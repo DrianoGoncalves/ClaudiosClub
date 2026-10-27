@@ -324,6 +324,29 @@ export interface Task {
   merged?: { at: string; sha: string; branch: string; base: string } | null;
   /** Último teste rodado pelo MyCo para esta tarefa. */
   tests?: TestRun | null;
+  /**
+   * Na fila do funcionário: começa sozinha quando ele terminar a tarefa atual (uma por vez, na
+   * ordem do quadro).
+   */
+  queuedAt?: string | null;
+  /** Começar mesmo com o limite de consumo batido (você confirmou ao pôr na fila). */
+  queuedForce?: boolean;
+  /** Mensagens suas nesta conversa esperando o funcionário terminar outra tarefa. */
+  held?: HeldMessage[];
+  /**
+   * Commit da entrega na worktree, feito quando ela foi para revisão. A mescla vai até aqui: o que
+   * vem depois é da próxima tarefa dele, que já pode ter começado na mesma worktree.
+   */
+  checkpoint?: { sha: string; at: string } | null;
+}
+
+export interface HeldMessage {
+  id: string;
+  at: string;
+  text: string;
+  images?: string[];
+  /** Por que está esperando ("Bia está em “Exportar CSV”"). */
+  reason: string;
 }
 
 /** Tarefas de um projeto para o cabeçalho: abertas, em revisão e o último deploy. */
@@ -488,7 +511,16 @@ export interface LaunchResult {
 export type ChatItem =
   /** `queued`: mandada com o turno em andamento, com esta prioridade. */
   /** `images`: quantas imagens (prints colados) foram junto com o texto. */
-  | { kind: 'user'; id: string; text: string; at: string | null; queued?: SendPriority; images?: number }
+  | {
+      kind: 'user';
+      id: string;
+      text: string;
+      at: string | null;
+      queued?: SendPriority;
+      images?: number;
+      /** Guardada pelo MyCo até o funcionário terminar a outra tarefa (o motivo). */
+      held?: string;
+    }
   | { kind: 'assistant'; id: string; text: string; at: string | null }
   | {
       kind: 'tool';
@@ -589,6 +621,8 @@ export interface ChatSnapshot {
   history: ChatItem[];
   /** Itens e estado do processo aberto no MyCo agora, se houver. */
   live: { items: ChatItem[]; state: ChatState; seq: number } | null;
+  /** Suas mensagens guardadas até o funcionário terminar a outra tarefa (ver Task.held). */
+  held?: ChatItem[];
   /** Contexto da última resposta registrada, quando não há processo aberto. */
   context: ContextUsage | null;
   /** A sessão está aberta em outro lugar (app ou terminal): conversar daqui criaria uma cópia. */

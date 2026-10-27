@@ -313,6 +313,7 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .task-card.is-selected { outline: 2px solid var(--ink-blue); }
 .task-title { font-weight: 600; font-size: 13.5px; line-height: 1.25; }
 .task-branch { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-queue { align-self: flex-start; color: var(--muted); border: 1px dashed var(--line); border-radius: 999px; padding: 0 7px; font-size: 11px; }
 .task-form { display: grid; gap: 8px; border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; }
 .task-detail { position: absolute; top: 0; right: 0; bottom: 0; width: min(420px, 100%); overflow-y: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; box-shadow: -10px 0 30px rgba(0, 0, 0, 0.15); }
 .task-detail-head { display: flex; align-items: center; justify-content: space-between; }

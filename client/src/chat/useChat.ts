@@ -26,6 +26,8 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
   const [sessionId, setSessionId] = useState(initialSessionId);
   const [history, setHistory] = useState<ChatItem[]>([]);
   const [live, setLive] = useState<ChatItem[]>([]);
+  /** Suas mensagens que o MyCo guardou até ele terminar outra tarefa. */
+  const [held, setHeld] = useState<ChatItem[]>([]);
   const [state, setState] = useState<ChatState | null>(null);
   const [baseContext, setBaseContext] = useState<ContextUsage | null>(null);
   const [elsewhere, setElsewhere] = useState<ChatSnapshot['elsewhere']>(null);
@@ -76,6 +78,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     async (sid: string) => {
       const snap = await api.chat(projectId, sid);
       setHistory(snap.history);
+      setHeld(snap.held ?? []);
       setBaseContext(snap.context);
       setElsewhere(snap.elsewhere);
       if (snap.live) {
@@ -93,6 +96,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     setSessionId(initialSessionId);
     setHistory([]);
     setLive([]);
+    setHeld([]);
     setState(null);
     setError(null);
     seq.current = 0;
@@ -110,6 +114,18 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     };
   }, [initialSessionId, load]);
 
+  // Com mensagem guardada, relê de tempos em tempos: quando ele fica livre, ela vai e a conversa
+  // volta a andar (às vezes num processo novo, que o stream antigo não acompanha).
+  const waiting = held.length > 0;
+  useEffect(() => {
+    if (!waiting || !sessionId) return;
+    const t = setInterval(async () => {
+      const snap = await api.chat(projectId, sessionId).catch(() => null);
+      if (snap && !snap.held?.length) void load(sessionId).catch(() => {});
+    }, 5000);
+    return () => clearInterval(t);
+  }, [waiting, sessionId, projectId, load]);
+
   const ensureStream = (sid: string) => {
     if (!source.current || source.current.readyState === EventSource.CLOSED) openStream(sid);
   };
@@ -120,6 +136,11 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
       const r = await withUsageConfirm((force) => api.chatSend(projectId, { sessionId, staffId, text, force, priority, images }));
       if (!r) return false;
       if (r.sessionId !== sessionId) setSessionId(r.sessionId);
+      if (r.held) {
+        const item: ChatItem = { kind: 'user', id: `h:${Date.now()}`, text, at: new Date().toISOString(), held: r.held, ...(images.length && { images: images.length }) };
+        setHeld((h) => [...h, item]);
+        return true;
+      }
       ensureStream(r.sessionId);
       return true;
     } catch (e) {
@@ -164,7 +185,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
 
   return {
     sessionId,
-    items: [...history, ...live],
+    items: [...history, ...live, ...held],
     state,
     context: state?.context ?? baseContext,
     elsewhere,

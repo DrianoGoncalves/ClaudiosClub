@@ -72,6 +72,8 @@ const chats = new ChatManager({
   registry: new ChatRegistry(path.join(MYCO_HOME, 'run', 'chats.json')),
   onPlanApproved: (sid, plan) => void tasks.onPlanApproved(sid, plan).catch(() => {}),
   onSent: (sid) => void tasks.onSent(sid).catch(() => {}),
+  // Ficou livre: os ajustes guardados e a próxima tarefa da fila dele.
+  onIdle: (sid, pid, staffId) => void tasks.onIdle(sid, pid, staffId).catch(() => {}),
 });
 // Quem acabou de terminar o turno (trabalhando → parado), para o aviso "terminou" no navegador.
 const turns = new TurnWatcher(
@@ -98,6 +100,9 @@ const tasks = new TaskService({
     return chats.send(projectId, null, staffId, text);
   },
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
+  isWorking: (staffId, except) => chats.staffWorking(staffId, except),
+  // O consumo já foi conferido quando você mandou (a mensagem só esperou a vez).
+  sendTo: (projectId, sessionId, staffId, text, images) => chats.send(projectId, sessionId, staffId, text, 'next', images),
 });
 
 // Rotinas: no horário, a mensagem vai ao funcionário pelo mesmo caminho do chat do painel.
@@ -262,13 +267,22 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     },
   ],
   // ---- conversa ----
-  ['GET', new RegExp(`^/api/projects/${ID}/chat/${ID}$`), ({ params: [pid, sid] }) => chats.snapshot(pid!, sid!)],
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/chat/${ID}$`),
+    async ({ params: [pid, sid] }) => ({ ...(await chats.snapshot(pid!, sid!)), held: await tasks.heldItems(sid!) }),
+  ],
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/chat/send$`),
     async ({ params: [pid], body, fromBrowser }) => {
       const b = parse(SendBody, body);
       if (!(fromBrowser && b.force)) await staff.checkUsage(pid!, b.staffId);
+      // Ajuste numa tarefa anterior com ele ocupado em outra: espera a vez (ver tasks.ts).
+      if (b.sessionId && b.staffId) {
+        const held = await tasks.hold(b.sessionId, { text: b.text, images: b.images });
+        if (held) return { sessionId: b.sessionId, held };
+      }
       const priority = b.priority ?? (await readConfig()).sendWhileBusy;
       return { sessionId: await chats.send(pid!, b.sessionId, b.staffId, b.text, priority, b.images) };
     },
@@ -847,6 +861,10 @@ server.listen(PORT, HOST, () => {
   chats.cleanOrphans().catch((err) => console.error('[chat] limpeza de órfãos falhou:', err));
   // Só o servidor que ficou com a porta agenda: um segundo que falhou não dispara rotinas em dobro.
   routines.start();
+  // Fila de tarefas: quem ficou com tarefa ou ajuste esperando (ex.: o MyCo reiniciou no meio).
+  const queueTick = () => void tasks.tick().catch(() => {});
+  setTimeout(queueTick, 15_000).unref();
+  setInterval(queueTick, 60_000).unref();
   // Configs de sessão antigas em ~/.myco/run (podem ter tokens de MCP): na subida e a cada 12 h.
   const cleanRun = () =>
     cleanRunDir(path.join(MYCO_HOME, 'run'))

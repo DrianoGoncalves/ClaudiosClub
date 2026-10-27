@@ -19,7 +19,7 @@ const LABEL: Record<TaskStatus, string> = {
 };
 
 const HELP: Record<TaskStatus, string> = {
-  todo: 'Ainda não começou.',
+  todo: 'Ainda não começou. As que estão na fila começam sozinhas, uma por vez, quando o funcionário entrega a atual.',
   planning: 'Ele está montando o plano; você aprova no cartão de plano do chat.',
   doing: 'Trabalhando. Quando o turno terminar, vai para revisão.',
   review: 'Ele terminou um turno: confira a entrega. Responder na conversa traz de volta para "fazendo".',
@@ -87,6 +87,11 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     return usd !== undefined && costs?.total.usd ? formatShare(usd, costs.total.usd) : null;
   };
   const current = tasks?.find((t) => t.id === selected) ?? null;
+  /** A tarefa que ocupa o funcionário agora (planejando ou fazendo). */
+  const busyWith = (t: Task) =>
+    tasks?.find((o) => o.id !== t.id && o.staffId === t.staffId && o.sessionId && (o.status === 'doing' || o.status === 'planning')) ?? null;
+  /** Posição na fila dele (1 = a próxima), na ordem do quadro. */
+  const queuePos = (t: Task) => (t.queuedAt ? (tasks ?? []).filter((o) => o.staffId === t.staffId && o.queuedAt && !o.sessionId).indexOf(t) + 1 : 0);
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -167,6 +172,16 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                           <BranchIcon /> {t.branch}
                         </span>
                       )}
+                      {queuePos(t) > 0 && (
+                        <span className="task-queue small" title="Começa sozinha quando ele entregar a atual">
+                          na fila · {queuePos(t)}ª
+                        </span>
+                      )}
+                      {!!t.held?.length && (
+                        <span className="task-queue small" title="Suas mensagens vão quando ele terminar a tarefa em que está">
+                          {t.held.length} {t.held.length === 1 ? 'ajuste esperando' : 'ajustes esperando'}
+                        </span>
+                      )}
                     </button>
                   ))}
                 </section>
@@ -190,6 +205,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             onSave={(patch) => act(() => api.updateTask(projectId, current.id, patch))}
             onMove={(s) => void move(current, s)}
             onStart={() => void start(current)}
+            busyWith={busyWith(current)}
+            queuePos={queuePos(current)}
+            onUnqueue={() => void act(() => api.updateTask(projectId, current.id, { queued: false }))}
             onOpen={() => current.staffId && onOpenStaff(current.staffId)}
             onDelete={() =>
               window.confirm(`Apagar a tarefa "${current.title}"? A conversa dela continua no funcionário.`) &&
@@ -252,7 +270,7 @@ function TaskForm({
         </select>
       </label>
       <p className="actions">
-        <button type="submit" className="btn-primary" disabled={busy || !title.trim() || !staffId} title="Cria e já manda para ele, numa conversa nova">
+        <button type="submit" className="btn-primary" disabled={busy || !title.trim() || !staffId} title="Cria e já manda para ele, numa conversa nova (ocupado com outra tarefa, entra na fila dele)">
           Criar e começar
         </button>
         <button type="button" className="btn-secondary" disabled={busy || !title.trim()} onClick={() => void submit(false)}>
@@ -275,6 +293,9 @@ function TaskDetail({
   onSave,
   onMove,
   onStart,
+  busyWith,
+  queuePos,
+  onUnqueue,
   onOpen,
   onDelete,
   onChanged,
@@ -290,6 +311,10 @@ function TaskDetail({
   onSave: (patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'pr' | 'branch'>>) => Promise<void>;
   onMove: (s: TaskStatus) => void;
   onStart: () => void;
+  /** A tarefa em que o responsável está agora (aí "Começar" põe na fila). */
+  busyWith: Task | null;
+  queuePos: number;
+  onUnqueue: () => void;
   onOpen: () => void;
   onDelete: () => void;
 }) {
@@ -357,10 +382,34 @@ function TaskDetail({
           </>
         )}
       </p>
+      {queuePos > 0 && (
+        <p className="muted small">
+          Na fila de {who?.name ?? 'quem cuida'} ({queuePos}ª){busyWith ? `: começa quando ele entregar “${busyWith.title}”.` : ': começa assim que ele ficar livre.'}{' '}
+          <button className="link small" onClick={onUnqueue}>
+            tirar da fila
+          </button>
+        </p>
+      )}
+      {!!task.held?.length && (
+        <p className="muted small">
+          {task.held.length === 1 ? 'Um ajuste seu está guardado' : `${task.held.length} ajustes seus estão guardados`}: {task.held[0]!.reason}. Vai antes da próxima da fila.
+        </p>
+      )}
       <p className="actions">
-        {!task.sessionId && (
-          <button className="btn-primary" disabled={!task.staffId} onClick={onStart} title={task.staffId ? `Manda para ${who?.name}, numa conversa nova` : 'Escolha quem cuida'}>
-            Começar
+        {!task.sessionId && queuePos === 0 && (
+          <button
+            className="btn-primary"
+            disabled={!task.staffId}
+            onClick={onStart}
+            title={
+              !task.staffId
+                ? 'Escolha quem cuida'
+                : busyWith
+                  ? `${who?.name} está em “${busyWith.title}”: entra na fila e começa quando ele entregar`
+                  : `Manda para ${who?.name}, numa conversa nova`
+            }
+          >
+            {busyWith ? 'Pôr na fila' : 'Começar'}
           </button>
         )}
         {task.sessionId && who && (

@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CodeError, locateCode, mergeCode, readCode } from '../server/taskCode';
+import { checkpoint, CodeError, locateCode, mergeCode, readCode } from '../server/taskCode';
 import { ensureWorktree } from '../server/staff/worktree';
 
 let root: string;
@@ -56,6 +56,30 @@ describe('código da tarefa', () => {
     expect(await fs.readFile(path.join(dir, 'app.txt'), 'utf8')).toBe('v2\n');
     expect(git('log', '-1', '--format=%s').trim()).toBe('Merge myco/ana-1: Atualizar o app');
     expect(git('status', '--porcelain').trim()).toBe('');
+  }, 60_000);
+
+  it('a entrega tem o seu commit; mesclar ela não leva o que a próxima tarefa já começou', async () => {
+    const { dir, git } = await repo('fila');
+    const wt = await ensureWorktree(dir, 'ana-1');
+    const place = (await locateCode(dir, 'ana-1', true))!;
+    await fs.writeFile(path.join(wt.path, 'app.txt'), 'v2\n'); // tarefa A
+    const sha = (await checkpoint(place, 'Tarefa A'))!;
+    expect(sha).toMatch(/^[0-9a-f]{40}$/);
+    await fs.writeFile(path.join(wt.path, 'b.txt'), 'meio da B\n'); // a próxima já começou
+    await fs.writeFile(path.join(wt.path, 'app.txt'), 'v3\n');
+
+    const code = await readCode(dir, place, sha);
+    expect(code).toMatchObject({ uncommitted: 0, canMerge: true, commits: [expect.objectContaining({ subject: 'Tarefa A (MyCo)' })] });
+    expect(code.files.map((f) => f.path)).toEqual(['app.txt']);
+
+    await mergeCode(dir, place, 'Tarefa A', { upTo: sha });
+    expect(await fs.readFile(path.join(dir, 'app.txt'), 'utf8')).toBe('v2\n');
+    await expect(fs.stat(path.join(dir, 'b.txt'))).rejects.toThrow();
+    // A B continua lá, sem commit, do jeito que estava.
+    expect(await fs.readFile(path.join(wt.path, 'app.txt'), 'utf8')).toBe('v3\n');
+    expect(git('-C', wt.path, 'status', '--porcelain').split(/\r?\n/).filter(Boolean).sort()).toEqual([' M app.txt', '?? b.txt']);
+    // Um commit que não é desta worktree é ignorado (mescla tudo, como antes).
+    expect((await readCode(dir, place, 'f'.repeat(40))).uncommitted).toBe(2);
   }, 60_000);
 
   it('teste vermelho desfaz a mescla; sem testes, só confirmando; projeto sujo não mescla', async () => {

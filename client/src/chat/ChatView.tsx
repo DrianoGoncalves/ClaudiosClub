@@ -342,6 +342,7 @@ function Item({
           ) : null}
           {item.text}
           {item.queued && <span className="msg-queued">{QUEUED_TEXT[item.queued]}</span>}
+          {item.held && <span className="msg-queued">guardada pelo MyCo: {item.held}</span>}
         </div>
       );
     case 'assistant':

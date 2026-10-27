@@ -146,3 +146,102 @@ describe('tarefas por projeto', () => {
     expect(await svc.list('outro')).toBeNull();
   });
 });
+
+describe('fila por funcionário', () => {
+  function queued(dirName: string) {
+    const dir = path.join(root, dirName);
+    const sent: Array<{ text: string; session: string }> = [];
+    const delivered: Array<{ sessionId: string; text: string; images: string[] }> = [];
+    /** Conversas trabalhando agora (o que o ChatManager sabe). */
+    const working = new Set<string>();
+    let n = 0;
+    const ana = { id: 'ana-1', name: 'Ana', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'ana-1' ? ana : null),
+      send: async (_p, _staffId, text) => {
+        const session = `s-${++n}`;
+        sent.push({ text, session });
+        working.add(session);
+        return session;
+      },
+      branchFor: async () => null,
+      isWorking: (_staffId, except) => [...working].some((s) => s !== except),
+      sendTo: async (_p, sessionId, _staffId, text, images) => {
+        delivered.push({ sessionId, text, images });
+        working.add(sessionId);
+        return sessionId;
+      },
+    });
+    // O turno acabou: o processo da conversa avisa (onIdle) e o vigia de sessões também (onTurnDone);
+    // turno curto o vigia perde, então o processo vem primeiro e o segundo aviso não muda nada.
+    const finish = async (session: string) => {
+      working.delete(session);
+      await svc.onIdle(session, 'p', 'ana-1');
+      await svc.onTurnDone(session);
+    };
+    const make = async (title: string) => (await svc.create('p', { title, staffId: 'ana-1' }))!;
+    return { svc, sent, delivered, working, finish, make };
+  }
+
+  it('uma por vez: as outras entram na fila e a próxima começa quando a atual vai para revisão', async () => {
+    const { svc, sent, finish, make } = queued('q1');
+    const [a, b, c] = [await make('A'), await make('B'), await make('C')];
+    expect((await svc.start('p', a.id))!.status).toBe('doing');
+    const qb = (await svc.start('p', b.id))!;
+    expect(qb).toMatchObject({ status: 'todo', sessionId: null, queuedAt: expect.any(String) });
+    expect(qb.history.at(-1)?.note).toBe('na fila de Ana, depois de “A”');
+    await svc.start('p', c.id);
+    expect(sent).toHaveLength(1);
+
+    await finish('s-1');
+    const list = (await svc.list('p'))!;
+    expect(list.map((t) => [t.title, t.status])).toEqual([
+      ['A', 'review'],
+      ['B', 'doing'],
+      ['C', 'todo'],
+    ]);
+    expect(sent[1]!.text).toContain('[Tarefa "B"]');
+    expect(list[1]!.queuedAt).toBeNull();
+
+    // Tirou da fila: quando B entregar, C não começa.
+    await svc.update('p', c.id, { queued: false });
+    await finish('s-2');
+    expect(sent).toHaveLength(2);
+  });
+
+  it('turno curto que o vigia de sessões não viu: o aviso do processo basta', async () => {
+    const { svc, sent, working, make } = queued('q3');
+    const [a, b] = [await make('A'), await make('B')];
+    await svc.start('p', a.id); // s-1
+    await svc.start('p', b.id); // fila
+    working.delete('s-1');
+    await svc.onIdle('s-1', 'p', 'ana-1'); // só o processo avisou
+    expect((await svc.list('p'))!.map((t) => t.status)).toEqual(['review', 'doing']);
+    expect(sent.at(-1)!.text).toContain('[Tarefa "B"]');
+  });
+
+  it('ajuste numa tarefa anterior espera a vez e vai antes da próxima da fila', async () => {
+    const { svc, sent, delivered, finish, make } = queued('q2');
+    const [a, b, c] = [await make('A'), await make('B'), await make('C')];
+    await svc.start('p', a.id); // s-1
+    await finish('s-1'); // A em revisão
+    await svc.start('p', b.id); // livre: começa já (s-2)
+    await svc.start('p', c.id); // fila, depois de B
+
+    expect(await svc.hold('s-1', { text: 'faltou o cabeçalho' })).toBe('espera Ana terminar “B”');
+    expect(await svc.heldItems('s-1')).toEqual([expect.objectContaining({ kind: 'user', text: 'faltou o cabeçalho', held: 'espera Ana terminar “B”' })]);
+    expect(await svc.hold('s-2', { text: 'na B mesmo' })).toBeNull(); // a conversa em que ela está: vai já
+
+    await finish('s-2');
+    expect(delivered).toEqual([{ sessionId: 's-1', text: 'faltou o cabeçalho', images: [] }]);
+    expect(sent).toHaveLength(2); // C ainda espera: ela está no ajuste da A
+    expect(await svc.heldItems('s-1')).toEqual([]);
+
+    await svc.onSent('s-1'); // o que o ChatManager faz ao mandar: A volta para "fazendo"
+    await finish('s-1');
+    expect(sent.at(-1)!.text).toContain('[Tarefa "C"]');
+    expect((await svc.list('p'))!.find((t) => t.id === a.id)!.history.map((h) => h.note)).toContain('ajuste guardado enviado');
+  });
+});

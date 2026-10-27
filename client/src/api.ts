@@ -155,7 +155,8 @@ export const api = {
     projectId: string,
     body: { sessionId: string | null; staffId: string | null; text: string; force?: boolean; priority?: SendPriority; images?: string[] },
   ) =>
-    post<{ sessionId: string }>(`/api/projects/${projectId}/chat/send`, body),
+    /** `held`: guardada até ele terminar outra tarefa (o motivo). */
+    post<{ sessionId: string; held?: string }>(`/api/projects/${projectId}/chat/send`, body),
   chatCompact: (projectId: string, sessionId: string, staffId: string | null, force = false) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/chat/${sessionId}/compact`, { staffId, force }),
   chatAdopt: (sessionId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/adopt`),
@@ -177,7 +178,11 @@ export const api = {
   tasks: (projectId: string) => get<Task[] | null>(`/api/projects/${projectId}/tasks`),
   createTask: (projectId: string, input: { title: string; description: string; staffId: string | null }) =>
     post<Task | null>(`/api/projects/${projectId}/tasks`, input),
-  updateTask: (projectId: string, taskId: string, patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'status' | 'pr' | 'branch'>>) =>
+  updateTask: (
+    projectId: string,
+    taskId: string,
+    patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'status' | 'pr' | 'branch'>> & { queued?: false },
+  ) =>
     post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}`, patch),
   startTask: (projectId: string, taskId: string, force = false) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/start`, { force }),
   deleteTask: (projectId: string, taskId: string) => post<{ ok: boolean }>(`/api/projects/${projectId}/tasks/${taskId}/delete`),

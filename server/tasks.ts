@@ -2,9 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { TASK_STATUSES, type StaffProfile, type Task, type TaskCode, type TaskStatus, type TaskSummary } from '../shared/model';
+import { TASK_STATUSES, type ChatItem, type HeldMessage, type StaffProfile, type Task, type TaskCode, type TaskStatus, type TaskSummary } from '../shared/model';
 import { writeAtomic } from './staff/store';
-import { CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
+import { checkpoint, CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
 
 // Tarefas por projeto: `<projeto>/.myco/tasks.json`, ao lado das fichas. Cada tarefa vai para um
 // funcionário; ao começar, abre uma conversa nova com a descrição. Ela anda sozinha:
@@ -12,6 +12,11 @@ import { CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from
 //   fazendo → revisão     quando o turno dele termina (trabalhando → parado);
 //   revisão → fazendo     quando você manda outra mensagem na conversa da tarefa.
 // "Pronto" e "no ar" são suas (o deploy, por enquanto, é marcado à mão).
+//
+// Uma tarefa por vez por funcionário. Começar com ele ocupado (outra tarefa planejando ou fazendo,
+// ou uma conversa dele trabalhando) põe na fila dele; quando ele fica livre, o MyCo manda primeiro
+// os ajustes que você deixou em tarefas anteriores (guardados enquanto ele estava ocupado) e
+// depois a próxima da fila, na ordem do quadro.
 
 export class TaskError extends Error {}
 
@@ -38,6 +43,8 @@ export const TaskPatch = z.object({
     .nullable()
     .optional(),
   branch: z.string().trim().max(200).transform((v) => v || null).nullable().optional(),
+  /** Tirar da fila (pôr é pelo "Começar"). */
+  queued: z.literal(false).optional(),
 });
 
 export interface TaskServiceDeps {
@@ -50,15 +57,23 @@ export interface TaskServiceDeps {
   send: (projectId: string, staffId: string, text: string, force: boolean) => Promise<string>;
   /** Branch em que ele vai trabalhar (a da worktree dele, ou a atual do projeto). */
   branchFor: (projectPath: string, profile: StaffProfile) => Promise<string | null>;
+  /** Alguma conversa dele no MyCo está trabalhando (turno ou segundo plano), fora `exceptSession`. */
+  isWorking?: (staffId: string, exceptSession?: string) => boolean;
+  /** Manda na conversa que já existe (os ajustes guardados). */
+  sendTo?: (projectId: string, sessionId: string, staffId: string, text: string, images: string[]) => Promise<string>;
 }
 
 type Role = 'work' | 'review' | 'deploy';
+
+const OCCUPIED: TaskStatus[] = ['planning', 'doing'];
 
 export class TaskService {
   /** sessionId → onde está a tarefa daquela conversa (e se é o trabalho, a revisão ou o deploy). */
   private readonly bySession = new Map<string, { projectId: string; taskId: string; role: Role }>();
   private indexed = false;
   private readonly queues = new Map<string, Promise<unknown>>();
+  /** Uma "vez de quem é" por funcionário: dois avisos juntos não começam duas tarefas. */
+  private readonly kicks = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: TaskServiceDeps) {}
 
@@ -98,29 +113,56 @@ export class TaskService {
   async update(projectId: string, taskId: string, body: unknown): Promise<Task | null> {
     const patch = parseOr(TaskPatch, body);
     if (patch.staffId) await this.staffOrThrow(projectId, patch.staffId);
-    return this.change(projectId, taskId, (t) => withPatch(t, patch, 'you'));
+    let before: Task | undefined;
+    const out = await this.change(projectId, taskId, (t) => {
+      before = t;
+      const next = withPatch(t, patch, 'you');
+      // Fora da fila: você tirou, trocou o responsável ou levou o cartão para outra coluna.
+      const leaves = patch.queued === false || next.staffId !== t.staffId || next.status !== 'todo';
+      return leaves && next.queuedAt ? { ...next, queuedAt: null, queuedForce: false } : next;
+    });
+    // Saiu de "fazendo" à mão (ou mudou de dono): quem estava com ela pode pegar a próxima.
+    for (const s of new Set([before?.staffId, out?.staffId])) if (s) void this.kick(projectId, s);
+    return out;
   }
 
   async remove(projectId: string, taskId: string): Promise<boolean> {
-    let found = false;
+    let found: Task | undefined;
     const ok = await this.mutate(projectId, (tasks) => {
-      found = tasks.some((t) => t.id === taskId);
+      found = tasks.find((t) => t.id === taskId);
       return tasks.filter((t) => t.id !== taskId);
     });
-    return !!ok && found;
+    if (found?.staffId) void this.kick(projectId, found.staffId);
+    return !!ok && !!found;
   }
 
   /**
    * Começa: conversa nova com o funcionário, com o título e a descrição. Com a ficha em "só
-   * planeja", a tarefa vai para "planejando"; senão, para "fazendo".
+   * planeja", a tarefa vai para "planejando"; senão, para "fazendo". Com ele ocupado, entra na
+   * fila dele e começa sozinha quando ele ficar livre.
    */
   async start(projectId: string, taskId: string, force = false): Promise<Task | null> {
     const dir = await this.deps.projectPath(projectId);
-    const task = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
+    const tasks = dir ? await readTasks(dir) : [];
+    const task = tasks.find((t) => t.id === taskId);
     if (!dir || !task) return null;
     if (!task.staffId) throw new TaskError('escolha quem vai cuidar da tarefa');
     if (task.sessionId) throw new TaskError('a tarefa já começou: continue pela conversa dela');
     const profile = await this.staffOrThrow(projectId, task.staffId);
+    const staffId = task.staffId;
+    // Na mesma vez do funcionário que a fila: dois "Começar" juntos não abrem duas conversas.
+    return this.locked(projectId, staffId, async () => {
+      const busyWith = occupant(await readTasks(dir), staffId, taskId);
+      if (!busyWith && !this.deps.isWorking?.(staffId)) return this.startNow(projectId, taskId, profile, force);
+      const note = busyWith ? `na fila de ${profile.name}, depois de “${busyWith.title}”` : `na fila de ${profile.name} (ele está numa conversa)`;
+      return this.change(projectId, taskId, (t) => noted({ ...t, queuedAt: t.queuedAt ?? new Date().toISOString(), queuedForce: force }, note));
+    });
+  }
+
+  private async startNow(projectId: string, taskId: string, profile: StaffProfile, force: boolean): Promise<Task | null> {
+    const dir = await this.deps.projectPath(projectId);
+    const task = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
+    if (!dir || !task || task.sessionId) return null;
     const text = [`[Tarefa "${task.title}"]`, task.description, 'Quando terminar, responda com um resumo curto do que foi feito e do que falta.']
       .filter(Boolean)
       .join('\n\n');
@@ -128,7 +170,104 @@ export class TaskService {
     const branch = await this.deps.branchFor(dir, profile).catch(() => null);
     this.bySession.set(sessionId, { projectId, taskId, role: 'work' });
     const next: TaskStatus = profile.autonomy === 'plan' ? 'planning' : 'doing';
-    return this.change(projectId, taskId, (t) => moved({ ...t, sessionId, branch: branch ?? t.branch }, next, 'auto', `com ${profile.name}`));
+    return this.change(projectId, taskId, (t) =>
+      moved({ ...t, sessionId, branch: branch ?? t.branch, queuedAt: null, queuedForce: false }, next, 'auto', `com ${profile.name}`),
+    );
+  }
+
+  /**
+   * Sua mensagem para a conversa de uma tarefa enquanto o funcionário está em outra: fica guardada
+   * na tarefa e vai quando ele ficar livre. Devolve o motivo, ou null se pode mandar já.
+   */
+  async hold(sessionId: string, msg: { text: string; images?: string[] }): Promise<string | null> {
+    const where = await this.where(sessionId);
+    if (!where || where.role !== 'work') return null;
+    const tasks = (await this.list(where.projectId)) ?? [];
+    const task = tasks.find((t) => t.id === where.taskId);
+    if (!task?.staffId) return null;
+    const busyWith = occupant(tasks, task.staffId, task.id);
+    if (!busyWith && !this.deps.isWorking?.(task.staffId, sessionId)) return null;
+    const name = (await this.deps.readProfile(where.projectId, task.staffId))?.name ?? 'ele';
+    const reason = busyWith ? `espera ${name} terminar “${busyWith.title}”` : `espera ${name} terminar a conversa em que está`;
+    const held: HeldMessage = { id: randomBytes(4).toString('hex'), at: new Date().toISOString(), text: msg.text, ...(msg.images?.length && { images: msg.images }), reason };
+    await this.change(where.projectId, task.id, (t) => noted({ ...t, held: [...(t.held ?? []), held] }, `ajuste guardado: ${reason}`));
+    return reason;
+  }
+
+  /** As mensagens guardadas desta conversa, como itens do chat. */
+  async heldItems(sessionId: string): Promise<ChatItem[]> {
+    const where = await this.where(sessionId);
+    if (!where || where.role !== 'work') return [];
+    const task = ((await this.list(where.projectId)) ?? []).find((t) => t.id === where.taskId);
+    return (task?.held ?? []).map((m) => ({ kind: 'user', id: `h:${m.id}`, text: m.text, at: m.at, held: m.reason, ...(m.images?.length && { images: m.images.length }) }));
+  }
+
+  /**
+   * Uma conversa do MyCo parou de trabalhar: se for de uma tarefa, a entrega anda; se for de um
+   * funcionário, ele pode pegar o que espera.
+   */
+  async onIdle(sessionId: string, projectId: string | null, staffId: string | null): Promise<void> {
+    await this.workDone(sessionId);
+    if (projectId && staffId) await this.kick(projectId, staffId);
+  }
+
+  /** Rede de segurança (na subida e de tempos em tempos): quem tem fila ou ajuste esperando e está livre. */
+  async tick(): Promise<void> {
+    for (const projectId of await this.deps.projectIds()) {
+      const tasks = (await this.list(projectId)) ?? [];
+      const waiting = new Set(tasks.filter((t) => t.staffId && (t.queuedAt || t.held?.length)).map((t) => t.staffId!));
+      for (const s of waiting) await this.kick(projectId, s);
+    }
+  }
+
+  /** Um por vez por funcionário (começar, pegar a próxima, mandar ajustes). */
+  private locked<T>(projectId: string, staffId: string, fn: () => Promise<T>): Promise<T> {
+    const key = `${projectId}:${staffId}`;
+    const run = (this.kicks.get(key) ?? Promise.resolve()).then(fn);
+    this.kicks.set(
+      key,
+      run.then(
+        () => {},
+        () => {},
+      ),
+    );
+    return run;
+  }
+
+  /** Se ele está livre: primeiro os ajustes guardados (o mais antigo antes), depois a próxima da fila. */
+  private kick(projectId: string, staffId: string): Promise<void> {
+    return this.locked(projectId, staffId, () => this.takeNext(projectId, staffId)).catch(() => {});
+  }
+
+  private async takeNext(projectId: string, staffId: string): Promise<void> {
+    const tasks = (await this.list(projectId)) ?? [];
+    if (occupant(tasks, staffId) || this.deps.isWorking?.(staffId)) return;
+    const adjust = tasks
+      .filter((t) => t.staffId === staffId && t.sessionId && t.held?.length)
+      .sort((a, b) => a.held![0]!.at.localeCompare(b.held![0]!.at))[0];
+    if (adjust && this.deps.sendTo) {
+      const held = adjust.held!;
+      const text = held.map((m) => m.text).filter(Boolean).join('\n\n');
+      try {
+        await this.deps.sendTo(projectId, adjust.sessionId!, staffId, text, held.flatMap((m) => m.images ?? []));
+      } catch (err) {
+        await this.change(projectId, adjust.id, (t) => noted(t, `o ajuste guardado não foi: ${(err as Error).message}`));
+        return;
+      }
+      const sent = new Set(held.map((m) => m.id));
+      await this.change(projectId, adjust.id, (t) => noted({ ...t, held: (t.held ?? []).filter((m) => !sent.has(m.id)) }, 'ajuste guardado enviado'));
+      return;
+    }
+    const next = tasks.find((t) => t.staffId === staffId && t.status === 'todo' && t.queuedAt && !t.sessionId);
+    if (!next) return;
+    const profile = await this.deps.readProfile(projectId, staffId);
+    if (!profile) return;
+    try {
+      await this.startNow(projectId, next.id, profile, !!next.queuedForce);
+    } catch (err) {
+      // Continua na fila (ex.: limite de consumo); "Começar" de novo tenta já.
+      await this.change(projectId, next.id, (t) => noted(t, `não começou: ${(err as Error).message}`));
+    }
   }
 
   /** O código da tarefa: onde está, o que mudou e se dá para mesclar. */
@@ -136,7 +275,7 @@ export class TaskService {
     const { dir, task, profile } = await this.context(projectId, taskId);
     const place = await locateCode(dir, task.staffId, !!profile?.worktree);
     if (!place) throw new TaskError('o projeto não é um repositório git');
-    return readCode(dir, place);
+    return readCode(dir, place, deliveredAt(task));
   }
 
   /** Roda os testes onde está o código da tarefa e guarda o resultado no cartão. */
@@ -156,7 +295,7 @@ export class TaskService {
     const place = await locateCode(dir, task.staffId, !!profile?.worktree);
     if (!place) throw new TaskError('o projeto não é um repositório git');
     try {
-      const m = await mergeCode(dir, place, task.title, { skipTests });
+      const m = await mergeCode(dir, place, task.title, { skipTests, upTo: deliveredAt(task) });
       return this.change(projectId, taskId, (t) =>
         moved({ ...t, tests: m.tests ?? t.tests ?? null, merged: { at: new Date().toISOString(), sha: m.sha, branch: m.branch, base: m.base } }, 'done', 'auto', `mesclado em ${m.base} (${m.sha})`),
       );
@@ -235,9 +374,41 @@ export class TaskService {
    * deploy: anota que a resposta chegou (a tarefa não muda de coluna sozinha por isso).
    */
   async onTurnDone(sessionId: string): Promise<void> {
-    await this.onSession(sessionId, 'work', (t) => (t.status === 'doing' ? moved(t, 'review', 'auto', 'turno terminou') : null));
     await this.onSession(sessionId, 'review', (t) => noteHandoff(t, 'review', 'revisão respondida'));
     await this.onSession(sessionId, 'deploy', (t) => noteHandoff(t, 'deploy', 'deploy respondeu'));
+    await this.workDone(sessionId);
+  }
+
+  /**
+   * Fazendo → revisão, com o commit da entrega, e a vez passa para o que espera. Vem do vigia de
+   * sessões (que lê de tempos em tempos e perde turno curto) e do processo da conversa no MyCo (que
+   * sabe a hora exata); o segundo aviso não muda nada.
+   */
+  private async workDone(sessionId: string): Promise<void> {
+    const where = await this.where(sessionId);
+    if (where?.role !== 'work') return;
+    const staffId = ((await this.list(where.projectId)) ?? []).find((t) => t.id === where.taskId)?.staffId;
+    if (!staffId) return;
+    // Na vez dele: a próxima tarefa só começa depois que a entrega desta tem o seu commit.
+    await this.locked(where.projectId, staffId, async () => {
+      let delivered: Task | null = null;
+      await this.change(where.projectId, where.taskId, (t) => (t.status === 'doing' ? (delivered = moved(t, 'review', 'auto', 'turno terminou')) : t));
+      if (delivered) await this.markDelivery(where.projectId, delivered);
+    });
+    void this.kick(where.projectId, staffId);
+  }
+
+  /**
+   * Foi para revisão numa worktree: commita a entrega com o título da tarefa e guarda o commit. A
+   * próxima tarefa dele começa na mesma worktree; a mescla desta vai só até aqui.
+   */
+  private async markDelivery(projectId: string, task: Task): Promise<void> {
+    const dir = await this.deps.projectPath(projectId);
+    const profile = dir && task.staffId ? await this.deps.readProfile(projectId, task.staffId) : null;
+    if (!dir || !profile?.worktree) return;
+    const place = await locateCode(dir, task.staffId, true).catch(() => null);
+    const sha = place ? await checkpoint(place, task.title).catch(() => null) : null;
+    if (sha) await this.change(projectId, task.id, (t) => noted({ ...t, checkpoint: { sha, at: new Date().toISOString() } }, `entrega no commit ${sha.slice(0, 7)}`));
   }
 
   /**
@@ -268,12 +439,13 @@ export class TaskService {
   }
 
   private async onSession(sessionId: string, role: Role, fn: (t: Task) => Task | null): Promise<void> {
-    let where = this.bySession.get(sessionId);
-    if (!where && !this.indexed) {
-      await this.summary(); // primeira vez depois de subir: monta o índice sessão → tarefa
-      where = this.bySession.get(sessionId);
-    }
+    const where = await this.where(sessionId);
     if (where && where.role === role) await this.change(where.projectId, where.taskId, (t) => fn(t) ?? t);
+  }
+
+  private async where(sessionId: string) {
+    if (!this.bySession.has(sessionId) && !this.indexed) await this.summary(); // primeira vez depois de subir: monta o índice sessão → tarefa
+    return this.bySession.get(sessionId) ?? null;
   }
 
   private async change(projectId: string, taskId: string, fn: (t: Task) => Task): Promise<Task | null> {
@@ -330,6 +502,25 @@ function noteHandoff(t: Task, kind: 'review' | 'deploy', note: string): Task | n
   const at = new Date().toISOString();
   const history = [...t.history, { at, status: t.status, by: 'auto' as const, note }].slice(-MAX_HISTORY);
   return { ...t, [kind]: { ...h, doneAt: at }, history, updatedAt: at };
+}
+
+/** A tarefa que ocupa o funcionário (planejando ou fazendo, com conversa aberta), fora `except`. */
+function occupant(tasks: Task[], staffId: string, except?: string): Task | undefined {
+  return tasks.find((t) => t.staffId === staffId && t.id !== except && t.sessionId && OCCUPIED.includes(t.status));
+}
+
+/**
+ * Até onde vai a entrega desta tarefa: o commit dela, se ela não voltou a "fazendo" depois (aí o
+ * trabalho novo dela ainda não tem commit e entra tudo).
+ */
+function deliveredAt(t: Task): string | null {
+  return t.checkpoint && t.status !== 'doing' && t.status !== 'planning' ? t.checkpoint.sha : null;
+}
+
+/** Uma linha no histórico, sem mudar de coluna. */
+function noted(t: Task, note: string): Task {
+  const at = new Date().toISOString();
+  return { ...t, history: [...t.history, { at, status: t.status, by: 'auto' as const, note }].slice(-MAX_HISTORY), updatedAt: at };
 }
 
 function moved(t: Task, status: TaskStatus, by: 'you' | 'auto', note?: string): Task {

@@ -49,6 +49,9 @@ function backgroundTask(t: z.infer<typeof BackgroundTasks>[number]): BackgroundT
 
 export interface ChatProcessOptions {
   sessionId: string;
+  /** De quem é a conversa (null: sessão sem ficha). */
+  projectId?: string | null;
+  staffId?: string | null;
   cwd: string;
   /** Argumentos depois de `claude` (os de stream-json são acrescentados aqui). */
   args: string[];
@@ -57,6 +60,8 @@ export interface ChatProcessOptions {
   onExit?: (pid: number | null, error: string | null) => void;
   /** Algo com cara de segredo passou pela conversa (só o tipo; o valor nunca sai daqui). */
   onSecret?: (label: string) => void;
+  /** Parou de trabalhar: turno acabou sem nada em segundo plano, ou o processo saiu. */
+  onIdle?: () => void;
   /** Troca o `spawn` real nos testes. */
   spawnImpl?: (cmd: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }) => ChildProcessWithoutNullStreams;
 }
@@ -112,6 +117,14 @@ export class ChatProcess {
 
   get background(): BackgroundTask[] {
     return this.state.background;
+  }
+
+  get staffId(): string | null {
+    return this.opts.staffId ?? null;
+  }
+
+  private idleCheck() {
+    if (!this.working) this.opts.onIdle?.();
   }
 
   get currentSeq(): number {
@@ -283,7 +296,10 @@ export class ChatProcess {
           this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text: `${tool}: permissão negada`, tone: 'warn', at });
         } else if (subtype === 'background_tasks_changed') {
           const tasks = BackgroundTasks.safeParse(ev.tasks);
-          if (tasks.success) this.setState({ background: tasks.data.map(backgroundTask) });
+          if (tasks.success) {
+            this.setState({ background: tasks.data.map(backgroundTask) });
+            if (!tasks.data.length) this.idleCheck();
+          }
         }
         return;
       }
@@ -414,6 +430,7 @@ export class ChatProcess {
           this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text, tone: 'error', at });
         }
         this.setState({ busy: false, compacting: false });
+        this.idleCheck();
         return;
       }
     }
@@ -434,6 +451,7 @@ export class ChatProcess {
     this.controls.clear();
     this.setState({ running: false, busy: false, compacting: false, error, background: [] });
     for (const done of this.exitWaiters.splice(0)) done();
+    this.opts.onIdle?.();
   }
 
   private write(obj: unknown) {

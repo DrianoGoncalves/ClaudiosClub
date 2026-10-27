@@ -40,8 +40,30 @@ export async function locateCode(projectPath: string, staffId: string | null, ow
   return { where: 'project', path: projectPath, branch: (await git(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => '')).trim() || null };
 }
 
-/** O que mudou: na worktree, tudo desde onde ela saiu da base (commits + o que ainda não foi commitado). */
-export async function readCode(projectPath: string, place: CodePlace): Promise<TaskCode> {
+/**
+ * Fecha a entrega numa worktree: commita o que estiver pendente (com o título da tarefa) e devolve o
+ * commit. Fora de worktree, null: no projeto principal o MyCo não commita por você.
+ */
+export async function checkpoint(place: CodePlace, title: string): Promise<string | null> {
+  if (place.where !== 'worktree') return null;
+  if (await dirtyCount(place.path)) {
+    await git(place.path, ['add', '-A', '--', '.', ...NOT_MYCO]);
+    await git(place.path, ['commit', '-m', `${title} (MyCo)`]).catch(() => {});
+  }
+  return (await git(place.path, ['rev-parse', 'HEAD']).catch(() => '')).trim() || null;
+}
+
+/** `upTo` só vale se for um commit desta worktree (ancestral do HEAD dela). */
+async function validEnd(place: CodePlace, upTo: string | null | undefined): Promise<string | null> {
+  if (!upTo || place.where !== 'worktree') return null;
+  return (await git(place.path, ['merge-base', '--is-ancestor', upTo, 'HEAD']).then(() => true, () => false)) ? upTo : null;
+}
+
+/**
+ * O que mudou: na worktree, tudo desde onde ela saiu da base (commits + o que ainda não foi
+ * commitado). Com `upTo` (o commit da entrega), só até ele: o resto é da tarefa seguinte.
+ */
+export async function readCode(projectPath: string, place: CodePlace, upTo?: string | null): Promise<TaskCode> {
   const base = (await git(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => '')).trim() || null;
   const test = await detectTest(projectPath);
   const mainDirty = await dirtyCount(projectPath);
@@ -62,11 +84,12 @@ export async function readCode(projectPath: string, place: CodePlace): Promise<T
       whyNot: 'as mudanças já estão no próprio projeto (a ficha não usa worktree): não há o que mesclar',
     };
   }
+  const end = await validEnd(place, upTo);
   const mb = base ? (await git(place.path, ['merge-base', base, 'HEAD']).catch(() => '')).trim() : '';
   const from = mb || 'HEAD';
-  const files = await changedFiles(place.path, from);
-  const uncommitted = (await changedFiles(place.path, 'HEAD')).length;
-  const log = mb ? await git(place.path, ['log', '--format=%h%x09%s', `${mb}..HEAD`]).catch(() => '') : '';
+  const files = await changedFiles(place.path, from, end);
+  const uncommitted = end ? 0 : (await changedFiles(place.path, 'HEAD')).length;
+  const log = mb ? await git(place.path, ['log', '--format=%h%x09%s', `${mb}..${end ?? 'HEAD'}`]).catch(() => '') : '';
   const commits = log
     .split(/\r?\n/)
     .filter(Boolean)
@@ -74,7 +97,7 @@ export async function readCode(projectPath: string, place: CodePlace): Promise<T
       const [sha, ...rest] = l.split('\t');
       return { sha: sha!, subject: rest.join('\t') };
     });
-  const diff = await git(place.path, ['diff', from, '--', '.', ...NOT_MYCO]).catch(() => '');
+  const diff = await git(place.path, ['diff', from, ...(end ? [end] : []), '--', '.', ...NOT_MYCO]).catch(() => '');
   const whyNot = !base
     ? 'o projeto principal está com o HEAD destacado'
     : mainDirty
@@ -87,21 +110,23 @@ export async function readCode(projectPath: string, place: CodePlace): Promise<T
 
 /**
  * Mescla a worktree no branch atual do projeto. O que não foi commitado na worktree é commitado
- * antes (com a mensagem da tarefa). Sem testes, só com `skipTests` (confirmado no MyCo).
+ * antes (com a mensagem da tarefa). Com `upTo` (o commit da entrega), mescla só até ele e não
+ * commita o pendente, que é da tarefa seguinte. Sem testes, só com `skipTests` (confirmado no MyCo).
  */
 export async function mergeCode(
   projectPath: string,
   place: CodePlace,
   title: string,
-  opts: { skipTests?: boolean } = {},
+  opts: { skipTests?: boolean; upTo?: string | null } = {},
 ): Promise<{ sha: string; base: string; branch: string; tests: TestRun | null }> {
   if (place.where !== 'worktree' || !place.branch) throw new CodeError('só dá para mesclar o trabalho de uma worktree');
-  const code = await readCode(projectPath, place);
+  const end = await validEnd(place, opts.upTo);
+  const code = await readCode(projectPath, place, end);
   if (!code.canMerge || !code.base) throw new CodeError(code.whyNot ?? 'não dá para mesclar agora');
   const test = code.test;
   if (!test && !opts.skipTests) throw new CodeError('não achei testes neste projeto (npm test, composer test ou phpunit)', 'no-tests');
 
-  if (code.uncommitted) {
+  if (code.uncommitted && !end) {
     await git(place.path, ['add', '-A', '--', '.', ...NOT_MYCO]);
     await git(place.path, ['commit', '-m', `${title} (MyCo)`]).catch((err: Error) => {
       throw new CodeError(`não deu para commitar na worktree: ${firstLine(err.message)}`);
@@ -109,7 +134,7 @@ export async function mergeCode(
   }
   const message = `Merge ${place.branch}: ${title}`;
   try {
-    await git(projectPath, ['merge', '--no-ff', '--no-commit', place.branch]);
+    await git(projectPath, ['merge', '--no-ff', '--no-commit', end ?? place.branch]);
   } catch (err) {
     const conflicts = (await git(projectPath, ['diff', '--name-only', '--diff-filter=U']).catch(() => '')).trim();
     await git(projectPath, ['merge', '--abort']).catch(() => {});
@@ -166,9 +191,11 @@ export function runTests(dir: string, command: string): Promise<TestRun> {
   });
 }
 
-async function changedFiles(dir: string, from: string): Promise<TaskCodeFile[]> {
-  const numstat = await git(dir, ['diff', '--numstat', from, '--', '.', ...NOT_MYCO]).catch(() => '');
-  const status = await git(dir, ['diff', '--name-status', from, '--', '.', ...NOT_MYCO]).catch(() => '');
+/** De `from` até o que está no disco, ou até o commit `to` (aí sem os arquivos novos não commitados). */
+async function changedFiles(dir: string, from: string, to?: string | null): Promise<TaskCodeFile[]> {
+  const range = to ? [from, to] : [from];
+  const numstat = await git(dir, ['diff', '--numstat', ...range, '--', '.', ...NOT_MYCO]).catch(() => '');
+  const status = await git(dir, ['diff', '--name-status', ...range, '--', '.', ...NOT_MYCO]).catch(() => '');
   const kinds = new Map(
     status
       .split(/\r?\n/)
@@ -186,6 +213,7 @@ async function changedFiles(dir: string, from: string): Promise<TaskCodeFile[]> 
       const file = p.join('\t').replace(/^.*=> /, '').replace(/[{}]/g, '');
       return { path: file, status: kinds.get(file) ?? 'M', add: a === '-' ? 0 : Number(a), del: d === '-' ? 0 : Number(d) };
     });
+  if (to) return files;
   const untracked = await git(dir, ['ls-files', '--others', '--exclude-standard', '--', '.', ...NOT_MYCO]).catch(() => '');
   for (const f of untracked.split(/\r?\n/).filter(Boolean)) files.push({ path: f, status: '?', add: 0, del: 0 });
   return files;

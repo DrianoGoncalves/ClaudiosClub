@@ -33,6 +33,8 @@ export interface ChatManagerOptions {
   onPlanApproved?: (sessionId: string, plan: string) => void;
   /** Uma mensagem sua foi para a conversa (a tarefa dela volta para "fazendo"). */
   onSent?: (sessionId: string) => void;
+  /** Uma conversa parou de trabalhar (a fila de tarefas do funcionário anda). */
+  onIdle?: (sessionId: string, projectId: string, staffId: string | null) => void;
 }
 
 export class ChatError extends Error {}
@@ -238,6 +240,14 @@ export class ChatManager {
     this.chats.get(sessionId)?.interrupt();
   }
 
+  /** Alguma conversa aberta do funcionário está trabalhando (fora `exceptSession`). */
+  staffWorking(staffId: string, exceptSession?: string): boolean {
+    for (const c of this.chats.values()) {
+      if (c.running && c.staffId === staffId && c.sessionId !== exceptSession && c.working) return true;
+    }
+    return false;
+  }
+
   /** Quantas conversas abertas estão no meio de um turno ou com algo em segundo plano. */
   working(): { busy: number; background: number } {
     let busy = 0;
@@ -292,10 +302,13 @@ export class ChatManager {
     if (!spawn) throw new ChatError('funcionário ou projeto não encontrado');
     const chat = new ChatProcess({
       sessionId: spawn.sessionId,
+      projectId,
+      staffId,
       cwd: spawn.cwd,
       args: spawn.args,
       onUsage: (limits) => void this.saveUsage(spawn.sessionId, limits),
       onSecret: (label) => this.noteSecret(spawn.sessionId, label),
+      onIdle: () => this.opts.onIdle?.(spawn.sessionId, projectId, staffId),
       onExit: (pid, error) => {
         this.log(`${spawn.sessionId} saiu (pid ${pid})${error ? `: ${error.slice(0, 200)}` : ''}`);
         if (pid !== null) void this.opts.registry?.remove(spawn.sessionId, pid).catch(() => {});
