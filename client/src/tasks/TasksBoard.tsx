@@ -40,11 +40,13 @@ interface Props {
   onChanged: () => void;
   /** A última tarefa que foi para "no ar". */
   lastDeploy: TaskSummary['lastDeploy'];
+  /** Abre com esta tarefa selecionada (Ctrl+K). */
+  initialTaskId?: string | null;
 }
 
-export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOpenStaff, onChanged, lastDeploy }: Props) {
+export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOpenStaff, onChanged, lastDeploy, initialTaskId = null }: Props) {
   const [tasks, setTasks] = useState<Task[] | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(initialTaskId);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);

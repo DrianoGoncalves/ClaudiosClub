@@ -14,6 +14,8 @@ export interface TurnDone {
 }
 
 const KEEP = 50;
+/** Dois avisos da mesma sessão com menos que isso entre eles são o mesmo turno. */
+const SAME_TURN_MS = 10_000;
 
 export class TurnWatcher {
   private readonly status = new Map<string, string | null>();
@@ -44,13 +46,28 @@ export class TurnWatcher {
       seen.add(l.sessionId);
       const prev = this.status.get(l.sessionId);
       if (prev === 'busy' && l.status === 'idle') {
-        this.done.push({ id: `${l.sessionId}:${now.getTime()}`, sessionId: l.sessionId, at: now.toISOString(), text: firstLine(this.lastText(l.sessionId)) });
-        if (this.done.length > KEEP) this.done.splice(0, this.done.length - KEEP);
+        this.record(l.sessionId, now);
         this.onDone?.(l.sessionId);
       }
       this.status.set(l.sessionId, l.status);
     }
     for (const id of this.status.keys()) if (!seen.has(id)) this.status.delete(id);
+  }
+
+  /**
+   * Turno de uma conversa do MyCo que acabou (o processo avisa na hora). Vale também para o turno
+   * curto que a leitura de tempos em tempos nunca viu trabalhando.
+   */
+  noteDone(sessionId: string, now = new Date()) {
+    this.record(sessionId, now);
+  }
+
+  /** Um aviso por turno: o processo e a leitura das sessões podem ver o mesmo fim. */
+  private record(sessionId: string, now: Date) {
+    const last = [...this.done].reverse().find((d) => d.sessionId === sessionId);
+    if (last && now.getTime() - Date.parse(last.at) < SAME_TURN_MS) return;
+    this.done.push({ id: `${sessionId}:${now.getTime()}`, sessionId, at: now.toISOString(), text: firstLine(this.lastText(sessionId)) });
+    if (this.done.length > KEEP) this.done.splice(0, this.done.length - KEEP);
   }
 
   /** Turnos que terminaram depois de `since` (ISO); sem `since`, nada (a página acabou de abrir). */

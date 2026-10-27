@@ -6,8 +6,10 @@ import type {
   Board,
   BoardBackground,
   BrowserStatus,
+  ChatAttachment,
   ChatSnapshot,
   CostReport,
+  Effort,
   GitState,
   InboxItem,
   LaunchResult,
@@ -153,16 +155,36 @@ export const api = {
   hire: (projectId: string, input: StaffInput) =>
     post<{ profile: StaffProfile; launch: LaunchResult | null }>(`/api/projects/${projectId}/staff`, input),
   chat: (projectId: string, sessionId: string) => get<ChatSnapshot>(`/api/projects/${projectId}/chat/${sessionId}`),
+  /** Modelo, esforço e autonomia desta conversa, na hora (abre a conversa se preciso). */
+  chatSettings: (
+    projectId: string,
+    body: { sessionId: string | null; staffId: string | null; model?: string; effort?: Effort; autonomy?: Autonomy },
+  ) => post<{ sessionId: string }>(`/api/projects/${projectId}/chat/settings`, body),
+  /** "@" no chat: arquivos do projeto que batem com `q`. */
+  files: (projectId: string, q: string) => get<string[]>(`/api/projects/${projectId}/files?q=${encodeURIComponent(q)}`),
   chatSend: (
     projectId: string,
-    body: { sessionId: string | null; staffId: string | null; text: string; force?: boolean; priority?: SendPriority; images?: string[] },
+    body: {
+      sessionId: string | null;
+      staffId: string | null;
+      text: string;
+      force?: boolean;
+      priority?: SendPriority;
+      images?: string[];
+      files?: ChatAttachment[];
+    },
   ) =>
     /** `held`: guardada até ele terminar outra tarefa (o motivo). */
     post<{ sessionId: string; held?: string }>(`/api/projects/${projectId}/chat/send`, body),
   chatCompact: (projectId: string, sessionId: string, staffId: string | null, force = false) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/chat/${sessionId}/compact`, { staffId, force }),
   chatAdopt: (sessionId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/adopt`),
-  chatPermission: (sessionId: string, requestId: string, allow: boolean, opts: { message?: string; executeAs?: Autonomy } = {}) =>
+  chatPermission: (
+    sessionId: string,
+    requestId: string,
+    allow: boolean,
+    opts: { message?: string; executeAs?: Autonomy; remember?: 'session' | 'project' } = {},
+  ) =>
     post<{ ok: boolean }>(`/api/chat/${sessionId}/permission`, { requestId, allow, ...opts }),
   inbox: () => get<InboxItem[]>('/api/inbox'),
   turns: (since: string) => get<TurnNotice[]>(`/api/turns?since=${encodeURIComponent(since)}`),

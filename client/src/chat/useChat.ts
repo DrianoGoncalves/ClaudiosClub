@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Autonomy, ChatEvent, ChatItem, ChatSnapshot, ChatState, ContextUsage, SendPriority } from '../../../shared/model';
+import type {
+  Autonomy,
+  ChatAttachment,
+  ChatCommand,
+  ChatEvent,
+  ChatItem,
+  ChatSnapshot,
+  ChatState,
+  ContextUsage,
+  Effort,
+  SendPriority,
+} from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
 
 // Estado de uma conversa: histórico do transcript + o que chega ao vivo pelo SSE.
@@ -13,11 +24,18 @@ export interface ChatView {
   loading: boolean;
   error: string | null;
   /** false = não foi enviada (erro ou trava de consumo recusada). */
-  send: (text: string, priority?: SendPriority, images?: string[]) => Promise<boolean>;
+  send: (text: string, priority?: SendPriority, images?: string[], files?: ChatAttachment[]) => Promise<boolean>;
   compact: () => Promise<void>;
   interrupt: () => Promise<void>;
-  /** `executeAs`: ao aprovar um plano, a autonomia com que ele executa; `message`: o que ele lê ao negar. */
-  answer: (requestId: string, allow: boolean, opts?: { message?: string; executeAs?: Autonomy }) => Promise<void>;
+  /**
+   * `executeAs`: ao aprovar um plano, a autonomia com que ele executa; `message`: o que ele lê ao
+   * negar; `remember`: aprovar de vez, nesta conversa ou no projeto.
+   */
+  answer: (requestId: string, allow: boolean, opts?: { message?: string; executeAs?: Autonomy; remember?: 'session' | 'project' }) => Promise<void>;
+  /** Modelo, esforço e autonomia desta conversa, na hora. */
+  settings: (s: { model?: string; effort?: Effort; autonomy?: Autonomy }) => Promise<void>;
+  /** Comandos "/" da sessão (ou os últimos vistos no projeto, antes de abrir). */
+  commands: ChatCommand[];
   /** Confere de novo se a sessão ainda está aberta em outro lugar. */
   recheck: () => Promise<void>;
 }
@@ -31,6 +49,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
   const [state, setState] = useState<ChatState | null>(null);
   const [baseContext, setBaseContext] = useState<ContextUsage | null>(null);
   const [elsewhere, setElsewhere] = useState<ChatSnapshot['elsewhere']>(null);
+  const [knownCommands, setKnownCommands] = useState<ChatCommand[]>([]);
   const [loading, setLoading] = useState(!!initialSessionId);
   const [error, setError] = useState<string | null>(null);
   const source = useRef<EventSource | null>(null);
@@ -79,6 +98,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
       const snap = await api.chat(projectId, sid);
       setHistory(snap.history);
       setHeld(snap.held ?? []);
+      setKnownCommands(snap.commands ?? []);
       setBaseContext(snap.context);
       setElsewhere(snap.elsewhere);
       if (snap.live) {
@@ -130,10 +150,10 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     if (!source.current || source.current.readyState === EventSource.CLOSED) openStream(sid);
   };
 
-  const send = async (text: string, priority?: SendPriority, images: string[] = []) => {
+  const send = async (text: string, priority?: SendPriority, images: string[] = [], files: ChatAttachment[] = []) => {
     setError(null);
     try {
-      const r = await withUsageConfirm((force) => api.chatSend(projectId, { sessionId, staffId, text, force, priority, images }));
+      const r = await withUsageConfirm((force) => api.chatSend(projectId, { sessionId, staffId, text, force, priority, images, files }));
       if (!r) return false;
       if (r.sessionId !== sessionId) setSessionId(r.sessionId);
       if (r.held) {
@@ -164,8 +184,19 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     if (sessionId) await api.chatInterrupt(sessionId).catch(() => {});
   };
 
-  const answer = async (requestId: string, allow: boolean, opts?: { message?: string; executeAs?: Autonomy }) => {
+  const answer = async (requestId: string, allow: boolean, opts?: { message?: string; executeAs?: Autonomy; remember?: 'session' | 'project' }) => {
     if (sessionId) await api.chatPermission(sessionId, requestId, allow, opts).catch((e: Error) => setError(e.message));
+  };
+
+  const settings = async (s: { model?: string; effort?: Effort; autonomy?: Autonomy }) => {
+    setError(null);
+    try {
+      const r = await api.chatSettings(projectId, { sessionId, staffId, ...s });
+      if (r.sessionId !== sessionId) setSessionId(r.sessionId);
+      ensureStream(r.sessionId);
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   /** Processo órfão do MyCo: encerra e retoma aqui. Aberta de verdade em outro lugar: diz que continua lá. */
@@ -195,6 +226,8 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     compact,
     interrupt,
     answer,
+    settings,
+    commands: state?.commands?.length ? state.commands : knownCommands,
     recheck,
   };
 }

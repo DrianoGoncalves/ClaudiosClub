@@ -88,8 +88,19 @@ export function EmployeePanel(props: {
   /** Nível simples: o painel fica só com a conversa. */
   simple?: boolean;
   onShowAdvanced?: () => void;
+  /** Conversas do funcionário, da mais recente à mais antiga. */
+  conversations?: Array<{ id: string; title: string | null; updatedAt: string | null }>;
 }) {
   const { session: s, staff, project } = props;
+  // Qual conversa está aberta: a mais recente, outra da lista, ou uma nova (ainda sem sessão).
+  const [picked, setPicked] = useState<string | null>(s?.id ?? null);
+  const [fresh, setFresh] = useState(false);
+  useEffect(() => {
+    setPicked(s?.id ?? null);
+    setFresh(false);
+  }, [s?.id]);
+  const current = fresh ? null : picked;
+  const conversations = props.conversations ?? [];
   const live = s?.live?.alive ? s.live : null;
   const name = staff?.name ?? (s ? employeeName(s) : '?');
   return (
@@ -129,16 +140,41 @@ export function EmployeePanel(props: {
         <TempNotice staff={staff} managers={props.managers} projectId={project.id} archived={props.archived} onArchive={props.onArchive} onChanged={props.onChanged} />
       )}
       {staff?.browser && <BrowserCheck />}
+      {staff && project && (conversations.length > 0 || fresh) && (
+        <div className="chat-convos">
+          <select
+            aria-label="Conversa"
+            value={current ?? ''}
+            onChange={(e) => {
+              setFresh(false);
+              setPicked(e.target.value);
+            }}
+          >
+            {fresh && <option value="">Nova conversa</option>}
+            {conversations.map((c, i) => (
+              <option key={c.id} value={c.id}>
+                {conversationLabel(c, i)}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="btn-secondary" disabled={fresh} onClick={() => setFresh(true)} title="Começa uma conversa do zero (a ficha e a memória continuam)">
+            Nova conversa
+          </button>
+        </div>
+      )}
       {project && (
         <ChatView
-          key={`${s?.id ?? 'novo'}:${staff?.id ?? ''}`}
+          key={`${current ?? 'novo'}:${staff?.id ?? ''}`}
           projectId={project.id}
-          sessionId={s?.id ?? null}
+          sessionId={current}
           staffId={staff?.id ?? null}
           name={name}
           autonomy={staff?.autonomy ?? null}
           disabled={!project.exists ? 'a pasta do projeto não existe' : null}
           onSessionStarted={props.onSessionStarted}
+          level={props.simple ? 'simple' : 'advanced'}
+          fichaModel={staff?.model ?? null}
+          fichaEffort={staff?.effort ?? null}
         />
       )}
 
@@ -213,6 +249,13 @@ export function EmployeePanel(props: {
       )}
     </>
   );
+}
+
+/** "Ajustar o header da sala · 27/10 14:05" (a mais recente ganha "atual"). */
+function conversationLabel(c: { title: string | null; updatedAt: string | null }, index: number): string {
+  const title = (c.title ?? 'Conversa sem título').replace(/\s+/g, ' ').slice(0, 48);
+  const when = c.updatedAt ? new Date(c.updatedAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  return `${index === 0 ? 'atual: ' : ''}${title}${when ? ` · ${when}` : ''}`;
 }
 
 /**

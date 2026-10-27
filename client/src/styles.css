@@ -388,6 +388,36 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .chat-footer-actions .check { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); cursor: pointer; }
 /* Botão liga/desliga: o btn-secondary com estado pressionado em azul de caneta. */
 .segmented { display: inline-flex; gap: 6px; }
+/* Conversa: qual delas, lista de tarefas do funcionário, ajustes, menu de "/" e "@", anexos. */
+.chat-convos { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+.chat-convos select { flex: 1; min-width: 0; font: inherit; font-size: 12.5px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
+.chat-todos { margin: 4px 0; padding: 6px 10px; border: 1px dashed var(--line); border-radius: 8px; }
+.chat-todos ul { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 2px; font-size: 12.5px; }
+.chat-todos-head { font-weight: 600; }
+.todo-mark { display: inline-block; width: 16px; color: var(--muted); }
+.todo-completed { color: var(--muted); text-decoration: line-through; }
+.todo-in_progress { font-weight: 600; }
+.todo-in_progress .todo-mark { color: var(--ink-blue); }
+.chat-settings { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.chat-settings select { font: inherit; font-size: 12px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
+.chat-settings .btn-toggle { font-size: 12px; padding: 2px 8px; }
+.chat-input { position: relative; }
+.chat-suggest { position: absolute; left: 0; right: 0; bottom: 100%; margin: 0 0 4px; padding: 4px; list-style: none; max-height: 240px; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2); z-index: 5; }
+.chat-suggest button { display: block; width: 100%; text-align: left; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-suggest button.is-active { background: color-mix(in srgb, var(--ink-blue) 14%, transparent); }
+.chat-file { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; }
+.chat-file button { border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+/* Ctrl+K: ir para funcionário, projeto ou tarefa. */
+.quick-jump-backdrop { align-items: flex-start; padding-top: 12vh; }
+.quick-jump { width: min(560px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3); overflow: hidden; }
+.quick-jump input { width: 100%; border: 0; border-bottom: 1px solid var(--line); padding: 12px 14px; font: inherit; font-size: 15px; background: transparent; color: var(--ink); outline: none; }
+.quick-jump-list { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow-y: auto; }
+.quick-jump-list button { display: grid; grid-template-columns: 90px 1fr; grid-template-areas: 'kind title' 'kind detail'; gap: 0 10px; width: 100%; text-align: left; padding: 6px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ink); cursor: pointer; font: inherit; }
+.quick-jump-list button.is-active { background: color-mix(in srgb, var(--ink-blue) 14%, transparent); }
+.quick-jump-kind { grid-area: kind; align-self: center; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.quick-jump-title { grid-area: title; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quick-jump-detail { grid-area: detail; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quick-jump-empty { padding: 10px; }
 .simple-hire { display: grid; gap: 12px; }
 .simple-summary { margin: 0; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; }
 .simple-more { margin: 8px 2px; }

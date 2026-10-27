@@ -8,8 +8,12 @@ import { writeAtomic } from './staff/store';
 // Cargos da empresa: os prontos (shared/roles.ts) + os seus, em ~/.myco/roles.json:
 //   items:     os seus cargos e as suas versões dos prontos (mesmo id do pronto)
 //   removed:   prontos que você tirou da lista
-//   defaultId: o cargo que já vem preenchido ao contratar (null = começa em branco)
+//   defaultId: o cargo que já vem preenchido ao contratar (null = começa em branco; sem a chave, o
+//              orquestrador)
 // Um pronto novo numa versão futura do MyCo aparece sozinho (não está em `removed`).
+
+/** O cargo que vem marcado ao contratar enquanto você não escolher outro. */
+export const DEFAULT_ROLE = 'orquestrador';
 
 export class RoleError extends Error {}
 
@@ -32,6 +36,7 @@ export const RoleInput = z.object({
   worktree: z.boolean().optional(),
   skills: z.array(z.string().max(100)).max(50).optional(),
   servers: z.boolean().optional(),
+  canHire: z.boolean().optional(),
 });
 
 interface RolesFile {
@@ -48,9 +53,10 @@ export async function readRolesFile(file = FILE): Promise<RolesFile> {
       const ok = RoleInput.safeParse(r);
       return ok.success && ok.data.id ? [{ ...ok.data, id: ok.data.id } as RoleTemplate] : [];
     });
-    return { items, removed: Array.isArray(d.removed) ? d.removed.filter((x) => typeof x === 'string') : [], defaultId: typeof d.defaultId === 'string' ? d.defaultId : null };
+    const defaultId = typeof d.defaultId === 'string' ? d.defaultId : d.defaultId === null ? null : DEFAULT_ROLE;
+    return { items, removed: Array.isArray(d.removed) ? d.removed.filter((x) => typeof x === 'string') : [], defaultId };
   } catch {
-    return { items: [], removed: [], defaultId: null };
+    return { items: [], removed: [], defaultId: DEFAULT_ROLE };
   }
 }
 

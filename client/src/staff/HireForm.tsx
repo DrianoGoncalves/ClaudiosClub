@@ -137,8 +137,8 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
   useEffect(() => {
     if (!roles || editing || adopting || defaultApplied.current) return;
     defaultApplied.current = true;
-    // No simples sempre há um cargo escolhido: o padrão, o de desenvolvedor ou o primeiro.
-    const d = roles.find((r) => r.isDefault) ?? (full ? undefined : (roles.find((r) => r.id === 'desenvolvedor') ?? roles[0]));
+    // No simples sempre há um cargo escolhido: o padrão, o orquestrador ou o primeiro.
+    const d = roles.find((r) => r.isDefault) ?? (full ? undefined : (roles.find((r) => r.id === 'orquestrador') ?? roles[0]));
     if (d) applyTemplate(d);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roles]);
@@ -154,6 +154,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
     setModel(t.model);
     setEffort(t.effort ?? '');
     setPlaybook(t.playbook ?? '');
+    setCanHire(!!t.canHire);
     if (t.worktree !== undefined) setWorktree(t.worktree);
     if (t.skills) setSkills([...new Set([...skills, ...t.skills.filter((s) => skillNames.includes(s))])]);
     setShowServers(!!t.servers || servers.length > 0);
@@ -358,8 +359,8 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
                 Vem do cargo: {modelLabel(template.model)}
                 {template.effort ? `, esforço ${template.effort}` : ''}, {AUTONOMY_OPTIONS.find((o) => o.value === template.autonomy)?.label.toLowerCase()}
                 {template.playbook ? `, ${PLAYBOOK_OPTIONS.find((o) => o.value === template.playbook)?.label.toLowerCase()}` : ''}
-                {autoWorktree ? ', worktree própria (já há outro editando o projeto)' : ', edita o projeto direto'}, sem MCPs, conversa aqui no
-                MyCo.
+                {autoWorktree ? ', worktree própria (já há outro editando o projeto)' : ', edita o projeto direto'}
+                {template.canHire ? ', pode contratar subfuncionários (temporários)' : ''}, sem MCPs, conversa aqui no MyCo.
               </p>
             )}
             <p className="small">

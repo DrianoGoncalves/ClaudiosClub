@@ -20,7 +20,8 @@ import type {
 import { api, withUsageConfirm } from './api';
 import { BoardView } from './board/Board';
 import { useBoardBackground } from './board/colors';
-import { archiveKey, employeeNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
+import { archiveKey, employeeNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
+import { QuickJump } from './toolbar/QuickJump';
 import {
   AgentPanel,
   EmployeePanel,
@@ -76,6 +77,8 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   /** Quadro de tarefas aberto (id do projeto). */
   const [tasksFor, setTasksFor] = useState<string | null>(null);
+  /** Tarefa escolhida no Ctrl+K: o quadro de tarefas abre com ela selecionada. */
+  const [jumpTask, setJumpTask] = useState<string | null>(null);
   /** Tarefas em aberto por projeto, para o cabeçalho das salas. */
   const [taskSummary, setTaskSummary] = useState<Record<string, TaskSummary>>({});
   const readTaskSummary = useCallback(() => {
@@ -321,6 +324,7 @@ export function App() {
               onSessionStarted={reloadSoon}
               simple={simple}
               onShowAdvanced={() => void saveUiLevel('advanced')}
+              conversations={selection.staff ? staffConversations(board, selection.staff) : []}
               onChanged={() => {
                 load();
                 // Efetivar desarquiva no servidor: os arquivados do config mudam também.
@@ -356,14 +360,34 @@ export function App() {
           }}
         />
       )}
+      {board && (
+        <QuickJump
+          board={board}
+          taskProjects={Object.keys(taskSummary)}
+          onJump={(t) => {
+            if (t.kind === 'task') {
+              setJumpTask(t.taskId);
+              setTasksFor(t.projectId);
+              return;
+            }
+            setTasksFor(null);
+            setSelectedId(t.kind === 'staff' ? staffNodeId(t.projectId, t.staffId) : projectNodeId(t.projectId));
+          }}
+        />
+      )}
       {board && tasksFor && (
         <TasksBoard
+          key={`${tasksFor}:${jumpTask ?? ''}`}
+          initialTaskId={jumpTask}
           projectId={tasksFor}
           projectName={board.projects.find((p) => p.id === tasksFor)?.name ?? tasksFor}
           staff={board.staff.filter((s) => s.projectId === tasksFor)}
           costs={costs}
           lastDeploy={taskSummary[tasksFor]?.lastDeploy ?? null}
-          onClose={() => setTasksFor(null)}
+          onClose={() => {
+            setTasksFor(null);
+            setJumpTask(null);
+          }}
           onOpenStaff={(staffId) => {
             setTasksFor(null);
             setSelectedId(staffNodeId(tasksFor, staffId));
@@ -440,6 +464,20 @@ function rankEmployees(board: Board, costs: CostReport | null, config: AppConfig
     }
   }
   return out.sort((a, b) => b.usd - a.usd);
+}
+
+/**
+ * Conversas de um funcionário, da mais recente à mais antiga. As da worktree dele ficam noutra
+ * pasta do Claude Code; as que ainda não gravaram nada entram pela data de início.
+ */
+function staffConversations(board: Board, staff: StaffProfile) {
+  const known = new Map(Object.values(board.sessions).flat().map((s) => [s.id, s]));
+  return staff.sessions
+    .map((x) => {
+      const s = known.get(x.id);
+      return { id: x.id, title: s?.title ?? null, updatedAt: s?.updatedAt ?? x.startedAt };
+    })
+    .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
 }
 
 function employeeCost(costs: CostReport | null, sel: { session: Session | null; staff: StaffProfile | null; projectId: string }) {

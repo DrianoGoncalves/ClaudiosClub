@@ -1,9 +1,9 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { Autonomy, ChatEvent, ChatItem, ChatSnapshot, LiveSession, SendPriority, StaffProfile, UsageLimit } from '../../shared/model';
+import type { Autonomy, ChatAttachment, ChatCommand, ChatEvent, ChatItem, ChatSnapshot, LiveSession, SendPriority, StaffProfile, UsageLimit } from '../../shared/model';
 import { writeAtomic } from '../staff/store';
 import { readHistory } from './history';
-import { ChatProcess, type ChatProcessOptions } from './process';
+import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
 import { isAlive, killTree, type ChatRegistry } from './registry';
 
 export interface ChatSpawn {
@@ -34,7 +34,7 @@ export interface ChatManagerOptions {
   /** Uma mensagem sua foi para a conversa (a tarefa dela volta para "fazendo"). */
   onSent?: (sessionId: string) => void;
   /** Uma conversa parou de trabalhar (a fila de tarefas do funcionário anda). */
-  onIdle?: (sessionId: string, projectId: string, staffId: string | null) => void;
+  onIdle?: (sessionId: string, projectId: string, staffId: string | null, reason: 'turn' | 'background' | 'exit') => void;
 }
 
 export class ChatError extends Error {}
@@ -88,6 +88,8 @@ export class ChatManager {
   private readonly streams = new Map<string, Map<Listener, () => void>>();
   /** Conversas cuja ficha mudou: o aviso para reler vai na próxima mensagem de cada uma. */
   private readonly fichaNotices = new Map<string, string>();
+  /** Por projeto: os comandos "/" da última sessão que abriu. */
+  private readonly commands = new Map<string, ChatCommand[]>();
   /** Segredos vistos nas conversas (um aviso por tipo por sessão, até você dispensar). */
   private readonly secrets: Array<{ id: string; sessionId: string; label: string; at: string }> = [];
   private readonly timer: NodeJS.Timeout;
@@ -112,7 +114,12 @@ export class ChatManager {
     const file = await findTranscript(this.opts.transcriptsDir, projectId, sessionId);
     // Com processo aberto, o histórico vai até o início dele; o resto vem pelo SSE.
     const { items, context } = await readHistory(file, { before: live ? chat!.startedAt : undefined });
-    return { sessionId, history: items, live, context, elsewhere: await this.elsewhere(sessionId) };
+    return { sessionId, history: items, live, context, elsewhere: await this.elsewhere(sessionId), commands: this.commands.get(projectId) ?? [] };
+  }
+
+  /** Comandos "/" do projeto vistos na última sessão aberta (o menu funciona antes de abrir outra). */
+  commandsFor(projectId: string): ChatCommand[] {
+    return this.commands.get(projectId) ?? [];
   }
 
   /**
@@ -126,12 +133,13 @@ export class ChatManager {
     text: string,
     priority?: SendPriority,
     images: string[] = [],
+    files: ChatAttachment[] = [],
   ): Promise<string> {
     const chat = await this.ensure(projectId, sessionId, staffId);
     // A ficha mudou depois que esta conversa começou: o aviso vai junto, uma vez só.
     const notice = this.fichaNotices.get(chat.sessionId);
     this.fichaNotices.delete(chat.sessionId);
-    chat.send(text, priority, images, notice);
+    chat.send(text, priority, images, notice, files);
     this.opts.onSent?.(chat.sessionId);
     return chat.sessionId;
   }
@@ -168,10 +176,32 @@ export class ChatManager {
    * Responde um pedido de permissão. `executeAs` ("Aprovar e executar" no cartão de plano): depois
    * de aprovar, o processo troca para essa autonomia, já que o fim do modo plano cai em "pede tudo".
    */
-  answer(sessionId: string, requestId: string, allow: boolean, opts: { message?: string; executeAs?: Autonomy } = {}): boolean {
+  /**
+   * Ajustes na conversa, sem editar a ficha e sem reabrir: modelo, esforço e autonomia. Abre o
+   * processo se preciso (conversa nova também); devolve a sessão.
+   */
+  async settings(
+    projectId: string,
+    sessionId: string | null,
+    staffId: string | null,
+    s: { model?: string; effort?: string; autonomy?: Autonomy },
+  ): Promise<string> {
+    const chat = await this.ensure(projectId, sessionId, staffId);
+    if (s.model) chat.setModel(s.model, `Modelo desta conversa: ${s.model}`);
+    if (s.effort) chat.setEffort(s.effort, `Esforço desta conversa: ${s.effort}`);
+    if (s.autonomy) chat.setPermissionMode(CLI_MODE[s.autonomy], `Autonomia desta conversa: ${AUTONOMY_NAME[s.autonomy]}`);
+    return chat.sessionId;
+  }
+
+  answer(
+    sessionId: string,
+    requestId: string,
+    allow: boolean,
+    opts: { message?: string; executeAs?: Autonomy; remember?: Remember } = {},
+  ): boolean {
     const chat = this.chats.get(sessionId);
     const plan = chat?.pendingPermissions().find((p) => p.id === `p:${requestId}`)?.plan;
-    if (!chat?.answer(requestId, allow, opts.message)) return false;
+    if (!chat?.answer(requestId, allow, opts.message, opts.remember)) return false;
     if (allow && opts.executeAs) chat.setPermissionMode(CLI_MODE[opts.executeAs], `Executando como: ${AUTONOMY_NAME[opts.executeAs]}`);
     if (allow && plan !== undefined) this.opts.onPlanApproved?.(sessionId, plan);
     return true;
@@ -308,7 +338,8 @@ export class ChatManager {
       args: spawn.args,
       onUsage: (limits) => void this.saveUsage(spawn.sessionId, limits),
       onSecret: (label) => this.noteSecret(spawn.sessionId, label),
-      onIdle: () => this.opts.onIdle?.(spawn.sessionId, projectId, staffId),
+      onIdle: (reason) => this.opts.onIdle?.(spawn.sessionId, projectId, staffId, reason),
+      onCommands: (commands) => this.commands.set(projectId, commands),
       onExit: (pid, error) => {
         this.log(`${spawn.sessionId} saiu (pid ${pid})${error ? `: ${error.slice(0, 200)}` : ''}`);
         if (pid !== null) void this.opts.registry?.remove(spawn.sessionId, pid).catch(() => {});

@@ -27,6 +27,8 @@ export interface RoleTemplate {
   skills?: string[];
   /** Mostra o campo de servidores (cargos de infra). */
   servers?: boolean;
+  /** Já vem com "pode contratar subfuncionários" marcado. */
+  canHire?: boolean;
 }
 
 /** Como o cargo aparece para você: pronto ou seu, editado ou não, e se é o padrão. */
@@ -51,6 +53,8 @@ export const BUILTIN_ROLES: RoleTemplate[] = [
     effort: 'high',
     pickExecutors: true,
     playbook: 'plan-big-execute-small',
+    // Quem divide o trabalho pode precisar de um papel contínuo a mais (entra como temporário).
+    canHire: true,
     rules: [
       'Planeje antes de agir: liste as tarefas, os arquivos envolvidos e como saber que cada uma está pronta',
       'Delegue a execução aos agents indicados na ficha (ferramenta Agent), mandando arquivos, critério de pronto e o que não mexer',

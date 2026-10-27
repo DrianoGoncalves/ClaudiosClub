@@ -20,6 +20,14 @@ describe('cargos', () => {
     const list = await listRoles(path.join(root, 'vazio.json'));
     expect(list.map((r) => r.id)).toEqual(BUILTIN_ROLES.map((r) => r.id));
     expect(list.every((r) => r.builtin && !r.edited && r.model)).toBe(true);
+    // O padrão é o orquestrador, que já vem podendo contratar.
+    expect(list.filter((r) => r.isDefault).map((r) => [r.id, r.canHire])).toEqual([['orquestrador', true]]);
+  });
+
+  it('padrão: "nenhum" escolhido continua nenhum', async () => {
+    const file = path.join(root, 'sem-padrao.json');
+    expect((await setDefaultRole(null, file)).some((r) => r.isDefault)).toBe(false);
+    expect((await listRoles(file)).some((r) => r.isDefault)).toBe(false);
   });
 
   it('cria o seu, edita um pronto (e volta ao original), tira e devolve prontos', async () => {

@@ -10,6 +10,7 @@ import { ArchiveRequest, ConfigPatch, MYCO_HOME, readConfig, setArchived, update
 import { z } from 'zod';
 import { AgentError, AgentInput, readAgentSource, saveAgent } from './adapters/claude/agentWrite';
 import { ChatError, ChatManager } from './chat/manager';
+import { searchFiles } from './fileSearch';
 import { ChatRegistry } from './chat/registry';
 import { StaffError, StaffService } from './staff/service';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
@@ -60,7 +61,8 @@ const staff: StaffService = new StaffService(adapter, {
       chats.profileChanged(prev, next, dir ? path.join(dir, '.myco', 'staff', `${next.id}.md`) : null),
     ),
   // Subfuncionário contratado pela API: abre numa conversa do MyCo, não num terminal.
-  openChat: (projectId, staffId, text): Promise<string> => chats.send(projectId, null, staffId, text),
+  // O gestor que contratou pela API passa a primeira tarefa: é delegação (bolinhas na linha).
+  openChat: (projectId, staffId, text): Promise<string> => chats.send(projectId, null, staffId, text, undefined, [], [], true),
   isWorking: (staffId) => chats.staffWorking(staffId),
   weekCost: async (projectId) => {
     const c = await getCosts();
@@ -76,7 +78,12 @@ const chats: ChatManager = new ChatManager({
   onPlanApproved: (sid, plan) => void tasks.onPlanApproved(sid, plan).catch(() => {}),
   onSent: (sid) => void tasks.onSent(sid).catch(() => {}),
   // Ficou livre: os ajustes guardados e a próxima tarefa da fila dele.
-  onIdle: (sid, pid, staffId) => void tasks.onIdle(sid, pid, staffId).catch(() => {}),
+  onIdle: (sid, pid, staffId, reason) => {
+    // Turno de conversa do MyCo: o aviso "terminou" vem daqui, na hora exata (o vigia lê as sessões
+    // de tempos em tempos e perde turno curto).
+    if (reason === 'turn') turns.noteDone(sid);
+    void tasks.onIdle(sid, pid, staffId).catch(() => {});
+  },
 });
 // Quem acabou de terminar o turno (trabalhando → parado), para o aviso "terminou" no navegador.
 const turns = new TurnWatcher(
@@ -159,8 +166,13 @@ const SendBody = z
     force: z.boolean().default(false),
     /** Com o funcionário trabalhando; sem ela, vale a da configuração. */
     priority: z.enum(['now', 'next', 'later']).optional(),
+    /** Arquivos anexados (texto ou PDF), além das imagens. */
+    files: z
+      .array(z.object({ name: z.string().trim().min(1).max(200), mediaType: z.string().max(100), data: z.string().max(3_000_000) }))
+      .max(5, 'no máximo 5 arquivos por mensagem')
+      .default([]),
   })
-  .refine((b) => b.text.length > 0 || b.images.length > 0, 'mensagem vazia');
+  .refine((b) => b.text.length > 0 || b.images.length > 0 || b.files.length > 0, 'mensagem vazia');
 const PermissionBody = z.object({
   requestId: z.string().min(1).max(100),
   allow: z.boolean(),
@@ -168,7 +180,17 @@ const PermissionBody = z.object({
   message: z.string().trim().min(1).max(500).optional(),
   /** Ao aprovar um plano: autonomia com que ele executa (só pelo MyCo). */
   executeAs: z.enum(AUTONOMY).optional(),
+  /** Ao aprovar: liberar de vez, nesta conversa ou no projeto (só pelo MyCo). */
+  remember: z.enum(['session', 'project']).optional(),
 });
+const ChatSettingsBody = z
+  .object({
+    staffId: z.string().max(40).nullable(),
+    model: z.string().regex(/^[\w.[\]-]{1,60}$/, 'modelo inválido').optional(),
+    effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+    autonomy: z.enum(AUTONOMY).optional(),
+  })
+  .refine((b) => b.model || b.effort || b.autonomy, 'nada para mudar');
 const StaffRef = z.object({ staffId: z.string().max(40).nullable().default(null), force: z.boolean().default(false) });
 
 function parse<S extends z.ZodTypeAny>(schema: S, body: unknown): z.output<S> {
@@ -287,7 +309,26 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
         if (held) return { sessionId: b.sessionId, held };
       }
       const priority = b.priority ?? (await readConfig()).sendWhileBusy;
-      return { sessionId: await chats.send(pid!, b.sessionId, b.staffId, b.text, priority, b.images) };
+      return { sessionId: await chats.send(pid!, b.sessionId, b.staffId, b.text, priority, b.images, b.files) };
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/chat/settings$`),
+    async ({ params: [pid], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      const b = parse(ChatSettingsBody.and(z.object({ sessionId: z.string().uuid().nullable() })), body);
+      return { sessionId: await chats.settings(pid!, b.sessionId, b.staffId, b) };
+    },
+  ],
+  // "@" no chat: arquivos do projeto que batem com o que foi digitado.
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/files$`),
+    async ({ params: [pid], url }) => {
+      const dir = await projectPathOf(pid!);
+      if (!dir) return [];
+      return searchFiles(dir, url.searchParams.get('q') ?? '');
     },
   ],
   [
@@ -305,7 +346,13 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     new RegExp(`^/api/chat/${ID}/permission$`),
     async ({ params: [sid], body, fromBrowser }) => {
       const b = parse(PermissionBody, body);
-      return { ok: chats.answer(sid!, b.requestId, b.allow, { message: b.message, executeAs: fromBrowser ? b.executeAs : undefined }) };
+      return {
+        ok: chats.answer(sid!, b.requestId, b.allow, {
+          message: b.message,
+          executeAs: fromBrowser ? b.executeAs : undefined,
+          remember: fromBrowser ? b.remember : undefined,
+        }),
+      };
     },
   ],
   // ---- caixa "precisa de mim" ----

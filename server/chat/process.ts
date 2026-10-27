@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { BackgroundTask, ChatEvent, ChatItem, ChatState, SendPriority, UsageLimit } from '../../shared/model';
+import type { BackgroundTask, ChatAttachment, ChatCommand, ChatEvent, ChatItem, ChatState, SendPriority, UsageLimit } from '../../shared/model';
 import { cleanEnv } from '../auth';
 import { tryJson } from '../adapters/claude/fsutil';
 import { contextWindowFor } from '../adapters/claude/pricing';
@@ -41,6 +41,32 @@ const BackgroundTasks = z.array(
     .passthrough(),
 );
 
+/** `commands_changed` traz cada comando "/" (e skill) com a descrição. */
+const Commands = z.array(z.object({ name: z.string(), description: z.string().optional() }).passthrough());
+
+/** Anexo → bloco de documento da API (texto como texto, PDF em base64). */
+export function documentBlock(f: ChatAttachment) {
+  return f.mediaType === 'application/pdf'
+    ? { type: 'document', title: f.name, source: { type: 'base64', media_type: 'application/pdf', data: f.data } }
+    : { type: 'document', title: f.name, source: { type: 'text', media_type: 'text/plain', data: f.data } };
+}
+
+/** Onde guardar o "permitir sempre": só nesta conversa, ou no projeto (.claude/settings.local.json). */
+export type Remember = 'session' | 'project';
+
+type Suggestion = Record<string, unknown> & { type?: string; rules?: unknown[] };
+
+/**
+ * As regras do "permitir sempre". Na conversa, as sugestões do próprio Claude Code (que podem ser
+ * trocar o modo, como "edita sozinho"). No projeto, só regras de ferramenta: trocar o modo do
+ * projeto inteiro seria demais.
+ */
+export function rememberRules(tool: string, suggestions: Suggestion[], where: Remember): unknown[] {
+  if (where === 'session' && suggestions.length) return suggestions.map((s) => ({ ...s, destination: 'session' }));
+  const rules = suggestions.filter((s) => s.type === 'addRules').flatMap((s) => (Array.isArray(s.rules) ? s.rules : []));
+  return [{ type: 'addRules', rules: rules.length ? rules : [{ toolName: tool }], behavior: 'allow', destination: where === 'session' ? 'session' : 'localSettings' }];
+}
+
 function backgroundTask(t: z.infer<typeof BackgroundTasks>[number]): BackgroundTask {
   const kind = t.task_type === 'local_agent' ? 'agent' : t.task_type === 'local_bash' ? 'shell' : (t.task_type ?? 'tarefa');
   const label = [t.subagent_type, t.description].filter(Boolean).join(': ') || t.task_id;
@@ -60,8 +86,13 @@ export interface ChatProcessOptions {
   onExit?: (pid: number | null, error: string | null) => void;
   /** Algo com cara de segredo passou pela conversa (só o tipo; o valor nunca sai daqui). */
   onSecret?: (label: string) => void;
-  /** Parou de trabalhar: turno acabou sem nada em segundo plano, ou o processo saiu. */
-  onIdle?: () => void;
+  /**
+   * Parou de trabalhar: o turno acabou (`turn`), o que estava em segundo plano terminou
+   * (`background`) ou o processo saiu (`exit`).
+   */
+  onIdle?: (reason: 'turn' | 'background' | 'exit') => void;
+  /** Chegou a lista de comandos "/" da sessão. */
+  onCommands?: (commands: ChatCommand[]) => void;
   /** Troca o `spawn` real nos testes. */
   spawnImpl?: (cmd: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }) => ChildProcessWithoutNullStreams;
 }
@@ -77,13 +108,25 @@ export class ChatProcess {
   private readonly log: ChatEvent[] = [];
   private readonly items = new Map<string, ChatItem>();
   private readonly listeners = new Set<Listener>();
-  private readonly pending = new Map<string, unknown>();
+  /** Pedidos de permissão sem resposta: a entrada original e as sugestões de "permitir sempre". */
+  private readonly pending = new Map<string, { input: unknown; tool: string; suggestions: Suggestion[] }>();
   private stderr = '';
   private buf = '';
-  private state: ChatState = { running: false, busy: false, compacting: false, model: null, permissionMode: null, context: null, error: null, background: [] };
+  private state: ChatState = {
+    running: false,
+    busy: false,
+    compacting: false,
+    model: null,
+    permissionMode: null,
+    context: null,
+    error: null,
+    background: [],
+    commands: [],
+    effort: null,
+  };
   private window: number | null = null;
-  /** Pedidos de controle nossos esperando resposta (troca de modo): id → o que avisar no fim. */
-  private readonly controls = new Map<string, string>();
+  /** Pedidos de controle nossos esperando resposta (troca de modo, modelo, esforço): o que avisar no fim. */
+  private readonly controls = new Map<string, { label: string; onOk?: (response: Record<string, unknown>) => void; mode?: boolean }>();
   /** O próximo resultado com erro é de um turno que nós paramos (botão Parar ou mensagem `now`). */
   private stopping = false;
   /** A ficha mudou depois que o processo abriu: reabre quando estiver parado. */
@@ -123,8 +166,17 @@ export class ChatProcess {
     return this.opts.staffId ?? null;
   }
 
-  private idleCheck() {
-    if (!this.working) this.opts.onIdle?.();
+  get commands(): ChatCommand[] {
+    return this.state.commands;
+  }
+
+  private setCommands(commands: ChatCommand[]) {
+    this.setState({ commands });
+    this.opts.onCommands?.(commands);
+  }
+
+  private idleCheck(reason: 'turn' | 'background') {
+    if (!this.working) this.opts.onIdle?.(reason);
   }
 
   get currentSeq(): number {
@@ -137,7 +189,8 @@ export class ChatProcess {
 
   start() {
     const run = this.opts.spawnImpl ?? ((cmd, args, o) => spawn(cmd, args, { ...o, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }));
-    const child = run('claude', [...STREAM_FLAGS, ...this.opts.args], { cwd: this.opts.cwd, env: cleanEnv() });
+    // A lista de tarefas (TaskCreate/TaskUpdate) não vem ligada no modo -p: o chat mostra ela fixa.
+    const child = run('claude', [...STREAM_FLAGS, ...this.opts.args], { cwd: this.opts.cwd, env: { ...cleanEnv(), CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' } });
     this.child = child;
     this.setState({ running: true, error: null });
     child.stdout.on('data', (chunk: Buffer) => this.onData(chunk.toString('utf8')));
@@ -158,14 +211,15 @@ export class ChatProcess {
    * Com o turno em andamento, a mensagem vai com prioridade (ver SendPriority); parado, é um turno
    * novo e a prioridade não importa.
    */
-  send(text: string, priority: SendPriority = 'next', images: string[] = [], notice?: string) {
+  send(text: string, priority: SendPriority = 'next', images: string[] = [], notice?: string, files: ChatAttachment[] = []) {
     const queued = this.state.busy ? priority : undefined;
     if (queued === 'now') this.stopping = true;
     this.scan(text);
-    // Imagens antes do texto (como o Claude Code faz ao colar um print): blocos base64 da API.
+    // Imagens e arquivos antes do texto (como o Claude Code faz ao colar um print): blocos da API.
     // Um aviso do MyCo (ficha atualizada) vai num bloco à parte; a conversa mostra só o seu texto.
     const content = [
       ...images.map(imageBlock).filter((b) => b !== null),
+      ...files.map(documentBlock),
       ...(notice ? [{ type: 'text', text: notice }] : []),
       ...(text ? [{ type: 'text', text }] : []),
     ];
@@ -177,15 +231,34 @@ export class ChatProcess {
       at: new Date().toISOString(),
       ...(queued && { queued }),
       ...(images.length && { images: images.length }),
+      ...(files.length && { files: files.map((f) => f.name) }),
     });
     this.setState({ busy: true, error: null });
   }
 
   /** Troca o modo de permissão do processo aberto, sem reiniciar (a ficha mudou de autonomia). */
   setPermissionMode(mode: string, label: string) {
+    this.control({ subtype: 'set_permission_mode', mode }, label, { mode: true });
+  }
+
+  /** Troca o modelo desta conversa, na hora (a ficha continua como está). */
+  setModel(model: string, label: string) {
+    // A resposta traz o id do modelo novo: a tela mostra já, sem esperar o próximo turno.
+    this.control({ subtype: 'set_model', model }, label, {
+      onOk: (res) => typeof res.model === 'string' && this.setState({ model: res.model }),
+    });
+  }
+
+  /** Troca o esforço (quanto ele pensa) desta conversa, na hora. */
+  setEffort(effort: string, label: string) {
+    this.control({ subtype: 'apply_flag_settings', settings: { effortLevel: effort } }, label, { onOk: () => this.setState({ effort }) });
+  }
+
+  /** `mode`: troca de autonomia (se não der, a conversa reabre com a ficha nova). */
+  private control(request: Record<string, unknown>, label: string, opts: { onOk?: (response: Record<string, unknown>) => void; mode?: boolean } = {}) {
     const requestId = randomUUID();
-    this.controls.set(requestId, label);
-    this.write({ type: 'control_request', request_id: requestId, request: { subtype: 'set_permission_mode', mode } });
+    this.controls.set(requestId, { label, ...opts });
+    this.write({ type: 'control_request', request_id: requestId, request });
   }
 
   /** Espera o processo sair (para reabrir com a ficha nova). */
@@ -207,23 +280,25 @@ export class ChatProcess {
   }
 
   /**
-   * Responde um pedido de permissão. Aprovar devolve a entrada original, sem mudanças; negar
-   * leva `message` (o que o funcionário lê), por padrão "negou".
+   * Responde um pedido de permissão. Aprovar devolve a entrada original, sem mudanças; com
+   * `remember`, ainda libera de vez (nesta conversa ou no projeto). Negar leva `message` (o que o
+   * funcionário lê), por padrão "negou".
    */
-  answer(requestId: string, allow: boolean, message = 'O usuário negou pelo MyCo.'): boolean {
-    if (!this.pending.has(requestId)) return false;
-    const input = this.pending.get(requestId);
+  answer(requestId: string, allow: boolean, message = 'O usuário negou pelo MyCo.', remember?: Remember): boolean {
+    const p = this.pending.get(requestId);
+    if (!p) return false;
     this.pending.delete(requestId);
+    const updatedPermissions = allow && remember ? rememberRules(p.tool, p.suggestions, remember) : undefined;
     this.write({
       type: 'control_response',
       response: {
         subtype: 'success',
         request_id: requestId,
-        response: allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message },
+        response: allow ? { behavior: 'allow', updatedInput: p.input, ...(updatedPermissions && { updatedPermissions }) } : { behavior: 'deny', message },
       },
     });
     const item = this.items.get(`p:${requestId}`);
-    if (item?.kind === 'permission') this.putItem({ ...item, status: allow ? 'allowed' : 'denied' });
+    if (item?.kind === 'permission') this.putItem({ ...item, status: allow ? 'allowed' : 'denied', ...(updatedPermissions && { remembered: remember }) });
     return true;
   }
 
@@ -287,6 +362,12 @@ export class ChatProcess {
         // Cada turno começa com um init, inclusive o da mensagem que esperou na fila (`later`).
         if (subtype === 'init') {
           this.setState({ busy: true, ...(typeof ev.model === 'string' && { model: ev.model }), ...(mode && { permissionMode: mode }) });
+          // Sem a lista com descrições (commands_changed), ao menos os nomes.
+          const names = Array.isArray(ev.slash_commands) ? ev.slash_commands.filter((c): c is string => typeof c === 'string') : [];
+          if (!this.state.commands.length && names.length) this.setCommands(names.map((name) => ({ name, description: '' })));
+        } else if (subtype === 'commands_changed') {
+          const list = Commands.safeParse(ev.commands);
+          if (list.success) this.setCommands(list.data.map((c) => ({ name: c.name, description: (c.description ?? '').slice(0, 200) })));
         } else if (subtype === 'status') this.setState({ compacting: ev.status === 'compacting', ...(mode && { permissionMode: mode }) });
         else if (subtype === 'compact_boundary') {
           this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text: 'Conversa compactada', tone: 'info', at });
@@ -298,7 +379,7 @@ export class ChatProcess {
           const tasks = BackgroundTasks.safeParse(ev.tasks);
           if (tasks.success) {
             this.setState({ background: tasks.data.map(backgroundTask) });
-            if (!tasks.data.length) this.idleCheck();
+            if (!tasks.data.length) this.idleCheck('background');
           }
         }
         return;
@@ -355,10 +436,12 @@ export class ChatProcess {
         return;
       }
       case 'control_response': {
-        const res = ev.response as { subtype?: string; request_id?: string; error?: string } | undefined;
-        const label = res?.request_id ? this.controls.get(res.request_id) : undefined;
-        if (!res?.request_id || label === undefined) return;
+        const res = ev.response as { subtype?: string; request_id?: string; error?: string; response?: Record<string, unknown> } | undefined;
+        const entry = res?.request_id ? this.controls.get(res.request_id) : undefined;
+        if (!res?.request_id || !entry) return;
         this.controls.delete(res.request_id);
+        const { label, mode } = entry;
+        if (res.subtype === 'success') entry.onOk?.(res.response ?? {});
         this.putItem(
           res.subtype === 'success'
             ? { kind: 'notice', id: `n:${randomUUID()}`, text: label, tone: 'info', at }
@@ -368,20 +451,27 @@ export class ChatProcess {
                 // "Sem travas" só entra com o processo aberto já nesse modo: reabre na próxima mensagem.
                 text: /bypass/i.test(res.error ?? '')
                   ? `${label}: a conversa reabre nesse modo na próxima mensagem.`
-                  : `Não deu para trocar a autonomia agora (${res.error ?? 'erro'}); vale quando a conversa reabrir.`,
+                  : mode
+                    ? `Não deu para trocar a autonomia agora (${res.error ?? 'erro'}); vale quando a conversa reabrir.`
+                    : `Não deu para aplicar agora (${res.error ?? 'erro'}).`,
                 tone: /bypass/i.test(res.error ?? '') ? 'info' : 'warn',
                 at,
               },
         );
-        if (res.subtype !== 'success') this.stale = true;
+        if (res.subtype !== 'success' && mode) this.stale = true;
         return;
       }
       case 'control_request': {
-        const req = ev.request as { subtype?: string; tool_name?: string; display_name?: string; input?: unknown; description?: string } | undefined;
+        const req = ev.request as
+          | { subtype?: string; tool_name?: string; display_name?: string; input?: unknown; description?: string; permission_suggestions?: unknown }
+          | undefined;
         const requestId = typeof ev.request_id === 'string' ? ev.request_id : null;
         if (req?.subtype !== 'can_use_tool' || !requestId) return;
         const tool = req.display_name ?? req.tool_name ?? 'ferramenta';
-        this.pending.set(requestId, req.input);
+        const suggestions = (Array.isArray(req.permission_suggestions) ? req.permission_suggestions : []).filter(
+          (s): s is Suggestion => !!s && typeof s === 'object',
+        );
+        this.pending.set(requestId, { input: req.input, tool: req.tool_name ?? tool, suggestions });
         // Fim do modo plano: o plano vem inteiro em `input.plan` e vira um cartão para aprovar.
         const plan = req.tool_name === 'ExitPlanMode' ? (req.input as { plan?: unknown } | undefined)?.plan : undefined;
         this.putItem({
@@ -430,7 +520,7 @@ export class ChatProcess {
           this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text, tone: 'error', at });
         }
         this.setState({ busy: false, compacting: false });
-        this.idleCheck();
+        this.idleCheck('turn');
         return;
       }
     }
@@ -451,7 +541,7 @@ export class ChatProcess {
     this.controls.clear();
     this.setState({ running: false, busy: false, compacting: false, error, background: [] });
     for (const done of this.exitWaiters.splice(0)) done();
-    this.opts.onIdle?.();
+    this.opts.onIdle?.('exit');
   }
 
   private write(obj: unknown) {

@@ -538,6 +538,8 @@ export type ChatItem =
       at: string | null;
       queued?: SendPriority;
       images?: number;
+      /** Nomes dos arquivos anexados (texto, PDF). */
+      files?: string[];
       /** Guardada pelo MyCo até o funcionário terminar a outra tarefa (o motivo). */
       held?: string;
     }
@@ -564,6 +566,8 @@ export type ChatItem =
       at: string | null;
       /** Fim do modo plano (ExitPlanMode): o plano em Markdown, para aprovar e executar. */
       plan?: string;
+      /** Aprovado "sempre": nesta conversa ou no projeto. */
+      remembered?: 'session' | 'project';
     }
   | { kind: 'notice'; id: string; text: string; tone: 'info' | 'warn' | 'error'; at: string | null };
 
@@ -620,6 +624,22 @@ export interface ChatState {
    * mas fechar o processo agora os mataria no meio.
    */
   background: BackgroundTask[];
+  /** Comandos "/" e skills da sessão (o Claude Code manda ao abrir). */
+  commands: ChatCommand[];
+  /** Esforço trocado nesta conversa; null = o da ficha. */
+  effort: string | null;
+}
+
+export interface ChatCommand {
+  name: string;
+  description: string;
+}
+
+/** Arquivo anexado a uma mensagem (além das imagens): texto vai como texto; PDF, em base64. */
+export interface ChatAttachment {
+  name: string;
+  mediaType: string;
+  data: string;
 }
 
 export interface BackgroundTask {
@@ -643,6 +663,8 @@ export interface ChatSnapshot {
   live: { items: ChatItem[]; state: ChatState; seq: number } | null;
   /** Suas mensagens guardadas até o funcionário terminar a outra tarefa (ver Task.held). */
   held?: ChatItem[];
+  /** Comandos "/" conhecidos para o projeto (da última sessão aberta), para o menu antes de abrir. */
+  commands?: ChatCommand[];
   /** Contexto da última resposta registrada, quando não há processo aberto. */
   context: ContextUsage | null;
   /** A sessão está aberta em outro lugar (app ou terminal): conversar daqui criaria uma cópia. */

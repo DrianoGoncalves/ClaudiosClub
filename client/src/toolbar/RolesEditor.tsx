@@ -19,15 +19,16 @@ interface Draft {
   doneWhen: string;
   model: string;
   effort: '' | Effort;
+  canHire: boolean;
   /** Campos dos prontos que o editor não mostra (roteiro, worktree, skills…): voltam como estavam. */
   rest: Partial<RoleEntry>;
 }
 
-const blank: Draft = { label: '', role: '', mission: '', autonomy: 'acceptEdits', rules: '', doneWhen: '', model: 'sonnet', effort: 'medium', rest: {} };
+const blank: Draft = { label: '', role: '', mission: '', autonomy: 'acceptEdits', rules: '', doneWhen: '', model: 'sonnet', effort: 'medium', canHire: false, rest: {} };
 
 function toDraft(r: RoleEntry): Draft {
-  const { id, label, role, mission, autonomy, rules, doneWhen, model, effort, builtin: _b, edited: _e, isDefault: _d, ...rest } = r;
-  return { id, label, role, mission, autonomy, rules: rules.join('\n'), doneWhen, model, effort: effort ?? '', rest };
+  const { id, label, role, mission, autonomy, rules, doneWhen, model, effort, canHire, builtin: _b, edited: _e, isDefault: _d, ...rest } = r;
+  return { id, label, role, mission, autonomy, rules: rules.join('\n'), doneWhen, model, effort: effort ?? '', canHire: !!canHire, rest };
 }
 
 export function RolesEditor() {
@@ -68,6 +69,7 @@ export function RolesEditor() {
         doneWhen: editing.doneWhen.trim(),
         model: editing.model,
         effort: editing.effort || null,
+        canHire: editing.canHire,
       }),
     );
     if (ok) setEditing(null);
@@ -187,6 +189,10 @@ export function RolesEditor() {
           <label>
             Pronto quando
             <input value={editing.doneWhen} maxLength={2000} onChange={(e) => setEditing({ ...editing, doneWhen: e.target.value })} />
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={editing.canHire} onChange={(e) => setEditing({ ...editing, canHire: e.target.checked })} /> Pode
+            contratar subfuncionários <span className="muted small">(entram como temporários)</span>
           </label>
           <p className="muted small">Vale para os próximos contratados com este cargo. Quem já foi contratado continua com a própria ficha.</p>
           <p className="roles-footer">
