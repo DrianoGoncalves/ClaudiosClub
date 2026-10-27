@@ -61,8 +61,7 @@ const staff: StaffService = new StaffService(adapter, {
       chats.profileChanged(prev, next, dir ? path.join(dir, '.myco', 'staff', `${next.id}.md`) : null),
     ),
   // Subfuncionário contratado pela API: abre numa conversa do MyCo, não num terminal.
-  // O gestor que contratou pela API passa a primeira tarefa: é delegação (bolinhas na linha).
-  openChat: (projectId, staffId, text): Promise<string> => chats.send(projectId, null, staffId, text, undefined, [], [], true),
+  openChat: (projectId, staffId, text): Promise<string> => chats.send(projectId, null, staffId, text),
   isWorking: (staffId) => chats.staffWorking(staffId),
   weekCost: async (projectId) => {
     const c = await getCosts();
