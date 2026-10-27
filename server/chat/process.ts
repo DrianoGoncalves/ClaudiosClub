@@ -123,12 +123,17 @@ export class ChatProcess {
    * Com o turno em andamento, a mensagem vai com prioridade (ver SendPriority); parado, é um turno
    * novo e a prioridade não importa.
    */
-  send(text: string, priority: SendPriority = 'next', images: string[] = []) {
+  send(text: string, priority: SendPriority = 'next', images: string[] = [], notice?: string) {
     const queued = this.state.busy ? priority : undefined;
     if (queued === 'now') this.stopping = true;
     this.scan(text);
     // Imagens antes do texto (como o Claude Code faz ao colar um print): blocos base64 da API.
-    const content = [...images.map(imageBlock).filter((b) => b !== null), ...(text ? [{ type: 'text', text }] : [])];
+    // Um aviso do MyCo (ficha atualizada) vai num bloco à parte; a conversa mostra só o seu texto.
+    const content = [
+      ...images.map(imageBlock).filter((b) => b !== null),
+      ...(notice ? [{ type: 'text', text: notice }] : []),
+      ...(text ? [{ type: 'text', text }] : []),
+    ];
     this.write({ type: 'user', message: { role: 'user', content }, ...(queued && { priority: queued }) });
     this.putItem({
       kind: 'user',

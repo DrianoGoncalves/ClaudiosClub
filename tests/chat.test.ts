@@ -362,6 +362,29 @@ describe('ChatManager: ficha editada com a conversa aberta', () => {
     expect(m.attention()).toEqual([{ sessionId: 'sx', pending: [], error: 'o claude saiu com código 1' }]);
   });
 
+  it('ficha mudou: a próxima mensagem de cada conversa dela leva o aviso para reler, uma vez só', async () => {
+    const { m, procs } = manager();
+    await m.send('p', 'sx', 'ana', 'oi');
+    procs[0]!.emit({ type: 'result', is_error: false });
+    await tick();
+    m.profileChanged(profile(), profile({ mission: 'nova missão', updatedAt: '2' } as Partial<StaffProfile>), 'C:\\p\\.myco\\staff\\ana.md');
+    await m.send('p', 'sx', 'ana', 'continua');
+    await tick();
+    const blocks = (procs.at(-1)!.written.at(-1) as { message: { content: Array<{ text: string }> } }).message.content;
+    expect(blocks.map((b) => b.text)).toEqual([expect.stringMatching(/^\[MyCo\] Sua ficha foi atualizada.*C:\\p\\\.myco\\staff\\ana\.md/), 'continua']);
+    procs.at(-1)!.emit({ type: 'result', is_error: false });
+    await tick();
+    await m.send('p', 'sx', 'ana', 'e agora');
+    await tick();
+    const again = (procs.at(-1)!.written.at(-1) as { message: { content: Array<{ text: string }> } }).message.content;
+    expect(again.map((b) => b.text)).toEqual(['e agora']);
+    // Só a autonomia mudou: troca ao vivo, sem aviso de ficha.
+    m.profileChanged(profile(), profile({ autonomy: 'manual', updatedAt: '3' }));
+    await m.send('p', 'sx', 'ana', 'ok');
+    await tick();
+    expect((procs.at(-1)!.written.at(-1) as { message: { content: unknown[] } }).message.content).toHaveLength(1);
+  });
+
   it('aba ouvindo a sessão continua recebendo quando o processo fecha e reabre', async () => {
     const { m, procs } = manager();
     await m.send('p', 'sx', 'ana', 'um');
@@ -388,7 +411,8 @@ describe('ChatManager: ficha editada com a conversa aberta', () => {
     await m.send('p', 'sx', 'ana', 'continua');
     expect(procs).toHaveLength(2);
     expect(procs[1]!.spawned()?.args).toContain('opus');
-    expect(procs[1]!.written[0]).toMatchObject({ message: { content: [{ text: 'continua' }] } });
+    // Com o aviso de ficha atualizada antes (a ficha mudou), e a sua mensagem por último.
+    expect(procs[1]!.written[0]).toMatchObject({ message: { content: [{ text: expect.stringMatching(/^\[MyCo\] Sua ficha/) }, { text: 'continua' }] } });
   });
 });
 

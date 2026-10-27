@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { LaunchResult, ServerInfo, StaffProfile } from '../../shared/model';
 import { cleanEnv } from '../auth';
-import { buildClaudeArgs, identityPrompt, renderFicha, sanitizeArg, toCmdLine, type FichaContext } from './ficha';
+import { buildClaudeArgs, renderFicha, sanitizeArg, systemPrompt, toCmdLine, type FichaContext } from './ficha';
 import { buildMcpConfig } from './mcp';
 import { ensureMemory, fichaFile, memoryFile, saveProfile, staffDir, writeAtomic } from './store';
 import type { Worktree } from './worktree';
@@ -44,18 +44,18 @@ export async function launchStaff(
   const sessionId = resume ? last!.id : randomUUID();
   const cwd = sessionCwd(profile, ctx, resume ? sessionId : null);
 
-  const { identity, mcpConfigPath, addDirs } = await prepareRun(profile, ctx, sessionId, cwd);
+  const { systemPromptFile, mcpConfigPath, addDirs } = await prepareRun(profile, ctx, sessionId, cwd);
   const runDir = path.join(ctx.runDir, sessionId);
 
   const args = buildClaudeArgs(profile, {
     sessionId,
     resume,
-    identity,
+    systemPromptFile,
     mcpConfigPath,
     addDirs,
     firstPrompt: profile.firstTask
-      ? `Olá, ${profile.name}. Leia sua ficha e sua memória e comece pela primeira tarefa.`
-      : `Olá, ${profile.name}. Leia sua ficha e sua memória e diga em poucas linhas como pretende começar.`,
+      ? `Olá, ${profile.name}. Leia sua memória e comece pela primeira tarefa da ficha.`
+      : `Olá, ${profile.name}. Leia sua memória e diga em poucas linhas como pretende começar.`,
   });
   const command = toCmdLine('claude', args);
   // Nome primeiro: a aba do terminal é estreita.
@@ -84,23 +84,26 @@ export async function launchStaff(
 }
 
 /**
- * Ficha atualizada, identidade curta e config de MCP da ficha, para o terminal ou para a conversa
- * no MyCo. Rodando fora da pasta do projeto (worktree), a pasta das fichas entra em `--add-dir`.
+ * Ficha atualizada, prompt de sistema (identidade + ficha, em arquivo) e config de MCP da ficha,
+ * para o terminal ou para a conversa no MyCo. Rodando fora da pasta do projeto (worktree), a pasta
+ * das fichas entra em `--add-dir`.
  */
 export async function prepareRun(
   profile: StaffProfile,
   ctx: LaunchContext,
   sessionId: string,
   cwd: string,
-): Promise<{ identity: string; mcpConfigPath: string | null; addDirs: string[] }> {
+): Promise<{ systemPromptFile: string; mcpConfigPath: string | null; addDirs: string[] }> {
   const away = path.resolve(cwd) !== path.resolve(ctx.projectPath);
   const fichaCtx = await writeFicha(profile, ctx, away);
+  const systemPromptFile = path.join(ctx.runDir, sessionId, 'system.md');
+  await writeAtomic(systemPromptFile, systemPrompt(profile, fichaCtx, renderFicha(profile, fichaCtx)));
   let mcpConfigPath: string | null = null;
   if (profile.mcps !== null) {
     mcpConfigPath = path.join(ctx.runDir, sessionId, 'mcp.json');
     await writeAtomic(mcpConfigPath, JSON.stringify(await buildMcpConfig(ctx.projectPath, profile.mcps, ctx.claudeConfigFile), null, 2));
   }
-  return { identity: identityPrompt(profile, fichaCtx), mcpConfigPath, addDirs: away ? [staffDir(ctx.projectPath)] : [] };
+  return { systemPromptFile, mcpConfigPath, addDirs: away ? [staffDir(ctx.projectPath)] : [] };
 }
 
 /**

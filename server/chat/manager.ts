@@ -39,6 +39,9 @@ export class ChatError extends Error {}
 
 type Listener = (e: ChatEvent) => void;
 
+/** Começo do aviso de ficha atualizada (o histórico do chat o esconde, ver items.ts). */
+export const FICHA_NOTICE = '[MyCo] Sua ficha foi atualizada depois que esta conversa começou.';
+
 /** Autonomia da ficha → modo que o processo aberto reporta e aceita em `set_permission_mode`. */
 const CLI_MODE: Record<Autonomy, string> = { plan: 'plan', manual: 'default', acceptEdits: 'acceptEdits', auto: 'auto', bypassPermissions: 'bypassPermissions' };
 const AUTONOMY_NAME: Record<Autonomy, string> = {
@@ -81,6 +84,8 @@ export class ChatManager {
   private readonly chats = new Map<string, ChatProcess>();
   /** Abas ouvindo cada sessão: listener → como parar de ouvir o processo atual. */
   private readonly streams = new Map<string, Map<Listener, () => void>>();
+  /** Conversas cuja ficha mudou: o aviso para reler vai na próxima mensagem de cada uma. */
+  private readonly fichaNotices = new Map<string, string>();
   /** Segredos vistos nas conversas (um aviso por tipo por sessão, até você dispensar). */
   private readonly secrets: Array<{ id: string; sessionId: string; label: string; at: string }> = [];
   private readonly timer: NodeJS.Timeout;
@@ -121,18 +126,27 @@ export class ChatManager {
     images: string[] = [],
   ): Promise<string> {
     const chat = await this.ensure(projectId, sessionId, staffId);
-    chat.send(text, priority, images);
+    // A ficha mudou depois que esta conversa começou: o aviso vai junto, uma vez só.
+    const notice = this.fichaNotices.get(chat.sessionId);
+    this.fichaNotices.delete(chat.sessionId);
+    chat.send(text, priority, images, notice);
     this.opts.onSent?.(chat.sessionId);
     return chat.sessionId;
   }
 
   /**
    * A ficha mudou: a autonomia vale já nas conversas abertas dela; o resto (modelo, MCPs,
-   * ferramentas, identidade) só com o processo reaberto, o que acontece na próxima mensagem
-   * com o funcionário parado.
+   * ferramentas) só com o processo reaberto, o que acontece na próxima mensagem com o funcionário
+   * parado. O texto da ficha fica gravado no prompt de sistema da conversa até o /compact: a
+   * próxima mensagem de cada conversa dela leva um aviso para reler o arquivo.
    */
-  profileChanged(prev: StaffProfile, next: StaffProfile) {
+  profileChanged(prev: StaffProfile, next: StaffProfile, fichaPath: string | null = null) {
     const restart = JSON.stringify(launchFields(prev)) !== JSON.stringify(launchFields(next));
+    if (restart) {
+      const where = fichaPath ? `em ${fichaPath}` : 'no arquivo da sua ficha';
+      const notice = `${FICHA_NOTICE} Releia-a agora (${where}) e siga a versão do arquivo daqui em diante.`;
+      for (const { id } of next.sessions) this.fichaNotices.set(id, notice);
+    }
     for (const { id } of next.sessions) {
       const chat = this.chats.get(id);
       if (!chat?.running) continue;

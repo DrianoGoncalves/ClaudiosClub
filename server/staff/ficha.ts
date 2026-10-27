@@ -189,13 +189,21 @@ function hiringSection(p: StaffProfile, ctx: FichaContext): string {
   ].join('\n');
 }
 
-/** Identidade curta para `--append-system-prompt`, segura para a linha de comando. */
-export function identityPrompt(p: StaffProfile, ctx: FichaContext): string {
-  return sanitizeArg(
-    `Você é ${p.name}, ${p.role} da ${ctx.company}, trabalhando no projeto ${ctx.projectName}. ` +
-      `Sua ficha (missão, regras, autonomia) está em ${ctx.fichaPath} e sua memória em ${ctx.memoryPath}. ` +
-      `Antes de qualquer outra coisa, leia as duas e siga a ficha.`,
-  );
+/**
+ * Prompt de sistema do funcionário (vai por arquivo em `--append-system-prompt-file`): a identidade
+ * e a ficha inteira. O Claude Code grava o prompt de sistema na 1ª mensagem e o reaproveita igual
+ * (cache) em todas as outras e nas retomadas; depois de um /compact ele é montado de novo, então as
+ * regras não viram resumo. A memória continua no arquivo dela (muda durante o trabalho).
+ */
+export function systemPrompt(p: StaffProfile, ctx: FichaContext, ficha: string): string {
+  return [
+    `Você é ${p.name}, ${p.role} da ${ctx.company}, trabalhando no projeto ${ctx.projectName}.`,
+    `Sua ficha está abaixo (a mesma de ${ctx.fichaPath}): siga-a. Sua memória fica em ${ctx.memoryPath}: leia no início de cada conversa, antes de qualquer outra coisa.`,
+    `Se avisarem que a ficha foi atualizada, releia ${ctx.fichaPath}: vale a versão do arquivo.`,
+    '',
+    ficha.trim(),
+    '',
+  ].join('\n');
 }
 
 /**
@@ -213,7 +221,8 @@ export function sanitizeArg(s: string): string {
 export interface ClaudeArgsOptions {
   sessionId: string;
   resume: boolean;
-  identity: string;
+  /** Arquivo com a identidade e a ficha (ver systemPrompt). */
+  systemPromptFile: string;
   mcpConfigPath: string | null;
   /** Só no terminal; a conversa pelo MyCo manda as mensagens pelo stream. */
   firstPrompt: string | null;
@@ -231,7 +240,10 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   if (o.resume) args.push('--resume', o.sessionId);
   else args.push('--session-id', o.sessionId);
   args.push('--name', sanitizeArg(`${p.name} - ${p.role}`));
-  args.push('--append-system-prompt', o.identity);
+  args.push('--append-system-prompt-file', o.systemPromptFile);
+  // Pasta, git status e afins vão para a 1ª mensagem: o prompt de sistema fica igual entre conversas
+  // e projetos, e o cache dele é reaproveitado mais vezes.
+  args.push('--exclude-dynamic-system-prompt-sections');
   args.push('--permission-mode', p.autonomy);
   if (p.model) args.push('--model', p.model);
   if (p.effort) args.push('--effort', p.effort);

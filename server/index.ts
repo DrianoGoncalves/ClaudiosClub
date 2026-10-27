@@ -54,7 +54,10 @@ const staff = new StaffService(adapter, {
   runDir: path.join(MYCO_HOME, 'run'),
   claudeConfigFile: defaultLocations().configFile,
   mycoUrl: `http://127.0.0.1:${PORT}`,
-  onChange: (prev, next) => chats.profileChanged(prev, next),
+  onChange: (prev, next) =>
+    void projectPathOf(next.projectId).then((dir) =>
+      chats.profileChanged(prev, next, dir ? path.join(dir, '.myco', 'staff', `${next.id}.md`) : null),
+    ),
   weekCost: async (projectId) => {
     const c = await getCosts();
     return { project: c.projects[projectId]?.last7d ?? 0, total: c.total.last7d };

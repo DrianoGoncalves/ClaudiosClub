@@ -53,6 +53,8 @@ export function isInjectedUserText(text: string): boolean {
     t.startsWith('Caveat:') ||
     t.startsWith('[Request interrupted') ||
     // Aviso do próprio Claude Code de que uma tarefa em segundo plano terminou (não é você falando).
-    t.startsWith('<task-notification>')
+    t.startsWith('<task-notification>') ||
+    // Aviso do MyCo de que a ficha mudou (vai junto com a sua mensagem).
+    t.startsWith('[MyCo] Sua ficha foi atualizada')
   );
 }

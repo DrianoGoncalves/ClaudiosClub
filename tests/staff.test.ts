@@ -11,8 +11,8 @@ import type { ToolAdapter } from '../server/adapters/types';
 import {
   buildClaudeArgs,
   capAutonomy,
-  identityPrompt,
   renderFicha,
+  systemPrompt,
   sanitizeArg,
   secretDenyRules,
   slugify,
@@ -75,22 +75,27 @@ describe('ficha', () => {
     expect(hiring).toContain('reportsTo: ["ana-1a2b"]');
   });
 
-  it('identidade cabe na linha de comando: sem aspas, %, & nem quebras', () => {
-    const id = identityPrompt(profile(), ctx);
-    expect(id).not.toMatch(/["%&^!|<>\n]/);
-    expect(id).toContain('.myco\\staff\\ana-1a2b.md');
+  it('prompt de sistema: identidade, onde fica a memória e a ficha inteira (vai por arquivo)', () => {
+    const ficha = renderFicha(profile(), ctx);
+    const sys = systemPrompt(profile(), ctx, ficha);
+    // Por arquivo, nada é cortado (aspas e % não passam pela linha de comando).
+    expect(sys).toMatch(/^Você é Ana "Revisora" Souza, Revisora 100%/);
+    expect(sys).toContain('.myco\\staff\\ana-1a2b.memory.md');
+    expect(sys).toContain('releia .myco\\staff\\ana-1a2b.md');
+    expect(sys).toContain(ficha.trim());
     expect(sanitizeArg('a "b"\n%c% & d')).toBe('a b c d');
   });
 
   it('argumentos: prompt primeiro; sessão nova com --session-id; MCP só quando restrito', () => {
-    const args = buildClaudeArgs(profile(), { sessionId: 'uuid-1', resume: false, identity: 'ID', mcpConfigPath: null, firstPrompt: 'Olá' });
+    const args = buildClaudeArgs(profile(), { sessionId: 'uuid-1', resume: false, systemPromptFile: 'C:\\run\\system.md', mcpConfigPath: null, firstPrompt: 'Olá' });
     expect(args[0]).toBe('Olá');
     expect(args).toEqual([
-      'Olá', '--session-id', 'uuid-1', '--name', 'Ana Revisora Souza - Revisora 100', '--append-system-prompt', 'ID',
+      'Olá', '--session-id', 'uuid-1', '--name', 'Ana Revisora Souza - Revisora 100',
+      '--append-system-prompt-file', 'C:\\run\\system.md', '--exclude-dynamic-system-prompt-sections',
       '--permission-mode', 'plan', '--model', 'opus', '--effort', 'high',
       '--no-chrome', '--disallowedTools', 'Read(~/.ssh/**),Edit(~/.ssh/**),Write(~/.ssh/**)',
     ]);
-    const withChrome = buildClaudeArgs(profile({ browser: true }), { sessionId: 'u', resume: false, identity: 'ID', mcpConfigPath: null, firstPrompt: null });
+    const withChrome = buildClaudeArgs(profile({ browser: true }), { sessionId: 'u', resume: false, systemPromptFile: 'S', mcpConfigPath: null, firstPrompt: null });
     expect(withChrome).toContain('--chrome');
     expect(withChrome).not.toContain('--no-chrome');
     expect(renderFicha(profile({ browser: true }), ctx)).toContain('## Navegador');
@@ -99,7 +104,7 @@ describe('ficha', () => {
     const p = profile({ browser: true });
     expect(renderFicha(p, ctx)).toContain(tabTitleSnippet(p.name));
     expect(tabTitleSnippet('Ana "Dev"')).toContain(JSON.stringify('[Ana "Dev"] '));
-    const resumed = buildClaudeArgs(profile(), { sessionId: 'uuid-1', resume: true, identity: 'ID', mcpConfigPath: 'C:\\m.json', firstPrompt: 'Olá' });
+    const resumed = buildClaudeArgs(profile(), { sessionId: 'uuid-1', resume: true, systemPromptFile: 'S', mcpConfigPath: 'C:\\m.json', firstPrompt: 'Olá' });
     expect(resumed.slice(0, 2)).toEqual(['--resume', 'uuid-1']);
     expect(resumed.slice(-3)).toEqual(['--mcp-config', 'C:\\m.json', '--strict-mcp-config']);
     expect(toCmdLine('claude', ['Olá', '--model', 'opus'])).toBe('claude "Olá" --model "opus"');
@@ -176,7 +181,7 @@ describe('infra: servidores por SSH', () => {
       expect(md).toContain(part);
     }
     expect(renderFicha(profile(), ctx)).not.toContain('## Servidores');
-    const args = buildClaudeArgs(p, { sessionId: 's', resume: false, identity: 'i', mcpConfigPath: null, firstPrompt: null });
+    const args = buildClaudeArgs(p, { sessionId: 's', resume: false, systemPromptFile: 'S', mcpConfigPath: null, firstPrompt: null });
     const deny = args[args.indexOf('--disallowedTools') + 1]!;
     expect(deny).toContain('Read(~/.ssh/**)');
     expect(deny).toContain('Read(**/.env)');
