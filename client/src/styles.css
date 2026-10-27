@@ -272,6 +272,18 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .chat-elsewhere { border: 1px dashed var(--ink-blue); border-radius: 10px; padding: 8px 12px; font-size: 13px; }
 .chat-elsewhere p { margin: 0 0 6px; }
 .chat-input { display: flex; gap: 8px; align-items: flex-end; }
+/* Cargos (config → Cargos). */
+.roles { display: grid; gap: 8px; width: 100%; }
+.roles-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.roles-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.roles-main { display: grid; gap: 1px; min-width: 0; }
+.roles-actions { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.roles-actions .check { display: inline-flex; align-items: center; gap: 4px; }
+.roles-footer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0; }
+.role-form { display: grid; gap: 8px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 10px; }
+.role-form label { display: grid; gap: 3px; font-size: 12.5px; }
+.role-form input, .role-form textarea, .role-form select { font: inherit; font-size: 13px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
+.templates .btn-secondary.is-on { border-color: var(--ink-blue); box-shadow: 0 0 0 1px var(--ink-blue) inset; }
 /* Parar / reiniciar o servidor (config) e a tela de "parado". */
 .setting-buttons { display: inline-flex; flex-wrap: wrap; gap: 8px; }
 .setting-danger { color: var(--ink-red); }

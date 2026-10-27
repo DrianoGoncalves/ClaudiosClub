@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { BoardBackground, ProjectColor, SendPriority, UsageStop } from '../../../shared/model';
 import { api } from '../api';
 import { BackgroundPicker, RoomColorPicker, useSystemTheme } from '../board/colors';
+import { RolesEditor } from './RolesEditor';
 
 // Configurações do MyCo, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
 // com título, descrição e o controle logo abaixo. Abre pelo botão "config" ou com Ctrl+,.
@@ -33,12 +34,13 @@ interface Props {
   onProjectBudget: (projectId: string, budget: number | null) => Promise<void>;
 }
 
-type GroupId = 'board' | 'look' | 'chat' | 'usage';
+type GroupId = 'board' | 'look' | 'chat' | 'roles' | 'usage';
 
 const GROUPS: Array<{ id: GroupId; label: string; intro: string }> = [
   { id: 'board', label: 'Quadro', intro: 'O que aparece no escritório e como ele se arruma.' },
   { id: 'look', label: 'Aparência', intro: 'Cores do fundo e das salas. Cada cor tem um tom para o tema claro e outro para o escuro.' },
   { id: 'chat', label: 'Conversa', intro: 'Como as mensagens chegam aos funcionários.' },
+  { id: 'roles', label: 'Cargos', intro: 'Modelos de ficha para contratar: os prontos e os seus, cada um com o modelo em que o funcionário começa.' },
   { id: 'usage', label: 'Consumo', intro: 'Até onde a conta pode gastar antes de o MyCo perguntar.' },
 ];
 
@@ -372,6 +374,16 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       control: <SendWhileBusyEditor value={p.sendWhileBusy} onSave={p.onSendWhileBusy} />,
     });
   }
+
+  out.push({
+    id: 'roles',
+    group: 'roles',
+    title: 'Cargos para contratar',
+    description:
+      'Cada cargo preenche a ficha de quem é contratado com ele, inclusive o modelo e o esforço. Para mudar só um funcionário, edite a ficha dele. O cargo marcado como padrão já vem preenchido ao contratar.',
+    keywords: 'cargo template modelo funcionario contratar padrao papel orquestrador desenvolvedor revisor infra opus sonnet haiku',
+    control: <RolesEditor />,
+  });
 
   if (p.usageStop) {
     const stop = p.usageStop;

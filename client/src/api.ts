@@ -32,6 +32,7 @@ import type {
   UsageStopHit,
   UserScope,
 } from '../../shared/model';
+import type { RoleEntry, RoleTemplate } from '../../shared/roles';
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -115,6 +116,11 @@ export const api = {
   user: () => get<UserScope>('/api/user'),
   live: () => get<LiveSession[]>('/api/live'),
   git: () => get<Record<string, GitState>>('/api/git'),
+  roles: () => get<RoleEntry[]>('/api/roles'),
+  saveRole: (role: Omit<RoleTemplate, 'id'> & { id?: string }) => post<RoleEntry[]>('/api/roles', role),
+  deleteRole: (id: string) => post<RoleEntry[]>(`/api/roles/${id}/delete`),
+  setDefaultRole: (id: string | null) => post<RoleEntry[]>('/api/roles/default', { id }),
+  restoreRoles: () => post<RoleEntry[]>('/api/roles/restore'),
   serverInfo: () => get<{ daemon: boolean; pid: number; port: number; startedAt: string }>('/api/server'),
   serverAction: (action: 'stop' | 'restart') => post<{ ok: boolean; daemon: boolean }>(`/api/server/${action}`),
   usage: () => get<AccountUsage>('/api/usage'),

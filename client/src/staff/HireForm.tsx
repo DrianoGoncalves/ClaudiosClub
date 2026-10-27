@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Autonomy,
   Board,
@@ -15,7 +15,11 @@ import { api, withUsageConfirm } from '../api';
 import { employeeName } from '../format';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
 import { BrowserCheck } from './BrowserCheck';
-import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, PLAYBOOK_OPTIONS, TEMPLATES } from './templates';
+import type { RoleEntry } from '../../../shared/roles';
+import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, PLAYBOOK_OPTIONS } from './templates';
+
+/** "opus" → "Opus (mais recente)"; '' → "Padrão do Claude Code"; outro id fica como está. */
+export const modelLabel = (m: string) => MODEL_OPTIONS.find((o) => o.value === m)?.label ?? m;
 
 // Questionário do funcionário: contratar (vira a ficha em <projeto>/.myco/staff/) ou editar
 // (a versão anterior vai para o histórico, de onde dá para restaurar).
@@ -111,20 +115,35 @@ export function StaffForm({ board, projectId, mode, onClose, onHired, onSaved }:
     api.servers(projectId).then(setServerList, () => setServerList([]));
   }, [projectId, editing]);
 
-  const applyTemplate = (i: number) => {
-    const t = TEMPLATES[i];
-    if (!t) return;
+  // Cargos da empresa (config → Cargos). Contratando, o cargo padrão já vem preenchido.
+  const [roles, setRoles] = useState<RoleEntry[] | null>(null);
+  const [roleId, setRoleId] = useState<string | null>(null);
+  useEffect(() => {
+    api.roles().then(setRoles, () => setRoles([]));
+  }, []);
+  const defaultApplied = useRef(false);
+  useEffect(() => {
+    if (!roles || editing || adopting || defaultApplied.current) return;
+    defaultApplied.current = true;
+    const d = roles.find((r) => r.isDefault);
+    if (d) applyTemplate(d);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roles]);
+
+  /** Preenche com o cargo: o modelo (e o esforço) vêm dele; troca só deste funcionário na ficha. */
+  const applyTemplate = (t: RoleEntry) => {
+    setRoleId(t.id);
     setRole(t.role);
     setMission(t.mission);
     setAutonomy(t.autonomy);
     setRules(t.rules.join('\n'));
     setDoneWhen(t.doneWhen);
-    if (t.model) setModel(t.model);
-    if (t.effort) setEffort(t.effort);
-    if (t.playbook) setPlaybook(t.playbook);
+    setModel(t.model);
+    setEffort(t.effort ?? '');
+    setPlaybook(t.playbook ?? '');
     if (t.worktree !== undefined) setWorktree(t.worktree);
     if (t.skills) setSkills([...new Set([...skills, ...t.skills.filter((s) => skillNames.includes(s))])]);
-    setShowServers(t.label.startsWith('Infra') || servers.length > 0);
+    setShowServers(!!t.servers || servers.length > 0);
     if (t.pickExecutors) {
       // Agents com modelo menor que o do orquestrador são os executores naturais.
       const executors = [...inventory.agents, ...board.user.agents]
@@ -278,11 +297,20 @@ export function StaffForm({ board, projectId, mode, onClose, onHired, onSaved }:
 
         {/* ---- Quem é ---- */}
         <div className="form-panel" role="tabpanel" hidden={tab !== 'who'}>
-        {!editing && (
+        {!editing && roles && roles.length > 0 && (
           <div className="templates">
-            <span className="muted small">Cargos prontos:</span>
-            {TEMPLATES.map((t, i) => (
-              <button type="button" key={t.label} className="btn-secondary" onClick={() => applyTemplate(i)}>
+            <span className="muted small" title="Edite ou crie cargos em config → Cargos">
+              Cargos:
+            </span>
+            {roles.map((t) => (
+              <button
+                type="button"
+                key={t.id}
+                className={`btn-secondary ${roleId === t.id ? 'is-on' : ''}`}
+                aria-pressed={roleId === t.id}
+                title={`${t.role} · ${modelLabel(t.model)}${t.isDefault ? ' · padrão' : ''}`}
+                onClick={() => applyTemplate(t)}
+              >
                 {t.label}
               </button>
             ))}

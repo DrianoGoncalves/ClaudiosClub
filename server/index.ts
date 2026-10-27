@@ -26,6 +26,7 @@ import { encodeProjectDir, pathKey } from './adapters/claude/paths';
 import { AUTONOMY, readProfile } from './staff/store';
 import { TaskError, TaskService } from './tasks';
 import { CodeError } from './taskCode';
+import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefaultRole } from './roles';
 import { cleanRunDir } from './runCleanup';
 
 const PORT = Number(process.env.MYCO_PORT ?? 4848);
@@ -293,6 +294,26 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   // ---- caixa "precisa de mim" ----
   ['GET', /^\/api\/inbox$/, () => getInbox()],
   ['GET', /^\/api\/turns$/, ({ url }) => getTurns(url.searchParams.get('since'))],
+  // ---- cargos (modelos de ficha) ----
+  ['GET', /^\/api\/roles$/, () => listRoles()],
+  [
+    'POST',
+    /^\/api\/roles(?:\/(default|restore))?$/,
+    ({ params: [action], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('cargos só pelo MyCo');
+      if (action === 'restore') return restoreBuiltins();
+      if (action === 'default') return setDefaultRole(parse(z.object({ id: z.string().max(40).nullable() }), body).id);
+      return saveRole(body);
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/roles/${ID}/delete$`),
+    ({ params: [id], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('cargos só pelo MyCo');
+      return removeRole(id!);
+    },
+  ],
   // ---- tarefas por projeto ----
   ['GET', /^\/api\/tasks\/summary$/, () => tasks.summary()],
   ['GET', new RegExp(`^/api/projects/${ID}/tasks$`), ({ params: [id] }) => tasks.list(id!)],
@@ -552,6 +573,7 @@ const server = http.createServer(async (req, res) => {
           err instanceof StaffError ||
           err instanceof ChatError ||
           err instanceof TaskError ||
+          err instanceof RoleError ||
           err instanceof FileError ||
           err instanceof AgentError ||
           (err as NodeJS.ErrnoException | null)?.code === 'EEXIST'

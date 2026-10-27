@@ -37,15 +37,16 @@ if ((Test-Path $log) -and (Get-Item $log).Length -gt 5MB) { Move-Item -Force $lo
 Get-ChildItem env: | Where-Object Name -match '^(CLAUDE|ANTHROPIC)' | ForEach-Object { Remove-Item "env:$($_.Name)" -ErrorAction SilentlyContinue }
 
 Write-Log "iniciando em $root (porta $port)"
-# Só o build do cliente (sem a checagem de tipos): um erro de tipo em edição não deixa o MyCo sem tela.
-cmd.exe /d /c "node node_modules\vite\bin\vite.js build >> `"$log`" 2>&1"
-if ($LASTEXITCODE -ne 0) { Write-Log 'o build do cliente falhou (veja acima); o servidor sobe mesmo assim, com a última versão do cliente' }
 
 # O servidor sabe que tem vigia: o config mostra "Reiniciar" (sair e voltar) além de "Parar".
 $env:MYCO_DAEMON = '1'
 $delay = 5
 while ($true) {
   if (Test-Path $stopFile) { break }
+  # O cliente é gerado a cada (re)início: "Reiniciar" no config já traz a tela nova. Só o build
+  # (sem a checagem de tipos): um erro de tipo em edição não deixa o MyCo sem tela.
+  cmd.exe /d /c "node node_modules\vite\bin\vite.js build >> `"$log`" 2>&1"
+  if ($LASTEXITCODE -ne 0) { Write-Log 'o build do cliente falhou (veja acima); o servidor sobe com a última versão do cliente' }
   $started = Get-Date
   Write-Log "subindo o servidor: http://myco.localhost:$port"
   cmd.exe /d /c "node node_modules\tsx\dist\cli.mjs server\index.ts >> `"$log`" 2>&1"
