@@ -1,0 +1,11 @@
+{
+  "name": "MyCo",
+  "short_name": "MyCo",
+  "description": "Quadro branco para orquestrar os funcionários (sessões do Claude Code) dos seus projetos.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f1e7",
+  "theme_color": "#f6f1e7",
+  "lang": "pt-BR",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

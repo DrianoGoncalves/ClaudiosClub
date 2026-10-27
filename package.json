@@ -1,0 +1,42 @@
+{
+  "name": "myco",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Quadro branco para orquestrar agentes do Claude Code entre projetos",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n server,client -c blue,green \"tsx watch server/index.ts\" \"vite\"",
+    "build": "tsc --noEmit && vite build",
+    "start": "tsx server/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "mod:install": "tsx scripts/install-mod.ts",
+    "mod:uninstall": "tsx scripts/install-mod.ts --uninstall",
+    "daily": "scripts\\start-myco.cmd",
+    "autostart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/autostart.ps1",
+    "autostart:remove": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/autostart.ps1 -Remove"
+  },
+  "dependencies": {
+    "@fontsource/caveat": "^5.3.0",
+    "@xyflow/react": "^12.12.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "roughjs": "^4.6.6",
+    "yaml": "^2.6.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "vitest": "^2.1.8"
+  }
+}

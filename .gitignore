@@ -1,0 +1,20 @@
+node_modules/
+dist/
+coverage/
+*.log
+*.tsbuildinfo
+
+# Segredos e conexões locais (a skill vps guarda as conexões em .vps/).
+.env
+.env.*
+.vps/
+
+# Imagens de rosto dos funcionários: ficam só na máquina.
+faces/
+
+# Dados do seu escritório neste projeto (fichas, memórias, tarefas, imagens): não são o app.
+.myco/
+
+# Claude Code: worktrees dos funcionários e permissões locais.
+.claude/worktrees/
+.claude/settings.local.json
