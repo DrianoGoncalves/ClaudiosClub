@@ -113,6 +113,9 @@ body { background: var(--board); }
 .bn-portrait-wrap { position: relative; flex: none; }
 .bn-portrait img { position: absolute; inset: 3px; width: 34px; height: 34px; border-radius: 50%; object-fit: cover; }
 .bn-role { color: var(--ink); }
+.bn-temp { color: var(--warn); }
+.temp-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; padding: 8px 10px; border: 1px dashed var(--warn); border-radius: 8px; color: var(--ink); }
+.temp-notice-actions { display: inline-flex; gap: 6px; margin-left: auto; }
 .bn-employee.is-busy .sketch path { stroke-dasharray: 14 6; animation: bn-redraw 1.6s linear infinite; }
 .bn-employee.is-busy { animation: bn-glow 2.4s ease-in-out infinite; }
 .bn-pencil { position: absolute; right: -8px; bottom: -6px; font-size: 18px; color: var(--busy); transform-origin: 20% 80%; animation: bn-write 0.9s ease-in-out infinite; }

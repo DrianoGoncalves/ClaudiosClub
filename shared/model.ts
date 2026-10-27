@@ -292,6 +292,9 @@ export interface Routine {
 
 /** Colunas do quadro de tarefas, na ordem. */
 export const TASK_STATUSES = ['todo', 'planning', 'doing', 'review', 'done', 'live'] as const;
+
+/** Temporário (contratado por outro funcionário) parado há mais que isso sai do quadro. */
+export const TEMP_IDLE_DAYS = 3;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
 /**
@@ -449,6 +452,15 @@ export interface StaffProfile {
   browser: boolean;
   /** Rotinas agendadas (o MyCo manda a mensagem no horário). Só pelo MyCo; fichas antigas não têm. */
   routines?: Routine[];
+  /** Quem contratou pela API (id do funcionário); ausente = você, pelo MyCo. */
+  hiredBy?: string | null;
+  /**
+   * Contratado por outro funcionário: sai do quadro (arquivado, nada apagado) quando o gestor
+   * encerra ou depois de dias parado. "Efetivar" tira isso.
+   */
+  temporary?: boolean;
+  /** Quando e por que o temporário foi encerrado. */
+  ended?: { at: string; reason: string } | null;
   /**
    * Sessões abertas para este funcionário, a mais recente por último. `cwd` é a pasta onde a
    * sessão roda (a worktree, se a ficha pede uma): retomar exige a mesma pasta.

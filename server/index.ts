@@ -51,7 +51,7 @@ const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', 'myco.localh
 const MAX_BODY = 4 * 1024 * 1024;
 
 const adapter: ToolAdapter = new ClaudeAdapter();
-const staff = new StaffService(adapter, {
+const staff: StaffService = new StaffService(adapter, {
   runDir: path.join(MYCO_HOME, 'run'),
   claudeConfigFile: defaultLocations().configFile,
   mycoUrl: `http://127.0.0.1:${PORT}`,
@@ -59,12 +59,15 @@ const staff = new StaffService(adapter, {
     void projectPathOf(next.projectId).then((dir) =>
       chats.profileChanged(prev, next, dir ? path.join(dir, '.myco', 'staff', `${next.id}.md`) : null),
     ),
+  // Subfuncionário contratado pela API: abre numa conversa do MyCo, não num terminal.
+  openChat: (projectId, staffId, text): Promise<string> => chats.send(projectId, null, staffId, text),
+  isWorking: (staffId) => chats.staffWorking(staffId),
   weekCost: async (projectId) => {
     const c = await getCosts();
     return { project: c.projects[projectId]?.last7d ?? 0, total: c.total.last7d };
   },
 });
-const chats = new ChatManager({
+const chats: ChatManager = new ChatManager({
   transcriptsDir: path.join(defaultLocations().home, 'projects'),
   usageFile: path.join(MYCO_HOME, 'usage.json'),
   listLive: () => adapter.listLiveSessions(),
@@ -387,6 +390,23 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       return staff.setRoutines(id!, staffId!, (body as { routines?: unknown } | null)?.routines);
     },
   ],
+  // Temporários: o gestor (pela API) ou você encerra; só você efetiva.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/staff/${ID}/done$`),
+    ({ params: [id, staffId], body, fromBrowser }) => {
+      const note = (body as { note?: unknown } | null)?.note;
+      return staff.end(id!, staffId!, typeof note === 'string' && note.trim() ? note.trim() : fromBrowser ? 'você encerrou' : 'o gestor encerrou');
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/staff/${ID}/keep$`),
+    ({ params: [id, staffId], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só você efetiva, pelo MyCo');
+      return staff.keep(id!, staffId!);
+    },
+  ],
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}/routines/${ID}/run$`),
@@ -519,7 +539,10 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     async ({ body }) => {
       const req = ArchiveRequest.safeParse(body);
       if (!req.success) throw new BadRequest('pedido de arquivamento inválido');
-      return setArchived(req.data);
+      const config = await setArchived(req.data);
+      // Temporário de volta ao quadro: os dias parado recomeçam a contar.
+      if (!req.data.archived && req.data.id.startsWith('staff:')) await staff.restored(req.data.id.slice('staff:'.length));
+      return config;
     },
   ],
   ['GET', /^\/api\/config$/, () => readConfig()],
@@ -865,6 +888,14 @@ server.listen(PORT, HOST, () => {
   const queueTick = () => void tasks.tick().catch(() => {});
   setTimeout(queueTick, 15_000).unref();
   setInterval(queueTick, 60_000).unref();
+  // Temporários parados há dias saem do quadro (arquivados, nada apagado).
+  const sweep = () =>
+    void staff
+      .sweepTemporaries()
+      .then((ended) => ended.forEach((s) => console.log(`[staff] ${s.name}: temporário arquivado (${s.ended?.reason})`)))
+      .catch(() => {});
+  setTimeout(sweep, 30_000).unref();
+  setInterval(sweep, 60 * 60_000).unref();
   // Configs de sessão antigas em ~/.myco/run (podem ter tokens de MCP): na subida e a cada 12 h.
   const cleanRun = () =>
     cleanRunDir(path.join(MYCO_HOME, 'run'))

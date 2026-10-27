@@ -2,11 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { AccountUsage, LaunchResult, McpServerInfo, Project, ServerInfo, StaffProfile, UsageStop } from '../../shared/model';
 import { listServers } from './servers';
 import type { ToolAdapter } from '../adapters/types';
-import { readConfig } from '../config';
+import { readConfig, setArchived } from '../config';
 import { readUsage } from '../usage';
 import { projectBudgetHit, usageStopHit, UsageStopError } from '../usageStop';
+import { TEMP_IDLE_DAYS } from '../../shared/model';
 import { buildClaudeArgs, capAutonomy } from './ficha';
-import { launchStaff, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
+import { greeting, launchStaff, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
 import { ensureWorktree, worktreeFor, type Worktree } from './worktree';
 import { listMcpServers } from './mcp';
 import {
@@ -40,7 +41,18 @@ export interface StaffServiceOptions {
   onChange?: (prev: StaffProfile, next: StaffProfile) => void;
   /** Custo dos últimos 7 dias do projeto e da conta toda, para o orçamento por projeto. */
   weekCost?: (projectId: string) => Promise<{ project: number; total: number }>;
+  /** Abre uma conversa nova no MyCo e manda a mensagem (subfuncionário contratado pela API). */
+  openChat?: (projectId: string, staffId: string, text: string) => Promise<string>;
+  /** Alguma conversa do funcionário está trabalhando agora. */
+  isWorking?: (staffId: string) => boolean;
+  /** Arquivados (config → `staff:<id>`); os testes trocam para não mexer no config de verdade. */
+  archive?: { has: (key: string) => Promise<boolean>; set: (key: string, archived: boolean) => Promise<void> };
 }
+
+const configArchive = {
+  has: async (key: string) => (await readConfig()).archived.sessions.includes(key),
+  set: async (key: string, archived: boolean) => void (await setArchived({ kind: 'session', id: key, archived })),
+};
 
 /** Contratação e expediente dos funcionários (sessões com ficha). */
 export class StaffService {
@@ -81,8 +93,8 @@ export class StaffService {
     const input = parsed.data;
 
     const managers = await this.managers(project.path, input.reportsTo);
+    const hirer = fromBrowser ? undefined : managers.find((m) => m.canHire);
     if (!fromBrowser) {
-      const hirer = managers.find((m) => m.canHire);
       if (!hirer) throw new StaffError('só um funcionário com permissão de contratar pode contratar pela API');
       input.autonomy = capAutonomy(input.autonomy, hirer.autonomy);
       input.canHire = false; // subfuncionário contratado por outro não contrata em cascata
@@ -107,11 +119,28 @@ export class StaffService {
 
     // A trava vale também para quem contrata pela API (sem como confirmar, só recusa).
     if (input.launch && !(fromBrowser && input.force)) await this.guardUsage(input.usageStop, project.id);
-    const profile = await createProfile(project.path, project.id, input);
+    let profile = await createProfile(project.path, project.id, input);
+    if (hirer) {
+      // Contratado por outro funcionário: temporário, com quem contratou (ver end/sweepTemporaries).
+      profile = { ...profile, hiredBy: hirer.id, temporary: true };
+      await saveProfile(project.path, profile);
+    }
     if (!input.launch) {
       // Sem sessão ainda, mas a ficha e a memória já ficam no projeto para conferir.
       await writeFicha(profile, await this.context(project, profile));
       return { profile, launch: null };
+    }
+    // Pela API, a sessão abre numa conversa do MyCo (não num terminal): fica à vista no quadro, na
+    // fila de tarefas e na caixa "precisa de mim".
+    if (hirer && this.opts.openChat) {
+      try {
+        const sessionId = await this.opts.openChat(project.id, profile.id, greeting(profile));
+        const opened = (await readProfile(project.path, profile.id)) ?? profile;
+        return { profile: opened, launch: { ok: true, sessionId, command: '', error: null } };
+      } catch (err) {
+        await writeFicha(profile, await this.context(project, profile));
+        return { profile, launch: { ok: false, sessionId: null, command: '', error: err instanceof Error ? err.message : String(err) } };
+      }
     }
     try {
       const { result, profile: launched } = await this.launchProfile(project, profile, false);
@@ -187,12 +216,82 @@ export class StaffService {
       sessions: current.sessions,
       portrait: current.portrait,
       routines: current.routines,
+      // Temporário ou efetivado é situação de agora, não da ficha antiga.
+      hiredBy: current.hiredBy,
+      temporary: current.temporary,
+      ended: current.ended,
       updatedAt: new Date().toISOString(),
     };
     await saveProfile(project.path, next);
     await writeFicha(next, await this.context(project, next));
     this.opts.onChange?.(current, next);
     return next;
+  }
+
+  /**
+   * Encerra um temporário: sai do quadro (arquivado; ficha, memória e conversas ficam). Só
+   * temporários: um funcionário seu não é encerrado por outro.
+   */
+  async end(projectId: string, staffId: string, reason: string): Promise<StaffProfile | null> {
+    const project = await this.project(projectId);
+    const current = project ? await readProfile(project.path, staffId) : null;
+    if (!project || !current) return null;
+    if (!current.temporary) throw new StaffError(`${current.name} não é temporário: só você arquiva, pelo quadro`);
+    const next: StaffProfile = { ...current, projectId, ended: { at: new Date().toISOString(), reason: reason.slice(0, 300) || 'encerrado' } };
+    await saveProfile(project.path, next);
+    await this.archive.set(`staff:${staffId}`, true);
+    return next;
+  }
+
+  /** Efetivar: o temporário vira funcionário do projeto (e volta ao quadro, se tinha saído). */
+  async keep(projectId: string, staffId: string): Promise<StaffProfile | null> {
+    const project = await this.project(projectId);
+    const current = project ? await readProfile(project.path, staffId) : null;
+    if (!project || !current) return null;
+    const next: StaffProfile = { ...current, projectId, temporary: false, ended: null, updatedAt: new Date().toISOString() };
+    await saveProfile(project.path, next);
+    await this.archive.set(`staff:${staffId}`, false);
+    return next;
+  }
+
+  /**
+   * Voltou ao quadro (desarquivado): o temporário recomeça a contar os dias parado a partir de
+   * agora, senão a próxima varredura o tiraria de novo.
+   */
+  async restored(staffId: string): Promise<void> {
+    for (const project of (await this.adapter.listProjects()).filter((p) => p.exists)) {
+      const current = await readProfile(project.path, staffId);
+      if (!current) continue;
+      if (current.temporary) await saveProfile(project.path, { ...current, ended: null, updatedAt: new Date().toISOString() });
+      return;
+    }
+  }
+
+  /**
+   * Temporários parados há mais de `days` dias (sem conversa, sem edição) saem do quadro. Quem
+   * está trabalhando agora fica. Devolve os encerrados.
+   */
+  async sweepTemporaries(now = new Date(), days = TEMP_IDLE_DAYS): Promise<StaffProfile[]> {
+    const out: StaffProfile[] = [];
+    for (const project of (await this.adapter.listProjects()).filter((p) => p.exists)) {
+      const temps = (await listProjectStaff(project.path, project.id)).filter((s) => s.temporary);
+      if (!temps.length) continue;
+      const sessions = (await this.adapter.getProjectSessions(project.id).catch(() => null)) ?? [];
+      const touched = new Map(sessions.map((s) => [s.id, s.updatedAt]));
+      for (const s of temps) {
+        if ((await this.archive.has(`staff:${s.id}`)) || this.opts.isWorking?.(s.id)) continue;
+        const last = [s.createdAt, s.updatedAt, ...s.sessions.map((x) => touched.get(x.id) ?? x.startedAt)].sort().at(-1)!;
+        const idle = (now.getTime() - Date.parse(last)) / 86_400_000;
+        if (idle < days) continue;
+        const ended = await this.end(project.id, s.id, `parado há ${Math.floor(idle)} dias`);
+        if (ended) out.push(ended);
+      }
+    }
+    return out;
+  }
+
+  private get archive() {
+    return this.opts.archive ?? configArchive;
   }
 
   /** Acrescenta um gestor a um funcionário (o "+" arrastado até outro funcionário no quadro). */

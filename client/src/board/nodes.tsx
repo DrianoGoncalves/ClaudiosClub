@@ -194,6 +194,11 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
           <div className="bn-title bn-title-sm">{name}</div>
           <div className="bn-meta">
             {staff && <span className="bn-role">{staff.role} · </span>}
+            {staff?.temporary && (
+              <span className="bn-temp" title="Contratado por outro funcionário: sai do quadro quando terminar">
+                temporário ·{' '}
+              </span>
+            )}
             {live ? (
               <>
                 <span className={`dot dot-${live.status ?? 'unknown'}`} />{' '}

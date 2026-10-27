@@ -30,6 +30,13 @@ export interface LaunchContext {
   open?: (scriptPath: string, title: string) => void;
 }
 
+/** A primeira mensagem de uma sessão nova (no terminal ou numa conversa do MyCo). */
+export function greeting(profile: Pick<StaffProfile, 'name' | 'firstTask'>): string {
+  return profile.firstTask
+    ? `Olá, ${profile.name}. Leia sua memória e comece pela primeira tarefa da ficha.`
+    : `Olá, ${profile.name}. Leia sua memória e diga em poucas linhas como pretende começar.`;
+}
+
 /** Pasta de uma sessão: a gravada (retomar exige a mesma), ou a worktree, ou o projeto. */
 export function sessionCwd(profile: StaffProfile, ctx: Pick<LaunchContext, 'projectPath' | 'worktree'>, sessionId: string | null): string {
   const known = sessionId ? profile.sessions.find((s) => s.id === sessionId)?.cwd : undefined;
@@ -52,14 +59,7 @@ export async function launchStaff(
   const run = await prepareRun(profile, ctx, sessionId, cwd);
   const runDir = path.join(ctx.runDir, sessionId);
 
-  const args = buildClaudeArgs(profile, {
-    ...run,
-    sessionId,
-    resume,
-    firstPrompt: profile.firstTask
-      ? `Olá, ${profile.name}. Leia sua memória e comece pela primeira tarefa da ficha.`
-      : `Olá, ${profile.name}. Leia sua memória e diga em poucas linhas como pretende começar.`,
-  });
+  const args = buildClaudeArgs(profile, { ...run, sessionId, resume, firstPrompt: greeting(profile) });
   const command = toCmdLine('claude', args);
   // Nome primeiro: a aba do terminal é estreita.
   const title = sanitizeArg(`${profile.name} (${profile.role}) - ${ctx.company}`);

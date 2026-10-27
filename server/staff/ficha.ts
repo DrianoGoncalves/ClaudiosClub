@@ -1,4 +1,4 @@
-import type { Autonomy, Playbook, ServerInfo, StaffProfile } from '../../shared/model';
+import { TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
 
 // A ficha vira um arquivo Markdown dentro do projeto (.myco/staff/<id>.md), que a sessão lê
 // no começo. Pela linha de comando só vai uma identidade curta apontando para ela: o CLI não
@@ -178,15 +178,26 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
 }
 
 function hiringSection(p: StaffProfile, ctx: FichaContext): string {
+  const temp = p.temporary
+    ? 'Você é temporário: quem te contratou (seu gestor) te chamou para um trabalho específico. Quando terminar, diga isso claramente na resposta; ele encerra e você sai do quadro (nada é apagado).'
+    : '';
   if (!p.canHire) {
-    return '## Subfuncionários\nVocê não pode contratar subfuncionários. Se precisar de mais gente, peça ao usuário. Subagents (ferramenta Agent) continuam permitidos.';
+    return ['## Subfuncionários', temp, 'Você não pode contratar subfuncionários. Se precisar de mais gente, peça ao usuário. Subagents (ferramenta Agent) continuam permitidos.']
+      .filter(Boolean)
+      .join('\n');
   }
+  const api = `${ctx.mycoUrl}/api/projects/${p.projectId}`;
   return [
     '## Subfuncionários',
-    'Você pode contratar subfuncionários (novas sessões) para dividir o trabalho. Contrate só quando a tarefa realmente pedir, com missão clara, e acompanhe o que eles fazem.',
-    `Para contratar, faça um POST em ${ctx.mycoUrl}/api/projects/<id do projeto>/staff com o cabeçalho \`x-myco: 1\` e um JSON com: name, role, mission, firstTask, autonomy (plan, manual, acceptEdits ou auto), reportsTo: ["${p.id}"] e launch: true.`,
+    temp,
+    'Para trabalho pontual (uma tarefa, uma busca, uma revisão), use subagents (ferramenta Agent): terminam junto com o trabalho e custam menos. Contrate um subfuncionário só para um papel contínuo, que precise de memória e conversa próprias.',
+    `Para contratar: POST ${api}/staff com o cabeçalho \`x-myco: 1\` e um JSON com name, role, mission, firstTask, autonomy (plan, manual, acceptEdits ou auto), reportsTo: ["${p.id}"] e launch: true. Ele abre numa conversa do MyCo; a resposta traz o id dele (profile.id) e a conversa (launch.sessionId).`,
+    `Para mandar outra mensagem a ele: POST ${api}/chat/send com {"sessionId", "staffId", "text"} (mesmo cabeçalho).`,
+    `Quem você contrata é temporário. Quando o trabalho dele terminar, encerre: POST ${api}/staff/<id dele>/done com {"note": "o que ele entregou"}. Ele sai do quadro (nada é apagado); parado há ${TEMP_IDLE_DAYS} dias, sai sozinho. Só o usuário efetiva.`,
     'Você não pode dar a um subfuncionário mais autonomia do que a sua.',
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /**

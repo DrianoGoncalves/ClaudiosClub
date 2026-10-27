@@ -15,6 +15,7 @@ import type {
   TaskSummary,
   UserScope,
 } from '../../../shared/model';
+import { TEMP_IDLE_DAYS } from '../../../shared/model';
 import { api } from '../api';
 import { RoomColorPicker } from '../board/colors';
 import { portraitUrl } from '../board/nodes';
@@ -29,7 +30,17 @@ import { employeeName, ENTRYPOINT_LABEL, formatShare, STATUS_LABEL } from '../fo
 
 type ProjectCost = CostSummary & { sessions: Record<string, number> };
 
-function ArchiveButton({ archived, onArchive, what }: { archived: boolean; onArchive: (v: boolean) => Promise<void>; what: string }) {
+function ArchiveButton({
+  archived,
+  onArchive,
+  what,
+  restoreLabel = 'Desarquivar',
+}: {
+  archived: boolean;
+  onArchive: (v: boolean) => Promise<void>;
+  what: string;
+  restoreLabel?: string;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const click = async () => {
@@ -51,7 +62,7 @@ function ArchiveButton({ archived, onArchive, what }: { archived: boolean; onArc
         disabled={busy}
         title={archived ? `Volta a mostrar ${what} no quadro` : `Esconde ${what} do quadro (nada é apagado do Claude Code)`}
       >
-        {archived ? 'Desarquivar' : 'Arquivar'}
+        {archived ? restoreLabel : 'Arquivar'}
       </button>
       {error && <span className="error">{error}</span>}
     </>
@@ -99,6 +110,7 @@ export function EmployeePanel(props: {
             {s?.entrypoint && <span className="badge">{ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</span>}
             {s?.gitBranch && <span className="badge dim">{s.gitBranch}</span>}
             {!staff && <span className="badge dim">sem ficha</span>}
+            {staff?.temporary && <span className="badge warn">temporário</span>}
             {props.archived && <span className="badge dim">arquivado</span>}
           </p>
         </div>
@@ -110,6 +122,9 @@ export function EmployeePanel(props: {
           Editar
         </button>
       </header>
+      {staff?.temporary && project && (
+        <TempNotice staff={staff} managers={props.managers} projectId={project.id} archived={props.archived} onArchive={props.onArchive} onChanged={props.onChanged} />
+      )}
       {staff?.browser && <BrowserCheck />}
       {project && (
         <ChatView
@@ -173,11 +188,76 @@ export function EmployeePanel(props: {
                 Contratar subordinado
               </button>
             )}
-            <ArchiveButton archived={props.archived} onArchive={props.onArchive} what="este funcionário" />
+            <ArchiveButton
+              archived={props.archived}
+              onArchive={props.onArchive}
+              what="este funcionário"
+              restoreLabel={staff?.temporary ? 'Restaurar' : 'Desarquivar'}
+            />
           </p>
         </details>
       </details>
     </>
+  );
+}
+
+/**
+ * Temporário (contratado por outro funcionário): quem contratou, quando sai do quadro e, encerrado,
+ * por quê. "Efetivar" o torna funcionário do projeto; "Restaurar" o traz de volta como temporário.
+ */
+function TempNotice(props: {
+  staff: StaffProfile;
+  managers: StaffProfile[];
+  projectId: string;
+  archived: boolean;
+  onArchive: (v: boolean) => Promise<void>;
+  onChanged?: () => void;
+}) {
+  const { staff } = props;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const hirer = props.managers.find((m) => m.id === staff.hiredBy)?.name ?? 'outro funcionário';
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      props.onChanged?.();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="temp-notice small">
+      {props.archived && staff.ended ? (
+        <span>
+          Encerrado em {formatDate(staff.ended.at)}: {staff.ended.reason}. Ficha, memória e conversas continuam guardadas.
+        </span>
+      ) : (
+        <span>
+          Temporário, contratado por {hirer} em {formatDate(staff.createdAt)}. Sai do quadro quando {hirer} encerrar ou depois de {TEMP_IDLE_DAYS} dias
+          parado.
+        </span>
+      )}
+      <span className="temp-notice-actions">
+        {props.archived && (
+          <button className="btn-secondary" disabled={busy} onClick={() => void run(() => props.onArchive(false))} title="Volta ao quadro como temporário">
+            Restaurar
+          </button>
+        )}
+        <button
+          className="btn-primary"
+          disabled={busy}
+          onClick={() => void run(() => api.keepStaff(props.projectId, staff.id))}
+          title="Passa a ser funcionário do projeto: não sai mais do quadro sozinho"
+        >
+          Efetivar
+        </button>
+      </span>
+      {error && <span className="error">{error}</span>}
+    </div>
   );
 }
 

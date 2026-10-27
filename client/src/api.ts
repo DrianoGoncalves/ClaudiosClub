@@ -184,6 +184,8 @@ export const api = {
     patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'status' | 'pr' | 'branch'>> & { queued?: false },
   ) =>
     post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}`, patch),
+  /** Efetivar um temporário (contratado por outro funcionário). */
+  keepStaff: (projectId: string, staffId: string) => post<StaffProfile>(`/api/projects/${projectId}/staff/${staffId}/keep`),
   startTask: (projectId: string, taskId: string, force = false) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/start`, { force }),
   deleteTask: (projectId: string, taskId: string) => post<{ ok: boolean }>(`/api/projects/${projectId}/tasks/${taskId}/delete`),
   saveRoutines: (projectId: string, staffId: string, routines: Routine[]) =>

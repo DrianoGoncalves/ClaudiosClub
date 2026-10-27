@@ -315,7 +315,11 @@ export function App() {
                 else if (selection.session) setForm({ projectId: selection.projectId, mode: { kind: 'adopt', session: selection.session } });
               }}
               onSessionStarted={reloadSoon}
-              onChanged={load}
+              onChanged={() => {
+                load();
+                // Efetivar desarquiva no servidor: os arquivados do config mudam também.
+                void api.config().then(setConfig, () => {});
+              }}
             />
           )}
           {selection.kind === 'agent' && (

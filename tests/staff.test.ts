@@ -70,9 +70,14 @@ describe('ficha', () => {
     for (const part of ['## Missão', 'Revisar mudanças', '## Primeira tarefa', 'Só lê e planeja', '- Não altere arquivos', '## Memória', 'ana-1a2b.memory.md', 'não pode contratar']) {
       expect(md).toContain(part);
     }
-    const hiring = renderFicha(profile({ canHire: true }), ctx);
-    expect(hiring).toContain('/api/projects/<id do projeto>/staff');
+    const hiring = renderFicha(profile({ canHire: true, projectId: 'proj-x' }), ctx);
+    expect(hiring).toContain('/api/projects/proj-x/staff com');
     expect(hiring).toContain('reportsTo: ["ana-1a2b"]');
+    expect(hiring).toMatch(/use subagents[\s\S]*só para um papel contínuo/);
+    expect(hiring).toContain('/api/projects/proj-x/staff/<id dele>/done');
+    // O próprio temporário sabe que é temporário.
+    expect(renderFicha(profile({ temporary: true }), ctx)).toContain('Você é temporário');
+    expect(md).not.toContain('Você é temporário');
   });
 
   it('prompt de sistema: identidade, onde fica a memória e a ficha inteira (vai por arquivo)', () => {
@@ -303,10 +308,58 @@ describe('StaffService', () => {
 
     const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Chefe', autonomy: 'acceptEdits', canHire: true, launch: false }, true))!;
     // Contratado sem sessão: a ficha já fica no projeto.
-    expect(await fs.readFile(path.join(projectPath, '.myco', 'staff', `${boss.id}.md`), 'utf8')).toContain('Você pode contratar subfuncionários');
+    expect(await fs.readFile(path.join(projectPath, '.myco', 'staff', `${boss.id}.md`), 'utf8')).toContain('Para contratar: POST');
     // Pela API chega como texto (formato antigo): vira lista.
     const r = await svc.hire('proj-id', { ...input, name: 'Sub', autonomy: 'auto', canHire: true, reportsTo: boss.id, launch: false, servers: ['prod'] }, false);
-    expect(r?.profile).toMatchObject({ reportsTo: [boss.id], autonomy: 'acceptEdits', canHire: false, servers: [] });
+    expect(r?.profile).toMatchObject({ reportsTo: [boss.id], autonomy: 'acceptEdits', canHire: false, servers: [], hiredBy: boss.id, temporary: true });
+  });
+
+  it('temporário: abre numa conversa do MyCo, o gestor encerra, você efetiva; parado há dias sai sozinho', async () => {
+    const archived = new Set<string>();
+    const chats: Array<{ staffId: string; text: string }> = [];
+    const working = new Set<string>();
+    const sessions: Array<{ id: string; updatedAt: string }> = [];
+    const adapterTemp = { listProjects: async () => [project()], getProjectSessions: async () => sessions } as unknown as ToolAdapter;
+    const svc = new StaffService(adapterTemp, {
+      runDir: path.join(root, 'run'),
+      claudeConfigFile: claudeJson,
+      mycoUrl: 'x',
+      open: (s) => opened.push(s),
+      readUsage: noUsage,
+      openChat: async (_p, staffId, text) => (chats.push({ staffId, text }), 'conversa-1'),
+      isWorking: (id) => working.has(id),
+      archive: { has: async (k) => archived.has(k), set: async (k, v) => void (v ? archived.add(k) : archived.delete(k)) },
+    });
+    const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestora', canHire: true, launch: false }, true))!;
+    const before = opened.length;
+    const r = (await svc.hire('proj-id', { ...input, name: 'Temp', firstTask: 'Mapear as rotas', reportsTo: [boss.id], launch: true }, false))!;
+    expect(r.launch).toEqual({ ok: true, sessionId: 'conversa-1', command: '', error: null });
+    expect(opened).toHaveLength(before); // nada de terminal
+    expect(chats).toEqual([{ staffId: r.profile.id, text: 'Olá, Temp. Leia sua memória e comece pela primeira tarefa da ficha.' }]);
+
+    // Você não é encerrado por outro; o temporário é.
+    await expect(svc.end('proj-id', boss.id, 'x')).rejects.toThrow(/não é temporário/);
+    const ended = (await svc.end('proj-id', r.profile.id, 'entregou o mapa'))!;
+    expect(ended.ended).toMatchObject({ reason: 'entregou o mapa' });
+    expect(archived.has(`staff:${r.profile.id}`)).toBe(true);
+    // Efetivar: volta ao quadro e deixa de ser temporário.
+    expect(await svc.keep('proj-id', r.profile.id)).toMatchObject({ temporary: false, ended: null });
+    expect(archived.has(`staff:${r.profile.id}`)).toBe(false);
+
+    // Parado há dias: sai sozinho; trabalhando ou com conversa recente, fica.
+    const { profile: idle } = (await svc.hire('proj-id', { ...input, name: 'Parado', reportsTo: [boss.id], launch: false }, false))!;
+    const in4days = new Date(Date.now() + 4 * 86_400_000);
+    // (O projeto dos testes tem outros temporários: olha só para este.)
+    const sweep = async (when: Date) => (await svc.sweepTemporaries(when)).filter((s) => s.id === idle.id).map((s) => s.ended?.reason);
+    working.add(idle.id);
+    expect(await sweep(in4days)).toEqual([]);
+    working.delete(idle.id);
+    expect(await sweep(new Date(Date.now() + 86_400_000))).toEqual([]);
+    expect(await sweep(in4days)).toEqual(['parado há 4 dias']);
+    // Restaurado: os dias recomeçam a contar.
+    archived.delete(`staff:${idle.id}`);
+    await svc.restored(idle.id);
+    expect(await sweep(new Date(Date.now() + 2 * 86_400_000))).toEqual([]);
   });
 
   it('edita a ficha guardando a versão anterior, restaura, e não aceita ciclo de gestores', async () => {
