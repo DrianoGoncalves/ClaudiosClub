@@ -16,7 +16,6 @@ interface Props {
   archivedCount: number;
   animations: boolean;
   onToggleAnimations: (v: boolean) => void;
-  onResetLayout: () => void;
   onRefresh: () => void;
   refreshing: boolean;
   usageStop: UsageStop | null;
@@ -299,25 +298,6 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       description: 'Funcionário trabalhando e conversas animadas nas linhas. O padrão segue o “reduzir animações” do sistema.',
       keywords: 'movimento reduzir',
       toggle: { checked: p.animations, onChange: p.onToggleAnimations },
-    },
-    {
-      id: 'reset-layout',
-      group: 'board',
-      title: 'Reorganizar o quadro',
-      description: 'Desfaz os arrastos e enquadra o escritório de novo.',
-      keywords: 'layout posicoes arrastos enquadrar',
-      control: (
-        <button
-          type="button"
-          className="btn-secondary"
-          onClick={() => {
-            p.onResetLayout();
-            close();
-          }}
-        >
-          Reorganizar
-        </button>
-      ),
     },
     {
       id: 'refresh',

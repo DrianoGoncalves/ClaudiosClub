@@ -26,6 +26,8 @@
   --scroll-thumb: color-mix(in srgb, var(--ink-muted) 45%, transparent);
   --scroll-thumb-hover: var(--ink-muted);
   --scroll-thumb-active: var(--ink-blue);
+  /* Cartão selecionado no quadro: véu branco por cima do papel (em teste, pedido do usuário). */
+  --card-selected: #ffffff55;
   /* Canetas da parede da sala (escolhidas por projeto): tom de marcador no claro, de giz no escuro. */
   --pen-red: #c9372c;
   --pen-orange: #d0650c;
@@ -191,7 +193,10 @@ body { background: var(--board); }
 /* Nome em cima, com a largura toda para identificar o projeto; contagem e resumo na linha de baixo. */
 .bn-header-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
 .bn-header-text .bn-title, .bn-header-text .bn-meta { min-width: 0; max-width: 100%; }
-.bn-header .bn-live { margin-left: auto; margin-top: 0; flex: none; }
+/* Lado direito do cabeçalho: tarefas em cima; branch e "ao vivo" na linha de baixo, alinhados à direita. */
+.bn-header-side { flex: none; margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.bn-header-status { display: flex; align-items: center; gap: 10px; }
+.bn-header .bn-live { margin-top: 0; flex: none; }
 /* Colado na moldura: a parede da sala vira a borda do cabeçalho, e o fundo leva um tanto da cor dela. */
 .bn-project, .bn-user { --room-wall: var(--ink-muted); }
 .bn-project::before, .bn-user::before { background: color-mix(in srgb, var(--room-wall) 14%, var(--card)); }
@@ -204,8 +209,6 @@ body { background: var(--board); }
 .bn-git-branch { font-family: ui-monospace, Consolas, monospace; font-size: 11px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 10px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .bn-git.is-dirty .bn-git-state { color: var(--warn); font-weight: 600; }
 .bn-git.is-behind .bn-git-state { color: var(--ink-red); font-weight: 600; }
-.bn-header .bn-git + .bn-live { margin-left: 12px; }
-.bn-header .bn-git { margin-left: auto; }
 .project-image { display: block; max-width: 100%; max-height: 200px; border-radius: 8px; border: 1px solid var(--line); margin-bottom: 6px; }
 .file-btn { position: relative; overflow: hidden; display: inline-block; }
 .file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
@@ -299,8 +302,6 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .bn-tasks:hover { border-color: var(--room-wall); background: color-mix(in srgb, var(--room-wall) 14%, transparent); }
 .bn-tasks.is-empty { color: var(--muted); }
 .bn-tasks-review { color: var(--waiting); font-weight: 600; }
-.bn-header .bn-tasks { margin-left: auto; }
-.bn-header .bn-tasks + .bn-git { margin-left: 10px; }
 /* Quadro de tarefas. */
 .modal.tasks-modal { width: min(1280px, 100%); height: min(820px, calc(100vh - 32px)); display: flex; flex-direction: column; position: relative; overflow: hidden; }
 .tasks-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
@@ -478,7 +479,8 @@ button.ranking-row:hover { border-color: var(--accent); }
 .stats dd { margin: 2px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; }
 .small { font-size: 12px; }
 .row-inline { flex-direction: row; justify-content: space-between; align-items: center; }
-.bn.is-selected::before { background: color-mix(in srgb, var(--card) 55%, var(--highlight-solid)); }
+/* O véu vai sobre o papel do cartão, não no lugar dele: as linhas do quadro continuam por trás. */
+.bn.is-selected::before { background: linear-gradient(var(--card-selected), var(--card-selected)), var(--card); }
 
 .bn-agent { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .bn-portrait { position: relative; width: 40px; height: 40px; flex: none; display: grid; place-items: center; font-family: var(--hand); font-weight: 700; font-size: 18px; }

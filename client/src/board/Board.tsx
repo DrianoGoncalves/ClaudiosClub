@@ -2,6 +2,7 @@ import {
   applyNodeChanges,
   Background,
   BackgroundVariant,
+  ControlButton,
   Controls,
   Panel,
   ReactFlow,
@@ -310,7 +311,17 @@ export function BoardView(props: BoardViewProps) {
       colorMode="system"
     >
       <Background variant={BackgroundVariant.Dots} gap={28} size={1.2} />
-      <Controls showInteractive={false} />
+      <Controls showInteractive={false}>
+        {/* Logo depois de "enquadrar": desfaz os arrastos e volta à grade de salas. */}
+        <ControlButton onClick={resetLayout} title="Reorganizar o quadro (desfaz os arrastos)" aria-label="Reorganizar o quadro">
+          <svg viewBox="0 0 32 32" aria-hidden="true">
+            <rect x="3" y="3" width="11" height="11" rx="2" />
+            <rect x="18" y="3" width="11" height="11" rx="2" />
+            <rect x="3" y="18" width="11" height="11" rx="2" />
+            <rect x="18" y="18" width="11" height="11" rx="2" />
+          </svg>
+        </ControlButton>
+      </Controls>
       <Panel position="top-left" className="toolbar">
         <CompanyTitle name={config?.companyName ?? 'MyCo'} onRename={props.onRename} />
         <UsageMeters />
@@ -328,7 +339,6 @@ export function BoardView(props: BoardViewProps) {
           archivedCount={archivedCount}
           animations={props.animations}
           onToggleAnimations={props.onToggleAnimations}
-          onResetLayout={resetLayout}
           onRefresh={props.onRefresh}
           refreshing={props.refreshing}
           usageStop={config?.usageStop ?? null}

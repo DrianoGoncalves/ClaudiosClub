@@ -160,9 +160,16 @@ function ProjectNode({ id, data, selected, width }: NodeProps<Node<ProjectNodeDa
             {!p.exists && ' · pasta não existe'}
           </div>
         </div>
-        <TasksChip tasks={data.tasks} />
-        {data.git && <GitBadge git={data.git} />}
-        {data.live.length > 0 && <LiveDots live={data.live} />}
+        {/* À direita, em duas linhas: tarefas em cima; branch e quem está ao vivo embaixo. */}
+        <div className="bn-header-side">
+          <TasksChip tasks={data.tasks} />
+          {(data.git || data.live.length > 0) && (
+            <div className="bn-header-status">
+              {data.git && <GitBadge git={data.git} />}
+              {data.live.length > 0 && <LiveDots live={data.live} />}
+            </div>
+          )}
+        </div>
       </div>
     </Frame>
   );
