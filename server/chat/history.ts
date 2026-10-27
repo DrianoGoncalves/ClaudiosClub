@@ -12,6 +12,7 @@ const MAX_ITEMS = 200;
 
 interface Line {
   type?: string;
+  uuid?: string;
   timestamp?: string;
   isSidechain?: boolean;
   isMeta?: boolean;
@@ -54,17 +55,30 @@ export async function readHistory(
     }
     if (l.type === 'user' && l.message && !l.isMeta && !l.isCompactSummary) {
       const content = l.message.content;
+      // O id da mensagem vai junto: "voltar até aqui" desfaz as edições feitas depois dela.
+      const uuid = l.uuid ? { uuid: l.uuid } : {};
       if (typeof content === 'string') {
-        if (!isInjectedUserText(content)) put({ kind: 'user', id: `u:${at}:${items.length}`, text: content, at });
+        if (!isInjectedUserText(content)) put({ kind: 'user', id: `u:${at}:${items.length}`, text: content, at, ...uuid });
         continue;
       }
       if (!Array.isArray(content)) continue;
       // Prints colados vêm como blocos de imagem antes do texto: viram uma contagem na mensagem.
       const blocks = content as Array<Record<string, unknown>>;
       const images = blocks.filter((b) => b.type === 'image').length;
+      const docs = blocks.filter((b) => b.type === 'document').map((b) => (typeof b.title === 'string' ? b.title : 'arquivo'));
       const texts = blocks.filter((b) => b.type === 'text' && typeof b.text === 'string' && !isInjectedUserText(b.text as string));
-      if (images && !texts.length) put({ kind: 'user', id: `u:${at}:${items.length}`, text: '', at, images });
-      texts.forEach((b, i) => put({ kind: 'user', id: `u:${at}:${items.length}`, text: b.text as string, at, ...(i === 0 && images && { images }) }));
+      if ((images || docs.length) && !texts.length) put({ kind: 'user', id: `u:${at}:${items.length}`, text: '', at, ...(images && { images }), ...(docs.length && { files: docs }), ...uuid });
+      texts.forEach((b, i) =>
+        put({
+          kind: 'user',
+          id: `u:${at}:${items.length}`,
+          text: b.text as string,
+          at,
+          ...(i === 0 && images && { images }),
+          ...(i === 0 && docs.length && { files: docs }),
+          ...(i === 0 && uuid),
+        }),
+      );
       for (const b of blocks) {
         if (b.type === 'tool_result' && typeof b.tool_use_id === 'string') {
           const tool = byId.get(`t:${b.tool_use_id}`);
@@ -100,7 +114,7 @@ export async function readHistory(
   return { items: items.slice(-MAX_ITEMS), context };
 }
 
-async function tailLines(file: string, bytes: number): Promise<string[]> {
+export async function tailLines(file: string, bytes: number): Promise<string[]> {
   const fh = await fs.open(file, 'r').catch(() => null);
   if (!fh) return [];
   try {

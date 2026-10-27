@@ -9,8 +9,11 @@ import { getAuthStatus, openLoginTerminal } from './auth';
 import { ArchiveRequest, ConfigPatch, MYCO_HOME, readConfig, setArchived, updateConfig } from './config';
 import { z } from 'zod';
 import { AgentError, AgentInput, readAgentSource, saveAgent } from './adapters/claude/agentWrite';
-import { ChatError, ChatManager } from './chat/manager';
+import { ChatError, ChatManager, findTranscript } from './chat/manager';
+import { touchedFiles } from './chatChanges';
+import { searchConversations } from './chatSearch';
 import { searchFiles } from './fileSearch';
+import { CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
 import { ChatRegistry } from './chat/registry';
 import { StaffError, StaffService } from './staff/service';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
@@ -26,7 +29,6 @@ import type { Routine, StaffProfile } from '../shared/model';
 import { encodeProjectDir, pathKey } from './adapters/claude/paths';
 import { AUTONOMY, readProfile } from './staff/store';
 import { TaskError, TaskService } from './tasks';
-import { CodeError } from './taskCode';
 import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefaultRole } from './roles';
 import { cleanRunDir } from './runCleanup';
 
@@ -52,6 +54,18 @@ const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', 'myco.localh
 const MAX_BODY = 4 * 1024 * 1024;
 
 const adapter: ToolAdapter = new ClaudeAdapter();
+/** ~/.claude/projects: onde ficam os transcripts das conversas. */
+const defaultTranscripts = path.join(defaultLocations().home, 'projects');
+
+/** Onde está o código de um funcionário (a worktree dele ou o próprio projeto). */
+async function chatPlace(projectId: string, staffId: string | null) {
+  const dir = await projectPathOf(projectId);
+  if (!dir) throw new BadRequest('projeto não encontrado');
+  const profile = staffId ? await readProfile(dir, staffId) : null;
+  const place = await locateCode(dir, staffId, !!profile?.worktree);
+  if (!place) throw new BadRequest('o projeto não é um repositório git');
+  return { dir, place, profile };
+}
 const staff: StaffService = new StaffService(adapter, {
   runDir: path.join(MYCO_HOME, 'run'),
   claudeConfigFile: defaultLocations().configFile,
@@ -69,10 +83,10 @@ const staff: StaffService = new StaffService(adapter, {
   },
 });
 const chats: ChatManager = new ChatManager({
-  transcriptsDir: path.join(defaultLocations().home, 'projects'),
+  transcriptsDir: defaultTranscripts,
   usageFile: path.join(MYCO_HOME, 'usage.json'),
   listLive: () => adapter.listLiveSessions(),
-  resolve: (projectId, sessionId, staffId) => staff.chatSpawn(projectId, sessionId, staffId),
+  resolve: (projectId, sessionId, staffId, forkFrom) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom),
   registry: new ChatRegistry(path.join(MYCO_HOME, 'run', 'chats.json')),
   onPlanApproved: (sid, plan) => void tasks.onPlanApproved(sid, plan).catch(() => {}),
   onSent: (sid) => void tasks.onSent(sid).catch(() => {}),
@@ -318,6 +332,106 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       if (!fromBrowser) throw new BadRequest('só pelo MyCo');
       const b = parse(ChatSettingsBody.and(z.object({ sessionId: z.string().uuid().nullable() })), body);
       return { sessionId: await chats.settings(pid!, b.sessionId, b.staffId, b) };
+    },
+  ],
+  // "O que mudou" na conversa: a worktree dele, ou só os arquivos que ele editou nesta conversa.
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/chat/${ID}/changes$`),
+    async ({ params: [pid, sid], url }) => {
+      const { dir, place } = await chatPlace(pid!, url.searchParams.get('staffId'));
+      if (place.where === 'worktree') return { ...(await readCode(dir, place)), scope: 'worktree', touched: [] };
+      const touched = await touchedFiles(await findTranscript(defaultTranscripts, pid!, sid!), place.path);
+      return { ...(await readCode(dir, place, null, touched)), scope: 'conversation', touched };
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/chat/${ID}/test$`),
+    async ({ params: [pid], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      const { dir, place } = await chatPlace(pid!, parse(StaffRef, body).staffId);
+      const command = await detectTest(dir);
+      if (!command) throw new BadRequest('não achei testes neste projeto (npm test, composer test ou phpunit)');
+      return runTests(place.path, command);
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/chat/${ID}/merge$`),
+    async ({ params: [pid], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      const b = parse(StaffRef.extend({ skipTests: z.boolean().default(false) }), body);
+      const { dir, place, profile } = await chatPlace(pid!, b.staffId);
+      return mergeCode(dir, place, `Trabalho de ${profile?.name ?? 'funcionário'}`, { skipTests: b.skipTests });
+    },
+  ],
+  // "Voltar até aqui": desfaz as edições de arquivo feitas desde aquela mensagem sua.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/chat/${ID}/rewind$`),
+    async ({ params: [pid, sid], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      const b = parse(StaffRef.extend({ uuid: z.string().uuid(), dryRun: z.boolean().default(true) }), body);
+      return chats.rewind(pid!, sid!, b.staffId, b.uuid, b.dryRun);
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/chat/${ID}/fork$`),
+    async ({ params: [pid, sid], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      return { sessionId: await chats.fork(pid!, sid!, parse(StaffRef, body).staffId) };
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/chat/${ID}/rename$`),
+    async ({ params: [pid, sid], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      const { title } = parse(z.object({ title: z.string().trim().min(1, 'dê um nome').max(120) }), body);
+      await chats.rename(pid!, sid!, title);
+      return { ok: true };
+    },
+  ],
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/chat/${ID}/mcp$`),
+    async ({ params: [pid, sid], url }) => chats.mcp(pid!, sid!, url.searchParams.get('staffId')),
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/chat/${ID}/mcp$`),
+    async ({ params: [pid, sid], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      const b = parse(StaffRef.extend({ name: z.string().min(1).max(100), enabled: z.boolean() }), body);
+      await chats.mcpToggle(pid!, sid!, b.staffId, b.name, b.enabled);
+      return { ok: true };
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/chat/${ID}/stop-task$`),
+    async ({ params: [sid], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      await chats.stopTask(sid!, parse(z.object({ taskId: z.string().min(1).max(100) }), body).taskId);
+      return { ok: true };
+    },
+  ],
+  // Busca nas conversas dos funcionários (Ctrl+K).
+  [
+    'GET',
+    /^\/api\/search$/,
+    async ({ url }) => {
+      const q = url.searchParams.get('q') ?? '';
+      if (q.trim().length < 3) return [];
+      const projects = (await adapter.listProjects()).filter((p) => p.exists);
+      const targets = await Promise.all(
+        (await staff.listAll(projects)).flatMap((s) =>
+          s.sessions.map(async (x) => ({ projectId: s.projectId, staffId: s.id, staffName: s.name, sessionId: x.id, file: await findTranscript(defaultTranscripts, s.projectId, x.id) })),
+        ),
+      );
+      return searchConversations(targets, q);
     },
   ],
   // "@" no chat: arquivos do projeto que batem com o que foi digitado.

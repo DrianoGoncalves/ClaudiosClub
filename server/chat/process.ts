@@ -127,6 +127,8 @@ export class ChatProcess {
   private window: number | null = null;
   /** Pedidos de controle nossos esperando resposta (troca de modo, modelo, esforço): o que avisar no fim. */
   private readonly controls = new Map<string, { label: string; onOk?: (response: Record<string, unknown>) => void; mode?: boolean }>();
+  /** Pedidos que esperam a resposta (ver `request`). */
+  private readonly waiters = new Map<string, { resolve: (r: Record<string, unknown>) => void; reject: (e: Error) => void }>();
   /** O próximo resultado com erro é de um turno que nós paramos (botão Parar ou mensagem `now`). */
   private stopping = false;
   /** A ficha mudou depois que o processo abriu: reabre quando estiver parado. */
@@ -189,8 +191,10 @@ export class ChatProcess {
 
   start() {
     const run = this.opts.spawnImpl ?? ((cmd, args, o) => spawn(cmd, args, { ...o, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }));
-    // A lista de tarefas (TaskCreate/TaskUpdate) não vem ligada no modo -p: o chat mostra ela fixa.
-    const child = run('claude', [...STREAM_FLAGS, ...this.opts.args], { cwd: this.opts.cwd, env: { ...cleanEnv(), CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' } });
+    // A lista de tarefas (TaskCreate/TaskUpdate) e os pontos de restauração das edições ("voltar até
+    // aqui") não vêm ligados no modo -p.
+    const env = { ...cleanEnv(), CLAUDE_CODE_ENABLE_TODO_TOOLS: '1', CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1' };
+    const child = run('claude', [...STREAM_FLAGS, ...this.opts.args], { cwd: this.opts.cwd, env });
     this.child = child;
     this.setState({ running: true, error: null });
     child.stdout.on('data', (chunk: Buffer) => this.onData(chunk.toString('utf8')));
@@ -223,10 +227,13 @@ export class ChatProcess {
       ...(notice ? [{ type: 'text', text: notice }] : []),
       ...(text ? [{ type: 'text', text }] : []),
     ];
-    this.write({ type: 'user', message: { role: 'user', content }, ...(queued && { priority: queued }) });
+    // O id vira o da mensagem no transcript: é por ele que "voltar até aqui" acha o ponto.
+    const uuid = randomUUID();
+    this.write({ type: 'user', uuid, message: { role: 'user', content }, ...(queued && { priority: queued }) });
     this.putItem({
       kind: 'user',
-      id: `u:${randomUUID()}`,
+      id: `u:${uuid}`,
+      uuid,
       text,
       at: new Date().toISOString(),
       ...(queued && { queued }),
@@ -252,6 +259,48 @@ export class ChatProcess {
   /** Troca o esforço (quanto ele pensa) desta conversa, na hora. */
   setEffort(effort: string, label: string) {
     this.control({ subtype: 'apply_flag_settings', settings: { effortLevel: effort } }, label, { onOk: () => this.setState({ effort }) });
+  }
+
+  /** Pede algo ao Claude Code e espera a resposta (erro vira exceção com a mensagem dele). */
+  request(request: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const requestId = randomUUID();
+    const done = new Promise<Record<string, unknown>>((resolve, reject) => this.waiters.set(requestId, { resolve, reject }));
+    this.write({ type: 'control_request', request_id: requestId, request });
+    return done;
+  }
+
+  /**
+   * Desfaz as edições de arquivo feitas desde a mensagem `uuid` (os arquivos voltam ao que eram
+   * antes dela). `dryRun` só conta o que voltaria. Comandos rodados não são desfeitos.
+   */
+  async rewind(uuid: string, dryRun: boolean): Promise<Record<string, unknown>> {
+    const r = await this.request({ subtype: 'rewind_files', user_message_id: uuid, dry_run: dryRun });
+    if (!dryRun && r.canRewind !== false) {
+      this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text: 'Arquivos voltaram ao estado de antes daquela mensagem (a conversa continua).', tone: 'info', at: new Date().toISOString() });
+    }
+    return r;
+  }
+
+  /** Dá um nome à conversa (fica no transcript, como o /rename do Claude Code). */
+  async rename(title: string): Promise<void> {
+    await this.request({ subtype: 'rename_session', title, source: 'host', session_id: this.sessionId });
+  }
+
+  /** Servidores MCP da conversa: só nome e estado (a configuração vem com tokens e não sai daqui). */
+  async mcpStatus(): Promise<Array<{ name: string; status: string }>> {
+    const r = await this.request({ subtype: 'mcp_status' });
+    const list = Array.isArray(r.mcpServers) ? (r.mcpServers as Array<Record<string, unknown>>) : [];
+    return list.filter((s) => typeof s.name === 'string').map((s) => ({ name: s.name as string, status: typeof s.status === 'string' ? s.status : '?' }));
+  }
+
+  async mcpToggle(name: string, enabled: boolean): Promise<void> {
+    await this.request({ subtype: 'mcp_toggle', serverName: name, enabled });
+    this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text: `MCP ${name} ${enabled ? 'ligado' : 'desligado'} nesta conversa`, tone: 'info', at: new Date().toISOString() });
+  }
+
+  /** Para um agent ou comando em segundo plano. */
+  async stopTask(taskId: string): Promise<void> {
+    await this.request({ subtype: 'stop_task', task_id: taskId });
   }
 
   /** `mode`: troca de autonomia (se não der, a conversa reabre com a ficha nova). */
@@ -437,6 +486,13 @@ export class ChatProcess {
       }
       case 'control_response': {
         const res = ev.response as { subtype?: string; request_id?: string; error?: string; response?: Record<string, unknown> } | undefined;
+        const waiter = res?.request_id ? this.waiters.get(res.request_id) : undefined;
+        if (res?.request_id && waiter) {
+          this.waiters.delete(res.request_id);
+          if (res.subtype === 'success') waiter.resolve(res.response ?? {});
+          else waiter.reject(new Error(res.error ?? 'o Claude Code recusou o pedido'));
+          return;
+        }
         const entry = res?.request_id ? this.controls.get(res.request_id) : undefined;
         if (!res?.request_id || !entry) return;
         this.controls.delete(res.request_id);
@@ -539,6 +595,8 @@ export class ChatProcess {
     }
     this.pending.clear();
     this.controls.clear();
+    for (const w of this.waiters.values()) w.reject(new Error('a conversa fechou'));
+    this.waiters.clear();
     this.setState({ running: false, busy: false, compacting: false, error, background: [] });
     for (const done of this.exitWaiters.splice(0)) done();
     this.opts.onIdle?.('exit');

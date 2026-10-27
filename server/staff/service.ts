@@ -372,27 +372,32 @@ export class StaffService {
   /**
    * Linha de comando para conversar pelo MyCo. Com ficha: autonomia, modelo, MCPs e identidade
    * da ficha (sessão nova quando `sessionId` é null). Sem ficha: só retoma a sessão, pedindo
-   * aprovação para tudo.
+   * aprovação para tudo. `forkFrom`: sessão nova como cópia desta (duplicar a conversa), na mesma
+   * pasta da original.
    */
-  async chatSpawn(projectId: string, sessionId: string | null, staffId: string | null) {
+  async chatSpawn(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string) {
     const project = await this.project(projectId);
     if (!project) return null;
     if (!staffId) {
+      if (forkFrom) {
+        const id = randomUUID();
+        return { sessionId: id, cwd: project.path, args: ['--resume', forkFrom, '--fork-session', '--session-id', id, '--permission-mode', 'manual'] };
+      }
       return sessionId ? { sessionId, cwd: project.path, args: ['--resume', sessionId, '--permission-mode', 'manual'] } : null;
     }
     let profile = await readProfile(project.path, staffId);
     if (!profile) return null;
     profile = { ...profile, projectId };
-    const resume = !!sessionId;
-    const id = sessionId ?? randomUUID();
+    const resume = !!sessionId && !forkFrom;
+    const id = resume ? sessionId! : randomUUID();
     const ctx = await this.context(project, profile, true);
-    const cwd = sessionCwd(profile, ctx, sessionId);
+    const cwd = sessionCwd(profile, ctx, forkFrom ?? sessionId);
     const run = await prepareRun(profile, ctx, id, cwd);
     if (!resume) {
       const now = new Date().toISOString();
       await saveProfile(project.path, { ...profile, sessions: [...profile.sessions, { id, startedAt: now, cwd }], updatedAt: now });
     }
-    const args = buildClaudeArgs(profile, { ...run, sessionId: id, resume, firstPrompt: null });
+    const args = buildClaudeArgs(profile, { ...run, sessionId: id, resume, firstPrompt: null, ...(forkFrom && { forkFrom }) });
     return { sessionId: id, cwd, args };
   }
 

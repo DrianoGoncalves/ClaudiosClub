@@ -7,9 +7,13 @@ import type {
   BoardBackground,
   BrowserStatus,
   ChatAttachment,
+  ChatChanges,
+  ChatMcp,
   ChatSnapshot,
+  ConversationHit,
   CostReport,
   Effort,
+  RewindPreview,
   GitState,
   InboxItem,
   LaunchResult,
@@ -30,6 +34,7 @@ import type {
   StaffProfile,
   Task,
   TaskCode,
+  TestRun,
   TaskSummary,
   UsageStop,
   UsageStopHit,
@@ -160,6 +165,24 @@ export const api = {
     projectId: string,
     body: { sessionId: string | null; staffId: string | null; model?: string; effort?: Effort; autonomy?: Autonomy },
   ) => post<{ sessionId: string }>(`/api/projects/${projectId}/chat/settings`, body),
+  /** "O que mudou" na conversa (worktree inteira, ou só os arquivos que ele editou nela). */
+  chatChanges: (projectId: string, sessionId: string, staffId: string | null) =>
+    get<ChatChanges>(`/api/projects/${projectId}/chat/${sessionId}/changes${staffId ? `?staffId=${encodeURIComponent(staffId)}` : ''}`),
+  chatTest: (projectId: string, sessionId: string, staffId: string | null) => post<TestRun>(`/api/projects/${projectId}/chat/${sessionId}/test`, { staffId }),
+  chatMerge: (projectId: string, sessionId: string, staffId: string | null, skipTests = false) =>
+    post<{ sha: string; base: string }>(`/api/projects/${projectId}/chat/${sessionId}/merge`, { staffId, skipTests }),
+  /** "Voltar até aqui": `dryRun` só conta o que voltaria. */
+  chatRewind: (projectId: string, sessionId: string, staffId: string | null, uuid: string, dryRun: boolean) =>
+    post<RewindPreview>(`/api/projects/${projectId}/chat/${sessionId}/rewind`, { staffId, uuid, dryRun }),
+  chatFork: (projectId: string, sessionId: string, staffId: string | null) => post<{ sessionId: string }>(`/api/projects/${projectId}/chat/${sessionId}/fork`, { staffId }),
+  chatRename: (projectId: string, sessionId: string, title: string) => post<{ ok: boolean }>(`/api/projects/${projectId}/chat/${sessionId}/rename`, { title }),
+  chatMcp: (projectId: string, sessionId: string, staffId: string | null) =>
+    get<ChatMcp[]>(`/api/projects/${projectId}/chat/${sessionId}/mcp${staffId ? `?staffId=${encodeURIComponent(staffId)}` : ''}`),
+  chatMcpToggle: (projectId: string, sessionId: string, staffId: string | null, name: string, enabled: boolean) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/chat/${sessionId}/mcp`, { staffId, name, enabled }),
+  chatStopTask: (sessionId: string, taskId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/stop-task`, { taskId }),
+  /** Busca nas conversas dos funcionários (a partir de 3 letras). */
+  search: (q: string) => get<ConversationHit[]>(`/api/search?q=${encodeURIComponent(q)}`),
   /** "@" no chat: arquivos do projeto que batem com `q`. */
   files: (projectId: string, q: string) => get<string[]>(`/api/projects/${projectId}/files?q=${encodeURIComponent(q)}`),
   chatSend: (

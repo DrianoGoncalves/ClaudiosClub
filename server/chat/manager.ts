@@ -1,6 +1,19 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { Autonomy, ChatAttachment, ChatCommand, ChatEvent, ChatItem, ChatSnapshot, LiveSession, SendPriority, StaffProfile, UsageLimit } from '../../shared/model';
+import type {
+  Autonomy,
+  ChatAttachment,
+  ChatCommand,
+  ChatEvent,
+  ChatItem,
+  ChatMcp,
+  ChatSnapshot,
+  LiveSession,
+  RewindPreview,
+  SendPriority,
+  StaffProfile,
+  UsageLimit,
+} from '../../shared/model';
 import { writeAtomic } from '../staff/store';
 import { readHistory } from './history';
 import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
@@ -19,7 +32,8 @@ export interface ChatManagerOptions {
   usageFile: string;
   listLive: () => Promise<LiveSession[]>;
   /** Monta a linha de comando (ficha, autonomia, MCPs) de quem vai conversar. */
-  resolve: (projectId: string, sessionId: string | null, staffId: string | null) => Promise<ChatSpawn | null>;
+  /** `forkFrom`: sessão nova que começa como cópia desta (duplicar a conversa). */
+  resolve: (projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string) => Promise<ChatSpawn | null>;
   /** Conversa parada há mais que isso fecha o processo (a sessão continua no disco). */
   idleMs?: number;
   spawnImpl?: ChatProcessOptions['spawnImpl'];
@@ -90,6 +104,8 @@ export class ChatManager {
   private readonly fichaNotices = new Map<string, string>();
   /** Por projeto: os comandos "/" da última sessão que abriu. */
   private readonly commands = new Map<string, ChatCommand[]>();
+  /** Conversas duplicadas: cópia → original (para o histórico antes da primeira mensagem). */
+  private readonly forks = new Map<string, string>();
   /** Segredos vistos nas conversas (um aviso por tipo por sessão, até você dispensar). */
   private readonly secrets: Array<{ id: string; sessionId: string; label: string; at: string }> = [];
   private readonly timer: NodeJS.Timeout;
@@ -111,15 +127,74 @@ export class ChatManager {
   async snapshot(projectId: string, sessionId: string): Promise<ChatSnapshot> {
     const chat = this.chats.get(sessionId);
     const live = chat?.running ? chat.snapshot() : null;
-    const file = await findTranscript(this.opts.transcriptsDir, projectId, sessionId);
+    let file = await findTranscript(this.opts.transcriptsDir, projectId, sessionId);
+    // Cópia recém-duplicada: o Claude Code só grava o transcript dela na primeira mensagem; até lá,
+    // o histórico é o da original.
+    const source = this.forks.get(sessionId);
+    if (source && !(await fs.access(file).then(() => true, () => false))) file = await findTranscript(this.opts.transcriptsDir, projectId, source);
     // Com processo aberto, o histórico vai até o início dele; o resto vem pelo SSE.
-    const { items, context } = await readHistory(file, { before: live ? chat!.startedAt : undefined });
+    const { items, context } = await readHistory(file, { before: live && !source ? chat!.startedAt : undefined });
     return { sessionId, history: items, live, context, elsewhere: await this.elsewhere(sessionId), commands: this.commands.get(projectId) ?? [] };
   }
 
   /** Comandos "/" do projeto vistos na última sessão aberta (o menu funciona antes de abrir outra). */
   commandsFor(projectId: string): ChatCommand[] {
     return this.commands.get(projectId) ?? [];
+  }
+
+  /** "Voltar até aqui": desfaz as edições de arquivo feitas desde a mensagem `uuid`. */
+  async rewind(projectId: string, sessionId: string, staffId: string | null, uuid: string, dryRun: boolean): Promise<RewindPreview> {
+    const chat = await this.ensure(projectId, sessionId, staffId);
+    try {
+      const r = await chat.rewind(uuid, dryRun);
+      return {
+        canRewind: r.canRewind !== false,
+        files: Array.isArray(r.filesChanged) ? r.filesChanged.filter((f): f is string => typeof f === 'string') : [],
+        insertions: typeof r.insertions === 'number' ? r.insertions : 0,
+        deletions: typeof r.deletions === 'number' ? r.deletions : 0,
+        ...(typeof r.error === 'string' && { error: r.error }),
+      };
+    } catch (err) {
+      return { canRewind: false, files: [], insertions: 0, deletions: 0, error: (err as Error).message };
+    }
+  }
+
+  /**
+   * Duplica a conversa: uma sessão nova com o histórico desta, para tentar outro caminho sem
+   * perder a original. Devolve a sessão nova.
+   */
+  async fork(projectId: string, sessionId: string, staffId: string | null): Promise<string> {
+    const chat = await this.ensure(projectId, null, staffId, sessionId);
+    this.forks.set(chat.sessionId, sessionId);
+    return chat.sessionId;
+  }
+
+  /**
+   * Dá um nome à conversa. Aberta, pelo próprio Claude Code; fechada, a mesma linha que o /rename
+   * grava, no fim do transcript (sem abrir processo só para isso).
+   */
+  async rename(projectId: string, sessionId: string, title: string): Promise<void> {
+    const chat = this.chats.get(sessionId);
+    if (chat?.running) return chat.rename(title);
+    const file = await findTranscript(this.opts.transcriptsDir, projectId, sessionId);
+    if (!(await fs.access(file).then(() => true, () => false))) throw new ChatError('a conversa ainda não tem histórico para renomear');
+    await fs.appendFile(file, JSON.stringify({ type: 'custom-title', customTitle: title, sessionId }) + '\n');
+  }
+
+  /** Servidores MCP da conversa aberta (abre se preciso). */
+  async mcp(projectId: string, sessionId: string, staffId: string | null): Promise<ChatMcp[]> {
+    return (await this.ensure(projectId, sessionId, staffId)).mcpStatus();
+  }
+
+  async mcpToggle(projectId: string, sessionId: string, staffId: string | null, name: string, enabled: boolean): Promise<void> {
+    await (await this.ensure(projectId, sessionId, staffId)).mcpToggle(name, enabled);
+  }
+
+  /** Para um agent ou comando em segundo plano de uma conversa aberta. */
+  async stopTask(sessionId: string, taskId: string): Promise<void> {
+    const chat = this.chats.get(sessionId);
+    if (!chat?.running) throw new ChatError('a conversa não está aberta');
+    await chat.stopTask(taskId);
   }
 
   /**
@@ -316,7 +391,7 @@ export class ChatManager {
     };
   }
 
-  private async ensure(projectId: string, sessionId: string | null, staffId: string | null): Promise<ChatProcess> {
+  private async ensure(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string): Promise<ChatProcess> {
     const existing = sessionId ? this.chats.get(sessionId) : undefined;
     // Ficha nova só reabre com tudo parado: agents em segundo plano morreriam com o processo.
     if (existing?.running && !(existing.stale && !existing.working)) return existing;
@@ -328,7 +403,7 @@ export class ChatManager {
         throw new ChatError(holdMessage(other));
       }
     }
-    const spawn = await this.opts.resolve(projectId, sessionId, staffId);
+    const spawn = await this.opts.resolve(projectId, sessionId, staffId, forkFrom);
     if (!spawn) throw new ChatError('funcionário ou projeto não encontrado');
     const chat = new ChatProcess({
       sessionId: spawn.sessionId,

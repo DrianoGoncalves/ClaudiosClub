@@ -63,13 +63,15 @@ async function validEnd(place: CodePlace, upTo: string | null | undefined): Prom
  * O que mudou: na worktree, tudo desde onde ela saiu da base (commits + o que ainda não foi
  * commitado). Com `upTo` (o commit da entrega), só até ele: o resto é da tarefa seguinte.
  */
-export async function readCode(projectPath: string, place: CodePlace, upTo?: string | null): Promise<TaskCode> {
+export async function readCode(projectPath: string, place: CodePlace, upTo?: string | null, only?: string[]): Promise<TaskCode> {
   const base = (await git(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => '')).trim() || null;
   const test = await detectTest(projectPath);
   const mainDirty = await dirtyCount(projectPath);
   if (place.where === 'project') {
-    const files = await changedFiles(projectPath, 'HEAD');
-    const diff = await git(projectPath, ['diff', 'HEAD', '--', '.', ...NOT_MYCO]).catch(() => '');
+    // `only`: só estes arquivos (os que um funcionário editou numa conversa).
+    const keep = only ? new Set(only) : null;
+    const files = (await changedFiles(projectPath, 'HEAD')).filter((f) => !keep || keep.has(f.path));
+    const diff = keep && !keep.size ? '' : await git(projectPath, ['diff', 'HEAD', '--', ...(keep ? [...keep] : ['.', ...NOT_MYCO])]).catch(() => '');
     return {
       where: 'project',
       path: place.path,

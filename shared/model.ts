@@ -540,6 +540,8 @@ export type ChatItem =
       images?: number;
       /** Nomes dos arquivos anexados (texto, PDF). */
       files?: string[];
+      /** Id da mensagem no transcript: dá para "voltar até aqui" (desfazer as edições depois dela). */
+      uuid?: string;
       /** Guardada pelo MyCo até o funcionário terminar a outra tarefa (o motivo). */
       held?: string;
     }
@@ -633,6 +635,38 @@ export interface ChatState {
 export interface ChatCommand {
   name: string;
   description: string;
+}
+
+/**
+ * "O que mudou" na conversa: na worktree do funcionário, tudo desde a base; no próprio projeto,
+ * só os arquivos que ele editou nesta conversa (as mudanças dos outros ficam de fora).
+ */
+export type ChatChanges = TaskCode & { scope: 'worktree' | 'conversation'; touched: string[] };
+
+/** Servidor MCP de uma conversa aberta (só nome e estado: a configuração pode ter tokens). */
+export interface ChatMcp {
+  name: string;
+  status: string;
+}
+
+/** Trecho de conversa achado na busca. */
+export interface ConversationHit {
+  projectId: string;
+  staffId: string;
+  staffName: string;
+  sessionId: string;
+  title: string | null;
+  snippet: string;
+  at: string | null;
+}
+
+/** Prévia de "voltar até aqui": o que volta. */
+export interface RewindPreview {
+  canRewind: boolean;
+  files: string[];
+  insertions: number;
+  deletions: number;
+  error?: string;
 }
 
 /** Arquivo anexado a uma mensagem (além das imagens): texto vai como texto; PDF, em base64. */

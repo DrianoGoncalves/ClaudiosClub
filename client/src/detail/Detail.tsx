@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type {
   Agent,
   CostReport,
@@ -90,17 +90,57 @@ export function EmployeePanel(props: {
   onShowAdvanced?: () => void;
   /** Conversas do funcionário, da mais recente à mais antiga. */
   conversations?: Array<{ id: string; title: string | null; updatedAt: string | null }>;
+  /** Abrir nesta conversa (achada na busca do Ctrl+K). */
+  initialConversation?: string | null;
 }) {
   const { session: s, staff, project } = props;
   // Qual conversa está aberta: a mais recente, outra da lista, ou uma nova (ainda sem sessão).
-  const [picked, setPicked] = useState<string | null>(s?.id ?? null);
+  // A conversa pedida (busca) só vale se for deste funcionário.
+  const wanted = props.initialConversation && props.conversations?.some((c) => c.id === props.initialConversation) ? props.initialConversation : null;
+  const [picked, setPicked] = useState<string | null>(wanted ?? s?.id ?? null);
   const [fresh, setFresh] = useState(false);
+  const first = useRef(true);
   useEffect(() => {
+    // Na primeira vez vale a conversa pedida (busca); depois, a mais recente quando ela muda.
+    if (first.current) {
+      first.current = false;
+      return;
+    }
     setPicked(s?.id ?? null);
     setFresh(false);
   }, [s?.id]);
   const current = fresh ? null : picked;
   const conversations = props.conversations ?? [];
+  const [convBusy, setConvBusy] = useState(false);
+  const duplicate = async () => {
+    if (!project || !current) return;
+    setConvBusy(true);
+    try {
+      const r = await api.chatFork(project.id, current, staff?.id ?? null);
+      setFresh(false);
+      setPicked(r.sessionId);
+      props.onSessionStarted?.(r.sessionId);
+    } catch (e) {
+      window.alert((e as Error).message);
+    } finally {
+      setConvBusy(false);
+    }
+  };
+  const rename = async () => {
+    if (!project || !current) return;
+    const now = conversations.find((c) => c.id === current)?.title ?? '';
+    const title = window.prompt('Nome desta conversa', now)?.trim();
+    if (!title || title === now) return;
+    setConvBusy(true);
+    try {
+      await api.chatRename(project.id, current, title);
+      props.onChanged?.();
+    } catch (e) {
+      window.alert((e as Error).message);
+    } finally {
+      setConvBusy(false);
+    }
+  };
   const live = s?.live?.alive ? s.live : null;
   const name = staff?.name ?? (s ? employeeName(s) : '?');
   return (
@@ -157,8 +197,20 @@ export function EmployeePanel(props: {
               </option>
             ))}
           </select>
-          <button type="button" className="btn-secondary" disabled={fresh} onClick={() => setFresh(true)} title="Começa uma conversa do zero (a ficha e a memória continuam)">
+          <button type="button" className="btn-secondary" disabled={fresh || convBusy} onClick={() => setFresh(true)} title="Começa uma conversa do zero (a ficha e a memória continuam)">
             Nova conversa
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={!current || convBusy}
+            onClick={() => void duplicate()}
+            title="Uma cópia desta conversa, com todo o histórico, para tentar outro caminho sem perder a original"
+          >
+            Duplicar
+          </button>
+          <button type="button" className="link small" disabled={!current || convBusy} onClick={() => void rename()} title="Dar um nome a esta conversa">
+            renomear
           </button>
         </div>
       )}

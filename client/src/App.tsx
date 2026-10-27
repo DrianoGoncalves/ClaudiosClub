@@ -79,6 +79,8 @@ export function App() {
   const [tasksFor, setTasksFor] = useState<string | null>(null);
   /** Tarefa escolhida no Ctrl+K: o quadro de tarefas abre com ela selecionada. */
   const [jumpTask, setJumpTask] = useState<string | null>(null);
+  /** Conversa achada na busca do Ctrl+K: o painel do funcionário abre nela. */
+  const [jumpConversation, setJumpConversation] = useState<string | null>(null);
   /** Tarefas em aberto por projeto, para o cabeçalho das salas. */
   const [taskSummary, setTaskSummary] = useState<Record<string, TaskSummary>>({});
   const readTaskSummary = useCallback(() => {
@@ -295,7 +297,8 @@ export function App() {
           )}
           {selection.kind === 'employee' && (
             <EmployeePanel
-              key={selectedId}
+              key={`${selectedId}:${jumpConversation ?? ''}`}
+              initialConversation={jumpConversation}
               session={
                 selection.session && {
                   ...selection.session,
@@ -371,6 +374,7 @@ export function App() {
               return;
             }
             setTasksFor(null);
+            setJumpConversation(t.kind === 'staff' ? (t.sessionId ?? null) : null);
             setSelectedId(t.kind === 'staff' ? staffNodeId(t.projectId, t.staffId) : projectNodeId(t.projectId));
           }}
         />

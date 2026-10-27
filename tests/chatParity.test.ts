@@ -133,6 +133,109 @@ describe('conversa: ajustes, permitir sempre, anexos e comandos', () => {
   });
 });
 
+describe('voltar no tempo, duplicar, renomear, MCPs, parar, buscar e o que mudou', () => {
+  it('"voltar até aqui" e os pedidos com resposta; MCPs só com nome e estado (sem a configuração)', async () => {
+    const f = fakeClaude();
+    const chat = new ChatProcess({ sessionId: 's', cwd: '.', args: [], spawnImpl: f.spawnImpl });
+    chat.start();
+    expect(f.env().CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING).toBe('1');
+    chat.send('mude o arquivo');
+    await tick();
+    const uuid = (f.written[0] as { uuid: string }).uuid;
+    expect(chat.snapshot().items[0]).toMatchObject({ kind: 'user', uuid });
+
+    const answer = (i: number, response: object, subtype = 'success') => {
+      const id = (f.written[i] as { request_id: string }).request_id;
+      f.emit({ type: 'control_response', response: { subtype, request_id: id, response } });
+    };
+    const preview = chat.rewind(uuid, true);
+    await tick();
+    expect(f.written[1]).toMatchObject({ request: { subtype: 'rewind_files', user_message_id: uuid, dry_run: true } });
+    answer(1, { canRewind: true, filesChanged: ['a.txt'], insertions: 1, deletions: 1 });
+    expect(await preview).toMatchObject({ canRewind: true, filesChanged: ['a.txt'] });
+
+    const mcp = chat.mcpStatus();
+    await tick();
+    answer(2, { mcpServers: [{ name: 'n8n', status: 'connected', config: { headers: { Authorization: 'Bearer SEGREDO' } } }] });
+    expect(await mcp).toEqual([{ name: 'n8n', status: 'connected' }]);
+
+    const stop = chat.stopTask('t1');
+    await tick();
+    expect(f.written[3]).toMatchObject({ request: { subtype: 'stop_task', task_id: 't1' } });
+    answer(3, {}, 'error');
+    await expect(stop).rejects.toThrow(/recusou/);
+  });
+
+  it('renomear com a conversa fechada grava a mesma linha do /rename; duplicar usa --fork-session', async () => {
+    const { ChatManager } = await import('../server/chat/manager');
+    const { buildClaudeArgs } = await import('../server/staff/ficha');
+    const dir = path.join(root, 'tr', 'proj');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 's1.jsonl'), '{"type":"user","message":{"content":"oi"}}\n');
+    const m = new ChatManager({ transcriptsDir: path.join(root, 'tr'), usageFile: path.join(root, 'u.json'), listLive: async () => [], resolve: async () => null });
+    await m.rename('proj', 's1', 'Ajustar o login');
+    expect((await fs.readFile(path.join(dir, 's1.jsonl'), 'utf8')).trim().split('\n').at(-1)).toBe('{"type":"custom-title","customTitle":"Ajustar o login","sessionId":"s1"}');
+    const p = { name: 'Ana', role: 'Dev', autonomy: 'acceptEdits', model: null, effort: null, browser: false, mcps: null, servers: [] } as never;
+    const args = buildClaudeArgs(p, { sessionId: 'novo', resume: false, systemPromptFile: 's.md', mcpConfigPath: null, firstPrompt: null, forkFrom: 'velho' });
+    expect(args.slice(0, 5)).toEqual(['--resume', 'velho', '--fork-session', '--session-id', 'novo']);
+  });
+
+  it('"o que mudou" sem worktree: só os arquivos que ele editou nesta conversa', async () => {
+    const { touchedFiles } = await import('../server/chatChanges');
+    const { locateCode, readCode } = await import('../server/taskCode');
+    const dir = path.join(root, 'repo');
+    await fs.mkdir(dir, { recursive: true });
+    const git = (...a: string[]) => execFileSync('git', ['-C', dir, ...a]);
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 't@t');
+    git('config', 'user.name', 't');
+    await fs.writeFile(path.join(dir, 'a.txt'), '1\n');
+    await fs.writeFile(path.join(dir, 'b.txt'), '1\n');
+    git('add', '.');
+    git('commit', '-qm', 'início');
+    await fs.writeFile(path.join(dir, 'a.txt'), '2\n'); // ele editou
+    await fs.writeFile(path.join(dir, 'b.txt'), '2\n'); // outra pessoa editou
+    const tr = path.join(root, 'conversa.jsonl');
+    await fs.writeFile(
+      tr,
+      [
+        { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: path.join(dir, 'a.txt') } }] } },
+        { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: path.join(dir, 'b.txt') } }] } },
+        { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: 'C:/fora/x.txt' } }] } },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join('\n'),
+    );
+    const touched = await touchedFiles(tr, dir);
+    expect(touched).toEqual(['a.txt']);
+    const code = await readCode(dir, (await locateCode(dir, null, false))!, null, touched);
+    expect(code.files.map((f) => f.path)).toEqual(['a.txt']);
+    expect(code.diff).toContain('a.txt');
+    expect(code.diff).not.toContain('b.txt');
+  });
+
+  it('busca nas conversas: seu texto e o deles, com o trecho e o nome da conversa', async () => {
+    const { searchConversations } = await import('../server/chatSearch');
+    const file = path.join(root, 'busca.jsonl');
+    await fs.writeFile(
+      file,
+      [
+        { type: 'user', timestamp: '2026-10-27T10:00:00Z', message: { content: 'Precisamos trocar o gateway de pagamento' } },
+        { type: 'assistant', timestamp: '2026-10-27T10:01:00Z', message: { content: [{ type: 'text', text: 'Troquei o Gateway para o novo.' }] } },
+        { type: 'custom-title', customTitle: 'Pagamentos' },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join('\n'),
+    );
+    const hits = await searchConversations([{ projectId: 'p', staffId: 'ana', staffName: 'Ana', sessionId: 's', file }], 'gateway');
+    expect(hits.map((h) => [h.title, h.snippet])).toEqual([
+      ['Pagamentos', 'Troquei o Gateway para o novo.'],
+      ['Pagamentos', 'Precisamos trocar o gateway de pagamento'],
+    ]);
+    expect(await searchConversations([], 'ga')).toEqual([]);
+  });
+});
+
 describe('lista de tarefas do funcionário', () => {
   it('monta a partir de TaskCreate e TaskUpdate', () => {
     const tool = (id: string, name: string, input: object, result: string | null): ChatItem => ({

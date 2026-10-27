@@ -241,6 +241,8 @@ export interface ClaudeArgsOptions {
   agentsFile?: string | null;
   /** Só no terminal; a conversa pelo MyCo manda as mensagens pelo stream. */
   firstPrompt: string | null;
+  /** Sessão nova (`sessionId`) que começa como cópia desta: duplicar a conversa. */
+  forkFrom?: string;
   /** Pastas fora do diretório de trabalho que a sessão pode ler (a ficha, quando roda numa worktree). */
   addDirs?: string[];
 }
@@ -252,7 +254,8 @@ export interface ClaudeArgsOptions {
 export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[] {
   const args: string[] = [];
   if (o.firstPrompt && !o.resume) args.push(sanitizeArg(o.firstPrompt));
-  if (o.resume) args.push('--resume', o.sessionId);
+  if (o.forkFrom) args.push('--resume', o.forkFrom, '--fork-session', '--session-id', o.sessionId);
+  else if (o.resume) args.push('--resume', o.sessionId);
   else args.push('--session-id', o.sessionId);
   args.push('--name', sanitizeArg(`${p.name} - ${p.role}`));
   args.push('--append-system-prompt-file', o.systemPromptFile);

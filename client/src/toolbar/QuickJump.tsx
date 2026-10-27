@@ -6,13 +6,13 @@ import { api } from '../api';
 // escolhem, Enter abre, Esc fecha.
 
 export type JumpTarget =
-  | { kind: 'staff'; projectId: string; staffId: string }
+  | { kind: 'staff'; projectId: string; staffId: string; sessionId?: string }
   | { kind: 'project'; projectId: string }
   | { kind: 'task'; projectId: string; taskId: string };
 
 interface Item {
   key: string;
-  kind: 'funcionário' | 'projeto' | 'tarefa';
+  kind: 'funcionário' | 'projeto' | 'tarefa' | 'conversa';
   title: string;
   detail: string;
   target: JumpTarget;
@@ -79,8 +79,39 @@ export function QuickJump({ board, taskProjects, onJump }: { board: Board; taskP
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board, tasks]);
 
+  // A partir de 3 letras, também o que foi dito nas conversas dos funcionários.
+  const [hits, setHits] = useState<Item[]>([]);
+  useEffect(() => {
+    const q = query.trim();
+    if (!open || q.length < 3) return setHits([]);
+    let alive = true;
+    const t = setTimeout(
+      () =>
+        void api.search(q).then(
+          (found) =>
+            alive &&
+            setHits(
+              found.map((h) => ({
+                key: `c:${h.sessionId}:${h.at}`,
+                kind: 'conversa',
+                title: `${h.staffName}${h.title ? ` · ${h.title}` : ''}`,
+                detail: h.snippet,
+                target: { kind: 'staff', projectId: h.projectId, staffId: h.staffId, sessionId: h.sessionId },
+              })),
+            ),
+          () => alive && setHits([]),
+        ),
+      250,
+    );
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [open, query]);
+
   const words = fold(query).split(/\s+/).filter(Boolean);
-  const shown = (words.length ? items.filter((i) => words.every((w) => fold(`${i.title} ${i.detail} ${i.kind}`).includes(w))) : items).slice(0, MAX);
+  const named = words.length ? items.filter((i) => words.every((w) => fold(`${i.title} ${i.detail} ${i.kind}`).includes(w))) : items;
+  const shown = [...named.slice(0, MAX), ...hits].slice(0, MAX + 8);
 
   useEffect(() => {
     list.current?.querySelector('.is-active')?.scrollIntoView({ block: 'nearest' });
@@ -98,7 +129,7 @@ export function QuickJump({ board, taskProjects, onJump }: { board: Board; taskP
         <input
           autoFocus
           value={query}
-          placeholder="Ir para um funcionário, projeto ou tarefa…"
+          placeholder="Ir para um funcionário, projeto, tarefa ou algo dito numa conversa…"
           aria-label="Ir para"
           onChange={(e) => {
             setQuery(e.target.value);

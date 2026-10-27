@@ -42,7 +42,8 @@ describe('ChatProcess', () => {
 
     chat.send('Olá');
     await tick();
-    expect(f.written[0]).toEqual({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'Olá' }] } });
+    // Com o id da mensagem (vira o do transcript: é por ele que "voltar até aqui" acha o ponto).
+    expect(f.written[0]).toEqual({ type: 'user', uuid: expect.any(String), message: { role: 'user', content: [{ type: 'text', text: 'Olá' }] } });
     expect(chat.snapshot().state.busy).toBe(true);
 
     f.emit({ type: 'system', subtype: 'init', model: 'claude-haiku-5-5' });
@@ -145,6 +146,7 @@ describe('ChatProcess', () => {
     await tick();
     expect(f.written[0]).toEqual({
       type: 'user',
+      uuid: expect.any(String),
       message: {
         role: 'user',
         content: [

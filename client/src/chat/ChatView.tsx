@@ -15,6 +15,7 @@ import {
   triggerOf,
   useFileSuggestions,
 } from './ChatExtras';
+import { ChangesPanel } from './ChangesPanel';
 import { Markdown } from './markdown';
 
 /** Prints no chat: até 4 por mensagem, com o lado maior em até 1568 px (o que o Claude lê sem reduzir). */
@@ -144,6 +145,26 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   };
 
   const blocked = disabled ?? (chat.elsewhere ? 'aberta em outro lugar' : null);
+  const [showChanges, setShowChanges] = useState(false);
+  const [extra, setExtra] = useState<'mcp' | 'background' | null>(null);
+
+  /** "Voltar até aqui": mostra o que volta, pede confirmação e desfaz as edições desde aquela mensagem. */
+  const rewind = async (uuid: string) => {
+    const sid = chat.sessionId;
+    if (!sid) return;
+    const p = await api.chatRewind(projectId, sid, staffId, uuid, true).catch((e: Error) => ({ canRewind: false, files: [], insertions: 0, deletions: 0, error: e.message }));
+    if (!p.canRewind) {
+      window.alert(`Não dá para voltar até aqui${p.error ? ` (${p.error})` : ''}. Só funciona para mensagens mandadas pelo MyCo a partir desta versão.`);
+      return;
+    }
+    if (!p.files.length) {
+      window.alert('Nenhum arquivo mudou desde essa mensagem.');
+      return;
+    }
+    const list = p.files.map((f) => `• ${f}`).join('\n');
+    if (!window.confirm(`Voltar ${p.files.length === 1 ? '1 arquivo' : `${p.files.length} arquivos`} ao que eram antes desta mensagem? (+${p.insertions} −${p.deletions})\n\n${list}\n\nComandos que ele rodou (instalar, banco, git) não são desfeitos. A conversa continua.`)) return;
+    await api.chatRewind(projectId, sid, staffId, uuid, false).catch((e: Error) => window.alert(e.message));
+  };
 
   return (
     <section className="chat">
@@ -162,7 +183,14 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           </p>
         )}
         {visible.map((item) => (
-          <Item key={item.id} item={item} onAnswer={chat.answer} executeAs={executeAs} onChangesRequested={() => input.current?.focus()} />
+          <Item
+            key={item.id}
+            item={item}
+            onAnswer={chat.answer}
+            executeAs={executeAs}
+            onChangesRequested={() => input.current?.focus()}
+            onRewind={staffId && chat.sessionId && !blocked ? (uuid) => void rewind(uuid) : undefined}
+          />
         ))}
         {busy && !streaming && !pending && (
           <div className="chat-typing" aria-live="polite">
@@ -325,11 +353,26 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           </span>
         )}
         {chat.state?.running && !!chat.state.background?.length && (
-          <span className="muted small" title={chat.state.background.map((t) => t.label).join('\n')}>
+          <button
+            type="button"
+            className="link small"
+            title={`${chat.state.background.map((t) => t.label).join('\n')}\n\nClique para ver e parar`}
+            onClick={() => setExtra(extra === 'background' ? null : 'background')}
+          >
             {chat.state.background.length} em segundo plano
-          </span>
+          </button>
         )}
         <span className="chat-footer-actions">
+          {staffId && chat.sessionId && (
+            <button type="button" className="btn-secondary" onClick={() => setShowChanges(true)} title="Os arquivos que ele mudou, o diff, os testes e (na worktree dele) mesclar">
+              O que mudou
+            </button>
+          )}
+          {level === 'advanced' && chat.state?.running && chat.sessionId && (
+            <button type="button" className="btn-secondary btn-toggle" aria-pressed={extra === 'mcp'} onClick={() => setExtra(extra === 'mcp' ? null : 'mcp')} title="Ligar e desligar MCPs só nesta conversa">
+              MCPs
+            </button>
+          )}
           {/* Liga/desliga no padrão dos botões do DS (pressionado = ligado), ao lado de "Compactar". */}
           <button
             type="button"
@@ -353,7 +396,56 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           </button>
         </span>
       </div>
+      {extra === 'mcp' && chat.sessionId && <McpMenu projectId={projectId} sessionId={chat.sessionId} staffId={staffId} />}
+      {extra === 'background' && chat.sessionId && !!chat.state?.background?.length && (
+        <ul className="chat-extra small">
+          {chat.state.background.map((t) => (
+            <li key={t.id}>
+              <span className="muted">{t.kind === 'agent' ? 'agent' : t.kind === 'shell' ? 'comando' : t.kind}</span> {t.label}{' '}
+              <button type="button" className="link small" onClick={() => void api.chatStopTask(chat.sessionId!, t.id).catch((e: Error) => window.alert(e.message))}>
+                parar
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {showChanges && chat.sessionId && <ChangesPanel projectId={projectId} sessionId={chat.sessionId} staffId={staffId} name={name} onClose={() => setShowChanges(false)} />}
     </section>
+  );
+}
+
+/** MCPs só desta conversa: liga e desliga sem mexer na ficha. */
+function McpMenu({ projectId, sessionId, staffId }: { projectId: string; sessionId: string; staffId: string | null }) {
+  const [list, setList] = useState<Array<{ name: string; status: string }> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = () => api.chatMcp(projectId, sessionId, staffId).then(setList, (e: Error) => setError(e.message));
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, sessionId, staffId]);
+  const toggle = async (name: string, enabled: boolean) => {
+    setError(null);
+    try {
+      await api.chatMcpToggle(projectId, sessionId, staffId, name, enabled);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  return (
+    <ul className="chat-extra small">
+      {!list && !error && <li className="muted">Lendo os MCPs da conversa…</li>}
+      {list?.length === 0 && <li className="muted">Nenhum MCP nesta conversa.</li>}
+      {list?.map((m) => (
+        <li key={m.name}>
+          <label className="check">
+            <input type="checkbox" checked={m.status !== 'disabled'} onChange={(e) => void toggle(m.name, e.target.checked)} /> {m.name}
+            <span className="muted"> {m.status}</span>
+          </label>
+        </li>
+      ))}
+      {error && <li className="error">{error}</li>}
+    </ul>
   );
 }
 
@@ -420,16 +512,24 @@ function Item({
   onAnswer,
   executeAs,
   onChangesRequested,
+  onRewind,
 }: {
   item: ChatItem;
   onAnswer: Answer;
   executeAs: Autonomy;
   onChangesRequested: () => void;
+  /** "Voltar até aqui" nas suas mensagens (as que têm o id do transcript). */
+  onRewind?: (uuid: string) => void;
 }) {
   switch (item.kind) {
     case 'user':
       return (
         <div className="msg msg-user">
+          {onRewind && item.uuid && !item.held && (
+            <button type="button" className="msg-rewind" title="Volta os arquivos ao que eram antes desta mensagem (pergunta antes)" onClick={() => onRewind(item.uuid!)}>
+              ↶ voltar até aqui
+            </button>
+          )}
           {item.images ? (
             <span className="msg-images">
               <ImageIcon size={12} /> {item.images === 1 ? '1 imagem' : `${item.images} imagens`}

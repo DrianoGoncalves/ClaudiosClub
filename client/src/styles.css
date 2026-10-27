@@ -407,6 +407,13 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .chat-suggest button.is-active { background: color-mix(in srgb, var(--ink-blue) 14%, transparent); }
 .chat-file { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; }
 .chat-file button { border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+/* "Voltar até aqui", MCPs e segundo plano da conversa, "o que mudou". */
+.msg-user { position: relative; }
+.msg-rewind { position: absolute; top: -9px; right: 6px; display: none; padding: 0 6px; font-size: 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); cursor: pointer; }
+.msg-user:hover .msg-rewind, .msg-rewind:focus-visible { display: inline-block; }
+.chat-extra { list-style: none; margin: 4px 0 0; padding: 6px 10px; border: 1px dashed var(--line); border-radius: 8px; display: grid; gap: 3px; }
+.changes-modal { width: min(980px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow-y: auto; }
+.changes-diff { max-height: 50vh; overflow: auto; }
 /* Ctrl+K: ir para funcionário, projeto ou tarefa. */
 .quick-jump-backdrop { align-items: flex-start; padding-top: 12vh; }
 .quick-jump { width: min(560px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3); overflow: hidden; }
