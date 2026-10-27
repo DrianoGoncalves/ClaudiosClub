@@ -414,6 +414,53 @@ describe('ChatManager: ficha editada com a conversa aberta', () => {
     // Com o aviso de ficha atualizada antes (a ficha mudou), e a sua mensagem por último.
     expect(procs[1]!.written[0]).toMatchObject({ message: { content: [{ text: expect.stringMatching(/^\[MyCo\] Sua ficha/) }, { text: 'continua' }] } });
   });
+
+  it('ficha mudou com agents em segundo plano: não reabre (eles morreriam) até terminarem', async () => {
+    const { m, procs } = manager();
+    await m.send('p', 'sx', 'ana', 'delegue');
+    const f = procs[0]!;
+    f.emit({
+      type: 'system',
+      subtype: 'background_tasks_changed',
+      tasks: [{ task_id: 'a1', task_type: 'local_agent', subagent_type: 'executor', description: 'Servidor: cor da sala' }],
+    });
+    f.emit({ type: 'result', is_error: false }); // o turno acabou, o executor continua
+    await tick();
+    expect(m.working()).toEqual({ busy: 0, background: 1 });
+    m.profileChanged(profile(), profile({ model: 'opus', updatedAt: '2' }));
+    await m.send('p', 'sx', 'ana', 'como vai?');
+    expect(procs).toHaveLength(1);
+    f.emit({ type: 'result', is_error: false });
+    f.emit({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });
+    await tick();
+    await m.send('p', 'sx', 'ana', 'e agora?');
+    expect(procs).toHaveLength(2);
+  });
+});
+
+describe('ChatProcess: segundo plano', () => {
+  it('lista o que roda em segundo plano e limpa quando o processo sai', async () => {
+    const f = fakeClaude();
+    const chat = new ChatProcess({ sessionId: 's', cwd: '.', args: [], spawnImpl: f.spawnImpl });
+    chat.start();
+    f.emit({
+      type: 'system',
+      subtype: 'background_tasks_changed',
+      tasks: [
+        { task_id: 'a1', task_type: 'local_agent', subagent_type: 'executor', description: 'Cliente' },
+        { task_id: 'b2', task_type: 'local_bash', description: 'npm test' },
+      ],
+    });
+    await tick();
+    expect(chat.working).toBe(true);
+    expect(chat.background).toEqual([
+      { id: 'a1', kind: 'agent', label: 'executor: Cliente' },
+      { id: 'b2', kind: 'shell', label: 'npm test' },
+    ]);
+    f.proc.emit('exit', 0);
+    expect(chat.working).toBe(false);
+    expect(chat.snapshot().state.background).toEqual([]);
+  });
 });
 
 let root: string;

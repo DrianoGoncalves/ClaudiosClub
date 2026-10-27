@@ -238,6 +238,18 @@ export class ChatManager {
     this.chats.get(sessionId)?.interrupt();
   }
 
+  /** Quantas conversas abertas estão no meio de um turno ou com algo em segundo plano. */
+  working(): { busy: number; background: number } {
+    let busy = 0;
+    let background = 0;
+    for (const c of this.chats.values()) {
+      if (!c.running) continue;
+      if (c.busy) busy++;
+      else if (c.background.length) background++;
+    }
+    return { busy, background };
+  }
+
   /** Fecha todas as conversas e espera os processos saírem (o MyCo vai parar ou reiniciar). */
   async stopAll(): Promise<void> {
     await Promise.all([...this.chats.values()].map((c) => c.stopAndWait()));
@@ -266,7 +278,8 @@ export class ChatManager {
 
   private async ensure(projectId: string, sessionId: string | null, staffId: string | null): Promise<ChatProcess> {
     const existing = sessionId ? this.chats.get(sessionId) : undefined;
-    if (existing?.running && !(existing.stale && !existing.busy)) return existing;
+    // Ficha nova só reabre com tudo parado: agents em segundo plano morreriam com o processo.
+    if (existing?.running && !(existing.stale && !existing.working)) return existing;
     if (existing?.running) await existing.stopAndWait(); // reabre com a ficha nova
     if (sessionId) {
       const other = await this.elsewhere(sessionId);
@@ -373,7 +386,7 @@ export class ChatManager {
     const idle = this.opts.idleMs ?? 15 * 60_000;
     for (const [id, chat] of this.chats) {
       if (!chat.running) this.chats.delete(id);
-      else if (!chat.busy && Date.now() - chat.lastActivity > idle) chat.stop();
+      else if (!chat.working && Date.now() - chat.lastActivity > idle) chat.stop();
     }
   }
 }

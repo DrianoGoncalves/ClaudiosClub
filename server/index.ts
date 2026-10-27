@@ -194,7 +194,7 @@ const ID = '([A-Za-z0-9-]+)';
 const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ['GET', /^\/api\/health$/, async () => ({ ok: true, adapter: adapter.id })],
   // ---- o próprio servidor: parar e (com o vigia) reiniciar pelo config ----
-  ['GET', /^\/api\/server$/, async () => ({ daemon: UNDER_DAEMON, pid: process.pid, port: PORT, startedAt: STARTED_AT })],
+  ['GET', /^\/api\/server$/, async () => ({ daemon: UNDER_DAEMON, pid: process.pid, port: PORT, startedAt: STARTED_AT, working: chats.working() })],
   [
     'POST',
     /^\/api\/server\/(stop|restart)$/,

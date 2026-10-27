@@ -37,6 +37,13 @@ describe('pricing', () => {
     expect(costOf('claude-opus-5-5', { output_tokens: 1_000_000, speed: 'fast' })).toBeCloseTo(40, 6);
     expect(costOf('modelo-novo', { input_tokens: 1 })).toBeNull();
   });
+
+  it('modelo que saiu depois da tabela usa o preço do mais recente da família', () => {
+    expect(costOf('claude-haiku-6', { input_tokens: 1_000_000 })).toBeCloseTo(costOf('claude-haiku-5-5', { input_tokens: 1_000_000 })!, 6);
+    expect(costOf('claude-opus-6-1-20270101', { output_tokens: 1_000_000 })).toBeCloseTo(20, 6);
+    expect(costOf('claude-sonnet-6[1m]', { output_tokens: 1_000_000 })).toBeCloseTo(10, 6);
+    expect(costOf('claude-novafamilia-1', { input_tokens: 1 })).toBeNull();
+  });
 });
 
 function assistant(id: string, usage: object, opts: { model?: string; ts?: string; text?: string } = {}) {

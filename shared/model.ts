@@ -563,6 +563,18 @@ export interface ChatState {
   permissionMode: string | null;
   context: ContextUsage | null;
   error: string | null;
+  /**
+   * Agents e comandos que o funcionário deixou rodando em segundo plano. O turno pode ter acabado,
+   * mas fechar o processo agora os mataria no meio.
+   */
+  background: BackgroundTask[];
+}
+
+export interface BackgroundTask {
+  id: string;
+  /** `agent`, `shell` ou o tipo que o Claude Code mandar. */
+  kind: string;
+  label: string;
 }
 
 /** Eventos que o servidor manda pelo SSE da conversa. */

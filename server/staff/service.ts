@@ -288,12 +288,12 @@ export class StaffService {
     const id = sessionId ?? randomUUID();
     const ctx = await this.context(project, profile, true);
     const cwd = sessionCwd(profile, ctx, sessionId);
-    const { systemPromptFile, mcpConfigPath, addDirs } = await prepareRun(profile, ctx, id, cwd);
+    const run = await prepareRun(profile, ctx, id, cwd);
     if (!resume) {
       const now = new Date().toISOString();
       await saveProfile(project.path, { ...profile, sessions: [...profile.sessions, { id, startedAt: now, cwd }], updatedAt: now });
     }
-    const args = buildClaudeArgs(profile, { sessionId: id, resume, systemPromptFile, mcpConfigPath, addDirs, firstPrompt: null });
+    const args = buildClaudeArgs(profile, { ...run, sessionId: id, resume, firstPrompt: null });
     return { sessionId: id, cwd, args };
   }
 

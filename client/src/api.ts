@@ -121,7 +121,8 @@ export const api = {
   deleteRole: (id: string) => post<RoleEntry[]>(`/api/roles/${id}/delete`),
   setDefaultRole: (id: string | null) => post<RoleEntry[]>('/api/roles/default', { id }),
   restoreRoles: () => post<RoleEntry[]>('/api/roles/restore'),
-  serverInfo: () => get<{ daemon: boolean; pid: number; port: number; startedAt: string }>('/api/server'),
+  serverInfo: () =>
+    get<{ daemon: boolean; pid: number; port: number; startedAt: string; working: { busy: number; background: number } }>('/api/server'),
   serverAction: (action: 'stop' | 'restart') => post<{ ok: boolean; daemon: boolean }>(`/api/server/${action}`),
   usage: () => get<AccountUsage>('/api/usage'),
   browser: (fresh = false) => get<BrowserStatus>(fresh ? '/api/browser?fresh=1' : '/api/browser'),

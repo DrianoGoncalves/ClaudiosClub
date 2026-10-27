@@ -229,6 +229,11 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
             {MODE_TEXT[chat.state.permissionMode] ?? chat.state.permissionMode}
           </span>
         )}
+        {chat.state?.running && !!chat.state.background?.length && (
+          <span className="muted small" title={chat.state.background.map((t) => t.label).join('\n')}>
+            {chat.state.background.length} em segundo plano
+          </span>
+        )}
         <span className="chat-footer-actions">
           {/* Liga/desliga no padrão dos botões do DS (pressionado = ligado), ao lado de "Compactar". */}
           <button

@@ -109,7 +109,7 @@ function playbookSection(p: StaffProfile): string {
   return [
     `## Roteiro: ${pb.title}`,
     pb.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'),
-    'Ao delegar: peça respostas curtas (o que mudou ou o que achou, com arquivo:linha, e o que não deu para fazer), nunca arquivos inteiros colados. Quem você chama não chama outros agents: dividir o trabalho é com você. Se o agent do roteiro não existir no projeto, avise o usuário em vez de improvisar.',
+    'Ao delegar: chame os agents em primeiro plano (para rodar em paralelo, várias chamadas na mesma mensagem) e confira cada entrega antes de seguir. Peça respostas curtas (o que mudou ou o que achou, com arquivo:linha, e o que não deu para fazer), nunca arquivos inteiros colados. Quem você chama não chama outros agents: dividir o trabalho é com você. Se o agent do roteiro não existir no projeto, avise o usuário em vez de improvisar.',
   ].join('\n\n');
 }
 
@@ -224,6 +224,10 @@ export interface ClaudeArgsOptions {
   /** Arquivo com a identidade e a ficha (ver systemPrompt). */
   systemPromptFile: string;
   mcpConfigPath: string | null;
+  /** Configuração extra com os hooks do MyCo (ver staffSettings em launch.ts). */
+  settingsFile?: string | null;
+  /** Agents do roteiro que faltam na pasta da sessão (worktree), em JSON. */
+  agentsFile?: string | null;
   /** Só no terminal; a conversa pelo MyCo manda as mensagens pelo stream. */
   firstPrompt: string | null;
   /** Pastas fora do diretório de trabalho que a sessão pode ler (a ficha, quando roda numa worktree). */
@@ -244,6 +248,8 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   // Pasta, git status e afins vão para a 1ª mensagem: o prompt de sistema fica igual entre conversas
   // e projetos, e o cache dele é reaproveitado mais vezes.
   args.push('--exclude-dynamic-system-prompt-sections');
+  if (o.settingsFile) args.push('--settings', o.settingsFile);
+  if (o.agentsFile) args.push('--agents', o.agentsFile);
   args.push('--permission-mode', p.autonomy);
   if (p.model) args.push('--model', p.model);
   if (p.effort) args.push('--effort', p.effort);

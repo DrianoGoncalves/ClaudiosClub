@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { ChatEvent, ChatItem, ChatState, SendPriority, UsageLimit } from '../../shared/model';
+import type { BackgroundTask, ChatEvent, ChatItem, ChatState, SendPriority, UsageLimit } from '../../shared/model';
 import { cleanEnv } from '../auth';
 import { tryJson } from '../adapters/claude/fsutil';
 import { contextWindowFor } from '../adapters/claude/pricing';
@@ -34,6 +34,19 @@ const UnifiedWindows = z.record(
   z.object({ utilization: z.number(), resetsAt: z.number().optional(), status: z.string().optional() }).passthrough(),
 );
 
+/** `background_tasks_changed` traz a lista inteira do que ainda roda em segundo plano. */
+const BackgroundTasks = z.array(
+  z
+    .object({ task_id: z.string(), task_type: z.string().optional(), subagent_type: z.string().optional(), description: z.string().optional() })
+    .passthrough(),
+);
+
+function backgroundTask(t: z.infer<typeof BackgroundTasks>[number]): BackgroundTask {
+  const kind = t.task_type === 'local_agent' ? 'agent' : t.task_type === 'local_bash' ? 'shell' : (t.task_type ?? 'tarefa');
+  const label = [t.subagent_type, t.description].filter(Boolean).join(': ') || t.task_id;
+  return { id: t.task_id, kind, label };
+}
+
 export interface ChatProcessOptions {
   sessionId: string;
   cwd: string;
@@ -62,7 +75,7 @@ export class ChatProcess {
   private readonly pending = new Map<string, unknown>();
   private stderr = '';
   private buf = '';
-  private state: ChatState = { running: false, busy: false, compacting: false, model: null, permissionMode: null, context: null, error: null };
+  private state: ChatState = { running: false, busy: false, compacting: false, model: null, permissionMode: null, context: null, error: null, background: [] };
   private window: number | null = null;
   /** Pedidos de controle nossos esperando resposta (troca de modo): id → o que avisar no fim. */
   private readonly controls = new Map<string, string>();
@@ -90,6 +103,15 @@ export class ChatProcess {
 
   get busy(): boolean {
     return this.state.busy || this.pending.size > 0;
+  }
+
+  /** Turno em andamento ou algo em segundo plano: fechar o processo agora interromperia trabalho. */
+  get working(): boolean {
+    return this.busy || this.state.background.length > 0;
+  }
+
+  get background(): BackgroundTask[] {
+    return this.state.background;
   }
 
   get currentSeq(): number {
@@ -259,6 +281,9 @@ export class ChatProcess {
         } else if (subtype === 'permission_denied') {
           const tool = typeof ev.tool_name === 'string' ? ev.tool_name : 'ferramenta';
           this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text: `${tool}: permissão negada`, tone: 'warn', at });
+        } else if (subtype === 'background_tasks_changed') {
+          const tasks = BackgroundTasks.safeParse(ev.tasks);
+          if (tasks.success) this.setState({ background: tasks.data.map(backgroundTask) });
         }
         return;
       }
@@ -407,7 +432,7 @@ export class ChatProcess {
     }
     this.pending.clear();
     this.controls.clear();
-    this.setState({ running: false, busy: false, compacting: false, error });
+    this.setState({ running: false, busy: false, compacting: false, error, background: [] });
     for (const done of this.exitWaiters.splice(0)) done();
   }
 

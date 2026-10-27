@@ -1,10 +1,13 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { LaunchResult, ServerInfo, StaffProfile } from '../../shared/model';
+import { defaultLocations } from '../adapters/claude/paths';
 import { cleanEnv } from '../auth';
 import { buildClaudeArgs, renderFicha, sanitizeArg, systemPrompt, toCmdLine, type FichaContext } from './ficha';
 import { buildMcpConfig } from './mcp';
+import { ensurePlaybookAgents } from './playbookAgents';
 import { ensureMemory, fichaFile, memoryFile, saveProfile, staffDir, writeAtomic } from './store';
 import type { Worktree } from './worktree';
 
@@ -21,6 +24,8 @@ export interface LaunchContext {
   worktree?: Worktree | null;
   /** Servidores da ficha, resolvidos (só nomes e destinos). */
   servers?: ServerInfo[];
+  /** Agents da conta (padrão ~/.claude/agents); os testes trocam. */
+  userAgentsDir?: string;
   /** Troca o `spawn` real nos testes. */
   open?: (scriptPath: string, title: string) => void;
 }
@@ -44,15 +49,13 @@ export async function launchStaff(
   const sessionId = resume ? last!.id : randomUUID();
   const cwd = sessionCwd(profile, ctx, resume ? sessionId : null);
 
-  const { systemPromptFile, mcpConfigPath, addDirs } = await prepareRun(profile, ctx, sessionId, cwd);
+  const run = await prepareRun(profile, ctx, sessionId, cwd);
   const runDir = path.join(ctx.runDir, sessionId);
 
   const args = buildClaudeArgs(profile, {
+    ...run,
     sessionId,
     resume,
-    systemPromptFile,
-    mcpConfigPath,
-    addDirs,
     firstPrompt: profile.firstTask
       ? `Olá, ${profile.name}. Leia sua memória e comece pela primeira tarefa da ficha.`
       : `Olá, ${profile.name}. Leia sua memória e diga em poucas linhas como pretende começar.`,
@@ -83,27 +86,62 @@ export async function launchStaff(
   return { result: { ok: true, sessionId, command, error: null }, profile: next };
 }
 
+export interface PreparedRun {
+  systemPromptFile: string;
+  mcpConfigPath: string | null;
+  addDirs: string[];
+  settingsFile: string;
+  agentsFile: string | null;
+}
+
 /**
- * Ficha atualizada, prompt de sistema (identidade + ficha, em arquivo) e config de MCP da ficha,
- * para o terminal ou para a conversa no MyCo. Rodando fora da pasta do projeto (worktree), a pasta
- * das fichas entra em `--add-dir`.
+ * Ficha atualizada, prompt de sistema (identidade + ficha, em arquivo), config de MCP da ficha,
+ * hooks do MyCo e os agents do roteiro, para o terminal ou para a conversa no MyCo. Rodando fora
+ * da pasta do projeto (worktree), a pasta das fichas entra em `--add-dir`.
  */
-export async function prepareRun(
-  profile: StaffProfile,
-  ctx: LaunchContext,
-  sessionId: string,
-  cwd: string,
-): Promise<{ systemPromptFile: string; mcpConfigPath: string | null; addDirs: string[] }> {
+export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string): Promise<PreparedRun> {
   const away = path.resolve(cwd) !== path.resolve(ctx.projectPath);
   const fichaCtx = await writeFicha(profile, ctx, away);
-  const systemPromptFile = path.join(ctx.runDir, sessionId, 'system.md');
+  const dir = path.join(ctx.runDir, sessionId);
+  const systemPromptFile = path.join(dir, 'system.md');
   await writeAtomic(systemPromptFile, systemPrompt(profile, fichaCtx, renderFicha(profile, fichaCtx)));
   let mcpConfigPath: string | null = null;
   if (profile.mcps !== null) {
-    mcpConfigPath = path.join(ctx.runDir, sessionId, 'mcp.json');
+    mcpConfigPath = path.join(dir, 'mcp.json');
     await writeAtomic(mcpConfigPath, JSON.stringify(await buildMcpConfig(ctx.projectPath, profile.mcps, ctx.claudeConfigFile), null, 2));
   }
-  return { systemPromptFile, mcpConfigPath, addDirs: away ? [staffDir(ctx.projectPath)] : [] };
+  const settingsFile = path.join(dir, 'settings.json');
+  await writeAtomic(settingsFile, JSON.stringify(staffSettings(), null, 2));
+  const agents = await ensurePlaybookAgents(profile, {
+    projectPath: ctx.projectPath,
+    cwd,
+    userAgentsDir: ctx.userAgentsDir ?? path.join(defaultLocations().home, 'agents'),
+    backupDir: path.join(ctx.runDir, 'agent-backups'),
+  });
+  if (agents.created.length) {
+    console.log(`[staff] ${profile.name}: criado ${agents.created.join(', ')} em ${path.join(ctx.projectPath, '.claude', 'agents')} (roteiro da ficha)`);
+  }
+  let agentsFile: string | null = null;
+  if (Object.keys(agents.inline).length) {
+    agentsFile = path.join(dir, 'agents.json');
+    await writeAtomic(agentsFile, JSON.stringify(agents.inline, null, 2));
+  }
+  return { systemPromptFile, mcpConfigPath, addDirs: away ? [staffDir(ctx.projectPath)] : [], settingsFile, agentsFile };
+}
+
+const DELIVERY_HOOK = fileURLToPath(new URL('../../scripts/hooks/delivery-check.mjs', import.meta.url));
+
+/**
+ * Hooks do MyCo em todo funcionário (`--settings`, somados aos do usuário e do projeto): os agents
+ * do roteiro rodam em primeiro plano e cada entrega do executor chega com o lembrete de conferir
+ * (scripts/hooks/delivery-check.mjs). O node é chamado direto, sem shell: no Windows sem Git Bash
+ * o Claude Code rodaria o comando no PowerShell.
+ */
+export function staffSettings() {
+  const hook = (stage: 'pre' | 'post') => [
+    { matcher: 'Agent|Task', hooks: [{ type: 'command', command: process.execPath, args: [DELIVERY_HOOK, stage], timeout: 10 }] },
+  ];
+  return { hooks: { PreToolUse: hook('pre'), PostToolUse: hook('post') } };
 }
 
 /**

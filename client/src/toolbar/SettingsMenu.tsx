@@ -475,10 +475,17 @@ function ServerControls() {
   }, []);
 
   const act = async (action: 'stop' | 'restart') => {
+    // Na hora do clique, não de quando o menu abriu: quem está trabalhando agora perde o que faz.
+    const working = await api.serverInfo().then((i) => i.working, () => null);
+    const cut = [
+      working?.busy ? `${working.busy} no meio de um turno` : '',
+      working?.background ? `${working.background} com agents em segundo plano` : '',
+    ].filter(Boolean);
+    const warn = cut.length ? `\n\nAtenção: ${cut.join(' e ')}. O trabalho deles é interrompido.` : '';
     const ask =
-      action === 'stop'
+      (action === 'stop'
         ? 'Parar o MyCo? As conversas abertas fecham e as rotinas param até ele voltar.'
-        : 'Reiniciar o MyCo? As conversas abertas fecham e ele volta em alguns segundos.';
+        : 'Reiniciar o MyCo? As conversas abertas fecham e ele volta em alguns segundos.') + warn;
     if (!window.confirm(ask)) return;
     setError(null);
     setState(action === 'stop' ? 'stopping' : 'restarting');

@@ -1,3 +1,4 @@
+import { PLAYBOOK_AGENTS } from '../../../shared/agentPresets';
 import type { Autonomy, Playbook } from '../../../shared/model';
 
 // Opções do questionário do funcionário. Os cargos (modelos de ficha) ficam em shared/roles.ts e
@@ -5,26 +6,26 @@ import type { Autonomy, Playbook } from '../../../shared/model';
 
 /**
  * Roteiros de orquestração. Os passos em si vão para a ficha (server/staff/ficha.ts); aqui ficam
- * o nome, a explicação e os agents (dos modelos prontos de “Novo agent”) que cada um usa.
+ * o nome, a explicação e os agents (shared/agentPresets.ts) que cada um usa.
  */
 export const PLAYBOOK_OPTIONS: { value: Playbook; label: string; help: string; agents: string[] }[] = [
   {
     value: 'plan-big-execute-small',
     label: 'Planeja grande, executa pequeno',
     help: 'Ele planeja e revisa no modelo dele; cada tarefa vai para o executor (Haiku), com arquivos, critério de pronto e o que não mexer.',
-    agents: ['executor'],
+    agents: PLAYBOOK_AGENTS['plan-big-execute-small'],
   },
   {
     value: 'scout-then-build',
     label: 'Reconhece, depois constrói',
     help: 'Primeiro o pesquisador (só leitura) mapeia o código e responde com arquivo:linha; só então ele planeja e manda o executor construir.',
-    agents: ['pesquisador', 'executor'],
+    agents: PLAYBOOK_AGENTS['scout-then-build'],
   },
   {
     value: 'review-gate',
     label: 'Portão de revisão',
     help: 'Cada entrega do executor passa pelo revisor antes de seguir; o que for reprovado volta com os achados, no máximo duas vezes.',
-    agents: ['executor', 'revisor'],
+    agents: PLAYBOOK_AGENTS['review-gate'],
   },
 ];
 

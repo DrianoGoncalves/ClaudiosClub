@@ -57,9 +57,24 @@ export function isBillable(model: string | undefined): model is string {
   return !!model && !model.startsWith('<');
 }
 
-/** Custo em US$, ou null quando o modelo não está na tabela. */
+const FAMILY = /^claude-(fable|mythos|opus|sonnet|haiku)-/;
+
+/**
+ * Preço do modelo; um que ainda não está na tabela (saiu depois dela) usa o mais recente da mesma
+ * família (a tabela vai do mais novo ao mais velho em cada uma), para o custo e o orçamento não
+ * sumirem até a tabela ser atualizada. Família desconhecida: null.
+ */
+export function rateFor(model: string): Rate | null {
+  const m = normalizeModel(model);
+  if (RATES[m]) return RATES[m];
+  const family = FAMILY.exec(m)?.[0];
+  const sibling = family ? Object.keys(RATES).find((k) => k.startsWith(family)) : undefined;
+  return sibling ? RATES[sibling]! : null;
+}
+
+/** Custo em US$, ou null quando não há preço para o modelo (nem pela família). */
 export function costOf(model: string, u: Usage): number | null {
-  const rate = RATES[normalizeModel(model)];
+  const rate = rateFor(model);
   if (!rate) return null;
   const input = u.input_tokens ?? 0;
   const output = u.output_tokens ?? 0;
