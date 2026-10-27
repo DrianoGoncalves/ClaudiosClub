@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { BoardBackground, ProjectColor, SendPriority, UsageStop } from '../../../shared/model';
+import { api } from '../api';
 import { BackgroundPicker, RoomColorPicker, useSystemTheme } from '../board/colors';
 
 // Configurações do MyCo, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
@@ -298,6 +299,15 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
         </button>
       ),
     },
+    {
+      id: 'server',
+      group: 'board',
+      title: 'Servidor do MyCo',
+      description:
+        'Parar fecha as conversas abertas e desliga o MyCo (as rotinas param junto). Reiniciar só aparece com o MyCo em segundo plano (npm run daily:start ou o início automático).',
+      keywords: 'parar desligar encerrar reiniciar stop restart servidor',
+      control: <ServerControls />,
+    },
   ];
 
   if (p.boardBackground) {
@@ -440,6 +450,92 @@ function BudgetInput({ value, label, onSave }: { value: number | null; label: st
       />
       %{error && <span className="error small">{error}</span>}
     </span>
+  );
+}
+
+/** Parar (e, com o vigia, reiniciar) o servidor do MyCo. Depois, a tela mostra como voltar. */
+function ServerControls() {
+  const [info, setInfo] = useState<{ daemon: boolean; startedAt: string } | null>(null);
+  const [state, setState] = useState<'idle' | 'stopping' | 'stopped' | 'restarting'>('idle');
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.serverInfo().then(setInfo, () => {});
+  }, []);
+
+  const act = async (action: 'stop' | 'restart') => {
+    const ask =
+      action === 'stop'
+        ? 'Parar o MyCo? As conversas abertas fecham e as rotinas param até ele voltar.'
+        : 'Reiniciar o MyCo? As conversas abertas fecham e ele volta em alguns segundos.';
+    if (!window.confirm(ask)) return;
+    setError(null);
+    setState(action === 'stop' ? 'stopping' : 'restarting');
+    try {
+      await api.serverAction(action);
+    } catch (e) {
+      setError((e as Error).message);
+      setState('idle');
+      return;
+    }
+    if (action === 'stop') {
+      // Espera o servidor sumir de verdade antes de dizer que parou.
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        if (!(await fetch('/api/health').then((r) => r.ok, () => false))) break;
+      }
+      setState('stopped');
+      return;
+    }
+    // Reiniciando: espera ele sair e voltar, e recarrega a página.
+    await new Promise((r) => setTimeout(r, 2500));
+    for (let i = 0; i < 60; i++) {
+      if (await fetch('/api/health').then((r) => r.ok, () => false)) return window.location.reload();
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    setError('o MyCo não voltou em 1 min e meio: veja o log com npm run daily:status');
+    setState('idle');
+  };
+
+  return (
+    <>
+      <span className="setting-buttons">
+        {info?.daemon && (
+          <button type="button" className="btn-secondary" disabled={state !== 'idle'} onClick={() => void act('restart')}>
+            Reiniciar
+          </button>
+        )}
+        <button type="button" className="btn-secondary setting-danger" disabled={state !== 'idle'} onClick={() => void act('stop')}>
+          Parar o MyCo
+        </button>
+      </span>
+      {info && (
+        <span className="muted small">
+          {info.daemon ? 'Em segundo plano, com vigia' : 'Rodando em primeiro plano (sem vigia)'} · desde{' '}
+          {new Date(info.startedAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+        </span>
+      )}
+      {error && <span className="error small">{error}</span>}
+      {state !== 'idle' &&
+        createPortal(
+          <div className="server-overlay" role="alertdialog" aria-live="assertive">
+            <div className="server-overlay-card">
+              {state === 'restarting' && <h2>Reiniciando o MyCo…</h2>}
+              {state === 'stopping' && <h2>Parando o MyCo…</h2>}
+              {state === 'stopped' && (
+                <>
+                  <h2>O MyCo está parado</h2>
+                  <p>As conversas foram fechadas (continuam salvas) e as rotinas não rodam até ele voltar.</p>
+                  <p>
+                    Para ligar de novo: abra o atalho <b>MyCo</b> do Menu Iniciar (página de início, com o botão "Iniciar"), ou rode{' '}
+                    <code>npm run daily:start</code> na pasta do MyCo.
+                  </p>
+                </>
+              )}
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 

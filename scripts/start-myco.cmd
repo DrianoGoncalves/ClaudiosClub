@@ -2,7 +2,7 @@
 rem MyCo para o dia a dia: gera o cliente e sobe o servidor sem "watch". Assim, salvar um arquivo do
 rem próprio MyCo (você ou um funcionário) não reinicia o servidor nem deixa conversas órfãs.
 rem Abre em http://myco.localhost:4848. Para desenvolver o MyCo, use "npm run dev" (myco.localhost:5173).
-rem Para iniciar com o Windows: npm run autostart (cria um atalho na pasta Inicializar).
+rem Em segundo plano, sem janela e religando se cair: npm run daily:start (ou npm run autostart).
 chcp 65001 >nul
 title MyCo
 cd /d "%~dp0.."

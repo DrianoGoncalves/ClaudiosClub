@@ -224,6 +224,11 @@ export class ChatManager {
     this.chats.get(sessionId)?.interrupt();
   }
 
+  /** Fecha todas as conversas e espera os processos saírem (o MyCo vai parar ou reiniciar). */
+  async stopAll(): Promise<void> {
+    await Promise.all([...this.chats.values()].map((c) => c.stopAndWait()));
+  }
+
   stop(sessionId: string) {
     this.chats.get(sessionId)?.stop();
   }

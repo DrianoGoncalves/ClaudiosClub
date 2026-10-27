@@ -16,6 +16,11 @@
     "mod:install": "tsx scripts/install-mod.ts",
     "mod:uninstall": "tsx scripts/install-mod.ts --uninstall",
     "daily": "scripts\\start-myco.cmd",
+    "daily:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/daily.ps1 start",
+    "daily:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/daily.ps1 stop",
+    "daily:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/daily.ps1 status",
+    "launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/launcher.ps1",
+    "launcher:remove": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/launcher.ps1 -Remove",
     "autostart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/autostart.ps1",
     "autostart:remove": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/autostart.ps1 -Remove"
   },

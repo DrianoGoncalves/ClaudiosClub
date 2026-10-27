@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MyCo</title>
+    <style>
+      :root { --bg: #f6f3ea; --card: #fffdf8; --ink: #1f2328; --muted: #6b6f76; --line: #ddd6c8; --blue: #2457c5; }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg: #1a2026; --card: #222a31; --ink: #e8e6df; --muted: #9aa3ab; --line: #36414b; --blue: #9cc0ff; }
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, sans-serif; }
+      main { width: min(460px, 100%); background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 24px 26px; display: grid; gap: 12px; }
+      h1 { margin: 0; font-size: 30px; line-height: 1; letter-spacing: -0.01em; }
+      p { margin: 0; }
+      .muted { color: var(--muted); font-size: 13px; }
+      button { justify-self: start; font: inherit; font-weight: 600; padding: 9px 18px; border-radius: 9px; border: 0; background: var(--blue); color: #fff; cursor: pointer; }
+      button:disabled { opacity: 0.6; cursor: default; }
+      code { font-size: 12.5px; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>MyCo</h1>
+      <p id="checking">Procurando o MyCo…</p>
+      <section id="down" hidden>
+        <p>O MyCo está parado.</p>
+        <p class="muted">Ele sobe em segundo plano, sem janela, e volta sozinho se cair.</p>
+        <p><button id="start" type="button">Iniciar o MyCo</button></p>
+        <p class="muted" id="hint">
+          Na primeira vez, o navegador pergunta se pode abrir o MyCo: confirme. Se nada acontecer, rode
+          <code>npm run launcher</code> na pasta do MyCo (registra o botão) ou <code>npm run daily:start</code>.
+        </p>
+      </section>
+      <p id="starting" hidden>Iniciando… (o primeiro build leva uns segundos)</p>
+    </main>
+    <script>
+      // Página de início: se o MyCo responde, vai direto para ele; senão, mostra o botão "Iniciar",
+      // que abre o link myco://start (registrado no Windows por `npm run launcher`).
+      const port = new URLSearchParams(location.search).get('port') || '4848';
+      const app = `http://myco.localhost:${port}`;
+      const el = (id) => document.getElementById(id);
+
+      // Uma imagem do próprio MyCo: carrega se ele está no ar (fetch de file:// esbarraria no CORS).
+      const isUp = () =>
+        new Promise((resolve) => {
+          const img = new Image();
+          const t = setTimeout(() => resolve(false), 2500);
+          img.onload = () => (clearTimeout(t), resolve(true));
+          img.onerror = () => (clearTimeout(t), resolve(false));
+          img.src = `${app}/icon.svg?t=${Date.now()}`;
+        });
+
+      async function check() {
+        if (await isUp()) return location.replace(app);
+        el('checking').hidden = true;
+        el('down').hidden = false;
+      }
+
+      el('start').addEventListener('click', async () => {
+        el('start').disabled = true;
+        el('starting').hidden = false;
+        location.href = 'myco://start';
+        for (let i = 0; i < 90; i++) {
+          await new Promise((r) => setTimeout(r, 2000));
+          if (await isUp()) return location.replace(app);
+        }
+        el('starting').textContent = 'Não subiu em 3 minutos. Veja o log com npm run daily:status.';
+        el('start').disabled = false;
+      });
+
+      check();
+    </script>
+  </body>
+</html>

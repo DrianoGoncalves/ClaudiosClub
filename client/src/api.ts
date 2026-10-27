@@ -115,6 +115,8 @@ export const api = {
   user: () => get<UserScope>('/api/user'),
   live: () => get<LiveSession[]>('/api/live'),
   git: () => get<Record<string, GitState>>('/api/git'),
+  serverInfo: () => get<{ daemon: boolean; pid: number; port: number; startedAt: string }>('/api/server'),
+  serverAction: (action: 'stop' | 'restart') => post<{ ok: boolean; daemon: boolean }>(`/api/server/${action}`),
   usage: () => get<AccountUsage>('/api/usage'),
   browser: (fresh = false) => get<BrowserStatus>(fresh ? '/api/browser?fresh=1' : '/api/browser'),
   auth: (fresh = false) => get<AuthStatus>(fresh ? '/api/auth?fresh=1' : '/api/auth'),

@@ -29,6 +29,17 @@ import { CodeError } from './taskCode';
 import { cleanRunDir } from './runCleanup';
 
 const PORT = Number(process.env.MYCO_PORT ?? 4848);
+/** Rodando pelo vigia (scripts/myco-daemon.ps1): ele religa o servidor quando este sai. */
+const UNDER_DAEMON = process.env.MYCO_DAEMON === '1';
+const STARTED_AT = new Date().toISOString();
+
+/** Fecha as conversas (sem deixar processos órfãos) e sai. `stop`: o vigia não religa. */
+async function shutdown(stop: boolean) {
+  console.log(`[servidor] ${stop ? 'parando' : 'reiniciando'} a pedido do config`);
+  if (stop && UNDER_DAEMON) await fs.writeFile(path.join(MYCO_HOME, 'run', 'daemon.stop'), '').catch(() => {});
+  await Promise.race([chats.stopAll(), new Promise((r) => setTimeout(r, 5000))]);
+  process.exit(0);
+}
 // Só local: o MyCo lê transcripts e configurações do usuário.
 const HOST = '127.0.0.1';
 const CLIENT_DIR = path.resolve(import.meta.dirname, '../dist/client');
@@ -178,6 +189,20 @@ const ID = '([A-Za-z0-9-]+)';
 
 const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ['GET', /^\/api\/health$/, async () => ({ ok: true, adapter: adapter.id })],
+  // ---- o próprio servidor: parar e (com o vigia) reiniciar pelo config ----
+  ['GET', /^\/api\/server$/, async () => ({ daemon: UNDER_DAEMON, pid: process.pid, port: PORT, startedAt: STARTED_AT })],
+  [
+    'POST',
+    /^\/api\/server\/(stop|restart)$/,
+    async ({ params: [action], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (action === 'restart' && !UNDER_DAEMON) throw new BadRequest('reiniciar precisa do MyCo em segundo plano (npm run daily:start)');
+      // Responde primeiro; fecha as conversas e sai logo depois. Parando com o vigia, o arquivo de
+      // parada impede que ele religue; reiniciando, ele sobe o servidor de novo em poucos segundos.
+      setTimeout(() => void shutdown(action === 'stop'), 300);
+      return { ok: true, daemon: UNDER_DAEMON };
+    },
+  ],
   ['GET', /^\/api\/projects$/, () => adapter.listProjects()],
   ['GET', new RegExp(`^/api/projects/${ID}$`), ({ params: [id] }) => adapter.getProject(id!)],
   ['GET', new RegExp(`^/api/projects/${ID}/mcp$`), ({ params: [id] }) => staff.listMcp(id!)],
