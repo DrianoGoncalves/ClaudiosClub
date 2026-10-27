@@ -16,6 +16,7 @@ import {
   sanitizeArg,
   secretDenyRules,
   slugify,
+  tabTitleSnippet,
   toCmdLine,
   type FichaContext,
 } from '../server/staff/ficha';
@@ -94,6 +95,10 @@ describe('ficha', () => {
     expect(withChrome).not.toContain('--no-chrome');
     expect(renderFicha(profile({ browser: true }), ctx)).toContain('## Navegador');
     expect(renderFicha(profile(), ctx)).not.toContain('## Navegador');
+    // O nome dele no título das abas que usa (o grupo de abas da extensão não dá para renomear).
+    const p = profile({ browser: true });
+    expect(renderFicha(p, ctx)).toContain(tabTitleSnippet(p.name));
+    expect(tabTitleSnippet('Ana "Dev"')).toContain(JSON.stringify('[Ana "Dev"] '));
     const resumed = buildClaudeArgs(profile(), { sessionId: 'uuid-1', resume: true, identity: 'ID', mcpConfigPath: 'C:\\m.json', firstPrompt: 'Olá' });
     expect(resumed.slice(0, 2)).toEqual(['--resume', 'uuid-1']);
     expect(resumed.slice(-3)).toEqual(['--mcp-config', 'C:\\m.json', '--strict-mcp-config']);
