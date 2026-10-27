@@ -21,6 +21,7 @@ import type {
   RoutineRun,
   RunMark,
   SendPriority,
+  UiLevel,
   ServerInfo,
   TurnNotice,
   StaffInput,
@@ -131,6 +132,7 @@ export const api = {
   config: () => get<AppConfig>('/api/config'),
   saveConfig: (patch: {
     companyName?: string;
+    uiLevel?: UiLevel;
     usageStop?: UsageStop;
     sendWhileBusy?: SendPriority;
     /** Só os projetos enviados mudam; null volta à cor padrão. */

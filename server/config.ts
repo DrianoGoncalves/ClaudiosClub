@@ -11,6 +11,8 @@ const CONFIG_FILE = path.join(MYCO_HOME, 'config.json');
 
 const DEFAULTS: AppConfig = {
   companyName: 'MyCo',
+  // Quem chega começa no simples; quem já tinha config (já usava) fica no avançado (ver readConfig).
+  uiLevel: 'simple',
   archived: { projects: [], sessions: [] },
   // Para antes de esgotar: sobra margem para terminar o que está em andamento.
   usageStop: { fiveHour: 90, sevenDay: 95 },
@@ -22,6 +24,7 @@ const DEFAULTS: AppConfig = {
 };
 
 const PRIORITY = z.enum(['now', 'next', 'later']);
+const UI_LEVEL = z.enum(['simple', 'advanced']);
 const COLOR = z.enum(PROJECT_COLORS);
 const HEX = z.string().regex(/^#[0-9a-f]{6}$/i, 'cor inválida (use #rrggbb)');
 
@@ -31,6 +34,7 @@ const UsageStopFile = z.object({ fiveHour: percent.optional(), sevenDay: percent
 const ConfigFile = z
   .object({
     companyName: z.string().optional(),
+    uiLevel: UI_LEVEL.optional().catch(undefined),
     archived: z
       .object({ projects: z.array(z.string()).optional(), sessions: z.array(z.string()).optional() })
       .optional(),
@@ -50,6 +54,7 @@ const BUDGET = z.number().int().min(1).max(100);
 
 export const ConfigPatch = z.object({
   companyName: z.string().trim().min(1, 'nome vazio').max(40, 'máximo de 40 caracteres').optional(),
+  uiLevel: UI_LEVEL.optional(),
   usageStop: z.object({ fiveHour: percent, sevenDay: percent }).optional(),
   sendWhileBusy: PRIORITY.optional(),
   /** Por id de projeto: uma cor troca a da sala; null volta à padrão. Os outros projetos ficam como estão. */
@@ -74,6 +79,7 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
   const d = parsed.data;
   return {
     companyName: d.companyName ?? DEFAULTS.companyName,
+    uiLevel: d.uiLevel ?? (Object.keys(d).length ? 'advanced' : DEFAULTS.uiLevel),
     archived: { projects: d.archived?.projects ?? [], sessions: d.archived?.sessions ?? [] },
     usageStop: {
       fiveHour: d.usageStop?.fiveHour === undefined ? DEFAULTS.usageStop.fiveHour : d.usageStop.fiveHour,

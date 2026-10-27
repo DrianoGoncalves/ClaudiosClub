@@ -3,6 +3,7 @@ import type {
   Autonomy,
   Board,
   Effort,
+  GitState,
   LaunchResult,
   McpServerInfo,
   Playbook,
@@ -34,10 +35,15 @@ interface Props {
   board: Board;
   projectId: string;
   mode: StaffFormMode;
+  /** Nível simples: só cargo, nome, retrato e primeira tarefa; o resto vem do cargo. */
+  simple?: boolean;
   onClose: () => void;
   onHired: (profile: StaffProfile, launch: LaunchResult | null) => void;
   onSaved: (profile: StaffProfile) => void;
 }
+
+/** Quem edita código (a autonomia deixa): no simples, ganha worktree se já há outro assim no projeto. */
+const editsCode = (a: Autonomy) => a === 'acceptEdits' || a === 'auto' || a === 'bypassPermissions';
 
 const lines = (s: string) => s.split('\n').map((l) => l.trim()).filter(Boolean);
 
@@ -51,9 +57,15 @@ const TABS: Array<{ id: Tab; label: string; intro: string }> = [
   { id: 'history', label: 'Histórico', intro: 'Cada edição guarda a versão anterior; restaure se precisar.' },
 ];
 
-export function StaffForm({ board, projectId, mode, onClose, onHired, onSaved }: Props) {
+export function StaffForm({ board, projectId, mode, simple = false, onClose, onHired, onSaved }: Props) {
   const editing = mode.kind === 'edit' ? mode.profile : null;
   const adopting = mode.kind === 'adopt' ? mode.session : null;
+  // No simples, a ficha inteira fica a um clique ("Mostrar todos os campos").
+  const [full, setFull] = useState(!simple || !!adopting);
+  const [git, setGit] = useState<Record<string, GitState> | null>(null);
+  useEffect(() => {
+    if (!full && !editing) api.git().then(setGit, () => setGit({}));
+  }, [full, editing]);
   const project = board.projects.find((p) => p.id === projectId);
   const inventory = board.inventories[projectId] ?? { agents: [], skills: [] };
   const agentNames = useMemo(
@@ -125,7 +137,8 @@ export function StaffForm({ board, projectId, mode, onClose, onHired, onSaved }:
   useEffect(() => {
     if (!roles || editing || adopting || defaultApplied.current) return;
     defaultApplied.current = true;
-    const d = roles.find((r) => r.isDefault);
+    // No simples sempre há um cargo escolhido: o padrão, o de desenvolvedor ou o primeiro.
+    const d = roles.find((r) => r.isDefault) ?? (full ? undefined : (roles.find((r) => r.id === 'desenvolvedor') ?? roles[0]));
     if (d) applyTemplate(d);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roles]);
@@ -197,13 +210,20 @@ export function StaffForm({ board, projectId, mode, onClose, onHired, onSaved }:
     return s.trim() && Number.isFinite(n) ? Math.min(100, Math.max(1, Math.round(n))) : null;
   };
 
+  // Contratando no simples: o recomendado para sair funcionando, sem perguntar.
+  const simpleHire = !full && !editing && !adopting;
+  const template = roles?.find((r) => r.id === roleId) ?? null;
+  const autoWorktree =
+    template?.worktree ??
+    (editsCode(autonomy) && !!git?.[projectId] && colleagues.some((c) => editsCode(c.autonomy) && !c.temporary));
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     // Validação própria: o navegador não consegue focar um campo obrigatório numa aba escondida.
-    const missing: Tab | null = !name.trim() || !role.trim() ? 'who' : !mission.trim() ? 'work' : null;
+    const missing: Tab | null = !name.trim() || !role.trim() ? 'who' : !mission.trim() && full ? 'work' : null;
     if (missing) {
       setTab(missing);
-      return setError(missing === 'who' ? 'Preencha nome e cargo.' : 'Preencha a missão.');
+      return setError(missing === 'who' ? (full ? 'Preencha nome e cargo.' : 'Escolha o cargo e dê um nome.') : 'Preencha a missão.');
     }
     setBusy(true);
     setError(null);
@@ -211,14 +231,15 @@ export function StaffForm({ board, projectId, mode, onClose, onHired, onSaved }:
     const input: StaffInput = {
       name,
       role,
-      mission,
+      mission: mission.trim() || `Ajudar no projeto ${project?.name ?? ''} como ${role}.`,
       firstTask,
       reportsTo: managers,
       autonomy,
       agents,
       skills,
-      // Todos marcados = não restringir (a sessão também recebe os conectores da conta).
-      mcps: allMcps ? null : [...mcpOn],
+      // Todos marcados = não restringir (a sessão também recebe os conectores da conta). No simples,
+      // nenhum: a sessão abre mais leve e rápida; quem precisa liga no avançado.
+      mcps: simpleHire ? [] : allMcps ? null : [...mcpOn],
       knowledge: lines(knowledge),
       rules: lines(rules),
       doneWhen,
@@ -227,11 +248,12 @@ export function StaffForm({ board, projectId, mode, onClose, onHired, onSaved }:
       canHire,
       usageStop: usageStop.fiveHour === null && usageStop.sevenDay === null ? null : usageStop,
       playbook: playbook || null,
-      worktree,
+      worktree: simpleHire ? autoWorktree : worktree,
       servers,
       browser,
       ...(portrait !== undefined ? { portraitDataUrl: portrait } : {}),
-      ...(editing ? {} : adopting ? { adoptSessionId: adopting.id, launch: false } : { launch }),
+      // No simples a conversa é pelo painel do MyCo, nunca num terminal.
+      ...(editing ? {} : adopting ? { adoptSessionId: adopting.id, launch: false } : { launch: simpleHire ? false : launch }),
     };
     try {
       if (editing) onSaved(await api.updateStaff(projectId, editing.id, input));
@@ -278,6 +300,76 @@ export function StaffForm({ board, projectId, mode, onClose, onHired, onSaved }:
           </p>
         )}
 
+        {!full ? (
+          <div className="form-panel simple-hire">
+            {!editing && (
+              <fieldset>
+                <legend>Cargo</legend>
+                {!roles && <p className="muted small">Carregando cargos…</p>}
+                <div className="templates">
+                  {roles?.map((t) => (
+                    <button
+                      type="button"
+                      key={t.id}
+                      className={`btn-secondary ${roleId === t.id ? 'is-on' : ''}`}
+                      aria-pressed={roleId === t.id}
+                      title={t.mission}
+                      onClick={() => applyTemplate(t)}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+            )}
+            <div className="grid2">
+              <label>
+                Nome*
+                <input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} required autoFocus />
+              </label>
+              <label>
+                Retrato
+                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => pickPortrait(e.target.files?.[0])} />
+                {currentPortrait && (
+                  <span className="portrait-row">
+                    <img className="portrait-preview" src={currentPortrait} alt="Retrato" />
+                  </span>
+                )}
+              </label>
+            </div>
+            {editing && (
+              <label>
+                O que ele faz
+                <textarea value={mission} onChange={(e) => setMission(e.target.value)} rows={3} maxLength={4000} />
+              </label>
+            )}
+            <label>
+              Primeira tarefa <span className="muted small">(opcional{editing ? ', vale para a próxima conversa nova' : ''})</span>
+              <textarea
+                value={firstTask}
+                onChange={(e) => setFirstTask(e.target.value)}
+                rows={3}
+                maxLength={4000}
+                placeholder="O que ele faz assim que você abrir a conversa. Em branco, ele se apresenta e pergunta."
+              />
+            </label>
+            {!editing && template && (
+              <p className="muted small simple-summary">
+                Vem do cargo: {modelLabel(template.model)}
+                {template.effort ? `, esforço ${template.effort}` : ''}, {AUTONOMY_OPTIONS.find((o) => o.value === template.autonomy)?.label.toLowerCase()}
+                {template.playbook ? `, ${PLAYBOOK_OPTIONS.find((o) => o.value === template.playbook)?.label.toLowerCase()}` : ''}
+                {autoWorktree ? ', worktree própria (já há outro editando o projeto)' : ', edita o projeto direto'}, sem MCPs, conversa aqui no
+                MyCo.
+              </p>
+            )}
+            <p className="small">
+              <button type="button" className="link" onClick={() => setFull(true)}>
+                Mostrar todos os campos
+              </button>
+            </p>
+          </div>
+        ) : (
+          <>
         <div className="tabs" role="tablist">
           {TABS.filter((t) => t.id !== 'history' || editing).map((t) => (
             <button
@@ -606,10 +698,12 @@ export function StaffForm({ board, projectId, mode, onClose, onHired, onSaved }:
             </ul>
           </div>
         )}
+          </>
+        )}
 
         {/* Rodapé fixo: salvar está sempre à vista, em qualquer aba. */}
         <div className="modal-footer">
-        {!editing && !adopting && (
+        {full && !editing && !adopting && (
           <label className="check">
             <input type="checkbox" checked={launch} onChange={(e) => setLaunch(e.target.checked)} /> Abrir a sessão no terminal ao contratar
             <span className="muted small"> (sem marcar, converse pelo painel do MyCo)</span>

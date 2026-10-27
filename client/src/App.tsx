@@ -14,6 +14,7 @@ import type {
   Skill,
   StaffProfile,
   TaskSummary,
+  UiLevel,
   UsageStop,
 } from '../../shared/model';
 import { api, withUsageConfirm } from './api';
@@ -164,6 +165,8 @@ export function App() {
   const rename = async (companyName: string) => setConfig(await api.saveConfig({ companyName }));
   const saveUsageStop = async (usageStop: UsageStop) => setConfig(await api.saveConfig({ usageStop }));
   const saveSendWhileBusy = async (sendWhileBusy: SendPriority) => setConfig(await api.saveConfig({ sendWhileBusy }));
+  const saveUiLevel = async (uiLevel: UiLevel) => setConfig(await api.saveConfig({ uiLevel }));
+  const simple = config?.uiLevel === 'simple';
   const saveProjectColor = async (projectId: string, color: ProjectColor | null) =>
     setConfig(await api.saveConfig({ projectColors: { [projectId]: color } }));
   const saveBoardBackground = async (boardBackground: Partial<BoardBackground>) => setConfig(await api.saveConfig({ boardBackground }));
@@ -207,6 +210,7 @@ export function App() {
             onRename={rename}
             onUsageStop={saveUsageStop}
             onSendWhileBusy={saveSendWhileBusy}
+            onUiLevel={saveUiLevel}
             onProjectColor={saveProjectColor}
             onBoardBackground={saveBoardBackground}
             onProjectBudget={saveProjectBudget}
@@ -315,6 +319,8 @@ export function App() {
                 else if (selection.session) setForm({ projectId: selection.projectId, mode: { kind: 'adopt', session: selection.session } });
               }}
               onSessionStarted={reloadSoon}
+              simple={simple}
+              onShowAdvanced={() => void saveUiLevel('advanced')}
               onChanged={() => {
                 load();
                 // Efetivar desarquiva no servidor: os arquivados do config mudam também.
@@ -375,6 +381,7 @@ export function App() {
           board={board}
           projectId={form.projectId}
           mode={form.mode}
+          simple={simple}
           onClose={() => setForm(null)}
           onHired={(profile, launch) => {
             setForm(null);

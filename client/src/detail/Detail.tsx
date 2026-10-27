@@ -85,6 +85,9 @@ export function EmployeePanel(props: {
   onSessionStarted?: (sessionId: string) => void;
   /** A ficha mudou por aqui (rotinas): o quadro relê. */
   onChanged?: () => void;
+  /** Nível simples: o painel fica só com a conversa. */
+  simple?: boolean;
+  onShowAdvanced?: () => void;
 }) {
   const { session: s, staff, project } = props;
   const live = s?.live?.alive ? s.live : null;
@@ -139,7 +142,17 @@ export function EmployeePanel(props: {
         />
       )}
 
-      {/* O chat fica em primeiro plano; o resto, guardado num só acordeão. */}
+      {/* O chat fica em primeiro plano; o resto, guardado num só acordeão (no simples, nem ele). */}
+      {props.simple ? (
+        <p className="muted small simple-more">
+          Consumo, rotinas, ficha e mais ações ficam no nível avançado.{' '}
+          {props.onShowAdvanced && (
+            <button type="button" className="link" onClick={props.onShowAdvanced}>
+              Mostrar
+            </button>
+          )}
+        </p>
+      ) : (
       <details className="collapse collapse-group">
         <summary>Avançado</summary>
         <details className="collapse">
@@ -197,6 +210,7 @@ export function EmployeePanel(props: {
           </p>
         </details>
       </details>
+      )}
     </>
   );
 }

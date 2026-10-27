@@ -13,7 +13,7 @@ import {
   type XYPosition,
 } from '@xyflow/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AppConfig, Board, BoardBackground, CostReport, GitState, InboxItem, ProjectColor, SendPriority, UsageStop } from '../../../shared/model';
+import type { AppConfig, Board, BoardBackground, CostReport, GitState, InboxItem, ProjectColor, SendPriority, UiLevel, UsageStop } from '../../../shared/model';
 import { InboxMenu } from '../inbox/InboxMenu';
 import type { InboxView } from '../inbox/useInbox';
 import { EdgeActions, edgeTypes } from './edges';
@@ -88,6 +88,7 @@ interface BoardViewProps {
   onRename: (name: string) => Promise<void>;
   onUsageStop: (stop: UsageStop) => Promise<void>;
   onSendWhileBusy: (p: SendPriority) => Promise<void>;
+  onUiLevel: (level: UiLevel) => Promise<void>;
   onProjectColor: (projectId: string, color: ProjectColor | null) => Promise<void>;
   onBoardBackground: (bg: Partial<BoardBackground>) => Promise<void>;
   onProjectBudget: (projectId: string, budget: number | null) => Promise<void>;
@@ -334,6 +335,8 @@ export function BoardView(props: BoardViewProps) {
           onUsageStop={props.onUsageStop}
           sendWhileBusy={config?.sendWhileBusy ?? null}
           onSendWhileBusy={props.onSendWhileBusy}
+          uiLevel={config?.uiLevel ?? null}
+          onUiLevel={props.onUiLevel}
           rooms={rooms}
           projectColors={config?.projectColors ?? null}
           onProjectColor={props.onProjectColor}

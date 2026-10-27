@@ -155,9 +155,17 @@ export interface CostReport {
 }
 
 /** Configuração do MyCo (~/.myco/config.json). */
+/**
+ * Simples: contratar com nome, cargo e primeira tarefa (o resto vem do cargo), painel do
+ * funcionário só com o chat e config só com o essencial. Avançado: cada detalhe.
+ */
+export type UiLevel = 'simple' | 'advanced';
+
 export interface AppConfig {
   /** Nome exibido no topo do quadro; "MyCo" por padrão. */
   companyName: string;
+  /** Nível da interface; quem já usava o MyCo antes desta opção fica no avançado. */
+  uiLevel: UiLevel;
   /** Escondidos do quadro (nada é apagado do Claude Code). */
   archived: {
     /** Ids de projeto. */

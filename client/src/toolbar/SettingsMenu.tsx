@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import type { BoardBackground, ProjectColor, SendPriority, UsageStop } from '../../../shared/model';
+import type { BoardBackground, ProjectColor, SendPriority, UiLevel, UsageStop } from '../../../shared/model';
 import { api } from '../api';
 import { BackgroundPicker, RoomColorPicker, useSystemTheme } from '../board/colors';
 import { RolesEditor } from './RolesEditor';
@@ -23,6 +23,8 @@ interface Props {
   onUsageStop: (stop: UsageStop) => Promise<void>;
   sendWhileBusy: SendPriority | null;
   onSendWhileBusy: (p: SendPriority) => Promise<void>;
+  uiLevel: UiLevel | null;
+  onUiLevel: (level: UiLevel) => Promise<void>;
   /** Salas de projeto no quadro agora (as que podem ganhar cor). */
   rooms: Array<{ id: string; name: string }>;
   projectColors: Record<string, ProjectColor> | null;
@@ -56,6 +58,8 @@ interface Setting {
   /** Liga/desliga: a descrição vira o rótulo da caixinha, como no VS Code. */
   toggle?: { checked: boolean; onChange: (v: boolean) => void };
   control?: ReactNode;
+  /** Só aparece no nível avançado. */
+  advanced?: boolean;
 }
 
 /** Sem acento e sem caixa: "animacoes" acha "Animações". */
@@ -122,7 +126,10 @@ export function SettingsMenu(props: Props) {
   }, [open]);
 
   const words = fold(query).split(/\s+/).filter(Boolean);
-  const settings = buildSettings(props, theme, () => setOpen(false), words);
+  const all = buildSettings(props, theme, () => setOpen(false), words);
+  // No simples, só o essencial; o resto continua lá, no avançado.
+  const settings = props.uiLevel === 'simple' ? all.filter((s) => !s.advanced) : all;
+  const hidden = all.length - settings.length;
   const groupLabel = (id: GroupId) => GROUPS.find((g) => g.id === id)!.label;
   const visible = settings.filter(
     (s) => !words.length || matches(`${groupLabel(s.group)} ${s.title} ${s.description} ${s.keywords ?? ''}`, words),
@@ -165,7 +172,8 @@ export function SettingsMenu(props: Props) {
       </div>
       <div className="settings-body">
         <nav className="settings-nav" aria-label="Grupos">
-          {GROUPS.map((g) => (
+          {/* No simples, grupos sem nada essencial nem aparecem. */}
+          {GROUPS.filter((g) => props.uiLevel !== 'simple' || words.length || count(g.id)).map((g) => (
             <button
               key={g.id}
               type="button"
@@ -195,6 +203,14 @@ export function SettingsMenu(props: Props) {
               Nenhuma configuração com “{query.trim()}”.{' '}
               <button type="button" className="link" onClick={() => setQuery('')}>
                 Limpar a busca
+              </button>
+            </p>
+          )}
+          {hidden > 0 && (
+            <p className="muted small settings-more">
+              Mais {hidden} configurações no nível avançado (cores, cargos, orçamentos, worktrees…).{' '}
+              <button type="button" className="link" onClick={() => void props.onUiLevel('advanced')}>
+                Mostrar tudo
               </button>
             </p>
           )}
@@ -246,6 +262,19 @@ function SettingRow({ setting: s }: { setting: Setting }) {
 /** A lista de configurações; itens que dependem do config.json só entram depois que ele chega. */
 function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, words: string[]): Setting[] {
   const out: Setting[] = [
+    ...(p.uiLevel
+      ? [
+          {
+            id: 'ui-level',
+            group: 'board' as const,
+            title: 'Nível de uso',
+            description:
+              'Simples: contratar com nome, cargo e primeira tarefa (o resto vem do cargo), o funcionário só com a conversa e aqui só o essencial. Avançado: cada detalhe da ficha, do painel e do config. Dá para trocar a qualquer hora; nada se perde.',
+            keywords: 'simples avancado basico completo modo interface detalhes',
+            control: <UiLevelPicker value={p.uiLevel} onChange={p.onUiLevel} />,
+          },
+        ]
+      : []),
     {
       id: 'worktrees',
       group: 'board',
@@ -253,6 +282,7 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       description: 'Cópias de trabalho (.claude/worktrees) aparecem dentro da sala de cada projeto.',
       keywords: 'copias git branch',
       toggle: { checked: p.showWorktrees, onChange: p.onToggleWorktrees },
+      advanced: true,
     },
     {
       id: 'archived',
@@ -323,6 +353,7 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
         description: 'Cor do quadro com o sistema no tema claro. Os cartões e os pontinhos acompanham o tom.',
         keywords: 'cor fundo quadro branco background tema claro',
         control: <BackgroundPicker theme="light" value={bg.light} onChange={(light) => p.onBoardBackground({ light })} />,
+        advanced: true,
       },
       {
         id: 'background-dark',
@@ -332,6 +363,7 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
         description: 'Cor do quadro com o sistema no tema escuro (a lousa). Os cartões e os pontinhos acompanham o tom.',
         keywords: 'cor fundo quadro negro lousa background tema escuro',
         control: <BackgroundPicker theme="dark" value={bg.dark} onChange={(dark) => p.onBoardBackground({ dark })} />,
+        advanced: true,
       },
     );
   }
@@ -361,6 +393,7 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       ) : (
         <p className="muted small">Nenhuma sala de projeto no quadro agora.</p>
       ),
+      advanced: true,
     });
   }
 
@@ -372,6 +405,7 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       description: `O que acontece com a mensagem mandada com o funcionário trabalhando: ${SEND_HELP[p.sendWhileBusy]}. Vale para todos os funcionários.`,
       keywords: 'fila interromper prioridade enviar mandar ocupado',
       control: <SendWhileBusyEditor value={p.sendWhileBusy} onSave={p.onSendWhileBusy} />,
+      advanced: true,
     });
   }
 
@@ -383,6 +417,7 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       'Cada cargo preenche a ficha de quem é contratado com ele, inclusive o modelo e o esforço. Para mudar só um funcionário, edite a ficha dele. O cargo marcado como padrão já vem preenchido ao contratar.',
     keywords: 'cargo template modelo funcionario contratar padrao papel orquestrador desenvolvedor revisor infra opus sonnet haiku',
     control: <RolesEditor />,
+    advanced: true,
   });
 
   if (p.usageStop) {
@@ -432,9 +467,37 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       ) : (
         <p className="muted small">Nenhuma sala de projeto no quadro agora.</p>
       ),
+      advanced: true,
     });
   }
   return out;
+}
+
+function UiLevelPicker({ value, onChange }: { value: UiLevel; onChange: (level: UiLevel) => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const pick = async (level: UiLevel) => {
+    if (level === value) return;
+    setBusy(true);
+    try {
+      await onChange(level);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="segmented" aria-label="Nível de uso">
+      {(
+        [
+          ['simple', 'Simples'],
+          ['advanced', 'Avançado'],
+        ] as const
+      ).map(([level, label]) => (
+        <button key={level} type="button" className="btn-toggle" aria-pressed={value === level} disabled={busy} onClick={() => void pick(level)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 /** % da cota de 7 dias de um projeto; grava ao sair do campo. */
