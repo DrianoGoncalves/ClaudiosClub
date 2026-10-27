@@ -103,6 +103,11 @@ export interface GraphOptions {
   git?: Record<string, GitState>;
   /** Tarefas em aberto por id de projeto (ver /api/tasks/summary). */
   tasks?: Record<string, { open: number; review: number }>;
+  /**
+   * Proporção (largura/altura) da área visível do quadro. Tela deitada: a grade cresce para a
+   * direita; em pé: cresce para baixo. Sem ela, a de uma tela larga.
+   */
+  aspect?: number;
 }
 
 /**
@@ -128,8 +133,11 @@ const SIDE_ROW_GAP = 12;
 export const ROOM_PAD = 26;
 const ROOM_GAP_X = 56;
 const ROOM_GAP_Y = 56;
-/** Proporção (largura/altura) que a grade de salas procura: a de uma tela larga. */
+/** Proporção (largura/altura) que a grade de salas procura quando a da tela não é informada. */
 const GRID_ASPECT = 16 / 10;
+/** Limites da proporção da tela: evita uma fila só (ou uma coluna só) em janelas extremas. */
+const ASPECT_MIN = 0.4;
+const ASPECT_MAX = 4;
 /** Até quantos agents/skills ficam soltos ao lado do projeto; acima disso, vão para a estante. */
 const SHELF_MAX_LOOSE = 3;
 
@@ -345,6 +353,7 @@ export function buildGraph(
       const b = measure(r, memo);
       return { w: b.w + ROOM_PAD * 2, h: b.h + ROOM_PAD * 2 };
     }),
+    Math.min(ASPECT_MAX, Math.max(ASPECT_MIN, opts.aspect ?? GRID_ASPECT)),
   );
   rooms.forEach((room, i) => {
     const start = nodes.length;
@@ -418,12 +427,12 @@ function markStaffLinks(edges: BoardEdge[], nodes: BoardNode[]) {
 
 /**
  * Planta do escritório: as salas, na ordem recebida, preenchem linhas até a largura que deixa a
- * grade com a proporção de uma tela larga; aí quebram linha.
+ * grade com a proporção da tela (`aspect` = largura/altura); aí quebram linha.
  */
-function gridSpots(boxes: Array<{ w: number; h: number }>): Array<{ x: number; y: number }> {
+function gridSpots(boxes: Array<{ w: number; h: number }>, aspect: number): Array<{ x: number; y: number }> {
   if (!boxes.length) return [];
   const area = boxes.reduce((s, b) => s + (b.w + ROOM_GAP_X) * (b.h + ROOM_GAP_Y), 0);
-  const rowLimit = Math.max(...boxes.map((b) => b.w), Math.sqrt(area * GRID_ASPECT));
+  const rowLimit = Math.max(...boxes.map((b) => b.w), Math.sqrt(area * aspect));
   const spots: Array<{ x: number; y: number }> = [];
   let x = 0;
   let y = 0;

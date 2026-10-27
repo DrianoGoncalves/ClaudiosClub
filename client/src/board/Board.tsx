@@ -114,6 +114,9 @@ export function BoardView(props: BoardViewProps) {
   const { board, config, costs, git, tasks, showWorktrees, showArchived, selectedId, onSelect } = props;
   const [shelves, setShelves] = useState(() => loadList(SHELVES_KEY));
   const [collapsed, setCollapsed] = useState(() => loadList(COLLAPSED_KEY));
+  // Proporção da tela usada na planta: medida na abertura e a cada "reorganizar" (não a cada
+  // redimensionamento, para o quadro não se rearrumar sozinho enquanto você mexe na janela).
+  const [aspect, setAspect] = useState(measureAspect);
   const graph = useMemo(
     () =>
       buildGraph(
@@ -128,10 +131,11 @@ export function BoardView(props: BoardViewProps) {
           collapsedRooms: collapsed,
           git,
           tasks,
+          aspect,
         },
         props.images,
       ),
-    [board, showWorktrees, showArchived, config?.archived, costs, shelves, props.images, config?.projectColors, collapsed, git, tasks],
+    [board, showWorktrees, showArchived, config?.archived, costs, shelves, props.images, config?.projectColors, collapsed, git, tasks, aspect],
   );
   // Salas de projeto no quadro agora, na ordem da planta: as que o menu de cores lista.
   const rooms = useMemo(
@@ -277,7 +281,8 @@ export function BoardView(props: BoardViewProps) {
   const resetLayout = () => {
     savePositions({});
     setSaved({});
-    setTimeout(fitStart, 50);
+    setAspect(measureAspect());
+    setTimeout(fitStart, 80);
   };
 
   const displayNodes = useMemo(
@@ -366,6 +371,18 @@ export function BoardView(props: BoardViewProps) {
     </ReactFlow>
     </EdgeActions.Provider>
   );
+}
+
+/**
+ * Largura/altura da área livre do quadro: a do React Flow (ou da janela, antes de ele existir),
+ * descontado o topo (nome, consumo, menu), que fica por cima.
+ */
+function measureAspect(): number {
+  const container = document.querySelector<HTMLElement>('.react-flow');
+  const area = container?.getBoundingClientRect() ?? { width: window.innerWidth, height: window.innerHeight, top: 0 };
+  const toolbar = container?.querySelector<HTMLElement>('.toolbar');
+  const top = toolbar ? Math.max(0, toolbar.getBoundingClientRect().bottom - area.top) : 60;
+  return area.width / Math.max(100, area.height - top);
 }
 
 function withSaved(nodes: BoardNode[], saved: Record<string, XYPosition>): BoardNode[] {

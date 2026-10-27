@@ -174,6 +174,22 @@ describe('buildGraph', () => {
     expect(w / h).toBeLessThan(4);
   });
 
+  it('a grade segue a proporção da tela: deitada cresce para a direita, em pé para baixo', () => {
+    const projects = Array.from({ length: 12 }, (_, i) => project(`p${i}`, `C:\\www\\p${i}`));
+    const b: Board = { ...board(), projects, inventories: {}, sessions: {} };
+    const ratio = (aspect: number) => {
+      const rooms = buildGraph(b, { showWorktrees: false, aspect }).nodes.filter((n) => n.type === 'room').map(rect);
+      const w = Math.max(...rooms.map((r) => r.x + r.w)) - Math.min(...rooms.map((r) => r.x));
+      const h = Math.max(...rooms.map((r) => r.y + r.h)) - Math.min(...rooms.map((r) => r.y));
+      return w / h;
+    };
+    const wide = ratio(21 / 9);
+    const tall = ratio(9 / 16);
+    expect(wide).toBeGreaterThan(1);
+    expect(tall).toBeLessThan(1);
+    expect(wide).toBeGreaterThan(tall);
+  });
+
   it('muitos agents/skills vão para uma estante, que abre quando pedido', () => {
     const closed = buildGraph(board(), { showWorktrees: false }).nodes;
     const shelf = closed.find((n) => n.id === 'sh:p:a');
