@@ -65,6 +65,23 @@ const ctx: FichaContext = {
 };
 
 describe('ficha', () => {
+  it('gestor: a equipe dele, com o caminho para passar tarefa, e o roteiro manda o que é da área para a pessoa', () => {
+    const team = [
+      { id: 'luana-0d88', name: 'Luana', role: 'Design system', mission: 'Cuidar do design system. E de mais coisas.' },
+      { id: 'raquel-1', name: 'Raquel', role: 'Infra', mission: 'Servidores.', temporary: true },
+    ];
+    const md = renderFicha(profile({ projectId: 'proj-x', playbook: 'plan-big-execute-small' }), { ...ctx, team });
+    expect(md).toContain('## Sua equipe');
+    expect(md).toContain('- Luana (Design system), id `luana-0d88`: Cuidar do design system.');
+    expect(md).toContain('- Raquel (Infra, temporário)');
+    expect(md).toContain('POST http://127.0.0.1:4848/api/projects/proj-x/tasks');
+    expect(md).toContain('requestedBy: "ana-1a2b"');
+    expect(md).toContain('Antes de chamar o executor: se a tarefa é da área de alguém da sua equipe');
+    // Sem equipe, nada disso.
+    const solo = renderFicha(profile({ playbook: 'plan-big-execute-small' }), ctx);
+    expect(solo).not.toContain('Sua equipe');
+  });
+
   it('tem missão, autonomia, regras, memória e a seção de contratação', () => {
     const md = renderFicha(profile(), ctx);
     for (const part of ['## Missão', 'Revisar mudanças', '## Primeira tarefa', 'Só lê e planeja', '- Não altere arquivos', '## Memória', 'ana-1a2b.memory.md', 'não pode contratar']) {
@@ -312,6 +329,10 @@ describe('StaffService', () => {
     // Pela API chega como texto (formato antigo): vira lista.
     const r = await svc.hire('proj-id', { ...input, name: 'Sub', autonomy: 'auto', canHire: true, reportsTo: boss.id, launch: false, servers: ['prod'] }, false);
     expect(r?.profile).toMatchObject({ reportsTo: [boss.id], autonomy: 'acceptEdits', canHire: false, servers: [], hiredBy: boss.id, temporary: true });
+    // Só o gestor passa tarefa (pela API) para quem reporta a ele.
+    expect(await svc.isManagerOf('proj-id', boss.id, r!.profile.id)).toBe(true);
+    expect(await svc.isManagerOf('proj-id', r!.profile.id, boss.id)).toBe(false);
+    expect(await svc.isManagerOf('proj-id', 'ninguem', r!.profile.id)).toBe(false);
   });
 
   it('temporário: abre numa conversa do MyCo, o gestor encerra, você efetiva; parado há dias sai sozinho', async () => {

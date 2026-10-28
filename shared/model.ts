@@ -335,6 +335,8 @@ export interface Task {
   merged?: { at: string; sha: string; branch: string; base: string } | null;
   /** Último teste rodado pelo MyCo para esta tarefa. */
   tests?: TestRun | null;
+  /** Gestor (funcionário) que pediu a tarefa pela API; recebe o resumo quando ela é entregue. */
+  requestedBy?: string | null;
   /**
    * Na fila do funcionário: começa sozinha quando ele terminar a tarefa atual (uma por vez, na
    * ordem do quadro).

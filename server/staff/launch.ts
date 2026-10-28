@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { LaunchResult, ServerInfo, StaffProfile } from '../../shared/model';
 import { defaultLocations } from '../adapters/claude/paths';
 import { cleanEnv } from '../auth';
-import { buildClaudeArgs, renderFicha, sanitizeArg, systemPrompt, toCmdLine, type FichaContext } from './ficha';
+import { buildClaudeArgs, renderFicha, sanitizeArg, systemPrompt, toCmdLine, type FichaContext, type TeamMember } from './ficha';
 import { buildMcpConfig } from './mcp';
 import { ensurePlaybookAgents } from './playbookAgents';
 import { ensureMemory, fichaFile, memoryFile, saveProfile, staffDir, writeAtomic } from './store';
@@ -24,6 +24,8 @@ export interface LaunchContext {
   worktree?: Worktree | null;
   /** Servidores da ficha, resolvidos (só nomes e destinos). */
   servers?: ServerInfo[];
+  /** Quem reporta a este funcionário (a seção "Sua equipe" da ficha). */
+  team?: TeamMember[];
   /** Agents da conta (padrão ~/.claude/agents); os testes trocam. */
   userAgentsDir?: string;
   /** Troca o `spawn` real nos testes. */
@@ -150,7 +152,7 @@ export function staffSettings() {
  */
 export async function writeFicha(
   profile: StaffProfile,
-  ctx: Pick<LaunchContext, 'company' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers'>,
+  ctx: Pick<LaunchContext, 'company' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team'>,
   absolute = false,
 ): Promise<FichaContext> {
   const rel = (file: string) => (absolute ? file : path.relative(ctx.projectPath, file));
@@ -164,6 +166,7 @@ export async function writeFicha(
     mycoUrl: ctx.mycoUrl,
     worktree: profile.worktree ? (ctx.worktree ?? null) : null,
     servers: ctx.servers,
+    team: ctx.team,
   };
   await writeAtomic(fichaFile(ctx.projectPath, profile.id), renderFicha(profile, fichaCtx));
   await ensureMemory(ctx.projectPath, profile);

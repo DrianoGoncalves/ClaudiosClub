@@ -147,6 +147,36 @@ describe('tarefas por projeto', () => {
   });
 });
 
+describe('tarefa pedida por um gestor', () => {
+  it('a pessoa sabe quem pediu; na entrega, o gestor recebe o resumo para conferir', async () => {
+    const dir = path.join(root, 'gestor');
+    const sent: Array<{ staffId: string; text: string }> = [];
+    const notified: Array<{ staffId: string; text: string }> = [];
+    const people: Record<string, StaffProfile> = {
+      'gio-1': { id: 'gio-1', name: 'Giovana', role: 'Orquestradora', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+      'lu-1': { id: 'lu-1', name: 'Luana', role: 'Design system', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+    };
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => people[id] ?? null,
+      send: async (_p, staffId, text) => (sent.push({ staffId, text }), 's-lu'),
+      branchFor: async () => null,
+      notify: async (_p, staffId, text) => void notified.push({ staffId, text }),
+      lastText: () => 'Troquei os tokens de cor do botão.',
+    });
+    const t = (await svc.create('p', { title: 'Botão no DS', description: 'Usar os tokens novos', staffId: 'lu-1' }, 'gio-1'))!;
+    expect(t).toMatchObject({ requestedBy: 'gio-1', history: [{ by: 'auto', note: 'pedida por Giovana' }] });
+    await svc.start('p', t.id);
+    expect(sent[0]).toMatchObject({ staffId: 'lu-1', text: expect.stringContaining('Pedida por Giovana (Orquestradora)') });
+
+    await svc.onTurnDone('s-lu'); // Luana entregou
+    expect(notified).toEqual([{ staffId: 'gio-1', text: expect.stringMatching(/Luana entregou a tarefa “Botão no DS”[\s\S]*Troquei os tokens de cor do botão/) }]);
+    await svc.onIdle('s-lu', 'p', 'lu-1'); // o segundo aviso do mesmo fim não repete
+    expect(notified).toHaveLength(1);
+  });
+});
+
 describe('fila por funcionário', () => {
   function queued(dirName: string) {
     const dir = path.join(root, dirName);

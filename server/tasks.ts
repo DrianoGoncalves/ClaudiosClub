@@ -55,6 +55,10 @@ export interface TaskServiceDeps {
   readProfile: (projectId: string, staffId: string) => Promise<StaffProfile | null>;
   /** Abre uma conversa nova com o funcionário e manda a mensagem; devolve a sessão. */
   send: (projectId: string, staffId: string, text: string, force: boolean) => Promise<string>;
+  /** Avisa um funcionário (o gestor que pediu a tarefa), na conversa mais recente dele. */
+  notify?: (projectId: string, staffId: string, text: string) => Promise<void>;
+  /** A última resposta de uma conversa (o resumo da entrega). */
+  lastText?: (sessionId: string) => string | null;
   /** Branch em que ele vai trabalhar (a da worktree dele, ou a atual do projeto). */
   branchFor: (projectPath: string, profile: StaffProfile) => Promise<string | null>;
   /** Alguma conversa dele no MyCo está trabalhando (turno ou segundo plano), fora `exceptSession`. */
@@ -89,11 +93,14 @@ export class TaskService {
     return tasks;
   }
 
-  async create(projectId: string, body: unknown): Promise<Task | null> {
+  /** `requestedBy`: o gestor (funcionário) que pediu, pela API; recebe o resumo na entrega. */
+  async create(projectId: string, body: unknown, requestedBy: string | null = null): Promise<Task | null> {
     const input = parseOr(TaskInput, body);
     if (input.staffId) await this.staffOrThrow(projectId, input.staffId);
+    const manager = requestedBy ? await this.staffOrThrow(projectId, requestedBy) : null;
     const now = new Date().toISOString();
     const task: Task = {
+      ...(manager && { requestedBy: manager.id }),
       id: `t-${randomBytes(3).toString('hex')}`,
       title: input.title,
       description: input.description,
@@ -105,7 +112,7 @@ export class TaskService {
       pr: null,
       createdAt: now,
       updatedAt: now,
-      history: [{ at: now, status: 'todo', by: 'you' }],
+      history: [{ at: now, status: 'todo', by: manager ? 'auto' : 'you', ...(manager && { note: `pedida por ${manager.name}` }) }],
     };
     return (await this.mutate(projectId, (tasks) => [...tasks, task])) ? task : null;
   }
@@ -163,7 +170,13 @@ export class TaskService {
     const dir = await this.deps.projectPath(projectId);
     const task = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
     if (!dir || !task || task.sessionId) return null;
-    const text = [`[Tarefa "${task.title}"]`, task.description, 'Quando terminar, responda com um resumo curto do que foi feito e do que falta.']
+    const manager = task.requestedBy ? await this.deps.readProfile(projectId, task.requestedBy) : null;
+    const text = [
+      `[Tarefa "${task.title}"]`,
+      manager ? `Pedida por ${manager.name} (${manager.role}), que vai conferir a sua entrega.` : '',
+      task.description,
+      'Quando terminar, responda com um resumo curto do que foi feito e do que falta.',
+    ]
       .filter(Boolean)
       .join('\n\n');
     const sessionId = await this.deps.send(projectId, profile.id, text, force);
@@ -393,9 +406,29 @@ export class TaskService {
     await this.locked(where.projectId, staffId, async () => {
       let delivered: Task | null = null;
       await this.change(where.projectId, where.taskId, (t) => (t.status === 'doing' ? (delivered = moved(t, 'review', 'auto', 'turno terminou')) : t));
-      if (delivered) await this.markDelivery(where.projectId, delivered);
+      if (delivered) {
+        await this.markDelivery(where.projectId, delivered);
+        await this.tellManager(where.projectId, delivered, sessionId);
+      }
     });
     void this.kick(where.projectId, staffId);
+  }
+
+  /**
+   * Tarefa pedida por um gestor foi entregue: ele recebe, na conversa dele, quem entregou, o quê e
+   * o resumo, para conferir.
+   */
+  private async tellManager(projectId: string, task: Task, sessionId: string): Promise<void> {
+    if (!task.requestedBy || !this.deps.notify) return;
+    const who = task.staffId ? await this.deps.readProfile(projectId, task.staffId) : null;
+    const name = who?.name ?? 'O funcionário';
+    const summary = (this.deps.lastText?.(sessionId) ?? '').trim().slice(0, 1500);
+    const text = [
+      `[MyCo] ${name} entregou a tarefa “${task.title}” (id ${task.id}, agora em revisão no quadro).`,
+      summary ? `O que ${name} disse:\n${summary}` : `${name} não deixou resumo: veja a conversa da tarefa.`,
+      'Confira (diff, testes) antes de dar como pronto. Ajuste vai para a pessoa, na conversa da tarefa dela, não refaça você.',
+    ].join('\n\n');
+    await this.deps.notify(projectId, task.requestedBy, text).catch(() => {});
   }
 
   /**

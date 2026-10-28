@@ -124,6 +124,14 @@ const tasks = new TaskService({
   },
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
   isWorking: (staffId, except) => chats.staffWorking(staffId, except),
+  // O gestor que pediu recebe a entrega na conversa mais recente dele (espera o turno dele acabar).
+  notify: async (projectId, staffId, text) => {
+    const dir = await projectPathOf(projectId);
+    const manager = dir ? await readProfile(dir, staffId) : null;
+    if (!manager) return;
+    await chats.send(projectId, manager.sessions.at(-1)?.id ?? null, staffId, text, 'later');
+  },
+  lastText: (sessionId) => chats.lastAssistantText(sessionId),
   // O consumo já foi conferido quando você mandou (a mensagem só esperou a vez).
   sendTo: (projectId, sessionId, staffId, text, images) => chats.send(projectId, sessionId, staffId, text, 'next', images),
 });
@@ -497,9 +505,13 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks$`),
-    ({ params: [id], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('tarefas só pelo MyCo');
-      return tasks.create(id!, body);
+    async ({ params: [id], body, fromBrowser }) => {
+      if (fromBrowser) return tasks.create(id!, body);
+      // Pela API, só um gestor passando tarefa para quem reporta a ele (e ela já pode começar).
+      const b = parse(z.object({ staffId: z.string().max(40), requestedBy: z.string().max(40), start: z.boolean().default(false) }).passthrough(), body);
+      if (!(await staff.isManagerOf(id!, b.requestedBy, b.staffId))) throw new BadRequest('pela API, só para quem reporta a você (requestedBy)');
+      const task = await tasks.create(id!, body, b.requestedBy);
+      return task && b.start ? ((await tasks.start(id!, task.id)) ?? task) : task;
     },
   ],
   [

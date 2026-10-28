@@ -413,7 +413,7 @@ export class StaffService {
 
   /** `createWorktree`: vai abrir uma sessão agora, então a worktree da ficha precisa existir. */
   private async context(project: Project, profile: StaffProfile, createWorktree = false): Promise<LaunchContext> {
-    const [config, managers, servers, worktree] = await Promise.all([
+    const [config, managers, servers, worktree, everyone] = await Promise.all([
       readConfig(),
       Promise.all(profile.reportsTo.map((id) => readProfile(project.path, id))),
       profile.servers.length ? listServers(project.path, this.opts.sshConfigFile) : [],
@@ -422,6 +422,7 @@ export class StaffService {
         : createWorktree
           ? (this.opts.ensureWorktree ?? ensureWorktree)(project.path, profile.id)
           : worktreeFor(project.path, profile.id),
+      listProjectStaff(project.path, project.id),
     ]);
     return {
       company: config.companyName,
@@ -433,8 +434,23 @@ export class StaffService {
       claudeConfigFile: this.opts.claudeConfigFile,
       worktree,
       servers,
+      // A equipe dele: quem reporta a ele (os temporários encerrados já saíram do quadro, mas a ficha
+      // não sabe disso; ficam de fora os que têm `ended`).
+      team: everyone
+        .filter((s) => s.id !== profile.id && s.reportsTo.includes(profile.id) && !s.ended)
+        .map((s) => ({ id: s.id, name: s.name, role: s.role, mission: s.mission, ...(s.temporary && { temporary: true }) })),
       open: this.opts.open,
     };
+  }
+
+  /**
+   * Pode `managerId` passar trabalho para `staffId`? Só para quem reporta a ele (a API não deixa um
+   * funcionário mandar tarefa para quem não é da equipe dele).
+   */
+  async isManagerOf(projectId: string, managerId: string, staffId: string): Promise<boolean> {
+    const project = await this.project(projectId);
+    const target = project ? await readProfile(project.path, staffId) : null;
+    return !!target && target.reportsTo.includes(managerId) && !!(await readProfile(project!.path, managerId));
   }
 
   private async project(id: string): Promise<Project | null> {

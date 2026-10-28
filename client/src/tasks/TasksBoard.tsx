@@ -167,6 +167,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                       <span className="task-title">{t.title}</span>
                       <span className="task-meta muted small">
                         {nameOf(t.staffId) ?? 'sem responsável'}
+                        {t.requestedBy && ` · pedida por ${nameOf(t.requestedBy) ?? t.requestedBy}`}
                         {costOf(t) && ` · ${costOf(t)}`} · {formatAgo(now - Date.parse(t.updatedAt))}
                       </span>
                       {t.branch && (

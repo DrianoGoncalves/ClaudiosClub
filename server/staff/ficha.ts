@@ -21,6 +21,34 @@ export interface FichaContext {
   worktree?: { path: string; branch: string } | null;
   /** Os servidores da ficha, já resolvidos (nome, destino, pasta remota). */
   servers?: ServerInfo[];
+  /** Quem reporta a este funcionário (a equipe dele). */
+  team?: TeamMember[];
+}
+
+export interface TeamMember {
+  id: string;
+  name: string;
+  role: string;
+  mission: string;
+  temporary?: boolean;
+}
+
+/**
+ * A equipe de um gestor: o que é da área de alguém vai para essa pessoa, como tarefa do MyCo (fila,
+ * quadro, aviso de volta); o executor fica com o trabalho mecânico sem dono.
+ */
+function teamSection(p: StaffProfile, ctx: FichaContext): string {
+  if (!ctx.team?.length) return '';
+  const api = `${ctx.mycoUrl}/api/projects/${p.projectId}`;
+  const first = (s: string) => s.split(/(?<=[.!?])\s/)[0]!.slice(0, 200);
+  return [
+    '## Sua equipe',
+    'Estas pessoas reportam a você. O que for da área de alguém daqui vai para essa pessoa, não para o executor: ela tem a ficha, as regras e a memória dessa área. O executor fica com o trabalho mecânico que não tem dono (ou que a própria pessoa não precisa fazer).',
+    ctx.team.map((m) => `- ${m.name} (${m.role}${m.temporary ? ', temporário' : ''}), id \`${m.id}\`: ${first(m.mission)}`).join('\n'),
+    `Para passar uma tarefa: POST ${api}/tasks com o cabeçalho \`x-myco: 1\` e um JSON com title, description (o que fazer, arquivos, critério de pronto e o que não mexer), staffId (o id da pessoa), requestedBy: "${p.id}" e start: true. A tarefa entra na fila dela (uma por vez) e aparece no quadro de tarefas.`,
+    'Quando a pessoa entregar, o MyCo te avisa (na sua conversa mais recente) com o resumo do que ela disse. Confira (diff, testes) antes de dar como pronto; se faltar algo, peça a ela na conversa da tarefa, não refaça você.',
+    `Para ver como estão: GET ${api}/tasks.`,
+  ].join('\n');
 }
 
 /**
@@ -103,14 +131,17 @@ export const PLAYBOOK_STEPS: Record<Playbook, { title: string; steps: string[] }
   },
 };
 
-function playbookSection(p: StaffProfile): string {
+function playbookSection(p: StaffProfile, ctx?: FichaContext): string {
   if (!p.playbook) return '';
   const pb = PLAYBOOK_STEPS[p.playbook];
   return [
     `## Roteiro: ${pb.title}`,
     pb.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'),
+    ctx?.team?.length ? 'Antes de chamar o executor: se a tarefa é da área de alguém da sua equipe, ela vai para essa pessoa (veja "Sua equipe").' : '',
     'Ao delegar: chame os agents em primeiro plano (para rodar em paralelo, várias chamadas na mesma mensagem) e confira cada entrega antes de seguir. Peça respostas curtas (o que mudou ou o que achou, com arquivo:linha, e o que não deu para fazer), nunca arquivos inteiros colados. Quem você chama não chama outros agents: dividir o trabalho é com você. Se o agent do roteiro não existir no projeto, avise o usuário em vez de improvisar.',
-  ].join('\n\n');
+  ]
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 /**
@@ -167,10 +198,11 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     `## Conhecimento (leia antes de começar)\n${list(p.knowledge, 'Nada específico além do CLAUDE.md do projeto.')}`,
     `## Regras\n${list(p.rules, 'Siga o CLAUDE.md do projeto.')}`,
     p.doneWhen ? `## Definição de pronto\n${p.doneWhen}` : '',
-    playbookSection(p),
+    playbookSection(p, ctx),
     serversSection(p, ctx),
     browserSection(p),
     worktreeSection(ctx),
+    teamSection(p, ctx),
     hiringSection(p, ctx),
     `## Memória\nSua memória fica em \`${ctx.memoryPath}\`. Leia no início de cada sessão. Ao concluir algo relevante, acrescente notas curtas: decisões, convenções descobertas, pendências. Não registre segredos (senhas, chaves, tokens).`,
   ];
