@@ -22,6 +22,7 @@ import { portraitUrl } from '../board/nodes';
 import { ChatView } from '../chat/ChatView';
 import { BrowserCheck } from '../staff/BrowserCheck';
 import { MAX_INPUT_BYTES, PROJECT_IMAGE_MAX, shrinkImage } from '../lib/shrinkImage';
+import { METRIC_LABEL, type Metric, ModelsChart } from '../toolbar/ModelsMenu';
 import { Routines } from './Routines';
 import { WorthIt } from './WorthIt';
 import { employeeName, ENTRYPOINT_LABEL, formatShare, STATUS_LABEL } from '../format';
@@ -768,9 +769,12 @@ export interface RankingEntry {
   usd: number;
 }
 
+type RankingTab = 'cost' | Metric;
+const RANKING_TABS: Array<[RankingTab, string]> = [['cost', 'Gastos'], ['index', METRIC_LABEL.index], ['price', METRIC_LABEL.price]];
+
 /**
- * Comparação de quem mais gasta. Os valores são equivalentes em API (estimativa): servem para
- * comparar funcionários e agents entre si, não como conta a pagar.
+ * Ranking, em abas: quem mais gasta (funcionários e agents) e os modelos para código (Artificial
+ * Analysis). Os gastos são equivalentes em API (estimativa): servem para comparar, não como conta a pagar.
  */
 export function RankingPanel({
   employees,
@@ -783,6 +787,7 @@ export function RankingPanel({
   scanning: boolean;
   onSelect: (nodeId: string) => void;
 }) {
+  const [tab, setTab] = useState<RankingTab>('cost');
   const [limit, setLimit] = useState(10);
   const topEmployee = employees[0]?.usd ?? 0;
   const topAgent = agents[0]?.usd ?? 0;
@@ -792,58 +797,73 @@ export function RankingPanel({
   return (
     <>
       <header className="header">
-        <p className="kicker">comparação</p>
-        <h2>Quem mais gasta</h2>
-        <p className="muted small">
-          Parte de cada um no consumo total, só para comparar (as sessões rodam pela assinatura).
-          {scanning && ' Ainda lendo os transcripts: os números vão crescer.'}
-        </p>
-      </header>
-      <section className="section">
-        <h3>Funcionários</h3>
-        {employees.length === 0 && <p className="muted">Nenhum custo registrado ainda.</p>}
-        <ol className="ranking">
-          {employees.slice(0, limit).map((e, i) => (
-            <li key={e.nodeId}>
-              <button className="ranking-row" onClick={() => onSelect(e.nodeId)} title="Mostrar no quadro">
-                <span className="ranking-pos">{i + 1}</span>
-                <span className="ranking-text">
-                  <span className="ranking-name">{e.name}</span>
-                  <span className="muted small">{e.detail}</span>
-                </span>
-                <span className="ranking-value">{formatShare(e.usd, employeesTotal)}</span>
-                <span className="ranking-bar" style={{ width: `${topEmployee ? (e.usd / topEmployee) * 100 : 0}%` }} />
-              </button>
-            </li>
-          ))}
-        </ol>
-        {employees.length > limit && (
-          <button className="btn-secondary" onClick={() => setLimit(limit + 20)}>
-            Mostrar mais ({employees.length - limit})
-          </button>
+        <p className="kicker">ranking</p>
+        <h2>{tab === 'cost' ? 'Quem mais gasta' : 'Modelos para código'}</h2>
+        {tab === 'cost' && (
+          <p className="muted small">
+            Parte de cada um no consumo total, só para comparar (as sessões rodam pela assinatura).
+            {scanning && ' Ainda lendo os transcripts: os números vão crescer.'}
+          </p>
         )}
-      </section>
-      <section className="section">
-        <h3>Agents (subagents chamados pelos funcionários)</h3>
-        {agents.length === 0 && <p className="muted">Nenhum subagent usado ainda.</p>}
-        <ol className="ranking">
-          {agents.map((a, i) => (
-            <li key={a.type}>
-              <div className="ranking-row">
-                <span className="ranking-pos">{i + 1}</span>
-                <span className="ranking-text">
-                  <span className="ranking-name">{a.type}</span>
-                  <span className="muted small">
-                    {a.runs} {a.runs === 1 ? 'execução' : 'execuções'} · {formatShare(a.usd / Math.max(1, a.runs), agentsTotal)} por execução
-                  </span>
-                </span>
-                <span className="ranking-value">{formatShare(a.usd, agentsTotal)}</span>
-                <span className="ranking-bar" style={{ width: `${topAgent ? (a.usd / topAgent) * 100 : 0}%` }} />
-              </div>
-            </li>
-          ))}
-        </ol>
-      </section>
+      </header>
+      <div className="tabs" role="tablist">
+        {RANKING_TABS.map(([k, label]) => (
+          <button key={k} type="button" role="tab" aria-selected={tab === k} className={`tab ${tab === k ? 'is-active' : ''}`} onClick={() => setTab(k)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {tab !== 'cost' ? (
+        <ModelsChart metric={tab} />
+      ) : (
+        <>
+          <section className="section">
+            <h3>Funcionários</h3>
+            {employees.length === 0 && <p className="muted">Nenhum custo registrado ainda.</p>}
+            <ol className="ranking">
+              {employees.slice(0, limit).map((e, i) => (
+                <li key={e.nodeId}>
+                  <button className="ranking-row" onClick={() => onSelect(e.nodeId)} title="Mostrar no quadro">
+                    <span className="ranking-pos">{i + 1}</span>
+                    <span className="ranking-text">
+                      <span className="ranking-name">{e.name}</span>
+                      <span className="muted small">{e.detail}</span>
+                    </span>
+                    <span className="ranking-value">{formatShare(e.usd, employeesTotal)}</span>
+                    <span className="ranking-bar" style={{ width: `${topEmployee ? (e.usd / topEmployee) * 100 : 0}%` }} />
+                  </button>
+                </li>
+              ))}
+            </ol>
+            {employees.length > limit && (
+              <button className="btn-secondary" onClick={() => setLimit(limit + 20)}>
+                Mostrar mais ({employees.length - limit})
+              </button>
+            )}
+          </section>
+          <section className="section">
+            <h3>Agents (subagents chamados pelos funcionários)</h3>
+            {agents.length === 0 && <p className="muted">Nenhum subagent usado ainda.</p>}
+            <ol className="ranking">
+              {agents.map((a, i) => (
+                <li key={a.type}>
+                  <div className="ranking-row">
+                    <span className="ranking-pos">{i + 1}</span>
+                    <span className="ranking-text">
+                      <span className="ranking-name">{a.type}</span>
+                      <span className="muted small">
+                        {a.runs} {a.runs === 1 ? 'execução' : 'execuções'} · {formatShare(a.usd / Math.max(1, a.runs), agentsTotal)} por execução
+                      </span>
+                    </span>
+                    <span className="ranking-value">{formatShare(a.usd, agentsTotal)}</span>
+                    <span className="ranking-bar" style={{ width: `${topAgent ? (a.usd / topAgent) * 100 : 0}%` }} />
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </section>
+        </>
+      )}
     </>
   );
 }
@@ -882,6 +902,7 @@ export function AgentPanel({
         <p className="badges">
           <LinkBadge link={agent.link} />
           <span className="badge">{agent.model ? `modelo: ${agent.model}` : 'modelo de quem chama'}</span>
+          <span className="badge">{agent.effort ? `esforço: ${agent.effort}` : 'esforço padrão'}</span>
           {agent.duplicate && <span className="badge warn">nome repetido: só um é carregado</span>}
         </p>
         {onEdit && !agent.error && (
@@ -979,7 +1000,7 @@ function AgentList({
           <li key={a.id} className={`card ${a.error ? 'card-error' : ''}`}>
             <div className="card-title">
               {a.name}
-              {a.model && <span className="badge">{a.model}</span>}
+              {(a.model || a.effort) && <span className="badge">{[a.model, a.effort].filter(Boolean).join(' / ')}</span>}
               <LinkBadge link={a.link} />
               {a.duplicate && <span className="badge warn">nome repetido</span>}
               {onEdit && !a.error && (

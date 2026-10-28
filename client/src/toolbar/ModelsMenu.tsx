@@ -1,14 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ModelBenchmarks, ModelVariant } from '../../../shared/model';
 import { api } from '../api';
 import { formatAgo } from '../format';
 
-// Botão "modelos" no topo do quadro: os modelos de maior índice de código do Artificial Analysis,
-// em barras, com uma aba por métrica (índice e preço). Cada modelo aparece no esforço padrão;
-// clicar nele abre todos os esforços. Cada clique que abre o botão busca de novo (o servidor segura
-// 1 min entre buscas, por causa da cota diária da chave).
+// Abas "Coding Index" e "Preço" do ranking (painel lateral): os modelos de maior índice de código do
+// Artificial Analysis, em barras. Cada modelo aparece no esforço padrão; clicar nele abre todos os
+// esforços. Abrir a aba busca de novo (o servidor segura 1 min entre buscas, por causa da cota
+// diária da chave).
 
-type Metric = 'index' | 'price';
+export type Metric = 'index' | 'price';
 
 const decimals = (v: number, digits: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
@@ -22,29 +22,13 @@ const FOOTNOTE: Record<Metric, string> = {
   price: 'US$ por 1M tokens, 3 de entrada para 1 de saída.',
 };
 
-export function ModelsMenu() {
-  const [open, setOpen] = useState(false);
+export const METRIC_LABEL: Record<Metric, string> = { index: METRICS.index.label, price: METRICS.price.label };
+
+export function ModelsChart({ metric }: { metric: Metric }) {
   const [data, setData] = useState<ModelBenchmarks | null>(null);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
-  const [metric, setMetric] = useState<Metric>('index');
   const [expanded, setExpanded] = useState<string | null>(null);
-  const root = useRef<HTMLDivElement>(null);
-
-  // Fecha ao clicar fora ou apertar Esc.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!root.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
 
   const load = () => {
     setLoading(true);
@@ -60,40 +44,15 @@ export function ModelsMenu() {
       .finally(() => setLoading(false));
   };
 
-  // A lista abre embaixo do botão; no celular, com a barra quebrando em linhas, puxa para a
-  // esquerda o quanto for preciso para caber na tela.
-  const [shift, setShift] = useState(0);
-  const toggle = () => {
-    if (!open) {
-      const left = root.current?.getBoundingClientRect().left ?? 0;
-      setShift(Math.min(0, window.innerWidth - 12 - Math.min(460, window.innerWidth - 24) - left));
-      load();
-    }
-    setOpen(!open);
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(load, []);
 
   return (
-    <div className="inbox" ref={root}>
-      <button aria-haspopup="dialog" aria-expanded={open} onClick={toggle} title="Ranking de modelos para código (Artificial Analysis)">
-        modelos
+    <div className="models">
+      <button className="btn-secondary models-refresh" onClick={load} disabled={loading} title="Buscar de novo">
+        {loading ? 'buscando…' : 'atualizar'}
       </button>
-      {open && (
-        <div className="inbox-menu models-menu" role="dialog" aria-label="Ranking de modelos para código" style={{ left: shift }}>
-          <div className="models-head">
-            <div className="models-tabs" role="tablist">
-              {(Object.keys(METRICS) as Metric[]).map((k) => (
-                <button key={k} role="tab" aria-selected={metric === k} className={metric === k ? 'is-active' : ''} onClick={() => setMetric(k)}>
-                  {METRICS[k].label}
-                </button>
-              ))}
-            </div>
-            <button onClick={load} disabled={loading} title="Buscar de novo">
-              {loading ? 'buscando…' : 'atualizar'}
-            </button>
-          </div>
-          <ModelsBody data={data} loading={loading} failed={failed} metric={metric} expanded={expanded} onExpand={setExpanded} />
-        </div>
-      )}
+      <ModelsBody data={data} loading={loading} failed={failed} metric={metric} expanded={expanded} onExpand={setExpanded} />
     </div>
   );
 }

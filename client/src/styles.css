@@ -101,10 +101,10 @@ body { background: var(--board); }
 /* Fundo de papel sob o traço: as linhas do organograma passam por trás do cartão, não por cima do texto. */
 .bn::before { content: ''; position: absolute; inset: 3px; background: var(--card); border-radius: 3px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06); }
 .bn .sketch { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
-.bn-body { position: relative; height: 100%; padding: 10px 14px; display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; }
+.bn-body { position: relative; height: 100%; padding: 8px 10px; display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; }
 .bn-title { font-family: var(--hand); font-weight: 700; font-size: 25px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bn-title-sm { font-size: 21px; }
-.bn-meta { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bn-meta { font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bn-tag { font-family: system-ui, sans-serif; font-weight: 500; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin-right: 6px; vertical-align: middle; }
 .bn-project .bn-title { color: var(--ink-blue); }
 .bn-skill .bn-title { color: var(--ink-green); }
@@ -277,7 +277,15 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .chat-typing { align-self: flex-start; font-size: 12.5px; color: var(--muted); }
 .chat-elsewhere { border: 1px dashed var(--ink-blue); border-radius: 10px; padding: 8px 12px; font-size: 13px; }
 .chat-elsewhere p { margin: 0 0 6px; }
-.chat-input { display: flex; gap: 8px; align-items: flex-end; }
+/* Caixa do chat: um campo só (texto em cima; anexar à esquerda, Parar e Enviar à direita, embaixo). */
+.chat-input { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.chat-input:focus-within { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); border-color: var(--ink-blue); }
+.chat-input textarea { font: inherit; font-size: 12px; line-height: 1.2; color: var(--ink); background: transparent; border: 0; outline: 0; padding: 4px 4px; resize: none; field-sizing: content; min-height: calc(2 * 1.4em + 8px); max-height: 40vh; overflow-y: auto; }
+.chat-actions { display: flex; align-items: center; gap: 6px; }
+.chat-actions .chat-attach { margin-right: auto; border-color: transparent; }
+.chat-actions .chat-attach:focus-within { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); }
+.chat-actions .chat-stop { min-height: 36px; }
+.chat-actions :is(.chat-attach, .chat-send), .chat-status .chat-changes { width: 36px; height: 36px; padding: 0; display: inline-grid; place-items: center; }
 /* Cargos (config → Cargos). */
 .roles { display: grid; gap: 8px; width: 100%; }
 .roles-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
@@ -366,8 +374,6 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .msg-images { display: flex; align-items: center; gap: 4px; font-size: 11.5px; opacity: 0.85; margin-bottom: 2px; }
 .bn-git-branch { display: inline-flex; align-items: center; gap: 4px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.chat-input textarea { flex: 1; font: inherit; font-size: 14px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; resize: vertical; min-height: 44px; }
-.chat-input textarea:focus { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); border-color: var(--ink-blue); }
 /* Topo do funcionário: o "⋯" fica no canto do topo, à esquerda do "×" do painel. */
 .chat-top { position: relative; min-height: 28px; }
 .btn-secondary.chat-more-btn { position: absolute; top: 0; right: 10px; width: 30px; height: 28px; padding: 0; font-size: 18px; line-height: 1; display: grid; place-items: center; }
@@ -386,7 +392,7 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .chat-chip:hover { border-color: var(--accent); }
 .chat-chip.is-warn { color: var(--warn); border-color: var(--warn); }
 .chat-chip.is-danger { color: var(--danger); border-color: var(--danger); }
-.chat-changes { margin-left: auto; min-height: 28px; }
+.chat-changes { margin-left: auto; }
 
 /* Rolagem do painel lateral e do chat: fina, sem trilho, ponta irregular como os traços de caneta.
    A borda transparente (com background-clip) afasta o polegar da beira, qualquer que seja o fundo. */
@@ -420,7 +426,6 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .chat-settings { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .chat-settings select { font: inherit; font-size: 12px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
 .chat-settings .btn-toggle { font-size: 12px; padding: 2px 8px; }
-.chat-input { position: relative; }
 .chat-suggest { position: absolute; left: 0; right: 0; bottom: 100%; margin: 0 0 4px; padding: 4px; list-style: none; max-height: 240px; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2); z-index: 5; }
 .chat-suggest button { display: block; width: 100%; text-align: left; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-suggest button.is-active { background: color-mix(in srgb, var(--ink-blue) 14%, transparent); }
@@ -596,6 +601,8 @@ button.ranking-row:hover { border-color: var(--accent); }
 .toolbar button { font: inherit; font-size: 13px; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
 .toolbar button:hover:not(:disabled) { border-color: var(--accent); }
 .toolbar button:disabled { opacity: 0.6; cursor: default; }
+/* Botões só com ícone (ranking, config): quadrados, ícone no centro. */
+.toolbar .toolbar-icon { display: inline-grid; place-items: center; min-width: 32px; min-height: 28px; padding: 3px 7px; }
 
 /* ---- caixa "precisa de mim": botão com contador no topo e a lista embaixo ---- */
 .inbox { position: relative; }
@@ -618,17 +625,14 @@ button.ranking-row:hover { border-color: var(--accent); }
 .inbox-at { grid-area: at; white-space: nowrap; }
 .inbox-notify { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--line); color: var(--muted); cursor: pointer; }
 
-/* ---- "modelos": ranking do Artificial Analysis em barras (uma métrica por aba) ---- */
-.models-menu { width: min(460px, calc(100vw - 24px)); }
-.models-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
-.models-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
-.toolbar .models-tabs button { border-color: transparent; font-family: var(--hand); font-size: 18px; font-weight: 700; line-height: 1.1; color: var(--muted); padding: 2px 8px; }
-.toolbar .models-tabs button.is-active { color: var(--ink); background: color-mix(in srgb, var(--ink-blue) 12%, transparent); }
-.models-chart { list-style: none; margin: 0; padding: 8px 12px; display: grid; gap: 4px; overflow-y: auto; }
+/* ---- Ranking, abas "Coding Index" e "Preço": modelos do Artificial Analysis em barras ---- */
+.models { display: grid; gap: 8px; margin-top: 12px; }
+.models-refresh { justify-self: end; }
+.models-chart { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 /* Coluna do valor com largura fixa: as barras de todas as linhas começam e crescem alinhadas. */
 .models-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(70px, 38%) 8ch; align-items: center; gap: 8px; padding: 3px 4px; }
-.toolbar .models-row { width: 100%; text-align: left; border: 0; border-radius: 6px; padding: 3px 4px; background: transparent; font-size: 13px; }
-.toolbar .models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+button.models-row { width: 100%; min-height: 32px; text-align: left; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
 .models-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .models-caret { display: inline-block; width: 1.1em; color: var(--muted); }
 .models-effort { margin-left: 6px; padding: 0 5px; border: 1px solid var(--line); border-radius: 8px; font-size: 11px; color: var(--muted); }
@@ -642,11 +646,11 @@ button.ranking-row:hover { border-color: var(--accent); }
 .models-bar { display: block; height: 100%; min-width: 2px; background: var(--ink-blue); border-radius: 0 4px 4px 0; }
 .models-row:hover .models-bar { background: color-mix(in srgb, var(--ink-blue) 75%, var(--ink)); }
 .models-value { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.models-note { margin: 0; padding: 10px 14px; }
+.models-note { margin: 0; }
 .models-note p { margin: 0 0 6px; }
 .models-env { margin: 0 0 6px; padding: 6px 8px; background: color-mix(in srgb, var(--ink) 7%, transparent); border-radius: 6px; font-size: 12px; overflow-x: auto; }
-.models-foot { margin: 0; padding: 8px 14px; border-top: 1px solid var(--line); }
-.models-menu a { color: var(--ink-blue); text-underline-offset: 2px; }
+.models-foot { margin: 0; padding-top: 8px; border-top: 1px solid var(--line); }
+.models a { color: var(--ink-blue); text-underline-offset: 2px; }
 /* No celular não há hover para ler o nome cortado: o nome ganha a linha de cima inteira. */
 @media (max-width: 480px) {
   .models-row { grid-template-columns: minmax(0, 1fr) 8ch; row-gap: 2px; }
@@ -706,7 +710,6 @@ button.ranking-row:hover { border-color: var(--accent); }
 .room-colors li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .room-colors-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--hand); font-size: 19px; font-weight: 700; }
 @media (max-width: 640px) {
-  .settings-label { display: none; }
   .settings-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .settings-nav { flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--line); padding: 6px 8px; }
   .settings-menu .settings-nav-item { white-space: nowrap; }
@@ -756,11 +759,14 @@ button.ranking-row:hover { border-color: var(--accent); }
 }
 .drawer-close { position: absolute; top: 10px; right: 12px; font-size: 22px; line-height: 1; background: none; border: none; color: var(--muted); cursor: pointer; }
 .drawer-close:hover { color: var(--ink); }
-/* Painel do funcionário: a conversa ocupa a altura toda; só a lista de mensagens rola. */
-/* Em janela baixa (muitos avisos no topo), a lista não some: o painel rola e a caixa continua alcançável. */
-.drawer-chat { display: flex; flex-direction: column; overflow-y: auto; }
-.drawer-chat .chat { flex: 1; margin-top: 0; }
-.drawer-chat .chat-list { flex: 1; min-height: 160px; height: auto; }
+/* Abas no painel lateral (ex.: ranking): as mesmas da ficha, na medida do padding do painel. */
+.drawer .tabs { top: -18px; margin: 12px -20px 0; padding: 4px 20px 0; }
+/* Painel do funcionário: a conversa ocupa a altura toda; só a lista de mensagens rola e a caixa fica fixa embaixo.
+   O painel não rola: em janela baixa, quem cede é o topo (avisos), que rola sozinho. */
+.drawer-chat { display: flex; flex-direction: column; overflow: hidden; }
+.drawer-chat .chat { flex: 1; min-height: 0; margin-top: 0; }
+.drawer-chat .chat-list { flex: 1; min-height: 0; height: auto; }
+.drawer-chat .chat-top { flex: 0 1 auto; max-height: 35vh; overflow-y: auto; }
 /* Sem projeto não há conversa: o topo e a ficha rolam aqui. */
 .employee-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 

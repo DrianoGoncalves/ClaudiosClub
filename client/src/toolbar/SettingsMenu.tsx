@@ -221,13 +221,14 @@ export function SettingsMenu(props: Props) {
   return (
     <div className="settings" ref={root}>
       <button
-        className="settings-button"
+        className="settings-button toolbar-icon"
         aria-haspopup="dialog"
         aria-expanded={open}
+        aria-label="Configurações"
         title="Configurações do MyCo (Ctrl+,)"
         onClick={() => setOpen(!open)}
       >
-        <GearIcon /> <span className="settings-label">config</span>
+        <GearIcon />
         {props.archivedCount > 0 && props.showArchived && <span className="settings-dot" aria-hidden="true" />}
       </button>
       {/* No body: o painel do topo do React Flow prende o z-index, e o painel lateral cobriria o menu. */}

@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type { Autonomy, ChatAttachment, ChatItem, Effort, SendPriority, UiLevel } from '../../../shared/model';
 import { api } from '../api';
-import { ImageIcon } from '../icons';
+import { FileDiffIcon, ImageIcon, SendIcon } from '../icons';
 import { shrinkImage } from '../lib/shrinkImage';
 import {
   applySuggestion,
@@ -75,6 +75,14 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
     const el = list.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [chat.items, busy, showTools]);
+  // Ao abrir (ou trocar de conversa), começa pela última mensagem.
+  useEffect(() => {
+    const el = list.current;
+    if (!chat.loading && el) {
+      stick.current = true;
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [chat.loading]);
 
   // Mensagem com o funcionário trabalhando: quem decide é o servidor, pela config geral (menu
   // config); aqui só o texto do botão. Relê quando ele começa a trabalhar, para pegar a mudança.
@@ -424,17 +432,18 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
             />
           </label>
           {busy && (
-            <button className="btn-secondary" onClick={() => void chat.interrupt()} title="Interrompe o turno atual">
+            <button className="btn-secondary chat-stop" onClick={() => void chat.interrupt()} title="Interrompe o turno atual">
               Parar
             </button>
           )}
           <button
-            className="btn-primary"
+            className="btn-primary chat-send"
             onClick={() => void submit()}
             disabled={(!draft.trim() && !images.length && !files.length) || !!blocked || pending}
-            title={pending ? 'Responda o pedido de permissão primeiro' : busy ? PRIORITY_HELP[whileBusy] : undefined}
+            aria-label={busy ? PRIORITY_BUTTON[whileBusy] : 'Enviar'}
+            title={pending ? 'Responda o pedido de permissão primeiro' : busy ? `${PRIORITY_BUTTON[whileBusy]}: ${PRIORITY_HELP[whileBusy]}` : 'Enviar (Enter)'}
           >
-            {busy ? PRIORITY_BUTTON[whileBusy] : 'Enviar'}
+            <SendIcon />
           </button>
         </div>
       </div>
@@ -466,8 +475,14 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           </button>
         )}
         {staffId && chat.sessionId && (
-          <button type="button" className="btn-secondary chat-changes" onClick={() => setShowChanges(true)} title="Os arquivos que ele mudou, o diff, os testes e (na worktree dele) mesclar">
-            O que mudou
+          <button
+            type="button"
+            className="btn-secondary chat-changes"
+            onClick={() => setShowChanges(true)}
+            aria-label="O que mudou"
+            title="O que mudou: os arquivos que ele mudou, o diff, os testes e (na worktree dele) mesclar"
+          >
+            <FileDiffIcon />
           </button>
         )}
       </div>

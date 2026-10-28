@@ -13,6 +13,40 @@ export function ImageIcon({ size = 15 }: { size?: number }) {
   );
 }
 
+/** Enviar (avião de papel): o botão de enviar do chat. */
+export function SendIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M14.5 21.7a.5.5 0 0 0 .9 0l6.5-19a.5.5 0 0 0-.6-.6l-19 6.5a.5.5 0 0 0 0 .9l7.9 3.2a2 2 0 0 1 1.1 1.1z" />
+      <path d="M21.9 2.1 10.9 13.1" />
+    </svg>
+  );
+}
+
+/** Folha com + e −: os arquivos que o funcionário mudou (diff). */
+export function FileDiffIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" />
+      <path d="M9 10h6" />
+      <path d="M12 7v6" />
+      <path d="M9 17h6" />
+    </svg>
+  );
+}
+
+/** Gráfico de barras: o ranking (gastos e modelos). */
+export function ChartIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M3 3v16a2 2 0 0 0 2 2h16" />
+      <path d="M8 17v-3" />
+      <path d="M13 17V5" />
+      <path d="M18 17V9" />
+    </svg>
+  );
+}
+
 /** Tarefas (lista com marcações): o quadro de tarefas do projeto. */
 export function TasksIcon({ size = 12 }: { size?: number }) {
   return (

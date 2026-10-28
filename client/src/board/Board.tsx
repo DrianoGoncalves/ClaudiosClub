@@ -20,7 +20,7 @@ import type { InboxView } from '../inbox/useInbox';
 import { EdgeActions, edgeTypes } from './edges';
 import { buildGraph, HANDLE, RANKING_ID, roomFrame, type BoardNode, type StaffLink } from './layout';
 import { nodeTypes } from './nodes';
-import { ModelsMenu } from '../toolbar/ModelsMenu';
+import { ChartIcon } from '../icons';
 import { SettingsMenu } from '../toolbar/SettingsMenu';
 import { AuthBadge, CompanyTitle, UsageMeters } from '../toolbar/Toolbar';
 
@@ -334,10 +334,9 @@ export function BoardView(props: BoardViewProps) {
         <AuthBadge />
         <span className="toolbar-sep" />
         <InboxMenu inbox={props.inbox} onOpen={props.onOpenInbox} />
-        <button onClick={() => onSelect(RANKING_ID)} title="Quem mais gasta: funcionários e agents">
-          ranking
+        <button className="toolbar-icon" onClick={() => onSelect(RANKING_ID)} title="Ranking: quem mais gasta e modelos para código" aria-label="Ranking">
+          <ChartIcon />
         </button>
-        <ModelsMenu />
         <SettingsMenu
           showWorktrees={showWorktrees}
           onToggleWorktrees={props.onToggleWorktrees}
