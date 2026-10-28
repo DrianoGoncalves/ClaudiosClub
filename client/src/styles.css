@@ -624,14 +624,14 @@ button.ranking-row:hover { border-color: var(--accent); }
 .workspace-new { display: flex; gap: 6px; }
 .workspace-new input { flex: 1; min-width: 0; }
 
-/* ---- servidores (SSH) do projeto ---- */
-.conn-list { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 10px; }
 /* ---- registro de acesso aos servidores (na ficha) ---- */
 .server-log { margin-top: 10px; }
 .server-log summary { cursor: pointer; font-weight: 600; }
 .server-log-list { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 6px; max-height: 320px; overflow-y: auto; }
 .server-log-cmd { display: block; font-size: 12px; white-space: pre-wrap; word-break: break-all; color: var(--muted); }
 
+/* ---- servidores (SSH) do projeto ---- */
+.conn-list { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 10px; }
 .conn-list li { display: grid; gap: 4px; }
 .conn-list .actions { margin: 0; }
 .conn-form { display: grid; gap: 8px; }
@@ -653,10 +653,10 @@ button.ranking-row:hover { border-color: var(--accent); }
 /* "já troquei" no aviso de segredo: fica no canto do item, fora do botão que abre o painel. */
 .inbox-list li { position: relative; }
 .toolbar .inbox-dismiss { position: absolute; right: 10px; bottom: 6px; padding: 0; }
-.inbox-who { grid-area: who; }
-.inbox-summary { grid-area: summary; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 span.inbox-dismiss { display: inline-flex; gap: 10px; }
 .toolbar span.inbox-dismiss button { padding: 0; }
+.inbox-who { grid-area: who; }
+.inbox-summary { grid-area: summary; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inbox-at { grid-area: at; white-space: nowrap; }
 .inbox-notify { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--line); color: var(--muted); cursor: pointer; }
 
