@@ -163,6 +163,6 @@ Abra **http://myco.localhost:5173**, aponte as pastas dos seus projetos e contra
 | --- | --- |
 | Usar no dia a dia (build + servidor em http://myco.localhost:4848) | `npm run daily` |
 | Subir junto com o Windows, em segundo plano | `npm run autostart` |
-| Atalho no Menu Iniciar | `npm run launcher` |
+| Botão **Rodar** na própria porta quando o MyCo está parado (e atalho no Menu Iniciar) | `npm run launcher` |
 | Barras de consumo 5 h / 7 d (instala o mod `myco-tap`) | `npm run mod:install` |
 | Testes e tipos | `npm test` · `npm run typecheck` |

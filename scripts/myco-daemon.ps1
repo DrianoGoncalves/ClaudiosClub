@@ -22,10 +22,12 @@ function Write-Log([string]$line) {
   [IO.File]::AppendAllText($log, "[$stamp] [vigia] $line`n", (New-Object System.Text.UTF8Encoding $false))
 }
 
-# Um vigia por vez: se o registrado ainda está vivo, este sai quieto.
+# Um vigia por vez: se o registrado ainda está vivo, este sai quieto. O Windows reaproveita PIDs
+# (depois de reiniciar, o número guardado pode ser de outro processo), então confere que é um vigia.
 if (Test-Path $pidFile) {
-  $old = Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($old -and (Get-Process -Id $old -ErrorAction SilentlyContinue)) { exit 0 }
+  $old = (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1) -as [int]
+  $p = if ($old) { Get-CimInstance Win32_Process -Filter "ProcessId=$old" -ErrorAction SilentlyContinue }
+  if ($p -and $p.CommandLine -like '*myco-daemon.ps1*') { exit 0 }
 }
 Set-Content -Path $pidFile -Value $PID -Encoding ascii
 Remove-Item $stopFile -ErrorAction SilentlyContinue
@@ -41,12 +43,25 @@ Write-Log "iniciando em $root (porta $port)"
 # O servidor sabe que tem vigia: o config mostra "Reiniciar" (sair e voltar) além de "Parar".
 $env:MYCO_DAEMON = '1'
 $delay = 5
+$built = Join-Path $root 'dist\client\index.html'
+
+# O cliente mudou desde o último build? (código, dependências ou config do Vite)
+function Test-ClientChanged {
+  if (-not (Test-Path $built)) { return $true }
+  $since = (Get-Item $built).LastWriteTime
+  $sources = @(Get-ChildItem client, shared -Recurse -File) + @(Get-Item vite.config.ts, package-lock.json)
+  return [bool]($sources | Where-Object { $_.LastWriteTime -gt $since } | Select-Object -First 1)
+}
+
 while ($true) {
   if (Test-Path $stopFile) { break }
-  # O cliente é gerado a cada (re)início: "Reiniciar" no config já traz a tela nova. Só o build
-  # (sem a checagem de tipos): um erro de tipo em edição não deixa o MyCo sem tela.
-  cmd.exe /d /c "node node_modules\vite\bin\vite.js build >> `"$log`" 2>&1"
-  if ($LASTEXITCODE -ne 0) { Write-Log 'o build do cliente falhou (veja acima); o servidor sobe com a última versão do cliente' }
+  # O cliente é gerado no (re)início quando mudou: "Reiniciar" no config já traz a tela nova, e sem
+  # mudança o servidor sobe em segundos (o botão "Rodar" da tela de parado espera por ele). Só o
+  # build (sem a checagem de tipos): um erro de tipo em edição não deixa o MyCo sem tela.
+  if (Test-ClientChanged) {
+    cmd.exe /d /c "node node_modules\vite\bin\vite.js build >> `"$log`" 2>&1"
+    if ($LASTEXITCODE -ne 0) { Write-Log 'o build do cliente falhou (veja acima); o servidor sobe com a última versão do cliente' }
+  }
   $started = Get-Date
   Write-Log "subindo o servidor: http://myco.localhost:$port"
   cmd.exe /d /c "node node_modules\tsx\dist\cli.mjs server\index.ts >> `"$log`" 2>&1"

@@ -11,8 +11,11 @@ $port = if ($Port -gt 0) { $Port } elseif ($env:MYCO_PORT) { $env:MYCO_PORT } el
 
 function Get-Daemon {
   if (-not (Test-Path $pidFile)) { return $null }
-  $id = Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($id) { Get-Process -Id $id -ErrorAction SilentlyContinue } else { $null }
+  $id = (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1) -as [int]
+  if (-not $id) { return $null }
+  # O Windows reaproveita PIDs: depois de reiniciar, o número guardado pode ser de outro processo.
+  $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue
+  if ($p -and $p.CommandLine -like '*myco-daemon.ps1*') { Get-Process -Id $id -ErrorAction SilentlyContinue } else { $null }
 }
 
 switch ($Action) {
