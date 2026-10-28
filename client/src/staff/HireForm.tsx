@@ -560,26 +560,27 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
           <fieldset>
             <legend>{t('staff.sshLegend')}</legend>
             <p className="muted small">
-              {t('staff.sshNote1')}<code>~/.ssh/config</code>{t('staff.sshNote2')}<code>~/.ssh</code>, <code>.env</code>
-              {t('staff.sshNote4', { autonomy: t('staff.autonomyManualLabel') })}
+              {t('office.hireServersNote')}{' '}
+              {(() => {
+                // Só no "só planeja", "manual" e "edita sozinho" um comando no servidor espera você.
+                const label = AUTONOMY_OPTIONS.find((o) => o.value === autonomy)?.label ?? autonomy;
+                return autonomy === 'auto' || autonomy === 'bypassPermissions' ? (
+                  <b>{t('office.hireNoApproval', { autonomy: label, manual: t('staff.autonomyManualLabel') })}</b>
+                ) : (
+                  t('office.hireApproval', { autonomy: label })
+                );
+              })()}
             </p>
             {serverList === null && <p className="muted small">{t('staff.loading')}</p>}
-            {serverList?.length === 0 && (
-              <p className="muted small">
-                {t('staff.sshEmptyA')}<code>Host</code>{t('staff.sshEmptyB')}<code>~/.ssh/config</code>{t('staff.sshEmptyC')}<code>/vps init</code>{t('staff.sshEmptyD')}
-              </p>
-            )}
+            {serverList?.length === 0 && <p className="muted small">{t('office.hireServersEmpty')}</p>}
             <div className="checks">
               {serverList?.map((s) => (
                 <label key={s.name} className="check">
                   <input type="checkbox" checked={servers.includes(s.name)} onChange={() => toggle(servers, setServers, s.name)} /> {s.name}
                   <span className="muted small">
                     {' '}
-                    {s.source === 'vps'
-                      ? s.remoteRoot
-                        ? t('staff.sshVpsRoot', { root: s.remoteRoot })
-                        : t('staff.sshVps')
-                      : '~/.ssh/config'}
+                    {s.host}
+                    {s.remoteRoot ? ` · ${s.remoteRoot}` : ''}
                   </span>
                 </label>
               ))}
@@ -588,7 +589,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
                 .map((n) => (
                   <label key={n} className="check">
                     <input type="checkbox" checked onChange={() => toggle(servers, setServers, n)} /> {n}
-                    <span className="muted small"> {t('staff.sshNotHere')}</span>
+                    <span className="muted small"> {t('office.hireServerGone')}</span>
                   </label>
                 ))}
             </div>

@@ -23,6 +23,7 @@ import type {
   OrchestrationReport,
   Project,
   ProjectColor,
+  ProjectConnection,
   ProjectDetail,
   Routine,
   RoutineRun,
@@ -173,6 +174,26 @@ export const api = {
     post<Record<string, RunMark>>(`/api/sessions/${sessionId}/marks`, { runId, mark }),
   mcp: (projectId: string) => get<McpServerInfo[]>(`/api/projects/${projectId}/mcp`),
   servers: (projectId: string) => get<ServerInfo[]>(`/api/projects/${projectId}/servers`),
+  // Conexões SSH do projeto (a lista também é POST: exige a página do MyCo).
+  connections: (projectId: string) => post<ProjectConnection[]>(`/api/projects/${projectId}/connections/list`),
+  saveConnection: (
+    projectId: string,
+    c: { name: string; host: string; port: number; user: string; identityFile: string; remoteRoot: string | null; originalName?: string },
+  ) => post<ProjectConnection>(`/api/projects/${projectId}/connections`, c),
+  removeConnection: (projectId: string, name: string) => post<{ ok: boolean }>(`/api/projects/${projectId}/connections/${encodeURIComponent(name)}/delete`),
+  testConnection: (projectId: string, name: string) =>
+    post<{ ok: boolean; message: string }>(`/api/projects/${projectId}/connections/${encodeURIComponent(name)}/test`),
+  // Empresas (abas do quadro) e novo projeto.
+  saveCompany: (c: { id?: string; name: string; color: ProjectColor | null }) => post<AppConfig>('/api/companies', c),
+  removeCompany: (id: string) => post<AppConfig>(`/api/companies/${id}/delete`),
+  setProjectCompany: (projectId: string, companyId: string | null) => post<AppConfig>(`/api/projects/${projectId}/company`, { companyId }),
+  newProjectDefaults: () => get<{ parent: string }>('/api/new-project'),
+  newProject: (
+    body:
+      | { mode: 'create'; parent: string; name: string; git: boolean; companyId: string | null }
+      | { mode: 'existing'; path: string; companyId: string | null },
+  ) => post<{ created: boolean; projectId: string }>('/api/new-project', body),
+  createDemo: () => post<{ created: boolean; projectId: string }>('/api/demo'),
   hire: (projectId: string, input: StaffInput) =>
     post<{ profile: StaffProfile; launch: LaunchResult | null }>(`/api/projects/${projectId}/staff`, input),
   chat: (projectId: string, sessionId: string) => get<ChatSnapshot>(`/api/projects/${projectId}/chat/${sessionId}`),

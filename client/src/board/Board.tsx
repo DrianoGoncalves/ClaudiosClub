@@ -24,6 +24,8 @@ import { ChartIcon } from '../icons';
 import { SettingsMenu } from '../toolbar/SettingsMenu';
 import { AuthBadge, CompanyTitle, UsageMeters } from '../toolbar/Toolbar';
 import { t } from '../i18n';
+import { CompanyTabs } from '../office/CompanyTabs';
+import { companyByProject, inTab, readTab, TAB_ALL, TAB_NONE, writeTab } from '../office/companies';
 
 // Posições arrastadas ficam no navegador por enquanto; vão para `.myco/` quando houver escrita no disco.
 // v3: as salas passaram a formar uma grade; as posições da v2 (uma linha só) não servem mais.
@@ -103,6 +105,12 @@ interface BoardViewProps {
   onLink: (projectId: string, staffId: string, managerId: string) => void;
   /** Botão na linha entre dois funcionários: `managerId` deixa de chamar `staffId`. */
   onUnlink: (link: StaffLink) => void;
+  /** O config mudou por aqui (empresa criada nas abas). */
+  onConfig: (config: AppConfig) => void;
+  /** "+ projeto" nas abas: criar ou abrir, já na empresa da aba (null = sem empresa). */
+  onNewProject: (companyId: string | null) => void;
+  /** Um projeto acabou de ser criado (o demo): recarrega o quadro e abre a sala dele. */
+  onProjectCreated: (projectId: string) => void;
 }
 
 /** De onde saiu o "+": projeto (`p:<id>`) ou funcionário com ficha (`h:<projeto>:<ficha>`). */
@@ -113,7 +121,18 @@ function parseHireSource(nodeId: string): { projectId: string; staffId: string |
 }
 
 export function BoardView(props: BoardViewProps) {
-  const { board, config, costs, git, tasks, showWorktrees, showArchived, selectedId, onSelect } = props;
+  const { config, costs, git, tasks, showWorktrees, showArchived, selectedId, onSelect } = props;
+  // Aba de empresa: o quadro mostra só as salas dos projetos dela.
+  const [tab, setTabState] = useState(readTab);
+  const setTab = (next: string) => {
+    setTabState(next);
+    writeTab(next);
+  };
+  const companyOf = useMemo(() => companyByProject(props.board.projects, config), [props.board.projects, config]);
+  const board = useMemo(
+    () => (tab === TAB_ALL ? props.board : { ...props.board, projects: props.board.projects.filter((p) => inTab(tab, companyOf.get(p.id), config)) }),
+    [props.board, tab, companyOf, config],
+  );
   const [shelves, setShelves] = useState(() => loadList(SHELVES_KEY));
   const [collapsed, setCollapsed] = useState(() => loadList(COLLAPSED_KEY));
   // Proporção da tela usada na planta: medida na abertura e a cada "reorganizar" (não a cada
@@ -221,12 +240,13 @@ export function BoardView(props: BoardViewProps) {
     fitStart();
   }, [nodesReady, fitStart]);
   // Mostrar/esconder worktrees ou arquivados é um pedido explícito: aí, sim, reenquadra.
-  const toggles = useRef({ showWorktrees, showArchived });
+  // Trocar de aba também.
+  const toggles = useRef({ showWorktrees, showArchived, tab });
   useEffect(() => {
     const prev = toggles.current;
-    toggles.current = { showWorktrees, showArchived };
-    if (fitted.current && (prev.showWorktrees !== showWorktrees || prev.showArchived !== showArchived)) setTimeout(fitStart, 50);
-  }, [showWorktrees, showArchived, fitStart]);
+    toggles.current = { showWorktrees, showArchived, tab };
+    if (fitted.current && (prev.showWorktrees !== showWorktrees || prev.showArchived !== showArchived || prev.tab !== tab)) setTimeout(fitStart, 50);
+  }, [showWorktrees, showArchived, tab, fitStart]);
 
   // A seleção é controlada pelo App (painel lateral); aqui só entram arrastos e medições.
   // Arrastar a sala leva junto tudo que está dentro dela; a moldura sempre se reajusta aos nós.
@@ -361,7 +381,26 @@ export function BoardView(props: BoardViewProps) {
           onBoardBackground={props.onBoardBackground}
           projectBudgets={config?.projectBudgets ?? null}
           onProjectBudget={props.onProjectBudget}
+          projects={props.board.projects}
+          companies={config?.companies ?? null}
+          projectCompanies={config?.projectCompanies ?? null}
+          onConfig={props.onConfig}
+          // O demo não tem empresa: volta para "Todas", senão a sala dele ficaria escondida.
+          onOpenProject={(projectId) => {
+            setTab(TAB_ALL);
+            props.onProjectCreated(projectId);
+          }}
         />
+        <CompanyTabs
+          config={config}
+          companyOf={companyOf}
+          inbox={props.inbox.items}
+          value={tab}
+          onChange={setTab}
+          onConfig={props.onConfig}
+          onNewProject={() => props.onNewProject(tab === TAB_ALL || tab === TAB_NONE ? null : tab)}
+        />
+        {tab !== TAB_ALL && !board.projects.length && <p className="muted small company-empty">{t('office.emptyTab')}</p>}
       </Panel>
       <Panel position="bottom-right" className="legend">
         <span className="legend-item legend-project">{t('board.legendProject')}</span>

@@ -36,6 +36,8 @@ import { employeeName } from './format';
 import { t } from './i18n';
 import { useInbox } from './inbox/useInbox';
 import { AgentForm, type AgentFormTarget } from './staff/AgentForm';
+import { NewProjectForm } from './office/NewProjectForm';
+import { ProjectOffice } from './office/ProjectOffice';
 import { StaffForm, type StaffFormMode } from './staff/HireForm';
 import { TasksBoard } from './tasks/TasksBoard';
 
@@ -75,6 +77,8 @@ export function App() {
   const [animations, setAnimations] = useState(readAnimations);
   const [form, setForm] = useState<{ projectId: string; mode: StaffFormMode } | null>(null);
   const [agentForm, setAgentForm] = useState<AgentFormTarget | null>(null);
+  /** "+ projeto" das abas: a empresa da aba de onde veio. */
+  const [newProject, setNewProject] = useState<{ companyId: string | null } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   /** Quadro de tarefas aberto (id do projeto). */
   const [tasksFor, setTasksFor] = useState<string | null>(null);
@@ -181,6 +185,13 @@ export function App() {
     setConfig(await api.saveConfig({ projectBudgets: { [projectId]: budget } }));
   useBoardBackground(config?.boardBackground);
 
+  /** Projeto novo (ou o demo): recarrega o quadro e o config (a empresa dele) e abre a sala. */
+  const projectCreated = (projectId: string) => {
+    load();
+    void api.config().then(setConfig, () => {});
+    setSelectedId(projectNodeId(projectId));
+  };
+
   const archive = async (kind: 'project' | 'session', id: string, archived: boolean) => {
     setConfig(await api.archive(kind, id, archived));
     if (archived && !showArchived) setSelectedId(null);
@@ -221,6 +232,9 @@ export function App() {
             onProjectColor={saveProjectColor}
             onBoardBackground={saveBoardBackground}
             onProjectBudget={saveProjectBudget}
+            onConfig={setConfig}
+            onNewProject={(companyId) => setNewProject({ companyId })}
+            onProjectCreated={projectCreated}
             images={board.images}
             onHireFrom={(projectId, managerId) =>
               setForm({ projectId, mode: { kind: 'hire', reportsTo: managerId ? [managerId] : [] } })
@@ -287,6 +301,7 @@ export function App() {
             <ProjectPanel
               onTasks={() => setTasksFor(selection.id)}
               tasks={taskSummary[selection.id] ?? null}
+              office={<ProjectOffice projectId={selection.id} config={config} onConfig={setConfig} />}
               onNewAgent={() => setAgentForm({ scope: 'project', projectId: selection.id })}
               onEditAgent={(name) => setAgentForm({ scope: 'project', projectId: selection.id, name })}
               id={selection.id}
@@ -361,6 +376,17 @@ export function App() {
           )}
           {selection.kind === 'skill' && <SkillPanel skill={selection.skill} />}
         </aside>
+      )}
+      {newProject && (
+        <NewProjectForm
+          companies={config?.companies ?? []}
+          companyId={newProject.companyId}
+          onClose={() => setNewProject(null)}
+          onCreated={(projectId) => {
+            setNewProject(null);
+            projectCreated(projectId);
+          }}
+        />
       )}
       {agentForm && (
         <AgentForm

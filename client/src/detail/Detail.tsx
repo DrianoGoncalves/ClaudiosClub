@@ -528,7 +528,10 @@ export function ProjectPanel({
   onEditAgent,
   onTasks,
   tasks,
+  office,
 }: {
+  /** Empresa e servidores do projeto (ver office/ProjectOffice.tsx). */
+  office?: React.ReactNode;
   onNewAgent?: () => void;
   onEditAgent?: (name: string) => void;
   /** Abre o quadro de tarefas do projeto. */
@@ -609,6 +612,7 @@ export function ProjectPanel({
           {project.worktreeOf ? t('detail.worktreeRoomNote') : t('detail.roomColorNote')}
         </p>
       </section>
+      {project.exists && !project.worktreeOf && office}
       {project.exists && <ImagePicker image={image} onChange={onImage} />}
       <SessionList sessions={sessions} costs={cost?.sessions ?? {}} totalUsd={totalUsd} />
       <AgentList

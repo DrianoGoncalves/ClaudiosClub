@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import type { BoardBackground, ProjectColor, SendPriority, UiLevel, UsageStop } from '../../../shared/model';
+import type { AppConfig, BoardBackground, Company, Project, ProjectColor, SendPriority, UiLevel, UsageStop } from '../../../shared/model';
+import { CompaniesEditor, DemoButton } from '../office/CompaniesSettings';
 import { api } from '../api';
 import { BackgroundPicker, RoomColorPicker, useSystemTheme } from '../board/colors';
 import { useChatDetail } from '../chat/chatDetail';
@@ -35,6 +36,14 @@ interface Props {
   /** Orçamento por projeto: % da cota de 7 dias. */
   projectBudgets: Record<string, number> | null;
   onProjectBudget: (projectId: string, budget: number | null) => Promise<void>;
+  /** Todos os projetos (o demo já existe?). */
+  projects: Project[];
+  /** Empresas (abas do quadro) e a de cada projeto. */
+  companies: Company[] | null;
+  projectCompanies: Record<string, string> | null;
+  onConfig: (config: AppConfig) => void;
+  /** Abre a sala de um projeto (o demo, depois de criado). */
+  onOpenProject: (projectId: string) => void;
 }
 
 type GroupId = 'board' | 'look' | 'chat' | 'roles' | 'usage';
@@ -295,6 +304,47 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       keywords: t('toolbar.worktreesKeywords'),
       toggle: { checked: p.showWorktrees, onChange: p.onToggleWorktrees },
       advanced: true,
+    },
+    ...(p.companies && p.projectCompanies
+      ? [
+          {
+            id: 'companies',
+            group: 'board' as const,
+            title: t('office.companiesTitle'),
+            description: t('office.companiesDesc'),
+            keywords: t('office.companiesKeywords'),
+            control: <CompaniesEditor companies={p.companies} projectCompanies={p.projectCompanies} onConfig={p.onConfig} />,
+          },
+        ]
+      : []),
+    {
+      id: 'demo',
+      group: 'board',
+      title: t('office.demoTitle'),
+      description: t('office.demoDesc'),
+      keywords: t('office.demoKeywords'),
+      control: (() => {
+        const demo = p.projects.find((x) => /[\\/]\.myco[\\/]demo[\\/]cafe-demo$/i.test(x.path));
+        return demo ? (
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              close();
+              p.onOpenProject(demo.id);
+            }}
+          >
+            {t('office.demoOpen')}
+          </button>
+        ) : (
+          <DemoButton
+            onOpen={(id) => {
+              close();
+              p.onOpenProject(id);
+            }}
+          />
+        );
+      })(),
     },
     {
       id: 'archived',
