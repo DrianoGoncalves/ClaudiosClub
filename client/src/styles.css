@@ -761,6 +761,7 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
 .drawer-close:hover { color: var(--ink); }
 /* Abas no painel lateral (ex.: ranking): as mesmas da ficha, na medida do padding do painel. */
 .drawer .tabs { top: -18px; margin: 12px -20px 0; padding: 4px 20px 0; }
+.drawer .chat-more .tabs { margin-top: 0; }
 /* Painel do funcionário: a conversa ocupa a altura toda; só a lista de mensagens rola e a caixa fica fixa embaixo.
    O painel não rola: em janela baixa, quem cede é o topo (avisos), que rola sozinho. */
 .drawer-chat { display: flex; flex-direction: column; overflow: hidden; }

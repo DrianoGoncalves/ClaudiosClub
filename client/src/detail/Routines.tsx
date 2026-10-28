@@ -3,6 +3,7 @@ import { cronError, describeCron, nextRun, parseCron } from '../../../shared/cro
 import type { Routine, RoutineRun, StaffProfile } from '../../../shared/model';
 import { api } from '../api';
 import { formatAgo } from '../format';
+import { t, locale } from '../i18n';
 
 // Rotinas do funcionário: no horário, o MyCo manda a mensagem para ele, como se você tivesse digitado.
 // Só rodam com o MyCo ligado (npm run daily / autostart).
@@ -22,7 +23,15 @@ interface Draft {
   enabled: boolean;
 }
 
-const WEEKDAYS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+const WEEKDAYS = [
+  t('detail.weekdaySun'),
+  t('detail.weekdayMon'),
+  t('detail.weekdayTue'),
+  t('detail.weekdayWed'),
+  t('detail.weekdayThu'),
+  t('detail.weekdayFri'),
+  t('detail.weekdaySat'),
+];
 
 const newId = () => `r-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -98,7 +107,7 @@ export function Routines({ projectId, staff, onChanged }: { projectId: string; s
     if (!editing) return;
     const schedule = toCron(editing);
     const err = cronError(schedule);
-    if (err) return setError(`Horário: ${err}`);
+    if (err) return setError(t('detail.scheduleError', { err }));
     const r: Routine = { id: editing.id, name: editing.name.trim(), schedule, message: editing.message.trim(), mode: editing.mode, enabled: editing.enabled };
     const exists = list.some((x) => x.id === r.id);
     if (await save(exists ? list.map((x) => (x.id === r.id ? r : x)) : [...list, r])) setEditing(null);
@@ -110,7 +119,14 @@ export function Routines({ projectId, staff, onChanged }: { projectId: string; s
     setNotice(null);
     try {
       const out = await api.runRoutine(projectId, staff.id, r.id);
-      setNotice(out ? `"${r.name}": ${out.ok ? out.text : `não rodou (${out.text.replace(/^pulada: /, '')})`}` : 'Rotina não encontrada.');
+      setNotice(
+        out
+          ? t('detail.routineResult', {
+              name: r.name,
+              result: out.ok ? out.text : t('detail.routineNotRun', { reason: out.text.replace(/^pulada: /, '') }),
+            })
+          : t('detail.routineNotFound'),
+      );
       api.routineState().then(setRuns, () => {});
     } catch (e) {
       setError((e as Error).message);
@@ -121,9 +137,7 @@ export function Routines({ projectId, staff, onChanged }: { projectId: string; s
 
   return (
     <div className="routines">
-      {list.length === 0 && !editing && (
-        <p className="muted small">Nenhuma rotina. Ex.: "dias úteis às 19:00 — revise os PRs abertos e me diga o que precisa de mim".</p>
-      )}
+      {list.length === 0 && !editing && <p className="muted small">{t('detail.routinesEmpty')}</p>}
       <ul className="routine-list">
         {list.map((r) => {
           const run = runs[`${projectId}:${staff.id}:${r.id}`];
@@ -136,7 +150,7 @@ export function Routines({ projectId, staff, onChanged }: { projectId: string; s
           return (
             <li key={r.id} className={r.enabled ? '' : 'is-off'}>
               <div className="routine-head">
-                <label className="check" title={r.enabled ? 'Ligada: roda no horário' : 'Desligada: não roda'}>
+                <label className="check" title={r.enabled ? t('detail.routineOn') : t('detail.routineOff')}>
                   <input
                     type="checkbox"
                     checked={r.enabled}
@@ -149,28 +163,34 @@ export function Routines({ projectId, staff, onChanged }: { projectId: string; s
               </div>
               <p className="routine-message small">{r.message}</p>
               <p className="muted small">
-                {r.enabled && next ? `próxima: ${next.toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : 'desligada'}
+                {r.enabled && next
+                  ? t('detail.routineNext', { when: next.toLocaleString(locale(), { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) })
+                  : t('detail.off')}
                 {' · '}
-                {r.mode === 'continue' ? 'na última conversa' : 'numa conversa nova'}
+                {r.mode === 'continue' ? t('detail.inLastConv') : t('detail.inNewConv')}
                 {run && (
                   <span className={run.ok ? '' : 'routine-fail'}>
-                    {' · '}última: {formatAgo(now - Date.parse(run.at))} ({run.ok ? run.text : run.text.replace(/^pulada: /, 'pulada, ')})
+                    {' · '}
+                    {t('detail.lastRun', {
+                      ago: formatAgo(now - Date.parse(run.at)),
+                      text: run.ok ? run.text : run.text.replace(/^pulada: /, `${t('detail.skipped')}, `),
+                    })}
                   </span>
                 )}
               </p>
               <p className="actions">
-                <button className="btn-secondary" disabled={busy} onClick={() => void runNow(r)} title="Manda a mensagem agora, sem esperar o horário">
-                  Rodar agora
+                <button className="btn-secondary" disabled={busy} onClick={() => void runNow(r)} title={t('detail.runNowTitle')}>
+                  {t('detail.runNow')}
                 </button>
                 <button className="btn-secondary" disabled={busy} onClick={() => setEditing(fromRoutine(r))}>
-                  Editar
+                  {t('detail.edit')}
                 </button>
                 <button
                   className="btn-secondary"
                   disabled={busy}
-                  onClick={() => window.confirm(`Apagar a rotina "${r.name}"?`) && void save(list.filter((x) => x.id !== r.id))}
+                  onClick={() => window.confirm(t('detail.deleteRoutineConfirm', { name: r.name })) && void save(list.filter((x) => x.id !== r.id))}
                 >
-                  Apagar
+                  {t('detail.deleteRoutine')}
                 </button>
               </p>
             </li>
@@ -187,23 +207,23 @@ export function Routines({ projectId, staff, onChanged }: { projectId: string; s
           }}
         >
           <label>
-            Nome
-            <input value={editing.name} maxLength={60} placeholder="Revisar PRs" onChange={(e) => setEditing({ ...editing, name: e.target.value })} required />
+            {t('detail.name')}
+            <input value={editing.name} maxLength={60} placeholder={t('detail.namePlaceholder')} onChange={(e) => setEditing({ ...editing, name: e.target.value })} required />
           </label>
           <div className="routine-when">
             <label>
-              Quando
+              {t('detail.when')}
               <select value={editing.when} onChange={(e) => setEditing({ ...editing, when: e.target.value as When })}>
-                <option value="daily">todo dia</option>
-                <option value="weekdays">dias úteis (seg a sex)</option>
-                <option value="weekly">uma vez por semana</option>
-                <option value="every">a cada N minutos</option>
-                <option value="custom">personalizado (cron)</option>
+                <option value="daily">{t('detail.whenDaily')}</option>
+                <option value="weekdays">{t('detail.whenWeekdays')}</option>
+                <option value="weekly">{t('detail.whenWeekly')}</option>
+                <option value="every">{t('detail.whenEvery')}</option>
+                <option value="custom">{t('detail.whenCustom')}</option>
               </select>
             </label>
             {editing.when === 'weekly' && (
               <label>
-                Dia
+                {t('detail.day')}
                 <select value={editing.weekday} onChange={(e) => setEditing({ ...editing, weekday: e.target.value })}>
                   {WEEKDAYS.map((d, i) => (
                     <option key={d} value={String(i)}>
@@ -215,18 +235,18 @@ export function Routines({ projectId, staff, onChanged }: { projectId: string; s
             )}
             {(editing.when === 'daily' || editing.when === 'weekdays' || editing.when === 'weekly') && (
               <label>
-                Hora
+                {t('detail.time')}
                 <input type="time" value={editing.time} onChange={(e) => setEditing({ ...editing, time: e.target.value })} required />
               </label>
             )}
             {editing.when === 'every' && (
               <label>
-                Minutos
+                {t('detail.minutes')}
                 <input type="number" min={5} max={720} value={editing.minutes} onChange={(e) => setEditing({ ...editing, minutes: e.target.value })} />
               </label>
             )}
             {editing.when === 'custom' && (
-              <label title="minuto hora dia-do-mês mês dia-da-semana">
+              <label title={t('detail.cronHint')}>
                 Cron
                 <input className="mono" value={editing.cron} placeholder="0 8 * * 1-5" onChange={(e) => setEditing({ ...editing, cron: e.target.value })} />
               </label>
@@ -236,33 +256,33 @@ export function Routines({ projectId, staff, onChanged }: { projectId: string; s
             {(() => {
               const s = toCron(editing);
               const err = cronError(s);
-              return err ? `Horário: ${err}` : `Roda ${describeCron(s)} (horário deste computador).`;
+              return err ? t('detail.scheduleError', { err }) : t('detail.runsWhen', { when: describeCron(s) });
             })()}
           </p>
           <label>
-            Mensagem
+            {t('detail.message')}
             <textarea
               rows={3}
               value={editing.message}
               maxLength={4000}
-              placeholder="Revise os PRs abertos e me diga o que precisa de mim."
+              placeholder={t('detail.messagePlaceholder')}
               onChange={(e) => setEditing({ ...editing, message: e.target.value })}
               required
             />
           </label>
           <label>
-            Onde
+            {t('detail.where')}
             <select value={editing.mode} onChange={(e) => setEditing({ ...editing, mode: e.target.value as Routine['mode'] })}>
-              <option value="continue">na última conversa (ele lembra do contexto)</option>
-              <option value="new">numa conversa nova (começa do zero, só com a ficha e a memória)</option>
+              <option value="continue">{t('detail.modeContinue')}</option>
+              <option value="new">{t('detail.modeNew')}</option>
             </select>
           </label>
           <p className="actions">
             <button type="submit" className="btn-primary" disabled={busy}>
-              Salvar rotina
+              {t('detail.saveRoutine')}
             </button>
             <button type="button" className="btn-secondary" disabled={busy} onClick={() => setEditing(null)}>
-              Cancelar
+              {t('detail.cancel')}
             </button>
           </p>
         </form>
@@ -270,7 +290,7 @@ export function Routines({ projectId, staff, onChanged }: { projectId: string; s
         list.length < 10 && (
           <p className="actions">
             <button className="btn-secondary" onClick={() => setEditing(fromRoutine(null))}>
-              Nova rotina
+              {t('detail.newRoutine')}
             </button>
           </p>
         )
@@ -278,10 +298,7 @@ export function Routines({ projectId, staff, onChanged }: { projectId: string; s
 
       {notice && <p className="small">{notice}</p>}
       {error && <p className="error small">{error}</p>}
-      <p className="muted small">
-        As travas valem: consumo, orçamento do projeto e a autonomia da ficha (pedidos de permissão esperam você na caixa "precisa de mim"). Só roda com
-        o MyCo ligado.
-      </p>
+      <p className="muted small">{t('detail.routinesNote')}</p>
     </div>
   );
 }

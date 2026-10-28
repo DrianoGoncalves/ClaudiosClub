@@ -10,19 +10,61 @@ self.addEventListener('fetch', (event) => {
   if (event.request.mode !== 'navigate') return;
   event.respondWith(
     fetch(event.request).catch(
-      () => new Response(STOPPED_PAGE, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } }),
+      () => new Response(stoppedPage(), { headers:{ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } }),
     ),
   );
 });
 
 // "Rodar" abre o link myco://start (registrado no Windows por `npm run launcher`) e recarrega assim
 // que o MyCo responder; se ele subir por outro caminho (terminal, outra aba), entra sozinho.
-const STOPPED_PAGE = `<!doctype html>
-<html lang="pt-BR">
+// Textos da tela de parado. O service worker não lê o localStorage do MyCo: vale o idioma do navegador.
+const STOPPED_TEXT = {
+  'pt-BR': {
+    title: 'MyCo parado',
+    status: 'O MyCo está parado.',
+    run: 'Rodar o MyCo',
+    hint: 'Sobe em segundo plano, sem janela. Na primeira vez, o navegador pergunta se pode abrir o MyCo: confirme.',
+    help: 'Nada aconteceu? Rode <code>npm run launcher</code> uma vez na pasta do MyCo (registra este botão) ou suba com <code>npm run daily:start</code>.',
+    starting: 'Subindo o MyCo…',
+    timeout: 'Não subiu em 3 minutos. Veja o log com npm run daily:status.',
+  },
+  en: {
+    title: 'MyCo stopped',
+    status: 'MyCo is stopped.',
+    run: 'Run MyCo',
+    hint: 'It starts in the background, with no window. The first time, the browser asks whether it can open MyCo: confirm.',
+    help: 'Nothing happened? Run <code>npm run launcher</code> once in the MyCo folder (this registers the button) or start it with <code>npm run daily:start</code>.',
+    starting: 'Starting MyCo…',
+    timeout: 'It did not start within 3 minutes. Check the log with npm run daily:status.',
+  },
+  es: {
+    title: 'MyCo detenido',
+    status: 'MyCo está detenido.',
+    run: 'Ejecutar MyCo',
+    hint: 'Se inicia en segundo plano, sin ventana. La primera vez, el navegador pregunta si puede abrir MyCo: confirma.',
+    help: '¿No pasó nada? Ejecuta <code>npm run launcher</code> una vez en la carpeta de MyCo (registra este botón) o inicia con <code>npm run daily:start</code>.',
+    starting: 'Iniciando MyCo…',
+    timeout: 'No se inició en 3 minutos. Revisa el log con npm run daily:status.',
+  },
+};
+
+/** Idioma do navegador (pt, es ou en). */
+function stoppedLocale() {
+  const nav = String((self.navigator && self.navigator.language) || '').toLowerCase();
+  if (nav.startsWith('pt')) return 'pt-BR';
+  if (nav.startsWith('es')) return 'es';
+  return 'en';
+}
+
+function stoppedPage() {
+  const lang = stoppedLocale();
+  const m = STOPPED_TEXT[lang];
+  return `<!doctype html>
+<html lang="${lang}">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>MyCo parado</title>
+    <title>${m.title}</title>
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <style>
       :root { --bg: #f6f3ea; --card: #fffdf8; --ink: #1f2328; --muted: #6b6f76; --line: #ddd6c8; --blue: #2457c5; }
@@ -44,29 +86,29 @@ const STOPPED_PAGE = `<!doctype html>
   <body>
     <main>
       <h1>MyCo</h1>
-      <p id="status">O MyCo está parado.</p>
-      <button id="run" type="button">Rodar o MyCo</button>
-      <p class="muted">Sobe em segundo plano, sem janela. Na primeira vez, o navegador pergunta se pode abrir o MyCo: confirme.</p>
+      <p id="status">${m.status}</p>
+      <button id="run" type="button">${m.run}</button>
+      <p class="muted">${m.hint}</p>
       <p class="muted" id="help" hidden>
-        Nada aconteceu? Rode <code>npm run launcher</code> uma vez na pasta do MyCo (registra este botão) ou suba com
-        <code>npm run daily:start</code>.
+        ${m.help}
       </p>
     </main>
     <script>
+      const T = ${JSON.stringify({ starting: m.starting, timeout: m.timeout })};
       const el = (id) => document.getElementById(id);
       const isUp = () => fetch('/api/health', { cache: 'no-store' }).then((r) => r.ok, () => false);
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
       el('run').addEventListener('click', async () => {
         el('run').disabled = true;
-        el('status').textContent = 'Subindo o MyCo…';
+        el('status').textContent = T.starting;
         location.href = 'myco://start';
         for (let i = 1; i <= 90; i++) {
           await wait(2000);
           if (await isUp()) return location.reload();
           if (i === 8) el('help').hidden = false;
         }
-        el('status').textContent = 'Não subiu em 3 minutos. Veja o log com npm run daily:status.';
+        el('status').textContent = T.timeout;
         el('run').disabled = false;
       });
 
@@ -77,3 +119,4 @@ const STOPPED_PAGE = `<!doctype html>
     </script>
   </body>
 </html>`;
+}

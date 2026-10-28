@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { BrowserStatus } from '../../../shared/model';
 import { api } from '../api';
+import { t } from '../i18n';
 
 // Aviso quando o funcionário usa o navegador e falta a extensão Claude in Chrome ou a ponte do CLI.
 // Não mostra nada se está tudo certo.
@@ -24,19 +25,19 @@ export function BrowserCheck() {
     <div className="badge warn browser-check" role="alert">
       {status.extension === false ? (
         <span>
-          A extensão Claude in Chrome não está instalada. Sem ela, este funcionário não consegue usar o navegador.{' '}
+          {t('staff.extMissing')}{' '}
           <a href={status.installUrl} target="_blank" rel="noreferrer">
-            Instalar na Chrome Web Store
+            {t('staff.installLink')}
           </a>{' '}
-          e entrar com a mesma conta do Claude.
+          {t('staff.signInHint')}
         </span>
       ) : (
         <span>
-          A extensão está instalada, mas a ponte com o CLI ainda não: rode <code>claude --chrome</code> uma vez num terminal e feche.
+          {t('staff.bridgeA')}<code>claude --chrome</code>{t('staff.bridgeB')}
         </span>
       )}{' '}
       <button type="button" className="link" onClick={() => void recheck()} disabled={checking}>
-        {checking ? 'conferindo…' : 'conferir de novo'}
+        {checking ? t('staff.checking') : t('staff.recheck')}
       </button>
     </div>
   );

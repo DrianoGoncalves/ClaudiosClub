@@ -1,4 +1,5 @@
 import { TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
+import { sshConfigFile } from './servers';
 
 // A ficha vira um arquivo Markdown dentro do projeto (.myco/staff/<id>.md), que a sessão lê
 // no começo. Pela linha de comando só vai uma identidade curta apontando para ela: o CLI não
@@ -35,7 +36,9 @@ export interface TeamMember {
 
 /**
  * A equipe de um gestor: o que é da área de alguém vai para essa pessoa, como tarefa do MyCo (fila,
- * quadro, aviso de volta); o executor fica com o trabalho mecânico sem dono.
+ * quadro, aviso de volta); o executor fica com o trabalho mecânico sem dono. A conversa do gestor
+ * costuma ser longa (centenas de milhares de tokens), então cada passo dele custa caro: ele repassa
+ * sem pesquisar o código, não faz o trabalho da área e confere na medida do risco.
  */
 function teamSection(p: StaffProfile, ctx: FichaContext): string {
   if (!ctx.team?.length) return '';
@@ -43,45 +46,58 @@ function teamSection(p: StaffProfile, ctx: FichaContext): string {
   const first = (s: string) => s.split(/(?<=[.!?])\s/)[0]!.slice(0, 200);
   return [
     '## Sua equipe',
-    'Estas pessoas reportam a você. O que for da área de alguém daqui vai para essa pessoa, não para o executor: ela tem a ficha, as regras e a memória dessa área. O executor fica com o trabalho mecânico que não tem dono (ou que a própria pessoa não precisa fazer).',
+    'Estas pessoas reportam a você. O que for da área de alguém daqui vai para essa pessoa, nem para o executor nem para você, mesmo que seja uma correção pequena: ela tem a ficha, as regras e a memória dessa área e trabalha numa conversa curta, enquanto a sua é longa e cada passo seu nela custa mais. O executor fica com o trabalho mecânico que não tem dono.',
     ctx.team.map((m) => `- ${m.name} (${m.role}${m.temporary ? ', temporário' : ''}), id \`${m.id}\`: ${first(m.mission)}`).join('\n'),
-    `Para passar uma tarefa: POST ${api}/tasks com o cabeçalho \`x-myco: 1\` e um JSON com title, description (o que fazer, arquivos, critério de pronto e o que não mexer), staffId (o id da pessoa), requestedBy: "${p.id}" e start: true. A tarefa entra na fila dela (uma por vez) e aparece no quadro de tarefas.`,
-    'Quando a pessoa entregar, o MyCo te avisa (na sua conversa mais recente) com o resumo do que ela disse. Confira (diff, testes) antes de dar como pronto; se faltar algo, peça a ela na conversa da tarefa, não refaça você.',
+    'Repasse sem pesquisar: não leia o código para escrever a tarefa. Mande o pedido do usuário nas palavras dele, o critério de pronto e o que não mexer (com o motivo); cite arquivos só se já souber quais são. Quem é da área acha as linhas. Um pedido com partes de áreas diferentes vira uma tarefa para cada pessoa.',
+    `Para passar uma tarefa: POST ${api}/tasks com o cabeçalho \`x-myco: 1\` e um JSON com title, description (o pedido, o critério de pronto e o que não mexer), staffId (o id da pessoa), requestedBy: "${p.id}" e start: true. A tarefa entra na fila dela (uma por vez) e aparece no quadro de tarefas.`,
+    'Quando a pessoa entregar, o MyCo te avisa (na sua conversa mais recente) com o resumo do que ela disse. Confira na medida do risco: para mudança pequena, `git diff --stat`, o resumo e uma rodada dos testes bastam; abra o diff inteiro só no que for arriscado (segurança, dados, servidor) ou se o --stat não bater com o resumo. Não procure prints nem arquivos dela: se faltar prova, peça. Se faltar algo, peça a ela na conversa da tarefa, não refaça você.',
     `Para ver como estão: GET ${api}/tasks.`,
   ].join('\n');
 }
 
+/** Programas de acesso remoto: quem não tem servidor na ficha não roda nenhum deles. */
+const REMOTE_TOOLS = ['ssh', 'ssh.exe', 'scp', 'scp.exe', 'sftp', 'sftp.exe', 'rsync'];
+
 /**
- * Bloqueios que vão para `--disallowedTools`: o Claude Code recusa a ferramenta antes de ler.
- * Chaves SSH para todo funcionário; para quem acessa servidores, também .env e afins (segredos
- * de produção costumam estar neles). Comparar segredos é com `vps status`, que só mostra o hash.
+ * Bloqueios que vão para `--disallowedTools`: o Claude Code recusa a ferramenta antes de rodar.
+ * Para todos: chaves SSH e a pasta `.vps` (conexões e ssh_config, que só o MyCo edita). Sem
+ * servidor na ficha: os programas de acesso remoto, no Bash e no PowerShell. Com servidor: .env e
+ * afins (segredos de produção costumam estar neles) e os arquivos das chaves das conexões dele.
+ * É uma barreira a mais, não a única: quem tem terminal ainda consegue ler um arquivo por outro
+ * comando; por isso a chave deve ter senha (ssh-agent) ou um usuário sem root no servidor.
  */
-export function secretDenyRules(p: StaffProfile): string[] {
-  const keys = ['Read(~/.ssh/**)', 'Edit(~/.ssh/**)', 'Write(~/.ssh/**)'];
-  if (!p.servers.length) return keys;
-  return [...keys, 'Read(**/.env)', 'Read(**/.env.*)', 'Read(**/*.pem)', 'Read(**/*.key)', 'Edit(**/.env)', 'Edit(**/.env.*)'];
+export function secretDenyRules(p: StaffProfile, keyFiles: string[] = []): string[] {
+  const always = ['Read(~/.ssh/**)', 'Edit(~/.ssh/**)', 'Write(~/.ssh/**)', 'Read(**/.vps/**)', 'Edit(**/.vps/**)', 'Write(**/.vps/**)'];
+  if (!p.servers.length) return [...always, ...REMOTE_TOOLS.flatMap((t) => [`Bash(${t}:*)`, `PowerShell(${t}:*)`])];
+  // No Windows as regras usam o caminho em forma POSIX: C:/x → //c/x. Com espaço, a lista da linha
+  // de comando quebraria a regra: fica só o bloqueio por nome (*.pem, *.key) e o de ~/.ssh.
+  const keys = keyFiles
+    .map((f) => f.replace(/\\/g, '/').replace(/^([A-Za-z]):\//, (_, d: string) => `//${d.toLowerCase()}/`))
+    .filter((f) => !/\s/.test(f))
+    .map((f) => `Read(${f.startsWith('//') ? f : `/${f}`})`);
+  return [...always, 'Read(**/.env)', 'Read(**/.env.*)', 'Read(**/*.pem)', 'Read(**/*.key)', 'Edit(**/.env)', 'Edit(**/.env.*)', ...keys];
 }
 
 function serversSection(p: StaffProfile, ctx: FichaContext): string {
   if (!p.servers.length) return '';
+  const config = sshConfigFile(ctx.projectPath).replace(/\\/g, '/');
   const known = new Map((ctx.servers ?? []).map((s) => [s.name, s]));
   const lines = p.servers.map((name) => {
     const s = known.get(name);
-    if (!s) return `- \`${name}\` (não encontrado nesta máquina: avise o usuário antes de tentar)`;
-    const where = s.remoteRoot ? `, projeto em \`${s.remoteRoot}\`` : '';
-    return s.source === 'vps'
-      ? `- \`${name}\`: conexão da skill vps (host \`${s.host}\`${where})`
-      : `- \`${name}\`: \`ssh ${s.host}\``;
+    if (!s) return `- \`${name}\` (a conexão não existe mais no projeto: avise o usuário antes de tentar)`;
+    return `- \`${name}\`: ${s.host}${s.remoteRoot ? `, projeto em \`${s.remoteRoot}\`` : ''}`;
   });
+  const vps = p.skills.includes('vps') ? ' Ou a skill `vps` (push, pull, status), que usa as mesmas conexões.' : '';
   return [
     '## Servidores',
-    'Você pode acessar só estes servidores, sempre pelo apelido:',
+    'Você pode acessar só estas conexões do projeto, sempre pelo nome:',
     lines.join('\n'),
     [
       '### Acesso seguro',
-      '- A autenticação é por chave SSH, guardada no ssh-agent e no `~/.ssh/config`. Você nunca vê, pede, copia ou gera chaves e senhas. Se o acesso falhar por autenticação, pare e avise o usuário: não tente outra forma.',
-      '- Rode comandos remotos um por vez: `ssh -o BatchMode=yes <apelido> "<comando>"`. Para enviar ou baixar arquivos, use a skill `vps` (push, pull, status).',
-      '- Nunca exiba no chat o conteúdo de `.env`, chaves, tokens ou senhas, nem os grave na memória. Para saber se um segredo local e o do servidor batem, use `vps status` (compara só o hash).',
+      `- Comando remoto, um por vez: \`ssh -F "${config}" <conexão> "<comando>"\`. O arquivo é gerado pelo MyCo: não leia, não edite e não use outra configuração.`,
+      `- Arquivos: \`scp -F "${config}" <local> <conexão>:<caminho>\` para enviar (com backup do que for sobrescrito no servidor) e o contrário para baixar.${vps}`,
+      '- A chave fica no computador do usuário e é o MyCo que aponta para ela. Você nunca lê, pede, copia, mostra ou gera chaves e senhas. Se a conexão falhar por autenticação, pare e avise o usuário: não tente outra forma.',
+      '- Nunca exiba no chat o conteúdo de `.env`, chaves, tokens ou senhas, nem os grave na memória. Para saber se um segredo local e o do servidor batem, compare só o hash (`sha256sum` no servidor, `Get-FileHash` aqui).',
       '- Um servidor pode ter mais de um projeto: confirme a pasta e o serviço do projeto antes de agir, e não mexa nos outros sites.',
     ].join('\n'),
     [
@@ -137,7 +153,7 @@ function playbookSection(p: StaffProfile, ctx?: FichaContext): string {
   return [
     `## Roteiro: ${pb.title}`,
     pb.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'),
-    ctx?.team?.length ? 'Antes de chamar o executor: se a tarefa é da área de alguém da sua equipe, ela vai para essa pessoa (veja "Sua equipe").' : '',
+    ctx?.team?.length ? 'Antes de chamar o executor (ou de fazer você mesmo): se a tarefa é da área de alguém da sua equipe, ela vai para essa pessoa (veja "Sua equipe").' : '',
     'Ao delegar: chame os agents em primeiro plano (para rodar em paralelo, várias chamadas na mesma mensagem) e confira cada entrega antes de seguir. Peça respostas curtas (o que mudou ou o que achou, com arquivo:linha, e o que não deu para fazer), nunca arquivos inteiros colados. Quem você chama não chama outros agents: dividir o trabalho é com você. Se o agent do roteiro não existir no projeto, avise o usuário em vez de improvisar.',
   ]
     .filter(Boolean)
@@ -198,6 +214,10 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     `## Conhecimento (leia antes de começar)\n${list(p.knowledge, 'Nada específico além do CLAUDE.md do projeto.')}`,
     `## Regras\n${list(p.rules, 'Siga o CLAUDE.md do projeto.')}`,
     p.doneWhen ? `## Definição de pronto\n${p.doneWhen}` : '',
+    // Quem pediu confere pela entrega: com as provas nela, não precisa abrir tudo de novo.
+    ctx.managerNames.length
+      ? '## Entrega\nAo terminar uma tarefa que o seu gestor passou, a sua última mensagem é a entrega: o MyCo manda para quem pediu. Seja curto e traga as provas: o que mudou (arquivos), os testes que rodou e o resultado, onde estão os prints (caminho) e o que não verificou.'
+      : '',
     playbookSection(p, ctx),
     serversSection(p, ctx),
     browserSection(p),
@@ -277,6 +297,8 @@ export interface ClaudeArgsOptions {
   forkFrom?: string;
   /** Pastas fora do diretório de trabalho que a sessão pode ler (a ficha, quando roda numa worktree). */
   addDirs?: string[];
+  /** Chaves SSH das conexões da ficha, para bloquear a leitura (ver secretDenyRules). */
+  keyFiles?: string[];
 }
 
 /**
@@ -302,7 +324,7 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   if (o.addDirs?.length) args.push('--add-dir', ...o.addDirs);
   // Explícito nos dois sentidos: sem a opção, nem a configuração do usuário liga o Chrome.
   args.push(p.browser ? '--chrome' : '--no-chrome');
-  args.push('--disallowedTools', secretDenyRules(p).join(','));
+  args.push('--disallowedTools', secretDenyRules(p, o.keyFiles).join(','));
   if (o.mcpConfigPath) args.push('--mcp-config', o.mcpConfigPath, '--strict-mcp-config');
   return args;
 }

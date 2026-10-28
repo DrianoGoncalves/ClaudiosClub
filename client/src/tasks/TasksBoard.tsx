@@ -3,6 +3,7 @@ import { TASK_STATUSES, type CostReport, type StaffProfile, type Task, type Task
 import { api, withUsageConfirm } from '../api';
 import { Markdown } from '../chat/markdown';
 import { formatAgo, formatShare } from '../format';
+import { t, locale } from '../i18n';
 import { BranchIcon } from '../icons';
 import { TaskCodePanel } from './TaskCodePanel';
 
@@ -10,22 +11,44 @@ import { TaskCodePanel } from './TaskCodePanel';
 // Arrastar um cartão muda a coluna; o resto anda sozinho com a conversa da tarefa (ver server/tasks.ts).
 
 const LABEL: Record<TaskStatus, string> = {
-  todo: 'A fazer',
-  planning: 'Planejando',
-  doing: 'Fazendo',
-  review: 'Revisão',
-  done: 'Pronto',
-  live: 'No ar',
+  todo: t('tasks.statusTodo'),
+  planning: t('tasks.statusPlanning'),
+  doing: t('tasks.statusDoing'),
+  review: t('tasks.statusReview'),
+  done: t('tasks.statusDone'),
+  live: t('tasks.statusLive'),
 };
 
 const HELP: Record<TaskStatus, string> = {
-  todo: 'Ainda não começou. As que estão na fila começam sozinhas, uma por vez, quando o funcionário entrega a atual.',
-  planning: 'Ele está montando o plano; você aprova no cartão de plano do chat.',
-  doing: 'Trabalhando. Quando o turno terminar, vai para revisão.',
-  review: 'Ele terminou um turno: confira a entrega. Responder na conversa traz de volta para "fazendo".',
-  done: 'Entregue e conferido.',
-  live: 'Publicado (deploy feito).',
+  todo: t('tasks.helpTodo'),
+  planning: t('tasks.helpPlanning'),
+  doing: t('tasks.helpDoing'),
+  review: t('tasks.helpReview'),
+  done: t('tasks.helpDone'),
+  live: t('tasks.helpLive'),
 };
+
+/**
+ * Funcionários na ordem da hierarquia: quem reporta a você primeiro, depois os subordinados
+ * (pelo primeiro gestor, como no organograma). No mesmo nível, orquestrador antes; depois por nome.
+ */
+export function byHierarchy(staff: StaffProfile[]): StaffProfile[] {
+  const byId = new Map(staff.map((s) => [s.id, s]));
+  const depth = (s: StaffProfile) => {
+    const seen = new Set([s.id]);
+    let d = 0;
+    for (let m = byId.get(s.reportsTo[0] ?? ''); m && !seen.has(m.id); m = byId.get(m.reportsTo[0] ?? '')) {
+      seen.add(m.id);
+      d++;
+    }
+    return d;
+  };
+  const orch = (s: StaffProfile) => (/orquestr/i.test(s.role) ? 0 : 1);
+  return staff
+    .map((s) => ({ s, d: depth(s) }))
+    .sort((a, b) => a.d - b.d || orch(a.s) - orch(b.s) || a.s.name.localeCompare(b.s.name, 'pt-BR'))
+    .map((x) => x.s);
+}
 
 interface Props {
   projectId: string;
@@ -97,28 +120,28 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal tasks-modal" role="dialog" aria-label={`Tarefas de ${projectName}`}>
+      <div className="modal tasks-modal" role="dialog" aria-label={t('tasks.dialogLabel', { name: projectName })}>
         <header className="tasks-head">
-          <h2>Tarefas · {projectName}</h2>
+          <h2>{t('tasks.title', { name: projectName })}</h2>
           {lastDeploy && (
-            <span className="muted small tasks-last-deploy" title={`Último deploy: ${new Date(lastDeploy.at).toLocaleString('pt-BR')}`}>
-              último deploy {formatAgo(now - Date.parse(lastDeploy.at))}: {lastDeploy.title}
-              {lastDeploy.by && ` (por ${staff.find((s) => s.id === lastDeploy.by)?.name ?? lastDeploy.by})`}
+            <span className="muted small tasks-last-deploy" title={t('tasks.lastDeployTitle', { at: new Date(lastDeploy.at).toLocaleString(locale()) })}>
+              {t('tasks.lastDeploy', { ago: formatAgo(now - Date.parse(lastDeploy.at)), title: lastDeploy.title })}
+              {lastDeploy.by && ` (${t('tasks.byWho', { name: staff.find((s) => s.id === lastDeploy.by)?.name ?? lastDeploy.by })})`}
             </span>
           )}
           <span className="tasks-head-actions">
             <button className="btn-primary" onClick={() => setAdding(true)}>
-              Nova tarefa
+              {t('tasks.newTask')}
             </button>
-            <button className="btn-secondary" onClick={onClose} aria-label="Fechar">
-              Fechar
+            <button className="btn-secondary" onClick={onClose} aria-label={t('tasks.close')}>
+              {t('tasks.close')}
             </button>
           </span>
         </header>
         {error && <p className="error small">{error}</p>}
         {adding && (
           <TaskForm
-            staff={staff}
+            staff={byHierarchy(staff)}
             onCancel={() => setAdding(false)}
             onSave={async (input, andStart) => {
               await act(async () => {
@@ -130,7 +153,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
           />
         )}
         {!tasks ? (
-          <p className="muted">Carregando…</p>
+          <p className="muted">{t('tasks.loading')}</p>
         ) : (
           <div className="tasks-columns">
             {TASK_STATUSES.map((status) => {
@@ -155,34 +178,34 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                   <h3 title={HELP[status]}>
                     {LABEL[status]} <span className="muted">{col.length || ''}</span>
                   </h3>
-                  {col.map((t) => (
+                  {col.map((task) => (
                     <button
-                      key={t.id}
-                      className={`task-card ${selected === t.id ? 'is-selected' : ''}`}
+                      key={task.id}
+                      className={`task-card ${selected === task.id ? 'is-selected' : ''}`}
                       draggable
-                      onDragStart={() => setDragging(t.id)}
+                      onDragStart={() => setDragging(task.id)}
                       onDragEnd={() => setDragging(null)}
-                      onClick={() => setSelected(t.id)}
+                      onClick={() => setSelected(task.id)}
                     >
-                      <span className="task-title">{t.title}</span>
+                      <span className="task-title">{task.title}</span>
                       <span className="task-meta muted small">
-                        {nameOf(t.staffId) ?? 'sem responsável'}
-                        {t.requestedBy && ` · pedida por ${nameOf(t.requestedBy) ?? t.requestedBy}`}
-                        {costOf(t) && ` · ${costOf(t)}`} · {formatAgo(now - Date.parse(t.updatedAt))}
+                        {nameOf(task.staffId) ?? t('tasks.noOwner')}
+                        {task.requestedBy && ` · ${t('tasks.requestedBy', { name: nameOf(task.requestedBy) ?? task.requestedBy })}`}
+                        {costOf(task) && ` · ${costOf(task)}`} · {formatAgo(now - Date.parse(task.updatedAt))}
                       </span>
-                      {t.branch && (
+                      {task.branch && (
                         <span className="task-branch small">
-                          <BranchIcon /> {t.branch}
+                          <BranchIcon /> {task.branch}
                         </span>
                       )}
-                      {queuePos(t) > 0 && (
-                        <span className="task-queue small" title="Começa sozinha quando ele entregar a atual">
-                          na fila · {queuePos(t)}ª
+                      {queuePos(task) > 0 && (
+                        <span className="task-queue small" title={t('tasks.queuedHint')}>
+                          {t('tasks.queuePos', { pos: queuePos(task) })}
                         </span>
                       )}
-                      {!!t.held?.length && (
-                        <span className="task-queue small" title="Suas mensagens vão quando ele terminar a tarefa em que está">
-                          {t.held.length} {t.held.length === 1 ? 'ajuste esperando' : 'ajustes esperando'}
+                      {!!task.held?.length && (
+                        <span className="task-queue small" title={t('tasks.heldHint')}>
+                          {t(task.held.length === 1 ? 'tasks.heldOne' : 'tasks.heldOther', { n: task.held.length })}
                         </span>
                       )}
                     </button>
@@ -213,7 +236,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             onUnqueue={() => void act(() => api.updateTask(projectId, current.id, { queued: false }))}
             onOpen={() => current.staffId && onOpenStaff(current.staffId)}
             onDelete={() =>
-              window.confirm(`Apagar a tarefa "${current.title}"? A conversa dela continua no funcionário.`) &&
+              window.confirm(t('tasks.confirmDelete', { title: current.title })) &&
               void act(async () => {
                 await api.deleteTask(projectId, current.id);
                 setSelected(null);
@@ -254,17 +277,17 @@ function TaskForm({
       }}
     >
       <label>
-        Título
-        <input value={title} maxLength={120} autoFocus placeholder="Botão de exportar CSV no relatório" onChange={(e) => setTitle(e.target.value)} />
+        {t('tasks.fieldTitle')}
+        <input value={title} maxLength={120} autoFocus placeholder={t('tasks.titlePlaceholder')} onChange={(e) => setTitle(e.target.value)} />
       </label>
       <label>
-        O que precisa ser feito
-        <textarea rows={3} value={description} maxLength={8000} placeholder="Contexto, critérios de pronto, links…" onChange={(e) => setDescription(e.target.value)} />
+        {t('tasks.fieldDescription')}
+        <textarea rows={3} value={description} maxLength={8000} placeholder={t('tasks.descPlaceholder')} onChange={(e) => setDescription(e.target.value)} />
       </label>
       <label>
-        Quem cuida
+        {t('tasks.fieldOwner')}
         <select value={staffId} onChange={(e) => setStaffId(e.target.value)}>
-          <option value="">ninguém por enquanto</option>
+          <option value="">{t('tasks.nobodyYet')}</option>
           {staff.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name} — {s.role}
@@ -273,14 +296,14 @@ function TaskForm({
         </select>
       </label>
       <p className="actions">
-        <button type="submit" className="btn-primary" disabled={busy || !title.trim() || !staffId} title="Cria e já manda para ele, numa conversa nova (ocupado com outra tarefa, entra na fila dele)">
-          Criar e começar
+        <button type="submit" className="btn-primary" disabled={busy || !title.trim() || !staffId} title={t('tasks.createHint')}>
+          {t('tasks.createAndStart')}
         </button>
         <button type="button" className="btn-secondary" disabled={busy || !title.trim()} onClick={() => void submit(false)}>
-          Só criar
+          {t('tasks.createOnly')}
         </button>
         <button type="button" className="btn-secondary" disabled={busy} onClick={onCancel}>
-          Cancelar
+          {t('tasks.cancel')}
         </button>
       </p>
     </form>
@@ -330,28 +353,28 @@ function TaskDetail({
     <aside className="task-detail">
       <header className="task-detail-head">
         <span className="kicker">{LABEL[task.status]}</span>
-        <button className="btn-secondary" onClick={onClose} aria-label="Fechar detalhes">
+        <button className="btn-secondary" onClick={onClose} aria-label={t('tasks.closeDetails')}>
           ×
         </button>
       </header>
       <label>
-        Título
+        {t('tasks.fieldTitle')}
         <input value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} />
       </label>
       <label>
-        Descrição
+        {t('tasks.description')}
         <textarea rows={4} value={description} maxLength={8000} onChange={(e) => setDescription(e.target.value)} />
       </label>
       <label>
-        Quem cuida
+        {t('tasks.fieldOwner')}
         <select
           value={task.staffId ?? ''}
           disabled={!!task.sessionId}
-          title={task.sessionId ? 'A tarefa já começou com este funcionário' : undefined}
+          title={task.sessionId ? t('tasks.ownerLocked') : undefined}
           onChange={(e) => void onSave({ staffId: e.target.value || null })}
         >
-          <option value="">ninguém</option>
-          {staff.map((s) => (
+          <option value="">{t('tasks.nobody')}</option>
+          {byHierarchy(staff).map((s) => (
             <option key={s.id} value={s.id}>
               {s.name} — {s.role}
             </option>
@@ -365,7 +388,7 @@ function TaskDetail({
       {dirty && (
         <p className="actions">
           <button className="btn-primary" onClick={() => void onSave({ title, description, pr: pr || null })}>
-            Salvar
+            {t('tasks.save')}
           </button>
         </p>
       )}
@@ -375,27 +398,30 @@ function TaskDetail({
             <BranchIcon /> {task.branch} ·{' '}
           </>
         )}
-        {cost ? `${cost} do consumo` : 'sem consumo ainda'}
+        {cost ? t('tasks.costSuffix', { cost }) : t('tasks.noCostYet')}
         {task.pr && (
           <>
             {' · '}
             <a href={task.pr} target="_blank" rel="noreferrer">
-              abrir o PR
+              {t('tasks.openPr')}
             </a>
           </>
         )}
       </p>
       {queuePos > 0 && (
         <p className="muted small">
-          Na fila de {who?.name ?? 'quem cuida'} ({queuePos}ª){busyWith ? `: começa quando ele entregar “${busyWith.title}”.` : ': começa assim que ele ficar livre.'}{' '}
+          {busyWith
+            ? t('tasks.queueBusy', { who: who?.name ?? t('tasks.ownerFallback'), pos: queuePos, title: busyWith.title })
+            : t('tasks.queueFree', { who: who?.name ?? t('tasks.ownerFallback'), pos: queuePos })}{' '}
           <button className="link small" onClick={onUnqueue}>
-            tirar da fila
+            {t('tasks.unqueue')}
           </button>
         </p>
       )}
       {!!task.held?.length && (
         <p className="muted small">
-          {task.held.length === 1 ? 'Um ajuste seu está guardado' : `${task.held.length} ajustes seus estão guardados`}: {task.held[0]!.reason}. Vai antes da próxima da fila.
+          {task.held.length === 1 ? t('tasks.heldMineOne') : t('tasks.heldMineOther', { n: task.held.length })}: {task.held[0]!.reason}.{' '}
+          {t('tasks.heldNext')}
         </p>
       )}
       <p className="actions">
@@ -406,59 +432,60 @@ function TaskDetail({
             onClick={onStart}
             title={
               !task.staffId
-                ? 'Escolha quem cuida'
+                ? t('tasks.pickOwner')
                 : busyWith
-                  ? `${who?.name} está em “${busyWith.title}”: entra na fila e começa quando ele entregar`
-                  : `Manda para ${who?.name}, numa conversa nova`
+                  ? t('tasks.startBusyHint', { who: who?.name ?? '', title: busyWith.title })
+                  : t('tasks.startHint', { who: who?.name ?? '' })
             }
           >
-            {busyWith ? 'Pôr na fila' : 'Começar'}
+            {busyWith ? t('tasks.enqueue') : t('tasks.start')}
           </button>
         )}
         {task.sessionId && who && (
           <button className="btn-secondary" onClick={onOpen}>
-            Abrir a conversa com {who.name}
+            {t('tasks.openChat', { who: who.name })}
           </button>
         )}
         {task.status === 'review' && (
           <button className="btn-primary" onClick={() => onMove('done')}>
-            Aprovar entrega
+            {t('tasks.approve')}
           </button>
         )}
         {task.status === 'done' && (
           <button className="btn-secondary" onClick={() => onMove('live')}>
-            Marcar no ar
+            {t('tasks.markLive')}
           </button>
         )}
-        <select className="task-move" value={task.status} onChange={(e) => onMove(e.target.value as TaskStatus)} aria-label="Mover para a coluna">
+        <select className="task-move" value={task.status} onChange={(e) => onMove(e.target.value as TaskStatus)} aria-label={t('tasks.moveTo')}>
           {TASK_STATUSES.map((s) => (
             <option key={s} value={s}>
-              mover: {LABEL[s]}
+              {t('tasks.moveOption', { status: LABEL[s] })}
             </option>
           ))}
         </select>
       </p>
       {task.sessionId && (
         <details className="collapse" open={task.status === 'review' || task.status === 'done'}>
-          <summary>Código, revisão e deploy</summary>
+          <summary>{t('tasks.sectionCode')}</summary>
           <TaskCodePanel projectId={projectId} task={task} staff={staff} onChanged={onChanged} onOpenStaff={onOpenStaff} />
         </details>
       )}
       {task.plan && (
         <details className="collapse">
-          <summary>Plano aprovado</summary>
+          <summary>{t('tasks.approvedPlan')}</summary>
           <div className="task-plan">
             <Markdown text={task.plan} />
           </div>
         </details>
       )}
       <details className="collapse">
-        <summary>Histórico</summary>
+        <summary>{t('tasks.history')}</summary>
         <ul className="task-history small">
           {[...task.history].reverse().map((h, i) => (
             <li key={i}>
-              {new Date(h.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {LABEL[h.status]}
-              {h.by === 'auto' ? ' (automático' : ' (você'}
+              {new Date(h.at).toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {LABEL[h.status]}
+              {' ('}
+              {h.by === 'auto' ? t('tasks.byAuto') : t('tasks.byYou')}
               {h.note ? `: ${h.note})` : ')'}
             </li>
           ))}
@@ -466,7 +493,7 @@ function TaskDetail({
       </details>
       <p className="actions">
         <button className="btn-secondary task-delete" onClick={onDelete}>
-          Apagar tarefa
+          {t('tasks.deleteTask')}
         </button>
       </p>
     </aside>

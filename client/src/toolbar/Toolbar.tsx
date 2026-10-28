@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AccountUsage, AuthStatus, UsageLimit } from '../../../shared/model';
 import { api } from '../api';
 import { formatAgo, formatDuration } from '../format';
+import { t } from '../i18n';
 
 // Topo do quadro: nome da empresa (editável), consumo da conta e login do CLI.
 
@@ -39,7 +40,7 @@ export function CompanyTitle({ name, onRename }: { name: string; onRename: (name
           className="toolbar-title company-input"
           value={draft}
           maxLength={40}
-          aria-label="Nome da empresa"
+          aria-label={t('toolbar.companyName')}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={save}
           onKeyDown={(e) => {
@@ -55,13 +56,13 @@ export function CompanyTitle({ name, onRename }: { name: string; onRename: (name
     );
   }
   return (
-    <button className="toolbar-title company-name" onClick={() => setDraft(name)} title="Clique para renomear">
+    <button className="toolbar-title company-name" onClick={() => setDraft(name)} title={t('toolbar.renameTitle')}>
       {name}
     </button>
   );
 }
 
-const LIMIT_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7d', spend_limit: 'limite' };
+const LIMIT_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7d', spend_limit: t('toolbar.limitShort') };
 
 export function UsageMeters() {
   const [usage, setUsage] = useState<AccountUsage | null>(null);
@@ -80,8 +81,8 @@ export function UsageMeters() {
   if (!usage) return null;
   if (!usage.tapInstalled) {
     return (
-      <span className="usage-note" title="O consumo 5h/7d vem do mod myco-tap. Rode: npm run mod:install">
-        consumo: instale o myco-tap
+      <span className="usage-note" title={t('toolbar.usageInstallTitle')}>
+        {t('toolbar.usageInstall')}
       </span>
     );
   }
@@ -90,18 +91,12 @@ export function UsageMeters() {
     .filter((l): l is UsageLimit => !!l);
   if (!shown.length) {
     return (
-      <span
-        className="usage-note"
-        title={
-          'O consumo 5h/7d chega pelo mod myco-tap, que só roda em sessões do app abertas depois da instalação ' +
-          '(o claude do terminal está com mods desligados por enquanto). Abra uma sessão nova no app e mande uma mensagem.'
-        }
-      >
-        consumo: abra uma sessão nova no app
+      <span className="usage-note" title={t('toolbar.usageOpenTitle')}>
+        {t('toolbar.usageOpen')}
       </span>
     );
   }
-  const updated = usage.updatedAt ? `lido ${formatAgo(now - Date.parse(usage.updatedAt))}` : '';
+  const updated = usage.updatedAt ? t('toolbar.updatedAgo', { ago: formatAgo(now - Date.parse(usage.updatedAt)) }) : '';
   return (
     <span className="usage" title={updated}>
       {shown.map((l) => (
@@ -118,7 +113,7 @@ function UsageMeter({ limit, now }: { limit: UsageLimit; now: number }) {
   const pct = expired ? 0 : Math.min(100, Math.max(0, limit.percentUsed));
   const level = pct >= 90 ? 'high' : pct >= 70 ? 'mid' : 'low';
   const label = LIMIT_LABEL[limit.kind] ?? limit.kind;
-  const left = expired ? 'reiniciou' : resetMs !== null ? `reinicia em ${formatDuration(resetMs)}` : '';
+  const left = expired ? t('toolbar.resetDone') : resetMs !== null ? t('toolbar.resetsIn', { time: formatDuration(resetMs) }) : '';
   return (
     <span className={`meter meter-${level}`} title={`${label}: ${expired ? '—' : `${Math.round(pct)}%`} ${left}`}>
       <span className="meter-label">{label}</span>
@@ -159,8 +154,8 @@ export function AuthBadge() {
 
   if (auth.loggedIn && auth.subscription) {
     return (
-      <span className="auth-ok" title={`CLI logado pela assinatura (${auth.authMethod ?? '?'})`}>
-        <span className="dot dot-ok" /> assinatura
+      <span className="auth-ok" title={t('toolbar.cliSubscription', { method: auth.authMethod ?? '?' })}>
+        <span className="dot dot-ok" /> {t('toolbar.subscription')}
       </span>
     );
   }
@@ -170,29 +165,28 @@ export function AuthBadge() {
     try {
       const r = await api.login();
       if (r.ok) setWaiting(true);
-      else setError(`${r.error ?? 'não foi possível abrir o terminal'}. Rode: ${r.command}`);
+      else setError(t('toolbar.loginFailed', { error: r.error ?? t('toolbar.terminalFailed'), command: String(r.command) }));
     } catch (e) {
       setError((e as Error).message);
     }
   };
 
   const reason = !auth.cliFound
-    ? '`claude` não encontrado no PATH'
+    ? t('toolbar.reasonNoCli')
     : auth.loggedIn
-      ? `logado pela API (${auth.authMethod}): as sessões cobrariam por token`
-      : 'o CLI está deslogado: o MyCo não consegue abrir sessões';
+      ? t('toolbar.reasonApi', { method: String(auth.authMethod) })
+      : t('toolbar.reasonLoggedOut');
 
   return (
     <span className="auth-warn">
       {auth.cliFound ? (
         <button className="btn-login" onClick={login} disabled={waiting} title={reason}>
-          {waiting ? 'aguardando login…' : auth.loggedIn ? 'Entrar pela assinatura' : 'Entrar no Claude'}
+          {waiting ? t('toolbar.waitingLogin') : auth.loggedIn ? t('toolbar.loginSubscription') : t('toolbar.loginClaude')}
         </button>
       ) : (
-        <span className="usage-note" title={reason}>CLI não encontrado</span>
+        <span className="usage-note" title={reason}>{t('toolbar.cliNotFound')}</span>
       )}
       {error && <span className="error">{error}</span>}
     </span>
   );
 }
-

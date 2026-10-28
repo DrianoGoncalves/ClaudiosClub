@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ModelBenchmarks, ModelVariant } from '../../../shared/model';
 import { api } from '../api';
 import { formatAgo } from '../format';
+import { locale, t } from '../i18n';
 
 // Abas "Coding Index" e "Preço" do ranking (painel lateral): os modelos de maior índice de código do
 // Artificial Analysis, em barras. Cada modelo aparece no esforço padrão; clicar nele abre todos os
@@ -10,16 +11,16 @@ import { formatAgo } from '../format';
 
 export type Metric = 'index' | 'price';
 
-const decimals = (v: number, digits: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+const decimals = (v: number, digits: number) => v.toLocaleString(locale(), { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
 const METRICS: Record<Metric, { label: string; value: (m: ModelVariant) => number; format: (v: number) => string; order: 1 | -1 }> = {
   index: { label: 'Coding Index', value: (m) => m.codingIndex, format: (v) => decimals(v, 1), order: -1 },
-  price: { label: 'Preço', value: (m) => m.priceBlended, format: (v) => `US$ ${decimals(v, v < 1 ? 2 : 1)}`, order: 1 },
+  price: { label: t('toolbar.priceLabel'), value: (m) => m.priceBlended, format: (v) => `US$ ${decimals(v, v < 1 ? 2 : 1)}`, order: 1 },
 };
 
 const FOOTNOTE: Record<Metric, string> = {
-  index: 'Índice de código do modelo (não de agentes).',
-  price: 'US$ por 1M tokens, 3 de entrada para 1 de saída.',
+  index: t('toolbar.footIndex'),
+  price: t('toolbar.footPrice'),
 };
 
 export const METRIC_LABEL: Record<Metric, string> = { index: METRICS.index.label, price: METRICS.price.label };
@@ -49,8 +50,8 @@ export function ModelsChart({ metric }: { metric: Metric }) {
 
   return (
     <div className="models">
-      <button className="btn-secondary models-refresh" onClick={load} disabled={loading} title="Buscar de novo">
-        {loading ? 'buscando…' : 'atualizar'}
+      <button className="btn-secondary models-refresh" onClick={load} disabled={loading} title={t('toolbar.searchAgain')}>
+        {loading ? t('toolbar.searching') : t('toolbar.refresh')}
       </button>
       <ModelsBody data={data} loading={loading} failed={failed} metric={metric} expanded={expanded} onExpand={setExpanded} />
     </div>
@@ -68,19 +69,19 @@ interface BodyProps {
 }
 
 function ModelsBody({ data, loading, failed, metric, expanded, onExpand }: BodyProps) {
-  if (!data) return <p className={`muted small models-note ${failed ? 'error' : ''}`}>{failed ?? (loading ? 'Buscando…' : '')}</p>;
+  if (!data) return <p className={`muted small models-note ${failed ? 'error' : ''}`}>{failed ?? (loading ? t('toolbar.searching') : '')}</p>;
   if (!data.configured) {
     return (
       <div className="small models-note">
         <p>
-          Para ver o ranking, crie uma chave gratuita na{' '}
+          {t('toolbar.keyIntro1')}{' '}
           <a href="https://artificialanalysis.ai/api-reference" target="_blank" rel="noopener noreferrer">
-            API do Artificial Analysis
+            {t('toolbar.aaApi')}
           </a>{' '}
-          e ponha no arquivo <code>.env</code> da pasta do MyCo:
+          {t('toolbar.keyIntro2')} <code>.env</code> {t('toolbar.keyIntro3')}
         </p>
-        <pre className="models-env">ARTIFICIAL_ANALYSIS_API_KEY=sua-chave</pre>
-        <p className="muted">Não precisa reiniciar: a chave fica só no servidor e é lida na próxima busca.</p>
+        <pre className="models-env">ARTIFICIAL_ANALYSIS_API_KEY={t('toolbar.keyPlaceholder')}</pre>
+        <p className="muted">{t('toolbar.keyNoRestart')}</p>
       </div>
     );
   }
@@ -95,13 +96,16 @@ function ModelsBody({ data, loading, failed, metric, expanded, onExpand }: BodyP
     </span>
   );
   const numbers = (v: ModelVariant) =>
-    `Coding Index ${METRICS.index.format(v.codingIndex)} · ${METRICS.price.format(v.priceBlended)} por 1M tokens`;
+    t('toolbar.numbersLine', { index: METRICS.index.format(v.codingIndex), price: METRICS.price.format(v.priceBlended) });
   const error = failed ?? data.error;
   return (
     <>
       {error && <p className="small error models-note">{error}</p>}
       {rows.length > 0 ? (
-        <ol className="models-chart" aria-label={`${m.label}, ${m.order === 1 ? 'menor' : 'maior'} primeiro`}>
+        <ol
+          className="models-chart"
+          aria-label={t(m.order === 1 ? 'toolbar.sortLowFirst' : 'toolbar.sortHighFirst', { label: m.label })}
+        >
           {rows.map((r) => {
             const isOpen = expanded === r.id;
             return (
@@ -110,7 +114,7 @@ function ModelsBody({ data, loading, failed, metric, expanded, onExpand }: BodyP
                   className="models-row"
                   aria-expanded={isOpen}
                   onClick={() => onExpand(isOpen ? null : r.id)}
-                  title={`${r.name}${r.creator ? ` (${r.creator})` : ''}${r.effort ? `, esforço ${r.effort}` : ''}\n${numbers(r)}`}
+                  title={`${r.name}${r.creator ? ` (${r.creator})` : ''}${r.effort ? `, ${t('toolbar.effortWith', { effort: r.effort })}` : ''}\n${numbers(r)}`}
                 >
                   <span className="models-name">
                     <span className="models-caret" aria-hidden>
@@ -124,12 +128,16 @@ function ModelsBody({ data, loading, failed, metric, expanded, onExpand }: BodyP
                   <span className="models-value">{m.format(m.value(r))}</span>
                 </button>
                 {isOpen && (
-                  <ul className="models-variants" aria-label={`Esforços de ${r.name}`}>
+                  <ul className="models-variants" aria-label={t('toolbar.effortsOf', { name: r.name })}>
                     {r.variants.map((v) => (
-                      <li key={v.id} className="models-row models-variant" title={`${v.effort ?? 'esforço não informado'}: ${numbers(v)}`}>
+                      <li
+                        key={v.id}
+                        className="models-row models-variant"
+                        title={`${v.effort ?? t('toolbar.effortUnknown')}: ${numbers(v)}`}
+                      >
                         <span className="models-name">
                           {v.effort ?? '—'}
-                          {v.id === r.id && <span className="muted"> · padrão</span>}
+                          {v.id === r.id && <span className="muted"> · {t('toolbar.defaultLabel')}</span>}
                         </span>
                         {bar(v)}
                         <span className="models-value">{m.format(m.value(v))}</span>
@@ -142,11 +150,11 @@ function ModelsBody({ data, loading, failed, metric, expanded, onExpand }: BodyP
           })}
         </ol>
       ) : (
-        !error && <p className="muted small models-note">A API não trouxe modelos com índice e preço.</p>
+        !error && <p className="muted small models-note">{t('toolbar.noModels')}</p>
       )}
       <p className="muted small models-foot">
-        {FOOTNOTE[metric]} No esforço padrão do AA; clique num modelo para ver os outros.
-        {data.fetchedAt && ` Lido ${formatAgo(Date.now() - Date.parse(data.fetchedAt))}.`} Dados:{' '}
+        {FOOTNOTE[metric]} {t('toolbar.footDefault')}
+        {data.fetchedAt && ` ${t('toolbar.fetchedAgo', { ago: formatAgo(Date.now() - Date.parse(data.fetchedAt)) })}`} {t('toolbar.dataFrom')}{' '}
         <a href="https://artificialanalysis.ai/" target="_blank" rel="noopener noreferrer">
           Artificial Analysis
         </a>

@@ -23,6 +23,7 @@ import { nodeTypes } from './nodes';
 import { ChartIcon } from '../icons';
 import { SettingsMenu } from '../toolbar/SettingsMenu';
 import { AuthBadge, CompanyTitle, UsageMeters } from '../toolbar/Toolbar';
+import { t } from '../i18n';
 
 // Posições arrastadas ficam no navegador por enquanto; vão para `.myco/` quando houver escrita no disco.
 // v3: as salas passaram a formar uma grade; as posições da v2 (uma linha só) não servem mais.
@@ -319,7 +320,7 @@ export function BoardView(props: BoardViewProps) {
       <Background variant={BackgroundVariant.Dots} gap={28} size={1.2} />
       <Controls showInteractive={false}>
         {/* Logo depois de "enquadrar": desfaz os arrastos e volta à grade de salas. */}
-        <ControlButton onClick={resetLayout} title="Reorganizar o quadro (desfaz os arrastos)" aria-label="Reorganizar o quadro">
+        <ControlButton onClick={resetLayout} title={t('board.resetLayoutTitle')} aria-label={t('board.resetLayout')}>
           <svg viewBox="0 0 32 32" aria-hidden="true">
             <rect x="3" y="3" width="11" height="11" rx="2" />
             <rect x="18" y="3" width="11" height="11" rx="2" />
@@ -334,7 +335,7 @@ export function BoardView(props: BoardViewProps) {
         <AuthBadge />
         <span className="toolbar-sep" />
         <InboxMenu inbox={props.inbox} onOpen={props.onOpenInbox} />
-        <button className="toolbar-icon" onClick={() => onSelect(RANKING_ID)} title="Ranking: quem mais gasta e modelos para código" aria-label="Ranking">
+        <button className="toolbar-icon" onClick={() => onSelect(RANKING_ID)} title={t('board.rankingTitle')} aria-label={t('board.ranking')}>
           <ChartIcon />
         </button>
         <SettingsMenu
@@ -363,11 +364,11 @@ export function BoardView(props: BoardViewProps) {
         />
       </Panel>
       <Panel position="bottom-right" className="legend">
-        <span className="legend-item legend-project">projeto</span>
-        <span className="legend-item legend-agent">funcionário / agent</span>
-        <span className="legend-item legend-skill">skill</span>
-        <span className="legend-item legend-calls">também chama</span>
-        <span className="legend-item legend-borrow">empréstimo</span>
+        <span className="legend-item legend-project">{t('board.legendProject')}</span>
+        <span className="legend-item legend-agent">{t('board.legendEmployee')}</span>
+        <span className="legend-item legend-skill">{t('board.skillWord')}</span>
+        <span className="legend-item legend-calls">{t('board.alsoCalls')}</span>
+        <span className="legend-item legend-borrow">{t('board.legendBorrow')}</span>
       </Panel>
     </ReactFlow>
     </EdgeActions.Provider>

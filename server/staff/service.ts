@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { AccountUsage, LaunchResult, McpServerInfo, Project, ServerInfo, StaffProfile, UsageStop } from '../../shared/model';
-import { listServers } from './servers';
+import type { AccountUsage, LaunchResult, McpServerInfo, Project, ProjectConnection, ServerInfo, StaffProfile, UsageStop } from '../../shared/model';
+import { keyFilesOf, listServers, readConnections, removeConnection, saveConnection, testConnection, writeSshConfig } from './servers';
 import type { ToolAdapter } from '../adapters/types';
 import { readConfig, setArchived } from '../config';
 import { readUsage } from '../usage';
@@ -35,8 +35,6 @@ export interface StaffServiceOptions {
   readUsage?: () => Promise<AccountUsage>;
   /** Cria a worktree da ficha (testes trocam o git). */
   ensureWorktree?: (projectPath: string, staffId: string) => Promise<Worktree>;
-  /** ~/.ssh/config (só as linhas Host são lidas). */
-  sshConfigFile?: string;
   /** A ficha foi editada ou restaurada (as conversas abertas dela precisam saber). */
   onChange?: (prev: StaffProfile, next: StaffProfile) => void;
   /** Custo dos últimos 7 dias do projeto e da conta toda, para o orçamento por projeto. */
@@ -68,7 +66,40 @@ export class StaffService {
 
   async listServers(projectId: string): Promise<ServerInfo[] | null> {
     const project = await this.project(projectId);
-    return project ? listServers(project.path, this.opts.sshConfigFile) : null;
+    return project ? listServers(project.path) : null;
+  }
+
+  // ---- conexões SSH do projeto (só pelo MyCo: as rotas recusam pedido de funcionário) ----
+
+  async listConnections(projectId: string): Promise<ProjectConnection[] | null> {
+    const project = await this.project(projectId);
+    return project ? readConnections(project.path) : null;
+  }
+
+  /** `originalName` no corpo: a conexão editada (renomear mantém o acesso de quem já tinha). */
+  async saveConnection(projectId: string, body: unknown): Promise<ProjectConnection | null> {
+    const project = await this.project(projectId);
+    if (!project) return null;
+    const original = (body as { originalName?: unknown } | null)?.originalName;
+    const originalName = typeof original === 'string' && original ? original : undefined;
+    const saved = await saveConnection(project.path, body, originalName);
+    if (originalName && originalName !== saved.name) {
+      for (const s of await listProjectStaff(project.path, project.id)) {
+        if (!s.servers.includes(originalName)) continue;
+        await saveProfile(project.path, { ...s, servers: s.servers.map((n) => (n === originalName ? saved.name : n)), updatedAt: new Date().toISOString() });
+      }
+    }
+    return saved;
+  }
+
+  async removeConnection(projectId: string, name: string): Promise<boolean | null> {
+    const project = await this.project(projectId);
+    return project ? removeConnection(project.path, name) : null;
+  }
+
+  async testConnection(projectId: string, name: string): Promise<{ ok: boolean; message: string } | null> {
+    const project = await this.project(projectId);
+    return project ? testConnection(project.path, name) : null;
   }
 
   async listMcp(projectId: string): Promise<McpServerInfo[] | null> {
@@ -416,7 +447,8 @@ export class StaffService {
     const [config, managers, servers, worktree, everyone] = await Promise.all([
       readConfig(),
       Promise.all(profile.reportsTo.map((id) => readProfile(project.path, id))),
-      profile.servers.length ? listServers(project.path, this.opts.sshConfigFile) : [],
+      // O ssh_config é refeito a cada sessão: vale o que está no .vps/config.json agora.
+      profile.servers.length ? writeSshConfig(project.path).then(() => listServers(project.path)) : [],
       !profile.worktree
         ? null
         : createWorktree
@@ -434,6 +466,7 @@ export class StaffService {
       claudeConfigFile: this.opts.claudeConfigFile,
       worktree,
       servers,
+      serverKeys: profile.servers.length ? await keyFilesOf(project.path, profile.servers) : [],
       // A equipe dele: quem reporta a ele (os temporários encerrados já saíram do quadro, mas a ficha
       // não sabe disso; ficam de fora os que têm `ended`).
       team: everyone

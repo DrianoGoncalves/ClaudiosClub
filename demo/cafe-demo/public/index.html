@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cafeteria</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 0 auto; max-width: 480px; padding: 16px; }
+      li { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #ddd; }
+    </style>
+  </head>
+  <body>
+    <h1>Cardápio</h1>
+    <ul id="cardapio"></ul>
+    <script type="module">
+      const reais = (centavos) => (centavos / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+      const lista = document.getElementById('cardapio');
+      for (const item of await (await fetch('/api/cardapio')).json()) {
+        const li = document.createElement('li');
+        li.append(item.nome, ' ', reais(item.preco));
+        lista.append(li);
+      }
+    </script>
+  </body>
+</html>

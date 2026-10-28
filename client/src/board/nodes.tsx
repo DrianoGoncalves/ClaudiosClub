@@ -3,6 +3,7 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import type { GitState, LiveSession } from '../../../shared/model';
 import { employeeName, ENTRYPOINT_LABEL, formatAgo, formatShare, initials, STATUS_LABEL } from '../format';
 import { BranchIcon, TasksIcon } from '../icons';
+import { t } from '../i18n';
 import {
   HANDLE,
   SIZES,
@@ -61,7 +62,7 @@ function Frame(props: {
           type="source"
           position={Position.Bottom}
           className="bn-hire"
-          title="Arraste para contratar um subordinado (ou solte sobre um funcionário para ligar)"
+          title={t('board.dragToHire')}
         >
           +
         </Handle>
@@ -100,8 +101,8 @@ function CollapseToggle({ collapsed }: { collapsed: boolean }) {
     <button
       type="button"
       className="bn-collapse nodrag"
-      title={collapsed ? 'Abrir a sala' : 'Dobrar a sala (fica só o cabeçalho)'}
-      aria-label={collapsed ? 'Abrir a sala' : 'Dobrar a sala'}
+      title={collapsed ? t('board.openRoom') : t('board.collapseRoom')}
+      aria-label={collapsed ? t('board.openRoom') : t('board.collapseRoom')}
       aria-expanded={!collapsed}
     >
       {collapsed ? '▸' : '▾'}
@@ -109,7 +110,7 @@ function CollapseToggle({ collapsed }: { collapsed: boolean }) {
   );
 }
 
-const resourcesText = (n: number) => (n ? ` · ${n} ${n === 1 ? 'agent/skill' : 'agents/skills'}` : '');
+const resourcesText = (n: number) => (n ? ` · ${t(n === 1 ? 'board.resourceOne' : 'board.resourceOther', { n })}` : '');
 
 /** Cabeçalho da sala "você", colado nas bordas, como o do projeto. */
 function UserNode({ id, data, selected, width }: NodeProps<Node<UserNodeData, 'user'>>) {
@@ -118,8 +119,8 @@ function UserNode({ id, data, selected, width }: NodeProps<Node<UserNodeData, 'u
       <div className="bn-header">
         <CollapseToggle collapsed={data.header.collapsed} />
         <div className="bn-header-text">
-          <div className="bn-title">~ você</div>
-          <div className="bn-meta">global · {data.agentCount} agents · {data.skillCount} skills</div>
+          <div className="bn-title">{t('board.youTitle')}</div>
+          <div className="bn-meta">{t('board.userMeta', { agents: data.agentCount, skills: data.skillCount })}</div>
         </div>
       </div>
     </Frame>
@@ -147,17 +148,17 @@ function ProjectNode({ id, data, selected, width }: NodeProps<Node<ProjectNodeDa
         {data.image && <img className="bn-header-img" src={data.image} alt="" draggable={false} />}
         <div className="bn-header-text">
           <div className="bn-title">
-            {p.worktreeOf && <span className="bn-tag">worktree</span>}
-            {data.archived && <span className="bn-tag">arquivado</span>}
+            {p.worktreeOf && <span className="bn-tag">{t('board.worktreeTag')}</span>}
+            {data.archived && <span className="bn-tag">{t('board.archivedTag')}</span>}
             {p.name}
           </div>
           <div className="bn-meta">
-            {p.sessionCount} {p.sessionCount === 1 ? 'funcionário' : 'funcionários'}
+            {p.sessionCount} {t(p.sessionCount === 1 ? 'board.employeeOne' : 'board.employeeOther')}
             {data.header.collapsed && resourcesText(data.header.resources)}
             {data.header.collapsed && data.costShare !== null && (
-              <span title="Parte do projeto no consumo total"> · {formatShare(data.costShare, 1)}</span>
+              <span title={t('board.shareOfProject')}> · {formatShare(data.costShare, 1)}</span>
             )}
-            {!p.exists && ' · pasta não existe'}
+            {!p.exists && ` · ${t('board.folderMissing')}`}
           </div>
         </div>
         {/* À direita, em duas linhas: tarefas em cima; branch e quem está ao vivo embaixo. */}
@@ -202,17 +203,17 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
           <div className="bn-meta">
             {staff && <span className="bn-role">{staff.role} · </span>}
             {staff?.temporary && (
-              <span className="bn-temp" title="Contratado por outro funcionário: sai do quadro quando terminar">
-                temporário ·{' '}
+              <span className="bn-temp" title={t('board.temporaryTitle')}>
+                {t('board.temporary')} ·{' '}
               </span>
             )}
             {live ? (
               <>
                 <span className={`dot dot-${live.status ?? 'unknown'}`} />{' '}
-                {busy ? <span className="bn-working">trabalhando</span> : (STATUS_LABEL[live.status ?? ''] ?? live.status)}
+                {busy ? <span className="bn-working">{t('board.working')}</span> : (STATUS_LABEL[live.status ?? ''] ?? live.status)}
                 {/* Delegando agora: para quem (inclui agents embutidos, que não têm nó no quadro). */}
                 {live.activeAgents && live.activeAgents.length > 0 && (
-                  <span className="bn-delegating" title={`Delegando para: ${live.activeAgents.join(', ')}`}>
+                  <span className="bn-delegating" title={t('board.delegatingTo', { list: live.activeAgents.join(', ') })}>
                     {' '}→ {live.activeAgents.join(', ')}
                   </span>
                 )}
@@ -220,10 +221,10 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
             ) : s ? (
               formatAgo(Date.now() - Date.parse(s.updatedAt))
             ) : (
-              'contratado, sem sessão'
+              t('board.hiredNoSession')
             )}
             {data.costShare !== null && (
-              <span title="Parte deste funcionário no consumo total"> · {formatShare(data.costShare, 1)}</span>
+              <span title={t('board.employeeShareTitle')}> · {formatShare(data.costShare, 1)}</span>
             )}
             {!staff && s?.entrypoint && <> · {ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</>}
           </div>
@@ -250,13 +251,13 @@ function AgentNode({ id, data, selected }: NodeProps<Node<AgentNodeData, 'agent'
         <div className="bn-agent-text">
           <div className="bn-title bn-title-sm">{a.name}</div>
           <div className="bn-meta">
-            {borrowed && <span className="bn-flag bn-flag-link">↪ emprestado</span>}
-            {a.duplicate && <span className="bn-flag bn-flag-warn">nome repetido</span>}
-            {a.error && <span className="bn-flag bn-flag-warn">erro</span>}
-            {!borrowed && !a.duplicate && !a.error && 'agent'}
+            {borrowed && <span className="bn-flag bn-flag-link">{t('board.borrowedFlag')}</span>}
+            {a.duplicate && <span className="bn-flag bn-flag-warn">{t('board.duplicateName')}</span>}
+            {a.error && <span className="bn-flag bn-flag-warn">{t('board.errorFlag')}</span>}
+            {!borrowed && !a.duplicate && !a.error && t('board.agentWord')}
             {data.cost && (
-              <span title="Parte deste agent no consumo de todos os subagents">
-                {' '}· {formatShare(data.cost.share, 1)} em {data.cost.runs} {data.cost.runs === 1 ? 'execução' : 'execuções'}
+              <span title={t('board.agentShareTitle')}>
+                {' '}· {formatShare(data.cost.share, 1)} {t(data.cost.runs === 1 ? 'board.runOne' : 'board.runOther', { n: data.cost.runs })}
               </span>
             )}
           </div>
@@ -271,7 +272,7 @@ function SkillNode({ id, data, selected }: NodeProps<Node<SkillNodeData, 'skill'
   return (
     <Frame id={id} type="skill" variant={s.error ? 'warn' : 'skill'} selected={selected} title={s.description ?? s.name}>
       <div className="bn-title bn-title-sm">{s.name}</div>
-      <div className="bn-meta">{s.link.kind !== 'file' ? <span className="bn-flag bn-flag-link">↪ emprestada</span> : 'skill'}</div>
+      <div className="bn-meta">{s.link.kind !== 'file' ? <span className="bn-flag bn-flag-link">{t('board.borrowedSkill')}</span> : t('board.skillWord')}</div>
     </Frame>
   );
 }
@@ -279,13 +280,11 @@ function SkillNode({ id, data, selected }: NodeProps<Node<SkillNodeData, 'skill'
 function SyncedNode({ id, data, selected }: NodeProps<Node<SyncedNodeData, 'synced'>>) {
   return (
     <Frame id={id} type="synced" variant="synced" selected={selected} title={data.skills.map((s) => s.name).join(', ')}>
-      <div className="bn-title bn-title-sm">{data.skills.length} skills da conta</div>
-      <div className="bn-meta">sincronizadas · somente leitura</div>
+      <div className="bn-title bn-title-sm">{t(data.skills.length === 1 ? 'board.syncedOne' : 'board.syncedOther', { n: data.skills.length })}</div>
+      <div className="bn-meta">{t('board.syncedMeta')}</div>
     </Frame>
   );
 }
-
-const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** Estante: agents e skills guardados num nó só; clicar abre ou fecha (ver Board.tsx). */
 function ShelfNode({ id, data, selected }: NodeProps<Node<ShelfNodeData, 'shelf'>>) {
@@ -296,11 +295,11 @@ function ShelfNode({ id, data, selected }: NodeProps<Node<ShelfNodeData, 'shelf'
       {!data.expanded && <Sketch className="bn-shelf-back" variant="agent" width={w} height={h} seed={`${id}:back`} />}
       <Frame id={id} type="shelf" variant="agent" selected={selected} className={data.expanded ? 'is-open' : ''}>
         <div className="bn-title bn-title-sm">
-          {data.agents > 0 && <span>{plural(data.agents, 'agent', 'agents')}</span>}
+          {data.agents > 0 && <span>{t(data.agents === 1 ? 'board.agentsOne' : 'board.agentsOther', { n: data.agents })}</span>}
           {data.agents > 0 && data.skills > 0 && ' · '}
-          {data.skills > 0 && <span className="bn-shelf-skills">{plural(data.skills, 'skill', 'skills')}</span>}
+          {data.skills > 0 && <span className="bn-shelf-skills">{t(data.skills === 1 ? 'board.skillsOne' : 'board.skillsOther', { n: data.skills })}</span>}
         </div>
-        <div className="bn-meta">{data.expanded ? '▴ guardar na estante' : '▾ abrir a estante'}</div>
+        <div className="bn-meta">{t(data.expanded ? 'board.shelfClose' : 'board.shelfOpen')}</div>
       </Frame>
     </div>
   );
@@ -320,15 +319,15 @@ function RoomNode({ id, data, width, height }: NodeProps<Node<RoomNodeData, 'roo
 
 /** Tarefas do projeto no cabeçalho; o clique abre o quadro de tarefas (tratado no Board, pela classe). */
 function TasksChip({ tasks }: { tasks: { open: number; review: number } | null }) {
-  const label = tasks ? `${tasks.open} ${tasks.open === 1 ? 'tarefa' : 'tarefas'}` : 'tarefas';
+  const label = tasks ? t(tasks.open === 1 ? 'board.taskOne' : 'board.taskOther', { n: tasks.open }) : t('board.tasksEmpty');
   return (
     <button
       type="button"
       className={`bn-tasks nodrag ${tasks?.review ? 'has-review' : ''} ${tasks ? '' : 'is-empty'}`}
-      title={tasks?.review ? `${tasks.review} em revisão: abrir o quadro de tarefas` : 'Abrir o quadro de tarefas'}
+      title={tasks?.review ? t('board.reviewTitle', { n: tasks.review }) : t('board.openTasks')}
     >
       <TasksIcon /> {label}
-      {tasks?.review ? <span className="bn-tasks-review">{tasks.review} p/ revisar</span> : null}
+      {tasks?.review ? <span className="bn-tasks-review">{t('board.toReview', { n: tasks.review })}</span> : null}
     </button>
   );
 }
@@ -336,19 +335,19 @@ function TasksChip({ tasks }: { tasks: { open: number; review: number } | null }
 /** Estado do código no cabeçalho: branch, arquivos sem commit e distância do remoto. */
 function GitBadge({ git }: { git: GitState }) {
   const parts = [
-    git.dirty ? `${git.dirty} sem commit` : 'limpo',
+    git.dirty ? t('board.gitDirty', { n: git.dirty }) : t('board.gitClean'),
     git.ahead ? `↑${git.ahead}` : null,
     git.behind ? `↓${git.behind}` : null,
   ].filter(Boolean);
   const tip = [
-    `branch ${git.branch ?? '(destacado)'}`,
-    git.dirty ? `${git.dirty} ${git.dirty === 1 ? 'arquivo alterado' : 'arquivos alterados'} sem commit` : 'nada sem commit',
-    git.upstream ? `${git.ahead} à frente e ${git.behind} atrás de ${git.upstream}` : 'sem remoto configurado',
+    t('board.gitBranch', { name: git.branch ?? `(${t('board.detached')})` }),
+    git.dirty ? t(git.dirty === 1 ? 'board.gitFileOne' : 'board.gitFileOther', { n: git.dirty }) : t('board.gitNothingUncommitted'),
+    git.upstream ? t('board.gitAheadBehind', { ahead: git.ahead, behind: git.behind, upstream: git.upstream }) : t('board.gitNoRemote'),
   ].join('\n');
   return (
     <div className={`bn-git ${git.dirty ? 'is-dirty' : ''} ${git.behind ? 'is-behind' : ''}`} title={tip}>
       <span className="bn-git-branch">
-        <BranchIcon /> {git.branch ?? 'destacado'}
+        <BranchIcon /> {git.branch ?? t('board.detached')}
       </span>
       <span className="bn-git-state">{parts.join(' ')}</span>
     </div>
@@ -362,7 +361,7 @@ function LiveDots({ live }: { live: LiveSession[] }) {
       {live.map((s) => (
         <span key={s.sessionId} className={`dot dot-${s.status ?? 'unknown'}`} />
       ))}
-      <span>{waiting > 0 ? `${waiting} aguardando você` : `${live.length} ao vivo`}</span>
+      <span>{waiting > 0 ? t('board.awaitingYou', { n: waiting }) : t('board.liveCount', { n: live.length })}</span>
     </div>
   );
 }

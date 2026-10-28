@@ -124,6 +124,10 @@ export class ClaudeAdapter implements ToolAdapter {
     return { files: this.costs.sessionFiles(sessionId), scanning: this.costs.isScanning };
   }
 
+  forgetProjects(): void {
+    this.discovery = null;
+  }
+
   private refs(): Promise<ProjectRef[]> {
     const ttl = this.opts.discoveryTtlMs ?? 10_000;
     if (!this.discovery || Date.now() - this.discovery.at > ttl) {

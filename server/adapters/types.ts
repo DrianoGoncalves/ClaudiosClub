@@ -16,6 +16,8 @@ import type { FileCost } from './claude/costs';
 export interface ToolAdapter {
   readonly id: string;
   listProjects(): Promise<Project[]>;
+  /** A próxima leitura descobre os projetos de novo (um projeto acabou de ser criado). */
+  forgetProjects(): void;
   getProject(id: string): Promise<ProjectDetail | null>;
   /** Agents e skills de um projeto, sem ler sessões. */
   getProjectInventory(id: string): Promise<ProjectInventory | null>;

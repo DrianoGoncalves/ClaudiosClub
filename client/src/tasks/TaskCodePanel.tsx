@@ -2,11 +2,19 @@ import { useCallback, useEffect, useState } from 'react';
 import type { StaffProfile, Task, TaskCode } from '../../../shared/model';
 import { api, ApiError, withUsageConfirm } from '../api';
 import { formatAgo } from '../format';
+import { t, locale } from '../i18n';
 import { BranchIcon } from '../icons';
 
 // Código da tarefa, no cartão: o que mudou, testes, mesclar, pedir revisão e pedir deploy.
 
-const STATUS: Record<string, string> = { A: 'novo', M: 'mudou', D: 'apagado', R: 'renomeado', C: 'copiado', '?': 'novo (fora do git)' };
+const STATUS: Record<string, string> = {
+  A: t('tasks.fileAdded'),
+  M: t('tasks.fileModified'),
+  D: t('tasks.fileDeleted'),
+  R: t('tasks.fileRenamed'),
+  C: t('tasks.fileCopied'),
+  '?': t('tasks.fileUntracked'),
+};
 
 interface Props {
   projectId: string;
@@ -52,12 +60,12 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
 
   const merge = () =>
     run('merge', async () => {
-      if (!code?.base || !window.confirm(`Mesclar ${code.branch} em ${code.base}? O que não foi commitado na worktree será commitado com o título da tarefa.`)) return;
+      if (!code?.base || !window.confirm(t('tasks.confirmMerge', { branch: code.branch ?? '?', base: code.base }))) return;
       try {
         await api.taskMerge(projectId, task.id);
       } catch (e) {
         if (!(e instanceof ApiError) || e.code !== 'no-tests') throw e;
-        if (!window.confirm(`${e.message}. Mesclar mesmo assim, sem testes?`)) return;
+        if (!window.confirm(t('tasks.confirmNoTests', { message: e.message }))) return;
         await api.taskMerge(projectId, task.id, true);
       }
     });
@@ -70,12 +78,14 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
           <p className="small">
             {code.where === 'worktree' ? (
               <>
-                <BranchIcon /> <b>{code.branch}</b> → {code.base ?? '?'} · {code.commits.length} commit{code.commits.length === 1 ? '' : 's'}
-                {code.uncommitted ? ` · ${code.uncommitted} sem commit` : ''}
+                <BranchIcon /> <b>{code.branch}</b> → {code.base ?? '?'} ·{' '}
+                {t(code.commits.length === 1 ? 'tasks.commitOne' : 'tasks.commitOther', { n: code.commits.length })}
+                {code.uncommitted ? ` · ${t('tasks.uncommitted', { n: code.uncommitted })}` : ''}
               </>
             ) : (
               <>
-                No próprio projeto{code.branch ? ` (${code.branch})` : ''}: {code.files.length} {code.files.length === 1 ? 'arquivo alterado' : 'arquivos alterados'} sem commit
+                {t('tasks.ownProject')}
+                {code.branch ? ` (${code.branch})` : ''}: {t(code.files.length === 1 ? 'tasks.filesOne' : 'tasks.filesOther', { n: code.files.length })}
               </>
             )}
           </p>
@@ -92,36 +102,39 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
                   )}
                 </li>
               ))}
-              {code.files.length > 40 && <li className="muted">… e mais {code.files.length - 40}</li>}
+              {code.files.length > 40 && <li className="muted">{t('tasks.andMore', { n: code.files.length - 40 })}</li>}
             </ul>
           ) : (
-            <p className="muted small">Nada mudou ainda.</p>
+            <p className="muted small">{t('tasks.nothingChanged')}</p>
           )}
           {code.diff && (
             <details className="collapse">
-              <summary>Ver as mudanças (diff){code.truncated ? ' — cortado' : ''}</summary>
+              <summary>
+                {t('tasks.seeDiff')}
+                {code.truncated ? ` — ${t('tasks.cut')}` : ''}
+              </summary>
               <pre className="task-diff">{code.diff}</pre>
             </details>
           )}
 
           <div className="task-code-row">
-            <b className="small">Testes</b>
+            <b className="small">{t('tasks.tests')}</b>
             {task.tests ? (
               <span className={`small ${task.tests.ok ? 'ok' : 'fail'}`}>
-                {task.tests.ok ? 'passaram' : 'falharam'} · {task.tests.command} · {formatAgo(now - Date.parse(task.tests.at))}
+                {task.tests.ok ? t('tasks.passed') : t('tasks.failed')} · {task.tests.command} · {formatAgo(now - Date.parse(task.tests.at))}
               </span>
             ) : (
-              <span className="muted small">{code.test ? `${code.test}, ainda não rodou` : 'nenhum comando de testes achado'}</span>
+              <span className="muted small">{code.test ? t('tasks.notRunYet', { cmd: code.test }) : t('tasks.noTestCmd')}</span>
             )}
             {code.test && (
               <button className="btn-secondary" disabled={!!busy} onClick={() => void run('test', () => api.taskTest(projectId, task.id))}>
-                {busy === 'test' ? 'Rodando…' : 'Rodar testes'}
+                {busy === 'test' ? t('tasks.running') : t('tasks.runTests')}
               </button>
             )}
           </div>
           {task.tests && !task.tests.ok && task.tests.output && (
             <details className="collapse">
-              <summary>Saída dos testes</summary>
+              <summary>{t('tasks.testOutput')}</summary>
               <pre className="task-diff">{task.tests.output}</pre>
             </details>
           )}
@@ -131,14 +144,14 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
               <button
                 className="btn-primary"
                 disabled={!!busy || !code.canMerge || !!task.merged}
-                title={task.merged ? 'Já mesclada' : (code.whyNot ?? 'Testa o resultado e mescla; teste vermelho desfaz')}
+                title={task.merged ? t('tasks.alreadyMerged') : (code.whyNot ?? t('tasks.mergeHint'))}
                 onClick={() => void merge()}
               >
-                {busy === 'merge' ? 'Mesclando…' : `Mesclar em ${code.base ?? '?'}`}
+                {busy === 'merge' ? t('tasks.merging') : t('tasks.mergeInto', { base: code.base ?? '?' })}
               </button>
               {task.merged ? (
                 <span className="small ok">
-                  mesclada em {task.merged.base} ({task.merged.sha}) · {formatAgo(now - Date.parse(task.merged.at))}
+                  {t('tasks.mergedIn', { base: task.merged.base, sha: task.merged.sha, ago: formatAgo(now - Date.parse(task.merged.at)) })}
                 </span>
               ) : (
                 code.whyNot && <span className="muted small">{code.whyNot}</span>
@@ -149,17 +162,17 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
       )}
 
       <div className="task-code-row">
-        <b className="small">Revisão</b>
+        <b className="small">{t('tasks.reviewLabel')}</b>
         {task.review ? (
           <span className="small">
-            {nameOf(task.review.staffId)} · {task.review.doneAt ? 'respondeu' : 'revisando'} ·{' '}
+            {nameOf(task.review.staffId)} · {task.review.doneAt ? t('tasks.replied') : t('tasks.reviewing')} ·{' '}
             <button className="link" onClick={() => onOpenStaff(task.review!.staffId)}>
-              abrir a conversa
+              {t('tasks.openConversation')}
             </button>
           </span>
         ) : reviewers.length ? (
           <>
-            <select value={reviewer} onChange={(e) => setReviewer(e.target.value)} aria-label="Quem revisa">
+            <select value={reviewer} onChange={(e) => setReviewer(e.target.value)} aria-label={t('tasks.whoReviews')}>
               {reviewers.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name} — {s.role}
@@ -171,27 +184,27 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
               disabled={!!busy || !reviewer}
               onClick={() => void run('review', () => withUsageConfirm((force) => api.taskReview(projectId, task.id, reviewer, force)))}
             >
-              Pedir revisão
+              {t('tasks.askReview')}
             </button>
           </>
         ) : (
-          <span className="muted small">contrate um revisor neste projeto para pedir revisão</span>
+          <span className="muted small">{t('tasks.hireReviewer')}</span>
         )}
       </div>
 
       {(task.status === 'done' || task.status === 'live' || task.merged) && (
         <div className="task-code-row">
-          <b className="small">Deploy</b>
+          <b className="small">{t('tasks.deploy')}</b>
           {task.deploy ? (
             <span className="small">
-              {nameOf(task.deploy.staffId)} · {task.deploy.doneAt ? 'respondeu' : 'fazendo'} ·{' '}
+              {nameOf(task.deploy.staffId)} · {task.deploy.doneAt ? t('tasks.replied') : t('tasks.working')} ·{' '}
               <button className="link" onClick={() => onOpenStaff(task.deploy!.staffId)}>
-                abrir a conversa
+                {t('tasks.openConversation')}
               </button>
             </span>
           ) : infra.length ? (
             <>
-              <select value={deployer} onChange={(e) => setDeployer(e.target.value)} aria-label="Quem faz o deploy">
+              <select value={deployer} onChange={(e) => setDeployer(e.target.value)} aria-label={t('tasks.whoDeploys')}>
                 {infra.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name} — {s.role}
@@ -201,14 +214,14 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
               <button
                 className="btn-secondary"
                 disabled={!!busy || !deployer}
-                title="Manda o checklist: backup, estado antes e depois, runbook; ele pede confirmação antes do irreversível"
+                title={t('tasks.deployHint')}
                 onClick={() => void run('deploy', () => withUsageConfirm((force) => api.taskDeploy(projectId, task.id, deployer, force)))}
               >
-                Pedir deploy
+                {t('tasks.askDeploy')}
               </button>
             </>
           ) : (
-            <span className="muted small">nenhum funcionário com acesso a servidores neste projeto</span>
+            <span className="muted small">{t('tasks.noInfraStaff')}</span>
           )}
         </div>
       )}

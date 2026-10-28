@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type { Autonomy, ChatAttachment, ChatItem, Effort, SendPriority, UiLevel } from '../../../shared/model';
 import { api } from '../api';
 import { FileDiffIcon, ImageIcon, SendIcon } from '../icons';
+import { t, locale } from '../i18n';
 import { shrinkImage } from '../lib/shrinkImage';
 import {
   applySuggestion,
@@ -17,6 +18,7 @@ import {
   useFileSuggestions,
 } from './ChatExtras';
 import { ChangesPanel } from './ChangesPanel';
+import { useChatDetail } from './chatDetail';
 import { Markdown } from './markdown';
 
 /** Prints no chat: até 4 por mensagem, com o lado maior em até 1568 px (o que o Claude lê sem reduzir). */
@@ -42,8 +44,15 @@ interface Props {
   fichaEffort?: Effort | null;
   /** Topo compacto do funcionário (montado pelo EmployeePanel); o "⋯" fica à direita dele. */
   top?: ReactNode;
-  /** O que o "Mais" mostra da conversa e do funcionário (vem do EmployeePanel). */
-  more?: { conversation?: ReactNode; employee?: ReactNode };
+  /** O que o "Mais" mostra (vem do EmployeePanel): extras da aba Conversa e as abas do funcionário. */
+  more?: { conversation?: ReactNode; tabs?: MoreTab[] };
+}
+
+/** Uma aba do "Mais" (Ficha, Expediente, Rotinas, Ações…). */
+export interface MoreTab {
+  id: string;
+  label: string;
+  content: ReactNode;
 }
 
 /** Conversa com o funcionário dentro do MyCo, sem terminal. */
@@ -54,7 +63,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
     if (chat.sessionId && chat.sessionId !== sessionId) onSessionStarted?.(chat.sessionId);
   }, [chat.sessionId, sessionId, onSessionStarted]);
   const [draft, setDraft] = useState('');
-  const [showTools, setShowTools] = useState(() => readFlag(TOOLS_KEY));
+  const [showTools] = useChatDetail();
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const stick = useRef(true);
@@ -99,13 +108,13 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
     const valid = files.filter((f) => /^image\/(png|jpeg|webp|gif)$/.test(f.type));
     if (!valid.length) return;
     const room = MAX_IMAGES - images.length;
-    if (room <= 0) return setImageError(`No máximo ${MAX_IMAGES} imagens por mensagem.`);
+    if (room <= 0) return setImageError(t('chat.maxImages', { max: MAX_IMAGES }));
     try {
       const shrunk = await Promise.all(valid.slice(0, room).map((f) => shrinkImage(f, CHAT_IMAGE_MAX)));
       setImages((prev) => [...prev, ...shrunk].slice(0, MAX_IMAGES));
-      if (valid.length > room) setImageError(`No máximo ${MAX_IMAGES} imagens por mensagem.`);
+      if (valid.length > room) setImageError(t('chat.maxImages', { max: MAX_IMAGES }));
     } catch {
-      setImageError('Não foi possível ler a imagem.');
+      setImageError(t('chat.imageReadFail'));
     }
   };
 
@@ -121,7 +130,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
     try {
       const read = await Promise.all(docs.filter(isAttachable).map(readAttachment));
       setFiles((prev) => [...prev, ...read].slice(0, 5));
-      if (bad.length) setImageError(`Não dá para anexar ${bad.map((f) => f.name).join(', ')}: só imagem, texto ou PDF.`);
+      if (bad.length) setImageError(t('chat.cantAttach', { names: bad.map((f) => f.name).join(', ') }));
     } catch (e) {
       setImageError((e as Error).message);
     }
@@ -157,11 +166,17 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
     }
   };
 
-  const blocked = disabled ?? (chat.elsewhere ? 'aberta em outro lugar' : null);
+  const blocked = disabled ?? (chat.elsewhere ? t('chat.openElsewhereShort') : null);
   const [showChanges, setShowChanges] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   // "Mais": abre com o foco no painel; ao fechar, o foco volta para o "⋯".
   const [moreOpen, setMoreOpen] = useState(false);
+  const [moreTab, setMoreTab] = useState('conversa');
+  /** Os chips da linha de status abrem o "Mais" direto na aba da conversa. */
+  const openConversationMore = () => {
+    setMoreTab('conversa');
+    setMoreOpen(true);
+  };
   const moreBtn = useRef<HTMLButtonElement>(null);
   const moreRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -182,17 +197,66 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
     if (!sid) return;
     const p = await api.chatRewind(projectId, sid, staffId, uuid, true).catch((e: Error) => ({ canRewind: false, files: [], insertions: 0, deletions: 0, error: e.message }));
     if (!p.canRewind) {
-      window.alert(`Não dá para voltar até aqui${p.error ? ` (${p.error})` : ''}. Só funciona para mensagens mandadas pelo MyCo a partir desta versão.`);
+      window.alert(p.error ? t('chat.rewindNoError', { error: p.error }) : t('chat.rewindNo'));
       return;
     }
     if (!p.files.length) {
-      window.alert('Nenhum arquivo mudou desde essa mensagem.');
+      window.alert(t('chat.rewindNoChanges'));
       return;
     }
     const list = p.files.map((f) => `• ${f}`).join('\n');
-    if (!window.confirm(`Voltar ${p.files.length === 1 ? '1 arquivo' : `${p.files.length} arquivos`} ao que eram antes desta mensagem? (+${p.insertions} −${p.deletions})\n\n${list}\n\nComandos que ele rodou (instalar, banco, git) não são desfeitos. A conversa continua.`)) return;
+    if (
+      !window.confirm(
+        t('chat.rewindConfirm', {
+          files: p.files.length === 1 ? t('chat.filesOne') : t('chat.filesOther', { n: p.files.length }),
+          ins: p.insertions,
+          del: p.deletions,
+          list,
+        }),
+      )
+    )
+      return;
     await api.chatRewind(projectId, sid, staffId, uuid, false).catch((e: Error) => window.alert(e.message));
   };
+
+  // "Mais": uma aba para a conversa e as do funcionário (Ficha, Expediente…), num lugar só.
+  const conversationTab = (
+    <>
+      {chat.state?.running && chat.sessionId && !!chat.state.background?.length && (
+        <ul className="chat-extra small">
+          {chat.state.background.map((task) => (
+            <li key={task.id}>
+              <span className="muted">{task.kind === 'agent' ? 'agent' : task.kind === 'shell' ? t('chat.kindShell') : task.kind}</span> {task.label}{' '}
+              <button type="button" className="link small" onClick={() => void api.chatStopTask(chat.sessionId!, task.id).catch((e: Error) => window.alert(e.message))}>
+                {t('chat.stopTask')}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {staffId && <ChatSettingsBar level={level} state={chat.state} fichaModel={fichaModel} fichaEffort={fichaEffort} disabled={!!blocked} onChange={chat.settings} />}
+      <div className="chat-more-row">
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => void chat.compact()}
+          disabled={!chat.sessionId || busy || !!blocked}
+          title={t('chat.compactHelp')}
+        >
+          {chat.state?.compacting ? t('chat.compacting') : t('chat.compact')}
+        </button>
+        {level === 'advanced' && chat.state?.running && chat.sessionId && (
+          <button type="button" className="btn-secondary btn-toggle" aria-pressed={mcpOpen} onClick={() => setMcpOpen(!mcpOpen)} title={t('chat.mcpsHelp')}>
+            MCPs
+          </button>
+        )}
+        {more?.conversation}
+      </div>
+      {mcpOpen && chat.sessionId && <McpMenu projectId={projectId} sessionId={chat.sessionId} staffId={staffId} />}
+    </>
+  );
+  const moreTabs: MoreTab[] = [{ id: 'conversa', label: t('chat.tabConversation'), content: conversationTab }, ...(more?.tabs ?? [])];
+  const activeTab = moreTabs.find((tab) => tab.id === moreTab) ?? moreTabs[0]!;
 
   return (
     <section className="chat">
@@ -202,10 +266,10 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           type="button"
           ref={moreBtn}
           className="btn-secondary chat-more-btn"
-          aria-label="Mais opções"
+          aria-label={t('chat.moreOptions')}
           aria-haspopup="dialog"
           aria-expanded={moreOpen}
-          title="Mais opções"
+          title={t('chat.moreOptions')}
           onClick={() => setMoreOpen(true)}
         >
           ⋯
@@ -223,63 +287,29 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           }}
         >
           <div className="chat-more-head">
-            <h3 id="chat-more-title">Mais opções</h3>
+            <h3 id="chat-more-title">{t('chat.moreOptions')}</h3>
             <button type="button" className="btn-secondary" onClick={closeMore}>
-              Fechar
+              {t('chat.close')}
             </button>
           </div>
-          <div className="chat-more-sec">
-            <h4>Esta conversa</h4>
-            {chat.state?.running && chat.sessionId && !!chat.state.background?.length && (
-              <ul className="chat-extra small">
-                {chat.state.background.map((t) => (
-                  <li key={t.id}>
-                    <span className="muted">{t.kind === 'agent' ? 'agent' : t.kind === 'shell' ? 'comando' : t.kind}</span> {t.label}{' '}
-                    <button type="button" className="link small" onClick={() => void api.chatStopTask(chat.sessionId!, t.id).catch((e: Error) => window.alert(e.message))}>
-                      parar
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {staffId && (
-              <ChatSettingsBar level={level} state={chat.state} fichaModel={fichaModel} fichaEffort={fichaEffort} disabled={!!blocked} onChange={chat.settings} />
-            )}
-            <div className="chat-more-row">
-              {/* Liga/desliga no padrão dos botões do DS (pressionado = ligado). */}
+          <div className="tabs" role="tablist" aria-label={t('chat.moreOptions')}>
+            {moreTabs.map((tab) => (
               <button
+                key={tab.id}
                 type="button"
-                className="btn-secondary btn-toggle"
-                aria-pressed={showTools}
-                onClick={() => {
-                  setShowTools(!showTools);
-                  writeFlag(TOOLS_KEY, !showTools);
-                }}
-                title="Mostra as leituras, buscas e comandos que o funcionário fez"
+                role="tab"
+                id={`more-tab-${tab.id}`}
+                aria-selected={moreTab === tab.id}
+                aria-controls="chat-more-panel"
+                className={`tab ${moreTab === tab.id ? 'is-active' : ''}`}
+                onClick={() => setMoreTab(tab.id)}
               >
-                Detalhar
+                {tab.label}
               </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => void chat.compact()}
-                disabled={!chat.sessionId || busy || !!blocked}
-                title="Resume o início da conversa para liberar contexto (/compact)"
-              >
-                {chat.state?.compacting ? 'Compactando…' : 'Compactar'}
-              </button>
-              {level === 'advanced' && chat.state?.running && chat.sessionId && (
-                <button type="button" className="btn-secondary btn-toggle" aria-pressed={mcpOpen} onClick={() => setMcpOpen(!mcpOpen)} title="Ligar e desligar MCPs só nesta conversa">
-                  MCPs
-                </button>
-              )}
-            </div>
-            {mcpOpen && chat.sessionId && <McpMenu projectId={projectId} sessionId={chat.sessionId} staffId={staffId} />}
-            {more?.conversation}
+            ))}
           </div>
-          <div className="chat-more-sec">
-            <h4>Funcionário</h4>
-            {more?.employee}
+          <div className="chat-more-sec" role="tabpanel" id="chat-more-panel" aria-labelledby={`more-tab-${activeTab.id}`}>
+            {activeTab.content}
           </div>
         </div>
       )}
@@ -291,11 +321,9 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
-        {chat.loading && <p className="muted small chat-empty">Carregando a conversa…</p>}
+        {chat.loading && <p className="muted small chat-empty">{t('chat.loadingChat')}</p>}
         {!chat.loading && visible.length === 0 && (
-          <p className="muted small chat-empty">
-            {sessionId ? 'Nenhuma mensagem nesta sessão ainda.' : `Comece a conversa: ${name} lê a ficha e a memória antes de responder.`}
-          </p>
+          <p className="muted small chat-empty">{sessionId ? t('chat.noMessages') : t('chat.startChat', { name })}</p>
         )}
         {visible.map((item) => (
           <Item
@@ -309,7 +337,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
         ))}
         {busy && !streaming && !pending && (
           <div className="chat-typing" aria-live="polite">
-            {chat.state?.compacting ? 'compactando a conversa' : `${name} está trabalhando`}
+            {chat.state?.compacting ? t('chat.compactingChat') : t('chat.working', { name })}
             <span className="bn-working" />
             {doing && !showTools && <span className="chat-doing mono">{doing}</span>}
           </div>
@@ -321,31 +349,28 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           {chat.elsewhere.orphan ? (
             <>
               <p>
-                Ficou um processo desta conversa de antes do MyCo reiniciar
-                {chat.elsewhere.status ? ` (${STATUS_TEXT[chat.elsewhere.status] ?? chat.elsewhere.status})` : ''}. Ninguém mais
-                fala com ele.
+                {t('chat.orphanProc', {
+                  status: chat.elsewhere.status ? ` (${STATUS_TEXT[chat.elsewhere.status] ?? chat.elsewhere.status})` : '',
+                })}
               </p>
               <p className="muted small">
-                Trazer encerra esse processo e retoma a conversa aqui.
-                {chat.elsewhere.status === 'busy' ? ' Ele está no meio de um turno: o que estava fazendo para.' : ''}
+                {t('chat.bringHere')}
+                {chat.elsewhere.status === 'busy' ? t('chat.stoppedMidTurn') : ''}
               </p>
             </>
           ) : (
             <>
               <p>
-                Esta sessão está aberta {chat.elsewhere.entrypoint === 'claude-desktop' ? 'no app do Claude' : 'num terminal'}
-                {chat.elsewhere.status ? ` (${STATUS_TEXT[chat.elsewhere.status] ?? chat.elsewhere.status})` : ''}. Conversar daqui ao
-                mesmo tempo criaria uma cópia da sessão.
+                {t('chat.sessionOpen', {
+                  where: t(chat.elsewhere.entrypoint === 'claude-desktop' ? 'chat.whereDesktop' : 'chat.whereTerminal'),
+                  status: chat.elsewhere.status ? ` (${STATUS_TEXT[chat.elsewhere.status] ?? chat.elsewhere.status})` : '',
+                })}
               </p>
-              <p className="muted small">
-                {chat.elsewhere.entrypoint === 'claude-desktop'
-                  ? 'Feche a sessão no app do Claude (arquive ou feche o app) e clique em trazer.'
-                  : 'Feche a sessão lá (digite /exit ou feche a janela) e clique em trazer.'}
-              </p>
+              <p className="muted small">{t(chat.elsewhere.entrypoint === 'claude-desktop' ? 'chat.closeDesktop' : 'chat.closeTerminal')}</p>
             </>
           )}
           <button className="btn-primary" onClick={() => void chat.recheck()}>
-            Trazer para o MyCo
+            {t('chat.bringToMyco')}
           </button>
         </div>
       )}
@@ -358,8 +383,8 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
         <div className="chat-images">
           {images.map((src, i) => (
             <span key={i} className="chat-image">
-              <img src={src} alt={`Imagem ${i + 1}`} />
-              <button type="button" onClick={() => setImages((prev) => prev.filter((_, j) => j !== i))} title="Tirar esta imagem" aria-label="Tirar imagem">
+              <img src={src} alt={t('chat.imageAlt', { n: i + 1 })} />
+              <button type="button" onClick={() => setImages((prev) => prev.filter((_, j) => j !== i))} title={t('chat.removeImage')} aria-label={t('chat.removeImageAria')}>
                 ×
               </button>
             </span>
@@ -367,7 +392,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           {files.map((f, i) => (
             <span key={`f${i}`} className="chat-file small">
               {f.name}
-              <button type="button" onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))} title="Tirar este arquivo" aria-label={`Tirar ${f.name}`}>
+              <button type="button" onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))} title={t('chat.removeFile')} aria-label={t('chat.removeNamed', { name: f.name })}>
                 ×
               </button>
             </span>
@@ -381,8 +406,8 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
         <textarea
           ref={input}
           value={draft}
-          placeholder={blocked ? `Conversa indisponível: ${blocked}` : `Mensagem para ${name} · / comandos · @ arquivos`}
-          title={blocked ? undefined : 'Enter envia, Shift+Enter quebra linha, Ctrl+V cola um print'}
+          placeholder={blocked ? t('chat.unavailable', { why: blocked }) : t('chat.placeholder', { name })}
+          title={blocked ? undefined : t('chat.inputHelp')}
           disabled={!!blocked}
           rows={2}
           onChange={(e) => setDraft(e.target.value)}
@@ -417,9 +442,9 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           }}
         />
         <div className="chat-actions">
-          <label className="btn-secondary chat-attach" title="Anexar imagem, texto ou PDF (ou cole com Ctrl+V)">
+          <label className="btn-secondary chat-attach" title={t('chat.attachHelp')}>
             <ImageIcon />
-            <span className="sr-only">Anexar arquivo</span>
+            <span className="sr-only">{t('chat.attachFile')}</span>
             <input
               type="file"
               accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/*,.md,.csv,.json,.yml,.yaml,.ts,.tsx,.js,.php,.py,.sql,.log"
@@ -432,16 +457,16 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
             />
           </label>
           {busy && (
-            <button className="btn-secondary chat-stop" onClick={() => void chat.interrupt()} title="Interrompe o turno atual">
-              Parar
+            <button className="btn-secondary chat-stop" onClick={() => void chat.interrupt()} title={t('chat.stopHelp')}>
+              {t('chat.stop')}
             </button>
           )}
           <button
             className="btn-primary chat-send"
             onClick={() => void submit()}
             disabled={(!draft.trim() && !images.length && !files.length) || !!blocked || pending}
-            aria-label={busy ? PRIORITY_BUTTON[whileBusy] : 'Enviar'}
-            title={pending ? 'Responda o pedido de permissão primeiro' : busy ? `${PRIORITY_BUTTON[whileBusy]}: ${PRIORITY_HELP[whileBusy]}` : 'Enviar (Enter)'}
+            aria-label={busy ? PRIORITY_BUTTON[whileBusy] : t('chat.send')}
+            title={pending ? t('chat.answerFirst') : busy ? `${PRIORITY_BUTTON[whileBusy]}: ${PRIORITY_HELP[whileBusy]}` : t('chat.sendEnter')}
           >
             <SendIcon />
           </button>
@@ -453,25 +478,27 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           <button
             type="button"
             className={`chat-chip ${modeAlert}`}
-            onClick={() => setMoreOpen(true)}
-            title={`${chat.state?.permissionMode ? `Modo de permissão em vigor nesta conversa (${mode})` : 'Autonomia da ficha: a conversa passa a usá-la quando abrir'}. Para trocar, abra o Mais`}
+            onClick={openConversationMore}
+            title={t('chat.modeTitle', {
+              info: chat.state?.permissionMode ? t('chat.modeInForce', { mode }) : t('chat.autonomyFromProfile'),
+            })}
           >
             {MODE_TEXT[mode] ?? mode}
           </button>
         )}
-        <button type="button" className="chat-chip" onClick={() => setMoreOpen(true)} title="Modelo e esforço desta conversa (para trocar, abra o Mais)">
-          {modelLabel(chat.state?.model) || modelLabel(fichaModel) || 'modelo padrão'}
-          {effort ? ` · esforço ${effort}` : ''}
+        <button type="button" className="chat-chip" onClick={openConversationMore} title={t('chat.modelHelp')}>
+          {modelLabel(chat.state?.model) || modelLabel(fichaModel) || t('chat.defaultModel')}
+          {effort ? t('chat.effortShort', { e: effort }) : ''}
         </button>
         <ContextMeter context={chat.context} />
         {chat.state?.running && !!chat.state.background?.length && (
           <button
             type="button"
             className="link small"
-            title={`${chat.state.background.map((t) => t.label).join('\n')}\n\nClique para ver e parar`}
-            onClick={() => setMoreOpen(true)}
+            title={`${chat.state.background.map((task) => task.label).join('\n')}\n\n${t('chat.clickToStop')}`}
+            onClick={openConversationMore}
           >
-            {chat.state.background.length} em segundo plano
+            {t('chat.background', { n: chat.state.background.length })}
           </button>
         )}
         {staffId && chat.sessionId && (
@@ -479,8 +506,8 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
             type="button"
             className="btn-secondary chat-changes"
             onClick={() => setShowChanges(true)}
-            aria-label="O que mudou"
-            title="O que mudou: os arquivos que ele mudou, o diff, os testes e (na worktree dele) mesclar"
+            aria-label={t('chat.changes')}
+            title={t('chat.changesHelp')}
           >
             <FileDiffIcon />
           </button>
@@ -511,8 +538,8 @@ function McpMenu({ projectId, sessionId, staffId }: { projectId: string; session
   };
   return (
     <ul className="chat-extra small">
-      {!list && !error && <li className="muted">Lendo os MCPs da conversa…</li>}
-      {list?.length === 0 && <li className="muted">Nenhum MCP nesta conversa.</li>}
+      {!list && !error && <li className="muted">{t('chat.readingMcps')}</li>}
+      {list?.length === 0 && <li className="muted">{t('chat.noMcps')}</li>}
       {list?.map((m) => (
         <li key={m.name}>
           <label className="check">
@@ -526,26 +553,24 @@ function McpMenu({ projectId, sessionId, staffId }: { projectId: string; session
   );
 }
 
-const TOOLS_KEY = 'myco.chat.showTools';
+const STATUS_TEXT: Record<string, string> = { busy: t('chat.stBusy'), idle: t('chat.stIdle'), waiting: t('chat.stWaiting') };
 
-const STATUS_TEXT: Record<string, string> = { busy: 'trabalhando', idle: 'parada', waiting: 'esperando resposta' };
-
-const PRIORITY_BUTTON: Record<SendPriority, string> = { next: 'Enviar', later: 'Pôr na fila', now: 'Enviar agora' };
+const PRIORITY_BUTTON: Record<SendPriority, string> = { next: t('chat.send'), later: t('chat.prioLater'), now: t('chat.prioNow') };
 const PRIORITY_HELP: Record<SendPriority, string> = {
-  next: 'Entra no trabalho em andamento, entre uma ferramenta e outra, sem parar (muda no menu config)',
-  later: 'Espera ele terminar e vira a próxima mensagem (muda no menu config)',
-  now: 'Interrompe o que ele está fazendo e responde já (muda no menu config)',
+  next: t('chat.prioNextHelp'),
+  later: t('chat.prioLaterHelp'),
+  now: t('chat.prioNowHelp'),
 };
-const QUEUED_TEXT: Record<SendPriority, string> = { next: 'mandada durante o trabalho', later: 'na fila', now: 'interrompeu' };
+const QUEUED_TEXT: Record<SendPriority, string> = { next: t('chat.queuedNext'), later: t('chat.queuedLater'), now: t('chat.queuedNow') };
 
 /** Modo que o Claude Code reporta → o nome da autonomia na ficha. */
 const MODE_TEXT: Record<string, string> = {
-  default: 'pede aprovação',
-  acceptEdits: 'edita sozinho',
-  plan: 'só planeja',
-  auto: 'automático',
-  dontAsk: 'não pergunta (nega o que não está liberado)',
-  bypassPermissions: 'sem nenhuma checagem',
+  default: t('chat.modeAsk'),
+  acceptEdits: t('chat.modeEdits'),
+  plan: t('chat.modePlan'),
+  auto: t('chat.modeAuto'),
+  dontAsk: t('chat.modeDontAsk'),
+  bypassPermissions: t('chat.modeBypass'),
 };
 /** Autonomia da ficha → modo do Claude Code (vale antes de a conversa abrir). */
 const MODE_OF_AUTONOMY: Record<Autonomy, string> = {
@@ -556,29 +581,16 @@ const MODE_OF_AUTONOMY: Record<Autonomy, string> = {
   bypassPermissions: 'bypassPermissions',
 };
 
-function readFlag(key: string): boolean {
-  try {
-    return localStorage.getItem(key) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function writeFlag(key: string, value: boolean) {
-  try {
-    localStorage.setItem(key, value ? '1' : '0');
-  } catch {
-    // sem armazenamento: vale só nesta aba
-  }
-}
-
 /** Compacto: "contexto 42%"; a barrinha só aparece a partir de 60%. Os números completos ficam no tooltip. */
 function ContextMeter({ context }: { context: { used: number; window: number; percent: number } | null }) {
-  if (!context) return <span className="muted small">contexto: —</span>;
+  if (!context) return <span className="muted small">{t('chat.contextNone')}</span>;
   const level = context.percent >= 80 ? 'high' : context.percent >= 60 ? 'mid' : 'low';
   return (
-    <span className={`meter meter-${level}`} title={`${context.used.toLocaleString('pt-BR')} de ${context.window.toLocaleString('pt-BR')} tokens`}>
-      <span className="meter-label">contexto</span>
+    <span
+      className={`meter meter-${level}`}
+      title={t('chat.tokensOf', { used: context.used.toLocaleString(locale()), window: context.window.toLocaleString(locale()) })}
+    >
+      <span className="meter-label">{t('chat.context')}</span>
       {context.percent >= 60 && (
         <span className="meter-track">
           <span className="meter-fill" style={{ width: `${Math.min(100, context.percent)}%` }} />
@@ -610,19 +622,19 @@ function Item({
       return (
         <div className="msg msg-user">
           {onRewind && item.uuid && !item.held && (
-            <button type="button" className="msg-rewind" title="Volta os arquivos ao que eram antes desta mensagem (pergunta antes)" onClick={() => onRewind(item.uuid!)}>
-              ↶ voltar até aqui
+            <button type="button" className="msg-rewind" title={t('chat.rewindHelp')} onClick={() => onRewind(item.uuid!)}>
+              {t('chat.rewindHere')}
             </button>
           )}
           {item.images ? (
             <span className="msg-images">
-              <ImageIcon size={12} /> {item.images === 1 ? '1 imagem' : `${item.images} imagens`}
+              <ImageIcon size={12} /> {item.images === 1 ? t('chat.imagesOne') : t('chat.imagesOther', { n: item.images })}
             </span>
           ) : null}
-          {item.files?.length ? <span className="msg-images">anexos: {item.files.join(', ')}</span> : null}
+          {item.files?.length ? <span className="msg-images">{t('chat.attachments', { files: item.files.join(', ') })}</span> : null}
           {item.text}
           {item.queued && <span className="msg-queued">{QUEUED_TEXT[item.queued]}</span>}
-          {item.held && <span className="msg-queued">guardada pelo MyCo: {item.held}</span>}
+          {item.held && <span className="msg-queued">{t('chat.heldByMyco', { why: item.held })}</span>}
         </div>
       );
     case 'assistant':
@@ -636,10 +648,10 @@ function Item({
         <details className={`tool ${item.isError ? 'tool-error' : ''}`}>
           <summary>
             <span className="tool-name">{item.name}</span> <span className="tool-summary">{item.summary}</span>
-            {item.result === null && <span className="muted small"> · rodando…</span>}
+            {item.result === null && <span className="muted small"> · {t('chat.running')}</span>}
           </summary>
           {item.input && <pre className="tool-io">{item.input}</pre>}
-          {item.result !== null && <pre className="tool-io">{item.result || '(sem saída)'}</pre>}
+          {item.result !== null && <pre className="tool-io">{item.result || t('chat.noOutput')}</pre>}
         </details>
       );
     case 'permission':
@@ -654,11 +666,11 @@ function Item({
 }
 
 const AUTONOMY_SHORT: Record<Autonomy, string> = {
-  plan: 'só planeja',
-  manual: 'pedindo aprovação',
-  acceptEdits: 'editando sozinho',
-  auto: 'no automático',
-  bypassPermissions: 'sem travas',
+  plan: t('chat.shortPlan'),
+  manual: t('chat.shortManual'),
+  acceptEdits: t('chat.shortEdits'),
+  auto: t('chat.shortAuto'),
+  bypassPermissions: t('chat.shortBypass'),
 };
 
 /**
@@ -687,6 +699,7 @@ function PlanCard({
   };
   const changes = async () => {
     setBusy(true);
+    // Vai ao agente: fica em português de propósito (é o prompt que ele lê, não a interface).
     await onAnswer(requestId, false, { message: 'O usuário quer mudanças no plano. Pergunte o que mudar e espere a resposta dele.' });
     setBusy(false);
     onChangesRequested();
@@ -694,23 +707,24 @@ function PlanCard({
   return (
     <div className={`permission permission-plan permission-${item.status}`}>
       <p className="permission-title">
-        <b>Plano pronto</b> <span className="muted small">{item.status === 'pending' ? 'para você aprovar' : item.status === 'allowed' ? 'aprovado' : 'devolvido'}</span>
+        <b>{t('chat.planReady')}</b>{' '}
+        <span className="muted small">{item.status === 'pending' ? t('chat.planPending') : item.status === 'allowed' ? t('chat.planApproved') : t('chat.planReturned')}</span>
       </p>
       <div className="plan-body">
         <Markdown text={plan} />
       </div>
       {item.status === 'pending' ? (
         <div className="actions">
-          <button className="btn-primary" disabled={busy} onClick={() => void approve()} title={`Ele executa ${AUTONOMY_SHORT[executeAs]}`}>
-            Aprovar e executar
+          <button className="btn-primary" disabled={busy} onClick={() => void approve()} title={t('chat.runsTitle', { how: AUTONOMY_SHORT[executeAs] })}>
+            {t('chat.approveRun')}
           </button>
-          <button className="btn-secondary" disabled={busy} onClick={() => void changes()} title="Ele continua só planejando; escreva o que mudar">
-            Pedir mudanças
+          <button className="btn-secondary" disabled={busy} onClick={() => void changes()} title={t('chat.askChangesHelp')}>
+            {t('chat.askChanges')}
           </button>
-          <span className="muted small">executa {AUTONOMY_SHORT[executeAs]}</span>
+          <span className="muted small">{t('chat.runsHow', { how: AUTONOMY_SHORT[executeAs] })}</span>
         </div>
       ) : (
-        <p className="small muted">{item.status === 'allowed' ? `Aprovado: executando ${AUTONOMY_SHORT[executeAs]}` : 'Devolvido para mudanças'}</p>
+        <p className="small muted">{item.status === 'allowed' ? t('chat.approvedRunning', { how: AUTONOMY_SHORT[executeAs] }) : t('chat.returnedForChanges')}</p>
       )}
     </div>
   );
@@ -727,48 +741,38 @@ function PermissionCard({ item, onAnswer }: { item: Extract<ChatItem, { kind: 'p
   return (
     <div className={`permission permission-${item.status}`}>
       <p className="permission-title">
-        Pede permissão: <b>{item.tool}</b>
+        {t('chat.asksPermission')} <b>{item.tool}</b>
       </p>
       <p className="mono small">{item.summary}</p>
       {item.description && <p className="small">{item.description}</p>}
       <details>
-        <summary className="small">detalhes</summary>
+        <summary className="small">{t('chat.details')}</summary>
         <pre className="tool-io">{item.input}</pre>
       </details>
       {item.status === 'pending' ? (
         <div className="actions">
           <button className="btn-primary" disabled={busy} onClick={() => void answer(true)}>
-            Aprovar
+            {t('chat.approve')}
           </button>
-          <button
-            className="btn-secondary"
-            disabled={busy}
-            onClick={() => void answer(true, 'session')}
-            title="Aprova e não pergunta mais isso nesta conversa"
-          >
-            Sempre nesta conversa
+          <button className="btn-secondary" disabled={busy} onClick={() => void answer(true, 'session')} title={t('chat.alwaysHereHelp')}>
+            {t('chat.alwaysHere')}
           </button>
-          <button
-            className="btn-secondary"
-            disabled={busy}
-            onClick={() => void answer(true, 'project')}
-            title="Aprova e libera de vez no projeto (fica em .claude/settings.local.json)"
-          >
-            Sempre neste projeto
+          <button className="btn-secondary" disabled={busy} onClick={() => void answer(true, 'project')} title={t('chat.alwaysProjectHelp')}>
+            {t('chat.alwaysProject')}
           </button>
           <button className="btn-secondary" disabled={busy} onClick={() => void answer(false)}>
-            Negar
+            {t('chat.deny')}
           </button>
         </div>
       ) : (
         <p className="small muted">
           {item.status === 'allowed'
             ? item.remembered === 'session'
-              ? 'Aprovado de vez nesta conversa'
+              ? t('chat.approvedHere')
               : item.remembered === 'project'
-                ? 'Aprovado de vez neste projeto'
-                : 'Aprovado'
-            : 'Negado'}
+                ? t('chat.approvedProject')
+                : t('chat.approved')
+            : t('chat.denied')}
         </p>
       )}
     </div>

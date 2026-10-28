@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Board, Task } from '../../../shared/model';
 import { api } from '../api';
+import { t } from '../i18n';
 
 // Ctrl+K: pular para um funcionário, um projeto ou uma tarefa digitando parte do nome. Setas
 // escolhem, Enter abre, Esc fecha.
@@ -19,6 +20,13 @@ interface Item {
 }
 
 const MAX = 12;
+/** Nome de cada tipo na tela (o tipo interno continua em pt, como identificador). */
+const KIND: Record<Item['kind'], string> = {
+  funcionário: t('toolbar.kindStaff'),
+  projeto: t('toolbar.kindProject'),
+  tarefa: t('toolbar.kindTask'),
+  conversa: t('toolbar.kindChat'),
+};
 /** Sem acento e sem caixa: "joao" acha "João". */
 const fold = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
@@ -110,7 +118,7 @@ export function QuickJump({ board, taskProjects, onJump }: { board: Board; taskP
   }, [open, query]);
 
   const words = fold(query).split(/\s+/).filter(Boolean);
-  const named = words.length ? items.filter((i) => words.every((w) => fold(`${i.title} ${i.detail} ${i.kind}`).includes(w))) : items;
+  const named = words.length ? items.filter((i) => words.every((w) => fold(`${i.title} ${i.detail} ${KIND[i.kind]}`).includes(w))) : items;
   const shown = [...named.slice(0, MAX), ...hits].slice(0, MAX + 8);
 
   useEffect(() => {
@@ -125,12 +133,12 @@ export function QuickJump({ board, taskProjects, onJump }: { board: Board; taskP
   };
   return (
     <div className="modal-backdrop quick-jump-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
-      <div className="quick-jump" role="dialog" aria-label="Ir para">
+      <div className="quick-jump" role="dialog" aria-label={t('toolbar.jumpLabel')}>
         <input
           autoFocus
           value={query}
-          placeholder="Ir para um funcionário, projeto, tarefa ou algo dito numa conversa…"
-          aria-label="Ir para"
+          placeholder={t('toolbar.jumpPlaceholder')}
+          aria-label={t('toolbar.jumpLabel')}
           onChange={(e) => {
             setQuery(e.target.value);
             setActive(0);
@@ -152,13 +160,13 @@ export function QuickJump({ board, taskProjects, onJump }: { board: Board; taskP
           {shown.map((item, i) => (
             <li key={item.key}>
               <button type="button" className={i === active ? 'is-active' : ''} onMouseEnter={() => setActive(i)} onClick={() => go(item)}>
-                <span className="quick-jump-kind">{item.kind}</span>
+                <span className="quick-jump-kind">{KIND[item.kind]}</span>
                 <span className="quick-jump-title">{item.title}</span>
                 <span className="muted small quick-jump-detail">{item.detail}</span>
               </button>
             </li>
           ))}
-          {!shown.length && <li className="muted small quick-jump-empty">Nada com “{query.trim()}”.</li>}
+          {!shown.length && <li className="muted small quick-jump-empty">{t('toolbar.nothingWith', { q: query.trim() })}</li>}
         </ul>
       </div>
     </div>

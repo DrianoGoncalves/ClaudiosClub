@@ -12,6 +12,7 @@ import type {
   SendPriority,
 } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
+import { t } from '../i18n';
 
 // Estado de uma conversa: histórico do transcript + o que chega ao vivo pelo SSE.
 
@@ -207,7 +208,12 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
       if (elsewhere?.orphan) await api.chatAdopt(sessionId);
       const snap = await load(sessionId);
       if (snap.elsewhere && !snap.elsewhere.orphan) {
-        setError(`Ainda está aberta ${snap.elsewhere.entrypoint === 'claude-desktop' ? 'no app do Claude' : 'em outro lugar'} (processo ${snap.elsewhere.pid}). Feche lá e tente de novo.`);
+        setError(
+          t('chat.stillOpen', {
+            where: t(snap.elsewhere.entrypoint === 'claude-desktop' ? 'chat.whereDesktop' : 'chat.whereElsewhere'),
+            pid: snap.elsewhere.pid,
+          }),
+        );
       }
     } catch (e) {
       setError((e as Error).message);

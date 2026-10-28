@@ -16,6 +16,8 @@ export interface Agent {
   description: string | null;
   tools: string[] | null;
   model: string | null;
+  /** `effort` do frontmatter; null = sem ajuste (vale o padrão do Claude Code para o modelo). */
+  effort: string | null;
   scope: 'user' | 'project';
   filePath: string;
   link: LinkInfo;
@@ -534,15 +536,32 @@ export interface McpServerInfo {
   transport: string | null;
 }
 
-/** Servidor acessível por SSH (só nome e destino: chaves e senhas ficam no ssh-agent, fora da IA). */
+/** Servidor que um funcionário pode acessar: uma conexão completa do projeto (sem usuário nem chave). */
 export interface ServerInfo {
-  /** Apelido do ~/.ssh/config ou nome da conexão no .vps/config.json do projeto. */
+  /** Nome da conexão no .vps/config.json do projeto. */
   name: string;
-  source: 'ssh-config' | 'vps';
-  /** Alias ou endereço que o `ssh` recebe. */
+  source: 'vps';
+  /** Endereço do servidor. */
   host: string;
-  /** Pasta do projeto no servidor (conexões da skill vps). */
+  /** Pasta do projeto no servidor. */
   remoteRoot: string | null;
+}
+
+/**
+ * Conexão SSH de um projeto, como o MyCo mostra para você editar (`<projeto>/.vps/config.json`, o
+ * mesmo formato da skill vps). O conteúdo da chave nunca é lido: só o caminho.
+ */
+export interface ProjectConnection {
+  name: string;
+  host: string;
+  port: number;
+  user: string | null;
+  identityFile: string | null;
+  remoteRoot: string | null;
+  /** Válida e com usuário e chave: só estas entram no ssh_config que os funcionários usam. */
+  complete: boolean;
+  /** O arquivo da chave existe nesta máquina. */
+  keyFound: boolean;
 }
 
 /** Pré-requisitos do Claude in Chrome nesta máquina; null = não dá para conferir neste sistema. */

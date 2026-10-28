@@ -8,6 +8,7 @@ import { defaultLocations } from './adapters/claude/paths';
 import type { ToolAdapter } from './adapters/types';
 import { getAuthStatus, openLoginTerminal } from './auth';
 import { ArchiveRequest, ConfigPatch, MYCO_HOME, readConfig, setArchived, updateConfig } from './config';
+import { createDemo, DEMO_DIR } from './demo';
 import { z } from 'zod';
 import { AgentError, AgentInput, readAgentSource, saveAgent } from './adapters/claude/agentWrite';
 import { ChatError, ChatManager, findTranscript } from './chat/manager';
@@ -17,6 +18,7 @@ import { searchFiles } from './fileSearch';
 import { CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
 import { ChatRegistry } from './chat/registry';
 import { StaffError, StaffService } from './staff/service';
+import { mcpJsonWarnings } from './staff/mcp';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
 import { readUsage } from './usage';
 import { UsageStopError } from './usageStop';
@@ -54,7 +56,7 @@ const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', 'myco.localh
 // Retratos chegam como data URL no JSON da contratação.
 const MAX_BODY = 4 * 1024 * 1024;
 
-const adapter: ToolAdapter = new ClaudeAdapter();
+const adapter: ToolAdapter = new ClaudeAdapter({ extraPaths: [DEMO_DIR] });
 const benchmarks = new ArtificialAnalysis();
 /** ~/.claude/projects: onde ficam os transcripts das conversas. */
 const defaultTranscripts = path.join(defaultLocations().home, 'projects');
@@ -244,6 +246,8 @@ class Raw {
 class BadRequest extends Error {}
 
 const ID = '([A-Za-z0-9-]+)';
+/** Nome de conexão SSH (o mesmo formato de server/staff/servers.ts). */
+const CONN = '([A-Za-z0-9][\\w.-]{0,39})';
 
 const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ['GET', /^\/api\/health$/, async () => ({ ok: true, adapter: adapter.id })],
@@ -265,6 +269,34 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ['GET', new RegExp(`^/api/projects/${ID}$`), ({ params: [id] }) => adapter.getProject(id!)],
   ['GET', new RegExp(`^/api/projects/${ID}/mcp$`), ({ params: [id] }) => staff.listMcp(id!)],
   ['GET', new RegExp(`^/api/projects/${ID}/servers$`), ({ params: [id] }) => staff.listServers(id!)],
+  // Conexões SSH do projeto, só pela página do MyCo: até a lista é POST, para exigir o cabeçalho
+  // x-myco e a origem local (um funcionário teria de forjar os dois num comando que você aprova).
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/connections/list$`),
+    ({ params: [id], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      return staff.listConnections(id!);
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/connections$`),
+    ({ params: [id], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      return staff.saveConnection(id!, body);
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/connections/${CONN}/(delete|test)$`),
+    async ({ params: [id, name, action], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (action === 'test') return staff.testConnection(id!, name!);
+      const ok = await staff.removeConnection(id!, name!);
+      return ok === null ? null : { ok };
+    },
+  ],
   ['POST', new RegExp(`^/api/projects/${ID}/staff$`), ({ params: [id], body, fromBrowser }) => staff.hire(id!, body, fromBrowser)],
   [
     'POST',
@@ -701,6 +733,21 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       return benchmarks.get(parse(z.object({ refresh: z.boolean().default(false) }), body ?? {}).refresh);
     },
   ],
+  // Projeto demo (equipe e tarefas de exemplo em ~/.myco/demo). Criar de novo não sobrescreve:
+  // só traz de volta ao quadro, se estava arquivado.
+  [
+    'POST',
+    /^\/api\/demo$/,
+    async ({ fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      const demo = await createDemo();
+      if ((await readConfig()).archived.projects.includes(demo.projectId)) {
+        await setArchived({ kind: 'project', id: demo.projectId, archived: false });
+      }
+      adapter.forgetProjects();
+      return { created: demo.created, projectId: demo.projectId };
+    },
+  ],
   // ---- "valeu a pena?" de uma sessão ----
   [
     'GET',
@@ -956,6 +1003,23 @@ async function getInbox(): Promise<InboxItem[]> {
   for (const s of chats.secretHits()) {
     const w = where(s.sessionId, liveById.get(s.sessionId));
     if (!hidden(w)) out.push({ id: `secret:${s.id}`, kind: 'secret', ...w, summary: `${s.label} apareceu no chat: troque e não cole segredos na conversa`, at: s.at });
+  }
+  // Chave escrita no .mcp.json de um projeto: o arquivo vai para o git junto com o código.
+  for (const p of projects.filter((x) => x.exists && !x.worktreeOf)) {
+    if (hidden({ projectId: p.id, staffId: null, sessionId: '' })) continue;
+    for (const s of await mcpJsonWarnings(p.path)) {
+      out.push({
+        id: `secret:mcp:${p.id}:${s.server}`,
+        kind: 'secret',
+        projectId: p.id,
+        projectName: p.name,
+        sessionId: '',
+        staffId: null,
+        name: `MCP ${s.server}`,
+        summary: `${s.label} escrita no .mcp.json, que vai para o git: troque a chave e ponha \${VARIAVEL} no lugar dela`,
+        at: null,
+      });
+    }
   }
   return out.sort((a, b) => INBOX_ORDER[a.kind] - INBOX_ORDER[b.kind] || (b.at ?? '').localeCompare(a.at ?? ''));
 }

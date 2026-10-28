@@ -19,13 +19,14 @@ import { TEMP_IDLE_DAYS } from '../../../shared/model';
 import { api } from '../api';
 import { RoomColorPicker } from '../board/colors';
 import { portraitUrl } from '../board/nodes';
-import { ChatView } from '../chat/ChatView';
+import { ChatView, type MoreTab } from '../chat/ChatView';
 import { BrowserCheck } from '../staff/BrowserCheck';
 import { MAX_INPUT_BYTES, PROJECT_IMAGE_MAX, shrinkImage } from '../lib/shrinkImage';
 import { METRIC_LABEL, type Metric, ModelsChart } from '../toolbar/ModelsMenu';
 import { Routines } from './Routines';
 import { WorthIt } from './WorthIt';
 import { employeeName, ENTRYPOINT_LABEL, formatShare, STATUS_LABEL } from '../format';
+import { t, locale } from '../i18n';
 
 // Painel lateral: o que o nó selecionado no quadro tem por trás.
 
@@ -35,7 +36,7 @@ function ArchiveButton({
   archived,
   onArchive,
   what,
-  restoreLabel = 'Desarquivar',
+  restoreLabel = t('detail.unarchive'),
 }: {
   archived: boolean;
   onArchive: (v: boolean) => Promise<void>;
@@ -61,9 +62,9 @@ function ArchiveButton({
         className="btn-secondary"
         onClick={click}
         disabled={busy}
-        title={archived ? `Volta a mostrar ${what} no quadro` : `Esconde ${what} do quadro (nada é apagado do Claude Code)`}
+        title={archived ? t('detail.showOnBoard', { what }) : t('detail.hideFromBoard', { what })}
       >
-        {archived ? restoreLabel : 'Arquivar'}
+        {archived ? restoreLabel : t('detail.archive')}
       </button>
       {error && <span className="error">{error}</span>}
     </>
@@ -127,32 +128,17 @@ export function EmployeePanel(props: {
       setConvBusy(false);
     }
   };
-  const rename = async () => {
-    if (!project || !current) return;
-    const now = conversations.find((c) => c.id === current)?.title ?? '';
-    const title = window.prompt('Nome desta conversa', now)?.trim();
-    if (!title || title === now) return;
-    setConvBusy(true);
-    try {
-      await api.chatRename(project.id, current, title);
-      props.onChanged?.();
-    } catch (e) {
-      window.alert((e as Error).message);
-    } finally {
-      setConvBusy(false);
-    }
-  };
   const live = s?.live?.alive ? s.live : null;
   const name = staff?.name ?? (s ? employeeName(s) : '?');
   const showConvos = !!staff && !!project && (conversations.length > 0 || fresh);
   const statusInfo = live
     ? { dot: `dot dot-${live.status ?? 'unknown'}`, text: STATUS_LABEL[live.status ?? ''] ?? live.status }
-    : { dot: 'dot', text: s ? 'fora do expediente' : 'ainda sem sessão' };
+    : { dot: 'dot', text: s ? t('detail.offShift') : t('detail.noSessionYet') };
   // Topo compacto: quem é e como está. Logo abaixo, a conversa (linha 2) e os avisos que pedem ação.
   const top = (
     <>
       <div className="employee-top">
-        {staff?.portrait && project && <img className="employee-portrait" src={portraitUrl(project.id, staff.id)} alt={`Retrato de ${staff.name}`} />}
+        {staff?.portrait && project && <img className="employee-portrait" src={portraitUrl(project.id, staff.id)} alt={t('detail.portraitOf', { name: staff.name })} />}
         <div className="employee-ident">
           <h2 className="employee-name" title={name}>
             {name}
@@ -165,28 +151,28 @@ export function EmployeePanel(props: {
           <span className="badge">
             <span className={statusInfo.dot} /> {statusInfo.text}
           </span>
-          {staff?.temporary && <span className="badge warn">temporário</span>}
+          {staff?.temporary && <span className="badge warn">{t('detail.temporary')}</span>}
         </div>
       </div>
       {showConvos && (
         <div className="chat-convos">
           <select
-            aria-label="Conversa"
+            aria-label={t('detail.conversation')}
             value={current ?? ''}
             onChange={(e) => {
               setFresh(false);
               setPicked(e.target.value);
             }}
           >
-            {fresh && <option value="">Nova conversa</option>}
+            {fresh && <option value="">{t('detail.newConversation')}</option>}
             {conversations.map((c, i) => (
               <option key={c.id} value={c.id}>
                 {conversationLabel(c, i)}
               </option>
             ))}
           </select>
-          <button type="button" className="btn-secondary" disabled={fresh || convBusy} onClick={() => setFresh(true)} title="Começa uma conversa do zero (a ficha e a memória continuam)">
-            + Nova
+          <button type="button" className="btn-secondary" disabled={fresh || convBusy} onClick={() => setFresh(true)} title={t('detail.newConversationTitle')}>
+            {t('detail.newConversationBtn')}
           </button>
         </div>
       )}
@@ -196,117 +182,125 @@ export function EmployeePanel(props: {
       {staff?.browser && <BrowserCheck />}
     </>
   );
-  // No "Mais" da conversa: duplicar e renomear.
+  // No "Mais", aba Conversa: duplicar (o nome da conversa vem sozinho da primeira mensagem).
   const conversationMore = showConvos ? (
-    <div className="chat-more-row">
-      <button
-        type="button"
-        className="btn-secondary"
-        disabled={!current || convBusy}
-        onClick={() => void duplicate()}
-        title="Uma cópia desta conversa, com todo o histórico, para tentar outro caminho sem perder a original"
-      >
-        Duplicar
-      </button>
-      <button type="button" className="btn-secondary" disabled={!current || convBusy} onClick={() => void rename()} title="Dar um nome a esta conversa">
-        Renomear
-      </button>
-    </div>
+    <button
+      type="button"
+      className="btn-secondary"
+      disabled={!current || convBusy}
+      onClick={() => void duplicate()}
+      title={t('detail.duplicateTitle')}
+    >
+      {t('detail.duplicate')}
+    </button>
   ) : undefined;
-  // Funcionário: no "Mais" (ou direto no painel, sem projeto). O avançado fica em grupo, sem caixa dentro de caixa.
-  const employee = (
-    <>
-      <div className="chat-more-row">
-        <button
-          type="button"
-          className="btn-secondary"
-          onClick={props.onEdit}
-          title={staff ? 'Editar nome, retrato e ficha' : 'Dar nome, retrato e ficha a este funcionário (a sessão continua a mesma)'}
-        >
-          Editar
-        </button>
-      </div>
-      <p className="badges">
-        {s?.entrypoint && <span className="badge">{ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</span>}
-        {s?.gitBranch && <span className="badge dim">{s.gitBranch}</span>}
-        {!staff && <span className="badge dim">sem ficha</span>}
-        {props.archived && <span className="badge dim">arquivado</span>}
-      </p>
-      {s && <p className="muted mono">sessão {s.id}</p>}
-      {props.simple ? (
-        <p className="muted small simple-more">
-          Consumo, rotinas, ficha e mais ações ficam no nível avançado.{' '}
-          {props.onShowAdvanced && (
-            <button type="button" className="link" onClick={props.onShowAdvanced}>
-              Mostrar
-            </button>
-          )}
-        </p>
-      ) : (
-        <div className="collapse-group">
-          <details className="collapse">
-            <summary>Expediente</summary>
-            <dl className="stats">
-              <div><dt>do consumo total</dt><dd>{props.costUsd === null ? '—' : formatShare(props.costUsd, props.totalUsd)}</dd></div>
-              <div><dt>subagents</dt><dd>{s?.subagentCount ?? 0}</dd></div>
-              <div><dt>início</dt><dd>{s?.startedAt ? formatDate(s.startedAt) : '—'}</dd></div>
-              <div><dt>última atividade</dt><dd>{s ? formatDate(s.updatedAt) : '—'}</dd></div>
-            </dl>
-            {staff && staff.sessions.length > 1 && <p className="muted small">{staff.sessions.length} sessões desde a contratação, somadas.</p>}
-            <p className="muted small">Parte deste funcionário no consumo de todos, com os subagents que ele chamou.</p>
-          </details>
-          {s && <WorthIt key={s.id} sessionId={s.id} />}
-
-          {staff && project && (
-            <details className="collapse">
-              <summary>Rotinas{staff.routines?.length ? ` (${staff.routines.filter((r) => r.enabled).length} ligada${staff.routines.filter((r) => r.enabled).length === 1 ? '' : 's'})` : ''}</summary>
-              <Routines projectId={project.id} staff={staff} onChanged={props.onChanged} />
-            </details>
-          )}
-
+  const enabledRoutines = staff?.routines?.filter((r) => r.enabled).length ?? 0;
+  // As abas do funcionário no "Mais". Editar a ficha é um botão só, na aba Ficha.
+  const tabs: MoreTab[] = [
+    {
+      id: 'ficha',
+      label: t('detail.tabSheet'),
+      content: (
+        <>
+          <p className="badges">
+            {s?.entrypoint && <span className="badge">{ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</span>}
+            {s?.gitBranch && <span className="badge dim">{s.gitBranch}</span>}
+            {!staff && <span className="badge dim">{t('detail.noSheet')}</span>}
+            {props.archived && <span className="badge dim">{t('detail.archived')}</span>}
+          </p>
           {staff ? (
-            <details className="collapse">
-              <summary>Ficha</summary>
-              <StaffSheet staff={staff} managers={props.managers} />
-              <p className="actions">
-                <button className="btn-secondary" onClick={props.onEdit}>
-                  Editar ficha
-                </button>
-              </p>
-            </details>
+            !props.simple && <StaffSheet staff={staff} managers={props.managers} />
           ) : (
-            <p className="muted small">
-              Aberto fora do MyCo, ainda sem ficha (missão, regras, memória, MCPs). Use <b>Editar</b> para dar nome, retrato e ficha.
-            </p>
+            <p className="muted small">{t('detail.outsideMyco')}</p>
           )}
-
-          <details className="collapse">
-            <summary>Mais ações</summary>
-            {staff && <LaunchButtons hasSession={!!s} working={!!live} onLaunch={props.onLaunch} />}
-            <p className="actions">
-              {staff?.canHire && (
-                <button className="btn-secondary" onClick={props.onHireSub}>
-                  Contratar subordinado
+          <div className="chat-more-row">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={props.onEdit}
+              title={staff ? t('detail.editProfileTitle') : t('detail.giveProfileTitle')}
+            >
+              {staff ? t('detail.editProfile') : t('detail.giveProfile')}
+            </button>
+          </div>
+          {props.simple && (
+            <p className="muted small simple-more">
+              {t('detail.simpleMore')}{' '}
+              {props.onShowAdvanced && (
+                <button type="button" className="link" onClick={props.onShowAdvanced}>
+                  {t('detail.show')}
                 </button>
               )}
-              <ArchiveButton
-                archived={props.archived}
-                onArchive={props.onArchive}
-                what="este funcionário"
-                restoreLabel={staff?.temporary ? 'Restaurar' : 'Desarquivar'}
-              />
             </p>
-          </details>
-        </div>
-      )}
-    </>
-  );
-  // Sem projeto não há conversa: o topo e a ficha ficam no painel, com rolagem própria.
+          )}
+        </>
+      ),
+    },
+    ...(props.simple
+      ? []
+      : [
+          {
+            id: 'expediente',
+            label: t('detail.tabActivity'),
+            content: (
+              <>
+                <dl className="stats">
+                  <div><dt>{t('detail.costOfTotal')}</dt><dd>{props.costUsd === null ? '—' : formatShare(props.costUsd, props.totalUsd)}</dd></div>
+                  <div><dt>{t('detail.subagents')}</dt><dd>{s?.subagentCount ?? 0}</dd></div>
+                  <div><dt>{t('detail.start')}</dt><dd>{s?.startedAt ? formatDate(s.startedAt) : '—'}</dd></div>
+                  <div><dt>{t('detail.lastActivity')}</dt><dd>{s ? formatDate(s.updatedAt) : '—'}</dd></div>
+                </dl>
+                {staff && staff.sessions.length > 1 && <p className="muted small">{t('detail.sessionsSinceHire', { n: staff.sessions.length })}</p>}
+                <p className="muted small">{t('detail.shareNote')}</p>
+                {s && <WorthIt key={s.id} sessionId={s.id} />}
+                {s && <p className="muted small mono">{t('detail.sessionId', { id: s.id })}</p>}
+              </>
+            ),
+          },
+          ...(staff && project
+            ? [
+                {
+                  id: 'rotinas',
+                  label: enabledRoutines ? t('detail.routinesCount', { n: enabledRoutines }) : t('detail.tabRoutines'),
+                  content: <Routines projectId={project.id} staff={staff} onChanged={props.onChanged} />,
+                },
+              ]
+            : []),
+          {
+            id: 'acoes',
+            label: t('detail.tabActions'),
+            content: (
+              <>
+                {staff && <LaunchButtons hasSession={!!s} working={!!live} onLaunch={props.onLaunch} />}
+                <p className="actions">
+                  {staff?.canHire && (
+                    <button className="btn-secondary" onClick={props.onHireSub}>
+                      {t('detail.hireSub')}
+                    </button>
+                  )}
+                  <ArchiveButton
+                    archived={props.archived}
+                    onArchive={props.onArchive}
+                    what={t('detail.whatEmployee')}
+                    restoreLabel={staff?.temporary ? t('detail.restore') : t('detail.unarchive')}
+                  />
+                </p>
+              </>
+            ),
+          },
+        ]),
+  ];
+  // Sem projeto não há conversa (nem "Mais"): o topo e as abas, uma embaixo da outra, com rolagem própria.
   if (!project) {
     return (
       <div className="employee-scroll">
         {top}
-        {employee}
+        {tabs.map((t) => (
+          <section key={t.id} className="section">
+            <h3>{t.label}</h3>
+            {t.content}
+          </section>
+        ))}
       </div>
     );
   }
@@ -318,22 +312,22 @@ export function EmployeePanel(props: {
       staffId={staff?.id ?? null}
       name={name}
       autonomy={staff?.autonomy ?? null}
-      disabled={!project.exists ? 'a pasta do projeto não existe' : null}
+      disabled={!project.exists ? t('detail.projectFolderMissing') : null}
       onSessionStarted={props.onSessionStarted}
       level={props.simple ? 'simple' : 'advanced'}
       fichaModel={staff?.model ?? null}
       fichaEffort={staff?.effort ?? null}
       top={top}
-      more={{ conversation: conversationMore, employee }}
+      more={{ conversation: conversationMore, tabs }}
     />
   );
 }
 
 /** "Ajustar o header da sala · 27/10 14:05" (a mais recente ganha "atual"). */
 function conversationLabel(c: { title: string | null; updatedAt: string | null }, index: number): string {
-  const title = (c.title ?? 'Conversa sem título').replace(/\s+/g, ' ').slice(0, 48);
-  const when = c.updatedAt ? new Date(c.updatedAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-  return `${index === 0 ? 'atual: ' : ''}${title}${when ? ` · ${when}` : ''}`;
+  const title = (c.title ?? t('detail.untitledConversation')).replace(/\s+/g, ' ').slice(0, 48);
+  const when = c.updatedAt ? new Date(c.updatedAt).toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  return `${index === 0 ? t('detail.currentPrefix') : ''}${title}${when ? ` · ${when}` : ''}`;
 }
 
 /**
@@ -351,7 +345,7 @@ function TempNotice(props: {
   const { staff } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const hirer = props.managers.find((m) => m.id === staff.hiredBy)?.name ?? 'outro funcionário';
+  const hirer = props.managers.find((m) => m.id === staff.hiredBy)?.name ?? t('detail.otherEmployee');
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
@@ -367,28 +361,23 @@ function TempNotice(props: {
   return (
     <div className="temp-notice small">
       {props.archived && staff.ended ? (
-        <span>
-          Encerrado em {formatDate(staff.ended.at)}: {staff.ended.reason}. Ficha, memória e conversas continuam guardadas.
-        </span>
+        <span>{t('detail.endedOn', { date: formatDate(staff.ended.at), reason: staff.ended.reason })}</span>
       ) : (
-        <span>
-          Temporário, contratado por {hirer} em {formatDate(staff.createdAt)}. Sai do quadro quando {hirer} encerrar ou depois de {TEMP_IDLE_DAYS} dias
-          parado.
-        </span>
+        <span>{t('detail.tempNotice', { hirer, date: formatDate(staff.createdAt), days: TEMP_IDLE_DAYS })}</span>
       )}
       <span className="temp-notice-actions">
         {props.archived && (
-          <button className="btn-secondary" disabled={busy} onClick={() => void run(() => props.onArchive(false))} title="Volta ao quadro como temporário">
-            Restaurar
+          <button className="btn-secondary" disabled={busy} onClick={() => void run(() => props.onArchive(false))} title={t('detail.restoreTempTitle')}>
+            {t('detail.restore')}
           </button>
         )}
         <button
           className="btn-primary"
           disabled={busy}
           onClick={() => void run(() => api.keepStaff(props.projectId, staff.id))}
-          title="Passa a ser funcionário do projeto: não sai mais do quadro sozinho"
+          title={t('detail.keepStaffTitle')}
         >
-          Efetivar
+          {t('detail.keepStaff')}
         </button>
       </span>
       {error && <span className="error">{error}</span>}
@@ -421,25 +410,25 @@ function LaunchButtons({ hasSession, working, onLaunch }: { hasSession: boolean;
               className="btn-primary"
               onClick={() => go(true)}
               disabled={busy || working}
-              title={working ? 'Já está trabalhando numa sessão aberta' : 'Retoma a última sessão, com o histórico'}
+              title={working ? t('detail.workingInOpenSession') : t('detail.resumeTitle')}
             >
-              Chamar de volta
+              {t('detail.callBack')}
             </button>
-            <button className="btn-secondary" onClick={() => go(false)} disabled={busy} title="Abre uma sessão nova com a mesma ficha e memória">
-              Nova sessão
+            <button className="btn-secondary" onClick={() => go(false)} disabled={busy} title={t('detail.newSessionTitle')}>
+              {t('detail.newSession')}
             </button>
           </>
         ) : (
           <button className="btn-primary" onClick={() => go(false)} disabled={busy}>
-            Abrir sessão
+            {t('detail.openSession')}
           </button>
         )}
       </div>
-      {working && <p className="muted small">Já está trabalhando: a janela do terminal dele está aberta.</p>}
-      {result?.ok && <p className="ok small">Sessão aberta numa janela de terminal nova.</p>}
+      {working && <p className="muted small">{t('detail.workingNote')}</p>}
+      {result?.ok && <p className="ok small">{t('detail.launchedOk')}</p>}
       {result && !result.ok && (
         <div className="error small">
-          <p>Não abriu sozinha: {result.error}. Rode no terminal:</p>
+          <p>{t('detail.launchFailed', { error: result.error ?? '' })}</p>
           <code className="mono block">{result.command}</code>
         </div>
       )}
@@ -449,11 +438,11 @@ function LaunchButtons({ hasSession, working, onLaunch }: { hasSession: boolean;
 }
 
 const AUTONOMY_TEXT: Record<string, string> = {
-  plan: 'Só planeja',
-  manual: 'Pede tudo',
-  acceptEdits: 'Edita sozinho',
-  auto: 'Autônomo',
-  bypassPermissions: 'Sem travas',
+  plan: t('detail.autPlan'),
+  manual: t('detail.autManual'),
+  acceptEdits: t('detail.autAcceptEdits'),
+  auto: t('detail.autAuto'),
+  bypassPermissions: t('detail.autBypass'),
 };
 
 function StaffSheet({ staff, managers }: { staff: StaffProfile; managers: StaffProfile[] }) {
@@ -461,33 +450,33 @@ function StaffSheet({ staff, managers }: { staff: StaffProfile; managers: StaffP
   return (
     <section className="section">
       <dl className="sheet">
-        <dt>Missão</dt>
+        <dt>{t('detail.mission')}</dt>
         <dd>{staff.mission}</dd>
         {staff.firstTask && (
           <>
-            <dt>Primeira tarefa</dt>
+            <dt>{t('detail.firstTask')}</dt>
             <dd>{staff.firstTask}</dd>
           </>
         )}
-        <dt>Reporta a</dt>
-        <dd>{managers.length ? managers.map((m) => `${m.name} (${m.role})`).join(', ') : 'Você'}</dd>
-        <dt>Autonomia</dt>
+        <dt>{t('detail.reportsTo')}</dt>
+        <dd>{managers.length ? managers.map((m) => `${m.name} (${m.role})`).join(', ') : t('detail.you')}</dd>
+        <dt>{t('detail.autonomy')}</dt>
         <dd>{AUTONOMY_TEXT[staff.autonomy]}</dd>
         <dt>Agents / skills</dt>
         <dd>
           {list(staff.agents)} / {list(staff.skills)}
         </dd>
         <dt>MCPs</dt>
-        <dd>{staff.mcps === null ? 'Todos os configurados' : list(staff.mcps)}</dd>
+        <dd>{staff.mcps === null ? t('detail.allConfigured') : list(staff.mcps)}</dd>
         {staff.knowledge.length > 0 && (
           <>
-            <dt>Conhecimento</dt>
+            <dt>{t('detail.knowledge')}</dt>
             <dd className="mono">{staff.knowledge.join(' · ')}</dd>
           </>
         )}
         {staff.rules.length > 0 && (
           <>
-            <dt>Regras</dt>
+            <dt>{t('detail.rules')}</dt>
             <dd>
               <ul className="plain">
                 {staff.rules.map((r) => (
@@ -499,28 +488,26 @@ function StaffSheet({ staff, managers }: { staff: StaffProfile; managers: StaffP
         )}
         {staff.doneWhen && (
           <>
-            <dt>Pronto quando</dt>
+            <dt>{t('detail.doneWhen')}</dt>
             <dd>{staff.doneWhen}</dd>
           </>
         )}
-        <dt>Modelo / esforço</dt>
+        <dt>{t('detail.modelEffort')}</dt>
         <dd>
-          {staff.model ?? 'padrão'} / {staff.effort ?? 'padrão'}
+          {staff.model ?? t('detail.default')} / {staff.effort ?? t('detail.default')}
         </dd>
-        <dt>Contratar</dt>
-        <dd>{staff.canHire ? 'Pode contratar subfuncionários' : 'Não'}</dd>
+        <dt>{t('detail.hire')}</dt>
+        <dd>{staff.canHire ? t('detail.canHire') : t('detail.no')}</dd>
         {staff.servers.length > 0 && (
           <>
-            <dt>Servidores</dt>
+            <dt>{t('detail.servers')}</dt>
             <dd>{staff.servers.join(', ')}</dd>
           </>
         )}
-        <dt>Navegador</dt>
-        <dd>{staff.browser ? 'Usa o seu Chrome (Claude in Chrome)' : 'Não'}</dd>
+        <dt>{t('detail.browser')}</dt>
+        <dd>{staff.browser ? t('detail.usesChrome') : t('detail.no')}</dd>
       </dl>
-      <p className="muted small mono">
-        .myco/staff/{staff.id}.md · memória em .myco/staff/{staff.id}.memory.md
-      </p>
+      <p className="muted small mono">{t('detail.sheetFiles', { id: staff.id })}</p>
     </section>
   );
 }
@@ -571,7 +558,7 @@ export function ProjectPanel({
   }, [id]);
 
   if (error) return <p className="error">{error}</p>;
-  if (!detail) return <p className="muted">Carregando…</p>;
+  if (!detail) return <p className="muted">{t('detail.loading')}</p>;
 
   // O status ao vivo vem do polling; o detalhe pode estar alguns segundos atrasado.
   const liveById = new Map(live.map((s) => [s.sessionId, s]));
@@ -581,51 +568,52 @@ export function ProjectPanel({
   return (
     <>
       <header className="header">
-        <p className="kicker">projeto</p>
+        <p className="kicker">{t('detail.kickerProject')}</p>
         <h2>{project.name}</h2>
         <p className="muted mono">{project.path}</p>
         <p className="badges">
-          {project.hasClaudeMd ? <span className="badge">CLAUDE.md</span> : <span className="badge dim">sem CLAUDE.md</span>}
-          {project.worktreeOf && <span className="badge">worktree de {basename(project.worktreeOf)}</span>}
-          {!project.exists && <span className="badge warn">pasta não existe</span>}
-          {archived && <span className="badge dim">arquivado</span>}
+          {project.hasClaudeMd ? <span className="badge">CLAUDE.md</span> : <span className="badge dim">{t('detail.noClaudeMd')}</span>}
+          {project.worktreeOf && <span className="badge">{t('detail.worktreeOf', { name: basename(project.worktreeOf) })}</span>}
+          {!project.exists && <span className="badge warn">{t('detail.folderMissing')}</span>}
+          {archived && <span className="badge dim">{t('detail.archived')}</span>}
         </p>
         <p className="actions">
           {project.exists && (
             <button className="btn-primary" onClick={onHire}>
-              Contratar funcionário
+              {t('detail.hireEmployee')}
             </button>
           )}
           {project.exists && onTasks && (
-            <button className="btn-secondary" onClick={onTasks} title="Quadro de tarefas do projeto">
-              Tarefas
+            <button className="btn-secondary" onClick={onTasks} title={t('detail.boardTasksTitle')}>
+              {t('detail.tasks')}
             </button>
           )}
-          <ArchiveButton archived={archived} onArchive={onArchive} what="este projeto e seus funcionários" />
+          <ArchiveButton archived={archived} onArchive={onArchive} what={t('detail.whatProjectAndStaff')} />
         </p>
         {tasks && (
           <p className="muted small">
-            {tasks.open} {tasks.open === 1 ? 'tarefa aberta' : 'tarefas abertas'}
-            {tasks.review ? `, ${tasks.review} em revisão` : ''}
+            {tasks.open === 1 ? t('detail.taskOpenOne', { n: tasks.open }) : t('detail.taskOpenOther', { n: tasks.open })}
+            {tasks.review ? `, ${t('detail.inReview', { n: tasks.review })}` : ''}
             {tasks.lastDeploy &&
-              ` · último deploy ${new Date(tasks.lastDeploy.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}: ${tasks.lastDeploy.title}`}
+              ` · ${t('detail.lastDeploy', {
+                date: new Date(tasks.lastDeploy.at).toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }),
+                title: tasks.lastDeploy.title,
+              })}`}
           </p>
         )}
       </header>
       <section className="section">
-        <h3>Cor da sala</h3>
+        <h3>{t('detail.roomColor')}</h3>
         <RoomColorPicker value={color} onChange={onColor} />
         <p className="muted small">
-          {project.worktreeOf
-            ? 'Vale quando este worktree aparece numa sala própria; dentro do projeto principal, a sala é a dele.'
-            : 'A parede da sala no quadro. Cada cor tem um tom para o tema claro e outro para o escuro.'}
+          {project.worktreeOf ? t('detail.worktreeRoomNote') : t('detail.roomColorNote')}
         </p>
       </section>
       {project.exists && <ImagePicker image={image} onChange={onImage} />}
       <SessionList sessions={sessions} costs={cost?.sessions ?? {}} totalUsd={totalUsd} />
       <AgentList
         agents={detail.agents}
-        empty="Nenhum agent em .claude/agents."
+        empty={t('detail.noAgentsProject')}
         onNew={project.exists ? onNewAgent : undefined}
         onEdit={project.exists ? onEditAgent : undefined}
       />
@@ -651,23 +639,23 @@ function ImagePicker({ image, onChange }: { image: string | null; onChange: (dat
   };
   const pick = (file: File | undefined) => {
     if (!file) return;
-    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return setError('Use PNG, JPEG ou WebP.');
-    if (file.size > MAX_INPUT_BYTES) return setError('Máximo de 20 MB.');
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return setError(t('detail.usePng'));
+    if (file.size > MAX_INPUT_BYTES) return setError(t('detail.max20'));
     // Reduzida aqui antes de subir: o arquivo fica dentro da pasta do projeto.
-    shrinkImage(file, PROJECT_IMAGE_MAX).then((url) => run(url), () => setError('Não foi possível ler a imagem.'));
+    shrinkImage(file, PROJECT_IMAGE_MAX).then((url) => run(url), () => setError(t('detail.cantReadImage')));
   };
   return (
     <section className="section">
-      <h3>Imagem do projeto</h3>
-      {image && <img className="project-image" src={image} alt="Imagem do projeto" />}
+      <h3>{t('detail.projectImage')}</h3>
+      {image && <img className="project-image" src={image} alt={t('detail.projectImage')} />}
       <p className="actions">
         <label className="btn-secondary file-btn">
-          {image ? 'Trocar imagem' : 'Adicionar logo ou print'}
+          {image ? t('detail.changeImage') : t('detail.addLogo')}
           <input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} onChange={(e) => pick(e.target.files?.[0])} />
         </label>
         {image && (
           <button className="btn-secondary" disabled={busy} onClick={() => void run(null)}>
-            Remover
+            {t('detail.remove')}
           </button>
         )}
       </p>
@@ -699,7 +687,7 @@ function AccountRules() {
     try {
       const d = await api.saveAccountRules(draft);
       setData(d);
-      setMsg({ tone: 'ok', text: 'Salvo. Vale para as sessões abertas a partir de agora.' });
+      setMsg({ tone: 'ok', text: t('detail.rulesSaved') });
     } catch (e) {
       setMsg({ tone: 'error', text: (e as Error).message });
     } finally {
@@ -710,26 +698,26 @@ function AccountRules() {
   const dirty = data !== null && draft !== (data.text ?? '');
   return (
     <section className="section">
-      <h3>Regras da conta</h3>
+      <h3>{t('detail.rulesHeading')}</h3>
       <p className="muted small">
-        Valem para todas as sessões, em todos os projetos (<span className="mono">{data?.path ?? '~/.claude/CLAUDE.md'}</span>).
-        {data && data.text === null && ' O arquivo ainda não existe: salvar cria.'} A versão anterior vai para ~/.myco/backups.
+        {t('detail.rulesAllSessions')} (<span className="mono">{data?.path ?? '~/.claude/CLAUDE.md'}</span>).
+        {data && data.text === null && ` ${t('detail.rulesNotCreated')}`} {t('detail.rulesBackup')}
       </p>
       <textarea
         className="rules-editor mono"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         rows={10}
-        placeholder={'# Regras gerais\n- Responda em português\n- Nunca faça push sem pedir'}
+        placeholder={t('detail.rulesPlaceholder')}
         disabled={data === null}
       />
       <p className="actions">
         <button className="btn-primary" onClick={() => void save()} disabled={busy || !dirty}>
-          {busy ? 'Salvando…' : 'Salvar regras'}
+          {busy ? t('detail.saving') : t('detail.saveRules')}
         </button>
         {dirty && (
           <button className="btn-secondary" onClick={() => setDraft(data?.text ?? '')} disabled={busy}>
-            Descartar
+            {t('detail.discard')}
           </button>
         )}
       </p>
@@ -750,12 +738,12 @@ export function UserPanel({
   return (
     <>
       <header className="header">
-        <p className="kicker">escopo do usuário</p>
-        <h2>~ você</h2>
-        <p className="muted">Visível em todos os projetos (~/.claude)</p>
+        <p className="kicker">{t('detail.kickerUserScope')}</p>
+        <h2>{t('detail.userHeading')}</h2>
+        <p className="muted">{t('detail.visibleAllProjects')}</p>
       </header>
       <AccountRules />
-      <AgentList agents={scope.agents} empty="Nenhum agent em ~/.claude/agents." onNew={onNewAgent} onEdit={onEditAgent} />
+      <AgentList agents={scope.agents} empty={t('detail.noAgentsUser')} onNew={onNewAgent} onEdit={onEditAgent} />
       <SkillList skills={scope.skills} />
     </>
   );
@@ -770,7 +758,7 @@ export interface RankingEntry {
 }
 
 type RankingTab = 'cost' | Metric;
-const RANKING_TABS: Array<[RankingTab, string]> = [['cost', 'Gastos'], ['index', METRIC_LABEL.index], ['price', METRIC_LABEL.price]];
+const RANKING_TABS: Array<[RankingTab, string]> = [['cost', t('detail.tabCost')], ['index', METRIC_LABEL.index], ['price', METRIC_LABEL.price]];
 
 /**
  * Ranking, em abas: quem mais gasta (funcionários e agents) e os modelos para código (Artificial
@@ -797,12 +785,12 @@ export function RankingPanel({
   return (
     <>
       <header className="header">
-        <p className="kicker">ranking</p>
-        <h2>{tab === 'cost' ? 'Quem mais gasta' : 'Modelos para código'}</h2>
+        <p className="kicker">{t('detail.kickerRanking')}</p>
+        <h2>{tab === 'cost' ? t('detail.topSpenders') : t('detail.modelsForCode')}</h2>
         {tab === 'cost' && (
           <p className="muted small">
-            Parte de cada um no consumo total, só para comparar (as sessões rodam pela assinatura).
-            {scanning && ' Ainda lendo os transcripts: os números vão crescer.'}
+            {t('detail.costNote')}
+            {scanning && ` ${t('detail.stillScanning')}`}
           </p>
         )}
       </header>
@@ -818,12 +806,12 @@ export function RankingPanel({
       ) : (
         <>
           <section className="section">
-            <h3>Funcionários</h3>
-            {employees.length === 0 && <p className="muted">Nenhum custo registrado ainda.</p>}
+            <h3>{t('detail.employees')}</h3>
+            {employees.length === 0 && <p className="muted">{t('detail.noCostYet')}</p>}
             <ol className="ranking">
               {employees.slice(0, limit).map((e, i) => (
                 <li key={e.nodeId}>
-                  <button className="ranking-row" onClick={() => onSelect(e.nodeId)} title="Mostrar no quadro">
+                  <button className="ranking-row" onClick={() => onSelect(e.nodeId)} title={t('detail.showOnBoardLink')}>
                     <span className="ranking-pos">{i + 1}</span>
                     <span className="ranking-text">
                       <span className="ranking-name">{e.name}</span>
@@ -837,13 +825,13 @@ export function RankingPanel({
             </ol>
             {employees.length > limit && (
               <button className="btn-secondary" onClick={() => setLimit(limit + 20)}>
-                Mostrar mais ({employees.length - limit})
+                {t('detail.showMore', { n: employees.length - limit })}
               </button>
             )}
           </section>
           <section className="section">
-            <h3>Agents (subagents chamados pelos funcionários)</h3>
-            {agents.length === 0 && <p className="muted">Nenhum subagent usado ainda.</p>}
+            <h3>{t('detail.agentsSubagentsHeading')}</h3>
+            {agents.length === 0 && <p className="muted">{t('detail.noSubagentsUsed')}</p>}
             <ol className="ranking">
               {agents.map((a, i) => (
                 <li key={a.type}>
@@ -852,7 +840,8 @@ export function RankingPanel({
                     <span className="ranking-text">
                       <span className="ranking-name">{a.type}</span>
                       <span className="muted small">
-                        {a.runs} {a.runs === 1 ? 'execução' : 'execuções'} · {formatShare(a.usd / Math.max(1, a.runs), agentsTotal)} por execução
+                        {a.runs === 1 ? t('detail.runOne', { n: a.runs }) : t('detail.runOther', { n: a.runs })} · {formatShare(a.usd / Math.max(1, a.runs), agentsTotal)}{' '}
+                        {t('detail.perRun')}
                       </span>
                     </span>
                     <span className="ranking-value">{formatShare(a.usd, agentsTotal)}</span>
@@ -872,9 +861,9 @@ export function SyncedPanel({ skills }: { skills: Skill[] }) {
   return (
     <>
       <header className="header">
-        <p className="kicker">skills da conta</p>
-        <h2>{skills.length} sincronizadas</h2>
-        <p className="muted">Gerenciadas pela sua conta Claude; o MyCo só lê.</p>
+        <p className="kicker">{t('detail.kickerAccountSkills')}</p>
+        <h2>{skills.length === 1 ? t('detail.syncedOne', { n: skills.length }) : t('detail.syncedOther', { n: skills.length })}</h2>
+        <p className="muted">{t('detail.syncedNote')}</p>
       </header>
       <SkillList skills={skills} />
     </>
@@ -896,19 +885,19 @@ export function AgentPanel({
   return (
     <>
       <header className="header">
-        <p className="kicker">agent · {agent.scope === 'user' ? 'usuário' : 'projeto'}</p>
+        <p className="kicker">{t('detail.kickerAgent', { scope: agent.scope === 'user' ? t('detail.scopeUser') : t('detail.scopeProject') })}</p>
         <h2>{agent.name}</h2>
         <p className="muted mono">{agent.filePath}</p>
         <p className="badges">
           <LinkBadge link={agent.link} />
-          <span className="badge">{agent.model ? `modelo: ${agent.model}` : 'modelo de quem chama'}</span>
-          <span className="badge">{agent.effort ? `esforço: ${agent.effort}` : 'esforço padrão'}</span>
-          {agent.duplicate && <span className="badge warn">nome repetido: só um é carregado</span>}
+          <span className="badge">{agent.model ? t('detail.modelOf', { model: agent.model }) : t('detail.callerModel')}</span>
+          <span className="badge">{agent.effort ? t('detail.effortOf', { effort: agent.effort }) : t('detail.defaultEffort')}</span>
+          {agent.duplicate && <span className="badge warn">{t('detail.duplicateOnly')}</span>}
         </p>
         {onEdit && !agent.error && (
           <p className="actions">
             <button className="btn-secondary" onClick={onEdit}>
-              Editar agent
+              {t('detail.editAgent')}
             </button>
           </p>
         )}
@@ -916,20 +905,20 @@ export function AgentPanel({
       {agent.error && <p className="error">{agent.error}</p>}
       {cost && (
         <section className="section">
-          <h3>Consumo como subagent</h3>
+          <h3>{t('detail.asSubagentCost')}</h3>
           <dl className="stats">
-            <div><dt>dos subagents</dt><dd>{formatShare(cost.usd, agentsUsd)}</dd></div>
-            <div><dt>por execução</dt><dd>{formatShare(cost.usd / Math.max(1, cost.runs), agentsUsd)}</dd></div>
+            <div><dt>{t('detail.ofSubagents')}</dt><dd>{formatShare(cost.usd, agentsUsd)}</dd></div>
+            <div><dt>{t('detail.perRun')}</dt><dd>{formatShare(cost.usd / Math.max(1, cost.runs), agentsUsd)}</dd></div>
           </dl>
           <p className="muted small">
-            {cost.runs} {cost.runs === 1 ? 'execução' : 'execuções'}, somando todos os projetos. Parte no consumo de todos os subagents.
+            {cost.runs === 1 ? t('detail.runOne', { n: cost.runs }) : t('detail.runOther', { n: cost.runs })}, {t('detail.summingAll')}
           </p>
         </section>
       )}
-      {agent.link.target && <Field label="origem do vínculo" mono value={agent.link.target} />}
-      {agent.description && <Field label="descrição" value={agent.description} />}
+      {agent.link.target && <Field label={t('detail.origin')} mono value={agent.link.target} />}
+      {agent.description && <Field label={t('detail.description')} value={agent.description} />}
       <section className="section">
-        <h3>Ferramentas</h3>
+        <h3>{t('detail.tools')}</h3>
         {agent.tools ? (
           <ul className="chips">
             {agent.tools.map((t) => (
@@ -937,7 +926,7 @@ export function AgentPanel({
             ))}
           </ul>
         ) : (
-          <p className="muted">Todas (sem lista no frontmatter).</p>
+          <p className="muted">{t('detail.allTools')}</p>
         )}
       </section>
     </>
@@ -948,18 +937,22 @@ export function SkillPanel({ skill }: { skill: Skill }) {
   return (
     <>
       <header className="header">
-        <p className="kicker">skill · {skill.scope === 'project' ? 'projeto' : skill.scope === 'user' ? 'usuário' : 'conta'}</p>
+        <p className="kicker">
+          {t('detail.kickerSkill', {
+            scope: skill.scope === 'project' ? t('detail.scopeProject') : skill.scope === 'user' ? t('detail.scopeUser') : t('detail.scopeAccount'),
+          })}
+        </p>
         <h2>{skill.name}</h2>
         <p className="muted mono">{skill.dirPath}</p>
         <p className="badges">
           <LinkBadge link={skill.link} />
-          {skill.label && skill.label !== skill.name && <span className="badge dim">rótulo: {skill.label}</span>}
-          {skill.readOnly && <span className="badge dim">somente leitura</span>}
+          {skill.label && skill.label !== skill.name && <span className="badge dim">{t('detail.labelOf', { label: skill.label })}</span>}
+          {skill.readOnly && <span className="badge dim">{t('detail.readOnly')}</span>}
         </p>
       </header>
       {skill.error && <p className="error">{skill.error}</p>}
-      {skill.link.target && <Field label="origem do vínculo" mono value={skill.link.target} />}
-      {skill.description && <Field label="descrição" value={skill.description} />}
+      {skill.link.target && <Field label={t('detail.origin')} mono value={skill.link.target} />}
+      {skill.description && <Field label={t('detail.description')} value={skill.description} />}
     </>
   );
 }
@@ -987,10 +980,10 @@ function AgentList({
   return (
     <section className="section">
       <h3 className="section-head">
-        Agents ({agents.length})
+        {t('detail.agentsCount', { n: agents.length })}
         {onNew && (
           <button className="btn-secondary" onClick={onNew}>
-            Novo agent
+            {t('detail.newAgent')}
           </button>
         )}
       </h3>
@@ -1002,10 +995,10 @@ function AgentList({
               {a.name}
               {(a.model || a.effort) && <span className="badge">{[a.model, a.effort].filter(Boolean).join(' / ')}</span>}
               <LinkBadge link={a.link} />
-              {a.duplicate && <span className="badge warn">nome repetido</span>}
+              {a.duplicate && <span className="badge warn">{t('detail.duplicateName')}</span>}
               {onEdit && !a.error && (
                 <button className="btn-secondary card-action" onClick={() => onEdit(a.name)}>
-                  Editar
+                  {t('detail.edit')}
                 </button>
               )}
             </div>
@@ -1021,15 +1014,15 @@ function AgentList({
 function SkillList({ skills }: { skills: Skill[] }) {
   return (
     <section className="section">
-      <h3>Skills ({skills.length})</h3>
-      {skills.length === 0 && <p className="muted">Nenhuma skill.</p>}
+      <h3>{t('detail.skillsCount', { n: skills.length })}</h3>
+      {skills.length === 0 && <p className="muted">{t('detail.noSkills')}</p>}
       <ul className="cards">
         {skills.map((s) => (
           <li key={s.id} className={`card ${s.error ? 'card-error' : ''}`}>
             <div className="card-title">
               {s.name}
               <LinkBadge link={s.link} />
-              {s.readOnly && <span className="badge dim">sincronizada</span>}
+              {s.readOnly && <span className="badge dim">{t('detail.synced')}</span>}
             </div>
             {s.description && <p className="card-desc">{s.description}</p>}
             {s.error && <p className="error">{s.error}</p>}
@@ -1043,8 +1036,8 @@ function SkillList({ skills }: { skills: Skill[] }) {
 function SessionList({ sessions, costs, totalUsd }: { sessions: Session[]; costs: Record<string, number>; totalUsd: number }) {
   return (
     <section className="section">
-      <h3>Funcionários ({sessions.length})</h3>
-      {sessions.length === 0 && <p className="muted">Nenhuma sessão registrada.</p>}
+      <h3>{t('detail.employeesCount', { n: sessions.length })}</h3>
+      {sessions.length === 0 && <p className="muted">{t('detail.noSessions')}</p>}
       <ul className="rows">
         {sessions.map((s) => (
           <li key={s.id} className="row">
@@ -1055,8 +1048,8 @@ function SessionList({ sessions, costs, totalUsd }: { sessions: Session[]; costs
             <span className="row-meta">
               {s.entrypoint && <span className="badge">{ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</span>}
               {s.gitBranch && <span className="badge dim">{s.gitBranch}</span>}
-              {s.subagentCount > 0 && <span className="badge dim">{s.subagentCount} subagents</span>}
-              {costs[s.id] !== undefined && <span title="Parte no consumo total">{formatShare(costs[s.id]!, totalUsd)}</span>}
+              {s.subagentCount > 0 && <span className="badge dim">{t('detail.subagentsCount', { n: s.subagentCount })}</span>}
+              {costs[s.id] !== undefined && <span title={t('detail.inTotalUsage')}>{formatShare(costs[s.id]!, totalUsd)}</span>}
               <span className="muted">{formatDate(s.updatedAt)}</span>
             </span>
           </li>
@@ -1071,7 +1064,7 @@ function LinkBadge({ link }: { link: LinkInfo }) {
   if (link.kind === 'file') return null;
   return (
     <span className="badge link" title={link.target ?? undefined}>
-      {link.kind === 'symlink' ? 'vinculado' : 'hardlink'}
+      {link.kind === 'symlink' ? t('detail.linked') : 'hardlink'}
     </span>
   );
 }
@@ -1081,5 +1074,5 @@ function basename(p: string) {
 }
 
 function formatDate(isoDate: string) {
-  return new Date(isoDate).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+  return new Date(isoDate).toLocaleString(locale(), { dateStyle: 'short', timeStyle: 'short' });
 }

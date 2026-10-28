@@ -1,42 +1,43 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { PROJECT_COLORS, type BoardBackground, type ProjectColor } from '../../../shared/model';
+import { t } from '../i18n';
 
 // Cores escolhidas pelo usuário: a caneta da parede de cada sala e o fundo do quadro em cada tema.
 // Os tons das canetas são variáveis do styles.css (`--pen-<cor>`), um para o claro e outro para o escuro.
 
 export const PROJECT_COLOR_LABEL: Record<ProjectColor, string> = {
-  red: 'vermelho',
-  orange: 'laranja',
-  yellow: 'amarelo',
-  green: 'verde',
-  teal: 'verde-água',
-  blue: 'azul',
-  purple: 'roxo',
-  pink: 'rosa',
+  red: t('board.colorRed'),
+  orange: t('board.colorOrange'),
+  yellow: t('board.colorYellow'),
+  green: t('board.colorGreen'),
+  teal: t('board.colorTeal'),
+  blue: t('board.colorBlue'),
+  purple: t('board.colorPurple'),
+  pink: t('board.colorPink'),
 };
 
 export type Theme = keyof BoardBackground;
 
 /** Fundo de fábrica de cada tema (o mesmo `--board` do styles.css). */
 export const BACKGROUND_DEFAULT: Record<Theme, { hex: string; label: string }> = {
-  light: { hex: '#fbfaf6', label: 'quadro branco' },
-  dark: { hex: '#1f2a25', label: 'lousa' },
+  light: { hex: '#fbfaf6', label: t('board.bgWhiteboard') },
+  dark: { hex: '#1f2a25', label: t('board.bgChalkboard') },
 };
 
 export const BACKGROUND_PRESETS: Record<Theme, Array<{ hex: string; label: string }>> = {
   light: [
-    { hex: '#ffffff', label: 'branco' },
-    { hex: '#f6f0e1', label: 'creme' },
-    { hex: '#eef0f2', label: 'cinza' },
-    { hex: '#edf3fb', label: 'azulado' },
-    { hex: '#eef6ee', label: 'verde-claro' },
+    { hex: '#ffffff', label: t('board.bgWhite') },
+    { hex: '#f6f0e1', label: t('board.bgCream') },
+    { hex: '#eef0f2', label: t('board.bgGray') },
+    { hex: '#edf3fb', label: t('board.bgBluish') },
+    { hex: '#eef6ee', label: t('board.bgLightGreen') },
   ],
   dark: [
-    { hex: '#1e2124', label: 'grafite' },
-    { hex: '#18212f', label: 'azul-noite' },
-    { hex: '#121212', label: 'preto' },
-    { hex: '#241f2c', label: 'roxo-noite' },
-    { hex: '#2a2420', label: 'café' },
+    { hex: '#1e2124', label: t('board.bgGraphite') },
+    { hex: '#18212f', label: t('board.bgNightBlue') },
+    { hex: '#121212', label: t('board.bgBlack') },
+    { hex: '#241f2c', label: t('board.bgNightPurple') },
+    { hex: '#2a2420', label: t('board.bgCoffee') },
   ],
 };
 
@@ -46,7 +47,7 @@ const HEX = /^#[0-9a-f]{6}$/i;
 export function RoomColorPicker({
   value,
   onChange,
-  label = 'Cor da sala',
+  label = t('board.roomColor'),
   small,
 }: {
   value: ProjectColor | null;
@@ -75,8 +76,8 @@ export function RoomColorPicker({
         role="radio"
         aria-checked={value === null}
         className="swatch swatch-default"
-        title="Padrão (grafite)"
-        aria-label="padrão"
+        title={t('board.defaultGraphite')}
+        aria-label={t('board.defaultLabel')}
         disabled={busy}
         onClick={() => void pick(null)}
       />
@@ -133,15 +134,15 @@ export function BackgroundPicker({
   const presets = BACKGROUND_PRESETS[theme];
   const custom = shown !== null && !presets.some((p) => p.hex === shown);
   return (
-    <span className="swatches swatches-bg" role="radiogroup" aria-label={`Fundo no tema ${theme === 'light' ? 'claro' : 'escuro'}`}>
+    <span className="swatches swatches-bg" role="radiogroup" aria-label={t(theme === 'light' ? 'board.bgLightTheme' : 'board.bgDarkTheme')}>
       <button
         type="button"
         role="radio"
         aria-checked={shown === null}
         className="swatch"
         style={{ '--swatch': def.hex } as CSSProperties}
-        title={`Padrão (${def.label})`}
-        aria-label={`padrão (${def.label})`}
+        title={t('board.defaultWithName', { name: def.label })}
+        aria-label={t('board.defaultNamed', { name: def.label })}
         onClick={() => save(null)}
       />
       {presets.map((p) => (
@@ -157,11 +158,11 @@ export function BackgroundPicker({
           onClick={() => save(p.hex)}
         />
       ))}
-      <label className={`swatch swatch-custom ${custom ? 'is-on' : ''}`} title="Outra cor" style={custom ? ({ '--swatch': shown } as CSSProperties) : undefined}>
-        <input type="color" aria-label="Outra cor" value={shown ?? def.hex} onChange={(e) => pickCustom(e.target.value)} />
+      <label className={`swatch swatch-custom ${custom ? 'is-on' : ''}`} title={t('board.otherColor')} style={custom ? ({ '--swatch': shown } as CSSProperties) : undefined}>
+        <input type="color" aria-label={t('board.otherColor')} value={shown ?? def.hex} onChange={(e) => pickCustom(e.target.value)} />
         {!custom && <span aria-hidden="true">+</span>}
       </label>
-      <span className="muted small mono">{shown ?? 'padrão'}</span>
+      <span className="muted small mono">{shown ?? t('board.defaultLabel')}</span>
       {error && <span className="error small">{error}</span>}
     </span>
   );

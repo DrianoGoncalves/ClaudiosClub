@@ -1,0 +1,4 @@
+node_modules/
+
+# Dados do escritório do MyCo (fichas, memórias, tarefas): não são o app.
+.myco/

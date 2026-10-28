@@ -2,11 +2,12 @@ import { useState } from 'react';
 import type { OrchestrationReport, RunMark } from '../../../shared/model';
 import { api } from '../api';
 import { formatAgo } from '../format';
+import { t } from '../i18n';
 
 // "Valeu a pena?": quanto da sessão foi do planejador e quanto dos executores, a economia em
 // relação a tudo rodar no modelo do planejador, e o que foi aproveitado de cada entrega.
 
-const MARK_LABEL: Record<RunMark, string> = { used: 'usei', partial: 'em parte', discarded: 'descartei' };
+const MARK_LABEL: Record<RunMark, string> = { used: t('detail.markUsed'), partial: t('detail.markPartial'), discarded: t('detail.markDiscarded') };
 
 const RUNS_SHOWN = 10;
 const pct = (v: number, digits = 0) => `${(v * 100).toFixed(digits)}%`;
@@ -31,32 +32,32 @@ export function WorthIt({ sessionId }: { sessionId: string }) {
 
   return (
     <details className="collapse" onToggle={(e) => (e.currentTarget as HTMLDetailsElement).open && !report && void load()}>
-      <summary>Valeu a pena?</summary>
+      <summary>{t('detail.worthIt')}</summary>
       {error && <p className="error small">{error}</p>}
-      {!report && !error && <p className="muted small">Lendo os transcripts…</p>}
+      {!report && !error && <p className="muted small">{t('detail.readingTranscripts')}</p>}
       {report && report.runs.length === 0 && (
         <p className="muted small">
-          Nenhum subagent nesta sessão ainda: tudo foi feito no modelo dele ({shortModel(report.plannerModel)}).
-          {report.scanning && ' A leitura dos transcripts ainda está em andamento.'}
+          {t('detail.noSubagentsYet', { model: shortModel(report.plannerModel) })}
+          {report.scanning && ` ${t('detail.stillReading')}`}
         </p>
       )}
       {report && report.runs.length > 0 && (
         <>
-          <div className="worth-bar" role="img" aria-label={`Planejador ${pct(report.plannerShare)}, executores ${pct(report.executorShare)}`}>
+          <div className="worth-bar" role="img" aria-label={t('detail.splitAria', { planner: pct(report.plannerShare), exec: pct(report.executorShare) })}>
             <span className="worth-planner" style={{ width: pct(report.plannerShare, 1) }} />
             <span className="worth-exec" style={{ width: pct(report.executorShare, 1) }} />
           </div>
           <dl className="stats">
             <div>
-              <dt>planejador ({shortModel(report.plannerModel)})</dt>
+              <dt>{t('detail.plannerLabel', { model: shortModel(report.plannerModel) })}</dt>
               <dd>{pct(report.plannerShare)}</dd>
             </div>
             <div>
-              <dt>executores</dt>
+              <dt>{t('detail.executors')}</dt>
               <dd>{pct(report.executorShare)}</dd>
             </div>
             <div>
-              <dt>economia</dt>
+              <dt>{t('detail.savings')}</dt>
               <dd className={report.savings !== null && report.savings < -0.005 ? 'worth-bad' : ''}>
                 {report.savings === null
                   ? '—'
@@ -68,19 +69,19 @@ export function WorthIt({ sessionId }: { sessionId: string }) {
               </dd>
             </div>
             <div>
-              <dt>descartado</dt>
+              <dt>{t('detail.discardedLabel')}</dt>
               <dd className={report.wasteShare > 0 ? 'worth-bad' : ''}>{pct(report.wasteShare)}</dd>
             </div>
           </dl>
           <p className="muted small">
             {report.savings === null
-              ? 'Sem preço para algum modelo: a economia não dá para estimar.'
+              ? t('detail.noPriceNote')
               : Math.abs(report.savings) < 0.005
-                ? 'Os executores rodaram no mesmo modelo do planejador: sem economia. Para economizar, delegue a agents em modelo menor (ex.: o executor no Haiku).'
+                ? t('detail.sameModelNote')
                 : report.savings >= 0
-                ? `Gastou ${pct(report.savings)} menos do que se os executores rodassem no ${shortModel(report.plannerModel)}.`
-                : `Gastou ${pct(-report.savings)} mais do que no ${shortModel(report.plannerModel)}: os executores usaram modelo mais caro.`}{' '}
-            Marque as entregas para saber quanto do trabalho delegado foi aproveitado.
+                  ? t('detail.savedVsPlanner', { pct: pct(report.savings), model: shortModel(report.plannerModel) })
+                  : t('detail.spentMoreVsPlanner', { pct: pct(-report.savings), model: shortModel(report.plannerModel) })}{' '}
+            {t('detail.markHint')}
           </p>
           <ul className="rows worth-runs">
             {(showAll ? report.runs : report.runs.slice(0, RUNS_SHOWN)).map((r) => (
@@ -90,11 +91,11 @@ export function WorthIt({ sessionId }: { sessionId: string }) {
                   <span className="muted small">
                     {' '}
                     {r.agentType} · {shortModel(r.model)} · {pct(r.share, 1)}
-                    {r.extraIfPlanner !== null && r.extraIfPlanner > 0.05 && ` · no planejador custaria ${pct(r.extraIfPlanner)} a mais`}
+                    {r.extraIfPlanner !== null && r.extraIfPlanner > 0.05 && ` · ${t('detail.extraIfPlanner', { pct: pct(r.extraIfPlanner) })}`}
                     {r.at && ` · ${formatAgo(Date.now() - Date.parse(r.at))}`}
                   </span>
                 </span>
-                <span className="worth-marks" role="group" aria-label="O que foi aproveitado">
+                <span className="worth-marks" role="group" aria-label={t('detail.usedAria')}>
                   {(Object.keys(MARK_LABEL) as RunMark[]).map((m) => (
                     <button
                       key={m}
@@ -113,11 +114,11 @@ export function WorthIt({ sessionId }: { sessionId: string }) {
           <p className="actions">
             {report.runs.length > RUNS_SHOWN && (
               <button type="button" className="btn-secondary" onClick={() => setShowAll(!showAll)}>
-                {showAll ? 'Mostrar as recentes' : `Mostrar todas (${report.runs.length})`}
+                {showAll ? t('detail.showRecent') : t('detail.showAll', { n: report.runs.length })}
               </button>
             )}
             <button type="button" className="btn-secondary" onClick={() => void load()}>
-              Atualizar
+              {t('detail.refresh')}
             </button>
           </p>
         </>

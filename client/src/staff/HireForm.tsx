@@ -14,6 +14,7 @@ import type {
 } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
 import { employeeName } from '../format';
+import { t, locale } from '../i18n';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
 import { BrowserCheck } from './BrowserCheck';
 import type { RoleEntry } from '../../../shared/roles';
@@ -50,11 +51,11 @@ const lines = (s: string) => s.split('\n').map((l) => l.trim()).filter(Boolean);
 /** A ficha é longa: dividida em abas, cada uma com uma pergunta só. */
 type Tab = 'who' | 'work' | 'tools' | 'run' | 'history';
 const TABS: Array<{ id: Tab; label: string; intro: string }> = [
-  { id: 'who', label: 'Quem é', intro: 'Identidade e a quem este funcionário responde.' },
-  { id: 'work', label: 'Trabalho', intro: 'O que ele faz, o que precisa saber e quando terminou.' },
-  { id: 'tools', label: 'Ferramentas', intro: 'O que ele pode usar: agents, skills, MCPs, servidores e navegador.' },
-  { id: 'run', label: 'Como trabalha', intro: 'Quanto decide sozinho, com que modelo e até onde pode gastar.' },
-  { id: 'history', label: 'Histórico', intro: 'Cada edição guarda a versão anterior; restaure se precisar.' },
+  { id: 'who', label: t('staff.tabWho'), intro: t('staff.tabWhoIntro') },
+  { id: 'work', label: t('staff.tabWork'), intro: t('staff.tabWorkIntro') },
+  { id: 'tools', label: t('staff.tools'), intro: t('staff.tabToolsIntro') },
+  { id: 'run', label: t('staff.tabRun'), intro: t('staff.tabRunIntro') },
+  { id: 'history', label: t('staff.tabHistory'), intro: t('staff.tabHistoryIntro') },
 ];
 
 export function StaffForm({ board, projectId, mode, simple = false, onClose, onHired, onSaved }: Props) {
@@ -144,21 +145,21 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
   }, [roles]);
 
   /** Preenche com o cargo: o modelo (e o esforço) vêm dele; troca só deste funcionário na ficha. */
-  const applyTemplate = (t: RoleEntry) => {
-    setRoleId(t.id);
-    setRole(t.role);
-    setMission(t.mission);
-    setAutonomy(t.autonomy);
-    setRules(t.rules.join('\n'));
-    setDoneWhen(t.doneWhen);
-    setModel(t.model);
-    setEffort(t.effort ?? '');
-    setPlaybook(t.playbook ?? '');
-    setCanHire(!!t.canHire);
-    if (t.worktree !== undefined) setWorktree(t.worktree);
-    if (t.skills) setSkills([...new Set([...skills, ...t.skills.filter((s) => skillNames.includes(s))])]);
-    setShowServers(!!t.servers || servers.length > 0);
-    if (t.pickExecutors) {
+  const applyTemplate = (tpl: RoleEntry) => {
+    setRoleId(tpl.id);
+    setRole(tpl.role);
+    setMission(tpl.mission);
+    setAutonomy(tpl.autonomy);
+    setRules(tpl.rules.join('\n'));
+    setDoneWhen(tpl.doneWhen);
+    setModel(tpl.model);
+    setEffort(tpl.effort ?? '');
+    setPlaybook(tpl.playbook ?? '');
+    setCanHire(!!tpl.canHire);
+    if (tpl.worktree !== undefined) setWorktree(tpl.worktree);
+    if (tpl.skills) setSkills([...new Set([...skills, ...tpl.skills.filter((s) => skillNames.includes(s))])]);
+    setShowServers(!!tpl.servers || servers.length > 0);
+    if (tpl.pickExecutors) {
       // Agents com modelo menor que o do orquestrador são os executores naturais.
       const executors = [...inventory.agents, ...board.user.agents]
         .filter((a) => a.model && /haiku|sonnet/i.test(a.model))
@@ -167,7 +168,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
       setTip(
         executors.length
           ? null
-          : 'Ainda não há agents em modelos menores para executar. Crie um (ex.: “Executor (Haiku)”) em “Novo agent”, no painel do projeto, e edite esta ficha depois.',
+          : t('staff.tipNoExecutors', { preset: t('staff.presetExecutor'), newAgent: t('staff.newAgent') }),
       );
     }
   };
@@ -180,10 +181,10 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
   const pickPortrait = (file: File | undefined) => {
     setError(null);
     if (!file) return setPortrait(undefined);
-    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return setError('Retrato: use PNG, JPEG ou WebP.');
-    if (file.size > MAX_INPUT_BYTES) return setError('Retrato: máximo de 20 MB.');
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return setError(t('staff.errPortraitType'));
+    if (file.size > MAX_INPUT_BYTES) return setError(t('staff.errPortraitSize'));
     // Reduzido aqui: o quadro mostra com 40 px e o arquivo fica na pasta do projeto.
-    shrinkImage(file, PORTRAIT_MAX).then(setPortrait, () => setError('Retrato: não foi possível ler a imagem.'));
+    shrinkImage(file, PORTRAIT_MAX).then(setPortrait, () => setError(t('staff.errPortraitRead')));
   };
 
   const toggle = (list: string[], set: (v: string[]) => void, value: string) =>
@@ -201,7 +202,11 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
     setAgents([...new Set([...agents, ...found])]);
     setTip(
       missing.length
-        ? `O roteiro “${option.label}” usa ${missing.map((a) => `“${a}”`).join(', ')}, que ainda não existe neste projeto. Crie em “Novo agent”, no painel do projeto (há modelos prontos).`
+        ? t('staff.tipPlaybookMissing', {
+            playbook: option.label,
+            agents: missing.map((a) => `“${a}”`).join(', '),
+            newAgent: t('staff.newAgent'),
+          })
         : null,
     );
   };
@@ -224,7 +229,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
     const missing: Tab | null = !name.trim() || !role.trim() ? 'who' : !mission.trim() && full ? 'work' : null;
     if (missing) {
       setTab(missing);
-      return setError(missing === 'who' ? (full ? 'Preencha nome e cargo.' : 'Escolha o cargo e dê um nome.') : 'Preencha a missão.');
+      return setError(missing === 'who' ? (full ? t('staff.errNameRole') : t('staff.errChooseRoleName')) : t('staff.errMission'));
     }
     setBusy(true);
     setError(null);
@@ -287,17 +292,16 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <form className="modal hire" onSubmit={submit} noValidate>
-        <button type="button" className="drawer-close" onClick={onClose} aria-label="Fechar">
+        <button type="button" className="drawer-close" onClick={onClose} aria-label={t('staff.close')}>
           ×
         </button>
         <p className="kicker">
-          {editing ? 'editar funcionário' : adopting ? 'editar funcionário' : 'contratar funcionário'} · {project?.name}
+          {editing || adopting ? t('staff.kickerEdit') : t('staff.kickerHire')} · {project?.name}
         </p>
-        <h2>{editing ? editing.name : adopting ? 'Criar a ficha' : 'Nova ficha'}</h2>
+        <h2>{editing ? editing.name : adopting ? t('staff.titleAdopt') : t('staff.titleNew')}</h2>
         {adopting && (
           <p className="muted small">
-            Este funcionário foi aberto fora do MyCo. Ao salvar, ele ganha nome, retrato e ficha, e a sessão continua a mesma,
-            com o histórico.
+            {t('staff.adoptNote')}
           </p>
         )}
 
@@ -305,19 +309,19 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
           <div className="form-panel simple-hire">
             {!editing && (
               <fieldset>
-                <legend>Cargo</legend>
-                {!roles && <p className="muted small">Carregando cargos…</p>}
+                <legend>{t('staff.roleLegend')}</legend>
+                {!roles && <p className="muted small">{t('staff.rolesLoading')}</p>}
                 <div className="templates">
-                  {roles?.map((t) => (
+                  {roles?.map((tpl) => (
                     <button
                       type="button"
-                      key={t.id}
-                      className={`btn-secondary ${roleId === t.id ? 'is-on' : ''}`}
-                      aria-pressed={roleId === t.id}
-                      title={t.mission}
-                      onClick={() => applyTemplate(t)}
+                      key={tpl.id}
+                      className={`btn-secondary ${roleId === tpl.id ? 'is-on' : ''}`}
+                      aria-pressed={roleId === tpl.id}
+                      title={tpl.mission}
+                      onClick={() => applyTemplate(tpl)}
                     >
-                      {t.label}
+                      {tpl.label}
                     </button>
                   ))}
                 </div>
@@ -325,86 +329,95 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
             )}
             <div className="grid2">
               <label>
-                Nome*
+                {t('staff.nameReq')}
                 <input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} required autoFocus />
               </label>
               <label>
-                Retrato
+                {t('staff.portrait')}
                 <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => pickPortrait(e.target.files?.[0])} />
                 {currentPortrait && (
                   <span className="portrait-row">
-                    <img className="portrait-preview" src={currentPortrait} alt="Retrato" />
+                    <img className="portrait-preview" src={currentPortrait} alt={t('staff.portrait')} />
                   </span>
                 )}
               </label>
             </div>
             {editing && (
               <label>
-                O que ele faz
+                {t('staff.whatHeDoes')}
                 <textarea value={mission} onChange={(e) => setMission(e.target.value)} rows={3} maxLength={4000} />
               </label>
             )}
             <label>
-              Primeira tarefa <span className="muted small">(opcional{editing ? ', vale para a próxima conversa nova' : ''})</span>
+              {t('staff.firstTask')} <span className="muted small">{editing ? t('staff.firstTaskOptionalNext') : t('staff.firstTaskOptional')}</span>
               <textarea
                 value={firstTask}
                 onChange={(e) => setFirstTask(e.target.value)}
                 rows={3}
                 maxLength={4000}
-                placeholder="O que ele faz assim que você abrir a conversa. Em branco, ele se apresenta e pergunta."
+                placeholder={t('staff.firstTaskPlaceholderSimple')}
               />
             </label>
             {!editing && template && (
               <p className="muted small simple-summary">
-                Vem do cargo: {modelLabel(template.model)}
-                {template.effort ? `, esforço ${template.effort}` : ''}, {AUTONOMY_OPTIONS.find((o) => o.value === template.autonomy)?.label.toLowerCase()}
-                {template.playbook ? `, ${PLAYBOOK_OPTIONS.find((o) => o.value === template.playbook)?.label.toLowerCase()}` : ''}
-                {autoWorktree ? ', worktree própria (já há outro editando o projeto)' : ', edita o projeto direto'}
-                {template.canHire ? ', pode contratar subfuncionários (temporários)' : ''}, sem MCPs, conversa aqui no MyCo.
+                {t('staff.fromRole', {
+                  details: [
+                    modelLabel(template.model),
+                    template.effort ? t('staff.summaryEffort', { effort: template.effort }) : null,
+                    AUTONOMY_OPTIONS.find((o) => o.value === template.autonomy)?.label.toLowerCase(),
+                    template.playbook ? PLAYBOOK_OPTIONS.find((o) => o.value === template.playbook)?.label.toLowerCase() : null,
+                    autoWorktree ? t('staff.summaryOwnWorktree') : t('staff.summaryDirect'),
+                    template.canHire ? t('staff.summaryCanHire') : null,
+                    t('staff.summaryNoMcp'),
+                    t('staff.summaryChat'),
+                  ]
+                    .filter(Boolean)
+                    .join(', '),
+                })}
               </p>
             )}
             <p className="small">
               <button type="button" className="link" onClick={() => setFull(true)}>
-                Mostrar todos os campos
+                {t('staff.showAll')}
               </button>
             </p>
           </div>
         ) : (
           <>
         <div className="tabs" role="tablist">
-          {TABS.filter((t) => t.id !== 'history' || editing).map((t) => (
+          {TABS.filter((tb) => tb.id !== 'history' || editing).map((tb) => (
             <button
-              key={t.id}
+              key={tb.id}
               type="button"
               role="tab"
-              aria-selected={tab === t.id}
-              className={`tab ${tab === t.id ? 'is-active' : ''}`}
-              onClick={() => setTab(t.id)}
+              aria-selected={tab === tb.id}
+              className={`tab ${tab === tb.id ? 'is-active' : ''}`}
+              onClick={() => setTab(tb.id)}
             >
-              {t.label}
-              {t.id === 'history' && versions ? ` (${versions.length})` : ''}
+              {tb.label}
+              {tb.id === 'history' && versions ? ` (${versions.length})` : ''}
             </button>
           ))}
         </div>
-        <p className="muted small tab-intro">{TABS.find((t) => t.id === tab)?.intro}</p>
+        <p className="muted small tab-intro">{TABS.find((tb) => tb.id === tab)?.intro}</p>
 
         {/* ---- Quem é ---- */}
         <div className="form-panel" role="tabpanel" hidden={tab !== 'who'}>
         {!editing && roles && roles.length > 0 && (
           <div className="templates">
-            <span className="muted small" title="Edite ou crie cargos em config → Cargos">
-              Cargos:
+            <span className="muted small" title={t('staff.cargosTitle')}>
+              {t('staff.cargosLabel')}
             </span>
-            {roles.map((t) => (
+            {roles.map((tpl) => (
               <button
                 type="button"
-                key={t.id}
-                className={`btn-secondary ${roleId === t.id ? 'is-on' : ''}`}
-                aria-pressed={roleId === t.id}
-                title={`${t.role} · ${modelLabel(t.model)}${t.isDefault ? ' · padrão' : ''}`}
-                onClick={() => applyTemplate(t)}
+                key={tpl.id}
+                className={`btn-secondary ${roleId === tpl.id ? 'is-on' : ''}`}
+                aria-pressed={roleId === tpl.id}
+                title={`${tpl.role} · ${modelLabel(tpl.model)}${tpl.isDefault ? ` · ${t('staff.defaultTag')}` : ''}`}
+                onClick={() => applyTemplate(tpl)}
               >
-                {t.label}
+                {tpl.label}
               </button>
             ))}
           </div>
@@ -412,33 +425,33 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
 
         <div className="grid2">
           <label>
-            Nome*
+            {t('staff.nameReq')}
             <input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} required autoFocus={!editing} />
           </label>
           <label>
-            Cargo*
+            {t('staff.roleReq')}
             <input value={role} onChange={(e) => setRole(e.target.value)} maxLength={60} required />
           </label>
         </div>
 
         <div className="grid2">
           <label>
-            Retrato
+            {t('staff.portrait')}
             <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => pickPortrait(e.target.files?.[0])} />
             {currentPortrait && (
               <span className="portrait-row">
-                <img className="portrait-preview" src={currentPortrait} alt="Retrato" />
+                <img className="portrait-preview" src={currentPortrait} alt={t('staff.portrait')} />
                 <button type="button" className="btn-secondary" onClick={() => setPortrait(null)}>
-                  Remover retrato
+                  {t('staff.removePortrait')}
                 </button>
               </span>
             )}
           </label>
           <fieldset>
-            <legend>Reporta a</legend>
-            <p className="muted small">Quem pode chamar este funcionário. Nenhum marcado = só você.</p>
+            <legend>{t('staff.reportsTo')}</legend>
+            <p className="muted small">{t('staff.reportsToHint')}</p>
             <div className="checks">
-              {colleagues.length === 0 && <span className="muted small">Nenhum outro funcionário com ficha neste projeto.</span>}
+              {colleagues.length === 0 && <span className="muted small">{t('staff.noColleagues')}</span>}
               {colleagues.map((m) => (
                 <label key={m.id} className="check">
                   <input type="checkbox" checked={managers.includes(m.id)} onChange={() => toggle(managers, setManagers, m.id)} /> {m.name}
@@ -449,33 +462,33 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
           </fieldset>
         </div>
         <label className="check">
-          <input type="checkbox" checked={canHire} onChange={(e) => setCanHire(e.target.checked)} /> Pode contratar subfuncionários
-          <span className="muted small"> (abre novas sessões pelo MyCo, com no máximo a autonomia dele)</span>
+          <input type="checkbox" checked={canHire} onChange={(e) => setCanHire(e.target.checked)} /> {t('staff.canHire')}
+          <span className="muted small"> {t('staff.canHireHint')}</span>
         </label>
         </div>
 
         {/* ---- Trabalho ---- */}
         <div className="form-panel" role="tabpanel" hidden={tab !== 'work'}>
         <label>
-          Missão*
+          {t('staff.missionReq')}
           <textarea value={mission} onChange={(e) => setMission(e.target.value)} rows={3} maxLength={4000} required />
         </label>
         <label>
-          Primeira tarefa
-          <textarea value={firstTask} onChange={(e) => setFirstTask(e.target.value)} rows={2} maxLength={4000} placeholder="O que fazer assim que a sessão abrir" />
+          {t('staff.firstTask')}
+          <textarea value={firstTask} onChange={(e) => setFirstTask(e.target.value)} rows={2} maxLength={4000} placeholder={t('staff.firstTaskPlaceholder')} />
         </label>
         <label>
-          Definição de pronto
-          <input value={doneWhen} onChange={(e) => setDoneWhen(e.target.value)} maxLength={2000} placeholder="Quando dá para dizer que terminou" />
+          {t('staff.doneWhen')}
+          <input value={doneWhen} onChange={(e) => setDoneWhen(e.target.value)} maxLength={2000} placeholder={t('staff.doneWhenPlaceholder')} />
         </label>
         <div className="grid2">
           <label>
-            Regras (uma por linha)
-            <textarea value={rules} onChange={(e) => setRules(e.target.value)} rows={4} placeholder="Nunca dar push" />
+            {t('staff.rules')}
+            <textarea value={rules} onChange={(e) => setRules(e.target.value)} rows={4} placeholder={t('staff.rulesPlaceholder')} />
           </label>
           <label>
-            Conhecimento (um caminho por linha)
-            <textarea value={knowledge} onChange={(e) => setKnowledge(e.target.value)} rows={4} placeholder={'docs/arquitetura.md\nsrc/components/'} />
+            {t('staff.knowledge')}
+            <textarea value={knowledge} onChange={(e) => setKnowledge(e.target.value)} rows={4} placeholder={t('staff.knowledgePlaceholder')} />
           </label>
         </div>
         </div>
@@ -483,23 +496,23 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
         {/* ---- Ferramentas ---- */}
         <div className="form-panel" role="tabpanel" hidden={tab !== 'tools'}>
         {agentNames.length === 0 && skillNames.length === 0 && (
-          <p className="muted small">Este projeto ainda não tem agents nem skills.</p>
+          <p className="muted small">{t('staff.noAgentsSkills')}</p>
         )}
         {(agentNames.length > 0 || skillNames.length > 0) && (
           <fieldset>
-            <legend>Agents e skills indicados</legend>
-            <p className="muted small">Viram orientação na ficha; o Claude Code continua vendo os demais do projeto.</p>
+            <legend>{t('staff.suggested')}</legend>
+            <p className="muted small">{t('staff.suggestedHint')}</p>
             <div className="checks">
               {agentNames.map((a) => (
                 <label key={`a:${a}`} className="check">
                   <input type="checkbox" checked={agents.includes(a)} onChange={() => toggle(agents, setAgents, a)} /> {a}
-                  <span className="muted small"> agent · {modelOf.get(a) ?? 'modelo de quem chama'}</span>
+                  <span className="muted small"> {t('staff.agentTag')} · {modelOf.get(a) ?? t('staff.callerModel')}</span>
                 </label>
               ))}
               {skillNames.map((s) => (
                 <label key={`s:${s}`} className="check">
                   <input type="checkbox" checked={skills.includes(s)} onChange={() => toggle(skills, setSkills, s)} /> {s}
-                  <span className="muted small"> skill</span>
+                  <span className="muted small"> {t('staff.skillTag')}</span>
                 </label>
               ))}
             </div>
@@ -513,8 +526,8 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
 
         <fieldset>
           <legend>MCPs</legend>
-          {mcps === null && <p className="muted small">Carregando…</p>}
-          {mcps?.length === 0 && <p className="muted small">Nenhum MCP configurado neste projeto (os conectores da conta continuam disponíveis).</p>}
+          {mcps === null && <p className="muted small">{t('staff.loading')}</p>}
+          {mcps?.length === 0 && <p className="muted small">{t('staff.mcpNone')}</p>}
           {mcps && mcps.length > 0 && (
             <>
               <div className="checks">
@@ -531,32 +544,29 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
                       }}
                     />{' '}
                     {m.name}
-                    <span className="muted small"> {m.source === 'user' ? 'usuário' : m.source === 'local' ? 'local' : 'projeto'}</span>
+                    <span className="muted small">
+                      {' '}
+                      {m.source === 'user' ? t('staff.sourceUser') : m.source === 'local' ? t('staff.sourceLocal') : t('staff.sourceProject')}
+                    </span>
                   </label>
                 ))}
               </div>
-              <p className="muted small">
-                {allMcps
-                  ? 'Todos ligados: a sessão usa a configuração normal, inclusive os conectores da conta.'
-                  : 'Com algum desligado, a sessão usa só os marcados (os conectores da conta ficam de fora).'}
-              </p>
+              <p className="muted small">{allMcps ? t('staff.mcpAllOn') : t('staff.mcpSomeOff')}</p>
             </>
           )}
         </fieldset>
 
         {showServers ? (
           <fieldset>
-            <legend>Servidores (SSH)</legend>
+            <legend>{t('staff.sshLegend')}</legend>
             <p className="muted small">
-              Só os apelidos chegam à IA: chaves e senhas ficam no ssh-agent e no <code>~/.ssh/config</code>. A ficha bloqueia a
-              leitura de <code>~/.ssh</code>, <code>.env</code> e chaves, e cada comando no servidor passa pela sua aprovação
-              (autonomia “Pede tudo”).
+              {t('staff.sshNote1')}<code>~/.ssh/config</code>{t('staff.sshNote2')}<code>~/.ssh</code>, <code>.env</code>
+              {t('staff.sshNote4', { autonomy: t('staff.autonomyManualLabel') })}
             </p>
-            {serverList === null && <p className="muted small">Carregando…</p>}
+            {serverList === null && <p className="muted small">{t('staff.loading')}</p>}
             {serverList?.length === 0 && (
               <p className="muted small">
-                Nenhum servidor encontrado. Adicione um <code>Host</code> no <code>~/.ssh/config</code> ou rode <code>/vps init</code> no
-                projeto.
+                {t('staff.sshEmptyA')}<code>Host</code>{t('staff.sshEmptyB')}<code>~/.ssh/config</code>{t('staff.sshEmptyC')}<code>/vps init</code>{t('staff.sshEmptyD')}
               </p>
             )}
             <div className="checks">
@@ -565,7 +575,11 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
                   <input type="checkbox" checked={servers.includes(s.name)} onChange={() => toggle(servers, setServers, s.name)} /> {s.name}
                   <span className="muted small">
                     {' '}
-                    {s.source === 'vps' ? `vps deste projeto${s.remoteRoot ? ` · ${s.remoteRoot}` : ''}` : '~/.ssh/config'}
+                    {s.source === 'vps'
+                      ? s.remoteRoot
+                        ? t('staff.sshVpsRoot', { root: s.remoteRoot })
+                        : t('staff.sshVps')
+                      : '~/.ssh/config'}
                   </span>
                 </label>
               ))}
@@ -574,7 +588,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
                 .map((n) => (
                   <label key={n} className="check">
                     <input type="checkbox" checked onChange={() => toggle(servers, setServers, n)} /> {n}
-                    <span className="muted small"> não encontrado nesta máquina</span>
+                    <span className="muted small"> {t('staff.sshNotHere')}</span>
                   </label>
                 ))}
             </div>
@@ -582,17 +596,16 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
         ) : (
           <p className="muted small">
             <button type="button" className="link" onClick={() => setShowServers(true)}>
-              + dar acesso a servidores (SSH)
+              {t('staff.addSsh')}
             </button>
           </p>
         )}
 
         <label className="check">
-          <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} /> Usar o navegador (Claude in Chrome)
+          <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} /> {t('staff.browserLabel')}
           <span className="muted small">
             {' '}
-            (age no seu Chrome real, com os seus logins; envios, compras e formulários pedem seu ok. Precisa da extensão instalada e de
-            ter rodado <code>claude --chrome</code> uma vez)
+            {t('staff.browserHintA')}<code>claude --chrome</code>{t('staff.browserHintB')}
           </span>
         </label>
         {browser && <BrowserCheck />}
@@ -600,9 +613,9 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
 
         {/* ---- Como trabalha ---- */}
         <div className="form-panel" role="tabpanel" hidden={tab !== 'run'}>
-        {editing && <p className="muted small">Mudanças aqui (e nos MCPs) valem a partir da próxima sessão.</p>}
+        {editing && <p className="muted small">{t('staff.editNote')}</p>}
         <fieldset>
-          <legend>Autonomia</legend>
+          <legend>{t('staff.autonomy')}</legend>
           <div className="choices">
             {AUTONOMY_OPTIONS.map((o) => (
               <label key={o.value} className="choice" title={o.help}>
@@ -618,7 +631,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
 
         <div className="grid2">
           <label>
-            Modelo
+            {t('staff.modelLabel')}
             <select value={model} onChange={(e) => setModel(e.target.value)}>
               {MODEL_OPTIONS.map((m) => (
                 <option key={m.value} value={m.value}>
@@ -628,11 +641,11 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
             </select>
           </label>
           <label>
-            Esforço
+            {t('staff.effortLabel')}
             <select value={effort} onChange={(e) => setEffort(e.target.value as '' | Effort)}>
               {EFFORT_OPTIONS.map((v) => (
                 <option key={v} value={v}>
-                  {v || 'Padrão'}
+                  {v || t('staff.effortDefault')}
                 </option>
               ))}
             </select>
@@ -640,11 +653,11 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
         </div>
 
         <fieldset>
-          <legend>Orquestração e limites</legend>
+          <legend>{t('staff.orchestration')}</legend>
           <label>
-            Roteiro
+            {t('staff.playbookLabel')}
             <select value={playbook} onChange={(e) => pickPlaybook(e.target.value as '' | Playbook)}>
-              <option value="">Nenhum (trabalha do jeito dele)</option>
+              <option value="">{t('staff.playbookNone')}</option>
               {PLAYBOOK_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
@@ -654,34 +667,31 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
           </label>
           {playbook && <p className="muted small">{PLAYBOOK_OPTIONS.find((o) => o.value === playbook)?.help}</p>}
           <label className="check">
-            <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} /> Trabalhar numa worktree própria
+            <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} /> {t('staff.worktreeLabel')}
             <span className="muted small">
               {' '}
-              (cópia git separada, no branch <code>myco/…</code>: dois funcionários escrevendo ao mesmo tempo não se atropelam; o
-              projeto precisa ser um repositório git)
+              {t('staff.worktreeHintA')}<code>myco/…</code>{t('staff.worktreeHintB')}
             </span>
           </label>
           <div className="grid2">
             <label>
-              Linha de parada 5h (%)
-              <input type="number" min={1} max={100} value={stop5h} onChange={(e) => setStop5h(e.target.value)} placeholder="a da empresa" />
+              {t('staff.stop5h')}
+              <input type="number" min={1} max={100} value={stop5h} onChange={(e) => setStop5h(e.target.value)} placeholder={t('staff.companyDefault')} />
             </label>
             <label>
-              Linha de parada 7d (%)
-              <input type="number" min={1} max={100} value={stop7d} onChange={(e) => setStop7d(e.target.value)} placeholder="a da empresa" />
+              {t('staff.stop7d')}
+              <input type="number" min={1} max={100} value={stop7d} onChange={(e) => setStop7d(e.target.value)} placeholder={t('staff.companyDefault')} />
             </label>
           </div>
-          <p className="muted small">
-            Passando dela, o MyCo pergunta antes de mandar trabalho a este funcionário. Vazio = a linha da empresa (em config → Consumo).
-          </p>
+          <p className="muted small">{t('staff.stopHint')}</p>
         </fieldset>
         </div>
 
         {/* ---- Histórico ---- */}
         {editing && (
           <div className="form-panel" role="tabpanel" hidden={tab !== 'history'}>
-            {versions === null && <p className="muted small">Carregando…</p>}
-            {versions?.length === 0 && <p className="muted small">Nenhuma edição ainda.</p>}
+            {versions === null && <p className="muted small">{t('staff.loading')}</p>}
+            {versions?.length === 0 && <p className="muted small">{t('staff.historyEmpty')}</p>}
             <ul className="rows">
               {versions?.map((v) => (
                 <li key={v.version} className="row row-inline">
@@ -689,9 +699,9 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
                     {v.name} <span className="muted small">{v.role}</span>
                   </span>
                   <span className="row-meta">
-                    <span className="muted">{new Date(v.updatedAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</span>
+                    <span className="muted">{new Date(v.updatedAt).toLocaleString(locale(), { dateStyle: 'short', timeStyle: 'short' })}</span>
                     <button type="button" className="btn-secondary" disabled={busy} onClick={() => void restore(v.version)}>
-                      Restaurar
+                      {t('staff.restore')}
                     </button>
                   </span>
                 </li>
@@ -706,21 +716,21 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
         <div className="modal-footer">
         {full && !editing && !adopting && (
           <label className="check">
-            <input type="checkbox" checked={launch} onChange={(e) => setLaunch(e.target.checked)} /> Abrir a sessão no terminal ao contratar
-            <span className="muted small"> (sem marcar, converse pelo painel do MyCo)</span>
+            <input type="checkbox" checked={launch} onChange={(e) => setLaunch(e.target.checked)} /> {t('staff.openTerminal')}
+            <span className="muted small"> {t('staff.openTerminalHint')}</span>
           </label>
         )}
 
         {error && <p className="error">{error}</p>}
         <div className="actions">
           <button type="submit" className="btn-primary" disabled={busy}>
-            {busy ? 'Salvando…' : editing || adopting ? 'Salvar ficha' : 'Contratar'}
+            {busy ? t('staff.saving') : editing || adopting ? t('staff.saveProfile') : t('staff.hire')}
           </button>
           <button type="button" className="btn-secondary" onClick={onClose}>
-            Cancelar
+            {t('staff.cancel')}
           </button>
           <span className="muted small modal-footer-note">
-            Ficha em <code>{project ? `${project.name}/.myco/staff/` : '.myco/staff/'}</code>
+            {t('staff.profileIn')} <code>{project ? `${project.name}/.myco/staff/` : '.myco/staff/'}</code>
           </span>
         </div>
         </div>

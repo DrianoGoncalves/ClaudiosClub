@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import type { BoardBackground, ProjectColor, SendPriority, UiLevel, UsageStop } from '../../../shared/model';
 import { api } from '../api';
 import { BackgroundPicker, RoomColorPicker, useSystemTheme } from '../board/colors';
+import { useChatDetail } from '../chat/chatDetail';
+import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
 import { RolesEditor } from './RolesEditor';
 
 // Configurações do MyCo, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
@@ -38,12 +40,15 @@ interface Props {
 type GroupId = 'board' | 'look' | 'chat' | 'roles' | 'usage';
 
 const GROUPS: Array<{ id: GroupId; label: string; intro: string }> = [
-  { id: 'board', label: 'Quadro', intro: 'O que aparece no escritório e como ele se arruma.' },
-  { id: 'look', label: 'Aparência', intro: 'Cores do fundo e das salas. Cada cor tem um tom para o tema claro e outro para o escuro.' },
-  { id: 'chat', label: 'Conversa', intro: 'Como as mensagens chegam aos funcionários.' },
-  { id: 'roles', label: 'Cargos', intro: 'Modelos de ficha para contratar: os prontos e os seus, cada um com o modelo em que o funcionário começa.' },
-  { id: 'usage', label: 'Consumo', intro: 'Até onde a conta pode gastar antes de o MyCo perguntar.' },
+  { id: 'board', label: t('toolbar.groupBoard'), intro: t('toolbar.groupBoardIntro') },
+  { id: 'look', label: t('toolbar.groupLook'), intro: t('toolbar.groupLookIntro') },
+  { id: 'chat', label: t('toolbar.groupChat'), intro: t('toolbar.groupChatIntro') },
+  { id: 'roles', label: t('toolbar.groupRoles'), intro: t('toolbar.groupRolesIntro') },
+  { id: 'usage', label: t('toolbar.groupUsage'), intro: t('toolbar.groupUsageIntro') },
 ];
+
+/** Singular ou plural da chave conforme n. */
+const plural = (n: number, one: MsgKey, other: MsgKey) => t(n === 1 ? one : other, { n });
 
 interface Setting {
   id: string;
@@ -92,7 +97,7 @@ export function SettingsMenu(props: Props) {
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
-  // Fecha ao clicar fora; Esc limpa a busca e, sem busca, fecha.
+  // Fecha ao clicar fora e com Esc. Só na busca com texto o Esc limpa primeiro, como no VS Code.
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -100,9 +105,12 @@ export function SettingsMenu(props: Props) {
       if (!root.current?.contains(t) && !panel.current?.contains(t)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      if (queryRef.current) setQuery('');
-      else setOpen(false);
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      const inSearch = (e.target as Element | null)?.closest?.('.settings-search');
+      if (inSearch && queryRef.current) return setQuery('');
+      setOpen(false);
+      // O foco volta para a engrenagem, para quem navega pelo teclado não se perder.
+      root.current?.querySelector<HTMLButtonElement>('.settings-button')?.focus();
     };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
@@ -125,7 +133,8 @@ export function SettingsMenu(props: Props) {
   }, [open]);
 
   const words = fold(query).split(/\s+/).filter(Boolean);
-  const all = buildSettings(props, theme, () => setOpen(false), words);
+  const chatDetail = useChatDetail();
+  const all = buildSettings(props, theme, () => setOpen(false), words, chatDetail);
   // No simples, só o essencial; o resto continua lá, no avançado.
   const settings = props.uiLevel === 'simple' ? all.filter((s) => !s.advanced) : all;
   const hidden = all.length - settings.length;
@@ -155,22 +164,26 @@ export function SettingsMenu(props: Props) {
       ref={panel}
       className="settings-menu"
       role="dialog"
-      aria-label="Configurações do MyCo"
+      aria-label={t('toolbar.settingsDialog')}
       style={{ '--settings-top': `${top}px` } as CSSProperties}
     >
       <div className="settings-search">
         <input
           type="search"
           value={query}
-          placeholder="Buscar configurações"
-          aria-label="Buscar configurações"
+          placeholder={t('toolbar.searchSettings')}
+          aria-label={t('toolbar.searchSettings')}
           autoFocus
           onChange={(e) => setQuery(e.target.value)}
         />
-        <span className="muted small">{words.length ? `${visible.length} de ${settings.length}` : `${settings.length} configurações`}</span>
+        <span className="muted small">
+          {words.length
+            ? t('toolbar.ofTotal', { n: visible.length, total: settings.length })
+            : plural(settings.length, 'toolbar.settingsCountOne', 'toolbar.settingsCountOther')}
+        </span>
       </div>
       <div className="settings-body">
-        <nav className="settings-nav" aria-label="Grupos">
+        <nav className="settings-nav" aria-label={t('toolbar.groupsNav')}>
           {/* No simples, grupos sem nada essencial nem aparecem. */}
           {GROUPS.filter((g) => props.uiLevel !== 'simple' || words.length || count(g.id)).map((g) => (
             <button
@@ -199,17 +212,17 @@ export function SettingsMenu(props: Props) {
           ))}
           {!visible.length && (
             <p className="muted settings-empty">
-              Nenhuma configuração com “{query.trim()}”.{' '}
+              {t('toolbar.noResults', { q: query.trim() })}{' '}
               <button type="button" className="link" onClick={() => setQuery('')}>
-                Limpar a busca
+                {t('toolbar.clearSearch')}
               </button>
             </p>
           )}
           {hidden > 0 && (
             <p className="muted small settings-more">
-              Mais {hidden} configurações no nível avançado (cores, cargos, orçamentos, worktrees…).{' '}
+              {plural(hidden, 'toolbar.moreOne', 'toolbar.moreOther')}{' '}
               <button type="button" className="link" onClick={() => void props.onUiLevel('advanced')}>
-                Mostrar tudo
+                {t('toolbar.showAll')}
               </button>
             </p>
           )}
@@ -224,8 +237,8 @@ export function SettingsMenu(props: Props) {
         className="settings-button toolbar-icon"
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label="Configurações"
-        title="Configurações do MyCo (Ctrl+,)"
+        aria-label={t('toolbar.settingsButton')}
+        title={t('toolbar.settingsTitle')}
         onClick={() => setOpen(!open)}
       >
         <GearIcon />
@@ -260,17 +273,16 @@ function SettingRow({ setting: s }: { setting: Setting }) {
 }
 
 /** A lista de configurações; itens que dependem do config.json só entram depois que ele chega. */
-function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, words: string[]): Setting[] {
+function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, words: string[], [chatDetail, setChatDetail]: [boolean, (v: boolean) => void]): Setting[] {
   const out: Setting[] = [
     ...(p.uiLevel
       ? [
           {
             id: 'ui-level',
             group: 'board' as const,
-            title: 'Nível de uso',
-            description:
-              'Simples: contratar com nome, cargo e primeira tarefa (o resto vem do cargo), o funcionário só com a conversa e aqui só o essencial. Avançado: cada detalhe da ficha, do painel e do config. Dá para trocar a qualquer hora; nada se perde.',
-            keywords: 'simples avancado basico completo modo interface detalhes',
+            title: t('toolbar.uiLevelTitle'),
+            description: t('toolbar.uiLevelDesc'),
+            keywords: t('toolbar.uiLevelKeywords'),
             control: <UiLevelPicker value={p.uiLevel} onChange={p.onUiLevel} />,
           },
         ]
@@ -278,50 +290,67 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
     {
       id: 'worktrees',
       group: 'board',
-      title: 'Mostrar worktrees',
-      description: 'Cópias de trabalho (.claude/worktrees) aparecem dentro da sala de cada projeto.',
-      keywords: 'copias git branch',
+      title: t('toolbar.worktreesTitle'),
+      description: t('toolbar.worktreesDesc'),
+      keywords: t('toolbar.worktreesKeywords'),
       toggle: { checked: p.showWorktrees, onChange: p.onToggleWorktrees },
       advanced: true,
     },
     {
       id: 'archived',
       group: 'board',
-      title: `Mostrar arquivados${p.archivedCount > 0 ? ` (${p.archivedCount})` : ''}`,
-      description: 'Projetos e funcionários arquivados aparecem esmaecidos. Nada é apagado do Claude Code.',
-      keywords: 'esconder ocultos',
+      title: `${t('toolbar.archivedTitle')}${p.archivedCount > 0 ? ` (${p.archivedCount})` : ''}`,
+      description: t('toolbar.archivedDesc'),
+      keywords: t('toolbar.archivedKeywords'),
       toggle: { checked: p.showArchived, onChange: p.onToggleArchived },
     },
     {
       id: 'animations',
       group: 'board',
-      title: 'Animações',
-      description: 'Funcionário trabalhando e conversas animadas nas linhas. O padrão segue o “reduzir animações” do sistema.',
-      keywords: 'movimento reduzir',
+      title: t('toolbar.animationsTitle'),
+      description: t('toolbar.animationsDesc'),
+      keywords: t('toolbar.animationsKeywords'),
       toggle: { checked: p.animations, onChange: p.onToggleAnimations },
     },
     {
       id: 'refresh',
       group: 'board',
-      title: 'Atualizar',
-      description: 'Relê do disco os projetos, funcionários e fichas.',
-      keywords: 'recarregar reler',
+      title: t('toolbar.refreshTitle'),
+      description: t('toolbar.refreshDesc'),
+      keywords: t('toolbar.refreshKeywords'),
       control: (
         <button type="button" className="btn-secondary" onClick={p.onRefresh} disabled={p.refreshing}>
-          {p.refreshing ? 'Atualizando…' : 'Atualizar agora'}
+          {p.refreshing ? t('toolbar.refreshing') : t('toolbar.refreshNow')}
         </button>
       ),
     },
     {
       id: 'server',
       group: 'board',
-      title: 'Servidor do MyCo',
-      description:
-        'Parar fecha as conversas abertas e desliga o MyCo (as rotinas param junto). Reiniciar só aparece com o MyCo em segundo plano (npm run daily:start ou o início automático).',
-      keywords: 'parar desligar encerrar reiniciar stop restart servidor',
+      title: t('toolbar.serverTitle'),
+      description: t('toolbar.serverDesc'),
+      keywords: t('toolbar.serverKeywords'),
       control: <ServerControls />,
     },
   ];
+
+  // Idioma: a escolha vale para a página toda e recarrega.
+  out.push({
+    id: 'language',
+    group: 'look',
+    title: t('toolbar.languageTitle'),
+    description: t('toolbar.languageDesc'),
+    keywords: t('toolbar.languageKeywords'),
+    control: (
+      <select className="setting-select" value={locale()} aria-label={t('toolbar.languageTitle')} onChange={(e) => setLocale(e.target.value as Locale)}>
+        {LOCALES.map((l) => (
+          <option key={l.id} value={l.id}>
+            {l.label}
+          </option>
+        ))}
+      </select>
+    ),
+  });
 
   if (p.boardBackground) {
     const bg = p.boardBackground;
@@ -329,20 +358,20 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       {
         id: 'background-light',
         group: 'look',
-        title: 'Fundo no tema claro',
-        badge: theme === 'light' ? 'em uso agora' : undefined,
-        description: 'Cor do quadro com o sistema no tema claro. Os cartões e os pontinhos acompanham o tom.',
-        keywords: 'cor fundo quadro branco background tema claro',
+        title: t('toolbar.bgLightTitle'),
+        badge: theme === 'light' ? t('toolbar.inUseNow') : undefined,
+        description: t('toolbar.bgLightDesc'),
+        keywords: t('toolbar.bgLightKeywords'),
         control: <BackgroundPicker theme="light" value={bg.light} onChange={(light) => p.onBoardBackground({ light })} />,
         advanced: true,
       },
       {
         id: 'background-dark',
         group: 'look',
-        title: 'Fundo no tema escuro',
-        badge: theme === 'dark' ? 'em uso agora' : undefined,
-        description: 'Cor do quadro com o sistema no tema escuro (a lousa). Os cartões e os pontinhos acompanham o tom.',
-        keywords: 'cor fundo quadro negro lousa background tema escuro',
+        title: t('toolbar.bgDarkTitle'),
+        badge: theme === 'dark' ? t('toolbar.inUseNow') : undefined,
+        description: t('toolbar.bgDarkDesc'),
+        keywords: t('toolbar.bgDarkKeywords'),
         control: <BackgroundPicker theme="dark" value={bg.dark} onChange={(dark) => p.onBoardBackground({ dark })} />,
         advanced: true,
       },
@@ -351,15 +380,15 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
 
   if (p.projectColors) {
     const colors = p.projectColors;
-    const text = 'Cor das salas A caneta da parede de cada sala parede borda projeto';
+    const text = t('toolbar.roomColorsSearch');
     // Buscando pelo nome de um projeto, a lista mostra só as salas que batem.
     const rooms = words.length && !matches(text, words) ? p.rooms.filter((r) => matches(r.name, words)) : p.rooms;
     out.push({
       id: 'room-colors',
       group: 'look',
-      title: 'Cor das salas',
-      description: 'A caneta da parede de cada sala no quadro. Também dá para trocar no painel do projeto.',
-      keywords: `parede borda projeto ${p.rooms.map((r) => r.name).join(' ')}`,
+      title: t('toolbar.roomColorsTitle'),
+      description: t('toolbar.roomColorsDesc'),
+      keywords: `${t('toolbar.roomColorsKeywords')} ${p.rooms.map((r) => r.name).join(' ')}`,
       control: rooms.length ? (
         <ul className="room-colors">
           {rooms.map((r) => (
@@ -367,24 +396,33 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
               <span className="room-colors-name" title={r.name}>
                 {r.name}
               </span>
-              <RoomColorPicker small value={colors[r.id] ?? null} label={`Cor da sala ${r.name}`} onChange={(c) => p.onProjectColor(r.id, c)} />
+              <RoomColorPicker small value={colors[r.id] ?? null} label={t('toolbar.roomColorOf', { name: r.name })} onChange={(c) => p.onProjectColor(r.id, c)} />
             </li>
           ))}
         </ul>
       ) : (
-        <p className="muted small">Nenhuma sala de projeto no quadro agora.</p>
+        <p className="muted small">{t('toolbar.noRooms')}</p>
       ),
       advanced: true,
     });
   }
 
+  out.push({
+    id: 'chat-detail',
+    group: 'chat',
+    title: t('toolbar.chatDetailTitle'),
+    description: t('toolbar.chatDetailDesc'),
+    keywords: t('toolbar.chatDetailKeywords'),
+    toggle: { checked: chatDetail, onChange: setChatDetail },
+  });
+
   if (p.sendWhileBusy) {
     out.push({
       id: 'send-while-busy',
       group: 'chat',
-      title: 'Mensagem durante o trabalho',
-      description: `O que acontece com a mensagem mandada com o funcionário trabalhando: ${SEND_HELP[p.sendWhileBusy]}. Vale para todos os funcionários.`,
-      keywords: 'fila interromper prioridade enviar mandar ocupado',
+      title: t('toolbar.sendBusyTitle'),
+      description: t('toolbar.sendBusyDesc', { how: SEND_HELP[p.sendWhileBusy] }),
+      keywords: t('toolbar.sendBusyKeywords'),
       control: <SendWhileBusyEditor value={p.sendWhileBusy} onSave={p.onSendWhileBusy} />,
       advanced: true,
     });
@@ -393,10 +431,9 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
   out.push({
     id: 'roles',
     group: 'roles',
-    title: 'Cargos para contratar',
-    description:
-      'Cada cargo preenche a ficha de quem é contratado com ele, inclusive o modelo e o esforço. Para mudar só um funcionário, edite a ficha dele. O cargo marcado como padrão já vem preenchido ao contratar.',
-    keywords: 'cargo template modelo funcionario contratar padrao papel orquestrador desenvolvedor revisor infra opus sonnet haiku',
+    title: t('toolbar.rolesTitle'),
+    description: t('toolbar.rolesDesc'),
+    keywords: t('toolbar.rolesKeywords'),
     control: <RolesEditor />,
     advanced: true,
   });
@@ -407,17 +444,17 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       {
         id: 'usage-stop-5h',
         group: 'usage',
-        title: 'Trava de consumo: 5 horas',
-        description: 'Passando deste percentual do limite de 5h, o MyCo pergunta antes de conversar ou abrir sessão. Vazio = sem trava. Cada ficha pode ter a sua.',
-        keywords: 'limite parada 5h gasto',
+        title: t('toolbar.stop5hTitle'),
+        description: t('toolbar.stop5hDesc'),
+        keywords: t('toolbar.stop5hKeywords'),
         control: <UsageStopInput field="fiveHour" value={stop} onSave={p.onUsageStop} />,
       },
       {
         id: 'usage-stop-7d',
         group: 'usage',
-        title: 'Trava de consumo: 7 dias',
-        description: 'O mesmo, para o limite semanal (7d).',
-        keywords: 'limite parada 7d semana gasto',
+        title: t('toolbar.stop7dTitle'),
+        description: t('toolbar.stop7dDesc'),
+        keywords: t('toolbar.stop7dKeywords'),
         control: <UsageStopInput field="sevenDay" value={stop} onSave={p.onUsageStop} />,
       },
     );
@@ -425,15 +462,14 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
 
   if (p.projectBudgets) {
     const budgets = p.projectBudgets;
-    const text = 'Orçamento por projeto cota semanal 7 dias limite projeto';
+    const text = t('toolbar.budgetsSearch');
     const rooms = words.length && !matches(text, words) ? p.rooms.filter((r) => matches(r.name, words)) : p.rooms;
     out.push({
       id: 'project-budgets',
       group: 'usage',
-      title: 'Orçamento por projeto',
-      description:
-        'Quanto da cota de 7 dias cada projeto pode usar, estimado pela parte dele no custo da semana. Passando, o MyCo pergunta antes de conversar ou abrir sessão naquele projeto. Vazio = sem orçamento.',
-      keywords: `cota semana limite gasto ${p.rooms.map((r) => r.name).join(' ')}`,
+      title: t('toolbar.budgetsTitle'),
+      description: t('toolbar.budgetsDesc'),
+      keywords: `${t('toolbar.budgetsKeywords')} ${p.rooms.map((r) => r.name).join(' ')}`,
       control: rooms.length ? (
         <ul className="room-colors">
           {rooms.map((r) => (
@@ -441,12 +477,12 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
               <span className="room-colors-name" title={r.name}>
                 {r.name}
               </span>
-              <BudgetInput value={budgets[r.id] ?? null} label={`Orçamento de ${r.name}`} onSave={(b) => p.onProjectBudget(r.id, b)} />
+              <BudgetInput value={budgets[r.id] ?? null} label={t('toolbar.budgetOf', { name: r.name })} onSave={(b) => p.onProjectBudget(r.id, b)} />
             </li>
           ))}
         </ul>
       ) : (
-        <p className="muted small">Nenhuma sala de projeto no quadro agora.</p>
+        <p className="muted small">{t('toolbar.noRooms')}</p>
       ),
       advanced: true,
     });
@@ -466,11 +502,11 @@ function UiLevelPicker({ value, onChange }: { value: UiLevel; onChange: (level: 
     }
   };
   return (
-    <div className="segmented" aria-label="Nível de uso">
+    <div className="segmented" aria-label={t('toolbar.uiLevelTitle')}>
       {(
         [
-          ['simple', 'Simples'],
-          ['advanced', 'Avançado'],
+          ['simple', t('toolbar.levelSimple')],
+          ['advanced', t('toolbar.levelAdvanced')],
         ] as const
       ).map(([level, label]) => (
         <button key={level} type="button" className="btn-toggle" aria-pressed={value === level} disabled={busy} onClick={() => void pick(level)}>
@@ -522,14 +558,11 @@ function ServerControls() {
     // Na hora do clique, não de quando o menu abriu: quem está trabalhando agora perde o que faz.
     const working = await api.serverInfo().then((i) => i.working, () => null);
     const cut = [
-      working?.busy ? `${working.busy} no meio de um turno` : '',
-      working?.background ? `${working.background} com agents em segundo plano` : '',
+      working?.busy ? t('toolbar.cutBusy', { n: working.busy }) : '',
+      working?.background ? t('toolbar.cutBackground', { n: working.background }) : '',
     ].filter(Boolean);
-    const warn = cut.length ? `\n\nAtenção: ${cut.join(' e ')}. O trabalho deles é interrompido.` : '';
-    const ask =
-      (action === 'stop'
-        ? 'Parar o MyCo? As conversas abertas fecham e as rotinas param até ele voltar.'
-        : 'Reiniciar o MyCo? As conversas abertas fecham e ele volta em alguns segundos.') + warn;
+    const warn = cut.length ? `\n\n${t('toolbar.warnCut', { cut: cut.join(` ${t('toolbar.and')} `) })}` : '';
+    const ask = (action === 'stop' ? t('toolbar.askStop') : t('toolbar.askRestart')) + warn;
     if (!window.confirm(ask)) return;
     setError(null);
     setState(action === 'stop' ? 'stopping' : 'restarting');
@@ -555,7 +588,7 @@ function ServerControls() {
       if (await fetch('/api/health').then((r) => r.ok, () => false)) return window.location.reload();
       await new Promise((r) => setTimeout(r, 1500));
     }
-    setError('o MyCo não voltou em 1 min e meio: veja o log com npm run daily:status');
+    setError(t('toolbar.serverNotBack'));
     setState('idle');
   };
 
@@ -564,17 +597,17 @@ function ServerControls() {
       <span className="setting-buttons">
         {info?.daemon && (
           <button type="button" className="btn-secondary" disabled={state !== 'idle'} onClick={() => void act('restart')}>
-            Reiniciar
+            {t('toolbar.restartBtn')}
           </button>
         )}
         <button type="button" className="btn-secondary setting-danger" disabled={state !== 'idle'} onClick={() => void act('stop')}>
-          Parar o MyCo
+          {t('toolbar.stopBtn')}
         </button>
       </span>
       {info && (
         <span className="muted small">
-          {info.daemon ? 'Em segundo plano, com vigia' : 'Rodando em primeiro plano (sem vigia)'} · desde{' '}
-          {new Date(info.startedAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+          {info.daemon ? t('toolbar.daemonOn') : t('toolbar.daemonOff')} · {t('toolbar.since')}{' '}
+          {new Date(info.startedAt).toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
         </span>
       )}
       {error && <span className="error small">{error}</span>}
@@ -582,15 +615,15 @@ function ServerControls() {
         createPortal(
           <div className="server-overlay" role="alertdialog" aria-live="assertive">
             <div className="server-overlay-card">
-              {state === 'restarting' && <h2>Reiniciando o MyCo…</h2>}
-              {state === 'stopping' && <h2>Parando o MyCo…</h2>}
+              {state === 'restarting' && <h2>{t('toolbar.restartingTitle')}</h2>}
+              {state === 'stopping' && <h2>{t('toolbar.stoppingTitle')}</h2>}
               {state === 'stopped' && (
                 <>
-                  <h2>O MyCo está parado</h2>
-                  <p>As conversas foram fechadas (continuam salvas) e as rotinas não rodam até ele voltar.</p>
+                  <h2>{t('toolbar.stoppedTitle')}</h2>
+                  <p>{t('toolbar.stoppedBody')}</p>
                   <p>
-                    Para ligar de novo: abra o atalho <b>MyCo</b> do Menu Iniciar (página de início, com o botão "Iniciar"), ou rode{' '}
-                    <code>npm run daily:start</code> na pasta do MyCo.
+                    {t('toolbar.startAgainA')} <b>MyCo</b> {t('toolbar.startAgainB')}{' '}
+                    <code>npm run daily:start</code> {t('toolbar.startAgainC')}
                   </p>
                 </>
               )}
@@ -603,9 +636,9 @@ function ServerControls() {
 }
 
 const SEND_HELP: Record<SendPriority, string> = {
-  next: 'entra no trabalho em andamento, entre uma ferramenta e outra, sem parar',
-  later: 'espera o funcionário terminar e vira a próxima mensagem',
-  now: 'interrompe o que ele está fazendo e responde já',
+  next: t('toolbar.sendNextHelp'),
+  later: t('toolbar.sendLaterHelp'),
+  now: t('toolbar.sendNowHelp'),
 };
 
 /** Mensagem mandada com o funcionário trabalhando: vale para todas as conversas. */
@@ -616,15 +649,15 @@ function SendWhileBusyEditor({ value, onSave }: { value: SendPriority; onSave: (
       <select
         className="setting-select"
         value={value}
-        aria-label="Mensagem durante o trabalho"
+        aria-label={t('toolbar.sendBusyTitle')}
         onChange={(e) => {
           setError(null);
           onSave(e.target.value as SendPriority).catch((err: Error) => setError(err.message));
         }}
       >
-        <option value="next">entra no meio</option>
-        <option value="later">vai para a fila</option>
-        <option value="now">interrompe</option>
+        <option value="next">{t('toolbar.sendNextLabel')}</option>
+        <option value="later">{t('toolbar.sendLaterLabel')}</option>
+        <option value="now">{t('toolbar.sendNowLabel')}</option>
       </select>
       {error && <span className="error small">{error}</span>}
     </>
@@ -651,7 +684,7 @@ function UsageStopInput({ field, value, onSave }: { field: keyof UsageStop; valu
         max={100}
         defaultValue={value[field] ?? ''}
         placeholder="—"
-        aria-label={field === 'fiveHour' ? 'Trava de 5 horas, em %' : 'Trava de 7 dias, em %'}
+        aria-label={field === 'fiveHour' ? t('toolbar.stopAria5h') : t('toolbar.stopAria7d')}
         onBlur={save}
         onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
       />

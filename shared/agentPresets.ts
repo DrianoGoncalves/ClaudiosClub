@@ -1,4 +1,4 @@
-import type { Playbook } from './model';
+import type { Effort, Playbook } from './model';
 
 // Agents prontos (“Novo agent” no quadro) e os que cada roteiro de orquestração usa. Quando a ficha
 // tem um roteiro e o projeto não tem o agent dele, o MyCo cria o arquivo a partir daqui
@@ -9,6 +9,8 @@ export interface AgentPreset {
   name: string;
   description: string;
   model: string;
+  /** Quanto pensa: o mecânico em low; quem procura bug, mais. */
+  effort: Effort;
   /** Separadas por vírgula, como no frontmatter. */
   tools: string;
   prompt: string;
@@ -31,6 +33,7 @@ export const AGENT_PRESETS: AgentPreset[] = [
     name: 'executor',
     description: 'Executa tarefas mecânicas e bem especificadas que o planejador delegar: editar arquivos indicados, aplicar mudanças repetitivas, rodar comandos de verificação.',
     model: 'haiku',
+    effort: 'low',
     tools: 'Read, Grep, Glob, Edit, Write, Bash, PowerShell',
     prompt: EXECUTOR_RULES,
   },
@@ -39,6 +42,7 @@ export const AGENT_PRESETS: AgentPreset[] = [
     name: 'pesquisador',
     description: 'Procura no código e resume o que encontrou: onde algo está definido, quem usa uma função, como uma parte funciona. Não altera nada.',
     model: 'haiku',
+    effort: 'low',
     tools: 'Read, Grep, Glob',
     prompt:
       'Você é um pesquisador de código. Encontre o que foi pedido e responda com caminhos de arquivo:linha e um resumo curto.\n- Não altere arquivos.\n- Não cole arquivos inteiros: no máximo trechos de poucas linhas quando forem essenciais.\n- Não chame outros agents; se a busca for grande demais, diga o que falta cobrir.\n- Diga claramente o que não encontrou.',
@@ -48,6 +52,7 @@ export const AGENT_PRESETS: AgentPreset[] = [
     name: 'revisor',
     description: 'Revisa uma mudança feita por um executor antes de ela ser aceita: procura bugs, regressões e desvios do pedido.',
     model: 'sonnet',
+    effort: 'high',
     tools: 'Read, Grep, Glob',
     prompt:
       'Você é um revisor. Compare a mudança com o que foi pedido.\n- Aponte cada problema com arquivo:linha e um cenário concreto de falha.\n- Separe bug de estilo.\n- Não corrija nem chame outros agents: devolva os achados para quem pediu.\n- Termine com um veredito: aprovado ou reprovado.\n- Se estiver tudo certo, diga isso em uma linha.',

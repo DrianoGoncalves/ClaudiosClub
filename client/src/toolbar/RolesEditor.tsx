@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Autonomy, Effort } from '../../../shared/model';
 import type { RoleEntry } from '../../../shared/roles';
 import { api } from '../api';
+import { t } from '../i18n';
 import { modelLabel } from '../staff/HireForm';
 import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS } from '../staff/templates';
 
@@ -75,7 +76,7 @@ export function RolesEditor() {
     if (ok) setEditing(null);
   };
 
-  if (!roles) return <span className="muted small">{error ?? 'Carregando…'}</span>;
+  if (!roles) return <span className="muted small">{error ?? t('toolbar.loading')}</span>;
   const hiddenBuiltins = 7 - roles.filter((r) => r.builtin).length;
 
   return (
@@ -87,27 +88,31 @@ export function RolesEditor() {
               <b>{r.label}</b>
               <span className="muted small">
                 {r.role} · {modelLabel(r.model)}
-                {r.effort ? ` · esforço ${r.effort}` : ''}
-                {r.builtin ? (r.edited ? ' · pronto (editado)' : ' · pronto') : ' · seu'}
+                {r.effort ? ` · ${t('toolbar.effortWith', { effort: r.effort })}` : ''}
+                {r.builtin ? ` · ${r.edited ? t('toolbar.builtInEdited') : t('toolbar.builtIn')}` : ` · ${t('toolbar.yours')}`}
               </span>
             </div>
             <span className="roles-actions">
-              <label className="check small" title="Já vem preenchido ao contratar">
-                <input type="radio" name="default-role" checked={r.isDefault} disabled={busy} onChange={() => void run(() => api.setDefaultRole(r.id))} /> padrão
+              <label className="check small" title={t('toolbar.defaultTitle')}>
+                <input type="radio" name="default-role" checked={r.isDefault} disabled={busy} onChange={() => void run(() => api.setDefaultRole(r.id))} /> {t('toolbar.defaultLabel')}
               </label>
               <button type="button" className="link small" disabled={busy} onClick={() => setEditing(toDraft(r))}>
-                editar
+                {t('toolbar.edit')}
               </button>
               <button
                 type="button"
                 className="link small"
                 disabled={busy}
                 onClick={() => {
-                  const what = r.builtin ? (r.edited ? `Voltar "${r.label}" ao original?` : `Tirar "${r.label}" da lista? (dá para trazer de volta)`) : `Apagar o cargo "${r.label}"?`;
+                  const what = r.builtin
+                    ? r.edited
+                      ? t('toolbar.restoreConfirm', { label: r.label })
+                      : t('toolbar.removeConfirm', { label: r.label })
+                    : t('toolbar.deleteConfirm', { label: r.label });
                   if (window.confirm(what)) void run(() => api.deleteRole(r.id));
                 }}
               >
-                {r.builtin ? (r.edited ? 'voltar ao original' : 'tirar') : 'apagar'}
+                {r.builtin ? (r.edited ? t('toolbar.restoreOriginal') : t('toolbar.remove')) : t('toolbar.delete')}
               </button>
             </span>
           </li>
@@ -115,16 +120,16 @@ export function RolesEditor() {
       </ul>
       <p className="roles-footer">
         <button type="button" className="btn-secondary" disabled={busy} onClick={() => setEditing({ ...blank })}>
-          Novo cargo
+          {t('toolbar.newRole')}
         </button>
         {roles.some((r) => r.isDefault) && (
           <button type="button" className="link small" disabled={busy} onClick={() => void run(() => api.setDefaultRole(null))}>
-            contratar sem cargo padrão
+            {t('toolbar.noDefault')}
           </button>
         )}
         {hiddenBuiltins > 0 && (
           <button type="button" className="link small" disabled={busy} onClick={() => void run(() => api.restoreRoles())}>
-            trazer de volta os prontos tirados ({hiddenBuiltins})
+            {t('toolbar.restoreBuiltins', { n: hiddenBuiltins })}
           </button>
         )}
       </p>
@@ -139,15 +144,15 @@ export function RolesEditor() {
         >
           <div className="grid2">
             <label>
-              Nome do cargo (botão)
+              {t('toolbar.fieldLabel')}
               <input value={editing.label} maxLength={60} required onChange={(e) => setEditing({ ...editing, label: e.target.value })} />
             </label>
             <label>
-              Cargo na ficha
+              {t('toolbar.fieldRole')}
               <input value={editing.role} maxLength={60} required onChange={(e) => setEditing({ ...editing, role: e.target.value })} />
             </label>
             <label>
-              Modelo
+              {t('toolbar.fieldModel')}
               <select value={editing.model} onChange={(e) => setEditing({ ...editing, model: e.target.value })}>
                 {MODEL_OPTIONS.map((m) => (
                   <option key={m.value} value={m.value}>
@@ -158,18 +163,18 @@ export function RolesEditor() {
               </select>
             </label>
             <label>
-              Esforço
+              {t('toolbar.effort')}
               <select value={editing.effort} onChange={(e) => setEditing({ ...editing, effort: e.target.value as '' | Effort })}>
                 {EFFORT_OPTIONS.map((x) => (
                   <option key={x} value={x}>
-                    {x || 'padrão'}
+                    {x || t('toolbar.defaultLabel')}
                   </option>
                 ))}
               </select>
             </label>
           </div>
           <label>
-            Autonomia
+            {t('toolbar.fieldAutonomy')}
             <select value={editing.autonomy} onChange={(e) => setEditing({ ...editing, autonomy: e.target.value as Autonomy })}>
               {AUTONOMY_OPTIONS.map((a) => (
                 <option key={a.value} value={a.value}>
@@ -179,28 +184,28 @@ export function RolesEditor() {
             </select>
           </label>
           <label>
-            Missão
+            {t('toolbar.fieldMission')}
             <textarea rows={3} value={editing.mission} maxLength={4000} required onChange={(e) => setEditing({ ...editing, mission: e.target.value })} />
           </label>
           <label>
-            Regras (uma por linha)
+            {t('toolbar.fieldRules')}
             <textarea rows={4} value={editing.rules} onChange={(e) => setEditing({ ...editing, rules: e.target.value })} />
           </label>
           <label>
-            Pronto quando
+            {t('toolbar.fieldDoneWhen')}
             <input value={editing.doneWhen} maxLength={2000} onChange={(e) => setEditing({ ...editing, doneWhen: e.target.value })} />
           </label>
           <label className="check">
-            <input type="checkbox" checked={editing.canHire} onChange={(e) => setEditing({ ...editing, canHire: e.target.checked })} /> Pode
-            contratar subfuncionários <span className="muted small">(entram como temporários)</span>
+            <input type="checkbox" checked={editing.canHire} onChange={(e) => setEditing({ ...editing, canHire: e.target.checked })} /> {t('toolbar.canHire')}{' '}
+            <span className="muted small">{t('toolbar.canHireNote')}</span>
           </label>
-          <p className="muted small">Vale para os próximos contratados com este cargo. Quem já foi contratado continua com a própria ficha.</p>
+          <p className="muted small">{t('toolbar.formNote')}</p>
           <p className="roles-footer">
             <button type="submit" className="btn-primary" disabled={busy}>
-              Salvar cargo
+              {t('toolbar.saveRole')}
             </button>
             <button type="button" className="btn-secondary" disabled={busy} onClick={() => setEditing(null)}>
-              Cancelar
+              {t('toolbar.cancel')}
             </button>
           </p>
         </form>

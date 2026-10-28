@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Autonomy, ChatAttachment, ChatCommand, ChatItem, ChatState, Effort, UiLevel } from '../../../shared/model';
+import { t } from '../i18n';
 
 // Pedaços da conversa que vieram do app do Claude: a lista de tarefas do funcionário, os ajustes
 // da conversa (modelo, esforço, autonomia), o menu de "/" e "@" e os anexos de arquivo.
@@ -51,7 +52,7 @@ export function TodoPanel({ todos }: { todos: TodoItem[] }) {
     <div className="chat-todos">
       <button type="button" className="chat-todos-head" onClick={() => setOpen(!open)} aria-expanded={open}>
         <span className="chat-todos-line">
-          Tarefas {done}/{todos.length}
+          {t('chat.tasks', { done, total: todos.length })}
           {doing && ` · ${doing.subject}`}
         </span>
         <span aria-hidden="true">{open ? '▾' : '▸'}</span>
@@ -82,20 +83,20 @@ const MODELS = [
 ];
 const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 const AUTONOMIES: Array<{ value: Autonomy; label: string }> = [
-  { value: 'plan', label: 'Só planeja' },
-  { value: 'manual', label: 'Pede tudo' },
-  { value: 'acceptEdits', label: 'Edita sozinho' },
-  { value: 'auto', label: 'Autônomo' },
-  { value: 'bypassPermissions', label: 'Sem travas' },
+  { value: 'plan', label: t('chat.autoPlan') },
+  { value: 'manual', label: t('chat.autoManual') },
+  { value: 'acceptEdits', label: t('chat.autoEdits') },
+  { value: 'auto', label: t('chat.autoAuto') },
+  { value: 'bypassPermissions', label: t('chat.autoBypass') },
 ];
 /** Modo que o Claude Code reporta → autonomia da ficha. */
 const MODE_AUTONOMY: Record<string, Autonomy> = { default: 'manual', acceptEdits: 'acceptEdits', plan: 'plan', auto: 'auto', bypassPermissions: 'bypassPermissions' };
 
 /** No simples: três jeitos de trabalhar, cada um com modelo e esforço. */
 const PACES = [
-  { id: 'fast', label: 'Rápido', model: 'haiku', effort: 'low' as Effort, help: 'Haiku, pensa pouco: tarefas simples, respostas rápidas e baratas' },
-  { id: 'balanced', label: 'Equilibrado', model: 'sonnet', effort: 'medium' as Effort, help: 'Sonnet: o dia a dia' },
-  { id: 'careful', label: 'Caprichado', model: 'opus', effort: 'high' as Effort, help: 'Opus, pensa bastante: planejar, revisar, problemas difíceis' },
+  { id: 'fast', label: t('chat.paceFast'), model: 'haiku', effort: 'low' as Effort, help: t('chat.paceFastHelp') },
+  { id: 'balanced', label: t('chat.paceBalanced'), model: 'sonnet', effort: 'medium' as Effort, help: t('chat.paceBalancedHelp') },
+  { id: 'careful', label: t('chat.paceCareful'), model: 'opus', effort: 'high' as Effort, help: t('chat.paceCarefulHelp') },
 ];
 
 /** "claude-sonnet-5-5" → "sonnet". */
@@ -131,7 +132,7 @@ export function ChatSettingsBar({
     }
   };
   const off = disabled || busy;
-  const hint = 'Vale só para esta conversa, na hora; a ficha continua como está.';
+  const hint = t('chat.settingsHint');
 
   if (level === 'simple') {
     const pace = model === 'haiku' ? 'fast' : model === 'sonnet' ? 'balanced' : model ? 'careful' : '';
@@ -146,18 +147,18 @@ export function ChatSettingsBar({
           ))}
         </span>
         <span className="segmented">
-          <button type="button" className="btn-toggle" aria-pressed={asks} disabled={off} title="Pede sua aprovação antes de editar ou rodar comandos" onClick={() => void run({ autonomy: 'manual' })}>
-            Pede antes
+          <button type="button" className="btn-toggle" aria-pressed={asks} disabled={off} title={t('chat.askBeforeHelp')} onClick={() => void run({ autonomy: 'manual' })}>
+            {t('chat.askBefore')}
           </button>
           <button
             type="button"
             className="btn-toggle"
             aria-pressed={!asks}
             disabled={off}
-            title="Faz sozinho o que for seguro; o arriscado (deploy, apagar em massa) ainda passa por você"
+            title={t('chat.autoHelp')}
             onClick={() => void run({ autonomy: 'auto' })}
           >
-            Faz sozinho
+            {t('chat.autoDo')}
           </button>
         </span>
       </span>
@@ -165,24 +166,24 @@ export function ChatSettingsBar({
   }
   return (
     <span className="chat-settings" title={hint}>
-      <select aria-label="Modelo desta conversa" value={model} disabled={off} onChange={(e) => void run({ model: e.target.value })}>
-        {!model && <option value="">modelo</option>}
+      <select aria-label={t('chat.modelAria')} value={model} disabled={off} onChange={(e) => void run({ model: e.target.value })}>
+        {!model && <option value="">{t('chat.modelPlaceholder')}</option>}
         {MODELS.map((m) => (
           <option key={m.value} value={m.value}>
             {m.label}
           </option>
         ))}
       </select>
-      <select aria-label="Esforço desta conversa" value={effort} disabled={off} onChange={(e) => void run({ effort: e.target.value as Effort })}>
-        {!effort && <option value="">esforço</option>}
+      <select aria-label={t('chat.effortAria')} value={effort} disabled={off} onChange={(e) => void run({ effort: e.target.value as Effort })}>
+        {!effort && <option value="">{t('chat.effortPlaceholder')}</option>}
         {EFFORTS.map((e) => (
           <option key={e} value={e}>
-            esforço {e}
+            {t('chat.effortOption', { e })}
           </option>
         ))}
       </select>
-      <select aria-label="Autonomia desta conversa" value={autonomy ?? ''} disabled={off} onChange={(e) => void run({ autonomy: e.target.value as Autonomy })}>
-        {!autonomy && <option value="">autonomia</option>}
+      <select aria-label={t('chat.autonomyAria')} value={autonomy ?? ''} disabled={off} onChange={(e) => void run({ autonomy: e.target.value as Autonomy })}>
+        {!autonomy && <option value="">{t('chat.autonomyPlaceholder')}</option>}
         {AUTONOMIES.map((a) => (
           <option key={a.value} value={a.value}>
             {a.label}
@@ -282,15 +283,15 @@ export function isAttachable(f: File): boolean {
 
 export async function readAttachment(f: File): Promise<ChatAttachment> {
   if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) {
-    if (f.size > MAX_PDF) throw new Error(`${f.name}: PDF grande demais (máx. 2,9 MB)`);
+    if (f.size > MAX_PDF) throw new Error(t('chat.pdfTooBig', { name: f.name }));
     const url = await new Promise<string>((resolve, reject) => {
       const r = new FileReader();
       r.onload = () => resolve(String(r.result));
-      r.onerror = () => reject(new Error(`não deu para ler ${f.name}`));
+      r.onerror = () => reject(new Error(t('chat.readFail', { name: f.name })));
       r.readAsDataURL(f);
     });
     return { name: f.name, mediaType: 'application/pdf', data: url.slice(url.indexOf(',') + 1) };
   }
-  if (f.size > MAX_TEXT) throw new Error(`${f.name}: arquivo de texto grande demais (máx. 200 KB)`);
+  if (f.size > MAX_TEXT) throw new Error(t('chat.textTooBig', { name: f.name }));
   return { name: f.name, mediaType: 'text/plain', data: await f.text() };
 }

@@ -32,6 +32,7 @@ async function readAgent(filePath: string, scope: Agent['scope']): Promise<Agent
       description: str(data.description),
       tools: strList(data.tools),
       model: str(data.model),
+      effort: str(data.effort),
       link,
       error: null,
     };
@@ -43,6 +44,7 @@ async function readAgent(filePath: string, scope: Agent['scope']): Promise<Agent
       description: null,
       tools: null,
       model: null,
+      effort: null,
       link: await linkInfo(filePath).catch(() => ({ kind: 'file' as const, target: null })),
       error: errorMessage(err),
     };

@@ -24,6 +24,8 @@ export interface LaunchContext {
   worktree?: Worktree | null;
   /** Servidores da ficha, resolvidos (só nomes e destinos). */
   servers?: ServerInfo[];
+  /** Arquivos das chaves desses servidores (a sessão não pode ler). */
+  serverKeys?: string[];
   /** Quem reporta a este funcionário (a seção "Sua equipe" da ficha). */
   team?: TeamMember[];
   /** Agents da conta (padrão ~/.claude/agents); os testes trocam. */
@@ -94,6 +96,7 @@ export interface PreparedRun {
   addDirs: string[];
   settingsFile: string;
   agentsFile: string | null;
+  keyFiles: string[];
 }
 
 /**
@@ -128,7 +131,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     agentsFile = path.join(dir, 'agents.json');
     await writeAtomic(agentsFile, JSON.stringify(agents.inline, null, 2));
   }
-  return { systemPromptFile, mcpConfigPath, addDirs: away ? [staffDir(ctx.projectPath)] : [], settingsFile, agentsFile };
+  return { systemPromptFile, mcpConfigPath, addDirs: away ? [staffDir(ctx.projectPath)] : [], settingsFile, agentsFile, keyFiles: ctx.serverKeys ?? [] };
 }
 
 const DELIVERY_HOOK = fileURLToPath(new URL('../../scripts/hooks/delivery-check.mjs', import.meta.url));

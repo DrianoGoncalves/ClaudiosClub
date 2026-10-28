@@ -1,19 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import type { InboxItem } from '../../../shared/model';
 import { formatAgo } from '../format';
+import { t } from '../i18n';
 import type { InboxView } from './useInbox';
 
 // Botão "precisa de mim" no topo do quadro, com o contador, e a lista que abre embaixo dele.
 // Clicar num item abre o painel de quem está esperando.
 
 const KIND_LABEL: Record<InboxItem['kind'], string> = {
-  plan: 'plano',
-  permission: 'permissão',
-  secret: 'segredo',
-  waiting: 'esperando',
-  error: 'erro',
-  routine: 'rotina',
-  orphan: 'sem dono',
+  plan: t('inbox.kindPlan'),
+  permission: t('inbox.kindPermission'),
+  secret: t('inbox.kindSecret'),
+  waiting: t('inbox.kindWaiting'),
+  error: t('inbox.kindError'),
+  routine: t('inbox.kindRoutine'),
+  orphan: t('inbox.kindOrphan'),
 };
 
 export function InboxMenu({ inbox, onOpen }: { inbox: InboxView; onOpen: (item: InboxItem) => void }) {
@@ -31,11 +32,11 @@ export function InboxMenu({ inbox, onOpen }: { inbox: InboxView; onOpen: (item: 
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
-    const t = setInterval(() => setNow(Date.now()), 15_000);
+    const timer = setInterval(() => setNow(Date.now()), 15_000);
     return () => {
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
-      clearInterval(t);
+      clearInterval(timer);
     };
   }, [open]);
 
@@ -45,16 +46,16 @@ export function InboxMenu({ inbox, onOpen }: { inbox: InboxView; onOpen: (item: 
         className={`inbox-button ${count ? 'inbox-has' : ''}`}
         aria-haspopup="menu"
         aria-expanded={open}
-        title={count ? `${count} ${count === 1 ? 'coisa espera' : 'coisas esperam'} você` : 'Nada espera você agora'}
+        title={count ? t(count === 1 ? 'inbox.countOne' : 'inbox.countOther', { count }) : t('inbox.nothingTitle')}
         onClick={() => setOpen(!open)}
       >
-        precisa de mim
+        {t('inbox.button')}
         {count > 0 && <span className="inbox-count">{count}</span>}
       </button>
       {open && (
         <div className="inbox-menu" role="menu">
           {count === 0 ? (
-            <p className="muted small inbox-empty">Nada espera você agora.</p>
+            <p className="muted small inbox-empty">{t('inbox.nothingBody')}</p>
           ) : (
             <ul className="inbox-list">
               {inbox.items.map((item) => (
@@ -78,15 +79,15 @@ export function InboxMenu({ inbox, onOpen }: { inbox: InboxView; onOpen: (item: 
                   {item.kind === 'secret' && (
                     <button
                       className="link small inbox-dismiss"
-                      title="Já troquei a senha/token: tirar o aviso"
+                      title={t('inbox.secretTitle')}
                       onClick={() => void inbox.dismiss(item)}
                     >
-                      já troquei
+                      {t('inbox.secretDone')}
                     </button>
                   )}
                   {item.kind === 'routine' && (
-                    <button className="link small inbox-dismiss" title="Tirar o aviso" onClick={() => void inbox.dismiss(item)}>
-                      ok, vi
+                    <button className="link small inbox-dismiss" title={t('inbox.dismissTitle')} onClick={() => void inbox.dismiss(item)}>
+                      {t('inbox.routineOk')}
                     </button>
                   )}
                 </li>
@@ -96,10 +97,9 @@ export function InboxMenu({ inbox, onOpen }: { inbox: InboxView; onOpen: (item: 
           {inbox.canNotify && (
             <label
               className="check small inbox-notify"
-              title="Uma notificação do sistema a cada item novo, e quando alguém termina o trabalho, mesmo com o MyCo em segundo plano"
+              title={t('inbox.notifyTitle')}
             >
-              <input type="checkbox" checked={inbox.notify} onChange={(e) => void inbox.setNotify(e.target.checked)} /> avisar no sistema (inclusive
-              quando alguém termina)
+              <input type="checkbox" checked={inbox.notify} onChange={(e) => void inbox.setNotify(e.target.checked)} /> {t('inbox.notifyLabel')}
             </label>
           )}
         </div>

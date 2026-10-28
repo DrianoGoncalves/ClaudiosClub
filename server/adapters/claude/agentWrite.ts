@@ -7,7 +7,8 @@ import { parseFrontmatter, str, strList } from './frontmatter';
 
 // Criar e editar agents (subagents) do Claude Code: `<pasta>/.claude/agents/<nome>.md` ou
 // `~/.claude/agents/<nome>.md`. O `model` do frontmatter é o que permite o padrão
-// orquestrador/executores: quem chama roda num modelo grande, o agent num menor.
+// orquestrador/executores: quem chama roda num modelo grande, o agent num menor. O `effort`
+// ajusta quanto ele pensa: um executor mecânico gasta menos em low.
 
 export class AgentError extends Error {}
 
@@ -22,6 +23,8 @@ export const AgentInput = z.object({
     .regex(/^(inherit|opus|sonnet|haiku|fable|[\w.[\]-]{3,60})$/, 'modelo inválido')
     .nullable()
     .default(null),
+  /** `null` = sem ajuste (o padrão do Claude Code para o modelo). */
+  effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).nullable().default(null),
   /** `null` = todas as ferramentas de quem chama. */
   tools: z.array(z.string().trim().regex(/^[\w*().:,\s/-]{1,120}$/, 'ferramenta inválida')).max(60).nullable().default(null),
   prompt: z.string().trim().min(1, 'escreva as instruções do agent').max(50_000),
@@ -32,6 +35,7 @@ export interface AgentSource {
   name: string;
   description: string | null;
   model: string | null;
+  effort: string | null;
   tools: string[] | null;
   prompt: string;
   filePath: string;
@@ -58,6 +62,7 @@ export async function readAgentSource(dir: string, name: string): Promise<AgentS
     name: str(data.name) ?? name,
     description: str(data.description),
     model: str(data.model),
+    effort: str(data.effort),
     tools: strList(data.tools),
     prompt: body.trim(),
     filePath: file,
@@ -88,6 +93,8 @@ export async function saveAgent(dir: string, input: AgentInputParsed, backupDir:
   else delete data.tools;
   if (input.model && input.model !== 'inherit') data.model = input.model;
   else delete data.model;
+  if (input.effort) data.effort = input.effort;
+  else delete data.effort;
 
   const text = `---\n${stringify(data, { lineWidth: 0 }).trimEnd()}\n---\n\n${input.prompt.trim()}\n`;
   const target = existing ? await fs.realpath(existing) : path.join(dir, `${input.name}.md`);

@@ -33,6 +33,17 @@ describe('agents: criar e editar', () => {
     expect(text).toMatch(/^---\nname: executor\ndescription: .+\ntools: Read, Edit\nmodel: haiku\n---\n\nFaça só a tarefa pedida\.\n$/);
   });
 
+  it('esforço: grava no frontmatter, lê de volta e sai quando volta ao padrão', async () => {
+    const dir = path.join(root, 'p3', '.claude', 'agents');
+    const bk = path.join(root, 'bk3');
+    expect(await saveAgent(dir, input({ effort: 'low' }), bk)).toMatchObject({ model: 'haiku', effort: 'low' });
+    expect(await fs.readFile(path.join(dir, 'executor.md'), 'utf8')).toContain('effort: low\n');
+    const back = await saveAgent(dir, input({ originalName: 'executor', effort: null }), bk);
+    expect(back.effort).toBeNull();
+    expect(await fs.readFile(path.join(dir, 'executor.md'), 'utf8')).not.toContain('effort:');
+    expect(() => input({ effort: 'turbo' })).toThrow();
+  });
+
   it('edita preservando chaves desconhecidas, guarda backup e recusa nome repetido', async () => {
     const dir = path.join(root, 'p2', '.claude', 'agents');
     await fs.mkdir(dir, { recursive: true });

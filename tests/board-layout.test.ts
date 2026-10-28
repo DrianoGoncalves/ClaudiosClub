@@ -26,6 +26,7 @@ function agent(name: string, filePath: string, link: LinkInfo = FILE): Agent {
     description: null,
     tools: null,
     model: null,
+    effort: null,
     scope: 'project',
     filePath,
     link,

@@ -2,11 +2,19 @@ import { useCallback, useEffect, useState } from 'react';
 import type { ChatChanges, TestRun } from '../../../shared/model';
 import { api, ApiError } from '../api';
 import { BranchIcon } from '../icons';
+import { t } from '../i18n';
 
 // "O que mudou" na conversa: na worktree do funcionário, tudo desde a base (com mesclar); no
 // próprio projeto, só os arquivos que ele editou nesta conversa. Testes rodam onde está o código.
 
-const STATUS: Record<string, string> = { A: 'novo', M: 'mudou', D: 'apagado', R: 'renomeado', C: 'copiado', '?': 'novo (fora do git)' };
+const STATUS: Record<string, string> = {
+  A: t('chat.stNew'),
+  M: t('chat.stModified'),
+  D: t('chat.stDeleted'),
+  R: t('chat.stRenamed'),
+  C: t('chat.stCopied'),
+  '?': t('chat.stUntracked'),
+};
 
 export function ChangesPanel({ projectId, sessionId, staffId, name, onClose }: { projectId: string; sessionId: string; staffId: string | null; name: string; onClose: () => void }) {
   const [code, setCode] = useState<ChatChanges | null>(null);
@@ -42,47 +50,48 @@ export function ChangesPanel({ projectId, sessionId, staffId, name, onClose }: {
 
   const merge = () =>
     run('merge', async () => {
-      if (!code?.base || !window.confirm(`Mesclar ${code.branch} em ${code.base}? O que não foi commitado na worktree será commitado antes; teste vermelho desfaz.`)) return;
+      if (!code?.base || !window.confirm(t('chat.mergeConfirm', { branch: code.branch ?? '?', base: code.base }))) return;
       try {
         const r = await api.chatMerge(projectId, sessionId, staffId);
-        setMerged(`mesclado em ${r.base} (${r.sha})`);
+        setMerged(t('chat.mergedIn', { base: r.base, sha: r.sha }));
       } catch (e) {
         if (!(e instanceof ApiError) || e.code !== 'no-tests') throw e;
-        if (!window.confirm(`${e.message}. Mesclar mesmo assim, sem testes?`)) return;
+        if (!window.confirm(t('chat.mergeNoTests', { message: e.message }))) return;
         const r = await api.chatMerge(projectId, sessionId, staffId, true);
-        setMerged(`mesclado em ${r.base} (${r.sha})`);
+        setMerged(t('chat.mergedIn', { base: r.base, sha: r.sha }));
       }
     });
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal changes-modal" role="dialog" aria-label={`O que ${name} mudou`}>
+      <div className="modal changes-modal" role="dialog" aria-label={t('chat.changedTitle', { name })}>
         <header className="tasks-head">
-          <h2>O que {name} mudou</h2>
+          <h2>{t('chat.changedTitle', { name })}</h2>
           <span className="tasks-head-actions">
             <button className="btn-secondary" disabled={!!busy} onClick={load}>
-              Atualizar
+              {t('chat.refresh')}
             </button>
-            <button className="btn-secondary" onClick={onClose} aria-label="Fechar">
-              Fechar
+            <button className="btn-secondary" onClick={onClose} aria-label={t('chat.close')}>
+              {t('chat.close')}
             </button>
           </span>
         </header>
-        {!code && !error && <p className="muted">Lendo…</p>}
+        {!code && !error && <p className="muted">{t('chat.reading')}</p>}
         {code && (
           <>
             <p className="small">
               {code.scope === 'worktree' ? (
                 <>
-                  <BranchIcon /> Worktree dele: <b>{code.branch}</b> → {code.base ?? '?'} · {code.commits.length} commit{code.commits.length === 1 ? '' : 's'}
-                  {code.uncommitted ? ` · ${code.uncommitted} sem commit` : ''}
+                  <BranchIcon /> {t('chat.worktreeOf')} <b>{code.branch}</b> → {code.base ?? '?'} ·{' '}
+                  {t(code.commits.length === 1 ? 'chat.commitsOne' : 'chat.commitsOther', { n: code.commits.length })}
+                  {code.uncommitted ? ` · ${t('chat.uncommitted', { n: code.uncommitted })}` : ''}
                 </>
               ) : (
                 <>
-                  No próprio projeto{code.branch ? ` (${code.branch})` : ''}: os arquivos que ele editou nesta conversa e ainda estão sem commit.{' '}
+                  {t('chat.ownProject', { branch: code.branch ? ` (${code.branch})` : '' })}{' '}
                   {code.touched.length > code.files.length && (
                     <span className="muted">
-                      ({code.touched.length - code.files.length} {code.touched.length - code.files.length === 1 ? 'outro editado já está' : 'outros editados já estão'} igual ao último commit)
+                      {t(code.touched.length - code.files.length === 1 ? 'chat.othersOne' : 'chat.othersOther', { n: code.touched.length - code.files.length })}
                     </span>
                   )}
                 </>
@@ -103,30 +112,30 @@ export function ChangesPanel({ projectId, sessionId, staffId, name, onClose }: {
                 ))}
               </ul>
             ) : (
-              <p className="muted small">{code.scope === 'conversation' && !code.touched.length ? 'Ele ainda não editou nenhum arquivo nesta conversa.' : 'Nada mudou ainda.'}</p>
+              <p className="muted small">{code.scope === 'conversation' && !code.touched.length ? t('chat.noEditsYet') : t('chat.nothingChanged')}</p>
             )}
             {code.diff && <pre className="task-diff changes-diff">{code.diff}</pre>}
-            {code.truncated && <p className="muted small">O diff foi cortado (grande demais).</p>}
+            {code.truncated && <p className="muted small">{t('chat.diffCut')}</p>}
             <div className="task-code-row">
-              <b className="small">Testes</b>
+              <b className="small">{t('chat.tests')}</b>
               {tests ? (
                 <span className={`small ${tests.ok ? 'ok' : 'fail'}`}>
-                  {tests.ok ? 'passaram' : 'falharam'} · {tests.command}
+                  {tests.ok ? t('chat.testsPassed') : t('chat.testsFailed')} · {tests.command}
                 </span>
               ) : (
-                <span className="muted small">{code.test ? `${code.test}, ainda não rodou` : 'nenhum comando de testes achado'}</span>
+                <span className="muted small">{code.test ? t('chat.testNotRun', { test: code.test }) : t('chat.noTestCommand')}</span>
               )}
               {code.test && (
                 <button className="btn-secondary" disabled={!!busy} onClick={() => void run('test', async () => setTests(await api.chatTest(projectId, sessionId, staffId)))}>
-                  {busy === 'test' ? 'Rodando…' : 'Rodar testes'}
+                  {busy === 'test' ? t('chat.runningTests') : t('chat.runTests')}
                 </button>
               )}
             </div>
             {tests && !tests.ok && tests.output && <pre className="task-diff">{tests.output}</pre>}
             {code.scope === 'worktree' && (
               <div className="task-code-row">
-                <button className="btn-primary" disabled={!!busy || !code.canMerge} title={code.whyNot ?? 'Testa o resultado e mescla; teste vermelho desfaz'} onClick={() => void merge()}>
-                  {busy === 'merge' ? 'Mesclando…' : `Mesclar em ${code.base ?? '?'}`}
+                <button className="btn-primary" disabled={!!busy || !code.canMerge} title={code.whyNot ?? t('chat.mergeHelp')} onClick={() => void merge()}>
+                  {busy === 'merge' ? t('chat.merging') : t('chat.mergeInto', { base: code.base ?? '?' })}
                 </button>
                 {merged ? <span className="small ok">{merged}</span> : code.whyNot && <span className="muted small">{code.whyNot}</span>}
               </div>

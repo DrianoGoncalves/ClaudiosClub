@@ -1,11 +1,12 @@
 // Formatação compartilhada pelo quadro, painel e topo.
+import { locale, t } from './i18n';
 
 /** Parte de `value` em `total`: "42%", "3,5%", "< 0,1%". */
 export function formatShare(value: number, total: number): string {
   if (!total || value <= 0) return '0%';
   const pct = (value / total) * 100;
-  if (pct < 0.1) return '< 0,1%';
-  return `${pct.toLocaleString('pt-BR', { maximumFractionDigits: pct < 10 ? 1 : 0 })}%`;
+  if (pct < 0.1) return t('app.belowShare');
+  return `${pct.toLocaleString(locale(), { maximumFractionDigits: pct < 10 ? 1 : 0 })}%`;
 }
 
 /** 2d4h, 3h05, 12min. */
@@ -20,13 +21,13 @@ export function formatDuration(ms: number): string {
 }
 
 export function formatAgo(ms: number): string {
-  return ms < 60_000 ? 'agora' : `há ${formatDuration(ms)}`;
+  return ms < 60_000 ? t('app.now') : t('app.ago', { dur: formatDuration(ms) });
 }
 
 export const STATUS_LABEL: Record<string, string> = {
-  busy: 'trabalhando',
-  idle: 'ocioso',
-  waiting: 'aguardando você',
+  busy: t('app.statusBusy'),
+  idle: t('app.statusIdle'),
+  waiting: t('app.statusWaiting'),
 };
 
 export const ENTRYPOINT_LABEL: Record<string, string> = { 'claude-desktop': 'app', cli: 'cli', 'sdk-cli': 'headless' };

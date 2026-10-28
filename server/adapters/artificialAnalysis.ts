@@ -14,7 +14,7 @@ export const KEY_NAME = 'ARTIFICIAL_ANALYSIS_API_KEY';
 const ENV_FILE = path.resolve(import.meta.dirname, '../../.env');
 
 /** Quantos modelos o ranking mostra. */
-const TOP = 10;
+const TOP = 20;
 /** Só os fornecedores que interessam aqui (slug do `model_creator` na API): Claude e OpenAI. */
 const CREATORS = new Set(['anthropic', 'openai']);
 /** Sem pedido de atualizar, os dados valem por 6 h (mudam pouco). */

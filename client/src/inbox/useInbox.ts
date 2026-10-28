@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { InboxItem, TurnNotice } from '../../../shared/model';
 import { api } from '../api';
+import { t } from '../i18n';
 
 // A caixa "precisa de mim": o que espera você em todas as salas, lida a cada poucos segundos.
 // Com "avisar no sistema" ligado, cada item novo vira uma notificação do sistema (só o que é novo:
@@ -10,13 +11,13 @@ const NOTIFY_KEY = 'myco.notify';
 const POLL_MS = 5000;
 
 const KIND_TITLE: Record<InboxItem['kind'], string> = {
-  plan: 'tem um plano para você aprovar',
-  permission: 'pede permissão',
-  secret: 'recebeu um segredo no chat',
-  waiting: 'espera sua resposta',
-  error: 'parou com erro',
-  routine: 'teve uma rotina que não rodou',
-  orphan: 'ficou sem dono num reinício',
+  plan: t('inbox.titlePlan'),
+  permission: t('inbox.titlePermission'),
+  secret: t('inbox.titleSecret'),
+  waiting: t('inbox.titleWaiting'),
+  error: t('inbox.titleError'),
+  routine: t('inbox.titleRoutine'),
+  orphan: t('inbox.titleOrphan'),
 };
 
 export interface InboxView {
@@ -95,7 +96,10 @@ function watching(): boolean {
 
 function showDone(d: TurnNotice, onOpen: (item: InboxItem) => void) {
   try {
-    const n = new Notification(`${d.name} terminou`, { body: d.text ?? (d.projectName ? `em ${d.projectName}` : 'o turno acabou'), tag: `done:${d.id}` });
+    const n = new Notification(t('inbox.doneTitle', { name: d.name }), {
+      body: d.text ?? (d.projectName ? t('inbox.inProject', { project: d.projectName }) : t('inbox.turnEnded')),
+      tag: `done:${d.id}`,
+    });
     n.onclick = () => {
       window.focus();
       onOpen({ id: d.id, kind: 'waiting', projectId: d.projectId, projectName: d.projectName, sessionId: d.sessionId, staffId: d.staffId, name: d.name, summary: '', at: d.at });

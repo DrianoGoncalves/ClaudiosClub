@@ -14,6 +14,7 @@ export interface InlineAgent {
   prompt: string;
   tools?: string[];
   model?: string;
+  effort?: string;
 }
 
 export interface PlaybookAgentsResult {
@@ -54,6 +55,7 @@ async function createPreset(dir: string, name: string, backupDir: string): Promi
     name,
     description: preset.description,
     model: preset.model,
+    effort: preset.effort,
     tools: preset.tools.split(',').map((t) => t.trim()).filter(Boolean),
     prompt: preset.prompt,
   });
@@ -67,5 +69,6 @@ function inline(a: AgentSource): InlineAgent {
     prompt: a.prompt,
     ...(a.tools?.length && { tools: a.tools }),
     ...(a.model && a.model !== 'inherit' && { model: a.model }),
+    ...(a.effort && { effort: a.effort }),
   };
 }

@@ -33,6 +33,7 @@ import {
   type RankingEntry,
 } from './detail/Detail';
 import { employeeName } from './format';
+import { t } from './i18n';
 import { useInbox } from './inbox/useInbox';
 import { AgentForm, type AgentFormTarget } from './staff/AgentForm';
 import { StaffForm, type StaffFormMode } from './staff/HireForm';
@@ -118,7 +119,8 @@ export function App() {
 
   // Clicar num item da caixa (ou na notificação) abre o painel de quem espera.
   const openInbox = useCallback((item: InboxItem) => {
-    setSelectedId(item.staffId ? staffNodeId(item.projectId, item.staffId) : employeeNodeId(item.sessionId));
+    // Sem funcionário nem conversa (aviso do projeto, como chave no .mcp.json): a sala do projeto.
+    setSelectedId(item.staffId ? staffNodeId(item.projectId, item.staffId) : item.sessionId ? employeeNodeId(item.sessionId) : projectNodeId(item.projectId));
   }, []);
   const inbox = useInbox(openInbox);
 
@@ -190,7 +192,7 @@ export function App() {
 
   return (
     <div className={`app ${animations ? 'anim-on' : 'anim-off'}`}>
-      {!board && <div className="center">{error ? <p className="error">{error}</p> : <p className="muted">Carregando o quadro…</p>}</div>}
+      {!board && <div className="center">{error ? <p className="error">{error}</p> : <p className="muted">{t('app.loadingBoard')}</p>}</div>}
       {board && (
         <ReactFlowProvider>
           <BoardView
@@ -228,10 +230,15 @@ export function App() {
               const boss = board.staff.find((s) => s.projectId === projectId && s.id === managerId);
               api.addManager(projectId, staffId, managerId).then(
                 () => {
-                  setNotice(`${boss?.name ?? 'O gestor'} agora também chama ${who?.name ?? 'o funcionário'}.`);
+                  setNotice(
+                    t('app.linkDone', {
+                      boss: boss?.name ?? t('app.fallbackManager'),
+                      who: who?.name ?? t('app.fallbackEmployee'),
+                    }),
+                  );
                   load();
                 },
-                (e: Error) => setNotice(`Não deu para ligar: ${e.message}`),
+                (e: Error) => setNotice(t('app.linkFailed', { error: e.message })),
               );
             }}
             onUnlink={({ projectId, staffId, managerId }) => {
@@ -240,11 +247,14 @@ export function App() {
               api.removeManager(projectId, staffId, managerId).then(
                 () => {
                   setNotice(
-                    `${boss?.name ?? 'O gestor'} não chama mais ${who?.name ?? 'o funcionário'}. Para voltar, restaure a versão anterior da ficha.`,
+                    t('app.unlinkDone', {
+                      boss: boss?.name ?? t('app.fallbackManager'),
+                      who: who?.name ?? t('app.fallbackEmployee'),
+                    }),
                   );
                   load();
                 },
-                (e: Error) => setNotice(`Não deu para desfazer: ${e.message}`),
+                (e: Error) => setNotice(t('app.unlinkFailed', { error: e.message })),
               );
             }}
           />
@@ -252,7 +262,7 @@ export function App() {
       )}
       {board && selection && (
         <aside className={`drawer ${selection.kind === 'employee' ? 'drawer-wide drawer-chat' : ''}`}>
-          <button className="drawer-close" onClick={() => setSelectedId(null)} aria-label="Fechar">
+          <button className="drawer-close" onClick={() => setSelectedId(null)} aria-label={t('app.close')}>
             ×
           </button>
           {selection.kind === 'ranking' && (
@@ -314,7 +324,7 @@ export function App() {
               onArchive={(v) => archive('session', archiveKey(selection), v)}
               onLaunch={async (resume) => {
                 const r = await withUsageConfirm((force) => api.launch(selection.projectId, selection.staff!.id, resume, force));
-                if (!r) return { ok: false, sessionId: null, command: '', error: 'não aberta: consumo acima da linha de parada' };
+                if (!r) return { ok: false, sessionId: null, command: '', error: t('app.notOpenedUsage') };
                 // A sessão nova entra no quadro assim que o Claude Code gravar o transcript.
                 setTimeout(load, 4000);
                 return r;
@@ -358,7 +368,10 @@ export function App() {
           onClose={() => setAgentForm(null)}
           onSaved={(a) => {
             setAgentForm(null);
-            setNotice(`Agent ${a.name} salvo${a.model ? ` (modelo ${a.model})` : ''}. Vale para as sessões abertas a partir de agora.`);
+            const how = [a.model && t('app.modelValue', { value: a.model }), a.effort && t('app.effortValue', { value: a.effort })]
+              .filter(Boolean)
+              .join(', ');
+            setNotice(t('app.agentSaved', { name: a.name, how: how ? ` (${how})` : '' }));
             load();
           }}
         />
@@ -415,10 +428,10 @@ export function App() {
             setForm(null);
             setNotice(
               launch === null
-                ? `${profile.name} foi contratado(a). Converse pelo painel quando quiser.`
+                ? t('app.hiredChat', { name: profile.name })
                 : launch.ok
-                  ? `${profile.name} foi contratado(a) e a sessão abriu numa janela nova.`
-                  : `${profile.name} foi contratado(a), mas a sessão não abriu: ${launch.error}. Comando: ${launch.command}`,
+                  ? t('app.hiredLaunched', { name: profile.name })
+                  : t('app.hiredNotLaunched', { name: profile.name, error: String(launch.error), command: launch.command }),
             );
             setSelectedId(staffNodeId(profile.projectId, profile.id));
             load();
@@ -426,7 +439,7 @@ export function App() {
           }}
           onSaved={(profile) => {
             setForm(null);
-            setNotice(`Ficha de ${profile.name} salva.`);
+            setNotice(t('app.profileSaved', { name: profile.name }));
             // Quem ganhou ficha agora muda de nó (sessão solta → funcionário com ficha).
             setSelectedId(staffNodeId(profile.projectId, profile.id));
             load();
@@ -436,7 +449,7 @@ export function App() {
       {notice && (
         <div className="notice" role="status">
           <span>{notice}</span>
-          <button className="drawer-close" onClick={() => setNotice(null)} aria-label="Fechar aviso">
+          <button className="drawer-close" onClick={() => setNotice(null)} aria-label={t('app.closeNotice')}>
             ×
           </button>
         </div>

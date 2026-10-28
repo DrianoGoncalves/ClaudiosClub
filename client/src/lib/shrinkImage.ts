@@ -2,6 +2,8 @@
 // 40 px no quadro, e o arquivo fica dentro da pasta do projeto. Uma foto de celular (2–5 MB) vira
 // algo como 20–60 KB.
 
+import { t } from '../i18n';
+
 export const PORTRAIT_MAX = 320;
 export const PROJECT_IMAGE_MAX = 800;
 /** Antes de reduzir: só para não travar o navegador com um arquivo absurdo. */
@@ -17,7 +19,7 @@ export async function shrinkImage(file: File, max: number): Promise<string> {
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('não foi possível processar a imagem');
+  if (!ctx) throw new Error(t('app.imageFailed'));
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(bitmap, 0, 0, w, h);
   bitmap.close();

@@ -2,6 +2,7 @@ import { EdgeLabelRenderer, getBezierPath, getSmoothStepPath, type EdgeProps, ty
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { BoardEdge, BoardEdgeData, StaffLink } from './layout';
 import { generator, seedOf } from './sketch';
+import { t } from '../i18n';
 
 /** Ações das linhas, fornecidas pelo quadro (Board.tsx). */
 export const EdgeActions = createContext<{ onUnlink?: (link: StaffLink) => void }>({});
@@ -12,11 +13,11 @@ const STYLE: Record<BoardEdgeData['kind'], { stroke: string; width: number; dash
   // Recursos do projeto, ao lado: mais discretas.
   side: { stroke: 'var(--ink-muted)', width: 1, roughness: 0.6, dash: '3 5' },
   // Gestor extra (funcionário chamado por mais de um).
-  calls: { stroke: 'var(--ink-blue)', width: 1.5, roughness: 0.8, dash: '7 5', label: 'também chama' },
+  calls: { stroke: 'var(--ink-blue)', width: 1.5, roughness: 0.8, dash: '7 5', label: t('board.alsoCalls') },
   // Empréstimo entre salas (symlink/junction).
-  borrow: { stroke: 'var(--ink-red)', width: 1.8, roughness: 1.1, dash: '9 7', label: 'empresta' },
+  borrow: { stroke: 'var(--ink-red)', width: 1.8, roughness: 1.1, dash: '9 7', label: t('board.edgeBorrow') },
   // Funcionário delegando a um agent agora (orquestrador → executor). Só existe enquanto dura.
-  delegates: { stroke: 'var(--busy)', width: 1.8, roughness: 1, dash: '5 5', label: 'delegando' },
+  delegates: { stroke: 'var(--busy)', width: 1.8, roughness: 1, dash: '5 5', label: t('board.edgeDelegating') },
 };
 
 function RoughEdge(props: EdgeProps<BoardEdge>) {
@@ -82,8 +83,8 @@ function RoughEdge(props: EdgeProps<BoardEdge>) {
               onMouseEnter={enter}
               onMouseLeave={exit}
               onClick={(e) => (e.stopPropagation(), onUnlink!(link))}
-              title="Desfazer este vínculo (a ficha anterior fica no histórico)"
-              aria-label="Desfazer vínculo"
+              title={t('board.unlinkTitle')}
+              aria-label={t('board.unlink')}
             >
               ×
             </button>

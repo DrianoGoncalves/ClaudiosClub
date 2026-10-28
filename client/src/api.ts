@@ -42,6 +42,7 @@ import type {
   UserScope,
 } from '../../shared/model';
 import type { RoleEntry, RoleTemplate } from '../../shared/roles';
+import { locale, t } from './i18n';
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -81,15 +82,26 @@ export async function withUsageConfirm<T>(run: (force: boolean) => Promise<T>): 
   } catch (err) {
     if (!(err instanceof ApiError) || err.code !== 'usage-stop' || !err.hit) throw err;
     const h = err.hit;
-    const reset = h.resetsAt ? ` A janela renova ${new Date(h.resetsAt).toLocaleString('pt-BR', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}.` : '';
+    const reset = h.resetsAt
+      ? ` ${t('app.usageResets', { when: new Date(h.resetsAt).toLocaleString(locale(), { weekday: 'short', hour: '2-digit', minute: '2-digit' }) })}`
+      : '';
     let why: string;
     if (h.kind === 'project_week') {
-      why = `${h.projectName ?? 'Este projeto'} já usou cerca de ${Math.round(h.percentUsed)}% da cota de 7 dias da conta, acima do orçamento dele (${h.limit}%).`;
+      why = t('app.usageProjectWeek', {
+        project: h.projectName ?? t('app.thisProject'),
+        pct: Math.round(h.percentUsed),
+        limit: h.limit,
+      });
     } else {
-      const origin = h.fromProfile ? 'da ficha deste funcionário' : 'da empresa';
-      why = `O consumo ${h.kind === 'five_hour' ? '5h' : '7d'} da conta está em ${Math.round(h.percentUsed)}%, acima da linha de parada ${origin} (${h.limit}%).`;
+      const origin = h.fromProfile ? t('app.originStaff') : t('app.originCompany');
+      why = t('app.usageAccount', {
+        window: h.kind === 'five_hour' ? '5h' : '7d',
+        pct: Math.round(h.percentUsed),
+        origin,
+        limit: h.limit,
+      });
     }
-    const ok = window.confirm(`${why}${reset}\n\nSeguir mesmo assim?`);
+    const ok = window.confirm(`${why}${reset}\n\n${t('app.continueAnyway')}`);
     return ok ? run(true) : null;
   }
 }
@@ -98,6 +110,7 @@ export interface AgentSource {
   name: string;
   description: string | null;
   model: string | null;
+  effort: string | null;
   tools: string[] | null;
   prompt: string;
   filePath: string;
@@ -116,6 +129,7 @@ export const api = {
     name: string;
     description: string;
     model: string | null;
+    effort: Effort | null;
     tools: string[] | null;
     prompt: string;
   }) => post<AgentSource>('/api/agents/save', body),

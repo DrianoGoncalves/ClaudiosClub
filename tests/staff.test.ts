@@ -76,10 +76,17 @@ describe('ficha', () => {
     expect(md).toContain('- Raquel (Infra, temporário)');
     expect(md).toContain('POST http://127.0.0.1:4848/api/projects/proj-x/tasks');
     expect(md).toContain('requestedBy: "ana-1a2b"');
-    expect(md).toContain('Antes de chamar o executor: se a tarefa é da área de alguém da sua equipe');
+    expect(md).toContain('Antes de chamar o executor (ou de fazer você mesmo): se a tarefa é da área de alguém da sua equipe');
+    // O que é da área não fica com o gestor, ele repassa sem pesquisar o código e confere na medida do risco.
+    expect(md).toContain('nem para o executor nem para você');
+    expect(md).toContain('Repasse sem pesquisar');
+    expect(md).toContain('Confira na medida do risco');
     // Sem equipe, nada disso.
     const solo = renderFicha(profile({ playbook: 'plan-big-execute-small' }), ctx);
     expect(solo).not.toContain('Sua equipe');
+    // Quem reporta a alguém entrega com as provas; quem não reporta, não tem a seção.
+    expect(renderFicha(profile(), { ...ctx, managerNames: ['Daniel'] })).toContain('## Entrega');
+    expect(solo).not.toContain('## Entrega');
   });
 
   it('tem missão, autonomia, regras, memória e a seção de contratação', () => {
@@ -115,7 +122,7 @@ describe('ficha', () => {
       'Olá', '--session-id', 'uuid-1', '--name', 'Ana Revisora Souza - Revisora 100',
       '--append-system-prompt-file', 'C:\\run\\system.md', '--exclude-dynamic-system-prompt-sections',
       '--permission-mode', 'plan', '--model', 'opus', '--effort', 'high',
-      '--no-chrome', '--disallowedTools', 'Read(~/.ssh/**),Edit(~/.ssh/**),Write(~/.ssh/**)',
+      '--no-chrome', '--disallowedTools', secretDenyRules(profile()).join(','),
     ]);
     const withChrome = buildClaudeArgs(profile({ browser: true }), { sessionId: 'u', resume: false, systemPromptFile: 'S', mcpConfigPath: null, firstPrompt: null });
     expect(withChrome).toContain('--chrome');
@@ -178,36 +185,47 @@ afterAll(async () => {
 });
 
 describe('infra: servidores por SSH', () => {
-  it('lista só apelidos (sem curinga) e conexões vps, sem usuário nem chave', async () => {
+  it('lista só as conexões completas do projeto, sem usuário nem chave (o ~/.ssh/config fica de fora)', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-srv-'));
-    const ssh = path.join(dir, 'config');
-    await fs.writeFile(ssh, 'Host *\n  ServerAliveInterval 30\nHost vps-a vps-b\n  HostName 1.2.3.4\n  IdentityFile ~/.ssh/segredo\n');
+    const key = path.join(dir, 'chave');
+    await fs.writeFile(key, 'x');
     await fs.mkdir(path.join(dir, 'proj', '.vps'), { recursive: true });
     await fs.writeFile(
       path.join(dir, 'proj', '.vps', 'config.json'),
-      JSON.stringify({ connections: { prod: { host: 'vps-a', user: 'root', identityFile: '~/.ssh/k', remoteRoot: '/var/www/app' }, 'mal nome': { host: 'x' } } }),
+      JSON.stringify({
+        connections: {
+          prod: { host: 'vps-a.example.com', user: 'deploy', identityFile: key, remoteRoot: '/var/www/app' },
+          apelido: { host: 'VPS' },
+          'mal nome': { host: 'x' },
+        },
+      }),
     );
-    const list = await listServers(path.join(dir, 'proj'), ssh);
-    expect(list).toEqual([
-      { name: 'prod', source: 'vps', host: 'vps-a', remoteRoot: '/var/www/app' },
-      { name: 'vps-a', source: 'ssh-config', host: 'vps-a', remoteRoot: null },
-      { name: 'vps-b', source: 'ssh-config', host: 'vps-b', remoteRoot: null },
-    ]);
-    expect(JSON.stringify(list)).not.toMatch(/segredo|"user"|identity|"root"/i);
+    const list = await listServers(path.join(dir, 'proj'));
+    expect(list).toEqual([{ name: 'prod', source: 'vps', host: 'vps-a.example.com', remoteRoot: '/var/www/app' }]);
+    expect(JSON.stringify(list)).not.toMatch(/chave|deploy|identity/i);
   });
 
-  it('a ficha traz os servidores e as regras; a linha de comando bloqueia chaves e .env', () => {
+  it('a ficha traz as conexões e as regras; a linha de comando bloqueia chaves e .env', () => {
     const p = profile({ servers: ['prod', 'sumiu'] });
     const md = renderFicha(p, { ...ctx, servers: [{ name: 'prod', source: 'vps', host: 'vps-a', remoteRoot: '/var/www/app' }] });
-    for (const part of ['## Servidores', '`prod`: conexão da skill vps', '/var/www/app', 'não encontrado nesta máquina', 'BatchMode=yes', 'Nunca, sem pedir antes']) {
+    for (const part of ['## Servidores', '- `prod`: vps-a', '/var/www/app', 'ssh -F "', '.vps/ssh_config" <conexão>', 'não existe mais no projeto', 'Nunca, sem pedir antes']) {
       expect(md).toContain(part);
     }
+    expect(md).not.toContain('skill `vps`');
+    expect(renderFicha({ ...p, skills: ['vps'] }, ctx)).toContain('skill `vps`');
     expect(renderFicha(profile(), ctx)).not.toContain('## Servidores');
-    const args = buildClaudeArgs(p, { sessionId: 's', resume: false, systemPromptFile: 'S', mcpConfigPath: null, firstPrompt: null });
-    const deny = args[args.indexOf('--disallowedTools') + 1]!;
-    expect(deny).toContain('Read(~/.ssh/**)');
-    expect(deny).toContain('Read(**/.env)');
-    expect(secretDenyRules(profile())).not.toContain('Read(**/.env)');
+    const args = buildClaudeArgs(p, { sessionId: 's', resume: false, systemPromptFile: 'S', mcpConfigPath: null, firstPrompt: null, keyFiles: ['C:\\chaves\\ia', 'C:/com espaço/k'] });
+    const deny = args[args.indexOf('--disallowedTools') + 1]!.split(',');
+    expect(deny).toEqual(expect.arrayContaining(['Read(~/.ssh/**)', 'Read(**/.env)', 'Read(**/.vps/**)', 'Read(//c/chaves/ia)']));
+    expect(deny.join(',')).not.toContain('espaço');
+    // Com servidor, o ssh fica liberado (só as conexões dele estão no ssh_config).
+    expect(deny).not.toContain('Bash(ssh:*)');
+  });
+
+  it('sem servidor na ficha: nada de ssh, scp, sftp ou rsync, no Bash nem no PowerShell', () => {
+    const deny = secretDenyRules(profile());
+    expect(deny).toEqual(expect.arrayContaining(['Bash(ssh:*)', 'PowerShell(ssh:*)', 'Bash(scp:*)', 'PowerShell(scp.exe:*)', 'Bash(rsync:*)', 'Edit(**/.vps/**)']));
+    expect(deny).not.toContain('Read(**/.env)');
   });
 });
 
