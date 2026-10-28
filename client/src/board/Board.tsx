@@ -349,47 +349,50 @@ export function BoardView(props: BoardViewProps) {
         </ControlButton>
       </Controls>
       <Panel position="top-left" className="toolbar">
-        <CompanyTitle name={config?.companyName ?? 'MyCo'} onRename={props.onRename} />
-        <UsageMeters />
-        <AuthBadge />
-        <span className="toolbar-sep" />
-        <InboxMenu inbox={props.inbox} onOpen={props.onOpenInbox} />
-        <button className="toolbar-icon" onClick={() => onSelect(RANKING_ID)} title={t('board.rankingTitle')} aria-label={t('board.ranking')}>
-          <ChartIcon />
-        </button>
-        <SettingsMenu
-          showWorktrees={showWorktrees}
-          onToggleWorktrees={props.onToggleWorktrees}
-          showArchived={showArchived}
-          onToggleArchived={props.onToggleArchived}
-          archivedCount={archivedCount}
-          animations={props.animations}
-          onToggleAnimations={props.onToggleAnimations}
-          onRefresh={props.onRefresh}
-          refreshing={props.refreshing}
-          usageStop={config?.usageStop ?? null}
-          onUsageStop={props.onUsageStop}
-          sendWhileBusy={config?.sendWhileBusy ?? null}
-          onSendWhileBusy={props.onSendWhileBusy}
-          uiLevel={config?.uiLevel ?? null}
-          onUiLevel={props.onUiLevel}
-          rooms={rooms}
-          projectColors={config?.projectColors ?? null}
-          onProjectColor={props.onProjectColor}
-          boardBackground={config?.boardBackground ?? null}
-          onBoardBackground={props.onBoardBackground}
-          projectBudgets={config?.projectBudgets ?? null}
-          onProjectBudget={props.onProjectBudget}
-          projects={props.board.projects}
-          workspaces={config?.workspaces ?? null}
-          projectWorkspaces={config?.projectWorkspaces ?? null}
-          onConfig={props.onConfig}
-          // O demo não tem workspace: volta para "Todos", senão a sala dele ficaria escondida.
-          onOpenProject={(projectId) => {
-            setTab(TAB_ALL);
-            props.onProjectCreated(projectId);
-          }}
-        />
+        {/* Opções numa linha e abas embaixo: o topo fica com a largura da maior das duas. */}
+        <div className="toolbar-row">
+          <CompanyTitle name={config?.companyName ?? 'MyCo'} onRename={props.onRename} />
+          <UsageMeters />
+          <AuthBadge />
+          <span className="toolbar-sep" />
+          <InboxMenu inbox={props.inbox} onOpen={props.onOpenInbox} />
+          <button className="toolbar-icon" onClick={() => onSelect(RANKING_ID)} title={t('board.rankingTitle')} aria-label={t('board.ranking')}>
+            <ChartIcon />
+          </button>
+          <SettingsMenu
+            showWorktrees={showWorktrees}
+            onToggleWorktrees={props.onToggleWorktrees}
+            showArchived={showArchived}
+            onToggleArchived={props.onToggleArchived}
+            archivedCount={archivedCount}
+            animations={props.animations}
+            onToggleAnimations={props.onToggleAnimations}
+            onRefresh={props.onRefresh}
+            refreshing={props.refreshing}
+            usageStop={config?.usageStop ?? null}
+            onUsageStop={props.onUsageStop}
+            sendWhileBusy={config?.sendWhileBusy ?? null}
+            onSendWhileBusy={props.onSendWhileBusy}
+            uiLevel={config?.uiLevel ?? null}
+            onUiLevel={props.onUiLevel}
+            rooms={rooms}
+            projectColors={config?.projectColors ?? null}
+            onProjectColor={props.onProjectColor}
+            boardBackground={config?.boardBackground ?? null}
+            onBoardBackground={props.onBoardBackground}
+            projectBudgets={config?.projectBudgets ?? null}
+            onProjectBudget={props.onProjectBudget}
+            projects={props.board.projects}
+            workspaces={config?.workspaces ?? null}
+            projectWorkspaces={config?.projectWorkspaces ?? null}
+            onConfig={props.onConfig}
+            // O demo não tem workspace: volta para "Todos", senão a sala dele ficaria escondida.
+            onOpenProject={(projectId) => {
+              setTab(TAB_ALL);
+              props.onProjectCreated(projectId);
+            }}
+          />
+        </div>
         <WorkspaceTabs
           config={config}
           workspaceOf={workspaceOf}

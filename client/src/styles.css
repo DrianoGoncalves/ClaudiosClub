@@ -571,8 +571,10 @@ button.ranking-row:hover { border-color: var(--accent); }
 }
 
 /* ---- toolbar e legenda ---- */
-.toolbar { display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06); }
-.toolbar { flex-wrap: wrap; max-width: calc(100vw - 24px); }
+.toolbar { display: flex; flex-direction: column; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06); }
+.toolbar { max-width: calc(100vw - 24px); }
+/* Linhas empilhadas: a largura do topo é a da maior (opções ou abas), não a soma das duas. */
+.toolbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .toolbar-title { font-family: var(--hand); font-weight: 700; font-size: 26px; line-height: 1; margin-right: 4px; color: var(--ink); }
 .toolbar .company-name { border: none; padding: 0 2px; font-family: var(--hand); font-size: 26px; font-weight: 700; border-bottom: 1.5px dashed transparent; border-radius: 0; }
 .toolbar .company-name:hover { border-bottom-color: var(--ink-muted); }
@@ -605,7 +607,7 @@ button.ranking-row:hover { border-color: var(--accent); }
 .toolbar .toolbar-icon { display: inline-grid; place-items: center; min-width: 32px; min-height: 28px; padding: 3px 7px; }
 
 /* ---- abas de workspace: segunda linha do topo; no celular rolam para o lado ---- */
-.workspace-tabs { flex-basis: 100%; display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: thin; padding-top: 4px; border-top: 1px solid var(--line); }
+.workspace-tabs { display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: thin; padding-top: 4px; border-top: 1px solid var(--line); }
 .toolbar .workspace-tab { display: inline-flex; align-items: center; gap: 6px; flex: none; white-space: nowrap; border-color: transparent; border-radius: 6px 6px 0 0; border-bottom: 2px solid transparent; }
 .toolbar .workspace-tab.is-active { border-bottom-color: var(--tab-color, var(--ink)); font-weight: 600; }
 .toolbar .workspace-tab-add { color: var(--muted); }
@@ -613,7 +615,7 @@ button.ranking-row:hover { border-color: var(--accent); }
 .workspace-pending { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--waiting); color: #fff; font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; }
 .workspace-add { display: inline-flex; align-items: center; gap: 6px; flex: none; }
 .workspace-add input { width: 16ch; font: inherit; font-size: 13px; padding: 2px 6px; }
-.workspace-empty { flex-basis: 100%; margin: 0; }
+.workspace-empty { margin: 0; }
 .workspaces-editor { display: grid; gap: 8px; width: 100%; }
 .workspaces-editor .room-colors li { flex-wrap: wrap; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
 .workspace-bg { flex-basis: 100%; display: grid; gap: 4px; }

@@ -22,10 +22,13 @@ export function WorkspaceTabs({ config, workspaceOf, inbox, value, onChange, onC
   const [error, setError] = useState<string | null>(null);
   const workspaces = config?.workspaces ?? [];
   const hasLoose = [...workspaceOf.values()].some((w) => !w);
+  // Workspace sem projeto fica fora do topo; o aberto agora continua, para receber o primeiro projeto.
+  const used = new Set(workspaceOf.values());
+  const shown = workspaces.filter((w) => used.has(w.id) || w.id === value);
   const tabs = [
     { id: TAB_ALL, label: t('office.tabAll'), color: null },
-    ...workspaces.map((w) => ({ id: w.id, label: w.name, color: w.color })),
-    ...(workspaces.length && hasLoose ? [{ id: TAB_NONE, label: t('office.tabNone'), color: null }] : []),
+    ...shown.map((w) => ({ id: w.id, label: w.name, color: w.color })),
+    ...(shown.length && hasLoose ? [{ id: TAB_NONE, label: t('office.tabNone'), color: null }] : []),
   ];
   const pending = (tab: string) => inbox.filter((i) => inTab(tab, workspaceOf.get(i.projectId), config)).length;
 
