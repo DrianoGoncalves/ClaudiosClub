@@ -175,6 +175,37 @@ describe('tarefa pedida por um gestor', () => {
     await svc.onIdle('s-lu', 'p', 'lu-1'); // o segundo aviso do mesmo fim não repete
     expect(notified).toHaveLength(1);
   });
+
+  it('a entrega volta para a conversa em que o gestor pediu, já com os testes rodados pelo MyCo', async () => {
+    const dir = path.join(root, 'gestor-testes');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
+    const notified: Array<{ text: string; sessionId: string | null | undefined }> = [];
+    const ran: string[] = [];
+    const people: Record<string, StaffProfile> = {
+      'gio-1': { id: 'gio-1', name: 'Giovana', role: 'Orquestradora', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+      'lu-1': { id: 'lu-1', name: 'Luana', role: 'Front-end', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+    };
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => people[id] ?? null,
+      send: async () => 's-lu2',
+      branchFor: async () => null,
+      notify: async (_p, _s, text, sessionId) => void notified.push({ text, sessionId }),
+      lastText: () => 'Pronto.',
+      // Giovana está no turno em que chamou a API: é para essa conversa que a entrega volta.
+      requesterSession: (staffId) => (staffId === 'gio-1' ? 's-gio-pediu' : null),
+      runTests: async (cwd, command) => (ran.push(`${cwd}|${command}`), { command, ok: false, output: 'FAIL botao.test.ts', ms: 4200, at: '2026-10-28T12:00:00Z' }),
+    });
+    const t = (await svc.create('p', { title: 'Botão', description: '', staffId: 'lu-1' }, 'gio-1'))!;
+    expect(t.requestedSession).toBe('s-gio-pediu');
+    await svc.start('p', t.id);
+    await svc.onTurnDone('s-lu2');
+    expect(ran).toEqual([`${dir}|npm test`]);
+    expect(notified).toEqual([{ sessionId: 's-gio-pediu', text: expect.stringContaining('FALHARAM. Fim da saída:\nFAIL botao.test.ts') }]);
+    expect((await svc.list('p'))![0]!.tests).toMatchObject({ ok: false, command: 'npm test' });
+  });
 });
 
 describe('fila por funcionário', () => {

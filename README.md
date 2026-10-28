@@ -60,13 +60,13 @@ Modelo, esforço e autonomia na conversa, `/` comandos e skills, `@` arquivos, p
 <td valign="top">
 
 ### 📋 Kanban com fila
-Uma tarefa por vez por funcionário: a próxima começa quando a atual vai para revisão. Cada um trabalha na sua worktree, e a entrega vira commit, com diff, testes e mesclar a um clique.
+Uma tarefa por vez por funcionário: a próxima começa quando a atual vai para revisão. Cada um trabalha na sua worktree, e a entrega vira commit, com diff, testes e mesclar a um clique. A entrega volta para a conversa de quem pediu, já com os testes rodados.
 
 </td>
 <td valign="top">
 
 ### 🔔 Precisa de mim
-Permissões, perguntas e planos para aprovar numa caixa só, com contador no título da aba e notificação do sistema quando alguém termina.
+Permissões, planos e as perguntas que o funcionário deixou no fim da resposta, numa caixa só, com contador por aba, no título da página e notificação do sistema quando alguém termina.
 
 </td>
 </tr>
@@ -80,13 +80,33 @@ Barras de 5 h e 7 dias da assinatura com o tempo até o reset, custo por funcion
 <td valign="top">
 
 ### 🛡️ Guarda de segredos
-Senha em comando, URL com senha e chaves conhecidas (Anthropic, OpenAI, GitHub, AWS, Stripe…) viram alerta no chat, nos comandos e nas saídas. O valor nunca é guardado.
+Senha em comando, URL com senha e chaves conhecidas (Anthropic, OpenAI, GitHub, AWS, Stripe…) viram alerta no chat, nos comandos, nas saídas e no `.mcp.json` que vai para o git. O valor nunca é guardado, e "não é segredo" cala o alarme falso.
 
 </td>
 <td valign="top">
 
 ### ⚡ Simples ou Avançado
 No Simples: *Rápido / Equilibrado / Caprichado* e *Pede antes / Faz sozinho*. No Avançado, cada detalhe. E `Ctrl+K` leva a qualquer funcionário, tarefa ou conversa.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 🗂️ Workspaces
+Abas no topo para agrupar os projetos do seu jeito: por cliente, área, pessoal. Cada uma com cor e fundo próprios, e **+ projeto** cria uma pasta nova (com git) ou abre uma que já existe.
+
+</td>
+<td valign="top">
+
+### 🔐 Servidores por projeto
+A conexão SSH fica no projeto (host, usuário, caminho da chave, pasta remota), com botão de testar. Na ficha você marca quem acessa, e cada comando no servidor fica registrado.
+
+</td>
+<td valign="top">
+
+### 🌎 Três idiomas e um demo
+Interface em português, inglês e espanhol. O projeto demo traz uma cafeteria com equipe, hierarquia e tarefas prontas para você ver tudo funcionando sem gastar nada.
 
 </td>
 </tr>
@@ -127,7 +147,7 @@ Quem pediu fica sabendo quando a parte dele termina. Funcionários que um gestor
 - **O disco é a fonte da verdade.** O MyCo grava o que o Claude Code já entende (`.claude/agents`, `.claude/skills`, `CLAUDE.md`) e as fichas em `<projeto>/.myco/`. Fechou o MyCo, tudo continua funcionando.
 - **Sem nuvem própria.** Cada funcionário é um processo `claude` na sua máquina, falando em `stream-json`. Conta, login e cota são os seus.
 - **Só local.** O servidor escuta em `127.0.0.1`, recusa `Host` de fora (DNS rebinding) e só aceita escrita da própria página ou de ferramentas locais.
-- **Infra com cinto de segurança.** O cargo de servidores acessa SSH só por apelido; `~/.ssh`, `.env` e chaves ficam bloqueados para o agente.
+- **Infra com cinto de segurança.** O MyCo gera o `ssh_config` de cada projeto sem senha (`BatchMode`), sem túneis nem repasse do agente; quem não tem acesso na ficha não roda `ssh`/`scp`, e `~/.ssh`, `.env` e a chave ficam bloqueados para o agente.
 
 | Camada | Stack |
 | --- | --- |
@@ -157,7 +177,7 @@ npm install
 npm run dev
 ```
 
-Abra **http://myco.localhost:5173**, aponte as pastas dos seus projetos e contrate o primeiro funcionário.
+Abra **http://myco.localhost:5173**. Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code aparecem sozinhos.
 
 | Para | Comando |
 | --- | --- |

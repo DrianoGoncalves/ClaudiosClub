@@ -351,12 +351,38 @@ describe('ChatManager: ficha editada com a conversa aberta', () => {
     await m.send('p', 'sx', 'ana', 'faça como sugerir');
     expect(m.pendingQuestions()).toEqual([]);
 
+    // "Ok, vi": sai da caixa sem responder.
+    f.emit({ type: 'assistant', message: { id: 'm1b', content: [{ type: 'text', text: 'Sigo com a opção 2?' }] } });
+    f.emit({ type: 'result', is_error: false });
+    await tick();
+    expect(m.dismissQuestion('sx')).toBe(true);
+    expect(m.pendingQuestions()).toEqual([]);
+
     // Pedido de outro funcionário: a pergunta é para ele, que recebe a entrega.
     await m.send('p', 'sx', 'ana', 'tarefa', undefined, [], [], true);
     f.emit({ type: 'assistant', message: { id: 'm2', content: [{ type: 'text', text: 'Pode ser assim?' }] } });
     f.emit({ type: 'result', is_error: false });
     await tick();
     expect(m.pendingQuestions()).toEqual([]);
+  });
+
+  it('"já troquei" tira o aviso de segredo; "não é segredo" tira e não avisa mais desse tipo', async () => {
+    const { m, procs } = manager();
+    await m.send('p', 'sx', 'ana', 'rode');
+    const f = procs[0]!;
+    const leak = (id: string) => f.emit({ type: 'assistant', message: { id, content: [{ type: 'tool_use', id: `tu-${id}`, name: 'Bash', input: { command: 'mysql -uroot -pS3nh4Forte app' } }] } });
+    leak('a');
+    await tick();
+    const [hit] = m.secretHits();
+    expect(hit).toMatchObject({ sessionId: 'sx', label: 'uma senha' });
+    expect(m.dismissSecret(hit!.id)).toBe(true);
+    leak('b');
+    await tick();
+    expect(m.secretHits()).toHaveLength(1); // trocou e colou de novo: volta
+    expect(m.dismissSecret(hit!.id, true)).toBe(true);
+    leak('c');
+    await tick();
+    expect(m.secretHits()).toEqual([]);
   });
 
   it('só a autonomia mudou: troca o modo sem reabrir', async () => {

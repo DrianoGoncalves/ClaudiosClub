@@ -27,6 +27,7 @@ import { Routines } from './Routines';
 import { WorthIt } from './WorthIt';
 import { employeeName, ENTRYPOINT_LABEL, formatShare, STATUS_LABEL } from '../format';
 import { t, locale } from '../i18n';
+import { ServerLog } from '../office/ServerLog';
 
 // Painel lateral: o que o nó selecionado no quadro tem por trás.
 
@@ -508,6 +509,7 @@ function StaffSheet({ staff, managers }: { staff: StaffProfile; managers: StaffP
         <dd>{staff.browser ? t('detail.usesChrome') : t('detail.no')}</dd>
       </dl>
       <p className="muted small mono">{t('detail.sheetFiles', { id: staff.id })}</p>
+      {staff.servers.length > 0 && <ServerLog projectId={staff.projectId} staffId={staff.id} />}
     </section>
   );
 }

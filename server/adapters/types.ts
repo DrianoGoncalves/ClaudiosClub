@@ -10,7 +10,7 @@ import type {
 import type { FileCost } from './claude/costs';
 
 /**
- * Contrato de uma ferramenta de agentes. Hoje: Claude Code. Depois: Codex.
+ * Contrato da ferramenta de agentes (o Claude Code): isola os formatos não documentados dele.
  * Somente leitura nesta fase; a escrita (vínculos, CLAUDE.md) vem em outro módulo.
  */
 export interface ToolAdapter {

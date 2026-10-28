@@ -18,6 +18,7 @@ import { writeAtomic } from '../staff/store';
 import { readHistory } from './history';
 import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
 import { finalQuestion } from './question';
+import { InboxState } from '../inboxState';
 import { isAlive, killTree, type ChatRegistry } from './registry';
 
 export interface ChatSpawn {
@@ -50,6 +51,8 @@ export interface ChatManagerOptions {
   onSent?: (sessionId: string) => void;
   /** Uma conversa parou de trabalhar (a fila de tarefas do funcionário anda). */
   onIdle?: (sessionId: string, projectId: string, staffId: string | null, reason: 'turn' | 'background' | 'exit') => void;
+  /** O que a caixa lembra entre reinícios; sem ele, fica só na memória. */
+  inbox?: InboxState;
 }
 
 export class ChatError extends Error {}
@@ -111,11 +114,12 @@ export class ChatManager {
   private readonly secrets: Array<{ id: string; sessionId: string; label: string; at: string }> = [];
   /** Conversas cuja última mensagem veio de outro funcionário (delegação), e não de você. */
   private readonly delegated = new Set<string>();
-  /** Turnos que terminaram com uma pergunta para você no texto, até você responder. */
-  private readonly questions = new Map<string, { text: string; at: string }>();
+  /** Perguntas em aberto e avisos que não são segredo (sobrevivem a um reinício, ver inboxState.ts). */
+  private readonly inbox: InboxState;
   private readonly timer: NodeJS.Timeout;
 
   constructor(private readonly opts: ChatManagerOptions) {
+    this.inbox = opts.inbox ?? new InboxState();
     this.timer = setInterval(() => this.reap(), 60_000);
     this.timer.unref();
   }
@@ -225,7 +229,7 @@ export class ChatManager {
     const chat = await this.ensure(projectId, sessionId, staffId);
     if (delegated) this.delegated.add(chat.sessionId);
     else this.delegated.delete(chat.sessionId);
-    this.questions.delete(chat.sessionId); // respondeu (ou mandou outra coisa): a pergunta sai da caixa
+    this.inbox.setQuestion(chat.sessionId, null); // respondeu (ou mandou outra coisa): a pergunta sai da caixa
     // A ficha mudou depois que esta conversa começou: o aviso vai junto, uma vez só.
     const notice = this.fichaNotices.get(chat.sessionId);
     this.fichaNotices.delete(chat.sessionId);
@@ -319,7 +323,14 @@ export class ChatManager {
 
   /** Conversas paradas numa pergunta para você, para a caixa "precisa de mim". */
   pendingQuestions(): Array<{ sessionId: string; text: string; at: string }> {
-    return [...this.questions].map(([sessionId, q]) => ({ sessionId, ...q }));
+    return this.inbox.questions();
+  }
+
+  /** "Ok, vi": a pergunta sai da caixa sem você responder. */
+  dismissQuestion(sessionId: string): boolean {
+    const had = this.inbox.questions().some((q) => q.sessionId === sessionId);
+    this.inbox.setQuestion(sessionId, null);
+    return had;
   }
 
   /**
@@ -328,8 +339,7 @@ export class ChatManager {
    */
   private noteQuestion(sessionId: string) {
     const q = this.delegated.has(sessionId) ? null : finalQuestion(this.chats.get(sessionId)?.lastAssistantText() ?? null);
-    if (q) this.questions.set(sessionId, { text: q, at: new Date().toISOString() });
-    else this.questions.delete(sessionId);
+    this.inbox.setQuestion(sessionId, q ? { text: q, at: new Date().toISOString() } : null);
   }
 
   /** Segredos que apareceram nas conversas, para a caixa "precisa de mim". */
@@ -337,17 +347,21 @@ export class ChatManager {
     return [...this.secrets];
   }
 
-  /** "Já troquei": tira o aviso. */
-  dismissSecret(id: string): boolean {
+  /**
+   * "Já troquei" tira o aviso (se o segredo aparecer de novo, volta). "Não é segredo" (`notSecret`)
+   * tira e não avisa mais desse tipo nesta conversa: era um exemplo, um teste, um valor público.
+   */
+  dismissSecret(id: string, notSecret = false): boolean {
+    if (notSecret) this.inbox.mute(id);
     const i = this.secrets.findIndex((s) => s.id === id);
-    if (i === -1) return false;
+    if (i === -1) return notSecret;
     this.secrets.splice(i, 1);
     return true;
   }
 
   private noteSecret(sessionId: string, label: string) {
     const id = `${sessionId}:${label}`;
-    if (this.secrets.some((s) => s.id === id)) return;
+    if (this.secrets.some((s) => s.id === id) || this.inbox.isMuted(id)) return;
     this.secrets.push({ id, sessionId, label, at: new Date().toISOString() });
     this.log(`${sessionId}: ${label} apareceu na conversa (aviso na caixa)`);
   }
@@ -381,6 +395,12 @@ export class ChatManager {
       if (c.running && c.staffId === staffId && c.sessionId !== exceptSession && c.working) return true;
     }
     return false;
+  }
+
+  /** A conversa do funcionário que está no meio de um turno agora, se for uma só (senão, null). */
+  workingSession(staffId: string): string | null {
+    const busy = [...this.chats.values()].filter((c) => c.running && c.staffId === staffId && c.busy);
+    return busy.length === 1 ? busy[0]!.sessionId : null;
   }
 
   /** Quantas conversas abertas estão no meio de um turno ou com algo em segundo plano. */

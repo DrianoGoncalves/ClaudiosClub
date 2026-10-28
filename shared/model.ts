@@ -1,5 +1,4 @@
-// Modelo de dados exposto pela API. Não usa termos de uma ferramenta específica:
-// hoje só o Claude Code o preenche; o Codex entra depois como outro adaptador.
+// Modelo de dados exposto pela API, preenchido a partir do Claude Code (via adaptador).
 
 export type LinkKind = 'file' | 'symlink' | 'hardlink';
 
@@ -386,6 +385,8 @@ export interface Task {
   tests?: TestRun | null;
   /** Gestor (funcionário) que pediu a tarefa pela API; recebe o resumo quando ela é entregue. */
   requestedBy?: string | null;
+  /** A conversa do gestor em que ele pediu: a entrega volta para ela. */
+  requestedSession?: string | null;
   /**
    * Na fila do funcionário: começa sozinha quando ele terminar a tarefa atual (uma por vez, na
    * ordem do quadro).
@@ -558,6 +559,17 @@ export interface ServerInfo {
   host: string;
   /** Pasta do projeto no servidor. */
   remoteRoot: string | null;
+}
+
+/** Um comando de acesso remoto que um funcionário rodou (tirado do transcript dele). */
+export interface ServerAccess {
+  at: string;
+  sessionId: string;
+  /** Conexão usada, quando dá para saber pelo comando. */
+  connection: string | null;
+  command: string;
+  /** Deu certo? null = sem resultado no transcript (interrompido, ou ainda rodando). */
+  ok: boolean | null;
 }
 
 /**

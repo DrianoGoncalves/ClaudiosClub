@@ -30,6 +30,7 @@ import type {
   RunMark,
   SendPriority,
   UiLevel,
+  ServerAccess,
   ServerInfo,
   TurnNotice,
   StaffInput,
@@ -174,6 +175,7 @@ export const api = {
     post<Record<string, RunMark>>(`/api/sessions/${sessionId}/marks`, { runId, mark }),
   mcp: (projectId: string) => get<McpServerInfo[]>(`/api/projects/${projectId}/mcp`),
   servers: (projectId: string) => get<ServerInfo[]>(`/api/projects/${projectId}/servers`),
+  serverLog: (projectId: string, staffId: string) => get<ServerAccess[]>(`/api/projects/${projectId}/staff/${staffId}/server-log`),
   // Conexões SSH do projeto (a lista também é POST: exige a página do MyCo).
   connections: (projectId: string) => post<ProjectConnection[]>(`/api/projects/${projectId}/connections/list`),
   saveConnection: (
@@ -248,7 +250,8 @@ export const api = {
     post<{ ok: boolean }>(`/api/chat/${sessionId}/permission`, { requestId, allow, ...opts }),
   inbox: () => get<InboxItem[]>('/api/inbox'),
   turns: (since: string) => get<TurnNotice[]>(`/api/turns?since=${encodeURIComponent(since)}`),
-  dismissSecret: (id: string) => post<{ ok: boolean }>('/api/secrets/dismiss', { id }),
+  dismissSecret: (id: string, notSecret = false) => post<{ ok: boolean }>('/api/secrets/dismiss', { id, notSecret }),
+  dismissQuestion: (sessionId: string) => post<{ ok: boolean }>('/api/questions/dismiss', { sessionId }),
   dismissRoutineAlert: (id: string) => post<{ ok: boolean }>('/api/routines/alerts/dismiss', { id }),
   routineState: () => get<Record<string, RoutineRun>>('/api/routines/state'),
   taskSummary: () => get<Record<string, TaskSummary>>('/api/tasks/summary'),

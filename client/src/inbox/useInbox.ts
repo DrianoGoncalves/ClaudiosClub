@@ -28,7 +28,7 @@ export interface InboxView {
   canNotify: boolean;
   setNotify: (on: boolean) => Promise<void>;
   /** Tira um aviso que só informa: segredo ("já troquei") ou rotina que não rodou ("ok, vi"). */
-  dismiss: (item: InboxItem) => Promise<void>;
+  dismiss: (item: InboxItem, opts?: { notSecret?: boolean }) => Promise<void>;
 }
 
 export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
@@ -80,9 +80,15 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
     [canNotify],
   );
 
-  const dismiss = useCallback(async (item: InboxItem) => {
+  /** Tira da caixa: rotina vista, segredo trocado (ou que não é segredo), pergunta vista sem responder. */
+  const dismiss = useCallback(async (item: InboxItem, opts: { notSecret?: boolean } = {}) => {
     const id = item.id.replace(/^(secret|routine):/, '');
-    await (item.kind === 'routine' ? api.dismissRoutineAlert(id) : api.dismissSecret(id)).catch(() => {});
+    const call = item.id.startsWith('question:')
+      ? api.dismissQuestion(item.sessionId)
+      : item.kind === 'routine'
+        ? api.dismissRoutineAlert(id)
+        : api.dismissSecret(id, opts.notSecret);
+    await call.catch(() => {});
     setItems((prev) => prev.filter((i) => i.id !== item.id));
   }, []);
 

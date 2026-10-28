@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { TASK_STATUSES, type ChatItem, type HeldMessage, type StaffProfile, type Task, type TaskCode, type TaskStatus, type TaskSummary } from '../shared/model';
+import { TASK_STATUSES, type ChatItem, type HeldMessage, type StaffProfile, type Task, type TaskCode, type TaskStatus, type TaskSummary, type TestRun } from '../shared/model';
 import { writeAtomic } from './staff/store';
 import { checkpoint, CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
 
@@ -55,8 +55,12 @@ export interface TaskServiceDeps {
   readProfile: (projectId: string, staffId: string) => Promise<StaffProfile | null>;
   /** Abre uma conversa nova com o funcionário e manda a mensagem; devolve a sessão. */
   send: (projectId: string, staffId: string, text: string, force: boolean) => Promise<string>;
-  /** Avisa um funcionário (o gestor que pediu a tarefa), na conversa mais recente dele. */
-  notify?: (projectId: string, staffId: string, text: string) => Promise<void>;
+  /** Avisa um funcionário (o gestor que pediu a tarefa): na conversa `sessionId`, ou na mais recente dele. */
+  notify?: (projectId: string, staffId: string, text: string, sessionId?: string | null) => Promise<void>;
+  /** A conversa do funcionário que está no meio de um turno agora (quem chamou a API), se for uma só. */
+  requesterSession?: (staffId: string) => string | null;
+  /** Roda os testes do projeto (os testes trocam); o comando vem de detectTest, nunca do pedido. */
+  runTests?: (cwd: string, command: string) => Promise<TestRun>;
   /** A última resposta de uma conversa (o resumo da entrega). */
   lastText?: (sessionId: string) => string | null;
   /** Branch em que ele vai trabalhar (a da worktree dele, ou a atual do projeto). */
@@ -99,8 +103,10 @@ export class TaskService {
     if (input.staffId) await this.staffOrThrow(projectId, input.staffId);
     const manager = requestedBy ? await this.staffOrThrow(projectId, requestedBy) : null;
     const now = new Date().toISOString();
+    // A entrega volta para a conversa em que o gestor pediu (a que está no turno agora, chamando a
+    // API), e não para a mais recente dele, que pode ser outro assunto.
     const task: Task = {
-      ...(manager && { requestedBy: manager.id }),
+      ...(manager && { requestedBy: manager.id, requestedSession: this.deps.requesterSession?.(manager.id) ?? null }),
       id: `t-${randomBytes(3).toString('hex')}`,
       title: input.title,
       description: input.description,
@@ -408,6 +414,10 @@ export class TaskService {
       await this.change(where.projectId, where.taskId, (t) => (t.status === 'doing' ? (delivered = moved(t, 'review', 'auto', 'turno terminou')) : t));
       if (delivered) {
         await this.markDelivery(where.projectId, delivered);
+        // Pedida por um gestor: o MyCo roda os testes antes de avisar, e o gestor não gasta a conversa
+        // dele (a mais longa e cara) rodando de novo.
+        const tests = (delivered as Task).requestedBy ? await this.deliveryTests(where.projectId, delivered) : null;
+        if (tests) delivered = (await this.change(where.projectId, where.taskId, (t) => ({ ...t, tests }))) ?? delivered;
         await this.tellManager(where.projectId, delivered, sessionId);
       }
     });
@@ -423,12 +433,33 @@ export class TaskService {
     const who = task.staffId ? await this.deps.readProfile(projectId, task.staffId) : null;
     const name = who?.name ?? 'O funcionário';
     const summary = (this.deps.lastText?.(sessionId) ?? '').trim().slice(0, 1500);
+    const t = task.tests;
+    const tests = t
+      ? t.ok
+        ? `Testes (\`${t.command}\`, rodados pelo MyCo): passaram em ${Math.round(t.ms / 1000)} s. Não rode de novo.`
+        : `Testes (\`${t.command}\`, rodados pelo MyCo): FALHARAM. Fim da saída:\n${t.output.slice(-800)}`
+      : '';
     const text = [
       `[MyCo] ${name} entregou a tarefa “${task.title}” (id ${task.id}, agora em revisão no quadro).`,
       summary ? `O que ${name} disse:\n${summary}` : `${name} não deixou resumo: veja a conversa da tarefa.`,
-      'Confira (diff, testes) antes de dar como pronto. Ajuste vai para a pessoa, na conversa da tarefa dela, não refaça você.',
-    ].join('\n\n');
-    await this.deps.notify(projectId, task.requestedBy, text).catch(() => {});
+      tests,
+      t ? 'Confira o diff na medida do risco antes de dar como pronto.' : 'Confira (diff, testes) antes de dar como pronto.',
+      'Ajuste vai para a pessoa, na conversa da tarefa dela, não refaça você.',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+    await this.deps.notify(projectId, task.requestedBy, text, task.requestedSession ?? null).catch(() => {});
+  }
+
+  /** Os testes do projeto onde está o código da entrega (a worktree dele ou o próprio projeto). */
+  private async deliveryTests(projectId: string, task: Task): Promise<TestRun | null> {
+    const dir = await this.deps.projectPath(projectId);
+    if (!dir || !task.staffId) return null;
+    const command = await detectTest(dir);
+    if (!command) return null;
+    const profile = await this.deps.readProfile(projectId, task.staffId);
+    const place = await locateCode(dir, task.staffId, !!profile?.worktree).catch(() => null);
+    return (this.deps.runTests ?? runTests)(place?.path ?? dir, command);
   }
 
   /**

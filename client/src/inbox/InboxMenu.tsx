@@ -77,12 +77,18 @@ export function InboxMenu({ inbox, onOpen }: { inbox: InboxView; onOpen: (item: 
                     {item.at && <span className="muted small inbox-at">{formatAgo(now - Date.parse(item.at))}</span>}
                   </button>
                   {item.kind === 'secret' && (
-                    <button
-                      className="link small inbox-dismiss"
-                      title={t('inbox.secretTitle')}
-                      onClick={() => void inbox.dismiss(item)}
-                    >
-                      {t('inbox.secretDone')}
+                    <span className="inbox-dismiss">
+                      <button className="link small" title={t('inbox.secretTitle')} onClick={() => void inbox.dismiss(item)}>
+                        {t('inbox.secretDone')}
+                      </button>
+                      <button className="link small" title={t('office.notSecretTitle')} onClick={() => void inbox.dismiss(item, { notSecret: true })}>
+                        {t('office.notSecret')}
+                      </button>
+                    </span>
+                  )}
+                  {item.id.startsWith('question:') && (
+                    <button className="link small inbox-dismiss" title={t('office.questionSeenTitle')} onClick={() => void inbox.dismiss(item)}>
+                      {t('office.questionSeen')}
                     </button>
                   )}
                   {item.kind === 'routine' && (

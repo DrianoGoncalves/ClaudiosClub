@@ -33,6 +33,8 @@ import { CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from
 import { ChatRegistry } from './chat/registry';
 import { StaffError, StaffService } from './staff/service';
 import { mcpJsonWarnings } from './staff/mcp';
+import { InboxState } from './inboxState';
+import { readServerLog } from './staff/serverLog';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
 import { readUsage } from './usage';
 import { UsageStopError } from './usageStop';
@@ -101,7 +103,10 @@ const staff: StaffService = new StaffService(adapter, {
     return { project: c.projects[projectId]?.last7d ?? 0, total: c.total.last7d };
   },
 });
+/** Perguntas em aberto e avisos marcados como "não é segredo", guardados entre reinícios. */
+const inboxState = new InboxState(path.join(MYCO_HOME, 'inbox.json'));
 const chats: ChatManager = new ChatManager({
+  inbox: inboxState,
   transcriptsDir: defaultTranscripts,
   usageFile: path.join(MYCO_HOME, 'usage.json'),
   listLive: () => adapter.listLiveSessions(),
@@ -143,13 +148,16 @@ const tasks = new TaskService({
   },
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
   isWorking: (staffId, except) => chats.staffWorking(staffId, except),
-  // O gestor que pediu recebe a entrega na conversa mais recente dele (espera o turno dele acabar).
-  notify: async (projectId, staffId, text) => {
+  // O gestor que pediu recebe a entrega na conversa em que pediu (ou, sem ela, na mais recente dele),
+  // depois que o turno dele acabar.
+  notify: async (projectId, staffId, text, sessionId) => {
     const dir = await projectPathOf(projectId);
     const manager = dir ? await readProfile(dir, staffId) : null;
     if (!manager) return;
-    await chats.send(projectId, manager.sessions.at(-1)?.id ?? null, staffId, text, 'later');
+    const target = sessionId && manager.sessions.some((s) => s.id === sessionId) ? sessionId : (manager.sessions.at(-1)?.id ?? null);
+    await chats.send(projectId, target, staffId, text, 'later');
   },
+  requesterSession: (staffId) => chats.workingSession(staffId),
   lastText: (sessionId) => chats.lastAssistantText(sessionId),
   // O consumo já foi conferido quando você mandou (a mensagem só esperou a vez).
   sendTo: (projectId, sessionId, staffId, text, images) => chats.send(projectId, sessionId, staffId, text, 'next', images),
@@ -350,6 +358,18 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     },
   ],
   ['GET', new RegExp(`^/api/projects/${ID}/staff/${ID}/versions$`), ({ params: [id, staffId] }) => staff.versions(id!, staffId!)],
+  // Registro de acesso aos servidores: os comandos ssh/scp/vps das conversas do funcionário.
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/staff/${ID}/server-log$`),
+    async ({ params: [id, staffId] }) => {
+      const dir = await projectPathOf(id!);
+      const profile = dir ? await readProfile(dir, staffId!) : null;
+      if (!profile) return null;
+      const files = await Promise.all(profile.sessions.map((s) => findTranscript(defaultTranscripts, id!, s.id)));
+      return readServerLog(files, profile.servers);
+    },
+  ],
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}/restore$`),
@@ -673,8 +693,22 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     /^\/api\/secrets\/dismiss$/,
     async ({ body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('só pelo MyCo');
-      const b = parse(z.object({ id: z.string().min(1).max(200) }), body);
-      return { ok: chats.dismissSecret(b.id) };
+      const b = parse(z.object({ id: z.string().min(1).max(300), notSecret: z.boolean().default(false) }), body);
+      // Chave no .mcp.json: "já troquei" não guarda nada (o aviso some quando o arquivo muda).
+      if (b.id.startsWith('mcp:')) {
+        if (b.notSecret) inboxState.mute(b.id);
+        return { ok: true };
+      }
+      return { ok: chats.dismissSecret(b.id, b.notSecret) };
+    },
+  ],
+  [
+    'POST',
+    /^\/api\/questions\/dismiss$/,
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      const b = parse(z.object({ sessionId: z.string().min(1).max(100) }), body);
+      return { ok: chats.dismissQuestion(b.sessionId) };
     },
   ],
   ['POST', new RegExp(`^/api/chat/${ID}/interrupt$`), async ({ params: [sid] }) => (chats.interrupt(sid!), { ok: true })],
@@ -1077,6 +1111,7 @@ async function getInbox(): Promise<InboxItem[]> {
   for (const p of projects.filter((x) => x.exists && !x.worktreeOf)) {
     if (hidden({ projectId: p.id, staffId: null, sessionId: '' })) continue;
     for (const s of await mcpJsonWarnings(p.path)) {
+      if (inboxState.isMuted(`mcp:${p.id}:${s.server}`)) continue;
       out.push({
         id: `secret:mcp:${p.id}:${s.server}`,
         kind: 'secret',
