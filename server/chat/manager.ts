@@ -17,6 +17,7 @@ import type {
 import { writeAtomic } from '../staff/store';
 import { readHistory } from './history';
 import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
+import { finalQuestion } from './question';
 import { isAlive, killTree, type ChatRegistry } from './registry';
 
 export interface ChatSpawn {
@@ -110,6 +111,8 @@ export class ChatManager {
   private readonly secrets: Array<{ id: string; sessionId: string; label: string; at: string }> = [];
   /** Conversas cuja última mensagem veio de outro funcionário (delegação), e não de você. */
   private readonly delegated = new Set<string>();
+  /** Turnos que terminaram com uma pergunta para você no texto, até você responder. */
+  private readonly questions = new Map<string, { text: string; at: string }>();
   private readonly timer: NodeJS.Timeout;
 
   constructor(private readonly opts: ChatManagerOptions) {
@@ -222,6 +225,7 @@ export class ChatManager {
     const chat = await this.ensure(projectId, sessionId, staffId);
     if (delegated) this.delegated.add(chat.sessionId);
     else this.delegated.delete(chat.sessionId);
+    this.questions.delete(chat.sessionId); // respondeu (ou mandou outra coisa): a pergunta sai da caixa
     // A ficha mudou depois que esta conversa começou: o aviso vai junto, uma vez só.
     const notice = this.fichaNotices.get(chat.sessionId);
     this.fichaNotices.delete(chat.sessionId);
@@ -311,6 +315,21 @@ export class ChatManager {
   isBusy(sessionId: string): boolean {
     const chat = this.chats.get(sessionId);
     return !!chat?.running && chat.busy;
+  }
+
+  /** Conversas paradas numa pergunta para você, para a caixa "precisa de mim". */
+  pendingQuestions(): Array<{ sessionId: string; text: string; at: string }> {
+    return [...this.questions].map(([sessionId, q]) => ({ sessionId, ...q }));
+  }
+
+  /**
+   * O turno terminou: se a resposta acaba perguntando algo, fica na caixa até você responder.
+   * Conversa delegada fica de fora: quem pediu (o gestor) recebe a entrega e responde.
+   */
+  private noteQuestion(sessionId: string) {
+    const q = this.delegated.has(sessionId) ? null : finalQuestion(this.chats.get(sessionId)?.lastAssistantText() ?? null);
+    if (q) this.questions.set(sessionId, { text: q, at: new Date().toISOString() });
+    else this.questions.delete(sessionId);
   }
 
   /** Segredos que apareceram nas conversas, para a caixa "precisa de mim". */
@@ -424,7 +443,10 @@ export class ChatManager {
       args: spawn.args,
       onUsage: (limits) => void this.saveUsage(spawn.sessionId, limits),
       onSecret: (label) => this.noteSecret(spawn.sessionId, label),
-      onIdle: (reason) => this.opts.onIdle?.(spawn.sessionId, projectId, staffId, reason),
+      onIdle: (reason) => {
+        if (reason !== 'exit') this.noteQuestion(spawn.sessionId);
+        this.opts.onIdle?.(spawn.sessionId, projectId, staffId, reason);
+      },
       onCommands: (commands) => this.commands.set(projectId, commands),
       onExit: (pid, error) => {
         this.log(`${spawn.sessionId} saiu (pid ${pid})${error ? `: ${error.slice(0, 200)}` : ''}`);

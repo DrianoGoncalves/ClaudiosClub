@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { AccountUsage, LaunchResult, McpServerInfo, Project, ProjectConnection, ServerInfo, StaffProfile, UsageStop } from '../../shared/model';
 import { keyFilesOf, listServers, readConnections, removeConnection, saveConnection, testConnection, writeSshConfig } from './servers';
 import type { ToolAdapter } from '../adapters/types';
-import { readConfig, setArchived } from '../config';
+import { companyOf, readConfig, setArchived } from '../config';
 import { readUsage } from '../usage';
 import { projectBudgetHit, usageStopHit, UsageStopError } from '../usageStop';
 import { TEMP_IDLE_DAYS } from '../../shared/model';
@@ -457,7 +457,8 @@ export class StaffService {
       listProjectStaff(project.path, project.id),
     ]);
     return {
-      company: config.companyName,
+      // A empresa do projeto (aba do quadro); sem empresa, o nome geral do MyCo.
+      company: companyOf(config, project.id)?.name ?? config.companyName,
       projectName: project.name,
       projectPath: project.path,
       managerNames: managers.filter((m): m is StaffProfile => !!m).map((m) => `${m.name} (${m.role})`),

@@ -14,14 +14,16 @@ afterAll(async () => {
 });
 
 const servers = (mcpServers: Record<string, unknown>) => ({ mcpServers });
+/** Texto com cara de chave aleatória, gerado na hora: o arquivo não tem chave nenhuma escrita. */
+const noise = (n: number) => Array.from({ length: n }, (_, i) => 'q7Xz2LmP9wKd4RtB'[(i * 7) % 16]).join('');
 
 describe('chave escrita no .mcp.json', () => {
   it('acha em env, headers, args e url; ${VARIAVEL} não conta', () => {
     const found = findMcpJsonSecrets(
       servers({
-        anthropic: { command: 'npx', env: { ANTHROPIC_API_KEY: `${'sk-ant-'}api03-${'A'.repeat(28)}` } },
+        anthropic: { command: 'npx', env: { ANTHROPIC_API_KEY: `${'sk-ant-'}api03-${noise(28)}` } },
         sentry: { type: 'http', url: 'https://mcp.sentry.dev/mcp', headers: { Authorization: 'Bearer abc123def456ghi' } },
-        github: { command: 'gh-mcp', args: ['--token', `${'ghp'}_${'a'.repeat(36)}`] },
+        github: { command: 'gh-mcp', args: ['--token', `${'ghp'}_${noise(36)}`] },
         busca: { type: 'http', url: 'https://mcp.exemplo.com/?api_key=segredo-de-verdade' },
         banco: { command: 'pg-mcp', env: { DB_PASSWORD: 'senhaForte123' } },
         certo: { command: 'npx', env: { ANTHROPIC_API_KEY: '${ANTHROPIC_API_KEY}' }, headers: { Authorization: 'Bearer ${TOKEN}' } },

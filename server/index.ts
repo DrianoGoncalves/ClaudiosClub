@@ -7,7 +7,21 @@ import { ClaudeAdapter } from './adapters/claude';
 import { defaultLocations } from './adapters/claude/paths';
 import type { ToolAdapter } from './adapters/types';
 import { getAuthStatus, openLoginTerminal } from './auth';
-import { ArchiveRequest, ConfigPatch, MYCO_HOME, readConfig, setArchived, updateConfig } from './config';
+import {
+  addExtraProject,
+  ArchiveRequest,
+  CompanyError,
+  ConfigPatch,
+  MYCO_HOME,
+  readConfig,
+  readExtraProjects,
+  removeCompany,
+  saveCompany,
+  setArchived,
+  setProjectCompany,
+  updateConfig,
+} from './config';
+import { openProject, parseNewProject, ProjectError, usualParent } from './newProject';
 import { createDemo, DEMO_DIR } from './demo';
 import { z } from 'zod';
 import { AgentError, AgentInput, readAgentSource, saveAgent } from './adapters/claude/agentWrite';
@@ -56,7 +70,7 @@ const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', 'myco.localh
 // Retratos chegam como data URL no JSON da contratação.
 const MAX_BODY = 4 * 1024 * 1024;
 
-const adapter: ToolAdapter = new ClaudeAdapter({ extraPaths: [DEMO_DIR] });
+const adapter: ToolAdapter = new ClaudeAdapter({ extraPaths: async () => [DEMO_DIR, ...(await readExtraProjects())] });
 const benchmarks = new ArtificialAnalysis();
 /** ~/.claude/projects: onde ficam os transcripts das conversas. */
 const defaultTranscripts = path.join(defaultLocations().home, 'projects');
@@ -266,6 +280,27 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     },
   ],
   ['GET', /^\/api\/projects$/, () => adapter.listProjects()],
+  // "Novo projeto": a pasta sugerida (onde está a maioria) e criar ou abrir, já na empresa da aba.
+  ['GET', /^\/api\/new-project$/, async () => ({ parent: usualParent(await adapter.listProjects()) })],
+  [
+    'POST',
+    /^\/api\/new-project$/,
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      const input = parseNewProject(body);
+      // A empresa antes da pasta: um id errado não deixa pasta criada para trás.
+      if (input.companyId && !(await readConfig()).companies.some((c) => c.id === input.companyId)) throw new BadRequest('empresa não encontrada');
+      const opened = await openProject(input);
+      await addExtraProject(opened.path);
+      adapter.forgetProjects();
+      const project = (await adapter.listProjects()).find((p) => pathKey(p.path) === pathKey(opened.path));
+      if (!project) throw new BadRequest('a pasta não entrou na lista de projetos');
+      if (input.companyId) await setProjectCompany(project.id, input.companyId);
+      // Estava arquivado: abrir de novo traz de volta ao quadro.
+      if ((await readConfig()).archived.projects.includes(project.id)) await setArchived({ kind: 'project', id: project.id, archived: false });
+      return { created: opened.created, projectId: project.id };
+    },
+  ],
   ['GET', new RegExp(`^/api/projects/${ID}$`), ({ params: [id] }) => adapter.getProject(id!)],
   ['GET', new RegExp(`^/api/projects/${ID}/mcp$`), ({ params: [id] }) => staff.listMcp(id!)],
   ['GET', new RegExp(`^/api/projects/${ID}/servers$`), ({ params: [id] }) => staff.listServers(id!)],
@@ -779,6 +814,33 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     },
   ],
   ['GET', /^\/api\/config$/, () => readConfig()],
+  // Empresas (abas do quadro): criar ou editar, remover, e a empresa de cada projeto.
+  [
+    'POST',
+    /^\/api\/companies$/,
+    ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      return saveCompany(body);
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/companies/${ID}/delete$`),
+    ({ params: [id], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      return removeCompany(id!);
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/company$`),
+    async ({ params: [id], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!(await adapter.listProjects()).some((p) => p.id === id)) return null;
+      const b = parse(z.object({ companyId: z.string().max(40).nullable() }), body);
+      return setProjectCompany(id!, b.companyId);
+    },
+  ],
   [
     'POST',
     /^\/api\/config$/,
@@ -846,6 +908,8 @@ const server = http.createServer(async (req, res) => {
           err instanceof RoleError ||
           err instanceof FileError ||
           err instanceof AgentError ||
+          err instanceof CompanyError ||
+          err instanceof ProjectError ||
           (err as NodeJS.ErrnoException | null)?.code === 'EEXIST'
         ) {
           const message = (err as NodeJS.ErrnoException).code === 'EEXIST' ? 'já existe um arquivo com esse nome' : (err as Error).message;
@@ -969,6 +1033,11 @@ async function getInbox(): Promise<InboxItem[]> {
       out.push({ id: `perm:${p.id}`, kind: plan ? 'plan' : 'permission', ...w, summary: plan ? 'plano pronto para aprovar' : `${p.tool} ${p.summary}`, at: p.at });
     }
     if (error) out.push({ id: `error:${sessionId}`, kind: 'error', ...w, summary: error, at: null });
+  }
+  // Terminou o turno perguntando algo no texto (sem pedido de permissão): espera até você responder.
+  for (const q of chats.pendingQuestions()) {
+    const w = where(q.sessionId, liveById.get(q.sessionId));
+    if (!hidden(w)) out.push({ id: `question:${q.sessionId}:${q.at}`, kind: 'waiting', ...w, summary: `perguntou: ${q.text}`, at: q.at });
   }
   const orphans = await chats.orphans(live);
   const orphanIds = new Set(orphans.map((o) => o.sessionId));

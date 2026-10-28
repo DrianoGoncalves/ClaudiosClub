@@ -19,8 +19,8 @@ export interface ProjectRef {
 export interface DiscoverOptions {
   /** Inclui projetos dentro da pasta temporária do sistema (pastas de teste, scratchpads). */
   includeTemp?: boolean;
-  /** Pastas que entram mesmo sem histórico no Claude Code (o projeto demo), se existirem. */
-  extraPaths?: string[];
+  /** Pastas que entram mesmo sem histórico no Claude Code (o demo, as do "Novo projeto"), se existirem. */
+  extraPaths?: string[] | (() => Promise<string[]>);
 }
 
 /**
@@ -37,7 +37,8 @@ export async function discoverProjects(loc: ClaudeLocations, opts: DiscoverOptio
   };
 
   for (const p of await readConfigProjectPaths(loc.configFile)) add(p);
-  for (const p of opts.extraPaths ?? []) if (await exists(p)) add(p);
+  const extra = typeof opts.extraPaths === 'function' ? await opts.extraPaths() : (opts.extraPaths ?? []);
+  for (const p of extra) if (await exists(p)) add(p);
 
   const known = new Set([...byKey.values()].map((r) => r.id));
   const orphanDirs = (await listDir(path.join(loc.home, 'projects'))).filter(

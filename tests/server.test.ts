@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cleanEnv, parseAuthStatus } from '../server/auth';
-import { ConfigPatch, readConfig, setArchived, updateConfig } from '../server/config';
+import { companyOf, ConfigPatch, readConfig, removeCompany, saveCompany, setArchived, setProjectCompany, updateConfig } from '../server/config';
 import { readUsage } from '../server/usage';
 import { projectBudgetHit, UsageStopError } from '../server/usageStop';
 import type { AccountUsage } from '../shared/model';
@@ -62,7 +62,7 @@ describe('config', () => {
   it('usa "MyCo" por padrão e grava o nome preservando outras chaves', async () => {
     const file = path.join(root, 'cfg', 'config.json');
     const usageStop = { fiveHour: 90, sevenDay: 95 };
-    const colors = { projectColors: {}, boardBackground: { light: null, dark: null }, projectBudgets: {} };
+    const colors = { projectColors: {}, boardBackground: { light: null, dark: null }, projectBudgets: {}, companies: [], projectCompanies: {} };
     // Quem chega (sem config) começa no simples.
     expect(await readConfig(file)).toEqual({
       companyName: 'MyCo',
@@ -86,6 +86,41 @@ describe('config', () => {
     });
     expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ futuro: 1, companyName: 'Acme Labs' });
     expect((await updateConfig({ uiLevel: 'simple' }, file)).uiLevel).toBe('simple');
+  });
+
+  it('empresas: cria com id do nome, renomeia sem trocar o id, recusa nome repetido', async () => {
+    const file = path.join(root, 'cfg-emp', 'config.json');
+    let cfg = await saveCompany({ name: 'Acme Labs', color: 'teal' }, file);
+    expect(cfg.companies).toEqual([{ id: 'acme-labs', name: 'Acme Labs', color: 'teal' }]);
+    cfg = await saveCompany({ name: 'Ação Ltda' }, file);
+    expect(cfg.companies[1]).toEqual({ id: 'acao-ltda', name: 'Ação Ltda', color: null });
+    await expect(saveCompany({ name: 'acme labs' }, file)).rejects.toThrow('já existe');
+    cfg = await saveCompany({ id: 'acme-labs', name: 'Acme', color: null }, file);
+    expect(cfg.companies[0]).toEqual({ id: 'acme-labs', name: 'Acme', color: null });
+    await expect(saveCompany({ id: 'sumiu', name: 'X' }, file)).rejects.toThrow('não encontrada');
+    await expect(saveCompany({ name: '' }, file)).rejects.toThrow('nome');
+    // Mesmo nome-base depois de renomear: o id ganha um número.
+    expect((await saveCompany({ name: 'Acme Labs' }, file)).companies.map((c) => c.id)).toEqual(['acme-labs', 'acao-ltda', 'acme-labs-2']);
+  });
+
+  it('empresa do projeto: atribui, tira, e remover a empresa deixa os projetos sem empresa', async () => {
+    const file = path.join(root, 'cfg-emp2', 'config.json');
+    await saveCompany({ name: 'Acme' }, file);
+    await saveCompany({ name: 'Beta' }, file);
+    await setProjectCompany('p1', 'acme', file);
+    await setProjectCompany('p2', 'beta', file);
+    let cfg = await setProjectCompany('p3', 'acme', file);
+    expect(cfg.projectCompanies).toEqual({ p1: 'acme', p2: 'beta', p3: 'acme' });
+    expect(companyOf(cfg, 'p2')?.name).toBe('Beta');
+    expect(companyOf(cfg, 'p9')).toBeNull();
+    await expect(setProjectCompany('p1', 'sumiu', file)).rejects.toThrow('não encontrada');
+    cfg = await setProjectCompany('p3', null, file);
+    expect(cfg.projectCompanies).toEqual({ p1: 'acme', p2: 'beta' });
+    cfg = await removeCompany('acme', file);
+    expect(cfg).toMatchObject({ companies: [{ id: 'beta' }], projectCompanies: { p2: 'beta' } });
+    // Editado à mão: empresa inválida some, e projeto de empresa que não existe fica sem empresa.
+    await fs.writeFile(file, JSON.stringify({ companies: [{ id: 'ok', name: 'Ok' }, { id: 'Ruim!', name: 'x' }, 3], projectCompanies: { a: 'ok', b: 'fantasma', c: 1 } }));
+    expect(await readConfig(file)).toMatchObject({ companies: [{ id: 'ok', name: 'Ok', color: null }], projectCompanies: { a: 'ok' } });
   });
 
   it('linha de parada: null desliga um limite; valores fora de 1–100 são recusados', async () => {

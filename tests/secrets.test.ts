@@ -3,15 +3,28 @@ import { findSecret } from '../server/chat/secrets';
 import { TurnWatcher } from '../server/turns';
 import type { LiveSession } from '../shared/model';
 
+/** Texto com cara de chave aleatória, gerado na hora (16 caracteres que se alternam fora de ordem). */
+const noise = (n: number) => Array.from({ length: n }, (_, i) => 'q7Xz2LmP9wKd4RtB'[(i * 7) % 16]).join('');
+
 describe('guarda de segredos', () => {
   it('reconhece senha em comando, chaves e tokens conhecidos', () => {
     expect(findSecret('mysql -uroot -ps3nh4fict1ca app')?.label).toBe('uma senha');
     expect(findSecret('docker run -e MYSQL_ROOT_PASSWORD=Sup3rSecreta mysql')?.label).toBe('uma senha');
     expect(findSecret('DATABASE_URL=postgres://app:s3nh4forte@db:5432/app')?.label).toBe('uma senha numa URL de conexão');
-    // Montadas por partes: o arquivo não tem nada com cara de chave real (o GitHub barraria o push).
-    expect(findSecret(`use a chave ${'sk-ant-'}api03-${'A'.repeat(28)}`)?.label).toBe('uma chave da API da Anthropic');
-    expect(findSecret(`token ${'ghp'}_${'a'.repeat(36)}`)?.label).toBe('um token do GitHub');
+    // Montadas na hora: o arquivo não tem nada com cara de chave real (o GitHub barraria o push, e um
+    // funcionário que lesse este arquivo dispararia a guarda).
+    expect(findSecret(`use a chave ${'sk-ant-'}api03-${noise(28)}`)?.label).toBe('uma chave da API da Anthropic');
+    expect(findSecret(`token ${'ghp'}_${noise(36)}`)?.label).toBe('um token do GitHub');
     expect(findSecret(`-----BEGIN OPENSSH ${'PRIVATE'} KEY-----\nb3Bl...`)?.label).toBe('uma chave privada');
+  });
+
+  it('chave com cara de teste não é segredo; a de verdade no mesmo texto ainda é', () => {
+    expect(findSecret(`${'sk-ant-'}api03-${'A'.repeat(28)}`)).toBeNull();
+    expect(findSecret(`${'ghp'}_${'abcdefghijklmnopqrstuvwxyz0123456789'}`)).toBeNull();
+    expect(findSecret(`${'AKIA'}IOSFODNN7EXAMPLE`)).toBeNull(); // o exemplo da documentação da AWS
+    expect(findSecret(`${'ghp'}_${'a'.repeat(36)} e ${'ghp'}_${noise(36)}`)?.label).toBe('um token do GitHub');
+    // Senha não passa por esse filtro: senha fraca continua sendo senha.
+    expect(findSecret('DB_PASSWORD=aaaaaaaa')?.label).toBe('uma senha');
   });
 
   it('não acusa placeholders, variáveis nem texto comum', () => {

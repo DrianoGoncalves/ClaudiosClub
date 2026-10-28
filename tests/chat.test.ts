@@ -339,6 +339,26 @@ describe('ChatManager: ficha editada com a conversa aberta', () => {
     expect(m.isDelegated('sx')).toBe(false);
   });
 
+  it('turno que termina com pergunta no texto espera você, até você responder; delegada não', async () => {
+    const { m, procs } = manager();
+    await m.send('p', 'sx', 'ana', 'arrume e me diga');
+    const f = procs[0]!;
+    const ask = 'Decisões aplicadas.\n\nQuer que eu **(1)** faça o commit em `main` e **(2)** apague os órfãos?\n\nCerteza: 8/10';
+    f.emit({ type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: ask }] } });
+    f.emit({ type: 'result', is_error: false });
+    await tick();
+    expect(m.pendingQuestions()).toEqual([{ sessionId: 'sx', text: 'Quer que eu (1) faça o commit em main e (2) apague os órfãos?', at: expect.any(String) }]);
+    await m.send('p', 'sx', 'ana', 'faça como sugerir');
+    expect(m.pendingQuestions()).toEqual([]);
+
+    // Pedido de outro funcionário: a pergunta é para ele, que recebe a entrega.
+    await m.send('p', 'sx', 'ana', 'tarefa', undefined, [], [], true);
+    f.emit({ type: 'assistant', message: { id: 'm2', content: [{ type: 'text', text: 'Pode ser assim?' }] } });
+    f.emit({ type: 'result', is_error: false });
+    await tick();
+    expect(m.pendingQuestions()).toEqual([]);
+  });
+
   it('só a autonomia mudou: troca o modo sem reabrir', async () => {
     const { m, procs } = manager();
     await m.send('p', 'sx', 'ana', 'oi');
