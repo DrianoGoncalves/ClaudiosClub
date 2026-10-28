@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import { ArtificialAnalysis } from './adapters/artificialAnalysis';
 import { ClaudeAdapter } from './adapters/claude';
 import { defaultLocations } from './adapters/claude/paths';
 import type { ToolAdapter } from './adapters/types';
@@ -54,6 +55,7 @@ const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', 'myco.localh
 const MAX_BODY = 4 * 1024 * 1024;
 
 const adapter: ToolAdapter = new ClaudeAdapter();
+const benchmarks = new ArtificialAnalysis();
 /** ~/.claude/projects: onde ficam os transcripts das conversas. */
 const defaultTranscripts = path.join(defaultLocations().home, 'projects');
 
@@ -689,6 +691,16 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ['GET', /^\/api\/usage$/, () => readUsage()],
   ['GET', /^\/api\/browser$/, ({ url }) => browserStatus(url.searchParams.has('fresh'))],
   ['GET', /^\/api\/costs$/, () => getCosts()],
+  // Ranking de modelos (Artificial Analysis). POST: cada busca gasta da cota diária da chave, então
+  // só a página do MyCo dispara (uma página qualquer não manda o cabeçalho x-myco).
+  [
+    'POST',
+    /^\/api\/models$/,
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      return benchmarks.get(parse(z.object({ refresh: z.boolean().default(false) }), body ?? {}).refresh);
+    },
+  ],
   // ---- "valeu a pena?" de uma sessão ----
   [
     'GET',

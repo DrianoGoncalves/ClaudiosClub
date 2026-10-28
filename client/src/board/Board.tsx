@@ -20,6 +20,7 @@ import type { InboxView } from '../inbox/useInbox';
 import { EdgeActions, edgeTypes } from './edges';
 import { buildGraph, HANDLE, RANKING_ID, roomFrame, type BoardNode, type StaffLink } from './layout';
 import { nodeTypes } from './nodes';
+import { ModelsMenu } from '../toolbar/ModelsMenu';
 import { SettingsMenu } from '../toolbar/SettingsMenu';
 import { AuthBadge, CompanyTitle, UsageMeters } from '../toolbar/Toolbar';
 
@@ -336,6 +337,7 @@ export function BoardView(props: BoardViewProps) {
         <button onClick={() => onSelect(RANKING_ID)} title="Quem mais gasta: funcionários e agents">
           ranking
         </button>
+        <ModelsMenu />
         <SettingsMenu
           showWorktrees={showWorktrees}
           onToggleWorktrees={props.onToggleWorktrees}

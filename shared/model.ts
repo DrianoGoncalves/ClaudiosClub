@@ -130,6 +130,38 @@ export interface AccountUsage {
   updatedAt: string | null;
 }
 
+/** Um esforço (effort) de um modelo no Artificial Analysis. */
+export interface ModelVariant {
+  id: string;
+  /** low, medium, high, xhigh, max…; null quando o nome não diz. */
+  effort: string | null;
+  /** Artificial Analysis Coding Index: o do modelo, não o de agentes (que a API não traz). */
+  codingIndex: number;
+  /** US$ por 1M tokens, na mistura de 3 de entrada para 1 de saída. */
+  priceBlended: number;
+}
+
+/**
+ * Um modelo no ranking de código do Artificial Analysis (API gratuita deles). Os números são os do
+ * esforço padrão (a variante principal do AA); `variants` traz todos, do menor esforço ao maior.
+ */
+export interface ModelBenchmark extends ModelVariant {
+  name: string;
+  creator: string;
+  variants: ModelVariant[];
+}
+
+export interface ModelBenchmarks {
+  /** Sem chave no .env: o painel explica como criar. */
+  configured: boolean;
+  /** Os de maior índice de código. */
+  models: ModelBenchmark[];
+  /** Quando os dados vieram da API; null antes da primeira leitura que deu certo. */
+  fetchedAt: string | null;
+  /** A última busca falhou: os dados, se houver, são da anterior. */
+  error: string | null;
+}
+
 /** US$ equivalentes em API (estimativa: as sessões rodam pela assinatura). */
 export interface CostSummary {
   usd: number;

@@ -7,6 +7,7 @@ coverage/
 # Segredos e conexões locais (a skill vps guarda as conexões em .vps/).
 .env
 .env.*
+!.env.example
 .vps/
 
 # Imagens de rosto dos funcionários: ficam só na máquina.
