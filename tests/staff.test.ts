@@ -214,6 +214,9 @@ describe('infra: servidores por SSH', () => {
     expect(md).not.toContain('skill `vps`');
     expect(renderFicha({ ...p, skills: ['vps'] }, ctx)).toContain('skill `vps`');
     expect(renderFicha(profile(), ctx)).not.toContain('## Servidores');
+    // O workspace do projeto entra como contexto, sem tomar o lugar da empresa.
+    expect(renderFicha(profile(), { ...ctx, workspace: 'Cliente X' })).toContain('Empresa: Acme & Cia. Workspace: Cliente X.');
+    expect(renderFicha(profile(), ctx)).not.toContain('Workspace:');
     const args = buildClaudeArgs(p, { sessionId: 's', resume: false, systemPromptFile: 'S', mcpConfigPath: null, firstPrompt: null, keyFiles: ['C:\\chaves\\ia', 'C:/com espaço/k'] });
     const deny = args[args.indexOf('--disallowedTools') + 1]!.split(',');
     expect(deny).toEqual(expect.arrayContaining(['Read(~/.ssh/**)', 'Read(**/.env)', 'Read(**/.vps/**)', 'Read(//c/chaves/ia)']));

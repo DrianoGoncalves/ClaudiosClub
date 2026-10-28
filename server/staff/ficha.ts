@@ -9,6 +9,8 @@ import { sshConfigFile } from './servers';
 
 export interface FichaContext {
   company: string;
+  /** Workspace do projeto (como você agrupa os projetos: cliente, área…), se tiver. */
+  workspace?: string | null;
   projectName: string;
   projectPath: string;
   /** Nomes de quem chama este funcionário; vazio = o usuário. */
@@ -204,7 +206,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
   const list = (items: string[], empty: string) => (items.length ? items.map((i) => `- ${i}`).join('\n') : empty);
   const sections = [
     `# Ficha de ${p.name} — ${p.role}`,
-    `Empresa: ${ctx.company}. Projeto: ${ctx.projectName} (\`${ctx.projectPath}\`).`,
+    `Empresa: ${ctx.company}.${ctx.workspace ? ` Workspace: ${ctx.workspace}.` : ''} Projeto: ${ctx.projectName} (\`${ctx.projectPath}\`).`,
     `Reporta a: ${ctx.managerNames.length ? `${ctx.managerNames.join(', ')} e ao usuário (dono da empresa)` : 'o usuário (dono da empresa)'}.`,
     `Esta ficha foi gerada pelo MyCo; para mudar, edite pelo MyCo (alterações à mão podem ser sobrescritas).`,
     `## Missão\n${p.mission}`,

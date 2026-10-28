@@ -24,8 +24,8 @@ import { ChartIcon } from '../icons';
 import { SettingsMenu } from '../toolbar/SettingsMenu';
 import { AuthBadge, CompanyTitle, UsageMeters } from '../toolbar/Toolbar';
 import { t } from '../i18n';
-import { CompanyTabs } from '../office/CompanyTabs';
-import { companyByProject, inTab, TAB_ALL, TAB_NONE } from '../office/companies';
+import { WorkspaceTabs } from '../office/WorkspaceTabs';
+import { inTab, TAB_ALL, TAB_NONE, workspaceByProject } from '../office/workspaces';
 
 // Posições arrastadas ficam no navegador por enquanto; vão para `.myco/` quando houver escrita no disco.
 // v3: as salas passaram a formar uma grade; as posições da v2 (uma linha só) não servem mais.
@@ -111,7 +111,7 @@ interface BoardViewProps {
   tab: string;
   onTab: (tab: string) => void;
   /** "+ projeto" nas abas: criar ou abrir, já na empresa da aba (null = sem empresa). */
-  onNewProject: (companyId: string | null) => void;
+  onNewProject: (workspaceId: string | null) => void;
   /** Um projeto acabou de ser criado (o demo): recarrega o quadro e abre a sala dele. */
   onProjectCreated: (projectId: string) => void;
 }
@@ -127,10 +127,10 @@ export function BoardView(props: BoardViewProps) {
   const { config, costs, git, tasks, showWorktrees, showArchived, selectedId, onSelect } = props;
   // Aba de empresa: o quadro mostra só as salas dos projetos dela.
   const { tab, onTab: setTab } = props;
-  const companyOf = useMemo(() => companyByProject(props.board.projects, config), [props.board.projects, config]);
+  const workspaceOf = useMemo(() => workspaceByProject(props.board.projects, config), [props.board.projects, config]);
   const board = useMemo(
-    () => (tab === TAB_ALL ? props.board : { ...props.board, projects: props.board.projects.filter((p) => inTab(tab, companyOf.get(p.id), config)) }),
-    [props.board, tab, companyOf, config],
+    () => (tab === TAB_ALL ? props.board : { ...props.board, projects: props.board.projects.filter((p) => inTab(tab, workspaceOf.get(p.id), config)) }),
+    [props.board, tab, workspaceOf, config],
   );
   const [shelves, setShelves] = useState(() => loadList(SHELVES_KEY));
   const [collapsed, setCollapsed] = useState(() => loadList(COLLAPSED_KEY));
@@ -381,25 +381,25 @@ export function BoardView(props: BoardViewProps) {
           projectBudgets={config?.projectBudgets ?? null}
           onProjectBudget={props.onProjectBudget}
           projects={props.board.projects}
-          companies={config?.companies ?? null}
-          projectCompanies={config?.projectCompanies ?? null}
+          workspaces={config?.workspaces ?? null}
+          projectWorkspaces={config?.projectWorkspaces ?? null}
           onConfig={props.onConfig}
-          // O demo não tem empresa: volta para "Todas", senão a sala dele ficaria escondida.
+          // O demo não tem workspace: volta para "Todos", senão a sala dele ficaria escondida.
           onOpenProject={(projectId) => {
             setTab(TAB_ALL);
             props.onProjectCreated(projectId);
           }}
         />
-        <CompanyTabs
+        <WorkspaceTabs
           config={config}
-          companyOf={companyOf}
+          workspaceOf={workspaceOf}
           inbox={props.inbox.items}
           value={tab}
           onChange={setTab}
           onConfig={props.onConfig}
           onNewProject={() => props.onNewProject(tab === TAB_ALL || tab === TAB_NONE ? null : tab)}
         />
-        {tab !== TAB_ALL && !board.projects.length && <p className="muted small company-empty">{t('office.emptyTab')}</p>}
+        {tab !== TAB_ALL && !board.projects.length && <p className="muted small workspace-empty">{t('office.emptyTab')}</p>}
       </Panel>
       <Panel position="bottom-right" className="legend">
         <span className="legend-item legend-project">{t('board.legendProject')}</span>

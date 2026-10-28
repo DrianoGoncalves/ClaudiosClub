@@ -1,11 +1,12 @@
 import type { AppConfig, Project } from '../../../shared/model';
 
-// Abas do quadro: "Todas", uma por empresa e "Sem empresa". A aba escolhida fica no navegador e no
-// endereço (#acme), para dar para abrir duas janelas em empresas diferentes.
+// Abas do quadro: "Todos", um por workspace e "Sem workspace". Você agrupa os projetos como quiser
+// (cliente, área, pessoal…). A aba escolhida fica no navegador e no endereço (#cliente-x), para dar
+// para abrir duas janelas em workspaces diferentes.
 
 export const TAB_ALL = 'all';
 export const TAB_NONE = 'none';
-const TAB_KEY = 'myco.companyTab';
+const TAB_KEY = 'myco.workspaceTab';
 
 export function readTab(): string {
   const hash = decodeURIComponent(window.location.hash.slice(1));
@@ -28,11 +29,11 @@ export function writeTab(tab: string) {
 }
 
 /**
- * Empresa de cada projeto do quadro (id → empresa ou null). Uma worktree segue o projeto de onde
- * saiu, que é quem está na empresa.
+ * Workspace de cada projeto do quadro (id → workspace ou null). Uma worktree segue o projeto de
+ * onde saiu, que é quem está no workspace.
  */
-export function companyByProject(projects: Project[], config: AppConfig | null): Map<string, string | null> {
-  const map = config?.projectCompanies ?? {};
+export function workspaceByProject(projects: Project[], config: AppConfig | null): Map<string, string | null> {
+  const map = config?.projectWorkspaces ?? {};
   const byPath = new Map(projects.map((p) => [p.path.toLowerCase(), p.id]));
   const out = new Map<string, string | null>();
   for (const p of projects) {
@@ -42,10 +43,10 @@ export function companyByProject(projects: Project[], config: AppConfig | null):
   return out;
 }
 
-/** O projeto aparece na aba? Aba de empresa que não existe mais vale como "Todas". */
-export function inTab(tab: string, company: string | null | undefined, config: AppConfig | null): boolean {
+/** O projeto aparece na aba? Aba de workspace que não existe mais vale como "Todos". */
+export function inTab(tab: string, workspace: string | null | undefined, config: AppConfig | null): boolean {
   if (tab === TAB_ALL) return true;
-  if (tab === TAB_NONE) return !company;
-  if (!config?.companies.some((c) => c.id === tab)) return true;
-  return company === tab;
+  if (tab === TAB_NONE) return !workspace;
+  if (!config?.workspaces.some((w) => w.id === tab)) return true;
+  return workspace === tab;
 }

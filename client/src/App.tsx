@@ -37,7 +37,7 @@ import { t } from './i18n';
 import { useInbox } from './inbox/useInbox';
 import { AgentForm, type AgentFormTarget } from './staff/AgentForm';
 import { NewProjectForm } from './office/NewProjectForm';
-import { readTab, writeTab } from './office/companies';
+import { readTab, writeTab } from './office/workspaces';
 import { ProjectOffice } from './office/ProjectOffice';
 import { StaffForm, type StaffFormMode } from './staff/HireForm';
 import { TasksBoard } from './tasks/TasksBoard';
@@ -79,7 +79,7 @@ export function App() {
   const [form, setForm] = useState<{ projectId: string; mode: StaffFormMode } | null>(null);
   const [agentForm, setAgentForm] = useState<AgentFormTarget | null>(null);
   /** "+ projeto" das abas: a empresa da aba de onde veio. */
-  const [newProject, setNewProject] = useState<{ companyId: string | null } | null>(null);
+  const [newProject, setNewProject] = useState<{ workspaceId: string | null } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   /** Quadro de tarefas aberto (id do projeto). */
   const [tasksFor, setTasksFor] = useState<string | null>(null);
@@ -184,20 +184,20 @@ export function App() {
   const saveBoardBackground = async (boardBackground: Partial<BoardBackground>) => setConfig(await api.saveConfig({ boardBackground }));
   const saveProjectBudget = async (projectId: string, budget: number | null) =>
     setConfig(await api.saveConfig({ projectBudgets: { [projectId]: budget } }));
-  // Aba de empresa (filtra o quadro) e o fundo dela: cada empresa pode ter o seu, para dar para
+  // Aba de workspace (filtra o quadro) e o fundo dela: cada workspace pode ter o seu, para dar para
   // saber de relance em qual se está; sem escolha, vale o fundo geral.
-  const [companyTab, setCompanyTabState] = useState(readTab);
-  const setCompanyTab = (tab: string) => {
-    setCompanyTabState(tab);
+  const [workspaceTab, setWorkspaceTabState] = useState(readTab);
+  const setWorkspaceTab = (tab: string) => {
+    setWorkspaceTabState(tab);
     writeTab(tab);
   };
-  const tabBackground = config?.companies.find((c) => c.id === companyTab)?.background;
+  const tabBackground = config?.workspaces.find((w) => w.id === workspaceTab)?.background;
   useBoardBackground({
     light: tabBackground?.light ?? config?.boardBackground.light ?? null,
     dark: tabBackground?.dark ?? config?.boardBackground.dark ?? null,
   });
 
-  /** Projeto novo (ou o demo): recarrega o quadro e o config (a empresa dele) e abre a sala. */
+  /** Projeto novo (ou o demo): recarrega o quadro e o config (o workspace dele) e abre a sala. */
   const projectCreated = (projectId: string) => {
     load();
     void api.config().then(setConfig, () => {});
@@ -245,9 +245,9 @@ export function App() {
             onBoardBackground={saveBoardBackground}
             onProjectBudget={saveProjectBudget}
             onConfig={setConfig}
-            tab={companyTab}
-            onTab={setCompanyTab}
-            onNewProject={(companyId) => setNewProject({ companyId })}
+            tab={workspaceTab}
+            onTab={setWorkspaceTab}
+            onNewProject={(workspaceId) => setNewProject({ workspaceId })}
             onProjectCreated={projectCreated}
             images={board.images}
             onHireFrom={(projectId, managerId) =>
@@ -393,8 +393,8 @@ export function App() {
       )}
       {newProject && (
         <NewProjectForm
-          companies={config?.companies ?? []}
-          companyId={newProject.companyId}
+          workspaces={config?.workspaces ?? []}
+          workspaceId={newProject.workspaceId}
           onClose={() => setNewProject(null)}
           onCreated={(projectId) => {
             setNewProject(null);

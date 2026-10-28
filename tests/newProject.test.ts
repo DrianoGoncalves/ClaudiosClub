@@ -24,7 +24,7 @@ describe('novo projeto', () => {
       expect(() => parseNewProject({ ...base, name }), name).toThrow();
     }
     expect(() => parseNewProject({ ...base, name: 'loja', parent: 'relativo' })).toThrow('caminho completo');
-    expect(parseNewProject({ ...base, name: 'Loja da Ana' })).toMatchObject({ git: true, companyId: null });
+    expect(parseNewProject({ ...base, name: 'Loja da Ana' })).toMatchObject({ git: true, workspaceId: null });
   });
 
   it('cria a pasta (com git), não sobrescreve, e abre uma que já existe', async () => {

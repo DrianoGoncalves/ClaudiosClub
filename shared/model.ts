@@ -222,18 +222,18 @@ export interface AppConfig {
    * do projeto é estimada pelo custo dele nos últimos 7 dias. Sem entrada = sem orçamento.
    */
   projectBudgets: Record<string, number>;
-  /** Empresas (clientes) que agrupam os projetos em abas no quadro. */
-  companies: Company[];
-  /** Empresa de cada projeto, por id de projeto; sem entrada = sem empresa. */
-  projectCompanies: Record<string, string>;
+  /** Workspaces: abas do quadro que agrupam os projetos como você quiser (cliente, área, tipo…). */
+  workspaces: Workspace[];
+  /** Workspace de cada projeto, por id de projeto; sem entrada = sem workspace. */
+  projectWorkspaces: Record<string, string>;
 }
 
-/** Uma empresa: o nome vai para a ficha de quem trabalha nos projetos dela. */
-export interface Company {
+/** Um workspace: o nome vai para a ficha de quem trabalha nos projetos dele, como contexto. */
+export interface Workspace {
   id: string;
   name: string;
   color: ProjectColor | null;
-  /** Fundo do quadro na aba dela, por tema; null = o fundo geral. */
+  /** Fundo do quadro na aba dele, por tema; null = o fundo geral. */
   background: BoardBackground;
 }
 

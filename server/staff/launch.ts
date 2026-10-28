@@ -13,6 +13,8 @@ import type { Worktree } from './worktree';
 
 export interface LaunchContext {
   company: string;
+  /** Workspace do projeto (aba do quadro), se tiver. */
+  workspace?: string | null;
   projectName: string;
   projectPath: string;
   managerNames: string[];
@@ -155,12 +157,13 @@ export function staffSettings() {
  */
 export async function writeFicha(
   profile: StaffProfile,
-  ctx: Pick<LaunchContext, 'company' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team'>,
+  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team'>,
   absolute = false,
 ): Promise<FichaContext> {
   const rel = (file: string) => (absolute ? file : path.relative(ctx.projectPath, file));
   const fichaCtx: FichaContext = {
     company: ctx.company,
+    workspace: ctx.workspace ?? null,
     projectName: ctx.projectName,
     projectPath: ctx.projectPath,
     managerNames: ctx.managerNames,

@@ -3,33 +3,33 @@ import type { AppConfig, ProjectConnection } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
 
-// No detalhe do projeto: a empresa dele (a aba onde aparece) e as conexões SSH, que os funcionários
-// usam conforme a ficha de cada um. O MyCo só guarda o caminho da chave, nunca o conteúdo.
+// No detalhe do projeto: o workspace dele (a aba onde aparece) e as conexões SSH, que os
+// funcionários usam conforme a ficha de cada um. O MyCo só guarda o caminho da chave, nunca o conteúdo.
 
 export function ProjectOffice({ projectId, config, onConfig }: { projectId: string; config: AppConfig | null; onConfig: (c: AppConfig) => void }) {
-  const companies = config?.companies ?? [];
+  const workspaces = config?.workspaces ?? [];
   const [error, setError] = useState<string | null>(null);
   return (
     <>
-      {companies.length > 0 && (
+      {workspaces.length > 0 && (
         <section className="section">
-          <h3>{t('office.projectCompany')}</h3>
+          <h3>{t('office.projectWorkspace')}</h3>
           <select
-            value={config?.projectCompanies[projectId] ?? ''}
-            aria-label={t('office.projectCompany')}
+            value={config?.projectWorkspaces[projectId] ?? ''}
+            aria-label={t('office.projectWorkspace')}
             onChange={async (e) => {
               setError(null);
               try {
-                onConfig(await api.setProjectCompany(projectId, e.target.value || null));
+                onConfig(await api.setProjectWorkspace(projectId, e.target.value || null));
               } catch (err) {
                 setError((err as Error).message);
               }
             }}
           >
-            <option value="">{t('office.npNoCompany')}</option>
-            {companies.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
+            <option value="">{t('office.noWorkspace')}</option>
+            {workspaces.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
               </option>
             ))}
           </select>

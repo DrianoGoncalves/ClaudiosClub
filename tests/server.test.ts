@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cleanEnv, parseAuthStatus } from '../server/auth';
-import { companyOf, ConfigPatch, readConfig, removeCompany, saveCompany, setArchived, setProjectCompany, updateConfig } from '../server/config';
+import { ConfigPatch, readConfig, removeWorkspace, saveWorkspace, setArchived, setProjectWorkspace, updateConfig, workspaceOf } from '../server/config';
 import { readUsage } from '../server/usage';
 import { projectBudgetHit, UsageStopError } from '../server/usageStop';
 import type { AccountUsage } from '../shared/model';
@@ -62,7 +62,7 @@ describe('config', () => {
   it('usa "MyCo" por padrão e grava o nome preservando outras chaves', async () => {
     const file = path.join(root, 'cfg', 'config.json');
     const usageStop = { fiveHour: 90, sevenDay: 95 };
-    const colors = { projectColors: {}, boardBackground: { light: null, dark: null }, projectBudgets: {}, companies: [], projectCompanies: {} };
+    const colors = { projectColors: {}, boardBackground: { light: null, dark: null }, projectBudgets: {}, workspaces: [], projectWorkspaces: {} };
     // Quem chega (sem config) começa no simples.
     expect(await readConfig(file)).toEqual({
       companyName: 'MyCo',
@@ -88,45 +88,45 @@ describe('config', () => {
     expect((await updateConfig({ uiLevel: 'simple' }, file)).uiLevel).toBe('simple');
   });
 
-  it('empresas: cria com id do nome, renomeia sem trocar o id, recusa nome repetido', async () => {
-    const file = path.join(root, 'cfg-emp', 'config.json');
+  it('workspaces: cria com id do nome, renomeia sem trocar o id, recusa nome repetido', async () => {
+    const file = path.join(root, 'cfg-ws', 'config.json');
     const noBg = { light: null, dark: null };
-    let cfg = await saveCompany({ name: 'Acme Labs', color: 'teal' }, file);
-    expect(cfg.companies).toEqual([{ id: 'acme-labs', name: 'Acme Labs', color: 'teal', background: noBg }]);
-    cfg = await saveCompany({ name: 'Ação Ltda' }, file);
-    expect(cfg.companies[1]).toEqual({ id: 'acao-ltda', name: 'Ação Ltda', color: null, background: noBg });
-    await expect(saveCompany({ name: 'acme labs' }, file)).rejects.toThrow('já existe');
+    let cfg = await saveWorkspace({ name: 'Clientes Ativos', color: 'teal' }, file);
+    expect(cfg.workspaces).toEqual([{ id: 'clientes-ativos', name: 'Clientes Ativos', color: 'teal', background: noBg }]);
+    cfg = await saveWorkspace({ name: 'Estudos & Ação' }, file);
+    expect(cfg.workspaces[1]).toEqual({ id: 'estudos-acao', name: 'Estudos & Ação', color: null, background: noBg });
+    await expect(saveWorkspace({ name: 'clientes ativos' }, file)).rejects.toThrow('já existe');
     // Fundo por tema, um de cada vez; renomear sem mandar cor nem fundo mantém os dois.
-    await saveCompany({ id: 'acme-labs', name: 'Acme Labs', background: { dark: '#1A2B3C' } }, file);
-    cfg = await saveCompany({ id: 'acme-labs', name: 'Acme Labs', background: { light: '#f6f0e1' } }, file);
-    expect(cfg.companies[0]).toMatchObject({ color: 'teal', background: { light: '#f6f0e1', dark: '#1a2b3c' } });
-    await expect(saveCompany({ id: 'acme-labs', name: 'Acme Labs', background: { light: 'azul' } }, file)).rejects.toThrow();
-    cfg = await saveCompany({ id: 'acme-labs', name: 'Acme', color: null, background: { light: null } }, file);
-    expect(cfg.companies[0]).toEqual({ id: 'acme-labs', name: 'Acme', color: null, background: { light: null, dark: '#1a2b3c' } });
-    await expect(saveCompany({ id: 'sumiu', name: 'X' }, file)).rejects.toThrow('não encontrada');
-    await expect(saveCompany({ name: '' }, file)).rejects.toThrow('nome');
+    await saveWorkspace({ id: 'clientes-ativos', name: 'Clientes Ativos', background: { dark: '#1A2B3C' } }, file);
+    cfg = await saveWorkspace({ id: 'clientes-ativos', name: 'Clientes Ativos', background: { light: '#f6f0e1' } }, file);
+    expect(cfg.workspaces[0]).toMatchObject({ color: 'teal', background: { light: '#f6f0e1', dark: '#1a2b3c' } });
+    await expect(saveWorkspace({ id: 'clientes-ativos', name: 'Clientes Ativos', background: { light: 'azul' } }, file)).rejects.toThrow();
+    cfg = await saveWorkspace({ id: 'clientes-ativos', name: 'Clientes', color: null, background: { light: null } }, file);
+    expect(cfg.workspaces[0]).toEqual({ id: 'clientes-ativos', name: 'Clientes', color: null, background: { light: null, dark: '#1a2b3c' } });
+    await expect(saveWorkspace({ id: 'sumiu', name: 'X' }, file)).rejects.toThrow('não encontrado');
+    await expect(saveWorkspace({ name: '' }, file)).rejects.toThrow('nome');
     // Mesmo nome-base depois de renomear: o id ganha um número.
-    expect((await saveCompany({ name: 'Acme Labs' }, file)).companies.map((c) => c.id)).toEqual(['acme-labs', 'acao-ltda', 'acme-labs-2']);
+    expect((await saveWorkspace({ name: 'Clientes Ativos' }, file)).workspaces.map((w) => w.id)).toEqual(['clientes-ativos', 'estudos-acao', 'clientes-ativos-2']);
   });
 
-  it('empresa do projeto: atribui, tira, e remover a empresa deixa os projetos sem empresa', async () => {
-    const file = path.join(root, 'cfg-emp2', 'config.json');
-    await saveCompany({ name: 'Acme' }, file);
-    await saveCompany({ name: 'Beta' }, file);
-    await setProjectCompany('p1', 'acme', file);
-    await setProjectCompany('p2', 'beta', file);
-    let cfg = await setProjectCompany('p3', 'acme', file);
-    expect(cfg.projectCompanies).toEqual({ p1: 'acme', p2: 'beta', p3: 'acme' });
-    expect(companyOf(cfg, 'p2')?.name).toBe('Beta');
-    expect(companyOf(cfg, 'p9')).toBeNull();
-    await expect(setProjectCompany('p1', 'sumiu', file)).rejects.toThrow('não encontrada');
-    cfg = await setProjectCompany('p3', null, file);
-    expect(cfg.projectCompanies).toEqual({ p1: 'acme', p2: 'beta' });
-    cfg = await removeCompany('acme', file);
-    expect(cfg).toMatchObject({ companies: [{ id: 'beta' }], projectCompanies: { p2: 'beta' } });
-    // Editado à mão: empresa inválida some, e projeto de empresa que não existe fica sem empresa.
-    await fs.writeFile(file, JSON.stringify({ companies: [{ id: 'ok', name: 'Ok' }, { id: 'Ruim!', name: 'x' }, 3], projectCompanies: { a: 'ok', b: 'fantasma', c: 1 } }));
-    expect(await readConfig(file)).toMatchObject({ companies: [{ id: 'ok', name: 'Ok', color: null, background: { light: null, dark: null } }], projectCompanies: { a: 'ok' } });
+  it('workspace do projeto: atribui, tira, e remover o workspace deixa os projetos sem workspace', async () => {
+    const file = path.join(root, 'cfg-ws2', 'config.json');
+    await saveWorkspace({ name: 'Pessoal' }, file);
+    await saveWorkspace({ name: 'Trabalho' }, file);
+    await setProjectWorkspace('p1', 'pessoal', file);
+    await setProjectWorkspace('p2', 'trabalho', file);
+    let cfg = await setProjectWorkspace('p3', 'pessoal', file);
+    expect(cfg.projectWorkspaces).toEqual({ p1: 'pessoal', p2: 'trabalho', p3: 'pessoal' });
+    expect(workspaceOf(cfg, 'p2')?.name).toBe('Trabalho');
+    expect(workspaceOf(cfg, 'p9')).toBeNull();
+    await expect(setProjectWorkspace('p1', 'sumiu', file)).rejects.toThrow('não encontrado');
+    cfg = await setProjectWorkspace('p3', null, file);
+    expect(cfg.projectWorkspaces).toEqual({ p1: 'pessoal', p2: 'trabalho' });
+    cfg = await removeWorkspace('pessoal', file);
+    expect(cfg).toMatchObject({ workspaces: [{ id: 'trabalho' }], projectWorkspaces: { p2: 'trabalho' } });
+    // Editado à mão: workspace inválido some, e projeto de workspace que não existe fica sem workspace.
+    await fs.writeFile(file, JSON.stringify({ workspaces: [{ id: 'ok', name: 'Ok' }, { id: 'Ruim!', name: 'x' }, 3], projectWorkspaces: { a: 'ok', b: 'fantasma', c: 1 } }));
+    expect(await readConfig(file)).toMatchObject({ workspaces: [{ id: 'ok', name: 'Ok', color: null, background: { light: null, dark: null } }], projectWorkspaces: { a: 'ok' } });
   });
 
   it('linha de parada: null desliga um limite; valores fora de 1–100 são recusados', async () => {

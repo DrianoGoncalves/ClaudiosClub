@@ -10,16 +10,16 @@ import { getAuthStatus, openLoginTerminal } from './auth';
 import {
   addExtraProject,
   ArchiveRequest,
-  CompanyError,
   ConfigPatch,
   MYCO_HOME,
   readConfig,
   readExtraProjects,
-  removeCompany,
-  saveCompany,
+  removeWorkspace,
+  saveWorkspace,
   setArchived,
-  setProjectCompany,
+  setProjectWorkspace,
   updateConfig,
+  WorkspaceError,
 } from './config';
 import { openProject, parseNewProject, ProjectError, usualParent } from './newProject';
 import { createDemo, DEMO_DIR } from './demo';
@@ -288,14 +288,14 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     async ({ body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('só pelo MyCo');
       const input = parseNewProject(body);
-      // A empresa antes da pasta: um id errado não deixa pasta criada para trás.
-      if (input.companyId && !(await readConfig()).companies.some((c) => c.id === input.companyId)) throw new BadRequest('empresa não encontrada');
+      // O workspace antes da pasta: um id errado não deixa pasta criada para trás.
+      if (input.workspaceId && !(await readConfig()).workspaces.some((w) => w.id === input.workspaceId)) throw new BadRequest('workspace não encontrado');
       const opened = await openProject(input);
       await addExtraProject(opened.path);
       adapter.forgetProjects();
       const project = (await adapter.listProjects()).find((p) => pathKey(p.path) === pathKey(opened.path));
       if (!project) throw new BadRequest('a pasta não entrou na lista de projetos');
-      if (input.companyId) await setProjectCompany(project.id, input.companyId);
+      if (input.workspaceId) await setProjectWorkspace(project.id, input.workspaceId);
       // Estava arquivado: abrir de novo traz de volta ao quadro.
       if ((await readConfig()).archived.projects.includes(project.id)) await setArchived({ kind: 'project', id: project.id, archived: false });
       return { created: opened.created, projectId: project.id };
@@ -814,31 +814,31 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     },
   ],
   ['GET', /^\/api\/config$/, () => readConfig()],
-  // Empresas (abas do quadro): criar ou editar, remover, e a empresa de cada projeto.
+  // Workspaces (abas do quadro): criar ou editar, remover, e o workspace de cada projeto.
   [
     'POST',
-    /^\/api\/companies$/,
+    /^\/api\/workspaces$/,
     ({ body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('só pelo MyCo');
-      return saveCompany(body);
+      return saveWorkspace(body);
     },
   ],
   [
     'POST',
-    new RegExp(`^/api/companies/${ID}/delete$`),
+    new RegExp(`^/api/workspaces/${ID}/delete$`),
     ({ params: [id], fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('só pelo MyCo');
-      return removeCompany(id!);
+      return removeWorkspace(id!);
     },
   ],
   [
     'POST',
-    new RegExp(`^/api/projects/${ID}/company$`),
+    new RegExp(`^/api/projects/${ID}/workspace$`),
     async ({ params: [id], body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('só pelo MyCo');
       if (!(await adapter.listProjects()).some((p) => p.id === id)) return null;
-      const b = parse(z.object({ companyId: z.string().max(40).nullable() }), body);
-      return setProjectCompany(id!, b.companyId);
+      const b = parse(z.object({ workspaceId: z.string().max(40).nullable() }), body);
+      return setProjectWorkspace(id!, b.workspaceId);
     },
   ],
   [
@@ -908,7 +908,7 @@ const server = http.createServer(async (req, res) => {
           err instanceof RoleError ||
           err instanceof FileError ||
           err instanceof AgentError ||
-          err instanceof CompanyError ||
+          err instanceof WorkspaceError ||
           err instanceof ProjectError ||
           (err as NodeJS.ErrnoException | null)?.code === 'EEXIST'
         ) {

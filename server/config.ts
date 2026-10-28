@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { PROJECT_COLORS, type AppConfig, type Company, type ProjectColor } from '../shared/model';
+import { PROJECT_COLORS, type AppConfig, type ProjectColor, type Workspace } from '../shared/model';
 import { pathKey } from './adapters/claude/paths';
 
 // Configuração do próprio MyCo, fora do ~/.claude: ~/.myco/config.json.
@@ -22,8 +22,8 @@ const DEFAULTS: AppConfig = {
   projectColors: {},
   boardBackground: { light: null, dark: null },
   projectBudgets: {},
-  companies: [],
-  projectCompanies: {},
+  workspaces: [],
+  projectWorkspaces: {},
 };
 
 const PRIORITY = z.enum(['now', 'next', 'later']);
@@ -50,14 +50,14 @@ const ConfigFile = z
       .optional()
       .catch(undefined),
     projectBudgets: z.record(z.string(), z.unknown()).optional().catch(undefined),
-    companies: z.array(z.unknown()).optional().catch(undefined),
-    projectCompanies: z.record(z.string(), z.unknown()).optional().catch(undefined),
+    workspaces: z.array(z.unknown()).optional().catch(undefined),
+    projectWorkspaces: z.record(z.string(), z.unknown()).optional().catch(undefined),
   })
   .passthrough();
 
-const COMPANY_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
-const CompanyFile = z.object({
-  id: z.string().regex(COMPANY_ID),
+const WORKSPACE_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const WorkspaceFile = z.object({
+  id: z.string().regex(WORKSPACE_ID),
   name: z.string().trim().min(1).max(40),
   color: COLOR.nullable().catch(null).default(null),
   background: z
@@ -66,17 +66,17 @@ const CompanyFile = z.object({
     .default({ light: null, dark: null }),
 });
 
-export const CompanyInput = z.object({
-  /** Ausente = empresa nova. */
-  id: z.string().regex(COMPANY_ID).optional(),
-  name: z.string().trim().min(1, 'dê um nome à empresa').max(40, 'máximo de 40 caracteres'),
-  /** Ausente = fica como está (sem cor, numa empresa nova). */
+export const WorkspaceInput = z.object({
+  /** Ausente = workspace novo. */
+  id: z.string().regex(WORKSPACE_ID).optional(),
+  name: z.string().trim().min(1, 'dê um nome ao workspace').max(40, 'máximo de 40 caracteres'),
+  /** Ausente = fica como está (sem cor, num workspace novo). */
   color: COLOR.nullable().optional(),
   /** Só o tema enviado muda; null volta ao fundo geral. */
   background: z.object({ light: HEX.toLowerCase().nullable().optional(), dark: HEX.toLowerCase().nullable().optional() }).optional(),
 });
 
-export class CompanyError extends Error {}
+export class WorkspaceError extends Error {}
 
 const BUDGET = z.number().int().min(1).max(100);
 
@@ -121,28 +121,28 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     projectBudgets: Object.fromEntries(
       Object.entries(d.projectBudgets ?? {}).filter((e): e is [string, number] => BUDGET.safeParse(e[1]).success),
     ),
-    ...readCompanies(d.companies, d.projectCompanies),
+    ...readWorkspaces(d.workspaces, d.projectWorkspaces),
   };
 }
 
-/** Editadas à mão, entradas estranhas somem; projeto de uma empresa que não existe fica sem empresa. */
-function readCompanies(rawCompanies: unknown[] | undefined, rawMap: Record<string, unknown> | undefined) {
-  const companies: Company[] = [];
-  for (const c of rawCompanies ?? []) {
-    const parsed = CompanyFile.safeParse(c);
-    if (parsed.success && !companies.some((x) => x.id === parsed.data.id)) companies.push(parsed.data);
+/** Editado à mão, entrada estranha some; projeto de um workspace que não existe fica sem workspace. */
+function readWorkspaces(rawList: unknown[] | undefined, rawMap: Record<string, unknown> | undefined) {
+  const workspaces: Workspace[] = [];
+  for (const w of rawList ?? []) {
+    const parsed = WorkspaceFile.safeParse(w);
+    if (parsed.success && !workspaces.some((x) => x.id === parsed.data.id)) workspaces.push(parsed.data);
   }
-  const ids = new Set(companies.map((c) => c.id));
-  const projectCompanies = Object.fromEntries(
+  const ids = new Set(workspaces.map((w) => w.id));
+  const projectWorkspaces = Object.fromEntries(
     Object.entries(rawMap ?? {}).filter((e): e is [string, string] => typeof e[1] === 'string' && ids.has(e[1])),
   );
-  return { companies, projectCompanies };
+  return { workspaces, projectWorkspaces };
 }
 
-/** A empresa de um projeto, ou null (sem empresa). */
-export function companyOf(config: AppConfig, projectId: string): Company | null {
-  const id = config.projectCompanies[projectId];
-  return (id && config.companies.find((c) => c.id === id)) || null;
+/** O workspace de um projeto, ou null (sem workspace). */
+export function workspaceOf(config: AppConfig, projectId: string): Workspace | null {
+  const id = config.projectWorkspaces[projectId];
+  return (id && config.workspaces.find((w) => w.id === id)) || null;
 }
 
 /** Pastas abertas pelo "Novo projeto": o Claude Code ainda não as conhece, então o MyCo lembra. */
@@ -159,25 +159,25 @@ export async function addExtraProject(dir: string, file = CONFIG_FILE): Promise<
   });
 }
 
-/** As empresas do arquivo já lido (dentro do `mutate`: duas mudanças juntas não se perdem). */
-const companiesIn = (raw: Record<string, unknown>) =>
-  readCompanies(Array.isArray(raw.companies) ? raw.companies : undefined, raw.projectCompanies as Record<string, unknown> | undefined);
+/** Os workspaces do arquivo já lido (dentro do `mutate`: duas mudanças juntas não se perdem). */
+const workspacesIn = (raw: Record<string, unknown>) =>
+  readWorkspaces(Array.isArray(raw.workspaces) ? raw.workspaces : undefined, raw.projectWorkspaces as Record<string, unknown> | undefined);
 
-/** Cria (sem `id`) ou edita uma empresa. O id sai do nome e não muda ao renomear. */
-export async function saveCompany(body: unknown, file = CONFIG_FILE): Promise<AppConfig> {
-  const parsed = CompanyInput.safeParse(body);
-  if (!parsed.success) throw new CompanyError(parsed.error.issues[0]?.message ?? 'empresa inválida');
+/** Cria (sem `id`) ou edita um workspace. O id sai do nome e não muda ao renomear. */
+export async function saveWorkspace(body: unknown, file = CONFIG_FILE): Promise<AppConfig> {
+  const parsed = WorkspaceInput.safeParse(body);
+  if (!parsed.success) throw new WorkspaceError(parsed.error.issues[0]?.message ?? 'workspace inválido');
   const input = parsed.data;
   return mutate(file, (raw) => {
-    const { companies } = companiesIn(raw);
-    if (input.id && !companies.some((c) => c.id === input.id)) throw new CompanyError('empresa não encontrada');
-    if (companies.some((c) => c.id !== input.id && c.name.toLowerCase() === input.name.toLowerCase())) {
-      throw new CompanyError(`já existe a empresa ${input.name}`);
+    const { workspaces } = workspacesIn(raw);
+    if (input.id && !workspaces.some((w) => w.id === input.id)) throw new WorkspaceError('workspace não encontrado');
+    if (workspaces.some((w) => w.id !== input.id && w.name.toLowerCase() === input.name.toLowerCase())) {
+      throw new WorkspaceError(`já existe o workspace ${input.name}`);
     }
-    const id = input.id ?? uniqueId(slug(input.name), new Set(companies.map((c) => c.id)));
-    const prev = companies.find((c) => c.id === id);
+    const id = input.id ?? uniqueId(slug(input.name), new Set(workspaces.map((w) => w.id)));
+    const prev = workspaces.find((w) => w.id === id);
     const bg = prev?.background ?? { light: null, dark: null };
-    const company: Company = {
+    const workspace: Workspace = {
       id,
       name: input.name,
       color: input.color !== undefined ? input.color : (prev?.color ?? null),
@@ -186,32 +186,32 @@ export async function saveCompany(body: unknown, file = CONFIG_FILE): Promise<Ap
         dark: input.background?.dark !== undefined ? input.background.dark : bg.dark,
       },
     };
-    return { ...raw, companies: input.id ? companies.map((c) => (c.id === id ? company : c)) : [...companies, company] };
+    return { ...raw, workspaces: input.id ? workspaces.map((w) => (w.id === id ? workspace : w)) : [...workspaces, workspace] };
   });
 }
 
-/** Remove a empresa; os projetos dela ficam sem empresa (nada mais muda). */
-export async function removeCompany(id: string, file = CONFIG_FILE): Promise<AppConfig> {
+/** Remove o workspace; os projetos dele ficam sem workspace (nada mais muda). */
+export async function removeWorkspace(id: string, file = CONFIG_FILE): Promise<AppConfig> {
   return mutate(file, (raw) => {
-    const { companies, projectCompanies } = companiesIn(raw);
-    if (!companies.some((c) => c.id === id)) throw new CompanyError('empresa não encontrada');
+    const { workspaces, projectWorkspaces } = workspacesIn(raw);
+    if (!workspaces.some((w) => w.id === id)) throw new WorkspaceError('workspace não encontrado');
     return {
       ...raw,
-      companies: companies.filter((c) => c.id !== id),
-      projectCompanies: Object.fromEntries(Object.entries(projectCompanies).filter(([, c]) => c !== id)),
+      workspaces: workspaces.filter((w) => w.id !== id),
+      projectWorkspaces: Object.fromEntries(Object.entries(projectWorkspaces).filter(([, w]) => w !== id)),
     };
   });
 }
 
-/** Põe o projeto numa empresa; null tira (sem empresa). */
-export async function setProjectCompany(projectId: string, companyId: string | null, file = CONFIG_FILE): Promise<AppConfig> {
+/** Põe o projeto num workspace; null tira (sem workspace). */
+export async function setProjectWorkspace(projectId: string, workspaceId: string | null, file = CONFIG_FILE): Promise<AppConfig> {
   return mutate(file, (raw) => {
-    const { companies, projectCompanies } = companiesIn(raw);
-    if (companyId !== null && !companies.some((c) => c.id === companyId)) throw new CompanyError('empresa não encontrada');
-    const next = { ...projectCompanies };
-    if (companyId === null) delete next[projectId];
-    else next[projectId] = companyId;
-    return { ...raw, projectCompanies: next };
+    const { workspaces, projectWorkspaces } = workspacesIn(raw);
+    if (workspaceId !== null && !workspaces.some((w) => w.id === workspaceId)) throw new WorkspaceError('workspace não encontrado');
+    const next = { ...projectWorkspaces };
+    if (workspaceId === null) delete next[projectId];
+    else next[projectId] = workspaceId;
+    return { ...raw, projectWorkspaces: next };
   });
 }
 
@@ -224,7 +224,7 @@ function slug(name: string): string {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '')
-      .slice(0, 30) || 'empresa'
+      .slice(0, 30) || 'workspace'
   );
 }
 

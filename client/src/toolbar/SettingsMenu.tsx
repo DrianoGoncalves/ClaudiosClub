@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import type { AppConfig, BoardBackground, Company, Project, ProjectColor, SendPriority, UiLevel, UsageStop } from '../../../shared/model';
-import { CompaniesEditor, DemoButton } from '../office/CompaniesSettings';
+import type { AppConfig, BoardBackground, Project, ProjectColor, SendPriority, UiLevel, UsageStop, Workspace } from '../../../shared/model';
+import { DemoButton, WorkspacesEditor } from '../office/WorkspacesSettings';
 import { api } from '../api';
 import { BackgroundPicker, RoomColorPicker, useSystemTheme } from '../board/colors';
 import { useChatDetail } from '../chat/chatDetail';
@@ -38,9 +38,9 @@ interface Props {
   onProjectBudget: (projectId: string, budget: number | null) => Promise<void>;
   /** Todos os projetos (o demo já existe?). */
   projects: Project[];
-  /** Empresas (abas do quadro) e a de cada projeto. */
-  companies: Company[] | null;
-  projectCompanies: Record<string, string> | null;
+  /** Workspaces (abas do quadro) e o de cada projeto. */
+  workspaces: Workspace[] | null;
+  projectWorkspaces: Record<string, string> | null;
   onConfig: (config: AppConfig) => void;
   /** Abre a sala de um projeto (o demo, depois de criado). */
   onOpenProject: (projectId: string) => void;
@@ -305,15 +305,15 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       toggle: { checked: p.showWorktrees, onChange: p.onToggleWorktrees },
       advanced: true,
     },
-    ...(p.companies && p.projectCompanies
+    ...(p.workspaces && p.projectWorkspaces
       ? [
           {
-            id: 'companies',
+            id: 'workspaces',
             group: 'board' as const,
-            title: t('office.companiesTitle'),
-            description: t('office.companiesDesc'),
-            keywords: t('office.companiesKeywords'),
-            control: <CompaniesEditor companies={p.companies} projectCompanies={p.projectCompanies} onConfig={p.onConfig} />,
+            title: t('office.workspacesTitle'),
+            description: t('office.workspacesDesc'),
+            keywords: t('office.workspacesKeywords'),
+            control: <WorkspacesEditor workspaces={p.workspaces} projectWorkspaces={p.projectWorkspaces} onConfig={p.onConfig} />,
           },
         ]
       : []),

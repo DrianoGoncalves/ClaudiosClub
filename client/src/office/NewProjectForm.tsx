@@ -1,25 +1,25 @@
 import { useEffect, useState } from 'react';
-import type { Company } from '../../../shared/model';
+import type { Workspace } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
 
-// Novo projeto: cria uma pasta (com git, se quiser) ou abre uma que já existe, já na empresa da aba.
+// Novo projeto: cria uma pasta (com git, se quiser) ou abre uma que já existe, já no workspace da aba.
 
 interface Props {
-  companies: Company[];
-  /** A empresa da aba de onde veio (null = sem empresa). */
-  companyId: string | null;
+  workspaces: Workspace[];
+  /** O workspace da aba de onde veio (null = sem workspace). */
+  workspaceId: string | null;
   onClose: () => void;
   onCreated: (projectId: string) => void;
 }
 
-export function NewProjectForm({ companies, companyId, onClose, onCreated }: Props) {
+export function NewProjectForm({ workspaces, workspaceId, onClose, onCreated }: Props) {
   const [mode, setMode] = useState<'create' | 'existing'>('create');
   const [parent, setParent] = useState('');
   const [name, setName] = useState('');
   const [folder, setFolder] = useState('');
   const [git, setGit] = useState(true);
-  const [company, setCompany] = useState(companyId ?? '');
+  const [workspace, setWorkspace] = useState(workspaceId ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,12 +35,12 @@ export function NewProjectForm({ companies, companyId, onClose, onCreated }: Pro
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const companyIdOrNull = company || null;
+    const workspaceIdOrNull = workspace || null;
     try {
       const r = await api.newProject(
         mode === 'create'
-          ? { mode, parent: parent.trim(), name: name.trim(), git, companyId: companyIdOrNull }
-          : { mode, path: folder.trim(), companyId: companyIdOrNull },
+          ? { mode, parent: parent.trim(), name: name.trim(), git, workspaceId: workspaceIdOrNull }
+          : { mode, path: folder.trim(), workspaceId: workspaceIdOrNull },
       );
       onCreated(r.projectId);
     } catch (err) {
@@ -89,14 +89,14 @@ export function NewProjectForm({ companies, companyId, onClose, onCreated }: Pro
           </label>
         )}
 
-        {companies.length > 0 && (
+        {workspaces.length > 0 && (
           <label>
-            {t('office.npCompany')}
-            <select value={company} onChange={(e) => setCompany(e.target.value)}>
-              <option value="">{t('office.npNoCompany')}</option>
-              {companies.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
+            {t('office.npWorkspace')}
+            <select value={workspace} onChange={(e) => setWorkspace(e.target.value)}>
+              <option value="">{t('office.noWorkspace')}</option>
+              {workspaces.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name}
                 </option>
               ))}
             </select>

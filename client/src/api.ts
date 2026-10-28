@@ -183,15 +183,15 @@ export const api = {
   removeConnection: (projectId: string, name: string) => post<{ ok: boolean }>(`/api/projects/${projectId}/connections/${encodeURIComponent(name)}/delete`),
   testConnection: (projectId: string, name: string) =>
     post<{ ok: boolean; message: string }>(`/api/projects/${projectId}/connections/${encodeURIComponent(name)}/test`),
-  // Empresas (abas do quadro) e novo projeto.
-  saveCompany: (c: { id?: string; name: string; color?: ProjectColor | null; background?: Partial<BoardBackground> }) => post<AppConfig>('/api/companies', c),
-  removeCompany: (id: string) => post<AppConfig>(`/api/companies/${id}/delete`),
-  setProjectCompany: (projectId: string, companyId: string | null) => post<AppConfig>(`/api/projects/${projectId}/company`, { companyId }),
+  // Workspaces (abas do quadro) e novo projeto.
+  saveWorkspace: (w: { id?: string; name: string; color?: ProjectColor | null; background?: Partial<BoardBackground> }) => post<AppConfig>('/api/workspaces', w),
+  removeWorkspace: (id: string) => post<AppConfig>(`/api/workspaces/${id}/delete`),
+  setProjectWorkspace: (projectId: string, workspaceId: string | null) => post<AppConfig>(`/api/projects/${projectId}/workspace`, { workspaceId }),
   newProjectDefaults: () => get<{ parent: string }>('/api/new-project'),
   newProject: (
     body:
-      | { mode: 'create'; parent: string; name: string; git: boolean; companyId: string | null }
-      | { mode: 'existing'; path: string; companyId: string | null },
+      | { mode: 'create'; parent: string; name: string; git: boolean; workspaceId: string | null }
+      | { mode: 'existing'; path: string; workspaceId: string | null },
   ) => post<{ created: boolean; projectId: string }>('/api/new-project', body),
   createDemo: () => post<{ created: boolean; projectId: string }>('/api/demo'),
   hire: (projectId: string, input: StaffInput) =>

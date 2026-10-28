@@ -15,7 +15,7 @@ export class ProjectError extends Error {}
 // Nome de pasta que funciona no Windows, no macOS e no Linux: sem barras, `..`, `:`, `*`, aspas…
 const FOLDER = /^[A-Za-z0-9][\w .-]{0,79}$/;
 const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
-const company = z.string().max(40).nullable().default(null);
+const workspace = z.string().max(40).nullable().default(null);
 const absolute = (what: string) => z.string().trim().min(1, `informe ${what}`).max(400).refine((p) => path.isAbsolute(p), `${what}: use o caminho completo`);
 
 export const NewProjectInput = z.discriminatedUnion('mode', [
@@ -28,9 +28,9 @@ export const NewProjectInput = z.discriminatedUnion('mode', [
       .regex(FOLDER, 'nome da pasta: letras, números, espaço, ponto, hífen ou _ (até 80)')
       .refine((n) => !RESERVED.test(n) && !/[. ]$/.test(n), 'esse nome de pasta não funciona no Windows'),
     git: z.boolean().default(true),
-    companyId: company,
+    workspaceId: workspace,
   }),
-  z.object({ mode: z.literal('existing'), path: absolute('a pasta do projeto'), companyId: company }),
+  z.object({ mode: z.literal('existing'), path: absolute('a pasta do projeto'), workspaceId: workspace }),
 ]);
 export type NewProject = z.infer<typeof NewProjectInput>;
 

@@ -2,12 +2,12 @@ import { useRef, useState, type CSSProperties } from 'react';
 import type { AppConfig, InboxItem } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
-import { inTab, TAB_ALL, TAB_NONE } from './companies';
+import { inTab, TAB_ALL, TAB_NONE } from './workspaces';
 
 interface Props {
   config: AppConfig | null;
-  /** Empresa de cada projeto (ver companyByProject). */
-  companyOf: Map<string, string | null>;
+  /** Workspace de cada projeto (ver workspaceByProject). */
+  workspaceOf: Map<string, string | null>;
   inbox: InboxItem[];
   value: string;
   onChange: (tab: string) => void;
@@ -16,18 +16,18 @@ interface Props {
 }
 
 /** Abas logo abaixo do topo: filtram as salas do quadro, sem sair da página. */
-export function CompanyTabs({ config, companyOf, inbox, value, onChange, onConfig, onNewProject }: Props) {
+export function WorkspaceTabs({ config, workspaceOf, inbox, value, onChange, onConfig, onNewProject }: Props) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const companies = config?.companies ?? [];
-  const hasLoose = [...companyOf.values()].some((c) => !c);
+  const workspaces = config?.workspaces ?? [];
+  const hasLoose = [...workspaceOf.values()].some((w) => !w);
   const tabs = [
     { id: TAB_ALL, label: t('office.tabAll'), color: null },
-    ...companies.map((c) => ({ id: c.id, label: c.name, color: c.color })),
-    ...(companies.length && hasLoose ? [{ id: TAB_NONE, label: t('office.tabNone'), color: null }] : []),
+    ...workspaces.map((w) => ({ id: w.id, label: w.name, color: w.color })),
+    ...(workspaces.length && hasLoose ? [{ id: TAB_NONE, label: t('office.tabNone'), color: null }] : []),
   ];
-  const pending = (tab: string) => inbox.filter((i) => inTab(tab, companyOf.get(i.projectId), config)).length;
+  const pending = (tab: string) => inbox.filter((i) => inTab(tab, workspaceOf.get(i.projectId), config)).length;
 
   // Enter e o blur que vem depois chamariam duas vezes.
   const busy = useRef(false);
@@ -37,9 +37,9 @@ export function CompanyTabs({ config, companyOf, inbox, value, onChange, onConfi
     busy.current = true;
     setError(null);
     try {
-      const next = await api.saveCompany({ name: name.trim(), color: null });
+      const next = await api.saveWorkspace({ name: name.trim(), color: null });
       onConfig(next);
-      const created = next.companies.find((c) => c.name.toLowerCase() === name.trim().toLowerCase());
+      const created = next.workspaces.find((w) => w.name.toLowerCase() === name.trim().toLowerCase());
       if (created) onChange(created.id);
       setName('');
       setAdding(false);
@@ -51,7 +51,7 @@ export function CompanyTabs({ config, companyOf, inbox, value, onChange, onConfi
   };
 
   return (
-    <div className="company-tabs" role="tablist" aria-label={t('office.tabsLabel')}>
+    <div className="workspace-tabs" role="tablist" aria-label={t('office.tabsLabel')}>
       {tabs.map((tab) => {
         const n = tab.id === TAB_ALL ? 0 : pending(tab.id);
         return (
@@ -60,14 +60,14 @@ export function CompanyTabs({ config, companyOf, inbox, value, onChange, onConfi
             type="button"
             role="tab"
             aria-selected={value === tab.id}
-            className={`company-tab ${value === tab.id ? 'is-active' : ''}`}
+            className={`workspace-tab ${value === tab.id ? 'is-active' : ''}`}
             style={tab.color ? ({ '--tab-color': `var(--pen-${tab.color})` } as CSSProperties) : undefined}
             onClick={() => onChange(tab.id)}
           >
-            {tab.color && <span className="company-dot" aria-hidden="true" />}
+            {tab.color && <span className="workspace-dot" aria-hidden="true" />}
             {tab.label}
             {n > 0 && (
-              <span className="company-pending" title={t('office.tabPending', { n })}>
+              <span className="workspace-pending" title={t('office.tabPending', { n })}>
                 {n}
               </span>
             )}
@@ -75,13 +75,13 @@ export function CompanyTabs({ config, companyOf, inbox, value, onChange, onConfi
         );
       })}
       {adding ? (
-        <span className="company-add">
+        <span className="workspace-add">
           <input
             autoFocus
             value={name}
             maxLength={40}
-            placeholder={t('office.companyNamePlaceholder')}
-            aria-label={t('office.companyNamePlaceholder')}
+            placeholder={t('office.workspaceNamePlaceholder')}
+            aria-label={t('office.workspaceNamePlaceholder')}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') void create();
@@ -92,11 +92,11 @@ export function CompanyTabs({ config, companyOf, inbox, value, onChange, onConfi
           {error && <span className="error small">{error}</span>}
         </span>
       ) : (
-        <button type="button" className="company-tab company-tab-add" title={t('office.addCompanyTitle')} onClick={() => setAdding(true)}>
-          {t('office.addCompany')}
+        <button type="button" className="workspace-tab workspace-tab-add" title={t('office.addWorkspaceTitle')} onClick={() => setAdding(true)}>
+          {t('office.addWorkspace')}
         </button>
       )}
-      <button type="button" className="company-tab company-tab-add" title={t('office.newProjectTitle')} onClick={onNewProject}>
+      <button type="button" className="workspace-tab workspace-tab-add" title={t('office.newProjectTitle')} onClick={onNewProject}>
         {t('office.newProject')}
       </button>
     </div>
