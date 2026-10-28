@@ -56,13 +56,24 @@ const ConfigFile = z
   .passthrough();
 
 const COMPANY_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
-const CompanyFile = z.object({ id: z.string().regex(COMPANY_ID), name: z.string().trim().min(1).max(40), color: COLOR.nullable().catch(null).default(null) });
+const CompanyFile = z.object({
+  id: z.string().regex(COMPANY_ID),
+  name: z.string().trim().min(1).max(40),
+  color: COLOR.nullable().catch(null).default(null),
+  background: z
+    .object({ light: HEX.toLowerCase().nullable().catch(null).default(null), dark: HEX.toLowerCase().nullable().catch(null).default(null) })
+    .catch({ light: null, dark: null })
+    .default({ light: null, dark: null }),
+});
 
 export const CompanyInput = z.object({
   /** Ausente = empresa nova. */
   id: z.string().regex(COMPANY_ID).optional(),
   name: z.string().trim().min(1, 'dê um nome à empresa').max(40, 'máximo de 40 caracteres'),
-  color: COLOR.nullable().default(null),
+  /** Ausente = fica como está (sem cor, numa empresa nova). */
+  color: COLOR.nullable().optional(),
+  /** Só o tema enviado muda; null volta ao fundo geral. */
+  background: z.object({ light: HEX.toLowerCase().nullable().optional(), dark: HEX.toLowerCase().nullable().optional() }).optional(),
 });
 
 export class CompanyError extends Error {}
@@ -164,7 +175,17 @@ export async function saveCompany(body: unknown, file = CONFIG_FILE): Promise<Ap
       throw new CompanyError(`já existe a empresa ${input.name}`);
     }
     const id = input.id ?? uniqueId(slug(input.name), new Set(companies.map((c) => c.id)));
-    const company: Company = { id, name: input.name, color: input.color };
+    const prev = companies.find((c) => c.id === id);
+    const bg = prev?.background ?? { light: null, dark: null };
+    const company: Company = {
+      id,
+      name: input.name,
+      color: input.color !== undefined ? input.color : (prev?.color ?? null),
+      background: {
+        light: input.background?.light !== undefined ? input.background.light : bg.light,
+        dark: input.background?.dark !== undefined ? input.background.dark : bg.dark,
+      },
+    };
     return { ...raw, companies: input.id ? companies.map((c) => (c.id === id ? company : c)) : [...companies, company] };
   });
 }

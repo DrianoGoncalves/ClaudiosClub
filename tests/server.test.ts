@@ -90,13 +90,19 @@ describe('config', () => {
 
   it('empresas: cria com id do nome, renomeia sem trocar o id, recusa nome repetido', async () => {
     const file = path.join(root, 'cfg-emp', 'config.json');
+    const noBg = { light: null, dark: null };
     let cfg = await saveCompany({ name: 'Acme Labs', color: 'teal' }, file);
-    expect(cfg.companies).toEqual([{ id: 'acme-labs', name: 'Acme Labs', color: 'teal' }]);
+    expect(cfg.companies).toEqual([{ id: 'acme-labs', name: 'Acme Labs', color: 'teal', background: noBg }]);
     cfg = await saveCompany({ name: 'Ação Ltda' }, file);
-    expect(cfg.companies[1]).toEqual({ id: 'acao-ltda', name: 'Ação Ltda', color: null });
+    expect(cfg.companies[1]).toEqual({ id: 'acao-ltda', name: 'Ação Ltda', color: null, background: noBg });
     await expect(saveCompany({ name: 'acme labs' }, file)).rejects.toThrow('já existe');
-    cfg = await saveCompany({ id: 'acme-labs', name: 'Acme', color: null }, file);
-    expect(cfg.companies[0]).toEqual({ id: 'acme-labs', name: 'Acme', color: null });
+    // Fundo por tema, um de cada vez; renomear sem mandar cor nem fundo mantém os dois.
+    await saveCompany({ id: 'acme-labs', name: 'Acme Labs', background: { dark: '#1A2B3C' } }, file);
+    cfg = await saveCompany({ id: 'acme-labs', name: 'Acme Labs', background: { light: '#f6f0e1' } }, file);
+    expect(cfg.companies[0]).toMatchObject({ color: 'teal', background: { light: '#f6f0e1', dark: '#1a2b3c' } });
+    await expect(saveCompany({ id: 'acme-labs', name: 'Acme Labs', background: { light: 'azul' } }, file)).rejects.toThrow();
+    cfg = await saveCompany({ id: 'acme-labs', name: 'Acme', color: null, background: { light: null } }, file);
+    expect(cfg.companies[0]).toEqual({ id: 'acme-labs', name: 'Acme', color: null, background: { light: null, dark: '#1a2b3c' } });
     await expect(saveCompany({ id: 'sumiu', name: 'X' }, file)).rejects.toThrow('não encontrada');
     await expect(saveCompany({ name: '' }, file)).rejects.toThrow('nome');
     // Mesmo nome-base depois de renomear: o id ganha um número.
@@ -120,7 +126,7 @@ describe('config', () => {
     expect(cfg).toMatchObject({ companies: [{ id: 'beta' }], projectCompanies: { p2: 'beta' } });
     // Editado à mão: empresa inválida some, e projeto de empresa que não existe fica sem empresa.
     await fs.writeFile(file, JSON.stringify({ companies: [{ id: 'ok', name: 'Ok' }, { id: 'Ruim!', name: 'x' }, 3], projectCompanies: { a: 'ok', b: 'fantasma', c: 1 } }));
-    expect(await readConfig(file)).toMatchObject({ companies: [{ id: 'ok', name: 'Ok', color: null }], projectCompanies: { a: 'ok' } });
+    expect(await readConfig(file)).toMatchObject({ companies: [{ id: 'ok', name: 'Ok', color: null, background: { light: null, dark: null } }], projectCompanies: { a: 'ok' } });
   });
 
   it('linha de parada: null desliga um limite; valores fora de 1–100 são recusados', async () => {

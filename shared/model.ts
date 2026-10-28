@@ -233,6 +233,8 @@ export interface Company {
   id: string;
   name: string;
   color: ProjectColor | null;
+  /** Fundo do quadro na aba dela, por tema; null = o fundo geral. */
+  background: BoardBackground;
 }
 
 /** Cor (#rrggbb) do fundo do quadro no tema claro e no escuro; null = a padrão. */

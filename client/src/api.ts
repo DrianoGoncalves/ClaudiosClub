@@ -184,7 +184,7 @@ export const api = {
   testConnection: (projectId: string, name: string) =>
     post<{ ok: boolean; message: string }>(`/api/projects/${projectId}/connections/${encodeURIComponent(name)}/test`),
   // Empresas (abas do quadro) e novo projeto.
-  saveCompany: (c: { id?: string; name: string; color: ProjectColor | null }) => post<AppConfig>('/api/companies', c),
+  saveCompany: (c: { id?: string; name: string; color?: ProjectColor | null; background?: Partial<BoardBackground> }) => post<AppConfig>('/api/companies', c),
   removeCompany: (id: string) => post<AppConfig>(`/api/companies/${id}/delete`),
   setProjectCompany: (projectId: string, companyId: string | null) => post<AppConfig>(`/api/projects/${projectId}/company`, { companyId }),
   newProjectDefaults: () => get<{ parent: string }>('/api/new-project'),

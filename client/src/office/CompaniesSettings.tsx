@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { AppConfig, Company, ProjectColor } from '../../../shared/model';
 import { api } from '../api';
-import { RoomColorPicker } from '../board/colors';
+import { BackgroundPicker, RoomColorPicker, useSystemTheme } from '../board/colors';
 import { t } from '../i18n';
 
 /** Configurações → Empresas: nome e cor de cada aba; remover deixa os projetos dela sem empresa. */
@@ -16,6 +16,7 @@ export function CompaniesEditor({
 }) {
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const theme = useSystemTheme();
   const run = async (fn: () => Promise<AppConfig>) => {
     setError(null);
     try {
@@ -57,6 +58,15 @@ export function CompaniesEditor({
             >
               {t('office.companyRemove')}
             </button>
+            {/* Fundo do quadro na aba dela, no tema do sistema agora (o outro tema se escolhe ao trocar). */}
+            <span className="company-bg">
+              <span className="muted small">{t(theme === 'light' ? 'office.companyBgLight' : 'office.companyBgDark')}</span>
+              <BackgroundPicker
+                theme={theme}
+                value={c.background[theme]}
+                onChange={(hex) => run(() => api.saveCompany({ id: c.id, name: c.name, background: { [theme]: hex } }))}
+              />
+            </span>
           </li>
         ))}
       </ul>

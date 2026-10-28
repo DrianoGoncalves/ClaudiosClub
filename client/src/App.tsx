@@ -37,6 +37,7 @@ import { t } from './i18n';
 import { useInbox } from './inbox/useInbox';
 import { AgentForm, type AgentFormTarget } from './staff/AgentForm';
 import { NewProjectForm } from './office/NewProjectForm';
+import { readTab, writeTab } from './office/companies';
 import { ProjectOffice } from './office/ProjectOffice';
 import { StaffForm, type StaffFormMode } from './staff/HireForm';
 import { TasksBoard } from './tasks/TasksBoard';
@@ -183,7 +184,18 @@ export function App() {
   const saveBoardBackground = async (boardBackground: Partial<BoardBackground>) => setConfig(await api.saveConfig({ boardBackground }));
   const saveProjectBudget = async (projectId: string, budget: number | null) =>
     setConfig(await api.saveConfig({ projectBudgets: { [projectId]: budget } }));
-  useBoardBackground(config?.boardBackground);
+  // Aba de empresa (filtra o quadro) e o fundo dela: cada empresa pode ter o seu, para dar para
+  // saber de relance em qual se está; sem escolha, vale o fundo geral.
+  const [companyTab, setCompanyTabState] = useState(readTab);
+  const setCompanyTab = (tab: string) => {
+    setCompanyTabState(tab);
+    writeTab(tab);
+  };
+  const tabBackground = config?.companies.find((c) => c.id === companyTab)?.background;
+  useBoardBackground({
+    light: tabBackground?.light ?? config?.boardBackground.light ?? null,
+    dark: tabBackground?.dark ?? config?.boardBackground.dark ?? null,
+  });
 
   /** Projeto novo (ou o demo): recarrega o quadro e o config (a empresa dele) e abre a sala. */
   const projectCreated = (projectId: string) => {
@@ -233,6 +245,8 @@ export function App() {
             onBoardBackground={saveBoardBackground}
             onProjectBudget={saveProjectBudget}
             onConfig={setConfig}
+            tab={companyTab}
+            onTab={setCompanyTab}
             onNewProject={(companyId) => setNewProject({ companyId })}
             onProjectCreated={projectCreated}
             images={board.images}

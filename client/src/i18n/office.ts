@@ -42,6 +42,8 @@ export default defineMessages({
     'office.companyRemove': 'Remover',
     'office.companyRemoveConfirm': 'Remover {name}? Os projetos dela ficam sem empresa (nada é apagado).',
     'office.companyProjects': '{n} projeto(s)',
+    'office.companyBgLight': 'Fundo do quadro nesta aba (tema claro)',
+    'office.companyBgDark': 'Fundo do quadro nesta aba (tema escuro)',
 
     'office.demoTitle': 'Projeto demo',
     'office.demoDesc': 'Uma cafeteria de exemplo com equipe, hierarquia e tarefas prontas. Ver o quadro e as fichas não gasta nada; abrir um funcionário usa a sua cota.',
@@ -120,6 +122,8 @@ export default defineMessages({
     'office.companyRemove': 'Remove',
     'office.companyRemoveConfirm': 'Remove {name}? Its projects are left with no company (nothing is deleted).',
     'office.companyProjects': '{n} project(s)',
+    'office.companyBgLight': 'Board background in this tab (light theme)',
+    'office.companyBgDark': 'Board background in this tab (dark theme)',
 
     'office.demoTitle': 'Demo project',
     'office.demoDesc': 'A sample coffee shop with a ready-made team, hierarchy and tasks. Viewing the board and profiles costs nothing; opening an employee uses your quota.',
@@ -198,6 +202,8 @@ export default defineMessages({
     'office.companyRemove': 'Quitar',
     'office.companyRemoveConfirm': '¿Quitar {name}? Sus proyectos quedan sin empresa (no se borra nada).',
     'office.companyProjects': '{n} proyecto(s)',
+    'office.companyBgLight': 'Fondo del tablero en esta pestaña (tema claro)',
+    'office.companyBgDark': 'Fondo del tablero en esta pestaña (tema oscuro)',
 
     'office.demoTitle': 'Proyecto demo',
     'office.demoDesc': 'Una cafetería de ejemplo con equipo, jerarquía y tareas listas. Ver el tablero y las fichas no cuesta nada; abrir un empleado usa tu cuota.',

@@ -615,6 +615,8 @@ button.ranking-row:hover { border-color: var(--accent); }
 .company-add input { width: 16ch; font: inherit; font-size: 13px; padding: 2px 6px; }
 .company-empty { flex-basis: 100%; margin: 0; }
 .companies-editor { display: grid; gap: 8px; width: 100%; }
+.companies-editor .room-colors li { flex-wrap: wrap; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.company-bg { flex-basis: 100%; display: grid; gap: 4px; }
 .company-rename { font-family: var(--hand); font-size: 19px; font-weight: 700; border: none; border-bottom: 1.5px dashed transparent; background: transparent; color: var(--ink); min-width: 0; }
 .company-rename:hover, .company-rename:focus { border-bottom-color: var(--ink-muted); outline: none; }
 .company-new { display: flex; gap: 6px; }

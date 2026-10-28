@@ -25,7 +25,7 @@ import { SettingsMenu } from '../toolbar/SettingsMenu';
 import { AuthBadge, CompanyTitle, UsageMeters } from '../toolbar/Toolbar';
 import { t } from '../i18n';
 import { CompanyTabs } from '../office/CompanyTabs';
-import { companyByProject, inTab, readTab, TAB_ALL, TAB_NONE, writeTab } from '../office/companies';
+import { companyByProject, inTab, TAB_ALL, TAB_NONE } from '../office/companies';
 
 // Posições arrastadas ficam no navegador por enquanto; vão para `.myco/` quando houver escrita no disco.
 // v3: as salas passaram a formar uma grade; as posições da v2 (uma linha só) não servem mais.
@@ -107,6 +107,9 @@ interface BoardViewProps {
   onUnlink: (link: StaffLink) => void;
   /** O config mudou por aqui (empresa criada nas abas). */
   onConfig: (config: AppConfig) => void;
+  /** Aba de empresa (o App guarda: o fundo do quadro segue a aba). */
+  tab: string;
+  onTab: (tab: string) => void;
   /** "+ projeto" nas abas: criar ou abrir, já na empresa da aba (null = sem empresa). */
   onNewProject: (companyId: string | null) => void;
   /** Um projeto acabou de ser criado (o demo): recarrega o quadro e abre a sala dele. */
@@ -123,11 +126,7 @@ function parseHireSource(nodeId: string): { projectId: string; staffId: string |
 export function BoardView(props: BoardViewProps) {
   const { config, costs, git, tasks, showWorktrees, showArchived, selectedId, onSelect } = props;
   // Aba de empresa: o quadro mostra só as salas dos projetos dela.
-  const [tab, setTabState] = useState(readTab);
-  const setTab = (next: string) => {
-    setTabState(next);
-    writeTab(next);
-  };
+  const { tab, onTab: setTab } = props;
   const companyOf = useMemo(() => companyByProject(props.board.projects, config), [props.board.projects, config]);
   const board = useMemo(
     () => (tab === TAB_ALL ? props.board : { ...props.board, projects: props.board.projects.filter((p) => inTab(tab, companyOf.get(p.id), config)) }),
