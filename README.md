@@ -166,14 +166,3 @@ Abra **http://myco.localhost:5173**, aponte as pastas dos seus projetos e contra
 | Atalho no Menu Iniciar | `npm run launcher` |
 | Barras de consumo 5 h / 7 d (instala o mod `myco-tap`) | `npm run mod:install` |
 | Testes e tipos | `npm test` · `npm run typecheck` |
-
-## O que vem por aí
-
-- **Gatilhos e avaliações:** trabalho que começa sozinho e nota para cada entrega.
-- **Codex:** o leitor de sessões já é um adaptador, pronto para receber outro motor.
-
-O plano completo, fase a fase, está em [PLANO.md](PLANO.md).
-
-## Créditos
-
-A ideia de ler as sessões do Claude Code, o servidor Node com SSE e os instaladores com backup vieram do [habblaud](https://github.com/marmottajr/habblaud) (MIT), de [@marmottajr](https://github.com/marmottajr).

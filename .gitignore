@@ -15,6 +15,9 @@ faces/
 # Dados do seu escritório neste projeto (fichas, memórias, tarefas, imagens): não são o app.
 .myco/
 
+# Plano de escopo: fica só na máquina.
+PLANO.md
+
 # Claude Code: worktrees dos funcionários e permissões locais.
 .claude/worktrees/
 .claude/settings.local.json
