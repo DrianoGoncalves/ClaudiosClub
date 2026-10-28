@@ -401,11 +401,17 @@ function delegateEdges(nodes: BoardNode[], shelved: Array<{ item: BoardNode; she
   return out;
 }
 
-/** Linhas que chegam a um funcionário trabalhando agora: a conversa está passando por elas. */
+/**
+ * Linhas que chegam a um funcionário trabalhando numa tarefa delegada por outro funcionário: a
+ * conversa está passando por elas. Se foi você que pediu no chat, só a borda do cartão anima.
+ */
 function markActive(edges: BoardEdge[], nodes: BoardNode[]) {
   const busy = new Set(
     nodes
-      .filter((n) => n.type === 'employee' && n.data.session?.live?.alive && n.data.session.live.status === 'busy')
+      .filter((n) => {
+        const live = n.type === 'employee' ? n.data.session?.live : null;
+        return live?.alive && live.status === 'busy' && live.delegated;
+      })
       .map((n) => n.id),
   );
   for (const e of edges) {

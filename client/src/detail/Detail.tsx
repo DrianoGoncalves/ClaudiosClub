@@ -143,44 +143,31 @@ export function EmployeePanel(props: {
   };
   const live = s?.live?.alive ? s.live : null;
   const name = staff?.name ?? (s ? employeeName(s) : '?');
-  return (
+  const showConvos = !!staff && !!project && (conversations.length > 0 || fresh);
+  const statusInfo = live
+    ? { dot: `dot dot-${live.status ?? 'unknown'}`, text: STATUS_LABEL[live.status ?? ''] ?? live.status }
+    : { dot: 'dot', text: s ? 'fora do expediente' : 'ainda sem sessão' };
+  // Topo compacto: quem é e como está. Logo abaixo, a conversa (linha 2) e os avisos que pedem ação.
+  const top = (
     <>
-      <header className="header employee-header">
-        {staff?.portrait && project && (
-          <img className="employee-portrait" src={portraitUrl(project.id, staff.id)} alt={`Retrato de ${staff.name}`} />
-        )}
-        <div>
-          <p className="kicker">funcionário{project ? ` · ${project.name}` : ''}</p>
-          <h2>{name}</h2>
-          {staff && <p className="employee-role">{staff.role}</p>}
-          <p className="badges">
-            {live ? (
-              <span className="badge">
-                <span className={`dot dot-${live.status ?? 'unknown'}`} /> {STATUS_LABEL[live.status ?? ''] ?? live.status}
-              </span>
-            ) : (
-              <span className="badge dim">{s ? 'fora do expediente' : 'ainda sem sessão'}</span>
-            )}
-            {s?.entrypoint && <span className="badge">{ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</span>}
-            {s?.gitBranch && <span className="badge dim">{s.gitBranch}</span>}
-            {!staff && <span className="badge dim">sem ficha</span>}
-            {staff?.temporary && <span className="badge warn">temporário</span>}
-            {props.archived && <span className="badge dim">arquivado</span>}
-          </p>
+      <div className="employee-top">
+        {staff?.portrait && project && <img className="employee-portrait" src={portraitUrl(project.id, staff.id)} alt={`Retrato de ${staff.name}`} />}
+        <div className="employee-ident">
+          <h2 className="employee-name" title={name}>
+            {name}
+          </h2>
+          {(staff || project) && (
+            <span className="employee-cargo" title={[staff?.role, project?.name].filter(Boolean).join(' · ')}>
+              {[staff?.role, project?.name].filter(Boolean).join(' · ')}
+            </span>
+          )}
+          <span className="badge">
+            <span className={statusInfo.dot} /> {statusInfo.text}
+          </span>
+          {staff?.temporary && <span className="badge warn">temporário</span>}
         </div>
-        <button
-          className="btn-secondary employee-edit"
-          onClick={props.onEdit}
-          title={staff ? 'Editar nome, retrato e ficha' : 'Dar nome, retrato e ficha a este funcionário (a sessão continua a mesma)'}
-        >
-          Editar
-        </button>
-      </header>
-      {staff?.temporary && project && (
-        <TempNotice staff={staff} managers={props.managers} projectId={project.id} archived={props.archived} onArchive={props.onArchive} onChanged={props.onChanged} />
-      )}
-      {staff?.browser && <BrowserCheck />}
-      {staff && project && (conversations.length > 0 || fresh) && (
+      </div>
+      {showConvos && (
         <div className="chat-convos">
           <select
             aria-label="Conversa"
@@ -198,39 +185,53 @@ export function EmployeePanel(props: {
             ))}
           </select>
           <button type="button" className="btn-secondary" disabled={fresh || convBusy} onClick={() => setFresh(true)} title="Começa uma conversa do zero (a ficha e a memória continuam)">
-            Nova conversa
-          </button>
-          <button
-            type="button"
-            className="btn-secondary"
-            disabled={!current || convBusy}
-            onClick={() => void duplicate()}
-            title="Uma cópia desta conversa, com todo o histórico, para tentar outro caminho sem perder a original"
-          >
-            Duplicar
-          </button>
-          <button type="button" className="link small" disabled={!current || convBusy} onClick={() => void rename()} title="Dar um nome a esta conversa">
-            renomear
+            + Nova
           </button>
         </div>
       )}
-      {project && (
-        <ChatView
-          key={`${current ?? 'novo'}:${staff?.id ?? ''}`}
-          projectId={project.id}
-          sessionId={current}
-          staffId={staff?.id ?? null}
-          name={name}
-          autonomy={staff?.autonomy ?? null}
-          disabled={!project.exists ? 'a pasta do projeto não existe' : null}
-          onSessionStarted={props.onSessionStarted}
-          level={props.simple ? 'simple' : 'advanced'}
-          fichaModel={staff?.model ?? null}
-          fichaEffort={staff?.effort ?? null}
-        />
+      {staff?.temporary && project && (
+        <TempNotice staff={staff} managers={props.managers} projectId={project.id} archived={props.archived} onArchive={props.onArchive} onChanged={props.onChanged} />
       )}
-
-      {/* O chat fica em primeiro plano; o resto, guardado num só acordeão (no simples, nem ele). */}
+      {staff?.browser && <BrowserCheck />}
+    </>
+  );
+  // No "Mais" da conversa: duplicar e renomear.
+  const conversationMore = showConvos ? (
+    <div className="chat-more-row">
+      <button
+        type="button"
+        className="btn-secondary"
+        disabled={!current || convBusy}
+        onClick={() => void duplicate()}
+        title="Uma cópia desta conversa, com todo o histórico, para tentar outro caminho sem perder a original"
+      >
+        Duplicar
+      </button>
+      <button type="button" className="btn-secondary" disabled={!current || convBusy} onClick={() => void rename()} title="Dar um nome a esta conversa">
+        Renomear
+      </button>
+    </div>
+  ) : undefined;
+  // Funcionário: no "Mais" (ou direto no painel, sem projeto). O avançado fica em grupo, sem caixa dentro de caixa.
+  const employee = (
+    <>
+      <div className="chat-more-row">
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={props.onEdit}
+          title={staff ? 'Editar nome, retrato e ficha' : 'Dar nome, retrato e ficha a este funcionário (a sessão continua a mesma)'}
+        >
+          Editar
+        </button>
+      </div>
+      <p className="badges">
+        {s?.entrypoint && <span className="badge">{ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</span>}
+        {s?.gitBranch && <span className="badge dim">{s.gitBranch}</span>}
+        {!staff && <span className="badge dim">sem ficha</span>}
+        {props.archived && <span className="badge dim">arquivado</span>}
+      </p>
+      {s && <p className="muted mono">sessão {s.id}</p>}
       {props.simple ? (
         <p className="muted small simple-more">
           Consumo, rotinas, ficha e mais ações ficam no nível avançado.{' '}
@@ -241,65 +242,89 @@ export function EmployeePanel(props: {
           )}
         </p>
       ) : (
-      <details className="collapse collapse-group">
-        <summary>Avançado</summary>
-        <details className="collapse">
-          <summary>Expediente</summary>
-          <dl className="stats">
-            <div><dt>do consumo total</dt><dd>{props.costUsd === null ? '—' : formatShare(props.costUsd, props.totalUsd)}</dd></div>
-            <div><dt>subagents</dt><dd>{s?.subagentCount ?? 0}</dd></div>
-            <div><dt>início</dt><dd>{s?.startedAt ? formatDate(s.startedAt) : '—'}</dd></div>
-            <div><dt>última atividade</dt><dd>{s ? formatDate(s.updatedAt) : '—'}</dd></div>
-          </dl>
-          {s && <p className="muted mono">sessão {s.id}</p>}
-          {staff && staff.sessions.length > 1 && <p className="muted small">{staff.sessions.length} sessões desde a contratação, somadas.</p>}
-          <p className="muted small">Parte deste funcionário no consumo de todos, com os subagents que ele chamou.</p>
-        </details>
-        {s && <WorthIt key={s.id} sessionId={s.id} />}
-
-        {staff && project && (
+        <div className="collapse-group">
           <details className="collapse">
-            <summary>Rotinas{staff.routines?.length ? ` (${staff.routines.filter((r) => r.enabled).length} ligada${staff.routines.filter((r) => r.enabled).length === 1 ? '' : 's'})` : ''}</summary>
-            <Routines projectId={project.id} staff={staff} onChanged={props.onChanged} />
+            <summary>Expediente</summary>
+            <dl className="stats">
+              <div><dt>do consumo total</dt><dd>{props.costUsd === null ? '—' : formatShare(props.costUsd, props.totalUsd)}</dd></div>
+              <div><dt>subagents</dt><dd>{s?.subagentCount ?? 0}</dd></div>
+              <div><dt>início</dt><dd>{s?.startedAt ? formatDate(s.startedAt) : '—'}</dd></div>
+              <div><dt>última atividade</dt><dd>{s ? formatDate(s.updatedAt) : '—'}</dd></div>
+            </dl>
+            {staff && staff.sessions.length > 1 && <p className="muted small">{staff.sessions.length} sessões desde a contratação, somadas.</p>}
+            <p className="muted small">Parte deste funcionário no consumo de todos, com os subagents que ele chamou.</p>
           </details>
-        )}
+          {s && <WorthIt key={s.id} sessionId={s.id} />}
 
-        {staff ? (
+          {staff && project && (
+            <details className="collapse">
+              <summary>Rotinas{staff.routines?.length ? ` (${staff.routines.filter((r) => r.enabled).length} ligada${staff.routines.filter((r) => r.enabled).length === 1 ? '' : 's'})` : ''}</summary>
+              <Routines projectId={project.id} staff={staff} onChanged={props.onChanged} />
+            </details>
+          )}
+
+          {staff ? (
+            <details className="collapse">
+              <summary>Ficha</summary>
+              <StaffSheet staff={staff} managers={props.managers} />
+              <p className="actions">
+                <button className="btn-secondary" onClick={props.onEdit}>
+                  Editar ficha
+                </button>
+              </p>
+            </details>
+          ) : (
+            <p className="muted small">
+              Aberto fora do MyCo, ainda sem ficha (missão, regras, memória, MCPs). Use <b>Editar</b> para dar nome, retrato e ficha.
+            </p>
+          )}
+
           <details className="collapse">
-            <summary>Ficha</summary>
-            <StaffSheet staff={staff} managers={props.managers} />
+            <summary>Mais ações</summary>
+            {staff && <LaunchButtons hasSession={!!s} working={!!live} onLaunch={props.onLaunch} />}
             <p className="actions">
-              <button className="btn-secondary" onClick={props.onEdit}>
-                Editar ficha
-              </button>
+              {staff?.canHire && (
+                <button className="btn-secondary" onClick={props.onHireSub}>
+                  Contratar subordinado
+                </button>
+              )}
+              <ArchiveButton
+                archived={props.archived}
+                onArchive={props.onArchive}
+                what="este funcionário"
+                restoreLabel={staff?.temporary ? 'Restaurar' : 'Desarquivar'}
+              />
             </p>
           </details>
-        ) : (
-          <p className="muted small">
-            Aberto fora do MyCo, ainda sem ficha (missão, regras, memória, MCPs). Use <b>Editar</b> para dar nome, retrato e ficha.
-          </p>
-        )}
-
-        <details className="collapse">
-          <summary>Mais ações</summary>
-          {staff && <LaunchButtons hasSession={!!s} working={!!live} onLaunch={props.onLaunch} />}
-          <p className="actions">
-            {staff?.canHire && (
-              <button className="btn-secondary" onClick={props.onHireSub}>
-                Contratar subordinado
-              </button>
-            )}
-            <ArchiveButton
-              archived={props.archived}
-              onArchive={props.onArchive}
-              what="este funcionário"
-              restoreLabel={staff?.temporary ? 'Restaurar' : 'Desarquivar'}
-            />
-          </p>
-        </details>
-      </details>
+        </div>
       )}
     </>
+  );
+  // Sem projeto não há conversa: o topo e a ficha ficam no painel, com rolagem própria.
+  if (!project) {
+    return (
+      <div className="employee-scroll">
+        {top}
+        {employee}
+      </div>
+    );
+  }
+  return (
+    <ChatView
+      key={`${current ?? 'novo'}:${staff?.id ?? ''}`}
+      projectId={project.id}
+      sessionId={current}
+      staffId={staff?.id ?? null}
+      name={name}
+      autonomy={staff?.autonomy ?? null}
+      disabled={!project.exists ? 'a pasta do projeto não existe' : null}
+      onSessionStarted={props.onSessionStarted}
+      level={props.simple ? 'simple' : 'advanced'}
+      fichaModel={staff?.model ?? null}
+      fichaEffort={staff?.effort ?? null}
+      top={top}
+      more={{ conversation: conversationMore, employee }}
+    />
   );
 }
 

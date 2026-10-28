@@ -368,7 +368,25 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .chat-input textarea { flex: 1; font: inherit; font-size: 14px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; resize: vertical; min-height: 44px; }
 .chat-input textarea:focus { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); border-color: var(--ink-blue); }
-.chat-footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+/* Topo do funcionário: o "⋯" fica no canto do topo, à esquerda do "×" do painel. */
+.chat-top { position: relative; min-height: 28px; }
+.btn-secondary.chat-more-btn { position: absolute; top: 0; right: 10px; width: 30px; height: 28px; padding: 0; font-size: 18px; line-height: 1; display: grid; place-items: center; }
+/* "Mais": cobre o painel do funcionário, com rolagem própria; Esc fecha. */
+.chat-more { position: absolute; inset: 0; z-index: 3; display: grid; align-content: start; gap: 16px; overflow-y: auto; overscroll-behavior: contain; padding: 18px 20px 24px; background: var(--panel); border-radius: 12px; }
+.chat-more:focus { outline: none; }
+.chat-more-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.chat-more-head h3 { margin: 0; font-family: var(--hand); font-size: 26px; line-height: 1; }
+.chat-more-sec { display: grid; gap: 10px; align-content: start; }
+.chat-more-sec > h4 { margin: 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.chat-more-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* Linha de status, logo abaixo da caixa: autonomia e modelo (chips que abrem o "Mais"), contexto, segundo plano. */
+.chat-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; color: var(--muted); }
+.chat-status .meter-label { font-size: 14px; }
+.chat-chip { font: inherit; font-size: 12px; min-height: 28px; padding: 2px 10px; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 999px; cursor: pointer; }
+.chat-chip:hover { border-color: var(--accent); }
+.chat-chip.is-warn { color: var(--warn); border-color: var(--warn); }
+.chat-chip.is-danger { color: var(--danger); border-color: var(--danger); }
+.chat-changes { margin-left: auto; min-height: 28px; }
 
 /* Rolagem do painel lateral e do chat: fina, sem trilho, ponta irregular como os traços de caneta.
    A borda transparente (com background-clip) afasta o polegar da beira, qualquer que seja o fundo. */
@@ -384,16 +402,17 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 @supports not selector(::-webkit-scrollbar) {
   .drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat-input textarea { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
 }
-.chat-footer-actions { display: inline-flex; align-items: center; gap: 10px; }
-.chat-footer-actions .check { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); cursor: pointer; }
 /* Botão liga/desliga: o btn-secondary com estado pressionado em azul de caneta. */
 .segmented { display: inline-flex; gap: 6px; }
 /* Conversa: qual delas, lista de tarefas do funcionário, ajustes, menu de "/" e "@", anexos. */
 .chat-convos { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
 .chat-convos select { flex: 1; min-width: 0; font: inherit; font-size: 12.5px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
-.chat-todos { margin: 4px 0; padding: 6px 10px; border: 1px dashed var(--line); border-radius: 8px; }
-.chat-todos ul { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 2px; font-size: 12.5px; }
-.chat-todos-head { font-weight: 600; }
+/* Tarefas: fechadas por padrão, numa linha; abertas, a lista com rolagem curta. */
+.chat-todos { margin: 4px 0; padding: 4px 10px; border: 1px dashed var(--line); border-radius: 8px; }
+.chat-todos ul { list-style: none; margin: 2px 0 6px; padding: 0; display: grid; gap: 2px; font-size: 12.5px; max-height: 30vh; overflow-y: auto; }
+.chat-todos-head { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 26px; padding: 0; background: none; border: 0; color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; text-align: left; cursor: pointer; }
+.chat-todos-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-todos-head > span:last-child { flex: none; color: var(--muted); }
 .todo-mark { display: inline-block; width: 16px; color: var(--muted); }
 .todo-completed { color: var(--muted); text-decoration: line-through; }
 .todo-in_progress { font-weight: 600; }
@@ -489,14 +508,14 @@ button.ranking-row:hover { border-color: var(--accent); }
 .portrait-preview { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 2px solid var(--ink); }
 @media (max-width: 640px) { .grid2, .choices { grid-template-columns: 1fr; } }
 
-.employee-header { display: flex; gap: 12px; align-items: flex-start; }
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .card-action { margin-left: auto; font-size: 11px; padding: 1px 8px; }
-.employee-header > div { min-width: 0; flex: 1; }
-/* Fica à esquerda do "×" de fechar o painel. */
-.employee-edit { flex: none; margin-right: 26px; }
-.employee-portrait { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; border: 2px solid var(--ink); flex: none; }
-.employee-role { margin: 0 0 4px !important; font-family: var(--hand); font-size: 20px; color: var(--muted); }
+/* Topo compacto do funcionário: retrato, nome, cargo e status numa linha. A direita fica livre para o "⋯" e o "×". */
+.employee-top { display: flex; gap: 10px; align-items: center; min-height: 32px; padding-right: 44px; }
+.employee-ident { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+.employee-name { margin: 0; min-width: 0; max-width: 100%; font-family: var(--hand); font-size: 22px; font-weight: 700; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.employee-cargo { min-width: 0; max-width: 100%; font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.employee-portrait { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; border: 2px solid var(--ink); flex: none; }
 .sheet { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; margin: 0; font-size: 13px; }
 .sheet dt { color: var(--muted); }
 .sheet dd { margin: 0; }
@@ -675,6 +694,9 @@ button.ranking-row:hover { border-color: var(--accent); }
 .swatch-custom input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: none; opacity: 0; cursor: pointer; }
 
 .legend { display: flex; gap: 14px; font-family: var(--hand); font-size: 18px; background: color-mix(in srgb, var(--board) 85%, transparent); padding: 2px 10px; border-radius: 8px; }
+/* Escondida até o mouse chegar no canto inferior direito (o painel continua lá, invisível, como área de hover). */
+.react-flow__panel.legend { opacity: 0; transition: opacity 0.15s; }
+.react-flow__panel.legend:hover { opacity: 1; }
 .legend-item::before { content: ''; display: inline-block; width: 18px; height: 0; border-top: 2.5px solid; vertical-align: middle; margin-right: 5px; }
 .legend-project { color: var(--ink-blue); }
 .legend-agent { color: var(--ink); }
@@ -699,6 +721,13 @@ button.ranking-row:hover { border-color: var(--accent); }
 }
 .drawer-close { position: absolute; top: 10px; right: 12px; font-size: 22px; line-height: 1; background: none; border: none; color: var(--muted); cursor: pointer; }
 .drawer-close:hover { color: var(--ink); }
+/* Painel do funcionário: a conversa ocupa a altura toda; só a lista de mensagens rola. */
+/* Em janela baixa (muitos avisos no topo), a lista não some: o painel rola e a caixa continua alcançável. */
+.drawer-chat { display: flex; flex-direction: column; overflow-y: auto; }
+.drawer-chat .chat { flex: 1; margin-top: 0; }
+.drawer-chat .chat-list { flex: 1; min-height: 160px; height: auto; }
+/* Sem projeto não há conversa: o topo e a ficha rolam aqui. */
+.employee-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 
 .kicker { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 2px; }
 .header h2 { margin: 0 0 4px; font-family: var(--hand); font-size: 34px; line-height: 1; padding-right: 24px; word-break: break-word; }
@@ -753,4 +782,5 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 @media (max-width: 640px) {
   .legend { display: none; }
   .drawer { top: auto; height: 60vh; left: 12px; width: auto; }
+  .drawer-chat { height: 88vh; }
 }

@@ -251,7 +251,7 @@ export function App() {
         </ReactFlowProvider>
       )}
       {board && selection && (
-        <aside className={`drawer ${selection.kind === 'employee' ? 'drawer-wide' : ''}`}>
+        <aside className={`drawer ${selection.kind === 'employee' ? 'drawer-wide drawer-chat' : ''}`}>
           <button className="drawer-close" onClick={() => setSelectedId(null)} aria-label="Fechar">
             ×
           </button>

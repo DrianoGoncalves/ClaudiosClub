@@ -75,7 +75,8 @@ const staff: StaffService = new StaffService(adapter, {
       chats.profileChanged(prev, next, dir ? path.join(dir, '.myco', 'staff', `${next.id}.md`) : null),
     ),
   // Subfuncionário contratado pela API: abre numa conversa do MyCo, não num terminal.
-  openChat: (projectId, staffId, text): Promise<string> => chats.send(projectId, null, staffId, text),
+  // O gestor que contratou pela API passa a primeira tarefa: é delegação (bolinhas na linha).
+  openChat: (projectId, staffId, text): Promise<string> => chats.send(projectId, null, staffId, text, undefined, [], [], true),
   isWorking: (staffId) => chats.staffWorking(staffId),
   weekCost: async (projectId) => {
     const c = await getCosts();
@@ -330,7 +331,8 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
         if (held) return { sessionId: b.sessionId, held };
       }
       const priority = b.priority ?? (await readConfig()).sendWhileBusy;
-      return { sessionId: await chats.send(pid!, b.sessionId, b.staffId, b.text, priority, b.images, b.files) };
+      // Fora do navegador, quem manda é outro funcionário (o gestor, pela API): delegação.
+      return { sessionId: await chats.send(pid!, b.sessionId, b.staffId, b.text, priority, b.images, b.files, !fromBrowser) };
     },
   ],
   [
@@ -671,7 +673,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ],
   ['GET', /^\/api\/user$/, () => adapter.getUserScope()],
   ['GET', /^\/api\/board$/, () => getBoard()],
-  ['GET', /^\/api\/live$/, () => adapter.listLiveSessions()],
+  ['GET', /^\/api\/live$/, () => liveForBoard()],
   // Estado do código de cada projeto (git status, com cache curto); worktrees ficam de fora.
   [
     'GET',
@@ -843,11 +845,16 @@ function isLocalOrigin(origin: string | undefined): boolean {
   }
 }
 
+/** Sessões vivas, marcadas com quem pediu o trabalho atual (as bolinhas na linha só na delegação). */
+async function liveForBoard(): Promise<LiveSession[]> {
+  return (await adapter.listLiveSessions()).map((s) => (chats.isDelegated(s.sessionId) ? { ...s, delegated: true } : s));
+}
+
 async function getBoard(): Promise<Board> {
   const [projects, user, live] = await Promise.all([
     adapter.listProjects(),
     adapter.getUserScope(),
-    adapter.listLiveSessions(),
+    liveForBoard(),
   ]);
   const inventories: Board['inventories'] = {};
   const sessions: Board['sessions'] = {};

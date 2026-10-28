@@ -41,14 +41,20 @@ export function todosFrom(items: ChatItem[]): TodoItem[] {
   return [...out.values()];
 }
 
-export function TodoPanel({ todos, name }: { todos: TodoItem[]; name: string }) {
-  const [open, setOpen] = useState(true);
+/** Fechada por padrão: uma linha com o progresso e a tarefa em andamento; abrir mostra a lista toda. */
+export function TodoPanel({ todos }: { todos: TodoItem[] }) {
+  const [open, setOpen] = useState(false);
   if (!todos.length) return null;
   const done = todos.filter((t) => t.status === 'completed').length;
+  const doing = todos.find((t) => t.status === 'in_progress');
   return (
     <div className="chat-todos">
-      <button type="button" className="link small chat-todos-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        Tarefas de {name}: {done}/{todos.length} {open ? '▾' : '▸'}
+      <button type="button" className="chat-todos-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="chat-todos-line">
+          Tarefas {done}/{todos.length}
+          {doing && ` · ${doing.subject}`}
+        </span>
+        <span aria-hidden="true">{open ? '▾' : '▸'}</span>
       </button>
       {open && (
         <ul>
@@ -94,6 +100,8 @@ const PACES = [
 
 /** "claude-sonnet-5-5" → "sonnet". */
 const aliasOf = (model: string | null | undefined) => MODELS.find((m) => model?.includes(m.value))?.value ?? '';
+/** "claude-sonnet-5-5" → "Sonnet" (vazio se não for um dos quatro). */
+export const modelLabel = (model: string | null | undefined) => MODELS.find((m) => model?.includes(m.value))?.label ?? '';
 
 export function ChatSettingsBar({
   level,

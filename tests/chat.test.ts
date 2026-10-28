@@ -330,6 +330,15 @@ describe('ChatManager: ficha editada com a conversa aberta', () => {
   const profile = (over: Partial<StaffProfile> = {}) =>
     ({ id: 'ana', autonomy: 'acceptEdits', model: 'sonnet', sessions: [{ id: 'sx', startedAt: '' }], updatedAt: '1', ...over }) as StaffProfile;
 
+  it('marca a conversa como delegada só quando quem mandou foi outro funcionário', async () => {
+    const { m } = manager();
+    await m.send('p', 'sx', 'ana', 'faça X', undefined, [], [], true);
+    expect(m.isDelegated('sx')).toBe(true);
+    // Você falou com ele no chat: deixa de ser delegação.
+    await m.send('p', 'sx', 'ana', 'e também Y');
+    expect(m.isDelegated('sx')).toBe(false);
+  });
+
   it('só a autonomia mudou: troca o modo sem reabrir', async () => {
     const { m, procs } = manager();
     await m.send('p', 'sx', 'ana', 'oi');

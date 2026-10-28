@@ -174,6 +174,19 @@ describe('buildGraph', () => {
     expect(w / h).toBeLessThan(4);
   });
 
+  it('bolinhas na linha do gestor só quando o trabalho foi delegado; conversa direta só anima a borda', () => {
+    const busy = (delegated: boolean) => ({
+      ...board(),
+      staff: [staffProfile('ana', ['s-a1']), staffProfile('bia', ['s-a2'], ['ana'])],
+      live: [
+        { sessionId: 's-a2', pid: 9, cwd: A, name: null, status: 'busy', alive: true, entrypoint: null, kind: null, startedAt: null, statusUpdatedAt: null, delegated },
+      ],
+    } as Board);
+    const line = (b: Board) => buildGraph(b, { showWorktrees: false }).edges.find((e) => e.source === 'h:a:ana' && e.target === 'h:a:bia');
+    expect(line(busy(false))?.data?.active).toBeFalsy();
+    expect(line(busy(true))?.data?.active).toBe(true);
+  });
+
   it('a grade segue a proporção da tela: deitada cresce para a direita, em pé para baixo', () => {
     const projects = Array.from({ length: 12 }, (_, i) => project(`p${i}`, `C:\\www\\p${i}`));
     const b: Board = { ...board(), projects, inventories: {}, sessions: {} };
@@ -397,11 +410,14 @@ describe('buildGraph', () => {
     expect(a2?.type === 'employee' && a2.data.archived).toBe(true);
   });
 
-  it('marca como ativa só a linha que chega a um funcionário trabalhando', () => {
+  it('marca como ativa só a linha que chega a um funcionário trabalhando numa tarefa delegada', () => {
     const b = board();
-    b.live = [{ sessionId: 's-a1', pid: 9, cwd: A, name: null, status: 'busy', alive: true, entrypoint: null, kind: null, startedAt: null, statusUpdatedAt: null }];
-    const { edges } = buildGraph(b, { showWorktrees: false });
-    const active = edges.filter((e) => e.data?.active);
+    const working = { sessionId: 's-a1', pid: 9, cwd: A, name: null, status: 'busy', alive: true, entrypoint: null, kind: null, startedAt: null, statusUpdatedAt: null } as const;
+    // Trabalhando no que você pediu no chat: nenhuma linha anima (só a borda do cartão).
+    b.live = [working];
+    expect(buildGraph(b, { showWorktrees: false }).edges.filter((e) => e.data?.active)).toEqual([]);
+    b.live = [{ ...working, delegated: true }];
+    const active = buildGraph(b, { showWorktrees: false }).edges.filter((e) => e.data?.active);
     expect(active.map((e) => e.target)).toEqual(['e:s-a1']);
     expect(active[0]?.data?.kind).toBe('contains');
   });

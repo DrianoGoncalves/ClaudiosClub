@@ -108,6 +108,8 @@ export class ChatManager {
   private readonly forks = new Map<string, string>();
   /** Segredos vistos nas conversas (um aviso por tipo por sessão, até você dispensar). */
   private readonly secrets: Array<{ id: string; sessionId: string; label: string; at: string }> = [];
+  /** Conversas cuja última mensagem veio de outro funcionário (delegação), e não de você. */
+  private readonly delegated = new Set<string>();
   private readonly timer: NodeJS.Timeout;
 
   constructor(private readonly opts: ChatManagerOptions) {
@@ -117,6 +119,11 @@ export class ChatManager {
 
   has(sessionId: string): boolean {
     return this.chats.has(sessionId);
+  }
+
+  /** O trabalho atual desta conversa foi pedido por outro funcionário (ver `send`)? */
+  isDelegated(sessionId: string): boolean {
+    return this.delegated.has(sessionId);
   }
 
   /** Pids dos processos abertos pelo MyCo (não contam como "aberto em outro lugar"). */
@@ -200,6 +207,7 @@ export class ChatManager {
   /**
    * Manda uma mensagem, abrindo o processo se preciso. `sessionId` null = sessão nova da ficha.
    * `priority` só conta com o funcionário trabalhando; `images` são data URLs (prints colados).
+   * `delegated`: quem mandou foi outro funcionário (pela API), não você pelo MyCo.
    */
   async send(
     projectId: string,
@@ -209,8 +217,11 @@ export class ChatManager {
     priority?: SendPriority,
     images: string[] = [],
     files: ChatAttachment[] = [],
+    delegated = false,
   ): Promise<string> {
     const chat = await this.ensure(projectId, sessionId, staffId);
+    if (delegated) this.delegated.add(chat.sessionId);
+    else this.delegated.delete(chat.sessionId);
     // A ficha mudou depois que esta conversa começou: o aviso vai junto, uma vez só.
     const notice = this.fichaNotices.get(chat.sessionId);
     this.fichaNotices.delete(chat.sessionId);

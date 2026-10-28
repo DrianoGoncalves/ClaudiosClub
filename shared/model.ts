@@ -56,6 +56,8 @@ export interface LiveSession {
   statusUpdatedAt: string | null;
   /** Tipos de subagent trabalhando agora para esta sessão (transcript do subagent mexido há pouco). */
   activeAgents?: string[];
+  /** O trabalho atual foi pedido por outro funcionário (delegação), e não por você no chat. */
+  delegated?: boolean;
 }
 
 export interface Session {
