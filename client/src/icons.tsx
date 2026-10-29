@@ -61,6 +61,22 @@ export function TasksIcon({ size = 12 }: { size?: number }) {
   );
 }
 
+/**
+ * Terminal preenchido (janela cheia com o >_ vazado): o login do CLI no topo, na cor do semáforo. O >_
+ * é furo (evenodd), então mostra o fundo do topo em qualquer tema.
+ */
+export function TerminalFilledIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fill="currentColor"
+        fillRule="evenodd"
+        d="M5 4h14a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zM6.2 8.5L9.9 12l-3.7 3.5 1.4 1.4 5-4.9-5-4.9zM13 15h5v2h-5z"
+      />
+    </svg>
+  );
+}
+
 /** Branch do git (dois ramos saindo de um tronco). */
 export function BranchIcon({ size = 12 }: { size?: number }) {
   return (

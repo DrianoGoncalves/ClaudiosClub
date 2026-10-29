@@ -24,6 +24,8 @@ const DEFAULTS: AppConfig = {
   projectBudgets: {},
   // Segue numa conversa nova sozinho quando o assunto fecha e compensa (dá para voltar à anterior).
   contextSwitch: 'auto',
+  // Desligado: gastar a sobra da cota é escolha de quem paga.
+  optimizeQuota: false,
   workspaces: [],
   projectWorkspaces: {},
 };
@@ -54,6 +56,7 @@ const ConfigFile = z
       .catch(undefined),
     projectBudgets: z.record(z.string(), z.unknown()).optional().catch(undefined),
     contextSwitch: z.enum(CONTEXT_SWITCHES).optional().catch(undefined),
+    optimizeQuota: z.boolean().optional().catch(undefined),
     workspaces: z.array(z.unknown()).optional().catch(undefined),
     projectWorkspaces: z.record(z.string(), z.unknown()).optional().catch(undefined),
   })
@@ -90,6 +93,7 @@ export const ConfigPatch = z.object({
   usageStop: z.object({ fiveHour: percent, sevenDay: percent }).optional(),
   sendWhileBusy: PRIORITY.optional(),
   contextSwitch: z.enum(CONTEXT_SWITCHES).optional(),
+  optimizeQuota: z.boolean().optional(),
   /** Por id de projeto: uma cor troca a da sala; null volta à padrão. Os outros projetos ficam como estão. */
   projectColors: z.record(z.string().min(1).max(200), COLOR.nullable()).optional(),
   /** Só o tema enviado muda; null volta à cor padrão. */
@@ -128,6 +132,7 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
       Object.entries(d.projectBudgets ?? {}).filter((e): e is [string, number] => BUDGET.safeParse(e[1]).success),
     ),
     contextSwitch: d.contextSwitch ?? DEFAULTS.contextSwitch,
+    optimizeQuota: d.optimizeQuota ?? DEFAULTS.optimizeQuota,
     ...readWorkspaces(d.workspaces, d.projectWorkspaces),
   };
 }

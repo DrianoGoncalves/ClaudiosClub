@@ -70,6 +70,7 @@ describe('config', () => {
       archived: { projects: [], sessions: [] },
       usageStop,
       sendWhileBusy: 'next',
+      optimizeQuota: false,
       ...colors,
     });
 
@@ -82,6 +83,7 @@ describe('config', () => {
       archived: { projects: [], sessions: [] },
       usageStop,
       sendWhileBusy: 'next',
+      optimizeQuota: false,
       ...colors,
     });
     expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ futuro: 1, companyName: 'Acme Labs' });

@@ -110,7 +110,6 @@ export function App() {
     api.config().then(setConfig, () => {});
   }, [load]);
 
-  // Uma conversa nova grava o transcript logo depois da primeira resposta.
   // Voltando para a aba, relê projetos e fichas do disco: o que mudou fora (terminal, editor) aparece
   // sem botão de atualizar.
   useEffect(() => {
@@ -121,6 +120,7 @@ export function App() {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [load]);
 
+  // Uma conversa nova grava o transcript logo depois da primeira resposta.
   const reloadSoon = useCallback(() => {
     setTimeout(load, 2000);
   }, [load]);

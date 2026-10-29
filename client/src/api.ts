@@ -100,7 +100,6 @@ export async function withUsageConfirm<T>(run: (force: boolean) => Promise<T>): 
       why = t('app.usageAccount', {
         window: h.kind === 'five_hour' ? '5h' : '7d',
         pct: Math.round(h.percentUsed),
-        origin,
         limit: h.limit,
       });
     }
@@ -162,6 +161,7 @@ export const api = {
     usageStop?: UsageStop;
     sendWhileBusy?: SendPriority;
     contextSwitch?: ContextSwitch;
+    optimizeQuota?: boolean;
     /** Só os projetos enviados mudam; null volta à cor padrão. */
     projectColors?: Record<string, ProjectColor | null>;
     /** Só o tema enviado muda; null volta ao fundo padrão. */

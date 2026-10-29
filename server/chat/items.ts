@@ -59,6 +59,9 @@ export function stripCheckpoint(text: string): string {
 /** Começo do aviso de contexto que o Claudio’s Club põe junto da sua mensagem (a conversa não mostra). */
 export const CONTEXT_NOTICE = '[MyCo] Contexto desta conversa:';
 
+/** Começo do aviso de folga de cota para o funcionário (ver server/quotaBoost.ts); a conversa não mostra. */
+export const BOOST_NOTICE = '[MyCo] Folga de cota';
+
 /**
  * Texto que o Claude Code injeta como se fosse do usuário (lembretes do sistema, saída de
  * comandos locais, avisos). Não é o que a pessoa digitou: fica fora da conversa.
@@ -75,6 +78,7 @@ export function isInjectedUserText(text: string): boolean {
     t.startsWith('<task-notification>') ||
     // Avisos do Claudio’s Club que vão junto com a sua mensagem: a ficha mudou, o contexto está grande.
     t.startsWith('[MyCo] Sua ficha foi atualizada') ||
-    t.startsWith(CONTEXT_NOTICE)
+    t.startsWith(CONTEXT_NOTICE) ||
+    t.startsWith(BOOST_NOTICE)
   );
 }

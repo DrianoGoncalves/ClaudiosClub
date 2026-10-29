@@ -10,6 +10,7 @@ import type {
   ChatSnapshot,
   ContextSwitch,
   LiveSession,
+  QuotaBoost,
   RewindPreview,
   SendPriority,
   StaffProfile,
@@ -20,7 +21,7 @@ import { readHistory } from './history';
 import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
 import { finalQuestion } from './question';
 import { CEILING_AT, contextNotice, kTokens, NOTICE_AT, rereadUsd, switchDecision, usd, type TurnInfo } from './contextPolicy';
-import { CONTEXT_NOTICE } from './items';
+import { BOOST_NOTICE, CONTEXT_NOTICE } from './items';
 import { InboxState } from '../inboxState';
 import { isAlive, killTree, type ChatRegistry } from './registry';
 
@@ -60,6 +61,8 @@ export interface ChatManagerOptions {
   contextSwitch?: () => Promise<ContextSwitch>;
   /** Conversas que nunca trocam sozinhas (a de uma tarefa: o quadro segue por ela). */
   keepSession?: (sessionId: string) => Promise<boolean>;
+  /** Folga de cota agora (com "otimizar assinatura" ligado); sem ele, nunca. */
+  quotaBoost?: () => Promise<QuotaBoost | null>;
 }
 
 export class ChatError extends Error {}
@@ -84,6 +87,17 @@ function holdMessage(o: NonNullable<ChatSnapshot['elsewhere']>): string {
   if (o.orphan) return `ficou um processo do Claudio’s Club de antes do reinício do servidor (pid ${o.pid}): clique em Trazer para encerrá-lo`;
   const where = o.entrypoint === 'claude-desktop' ? 'no app do Claude' : o.entrypoint === 'sdk-cli' ? 'em outro programa (sdk-cli)' : 'num terminal';
   return `a sessão continua aberta ${where} (pid ${o.pid}): feche lá e tente de novo`;
+}
+
+/** Valor de uma opção na linha de comando (`--model opus` → 'opus'), ou null. */
+function argOf(args: string[], flag: string): string | null {
+  const i = args.indexOf(flag);
+  return i >= 0 && i + 1 < args.length ? args[i + 1]! : null;
+}
+
+/** "sáb., 14:00": quando a folga de cota acaba (o reset da cota de 7 dias), no fuso desta máquina. */
+function boostEnd(iso: string): string {
+  return new Date(iso).toLocaleString('pt-BR', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 /** O que entra na linha de comando da conversa, fora a autonomia (que troca sem reabrir). */
@@ -125,6 +139,10 @@ export class ChatManager {
   private readonly inbox: InboxState;
   /** Fim do último turno de cada conversa: tamanho do contexto, ponto de corte (sobrevive ao processo fechar). */
   private readonly turns = new Map<string, TurnInfo & { ceilingNoted?: number }>();
+  /** Modelo e esforço com que cada processo abriu (para onde a folga de cota volta). */
+  private readonly launched = new WeakMap<ChatProcess, { model: string | null; effort: string | null }>();
+  /** Folga de cota em cada processo: ligada, ou você trocou o modelo/esforço à mão (vale a sua escolha). */
+  private readonly boosts = new WeakMap<ChatProcess, 'on' | 'manual'>();
   private readonly timer: NodeJS.Timeout;
 
   constructor(private readonly opts: ChatManagerOptions) {
@@ -245,10 +263,39 @@ export class ChatManager {
     this.fichaNotices.delete(chat.sessionId);
     const used = chat.contextUsed;
     const big = used !== null && used >= NOTICE_AT ? contextNotice(used, chat.model, CONTEXT_NOTICE) : null;
-    const notice = [ficha, big].filter(Boolean).join('\n\n') || undefined;
+    const boost = await this.applyBoost(chat);
+    const notice = [ficha, big, boost].filter(Boolean).join('\n\n') || undefined;
     chat.send(text, priority, images, notice, files);
     this.opts.onSent?.(chat.sessionId);
     return chat.sessionId;
+  }
+
+  /**
+   * Folga de cota (ver server/quotaBoost.ts), conferida a cada mensagem: começou, a conversa vai para
+   * o Opus em esforço máximo; acabou, volta ao modelo e ao esforço com que abriu. Devolve o aviso para
+   * o funcionário (os agents também mudam de esforço), só na troca. Se você trocou o modelo ou o
+   * esforço à mão nesta conversa, vale a sua escolha.
+   */
+  private async applyBoost(chat: ChatProcess): Promise<string | null> {
+    const state = this.boosts.get(chat);
+    if (state === 'manual' || !this.opts.quotaBoost) return null;
+    const boost = await this.opts.quotaBoost().catch(() => null);
+    if (boost && !state) {
+      this.boosts.set(chat, 'on');
+      const end = boostEnd(boost.until);
+      chat.setModel('opus', `Folga de cota até ${end}: esta conversa vai no Opus, em esforço máximo, e os agents pensam mais. Volta sozinho quando a folga acabar.`);
+      chat.setEffort('max', '');
+      return `${BOOST_NOTICE} até ${end}: esta conversa está no Opus, em esforço máximo. Ao chamar agents, passe effort: "xhigh" para o revisor e o pesquisador e effort: "medium" para o executor.`;
+    }
+    if (!boost && state === 'on') {
+      this.boosts.delete(chat);
+      const base = this.launched.get(chat);
+      chat.setModel(base?.model ?? 'default', 'A folga de cota acabou: esta conversa voltou ao modelo e ao esforço de antes.');
+      // Sem esforço na linha de comando, o padrão do Claude Code (alto).
+      chat.setEffort(base?.effort ?? 'high', '');
+      return `${BOOST_NOTICE} acabou: esta conversa voltou ao modelo e ao esforço de antes. Chame os agents sem effort (vale o de cada um).`;
+    }
+    return null;
   }
 
   /**
@@ -351,6 +398,8 @@ export class ChatManager {
     s: { model?: string; effort?: string; autonomy?: Autonomy },
   ): Promise<string> {
     const chat = await this.ensure(projectId, sessionId, staffId);
+    // Escolha sua nesta conversa: a folga de cota não troca nem desfaz mais (até o processo reabrir).
+    if (s.model || s.effort) this.boosts.set(chat, 'manual');
     if (s.model) chat.setModel(s.model, `Modelo desta conversa: ${s.model}`);
     if (s.effort) chat.setEffort(s.effort, `Esforço desta conversa: ${s.effort}`);
     if (s.autonomy) chat.setPermissionMode(CLI_MODE[s.autonomy], `Autonomia desta conversa: ${AUTONOMY_NAME[s.autonomy]}`);
@@ -546,6 +595,7 @@ export class ChatManager {
       spawnImpl: this.opts.spawnImpl,
     });
     this.chats.set(spawn.sessionId, chat);
+    this.launched.set(chat, { model: argOf(spawn.args, '--model'), effort: argOf(spawn.args, '--effort') });
     // Abas já abertas nesta sessão passam a ouvir o processo novo, desde o começo dele.
     const subs = this.streams.get(spawn.sessionId);
     if (subs) for (const [listener, unsubscribe] of subs) {

@@ -520,6 +520,8 @@ export class ChatProcess {
         this.controls.delete(res.request_id);
         const { label, mode } = entry;
         if (res.subtype === 'success') entry.onOk?.(res.response ?? {});
+        // Sem rótulo: deu certo em silêncio (outra troca do mesmo pedido já avisa); erro sempre aparece.
+        if (res.subtype === 'success' && !label) return;
         this.putItem(
           res.subtype === 'success'
             ? { kind: 'notice', id: `n:${randomUUID()}`, text: label, tone: 'info', at }

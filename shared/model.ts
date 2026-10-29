@@ -129,6 +129,16 @@ export interface AccountUsage {
   limits: UsageLimit[];
   /** Quando alguma sessão leu os limites pela última vez; null antes da primeira leitura. */
   updatedAt: string | null;
+  /** Folga de cota ligada agora (só com "otimizar assinatura" no config; ver server/quotaBoost.ts). */
+  boost?: QuotaBoost | null;
+}
+
+/** Folga de cota: até o reset da cota de 7 dias, conversas no Opus em esforço máximo. */
+export interface QuotaBoost {
+  /** O reset da cota de 7 dias (ISO), quando a folga acaba de vez. */
+  until: string;
+  /** Uso projetado no reset, no ritmo da semana (%). */
+  projected: number;
 }
 
 /** Um esforço (effort) de um modelo no Artificial Analysis. */
@@ -226,6 +236,11 @@ export interface AppConfig {
    * (quando compensa), `suggest` só avisa, `off` deixa como está.
    */
   contextSwitch: ContextSwitch;
+  /**
+   * Otimizar assinatura: perto do reset, com cota sobrando no ritmo da semana, as conversas vão para
+   * o Opus em esforço máximo e os agents pensam mais (ver server/quotaBoost.ts).
+   */
+  optimizeQuota: boolean;
   /** Workspaces: abas do quadro que agrupam os projetos como você quiser (cliente, área, tipo…). */
   workspaces: Workspace[];
   /** Workspace de cada projeto, por id de projeto; sem entrada = sem workspace. */

@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AccountUsage, AuthStatus, UsageLimit } from '../../../shared/model';
+import type { AccountUsage, AuthStatus, QuotaBoost, UsageLimit } from '../../../shared/model';
 import { api } from '../api';
 import { formatAgo, formatDuration } from '../format';
-import { t } from '../i18n';
+import { TerminalFilledIcon } from '../icons';
+import { locale, t } from '../i18n';
 
 // Topo do quadro: nome da empresa (editável), consumo da conta e login do CLI.
+
+/** "sáb., 14:00": quando a folga de cota acaba (o reset da cota de 7 dias). */
+function formatBoostEnd(iso: string): string {
+  return new Date(iso).toLocaleString(locale(), { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+}
 
 export function CompanyTitle({ name, onRename }: { name: string; onRename: (name: string) => Promise<void> }) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -64,17 +70,23 @@ export function CompanyTitle({ name, onRename }: { name: string; onRename: (name
 
 const LIMIT_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7d', spend_limit: t('toolbar.limitShort') };
 
-export function UsageMeters() {
+/** Consumo da conta, relido a cada 15 s: as barras e a bolinha da folga de cota (no ícone da assinatura) leem daqui. */
+export function useAccountUsage(): AccountUsage | null {
   const [usage, setUsage] = useState<AccountUsage | null>(null);
-  const [now, setNow] = useState(() => Date.now());
-
   useEffect(() => {
     const load = () => api.usage().then(setUsage, () => {});
     load();
-    const t = setInterval(() => {
-      load();
-      setNow(Date.now());
-    }, 15_000);
+    const t = setInterval(load, 15_000);
+    return () => clearInterval(t);
+  }, []);
+  return usage;
+}
+
+export function UsageMeters({ usage }: { usage: AccountUsage | null }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 15_000);
     return () => clearInterval(t);
   }, []);
 
@@ -126,7 +138,8 @@ function UsageMeter({ limit, now }: { limit: UsageLimit; now: number }) {
   );
 }
 
-export function AuthBadge() {
+/** Folga de cota ligada: bolinha "+" no canto do ícone; acabou, o ícone volta sem ela. */
+export function AuthBadge({ boost }: { boost: QuotaBoost | null }) {
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -153,9 +166,16 @@ export function AuthBadge() {
   if (!auth) return null;
 
   if (auth.loggedIn && auth.subscription) {
+    const base = t('toolbar.cliSubscription', { method: auth.authMethod ?? '?' });
+    const label = boost ? `${base}. ${t('toolbar.boostOn', { until: formatBoostEnd(boost.until) })}` : base;
     return (
-      <span className="auth-ok" title={t('toolbar.cliSubscription', { method: auth.authMethod ?? '?' })}>
-        <span className="dot dot-ok" /> {t('toolbar.subscription')}
+      <span className="auth-light auth-ok" role="img" aria-label={label} title={label}>
+        <TerminalFilledIcon />
+        {boost && (
+          <span className="auth-plus" aria-hidden="true">
+            +
+          </span>
+        )}
       </span>
     );
   }
@@ -177,8 +197,13 @@ export function AuthBadge() {
       ? t('toolbar.reasonApi', { method: String(auth.authMethod) })
       : t('toolbar.reasonLoggedOut');
 
+  // Semáforo: amarelo = logado pela API (cobra por token) ou aguardando login; vermelho = sem sessão possível.
+  const light = waiting || (auth.cliFound && auth.loggedIn) ? 'auth-api' : 'auth-off';
   return (
     <span className="auth-warn">
+      <span className={`auth-light ${light}`} role="img" aria-label={reason} title={reason}>
+        <TerminalFilledIcon />
+      </span>
       {auth.cliFound ? (
         <button className="btn-login" onClick={login} disabled={waiting} title={reason}>
           {waiting ? t('toolbar.waitingLogin') : auth.loggedIn ? t('toolbar.loginSubscription') : t('toolbar.loginClaude')}

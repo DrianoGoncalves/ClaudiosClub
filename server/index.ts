@@ -39,6 +39,7 @@ import { copyToLibrary, listLibrary, readLibrarySkill, removeLibrarySkill, saveL
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
 import { readUsage } from './usage';
 import { UsageStopError } from './usageStop';
+import { quotaBoost } from './quotaBoost';
 import { browserStatus } from './browser';
 import { gitState } from './git';
 import { buildOrchestration, MarkBody, readMarks, saveMark, withRunInfo } from './orchestration';
@@ -107,9 +108,13 @@ const staff: StaffService = new StaffService(adapter, {
 });
 /** Perguntas em aberto e avisos marcados como "não é segredo", guardados entre reinícios. */
 const inboxState = new InboxState(path.join(MYCO_HOME, 'inbox.json'));
+/** Folga de cota agora, só com "otimizar assinatura" ligado no config. */
+const currentBoost = async () => ((await readConfig()).optimizeQuota ? quotaBoost(await readUsage()) : null);
+
 const chats: ChatManager = new ChatManager({
   inbox: inboxState,
   contextSwitch: async () => (await readConfig()).contextSwitch,
+  quotaBoost: currentBoost,
   // A conversa de uma tarefa fica onde está: o quadro (revisão, ajustes, mescla) segue por ela.
   keepSession: (sessionId) => tasks.isTaskSession(sessionId),
   transcriptsDir: defaultTranscripts,
@@ -814,7 +819,14 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ],
   ['GET', /^\/api\/auth$/, ({ url }) => getAuthStatus({ fresh: url.searchParams.has('fresh') })],
   ['POST', /^\/api\/auth\/login$/, async () => openLoginTerminal()],
-  ['GET', /^\/api\/usage$/, () => readUsage()],
+  [
+    'GET',
+    /^\/api\/usage$/,
+    async () => {
+      const [usage, config] = await Promise.all([readUsage(), readConfig()]);
+      return { ...usage, boost: config.optimizeQuota ? quotaBoost(usage) : null };
+    },
+  ],
   ['GET', /^\/api\/browser$/, ({ url }) => browserStatus(url.searchParams.has('fresh'))],
   ['GET', /^\/api\/costs$/, () => getCosts()],
   // Ranking de modelos (Artificial Analysis). POST: cada busca gasta da cota diária da chave, então

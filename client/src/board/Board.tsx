@@ -22,7 +22,7 @@ import { buildGraph, HANDLE, RANKING_ID, roomFrame, type BoardNode, type StaffLi
 import { nodeTypes } from './nodes';
 import { ChartIcon } from '../icons';
 import { SettingsMenu } from '../toolbar/SettingsMenu';
-import { AuthBadge, CompanyTitle, UsageMeters } from '../toolbar/Toolbar';
+import { AuthBadge, CompanyTitle, UsageMeters, useAccountUsage } from '../toolbar/Toolbar';
 import { t } from '../i18n';
 import { WorkspaceTabs } from '../office/WorkspaceTabs';
 import { inTab, TAB_ALL, TAB_NONE, workspaceByProject } from '../office/workspaces';
@@ -120,6 +120,7 @@ function parseHireSource(nodeId: string): { projectId: string; staffId: string |
 
 export function BoardView(props: BoardViewProps) {
   const { config, costs, git, tasks, showArchived, selectedId, onSelect } = props;
+  const usage = useAccountUsage();
   // Aba de empresa: o quadro mostra só as salas dos projetos dela.
   const { tab, onTab: setTab } = props;
   const workspaceOf = useMemo(() => workspaceByProject(props.board.projects, config), [props.board.projects, config]);
@@ -356,8 +357,8 @@ export function BoardView(props: BoardViewProps) {
         {/* Opções numa linha e abas embaixo: o topo fica com a largura da maior das duas. */}
         <div className="toolbar-row">
           <CompanyTitle name={config?.companyName ?? 'Claudio’s Club'} onRename={props.onRename} />
-          <UsageMeters />
-          <AuthBadge />
+          <UsageMeters usage={usage} />
+          <AuthBadge boost={usage?.boost ?? null} />
           <span className="toolbar-sep" />
           <InboxMenu inbox={props.inbox} onOpen={props.onOpenInbox} />
           <button className="toolbar-icon" onClick={() => onSelect(RANKING_ID)} title={t('board.rankingTitle')} aria-label={t('board.ranking')}>
@@ -384,6 +385,7 @@ export function BoardView(props: BoardViewProps) {
             workspaces={config?.workspaces ?? null}
             projectWorkspaces={config?.projectWorkspaces ?? null}
             contextSwitch={config?.contextSwitch ?? null}
+            optimizeQuota={config?.optimizeQuota ?? null}
             onConfig={props.onConfig}
             // O demo não tem workspace: volta para "Todos", senão a sala dele ficaria escondida.
             onOpenProject={(projectId) => {

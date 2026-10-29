@@ -41,6 +41,8 @@ interface Props {
   onOpenProject: (projectId: string) => void;
   /** Conversa nova quando o assunto fecha. */
   contextSwitch: ContextSwitch | null;
+  /** Otimizar assinatura (folga de cota); null = config ainda não chegou. */
+  optimizeQuota: boolean | null;
 }
 
 type GroupId = 'general' | 'board' | 'chat' | 'roles' | 'usage';
@@ -483,6 +485,17 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
         control: <UsageStopInput field="sevenDay" value={stop} onSave={p.onUsageStop} />,
       },
     );
+  }
+
+  if (p.optimizeQuota !== null) {
+    out.push({
+      id: 'optimize-quota',
+      group: 'usage',
+      title: t('toolbar.optimizeTitle'),
+      description: t('toolbar.optimizeDesc'),
+      keywords: t('toolbar.optimizeKeywords'),
+      toggle: { checked: p.optimizeQuota, onChange: (v) => void api.saveConfig({ optimizeQuota: v }).then(p.onConfig, () => {}) },
+    });
   }
 
   if (p.projectBudgets) {

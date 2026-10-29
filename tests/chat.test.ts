@@ -625,3 +625,52 @@ describe('arquivos editados pelo Claudio’s Club', () => {
     await expect(saveProjectImage(proj, 'data:text/html;base64,AAAA')).rejects.toThrow('imagem inválida');
   });
 });
+
+describe('ChatManager: folga de cota', () => {
+  it('liga Opus no máximo enquanto dura, avisa o funcionário uma vez e volta ao da ficha; a sua escolha vale', async () => {
+    const f = fakeClaude();
+    let boost: { until: string; projected: number } | null = { until: '2026-10-31T17:00:00.000Z', projected: 45 };
+    const m = new ChatManager({
+      transcriptsDir: root,
+      usageFile: path.join(root, 'usage-boost.json'),
+      listLive: async () => [],
+      resolve: async () => ({ sessionId: 's-b', cwd: root, args: ['--session-id', 's-b', '--model', 'sonnet', '--effort', 'medium'] }),
+      spawnImpl: f.spawnImpl,
+      quotaBoost: async () => boost,
+    });
+    type Msg = { type: string; request?: Record<string, unknown>; message?: { content: Array<{ text?: string }> } };
+    const sent = () => f.written.splice(0) as Msg[];
+    const controls = (w: Msg[]) => w.filter((x) => x.type === 'control_request').map((x) => x.request);
+    const notice = (w: Msg[]) => w.find((x) => x.type === 'user')?.message?.content.find((b) => b.text?.startsWith('[MyCo] Folga'))?.text;
+
+    const sid = await m.send('p', null, 'bia', 'oi');
+    await tick();
+    let w = sent();
+    expect(controls(w)).toEqual([{ subtype: 'set_model', model: 'opus' }, { subtype: 'apply_flag_settings', settings: { effortLevel: 'max' } }]);
+    expect(notice(w)).toMatch(/effort: "xhigh" para o revisor e o pesquisador e effort: "medium" para o executor/);
+
+    // Ainda na folga: nada muda, nada repete.
+    await m.send('p', sid, 'bia', 'e agora?');
+    await tick();
+    w = sent();
+    expect(controls(w)).toEqual([]);
+    expect(notice(w)).toBeUndefined();
+
+    // Acabou: volta ao modelo e ao esforço com que a conversa abriu.
+    boost = null;
+    await m.send('p', sid, 'bia', 'continua');
+    await tick();
+    w = sent();
+    expect(controls(w)).toEqual([{ subtype: 'set_model', model: 'sonnet' }, { subtype: 'apply_flag_settings', settings: { effortLevel: 'medium' } }]);
+    expect(notice(w)).toMatch(/acabou/);
+
+    // Você trocou o modelo à mão: a folga não mexe mais nesta conversa.
+    await m.settings('p', sid, 'bia', { model: 'haiku' });
+    boost = { until: '2026-10-31T17:00:00.000Z', projected: 40 };
+    await m.send('p', sid, 'bia', 'mais uma');
+    await tick();
+    w = sent();
+    expect(controls(w)).toEqual([{ subtype: 'set_model', model: 'haiku' }]);
+    expect(notice(w)).toBeUndefined();
+  });
+});
