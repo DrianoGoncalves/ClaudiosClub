@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { StaffProfile, Task, TaskCode } from '../../../shared/model';
-import { api, ApiError, withUsageConfirm } from '../api';
+import { api, ApiError, withUsageConfirm, type CodexState } from '../api';
+import { Markdown } from '../chat/markdown';
 import { formatAgo } from '../format';
 import { t, locale } from '../i18n';
 import { BranchIcon } from '../icons';
@@ -27,6 +28,11 @@ interface Props {
 
 export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }: Props) {
   const [code, setCode] = useState<TaskCode | null>(null);
+  // Segunda opinião do Codex: ligada nas configurações? Instalado e com login? (O servidor guarda 5 min.)
+  const [codex, setCodex] = useState<CodexState | null>(null);
+  useEffect(() => {
+    api.codexStatus().then(setCodex, () => setCodex(null));
+  }, []);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -136,6 +142,29 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
             <details className="collapse">
               <summary>{t('tasks.testOutput')}</summary>
               <pre className="task-diff">{task.tests.output}</pre>
+            </details>
+          )}
+
+          {/* Segunda opinião: outro modelo (o Codex) olha o diff. Só com a opção ligada e o Codex instalado e com login. */}
+          {codex?.enabled && codex.available && code.diff && (
+            <div className="task-code-row">
+              <b className="small">{t('tasks.secondOpinion')}</b>
+              {task.secondOpinion && <span className="muted small">{formatAgo(now - Date.parse(task.secondOpinion.at))}</span>}
+              <button
+                className="btn-secondary"
+                disabled={!!busy}
+                title={t('tasks.secondOpinionHint')}
+                onClick={() => void run('codex', () => api.taskSecondOpinion(projectId, task.id))}
+              >
+                {busy === 'codex' ? t('tasks.secondOpinionRunning') : task.secondOpinion ? t('tasks.secondOpinionAgain') : t('tasks.secondOpinionAsk')}
+              </button>
+            </div>
+          )}
+          {codex?.enabled && !codex.available && code.diff && <p className="muted small">{t('tasks.secondOpinionOff', { reason: codex.reason ?? '' })}</p>}
+          {task.secondOpinion && (
+            <details className="collapse" open>
+              <summary>{t('tasks.secondOpinionResult')}</summary>
+              <Markdown text={task.secondOpinion.text} />
             </details>
           )}
 

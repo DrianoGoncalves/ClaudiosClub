@@ -43,6 +43,8 @@ interface Props {
   contextSwitch: ContextSwitch | null;
   /** Otimizar assinatura (folga de cota); null = config ainda não chegou. */
   optimizeQuota: boolean | null;
+  /** Segunda opinião do Codex na revisão das tarefas; null = config ainda não chegou. */
+  codexReview: boolean | null;
 }
 
 type GroupId = 'general' | 'board' | 'chat' | 'roles' | 'usage';
@@ -485,6 +487,18 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
         control: <UsageStopInput field="sevenDay" value={stop} onSave={p.onUsageStop} />,
       },
     );
+  }
+
+  if (p.codexReview !== null) {
+    out.push({
+      id: 'codex-review',
+      group: 'general',
+      title: t('toolbar.codexTitle'),
+      description: t('toolbar.codexDesc'),
+      keywords: t('toolbar.codexKeywords'),
+      toggle: { checked: p.codexReview, onChange: (v) => void api.saveConfig({ codexReview: v }).then(p.onConfig, () => {}) },
+      advanced: true,
+    });
   }
 
   if (p.optimizeQuota !== null) {

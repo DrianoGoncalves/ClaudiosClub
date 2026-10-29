@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { ArtificialAnalysis } from './adapters/artificialAnalysis';
+import { CodexAdapter, CodexError } from './adapters/codex';
 import { ClaudeAdapter } from './adapters/claude';
 import { defaultLocations } from './adapters/claude/paths';
 import type { ToolAdapter } from './adapters/types';
@@ -148,6 +149,9 @@ const projectPathOf = async (projectId: string) => {
   const p = (await adapter.listProjects()).find((x) => x.id === projectId);
   return p?.exists ? p.path : null;
 };
+/** Codex CLI só como segunda opinião na revisão de tarefas (o motor dos funcionários é o Claude). */
+const codex = new CodexAdapter();
+
 const tasks = new TaskService({
   projectPath: projectPathOf,
   projectIds: async () => (await adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf).map((p) => p.id),
@@ -174,6 +178,7 @@ const tasks = new TaskService({
   lastText: (sessionId) => chats.lastAssistantText(sessionId),
   // O consumo já foi conferido quando você mandou (a mensagem só esperou a vez).
   sendTo: (projectId, sessionId, staffId, text, images) => chats.send(projectId, sessionId, staffId, text, 'next', images),
+  secondOpinion: (input) => codex.review(input),
 });
 
 // Rotinas: no horário, a mensagem vai ao funcionário pelo mesmo caminho do chat do painel.
@@ -631,13 +636,29 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     },
   ],
   ['GET', new RegExp(`^/api/projects/${ID}/tasks/${ID}/code$`), ({ params: [id, taskId] }) => tasks.code(id!, taskId!)],
+  // Desligada nas configurações: nem procura o `codex` (nenhum processo é aberto).
+  [
+    'GET',
+    /^\/api\/codex$/,
+    async ({ url }) =>
+      (await readConfig()).codexReview
+        ? { enabled: true, ...(await codex.check(url.searchParams.has('fresh'))) }
+        : { enabled: false, available: false, reason: null },
+  ],
   [
     'POST',
-    new RegExp(`^/api/projects/${ID}/tasks/${ID}/(test|merge|review|deploy)$`),
+    new RegExp(`^/api/projects/${ID}/tasks/${ID}/(test|merge|review|deploy|second-opinion)$`),
     ({ params: [id, taskId, action], body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('tarefas só pelo Claudio’s Club');
       const b = parse(z.object({ staffId: z.string().max(40).optional(), force: z.boolean().default(false), skipTests: z.boolean().default(false) }), body ?? {});
       if (action === 'test') return tasks.test(id!, taskId!);
+      // O diff vai para a OpenAI: só com a opção ligada nas configurações e quando você pede, pelo botão.
+      if (action === 'second-opinion') {
+        return readConfig().then((c) => {
+          if (!c.codexReview) throw new BadRequest('a segunda opinião do Codex está desligada nas configurações');
+          return tasks.secondOpinion(id!, taskId!);
+        });
+      }
       if (action === 'merge') return tasks.merge(id!, taskId!, b.skipTests);
       if (!b.staffId) throw new BadRequest(action === 'review' ? 'escolha quem revisa' : 'escolha quem faz o deploy');
       return action === 'review' ? tasks.requestReview(id!, taskId!, b.staffId, b.force) : tasks.requestDeploy(id!, taskId!, b.staffId, b.force);
@@ -1014,6 +1035,7 @@ const server = http.createServer(async (req, res) => {
           err instanceof StaffError ||
           err instanceof ChatError ||
           err instanceof TaskError ||
+          err instanceof CodexError ||
           err instanceof RoleError ||
           err instanceof FileError ||
           err instanceof AgentError ||

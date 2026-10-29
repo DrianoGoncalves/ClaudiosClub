@@ -27,6 +27,8 @@ const DEFAULTS: AppConfig = {
   contextSwitch: 'auto',
   // Desligado: gastar a sobra da cota é escolha de quem paga.
   optimizeQuota: false,
+  // Desligada: mandar o diff para outra empresa é escolha sua.
+  codexReview: false,
   workspaces: [],
   projectWorkspaces: {},
 };
@@ -66,6 +68,7 @@ const ConfigFile = z
     projectBudgets: z.record(z.string(), z.unknown()).optional().catch(undefined),
     contextSwitch: z.enum(CONTEXT_SWITCHES).optional().catch(undefined),
     optimizeQuota: z.boolean().optional().catch(undefined),
+    codexReview: z.boolean().optional().catch(undefined),
     workspaces: z.array(z.unknown()).optional().catch(undefined),
     projectWorkspaces: z.record(z.string(), z.unknown()).optional().catch(undefined),
   })
@@ -103,6 +106,7 @@ export const ConfigPatch = z.object({
   sendWhileBusy: PRIORITY.optional(),
   contextSwitch: z.enum(CONTEXT_SWITCHES).optional(),
   optimizeQuota: z.boolean().optional(),
+  codexReview: z.boolean().optional(),
   /** Por id de projeto: uma cor troca a da sala; null volta à padrão. Os outros projetos ficam como estão. */
   projectColors: z.record(z.string().min(1).max(200), COLOR.nullable()).optional(),
   /** Por id de projeto: só o apelido na tela (a pasta não muda); vazio ou null volta ao nome da pasta. */
@@ -150,6 +154,7 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     ),
     contextSwitch: d.contextSwitch ?? DEFAULTS.contextSwitch,
     optimizeQuota: d.optimizeQuota ?? DEFAULTS.optimizeQuota,
+    codexReview: d.codexReview ?? DEFAULTS.codexReview,
     ...readWorkspaces(d.workspaces, d.projectWorkspaces),
   };
 }

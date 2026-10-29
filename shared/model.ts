@@ -248,6 +248,11 @@ export interface AppConfig {
    * o Opus em esforço máximo e os agents pensam mais (ver server/quotaBoost.ts).
    */
   optimizeQuota: boolean;
+  /**
+   * Segunda opinião do Codex na revisão das tarefas (o diff vai para a OpenAI): desligada até você
+   * ligar; desligada, o Claudio’s Club nem chama o `codex` (ver server/adapters/codex.ts).
+   */
+  codexReview: boolean;
   /** Workspaces: abas do quadro que agrupam os projetos como você quiser (cliente, área, tipo…). */
   workspaces: Workspace[];
   /** Workspace de cada projeto, por id de projeto; sem entrada = sem workspace. */
@@ -416,6 +421,8 @@ export interface Task {
   merged?: { at: string; sha: string; branch: string; base: string } | null;
   /** Último teste rodado pelo Claudio’s Club para esta tarefa. */
   tests?: TestRun | null;
+  /** Segunda opinião do Codex sobre o diff (Markdown), quando você pediu. */
+  secondOpinion?: { at: string; text: string } | null;
   /** Gestor (funcionário) que pediu a tarefa pela API; recebe o resumo quando ela é entregue. */
   requestedBy?: string | null;
   /** A conversa do gestor em que ele pediu: a entrega volta para ela. */

@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { TASK_STATUSES, type ChatItem, type HeldMessage, type StaffProfile, type Task, type TaskCode, type TaskStatus, type TaskSummary, type TestRun } from '../shared/model';
+import type { SecondOpinionInput } from './adapters/codex';
 import { writeAtomic } from './staff/store';
 import { checkpoint, CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
 
@@ -69,6 +70,8 @@ export interface TaskServiceDeps {
   isWorking?: (staffId: string, exceptSession?: string) => boolean;
   /** Manda na conversa que já existe (os ajustes guardados). */
   sendTo?: (projectId: string, sessionId: string, staffId: string, text: string, images: string[]) => Promise<string>;
+  /** Segunda opinião de outro modelo sobre o diff (o Codex, ver adapters/codex.ts); sem ele, indisponível. */
+  secondOpinion?: (input: SecondOpinionInput) => Promise<string>;
 }
 
 type Role = 'work' | 'review' | 'deploy';
@@ -306,6 +309,17 @@ export class TaskService {
     if (!command) throw new TaskError('não achei testes neste projeto (npm test, composer test ou phpunit)');
     const tests = await runTests(place.path, command);
     return this.change(projectId, taskId, (t) => ({ ...t, tests, updatedAt: new Date().toISOString() }));
+  }
+
+  /** Pede ao Codex uma segunda opinião sobre o diff da tarefa e guarda no cartão (só quando você pede). */
+  async secondOpinion(projectId: string, taskId: string): Promise<Task | null> {
+    if (!this.deps.secondOpinion) throw new TaskError('a segunda opinião não está disponível');
+    const { task } = await this.context(projectId, taskId);
+    const code = await this.code(projectId, taskId);
+    if (!code?.diff.trim()) throw new TaskError('não há mudanças para revisar');
+    const text = await this.deps.secondOpinion({ title: task.title, request: task.description, diff: code.diff, truncated: code.truncated });
+    const at = new Date().toISOString();
+    return this.change(projectId, taskId, (t) => noted({ ...t, secondOpinion: { at, text } }, 'segunda opinião do Codex'));
   }
 
   /** Mescla a worktree no projeto (testes verdes, ou sem testes confirmado). A tarefa vai para "pronto". */

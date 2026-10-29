@@ -71,6 +71,7 @@ describe('config', () => {
       usageStop,
       sendWhileBusy: 'next',
       optimizeQuota: false,
+      codexReview: false,
       ...colors,
     });
 
@@ -84,6 +85,7 @@ describe('config', () => {
       usageStop,
       sendWhileBusy: 'next',
       optimizeQuota: false,
+      codexReview: false,
       ...colors,
     });
     expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ futuro: 1, companyName: 'Acme Labs' });

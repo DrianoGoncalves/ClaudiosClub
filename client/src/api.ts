@@ -108,6 +108,13 @@ export async function withUsageConfirm<T>(run: (force: boolean) => Promise<T>): 
   }
 }
 
+/** Segunda opinião do Codex: ligada nas configurações, e se dá para usar (instalado, com login). */
+export interface CodexState {
+  enabled: boolean;
+  available: boolean;
+  reason: string | null;
+}
+
 export interface AgentSource {
   name: string;
   description: string | null;
@@ -162,6 +169,7 @@ export const api = {
     sendWhileBusy?: SendPriority;
     contextSwitch?: ContextSwitch;
     optimizeQuota?: boolean;
+    codexReview?: boolean;
     /** Só os projetos enviados mudam; null volta à cor padrão. */
     projectColors?: Record<string, ProjectColor | null>;
     /** Só os projetos enviados mudam; vazio ou null volta ao nome da pasta. */
@@ -269,6 +277,9 @@ export const api = {
   taskSummary: () => get<Record<string, TaskSummary>>('/api/tasks/summary'),
   taskCode: (projectId: string, taskId: string) => get<TaskCode>(`/api/projects/${projectId}/tasks/${taskId}/code`),
   taskTest: (projectId: string, taskId: string) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/test`),
+  /** Segunda opinião do Codex sobre o diff da tarefa (o diff vai para a OpenAI). */
+  taskSecondOpinion: (projectId: string, taskId: string) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/second-opinion`),
+  codexStatus: () => get<CodexState>('/api/codex'),
   taskMerge: (projectId: string, taskId: string, skipTests = false) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/merge`, { skipTests }),
   taskReview: (projectId: string, taskId: string, staffId: string, force = false) =>
     post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/review`, { staffId, force }),
