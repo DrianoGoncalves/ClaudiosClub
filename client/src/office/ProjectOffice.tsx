@@ -15,6 +15,7 @@ export function ProjectOffice({ projectId, config, onConfig }: { projectId: stri
         <section className="section">
           <h3>{t('office.projectWorkspace')}</h3>
           <select
+            className="setting-select"
             value={config?.projectWorkspaces[projectId] ?? ''}
             aria-label={t('office.projectWorkspace')}
             onChange={async (e) => {

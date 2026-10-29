@@ -1,4 +1,4 @@
-import { useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { AppConfig, InboxItem } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
@@ -8,6 +8,8 @@ interface Props {
   config: AppConfig | null;
   /** Workspace de cada projeto (ver workspaceByProject). */
   workspaceOf: Map<string, string | null>;
+  /** Workspaces com sala visível no quadro (null = projeto sem workspace). */
+  inUse: Set<string | null>;
   inbox: InboxItem[];
   value: string;
   onChange: (tab: string) => void;
@@ -16,15 +18,19 @@ interface Props {
 }
 
 /** Abas logo abaixo do topo: filtram as salas do quadro, sem sair da página. */
-export function WorkspaceTabs({ config, workspaceOf, inbox, value, onChange, onConfig, onNewProject }: Props) {
+export function WorkspaceTabs({ config, workspaceOf, inUse, inbox, value, onChange, onConfig, onNewProject }: Props) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const workspaces = config?.workspaces ?? [];
-  const hasLoose = [...workspaceOf.values()].some((w) => !w);
-  // Workspace sem projeto fica fora do topo; o aberto agora continua, para receber o primeiro projeto.
-  const used = new Set(workspaceOf.values());
-  const shown = workspaces.filter((w) => used.has(w.id) || w.id === value);
+  // Aba sem sala no quadro fica fora do topo; a aberta agora continua, para receber o primeiro projeto.
+  const hasLoose = inUse.has(null);
+  const shown = workspaces.filter((w) => inUse.has(w.id) || w.id === value);
+  // "Sem workspace" que sumiu deixaria o quadro só com o escopo do usuário: volta para "Todos".
+  // (inUse vazio = quadro ainda carregando; não mexe na aba guardada.)
+  useEffect(() => {
+    if (value === TAB_NONE && inUse.size && !hasLoose) onChange(TAB_ALL);
+  }, [value, inUse, hasLoose, onChange]);
   const tabs = [
     { id: TAB_ALL, label: t('office.tabAll'), color: null },
     ...shown.map((w) => ({ id: w.id, label: w.name, color: w.color })),

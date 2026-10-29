@@ -738,6 +738,7 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
 .setting-check { display: flex; align-items: flex-start; gap: 8px; margin-top: 4px; cursor: pointer; }
 .setting-check input { margin-top: 2px; flex: none; }
 .setting-select { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
+.setting-select:focus { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); border-color: var(--ink-blue); }
 .setting-number { display: inline-flex; align-items: center; gap: 4px; }
 .setting-number input { width: 64px; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
 .settings-empty { padding: 24px 0; }

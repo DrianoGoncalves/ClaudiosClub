@@ -132,6 +132,16 @@ export function BoardView(props: BoardViewProps) {
     () => (tab === TAB_ALL ? props.board : { ...props.board, projects: props.board.projects.filter((p) => inTab(tab, workspaceOf.get(p.id), config)) }),
     [props.board, tab, workspaceOf, config],
   );
+  // Workspaces com sala no quadro agora (null = sem workspace), com as mesmas regras de buildGraph:
+  // arquivado só com "mostrar arquivados", worktree solta só com "mostrar worktrees".
+  const inUse = useMemo(() => {
+    const archived = new Set(config?.archived.projects ?? []);
+    return new Set(
+      props.board.projects
+        .filter((p) => (showArchived || !archived.has(p.id)) && (!p.worktreeOf || showWorktrees))
+        .map((p) => workspaceOf.get(p.id) ?? null),
+    );
+  }, [props.board.projects, workspaceOf, config?.archived, showArchived, showWorktrees]);
   const [shelves, setShelves] = useState(() => loadList(SHELVES_KEY));
   const [collapsed, setCollapsed] = useState(() => loadList(COLLAPSED_KEY));
   // Proporção da tela usada na planta: medida na abertura e a cada "reorganizar" (não a cada
@@ -397,6 +407,7 @@ export function BoardView(props: BoardViewProps) {
         <WorkspaceTabs
           config={config}
           workspaceOf={workspaceOf}
+          inUse={inUse}
           inbox={props.inbox.items}
           value={tab}
           onChange={setTab}
