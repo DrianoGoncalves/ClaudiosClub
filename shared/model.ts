@@ -221,11 +221,19 @@ export interface AppConfig {
    * do projeto é estimada pelo custo dele nos últimos 7 dias. Sem entrada = sem orçamento.
    */
   projectBudgets: Record<string, number>;
+  /**
+   * Conversa nova quando o assunto fecha: `auto` segue sozinho numa nova depois do ponto de corte
+   * (quando compensa), `suggest` só avisa, `off` deixa como está.
+   */
+  contextSwitch: ContextSwitch;
   /** Workspaces: abas do quadro que agrupam os projetos como você quiser (cliente, área, tipo…). */
   workspaces: Workspace[];
   /** Workspace de cada projeto, por id de projeto; sem entrada = sem workspace. */
   projectWorkspaces: Record<string, string>;
 }
+
+export const CONTEXT_SWITCHES = ['auto', 'suggest', 'off'] as const;
+export type ContextSwitch = (typeof CONTEXT_SWITCHES)[number];
 
 /** Um workspace: o nome vai para a ficha de quem trabalha nos projetos dele, como contexto. */
 export interface Workspace {

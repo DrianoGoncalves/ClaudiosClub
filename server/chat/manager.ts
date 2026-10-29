@@ -8,6 +8,7 @@ import type {
   ChatItem,
   ChatMcp,
   ChatSnapshot,
+  ContextSwitch,
   LiveSession,
   RewindPreview,
   SendPriority,
@@ -18,6 +19,8 @@ import { writeAtomic } from '../staff/store';
 import { readHistory } from './history';
 import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
 import { finalQuestion } from './question';
+import { CEILING_AT, contextNotice, kTokens, NOTICE_AT, rereadUsd, switchDecision, usd, type TurnInfo } from './contextPolicy';
+import { CONTEXT_NOTICE } from './items';
 import { InboxState } from '../inboxState';
 import { isAlive, killTree, type ChatRegistry } from './registry';
 
@@ -53,6 +56,10 @@ export interface ChatManagerOptions {
   onIdle?: (sessionId: string, projectId: string, staffId: string | null, reason: 'turn' | 'background' | 'exit') => void;
   /** O que a caixa lembra entre reinícios; sem ele, fica só na memória. */
   inbox?: InboxState;
+  /** Conversa nova quando o assunto fecha (o config); sem ele, `auto`. */
+  contextSwitch?: () => Promise<ContextSwitch>;
+  /** Conversas que nunca trocam sozinhas (a de uma tarefa: o quadro segue por ela). */
+  keepSession?: (sessionId: string) => Promise<boolean>;
 }
 
 export class ChatError extends Error {}
@@ -116,6 +123,8 @@ export class ChatManager {
   private readonly delegated = new Set<string>();
   /** Perguntas em aberto e avisos que não são segredo (sobrevivem a um reinício, ver inboxState.ts). */
   private readonly inbox: InboxState;
+  /** Fim do último turno de cada conversa: tamanho do contexto, ponto de corte (sobrevive ao processo fechar). */
+  private readonly turns = new Map<string, TurnInfo & { ceilingNoted?: number }>();
   private readonly timer: NodeJS.Timeout;
 
   constructor(private readonly opts: ChatManagerOptions) {
@@ -230,12 +239,73 @@ export class ChatManager {
     if (delegated) this.delegated.add(chat.sessionId);
     else this.delegated.delete(chat.sessionId);
     this.inbox.setQuestion(chat.sessionId, null); // respondeu (ou mandou outra coisa): a pergunta sai da caixa
-    // A ficha mudou depois que esta conversa começou: o aviso vai junto, uma vez só.
-    const notice = this.fichaNotices.get(chat.sessionId);
+    // A ficha mudou depois que esta conversa começou: o aviso vai junto, uma vez só. Conversa grande:
+    // o funcionário fica sabendo do tamanho e do custo (ele não vê isso sozinho).
+    const ficha = this.fichaNotices.get(chat.sessionId);
     this.fichaNotices.delete(chat.sessionId);
+    const used = chat.contextUsed;
+    const big = used !== null && used >= NOTICE_AT ? contextNotice(used, chat.model, CONTEXT_NOTICE) : null;
+    const notice = [ficha, big].filter(Boolean).join('\n\n') || undefined;
     chat.send(text, priority, images, notice, files);
     this.opts.onSent?.(chat.sessionId);
     return chat.sessionId;
+  }
+
+  /**
+   * A sua mensagem, digitada no MyCo. Se o funcionário fechou o assunto (ponto de corte) numa
+   * conversa grande, ou o cache já esfriou, ela segue numa conversa nova: lê só a ficha e a memória,
+   * em vez de reler tudo. A anterior continua na lista, e um aviso conta o que aconteceu.
+   */
+  async sendFromUser(
+    projectId: string,
+    sessionId: string | null,
+    staffId: string | null,
+    text: string,
+    priority?: SendPriority,
+    images: string[] = [],
+    files: ChatAttachment[] = [],
+  ): Promise<string> {
+    const info = sessionId ? this.turns.get(sessionId) : undefined;
+    const open = sessionId ? this.chats.get(sessionId) : undefined;
+    if (sessionId && staffId && info && !open?.busy && !(await this.opts.keepSession?.(sessionId))) {
+      const policy = (await this.opts.contextSwitch?.()) ?? 'auto';
+      if (switchDecision(info, Date.now(), policy) === 'switch') {
+        const fresh = await this.ensure(projectId, null, staffId);
+        fresh.addNotice(
+          `Seguiu numa conversa nova: a anterior tinha ${kTokens(info.used!)} e o assunto dela tinha fechado (a memória leva o essencial). Ela continua na lista de conversas, se precisar voltar.`,
+        );
+        this.log(`${sessionId}: ponto de corte com ${kTokens(info.used!)}; a mensagem seguiu em ${fresh.sessionId}`);
+        return this.send(projectId, fresh.sessionId, staffId, text, priority, images, files);
+      }
+    }
+    return this.send(projectId, sessionId, staffId, text, priority, images, files);
+  }
+
+  /**
+   * Fim de um turno: guarda o tamanho e o ponto de corte para decidir a próxima mensagem, e avisa
+   * você quando não troca sozinho (o ajuste está em "sugerir", ou a conversa passou do teto sem
+   * fechar o assunto).
+   */
+  private async noteTurn(sessionId: string) {
+    const chat = this.chats.get(sessionId);
+    if (!chat) return;
+    const prev = this.turns.get(sessionId);
+    const info = { at: Date.now(), used: chat.contextUsed, checkpoint: chat.checkpoint, model: chat.model, ceilingNoted: prev?.ceilingNoted };
+    this.turns.set(sessionId, info);
+    if (info.used === null || this.delegated.has(sessionId)) return;
+    const policy = (await this.opts.contextSwitch?.()) ?? 'auto';
+    if (policy === 'off') return;
+    const cost = usd(rereadUsd(info.used, info.model));
+    if (switchDecision(info, info.at, policy) === 'suggest') {
+      chat.addNotice(`Assunto fechado, com ${kTokens(info.used)} de contexto: a próxima pergunta sai mais barata numa conversa nova (+ Nova), e a memória leva o essencial.`);
+    } else if (!info.checkpoint && info.used >= CEILING_AT) {
+      // Uma vez a cada 100k a mais: avisar a cada resposta seria só barulho.
+      const step = Math.floor(info.used / 100_000);
+      if ((info.ceilingNoted ?? 0) < step) {
+        info.ceilingNoted = step;
+        chat.addNotice(`Esta conversa tem ${kTokens(info.used)}: cada resposta relê tudo (cerca de ${cost}). Quando o assunto fechar, o funcionário registra na memória e a próxima mensagem segue numa conversa nova.`, 'warn');
+      }
+    }
   }
 
   /**
@@ -465,6 +535,7 @@ export class ChatManager {
       onSecret: (label) => this.noteSecret(spawn.sessionId, label),
       onIdle: (reason) => {
         if (reason !== 'exit') this.noteQuestion(spawn.sessionId);
+        if (reason === 'turn') void this.noteTurn(spawn.sessionId).catch(() => {});
         this.opts.onIdle?.(spawn.sessionId, projectId, staffId, reason);
       },
       onCommands: (commands) => this.commands.set(projectId, commands),

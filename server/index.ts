@@ -107,6 +107,9 @@ const staff: StaffService = new StaffService(adapter, {
 const inboxState = new InboxState(path.join(MYCO_HOME, 'inbox.json'));
 const chats: ChatManager = new ChatManager({
   inbox: inboxState,
+  contextSwitch: async () => (await readConfig()).contextSwitch,
+  // A conversa de uma tarefa fica onde está: o quadro (revisão, ajustes, mescla) segue por ela.
+  keepSession: (sessionId) => tasks.isTaskSession(sessionId),
   transcriptsDir: defaultTranscripts,
   usageFile: path.join(MYCO_HOME, 'usage.json'),
   listLive: () => adapter.listLiveSessions(),
@@ -420,8 +423,12 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
         if (held) return { sessionId: b.sessionId, held };
       }
       const priority = b.priority ?? (await readConfig()).sendWhileBusy;
-      // Fora do navegador, quem manda é outro funcionário (o gestor, pela API): delegação.
-      return { sessionId: await chats.send(pid!, b.sessionId, b.staffId, b.text, priority, b.images, b.files, !fromBrowser) };
+      // Fora do navegador, quem manda é outro funcionário (o gestor, pela API): delegação. Pelo MyCo,
+      // a mensagem pode seguir numa conversa nova se o assunto da atual fechou (ver contextPolicy.ts).
+      const sessionId = fromBrowser
+        ? await chats.sendFromUser(pid!, b.sessionId, b.staffId, b.text, priority, b.images, b.files)
+        : await chats.send(pid!, b.sessionId, b.staffId, b.text, priority, b.images, b.files, true);
+      return { sessionId };
     },
   ],
   [

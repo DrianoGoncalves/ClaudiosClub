@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import type { ChatItem, ContextUsage } from '../../shared/model';
 import { tryJson } from '../adapters/claude/fsutil';
 import { contextWindowFor } from '../adapters/claude/pricing';
-import { inputText, isInjectedUserText, resultText, toolSummary } from './items';
+import { inputText, isInjectedUserText, resultText, stripCheckpoint, toolSummary } from './items';
 
 // Histórico da conversa a partir do transcript (~/.claude/projects/.../<sessão>.jsonl).
 // Transcripts passam de MB: lê só o final e devolve as últimas mensagens.
@@ -102,7 +102,8 @@ export async function readHistory(
         if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
           const id = `a:${msgId}`;
           const prev = byId.get(id);
-          const text = prev?.kind === 'assistant' && prev.text !== b.text ? `${prev.text}\n\n${b.text}` : b.text;
+          const own = stripCheckpoint(b.text as string);
+          const text = prev?.kind === 'assistant' && prev.text !== own ? `${prev.text}\n\n${own}` : own;
           put({ kind: 'assistant', id, text, at });
         } else if (b.type === 'tool_use' && typeof b.id === 'string') {
           const name = typeof b.name === 'string' ? b.name : 'ferramenta';

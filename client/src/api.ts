@@ -10,6 +10,7 @@ import type {
   ChatChanges,
   ChatMcp,
   ChatSnapshot,
+  ContextSwitch,
   ConversationHit,
   CostReport,
   Effort,
@@ -160,6 +161,7 @@ export const api = {
     uiLevel?: UiLevel;
     usageStop?: UsageStop;
     sendWhileBusy?: SendPriority;
+    contextSwitch?: ContextSwitch;
     /** Só os projetos enviados mudam; null volta à cor padrão. */
     projectColors?: Record<string, ProjectColor | null>;
     /** Só o tema enviado muda; null volta ao fundo padrão. */

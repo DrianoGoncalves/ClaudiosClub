@@ -226,9 +226,25 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     worktreeSection(ctx),
     teamSection(p, ctx),
     hiringSection(p, ctx),
-    `## Memória\nSua memória fica em \`${ctx.memoryPath}\`. Leia no início de cada sessão. Ao concluir algo relevante, acrescente notas curtas: decisões, convenções descobertas, pendências. Não registre segredos (senhas, chaves, tokens).`,
+    memorySection(ctx),
   ];
   return sections.filter(Boolean).join('\n\n') + '\n';
+}
+
+/**
+ * A memória é o que atravessa as conversas: com ela curada, cada assunto pode ter uma conversa
+ * curta (barata e com o modelo prestando atenção), em vez de uma conversa que cresce por semanas e
+ * relê tudo a cada resposta. O ponto de corte avisa o MyCo de que o assunto fechou e a memória está
+ * em dia: a próxima mensagem pode seguir numa conversa nova (ver server/chat/manager.ts).
+ */
+function memorySection(ctx: FichaContext): string {
+  return [
+    '## Memória',
+    `Sua memória fica em \`${ctx.memoryPath}\`. Leia no início de cada conversa. Ela é o que você leva de uma conversa para a outra: decisões e o porquê, convenções do projeto, pendências e onde parou.`,
+    '- Curta (até umas 60 linhas): ao registrar, substitua o que ficou velho em vez de só acrescentar. Nada que o código ou o git já contam, e nada de segredos (senhas, chaves, tokens).',
+    '- Ponto de corte: quando terminar um assunto (tarefa entregue, decisão tomada, pergunta respondida e nada pendente nesta conversa), atualize a memória com o que vale levar e termine a resposta com esta linha, sozinha, por último: `[MyCo:ponto-de-corte]`. Assim a próxima mensagem pode começar numa conversa nova, mais barata, e você não perde nada. Não use no meio de um trabalho nem quando espera uma resposta para continuar.',
+    '- Se a mensagem vier com `[MyCo] Contexto desta conversa: …`, ela já está grande e cada resposta custa mais: feche o assunto atual e use o ponto de corte assim que for natural.',
+  ].join('\n');
 }
 
 function hiringSection(p: StaffProfile, ctx: FichaContext): string {

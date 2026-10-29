@@ -385,6 +385,7 @@ export function BoardView(props: BoardViewProps) {
             projects={props.board.projects}
             workspaces={config?.workspaces ?? null}
             projectWorkspaces={config?.projectWorkspaces ?? null}
+            contextSwitch={config?.contextSwitch ?? null}
             onConfig={props.onConfig}
             // O demo não tem workspace: volta para "Todos", senão a sala dele ficaria escondida.
             onOpenProject={(projectId) => {

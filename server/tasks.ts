@@ -507,6 +507,11 @@ export class TaskService {
     if (where && where.role === role) await this.change(where.projectId, where.taskId, (t) => fn(t) ?? t);
   }
 
+  /** A conversa é de uma tarefa (o trabalho, a revisão ou o deploy dela)? */
+  async isTaskSession(sessionId: string): Promise<boolean> {
+    return !!(await this.where(sessionId));
+  }
+
   private async where(sessionId: string) {
     if (!this.bySession.has(sessionId) && !this.indexed) await this.summary(); // primeira vez depois de subir: monta o índice sessão → tarefa
     return this.bySession.get(sessionId) ?? null;

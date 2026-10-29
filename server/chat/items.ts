@@ -41,6 +41,25 @@ export function resultText(content: unknown): string {
 }
 
 /**
+ * Ponto de corte: a última linha que o funcionário escreve quando terminou um assunto e já
+ * atualizou a memória (ver a ficha). O MyCo lê e esconde; a próxima mensagem pode seguir numa
+ * conversa nova, mais barata, sem perder o essencial.
+ */
+export const CHECKPOINT = '[MyCo:ponto-de-corte]';
+
+export function hasCheckpoint(text: string): boolean {
+  const last = text.trimEnd().split(/\r?\n/).at(-1)?.trim();
+  return last === CHECKPOINT;
+}
+
+export function stripCheckpoint(text: string): string {
+  return text.includes(CHECKPOINT) ? text.split(/\r?\n/).filter((l) => l.trim() !== CHECKPOINT).join('\n').trimEnd() : text;
+}
+
+/** Começo do aviso de contexto que o MyCo põe junto da sua mensagem (a conversa não mostra). */
+export const CONTEXT_NOTICE = '[MyCo] Contexto desta conversa:';
+
+/**
  * Texto que o Claude Code injeta como se fosse do usuário (lembretes do sistema, saída de
  * comandos locais, avisos). Não é o que a pessoa digitou: fica fora da conversa.
  */
@@ -54,7 +73,8 @@ export function isInjectedUserText(text: string): boolean {
     t.startsWith('[Request interrupted') ||
     // Aviso do próprio Claude Code de que uma tarefa em segundo plano terminou (não é você falando).
     t.startsWith('<task-notification>') ||
-    // Aviso do MyCo de que a ficha mudou (vai junto com a sua mensagem).
-    t.startsWith('[MyCo] Sua ficha foi atualizada')
+    // Avisos do MyCo que vão junto com a sua mensagem: a ficha mudou, o contexto está grande.
+    t.startsWith('[MyCo] Sua ficha foi atualizada') ||
+    t.startsWith(CONTEXT_NOTICE)
   );
 }

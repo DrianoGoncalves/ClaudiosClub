@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { PROJECT_COLORS, type AppConfig, type ProjectColor, type Workspace } from '../shared/model';
+import { CONTEXT_SWITCHES, PROJECT_COLORS, type AppConfig, type ProjectColor, type Workspace } from '../shared/model';
 import { pathKey } from './adapters/claude/paths';
 
 // Configuração do próprio MyCo, fora do ~/.claude: ~/.myco/config.json.
@@ -22,6 +22,8 @@ const DEFAULTS: AppConfig = {
   projectColors: {},
   boardBackground: { light: null, dark: null },
   projectBudgets: {},
+  // Segue numa conversa nova sozinho quando o assunto fecha e compensa (dá para voltar à anterior).
+  contextSwitch: 'auto',
   workspaces: [],
   projectWorkspaces: {},
 };
@@ -50,6 +52,7 @@ const ConfigFile = z
       .optional()
       .catch(undefined),
     projectBudgets: z.record(z.string(), z.unknown()).optional().catch(undefined),
+    contextSwitch: z.enum(CONTEXT_SWITCHES).optional().catch(undefined),
     workspaces: z.array(z.unknown()).optional().catch(undefined),
     projectWorkspaces: z.record(z.string(), z.unknown()).optional().catch(undefined),
   })
@@ -85,6 +88,7 @@ export const ConfigPatch = z.object({
   uiLevel: UI_LEVEL.optional(),
   usageStop: z.object({ fiveHour: percent, sevenDay: percent }).optional(),
   sendWhileBusy: PRIORITY.optional(),
+  contextSwitch: z.enum(CONTEXT_SWITCHES).optional(),
   /** Por id de projeto: uma cor troca a da sala; null volta à padrão. Os outros projetos ficam como estão. */
   projectColors: z.record(z.string().min(1).max(200), COLOR.nullable()).optional(),
   /** Só o tema enviado muda; null volta à cor padrão. */
@@ -121,6 +125,7 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     projectBudgets: Object.fromEntries(
       Object.entries(d.projectBudgets ?? {}).filter((e): e is [string, number] => BUDGET.safeParse(e[1]).success),
     ),
+    contextSwitch: d.contextSwitch ?? DEFAULTS.contextSwitch,
     ...readWorkspaces(d.workspaces, d.projectWorkspaces),
   };
 }

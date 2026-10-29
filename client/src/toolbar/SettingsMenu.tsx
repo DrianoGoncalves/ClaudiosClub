@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import type { AppConfig, BoardBackground, Project, ProjectColor, SendPriority, UiLevel, UsageStop, Workspace } from '../../../shared/model';
+import { CONTEXT_SWITCHES, type AppConfig, type BoardBackground, type ContextSwitch, type Project, type ProjectColor, type SendPriority, type UiLevel, type UsageStop, type Workspace } from '../../../shared/model';
 import { DemoButton, WorkspacesEditor } from '../office/WorkspacesSettings';
 import { api } from '../api';
 import { BackgroundPicker, RoomColorPicker, useSystemTheme } from '../board/colors';
@@ -44,6 +44,8 @@ interface Props {
   onConfig: (config: AppConfig) => void;
   /** Abre a sala de um projeto (o demo, depois de criado). */
   onOpenProject: (projectId: string) => void;
+  /** Conversa nova quando o assunto fecha. */
+  contextSwitch: ContextSwitch | null;
 }
 
 type GroupId = 'board' | 'look' | 'chat' | 'roles' | 'usage';
@@ -466,6 +468,17 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
     toggle: { checked: chatDetail, onChange: setChatDetail },
   });
 
+  if (p.contextSwitch) {
+    out.push({
+      id: 'context-switch',
+      group: 'chat',
+      title: t('office.ctxTitle'),
+      description: t('office.ctxDesc'),
+      keywords: t('office.ctxKeywords'),
+      control: <ContextSwitchPicker value={p.contextSwitch} onConfig={p.onConfig} />,
+    });
+  }
+
   if (p.sendWhileBusy) {
     out.push({
       id: 'send-while-busy',
@@ -538,6 +551,35 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
     });
   }
   return out;
+}
+
+/** Seguir sozinho numa conversa nova quando o assunto fecha, só avisar, ou deixar como está. */
+function ContextSwitchPicker({ value, onConfig }: { value: ContextSwitch; onConfig: (c: AppConfig) => void }) {
+  const [error, setError] = useState<string | null>(null);
+  const labels: Record<ContextSwitch, string> = { auto: t('office.ctxAuto'), suggest: t('office.ctxSuggest'), off: t('office.ctxOff') };
+  return (
+    <>
+      <select
+        value={value}
+        aria-label={t('office.ctxTitle')}
+        onChange={async (e) => {
+          setError(null);
+          try {
+            onConfig(await api.saveConfig({ contextSwitch: e.target.value as ContextSwitch }));
+          } catch (err) {
+            setError((err as Error).message);
+          }
+        }}
+      >
+        {CONTEXT_SWITCHES.map((c) => (
+          <option key={c} value={c}>
+            {labels[c]}
+          </option>
+        ))}
+      </select>
+      {error && <p className="error small">{error}</p>}
+    </>
+  );
 }
 
 function UiLevelPicker({ value, onChange }: { value: UiLevel; onChange: (level: UiLevel) => Promise<void> }) {

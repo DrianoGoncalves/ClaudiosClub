@@ -5,7 +5,7 @@ import type { BackgroundTask, ChatAttachment, ChatCommand, ChatEvent, ChatItem, 
 import { cleanEnv } from '../auth';
 import { tryJson } from '../adapters/claude/fsutil';
 import { contextWindowFor } from '../adapters/claude/pricing';
-import { inputText, resultText, toolSummary } from './items';
+import { hasCheckpoint, inputText, resultText, stripCheckpoint, toolSummary } from './items';
 import { findSecret } from './secrets';
 
 // Um funcionário conversando pelo MyCo: o `claude` em modo stream-json (o mesmo protocolo do SDK),
@@ -215,7 +215,27 @@ export class ChatProcess {
    * Com o turno em andamento, a mensagem vai com prioridade (ver SendPriority); parado, é um turno
    * novo e a prioridade não importa.
    */
+  /** O último turno terminou com o ponto de corte (assunto encerrado, memória atualizada). */
+  get checkpoint(): boolean {
+    return this.checkpointSeen;
+  }
+
+  /** Contexto da última resposta (tokens), ou null antes da primeira. */
+  get contextUsed(): number | null {
+    return this.state.context?.used ?? null;
+  }
+
+  get model(): string | null {
+    return this.state.model ?? null;
+  }
+
+  /** Aviso do MyCo no meio da conversa (só para você; o funcionário não vê). */
+  addNotice(text: string, tone: 'info' | 'warn' = 'info') {
+    this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text, tone, at: new Date().toISOString() });
+  }
+
   send(text: string, priority: SendPriority = 'next', images: string[] = [], notice?: string, files: ChatAttachment[] = []) {
+    this.checkpointSeen = false;
     const queued = this.state.busy ? priority : undefined;
     if (queued === 'now') this.stopping = true;
     this.scan(text);
@@ -457,7 +477,9 @@ export class ChatProcess {
             const done = this.doneText.get(id) ?? [];
             done.push(b.text);
             this.doneText.set(id, done);
-            this.putItem({ kind: 'assistant', id, text: done.join('\n\n'), at: (prev?.kind === 'assistant' ? prev.at : null) ?? at });
+            // O ponto de corte (última linha) é para o MyCo: fica guardado aqui e some do texto.
+            if (hasCheckpoint(b.text)) this.checkpointSeen = true;
+            this.putItem({ kind: 'assistant', id, text: stripCheckpoint(done.join('\n\n')), at: (prev?.kind === 'assistant' ? prev.at : null) ?? at });
           } else if (b.type === 'tool_use' && typeof b.id === 'string') {
             const name = typeof b.name === 'string' ? b.name : 'ferramenta';
             const input = inputText(b.input);
@@ -583,6 +605,7 @@ export class ChatProcess {
   }
 
   private readonly doneText = new Map<string, string[]>();
+  private checkpointSeen = false;
 
   private finish(error: string | null) {
     if (!this.state.running) return;
