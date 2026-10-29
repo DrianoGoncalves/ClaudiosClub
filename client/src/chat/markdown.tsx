@@ -1,65 +1,113 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, memo, useEffect, useRef, useState } from 'react';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import type { Element, ElementContent } from 'hast';
+import { ImageIcon } from '../icons';
+import { t } from '../i18n';
 
-// Markdown mínimo das respostas (blocos de código, `código`, **negrito**, listas e parágrafos),
-// montado como elementos React: nada vira HTML cru.
+// Markdown das respostas da IA no padrão GFM (tabelas, listas aninhadas, tarefas, riscado, código),
+// montado como elementos React pelo react-markdown: nada vira HTML cru. HTML escrito na resposta
+// aparece como texto; links só http, https e mailto; imagens remotas viram link (não carregam).
+// Markdown incompleto durante o streaming (bloco de código ou tabela abertos) segue o CommonMark:
+// o bloco aberto vai até o fim do texto e fecha sozinho quando o resto chega.
 
-export function Markdown({ text }: { text: string }) {
-  const out: ReactNode[] = [];
-  const parts = text.split(/```/);
-  parts.forEach((part, i) => {
-    if (i % 2 === 1) {
-      const nl = part.indexOf('\n');
-      const code = nl === -1 ? part : part.slice(nl + 1);
-      out.push(
-        <pre key={i} className="md-code">
-          <code>{code.replace(/\n$/, '')}</code>
-        </pre>,
-      );
-    } else {
-      out.push(...blocks(part, i));
-    }
-  });
-  return <div className="md">{out}</div>;
+/** Endereço permitido em link/imagem; qualquer outro vira '' e o link sai como texto. */
+export function safeUrl(url: string): string {
+  const u = url.trim();
+  return /^(https?:\/\/|mailto:)/i.test(u) ? u : '';
 }
 
-function blocks(text: string, key: number): ReactNode[] {
-  return text
-    .split(/\n{2,}/)
-    .map((b) => b.trim())
-    .filter(Boolean)
-    .map((b, j) => {
-      const lines = b.split('\n');
-      if (lines.every((l) => /^\s*([-*]|\d+\.)\s+/.test(l))) {
-        const ordered = /^\s*\d+\./.test(lines[0]!);
-        const items = lines.map((l, k) => <li key={k}>{inline(l.replace(/^\s*([-*]|\d+\.)\s+/, ''))}</li>);
-        return ordered ? <ol key={`${key}-${j}`}>{items}</ol> : <ul key={`${key}-${j}`}>{items}</ul>;
-      }
-      const heading = /^(#{1,4})\s+(.*)$/.exec(b);
-      if (heading && lines.length === 1) return <p key={`${key}-${j}`} className="md-h">{inline(heading[2]!)}</p>;
-      return (
-        <p key={`${key}-${j}`}>
-          {lines.map((l, k) => (
-            <span key={k}>
-              {k > 0 && <br />}
-              {inline(l)}
-            </span>
-          ))}
-        </p>
-      );
+type MdNode = { type: string; children?: MdNode[] };
+
+/** Plugin remark: HTML cru da resposta vira texto (mostra `<b>` em vez de interpretar). */
+function htmlAsText() {
+  const walk = (node: MdNode) => {
+    if (node.type === 'html') node.type = 'text';
+    node.children?.forEach(walk);
+  };
+  return walk;
+}
+
+const hastText = (n: ElementContent): string =>
+  n.type === 'text' ? n.value : n.type === 'element' ? n.children.map(hastText).join('') : '';
+
+function CodeBlock({ node, children }: { node?: Element; children?: ReactNode }) {
+  const code = node ? node.children.map(hastText).join('').replace(/\n$/, '') : '';
+  const first = node?.children[0];
+  const classes = first?.type === 'element' ? first.properties.className : undefined;
+  const lang = Array.isArray(classes)
+    ? classes.map(String).find((c) => c.startsWith('language-'))?.slice('language-'.length)
+    : undefined;
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const copy = () => {
+    void navigator.clipboard?.writeText(code).then(() => {
+      setCopied(true);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 1500);
     });
+  };
+  return (
+    <div className="md-code-wrap">
+      <div className="md-code-bar">
+        <span className="md-code-lang">{lang}</span>
+        <button type="button" className="md-copy" title={t('chat.mdCopyHelp')} onClick={copy}>
+          {copied ? t('chat.mdCopied') : t('chat.mdCopy')}
+        </button>
+      </div>
+      <pre className="md-code">{children}</pre>
+    </div>
+  );
 }
 
-function inline(text: string): ReactNode[] {
-  const out: ReactNode[] = [];
-  const re = /(`[^`]+`|\*\*[^*]+\*\*)/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-    const tok = m[0];
-    out.push(tok.startsWith('`') ? <code key={m.index}>{tok.slice(1, -1)}</code> : <b key={m.index}>{tok.slice(2, -2)}</b>);
-    last = m.index + tok.length;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
-}
+const COMPONENTS: Components = {
+  a: ({ href, children }) => {
+    const url = safeUrl(href ?? '');
+    return url ? (
+      <a href={url} target="_blank" rel="noopener noreferrer">
+        {children}
+      </a>
+    ) : (
+      <span className="md-link-off">{children}</span>
+    );
+  },
+  img: ({ src, alt }) => {
+    const url = typeof src === 'string' ? safeUrl(src) : '';
+    const label = (
+      <>
+        <ImageIcon size={12} /> {alt || t('chat.mdImage')}
+      </>
+    );
+    return url ? (
+      <a className="md-img" href={url} target="_blank" rel="noopener noreferrer" title={t('chat.mdImageHelp')}>
+        {label}
+      </a>
+    ) : (
+      <span className="md-img">{label}</span>
+    );
+  },
+  table: ({ children }) => (
+    <div className="md-table">
+      <table>{children}</table>
+    </div>
+  ),
+  pre: CodeBlock,
+};
+
+const REMARK = [remarkGfm, htmlAsText];
+
+// memo: no streaming só a última mensagem muda; as outras não são reprocessadas a cada pedaço.
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
+  return (
+    <div className="md">
+      <ReactMarkdown remarkPlugins={REMARK} components={COMPONENTS} urlTransform={safeUrl}>
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+});
+
+/** Texto do usuário que já vem em markdown (bloco de código, tabela, título): renderiza como tal. */
+export const looksLikeMarkdown = (text: string): boolean =>
+  /```|^\s*\|.*\|\s*$|^#{1,6}\s\S/m.test(text);

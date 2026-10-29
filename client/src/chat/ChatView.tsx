@@ -19,7 +19,7 @@ import {
 } from './ChatExtras';
 import { ChangesPanel } from './ChangesPanel';
 import { useChatDetail } from './chatDetail';
-import { Markdown } from './markdown';
+import { Markdown, looksLikeMarkdown } from './markdown';
 import { systemMessageText } from './systemMessage';
 
 /** Prints no chat: até 4 por mensagem, com o lado maior em até 1568 px (o que o Claude lê sem reduzir). */
@@ -645,7 +645,7 @@ function Item({
             </span>
           ) : null}
           {item.files?.length ? <span className="msg-images">{t('chat.attachments', { files: item.files.join(', ') })}</span> : null}
-          {system === null ? item.text : <Markdown text={system} />}
+          {system !== null ? <Markdown text={system} /> : looksLikeMarkdown(item.text) ? <Markdown text={item.text} /> : item.text}
           {item.queued && <span className="msg-queued">{QUEUED_TEXT[item.queued]}</span>}
           {item.held && <span className="msg-queued">{t('chat.heldByMyco', { why: item.held })}</span>}
         </div>

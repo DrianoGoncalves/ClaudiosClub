@@ -1,5 +1,5 @@
 import { ReactFlowProvider } from '@xyflow/react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import type {
   Agent,
   AppConfig,
@@ -31,7 +31,9 @@ import {
   SyncedPanel,
   UserPanel,
   type RankingEntry,
+  type TeamRow,
 } from './detail/Detail';
+import { DrawerResize, useDrawerWidth } from './detail/DrawerResize';
 import { employeeName } from './format';
 import { t } from './i18n';
 import { useInbox } from './inbox/useInbox';
@@ -184,6 +186,11 @@ export function App() {
   const simple = config?.uiLevel === 'simple';
   const saveProjectColor = async (projectId: string, color: ProjectColor | null) =>
     setConfig(await api.saveConfig({ projectColors: { [projectId]: color } }));
+  // O quadro, as abas e a caixa leem o nome do projeto do snapshot: recarrega junto com a config.
+  const saveProjectName = async (projectId: string, name: string | null) => {
+    setConfig(await api.saveConfig({ projectNames: { [projectId]: name } }));
+    load();
+  };
   const saveBoardBackground = async (boardBackground: Partial<BoardBackground>) => setConfig(await api.saveConfig({ boardBackground }));
   const saveProjectBudget = async (projectId: string, budget: number | null) =>
     setConfig(await api.saveConfig({ projectBudgets: { [projectId]: budget } }));
@@ -222,6 +229,7 @@ export function App() {
     const ws = config?.workspaces.find((w) => w.id === wsId);
     return boardStyle(ws?.background[theme] ?? config?.boardBackground[theme] ?? null, theme);
   }, [board, selection, config, theme]);
+  const [drawerWidth, setDrawerWidth] = useDrawerWidth();
   const isArchived = (kind: 'project' | 'session', id: string) =>
     (kind === 'project' ? config?.archived.projects : config?.archived.sessions)?.includes(id) ?? false;
 
@@ -296,7 +304,11 @@ export function App() {
         </ReactFlowProvider>
       )}
       {board && selection && (
-        <aside className={`drawer ${selection.kind === 'employee' ? 'drawer-wide drawer-chat' : ''}`} style={chatStyle}>
+        <aside
+          className={`drawer ${selection.kind === 'employee' ? 'drawer-wide drawer-chat' : ''}`}
+          style={chatStyle && { ...chatStyle, '--drawer-w': `${drawerWidth}px` } as CSSProperties}
+        >
+          {selection.kind === 'employee' && <DrawerResize width={drawerWidth} onResize={setDrawerWidth} />}
           <button className="drawer-close" onClick={() => setSelectedId(null)} aria-label={t('app.close')}>
             ×
           </button>
@@ -327,6 +339,8 @@ export function App() {
               onEditAgent={(name) => setAgentForm({ scope: 'project', projectId: selection.id, name })}
               id={selection.id}
               live={board.live}
+              {...projectTeam(board, costs, selection.id)}
+              onOpenStaff={(staffId) => setSelectedId(staffNodeId(selection.id, staffId))}
               cost={costs?.projects[selection.id] ?? null}
               archived={isArchived('project', selection.id)}
               onArchive={(v) => archive('project', selection.id, v)}
@@ -334,6 +348,7 @@ export function App() {
               image={board.images[selection.id] ?? null}
               color={config?.projectColors[selection.id] ?? null}
               onColor={(color) => saveProjectColor(selection.id, color)}
+              onName={(name) => saveProjectName(selection.id, name)}
               totalUsd={costs?.total.usd ?? 0}
               onImage={async (dataUrl) => {
                 await api.saveProjectImage(selection.id, dataUrl);
@@ -524,7 +539,8 @@ function rankEmployees(board: Board, costs: CostReport | null, config: AppConfig
 }
 
 /**
- * Conversas de um funcionário, da mais recente à mais antiga. As da worktree dele ficam noutra
+ * Conversas de um funcionário, da mais recente à mais antiga, cada uma pelo assunto (a tarefa ou a
+ * 1ª mensagem): o título do Claude Code é o nome dele em todas. As da worktree dele ficam noutra
  * pasta do Claude Code; as que ainda não gravaram nada entram pela data de início.
  */
 function staffConversations(board: Board, staff: StaffProfile) {
@@ -532,9 +548,39 @@ function staffConversations(board: Board, staff: StaffProfile) {
   return staff.sessions
     .map((x) => {
       const s = known.get(x.id);
-      return { id: x.id, title: s?.title ?? null, updatedAt: s?.updatedAt ?? x.startedAt };
+      return { id: x.id, title: s?.topic ?? null, updatedAt: s?.updatedAt ?? x.startedAt };
     })
     .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
+}
+
+/** Prioridade do status ao vivo quando o funcionário tem mais de uma conversa aberta. */
+const STATUS_RANK: Record<string, number> = { busy: 3, waiting: 2, idle: 1 };
+
+/**
+ * A equipe do projeto no painel: uma linha por funcionário (as conversas dele somadas), em vez de
+ * uma por conversa. `owned`: as sessões que têm dono, para o painel separar as sem ficha.
+ */
+function projectTeam(board: Board, costs: CostReport | null, projectId: string): { team: TeamRow[]; owned: Set<string> } {
+  const staff = board.staff.filter((s) => s.projectId === projectId);
+  const bySession = costs?.projects[projectId]?.sessions ?? {};
+  const team = staff
+    .filter((s) => !s.ended)
+    .map((s) => {
+      const ids = new Set(s.sessions.map((x) => x.id));
+      const live = board.live.filter((l) => l.alive && ids.has(l.sessionId));
+      const status = live.map((l) => l.status ?? 'idle').sort((a, b) => (STATUS_RANK[b] ?? 0) - (STATUS_RANK[a] ?? 0))[0] ?? null;
+      const conversations = staffConversations(board, s);
+      const spent = [...ids].map((id) => bySession[id]).filter((v): v is number => v !== undefined);
+      return {
+        staff: s,
+        conversations: conversations.length,
+        lastAt: conversations[0]?.updatedAt ?? null,
+        status,
+        costUsd: spent.length ? spent.reduce((a, b) => a + b, 0) : null,
+      };
+    })
+    .sort((a, b) => (b.lastAt ?? '').localeCompare(a.lastAt ?? ''));
+  return { team, owned: new Set(staff.flatMap((s) => s.sessions.map((x) => x.id))) };
 }
 
 function employeeCost(costs: CostReport | null, sel: { session: Session | null; staff: StaffProfile | null; projectId: string }) {

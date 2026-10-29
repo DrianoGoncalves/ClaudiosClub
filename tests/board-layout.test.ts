@@ -43,6 +43,7 @@ function session(id: string, title: string | null): Session {
   return {
     id,
     title,
+    topic: null,
     entrypoint: 'claude-desktop',
     gitBranch: null,
     version: null,

@@ -22,3 +22,6 @@ PLANO.md
 # Claude Code: worktrees dos funcionários e permissões locais.
 .claude/worktrees/
 .claude/settings.local.json
+
+# Estado do checklist da página de início: gerado por scripts/doctor.ps1 a cada verificação.
+scripts/status.js

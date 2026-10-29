@@ -69,7 +69,8 @@ export function projectClaudeDir(loc: ClaudeLocations, projectPath: string): str
   return pathKey(dir) === pathKey(loc.home) ? null : dir;
 }
 
-export async function summarizeProject(loc: ClaudeLocations, ref: ProjectRef): Promise<Project> {
+/** `displayName` é o apelido do Claudio’s Club; sem ele (ou vazio), o nome é o da pasta. A pasta e o id não mudam. */
+export async function summarizeProject(loc: ClaudeLocations, ref: ProjectRef, displayName?: string): Promise<Project> {
   const claudeDir = projectClaudeDir(loc, ref.path);
   const transcriptsDir = path.join(loc.home, 'projects', ref.id);
   const [projectExists, hasClaudeMd, hasNestedClaudeMd, agentEntries, skillEntries, transcripts] = await Promise.all([
@@ -83,7 +84,7 @@ export async function summarizeProject(loc: ClaudeLocations, ref: ProjectRef): P
   return {
     id: ref.id,
     path: ref.path,
-    name: path.basename(ref.path),
+    name: displayName || path.basename(ref.path),
     exists: projectExists,
     worktreeOf: worktreeParent(ref.path),
     hasClaudeMd: hasClaudeMd || hasNestedClaudeMd,

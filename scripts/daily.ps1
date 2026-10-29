@@ -20,6 +20,8 @@ function Get-Daemon {
 
 switch ($Action) {
   'start' {
+    # Atualiza o checklist (scripts/status.js) para a página ver o estado certo; nunca impede o start.
+    try { & (Join-Path $PSScriptRoot 'doctor.ps1') | Out-Null } catch {}
     if (Get-Daemon) { Write-Output "O Claudio’s Club já está rodando em segundo plano: http://claudio.localhost:$port"; break }
     $daemon = Join-Path $PSScriptRoot 'myco-daemon.ps1'
     $args_ = @('-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', "`"$daemon`"")

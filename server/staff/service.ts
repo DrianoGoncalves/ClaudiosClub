@@ -432,7 +432,8 @@ export class StaffService {
       company: config.companyName,
       // O workspace do projeto (aba do quadro) entra na ficha como contexto (cliente, área…).
       workspace: workspaceOf(config, project.id)?.name ?? null,
-      projectName: project.name,
+      // A pasta, não o apelido: a ficha grava este nome dentro do projeto (`Projeto: …`).
+      projectName: path.basename(project.path),
       projectPath: project.path,
       managerNames: managers.filter((m): m is StaffProfile => !!m).map((m) => `${m.name} (${m.role})`),
       mycoUrl: this.opts.mycoUrl,

@@ -31,6 +31,8 @@ export interface ClaudeAdapterOptions extends DiscoverOptions {
   costCacheFile?: string;
   /** Intervalo mínimo entre releituras de custo. */
   costTtlMs?: number;
+  /** Apelidos de exibição por id de projeto (lidos a cada chamada: mudam sem reiniciar). */
+  projectNames?: () => Promise<Record<string, string>>;
 }
 
 /** Leitura (somente) do que o Claude Code grava em ~/.claude e nas pastas `.claude/` dos projetos. */
@@ -53,8 +55,8 @@ export class ClaudeAdapter implements ToolAdapter {
   }
 
   async listProjects(): Promise<Project[]> {
-    const refs = await this.refs();
-    const projects = await Promise.all(refs.map((r) => summarizeProject(this.loc, r)));
+    const [refs, names] = await Promise.all([this.refs(), this.displayNames()]);
+    const projects = await Promise.all(refs.map((r) => summarizeProject(this.loc, r, names[r.id])));
     return projects.sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? ''));
   }
 
@@ -62,7 +64,7 @@ export class ClaudeAdapter implements ToolAdapter {
     const ref = await this.ref(id);
     if (!ref) return null;
     const [project, inventory, live] = await Promise.all([
-      summarizeProject(this.loc, ref),
+      this.displayNames().then((names) => summarizeProject(this.loc, ref, names[ref.id])),
       this.inventory(ref),
       this.liveById(),
     ]);
@@ -126,6 +128,10 @@ export class ClaudeAdapter implements ToolAdapter {
 
   forgetProjects(): void {
     this.discovery = null;
+  }
+
+  private displayNames(): Promise<Record<string, string>> {
+    return this.opts.projectNames ? this.opts.projectNames() : Promise.resolve({});
   }
 
   private refs(): Promise<ProjectRef[]> {

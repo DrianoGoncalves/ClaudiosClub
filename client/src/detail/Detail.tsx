@@ -22,9 +22,10 @@ import { ChatView, type MoreTab } from '../chat/ChatView';
 import { BrowserCheck } from '../staff/BrowserCheck';
 import { MAX_INPUT_BYTES, PROJECT_IMAGE_MAX, shrinkImage } from '../lib/shrinkImage';
 import { METRIC_LABEL, type Metric, ModelsChart } from '../toolbar/ModelsMenu';
+import { ProjectName } from './ProjectName';
 import { Routines } from './Routines';
 import { WorthIt } from './WorthIt';
-import { employeeName, ENTRYPOINT_LABEL, formatShare, STATUS_LABEL } from '../format';
+import { employeeName, ENTRYPOINT_LABEL, folderName, formatShare, STATUS_LABEL } from '../format';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
@@ -143,15 +144,15 @@ export function EmployeePanel(props: {
           <h2 className="employee-name" title={name}>
             {name}
           </h2>
+          <span className="badge">
+            <span className={statusInfo.dot} /> {statusInfo.text}
+          </span>
+          {staff?.temporary && <span className="badge warn">{t('detail.temporary')}</span>}
           {(staff || project) && (
             <span className="employee-cargo" title={[staff?.role, project?.name].filter(Boolean).join(' · ')}>
               {[staff?.role, project?.name].filter(Boolean).join(' · ')}
             </span>
           )}
-          <span className="badge">
-            <span className={statusInfo.dot} /> {statusInfo.text}
-          </span>
-          {staff?.temporary && <span className="badge warn">{t('detail.temporary')}</span>}
         </div>
       </div>
       {showConvos && (
@@ -165,10 +166,14 @@ export function EmployeePanel(props: {
             }}
           >
             {fresh && <option value="">{t('detail.newConversation')}</option>}
-            {conversations.map((c, i) => (
-              <option key={c.id} value={c.id}>
-                {conversationLabel(c, i)}
-              </option>
+            {byDay(conversations).map((g) => (
+              <optgroup key={g.label} label={g.label}>
+                {g.items.map(({ c, i }) => (
+                  <option key={c.id} value={c.id}>
+                    {conversationLabel(c)}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
           <button type="button" className="btn-secondary" disabled={fresh || convBusy} onClick={() => setFresh(true)} title={t('detail.newConversationTitle')}>
@@ -284,6 +289,7 @@ export function EmployeePanel(props: {
                     restoreLabel={staff?.temporary ? t('detail.restore') : t('detail.unarchive')}
                   />
                 </p>
+                {staff && project && <CanHireToggle projectId={project.id} staff={staff} onChanged={props.onChanged} />}
               </>
             ),
           },
@@ -322,11 +328,68 @@ export function EmployeePanel(props: {
   );
 }
 
-/** "Ajustar o header da sala · 27/10 14:05" (a mais recente ganha "atual"). */
-function conversationLabel(c: { title: string | null; updatedAt: string | null }, index: number): string {
+/**
+ * Liga/desliga "pode contratar subfuncionários" sem abrir a ficha. Manda a ficha atual com só esse
+ * campo trocado: o servidor guarda a anterior no histórico, como ao editar.
+ */
+function CanHireToggle({ projectId, staff, onChanged }: { projectId: string; staff: StaffProfile; onChanged?: () => void }) {
+  const [on, setOn] = useState(staff.canHire);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => setOn(staff.canHire), [staff.canHire]);
+  const flip = async () => {
+    const { id: _i, projectId: _p, portrait: _r, sessions: _s, createdAt: _c, updatedAt: _u, ...input } = staff;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.updateStaff(projectId, staff.id, { ...input, canHire: !on });
+      setOn(!on);
+      onChanged?.();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="chat-more-row">
+      <button type="button" className="btn-secondary btn-toggle" aria-pressed={on} disabled={busy} onClick={() => void flip()}>
+        {t('detail.canHire')}
+      </button>
+      <span className="muted small">{t('detail.canHireHint')}</span>
+      {error && <span className="error">{error}</span>}
+    </div>
+  );
+}
+
+/** "14:05 — Ajustar o header da sala" (o dia vem do grupo). */
+function conversationLabel(c: { title: string | null; updatedAt: string | null }): string {
   const title = (c.title ?? t('detail.untitledConversation')).replace(/\s+/g, ' ').slice(0, 48);
-  const when = c.updatedAt ? new Date(c.updatedAt).toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-  return `${index === 0 ? t('detail.currentPrefix') : ''}${title}${when ? ` · ${when}` : ''}`;
+  const when = c.updatedAt ? new Date(c.updatedAt).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' }) : '';
+  return when ? `${when} — ${title}` : title;
+}
+
+/** As conversas por dia (Hoje, Ontem, depois a data), na ordem da lista; `i` é a posição na lista toda. */
+function byDay<T extends { updatedAt: string | null }>(list: T[]): Array<{ label: string; items: Array<{ c: T; i: number }> }> {
+  const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const today = startOf(new Date());
+  const groups: Array<{ label: string; items: Array<{ c: T; i: number }> }> = [];
+  list.forEach((c, i) => {
+    const at = c.updatedAt ? new Date(c.updatedAt) : null;
+    const day = at ? startOf(at) : null;
+    const label =
+      day === null
+        ? t('detail.untitledConversation')
+        : day >= today
+          ? t('detail.today')
+          : day >= today - 86_400_000
+            ? t('detail.yesterday')
+            : at!.toLocaleDateString(locale(), { weekday: 'short', day: '2-digit', month: '2-digit' });
+    const last = groups.at(-1);
+    if (last?.label === label) last.items.push({ c, i });
+    else groups.push({ label, items: [{ c, i }] });
+  });
+  return groups;
 }
 
 /**
@@ -443,8 +506,6 @@ function StaffSheet({ staff, managers }: { staff: StaffProfile; managers: StaffP
         <dd>
           {staff.model ?? t('detail.default')} / {staff.effort ?? t('detail.default')}
         </dd>
-        <dt>{t('detail.hire')}</dt>
-        <dd>{staff.canHire ? t('detail.canHire') : t('detail.no')}</dd>
         {staff.servers.length > 0 && (
           <>
             <dt>{t('detail.servers')}</dt>
@@ -460,9 +521,22 @@ function StaffSheet({ staff, managers }: { staff: StaffProfile; managers: StaffP
   );
 }
 
+/** Um funcionário no painel do projeto, com as conversas dele somadas (ver projectTeam no App). */
+export interface TeamRow {
+  staff: StaffProfile;
+  conversations: number;
+  lastAt: string | null;
+  /** Status da conversa aberta mais ocupada (trabalhando > esperando > parada); null = nenhuma aberta. */
+  status: string | null;
+  costUsd: number | null;
+}
+
 export function ProjectPanel({
   id,
   live,
+  team,
+  owned,
+  onOpenStaff,
   cost,
   archived,
   onArchive,
@@ -471,6 +545,7 @@ export function ProjectPanel({
   onImage,
   color,
   onColor,
+  onName,
   totalUsd,
   onNewAgent,
   onEditAgent,
@@ -488,6 +563,11 @@ export function ProjectPanel({
   tasks?: TaskSummary | null;
   id: string;
   live: LiveSession[];
+  /** Uma linha por funcionário; clicar abre o painel dele. */
+  team: TeamRow[];
+  /** Sessões que têm dono (ficha): as outras aparecem à parte, como conversas sem ficha. */
+  owned: Set<string>;
+  onOpenStaff: (staffId: string) => void;
   cost: ProjectCost | null;
   totalUsd: number;
   archived: boolean;
@@ -498,6 +578,8 @@ export function ProjectPanel({
   /** Cor da parede da sala; null = a padrão. */
   color: ProjectColor | null;
   onColor: (color: ProjectColor | null) => Promise<void>;
+  /** Apelido do projeto (só na tela); null volta ao nome da pasta. */
+  onName: (name: string | null) => Promise<void>;
 }) {
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -516,11 +598,19 @@ export function ProjectPanel({
   const sessions = detail.sessions.map((s) => ({ ...s, live: liveById.get(s.id) ?? s.live }));
   const { project } = detail;
 
+  // Depois de salvar, o detalhe é relido: o cabeçalho mostra o apelido novo.
+  const rename = async (name: string | null) => {
+    await onName(name);
+    api.project(id).then(setDetail, (e: Error) => setError(e.message));
+  };
+
   return (
     <>
       <header className="header">
         <p className="kicker">{t('detail.kickerProject')}</p>
-        <h2>{project.name}</h2>
+        <h2>
+          <ProjectName name={project.name} folder={folderName(project.path)} onRename={rename} />
+        </h2>
         <p className="muted mono">{project.path}</p>
         <p className="badges">
           {project.hasClaudeMd ? <span className="badge">CLAUDE.md</span> : <span className="badge dim">{t('detail.noClaudeMd')}</span>}
@@ -562,7 +652,8 @@ export function ProjectPanel({
       </section>
       {project.exists && !project.worktreeOf && office}
       {project.exists && <ImagePicker image={image} onChange={onImage} />}
-      <SessionList sessions={sessions} costs={cost?.sessions ?? {}} totalUsd={totalUsd} />
+      <TeamList rows={team} totalUsd={totalUsd} onOpen={onOpenStaff} />
+      <SessionList sessions={sessions.filter((s) => !owned.has(s.id))} costs={cost?.sessions ?? {}} totalUsd={totalUsd} />
       <AgentList
         agents={detail.agents}
         empty={t('detail.noAgentsProject')}
@@ -988,17 +1079,46 @@ function SkillList({ skills }: { skills: Skill[] }) {
   );
 }
 
-function SessionList({ sessions, costs, totalUsd }: { sessions: Session[]; costs: Record<string, number>; totalUsd: number }) {
+/** A equipe do projeto: uma linha por funcionário, com as conversas dele somadas. Clicar abre o painel. */
+function TeamList({ rows, totalUsd, onOpen }: { rows: TeamRow[]; totalUsd: number; onOpen: (staffId: string) => void }) {
   return (
     <section className="section">
-      <h3>{t('detail.employeesCount', { n: sessions.length })}</h3>
-      {sessions.length === 0 && <p className="muted">{t('detail.noSessions')}</p>}
+      <h3>{t('detail.teamCount', { n: rows.length })}</h3>
+      {rows.length === 0 && <p className="muted">{t('detail.noTeam')}</p>}
+      <ul className="rows">
+        {rows.map((r) => (
+          <li key={r.staff.id}>
+            <button type="button" className="row row-button" onClick={() => onOpen(r.staff.id)} title={t('detail.openEmployee', { name: r.staff.name })}>
+              <span className="row-title">
+                <span className={`dot ${r.status ? `dot-${r.status}` : ''}`} title={r.status ? (STATUS_LABEL[r.status] ?? '') : t('detail.offShift')} />
+                {r.staff.name}
+                <span className="muted small">{r.staff.role}</span>
+              </span>
+              <span className="row-meta">
+                <span>{t(r.conversations === 1 ? 'detail.convOne' : 'detail.convOther', { n: r.conversations })}</span>
+                {r.costUsd !== null && <span title={t('detail.inTotalUsage')}>{formatShare(r.costUsd, totalUsd)}</span>}
+                {r.lastAt && <span className="muted">{formatDate(r.lastAt)}</span>}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Conversas sem ficha (abertas no terminal, no app do Claude ou soltas): recolhidas, à parte da equipe. */
+function SessionList({ sessions, costs, totalUsd }: { sessions: Session[]; costs: Record<string, number>; totalUsd: number }) {
+  if (!sessions.length) return null;
+  return (
+    <details className="section collapse">
+      <summary>{t('detail.looseCount', { n: sessions.length })}</summary>
       <ul className="rows">
         {sessions.map((s) => (
           <li key={s.id} className="row">
             <span className="row-title">
               {s.live?.alive && <span className={`dot dot-${s.live.status ?? 'unknown'}`} title={STATUS_LABEL[s.live.status ?? ''] ?? ''} />}
-              {s.title ?? <span className="muted mono">{s.id.slice(0, 8)}</span>}
+              {s.topic ?? s.title ?? <span className="muted mono">{s.id.slice(0, 8)}</span>}
             </span>
             <span className="row-meta">
               {s.entrypoint && <span className="badge">{ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</span>}
@@ -1010,7 +1130,7 @@ function SessionList({ sessions, costs, totalUsd }: { sessions: Session[]; costs
           </li>
         ))}
       </ul>
-    </section>
+    </details>
   );
 }
 

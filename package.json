@@ -19,6 +19,7 @@
     "daily:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/daily.ps1 start",
     "daily:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/daily.ps1 stop",
     "daily:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/daily.ps1 status",
+    "doctor": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/doctor.ps1",
     "launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/launcher.ps1",
     "launcher:remove": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/launcher.ps1 -Remove",
     "autostart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/autostart.ps1",
@@ -29,6 +30,8 @@
     "@xyflow/react": "^12.12.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "roughjs": "^4.6.6",
     "yaml": "^2.6.1",
     "zod": "^3.23.8"

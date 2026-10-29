@@ -1,10 +1,11 @@
-﻿import { defineMessages } from './define';
+import { defineMessages } from './define';
 
 export default defineMessages({
   'pt-BR': {
     'app.loadingBoard': 'Carregando o quadro…',
     'app.close': 'Fechar',
     'app.closeNotice': 'Fechar aviso',
+    'app.resizeDrawer': 'Arraste para mudar a largura do painel',
     'app.fallbackManager': 'O gestor',
     'app.fallbackEmployee': 'o funcionário',
     'app.linkDone': '{boss} agora também chama {who}.',
@@ -35,6 +36,7 @@ export default defineMessages({
     'app.loadingBoard': 'Loading the board…',
     'app.close': 'Close',
     'app.closeNotice': 'Close notice',
+    'app.resizeDrawer': 'Drag to change the panel width',
     'app.fallbackManager': 'The manager',
     'app.fallbackEmployee': 'an employee',
     'app.linkDone': '{boss} now also manages {who}.',
@@ -65,6 +67,7 @@ export default defineMessages({
     'app.loadingBoard': 'Cargando el tablero…',
     'app.close': 'Cerrar',
     'app.closeNotice': 'Cerrar aviso',
+    'app.resizeDrawer': 'Arrastra para cambiar el ancho del panel',
     'app.fallbackManager': 'El gestor',
     'app.fallbackEmployee': 'un empleado',
     'app.linkDone': '{boss} ahora también dirige a {who}.',

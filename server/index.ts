@@ -75,7 +75,10 @@ const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', 'claudio.loc
 // Retratos chegam como data URL no JSON da contratação.
 const MAX_BODY = 4 * 1024 * 1024;
 
-const adapter: ToolAdapter = new ClaudeAdapter({ extraPaths: async () => [DEMO_DIR, ...(await readExtraProjects())] });
+const adapter: ToolAdapter = new ClaudeAdapter({
+  extraPaths: async () => [DEMO_DIR, ...(await readExtraProjects())],
+  projectNames: async () => (await readConfig()).projectNames,
+});
 const benchmarks = new ArtificialAnalysis();
 /** ~/.claude/projects: onde ficam os transcripts das conversas. */
 const defaultTranscripts = path.join(defaultLocations().home, 'projects');

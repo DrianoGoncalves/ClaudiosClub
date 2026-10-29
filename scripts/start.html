@@ -24,6 +24,20 @@
       .start .btn-primary:disabled { opacity: 0.6; cursor: default; }
       .start code { font: 12px ui-monospace, Consolas, monospace; background: color-mix(in srgb, var(--ink) 8%, transparent); padding: 0 3px; border-radius: 3px; }
       [hidden] { display: none !important; }
+      /* Checklist "Para rodar": ícone + texto (não só cor). Cores e classes vêm do DS (styles.css). */
+      .checklist { display: grid; gap: 8px; }
+      .checklist h2 { margin: 0; font-family: var(--hand); font-weight: 700; font-size: 24px; line-height: 1; }
+      .checklist ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+      .checklist .btn-secondary { justify-self: start; }
+      .step { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--panel); }
+      .step-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+      .step-icon { width: 1em; text-align: center; font-weight: 700; }
+      .step-label { flex: 1 1 160px; font-weight: 600; }
+      .step-state { font-size: 12px; }
+      .step-fix { margin: 4px 0 0 calc(1em + 8px); overflow-wrap: anywhere; }
+      .step.is-ok .step-icon, .step.is-ok .step-state { color: var(--ink-green); }
+      .step.is-falta .step-icon, .step.is-falta .step-state { color: var(--danger); }
+      .step.is-nv .step-icon, .step.is-nv .step-state { color: var(--muted); }
     </style>
   </head>
   <body>
@@ -36,6 +50,16 @@
       <section id="down" hidden>
         <p>O Claudio’s Club está parado.</p>
         <p class="muted small">Ele sobe em segundo plano, sem janela, e volta sozinho se cair.</p>
+        <div class="checklist" role="group" aria-labelledby="checklist-title">
+          <h2 id="checklist-title">Para rodar</h2>
+          <p class="muted small" id="checked-at"></p>
+          <ol id="steps"></ol>
+          <p class="muted small" id="doctor-tip" hidden>
+            Não achei o resultado do checklist (<code>scripts/status.js</code>). Rode <code>npm run doctor</code>
+            ou <code>powershell -ExecutionPolicy Bypass -File scripts\doctor.ps1</code> e recarregue a página.
+          </p>
+          <button id="recheck" class="btn-secondary" type="button">Verificar de novo</button>
+        </div>
         <button id="start" class="btn-primary" type="button">Iniciar o Claudio’s Club</button>
         <p class="muted small" id="hint">
           Na primeira vez, o navegador pergunta se pode abrir o Claudio’s Club: confirme. Se nada acontecer, rode
@@ -45,26 +69,123 @@
       <p id="starting" hidden>Iniciando… (o primeiro build leva uns segundos)</p>
     </main>
     <script>
-      // Página de início: se o Claudio’s Club responde, vai direto para ele; senão, mostra o botão "Iniciar",
-      // que abre o link myco://start (registrado no Windows por `npm run launcher`).
+      // Página de início: se o Claudio’s Club responde, vai direto para ele; senão, mostra o checklist e o botão
+      // "Iniciar", que abre o link myco://start (registrado no Windows por `npm run launcher`).
       const port = new URLSearchParams(location.search).get('port') || '4848';
       const app = `http://claudio.localhost:${port}`;
       const el = (id) => document.getElementById(id);
 
-      // Uma imagem do próprio Claudio’s Club: carrega se ele está no ar (fetch de file:// esbarraria no CORS).
-      const isUp = () =>
+      // Uma imagem: carrega se o src existe e responde em 2,5 s (fetch de file:// esbarraria no CORS).
+      const probe = (src) =>
         new Promise((resolve) => {
           const img = new Image();
           const t = setTimeout(() => resolve(false), 2500);
           img.onload = () => (clearTimeout(t), resolve(true));
           img.onerror = () => (clearTimeout(t), resolve(false));
-          img.src = `${app}/icon-32.png?t=${Date.now()}`;
+          img.src = src;
         });
 
+      // Uma imagem do próprio Claudio’s Club: carrega se ele está no ar.
+      const isUp = () => probe(`${app}/icon-32.png?t=${Date.now()}`);
+
+      // Estado do checklist: scripts/doctor.ps1 grava scripts/status.js (file:// não deixa ler Node/Git/Claude daqui).
+      // Entra por <script src>, com ?t= para pegar a versão nova; a tag anterior sai antes.
+      function loadStatus() {
+        return new Promise((resolve) => {
+          const old = el('status-src');
+          if (old) old.remove();
+          delete window.claudioStatus;
+          const s = document.createElement('script');
+          s.id = 'status-src';
+          s.src = `status.js?t=${Date.now()}`;
+          s.onload = () => resolve(window.claudioStatus || null);
+          s.onerror = () => resolve(null);
+          document.head.appendChild(s);
+        });
+      }
+
+      // Passos para rodar, nesta ordem. Os do doctor vêm de status.js; "build" também conta se o ícone do build
+      // carrega (dist/client); "server" vem do isUp().
+      const STEPS = [
+        { id: 'node', label: 'Node 22 ou mais novo', fix: 'Instale em nodejs.org.' },
+        { id: 'git', label: 'Git', fix: 'Instale o Git.' },
+        { id: 'claude', label: 'Claude Code instalado', cmd: 'npm install -g @anthropic-ai/claude-code' },
+        { id: 'login', label: 'Login no Claude Code', fix: 'Rode claude e faça login.' },
+        { id: 'deps', label: 'Dependências', cmd: 'npm install' },
+        { id: 'build', label: 'Build do app', cmd: 'npm run build' },
+        { id: 'launcher', label: 'Botão Iniciar registrado', cmd: 'npm run launcher' },
+        { id: 'server', label: 'Claudio’s Club no ar', fix: 'Use o botão Iniciar ou rode', cmd: 'npm run daily:start' },
+      ];
+      const ICON = { ok: '✓', falta: '✗', nv: '?' };
+      const WORD = { ok: 'ok', falta: 'falta', nv: 'não verificado' };
+
+      // detail: o que o doctor achou (ex. "v20.1.0 (precisa 22+)"), mostrado junto da correção.
+      function stepRow(step, state, detail) {
+        const li = document.createElement('li');
+        li.className = `step is-${state}`;
+        const top = document.createElement('div');
+        top.className = 'step-top';
+        const icon = document.createElement('span');
+        icon.className = 'step-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = ICON[state];
+        const label = document.createElement('span');
+        label.className = 'step-label';
+        label.textContent = step.label;
+        const word = document.createElement('span');
+        word.className = 'step-state';
+        word.textContent = WORD[state];
+        top.append(icon, label, word);
+        li.append(top);
+        // O comando de correção aparece só quando o passo não está ok.
+        if (state !== 'ok' && (step.fix || step.cmd)) {
+          const fix = document.createElement('p');
+          fix.className = 'muted small step-fix';
+          if (detail) fix.append(`${detail}. `);
+          if (step.fix) fix.append(`${step.fix} `);
+          if (step.cmd) {
+            const code = document.createElement('code');
+            code.textContent = step.cmd;
+            fix.append(code);
+          }
+          li.append(fix);
+        }
+        return li;
+      }
+
+      function render(st, buildOk, up) {
+        const byId = {};
+        if (st && Array.isArray(st.checks)) st.checks.forEach((c) => { if (c && c.id) byId[c.id] = c; });
+        const list = el('steps');
+        list.textContent = '';
+        STEPS.forEach((step) => {
+          let state = 'nv';
+          if (step.id === 'server') state = up ? 'ok' : 'falta';
+          else if (step.id === 'build' && buildOk) state = 'ok';
+          else if (byId[step.id]) state = byId[step.id].ok ? 'ok' : 'falta';
+          const found = byId[step.id];
+          list.append(stepRow(step, state, found && typeof found.detail === 'string' ? found.detail : ''));
+        });
+        const at = st && st.at ? new Date(st.at) : null;
+        el('checked-at').textContent = at && !isNaN(at)
+          ? `verificado em ${at.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
+          : '';
+        el('doctor-tip').hidden = Array.isArray(st && st.checks);
+      }
+
+      async function refresh(up) {
+        el('recheck').disabled = true;
+        const [st, buildOk] = await Promise.all([loadStatus(), probe('../dist/client/icon-32.png')]);
+        render(st, buildOk, up);
+        el('recheck').disabled = false;
+      }
+
       async function check() {
-        if (await isUp()) return location.replace(app);
+        const up = await isUp();
+        if (up) return location.replace(app);
         el('checking').hidden = true;
         el('down').hidden = false;
+        await refresh(up);
       }
 
       el('start').addEventListener('click', async () => {
@@ -73,10 +194,18 @@
         location.href = 'myco://start';
         for (let i = 0; i < 90; i++) {
           await new Promise((r) => setTimeout(r, 2000));
-          if (await isUp()) return location.replace(app);
+          const up = await isUp();
+          if (up) return location.replace(app);
+          await refresh(up);
         }
         el('starting').textContent = 'Não subiu em 3 minutos. Veja o log com npm run daily:status.';
         el('start').disabled = false;
+      });
+
+      el('recheck').addEventListener('click', async () => {
+        const up = await isUp();
+        if (up) return location.replace(app);
+        await refresh(up);
       });
 
       check();

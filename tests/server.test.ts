@@ -62,7 +62,7 @@ describe('config', () => {
   it('usa "Claudio’s Club" por padrão e grava o nome preservando outras chaves', async () => {
     const file = path.join(root, 'cfg', 'config.json');
     const usageStop = { fiveHour: 90, sevenDay: 95 };
-    const colors = { projectColors: {}, boardBackground: { light: null, dark: null }, projectBudgets: {}, contextSwitch: 'auto', workspaces: [], projectWorkspaces: {} };
+    const colors = { projectColors: {}, projectNames: {}, boardBackground: { light: null, dark: null }, projectBudgets: {}, contextSwitch: 'auto', workspaces: [], projectWorkspaces: {} };
     // Quem chega (sem config) começa no simples.
     expect(await readConfig(file)).toEqual({
       companyName: 'Claudio’s Club',
@@ -186,6 +186,29 @@ describe('config', () => {
     expect(cfg.companyName).toBe('Y');
     await fs.writeFile(file, JSON.stringify({ companyName: 'Z', projectColors: 'vermelho' }));
     expect(await readConfig(file)).toMatchObject({ companyName: 'Z', projectColors: {} });
+  });
+
+  it('apelido do projeto: define com trim, apaga com null ou vazio, sem mexer nos outros', async () => {
+    const file = path.join(root, 'cfg-nome', 'config.json');
+    expect((await updateConfig(ConfigPatch.parse({ projectNames: { a: '  Acme  ', b: 'Beta' } }), file)).projectNames).toEqual({ a: 'Acme', b: 'Beta' });
+    expect((await updateConfig(ConfigPatch.parse({ projectNames: { b: null } }), file)).projectNames).toEqual({ a: 'Acme' });
+    // Só espaço, depois do trim, é vazio: apaga o apelido.
+    expect((await updateConfig(ConfigPatch.parse({ projectNames: { a: '   ' } }), file)).projectNames).toEqual({});
+    expect((await updateConfig(ConfigPatch.parse({ projectNames: { c: 'X' } }), file)).projectNames).toEqual({ c: 'X' });
+    // Outro campo no mesmo arquivo não apaga os apelidos.
+    expect((await updateConfig(ConfigPatch.parse({ companyName: 'Y' }), file)).projectNames).toEqual({ c: 'X' });
+    expect(ConfigPatch.parse({ projectNames: { c: 'x'.repeat(60) } }).projectNames).toEqual({ c: 'x'.repeat(60) });
+    expect(ConfigPatch.safeParse({ projectNames: { c: 'x'.repeat(61) } }).success).toBe(false);
+    expect(ConfigPatch.safeParse({ projectNames: { c: 'linha\nnova' } }).success).toBe(false);
+    expect(ConfigPatch.safeParse({ projectNames: { c: 'tab\there' } }).success).toBe(false);
+    expect(ConfigPatch.safeParse({ projectNames: { '': 'X' } }).success).toBe(false);
+  });
+
+  it('apelido do projeto: entrada estranha no arquivo some, as boas ficam', async () => {
+    const file = path.join(root, 'cfg-nome2', 'config.json');
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify({ projectNames: { a: 'Ok', b: 7, c: '', d: 'com\u0007sino', e: 'x'.repeat(61) } }));
+    expect((await readConfig(file)).projectNames).toEqual({ a: 'Ok' });
   });
 
   it('fundo do quadro: um tema por vez, null volta ao padrão, só #rrggbb', async () => {

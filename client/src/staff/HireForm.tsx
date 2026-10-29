@@ -13,7 +13,7 @@ import type {
   StaffProfile,
 } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
-import { employeeName } from '../format';
+import { employeeName, folderName } from '../format';
 import { t, locale } from '../i18n';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
 import { BrowserCheck } from './BrowserCheck';
@@ -457,10 +457,6 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
             </div>
           </fieldset>
         </div>
-        <label className="check">
-          <input type="checkbox" checked={canHire} onChange={(e) => setCanHire(e.target.checked)} /> {t('staff.canHire')}
-          <span className="muted small"> {t('staff.canHireHint')}</span>
-        </label>
         </div>
 
         {/* ---- Trabalho ---- */}
@@ -716,7 +712,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
             {t('staff.cancel')}
           </button>
           <span className="muted small modal-footer-note">
-            {t('staff.profileIn')} <code>{project ? `${project.name}/.myco/staff/` : '.myco/staff/'}</code>
+            {t('staff.profileIn')} <code>{project ? `${folderName(project.path)}/.myco/staff/` : '.myco/staff/'}</code>
           </span>
         </div>
         </div>

@@ -37,6 +37,11 @@ export function initials(name: string): string {
   return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase() || '?';
 }
 
+/** Última pasta de um caminho ("C:\\www\\MyCo" → "MyCo"): o nome de verdade, sem apelido. */
+export function folderName(projectPath: string): string {
+  return projectPath.split(/[\\/]/).filter(Boolean).pop() ?? projectPath;
+}
+
 /** Nome do funcionário: o título da sessão, ou o começo do id. */
 export function employeeName(session: { id: string; title: string | null }): string {
   return session.title?.trim() || `sessão ${session.id.slice(0, 8)}`;

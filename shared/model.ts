@@ -64,6 +64,11 @@ export interface LiveSession {
 export interface Session {
   id: string;
   title: string | null;
+  /**
+   * Assunto: o título da tarefa que abriu a conversa, ou o começo da 1ª mensagem sua. As conversas de
+   * um funcionário têm o mesmo `title` (o nome dele), então é isto que as diferencia na lista.
+   */
+  topic: string | null;
   /** Origem: claude-desktop, cli, sdk-cli… */
   entrypoint: string | null;
   gitBranch: string | null;
@@ -224,6 +229,8 @@ export interface AppConfig {
   sendWhileBusy: SendPriority;
   /** Cor da parede da sala de cada projeto, por id de projeto; sem entrada = cor padrão. */
   projectColors: Record<string, ProjectColor>;
+  /** Apelido de exibição por id de projeto; sem entrada = nome da pasta. A pasta nunca muda de nome. */
+  projectNames: Record<string, string>;
   /** Fundo do quadro em cada tema do sistema. */
   boardBackground: BoardBackground;
   /**

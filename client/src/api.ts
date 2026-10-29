@@ -164,6 +164,8 @@ export const api = {
     optimizeQuota?: boolean;
     /** Só os projetos enviados mudam; null volta à cor padrão. */
     projectColors?: Record<string, ProjectColor | null>;
+    /** Só os projetos enviados mudam; vazio ou null volta ao nome da pasta. */
+    projectNames?: Record<string, string | null>;
     /** Só o tema enviado muda; null volta ao fundo padrão. */
     boardBackground?: Partial<BoardBackground>;
     /** Só os projetos enviados mudam; null tira o orçamento. */

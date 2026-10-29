@@ -20,6 +20,7 @@ const DEFAULTS: AppConfig = {
   // O padrão do Claude Code: a mensagem entra no trabalho em andamento, sem interromper.
   sendWhileBusy: 'next',
   projectColors: {},
+  projectNames: {},
   boardBackground: { light: null, dark: null },
   projectBudgets: {},
   // Segue numa conversa nova sozinho quando o assunto fecha e compensa (dá para voltar à anterior).
@@ -35,6 +36,13 @@ const UI_LEVEL = z.enum(['simple', 'advanced']);
 // Caneta ou #rrggbb; o hex vai para um estilo inline, então só passa o formato exato.
 const COLOR = z.union([z.enum(PROJECT_COLORS), z.string().regex(HEX_COLOR).transform((s) => s.toLowerCase() as `#${string}`)]);
 const HEX = z.string().regex(/^#[0-9a-f]{6}$/i, 'cor inválida (use #rrggbb)');
+// Apelido do projeto: depois do trim, vazio apaga o apelido (volta ao nome da pasta).
+const PROJECT_NAME = z
+  .string()
+  .trim()
+  .max(60, 'máximo de 60 caracteres')
+  .refine((s) => !/[\x00-\x1f\x7f]/.test(s), 'nome com caractere de controle')
+  .transform((s) => (s === '' ? null : s));
 
 const percent = z.number().min(1).max(100).nullable();
 const UsageStopFile = z.object({ fiveHour: percent.optional(), sevenDay: percent.optional() });
@@ -50,6 +58,7 @@ const ConfigFile = z
     sendWhileBusy: PRIORITY.optional().catch(undefined),
     // Editado à mão, um valor estranho volta ao padrão sem derrubar o resto (ver readConfig).
     projectColors: z.record(z.string(), z.unknown()).optional().catch(undefined),
+    projectNames: z.record(z.string(), z.unknown()).optional().catch(undefined),
     boardBackground: z
       .object({ light: HEX.nullable().optional().catch(undefined), dark: HEX.nullable().optional().catch(undefined) })
       .optional()
@@ -96,6 +105,8 @@ export const ConfigPatch = z.object({
   optimizeQuota: z.boolean().optional(),
   /** Por id de projeto: uma cor troca a da sala; null volta à padrão. Os outros projetos ficam como estão. */
   projectColors: z.record(z.string().min(1).max(200), COLOR.nullable()).optional(),
+  /** Por id de projeto: só o apelido na tela (a pasta não muda); vazio ou null volta ao nome da pasta. */
+  projectNames: z.record(z.string().min(1).max(200), PROJECT_NAME.nullable()).optional(),
   /** Só o tema enviado muda; null volta à cor padrão. */
   boardBackground: z
     .object({ light: HEX.toLowerCase().nullable().optional(), dark: HEX.toLowerCase().nullable().optional() })
@@ -126,6 +137,12 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     sendWhileBusy: d.sendWhileBusy ?? DEFAULTS.sendWhileBusy,
     projectColors: Object.fromEntries(
       Object.entries(d.projectColors ?? {}).filter((e): e is [string, ProjectColor] => COLOR.safeParse(e[1]).success),
+    ),
+    projectNames: Object.fromEntries(
+      Object.entries(d.projectNames ?? {}).flatMap(([id, v]) => {
+        const name = PROJECT_NAME.safeParse(v);
+        return name.success && name.data ? [[id, name.data] as const] : [];
+      }),
     ),
     boardBackground: { light: d.boardBackground?.light ?? null, dark: d.boardBackground?.dark ?? null },
     projectBudgets: Object.fromEntries(
@@ -246,11 +263,12 @@ function uniqueId(base: string, taken: Set<string>): string {
 }
 
 export async function updateConfig(patch: z.infer<typeof ConfigPatch>, file = CONFIG_FILE): Promise<AppConfig> {
-  const { projectColors, boardBackground, projectBudgets, ...rest } = patch;
+  const { projectColors, projectNames, boardBackground, projectBudgets, ...rest } = patch;
   return mutate(file, (current) => {
     const next: Record<string, unknown> = { ...current, ...stripUndefined(rest) };
-    // Cores, fundo e orçamentos mudam por partes: o que não veio no pedido fica como está.
+    // Cores, nomes, fundo e orçamentos mudam por partes: o que não veio no pedido fica como está.
     if (projectColors) next.projectColors = mergePartial(current.projectColors, projectColors);
+    if (projectNames) next.projectNames = mergePartial(current.projectNames, projectNames);
     if (boardBackground) next.boardBackground = mergePartial(current.boardBackground, boardBackground);
     if (projectBudgets) next.projectBudgets = mergePartial(current.projectBudgets, projectBudgets);
     return next;

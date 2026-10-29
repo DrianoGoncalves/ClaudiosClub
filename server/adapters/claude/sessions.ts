@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import type { LiveSession, Session } from '../../../shared/model';
+import { isInjectedUserText } from '../../chat/items';
 import { listDir, readHeadTail, tryJson } from './fsutil';
 import { encodeProjectDir } from './paths';
 
@@ -27,6 +28,8 @@ const TranscriptLine = z.object({
   customTitle: z.string().optional(),
   agentName: z.string().optional(),
   cwd: z.string().optional(),
+  // Solto: um formato inesperado aqui não pode derrubar a linha inteira (data, origem, branch).
+  message: z.unknown().optional(),
 });
 type TranscriptLine = z.infer<typeof TranscriptLine>;
 
@@ -120,6 +123,7 @@ async function readSession(
       agentLine?.agentName ??
       liveInfo?.name ??
       null,
+    topic: sessionTopic(headLines),
     entrypoint: origin?.entrypoint ?? liveInfo?.entrypoint ?? null,
     gitBranch: origin?.gitBranch ?? null,
     version: origin?.version ?? null,
@@ -140,6 +144,39 @@ export async function readTranscriptCwd(projectDir: string): Promise<string | nu
     if (cwd) return cwd;
   }
   return null;
+}
+
+const TOPIC_MAX = 80;
+
+/**
+ * Assunto da conversa, do começo do transcript: a tarefa do quadro que a abriu (`[Tarefa "…"]`) ou
+ * a 1ª linha da 1ª mensagem sua. Pula o que o Claude Code ou o Claudio’s Club injetam e a saudação
+ * de sessão nova ("Olá, X. Leia sua memória…"), que não diz o assunto.
+ */
+export function sessionTopic(lines: TranscriptLine[]): string | null {
+  for (const l of lines) {
+    if (l.type !== 'user' || !l.message || typeof l.message !== 'object') continue;
+    const content = (l.message as { content?: unknown }).content;
+    const texts =
+      typeof content === 'string'
+        ? [content]
+        : Array.isArray(content)
+          ? content.flatMap((b) => (b && typeof b === 'object' && (b as { type?: unknown }).type === 'text' && typeof (b as { text?: unknown }).text === 'string' ? [(b as { text: string }).text] : []))
+          : [];
+    for (const raw of texts) {
+      const text = raw.trim();
+      const task = /^\[Tarefa "(.+?)"\]/.exec(text);
+      if (task) return clipTopic(task[1]!);
+      if (!text || isInjectedUserText(text) || text.startsWith('[MyCo]') || /^Olá, [^.]+\. Leia sua (memória|ficha)/.test(text)) continue;
+      return clipTopic(text.split(/\r?\n/)[0]!);
+    }
+  }
+  return null;
+}
+
+function clipTopic(s: string): string {
+  const one = s.replace(/\s+/g, ' ').trim();
+  return one.length > TOPIC_MAX ? `${one.slice(0, TOPIC_MAX - 1)}…` : one;
 }
 
 function parseLine(line: string): TranscriptLine {

@@ -165,6 +165,19 @@ describe('ClaudeAdapter', () => {
     });
   });
 
+  it('apelido do projeto troca só o nome (lista e detalhe); a pasta e o id ficam', async () => {
+    const id = encodeProjectDir(path.resolve(projA));
+    const named = new ClaudeAdapter({
+      locations: { home, configFile: path.join(root, 'home', '.claude.json') },
+      includeTemp: true,
+      projectNames: async () => ({ [id]: 'Apelido A' }),
+    });
+    const list = await named.listProjects();
+    expect(list.find((p) => p.path === path.resolve(projA))).toMatchObject({ id, name: 'Apelido A', path: path.resolve(projA) });
+    expect(list.find((p) => p.path === path.resolve(projB))!.name).toBe('projB');
+    expect((await named.getProject(id))!.project).toMatchObject({ id, name: 'Apelido A', path: path.resolve(projA) });
+  });
+
   it('lê agents, skills e sessões de um projeto', async () => {
     const ad = adapter();
     const a = (await ad.listProjects()).find((p) => p.path === path.resolve(projA))!;
