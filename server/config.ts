@@ -5,13 +5,13 @@ import { z } from 'zod';
 import { CONTEXT_SWITCHES, PROJECT_COLORS, type AppConfig, type ProjectColor, type Workspace } from '../shared/model';
 import { pathKey } from './adapters/claude/paths';
 
-// Configuração do próprio MyCo, fora do ~/.claude: ~/.myco/config.json.
+// Configuração do próprio Claudio’s Club, fora do ~/.claude: ~/.myco/config.json.
 
 export const MYCO_HOME = process.env.MYCO_HOME ?? path.join(os.homedir(), '.myco');
 const CONFIG_FILE = path.join(MYCO_HOME, 'config.json');
 
 const DEFAULTS: AppConfig = {
-  companyName: 'MyCo',
+  companyName: 'Claudio’s Club',
   // Quem chega começa no simples; quem já tinha config (já usava) fica no avançado (ver readConfig).
   uiLevel: 'simple',
   archived: { projects: [], sessions: [] },
@@ -110,7 +110,8 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
   if (!parsed.success) return DEFAULTS;
   const d = parsed.data;
   return {
-    companyName: d.companyName ?? DEFAULTS.companyName,
+    // 'MyCo' era o nome padrão antes da troca de nome: quem não mudou passa a ver o novo.
+    companyName: d.companyName && d.companyName !== 'MyCo' ? d.companyName : DEFAULTS.companyName,
     uiLevel: d.uiLevel ?? (Object.keys(d).length ? 'advanced' : DEFAULTS.uiLevel),
     archived: { projects: d.archived?.projects ?? [], sessions: d.archived?.sessions ?? [] },
     usageStop: {
@@ -150,7 +151,7 @@ export function workspaceOf(config: AppConfig, projectId: string): Workspace | n
   return (id && config.workspaces.find((w) => w.id === id)) || null;
 }
 
-/** Pastas abertas pelo "Novo projeto": o Claude Code ainda não as conhece, então o MyCo lembra. */
+/** Pastas abertas pelo "Novo projeto": o Claude Code ainda não as conhece, então o Claudio’s Club lembra. */
 export async function readExtraProjects(file = CONFIG_FILE): Promise<string[]> {
   const raw = await readRaw(file);
   const list = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).extraProjects : null;

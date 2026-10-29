@@ -107,7 +107,7 @@ function adapter() {
 
 describe('paths', () => {
   it('codifica o caminho como o Claude Code', () => {
-    expect(encodeProjectDir('C:\\Users\\voce\\Projetos\\MyCo')).toBe('C--Users-voce-Projetos-MyCo');
+    expect(encodeProjectDir('C:\\Users\\voce\\Projetos\\ClaudiosClub')).toBe('C--Users-voce-Projetos-ClaudiosClub');
     expect(encodeProjectDir('C:\\www\\painel.cliente.com.br\\.refactor-app')).toBe('C--www-painel-cliente-com-br--refactor-app');
   });
 

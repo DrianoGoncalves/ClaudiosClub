@@ -55,7 +55,7 @@ export interface MoreTab {
   content: ReactNode;
 }
 
-/** Conversa com o funcionário dentro do MyCo, sem terminal. */
+/** Conversa com o funcionário dentro do Claudio’s Club, sem terminal. */
 export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, top, more }: Props) {
   const chat = useChat(projectId, sessionId, staffId);
   const todos = useMemo(() => todosFrom(chat.items), [chat.items]);

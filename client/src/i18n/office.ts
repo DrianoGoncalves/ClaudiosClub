@@ -53,7 +53,7 @@ export default defineMessages({
 
     'office.projectWorkspace': 'Workspace',
     'office.serversTitle': 'Servidores (SSH)',
-    'office.serversIntro': 'Conexões deste projeto. Na ficha, cada funcionário marca as que pode usar; a chave fica no seu computador e o MyCo só aponta para ela.',
+    'office.serversIntro': 'Conexões deste projeto. Na ficha, cada funcionário marca as que pode usar; a chave fica no seu computador e o Claudio’s Club só aponta para ela.',
     'office.serversEmpty': 'Nenhuma conexão.',
     'office.connAdd': '+ conexão',
     'office.connName': 'Nome',
@@ -168,7 +168,7 @@ export default defineMessages({
 
     'office.projectWorkspace': 'Workspace',
     'office.serversTitle': 'Servers (SSH)',
-    'office.serversIntro': "This project's connections. In each profile, the employee gets the ones they may use; the key stays on your computer and MyCo only points to it.",
+    'office.serversIntro': "This project's connections. In each profile, the employee gets the ones they may use; the key stays on your computer and Claudio’s Club only points to it.",
     'office.serversEmpty': 'No connections.',
     'office.connAdd': '+ connection',
     'office.connName': 'Name',
@@ -283,7 +283,7 @@ export default defineMessages({
 
     'office.projectWorkspace': 'Workspace',
     'office.serversTitle': 'Servidores (SSH)',
-    'office.serversIntro': 'Conexiones de este proyecto. En la ficha, cada empleado marca las que puede usar; la clave queda en tu computadora y MyCo solo apunta a ella.',
+    'office.serversIntro': 'Conexiones de este proyecto. En la ficha, cada empleado marca las que puede usar; la clave queda en tu computadora y Claudio’s Club solo apunta a ella.',
     'office.serversEmpty': 'Ninguna conexión.',
     'office.connAdd': '+ conexión',
     'office.connName': 'Nombre',

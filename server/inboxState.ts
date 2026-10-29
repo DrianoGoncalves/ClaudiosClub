@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { writeAtomic } from './staff/store';
 
-// O que a caixa "precisa de mim" lembra entre reinícios do MyCo: as perguntas que esperam você
+// O que a caixa "precisa de mim" lembra entre reinícios do Claudio’s Club: as perguntas que esperam você
 // (um funcionário terminou o turno perguntando algo) e os avisos que você marcou como "não é
 // segredo" (não voltam a aparecer). Sem arquivo (testes), fica só na memória.
 

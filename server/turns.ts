@@ -1,7 +1,7 @@
 import type { LiveSession } from '../shared/model';
 
 // "Terminou": quando uma sessão passa de trabalhando para parada (o turno acabou), fica registrado
-// aqui por um tempo, para o navegador avisar ("Giovana terminou"). Vale para as conversas do MyCo
+// aqui por um tempo, para o navegador avisar ("Giovana terminou"). Vale para as conversas do Claudio’s Club
 // e para sessões no terminal ou no app do Claude: todas escrevem o status em ~/.claude/sessions.
 // Ir para "esperando você" não conta: isso já é a caixa "precisa de mim".
 
@@ -9,7 +9,7 @@ export interface TurnDone {
   id: string;
   sessionId: string;
   at: string;
-  /** Começo da última resposta, quando a conversa é do MyCo (as de fora não dão acesso ao texto). */
+  /** Começo da última resposta, quando a conversa é do Claudio’s Club (as de fora não dão acesso ao texto). */
   text: string | null;
 }
 
@@ -24,7 +24,7 @@ export class TurnWatcher {
 
   constructor(
     private readonly listLive: () => Promise<LiveSession[]>,
-    /** Última resposta de uma conversa aberta no MyCo (null se não for do MyCo). */
+    /** Última resposta de uma conversa aberta no Claudio’s Club (null se não for do Claudio’s Club). */
     private readonly lastText: (sessionId: string) => string | null,
     /** Avisado a cada turno que termina (as tarefas andam de "fazendo" para "revisão"). */
     private readonly onDone?: (sessionId: string) => void,
@@ -55,7 +55,7 @@ export class TurnWatcher {
   }
 
   /**
-   * Turno de uma conversa do MyCo que acabou (o processo avisa na hora). Vale também para o turno
+   * Turno de uma conversa do Claudio’s Club que acabou (o processo avisa na hora). Vale também para o turno
    * curto que a leitura de tempos em tempos nunca viu trabalhando.
    */
   noteDone(sessionId: string, now = new Date()) {

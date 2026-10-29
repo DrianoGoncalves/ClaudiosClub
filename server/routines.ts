@@ -5,7 +5,7 @@ import { writeAtomic } from './staff/store';
 
 // Agendador das rotinas: a cada ~20 s confere, no horário desta máquina, quais rotinas batem com o
 // minuto atual e manda a mensagem ao funcionário (o mesmo caminho do chat do painel). Só roda com o
-// MyCo ligado; horário perdido com ele desligado não é recuperado depois.
+// Claudio’s Club ligado; horário perdido com ele desligado não é recuperado depois.
 // A última execução de cada rotina fica em ~/.myco/routines.json: um reinício no meio do minuto não
 // dispara de novo, e o painel mostra quando rodou e como foi.
 

@@ -10,7 +10,7 @@ import { writeAtomic } from './staff/store';
 //   removed:   prontos que você tirou da lista
 //   defaultId: o cargo que já vem preenchido ao contratar (null = começa em branco; sem a chave, o
 //              orquestrador)
-// Um pronto novo numa versão futura do MyCo aparece sozinho (não está em `removed`).
+// Um pronto novo numa versão futura do Claudio’s Club aparece sozinho (não está em `removed`).
 
 /** O cargo que vem marcado ao contratar enquanto você não escolher outro. */
 export const DEFAULT_ROLE = 'orquestrador';

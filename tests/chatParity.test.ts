@@ -11,7 +11,7 @@ import { searchFiles } from '../server/fileSearch';
 import { TurnWatcher } from '../server/turns';
 import { applySuggestion, commandSuggestions, todosFrom, triggerOf } from '../client/src/chat/ChatExtras';
 
-// O que veio do app do Claude para a conversa do MyCo: ajustes na hora, "permitir sempre", anexos,
+// O que veio do app do Claude para a conversa do Claudio’s Club: ajustes na hora, "permitir sempre", anexos,
 // comandos "/", arquivos com "@", lista de tarefas e o aviso "terminou" de turno curto.
 
 let root: string;

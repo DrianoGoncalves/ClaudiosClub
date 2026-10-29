@@ -14,7 +14,7 @@ import { checkpoint, CodeError, detectTest, locateCode, mergeCode, readCode, run
 // "Pronto" e "no ar" são suas (o deploy, por enquanto, é marcado à mão).
 //
 // Uma tarefa por vez por funcionário. Começar com ele ocupado (outra tarefa planejando ou fazendo,
-// ou uma conversa dele trabalhando) põe na fila dele; quando ele fica livre, o MyCo manda primeiro
+// ou uma conversa dele trabalhando) põe na fila dele; quando ele fica livre, o Claudio’s Club manda primeiro
 // os ajustes que você deixou em tarefas anteriores (guardados enquanto ele estava ocupado) e
 // depois a próxima da fila, na ordem do quadro.
 
@@ -65,7 +65,7 @@ export interface TaskServiceDeps {
   lastText?: (sessionId: string) => string | null;
   /** Branch em que ele vai trabalhar (a da worktree dele, ou a atual do projeto). */
   branchFor: (projectPath: string, profile: StaffProfile) => Promise<string | null>;
-  /** Alguma conversa dele no MyCo está trabalhando (turno ou segundo plano), fora `exceptSession`. */
+  /** Alguma conversa dele no Claudio’s Club está trabalhando (turno ou segundo plano), fora `exceptSession`. */
   isWorking?: (staffId: string, exceptSession?: string) => boolean;
   /** Manda na conversa que já existe (os ajustes guardados). */
   sendTo?: (projectId: string, sessionId: string, staffId: string, text: string, images: string[]) => Promise<string>;
@@ -222,7 +222,7 @@ export class TaskService {
   }
 
   /**
-   * Uma conversa do MyCo parou de trabalhar: se for de uma tarefa, a entrega anda; se for de um
+   * Uma conversa do Claudio’s Club parou de trabalhar: se for de uma tarefa, a entrega anda; se for de um
    * funcionário, ele pode pegar o que espera.
    */
   async onIdle(sessionId: string, projectId: string | null, staffId: string | null): Promise<void> {
@@ -400,7 +400,7 @@ export class TaskService {
 
   /**
    * Fazendo → revisão, com o commit da entrega, e a vez passa para o que espera. Vem do vigia de
-   * sessões (que lê de tempos em tempos e perde turno curto) e do processo da conversa no MyCo (que
+   * sessões (que lê de tempos em tempos e perde turno curto) e do processo da conversa no Claudio’s Club (que
    * sabe a hora exata); o segundo aviso não muda nada.
    */
   private async workDone(sessionId: string): Promise<void> {
@@ -414,7 +414,7 @@ export class TaskService {
       await this.change(where.projectId, where.taskId, (t) => (t.status === 'doing' ? (delivered = moved(t, 'review', 'auto', 'turno terminou')) : t));
       if (delivered) {
         await this.markDelivery(where.projectId, delivered);
-        // Pedida por um gestor: o MyCo roda os testes antes de avisar, e o gestor não gasta a conversa
+        // Pedida por um gestor: o Claudio’s Club roda os testes antes de avisar, e o gestor não gasta a conversa
         // dele (a mais longa e cara) rodando de novo.
         const tests = (delivered as Task).requestedBy ? await this.deliveryTests(where.projectId, delivered) : null;
         if (tests) delivered = (await this.change(where.projectId, where.taskId, (t) => ({ ...t, tests }))) ?? delivered;
@@ -436,8 +436,8 @@ export class TaskService {
     const t = task.tests;
     const tests = t
       ? t.ok
-        ? `Testes (\`${t.command}\`, rodados pelo MyCo): passaram em ${Math.round(t.ms / 1000)} s. Não rode de novo.`
-        : `Testes (\`${t.command}\`, rodados pelo MyCo): FALHARAM. Fim da saída:\n${t.output.slice(-800)}`
+        ? `Testes (\`${t.command}\`, rodados pelo Claudio’s Club): passaram em ${Math.round(t.ms / 1000)} s. Não rode de novo.`
+        : `Testes (\`${t.command}\`, rodados pelo Claudio’s Club): FALHARAM. Fim da saída:\n${t.output.slice(-800)}`
       : '';
     const text = [
       `[MyCo] ${name} entregou a tarefa “${task.title}” (id ${task.id}, agora em revisão no quadro).`,

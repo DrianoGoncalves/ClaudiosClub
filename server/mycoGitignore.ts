@@ -1,11 +1,11 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-// `<projeto>/.myco/.gitignore`: as imagens que o MyCo guarda no projeto (retratos e imagem do
+// `<projeto>/.myco/.gitignore`: as imagens que o Claudio’s Club guarda no projeto (retratos e imagem do
 // projeto) não vão para o git. Fica dentro de .myco, sem mexer no .gitignore do projeto; as fichas
 // continuam versionáveis. Se você editou o arquivo, só as linhas que faltam são acrescentadas.
 
-const HEADER = '# Gerado pelo MyCo: imagens (retratos e imagem do projeto) ficam fora do git.';
+const HEADER = '# Gerado pelo Claudio’s Club: imagens (retratos e imagem do projeto) ficam fora do git.';
 export const IGNORED_IMAGES = ['staff/*.png', 'staff/*.jpg', 'staff/*.webp', 'project.png', 'project.jpg', 'project.webp'];
 
 export async function ensureMycoGitignore(projectPath: string): Promise<void> {

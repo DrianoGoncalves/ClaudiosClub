@@ -59,13 +59,13 @@ describe('auth', () => {
 });
 
 describe('config', () => {
-  it('usa "MyCo" por padrão e grava o nome preservando outras chaves', async () => {
+  it('usa "Claudio’s Club" por padrão e grava o nome preservando outras chaves', async () => {
     const file = path.join(root, 'cfg', 'config.json');
     const usageStop = { fiveHour: 90, sevenDay: 95 };
     const colors = { projectColors: {}, boardBackground: { light: null, dark: null }, projectBudgets: {}, contextSwitch: 'auto', workspaces: [], projectWorkspaces: {} };
     // Quem chega (sem config) começa no simples.
     expect(await readConfig(file)).toEqual({
-      companyName: 'MyCo',
+      companyName: 'Claudio’s Club',
       uiLevel: 'simple',
       archived: { projects: [], sessions: [] },
       usageStop,
@@ -75,7 +75,7 @@ describe('config', () => {
 
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, JSON.stringify({ futuro: 1 }));
-    // Quem já tinha config (já usava o MyCo antes da opção) fica no avançado.
+    // Quem já tinha config (já usava o Claudio’s Club antes da opção) fica no avançado.
     expect(await updateConfig({ companyName: 'Acme Labs' }, file)).toEqual({
       companyName: 'Acme Labs',
       uiLevel: 'advanced',

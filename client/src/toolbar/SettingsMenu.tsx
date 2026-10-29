@@ -8,7 +8,7 @@ import { useChatDetail } from '../chat/chatDetail';
 import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
 import { RolesEditor } from './RolesEditor';
 
-// Configurações do MyCo, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
+// Configurações do Claudio’s Club, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
 // com título, descrição e o controle logo abaixo. Abre pelo botão "config" ou com Ctrl+,.
 
 interface Props {
@@ -229,6 +229,7 @@ export function SettingsMenu(props: Props) {
               </button>
             </p>
           )}
+          <p className="muted small settings-about">{t('toolbar.about')}</p>
           {hidden > 0 && (
             <p className="muted small settings-more">
               {plural(hidden, 'toolbar.moreOne', 'toolbar.moreOther')}{' '}
@@ -637,7 +638,7 @@ function BudgetInput({ value, label, onSave }: { value: number | null; label: st
   );
 }
 
-/** Parar (e, com o vigia, reiniciar) o servidor do MyCo. Depois, a tela mostra como voltar. */
+/** Parar (e, com o vigia, reiniciar) o servidor do Claudio’s Club. Depois, a tela mostra como voltar. */
 function ServerControls() {
   const [info, setInfo] = useState<{ daemon: boolean; startedAt: string } | null>(null);
   const [state, setState] = useState<'idle' | 'stopping' | 'stopped' | 'restarting'>('idle');
@@ -714,7 +715,7 @@ function ServerControls() {
                   <h2>{t('toolbar.stoppedTitle')}</h2>
                   <p>{t('toolbar.stoppedBody')}</p>
                   <p>
-                    {t('toolbar.startAgainA')} <b>MyCo</b> {t('toolbar.startAgainB')}{' '}
+                    {t('toolbar.startAgainA')} <b>Claudio’s Club</b> {t('toolbar.startAgainB')}{' '}
                     <code>npm run daily:start</code> {t('toolbar.startAgainC')}
                   </p>
                 </>
@@ -756,7 +757,7 @@ function SendWhileBusyEditor({ value, onSave }: { value: SendPriority; onSave: (
   );
 }
 
-/** Linha de parada da empresa: acima dela, o MyCo pergunta antes de mandar trabalho novo. */
+/** Linha de parada da empresa: acima dela, o Claudio’s Club pergunta antes de mandar trabalho novo. */
 function UsageStopInput({ field, value, onSave }: { field: keyof UsageStop; value: UsageStop; onSave: (stop: UsageStop) => Promise<void> }) {
   const [error, setError] = useState<string | null>(null);
   const save = async (e: React.FocusEvent<HTMLInputElement>) => {

@@ -11,7 +11,7 @@ export interface FichaContext {
   company: string;
   /** Workspace do projeto (como você agrupa os projetos: cliente, área…), se tiver. */
   workspace?: string | null;
-  /** Skills da ficha que são da biblioteca do MyCo (só esta sessão vê, como `myco:<nome>`). */
+  /** Skills da ficha que são da biblioteca do Claudio’s Club (só esta sessão vê, como `myco:<nome>`). */
   librarySkills?: string[];
   projectName: string;
   projectPath: string;
@@ -20,7 +20,7 @@ export interface FichaContext {
   /** Caminho da ficha e da memória relativos à pasta do projeto. */
   fichaPath: string;
   memoryPath: string;
-  /** Endereço do MyCo, para quem pode contratar subfuncionários. */
+  /** Endereço do Claudio’s Club, para quem pode contratar subfuncionários. */
   mycoUrl: string;
   /** Worktree própria do funcionário, quando a ficha pede. */
   worktree?: { path: string; branch: string } | null;
@@ -39,7 +39,7 @@ export interface TeamMember {
 }
 
 /**
- * A equipe de um gestor: o que é da área de alguém vai para essa pessoa, como tarefa do MyCo (fila,
+ * A equipe de um gestor: o que é da área de alguém vai para essa pessoa, como tarefa do Claudio’s Club (fila,
  * quadro, aviso de volta); o executor fica com o trabalho mecânico sem dono. A conversa do gestor
  * costuma ser longa (centenas de milhares de tokens), então cada passo dele custa caro: ele repassa
  * sem pesquisar o código, não faz o trabalho da área e confere na medida do risco.
@@ -54,7 +54,7 @@ function teamSection(p: StaffProfile, ctx: FichaContext): string {
     ctx.team.map((m) => `- ${m.name} (${m.role}${m.temporary ? ', temporário' : ''}), id \`${m.id}\`: ${first(m.mission)}`).join('\n'),
     'Repasse sem pesquisar: não leia o código para escrever a tarefa. Mande o pedido do usuário nas palavras dele, o critério de pronto e o que não mexer (com o motivo); cite arquivos só se já souber quais são. Quem é da área acha as linhas. Pedido que é inteiro de uma área vai como está, numa tarefa só para essa pessoa, sem você dividir nem planejar; um pedido com partes de áreas diferentes vira uma tarefa para cada pessoa.',
     `Para passar uma tarefa: POST ${api}/tasks com o cabeçalho \`x-myco: 1\` e um JSON com title, description (o pedido, o critério de pronto e o que não mexer), staffId (o id da pessoa), requestedBy: "${p.id}" e start: true. A tarefa entra na fila dela (uma por vez) e aparece no quadro de tarefas.`,
-    'Quando a pessoa entregar, o MyCo te avisa (na conversa em que você pediu) com o resumo do que ela disse e, se o projeto tiver testes, o resultado deles, já rodados: não rode de novo. Confira na medida do risco: para mudança pequena, `git diff --stat` e o resumo bastam; abra o diff inteiro só no que for arriscado (segurança, dados, servidor) ou se o --stat não bater com o resumo. Não procure prints nem arquivos dela: se faltar prova, peça. Se faltar algo, peça a ela na conversa da tarefa, não refaça você.',
+    'Quando a pessoa entregar, o Claudio’s Club te avisa (na conversa em que você pediu) com o resumo do que ela disse e, se o projeto tiver testes, o resultado deles, já rodados: não rode de novo. Confira na medida do risco: para mudança pequena, `git diff --stat` e o resumo bastam; abra o diff inteiro só no que for arriscado (segurança, dados, servidor) ou se o --stat não bater com o resumo. Não procure prints nem arquivos dela: se faltar prova, peça. Se faltar algo, peça a ela na conversa da tarefa, não refaça você.',
     `Para ver como estão: GET ${api}/tasks.`,
   ].join('\n');
 }
@@ -64,7 +64,7 @@ const REMOTE_TOOLS = ['ssh', 'ssh.exe', 'scp', 'scp.exe', 'sftp', 'sftp.exe', 'r
 
 /**
  * Bloqueios que vão para `--disallowedTools`: o Claude Code recusa a ferramenta antes de rodar.
- * Para todos: chaves SSH e a pasta `.vps` (conexões e ssh_config, que só o MyCo edita). Sem
+ * Para todos: chaves SSH e a pasta `.vps` (conexões e ssh_config, que só o Claudio’s Club edita). Sem
  * servidor na ficha: os programas de acesso remoto, no Bash e no PowerShell. Com servidor: .env e
  * afins (segredos de produção costumam estar neles) e os arquivos das chaves das conexões dele.
  * É uma barreira a mais, não a única: quem tem terminal ainda consegue ler um arquivo por outro
@@ -98,9 +98,9 @@ function serversSection(p: StaffProfile, ctx: FichaContext): string {
     lines.join('\n'),
     [
       '### Acesso seguro',
-      `- Comando remoto, um por vez: \`ssh -F "${config}" <conexão> "<comando>"\`. O arquivo é gerado pelo MyCo: não leia, não edite e não use outra configuração.`,
+      `- Comando remoto, um por vez: \`ssh -F "${config}" <conexão> "<comando>"\`. O arquivo é gerado pelo Claudio’s Club: não leia, não edite e não use outra configuração.`,
       `- Arquivos: \`scp -F "${config}" <local> <conexão>:<caminho>\` para enviar (com backup do que for sobrescrito no servidor) e o contrário para baixar.${vps}`,
-      '- A chave fica no computador do usuário e é o MyCo que aponta para ela. Você nunca lê, pede, copia, mostra ou gera chaves e senhas. Se a conexão falhar por autenticação, pare e avise o usuário: não tente outra forma.',
+      '- A chave fica no computador do usuário e é o Claudio’s Club que aponta para ela. Você nunca lê, pede, copia, mostra ou gera chaves e senhas. Se a conexão falhar por autenticação, pare e avise o usuário: não tente outra forma.',
       '- Nunca exiba no chat o conteúdo de `.env`, chaves, tokens ou senhas, nem os grave na memória. Para saber se um segredo local e o do servidor batem, compare só o hash (`sha256sum` no servidor, `Get-FileHash` aqui).',
       '- Um servidor pode ter mais de um projeto: confirme a pasta e o serviço do projeto antes de agir, e não mexa nos outros sites.',
     ].join('\n'),
@@ -210,7 +210,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     `# Ficha de ${p.name} — ${p.role}`,
     `Empresa: ${ctx.company}.${ctx.workspace ? ` Workspace: ${ctx.workspace}.` : ''} Projeto: ${ctx.projectName} (\`${ctx.projectPath}\`).`,
     `Reporta a: ${ctx.managerNames.length ? `${ctx.managerNames.join(', ')} e ao usuário (dono da empresa)` : 'o usuário (dono da empresa)'}.`,
-    `Esta ficha foi gerada pelo MyCo; para mudar, edite pelo MyCo (alterações à mão podem ser sobrescritas).`,
+    `Esta ficha foi gerada pelo Claudio’s Club; para mudar, edite pelo Claudio’s Club (alterações à mão podem ser sobrescritas).`,
     `## Missão\n${p.mission}`,
     p.firstTask ? `## Primeira tarefa\n${p.firstTask}` : '',
     `## Autonomia\n${AUTONOMY_LABEL[p.autonomy]}`,
@@ -220,7 +220,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     p.doneWhen ? `## Definição de pronto\n${p.doneWhen}` : '',
     // Quem pediu confere pela entrega: com as provas nela, não precisa abrir tudo de novo.
     ctx.managerNames.length
-      ? '## Entrega\nAo terminar uma tarefa que o seu gestor passou, a sua última mensagem é a entrega: o MyCo manda para quem pediu. Seja curto e traga as provas: o que mudou (arquivos), os testes que rodou e o resultado, onde estão os prints (caminho) e o que não verificou.'
+      ? '## Entrega\nAo terminar uma tarefa que o seu gestor passou, a sua última mensagem é a entrega: o Claudio’s Club manda para quem pediu. Seja curto e traga as provas: o que mudou (arquivos), os testes que rodou e o resultado, onde estão os prints (caminho) e o que não verificou.'
       : '',
     playbookSection(p, ctx),
     serversSection(p, ctx),
@@ -233,7 +233,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
   return sections.filter(Boolean).join('\n\n') + '\n';
 }
 
-/** As skills da ficha; as da biblioteca do MyCo vêm no plugin da sessão, com o prefixo dele. */
+/** As skills da ficha; as da biblioteca do Claudio’s Club vêm no plugin da sessão, com o prefixo dele. */
 function skillList(p: StaffProfile, ctx: FichaContext): string {
   if (!p.skills.length) return 'nenhuma em especial';
   const library = new Set(ctx.librarySkills ?? []);
@@ -243,7 +243,7 @@ function skillList(p: StaffProfile, ctx: FichaContext): string {
 /**
  * A memória é o que atravessa as conversas: com ela curada, cada assunto pode ter uma conversa
  * curta (barata e com o modelo prestando atenção), em vez de uma conversa que cresce por semanas e
- * relê tudo a cada resposta. O ponto de corte avisa o MyCo de que o assunto fechou e a memória está
+ * relê tudo a cada resposta. O ponto de corte avisa o Claudio’s Club de que o assunto fechou e a memória está
  * em dia: a próxima mensagem pode seguir numa conversa nova (ver server/chat/manager.ts).
  */
 function memorySection(ctx: FichaContext): string {
@@ -270,7 +270,7 @@ function hiringSection(p: StaffProfile, ctx: FichaContext): string {
     '## Subfuncionários',
     temp,
     'Para trabalho pontual (uma tarefa, uma busca, uma revisão), use subagents (ferramenta Agent): terminam junto com o trabalho e custam menos. Contrate um subfuncionário só para um papel contínuo, que precise de memória e conversa próprias.',
-    `Para contratar: POST ${api}/staff com o cabeçalho \`x-myco: 1\` e um JSON com name, role, mission, firstTask, autonomy (plan, manual, acceptEdits ou auto), reportsTo: ["${p.id}"] e launch: true. Ele abre numa conversa do MyCo; a resposta traz o id dele (profile.id) e a conversa (launch.sessionId).`,
+    `Para contratar: POST ${api}/staff com o cabeçalho \`x-myco: 1\` e um JSON com name, role, mission, firstTask, autonomy (plan, manual, acceptEdits ou auto), reportsTo: ["${p.id}"] e launch: true. Ele abre numa conversa do Claudio’s Club; a resposta traz o id dele (profile.id) e a conversa (launch.sessionId).`,
     `Para mandar outra mensagem a ele: POST ${api}/chat/send com {"sessionId", "staffId", "text"} (mesmo cabeçalho).`,
     `Quem você contrata é temporário. Quando o trabalho dele terminar, encerre: POST ${api}/staff/<id dele>/done com {"note": "o que ele entregou"}. Ele sai do quadro (nada é apagado); parado há ${TEMP_IDLE_DAYS} dias, sai sozinho. Só o usuário efetiva.`,
     'Você não pode dar a um subfuncionário mais autonomia do que a sua.',
@@ -314,11 +314,11 @@ export interface ClaudeArgsOptions {
   /** Arquivo com a identidade e a ficha (ver systemPrompt). */
   systemPromptFile: string;
   mcpConfigPath: string | null;
-  /** Configuração extra com os hooks do MyCo (ver staffSettings em launch.ts). */
+  /** Configuração extra com os hooks do Claudio’s Club (ver staffSettings em launch.ts). */
   settingsFile?: string | null;
   /** Agents do roteiro que faltam na pasta da sessão (worktree), em JSON. */
   agentsFile?: string | null;
-  /** Só no terminal; a conversa pelo MyCo manda as mensagens pelo stream. */
+  /** Só no terminal; a conversa pelo Claudio’s Club manda as mensagens pelo stream. */
   firstPrompt: string | null;
   /** Sessão nova (`sessionId`) que começa como cópia desta: duplicar a conversa. */
   forkFrom?: string;

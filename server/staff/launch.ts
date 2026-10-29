@@ -29,7 +29,7 @@ export interface LaunchContext {
   servers?: ServerInfo[];
   /** Arquivos das chaves desses servidores (a sessão não pode ler). */
   serverKeys?: string[];
-  /** Skills da ficha que estão na biblioteca do MyCo (vão no plugin da sessão). */
+  /** Skills da ficha que estão na biblioteca do Claudio’s Club (vão no plugin da sessão). */
   librarySkills?: string[];
   /** Pasta da biblioteca (os testes trocam). */
   skillLibraryDir?: string;
@@ -41,7 +41,7 @@ export interface LaunchContext {
   open?: (scriptPath: string, title: string) => void;
 }
 
-/** A primeira mensagem de uma sessão nova (no terminal ou numa conversa do MyCo). */
+/** A primeira mensagem de uma sessão nova (no terminal ou numa conversa do Claudio’s Club). */
 export function greeting(profile: Pick<StaffProfile, 'name' | 'firstTask'>): string {
   return profile.firstTask
     ? `Olá, ${profile.name}. Leia sua memória e comece pela primeira tarefa da ficha.`
@@ -109,7 +109,7 @@ export interface PreparedRun {
 
 /**
  * Ficha atualizada, prompt de sistema (identidade + ficha, em arquivo), config de MCP da ficha,
- * hooks do MyCo e os agents do roteiro, para o terminal ou para a conversa no MyCo. Rodando fora
+ * hooks do Claudio’s Club e os agents do roteiro, para o terminal ou para a conversa no Claudio’s Club. Rodando fora
  * da pasta do projeto (worktree), a pasta das fichas entra em `--add-dir`.
  */
 export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string): Promise<PreparedRun> {
@@ -155,7 +155,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
 const DELIVERY_HOOK = fileURLToPath(new URL('../../scripts/hooks/delivery-check.mjs', import.meta.url));
 
 /**
- * Hooks do MyCo em todo funcionário (`--settings`, somados aos do usuário e do projeto): os agents
+ * Hooks do Claudio’s Club em todo funcionário (`--settings`, somados aos do usuário e do projeto): os agents
  * do roteiro rodam em primeiro plano e cada entrega do executor chega com o lembrete de conferir
  * (scripts/hooks/delivery-check.mjs). O node é chamado direto, sem shell: no Windows sem Git Bash
  * o Claude Code rodaria o comando no PowerShell.

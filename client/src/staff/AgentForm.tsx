@@ -39,7 +39,7 @@ const TOOL_SETS = [
   { label: t('staff.toolSetAll'), tools: '' },
 ];
 
-// Os prontos (executor, pesquisador, revisor) são os mesmos que o MyCo cria sozinho quando um
+// Os prontos (executor, pesquisador, revisor) são os mesmos que o Claudio’s Club cria sozinho quando um
 // roteiro precisa deles e o projeto não tem.
 const PRESETS = AGENT_PRESETS;
 // Rótulo traduzido de cada pronto (pelo nome); o do shared/agentPresets.ts serve de reserva.

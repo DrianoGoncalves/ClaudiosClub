@@ -11,8 +11,8 @@ export default defineConfig({
     // Porta fixa: ocupada, o Vite para com erro em vez de pular para 5174, 5175…
     port: 5173,
     strictPort: true,
-    // Endereço fixo em desenvolvimento: http://myco.localhost:5173 (ver server/index.ts).
-    allowedHosts: ['myco.localhost'],
+    // Endereço fixo em desenvolvimento: http://claudio.localhost:5173 (ver server/index.ts).
+    allowedHosts: ['claudio.localhost', 'myco.localhost'],
     open: false,
     proxy: { '/api': `http://127.0.0.1:${serverPort}` },
   },

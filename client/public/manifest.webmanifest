@@ -1,6 +1,6 @@
 {
-  "name": "MyCo",
-  "short_name": "MyCo",
+  "name": "Claudio’s Club",
+  "short_name": "Claudio’s Club",
   "description": "Quadro branco para orquestrar os funcionários (sessões do Claude Code) dos seus projetos.",
   "start_url": "/",
   "display": "standalone",

@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { z } from 'zod';
 import type { AuthStatus } from '../shared/model';
 
-// O MyCo nunca lê credenciais: pergunta ao próprio `claude` se está logado e, se não estiver,
+// O Claudio’s Club nunca lê credenciais: pergunta ao próprio `claude` se está logado e, se não estiver,
 // abre um terminal com `claude auth login` para o usuário entrar pela assinatura.
 
 const StatusOutput = z.object({
@@ -67,7 +67,7 @@ export function openLoginTerminal(): { ok: boolean; command: string; error: stri
   }
   try {
     // `start` abre uma janela nova; o primeiro argumento entre aspas é o título.
-    const child = spawn('cmd.exe', ['/d', '/s', '/c', `"start "MyCo - login no Claude" cmd /k ${LOGIN_COMMAND}"`], {
+    const child = spawn('cmd.exe', ['/d', '/s', '/c', `"start "Claudio’s Club - login no Claude" cmd /k ${LOGIN_COMMAND}"`], {
       env: cleanEnv(),
       detached: true,
       stdio: 'ignore',

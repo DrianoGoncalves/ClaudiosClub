@@ -4,7 +4,7 @@ import { api } from '../api';
 import { t } from '../i18n';
 
 // No detalhe do projeto: o workspace dele (a aba onde aparece) e as conexões SSH, que os
-// funcionários usam conforme a ficha de cada um. O MyCo só guarda o caminho da chave, nunca o conteúdo.
+// funcionários usam conforme a ficha de cada um. O Claudio’s Club só guarda o caminho da chave, nunca o conteúdo.
 
 export function ProjectOffice({ projectId, config, onConfig }: { projectId: string; config: AppConfig | null; onConfig: (c: AppConfig) => void }) {
   const workspaces = config?.workspaces ?? [];

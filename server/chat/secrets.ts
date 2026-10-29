@@ -1,4 +1,4 @@
-// Guarda de segredos: procura, no que passa pelas conversas do MyCo (o que você escreve, os comandos
+// Guarda de segredos: procura, no que passa pelas conversas do Claudio’s Club (o que você escreve, os comandos
 // que o funcionário roda e o que eles devolvem), coisas com cara de segredo. Não bloqueia nada: avisa
 // na caixa "precisa de mim" para você trocar a senha/token e não colar de novo. O segredo em si nunca
 // é guardado nem mostrado, só o tipo e onde apareceu.

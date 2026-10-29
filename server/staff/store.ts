@@ -47,9 +47,9 @@ export const StaffInputSchema = z.object({
   browser: z.boolean().default(false),
   portraitDataUrl: z.string().max(3_000_000, 'retrato grande demais (máx. 2 MB)').nullable().optional(),
   launch: z.boolean().optional(),
-  /** Sessão aberta fora do MyCo que passa a ser deste funcionário (ganha ficha, nome e retrato). */
+  /** Sessão aberta fora do Claudio’s Club que passa a ser deste funcionário (ganha ficha, nome e retrato). */
   adoptSessionId: z.string().uuid().optional(),
-  /** Abrir mesmo com o consumo acima da linha de parada (confirmado no MyCo). */
+  /** Abrir mesmo com o consumo acima da linha de parada (confirmado no Claudio’s Club). */
   force: z.boolean().optional(),
 });
 export type StaffInputParsed = z.infer<typeof StaffInputSchema>;

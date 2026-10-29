@@ -45,7 +45,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
   const [sessionId, setSessionId] = useState(initialSessionId);
   const [history, setHistory] = useState<ChatItem[]>([]);
   const [live, setLive] = useState<ChatItem[]>([]);
-  /** Suas mensagens que o MyCo guardou até ele terminar outra tarefa. */
+  /** Suas mensagens que o Claudio’s Club guardou até ele terminar outra tarefa. */
   const [held, setHeld] = useState<ChatItem[]>([]);
   const [state, setState] = useState<ChatState | null>(null);
   const [baseContext, setBaseContext] = useState<ContextUsage | null>(null);
@@ -212,7 +212,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     }
   };
 
-  /** Processo órfão do MyCo: encerra e retoma aqui. Aberta de verdade em outro lugar: diz que continua lá. */
+  /** Processo órfão do Claudio’s Club: encerra e retoma aqui. Aberta de verdade em outro lugar: diz que continua lá. */
   const recheck = async () => {
     if (!sessionId) return;
     setError(null);

@@ -1,4 +1,4 @@
-// Hook do Claude Code que o MyCo liga em todo funcionário (--settings, ver server/staff/launch.ts).
+// Hook do Claude Code que o Claudio’s Club liga em todo funcionário (--settings, ver server/staff/launch.ts).
 //   pre:  os agents do roteiro (executor, pesquisador, revisor) rodam em primeiro plano. Em segundo
 //         plano a entrega não volta para quem chamou conferir, e o agent morre se a conversa fechar.
 //   post: cada entrega do executor vem com o lembrete de conferir antes de seguir.

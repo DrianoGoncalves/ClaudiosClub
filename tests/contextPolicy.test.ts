@@ -39,7 +39,7 @@ describe('quando vale começar uma conversa nova', () => {
   });
 });
 
-/** Um processo `claude` falso por conversa aberta, com o que o MyCo escreveu nele. */
+/** Um processo `claude` falso por conversa aberta, com o que o Claudio’s Club escreveu nele. */
 function setup(opts: { policy?: ContextSwitch; keep?: boolean } = {}) {
   const procs: Array<{ sid: string; written: Array<{ message?: { content?: Array<{ text?: string }> } }>; emit: (ev: object) => void }> = [];
   let n = 0;

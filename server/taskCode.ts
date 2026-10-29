@@ -42,13 +42,13 @@ export async function locateCode(projectPath: string, staffId: string | null, ow
 
 /**
  * Fecha a entrega numa worktree: commita o que estiver pendente (com o título da tarefa) e devolve o
- * commit. Fora de worktree, null: no projeto principal o MyCo não commita por você.
+ * commit. Fora de worktree, null: no projeto principal o Claudio’s Club não commita por você.
  */
 export async function checkpoint(place: CodePlace, title: string): Promise<string | null> {
   if (place.where !== 'worktree') return null;
   if (await dirtyCount(place.path)) {
     await git(place.path, ['add', '-A', '--', '.', ...NOT_MYCO]);
-    await git(place.path, ['commit', '-m', `${title} (MyCo)`]).catch(() => {});
+    await git(place.path, ['commit', '-m', `${title} (Claudio’s Club)`]).catch(() => {});
   }
   return (await git(place.path, ['rev-parse', 'HEAD']).catch(() => '')).trim() || null;
 }
@@ -113,7 +113,7 @@ export async function readCode(projectPath: string, place: CodePlace, upTo?: str
 /**
  * Mescla a worktree no branch atual do projeto. O que não foi commitado na worktree é commitado
  * antes (com a mensagem da tarefa). Com `upTo` (o commit da entrega), mescla só até ele e não
- * commita o pendente, que é da tarefa seguinte. Sem testes, só com `skipTests` (confirmado no MyCo).
+ * commita o pendente, que é da tarefa seguinte. Sem testes, só com `skipTests` (confirmado no Claudio’s Club).
  */
 export async function mergeCode(
   projectPath: string,
@@ -130,7 +130,7 @@ export async function mergeCode(
 
   if (code.uncommitted && !end) {
     await git(place.path, ['add', '-A', '--', '.', ...NOT_MYCO]);
-    await git(place.path, ['commit', '-m', `${title} (MyCo)`]).catch((err: Error) => {
+    await git(place.path, ['commit', '-m', `${title} (Claudio’s Club)`]).catch((err: Error) => {
       throw new CodeError(`não deu para commitar na worktree: ${firstLine(err.message)}`);
     });
   }

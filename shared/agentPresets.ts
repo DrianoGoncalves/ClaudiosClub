@@ -1,7 +1,7 @@
 import type { Effort, Playbook } from './model';
 
 // Agents prontos (“Novo agent” no quadro) e os que cada roteiro de orquestração usa. Quando a ficha
-// tem um roteiro e o projeto não tem o agent dele, o MyCo cria o arquivo a partir daqui
+// tem um roteiro e o projeto não tem o agent dele, o Claudio’s Club cria o arquivo a partir daqui
 // (server/staff/playbookAgents.ts).
 
 export interface AgentPreset {

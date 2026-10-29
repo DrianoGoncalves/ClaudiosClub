@@ -1,4 +1,4 @@
-// Imagens enviadas pelo MyCo são reduzidas no navegador antes de subir: um retrato aparece com
+// Imagens enviadas pelo Claudio’s Club são reduzidas no navegador antes de subir: um retrato aparece com
 // 40 px no quadro, e o arquivo fica dentro da pasta do projeto. Uma foto de celular (2–5 MB) vira
 // algo como 20–60 KB.
 

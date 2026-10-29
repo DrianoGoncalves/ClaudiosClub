@@ -17,9 +17,9 @@ afterAll(async () => {
 });
 
 describe('biblioteca de skills', () => {
-  it('cria, edita (renomeando) e mantém os campos do frontmatter que o MyCo não edita', async () => {
+  it('cria, edita (renomeando) e mantém os campos do frontmatter que o Claudio’s Club não edita', async () => {
     await saveLibrarySkill({ name: 'revisar-a11y', description: 'Use para revisar acessibilidade', body: '1. Contraste\n2. Foco' }, lib);
-    // Um campo escrito à mão no SKILL.md (o MyCo não edita) sobrevive à edição.
+    // Um campo escrito à mão no SKILL.md (o Claudio’s Club não edita) sobrevive à edição.
     const file = path.join(lib, 'revisar-a11y', 'SKILL.md');
     await fs.writeFile(file, (await fs.readFile(file, 'utf8')).replace('---\n\n', 'disable-model-invocation: true\n---\n\n'));
     await fs.writeFile(path.join(lib, 'revisar-a11y', 'checar.sh'), 'echo ok');

@@ -11,7 +11,7 @@ import { ChatRegistry } from '../server/chat/registry';
 import { ChatProcess, STREAM_FLAGS } from '../server/chat/process';
 import { accountRulesFile, readAccountRules, saveAccountRules, saveProjectImage, readProjectImage } from '../server/files';
 
-/** Processo falso: o que o MyCo escreve no stdin fica em `written`; `emit` simula o stdout do claude. */
+/** Processo falso: o que o Claudio’s Club escreve no stdin fica em `written`; `emit` simula o stdout do claude. */
 function fakeClaude() {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
@@ -97,7 +97,7 @@ describe('ChatProcess', () => {
     await tick();
     expect(f.written).toEqual([
       { type: 'control_response', response: { subtype: 'success', request_id: 'r1', response: { behavior: 'allow', updatedInput: { file_path: 'x.txt', content: 'oi' } } } },
-      { type: 'control_response', response: { subtype: 'success', request_id: 'r2', response: { behavior: 'deny', message: 'O usuário negou pelo MyCo.' } } },
+      { type: 'control_response', response: { subtype: 'success', request_id: 'r2', response: { behavior: 'deny', message: 'O usuário negou pelo Claudio’s Club.' } } },
     ]);
     expect(chat.snapshot().items.find((i) => i.id === 'p:r2')).toMatchObject({ status: 'denied' });
   });
@@ -288,7 +288,7 @@ describe('ChatManager: processo órfão de um servidor que reiniciou', () => {
     expect(await m.orphans(live)).toEqual([]);
   });
 
-  it('aberta de verdade em outro lugar (sem registro do MyCo): não encerra nada', async () => {
+  it('aberta de verdade em outro lugar (sem registro do Claudio’s Club): não encerra nada', async () => {
     const { m, killed } = setup('idle');
     expect((await m.snapshot('p', 'orf')).elsewhere).toMatchObject({ orphan: false });
     await expect(m.adopt('orf')).rejects.toThrow(/feche lá/);
@@ -554,7 +554,7 @@ describe('readHistory', () => {
   });
 });
 
-describe('arquivos editados pelo MyCo', () => {
+describe('arquivos editados pelo Claudio’s Club', () => {
   it('regras da conta: cria, e na edição guarda a anterior em backup', async () => {
     const file = path.join(root, 'claude', 'CLAUDE.md');
     const backups = path.join(root, 'backups');

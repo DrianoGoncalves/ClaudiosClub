@@ -50,7 +50,7 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
       if (stopped) return;
       if (done?.length) {
         turnsSince.current = done.reduce((max, d) => (d.at > max ? d.at : max), turnsSince.current);
-        // "Terminou" só incomoda quando você não está olhando para o MyCo.
+        // "Terminou" só incomoda quando você não está olhando para o Claudio’s Club.
         if (notifyRef.current && !watching()) for (const d of done) showDone(d, open.current);
       }
       if (!next) return;
@@ -95,7 +95,7 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
   return { items, notify, canNotify, setNotify, dismiss };
 }
 
-/** A pessoa está com o MyCo na frente (aba visível e janela com foco). */
+/** A pessoa está com o Claudio’s Club na frente (aba visível e janela com foco). */
 function watching(): boolean {
   return document.visibilityState === 'visible' && document.hasFocus();
 }

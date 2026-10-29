@@ -69,7 +69,7 @@ describe('código da tarefa', () => {
     await fs.writeFile(path.join(wt.path, 'app.txt'), 'v3\n');
 
     const code = await readCode(dir, place, sha);
-    expect(code).toMatchObject({ uncommitted: 0, canMerge: true, commits: [expect.objectContaining({ subject: 'Tarefa A (MyCo)' })] });
+    expect(code).toMatchObject({ uncommitted: 0, canMerge: true, commits: [expect.objectContaining({ subject: 'Tarefa A (Claudio’s Club)' })] });
     expect(code.files.map((f) => f.path)).toEqual(['app.txt']);
 
     await mergeCode(dir, place, 'Tarefa A', { upTo: sha });

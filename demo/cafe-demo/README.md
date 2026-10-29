@@ -1,6 +1,6 @@
-# Cafeteria (projeto demo do MyCo)
+# Cafeteria (projeto demo do Claudio's Club)
 
-Uma API pequena de cafeteria para ver a equipe do MyCo trabalhando: o cardápio e o fechamento de um
+Uma API pequena de cafeteria para ver a equipe do Claudio's Club trabalhando: o cardápio e o fechamento de um
 pedido. Sem dependências: só Node 22.
 
 | Comando | O que faz |
@@ -12,5 +12,5 @@ pedido. Sem dependências: só Node 22.
 - `server.js`: `GET /api/cardapio` e `POST /api/pedidos` com `{ "itens": [{ "id": "espresso", "quantidade": 2 }] }`.
 - `public/index.html`: a página do cardápio.
 
-As tarefas do quadro do MyCo partem daqui: corrigir o total, cobrir com testes, mostrar o pedido na
+As tarefas do quadro do Claudio's Club partem daqui: corrigir o total, cobrir com testes, mostrar o pedido na
 página e planejar cupons de desconto.

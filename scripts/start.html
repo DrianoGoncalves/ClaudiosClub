@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>MyCo</title>
+    <title>Claudio’s Club</title>
     <style>
       :root { --bg: #f6f3ea; --card: #fffdf8; --ink: #1f2328; --muted: #6b6f76; --line: #ddd6c8; --blue: #2457c5; }
       @media (prefers-color-scheme: dark) {
@@ -23,27 +23,27 @@
   </head>
   <body>
     <main>
-      <h1>MyCo</h1>
-      <p id="checking">Procurando o MyCo…</p>
+      <h1>Claudio’s Club</h1>
+      <p id="checking">Procurando o Claudio’s Club…</p>
       <section id="down" hidden>
-        <p>O MyCo está parado.</p>
+        <p>O Claudio’s Club está parado.</p>
         <p class="muted">Ele sobe em segundo plano, sem janela, e volta sozinho se cair.</p>
-        <p><button id="start" type="button">Iniciar o MyCo</button></p>
+        <p><button id="start" type="button">Iniciar o Claudio’s Club</button></p>
         <p class="muted" id="hint">
-          Na primeira vez, o navegador pergunta se pode abrir o MyCo: confirme. Se nada acontecer, rode
-          <code>npm run launcher</code> na pasta do MyCo (registra o botão) ou <code>npm run daily:start</code>.
+          Na primeira vez, o navegador pergunta se pode abrir o Claudio’s Club: confirme. Se nada acontecer, rode
+          <code>npm run launcher</code> na pasta do Claudio’s Club (registra o botão) ou <code>npm run daily:start</code>.
         </p>
       </section>
       <p id="starting" hidden>Iniciando… (o primeiro build leva uns segundos)</p>
     </main>
     <script>
-      // Página de início: se o MyCo responde, vai direto para ele; senão, mostra o botão "Iniciar",
+      // Página de início: se o Claudio’s Club responde, vai direto para ele; senão, mostra o botão "Iniciar",
       // que abre o link myco://start (registrado no Windows por `npm run launcher`).
       const port = new URLSearchParams(location.search).get('port') || '4848';
-      const app = `http://myco.localhost:${port}`;
+      const app = `http://claudio.localhost:${port}`;
       const el = (id) => document.getElementById(id);
 
-      // Uma imagem do próprio MyCo: carrega se ele está no ar (fetch de file:// esbarraria no CORS).
+      // Uma imagem do próprio Claudio’s Club: carrega se ele está no ar (fetch de file:// esbarraria no CORS).
       const isUp = () =>
         new Promise((resolve) => {
           const img = new Image();

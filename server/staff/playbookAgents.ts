@@ -5,7 +5,7 @@ import { AgentInput, readAgentSource, saveAgent, type AgentSource } from '../ada
 import { pathKey } from '../adapters/claude/paths';
 
 // O roteiro da ficha chama agents pelo nome (executor, pesquisador, revisor). Sem eles no projeto,
-// o funcionário não tem para quem delegar. Faltando no projeto e na conta, o MyCo cria o pronto em
+// o funcionário não tem para quem delegar. Faltando no projeto e na conta, o Claudio’s Club cria o pronto em
 // `<projeto>/.claude/agents`: aparece no quadro e dá para editar. O que já existe não é tocado.
 
 /** Formato de cada agent em `--agents` (o arquivo JSON que o claude aceita). */

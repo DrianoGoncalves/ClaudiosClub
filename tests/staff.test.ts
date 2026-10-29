@@ -356,7 +356,7 @@ describe('StaffService', () => {
     expect(await svc.isManagerOf('proj-id', 'ninguem', r!.profile.id)).toBe(false);
   });
 
-  it('temporário: abre numa conversa do MyCo, o gestor encerra, você efetiva; parado há dias sai sozinho', async () => {
+  it('temporário: abre numa conversa do Claudio’s Club, o gestor encerra, você efetiva; parado há dias sai sozinho', async () => {
     const archived = new Set<string>();
     const chats: Array<{ staffId: string; text: string }> = [];
     const working = new Set<string>();
@@ -425,7 +425,7 @@ describe('StaffService', () => {
     await expect(svc.update('proj-id', a.id, { ...fields, reportsTo: [b.id] })).rejects.toThrow('ciclo');
   });
 
-  it('dá ficha a um funcionário criado fora do MyCo, sem abrir outra sessão', async () => {
+  it('dá ficha a um funcionário criado fora do Claudio’s Club, sem abrir outra sessão', async () => {
     const sid = '11111111-2222-4333-8444-555555555555';
     const adapterWithSession = {
       listProjects: async () => [project()],

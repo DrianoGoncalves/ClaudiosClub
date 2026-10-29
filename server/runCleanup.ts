@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-// ~/.myco/run/<sessão>/ guarda o que o MyCo gera para abrir uma sessão: a config de MCP da ficha
+// ~/.myco/run/<sessão>/ guarda o que o Claudio’s Club gera para abrir uma sessão: a config de MCP da ficha
 // (que pode ter tokens nas variáveis de ambiente dos servidores) e o start.cmd do terminal. Depois
 // que a sessão abriu, nada disso é relido: pastas paradas há mais de alguns dias são apagadas.
 // Só pastas com nome de sessão (UUID); arquivos soltos como chats.json ficam.

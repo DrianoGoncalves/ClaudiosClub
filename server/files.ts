@@ -5,7 +5,7 @@ import { MYCO_HOME } from './config';
 import { ensureMycoGitignore } from './mycoGitignore';
 import { writeAtomic } from './staff/store';
 
-// Arquivos que o MyCo edita a pedido do usuário: a imagem do projeto (logo ou print) e as
+// Arquivos que o Claudio’s Club edita a pedido do usuário: a imagem do projeto (logo ou print) e as
 // regras da conta (~/.claude/CLAUDE.md, que vale para todos os projetos).
 
 export class FileError extends Error {}

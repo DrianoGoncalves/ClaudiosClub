@@ -1,8 +1,8 @@
 import type { EngineInterface, Register } from 'claude-code'
 
-// O MyCo roda fora do Claude Code e não enxerga os limites da conta: só a API de mods os tem.
+// O Claudio’s Club roda fora do Claude Code e não enxerga os limites da conta: só a API de mods os tem.
 // Este mod grava, a cada medição, os limites (5h/7d) e o custo da sessão em ~/.myco/,
-// onde o servidor do MyCo só lê. Não desenha nada.
+// onde o servidor do Claudio’s Club só lê. Não desenha nada.
 
 type Limit = { kind: string; percentUsed: number; resetsAt?: string }
 type Cost = { usd: number }

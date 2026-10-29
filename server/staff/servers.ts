@@ -7,10 +7,10 @@ import type { ProjectConnection, ServerInfo } from '../../shared/model';
 import { tryJson } from '../adapters/claude/fsutil';
 import { StaffError, writeAtomic } from './store';
 
-// Conexões SSH de cada projeto, cadastradas no MyCo: `<projeto>/.vps/config.json` (o formato da
+// Conexões SSH de cada projeto, cadastradas no Claudio’s Club: `<projeto>/.vps/config.json` (o formato da
 // skill vps; a pasta fica fora do git com um `.gitignore` "*"). Na ficha, o funcionário só ganha o
-// nome das conexões que pode usar; quem conecta é o `ssh` com o `.vps/ssh_config` que o MyCo gera
-// daqui. O MyCo nunca lê o conteúdo da chave, só confere que o arquivo existe.
+// nome das conexões que pode usar; quem conecta é o `ssh` com o `.vps/ssh_config` que o Claudio’s Club gera
+// daqui. O Claudio’s Club nunca lê o conteúdo da chave, só confere que o arquivo existe.
 //
 // O ssh_config é gerado a partir do que você digitou: cada campo passa por uma validação estrita
 // (sem espaço, aspas nem quebra de linha), senão um "host" com quebra de linha viraria um
@@ -122,7 +122,7 @@ export async function saveConnection(projectPath: string, body: unknown, origina
   const file = await readFile(projectPath);
   const conns = { ...(file.connections ?? {}) };
   if (c.name !== originalName && conns[c.name]) throw new StaffError(`já existe uma conexão ${c.name}`);
-  // Campos que a skill vps usa e o MyCo não edita (localSubfolder…) ficam.
+  // Campos que a skill vps usa e o Claudio’s Club não edita (localSubfolder…) ficam.
   const prev = (originalName && conns[originalName]) || conns[c.name] || {};
   if (originalName) delete conns[originalName];
   conns[c.name] = { ...prev, host: c.host, port: c.port, user: c.user, identityFile: c.identityFile, remoteRoot: c.remoteRoot };
@@ -184,7 +184,7 @@ export function renderSshConfig(conns: ProjectConnection[]): string {
         '  ConnectTimeout 10',
       ].join('\n'),
     );
-  return ['# Gerado pelo MyCo a partir de config.json (refeito a cada mudança): não edite.', ...blocks].join('\n\n') + '\n';
+  return ['# Gerado pelo Claudio’s Club a partir de config.json (refeito a cada mudança): não edite.', ...blocks].join('\n\n') + '\n';
 }
 
 /** Regrava o ssh_config; devolve o caminho, ou null sem conexão completa (e apaga o antigo). */
@@ -231,7 +231,7 @@ export function explainSshError(stderr: string, port = 22): string {
   }
   if (/UNPROTECTED PRIVATE KEY|bad permissions/i.test(s)) return 'o arquivo da chave está aberto demais: só o seu usuário pode ter acesso a ele';
   if (/invalid format|error in libcrypto|not a private key/i.test(s)) return 'o arquivo não é uma chave privada válida';
-  if (/passphrase/i.test(s)) return 'a chave tem senha: carregue-a no ssh-agent (ssh-add) para o MyCo usar sem pedir';
+  if (/passphrase/i.test(s)) return 'a chave tem senha: carregue-a no ssh-agent (ssh-add) para o Claudio’s Club usar sem pedir';
   if (/Permission denied/i.test(s)) return 'o servidor recusou a chave: confira o usuário e se a chave pública está no authorized_keys';
   if (/Could not resolve hostname|Name or service not known|No such host/i.test(s)) return 'host não encontrado: confira o endereço';
   if (/Connection refused/i.test(s)) return `conexão recusada na porta ${port}`;

@@ -129,9 +129,9 @@ export function App() {
   }, []);
   const inbox = useInbox(openInbox);
 
-  // O título da aba traz quantas coisas esperam você: dá para ver sem trazer o MyCo para a frente.
+  // O título da aba traz quantas coisas esperam você: dá para ver sem trazer o Claudio’s Club para a frente.
   useEffect(() => {
-    const name = config?.companyName ?? 'MyCo';
+    const name = config?.companyName ?? 'Claudio’s Club';
     document.title = inbox.items.length ? `(${inbox.items.length}) ${name}` : name;
   }, [config?.companyName, inbox.items.length]);
 

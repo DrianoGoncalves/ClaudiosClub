@@ -6,7 +6,7 @@ import type { ModelBenchmark, ModelBenchmarks, ModelVariant } from '../../shared
 
 // Índice de código e preço dos modelos pela API gratuita do Artificial Analysis
 // (https://artificialanalysis.ai/api-reference: pede crédito ao site e cache das respostas, 1.000
-// chamadas por dia). A chave fica no .env da pasta do MyCo e só é lida aqui: não entra no
+// chamadas por dia). A chave fica no .env da pasta do Claudio’s Club e só é lida aqui: não entra no
 // process.env (as sessões dos funcionários herdam o ambiente do servidor) nem vai ao navegador.
 
 const API_URL = 'https://artificialanalysis.ai/api/v2/data/llms/models';

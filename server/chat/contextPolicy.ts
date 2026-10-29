@@ -4,7 +4,7 @@ import { rateFor } from '../adapters/claude/pricing';
 // Quando vale começar uma conversa nova. Cada resposta relê o contexto inteiro (do cache), então
 // uma conversa grande custa caro a cada passo e o modelo presta menos atenção nela; uma nova lê só
 // a ficha e a memória. Quem sabe que o assunto acabou é o funcionário (o ponto de corte, na ficha);
-// quem sabe quanto custa continuar é o MyCo (o tamanho do contexto e se o cache já esfriou).
+// quem sabe quanto custa continuar é o Claudio’s Club (o tamanho do contexto e se o cache já esfriou).
 
 /** Daqui para cima, a mensagem que vai ao funcionário leva o tamanho e o custo do contexto. */
 export const NOTICE_AT = 150_000;

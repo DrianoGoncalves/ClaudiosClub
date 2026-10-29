@@ -2,14 +2,14 @@ import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { writeAtomic } from '../staff/store';
 
-// Processos de conversa que o MyCo abriu: ~/.myco/run/chats.json. O arquivo sobrevive ao reinício
+// Processos de conversa que o Claudio’s Club abriu: ~/.myco/run/chats.json. O arquivo sobrevive ao reinício
 // do servidor (o `tsx watch` reinicia a cada arquivo salvo, e no Windows o `claude` filho não morre
-// junto), para o MyCo reconhecer os que ficaram órfãos: vivos, mas sem ninguém do outro lado.
+// junto), para o Claudio’s Club reconhecer os que ficaram órfãos: vivos, mas sem ninguém do outro lado.
 
 export interface ChatRecord {
   sessionId: string;
   pid: number;
-  /** Pid do servidor do MyCo que abriu o processo. */
+  /** Pid do servidor do Claudio’s Club que abriu o processo. */
   server: number;
   startedAt: string;
 }

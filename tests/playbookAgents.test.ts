@@ -61,7 +61,7 @@ describe('agents do roteiro', () => {
   });
 });
 
-describe('hooks do MyCo', () => {
+describe('hooks do Claudio’s Club', () => {
   const hook = fileURLToPath(new URL('../scripts/hooks/delivery-check.mjs', import.meta.url));
   const run = (stage: string, input: unknown) => execFileSync(process.execPath, [hook, stage], { input: JSON.stringify(input) }).toString();
 

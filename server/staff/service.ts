@@ -42,7 +42,7 @@ export interface StaffServiceOptions {
   onChange?: (prev: StaffProfile, next: StaffProfile) => void;
   /** Custo dos últimos 7 dias do projeto e da conta toda, para o orçamento por projeto. */
   weekCost?: (projectId: string) => Promise<{ project: number; total: number }>;
-  /** Abre uma conversa nova no MyCo e manda a mensagem (subfuncionário contratado pela API). */
+  /** Abre uma conversa nova no Claudio’s Club e manda a mensagem (subfuncionário contratado pela API). */
   openChat?: (projectId: string, staffId: string, text: string) => Promise<string>;
   /** Alguma conversa do funcionário está trabalhando agora. */
   isWorking?: (staffId: string) => boolean;
@@ -72,7 +72,7 @@ export class StaffService {
     return project ? listServers(project.path) : null;
   }
 
-  // ---- conexões SSH do projeto (só pelo MyCo: as rotas recusam pedido de funcionário) ----
+  // ---- conexões SSH do projeto (só pelo Claudio’s Club: as rotas recusam pedido de funcionário) ----
 
   async listConnections(projectId: string): Promise<ProjectConnection[] | null> {
     const project = await this.project(projectId);
@@ -137,9 +137,9 @@ export class StaffService {
       input.browser = input.browser && hirer.browser; // nem usa o navegador se o gestor não usa
     }
 
-    // Funcionário criado fora do MyCo: a sessão existente passa a ser dele, sem abrir outra.
+    // Funcionário criado fora do Claudio’s Club: a sessão existente passa a ser dele, sem abrir outra.
     if (input.adoptSessionId) {
-      if (!fromBrowser) throw new StaffError('só pelo MyCo');
+      if (!fromBrowser) throw new StaffError('só pelo Claudio’s Club');
       const sessionId = input.adoptSessionId;
       const session = ((await this.adapter.getProjectSessions(project.id)) ?? []).find((s) => s.id === sessionId);
       if (!session) throw new StaffError('sessão não encontrada neste projeto');
@@ -164,7 +164,7 @@ export class StaffService {
       await writeFicha(profile, await this.context(project, profile));
       return { profile, launch: null };
     }
-    // Pela API, a sessão abre numa conversa do MyCo (não num terminal): fica à vista no quadro, na
+    // Pela API, a sessão abre numa conversa do Claudio’s Club (não num terminal): fica à vista no quadro, na
     // fila de tarefas e na caixa "precisa de mim".
     if (hirer && this.opts.openChat) {
       try {
@@ -215,7 +215,7 @@ export class StaffService {
     return next;
   }
 
-  /** Troca as rotinas agendadas (só pelo MyCo). A ficha anterior vai para o histórico. */
+  /** Troca as rotinas agendadas (só pelo Claudio’s Club). A ficha anterior vai para o histórico. */
   async setRoutines(projectId: string, staffId: string, body: unknown): Promise<StaffProfile | null> {
     const project = await this.project(projectId);
     const current = project ? await readProfile(project.path, staffId) : null;
@@ -404,7 +404,7 @@ export class StaffService {
   }
 
   /**
-   * Linha de comando para conversar pelo MyCo. Com ficha: autonomia, modelo, MCPs e identidade
+   * Linha de comando para conversar pelo Claudio’s Club. Com ficha: autonomia, modelo, MCPs e identidade
    * da ficha (sessão nova quando `sessionId` é null). Sem ficha: só retoma a sessão, pedindo
    * aprovação para tudo. `forkFrom`: sessão nova como cópia desta (duplicar a conversa), na mesma
    * pasta da original.

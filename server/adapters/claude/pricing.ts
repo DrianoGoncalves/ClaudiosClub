@@ -1,5 +1,5 @@
 // Preço equivalente em API (US$ por milhão de tokens), primeira parte da Anthropic.
-// É estimativa para comparar agents/projetos: as sessões do MyCo rodam pela assinatura.
+// É estimativa para comparar agents/projetos: as sessões do Claudio’s Club rodam pela assinatura.
 // Fonte: tabela de modelos do skill claude-api (cache de 2026-10-06).
 
 export const PRICING_AS_OF = '2026-10-06';

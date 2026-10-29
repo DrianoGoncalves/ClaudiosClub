@@ -29,7 +29,7 @@ export const modelLabel = (m: string) => MODEL_OPTIONS.find((o) => o.value === m
 export type StaffFormMode =
   | { kind: 'hire'; reportsTo: string[] }
   | { kind: 'edit'; profile: StaffProfile }
-  /** Funcionário criado fora do MyCo: ganha ficha (nome, retrato, regras) sem perder a sessão. */
+  /** Funcionário criado fora do Claudio’s Club: ganha ficha (nome, retrato, regras) sem perder a sessão. */
   | { kind: 'adopt'; session: Session };
 
 interface Props {
@@ -73,7 +73,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
     () => [...new Set([...inventory.agents, ...board.user.agents].map((a) => a.name))].sort(),
     [inventory, board.user],
   );
-  // As da biblioteca do MyCo só carregam para quem tem na ficha (as do projeto e da conta, todos veem).
+  // As da biblioteca do Claudio’s Club só carregam para quem tem na ficha (as do projeto e da conta, todos veem).
   const [library, setLibrary] = useState<string[]>([]);
   useEffect(() => {
     api.skillLibrary().then((l) => setLibrary(l.map((s) => s.name)), () => {});
@@ -263,7 +263,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
       servers,
       browser,
       ...(portrait !== undefined ? { portraitDataUrl: portrait } : {}),
-      // No simples a conversa é pelo painel do MyCo, nunca num terminal.
+      // No simples a conversa é pelo painel do Claudio’s Club, nunca num terminal.
       ...(editing ? {} : adopting ? { adoptSessionId: adopting.id, launch: false } : { launch: simpleHire ? false : launch }),
     };
     try {

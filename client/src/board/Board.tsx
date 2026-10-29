@@ -334,7 +334,7 @@ export function BoardView(props: BoardViewProps) {
       onNodeDragStop={onNodeDragStop}
       onNodeClick={onNodeClick}
       onPaneClick={() => onSelect(null)}
-      // Só o "+" conecta; nenhuma aresta é criada pelo React Flow (o MyCo decide no onConnectEnd).
+      // Só o "+" conecta; nenhuma aresta é criada pelo React Flow (o Claudio’s Club decide no onConnectEnd).
       nodesConnectable
       // Clicar no "+" é contratar (ver onNodeClick), não o modo "clique para ligar" do React Flow.
       connectOnClick={false}
@@ -361,7 +361,7 @@ export function BoardView(props: BoardViewProps) {
       <Panel position="top-left" className="toolbar">
         {/* Opções numa linha e abas embaixo: o topo fica com a largura da maior das duas. */}
         <div className="toolbar-row">
-          <CompanyTitle name={config?.companyName ?? 'MyCo'} onRename={props.onRename} />
+          <CompanyTitle name={config?.companyName ?? 'Claudio’s Club'} onRename={props.onRename} />
           <UsageMeters />
           <AuthBadge />
           <span className="toolbar-sep" />

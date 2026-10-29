@@ -1,4 +1,4 @@
-// Com o MyCo parado, nada responde na porta e o navegador mostraria "conexão recusada". Este
+// Com o Claudio’s Club parado, nada responde na porta e o navegador mostraria "conexão recusada". Este
 // service worker fica no navegador desde a última visita: se abrir uma página falhar por rede, responde
 // com a tela de parado abaixo, que tem o botão Rodar. Fora isso, vai sempre à rede e não guarda nada
 // (a tela mora aqui dentro: não depende do Cache Storage, que pode falhar).
@@ -16,34 +16,34 @@ self.addEventListener('fetch', (event) => {
 });
 
 // "Rodar" abre o link myco://start (registrado no Windows por `npm run launcher`) e recarrega assim
-// que o MyCo responder; se ele subir por outro caminho (terminal, outra aba), entra sozinho.
-// Textos da tela de parado. O service worker não lê o localStorage do MyCo: vale o idioma do navegador.
+// que o Claudio’s Club responder; se ele subir por outro caminho (terminal, outra aba), entra sozinho.
+// Textos da tela de parado. O service worker não lê o localStorage do Claudio’s Club: vale o idioma do navegador.
 const STOPPED_TEXT = {
   'pt-BR': {
-    title: 'MyCo parado',
-    status: 'O MyCo está parado.',
-    run: 'Rodar o MyCo',
-    hint: 'Sobe em segundo plano, sem janela. Na primeira vez, o navegador pergunta se pode abrir o MyCo: confirme.',
-    help: 'Nada aconteceu? Rode <code>npm run launcher</code> uma vez na pasta do MyCo (registra este botão) ou suba com <code>npm run daily:start</code>.',
-    starting: 'Subindo o MyCo…',
+    title: 'Claudio’s Club parado',
+    status: 'O Claudio’s Club está parado.',
+    run: 'Rodar o Claudio’s Club',
+    hint: 'Sobe em segundo plano, sem janela. Na primeira vez, o navegador pergunta se pode abrir o Claudio’s Club: confirme.',
+    help: 'Nada aconteceu? Rode <code>npm run launcher</code> uma vez na pasta do Claudio’s Club (registra este botão) ou suba com <code>npm run daily:start</code>.',
+    starting: 'Subindo o Claudio’s Club…',
     timeout: 'Não subiu em 3 minutos. Veja o log com npm run daily:status.',
   },
   en: {
-    title: 'MyCo stopped',
-    status: 'MyCo is stopped.',
-    run: 'Run MyCo',
-    hint: 'It starts in the background, with no window. The first time, the browser asks whether it can open MyCo: confirm.',
-    help: 'Nothing happened? Run <code>npm run launcher</code> once in the MyCo folder (this registers the button) or start it with <code>npm run daily:start</code>.',
-    starting: 'Starting MyCo…',
+    title: 'Claudio’s Club stopped',
+    status: 'Claudio’s Club is stopped.',
+    run: 'Run Claudio’s Club',
+    hint: 'It starts in the background, with no window. The first time, the browser asks whether it can open Claudio’s Club: confirm.',
+    help: 'Nothing happened? Run <code>npm run launcher</code> once in the Claudio’s Club folder (this registers the button) or start it with <code>npm run daily:start</code>.',
+    starting: 'Starting Claudio’s Club…',
     timeout: 'It did not start within 3 minutes. Check the log with npm run daily:status.',
   },
   es: {
-    title: 'MyCo detenido',
-    status: 'MyCo está detenido.',
-    run: 'Ejecutar MyCo',
-    hint: 'Se inicia en segundo plano, sin ventana. La primera vez, el navegador pregunta si puede abrir MyCo: confirma.',
-    help: '¿No pasó nada? Ejecuta <code>npm run launcher</code> una vez en la carpeta de MyCo (registra este botón) o inicia con <code>npm run daily:start</code>.',
-    starting: 'Iniciando MyCo…',
+    title: 'Claudio’s Club detenido',
+    status: 'Claudio’s Club está detenido.',
+    run: 'Ejecutar Claudio’s Club',
+    hint: 'Se inicia en segundo plano, sin ventana. La primera vez, el navegador pregunta si puede abrir Claudio’s Club: confirma.',
+    help: '¿No pasó nada? Ejecuta <code>npm run launcher</code> una vez en la carpeta de Claudio’s Club (registra este botón) o inicia con <code>npm run daily:start</code>.',
+    starting: 'Iniciando Claudio’s Club…',
     timeout: 'No se inició en 3 minutos. Revisa el log con npm run daily:status.',
   },
 };
@@ -85,7 +85,7 @@ function stoppedPage() {
   </head>
   <body>
     <main>
-      <h1>MyCo</h1>
+      <h1>Claudio’s Club</h1>
       <p id="status">${m.status}</p>
       <button id="run" type="button">${m.run}</button>
       <p class="muted">${m.hint}</p>

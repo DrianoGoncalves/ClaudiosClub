@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { Project } from '../shared/model';
 import { isInside } from './adapters/claude/paths';
 
-// "Novo projeto": cria uma pasta (com git, se quiser) ou abre uma que já existe. O MyCo só lista o
+// "Novo projeto": cria uma pasta (com git, se quiser) ou abre uma que já existe. O Claudio’s Club só lista o
 // que o Claude Code conhece, então a pasta entra numa lista própria (config.json → extraProjects)
 // até a primeira conversa nela. Nada é sobrescrito: pasta nova que já existe é recusada.
 

@@ -33,7 +33,7 @@ export interface Skill {
   label: string | null;
   description: string | null;
   scope: 'user' | 'project' | 'synced';
-  /** Skills sincronizadas da conta são gerenciadas fora do MyCo. */
+  /** Skills sincronizadas da conta são gerenciadas fora do Claudio’s Club. */
   readOnly: boolean;
   dirPath: string;
   link: LinkInfo;
@@ -189,7 +189,7 @@ export interface CostReport {
   unpricedModels: string[];
 }
 
-/** Configuração do MyCo (~/.myco/config.json). */
+/** Configuração do Claudio’s Club (~/.myco/config.json). */
 /**
  * Simples: contratar com nome, cargo e primeira tarefa (o resto vem do cargo), painel do
  * funcionário só com o chat e config só com o essencial. Avançado: cada detalhe.
@@ -197,9 +197,9 @@ export interface CostReport {
 export type UiLevel = 'simple' | 'advanced';
 
 export interface AppConfig {
-  /** Nome exibido no topo do quadro; "MyCo" por padrão. */
+  /** Nome exibido no topo do quadro; "Claudio’s Club" por padrão. */
   companyName: string;
-  /** Nível da interface; quem já usava o MyCo antes desta opção fica no avançado. */
+  /** Nível da interface; quem já usava o Claudio’s Club antes desta opção fica no avançado. */
   uiLevel: UiLevel;
   /** Escondidos do quadro (nada é apagado do Claude Code). */
   archived: {
@@ -322,7 +322,7 @@ export interface OrchestrationReport {
   scanning: boolean;
 }
 
-/** Login do `claude` (CLI) que o MyCo usa para abrir sessões. */
+/** Login do `claude` (CLI) que o Claudio’s Club usa para abrir sessões. */
 export interface AuthStatus {
   /** O executável `claude` foi encontrado no PATH. */
   cliFound: boolean;
@@ -342,7 +342,7 @@ export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /** Ficha do funcionário: `<projeto>/.myco/staff/<id>.json`. */
 /**
- * Rotina de um funcionário: no horário (cron de 5 campos, hora desta máquina), o MyCo manda a
+ * Rotina de um funcionário: no horário (cron de 5 campos, hora desta máquina), o Claudio’s Club manda a
  * mensagem para ele, como se você tivesse digitado. `continue`: na última conversa; `new`: numa nova.
  */
 export interface Routine {
@@ -389,7 +389,7 @@ export interface Task {
   deploy?: TaskHandoff | null;
   /** A worktree foi mesclada no projeto. */
   merged?: { at: string; sha: string; branch: string; base: string } | null;
-  /** Último teste rodado pelo MyCo para esta tarefa. */
+  /** Último teste rodado pelo Claudio’s Club para esta tarefa. */
   tests?: TestRun | null;
   /** Gestor (funcionário) que pediu a tarefa pela API; recebe o resumo quando ela é entregue. */
   requestedBy?: string | null;
@@ -506,7 +506,7 @@ export interface StaffProfile {
   /** Alias (`opus`, `sonnet`…) ou id completo; null = padrão do Claude Code. */
   model: string | null;
   effort: Effort | null;
-  /** Pode contratar subfuncionários (subsessões) pelo MyCo. */
+  /** Pode contratar subfuncionários (subsessões) pelo Claudio’s Club. */
   canHire: boolean;
   /** Linha de parada própria; null = a da empresa (configurações). */
   usageStop: UsageStop | null;
@@ -518,9 +518,9 @@ export interface StaffProfile {
   servers: string[];
   /** Usa o seu Chrome pela extensão Claude in Chrome (`--chrome`). */
   browser: boolean;
-  /** Rotinas agendadas (o MyCo manda a mensagem no horário). Só pelo MyCo; fichas antigas não têm. */
+  /** Rotinas agendadas (o Claudio’s Club manda a mensagem no horário). Só pelo Claudio’s Club; fichas antigas não têm. */
   routines?: Routine[];
-  /** Quem contratou pela API (id do funcionário); ausente = você, pelo MyCo. */
+  /** Quem contratou pela API (id do funcionário); ausente = você, pelo Claudio’s Club. */
   hiredBy?: string | null;
   /**
    * Contratado por outro funcionário: sai do quadro (arquivado, nada apagado) quando o gestor
@@ -544,7 +544,7 @@ export type StaffInput = Omit<StaffProfile, 'id' | 'projectId' | 'portrait' | 's
   portraitDataUrl?: string | null;
   /** Abrir a primeira sessão logo após contratar. */
   launch?: boolean;
-  /** Sessão criada fora do MyCo que passa a ter esta ficha. */
+  /** Sessão criada fora do Claudio’s Club que passa a ter esta ficha. */
   adoptSessionId?: string;
   /** Abrir mesmo acima da linha de parada do consumo (confirmado pelo usuário). */
   force?: boolean;
@@ -576,7 +576,7 @@ export interface ServerInfo {
 export interface LibrarySkill {
   name: string;
   description: string;
-  /** Outros arquivos da pasta (scripts, modelos): o MyCo não edita. */
+  /** Outros arquivos da pasta (scripts, modelos): o Claudio’s Club não edita. */
   files: string[];
   updatedAt: string;
 }
@@ -593,7 +593,7 @@ export interface ServerAccess {
 }
 
 /**
- * Conexão SSH de um projeto, como o MyCo mostra para você editar (`<projeto>/.vps/config.json`, o
+ * Conexão SSH de um projeto, como o Claudio’s Club mostra para você editar (`<projeto>/.vps/config.json`, o
  * mesmo formato da skill vps). O conteúdo da chave nunca é lido: só o caminho.
  */
 export interface ProjectConnection {
@@ -642,7 +642,7 @@ export type ChatItem =
       files?: string[];
       /** Id da mensagem no transcript: dá para "voltar até aqui" (desfazer as edições depois dela). */
       uuid?: string;
-      /** Guardada pelo MyCo até o funcionário terminar a outra tarefa (o motivo). */
+      /** Guardada pelo Claudio’s Club até o funcionário terminar a outra tarefa (o motivo). */
       held?: string;
     }
   | { kind: 'assistant'; id: string; text: string; at: string | null }
@@ -684,7 +684,7 @@ export interface TurnNotice {
   sessionId: string;
   staffId: string | null;
   name: string;
-  /** Começo da última resposta (só nas conversas do MyCo). */
+  /** Começo da última resposta (só nas conversas do Claudio’s Club). */
   text: string | null;
   at: string;
 }
@@ -711,7 +711,7 @@ export interface ContextUsage {
 }
 
 export interface ChatState {
-  /** O processo do `claude` desta conversa está aberto no MyCo. */
+  /** O processo do `claude` desta conversa está aberto no Claudio’s Club. */
   running: boolean;
   /** Um turno está em andamento. */
   busy: boolean;
@@ -793,7 +793,7 @@ export interface ChatSnapshot {
   sessionId: string;
   /** Mensagens anteriores, do transcript (até o início do processo atual, se houver). */
   history: ChatItem[];
-  /** Itens e estado do processo aberto no MyCo agora, se houver. */
+  /** Itens e estado do processo aberto no Claudio’s Club agora, se houver. */
   live: { items: ChatItem[]; state: ChatState; seq: number } | null;
   /** Suas mensagens guardadas até o funcionário terminar a outra tarefa (ver Task.held). */
   held?: ChatItem[];
@@ -802,7 +802,7 @@ export interface ChatSnapshot {
   /** Contexto da última resposta registrada, quando não há processo aberto. */
   context: ContextUsage | null;
   /** A sessão está aberta em outro lugar (app ou terminal): conversar daqui criaria uma cópia. */
-  /** `orphan`: processo do próprio MyCo que ficou sem dono num reinício do servidor. */
+  /** `orphan`: processo do próprio Claudio’s Club que ficou sem dono num reinício do servidor. */
   elsewhere: { pid: number; entrypoint: string | null; status: string | null; orphan: boolean } | null;
 }
 
@@ -813,7 +813,7 @@ export interface Board {
   inventories: Record<string, ProjectInventory>;
   /** Sessões (= funcionários) por id de projeto, da mais recente à mais antiga. */
   sessions: Record<string, Session[]>;
-  /** Fichas dos funcionários contratados pelo MyCo. */
+  /** Fichas dos funcionários contratados pelo Claudio’s Club. */
   staff: StaffProfile[];
   /** URL da imagem (logo ou print) de cada projeto que tem uma. */
   images: Record<string, string>;

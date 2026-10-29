@@ -1,5 +1,5 @@
 {
   "name": "myco-tap",
   "version": "0.1.0",
-  "description": "Repassa ao MyCo os limites 5h/7d da conta e o custo de cada sessão, gravando JSON em ~/.myco/"
+  "description": "Repassa ao Claudio’s Club os limites 5h/7d da conta e o custo de cada sessão, gravando JSON em ~/.myco/"
 }

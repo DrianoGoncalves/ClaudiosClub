@@ -9,7 +9,7 @@ import type { GitState } from '../shared/model';
 const TTL_MS = 20_000;
 const cache = new Map<string, { at: number; state: GitState | null }>();
 
-/** A pasta `.myco/` é do próprio MyCo (fichas, imagens): não conta como trabalho sem commit. */
+/** A pasta `.myco/` é do próprio Claudio’s Club (fichas, imagens): não conta como trabalho sem commit. */
 function isMycoPath(line: string): boolean {
   const file = line.startsWith('? ') ? line.slice(2) : line.split(' ').slice(-1)[0] ?? '';
   return file === '.myco/' || file.startsWith('.myco/');

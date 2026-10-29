@@ -24,7 +24,7 @@ describe('projeto demo', () => {
     expect(out.created).toBe(true);
     expect(await fs.readFile(path.join(dir, 'pedidos.js'), 'utf8')).toContain('calcularTotal');
 
-    // As fichas passam pela mesma validação de quem é contratado pelo MyCo.
+    // As fichas passam pela mesma validação de quem é contratado pelo Claudio’s Club.
     const staff = await listProjectStaff(dir, out.projectId);
     expect(staff.map((s) => s.name)).toEqual(['Lia', 'Caio', 'Bruno', 'Fernanda', 'Duda', 'Taís', 'Rui']);
     const ids = new Set(staff.map((s) => s.id));

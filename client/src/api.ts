@@ -185,7 +185,7 @@ export const api = {
   removeLibrarySkill: (name: string) => post<{ ok: boolean }>(`/api/skills/library/${encodeURIComponent(name)}/delete`),
   importSkill: (name: string) => post<LibrarySkill>('/api/skills/library/import', { name }),
   serverLog: (projectId: string, staffId: string) => get<ServerAccess[]>(`/api/projects/${projectId}/staff/${staffId}/server-log`),
-  // Conexões SSH do projeto (a lista também é POST: exige a página do MyCo).
+  // Conexões SSH do projeto (a lista também é POST: exige a página do Claudio’s Club).
   connections: (projectId: string) => post<ProjectConnection[]>(`/api/projects/${projectId}/connections/list`),
   saveConnection: (
     projectId: string,

@@ -8,8 +8,8 @@ import { contextWindowFor } from '../adapters/claude/pricing';
 import { hasCheckpoint, inputText, resultText, stripCheckpoint, toolSummary } from './items';
 import { findSecret } from './secrets';
 
-// Um funcionário conversando pelo MyCo: o `claude` em modo stream-json (o mesmo protocolo do SDK),
-// com o MyCo no papel de "host": manda as mensagens, recebe as respostas em tempo real e responde
+// Um funcionário conversando pelo Claudio’s Club: o `claude` em modo stream-json (o mesmo protocolo do SDK),
+// com o Claudio’s Club no papel de "host": manda as mensagens, recebe as respostas em tempo real e responde
 // os pedidos de permissão. O formato não é documentado como API estável; tudo que é lido daqui
 // passa por validação e o resto é ignorado. Testado com o Claude Code 2.1.278.
 
@@ -229,7 +229,7 @@ export class ChatProcess {
     return this.state.model ?? null;
   }
 
-  /** Aviso do MyCo no meio da conversa (só para você; o funcionário não vê). */
+  /** Aviso do Claudio’s Club no meio da conversa (só para você; o funcionário não vê). */
   addNotice(text: string, tone: 'info' | 'warn' = 'info') {
     this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text, tone, at: new Date().toISOString() });
   }
@@ -240,7 +240,7 @@ export class ChatProcess {
     if (queued === 'now') this.stopping = true;
     this.scan(text);
     // Imagens e arquivos antes do texto (como o Claude Code faz ao colar um print): blocos da API.
-    // Um aviso do MyCo (ficha atualizada) vai num bloco à parte; a conversa mostra só o seu texto.
+    // Um aviso do Claudio’s Club (ficha atualizada) vai num bloco à parte; a conversa mostra só o seu texto.
     const content = [
       ...images.map(imageBlock).filter((b) => b !== null),
       ...files.map(documentBlock),
@@ -353,7 +353,7 @@ export class ChatProcess {
    * `remember`, ainda libera de vez (nesta conversa ou no projeto). Negar leva `message` (o que o
    * funcionário lê), por padrão "negou".
    */
-  answer(requestId: string, allow: boolean, message = 'O usuário negou pelo MyCo.', remember?: Remember): boolean {
+  answer(requestId: string, allow: boolean, message = 'O usuário negou pelo Claudio’s Club.', remember?: Remember): boolean {
     const p = this.pending.get(requestId);
     if (!p) return false;
     this.pending.delete(requestId);
@@ -477,7 +477,7 @@ export class ChatProcess {
             const done = this.doneText.get(id) ?? [];
             done.push(b.text);
             this.doneText.set(id, done);
-            // O ponto de corte (última linha) é para o MyCo: fica guardado aqui e some do texto.
+            // O ponto de corte (última linha) é para o Claudio’s Club: fica guardado aqui e some do texto.
             if (hasCheckpoint(b.text)) this.checkpointSeen = true;
             this.putItem({ kind: 'assistant', id, text: stripCheckpoint(done.join('\n\n')), at: (prev?.kind === 'assistant' ? prev.at : null) ?? at });
           } else if (b.type === 'tool_use' && typeof b.id === 'string') {

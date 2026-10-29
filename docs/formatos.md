@@ -3,11 +3,11 @@
 Levantamento feito em 2026-10-26 nesta máquina (Windows 10, Claude Code 2.1.308 no app desktop, CLI 2.1.278 no PATH).
 Legenda: **✅ confirmado** (visto no disco ou testado) · **⚠️ suposição** (não verificado) · **❌ não verificado / bloqueado**.
 
-Nenhum desses formatos é documentado oficialmente como API estável. Tudo que o MyCo ler daqui passa por `server/adapters/claude/` com validação (zod) e falha graciosa.
+Nenhum desses formatos é documentado oficialmente como API estável. Tudo que o Claudio's Club ler daqui passa por `server/adapters/claude/` com validação (zod) e falha graciosa.
 
 ## 1. Mapa de pastas
 
-| Caminho | O que é | Uso no MyCo | Status |
+| Caminho | O que é | Uso no Claudio's Club | Status |
 |---|---|---|---|
 | `~/.claude/agents/` | Agents de nível usuário (todos os projetos) | Destino de agents "globais" | ✅ não existe ainda nesta máquina |
 | `~/.claude/skills/<nome>/SKILL.md` | Skills de nível usuário | Ler/escrever | ✅ (`vps`) |
@@ -47,7 +47,7 @@ O identificador do agent é o **`name` do frontmatter**; mesmo `name` em dois ar
 Campos ✅: `pid, sessionId, cwd, startedAt, procStart, version, kind (interactive…), entrypoint (claude-desktop…), name, nameSource, status (busy…), updatedAt, statusUpdatedAt, hostSessionId, bridgeSessionId, messagingSocketPath, peerProtocol, peerFeatures`.
 
 - `status` + `statusUpdatedAt` dão o estado ao vivo sem ler o transcript. ✅ Valores vistos: `busy` (trabalhando), `idle` (ocioso), `waiting` (aguardando o usuário → fila "precisa de mim"). Outros valores: ⚠️
-- `entrypoint` diz a origem ✅: `claude-desktop` (app), `cli` (terminal), `sdk-cli` (`claude -p`). CLI e app gravam no mesmo `~/.claude`, então ambos aparecem no MyCo. Sessões na nuvem (claude.ai/code) e de outras máquinas **não** aparecem.
+- `entrypoint` diz a origem ✅: `claude-desktop` (app), `cli` (terminal), `sdk-cli` (`claude -p`). CLI e app gravam no mesmo `~/.claude`, então ambos aparecem no Claudio's Club. Sessões na nuvem (claude.ai/code) e de outras máquinas **não** aparecem.
 - Arquivo de processo encerrado pode ficar órfão: checar se o `pid` existe e se `procStart` bate. ⚠️
 
 ## 4. Transcript — `projects/.../<sessionId>.jsonl`
@@ -99,7 +99,7 @@ Como fechar: autenticar o CLI fora do app (`claude auth login` num terminal comu
 
 - ✅ **Junction de pasta funciona para skills** (`skills/demo/` é junction e foi carregada).
 - ✅ **Nome da skill = nome da pasta**, não o `name` do frontmatter (o frontmatter dizia `demo-myco`; listada como `demo`, com o `name` só como rótulo).
-- ✅ **Nome do agent = `name` do frontmatter**, não o nome do arquivo; agents com o mesmo `name` são deduplicados (só um aparece). O MyCo precisa detectar e avisar colisões de nome.
+- ✅ **Nome do agent = `name` do frontmatter**, não o nome do arquivo; agents com o mesmo `name` são deduplicados (só um aparece). O Claudio's Club precisa detectar e avisar colisões de nome.
 - ⚠️ Symlink de agent **inconclusivo**: `emprestado.md` (symlink) e `emprestado-hl.md` (hardlink) tinham o mesmo `name`, então não dá para saber qual foi carregado.
 
 **2ª rodada** (nomes únicos, sessão nova no app desktop):
@@ -112,13 +112,13 @@ Como fechar: autenticar o CLI fora do app (`claude auth login` num terminal comu
 
 | Item emprestado | 1ª opção | Fallback (máquina sem Modo de Desenvolvedor) |
 |---|---|---|
-| Agent (arquivo) | Symlink | Hardlink (só no mesmo volume; editores que salvam "substituindo" o arquivo quebram o vínculo, então o MyCo deve verificar e refazer) |
+| Agent (arquivo) | Symlink | Hardlink (só no mesmo volume; editores que salvam "substituindo" o arquivo quebram o vínculo, então o Claudio's Club deve verificar e refazer) |
 | Skill (pasta) | Junction (não exige admin) | Symlink de pasta |
 | Qualquer um, entre volumes sem symlink | Cópia gerenciada com marcador de origem e hash | — |
 
-Ressalvas: testado só no app desktop (o CLI usa o mesmo motor, mas não foi testado); o nome que vale é o `name` do agent e a pasta da skill, então o MyCo deve impedir colisões ao emprestar.
+Ressalvas: testado só no app desktop (o CLI usa o mesmo motor, mas não foi testado); o nome que vale é o `name` do agent e a pasta da skill, então o Claudio's Club deve impedir colisões ao emprestar.
 
-> Achado útil para o MyCo: um processo filho iniciado de dentro do app desktop herda `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH`, `CLAUDE_CODE_CHILD_SESSION` etc. Se o MyCo lançar sessões (Fase 4), deve iniciar o `claude` com ambiente limpo.
+> Achado útil para o Claudio's Club: um processo filho iniciado de dentro do app desktop herda `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH`, `CLAUDE_CODE_CHILD_SESSION` etc. Se o Claudio's Club lançar sessões (Fase 4), deve iniciar o `claude` com ambiente limpo.
 
 Alternativa sem vínculo (não recomendada): publicar o agent em `~/.claude/agents/`, que o deixa visível para todos os projetos e perde o controle por agente.
 
@@ -130,10 +130,10 @@ Alternativa sem vínculo (não recomendada): publicar o agent em `~/.claude/agen
 
 ## 8. Consumo (5h/7d) e custo
 
-**Assinatura, não API.** O MyCo nunca chama a API: ele inicia o `claude` (CLI), que usa o login da assinatura e consome os limites de 5h/7d. Para não cair na cobrança da API, o MyCo inicia o CLI **sem `ANTHROPIC_API_KEY`** no ambiente e confere `claude auth status` (`loggedIn`, `authMethod`). ✅ (flags e status vistos no CLI 2.1.278)
+**Assinatura, não API.** O Claudio's Club nunca chama a API: ele inicia o `claude` (CLI), que usa o login da assinatura e consome os limites de 5h/7d. Para não cair na cobrança da API, o Claudio's Club inicia o CLI **sem `ANTHROPIC_API_KEY`** no ambiente e confere `claude auth status` (`loggedIn`, `authMethod`). ✅ (flags e status vistos no CLI 2.1.278)
 
 **Limites de 5h/7d** ✅ — não ficam em nenhum arquivo do `~/.claude` (`stats-cache.json` só tem atividade diária; `policy-limits.json` é política da organização). Só a API de mods os expõe: `$.session.usage().rateLimits` e o evento `session.measure` trazem `{ kind: 'five_hour' | 'seven_day' | 'spend_limit', percentUsed, resetsAt }` (vazio fora de assinatura). É o que o mod `usage-bars` do usuário já usa.
-→ Implementado: mod `myco-tap` (`mod/myco-tap`, instalado com `npm run mod:install` em `~/.claude/mods/myco-tap` + `CLAUDE_CODE_PLUGIN_DIRS`). Em `session.start`/`session.measure` grava `~/.myco/usage.json` (limites da conta; nunca sobrescreve com lista vazia) e `~/.myco/sessions/<sessionId>.json` (custo da sessão segundo o `/cost`). O servidor do MyCo só lê. Vale para sessões iniciadas depois da instalação. ⚠️ ainda não visto gravando numa sessão real (confirmar se `$.fs.write` fora da pasta do projeto pede permissão).
+→ Implementado: mod `myco-tap` (`mod/myco-tap`, instalado com `npm run mod:install` em `~/.claude/mods/myco-tap` + `CLAUDE_CODE_PLUGIN_DIRS`). Em `session.start`/`session.measure` grava `~/.myco/usage.json` (limites da conta; nunca sobrescreve com lista vazia) e `~/.myco/sessions/<sessionId>.json` (custo da sessão segundo o `/cost`). O servidor do Claudio's Club só lê. Vale para sessões iniciadas depois da instalação. ⚠️ ainda não visto gravando numa sessão real (confirmar se `$.fs.write` fora da pasta do projeto pede permissão).
 
 **Custo por sessão/agent/projeto** ✅ — calculado dos transcripts: `message.usage.{input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}` × preço de `message.model`.
 - **Deduplicar por `message.id`**: cada bloco de conteúdo de uma resposta vira uma linha `assistant` com o mesmo `usage` repetido (sessão de teste: 299 linhas, 104 respostas).

@@ -5,8 +5,8 @@ import { api } from '../api';
 import { formatAgo } from '../format';
 import { t, locale } from '../i18n';
 
-// Rotinas do funcionário: no horário, o MyCo manda a mensagem para ele, como se você tivesse digitado.
-// Só rodam com o MyCo ligado (npm run daily / autostart).
+// Rotinas do funcionário: no horário, o Claudio’s Club manda a mensagem para ele, como se você tivesse digitado.
+// Só rodam com o Claudio’s Club ligado (npm run daily / autostart).
 
 type When = 'daily' | 'weekdays' | 'weekly' | 'every' | 'custom';
 

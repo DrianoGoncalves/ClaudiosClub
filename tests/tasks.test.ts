@@ -176,7 +176,7 @@ describe('tarefa pedida por um gestor', () => {
     expect(notified).toHaveLength(1);
   });
 
-  it('a entrega volta para a conversa em que o gestor pediu, já com os testes rodados pelo MyCo', async () => {
+  it('a entrega volta para a conversa em que o gestor pediu, já com os testes rodados pelo Claudio’s Club', async () => {
     const dir = path.join(root, 'gestor-testes');
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));

@@ -1,6 +1,6 @@
 <div align="center">
 
-# MyCo
+# Claudio's Club
 
 ### Sua empresa de agentes do Claude Code, num quadro branco.
 
@@ -13,7 +13,7 @@ Contrate funcionários, passe tarefas, veja quem está trabalhando e quem está 
 ![React](https://img.shields.io/badge/React_Flow-12-61DAFB?logo=react&logoColor=black)
 ![Local](https://img.shields.io/badge/100%25-local-2ea44f)
 
-<img src="docs/img/quadro.png" alt="O quadro do MyCo: cada projeto é uma sala com o organograma dos funcionários do Claude Code" width="100%">
+<img src="docs/img/quadro.png" alt="O quadro do Claudio's Club: cada projeto é uma sala com o organograma dos funcionários do Claude Code" width="100%">
 
 </div>
 
@@ -21,7 +21,7 @@ Contrate funcionários, passe tarefas, veja quem está trabalhando e quem está 
 
 ## Dez terminais abertos. Qual deles está esperando você?
 
-Quem usa o Claude Code a sério termina o dia com uma sessão por projeto, cada uma num terminal, cada uma com o seu contexto, e nenhuma visão do todo. O MyCo transforma isso num escritório:
+Quem usa o Claude Code a sério termina o dia com uma sessão por projeto, cada uma num terminal, cada uma com o seu contexto, e nenhuma visão do todo. O Claudio's Club transforma isso num escritório:
 
 - **Cada projeto é uma sala**, com o organograma de quem trabalha nela.
 - **Cada funcionário é uma sessão do Claude Code** com ficha, memória e autonomia que você define.
@@ -144,10 +144,10 @@ Quem pediu fica sabendo quando a parte dele termina. Funcionários que um gestor
 
 ## Por baixo do capô
 
-- **O disco é a fonte da verdade.** O MyCo grava o que o Claude Code já entende (`.claude/agents`, `.claude/skills`, `CLAUDE.md`) e as fichas em `<projeto>/.myco/`. Fechou o MyCo, tudo continua funcionando.
+- **O disco é a fonte da verdade.** O Claudio's Club grava o que o Claude Code já entende (`.claude/agents`, `.claude/skills`, `CLAUDE.md`) e as fichas em `<projeto>/.myco/`. Fechou o Claudio's Club, tudo continua funcionando.
 - **Sem nuvem própria.** Cada funcionário é um processo `claude` na sua máquina, falando em `stream-json`. Conta, login e cota são os seus.
 - **Só local.** O servidor escuta em `127.0.0.1`, recusa `Host` de fora (DNS rebinding) e só aceita escrita da própria página ou de ferramentas locais.
-- **Infra com cinto de segurança.** O MyCo gera o `ssh_config` de cada projeto sem senha (`BatchMode`), sem túneis nem repasse do agente; quem não tem acesso na ficha não roda `ssh`/`scp`, e `~/.ssh`, `.env` e a chave ficam bloqueados para o agente.
+- **Infra com cinto de segurança.** O Claudio's Club gera o `ssh_config` de cada projeto sem senha (`BatchMode`), sem túneis nem repasse do agente; quem não tem acesso na ficha não roda `ssh`/`scp`, e `~/.ssh`, `.env` e a chave ficam bloqueados para o agente.
 
 | Camada | Stack |
 | --- | --- |
@@ -162,11 +162,11 @@ Quem pediu fica sabendo quando a parte dele termina. Funcionários que um gestor
 > Precisa do **Node 22+**, do **Git** e do **[Claude Code](https://claude.com/claude-code)** instalado e com login feito. Feito e testado no **Windows 10/11**; os scripts do dia a dia são PowerShell.
 
 ```bash
-git clone https://github.com/adrianogonca/MyCo.git
+git clone https://github.com/adrianogonca/ClaudiosClub.git
 ```
 
 ```bash
-cd MyCo
+cd ClaudiosClub
 ```
 
 ```bash
@@ -177,12 +177,16 @@ npm install
 npm run dev
 ```
 
-Abra **http://myco.localhost:5173**. Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code aparecem sozinhos.
+Abra **http://claudio.localhost:5173**. Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code aparecem sozinhos.
 
 | Para | Comando |
 | --- | --- |
-| Usar no dia a dia (build + servidor em http://myco.localhost:4848) | `npm run daily` |
+| Usar no dia a dia (build + servidor em http://claudio.localhost:4848) | `npm run daily` |
 | Subir junto com o Windows, em segundo plano | `npm run autostart` |
-| Botão **Rodar** na própria porta quando o MyCo está parado (e atalho no Menu Iniciar) | `npm run launcher` |
+| Botão **Rodar** na própria porta quando o Claudio's Club está parado (e atalho no Menu Iniciar) | `npm run launcher` |
 | Barras de consumo 5 h / 7 d (instala o mod `myco-tap`) | `npm run mod:install` |
 | Testes e tipos | `npm test` · `npm run typecheck` |
+
+---
+
+<sub>Claudio's Club é um projeto independente, sem afiliação com a Anthropic e sem endosso dela. Claude e Claude Code são marcas da Anthropic.</sub>

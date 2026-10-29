@@ -48,7 +48,7 @@ export type ProjectNodeData = {
 export type EmployeeNodeData = {
   /** A sessão mais recente; null para quem foi contratado e ainda não abriu sessão. */
   session: Session | null;
-  /** Ficha, quando contratado pelo MyCo; null para sessões abertas fora dele. */
+  /** Ficha, quando contratado pelo Claudio’s Club; null para sessões abertas fora dele. */
   staff: StaffProfile | null;
   projectId: string;
   /** Soma de todas as sessões do funcionário. */
@@ -234,7 +234,7 @@ export function buildGraph(
 
   /**
    * Funcionários do projeto: cada ficha (com a sessão mais recente dela) e cada sessão aberta
-   * fora do MyCo. Quem reporta a outro funcionário fica pendurado no primeiro gestor.
+   * fora do Claudio’s Club. Quem reporta a outro funcionário fica pendurado no primeiro gestor.
    */
   const employeeTrees = (p: Project): Tree[] => {
     const sessions = board.sessions[p.id] ?? [];

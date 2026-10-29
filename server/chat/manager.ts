@@ -81,7 +81,7 @@ const AUTONOMY_NAME: Record<Autonomy, string> = {
 
 /** Onde a sessão está aberta e como liberar. */
 function holdMessage(o: NonNullable<ChatSnapshot['elsewhere']>): string {
-  if (o.orphan) return `ficou um processo do MyCo de antes do reinício do servidor (pid ${o.pid}): clique em Trazer para encerrá-lo`;
+  if (o.orphan) return `ficou um processo do Claudio’s Club de antes do reinício do servidor (pid ${o.pid}): clique em Trazer para encerrá-lo`;
   const where = o.entrypoint === 'claude-desktop' ? 'no app do Claude' : o.entrypoint === 'sdk-cli' ? 'em outro programa (sdk-cli)' : 'num terminal';
   return `a sessão continua aberta ${where} (pid ${o.pid}): feche lá e tente de novo`;
 }
@@ -106,7 +106,7 @@ export async function findTranscript(transcriptsDir: string, projectId: string, 
   return direct;
 }
 
-/** Conversas abertas pelo MyCo, uma por sessão (= funcionário). */
+/** Conversas abertas pelo Claudio’s Club, uma por sessão (= funcionário). */
 export class ChatManager {
   private readonly chats = new Map<string, ChatProcess>();
   /** Abas ouvindo cada sessão: listener → como parar de ouvir o processo atual. */
@@ -142,7 +142,7 @@ export class ChatManager {
     return this.delegated.has(sessionId);
   }
 
-  /** Pids dos processos abertos pelo MyCo (não contam como "aberto em outro lugar"). */
+  /** Pids dos processos abertos pelo Claudio’s Club (não contam como "aberto em outro lugar"). */
   ownPids(): Set<number> {
     return new Set([...this.chats.values()].map((c) => c.pid).filter((p): p is number => p !== null));
   }
@@ -223,7 +223,7 @@ export class ChatManager {
   /**
    * Manda uma mensagem, abrindo o processo se preciso. `sessionId` null = sessão nova da ficha.
    * `priority` só conta com o funcionário trabalhando; `images` são data URLs (prints colados).
-   * `delegated`: quem mandou foi outro funcionário (pela API), não você pelo MyCo.
+   * `delegated`: quem mandou foi outro funcionário (pela API), não você pelo Claudio’s Club.
    */
   async send(
     projectId: string,
@@ -252,7 +252,7 @@ export class ChatManager {
   }
 
   /**
-   * A sua mensagem, digitada no MyCo. Se o funcionário fechou o assunto (ponto de corte) numa
+   * A sua mensagem, digitada no Claudio’s Club. Se o funcionário fechou o assunto (ponto de corte) numa
    * conversa grande, ou o cache já esfriou, ela segue numa conversa nova: lê só a ficha e a memória,
    * em vez de reler tudo. A anterior continua na lista, e um aviso conta o que aconteceu.
    */
@@ -372,7 +372,7 @@ export class ChatManager {
   }
 
   /**
-   * O que espera você nas conversas abertas no MyCo: pedidos de permissão sem resposta (o plano
+   * O que espera você nas conversas abertas no Claudio’s Club: pedidos de permissão sem resposta (o plano
    * pronto entre eles) e conversas que pararam com erro.
    */
   attention(): Array<{ sessionId: string; pending: Array<Extract<ChatItem, { kind: 'permission' }>>; error: string | null }> {
@@ -385,7 +385,7 @@ export class ChatManager {
     return out;
   }
 
-  /** A conversa está aberta no MyCo e no meio de um turno (ou esperando uma aprovação). */
+  /** A conversa está aberta no Claudio’s Club e no meio de um turno (ou esperando uma aprovação). */
   isBusy(sessionId: string): boolean {
     const chat = this.chats.get(sessionId);
     return !!chat?.running && chat.busy;
@@ -436,12 +436,12 @@ export class ChatManager {
     this.log(`${sessionId}: ${label} apareceu na conversa (aviso na caixa)`);
   }
 
-  /** Última resposta da conversa aberta no MyCo (para o aviso "terminou"); null se não for daqui. */
+  /** Última resposta da conversa aberta no Claudio’s Club (para o aviso "terminou"); null se não for daqui. */
   lastAssistantText(sessionId: string): string | null {
     return this.chats.get(sessionId)?.lastAssistantText() ?? null;
   }
 
-  /** Processos do MyCo de antes de um reinício do servidor, ainda vivos (ver `adopt`). */
+  /** Processos do Claudio’s Club de antes de um reinício do servidor, ainda vivos (ver `adopt`). */
   async orphans(live: LiveSession[]): Promise<Array<{ sessionId: string; pid: number; status: string | null }>> {
     const registry = this.opts.registry;
     if (!registry) return [];
@@ -485,7 +485,7 @@ export class ChatManager {
     return { busy, background };
   }
 
-  /** Fecha todas as conversas e espera os processos saírem (o MyCo vai parar ou reiniciar). */
+  /** Fecha todas as conversas e espera os processos saírem (o Claudio’s Club vai parar ou reiniciar). */
   async stopAll(): Promise<void> {
     await Promise.all([...this.chats.values()].map((c) => c.stopAndWait()));
   }
@@ -519,7 +519,7 @@ export class ChatManager {
     if (sessionId) {
       const other = await this.elsewhere(sessionId);
       if (other) {
-        this.log(`${sessionId} bloqueada: aberta em ${other.orphan ? 'processo órfão do MyCo' : (other.entrypoint ?? '?')} (pid ${other.pid})`);
+        this.log(`${sessionId} bloqueada: aberta em ${other.orphan ? 'processo órfão do Claudio’s Club' : (other.entrypoint ?? '?')} (pid ${other.pid})`);
         throw new ChatError(holdMessage(other));
       }
     }
@@ -563,7 +563,7 @@ export class ChatManager {
   }
 
   /**
-   * Botão "Trazer para o MyCo". Processo órfão do próprio MyCo (o servidor que o abriu morreu, e
+   * Botão "Trazer para o Claudio’s Club". Processo órfão do próprio Claudio’s Club (o servidor que o abriu morreu, e
    * ninguém mais fala com ele): encerra para a conversa reabrir aqui. Aberta de verdade em outro
    * lugar (terminal, app do Claude): não mexe e diz onde fechar.
    */
@@ -571,7 +571,7 @@ export class ChatManager {
     const other = await this.elsewhere(sessionId);
     if (!other) return;
     if (!other.orphan) throw new ChatError(holdMessage(other));
-    this.log(`${sessionId}: encerrando processo órfão do MyCo (pid ${other.pid}, ${other.status ?? 'sem status'})`);
+    this.log(`${sessionId}: encerrando processo órfão do Claudio’s Club (pid ${other.pid}, ${other.status ?? 'sem status'})`);
     await (this.opts.kill ?? killTree)(other.pid);
     const alive = this.opts.isAlive ?? isAlive;
     for (let i = 0; i < 50 && alive(other.pid); i++) await new Promise((r) => setTimeout(r, 100));
@@ -594,7 +594,7 @@ export class ChatManager {
         await registry.remove(rec.sessionId, rec.pid);
         continue;
       }
-      if (alive(rec.server)) continue; // outro servidor do MyCo ainda cuida dele
+      if (alive(rec.server)) continue; // outro servidor do Claudio’s Club ainda cuida dele
       const s = live.find((l) => l.pid === rec.pid && l.sessionId === rec.sessionId);
       if (s && s.status !== 'busy') {
         this.log(`${rec.sessionId}: processo órfão parado (pid ${rec.pid}, ${s.status ?? 'sem status'}) encerrado na subida`);
@@ -608,7 +608,7 @@ export class ChatManager {
     const own = this.ownPids();
     const live = (await this.opts.listLive()).find((s) => s.sessionId === sessionId && s.alive && !own.has(s.pid));
     if (!live) return null;
-    // Aberto por um servidor do MyCo que já morreu: ninguém mais fala com esse processo.
+    // Aberto por um servidor do Claudio’s Club que já morreu: ninguém mais fala com esse processo.
     const rec = (await this.opts.registry?.read())?.[sessionId];
     const orphan = !!rec && rec.pid === live.pid && rec.server !== process.pid && !(this.opts.isAlive ?? isAlive)(rec.server);
     return { pid: live.pid, entrypoint: live.entrypoint, status: live.status, orphan };

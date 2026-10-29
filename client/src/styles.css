@@ -745,6 +745,7 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
 .setting-number { display: inline-flex; align-items: center; gap: 4px; }
 .setting-number input { width: 64px; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
 .settings-empty { padding: 24px 0; }
+.settings-about { margin: 24px 0 0; padding-top: 10px; border-top: 1px solid var(--line); }
 .room-colors { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; width: 100%; }
 .room-colors li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .room-colors-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--hand); font-size: 19px; font-weight: 700; }

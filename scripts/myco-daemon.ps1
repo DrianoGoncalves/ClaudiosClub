@@ -1,4 +1,4 @@
-﻿# Vigia do MyCo: sobe o servidor sem janela, guarda a saída em ~/.myco/logs/server.log e religa
+﻿# Vigia do Claudio’s Club: sobe o servidor sem janela, guarda a saída em ~/.myco/logs/server.log e religa
 # sozinho se ele cair. Para parar: npm run daily:stop (cria o arquivo de parada e encerra tudo).
 # Usado pelo atalho da pasta Inicializar (npm run autostart) e por npm run daily:start.
 #   -Port: porta do servidor (padrão 4848, ou MYCO_PORT).
@@ -57,13 +57,13 @@ while ($true) {
   if (Test-Path $stopFile) { break }
   # O cliente é gerado no (re)início quando mudou: "Reiniciar" no config já traz a tela nova, e sem
   # mudança o servidor sobe em segundos (o botão "Rodar" da tela de parado espera por ele). Só o
-  # build (sem a checagem de tipos): um erro de tipo em edição não deixa o MyCo sem tela.
+  # build (sem a checagem de tipos): um erro de tipo em edição não deixa o Claudio’s Club sem tela.
   if (Test-ClientChanged) {
     cmd.exe /d /c "node node_modules\vite\bin\vite.js build >> `"$log`" 2>&1"
     if ($LASTEXITCODE -ne 0) { Write-Log 'o build do cliente falhou (veja acima); o servidor sobe com a última versão do cliente' }
   }
   $started = Get-Date
-  Write-Log "subindo o servidor: http://myco.localhost:$port"
+  Write-Log "subindo o servidor: http://claudio.localhost:$port"
   cmd.exe /d /c "node node_modules\tsx\dist\cli.mjs server\index.ts >> `"$log`" 2>&1"
   $code = $LASTEXITCODE
   if (Test-Path $stopFile) { break }

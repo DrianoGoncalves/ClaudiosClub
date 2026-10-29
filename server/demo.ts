@@ -10,9 +10,9 @@ import { ensureMycoGitignore } from './mycoGitignore';
 import { saveProfile, staffDir, writeAtomic } from './staff/store';
 
 // Projeto demo: uma API pequena de cafeteria (com um bug de propósito) e uma equipe pronta, para
-// quem acabou de baixar o MyCo ver fichas, hierarquia e tarefas no quadro sem gastar nada. O app
+// quem acabou de baixar o Claudio’s Club ver fichas, hierarquia e tarefas no quadro sem gastar nada. O app
 // vem de demo/ no repositório; a cópia vai para ~/.myco/demo, fora do clone (o trabalho dos
-// funcionários não suja o git do MyCo). Abrir um funcionário é o Claude Code de verdade: gasta a
+// funcionários não suja o git do Claudio’s Club). Abrir um funcionário é o Claude Code de verdade: gasta a
 // cota de quem usa. A equipe sai dos cargos prontos, então acompanha as revisões deles.
 
 export const DEMO_DIR = path.join(MYCO_HOME, 'demo', 'cafe-demo');
@@ -176,7 +176,7 @@ async function initGit(dir: string): Promise<void> {
   try {
     await git('init', '-q', '-b', 'main');
     await git('add', '-A');
-    await git('-c', 'user.name=MyCo', '-c', 'user.email=myco@localhost', 'commit', '-q', '-m', 'Projeto demo do MyCo');
+    await git('-c', 'user.name=Claudio’s Club', '-c', 'user.email=myco@localhost', 'commit', '-q', '-m', 'Projeto demo do Claudio’s Club');
   } catch {
     // segue sem o repositório (ou sem o primeiro commit)
   }

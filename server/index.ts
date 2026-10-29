@@ -64,12 +64,13 @@ async function shutdown(stop: boolean) {
   await Promise.race([chats.stopAll(), new Promise((r) => setTimeout(r, 5000))]);
   process.exit(0);
 }
-// Só local: o MyCo lê transcripts e configurações do usuário.
+// Só local: o Claudio’s Club lê transcripts e configurações do usuário.
 const HOST = '127.0.0.1';
 const CLIENT_DIR = path.resolve(import.meta.dirname, '../dist/client');
-// `myco.localhost`: endereço fixo do MyCo. Todo `*.localhost` aponta para a própria máquina nos
+// `claudio.localhost`: endereço fixo do Claudio’s Club. Todo `*.localhost` aponta para a própria máquina nos
 // navegadores (RFC 6761), sem mexer no arquivo hosts; continua protegido contra DNS rebinding.
-const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', 'myco.localhost']);
+// `myco.localhost`: o endereço de antes da troca de nome, para favoritos e atalhos antigos.
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', 'claudio.localhost', 'myco.localhost']);
 // Retratos chegam como data URL no JSON da contratação.
 const MAX_BODY = 4 * 1024 * 1024;
 
@@ -95,7 +96,7 @@ const staff: StaffService = new StaffService(adapter, {
     void projectPathOf(next.projectId).then((dir) =>
       chats.profileChanged(prev, next, dir ? path.join(dir, '.myco', 'staff', `${next.id}.md`) : null),
     ),
-  // Subfuncionário contratado pela API: abre numa conversa do MyCo, não num terminal.
+  // Subfuncionário contratado pela API: abre numa conversa do Claudio’s Club, não num terminal.
   // O gestor que contratou pela API passa a primeira tarefa: é delegação (bolinhas na linha).
   openChat: (projectId, staffId, text): Promise<string> => chats.send(projectId, null, staffId, text, undefined, [], [], true),
   isWorking: (staffId) => chats.staffWorking(staffId),
@@ -120,7 +121,7 @@ const chats: ChatManager = new ChatManager({
   onSent: (sid) => void tasks.onSent(sid).catch(() => {}),
   // Ficou livre: os ajustes guardados e a próxima tarefa da fila dele.
   onIdle: (sid, pid, staffId, reason) => {
-    // Turno de conversa do MyCo: o aviso "terminou" vem daqui, na hora exata (o vigia lê as sessões
+    // Turno de conversa do Claudio’s Club: o aviso "terminou" vem daqui, na hora exata (o vigia lê as sessões
     // de tempos em tempos e perde turno curto).
     if (reason === 'turn') turns.noteDone(sid);
     void tasks.onIdle(sid, pid, staffId).catch(() => {});
@@ -214,7 +215,7 @@ const SendBody = z
     text: z.string().trim().max(50_000).default(''),
     /** Prints e imagens coladas (até 4). */
     images: z.array(ChatImage).max(4, 'no máximo 4 imagens por mensagem').default([]),
-    /** Confirmado no MyCo: segue mesmo acima da linha de parada do consumo. */
+    /** Confirmado no Claudio’s Club: segue mesmo acima da linha de parada do consumo. */
     force: z.boolean().default(false),
     /** Com o funcionário trabalhando; sem ela, vale a da configuração. */
     priority: z.enum(['now', 'next', 'later']).optional(),
@@ -230,9 +231,9 @@ const PermissionBody = z.object({
   allow: z.boolean(),
   /** Ao negar: o que o funcionário lê (ex.: "quero mudanças no plano"). */
   message: z.string().trim().min(1).max(500).optional(),
-  /** Ao aprovar um plano: autonomia com que ele executa (só pelo MyCo). */
+  /** Ao aprovar um plano: autonomia com que ele executa (só pelo Claudio’s Club). */
   executeAs: z.enum(AUTONOMY).optional(),
-  /** Ao aprovar: liberar de vez, nesta conversa ou no projeto (só pelo MyCo). */
+  /** Ao aprovar: liberar de vez, nesta conversa ou no projeto (só pelo Claudio’s Club). */
   remember: z.enum(['session', 'project']).optional(),
 });
 const ChatSettingsBody = z
@@ -255,7 +256,7 @@ interface Request {
   params: string[];
   url: URL;
   body: unknown;
-  /** Veio da página do MyCo (tem Origin local), e não de uma ferramenta de linha de comando. */
+  /** Veio da página do Claudio’s Club (tem Origin local), e não de uma ferramenta de linha de comando. */
   fromBrowser: boolean;
 }
 
@@ -283,8 +284,8 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     /^\/api\/server\/(stop|restart)$/,
     async ({ params: [action], fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
-      if (action === 'restart' && !UNDER_DAEMON) throw new BadRequest('reiniciar precisa do MyCo em segundo plano (npm run daily:start)');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      if (action === 'restart' && !UNDER_DAEMON) throw new BadRequest('reiniciar precisa do Claudio’s Club em segundo plano (npm run daily:start)');
       // Responde primeiro; fecha as conversas e sai logo depois. Parando com o vigia, o arquivo de
       // parada impede que ele religue; reiniciando, ele sobe o servidor de novo em poucos segundos.
       setTimeout(() => void shutdown(action === 'stop'), 300);
@@ -298,7 +299,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     /^\/api\/new-project$/,
     async ({ body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const input = parseNewProject(body);
       // O workspace antes da pasta: um id errado não deixa pasta criada para trás.
       if (input.workspaceId && !(await readConfig()).workspaces.some((w) => w.id === input.workspaceId)) throw new BadRequest('workspace não encontrado');
@@ -316,13 +317,13 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ['GET', new RegExp(`^/api/projects/${ID}$`), ({ params: [id] }) => adapter.getProject(id!)],
   ['GET', new RegExp(`^/api/projects/${ID}/mcp$`), ({ params: [id] }) => staff.listMcp(id!)],
   ['GET', new RegExp(`^/api/projects/${ID}/servers$`), ({ params: [id] }) => staff.listServers(id!)],
-  // Conexões SSH do projeto, só pela página do MyCo: até a lista é POST, para exigir o cabeçalho
+  // Conexões SSH do projeto, só pela página do Claudio’s Club: até a lista é POST, para exigir o cabeçalho
   // x-myco e a origem local (um funcionário teria de forjar os dois num comando que você aprova).
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/connections/list$`),
     ({ params: [id], fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       return staff.listConnections(id!);
     },
   ],
@@ -330,7 +331,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/connections$`),
     ({ params: [id], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       return staff.saveConnection(id!, body);
     },
   ],
@@ -338,7 +339,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/connections/${CONN}/(delete|test)$`),
     async ({ params: [id, name, action], fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       if (action === 'test') return staff.testConnection(id!, name!);
       const ok = await staff.removeConnection(id!, name!);
       return ok === null ? null : { ok };
@@ -357,7 +358,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}$`),
     ({ params: [id, staffId], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('a ficha só é editada pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('a ficha só é editada pelo Claudio’s Club');
       return staff.update(id!, staffId!, body);
     },
   ],
@@ -378,7 +379,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}/restore$`),
     ({ params: [id, staffId], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('a ficha só é editada pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('a ficha só é editada pelo Claudio’s Club');
       return staff.restore(id!, staffId!, parse(z.object({ version: z.string().max(40) }), body).version);
     },
   ],
@@ -386,7 +387,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}/managers$`),
     ({ params: [id, staffId], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('vínculos só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('vínculos só pelo Claudio’s Club');
       return staff.addManager(id!, staffId!, parse(z.object({ managerId: z.string().max(40) }), body).managerId);
     },
   ],
@@ -394,7 +395,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}/managers/remove$`),
     ({ params: [id, staffId], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('vínculos só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('vínculos só pelo Claudio’s Club');
       return staff.removeManager(id!, staffId!, parse(z.object({ managerId: z.string().max(40) }), body).managerId);
     },
   ],
@@ -424,7 +425,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
         if (held) return { sessionId: b.sessionId, held };
       }
       const priority = b.priority ?? (await readConfig()).sendWhileBusy;
-      // Fora do navegador, quem manda é outro funcionário (o gestor, pela API): delegação. Pelo MyCo,
+      // Fora do navegador, quem manda é outro funcionário (o gestor, pela API): delegação. Pelo Claudio’s Club,
       // a mensagem pode seguir numa conversa nova se o assunto da atual fechou (ver contextPolicy.ts).
       const sessionId = fromBrowser
         ? await chats.sendFromUser(pid!, b.sessionId, b.staffId, b.text, priority, b.images, b.files)
@@ -436,7 +437,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/chat/settings$`),
     async ({ params: [pid], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(ChatSettingsBody.and(z.object({ sessionId: z.string().uuid().nullable() })), body);
       return { sessionId: await chats.settings(pid!, b.sessionId, b.staffId, b) };
     },
@@ -456,7 +457,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/chat/${ID}/test$`),
     async ({ params: [pid], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const { dir, place } = await chatPlace(pid!, parse(StaffRef, body).staffId);
       const command = await detectTest(dir);
       if (!command) throw new BadRequest('não achei testes neste projeto (npm test, composer test ou phpunit)');
@@ -467,7 +468,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/chat/${ID}/merge$`),
     async ({ params: [pid], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(StaffRef.extend({ skipTests: z.boolean().default(false) }), body);
       const { dir, place, profile } = await chatPlace(pid!, b.staffId);
       return mergeCode(dir, place, `Trabalho de ${profile?.name ?? 'funcionário'}`, { skipTests: b.skipTests });
@@ -478,7 +479,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/chat/${ID}/rewind$`),
     async ({ params: [pid, sid], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(StaffRef.extend({ uuid: z.string().uuid(), dryRun: z.boolean().default(true) }), body);
       return chats.rewind(pid!, sid!, b.staffId, b.uuid, b.dryRun);
     },
@@ -487,7 +488,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/chat/${ID}/fork$`),
     async ({ params: [pid, sid], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       return { sessionId: await chats.fork(pid!, sid!, parse(StaffRef, body).staffId) };
     },
   ],
@@ -495,7 +496,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/chat/${ID}/rename$`),
     async ({ params: [pid, sid], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const { title } = parse(z.object({ title: z.string().trim().min(1, 'dê um nome').max(120) }), body);
       await chats.rename(pid!, sid!, title);
       return { ok: true };
@@ -510,7 +511,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/chat/${ID}/mcp$`),
     async ({ params: [pid, sid], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(StaffRef.extend({ name: z.string().min(1).max(100), enabled: z.boolean() }), body);
       await chats.mcpToggle(pid!, sid!, b.staffId, b.name, b.enabled);
       return { ok: true };
@@ -520,7 +521,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/chat/${ID}/stop-task$`),
     async ({ params: [sid], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       await chats.stopTask(sid!, parse(z.object({ taskId: z.string().min(1).max(100) }), body).taskId);
       return { ok: true };
     },
@@ -584,7 +585,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     /^\/api\/roles(?:\/(default|restore))?$/,
     ({ params: [action], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('cargos só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('cargos só pelo Claudio’s Club');
       if (action === 'restore') return restoreBuiltins();
       if (action === 'default') return setDefaultRole(parse(z.object({ id: z.string().max(40).nullable() }), body).id);
       return saveRole(body);
@@ -594,7 +595,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/roles/${ID}/delete$`),
     ({ params: [id], fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('cargos só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('cargos só pelo Claudio’s Club');
       return removeRole(id!);
     },
   ],
@@ -617,7 +618,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks/${ID}$`),
     ({ params: [id, taskId], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('tarefas só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('tarefas só pelo Claudio’s Club');
       return tasks.update(id!, taskId!, body);
     },
   ],
@@ -625,7 +626,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks/${ID}/start$`),
     ({ params: [id, taskId], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('tarefas só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('tarefas só pelo Claudio’s Club');
       return tasks.start(id!, taskId!, (body as { force?: unknown } | null)?.force === true);
     },
   ],
@@ -634,7 +635,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks/${ID}/(test|merge|review|deploy)$`),
     ({ params: [id, taskId, action], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('tarefas só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('tarefas só pelo Claudio’s Club');
       const b = parse(z.object({ staffId: z.string().max(40).optional(), force: z.boolean().default(false), skipTests: z.boolean().default(false) }), body ?? {});
       if (action === 'test') return tasks.test(id!, taskId!);
       if (action === 'merge') return tasks.merge(id!, taskId!, b.skipTests);
@@ -646,7 +647,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks/${ID}/delete$`),
     async ({ params: [id, taskId], fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('tarefas só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('tarefas só pelo Claudio’s Club');
       return { ok: await tasks.remove(id!, taskId!) };
     },
   ],
@@ -657,7 +658,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     new RegExp(`^/api/projects/${ID}/staff/${ID}/routines$`),
     ({ params: [id, staffId], body, fromBrowser }) => {
       // Um funcionário não agenda trabalho para si mesmo (nem para outro) pela API.
-      if (!fromBrowser) throw new BadRequest('rotinas só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('rotinas só pelo Claudio’s Club');
       return staff.setRoutines(id!, staffId!, (body as { routines?: unknown } | null)?.routines);
     },
   ],
@@ -674,7 +675,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}/keep$`),
     ({ params: [id, staffId], fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só você efetiva, pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só você efetiva, pelo Claudio’s Club');
       return staff.keep(id!, staffId!);
     },
   ],
@@ -682,7 +683,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}/routines/${ID}/run$`),
     async ({ params: [id, staffId, routineId], fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('rotinas só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('rotinas só pelo Claudio’s Club');
       const profile = (await staff.listAll((await adapter.listProjects()).filter((p) => p.id === id))).find((s) => s.id === staffId);
       return profile ? await routines.runNow(profile, routineId!) : null;
     },
@@ -691,7 +692,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     /^\/api\/routines\/alerts\/dismiss$/,
     async ({ body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(z.object({ id: z.string().min(1).max(300) }), body);
       return { ok: routines.dismissAlert(b.id) };
     },
@@ -700,7 +701,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     /^\/api\/secrets\/dismiss$/,
     async ({ body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(z.object({ id: z.string().min(1).max(300), notSecret: z.boolean().default(false) }), body);
       // Chave no .mcp.json: "já troquei" não guarda nada (o aviso some quando o arquivo muda).
       if (b.id.startsWith('mcp:')) {
@@ -714,7 +715,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     /^\/api\/questions\/dismiss$/,
     async ({ body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(z.object({ sessionId: z.string().min(1).max(100) }), body);
       return { ok: chats.dismissQuestion(b.sessionId) };
     },
@@ -725,7 +726,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/chat/${ID}/adopt$`),
     async ({ params: [sid], fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       await chats.adopt(sid!);
       return { ok: true };
     },
@@ -744,7 +745,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/image$`),
     async ({ params: [id], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const p = await projectById(id!);
       if (!p) return null;
       const { dataUrl } = parse(z.object({ dataUrl: z.string().max(3_000_000).nullable() }), body);
@@ -757,7 +758,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     /^\/api\/account\/rules$/,
     async ({ body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('as regras da conta só são editadas pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('as regras da conta só são editadas pelo Claudio’s Club');
       return saveAccountRules(parse(z.object({ text: z.string() }), body).text);
     },
   ],
@@ -775,7 +776,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     /^\/api\/agents\/save$/,
     async ({ body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('agents só são editados pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('agents só são editados pelo Claudio’s Club');
       const b = parse(z.object({ scope: z.enum(['project', 'user']), projectId: z.string().max(200).nullable().default(null) }), body);
       const dir = await agentsDir(b.scope, b.projectId);
       if (!dir) return null;
@@ -801,12 +802,12 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ['GET', /^\/api\/browser$/, ({ url }) => browserStatus(url.searchParams.has('fresh'))],
   ['GET', /^\/api\/costs$/, () => getCosts()],
   // Ranking de modelos (Artificial Analysis). POST: cada busca gasta da cota diária da chave, então
-  // só a página do MyCo dispara (uma página qualquer não manda o cabeçalho x-myco).
+  // só a página do Claudio’s Club dispara (uma página qualquer não manda o cabeçalho x-myco).
   [
     'POST',
     /^\/api\/models$/,
     async ({ body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       return benchmarks.get(parse(z.object({ refresh: z.boolean().default(false) }), body ?? {}).refresh);
     },
   ],
@@ -816,7 +817,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     /^\/api\/demo$/,
     async ({ fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const demo = await createDemo();
       if ((await readConfig()).archived.projects.includes(demo.projectId)) {
         await setArchived({ kind: 'project', id: demo.projectId, archived: false });
@@ -838,7 +839,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/sessions/${ID}/marks$`),
     async ({ params: [sid], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(MarkBody, body);
       return saveMark(sid!, b.runId, b.mark);
     },
@@ -870,7 +871,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     /^\/api\/skills\/library$/,
     ({ body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       return saveLibrarySkill(body);
     },
   ],
@@ -878,7 +879,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     /^\/api\/skills\/library\/import$/,
     ({ body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(z.object({ name: z.string().max(64) }), body);
       return copyToLibrary(b.name, path.join(defaultLocations().home, 'skills'));
     },
@@ -887,7 +888,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     /^\/api\/skills\/library\/([a-z0-9][a-z0-9-]{0,63})\/delete$/,
     async ({ params: [name], fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       return { ok: await removeLibrarySkill(name!) };
     },
   ],
@@ -896,7 +897,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     /^\/api\/workspaces$/,
     ({ body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       return saveWorkspace(body);
     },
   ],
@@ -904,7 +905,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/workspaces/${ID}/delete$`),
     ({ params: [id], fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       return removeWorkspace(id!);
     },
   ],
@@ -912,7 +913,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/workspace$`),
     async ({ params: [id], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       if (!(await adapter.listProjects()).some((p) => p.id === id)) return null;
       const b = parse(z.object({ workspaceId: z.string().max(40).nullable() }), body);
       return setProjectWorkspace(id!, b.workspaceId);
@@ -1094,7 +1095,7 @@ const INBOX_ORDER: Record<InboxKind, number> = { plan: 0, permission: 1, secret:
 
 /**
  * Tudo que espera você, de todas as salas: planos prontos e permissões pendentes das conversas
- * no MyCo, sessões esperando resposta em outro lugar (app, terminal), conversas que pararam com
+ * no Claudio’s Club, sessões esperando resposta em outro lugar (app, terminal), conversas que pararam com
  * erro e processos órfãos de um reinício. Arquivados ficam de fora.
  */
 async function getInbox(): Promise<InboxItem[]> {
@@ -1121,7 +1122,7 @@ async function getInbox(): Promise<InboxItem[]> {
   const orphanIds = new Set(orphans.map((o) => o.sessionId));
   for (const o of orphans) {
     const w = where(o.sessionId, liveById.get(o.sessionId));
-    if (!hidden(w)) out.push({ id: `orphan:${o.sessionId}`, kind: 'orphan', ...w, summary: 'processo de antes do reinício do MyCo: clique em Trazer', at: null });
+    if (!hidden(w)) out.push({ id: `orphan:${o.sessionId}`, kind: 'orphan', ...w, summary: 'processo de antes do reinício do Claudio’s Club: clique em Trazer', at: null });
   }
   const own = chats.ownPids();
   for (const l of live) {
@@ -1146,7 +1147,7 @@ async function getInbox(): Promise<InboxItem[]> {
       at: a.at,
     });
   }
-  // Segredos que apareceram nas conversas do MyCo (senha num comando, token colado…).
+  // Segredos que apareceram nas conversas do Claudio’s Club (senha num comando, token colado…).
   for (const s of chats.secretHits()) {
     const w = where(s.sessionId, liveById.get(s.sessionId));
     if (!hidden(w)) out.push({ id: `secret:${s.id}`, kind: 'secret', ...w, summary: `${s.label} apareceu no chat: troque e não cole segredos na conversa`, at: s.at });
@@ -1213,7 +1214,7 @@ async function sessionPlaces(projects: Project[]) {
   return { where, hidden };
 }
 
-/** Worktrees criadas pelo MyCo (…/.claude/worktrees/myco-<ficha>) → id do projeto principal. */
+/** Worktrees criadas pelo Claudio’s Club (…/.claude/worktrees/myco-<ficha>) → id do projeto principal. */
 function mycoWorktreeParents(projects: Project[]): Map<string, string> {
   const byPath = new Map(projects.map((p) => [pathKey(p.path), p.id]));
   const out = new Map<string, string>();
@@ -1225,7 +1226,7 @@ function mycoWorktreeParents(projects: Project[]): Map<string, string> {
   return out;
 }
 
-/** Custos: a mesma dobra do quadro (worktree do MyCo soma no projeto principal). */
+/** Custos: a mesma dobra do quadro (worktree do Claudio’s Club soma no projeto principal). */
 async function getCosts(): Promise<CostReport> {
   const [report, projects] = await Promise.all([adapter.getCosts(), adapter.listProjects()]);
   const out: CostReport = { ...report, projects: { ...report.projects } };
@@ -1282,12 +1283,12 @@ async function isFile(p: string): Promise<boolean> {
 }
 
 server.listen(PORT, HOST, () => {
-  console.log(`MyCo em http://myco.localhost:${PORT} (adaptador: ${adapter.id})`);
+  console.log(`Claudio’s Club em http://claudio.localhost:${PORT} (adaptador: ${adapter.id})`);
   // Só quem conseguiu a porta limpa: um segundo servidor que falhou não mexe nos processos do outro.
   chats.cleanOrphans().catch((err) => console.error('[chat] limpeza de órfãos falhou:', err));
   // Só o servidor que ficou com a porta agenda: um segundo que falhou não dispara rotinas em dobro.
   routines.start();
-  // Fila de tarefas: quem ficou com tarefa ou ajuste esperando (ex.: o MyCo reiniciou no meio).
+  // Fila de tarefas: quem ficou com tarefa ou ajuste esperando (ex.: o Claudio’s Club reiniciou no meio).
   const queueTick = () => void tasks.tick().catch(() => {});
   setTimeout(queueTick, 15_000).unref();
   setInterval(queueTick, 60_000).unref();

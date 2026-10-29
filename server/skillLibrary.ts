@@ -10,10 +10,10 @@ import { writeAtomic } from './staff/store';
 
 // Biblioteca de skills da conta: `~/.myco/skills/<nome>/SKILL.md`. Fica fora do ~/.claude, então
 // nenhuma sessão do Claude Code vê sozinha; só quem tem a skill marcada na ficha. Ao abrir a
-// conversa dele, o MyCo monta um plugin só com essas skills e passa com `--plugin-dir` (vale só para
+// conversa dele, o Claudio’s Club monta um plugin só com essas skills e passa com `--plugin-dir` (vale só para
 // aquela sessão). No Claude Code elas aparecem como `myco:<nome>`.
 //
-// Pelo MyCo se edita só o SKILL.md: scripts e outros arquivos da pasta ficam como estão (código
+// Pelo Claudio’s Club se edita só o SKILL.md: scripts e outros arquivos da pasta ficam como estão (código
 // executável não se edita numa caixa de texto do navegador).
 
 export const LIBRARY_DIR = path.join(MYCO_HOME, 'skills');
@@ -120,13 +120,13 @@ export async function buildSkillPlugin(names: string[], target: string, dir = LI
   if (!found.length) return null;
   await writeAtomic(
     path.join(target, '.claude-plugin', 'plugin.json'),
-    JSON.stringify({ name: PLUGIN_NAME, version: '1.0.0', description: 'Skills da biblioteca do MyCo para este funcionário', author: { name: 'MyCo' } }, null, 2) + '\n',
+    JSON.stringify({ name: PLUGIN_NAME, version: '1.0.0', description: 'Skills da biblioteca do Claudio’s Club para este funcionário', author: { name: 'Claudio’s Club' } }, null, 2) + '\n',
   );
   for (const n of found) await fs.cp(path.join(dir, n), path.join(target, 'skills', n), { recursive: true });
   return { dir: target, skills: found };
 }
 
-/** Os campos do frontmatter que o MyCo não edita (allowed-tools, disable-model-invocation…). */
+/** Os campos do frontmatter que o Claudio’s Club não edita (allowed-tools, disable-model-invocation…). */
 function extraOf(data: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(data).filter(([k]) => !RESERVED.has(k)));
 }

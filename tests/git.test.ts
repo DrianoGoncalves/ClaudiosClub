@@ -10,7 +10,7 @@ describe('git status do projeto', () => {
       '# branch.ab +2 -3',
       '1 .M N... 100644 100644 100644 aaa bbb client/src/App.tsx',
       '? notas.txt',
-      // A pasta do próprio MyCo não conta.
+      // A pasta do próprio Claudio’s Club não conta.
       '? .myco/',
       '1 A. N... 000000 100644 100644 000 ccc .myco/staff/ana.json',
       '',
