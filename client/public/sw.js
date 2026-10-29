@@ -65,27 +65,50 @@ function stoppedPage() {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${m.title}</title>
-    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/icon-32.png" sizes="32x32" type="image/png" />
     <style>
-      :root { --bg: #f6f3ea; --card: #fffdf8; --ink: #1f2328; --muted: #6b6f76; --line: #ddd6c8; --blue: #2457c5; }
+      /* O DS do app (client/src/styles.css), como em scripts/start.html. Com o servidor parado, logo e
+         fonte só aparecem se o navegador guardou; senão, some o logo e vale a manuscrita do sistema. */
+      :root {
+        --board: #fbfaf6; --board-dot: #dcd8cd; --card: #fffdf8; --ink: #1f2328; --ink-blue: #1f4fbf;
+        --muted: #6b7076; --line: #e4e1da;
+        --hand: 'Caveat', 'Segoe Print', 'Comic Sans MS', cursive;
+      }
       @media (prefers-color-scheme: dark) {
-        :root { --bg: #1a2026; --card: #222a31; --ink: #e8e6df; --muted: #9aa3ab; --line: #36414b; --blue: #9cc0ff; }
+        :root { --board: #1f2a25; --board-dot: #34433b; --card: #27322c; --ink: #eef0ea; --ink-blue: #9cc0ff; --muted: #a3aca7; --line: #3a4540; }
       }
       * { box-sizing: border-box; }
-      body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, sans-serif; }
-      main { width: min(440px, 100%); background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 24px 26px; display: grid; gap: 12px; }
-      h1 { margin: 0; font-size: 30px; line-height: 1; }
+      body {
+        margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
+        color: var(--ink); font: 15px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        background: var(--board) radial-gradient(var(--board-dot) 1.2px, transparent 1.4px) 0 0 / 28px 28px;
+      }
+      main {
+        width: min(440px, 100%); display: grid; gap: 10px; padding: 22px 24px;
+        background: var(--card); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.12);
+      }
+      header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+      header img { width: 56px; height: 56px; flex: none; }
+      h1 { margin: 0; font-family: var(--hand); font-weight: 700; font-size: 38px; line-height: 1; }
       p { margin: 0; }
       .muted { color: var(--muted); font-size: 13px; }
-      button { justify-self: start; font: inherit; font-weight: 600; padding: 9px 18px; border-radius: 9px; border: 0; background: var(--blue); color: #fff; cursor: pointer; }
+      button {
+        justify-self: start; font: inherit; font-size: 14px; font-weight: 600; padding: 8px 16px; cursor: pointer;
+        color: var(--card); background: var(--ink-blue); border: 1px solid var(--ink-blue); border-radius: 6px;
+      }
+      button:hover:not(:disabled) { filter: brightness(1.08); }
+      button:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; }
       button:disabled { opacity: 0.6; cursor: default; }
-      code { font-size: 12.5px; }
+      code { font: 12.5px ui-monospace, Consolas, monospace; background: color-mix(in srgb, var(--ink) 8%, transparent); padding: 0 3px; border-radius: 3px; }
       [hidden] { display: none !important; }
     </style>
   </head>
   <body>
     <main>
-      <h1>Claudio’s Club</h1>
+      <header>
+        <img src="/icon-192.png" alt="" onerror="this.remove()" />
+        <h1>Claudio’s Club</h1>
+      </header>
       <p id="status">${m.status}</p>
       <button id="run" type="button">${m.run}</button>
       <p class="muted">${m.hint}</p>
