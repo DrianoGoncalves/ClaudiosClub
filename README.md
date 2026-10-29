@@ -162,7 +162,7 @@ Quem pediu fica sabendo quando a parte dele termina. Funcionários que um gestor
 > Precisa do **Node 22+**, do **Git** e do **[Claude Code](https://claude.com/claude-code)** instalado e com login feito. Feito e testado no **Windows 10/11**; os scripts do dia a dia são PowerShell.
 
 ```bash
-git clone https://github.com/adrianogonca/ClaudiosClub.git
+git clone https://github.com/DrianoGoncalves/ClaudiosClub.git
 ```
 
 ```bash
