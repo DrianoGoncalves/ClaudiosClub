@@ -34,7 +34,7 @@ import {
   type TeamRow,
 } from './detail/Detail';
 import { DrawerResize, useDrawerWidth } from './detail/DrawerResize';
-import { employeeName } from './format';
+import { companyName, effortLabel, employeeName } from './format';
 import { t } from './i18n';
 import { useInbox } from './inbox/useInbox';
 import { AgentForm, type AgentFormTarget } from './staff/AgentForm';
@@ -136,7 +136,7 @@ export function App() {
 
   // O título da aba traz quantas coisas esperam você: dá para ver sem trazer o Claudio’s Club para a frente.
   useEffect(() => {
-    const name = config?.companyName ?? 'Claudio’s Club';
+    const name = companyName(config?.companyName);
     document.title = inbox.items.length ? `(${inbox.items.length}) ${name}` : name;
   }, [config?.companyName, inbox.items.length]);
 
@@ -423,7 +423,7 @@ export function App() {
           onClose={() => setAgentForm(null)}
           onSaved={(a) => {
             setAgentForm(null);
-            const how = [a.model && t('app.modelValue', { value: a.model }), a.effort && t('app.effortValue', { value: a.effort })]
+            const how = [a.model && t('app.modelValue', { value: a.model }), a.effort && t('app.effortValue', { value: effortLabel(a.effort) })]
               .filter(Boolean)
               .join(', ');
             setNotice(t('app.agentSaved', { name: a.name, how: how ? ` (${how})` : '' }));

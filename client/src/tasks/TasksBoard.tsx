@@ -133,8 +133,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             <button className="btn-primary" onClick={() => setAdding(true)}>
               {t('tasks.newTask')}
             </button>
-            <button className="btn-secondary" onClick={onClose} aria-label={t('tasks.close')}>
-              {t('tasks.close')}
+            <button className="drawer-close in-head" onClick={onClose} aria-label={t('tasks.close')}>
+              ×
             </button>
           </span>
         </header>
@@ -353,7 +353,7 @@ function TaskDetail({
     <aside className="task-detail">
       <header className="task-detail-head">
         <span className="kicker">{LABEL[task.status]}</span>
-        <button className="btn-secondary" onClick={onClose} aria-label={t('tasks.closeDetails')}>
+        <button className="drawer-close in-head" onClick={onClose} aria-label={t('tasks.closeDetails')}>
           ×
         </button>
       </header>

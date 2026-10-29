@@ -12,7 +12,6 @@ import type {
   SendPriority,
 } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
-import { t } from '../i18n';
 
 // Estado de uma conversa: histórico do transcript + o que chega ao vivo pelo SSE.
 
@@ -37,7 +36,7 @@ export interface ChatView {
   settings: (s: { model?: string; effort?: Effort; autonomy?: Autonomy }) => Promise<void>;
   /** Comandos "/" da sessão (ou os últimos vistos no projeto, antes de abrir). */
   commands: ChatCommand[];
-  /** Confere de novo se a sessão ainda está aberta em outro lugar. */
+  /** Trazer: órfã, retoma aqui; aberta em outro lugar, cria uma cópia aqui (com o histórico) e troca para ela. A original segue lá. */
   recheck: () => Promise<void>;
   /** Assumir aqui: encerra a sessão aberta em outro lugar (que não está trabalhando) e retoma a conversa aqui. */
   takeOver: () => Promise<void>;
@@ -214,20 +213,24 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     }
   };
 
-  /** Processo órfão do Claudio’s Club: encerra e retoma aqui. Aberta de verdade em outro lugar: diz que continua lá. */
+  /**
+   * "Trazer". Processo órfão do Claudio’s Club: encerra e retoma aqui. Aberta de verdade em outro lugar:
+   * cria uma cópia aqui, com o histórico, e troca para ela. A original segue lá, sem sincronizar.
+   */
   const recheck = async () => {
     if (!sessionId) return;
     setError(null);
     try {
-      if (elsewhere?.orphan) await api.chatAdopt(sessionId);
-      const snap = await load(sessionId);
-      if (snap.elsewhere && !snap.elsewhere.orphan) {
-        setError(
-          t('chat.stillOpen', {
-            where: t(snap.elsewhere.entrypoint === 'claude-desktop' ? 'chat.whereDesktop' : 'chat.whereElsewhere'),
-            pid: snap.elsewhere.pid,
-          }),
-        );
+      if (elsewhere?.orphan) {
+        await api.chatAdopt(sessionId);
+        await load(sessionId);
+      } else if (elsewhere) {
+        const r = await api.chatFork(projectId, sessionId, staffId);
+        setSessionId(r.sessionId);
+        // Carrega já: a prop sessionId do pai pode demorar a acompanhar (aí o efeito de troca recarrega de novo).
+        await load(r.sessionId);
+      } else {
+        await load(sessionId);
       }
     } catch (e) {
       setError((e as Error).message);

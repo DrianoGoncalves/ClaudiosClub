@@ -188,7 +188,7 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
     <Frame
       id={id}
       type="employee"
-      variant={waiting ? 'warn' : busy ? 'busy' : 'agent'}
+      variant={waiting ? 'waiting' : busy ? 'busy' : 'agent'}
       selected={selected}
       className={state}
       title={staff ? `${staff.name} — ${staff.role}` : name}
@@ -248,22 +248,18 @@ function AgentNode({ id, data, selected }: NodeProps<Node<AgentNodeData, 'agent'
       className="bn-agent-def"
       title={a.description ?? a.name}
     >
-      <div className="bn-agent">
-        <Portrait id={id} label={a.name} />
-        <div className="bn-agent-text">
-          <div className="bn-title bn-title-sm">{a.name}</div>
-          <div className="bn-meta">
-            {borrowed && <span className="bn-flag bn-flag-link">{t('board.borrowedFlag')}</span>}
-            {a.duplicate && <span className="bn-flag bn-flag-warn">{t('board.duplicateName')}</span>}
-            {a.error && <span className="bn-flag bn-flag-warn">{t('board.errorFlag')}</span>}
-            {!borrowed && !a.duplicate && !a.error && t('board.agentWord')}
-            {data.cost && (
-              <span title={t('board.agentShareTitle')}>
-                {' '}· {formatShare(data.cost.share, 1)} {t(data.cost.runs === 1 ? 'board.runOne' : 'board.runOther', { n: data.cost.runs })}
-              </span>
-            )}
-          </div>
-        </div>
+      {/* Agent não tem foto: só nome e o que ele é, como a skill. */}
+      <div className="bn-title bn-title-sm">{a.name}</div>
+      <div className="bn-meta">
+        {borrowed && <span className="bn-flag bn-flag-link">{t('board.borrowedFlag')}</span>}
+        {a.duplicate && <span className="bn-flag bn-flag-warn">{t('board.duplicateName')}</span>}
+        {a.error && <span className="bn-flag bn-flag-warn">{t('board.errorFlag')}</span>}
+        {!borrowed && !a.duplicate && !a.error && t('board.agentWord')}
+        {data.cost && (
+          <span title={t('board.agentShareTitle')}>
+            {' '}· {formatShare(data.cost.share, 1)} {t(data.cost.runs === 1 ? 'board.runOne' : 'board.runOther', { n: data.cost.runs })}
+          </span>
+        )}
       </div>
     </Frame>
   );

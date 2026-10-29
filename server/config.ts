@@ -78,7 +78,6 @@ const WORKSPACE_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const WorkspaceFile = z.object({
   id: z.string().regex(WORKSPACE_ID),
   name: z.string().trim().min(1).max(40),
-  color: COLOR.nullable().catch(null).default(null),
   background: z
     .object({ light: HEX.toLowerCase().nullable().catch(null).default(null), dark: HEX.toLowerCase().nullable().catch(null).default(null) })
     .catch({ light: null, dark: null })
@@ -89,8 +88,6 @@ export const WorkspaceInput = z.object({
   /** Ausente = workspace novo. */
   id: z.string().regex(WORKSPACE_ID).optional(),
   name: z.string().trim().min(1, 'dê um nome ao workspace').max(40, 'máximo de 40 caracteres'),
-  /** Ausente = fica como está (sem cor, num workspace novo). */
-  color: COLOR.nullable().optional(),
   /** Só o tema enviado muda; null volta ao fundo geral. */
   background: z.object({ light: HEX.toLowerCase().nullable().optional(), dark: HEX.toLowerCase().nullable().optional() }).optional(),
 });
@@ -214,7 +211,6 @@ export async function saveWorkspace(body: unknown, file = CONFIG_FILE): Promise<
     const workspace: Workspace = {
       id,
       name: input.name,
-      color: input.color !== undefined ? input.color : (prev?.color ?? null),
       background: {
         light: input.background?.light !== undefined ? input.background.light : bg.light,
         dark: input.background?.dark !== undefined ? input.background.dark : bg.dark,

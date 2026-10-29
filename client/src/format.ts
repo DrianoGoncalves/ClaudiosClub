@@ -1,6 +1,12 @@
 // Formatação compartilhada pelo quadro, painel e topo.
 import { locale, t } from './i18n';
 
+/** Nome da empresa no topo e na aba: o padrão do servidor (`server/config.ts`) sai no idioma da interface;
+ *  um nome dado pelo usuário fica como está. */
+export function companyName(name: string | undefined): string {
+  return !name || name === 'Claudio’s Club' ? t('app.name') : name;
+}
+
 /** Parte de `value` em `total`: "42%", "3,5%", "< 0,1%". */
 export function formatShare(value: number, total: number): string {
   if (!total || value <= 0) return '0%';
@@ -20,8 +26,17 @@ export function formatDuration(ms: number): string {
   return `${m}min`;
 }
 
+/** "há 12min", "há 3h05"; de 24h em diante, só os dias ("há 2d", não "há 2d19h"). */
 export function formatAgo(ms: number): string {
-  return ms < 60_000 ? t('app.now') : t('app.ago', { dur: formatDuration(ms) });
+  if (ms < 60_000) return t('app.now');
+  const days = Math.floor(Math.round(ms / 60_000) / 1440); // mesmo arredondamento do formatDuration
+  return t('app.ago', { dur: days > 0 ? `${days}d` : formatDuration(ms) });
+}
+
+/** Nível de esforço como aparece na tela, sem a palavra "esforço": "high" → "High", "xhigh" → "XHigh". */
+export function effortLabel(effort: string): string {
+  if (effort === 'xhigh') return 'XHigh';
+  return effort.charAt(0).toUpperCase() + effort.slice(1);
 }
 
 export const STATUS_LABEL: Record<string, string> = {

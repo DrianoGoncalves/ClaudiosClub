@@ -204,7 +204,7 @@ export const api = {
   testConnection: (projectId: string, name: string) =>
     post<{ ok: boolean; message: string }>(`/api/projects/${projectId}/connections/${encodeURIComponent(name)}/test`),
   // Workspaces (abas do quadro) e novo projeto.
-  saveWorkspace: (w: { id?: string; name: string; color?: ProjectColor | null; background?: Partial<BoardBackground> }) => post<AppConfig>('/api/workspaces', w),
+  saveWorkspace: (w: { id?: string; name: string; background?: Partial<BoardBackground> }) => post<AppConfig>('/api/workspaces', w),
   removeWorkspace: (id: string) => post<AppConfig>(`/api/workspaces/${id}/delete`),
   setProjectWorkspace: (projectId: string, workspaceId: string | null) => post<AppConfig>(`/api/projects/${projectId}/workspace`, { workspaceId }),
   newProjectDefaults: () => get<{ parent: string }>('/api/new-project'),

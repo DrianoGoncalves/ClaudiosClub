@@ -13,7 +13,7 @@ import type {
   StaffProfile,
 } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
-import { employeeName, folderName } from '../format';
+import { effortLabel, employeeName, folderName } from '../format';
 import { t, locale } from '../i18n';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
 import { BrowserCheck } from './BrowserCheck';
@@ -359,7 +359,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
                 {t('staff.fromRole', {
                   details: [
                     modelLabel(template.model),
-                    template.effort ? t('staff.summaryEffort', { effort: template.effort }) : null,
+                    template.effort ? t('staff.summaryEffort', { effort: effortLabel(template.effort) }) : null,
                     AUTONOMY_OPTIONS.find((o) => o.value === template.autonomy)?.label.toLowerCase(),
                     template.playbook ? PLAYBOOK_OPTIONS.find((o) => o.value === template.playbook)?.label.toLowerCase() : null,
                     autoWorktree ? t('staff.summaryOwnWorktree') : t('staff.summaryDirect'),
@@ -638,7 +638,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
             <select value={effort} onChange={(e) => setEffort(e.target.value as '' | Effort)}>
               {EFFORT_OPTIONS.map((v) => (
                 <option key={v} value={v}>
-                  {v || t('staff.effortDefault')}
+                  {v ? effortLabel(v) : t('staff.effortDefault')}
                 </option>
               ))}
             </select>

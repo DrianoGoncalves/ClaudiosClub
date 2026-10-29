@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { colorCss, type AppConfig, type InboxItem } from '../../../shared/model';
+import { useEffect, useRef, useState } from 'react';
+import type { AppConfig, InboxItem } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
 import { inTab, TAB_ALL, TAB_NONE } from './workspaces';
@@ -31,9 +31,9 @@ export function WorkspaceTabs({ config, workspaceOf, inUse, inbox, value, onChan
     if (value === TAB_NONE && inUse.size && !hasLoose) onChange(TAB_ALL);
   }, [value, inUse, hasLoose, onChange]);
   const tabs = [
-    { id: TAB_ALL, label: t('office.tabAll'), color: null },
-    ...shown.map((w) => ({ id: w.id, label: w.name, color: w.color })),
-    ...(shown.length && hasLoose ? [{ id: TAB_NONE, label: t('office.tabNone'), color: null }] : []),
+    { id: TAB_ALL, label: t('office.tabAll') },
+    ...shown.map((w) => ({ id: w.id, label: w.name })),
+    ...(shown.length && hasLoose ? [{ id: TAB_NONE, label: t('office.tabNone') }] : []),
   ];
   const pending = (tab: string) => inbox.filter((i) => inTab(tab, workspaceOf.get(i.projectId), config)).length;
 
@@ -45,7 +45,7 @@ export function WorkspaceTabs({ config, workspaceOf, inUse, inbox, value, onChan
     busy.current = true;
     setError(null);
     try {
-      const next = await api.saveWorkspace({ name: name.trim(), color: null });
+      const next = await api.saveWorkspace({ name: name.trim() });
       onConfig(next);
       const created = next.workspaces.find((w) => w.name.toLowerCase() === name.trim().toLowerCase());
       if (created) onChange(created.id);
@@ -69,10 +69,8 @@ export function WorkspaceTabs({ config, workspaceOf, inUse, inbox, value, onChan
             role="tab"
             aria-selected={value === tab.id}
             className={`workspace-tab ${value === tab.id ? 'is-active' : ''}`}
-            style={tab.color ? ({ '--tab-color': colorCss(tab.color) } as CSSProperties) : undefined}
             onClick={() => onChange(tab.id)}
           >
-            {tab.color && <span className="workspace-dot" aria-hidden="true" />}
             {tab.label}
             {n > 0 && (
               <span className="workspace-pending" title={t('office.tabPending', { n })}>

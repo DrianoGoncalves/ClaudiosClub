@@ -24,6 +24,7 @@ import { ChartIcon } from '../icons';
 import { SettingsMenu } from '../toolbar/SettingsMenu';
 import { AuthBadge, CompanyTitle, UsageMeters, useAccountUsage } from '../toolbar/Toolbar';
 import { t } from '../i18n';
+import { companyName } from '../format';
 import { WorkspaceTabs } from '../office/WorkspaceTabs';
 import { inTab, TAB_ALL, TAB_NONE, workspaceByProject } from '../office/workspaces';
 
@@ -356,7 +357,7 @@ export function BoardView(props: BoardViewProps) {
       <Panel position="top-left" className="toolbar">
         {/* Opções numa linha e abas embaixo: o topo fica com a largura da maior das duas. */}
         <div className="toolbar-row">
-          <CompanyTitle name={config?.companyName ?? 'Claudio’s Club'} onRename={props.onRename} />
+          <CompanyTitle name={companyName(config?.companyName)} onRename={props.onRename} />
           <UsageMeters usage={usage} />
           <AuthBadge boost={usage?.boost ?? null} />
           <span className="toolbar-sep" />

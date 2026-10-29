@@ -2,6 +2,7 @@ import { defineMessages } from './define';
 
 export default defineMessages({
   'pt-BR': {
+    'app.name': 'Clube dos Claudios',
     'app.loadingBoard': 'Carregando o quadro…',
     'app.close': 'Fechar',
     'app.closeNotice': 'Fechar aviso',
@@ -13,7 +14,7 @@ export default defineMessages({
     'app.unlinkDone': '{boss} não chama mais {who}. Para voltar, restaure a versão anterior da ficha.',
     'app.unlinkFailed': 'Não deu para desfazer: {error}',
     'app.modelValue': 'modelo {value}',
-    'app.effortValue': 'esforço {value}',
+    'app.effortValue': '{value}',
     'app.agentSaved': 'Agent {name} salvo{how}. Vale para as sessões abertas a partir de agora.',
     'app.hiredChat': '{name} foi contratado(a). Converse pelo painel quando quiser.',
     'app.hiredLaunched': '{name} foi contratado(a) e já começou a conversa no painel.',
@@ -33,6 +34,7 @@ export default defineMessages({
     'app.statusWaiting': 'aguardando você',
   },
   en: {
+    'app.name': 'Claudio’s Club',
     'app.loadingBoard': 'Loading the board…',
     'app.close': 'Close',
     'app.closeNotice': 'Close notice',
@@ -44,7 +46,7 @@ export default defineMessages({
     'app.unlinkDone': '{boss} no longer manages {who}. To undo, restore the previous version of the profile.',
     'app.unlinkFailed': 'Could not undo: {error}',
     'app.modelValue': 'model {value}',
-    'app.effortValue': 'effort {value}',
+    'app.effortValue': '{value}',
     'app.agentSaved': 'Agent {name} saved{how}. Applies to sessions opened from now on.',
     'app.hiredChat': '{name} was hired. Chat with them from the panel whenever you like.',
     'app.hiredLaunched': '{name} was hired and has already started the conversation in the panel.',
@@ -64,6 +66,7 @@ export default defineMessages({
     'app.statusWaiting': 'waiting for you',
   },
   es: {
+    'app.name': 'Club de los Claudios',
     'app.loadingBoard': 'Cargando el tablero…',
     'app.close': 'Cerrar',
     'app.closeNotice': 'Cerrar aviso',
@@ -75,7 +78,7 @@ export default defineMessages({
     'app.unlinkDone': '{boss} ya no dirige a {who}. Para volver atrás, restaura la versión anterior del perfil.',
     'app.unlinkFailed': 'No se pudo deshacer: {error}',
     'app.modelValue': 'modelo {value}',
-    'app.effortValue': 'esfuerzo {value}',
+    'app.effortValue': '{value}',
     'app.agentSaved': 'Agent {name} guardado{how}. Aplica a las sesiones que se abran desde ahora.',
     'app.hiredChat': '{name} fue contratado/a. Conversa desde el panel cuando quieras.',
     'app.hiredLaunched': '{name} fue contratado/a y ya empezó la conversación en el panel.',

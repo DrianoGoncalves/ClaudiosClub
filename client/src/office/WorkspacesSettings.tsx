@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import type { AppConfig, BoardBackground, ProjectColor, Workspace } from '../../../shared/model';
+import type { AppConfig, BoardBackground, Workspace } from '../../../shared/model';
 import { api } from '../api';
-import { RoomColorPicker, useSystemTheme } from '../board/colors';
+import { useSystemTheme } from '../board/colors';
 import { t } from '../i18n';
 import { ThemeBackgrounds } from '../toolbar/ThemeBackgrounds';
 
-/** Configurações → Workspaces: nome, cor e fundo (claro e escuro) de cada aba; remover deixa os projetos dele sem workspace. */
+/** Configurações → Workspaces: nome e fundo (claro e escuro) de cada aba; remover deixa os projetos dele sem workspace. */
 export function WorkspacesEditor({
   workspaces,
   projectWorkspaces,
@@ -60,15 +60,6 @@ export function WorkspacesEditor({
               </button>
             </div>
             <div className="workspace-field">
-              <span className="muted small">{t('office.workspaceColor')}</span>
-              <RoomColorPicker
-                small
-                label={t('office.workspaceColor')}
-                value={w.color}
-                onChange={(color: ProjectColor | null) => run(() => api.saveWorkspace({ id: w.id, name: w.name, color }))}
-              />
-            </div>
-            <div className="workspace-field">
               <span className="muted small">{t('office.workspaceBg')}</span>
               <ThemeBackgrounds
                 value={w.background}
@@ -85,7 +76,7 @@ export function WorkspacesEditor({
         onSubmit={(e) => {
           e.preventDefault();
           if (!name.trim()) return;
-          void run(() => api.saveWorkspace({ name: name.trim(), color: null })).then(() => setName(''));
+          void run(() => api.saveWorkspace({ name: name.trim() })).then(() => setName(''));
         }}
       >
         <input value={name} maxLength={40} placeholder={t('office.workspaceNamePlaceholder')} onChange={(e) => setName(e.target.value)} />

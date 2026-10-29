@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ModelBenchmarks, ModelVariant } from '../../../shared/model';
 import { api } from '../api';
-import { formatAgo } from '../format';
+import { effortLabel, formatAgo } from '../format';
 import { locale, t } from '../i18n';
 
 // Abas "Coding Index" e "Preço" do ranking (painel lateral): os modelos de maior índice de código do
@@ -114,14 +114,14 @@ function ModelsBody({ data, loading, failed, metric, expanded, onExpand }: BodyP
                   className="models-row"
                   aria-expanded={isOpen}
                   onClick={() => onExpand(isOpen ? null : r.id)}
-                  title={`${r.name}${r.creator ? ` (${r.creator})` : ''}${r.effort ? `, ${t('toolbar.effortWith', { effort: r.effort })}` : ''}\n${numbers(r)}`}
+                  title={`${r.name}${r.creator ? ` (${r.creator})` : ''}${r.effort ? `, ${t('toolbar.effortWith', { effort: effortLabel(r.effort) })}` : ''}\n${numbers(r)}`}
                 >
                   <span className="models-name">
                     <span className="models-caret" aria-hidden>
                       {isOpen ? '▾' : '▸'}
                     </span>
                     {r.name}
-                    {r.effort && <span className="models-effort">{r.effort}</span>}
+                    {r.effort && <span className="models-effort">{effortLabel(r.effort)}</span>}
                     {r.creator && <span className="muted"> · {r.creator}</span>}
                   </span>
                   {bar(r)}
@@ -133,10 +133,10 @@ function ModelsBody({ data, loading, failed, metric, expanded, onExpand }: BodyP
                       <li
                         key={v.id}
                         className="models-row models-variant"
-                        title={`${v.effort ?? t('toolbar.effortUnknown')}: ${numbers(v)}`}
+                        title={`${v.effort ? effortLabel(v.effort) : t('toolbar.effortUnknown')}: ${numbers(v)}`}
                       >
                         <span className="models-name">
-                          {v.effort ?? '—'}
+                          {v.effort ? effortLabel(v.effort) : '—'}
                           {v.id === r.id && <span className="muted"> · {t('toolbar.defaultLabel')}</span>}
                         </span>
                         {bar(v)}

@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type { Autonomy, ChatAttachment, ChatItem, Effort, SendPriority, UiLevel } from '../../../shared/model';
 import { api } from '../api';
+import { effortLabel } from '../format';
 import { ArrowDownIcon, FileDiffIcon, ImageIcon, SendIcon } from '../icons';
 import { t, locale } from '../i18n';
 import { shrinkImage } from '../lib/shrinkImage';
@@ -19,7 +20,7 @@ import {
 } from './ChatExtras';
 import { ChangesPanel } from './ChangesPanel';
 import { useChatDetail } from './chatDetail';
-import { Markdown, looksLikeMarkdown } from './markdown';
+import { Markdown, looksLikeMarkdown, useCopy } from './markdown';
 import { systemMessageText } from './systemMessage';
 
 /** Prints no chat: até 4 por mensagem, com o lado maior em até 1568 px (o que o Claude lê sem reduzir). */
@@ -291,8 +292,8 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
         >
           <div className="chat-more-head">
             <h3 id="chat-more-title">{t('chat.moreOptions')}</h3>
-            <button type="button" className="btn-secondary" onClick={closeMore}>
-              {t('chat.close')}
+            <button type="button" className="drawer-close in-head" onClick={closeMore} aria-label={t('chat.close')}>
+              ×
             </button>
           </div>
           <div className="tabs" role="tablist" aria-label={t('chat.moreOptions')}>
@@ -381,13 +382,13 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
                   status: chat.elsewhere.status ? ` (${STATUS_TEXT[chat.elsewhere.status] ?? chat.elsewhere.status})` : '',
                 })}
               </p>
-              <p className="muted small">{t(chat.elsewhere.entrypoint === 'claude-desktop' ? 'chat.closeDesktop' : 'chat.closeTerminal')}</p>
+              <p className="muted small">{t('chat.copyHere')}</p>
             </>
           )}
           <button className="btn-primary" onClick={() => void chat.recheck()}>
             {t('chat.bringToMyco')}
           </button>
-          {!chat.elsewhere.orphan && (chat.elsewhere.status === 'waiting' || chat.elsewhere.status === 'idle') && (
+          {!chat.elsewhere.orphan && chat.elsewhere.entrypoint !== 'claude-desktop' && (chat.elsewhere.status === 'waiting' || chat.elsewhere.status === 'idle') && (
             <button className="btn-secondary" onClick={() => window.confirm(t('chat.takeOverConfirm')) && void chat.takeOver()}>
               {t('chat.takeOver')}
             </button>
@@ -508,7 +509,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
         )}
         <button type="button" className="chat-chip" onClick={openConversationMore} title={t('chat.modelHelp')}>
           {modelLabel(chat.state?.model) || modelLabel(fichaModel) || t('chat.defaultModel')}
-          {effort ? t('chat.effortShort', { e: effort }) : ''}
+          {effort ? t('chat.effortShort', { e: effortLabel(effort) }) : ''}
         </button>
         <ContextMeter context={chat.context} />
         {chat.state?.running && !!chat.state.background?.length && (
@@ -621,6 +622,19 @@ function ContextMeter({ context }: { context: { used: number; window: number; pe
   );
 }
 
+/** Resposta da IA com "Copiar" (o texto em markdown, como veio) no canto, no hover/foco. */
+function AssistantMessage({ text }: { text: string }) {
+  const [copied, copy] = useCopy();
+  return (
+    <div className="msg msg-assistant">
+      <button type="button" className="msg-rewind msg-copy" title={t('chat.msgCopyHelp')} onClick={() => copy(text)}>
+        {copied ? t('chat.mdCopied') : t('chat.mdCopy')}
+      </button>
+      <Markdown text={text} />
+    </div>
+  );
+}
+
 type Answer = (id: string, allow: boolean, opts?: { message?: string; executeAs?: Autonomy; remember?: 'session' | 'project' }) => Promise<void>;
 
 function Item({
@@ -666,11 +680,7 @@ function Item({
       );
     }
     case 'assistant':
-      return item.text ? (
-        <div className="msg msg-assistant">
-          <Markdown text={item.text} />
-        </div>
-      ) : null;
+      return item.text ? <AssistantMessage text={item.text} /> : null;
     case 'tool':
       return (
         <details className={`tool ${item.isError ? 'tool-error' : ''}`}>

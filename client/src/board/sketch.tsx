@@ -7,7 +7,7 @@ import type { Options } from 'roughjs/bin/core';
 
 export const generator = rough.generator();
 
-export type SketchVariant = 'project' | 'user' | 'agent' | 'busy' | 'skill' | 'synced' | 'portrait' | 'warn' | 'room' | 'room-color' | 'header';
+export type SketchVariant = 'project' | 'user' | 'agent' | 'busy' | 'skill' | 'synced' | 'portrait' | 'warn' | 'waiting' | 'room' | 'room-color' | 'header';
 
 const VARIANTS: Record<SketchVariant, Options> = {
   project: { stroke: 'var(--ink-blue)', strokeWidth: 2.2, roughness: 1.3 },
@@ -27,6 +27,8 @@ const VARIANTS: Record<SketchVariant, Options> = {
   synced: { stroke: 'var(--ink-muted)', strokeWidth: 1.3, roughness: 1.4, strokeLineDash: [6, 6] },
   portrait: { stroke: 'var(--ink)', strokeWidth: 1.4, roughness: 1 },
   warn: { stroke: 'var(--ink-red)', strokeWidth: 2, roughness: 1.4 },
+  // Esperando você: amarelo da bolinha de alerta (`.dot-waiting`), não o vermelho de erro.
+  waiting: { stroke: 'var(--waiting)', strokeWidth: 2.2, roughness: 1.3 },
   // Parede da sala: traço leve e mais tremido, para não competir com os cartões.
   room: { stroke: 'var(--ink-muted)', strokeWidth: 1.2, roughness: 1.8, bowing: 0.6 },
   // Sala com cor escolhida: a mesma parede, um pouco mais grossa para a cor aparecer.

@@ -95,18 +95,19 @@ describe('config', () => {
   it('workspaces: cria com id do nome, renomeia sem trocar o id, recusa nome repetido', async () => {
     const file = path.join(root, 'cfg-ws', 'config.json');
     const noBg = { light: null, dark: null };
+    // Cor antiga (o workspace já teve cor) é ignorada.
     let cfg = await saveWorkspace({ name: 'Clientes Ativos', color: 'teal' }, file);
-    expect(cfg.workspaces).toEqual([{ id: 'clientes-ativos', name: 'Clientes Ativos', color: 'teal', background: noBg }]);
+    expect(cfg.workspaces).toEqual([{ id: 'clientes-ativos', name: 'Clientes Ativos', background: noBg }]);
     cfg = await saveWorkspace({ name: 'Estudos & Ação' }, file);
-    expect(cfg.workspaces[1]).toEqual({ id: 'estudos-acao', name: 'Estudos & Ação', color: null, background: noBg });
+    expect(cfg.workspaces[1]).toEqual({ id: 'estudos-acao', name: 'Estudos & Ação', background: noBg });
     await expect(saveWorkspace({ name: 'clientes ativos' }, file)).rejects.toThrow('já existe');
-    // Fundo por tema, um de cada vez; renomear sem mandar cor nem fundo mantém os dois.
+    // Fundo por tema, um de cada vez; renomear sem mandar fundo mantém os dois.
     await saveWorkspace({ id: 'clientes-ativos', name: 'Clientes Ativos', background: { dark: '#1A2B3C' } }, file);
     cfg = await saveWorkspace({ id: 'clientes-ativos', name: 'Clientes Ativos', background: { light: '#f6f0e1' } }, file);
-    expect(cfg.workspaces[0]).toMatchObject({ color: 'teal', background: { light: '#f6f0e1', dark: '#1a2b3c' } });
+    expect(cfg.workspaces[0]).toMatchObject({ background: { light: '#f6f0e1', dark: '#1a2b3c' } });
     await expect(saveWorkspace({ id: 'clientes-ativos', name: 'Clientes Ativos', background: { light: 'azul' } }, file)).rejects.toThrow();
-    cfg = await saveWorkspace({ id: 'clientes-ativos', name: 'Clientes', color: null, background: { light: null } }, file);
-    expect(cfg.workspaces[0]).toEqual({ id: 'clientes-ativos', name: 'Clientes', color: null, background: { light: null, dark: '#1a2b3c' } });
+    cfg = await saveWorkspace({ id: 'clientes-ativos', name: 'Clientes', background: { light: null } }, file);
+    expect(cfg.workspaces[0]).toEqual({ id: 'clientes-ativos', name: 'Clientes', background: { light: null, dark: '#1a2b3c' } });
     await expect(saveWorkspace({ id: 'sumiu', name: 'X' }, file)).rejects.toThrow('não encontrado');
     await expect(saveWorkspace({ name: '' }, file)).rejects.toThrow('nome');
     // Mesmo nome-base depois de renomear: o id ganha um número.
@@ -130,7 +131,7 @@ describe('config', () => {
     expect(cfg).toMatchObject({ workspaces: [{ id: 'trabalho' }], projectWorkspaces: { p2: 'trabalho' } });
     // Editado à mão: workspace inválido some, e projeto de workspace que não existe fica sem workspace.
     await fs.writeFile(file, JSON.stringify({ workspaces: [{ id: 'ok', name: 'Ok' }, { id: 'Ruim!', name: 'x' }, 3], projectWorkspaces: { a: 'ok', b: 'fantasma', c: 1 } }));
-    expect(await readConfig(file)).toMatchObject({ workspaces: [{ id: 'ok', name: 'Ok', color: null, background: { light: null, dark: null } }], projectWorkspaces: { a: 'ok' } });
+    expect(await readConfig(file)).toMatchObject({ workspaces: [{ id: 'ok', name: 'Ok', background: { light: null, dark: null } }], projectWorkspaces: { a: 'ok' } });
   });
 
   it('linha de parada: null desliga um limite; valores fora de 1–100 são recusados', async () => {

@@ -153,8 +153,6 @@ body { background: var(--board); }
 .bn-delegating { color: var(--busy); font-weight: 600; }
 .edge-label-delegates { color: var(--busy); font-size: 15px; }
 
-.bn-agent-def .bn-portrait span { font-size: 15px; color: var(--muted); }
-
 /* ---- sala (moldura arrastável que envolve o projeto) e estante de agents/skills ---- */
 .react-flow__node-room { cursor: grab; }
 .react-flow__node-room.dragging { cursor: grabbing; }
@@ -490,9 +488,12 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .chat-file { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; }
 .chat-file button { border: 0; background: transparent; color: var(--muted); cursor: pointer; }
 /* "Voltar até aqui", MCPs e segundo plano da conversa, "o que mudou". */
-.msg-user { position: relative; }
+.msg-user, .msg-assistant { position: relative; }
 .msg-rewind { position: absolute; top: -9px; right: 6px; display: none; padding: 0 6px; font-size: 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); cursor: pointer; }
-.msg-user:hover .msg-rewind, .msg-system:hover .msg-rewind, .msg-rewind:focus-visible { display: inline-block; }
+.msg-user:hover .msg-rewind, .msg-system:hover .msg-rewind, .msg-assistant:hover .msg-copy, .msg-rewind:focus-visible { display: inline-block; }
+.msg-copy:hover { color: var(--ink); }
+/* Toque não tem hover: "Copiar" da resposta fica sempre visível. */
+@media (hover: none) { .msg-copy { display: inline-block; } }
 .chat-extra { list-style: none; margin: 4px 0 0; padding: 6px 10px; border: 1px dashed var(--line); border-radius: 8px; display: grid; gap: 3px; }
 .changes-modal { width: min(980px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow-y: auto; }
 .changes-diff { max-height: 50vh; overflow: auto; }
@@ -576,7 +577,7 @@ button.ranking-row:hover { border-color: var(--accent); }
 /* Topo compacto do funcionário: retrato, nome, cargo e status numa linha. A direita fica livre para o "⋯" e o "×". */
 .employee-top { display: flex; gap: 10px; align-items: center; min-height: 32px; padding-right: 44px; }
 .employee-ident { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
-.employee-name { margin: 0; min-width: 0; max-width: 100%; font-family: var(--hand); font-size: 22px; font-weight: 700; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.employee-name { padding: 0 5px 0 0; margin: 0; min-width: 0; max-width: 100%; font-family: var(--hand); font-size: 22px; font-weight: 700; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Cargo na linha de baixo, largura toda; quebra em até 2 linhas antes de cortar. */
 .employee-cargo { flex-basis: 100%; min-width: 0; font-size: 10px; line-height: 1.35; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
 .employee-portrait { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; border: 2px solid var(--ink); flex: none; }
@@ -676,12 +677,11 @@ button.ranking-row:hover { border-color: var(--accent); }
 /* ---- abas de workspace: segunda linha do topo; no celular rolam para o lado ---- */
 .workspace-tabs { display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: thin; padding-top: 4px; border-top: 1px solid var(--line); }
 .toolbar .workspace-tab { display: inline-flex; align-items: center; gap: 6px; flex: none; white-space: nowrap; border-color: transparent; border-radius: 6px 6px 0 0; border-bottom: 2px solid transparent; }
-.toolbar .workspace-tab.is-active { border-bottom-color: var(--tab-color, var(--ink)); font-weight: 600; }
+.toolbar .workspace-tab.is-active { border-bottom-color: var(--ink); font-weight: 600; }
 /* Hover de aba: só a linha de baixo, sem a moldura dos outros botões do topo. */
-.toolbar .workspace-tab:hover:not(:disabled) { border-color: transparent; border-bottom-color: var(--tab-color, var(--ink-muted)); }
-.toolbar .workspace-tab.is-active:hover:not(:disabled) { border-bottom-color: var(--tab-color, var(--ink)); }
+.toolbar .workspace-tab:hover:not(:disabled) { border-color: transparent; border-bottom-color: var(--ink-muted); }
+.toolbar .workspace-tab.is-active:hover:not(:disabled) { border-bottom-color: var(--ink); }
 .toolbar .workspace-tab-add { color: var(--muted); }
-.workspace-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tab-color); }
 .workspace-pending { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--waiting); color: #fff; font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; }
 .workspace-add { display: inline-flex; align-items: center; gap: 6px; flex: none; }
 .workspace-add input { width: 16ch; font: inherit; font-size: 13px; padding: 2px 6px; }
@@ -895,6 +895,8 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
 }
 .drawer-close { position: absolute; top: 10px; right: 12px; font-size: 22px; line-height: 1; background: none; border: none; color: var(--muted); cursor: pointer; }
 .drawer-close:hover { color: var(--ink); }
+/* O mesmo X dentro de um cabeçalho com título/ações (Mais, tarefas, o que mudou): no fluxo, alinhado à linha. */
+.drawer-close.in-head { position: static; padding: 0 2px; }
 /* Abas no painel lateral (ex.: ranking): as mesmas da ficha, na medida do padding do painel. */
 .drawer .tabs { top: -18px; margin: 12px -20px 0; padding: 4px 20px 0; }
 .drawer .chat-more .tabs { margin-top: 0; }
@@ -972,7 +974,7 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 .chip-discarded.is-on { background: var(--ink-red); }
 
 .badges { display: flex; gap: 6px; flex-wrap: wrap; }
-.badge { font-size: 11px; font-weight: 500; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; color: var(--ink); }
+.badge { font-size: 10px; font-weight: 500; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; color: var(--ink); }
 .badge.dim { color: var(--muted); }
 .badge.warn { color: var(--warn); border-color: var(--warn); }
 .badge.link { color: var(--ink-red); border-color: var(--ink-red); }

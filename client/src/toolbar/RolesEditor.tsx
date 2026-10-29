@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Autonomy, Effort } from '../../../shared/model';
 import type { RoleEntry } from '../../../shared/roles';
 import { api } from '../api';
+import { effortLabel } from '../format';
 import { t } from '../i18n';
 import { modelLabel } from '../staff/HireForm';
 import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS } from '../staff/templates';
@@ -119,7 +120,7 @@ export function RolesEditor() {
           <select value={editing.effort} onChange={(e) => setEditing({ ...editing, effort: e.target.value as '' | Effort })}>
             {EFFORT_OPTIONS.map((x) => (
               <option key={x} value={x}>
-                {x || t('toolbar.defaultLabel')}
+                {x ? effortLabel(x) : t('toolbar.defaultLabel')}
               </option>
             ))}
           </select>
@@ -175,7 +176,7 @@ export function RolesEditor() {
               <b>{r.label}</b>
               <span className="muted small">
                 {r.role} · {modelLabel(r.model)}
-                {r.effort ? ` · ${t('toolbar.effortWith', { effort: r.effort })}` : ''}
+                {r.effort ? ` · ${t('toolbar.effortWith', { effort: effortLabel(r.effort) })}` : ''}
                 {r.builtin ? ` · ${r.edited ? t('toolbar.builtInEdited') : t('toolbar.builtIn')}` : ` · ${t('toolbar.yours')}`}
               </span>
             </div>

@@ -25,7 +25,7 @@ import { METRIC_LABEL, type Metric, ModelsChart } from '../toolbar/ModelsMenu';
 import { ProjectName } from './ProjectName';
 import { Routines } from './Routines';
 import { WorthIt } from './WorthIt';
-import { employeeName, ENTRYPOINT_LABEL, folderName, formatShare, STATUS_LABEL } from '../format';
+import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatShare, STATUS_LABEL } from '../format';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
@@ -504,7 +504,7 @@ function StaffSheet({ staff, managers }: { staff: StaffProfile; managers: StaffP
         )}
         <dt>{t('detail.modelEffort')}</dt>
         <dd>
-          {staff.model ?? t('detail.default')} / {staff.effort ?? t('detail.default')}
+          {staff.model ?? t('detail.default')} / {staff.effort ? effortLabel(staff.effort) : t('detail.default')}
         </dd>
         {staff.servers.length > 0 && (
           <>
@@ -935,7 +935,7 @@ export function AgentPanel({
         <p className="badges">
           <LinkBadge link={agent.link} />
           <span className="badge">{agent.model ? t('detail.modelOf', { model: agent.model }) : t('detail.callerModel')}</span>
-          <span className="badge">{agent.effort ? t('detail.effortOf', { effort: agent.effort }) : t('detail.defaultEffort')}</span>
+          <span className="badge">{agent.effort ? t('detail.effortOf', { effort: effortLabel(agent.effort) }) : t('detail.defaultEffort')}</span>
           {agent.duplicate && <span className="badge warn">{t('detail.duplicateOnly')}</span>}
         </p>
         {onEdit && !agent.error && (
@@ -1039,7 +1039,7 @@ function AgentList({
           <li key={a.id} className={`card ${a.error ? 'card-error' : ''}`}>
             <div className="card-title">
               {a.name}
-              {(a.model || a.effort) && <span className="badge">{[a.model, a.effort].filter(Boolean).join(' / ')}</span>}
+              {(a.model || a.effort) && <span className="badge">{[a.model, a.effort && effortLabel(a.effort)].filter(Boolean).join(' / ')}</span>}
               <LinkBadge link={a.link} />
               {a.duplicate && <span className="badge warn">{t('detail.duplicateName')}</span>}
               {onEdit && !a.error && (

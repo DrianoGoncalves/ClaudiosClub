@@ -266,7 +266,6 @@ export type ContextSwitch = (typeof CONTEXT_SWITCHES)[number];
 export interface Workspace {
   id: string;
   name: string;
-  color: ProjectColor | null;
   /** Fundo do quadro na aba dele, por tema; null = o fundo geral. */
   background: BoardBackground;
 }

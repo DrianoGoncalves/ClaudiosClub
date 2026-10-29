@@ -71,8 +71,8 @@ export function ChangesPanel({ projectId, sessionId, staffId, name, onClose }: {
             <button className="btn-secondary" disabled={!!busy} onClick={load}>
               {t('chat.refresh')}
             </button>
-            <button className="btn-secondary" onClick={onClose} aria-label={t('chat.close')}>
-              {t('chat.close')}
+            <button className="drawer-close in-head" onClick={onClose} aria-label={t('chat.close')}>
+              ×
             </button>
           </span>
         </header>

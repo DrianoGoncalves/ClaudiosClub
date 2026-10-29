@@ -31,6 +31,21 @@ function htmlAsText() {
 const hastText = (n: ElementContent): string =>
   n.type === 'text' ? n.value : n.type === 'element' ? n.children.map(hastText).join('') : '';
 
+/** Copia para a área de transferência; `copied` fica true por 1,5s para o botão confirmar. */
+export function useCopy(): [boolean, (text: string) => void] {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const copy = (text: string) => {
+    void navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return [copied, copy];
+}
+
 function CodeBlock({ node, children }: { node?: Element; children?: ReactNode }) {
   const code = node ? node.children.map(hastText).join('').replace(/\n$/, '') : '';
   const first = node?.children[0];
@@ -38,16 +53,8 @@ function CodeBlock({ node, children }: { node?: Element; children?: ReactNode })
   const lang = Array.isArray(classes)
     ? classes.map(String).find((c) => c.startsWith('language-'))?.slice('language-'.length)
     : undefined;
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>();
-  useEffect(() => () => clearTimeout(timer.current), []);
-  const copy = () => {
-    void navigator.clipboard?.writeText(code).then(() => {
-      setCopied(true);
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 1500);
-    });
-  };
+  const [copied, doCopy] = useCopy();
+  const copy = () => doCopy(code);
   return (
     <div className="md-code-wrap">
       <div className="md-code-bar">

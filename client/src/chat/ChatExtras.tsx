@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Autonomy, ChatAttachment, ChatCommand, ChatItem, ChatState, Effort, UiLevel } from '../../../shared/model';
+import { effortLabel } from '../format';
 import { t } from '../i18n';
 
 // Pedaços da conversa que vieram do app do Claude: a lista de tarefas do funcionário, os ajustes
@@ -178,7 +179,7 @@ export function ChatSettingsBar({
         {!effort && <option value="">{t('chat.effortPlaceholder')}</option>}
         {EFFORTS.map((e) => (
           <option key={e} value={e}>
-            {t('chat.effortOption', { e })}
+            {t('chat.effortOption', { e: effortLabel(e) })}
           </option>
         ))}
       </select>
