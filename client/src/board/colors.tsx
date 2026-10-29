@@ -170,6 +170,24 @@ export function BackgroundPicker({
 
 const STYLE_ID = 'myco-board-background';
 
+/** Quanto os pontinhos puxam para a tinta e os cartões para o branco, em cada tema. */
+const MIX: Record<Theme, { dot: number; card: number }> = { light: { dot: 14, card: 60 }, dark: { dot: 10, card: 5 } };
+
+/**
+ * Os tokens `--board`, `--board-dot` e `--card` de um fundo (sem fundo, os de fábrica). Servem
+ * também para um pedaço da tela: o chat do funcionário usa o fundo do workspace do projeto dele,
+ * para não confundir de quem é a conversa quando a aba aberta é outra.
+ */
+export function boardStyle(hex: string | null, theme: Theme): CSSProperties & Record<string, string> {
+  if (!hex || !HEX.test(hex)) return { '--board': 'var(--board-base)', '--board-dot': 'var(--board-dot-base)', '--card': 'var(--card-base)' };
+  const { dot, card } = MIX[theme];
+  return {
+    '--board': hex,
+    '--board-dot': `color-mix(in srgb, ${hex}, var(--ink) ${dot}%)`,
+    '--card': `color-mix(in srgb, ${hex}, #fff ${card}%)`,
+  };
+}
+
 /**
  * Aplica o fundo escolhido sobre os tokens do styles.css: o quadro, os pontinhos e os cartões
  * acompanham o tom (os pontinhos puxam para a tinta; os cartões, para o branco).
@@ -178,11 +196,11 @@ export function useBoardBackground(bg: BoardBackground | null | undefined) {
   const light = bg?.light && HEX.test(bg.light) ? bg.light : null;
   const dark = bg?.dark && HEX.test(bg.dark) ? bg.dark : null;
   useEffect(() => {
-    const rule = (hex: string, dot: number, card: number) =>
-      `:root:root { --board: ${hex}; --board-dot: color-mix(in srgb, ${hex}, var(--ink) ${dot}%); --card: color-mix(in srgb, ${hex}, #fff ${card}%); }`;
+    const rule = (hex: string, theme: Theme) =>
+      `:root:root { ${Object.entries(boardStyle(hex, theme)).map(([k, v]) => `${k}: ${v};`).join(' ')} }`;
     const css = [
-      light && `@media (prefers-color-scheme: light) { ${rule(light, 14, 60)} }`,
-      dark && `@media (prefers-color-scheme: dark) { ${rule(dark, 10, 5)} }`,
+      light && `@media (prefers-color-scheme: light) { ${rule(light, 'light')} }`,
+      dark && `@media (prefers-color-scheme: dark) { ${rule(dark, 'dark')} }`,
     ]
       .filter(Boolean)
       .join('\n');

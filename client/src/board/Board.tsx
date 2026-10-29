@@ -412,16 +412,28 @@ export function BoardView(props: BoardViewProps) {
           value={tab}
           onChange={setTab}
           onConfig={props.onConfig}
-          onNewProject={() => props.onNewProject(tab === TAB_ALL || tab === TAB_NONE ? null : tab)}
         />
         {tab !== TAB_ALL && !board.projects.length && <p className="muted small workspace-empty">{t('office.emptyTab')}</p>}
       </Panel>
-      <Panel position="bottom-right" className="legend">
-        <span className="legend-item legend-project">{t('board.legendProject')}</span>
-        <span className="legend-item legend-agent">{t('board.legendEmployee')}</span>
-        <span className="legend-item legend-skill">{t('board.skillWord')}</span>
-        <span className="legend-item legend-calls">{t('board.alsoCalls')}</span>
-        <span className="legend-item legend-borrow">{t('board.legendBorrow')}</span>
+      {/* Canto de baixo: legenda (aparece no hover) e o novo projeto, discreto até o mouse chegar.
+          Os painéis laterais ficam por cima dos dois. */}
+      <Panel position="bottom-right" className="board-corner">
+        <div className="legend">
+          <span className="legend-item legend-project">{t('board.legendProject')}</span>
+          <span className="legend-item legend-agent">{t('board.legendEmployee')}</span>
+          <span className="legend-item legend-skill">{t('board.skillWord')}</span>
+          <span className="legend-item legend-calls">{t('board.alsoCalls')}</span>
+          <span className="legend-item legend-borrow">{t('board.legendBorrow')}</span>
+        </div>
+        <button
+          type="button"
+          className="fab"
+          title={t('office.newProjectTitle')}
+          aria-label={t('office.newProjectTitle')}
+          onClick={() => props.onNewProject(tab === TAB_ALL || tab === TAB_NONE ? null : tab)}
+        >
+          {t('office.newProject')}
+        </button>
       </Panel>
     </ReactFlow>
     </EdgeActions.Provider>

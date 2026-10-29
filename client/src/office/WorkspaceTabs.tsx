@@ -14,11 +14,10 @@ interface Props {
   value: string;
   onChange: (tab: string) => void;
   onConfig: (config: AppConfig) => void;
-  onNewProject: () => void;
 }
 
 /** Abas logo abaixo do topo: filtram as salas do quadro, sem sair da página. */
-export function WorkspaceTabs({ config, workspaceOf, inUse, inbox, value, onChange, onConfig, onNewProject }: Props) {
+export function WorkspaceTabs({ config, workspaceOf, inUse, inbox, value, onChange, onConfig }: Props) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -101,13 +100,16 @@ export function WorkspaceTabs({ config, workspaceOf, inUse, inbox, value, onChan
           {error && <span className="error small">{error}</span>}
         </span>
       ) : (
-        <button type="button" className="workspace-tab workspace-tab-add" title={t('office.addWorkspaceTitle')} onClick={() => setAdding(true)}>
-          {t('office.addWorkspace')}
+        <button
+          type="button"
+          className="workspace-tab workspace-tab-add"
+          title={t('office.addWorkspaceTitle')}
+          aria-label={t('office.addWorkspaceTitle')}
+          onClick={() => setAdding(true)}
+        >
+          +
         </button>
       )}
-      <button type="button" className="workspace-tab workspace-tab-add" title={t('office.newProjectTitle')} onClick={onNewProject}>
-        {t('office.newProject')}
-      </button>
     </div>
   );
 }

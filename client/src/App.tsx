@@ -19,7 +19,7 @@ import type {
 } from '../../shared/model';
 import { api, withUsageConfirm } from './api';
 import { BoardView } from './board/Board';
-import { useBoardBackground } from './board/colors';
+import { boardStyle, useBoardBackground, useSystemTheme } from './board/colors';
 import { archiveKey, employeeNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
 import { QuickJump } from './toolbar/QuickJump';
 import {
@@ -37,7 +37,7 @@ import { t } from './i18n';
 import { useInbox } from './inbox/useInbox';
 import { AgentForm, type AgentFormTarget } from './staff/AgentForm';
 import { NewProjectForm } from './office/NewProjectForm';
-import { readTab, writeTab } from './office/workspaces';
+import { readTab, workspaceByProject, writeTab } from './office/workspaces';
 import { ProjectOffice } from './office/ProjectOffice';
 import { StaffForm, type StaffFormMode } from './staff/HireForm';
 import { TasksBoard } from './tasks/TasksBoard';
@@ -210,6 +210,15 @@ export function App() {
   };
 
   const selection = useMemo(() => (board ? resolveSelection(board, selectedId) : null), [board, selectedId]);
+  // Chat do funcionário no fundo do workspace do projeto dele (não no da aba aberta): a cor diz de
+  // quem é a conversa. Sem fundo no workspace, vale o geral; sem geral, o de fábrica.
+  const theme = useSystemTheme();
+  const chatStyle = useMemo(() => {
+    if (!board || selection?.kind !== 'employee') return undefined;
+    const wsId = workspaceByProject(board.projects, config).get(selection.projectId);
+    const ws = config?.workspaces.find((w) => w.id === wsId);
+    return boardStyle(ws?.background[theme] ?? config?.boardBackground[theme] ?? null, theme);
+  }, [board, selection, config, theme]);
   const isArchived = (kind: 'project' | 'session', id: string) =>
     (kind === 'project' ? config?.archived.projects : config?.archived.sessions)?.includes(id) ?? false;
 
@@ -289,7 +298,7 @@ export function App() {
         </ReactFlowProvider>
       )}
       {board && selection && (
-        <aside className={`drawer ${selection.kind === 'employee' ? 'drawer-wide drawer-chat' : ''}`}>
+        <aside className={`drawer ${selection.kind === 'employee' ? 'drawer-wide drawer-chat' : ''}`} style={chatStyle}>
           <button className="drawer-close" onClick={() => setSelectedId(null)} aria-label={t('app.close')}>
             ×
           </button>

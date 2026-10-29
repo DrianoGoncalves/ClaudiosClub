@@ -1,8 +1,13 @@
 /* Quadro branco no claro, quadro negro (giz) no escuro. As cores das canetas são as mesmas variáveis
    usadas pelos traços do rough.js. */
 :root {
-  --board: #fbfaf6;
-  --board-dot: #dcd8cd;
+  /* Papel de fábrica (`-base`): o fundo escolhido (geral/aba) troca só `--board`, `--board-dot` e
+     `--card`; o chat do funcionário volta à base quando o workspace dele não tem fundo próprio. */
+  --board-base: #fbfaf6;
+  --board-dot-base: #dcd8cd;
+  --card-base: #fffdf8;
+  --board: var(--board-base);
+  --board-dot: var(--board-dot-base);
   --ink: #1f2328;
   --ink-blue: #1f4fbf;
   --ink-green: #1d7a46;
@@ -11,7 +16,7 @@
   --ink-muted: #8a8f96;
   --highlight: rgba(255, 214, 10, 0.55);
   --highlight-solid: #ffd60a;
-  --card: #fffdf8;
+  --card: var(--card-base);
 
   --panel: #ffffff;
   --muted: #6b7076;
@@ -46,8 +51,9 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --board: #1f2a25;
-    --board-dot: #34433b;
+    --board-base: #1f2a25;
+    --board-dot-base: #34433b;
+    --card-base: #27322c;
     --ink: #eef0ea;
     --ink-blue: #9cc0ff;
     --ink-green: #9fe0b4;
@@ -56,7 +62,6 @@
     --ink-muted: #8fa098;
     --highlight: rgba(255, 230, 120, 0.25);
     --highlight-solid: #8a7a2e;
-    --card: #27322c;
 
     --panel: #222228;
     --muted: #a3aca7;
@@ -773,8 +778,17 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
 
 .legend { display: flex; gap: 14px; font-family: var(--hand); font-size: 18px; background: color-mix(in srgb, var(--board) 85%, transparent); padding: 2px 10px; border-radius: 8px; }
 /* Escondida até o mouse chegar no canto inferior direito (o painel continua lá, invisível, como área de hover). */
-.react-flow__panel.legend { opacity: 0; transition: opacity 0.15s; }
-.react-flow__panel.legend:hover { opacity: 1; }
+.board-corner .legend { opacity: 0; transition: opacity 0.15s; }
+.board-corner .legend:hover { opacity: 1; }
+/* Canto de baixo à direita: legenda + novo projeto lado a lado (z-index do painel do React Flow, abaixo do .drawer). */
+.board-corner { display: flex; align-items: center; gap: 10px; }
+.fab {
+  font: inherit; font-size: 14px; font-weight: 600; color: var(--ink-blue); background: var(--panel);
+  border: 1.5px solid var(--ink-blue); border-radius: 999px; padding: 8px 16px; cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); opacity: 0.55; transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+.fab:hover, .fab:focus-visible { opacity: 1; }
+.fab:hover { background: var(--ink-blue); color: var(--card); }
 .legend-item::before { content: ''; display: inline-block; width: 18px; height: 0; border-top: 2.5px solid; vertical-align: middle; margin-right: 5px; }
 .legend-project { color: var(--ink-blue); }
 .legend-agent { color: var(--ink); }
