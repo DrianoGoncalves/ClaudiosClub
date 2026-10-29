@@ -17,6 +17,14 @@ const KIND_LABEL: Record<InboxItem['kind'], string> = {
   orphan: t('inbox.kindOrphan'),
 };
 
+/** Itens que só se dispensam ganham um X no canto; o title explica o que o X faz. Segredo tem duas ações, com texto. */
+function dismissTitleOf(item: InboxItem): string | null {
+  if (item.id.startsWith('question:')) return t('office.questionSeenTitle');
+  if (item.id.startsWith('waiting:')) return t('inbox.dismissWaitingTitle');
+  if (item.kind === 'routine') return t('inbox.dismissTitle');
+  return null;
+}
+
 export function InboxMenu({ inbox, onOpen }: { inbox: InboxView; onOpen: (item: InboxItem) => void }) {
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -58,8 +66,10 @@ export function InboxMenu({ inbox, onOpen }: { inbox: InboxView; onOpen: (item: 
             <p className="muted small inbox-empty">{t('inbox.nothingBody')}</p>
           ) : (
             <ul className="inbox-list">
-              {inbox.items.map((item) => (
-                <li key={item.id}>
+              {inbox.items.map((item) => {
+                const dismissTitle = dismissTitleOf(item);
+                return (
+                <li key={item.id} className={dismissTitle ? 'inbox-has-x' : undefined}>
                   <button
                     role="menuitem"
                     className={`inbox-item inbox-${item.kind}`}
@@ -86,18 +96,14 @@ export function InboxMenu({ inbox, onOpen }: { inbox: InboxView; onOpen: (item: 
                       </button>
                     </span>
                   )}
-                  {item.id.startsWith('question:') && (
-                    <button className="link small inbox-dismiss" title={t('office.questionSeenTitle')} onClick={() => void inbox.dismiss(item)}>
-                      {t('office.questionSeen')}
-                    </button>
-                  )}
-                  {item.kind === 'routine' && (
-                    <button className="link small inbox-dismiss" title={t('inbox.dismissTitle')} onClick={() => void inbox.dismiss(item)}>
-                      {t('inbox.routineOk')}
+                  {dismissTitle && (
+                    <button className="drawer-close inbox-x" title={dismissTitle} aria-label={t('inbox.dismiss')} onClick={() => void inbox.dismiss(item)}>
+                      ×
                     </button>
                   )}
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
           {inbox.canNotify && (

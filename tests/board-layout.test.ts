@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Agent, Board, CostReport, LinkInfo, Project, Session, Skill, StaffProfile } from '../shared/model';
+import type { Agent, Board, CostReport, InboxItem, LinkInfo, Project, Session, Skill, StaffProfile } from '../shared/model';
 import { buildGraph, SIZES, type BoardNode, type BoardNodeType } from '../client/src/board/layout';
 
 const FILE: LinkInfo = { kind: 'file', target: null };
@@ -443,5 +443,50 @@ describe('buildGraph', () => {
     const { nodes } = buildGraph(board(), { showWorktrees: false });
     const a = nodes.find((n) => n.id === 'p:a');
     expect(a?.type === 'project' && a.data.live.map((s) => s.sessionId)).toEqual(['1']);
+  });
+
+  it('esperando você: cartão e contador da sala destacam quem tem item na caixa, mesmo com a sessão parada', () => {
+    const b = board();
+    b.staff = [staffProfile('ana', ['s-a1'])];
+    // O turno de s-a1 acabou perguntando: a sessão está parada (idle), não esperando resposta.
+    b.live = [{ sessionId: 's-a1', pid: 9, cwd: A, name: null, status: 'idle', alive: true, entrypoint: null, kind: null, startedAt: null, statusUpdatedAt: null }];
+    const question: InboxItem = {
+      id: 'question:s-a1:t', kind: 'waiting', projectId: 'a', projectName: 'a', sessionId: 's-a1', staffId: null,
+      name: 'Refatorar DS', summary: 'perguntou: qual branch?', at: '2026-10-29T10:00:00.000Z',
+    };
+    const routine: InboxItem = { ...question, id: 'routine:r1', kind: 'routine', sessionId: '', staffId: 'ana', name: 'ANA', summary: 'rotina pulada' };
+    const graph = (inbox: InboxItem[]) => buildGraph(b, { showWorktrees: false, inbox }).nodes;
+    const emp = (nodes: BoardNode[], id: string) => {
+      const n = nodes.find((x) => x.id === id);
+      return n?.type === 'employee' ? n.data : null;
+    };
+    const proj = (nodes: BoardNode[], id: string) => {
+      const n = nodes.find((x) => x.id === id);
+      return n?.type === 'project' ? n.data : null;
+    };
+
+    // Sem item e com a sessão parada: nada destaca.
+    expect(emp(graph([]), 'h:a:ana')?.needsYou).toBe(false);
+    expect(proj(graph([]), 'p:a')?.awaiting).toBe(0);
+    // Pergunta na caixa de uma sessão da ficha: o cartão da ficha destaca; o contador da sala conta a sessão viva.
+    expect(emp(graph([question]), 'h:a:ana')?.needsYou).toBe(true);
+    expect(proj(graph([question]), 'p:a')?.awaiting).toBe(1);
+    // Rotina pulada da ficha (sem sessão) também destaca o cartão dela.
+    expect(emp(graph([routine]), 'h:a:ana')?.needsYou).toBe(true);
+    // Sessão esperando em outro lugar que você dispensou (sem item na caixa): o cartão apaga.
+    b.live = [{ ...b.live[0]!, status: 'waiting' }];
+    expect(emp(graph([]), 'h:a:ana')?.needsYou).toBe(false);
+    expect(proj(graph([]), 'p:a')?.awaiting).toBe(0);
+  });
+
+  it('sessão solta com item na caixa destaca o próprio cartão', () => {
+    const b = board();
+    b.live = [{ sessionId: 's-a2', pid: 8, cwd: A, name: null, status: 'idle', alive: true, entrypoint: null, kind: null, startedAt: null, statusUpdatedAt: null }];
+    const item: InboxItem = { id: 'error:s-a2', kind: 'error', projectId: 'a', projectName: 'a', sessionId: 's-a2', staffId: null, name: 'sessão', summary: 'erro', at: null };
+    const { nodes } = buildGraph(b, { showWorktrees: false, inbox: [item] });
+    const n = nodes.find((x) => x.id === 'e:s-a2');
+    expect(n?.type === 'employee' && n.data.needsYou).toBe(true);
+    const other = nodes.find((x) => x.id === 'e:s-a1');
+    expect(other?.type === 'employee' && other.data.needsYou).toBe(false);
   });
 });

@@ -3,10 +3,11 @@ import { createPortal } from 'react-dom';
 import { CONTEXT_SWITCHES, type AppConfig, type BoardBackground, type ContextSwitch, type Project, type ProjectColor, type SendPriority, type UiLevel, type UsageStop, type Workspace } from '../../../shared/model';
 import { DemoButton, WorkspacesEditor } from '../office/WorkspacesSettings';
 import { api } from '../api';
-import { BackgroundPicker, RoomColorPicker, useSystemTheme } from '../board/colors';
+import { RoomColorPicker, useSystemTheme } from '../board/colors';
 import { useChatDetail } from '../chat/chatDetail';
 import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
 import { RolesEditor } from './RolesEditor';
+import { ThemeBackgrounds } from './ThemeBackgrounds';
 
 // Configurações do Claudio’s Club, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
 // com título, descrição e o controle logo abaixo. Abre pelo botão "config" ou com Ctrl+,.
@@ -48,14 +49,23 @@ interface Props {
   contextSwitch: ContextSwitch | null;
 }
 
-type GroupId = 'board' | 'look' | 'chat' | 'roles' | 'usage';
+type GroupId = 'general' | 'board' | 'chat' | 'roles' | 'usage';
 
 const GROUPS: Array<{ id: GroupId; label: string; intro: string }> = [
+  { id: 'general', label: t('toolbar.groupGeneral'), intro: t('toolbar.groupGeneralIntro') },
   { id: 'board', label: t('toolbar.groupBoard'), intro: t('toolbar.groupBoardIntro') },
-  { id: 'look', label: t('toolbar.groupLook'), intro: t('toolbar.groupLookIntro') },
   { id: 'chat', label: t('toolbar.groupChat'), intro: t('toolbar.groupChatIntro') },
   { id: 'roles', label: t('toolbar.groupRoles'), intro: t('toolbar.groupRolesIntro') },
   { id: 'usage', label: t('toolbar.groupUsage'), intro: t('toolbar.groupUsageIntro') },
+];
+
+type SectionId = 'workspaces' | 'colors' | 'display';
+
+/** Blocos com título dentro de um grupo, nesta ordem. Itens sem bloco vêm antes. */
+const SECTIONS: Array<{ id: SectionId; group: GroupId; label: string }> = [
+  { id: 'workspaces', group: 'board', label: t('toolbar.sectionWorkspaces') },
+  { id: 'colors', group: 'board', label: t('toolbar.sectionColors') },
+  { id: 'display', group: 'board', label: t('toolbar.sectionDisplay') },
 ];
 
 /** Singular ou plural da chave conforme n. */
@@ -64,6 +74,7 @@ const plural = (n: number, one: MsgKey, other: MsgKey) => t(n === 1 ? one : othe
 interface Setting {
   id: string;
   group: GroupId;
+  section?: SectionId;
   title: string;
   description: string;
   /** Palavras a mais para a busca (sinônimos, o nome antigo do item). */
@@ -87,7 +98,7 @@ const matches = (text: string, words: string[]) => {
 export function SettingsMenu(props: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const [active, setActive] = useState<GroupId>('board');
+  const [active, setActive] = useState<GroupId>('general');
   const [top, setTop] = useState(64);
   const root = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -150,8 +161,9 @@ export function SettingsMenu(props: Props) {
   const settings = props.uiLevel === 'simple' ? all.filter((s) => !s.advanced) : all;
   const hidden = all.length - settings.length;
   const groupLabel = (id: GroupId) => GROUPS.find((g) => g.id === id)!.label;
+  const sectionLabel = (id?: SectionId) => SECTIONS.find((x) => x.id === id)?.label ?? '';
   const visible = settings.filter(
-    (s) => !words.length || matches(`${groupLabel(s.group)} ${s.title} ${s.description} ${s.keywords ?? ''}`, words),
+    (s) => !words.length || matches(`${groupLabel(s.group)} ${sectionLabel(s.section)} ${s.title} ${s.description} ${s.keywords ?? ''}`, words),
   );
   const count = (g: GroupId) => visible.filter((s) => s.group === g).length;
 
@@ -215,10 +227,23 @@ export function SettingsMenu(props: Props) {
               <h3 className="settings-group-title">{g.label}</h3>
               <p className="muted small settings-group-intro">{g.intro}</p>
               {visible
-                .filter((s) => s.group === g.id)
+                .filter((s) => s.group === g.id && !s.section)
                 .map((s) => (
                   <SettingRow key={s.id} setting={s} />
                 ))}
+              {SECTIONS.filter((x) => x.group === g.id).map((x) => {
+                const items = visible.filter((s) => s.section === x.id);
+                return (
+                  items.length > 0 && (
+                    <div key={x.id} className="settings-section">
+                      <h4 className="settings-section-title">{x.label}</h4>
+                      {items.map((s) => (
+                        <SettingRow key={s.id} setting={s} />
+                      ))}
+                    </div>
+                  )
+                );
+              })}
             </section>
           ))}
           {!visible.length && (
@@ -291,7 +316,7 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       ? [
           {
             id: 'ui-level',
-            group: 'board' as const,
+            group: 'general' as const,
             title: t('toolbar.uiLevelTitle'),
             description: t('toolbar.uiLevelDesc'),
             keywords: t('toolbar.uiLevelKeywords'),
@@ -299,9 +324,27 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
           },
         ]
       : []),
+    // Idioma: a escolha vale para a página toda e recarrega.
+    {
+      id: 'language',
+      group: 'general',
+      title: t('toolbar.languageTitle'),
+      description: t('toolbar.languageDesc'),
+      keywords: t('toolbar.languageKeywords'),
+      control: (
+        <select className="setting-select" value={locale()} aria-label={t('toolbar.languageTitle')} onChange={(e) => setLocale(e.target.value as Locale)}>
+          {LOCALES.map((l) => (
+            <option key={l.id} value={l.id}>
+              {l.label}
+            </option>
+          ))}
+        </select>
+      ),
+    },
     {
       id: 'worktrees',
       group: 'board',
+      section: 'display',
       title: t('toolbar.worktreesTitle'),
       description: t('toolbar.worktreesDesc'),
       keywords: t('toolbar.worktreesKeywords'),
@@ -313,16 +356,19 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
           {
             id: 'workspaces',
             group: 'board' as const,
+            section: 'workspaces' as const,
             title: t('office.workspacesTitle'),
             description: t('office.workspacesDesc'),
             keywords: t('office.workspacesKeywords'),
-            control: <WorkspacesEditor workspaces={p.workspaces} projectWorkspaces={p.projectWorkspaces} onConfig={p.onConfig} />,
+            control: (
+              <WorkspacesEditor workspaces={p.workspaces} projectWorkspaces={p.projectWorkspaces} background={p.boardBackground} onConfig={p.onConfig} />
+            ),
           },
         ]
       : []),
     {
       id: 'demo',
-      group: 'board',
+      group: 'general',
       title: t('office.demoTitle'),
       description: t('office.demoDesc'),
       keywords: t('office.demoKeywords'),
@@ -352,6 +398,7 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
     {
       id: 'archived',
       group: 'board',
+      section: 'display',
       title: `${t('toolbar.archivedTitle')}${p.archivedCount > 0 ? ` (${p.archivedCount})` : ''}`,
       description: t('toolbar.archivedDesc'),
       keywords: t('toolbar.archivedKeywords'),
@@ -360,6 +407,7 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
     {
       id: 'animations',
       group: 'board',
+      section: 'display',
       title: t('toolbar.animationsTitle'),
       description: t('toolbar.animationsDesc'),
       keywords: t('toolbar.animationsKeywords'),
@@ -368,6 +416,7 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
     {
       id: 'refresh',
       group: 'board',
+      section: 'display',
       title: t('toolbar.refreshTitle'),
       description: t('toolbar.refreshDesc'),
       keywords: t('toolbar.refreshKeywords'),
@@ -379,7 +428,7 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
     },
     {
       id: 'server',
-      group: 'board',
+      group: 'general',
       title: t('toolbar.serverTitle'),
       description: t('toolbar.serverDesc'),
       keywords: t('toolbar.serverKeywords'),
@@ -387,48 +436,18 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
     },
   ];
 
-  // Idioma: a escolha vale para a página toda e recarrega.
-  out.push({
-    id: 'language',
-    group: 'look',
-    title: t('toolbar.languageTitle'),
-    description: t('toolbar.languageDesc'),
-    keywords: t('toolbar.languageKeywords'),
-    control: (
-      <select className="setting-select" value={locale()} aria-label={t('toolbar.languageTitle')} onChange={(e) => setLocale(e.target.value as Locale)}>
-        {LOCALES.map((l) => (
-          <option key={l.id} value={l.id}>
-            {l.label}
-          </option>
-        ))}
-      </select>
-    ),
-  });
-
+  // Fundo geral: claro e escuro lado a lado, cada um com o padrão de fábrica.
   if (p.boardBackground) {
-    const bg = p.boardBackground;
-    out.push(
-      {
-        id: 'background-light',
-        group: 'look',
-        title: t('toolbar.bgLightTitle'),
-        badge: theme === 'light' ? t('toolbar.inUseNow') : undefined,
-        description: t('toolbar.bgLightDesc'),
-        keywords: t('toolbar.bgLightKeywords'),
-        control: <BackgroundPicker theme="light" value={bg.light} onChange={(light) => p.onBoardBackground({ light })} />,
-        advanced: true,
-      },
-      {
-        id: 'background-dark',
-        group: 'look',
-        title: t('toolbar.bgDarkTitle'),
-        badge: theme === 'dark' ? t('toolbar.inUseNow') : undefined,
-        description: t('toolbar.bgDarkDesc'),
-        keywords: t('toolbar.bgDarkKeywords'),
-        control: <BackgroundPicker theme="dark" value={bg.dark} onChange={(dark) => p.onBoardBackground({ dark })} />,
-        advanced: true,
-      },
-    );
+    out.push({
+      id: 'background',
+      group: 'board',
+      section: 'colors',
+      title: t('toolbar.bgTitle'),
+      description: t('toolbar.bgDesc'),
+      keywords: t('toolbar.bgKeywords'),
+      control: <ThemeBackgrounds value={p.boardBackground} current={theme} onChange={(th, hex) => p.onBoardBackground({ [th]: hex })} />,
+      advanced: true,
+    });
   }
 
   if (p.projectColors) {
@@ -438,7 +457,8 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
     const rooms = words.length && !matches(text, words) ? p.rooms.filter((r) => matches(r.name, words)) : p.rooms;
     out.push({
       id: 'room-colors',
-      group: 'look',
+      group: 'board',
+      section: 'colors',
       title: t('toolbar.roomColorsTitle'),
       description: t('toolbar.roomColorsDesc'),
       keywords: `${t('toolbar.roomColorsKeywords')} ${p.rooms.map((r) => r.name).join(' ')}`,

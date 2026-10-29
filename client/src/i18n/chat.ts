@@ -1,4 +1,4 @@
-﻿import { defineMessages } from './define';
+import { defineMessages } from './define';
 
 // Textos da conversa com o funcionário (chat, anexos, "o que mudou", pedidos de permissão).
 // pt-BR é a fonte; en e es têm as mesmas chaves, na mesma ordem.
@@ -97,6 +97,8 @@ export default defineMessages({
     'chat.closeDesktop': 'Feche a sessão no app do Claude (arquive ou feche o app) e clique em trazer.',
     'chat.closeTerminal': 'Feche a sessão lá (digite /exit ou feche a janela) e clique em trazer.',
     'chat.bringToMyco': 'Trazer para o Claudio’s Club',
+    'chat.takeOver': 'Assumir aqui',
+    'chat.takeOverConfirm': 'Assumir aqui? A aba no app do Claude ou no terminal perde a conexão. Comandos que ela deixou rodando (servidores MCP, npm run dev) também param. O histórico continua: feche aquela aba depois.',
     'chat.openElsewhereShort': 'aberta em outro lugar',
     'chat.unavailable': 'Conversa indisponível: {why}',
     'chat.placeholder': 'Mensagem para {name} · / comandos · @ arquivos',
@@ -130,6 +132,8 @@ export default defineMessages({
     'chat.imagesOther': '{n} imagens',
     'chat.attachments': 'anexos: {files}',
     'chat.heldByMyco': 'guardada pelo Claudio’s Club: {why}',
+    'chat.systemMessage': 'automática',
+    'chat.systemMessageHelp': 'Mensagem automática do Claudio’s Club, não foi você que escreveu',
     'chat.noOutput': '(sem saída)',
     'chat.contextNone': 'contexto: —',
     'chat.context': 'contexto',
@@ -280,6 +284,8 @@ export default defineMessages({
     'chat.closeDesktop': 'Close the session in the Claude app (archive it or quit the app), then click "Bring to Claudio’s Club".',
     'chat.closeTerminal': 'Close the session there (type /exit or close the window), then click "Bring to Claudio’s Club".',
     'chat.bringToMyco': 'Bring to Claudio’s Club',
+    'chat.takeOver': 'Take over here',
+    'chat.takeOverConfirm': 'Take over here? The tab in the Claude app or terminal loses its connection. Commands it left running (MCP servers, npm run dev) also stop. The history stays: close that tab afterwards.',
     'chat.openElsewhereShort': 'open somewhere else',
     'chat.unavailable': 'Conversation unavailable: {why}',
     'chat.placeholder': 'Message to {name} · / commands · @ files',
@@ -313,6 +319,8 @@ export default defineMessages({
     'chat.imagesOther': '{n} images',
     'chat.attachments': 'attachments: {files}',
     'chat.heldByMyco': 'held by Claudio’s Club: {why}',
+    'chat.systemMessage': 'automatic',
+    'chat.systemMessageHelp': 'Automatic message from Claudio’s Club, not written by you',
     'chat.noOutput': '(no output)',
     'chat.contextNone': 'context: —',
     'chat.context': 'context',
@@ -463,6 +471,8 @@ export default defineMessages({
     'chat.closeDesktop': 'Cierra la sesión en la app de Claude (archívala o cierra la app) y haz clic en "Traer a Claudio’s Club".',
     'chat.closeTerminal': 'Cierra la sesión allí (escribe /exit o cierra la ventana) y haz clic en "Traer a Claudio’s Club".',
     'chat.bringToMyco': 'Traer a Claudio’s Club',
+    'chat.takeOver': 'Asumir aquí',
+    'chat.takeOverConfirm': '¿Asumir aquí? La pestaña de la app de Claude o de la terminal pierde la conexión. Los comandos que dejó en marcha (servidores MCP, npm run dev) también se detienen. El historial sigue: cierra esa pestaña después.',
     'chat.openElsewhereShort': 'abierta en otro lugar',
     'chat.unavailable': 'Conversación no disponible: {why}',
     'chat.placeholder': 'Mensaje para {name} · / comandos · @ archivos',
@@ -496,6 +506,8 @@ export default defineMessages({
     'chat.imagesOther': '{n} imágenes',
     'chat.attachments': 'adjuntos: {files}',
     'chat.heldByMyco': 'retenido por Claudio’s Club: {why}',
+    'chat.systemMessage': 'automático',
+    'chat.systemMessageHelp': 'Mensaje automático de Claudio’s Club, no lo escribiste tú',
     'chat.noOutput': '(sin salida)',
     'chat.contextNone': 'contexto: —',
     'chat.context': 'contexto',

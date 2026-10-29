@@ -1,4 +1,4 @@
-﻿import { defineMessages } from './define';
+import { defineMessages } from './define';
 
 // Textos das áreas staff (contratação, ficha, agents, navegador) e inbox ("precisa de mim").
 export default defineMessages({
@@ -194,9 +194,10 @@ export default defineMessages({
     'inbox.secretTitle': 'Já troquei a senha/token: tirar o aviso',
     'inbox.secretDone': 'já troquei',
     'inbox.dismissTitle': 'Tirar o aviso',
-    'inbox.routineOk': 'ok, vi',
     'inbox.notifyTitle': 'Uma notificação do sistema a cada item novo, e quando alguém termina o trabalho, mesmo com o Claudio’s Club em segundo plano',
     'inbox.notifyLabel': 'avisar no sistema (inclusive quando alguém termina)',
+    'inbox.dismiss': 'Dispensar',
+    'inbox.dismissWaitingTitle': 'Tira da caixa até a sessão mudar de status',
   },
   en: {
     'staff.kickerEdit': 'edit employee',
@@ -385,9 +386,10 @@ export default defineMessages({
     'inbox.secretTitle': 'Already changed the password/token: dismiss the alert',
     'inbox.secretDone': 'already changed',
     'inbox.dismissTitle': 'Dismiss the alert',
-    'inbox.routineOk': 'ok, got it',
     'inbox.notifyTitle': 'A system notification for each new item, and when someone finishes their work, even with Claudio’s Club in the background',
     'inbox.notifyLabel': 'notify on the system (including when someone finishes)',
+    'inbox.dismiss': 'Dismiss',
+    'inbox.dismissWaitingTitle': 'Removes it from the inbox until the session changes status',
   },
   es: {
     'staff.kickerEdit': 'editar empleado',
@@ -576,8 +578,9 @@ export default defineMessages({
     'inbox.secretTitle': 'Ya cambié la contraseña/token: quitar el aviso',
     'inbox.secretDone': 'ya lo cambié',
     'inbox.dismissTitle': 'Quitar el aviso',
-    'inbox.routineOk': 'vale, lo vi',
     'inbox.notifyTitle': 'Una notificación del sistema por cada elemento nuevo, y cuando alguien termina su trabajo, incluso con Claudio’s Club en segundo plano',
     'inbox.notifyLabel': 'avisar en el sistema (incluso cuando alguien termina)',
+    'inbox.dismiss': 'Descartar',
+    'inbox.dismissWaitingTitle': 'Lo quita de la bandeja hasta que la sesión cambie de estado',
   },
 });

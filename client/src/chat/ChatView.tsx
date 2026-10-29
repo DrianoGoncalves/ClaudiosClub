@@ -20,6 +20,7 @@ import {
 import { ChangesPanel } from './ChangesPanel';
 import { useChatDetail } from './chatDetail';
 import { Markdown } from './markdown';
+import { systemMessageText } from './systemMessage';
 
 /** Prints no chat: até 4 por mensagem, com o lado maior em até 1568 px (o que o Claude lê sem reduzir). */
 const MAX_IMAGES = 4;
@@ -372,6 +373,11 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           <button className="btn-primary" onClick={() => void chat.recheck()}>
             {t('chat.bringToMyco')}
           </button>
+          {!chat.elsewhere.orphan && (chat.elsewhere.status === 'waiting' || chat.elsewhere.status === 'idle') && (
+            <button className="btn-secondary" onClick={() => window.confirm(t('chat.takeOverConfirm')) && void chat.takeOver()}>
+              {t('chat.takeOver')}
+            </button>
+          )}
         </div>
       )}
 
@@ -618,9 +624,16 @@ function Item({
   onRewind?: (uuid: string) => void;
 }) {
   switch (item.kind) {
-    case 'user':
+    case 'user': {
+      // Aviso automático da plataforma (entrega de tarefa, contexto…): à esquerda, neutro, com badge.
+      const system = systemMessageText(item.text);
       return (
-        <div className="msg msg-user">
+        <div className={`msg ${system === null ? 'msg-user' : 'msg-system'}`}>
+          {system !== null && (
+            <span className="badge dim msg-system-badge" title={t('chat.systemMessageHelp')}>
+              {t('chat.systemMessage')}
+            </span>
+          )}
           {onRewind && item.uuid && !item.held && (
             <button type="button" className="msg-rewind" title={t('chat.rewindHelp')} onClick={() => onRewind(item.uuid!)}>
               {t('chat.rewindHere')}
@@ -632,11 +645,12 @@ function Item({
             </span>
           ) : null}
           {item.files?.length ? <span className="msg-images">{t('chat.attachments', { files: item.files.join(', ') })}</span> : null}
-          {item.text}
+          {system === null ? item.text : <Markdown text={system} />}
           {item.queued && <span className="msg-queued">{QUEUED_TEXT[item.queued]}</span>}
           {item.held && <span className="msg-queued">{t('chat.heldByMyco', { why: item.held })}</span>}
         </div>
       );
+    }
     case 'assistant':
       return item.text ? (
         <div className="msg msg-assistant">

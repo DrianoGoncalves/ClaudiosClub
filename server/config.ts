@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { CONTEXT_SWITCHES, PROJECT_COLORS, type AppConfig, type ProjectColor, type Workspace } from '../shared/model';
+import { CONTEXT_SWITCHES, HEX_COLOR, PROJECT_COLORS, type AppConfig, type ProjectColor, type Workspace } from '../shared/model';
 import { pathKey } from './adapters/claude/paths';
 
 // Configuração do próprio Claudio’s Club, fora do ~/.claude: ~/.myco/config.json.
@@ -30,7 +30,8 @@ const DEFAULTS: AppConfig = {
 
 const PRIORITY = z.enum(['now', 'next', 'later']);
 const UI_LEVEL = z.enum(['simple', 'advanced']);
-const COLOR = z.enum(PROJECT_COLORS);
+// Caneta ou #rrggbb; o hex vai para um estilo inline, então só passa o formato exato.
+const COLOR = z.union([z.enum(PROJECT_COLORS), z.string().regex(HEX_COLOR).transform((s) => s.toLowerCase() as `#${string}`)]);
 const HEX = z.string().regex(/^#[0-9a-f]{6}$/i, 'cor inválida (use #rrggbb)');
 
 const percent = z.number().min(1).max(100).nullable();

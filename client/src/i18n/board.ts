@@ -1,4 +1,4 @@
-﻿import { defineMessages } from './define';
+import { defineMessages } from './define';
 
 export default defineMessages({
   'pt-BR': {
@@ -33,7 +33,7 @@ export default defineMessages({
     'board.bgBlack': 'preto',
     'board.bgNightPurple': 'roxo-noite',
     'board.bgCoffee': 'café',
-    'board.roomColor': 'Cor da sala',
+    'board.roomColor': 'Cor do projeto',
     'board.defaultGraphite': 'Padrão (grafite)',
     'board.defaultLabel': 'padrão',
     'board.bgLightTheme': 'Fundo no tema claro',
@@ -43,8 +43,8 @@ export default defineMessages({
     'board.otherColor': 'Outra cor',
     // Salas, funcionários, agents, skills e estantes (nodes.tsx)
     'board.dragToHire': 'Arraste para contratar um subordinado (ou solte sobre um funcionário para ligar)',
-    'board.collapseRoom': 'Dobrar a sala (fica só o cabeçalho)',
-    'board.openRoom': 'Abrir a sala',
+    'board.collapseRoom': 'Recolher o projeto (fica só o cabeçalho)',
+    'board.openRoom': 'Abrir o projeto',
     'board.resourceOne': '{n} agent/skill',
     'board.resourceOther': '{n} agents/skills',
     'board.youTitle': '~ você',
@@ -131,7 +131,7 @@ export default defineMessages({
     'board.bgBlack': 'black',
     'board.bgNightPurple': 'night purple',
     'board.bgCoffee': 'coffee',
-    'board.roomColor': 'Room color',
+    'board.roomColor': 'Project color',
     'board.defaultGraphite': 'Default (graphite)',
     'board.defaultLabel': 'default',
     'board.bgLightTheme': 'Background in light theme',
@@ -140,8 +140,8 @@ export default defineMessages({
     'board.defaultNamed': 'default ({name})',
     'board.otherColor': 'Other color',
     'board.dragToHire': 'Drag to hire a report (or drop onto an employee to link)',
-    'board.collapseRoom': 'Collapse room (header only)',
-    'board.openRoom': 'Open room',
+    'board.collapseRoom': 'Collapse project (header only)',
+    'board.openRoom': 'Open project',
     'board.resourceOne': '{n} agent/skill',
     'board.resourceOther': '{n} agents/skills',
     'board.youTitle': '~ you',
@@ -227,7 +227,7 @@ export default defineMessages({
     'board.bgBlack': 'negro',
     'board.bgNightPurple': 'morado noche',
     'board.bgCoffee': 'café',
-    'board.roomColor': 'Color de la sala',
+    'board.roomColor': 'Color del proyecto',
     'board.defaultGraphite': 'Predeterminado (grafito)',
     'board.defaultLabel': 'predeterminado',
     'board.bgLightTheme': 'Fondo en tema claro',
@@ -236,8 +236,8 @@ export default defineMessages({
     'board.defaultNamed': 'predeterminado ({name})',
     'board.otherColor': 'Otro color',
     'board.dragToHire': 'Arrastra para contratar a un subordinado (o suelta sobre un empleado para vincular)',
-    'board.collapseRoom': 'Plegar la sala (queda solo el encabezado)',
-    'board.openRoom': 'Abrir la sala',
+    'board.collapseRoom': 'Plegar el proyecto (queda solo el encabezado)',
+    'board.openRoom': 'Abrir el proyecto',
     'board.resourceOne': '{n} agente/skill',
     'board.resourceOther': '{n} agentes/skills',
     'board.youTitle': '~ tú',

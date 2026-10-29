@@ -39,6 +39,8 @@ export interface ChatView {
   commands: ChatCommand[];
   /** Confere de novo se a sessão ainda está aberta em outro lugar. */
   recheck: () => Promise<void>;
+  /** Assumir aqui: encerra a sessão aberta em outro lugar (que não está trabalhando) e retoma a conversa aqui. */
+  takeOver: () => Promise<void>;
 }
 
 export function useChat(projectId: string, initialSessionId: string | null, staffId: string | null): ChatView {
@@ -232,6 +234,17 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     }
   };
 
+  const takeOver = async () => {
+    if (!sessionId) return;
+    setError(null);
+    try {
+      await api.chatTakeOver(projectId, sessionId);
+      await load(sessionId);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
   return {
     sessionId,
     items: [...history, ...live, ...held],
@@ -247,5 +260,6 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     settings,
     commands: state?.commands?.length ? state.commands : knownCommands,
     recheck,
+    takeOver,
   };
 }

@@ -8,12 +8,15 @@ import { writeAtomic } from './staff/store';
 interface Data {
   questions: Record<string, { text: string; at: string }>;
   muted: string[];
+  /** Sessões esperando você em outro lugar que você dispensou: sessionId → statusUpdatedAt visto ('' = sem data). */
+  waitingDismissed: Record<string, string>;
 }
 
 const MAX_MUTED = 500;
+const MAX_WAITING = 500;
 
 export class InboxState {
-  private data: Data = { questions: {}, muted: [] };
+  private data: Data = { questions: {}, muted: [], waitingDismissed: {} };
   private saving: Promise<void> = Promise.resolve();
 
   constructor(private readonly file: string | null = null) {
@@ -25,6 +28,10 @@ export class InboxState {
         if (q && typeof q.text === 'string' && typeof q.at === 'string') this.data.questions[id] = { text: q.text.slice(0, 200), at: q.at };
       }
       this.data.muted = Array.isArray(raw.muted) ? raw.muted.filter((m): m is string => typeof m === 'string').slice(-MAX_MUTED) : [];
+      const waiting = raw.waitingDismissed && typeof raw.waitingDismissed === 'object' ? raw.waitingDismissed : {};
+      for (const [sid, at] of Object.entries(waiting)) {
+        if (typeof at === 'string') this.data.waitingDismissed[sid] = at;
+      }
     } catch {
       // sem arquivo (ou corrompido): começa vazio
     }
@@ -49,6 +56,17 @@ export class InboxState {
     if (this.isMuted(id)) return;
     this.data.muted = [...this.data.muted, id].slice(-MAX_MUTED);
     this.save();
+  }
+
+  /** "Dispensar" numa sessão que espera você em outro lugar: some até o status mudar (outro `statusUpdatedAt`). */
+  dismissWaiting(sessionId: string, statusUpdatedAt: string | null) {
+    const rest = Object.entries(this.data.waitingDismissed).filter(([sid]) => sid !== sessionId);
+    this.data.waitingDismissed = Object.fromEntries([...rest, [sessionId, statusUpdatedAt ?? '']].slice(-MAX_WAITING));
+    this.save();
+  }
+
+  isWaitingDismissed(sessionId: string, statusUpdatedAt: string | null): boolean {
+    return this.data.waitingDismissed[sessionId] === (statusUpdatedAt ?? '');
   }
 
   /** Grava em fila: duas mudanças juntas não se atropelam. */

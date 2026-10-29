@@ -250,6 +250,7 @@ export const api = {
   chatCompact: (projectId: string, sessionId: string, staffId: string | null, force = false) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/chat/${sessionId}/compact`, { staffId, force }),
   chatAdopt: (sessionId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/adopt`),
+  chatTakeOver: (projectId: string, sessionId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/takeover`, { projectId }),
   chatPermission: (
     sessionId: string,
     requestId: string,
@@ -261,6 +262,7 @@ export const api = {
   turns: (since: string) => get<TurnNotice[]>(`/api/turns?since=${encodeURIComponent(since)}`),
   dismissSecret: (id: string, notSecret = false) => post<{ ok: boolean }>('/api/secrets/dismiss', { id, notSecret }),
   dismissQuestion: (sessionId: string) => post<{ ok: boolean }>('/api/questions/dismiss', { sessionId }),
+  dismissWaiting: (sessionId: string) => post<{ ok: boolean }>('/api/waiting/dismiss', { sessionId }),
   dismissRoutineAlert: (id: string) => post<{ ok: boolean }>('/api/routines/alerts/dismiss', { id }),
   routineState: () => get<Record<string, RoutineRun>>('/api/routines/state'),
   taskSummary: () => get<Record<string, TaskSummary>>('/api/tasks/summary'),

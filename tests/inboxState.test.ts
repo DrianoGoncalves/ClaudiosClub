@@ -29,6 +29,24 @@ describe('o que a caixa lembra entre reinícios', () => {
     expect(b.isMuted('s1:uma senha')).toBe(false);
   });
 
+  it('"dispensar" numa sessão esperando você em outro lugar: some até o status mudar, e sobrevive a reabrir', async () => {
+    const file = path.join(root, 'inbox-espera.json');
+    const a = new InboxState(file);
+    expect(a.isWaitingDismissed('w1', '2026-10-29T10:00:00Z')).toBe(false);
+    a.dismissWaiting('w1', '2026-10-29T10:00:00Z');
+    expect(a.isWaitingDismissed('w1', '2026-10-29T10:00:00Z')).toBe(true);
+    // Mudou de status (outro statusUpdatedAt): volta a aparecer na caixa.
+    expect(a.isWaitingDismissed('w1', '2026-10-29T10:05:00Z')).toBe(false);
+    a.dismissWaiting('w2', null);
+    expect(a.isWaitingDismissed('w2', null)).toBe(true);
+    await a.flush();
+
+    const b = new InboxState(file);
+    expect(b.isWaitingDismissed('w1', '2026-10-29T10:00:00Z')).toBe(true);
+    expect(b.isWaitingDismissed('w2', null)).toBe(true);
+    expect(b.isWaitingDismissed('w2', '2026-10-29T10:00:00Z')).toBe(false);
+  });
+
   it('arquivo corrompido ou ausente: começa vazio; sem arquivo, só na memória', async () => {
     const bad = path.join(root, 'ruim.json');
     await fs.writeFile(bad, '{ não é json');

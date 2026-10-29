@@ -720,6 +720,18 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       return { ok: chats.dismissQuestion(b.sessionId) };
     },
   ],
+  [
+    'POST',
+    /^\/api\/waiting\/dismiss$/,
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      const b = parse(z.object({ sessionId: z.string().min(1).max(100) }), body);
+      // Só sessão viva e esperando: o statusUpdatedAt guardado é o de agora, lido aqui (não o que o cliente diz).
+      const l = (await adapter.listLiveSessions()).find((s) => s.sessionId === b.sessionId && s.alive && s.status === 'waiting');
+      if (l) inboxState.dismissWaiting(l.sessionId, l.statusUpdatedAt);
+      return { ok: !!l };
+    },
+  ],
   ['POST', new RegExp(`^/api/chat/${ID}/interrupt$`), async ({ params: [sid] }) => (chats.interrupt(sid!), { ok: true })],
   ['POST', new RegExp(`^/api/chat/${ID}/stop$`), async ({ params: [sid] }) => (chats.stop(sid!), { ok: true })],
   [
@@ -728,6 +740,18 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     async ({ params: [sid], fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       await chats.adopt(sid!);
+      return { ok: true };
+    },
+  ],
+  // "Assumir aqui": sessão aberta no app do Claude ou num terminal. O pid sai do servidor, nunca do cliente.
+  [
+    'POST',
+    new RegExp(`^/api/chat/${ID}/takeover$`),
+    async ({ params: [sid], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      const b = parse(z.object({ projectId: z.string().min(1).max(200) }), body);
+      if (!(await projectById(b.projectId))) return null;
+      await chats.takeOver(sid!);
       return { ok: true };
     },
   ],
@@ -1127,6 +1151,8 @@ async function getInbox(): Promise<InboxItem[]> {
   const own = chats.ownPids();
   for (const l of live) {
     if (!l.alive || l.status !== 'waiting' || own.has(l.pid) || orphanIds.has(l.sessionId)) continue;
+    // Dispensada por você: volta só quando o status mudar (outro statusUpdatedAt).
+    if (inboxState.isWaitingDismissed(l.sessionId, l.statusUpdatedAt)) continue;
     const w = where(l.sessionId, l);
     if (hidden(w)) continue;
     const place = l.entrypoint === 'claude-desktop' ? 'no app do Claude' : l.entrypoint === 'sdk-cli' ? 'em outro programa' : 'num terminal';

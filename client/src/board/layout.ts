@@ -6,6 +6,7 @@ import type {
   CostReport,
   CostSummary,
   GitState,
+  InboxItem,
   LiveSession,
   Project,
   ProjectColor,
@@ -44,6 +45,8 @@ export type ProjectNodeData = {
   git: GitState | null;
   /** Tarefas em aberto e quantas esperam revisão (null: nenhuma). */
   tasks: { open: number; review: number } | null;
+  /** Funcionários da sala esperando você (ver EmployeeNodeData.needsYou): o contador do cabeçalho. */
+  awaiting: number;
 };
 export type EmployeeNodeData = {
   /** A sessão mais recente; null para quem foi contratado e ainda não abriu sessão. */
@@ -56,6 +59,11 @@ export type EmployeeNodeData = {
   /** Parte do funcionário no consumo total (0 a 1). */
   costShare: number | null;
   archived: boolean;
+  /**
+   * Esperando você (cartão amarelo): tem item na caixa "precisa de mim" (ver GraphOptions.inbox),
+   * ou a sessão viva está esperando resposta em outro lugar.
+   */
+  needsYou: boolean;
 };
 /** `share`: parte do agent no consumo de todos os subagents (0 a 1). */
 export type AgentNodeData = { agent: Agent; cost: { usd: number; runs: number; share: number } | null };
@@ -103,6 +111,8 @@ export interface GraphOptions {
   git?: Record<string, GitState>;
   /** Tarefas em aberto por id de projeto (ver /api/tasks/summary). */
   tasks?: Record<string, { open: number; review: number }>;
+  /** Itens da caixa "precisa de mim" (useInbox): quem tem item fica com o cartão amarelo. */
+  inbox?: InboxItem[];
   /**
    * Proporção (largura/altura) da área visível do quadro. Tela deitada: a grade cresce para a
    * direita; em pé: cresce para baixo. Sem ela, a de uma tela larga.
@@ -202,6 +212,17 @@ export function buildGraph(
   const agentsUsd = Object.values(costs?.agents ?? {}).reduce((s, a) => s + a.usd, 0);
   const share = (usd: number | null, total: number) => (usd === null || !total ? null : usd / total);
   const extraManagers: Array<{ projectId: string; staff: StaffProfile; managerId: string }> = [];
+  // A caixa é a fonte única de "precisa de mim": cartão e contador da sala leem o mesmo conjunto.
+  const inbox = opts.inbox ?? [];
+  const awaitingSessions = new Set(inbox.map((i) => i.sessionId).filter((id) => id !== ''));
+  const awaitingStaff = new Set(inbox.map((i) => i.staffId).filter((id): id is string => id !== null));
+  /**
+   * Esperando você: item na caixa de alguma das sessões ou da ficha. Sessão viva esperando em outro
+   * lugar já vira item no servidor; olhar o status aqui de novo faria o "Dispensar" não apagar o cartão.
+   */
+  const needsYou = (_live: LiveSession | null | undefined, sessionIds: string[], staffId: string | null): boolean =>
+    sessionIds.some((id) => awaitingSessions.has(id)) ||
+    (staffId !== null && awaitingStaff.has(staffId));
 
   const agentNode = (a: Agent): BoardNode => {
     const c = costs?.agents[a.name];
@@ -251,13 +272,15 @@ export function buildGraph(
       const latest = sessions.find((s) => mine.includes(s.id)) ?? null;
       const costsOfMine = mine.map(sessionCost).filter((c): c is number => c !== undefined);
       const costUsd = costsOfMine.length ? costsOfMine.reduce((a, b) => a + b, 0) : null;
+      const session = latest ? withLive(latest) : null;
       const data: EmployeeNodeData = {
-        session: latest ? withLive(latest) : null,
+        session,
         staff: st,
         projectId: p.id,
         costUsd,
         costShare: share(costUsd, totalUsd),
         archived: archivedSessions.has(`staff:${st.id}`),
+        needsYou: needsYou(session?.live, mine, st.id),
       };
       if (data.archived && !opts.showArchived) continue;
       const tree: Tree = { node: node(staffNodeId(p.id, st.id), 'employee', data), side: [], children: [] };
@@ -268,14 +291,16 @@ export function buildGraph(
       if (ownedBy.has(s.id)) continue;
       const archived = archivedSessions.has(s.id);
       if (archived && !opts.showArchived) continue;
+      const session = withLive(s);
       trees.push({
         node: node(employeeNodeId(s.id), 'employee', {
-          session: withLive(s),
+          session,
           staff: null,
           projectId: p.id,
           costUsd: sessionCost(s.id) ?? null,
           costShare: share(sessionCost(s.id) ?? null, totalUsd),
           archived,
+          needsYou: needsYou(session.live, [s.id], null),
         }),
         side: [],
         children: [],
@@ -311,6 +336,8 @@ export function buildGraph(
         costShare: share(costs?.projects[p.id]?.usd ?? null, totalUsd),
         git: opts.git?.[p.id] ?? null,
         tasks: opts.tasks?.[p.id] ?? null,
+        // Só as sessões vivas da sala (as que o cabeçalho mostra as bolinhas).
+        awaiting: liveFor(board.live, p.path).filter((s) => awaitingSessions.has(s.sessionId)).length,
       }),
       // Dobrada: só o cabeçalho, com o resumo; nada de equipe, recursos ou worktrees.
       side: folded ? [] : sideOf(id, [...inv.agents.map(agentNode), ...inv.skills.map(skillNode)]),

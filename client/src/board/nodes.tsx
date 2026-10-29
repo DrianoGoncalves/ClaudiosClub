@@ -1,6 +1,6 @@
 import { Handle, Position, type Node, type NodeProps, type NodeTypes } from '@xyflow/react';
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import type { GitState, LiveSession } from '../../../shared/model';
+import { colorCss, type GitState, type LiveSession } from '../../../shared/model';
 import { employeeName, ENTRYPOINT_LABEL, formatAgo, formatShare, initials, STATUS_LABEL } from '../format';
 import { BranchIcon, TasksIcon } from '../icons';
 import { t } from '../i18n';
@@ -93,7 +93,7 @@ export const portraitUrl = (projectId: string, staffId: string) => `/api/project
 
 /** Cor da parede da sala no cabeçalho (`--room-wall`); sem cor escolhida, o CSS usa a parede padrão. */
 const headerStyle = (h: HeaderData): CSSProperties | undefined =>
-  h.color ? ({ '--room-wall': `var(--pen-${h.color})` } as CSSProperties) : undefined;
+  h.color ? ({ '--room-wall': colorCss(h.color) } as CSSProperties) : undefined;
 
 /** Seta de dobrar/abrir a sala; o clique é tratado no quadro (Board.tsx), pela classe. */
 function CollapseToggle({ collapsed }: { collapsed: boolean }) {
@@ -167,7 +167,7 @@ function ProjectNode({ id, data, selected, width }: NodeProps<Node<ProjectNodeDa
           {(data.git || data.live.length > 0) && (
             <div className="bn-header-status">
               {data.git && <GitBadge git={data.git} />}
-              {data.live.length > 0 && <LiveDots live={data.live} />}
+              {data.live.length > 0 && <LiveDots live={data.live} awaiting={data.awaiting} />}
             </div>
           )}
         </div>
@@ -181,12 +181,14 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
   const name = staff?.name ?? (s ? employeeName(s) : '?');
   const live = s?.live?.alive ? s.live : null;
   const busy = live?.status === 'busy';
-  const state = data.archived ? 'is-archived' : busy ? 'is-busy' : live?.status === 'waiting' ? 'is-waiting' : live ? '' : 'is-away';
+  // Esperando você (amarelo) vale mesmo com a sessão parada: é o que a caixa "precisa de mim" mostra.
+  const waiting = data.needsYou;
+  const state = data.archived ? 'is-archived' : waiting ? 'is-waiting' : busy ? 'is-busy' : live ? '' : 'is-away';
   return (
     <Frame
       id={id}
       type="employee"
-      variant={live?.status === 'waiting' ? 'warn' : busy ? 'busy' : 'agent'}
+      variant={waiting ? 'warn' : busy ? 'busy' : 'agent'}
       selected={selected}
       className={state}
       title={staff ? `${staff.name} — ${staff.role}` : name}
@@ -309,7 +311,7 @@ function ShelfNode({ id, data, selected }: NodeProps<Node<ShelfNodeData, 'shelf'
 function RoomNode({ id, data, width, height }: NodeProps<Node<RoomNodeData, 'room'>>) {
   const w = width ?? 0;
   const h = height ?? 0;
-  const style = { width: w, height: h, ...(data.color ? { '--room-wall': `var(--pen-${data.color})` } : {}) } as CSSProperties;
+  const style = { width: w, height: h, ...(data.color ? { '--room-wall': colorCss(data.color) } : {}) } as CSSProperties;
   return (
     <div className={`bn-room ${data.color ? 'has-color' : ''}`} style={style}>
       <Sketch variant={data.color ? 'room-color' : 'room'} width={w} height={h} seed={id} />
@@ -354,14 +356,13 @@ function GitBadge({ git }: { git: GitState }) {
   );
 }
 
-function LiveDots({ live }: { live: LiveSession[] }) {
-  const waiting = live.filter((s) => s.status === 'waiting').length;
+function LiveDots({ live, awaiting }: { live: LiveSession[]; awaiting: number }) {
   return (
     <div className="bn-live" title={live.map((s) => `${s.name ?? s.sessionId.slice(0, 8)}: ${STATUS_LABEL[s.status ?? ''] ?? s.status}`).join('\n')}>
       {live.map((s) => (
         <span key={s.sessionId} className={`dot dot-${s.status ?? 'unknown'}`} />
       ))}
-      <span>{waiting > 0 ? t('board.awaitingYou', { n: waiting }) : t('board.liveCount', { n: live.length })}</span>
+      <span>{awaiting > 0 ? t('board.awaitingYou', { n: awaiting }) : t('board.liveCount', { n: live.length })}</span>
     </div>
   );
 }

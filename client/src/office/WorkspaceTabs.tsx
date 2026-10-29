@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import type { AppConfig, InboxItem } from '../../../shared/model';
+import { colorCss, type AppConfig, type InboxItem } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
 import { inTab, TAB_ALL, TAB_NONE } from './workspaces';
@@ -69,7 +69,7 @@ export function WorkspaceTabs({ config, workspaceOf, inUse, inbox, value, onChan
             role="tab"
             aria-selected={value === tab.id}
             className={`workspace-tab ${value === tab.id ? 'is-active' : ''}`}
-            style={tab.color ? ({ '--tab-color': `var(--pen-${tab.color})` } as CSSProperties) : undefined}
+            style={tab.color ? ({ '--tab-color': colorCss(tab.color) } as CSSProperties) : undefined}
             onClick={() => onChange(tab.id)}
           >
             {tab.color && <span className="workspace-dot" aria-hidden="true" />}

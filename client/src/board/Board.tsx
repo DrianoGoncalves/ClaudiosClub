@@ -162,10 +162,11 @@ export function BoardView(props: BoardViewProps) {
           git,
           tasks,
           aspect,
+          inbox: props.inbox.items,
         },
         props.images,
       ),
-    [board, showWorktrees, showArchived, config?.archived, costs, shelves, props.images, config?.projectColors, collapsed, git, tasks, aspect],
+    [board, showWorktrees, showArchived, config?.archived, costs, shelves, props.images, config?.projectColors, collapsed, git, tasks, aspect, props.inbox.items],
   );
   // Salas de projeto no quadro agora, na ordem da planta: as que o menu de cores lista.
   const rooms = useMemo(

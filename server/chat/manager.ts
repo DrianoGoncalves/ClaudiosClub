@@ -572,11 +572,33 @@ export class ChatManager {
     if (!other) return;
     if (!other.orphan) throw new ChatError(holdMessage(other));
     this.log(`${sessionId}: encerrando processo órfão do Claudio’s Club (pid ${other.pid}, ${other.status ?? 'sem status'})`);
-    await (this.opts.kill ?? killTree)(other.pid);
+    await this.endProcess(sessionId, other.pid);
+  }
+
+  /**
+   * Botão "Assumir aqui" (sessão aberta no app do Claude ou num terminal, não órfã). Encerra só a árvore
+   * daquele processo, para a conversa seguir aqui. Trabalhando no meio do turno, recusa: encerrar
+   * mataria o que ela está fazendo.
+   */
+  async takeOver(sessionId: string): Promise<void> {
+    const other = await this.elsewhere(sessionId);
+    if (!other) return;
+    if (other.orphan) throw new ChatError(holdMessage(other));
+    // Só com status conhecido de parada: sem status não dá para saber se ela está no meio do turno.
+    if (other.status !== 'waiting' && other.status !== 'idle') {
+      throw new ChatError(`a sessão está trabalhando agora (pid ${other.pid}): encerrar no meio do turno faria ela parar. Espere terminar e tente de novo`);
+    }
+    this.log(`${sessionId}: assumida aqui, encerrando o processo de ${other.entrypoint ?? '?'} (pid ${other.pid}, ${other.status ?? 'sem status'})`);
+    await this.endProcess(sessionId, other.pid);
+  }
+
+  /** Encerra a árvore do processo, espera ele sair e tira o registro dele (se houver). */
+  private async endProcess(sessionId: string, pid: number): Promise<void> {
+    await (this.opts.kill ?? killTree)(pid);
     const alive = this.opts.isAlive ?? isAlive;
-    for (let i = 0; i < 50 && alive(other.pid); i++) await new Promise((r) => setTimeout(r, 100));
-    if (alive(other.pid)) throw new ChatError(`não consegui encerrar o processo ${other.pid}`);
-    await this.opts.registry?.remove(sessionId, other.pid).catch(() => {});
+    for (let i = 0; i < 50 && alive(pid); i++) await new Promise((r) => setTimeout(r, 100));
+    if (alive(pid)) throw new ChatError(`não consegui encerrar o processo ${pid}`);
+    await this.opts.registry?.remove(sessionId, pid).catch(() => {});
   }
 
   /**

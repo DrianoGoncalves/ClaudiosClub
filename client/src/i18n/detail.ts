@@ -1,4 +1,4 @@
-﻿import { defineMessages } from './define';
+import { defineMessages } from './define';
 
 export default defineMessages({
   'pt-BR': {
@@ -96,9 +96,9 @@ export default defineMessages({
     'detail.taskOpenOther': '{n} tarefas abertas',
     'detail.inReview': '{n} em revisão',
     'detail.lastDeploy': 'último deploy {date}: {title}',
-    'detail.roomColor': 'Cor da sala',
-    'detail.worktreeRoomNote': 'Vale quando este worktree aparece numa sala própria; dentro do projeto principal, a sala é a dele.',
-    'detail.roomColorNote': 'A parede da sala no quadro. Cada cor tem um tom para o tema claro e outro para o escuro.',
+    'detail.roomColor': 'Cor do projeto',
+    'detail.worktreeRoomNote': 'Vale quando este worktree aparece como projeto próprio; dentro do projeto principal, vale a cor dele.',
+    'detail.roomColorNote': 'A borda do projeto no quadro. Cada cor tem um tom para o tema claro e outro para o escuro; a personalizada vale para os dois.',
     'detail.projectImage': 'Imagem do projeto',
     'detail.portraitOf': 'Retrato de {name}',
     'detail.changeImage': 'Trocar imagem',
@@ -333,9 +333,9 @@ export default defineMessages({
     'detail.taskOpenOther': '{n} open tasks',
     'detail.inReview': '{n} in review',
     'detail.lastDeploy': 'last deploy {date}: {title}',
-    'detail.roomColor': 'Room color',
-    'detail.worktreeRoomNote': "Applies when this worktree shows up in its own room; inside the main project, the room is the project’s.",
-    'detail.roomColorNote': 'The room wall on the board. Each color has one shade for the light theme and another for the dark theme.',
+    'detail.roomColor': 'Project color',
+    'detail.worktreeRoomNote': 'Applies when this worktree shows up as its own project; inside the main project, the main project’s color applies.',
+    'detail.roomColorNote': 'The project border on the board. Each color has one shade for the light theme and another for the dark one; a custom color applies to both.',
     'detail.projectImage': 'Project image',
     'detail.portraitOf': 'Portrait of {name}',
     'detail.changeImage': 'Change image',
@@ -570,9 +570,9 @@ export default defineMessages({
     'detail.taskOpenOther': '{n} tareas abiertas',
     'detail.inReview': '{n} en revisión',
     'detail.lastDeploy': 'último deploy {date}: {title}',
-    'detail.roomColor': 'Color de la sala',
-    'detail.worktreeRoomNote': 'Aplica cuando este worktree aparece en una sala propia; dentro del proyecto principal, la sala es la suya.',
-    'detail.roomColorNote': 'La pared de la sala en el tablero. Cada color tiene un tono para el tema claro y otro para el oscuro.',
+    'detail.roomColor': 'Color del proyecto',
+    'detail.worktreeRoomNote': 'Aplica cuando este worktree aparece como proyecto propio; dentro del proyecto principal, vale el color de este.',
+    'detail.roomColorNote': 'El borde del proyecto en el tablero. Cada color tiene un tono para el tema claro y otro para el oscuro; el personalizado vale para los dos.',
     'detail.projectImage': 'Imagen del proyecto',
     'detail.portraitOf': 'Retrato de {name}',
     'detail.changeImage': 'Cambiar imagen',

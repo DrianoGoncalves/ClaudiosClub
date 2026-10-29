@@ -308,6 +308,48 @@ describe('ChatManager: processo órfão de um servidor que reiniciou', () => {
   });
 });
 
+describe('ChatManager: assumir sessão aberta em outro lugar', () => {
+  const OTHER = 99_101;
+  function setup(status: string | null, present = true) {
+    const alive = new Set(present ? [OTHER] : []);
+    const killed: number[] = [];
+    const m = new ChatManager({
+      transcriptsDir: root,
+      usageFile: path.join(root, 'usage.json'),
+      listLive: async () =>
+        (present ? [{ sessionId: 'ter', pid: OTHER, alive: alive.has(OTHER), entrypoint: 'claude-desktop', status }] : []) as never,
+      resolve: async () => null,
+      isAlive: (pid) => alive.has(pid),
+      kill: async (pid) => {
+        killed.push(pid);
+        alive.delete(pid);
+      },
+      log: () => {},
+    });
+    return { m, killed };
+  }
+
+  it('recusa sessão trabalhando (encerrar no meio do turno perderia o que ela faz)', async () => {
+    const { m, killed } = setup('busy');
+    await expect(m.takeOver('ter')).rejects.toThrow(/trabalhando/);
+    expect(killed).toEqual([]);
+  });
+
+  it('sessão parada em outro lugar: encerra só o processo dela, e a conversa fica livre aqui', async () => {
+    const { m, killed } = setup('waiting');
+    expect((await m.snapshot('p', 'ter')).elsewhere).toMatchObject({ pid: OTHER, orphan: false });
+    await m.takeOver('ter');
+    expect(killed).toEqual([OTHER]);
+    expect((await m.snapshot('p', 'ter')).elsewhere).toBeNull();
+  });
+
+  it('sem sessão aberta: não mexe em nada', async () => {
+    const { m, killed } = setup('waiting', false);
+    await m.takeOver('ter');
+    expect(killed).toEqual([]);
+  });
+});
+
 describe('ChatManager: ficha editada com a conversa aberta', () => {
   function manager() {
     const procs: Array<ReturnType<typeof fakeClaude>> = [];

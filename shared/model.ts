@@ -250,9 +250,14 @@ export interface BoardBackground {
   dark: string | null;
 }
 
-/** Cores de caneta para a sala do projeto (cada uma tem um tom claro e um escuro no CSS). */
+/** Cores de caneta para o projeto (cada uma tem um tom claro e um escuro no CSS). */
 export const PROJECT_COLORS = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const;
-export type ProjectColor = (typeof PROJECT_COLORS)[number];
+export type PenColor = (typeof PROJECT_COLORS)[number];
+/** Uma caneta ou uma cor personalizada (#rrggbb, a mesma nos dois temas). */
+export type ProjectColor = PenColor | `#${string}`;
+export const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+/** O valor CSS da cor: a variável da caneta ou o hex. */
+export const colorCss = (c: ProjectColor) => (c.startsWith('#') ? c : `var(--pen-${c})`);
 
 /**
  * Prioridade de uma mensagem mandada com o turno em andamento (a mesma do Claude Code):

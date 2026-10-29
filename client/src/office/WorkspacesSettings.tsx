@@ -1,17 +1,21 @@
 import { useState } from 'react';
-import type { AppConfig, ProjectColor, Workspace } from '../../../shared/model';
+import type { AppConfig, BoardBackground, ProjectColor, Workspace } from '../../../shared/model';
 import { api } from '../api';
-import { BackgroundPicker, RoomColorPicker, useSystemTheme } from '../board/colors';
+import { RoomColorPicker, useSystemTheme } from '../board/colors';
 import { t } from '../i18n';
+import { ThemeBackgrounds } from '../toolbar/ThemeBackgrounds';
 
-/** Configurações → Workspaces: nome, cor e fundo de cada aba; remover deixa os projetos dele sem workspace. */
+/** Configurações → Workspaces: nome, cor e fundo (claro e escuro) de cada aba; remover deixa os projetos dele sem workspace. */
 export function WorkspacesEditor({
   workspaces,
   projectWorkspaces,
+  background,
   onConfig,
 }: {
   workspaces: Workspace[];
   projectWorkspaces: Record<string, string>;
+  /** Fundo geral do quadro: o que vale numa aba sem fundo próprio. */
+  background: BoardBackground | null;
   onConfig: (config: AppConfig) => void;
 }) {
   const [name, setName] = useState('');
@@ -32,41 +36,47 @@ export function WorkspacesEditor({
       {!workspaces.length && <p className="muted small">{t('office.workspaceNone')}</p>}
       <ul className="room-colors">
         {workspaces.map((w) => (
-          <li key={w.id}>
-            <input
-              className="workspace-rename"
-              defaultValue={w.name}
-              maxLength={40}
-              aria-label={w.name}
-              onBlur={(e) => {
-                const next = e.target.value.trim();
-                if (next && next !== w.name) void run(() => api.saveWorkspace({ id: w.id, name: next }));
-              }}
-              onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-            />
-            <span className="muted small">{t('office.workspaceProjects', { n: count(w.id) })}</span>
-            <RoomColorPicker
-              small
-              label={t('office.workspaceColor')}
-              value={w.color}
-              onChange={(color: ProjectColor | null) => run(() => api.saveWorkspace({ id: w.id, name: w.name, color }))}
-            />
-            <button
-              type="button"
-              className="link small"
-              onClick={() => window.confirm(t('office.workspaceRemoveConfirm', { name: w.name })) && void run(() => api.removeWorkspace(w.id))}
-            >
-              {t('office.workspaceRemove')}
-            </button>
-            {/* Fundo do quadro na aba dele, no tema do sistema agora (o outro tema se escolhe ao trocar). */}
-            <span className="workspace-bg">
-              <span className="muted small">{t(theme === 'light' ? 'office.workspaceBgLight' : 'office.workspaceBgDark')}</span>
-              <BackgroundPicker
-                theme={theme}
-                value={w.background[theme]}
-                onChange={(hex) => run(() => api.saveWorkspace({ id: w.id, name: w.name, background: { [theme]: hex } }))}
+          <li key={w.id} className="workspace-card">
+            {/* O nome é o título do cartão e se edita ali mesmo. */}
+            <div className="workspace-head">
+              <input
+                className="workspace-rename"
+                defaultValue={w.name}
+                maxLength={40}
+                aria-label={w.name}
+                onBlur={(e) => {
+                  const next = e.target.value.trim();
+                  if (next && next !== w.name) void run(() => api.saveWorkspace({ id: w.id, name: next }));
+                }}
+                onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
               />
-            </span>
+              <span className="muted small">{t('office.workspaceProjects', { n: count(w.id) })}</span>
+              <button
+                type="button"
+                className="link small"
+                onClick={() => window.confirm(t('office.workspaceRemoveConfirm', { name: w.name })) && void run(() => api.removeWorkspace(w.id))}
+              >
+                {t('office.workspaceRemove')}
+              </button>
+            </div>
+            <div className="workspace-field">
+              <span className="muted small">{t('office.workspaceColor')}</span>
+              <RoomColorPicker
+                small
+                label={t('office.workspaceColor')}
+                value={w.color}
+                onChange={(color: ProjectColor | null) => run(() => api.saveWorkspace({ id: w.id, name: w.name, color }))}
+              />
+            </div>
+            <div className="workspace-field">
+              <span className="muted small">{t('office.workspaceBg')}</span>
+              <ThemeBackgrounds
+                value={w.background}
+                fallback={background ?? { light: null, dark: null }}
+                current={theme}
+                onChange={(th, hex) => run(() => api.saveWorkspace({ id: w.id, name: w.name, background: { [th]: hex } }))}
+              />
+            </div>
           </li>
         ))}
       </ul>

@@ -80,14 +80,16 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
     [canNotify],
   );
 
-  /** Tira da caixa: rotina vista, segredo trocado (ou que não é segredo), pergunta vista sem responder. */
+  /** Tira da caixa: rotina vista, segredo trocado (ou que não é segredo), pergunta vista sem responder, sessão esperando em outro lugar. */
   const dismiss = useCallback(async (item: InboxItem, opts: { notSecret?: boolean } = {}) => {
     const id = item.id.replace(/^(secret|routine):/, '');
     const call = item.id.startsWith('question:')
       ? api.dismissQuestion(item.sessionId)
-      : item.kind === 'routine'
-        ? api.dismissRoutineAlert(id)
-        : api.dismissSecret(id, opts.notSecret);
+      : item.id.startsWith('waiting:')
+        ? api.dismissWaiting(item.sessionId)
+        : item.kind === 'routine'
+          ? api.dismissRoutineAlert(id)
+          : api.dismissSecret(id, opts.notSecret);
     await call.catch(() => {});
     setItems((prev) => prev.filter((i) => i.id !== item.id));
   }, []);

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { PROJECT_COLORS, type BoardBackground, type ProjectColor } from '../../../shared/model';
+import { HEX_COLOR as HEX, PROJECT_COLORS, type BoardBackground, type PenColor, type ProjectColor } from '../../../shared/model';
 import { t } from '../i18n';
 
 // Cores escolhidas pelo usuário: a caneta da parede de cada sala e o fundo do quadro em cada tema.
 // Os tons das canetas são variáveis do styles.css (`--pen-<cor>`), um para o claro e outro para o escuro.
 
-export const PROJECT_COLOR_LABEL: Record<ProjectColor, string> = {
+export const PROJECT_COLOR_LABEL: Record<PenColor, string> = {
   red: t('board.colorRed'),
   orange: t('board.colorOrange'),
   yellow: t('board.colorYellow'),
@@ -41,9 +41,7 @@ export const BACKGROUND_PRESETS: Record<Theme, Array<{ hex: string; label: strin
   ],
 };
 
-const HEX = /^#[0-9a-f]{6}$/i;
-
-/** Bolinhas de cor para a parede da sala; a primeira volta à padrão. */
+/** Bolinhas de cor do projeto: a primeira volta à padrão, a última abre o seletor do sistema. */
 export function RoomColorPicker({
   value,
   onChange,
@@ -57,6 +55,9 @@ export function RoomColorPicker({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(timer.current), []);
   const pick = async (color: ProjectColor | null) => {
     if (color === value) return;
     setBusy(true);
@@ -67,8 +68,18 @@ export function RoomColorPicker({
       setError((e as Error).message);
     } finally {
       setBusy(false);
+      setDraft(null);
     }
   };
+  // O seletor do sistema dispara a cada movimento: grava só quando a mão para.
+  const pickCustom = (hex: string) => {
+    if (!HEX.test(hex)) return;
+    setDraft(hex);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => void pick(hex.toLowerCase() as ProjectColor), 300);
+  };
+  const shown = draft ?? value;
+  const custom = shown?.startsWith('#') ? shown : null;
   return (
     <span className={`swatches ${small ? 'swatches-sm' : ''}`} role="radiogroup" aria-label={label}>
       <button
@@ -95,6 +106,10 @@ export function RoomColorPicker({
           onClick={() => void pick(c)}
         />
       ))}
+      <label className={`swatch swatch-custom ${custom ? 'is-on' : ''}`} title={t('board.otherColor')} style={custom ? ({ '--swatch': custom } as CSSProperties) : undefined}>
+        <input type="color" aria-label={t('board.otherColor')} value={custom ?? '#808080'} disabled={busy} onChange={(e) => pickCustom(e.target.value)} />
+        {!custom && <span aria-hidden="true">+</span>}
+      </label>
       {error && <span className="error small">{error}</span>}
     </span>
   );
