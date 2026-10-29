@@ -23,6 +23,8 @@ const EXECUTOR_RULES = [
   '- Leia só o necessário para a tarefa.',
   '- Se algo estiver ambíguo ou fora do combinado, pare e diga o que falta em vez de adivinhar.',
   '- Não chame outros agents nem divida a tarefa: se ela for grande demais, devolva dizendo isso.',
+  '- Commit, push, instalar dependências, apagar arquivos ou mexer fora dos arquivos combinados só se a tarefa pedir.',
+  '- Antes de responder, rode a verificação que a tarefa pedir (ou a mais simples que prove que funciona).',
   '- Responda curto: o que mudou, com arquivo:linha, e o que você verificou (comando e resultado). Não cole arquivos inteiros nem diffs longos.',
   '- Se não conseguiu, diga o motivo e onde parou, em uma ou duas linhas.',
 ].join('\n');
@@ -31,7 +33,7 @@ export const AGENT_PRESETS: AgentPreset[] = [
   {
     label: 'Executor (Haiku)',
     name: 'executor',
-    description: 'Executa tarefas mecânicas e bem especificadas que o planejador delegar: editar arquivos indicados, aplicar mudanças repetitivas, rodar comandos de verificação.',
+    description: 'Executa tarefas bem especificadas que o orquestrador delegar: editar os arquivos indicados, aplicar mudanças repetitivas, rodar comandos de verificação.',
     model: 'haiku',
     effort: 'low',
     tools: 'Read, Grep, Glob, Edit, Write, Bash, PowerShell',
@@ -59,9 +61,12 @@ export const AGENT_PRESETS: AgentPreset[] = [
   },
 ];
 
-/** Agents que cada roteiro chama pelo nome (os passos estão em server/staff/ficha.ts). */
+/**
+ * Agents que cada roteiro chama pelo nome (os passos estão em server/staff/ficha.ts). O padrão do
+ * orquestrador escolhe entre os três conforme a tarefa: quem é contratado sozinho tem todos à mão.
+ */
 export const PLAYBOOK_AGENTS: Record<Playbook, string[]> = {
-  'plan-big-execute-small': ['executor'],
+  'plan-big-execute-small': ['pesquisador', 'executor', 'revisor'],
   'scout-then-build': ['pesquisador', 'executor'],
   'review-gate': ['executor', 'revisor'],
 };

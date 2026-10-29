@@ -46,7 +46,7 @@ Cargo, missão, autonomia, modelo, agents, skills, MCPs, regras e definição de
 <td width="33%" valign="top">
 
 ### 🧭 Planeja grande, executa pequeno
-O orquestrador quebra o trabalho e passa cada parte para quem é da área. Executores Haiku fazem, e um hook cobra a conferência de diff, tipos e testes a cada entrega.
+O orquestrador quebra o trabalho e passa cada parte para quem é da área. Sozinho, escolhe o agent de cada parte: pesquisador e executor em Haiku, Sonnet quando a tarefa pede julgamento, revisor no que é arriscado. Um hook cobra a conferência de diff, tipos e testes a cada entrega.
 
 </td>
 </tr>

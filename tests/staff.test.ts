@@ -73,7 +73,7 @@ describe('ficha', () => {
     expect(md).toContain('- Raquel (Infra, temporário)');
     expect(md).toContain('POST http://127.0.0.1:4848/api/projects/proj-x/tasks');
     expect(md).toContain('requestedBy: "ana-1a2b"');
-    expect(md).toContain('Antes de chamar o executor (ou de fazer você mesmo): se a tarefa é da área de alguém da sua equipe');
+    expect(md).toContain('Antes de chamar um agent (ou de fazer você mesmo): se a tarefa é da área de alguém da sua equipe');
     // O que é da área não fica com o gestor, ele repassa sem pesquisar o código e confere na medida do risco.
     expect(md).toContain('nem para o executor nem para você');
     expect(md).toContain('Repasse sem pesquisar');
@@ -81,6 +81,10 @@ describe('ficha', () => {
     // Sem equipe, nada disso.
     const solo = renderFicha(profile({ playbook: 'plan-big-execute-small' }), ctx);
     expect(solo).not.toContain('Sua equipe');
+    // Contratado sozinho, os agents do roteiro já aparecem como indicados, com os da ficha.
+    expect(solo).toContain('Agents: pesquisador, executor, revisor, Explore.');
+    expect(solo).toMatch(/pede julgamento[^\n]*`executor` com model: "sonnet"/);
+    expect(solo).toContain('run_in_background: false');
     // Quem reporta a alguém entrega com as provas; quem não reporta, não tem a seção.
     expect(renderFicha(profile(), { ...ctx, managerNames: ['Daniel'] })).toContain('## Entrega');
     expect(solo).not.toContain('## Entrega');

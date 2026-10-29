@@ -1,3 +1,4 @@
+import { PLAYBOOK_AGENTS } from '../../shared/agentPresets';
 import { TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
 import { sshConfigFile } from './servers';
 
@@ -50,7 +51,7 @@ function teamSection(p: StaffProfile, ctx: FichaContext): string {
   const first = (s: string) => s.split(/(?<=[.!?])\s/)[0]!.slice(0, 200);
   return [
     '## Sua equipe',
-    'Estas pessoas reportam a você. O que for da área de alguém daqui vai para essa pessoa, nem para o executor nem para você, mesmo que seja uma correção pequena: ela tem a ficha, as regras e a memória dessa área e trabalha numa conversa curta, enquanto a sua é longa e cada passo seu nela custa mais. O executor fica com o trabalho mecânico que não tem dono.',
+    'Estas pessoas reportam a você. O que for da área de alguém daqui vai para essa pessoa, nem para o executor nem para você, mesmo que seja uma correção pequena: ela tem a ficha, as regras e a memória dessa área e trabalha numa conversa curta, enquanto a sua é longa e cada passo seu nela custa mais. O que não tem dono vai para os agents do roteiro.',
     ctx.team.map((m) => `- ${m.name} (${m.role}${m.temporary ? ', temporário' : ''}), id \`${m.id}\`: ${first(m.mission)}`).join('\n'),
     'Repasse sem pesquisar: não leia o código para escrever a tarefa. Mande o pedido do usuário nas palavras dele, o critério de pronto e o que não mexer (com o motivo); cite arquivos só se já souber quais são. Quem é da área acha as linhas. Pedido que é inteiro de uma área vai como está, numa tarefa só para essa pessoa, sem você dividir nem planejar; um pedido com partes de áreas diferentes vira uma tarefa para cada pessoa.',
     `Para passar uma tarefa: POST ${api}/tasks com o cabeçalho \`x-myco: 1\` e um JSON com title, description (o pedido, o critério de pronto e o que não mexer), staffId (o id da pessoa), requestedBy: "${p.id}" e start: true. A tarefa entra na fila dela (uma por vez) e aparece no quadro de tarefas.`,
@@ -124,11 +125,19 @@ export const PLAYBOOK_STEPS: Record<Playbook, { title: string; steps: string[] }
   'plan-big-execute-small': {
     title: 'Planeja grande, executa pequeno',
     steps: [
-      'Entenda o pedido e leia só o necessário para planejar.',
-      'Escreva o plano em tarefas pequenas, cada uma com os arquivos, o critério de pronto e o que não mexer.',
-      'Delegue cada tarefa ao agent `executor` (ferramenta Agent). Tarefas independentes podem ir em paralelo.',
-      'Confira cada entrega (diff, testes) antes da próxima. Se a mesma tarefa falhar duas vezes, faça você ou replaneje.',
-      'Termine com um resumo: o que cada executor fez, o que você conferiu e o que ficou pendente.',
+      'Entenda o pedido e o que o usuário quer ver no fim. Leia só o necessário para decidir; para achar coisas no código, mande o `pesquisador` em vez de ler você.',
+      [
+        'Escolha quem faz cada parte (ferramenta Agent, sempre com o subagent_type):',
+        '   - achar, mapear ou explicar código: `pesquisador` (Haiku, só lê);',
+        '   - mudança bem definida, com os arquivos e o que mudar já sabidos: `executor` (Haiku);',
+        '   - mudança que pede julgamento (bug de causa desconhecida, funcionalidade que cruza vários arquivos): `executor` com model: "sonnet";',
+        '   - antes de dar por pronto o que é arriscado (segurança, dados, pagamento, muitos arquivos): `revisor`;',
+        '   - uma linha num arquivo que você já leu: faça você, porque explicar custaria mais.',
+      ].join('\n'),
+      'Cada agent começa do zero: não vê esta conversa, a ficha nem a memória. No pedido vão o objetivo (o porquê), o que já se sabe (arquivos com caminho, o erro, o que já foi decidido), o que não mexer e por quê, como saber que ficou pronto (o teste ou o comando) e a resposta esperada: curta, com arquivo:linha, o que verificou e o que não deu.',
+      'Tarefas independentes vão juntas, em várias chamadas ao Agent na mesma mensagem, mas nunca dois agents no mesmo arquivo; a que depende de outra espera a anterior.',
+      'Confira cada entrega antes da próxima. Falhou: devolva com o que está errado. Falhou de novo: chame com um modelo maior (model: "sonnet", ou "opus" se já era sonnet), divida em partes menores ou pergunte ao usuário.',
+      'Termine com o resumo para o usuário, como pede a definição de pronto.',
     ],
   },
   'scout-then-build': {
@@ -157,8 +166,8 @@ function playbookSection(p: StaffProfile, ctx?: FichaContext): string {
   return [
     `## Roteiro: ${pb.title}`,
     pb.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'),
-    ctx?.team?.length ? 'Antes de chamar o executor (ou de fazer você mesmo): se a tarefa é da área de alguém da sua equipe, ela vai para essa pessoa (veja "Sua equipe").' : '',
-    'Ao delegar: chame os agents em primeiro plano (para rodar em paralelo, várias chamadas na mesma mensagem) e confira cada entrega antes de seguir. Peça respostas curtas (o que mudou ou o que achou, com arquivo:linha, e o que não deu para fazer), nunca arquivos inteiros colados. Quem você chama não chama outros agents: dividir o trabalho é com você. Se o agent do roteiro não existir no projeto, avise o usuário em vez de improvisar.',
+    ctx?.team?.length ? 'Antes de chamar um agent (ou de fazer você mesmo): se a tarefa é da área de alguém da sua equipe, ela vai para essa pessoa (veja "Sua equipe").' : '',
+    'Ao delegar: chame os agents do roteiro sempre com subagent_type e run_in_background: false; em segundo plano a entrega não volta nesta conversa para você conferir, e o agent morre se a conversa fechar. Evite fork, general-purpose e Explore: rodam no seu modelo (o fork ainda leva esta conversa inteira), e os do roteiro custam bem menos. Peça respostas curtas, nunca arquivos inteiros colados. Quem você chama não chama outros agents: dividir o trabalho é com você. Se um agent do roteiro não existir no projeto, avise o usuário em vez de improvisar.',
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -214,7 +223,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     `## Missão\n${p.mission}`,
     p.firstTask ? `## Primeira tarefa\n${p.firstTask}` : '',
     `## Autonomia\n${AUTONOMY_LABEL[p.autonomy]}`,
-    `## Agents e skills indicados\nAgents: ${p.agents.length ? p.agents.join(', ') : 'nenhum em especial'}.\nSkills: ${skillList(p, ctx)}.\nPrefira estes quando a tarefa pedir; os demais do projeto continuam disponíveis.`,
+    `## Agents e skills indicados\nAgents: ${agentList(p)}.\nSkills: ${skillList(p, ctx)}.\nPrefira estes quando a tarefa pedir; os demais do projeto continuam disponíveis.`,
     `## Conhecimento (leia antes de começar)\n${list(p.knowledge, 'Nada específico além do CLAUDE.md do projeto.')}`,
     `## Regras\n${list(p.rules, 'Siga o CLAUDE.md do projeto.')}`,
     p.doneWhen ? `## Definição de pronto\n${p.doneWhen}` : '',
@@ -231,6 +240,12 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     memorySection(ctx),
   ];
   return sections.filter(Boolean).join('\n\n') + '\n';
+}
+
+/** Os agents da ficha e os do roteiro dela (que o Claudio’s Club garante no projeto ao abrir a sessão). */
+function agentList(p: StaffProfile): string {
+  const all = [...new Set([...(p.playbook ? PLAYBOOK_AGENTS[p.playbook] : []), ...p.agents])];
+  return all.length ? all.join(', ') : 'nenhum em especial';
 }
 
 /** As skills da ficha; as da biblioteca do Claudio’s Club vêm no plugin da sessão, com o prefixo dele. */
@@ -269,7 +284,7 @@ function hiringSection(p: StaffProfile, ctx: FichaContext): string {
   return [
     '## Subfuncionários',
     temp,
-    'Para trabalho pontual (uma tarefa, uma busca, uma revisão), use subagents (ferramenta Agent): terminam junto com o trabalho e custam menos. Contrate um subfuncionário só para um papel contínuo, que precise de memória e conversa próprias.',
+    'Para trabalho pontual (uma tarefa, uma busca, uma revisão), use subagents (ferramenta Agent): terminam junto com o trabalho e custam menos. Contrate um subfuncionário só para um papel contínuo, que precise de memória e conversa próprias, e só com o ok do usuário: diga em uma frase o papel e por que um subagent não basta.',
     `Para contratar: POST ${api}/staff com o cabeçalho \`x-myco: 1\` e um JSON com name, role, mission, firstTask, autonomy (plan, manual, acceptEdits ou auto), reportsTo: ["${p.id}"] e launch: true. Ele abre numa conversa do Claudio’s Club; a resposta traz o id dele (profile.id) e a conversa (launch.sessionId).`,
     `Para mandar outra mensagem a ele: POST ${api}/chat/send com {"sessionId", "staffId", "text"} (mesmo cabeçalho).`,
     `Quem você contrata é temporário. Quando o trabalho dele terminar, encerre: POST ${api}/staff/<id dele>/done com {"note": "o que ele entregou"}. Ele sai do quadro (nada é apagado); parado há ${TEMP_IDLE_DAYS} dias, sai sozinho. Só o usuário efetiva.`,

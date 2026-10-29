@@ -56,7 +56,7 @@ describe('agents do roteiro', () => {
     const wt = path.join(root, 'c-wt');
     await fs.mkdir(wt, { recursive: true });
     const r = await ensurePlaybookAgents({ playbook: 'plan-big-execute-small' }, { ...d, cwd: wt });
-    expect(r.created).toEqual(['executor']);
+    expect(r.created).toEqual(['pesquisador', 'executor', 'revisor']);
     expect(r.inline.executor).toMatchObject({ model: 'haiku', prompt: expect.stringMatching(/^Você é um executor/), tools: expect.any(Array) });
   });
 });
@@ -65,15 +65,23 @@ describe('hooks do Claudio’s Club', () => {
   const hook = fileURLToPath(new URL('../scripts/hooks/delivery-check.mjs', import.meta.url));
   const run = (stage: string, input: unknown) => execFileSync(process.execPath, [hook, stage], { input: JSON.stringify(input) }).toString();
 
-  it('o roteiro roda em primeiro plano; a entrega do executor pede conferência', () => {
-    expect(JSON.parse(run('pre', { tool_input: { subagent_type: 'executor', run_in_background: true } }))).toEqual({
-      hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: expect.stringMatching(/primeiro plano/) },
+  it('o roteiro roda em primeiro plano, sempre com o agent pelo nome; a entrega do executor pede conferência', () => {
+    const deny = (reason: RegExp) => ({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: expect.stringMatching(reason) },
     });
-    expect(run('pre', { tool_input: { subagent_type: 'executor' } })).toBe('');
+    expect(JSON.parse(run('pre', { tool_input: { subagent_type: 'executor', run_in_background: true } }))).toEqual(deny(/run_in_background: false/));
+    // Sem o parâmetro, o Claude Code põe em segundo plano: também volta.
+    expect(JSON.parse(run('pre', { tool_input: { subagent_type: 'pesquisador' } }))).toEqual(deny(/run_in_background: false/));
+    expect(run('pre', { tool_input: { subagent_type: 'executor', run_in_background: false } })).toBe('');
     expect(run('pre', { tool_input: { subagent_type: 'Explore', run_in_background: true } })).toBe('');
+    // Sem subagent_type vira fork ou general-purpose, no modelo de quem chama.
+    expect(JSON.parse(run('pre', { tool_input: { prompt: 'faça' } }))).toEqual(deny(/subagent_type/));
     expect(JSON.parse(run('post', { tool_input: { subagent_type: 'executor' } })).hookSpecificOutput.additionalContext).toMatch(/diff vazio = não foi feito/);
+    // Ainda rodando em segundo plano: nada a conferir agora.
+    expect(run('post', { tool_input: { subagent_type: 'executor' }, tool_response: { status: 'async_launched' } })).toBe('');
     expect(run('post', { tool_input: { subagent_type: 'revisor' } })).toBe('');
     expect(run('post', 'lixo')).toBe('');
+    expect(run('pre', 'lixo')).toBe('');
   });
 
   it('vão para o claude por --settings, com o node chamado direto', () => {
