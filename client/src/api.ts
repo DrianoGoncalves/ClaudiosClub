@@ -97,7 +97,6 @@ export async function withUsageConfirm<T>(run: (force: boolean) => Promise<T>): 
         limit: h.limit,
       });
     } else {
-      const origin = h.fromProfile ? t('app.originStaff') : t('app.originCompany');
       why = t('app.usageAccount', {
         window: h.kind === 'five_hour' ? '5h' : '7d',
         pct: Math.round(h.percentUsed),

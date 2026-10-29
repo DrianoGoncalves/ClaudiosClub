@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { CONTEXT_SWITCHES, type AppConfig, type BoardBackground, type ContextSwitch, type Project, type ProjectColor, type SendPriority, type UiLevel, type UsageStop, type Workspace } from '../../../shared/model';
+import { CONTEXT_SWITCHES, type AppConfig, type BoardBackground, type ContextSwitch, type Project, type SendPriority, type UiLevel, type UsageStop, type Workspace } from '../../../shared/model';
 import { DemoButton, WorkspacesEditor } from '../office/WorkspacesSettings';
 import { api } from '../api';
-import { RoomColorPicker, useSystemTheme } from '../board/colors';
+import { useSystemTheme } from '../board/colors';
 import { useChatDetail } from '../chat/chatDetail';
 import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
 import { RolesEditor } from './RolesEditor';
@@ -13,25 +13,19 @@ import { ThemeBackgrounds } from './ThemeBackgrounds';
 // com título, descrição e o controle logo abaixo. Abre pelo botão "config" ou com Ctrl+,.
 
 interface Props {
-  showWorktrees: boolean;
-  onToggleWorktrees: (v: boolean) => void;
   showArchived: boolean;
   onToggleArchived: (v: boolean) => void;
   archivedCount: number;
   animations: boolean;
   onToggleAnimations: (v: boolean) => void;
-  onRefresh: () => void;
-  refreshing: boolean;
   usageStop: UsageStop | null;
   onUsageStop: (stop: UsageStop) => Promise<void>;
   sendWhileBusy: SendPriority | null;
   onSendWhileBusy: (p: SendPriority) => Promise<void>;
   uiLevel: UiLevel | null;
   onUiLevel: (level: UiLevel) => Promise<void>;
-  /** Salas de projeto no quadro agora (as que podem ganhar cor). */
+  /** Salas de projeto no quadro agora (as que podem ganhar orçamento). */
   rooms: Array<{ id: string; name: string }>;
-  projectColors: Record<string, ProjectColor> | null;
-  onProjectColor: (projectId: string, color: ProjectColor | null) => Promise<void>;
   boardBackground: BoardBackground | null;
   onBoardBackground: (bg: Partial<BoardBackground>) => Promise<void>;
   /** Orçamento por projeto: % da cota de 7 dias. */
@@ -341,16 +335,6 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
         </select>
       ),
     },
-    {
-      id: 'worktrees',
-      group: 'board',
-      section: 'display',
-      title: t('toolbar.worktreesTitle'),
-      description: t('toolbar.worktreesDesc'),
-      keywords: t('toolbar.worktreesKeywords'),
-      toggle: { checked: p.showWorktrees, onChange: p.onToggleWorktrees },
-      advanced: true,
-    },
     ...(p.workspaces && p.projectWorkspaces
       ? [
           {
@@ -414,19 +398,6 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       toggle: { checked: p.animations, onChange: p.onToggleAnimations },
     },
     {
-      id: 'refresh',
-      group: 'board',
-      section: 'display',
-      title: t('toolbar.refreshTitle'),
-      description: t('toolbar.refreshDesc'),
-      keywords: t('toolbar.refreshKeywords'),
-      control: (
-        <button type="button" className="btn-secondary" onClick={p.onRefresh} disabled={p.refreshing}>
-          {p.refreshing ? t('toolbar.refreshing') : t('toolbar.refreshNow')}
-        </button>
-      ),
-    },
-    {
       id: 'server',
       group: 'general',
       title: t('toolbar.serverTitle'),
@@ -446,36 +417,6 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       description: t('toolbar.bgDesc'),
       keywords: t('toolbar.bgKeywords'),
       control: <ThemeBackgrounds value={p.boardBackground} current={theme} onChange={(th, hex) => p.onBoardBackground({ [th]: hex })} />,
-      advanced: true,
-    });
-  }
-
-  if (p.projectColors) {
-    const colors = p.projectColors;
-    const text = t('toolbar.roomColorsSearch');
-    // Buscando pelo nome de um projeto, a lista mostra só as salas que batem.
-    const rooms = words.length && !matches(text, words) ? p.rooms.filter((r) => matches(r.name, words)) : p.rooms;
-    out.push({
-      id: 'room-colors',
-      group: 'board',
-      section: 'colors',
-      title: t('toolbar.roomColorsTitle'),
-      description: t('toolbar.roomColorsDesc'),
-      keywords: `${t('toolbar.roomColorsKeywords')} ${p.rooms.map((r) => r.name).join(' ')}`,
-      control: rooms.length ? (
-        <ul className="room-colors">
-          {rooms.map((r) => (
-            <li key={r.id}>
-              <span className="room-colors-name" title={r.name}>
-                {r.name}
-              </span>
-              <RoomColorPicker small value={colors[r.id] ?? null} label={t('toolbar.roomColorOf', { name: r.name })} onChange={(c) => p.onProjectColor(r.id, c)} />
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="muted small">{t('toolbar.noRooms')}</p>
-      ),
       advanced: true,
     });
   }

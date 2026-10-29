@@ -35,27 +35,21 @@ export function projectBudgetHit(
   if (!reading || (reading.resetsAt && Date.parse(reading.resetsAt) <= now)) return null;
   const used = (week.project / week.total) * reading.percentUsed;
   if (used < budget) return null;
-  return { kind: 'project_week', percentUsed: used, limit: budget, resetsAt: reading.resetsAt, fromProfile: false, projectName };
+  return { kind: 'project_week', percentUsed: used, limit: budget, resetsAt: reading.resetsAt, projectName };
 }
 
 /**
- * O primeiro limite que passou da linha, ou null. A ficha manda em cada limite que ela define;
- * o resto vem da empresa. Uma leitura cuja janela já virou (resetsAt no passado) não conta.
+ * O primeiro limite da empresa que passou da linha, ou null. Uma leitura cuja janela já virou
+ * (resetsAt no passado) não conta.
  */
-export function usageStopHit(
-  usage: AccountUsage,
-  company: UsageStop,
-  profile: UsageStop | null,
-  now = Date.now(),
-): UsageStopHit | null {
+export function usageStopHit(usage: AccountUsage, company: UsageStop, now = Date.now()): UsageStopHit | null {
   for (const [kind, key] of KINDS) {
-    const own = profile?.[key] ?? null;
-    const limit = own ?? company[key];
+    const limit = company[key];
     if (limit === null) continue;
     const reading = usage.limits.find((l) => l.kind === kind);
     if (!reading || reading.percentUsed < limit) continue;
     if (reading.resetsAt && Date.parse(reading.resetsAt) <= now) continue;
-    return { kind, percentUsed: reading.percentUsed, limit, resetsAt: reading.resetsAt, fromProfile: own !== null };
+    return { kind, percentUsed: reading.percentUsed, limit, resetsAt: reading.resetsAt };
   }
   return null;
 }

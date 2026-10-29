@@ -13,8 +13,6 @@ import { slugify } from './ficha';
 export const AUTONOMY = ['plan', 'manual', 'acceptEdits', 'auto', 'bypassPermissions'] as const;
 const EFFORT = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const PLAYBOOKS = ['plan-big-execute-small', 'scout-then-build', 'review-gate'] as const;
-const percent = z.number().min(1).max(100).nullable();
-export const UsageStopSchema = z.object({ fiveHour: percent.default(null), sevenDay: percent.default(null) });
 const line = (max: number) => z.string().trim().max(max);
 const list = (max: number) => z.array(line(500)).max(max).default([]);
 
@@ -40,7 +38,6 @@ export const StaffInputSchema = z.object({
   model: z.string().regex(/^[\w.[\]-]{1,60}$/, 'modelo inválido').nullable().default(null),
   effort: z.enum(EFFORT).nullable().default(null),
   canHire: z.boolean().default(false),
-  usageStop: UsageStopSchema.nullable().default(null),
   playbook: z.enum(PLAYBOOKS).nullable().default(null),
   worktree: z.boolean().default(false),
   servers: z.array(z.string().regex(/^[\w.-]{1,60}$/, 'servidor inválido')).max(30).default([]),

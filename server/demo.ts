@@ -158,7 +158,6 @@ function profileOf(m: Member, at: string): StaffProfile {
     model: role.model || null,
     effort: role.effort,
     canHire: !!role.canHire,
-    usageStop: null,
     playbook: role.playbook ?? null,
     worktree: false,
     // Nada de servidores nem do seu Chrome num projeto de exemplo.

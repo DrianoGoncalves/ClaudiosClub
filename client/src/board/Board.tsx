@@ -14,7 +14,7 @@ import {
   type XYPosition,
 } from '@xyflow/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AppConfig, Board, BoardBackground, CostReport, GitState, InboxItem, ProjectColor, SendPriority, UiLevel, UsageStop } from '../../../shared/model';
+import type { AppConfig, Board, BoardBackground, CostReport, GitState, InboxItem, SendPriority, UiLevel, UsageStop } from '../../../shared/model';
 import { InboxMenu } from '../inbox/InboxMenu';
 import type { InboxView } from '../inbox/useInbox';
 import { EdgeActions, edgeTypes } from './edges';
@@ -77,8 +77,6 @@ interface BoardViewProps {
   /** Tarefas em aberto por projeto (chip no cabeçalho, que abre o quadro de tarefas). */
   tasks: Record<string, { open: number; review: number }>;
   onOpenTasks: (projectId: string) => void;
-  showWorktrees: boolean;
-  onToggleWorktrees: (value: boolean) => void;
   showArchived: boolean;
   onToggleArchived: (value: boolean) => void;
   animations: boolean;
@@ -88,13 +86,10 @@ interface BoardViewProps {
   /** A caixa "precisa de mim" (lida no App, que também mostra as notificações). */
   inbox: InboxView;
   onOpenInbox: (item: InboxItem) => void;
-  onRefresh: () => void;
-  refreshing: boolean;
   onRename: (name: string) => Promise<void>;
   onUsageStop: (stop: UsageStop) => Promise<void>;
   onSendWhileBusy: (p: SendPriority) => Promise<void>;
   onUiLevel: (level: UiLevel) => Promise<void>;
-  onProjectColor: (projectId: string, color: ProjectColor | null) => Promise<void>;
   onBoardBackground: (bg: Partial<BoardBackground>) => Promise<void>;
   onProjectBudget: (projectId: string, budget: number | null) => Promise<void>;
   /** URL da imagem de cada projeto. */
@@ -124,7 +119,7 @@ function parseHireSource(nodeId: string): { projectId: string; staffId: string |
 }
 
 export function BoardView(props: BoardViewProps) {
-  const { config, costs, git, tasks, showWorktrees, showArchived, selectedId, onSelect } = props;
+  const { config, costs, git, tasks, showArchived, selectedId, onSelect } = props;
   // Aba de empresa: o quadro mostra só as salas dos projetos dela.
   const { tab, onTab: setTab } = props;
   const workspaceOf = useMemo(() => workspaceByProject(props.board.projects, config), [props.board.projects, config]);
@@ -133,15 +128,15 @@ export function BoardView(props: BoardViewProps) {
     [props.board, tab, workspaceOf, config],
   );
   // Workspaces com sala no quadro agora (null = sem workspace), com as mesmas regras de buildGraph:
-  // arquivado só com "mostrar arquivados", worktree solta só com "mostrar worktrees".
+  // arquivado só com "mostrar arquivados"; worktree nunca.
   const inUse = useMemo(() => {
     const archived = new Set(config?.archived.projects ?? []);
     return new Set(
       props.board.projects
-        .filter((p) => (showArchived || !archived.has(p.id)) && (!p.worktreeOf || showWorktrees))
+        .filter((p) => (showArchived || !archived.has(p.id)) && !p.worktreeOf)
         .map((p) => workspaceOf.get(p.id) ?? null),
     );
-  }, [props.board.projects, workspaceOf, config?.archived, showArchived, showWorktrees]);
+  }, [props.board.projects, workspaceOf, config?.archived, showArchived]);
   const [shelves, setShelves] = useState(() => loadList(SHELVES_KEY));
   const [collapsed, setCollapsed] = useState(() => loadList(COLLAPSED_KEY));
   // Proporção da tela usada na planta: medida na abertura e a cada "reorganizar" (não a cada
@@ -152,7 +147,6 @@ export function BoardView(props: BoardViewProps) {
       buildGraph(
         board,
         {
-          showWorktrees,
           showArchived,
           archived: config?.archived,
           costs,
@@ -166,9 +160,9 @@ export function BoardView(props: BoardViewProps) {
         },
         props.images,
       ),
-    [board, showWorktrees, showArchived, config?.archived, costs, shelves, props.images, config?.projectColors, collapsed, git, tasks, aspect, props.inbox.items],
+    [board, showArchived, config?.archived, costs, shelves, props.images, config?.projectColors, collapsed, git, tasks, aspect, props.inbox.items],
   );
-  // Salas de projeto no quadro agora, na ordem da planta: as que o menu de cores lista.
+  // Salas de projeto no quadro agora, na ordem da planta: as que o orçamento por projeto lista.
   const rooms = useMemo(
     () =>
       graph.nodes.flatMap((n) => {
@@ -249,14 +243,13 @@ export function BoardView(props: BoardViewProps) {
     fitted.current = true;
     fitStart();
   }, [nodesReady, fitStart]);
-  // Mostrar/esconder worktrees ou arquivados é um pedido explícito: aí, sim, reenquadra.
-  // Trocar de aba também.
-  const toggles = useRef({ showWorktrees, showArchived, tab });
+  // Mostrar/esconder arquivados é um pedido explícito: aí, sim, reenquadra. Trocar de aba também.
+  const toggles = useRef({ showArchived, tab });
   useEffect(() => {
     const prev = toggles.current;
-    toggles.current = { showWorktrees, showArchived, tab };
-    if (fitted.current && (prev.showWorktrees !== showWorktrees || prev.showArchived !== showArchived || prev.tab !== tab)) setTimeout(fitStart, 50);
-  }, [showWorktrees, showArchived, tab, fitStart]);
+    toggles.current = { showArchived, tab };
+    if (fitted.current && (prev.showArchived !== showArchived || prev.tab !== tab)) setTimeout(fitStart, 50);
+  }, [showArchived, tab, fitStart]);
 
   // A seleção é controlada pelo App (painel lateral); aqui só entram arrastos e medições.
   // Arrastar a sala leva junto tudo que está dentro dela; a moldura sempre se reajusta aos nós.
@@ -371,15 +364,11 @@ export function BoardView(props: BoardViewProps) {
             <ChartIcon />
           </button>
           <SettingsMenu
-            showWorktrees={showWorktrees}
-            onToggleWorktrees={props.onToggleWorktrees}
             showArchived={showArchived}
             onToggleArchived={props.onToggleArchived}
             archivedCount={archivedCount}
             animations={props.animations}
             onToggleAnimations={props.onToggleAnimations}
-            onRefresh={props.onRefresh}
-            refreshing={props.refreshing}
             usageStop={config?.usageStop ?? null}
             onUsageStop={props.onUsageStop}
             sendWhileBusy={config?.sendWhileBusy ?? null}
@@ -387,8 +376,6 @@ export function BoardView(props: BoardViewProps) {
             uiLevel={config?.uiLevel ?? null}
             onUiLevel={props.onUiLevel}
             rooms={rooms}
-            projectColors={config?.projectColors ?? null}
-            onProjectColor={props.onProjectColor}
             boardBackground={config?.boardBackground ?? null}
             onBoardBackground={props.onBoardBackground}
             projectBudgets={config?.projectBudgets ?? null}

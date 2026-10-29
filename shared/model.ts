@@ -281,8 +281,6 @@ export interface UsageStopHit {
   percentUsed: number;
   limit: number;
   resetsAt: string | null;
-  /** A linha veio da ficha do funcionário, e não da empresa. */
-  fromProfile: boolean;
   /** Em `project_week`: o nome do projeto. */
   projectName?: string;
 }
@@ -513,8 +511,6 @@ export interface StaffProfile {
   effort: Effort | null;
   /** Pode contratar subfuncionários (subsessões) pelo Claudio’s Club. */
   canHire: boolean;
-  /** Linha de parada própria; null = a da empresa (configurações). */
-  usageStop: UsageStop | null;
   /** Roteiro de trabalho (orquestração); null = nenhum. */
   playbook: Playbook | null;
   /** Trabalha numa worktree git própria (escritores em paralelo sem pisar um no outro). */

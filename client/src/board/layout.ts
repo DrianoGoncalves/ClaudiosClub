@@ -96,7 +96,6 @@ export type BoardEdgeData = { kind: 'contains' | 'side' | 'calls' | 'borrow' | '
 export type BoardEdge = Edge<BoardEdgeData, 'rough'>;
 
 export interface GraphOptions {
-  showWorktrees: boolean;
   /** Mostra (esmaecidos) projetos e funcionários arquivados. */
   showArchived?: boolean;
   archived?: AppConfig['archived'];
@@ -195,13 +194,6 @@ export function buildGraph(
   opts: GraphOptions,
   images: Record<string, string> = {},
 ): { nodes: BoardNode[]; edges: BoardEdge[] } {
-  const projectKeys = new Set(board.projects.map((p) => pathKey(p.path)));
-  const worktreesByParent = new Map<string, Project[]>();
-  for (const p of board.projects) {
-    if (!p.worktreeOf) continue;
-    const k = pathKey(p.worktreeOf);
-    worktreesByParent.set(k, [...(worktreesByParent.get(k) ?? []), p]);
-  }
 
   const archivedProjects = new Set(opts.archived?.projects ?? []);
   const archivedSessions = new Set(opts.archived?.sessions ?? []);
@@ -322,7 +314,6 @@ export function buildGraph(
 
   const projectTree = (p: Project): Tree => {
     const inv = board.inventories[p.id] ?? { agents: [], skills: [] };
-    const worktrees = opts.showWorktrees ? (worktreesByParent.get(pathKey(p.path)) ?? []).filter(visibleProject) : [];
     const id = projectNodeId(p.id);
     const folded = collapsed.has(id);
     return {
@@ -339,9 +330,9 @@ export function buildGraph(
         // Só as sessões vivas da sala (as que o cabeçalho mostra as bolinhas).
         awaiting: liveFor(board.live, p.path).filter((s) => awaitingSessions.has(s.sessionId)).length,
       }),
-      // Dobrada: só o cabeçalho, com o resumo; nada de equipe, recursos ou worktrees.
+      // Dobrada: só o cabeçalho, com o resumo; nada de equipe nem recursos.
       side: folded ? [] : sideOf(id, [...inv.agents.map(agentNode), ...inv.skills.map(skillNode)]),
-      children: folded ? [] : [...employeeTrees(p), ...worktrees.map(projectTree)],
+      children: folded ? [] : employeeTrees(p),
     };
   };
 
@@ -365,9 +356,10 @@ export function buildGraph(
 
   const rooms = [
     userTree,
+    // Worktrees (cópias de trabalho do Claude Code) ficam fora do quadro.
     ...board.projects
       .filter(visibleProject)
-      .filter((p) => !p.worktreeOf || (opts.showWorktrees && !projectKeys.has(pathKey(p.worktreeOf))))
+      .filter((p) => !p.worktreeOf)
       .map(projectTree),
   ];
 

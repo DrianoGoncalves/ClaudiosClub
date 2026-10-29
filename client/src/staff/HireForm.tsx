@@ -104,9 +104,6 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
   const [canHire, setCanHire] = useState(editing?.canHire ?? false);
   const [playbook, setPlaybook] = useState<'' | Playbook>(editing?.playbook ?? '');
   const [worktree, setWorktree] = useState(editing?.worktree ?? false);
-  // Linha de parada própria: vazio = a da empresa.
-  const [stop5h, setStop5h] = useState(editing?.usageStop?.fiveHour?.toString() ?? '');
-  const [stop7d, setStop7d] = useState(editing?.usageStop?.sevenDay?.toString() ?? '');
   const [servers, setServers] = useState<string[]>(editing?.servers ?? []);
   const [browser, setBrowser] = useState(editing?.browser ?? false);
   const [serverList, setServerList] = useState<ServerInfo[] | null>(null);
@@ -216,11 +213,6 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
     );
   };
 
-  const stopValue = (s: string) => {
-    const n = Number(s);
-    return s.trim() && Number.isFinite(n) ? Math.min(100, Math.max(1, Math.round(n))) : null;
-  };
-
   // Contratando no simples: o recomendado para sair funcionando, sem perguntar.
   const simpleHire = !full && !editing && !adopting;
   const template = roles?.find((r) => r.id === roleId) ?? null;
@@ -238,7 +230,6 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
     }
     setBusy(true);
     setError(null);
-    const usageStop = { fiveHour: stopValue(stop5h), sevenDay: stopValue(stop7d) };
     const input: StaffInput = {
       name,
       role,
@@ -257,7 +248,6 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
       model: model || null,
       effort: effort || null,
       canHire,
-      usageStop: usageStop.fiveHour === null && usageStop.sevenDay === null ? null : usageStop,
       playbook: playbook || null,
       worktree: simpleHire ? autoWorktree : worktree,
       servers,
@@ -680,17 +670,6 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
               {t('staff.worktreeHintA')}<code>myco/…</code>{t('staff.worktreeHintB')}
             </span>
           </label>
-          <div className="grid2">
-            <label>
-              {t('staff.stop5h')}
-              <input type="number" min={1} max={100} value={stop5h} onChange={(e) => setStop5h(e.target.value)} placeholder={t('staff.companyDefault')} />
-            </label>
-            <label>
-              {t('staff.stop7d')}
-              <input type="number" min={1} max={100} value={stop7d} onChange={(e) => setStop7d(e.target.value)} placeholder={t('staff.companyDefault')} />
-            </label>
-          </div>
-          <p className="muted small">{t('staff.stopHint')}</p>
         </fieldset>
         </div>
 

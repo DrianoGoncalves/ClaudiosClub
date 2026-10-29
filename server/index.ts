@@ -148,7 +148,7 @@ const tasks = new TaskService({
     return dir ? readProfile(dir, staffId) : null;
   },
   send: async (projectId, staffId, text, force) => {
-    if (!force) await staff.checkUsage(projectId, staffId);
+    if (!force) await staff.checkUsage(projectId);
     return chats.send(projectId, null, staffId, text);
   },
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
@@ -187,7 +187,7 @@ const routines = new RoutineScheduler({
  */
 async function runRoutine(profile: StaffProfile, r: Routine): Promise<RoutineOutcome> {
   try {
-    await staff.checkUsage(profile.projectId, profile.id);
+    await staff.checkUsage(profile.projectId);
   } catch (err) {
     if (err instanceof UsageStopError) return { ok: false, text: `pulada: ${err.message}` };
     throw err;
@@ -410,7 +410,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     new RegExp(`^/api/projects/${ID}/chat/send$`),
     async ({ params: [pid], body, fromBrowser }) => {
       const b = parse(SendBody, body);
-      if (!(fromBrowser && b.force)) await staff.checkUsage(pid!, b.staffId);
+      if (!(fromBrowser && b.force)) await staff.checkUsage(pid!);
       // Ajuste numa tarefa anterior com ele ocupado em outra: espera a vez (ver tasks.ts).
       if (b.sessionId && b.staffId) {
         const held = await tasks.hold(b.sessionId, { text: b.text, images: b.images });
@@ -549,7 +549,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     new RegExp(`^/api/projects/${ID}/chat/${ID}/compact$`),
     async ({ params: [pid, sid], body, fromBrowser }) => {
       const b = parse(StaffRef, body);
-      if (!(fromBrowser && b.force)) await staff.checkUsage(pid!, b.staffId);
+      if (!(fromBrowser && b.force)) await staff.checkUsage(pid!);
       await chats.compact(pid!, sid!, b.staffId);
       return { ok: true };
     },

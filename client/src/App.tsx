@@ -42,7 +42,6 @@ import { ProjectOffice } from './office/ProjectOffice';
 import { StaffForm, type StaffFormMode } from './staff/HireForm';
 import { TasksBoard } from './tasks/TasksBoard';
 
-const WORKTREES_KEY = 'myco.showWorktrees';
 const ARCHIVED_KEY = 'myco.showArchived';
 const ANIMATIONS_KEY = 'myco.animations';
 
@@ -71,9 +70,7 @@ export function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [costs, setCosts] = useState<CostReport | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [showWorktrees, setShowWorktrees] = useState(() => readFlag(WORKTREES_KEY));
   const [showArchived, setShowArchived] = useState(() => readFlag(ARCHIVED_KEY));
   const [animations, setAnimations] = useState(readAnimations);
   const [form, setForm] = useState<{ projectId: string; mode: StaffFormMode } | null>(null);
@@ -99,17 +96,13 @@ export function App() {
   }, [readTaskSummary]);
 
   const load = useCallback(() => {
-    setRefreshing(true);
-    api
-      .board()
-      .then(
-        (b) => {
-          setBoard(b);
-          setError(null);
-        },
-        (e: Error) => setError(e.message),
-      )
-      .finally(() => setRefreshing(false));
+    api.board().then(
+      (b) => {
+        setBoard(b);
+        setError(null);
+      },
+      (e: Error) => setError(e.message),
+    );
   }, []);
 
   useEffect(() => {
@@ -118,6 +111,16 @@ export function App() {
   }, [load]);
 
   // Uma conversa nova grava o transcript logo depois da primeira resposta.
+  // Voltando para a aba, relê projetos e fichas do disco: o que mudou fora (terminal, editor) aparece
+  // sem botão de atualizar.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') load();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [load]);
+
   const reloadSoon = useCallback(() => {
     setTimeout(load, 2000);
   }, [load]);
@@ -234,8 +237,6 @@ export function App() {
             git={git}
             tasks={taskSummary}
             onOpenTasks={setTasksFor}
-            showWorktrees={showWorktrees}
-            onToggleWorktrees={toggle(WORKTREES_KEY, setShowWorktrees)}
             showArchived={showArchived}
             onToggleArchived={toggle(ARCHIVED_KEY, setShowArchived)}
             animations={animations}
@@ -244,13 +245,10 @@ export function App() {
             onSelect={setSelectedId}
             inbox={inbox}
             onOpenInbox={openInbox}
-            onRefresh={load}
-            refreshing={refreshing}
             onRename={rename}
             onUsageStop={saveUsageStop}
             onSendWhileBusy={saveSendWhileBusy}
             onUiLevel={saveUiLevel}
-            onProjectColor={saveProjectColor}
             onBoardBackground={saveBoardBackground}
             onProjectBudget={saveProjectBudget}
             onConfig={setConfig}

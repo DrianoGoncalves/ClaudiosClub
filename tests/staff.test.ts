@@ -41,7 +41,6 @@ const profile = (over: Partial<StaffProfile> = {}): StaffProfile => ({
   model: 'opus',
   effort: 'high',
   canHire: false,
-  usageStop: null,
   playbook: null,
   worktree: false,
   servers: [],
@@ -236,20 +235,15 @@ describe('linha de parada do consumo', () => {
   });
   const company = { fiveHour: 90, sevenDay: 95 };
 
-  it('para no primeiro limite que passou da linha', () => {
-    expect(usageStopHit(usage(50, 50), company, null, now)).toBeNull();
-    expect(usageStopHit(usage(90, 50), company, null, now)).toMatchObject({ kind: 'five_hour', limit: 90, fromProfile: false });
-    expect(usageStopHit(usage(10, 96), company, null, now)).toMatchObject({ kind: 'seven_day', limit: 95 });
-  });
-
-  it('a ficha manda nos limites que define; null na empresa = sem trava', () => {
-    expect(usageStopHit(usage(80, 10), company, { fiveHour: 70, sevenDay: null }, now)).toMatchObject({ limit: 70, fromProfile: true });
-    expect(usageStopHit(usage(92, 10), company, { fiveHour: 99, sevenDay: null }, now)).toBeNull();
-    expect(usageStopHit(usage(100, 100), { fiveHour: null, sevenDay: null }, null, now)).toBeNull();
+  it('para no primeiro limite que passou da linha; null na empresa = sem trava', () => {
+    expect(usageStopHit(usage(50, 50), company, now)).toBeNull();
+    expect(usageStopHit(usage(90, 50), company, now)).toMatchObject({ kind: 'five_hour', limit: 90 });
+    expect(usageStopHit(usage(10, 96), company, now)).toMatchObject({ kind: 'seven_day', limit: 95 });
+    expect(usageStopHit(usage(100, 100), { fiveHour: null, sevenDay: null }, now)).toBeNull();
   });
 
   it('ignora leitura de uma janela que já renovou', () => {
-    expect(usageStopHit(usage(99, 10, '2026-10-26T11:00:00Z'), company, null, now)).toBeNull();
+    expect(usageStopHit(usage(99, 10, '2026-10-26T11:00:00Z'), company, now)).toBeNull();
   });
 });
 
@@ -470,7 +464,7 @@ describe('StaffService', () => {
     expect((await svc.versions('proj-id', x.id))?.length).toBe(2);
   });
 
-  it('trava de consumo: recusa contratar e conversar acima da linha; a ficha pode subir a própria', async () => {
+  it('trava de consumo: recusa contratar começando a conversa e conversar acima da linha da empresa', async () => {
     const future = new Date(Date.now() + 3600_000).toISOString();
     const high = async (): Promise<AccountUsage> => ({
       tapInstalled: true,
@@ -479,11 +473,9 @@ describe('StaffService', () => {
     });
     const svc = service(high);
     await expect(svc.hire('proj-id', { ...input, name: 'Gui' }, true)).rejects.toBeInstanceOf(UsageStopError);
-    // A ficha pode subir a própria linha; pela API (sem navegador) não há como confirmar.
-    const { profile: p } = (await svc.hire('proj-id', { ...input, name: 'Hel', launch: false }, true))!;
-    await expect(svc.checkUsage('proj-id', p.id)).rejects.toThrow('linha de parada: 90%');
-    const { profile: ivo } = (await svc.hire('proj-id', { ...input, name: 'Ivo', usageStop: { fiveHour: 99, sevenDay: null }, launch: false }, true))!;
-    await expect(svc.checkUsage('proj-id', ivo.id)).resolves.toBeUndefined();
+    // Contratar sem começar a conversa não gasta: passa. Conversar, não.
+    expect((await svc.hire('proj-id', { ...input, name: 'Hel', launch: false }, true))?.profile.name).toBe('Hel');
+    await expect(svc.checkUsage('proj-id')).rejects.toThrow('linha de parada: 90%');
   });
 
   it('worktree própria: sessão nova roda nela, lê a ficha por --add-dir e retoma na mesma pasta', async () => {

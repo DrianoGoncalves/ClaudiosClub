@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { AccountUsage, LaunchResult, McpServerInfo, Project, ProjectConnection, ServerInfo, StaffProfile, UsageStop } from '../../shared/model';
+import path from 'node:path';
+import type { AccountUsage, LaunchResult, McpServerInfo, Project, ProjectConnection, ServerInfo, StaffProfile } from '../../shared/model';
 import { keyFilesOf, listServers, readConnections, removeConnection, saveConnection, testConnection, writeSshConfig } from './servers';
 import type { ToolAdapter } from '../adapters/types';
 import { readConfig, setArchived, workspaceOf } from '../config';
@@ -132,7 +133,6 @@ export class StaffService {
       input.autonomy = capAutonomy(input.autonomy, hirer.autonomy);
       input.canHire = false; // subfuncionário contratado por outro não contrata em cascata
       input.servers = input.servers.filter((s) => hirer.servers.includes(s)); // nem acessa servidor que o gestor não acessa
-      input.usageStop = hirer.usageStop; // nem passa por cima da trava do gestor
       input.browser = input.browser && hirer.browser; // nem usa o navegador se o gestor não usa
     }
 
@@ -151,7 +151,7 @@ export class StaffService {
     }
 
     // A trava vale também para quem contrata pela API (sem como confirmar, só recusa).
-    if (input.launch && !(fromBrowser && input.force)) await this.guardUsage(input.usageStop, project.id);
+    if (input.launch && !(fromBrowser && input.force)) await this.checkUsage(project.id);
     let profile = await createProfile(project.path, project.id, input);
     if (hirer) {
       // Contratado por outro funcionário: temporário, com quem contratou (ver end/sweepTemporaries).
@@ -362,22 +362,15 @@ export class StaffService {
   }
 
   /**
-   * Trava de consumo antes de trabalho novo (conversa ou contratação). Lança
-   * UsageStopError quando o 5h/7d passou da linha da ficha ou da empresa.
+   * Trava de consumo antes de trabalho novo (conversa ou contratação): a linha de parada da empresa
+   * (5h/7d) e o orçamento do projeto. Lança UsageStopError quando passou.
    */
-  async checkUsage(projectId: string, staffId: string | null): Promise<void> {
-    const project = staffId ? await this.project(projectId) : null;
-    const profile = project && staffId ? await readProfile(project.path, staffId) : null;
-    await this.guardUsage(profile?.usageStop ?? null, projectId);
-  }
-
-  /** Trava da conta (5h/7d, da ficha ou da empresa) e, com `projectId`, o orçamento do projeto. */
-  private async guardUsage(own: UsageStop | null, projectId?: string) {
+  async checkUsage(projectId: string): Promise<void> {
     const [usage, config] = await Promise.all([(this.opts.readUsage ?? readUsage)(), readConfig()]);
-    const hit = usageStopHit(usage, config.usageStop, own);
+    const hit = usageStopHit(usage, config.usageStop);
     if (hit) throw new UsageStopError(hit);
-    const budget = projectId ? config.projectBudgets[projectId] : undefined;
-    if (!budget || !projectId || !this.opts.weekCost) return;
+    const budget = config.projectBudgets[projectId];
+    if (!budget || !this.opts.weekCost) return;
     const [week, project] = await Promise.all([this.opts.weekCost(projectId), this.project(projectId)]);
     const over = projectBudgetHit(usage, week, budget, project?.name ?? projectId);
     if (over) throw new UsageStopError(over);
