@@ -263,7 +263,8 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
       servers,
       browser,
       ...(portrait !== undefined ? { portraitDataUrl: portrait } : {}),
-      // No simples a conversa é pelo painel do Claudio’s Club, nunca num terminal.
+      // A conversa é sempre pelo painel do Claudio’s Club. No simples, espera você escrever; no avançado,
+      // `launch` já manda a saudação e ele começa pela primeira tarefa.
       ...(editing ? {} : adopting ? { adoptSessionId: adopting.id, launch: false } : { launch: simpleHire ? false : launch }),
     };
     try {
@@ -722,8 +723,8 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
         <div className="modal-footer">
         {full && !editing && !adopting && (
           <label className="check">
-            <input type="checkbox" checked={launch} onChange={(e) => setLaunch(e.target.checked)} /> {t('staff.openTerminal')}
-            <span className="muted small"> {t('staff.openTerminalHint')}</span>
+            <input type="checkbox" checked={launch} onChange={(e) => setLaunch(e.target.checked)} /> {t('staff.startChat')}
+            <span className="muted small"> {t('staff.startChatHint')}</span>
           </label>
         )}
 

@@ -348,14 +348,6 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ['POST', new RegExp(`^/api/projects/${ID}/staff$`), ({ params: [id], body, fromBrowser }) => staff.hire(id!, body, fromBrowser)],
   [
     'POST',
-    new RegExp(`^/api/projects/${ID}/staff/${ID}/launch$`),
-    ({ params: [id, staffId], body, fromBrowser }) => {
-      const b = parse(z.object({ resume: z.boolean().default(false), force: z.boolean().default(false) }), body ?? {});
-      return staff.launch(id!, staffId!, b.resume, fromBrowser && b.force);
-    },
-  ],
-  [
-    'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}$`),
     ({ params: [id, staffId], body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('a ficha só é editada pelo Claudio’s Club');

@@ -318,7 +318,7 @@ export interface ClaudeArgsOptions {
   settingsFile?: string | null;
   /** Agents do roteiro que faltam na pasta da sessão (worktree), em JSON. */
   agentsFile?: string | null;
-  /** Só no terminal; a conversa pelo Claudio’s Club manda as mensagens pelo stream. */
+  /** Prompt inicial como argumento; a conversa pelo Claudio’s Club passa null e manda as mensagens pelo stream. */
   firstPrompt: string | null;
   /** Sessão nova (`sessionId`) que começa como cópia desta: duplicar a conversa. */
   forkFrom?: string;
@@ -358,11 +358,6 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   args.push('--disallowedTools', secretDenyRules(p, o.keyFiles).join(','));
   if (o.mcpConfigPath) args.push('--mcp-config', o.mcpConfigPath, '--strict-mcp-config');
   return args;
-}
-
-/** Linha de comando para o .cmd: flags sem aspas, valores entre aspas. */
-export function toCmdLine(exe: string, args: string[]): string {
-  return [exe, ...args.map((a) => (/^--[a-z-]+$/.test(a) ? a : `"${a}"`))].join(' ');
 }
 
 const AUTONOMY_ORDER: Autonomy[] = ['plan', 'manual', 'acceptEdits', 'auto', 'bypassPermissions'];

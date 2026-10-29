@@ -6,7 +6,6 @@ import type {
   LinkInfo,
   LiveSession,
   Project,
-  LaunchResult,
   ProjectColor,
   ProjectDetail,
   Session,
@@ -83,7 +82,6 @@ export function EmployeePanel(props: {
   totalUsd: number;
   archived: boolean;
   onArchive: (v: boolean) => Promise<void>;
-  onLaunch: (resume: boolean) => Promise<LaunchResult>;
   onHireSub: () => void;
   onEdit: () => void;
   onSessionStarted?: (sessionId: string) => void;
@@ -273,7 +271,6 @@ export function EmployeePanel(props: {
             label: t('detail.tabActions'),
             content: (
               <>
-                {staff && <LaunchButtons hasSession={!!s} working={!!live} onLaunch={props.onLaunch} />}
                 <p className="actions">
                   {staff?.canHire && (
                     <button className="btn-secondary" onClick={props.onHireSub}>
@@ -384,58 +381,6 @@ function TempNotice(props: {
       </span>
       {error && <span className="error">{error}</span>}
     </div>
-  );
-}
-
-function LaunchButtons({ hasSession, working, onLaunch }: { hasSession: boolean; working: boolean; onLaunch: (resume: boolean) => Promise<LaunchResult> }) {
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<LaunchResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const go = async (resume: boolean) => {
-    setBusy(true);
-    setError(null);
-    setResult(null);
-    try {
-      setResult(await onLaunch(resume));
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <section className="section launch">
-      <div className="actions">
-        {hasSession ? (
-          <>
-            <button
-              className="btn-primary"
-              onClick={() => go(true)}
-              disabled={busy || working}
-              title={working ? t('detail.workingInOpenSession') : t('detail.resumeTitle')}
-            >
-              {t('detail.callBack')}
-            </button>
-            <button className="btn-secondary" onClick={() => go(false)} disabled={busy} title={t('detail.newSessionTitle')}>
-              {t('detail.newSession')}
-            </button>
-          </>
-        ) : (
-          <button className="btn-primary" onClick={() => go(false)} disabled={busy}>
-            {t('detail.openSession')}
-          </button>
-        )}
-      </div>
-      {working && <p className="muted small">{t('detail.workingNote')}</p>}
-      {result?.ok && <p className="ok small">{t('detail.launchedOk')}</p>}
-      {result && !result.ok && (
-        <div className="error small">
-          <p>{t('detail.launchFailed', { error: result.error ?? '' })}</p>
-          <code className="mono block">{result.command}</code>
-        </div>
-      )}
-      {error && <p className="error">{error}</p>}
-    </section>
   );
 }
 

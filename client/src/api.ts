@@ -305,6 +305,4 @@ export const api = {
     post<{ image: string | null }>(`/api/projects/${projectId}/image`, { dataUrl }),
   accountRules: () => get<{ path: string; text: string | null }>('/api/account/rules'),
   saveAccountRules: (text: string) => post<{ path: string; text: string | null }>('/api/account/rules', { text }),
-  launch: (projectId: string, staffId: string, resume: boolean, force = false) =>
-    post<LaunchResult>(`/api/projects/${projectId}/staff/${staffId}/launch`, { resume, force }),
 };

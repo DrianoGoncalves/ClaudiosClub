@@ -17,10 +17,8 @@ import {
   secretDenyRules,
   slugify,
   tabTitleSnippet,
-  toCmdLine,
   type FichaContext,
 } from '../server/staff/ficha';
-import { cmdScript } from '../server/staff/launch';
 import { buildMcpConfig, listMcpServers } from '../server/staff/mcp';
 import { StaffError, StaffService } from '../server/staff/service';
 
@@ -136,7 +134,6 @@ describe('ficha', () => {
     const resumed = buildClaudeArgs(profile(), { sessionId: 'uuid-1', resume: true, systemPromptFile: 'S', mcpConfigPath: 'C:\\m.json', firstPrompt: 'Olá' });
     expect(resumed.slice(0, 2)).toEqual(['--resume', 'uuid-1']);
     expect(resumed.slice(-3)).toEqual(['--mcp-config', 'C:\\m.json', '--strict-mcp-config']);
-    expect(toCmdLine('claude', ['Olá', '--model', 'opus'])).toBe('claude "Olá" --model "opus"');
   });
 
   it('subfuncionário não passa da autonomia do gestor', () => {
@@ -147,13 +144,8 @@ describe('ficha', () => {
     expect(capAutonomy('bypassPermissions', 'bypassPermissions')).toBe('bypassPermissions');
   });
 
-  it('slug sem acentos e script do cmd em CRLF com UTF-8', () => {
+  it('slug sem acentos', () => {
     expect(slugify('João da Silva!')).toBe('joao-da-silva');
-    const script = cmdScript('T', 'C:\\www\\a b', 'claude "x"');
-    expect(script).toContain('chcp 65001');
-    expect(script).toContain('cd /d "C:\\www\\a b"\r\nclaude "x"');
-    expect(script).toContain('set CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1');
-    expect(script).toMatch(/if errorlevel 1 \([\s\S]*pause >nul\r\n\)\r\nexit/);
   });
 });
 
@@ -293,49 +285,58 @@ describe('StaffService', () => {
     lastActivityAt: null,
   });
   const adapter = { listProjects: async () => [project()] } as unknown as ToolAdapter;
-  const opened: string[] = [];
   const noUsage = async (): Promise<AccountUsage> => ({ tapInstalled: true, limits: [], updatedAt: null });
   const service = (readUsage = noUsage) =>
     new StaffService(adapter, {
       runDir: path.join(root, 'run'),
       claudeConfigFile: claudeJson,
       mycoUrl: 'http://127.0.0.1:4848',
-      open: (script) => opened.push(script),
       readUsage,
     });
 
   const input = { name: 'Bia', role: 'Dev', mission: 'Implementar', autonomy: 'acceptEdits', mcps: ['docs'], launch: true };
 
-  it('contrata pelo navegador: grava ficha, memória, script e abre a sessão', async () => {
-    const r = await service().hire('proj-id', input, true);
-    expect(r?.launch?.ok).toBe(true);
+  it('contrata pelo navegador com "começar a conversa": abre no Claudio’s Club', async () => {
+    const chats: Array<{ staffId: string; text: string }> = [];
+    const svc = new StaffService(adapter, {
+      runDir: path.join(root, 'run'),
+      claudeConfigFile: claudeJson,
+      mycoUrl: 'x',
+      readUsage: noUsage,
+      openChat: async (_p, staffId, text) => (chats.push({ staffId, text }), 'conversa-1'),
+    });
+    const r = (await svc.hire('proj-id', { ...input, name: 'Joe', canHire: true }, true))!;
+    expect(r.launch).toEqual({ ok: true, sessionId: 'conversa-1', command: '', error: null });
+    expect(chats).toEqual([{ staffId: r.profile.id, text: 'Olá, Joe. Leia sua memória e diga em poucas linhas como pretende começar.' }]);
+  });
+
+  it('contrata sem começar a conversa: grava ficha e memória; a conversa nova sai com a ficha', async () => {
+    const svc = service();
+    const r = await svc.hire('proj-id', { ...input, launch: false }, true);
+    expect(r?.launch).toBeNull();
     const p = r!.profile;
     expect(p.id).toMatch(/^bia-[0-9a-f]{4}$/);
-    expect(p.sessions).toHaveLength(1);
 
     const dir = path.join(projectPath, '.myco', 'staff');
     const ficha = await fs.readFile(path.join(dir, `${p.id}.md`), 'utf8');
     expect(ficha).toContain('# Ficha de Bia — Dev');
     expect(await fs.readFile(path.join(dir, `${p.id}.memory.md`), 'utf8')).toContain('Memória de Bia');
 
-    const sid = p.sessions[0]!.id;
-    expect(opened.at(-1)).toBe(path.join(root, 'run', sid, 'start.cmd'));
-    const script = await fs.readFile(opened.at(-1)!, 'utf8');
-    expect(script).toContain(`--session-id "${sid}"`);
-    expect(script).toContain('--permission-mode "acceptEdits"');
-    expect(script).toContain('--strict-mcp-config');
+    const spawn = (await svc.chatSpawn('proj-id', null, p.id))!;
+    const sid = spawn.sessionId;
+    expect(spawn.args).toEqual(expect.arrayContaining(['--session-id', sid, '--permission-mode', 'acceptEdits', '--strict-mcp-config']));
     // A config de MCP (com possíveis segredos) fica fora do projeto, só com o escolhido.
     const mcp = JSON.parse(await fs.readFile(path.join(root, 'run', sid, 'mcp.json'), 'utf8'));
     expect(Object.keys(mcp.mcpServers)).toEqual(['docs']);
   });
 
-  it('chamar de volta usa --resume na mesma sessão, sem duplicar', async () => {
+  it('retomar a conversa usa --resume na mesma sessão, sem duplicar', async () => {
     const svc = service();
-    const { profile: p } = (await svc.hire('proj-id', { ...input, name: 'Caio' }, true))!;
-    const r = await svc.launch('proj-id', p.id, true);
-    expect(r?.sessionId).toBe(p.sessions[0]!.id);
-    const script = await fs.readFile(opened.at(-1)!, 'utf8');
-    expect(script).toContain(`--resume "${p.sessions[0]!.id}"`);
+    const { profile: p } = (await svc.hire('proj-id', { ...input, name: 'Caio', launch: false }, true))!;
+    const first = (await svc.chatSpawn('proj-id', null, p.id))!;
+    const r = (await svc.chatSpawn('proj-id', first.sessionId, p.id))!;
+    expect(r.sessionId).toBe(first.sessionId);
+    expect(r.args.slice(0, 2)).toEqual(['--resume', first.sessionId]);
     const list = await svc.listAll([project()]);
     expect(list.find((s) => s.id === p.id)?.sessions).toHaveLength(1);
   });
@@ -366,17 +367,14 @@ describe('StaffService', () => {
       runDir: path.join(root, 'run'),
       claudeConfigFile: claudeJson,
       mycoUrl: 'x',
-      open: (s) => opened.push(s),
       readUsage: noUsage,
       openChat: async (_p, staffId, text) => (chats.push({ staffId, text }), 'conversa-1'),
       isWorking: (id) => working.has(id),
       archive: { has: async (k) => archived.has(k), set: async (k, v) => void (v ? archived.add(k) : archived.delete(k)) },
     });
     const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestora', canHire: true, launch: false }, true))!;
-    const before = opened.length;
     const r = (await svc.hire('proj-id', { ...input, name: 'Temp', firstTask: 'Mapear as rotas', reportsTo: [boss.id], launch: true }, false))!;
     expect(r.launch).toEqual({ ok: true, sessionId: 'conversa-1', command: '', error: null });
-    expect(opened).toHaveLength(before); // nada de terminal
     expect(chats).toEqual([{ staffId: r.profile.id, text: 'Olá, Temp. Leia sua memória e comece pela primeira tarefa da ficha.' }]);
 
     // Você não é encerrado por outro; o temporário é.
@@ -431,12 +429,17 @@ describe('StaffService', () => {
       listProjects: async () => [project()],
       getProjectSessions: async () => [{ id: sid, title: 'Sessão solta', startedAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-02T00:00:00.000Z' }],
     } as unknown as ToolAdapter;
-    const svc = new StaffService(adapterWithSession, { runDir: path.join(root, 'run'), claudeConfigFile: claudeJson, mycoUrl: 'x', open: (s) => opened.push(s) });
-    const before = opened.length;
+    const chats: string[] = [];
+    const svc = new StaffService(adapterWithSession, {
+      runDir: path.join(root, 'run'),
+      claudeConfigFile: claudeJson,
+      mycoUrl: 'x',
+      openChat: async (_p, staffId) => (chats.push(staffId), 'conversa-1'),
+    });
 
     const r = await svc.hire('proj-id', { name: 'Gil', role: 'Dev', mission: 'Continuar', adoptSessionId: sid, launch: true }, true);
     expect(r?.launch).toBeNull();
-    expect(opened.length).toBe(before); // não abriu terminal
+    expect(chats).toEqual([]); // não abriu outra conversa
     expect(r?.profile.sessions).toEqual([{ id: sid, startedAt: '2026-10-01T00:00:00.000Z' }]);
 
     await expect(svc.hire('proj-id', { name: 'Outro', role: 'Dev', mission: 'x', adoptSessionId: sid }, true)).rejects.toThrow('já é de Gil');
@@ -467,7 +470,7 @@ describe('StaffService', () => {
     expect((await svc.versions('proj-id', x.id))?.length).toBe(2);
   });
 
-  it('trava de consumo: recusa abrir acima da linha, a menos que confirmado', async () => {
+  it('trava de consumo: recusa contratar e conversar acima da linha; a ficha pode subir a própria', async () => {
     const future = new Date(Date.now() + 3600_000).toISOString();
     const high = async (): Promise<AccountUsage> => ({
       tapInstalled: true,
@@ -478,10 +481,9 @@ describe('StaffService', () => {
     await expect(svc.hire('proj-id', { ...input, name: 'Gui' }, true)).rejects.toBeInstanceOf(UsageStopError);
     // A ficha pode subir a própria linha; pela API (sem navegador) não há como confirmar.
     const { profile: p } = (await svc.hire('proj-id', { ...input, name: 'Hel', launch: false }, true))!;
-    await expect(svc.launch('proj-id', p.id, false)).rejects.toThrow('linha de parada: 90%');
-    expect((await svc.launch('proj-id', p.id, false, true))?.ok).toBe(true);
-    const r = await svc.hire('proj-id', { ...input, name: 'Ivo', usageStop: { fiveHour: 99, sevenDay: null } }, true);
-    expect(r?.launch?.ok).toBe(true);
+    await expect(svc.checkUsage('proj-id', p.id)).rejects.toThrow('linha de parada: 90%');
+    const { profile: ivo } = (await svc.hire('proj-id', { ...input, name: 'Ivo', usageStop: { fiveHour: 99, sevenDay: null }, launch: false }, true))!;
+    await expect(svc.checkUsage('proj-id', ivo.id)).resolves.toBeUndefined();
   });
 
   it('worktree própria: sessão nova roda nela, lê a ficha por --add-dir e retoma na mesma pasta', async () => {
@@ -490,26 +492,24 @@ describe('StaffService', () => {
       runDir: path.join(root, 'run'),
       claudeConfigFile: claudeJson,
       mycoUrl: 'x',
-      open: (s) => opened.push(s),
       readUsage: noUsage,
       ensureWorktree: async (projectPath, staffId) => {
         created.push(staffId);
         return worktreeFor(projectPath, staffId);
       },
     });
-    const r = (await svc.hire('proj-id', { ...input, name: 'Wal', worktree: true, playbook: 'review-gate' }, true))!;
-    const wt = worktreeFor(projectPath, r.profile.id);
-    expect(created).toEqual([r.profile.id]);
-    expect(r.profile.sessions[0]!.cwd).toBe(wt.path);
-    const script = await fs.readFile(opened.at(-1)!, 'utf8');
-    expect(script).toContain(`cd /d "${wt.path}"`);
-    expect(script).toContain(`--add-dir "${path.join(projectPath, '.myco', 'staff')}"`);
-    const ficha = await fs.readFile(path.join(projectPath, '.myco', 'staff', `${r.profile.id}.md`), 'utf8');
+    const { profile: hired } = (await svc.hire('proj-id', { ...input, name: 'Wal', worktree: true, playbook: 'review-gate', launch: false }, true))!;
+    const first = (await svc.chatSpawn('proj-id', null, hired.id))!;
+    const wt = worktreeFor(projectPath, hired.id);
+    expect(created).toEqual([hired.id]);
+    expect(first.cwd).toBe(wt.path);
+    expect(first.args).toEqual(expect.arrayContaining(['--add-dir', path.join(projectPath, '.myco', 'staff')]));
+    const ficha = await fs.readFile(path.join(projectPath, '.myco', 'staff', `${hired.id}.md`), 'utf8');
     expect(ficha).toContain('## Worktree própria');
-    expect(ficha).toContain(`myco/${r.profile.id}`);
+    expect(ficha).toContain(`myco/${hired.id}`);
     expect(ficha).toContain('## Roteiro: Portão de revisão');
 
-    const spawn = await svc.chatSpawn('proj-id', r.profile.sessions[0]!.id, r.profile.id);
+    const spawn = await svc.chatSpawn('proj-id', first.sessionId, hired.id);
     expect(spawn?.cwd).toBe(wt.path);
   });
 

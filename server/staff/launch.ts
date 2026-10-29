@@ -1,15 +1,12 @@
-import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { LaunchResult, ServerInfo, StaffProfile } from '../../shared/model';
+import type { ServerInfo, StaffProfile } from '../../shared/model';
 import { defaultLocations } from '../adapters/claude/paths';
-import { cleanEnv } from '../auth';
-import { buildClaudeArgs, renderFicha, sanitizeArg, systemPrompt, toCmdLine, type FichaContext, type TeamMember } from './ficha';
+import { renderFicha, systemPrompt, type FichaContext, type TeamMember } from './ficha';
 import { buildMcpConfig } from './mcp';
 import { ensurePlaybookAgents } from './playbookAgents';
 import { buildSkillPlugin } from '../skillLibrary';
-import { ensureMemory, fichaFile, memoryFile, saveProfile, staffDir, writeAtomic } from './store';
+import { ensureMemory, fichaFile, memoryFile, staffDir, writeAtomic } from './store';
 import type { Worktree } from './worktree';
 
 export interface LaunchContext {
@@ -37,11 +34,9 @@ export interface LaunchContext {
   team?: TeamMember[];
   /** Agents da conta (padrão ~/.claude/agents); os testes trocam. */
   userAgentsDir?: string;
-  /** Troca o `spawn` real nos testes. */
-  open?: (scriptPath: string, title: string) => void;
 }
 
-/** A primeira mensagem de uma sessão nova (no terminal ou numa conversa do Claudio’s Club). */
+/** A primeira mensagem de uma sessão nova numa conversa do Claudio’s Club. */
 export function greeting(profile: Pick<StaffProfile, 'name' | 'firstTask'>): string {
   return profile.firstTask
     ? `Olá, ${profile.name}. Leia sua memória e comece pela primeira tarefa da ficha.`
@@ -56,47 +51,6 @@ export function sessionCwd(profile: StaffProfile, ctx: Pick<LaunchContext, 'proj
   return ctx.worktree?.path ?? ctx.projectPath;
 }
 
-/** Gera a ficha, a config de MCP e o script, e abre o funcionário num terminal novo. */
-export async function launchStaff(
-  profile: StaffProfile,
-  ctx: LaunchContext,
-  opts: { resume: boolean },
-): Promise<{ result: LaunchResult; profile: StaffProfile }> {
-  const last = profile.sessions.at(-1);
-  const resume = opts.resume && !!last;
-  const sessionId = resume ? last!.id : randomUUID();
-  const cwd = sessionCwd(profile, ctx, resume ? sessionId : null);
-
-  const run = await prepareRun(profile, ctx, sessionId, cwd);
-  const runDir = path.join(ctx.runDir, sessionId);
-
-  const args = buildClaudeArgs(profile, { ...run, sessionId, resume, firstPrompt: greeting(profile) });
-  const command = toCmdLine('claude', args);
-  // Nome primeiro: a aba do terminal é estreita.
-  const title = sanitizeArg(`${profile.name} (${profile.role}) - ${ctx.company}`);
-
-  if (process.platform !== 'win32' && !ctx.open) {
-    return {
-      result: { ok: false, sessionId: null, command: `cd "${cwd}" && ${command}`, error: 'abrir terminal automaticamente só no Windows por enquanto' },
-      profile,
-    };
-  }
-
-  const script = path.join(runDir, 'start.cmd');
-  await writeAtomic(script, cmdScript(title, cwd, command));
-  try {
-    (ctx.open ?? openWindow)(script, title);
-  } catch (err) {
-    return { result: { ok: false, sessionId: null, command, error: err instanceof Error ? err.message : String(err) }, profile };
-  }
-
-  const next: StaffProfile = resume
-    ? { ...profile, updatedAt: new Date().toISOString() }
-    : { ...profile, sessions: [...profile.sessions, { id: sessionId, startedAt: new Date().toISOString(), cwd }], updatedAt: new Date().toISOString() };
-  await saveProfile(ctx.projectPath, next);
-  return { result: { ok: true, sessionId, command, error: null }, profile: next };
-}
-
 export interface PreparedRun {
   systemPromptFile: string;
   mcpConfigPath: string | null;
@@ -109,7 +63,7 @@ export interface PreparedRun {
 
 /**
  * Ficha atualizada, prompt de sistema (identidade + ficha, em arquivo), config de MCP da ficha,
- * hooks do Claudio’s Club e os agents do roteiro, para o terminal ou para a conversa no Claudio’s Club. Rodando fora
+ * hooks do Claudio’s Club e os agents do roteiro, para a conversa no Claudio’s Club. Rodando fora
  * da pasta do projeto (worktree), a pasta das fichas entra em `--add-dir`.
  */
 export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string): Promise<PreparedRun> {
@@ -196,37 +150,3 @@ export async function writeFicha(
   return fichaCtx;
 }
 
-/**
- * UTF-8 (chcp 65001) para nomes e caminhos com acento; CRLF, como o cmd espera.
- * O título da aba fica com o nome do funcionário: o Claude não troca o título do terminal.
- * Saiu bem (/exit), a janela fecha sozinha; com erro, fica aberta para dar para ler.
- */
-export function cmdScript(title: string, cwd: string, command: string): string {
-  return [
-    '@echo off',
-    'chcp 65001 >nul',
-    `title ${title}`,
-    'set CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1',
-    `cd /d "${cwd}"`,
-    command,
-    'if errorlevel 1 (',
-    '  echo.',
-    '  echo A sessao terminou com erro. Aperte uma tecla para fechar.',
-    '  pause >nul',
-    ')',
-    'exit',
-    '',
-  ].join('\r\n');
-}
-
-function openWindow(script: string, title: string) {
-  // `start` abre uma janela nova; o primeiro argumento entre aspas é o título. Com /s, o cmd tira
-  // só as aspas externas e o resto chega intacto.
-  const child = spawn('cmd.exe', ['/d', '/s', '/c', `"start "${title}" "${script}""`], {
-    env: cleanEnv(),
-    detached: true,
-    stdio: 'ignore',
-    windowsVerbatimArguments: true,
-  });
-  child.unref();
-}

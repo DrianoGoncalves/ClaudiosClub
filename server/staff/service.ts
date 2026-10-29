@@ -8,7 +8,7 @@ import { readUsage } from '../usage';
 import { projectBudgetHit, usageStopHit, UsageStopError } from '../usageStop';
 import { TEMP_IDLE_DAYS } from '../../shared/model';
 import { buildClaudeArgs, capAutonomy } from './ficha';
-import { greeting, launchStaff, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
+import { greeting, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
 import { ensureWorktree, worktreeFor, type Worktree } from './worktree';
 import { listMcpServers } from './mcp';
 import {
@@ -31,7 +31,6 @@ export interface StaffServiceOptions {
   runDir: string;
   claudeConfigFile: string;
   mycoUrl: string;
-  open?: LaunchContext['open'];
   /** Consumo 5h/7d (testes trocam). */
   readUsage?: () => Promise<AccountUsage>;
   /** Cria a worktree da ficha (testes trocam o git). */
@@ -159,31 +158,21 @@ export class StaffService {
       profile = { ...profile, hiredBy: hirer.id, temporary: true };
       await saveProfile(project.path, profile);
     }
-    if (!input.launch) {
+    if (!input.launch || !this.opts.openChat) {
       // Sem sessão ainda, mas a ficha e a memória já ficam no projeto para conferir.
       await writeFicha(profile, await this.context(project, profile));
       return { profile, launch: null };
     }
-    // Pela API, a sessão abre numa conversa do Claudio’s Club (não num terminal): fica à vista no quadro, na
-    // fila de tarefas e na caixa "precisa de mim".
-    if (hirer && this.opts.openChat) {
-      try {
-        const sessionId = await this.opts.openChat(project.id, profile.id, greeting(profile));
-        const opened = (await readProfile(project.path, profile.id)) ?? profile;
-        return { profile: opened, launch: { ok: true, sessionId, command: '', error: null } };
-      } catch (err) {
-        await writeFicha(profile, await this.context(project, profile));
-        return { profile, launch: { ok: false, sessionId: null, command: '', error: err instanceof Error ? err.message : String(err) } };
-      }
-    }
+    // A sessão abre numa conversa do Claudio’s Club, nunca num terminal (pelo navegador ou pela API): fica à
+    // vista no quadro, na fila de tarefas e na caixa "precisa de mim".
     try {
-      const { result, profile: launched } = await this.launchProfile(project, profile, false);
-      return { profile: launched, launch: result };
+      const sessionId = await this.opts.openChat(project.id, profile.id, greeting(profile));
+      const opened = (await readProfile(project.path, profile.id)) ?? profile;
+      return { profile: opened, launch: { ok: true, sessionId, command: '', error: null } };
     } catch (err) {
-      // Contratado, mas a sessão não abriu (ex.: a worktree pedida não pôde ser criada).
-      if (!(err instanceof StaffError)) throw err;
+      // Contratado, mas a conversa não começou (ex.: a worktree pedida não pôde ser criada).
       await writeFicha(profile, await this.context(project, profile));
-      return { profile, launch: { ok: false, sessionId: null, command: '', error: err.message } };
+      return { profile, launch: { ok: false, sessionId: null, command: '', error: err instanceof Error ? err.message : String(err) } };
     }
   }
 
@@ -372,17 +361,8 @@ export class StaffService {
     return false;
   }
 
-  async launch(projectId: string, staffId: string, resume: boolean, force = false): Promise<LaunchResult | null> {
-    const project = await this.project(projectId);
-    if (!project) return null;
-    const profile = await readProfile(project.path, staffId);
-    if (!profile) return null;
-    if (!force) await this.guardUsage(profile.usageStop, projectId);
-    return (await this.launchProfile(project, { ...profile, projectId }, resume)).result;
-  }
-
   /**
-   * Trava de consumo antes de trabalho novo (conversa, sessão no terminal). Lança
+   * Trava de consumo antes de trabalho novo (conversa ou contratação). Lança
    * UsageStopError quando o 5h/7d passou da linha da ficha ou da empresa.
    */
   async checkUsage(projectId: string, staffId: string | null): Promise<void> {
@@ -441,10 +421,6 @@ export class StaffService {
     return project && profile ? readPortrait(project.path, profile) : null;
   }
 
-  private async launchProfile(project: Project, profile: StaffProfile, resume: boolean) {
-    return launchStaff(profile, await this.context(project, profile, true), { resume });
-  }
-
   /** `createWorktree`: vai abrir uma sessão agora, então a worktree da ficha precisa existir. */
   private async context(project: Project, profile: StaffProfile, createWorktree = false): Promise<LaunchContext> {
     const [config, managers, servers, worktree, everyone] = await Promise.all([
@@ -479,7 +455,6 @@ export class StaffService {
       team: everyone
         .filter((s) => s.id !== profile.id && s.reportsTo.includes(profile.id) && !s.ended)
         .map((s) => ({ id: s.id, name: s.name, role: s.role, mission: s.mission, ...(s.temporary && { temporary: true }) })),
-      open: this.opts.open,
     };
   }
 

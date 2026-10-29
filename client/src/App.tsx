@@ -360,13 +360,6 @@ export function App() {
               totalUsd={costs?.total.usd ?? 0}
               archived={isArchived('session', archiveKey(selection))}
               onArchive={(v) => archive('session', archiveKey(selection), v)}
-              onLaunch={async (resume) => {
-                const r = await withUsageConfirm((force) => api.launch(selection.projectId, selection.staff!.id, resume, force));
-                if (!r) return { ok: false, sessionId: null, command: '', error: t('app.notOpenedUsage') };
-                // A sessão nova entra no quadro assim que o Claude Code gravar o transcript.
-                setTimeout(load, 4000);
-                return r;
-              }}
               onHireSub={() => setForm({ projectId: selection.projectId, mode: { kind: 'hire', reportsTo: selection.staff ? [selection.staff.id] : [] } })}
               onEdit={() => {
                 if (selection.staff) setForm({ projectId: selection.projectId, mode: { kind: 'edit', profile: selection.staff } });
@@ -480,7 +473,7 @@ export function App() {
                 ? t('app.hiredChat', { name: profile.name })
                 : launch.ok
                   ? t('app.hiredLaunched', { name: profile.name })
-                  : t('app.hiredNotLaunched', { name: profile.name, error: String(launch.error), command: launch.command }),
+                  : t('app.hiredNotLaunched', { name: profile.name, error: String(launch.error) }),
             );
             setSelectedId(staffNodeId(profile.projectId, profile.id));
             load();
