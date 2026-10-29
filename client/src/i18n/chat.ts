@@ -6,6 +6,7 @@ import { defineMessages } from './define';
 export default defineMessages({
   'pt-BR': {
     'chat.close': 'Fechar',
+    'chat.scrollBottom': 'Ir para a última mensagem',
     'chat.send': 'Enviar',
     'chat.stop': 'Parar',
     'chat.stopTask': 'parar',
@@ -198,6 +199,7 @@ export default defineMessages({
   },
   en: {
     'chat.close': 'Close',
+    'chat.scrollBottom': 'Go to the latest message',
     'chat.send': 'Send',
     'chat.stop': 'Stop',
     'chat.stopTask': 'stop',
@@ -390,6 +392,7 @@ export default defineMessages({
   },
   es: {
     'chat.close': 'Cerrar',
+    'chat.scrollBottom': 'Ir al último mensaje',
     'chat.send': 'Enviar',
     'chat.stop': 'Detener',
     'chat.stopTask': 'detener',

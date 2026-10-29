@@ -23,6 +23,16 @@ export function SendIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+/** Seta para baixo: voltar ao fim da conversa. */
+export function ArrowDownIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M12 5v14" />
+      <path d="m19 12-7 7-7-7" />
+    </svg>
+  );
+}
+
 /** Folha com + e −: os arquivos que o funcionário mudou (diff). */
 export function FileDiffIcon({ size = 16 }: { size?: number }) {
   return (

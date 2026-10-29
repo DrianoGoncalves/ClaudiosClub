@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type { Autonomy, ChatAttachment, ChatItem, Effort, SendPriority, UiLevel } from '../../../shared/model';
 import { api } from '../api';
-import { FileDiffIcon, ImageIcon, SendIcon } from '../icons';
+import { ArrowDownIcon, FileDiffIcon, ImageIcon, SendIcon } from '../icons';
 import { t, locale } from '../i18n';
 import { shrinkImage } from '../lib/shrinkImage';
 import {
@@ -68,6 +68,8 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const stick = useRef(true);
+  // Rolou para cima: aparece a seta para voltar ao fim.
+  const [away, setAway] = useState(false);
   const executeAs: Autonomy = !autonomy || autonomy === 'plan' ? 'acceptEdits' : autonomy;
 
   const busy = chat.state?.busy ?? false;
@@ -320,6 +322,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
         onScroll={(e) => {
           const el = e.currentTarget;
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          setAway(!stick.current);
         }}
       >
         {chat.loading && <p className="muted small chat-empty">{t('chat.loadingChat')}</p>}
@@ -342,6 +345,17 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
             <span className="bn-working" />
             {doing && !showTools && <span className="chat-doing mono">{doing}</span>}
           </div>
+        )}
+        {away && (
+          <button
+            type="button"
+            className="chat-bottom"
+            aria-label={t('chat.scrollBottom')}
+            title={t('chat.scrollBottom')}
+            onClick={() => list.current?.scrollTo({ top: list.current.scrollHeight, behavior: 'smooth' })}
+          >
+            <ArrowDownIcon />
+          </button>
         )}
       </div>
 

@@ -168,7 +168,7 @@ export function EmployeePanel(props: {
             {fresh && <option value="">{t('detail.newConversation')}</option>}
             {byDay(conversations).map((g) => (
               <optgroup key={g.label} label={g.label}>
-                {g.items.map(({ c, i }) => (
+                {g.items.map(({ c }) => (
                   <option key={c.id} value={c.id}>
                     {conversationLabel(c)}
                   </option>
