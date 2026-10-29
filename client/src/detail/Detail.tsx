@@ -28,6 +28,7 @@ import { WorthIt } from './WorthIt';
 import { employeeName, ENTRYPOINT_LABEL, formatShare, STATUS_LABEL } from '../format';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
+import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
 
 // Painel lateral: o que o nó selecionado no quadro tem por trás.
 
@@ -751,6 +752,7 @@ export function UserPanel({
       <AccountRules />
       <AgentList agents={scope.agents} empty={t('detail.noAgentsUser')} onNew={onNewAgent} onEdit={onEditAgent} />
       <SkillList skills={scope.skills} />
+      <SkillLibrary />
     </>
   );
 }
@@ -959,6 +961,8 @@ export function SkillPanel({ skill }: { skill: Skill }) {
       {skill.error && <p className="error">{skill.error}</p>}
       {skill.link.target && <Field label={t('detail.origin')} mono value={skill.link.target} />}
       {skill.description && <Field label={t('detail.description')} value={skill.description} />}
+      {/* Skill da conta aparece em todas as sessões: dá para copiar para a biblioteca (só quem tem na ficha). */}
+      {skill.scope === 'user' && !skill.readOnly && !skill.link.target && <CopyToLibrary name={skill.name} />}
     </>
   );
 }

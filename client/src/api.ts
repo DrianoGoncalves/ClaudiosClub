@@ -18,6 +18,7 @@ import type {
   GitState,
   InboxItem,
   LaunchResult,
+  LibrarySkill,
   LiveSession,
   McpServerInfo,
   ModelBenchmarks,
@@ -177,6 +178,12 @@ export const api = {
     post<Record<string, RunMark>>(`/api/sessions/${sessionId}/marks`, { runId, mark }),
   mcp: (projectId: string) => get<McpServerInfo[]>(`/api/projects/${projectId}/mcp`),
   servers: (projectId: string) => get<ServerInfo[]>(`/api/projects/${projectId}/servers`),
+  // Biblioteca de skills da conta (só quem tem na ficha carrega).
+  skillLibrary: () => get<LibrarySkill[]>('/api/skills/library'),
+  librarySkill: (name: string) => get<LibrarySkill & { body: string }>(`/api/skills/library/${encodeURIComponent(name)}`),
+  saveLibrarySkill: (s: { originalName?: string; name: string; description: string; body: string }) => post<LibrarySkill>('/api/skills/library', s),
+  removeLibrarySkill: (name: string) => post<{ ok: boolean }>(`/api/skills/library/${encodeURIComponent(name)}/delete`),
+  importSkill: (name: string) => post<LibrarySkill>('/api/skills/library/import', { name }),
   serverLog: (projectId: string, staffId: string) => get<ServerAccess[]>(`/api/projects/${projectId}/staff/${staffId}/server-log`),
   // Conexões SSH do projeto (a lista também é POST: exige a página do MyCo).
   connections: (projectId: string) => post<ProjectConnection[]>(`/api/projects/${projectId}/connections/list`),

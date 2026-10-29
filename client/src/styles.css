@@ -624,6 +624,9 @@ button.ranking-row:hover { border-color: var(--accent); }
 .workspace-new { display: flex; gap: 6px; }
 .workspace-new input { flex: 1; min-width: 0; }
 
+/* ---- biblioteca de skills (no painel da conta) ---- */
+.skill-lib { display: grid; gap: 6px; }
+
 /* ---- registro de acesso aos servidores (na ficha) ---- */
 .server-log { margin-top: 10px; }
 .server-log summary { cursor: pointer; font-weight: 600; }

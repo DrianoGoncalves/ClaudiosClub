@@ -8,6 +8,7 @@ import { cleanEnv } from '../auth';
 import { buildClaudeArgs, renderFicha, sanitizeArg, systemPrompt, toCmdLine, type FichaContext, type TeamMember } from './ficha';
 import { buildMcpConfig } from './mcp';
 import { ensurePlaybookAgents } from './playbookAgents';
+import { buildSkillPlugin } from '../skillLibrary';
 import { ensureMemory, fichaFile, memoryFile, saveProfile, staffDir, writeAtomic } from './store';
 import type { Worktree } from './worktree';
 
@@ -28,6 +29,10 @@ export interface LaunchContext {
   servers?: ServerInfo[];
   /** Arquivos das chaves desses servidores (a sessão não pode ler). */
   serverKeys?: string[];
+  /** Skills da ficha que estão na biblioteca do MyCo (vão no plugin da sessão). */
+  librarySkills?: string[];
+  /** Pasta da biblioteca (os testes trocam). */
+  skillLibraryDir?: string;
   /** Quem reporta a este funcionário (a seção "Sua equipe" da ficha). */
   team?: TeamMember[];
   /** Agents da conta (padrão ~/.claude/agents); os testes trocam. */
@@ -99,6 +104,7 @@ export interface PreparedRun {
   settingsFile: string;
   agentsFile: string | null;
   keyFiles: string[];
+  pluginDir: string | null;
 }
 
 /**
@@ -133,7 +139,17 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     agentsFile = path.join(dir, 'agents.json');
     await writeAtomic(agentsFile, JSON.stringify(agents.inline, null, 2));
   }
-  return { systemPromptFile, mcpConfigPath, addDirs: away ? [staffDir(ctx.projectPath)] : [], settingsFile, agentsFile, keyFiles: ctx.serverKeys ?? [] };
+  // As skills da biblioteca que a ficha tem: um plugin só desta sessão (as outras não veem).
+  const plugin = ctx.librarySkills?.length ? await buildSkillPlugin(ctx.librarySkills, path.join(dir, 'myco-plugin'), ctx.skillLibraryDir) : null;
+  return {
+    systemPromptFile,
+    mcpConfigPath,
+    addDirs: away ? [staffDir(ctx.projectPath)] : [],
+    settingsFile,
+    agentsFile,
+    keyFiles: ctx.serverKeys ?? [],
+    pluginDir: plugin?.dir ?? null,
+  };
 }
 
 const DELIVERY_HOOK = fileURLToPath(new URL('../../scripts/hooks/delivery-check.mjs', import.meta.url));
@@ -157,7 +173,7 @@ export function staffSettings() {
  */
 export async function writeFicha(
   profile: StaffProfile,
-  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team'>,
+  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'librarySkills'>,
   absolute = false,
 ): Promise<FichaContext> {
   const rel = (file: string) => (absolute ? file : path.relative(ctx.projectPath, file));
@@ -173,6 +189,7 @@ export async function writeFicha(
     worktree: profile.worktree ? (ctx.worktree ?? null) : null,
     servers: ctx.servers,
     team: ctx.team,
+    librarySkills: ctx.librarySkills,
   };
   await writeAtomic(fichaFile(ctx.projectPath, profile.id), renderFicha(profile, fichaCtx));
   await ensureMemory(ctx.projectPath, profile);

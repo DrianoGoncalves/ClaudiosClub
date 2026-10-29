@@ -569,6 +569,18 @@ export interface ServerInfo {
   remoteRoot: string | null;
 }
 
+/**
+ * Skill da biblioteca da conta (`~/.myco/skills`): nenhuma sessão vê sozinha; só quem a tem na
+ * ficha, carregada como `myco:<nome>` na conversa dele.
+ */
+export interface LibrarySkill {
+  name: string;
+  description: string;
+  /** Outros arquivos da pasta (scripts, modelos): o MyCo não edita. */
+  files: string[];
+  updatedAt: string;
+}
+
 /** Um comando de acesso remoto que um funcionário rodou (tirado do transcript dele). */
 export interface ServerAccess {
   at: string;

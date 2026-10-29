@@ -35,6 +35,7 @@ import { StaffError, StaffService } from './staff/service';
 import { mcpJsonWarnings } from './staff/mcp';
 import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
+import { copyToLibrary, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill, SkillError } from './skillLibrary';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
 import { readUsage } from './usage';
 import { UsageStopError } from './usageStop';
@@ -855,6 +856,41 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     },
   ],
   ['GET', /^\/api\/config$/, () => readConfig()],
+  // Biblioteca de skills da conta (~/.myco/skills): só quem tem a skill na ficha carrega.
+  ['GET', /^\/api\/skills\/library$/, () => listLibrary()],
+  [
+    'GET',
+    /^\/api\/skills\/library\/([a-z0-9][a-z0-9-]{0,63})$/,
+    async ({ params: [name] }) => {
+      const s = await readLibrarySkill(name!);
+      return s && { name: s.name, description: s.description, body: s.body, files: s.files, updatedAt: s.updatedAt };
+    },
+  ],
+  [
+    'POST',
+    /^\/api\/skills\/library$/,
+    ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      return saveLibrarySkill(body);
+    },
+  ],
+  [
+    'POST',
+    /^\/api\/skills\/library\/import$/,
+    ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      const b = parse(z.object({ name: z.string().max(64) }), body);
+      return copyToLibrary(b.name, path.join(defaultLocations().home, 'skills'));
+    },
+  ],
+  [
+    'POST',
+    /^\/api\/skills\/library\/([a-z0-9][a-z0-9-]{0,63})\/delete$/,
+    async ({ params: [name], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo MyCo');
+      return { ok: await removeLibrarySkill(name!) };
+    },
+  ],
   // Workspaces (abas do quadro): criar ou editar, remover, e o workspace de cada projeto.
   [
     'POST',
@@ -950,6 +986,7 @@ const server = http.createServer(async (req, res) => {
           err instanceof FileError ||
           err instanceof AgentError ||
           err instanceof WorkspaceError ||
+          err instanceof SkillError ||
           err instanceof ProjectError ||
           (err as NodeJS.ErrnoException | null)?.code === 'EEXIST'
         ) {

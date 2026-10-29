@@ -11,6 +11,8 @@ export interface FichaContext {
   company: string;
   /** Workspace do projeto (como você agrupa os projetos: cliente, área…), se tiver. */
   workspace?: string | null;
+  /** Skills da ficha que são da biblioteca do MyCo (só esta sessão vê, como `myco:<nome>`). */
+  librarySkills?: string[];
   projectName: string;
   projectPath: string;
   /** Nomes de quem chama este funcionário; vazio = o usuário. */
@@ -212,7 +214,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     `## Missão\n${p.mission}`,
     p.firstTask ? `## Primeira tarefa\n${p.firstTask}` : '',
     `## Autonomia\n${AUTONOMY_LABEL[p.autonomy]}`,
-    `## Agents e skills indicados\nAgents: ${p.agents.length ? p.agents.join(', ') : 'nenhum em especial'}.\nSkills: ${p.skills.length ? p.skills.join(', ') : 'nenhuma em especial'}.\nPrefira estes quando a tarefa pedir; os demais do projeto continuam disponíveis.`,
+    `## Agents e skills indicados\nAgents: ${p.agents.length ? p.agents.join(', ') : 'nenhum em especial'}.\nSkills: ${skillList(p, ctx)}.\nPrefira estes quando a tarefa pedir; os demais do projeto continuam disponíveis.`,
     `## Conhecimento (leia antes de começar)\n${list(p.knowledge, 'Nada específico além do CLAUDE.md do projeto.')}`,
     `## Regras\n${list(p.rules, 'Siga o CLAUDE.md do projeto.')}`,
     p.doneWhen ? `## Definição de pronto\n${p.doneWhen}` : '',
@@ -229,6 +231,13 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     memorySection(ctx),
   ];
   return sections.filter(Boolean).join('\n\n') + '\n';
+}
+
+/** As skills da ficha; as da biblioteca do MyCo vêm no plugin da sessão, com o prefixo dele. */
+function skillList(p: StaffProfile, ctx: FichaContext): string {
+  if (!p.skills.length) return 'nenhuma em especial';
+  const library = new Set(ctx.librarySkills ?? []);
+  return p.skills.map((s) => (library.has(s) ? `\`myco:${s}\` (só sua)` : s)).join(', ');
 }
 
 /**
@@ -317,6 +326,8 @@ export interface ClaudeArgsOptions {
   addDirs?: string[];
   /** Chaves SSH das conexões da ficha, para bloquear a leitura (ver secretDenyRules). */
   keyFiles?: string[];
+  /** Plugin da sessão com as skills da biblioteca que a ficha tem (ver server/skillLibrary.ts). */
+  pluginDir?: string | null;
 }
 
 /**
@@ -335,6 +346,8 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   // e projetos, e o cache dele é reaproveitado mais vezes.
   args.push('--exclude-dynamic-system-prompt-sections');
   if (o.settingsFile) args.push('--settings', o.settingsFile);
+  // Só esta sessão carrega: as skills da biblioteca que estão na ficha dele.
+  if (o.pluginDir) args.push('--plugin-dir', o.pluginDir);
   if (o.agentsFile) args.push('--agents', o.agentsFile);
   args.push('--permission-mode', p.autonomy);
   if (p.model) args.push('--model', p.model);

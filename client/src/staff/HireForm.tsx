@@ -73,9 +73,14 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
     () => [...new Set([...inventory.agents, ...board.user.agents].map((a) => a.name))].sort(),
     [inventory, board.user],
   );
+  // As da biblioteca do MyCo só carregam para quem tem na ficha (as do projeto e da conta, todos veem).
+  const [library, setLibrary] = useState<string[]>([]);
+  useEffect(() => {
+    api.skillLibrary().then((l) => setLibrary(l.map((s) => s.name)), () => {});
+  }, []);
   const skillNames = useMemo(
-    () => [...new Set([...inventory.skills, ...board.user.skills.filter((s) => s.scope !== 'synced')].map((s) => s.name))].sort(),
-    [inventory, board.user],
+    () => [...new Set([...inventory.skills, ...board.user.skills.filter((s) => s.scope !== 'synced')].map((s) => s.name).concat(library))].sort(),
+    [inventory, board.user, library],
   );
   const colleagues = board.staff.filter((s) => s.projectId === projectId && s.id !== editing?.id);
 
@@ -512,7 +517,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
               {skillNames.map((s) => (
                 <label key={`s:${s}`} className="check">
                   <input type="checkbox" checked={skills.includes(s)} onChange={() => toggle(skills, setSkills, s)} /> {s}
-                  <span className="muted small"> {t('staff.skillTag')}</span>
+                  <span className="muted small"> {library.includes(s) ? t('office.libTag') : t('staff.skillTag')}</span>
                 </label>
               ))}
             </div>

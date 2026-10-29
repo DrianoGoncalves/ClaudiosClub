@@ -3,6 +3,7 @@ import type { AccountUsage, LaunchResult, McpServerInfo, Project, ProjectConnect
 import { keyFilesOf, listServers, readConnections, removeConnection, saveConnection, testConnection, writeSshConfig } from './servers';
 import type { ToolAdapter } from '../adapters/types';
 import { readConfig, setArchived, workspaceOf } from '../config';
+import { librarySkillsOf } from '../skillLibrary';
 import { readUsage } from '../usage';
 import { projectBudgetHit, usageStopHit, UsageStopError } from '../usageStop';
 import { TEMP_IDLE_DAYS } from '../../shared/model';
@@ -35,6 +36,8 @@ export interface StaffServiceOptions {
   readUsage?: () => Promise<AccountUsage>;
   /** Cria a worktree da ficha (testes trocam o git). */
   ensureWorktree?: (projectPath: string, staffId: string) => Promise<Worktree>;
+  /** Biblioteca de skills da conta (padrão ~/.myco/skills; os testes trocam). */
+  skillLibraryDir?: string;
   /** A ficha foi editada ou restaurada (as conversas abertas dela precisam saber). */
   onChange?: (prev: StaffProfile, next: StaffProfile) => void;
   /** Custo dos últimos 7 dias do projeto e da conta toda, para o orçamento por projeto. */
@@ -469,6 +472,8 @@ export class StaffService {
       worktree,
       servers,
       serverKeys: profile.servers.length ? await keyFilesOf(project.path, profile.servers) : [],
+      librarySkills: profile.skills.length ? await librarySkillsOf(profile.skills, this.opts.skillLibraryDir) : [],
+      skillLibraryDir: this.opts.skillLibraryDir,
       // A equipe dele: quem reporta a ele (os temporários encerrados já saíram do quadro, mas a ficha
       // não sabe disso; ficam de fora os que têm `ended`).
       team: everyone
