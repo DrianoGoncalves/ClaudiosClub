@@ -998,3 +998,4 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 .update-menu p { margin: 0; }
 .update-commits { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 12px; line-height: 1.4; }
 .update-commits code { color: var(--muted); }
+.update-notes { white-space: pre-wrap; line-height: 1.45; }

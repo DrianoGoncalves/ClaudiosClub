@@ -5,9 +5,9 @@ import { api } from '../api';
 import { formatAgo } from '../format';
 import { t } from '../i18n';
 
-// Novidades do Claudio’s Club no GitHub: "Nova versão" no topo do quadro quando o remoto tem commits que este
-// clone não tem, e o item "Atualizações" nas configurações. Atualizar avança o código (só fast-forward, no
-// servidor) e, com o vigia, reinicia; a página recarrega quando o servidor novo responde.
+// Versões do Claudio’s Club publicadas no GitHub (tags vX.Y.Z): "Nova versão" no topo do quadro quando há uma mais
+// nova que a daqui, e o item "Atualizações" nas configurações. Atualizar avança o código até ela (só fast-forward,
+// no servidor) e, com o vigia, reinicia; a página recarrega quando o servidor novo responde.
 
 /** Status guardado no servidor (ele busca no GitHub ao subir e a cada 6 h); relido aqui a cada 30 min. */
 export function useUpdateStatus(): [UpdateStatus | null, (s: UpdateStatus) => void] {
@@ -24,7 +24,7 @@ export function useUpdateStatus(): [UpdateStatus | null, (s: UpdateStatus) => vo
 /** Por que não dá para atualizar por aqui; null quando dá. */
 function blockedReason(s: UpdateStatus): string | null {
   if (s.dirty) return t('toolbar.updateDirty');
-  if (s.ahead > 0) return t('toolbar.updateAhead', { upstream: s.upstream ?? '' });
+  if (s.diverged) return t('toolbar.updateDiverged', { latest: s.latest ?? '' });
   return null;
 }
 
@@ -104,12 +104,13 @@ function UpdateButton({ status }: { status: UpdateStatus }) {
   );
 }
 
-/** As novidades (assunto dos commits), o motivo de não poder atualizar e o botão. */
+/** As notas da versão, o que entra (assunto dos commits), o motivo de não poder atualizar e o botão. */
 function UpdateDetails({ status }: { status: UpdateStatus }) {
   const blocked = blockedReason(status);
   const more = status.behind - status.commits.length;
   return (
     <>
+      {status.notes && <p className="update-notes">{status.notes}</p>}
       <ul className="update-commits">
         {status.commits.map((c) => (
           <li key={c.hash}>
@@ -148,7 +149,7 @@ export function UpdateNotice() {
   }, [open]);
 
   if (!status?.supported || status.behind === 0) return null;
-  const title = t(status.behind === 1 ? 'toolbar.updateBehindOne' : 'toolbar.updateBehindOther', { n: status.behind, upstream: status.upstream ?? '' });
+  const title = t('toolbar.updateAvailable', { latest: status.latest ?? '', current: status.current ?? '?' });
   return (
     <div className="update-notice" ref={root}>
       <button className="update-button" aria-haspopup="dialog" aria-expanded={open} title={title} onClick={() => setOpen(!open)}>
@@ -176,11 +177,12 @@ export function UpdateControls() {
 
   if (!status) return null;
   if (!status.supported) return <span className="muted small">{t('toolbar.updateUnsupported')}</span>;
-  const upstream = status.upstream ?? '';
-  const summary =
-    status.behind === 0
-      ? t('toolbar.updateUpToDate', { upstream })
-      : t(status.behind === 1 ? 'toolbar.updateBehindOne' : 'toolbar.updateBehindOther', { n: status.behind, upstream });
+  const versions = { latest: status.latest ?? '', current: status.current ?? '?' };
+  const summary = !status.latest
+    ? t('toolbar.updateNoRelease', versions)
+    : status.behind === 0
+      ? t('toolbar.updateUpToDate', versions)
+      : t('toolbar.updateAvailable', versions);
   const checked = status.checkedAt ? ` · ${t('toolbar.updateChecked', { ago: formatAgo(Date.now() - Date.parse(status.checkedAt)) })}` : '';
   return (
     <>

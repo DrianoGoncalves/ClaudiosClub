@@ -5,7 +5,8 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { applyUpdate, readUpdateStatus } from '../server/selfUpdate';
 
-// Um "GitHub" de mentira (repositório bare), o clone em que o Claudio’s Club roda e outro clone que publica.
+// Um "GitHub" de mentira (repositório bare), o clone em que o Claudio’s Club roda e outro clone que publica
+// as versões (tags).
 
 let dir: string;
 let app: string;
@@ -37,30 +38,64 @@ beforeEach(() => {
 
 afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
-describe('atualizar o Claudio’s Club pelo GitHub', () => {
-  it('em dia, sem novidades', async () => {
+/** Publica uma versão: tag anotada com as notas, enviada ao remoto. */
+function release(tag: string, notes = `versão ${tag}`) {
+  git(dev, 'tag', '-a', tag, '-m', notes);
+  git(dev, 'push', '-q', 'origin', tag);
+}
+
+describe('atualizar o Claudio’s Club pela versão publicada no GitHub', () => {
+  it('sem versão publicada, não há o que atualizar', async () => {
+    commit(dev, 'a.txt', 'a\n', 'no main, sem versão');
+    git(dev, 'push', '-q');
     const s = await readUpdateStatus(app);
-    expect(s).toMatchObject({ supported: true, upstream: 'origin/main', behind: 0, ahead: 0, dirty: false, commits: [], error: null });
+    expect(s).toMatchObject({ supported: true, latest: null, behind: 0, diverged: false, dirty: false, error: null });
+    await expect(applyUpdate(app, noInstall)).rejects.toThrow(/mais nova/);
   });
 
-  it('conta as novidades do remoto e avança até elas', async () => {
+  it('o que foi mesclado no main não chega antes da versão', async () => {
+    release('v0.1.0');
+    git(app, 'fetch', '-q', '--tags');
+    git(app, 'merge', '-q', '--ff-only', 'v0.1.0');
+    commit(dev, 'a.txt', 'a\n', 'só no main');
+    git(dev, 'push', '-q');
+    expect(await readUpdateStatus(app)).toMatchObject({ current: 'v0.1.0', latest: 'v0.1.0', behind: 0 });
+  });
+
+  it('avança até a versão mais nova, com as notas, e para nela', async () => {
+    release('v0.1.0');
     commit(dev, 'a.txt', 'a\n', 'novidade um');
     commit(dev, 'b.txt', 'b\n', 'novidade dois');
     git(dev, 'push', '-q');
+    release('v0.2.0', 'Versão 0.2\n\nDuas novidades.');
+    commit(dev, 'c.txt', 'c\n', 'depois da versão');
+    git(dev, 'push', '-q');
 
     const s = await readUpdateStatus(app);
+    expect(s.latest).toBe('v0.2.0');
     expect(s.behind).toBe(2);
+    expect(s.notes).toBe('Versão 0.2\n\nDuas novidades.');
     expect(s.commits.map((c) => c.subject)).toEqual(['novidade dois', 'novidade um']);
 
     const r = await applyUpdate(app, noInstall);
-    expect(r.installed).toBe(false);
+    expect(r).toMatchObject({ to: 'v0.2.0', installed: false });
     expect(fs.existsSync(path.join(app, 'b.txt'))).toBe(true);
-    expect((await readUpdateStatus(app, { fetch: false })).behind).toBe(0);
+    expect(fs.existsSync(path.join(app, 'c.txt'))).toBe(false);
+    expect(await readUpdateStatus(app, { fetch: false })).toMatchObject({ current: 'v0.2.0', behind: 0 });
+  });
+
+  it('a versão mais nova é pela ordem das versões, não pela data', async () => {
+    release('v0.9.0');
+    commit(dev, 'a.txt', 'a\n', 'nova');
+    git(dev, 'push', '-q');
+    release('v0.10.0');
+    expect((await readUpdateStatus(app)).latest).toBe('v0.10.0');
   });
 
   it('roda o npm install quando o package-lock muda', async () => {
     commit(dev, 'package-lock.json', '{}\n', 'dependências');
     git(dev, 'push', '-q');
+    release('v0.2.0');
     let ran = false;
     const r = await applyUpdate(app, async () => ((ran = true), { ok: true, out: '', err: '' }));
     expect(r.installed).toBe(true);
@@ -70,13 +105,15 @@ describe('atualizar o Claudio’s Club pelo GitHub', () => {
   it('não atualiza com arquivo mudado à mão nem com commit local', async () => {
     commit(dev, 'a.txt', 'a\n', 'novidade');
     git(dev, 'push', '-q');
+    release('v0.2.0');
 
     fs.writeFileSync(path.join(app, 'README.md'), 'mexido\n');
     await expect(applyUpdate(app, noInstall)).rejects.toThrow(/mudados à mão/);
     git(app, 'checkout', '-q', '--', 'README.md');
 
     commit(app, 'meu.txt', 'meu\n', 'meu commit');
-    await expect(applyUpdate(app, noInstall)).rejects.toThrow(/commit\(s\) seus/);
+    expect((await readUpdateStatus(app)).diverged).toBe(true);
+    await expect(applyUpdate(app, noInstall)).rejects.toThrow(/commits que a v0.2.0 não tem/);
   });
 
   it('pasta sem git não tem o que buscar', async () => {

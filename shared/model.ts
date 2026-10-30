@@ -860,19 +860,23 @@ export interface UpdateCommit {
   subject: string;
 }
 
-/** O próprio Claudio’s Club contra o GitHub (server/selfUpdate.ts). */
+/** O próprio Claudio’s Club contra a versão mais nova publicada no GitHub (server/selfUpdate.ts). */
 export interface UpdateStatus {
-  /** É um clone git que segue um branch remoto? Sem isso, não há o que buscar. */
+  /** É um clone git com remoto? Sem isso, não há o que buscar. */
   supported: boolean;
-  /** Ex.: origin/main. */
-  upstream: string | null;
-  /** Commits do remoto que ainda não estão aqui. */
+  /** A versão daqui (ex.: v0.2.0): a última tag no histórico, ou a do package.json. */
+  current: string | null;
+  /** A versão mais nova publicada (tag vX.Y.Z); null antes da primeira. */
+  latest: string | null;
+  /** Commits da versão mais nova que ainda não estão aqui. */
   behind: number;
-  /** Commits daqui que o remoto não tem (impedem o fast-forward). */
-  ahead: number;
+  /** Este código tem commits que a versão não tem (impede o fast-forward). */
+  diverged: boolean;
   /** Arquivos do Claudio’s Club mudados à mão (impedem atualizar). */
   dirty: boolean;
-  /** As novidades, da mais nova para a mais velha (até 20). */
+  /** As notas da versão (texto da tag anotada). */
+  notes: string | null;
+  /** O que entra, do mais novo para o mais velho (até 20). */
   commits: UpdateCommit[];
   checkedAt: string | null;
   /** A busca no remoto falhou (sem rede, sem acesso): o resto vale da última busca boa. */

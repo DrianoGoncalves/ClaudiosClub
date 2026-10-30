@@ -187,6 +187,20 @@ Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro)
 | Barras de consumo 5 h / 7 d (instala o mod `myco-tap`) | `npm run mod:install` |
 | Testes e tipos | `npm test` · `npm run typecheck` |
 
+### Atualizações e versões
+
+O Claudio's Club avisa quando sai uma **versão nova** (aparece *Nova versão* no topo do quadro) e se atualiza com um clique. Ele segue as versões publicadas, não o `main`: o que é mesclado só chega a quem usa quando a versão sai.
+
+Contribuições entram por pull request no `main`, com os testes do CI passando. Para publicar uma versão (mantenedor), no `main` atualizado:
+
+```bash
+npm version minor --no-git-tag-version   # ou patch / major; o PR com o package.json vai para o main
+git tag -a v0.2.0 -m "O que mudou nesta versão"
+git push origin v0.2.0
+```
+
+O texto da tag é o que aparece no aviso de *Nova versão*.
+
 ---
 
 <sub>Claudio's Club é um projeto independente, sem afiliação com a Anthropic e sem endosso dela. Claude e Claude Code são marcas da Anthropic.</sub>
