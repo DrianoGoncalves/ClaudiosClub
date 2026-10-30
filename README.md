@@ -159,7 +159,7 @@ Quem pediu fica sabendo quando a parte dele termina. Funcionários que um gestor
 ## Começando
 
 > [!NOTE]
-> Precisa do **Node 22+**, do **Git** e do **[Claude Code](https://claude.com/claude-code)** instalado e com login feito. Feito e testado no **Windows 10/11**; os scripts do dia a dia são PowerShell.
+> Precisa do **Node 22+**, do **Git** e do **[Claude Code](https://claude.com/claude-code)** instalado e com login feito. Feito e testado no **Windows 10/11**; os scripts do dia a dia são Node, sem PowerShell.
 
 ```bash
 git clone https://github.com/DrianoGoncalves/ClaudiosClub.git
@@ -182,8 +182,8 @@ Abra **http://claudio.localhost:5173**. Para ver uma equipe pronta, crie o **pro
 | Para | Comando |
 | --- | --- |
 | Usar no dia a dia (build + servidor em http://claudio.localhost:4848) | `npm run daily` |
-| Subir junto com o Windows, em segundo plano | `npm run autostart` |
-| Botão **Rodar** na própria porta quando o Claudio's Club está parado (e atalho no Menu Iniciar) | `npm run launcher` |
+| Subir junto com o sistema, em segundo plano | `npm run autostart` |
+| Botão **Rodar** na própria porta quando o Claudio's Club está parado (e atalho no menu de programas) | `npm run launcher` |
 | Barras de consumo 5 h / 7 d (instala o mod `myco-tap`) | `npm run mod:install` |
 | Testes e tipos | `npm test` · `npm run typecheck` |
 

@@ -55,7 +55,7 @@ import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefault
 import { cleanRunDir } from './runCleanup';
 
 const PORT = Number(process.env.MYCO_PORT ?? 4848);
-/** Rodando pelo vigia (scripts/myco-daemon.ps1): ele religa o servidor quando este sai. */
+/** Rodando pelo vigia (scripts/daemon.ts): ele religa o servidor quando este sai. */
 const UNDER_DAEMON = process.env.MYCO_DAEMON === '1';
 const STARTED_AT = new Date().toISOString();
 

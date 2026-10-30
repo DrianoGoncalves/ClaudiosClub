@@ -89,7 +89,9 @@ export async function saveAgent(dir: string, input: AgentInputParsed, backupDir:
     await fs.writeFile(path.join(backupDir, `${input.originalName}.${new Date().toISOString().replace(/[:.]/g, '-')}.md`), previous);
   }
   data = { ...data, name: input.name, description: input.description };
-  if (input.tools && input.tools.length) data.tools = input.tools.join(', ');
+  // A ferramenta PowerShell só existe no Claude Code do Windows: fora dele, sai da lista do agente.
+  const tools = process.platform === 'win32' ? input.tools : input.tools?.filter((t) => !/^PowerShell\b/.test(t)) ?? null;
+  if (tools && tools.length) data.tools = tools.join(', ');
   else delete data.tools;
   if (input.model && input.model !== 'inherit') data.model = input.model;
   else delete data.model;

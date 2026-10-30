@@ -1,4 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { z } from 'zod';
 import type { AuthStatus } from '../shared/model';
 
@@ -46,7 +48,8 @@ export function getAuthStatus(opts: { fresh?: boolean } = {}): Promise<AuthStatu
   if (!opts.fresh && cache && Date.now() - cache.at < 20_000) return cache.status;
   const status = new Promise<AuthStatus>((resolve) => {
     // Deslogado, o CLI sai com código 1 mas ainda imprime o JSON: o stdout decide, não o código.
-    execFile('claude', ['auth', 'status', '--json'], { env: cleanEnv(), timeout: 15_000, windowsHide: true }, (err, stdout) => {
+    // No Windows o `claude` do npm é um .cmd: sem shell o execFile não o acha (os argumentos são fixos, sem aspas).
+    execFile('claude', ['auth', 'status', '--json'], { env: cleanEnv(), timeout: 15_000, windowsHide: true, shell: process.platform === 'win32' }, (err, stdout) => {
       if ((err as NodeJS.ErrnoException | null)?.code === 'ENOENT') {
         resolve({ cliFound: false, loggedIn: false, authMethod: null, subscription: false, error: '`claude` não encontrado no PATH', checkedAt: new Date().toISOString() });
         return;
@@ -60,10 +63,38 @@ export function getAuthStatus(opts: { fresh?: boolean } = {}): Promise<AuthStatu
 
 export const LOGIN_COMMAND = 'claude auth login --claudeai';
 
+/** Terminais do Linux, em ordem de preferência: o binário e como passar um comando para ele. */
+const LINUX_TERMINALS: Array<{ bin: string; args: (script: string) => string[] }> = [
+  { bin: 'x-terminal-emulator', args: (s) => ['-e', 'sh', '-c', s] },
+  { bin: 'gnome-terminal', args: (s) => ['--', 'sh', '-c', s] },
+  { bin: 'konsole', args: (s) => ['-e', 'sh', '-c', s] },
+  { bin: 'xfce4-terminal', args: (s) => ['-x', 'sh', '-c', s] },
+  { bin: 'kitty', args: (s) => ['sh', '-c', s] },
+  { bin: 'alacritty', args: (s) => ['-e', 'sh', '-c', s] },
+  { bin: 'foot', args: (s) => ['sh', '-c', s] },
+  { bin: 'xterm', args: (s) => ['-e', 'sh', '-c', s] },
+];
+
+/** Caminho do executável no PATH, ou null. */
+function inPath(bin: string): string | null {
+  for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
+    if (!dir) continue;
+    const full = path.join(dir, bin);
+    try {
+      fs.accessSync(full, fs.constants.X_OK);
+      return full;
+    } catch {
+      // próximo
+    }
+  }
+  return null;
+}
+
 /** Abre uma janela de terminal com o login pela assinatura. O usuário conclui no navegador. */
 export function openLoginTerminal(): { ok: boolean; command: string; error: string | null } {
+  if (process.platform === 'linux') return openLinuxLoginTerminal();
   if (process.platform !== 'win32') {
-    return { ok: false, command: LOGIN_COMMAND, error: 'abrir terminal automaticamente só no Windows por enquanto' };
+    return { ok: false, command: LOGIN_COMMAND, error: 'abrir terminal automaticamente só no Windows e no Linux por enquanto' };
   }
   try {
     // `start` abre uma janela nova; o primeiro argumento entre aspas é o título.
@@ -73,6 +104,24 @@ export function openLoginTerminal(): { ok: boolean; command: string; error: stri
       stdio: 'ignore',
       windowsVerbatimArguments: true,
     });
+    child.unref();
+    cache = null;
+    return { ok: true, command: LOGIN_COMMAND, error: null };
+  } catch (err) {
+    return { ok: false, command: LOGIN_COMMAND, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function openLinuxLoginTerminal(): { ok: boolean; command: string; error: string | null } {
+  // Depois do login a janela fica aberta, com um shell, para o usuário ver o resultado e fechar.
+  const script = `${LOGIN_COMMAND}; echo; echo 'Pode fechar esta janela.'; exec sh`;
+  const found = LINUX_TERMINALS.find((t) => inPath(t.bin));
+  if (!found) {
+    return { ok: false, command: LOGIN_COMMAND, error: 'nenhum terminal encontrado: rode claude auth login --claudeai num terminal' };
+  }
+  try {
+    const child = spawn(found.bin, found.args(script), { env: cleanEnv(), detached: true, stdio: 'ignore' });
+    child.on('error', () => {});
     child.unref();
     cache = null;
     return { ok: true, command: LOGIN_COMMAND, error: null };

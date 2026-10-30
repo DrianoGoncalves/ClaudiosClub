@@ -56,7 +56,7 @@
           <ol id="steps"></ol>
           <p class="muted small" id="doctor-tip" hidden>
             Não achei o resultado do checklist (<code>scripts/status.js</code>). Rode <code>npm run doctor</code>
-            ou <code>powershell -ExecutionPolicy Bypass -File scripts\doctor.ps1</code> e recarregue a página.
+            e recarregue a página.
           </p>
           <button id="recheck" class="btn-secondary" type="button">Verificar de novo</button>
         </div>
@@ -70,7 +70,7 @@
     </main>
     <script>
       // Página de início: se o Claudio’s Club responde, vai direto para ele; senão, mostra o checklist e o botão
-      // "Iniciar", que abre o link myco://start (registrado no Windows por `npm run launcher`).
+      // "Iniciar", que abre o link myco://start (registrado por `npm run launcher` no Windows e no Linux).
       const port = new URLSearchParams(location.search).get('port') || '4848';
       const app = `http://claudio.localhost:${port}`;
       const el = (id) => document.getElementById(id);
@@ -88,7 +88,7 @@
       // Uma imagem do próprio Claudio’s Club: carrega se ele está no ar.
       const isUp = () => probe(`${app}/icon-32.png?t=${Date.now()}`);
 
-      // Estado do checklist: scripts/doctor.ps1 grava scripts/status.js (file:// não deixa ler Node/Git/Claude daqui).
+      // Estado do checklist: npm run doctor grava scripts/status.js (file:// não deixa ler Node/Git/Claude daqui).
       // Entra por <script src>, com ?t= para pegar a versão nova; a tag anterior sai antes.
       function loadStatus() {
         return new Promise((resolve) => {
