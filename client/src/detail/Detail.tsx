@@ -113,7 +113,12 @@ export function EmployeePanel(props: {
     setFresh(false);
   }, [s?.id]);
   const current = fresh ? null : picked;
-  const conversations = props.conversations ?? [];
+  // Sem ficha, a lista é a própria conversa: dá para abrir uma nova (a pesada fica no quadro) e voltar a ela.
+  const conversations = props.conversations?.length
+    ? props.conversations
+    : !staff && s
+      ? [{ id: s.id, title: s.topic ?? s.title, updatedAt: s.updatedAt }]
+      : [];
   const [convBusy, setConvBusy] = useState(false);
   const duplicate = async () => {
     if (!project || !current) return;
@@ -131,7 +136,7 @@ export function EmployeePanel(props: {
   };
   const live = s?.live?.alive ? s.live : null;
   const name = staff?.name ?? (s ? employeeName(s) : '?');
-  const showConvos = !!staff && !!project && (conversations.length > 0 || fresh);
+  const showConvos = !!project && (conversations.length > 0 || fresh);
   const statusInfo = live
     ? { dot: `dot dot-${live.status ?? 'unknown'}`, text: STATUS_LABEL[live.status ?? ''] ?? live.status }
     : { dot: 'dot', text: s ? t('detail.offShift') : t('detail.noSessionYet') };

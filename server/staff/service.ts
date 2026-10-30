@@ -390,7 +390,10 @@ export class StaffService {
         const id = randomUUID();
         return { sessionId: id, cwd: project.path, args: ['--resume', forkFrom, '--fork-session', '--session-id', id, '--permission-mode', 'manual'] };
       }
-      return sessionId ? { sessionId, cwd: project.path, args: ['--resume', sessionId, '--permission-mode', 'manual'] } : null;
+      if (sessionId) return { sessionId, cwd: project.path, args: ['--resume', sessionId, '--permission-mode', 'manual'] };
+      // Conversa nova sem ficha (ex.: a anterior ficou pesada): começa vazia, na pasta do projeto, pedindo antes de agir.
+      const id = randomUUID();
+      return { sessionId: id, cwd: project.path, args: ['--session-id', id, '--permission-mode', 'manual'] };
     }
     let profile = await readProfile(project.path, staffId);
     if (!profile) return null;
