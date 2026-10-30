@@ -99,3 +99,14 @@ export function BranchIcon({ size = 12 }: { size?: number }) {
     </svg>
   );
 }
+
+/** Fantasma: o funcionário fantasma (conversas sem ficha do projeto, num nó só). */
+export function GhostIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M5 21V10a7 7 0 0 1 14 0v11l-2.5-2-2.5 2-2-2-2 2-2.5-2z" />
+      <path d="M9.5 10.5h.01" />
+      <path d="M14.5 10.5h.01" />
+    </svg>
+  );
+}

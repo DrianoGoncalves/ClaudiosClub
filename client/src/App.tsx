@@ -20,7 +20,7 @@ import type {
 import { api, withUsageConfirm } from './api';
 import { BoardView } from './board/Board';
 import { boardStyle, useBoardBackground, useSystemTheme } from './board/colors';
-import { archiveKey, employeeNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
+import { archiveKey, ghostNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
 import { QuickJump } from './toolbar/QuickJump';
 import {
   AgentPanel,
@@ -63,7 +63,7 @@ type Selection =
   | { kind: 'user' }
   | { kind: 'synced'; skills: Skill[] }
   | { kind: 'project'; id: string }
-  | { kind: 'employee'; session: Session | null; staff: StaffProfile | null; projectId: string }
+  | { kind: 'employee'; session: Session | null; staff: StaffProfile | null; projectId: string; ghost?: Session[] }
   | { kind: 'agent'; agent: Agent; projectId: string | null }
   | { kind: 'skill'; skill: Skill };
 
@@ -130,7 +130,9 @@ export function App() {
   // Clicar num item da caixa (ou na notificação) abre o painel de quem espera.
   const openInbox = useCallback((item: InboxItem) => {
     // Sem funcionário nem conversa (aviso do projeto, como chave no .mcp.json): a sala do projeto.
-    setSelectedId(item.staffId ? staffNodeId(item.projectId, item.staffId) : item.sessionId ? employeeNodeId(item.sessionId) : projectNodeId(item.projectId));
+    // Conversa sem ficha: o funcionário fantasma do projeto, já nela.
+    setJumpConversation(!item.staffId && item.sessionId ? item.sessionId : null);
+    setSelectedId(item.staffId ? staffNodeId(item.projectId, item.staffId) : item.sessionId ? ghostNodeId(item.projectId) : projectNodeId(item.projectId));
   }, []);
   const inbox = useInbox(openInbox);
 
@@ -234,7 +236,11 @@ export function App() {
     if (archived && !showArchived) setSelectedId(null);
   };
 
-  const selection = useMemo(() => (board ? resolveSelection(board, selectedId) : null), [board, selectedId]);
+  const archivedList = config?.archived.sessions;
+  const selection = useMemo(
+    () => (board ? resolveSelection(board, selectedId, new Set(archivedList ?? []), showArchived) : null),
+    [board, selectedId, archivedList, showArchived],
+  );
   // Chat do funcionário no fundo do workspace do projeto dele (não no da aba aberta): a cor diz de
   // quem é a conversa. Sem fundo no workspace, vale o geral; sem geral, o de fábrica.
   const theme = useSystemTheme();
@@ -386,17 +392,30 @@ export function App() {
               project={board.projects.find((p) => p.id === selection.projectId) ?? null}
               costUsd={employeeCost(costs, selection)}
               totalUsd={costs?.total.usd ?? 0}
-              archived={isArchived('session', archiveKey(selection))}
-              onArchive={(v) => archive('session', archiveKey(selection), v)}
+              ghost={!!selection.ghost}
+              archived={
+                selection.ghost ? selection.ghost.every((s) => isArchived('session', s.id)) : isArchived('session', archiveKey(selection))
+              }
+              onArchive={async (v) => {
+                // O fantasma arquiva (ou desarquiva) todas as conversas dele.
+                if (selection.ghost) for (const s of selection.ghost) await archive('session', s.id, v);
+                else await archive('session', archiveKey(selection), v);
+              }}
               onHireSub={() => setForm({ projectId: selection.projectId, mode: { kind: 'hire', reportsTo: selection.staff ? [selection.staff.id] : [] } })}
-              onEdit={() => {
-                if (selection.staff) setForm({ projectId: selection.projectId, mode: { kind: 'edit', profile: selection.staff } });
-                else if (selection.session) setForm({ projectId: selection.projectId, mode: { kind: 'adopt', session: selection.session } });
+              onEdit={(sessionId) => {
+                if (selection.staff) return setForm({ projectId: selection.projectId, mode: { kind: 'edit', profile: selection.staff } });
+                // Sem ficha: a conversa aberta no painel (no fantasma, pode não ser a do cartão).
+                const session = (sessionId && board.sessions[selection.projectId]?.find((s) => s.id === sessionId)) || selection.session;
+                if (session) setForm({ projectId: selection.projectId, mode: { kind: 'adopt', session } });
               }}
               onSessionStarted={reloadSoon}
               simple={simple}
               onShowAdvanced={() => void saveUiLevel('advanced')}
-              conversations={selection.staff ? staffConversations(board, selection.staff) : []}
+              conversations={
+                selection.staff
+                  ? staffConversations(board, selection.staff)
+                  : (selection.ghost ?? []).map((s) => ({ id: s.id, title: s.topic ?? s.title, updatedAt: s.updatedAt }))
+              }
               onChanged={() => {
                 load();
                 // Efetivar desarquiva no servidor: os arquivados do config mudam também.
@@ -544,11 +563,11 @@ function rankEmployees(board: Board, costs: CostReport | null, config: AppConfig
       const usd = st.sessions.reduce((sum, s) => sum + (bySession[s.id] ?? 0), 0);
       if (usd > 0) out.push({ nodeId: staffNodeId(p.id, st.id), name: st.name, detail: `${st.role} · ${p.name}`, usd });
     }
-    for (const s of board.sessions[p.id] ?? []) {
-      const usd = bySession[s.id];
-      if (owned.has(s.id) || archivedSessions.has(s.id) || !usd) continue;
-      out.push({ nodeId: employeeNodeId(s.id), name: employeeName(s), detail: p.name, usd });
-    }
+    // As conversas sem ficha somam no funcionário fantasma do projeto.
+    const ghostUsd = (board.sessions[p.id] ?? [])
+      .filter((s) => !owned.has(s.id) && !archivedSessions.has(s.id))
+      .reduce((sum, s) => sum + (bySession[s.id] ?? 0), 0);
+    if (ghostUsd > 0) out.push({ nodeId: ghostNodeId(p.id), name: t('detail.ghostName'), detail: p.name, usd: ghostUsd });
   }
   return out.sort((a, b) => b.usd - a.usd);
 }
@@ -606,19 +625,17 @@ function employeeCost(costs: CostReport | null, sel: { session: Session | null; 
   return found.length ? found.reduce((a, b) => a + b, 0) : null;
 }
 
-function resolveSelection(board: Board, id: string | null): Selection | null {
+function resolveSelection(board: Board, id: string | null, archivedSessions: Set<string>, showArchived: boolean): Selection | null {
   if (!id) return null;
   if (id === RANKING_ID) return { kind: 'ranking' };
   if (id === USER_NODE_ID) return { kind: 'user' };
   if (id === SYNCED_NODE_ID) return { kind: 'synced', skills: board.user.skills.filter((s) => s.scope === 'synced') };
   if (id.startsWith('p:')) return { kind: 'project', id: id.slice(2) };
-  if (id.startsWith('e:')) {
-    const sessionId = id.slice(2);
-    for (const [projectId, list] of Object.entries(board.sessions)) {
-      const session = list.find((s) => s.id === sessionId);
-      if (session) return { kind: 'employee', session, staff: null, projectId };
-    }
-    return null;
+  if (id.startsWith('g:')) {
+    const projectId = id.slice(2);
+    const owned = new Set(board.staff.filter((s) => s.projectId === projectId).flatMap((s) => s.sessions.map((x) => x.id)));
+    const ghost = (board.sessions[projectId] ?? []).filter((s) => !owned.has(s.id) && (showArchived || !archivedSessions.has(s.id)));
+    return ghost.length ? { kind: 'employee', session: ghost[0]!, staff: null, projectId, ghost } : null;
   }
   if (id.startsWith('h:')) {
     const [, projectId, staffId] = id.split(':');

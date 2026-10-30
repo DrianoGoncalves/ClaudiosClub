@@ -2,7 +2,7 @@ import { Handle, Position, type Node, type NodeProps, type NodeTypes } from '@xy
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { colorCss, type GitState, type LiveSession } from '../../../shared/model';
 import { employeeName, ENTRYPOINT_LABEL, formatAgo, formatShare, initials, STATUS_LABEL } from '../format';
-import { BranchIcon, TasksIcon } from '../icons';
+import { BranchIcon, GhostIcon, TasksIcon } from '../icons';
 import { t } from '../i18n';
 import {
   HANDLE,
@@ -71,7 +71,7 @@ function Frame(props: {
   );
 }
 
-function Portrait({ id, label, src }: { id: string; label: string; src?: string | null }) {
+function Portrait({ id, label, src, ghost }: { id: string; label: string; src?: string | null; ghost?: boolean }) {
   // O servidor reinicia a cada arquivo salvo em desenvolvimento: uma foto pedida nessa hora falha.
   // Tenta de novo duas vezes; depois, mostra as iniciais em vez do ícone de imagem quebrada.
   const [tries, setTries] = useState(0);
@@ -79,7 +79,11 @@ function Portrait({ id, label, src }: { id: string; label: string; src?: string 
   const shown = src && tries <= 2 ? (tries ? `${src}${src.includes('?') ? '&' : '?'}retry=${tries}` : src) : null;
   return (
     <div className="bn-portrait">
-      {shown ? (
+      {ghost ? (
+        <span className="bn-ghost">
+          <GhostIcon size={24} />
+        </span>
+      ) : shown ? (
         <img src={shown} alt="" draggable={false} onError={() => setTimeout(() => setTries((t) => t + 1), 1500 * (tries + 1))} />
       ) : (
         <span>{initials(label)}</span>
@@ -178,7 +182,8 @@ function ProjectNode({ id, data, selected, width }: NodeProps<Node<ProjectNodeDa
 
 function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, 'employee'>>) {
   const { session: s, staff } = data;
-  const name = staff?.name ?? (s ? employeeName(s) : '?');
+  const ghost = data.ghost;
+  const name = staff?.name ?? (ghost ? t('board.ghostName') : s ? employeeName(s) : '?');
   const live = s?.live?.alive ? s.live : null;
   const busy = live?.status === 'busy';
   // Esperando você (amarelo) vale mesmo com a sessão parada: é o que a caixa "precisa de mim" mostra.
@@ -191,12 +196,12 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
       variant={waiting ? 'waiting' : busy ? 'busy' : 'agent'}
       selected={selected}
       className={state}
-      title={staff ? `${staff.name} — ${staff.role}` : name}
+      title={staff ? `${staff.name} — ${staff.role}` : ghost ? t('board.ghostTitle', { n: ghost.length }) : name}
       canHire={!!staff && !data.archived}
     >
       <div className="bn-agent">
         <div className="bn-portrait-wrap">
-          <Portrait id={id} label={name} src={staff?.portrait ? portraitUrl(data.projectId, staff.id) : null} />
+          <Portrait id={id} label={name} src={staff?.portrait ? portraitUrl(data.projectId, staff.id) : null} ghost={!!ghost} />
           {/* Lápis que "escreve" enquanto a sessão trabalha. */}
           {busy && <span className="bn-pencil" aria-hidden="true">✎</span>}
         </div>
@@ -204,6 +209,7 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
           <div className="bn-title bn-title-sm">{name}</div>
           <div className="bn-meta">
             {staff && <span className="bn-role">{staff.role} · </span>}
+            {ghost && ghost.length > 1 && <span className="bn-role">{t('board.ghostConversations', { n: ghost.length })} · </span>}
             {staff?.temporary && (
               <span className="bn-temp" title={t('board.temporaryTitle')}>
                 {t('board.temporary')} ·{' '}
@@ -228,7 +234,7 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
             {data.costShare !== null && (
               <span title={t('board.employeeShareTitle')}> · {formatShare(data.costShare, 1)}</span>
             )}
-            {!staff && s?.entrypoint && <> · {ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</>}
+            {!staff && !ghost && s?.entrypoint && <> · {ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</>}
           </div>
         </div>
       </div>
