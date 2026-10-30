@@ -248,6 +248,8 @@ export interface AppConfig {
    * o Opus em esforço máximo e os agents pensam mais (ver server/quotaBoost.ts).
    */
   optimizeQuota: boolean;
+  /** Mostrar no quadro a sala do escopo do usuário (agents e skills de ~/.claude); desligado por padrão. */
+  showUserScope: boolean;
   /**
    * Segunda opinião do Codex na revisão das tarefas (o diff vai para a OpenAI): desligada até você
    * ligar; desligada, o Claudio’s Club nem chama o `codex` (ver server/adapters/codex.ts).
@@ -820,6 +822,8 @@ export type ChatEvent =
 
 export interface ChatSnapshot {
   sessionId: string;
+  /** Esta conversa foi trazida para cá ("Trazer"): a cópia que segue aqui. O painel abre direto nela. */
+  copy?: string | null;
   /** Mensagens anteriores, do transcript (até o início do processo atual, se houver). */
   history: ChatItem[];
   /** Itens e estado do processo aberto no Claudio’s Club agora, se houver. */
@@ -848,4 +852,35 @@ export interface Board {
   images: Record<string, string>;
   user: UserScope;
   live: LiveSession[];
+}
+
+export interface UpdateCommit {
+  hash: string;
+  at: string;
+  subject: string;
+}
+
+/** O próprio Claudio’s Club contra a versão mais nova publicada no GitHub (server/selfUpdate.ts). */
+export interface UpdateStatus {
+  /** É um clone git com remoto? Sem isso, não há o que buscar. */
+  supported: boolean;
+  /** A versão daqui (ex.: v0.2.0): a última tag no histórico, ou a do package.json. */
+  current: string | null;
+  /** A versão mais nova publicada (tag vX.Y.Z); null antes da primeira. */
+  latest: string | null;
+  /** Commits da versão mais nova que ainda não estão aqui. */
+  behind: number;
+  /** Este código tem commits que a versão não tem (impede o fast-forward). */
+  diverged: boolean;
+  /** Arquivos do Claudio’s Club mudados à mão (impedem atualizar). */
+  dirty: boolean;
+  /** As notas da versão (texto da tag anotada). */
+  notes: string | null;
+  /** O que entra, do mais novo para o mais velho (até 20). */
+  commits: UpdateCommit[];
+  checkedAt: string | null;
+  /** A busca no remoto falhou (sem rede, sem acesso): o resto vale da última busca boa. */
+  error: string | null;
+  /** Rodando com o vigia: atualizar já reinicia sozinho (só na resposta da API). */
+  daemon?: boolean;
 }

@@ -238,7 +238,10 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           ))}
         </ul>
       )}
-      {staffId && <ChatSettingsBar level={level} state={chat.state} fichaModel={fichaModel} fichaEffort={fichaEffort} disabled={!!blocked} onChange={chat.settings} />}
+      {/* Modelo, esforço e autonomia valem para qualquer conversa, com ou sem ficha: sem ficha, a conversa só precisa existir. */}
+      {(staffId || chat.sessionId) && (
+        <ChatSettingsBar level={level} state={chat.state} fichaModel={fichaModel} fichaEffort={fichaEffort} disabled={!!blocked} onChange={chat.settings} />
+      )}
       <div className="chat-more-row">
         <button
           type="button"

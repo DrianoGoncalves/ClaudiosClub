@@ -201,7 +201,7 @@ describe('voltar no tempo, duplicar, renomear, MCPs, parar, buscar e o que mudou
       [
         { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: path.join(dir, 'a.txt') } }] } },
         { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: path.join(dir, 'b.txt') } }] } },
-        { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: 'C:/fora/x.txt' } }] } },
+        { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: path.resolve(dir, '..', 'fora', 'x.txt') } }] } },
       ]
         .map((l) => JSON.stringify(l))
         .join('\n'),

@@ -6,6 +6,7 @@ import { cleanEnv } from '../auth';
 import { tryJson } from '../adapters/claude/fsutil';
 import { contextWindowFor } from '../adapters/claude/pricing';
 import { hasCheckpoint, inputText, resultText, stripCheckpoint, toolSummary } from './items';
+import { killTree } from './registry';
 import { findSecret } from './secrets';
 
 // Um funcionário conversando pelo Claudio’s Club: o `claude` em modo stream-json (o mesmo protocolo do SDK),
@@ -190,7 +191,10 @@ export class ChatProcess {
   }
 
   start() {
-    const run = this.opts.spawnImpl ?? ((cmd, args, o) => spawn(cmd, args, { ...o, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }));
+    // No Unix o processo vira líder do próprio grupo: encerrar o grupo leva também os comandos que ele abriu.
+    const run =
+      this.opts.spawnImpl ??
+      ((cmd, args, o) => spawn(cmd, args, { ...o, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' }));
     // A lista de tarefas (TaskCreate/TaskUpdate) e os pontos de restauração das edições ("voltar até
     // aqui") não vêm ligados no modo -p.
     const env = { ...cleanEnv(), CLAUDE_CODE_ENABLE_TODO_TOOLS: '1', CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1' };
@@ -400,8 +404,11 @@ export class ChatProcess {
 
   stop() {
     this.child?.stdin.end();
-    // Se não sair sozinho, encerra.
-    setTimeout(() => this.child?.kill(), 3_000).unref?.();
+    // Se não sair sozinho, encerra a árvore (o claude e os comandos que ele abriu).
+    const child = this.child;
+    setTimeout(() => {
+      if (child?.pid && child.exitCode === null && child.signalCode === null) void killTree(child.pid);
+    }, 3_000).unref?.();
   }
 
   // ---- leitura do stream ----

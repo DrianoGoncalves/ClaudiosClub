@@ -27,6 +27,8 @@ const DEFAULTS: AppConfig = {
   contextSwitch: 'auto',
   // Desligado: gastar a sobra da cota é escolha de quem paga.
   optimizeQuota: false,
+  // Escondida: o quadro começa só com os projetos; a sala de ~/.claude se liga no config.
+  showUserScope: false,
   // Desligada: mandar o diff para outra empresa é escolha sua.
   codexReview: false,
   workspaces: [],
@@ -68,6 +70,7 @@ const ConfigFile = z
     projectBudgets: z.record(z.string(), z.unknown()).optional().catch(undefined),
     contextSwitch: z.enum(CONTEXT_SWITCHES).optional().catch(undefined),
     optimizeQuota: z.boolean().optional().catch(undefined),
+    showUserScope: z.boolean().optional().catch(undefined),
     codexReview: z.boolean().optional().catch(undefined),
     workspaces: z.array(z.unknown()).optional().catch(undefined),
     projectWorkspaces: z.record(z.string(), z.unknown()).optional().catch(undefined),
@@ -103,6 +106,7 @@ export const ConfigPatch = z.object({
   sendWhileBusy: PRIORITY.optional(),
   contextSwitch: z.enum(CONTEXT_SWITCHES).optional(),
   optimizeQuota: z.boolean().optional(),
+  showUserScope: z.boolean().optional(),
   codexReview: z.boolean().optional(),
   /** Por id de projeto: uma cor troca a da sala; null volta à padrão. Os outros projetos ficam como estão. */
   projectColors: z.record(z.string().min(1).max(200), COLOR.nullable()).optional(),
@@ -129,7 +133,8 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
   return {
     // 'MyCo' era o nome padrão antes da troca de nome: quem não mudou passa a ver o novo.
     companyName: d.companyName && d.companyName !== 'MyCo' ? d.companyName : DEFAULTS.companyName,
-    uiLevel: d.uiLevel ?? (Object.keys(d).length ? 'advanced' : DEFAULTS.uiLevel),
+    // Simples até você escolher o avançado, também para quem já tinha config de antes da opção.
+    uiLevel: d.uiLevel ?? DEFAULTS.uiLevel,
     archived: { projects: d.archived?.projects ?? [], sessions: d.archived?.sessions ?? [] },
     usageStop: {
       fiveHour: d.usageStop?.fiveHour === undefined ? DEFAULTS.usageStop.fiveHour : d.usageStop.fiveHour,
@@ -151,6 +156,7 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     ),
     contextSwitch: d.contextSwitch ?? DEFAULTS.contextSwitch,
     optimizeQuota: d.optimizeQuota ?? DEFAULTS.optimizeQuota,
+    showUserScope: d.showUserScope ?? DEFAULTS.showUserScope,
     codexReview: d.codexReview ?? DEFAULTS.codexReview,
     ...readWorkspaces(d.workspaces, d.projectWorkspaces),
   };

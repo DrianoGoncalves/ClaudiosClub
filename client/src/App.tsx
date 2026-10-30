@@ -1,5 +1,5 @@
 import { ReactFlowProvider } from '@xyflow/react';
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type {
   Agent,
   AppConfig,
@@ -141,16 +141,30 @@ export function App() {
   }, [config?.companyName, inbox.items.length]);
 
   // Estado ao vivo por polling (SSE na Fase 3). Só troca o board se algo mudou, para não redesenhar à toa.
+  // Sessão viva que o quadro ainda não conhece (conversa nova, que grava o transcript só depois da primeira
+  // resposta): relê o quadro, até ela aparecer, para entrar no organograma já "trabalhando", sem F5.
+  const boardRef = useRef(board);
+  boardRef.current = board;
   useEffect(() => {
+    const reloads = new Map<string, number>();
     const t = setInterval(() => {
       api.live().then(
-        (live) =>
-          setBoard((b) => (b && JSON.stringify(b.live) !== JSON.stringify(live) ? { ...b, live } : b)),
+        (live) => {
+          setBoard((b) => (b && JSON.stringify(b.live) !== JSON.stringify(live) ? { ...b, live } : b));
+          const b = boardRef.current;
+          if (!b) return;
+          const known = new Set(Object.values(b.sessions).flat().map((x) => x.id));
+          const missing = live.filter((l) => l.alive && !known.has(l.sessionId) && (reloads.get(l.sessionId) ?? 0) < 10);
+          if (!missing.length) return;
+          // No máximo 10 releituras por sessão (uma a cada 3 s): uma sessão de outra pasta nunca aparece.
+          missing.forEach((l) => reloads.set(l.sessionId, (reloads.get(l.sessionId) ?? 0) + 1));
+          load();
+        },
         () => {},
       );
     }, 3000);
     return () => clearInterval(t);
-  }, []);
+  }, [load]);
 
   // Estado do código (branch, sem commit, remoto) no cabeçalho de cada sala; muda devagar.
   const [git, setGit] = useState<Record<string, GitState>>({});
@@ -183,7 +197,8 @@ export function App() {
   const saveUsageStop = async (usageStop: UsageStop) => setConfig(await api.saveConfig({ usageStop }));
   const saveSendWhileBusy = async (sendWhileBusy: SendPriority) => setConfig(await api.saveConfig({ sendWhileBusy }));
   const saveUiLevel = async (uiLevel: UiLevel) => setConfig(await api.saveConfig({ uiLevel }));
-  const simple = config?.uiLevel === 'simple';
+  // Simples por padrão, também enquanto o config não chega (sem piscar o avançado).
+  const simple = config?.uiLevel !== 'advanced';
   const saveProjectColor = async (projectId: string, color: ProjectColor | null) =>
     setConfig(await api.saveConfig({ projectColors: { [projectId]: color } }));
   // O quadro, as abas e a caixa leem o nome do projeto do snapshot: recarrega junto com a config.

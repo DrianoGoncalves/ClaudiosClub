@@ -34,7 +34,7 @@ async function hasExtension(): Promise<boolean | null> {
       ? BROWSERS.map(([vendor, name]) => path.join(process.env.LOCALAPPDATA ?? '', vendor, name, 'User Data'))
       : process.platform === 'darwin'
         ? [path.join(process.env.HOME ?? '', 'Library', 'Application Support', 'Google', 'Chrome')]
-        : [path.join(process.env.HOME ?? '', '.config', 'google-chrome')];
+        : LINUX_CONFIG_DIRS.map((dir) => path.join(process.env.HOME ?? '', '.config', dir));
   for (const root of roots) {
     for (const profile of await fs.readdir(root).catch(() => [] as string[])) {
       if (await fs.stat(path.join(root, profile, 'Extensions', EXTENSION_ID)).then((s) => s.isDirectory(), () => false)) return true;
@@ -43,9 +43,22 @@ async function hasExtension(): Promise<boolean | null> {
   return false;
 }
 
-/** A ponte fica registrada no Windows em HKCU\…\NativeMessagingHosts; nos outros sistemas, não conferimos. */
-function hasBridge(): Promise<boolean | null> {
-  if (process.platform !== 'win32') return Promise.resolve(null);
+/** Pastas de configuração dos navegadores baseados no Chromium no Linux (cada uma tem seus perfis). */
+const LINUX_CONFIG_DIRS = ['google-chrome', 'chromium', 'BraveSoftware/Brave-Browser', 'microsoft-edge'];
+
+/**
+ * A ponte fica registrada como manifesto em NativeMessagingHosts: no Windows é uma chave do registro (HKCU); no Linux,
+ * um arquivo em ~/.config/<navegador>/NativeMessagingHosts. No macOS não conferimos.
+ */
+async function hasBridge(): Promise<boolean | null> {
+  if (process.platform === 'linux') {
+    for (const dir of LINUX_CONFIG_DIRS) {
+      const manifest = path.join(process.env.HOME ?? '', '.config', dir, 'NativeMessagingHosts', `${HOST_NAME}.json`);
+      if (await fs.stat(manifest).then((s) => s.isFile(), () => false)) return true;
+    }
+    return false;
+  }
+  if (process.platform !== 'win32') return null;
   return new Promise((resolve) => {
     execFile('reg', ['query', `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`], { windowsHide: true, timeout: 5000 }, (err) =>
       resolve(!err),

@@ -128,6 +128,12 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     }
     setLoading(true);
     load(initialSessionId)
+      // Já trazida para cá antes: segue na cópia, com as mensagens que você mandou aqui, em vez da original.
+      .then(async (snap) => {
+        if (!snap.copy) return;
+        setSessionId(snap.copy);
+        await load(snap.copy);
+      })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
     return () => {
@@ -225,7 +231,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
         await api.chatAdopt(sessionId);
         await load(sessionId);
       } else if (elsewhere) {
-        const r = await api.chatFork(projectId, sessionId, staffId);
+        const r = await api.chatBring(projectId, sessionId, staffId);
         setSessionId(r.sessionId);
         // Carrega já: a prop sessionId do pai pode demorar a acompanhar (aí o efeito de troca recarrega de novo).
         await load(r.sessionId);

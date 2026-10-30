@@ -23,5 +23,7 @@ PLANO.md
 .claude/worktrees/
 .claude/settings.local.json
 
-# Estado do checklist da página de início: gerado por scripts/doctor.ps1 a cada verificação.
+# Estado do checklist da página de início: gerado por npm run doctor a cada verificação.
 scripts/status.js
+# Fim do log que a página de início mostra: copiado de ~/.myco/logs/server.log pelos scripts.
+scripts/log.js

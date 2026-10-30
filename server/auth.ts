@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { z } from 'zod';
 import type { AuthStatus } from '../shared/model';
+import { openTerminal } from './terminal';
 
 // O Claudio’s Club nunca lê credenciais: pergunta ao próprio `claude` se está logado e, se não estiver,
 // abre um terminal com `claude auth login` para o usuário entrar pela assinatura.
@@ -46,7 +47,8 @@ export function getAuthStatus(opts: { fresh?: boolean } = {}): Promise<AuthStatu
   if (!opts.fresh && cache && Date.now() - cache.at < 20_000) return cache.status;
   const status = new Promise<AuthStatus>((resolve) => {
     // Deslogado, o CLI sai com código 1 mas ainda imprime o JSON: o stdout decide, não o código.
-    execFile('claude', ['auth', 'status', '--json'], { env: cleanEnv(), timeout: 15_000, windowsHide: true }, (err, stdout) => {
+    // No Windows o `claude` do npm é um .cmd: sem shell o execFile não o acha (os argumentos são fixos, sem aspas).
+    execFile('claude', ['auth', 'status', '--json'], { env: cleanEnv(), timeout: 15_000, windowsHide: true, shell: process.platform === 'win32' }, (err, stdout) => {
       if ((err as NodeJS.ErrnoException | null)?.code === 'ENOENT') {
         resolve({ cliFound: false, loggedIn: false, authMethod: null, subscription: false, error: '`claude` não encontrado no PATH', checkedAt: new Date().toISOString() });
         return;
@@ -62,8 +64,9 @@ export const LOGIN_COMMAND = 'claude auth login --claudeai';
 
 /** Abre uma janela de terminal com o login pela assinatura. O usuário conclui no navegador. */
 export function openLoginTerminal(): { ok: boolean; command: string; error: string | null } {
+  if (process.platform === 'linux') return openLinuxLoginTerminal();
   if (process.platform !== 'win32') {
-    return { ok: false, command: LOGIN_COMMAND, error: 'abrir terminal automaticamente só no Windows por enquanto' };
+    return { ok: false, command: LOGIN_COMMAND, error: 'abrir terminal automaticamente só no Windows e no Linux por enquanto' };
   }
   try {
     // `start` abre uma janela nova; o primeiro argumento entre aspas é o título.
@@ -79,4 +82,13 @@ export function openLoginTerminal(): { ok: boolean; command: string; error: stri
   } catch (err) {
     return { ok: false, command: LOGIN_COMMAND, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+function openLinuxLoginTerminal(): { ok: boolean; command: string; error: string | null } {
+  // Depois do login a janela fica aberta, com um shell, para o usuário ver o resultado e fechar.
+  const script = `${LOGIN_COMMAND}; echo; echo 'Pode fechar esta janela.'; exec sh`;
+  const r = openTerminal(['sh', '-c', script], { env: cleanEnv() });
+  if (r.ok) cache = null;
+  const error = r.error === 'nenhum terminal encontrado' ? 'nenhum terminal encontrado: rode claude auth login --claudeai num terminal' : r.error;
+  return { ok: r.ok, command: LOGIN_COMMAND, error };
 }

@@ -8,6 +8,7 @@ import { ClaudeAdapter } from './adapters/claude';
 import { defaultLocations } from './adapters/claude/paths';
 import type { ToolAdapter } from './adapters/types';
 import { getAuthStatus, openLoginTerminal } from './auth';
+import { serveStartFiles } from './startPage';
 import {
   addExtraProject,
   ArchiveRequest,
@@ -53,11 +54,14 @@ import { AUTONOMY, readProfile } from './staff/store';
 import { TaskError, TaskService } from './tasks';
 import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefaultRole } from './roles';
 import { cleanRunDir } from './runCleanup';
+import { SelfUpdater, UpdateError } from './selfUpdate';
 
 const PORT = Number(process.env.MYCO_PORT ?? 4848);
-/** Rodando pelo vigia (scripts/myco-daemon.ps1): ele religa o servidor quando este sai. */
+/** Rodando pelo vigia (scripts/daemon.ts): ele religa o servidor quando este sai. */
 const UNDER_DAEMON = process.env.MYCO_DAEMON === '1';
 const STARTED_AT = new Date().toISOString();
+/** Novidades do próprio Claudio’s Club no remoto (GitHub). */
+const updater = new SelfUpdater();
 
 /** Fecha as conversas (sem deixar processos órfãos) e sai. `stop`: o vigia não religa. */
 async function shutdown(stop: boolean) {
@@ -126,6 +130,7 @@ const chats: ChatManager = new ChatManager({
   listLive: () => adapter.listLiveSessions(),
   resolve: (projectId, sessionId, staffId, forkFrom) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom),
   registry: new ChatRegistry(path.join(MYCO_HOME, 'run', 'chats.json')),
+  copiesFile: path.join(MYCO_HOME, 'run', 'copies.json'),
   onPlanApproved: (sid, plan) => void tasks.onPlanApproved(sid, plan).catch(() => {}),
   onSent: (sid) => void tasks.onSent(sid).catch(() => {}),
   // Ficou livre: os ajustes guardados e a próxima tarefa da fila dele.
@@ -303,6 +308,20 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       // parada impede que ele religue; reiniciando, ele sobe o servidor de novo em poucos segundos.
       setTimeout(() => void shutdown(action === 'stop'), 300);
       return { ok: true, daemon: UNDER_DAEMON };
+    },
+  ],
+  // ---- atualizar o Claudio’s Club pelo GitHub: novidades no remoto e, com o vigia, atualizar e reiniciar ----
+  ['GET', /^\/api\/update$/, async ({ url }) => ({ ...(await updater.check(url.searchParams.has('fresh'))), daemon: UNDER_DAEMON })],
+  [
+    'POST',
+    /^\/api\/update$/,
+    async ({ fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      const result = await updater.apply();
+      console.log(`[servidor] atualizado pelo config: ${result.from} → ${result.to}${result.installed ? ' (com npm install)' : ''}`);
+      // Com o vigia, reinicia já na versão nova (ele refaz o build do cliente); sem ele, quem reinicia é você.
+      if (UNDER_DAEMON) setTimeout(() => void shutdown(false), 300);
+      return { ...result, restarting: UNDER_DAEMON };
     },
   ],
   ['GET', /^\/api\/projects$/, () => adapter.listProjects()],
@@ -495,6 +514,15 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     async ({ params: [pid, sid], body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       return { sessionId: await chats.fork(pid!, sid!, parse(StaffRef, body).staffId) };
+    },
+  ],
+  // "Trazer" uma conversa aberta em outro lugar: a cópia daqui, criada uma vez só.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/chat/${ID}/bring$`),
+    async ({ params: [pid, sid], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      return { sessionId: await chats.bring(pid!, sid!, parse(StaffRef, body).staffId) };
     },
   ],
   [
@@ -1042,6 +1070,7 @@ const server = http.createServer(async (req, res) => {
           err instanceof WorkspaceError ||
           err instanceof SkillError ||
           err instanceof ProjectError ||
+          err instanceof UpdateError ||
           (err as NodeJS.ErrnoException | null)?.code === 'EEXIST'
         ) {
           const message = (err as NodeJS.ErrnoException).code === 'EEXIST' ? 'já existe um arquivo com esse nome' : (err as Error).message;
@@ -1054,6 +1083,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 404, { error: 'rota desconhecida' });
   }
   if (req.method !== 'GET') return send(res, 405, { error: 'método não permitido' });
+  if (await serveStartFiles(url.pathname, res)) return;
   return serveStatic(url.pathname, res);
 });
 
@@ -1362,4 +1392,6 @@ server.listen(PORT, HOST, () => {
       .catch(() => {});
   void cleanRun();
   setInterval(cleanRun, 12 * 60 * 60_000).unref();
+  // Novidades do Claudio’s Club no GitHub: na subida e a cada 6 h.
+  updater.start();
 });

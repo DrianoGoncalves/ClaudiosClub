@@ -24,10 +24,12 @@ export async function readUsage(
   usageFile = path.join(MYCO_HOME, 'usage.json'),
   tapFile = path.join(CLAUDE_HOME, 'mods', 'myco-tap', 'hooks', 'register.ts'),
 ): Promise<AccountUsage> {
-  const [raw, tapInstalled] = await Promise.all([
+  const [raw, tapFileExists] = await Promise.all([
     fs.readFile(usageFile, 'utf8').catch(() => null),
     fs.access(tapFile).then(() => true, () => false),
   ]);
+  // O mod pode estar carregado por outro caminho (plugin dir do app): se ele já gravou o usage, está ativo.
+  const tapInstalled = tapFileExists || raw !== null;
   if (raw === null) return { tapInstalled, limits: [], updatedAt: null };
   try {
     const parsed = UsageFile.safeParse(JSON.parse(raw.replace(/^﻿/, '')));

@@ -674,3 +674,59 @@ describe('ChatManager: folga de cota', () => {
     expect(notice(w)).toBeUndefined();
   });
 });
+
+describe('ChatManager: conversa sem ficha', () => {
+  it('modelo, esforço e autonomia mudam na hora, sem funcionário (a conversa só precisa existir)', async () => {
+    const f = fakeClaude();
+    let asked: { sessionId: string | null; staffId: string | null } | null = null;
+    const m = new ChatManager({
+      transcriptsDir: root,
+      usageFile: path.join(root, 'usage-loose.json'),
+      listLive: async () => [],
+      // Como o chatSpawn sem ficha: retoma a sessão que já existe, pedindo antes de agir.
+      resolve: async (_p, sessionId, staffId) => {
+        asked = { sessionId, staffId };
+        return sessionId && !staffId ? { sessionId, cwd: root, args: ['--resume', sessionId, '--permission-mode', 'manual'] } : null;
+      },
+      spawnImpl: f.spawnImpl,
+    });
+    type Msg = { type: string; request?: Record<string, unknown> };
+    const sid = await m.settings('p', 'solta-1', null, { model: 'haiku', effort: 'low', autonomy: 'auto' });
+    await tick();
+    expect(sid).toBe('solta-1');
+    expect(asked).toEqual({ sessionId: 'solta-1', staffId: null });
+    const controls = (f.written as Msg[]).filter((x) => x.type === 'control_request').map((x) => x.request?.subtype);
+    expect(controls).toEqual(expect.arrayContaining(['set_model', 'apply_flag_settings', 'set_permission_mode']));
+  });
+});
+
+describe('ChatManager: trazer uma conversa aberta em outro lugar', () => {
+  it('cria a cópia uma vez só, grava o vínculo e a original aponta para ela', async () => {
+    const f = fakeClaude();
+    const copiesFile = path.join(root, 'copies-bring.json');
+    let n = 0;
+    const opts = {
+      transcriptsDir: root,
+      usageFile: path.join(root, 'usage-bring.json'),
+      copiesFile,
+      listLive: async () => [],
+      resolve: async (_p: string, sessionId: string | null, _s: string | null, forkFrom?: string) => {
+        if (forkFrom) {
+          const id = `00000000-0000-4000-8000-00000000000${++n}`;
+          return { sessionId: id, cwd: root, args: ['--resume', forkFrom, '--fork-session', '--session-id', id] };
+        }
+        return sessionId ? { sessionId, cwd: root, args: ['--resume', sessionId] } : null;
+      },
+      spawnImpl: f.spawnImpl,
+    };
+    const m = new ChatManager(opts);
+    const copy = await m.bring('p', 'original-app', null);
+    expect(await m.bring('p', 'original-app', null)).toBe(copy);
+    expect(n).toBe(1);
+    expect((await m.snapshot('p', 'original-app')).copy).toBe(copy);
+    expect((await m.snapshot('p', copy)).copy).toBeNull();
+    // Depois de reiniciar o servidor, o vínculo continua (arquivo).
+    expect(await new ChatManager(opts).copyOf('original-app')).toBe(copy);
+    expect(JSON.parse(await fs.readFile(copiesFile, 'utf8'))).toEqual({ 'original-app': copy });
+  });
+});

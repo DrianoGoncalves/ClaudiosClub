@@ -8,6 +8,7 @@ import { useChatDetail } from '../chat/chatDetail';
 import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
 import { RolesEditor } from './RolesEditor';
 import { ThemeBackgrounds } from './ThemeBackgrounds';
+import { UpdateControls } from './UpdateNotice';
 
 // Configurações do Claudio’s Club, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
 // com título, descrição e o controle logo abaixo. Abre pelo botão "config" ou com Ctrl+,.
@@ -43,6 +44,8 @@ interface Props {
   contextSwitch: ContextSwitch | null;
   /** Otimizar assinatura (folga de cota); null = config ainda não chegou. */
   optimizeQuota: boolean | null;
+  /** Sala do escopo do usuário no quadro; null = config ainda não chegou. */
+  showUserScope: boolean | null;
   /** Segunda opinião do Codex na revisão das tarefas; null = config ainda não chegou. */
   codexReview: boolean | null;
 }
@@ -383,6 +386,19 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
         );
       })(),
     },
+    ...(p.showUserScope !== null
+      ? [
+          {
+            id: 'user-scope',
+            group: 'board' as const,
+            section: 'display' as const,
+            title: t('toolbar.userScopeTitle'),
+            description: t('toolbar.userScopeDesc'),
+            keywords: t('toolbar.userScopeKeywords'),
+            toggle: { checked: p.showUserScope, onChange: (v: boolean) => void api.saveConfig({ showUserScope: v }).then(p.onConfig, () => {}) },
+          },
+        ]
+      : []),
     {
       id: 'archived',
       group: 'board',
@@ -408,6 +424,14 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       description: t('toolbar.serverDesc'),
       keywords: t('toolbar.serverKeywords'),
       control: <ServerControls />,
+    },
+    {
+      id: 'update',
+      group: 'general',
+      title: t('toolbar.updateTitle'),
+      description: t('toolbar.updateDesc'),
+      keywords: t('toolbar.updateKeywords'),
+      control: <UpdateControls />,
     },
   ];
 
@@ -660,6 +684,8 @@ function ServerControls() {
         await new Promise((r) => setTimeout(r, 1000));
         if (!(await fetch('/api/health').then((r) => r.ok, () => false))) break;
       }
+      // Com o service worker, recarregar já mostra a página de início (checklist e botão Iniciar).
+      if (navigator.serviceWorker?.controller) return window.location.reload();
       setState('stopped');
       return;
     }

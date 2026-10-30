@@ -990,3 +990,12 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
   .drawer.drawer-chat { width: auto; }
   .drawer-resize { display: none; }
 }
+
+/* Nova versão do Claudio’s Club no GitHub: aviso no topo do quadro e a lista de novidades embaixo dele. */
+.update-notice { position: relative; }
+.toolbar .update-button { border-color: var(--ink-blue); color: var(--ink-blue); font-weight: 600; }
+.update-menu { position: absolute; top: calc(100% + 8px); left: 0; width: min(420px, calc(100vw - 24px)); max-height: min(70vh, 480px); overflow: auto; display: grid; gap: 8px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2); font-size: 13px; z-index: 30; }
+.update-menu p { margin: 0; }
+.update-commits { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 12px; line-height: 1.4; }
+.update-commits code { color: var(--muted); }
+.update-notes { white-space: pre-wrap; line-height: 1.45; }

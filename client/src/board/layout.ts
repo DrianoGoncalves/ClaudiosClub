@@ -104,6 +104,8 @@ export interface GraphOptions {
   expandedShelves?: string[];
   /** Cor da parede da sala, por id de projeto. */
   projectColors?: AppConfig['projectColors'];
+  /** Sala do escopo do usuário (~/.claude); sem ela, o quadro mostra só os projetos. */
+  showUserScope?: boolean;
   /** Salas dobradas (ids do cabeçalho: `p:<projeto>` ou `u`): só o cabeçalho aparece. */
   collapsedRooms?: string[];
   /** Estado do código por id de projeto (ver /api/git). */
@@ -355,7 +357,7 @@ export function buildGraph(
   };
 
   const rooms = [
-    userTree,
+    ...(opts.showUserScope ? [userTree] : []),
     // Worktrees (cópias de trabalho do Claude Code) ficam fora do quadro.
     ...board.projects
       .filter(visibleProject)

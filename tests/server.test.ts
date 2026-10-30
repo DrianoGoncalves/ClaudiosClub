@@ -71,25 +71,27 @@ describe('config', () => {
       usageStop,
       sendWhileBusy: 'next',
       optimizeQuota: false,
+      showUserScope: false,
       codexReview: false,
       ...colors,
     });
 
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, JSON.stringify({ futuro: 1 }));
-    // Quem já tinha config (já usava o Claudio’s Club antes da opção) fica no avançado.
+    // Quem já tinha config sem a opção também começa no simples.
     expect(await updateConfig({ companyName: 'Acme Labs' }, file)).toEqual({
       companyName: 'Acme Labs',
-      uiLevel: 'advanced',
+      uiLevel: 'simple',
       archived: { projects: [], sessions: [] },
       usageStop,
       sendWhileBusy: 'next',
       optimizeQuota: false,
+      showUserScope: false,
       codexReview: false,
       ...colors,
     });
     expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ futuro: 1, companyName: 'Acme Labs' });
-    expect((await updateConfig({ uiLevel: 'simple' }, file)).uiLevel).toBe('simple');
+    expect((await updateConfig({ uiLevel: 'advanced' }, file)).uiLevel).toBe('advanced');
   });
 
   it('workspaces: cria com id do nome, renomeia sem trocar o id, recusa nome repetido', async () => {

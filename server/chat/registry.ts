@@ -59,13 +59,21 @@ export function isAlive(pid: number): boolean {
   }
 }
 
-/** Encerra o processo e os filhos dele (servidores MCP, comandos em andamento). */
+/**
+ * Encerra o processo e os filhos dele (servidores MCP, comandos em andamento). No Unix, os processos de conversa
+ * são líderes do próprio grupo (ver ChatProcess.start), então o grupo inteiro sai junto; um processo que não é
+ * líder (ex.: aberto num terminal) sai sozinho.
+ */
 export function killTree(pid: number): Promise<void> {
   if (process.platform !== 'win32') {
     try {
-      process.kill(pid, 'SIGTERM');
+      process.kill(-pid, 'SIGTERM');
     } catch {
-      // já saiu
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch {
+        // já saiu
+      }
     }
     return Promise.resolve();
   }

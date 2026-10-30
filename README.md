@@ -159,7 +159,7 @@ Quem pediu fica sabendo quando a parte dele termina. Funcionários que um gestor
 ## Começando
 
 > [!NOTE]
-> Precisa do **Node 22+**, do **Git** e do **[Claude Code](https://claude.com/claude-code)** instalado e com login feito. Feito e testado no **Windows 10/11**; os scripts do dia a dia são PowerShell.
+> Precisa do **Node 22+** e do **Git**. Roda no **Windows 10/11** e no **Linux**; os scripts do dia a dia são Node, sem PowerShell.
 
 ```bash
 git clone https://github.com/DrianoGoncalves/ClaudiosClub.git
@@ -170,22 +170,36 @@ cd ClaudiosClub
 ```
 
 ```bash
-npm install
+npm run setup
 ```
 
-```bash
-npm run dev
-```
+Uma vez só: instala as dependências, o Claude Code e o login se faltarem, registra o botão da página de início e o atalho no menu, oferece as barras de cota e sobe o Claudio's Club em **http://claudio.localhost:4848**. Depois disso, tudo pelo navegador: com ele parado, a mesma porta mostra a página de início, com o checklist, o log e o botão **Iniciar**. Com tudo pronto, ele sobe sem janela; se faltar algo, abre um terminal que resolve, sobe e fecha sozinho.
 
-Abra **http://claudio.localhost:5173**. Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code aparecem sozinhos.
+Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code aparecem sozinhos.
 
 | Para | Comando |
 | --- | --- |
-| Usar no dia a dia (build + servidor em http://claudio.localhost:4848) | `npm run daily` |
-| Subir junto com o Windows, em segundo plano | `npm run autostart` |
-| Botão **Rodar** na própria porta quando o Claudio's Club está parado (e atalho no Menu Iniciar) | `npm run launcher` |
+| Preparar tudo e subir (primeira vez, ou depois de atualizar) | `npm run setup` |
+| Subir em segundo plano · parar · ver o estado e o log | `npm run daily:start` · `npm run daily:stop` · `npm run daily:status` |
+| Subir junto com o sistema, em segundo plano | `npm run autostart` |
+| Só registrar o botão da página de início e o atalho no menu | `npm run launcher` |
+| Desenvolver o Claudio's Club (recarrega a cada arquivo salvo, em http://claudio.localhost:5173) | `npm run dev` |
 | Barras de consumo 5 h / 7 d (instala o mod `myco-tap`) | `npm run mod:install` |
 | Testes e tipos | `npm test` · `npm run typecheck` |
+
+### Atualizações e versões
+
+O Claudio's Club avisa quando sai uma **versão nova** (aparece *Nova versão* no topo do quadro) e se atualiza com um clique. Ele segue as versões publicadas, não o `main`: o que é mesclado só chega a quem usa quando a versão sai.
+
+Contribuições entram por pull request no `main`, com os testes do CI passando. Para publicar uma versão (mantenedor), no `main` atualizado:
+
+```bash
+npm version minor --no-git-tag-version   # ou patch / major; o PR com o package.json vai para o main
+git tag -a v0.2.0 -m "O que mudou nesta versão"
+git push origin v0.2.0
+```
+
+O texto da tag é o que aparece no aviso de *Nova versão*.
 
 ---
 

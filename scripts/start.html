@@ -38,6 +38,22 @@
       .step.is-ok .step-icon, .step.is-ok .step-state { color: var(--ink-green); }
       .step.is-falta .step-icon, .step.is-falta .step-state { color: var(--danger); }
       .step.is-nv .step-icon, .step.is-nv .step-state { color: var(--muted); }
+      /* Log: as últimas linhas de ~/.myco/logs/server.log, a mais nova embaixo. Fechado até alguém abrir (ou a
+         subida falhar). */
+      .log summary { display: flex; align-items: baseline; gap: 8px; cursor: pointer; list-style: none; }
+      .log summary::-webkit-details-marker { display: none; }
+      .log summary::before { content: '▸'; color: var(--muted); width: 1em; }
+      .log[open] summary::before { content: '▾'; }
+      .log summary:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; border-radius: 4px; }
+      .log h2 { margin: 0; font-family: var(--hand); font-weight: 700; font-size: 24px; line-height: 1; }
+      .log[open] summary { margin-bottom: 6px; }
+      .log-scroll { max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+      .log table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      .log th { position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 600; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+      .log td { padding: 3px 8px; vertical-align: top; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+      .log td.at, .log td.src { white-space: nowrap; color: var(--muted); }
+      .log td.msg { font-family: ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
+      .log tr.is-error td.msg { color: var(--danger); }
     </style>
   </head>
   <body>
@@ -56,22 +72,36 @@
           <ol id="steps"></ol>
           <p class="muted small" id="doctor-tip" hidden>
             Não achei o resultado do checklist (<code>scripts/status.js</code>). Rode <code>npm run doctor</code>
-            ou <code>powershell -ExecutionPolicy Bypass -File scripts\doctor.ps1</code> e recarregue a página.
+            e recarregue a página.
           </p>
           <button id="recheck" class="btn-secondary" type="button">Verificar de novo</button>
         </div>
         <button id="start" class="btn-primary" type="button">Iniciar o Claudio’s Club</button>
         <p class="muted small" id="hint">
-          Na primeira vez, o navegador pergunta se pode abrir o Claudio’s Club: confirme. Se nada acontecer, rode
-          <code>npm run launcher</code> na pasta do Claudio’s Club (registra o botão) ou <code>npm run daily:start</code>.
+          Com tudo pronto, sobe em segundo plano, sem janela. Se faltar algo (dependências, Claude Code, login), abre
+          um terminal que resolve, sobe o Claudio’s Club e fecha sozinho. Na primeira vez, o navegador pergunta se pode
+          abrir o Claudio’s Club (no Linux, como “Abrir xdg-open?”): confirme. Se nada acontecer, rode
+          <code>npm run setup</code> uma vez na pasta do Claudio’s Club (registra este botão).
         </p>
+        <details class="log" id="log">
+          <summary><h2>Log</h2><span class="muted small" id="log-at"></span></summary>
+          <div class="log-scroll" id="log-box" hidden>
+            <table>
+              <thead><tr><th scope="col">Hora</th><th scope="col">Origem</th><th scope="col">Mensagem</th></tr></thead>
+              <tbody id="log-rows"></tbody>
+            </table>
+          </div>
+          <p class="muted small" id="log-empty">Sem registros ainda.</p>
+        </details>
       </section>
       <p id="starting" hidden>Iniciando… (o primeiro build leva uns segundos)</p>
     </main>
     <script>
-      // Página de início: se o Claudio’s Club responde, vai direto para ele; senão, mostra o checklist e o botão
-      // "Iniciar", que abre o link myco://start (registrado no Windows por `npm run launcher`).
-      const port = new URLSearchParams(location.search).get('port') || '4848';
+      // Página de início e tela de "parado": se o Claudio’s Club responde, vai direto para ele; senão, mostra o
+      // checklist e o botão "Iniciar", que abre o link myco://start (registrado por `npm run launcher` no Windows e
+      // no Linux). Abre como arquivo (atalho) ou pela própria porta, quando o service worker a mostra no lugar do
+      // erro de conexão (server/startPage.ts).
+      const port = new URLSearchParams(location.search).get('port') || location.port || '4848';
       const app = `http://claudio.localhost:${port}`;
       const el = (id) => document.getElementById(id);
 
@@ -88,33 +118,70 @@
       // Uma imagem do próprio Claudio’s Club: carrega se ele está no ar.
       const isUp = () => probe(`${app}/icon-32.png?t=${Date.now()}`);
 
-      // Estado do checklist: scripts/doctor.ps1 grava scripts/status.js (file:// não deixa ler Node/Git/Claude daqui).
-      // Entra por <script src>, com ?t= para pegar a versão nova; a tag anterior sai antes.
-      function loadStatus() {
+      // Checklist e log entram por <script src> (file:// não deixa ler arquivos de outro jeito): o npm run doctor
+      // grava scripts/status.js e os scripts copiam o fim do log para scripts/log.js; pela porta, o servidor (ou o
+      // service worker, com ele parado) entrega os dois. ?t= pega a versão nova; a tag anterior sai antes.
+      function loadData(file, key) {
         return new Promise((resolve) => {
-          const old = el('status-src');
+          const id = `${key}-src`;
+          const old = el(id);
           if (old) old.remove();
-          delete window.claudioStatus;
+          delete window[key];
           const s = document.createElement('script');
-          s.id = 'status-src';
-          s.src = `status.js?t=${Date.now()}`;
-          s.onload = () => resolve(window.claudioStatus || null);
+          s.id = id;
+          s.src = `${file}?t=${Date.now()}`;
+          s.onload = () => resolve(window[key] || null);
           s.onerror = () => resolve(null);
           document.head.appendChild(s);
         });
       }
+      const loadStatus = () => loadData('status.js', 'claudioStatus');
+      const loadLog = () => loadData('log.js', 'claudioLog');
+
+      // Linhas de erro em vermelho: o que o vigia ou o setup registram quando algo dá errado.
+      const ERROR_LINE = /erro|error|falhou|failed|não subiu|parou|EADDRINUSE|ENOENT|No such file/i;
+
+      function renderLog(log) {
+        const entries = log && Array.isArray(log.entries) ? log.entries : [];
+        const rows = el('log-rows');
+        rows.textContent = '';
+        entries.forEach((e) => {
+          const tr = document.createElement('tr');
+          if (ERROR_LINE.test(e.text || '')) tr.className = 'is-error';
+          [['at', (e.at || '').slice(11)], ['src', e.source || ''], ['msg', e.text || '']].forEach(([cls, text]) => {
+            const td = document.createElement('td');
+            td.className = cls;
+            td.textContent = text;
+            tr.append(td);
+          });
+          rows.append(tr);
+        });
+        el('log-box').hidden = !entries.length;
+        el('log-empty').hidden = !!entries.length;
+        const at = log && log.at ? new Date(log.at) : null;
+        el('log-at').textContent = at && !isNaN(at)
+          ? `atualizado em ${at.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+          : '';
+        const box = el('log-box');
+        box.scrollTop = box.scrollHeight;
+      }
+
+      // Fechado, a tabela não tem altura: ao abrir, desce até a linha mais nova.
+      el('log').addEventListener('toggle', () => {
+        if (el('log').open) el('log-box').scrollTop = el('log-box').scrollHeight;
+      });
 
       // Passos para rodar, nesta ordem. Os do doctor vêm de status.js; "build" também conta se o ícone do build
       // carrega (dist/client); "server" vem do isUp().
       const STEPS = [
         { id: 'node', label: 'Node 22 ou mais novo', fix: 'Instale em nodejs.org.' },
         { id: 'git', label: 'Git', fix: 'Instale o Git.' },
-        { id: 'claude', label: 'Claude Code instalado', cmd: 'npm install -g @anthropic-ai/claude-code' },
-        { id: 'login', label: 'Login no Claude Code', fix: 'Rode claude e faça login.' },
-        { id: 'deps', label: 'Dependências', cmd: 'npm install' },
-        { id: 'build', label: 'Build do app', cmd: 'npm run build' },
-        { id: 'launcher', label: 'Botão Iniciar registrado', cmd: 'npm run launcher' },
-        { id: 'server', label: 'Claudio’s Club no ar', fix: 'Use o botão Iniciar ou rode', cmd: 'npm run daily:start' },
+        { id: 'claude', label: 'Claude Code instalado', fix: 'O Iniciar instala, ou rode', cmd: 'npm install -g @anthropic-ai/claude-code' },
+        { id: 'login', label: 'Login no Claude Code', fix: 'O Iniciar abre o login, ou rode', cmd: 'claude auth login --claudeai' },
+        { id: 'deps', label: 'Dependências', fix: 'O Iniciar instala, ou rode', cmd: 'npm install' },
+        { id: 'build', label: 'Build do app', fix: 'Sai na subida (Iniciar), ou rode', cmd: 'npm run build' },
+        { id: 'launcher', label: 'Botão Iniciar registrado', fix: 'Rode uma vez na pasta do projeto:', cmd: 'npm run setup' },
+        { id: 'server', label: 'Claudio’s Club no ar', fix: 'Use o Iniciar, ou rode', cmd: 'npm run daily:start' },
       ];
       const ICON = { ok: '✓', falta: '✗', nv: '?' };
       const WORD = { ok: 'ok', falta: 'falta', nv: 'não verificado' };
@@ -175,8 +242,11 @@
 
       async function refresh(up) {
         el('recheck').disabled = true;
-        const [st, buildOk] = await Promise.all([loadStatus(), probe('../dist/client/icon-32.png')]);
+        // O build só dá para ver como arquivo, ao lado da pasta dist; pela porta, vale o que o doctor anotou.
+        const buildProbe = location.protocol === 'file:' ? probe('../dist/client/icon-32.png') : Promise.resolve(false);
+        const [st, buildOk, log] = await Promise.all([loadStatus(), buildProbe, loadLog()]);
         render(st, buildOk, up);
+        renderLog(log);
         el('recheck').disabled = false;
       }
 
@@ -188,17 +258,23 @@
         await refresh(up);
       }
 
+      // O botão chama o link myco://start (o sistema roda scripts/daily.ts link), que decide: sobe sem janela ou,
+      // faltando algo, abre um terminal que prepara e sobe. Esperamos o app responder; com o terminal (npm install,
+      // login no navegador) pode demorar: até 10 min.
+      const WAIT_MINUTES = 10;
       el('start').addEventListener('click', async () => {
         el('start').disabled = true;
         el('starting').hidden = false;
+        el('starting').textContent = 'Iniciando… Se faltar algo, um terminal abre para resolver e fecha sozinho.';
         location.href = 'myco://start';
-        for (let i = 0; i < 90; i++) {
+        for (let i = 0; i < WAIT_MINUTES * 30; i++) {
           await new Promise((r) => setTimeout(r, 2000));
           const up = await isUp();
           if (up) return location.replace(app);
           await refresh(up);
         }
-        el('starting').textContent = 'Não subiu em 3 minutos. Veja o log com npm run daily:status.';
+        el('starting').textContent = `Não subiu em ${WAIT_MINUTES} minutos. Veja o log abaixo.`;
+        el('log').open = true;
         el('start').disabled = false;
       });
 

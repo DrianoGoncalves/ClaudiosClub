@@ -1,7 +1,5 @@
-# Fim de linha estável: LF no repositório e na pasta; scripts do Windows com CRLF.
+# Fim de linha estável: LF no repositório e na pasta, em qualquer sistema.
 * text=auto eol=lf
-*.cmd text eol=crlf
-*.ps1 text eol=crlf
 *.png binary
 *.jpg binary
 *.webp binary

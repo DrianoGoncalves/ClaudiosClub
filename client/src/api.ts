@@ -42,6 +42,7 @@ import type {
   TestRun,
   TaskSummary,
   UsageStop,
+  UpdateStatus,
   UsageStopHit,
   UserScope,
 } from '../../shared/model';
@@ -156,6 +157,8 @@ export const api = {
   serverInfo: () =>
     get<{ daemon: boolean; pid: number; port: number; startedAt: string; working: { busy: number; background: number } }>('/api/server'),
   serverAction: (action: 'stop' | 'restart') => post<{ ok: boolean; daemon: boolean }>(`/api/server/${action}`),
+  updateStatus: (fresh = false) => get<UpdateStatus>(fresh ? '/api/update?fresh=1' : '/api/update'),
+  applyUpdate: () => post<{ from: string; to: string; installed: boolean; restarting: boolean }>('/api/update'),
   usage: () => get<AccountUsage>('/api/usage'),
   models: (refresh = false) => post<ModelBenchmarks>('/api/models', { refresh }),
   browser: (fresh = false) => get<BrowserStatus>(fresh ? '/api/browser?fresh=1' : '/api/browser'),
@@ -169,6 +172,7 @@ export const api = {
     sendWhileBusy?: SendPriority;
     contextSwitch?: ContextSwitch;
     optimizeQuota?: boolean;
+    showUserScope?: boolean;
     codexReview?: boolean;
     /** Só os projetos enviados mudam; null volta à cor padrão. */
     projectColors?: Record<string, ProjectColor | null>;
@@ -232,6 +236,8 @@ export const api = {
   chatRewind: (projectId: string, sessionId: string, staffId: string | null, uuid: string, dryRun: boolean) =>
     post<RewindPreview>(`/api/projects/${projectId}/chat/${sessionId}/rewind`, { staffId, uuid, dryRun }),
   chatFork: (projectId: string, sessionId: string, staffId: string | null) => post<{ sessionId: string }>(`/api/projects/${projectId}/chat/${sessionId}/fork`, { staffId }),
+  /** "Trazer": a cópia daqui de uma conversa aberta em outro lugar (a mesma, se já foi trazida). */
+  chatBring: (projectId: string, sessionId: string, staffId: string | null) => post<{ sessionId: string }>(`/api/projects/${projectId}/chat/${sessionId}/bring`, { staffId }),
   chatRename: (projectId: string, sessionId: string, title: string) => post<{ ok: boolean }>(`/api/projects/${projectId}/chat/${sessionId}/rename`, { title }),
   chatMcp: (projectId: string, sessionId: string, staffId: string | null) =>
     get<ChatMcp[]>(`/api/projects/${projectId}/chat/${sessionId}/mcp${staffId ? `?staffId=${encodeURIComponent(staffId)}` : ''}`),
