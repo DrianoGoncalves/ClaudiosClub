@@ -34,6 +34,8 @@ export interface ChatSpawn {
 export interface ChatManagerOptions {
   /** ~/.claude/projects */
   transcriptsDir: string;
+  /** Cópias trazidas ("Trazer" de uma conversa aberta em outro lugar): original → cópia. Sem ele, só em memória. */
+  copiesFile?: string;
   /** Onde gravar o consumo lido das conversas (o mesmo arquivo que o mod myco-tap grava). */
   usageFile: string;
   listLive: () => Promise<LiveSession[]>;
@@ -131,6 +133,7 @@ export class ChatManager {
   private readonly commands = new Map<string, ChatCommand[]>();
   /** Conversas duplicadas: cópia → original (para o histórico antes da primeira mensagem). */
   private readonly forks = new Map<string, string>();
+  private copies: Record<string, string> | null = null;
   /** Segredos vistos nas conversas (um aviso por tipo por sessão, até você dispensar). */
   private readonly secrets: Array<{ id: string; sessionId: string; label: string; at: string }> = [];
   /** Conversas cuja última mensagem veio de outro funcionário (delegação), e não de você. */
@@ -175,7 +178,15 @@ export class ChatManager {
     if (source && !(await fs.access(file).then(() => true, () => false))) file = await findTranscript(this.opts.transcriptsDir, projectId, source);
     // Com processo aberto, o histórico vai até o início dele; o resto vem pelo SSE.
     const { items, context } = await readHistory(file, { before: live && !source ? chat!.startedAt : undefined });
-    return { sessionId, history: items, live, context, elsewhere: await this.elsewhere(sessionId), commands: this.commands.get(projectId) ?? [] };
+    return {
+      sessionId,
+      history: items,
+      live,
+      context,
+      elsewhere: await this.elsewhere(sessionId),
+      commands: this.commands.get(projectId) ?? [],
+      copy: await this.copyOf(sessionId),
+    };
   }
 
   /** Comandos "/" do projeto vistos na última sessão aberta (o menu funciona antes de abrir outra). */
@@ -204,6 +215,47 @@ export class ChatManager {
    * Duplica a conversa: uma sessão nova com o histórico desta, para tentar outro caminho sem
    * perder a original. Devolve a sessão nova.
    */
+  private async readCopies(): Promise<Record<string, string>> {
+    if (!this.copies) {
+      const raw = this.opts.copiesFile ? await fs.readFile(this.opts.copiesFile, 'utf8').catch(() => '{}') : '{}';
+      try {
+        this.copies = JSON.parse(raw) as Record<string, string>;
+      } catch {
+        this.copies = {};
+      }
+    }
+    return this.copies;
+  }
+
+  /** A cópia trazida para cá desta conversa (a mais nova, se a cópia também foi trazida); null se não há. */
+  async copyOf(sessionId: string): Promise<string | null> {
+    const copies = await this.readCopies();
+    let id = sessionId;
+    const seen = new Set<string>();
+    while (copies[id] && !seen.has(id)) {
+      seen.add(id);
+      id = copies[id]!;
+    }
+    return id === sessionId ? null : id;
+  }
+
+  /**
+   * "Trazer" uma conversa aberta em outro lugar (app, terminal): a cópia aqui, com o histórico. Já trazida antes,
+   * volta para a mesma cópia em vez de criar outra; a original segue lá, sem sincronizar.
+   */
+  async bring(projectId: string, sessionId: string, staffId: string | null): Promise<string> {
+    const existing = await this.copyOf(sessionId);
+    if (existing) return existing;
+    const copy = await this.fork(projectId, sessionId, staffId);
+    const copies = await this.readCopies();
+    copies[sessionId] = copy;
+    if (this.opts.copiesFile) {
+      await fs.mkdir(path.dirname(this.opts.copiesFile), { recursive: true });
+      await writeAtomic(this.opts.copiesFile, JSON.stringify(copies, null, 2) + '\n');
+    }
+    return copy;
+  }
+
   async fork(projectId: string, sessionId: string, staffId: string | null): Promise<string> {
     const chat = await this.ensure(projectId, null, staffId, sessionId);
     this.forks.set(chat.sessionId, sessionId);

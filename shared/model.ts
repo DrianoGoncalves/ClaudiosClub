@@ -820,6 +820,8 @@ export type ChatEvent =
 
 export interface ChatSnapshot {
   sessionId: string;
+  /** Esta conversa foi trazida para cá ("Trazer"): a cópia que segue aqui. O painel abre direto nela. */
+  copy?: string | null;
   /** Mensagens anteriores, do transcript (até o início do processo atual, se houver). */
   history: ChatItem[];
   /** Itens e estado do processo aberto no Claudio’s Club agora, se houver. */

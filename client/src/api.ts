@@ -232,6 +232,8 @@ export const api = {
   chatRewind: (projectId: string, sessionId: string, staffId: string | null, uuid: string, dryRun: boolean) =>
     post<RewindPreview>(`/api/projects/${projectId}/chat/${sessionId}/rewind`, { staffId, uuid, dryRun }),
   chatFork: (projectId: string, sessionId: string, staffId: string | null) => post<{ sessionId: string }>(`/api/projects/${projectId}/chat/${sessionId}/fork`, { staffId }),
+  /** "Trazer": a cópia daqui de uma conversa aberta em outro lugar (a mesma, se já foi trazida). */
+  chatBring: (projectId: string, sessionId: string, staffId: string | null) => post<{ sessionId: string }>(`/api/projects/${projectId}/chat/${sessionId}/bring`, { staffId }),
   chatRename: (projectId: string, sessionId: string, title: string) => post<{ ok: boolean }>(`/api/projects/${projectId}/chat/${sessionId}/rename`, { title }),
   chatMcp: (projectId: string, sessionId: string, staffId: string | null) =>
     get<ChatMcp[]>(`/api/projects/${projectId}/chat/${sessionId}/mcp${staffId ? `?staffId=${encodeURIComponent(staffId)}` : ''}`),

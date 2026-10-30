@@ -127,6 +127,7 @@ const chats: ChatManager = new ChatManager({
   listLive: () => adapter.listLiveSessions(),
   resolve: (projectId, sessionId, staffId, forkFrom) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom),
   registry: new ChatRegistry(path.join(MYCO_HOME, 'run', 'chats.json')),
+  copiesFile: path.join(MYCO_HOME, 'run', 'copies.json'),
   onPlanApproved: (sid, plan) => void tasks.onPlanApproved(sid, plan).catch(() => {}),
   onSent: (sid) => void tasks.onSent(sid).catch(() => {}),
   // Ficou livre: os ajustes guardados e a próxima tarefa da fila dele.
@@ -496,6 +497,15 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     async ({ params: [pid, sid], body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       return { sessionId: await chats.fork(pid!, sid!, parse(StaffRef, body).staffId) };
+    },
+  ],
+  // "Trazer" uma conversa aberta em outro lugar: a cópia daqui, criada uma vez só.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/chat/${ID}/bring$`),
+    async ({ params: [pid, sid], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      return { sessionId: await chats.bring(pid!, sid!, parse(StaffRef, body).staffId) };
     },
   ],
   [
