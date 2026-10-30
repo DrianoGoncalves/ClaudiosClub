@@ -1,8 +1,8 @@
 // Com o Claudio’s Club parado, nada responde na porta e o navegador mostraria "conexão recusada". Este
 // service worker fica no navegador desde a última visita: se abrir uma página falhar por rede, responde com a
-// página de início (scripts/start.html, servida em /start.html num arquivo só), com o checklist, o log e os botões
-// Iniciar e Preparar. Ela, o checklist (/status.js) e o log (/log.js) são guardados a cada visita com o servidor
-// no ar; o resto vai sempre à rede e não é guardado.
+// página de início (scripts/start.html, servida em /start.html num arquivo só), com o checklist, o log e o botão
+// Iniciar. Ela, o checklist (/status.js) e o log (/log.js) são guardados a cada visita com o servidor no ar; o resto
+// vai sempre à rede e não é guardado.
 
 const CACHE = 'claudio-parado-v1';
 const PAGE = '/start.html';

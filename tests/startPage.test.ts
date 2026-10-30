@@ -13,8 +13,9 @@ describe('página de início servida pela porta', () => {
     // Checklist e log continuam vindo à parte (/status.js, /log.js), para o service worker guardar a versão mais nova.
     expect(html).toContain("loadData('status.js', 'claudioStatus')");
     expect(html).toContain("loadData('log.js', 'claudioLog')");
+    // Um botão só: o link decide entre subir direto e abrir o terminal para preparar.
     expect(html).toContain('Iniciar o Claudio’s Club');
-    expect(html).toContain('Preparar e iniciar');
+    expect(html).not.toContain('Preparar e iniciar');
   });
 });
 

@@ -173,7 +173,7 @@ cd ClaudiosClub
 npm run setup
 ```
 
-Uma vez só: instala as dependências, o Claude Code e o login se faltarem, registra os botões da página de início e o atalho no menu, oferece as barras de cota e sobe o Claudio's Club em **http://claudio.localhost:4848**. Depois disso, tudo pelo navegador: com ele parado, a mesma porta mostra a página de início, com o checklist, o log e os botões **Iniciar** e **Preparar e iniciar** (este abre um terminal, faz o que falta e fecha sozinho).
+Uma vez só: instala as dependências, o Claude Code e o login se faltarem, registra o botão da página de início e o atalho no menu, oferece as barras de cota e sobe o Claudio's Club em **http://claudio.localhost:4848**. Depois disso, tudo pelo navegador: com ele parado, a mesma porta mostra a página de início, com o checklist, o log e o botão **Iniciar**. Com tudo pronto, ele sobe sem janela; se faltar algo, abre um terminal que resolve, sobe e fecha sozinho.
 
 Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code aparecem sozinhos.
 
@@ -182,7 +182,7 @@ Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro)
 | Preparar tudo e subir (primeira vez, ou depois de atualizar) | `npm run setup` |
 | Subir em segundo plano · parar · ver o estado e o log | `npm run daily:start` · `npm run daily:stop` · `npm run daily:status` |
 | Subir junto com o sistema, em segundo plano | `npm run autostart` |
-| Só registrar os botões da página de início e o atalho no menu | `npm run launcher` |
+| Só registrar o botão da página de início e o atalho no menu | `npm run launcher` |
 | Desenvolver o Claudio's Club (recarrega a cada arquivo salvo, em http://claudio.localhost:5173) | `npm run dev` |
 | Barras de consumo 5 h / 7 d (instala o mod `myco-tap`) | `npm run mod:install` |
 | Testes e tipos | `npm test` · `npm run typecheck` |

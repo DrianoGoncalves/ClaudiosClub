@@ -29,7 +29,8 @@ import {
 //   start   em segundo plano, sem janela, religando se cair (npm run daily:start)
 //   stop    para o vigia e tudo o que ele abriu (npm run daily:stop)
 //   status  vigia, servidor e fim do log (npm run daily:status)
-//   link    o que os botões da página de início pedem pelo link myco:// (registrado por npm run launcher)
+//   link    o botão Iniciar da página de início, pelo link myco:// (registrado por npm run launcher): sobe sem janela
+//           ou, se faltar algo, abre um terminal com o setup
 // Porta: --port N, ou MYCO_PORT, ou 4848.
 
 const [action = 'status', ...rest] = process.argv.slice(2);
@@ -42,6 +43,9 @@ const isUp = () => fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortS
 /** O programa existe e responde a --version? (no Windows, o `claude` e o `npm` são .cmd: precisam do shell) */
 const has = (cmd: string) => spawnSync(cmd, ['--version'], { shell: win, stdio: 'ignore', windowsHide: true }).status === 0;
 const npm = (args: string[]) => spawnSync('npm', args, { cwd: ROOT, stdio: 'inherit', shell: win }).status === 0;
+
+/** Login no Claude Code feito (ou chave de API definida)? */
+const loggedIn = async () => (await getAuthStatus({ fresh: true })).loggedIn || !!process.env.ANTHROPIC_API_KEY;
 
 /** Pergunta sim/não no terminal. Sem terminal (atalho, link), não instala nada por conta própria. */
 async function ask(question: string, yesByDefault: boolean): Promise<boolean> {
@@ -154,10 +158,21 @@ async function setupFailed(reason: string): Promise<never> {
   process.exit(1);
 }
 
+/** O que impede a subida e só o setup resolve (instalar, fazer login); vazio quando dá para subir direto. */
+async function missingForStart(): Promise<string[]> {
+  const missing: string[] = [];
+  if (Number(process.versions.node.split('.')[0]) < 22) missing.push('Node 22+');
+  if (!has('git')) missing.push('Git');
+  if (depsStale()) missing.push('dependências');
+  if (!has('claude')) missing.push('Claude Code');
+  else if (!(await loggedIn())) missing.push('login');
+  return missing;
+}
+
 /**
- * Tudo o que falta para rodar, em ordem, num terminal: o botão "Preparar e iniciar" da página de início abre esta
- * janela, e ela fecha sozinha quando o Claudio’s Club está no ar (a página entra nele). Sem botão ainda, rode
- * `npm run setup` uma vez.
+ * Tudo o que falta para rodar, em ordem, num terminal: quando o botão Iniciar da página de início encontra algo
+ * faltando, abre esta janela, e ela fecha sozinha quando o Claudio’s Club está no ar (a página entra nele). Sem o
+ * botão registrado ainda, rode `npm run setup` uma vez.
  */
 async function setup(fromLink: boolean): Promise<void> {
   console.log('Claudio’s Club: preparando tudo para rodar.');
@@ -185,13 +200,12 @@ async function setup(fromLink: boolean): Promise<void> {
   console.log('ok');
 
   step('Login no Claude Code');
-  const logged = async () => (await getAuthStatus({ fresh: true })).loggedIn || !!process.env.ANTHROPIC_API_KEY;
-  if (!(await logged())) {
+  if (!(await loggedIn())) {
     if (process.stdin.isTTY) {
       console.log('Entre com a sua conta do Claude no navegador que vai abrir.');
       spawnSync('claude', ['auth', 'login', '--claudeai'], { stdio: 'inherit', shell: win });
     }
-    if (!(await logged())) await setupFailed('sem login no Claude Code: rode claude auth login --claudeai');
+    if (!(await loggedIn())) await setupFailed('sem login no Claude Code: rode claude auth login --claudeai');
   }
   console.log('ok');
 
@@ -219,13 +233,17 @@ async function setup(fromLink: boolean): Promise<void> {
 }
 
 /**
- * Pedido de um botão da página de início (myco://start, myco://setup). O link não recebe nada de fora: só o nome
- * da ação, de uma lista fixa; o resto é ignorado.
+ * O botão Iniciar da página de início (myco://start). Com tudo pronto, sobe em segundo plano, sem janela; faltando
+ * algo que só o setup resolve, abre um terminal com ele, que sobe no fim e fecha. myco://setup abre o terminal
+ * sempre. O link não recebe nada de fora: só o nome da ação, de uma lista fixa; o resto é ignorado.
  */
 async function link(raw: string | undefined): Promise<void> {
-  const what = (raw ?? '').replace(/^myco:\/*/i, '').split(/[/?#]/)[0]?.toLowerCase() ?? '';
-  appendLog('link', `pedido: myco://${what || 'start'}`);
-  if (what === 'setup') {
+  const what = (raw ?? '').replace(/^myco:\/*/i, '').split(/[/?#]/)[0]?.toLowerCase() || 'start';
+  appendLog('link', `pedido: myco://${what}`);
+  if (runningDaemon()) return start({ offerMod: false });
+  const missing = what === 'setup' ? ['pedido direto'] : await missingForStart();
+  if (missing.length) {
+    appendLog('link', `falta: ${missing.join(', ')}; abrindo o terminal para preparar`);
     const r = openTerminal([process.execPath, TSX, DAILY, 'setup', '--from-link'], { title: 'Claudio’s Club - preparar', cwd: ROOT });
     if (r.ok) return;
     // Sem terminal para mostrar: sobe assim mesmo e registra o motivo.
