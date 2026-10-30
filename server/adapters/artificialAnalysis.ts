@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parseEnv } from 'node:util';
 import { z } from 'zod';
-import type { ModelBenchmark, ModelBenchmarks, ModelVariant } from '../../shared/model';
+import type { IndexMetric, ModelBenchmark, ModelBenchmarks, ModelVariant } from '../../shared/model';
 
 // Índice de código e preço dos modelos pela API gratuita do Artificial Analysis
 // (https://artificialanalysis.ai/api-reference: pede crédito ao site e cache das respostas, 1.000
@@ -32,10 +32,18 @@ const ApiModel = z.object({
   name: z.string(),
   slug: z.string(),
   model_creator: z.object({ name: z.string().nullish(), slug: z.string().nullish() }).nullish(),
-  evaluations: z.object({ artificial_analysis_coding_index: z.number().nullish() }).nullish(),
+  evaluations: z
+    .object({ artificial_analysis_coding_index: z.number().nullish(), artificial_analysis_intelligence_index: z.number().nullish() })
+    .nullish(),
   pricing: z.object({ price_1m_blended_3_to_1: z.number().nullish() }).nullish(),
 });
+type ApiModelData = z.infer<typeof ApiModel>;
 const ApiResponse = z.object({ data: z.array(z.unknown()) });
+
+/** Da mais preferida para a menos: a lista inteira usa a primeira métrica que algum modelo tem. */
+const INDEX_METRICS: IndexMetric[] = ['coding', 'intelligence'];
+
+type Ranking = Pick<ModelBenchmarks, 'metric' | 'models'>;
 
 /** Falha que não adianta repetir (chave recusada, limite do dia). */
 class PermanentError extends Error {}
@@ -48,7 +56,7 @@ export interface ArtificialAnalysisDeps {
 }
 
 export class ArtificialAnalysis {
-  private cache: { models: ModelBenchmark[]; at: number } | null = null;
+  private cache: (Ranking & { at: number }) | null = null;
   private failures = 0;
   private openUntil = 0;
   private inflight: Promise<ModelBenchmarks> | null = null;
@@ -67,7 +75,7 @@ export class ArtificialAnalysis {
   /** O ranking; `refresh` busca de novo (respeitando o intervalo mínimo entre buscas). */
   async get(refresh = false): Promise<ModelBenchmarks> {
     const key = await this.deps.readKey();
-    if (!key) return { configured: false, models: [], fetchedAt: null, error: null };
+    if (!key) return { configured: false, metric: null, models: [], fetchedAt: null, error: null };
     const now = this.deps.now();
     const age = this.cache ? now - this.cache.at : Infinity;
     if (age < (refresh ? MIN_REFRESH_MS : CACHE_MS)) return this.report(null);
@@ -82,8 +90,8 @@ export class ArtificialAnalysis {
 
   private async fetchModels(key: string): Promise<ModelBenchmarks> {
     try {
-      const models = await this.withRetry(() => this.request(key));
-      this.cache = { models, at: this.deps.now() };
+      const ranking = await this.withRetry(() => this.request(key));
+      this.cache = { ...ranking, at: this.deps.now() };
       this.failures = 0;
       return this.report(null);
     } catch (err) {
@@ -105,7 +113,7 @@ export class ArtificialAnalysis {
     }
   }
 
-  private async request(key: string): Promise<ModelBenchmark[]> {
+  private async request(key: string): Promise<Ranking> {
     let res: Response;
     try {
       res = await this.deps.fetch(API_URL, { headers: { 'x-api-key': key }, signal: AbortSignal.timeout(TIMEOUT_MS) });
@@ -123,6 +131,7 @@ export class ArtificialAnalysis {
   private report(error: string | null): ModelBenchmarks {
     return {
       configured: true,
+      metric: this.cache?.metric ?? null,
       models: this.cache?.models ?? [],
       fetchedAt: this.cache ? new Date(this.cache.at).toISOString() : null,
       error,
@@ -134,22 +143,32 @@ const EFFORTS = ['non-reasoning', 'minimal', 'low', 'medium', 'high', 'xhigh', '
 const EFFORT_SUFFIX = new RegExp(`-(${EFFORTS.join('|')})$`);
 
 /**
- * Os de maior índice de código, só os que têm índice e preço. Cada esforço vem como um item
- * ("claude-x-high", "claude-x-low"…, slug com sufixo): juntam-se num modelo só, que aparece com o
- * esforço padrão, a variante principal do AA (o slug sem sufixo, como "claude-x").
+ * Os de maior índice, só os que têm preço. A métrica (código ou inteligência) é a mesma para a lista
+ * inteira: a primeira que algum modelo tem. Sem nenhum índice, a lista vem vazia e a métrica é null.
+ * Cada esforço vem como um item ("claude-x-high", "claude-x-low"…, slug com sufixo): juntam-se num
+ * modelo só, que aparece com o esforço padrão, a variante principal do AA (o slug sem sufixo, como "claude-x").
  */
-export function pickTop(items: unknown[], top = TOP): ModelBenchmark[] {
-  const families = new Map<string, Array<ModelVariant & { name: string; creator: string; slug: string }>>();
+export function pickTop(items: unknown[], top = TOP): Ranking {
+  const priced: Array<{ m: ApiModelData; priceBlended: number }> = [];
   for (const item of items) {
     const m = ApiModel.safeParse(item);
     if (!m.success || !CREATORS.has(m.data.model_creator?.slug ?? '')) continue;
-    const codingIndex = m.data.evaluations?.artificial_analysis_coding_index;
     const priceBlended = m.data.pricing?.price_1m_blended_3_to_1;
-    if (codingIndex == null || priceBlended == null || priceBlended < 0) continue;
-    const { id, name, slug } = m.data;
+    if (priceBlended == null || priceBlended < 0) continue;
+    priced.push({ m: m.data, priceBlended });
+  }
+  const metric = INDEX_METRICS.find((k) => priced.some(({ m }) => indexOf(m, k) != null)) ?? null;
+  if (!metric) return { metric, models: [] };
+
+  const families = new Map<string, Array<ModelVariant & { name: string; creator: string; slug: string }>>();
+  for (const { m, priceBlended } of priced) {
+    const codingIndex = indexOf(m, metric);
+    // Modelo sem a métrica escolhida fica de fora: não se misturam escalas.
+    if (codingIndex == null) continue;
+    const { id, name, slug } = m;
     const key = slug.replace(EFFORT_SUFFIX, '');
     const list = families.get(key) ?? [];
-    list.push({ id, name, slug, creator: m.data.model_creator?.name ?? '', effort: effortOf(slug, name), codingIndex, priceBlended });
+    list.push({ id, name, slug, creator: m.model_creator?.name ?? '', effort: effortOf(slug, name), codingIndex, priceBlended });
     families.set(key, list);
   }
   const out: ModelBenchmark[] = [];
@@ -168,7 +187,11 @@ export function pickTop(items: unknown[], top = TOP): ModelBenchmark[] {
       variants: list.map(({ id, effort, codingIndex, priceBlended }) => ({ id, effort, codingIndex, priceBlended })),
     });
   }
-  return out.sort((a, b) => b.codingIndex - a.codingIndex).slice(0, top);
+  return { metric, models: out.sort((a, b) => b.codingIndex - a.codingIndex).slice(0, top) };
+}
+
+function indexOf(m: ApiModelData, metric: IndexMetric): number | null | undefined {
+  return metric === 'coding' ? m.evaluations?.artificial_analysis_coding_index : m.evaluations?.artificial_analysis_intelligence_index;
 }
 
 /** O esforço pelo sufixo do slug ou, na variante principal (sem sufixo), pelo nome: "(Max, …)". */
