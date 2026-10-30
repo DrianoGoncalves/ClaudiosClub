@@ -180,6 +180,13 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
 
   // Órfão do Claudio’s Club não trava: a próxima mensagem já retoma a conversa aqui.
   const blocked = disabled ?? (chat.elsewhere && !chat.elsewhere.orphan ? t('chat.openElsewhereShort') : null);
+  // Ao abrir o painel, o cursor já vai para a caixa de mensagem (uma vez, assim que ela estiver liberada).
+  const focused = useRef(false);
+  useEffect(() => {
+    if (blocked || focused.current) return;
+    focused.current = true;
+    input.current?.focus({ preventScroll: true });
+  }, [blocked]);
   const [showChanges, setShowChanges] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [bgOpen, setBgOpen] = useState(false);
