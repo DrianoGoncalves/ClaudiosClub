@@ -674,3 +674,28 @@ describe('ChatManager: folga de cota', () => {
     expect(notice(w)).toBeUndefined();
   });
 });
+
+describe('ChatManager: conversa sem ficha', () => {
+  it('modelo, esforço e autonomia mudam na hora, sem funcionário (a conversa só precisa existir)', async () => {
+    const f = fakeClaude();
+    let asked: { sessionId: string | null; staffId: string | null } | null = null;
+    const m = new ChatManager({
+      transcriptsDir: root,
+      usageFile: path.join(root, 'usage-loose.json'),
+      listLive: async () => [],
+      // Como o chatSpawn sem ficha: retoma a sessão que já existe, pedindo antes de agir.
+      resolve: async (_p, sessionId, staffId) => {
+        asked = { sessionId, staffId };
+        return sessionId && !staffId ? { sessionId, cwd: root, args: ['--resume', sessionId, '--permission-mode', 'manual'] } : null;
+      },
+      spawnImpl: f.spawnImpl,
+    });
+    type Msg = { type: string; request?: Record<string, unknown> };
+    const sid = await m.settings('p', 'solta-1', null, { model: 'haiku', effort: 'low', autonomy: 'auto' });
+    await tick();
+    expect(sid).toBe('solta-1');
+    expect(asked).toEqual({ sessionId: 'solta-1', staffId: null });
+    const controls = (f.written as Msg[]).filter((x) => x.type === 'control_request').map((x) => x.request?.subtype);
+    expect(controls).toEqual(expect.arrayContaining(['set_model', 'apply_flag_settings', 'set_permission_mode']));
+  });
+});
