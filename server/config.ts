@@ -133,7 +133,8 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
   return {
     // 'MyCo' era o nome padrão antes da troca de nome: quem não mudou passa a ver o novo.
     companyName: d.companyName && d.companyName !== 'MyCo' ? d.companyName : DEFAULTS.companyName,
-    uiLevel: d.uiLevel ?? (Object.keys(d).length ? 'advanced' : DEFAULTS.uiLevel),
+    // Simples até você escolher o avançado, também para quem já tinha config de antes da opção.
+    uiLevel: d.uiLevel ?? DEFAULTS.uiLevel,
     archived: { projects: d.archived?.projects ?? [], sessions: d.archived?.sessions ?? [] },
     usageStop: {
       fiveHour: d.usageStop?.fiveHour === undefined ? DEFAULTS.usageStop.fiveHour : d.usageStop.fiveHour,

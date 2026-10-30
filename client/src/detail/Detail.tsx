@@ -102,6 +102,12 @@ export function EmployeePanel(props: {
   const wanted = props.initialConversation && props.conversations?.some((c) => c.id === props.initialConversation) ? props.initialConversation : null;
   const [picked, setPicked] = useState<string | null>(wanted ?? s?.id ?? null);
   const [fresh, setFresh] = useState(false);
+  // A conversa nova, depois da primeira mensagem, já tem sessão: o ChatView segue nela sem remontar (fica com a
+  // chave de "nova"), e ela entra na lista na hora, para dar para trocar de conversa e voltar antes do quadro
+  // reler as fichas e os transcripts.
+  const [freshId, setFreshId] = useState<string | null>(null);
+  const [freshN, setFreshN] = useState(0);
+  const [started, setStarted] = useState<Array<{ id: string; title: string; updatedAt: string }>>([]);
   const first = useRef(true);
   useEffect(() => {
     // Na primeira vez vale a conversa pedida (busca); depois, a mais recente quando ela muda.
@@ -111,22 +117,35 @@ export function EmployeePanel(props: {
     }
     setPicked(s?.id ?? null);
     setFresh(false);
+    setFreshId(null);
   }, [s?.id]);
-  const current = fresh ? null : picked;
+  /** A sessão que o ChatView abre: nenhuma na conversa nova (mesmo depois que ela ganhou id). */
+  const opened = fresh ? null : picked;
+  const current = fresh ? freshId : picked;
   // Sem ficha, a lista é a própria conversa: dá para abrir uma nova (a pesada fica no quadro) e voltar a ela.
-  const conversations = props.conversations?.length
+  const listed = props.conversations?.length
     ? props.conversations
     : !staff && s
       ? [{ id: s.id, title: s.topic ?? s.title, updatedAt: s.updatedAt }]
       : [];
+  const conversations = [...started.filter((c) => !listed.some((l) => l.id === c.id)), ...listed];
+  const sessionStarted = (id: string) => {
+    if (fresh) setFreshId(id);
+    setStarted((prev) => (prev.some((c) => c.id === id) ? prev : [{ id, title: t('detail.newConversation'), updatedAt: new Date().toISOString() }, ...prev]));
+    props.onSessionStarted?.(id);
+  };
+  const pick = (id: string) => {
+    setFresh(false);
+    setFreshId(null);
+    setPicked(id);
+  };
   const [convBusy, setConvBusy] = useState(false);
   const duplicate = async () => {
     if (!project || !current) return;
     setConvBusy(true);
     try {
       const r = await api.chatFork(project.id, current, staff?.id ?? null);
-      setFresh(false);
-      setPicked(r.sessionId);
+      pick(r.sessionId);
       props.onSessionStarted?.(r.sessionId);
     } catch (e) {
       window.alert((e as Error).message);
@@ -165,12 +184,9 @@ export function EmployeePanel(props: {
           <select
             aria-label={t('detail.conversation')}
             value={current ?? ''}
-            onChange={(e) => {
-              setFresh(false);
-              setPicked(e.target.value);
-            }}
+            onChange={(e) => pick(e.target.value)}
           >
-            {fresh && <option value="">{t('detail.newConversation')}</option>}
+            {fresh && !freshId && <option value="">{t('detail.newConversation')}</option>}
             {byDay(conversations).map((g) => (
               <optgroup key={g.label} label={g.label}>
                 {g.items.map(({ c }) => (
@@ -181,7 +197,17 @@ export function EmployeePanel(props: {
               </optgroup>
             ))}
           </select>
-          <button type="button" className="btn-secondary" disabled={fresh || convBusy} onClick={() => setFresh(true)} title={t('detail.newConversationTitle')}>
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={(fresh && !freshId) || convBusy}
+            onClick={() => {
+              setFresh(true);
+              setFreshId(null);
+              setFreshN((n) => n + 1);
+            }}
+            title={t('detail.newConversationTitle')}
+          >
             {t('detail.newConversationBtn')}
           </button>
         </div>
@@ -316,14 +342,14 @@ export function EmployeePanel(props: {
   }
   return (
     <ChatView
-      key={`${current ?? 'novo'}:${staff?.id ?? ''}`}
+      key={`${opened ?? `novo${freshN}`}:${staff?.id ?? ''}`}
       projectId={project.id}
-      sessionId={current}
+      sessionId={opened}
       staffId={staff?.id ?? null}
       name={name}
       autonomy={staff?.autonomy ?? null}
       disabled={!project.exists ? t('detail.projectFolderMissing') : null}
-      onSessionStarted={props.onSessionStarted}
+      onSessionStarted={sessionStarted}
       level={props.simple ? 'simple' : 'advanced'}
       fichaModel={staff?.model ?? null}
       fichaEffort={staff?.effort ?? null}
