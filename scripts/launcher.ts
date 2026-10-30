@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DAILY, START_PAGE, ROOT, createWindowsShortcut, linuxAppsDir } from './lib';
+import { DAILY, START_PAGE, TSX, createWindowsShortcut, execArg, linuxAppsDir, linuxScriptPath, writeLinuxScript } from './lib';
 
 // Atalho do Claudio’s Club no menu de programas e o link myco:// que o botão "Iniciar" da página de início
 // (scripts/start.html) usa para subir o Claudio’s Club em segundo plano. Só no seu usuário, sem administrador.
@@ -13,8 +13,8 @@ import { DAILY, START_PAGE, ROOT, createWindowsShortcut, linuxAppsDir } from './
 
 const NAME = 'Claudio’s Club';
 const NODE = process.execPath;
-const TSX = path.join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-const START_CMD = [NODE, TSX, DAILY, 'start'];
+// O link vai para `daily.ts link <url>`, que só aceita ações de uma lista fixa (start, setup).
+const LINK_CMD = [NODE, TSX, DAILY, 'link'];
 const DESKTOP_MENU = 'claudios.desktop';
 const DESKTOP_URL = 'claudios-url.desktop';
 const URL_KEY = 'HKCU\\Software\\Classes\\myco';
@@ -29,7 +29,7 @@ function installWindows(): void {
   const reg = (args: string[]) => spawnSync('reg', args, { windowsHide: true, stdio: 'ignore' });
   reg(['add', URL_KEY, '/ve', '/d', `URL:${NAME}`, '/f']);
   reg(['add', URL_KEY, '/v', 'URL Protocol', '/d', '', '/f']);
-  reg(['add', `${URL_KEY}\\shell\\open\\command`, '/ve', '/d', START_CMD.map(quote).join(' '), '/f']);
+  reg(['add', `${URL_KEY}\\shell\\open\\command`, '/ve', '/d', [...LINK_CMD, '%1'].map(quote).join(' '), '/f']);
   createWindowsShortcut({
     link: path.join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', `${NAME}.lnk`),
     target: START_PAGE,
@@ -46,7 +46,7 @@ function installLinux(): void {
     desktopEntry({
       Name: NAME,
       Comment: 'Abre o escritório (ou o botão para iniciar, se estiver parado)',
-      Exec: `xdg-open ${quote(START_PAGE)}`,
+      Exec: `xdg-open ${execArg(START_PAGE)}`,
       Categories: 'Development;',
     }),
   );
@@ -54,7 +54,8 @@ function installLinux(): void {
     path.join(dir, DESKTOP_URL),
     desktopEntry({
       Name: `${NAME} (iniciar)`,
-      Exec: START_CMD.map(quote).join(' '),
+      // Chamado pelo navegador (xdg-open): o comando, o PATH do terminal e a pasta ficam no script.
+      Exec: `${execArg(writeLinuxScript('iniciar', LINK_CMD, true))} %u`,
       NoDisplay: 'true',
       MimeType: 'x-scheme-handler/myco;',
     }),
@@ -72,6 +73,7 @@ function remove(): void {
   } else if (process.platform === 'linux') {
     fs.rmSync(path.join(linuxAppsDir(), DESKTOP_MENU), { force: true });
     fs.rmSync(path.join(linuxAppsDir(), DESKTOP_URL), { force: true });
+    fs.rmSync(linuxScriptPath('iniciar'), { force: true });
   }
   console.log('Atalho e link myco:// removidos.');
 }

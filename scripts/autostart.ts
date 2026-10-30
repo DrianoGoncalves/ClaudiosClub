@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DAEMON, ROOT, createWindowsShortcut } from './lib';
+import { DAEMON, ROOT, createWindowsShortcut, execArg, linuxScriptPath, userPath, writeLinuxScript } from './lib';
 
 // Sobe o vigia do Claudio’s Club sozinho a cada login (sem janela, religando se cair). O log fica em
 // ~/.myco/logs/server.log. Não precisa de administrador.
@@ -34,8 +34,8 @@ function installWindows(): void {
 
 function installLinux(): void {
   fs.mkdirSync(path.dirname(LINUX_FILE), { recursive: true });
-  // O login gráfico não herda o PATH do terminal: levamos o atual, para o `claude` continuar sendo achado.
-  const exec = ['env', `PATH=${process.env.PATH ?? ''}`, quote(NODE), ...ARGS.map((a) => (a === DAEMON ? quote(a) : a))].join(' ');
+  // O login gráfico não herda o PATH do terminal: o script leva o atual, para o `claude` continuar sendo achado.
+  const exec = execArg(writeLinuxScript('vigia', [NODE, ...ARGS]));
   fs.writeFileSync(
     LINUX_FILE,
     ['[Desktop Entry]', 'Type=Application', `Name=${NAME} (vigia)`, `Exec=${exec}`, `Path=${ROOT}`, 'Terminal=false', 'X-GNOME-Autostart-enabled=true'].join('\n') + '\n',
@@ -63,7 +63,7 @@ ${args}
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>${xml(process.env.PATH ?? '')}</string>
+    <string>${xml(userPath())}</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -83,6 +83,7 @@ function remove(): void {
     fs.rmSync(path.join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', `${NAME}.lnk`), { force: true });
   } else if (process.platform === 'linux') {
     fs.rmSync(LINUX_FILE, { force: true });
+    fs.rmSync(linuxScriptPath('vigia'), { force: true });
   } else {
     spawnSync('launchctl', ['bootout', `gui/${process.getuid?.() ?? 0}`, MAC_FILE], { stdio: 'ignore' });
     fs.rmSync(MAC_FILE, { force: true });

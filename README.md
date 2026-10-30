@@ -159,7 +159,7 @@ Quem pediu fica sabendo quando a parte dele termina. Funcionários que um gestor
 ## Começando
 
 > [!NOTE]
-> Precisa do **Node 22+**, do **Git** e do **[Claude Code](https://claude.com/claude-code)** instalado e com login feito. Feito e testado no **Windows 10/11**; os scripts do dia a dia são Node, sem PowerShell.
+> Precisa do **Node 22+** e do **Git**. Roda no **Windows 10/11** e no **Linux**; os scripts do dia a dia são Node, sem PowerShell.
 
 ```bash
 git clone https://github.com/DrianoGoncalves/ClaudiosClub.git
@@ -170,20 +170,20 @@ cd ClaudiosClub
 ```
 
 ```bash
-npm install
+npm run setup
 ```
 
-```bash
-npm run dev
-```
+Uma vez só: instala as dependências, o Claude Code e o login se faltarem, registra os botões da página de início e o atalho no menu, oferece as barras de cota e sobe o Claudio's Club em **http://claudio.localhost:4848**. Depois disso, tudo pelo navegador: com ele parado, a mesma porta mostra a página de início, com o checklist, o log e os botões **Iniciar** e **Preparar e iniciar** (este abre um terminal, faz o que falta e fecha sozinho).
 
-Abra **http://claudio.localhost:5173**. Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code aparecem sozinhos.
+Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code aparecem sozinhos.
 
 | Para | Comando |
 | --- | --- |
-| Usar no dia a dia (build + servidor em http://claudio.localhost:4848) | `npm run daily` |
+| Preparar tudo e subir (primeira vez, ou depois de atualizar) | `npm run setup` |
+| Subir em segundo plano · parar · ver o estado e o log | `npm run daily:start` · `npm run daily:stop` · `npm run daily:status` |
 | Subir junto com o sistema, em segundo plano | `npm run autostart` |
-| Botão **Rodar** na própria porta quando o Claudio's Club está parado (e atalho no menu de programas) | `npm run launcher` |
+| Só registrar os botões da página de início e o atalho no menu | `npm run launcher` |
+| Desenvolver o Claudio's Club (recarrega a cada arquivo salvo, em http://claudio.localhost:5173) | `npm run dev` |
 | Barras de consumo 5 h / 7 d (instala o mod `myco-tap`) | `npm run mod:install` |
 | Testes e tipos | `npm test` · `npm run typecheck` |
 

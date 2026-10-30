@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "mod:install": "tsx scripts/install-mod.ts",
     "mod:uninstall": "tsx scripts/install-mod.ts --uninstall",
+    "setup": "npm install --no-audit --no-fund && tsx scripts/daily.ts setup",
     "daily": "tsx scripts/daily.ts run",
     "daily:start": "tsx scripts/daily.ts start",
     "daily:stop": "tsx scripts/daily.ts stop",

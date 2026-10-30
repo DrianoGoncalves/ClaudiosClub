@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { BUILT, LOG_FILE, PID_FILE, ROOT, RUN_DIR, STOP_FILE, portFrom, runningDaemon } from './lib';
+import { BUILT, LOG_FILE, PID_FILE, ROOT, RUN_DIR, STOP_FILE, appendLog, portFrom, runningDaemon, writeLogSnapshot } from './lib';
 
 // Vigia do Claudio’s Club: sobe o servidor sem janela, guarda a saída em ~/.myco/logs/server.log e religa sozinho se
 // ele cair. Para parar: npm run daily:stop. Quem chama (daily start, ou o login automático) já o põe em segundo plano.
@@ -13,10 +13,10 @@ const port = portFrom(process.argv.slice(2));
 let child: ChildProcess | null = null;
 let stopping = false;
 
+/** Registra no log e atualiza a cópia que a página de início lê (scripts/log.js). */
 function log(line: string): void {
-  // Hora local, no formato AAAA-MM-DD HH:MM:SS.
-  const stamp = new Date().toLocaleString('sv-SE');
-  fs.appendFileSync(LOG_FILE, `[${stamp}] [vigia] ${line}\n`);
+  appendLog('vigia', line);
+  void writeLogSnapshot();
 }
 
 /** Arquivos de uma pasta, em todos os níveis. */
