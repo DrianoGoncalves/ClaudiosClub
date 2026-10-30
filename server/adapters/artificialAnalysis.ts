@@ -3,6 +3,7 @@ import path from 'node:path';
 import { parseEnv } from 'node:util';
 import { z } from 'zod';
 import type { IndexMetric, ModelBenchmark, ModelBenchmarks, ModelVariant } from '../../shared/model';
+import { ROOT } from '../root';
 
 // Índice de código e preço dos modelos pela API gratuita do Artificial Analysis
 // (https://artificialanalysis.ai/api-reference: pede crédito ao site e cache das respostas, 1.000
@@ -11,7 +12,7 @@ import type { IndexMetric, ModelBenchmark, ModelBenchmarks, ModelVariant } from 
 
 const API_URL = 'https://artificialanalysis.ai/api/v2/data/llms/models';
 export const KEY_NAME = 'ARTIFICIAL_ANALYSIS_API_KEY';
-const ENV_FILE = path.resolve(import.meta.dirname, '../../.env');
+const ENV_FILE = path.join(ROOT, '.env');
 
 /** Quantos modelos o ranking mostra. */
 const TOP = 20;

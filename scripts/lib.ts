@@ -2,12 +2,13 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { ROOT } from '../server/root';
 import { logEntries, logScript, readTail } from '../server/startPage';
 
 // Base dos scripts do dia a dia (daily, daemon, doctor, launcher, autostart). Roda igual no Windows, no macOS e
 // no Linux: só Node. O que é do sistema (atalho, registro, login automático) fica nos blocos por plataforma.
 
-export const ROOT = path.resolve(import.meta.dirname, '..');
+export { ROOT };
 export const DEFAULT_PORT = 4848;
 export const MYCO_HOME = process.env.MYCO_HOME ?? path.join(os.homedir(), '.myco');
 export const LOG_FILE = path.join(MYCO_HOME, 'logs', 'server.log');
@@ -84,7 +85,7 @@ export function runningDaemon(): number | null {
     return null;
   }
   if (typeof pid !== 'number' || !isAlive(pid)) return null;
-  return commandLine(pid).includes('daemon.ts') ? pid : null;
+  return /daemon\.(ts|mjs)/.test(commandLine(pid)) ? pid : null;
 }
 
 /** Encerra o vigia e tudo o que ele abriu (servidor, build). No Unix, o vigia é líder do próprio grupo. */

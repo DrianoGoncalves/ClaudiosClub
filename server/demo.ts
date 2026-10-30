@@ -7,6 +7,7 @@ import { BUILTIN_ROLES } from '../shared/roles';
 import { encodeProjectDir } from './adapters/claude/paths';
 import { MYCO_HOME } from './config';
 import { ensureMycoGitignore } from './mycoGitignore';
+import { ROOT } from './root';
 import { saveProfile, staffDir, writeAtomic } from './staff/store';
 
 // Projeto demo: uma API pequena de cafeteria (com um bug de propósito) e uma equipe pronta, para
@@ -16,7 +17,7 @@ import { saveProfile, staffDir, writeAtomic } from './staff/store';
 // cota de quem usa. A equipe sai dos cargos prontos, então acompanha as revisões deles.
 
 export const DEMO_DIR = path.join(MYCO_HOME, 'demo', 'cafe-demo');
-const TEMPLATE_DIR = path.resolve(import.meta.dirname, '../demo/cafe-demo');
+const TEMPLATE_DIR = path.join(ROOT, 'demo', 'cafe-demo');
 
 const exec = promisify(execFile);
 

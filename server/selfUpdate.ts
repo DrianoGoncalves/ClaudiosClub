@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { UpdateStatus } from '../shared/model';
+import { ROOT } from './root';
 
 // Atualizar o próprio Claudio’s Club pelo GitHub, por versão publicada: uma tag vX.Y.Z (o Release no GitHub).
 // O que é mesclado no main não chega a ninguém até você publicar a versão. De tempos em tempos ele busca as tags
@@ -10,7 +11,6 @@ import type { UpdateStatus } from '../shared/model';
 // Mudou o package.json ou o lock, roda o npm install. Quem reinicia é o servidor (com o vigia, ele sobe de novo
 // e refaz o build do cliente, que ficou mais velho que o código).
 
-const ROOT = path.resolve(import.meta.dirname, '..');
 const MAX_COMMITS = 20;
 
 export class UpdateError extends Error {}

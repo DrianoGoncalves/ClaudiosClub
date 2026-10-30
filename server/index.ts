@@ -53,6 +53,7 @@ import { encodeProjectDir, pathKey } from './adapters/claude/paths';
 import { AUTONOMY, readProfile } from './staff/store';
 import { TaskError, TaskService } from './tasks';
 import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefaultRole } from './roles';
+import { ROOT } from './root';
 import { cleanRunDir } from './runCleanup';
 import { SelfUpdater, UpdateError } from './selfUpdate';
 
@@ -72,7 +73,7 @@ async function shutdown(stop: boolean) {
 }
 // Só local: o Claudio’s Club lê transcripts e configurações do usuário.
 const HOST = '127.0.0.1';
-const CLIENT_DIR = path.resolve(import.meta.dirname, '../dist/client');
+const CLIENT_DIR = path.join(ROOT, 'dist', 'client');
 // `claudio.localhost`: endereço fixo do Claudio’s Club. Todo `*.localhost` aponta para a própria máquina nos
 // navegadores (RFC 6761), sem mexer no arquivo hosts; continua protegido contra DNS rebinding.
 // `myco.localhost`: o endereço de antes da troca de nome, para favoritos e atalhos antigos.

@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import type http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { ROOT } from './root';
 
 // A página de início (scripts/start.html) também é a tela de "parado": o service worker (client/public/sw.js)
 // guarda uma cópia e a mostra quando a porta não responde. Aberta como arquivo, ela usa o CSS e os ícones do
@@ -9,7 +10,6 @@ import path from 'node:path';
 // parado nada mais carrega. O checklist (scripts/status.js, do `npm run doctor`) vai à parte, em /status.js, e o
 // fim do log (~/.myco/logs/server.log), em /log.js.
 
-const ROOT = path.resolve(import.meta.dirname, '..');
 const LOG_FILE = path.join(process.env.MYCO_HOME ?? path.join(os.homedir(), '.myco'), 'logs', 'server.log');
 
 export interface LogEntry {
