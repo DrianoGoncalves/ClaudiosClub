@@ -140,6 +140,11 @@ export function BoardView(props: BoardViewProps) {
         .map((p) => workspaceOf.get(p.id) ?? null),
     );
   }, [props.board.projects, workspaceOf, config?.archived, showArchived]);
+  // Assunto de cada conversa (o mesmo da lista de conversas do funcionário), para a caixa "precisa de mim".
+  const topicOf = useMemo(
+    () => new Map(Object.values(props.board.sessions).flat().flatMap((s) => (s.topic ? [[s.id, s.topic] as const] : []))),
+    [props.board.sessions],
+  );
   const [shelves, setShelves] = useState(() => loadList(SHELVES_KEY));
   const [collapsed, setCollapsed] = useState(() => loadList(COLLAPSED_KEY));
   // Proporção da tela usada na planta: medida na abertura e a cada "reorganizar" (não a cada
@@ -364,7 +369,7 @@ export function BoardView(props: BoardViewProps) {
           <AuthBadge boost={usage?.boost ?? null} />
           <UpdateNotice />
           <span className="toolbar-sep" />
-          <InboxMenu inbox={props.inbox} onOpen={props.onOpenInbox} />
+          <InboxMenu inbox={props.inbox} topicOf={topicOf} onOpen={props.onOpenInbox} />
           <button className="toolbar-icon" onClick={() => onSelect(RANKING_ID)} title={t('board.rankingTitle')} aria-label={t('board.ranking')}>
             <ChartIcon />
           </button>

@@ -25,7 +25,16 @@ function dismissTitleOf(item: InboxItem): string | null {
   return null;
 }
 
-export function InboxMenu({ inbox, onOpen }: { inbox: InboxView; onOpen: (item: InboxItem) => void }) {
+export function InboxMenu({
+  inbox,
+  topicOf,
+  onOpen,
+}: {
+  inbox: InboxView;
+  /** Assunto da conversa por sessionId; sem assunto conhecido, o item não mostra a linha. */
+  topicOf: ReadonlyMap<string, string>;
+  onOpen: (item: InboxItem) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const root = useRef<HTMLDivElement>(null);
@@ -68,6 +77,7 @@ export function InboxMenu({ inbox, onOpen }: { inbox: InboxView; onOpen: (item: 
             <ul className="inbox-list">
               {inbox.items.map((item) => {
                 const dismissTitle = dismissTitleOf(item);
+                const topic = topicOf.get(item.sessionId);
                 return (
                 <li key={item.id} className={dismissTitle ? 'inbox-has-x' : undefined}>
                   <button
@@ -83,6 +93,7 @@ export function InboxMenu({ inbox, onOpen }: { inbox: InboxView; onOpen: (item: 
                       <b>{item.name}</b>
                       {item.projectName && <span className="muted"> · {item.projectName}</span>}
                     </span>
+                    {topic && <span className="inbox-topic" title={topic}>{topic}</span>}
                     <span className="inbox-summary">{item.summary}</span>
                     {item.at && <span className="muted small inbox-at">{formatAgo(now - Date.parse(item.at))}</span>}
                   </button>
