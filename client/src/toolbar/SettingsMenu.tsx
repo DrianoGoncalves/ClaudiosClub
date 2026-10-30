@@ -8,6 +8,7 @@ import { useChatDetail } from '../chat/chatDetail';
 import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
 import { RolesEditor } from './RolesEditor';
 import { ThemeBackgrounds } from './ThemeBackgrounds';
+import { UpdateControls } from './UpdateNotice';
 
 // Configurações do Claudio’s Club, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
 // com título, descrição e o controle logo abaixo. Abre pelo botão "config" ou com Ctrl+,.
@@ -423,6 +424,14 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       description: t('toolbar.serverDesc'),
       keywords: t('toolbar.serverKeywords'),
       control: <ServerControls />,
+    },
+    {
+      id: 'update',
+      group: 'general',
+      title: t('toolbar.updateTitle'),
+      description: t('toolbar.updateDesc'),
+      keywords: t('toolbar.updateKeywords'),
+      control: <UpdateControls />,
     },
   ];
 

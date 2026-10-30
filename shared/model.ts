@@ -853,3 +853,30 @@ export interface Board {
   user: UserScope;
   live: LiveSession[];
 }
+
+export interface UpdateCommit {
+  hash: string;
+  at: string;
+  subject: string;
+}
+
+/** O próprio Claudio’s Club contra o GitHub (server/selfUpdate.ts). */
+export interface UpdateStatus {
+  /** É um clone git que segue um branch remoto? Sem isso, não há o que buscar. */
+  supported: boolean;
+  /** Ex.: origin/main. */
+  upstream: string | null;
+  /** Commits do remoto que ainda não estão aqui. */
+  behind: number;
+  /** Commits daqui que o remoto não tem (impedem o fast-forward). */
+  ahead: number;
+  /** Arquivos do Claudio’s Club mudados à mão (impedem atualizar). */
+  dirty: boolean;
+  /** As novidades, da mais nova para a mais velha (até 20). */
+  commits: UpdateCommit[];
+  checkedAt: string | null;
+  /** A busca no remoto falhou (sem rede, sem acesso): o resto vale da última busca boa. */
+  error: string | null;
+  /** Rodando com o vigia: atualizar já reinicia sozinho (só na resposta da API). */
+  daemon?: boolean;
+}

@@ -23,6 +23,7 @@ import { nodeTypes } from './nodes';
 import { ChartIcon } from '../icons';
 import { SettingsMenu } from '../toolbar/SettingsMenu';
 import { AuthBadge, CompanyTitle, UsageMeters, useAccountUsage } from '../toolbar/Toolbar';
+import { UpdateNotice } from '../toolbar/UpdateNotice';
 import { t } from '../i18n';
 import { companyName } from '../format';
 import { WorkspaceTabs } from '../office/WorkspaceTabs';
@@ -361,6 +362,7 @@ export function BoardView(props: BoardViewProps) {
           <CompanyTitle name={companyName(config?.companyName)} onRename={props.onRename} />
           <UsageMeters usage={usage} />
           <AuthBadge boost={usage?.boost ?? null} />
+          <UpdateNotice />
           <span className="toolbar-sep" />
           <InboxMenu inbox={props.inbox} onOpen={props.onOpenInbox} />
           <button className="toolbar-icon" onClick={() => onSelect(RANKING_ID)} title={t('board.rankingTitle')} aria-label={t('board.ranking')}>

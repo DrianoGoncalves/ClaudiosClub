@@ -42,6 +42,7 @@ import type {
   TestRun,
   TaskSummary,
   UsageStop,
+  UpdateStatus,
   UsageStopHit,
   UserScope,
 } from '../../shared/model';
@@ -156,6 +157,8 @@ export const api = {
   serverInfo: () =>
     get<{ daemon: boolean; pid: number; port: number; startedAt: string; working: { busy: number; background: number } }>('/api/server'),
   serverAction: (action: 'stop' | 'restart') => post<{ ok: boolean; daemon: boolean }>(`/api/server/${action}`),
+  updateStatus: (fresh = false) => get<UpdateStatus>(fresh ? '/api/update?fresh=1' : '/api/update'),
+  applyUpdate: () => post<{ from: string; to: string; installed: boolean; restarting: boolean }>('/api/update'),
   usage: () => get<AccountUsage>('/api/usage'),
   models: (refresh = false) => post<ModelBenchmarks>('/api/models', { refresh }),
   browser: (fresh = false) => get<BrowserStatus>(fresh ? '/api/browser?fresh=1' : '/api/browser'),
