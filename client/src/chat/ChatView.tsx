@@ -170,7 +170,8 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
     }
   };
 
-  const blocked = disabled ?? (chat.elsewhere ? t('chat.openElsewhereShort') : null);
+  // Órfão do Claudio’s Club não trava: a próxima mensagem já retoma a conversa aqui.
+  const blocked = disabled ?? (chat.elsewhere && !chat.elsewhere.orphan ? t('chat.openElsewhereShort') : null);
   const [showChanges, setShowChanges] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   // "Mais": abre com o foco no painel; ao fechar, o foco volta para o "⋯".

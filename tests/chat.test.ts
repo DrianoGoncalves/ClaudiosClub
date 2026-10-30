@@ -266,12 +266,21 @@ describe('ChatManager: processo órfão de um servidor que reiniciou', () => {
     return { m, registry, killed, lines };
   }
 
-  it('reconhece o órfão, recusa mandar mensagem e o "Trazer" encerra o processo', async () => {
+  it('mandar mensagem para o órfão encerra o processo e segue aqui', async () => {
+    const { m, registry, killed, lines } = setup('busy');
+    await registry.add({ sessionId: 'orf', pid: ORPHAN, server: DEAD_SERVER, startedAt: '' });
+    // `resolve` do teste não abre processo: o erro vem depois de o órfão sair do caminho.
+    await expect(m.send('p', 'orf', null, 'oi')).rejects.toThrow(/não encontrado/);
+    expect(killed).toEqual([ORPHAN]);
+    expect(await registry.read()).toEqual({});
+    expect(lines.some((l) => l.includes('retomada aqui'))).toBe(true);
+  });
+
+  it('reconhece o órfão e o "Trazer" encerra o processo', async () => {
     const { m, registry, killed, lines } = setup('busy');
     await registry.add({ sessionId: 'orf', pid: ORPHAN, server: DEAD_SERVER, startedAt: '' });
     const snap = await m.snapshot('p', 'orf');
     expect(snap.elsewhere).toMatchObject({ pid: ORPHAN, orphan: true });
-    await expect(m.send('p', 'orf', null, 'oi')).rejects.toThrow(/antes do reinício/);
     await m.adopt('orf');
     expect(killed).toEqual([ORPHAN]);
     expect(await registry.read()).toEqual({});
