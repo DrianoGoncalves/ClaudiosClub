@@ -1,5 +1,5 @@
 import { Handle, Position, type Node, type NodeProps, type NodeTypes } from '@xyflow/react';
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { colorCss, type GitState, type LiveSession } from '../../../shared/model';
 import { employeeName, ENTRYPOINT_LABEL, formatAgo, formatShare, initials, STATUS_LABEL } from '../format';
 import { BranchIcon, TasksIcon } from '../icons';
@@ -203,35 +203,50 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
         <div className="bn-agent-text">
           <div className="bn-title bn-title-sm">{name}</div>
           <div className="bn-meta">
-            {staff && <span className="bn-role">{staff.role} · </span>}
-            {staff?.temporary && (
-              <span className="bn-temp" title={t('board.temporaryTitle')}>
-                {t('board.temporary')} ·{' '}
-              </span>
-            )}
-            {live ? (
-              <>
-                <span className={`dot dot-${live.status ?? 'unknown'}`} />{' '}
-                {busy ? <span className="bn-working">{t('board.working')}</span> : (STATUS_LABEL[live.status ?? ''] ?? live.status)}
-                {/* Delegando agora: para quem (inclui agents embutidos, que não têm nó no quadro). */}
-                {live.activeAgents && live.activeAgents.length > 0 && (
-                  <span className="bn-delegating" title={t('board.delegatingTo', { list: live.activeAgents.join(', ') })}>
-                    {' '}→ {live.activeAgents.join(', ')}
-                  </span>
-                )}
-              </>
-            ) : s ? (
-              formatAgo(Date.now() - Date.parse(s.updatedAt))
-            ) : (
-              t('board.hiredNoSession')
-            )}
-            {data.costShare !== null && (
-              <span title={t('board.employeeShareTitle')}> · {formatShare(data.costShare, 1)}</span>
-            )}
-            {!staff && s?.entrypoint && <> · {ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</>}
+            {[
+              staff && <span key="role" className="bn-role">{staff.role}</span>,
+              staff?.temporary && (
+                <span key="temp" className="bn-temp" title={t('board.temporaryTitle')}>
+                  {t('board.temporary')}
+                </span>
+              ),
+              live
+                ? /* Delegando agora: para quem (inclui agents embutidos, que não têm nó no quadro). */
+                  live.activeAgents &&
+                  live.activeAgents.length > 0 && (
+                    <span key="deleg" className="bn-delegating" title={t('board.delegatingTo', { list: live.activeAgents.join(', ') })}>
+                      → {live.activeAgents.join(', ')}
+                    </span>
+                  )
+                : s
+                  ? formatAgo(Date.now() - Date.parse(s.updatedAt))
+                  : t('board.hiredNoSession'),
+              data.costShare !== null && (
+                <span key="share" title={t('board.employeeShareTitle')}>
+                  {formatShare(data.costShare, 1)}
+                </span>
+              ),
+              !staff && s?.entrypoint && (ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint),
+            ]
+              .filter(Boolean)
+              .map((part, i) => (
+                <Fragment key={i}>
+                  {i > 0 && ' · '}
+                  {part}
+                </Fragment>
+              ))}
           </div>
         </div>
       </div>
+      {/* Só a bolinha no canto; o texto do status aparece ao passar o mouse. */}
+      {live && (
+        <span className="bn-status">
+          <span className="bn-status-label">
+            {busy ? <span className="bn-working">{t('board.working')}</span> : (STATUS_LABEL[live.status ?? ''] ?? live.status)}
+          </span>
+          <span className={`dot dot-${live.status ?? 'unknown'}`} />
+        </span>
+      )}
     </Frame>
   );
 }
