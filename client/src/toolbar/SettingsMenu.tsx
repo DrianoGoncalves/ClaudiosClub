@@ -43,6 +43,8 @@ interface Props {
   contextSwitch: ContextSwitch | null;
   /** Otimizar assinatura (folga de cota); null = config ainda não chegou. */
   optimizeQuota: boolean | null;
+  /** Sala do escopo do usuário no quadro; null = config ainda não chegou. */
+  showUserScope: boolean | null;
   /** Segunda opinião do Codex na revisão das tarefas; null = config ainda não chegou. */
   codexReview: boolean | null;
 }
@@ -383,6 +385,19 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
         );
       })(),
     },
+    ...(p.showUserScope !== null
+      ? [
+          {
+            id: 'user-scope',
+            group: 'board' as const,
+            section: 'display' as const,
+            title: t('toolbar.userScopeTitle'),
+            description: t('toolbar.userScopeDesc'),
+            keywords: t('toolbar.userScopeKeywords'),
+            toggle: { checked: p.showUserScope, onChange: (v: boolean) => void api.saveConfig({ showUserScope: v }).then(p.onConfig, () => {}) },
+          },
+        ]
+      : []),
     {
       id: 'archived',
       group: 'board',

@@ -154,6 +154,7 @@ export function BoardView(props: BoardViewProps) {
           costs,
           expandedShelves: shelves,
           projectColors: config?.projectColors,
+          showUserScope: config?.showUserScope ?? false,
           collapsedRooms: collapsed,
           git,
           tasks,
@@ -387,6 +388,7 @@ export function BoardView(props: BoardViewProps) {
             projectWorkspaces={config?.projectWorkspaces ?? null}
             contextSwitch={config?.contextSwitch ?? null}
             optimizeQuota={config?.optimizeQuota ?? null}
+            showUserScope={config?.showUserScope ?? null}
             codexReview={config?.codexReview ?? null}
             onConfig={props.onConfig}
             // O demo não tem workspace: volta para "Todos", senão a sala dele ficaria escondida.

@@ -248,6 +248,8 @@ export interface AppConfig {
    * o Opus em esforço máximo e os agents pensam mais (ver server/quotaBoost.ts).
    */
   optimizeQuota: boolean;
+  /** Mostrar no quadro a sala do escopo do usuário (agents e skills de ~/.claude); desligado por padrão. */
+  showUserScope: boolean;
   /**
    * Segunda opinião do Codex na revisão das tarefas (o diff vai para a OpenAI): desligada até você
    * ligar; desligada, o Claudio’s Club nem chama o `codex` (ver server/adapters/codex.ts).

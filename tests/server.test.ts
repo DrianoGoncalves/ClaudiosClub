@@ -71,6 +71,7 @@ describe('config', () => {
       usageStop,
       sendWhileBusy: 'next',
       optimizeQuota: false,
+      showUserScope: false,
       codexReview: false,
       ...colors,
     });
@@ -85,6 +86,7 @@ describe('config', () => {
       usageStop,
       sendWhileBusy: 'next',
       optimizeQuota: false,
+      showUserScope: false,
       codexReview: false,
       ...colors,
     });

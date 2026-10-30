@@ -84,6 +84,9 @@ export default defineMessages({
     'toolbar.stop7dTitle': 'Trava de consumo: 7 dias',
     'toolbar.stop7dDesc': 'O mesmo, para o limite semanal (7d).',
     'toolbar.stop7dKeywords': 'limite parada 7d semana gasto',
+    'toolbar.userScopeTitle': 'Mostrar o escopo do usuário',
+    'toolbar.userScopeDesc': 'A sala com os agents e as skills da sua conta (~/.claude), que valem em todos os projetos. Desligada, o quadro mostra só os projetos.',
+    'toolbar.userScopeKeywords': 'usuário conta global ~/.claude agents skills sala escopo',
     'toolbar.optimizeTitle': 'Otimizar assinatura',
     'toolbar.optimizeDesc':
       'Nas últimas 48h antes do reset da cota de 7 dias, se no seu ritmo ia sobrar 30% ou mais, as conversas vão para o Opus em esforço máximo e os agents pensam mais, até a folga acabar. Espera se o limite de 5h passar de 50%. As respostas ficam mais lentas.',
@@ -286,6 +289,9 @@ export default defineMessages({
     'toolbar.stop7dTitle': 'Usage limit: 7 days',
     'toolbar.stop7dDesc': 'The same, for the weekly limit (7d).',
     'toolbar.stop7dKeywords': 'limit stop 7d week spend',
+    'toolbar.userScopeTitle': 'Show the user scope',
+    'toolbar.userScopeDesc': 'The room with the agents and skills of your account (~/.claude), which apply to every project. Off, the board shows only the projects.',
+    'toolbar.userScopeKeywords': 'user account global ~/.claude agents skills room scope',
     'toolbar.optimizeTitle': 'Optimize subscription',
     'toolbar.optimizeDesc':
       'In the last 48h before the 7-day quota resets, if at your pace 30% or more would be left over, chats move to Opus at maximum effort and agents think harder until the slack runs out. It waits while the 5h limit is above 50%. Answers get slower.',
@@ -485,6 +491,9 @@ export default defineMessages({
     'toolbar.stop7dTitle': 'Límite de consumo: 7 días',
     'toolbar.stop7dDesc': 'Lo mismo, para el límite semanal (7d).',
     'toolbar.stop7dKeywords': 'límite parada 7d semana gasto',
+    'toolbar.userScopeTitle': 'Mostrar el ámbito del usuario',
+    'toolbar.userScopeDesc': 'La sala con los agents y las skills de tu cuenta (~/.claude), que valen en todos los proyectos. Apagada, el tablero muestra solo los proyectos.',
+    'toolbar.userScopeKeywords': 'usuario cuenta global ~/.claude agents skills sala ámbito',
     'toolbar.optimizeTitle': 'Optimizar suscripción',
     'toolbar.optimizeDesc':
       'En las últimas 48h antes del reinicio de la cuota de 7 días, si a tu ritmo sobraría un 30% o más, las conversaciones pasan a Opus con esfuerzo máximo y los agents piensan más, hasta que se acabe la holgura. Espera si el límite de 5h supera el 50%. Las respuestas son más lentas.',

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, Board, CostReport, InboxItem, LinkInfo, Project, Session, Skill, StaffProfile } from '../shared/model';
-import { buildGraph, SIZES, type BoardNode, type BoardNodeType } from '../client/src/board/layout';
+import { buildGraph as buildGraphRaw, SIZES, type BoardNode, type BoardNodeType } from '../client/src/board/layout';
+
+// Estes testes contam com a sala do usuário; o padrão do quadro é escondê-la (ver "escopo do usuário" abaixo).
+const buildGraph = (b: Parameters<typeof buildGraphRaw>[0], o: Parameters<typeof buildGraphRaw>[1]) => buildGraphRaw(b, { showUserScope: true, ...o });
 
 const FILE: LinkInfo = { kind: 'file', target: null };
 
@@ -484,5 +487,13 @@ describe('buildGraph', () => {
     expect(n?.type === 'employee' && n.data.needsYou).toBe(true);
     const other = nodes.find((x) => x.id === 'e:s-a1');
     expect(other?.type === 'employee' && other.data.needsYou).toBe(false);
+  });
+});
+
+describe('escopo do usuário', () => {
+  it('fica fora do quadro por padrão e volta com a opção do config', () => {
+    const ids = (show?: boolean) => buildGraphRaw(board(), { showUserScope: show }).nodes.map((n) => n.id);
+    expect(ids()).not.toContain('u');
+    expect(ids(true)).toContain('u');
   });
 });

@@ -169,6 +169,7 @@ export const api = {
     sendWhileBusy?: SendPriority;
     contextSwitch?: ContextSwitch;
     optimizeQuota?: boolean;
+    showUserScope?: boolean;
     codexReview?: boolean;
     /** Só os projetos enviados mudam; null volta à cor padrão. */
     projectColors?: Record<string, ProjectColor | null>;
