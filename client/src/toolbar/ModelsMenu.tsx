@@ -87,6 +87,10 @@ function ModelsBody({ data, loading, failed, metric, expanded, onExpand }: BodyP
   }
 
   const m = METRICS[metric];
+  // O índice segue a métrica do ranking (código ou inteligência), não um rótulo fixo.
+  const indexLabel = data.metric === 'intelligence' ? t('toolbar.indexIntelligence') : t('toolbar.indexCoding');
+  const label = metric === 'index' ? indexLabel : m.label;
+  const foot = metric === 'index' && data.metric === 'intelligence' ? t('toolbar.footIntelligence') : FOOTNOTE[metric];
   const rows = [...data.models].sort((a, b) => m.order * (m.value(a) - m.value(b)));
   // A mesma escala para os modelos e os esforços abertos: dá para comparar as barras entre si.
   const max = Math.max(...rows.flatMap((r) => r.variants.map(m.value)), 0);
@@ -96,7 +100,7 @@ function ModelsBody({ data, loading, failed, metric, expanded, onExpand }: BodyP
     </span>
   );
   const numbers = (v: ModelVariant) =>
-    t('toolbar.numbersLine', { index: METRICS.index.format(v.codingIndex), price: METRICS.price.format(v.priceBlended) });
+    t('toolbar.numbersLine', { label: indexLabel, index: METRICS.index.format(v.codingIndex), price: METRICS.price.format(v.priceBlended) });
   const error = failed ?? data.error;
   return (
     <>
@@ -104,7 +108,7 @@ function ModelsBody({ data, loading, failed, metric, expanded, onExpand }: BodyP
       {rows.length > 0 ? (
         <ol
           className="models-chart"
-          aria-label={t(m.order === 1 ? 'toolbar.sortLowFirst' : 'toolbar.sortHighFirst', { label: m.label })}
+          aria-label={t(m.order === 1 ? 'toolbar.sortLowFirst' : 'toolbar.sortHighFirst', { label })}
         >
           {rows.map((r) => {
             const isOpen = expanded === r.id;
@@ -153,7 +157,7 @@ function ModelsBody({ data, loading, failed, metric, expanded, onExpand }: BodyP
         !error && <p className="muted small models-note">{t('toolbar.noModels')}</p>
       )}
       <p className="muted small models-foot">
-        {FOOTNOTE[metric]} {t('toolbar.footDefault')}
+        {foot} {t('toolbar.footDefault')}
         {data.fetchedAt && ` ${t('toolbar.fetchedAgo', { ago: formatAgo(Date.now() - Date.parse(data.fetchedAt)) })}`} {t('toolbar.dataFrom')}{' '}
         <a href="https://artificialanalysis.ai/" target="_blank" rel="noopener noreferrer">
           Artificial Analysis
