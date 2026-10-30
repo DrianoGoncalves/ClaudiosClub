@@ -69,9 +69,11 @@
       <p id="starting" hidden>Iniciando… (o primeiro build leva uns segundos)</p>
     </main>
     <script>
-      // Página de início: se o Claudio’s Club responde, vai direto para ele; senão, mostra o checklist e o botão
-      // "Iniciar", que abre o link myco://start (registrado por `npm run launcher` no Windows e no Linux).
-      const port = new URLSearchParams(location.search).get('port') || '4848';
+      // Página de início e tela de "parado": se o Claudio’s Club responde, vai direto para ele; senão, mostra o
+      // checklist e o botão "Iniciar", que abre o link myco://start (registrado por `npm run launcher` no Windows e
+      // no Linux). Abre como arquivo (atalho) ou pela própria porta, quando o service worker a mostra no lugar do
+      // erro de conexão (server/startPage.ts).
+      const port = new URLSearchParams(location.search).get('port') || location.port || '4848';
       const app = `http://claudio.localhost:${port}`;
       const el = (id) => document.getElementById(id);
 
@@ -175,7 +177,9 @@
 
       async function refresh(up) {
         el('recheck').disabled = true;
-        const [st, buildOk] = await Promise.all([loadStatus(), probe('../dist/client/icon-32.png')]);
+        // O build só dá para ver como arquivo, ao lado da pasta dist; pela porta, vale o que o doctor anotou.
+        const buildProbe = location.protocol === 'file:' ? probe('../dist/client/icon-32.png') : Promise.resolve(false);
+        const [st, buildOk] = await Promise.all([loadStatus(), buildProbe]);
         render(st, buildOk, up);
         el('recheck').disabled = false;
       }

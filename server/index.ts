@@ -8,6 +8,7 @@ import { ClaudeAdapter } from './adapters/claude';
 import { defaultLocations } from './adapters/claude/paths';
 import type { ToolAdapter } from './adapters/types';
 import { getAuthStatus, openLoginTerminal } from './auth';
+import { serveStartFiles } from './startPage';
 import {
   addExtraProject,
   ArchiveRequest,
@@ -1054,6 +1055,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 404, { error: 'rota desconhecida' });
   }
   if (req.method !== 'GET') return send(res, 405, { error: 'método não permitido' });
+  if (await serveStartFiles(url.pathname, res)) return;
   return serveStatic(url.pathname, res);
 });
 

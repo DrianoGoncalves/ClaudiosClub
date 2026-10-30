@@ -1,7 +1,8 @@
 import { spawn, spawnSync } from 'node:child_process';
+import readline from 'node:readline/promises';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DAEMON, LOG_FILE, PID_FILE, ROOT, RUN_DIR, STOP_FILE, isAlive, openUrl, portFrom, runningDaemon, stopProcess } from './lib';
+import { DAEMON, LOG_FILE, PID_FILE, ROOT, RUN_DIR, STOP_FILE, isAlive, modInstalled, openUrl, portFrom, runningDaemon, stopProcess } from './lib';
 
 // Claudio’s Club no dia a dia. Uso (npm run daily:…, ou direto com tsx):
 //   run     em primeiro plano: build, abre o navegador e segue no terminal até Ctrl+C (npm run daily)
@@ -29,12 +30,24 @@ function run(): void {
   server.on('exit', (code) => process.exit(code ?? 0));
 }
 
-function start(): void {
+/** Sem o myco-tap não há barras de cota: pergunta uma vez, no terminal, antes de subir. */
+async function offerModInstall(): Promise<void> {
+  if (modInstalled() || !process.stdin.isTTY) return;
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await rl.question('O myco-tap (barras de cota 5h/7d) não está instalado. Instalar agora? Mexe em ~/.claude/settings.json, com backup [s/N] ');
+  rl.close();
+  if (/^s/i.test(answer.trim())) spawnSync(process.execPath, ['--import', 'tsx', path.join(ROOT, 'scripts', 'install-mod.ts')], { cwd: ROOT, stdio: 'inherit' });
+}
+
+async function start(): Promise<void> {
   const running = runningDaemon();
   if (running) {
     console.log(`O Claudio’s Club já está rodando em segundo plano: ${url}`);
     return;
   }
+  await offerModInstall();
+  // Atualiza o checklist (scripts/status.js) que a página de início mostra; nunca impede a subida.
+  spawnSync(process.execPath, ['--import', 'tsx', path.join(ROOT, 'scripts', 'doctor.ts')], { cwd: ROOT, stdio: 'ignore', timeout: 60_000 });
   fs.mkdirSync(RUN_DIR, { recursive: true });
   fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
   // O vigia recebe o log como saída e segue sozinho: não fica preso a este terminal.
@@ -95,7 +108,7 @@ switch (action) {
     run();
     break;
   case 'start':
-    start();
+    await start();
     break;
   case 'stop':
     stop();

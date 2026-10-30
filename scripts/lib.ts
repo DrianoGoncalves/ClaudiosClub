@@ -17,6 +17,12 @@ export const BUILT = path.join(ROOT, 'dist', 'client', 'index.html');
 export const DAEMON = path.join(ROOT, 'scripts', 'daemon.ts');
 export const DAILY = path.join(ROOT, 'scripts', 'daily.ts');
 export const START_PAGE = path.join(ROOT, 'scripts', 'start.html');
+export const CLAUDE_HOME = process.env.MYCO_CLAUDE_HOME ?? path.join(os.homedir(), '.claude');
+
+/** O mod myco-tap (cota 5h/7d) está instalado ou já gravou dados? */
+export function modInstalled(): boolean {
+  return fs.existsSync(path.join(CLAUDE_HOME, 'mods', 'myco-tap', 'hooks', 'register.ts')) || fs.existsSync(path.join(MYCO_HOME, 'usage.json'));
+}
 
 /** Porta: --port, depois MYCO_PORT, depois 4848. */
 export function portFrom(args: string[]): number {

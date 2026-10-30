@@ -660,6 +660,8 @@ function ServerControls() {
         await new Promise((r) => setTimeout(r, 1000));
         if (!(await fetch('/api/health').then((r) => r.ok, () => false))) break;
       }
+      // Com o service worker, recarregar já mostra a página de início (checklist e botão Iniciar).
+      if (navigator.serviceWorker?.controller) return window.location.reload();
       setState('stopped');
       return;
     }
