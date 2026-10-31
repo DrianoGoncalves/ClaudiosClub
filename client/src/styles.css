@@ -1011,6 +1011,8 @@ body.is-resizing { cursor: ew-resize; user-select: none; }
 /* Véu semitransparente da cor do projeto sobre o fundo do workspace: diz de qual projeto é a conversa. */
 .drawer-chat .chat-list { background: linear-gradient(var(--chat-tint, transparent), var(--chat-tint, transparent)), var(--board); }
 .drawer-chat .chat-top { flex: 0 1 auto; max-height: 35vh; overflow-y: auto; }
+/* O ⋯ fica à esquerda do X do painel, com folga: na posição padrão os dois se sobrepõem. */
+.drawer-chat .btn-secondary.chat-more-btn { right: 25px; }
 /* Sem projeto não há conversa: o topo e a ficha rolam aqui. */
 .employee-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 

@@ -1,12 +1,12 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ContextSwitch } from '../shared/model';
-import { contextNotice, rereadUsd, switchDecision } from '../server/chat/contextPolicy';
+import { CACHE_TTL_1H_MS, CACHE_TTL_MS, cacheTtlOf, contextNotice, rereadUsd, switchDecision } from '../server/chat/contextPolicy';
 import { CHECKPOINT, CONTEXT_NOTICE, hasCheckpoint, isInjectedUserText, stripCheckpoint } from '../server/chat/items';
 import { ChatManager } from '../server/chat/manager';
 
-const turn = (over: Partial<Parameters<typeof switchDecision>[0]> = {}) => ({ at: 0, used: 200_000, checkpoint: true, model: 'claude-opus-5-5', ...over });
+const turn = (over: Partial<Parameters<typeof switchDecision>[0]> = {}) => ({ at: 0, used: 200_000, checkpoint: true, model: 'claude-opus-5-5', ttl: null, ...over });
 
 describe('quando vale começar uma conversa nova', () => {
   it('só depois do ponto de corte, e só quando compensa', () => {
@@ -17,9 +17,24 @@ describe('quando vale começar uma conversa nova', () => {
     expect(switchDecision(turn({ checkpoint: false, used: 900_000 }), 1000, 'auto')).toBeNull();
     // Conversa pequena: continuar sai mais barato que reler ficha e memória numa nova.
     expect(switchDecision(turn({ used: 30_000 }), 1000, 'auto')).toBeNull();
-    // Média, mas o cache já esfriou (pausa > 5 min): a próxima resposta reescreveria tudo.
-    expect(switchDecision(turn({ used: 60_000 }), 60_000, 'auto')).toBeNull();
-    expect(switchDecision(turn({ used: 60_000 }), 6 * 60_000, 'auto')).toBe('switch');
+    // Média, mas o cache já esfriou: a próxima resposta reescreveria tudo. Vale a validade que a conversa usa.
+    const min = 60_000;
+    expect(switchDecision(turn({ used: 90_000, ttl: CACHE_TTL_1H_MS }), 6 * min, 'auto')).toBeNull();
+    expect(switchDecision(turn({ used: 90_000, ttl: CACHE_TTL_1H_MS }), 61 * min, 'auto')).toBe('switch');
+    expect(switchDecision(turn({ used: 90_000, ttl: CACHE_TTL_MS }), 6 * min, 'auto')).toBe('switch');
+    // Sem saber a validade, a menor (5 min).
+    expect(switchDecision(turn({ used: 90_000 }), 6 * min, 'auto')).toBe('switch');
+    expect(switchDecision(turn({ used: 90_000 }), 1 * min, 'auto')).toBeNull();
+    // Frio, mas pequena: uma conversa nova já começa com 20–70k, trocar não compensa.
+    expect(switchDecision(turn({ used: 60_000 }), 2 * 60 * min, 'auto')).toBeNull();
+  });
+
+  it('a validade do cache sai do que a resposta gravou nele', () => {
+    expect(cacheTtlOf({ cache_creation: { ephemeral_1h_input_tokens: 1200, ephemeral_5m_input_tokens: 0 } })).toBe(CACHE_TTL_1H_MS);
+    expect(cacheTtlOf({ cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 800 } })).toBe(CACHE_TTL_MS);
+    // Só leitura (nada gravado) ou sem o detalhe: não diz.
+    expect(cacheTtlOf({ cache_read_input_tokens: 90_000 })).toBeNull();
+    expect(cacheTtlOf(null)).toBeNull();
   });
 
   it('o aviso para o funcionário traz o tamanho e quanto custa reler', () => {
@@ -60,8 +75,9 @@ function setup(opts: { policy?: ContextSwitch; keep?: boolean } = {}) {
     contextSwitch: async () => opts.policy ?? 'auto',
     keepSession: async () => !!opts.keep,
   });
-  const reply = async (i: number, text: string, used: number) => {
-    procs[i]!.emit({ type: 'assistant', message: { id: `m${Math.random()}`, model: 'claude-opus-5-5', content: [{ type: 'text', text }], usage: { input_tokens: 10, cache_read_input_tokens: used - 10 } } });
+  const reply = async (i: number, text: string, used: number, cacheCreation?: object) => {
+    const usage = { input_tokens: 10, cache_read_input_tokens: used - 10, cache_creation: cacheCreation };
+    procs[i]!.emit({ type: 'assistant', message: { id: `m${Math.random()}`, model: 'claude-opus-5-5', content: [{ type: 'text', text }], usage } });
     procs[i]!.emit({ type: 'result', is_error: false });
     await new Promise((r) => setTimeout(r, 15));
   };
@@ -73,6 +89,8 @@ function setup(opts: { policy?: ContextSwitch; keep?: boolean } = {}) {
 }
 
 describe('conversa nova no momento barato', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it('conversa grande: avisa o funcionário; depois do ponto de corte, a sua mensagem segue numa nova', async () => {
     const { m, procs, reply, lastText, texts } = setup();
     expect(await m.sendFromUser('p', null, 'ana', 'comece')).toBe('nova-1');
@@ -90,6 +108,22 @@ describe('conversa nova no momento barato', () => {
     expect(procs).toHaveLength(2);
     expect(lastText(1)).toBe('outro assunto');
     expect((await texts('nova-2', 'notice'))[0]).toContain('Seguiu numa conversa nova: a anterior tinha 210k');
+
+    // Você voltou à anterior pela lista: a mensagem fica nela, não desvia de novo.
+    expect(await m.sendFromUser('p', 'nova-1', 'ana', 'voltei para cá')).toBe('nova-1');
+    expect(procs).toHaveLength(2);
+  });
+
+  it('pausa curta com cache de 1 h não troca; passada a hora, troca', async () => {
+    const { m, reply } = setup();
+    await m.sendFromUser('p', null, 'ana', 'oi');
+    await reply(0, `Feito.\n${CHECKPOINT}`, 90_000, { ephemeral_1h_input_tokens: 500 });
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now + 10 * 60_000);
+    expect(await m.sendFromUser('p', 'nova-1', 'ana', 'mais uma')).toBe('nova-1');
+    await reply(0, `Feito de novo.\n${CHECKPOINT}`, 92_000);
+    vi.spyOn(Date, 'now').mockReturnValue(now + 80 * 60_000);
+    expect(await m.sendFromUser('p', 'nova-1', 'ana', 'depois do almoço')).toBe('nova-2');
   });
 
   it('conversa de tarefa nunca troca; em "só avisar", avisa e fica', async () => {

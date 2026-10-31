@@ -370,8 +370,10 @@ export class ChatManager {
       const policy = (await this.opts.contextSwitch?.()) ?? 'auto';
       if (switchDecision(info, Date.now(), policy) === 'switch') {
         const fresh = await this.ensure(projectId, null, staffId);
+        // Desviou uma vez: se você voltar à anterior pela lista, a mensagem fica nela.
+        this.turns.delete(sessionId);
         fresh.addNotice(
-          `Seguiu numa conversa nova: a anterior tinha ${kTokens(info.used!)} e o assunto dela tinha fechado (a memória leva o essencial). Ela continua na lista de conversas, se precisar voltar.`,
+          `Seguiu numa conversa nova: a anterior tinha ${kTokens(info.used!)} e o assunto dela tinha fechado. Cada resposta relia tudo (cerca de ${usd(rereadUsd(info.used!, info.model))}); esta começa só com a ficha e a memória, que leva o essencial. A anterior continua na lista de conversas: voltando a ela, a mensagem fica lá.`,
         );
         this.log(`${sessionId}: ponto de corte com ${kTokens(info.used!)}; a mensagem seguiu em ${fresh.sessionId}`);
         return this.send(projectId, fresh.sessionId, staffId, text, priority, images, files);
@@ -389,14 +391,14 @@ export class ChatManager {
     const chat = this.chats.get(sessionId);
     if (!chat) return;
     const prev = this.turns.get(sessionId);
-    const info = { at: Date.now(), used: chat.contextUsed, checkpoint: chat.checkpoint, model: chat.model, ceilingNoted: prev?.ceilingNoted };
+    const info = { at: Date.now(), used: chat.contextUsed, checkpoint: chat.checkpoint, model: chat.model, ttl: chat.cacheTtl, ceilingNoted: prev?.ceilingNoted };
     this.turns.set(sessionId, info);
     if (info.used === null || this.delegated.has(sessionId)) return;
     const policy = (await this.opts.contextSwitch?.()) ?? 'auto';
     if (policy === 'off') return;
     const cost = usd(rereadUsd(info.used, info.model));
     if (switchDecision(info, info.at, policy) === 'suggest') {
-      chat.addNotice(`Assunto fechado, com ${kTokens(info.used)} de contexto: a próxima pergunta sai mais barata numa conversa nova (+ Nova), e a memória leva o essencial.`);
+      chat.addNotice(`Assunto fechado, com ${kTokens(info.used)} de contexto (cada resposta relê tudo, cerca de ${cost}): a próxima pergunta sai mais barata numa conversa nova (+ Nova), que começa só com a ficha e a memória.`);
     } else if (!info.checkpoint && info.used >= CEILING_AT) {
       // Uma vez a cada 100k a mais: avisar a cada resposta seria só barulho.
       const step = Math.floor(info.used / 100_000);
