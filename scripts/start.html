@@ -186,6 +186,38 @@
       const ICON = { ok: '✓', falta: '✗', nv: '?' };
       const WORD = { ok: 'ok', falta: 'falta', nv: 'não verificado' };
 
+      // Copia o comando de correção. Como arquivo (file://) a API de área de transferência pode não existir: cai no
+      // execCommand. A página nunca executa nada: quem roda é você, no terminal.
+      async function copyText(text) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.setAttribute('readonly', '');
+          ta.style.cssText = 'position:fixed;opacity:0';
+          document.body.append(ta);
+          ta.select();
+          const ok = document.execCommand('copy');
+          ta.remove();
+          return ok;
+        }
+      }
+
+      function copyButton(cmd) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn-secondary';
+        btn.textContent = 'Copiar';
+        btn.setAttribute('aria-label', `Copiar o comando ${cmd}`);
+        btn.addEventListener('click', async () => {
+          btn.textContent = (await copyText(cmd)) ? 'Copiado' : 'Não deu: copie à mão';
+          setTimeout(() => { btn.textContent = 'Copiar'; }, 2000);
+        });
+        return btn;
+      }
+
       // detail: o que o doctor achou (ex. "v20.1.0 (precisa 22+)"), mostrado junto da correção.
       function stepRow(step, state, detail) {
         const li = document.createElement('li');
@@ -213,7 +245,7 @@
           if (step.cmd) {
             const code = document.createElement('code');
             code.textContent = step.cmd;
-            fix.append(code);
+            fix.append(code, ' ', copyButton(step.cmd));
           }
           li.append(fix);
         }

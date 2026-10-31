@@ -11,7 +11,7 @@ import type {
   Effort,
   SendPriority,
 } from '../../../shared/model';
-import { api, withUsageConfirm } from '../api';
+import { api, ApiError, withUsageConfirm } from '../api';
 
 // Estado de uma conversa: histórico do transcript + o que chega ao vivo pelo SSE.
 
@@ -54,8 +54,15 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
   const [knownCommands, setKnownCommands] = useState<ChatCommand[]>([]);
   const [loading, setLoading] = useState(!!initialSessionId);
   const [error, setError] = useState<string | null>(null);
+  /** Servidor fora do ar (erro `offline` numa chamada): o efeito de polling abaixo espera ele voltar. */
+  const [offline, setOffline] = useState(false);
   const source = useRef<EventSource | null>(null);
   const seq = useRef(0);
+
+  const fail = (e: unknown) => {
+    if (e instanceof ApiError && e.code === 'offline') setOffline(true);
+    setError((e as Error).message);
+  };
 
   const apply = useCallback((e: ChatEvent) => {
     seq.current = Math.max(seq.current, e.seq);
@@ -114,6 +121,17 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     [projectId, openStream],
   );
 
+  // Já trazida para cá antes: segue na cópia, com as mensagens que você mandou aqui, em vez da original.
+  const loadFollowingCopy = useCallback(
+    async (sid: string) => {
+      const snap = await load(sid);
+      if (!snap.copy) return;
+      setSessionId(snap.copy);
+      await load(snap.copy);
+    },
+    [load],
+  );
+
   useEffect(() => {
     setSessionId(initialSessionId);
     setHistory([]);
@@ -121,26 +139,21 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     setHeld([]);
     setState(null);
     setError(null);
+    setOffline(false);
     seq.current = 0;
     if (!initialSessionId) {
       setLoading(false);
       return;
     }
     setLoading(true);
-    load(initialSessionId)
-      // Já trazida para cá antes: segue na cópia, com as mensagens que você mandou aqui, em vez da original.
-      .then(async (snap) => {
-        if (!snap.copy) return;
-        setSessionId(snap.copy);
-        await load(snap.copy);
-      })
-      .catch((e: Error) => setError(e.message))
+    loadFollowingCopy(initialSessionId)
+      .catch(fail)
       .finally(() => setLoading(false));
     return () => {
       source.current?.close();
       source.current = null;
     };
-  }, [initialSessionId, load]);
+  }, [initialSessionId, loadFollowingCopy]);
 
   // Com mensagem guardada, relê de tempos em tempos: quando ele fica livre, ela vai e a conversa
   // volta a andar (às vezes num processo novo, que o stream antigo não acompanha).
@@ -153,6 +166,20 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     }, 5000);
     return () => clearInterval(t);
   }, [waiting, sessionId, projectId, load]);
+
+  // Servidor fora do ar: confere /api/health a cada 2 s; ao responder, relê a conversa (o load reabre o stream).
+  useEffect(() => {
+    if (!offline || !sessionId) return;
+    const t = setInterval(async () => {
+      const up = await fetch('/api/health').then((r) => r.ok, () => false);
+      if (!up) return;
+      clearInterval(t);
+      setOffline(false);
+      setError(null);
+      void loadFollowingCopy(sessionId).catch(fail);
+    }, 2000);
+    return () => clearInterval(t);
+  }, [offline, sessionId, loadFollowingCopy]);
 
   const ensureStream = (sid: string) => {
     if (!source.current || source.current.readyState === EventSource.CLOSED) openStream(sid);
@@ -186,7 +213,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
       ensureStream(r.sessionId);
       return true;
     } catch (e) {
-      setError((e as Error).message);
+      fail(e);
       return false;
     }
   };
@@ -198,7 +225,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
       if (!(await withUsageConfirm((force) => api.chatCompact(projectId, sessionId, staffId, force)))) return;
       ensureStream(sessionId);
     } catch (e) {
-      setError((e as Error).message);
+      fail(e);
     }
   };
 
@@ -207,7 +234,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
   };
 
   const answer = async (requestId: string, allow: boolean, opts?: { message?: string; executeAs?: Autonomy; remember?: 'session' | 'project' }) => {
-    if (sessionId) await api.chatPermission(sessionId, requestId, allow, opts).catch((e: Error) => setError(e.message));
+    if (sessionId) await api.chatPermission(sessionId, requestId, allow, opts).catch(fail);
   };
 
   const settings = async (s: { model?: string; effort?: Effort; autonomy?: Autonomy }) => {
@@ -217,7 +244,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
       if (r.sessionId !== sessionId) setSessionId(r.sessionId);
       ensureStream(r.sessionId);
     } catch (e) {
-      setError((e as Error).message);
+      fail(e);
     }
   };
 
@@ -241,7 +268,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
         await load(sessionId);
       }
     } catch (e) {
-      setError((e as Error).message);
+      fail(e);
     }
   };
 
@@ -252,7 +279,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
       await api.chatTakeOver(projectId, sessionId);
       await load(sessionId);
     } catch (e) {
-      setError((e as Error).message);
+      fail(e);
     }
   };
 

@@ -1,7 +1,6 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type { Autonomy, ChatAttachment, ChatItem, Effort, SendPriority, UiLevel } from '../../../shared/model';
 import { api } from '../api';
-import { effortLabel } from '../format';
 import { ArrowDownIcon, FileDiffIcon, ImageIcon, SendIcon } from '../icons';
 import { t, locale } from '../i18n';
 import { shrinkImage } from '../lib/shrinkImage';
@@ -10,7 +9,6 @@ import {
   ChatSettingsBar,
   commandSuggestions,
   isAttachable,
-  modelLabel,
   readAttachment,
   SuggestionList,
   TodoPanel,
@@ -46,8 +44,8 @@ interface Props {
   fichaEffort?: Effort | null;
   /** Topo compacto do funcionário (montado pelo EmployeePanel); o "⋯" fica à direita dele. */
   top?: ReactNode;
-  /** O que o "Mais" mostra (vem do EmployeePanel): extras da aba Conversa e as abas do funcionário. */
-  more?: { conversation?: ReactNode; tabs?: MoreTab[] };
+  /** Abas do "Mais" (vêm do EmployeePanel): só coisas do funcionário; os ajustes da conversa ficam abaixo da caixa. */
+  moreTabs?: MoreTab[];
 }
 
 /** Uma aba do "Mais" (Ficha, Expediente, Rotinas, Ações…). */
@@ -58,7 +56,7 @@ export interface MoreTab {
 }
 
 /** Conversa com o funcionário dentro do Claudio’s Club, sem terminal. */
-export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, top, more }: Props) {
+export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, top, moreTabs = [] }: Props) {
   const chat = useChat(projectId, sessionId, staffId);
   const todos = useMemo(() => todosFrom(chat.items), [chat.items]);
   useEffect(() => {
@@ -174,14 +172,10 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   const blocked = disabled ?? (chat.elsewhere && !chat.elsewhere.orphan ? t('chat.openElsewhereShort') : null);
   const [showChanges, setShowChanges] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
+  const [bgOpen, setBgOpen] = useState(false);
   // "Mais": abre com o foco no painel; ao fechar, o foco volta para o "⋯".
   const [moreOpen, setMoreOpen] = useState(false);
-  const [moreTab, setMoreTab] = useState('conversa');
-  /** Os chips da linha de status abrem o "Mais" direto na aba da conversa. */
-  const openConversationMore = () => {
-    setMoreTab('conversa');
-    setMoreOpen(true);
-  };
+  const [moreTab, setMoreTab] = useState(moreTabs[0]?.id ?? '');
   const moreBtn = useRef<HTMLButtonElement>(null);
   const moreRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -191,10 +185,6 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
     setMoreOpen(false);
     moreBtn.current?.focus();
   };
-  // Linha de status: a autonomia aparece sempre (é informação de segurança); sem processo, vale a da ficha.
-  const mode = chat.state?.permissionMode ?? (autonomy ? MODE_OF_AUTONOMY[autonomy] : null);
-  const modeAlert = mode === 'bypassPermissions' ? 'is-danger' : mode === 'auto' ? 'is-warn' : '';
-  const effort = chat.state?.effort ?? fichaEffort;
 
   /** "Voltar até aqui": mostra o que volta, pede confirmação e desfaz as edições desde aquela mensagem. */
   const rewind = async (uuid: string) => {
@@ -224,66 +214,29 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
     await api.chatRewind(projectId, sid, staffId, uuid, false).catch((e: Error) => window.alert(e.message));
   };
 
-  // "Mais": uma aba para a conversa e as do funcionário (Ficha, Expediente…), num lugar só.
-  const conversationTab = (
-    <>
-      {chat.state?.running && chat.sessionId && !!chat.state.background?.length && (
-        <ul className="chat-extra small">
-          {chat.state.background.map((task) => (
-            <li key={task.id}>
-              <span className="muted">{task.kind === 'agent' ? 'agent' : task.kind === 'shell' ? t('chat.kindShell') : task.kind}</span> {task.label}{' '}
-              <button type="button" className="link small" onClick={() => void api.chatStopTask(chat.sessionId!, task.id).catch((e: Error) => window.alert(e.message))}>
-                {t('chat.stopTask')}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {/* Modelo, esforço e autonomia valem para qualquer conversa, com ou sem ficha: sem ficha, a conversa só precisa existir. */}
-      {(staffId || chat.sessionId) && (
-        <ChatSettingsBar level={level} state={chat.state} fichaModel={fichaModel} fichaEffort={fichaEffort} disabled={!!blocked} onChange={chat.settings} />
-      )}
-      <div className="chat-more-row">
-        <button
-          type="button"
-          className="btn-secondary"
-          onClick={() => void chat.compact()}
-          disabled={!chat.sessionId || busy || !!blocked}
-          title={t('chat.compactHelp')}
-        >
-          {chat.state?.compacting ? t('chat.compacting') : t('chat.compact')}
-        </button>
-        {level === 'advanced' && chat.state?.running && chat.sessionId && (
-          <button type="button" className="btn-secondary btn-toggle" aria-pressed={mcpOpen} onClick={() => setMcpOpen(!mcpOpen)} title={t('chat.mcpsHelp')}>
-            MCPs
-          </button>
-        )}
-        {more?.conversation}
-      </div>
-      {mcpOpen && chat.sessionId && <McpMenu projectId={projectId} sessionId={chat.sessionId} staffId={staffId} />}
-    </>
-  );
-  const moreTabs: MoreTab[] = [{ id: 'conversa', label: t('chat.tabConversation'), content: conversationTab }, ...(more?.tabs ?? [])];
-  const activeTab = moreTabs.find((tab) => tab.id === moreTab) ?? moreTabs[0]!;
+  const activeTab = moreTabs.find((tab) => tab.id === moreTab) ?? moreTabs[0];
+  const background = chat.state?.running && chat.sessionId ? (chat.state.background ?? []) : [];
 
   return (
     <section className="chat">
       <div className="chat-top">
         {top}
-        <button
-          type="button"
-          ref={moreBtn}
-          className="btn-secondary chat-more-btn"
-          aria-label={t('chat.moreOptions')}
-          aria-haspopup="dialog"
-          aria-expanded={moreOpen}
-          title={t('chat.moreOptions')}
-          onClick={() => setMoreOpen(true)}
-        >
-          ⋯
-        </button>
+        {activeTab && (
+          <button
+            type="button"
+            ref={moreBtn}
+            className="btn-secondary chat-more-btn"
+            aria-label={t('chat.moreOptions')}
+            aria-haspopup="dialog"
+            aria-expanded={moreOpen}
+            title={t('chat.moreOptions')}
+            onClick={() => setMoreOpen(true)}
+          >
+            ⋯
+          </button>
+        )}
       </div>
-      {moreOpen && (
+      {moreOpen && activeTab && (
         <div
           className="chat-more"
           role="dialog"
@@ -307,9 +260,9 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
                 type="button"
                 role="tab"
                 id={`more-tab-${tab.id}`}
-                aria-selected={moreTab === tab.id}
+                aria-selected={activeTab.id === tab.id}
                 aria-controls="chat-more-panel"
-                className={`tab ${moreTab === tab.id ? 'is-active' : ''}`}
+                className={`tab ${activeTab.id === tab.id ? 'is-active' : ''}`}
                 onClick={() => setMoreTab(tab.id)}
               >
                 {tab.label}
@@ -348,7 +301,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           <div className="chat-typing" aria-live="polite">
             {chat.state?.compacting ? t('chat.compactingChat') : t('chat.working', { name })}
             <span className="bn-working" />
-            {doing && !showTools && <span className="chat-doing mono">{doing}</span>}
+            {doing && !showTools && <span className="chat-doing mono" title={doing}>{doing}</span>}
           </div>
         )}
         {away && (
@@ -498,32 +451,53 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
         </div>
       </div>
 
+      {bgOpen && background.length > 0 && (
+        <ul className="chat-extra small">
+          {background.map((task) => (
+            <li key={task.id}>
+              <span className="muted">{task.kind === 'agent' ? 'agent' : task.kind === 'shell' ? t('chat.kindShell') : task.kind}</span> {task.label}{' '}
+              <button type="button" className="link small" onClick={() => void api.chatStopTask(chat.sessionId!, task.id).catch((e: Error) => window.alert(e.message))}>
+                {t('chat.stopTask')}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {mcpOpen && chat.sessionId && <McpMenu projectId={projectId} sessionId={chat.sessionId} staffId={staffId} />}
+
+      {/* Ajustes só desta conversa, logo abaixo da caixa (os gerais ficam na ficha). Sem ficha, a conversa só precisa existir. */}
       <div className="chat-status">
-        {mode && (
-          <button
-            type="button"
-            className={`chat-chip ${modeAlert}`}
-            onClick={openConversationMore}
-            title={t('chat.modeTitle', {
-              info: chat.state?.permissionMode ? t('chat.modeInForce', { mode }) : t('chat.autonomyFromProfile'),
-            })}
-          >
-            {MODE_TEXT[mode] ?? mode}
+        {(staffId || chat.sessionId) && (
+          <ChatSettingsBar
+            level={level}
+            state={chat.state}
+            fichaModel={fichaModel}
+            fichaEffort={fichaEffort}
+            fichaAutonomy={autonomy}
+            disabled={!!blocked}
+            onChange={chat.settings}
+          />
+        )}
+        <ContextMeter context={chat.context} />
+        {chat.sessionId && (
+          <button type="button" className="chat-chip" onClick={() => void chat.compact()} disabled={busy || !!blocked} title={t('chat.compactHelp')}>
+            {chat.state?.compacting ? t('chat.compacting') : t('chat.compact')}
           </button>
         )}
-        <button type="button" className="chat-chip" onClick={openConversationMore} title={t('chat.modelHelp')}>
-          {modelLabel(chat.state?.model) || modelLabel(fichaModel) || t('chat.defaultModel')}
-          {effort ? t('chat.effortShort', { e: effortLabel(effort) }) : ''}
-        </button>
-        <ContextMeter context={chat.context} />
-        {chat.state?.running && !!chat.state.background?.length && (
+        {level === 'advanced' && chat.state?.running && chat.sessionId && (
+          <button type="button" className="chat-chip btn-toggle" aria-pressed={mcpOpen} onClick={() => setMcpOpen(!mcpOpen)} title={t('chat.mcpsHelp')}>
+            MCPs
+          </button>
+        )}
+        {background.length > 0 && (
           <button
             type="button"
-            className="link small"
-            title={`${chat.state.background.map((task) => task.label).join('\n')}\n\n${t('chat.clickToStop')}`}
-            onClick={openConversationMore}
+            className="chat-chip btn-toggle"
+            aria-pressed={bgOpen}
+            title={`${background.map((task) => task.label).join('\n')}\n\n${t('chat.clickToStop')}`}
+            onClick={() => setBgOpen(!bgOpen)}
           >
-            {t('chat.background', { n: chat.state.background.length })}
+            {t('chat.background', { n: background.length })}
           </button>
         )}
         {staffId && chat.sessionId && (
@@ -588,40 +562,19 @@ const PRIORITY_HELP: Record<SendPriority, string> = {
 };
 const QUEUED_TEXT: Record<SendPriority, string> = { next: t('chat.queuedNext'), later: t('chat.queuedLater'), now: t('chat.queuedNow') };
 
-/** Modo que o Claude Code reporta → o nome da autonomia na ficha. */
-const MODE_TEXT: Record<string, string> = {
-  default: t('chat.modeAsk'),
-  acceptEdits: t('chat.modeEdits'),
-  plan: t('chat.modePlan'),
-  auto: t('chat.modeAuto'),
-  dontAsk: t('chat.modeDontAsk'),
-  bypassPermissions: t('chat.modeBypass'),
-};
-/** Autonomia da ficha → modo do Claude Code (vale antes de a conversa abrir). */
-const MODE_OF_AUTONOMY: Record<Autonomy, string> = {
-  plan: 'plan',
-  manual: 'default',
-  acceptEdits: 'acceptEdits',
-  auto: 'auto',
-  bypassPermissions: 'bypassPermissions',
-};
-
-/** Compacto: "contexto 42%"; a barrinha só aparece a partir de 60%. Os números completos ficam no tooltip. */
+/** Rosquinha do contexto usado (como no app do Claude): a cor muda a partir de 60% e 80%; os números ficam no tooltip. */
 function ContextMeter({ context }: { context: { used: number; window: number; percent: number } | null }) {
-  if (!context) return <span className="muted small">{t('chat.contextNone')}</span>;
-  const level = context.percent >= 80 ? 'high' : context.percent >= 60 ? 'mid' : 'low';
+  const percent = context ? Math.min(100, Math.max(0, context.percent)) : 0;
+  const level = percent >= 80 ? 'high' : percent >= 60 ? 'mid' : 'low';
+  const label = context
+    ? `${t('chat.context')} ${context.percent}% · ${t('chat.tokensOf', { used: context.used.toLocaleString(locale()), window: context.window.toLocaleString(locale()) })}`
+    : t('chat.contextNone');
   return (
-    <span
-      className={`meter meter-${level}`}
-      title={t('chat.tokensOf', { used: context.used.toLocaleString(locale()), window: context.window.toLocaleString(locale()) })}
-    >
-      <span className="meter-label">{t('chat.context')}</span>
-      {context.percent >= 60 && (
-        <span className="meter-track">
-          <span className="meter-fill" style={{ width: `${Math.min(100, context.percent)}%` }} />
-        </span>
-      )}
-      <span className="meter-value">{context.percent}%</span>
+    <span className={`context-ring meter-${level}`} role="img" aria-label={label} title={label}>
+      <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+        <circle className="context-ring-track" cx="10" cy="10" r="8" pathLength="100" />
+        {context && <circle className="context-ring-fill" cx="10" cy="10" r="8" pathLength="100" strokeDasharray={`${percent} 100`} />}
+      </svg>
     </span>
   );
 }

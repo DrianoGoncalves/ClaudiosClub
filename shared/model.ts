@@ -424,6 +424,10 @@ export interface Task {
   history: Array<{ at: string; status: TaskStatus; by: 'you' | 'auto'; note?: string }>;
   /** Revisão pedida a outro funcionário (a conversa dele). */
   review?: TaskHandoff | null;
+  /** Revisor automático: quando a tarefa é entregue, ele revisa sozinho; null/ausente = sem revisão automática. */
+  reviewerId?: string | null;
+  /** Rodadas de revisão automática já pedidas (no máximo 3). */
+  reviewRounds?: number;
   /** Deploy pedido ao funcionário de infra. */
   deploy?: TaskHandoff | null;
   /** A worktree foi mesclada no projeto. */
@@ -476,6 +480,8 @@ export interface TaskHandoff {
   at: string;
   /** Quando o turno dele terminou (a resposta está na conversa). */
   doneAt?: string;
+  /** Veredito da revisão (primeira linha da resposta: APROVADO ou REPROVADO); null = a resposta não trouxe um. */
+  verdict?: 'approved' | 'rejected' | null;
 }
 
 export interface TestRun {

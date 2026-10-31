@@ -102,14 +102,13 @@ const PACES = [
 
 /** "claude-sonnet-5-5" → "sonnet". */
 const aliasOf = (model: string | null | undefined) => MODELS.find((m) => model?.includes(m.value))?.value ?? '';
-/** "claude-sonnet-5-5" → "Sonnet" (vazio se não for um dos quatro). */
-export const modelLabel = (model: string | null | undefined) => MODELS.find((m) => model?.includes(m.value))?.label ?? '';
 
 export function ChatSettingsBar({
   level,
   state,
   fichaModel,
   fichaEffort,
+  fichaAutonomy,
   disabled,
   onChange,
 }: {
@@ -117,13 +116,16 @@ export function ChatSettingsBar({
   state: ChatState | null;
   fichaModel: string | null;
   fichaEffort: Effort | null;
+  /** Sem processo aberto, vale a autonomia da ficha (é informação de segurança: aparece sempre). */
+  fichaAutonomy?: Autonomy | null;
   disabled: boolean;
   onChange: (s: { model?: string; effort?: Effort; autonomy?: Autonomy }) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const model = aliasOf(state?.model) || aliasOf(fichaModel);
   const effort = (state?.effort as Effort | null) ?? fichaEffort ?? '';
-  const autonomy = state?.permissionMode ? MODE_AUTONOMY[state.permissionMode] : undefined;
+  const autonomy = (state?.permissionMode ? MODE_AUTONOMY[state.permissionMode] : undefined) ?? fichaAutonomy ?? undefined;
+  const alert = autonomy === 'bypassPermissions' ? 'is-danger' : autonomy === 'auto' ? 'is-warn' : '';
   const run = async (s: Parameters<typeof onChange>[0]) => {
     setBusy(true);
     try {
@@ -183,7 +185,7 @@ export function ChatSettingsBar({
           </option>
         ))}
       </select>
-      <select aria-label={t('chat.autonomyAria')} value={autonomy ?? ''} disabled={off} onChange={(e) => void run({ autonomy: e.target.value as Autonomy })}>
+      <select aria-label={t('chat.autonomyAria')} className={alert} value={autonomy ?? ''} disabled={off} onChange={(e) => void run({ autonomy: e.target.value as Autonomy })}>
         {!autonomy && <option value="">{t('chat.autonomyPlaceholder')}</option>}
         {AUTONOMIES.map((a) => (
           <option key={a.value} value={a.value}>

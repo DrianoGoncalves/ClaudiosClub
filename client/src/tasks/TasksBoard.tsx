@@ -1,14 +1,37 @@
 import { useCallback, useEffect, useState } from 'react';
-import { TASK_STATUSES, type CostReport, type StaffProfile, type Task, type TaskStatus, type TaskSummary } from '../../../shared/model';
+import { type CostReport, type StaffProfile, type Task as TaskModel, type TaskHandoff, type TaskStatus, type TaskSummary } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
 import { Markdown } from '../chat/markdown';
 import { formatAgo, formatShare } from '../format';
 import { t, locale } from '../i18n';
-import { BranchIcon } from '../icons';
+import { BranchIcon, ReviewIcon } from '../icons';
 import { TaskCodePanel } from './TaskCodePanel';
 
-// Quadro de tarefas de um projeto: a fazer → planejando → fazendo → revisão → pronto → no ar.
-// Arrastar um cartão muda a coluna; o resto anda sozinho com a conversa da tarefa (ver server/tasks.ts).
+// Quadro de tarefas de um projeto: a fazer → fazendo → revisão → pronto.
+// Os status continuam 6 (ver server/tasks.ts); na tela, "planejando" vai em Fazendo e "no ar" em Pronto, com selo.
+// Arrastar um cartão muda a coluna; o resto anda sozinho com a conversa da tarefa.
+
+/**
+ * Revisão automática (contrato com o servidor): `reviewerId` preenchido = ligada; `reviewRounds` = rodadas já
+ * feitas (até REVIEW_ROUNDS_MAX); o veredito vem em `review.verdict`.
+ */
+type Task = TaskModel & {
+  reviewerId?: string | null;
+  reviewRounds?: number;
+  review?: (TaskHandoff & { verdict?: 'approved' | 'rejected' | null }) | null;
+};
+type TaskPatch = Parameters<typeof api.updateTask>[2];
+const REVIEW_ROUNDS_MAX = 3;
+
+/** Colunas do quadro: o status de quem é soltado nela e os que ela mostra. */
+const COLUMNS: { status: TaskStatus; shows: TaskStatus[] }[] = [
+  { status: 'todo', shows: ['todo'] },
+  { status: 'doing', shows: ['planning', 'doing'] },
+  { status: 'review', shows: ['review'] },
+  { status: 'done', shows: ['done', 'live'] },
+];
+/** A coluna em que o status aparece. */
+const columnOf = (s: TaskStatus) => COLUMNS.find((c) => c.shows.includes(s))!.status;
 
 const LABEL: Record<TaskStatus, string> = {
   todo: t('tasks.statusTodo'),
@@ -112,6 +135,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     return usd !== undefined && costs?.total.usd ? formatShare(usd, costs.total.usd) : null;
   };
   const current = tasks?.find((t) => t.id === selected) ?? null;
+  /** O projeto publica? (tem funcionário com servidor ou já teve deploy): só aí "não publicado" faz sentido. */
+  const hasDeploy = !!lastDeploy || staff.some((s) => s.servers.length > 0) || !!tasks?.some((t) => t.status === 'live' || t.deploy);
   /** A tarefa que ocupa o funcionário agora (planejando ou fazendo). */
   const busyWith = (t: Task) =>
     tasks?.find((o) => o.id !== t.id && o.staffId === t.staffId && o.sessionId && (o.status === 'doing' || o.status === 'planning')) ?? null;
@@ -156,8 +181,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
           <p className="muted">{t('tasks.loading')}</p>
         ) : (
           <div className="tasks-columns">
-            {TASK_STATUSES.map((status) => {
-              const col = tasks.filter((t) => t.status === status);
+            {COLUMNS.map(({ status, shows }) => {
+              // Plano para aprovar primeiro: é o que espera por você.
+              const col = tasks.filter((t) => shows.includes(t.status)).sort((a, b) => shows.indexOf(a.status) - shows.indexOf(b.status));
               return (
                 <section
                   key={status}
@@ -171,7 +197,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                     e.preventDefault();
                     setOver(null);
                     const t = tasks.find((x) => x.id === dragging);
-                    if (t) void move(t, status);
+                    // Na mesma coluna não muda nada (plano para aprovar continua plano; no ar continua no ar).
+                    if (t && columnOf(t.status) !== status) void move(t, status);
                     setDragging(null);
                   }}
                 >
@@ -188,6 +215,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                       onClick={() => setSelected(task.id)}
                     >
                       <span className="task-title">{task.title}</span>
+                      <StatusBadge task={task} hasDeploy={hasDeploy} />
+                      <VerdictBadge task={task} nameOf={nameOf} />
                       <span className="task-meta muted small">
                         {nameOf(task.staffId) ?? t('tasks.noOwner')}
                         {task.requestedBy && ` · ${t('tasks.requestedBy', { name: nameOf(task.requestedBy) ?? task.requestedBy })}`}
@@ -196,6 +225,12 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                       {task.branch && (
                         <span className="task-branch small">
                           <BranchIcon /> {task.branch}
+                        </span>
+                      )}
+                      {task.reviewerId && (
+                        <span className="task-reviewer small" title={t('tasks.autoReviewHint', { name: nameOf(task.reviewerId) ?? task.reviewerId })}>
+                          <ReviewIcon /> {nameOf(task.reviewerId) ?? task.reviewerId}
+                          {!!task.reviewRounds && ` · ${t('tasks.reviewRounds', { n: task.reviewRounds, max: REVIEW_ROUNDS_MAX })}`}
                         </span>
                       )}
                       {queuePos(task) > 0 && (
@@ -228,7 +263,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             staff={staff}
             cost={costOf(current)}
             onClose={() => setSelected(null)}
-            onSave={(patch) => act(() => api.updateTask(projectId, current.id, patch))}
+            onSave={(patch) => act(() => api.updateTask(projectId, current.id, patch as TaskPatch))}
             onMove={(s) => void move(current, s)}
             onStart={() => void start(current)}
             busyWith={busyWith(current)}
@@ -249,23 +284,106 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   );
 }
 
+/** Selo do cartão: plano esperando você (Fazendo) e publicado ou não (Pronto). */
+function StatusBadge({ task, hasDeploy }: { task: Task; hasDeploy: boolean }) {
+  if (task.status === 'planning')
+    return (
+      <span className="task-badge is-waiting small" title={HELP.planning}>
+        {t('tasks.badgePlan')}
+      </span>
+    );
+  if (task.status === 'live') {
+    const at = [...task.history].reverse().find((h) => h.status === 'live')?.at ?? task.updatedAt;
+    return (
+      <span className="task-badge is-live small" title={new Date(at).toLocaleString(locale())}>
+        {t('tasks.badgeLive', { date: new Date(at).toLocaleDateString(locale(), { day: '2-digit', month: '2-digit' }) })}
+      </span>
+    );
+  }
+  if (task.status === 'done' && hasDeploy)
+    return (
+      <span className="task-badge small" title={t('tasks.badgeNotLiveHint')}>
+        {t('tasks.badgeNotLive')}
+      </span>
+    );
+  return null;
+}
+
+/** Veredito da revisão (aprovada/reprovada por quem revisou), quando houver. */
+function VerdictBadge({ task, nameOf }: { task: Task; nameOf: (id: string | null) => string | null }) {
+  const verdict = task.review?.verdict;
+  if (!verdict) return null;
+  const name = nameOf(task.review!.staffId) ?? task.review!.staffId;
+  return (
+    <span className={`task-badge small ${verdict === 'approved' ? 'is-approved' : 'is-rejected'}`}>
+      {t(verdict === 'approved' ? 'tasks.verdictApproved' : 'tasks.verdictRejected', { name })}
+    </span>
+  );
+}
+
+/**
+ * "Revisão automática": marcado, mostra quem revisa (os do projeto, menos quem faz). Desmarcado = null.
+ * Ao marcar, já escolhe o primeiro da lista.
+ */
+function ReviewerField({
+  staff,
+  ownerId,
+  value,
+  onChange,
+}: {
+  staff: StaffProfile[];
+  ownerId: string | null;
+  value: string | null;
+  onChange: (reviewerId: string | null) => void;
+}) {
+  const options = staff.filter((s) => s.id !== ownerId);
+  return (
+    <>
+      <label className="check" title={options.length ? t('tasks.autoReviewHelp') : t('tasks.autoReviewNobody')}>
+        <input
+          type="checkbox"
+          checked={!!value}
+          disabled={!value && !options.length}
+          onChange={(e) => onChange(e.target.checked ? (options[0]?.id ?? null) : null)}
+        />
+        {t('tasks.autoReview')}
+      </label>
+      {value && (
+        <label>
+          {t('tasks.whoReviews')}
+          <select value={value} onChange={(e) => onChange(e.target.value)}>
+            {/* Revisor que saiu do projeto: aparece como está, em vez de fingir que é o primeiro da lista. */}
+            {!options.some((s) => s.id === value) && <option value={value}>{value}</option>}
+            {options.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} — {s.role}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+    </>
+  );
+}
+
 function TaskForm({
   staff,
   onSave,
   onCancel,
 }: {
   staff: StaffProfile[];
-  onSave: (input: { title: string; description: string; staffId: string | null }, andStart: boolean) => Promise<void>;
+  onSave: (input: { title: string; description: string; staffId: string | null; reviewerId: string | null }, andStart: boolean) => Promise<void>;
   onCancel: () => void;
 }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [staffId, setStaffId] = useState<string>(staff[0]?.id ?? '');
+  const [reviewerId, setReviewerId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const submit = async (andStart: boolean) => {
     if (!title.trim()) return;
     setBusy(true);
-    await onSave({ title: title.trim(), description: description.trim(), staffId: staffId || null }, andStart);
+    await onSave({ title: title.trim(), description: description.trim(), staffId: staffId || null, reviewerId }, andStart);
     setBusy(false);
   };
   return (
@@ -286,7 +404,14 @@ function TaskForm({
       </label>
       <label>
         {t('tasks.fieldOwner')}
-        <select value={staffId} onChange={(e) => setStaffId(e.target.value)}>
+        <select
+          value={staffId}
+          onChange={(e) => {
+            setStaffId(e.target.value);
+            // Quem faz não revisa a própria tarefa.
+            if (e.target.value === reviewerId) setReviewerId(null);
+          }}
+        >
           <option value="">{t('tasks.nobodyYet')}</option>
           {staff.map((s) => (
             <option key={s.id} value={s.id}>
@@ -295,6 +420,7 @@ function TaskForm({
           ))}
         </select>
       </label>
+      <ReviewerField staff={staff} ownerId={staffId || null} value={reviewerId} onChange={setReviewerId} />
       <p className="actions">
         <button type="submit" className="btn-primary" disabled={busy || !title.trim() || !staffId} title={t('tasks.createHint')}>
           {t('tasks.createAndStart')}
@@ -334,7 +460,7 @@ function TaskDetail({
   onChanged: () => void;
   onOpenStaff: (staffId: string) => void;
   onClose: () => void;
-  onSave: (patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'pr' | 'branch'>>) => Promise<void>;
+  onSave: (patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'pr' | 'branch' | 'reviewerId'>>) => Promise<void>;
   onMove: (s: TaskStatus) => void;
   onStart: () => void;
   /** A tarefa em que o responsável está agora (aí "Começar" põe na fila). */
@@ -371,7 +497,9 @@ function TaskDetail({
           value={task.staffId ?? ''}
           disabled={!!task.sessionId}
           title={task.sessionId ? t('tasks.ownerLocked') : undefined}
-          onChange={(e) => void onSave({ staffId: e.target.value || null })}
+          onChange={(e) =>
+            void onSave(e.target.value && e.target.value === task.reviewerId ? { staffId: e.target.value, reviewerId: null } : { staffId: e.target.value || null })
+          }
         >
           <option value="">{t('tasks.nobody')}</option>
           {byHierarchy(staff).map((s) => (
@@ -381,6 +509,7 @@ function TaskDetail({
           ))}
         </select>
       </label>
+      <ReviewerField staff={byHierarchy(staff)} ownerId={task.staffId} value={task.reviewerId ?? null} onChange={(reviewerId) => void onSave({ reviewerId })} />
       <label>
         PR
         <input value={pr} placeholder="https://github.com/…/pull/123" onChange={(e) => setPr(e.target.value)} />
@@ -456,8 +585,8 @@ function TaskDetail({
             {t('tasks.markLive')}
           </button>
         )}
-        <select className="task-move" value={task.status} onChange={(e) => onMove(e.target.value as TaskStatus)} aria-label={t('tasks.moveTo')}>
-          {TASK_STATUSES.map((s) => (
+        <select className="task-move" value={columnOf(task.status)} onChange={(e) => onMove(e.target.value as TaskStatus)} aria-label={t('tasks.moveTo')}>
+          {COLUMNS.map(({ status: s }) => (
             <option key={s} value={s}>
               {t('tasks.moveOption', { status: LABEL[s] })}
             </option>

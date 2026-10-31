@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { TASK_STATUSES, type ChatItem, type HeldMessage, type StaffProfile, type Task, type TaskCode, type TaskStatus, type TaskSummary, type TestRun } from '../shared/model';
+import { TASK_STATUSES, type ChatItem, type HeldMessage, type StaffProfile, type Task, type TaskCode, type TaskHandoff, type TaskStatus, type TaskSummary, type TestRun } from '../shared/model';
 import type { SecondOpinionInput } from './adapters/codex';
 import { writeAtomic } from './staff/store';
 import { checkpoint, CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
@@ -11,8 +11,12 @@ import { checkpoint, CodeError, detectTest, locateCode, mergeCode, readCode, run
 // funcionário; ao começar, abre uma conversa nova com a descrição. Ela anda sozinha:
 //   planejando → fazendo  quando você aprova o plano no cartão de plano (o plano fica guardado);
 //   fazendo → revisão     quando o turno dele termina (trabalhando → parado);
-//   revisão → fazendo     quando você manda outra mensagem na conversa da tarefa.
-// "Pronto" e "no ar" são suas (o deploy, por enquanto, é marcado à mão).
+//   revisão → fazendo     quando você manda outra mensagem na conversa da tarefa;
+//   revisão automática    com revisor marcado, ao entregar ele revisa sozinho (até 3 rodadas) e responde
+//                         APROVADO ou REPROVADO na primeira linha. Aprovada: pronto (fica em revisão se
+//                         falta mesclar a worktree). Reprovada: os ajustes vão para a conversa dele, e a
+//                         tarefa volta para fazendo.
+// "No ar" é sua (o deploy, por enquanto, é marcado à mão); "pronto" também sai sozinho na aprovação.
 //
 // Uma tarefa por vez por funcionário. Começar com ele ocupado (outra tarefa planejando ou fazendo,
 // ou uma conversa dele trabalhando) põe na fila dele; quando ele fica livre, o Claudio’s Club manda primeiro
@@ -23,17 +27,21 @@ export class TaskError extends Error {}
 
 const SAFE_ID = /^[a-z0-9-]{1,40}$/;
 const MAX_HISTORY = 30;
+/** Quantas revisões automáticas uma tarefa pede antes de ficar com você. */
+const AUTO_REVIEW_ROUNDS = 3;
 
 export const TaskInput = z.object({
   title: z.string().trim().min(1, 'dê um título à tarefa').max(120, 'título longo demais (máx. 120)'),
   description: z.string().trim().max(8000).default(''),
   staffId: z.string().regex(SAFE_ID).nullable().default(null),
+  reviewerId: z.string().regex(SAFE_ID).nullable().default(null),
 });
 
 export const TaskPatch = z.object({
   title: z.string().trim().min(1, 'dê um título à tarefa').max(120).optional(),
   description: z.string().trim().max(8000).optional(),
   staffId: z.string().regex(SAFE_ID).nullable().optional(),
+  reviewerId: z.string().regex(SAFE_ID).nullable().optional(),
   status: z.enum(TASK_STATUSES).optional(),
   pr: z
     .string()
@@ -104,6 +112,7 @@ export class TaskService {
   async create(projectId: string, body: unknown, requestedBy: string | null = null): Promise<Task | null> {
     const input = parseOr(TaskInput, body);
     if (input.staffId) await this.staffOrThrow(projectId, input.staffId);
+    await this.checkReviewer(projectId, input.reviewerId, input.staffId, true);
     const manager = requestedBy ? await this.staffOrThrow(projectId, requestedBy) : null;
     const now = new Date().toISOString();
     // A entrega volta para a conversa em que o gestor pediu (a que está no turno agora, chamando a
@@ -115,6 +124,7 @@ export class TaskService {
       description: input.description,
       status: 'todo',
       staffId: input.staffId,
+      reviewerId: input.reviewerId,
       sessionId: null,
       plan: null,
       branch: null,
@@ -129,6 +139,16 @@ export class TaskService {
   async update(projectId: string, taskId: string, body: unknown): Promise<Task | null> {
     const patch = parseOr(TaskPatch, body);
     if (patch.staffId) await this.staffOrThrow(projectId, patch.staffId);
+    // Revisor e responsável não podem ser a mesma pessoa, mesmo quando só um dos dois muda.
+    const dir = await this.deps.projectPath(projectId);
+    const cur = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
+    if (cur)
+      await this.checkReviewer(
+        projectId,
+        patch.reviewerId !== undefined ? patch.reviewerId : (cur.reviewerId ?? null),
+        patch.staffId !== undefined ? patch.staffId : cur.staffId,
+        patch.reviewerId !== undefined,
+      );
     let before: Task | undefined;
     const out = await this.change(projectId, taskId, (t) => {
       before = t;
@@ -357,7 +377,7 @@ export class TaskService {
       task.description && `O que foi pedido:\n${task.description}`,
       where,
       files,
-      'Responda com APROVADO, ou com a lista de ajustes (arquivo:linha e o porquê). Não mude o código: só revise.',
+      'Responda com APROVADO ou REPROVADO na primeira linha, exatamente assim. Se reprovar, em seguida a lista de ajustes (arquivo:linha e o porquê). Não mude o código: só revise.',
     ]
       .filter(Boolean)
       .join('\n\n');
@@ -403,13 +423,108 @@ export class TaskService {
   }
 
   /**
-   * O turno de uma conversa da tarefa terminou. Do trabalho: fazendo → revisão. Da revisão ou do
-   * deploy: anota que a resposta chegou (a tarefa não muda de coluna sozinha por isso).
+   * O turno de uma conversa da tarefa terminou. Do trabalho: fazendo → revisão. Da revisão: anota a
+   * resposta e o veredito, e com revisor automático aprova ou reprova (ver onReviewTurn). Do deploy:
+   * anota que a resposta chegou (a tarefa não muda de coluna sozinha por isso).
    */
   async onTurnDone(sessionId: string): Promise<void> {
-    await this.onSession(sessionId, 'review', (t) => noteHandoff(t, 'review', 'revisão respondida'));
+    await this.onReviewTurn(sessionId);
     await this.onSession(sessionId, 'deploy', (t) => noteHandoff(t, 'deploy', 'deploy respondeu'));
     await this.workDone(sessionId);
+  }
+
+  /**
+   * A revisão respondeu: anota o veredito (APROVADO ou REPROVADO, na primeira linha). Só a revisão
+   * atual da tarefa conta, e só com o revisor marcado nela é que o veredito move a tarefa: aprovada
+   * vai para pronto; reprovada, os ajustes voltam para a conversa de trabalho.
+   */
+  private async onReviewTurn(sessionId: string): Promise<void> {
+    const where = await this.where(sessionId);
+    if (where?.role !== 'review') return;
+    const current = ((await this.list(where.projectId)) ?? []).find((t) => t.id === where.taskId);
+    const isCurrent = current?.review?.sessionId === sessionId;
+    const reviewText = this.deps.lastText?.(sessionId) ?? null;
+    const verdict = isCurrent ? parseVerdict(reviewText) : undefined;
+    const task = await this.change(where.projectId, where.taskId, (t) => noteHandoff(t, 'review', 'revisão respondida', verdict) ?? t);
+    if (!task || !isCurrent || !verdict || task.status !== 'review' || !task.reviewerId || task.reviewerId !== task.review?.staffId) return;
+    const reviewer = (await this.deps.readProfile(where.projectId, task.reviewerId))?.name ?? 'o revisor';
+    if (verdict === 'approved') return this.approve(where.projectId, task.id, reviewer);
+    return this.reject(where.projectId, task.id, reviewer, reviewText ?? '');
+  }
+
+  /** Aprovada pelo revisor: pronto, a não ser que o código ainda esteja numa worktree por mesclar. */
+  private async approve(projectId: string, taskId: string, reviewer: string): Promise<void> {
+    const { dir, task, profile } = await this.context(projectId, taskId);
+    const place = task.staffId ? await locateCode(dir, task.staffId, !!profile?.worktree).catch(() => null) : null;
+    if (place?.where === 'worktree' && !task.merged) {
+      await this.change(projectId, taskId, (t) => (t.status === 'review' ? noted(t, `aprovada por ${reviewer}; falta mesclar`) : t));
+      return;
+    }
+    await this.change(projectId, taskId, (t) => (t.status === 'review' ? moved(t, 'done', 'auto', `aprovada por ${reviewer}`) : t));
+  }
+
+  /**
+   * Reprovada: a resposta do revisor vai para a conversa de trabalho, como ajuste. Com ele ocupado
+   * (outra tarefa, ou outra conversa dele), o ajuste fica guardado e a tarefa segue em revisão; quando
+   * a mensagem for enviada, ela volta para fazendo. Livre, a tarefa vai para fazendo e a mensagem
+   * entra na conversa dele. Quando o turno dele terminar, a próxima rodada é pedida (workDone).
+   */
+  private async reject(projectId: string, taskId: string, reviewer: string, reviewText: string): Promise<void> {
+    const { task } = await this.context(projectId, taskId);
+    if (!task.staffId || !task.sessionId) {
+      await this.change(projectId, taskId, (t) => (t.status === 'review' ? noted(t, `reprovada por ${reviewer}, mas não tem conversa de trabalho: fica com você`) : t));
+      return;
+    }
+    const staffId = task.staffId;
+    const work = task.sessionId;
+    const msg = [
+      `[Revisão da tarefa "${task.title}"]`,
+      `${reviewer} reprovou a entrega. Os ajustes, como ele escreveu:`,
+      reviewText.trim().slice(0, 4000),
+      'Faça os ajustes e, quando terminar, responda com um resumo curto do que mudou.',
+    ].join('\n\n');
+    await this.locked(projectId, staffId, async () => {
+      const reason = await this.hold(work, { text: msg });
+      if (reason) {
+        await this.change(projectId, taskId, (t) => (t.status === 'review' ? noted(t, `reprovada por ${reviewer}`) : t));
+        return;
+      }
+      await this.change(projectId, taskId, (t) => (t.status === 'review' ? moved(t, 'doing', 'auto', `reprovada por ${reviewer}`) : t));
+      try {
+        if (!this.deps.sendTo) throw new TaskError('sem envio para a conversa de trabalho');
+        await this.deps.sendTo(projectId, work, staffId, msg, []);
+      } catch (err) {
+        // Não foi (limite de consumo, conversa fechada…): fica guardado e volta para revisão; o vigia manda depois.
+        const error = (err as Error).message;
+        const held: HeldMessage = { id: randomBytes(4).toString('hex'), at: new Date().toISOString(), text: msg, reason: `não foi enviado: ${error}` };
+        await this.change(projectId, taskId, (t) => {
+          const back = t.status === 'doing' ? moved(t, 'review', 'auto', `ajuste de ${reviewer} não foi enviado: ${error}`) : t;
+          return { ...back, held: [...(back.held ?? []), held] };
+        });
+      }
+    });
+  }
+
+  /** Entregue com revisor marcado: pede a revisão sozinho, até AUTO_REVIEW_ROUNDS rodadas. */
+  private async autoReview(projectId: string, task: Task): Promise<void> {
+    if (!task.reviewerId) return;
+    if ((task.reviewRounds ?? 0) >= AUTO_REVIEW_ROUNDS) {
+      await this.change(projectId, task.id, (t) => noted(t, `limite de ${AUTO_REVIEW_ROUNDS} revisões automáticas; fica com você`));
+      return;
+    }
+    try {
+      await this.requestReview(projectId, task.id, task.reviewerId);
+      await this.change(projectId, task.id, (t) => ({ ...t, reviewRounds: (t.reviewRounds ?? 0) + 1 }));
+    } catch (err) {
+      await this.change(projectId, task.id, (t) => noted(t, `revisão automática não começou: ${(err as Error).message}`));
+    }
+  }
+
+  /** O revisor: outro funcionário do projeto, e não quem faz a tarefa (`check`: confere se ele existe). */
+  private async checkReviewer(projectId: string, reviewerId: string | null, staffId: string | null, check: boolean): Promise<void> {
+    if (!reviewerId) return;
+    if (reviewerId === staffId) throw new TaskError('a revisão precisa ser de outro funcionário');
+    if (check && !(await this.deps.readProfile(projectId, reviewerId))) throw new TaskError('revisor não encontrado neste projeto');
   }
 
   /**
@@ -423,7 +538,7 @@ export class TaskService {
     const staffId = ((await this.list(where.projectId)) ?? []).find((t) => t.id === where.taskId)?.staffId;
     if (!staffId) return;
     // Na vez dele: a próxima tarefa só começa depois que a entrega desta tem o seu commit.
-    await this.locked(where.projectId, staffId, async () => {
+    const deliveredTask = await this.locked(where.projectId, staffId, async () => {
       let delivered: Task | null = null;
       await this.change(where.projectId, where.taskId, (t) => (t.status === 'doing' ? (delivered = moved(t, 'review', 'auto', 'turno terminou')) : t));
       if (delivered) {
@@ -434,8 +549,11 @@ export class TaskService {
         if (tests) delivered = (await this.change(where.projectId, where.taskId, (t) => ({ ...t, tests }))) ?? delivered;
         await this.tellManager(where.projectId, delivered, sessionId);
       }
+      return delivered as Task | null;
     });
     void this.kick(where.projectId, staffId);
+    // Fora da vez dele: a revisão automática (com revisor marcado) é pedida depois da entrega.
+    if (deliveredTask) await this.autoReview(where.projectId, deliveredTask);
   }
 
   /**
@@ -578,13 +696,27 @@ async function readTasks(dir: string): Promise<Task[]> {
   }
 }
 
+/**
+ * O veredito da revisão: a primeira linha não vazia, sem markdown, é APROVADO ou REPROVADO
+ * (maiúsculas). Qualquer outra coisa é null e não decide nada.
+ */
+export function parseVerdict(text: string | null | undefined): 'approved' | 'rejected' | null {
+  const first = (text ?? '').split('\n').map((l) => l.trim()).find((l) => l.length > 0);
+  if (!first) return null;
+  // A linha só com a palavra: "APROVADO, mas o teste X falha" não aprova.
+  const line = first.replace(/^[*#_`>\s]+/, '').replace(/[*_`.!:\s]+$/, '');
+  if (line === 'APROVADO') return 'approved';
+  if (line === 'REPROVADO') return 'rejected';
+  return null;
+}
+
 /** A revisão ou o deploy respondeu: marca a hora e deixa uma linha no histórico (sem mudar de coluna). */
-function noteHandoff(t: Task, kind: 'review' | 'deploy', note: string): Task | null {
+function noteHandoff(t: Task, kind: 'review' | 'deploy', note: string, verdict?: TaskHandoff['verdict']): Task | null {
   const h = t[kind];
   if (!h) return null;
   const at = new Date().toISOString();
   const history = [...t.history, { at, status: t.status, by: 'auto' as const, note }].slice(-MAX_HISTORY);
-  return { ...t, [kind]: { ...h, doneAt: at }, history, updatedAt: at };
+  return { ...t, [kind]: { ...h, doneAt: at, ...(verdict !== undefined && { verdict }) }, history, updatedAt: at };
 }
 
 /** A tarefa que ocupa o funcionário (planejando ou fazendo, com conversa aberta), fora `except`. */

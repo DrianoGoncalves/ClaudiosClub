@@ -17,6 +17,7 @@ import type {
   UiLevel,
   UsageStop,
 } from '../../shared/model';
+import { colorCss } from '../../shared/model';
 import { api, withUsageConfirm } from './api';
 import { BoardView } from './board/Board';
 import { boardStyle, useBoardBackground, useSystemTheme } from './board/colors';
@@ -42,10 +43,13 @@ import { NewProjectForm } from './office/NewProjectForm';
 import { readTab, workspaceByProject, writeTab } from './office/workspaces';
 import { ProjectOffice } from './office/ProjectOffice';
 import { StaffForm, type StaffFormMode } from './staff/HireForm';
+import { FilesBoard } from './files/FilesBoard';
 import { TasksBoard } from './tasks/TasksBoard';
 
 const ARCHIVED_KEY = 'myco.showArchived';
 const ANIMATIONS_KEY = 'myco.animations';
+/** Quanto tempo o aviso de sucesso fica no canto antes de fechar sozinho. */
+const NOTICE_MS = 7000;
 
 /** Escolha salva; sem escolha, segue o "reduzir animações" do sistema. */
 function readAnimations(): boolean {
@@ -79,9 +83,18 @@ export function App() {
   const [agentForm, setAgentForm] = useState<AgentFormTarget | null>(null);
   /** "+ projeto" das abas: a empresa da aba de onde veio. */
   const [newProject, setNewProject] = useState<{ workspaceId: string | null } | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  // Aviso no canto: o de sucesso fecha sozinho em 7s; o de erro ("sticky") fica até fechar no ×.
+  const [notice, setNoticeState] = useState<{ text: string; sticky: boolean } | null>(null);
+  const setNotice = (text: string | null, sticky = false) => setNoticeState(text === null ? null : { text, sticky });
+  useEffect(() => {
+    if (!notice || notice.sticky) return;
+    const timer = setTimeout(() => setNoticeState(null), NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [notice]);
   /** Quadro de tarefas aberto (id do projeto). */
   const [tasksFor, setTasksFor] = useState<string | null>(null);
+  /** Arquivos do projeto abertos (id do projeto). */
+  const [filesFor, setFilesFor] = useState<string | null>(null);
   /** Tarefa escolhida no Ctrl+K: o quadro de tarefas abre com ela selecionada. */
   const [jumpTask, setJumpTask] = useState<string | null>(null);
   /** Conversa achada na busca do Ctrl+K: o painel do funcionário abre nela. */
@@ -248,7 +261,11 @@ export function App() {
     if (!board || selection?.kind !== 'employee') return undefined;
     const wsId = workspaceByProject(board.projects, config).get(selection.projectId);
     const ws = config?.workspaces.find((w) => w.id === wsId);
-    return boardStyle(ws?.background[theme] ?? config?.boardBackground[theme] ?? null, theme);
+    const style = boardStyle(ws?.background[theme] ?? config?.boardBackground[theme] ?? null, theme);
+    // Véu da cor do projeto por cima (styles.css: .drawer-chat .chat-list); sem cor, só o fundo.
+    const color = config?.projectColors[selection.projectId];
+    if (color) style['--chat-tint'] = `color-mix(in srgb, ${colorCss(color)} var(--project-tint-mix), transparent)`;
+    return style;
   }, [board, selection, config, theme]);
   const [drawerWidth, setDrawerWidth] = useDrawerWidth();
   const isArchived = (kind: 'project' | 'session', id: string) =>
@@ -302,7 +319,7 @@ export function App() {
                   );
                   load();
                 },
-                (e: Error) => setNotice(t('app.linkFailed', { error: e.message })),
+                (e: Error) => setNotice(t('app.linkFailed', { error: e.message }), true),
               );
             }}
             onUnlink={({ projectId, staffId, managerId }) => {
@@ -318,7 +335,7 @@ export function App() {
                   );
                   load();
                 },
-                (e: Error) => setNotice(t('app.unlinkFailed', { error: e.message })),
+                (e: Error) => setNotice(t('app.unlinkFailed', { error: e.message }), true),
               );
             }}
           />
@@ -354,6 +371,7 @@ export function App() {
           {selection.kind === 'project' && (
             <ProjectPanel
               onTasks={() => setTasksFor(selection.id)}
+              onFiles={() => setFilesFor(selection.id)}
               tasks={taskSummary[selection.id] ?? null}
               office={<ProjectOffice projectId={selection.id} config={config} onConfig={setConfig} />}
               onNewAgent={() => setAgentForm({ scope: 'project', projectId: selection.id })}
@@ -505,6 +523,14 @@ export function App() {
           }}
         />
       )}
+      {board && filesFor && (
+        <FilesBoard
+          key={filesFor}
+          projectId={filesFor}
+          projectName={board.projects.find((p) => p.id === filesFor)?.name ?? filesFor}
+          onClose={() => setFilesFor(null)}
+        />
+      )}
       {board && form && (
         <StaffForm
           key={form.mode.kind === 'edit' ? form.mode.profile.updatedAt : 'novo'}
@@ -521,6 +547,7 @@ export function App() {
                 : launch.ok
                   ? t('app.hiredLaunched', { name: profile.name })
                   : t('app.hiredNotLaunched', { name: profile.name, error: String(launch.error) }),
+              launch !== null && !launch.ok,
             );
             setSelectedId(staffNodeId(profile.projectId, profile.id));
             load();
@@ -537,7 +564,7 @@ export function App() {
       )}
       {notice && (
         <div className="notice" role="status">
-          <span>{notice}</span>
+          <span>{notice.text}</span>
           <button className="drawer-close" onClick={() => setNotice(null)} aria-label={t('app.closeNotice')}>
             ×
           </button>

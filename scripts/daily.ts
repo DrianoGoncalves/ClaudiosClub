@@ -15,6 +15,7 @@ import {
   STOP_FILE,
   TSX,
   appendLog,
+  brokenDeps,
   isAlive,
   modInstalled,
   openUrl,
@@ -192,7 +193,12 @@ async function setup(fromLink: boolean): Promise<void> {
   console.log(`ok (Node ${process.version})`);
 
   step('Dependências');
-  if (depsStale()) {
+  // `npm install` não refaz pacote que o npm acha instalado: com arquivos apagados, só `npm ci` repara.
+  const broken = fs.existsSync(path.join(ROOT, 'node_modules', '.package-lock.json')) ? brokenDeps() : [];
+  if (broken.length) {
+    console.log(`node_modules quebrado (${broken.join(', ')}): reinstalando.`);
+    if (!npm(['ci', '--no-audit', '--no-fund'])) await setupFailed('npm ci falhou (veja acima)');
+  } else if (depsStale()) {
     if (!npm(['install', '--no-audit', '--no-fund'])) await setupFailed('npm install falhou (veja acima)');
   } else console.log('ok');
 

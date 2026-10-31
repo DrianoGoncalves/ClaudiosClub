@@ -2,12 +2,11 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DAEMON_BUNDLE, SERVER_BUNDLE, bundle, bundleStale } from './bundle';
-import { BUILT, LOG_FILE, PID_FILE, ROOT, RUN_DIR, STOP_FILE, appendLog, portFrom, runningDaemon, writeLogSnapshot } from './lib';
+import { LOG_FILE, PID_FILE, ROOT, RUN_DIR, STOP_FILE, VITE, appendLog, clientChanged, portFrom, runningDaemon, writeLogSnapshot } from './lib';
 
 // Vigia do Claudio’s Club: sobe o servidor sem janela, guarda a saída em ~/.myco/logs/server.log e religa sozinho se
 // ele cair. Para parar: npm run daily:stop. Quem chama (daily start, ou o login automático) já o põe em segundo plano.
 
-const VITE = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
 const LOG_MAX = 5 * 1024 * 1024;
 const port = portFrom(process.argv.slice(2));
 
@@ -21,32 +20,15 @@ function log(line: string): void {
 }
 
 // Rodando do .ts (tsx), o vigia se troca pelo pacote dist/daemon.mjs no mesmo processo (mesmo PID) e fica no ar
-// sem o tsx. Sem process.execve (Windows) ou sem conseguir gerar o pacote, segue pelo tsx mesmo.
-if (import.meta.filename.endsWith('.ts') && process.execve) {
+// sem o tsx. Sem process.execve (Windows) ou sem conseguir gerar o pacote, segue pelo tsx mesmo. No Windows a função
+// existe mas lança "unavailable": por isso a checagem é pela plataforma, e não pela função.
+if (import.meta.filename.endsWith('.ts') && process.platform !== 'win32' && process.execve) {
   try {
     if (bundleStale(DAEMON_BUNDLE)) await bundle('scripts/daemon.ts', DAEMON_BUNDLE);
     process.execve(process.execPath, [process.execPath, DAEMON_BUNDLE, ...process.argv.slice(2)]);
   } catch (err) {
     log(`o vigia segue pelo tsx (sem o pacote: ${err instanceof Error ? err.message : String(err)})`);
   }
-}
-
-/** Arquivos de uma pasta, em todos os níveis. */
-function filesUnder(dir: string): string[] {
-  return (fs.readdirSync(dir, { recursive: true }) as string[]).map((f) => path.join(dir, f)).filter((f) => fs.statSync(f).isFile());
-}
-
-/** O cliente mudou desde o último build? (código, dependências ou config do Vite) */
-function clientChanged(): boolean {
-  if (!fs.existsSync(BUILT)) return true;
-  const since = fs.statSync(BUILT).mtimeMs;
-  const sources = [
-    ...filesUnder(path.join(ROOT, 'client')),
-    ...filesUnder(path.join(ROOT, 'shared')),
-    path.join(ROOT, 'vite.config.ts'),
-    path.join(ROOT, 'package-lock.json'),
-  ];
-  return sources.some((f) => (fs.statSync(f, { throwIfNoEntry: false })?.mtimeMs ?? 0) > since);
 }
 
 /** Como subir o servidor: o pacote, refeito se o código mudou; sem ele (erro no build), pelo tsx como antes. */

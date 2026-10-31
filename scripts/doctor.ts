@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getAuthStatus } from '../server/auth';
-import { BUILT, ROOT, linuxAppsDir } from './lib';
+import { BUILT, ROOT, brokenBuild, brokenDeps, linuxAppsDir } from './lib';
 
 // Checklist do Claudio’s Club: confere o que falta para rodar (Node 22+, Git, Claude Code, login, dependências, build
 // e o botão Iniciar) e grava scripts/status.js, que a página scripts/start.html lê. Só leitura: não instala nada e não
@@ -62,11 +62,21 @@ async function collect(): Promise<Check[]> {
   else if (apiKey) checks.push({ id: 'login', ok: true, detail: 'ANTHROPIC_API_KEY definida' });
   else checks.push({ id: 'login', ok: false, detail: 'faça login: rode claude' });
 
-  const deps = fs.existsSync(path.join(ROOT, 'node_modules', '.package-lock.json'));
-  checks.push({ id: 'deps', ok: deps, detail: deps ? 'node_modules instalado' : 'node_modules ausente' });
+  const installed = fs.existsSync(path.join(ROOT, 'node_modules', '.package-lock.json'));
+  const broken = installed ? brokenDeps() : [];
+  checks.push({
+    id: 'deps',
+    ok: installed && broken.length === 0,
+    detail: !installed ? 'node_modules ausente' : broken.length ? `quebradas: ${broken.join(', ')} (rode npm ci)` : 'node_modules instalado',
+  });
 
   const build = fs.existsSync(BUILT);
-  checks.push({ id: 'build', ok: build, detail: build ? 'dist/client/index.html' : 'build ausente' });
+  const missing = brokenBuild();
+  checks.push({
+    id: 'build',
+    ok: build && missing.length === 0,
+    detail: !build ? 'build ausente' : missing.length ? `faltam ${missing.join(', ')} (rode npm run build)` : 'dist/client/index.html',
+  });
 
   const launcher = launcherInstalled();
   checks.push({

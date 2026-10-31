@@ -21,6 +21,10 @@ export const STREAM_FLAGS = [
   '--verbose',
   '--include-partial-messages',
   '--permission-prompt-tool', 'stdio',
+  // Sem isto o Claude Code recusa trocar para "sem travas" com o processo aberto
+  // (`bypass_not_launched`) e ele segue pedindo permissão. Só libera a troca: o modo continua vindo
+  // do --permission-mode, e quem troca é o Claudio’s Club (rotas de autonomia só pelo navegador).
+  '--allow-dangerously-skip-permissions',
 ];
 
 const MAX_LOG = 5_000;
