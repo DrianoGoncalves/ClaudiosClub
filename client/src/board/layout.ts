@@ -56,6 +56,8 @@ export type EmployeeNodeData = {
   projectId: string;
   /** Soma de todas as sessões do funcionário. */
   costUsd: number | null;
+  /** Funcionário fantasma: as conversas sem ficha do projeto, num nó só (da mais recente à mais antiga). */
+  ghost: Session[] | null;
   /** Parte do funcionário no consumo total (0 a 1). */
   costShare: number | null;
   archived: boolean;
@@ -151,14 +153,16 @@ const ASPECT_MIN = 0.4;
 const ASPECT_MAX = 4;
 /** Até quantos agents/skills ficam soltos ao lado do projeto; acima disso, vão para a estante. */
 const SHELF_MAX_LOOSE = 3;
+/** Qual conversa do funcionário fantasma o cartão mostra, quando há mais de uma aberta. */
+const LIVE_RANK: Record<string, number> = { busy: 4, waiting: 3, idle: 2 };
 
 export const USER_NODE_ID = 'u';
 /** Não é um nó: abre o ranking de custo no painel lateral. */
 export const RANKING_ID = 'ranking';
 export const SYNCED_NODE_ID = 'sg';
 export const projectNodeId = (projectId: string) => `p:${projectId}`;
-export const employeeNodeId = (sessionId: string) => `e:${sessionId}`;
 export const staffNodeId = (projectId: string, staffId: string) => `h:${projectId}:${staffId}`;
+export const ghostNodeId = (projectId: string) => `g:${projectId}`;
 /** Chave de arquivamento: a ficha, para contratados; a sessão, para os demais. */
 export const archiveKey = (d: { staff: StaffProfile | null; session: Session | null }) =>
   d.staff ? `staff:${d.staff.id}` : d.session!.id;
@@ -272,6 +276,7 @@ export function buildGraph(
         staff: st,
         projectId: p.id,
         costUsd,
+        ghost: null,
         costShare: share(costUsd, totalUsd),
         archived: archivedSessions.has(`staff:${st.id}`),
         needsYou: needsYou(session?.live, mine, st.id),
@@ -281,20 +286,25 @@ export function buildGraph(
       byId.set(st.id, tree);
       trees.push(tree);
     }
-    for (const s of sessions) {
-      if (ownedBy.has(s.id)) continue;
-      const archived = archivedSessions.has(s.id);
-      if (archived && !opts.showArchived) continue;
-      const session = withLive(s);
+    // Conversas sem ficha: um funcionário fantasma por projeto, em vez de um nó por conversa.
+    const loose = sessions.filter((s) => !ownedBy.has(s.id) && (opts.showArchived || !archivedSessions.has(s.id))).map(withLive);
+    if (loose.length) {
+      const ids = loose.map((s) => s.id);
+      const costsOfLoose = ids.map(sessionCost).filter((c): c is number => c !== undefined);
+      const costUsd = costsOfLoose.length ? costsOfLoose.reduce((a, b) => a + b, 0) : null;
+      // O cartão mostra a conversa mais viva (trabalhando, esperando, parada); sem nenhuma aberta, a mais recente.
+      const rank = (s: Session) => (s.live?.alive ? (LIVE_RANK[s.live.status ?? ''] ?? 1) : 0);
+      const session = loose.reduce((best, s) => (rank(s) > rank(best) ? s : best), loose[0]!);
       trees.push({
-        node: node(employeeNodeId(s.id), 'employee', {
+        node: node(ghostNodeId(p.id), 'employee', {
           session,
           staff: null,
           projectId: p.id,
-          costUsd: sessionCost(s.id) ?? null,
-          costShare: share(sessionCost(s.id) ?? null, totalUsd),
-          archived,
-          needsYou: needsYou(session.live, [s.id], null),
+          costUsd,
+          ghost: loose,
+          costShare: share(costUsd, totalUsd),
+          archived: ids.every((id) => archivedSessions.has(id)),
+          needsYou: needsYou(session.live, ids, null),
         }),
         side: [],
         children: [],

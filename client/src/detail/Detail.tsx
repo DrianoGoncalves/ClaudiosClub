@@ -28,6 +28,7 @@ import { WorthIt } from './WorthIt';
 import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatShare, STATUS_LABEL } from '../format';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
+import { GhostIcon } from '../icons';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
 
 // Painel lateral: o que o nó selecionado no quadro tem por trás.
@@ -84,7 +85,10 @@ export function EmployeePanel(props: {
   archived: boolean;
   onArchive: (v: boolean) => Promise<void>;
   onHireSub: () => void;
-  onEdit: () => void;
+  /** Editar a ficha; sem ficha, dar uma para a conversa aberta (`sessionId`). */
+  onEdit: (sessionId: string | null) => void;
+  /** Funcionário fantasma: as conversas sem ficha do projeto, num nó só. */
+  ghost?: boolean;
   onSessionStarted?: (sessionId: string) => void;
   /** A ficha mudou por aqui (rotinas): o quadro relê. */
   onChanged?: () => void;
@@ -154,7 +158,7 @@ export function EmployeePanel(props: {
     }
   };
   const live = s?.live?.alive ? s.live : null;
-  const name = staff?.name ?? (s ? employeeName(s) : '?');
+  const name = staff?.name ?? (props.ghost ? t('detail.ghostName') : s ? employeeName(s) : '?');
   const showConvos = !!project && (conversations.length > 0 || fresh);
   const statusInfo = live
     ? { dot: `dot dot-${live.status ?? 'unknown'}`, text: STATUS_LABEL[live.status ?? ''] ?? live.status }
@@ -164,6 +168,11 @@ export function EmployeePanel(props: {
     <>
       <div className="employee-top">
         {staff?.portrait && project && <img className="employee-portrait" src={portraitUrl(project.id, staff.id)} alt={t('detail.portraitOf', { name: staff.name })} />}
+        {props.ghost && (
+          <span className="employee-portrait employee-ghost" aria-hidden="true">
+            <GhostIcon size={30} />
+          </span>
+        )}
         <div className="employee-ident">
           <h2 className="employee-name" title={name}>
             {name}
@@ -247,13 +256,13 @@ export function EmployeePanel(props: {
           {staff ? (
             !props.simple && <StaffSheet staff={staff} managers={props.managers} />
           ) : (
-            <p className="muted small">{t('detail.outsideMyco')}</p>
+            <p className="muted small">{t(props.ghost ? 'detail.ghostAbout' : 'detail.outsideMyco')}</p>
           )}
           <div className="chat-more-row">
             <button
               type="button"
               className="btn-secondary"
-              onClick={props.onEdit}
+              onClick={() => props.onEdit(current)}
               title={staff ? t('detail.editProfileTitle') : t('detail.giveProfileTitle')}
             >
               {staff ? t('detail.editProfile') : t('detail.giveProfile')}

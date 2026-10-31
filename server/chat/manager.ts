@@ -619,7 +619,11 @@ export class ChatManager {
     if (existing?.running) await existing.stopAndWait(); // reabre com a ficha nova
     if (sessionId) {
       const other = await this.elsewhere(sessionId);
-      if (other) {
+      // Órfão do próprio Claudio’s Club: ninguém mais fala com ele, então mandar mensagem já é o "Trazer".
+      if (other?.orphan) {
+        this.log(`${sessionId}: retomada aqui, encerrando processo órfão do Claudio’s Club (pid ${other.pid}, ${other.status ?? 'sem status'})`);
+        await this.endProcess(sessionId, other.pid);
+      } else if (other) {
         this.log(`${sessionId} bloqueada: aberta em ${other.orphan ? 'processo órfão do Claudio’s Club' : (other.entrypoint ?? '?')} (pid ${other.pid})`);
         throw new ChatError(holdMessage(other));
       }

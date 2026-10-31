@@ -119,6 +119,7 @@ body { background: var(--board); }
 /* Funcionário trabalhando: contorno "sendo redesenhado", lápis escrevendo, reticências animadas. */
 .bn-portrait-wrap { position: relative; flex: none; }
 .bn-portrait img { position: absolute; inset: 3px; width: 34px; height: 34px; border-radius: 50%; object-fit: cover; }
+.bn-portrait .bn-ghost { position: relative; display: grid; place-items: center; }
 .bn-role { color: var(--ink); }
 .bn-temp { color: var(--warn); }
 .temp-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; padding: 8px 10px; border: 1px dashed var(--warn); border-radius: 8px; color: var(--ink); }
@@ -581,6 +582,7 @@ button.ranking-row:hover { border-color: var(--accent); }
 /* Cargo na linha de baixo, largura toda; quebra em até 2 linhas antes de cortar. */
 .employee-cargo { flex-basis: 100%; min-width: 0; font-size: 10px; line-height: 1.35; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
 .employee-portrait { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; border: 2px solid var(--ink); flex: none; }
+.employee-ghost { display: grid; place-items: center; border-style: dashed; color: var(--muted); }
 .sheet { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; margin: 0; font-size: 13px; }
 .sheet dt { color: var(--muted); }
 .sheet dd { margin: 0; }

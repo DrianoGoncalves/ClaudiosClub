@@ -247,7 +247,7 @@ describe('buildGraph', () => {
     expect(borrow[0]).toMatchObject({ source: 'sh:p:a', target: `a:project:${B}\\.claude\\agents\\ds.md` });
   });
 
-  it('põe cada sessão como funcionário na sala do projeto, com o custo dela', () => {
+  it('conversas sem ficha viram um funcionário fantasma por projeto, com o custo somado', () => {
     const summary = { usd: 10, today: 1, last7d: 5, month: 8 };
     const costs: CostReport = {
       generatedAt: '',
@@ -262,13 +262,14 @@ describe('buildGraph', () => {
     const { nodes, edges } = buildGraph(board(), { costs, ...OPEN_A });
 
     const employees = nodes.filter((n) => n.type === 'employee');
-    expect(employees.map((n) => n.id).sort()).toEqual(['e:s-a1', 'e:s-a2', 'e:s-b1']);
-    expect(edges.some((e) => e.source === 'p:a' && e.target === 'e:s-a1' && e.data?.kind === 'contains')).toBe(true);
+    expect(employees.map((n) => n.id).sort()).toEqual(['g:a', 'g:b']);
+    expect(edges.some((e) => e.source === 'p:a' && e.target === 'g:a' && e.data?.kind === 'contains')).toBe(true);
 
-    const a1 = nodes.find((n) => n.id === 'e:s-a1');
+    const a1 = nodes.find((n) => n.id === 'g:a');
+    expect(a1?.type === 'employee' && a1.data.ghost?.map((x) => x.id).sort()).toEqual(['s-a1', 's-a2']);
     expect(a1?.type === 'employee' && a1.data.costUsd).toBe(7.5);
-    const a2 = nodes.find((n) => n.id === 'e:s-a2');
-    expect(a2?.type === 'employee' && a2.data.costUsd).toBeNull();
+    const b1 = nodes.find((n) => n.id === 'g:b');
+    expect(b1?.type === 'employee' && b1.data.costUsd).toBeNull();
     const ds = nodes.find((n) => n.type === 'agent' && n.data.agent.filePath.startsWith(A));
     // Único agent com consumo: 100% dos subagents. Funcionário: 7,5 de 10 no total.
     expect(ds?.type === 'agent' && ds.data.cost).toEqual({ usd: 2, runs: 3, share: 1 });
@@ -290,8 +291,8 @@ describe('buildGraph', () => {
     expect(header.type === 'project' && header.data.header.sideAt).toBeGreaterThan(0);
     expect(pos(`a:project:${A}\\.claude\\agents\\ds.md`).y).toBeGreaterThan(pos('p:a').y);
     // Funcionário abaixo do projeto, ligado da base do projeto ao topo dele.
-    expect(pos('e:s-a1').y).toBeGreaterThan(pos('p:a').y);
-    expect(edges.find((e) => e.source === 'p:a' && e.target === 'e:s-a1')).toMatchObject({ sourceHandle: 'b', targetHandle: 't', data: { kind: 'contains' } });
+    expect(pos('g:a').y).toBeGreaterThan(pos('p:a').y);
+    expect(edges.find((e) => e.source === 'p:a' && e.target === 'g:a')).toMatchObject({ sourceHandle: 'b', targetHandle: 't', data: { kind: 'contains' } });
     // Recursos: coluna à direita, encostada na borda da sala, abaixo do cabeçalho. A linha tracejada
     // desce do cabeçalho (alça `sd`) para o primeiro e segue de um para o outro (estante aberta primeiro).
     const ds = nodes.find((n) => n.type === 'agent' && n.data.agent.filePath.startsWith(A))!;
@@ -313,8 +314,8 @@ describe('buildGraph', () => {
     const open = buildGraph(board(), {});
     const folded = buildGraph(board(), { collapsedRooms: ['p:a'] });
     const ids = (g: typeof open) => g.nodes.map((n) => n.id);
-    expect(ids(open)).toContain('e:s-a1');
-    expect(ids(folded)).not.toContain('e:s-a1');
+    expect(ids(open)).toContain('g:a');
+    expect(ids(folded)).not.toContain('g:a');
     expect(folded.edges.some((e) => e.source === 'p:a' || e.target === 'p:a')).toBe(false);
     const header = folded.nodes.find((n) => n.id === 'p:a')!;
     const room = folded.nodes.find((n) => n.id === 'r:p:a')!;
@@ -322,7 +323,7 @@ describe('buildGraph', () => {
     expect(header.type === 'project' && header.data.header).toMatchObject({ collapsed: true, resources: 9 });
     expect(room.height).toBe(header.height);
     // As outras salas continuam abertas.
-    expect(ids(folded)).toContain('e:s-b1');
+    expect(ids(folded)).toContain('g:b');
   });
 
   it('git no cabeçalho: o estado do projeto chega ao nó', () => {
@@ -383,7 +384,7 @@ describe('buildGraph', () => {
     const { nodes, edges } = buildGraph(b, { costs });
 
     // As duas sessões do chefe viram um funcionário só.
-    expect(nodes.some((n) => n.id === 'e:s-a1' || n.id === 'e:s-a2')).toBe(false);
+    expect(nodes.some((n) => n.id === 'g:a')).toBe(false); // sem conversa solta, sem fantasma
     const chefe = nodes.find((n) => n.id === 'h:a:chefe');
     expect(chefe?.type === 'employee' && chefe.data.session?.id).toBe('s-a1');
     expect(chefe?.type === 'employee' && chefe.data.costUsd).toBe(3);
@@ -399,15 +400,19 @@ describe('buildGraph', () => {
     const hidden = buildGraph(board(), { archived });
     const ids = hidden.nodes.map((n) => n.id);
     expect(ids).not.toContain('p:b');
-    expect(ids).not.toContain('e:s-b1'); // funcionários de projeto arquivado somem junto
-    expect(ids).not.toContain('e:s-a2');
-    expect(ids).toContain('e:s-a1');
+    expect(ids).not.toContain('g:b'); // funcionários de projeto arquivado somem junto
+    const ghost = hidden.nodes.find((n) => n.id === 'g:a');
+    expect(ghost?.type === 'employee' && ghost.data.ghost?.map((x) => x.id)).toEqual(['s-a1']);
 
     const shown = buildGraph(board(), { archived, showArchived: true });
     const b = shown.nodes.find((n) => n.id === 'p:b');
     expect(b?.type === 'project' && b.data.archived).toBe(true);
-    const a2 = shown.nodes.find((n) => n.id === 'e:s-a2');
-    expect(a2?.type === 'employee' && a2.data.archived).toBe(true);
+    const a = shown.nodes.find((n) => n.id === 'g:a');
+    expect(a?.type === 'employee' && a.data.ghost?.map((x) => x.id).sort()).toEqual(['s-a1', 's-a2']);
+    expect(a?.type === 'employee' && a.data.archived).toBe(false); // só arquivado com todas as conversas arquivadas
+    const onlyArchived = buildGraph(board(), { archived: { projects: [], sessions: ['s-a1', 's-a2'] }, showArchived: true });
+    const all = onlyArchived.nodes.find((n) => n.id === 'g:a');
+    expect(all?.type === 'employee' && all.data.archived).toBe(true);
   });
 
   it('marca como ativa só a linha que chega a um funcionário trabalhando numa tarefa delegada', () => {
@@ -418,7 +423,7 @@ describe('buildGraph', () => {
     expect(buildGraph(b, {}).edges.filter((e) => e.data?.active)).toEqual([]);
     b.live = [{ ...working, delegated: true }];
     const active = buildGraph(b, {}).edges.filter((e) => e.data?.active);
-    expect(active.map((e) => e.target)).toEqual(['e:s-a1']);
+    expect(active.map((e) => e.target)).toEqual(['g:a']);
     expect(active[0]?.data?.kind).toBe('contains');
   });
 
@@ -435,7 +440,7 @@ describe('buildGraph', () => {
     // Só o agent que existe no quadro ganha linha (Explore é embutido); o do projeto A, não o emprestado em B.
     // Com muitos itens, o agent está guardado na estante fechada da sala: a linha vai até ela.
     expect(d).toHaveLength(1);
-    expect(d[0]).toMatchObject({ source: 'e:s-a1', target: 'sh:p:a', data: { kind: 'delegates', active: true }, sourceHandle: 'ro', targetHandle: 'li' });
+    expect(d[0]).toMatchObject({ source: 'g:a', target: 'sh:p:a', data: { kind: 'delegates', active: true }, sourceHandle: 'ro', targetHandle: 'li' });
   });
 
   it('anexa só as sessões vivas do projeto', () => {
@@ -478,14 +483,15 @@ describe('buildGraph', () => {
     expect(proj(graph([]), 'p:a')?.awaiting).toBe(0);
   });
 
-  it('sessão solta com item na caixa destaca o próprio cartão', () => {
+  it('conversa solta com item na caixa destaca o fantasma, que mostra a conversa viva', () => {
     const b = board();
     b.live = [{ sessionId: 's-a2', pid: 8, cwd: A, name: null, status: 'idle', alive: true, entrypoint: null, kind: null, startedAt: null, statusUpdatedAt: null }];
     const item: InboxItem = { id: 'error:s-a2', kind: 'error', projectId: 'a', projectName: 'a', sessionId: 's-a2', staffId: null, name: 'sessão', summary: 'erro', at: null };
     const { nodes } = buildGraph(b, { inbox: [item] });
-    const n = nodes.find((x) => x.id === 'e:s-a2');
+    const n = nodes.find((x) => x.id === 'g:a');
     expect(n?.type === 'employee' && n.data.needsYou).toBe(true);
-    const other = nodes.find((x) => x.id === 'e:s-a1');
+    expect(n?.type === 'employee' && n.data.session?.id).toBe('s-a2');
+    const other = buildGraph(b, { inbox: [] }).nodes.find((x) => x.id === 'g:a');
     expect(other?.type === 'employee' && other.data.needsYou).toBe(false);
   });
 });

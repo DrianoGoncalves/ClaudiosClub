@@ -4,6 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline/promises';
 import { getAuthStatus } from '../server/auth';
 import { openTerminal } from '../server/terminal';
+import { DAEMON_BUNDLE, SERVER_BUNDLE, bundle } from './bundle';
 import {
   DAEMON,
   DAILY,
@@ -62,7 +63,7 @@ function run(): void {
     process.exit(1);
   }
   openUrl(url);
-  const server = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
+  const server = spawn(process.execPath, [SERVER_BUNDLE], {
     cwd: ROOT,
     env: { ...process.env, MYCO_PORT: String(port) },
     stdio: 'inherit',
@@ -90,8 +91,13 @@ async function start(opts: { offerMod: boolean }): Promise<void> {
   fs.mkdirSync(RUN_DIR, { recursive: true });
   fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
   // O vigia recebe o log como saída e segue sozinho: não fica preso a este terminal.
+  // Direto pelo pacote quando dá. Pelo .ts o vigia também se troca por ele, mas sobra um processo zumbi do tsx.
+  const daemon = await bundle('scripts/daemon.ts', DAEMON_BUNDLE).then(
+    () => [DAEMON_BUNDLE],
+    () => ['--import', 'tsx', DAEMON],
+  );
   const log = fs.openSync(LOG_FILE, 'a');
-  const child = spawn(process.execPath, ['--import', 'tsx', DAEMON, '--port', String(port)], {
+  const child = spawn(process.execPath, [...daemon, '--port', String(port)], {
     cwd: ROOT,
     detached: true,
     stdio: ['ignore', log, log],

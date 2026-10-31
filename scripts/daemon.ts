@@ -1,6 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { DAEMON_BUNDLE, SERVER_BUNDLE, bundle, bundleStale } from './bundle';
 import { BUILT, LOG_FILE, PID_FILE, ROOT, RUN_DIR, STOP_FILE, appendLog, portFrom, runningDaemon, writeLogSnapshot } from './lib';
 
 // Vigia do Claudio’s Club: sobe o servidor sem janela, guarda a saída em ~/.myco/logs/server.log e religa sozinho se
@@ -17,6 +18,17 @@ let stopping = false;
 function log(line: string): void {
   appendLog('vigia', line);
   void writeLogSnapshot();
+}
+
+// Rodando do .ts (tsx), o vigia se troca pelo pacote dist/daemon.mjs no mesmo processo (mesmo PID) e fica no ar
+// sem o tsx. Sem process.execve (Windows) ou sem conseguir gerar o pacote, segue pelo tsx mesmo.
+if (import.meta.filename.endsWith('.ts') && process.execve) {
+  try {
+    if (bundleStale(DAEMON_BUNDLE)) await bundle('scripts/daemon.ts', DAEMON_BUNDLE);
+    process.execve(process.execPath, [process.execPath, DAEMON_BUNDLE, ...process.argv.slice(2)]);
+  } catch (err) {
+    log(`o vigia segue pelo tsx (sem o pacote: ${err instanceof Error ? err.message : String(err)})`);
+  }
 }
 
 /** Arquivos de uma pasta, em todos os níveis. */
@@ -37,10 +49,21 @@ function clientChanged(): boolean {
   return sources.some((f) => (fs.statSync(f, { throwIfNoEntry: false })?.mtimeMs ?? 0) > since);
 }
 
+/** Como subir o servidor: o pacote, refeito se o código mudou; sem ele (erro no build), pelo tsx como antes. */
+async function serverArgs(): Promise<string[]> {
+  if (bundleStale(SERVER_BUNDLE)) {
+    await bundle('server/index.ts', SERVER_BUNDLE).catch((err: unknown) =>
+      log(`o pacote do servidor falhou; sobe pelo tsx: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  }
+  return bundleStale(SERVER_BUNDLE) ? ['--import', 'tsx', 'server/index.ts'] : [SERVER_BUNDLE];
+}
+
 /** Roda o servidor até ele sair; devolve o código de saída. */
-function runServer(): Promise<number | null> {
+async function runServer(): Promise<number | null> {
+  const args = await serverArgs();
   return new Promise((resolve) => {
-    child = spawn(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
+    child = spawn(process.execPath, args, {
       cwd: ROOT,
       env: process.env,
       stdio: 'inherit',

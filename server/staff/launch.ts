@@ -1,7 +1,7 @@
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { ServerInfo, StaffProfile } from '../../shared/model';
 import { defaultLocations } from '../adapters/claude/paths';
+import { ROOT } from '../root';
 import { renderFicha, systemPrompt, type FichaContext, type TeamMember } from './ficha';
 import { buildMcpConfig } from './mcp';
 import { ensurePlaybookAgents } from './playbookAgents';
@@ -106,7 +106,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   };
 }
 
-const DELIVERY_HOOK = fileURLToPath(new URL('../../scripts/hooks/delivery-check.mjs', import.meta.url));
+const DELIVERY_HOOK = path.join(ROOT, 'scripts', 'hooks', 'delivery-check.mjs');
 
 /**
  * Hooks do Claudio’s Club em todo funcionário (`--settings`, somados aos do usuário e do projeto): os agents

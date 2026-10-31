@@ -163,6 +163,8 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     try {
       const r = await withUsageConfirm((force) => api.chatSend(projectId, { sessionId, staffId, text, force, priority, images, files }));
       if (!r) return false;
+      // O servidor encerrou o órfão para mandar a mensagem: a conversa já está aqui.
+      if (elsewhere?.orphan) setElsewhere(null);
       if (r.sessionId !== sessionId) {
         // Seguiu numa conversa nova (o assunto da anterior tinha fechado): a tela passa para ela.
         if (sessionId) {
