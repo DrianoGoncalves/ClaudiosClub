@@ -54,19 +54,19 @@ O orquestrador quebra o trabalho e passa cada parte para quem é da área. Sozin
 <td valign="top">
 
 ### 💬 O app do Claude, aqui dentro
-Modelo, esforço e autonomia na conversa, `/` comandos e skills, `@` arquivos, prints e PDFs, lista de tarefas, voltar no tempo, duplicar conversa, MCPs e agents em segundo plano.
+Modelo, esforço e autonomia na conversa (também nas sem ficha), `/` comandos e skills, `@` arquivos, prints e PDFs, lista de tarefas, voltar no tempo, duplicar conversa, trazer uma conversa aberta fora (vira cópia aqui), MCPs e agents em segundo plano.
 
 </td>
 <td valign="top">
 
 ### 📋 Kanban com fila
-Uma tarefa por vez por funcionário: a próxima começa quando a atual vai para revisão. Cada um trabalha na sua worktree, e a entrega vira commit, com diff, testes e mesclar a um clique. A entrega volta para a conversa de quem pediu, já com os testes rodados.
+Uma tarefa por vez por funcionário: a próxima começa quando a atual vai para revisão. Cada um trabalha na sua worktree, e a entrega vira commit, com diff, testes e mesclar a um clique. A entrega volta para a conversa de quem pediu, já com os testes rodados. Opcional: o Codex dá uma segunda opinião na revisão, e o motor continua sendo o Claude.
 
 </td>
 <td valign="top">
 
 ### 🔔 Precisa de mim
-Permissões, planos e as perguntas que o funcionário deixou no fim da resposta, numa caixa só, com contador por aba, no título da página e notificação do sistema quando alguém termina.
+Permissões, planos e as perguntas que o funcionário deixou no fim da resposta, numa caixa só, com o título da conversa, contador por aba, no título da página e notificação do sistema quando alguém termina.
 
 </td>
 </tr>
@@ -86,7 +86,7 @@ Senha em comando, URL com senha e chaves conhecidas (Anthropic, OpenAI, GitHub, 
 <td valign="top">
 
 ### ⚡ Simples ou Avançado
-No Simples: *Rápido / Equilibrado / Caprichado* e *Pede antes / Faz sozinho*. No Avançado, cada detalhe. E `Ctrl+K` leva a qualquer funcionário, tarefa ou conversa.
+Começa no Simples: *Rápido / Equilibrado / Caprichado* e *Pede antes / Faz sozinho*. No Avançado, cada detalhe. E `Ctrl+K` leva a qualquer funcionário, tarefa ou conversa.
 
 </td>
 </tr>
@@ -132,7 +132,7 @@ Quem pediu fica sabendo quando a parte dele termina. Funcionários que um gestor
 
 <img src="docs/img/barra.png" alt="Barra do topo: uso de 5 horas e 7 dias, precisa de mim, ranking e config" width="640">
 
-**"Ainda posso pedir mais?"** A barra do topo mostra o uso da assinatura e quanto falta para o reset, quantas coisas esperam por você e o ranking de quem mais gastou.
+**"Ainda posso pedir mais?"** A barra do topo mostra o uso da assinatura e quanto falta para o reset, quantas coisas esperam por você e o ranking: quem mais gastou (funcionários e agents), mais duas abas de modelos para código, por índice (de código; de inteligência, se a API não trouxer o de código) e por preço, com dados do Artificial Analysis.
 
 <img src="docs/img/sala.png" alt="A sala de um projeto: o orquestrador com a equipe de design system e infraestrutura logo abaixo" width="100%">
 
@@ -173,13 +173,17 @@ cd ClaudiosClub
 npm run setup
 ```
 
-Uma vez só: instala as dependências, o Claude Code e o login se faltarem, registra o botão da página de início e o atalho no menu, oferece as barras de cota e sobe o Claudio's Club em **http://claudio.localhost:4848**. Depois disso, tudo pelo navegador: com ele parado, a mesma porta mostra a página de início, com o checklist, o log e o botão **Iniciar**. Com tudo pronto, ele sobe sem janela; se faltar algo, abre um terminal que resolve, sobe e fecha sozinho.
+Uma vez só: instala as dependências, o Claude Code e o login se faltarem, registra o botão da página de início e o atalho no menu, oferece as barras de cota e sobe o Claudio's Club em **http://claudio.localhost:4848**. Depois disso, tudo pelo navegador: com ele parado, a mesma porta mostra a página de início, com o checklist, um log recolhível e o botão **Iniciar**. Com tudo pronto, ele sobe sem janela; se faltar algo, abre um terminal que resolve, sobe e fecha sozinho.
 
 Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code aparecem sozinhos.
+
+**Opcional: ranking de modelos.** Crie uma chave grátis em [artificialanalysis.ai/api-reference](https://artificialanalysis.ai/api-reference) e ponha `ARTIFICIAL_ANALYSIS_API_KEY=<sua chave>` no `.env` (o formato está em `.env.example`). Sem ela tudo funciona; o ranking só mostra como configurar.
 
 | Para | Comando |
 | --- | --- |
 | Preparar tudo e subir (primeira vez, ou depois de atualizar) | `npm run setup` |
+| Ver o que falta para rodar (só leitura) | `npm run doctor` |
+| Subir em primeiro plano, no terminal (Ctrl+C para parar) | `npm run daily` |
 | Subir em segundo plano · parar · ver o estado e o log | `npm run daily:start` · `npm run daily:stop` · `npm run daily:status` |
 | Subir junto com o sistema, em segundo plano | `npm run autostart` |
 | Só registrar o botão da página de início e o atalho no menu | `npm run launcher` |
@@ -189,7 +193,7 @@ Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro)
 
 ### Atualizações e versões
 
-O Claudio's Club avisa quando sai uma **versão nova** (aparece *Nova versão* no topo do quadro) e se atualiza com um clique. Ele segue as versões publicadas, não o `main`: o que é mesclado só chega a quem usa quando a versão sai.
+O Claudio's Club avisa quando sai uma **versão nova** (aparece *Nova versão* no topo do quadro) e se atualiza com um clique, só até a tag daquela versão. Ele segue as versões publicadas, não o `main`: o que é mesclado só chega a quem usa quando a versão sai.
 
 Contribuições entram por pull request no `main`, com os testes do CI passando. Para publicar uma versão (mantenedor), no `main` atualizado:
 

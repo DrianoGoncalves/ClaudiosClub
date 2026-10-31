@@ -1,4 +1,6 @@
 # Tipos, testes e build em todo PR e no main. A regra do main no GitHub exige o job "test" verde para mesclar.
+# O job roda sempre (sem paths-ignore: o check ficaria sem reportar e travaria PR só de docs). Se o que mudou é só
+# documentação (*.md, docs/** e LICENSE), o step "changes" marca code=false e pula os passos pesados: o job fica verde.
 name: CI
 
 on:
@@ -19,11 +21,43 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          ZERO=0000000000000000000000000000000000000000
+          BASE="$PUSH_BEFORE"
+          if [ "$EVENT" = "pull_request" ]; then BASE="$PR_BASE"; fi
+          code=true
+          motivo="sem base para comparar"
+          if [ -n "$BASE" ] && [ "$BASE" != "$ZERO" ] && files=$(git diff --name-only "$BASE" HEAD); then
+            code=false
+            motivo="sem mudanças fora da documentação"
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              case "$f" in
+                *.md | docs/* | LICENSE) ;;
+                *) code=true; motivo="mudou fora da documentação: $f"; break ;;
+              esac
+            done <<< "$files"
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Decisão: code=$code ($motivo)"
       - uses: actions/setup-node@v4
+        if: steps.changes.outputs.code == 'true'
         with:
           node-version: 22
           cache: npm
-      - run: npm ci --no-audit --no-fund
-      - run: npm run typecheck
-      - run: npm test
-      - run: npx vite build
+      - if: steps.changes.outputs.code == 'true'
+        run: npm ci --no-audit --no-fund
+      - if: steps.changes.outputs.code == 'true'
+        run: npm run typecheck
+      - if: steps.changes.outputs.code == 'true'
+        run: npm test
+      - if: steps.changes.outputs.code == 'true'
+        run: npx vite build
