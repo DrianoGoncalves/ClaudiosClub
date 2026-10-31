@@ -173,7 +173,10 @@ cd ClaudiosClub
 npm run setup
 ```
 
-Uma vez só: instala as dependências, o Claude Code e o login se faltarem, registra o botão da página de início e o atalho no menu, oferece as barras de cota e sobe o Claudio's Club em **http://claudio.localhost:4848**. Depois disso, tudo pelo navegador: com ele parado, a mesma porta mostra a página de início, com o checklist, um log recolhível e o botão **Iniciar**. Com tudo pronto, ele sobe sem janela; se faltar algo, abre um terminal que resolve, sobe e fecha sozinho.
+Uma vez só: instala as dependências (e refaz com `npm ci` se o `node_modules` estiver incompleto), o Claude Code e o login se faltarem, registra o botão da página de início e o atalho no menu, oferece as barras de cota e sobe o Claudio's Club em **http://claudio.localhost:4848**. Depois disso, tudo pelo navegador: com ele parado, a mesma porta mostra a página de início, com o checklist, um log recolhível e o botão **Iniciar**. Com tudo pronto, ele sobe sem janela; se faltar algo, abre um terminal que resolve, sobe e fecha sozinho.
+
+> [!IMPORTANT]
+> O botão **Iniciar** depende do link `myco://`, que só existe depois do `npm run setup` (ou do `npm run launcher`). Sem ele o botão não faz nada: rode o setup uma vez. Na página de início, cada passo com problema mostra o comando de correção e um botão **Copiar**; a página nunca executa comandos, quem roda é você, no terminal.
 
 Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code aparecem sozinhos.
 
@@ -190,6 +193,17 @@ Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro)
 | Desenvolver o Claudio's Club (recarrega a cada arquivo salvo, em http://claudio.localhost:5173) | `npm run dev` |
 | Barras de consumo 5 h / 7 d (instala o mod `myco-tap`) | `npm run mod:install` |
 | Testes e tipos | `npm test` · `npm run typecheck` |
+| Conferir o que falta para rodar (Node, Git, Claude Code, login, dependências, build, botão Iniciar) | `npm run doctor` |
+
+### Não abre ou a tela fica em branco
+
+Rode `npm run doctor`: ele aponta o passo com problema e o comando de correção.
+
+| Sintoma | Causa provável | Correção |
+| --- | --- | --- |
+| Tela em branco, sem erro no console | O build aponta para arquivos de `dist/client/assets` que não existem (build interrompido ou arquivos apagados). O servidor responde 404 para eles. | `npm run build` |
+| O build falha com `Failed to resolve entry for package` | `node_modules` incompleto (arquivos `.js` apagados, instalação interrompida). `npm install` não repara. | `npm ci`, depois `npm run build` |
+| O botão **Iniciar** não faz nada | O link `myco://` não está registrado neste computador | `npm run launcher` (ou `npm run setup`) |
 
 ### Atualizações e versões
 

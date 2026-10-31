@@ -2,6 +2,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ROOT } from '../server/root';
 import { logEntries, logScript, readTail } from '../server/startPage';
 
@@ -16,6 +17,7 @@ export const RUN_DIR = path.join(MYCO_HOME, 'run');
 export const PID_FILE = path.join(RUN_DIR, 'daemon.pid');
 export const STOP_FILE = path.join(RUN_DIR, 'daemon.stop');
 export const BUILT = path.join(ROOT, 'dist', 'client', 'index.html');
+export const VITE = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
 export const DAEMON = path.join(ROOT, 'scripts', 'daemon.ts');
 export const DAILY = path.join(ROOT, 'scripts', 'daily.ts');
 export const START_PAGE = path.join(ROOT, 'scripts', 'start.html');
@@ -27,6 +29,48 @@ export const CLAUDE_HOME = process.env.MYCO_CLAUDE_HOME ?? path.join(os.homedir(
 /** O mod myco-tap (cota 5h/7d) está instalado ou já gravou dados? */
 export function modInstalled(): boolean {
   return fs.existsSync(path.join(CLAUDE_HOME, 'mods', 'myco-tap', 'hooks', 'register.ts')) || fs.existsSync(path.join(MYCO_HOME, 'usage.json'));
+}
+
+/** Arquivos de uma pasta, em todos os níveis. */
+export function filesUnder(dir: string): string[] {
+  return (fs.readdirSync(dir, { recursive: true }) as string[]).map((f) => path.join(dir, f)).filter((f) => fs.statSync(f).isFile());
+}
+
+/**
+ * Dependências cujo ponto de entrada sumiu ou não resolve (node_modules pela metade: arquivos apagados, instalação
+ * interrompida). Só o que o app importa mais o que roda os scripts; `.package-lock.json` sozinho não percebe isso.
+ */
+export function brokenDeps(): string[] {
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as { dependencies?: Record<string, string> };
+  return [...Object.keys(pkg.dependencies ?? {}), 'vite', 'tsx'].filter((name) => {
+    try {
+      return !fs.existsSync(fileURLToPath(import.meta.resolve(name)));
+    } catch (err) {
+      // Pacote só com CSS/fontes (sem entrada JS) não é quebra: só falta de pasta ou de arquivo é.
+      return (err as NodeJS.ErrnoException).code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED';
+    }
+  });
+}
+
+/** Arquivos de /assets que o index.html do build pede e não existem em dist/client (build interrompido ou apagado). */
+export function brokenBuild(): string[] {
+  if (!fs.existsSync(BUILT)) return [];
+  const html = fs.readFileSync(BUILT, 'utf8');
+  const refs = [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1]!);
+  return refs.filter((ref) => !fs.existsSync(path.join(path.dirname(BUILT), ref)));
+}
+
+/** O cliente mudou desde o último build? (código, dependências ou config do Vite) */
+export function clientChanged(): boolean {
+  if (!fs.existsSync(BUILT) || brokenBuild().length > 0) return true;
+  const since = fs.statSync(BUILT).mtimeMs;
+  const sources = [
+    ...filesUnder(path.join(ROOT, 'client')),
+    ...filesUnder(path.join(ROOT, 'shared')),
+    path.join(ROOT, 'vite.config.ts'),
+    path.join(ROOT, 'package-lock.json'),
+  ];
+  return sources.some((f) => (fs.statSync(f, { throwIfNoEntry: false })?.mtimeMs ?? 0) > since);
 }
 
 /** Uma linha no log do Claudio’s Club, com hora local e origem: [AAAA-MM-DD HH:MM:SS] [origem] texto. */

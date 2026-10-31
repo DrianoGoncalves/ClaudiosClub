@@ -39,6 +39,8 @@ describe('ChatProcess', () => {
     chat.start();
     chat.subscribe((e) => events.push(e));
     expect(f.spawned()).toMatchObject({ cmd: 'claude', cwd: 'C:\\proj', args: [...STREAM_FLAGS, '--resume', 's1'] });
+    // Sem a opção, trocar para "sem travas" com o processo aberto é recusado e ele segue pedindo.
+    expect(STREAM_FLAGS).toContain('--allow-dangerously-skip-permissions');
 
     chat.send('Olá');
     await tick();

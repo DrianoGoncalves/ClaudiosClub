@@ -573,6 +573,7 @@ function ContextSwitchPicker({ value, onConfig }: { value: ContextSwitch; onConf
   return (
     <>
       <select
+        className="setting-select"
         value={value}
         aria-label={t('office.ctxTitle')}
         onChange={async (e) => {
@@ -614,7 +615,7 @@ function UiLevelPicker({ value, onChange }: { value: UiLevel; onChange: (level: 
           ['advanced', t('toolbar.levelAdvanced')],
         ] as const
       ).map(([level, label]) => (
-        <button key={level} type="button" className="btn-toggle" aria-pressed={value === level} disabled={busy} onClick={() => void pick(level)}>
+        <button key={level} type="button" className="btn-secondary btn-toggle" aria-pressed={value === level} disabled={busy} onClick={() => void pick(level)}>
           {label}
         </button>
       ))}
@@ -661,7 +662,9 @@ function ServerControls() {
 
   const act = async (action: 'stop' | 'restart') => {
     // Na hora do clique, não de quando o menu abriu: quem está trabalhando agora perde o que faz.
-    const working = await api.serverInfo().then((i) => i.working, () => null);
+    const current = await api.serverInfo().catch(() => null);
+    const working = current?.working;
+    const startedAt = current?.startedAt;
     const cut = [
       working?.busy ? t('toolbar.cutBusy', { n: working.busy }) : '',
       working?.background ? t('toolbar.cutBackground', { n: working.background }) : '',
@@ -689,11 +692,12 @@ function ServerControls() {
       setState('stopped');
       return;
     }
-    // Reiniciando: espera ele sair e voltar, e recarrega a página.
-    await new Promise((r) => setTimeout(r, 2500));
-    for (let i = 0; i < 60; i++) {
-      if (await fetch('/api/health').then((r) => r.ok, () => false)) return window.location.reload();
+    // Reiniciando: o servidor gera o build do cliente antes de sair, então o antigo segue no ar
+    // por até ~2 min. Só recarrega quando o startedAt mudou (servidor novo), senão cairia no antigo.
+    for (let i = 0; i < 120; i++) {
       await new Promise((r) => setTimeout(r, 1500));
+      const now = await api.serverInfo().catch(() => null);
+      if (now && now.startedAt !== startedAt) return window.location.reload();
     }
     setError(t('toolbar.serverNotBack'));
     setState('idle');

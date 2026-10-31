@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { StaffProfile } from '../shared/model';
-import { TaskService } from '../server/tasks';
+import { parseVerdict, TaskService } from '../server/tasks';
 import { cleanRunDir } from '../server/runCleanup';
 
 let root: string;
@@ -304,5 +304,161 @@ describe('fila por funcionário', () => {
     await finish('s-1');
     expect(sent.at(-1)!.text).toContain('[Tarefa "C"]');
     expect((await svc.list('p'))!.find((t) => t.id === a.id)!.history.map((h) => h.note)).toContain('ajuste guardado enviado');
+  });
+});
+
+describe('revisão automática', () => {
+  /** Ana faz a tarefa, Rui revisa. `texts` diz o que cada conversa respondeu por último. */
+  function reviewFlow(dirName: string, extra: Partial<StaffProfile> = {}) {
+    const dir = path.join(root, dirName);
+    const sent: Array<{ staffId: string; text: string; session: string }> = [];
+    const delivered: Array<{ sessionId: string; text: string }> = [];
+    const texts = new Map<string, string>();
+    let n = 0;
+    const people: Record<string, StaffProfile> = {
+      'ana-1': { id: 'ana-1', name: 'Ana', autonomy: 'acceptEdits', worktree: false, servers: [], ...extra } as unknown as StaffProfile,
+      'rev-1': { id: 'rev-1', name: 'Rui', autonomy: 'manual', worktree: false, servers: [] } as unknown as StaffProfile,
+    };
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => people[id] ?? null,
+      send: async (_p, staffId, text) => {
+        const session = `s-${++n}`;
+        sent.push({ staffId, text, session });
+        return session;
+      },
+      branchFor: async () => null,
+      lastText: (sessionId) => texts.get(sessionId) ?? null,
+      sendTo: async (_p, sessionId, _staffId, text) => {
+        delivered.push({ sessionId, text });
+        return sessionId;
+      },
+    });
+    const make = async (title: string, reviewerId: string | null = 'rev-1') => (await svc.create('p', { title, staffId: 'ana-1', reviewerId }))!;
+    const current = async () => (await svc.list('p'))![0]!;
+    return { svc, dir, sent, delivered, texts, make, current };
+  }
+
+  it('aprovada pelo revisor vai para pronto sozinha; ao entregar, ele é chamado com o veredito na primeira linha', async () => {
+    const { svc, sent, texts, make, current } = reviewFlow('auto-ok');
+    const t = await make('Tabela paginada');
+    expect(t).toMatchObject({ reviewerId: 'rev-1' });
+    await svc.start('p', t.id); // s-1
+    await svc.onTurnDone('s-1'); // entregou: o Rui revisa sozinho (s-2)
+    expect(await current()).toMatchObject({ status: 'review', reviewRounds: 1, review: { staffId: 'rev-1', sessionId: 's-2' } });
+    expect(sent.at(-1)).toMatchObject({ staffId: 'rev-1', session: 's-2' });
+    expect(sent.at(-1)!.text).toContain('APROVADO ou REPROVADO na primeira linha');
+
+    texts.set('s-2', '**APROVADO**\n\nPaginação e testes conferidos.');
+    await svc.onTurnDone('s-2');
+    const done = await current();
+    expect(done).toMatchObject({ status: 'done', review: { verdict: 'approved' } });
+    expect(done.history.at(-1)).toMatchObject({ status: 'done', by: 'auto', note: 'aprovada por Rui' });
+  });
+
+  it('aprovada, mas o código ainda está numa worktree por mesclar: fica em revisão, com a nota', async () => {
+    const { svc, dir, texts, make, current } = reviewFlow('auto-wt', { worktree: true });
+    // A worktree dela: a pasta com o arquivo `.git` (é assim que o Claudio’s Club acha a worktree).
+    const wt = path.join(dir, '.claude', 'worktrees', 'myco-ana-1');
+    await fs.mkdir(wt, { recursive: true });
+    await fs.writeFile(path.join(wt, '.git'), 'gitdir: nao-existe\n');
+    const t = await make('Filtro de datas');
+    await svc.start('p', t.id); // s-1
+    await svc.onTurnDone('s-1'); // s-2
+    texts.set('s-2', 'APROVADO\n\nok');
+    await svc.onTurnDone('s-2');
+    expect(await current()).toMatchObject({ status: 'review', review: { verdict: 'approved' } });
+    expect((await current()).history.at(-1)?.note).toBe('aprovada por Rui; falta mesclar');
+  });
+
+  it('reprovada: a tarefa volta para fazendo, a resposta do revisor vai para a conversa de trabalho, e a próxima rodada é pedida quando ela terminar', async () => {
+    const { svc, texts, delivered, make, current } = reviewFlow('auto-no');
+    const t = await make('Botão de exportar');
+    await svc.start('p', t.id); // s-1
+    await svc.onTurnDone('s-1'); // s-2: revisão automática
+    texts.set('s-2', 'REPROVADO\n\nbotao.tsx:12 falta o aria-label');
+    await svc.onTurnDone('s-2');
+    const back = await current();
+    expect(back).toMatchObject({ status: 'doing', review: { verdict: 'rejected' } });
+    expect(back.history.map((h) => h.note)).toContain('reprovada por Rui');
+    expect(delivered).toEqual([{ sessionId: 's-1', text: expect.stringContaining('botao.tsx:12 falta o aria-label') }]);
+
+    await svc.onTurnDone('s-1'); // ajustou e terminou: volta para revisão, e o Rui revisa de novo (s-3)
+    expect(await current()).toMatchObject({ status: 'review', reviewRounds: 2, review: { sessionId: 's-3' } });
+  });
+
+  it('reprovada com ela ocupada com outra tarefa: o ajuste espera na conversa dela, e a tarefa segue em revisão', async () => {
+    const { svc, texts, delivered, make } = reviewFlow('auto-busy');
+    const a = await make('A');
+    const b = await make('B', null);
+    await svc.start('p', a.id); // s-1
+    await svc.onTurnDone('s-1'); // A em revisão; o Rui revisa (s-2)
+    await svc.start('p', b.id); // a Ana está livre (A em revisão não ocupa): B começa (s-3)
+    texts.set('s-2', 'REPROVADO\n\nfalta o teste da paginação');
+    await svc.onTurnDone('s-2');
+    const held = (await svc.list('p'))!.find((x) => x.id === a.id)!;
+    expect(held).toMatchObject({ status: 'review', held: [expect.objectContaining({ text: expect.stringContaining('falta o teste da paginação') })] });
+    expect(held.held![0]!.reason).toBe('espera Ana terminar “B”');
+    expect(delivered).toEqual([]);
+
+    await svc.onTurnDone('s-3'); // B termina: a fila da Ana anda, e o ajuste da A vai primeiro
+    await svc.tick();
+    expect(delivered).toEqual([{ sessionId: 's-1', text: expect.stringContaining('falta o teste da paginação') }]);
+  });
+
+  it('no máximo 3 rodadas automáticas: depois, a tarefa fica com você e a entrega não pede mais revisão', async () => {
+    const { svc, sent, texts, delivered, make, current } = reviewFlow('auto-limit');
+    const t = await make('Relatório');
+    await svc.start('p', t.id); // s-1
+    await svc.onTurnDone('s-1'); // rodada 1 (s-2)
+    for (const round of [1, 2, 3]) {
+      texts.set(`s-${round + 1}`, `REPROVADO\n\najuste ${round}`);
+      await svc.onTurnDone(`s-${round + 1}`); // reprovou: volta para fazendo
+      await svc.onTurnDone('s-1'); // ajustou e terminou: vai para revisão
+    }
+    const end = await current();
+    expect(sent.filter((m) => m.staffId === 'rev-1')).toHaveLength(3);
+    expect(delivered).toHaveLength(3);
+    expect(end).toMatchObject({ status: 'review', reviewRounds: 3 });
+    expect(end.history.at(-1)?.note).toBe('limite de 3 revisões automáticas; fica com você');
+  });
+
+  it('revisor: outro funcionário do projeto, que não é quem faz a tarefa, nem na troca', async () => {
+    const { svc, make } = reviewFlow('auto-val');
+    await expect(svc.create('p', { title: 'x', staffId: 'ana-1', reviewerId: 'ana-1' })).rejects.toThrow(/outro funcionário/);
+    await expect(svc.create('p', { title: 'x', staffId: 'ana-1', reviewerId: 'ninguem' })).rejects.toThrow(/revisor não encontrado/);
+    const t = await make('y');
+    await expect(svc.update('p', t.id, { staffId: 'rev-1' })).rejects.toThrow(/outro funcionário/);
+    await expect(svc.update('p', t.id, { reviewerId: 'ana-1' })).rejects.toThrow(/outro funcionário/);
+    expect(await svc.update('p', t.id, { reviewerId: null })).toMatchObject({ reviewerId: null });
+  });
+
+  it('sem revisor marcado, nada muda: entregue fica em revisão; um veredito de revisão pedida à mão só é anotado', async () => {
+    const { svc, sent, texts, make, current } = reviewFlow('auto-none');
+    const t = await make('Sem revisor', null);
+    await svc.start('p', t.id); // s-1
+    await svc.onTurnDone('s-1');
+    expect(sent).toHaveLength(1);
+    expect(await current()).toMatchObject({ status: 'review' });
+    expect((await current()).reviewRounds).toBeUndefined();
+
+    await svc.requestReview('p', t.id, 'rev-1'); // s-2, pedida à mão
+    texts.set('s-2', 'APROVADO');
+    await svc.onTurnDone('s-2');
+    expect(await current()).toMatchObject({ status: 'review', review: { verdict: 'approved' } });
+  });
+
+  it('o veredito é a primeira linha, sem markdown e em maiúsculas; o resto não decide', () => {
+    expect(parseVerdict('**APROVADO**\n\nok')).toBe('approved');
+    expect(parseVerdict('\n  # REPROVADO\n- x')).toBe('rejected');
+    expect(parseVerdict('APROVADO.')).toBe('approved');
+    expect(parseVerdict('APROVADO com ressalvas')).toBeNull();
+    expect(parseVerdict('APROVADO, mas o teste X falha')).toBeNull();
+    expect(parseVerdict('Aprovado')).toBeNull();
+    expect(parseVerdict('Acho que está APROVADO')).toBeNull();
+    expect(parseVerdict('APROVADOS os dois')).toBeNull();
+    expect(parseVerdict('')).toBeNull();
+    expect(parseVerdict(null)).toBeNull();
   });
 });

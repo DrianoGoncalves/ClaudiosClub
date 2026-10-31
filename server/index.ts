@@ -1,7 +1,9 @@
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import { clientChanged, VITE } from '../scripts/lib';
 import { ArtificialAnalysis } from './adapters/artificialAnalysis';
 import { CodexAdapter, CodexError } from './adapters/codex';
 import { ClaudeAdapter } from './adapters/claude';
@@ -39,6 +41,7 @@ import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
 import { copyToLibrary, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill, SkillError } from './skillLibrary';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
+import { listProjectTree, parseWriteBody, ProjectFileError, readProjectFile, writeProjectFile } from './projectFiles';
 import { readUsage } from './usage';
 import { UsageStopError } from './usageStop';
 import { quotaBoost } from './quotaBoost';
@@ -64,10 +67,52 @@ const STARTED_AT = new Date().toISOString();
 /** Novidades do próprio Claudio’s Club no remoto (GitHub). */
 const updater = new SelfUpdater();
 
+/** Tempo máximo do build do cliente antes de um reinício. Estourou, o servidor sai mesmo assim. */
+const BUILD_TIMEOUT_MS = 120_000;
+
+/**
+ * Gera o cliente (vite build, sem checagem de tipos) com este servidor ainda no ar. Assíncrono: o event loop
+ * segue atendendo enquanto o build roda. Devolve se deu certo.
+ */
+function buildClient(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [VITE, 'build'], { cwd: ROOT, stdio: 'inherit', windowsHide: true });
+    const timer = setTimeout(() => {
+      child.kill();
+      resolve(false);
+    }, BUILD_TIMEOUT_MS);
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      resolve(code === 0);
+    });
+    child.on('error', () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+  });
+}
+
+/** Reinício com o vigia: se o cliente mudou, gera o build antes de sair (o vigia então não precisa fazê-lo). */
+async function buildBeforeRestart(): Promise<void> {
+  try {
+    if (!clientChanged()) return;
+    console.log('[servidor] o cliente mudou: gerando antes de reiniciar');
+    if (!(await buildClient())) console.error('[servidor] o build do cliente falhou ou passou de 2 min: reinicio com a versão anterior');
+  } catch (err) {
+    console.error('[servidor] não consegui gerar o cliente antes de reiniciar:', err);
+  }
+}
+
+let leaving = false;
+
 /** Fecha as conversas (sem deixar processos órfãos) e sai. `stop`: o vigia não religa. */
 async function shutdown(stop: boolean) {
-  console.log(`[servidor] ${stop ? 'parando' : 'reiniciando'} a pedido do config`);
+  // Parar grava o arquivo mesmo durante um reinício em curso: o vigia, ao ver o arquivo, não religa.
   if (stop && UNDER_DAEMON) await fs.writeFile(path.join(MYCO_HOME, 'run', 'daemon.stop'), '').catch(() => {});
+  if (leaving) return;
+  leaving = true;
+  console.log(`[servidor] ${stop ? 'parando' : 'reiniciando'} a pedido do config`);
+  if (!stop && UNDER_DAEMON) await buildBeforeRestart();
   await Promise.race([chats.stopAll(), new Promise((r) => setTimeout(r, 5000))]);
   process.exit(0);
 }
@@ -835,6 +880,33 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       return { image: await projectImageUrl(p.id, p.path) };
     },
   ],
+  // ---- arquivos do projeto (aba de arquivos): listar e ler; gravar só pelo Claudio’s Club ----
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/files/tree$`),
+    async ({ params: [id], url }) => {
+      const dir = await projectPathOf(id!);
+      return dir ? listProjectTree(dir, url.searchParams.get('path') ?? '') : null;
+    },
+  ],
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/files/read$`),
+    async ({ params: [id], url }) => {
+      const dir = await projectPathOf(id!);
+      return dir ? readProjectFile(dir, url.searchParams.get('path') ?? '') : null;
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/files/write$`),
+    async ({ params: [id], body, fromBrowser }) => {
+      if (!fromBrowser) throw new ProjectFileError(403, 'arquivos só são gravados pelo Claudio’s Club');
+      const input = parseWriteBody(body);
+      const dir = await projectPathOf(id!);
+      return dir ? writeProjectFile(dir, input) : null;
+    },
+  ],
   ['GET', /^\/api\/account\/rules$/, () => readAccountRules()],
   [
     'POST',
@@ -1064,6 +1136,7 @@ const server = http.createServer(async (req, res) => {
         }
         return send(res, 200, out);
       } catch (err) {
+        if (err instanceof ProjectFileError) return send(res, err.status, { error: err.message, ...err.extra });
         if (err instanceof UsageStopError) return send(res, 409, { error: err.message, code: err.code, hit: err.hit });
         // Mescla recusada (sem testes, teste vermelho, conflito): 409 com o motivo; `no-tests` dá para confirmar.
         if (err instanceof CodeError) return send(res, 409, { error: err.message, code: err.code });
@@ -1361,6 +1434,13 @@ function send(res: http.ServerResponse, status: number, body: unknown) {
 async function serveStatic(pathname: string, res: http.ServerResponse) {
   const requested = path.resolve(CLIENT_DIR, '.' + decodeURIComponent(pathname));
   const inside = requested === CLIENT_DIR || requested.startsWith(CLIENT_DIR + path.sep);
+  // Só rota do app (sem extensão) cai no index.html. Arquivo que falta (ex.: /assets/x.js de um build quebrado) é 404:
+  // devolver HTML no lugar do JS deixava a tela em branco, sem erro nenhum.
+  if (inside && !(await isFile(requested)) && path.extname(pathname) !== '') {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('Arquivo não encontrado.');
+    return;
+  }
   const file = inside && (await isFile(requested)) ? requested : path.join(CLIENT_DIR, 'index.html');
   try {
     const data = await fs.readFile(file);

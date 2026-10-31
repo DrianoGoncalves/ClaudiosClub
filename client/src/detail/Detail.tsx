@@ -219,6 +219,10 @@ export function EmployeePanel(props: {
           >
             {t('detail.newConversationBtn')}
           </button>
+          {/* Duplicar (o nome da conversa vem sozinho da primeira mensagem). */}
+          <button type="button" className="btn-secondary" disabled={!current || convBusy} onClick={() => void duplicate()} title={t('detail.duplicateTitle')}>
+            {t('detail.duplicate')}
+          </button>
         </div>
       )}
       {staff?.temporary && project && (
@@ -227,18 +231,6 @@ export function EmployeePanel(props: {
       {staff?.browser && <BrowserCheck />}
     </>
   );
-  // No "Mais", aba Conversa: duplicar (o nome da conversa vem sozinho da primeira mensagem).
-  const conversationMore = showConvos ? (
-    <button
-      type="button"
-      className="btn-secondary"
-      disabled={!current || convBusy}
-      onClick={() => void duplicate()}
-      title={t('detail.duplicateTitle')}
-    >
-      {t('detail.duplicate')}
-    </button>
-  ) : undefined;
   const enabledRoutines = staff?.routines?.filter((r) => r.enabled).length ?? 0;
   // As abas do funcionário no "Mais". Editar a ficha é um botão só, na aba Ficha.
   const tabs: MoreTab[] = [
@@ -363,7 +355,7 @@ export function EmployeePanel(props: {
       fichaModel={staff?.model ?? null}
       fichaEffort={staff?.effort ?? null}
       top={top}
-      more={{ conversation: conversationMore, tabs }}
+      moreTabs={tabs}
     />
   );
 }
@@ -590,6 +582,7 @@ export function ProjectPanel({
   onNewAgent,
   onEditAgent,
   onTasks,
+  onFiles,
   tasks,
   office,
 }: {
@@ -599,6 +592,8 @@ export function ProjectPanel({
   onEditAgent?: (name: string) => void;
   /** Abre o quadro de tarefas do projeto. */
   onTasks?: () => void;
+  /** Abre os arquivos do projeto (árvore + editor). */
+  onFiles?: () => void;
   /** Tarefas abertas, em revisão e o último deploy. */
   tasks?: TaskSummary | null;
   id: string;
@@ -667,6 +662,11 @@ export function ProjectPanel({
           {project.exists && onTasks && (
             <button className="btn-secondary" onClick={onTasks} title={t('detail.boardTasksTitle')}>
               {t('detail.tasks')}
+            </button>
+          )}
+          {project.exists && onFiles && (
+            <button className="btn-secondary" onClick={onFiles} title={t('files.openTitle')}>
+              {t('files.open')}
             </button>
           )}
           <ArchiveButton archived={archived} onArchive={onArchive} what={t('detail.whatProjectAndStaff')} />

@@ -49,19 +49,41 @@ import type {
 import type { RoleEntry, RoleTemplate } from '../../shared/roles';
 import { locale, t } from './i18n';
 
+/** Leituras tentam de novo só em erro de rede (servidor reiniciando): 3 tentativas no total. */
+const GET_ATTEMPTS = 3;
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const offlineError = () => new ApiError(t('app.serverOffline'), 'offline', null);
+
 async function get<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${url}: ${res.status}`);
-  return (await res.json()) as T;
+  for (let attempt = 1; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url);
+    } catch (err) {
+      if (!(err instanceof TypeError)) throw err;
+      if (attempt >= GET_ATTEMPTS) throw offlineError();
+      // Espera crescente (500 ms, 1 s) com jitter de 0–250 ms.
+      await sleep(500 * 2 ** (attempt - 1) + Math.random() * 250);
+      continue;
+    }
+    if (!res.ok) throw new Error(`${url}: ${res.status}`);
+    return (await res.json()) as T;
+  }
 }
 
-/** Ações levam o cabeçalho `x-myco`, que o servidor exige em todo POST. */
+/** Ações levam o cabeçalho `x-myco`, que o servidor exige em todo POST. Não repetem: um envio repetido duplicaria a ação (ex.: a mensagem do chat). */
 async function post<T>(url: string, body: unknown = {}): Promise<T> {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-myco': '1' },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-myco': '1' },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    if (err instanceof TypeError) throw offlineError();
+    throw err;
+  }
   const data = (await res.json().catch(() => ({}))) as T & { error?: string; code?: string; hit?: UsageStopHit };
   if (!res.ok) throw new ApiError(data.error ?? `${url}: ${res.status}`, data.code ?? null, data.hit ?? null);
   return data;
@@ -323,4 +345,57 @@ export const api = {
     post<{ image: string | null }>(`/api/projects/${projectId}/image`, { dataUrl }),
   accountRules: () => get<{ path: string; text: string | null }>('/api/account/rules'),
   saveAccountRules: (text: string) => post<{ path: string; text: string | null }>('/api/account/rules', { text }),
+};
+
+/** Item da árvore de arquivos do projeto; `path` relativo à raiz, com "/". `locked` = segredo: listado, mas não abre. */
+export interface FileEntry {
+  name: string;
+  path: string;
+  type: 'dir' | 'file';
+  size?: number;
+  locked?: boolean;
+}
+
+export interface FileContent {
+  path: string;
+  content: string;
+  mtimeMs: number;
+  size: number;
+}
+
+/** Erro dos arquivos com o status HTTP (403, 404, 409, 413, 415…); no 409, o `mtimeMs` do disco. */
+export class FileApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly mtimeMs: number | null = null,
+  ) {
+    super(message);
+  }
+}
+
+async function filesFetch<T>(url: string, body?: unknown): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(
+      url,
+      body === undefined ? undefined : { method: 'POST', headers: { 'content-type': 'application/json', 'x-myco': '1' }, body: JSON.stringify(body) },
+    );
+  } catch (err) {
+    if (err instanceof TypeError) throw offlineError();
+    throw err;
+  }
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string; mtimeMs?: number };
+  if (!res.ok) throw new FileApiError(data.error ?? `${url}: ${res.status}`, res.status, typeof data.mtimeMs === 'number' ? data.mtimeMs : null);
+  return data;
+}
+
+/** Arquivos do projeto (só existentes: sem criar, apagar ou renomear). */
+export const filesApi = {
+  tree: (projectId: string, path: string) =>
+    filesFetch<{ entries: FileEntry[] }>(`/api/projects/${projectId}/files/tree?path=${encodeURIComponent(path)}`),
+  read: (projectId: string, path: string) => filesFetch<FileContent>(`/api/projects/${projectId}/files/read?path=${encodeURIComponent(path)}`),
+  /** `baseMtimeMs` = versão carregada; se o disco mudou, o servidor responde 409 e não grava. */
+  write: (projectId: string, path: string, content: string, baseMtimeMs: number) =>
+    filesFetch<{ mtimeMs: number }>(`/api/projects/${projectId}/files/write`, { path, content, baseMtimeMs }),
 };
