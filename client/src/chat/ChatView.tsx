@@ -18,6 +18,8 @@ import {
 } from './ChatExtras';
 import { ChangesPanel } from './ChangesPanel';
 import { useChatDetail } from './chatDetail';
+import type { ChatFocus } from './chatFocus';
+import { useChatFocus } from './useChatFocus';
 import { Markdown, looksLikeMarkdown, useCopy } from './markdown';
 import { systemMessageText } from './systemMessage';
 
@@ -46,6 +48,10 @@ interface Props {
   top?: ReactNode;
   /** Abas do "Mais" (vêm do EmployeePanel): só coisas do funcionário; os ajustes da conversa ficam abaixo da caixa. */
   moreTabs?: MoreTab[];
+  /** Clique num aviso da caixa "precisa de mim": rola até o balão que o causou e o destaca. */
+  focus?: ChatFocus | null;
+  /** O alvo foi atendido (ou o balão não apareceu a tempo): pode ser largado. */
+  onFocusDone?: () => void;
 }
 
 /** Uma aba do "Mais" (Ficha, Expediente, Rotinas, Ações…). */
@@ -56,7 +62,7 @@ export interface MoreTab {
 }
 
 /** Conversa com o funcionário dentro do Claudio’s Club, sem terminal. */
-export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, top, moreTabs = [] }: Props) {
+export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, top, moreTabs = [], focus = null, onFocusDone }: Props) {
   const chat = useChat(projectId, sessionId, staffId);
   const todos = useMemo(() => todosFrom(chat.items), [chat.items]);
   useEffect(() => {
@@ -94,6 +100,8 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
       el.scrollTop = el.scrollHeight;
     }
   }, [chat.loading]);
+  // Vindo de um aviso, rola até o balão dele (depois do passo acima) e não deixa o fim puxar de volta.
+  const focusing = useChatFocus({ list, stick, items: chat.items, loading: chat.loading, sessionId, focus, onDone: onFocusDone, onAway: setAway });
 
   // Mensagem com o funcionário trabalhando: quem decide é o servidor, pela config geral (menu
   // config); aqui só o texto do botão. Relê quando ele começa a trabalhar, para pegar a mudança.
@@ -157,6 +165,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
     if ((!text && !images.length && !files.length) || pending) return;
     const sent = images;
     const sentFiles = files;
+    focusing.release(); // mandou mensagem: volta a acompanhar o fim
     setDraft('');
     setImages([]);
     setFiles([]);
@@ -181,6 +190,10 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   useEffect(() => {
     if (moreOpen) moreRef.current?.focus();
   }, [moreOpen]);
+  // Vindo de um aviso, mostra a conversa (e não o "Mais" aberto por cima dela).
+  useEffect(() => {
+    if (focus) setMoreOpen(false);
+  }, [focus]);
   const closeMore = () => {
     setMoreOpen(false);
     moreBtn.current?.focus();
@@ -282,6 +295,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
         onScroll={(e) => {
           const el = e.currentTarget;
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          if (stick.current) focusing.release();
           setAway(!stick.current);
         }}
       >
@@ -588,10 +602,10 @@ function ContextMeter({ context }: { context: { used: number; window: number; pe
 }
 
 /** Resposta da IA com "Copiar" (o texto em markdown, como veio) no canto, no hover/foco. */
-function AssistantMessage({ text }: { text: string }) {
+function AssistantMessage({ id, text }: { id: string; text: string }) {
   const [copied, copy] = useCopy();
   return (
-    <div className="msg msg-assistant">
+    <div className="msg msg-assistant" data-item-id={id}>
       <button type="button" className="msg-rewind msg-copy" title={t('chat.msgCopyHelp')} onClick={() => copy(text)}>
         {copied ? t('chat.mdCopied') : t('chat.mdCopy')}
       </button>
@@ -621,7 +635,7 @@ function Item({
       // Aviso automático da plataforma (entrega de tarefa, contexto…): à esquerda, neutro, com badge.
       const system = systemMessageText(item.text);
       return (
-        <div className={`msg ${system === null ? 'msg-user' : 'msg-system'}`}>
+        <div className={`msg ${system === null ? 'msg-user' : 'msg-system'}`} data-item-id={item.id}>
           {system !== null && (
             <span className="badge dim msg-system-badge" title={t('chat.systemMessageHelp')}>
               {t('chat.systemMessage')}
@@ -645,10 +659,10 @@ function Item({
       );
     }
     case 'assistant':
-      return item.text ? <AssistantMessage text={item.text} /> : null;
+      return item.text ? <AssistantMessage id={item.id} text={item.text} /> : null;
     case 'tool':
       return (
-        <details className={`tool ${item.isError ? 'tool-error' : ''}`}>
+        <details className={`tool ${item.isError ? 'tool-error' : ''}`} data-item-id={item.id}>
           <summary>
             <span className="tool-name">{item.name}</span> <span className="tool-summary">{item.summary}</span>
             {item.result === null && <span className="muted small"> · {t('chat.running')}</span>}
@@ -664,7 +678,7 @@ function Item({
         <PermissionCard item={item} onAnswer={onAnswer} />
       );
     case 'notice':
-      return <div className={`chat-notice chat-notice-${item.tone}`}>{item.text}</div>;
+      return <div className={`chat-notice chat-notice-${item.tone}`} data-item-id={item.id}>{item.text}</div>;
   }
 }
 
@@ -708,7 +722,7 @@ function PlanCard({
     onChangesRequested();
   };
   return (
-    <div className={`permission permission-plan permission-${item.status}`}>
+    <div className={`permission permission-plan permission-${item.status}`} data-item-id={item.id}>
       <p className="permission-title">
         <b>{t('chat.planReady')}</b>{' '}
         <span className="muted small">{item.status === 'pending' ? t('chat.planPending') : item.status === 'allowed' ? t('chat.planApproved') : t('chat.planReturned')}</span>
@@ -742,7 +756,7 @@ function PermissionCard({ item, onAnswer }: { item: Extract<ChatItem, { kind: 'p
     setBusy(false);
   };
   return (
-    <div className={`permission permission-${item.status}`}>
+    <div className={`permission permission-${item.status}`} data-item-id={item.id}>
       <p className="permission-title">
         {t('chat.asksPermission')} <b>{item.tool}</b>
       </p>

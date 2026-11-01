@@ -385,7 +385,6 @@ export class ChatProcess {
     return true;
   }
 
-  /** Pedidos de permissão ainda sem resposta (a caixa "precisa de mim" lê daqui). */
   /** Guarda de segredos: avisa o tipo do que apareceu (ver secrets.ts). */
   private scan(text: string) {
     if (!this.opts.onSecret) return;
@@ -394,14 +393,20 @@ export class ChatProcess {
   }
 
   lastAssistantText(): string | null {
+    return this.lastAssistant()?.text ?? null;
+  }
+
+  /** A última resposta com texto (o balão onde uma pergunta no fim da conversa aparece). */
+  lastAssistant(): { id: string; text: string } | null {
     const items = [...this.items.values()];
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i]!;
-      if (it.kind === 'assistant' && it.text.trim()) return it.text;
+      if (it.kind === 'assistant' && it.text.trim()) return { id: it.id, text: it.text };
     }
     return null;
   }
 
+  /** Pedidos de permissão ainda sem resposta (a caixa "precisa de mim" lê daqui). */
   pendingPermissions(): Array<Extract<ChatItem, { kind: 'permission' }>> {
     return [...this.items.values()].filter(
       (i): i is Extract<ChatItem, { kind: 'permission' }> => i.kind === 'permission' && i.status === 'pending',

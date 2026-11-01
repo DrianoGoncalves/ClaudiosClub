@@ -37,6 +37,7 @@ import { CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from
 import { ChatRegistry } from './chat/registry';
 import { StaffError, StaffService } from './staff/service';
 import { mcpJsonWarnings } from './staff/mcp';
+import { permissionInboxItem, questionInboxItem } from './inboxItems';
 import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
 import { copyToLibrary, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill, SkillError } from './skillLibrary';
@@ -1285,16 +1286,13 @@ async function getInbox(): Promise<InboxItem[]> {
   for (const { sessionId, pending, error } of chats.attention()) {
     const w = where(sessionId, liveById.get(sessionId));
     if (hidden(w)) continue;
-    for (const p of pending) {
-      const plan = p.plan !== undefined;
-      out.push({ id: `perm:${p.id}`, kind: plan ? 'plan' : 'permission', ...w, summary: plan ? 'plano pronto para aprovar' : `${p.tool} ${p.summary}`, at: p.at });
-    }
+    for (const p of pending) out.push(permissionInboxItem(p, w));
     if (error) out.push({ id: `error:${sessionId}`, kind: 'error', ...w, summary: error, at: null });
   }
   // Terminou o turno perguntando algo no texto (sem pedido de permissão): espera até você responder.
   for (const q of chats.pendingQuestions()) {
     const w = where(q.sessionId, liveById.get(q.sessionId));
-    if (!hidden(w)) out.push({ id: `question:${q.sessionId}:${q.at}`, kind: 'waiting', ...w, summary: `perguntou: ${q.text}`, at: q.at });
+    if (!hidden(w)) out.push(questionInboxItem(q, w));
   }
   const orphans = await chats.orphans(live);
   const orphanIds = new Set(orphans.map((o) => o.sessionId));

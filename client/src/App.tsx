@@ -33,6 +33,7 @@ import {
   UserPanel,
   type TeamRow,
 } from './detail/Detail';
+import type { ChatFocus } from './chat/chatFocus';
 import { DrawerResize, useDrawerWidth } from './detail/DrawerResize';
 import { companyName, effortLabel, employeeName } from './format';
 import { t } from './i18n';
@@ -50,6 +51,8 @@ const ARCHIVED_KEY = 'myco.showArchived';
 const ANIMATIONS_KEY = 'myco.animations';
 /** Quanto tempo o aviso de sucesso fica no canto antes de fechar sozinho. */
 const NOTICE_MS = 7000;
+/** Quanto tempo o alvo de um clique no aviso da caixa fica guardado se o chat não o atender. */
+const JUMP_TARGET_MS = 3000;
 
 /** Escolha salva; sem escolha, segue o "reduzir animações" do sistema. */
 function readAnimations(): boolean {
@@ -99,6 +102,21 @@ export function App() {
   const [jumpTask, setJumpTask] = useState<string | null>(null);
   /** Conversa achada na busca do Ctrl+K: o painel do funcionário abre nela. */
   const [jumpConversation, setJumpConversation] = useState<string | null>(null);
+  /** Clique num aviso da caixa: o balão da conversa a mostrar (largado quando o chat o atende). */
+  const [jumpTarget, setJumpTarget] = useState<ChatFocus | null>(null);
+  const jumpNonce = useRef(0);
+  /** A seleção que o próprio `openInbox` fez: qualquer outra troca de seleção larga o alvo guardado. */
+  const jumpSelection = useRef<string | null>(null);
+  const clearJumpTarget = useCallback(() => setJumpTarget(null), []);
+  useEffect(() => {
+    if (selectedId !== jumpSelection.current) setJumpTarget(null);
+  }, [selectedId]);
+  // O painel pode nunca atender o alvo (não montou, a conversa não tem o balão): não fica guardado para depois.
+  useEffect(() => {
+    if (!jumpTarget) return;
+    const timer = setTimeout(() => setJumpTarget(null), JUMP_TARGET_MS);
+    return () => clearTimeout(timer);
+  }, [jumpTarget]);
   /** Tarefas em aberto por projeto, para o cabeçalho das salas. */
   const [taskSummary, setTaskSummary] = useState<Record<string, TaskSummary>>({});
   const readTaskSummary = useCallback(() => {
@@ -144,8 +162,17 @@ export function App() {
   const openInbox = useCallback((item: InboxItem) => {
     // Sem funcionário nem conversa (aviso do projeto, como chave no .mcp.json): a sala do projeto.
     // Conversa sem ficha: o funcionário fantasma do projeto, já nela.
-    setJumpConversation(!item.staffId && item.sessionId ? item.sessionId : null);
-    setSelectedId(item.staffId ? staffNodeId(item.projectId, item.staffId) : item.sessionId ? ghostNodeId(item.projectId) : projectNodeId(item.projectId));
+    // Com conversa: a do aviso (não a mais recente do funcionário), rolada até o que o causou; o contador
+    // faz um segundo clique no mesmo aviso rolar de novo.
+    const node = item.staffId ? staffNodeId(item.projectId, item.staffId) : item.sessionId ? ghostNodeId(item.projectId) : projectNodeId(item.projectId);
+    jumpSelection.current = node;
+    setJumpConversation(item.sessionId || null);
+    setJumpTarget(
+      item.sessionId
+        ? { projectId: item.projectId, staffId: item.staffId, sessionId: item.sessionId, itemId: item.itemId, quote: item.quote, nonce: ++jumpNonce.current }
+        : null,
+    );
+    setSelectedId(node);
   }, []);
   const inbox = useInbox(openInbox);
 
@@ -399,6 +426,8 @@ export function App() {
             <EmployeePanel
               key={`${selectedId}:${jumpConversation ?? ''}`}
               initialConversation={jumpConversation}
+              focus={jumpTarget}
+              onFocusDone={clearJumpTarget}
               session={
                 selection.session && {
                   ...selection.session,

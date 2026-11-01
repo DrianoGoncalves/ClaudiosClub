@@ -16,7 +16,7 @@ describe('o que a caixa lembra entre reinícios', () => {
   it('perguntas e "não é segredo" voltam depois de reabrir', async () => {
     const file = path.join(root, 'inbox.json');
     const a = new InboxState(file);
-    a.setQuestion('s1', { text: 'Faço o commit?', at: '2026-10-28T21:28:38Z' });
+    a.setQuestion('s1', { text: 'Faço o commit?', at: '2026-10-28T21:28:38Z', itemId: 'a:m1' });
     a.setQuestion('s2', { text: 'E o deploy?', at: '2026-10-28T21:30:00Z' });
     a.setQuestion('s2', null);
     a.mute('s1:um token do GitHub');
@@ -24,7 +24,7 @@ describe('o que a caixa lembra entre reinícios', () => {
     await a.flush();
 
     const b = new InboxState(file);
-    expect(b.questions()).toEqual([{ sessionId: 's1', text: 'Faço o commit?', at: '2026-10-28T21:28:38Z' }]);
+    expect(b.questions()).toEqual([{ sessionId: 's1', text: 'Faço o commit?', at: '2026-10-28T21:28:38Z', itemId: 'a:m1' }]);
     expect(b.isMuted('s1:um token do GitHub')).toBe(true);
     expect(b.isMuted('s1:uma senha')).toBe(false);
   });
