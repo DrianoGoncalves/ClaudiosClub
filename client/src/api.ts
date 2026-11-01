@@ -132,6 +132,14 @@ export async function withUsageConfirm<T>(run: (force: boolean) => Promise<T>): 
   }
 }
 
+/** Um projeto do Claude Code que ainda está fora do quadro. */
+export interface ImportableProject {
+  id: string;
+  name: string;
+  path: string;
+  lastActivityAt: string | null;
+}
+
 /** Segunda opinião do Codex: ligada nas configurações, e se dá para usar (instalado, com login). */
 export interface CodexState {
   enabled: boolean;
@@ -242,6 +250,10 @@ export const api = {
       | { mode: 'create'; parent: string; name: string; git: boolean; workspaceId: string | null }
       | { mode: 'existing'; path: string; workspaceId: string | null },
   ) => post<{ created: boolean; projectId: string }>('/api/new-project', body),
+  /** Projetos do Claude Code que ainda não estão no quadro. */
+  importableProjects: () => get<ImportableProject[]>('/api/import-projects'),
+  importProjects: (paths: string[], workspaceId: string | null) =>
+    post<{ projectIds: string[]; imported: number }>('/api/import-projects', { paths, workspaceId }),
   createDemo: () => post<{ created: boolean; projectId: string }>('/api/demo'),
   hire: (projectId: string, input: StaffInput) =>
     post<{ profile: StaffProfile; launch: LaunchResult | null }>(`/api/projects/${projectId}/staff`, input),

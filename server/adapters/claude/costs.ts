@@ -106,7 +106,11 @@ export class CostIndex {
     return this.lastScanAt;
   }
 
-  report(now = new Date()): CostReport {
+  /**
+   * `only`: só os projetos desta lista entram em `projects`, `agents`, `models` e `unpricedModels` (os do quadro);
+   * `total` continua sendo a conta inteira, que é o que a trava de consumo e as porcentagens esperam.
+   */
+  report(now = new Date(), only?: ReadonlySet<string>): CostReport {
     const today = dayKey(now);
     const weekAgo = dayKey(new Date(now.getTime() - 6 * 86_400_000));
     const month = today.slice(0, 7);
@@ -135,11 +139,12 @@ export class CostIndex {
       if (!e) continue;
       const fileUsd = sum(e.byDay);
       addDays(totalDays, e.byDay);
+      if (only && !only.has(t.projectId)) continue;
+      e.unpriced.forEach((m) => unpriced.add(m));
       addDays(getOr(projectDays, t.projectId, (): Record<string, number> => ({})), e.byDay);
       const sessions = getOr(sessionTotals, t.projectId, () => new Map<string, number>());
       sessions.set(t.sessionId, (sessions.get(t.sessionId) ?? 0) + fileUsd);
       for (const [m, usd] of Object.entries(e.byModel)) models[m] = (models[m] ?? 0) + usd;
-      e.unpriced.forEach((m) => unpriced.add(m));
       if (t.agentType) {
         addDays(getOr(agentDays, t.agentType, (): Record<string, number> => ({})), e.byDay);
         agentRuns.set(t.agentType, (agentRuns.get(t.agentType) ?? 0) + 1);

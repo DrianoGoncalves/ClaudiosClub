@@ -659,6 +659,8 @@ button.ranking-row:hover { border-color: var(--accent); }
 .choice > span { display: grid; gap: 2px; }
 .checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .modal .check { display: flex; flex-direction: row; align-items: center; gap: 6px; font-weight: 400; }
+.import-list { display: grid; gap: 6px; max-height: 340px; overflow-y: auto; }
+.import-list .choice b { overflow-wrap: anywhere; }
 .portrait-preview { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 2px solid var(--ink); }
 @media (max-width: 640px) { .grid2, .choices { grid-template-columns: 1fr; } }
 

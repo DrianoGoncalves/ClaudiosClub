@@ -89,12 +89,21 @@ const profileFile = (projectPath: string, id: string) => path.join(staffDir(proj
 
 const SAFE_ID = /^[a-z0-9-]{1,40}$/;
 
+/** O id de uma ficha pelo arquivo (`<id>.json` em .myco/staff); null se o arquivo não é ficha. */
+const fichaIdOf = (e: { name: string; isFile(): boolean }) => (e.isFile() && e.name.endsWith('.json') && SAFE_ID.test(e.name.slice(0, -5)) ? e.name.slice(0, -5) : null);
+
+/** O projeto tem algum arquivo de ficha? Só olha a pasta: não lê nem valida o conteúdo (listProjectStaff faz isso). */
+export async function hasStaffFiles(projectPath: string): Promise<boolean> {
+  return (await listDir(staffDir(projectPath))).some((e) => fichaIdOf(e) !== null);
+}
+
 export async function listProjectStaff(projectPath: string, projectId: string): Promise<StaffProfile[]> {
   const entries = await listDir(staffDir(projectPath));
   const out: StaffProfile[] = [];
   for (const e of entries) {
-    if (!e.isFile() || !e.name.endsWith('.json')) continue;
-    const p = await readProfile(projectPath, e.name.slice(0, -5));
+    const id = fichaIdOf(e);
+    if (!id) continue;
+    const p = await readProfile(projectPath, id);
     // A pasta pode ter vindo de outro computador (repositório clonado): o id do projeto é o desta máquina.
     if (p) out.push({ ...p, projectId });
   }
