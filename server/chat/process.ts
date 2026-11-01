@@ -5,6 +5,7 @@ import type { BackgroundTask, ChatAttachment, ChatCommand, ChatEvent, ChatItem, 
 import { cleanEnv } from '../auth';
 import { tryJson } from '../adapters/claude/fsutil';
 import { contextWindowFor } from '../adapters/claude/pricing';
+import { cacheTtlOf } from './contextPolicy';
 import { hasCheckpoint, inputText, resultText, stripCheckpoint, toolSummary } from './items';
 import { killTree } from './registry';
 import { findSecret } from './secrets';
@@ -231,6 +232,11 @@ export class ChatProcess {
   /** Contexto da última resposta (tokens), ou null antes da primeira. */
   get contextUsed(): number | null {
     return this.state.context?.used ?? null;
+  }
+
+  /** Validade do cache desta conversa (ms), pela última resposta que gravou nele; null antes disso. */
+  get cacheTtl(): number | null {
+    return this.cacheTtlMs;
   }
 
   get model(): string | null {
@@ -503,6 +509,7 @@ export class ChatProcess {
           const used = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
           const window = this.window ?? contextWindowFor(msg.model ?? this.state.model);
           if (used > 0) this.setState({ context: { used, window, percent: Math.round((used / window) * 100) } });
+          this.cacheTtlMs = cacheTtlOf(u) ?? this.cacheTtlMs;
         }
         return;
       }
@@ -619,6 +626,7 @@ export class ChatProcess {
 
   private readonly doneText = new Map<string, string[]>();
   private checkpointSeen = false;
+  private cacheTtlMs: number | null = null;
 
   private finish(error: string | null) {
     if (!this.state.running) return;

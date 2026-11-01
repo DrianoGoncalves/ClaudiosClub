@@ -988,7 +988,9 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
   padding: 18px 20px 24px;
   z-index: 10;
 }
-.drawer-close { position: absolute; top: 10px; right: 12px; font-size: 22px; line-height: 1; background: none; border: none; color: var(--muted); cursor: pointer; }
+/* z-index: o conteúdo do painel vem depois no HTML e tem partes posicionadas (o topo da conversa, que vai até
+   a borda): sem ele, cobria o X e só a beirada direita respondia ao clique. */
+.drawer-close { position: absolute; top: 10px; right: 12px; z-index: 2; font-size: 22px; line-height: 1; background: none; border: none; color: var(--muted); cursor: pointer; }
 .drawer-close:hover { color: var(--ink); }
 /* O mesmo X dentro de um cabeçalho com título/ações (Mais, tarefas, o que mudou): no fluxo, alinhado à linha. */
 .drawer-close.in-head { position: static; padding: 0 2px; }
@@ -1011,6 +1013,8 @@ body.is-resizing { cursor: ew-resize; user-select: none; }
 /* Véu semitransparente da cor do projeto sobre o fundo do workspace: diz de qual projeto é a conversa. */
 .drawer-chat .chat-list { background: linear-gradient(var(--chat-tint, transparent), var(--chat-tint, transparent)), var(--board); }
 .drawer-chat .chat-top { flex: 0 1 auto; max-height: 35vh; overflow-y: auto; }
+/* O ⋯ fica à esquerda do X do painel, com folga: na posição padrão os dois se sobrepõem. */
+.drawer-chat .btn-secondary.chat-more-btn { right: 25px; }
 /* Sem projeto não há conversa: o topo e a ficha rolam aqui. */
 .employee-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 
