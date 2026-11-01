@@ -133,6 +133,8 @@ describe('ficha', () => {
     // O nome dele no título das abas que usa (o grupo de abas da extensão não dá para renomear).
     const p = profile({ browser: true });
     expect(renderFicha(p, ctx)).toContain(tabTitleSnippet(p.name));
+    // Reaproveita a própria aba (achada pelo nome no título) em vez de abrir uma nova a cada vez.
+    expect(renderFicha(p, ctx)).toContain(`"[${p.name}]" no começo do título, trabalhe nela`);
     expect(tabTitleSnippet('Ana "Dev"')).toContain(JSON.stringify('[Ana "Dev"] '));
     const resumed = buildClaudeArgs(profile(), { sessionId: 'uuid-1', resume: true, systemPromptFile: 'S', mcpConfigPath: 'C:\\m.json', firstPrompt: 'Olá' });
     expect(resumed.slice(0, 2)).toEqual(['--resume', 'uuid-1']);
