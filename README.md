@@ -132,7 +132,7 @@ Quem pediu fica sabendo quando a parte dele termina. Funcionários que um gestor
 
 <img src="docs/img/barra.png" alt="Barra do topo: uso de 5 horas e 7 dias, precisa de mim, ranking e config" width="640">
 
-**"Ainda posso pedir mais?"** A barra do topo mostra o uso da assinatura e quanto falta para o reset, quantas coisas esperam por você e o ranking: quem mais gastou (funcionários e agents), mais duas abas de modelos para código, por índice (de código; de inteligência, se a API não trouxer o de código) e por preço, com dados do Artificial Analysis.
+**"Ainda posso pedir mais?"** A barra do topo mostra o uso da assinatura e quanto falta para o reset, quantas coisas esperam por você e o ranking: quem mais gastou (funcionários e agents), quanto cada funcionário economizou ao delegar para modelos mais baratos (últimos 3 meses ou tudo, arquivados incluídos), mais duas abas de modelos para código, por índice (de código; de inteligência, se a API não trouxer o de código) e por preço, com dados do Artificial Analysis.
 
 <img src="docs/img/sala.png" alt="A sala de um projeto: o orquestrador com a equipe de design system e infraestrutura logo abaixo" width="100%">
 

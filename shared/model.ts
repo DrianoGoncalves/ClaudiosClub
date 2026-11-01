@@ -361,6 +361,35 @@ export interface OrchestrationReport {
   scanning: boolean;
 }
 
+/** Ranking de economia: o "valeu a pena?" de uma sessão em US$, só no período pedido. */
+export interface SessionSavings {
+  projectId: string;
+  sessionId: string;
+  /** US$ no período: transcript principal e subagents. */
+  usd: number;
+  /** Parte de `usd` gasta pelos subagents. */
+  executorUsd: number;
+  /**
+   * Quanto custaria se o modelo do planejador fizesse também o trabalho dos subagents; igual a
+   * `usd` sem subagents. Conta só os tokens dos modelos com preço (os mesmos de `usd`); null se o
+   * modelo do planejador não tem preço.
+   */
+  asPlannerUsd: number | null;
+  /** Parte de `usd` em entregas marcadas como descartadas. */
+  discardedUsd: number;
+  /** Subagents com gasto no período. */
+  runs: number;
+}
+
+export interface SavingsReport {
+  /** Primeiro dia do período (AAAA-MM-DD, hora local); null = desde sempre. */
+  since: string | null;
+  /** Só sessões com gasto no período. */
+  sessions: SessionSavings[];
+  /** A leitura dos transcripts ainda está em andamento. */
+  scanning: boolean;
+}
+
 /** Login do `claude` (CLI) que o Claudio’s Club usa para abrir sessões. */
 export interface AuthStatus {
   /** O executável `claude` foi encontrado no PATH. */

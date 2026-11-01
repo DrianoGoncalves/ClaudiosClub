@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type {
   Agent,
   CostReport,
@@ -8,6 +8,7 @@ import type {
   Project,
   ProjectColor,
   ProjectDetail,
+  SavingsReport,
   Session,
   Skill,
   StaffProfile,
@@ -25,7 +26,8 @@ import { METRIC_LABEL, type Metric, ModelsChart } from '../toolbar/ModelsMenu';
 import { ProjectName } from './ProjectName';
 import { Routines } from './Routines';
 import { WorthIt } from './WorthIt';
-import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatShare, STATUS_LABEL } from '../format';
+import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatPercent, formatShare, formatUsd, STATUS_LABEL } from '../format';
+import { isLoss, type RankingGroup, type RankingRow, rankingRows, savingsList, teamSavings } from '../ranking';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
 import { CopyIcon, GhostIcon, PlusIcon } from '../icons';
@@ -841,50 +843,141 @@ export function UserPanel({
   );
 }
 
-export interface RankingEntry {
-  /** Nó do quadro a selecionar ao clicar. */
-  nodeId: string;
-  name: string;
-  detail: string;
-  usd: number;
+type RankingTab = 'cost' | 'savings' | Metric;
+const RANKING_TABS: Array<[RankingTab, string]> = [['cost', t('detail.tabCost')], ['savings', t('detail.tabSavings')], ['index', METRIC_LABEL.index], ['price', METRIC_LABEL.price]];
+
+/** Período do ranking em dias (null = tudo); o padrão são os últimos 3 meses. */
+const RANKING_PERIODS: Array<[string, number | null, string]> = [['90', 90, t('detail.periodLast3Months')], ['all', null, t('detail.periodAll')]];
+
+/** Uma linha do ranking de funcionários; arquivado fica apagado e com a etiqueta. */
+function RankingItem({
+  pos,
+  row,
+  sub,
+  value,
+  bad,
+  bar,
+  saving,
+  onSelect,
+}: {
+  pos: number;
+  row: RankingRow;
+  sub?: ReactNode;
+  value: ReactNode;
+  bad?: boolean;
+  /** Tamanho da barra, de 0 a 1. */
+  bar: number;
+  saving?: boolean;
+  onSelect: (nodeId: string) => void;
+}) {
+  return (
+    <li>
+      <button className={`ranking-row ${row.archived ? 'is-archived' : ''}`} onClick={() => onSelect(row.nodeId)} title={t('detail.showOnBoardLink')}>
+        <span className="ranking-pos">{pos}</span>
+        <span className="ranking-text">
+          <span className="ranking-name">{row.name}</span>
+          <span className="muted small">
+            {row.detail}
+            {row.archived && <span className="badge dim ranking-tag">{t('detail.archived')}</span>}
+            {sub}
+          </span>
+        </span>
+        <span className={`ranking-value ${bad ? 'worth-bad' : ''}`}>{value}</span>
+        <span className={`ranking-bar ${saving ? 'is-saving' : ''}`} style={{ width: `${bar * 100}%` }} />
+      </button>
+    </li>
+  );
 }
 
-type RankingTab = 'cost' | Metric;
-const RANKING_TABS: Array<[RankingTab, string]> = [['cost', t('detail.tabCost')], ['index', METRIC_LABEL.index], ['price', METRIC_LABEL.price]];
-
 /**
- * Ranking, em abas: quem mais gasta (funcionários e agents) e os modelos para código (Artificial
- * Analysis). Os gastos são equivalentes em API (estimativa): servem para comparar, não como conta a pagar.
+ * Ranking, em abas: quem mais gasta e quem mais economiza (funcionários, no período escolhido), os
+ * agents e os modelos para código (Artificial Analysis). Os gastos são equivalentes em API
+ * (estimativa): servem para comparar, não como conta a pagar.
  */
 export function RankingPanel({
-  employees,
+  groups,
   agents,
   scanning,
   onSelect,
 }: {
-  employees: RankingEntry[];
+  groups: RankingGroup[];
   agents: Array<{ type: string; usd: number; runs: number }>;
   scanning: boolean;
   onSelect: (nodeId: string) => void;
 }) {
   const [tab, setTab] = useState<RankingTab>('cost');
   const [limit, setLimit] = useState(10);
-  const topEmployee = employees[0]?.usd ?? 0;
+  const [period, setPeriod] = useState('90');
+  const [report, setReport] = useState<SavingsReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Carrega ao abrir e ao trocar o período, e rebusca: a cada 5 s enquanto os transcripts são lidos,
+  // senão no ritmo do polling de custos do App (30 s). `alive` descarta a resposta de um período já
+  // trocado. O refresh não zera o relatório: o "Calculando…" só aparece na primeira carga do período.
+  useEffect(() => {
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let loaded = false;
+    const days = RANKING_PERIODS.find(([k]) => k === period)?.[1] ?? null;
+    setReport(null);
+    setError(null);
+    const tick = () =>
+      api.savings(days).then(
+        (r) => {
+          if (!alive) return;
+          loaded = true;
+          setError(null);
+          setReport((prev) => (prev && JSON.stringify(prev) === JSON.stringify(r) ? prev : r));
+          timer = setTimeout(tick, r.scanning ? 5_000 : 30_000);
+        },
+        (e: Error) => {
+          if (!alive) return;
+          // Falha num refresh mantém o que já está na tela; só a primeira carga mostra o erro.
+          if (!loaded) setError(e.message);
+          timer = setTimeout(tick, 30_000);
+        },
+      );
+    void tick();
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [period]);
+  const rows = report ? rankingRows(groups, report) : null;
+  const topEmployee = rows?.[0]?.usd ?? 0;
   const topAgent = agents[0]?.usd ?? 0;
   // Participação de cada um no gasto da lista (funcionários entre si; agents entre si).
-  const employeesTotal = employees.reduce((s, e) => s + e.usd, 0);
+  const employeesTotal = rows?.reduce((s, e) => s + e.usd, 0) ?? 0;
   const agentsTotal = agents.reduce((s, a) => s + a.usd, 0);
+  const savers = rows ? savingsList(rows) : [];
+  const team = rows ? teamSavings(rows) : null;
+  const topSaved = savers.reduce((m, r) => Math.max(m, Math.abs(r.savedUsd)), 0);
+  const idle = rows ? rows.length - savers.length : 0;
+  const employeesHead = (
+    <div className="ranking-head">
+      <h3>{t('detail.employees')}</h3>
+      <select className="ranking-period" value={period} onChange={(e) => (setPeriod(e.target.value), setLimit(10))} aria-label={t('detail.period')}>
+        {RANKING_PERIODS.map(([k, , label]) => (
+          <option key={k} value={k}>
+            {label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+  // O que mostrar no lugar da lista enquanto não há dados (ou se deu erro).
+  const waiting = error ? <p className="error small">{error}</p> : !rows ? <p className="muted small">{t('detail.calculating')}</p> : null;
   return (
     <>
       <header className="header">
         <p className="kicker">{t('detail.kickerRanking')}</p>
-        <h2>{tab === 'cost' ? t('detail.topSpenders') : t('detail.modelsForCode')}</h2>
+        <h2>{tab === 'cost' ? t('detail.topSpenders') : tab === 'savings' ? t('detail.topSavers') : t('detail.modelsForCode')}</h2>
         {tab === 'cost' && (
           <p className="muted small">
             {t('detail.costNote')}
-            {scanning && ` ${t('detail.stillScanning')}`}
+            {(scanning || report?.scanning) && ` ${t('detail.stillScanning')}`}
           </p>
         )}
+        {tab === 'savings' && report?.scanning && <p className="muted small">{t('detail.stillReading')}</p>}
       </header>
       <div className="tabs" role="tablist">
         {RANKING_TABS.map(([k, label]) => (
@@ -893,36 +986,89 @@ export function RankingPanel({
           </button>
         ))}
       </div>
-      {tab !== 'cost' ? (
+      {tab === 'index' || tab === 'price' ? (
         <ModelsChart metric={tab} />
+      ) : tab === 'savings' ? (
+        <section className="section">
+          {employeesHead}
+          {waiting}
+          {rows && rows.length === 0 && <p className="muted">{t('detail.noCostYet')}</p>}
+          {rows && rows.length > 0 && savers.length === 0 && <p className="muted">{t('detail.noSubagentsInPeriod')}</p>}
+          {savers.length > 0 && (
+            <>
+              <p className={`ranking-total ${team && isLoss(team.savedUsd) ? 'worth-bad' : ''}`}>
+                {team === null
+                  ? t('detail.noPriceNote')
+                  : isLoss(team.savedUsd)
+                    ? t('detail.teamSpentMore', { usd: formatUsd(-team.savedUsd), pct: formatPercent(-team.savedPct) })
+                    : t('detail.teamSaved', { usd: formatUsd(Math.max(0, team.savedUsd)), pct: formatPercent(Math.max(0, team.savedPct)) })}
+              </p>
+              <p className="muted small">{t('detail.savingsEstimate')}</p>
+              <ol className="ranking">
+                {savers.slice(0, limit).map((e, i) => {
+                  const loss = isLoss(e.savedUsd);
+                  const sign = loss ? '+' : '';
+                  return (
+                    <RankingItem
+                      key={e.nodeId}
+                      pos={i + 1}
+                      row={e}
+                      sub={
+                        <>
+                          {loss && <span className="worth-bad"> · {t('detail.moreExpensive')}</span>}
+                          {e.discardedUsd > 0 && ` · ${t('detail.discardedLabel')} ${formatShare(e.discardedUsd, e.usd)}`}
+                        </>
+                      }
+                      value={
+                        e.savedPct === null ? (
+                          '—'
+                        ) : (
+                          <>
+                            {sign}
+                            {formatUsd(Math.abs(e.savedUsd))} <span className="small">({sign}{formatPercent(Math.abs(e.savedPct))})</span>
+                          </>
+                        )
+                      }
+                      bad={loss}
+                      saving={!loss}
+                      bar={topSaved ? Math.abs(e.savedUsd) / topSaved : 0}
+                      onSelect={onSelect}
+                    />
+                  );
+                })}
+              </ol>
+              {savers.length > limit && (
+                <button className="btn-secondary" onClick={() => setLimit(limit + 20)}>
+                  {t('detail.showMore', { n: savers.length - limit })}
+                </button>
+              )}
+              {idle > 0 && <p className="muted small">{idle === 1 ? t('detail.noSubagentEmployeesOne', { n: idle }) : t('detail.noSubagentEmployeesOther', { n: idle })}</p>}
+            </>
+          )}
+        </section>
       ) : (
         <>
           <section className="section">
-            <h3>{t('detail.employees')}</h3>
-            {employees.length === 0 && <p className="muted">{t('detail.noCostYet')}</p>}
+            {employeesHead}
+            {waiting}
+            {rows && rows.length === 0 && <p className="muted">{t('detail.noCostYet')}</p>}
             <ol className="ranking">
-              {employees.slice(0, limit).map((e, i) => (
-                <li key={e.nodeId}>
-                  <button className="ranking-row" onClick={() => onSelect(e.nodeId)} title={t('detail.showOnBoardLink')}>
-                    <span className="ranking-pos">{i + 1}</span>
-                    <span className="ranking-text">
-                      <span className="ranking-name">{e.name}</span>
-                      <span className="muted small">{e.detail}</span>
-                    </span>
-                    <span className="ranking-value">{formatShare(e.usd, employeesTotal)}</span>
-                    <span className="ranking-bar" style={{ width: `${topEmployee ? (e.usd / topEmployee) * 100 : 0}%` }} />
-                  </button>
-                </li>
+              {rows?.slice(0, limit).map((e, i) => (
+                <RankingItem key={e.nodeId} pos={i + 1} row={e} value={formatShare(e.usd, employeesTotal)} bar={topEmployee ? e.usd / topEmployee : 0} onSelect={onSelect} />
               ))}
             </ol>
-            {employees.length > limit && (
+            {rows && rows.length > limit && (
               <button className="btn-secondary" onClick={() => setLimit(limit + 20)}>
-                {t('detail.showMore', { n: employees.length - limit })}
+                {t('detail.showMore', { n: rows.length - limit })}
               </button>
             )}
           </section>
           <section className="section">
-            <h3>{t('detail.agentsSubagentsHeading')}</h3>
+            <div className="ranking-head">
+              <h3>{t('detail.agentsSubagentsHeading')}</h3>
+              {/* Vem de `costs.agents`, que não segue o período do seletor. */}
+              <span className="muted small">{t('detail.agentsAllTime')}</span>
+            </div>
             {agents.length === 0 && <p className="muted">{t('detail.noSubagentsUsed')}</p>}
             <ol className="ranking">
               {agents.map((a, i) => (

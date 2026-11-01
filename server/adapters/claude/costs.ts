@@ -46,6 +46,14 @@ export interface FileCost {
   tokens: Record<string, TokenTotals>;
 }
 
+/** Um transcript com a sessão e o projeto a que pertence, e quanto dele foi gasto no período. */
+export interface TranscriptCost extends FileCost {
+  projectId: string;
+  sessionId: string;
+  /** US$ com dia >= `since` (`usd` é o total do arquivo). */
+  periodUsd: number;
+}
+
 interface CountedUsage {
   model: string;
   day: string;
@@ -175,6 +183,30 @@ export class CostIndex {
       out.push({ file: t.file, agentType: t.agentType, usd: sum(e.byDay), byModel: e.byModel, tokens: e.tokens ?? {} });
     }
     return out.sort((a, b) => Number(!!a.agentType) - Number(!!b.agentType));
+  }
+
+  /**
+   * Todos os transcripts conhecidos, com o gasto a partir de `since` (AAAA-MM-DD local; null = tudo).
+   * Só memória: usa o que a última varredura já somou.
+   */
+  transcripts(since: string | null): TranscriptCost[] {
+    const out: TranscriptCost[] = [];
+    for (const t of this.lastTargets) {
+      const e = this.files.get(t.file);
+      if (!e) continue;
+      const periodUsd = Object.entries(e.byDay).reduce((s, [day, usd]) => (since === null || day >= since ? s + usd : s), 0);
+      out.push({
+        projectId: t.projectId,
+        sessionId: t.sessionId,
+        file: t.file,
+        agentType: t.agentType,
+        usd: sum(e.byDay),
+        periodUsd,
+        byModel: e.byModel,
+        tokens: e.tokens ?? {},
+      });
+    }
+    return out;
   }
 
   private async scan(): Promise<void> {

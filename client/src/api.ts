@@ -30,6 +30,7 @@ import type {
   Routine,
   RoutineRun,
   RunMark,
+  SavingsReport,
   SendPriority,
   UiLevel,
   ServerAccess,
@@ -209,6 +210,8 @@ export const api = {
     post<AppConfig>('/api/archive', { kind, id, archived }),
   costs: () => get<CostReport>('/api/costs'),
   orchestration: (sessionId: string) => get<OrchestrationReport>(`/api/sessions/${sessionId}/orchestration`),
+  /** Economia por sessão nos últimos `days` dias; null = desde sempre. */
+  savings: (days: number | null) => get<SavingsReport>(days === null ? '/api/savings' : `/api/savings?days=${days}`),
   markRun: (sessionId: string, runId: string, mark: RunMark | null) =>
     post<Record<string, RunMark>>(`/api/sessions/${sessionId}/marks`, { runId, mark }),
   mcp: (projectId: string) => get<McpServerInfo[]>(`/api/projects/${projectId}/mcp`),

@@ -31,13 +31,13 @@ import {
   SkillPanel,
   SyncedPanel,
   UserPanel,
-  type RankingEntry,
   type TeamRow,
 } from './detail/Detail';
 import { DrawerResize, useDrawerWidth } from './detail/DrawerResize';
 import { companyName, effortLabel, employeeName } from './format';
 import { t } from './i18n';
 import { useInbox } from './inbox/useInbox';
+import { rankingGroups } from './ranking';
 import { AgentForm, type AgentFormTarget } from './staff/AgentForm';
 import { NewProjectForm } from './office/NewProjectForm';
 import { readTab, workspaceByProject, writeTab } from './office/workspaces';
@@ -352,7 +352,7 @@ export function App() {
           </button>
           {selection.kind === 'ranking' && (
             <RankingPanel
-              employees={rankEmployees(board, costs, config)}
+              groups={rankingGroups(board, config)}
               agents={Object.entries(costs?.agents ?? {})
                 .map(([type, c]) => ({ type, usd: c.usd, runs: c.runs }))
                 .sort((a, b) => b.usd - a.usd)}
@@ -574,31 +574,6 @@ export function App() {
   );
 }
 
-/** Funcionários (com ficha ou não) do mais ao menos gastão, sem os arquivados. */
-function rankEmployees(board: Board, costs: CostReport | null, config: AppConfig | null): RankingEntry[] {
-  if (!costs) return [];
-  const archivedProjects = new Set(config?.archived.projects ?? []);
-  const archivedSessions = new Set(config?.archived.sessions ?? []);
-  const out: RankingEntry[] = [];
-  for (const p of board.projects) {
-    if (archivedProjects.has(p.id)) continue;
-    const bySession = costs.projects[p.id]?.sessions ?? {};
-    const owned = new Set<string>();
-    for (const st of board.staff.filter((s) => s.projectId === p.id)) {
-      st.sessions.forEach((s) => owned.add(s.id));
-      if (archivedSessions.has(`staff:${st.id}`)) continue;
-      const usd = st.sessions.reduce((sum, s) => sum + (bySession[s.id] ?? 0), 0);
-      if (usd > 0) out.push({ nodeId: staffNodeId(p.id, st.id), name: st.name, detail: `${st.role} · ${p.name}`, usd });
-    }
-    // As conversas sem ficha somam no funcionário fantasma do projeto.
-    const ghostUsd = (board.sessions[p.id] ?? [])
-      .filter((s) => !owned.has(s.id) && !archivedSessions.has(s.id))
-      .reduce((sum, s) => sum + (bySession[s.id] ?? 0), 0);
-    if (ghostUsd > 0) out.push({ nodeId: ghostNodeId(p.id), name: t('detail.ghostName'), detail: p.name, usd: ghostUsd });
-  }
-  return out.sort((a, b) => b.usd - a.usd);
-}
-
 /**
  * Conversas de um funcionário, da mais recente à mais antiga, cada uma pelo assunto (a tarefa ou a
  * 1ª mensagem): o título do Claude Code é o nome dele em todas. As da worktree dele ficam noutra
@@ -661,7 +636,10 @@ function resolveSelection(board: Board, id: string | null, archivedSessions: Set
   if (id.startsWith('g:')) {
     const projectId = id.slice(2);
     const owned = new Set(board.staff.filter((s) => s.projectId === projectId).flatMap((s) => s.sessions.map((x) => x.id)));
-    const ghost = (board.sessions[projectId] ?? []).filter((s) => !owned.has(s.id) && (showArchived || !archivedSessions.has(s.id)));
+    const loose = (board.sessions[projectId] ?? []).filter((s) => !owned.has(s.id));
+    // Todas arquivadas (o ranking mostra o fantasma assim mesmo): abre com elas, em vez de fechar o painel.
+    const visible = loose.filter((s) => showArchived || !archivedSessions.has(s.id));
+    const ghost = visible.length ? visible : loose;
     return ghost.length ? { kind: 'employee', session: ghost[0]!, staff: null, projectId, ghost } : null;
   }
   if (id.startsWith('h:')) {

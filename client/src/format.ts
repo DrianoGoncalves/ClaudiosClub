@@ -15,6 +15,16 @@ export function formatShare(value: number, total: number): string {
   return `${pct.toLocaleString(locale(), { maximumFractionDigits: pct < 10 ? 1 : 0 })}%`;
 }
 
+/** Dólares com duas casas: "US$ 12,40". */
+export function formatUsd(value: number): string {
+  return `US$ ${value.toLocaleString(locale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** Fração em porcentagem inteira: 0,382 → "38%". */
+export function formatPercent(fraction: number): string {
+  return `${(fraction * 100).toLocaleString(locale(), { maximumFractionDigits: 0 })}%`;
+}
+
 /** 2d4h, 3h05, 12min. */
 export function formatDuration(ms: number): string {
   const min = Math.max(1, Math.round(ms / 60000));
