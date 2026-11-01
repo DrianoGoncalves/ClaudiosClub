@@ -20,6 +20,7 @@ import { api } from '../api';
 import { RoomColorPicker } from '../board/colors';
 import { portraitUrl } from '../board/nodes';
 import { ChatView, type MoreTab } from '../chat/ChatView';
+import type { ChatFocus } from '../chat/chatFocus';
 import { BrowserCheck } from '../staff/BrowserCheck';
 import { MAX_INPUT_BYTES, PROJECT_IMAGE_MAX, shrinkImage } from '../lib/shrinkImage';
 import { METRIC_LABEL, type Metric, ModelsChart } from '../toolbar/ModelsMenu';
@@ -101,11 +102,20 @@ export function EmployeePanel(props: {
   conversations?: Array<{ id: string; title: string | null; updatedAt: string | null }>;
   /** Abrir nesta conversa (achada na busca do Ctrl+K). */
   initialConversation?: string | null;
+  /** Clique num aviso da caixa "precisa de mim": a conversa do aviso e o balão a mostrar nela. */
+  focus?: ChatFocus | null;
+  onFocusDone?: () => void;
 }) {
   const { session: s, staff, project } = props;
   // Qual conversa está aberta: a mais recente, outra da lista, ou uma nova (ainda sem sessão).
   // A conversa pedida (busca) só vale se for deste funcionário.
-  const wanted = props.initialConversation && props.conversations?.some((c) => c.id === props.initialConversation) ? props.initialConversation : null;
+  // A do aviso (caixa "precisa de mim") também vale se for deste funcionário, mesmo criada agora, antes de o quadro relê-la.
+  const noticed =
+    props.focus && props.focus.projectId === project?.id && props.focus.staffId === (staff?.id ?? null) ? props.focus.sessionId : null;
+  const wanted =
+    props.initialConversation && (props.initialConversation === noticed || props.conversations?.some((c) => c.id === props.initialConversation))
+      ? props.initialConversation
+      : null;
   const [picked, setPicked] = useState<string | null>(wanted ?? s?.id ?? null);
   const [fresh, setFresh] = useState(false);
   // A conversa nova, depois da primeira mensagem, já tem sessão: o ChatView segue nela sem remontar (fica com a
@@ -113,7 +123,10 @@ export function EmployeePanel(props: {
   // reler as fichas e os transcripts.
   const [freshId, setFreshId] = useState<string | null>(null);
   const [freshN, setFreshN] = useState(0);
-  const [started, setStarted] = useState<Array<{ id: string; title: string; updatedAt: string }>>([]);
+  // A conversa do aviso, criada agora, entra na lista como uma recém-começada (o quadro a repete ali quando relê, e a repetida sai daqui).
+  const [started, setStarted] = useState<Array<{ id: string; title: string; updatedAt: string }>>(() =>
+    noticed ? [{ id: noticed, title: t('detail.newConversation'), updatedAt: new Date().toISOString() }] : [],
+  );
   const first = useRef(true);
   useEffect(() => {
     // Na primeira vez vale a conversa pedida (busca); depois, a mais recente quando ela muda.
@@ -145,6 +158,12 @@ export function EmployeePanel(props: {
     setFreshId(null);
     setPicked(id);
   };
+  // Clique num aviso com o painel já aberto (e talvez em outra conversa): vai para a conversa do aviso.
+  // Só depende do aviso de propósito: com `conversations`/`current` aqui, trocar de conversa à mão voltaria para a do aviso.
+  useEffect(() => {
+    const want = props.focus?.sessionId;
+    if (want && want !== current && conversations.some((c) => c.id === want)) pick(want);
+  }, [props.focus]);
   const [convBusy, setConvBusy] = useState(false);
   const duplicate = async () => {
     if (!project || !current) return;
@@ -366,6 +385,8 @@ export function EmployeePanel(props: {
       fichaEffort={staff?.effort ?? null}
       top={top}
       moreTabs={tabs}
+      focus={props.focus}
+      onFocusDone={props.onFocusDone}
     />
   );
 }

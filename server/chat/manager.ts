@@ -495,7 +495,7 @@ export class ChatManager {
   }
 
   /** Conversas paradas numa pergunta para você, para a caixa "precisa de mim". */
-  pendingQuestions(): Array<{ sessionId: string; text: string; at: string }> {
+  pendingQuestions(): Array<{ sessionId: string; text: string; at: string; itemId?: string }> {
     return this.inbox.questions();
   }
 
@@ -511,8 +511,9 @@ export class ChatManager {
    * Conversa delegada fica de fora: quem pediu (o gestor) recebe a entrega e responde.
    */
   private noteQuestion(sessionId: string) {
-    const q = this.delegated.has(sessionId) ? null : finalQuestion(this.chats.get(sessionId)?.lastAssistantText() ?? null);
-    this.inbox.setQuestion(sessionId, q ? { text: q, at: new Date().toISOString() } : null);
+    const last = this.delegated.has(sessionId) ? null : (this.chats.get(sessionId)?.lastAssistant() ?? null);
+    const q = finalQuestion(last?.text ?? null);
+    this.inbox.setQuestion(sessionId, q && last ? { text: q, at: new Date().toISOString(), itemId: last.id } : null);
   }
 
   /** Segredos que apareceram nas conversas, para a caixa "precisa de mim". */

@@ -400,7 +400,8 @@ describe('ChatManager: ficha editada com a conversa aberta', () => {
     f.emit({ type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: ask }] } });
     f.emit({ type: 'result', is_error: false });
     await tick();
-    expect(m.pendingQuestions()).toEqual([{ sessionId: 'sx', text: 'Quer que eu (1) faça o commit em main e (2) apague os órfãos?', at: expect.any(String) }]);
+    // Com o id do balão onde a pergunta foi achada: a caixa rola até ele.
+    expect(m.pendingQuestions()).toEqual([{ sessionId: 'sx', text: 'Quer que eu (1) faça o commit em main e (2) apague os órfãos?', at: expect.any(String), itemId: 'a:m1' }]);
     await m.send('p', 'sx', 'ana', 'faça como sugerir');
     expect(m.pendingQuestions()).toEqual([]);
 

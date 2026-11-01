@@ -775,6 +775,13 @@ export interface InboxItem {
   name: string;
   summary: string;
   at: string | null;
+  /**
+   * Para onde a conversa rola ao clicar no aviso: o id do `ChatItem` que causou o aviso (o cartão de
+   * permissão ou de plano; o balão da resposta onde a pergunta foi achada). Sem ele a conversa abre no fim.
+   */
+  itemId?: string;
+  /** Pergunta detectada no texto da resposta: o cliente acha o trecho dentro do balão (ou nos últimos balões, sem `itemId`). */
+  quote?: string;
 }
 
 export interface ContextUsage {

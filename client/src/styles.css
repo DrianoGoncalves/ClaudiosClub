@@ -331,6 +331,18 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .chat-notice { align-self: center; font-size: 12px; color: var(--muted); }
 .chat-notice-warn { color: var(--warn); }
 .chat-notice-error { color: var(--danger); }
+/* O balão que o aviso da caixa "precisa de mim" apontou: pisca de leve e volta ao normal (2,5 s, ver useChatFocus.ts). */
+.chat-list .is-flash { outline: 2px solid transparent; outline-offset: 2px; animation: msg-flash 2.5s ease-out; }
+@keyframes msg-flash {
+  0%, 36% { outline-color: var(--highlight-solid); box-shadow: 0 0 0 6px var(--highlight); }
+  18% { outline-color: color-mix(in srgb, var(--highlight-solid) 35%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--highlight) 35%, transparent); }
+  100% { outline-color: transparent; box-shadow: 0 0 0 0 transparent; }
+}
+/* Sem animação: só o contorno, pelo mesmo tempo (o JS tira a classe). */
+@media (prefers-reduced-motion: reduce) {
+  .chat-list .is-flash { animation: none; outline-color: var(--highlight-solid); box-shadow: 0 0 0 6px var(--highlight); }
+}
+.anim-off .chat-list .is-flash { animation: none; outline-color: var(--highlight-solid); box-shadow: 0 0 0 6px var(--highlight); }
 /* max-width + min-width: sem isso o comando em execução (.chat-doing, nowrap) alarga a linha e estoura o chat. */
 .chat-typing { align-self: flex-start; max-width: 100%; min-width: 0; font-size: 12.5px; color: var(--muted); }
 .chat-elsewhere { border: 1px dashed var(--ink-blue); border-radius: 10px; padding: 8px 12px; font-size: 13px; }

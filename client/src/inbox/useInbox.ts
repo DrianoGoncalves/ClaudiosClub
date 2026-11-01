@@ -51,7 +51,7 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
       if (done?.length) {
         turnsSince.current = done.reduce((max, d) => (d.at > max ? d.at : max), turnsSince.current);
         // "Terminou" só incomoda quando você não está olhando para o Claudio’s Club.
-        if (notifyRef.current && !watching()) for (const d of done) showDone(d, open.current);
+        if (notifyRef.current && !watching()) for (const d of done) showDone(d, open.current, next ?? []);
       }
       if (!next) return;
       setItems((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
@@ -102,7 +102,8 @@ function watching(): boolean {
   return document.visibilityState === 'visible' && document.hasFocus();
 }
 
-function showDone(d: TurnNotice, onOpen: (item: InboxItem) => void) {
+/** `inbox`: os avisos de agora; se a conversa tem um (a pergunta em que o turno parou), o clique abre no mesmo ponto dele. */
+function showDone(d: TurnNotice, onOpen: (item: InboxItem) => void, inbox: InboxItem[]) {
   try {
     const n = new Notification(t('inbox.doneTitle', { name: d.name }), {
       body: d.text ?? (d.projectName ? t('inbox.inProject', { project: d.projectName }) : t('inbox.turnEnded')),
@@ -110,7 +111,19 @@ function showDone(d: TurnNotice, onOpen: (item: InboxItem) => void) {
     });
     n.onclick = () => {
       window.focus();
-      onOpen({ id: d.id, kind: 'waiting', projectId: d.projectId, projectName: d.projectName, sessionId: d.sessionId, staffId: d.staffId, name: d.name, summary: '', at: d.at });
+      const target = inbox.find((i) => i.sessionId === d.sessionId && (i.itemId || i.quote));
+      onOpen({
+        id: d.id,
+        kind: 'waiting',
+        projectId: d.projectId,
+        projectName: d.projectName,
+        sessionId: d.sessionId,
+        staffId: d.staffId,
+        name: d.name,
+        summary: '',
+        at: d.at,
+        ...(target && { itemId: target.itemId, quote: target.quote }),
+      });
       n.close();
     };
   } catch {
