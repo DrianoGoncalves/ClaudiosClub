@@ -45,6 +45,37 @@ export function FileDiffIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+/** Mais: começar algo novo (conversa nova). */
+export function PlusIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
+/** Duas folhas sobrepostas: duplicar (uma cópia para seguir por outro caminho). */
+export function CopyIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <rect x="8" y="8" width="14" height="14" rx="2" />
+      <path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2" />
+    </svg>
+  );
+}
+
+/** O logo do MCP (Model Context Protocol), no traço dele: os MCPs ligados na conversa. */
+export function McpIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="12 12 172 172" fill="none" stroke="currentColor" strokeWidth={12} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M25 97.85 92.88 29.97a24 24 0 0 1 33.94 0 24 24 0 0 1 0 33.94L75.56 115.18" />
+      <path d="M76.27 114.47 126.82 63.91a24 24 0 0 1 33.94 0l.35.35a24 24 0 0 1 0 33.94L99.72 159.6a8 8 0 0 0 0 11.31l12.61 12.61" />
+      <path d="M109.85 46.94 59.65 97.15a24 24 0 0 0 0 33.94 24 24 0 0 0 33.94 0l50.2-50.21" />
+    </svg>
+  );
+}
+
 /** Gráfico de barras: o ranking (gastos e modelos). */
 export function ChartIcon({ size = 15 }: { size?: number }) {
   return (

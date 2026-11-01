@@ -28,7 +28,7 @@ import { WorthIt } from './WorthIt';
 import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatShare, STATUS_LABEL } from '../format';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
-import { GhostIcon } from '../icons';
+import { CopyIcon, GhostIcon, PlusIcon } from '../icons';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
 
 // Painel lateral: o que o nó selecionado no quadro tem por trás.
@@ -208,20 +208,28 @@ export function EmployeePanel(props: {
           </select>
           <button
             type="button"
-            className="btn-secondary"
+            className="btn-secondary chat-icon-btn"
             disabled={(fresh && !freshId) || convBusy}
             onClick={() => {
               setFresh(true);
               setFreshId(null);
               setFreshN((n) => n + 1);
             }}
+            aria-label={t('detail.newConversation')}
             title={t('detail.newConversationTitle')}
           >
-            {t('detail.newConversationBtn')}
+            <PlusIcon />
           </button>
           {/* Duplicar (o nome da conversa vem sozinho da primeira mensagem). */}
-          <button type="button" className="btn-secondary" disabled={!current || convBusy} onClick={() => void duplicate()} title={t('detail.duplicateTitle')}>
-            {t('detail.duplicate')}
+          <button
+            type="button"
+            className="btn-secondary chat-icon-btn"
+            disabled={!current || convBusy}
+            onClick={() => void duplicate()}
+            aria-label={t('detail.duplicate')}
+            title={t('detail.duplicateTitle')}
+          >
+            <CopyIcon />
           </button>
         </div>
       )}
