@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type { Autonomy, ChatAttachment, ChatItem, Effort, SendPriority, UiLevel } from '../../../shared/model';
 import { api } from '../api';
-import { ArrowDownIcon, FileDiffIcon, ImageIcon, SendIcon } from '../icons';
+import { ArrowDownIcon, FileDiffIcon, ImageIcon, McpIcon, SendIcon } from '../icons';
 import { t, locale } from '../i18n';
 import { shrinkImage } from '../lib/shrinkImage';
 import {
@@ -215,6 +215,8 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   };
 
   const activeTab = moreTabs.find((tab) => tab.id === moreTab) ?? moreTabs[0];
+  const showMcp = level === 'advanced' && !!chat.state?.running && !!chat.sessionId;
+  const showDiff = !!staffId && !!chat.sessionId;
   const background = chat.state?.running && chat.sessionId ? (chat.state.background ?? []) : [];
 
   return (
@@ -484,11 +486,6 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
             {chat.state?.compacting ? t('chat.compacting') : t('chat.compact')}
           </button>
         )}
-        {level === 'advanced' && chat.state?.running && chat.sessionId && (
-          <button type="button" className="chat-chip btn-toggle" aria-pressed={mcpOpen} onClick={() => setMcpOpen(!mcpOpen)} title={t('chat.mcpsHelp')}>
-            MCPs
-          </button>
-        )}
         {background.length > 0 && (
           <button
             type="button"
@@ -500,16 +497,27 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
             {t('chat.background', { n: background.length })}
           </button>
         )}
-        {staffId && chat.sessionId && (
-          <button
-            type="button"
-            className="btn-secondary chat-changes"
-            onClick={() => setShowChanges(true)}
-            aria-label={t('chat.changes')}
-            title={t('chat.changesHelp')}
-          >
-            <FileDiffIcon />
-          </button>
+        {/* Botões de ícone, redondos e juntos no fim da linha: MCPs e o que mudou. */}
+        {(showMcp || showDiff) && (
+          <span className="chat-icon-btns">
+            {showMcp && (
+              <button
+                type="button"
+                className="btn-secondary chat-icon-btn btn-toggle"
+                aria-pressed={mcpOpen}
+                onClick={() => setMcpOpen(!mcpOpen)}
+                aria-label="MCPs"
+                title={t('chat.mcpsHelp')}
+              >
+                <McpIcon />
+              </button>
+            )}
+            {showDiff && (
+              <button type="button" className="btn-secondary chat-icon-btn" onClick={() => setShowChanges(true)} aria-label={t('chat.changes')} title={t('chat.changesHelp')}>
+                <FileDiffIcon />
+              </button>
+            )}
+          </span>
         )}
       </div>
       {showChanges && chat.sessionId && <ChangesPanel projectId={projectId} sessionId={chat.sessionId} staffId={staffId} name={name} onClose={() => setShowChanges(false)} />}

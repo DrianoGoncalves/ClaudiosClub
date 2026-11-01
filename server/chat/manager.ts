@@ -398,7 +398,7 @@ export class ChatManager {
     if (policy === 'off') return;
     const cost = usd(rereadUsd(info.used, info.model));
     if (switchDecision(info, info.at, policy) === 'suggest') {
-      chat.addNotice(`Assunto fechado, com ${kTokens(info.used)} de contexto (cada resposta relê tudo, cerca de ${cost}): a próxima pergunta sai mais barata numa conversa nova (+ Nova), que começa só com a ficha e a memória.`);
+      chat.addNotice(`Assunto fechado, com ${kTokens(info.used)} de contexto (cada resposta relê tudo, cerca de ${cost}): a próxima pergunta sai mais barata numa conversa nova (o + ao lado da lista de conversas), que começa só com a ficha e a memória.`);
     } else if (!info.checkpoint && info.used >= CEILING_AT) {
       // Uma vez a cada 100k a mais: avisar a cada resposta seria só barulho.
       const step = Math.floor(info.used / 100_000);
