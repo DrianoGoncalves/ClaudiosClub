@@ -369,9 +369,11 @@ export function buildGraph(
   const rooms = [
     ...(opts.showUserScope ? [userTree] : []),
     // Worktrees (cópias de trabalho do Claude Code) ficam fora do quadro.
+    // Salas em ordem alfabética do nome (o servidor manda por atividade, que muda a toda hora).
     ...board.projects
       .filter(visibleProject)
       .filter((p) => !p.worktreeOf)
+      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base', numeric: true }))
       .map(projectTree),
   ];
 

@@ -176,6 +176,20 @@ describe('buildGraph', () => {
     expect(w / h).toBeLessThan(4);
   });
 
+  it('salas em ordem alfabética do nome, depois da sala "você", lidas da esquerda para a direita', () => {
+    const names = ['zeta', 'Alfa', 'p10', 'beta', 'p2'];
+    const projects = names.map((n) => project(n, `C:\\www\\${n}`));
+    const b: Board = { ...board(), projects, inventories: {}, sessions: {} };
+    const rooms = buildGraph(b, {}).nodes.filter((n) => n.type === 'room');
+    const owners = rooms.map((r) => (r.type === 'room' ? r.data.owner : ''));
+    expect(owners).toEqual(['u', 'p:Alfa', 'p:beta', 'p:p2', 'p:p10', 'p:zeta']);
+    // A ordem na tela segue a da lista: linha por linha, da esquerda para a direita.
+    const onScreen = [...rooms].sort((x, y) => x.position.y - y.position.y || x.position.x - y.position.x);
+    expect(onScreen.map((r) => r.id)).toEqual(rooms.map((r) => r.id));
+    // A lista do servidor não é reordenada no lugar.
+    expect(b.projects.map((p) => p.name)).toEqual(names);
+  });
+
   it('bolinhas na linha do gestor só quando o trabalho foi delegado; conversa direta só anima a borda', () => {
     const busy = (delegated: boolean) => ({
       ...board(),
