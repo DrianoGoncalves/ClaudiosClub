@@ -47,7 +47,7 @@ import { UsageStopError } from './usageStop';
 import { quotaBoost } from './quotaBoost';
 import { browserStatus } from './browser';
 import { gitState } from './git';
-import { buildOrchestration, MarkBody, readMarks, saveMark, withRunInfo } from './orchestration';
+import { buildOrchestration, buildSavings, MarkBody, readAllMarks, readMarks, saveMark, savingsSince, withRunInfo } from './orchestration';
 import type { Board, CostReport, InboxItem, InboxKind, LiveSession, Project, TurnNotice } from '../shared/model';
 import { TurnWatcher } from './turns';
 import { RoutineScheduler, type RoutineOutcome } from './routines';
@@ -994,6 +994,19 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     async ({ params: [sid] }) => {
       const { files, scanning } = await adapter.getSessionCostFiles(sid!);
       return buildOrchestration(sid!, await withRunInfo(files), await readMarks(sid!), scanning);
+    },
+  ],
+  // Economia por sessão, para o ranking: `days` (1 a 3650) limita aos últimos dias; sem ele, desde sempre.
+  [
+    'GET',
+    /^\/api\/savings$/,
+    async ({ url }) => {
+      const raw = url.searchParams.get('days');
+      const days = raw === null ? null : /^\d{1,4}$/.test(raw) ? Number(raw) : 0;
+      if (days !== null && (days < 1 || days > 3650)) throw new BadRequest('days deve ser um inteiro de 1 a 3650');
+      const since = savingsSince(days);
+      const { files, scanning } = await adapter.getSavingsFiles(since);
+      return buildSavings(files, await readAllMarks(), since, scanning);
     },
   ],
   [

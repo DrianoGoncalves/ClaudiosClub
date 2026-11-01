@@ -7,7 +7,7 @@ import type {
   Session,
   UserScope,
 } from '../../shared/model';
-import type { FileCost } from './claude/costs';
+import type { FileCost, TranscriptCost } from './claude/costs';
 
 /**
  * Contrato da ferramenta de agentes (o Claude Code): isola os formatos não documentados dele.
@@ -32,4 +32,6 @@ export interface ToolAdapter {
   getCosts(): Promise<CostReport>;
   /** Custo e tokens por transcript de uma sessão (principal e subagents), para o "valeu a pena?". */
   getSessionCostFiles(sessionId: string): Promise<{ files: FileCost[]; scanning: boolean }>;
+  /** Todos os transcripts com o gasto a partir de `since` (AAAA-MM-DD local; null = tudo), para o ranking de economia. */
+  getSavingsFiles(since: string | null): Promise<{ files: TranscriptCost[]; scanning: boolean }>;
 }

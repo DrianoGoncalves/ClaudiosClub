@@ -126,6 +126,13 @@ export class ClaudeAdapter implements ToolAdapter {
     return { files: this.costs.sessionFiles(sessionId), scanning: this.costs.isScanning };
   }
 
+  async getSavingsFiles(since: string | null) {
+    // Mesma regra de getSessionCostFiles: só espera a releitura depois da 1ª varredura.
+    if (this.costs.scannedAt === 0) void this.costs.refresh();
+    else if (!this.costs.isScanning) await this.costs.refresh();
+    return { files: this.costs.transcripts(since), scanning: this.costs.isScanning };
+  }
+
   forgetProjects(): void {
     this.discovery = null;
   }

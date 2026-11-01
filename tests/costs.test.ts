@@ -122,6 +122,22 @@ describe('CostIndex', () => {
     expect(r.models['claude-sonnet-5']).toBeCloseTo(5, 6);
   });
 
+  it('transcripts: total do arquivo e gasto a partir de uma data', async () => {
+    const idx = new CostIndex(projectsDir, path.join(root, 'cache3.json'));
+    await idx.refresh();
+    const all = idx.transcripts(null);
+    expect(all.map((t) => [t.projectId, t.sessionId, t.agentType ?? '-']).sort()).toEqual([
+      ['C--www-a', 's1', '-'],
+      ['C--www-a', 's1', 'Explore'],
+    ]);
+    const m = idx.transcripts('2026-10-01').find((t) => !t.agentType)!;
+    expect(m.usd).toBeCloseTo(3, 6); // m1 + m2 (setembro)
+    expect(m.periodUsd).toBeCloseTo(2, 6); // só m1
+    expect(m.tokens['claude-sonnet-5']!.input).toBe(1_500_000);
+    expect(idx.transcripts(null).find((t) => !t.agentType)!.periodUsd).toBeCloseTo(3, 6);
+    expect(idx.transcripts('2026-11-01').every((t) => t.periodUsd === 0)).toBe(true);
+  });
+
   it('lê só o que foi acrescentado e reaproveita o cache em disco', async () => {
     const cache = path.join(root, 'cache2.json');
     const idx = new CostIndex(projectsDir, cache);
