@@ -12,7 +12,7 @@ import type {
 import type { ToolAdapter } from '../types';
 import { markDuplicates, readAgentsDir } from './agents';
 import { CostIndex } from './costs';
-import { defaultLocations, type ClaudeLocations } from './paths';
+import { defaultLocations, worktreeParent, type ClaudeLocations } from './paths';
 import {
   discoverProjects,
   projectClaudeDir,
@@ -33,6 +33,11 @@ export interface ClaudeAdapterOptions extends DiscoverOptions {
   costTtlMs?: number;
   /** Apelidos de exibição por id de projeto (lidos a cada chamada: mudam sem reiniciar). */
   projectNames?: () => Promise<Record<string, string>>;
+  /**
+   * Dos projetos descobertos, os que entram no quadro (a lista, as sessões, os custos e o ranking só
+   * olham esses). Sem isto, entram todos. Roda junto com a descoberta, dentro do cache.
+   */
+  onBoard?: (refs: ProjectRef[]) => Promise<ProjectRef[]>;
 }
 
 /** Leitura (somente) do que o Claude Code grava em ~/.claude e nas pastas `.claude/` dos projetos. */
@@ -40,7 +45,7 @@ export class ClaudeAdapter implements ToolAdapter {
   readonly id = 'claude';
   private readonly loc: ClaudeLocations;
   private readonly opts: ClaudeAdapterOptions;
-  private discovery: { at: number; refs: Promise<ProjectRef[]> } | null = null;
+  private discovery: { at: number; all: Promise<ProjectRef[]>; board: Promise<ProjectRef[]> } | null = null;
 
   private readonly costs: CostIndex;
 
@@ -58,6 +63,24 @@ export class ClaudeAdapter implements ToolAdapter {
     const [refs, names] = await Promise.all([this.refs(), this.displayNames()]);
     const projects = await Promise.all(refs.map((r) => summarizeProject(this.loc, r, names[r.id])));
     return projects.sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? ''));
+  }
+
+  /** Tudo que o Claude Code conhece e está fora do quadro (worktrees de pais fora inclusive), só id e pasta: barato. */
+  async offBoardRefs(): Promise<ProjectRef[]> {
+    const found = this.discover();
+    const [all, board] = await Promise.all([found.all, found.board]);
+    const onBoard = new Set(board.map((r) => r.id));
+    return all.filter((r) => !onBoard.has(r.id));
+  }
+
+  /** Projetos que o Claude Code conhece e ainda estão fora do quadro (só pastas que existem; worktree não conta). */
+  async listImportable(): Promise<Project[]> {
+    const [off, names] = await Promise.all([this.offBoardRefs(), this.displayNames()]);
+    const refs = off.filter((r) => !worktreeParent(r.path));
+    const projects = await Promise.all(refs.map((r) => summarizeProject(this.loc, r, names[r.id])));
+    return projects
+      .filter((p) => p.exists)
+      .sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? '') || a.name.localeCompare(b.name));
   }
 
   async getProject(id: string): Promise<ProjectDetail | null> {
@@ -115,7 +138,7 @@ export class ClaudeAdapter implements ToolAdapter {
   async getCosts(): Promise<CostReport> {
     const stale = Date.now() - this.costs.scannedAt > (this.opts.costTtlMs ?? 30_000);
     if (!this.costs.isScanning && stale) void this.costs.refresh();
-    return this.costs.report();
+    return this.costs.report(new Date(), await this.boardIds());
   }
 
   async getSessionCostFiles(sessionId: string) {
@@ -130,7 +153,9 @@ export class ClaudeAdapter implements ToolAdapter {
     // Mesma regra de getSessionCostFiles: só espera a releitura depois da 1ª varredura.
     if (this.costs.scannedAt === 0) void this.costs.refresh();
     else if (!this.costs.isScanning) await this.costs.refresh();
-    return { files: this.costs.transcripts(since), scanning: this.costs.isScanning };
+    const board = await this.boardIds();
+    const files = this.costs.transcripts(since);
+    return { files: board ? files.filter((f) => board.has(f.projectId)) : files, scanning: this.costs.isScanning };
   }
 
   forgetProjects(): void {
@@ -141,12 +166,24 @@ export class ClaudeAdapter implements ToolAdapter {
     return this.opts.projectNames ? this.opts.projectNames() : Promise.resolve({});
   }
 
+  /** Os projetos do quadro. */
   private refs(): Promise<ProjectRef[]> {
+    return this.discover().board;
+  }
+
+  /** Ids dos projetos do quadro, para limitar custos e ranking; undefined = sem filtro (tudo conta). */
+  private async boardIds(): Promise<Set<string> | undefined> {
+    return this.opts.onBoard ? new Set((await this.refs()).map((r) => r.id)) : undefined;
+  }
+
+  /** Tudo que o Claude Code conhece (`all`) e a parte que entra no quadro (`board`), reaproveitados por um tempo. */
+  private discover() {
     const ttl = this.opts.discoveryTtlMs ?? 10_000;
     if (!this.discovery || Date.now() - this.discovery.at > ttl) {
-      this.discovery = { at: Date.now(), refs: discoverProjects(this.loc, this.opts) };
+      const all = discoverProjects(this.loc, this.opts);
+      this.discovery = { at: Date.now(), all, board: this.opts.onBoard ? all.then(this.opts.onBoard) : all };
     }
-    return this.discovery.refs;
+    return this.discovery;
   }
 
   private async liveById(): Promise<Map<string, LiveSession>> {

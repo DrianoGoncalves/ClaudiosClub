@@ -94,7 +94,7 @@ Começa no Simples: *Rápido / Equilibrado / Caprichado* e *Pede antes / Faz soz
 <td valign="top">
 
 ### 🗂️ Workspaces
-Abas no topo para agrupar os projetos do seu jeito: por cliente, área, pessoal. Cada uma com cor e fundo próprios, e **+ projeto** cria uma pasta nova (com git) ou abre uma que já existe.
+Abas no topo para agrupar os projetos do seu jeito: por cliente, área, pessoal. Cada uma com cor e fundo próprios, e **+ projeto** cria uma pasta nova (com git), abre uma que já existe ou importa projetos do Claude Code.
 
 </td>
 <td valign="top">
@@ -178,7 +178,7 @@ Uma vez só: instala as dependências (e refaz com `npm ci` se o `node_modules` 
 > [!IMPORTANT]
 > O botão **Iniciar** depende do link `myco://`, que só existe depois do `npm run setup` (ou do `npm run launcher`). Sem ele o botão não faz nada: rode o setup uma vez. Na página de início, cada passo com problema mostra o comando de correção e um botão **Copiar**; a página nunca executa comandos, quem roda é você, no terminal.
 
-Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code aparecem sozinhos.
+Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code ficam fora do quadro até você escolher quais trazer: **+ projeto → Importar do Claude Code**.
 
 **Opcional: ranking de modelos.** Crie uma chave grátis em [artificialanalysis.ai/api-reference](https://artificialanalysis.ai/api-reference) e ponha `ARTIFICIAL_ANALYSIS_API_KEY=<sua chave>` no `.env` (o formato está em `.env.example`). Sem ela tudo funciona; o ranking só mostra como configurar.
 

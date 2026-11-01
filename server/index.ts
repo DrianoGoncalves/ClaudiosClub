@@ -53,7 +53,10 @@ import type { Board, CostReport, InboxItem, InboxKind, LiveSession, Project, Tur
 import { TurnWatcher } from './turns';
 import { RoutineScheduler, type RoutineOutcome } from './routines';
 import type { Routine, StaffProfile } from '../shared/model';
-import { encodeProjectDir, pathKey } from './adapters/claude/paths';
+import { pathKey, worktreeParent } from './adapters/claude/paths';
+import { boardFilter } from './board';
+import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
+import { importableList, importProjects } from './importProjects';
 import { AUTONOMY, readProfile } from './staff/store';
 import { TaskError, TaskService } from './tasks';
 import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefaultRole } from './roles';
@@ -135,8 +138,12 @@ const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', 'claudio.loc
 // Retratos chegam como data URL no JSON da contratação.
 const MAX_BODY = 4 * 1024 * 1024;
 
+// No quadro: o demo, as pastas de `extraProjects` (novas ou importadas) e os projetos com equipe. O resto
+// do que o Claude Code conhece só entra se o usuário importar (`/api/import-projects`).
+const pinnedProjects = async () => [DEMO_DIR, ...(await readExtraProjects())];
 const adapter: ToolAdapter = new ClaudeAdapter({
-  extraPaths: async () => [DEMO_DIR, ...(await readExtraProjects())],
+  extraPaths: pinnedProjects,
+  onBoard: boardFilter({ pinned: pinnedProjects }),
   projectNames: async () => (await readConfig()).projectNames,
 });
 const benchmarks = new ArtificialAnalysis();
@@ -381,7 +388,8 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ],
   ['GET', /^\/api\/projects$/, () => adapter.listProjects()],
   // "Novo projeto": a pasta sugerida (onde está a maioria) e criar ou abrir, já na empresa da aba.
-  ['GET', /^\/api\/new-project$/, async () => ({ parent: usualParent(await adapter.listProjects()) })],
+  // Conta também os projetos do Claude Code que ficaram fora do quadro: quem só tem o demo ainda recebe a pasta onde trabalha.
+  ['GET', /^\/api\/new-project$/, async () => ({ parent: usualParent([...(await adapter.listProjects()), ...(await offBoardFolders())]) })],
   [
     'POST',
     /^\/api\/new-project$/,
@@ -399,6 +407,16 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       // Estava arquivado: abrir de novo traz de volta ao quadro.
       if ((await readConfig()).archived.projects.includes(project.id)) await setArchived({ kind: 'project', id: project.id, archived: false });
       return { created: opened.created, projectId: project.id };
+    },
+  ],
+  // "Importar do Claude Code": os projetos que o Claude Code conhece e ainda estão fora do quadro, e pô-los nele.
+  ['GET', /^\/api\/import-projects$/, () => importableList(adapter)],
+  [
+    'POST',
+    /^\/api\/import-projects$/,
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      return importProjects(adapter, body);
     },
   ],
   ['GET', new RegExp(`^/api/projects/${ID}$`), ({ params: [id] }) => adapter.getProject(id!)],
@@ -1279,7 +1297,7 @@ const INBOX_ORDER: Record<InboxKind, number> = { plan: 0, permission: 1, secret:
  */
 async function getInbox(): Promise<InboxItem[]> {
   const [projects, live] = await Promise.all([adapter.listProjects(), adapter.listLiveSessions()]);
-  const { where, hidden } = await sessionPlaces(projects);
+  const { where, hidden } = await sessionPlacesNow(projects);
 
   const out: InboxItem[] = [];
   const liveById = new Map(live.map((l) => [l.sessionId, l]));
@@ -1356,7 +1374,7 @@ async function getTurns(since: string | null): Promise<TurnNotice[]> {
   const done = turns.since(since);
   if (!done.length) return [];
   const [projects, live] = await Promise.all([adapter.listProjects(), adapter.listLiveSessions()]);
-  const { where, hidden } = await sessionPlaces(projects);
+  const { where, hidden } = await sessionPlacesNow(projects);
   const liveById = new Map(live.map((l) => [l.sessionId, l]));
   return done.flatMap((d) => {
     const w = where(d.sessionId, liveById.get(d.sessionId));
@@ -1364,44 +1382,16 @@ async function getTurns(since: string | null): Promise<TurnNotice[]> {
   });
 }
 
-/** Dono (funcionário/projeto) e nome de cada sessão; `hidden` = arquivada (ou o projeto dela). */
-async function sessionPlaces(projects: Project[]) {
-  const config = await readConfig();
-  const staffList = await staff.listAll(projects);
-  const parents = mycoWorktreeParents(projects);
-  const projectName = new Map(projects.map((p) => [p.id, p.name]));
-  const byPath = new Map(projects.map((p) => [pathKey(p.path), p.id]));
-  const owner = new Map<string, { projectId: string; staffId: string; name: string }>();
-  for (const s of staffList) for (const ss of s.sessions) owner.set(ss.id, { projectId: s.projectId, staffId: s.id, name: s.name });
-  const archived = new Set([...config.archived.sessions, ...config.archived.projects]);
-
-  const where = (sessionId: string, l?: LiveSession) => {
-    const own = owner.get(sessionId);
-    let projectId = own?.projectId ?? (l?.cwd ? (byPath.get(pathKey(l.cwd)) ?? encodeProjectDir(l.cwd)) : '');
-    projectId = parents.get(projectId) ?? projectId;
-    return {
-      projectId,
-      projectName: projectName.get(projectId) ?? '',
-      sessionId,
-      staffId: own?.staffId ?? null,
-      name: own?.name ?? l?.name?.trim() ?? `sessão ${sessionId.slice(0, 8)}`,
-    };
-  };
-  const hidden = (w: { projectId: string; staffId: string | null; sessionId: string }) =>
-    archived.has(w.projectId) || archived.has(w.sessionId) || (w.staffId !== null && archived.has(`staff:${w.staffId}`));
-  return { where, hidden };
+/** Dono e nome de cada sessão, e se ela fica de fora (arquivada, ou de projeto que não está no quadro). */
+async function sessionPlacesNow(projects: Project[]) {
+  const [config, staffList, off] = await Promise.all([readConfig(), staff.listAll(projects), adapter.offBoardRefs()]);
+  return sessionPlaces(projects, staffList, new Set([...config.archived.sessions, ...config.archived.projects]), new Set(off.map((r) => r.id)));
 }
 
-/** Worktrees criadas pelo Claudio’s Club (…/.claude/worktrees/myco-<ficha>) → id do projeto principal. */
-function mycoWorktreeParents(projects: Project[]): Map<string, string> {
-  const byPath = new Map(projects.map((p) => [pathKey(p.path), p.id]));
-  const out = new Map<string, string>();
-  for (const p of projects) {
-    if (!p.worktreeOf || !path.basename(p.path).startsWith('myco-')) continue;
-    const parent = byPath.get(pathKey(p.worktreeOf));
-    if (parent) out.set(p.id, parent);
-  }
-  return out;
+/** As pastas do Claude Code fora do quadro, no formato que a "pasta sugerida" lê (existe? é worktree?). */
+async function offBoardFolders() {
+  const refs = await adapter.offBoardRefs();
+  return Promise.all(refs.map(async (r) => ({ path: r.path, exists: await fs.stat(r.path).then(() => true, () => false), worktreeOf: worktreeParent(r.path) })));
 }
 
 /** Custos: a mesma dobra do quadro (worktree do Claudio’s Club soma no projeto principal). */

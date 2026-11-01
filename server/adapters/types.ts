@@ -15,7 +15,12 @@ import type { FileCost, TranscriptCost } from './claude/costs';
  */
 export interface ToolAdapter {
   readonly id: string;
+  /** Os projetos do quadro. */
   listProjects(): Promise<Project[]>;
+  /** Projetos do Claude Code que ainda estão fora do quadro (para importar). */
+  listImportable(): Promise<Project[]>;
+  /** Id e pasta de tudo que o Claude Code conhece e está fora do quadro (worktrees inclusive), sem ler nada deles. */
+  offBoardRefs(): Promise<Array<{ id: string; path: string }>>;
   /** A próxima leitura descobre os projetos de novo (um projeto acabou de ser criado). */
   forgetProjects(): void;
   getProject(id: string): Promise<ProjectDetail | null>;

@@ -61,7 +61,7 @@ export async function openProject(input: NewProject, tmpDir = os.tmpdir()): Prom
 }
 
 /** A pasta-mãe da maioria dos projetos (onde um novo costuma ir); sem projetos, a home. */
-export function usualParent(projects: Project[], home = os.homedir()): string {
+export function usualParent(projects: Array<Pick<Project, 'path' | 'exists' | 'worktreeOf'>>, home = os.homedir()): string {
   const count = new Map<string, number>();
   for (const p of projects) {
     if (!p.exists || p.worktreeOf) continue;
