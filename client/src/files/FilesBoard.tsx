@@ -1,4 +1,4 @@
-// Arquivos do projeto: árvore à esquerda (cada pasta é lida ao abrir), editor à direita com save automático.
+// Arquivos do projeto: árvore à esquerda (cada pasta é lida ao abrir), editor à direita que salva só pelo botão "Salvar" (ou Ctrl+S).
 // No celular, uma coisa por vez: a árvore, e ao abrir um arquivo o editor ocupa a tela (volta pelo "‹ Arquivos").
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { FileApiError, filesApi, type FileEntry } from '../api';
@@ -6,9 +6,6 @@ import { t } from '../i18n';
 import { FileIcon, FolderIcon, LockIcon } from '../icons';
 
 const CodeEditor = lazy(() => import('./CodeEditor'));
-
-/** Espera depois da última tecla para salvar. */
-const SAVE_DELAY_MS = 800;
 
 type Dir = { entries: FileEntry[] } | { error: string } | 'loading';
 /** Arquivo aberto: `content` é o que está no editor, `saved` o que está no disco (na versão `mtimeMs`). */
@@ -39,14 +36,16 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
   const [opened, setOpened] = useState<Opened | null>(null);
   const [status, setStatus] = useState<SaveStatus>('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
-  /** mtimeMs do disco no 409; enquanto houver, o save automático para. */
+  /** mtimeMs do disco no 409; enquanto houver, o salvar fica desligado. */
   const [conflict, setConflict] = useState<number | null>(null);
   /** No celular: true = mostra o editor no lugar da árvore. */
   const [editing, setEditing] = useState(false);
+  /** Há mudança que ainda não foi para o disco (`content !== saved`). */
+  const [dirty, setDirty] = useState(false);
 
   const doc = useRef<Doc | null>(null);
   const conflictRef = useRef<number | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const dirtyRef = useRef(false);
   const inflight = useRef<Promise<void> | null>(null);
   const rev = useRef(0);
 
@@ -68,9 +67,15 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
     setConflict(m);
   };
 
-  /** Grava o que mudou (se mudou). Uma escrita por vez; o que chegar durante ela sai na seguinte. */
+  /** Só chama o setState quando o valor muda, para não renderizar a cada tecla. */
+  const markDirty = (v: boolean) => {
+    if (dirtyRef.current === v) return;
+    dirtyRef.current = v;
+    setDirty(v);
+  };
+
+  /** Grava o que mudou (se mudou), só por ação da pessoa. Uma escrita por vez; o que for digitado durante ela fica como não salvo. */
   const flush = useCallback(async (): Promise<void> => {
-    clearTimeout(timer.current);
     if (inflight.current) await inflight.current;
     const d = doc.current;
     if (!d || d.content === d.saved || conflictRef.current !== null) return;
@@ -83,7 +88,9 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
         (r) => {
           d.saved = content;
           d.mtimeMs = r.mtimeMs;
-          if (doc.current === d) setStatus(d.content === content ? 'saved' : 'saving');
+          if (doc.current !== d) return;
+          markDirty(d.content !== d.saved);
+          setStatus(d.content === content ? 'saved' : 'idle');
         },
         (e: unknown) => {
           if (doc.current !== d) return;
@@ -100,35 +107,30 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
         inflight.current = null;
       });
     await inflight.current;
-    // Digitou enquanto gravava: grava de novo.
-    if (doc.current === d && d.content !== d.saved && conflictRef.current === null) return flush();
   }, [projectId]);
 
   const edit = (text: string) => {
     const d = doc.current;
     if (!d) return;
     d.content = text;
-    clearTimeout(timer.current);
+    markDirty(text !== d.saved);
     if (conflictRef.current !== null) return;
-    if (text === d.saved) {
-      setStatus('saved');
-      return;
-    }
-    timer.current = setTimeout(() => void flush(), SAVE_DELAY_MS);
+    if (text === d.saved) setStatus('saved');
   };
 
-  /** Pode sair do arquivo atual? Salva antes; com conflito, só se a pessoa aceitar perder as mudanças. */
+  /** Pode sair do arquivo atual? Não salva sozinho: com conflito ou mudança pendente, só se a pessoa aceitar perdê-la. */
   const leave = async (): Promise<boolean> => {
-    if (conflictRef.current !== null && !window.confirm(t('files.discardConflict'))) return false;
-    await flush();
+    if (inflight.current) await inflight.current;
+    if (conflictRef.current !== null) return window.confirm(t('files.discardConflict'));
     const d = doc.current;
-    if (d && d.content !== d.saved && conflictRef.current === null && !window.confirm(t('files.unsavedLeave'))) return false;
+    if (d && d.content !== d.saved) return window.confirm(t('files.unsavedLeave'));
     return true;
   };
 
   const load = async (path: string) => {
     doc.current = null;
     markConflict(null);
+    markDirty(false);
     setStatus('idle');
     setSaveError(null);
     setOpened({ path, state: 'loading' });
@@ -149,6 +151,7 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
     if (entry.locked) {
       doc.current = null;
       markConflict(null);
+      markDirty(false);
       setStatus('idle');
       setOpened({ path: entry.path, state: 'blocked', reason: t('files.locked') });
       return;
@@ -188,7 +191,7 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
     return () => document.removeEventListener('keydown', onKey);
   }, [close]);
 
-  // Fechar a aba com mudança pendente: o navegador pergunta. Desmontar por outro caminho: grava o que dá.
+  // Fechar a aba com mudança pendente: o navegador pergunta. Nada é salvo sem a pessoa pedir.
   useEffect(() => {
     const onUnload = (e: BeforeUnloadEvent) => {
       const d = doc.current;
@@ -197,9 +200,8 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
     window.addEventListener('beforeunload', onUnload);
     return () => {
       window.removeEventListener('beforeunload', onUnload);
-      void flush();
     };
-  }, [flush]);
+  }, []);
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && void close()}>
@@ -226,7 +228,19 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
                   <span className="files-path mono" title={opened.path}>
                     {opened.path}
                   </span>
-                  {opened.state === 'ok' && <SaveState status={status} error={saveError} onRetry={() => void flush()} />}
+                  {opened.state === 'ok' && (
+                    <>
+                      <SaveState status={status} dirty={dirty} error={saveError} onRetry={() => void flush()} />
+                      <button
+                        className={`files-save ${dirty ? 'btn-primary' : 'btn-secondary'}`}
+                        title={t('files.saveHint')}
+                        disabled={!dirty || status === 'saving' || conflict !== null}
+                        onClick={() => void flush()}
+                      >
+                        {t('files.save')}
+                      </button>
+                    </>
+                  )}
                 </div>
                 {conflict !== null && (
                   <div className="files-conflict" role="alert">
@@ -264,16 +278,16 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
   );
 }
 
-function SaveState({ status, error, onRetry }: { status: SaveStatus; error: string | null; onRetry: () => void }) {
+function SaveState({ status, dirty, error, onRetry }: { status: SaveStatus; dirty: boolean; error: string | null; onRetry: () => void }) {
   if (status === 'error')
     return (
       <button className="files-status is-error" role="status" title={error ?? undefined} onClick={onRetry}>
         {t('files.saveError')} · {t('files.retry')}
       </button>
     );
-  const text = status === 'saving' ? t('files.saving') : status === 'saved' ? t('files.saved') : '';
+  const text = status === 'saving' ? t('files.saving') : dirty ? t('files.unsaved') : status === 'saved' ? t('files.saved') : '';
   return (
-    <span className={`files-status is-${status}`} role="status" title={t('files.autosaveHint')}>
+    <span className={`files-status is-${dirty && status === 'saved' ? 'idle' : status}`} role="status">
       {text}
     </span>
   );
