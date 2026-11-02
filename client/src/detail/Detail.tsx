@@ -370,6 +370,11 @@ export function EmployeePanel(props: {
       </div>
     );
   }
+  // Com o chat fechado, o seletor mostra o que a conversa vai usar ao abrir: o escolhido nela > o da ficha > o último escolhido no chat.
+  const chosen = opened ? staff?.sessions.find((x) => x.id === opened) : undefined;
+  const opening = staff
+    ? { model: chosen?.model ?? staff.model ?? staff.lastModel ?? null, effort: chosen?.effort ?? staff.effort ?? staff.lastEffort ?? null }
+    : null;
   return (
     <ChatView
       key={`${opened ?? `novo${freshN}`}:${staff?.id ?? ''}`}
@@ -381,8 +386,8 @@ export function EmployeePanel(props: {
       disabled={!project.exists ? t('detail.projectFolderMissing') : null}
       onSessionStarted={sessionStarted}
       level={props.simple ? 'simple' : 'advanced'}
-      fichaModel={staff?.model ?? null}
-      fichaEffort={staff?.effort ?? null}
+      fichaModel={opening?.model ?? null}
+      fichaEffort={opening?.effort ?? null}
       top={top}
       moreTabs={tabs}
       focus={props.focus}

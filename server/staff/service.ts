@@ -22,10 +22,12 @@ import {
   readVersion,
   removePortrait,
   replacePortrait,
+  saveChatChoice,
   saveProfile,
   StaffError,
   StaffInputSchema,
   RoutinesSchema,
+  withProfileLock,
 } from './store';
 
 export interface StaffServiceOptions {
@@ -237,6 +239,9 @@ export class StaffService {
       id: current.id,
       projectId,
       sessions: current.sessions,
+      // O último modelo/esforço do chat também é do presente.
+      lastModel: current.lastModel,
+      lastEffort: current.lastEffort,
       portrait: current.portrait,
       routines: current.routines,
       // Temporário ou efetivado é situação de agora, não da ficha antiga.
@@ -403,12 +408,34 @@ export class StaffService {
     const ctx = await this.context(project, profile, true);
     const cwd = sessionCwd(profile, ctx, forkFrom ?? sessionId);
     const run = await prepareRun(profile, ctx, id, cwd);
+    // Modelo e esforço: o da conversa (reabrir, ou a de origem ao duplicar) > o da ficha > o último escolhido no chat.
+    const origin = profile.sessions.find((x) => x.id === (forkFrom ?? sessionId));
     if (!resume) {
       const now = new Date().toISOString();
-      await saveProfile(project.path, { ...profile, sessions: [...profile.sessions, { id, startedAt: now, cwd }], updatedAt: now });
+      // A cópia nasce com a escolha da origem gravada: ao reabrir depois, sai igual.
+      const entry = { id, startedAt: now, cwd, ...(forkFrom && origin?.model && { model: origin.model }), ...(forkFrom && origin?.effort && { effort: origin.effort }) };
+      // Ficha fresca, na fila das trocas do chat: uma troca de modelo pode ter gravado algo desde a leitura lá em cima.
+      await withProfileLock(project.path, staffId, async () => {
+        const fresh = (await readProfile(project.path, staffId)) ?? profile;
+        await saveProfile(project.path, { ...fresh, projectId, sessions: [...fresh.sessions, entry], updatedAt: now });
+      });
     }
-    const args = buildClaudeArgs(profile, { ...run, sessionId: id, resume, firstPrompt: null, ...(forkFrom && { forkFrom }) });
-    return { sessionId: id, cwd, args };
+    const effective: StaffProfile = {
+      ...profile,
+      model: origin?.model ?? profile.model ?? profile.lastModel ?? null,
+      effort: origin?.effort ?? profile.effort ?? profile.lastEffort ?? null,
+    };
+    const args = buildClaudeArgs(effective, { ...run, sessionId: id, resume, firstPrompt: null, ...(forkFrom && { forkFrom }) });
+    return { sessionId: id, cwd, args, ...((origin?.model || origin?.effort) && { chosen: true }) };
+  }
+
+  /**
+   * Guarda o modelo/esforço escolhido no seletor do chat (ver saveChatChoice): vale para aquela conversa
+   * e vira o "último" do funcionário. Só o JSON: não reescreve a ficha .md nem avisa as conversas.
+   */
+  async rememberChoice(projectId: string, staffId: string, sessionId: string | null, choice: { model?: string; effort?: string }): Promise<void> {
+    const project = await this.project(projectId);
+    if (project) await saveChatChoice(project.path, staffId, sessionId, choice);
   }
 
   async portrait(projectId: string, staffId: string) {

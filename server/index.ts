@@ -191,6 +191,7 @@ const chats: ChatManager = new ChatManager({
   usageFile: path.join(MYCO_HOME, 'usage.json'),
   listLive: () => adapter.listLiveSessions(),
   resolve: (projectId, sessionId, staffId, forkFrom) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom),
+  rememberChoice: (projectId, staffId, sessionId, choice) => staff.rememberChoice(projectId, staffId, sessionId, choice),
   registry: new ChatRegistry(path.join(MYCO_HOME, 'run', 'chats.json')),
   copiesFile: path.join(MYCO_HOME, 'run', 'copies.json'),
   onPlanApproved: (sid, plan) => void tasks.onPlanApproved(sid, plan).catch(() => {}),

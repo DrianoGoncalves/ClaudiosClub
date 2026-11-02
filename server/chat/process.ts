@@ -87,6 +87,9 @@ export interface ChatProcessOptions {
   cwd: string;
   /** Argumentos depois de `claude` (os de stream-json são acrescentados aqui). */
   args: string[];
+  /** Modelo e esforço com que a linha de comando abre: o estado já os mostra antes do primeiro turno (o `init` ainda pode atualizar o modelo). */
+  model?: string | null;
+  effort?: string | null;
   onUsage?: (limits: UsageLimit[]) => void;
   /** O processo saiu (`error` com o motivo, se saiu com erro). */
   onExit?: (pid: number | null, error: string | null) => void;
@@ -143,6 +146,7 @@ export class ChatProcess {
 
   constructor(private readonly opts: ChatProcessOptions) {
     this.sessionId = opts.sessionId;
+    this.state = { ...this.state, model: opts.model ?? null, effort: opts.effort ?? null };
   }
 
   get pid(): number | null {

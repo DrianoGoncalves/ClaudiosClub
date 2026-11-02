@@ -582,6 +582,12 @@ export interface StaffProfile {
   /** Alias (`opus`, `sonnet`…) ou id completo; null = padrão do Claude Code. */
   model: string | null;
   effort: Effort | null;
+  /**
+   * Último modelo/esforço escolhido no seletor do chat deste funcionário. Só vale para conversa nova
+   * quando a ficha não tem `model`/`effort`. Gravado pelo Claudio’s Club, fora do questionário.
+   */
+  lastModel?: string;
+  lastEffort?: Effort;
   /** Pode contratar subfuncionários (subsessões) pelo Claudio’s Club. */
   canHire: boolean;
   /** Roteiro de trabalho (orquestração); null = nenhum. */
@@ -605,15 +611,16 @@ export interface StaffProfile {
   ended?: { at: string; reason: string } | null;
   /**
    * Sessões abertas para este funcionário, a mais recente por último. `cwd` é a pasta onde a
-   * sessão roda (a worktree, se a ficha pede uma): retomar exige a mesma pasta.
+   * sessão roda (a worktree, se a ficha pede uma): retomar exige a mesma pasta. `model`/`effort`: o
+   * que foi escolhido no chat desta conversa (vale ao reabrir); ausente = o da ficha.
    */
-  sessions: { id: string; startedAt: string; cwd?: string }[];
+  sessions: { id: string; startedAt: string; cwd?: string; model?: string; effort?: Effort }[];
   createdAt: string;
   updatedAt: string;
 }
 
 /** O que o questionário de contratação envia. */
-export type StaffInput = Omit<StaffProfile, 'id' | 'projectId' | 'portrait' | 'sessions' | 'createdAt' | 'updatedAt'> & {
+export type StaffInput = Omit<StaffProfile, 'id' | 'projectId' | 'portrait' | 'sessions' | 'lastModel' | 'lastEffort' | 'createdAt' | 'updatedAt'> & {
   /** Retrato como data URL (png, jpeg ou webp). */
   portraitDataUrl?: string | null;
   /** Abrir a primeira sessão logo após contratar. */

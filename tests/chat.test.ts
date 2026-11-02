@@ -9,6 +9,7 @@ import { readHistory } from '../server/chat/history';
 import { ChatManager } from '../server/chat/manager';
 import { ChatRegistry } from '../server/chat/registry';
 import { ChatProcess, STREAM_FLAGS } from '../server/chat/process';
+import { readProfile, saveChatChoice, saveProfile } from '../server/staff/store';
 import { accountRulesFile, readAccountRules, saveAccountRules, saveProjectImage, readProjectImage } from '../server/files';
 
 /** Processo falso: o que o Claudio’s Club escreve no stdin fica em `written`; `emit` simula o stdout do claude. */
@@ -684,6 +685,164 @@ describe('ChatManager: folga de cota', () => {
     w = sent();
     expect(controls(w)).toEqual([{ subtype: 'set_model', model: 'haiku' }]);
     expect(notice(w)).toBeUndefined();
+  });
+});
+
+describe('ChatManager: modelo e esforço escolhidos no chat vão para a ficha', () => {
+  type Choice = { projectId: string; staffId: string; sessionId: string; choice: { model?: string; effort?: string } };
+  function setup(over: Partial<ConstructorParameters<typeof ChatManager>[0]> = {}) {
+    const f = fakeClaude();
+    const lines: string[] = [];
+    const m = new ChatManager({
+      transcriptsDir: root,
+      usageFile: path.join(root, 'usage-choice.json'),
+      listLive: async () => [],
+      resolve: async () => ({ sessionId: 's-c', cwd: root, args: ['--session-id', 's-c', '--model', 'sonnet', '--effort', 'medium'] }),
+      spawnImpl: f.spawnImpl,
+      log: (l) => lines.push(l),
+      ...over,
+    });
+    return { f, m, lines };
+  }
+  type Msg = { type: string; request?: Record<string, unknown> };
+  const controls = (f: ReturnType<typeof fakeClaude>) => (f.written as Msg[]).filter((x) => x.type === 'control_request').map((x) => x.request);
+
+  it('troca de modelo e/ou esforço com funcionário grava; só autonomia e conversa sem funcionário não gravam', async () => {
+    const saved: Choice[] = [];
+    const { m } = setup({ rememberChoice: async (projectId, staffId, sessionId, choice) => void saved.push({ projectId, staffId, sessionId, choice }) });
+    await m.settings('p', 's-c', 'bia', { model: 'haiku', effort: 'low' });
+    await m.settings('p', 's-c', 'bia', { effort: 'max' });
+    await m.settings('p', 's-c', 'bia', { autonomy: 'auto' });
+    await m.settings('p', 's-c', null, { model: 'opus' });
+    expect(saved).toEqual([
+      { projectId: 'p', staffId: 'bia', sessionId: 's-c', choice: { model: 'haiku', effort: 'low' } },
+      { projectId: 'p', staffId: 'bia', sessionId: 's-c', choice: { model: undefined, effort: 'max' } },
+    ]);
+  });
+
+  it('erro ao gravar não derruba a troca: o processo muda e o erro vai para o log', async () => {
+    const { f, m, lines } = setup({
+      rememberChoice: async () => {
+        throw new Error('disco cheio');
+      },
+    });
+    expect(await m.settings('p', 's-c', 'bia', { model: 'haiku' })).toBe('s-c');
+    await tick();
+    expect(controls(f)).toEqual([{ subtype: 'set_model', model: 'haiku' }]);
+    expect(lines.some((l) => l.includes('disco cheio'))).toBe(true);
+  });
+
+  it('a folga de cota troca o modelo sozinha e não grava nada; a sua escolha depois, sim', async () => {
+    let boost: { until: string; projected: number } | null = { until: '2026-10-31T17:00:00.000Z', projected: 45 };
+    const saved: Choice[] = [];
+    const { f, m } = setup({
+      quotaBoost: async () => boost,
+      rememberChoice: async (projectId, staffId, sessionId, choice) => void saved.push({ projectId, staffId, sessionId, choice }),
+    });
+    const sid = await m.send('p', null, 'bia', 'oi');
+    await tick();
+    expect(controls(f)[0]).toEqual({ subtype: 'set_model', model: 'opus' });
+    boost = null;
+    await m.send('p', sid, 'bia', 'continua');
+    await tick();
+    expect(controls(f)).toContainEqual({ subtype: 'set_model', model: 'sonnet' }); // voltou ao de antes
+    expect(saved).toEqual([]);
+
+    await m.settings('p', sid, 'bia', { model: 'haiku' });
+    expect(saved).toHaveLength(1);
+  });
+
+  it('ligado à ficha de verdade: grava na conversa e como último, sem mexer na ficha .md', async () => {
+    const dir = await fs.mkdtemp(path.join(root, 'ficha-'));
+    const base = {
+      id: 'bia',
+      projectId: 'p',
+      name: 'Bia',
+      role: 'Dev',
+      portrait: null,
+      reportsTo: [],
+      mission: 'Implementar',
+      firstTask: '',
+      autonomy: 'manual',
+      agents: [],
+      skills: [],
+      mcps: null,
+      knowledge: [],
+      rules: [],
+      doneWhen: '',
+      model: null,
+      effort: null,
+      canHire: false,
+      playbook: null,
+      worktree: false,
+      servers: [],
+      browser: false,
+      sessions: [
+        { id: 's-c', startedAt: '2026-10-26T00:00:00.000Z' },
+        { id: 'outra', startedAt: '2026-10-26T00:00:00.000Z' },
+      ],
+      createdAt: '2026-10-26T00:00:00.000Z',
+      updatedAt: '2026-10-26T00:00:00.000Z',
+    } as StaffProfile;
+    await saveProfile(dir, base);
+    const { m } = setup({ rememberChoice: (_p, staffId, sessionId, choice) => saveChatChoice(dir, staffId, sessionId, choice) });
+    await m.settings('p', 's-c', 'bia', { model: 'haiku', effort: 'low' });
+    await m.settings('p', 's-c', 'bia', { autonomy: 'auto' });
+    const saved = (await readProfile(dir, 'bia'))!;
+    expect(saved).toMatchObject({ lastModel: 'haiku', lastEffort: 'low', autonomy: 'manual', updatedAt: base.updatedAt });
+    expect(saved.sessions.find((x) => x.id === 's-c')).toMatchObject({ model: 'haiku', effort: 'low' });
+    expect(saved.sessions.find((x) => x.id === 'outra')!.model).toBeUndefined();
+    expect(await fs.readdir(path.join(dir, '.myco', 'staff'))).toEqual(['bia.json']);
+  });
+});
+
+describe('ChatManager: abrir com modelo e esforço já gravados', () => {
+  const open = (args: string[], over: Partial<ConstructorParameters<typeof ChatManager>[0]> = {}, chosen?: boolean) => {
+    const f = fakeClaude();
+    const m = new ChatManager({
+      transcriptsDir: root,
+      usageFile: path.join(root, 'usage-open.json'),
+      listLive: async () => [],
+      resolve: async () => ({ sessionId: 's-o', cwd: root, args: ['--session-id', 's-o', ...args], ...(chosen && { chosen }) }),
+      spawnImpl: f.spawnImpl,
+      ...over,
+    });
+    return { f, m };
+  };
+  type Msg = { type: string; request?: Record<string, unknown> };
+  const controls = (f: ReturnType<typeof fakeClaude>) => (f.written as Msg[]).filter((x) => x.type === 'control_request').map((x) => x.request);
+  const boost = async () => ({ until: '2026-10-31T17:00:00.000Z', projected: 45 });
+
+  it('o estado do processo já traz o modelo e o esforço dos argumentos, antes do primeiro turno', async () => {
+    const { m } = open(['--model', 'sonnet', '--effort', 'high']);
+    await m.settings('p', null, 'bia', { autonomy: 'manual' }); // só abre o processo
+    expect((await m.snapshot('p', 's-o')).live!.state).toMatchObject({ model: 'sonnet', effort: 'high' });
+
+    const none = open(['--permission-mode', 'manual']);
+    await none.m.settings('p', null, 'bia', { autonomy: 'manual' });
+    expect((await none.m.snapshot('p', 's-o')).live!.state).toMatchObject({ model: null, effort: null });
+  });
+
+  it('o init do turno ainda atualiza o modelo (o id completo vence o apelido)', async () => {
+    const { f, m } = open(['--model', 'sonnet', '--effort', 'high']);
+    await m.send('p', null, 'bia', 'oi');
+    f.emit({ type: 'system', subtype: 'init', model: 'claude-sonnet-4-5' });
+    await tick();
+    expect((await m.snapshot('p', 's-o')).live!.state).toMatchObject({ model: 'claude-sonnet-4-5', effort: 'high' });
+  });
+
+  it('com escolha gravada (chosen) a folga de cota não troca nem desfaz; sem escolha, troca como antes', async () => {
+    const chosen = open(['--model', 'haiku', '--effort', 'low'], { quotaBoost: boost }, true);
+    await chosen.m.send('p', null, 'bia', 'oi');
+    await tick();
+    await chosen.m.send('p', 's-o', 'bia', 'de novo');
+    await tick();
+    expect(controls(chosen.f)).toEqual([]);
+
+    const plain = open(['--model', 'haiku', '--effort', 'low'], { quotaBoost: boost });
+    await plain.m.send('p', null, 'bia', 'oi');
+    await tick();
+    expect(controls(plain.f)).toEqual([{ subtype: 'set_model', model: 'opus' }, { subtype: 'apply_flag_settings', settings: { effortLevel: 'max' } }]);
   });
 });
 

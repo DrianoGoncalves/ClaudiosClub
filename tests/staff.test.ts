@@ -21,6 +21,7 @@ import {
 } from '../server/staff/ficha';
 import { buildMcpConfig, listMcpServers } from '../server/staff/mcp';
 import { StaffError, StaffService } from '../server/staff/service';
+import { readProfile, saveChatChoice, writeAtomic } from '../server/staff/store';
 
 const profile = (over: Partial<StaffProfile> = {}): StaffProfile => ({
   id: 'ana-1a2b',
@@ -534,5 +535,191 @@ describe('StaffService', () => {
     await expect(service().hire('proj-id', { name: '', role: 'x', mission: 'y' }, true)).rejects.toThrow('informe o nome');
     await expect(service().hire('proj-id', { ...input, portraitDataUrl: 'data:text/html;base64,AAAA' }, true)).rejects.toThrow('retrato inválido');
     expect(await service().hire('outro', input, true)).toBeNull();
+  });
+
+  describe('modelo e esforço por conversa', () => {
+    const argOf = (args: string[], flag: string) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : null);
+    const hireStaff = async (svc: StaffService, name: string, extra: Record<string, unknown> = {}) =>
+      (await svc.hire('proj-id', { ...input, name, launch: false, ...extra }, true))!.profile;
+    const disk = async (id: string) => (await readProfile(projectPath, id))!;
+
+    it('conversa nova usa o modelo e o esforço da ficha, mesmo havendo um "último" escolhido no chat', async () => {
+      const svc = service();
+      const p = await hireStaff(svc, 'Ficha', { model: 'sonnet', effort: 'low' });
+      await svc.rememberChoice('proj-id', p.id, null, { model: 'haiku', effort: 'max' });
+      const spawn = (await svc.chatSpawn('proj-id', null, p.id))!;
+      expect(argOf(spawn.args, '--model')).toBe('sonnet');
+      expect(argOf(spawn.args, '--effort')).toBe('low');
+    });
+
+    it('ficha sem modelo: conversa nova herda o último escolhido no chat; sem nenhum, nada na linha de comando', async () => {
+      const svc = service();
+      const p = await hireStaff(svc, 'Ultimo');
+      const none = (await svc.chatSpawn('proj-id', null, p.id))!;
+      expect(none.args).not.toContain('--model');
+      expect(none.args).not.toContain('--effort');
+
+      await svc.rememberChoice('proj-id', p.id, none.sessionId, { model: 'haiku', effort: 'max' });
+      const next = (await svc.chatSpawn('proj-id', null, p.id))!;
+      expect(argOf(next.args, '--model')).toBe('haiku');
+      expect(argOf(next.args, '--effort')).toBe('max');
+      // O resolvido não é gravado na conversa nova: só escolha explícita do chat.
+      const saved = (await disk(p.id)).sessions.find((x) => x.id === next.sessionId)!;
+      expect(saved.model).toBeUndefined();
+      expect(saved.effort).toBeUndefined();
+    });
+
+    it('reabrir usa a escolha gravada na conversa, mesmo com a ficha tendo outro; duplicar parte da escolha da origem', async () => {
+      const svc = service();
+      const p = await hireStaff(svc, 'Reabre', { model: 'sonnet', effort: 'low' });
+      const a = (await svc.chatSpawn('proj-id', null, p.id))!;
+      const b = (await svc.chatSpawn('proj-id', null, p.id))!;
+      await svc.rememberChoice('proj-id', p.id, a.sessionId, { model: 'opus', effort: 'high' });
+
+      const reopenA = (await svc.chatSpawn('proj-id', a.sessionId, p.id))!;
+      expect(argOf(reopenA.args, '--model')).toBe('opus');
+      expect(argOf(reopenA.args, '--effort')).toBe('high');
+      // A outra conversa não escolheu nada: segue a ficha.
+      const reopenB = (await svc.chatSpawn('proj-id', b.sessionId, p.id))!;
+      expect(argOf(reopenB.args, '--model')).toBe('sonnet');
+      expect(argOf(reopenB.args, '--effort')).toBe('low');
+      // Duplicar a A: a cópia sai com a escolha da A; duplicar a B, com a ficha.
+      const copyA = (await svc.chatSpawn('proj-id', null, p.id, a.sessionId))!;
+      expect(copyA.args).toEqual(expect.arrayContaining(['--resume', a.sessionId, '--fork-session']));
+      expect(argOf(copyA.args, '--model')).toBe('opus');
+      expect(argOf(copyA.args, '--effort')).toBe('high');
+      expect(argOf((await svc.chatSpawn('proj-id', null, p.id, b.sessionId))!.args, '--model')).toBe('sonnet');
+    });
+
+    it('duplicar grava a escolha herdada na cópia: ao reabrir depois, ela sai igual, mesmo com a ficha e a origem mudando', async () => {
+      const svc = service();
+      const p = await hireStaff(svc, 'Copia', { model: 'sonnet', effort: 'low' });
+      const a = (await svc.chatSpawn('proj-id', null, p.id))!;
+      const plain = (await svc.chatSpawn('proj-id', null, p.id))!;
+      await svc.rememberChoice('proj-id', p.id, a.sessionId, { model: 'opus', effort: 'high' });
+
+      const copy = (await svc.chatSpawn('proj-id', null, p.id, a.sessionId))!;
+      expect((await disk(p.id)).sessions.find((x) => x.id === copy.sessionId)).toMatchObject({ model: 'opus', effort: 'high' });
+      // A cópia de uma conversa sem escolha não ganha nada (segue a ficha).
+      const copyPlain = (await svc.chatSpawn('proj-id', null, p.id, plain.sessionId))!;
+      const plainEntry = (await disk(p.id)).sessions.find((x) => x.id === copyPlain.sessionId)!;
+      expect(plainEntry.model).toBeUndefined();
+      expect(plainEntry.effort).toBeUndefined();
+
+      // Depois a origem troca de novo e a ficha muda: a cópia reabre com o que herdou.
+      await svc.rememberChoice('proj-id', p.id, a.sessionId, { model: 'haiku', effort: 'max' });
+      await svc.update('proj-id', p.id, { name: 'Copia', role: 'Dev', mission: 'Implementar', autonomy: 'acceptEdits', model: 'sonnet', effort: 'medium' });
+      const reopen = (await svc.chatSpawn('proj-id', copy.sessionId, p.id))!;
+      expect(argOf(reopen.args, '--model')).toBe('opus');
+      expect(argOf(reopen.args, '--effort')).toBe('high');
+    });
+
+    it('chatSpawn sinaliza `chosen` só quando modelo/esforço vieram da conversa (ou da origem); ficha e "último" não contam', async () => {
+      const svc = service();
+      const p = await hireStaff(svc, 'Sinal', { model: 'sonnet' });
+      const a = (await svc.chatSpawn('proj-id', null, p.id))!;
+      expect(a.chosen).toBeUndefined(); // da ficha
+      await svc.rememberChoice('proj-id', p.id, a.sessionId, { effort: 'max' }); // grava também o "último"
+      expect((await svc.chatSpawn('proj-id', null, p.id))!.chosen).toBeUndefined(); // conversa nova herdando o último
+      const b = (await svc.chatSpawn('proj-id', null, p.id))!;
+      expect((await svc.chatSpawn('proj-id', b.sessionId, p.id))!.chosen).toBeUndefined(); // reabrir sem escolha própria
+
+      expect((await svc.chatSpawn('proj-id', a.sessionId, p.id))!.chosen).toBe(true); // reabrir com escolha
+      expect((await svc.chatSpawn('proj-id', null, p.id, a.sessionId))!.chosen).toBe(true); // duplicar com escolha
+      expect((await svc.chatSpawn('proj-id', null, p.id, b.sessionId))!.chosen).toBeUndefined(); // duplicar sem escolha
+    });
+
+    it('trocas simultâneas da mesma ficha não se perdem: modelo e esforço juntos, e conversa nova no meio', async () => {
+      const svc = service();
+      const p = await hireStaff(svc, 'Corrida');
+      const a = (await svc.chatSpawn('proj-id', null, p.id))!;
+      const [, , nova] = await Promise.all([
+        saveChatChoice(projectPath, p.id, a.sessionId, { model: 'opus' }),
+        saveChatChoice(projectPath, p.id, a.sessionId, { effort: 'high' }),
+        svc.chatSpawn('proj-id', null, p.id),
+        saveChatChoice(projectPath, p.id, a.sessionId, { model: 'haiku' }),
+      ]);
+      const saved = await disk(p.id);
+      expect(saved.sessions.find((x) => x.id === a.sessionId)).toMatchObject({ model: 'haiku', effort: 'high' });
+      expect(saved).toMatchObject({ lastModel: 'haiku', lastEffort: 'high' });
+      expect(saved.sessions.some((x) => x.id === nova!.sessionId)).toBe(true);
+    });
+
+    it('writeAtomic: gravações ao mesmo tempo no mesmo arquivo não se atropelam', async () => {
+      const file = path.join(root, 'atomic', 'f.json');
+      await Promise.all(Array.from({ length: 20 }, (_, i) => writeAtomic(file, `${i}\n`)));
+      expect(await fs.readFile(file, 'utf8')).toMatch(/^\d+\n$/);
+      expect((await fs.readdir(path.dirname(file))).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+    });
+
+    it('rememberChoice grava na conversa e no "último", só o JSON: sem reescrever a ficha .md nem avisar; valor inválido é ignorado', async () => {
+      const changes: string[] = [];
+      const svc = new StaffService(adapter, {
+        runDir: path.join(root, 'run'),
+        claudeConfigFile: claudeJson,
+        mycoUrl: 'x',
+        readUsage: noUsage,
+        onChange: (_prev, next) => void changes.push(next.id),
+      });
+      const p = await hireStaff(svc, 'Grava');
+      const a = (await svc.chatSpawn('proj-id', null, p.id))!;
+      const b = (await svc.chatSpawn('proj-id', null, p.id))!;
+      const mdFile = path.join(projectPath, '.myco', 'staff', `${p.id}.md`);
+      const md = await fs.readFile(mdFile, 'utf8');
+      const mdTime = (await fs.stat(mdFile)).mtimeMs;
+      const updatedAt = (await disk(p.id)).updatedAt;
+
+      await svc.rememberChoice('proj-id', p.id, a.sessionId, { model: 'opus' });
+      await svc.rememberChoice('proj-id', p.id, a.sessionId, { effort: 'xhigh' });
+      await svc.rememberChoice('proj-id', p.id, b.sessionId, { model: 'haiku; rm -rf', effort: 'enorme' });
+      let saved = await disk(p.id);
+      expect(saved).toMatchObject({ lastModel: 'opus', lastEffort: 'xhigh' });
+      expect(saved.sessions.find((x) => x.id === a.sessionId)).toMatchObject({ model: 'opus', effort: 'xhigh' });
+      expect(saved.sessions.find((x) => x.id === b.sessionId)!.model).toBeUndefined();
+      expect(saved.updatedAt).toBe(updatedAt);
+
+      // Nada de ficha atualizada: nem o .md foi reescrito, nem o aviso às conversas saiu.
+      expect(await fs.readFile(mdFile, 'utf8')).toBe(md);
+      expect((await fs.stat(mdFile)).mtimeMs).toBe(mdTime);
+      expect(changes).toEqual([]);
+
+      // Valor ruim que já estava no disco também é ignorado ao ler.
+      const jsonFile = path.join(projectPath, '.myco', 'staff', `${p.id}.json`);
+      const raw = JSON.parse(await fs.readFile(jsonFile, 'utf8'));
+      raw.lastModel = 'x; y';
+      raw.sessions[0].effort = 'enorme';
+      await fs.writeFile(jsonFile, JSON.stringify(raw));
+      saved = await disk(p.id);
+      expect(saved.lastModel).toBeUndefined();
+      expect(saved.sessions[0]!.effort).toBeUndefined();
+    });
+
+    it('salvar a ficha pelo formulário (e restaurar uma versão) mantém o último modelo e o das conversas', async () => {
+      const svc = service();
+      const p = await hireStaff(svc, 'Forma', { model: 'sonnet' });
+      const a = (await svc.chatSpawn('proj-id', null, p.id))!;
+      await svc.rememberChoice('proj-id', p.id, a.sessionId, { model: 'opus', effort: 'high' });
+
+      // O corpo do formulário não traz lastModel nem sessões, e ainda esvazia o modelo da ficha.
+      const form = { name: 'Forma', role: 'Dev', mission: 'Outra missão', autonomy: 'acceptEdits', model: null, effort: null };
+      await svc.update('proj-id', p.id, form);
+      let saved = await disk(p.id);
+      expect(saved).toMatchObject({ mission: 'Outra missão', model: null, lastModel: 'opus', lastEffort: 'high' });
+      expect(saved.sessions.find((x) => x.id === a.sessionId)).toMatchObject({ model: 'opus', effort: 'high' });
+      // Sem modelo na ficha, a conversa nova herda o último do chat.
+      expect(argOf((await svc.chatSpawn('proj-id', null, p.id))!.args, '--model')).toBe('opus');
+
+      // Voltar a uma versão antiga traz os campos da ficha, mas o "último" e as conversas são do presente.
+      const [old] = (await svc.versions('proj-id', p.id))!;
+      await svc.restore('proj-id', p.id, old!.version);
+      saved = await disk(p.id);
+      expect(saved).toMatchObject({ model: 'sonnet', lastModel: 'opus', lastEffort: 'high' });
+      expect(saved.sessions.find((x) => x.id === a.sessionId)).toMatchObject({ model: 'opus', effort: 'high' });
+
+      // Mudar o gestor (addManager/removeManager passam pelo mesmo update) também mantém.
+      const boss = await hireStaff(svc, 'Chefona');
+      await svc.addManager('proj-id', p.id, boss.id);
+      expect(await disk(p.id)).toMatchObject({ reportsTo: [boss.id], lastModel: 'opus', lastEffort: 'high' });
+    });
   });
 });
