@@ -43,7 +43,7 @@ export const StaffInputSchema = z.object({
   playbook: z.enum(PLAYBOOKS).nullable().default(null),
   worktree: z.boolean().default(false),
   servers: z.array(z.string().regex(/^[\w.-]{1,60}$/, 'servidor inválido')).max(30).default([]),
-  browser: z.boolean().default(false),
+  browser: z.boolean().default(true),
   portraitDataUrl: z.string().max(3_000_000, 'retrato grande demais (máx. 2 MB)').nullable().optional(),
   launch: z.boolean().optional(),
   /** Sessão aberta fora do Claudio’s Club que passa a ser deste funcionário (ganha ficha, nome e retrato). */
