@@ -44,6 +44,8 @@ interface Props {
   contextSwitch: ContextSwitch | null;
   /** Otimizar assinatura (folga de cota); null = config ainda não chegou. */
   optimizeQuota: boolean | null;
+  /** Continuar sozinho quando o limite de uso volta; null = config ainda não chegou. */
+  autoContinue: boolean | null;
   /** Sala do escopo do usuário no quadro; null = config ainda não chegou. */
   showUserScope: boolean | null;
   /** Segunda opinião do Codex na revisão das tarefas; null = config ainda não chegou. */
@@ -533,6 +535,17 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       description: t('toolbar.optimizeDesc'),
       keywords: t('toolbar.optimizeKeywords'),
       toggle: { checked: p.optimizeQuota, onChange: (v) => void api.saveConfig({ optimizeQuota: v }).then(p.onConfig, () => {}) },
+    });
+  }
+
+  if (p.autoContinue !== null) {
+    out.push({
+      id: 'auto-continue',
+      group: 'usage',
+      title: t('toolbar.autoContinueTitle'),
+      description: t('toolbar.autoContinueDesc'),
+      keywords: t('toolbar.autoContinueKeywords'),
+      toggle: { checked: p.autoContinue, onChange: (v) => void api.saveConfig({ autoContinue: v }).then(p.onConfig, () => {}) },
     });
   }
 

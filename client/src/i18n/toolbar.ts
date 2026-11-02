@@ -91,6 +91,9 @@ export default defineMessages({
     'toolbar.optimizeDesc':
       'Nas últimas 48h antes do reset da cota de 7 dias, se no seu ritmo ia sobrar 30% ou mais, as conversas vão para o Opus em esforço máximo e os agents pensam mais, até a folga acabar. Espera se o limite de 5h passar de 50%. As respostas ficam mais lentas.',
     'toolbar.optimizeKeywords': 'folga cota sobra opus esforço máximo boost consumo otimizado',
+    'toolbar.autoContinueTitle': 'Continuar sozinho quando o limite de uso voltar',
+    'toolbar.autoContinueDesc': 'Se o limite da assinatura acabar no meio de uma conversa, ela manda "continue" sozinha assim que o limite voltar.',
+    'toolbar.autoContinueKeywords': 'continuar sozinho limite de uso acabou voltar retomar continue conversa assinatura reset 5h 7d',
     'toolbar.codexTitle': 'Segunda opinião do Codex',
     'toolbar.codexDesc':
       'Na revisão das tarefas, um botão manda o diff para o Codex (OpenAI) revisar. Vai só o diff, sem arquivos de segredo, e gasta a cota do seu ChatGPT. Precisa do Codex CLI instalado e com login (npm i -g @openai/codex e codex login).',
@@ -328,6 +331,9 @@ export default defineMessages({
     'toolbar.optimizeDesc':
       'In the last 48h before the 7-day quota resets, if at your pace 30% or more would be left over, chats move to Opus at maximum effort and agents think harder until the slack runs out. It waits while the 5h limit is above 50%. Answers get slower.',
     'toolbar.optimizeKeywords': 'slack quota leftover opus maximum effort boost optimized usage',
+    'toolbar.autoContinueTitle': 'Continue on its own when the usage limit is back',
+    'toolbar.autoContinueDesc': 'If the subscription limit runs out in the middle of a chat, it sends "continue" by itself as soon as the limit is back.',
+    'toolbar.autoContinueKeywords': 'continue on its own usage limit ran out back resume chat subscription reset 5h 7d',
     'toolbar.codexTitle': 'Codex second opinion',
     'toolbar.codexDesc':
       'In task review, a button sends the diff to Codex (OpenAI) for review. Only the diff goes, without secret files, and it uses your ChatGPT quota. Requires the Codex CLI installed and signed in (npm i -g @openai/codex and codex login).',
@@ -562,6 +568,9 @@ export default defineMessages({
     'toolbar.optimizeDesc':
       'En las últimas 48h antes del reinicio de la cuota de 7 días, si a tu ritmo sobraría un 30% o más, las conversaciones pasan a Opus con esfuerzo máximo y los agents piensan más, hasta que se acabe la holgura. Espera si el límite de 5h supera el 50%. Las respuestas son más lentas.',
     'toolbar.optimizeKeywords': 'holgura cuota sobra opus esfuerzo máximo boost consumo optimizado',
+    'toolbar.autoContinueTitle': 'Continuar solo cuando vuelva el límite de uso',
+    'toolbar.autoContinueDesc': 'Si el límite de la suscripción se acaba en medio de una conversación, ella manda "continue" sola en cuanto el límite vuelva.',
+    'toolbar.autoContinueKeywords': 'continuar solo límite de uso se acabó volver retomar continue conversación suscripción reinicio 5h 7d',
     'toolbar.codexTitle': 'Segunda opinión de Codex',
     'toolbar.codexDesc':
       'En la revisión de tareas, un botón envía el diff a Codex (OpenAI) para revisarlo. Solo va el diff, sin archivos de secretos, y gasta la cuota de tu ChatGPT. Necesita el Codex CLI instalado y con sesión (npm i -g @openai/codex y codex login).',

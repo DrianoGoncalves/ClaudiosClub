@@ -36,6 +36,7 @@ import { searchConversations } from './chatSearch';
 import { searchFiles } from './fileSearch';
 import { CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
 import { ChatRegistry } from './chat/registry';
+import { AutoContinue } from './chat/autoContinue';
 import { StaffError, StaffService } from './staff/service';
 import { mcpJsonWarnings } from './staff/mcp';
 import { permissionInboxItem, questionInboxItem } from './inboxItems';
@@ -182,7 +183,28 @@ const inboxState = new InboxState(path.join(MYCO_HOME, 'inbox.json'));
 /** Folga de cota agora, só com "otimizar assinatura" ligado no config. */
 const currentBoost = async () => ((await readConfig()).optimizeQuota ? quotaBoost(await readUsage()) : null);
 
+/**
+ * O limite de uso da assinatura acabou no meio de uma conversa: o "continue" sai sozinho quando ele volta
+ * (opção `autoContinue`). Respeita a linha de parada do usuário e o orçamento do projeto, como o chat.
+ */
+const autoContinue = new AutoContinue({
+  file: path.join(MYCO_HOME, 'auto-continue.json'),
+  enabled: async () => (await readConfig()).autoContinue,
+  stopHit: async (projectId) => {
+    try {
+      await staff.checkUsage(projectId);
+      return null;
+    } catch (err) {
+      if (err instanceof UsageStopError) return err.hit;
+      throw err;
+    }
+  },
+  knownResets: async () => (await readUsage()).limits,
+  send: (p) => chats.continueChat(p.projectId, p.sessionId, p.staffId),
+});
+
 const chats: ChatManager = new ChatManager({
+  autoContinue,
   inbox: inboxState,
   contextSwitch: async () => (await readConfig()).contextSwitch,
   quotaBoost: currentBoost,
@@ -248,6 +270,16 @@ const tasks = new TaskService({
   // O consumo já foi conferido quando você mandou (a mensagem só esperou a vez).
   sendTo: (projectId, sessionId, staffId, text, images) => chats.send(projectId, sessionId, staffId, text, 'next', images),
   secondOpinion: (input) => codex.review(input),
+  // Turno que parou no limite de uso, com o "continue" agendado, não é entrega.
+  awaitingLimit: (sessionId) => chats.awaitingLimit(sessionId),
+});
+
+// "Continue" que não vai sair (cancelado na conversa, opção desligada, falhou): o turno que parou no limite
+// vale como fim, e a tarefa daquela conversa é entregue como antes, sem prender a fila do funcionário.
+autoContinue.subscribe((e) => {
+  if (e.type === 'dropped' || e.type === 'failed' || (e.type === 'cancelled' && e.by === 'user')) {
+    void tasks.onTurnDone(e.pending.sessionId).catch(() => {});
+  }
 });
 
 // Rotinas: no horário, a mensagem vai ao funcionário pelo mesmo caminho do chat do painel.
@@ -534,6 +566,17 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
         ? await chats.sendFromUser(pid!, b.sessionId, b.staffId, b.text, priority, b.images, b.files)
         : await chats.send(pid!, b.sessionId, b.staffId, b.text, priority, b.images, b.files, true);
       return { sessionId };
+    },
+  ],
+  // Aviso de limite de uso na conversa: desfaz o "continue" agendado para quando ele voltar.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/chat/${ID}/auto-continue/cancel$`),
+    async ({ params: [pid, sid], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      // Pendência de outro projeto: 404, e ela fica como está.
+      const done = await chats.cancelAutoContinue(pid!, sid!);
+      return done === null ? null : { ok: done };
     },
   ],
   [
@@ -1480,6 +1523,8 @@ server.listen(PORT, HOST, () => {
   chats.cleanOrphans().catch((err) => console.error('[chat] limpeza de órfãos falhou:', err));
   // Só o servidor que ficou com a porta agenda: um segundo que falhou não dispara rotinas em dobro.
   routines.start();
+  // Pelo mesmo motivo, só ele manda o "continue" das conversas que bateram no limite de uso.
+  autoContinue.start();
   // Fila de tarefas: quem ficou com tarefa ou ajuste esperando (ex.: o Claudio’s Club reiniciou no meio).
   const queueTick = () => void tasks.tick().catch(() => {});
   setTimeout(queueTick, 15_000).unref();

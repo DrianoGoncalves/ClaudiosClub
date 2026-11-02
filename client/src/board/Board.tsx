@@ -395,6 +395,7 @@ export function BoardView(props: BoardViewProps) {
             projectWorkspaces={config?.projectWorkspaces ?? null}
             contextSwitch={config?.contextSwitch ?? null}
             optimizeQuota={config?.optimizeQuota ?? null}
+            autoContinue={config?.autoContinue ?? null}
             showUserScope={config?.showUserScope ?? null}
             codexReview={config?.codexReview ?? null}
             onConfig={props.onConfig}

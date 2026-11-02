@@ -214,6 +214,7 @@ export const api = {
     sendWhileBusy?: SendPriority;
     contextSwitch?: ContextSwitch;
     optimizeQuota?: boolean;
+    autoContinue?: boolean;
     showUserScope?: boolean;
     codexReview?: boolean;
     /** Só os projetos enviados mudam; null volta à cor padrão. */
@@ -291,6 +292,9 @@ export const api = {
     get<ChatMcp[]>(`/api/projects/${projectId}/chat/${sessionId}/mcp${staffId ? `?staffId=${encodeURIComponent(staffId)}` : ''}`),
   chatMcpToggle: (projectId: string, sessionId: string, staffId: string | null, name: string, enabled: boolean) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/chat/${sessionId}/mcp`, { staffId, name, enabled }),
+  /** Cancela o "continue" agendado para quando o limite de uso voltar. */
+  chatCancelAutoContinue: (projectId: string, sessionId: string) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/chat/${sessionId}/auto-continue/cancel`),
   chatStopTask: (sessionId: string, taskId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/stop-task`, { taskId }),
   /** Busca nas conversas dos funcionários (a partir de 3 letras). */
   search: (q: string) => get<ConversationHit[]>(`/api/search?q=${encodeURIComponent(q)}`),
