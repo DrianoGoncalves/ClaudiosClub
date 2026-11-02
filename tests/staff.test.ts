@@ -317,6 +317,7 @@ describe('StaffService', () => {
     expect(r?.launch).toBeNull();
     const p = r!.profile;
     expect(p.id).toMatch(/^bia-[0-9a-f]{4}$/);
+    expect(p.browser).toBe(true); // usa o Chrome por padrão
 
     const dir = path.join(projectPath, '.myco', 'staff');
     const ficha = await fs.readFile(path.join(dir, `${p.id}.md`), 'utf8');

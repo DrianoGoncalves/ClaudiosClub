@@ -105,7 +105,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
   const [playbook, setPlaybook] = useState<'' | Playbook>(editing?.playbook ?? '');
   const [worktree, setWorktree] = useState(editing?.worktree ?? false);
   const [servers, setServers] = useState<string[]>(editing?.servers ?? []);
-  const [browser, setBrowser] = useState(editing?.browser ?? false);
+  const [browser, setBrowser] = useState(editing?.browser ?? true);
   const [serverList, setServerList] = useState<ServerInfo[] | null>(null);
   // O campo só aparece para quem é de infra (cargo pronto) ou já tem servidores.
   const [showServers, setShowServers] = useState((editing?.servers.length ?? 0) > 0);
