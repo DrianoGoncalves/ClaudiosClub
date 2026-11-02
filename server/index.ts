@@ -43,7 +43,7 @@ import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
 import { copyToLibrary, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill, SkillError } from './skillLibrary';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
-import { listProjectTree, parseWriteBody, ProjectFileError, readProjectFile, writeProjectFile } from './projectFiles';
+import { listProjectTree, parseWriteBody, ProjectFileError, readProjectFile, readProjectImageFile, writeProjectFile } from './projectFiles';
 import { readUsage } from './usage';
 import { UsageStopError } from './usageStop';
 import { quotaBoost } from './quotaBoost';
@@ -922,6 +922,15 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     async ({ params: [id], url }) => {
       const dir = await projectPathOf(id!);
       return dir ? readProjectFile(dir, url.searchParams.get('path') ?? '') : null;
+    },
+  ],
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/files/image$`),
+    async ({ params: [id], url }) => {
+      const dir = await projectPathOf(id!);
+      const img = dir ? await readProjectImageFile(dir, url.searchParams.get('path') ?? '') : null;
+      return img ? new Raw(img.bytes, img.type) : null;
     },
   ],
   [

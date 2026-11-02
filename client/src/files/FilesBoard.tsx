@@ -15,7 +15,10 @@ interface Doc {
   saved: string;
   mtimeMs: number;
 }
-type Opened = { path: string; state: 'loading' } | { path: string; state: 'blocked'; reason: string } | { path: string; state: 'ok'; doc: Doc; rev: number };
+type Opened =
+  | { path: string; state: 'loading' }
+  | { path: string; state: 'image'; src: string }
+  | { path: string; state: 'blocked'; reason: string } | { path: string; state: 'ok'; doc: Doc; rev: number };
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'conflict';
 
 const byKind = (a: FileEntry, b: FileEntry) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1);
@@ -134,6 +137,11 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
     setStatus('idle');
     setSaveError(null);
     setOpened({ path, state: 'loading' });
+    if (filesApi.isImage(path)) {
+      // Imagem: só visualização. O arquivo segue sem edição (binário), e o navegador pede os bytes ao servidor.
+      setOpened({ path, state: 'image', src: filesApi.imageUrl(projectId, path, ++rev.current) });
+      return;
+    }
     try {
       const r = await filesApi.read(projectId, path);
       const d: Doc = { path, content: r.content, saved: r.content, mtimeMs: r.mtimeMs };
@@ -256,6 +264,14 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
                   </div>
                 )}
                 {opened.state === 'loading' && <p className="muted files-pick">{t('files.loading')}</p>}
+                {opened.state === 'image' && (
+                  <div className="files-image">
+                    <div className="files-image-view">
+                      <img src={opened.src} alt={opened.path} onError={() => setOpened({ path: opened.path, state: 'blocked', reason: t('files.imageError') })} />
+                    </div>
+                    <p className="files-blocked">{t('files.binary')}</p>
+                  </div>
+                )}
                 {opened.state === 'blocked' && <p className="files-blocked">{opened.reason}</p>}
                 {opened.state === 'ok' && (
                   <Suspense fallback={<p className="muted files-pick">{t('files.loadingEditor')}</p>}>

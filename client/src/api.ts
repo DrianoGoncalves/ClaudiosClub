@@ -416,6 +416,9 @@ export const filesApi = {
   tree: (projectId: string, path: string) =>
     filesFetch<{ entries: FileEntry[] }>(`/api/projects/${projectId}/files/tree?path=${encodeURIComponent(path)}`),
   read: (projectId: string, path: string) => filesFetch<FileContent>(`/api/projects/${projectId}/files/read?path=${encodeURIComponent(path)}`),
+  /** Extensões de imagem que a aba mostra no lugar do editor (as mesmas do servidor). */
+  isImage: (path: string) => /\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i.test(path),
+  imageUrl: (projectId: string, path: string, v: number) => `/api/projects/${projectId}/files/image?path=${encodeURIComponent(path)}&v=${v}`,
   /** `baseMtimeMs` = versão carregada; se o disco mudou, o servidor responde 409 e não grava. */
   write: (projectId: string, path: string, content: string, baseMtimeMs: number) =>
     filesFetch<{ mtimeMs: number }>(`/api/projects/${projectId}/files/write`, { path, content, baseMtimeMs }),
