@@ -29,6 +29,11 @@ export interface ChatSpawn {
   sessionId: string;
   cwd: string;
   args: string[];
+  /**
+   * O modelo/esforço da linha de comando vêm de uma escolha gravada nesta conversa (ou na de origem,
+   * ao duplicar). Vale como escolha à mão: a folga de cota não troca nem desfaz.
+   */
+  chosen?: boolean;
 }
 
 export interface ChatManagerOptions {
@@ -42,6 +47,12 @@ export interface ChatManagerOptions {
   /** Monta a linha de comando (ficha, autonomia, MCPs) de quem vai conversar. */
   /** `forkFrom`: sessão nova que começa como cópia desta (duplicar a conversa). */
   resolve: (projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string) => Promise<ChatSpawn | null>;
+  /**
+   * Você escolheu modelo/esforço no seletor do chat: guarda na ficha, na conversa e como "último" do
+   * funcionário (a conversa reabre assim; conversa nova sem modelo na ficha herda o último). Só grava
+   * escolha sua; a folga de cota não passa por aqui. Sem ele, nada é gravado.
+   */
+  rememberChoice?: (projectId: string, staffId: string, sessionId: string, choice: { model?: string; effort?: string }) => Promise<void>;
   /** Conversa parada há mais que isso fecha o processo (a sessão continua no disco). */
   idleMs?: number;
   spawnImpl?: ChatProcessOptions['spawnImpl'];
@@ -104,7 +115,7 @@ function boostEnd(iso: string): string {
 
 /** O que entra na linha de comando da conversa, fora a autonomia (que troca sem reabrir). */
 function launchFields(p: StaffProfile) {
-  const { autonomy: _a, updatedAt: _u, portrait: _p, sessions: _s, firstTask: _f, ...rest } = p;
+  const { autonomy: _a, updatedAt: _u, portrait: _p, sessions: _s, firstTask: _f, lastModel: _lm, lastEffort: _le, ...rest } = p;
   return rest;
 }
 
@@ -326,7 +337,7 @@ export class ChatManager {
    * Folga de cota (ver server/quotaBoost.ts), conferida a cada mensagem: começou, a conversa vai para
    * o Opus em esforço máximo; acabou, volta ao modelo e ao esforço com que abriu. Devolve o aviso para
    * o funcionário (os agents também mudam de esforço), só na troca. Se você trocou o modelo ou o
-   * esforço à mão nesta conversa, vale a sua escolha.
+   * esforço à mão nesta conversa (ou a conversa abriu com uma escolha gravada), vale a sua escolha.
    */
   private async applyBoost(chat: ChatProcess): Promise<string | null> {
     const state = this.boosts.get(chat);
@@ -457,6 +468,14 @@ export class ChatManager {
     if (s.model) chat.setModel(s.model, `Modelo desta conversa: ${s.model}`);
     if (s.effort) chat.setEffort(s.effort, `Esforço desta conversa: ${s.effort}`);
     if (s.autonomy) chat.setPermissionMode(CLI_MODE[s.autonomy], `Autonomia desta conversa: ${AUTONOMY_NAME[s.autonomy]}`);
+    // Fica na ficha para a conversa reabrir assim; falha ao gravar não desfaz a troca já feita.
+    if (staffId && (s.model || s.effort)) {
+      try {
+        await this.opts.rememberChoice?.(projectId, staffId, chat.sessionId, { model: s.model, effort: s.effort });
+      } catch (err) {
+        this.log(`${chat.sessionId}: não consegui gravar o modelo/esforço na ficha: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     return chat.sessionId;
   }
 
@@ -639,6 +658,8 @@ export class ChatManager {
       staffId,
       cwd: spawn.cwd,
       args: spawn.args,
+      model: argOf(spawn.args, '--model'),
+      effort: argOf(spawn.args, '--effort'),
       onUsage: (limits) => void this.saveUsage(spawn.sessionId, limits),
       onSecret: (label) => this.noteSecret(spawn.sessionId, label),
       onIdle: (reason) => {
@@ -655,6 +676,8 @@ export class ChatManager {
     });
     this.chats.set(spawn.sessionId, chat);
     this.launched.set(chat, { model: argOf(spawn.args, '--model'), effort: argOf(spawn.args, '--effort') });
+    // Escolha gravada (reabrir ou duplicar): vale a sua, a folga de cota não atropela.
+    if (spawn.chosen) this.boosts.set(chat, 'manual');
     // Abas já abertas nesta sessão passam a ouvir o processo novo, desde o começo dele.
     const subs = this.streams.get(spawn.sessionId);
     if (subs) for (const [listener, unsubscribe] of subs) {

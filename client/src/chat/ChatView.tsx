@@ -41,7 +41,7 @@ interface Props {
   onSessionStarted?: (sessionId: string) => void;
   /** Nível de uso: os ajustes da conversa mudam de cara. */
   level?: UiLevel;
-  /** Modelo e esforço da ficha (o que vale até você trocar na conversa). */
+  /** Modelo e esforço que a conversa usa ao abrir (o da conversa > o da ficha > o último escolhido no chat); vale até o processo informar o dele. */
   fichaModel?: string | null;
   fichaEffort?: Effort | null;
   /** Topo compacto do funcionário (montado pelo EmployeePanel); o "⋯" fica à direita dele. */

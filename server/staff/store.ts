@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -13,6 +13,9 @@ import { slugify } from './ficha';
 export const AUTONOMY = ['plan', 'manual', 'acceptEdits', 'auto', 'bypassPermissions'] as const;
 const EFFORT = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const PLAYBOOKS = ['plan-big-execute-small', 'scout-then-build', 'review-gate'] as const;
+// Alias ou id de modelo: só caracteres seguros na linha de comando.
+const ModelSchema = z.string().regex(/^[\w.[\]-]{1,60}$/, 'modelo inválido');
+const EffortSchema = z.enum(EFFORT);
 const line = (max: number) => z.string().trim().max(max);
 const list = (max: number) => z.array(line(500)).max(max).default([]);
 
@@ -34,9 +37,8 @@ export const StaffInputSchema = z.object({
   knowledge: list(50),
   rules: list(50),
   doneWhen: line(2000).default(''),
-  // Alias ou id de modelo: só caracteres seguros na linha de comando.
-  model: z.string().regex(/^[\w.[\]-]{1,60}$/, 'modelo inválido').nullable().default(null),
-  effort: z.enum(EFFORT).nullable().default(null),
+  model: ModelSchema.nullable().default(null),
+  effort: EffortSchema.nullable().default(null),
   canHire: z.boolean().default(false),
   playbook: z.enum(PLAYBOOKS).nullable().default(null),
   worktree: z.boolean().default(false),
@@ -77,7 +79,21 @@ const ProfileSchema = StaffInputSchema.omit({ portraitDataUrl: true, launch: tru
   hiredBy: z.string().nullable().optional().catch(undefined),
   temporary: z.boolean().optional().catch(undefined),
   ended: z.object({ at: z.string(), reason: z.string() }).nullable().optional().catch(undefined),
-  sessions: z.array(z.object({ id: z.string(), startedAt: z.string(), cwd: z.string().optional() })).default([]),
+  // Último modelo/esforço escolhido no chat (fora do questionário); valor inválido é ignorado.
+  lastModel: ModelSchema.optional().catch(undefined),
+  lastEffort: EffortSchema.optional().catch(undefined),
+  sessions: z
+    .array(
+      z.object({
+        id: z.string(),
+        startedAt: z.string(),
+        cwd: z.string().optional(),
+        // O que se escolheu no chat nesta conversa; valor inválido é ignorado.
+        model: ModelSchema.optional().catch(undefined),
+        effort: EffortSchema.optional().catch(undefined),
+      }),
+    )
+    .default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -118,8 +134,51 @@ export async function readProfile(projectPath: string, id: string): Promise<Staf
   return parsed.success ? (parsed.data as StaffProfile) : null;
 }
 
+/** Quem está lendo-e-gravando a ficha (por arquivo) espera a vez: duas trocas seguidas não perdem uma à outra. */
+const profileQueues = new Map<string, Promise<unknown>>();
+
+export function withProfileLock<T>(projectPath: string, staffId: string, fn: () => Promise<T>): Promise<T> {
+  const key = profileFile(projectPath, staffId);
+  const run = (profileQueues.get(key) ?? Promise.resolve()).then(fn);
+  const tail = run.catch(() => {});
+  profileQueues.set(key, tail);
+  void tail.then(() => {
+    if (profileQueues.get(key) === tail) profileQueues.delete(key);
+  });
+  return run;
+}
+
 export async function saveProfile(projectPath: string, p: StaffProfile): Promise<void> {
   await writeAtomic(profileFile(projectPath, p.id), JSON.stringify(p, null, 2) + '\n');
+}
+
+/**
+ * Guarda o modelo/esforço escolhido no seletor do chat: na conversa (`sessionId`) e como "último" do
+ * funcionário. Lê a ficha fresca do disco e grava só o JSON: sem .md, sem `updatedAt`, sem aviso de
+ * "ficha atualizada" (o aviso sai de StaffService.update/restore, não daqui). Valor inválido é ignorado.
+ */
+export async function saveChatChoice(
+  projectPath: string,
+  staffId: string,
+  sessionId: string | null,
+  choice: { model?: string; effort?: string },
+): Promise<void> {
+  const model = ModelSchema.safeParse(choice.model);
+  const effort = EffortSchema.safeParse(choice.effort);
+  if (!model.success && !effort.success) return;
+  await withProfileLock(projectPath, staffId, async () => {
+    const p = await readProfile(projectPath, staffId);
+    if (!p) return;
+    const next: StaffProfile = {
+      ...p,
+      ...(model.success && { lastModel: model.data }),
+      ...(effort.success && { lastEffort: effort.data }),
+      sessions: p.sessions.map((x) =>
+        x.id === sessionId ? { ...x, ...(model.success && { model: model.data }), ...(effort.success && { effort: effort.data }) } : x,
+      ),
+    };
+    await saveProfile(projectPath, next);
+  });
 }
 
 export async function createProfile(
@@ -221,7 +280,8 @@ export async function ensureMemory(projectPath: string, p: StaffProfile): Promis
 
 export async function writeAtomic(file: string, text: string): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
+  // Um temporário por gravação: duas ao mesmo tempo no mesmo arquivo não se atropelam no rename.
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   await fs.writeFile(tmp, text, 'utf8');
   await fs.rename(tmp, file);
 }
