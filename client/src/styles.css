@@ -357,7 +357,7 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .chat-actions .chat-attach { margin-right: auto; border-color: transparent; }
 .chat-actions .chat-attach:focus-within { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); }
 .chat-actions .chat-stop { min-height: 36px; }
-.chat-actions :is(.chat-attach, .chat-send), .chat-status .chat-icon-btn { width: 36px; height: 36px; padding: 0; display: inline-grid; place-items: center; }
+.chat-actions :is(.chat-attach, .chat-send) { width: 36px; height: 36px; padding: 0; display: inline-grid; place-items: center; }
 /* Cargos (config → Cargos). */
 .roles { display: grid; gap: 8px; width: 100%; }
 .roles-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
@@ -525,9 +525,9 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .context-ring-track { stroke: var(--line); }
 .context-ring-fill { stroke: var(--meter); stroke-linecap: round; }
 .chat-icon-btns { margin-left: auto; display: inline-flex; gap: 6px; }
-/* Botões só de ícone, redondos: 36px na barra de baixo do chat, 28px na linha das conversas (a altura da lista). */
+/* Botões só de ícone, redondos: 36px na barra de baixo do chat (anexar e enviar), 28px no MCP e no diff e na linha das conversas (a altura da lista). */
 .btn-secondary.chat-icon-btn { border-radius: 50%; }
-.chat-convos .chat-icon-btn { flex: none; width: 28px; height: 28px; padding: 0; display: inline-grid; place-items: center; }
+:is(.chat-convos, .chat-status) .chat-icon-btn { flex: none; width: 28px; height: 28px; padding: 0; display: inline-grid; place-items: center; }
 
 /* Rolagem do painel lateral, do chat, dos modais, das caixas de texto, do quadro de tarefas e das configurações: fina, sem trilho, ponta irregular como os traços de caneta.
    A borda transparente (com background-clip) afasta o polegar da beira, qualquer que seja o fundo. */
