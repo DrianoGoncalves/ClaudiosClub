@@ -8,6 +8,12 @@ export function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}\n… (${text.length - max} caracteres a mais)` : text;
 }
 
+/** AskUserQuestion não tem argumento simples: o resumo é o texto da primeira pergunta. */
+function firstQuestion(i: Record<string, unknown>): string {
+  const q = Array.isArray(i.questions) ? (i.questions[0] as { question?: unknown } | undefined)?.question : undefined;
+  return typeof q === 'string' ? q.trim() : '';
+}
+
 /** Resumo de uma chamada de ferramenta: o argumento que identifica o que ela faz. */
 export function toolSummary(name: string, input: unknown): string {
   const i = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
@@ -15,7 +21,7 @@ export function toolSummary(name: string, input: unknown): string {
     for (const k of keys) if (typeof i[k] === 'string' && i[k]) return String(i[k]);
     return '';
   };
-  const first = pick('file_path', 'path', 'notebook_path', 'command', 'pattern', 'url', 'query', 'description', 'prompt', 'skill');
+  const first = pick('file_path', 'path', 'notebook_path', 'command', 'pattern', 'url', 'query', 'description', 'prompt', 'skill') || firstQuestion(i);
   return first.split('\n')[0]!.slice(0, 160) || name;
 }
 

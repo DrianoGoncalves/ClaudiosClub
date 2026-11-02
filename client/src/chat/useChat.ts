@@ -11,7 +11,7 @@ import type {
   Effort,
   SendPriority,
 } from '../../../shared/model';
-import { api, ApiError, withUsageConfirm } from '../api';
+import { api, ApiError, withUsageConfirm, type PermissionOpts } from '../api';
 
 // Estado de uma conversa: histórico do transcript + o que chega ao vivo pelo SSE.
 
@@ -29,9 +29,10 @@ export interface ChatView {
   interrupt: () => Promise<void>;
   /**
    * `executeAs`: ao aprovar um plano, a autonomia com que ele executa; `message`: o que ele lê ao
-   * negar; `remember`: aprovar de vez, nesta conversa ou no projeto.
+   * negar; `remember`: aprovar de vez, nesta conversa ou no projeto; `answers`: as respostas de uma
+   * pergunta com opções.
    */
-  answer: (requestId: string, allow: boolean, opts?: { message?: string; executeAs?: Autonomy; remember?: 'session' | 'project' }) => Promise<void>;
+  answer: (requestId: string, allow: boolean, opts?: PermissionOpts) => Promise<void>;
   /** Modelo, esforço e autonomia desta conversa, na hora. */
   settings: (s: { model?: string; effort?: Effort; autonomy?: Autonomy }) => Promise<void>;
   /** Comandos "/" da sessão (ou os últimos vistos no projeto, antes de abrir). */
@@ -233,7 +234,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     if (sessionId) await api.chatInterrupt(sessionId).catch(() => {});
   };
 
-  const answer = async (requestId: string, allow: boolean, opts?: { message?: string; executeAs?: Autonomy; remember?: 'session' | 'project' }) => {
+  const answer = async (requestId: string, allow: boolean, opts?: PermissionOpts) => {
     if (sessionId) await api.chatPermission(sessionId, requestId, allow, opts).catch(fail);
   };
 

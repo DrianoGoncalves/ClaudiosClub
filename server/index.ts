@@ -30,6 +30,7 @@ import { createDemo, DEMO_DIR } from './demo';
 import { z } from 'zod';
 import { AgentError, AgentInput, readAgentSource, saveAgent } from './adapters/claude/agentWrite';
 import { ChatError, ChatManager, findTranscript } from './chat/manager';
+import { AnnotationsField, AnswersField } from './chat/questions';
 import { touchedFiles } from './chatChanges';
 import { searchConversations } from './chatSearch';
 import { searchFiles } from './fileSearch';
@@ -316,6 +317,10 @@ const PermissionBody = z.object({
   executeAs: z.enum(AUTONOMY).optional(),
   /** Ao aprovar: liberar de vez, nesta conversa ou no projeto (só pelo Claudio’s Club). */
   remember: z.enum(['session', 'project']).optional(),
+  /** Ao aprovar uma pergunta com opções: texto da pergunta → a opção, várias opções ou o que foi escrito. */
+  answers: AnswersField,
+  /** O `preview` (ou nota) da opção marcada, por pergunta. */
+  annotations: AnnotationsField,
 });
 const ChatSettingsBody = z
   .object({
@@ -679,6 +684,8 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
           message: b.message,
           executeAs: fromBrowser ? b.executeAs : undefined,
           remember: fromBrowser ? b.remember : undefined,
+          answers: b.answers,
+          annotations: b.annotations,
         }),
       };
     },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatItem } from '../shared/model';
+import type { AskedQuestion, ChatItem } from '../shared/model';
 import { permissionInboxItem, questionInboxItem } from '../server/inboxItems';
 
 const place = { projectId: 'p', projectName: 'Projeto', sessionId: 'sx', staffId: 'ana', name: 'Ana' };
@@ -17,6 +17,15 @@ const card = (over: Partial<Permission> = {}): Permission => ({
 });
 
 describe('aviso da caixa que leva ao ponto da conversa', () => {
+  it('pergunta com opções: diz que é pergunta e mostra o texto dela', () => {
+    const q: AskedQuestion = { question: 'Qual banco?', header: 'Banco', kind: 'choice', multiSelect: false, options: [{ label: 'SQLite', description: '' }] };
+    expect(permissionInboxItem(card({ tool: 'AskUserQuestion', summary: 'Qual banco?', questions: [q] }), place)).toMatchObject({
+      kind: 'permission',
+      summary: 'pergunta para você: Qual banco?',
+      itemId: 'p:r1',
+    });
+  });
+
   it('permissão: o alvo é o cartão dela', () => {
     expect(permissionInboxItem(card(), place)).toEqual({
       ...place,

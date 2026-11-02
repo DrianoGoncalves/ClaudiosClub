@@ -1,12 +1,13 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { BackgroundTask, ChatAttachment, ChatCommand, ChatEvent, ChatItem, ChatState, SendPriority, UsageLimit } from '../../shared/model';
+import type { AskedQuestion, BackgroundTask, ChatAttachment, ChatCommand, ChatEvent, ChatItem, ChatState, SendPriority, UsageLimit } from '../../shared/model';
 import { cleanEnv } from '../auth';
 import { tryJson } from '../adapters/claude/fsutil';
 import { contextWindowFor } from '../adapters/claude/pricing';
 import { cacheTtlOf } from './contextPolicy';
 import { hasCheckpoint, inputText, resultText, stripCheckpoint, toolSummary } from './items';
+import { ASK_TOOL, cleanAnswers, parseQuestions } from './questions';
 import { killTree } from './registry';
 import { findSecret } from './secrets';
 
@@ -118,7 +119,7 @@ export class ChatProcess {
   private readonly items = new Map<string, ChatItem>();
   private readonly listeners = new Set<Listener>();
   /** Pedidos de permissão sem resposta: a entrada original e as sugestões de "permitir sempre". */
-  private readonly pending = new Map<string, { input: unknown; tool: string; suggestions: Suggestion[] }>();
+  private readonly pending = new Map<string, { input: unknown; tool: string; suggestions: Suggestion[]; questions?: AskedQuestion[] }>();
   private stderr = '';
   private buf = '';
   private state: ChatState = {
@@ -369,23 +370,44 @@ export class ChatProcess {
   /**
    * Responde um pedido de permissão. Aprovar devolve a entrada original, sem mudanças; com
    * `remember`, ainda libera de vez (nesta conversa ou no projeto). Negar leva `message` (o que o
-   * funcionário lê), por padrão "negou".
+   * funcionário lê), por padrão "negou". Numa pergunta com opções (AskUserQuestion), aprovar leva
+   * `reply.answers` (sem nenhuma, o Claude lê "não respondeu") e nunca vira "permitir sempre":
+   * liberar de vez faria as próximas perguntas passarem sem ninguém responder.
    */
-  answer(requestId: string, allow: boolean, message = 'O usuário negou pelo Claudio’s Club.', remember?: Remember): boolean {
+  answer(
+    requestId: string,
+    allow: boolean,
+    message = 'O usuário negou pelo Claudio’s Club.',
+    remember?: Remember,
+    reply?: { answers?: unknown; annotations?: unknown },
+  ): boolean {
     const p = this.pending.get(requestId);
     if (!p) return false;
     this.pending.delete(requestId);
-    const updatedPermissions = allow && remember ? rememberRules(p.tool, p.suggestions, remember) : undefined;
+    const asking = p.tool === ASK_TOOL;
+    const updatedPermissions = allow && remember && !asking ? rememberRules(p.tool, p.suggestions, remember) : undefined;
+    const given = allow && p.questions ? cleanAnswers(p.questions, reply?.answers, reply?.annotations) : undefined;
+    const input =
+      given && p.input && typeof p.input === 'object'
+        ? { ...p.input, answers: given.answers, ...(Object.keys(given.annotations).length > 0 && { annotations: given.annotations }) }
+        : p.input;
     this.write({
       type: 'control_response',
       response: {
         subtype: 'success',
         request_id: requestId,
-        response: allow ? { behavior: 'allow', updatedInput: p.input, ...(updatedPermissions && { updatedPermissions }) } : { behavior: 'deny', message },
+        response: allow ? { behavior: 'allow', updatedInput: input, ...(updatedPermissions && { updatedPermissions }) } : { behavior: 'deny', message },
       },
     });
     const item = this.items.get(`p:${requestId}`);
-    if (item?.kind === 'permission') this.putItem({ ...item, status: allow ? 'allowed' : 'denied', ...(updatedPermissions && { remembered: remember }) });
+    if (item?.kind === 'permission') {
+      this.putItem({
+        ...item,
+        status: allow ? 'allowed' : 'denied',
+        ...(updatedPermissions && { remembered: remember }),
+        ...(given && { answers: given.answers }),
+      });
+    }
     return true;
   }
 
@@ -578,7 +600,10 @@ export class ChatProcess {
         const suggestions = (Array.isArray(req.permission_suggestions) ? req.permission_suggestions : []).filter(
           (s): s is Suggestion => !!s && typeof s === 'object',
         );
-        this.pending.set(requestId, { input: req.input, tool: req.tool_name ?? tool, suggestions });
+        // Pergunta com opções: as perguntas validadas viram um cartão para responder (entrada
+        // que não dá para ler fica no cartão genérico).
+        const questions = req.tool_name === ASK_TOOL ? parseQuestions(req.input) : null;
+        this.pending.set(requestId, { input: req.input, tool: req.tool_name ?? tool, suggestions, ...(questions && { questions }) });
         // Fim do modo plano: o plano vem inteiro em `input.plan` e vira um cartão para aprovar.
         const plan = req.tool_name === 'ExitPlanMode' ? (req.input as { plan?: unknown } | undefined)?.plan : undefined;
         this.putItem({
@@ -591,6 +616,7 @@ export class ChatProcess {
           status: 'pending',
           at,
           ...(typeof plan === 'string' && { plan }),
+          ...(questions && { questions }),
         });
         return;
       }

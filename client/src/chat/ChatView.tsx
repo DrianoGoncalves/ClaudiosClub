@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type { Autonomy, ChatAttachment, ChatItem, Effort, SendPriority, UiLevel } from '../../../shared/model';
-import { api } from '../api';
+import { api, type PermissionOpts } from '../api';
 import { ArrowDownIcon, FileDiffIcon, ImageIcon, McpIcon, SendIcon } from '../icons';
 import { t, locale } from '../i18n';
 import { shrinkImage } from '../lib/shrinkImage';
@@ -19,6 +19,7 @@ import {
 import { ChangesPanel } from './ChangesPanel';
 import { useChatDetail } from './chatDetail';
 import type { ChatFocus } from './chatFocus';
+import { QuestionCard } from './QuestionCard';
 import { useChatFocus } from './useChatFocus';
 import { Markdown, looksLikeMarkdown, useCopy } from './markdown';
 import { systemMessageText } from './systemMessage';
@@ -614,7 +615,7 @@ function AssistantMessage({ id, text }: { id: string; text: string }) {
   );
 }
 
-type Answer = (id: string, allow: boolean, opts?: { message?: string; executeAs?: Autonomy; remember?: 'session' | 'project' }) => Promise<void>;
+type Answer = (id: string, allow: boolean, opts?: PermissionOpts) => Promise<void>;
 
 function Item({
   item,
@@ -674,6 +675,8 @@ function Item({
     case 'permission':
       return item.plan !== undefined ? (
         <PlanCard item={item} plan={item.plan} onAnswer={onAnswer} executeAs={executeAs} onChangesRequested={onChangesRequested} />
+      ) : item.questions ? (
+        <QuestionCard item={item} questions={item.questions} onAnswer={onAnswer} />
       ) : (
         <PermissionCard item={item} onAnswer={onAnswer} />
       );
@@ -755,6 +758,8 @@ function PermissionCard({ item, onAnswer }: { item: Extract<ChatItem, { kind: 'p
     await onAnswer(requestId, allow, remember ? { remember } : undefined);
     setBusy(false);
   };
+  // O servidor ignora "sempre" na pergunta com opções (AskUserQuestion): o botão não aparece para ela.
+  const canRemember = item.tool !== 'AskUserQuestion';
   return (
     <div className={`permission permission-${item.status}`} data-item-id={item.id}>
       <p className="permission-title">
@@ -771,12 +776,16 @@ function PermissionCard({ item, onAnswer }: { item: Extract<ChatItem, { kind: 'p
           <button className="btn-primary" disabled={busy} onClick={() => void answer(true)}>
             {t('chat.approve')}
           </button>
-          <button className="btn-secondary" disabled={busy} onClick={() => void answer(true, 'session')} title={t('chat.alwaysHereHelp')}>
-            {t('chat.alwaysHere')}
-          </button>
-          <button className="btn-secondary" disabled={busy} onClick={() => void answer(true, 'project')} title={t('chat.alwaysProjectHelp')}>
-            {t('chat.alwaysProject')}
-          </button>
+          {canRemember && (
+            <button className="btn-secondary" disabled={busy} onClick={() => void answer(true, 'session')} title={t('chat.alwaysHereHelp')}>
+              {t('chat.alwaysHere')}
+            </button>
+          )}
+          {canRemember && (
+            <button className="btn-secondary" disabled={busy} onClick={() => void answer(true, 'project')} title={t('chat.alwaysProjectHelp')}>
+              {t('chat.alwaysProject')}
+            </button>
+          )}
           <button className="btn-secondary" disabled={busy} onClick={() => void answer(false)}>
             {t('chat.deny')}
           </button>

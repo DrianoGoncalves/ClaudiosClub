@@ -5,14 +5,14 @@ import type { ChatItem, InboxItem } from '../shared/model';
 
 type Place = Pick<InboxItem, 'projectId' | 'projectName' | 'sessionId' | 'staffId' | 'name'>;
 
-/** Pedido de permissão (ou plano) sem resposta: o alvo é o cartão dele na lista. */
+/** Pedido de permissão (ou plano, ou pergunta com opções) sem resposta: o alvo é o cartão dele na lista. */
 export function permissionInboxItem(p: Extract<ChatItem, { kind: 'permission' }>, w: Place): InboxItem {
   const plan = p.plan !== undefined;
   return {
     id: `perm:${p.id}`,
     kind: plan ? 'plan' : 'permission',
     ...w,
-    summary: plan ? 'plano pronto para aprovar' : `${p.tool} ${p.summary}`,
+    summary: plan ? 'plano pronto para aprovar' : p.questions ? `pergunta para você: ${p.summary}` : `${p.tool} ${p.summary}`,
     at: p.at,
     itemId: p.id,
   };
