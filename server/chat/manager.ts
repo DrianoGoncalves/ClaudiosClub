@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type {
@@ -26,6 +27,9 @@ import { CEILING_AT, contextNotice, kTokens, NOTICE_AT, rereadUsd, switchDecisio
 import { BOOST_NOTICE, CONTEXT_NOTICE } from './items';
 import { InboxState } from '../inboxState';
 import { isAlive, killTree, type ChatRegistry } from './registry';
+import { CONTINUE_TEXT, type AutoContinue, type AutoContinueEvent, type Pending } from './autoContinue';
+import { limitNotice, MAX_LIMIT_HITS, resumePlan, type LimitHit } from './usageLimit';
+import { readUsage } from '../usage';
 
 export interface ChatSpawn {
   sessionId: string;
@@ -78,6 +82,8 @@ export interface ChatManagerOptions {
   keepSession?: (sessionId: string) => Promise<boolean>;
   /** Folga de cota agora (com "otimizar assinatura" ligado); sem ele, nunca. */
   quotaBoost?: () => Promise<QuotaBoost | null>;
+  /** Limite de uso estourado: agenda o "continue" para quando ele voltar (ver autoContinue.ts); sem ele, só avisa. */
+  autoContinue?: AutoContinue;
 }
 
 export class ChatError extends Error {}
@@ -159,10 +165,22 @@ export class ChatManager {
   private readonly launched = new WeakMap<ChatProcess, { model: string | null; effort: string | null }>();
   /** Folga de cota em cada processo: ligada, ou você trocou o modelo/esforço à mão (vale a sua escolha). */
   private readonly boosts = new WeakMap<ChatProcess, 'on' | 'manual'>();
+  /** Último consumo (5h/7d) visto nas conversas, por janela: a hora de voltar quando o stream não diz. */
+  private readonly knownLimits = new Map<string, UsageLimit>();
+  /**
+   * O aviso de limite de uso mais recente de cada conversa aberta (para trocar o texto quando muda). Cada
+   * aviso guarda a própria hora: um estouro novo não reescreve o anterior com a hora dele.
+   */
+  private readonly limitNotices = new Map<string, { id: string; resetsAt: number; scheduled: boolean }>();
+  /** Estouros de limite seguidos por conversa, desde o último turno que terminou sem limite (ver `MAX_LIMIT_HITS`). */
+  private readonly limitStreak = new Map<string, number>();
+  /** Estouros de limite ainda sendo agendados, por conversa (ver `awaitingLimit`). */
+  private readonly limitRuns = new Map<string, Promise<unknown>>();
   private readonly timer: NodeJS.Timeout;
 
   constructor(private readonly opts: ChatManagerOptions) {
     this.inbox = opts.inbox ?? new InboxState();
+    opts.autoContinue?.subscribe((e) => this.autoContinueEvent(e));
     this.timer = setInterval(() => this.reap(), 60_000);
     this.timer.unref();
   }
@@ -191,9 +209,12 @@ export class ChatManager {
     if (source && !(await fs.access(file).then(() => true, () => false))) file = await findTranscript(this.opts.transcriptsDir, projectId, source);
     // Com processo aberto, o histórico vai até o início dele; o resto vem pelo SSE.
     const { items, context } = await readHistory(file, { before: live && !source ? chat!.startedAt : undefined });
+    // Sem processo (fechou por inatividade, ou o servidor reiniciou), o aviso de limite de uso não tem onde viver:
+    // volta da pendência guardada, com a mesma hora e o mesmo botão.
+    const waiting = live ? null : await this.opts.autoContinue?.get(sessionId);
     return {
       sessionId,
-      history: items,
+      history: waiting ? [...items, this.waitingNotice(waiting)] : items,
       live,
       context,
       elsewhere: await this.elsewhere(sessionId),
@@ -318,7 +339,43 @@ export class ChatManager {
     files: ChatAttachment[] = [],
     delegated = false,
   ): Promise<string> {
+    return this.deliver(projectId, sessionId, staffId, text, priority, images, files, delegated, false);
+  }
+
+  /**
+   * O "continue" que o Claudio’s Club manda sozinho quando o limite de uso volta. Vai pelo mesmo caminho de
+   * `send` (acorda a conversa se estiver fechada), mas não cancela o que está agendado: foi ele que agendou.
+   */
+  async continueChat(projectId: string, sessionId: string, staffId: string | null): Promise<void> {
+    await this.deliver(projectId, sessionId, staffId, CONTINUE_TEXT, undefined, [], [], this.delegated.has(sessionId), true);
+  }
+
+  /**
+   * O botão Cancelar do aviso de limite de uso: devolve se havia algo agendado. Pendência de outro projeto
+   * não é desta rota: devolve null (a rota responde 404) e não mexe nela.
+   */
+  async cancelAutoContinue(projectId: string, sessionId: string): Promise<boolean | null> {
+    const auto = this.opts.autoContinue;
+    if (!auto) return false;
+    const pending = await auto.get(sessionId);
+    if (pending && pending.projectId !== projectId) return null;
+    return auto.cancel(sessionId, 'user');
+  }
+
+  private async deliver(
+    projectId: string,
+    sessionId: string | null,
+    staffId: string | null,
+    text: string,
+    priority: SendPriority | undefined,
+    images: string[],
+    files: ChatAttachment[],
+    delegated: boolean,
+    auto: boolean,
+  ): Promise<string> {
     const chat = await this.ensure(projectId, sessionId, staffId);
+    // Qualquer mensagem sua (ou de outro funcionário) na conversa vale mais que o "continue" agendado.
+    if (!auto) await this.opts.autoContinue?.cancel(chat.sessionId, 'message');
     if (delegated) this.delegated.add(chat.sessionId);
     else this.delegated.delete(chat.sessionId);
     this.inbox.setQuestion(chat.sessionId, null); // respondeu (ou mandou outra coisa): a pergunta sai da caixa
@@ -383,6 +440,8 @@ export class ChatManager {
       const policy = (await this.opts.contextSwitch?.()) ?? 'auto';
       if (switchDecision(info, Date.now(), policy) === 'switch') {
         const fresh = await this.ensure(projectId, null, staffId);
+        // A mensagem foi para outra conversa: o "continue" agendado na anterior não vale mais.
+        await this.opts.autoContinue?.cancel(sessionId, 'message');
         // Desviou uma vez: se você voltar à anterior pela lista, a mensagem fica nela.
         this.turns.delete(sessionId);
         fresh.addNotice(
@@ -663,6 +722,8 @@ export class ChatManager {
       model: argOf(spawn.args, '--model'),
       effort: argOf(spawn.args, '--effort'),
       onUsage: (limits) => void this.saveUsage(spawn.sessionId, limits),
+      onUsageLimit: (hit) => this.limitHit(spawn.sessionId, projectId, staffId, hit),
+      onTurnWithoutLimit: () => void this.limitStreak.delete(spawn.sessionId),
       onSecret: (label) => this.noteSecret(spawn.sessionId, label),
       onIdle: (reason) => {
         if (reason !== 'exit') this.noteQuestion(spawn.sessionId);
@@ -677,6 +738,8 @@ export class ChatManager {
       spawnImpl: this.opts.spawnImpl,
     });
     this.chats.set(spawn.sessionId, chat);
+    // O aviso de limite de uso ficou no processo anterior (a pendência guardada recria o dele, logo abaixo).
+    this.limitNotices.delete(spawn.sessionId);
     this.launched.set(chat, { model: argOf(spawn.args, '--model'), effort: argOf(spawn.args, '--effort') });
     // Escolha gravada (reabrir ou duplicar): vale a sua, a folga de cota não atropela.
     if (spawn.chosen) this.boosts.set(chat, 'manual');
@@ -693,6 +756,10 @@ export class ChatManager {
         ?.add({ sessionId: spawn.sessionId, pid: chat.pid, server: process.pid, startedAt: chat.startedAt })
         .catch(() => {});
     }
+    // Reabriu com o "continue" ainda agendado (o processo anterior fechou por inatividade, ou o servidor
+    // reiniciou): o aviso volta com a hora guardada.
+    const waiting = await this.opts.autoContinue?.get(spawn.sessionId);
+    if (waiting) this.showLimit(waiting, true);
     return chat;
   }
 
@@ -774,7 +841,86 @@ export class ChatManager {
     (this.opts.log ?? ((l: string) => console.log(`[chat] ${l}`)))(line);
   }
 
+  /**
+   * O processo avisa o limite estourado logo antes de avisar o fim do turno, na mesma volta. Guardar a
+   * promessa do agendamento aqui, de forma síncrona, é o que deixa `awaitingLimit` certo para quem
+   * perguntar depois, venha o fim do turno antes ou depois de o agendamento terminar.
+   */
+  private limitHit(sessionId: string, projectId: string, staffId: string | null, hit: LimitHit) {
+    const run = this.noteUsageLimit(sessionId, projectId, staffId, hit).catch((err) => this.log(`${sessionId}: limite de uso: ${err instanceof Error ? err.message : String(err)}`));
+    this.limitRuns.set(sessionId, run);
+    void run.then(() => {
+      if (this.limitRuns.get(sessionId) === run) this.limitRuns.delete(sessionId);
+    });
+  }
+
+  /**
+   * A conversa parou no limite de uso e há um "continue" agendado para ela? Espera o agendamento em curso
+   * terminar; depois a pendência (guardada em disco) responde, também ao vigia de sessões, que vê o fim do
+   * turno com atraso. Opção desligada ou pendência cancelada: não.
+   */
+  async awaitingLimit(sessionId: string): Promise<boolean> {
+    await this.limitRuns.get(sessionId);
+    return !!(await this.opts.autoContinue?.get(sessionId));
+  }
+
+  /**
+   * O turno parou no limite de uso da assinatura: agenda o "continue" (se a opção estiver ligada) e avisa na
+   * conversa. Na `MAX_LIMIT_HITS`-ésima vez seguida desiste: a tarefa é entregue como antes e o aviso diz que
+   * não deu (a conta recomeça; o próximo estouro, depois de uma mensagem sua, volta a agendar).
+   */
+  private async noteUsageLimit(sessionId: string, projectId: string, staffId: string | null, hit: LimitHit) {
+    const streak = (this.limitStreak.get(sessionId) ?? 0) + 1;
+    this.limitStreak.set(sessionId, streak);
+    const now = Date.now();
+    const file = await readUsage(this.opts.usageFile).catch(() => null);
+    const plan = resumePlan(hit, [...(file?.limits ?? []), ...this.knownLimits.values()], now);
+    const pending: Pending = { projectId, sessionId, staffId, at: plan.at, resetsAt: plan.resetsAt };
+    if (streak >= MAX_LIMIT_HITS && (await this.opts.autoContinue?.giveUp(pending, `o limite de uso estourou ${streak} vezes seguidas`))) {
+      this.limitStreak.delete(sessionId);
+      this.log(`${sessionId}: limite de uso atingido ${streak} vezes seguidas; desisti do "continue" sozinho`);
+      return;
+    }
+    const scheduled = (await this.opts.autoContinue?.schedule(pending)) ?? false;
+    this.log(`${sessionId}: limite de uso atingido; ${scheduled ? 'continua' : 'volta'} às ${new Date(scheduled ? plan.at : plan.resetsAt).toISOString()} (${plan.source})`);
+    this.showLimit(pending, scheduled, true);
+  }
+
+  /** O aviso do limite que a conversa fechada mostra, vindo da pendência guardada (igual ao do processo aberto). */
+  private waitingNotice(p: Pending): ChatItem {
+    return { kind: 'notice', id: `n:limit:${p.sessionId}`, text: limitNotice.waiting(p.resetsAt, Date.now()), tone: 'warn', at: null, action: 'cancel-auto-continue' };
+  }
+
+  /** O aviso do limite na conversa aberta: troca o texto do que já está lá, ou põe um novo (`fresh`: outro estouro). */
+  private showLimit(p: Pending, scheduled: boolean, fresh = false) {
+    const chat = this.chats.get(p.sessionId);
+    if (!chat?.running) return;
+    const now = Date.now();
+    const old = this.limitNotices.get(p.sessionId);
+    // Outro estouro: o aviso anterior fica com a hora dele, só deixa de prometer o "continue" (e de ter o botão).
+    if (old && fresh && old.scheduled) chat.setNotice(old.id, limitNotice.back(old.resetsAt, now), 'warn');
+    const id = old && !fresh ? old.id : `n:limit:${randomUUID()}`;
+    this.limitNotices.set(p.sessionId, { id, resetsAt: p.resetsAt, scheduled });
+    chat.setNotice(id, scheduled ? limitNotice.waiting(p.resetsAt, now) : limitNotice.back(p.resetsAt, now), 'warn', scheduled ? 'cancel-auto-continue' : undefined);
+  }
+
+  /** O que o agendador fez com a pendência de uma conversa: reflete no aviso dela. */
+  private autoContinueEvent(e: AutoContinueEvent) {
+    const p = e.pending;
+    const chat = this.chats.get(p.sessionId);
+    const old = this.limitNotices.get(p.sessionId);
+    if (e.type === 'deferred') return this.showLimit(p, true);
+    this.limitNotices.delete(p.sessionId);
+    if (!chat?.running) return;
+    const now = Date.now();
+    const id = old?.id ?? `n:limit:${randomUUID()}`;
+    if (e.type === 'sent') chat.setNotice(id, limitNotice.continued(now), 'info');
+    else if (e.type === 'failed') chat.setNotice(id, e.gaveUp ? limitNotice.gaveUp : limitNotice.failed(e.error), 'warn');
+    else if (old) chat.setNotice(old.id, limitNotice.back(old.resetsAt, now), 'warn');
+  }
+
   private async saveUsage(sessionId: string, limits: UsageLimit[]) {
+    for (const l of limits) this.knownLimits.set(l.kind, l);
     const kept = limits.filter((l) => l.kind === 'five_hour' || l.kind === 'seven_day');
     if (!kept.length) return;
     const body = { updatedAt: new Date().toISOString(), sessionId, limits: kept };

@@ -10,6 +10,7 @@ import { hasCheckpoint, inputText, resultText, stripCheckpoint, toolSummary } fr
 import { ASK_TOOL, cleanAnswers, parseQuestions } from './questions';
 import { killTree } from './registry';
 import { findSecret } from './secrets';
+import { limitFromRateLimitEvent, limitFromText, mergeHits, type LimitHit } from './usageLimit';
 
 // Um funcionário conversando pelo Claudio’s Club: o `claude` em modo stream-json (o mesmo protocolo do SDK),
 // com o Claudio’s Club no papel de "host": manda as mensagens, recebe as respostas em tempo real e responde
@@ -92,6 +93,10 @@ export interface ChatProcessOptions {
   model?: string | null;
   effort?: string | null;
   onUsage?: (limits: UsageLimit[]) => void;
+  /** O turno acabou porque o limite de uso da assinatura estourou (uma vez por turno; ver usageLimit.ts). */
+  onUsageLimit?: (hit: LimitHit) => void;
+  /** O turno acabou sem estourar o limite (resposta normal, outro erro, ou interrompido por você): zera a conta de estouros seguidos. */
+  onTurnWithoutLimit?: () => void;
   /** O processo saiu (`error` com o motivo, se saiu com erro). */
   onExit?: (pid: number | null, error: string | null) => void;
   /** Algo com cara de segredo passou pela conversa (só o tipo; o valor nunca sai daqui). */
@@ -251,6 +256,14 @@ export class ChatProcess {
   /** Aviso do Claudio’s Club no meio da conversa (só para você; o funcionário não vê). */
   addNotice(text: string, tone: 'info' | 'warn' = 'info') {
     this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text, tone, at: new Date().toISOString() });
+  }
+
+  /**
+   * Aviso do limite de uso: cria o item, ou troca o que já tem esse id (o aviso muda de texto quando o
+   * "continue" sai, é cancelado ou a hora muda). `action` põe o botão de cancelar.
+   */
+  setNotice(id: string, text: string, tone: 'info' | 'warn', action?: 'cancel-auto-continue') {
+    this.putItem({ kind: 'notice', id, text, tone, at: new Date().toISOString(), ...(action && { action }) });
   }
 
   send(text: string, priority: SendPriority = 'next', images: string[] = [], notice?: string, files: ChatAttachment[] = []) {
@@ -516,6 +529,13 @@ export class ChatProcess {
       case 'assistant': {
         const msg = ev.message as { id?: string; model?: string; content?: unknown; usage?: Record<string, number> } | undefined;
         if (!msg) return;
+        // O erro de limite chega como uma mensagem "sintética" do assistente (não uma resposta dele).
+        if (ev.isApiErrorMessage === true || msg.model === '<synthetic>' || typeof ev.error === 'string') {
+          for (const b of (Array.isArray(msg.content) ? msg.content : []) as Array<Record<string, unknown>>) {
+            const hit = b.type === 'text' ? limitFromText(b.text) : null;
+            if (hit) this.limitSeen = { ...mergeHits(this.limitSeen, hit), confirmed: true };
+          }
+        }
         const msgId = msg.id ?? randomUUID();
         for (const b of (Array.isArray(msg.content) ? msg.content : []) as Array<Record<string, unknown>>) {
           if (b.type === 'text' && typeof b.text === 'string') {
@@ -621,6 +641,9 @@ export class ChatProcess {
         return;
       }
       case 'rate_limit_event': {
+        // `rejected`: o limite estourou. Só vale se o turno terminar parado por isso (ver `result`).
+        const rejected = limitFromRateLimitEvent(ev);
+        if (rejected) this.limitSeen = { ...mergeHits(this.limitSeen, rejected), confirmed: this.limitSeen?.confirmed ?? false };
         const info = ev.rate_limit_info as { unifiedWindows?: unknown } | undefined;
         const parsed = UnifiedWindows.safeParse(info?.unifiedWindows);
         if (parsed.success && this.opts.onUsage) {
@@ -644,6 +667,8 @@ export class ChatProcess {
           if (c) this.setState({ context: { ...c, window: this.window, percent: Math.round((c.used / this.window) * 100) } });
         }
         this.doneText.clear();
+        const hit = ev.is_error === true ? limitFromText(ev.result) : null;
+        if (hit) this.limitSeen = { ...mergeHits(this.limitSeen, hit), confirmed: true };
         const stopped = this.stopping && ev.subtype === 'error_during_execution';
         this.stopping = false;
         if (stopped) {
@@ -652,6 +677,12 @@ export class ChatProcess {
           const text = typeof ev.result === 'string' && ev.result ? ev.result : 'O turno terminou com erro.';
           this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text, tone: 'error', at });
         }
+        // O limite estourou neste turno: o evento `rejected` sozinho só vale se o turno terminou com erro. Turno
+        // que você interrompeu (parar/interromper) não vale: quem parou foi você, não o limite.
+        const limit = this.limitSeen;
+        this.limitSeen = null;
+        if (!stopped && limit && (limit.confirmed || ev.is_error === true)) this.opts.onUsageLimit?.({ resetsAt: limit.resetsAt, window: limit.window });
+        else this.opts.onTurnWithoutLimit?.();
         this.setState({ busy: false, compacting: false });
         this.idleCheck('turn');
         return;
@@ -660,6 +691,8 @@ export class ChatProcess {
   }
 
   private readonly doneText = new Map<string, string[]>();
+  /** Limite de uso visto neste turno; `confirmed`: um texto de erro de limite confirmou (não só o evento). */
+  private limitSeen: (LimitHit & { confirmed: boolean }) | null = null;
   private checkpointSeen = false;
   private cacheTtlMs: number | null = null;
 

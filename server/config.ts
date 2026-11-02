@@ -27,6 +27,8 @@ const DEFAULTS: AppConfig = {
   contextSwitch: 'auto',
   // Desligado: gastar a sobra da cota é escolha de quem paga.
   optimizeQuota: false,
+  // Ligado: a conversa que bateu no limite de uso segue sozinha quando o limite volta.
+  autoContinue: true,
   // Escondida: o quadro começa só com os projetos; a sala de ~/.claude se liga no config.
   showUserScope: false,
   // Desligada: mandar o diff para outra empresa é escolha sua.
@@ -70,6 +72,7 @@ const ConfigFile = z
     projectBudgets: z.record(z.string(), z.unknown()).optional().catch(undefined),
     contextSwitch: z.enum(CONTEXT_SWITCHES).optional().catch(undefined),
     optimizeQuota: z.boolean().optional().catch(undefined),
+    autoContinue: z.boolean().optional().catch(undefined),
     showUserScope: z.boolean().optional().catch(undefined),
     codexReview: z.boolean().optional().catch(undefined),
     workspaces: z.array(z.unknown()).optional().catch(undefined),
@@ -106,6 +109,7 @@ export const ConfigPatch = z.object({
   sendWhileBusy: PRIORITY.optional(),
   contextSwitch: z.enum(CONTEXT_SWITCHES).optional(),
   optimizeQuota: z.boolean().optional(),
+  autoContinue: z.boolean().optional(),
   showUserScope: z.boolean().optional(),
   codexReview: z.boolean().optional(),
   /** Por id de projeto: uma cor troca a da sala; null volta à padrão. Os outros projetos ficam como estão. */
@@ -156,6 +160,7 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     ),
     contextSwitch: d.contextSwitch ?? DEFAULTS.contextSwitch,
     optimizeQuota: d.optimizeQuota ?? DEFAULTS.optimizeQuota,
+    autoContinue: d.autoContinue ?? DEFAULTS.autoContinue,
     showUserScope: d.showUserScope ?? DEFAULTS.showUserScope,
     codexReview: d.codexReview ?? DEFAULTS.codexReview,
     ...readWorkspaces(d.workspaces, d.projectWorkspaces),

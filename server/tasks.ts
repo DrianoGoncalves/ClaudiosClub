@@ -80,6 +80,11 @@ export interface TaskServiceDeps {
   sendTo?: (projectId: string, sessionId: string, staffId: string, text: string, images: string[]) => Promise<string>;
   /** Segunda opinião de outro modelo sobre o diff (o Codex, ver adapters/codex.ts); sem ele, indisponível. */
   secondOpinion?: (input: SecondOpinionInput) => Promise<string>;
+  /**
+   * O turno desta conversa parou no limite de uso da assinatura e o "continue" está agendado? Então ele
+   * não é entrega: a tarefa fica em "fazendo" até o "continue" rodar e o turno terminar de verdade.
+   */
+  awaitingLimit?: (sessionId: string) => Promise<boolean>;
 }
 
 type Role = 'work' | 'review' | 'deploy';
@@ -535,6 +540,9 @@ export class TaskService {
   private async workDone(sessionId: string): Promise<void> {
     const where = await this.where(sessionId);
     if (where?.role !== 'work') return;
+    // Parou no limite de uso com o "continue" agendado: não é entrega. Fica em "fazendo", ninguém é avisado
+    // e a fila não anda (a tarefa segue ocupando o funcionário). Erro ao perguntar: vale como hoje, entrega.
+    if (await this.deps.awaitingLimit?.(sessionId).catch(() => false)) return;
     const staffId = ((await this.list(where.projectId)) ?? []).find((t) => t.id === where.taskId)?.staffId;
     if (!staffId) return;
     // Na vez dele: a próxima tarefa só começa depois que a entrega desta tem o seu commit.

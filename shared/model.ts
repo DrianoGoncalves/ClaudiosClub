@@ -256,6 +256,11 @@ export interface AppConfig {
    * o Opus em esforço máximo e os agents pensam mais (ver server/quotaBoost.ts).
    */
   optimizeQuota: boolean;
+  /**
+   * O limite de uso da assinatura acabou no meio de uma conversa: espera o limite voltar e manda "continue"
+   * nela (ver server/chat/autoContinue.ts). Ligado por padrão.
+   */
+  autoContinue: boolean;
   /** Mostrar no quadro a sala do escopo do usuário (agents e skills de ~/.claude); desligado por padrão. */
   showUserScope: boolean;
   /**
@@ -756,7 +761,15 @@ export type ChatItem =
       /** Perguntas respondidas (texto da pergunta → resposta); `{}` = você pulou. Só depois de responder. */
       answers?: QuestionAnswers;
     }
-  | { kind: 'notice'; id: string; text: string; tone: 'info' | 'warn' | 'error'; at: string | null };
+  | {
+      kind: 'notice';
+      id: string;
+      text: string;
+      tone: 'info' | 'warn' | 'error';
+      at: string | null;
+      /** O aviso leva um botão: `cancel-auto-continue` desfaz o "continue" agendado para quando o limite de uso voltar. */
+      action?: 'cancel-auto-continue';
+    };
 
 /** Uma opção de uma pergunta do Claude (`preview`: HTML de exemplo que o cartão mostra ao marcar). */
 export interface AskedOption {

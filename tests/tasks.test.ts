@@ -307,6 +307,121 @@ describe('fila por funcionário', () => {
   });
 });
 
+describe('limite de uso no meio da tarefa', () => {
+  /** Giovana pede, Luana faz. `limit.waiting` diz se a conversa da Luana parou no limite com o "continue" agendado. */
+  function limited(dirName: string, opts: { awaitingLimit?: (sessionId: string) => Promise<boolean> } = {}) {
+    const dir = path.join(root, dirName);
+    const notified: string[] = [];
+    const reviewed: string[] = [];
+    const sent: string[] = [];
+    const limit = { waiting: true, asked: [] as string[] };
+    let n = 0;
+    const people: Record<string, StaffProfile> = {
+      'gio-1': { id: 'gio-1', name: 'Giovana', role: 'Orquestradora', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+      'lu-1': { id: 'lu-1', name: 'Luana', role: 'Front-end', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+      'rev-1': { id: 'rev-1', name: 'Rui', autonomy: 'manual', worktree: false } as StaffProfile,
+    };
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => people[id] ?? null,
+      send: async (_p, staffId, text) => {
+        const session = `s-${++n}`;
+        (staffId === 'rev-1' ? reviewed : sent).push(text);
+        return session;
+      },
+      branchFor: async () => null,
+      notify: async (_p, _s, text) => void notified.push(text),
+      lastText: () => 'Fiz até aqui.',
+      awaitingLimit:
+        opts.awaitingLimit ??
+        (async (sid) => {
+          limit.asked.push(sid);
+          return limit.waiting;
+        }),
+    });
+    const make = async (title: string, reviewerId: string | null = null) => (await svc.create('p', { title, staffId: 'lu-1', reviewerId }, 'gio-1'))!;
+    const status = async () => (await svc.list('p'))!.map((t) => [t.title, t.status]);
+    return { svc, notified, reviewed, sent, limit, make, status };
+  }
+
+  it('turno parado pelo limite com "continue" agendado: não entrega, não avisa o gestor e a fila não anda', async () => {
+    const { svc, notified, sent, limit, make, status } = limited('limite-1');
+    const [a, b] = [await make('A'), await make('B')];
+    await svc.start('p', a.id); // s-1
+    await svc.start('p', b.id); // fila da Luana
+    expect(sent).toHaveLength(1);
+
+    // As duas origens do fim de turno: o processo da conversa (onIdle) e o vigia de sessões (onTurnDone).
+    await svc.onIdle('s-1', 'p', 'lu-1');
+    await svc.onTurnDone('s-1');
+    expect(limit.asked).toEqual(['s-1', 's-1']);
+    expect(await status()).toEqual([['A', 'doing'], ['B', 'todo']]);
+    expect(notified).toEqual([]);
+    expect(sent).toHaveLength(1);
+    const list = (await svc.list('p'))!;
+    expect(list[0]!.history.map((h) => h.note)).not.toContain('turno terminou');
+    expect(list[1]!.queuedAt).toEqual(expect.any(String)); // B segue na fila
+
+    // O "continue" rodou e o turno terminou de verdade: a entrega segue normal.
+    limit.waiting = false;
+    await svc.onIdle('s-1', 'p', 'lu-1');
+    expect(await status()).toEqual([['A', 'review'], ['B', 'doing']]);
+    expect(notified).toEqual([expect.stringContaining('Luana entregou a tarefa “A”')]);
+    expect(sent).toHaveLength(2);
+  });
+
+  it('só o vigia de sessões vendo o fim (com atraso): a pendência também segura a entrega', async () => {
+    const { svc, notified, make, status } = limited('limite-2');
+    const t = await make('A');
+    await svc.start('p', t.id);
+    await svc.onTurnDone('s-1');
+    expect(await status()).toEqual([['A', 'doing']]);
+    expect(notified).toEqual([]);
+  });
+
+  it('sem pendência (opção desligada ou cancelada): entrega como antes', async () => {
+    const { svc, notified, limit, make, status } = limited('limite-3');
+    limit.waiting = false;
+    const t = await make('A');
+    await svc.start('p', t.id);
+    await svc.onIdle('s-1', 'p', 'lu-1');
+    expect(await status()).toEqual([['A', 'review']]);
+    expect(notified).toHaveLength(1);
+  });
+
+  it('sem a dependência, ou com erro ao perguntar: entrega como antes', async () => {
+    const plain = service('limite-4');
+    const t = (await plain.svc.create('p', { title: 'A', staffId: 'ana-1' }))!;
+    await plain.svc.start('p', t.id);
+    await plain.svc.onTurnDone('sess-1');
+    expect((await plain.svc.list('p'))![0]!.status).toBe('review');
+
+    const broken = limited('limite-5', {
+      awaitingLimit: async () => {
+        throw new Error('sem resposta');
+      },
+    });
+    const b = await broken.make('B');
+    await broken.svc.start('p', b.id);
+    await broken.svc.onIdle('s-1', 'p', 'lu-1');
+    expect(await broken.status()).toEqual([['B', 'review']]);
+    expect(broken.notified).toHaveLength(1);
+  });
+
+  it('a pendência vale só para a conversa de trabalho: a revisão automática segue o seu caminho', async () => {
+    const { svc, reviewed, limit, make, status } = limited('limite-6');
+    const t = await make('A', 'rev-1');
+    await svc.start('p', t.id); // s-1
+    await svc.onTurnDone('s-1'); // parou no limite: não entrega, o revisor não é chamado
+    expect(reviewed).toEqual([]);
+    limit.waiting = false;
+    await svc.onTurnDone('s-1');
+    expect(await status()).toEqual([['A', 'review']]);
+    expect(reviewed).toHaveLength(1);
+  });
+});
+
 describe('revisão automática', () => {
   /** Ana faz a tarefa, Rui revisa. `texts` diz o que cada conversa respondeu por último. */
   function reviewFlow(dirName: string, extra: Partial<StaffProfile> = {}) {

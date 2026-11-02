@@ -192,6 +192,8 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   const [bgOpen, setBgOpen] = useState(false);
   // "Mais": abre com o foco no painel; ao fechar, o foco volta para o "⋯".
   const [moreOpen, setMoreOpen] = useState(false);
+  // Avisos de limite já cancelados aqui: numa conversa fechada o aviso só some ao recarregar o histórico.
+  const [autoCancelled, setAutoCancelled] = useState<ReadonlySet<string>>(new Set());
   const [moreTab, setMoreTab] = useState(moreTabs[0]?.id ?? '');
   const moreBtn = useRef<HTMLButtonElement>(null);
   const moreRef = useRef<HTMLDivElement>(null);
@@ -319,6 +321,16 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
             executeAs={executeAs}
             onChangesRequested={() => input.current?.focus()}
             onRewind={staffId && chat.sessionId && !blocked ? (uuid) => void rewind(uuid) : undefined}
+            autoCancelled={autoCancelled.has(item.id)}
+            onCancelAutoContinue={
+              chat.sessionId
+                ? () =>
+                    void api
+                      .chatCancelAutoContinue(projectId, chat.sessionId!)
+                      .then(() => setAutoCancelled((s) => new Set(s).add(item.id)))
+                      .catch((e: Error) => window.alert(e.message))
+                : undefined
+            }
           />
         ))}
         {busy && !streaming && !pending && (
@@ -630,6 +642,8 @@ function Item({
   executeAs,
   onChangesRequested,
   onRewind,
+  onCancelAutoContinue,
+  autoCancelled,
 }: {
   item: ChatItem;
   onAnswer: Answer;
@@ -637,6 +651,10 @@ function Item({
   onChangesRequested: () => void;
   /** "Voltar até aqui" nas suas mensagens (as que têm o id do transcript). */
   onRewind?: (uuid: string) => void;
+  /** "Cancelar" no aviso de limite de uso: desfaz o "continue" agendado. */
+  onCancelAutoContinue?: () => void;
+  /** O "continue" deste aviso já foi cancelado nesta tela. */
+  autoCancelled?: boolean;
 }) {
   switch (item.kind) {
     case 'user': {
@@ -688,7 +706,19 @@ function Item({
         <PermissionCard item={item} onAnswer={onAnswer} />
       );
     case 'notice':
-      return <div className={`chat-notice chat-notice-${item.tone}`} data-item-id={item.id}>{item.text}</div>;
+      return (
+        <div className={`chat-notice chat-notice-${item.tone}`} data-item-id={item.id}>
+          {item.action === 'cancel-auto-continue' && autoCancelled ? t('chat.autoContinueCancelled') : item.text}
+          {item.action === 'cancel-auto-continue' && !autoCancelled && onCancelAutoContinue && (
+            <>
+              {' '}
+              <button type="button" className="link" onClick={onCancelAutoContinue}>
+                {t('chat.cancelAutoContinue')}
+              </button>
+            </>
+          )}
+        </div>
+      );
   }
 }
 
