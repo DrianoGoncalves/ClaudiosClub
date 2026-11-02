@@ -328,6 +328,32 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .permission-plan.permission-denied { border-color: var(--line); background: var(--panel); }
 .plan-body { max-height: 320px; overflow-y: auto; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 13px; }
 .permission-plan .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Pergunta com opções do Claude: cada pergunta com suas opções clicáveis, "outra resposta" e a prévia. */
+.permission-question { border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 6%, var(--panel)); }
+.permission-question.permission-allowed { border-color: var(--ink-green); background: var(--panel); }
+.permission-question.permission-denied { border-color: var(--line); background: var(--panel); }
+.permission-question .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.q-block { display: grid; gap: 4px; padding: 6px 0; }
+.q-block + .q-block { border-top: 1px solid var(--line); }
+.q-block p { margin: 0; }
+.q-header { justify-self: start; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
+.q-text { font-size: 13.5px; font-weight: 600; }
+.q-given { padding-left: 8px; border-left: 3px solid var(--ink-green); white-space: pre-wrap; }
+.q-options { display: grid; gap: 4px; }
+.q-option { display: grid; gap: 1px; text-align: left; font: inherit; font-size: 13px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px 5px 30px; position: relative; cursor: pointer; }
+.q-option:hover:not(:disabled) { border-color: var(--accent); }
+.q-option:disabled { opacity: 0.6; cursor: default; }
+.q-option::before { content: ''; position: absolute; left: 9px; top: 9px; width: 11px; height: 11px; border: 1.5px solid var(--muted); border-radius: 50%; }
+.q-option.is-multi::before { border-radius: 3px; }
+.q-option.is-on { border-color: var(--ink-blue); box-shadow: 0 0 0 1px var(--ink-blue) inset; }
+.q-option.is-on::before { border-color: var(--ink-blue); background: var(--ink-blue); }
+.q-field { font: inherit; font-size: 13px; color: var(--ink); background: var(--board); border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px; min-width: 0; }
+textarea.q-field { resize: vertical; }
+.q-field:focus { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); border-color: var(--ink-blue); }
+.q-number { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.q-number .q-field { width: 120px; }
+.q-warn { color: var(--danger); }
+.q-preview { width: 100%; height: 150px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .chat-notice { align-self: center; font-size: 12px; color: var(--muted); }
 .chat-notice-warn { color: var(--warn); }
 .chat-notice-error { color: var(--danger); }

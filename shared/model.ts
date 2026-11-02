@@ -751,8 +751,40 @@ export type ChatItem =
       plan?: string;
       /** Aprovado "sempre": nesta conversa ou no projeto. */
       remembered?: 'session' | 'project';
+      /** Pergunta com opções (AskUserQuestion): as perguntas já validadas; o cartão deixa responder. */
+      questions?: AskedQuestion[];
+      /** Perguntas respondidas (texto da pergunta → resposta); `{}` = você pulou. Só depois de responder. */
+      answers?: QuestionAnswers;
     }
   | { kind: 'notice'; id: string; text: string; tone: 'info' | 'warn' | 'error'; at: string | null };
+
+/** Uma opção de uma pergunta do Claude (`preview`: HTML de exemplo que o cartão mostra ao marcar). */
+export interface AskedOption {
+  label: string;
+  description: string;
+  preview?: string;
+}
+
+/** Uma pergunta do Claude (AskUserQuestion). `choice` tem opções; `text` é caixa livre; `number` vai de min a max. */
+export interface AskedQuestion {
+  question: string;
+  header: string;
+  kind: 'choice' | 'text' | 'number';
+  multiSelect: boolean;
+  options: AskedOption[];
+  description?: string;
+  placeholder?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  defaultValue?: number;
+  unit?: string;
+}
+
+/** Respostas: texto da pergunta → a opção (ou várias, ou o que você escreveu). Pergunta sem resposta não entra. */
+export type QuestionAnswers = Record<string, string | string[]>;
+/** Extras de uma resposta: o `preview` da opção marcada. */
+export type QuestionAnnotations = Record<string, { preview?: string; notes?: string }>;
 
 /** O que espera você, de todas as salas (a caixa "precisa de mim"). */
 export type InboxKind = 'plan' | 'permission' | 'secret' | 'waiting' | 'error' | 'routine' | 'orphan';

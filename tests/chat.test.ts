@@ -4,8 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ChatEvent, StaffProfile, UsageLimit } from '../shared/model';
+import type { AskedQuestion, ChatEvent, StaffProfile, UsageLimit } from '../shared/model';
+import { answerOf, collectAnswers, initialDrafts, previewDoc } from '../client/src/chat/questionAnswers';
+import { AnnotationsField, AnswersField } from '../server/chat/questions';
 import { readHistory } from '../server/chat/history';
+import { toolSummary } from '../server/chat/items';
 import { ChatManager } from '../server/chat/manager';
 import { ChatRegistry } from '../server/chat/registry';
 import { ChatProcess, STREAM_FLAGS } from '../server/chat/process';
@@ -225,6 +228,197 @@ describe('ChatProcess', () => {
     await tick();
     expect(f.written.at(-1)).toMatchObject({ response: { request_id: 'r9', response: { behavior: 'deny', message: 'Quero mudanças.' } } });
     expect(chat.pendingPermissions().map((p) => p.id)).toEqual(['p:r10']);
+  });
+
+  describe('pergunta com opções (AskUserQuestion)', () => {
+    const ask = (id: string, input: unknown, extra: object = {}) => ({
+      type: 'control_request',
+      request_id: id,
+      request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input, requires_user_interaction: true, ...extra },
+    });
+    const input = {
+      questions: [
+        { question: 'Qual banco?', header: 'Banco', multiSelect: false, options: [{ label: 'SQLite', description: 'Simples', preview: '<b>arquivo</b>' }, { label: 'Postgres', description: 'Servidor', extra: 1 }], lixo: true },
+        { question: 'Quais extras?', header: 'Extras', multiSelect: true, options: [{ label: 'Docs', description: '' }, { label: 'Testes', description: '' }] },
+        { question: 'Nome do app?', header: 'Nome', kind: 'text', placeholder: 'ex.: meu-app' },
+        { question: 'Quantos slides?', header: 'Slides', kind: 'number', min: 1, max: 20, step: 1, defaultValue: 5, unit: 'slides' },
+      ],
+    };
+
+    it('vira cartão com as perguntas validadas; nada é aprovado sozinho, nem no "sem travas"', async () => {
+      const f = fakeClaude();
+      const chat = new ChatProcess({ sessionId: 'q1', cwd: '.', args: [], spawnImpl: f.spawnImpl });
+      chat.start();
+      f.emit({ type: 'system', subtype: 'init', permissionMode: 'bypassPermissions' });
+      f.emit(ask('q1', input));
+      await tick();
+      const item = chat.snapshot().items.find((i) => i.id === 'p:q1');
+      expect(item).toMatchObject({ kind: 'permission', tool: 'AskUserQuestion', summary: 'Qual banco?', status: 'pending' });
+      const questions = (item as { questions?: unknown[] }).questions;
+      expect(questions).toEqual([
+        { question: 'Qual banco?', header: 'Banco', kind: 'choice', multiSelect: false, options: [{ label: 'SQLite', description: 'Simples', preview: '<b>arquivo</b>' }, { label: 'Postgres', description: 'Servidor' }] },
+        { question: 'Quais extras?', header: 'Extras', kind: 'choice', multiSelect: true, options: [{ label: 'Docs', description: '' }, { label: 'Testes', description: '' }] },
+        { question: 'Nome do app?', header: 'Nome', kind: 'text', multiSelect: false, options: [], placeholder: 'ex.: meu-app' },
+        { question: 'Quantos slides?', header: 'Slides', kind: 'number', multiSelect: false, options: [], min: 1, max: 20, step: 1, defaultValue: 5, unit: 'slides' },
+      ]);
+      expect(f.written).toEqual([]); // ficou esperando você
+      expect(chat.pendingPermissions().map((p) => p.id)).toEqual(['p:q1']);
+    });
+
+    it('responder leva as respostas dentro de updatedInput; o que sobra é descartado', async () => {
+      const f = fakeClaude();
+      const chat = new ChatProcess({ sessionId: 'q2', cwd: '.', args: [], spawnImpl: f.spawnImpl });
+      chat.start();
+      f.emit(ask('q2', input));
+      await tick();
+      const answers = {
+        'Qual banco?': 'SQLite',
+        'Quais extras?': ['Docs', 'Outro extra'],
+        'Nome do app?': '   ',
+        'Quantos slides?': '8',
+        'Pergunta que não existe': 'x',
+      };
+      const annotations = { 'Qual banco?': { preview: '<b>arquivo</b>', lixo: 1 }, 'Nome do app?': { notes: 'não vale: sem resposta' } };
+      expect(chat.answer('q2', true, undefined, undefined, { answers, annotations })).toBe(true);
+      await tick();
+      expect(f.written).toEqual([
+        {
+          type: 'control_response',
+          response: {
+            subtype: 'success',
+            request_id: 'q2',
+            response: {
+              behavior: 'allow',
+              updatedInput: {
+                questions: input.questions,
+                answers: { 'Qual banco?': 'SQLite', 'Quais extras?': ['Docs', 'Outro extra'], 'Quantos slides?': '8' },
+                annotations: { 'Qual banco?': { preview: '<b>arquivo</b>' } },
+              },
+            },
+          },
+        },
+      ]);
+      // O que foi respondido fica no cartão (só leitura depois).
+      expect(chat.snapshot().items.find((i) => i.id === 'p:q2')).toMatchObject({
+        status: 'allowed',
+        answers: { 'Qual banco?': 'SQLite', 'Quais extras?': ['Docs', 'Outro extra'], 'Quantos slides?': '8' },
+      });
+    });
+
+    it('"Pular" aprova com answers {} (o Claude lê que você não respondeu); sem respostas no corpo, é o mesmo', async () => {
+      const f = fakeClaude();
+      const chat = new ChatProcess({ sessionId: 'q3', cwd: '.', args: [], spawnImpl: f.spawnImpl });
+      chat.start();
+      f.emit(ask('q3', input));
+      f.emit(ask('q4', input));
+      await tick();
+      expect(chat.answer('q3', true, undefined, undefined, { answers: {} })).toBe(true);
+      expect(chat.answer('q4', true)).toBe(true);
+      await tick();
+      for (const [i, id] of [[0, 'q3'], [1, 'q4']] as const) {
+        expect(f.written[i]).toEqual({
+          type: 'control_response',
+          response: { subtype: 'success', request_id: id, response: { behavior: 'allow', updatedInput: { questions: input.questions, answers: {} } } },
+        });
+      }
+      expect(chat.snapshot().items.find((i) => i.id === 'p:q3')).toMatchObject({ status: 'allowed', answers: {} });
+    });
+
+    it('"permitir sempre" não vale para pergunta: liberar de vez deixaria a próxima passar sem resposta', async () => {
+      const f = fakeClaude();
+      const chat = new ChatProcess({ sessionId: 'q5', cwd: '.', args: [], spawnImpl: f.spawnImpl });
+      chat.start();
+      f.emit(ask('q5', input, { permission_suggestions: [{ type: 'addRules', rules: [{ toolName: 'AskUserQuestion' }], behavior: 'allow', destination: 'session' }] }));
+      f.emit(ask('q6', { questions: 'quebrada' })); // cartão genérico: também não pode virar regra
+      await tick();
+      expect(chat.answer('q5', true, undefined, 'session', { answers: { 'Qual banco?': 'SQLite' } })).toBe(true);
+      expect(chat.answer('q6', true, undefined, 'project')).toBe(true);
+      await tick();
+      for (const w of f.written as Array<{ response: { response: Record<string, unknown> } }>) {
+        expect(w.response.response.behavior).toBe('allow');
+        expect(w.response.response).not.toHaveProperty('updatedPermissions');
+      }
+      expect(chat.snapshot().items.find((i) => i.id === 'p:q5')).not.toHaveProperty('remembered');
+      expect(chat.snapshot().items.find((i) => i.id === 'p:q6')).not.toHaveProperty('remembered');
+    });
+
+    it('entrada que não dá para ler cai no cartão genérico, e aprovar devolve a entrada como veio', async () => {
+      const f = fakeClaude();
+      const chat = new ChatProcess({ sessionId: 'q7', cwd: '.', args: [], spawnImpl: f.spawnImpl });
+      chat.start();
+      const bad: unknown[] = [
+        { questions: 'quebrada' },
+        { questions: [] },
+        { questions: [{ question: 'Sem opções?', options: [] }] },
+        { questions: [{ question: 'Número sem limites?', kind: 'number' }] },
+        { questions: [{ question: 'Repetida?', options: [{ label: 'a' }] }, { question: 'Repetida?', options: [{ label: 'b' }] }] },
+        {},
+      ];
+      bad.forEach((b, i) => f.emit(ask(`b${i}`, b)));
+      await tick();
+      for (let i = 0; i < bad.length; i++) {
+        const item = chat.snapshot().items.find((x) => x.id === `p:b${i}`);
+        expect(item, `entrada ${i}`).toMatchObject({ kind: 'permission', tool: 'AskUserQuestion', status: 'pending' });
+        expect(item, `entrada ${i}`).not.toHaveProperty('questions');
+      }
+      expect(chat.answer('b0', true)).toBe(true);
+      await tick();
+      expect(f.written[0]).toMatchObject({ response: { request_id: 'b0', response: { behavior: 'allow', updatedInput: { questions: 'quebrada' } } } });
+      expect((f.written[0] as { response: { response: { updatedInput: object } } }).response.response.updatedInput).not.toHaveProperty('answers');
+    });
+
+    it('pergunta e opção com espaço nas pontas saem exatas: a chave e o valor são o texto que o Claude mandou', async () => {
+      const qs = [{ question: 'Q? ', header: 'H', multiSelect: false, options: [{ label: 'Sim ', description: '' }, { label: ' Não', description: '' }] }];
+      const f = fakeClaude();
+      const chat = new ChatProcess({ sessionId: 'q8', cwd: '.', args: [], spawnImpl: f.spawnImpl });
+      chat.start();
+      f.emit(ask('q8', { questions: qs }));
+      await tick();
+      expect(chat.snapshot().items.find((i) => i.id === 'p:q8')).toMatchObject({ questions: [{ question: 'Q? ', options: [{ label: 'Sim ' }, { label: ' Não' }] }] });
+      expect(chat.answer('q8', true, undefined, undefined, { answers: { 'Q? ': 'Sim ' } })).toBe(true);
+      await tick();
+      expect(f.written[0]).toEqual({
+        type: 'control_response',
+        response: { subtype: 'success', request_id: 'q8', response: { behavior: 'allow', updatedInput: { questions: qs, answers: { 'Q? ': 'Sim ' } } } },
+      });
+    });
+
+    it('pergunta ou opção longa demais, ou pergunta só com espaço, cai no cartão genérico (não é cortada)', async () => {
+      const f = fakeClaude();
+      const chat = new ChatProcess({ sessionId: 'q9', cwd: '.', args: [], spawnImpl: f.spawnImpl });
+      chat.start();
+      const bad: unknown[] = [
+        { questions: [{ question: `${'x'.repeat(1_000)}?`, options: [{ label: 'a' }] }] },
+        { questions: [{ question: 'Curta?', options: [{ label: 'y'.repeat(201) }] }] },
+        { questions: [{ question: '   ', options: [{ label: 'a' }] }] },
+      ];
+      bad.forEach((b, i) => f.emit(ask(`big${i}`, b)));
+      f.emit(ask('big-ok', { questions: [{ question: 'x'.repeat(1_000), options: [{ label: 'a' }] }] })); // no limite (1000): cartão de pergunta
+      await tick();
+      bad.forEach((_, i) => expect(chat.snapshot().items.find((x) => x.id === `p:big${i}`), `entrada ${i}`).not.toHaveProperty('questions'));
+      expect(chat.snapshot().items.find((x) => x.id === 'p:big-ok')).toHaveProperty('questions');
+    });
+
+    it('"__proto__" como pergunta: a resposta sai com chave própria, do jeito que chega pelo corpo do pedido', async () => {
+      const f = fakeClaude();
+      const chat = new ChatProcess({ sessionId: 'q10', cwd: '.', args: [], spawnImpl: f.spawnImpl });
+      chat.start();
+      f.emit(ask('q10', { questions: [{ question: '__proto__', options: [{ label: 'Sim' }, { label: 'Não' }] }] }));
+      await tick();
+      expect(chat.snapshot().items.find((i) => i.id === 'p:q10')).toHaveProperty('questions');
+      const answers = AnswersField.parse(JSON.parse('{"__proto__":"Sim"}')); // o caminho do HTTP: o zod não pode descartar a chave
+      expect(chat.answer('q10', true, undefined, undefined, { answers })).toBe(true);
+      await tick();
+      const sent = (f.written[0] as { response: { response: { updatedInput: { answers: object } } } }).response.response.updatedInput.answers;
+      expect(JSON.stringify(sent)).toBe('{"__proto__":"Sim"}');
+      expect(Object.keys(sent)).toEqual(['__proto__']);
+    });
+
+    it('o resumo da chamada é o texto da primeira pergunta', () => {
+      expect(toolSummary('AskUserQuestion', input)).toBe('Qual banco?');
+      expect(toolSummary('AskUserQuestion', {})).toBe('AskUserQuestion');
+      expect(toolSummary('Read', { file_path: 'a.ts' })).toBe('a.ts');
+    });
   });
 
   it('"sem travas" não entra com o processo aberto: avisa que reabre na próxima mensagem', async () => {
@@ -899,5 +1093,84 @@ describe('ChatManager: trazer uma conversa aberta em outro lugar', () => {
     // Depois de reiniciar o servidor, o vínculo continua (arquivo).
     expect(await new ChatManager(opts).copyOf('original-app')).toBe(copy);
     expect(JSON.parse(await fs.readFile(copiesFile, 'utf8'))).toEqual({ 'original-app': copy });
+  });
+});
+
+describe('cartão de pergunta: como as escolhas viram respostas', () => {
+  const qs: AskedQuestion[] = [
+    { question: 'Qual banco?', header: 'Banco', kind: 'choice', multiSelect: false, options: [{ label: 'SQLite', description: '', preview: 'x' }, { label: 'Postgres', description: '' }] },
+    { question: 'Extras?', header: 'Extras', kind: 'choice', multiSelect: true, options: [{ label: 'Docs', description: '' }, { label: 'Testes', description: '' }] },
+    { question: 'Nome?', header: 'Nome', kind: 'text', multiSelect: false, options: [] },
+    { question: 'Slides?', header: 'Slides', kind: 'number', multiSelect: false, options: [], min: 1, max: 20, defaultValue: 5 },
+  ];
+
+  it('começa só com o valor padrão do número; nada marcado não é resposta', () => {
+    const d = initialDrafts(qs);
+    expect(d[3]).toEqual({ picked: [], typed: '5' });
+    expect(collectAnswers(qs, d)).toEqual({ answers: { 'Slides?': '5' }, annotations: {}, invalid: false });
+  });
+
+  it('escolha única: a opção (com a prévia dela); escrever no lugar substitui e some a prévia', () => {
+    const d = initialDrafts(qs);
+    d[0] = { picked: ['SQLite'], typed: '' };
+    expect(collectAnswers(qs, d)).toMatchObject({ answers: { 'Qual banco?': 'SQLite' }, annotations: { 'Qual banco?': { preview: 'x' } } });
+    d[0] = { picked: ['SQLite'], typed: ' MariaDB ' };
+    expect(collectAnswers(qs, d)).toMatchObject({ answers: { 'Qual banco?': 'MariaDB' }, annotations: {} });
+  });
+
+  it('várias escolhas: lista na ordem das opções, com o que você escreveu como mais um item', () => {
+    const d = initialDrafts(qs);
+    d[1] = { picked: ['Testes', 'Docs'], typed: 'Lint' };
+    expect(collectAnswers(qs, d).answers['Extras?']).toEqual(['Docs', 'Testes', 'Lint']);
+  });
+
+  it('texto livre e número; número fora de min..max é inválido e não entra', () => {
+    const d = initialDrafts(qs);
+    d[2] = { picked: [], typed: ' Meu app ' };
+    d[3] = { picked: [], typed: '30' };
+    expect(collectAnswers(qs, d)).toMatchObject({ answers: { 'Nome?': 'Meu app' }, invalid: true });
+    d[3] = { picked: [], typed: '' };
+    expect(collectAnswers(qs, d)).toMatchObject({ answers: { 'Nome?': 'Meu app' }, invalid: false });
+  });
+
+  it('a prévia vai num documento próprio: HTML segue como veio, texto puro é escapado', () => {
+    expect(previewDoc('<b>oi</b>')).toContain('<b>oi</b>');
+    expect(previewDoc('a < b & c')).toContain('<pre');
+    expect(previewDoc('a < b & c')).toContain('a &lt; b &amp; c');
+  });
+
+  it('a prévia traz a CSP antes do conteúdo: imagem ou link de fora não carrega', () => {
+    const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">`;
+    const doc = previewDoc('<img src="https://exemplo.com/a.png"><a href="https://exemplo.com">x</a>');
+    expect(doc.indexOf(csp)).toBeGreaterThan(-1);
+    expect(doc.indexOf(csp)).toBeLessThan(doc.indexOf('<img'));
+  });
+
+  it('pergunta e opção com espaço: o cartão usa o texto exato como chave e valor', () => {
+    const sp: AskedQuestion[] = [{ question: 'Q? ', header: '', kind: 'choice', multiSelect: false, options: [{ label: 'Sim ', description: '' }] }];
+    const sd = initialDrafts(sp);
+    sd[0] = { picked: ['Sim '], typed: '' };
+    expect(collectAnswers(sp, sd).answers).toEqual({ 'Q? ': 'Sim ' });
+  });
+
+  it('"__proto__" como pergunta: no cartão a resposta e a anotação saem com chave própria; sem resposta não puxa o protótipo', () => {
+    const pq: AskedQuestion[] = [{ question: '__proto__', header: '', kind: 'choice', multiSelect: false, options: [{ label: 'Sim', description: '', preview: 'p' }] }];
+    const d = initialDrafts(pq);
+    d[0] = { picked: ['Sim'], typed: '' };
+    const r = collectAnswers(pq, d);
+    expect(JSON.stringify(r.answers)).toBe('{"__proto__":"Sim"}');
+    expect(JSON.stringify(r.annotations)).toBe('{"__proto__":{"preview":"p"}}');
+    expect(answerOf(r.answers, '__proto__')).toBe('Sim');
+    expect(answerOf({}, '__proto__')).toBeUndefined();
+  });
+
+  it('answers e annotations do corpo: chaves comuns saem iguais; "__proto__" fica; array no lugar do objeto é recusado', () => {
+    const body = { 'Qual banco?': 'SQLite', 'Extras?': ['Docs', 'Testes'] };
+    expect(JSON.stringify(AnswersField.parse(body))).toBe(JSON.stringify(body));
+    expect(JSON.stringify(AnnotationsField.parse({ 'Qual banco?': { preview: '<b>x</b>' } }))).toBe('{"Qual banco?":{"preview":"<b>x</b>"}}');
+    expect(Object.keys(AnswersField.parse(JSON.parse('{"__proto__":"Sim"}'))!)).toEqual(['__proto__']);
+    expect(Object.keys(AnnotationsField.parse(JSON.parse('{"__proto__":{"notes":"n"}}'))!)).toEqual(['__proto__']);
+    expect(AnswersField.safeParse([['Q?', 'Sim']]).success).toBe(false);
+    expect(AnswersField.safeParse({ [`${'x'.repeat(1_001)}`]: 'a' }).success).toBe(false);
   });
 });

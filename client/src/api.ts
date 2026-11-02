@@ -33,6 +33,8 @@ import type {
   SavingsReport,
   SendPriority,
   UiLevel,
+  QuestionAnnotations,
+  QuestionAnswers,
   ServerAccess,
   ServerInfo,
   TurnNotice,
@@ -156,6 +158,15 @@ export interface AgentSource {
   prompt: string;
   filePath: string;
   linked: boolean;
+}
+
+/** Extras da resposta a um pedido de permissão. `answers`/`annotations`: respostas de uma pergunta com opções. */
+export interface PermissionOpts {
+  message?: string;
+  executeAs?: Autonomy;
+  remember?: 'session' | 'project';
+  answers?: QuestionAnswers;
+  annotations?: QuestionAnnotations;
 }
 
 export const api = {
@@ -303,12 +314,7 @@ export const api = {
     post<{ ok: boolean }>(`/api/projects/${projectId}/chat/${sessionId}/compact`, { staffId, force }),
   chatAdopt: (sessionId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/adopt`),
   chatTakeOver: (projectId: string, sessionId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/takeover`, { projectId }),
-  chatPermission: (
-    sessionId: string,
-    requestId: string,
-    allow: boolean,
-    opts: { message?: string; executeAs?: Autonomy; remember?: 'session' | 'project' } = {},
-  ) =>
+  chatPermission: (sessionId: string, requestId: string, allow: boolean, opts: PermissionOpts = {}) =>
     post<{ ok: boolean }>(`/api/chat/${sessionId}/permission`, { requestId, allow, ...opts }),
   inbox: () => get<InboxItem[]>('/api/inbox'),
   turns: (since: string) => get<TurnNotice[]>(`/api/turns?since=${encodeURIComponent(since)}`),

@@ -10,6 +10,8 @@ import type {
   ChatSnapshot,
   ContextSwitch,
   LiveSession,
+  QuestionAnnotations,
+  QuestionAnswers,
   QuotaBoost,
   RewindPreview,
   SendPriority,
@@ -483,11 +485,11 @@ export class ChatManager {
     sessionId: string,
     requestId: string,
     allow: boolean,
-    opts: { message?: string; executeAs?: Autonomy; remember?: Remember } = {},
+    opts: { message?: string; executeAs?: Autonomy; remember?: Remember; answers?: QuestionAnswers; annotations?: QuestionAnnotations } = {},
   ): boolean {
     const chat = this.chats.get(sessionId);
     const plan = chat?.pendingPermissions().find((p) => p.id === `p:${requestId}`)?.plan;
-    if (!chat?.answer(requestId, allow, opts.message, opts.remember)) return false;
+    if (!chat?.answer(requestId, allow, opts.message, opts.remember, { answers: opts.answers, annotations: opts.annotations })) return false;
     if (allow && opts.executeAs) chat.setPermissionMode(CLI_MODE[opts.executeAs], `Executando como: ${AUTONOMY_NAME[opts.executeAs]}`);
     if (allow && plan !== undefined) this.opts.onPlanApproved?.(sessionId, plan);
     return true;
