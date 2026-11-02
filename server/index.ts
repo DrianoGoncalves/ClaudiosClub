@@ -1177,10 +1177,10 @@ const server = http.createServer(async (req, res) => {
           // no-cache + ETag: o navegador confere a cada vez, mas só baixa de novo se a imagem mudou.
           const etag = `"${createHash('sha1').update(out.bytes).digest('base64url')}"`;
           if (req.headers['if-none-match'] === etag) {
-            res.writeHead(304, { etag, 'cache-control': 'no-cache' });
+            res.writeHead(304, { etag, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
             return res.end();
           }
-          res.writeHead(200, { 'content-type': out.type, 'cache-control': 'no-cache', etag });
+          res.writeHead(200, { 'content-type': out.type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', etag });
           return res.end(out.bytes);
         }
         return send(res, 200, out);

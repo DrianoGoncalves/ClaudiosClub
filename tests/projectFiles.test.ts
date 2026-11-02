@@ -263,4 +263,15 @@ describe('readProjectImageFile', () => {
     expect(await statusOf(readProjectImageFile(root, '../fora.png'))).toBe(403);
     expect(await statusOf(readProjectImageFile(root, 'nao-existe.png'))).toBe(404);
   });
+
+  it.runIf(canLink)('link com nome de imagem: para fora ou segredo dá 403, para texto dá 415', async () => {
+    await fs.writeFile(path.join(root, 'texto.txt'), 'oi');
+    await fs.writeFile(path.join(root, '.env'), 'SEGREDO=1');
+    await fs.symlink(path.join(outside, 'segredo.txt'), path.join(root, 'fora.png'), 'file');
+    await fs.symlink(path.join(root, '.env'), path.join(root, 'env.png'), 'file');
+    await fs.symlink(path.join(root, 'texto.txt'), path.join(root, 'texto.png'), 'file');
+    expect(await statusOf(readProjectImageFile(root, 'fora.png'))).toBe(403);
+    expect(await statusOf(readProjectImageFile(root, 'env.png'))).toBe(403);
+    expect(await statusOf(readProjectImageFile(root, 'texto.png'))).toBe(415);
+  });
 });

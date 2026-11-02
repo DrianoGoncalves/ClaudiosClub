@@ -138,14 +138,19 @@ export async function readProjectFile(root: string, rawPath: string): Promise<Pr
 export async function readProjectImageFile(root: string, rawPath: string): Promise<{ bytes: Buffer; type: string }> {
   const rel = cleanRel(rawPath);
   if (isSecretRel(rel)) throw secretError();
-  const type = IMAGE_TYPES[path.extname(rel).slice(1).toLowerCase()];
-  if (!type) throw new ProjectFileError(415, 'não é uma imagem que dá para mostrar');
+  if (!IMAGE_TYPES[path.extname(rel).slice(1).toLowerCase()]) throw new ProjectFileError(415, 'não é uma imagem que dá para mostrar');
   const { abs, realRel } = await resolveInside(root, rel);
   if (isSecretRel(realRel)) throw secretError();
+  // O tipo vale pelo arquivo de verdade: um link `a.png` que aponta para texto não sai como imagem.
+  const realType = IMAGE_TYPES[path.extname(realRel).slice(1).toLowerCase()];
+  if (!realType) throw new ProjectFileError(415, 'não é uma imagem que dá para mostrar');
   const st = await fs.stat(abs);
   if (!st.isFile()) throw notFound('não é um arquivo');
-  if (st.size > MAX_IMAGE_BYTES) throw new ProjectFileError(413, 'imagem grande demais (máx. 10 MB)');
-  return { bytes: await fs.readFile(abs), type };
+  const tooBig = () => new ProjectFileError(413, 'imagem grande demais (máx. 10 MB)');
+  if (st.size > MAX_IMAGE_BYTES) throw tooBig();
+  const bytes = await fs.readFile(abs);
+  if (bytes.length > MAX_IMAGE_BYTES) throw tooBig(); // cresceu entre o stat e a leitura
+  return { bytes, type: realType };
 }
 
 /** Uma pasta, um nível. Pastas primeiro, depois por nome (sem diferenciar maiúsculas). */
