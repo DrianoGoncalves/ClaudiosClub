@@ -22,6 +22,8 @@ PLANO.md
 # Claude Code: worktrees dos funcionários e permissões locais.
 .claude/worktrees/
 .claude/settings.local.json
+# Agents do projeto: o Claudio’s Club cria os que faltam e dá para editar no quadro; ficam só na máquina.
+.claude/agents/
 
 # Estado do checklist da página de início: gerado por npm run doctor a cada verificação.
 scripts/status.js
