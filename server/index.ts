@@ -43,7 +43,7 @@ import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
 import { copyToLibrary, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill, SkillError } from './skillLibrary';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
-import { listProjectTree, parseWriteBody, ProjectFileError, readProjectFile, writeProjectFile } from './projectFiles';
+import { listProjectTree, parseWriteBody, ProjectFileError, readProjectFile, readProjectImageFile, writeProjectFile } from './projectFiles';
 import { readUsage } from './usage';
 import { UsageStopError } from './usageStop';
 import { quotaBoost } from './quotaBoost';
@@ -925,6 +925,15 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     },
   ],
   [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/files/image$`),
+    async ({ params: [id], url }) => {
+      const dir = await projectPathOf(id!);
+      const img = dir ? await readProjectImageFile(dir, url.searchParams.get('path') ?? '') : null;
+      return img ? new Raw(img.bytes, img.type) : null;
+    },
+  ],
+  [
     'POST',
     new RegExp(`^/api/projects/${ID}/files/write$`),
     async ({ params: [id], body, fromBrowser }) => {
@@ -1168,10 +1177,10 @@ const server = http.createServer(async (req, res) => {
           // no-cache + ETag: o navegador confere a cada vez, mas só baixa de novo se a imagem mudou.
           const etag = `"${createHash('sha1').update(out.bytes).digest('base64url')}"`;
           if (req.headers['if-none-match'] === etag) {
-            res.writeHead(304, { etag, 'cache-control': 'no-cache' });
+            res.writeHead(304, { etag, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
             return res.end();
           }
-          res.writeHead(200, { 'content-type': out.type, 'cache-control': 'no-cache', etag });
+          res.writeHead(200, { 'content-type': out.type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', etag });
           return res.end(out.bytes);
         }
         return send(res, 200, out);

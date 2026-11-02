@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { cleanRel, isSecretRel, listProjectTree, MAX_FILE_BYTES, parseWriteBody, ProjectFileError, readProjectFile, writeProjectFile } from '../server/projectFiles';
+import { cleanRel, isSecretRel, listProjectTree, MAX_FILE_BYTES, parseWriteBody, ProjectFileError, readProjectFile, readProjectImageFile, writeProjectFile } from '../server/projectFiles';
 
 let base: string;
 let root: string;
@@ -243,5 +243,35 @@ describe('gravação', () => {
     expect(() => parseWriteBody({ path: 'a', content: 2, baseMtimeMs: 1 })).toThrow(ProjectFileError);
     expect(() => parseWriteBody({ path: 'a', content: '', baseMtimeMs: '1' })).toThrow(ProjectFileError);
     expect(parseWriteBody({ path: 'a', content: 'b', baseMtimeMs: 1 })).toEqual({ path: 'a', content: 'b', baseMtimeMs: 1 });
+  });
+});
+
+describe('readProjectImageFile', () => {
+  it('devolve os bytes e o tipo de uma imagem do projeto', async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2]);
+    await fs.writeFile(path.join(root, 'logo.PNG'), png);
+    const img = await readProjectImageFile(root, 'logo.PNG');
+    expect(img.type).toBe('image/png');
+    expect(img.bytes.equals(png)).toBe(true);
+  });
+
+  it('só imagens: texto e SVG dão 415, segredo e fora do projeto dão 403, inexistente 404', async () => {
+    await fs.writeFile(path.join(root, 'nota.txt'), 'oi');
+    expect(await statusOf(readProjectImageFile(root, 'nota.txt'))).toBe(415);
+    expect(await statusOf(readProjectImageFile(root, 'icone.svg'))).toBe(415);
+    expect(await statusOf(readProjectImageFile(root, '.ssh/foto.png'))).toBe(403);
+    expect(await statusOf(readProjectImageFile(root, '../fora.png'))).toBe(403);
+    expect(await statusOf(readProjectImageFile(root, 'nao-existe.png'))).toBe(404);
+  });
+
+  it.runIf(canLink)('link com nome de imagem: para fora ou segredo dá 403, para texto dá 415', async () => {
+    await fs.writeFile(path.join(root, 'texto.txt'), 'oi');
+    await fs.writeFile(path.join(root, '.env'), 'SEGREDO=1');
+    await fs.symlink(path.join(outside, 'segredo.txt'), path.join(root, 'fora.png'), 'file');
+    await fs.symlink(path.join(root, '.env'), path.join(root, 'env.png'), 'file');
+    await fs.symlink(path.join(root, 'texto.txt'), path.join(root, 'texto.png'), 'file');
+    expect(await statusOf(readProjectImageFile(root, 'fora.png'))).toBe(403);
+    expect(await statusOf(readProjectImageFile(root, 'env.png'))).toBe(403);
+    expect(await statusOf(readProjectImageFile(root, 'texto.png'))).toBe(415);
   });
 });

@@ -8,6 +8,18 @@ import path from 'node:path';
 
 export const MAX_FILE_BYTES = 1024 * 1024;
 const BINARY_PROBE_BYTES = 8 * 1024;
+/** Imagens que a aba de arquivos mostra (só visualização). SVG fica de fora: é texto e abre no editor. */
+export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const IMAGE_TYPES: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  avif: 'image/avif',
+  bmp: 'image/bmp',
+  ico: 'image/x-icon',
+};
 
 /** Pastas de dependências e de build: somem da lista. */
 const HIDDEN = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'vendor', '__pycache__', '.venv']);
@@ -120,6 +132,25 @@ export async function readProjectFile(root: string, rawPath: string): Promise<Pr
   if (bytes.length > MAX_FILE_BYTES) throw new ProjectFileError(413, 'arquivo grande demais (máx. 1 MB)');
   if (bytes.subarray(0, BINARY_PROBE_BYTES).includes(0)) throw new ProjectFileError(415, 'arquivo binário: não é aberto como texto');
   return { path: rel, content: decodeText(bytes), mtimeMs: st.mtimeMs, size: bytes.length };
+}
+
+/** Os bytes de uma imagem do projeto, para visualizar. Mesmas regras de caminho e de segredo da leitura de texto. */
+export async function readProjectImageFile(root: string, rawPath: string): Promise<{ bytes: Buffer; type: string }> {
+  const rel = cleanRel(rawPath);
+  if (isSecretRel(rel)) throw secretError();
+  if (!IMAGE_TYPES[path.extname(rel).slice(1).toLowerCase()]) throw new ProjectFileError(415, 'não é uma imagem que dá para mostrar');
+  const { abs, realRel } = await resolveInside(root, rel);
+  if (isSecretRel(realRel)) throw secretError();
+  // O tipo vale pelo arquivo de verdade: um link `a.png` que aponta para texto não sai como imagem.
+  const realType = IMAGE_TYPES[path.extname(realRel).slice(1).toLowerCase()];
+  if (!realType) throw new ProjectFileError(415, 'não é uma imagem que dá para mostrar');
+  const st = await fs.stat(abs);
+  if (!st.isFile()) throw notFound('não é um arquivo');
+  const tooBig = () => new ProjectFileError(413, 'imagem grande demais (máx. 10 MB)');
+  if (st.size > MAX_IMAGE_BYTES) throw tooBig();
+  const bytes = await fs.readFile(abs);
+  if (bytes.length > MAX_IMAGE_BYTES) throw tooBig(); // cresceu entre o stat e a leitura
+  return { bytes, type: realType };
 }
 
 /** Uma pasta, um nível. Pastas primeiro, depois por nome (sem diferenciar maiúsculas). */

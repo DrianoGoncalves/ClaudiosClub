@@ -524,12 +524,12 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
                 aria-label="MCPs"
                 title={t('chat.mcpsHelp')}
               >
-                <McpIcon />
+                <McpIcon size={16} />
               </button>
             )}
             {showDiff && (
               <button type="button" className="btn-secondary chat-icon-btn" onClick={() => setShowChanges(true)} aria-label={t('chat.changes')} title={t('chat.changesHelp')}>
-                <FileDiffIcon />
+                <FileDiffIcon size={16} />
               </button>
             )}
           </span>
