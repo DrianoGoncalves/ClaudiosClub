@@ -5,7 +5,8 @@ import { t } from '../i18n';
 import { answerOf, answerText, collectAnswers, initialDrafts, numberState, previewDoc, previewOption, type Draft } from './questionAnswers';
 
 // Pergunta com opções do Claude (ferramenta AskUserQuestion): você escolhe, escreve ou pula, e as
-// respostas voltam para ele. Depois de respondida, o cartão mostra o que foi escolhido, só leitura.
+// respostas voltam para ele. É um balão próprio: amarelo enquanto espera você; depois de respondido,
+// vira o balão neutro das mensagens automáticas e mostra o que foi escolhido, só leitura.
 
 type Permission = Extract<ChatItem, { kind: 'permission' }>;
 
@@ -42,7 +43,7 @@ export function QuestionCard({
         : t('chat.qSkipped');
 
   return (
-    <div className={`permission permission-question permission-${item.status}`} data-item-id={item.id}>
+    <div className={`msg permission-question ${pending ? 'msg-question' : 'msg-system'}`} data-item-id={item.id}>
       <p className="permission-title">
         <b>{t('chat.qTitle')}</b> <span className="muted small">{status}</span>
       </p>
