@@ -572,7 +572,7 @@ export class ChatProcess {
             this.putItem({ kind: 'assistant', id, text: stripCheckpoint(done.join('\n\n')), at: (prev?.kind === 'assistant' ? prev.at : null) ?? at });
           } else if (b.type === 'tool_use' && typeof b.id === 'string') {
             const name = typeof b.name === 'string' ? b.name : 'ferramenta';
-            const input = inputText(b.input);
+            const input = inputText(b.input, name);
             this.scan(input);
             this.putItem({ kind: 'tool', id: `t:${b.id}`, name, summary: toolSummary(name, b.input), input, result: null, isError: false, at });
           }
@@ -654,7 +654,7 @@ export class ChatProcess {
           tool,
           summary: plan !== undefined ? 'plano pronto para aprovar' : toolSummary(req.tool_name ?? tool, req.input),
           description: typeof req.description === 'string' ? req.description : null,
-          input: inputText(req.input),
+          input: inputText(req.input, req.tool_name ?? tool),
           status: 'pending',
           at,
           ...(typeof plan === 'string' && { plan }),

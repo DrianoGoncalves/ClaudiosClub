@@ -2,6 +2,8 @@
 // mensagem) em itens da conversa do Claudio’s Club.
 
 const MAX_INPUT = 2_000;
+/** A pergunta com opções (AskUserQuestion) tem JSON longo e a tela o lê campo a campo: cortado no meio, não daria para ler. */
+const MAX_INPUT_ASK = 20_000;
 const MAX_RESULT = 4_000;
 
 export function clip(text: string, max: number): string {
@@ -25,9 +27,9 @@ export function toolSummary(name: string, input: unknown): string {
   return first.split('\n')[0]!.slice(0, 160) || name;
 }
 
-export function inputText(input: unknown): string {
+export function inputText(input: unknown, tool?: string): string {
   try {
-    return clip(typeof input === 'string' ? input : JSON.stringify(input, null, 2), MAX_INPUT);
+    return clip(typeof input === 'string' ? input : JSON.stringify(input, null, 2), tool === 'AskUserQuestion' ? MAX_INPUT_ASK : MAX_INPUT);
   } catch {
     return '';
   }
