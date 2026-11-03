@@ -1,11 +1,16 @@
 <div align="center">
 
-# Claudio's Club
+# Clube dos Claudios
 
-### Sua empresa de agentes do Claude Code, num quadro branco.
+## Sua empresa de agentes do Claude Code, num quadro branco.
 
-Contrate funcionários, passe tarefas, veja quem está trabalhando e quem está esperando por você.<br>
+Coloque funcionários responsáveis por cada área, passe tarefas, veja quem está trabalhando e quem está esperando por você.<br>
 **Todos os seus projetos numa tela só**, rodando na sua máquina, com a sua assinatura.
+
+### Economia de Tokens
+Com conversas otimizadas e delegando automaticamente para cada responsável, suas equipe usa os modelos ideiais para cada tipo de tarefa.
+A memória e personalidade de cada funcionário se mantém, mas as mensagens operacionais ficam guardadas por conversas, sem ler tudo a cada request.
+Os funcionários são como pessoas, usam Agents/Skills/ Configuram MCPs e ainda podem contratar novos funcionários se for ideal para otimizar as tarefas.
 
 ![Claude Code](https://img.shields.io/badge/Claude_Code-orquestrado-D97757?logo=claude&logoColor=white)
 ![Node](https://img.shields.io/badge/Node-22%2B-339933?logo=nodedotjs&logoColor=white)
