@@ -43,6 +43,11 @@ export function formatAgo(ms: number): string {
   return t('app.ago', { dur: days > 0 ? `${days}d` : formatDuration(ms) });
 }
 
+/** A versão sem o "v" da tag ("v0.2.8" → "0.2.8"), para quem já escreve "Versão" antes do número. */
+export function bareVersion(version: string): string {
+  return version.replace(/^v(?=\d)/i, '');
+}
+
 /** Nível de esforço como aparece na tela, sem a palavra "esforço": "high" → "High", "xhigh" → "XHigh". */
 export function effortLabel(effort: string): string {
   if (effort === 'xhigh') return 'XHigh';

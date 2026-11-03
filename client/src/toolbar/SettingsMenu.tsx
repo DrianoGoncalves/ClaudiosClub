@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { CONTEXT_SWITCHES, type AppConfig, type BoardBackground, type ContextSwitch, type Project, type SendPriority, type UiLevel, type UsageStop, type Workspace } from '../../../shared/model';
 import { DemoButton, WorkspacesEditor } from '../office/WorkspacesSettings';
 import { api } from '../api';
+import { bareVersion } from '../format';
 import { useSystemTheme } from '../board/colors';
 import { useChatDetail } from '../chat/chatDetail';
 import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
@@ -208,7 +209,7 @@ export function SettingsMenu(props: Props) {
           {words.length
             ? t('toolbar.ofTotal', { n: visible.length, total: settings.length })
             : version
-              ? t('toolbar.version', { v: version })
+              ? t('toolbar.version', { v: bareVersion(version) })
               : ''}
         </span>
       </div>
