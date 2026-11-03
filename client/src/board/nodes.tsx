@@ -1,6 +1,6 @@
 import { Handle, Position, type Node, type NodeProps, type NodeTypes } from '@xyflow/react';
 import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import { colorCss, type GitState, type LiveSession } from '../../../shared/model';
+import { colorCss, type GitState, type LiveSession, type StaffProfile } from '../../../shared/model';
 import { employeeName, ENTRYPOINT_LABEL, formatAgo, formatShare, initials, STATUS_LABEL } from '../format';
 import { BranchIcon, ChromeIcon, GhostIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { t } from '../i18n';
@@ -93,7 +93,10 @@ function Portrait({ id, label, src, ghost }: { id: string; label: string; src?: 
   );
 }
 
-export const portraitUrl = (projectId: string, staffId: string) => `/api/projects/${projectId}/staff/${staffId}/portrait`;
+// O arquivo do retrato mantém o nome ao ser trocado: sem `v`, o `src` não muda e o navegador segue com a foto antiga.
+// O `updatedAt` da ficha muda a cada salvar, então o endereço novo força buscar a foto de novo.
+export const portraitUrl = (projectId: string, staff: Pick<StaffProfile, 'id' | 'updatedAt'>) =>
+  `/api/projects/${projectId}/staff/${staff.id}/portrait?v=${encodeURIComponent(staff.updatedAt)}`;
 
 /** Cor da parede da sala no cabeçalho (`--room-wall`); sem cor escolhida, o CSS usa a parede padrão. */
 const headerStyle = (h: HeaderData): CSSProperties | undefined =>
@@ -201,7 +204,7 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
     >
       <div className="bn-agent">
         <div className="bn-portrait-wrap">
-          <Portrait id={id} label={name} src={staff?.portrait ? portraitUrl(data.projectId, staff.id) : null} ghost={!!ghost} />
+          <Portrait id={id} label={name} src={staff?.portrait ? portraitUrl(data.projectId, staff) : null} ghost={!!ghost} />
           {/* Lápis que "escreve" enquanto a sessão trabalha. */}
           {busy && <span className="bn-pencil" aria-hidden="true">✎</span>}
         </div>
@@ -261,7 +264,7 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
               )}
               {staff.canHire && (
                 <span title={t('board.toolCanHire')} aria-label={t('board.toolCanHire')} role="img">
-                  <UserPlusIcon />
+                  <UserPlusIcon size={12} />
                 </span>
               )}
             </div>

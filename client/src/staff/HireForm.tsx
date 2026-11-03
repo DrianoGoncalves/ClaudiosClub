@@ -13,6 +13,7 @@ import type {
   StaffProfile,
 } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
+import { portraitUrl } from '../board/nodes';
 import { effortLabel, employeeName, folderName } from '../format';
 import { t, locale } from '../i18n';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
@@ -283,7 +284,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
     }
   };
 
-  const currentPortrait = editing?.portrait && portrait === undefined ? `/api/projects/${projectId}/staff/${editing.id}/portrait` : portrait;
+  const currentPortrait = editing?.portrait && portrait === undefined ? portraitUrl(projectId, editing) : portrait;
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>

@@ -192,7 +192,7 @@ export function EmployeePanel(props: {
   const top = (
     <>
       <div className="employee-top">
-        {staff?.portrait && project && <img className="employee-portrait" src={portraitUrl(project.id, staff.id)} alt={t('detail.portraitOf', { name: staff.name })} />}
+        {staff?.portrait && project && <img className="employee-portrait" src={portraitUrl(project.id, staff)} alt={t('detail.portraitOf', { name: staff.name })} />}
         {props.ghost && (
           <span className="employee-portrait employee-ghost" aria-hidden="true">
             <GhostIcon size={30} />
