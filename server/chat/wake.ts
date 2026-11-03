@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { AutoContinue, AutoContinueEvent } from './autoContinue';
 
 // Despertador: no meio do trabalho o funcionário pede "me chame de novo nesta conversa daqui a N segundos com esta
 // mensagem" (acompanhar um deploy em outro servidor, o CI do GitHub, um site). O agendador é o mesmo do "continue" do
@@ -7,6 +8,15 @@ import { z } from 'zod';
 export const WAKE_MIN_SECONDS = 10;
 export const WAKE_MAX_SECONDS = 86_400;
 export const WAKE_TEXT_MAX = 2_000;
+/** Despertadores que podem disparar seguidos numa conversa sem o usuário falar: o 21º agendamento é recusado. */
+export const WAKE_MAX_STREAK = 20;
+
+/** O funcionário já foi acordado vezes demais seguidas sem o usuário falar (a rota responde 400). */
+export class WakeStreakError extends Error {
+  constructor() {
+    super(`muitos despertadores seguidos sem o usuário falar (${WAKE_MAX_STREAK}); peça ao usuário antes de continuar acompanhando`);
+  }
+}
 
 /** O pedido do funcionário: `POST .../chat/:s/wake` com `{ "seconds": 90, "text": "..." }`. */
 export const WakeBody = z.object({
@@ -41,3 +51,16 @@ export const wakeNotice = {
   cancelled: 'Despertador cancelado.',
   failed: (error: string) => `Não deu para voltar a olhar na hora marcada (${error}). Mande uma mensagem quando quiser.`,
 };
+
+/**
+ * Despertador que saiu sem mandar (cancelado pelo usuário, solto ou que falhou): a tarefa da conversa, que ficou
+ * segurando a entrega por causa dele, é entregue como antes, mas só com a conversa parada. Trabalhando, o fim do
+ * turno entrega. Cancelado pelo próprio funcionário (no meio do turno dele) também não entrega: o fim do turno faz isso.
+ * Devolve quem parou de ouvir.
+ */
+export function watchWakeups(wakeups: Pick<AutoContinue, 'subscribe'>, isWorking: (sessionId: string) => boolean, onTurnDone: (sessionId: string) => void): () => void {
+  return wakeups.subscribe((e: AutoContinueEvent) => {
+    const left = e.type === 'dropped' || e.type === 'failed' || (e.type === 'cancelled' && e.by === 'user');
+    if (left && !isWorking(e.pending.sessionId)) onTurnDone(e.pending.sessionId);
+  });
+}

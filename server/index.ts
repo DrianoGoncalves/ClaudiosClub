@@ -37,7 +37,7 @@ import { searchFiles } from './fileSearch';
 import { CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
 import { ChatRegistry } from './chat/registry';
 import { AutoContinue } from './chat/autoContinue';
-import { WakeBody } from './chat/wake';
+import { WakeBody, WakeStreakError, watchWakeups } from './chat/wake';
 import { StaffError, StaffService } from './staff/service';
 import { mcpJsonWarnings } from './staff/mcp';
 import { permissionInboxItem, questionInboxItem } from './inboxItems';
@@ -300,10 +300,13 @@ autoContinue.subscribe((e) => {
     void tasks.onTurnDone(e.pending.sessionId).catch(() => {});
   }
 });
-// Despertador cancelado, solto ou que falhou: a tarefa daquela conversa é entregue como antes.
-wakeups.subscribe((e) => {
-  if (e.type === 'dropped' || e.type === 'failed' || e.type === 'cancelled') void tasks.onTurnDone(e.pending.sessionId).catch(() => {});
-});
+// Despertador cancelado pelo usuário, solto ou que falhou: a tarefa daquela conversa é entregue como antes, mas só com
+// a conversa parada (trabalhando, o fim do turno entrega); cancelado pelo próprio funcionário não entrega nada.
+watchWakeups(
+  wakeups,
+  (sessionId) => chats.isWorking(sessionId),
+  (sessionId) => void tasks.onTurnDone(sessionId).catch(() => {}),
+);
 
 // Rotinas: no horário, a mensagem vai ao funcionário pelo mesmo caminho do chat do painel.
 const routines = new RoutineScheduler({
@@ -608,7 +611,9 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     new RegExp(`^/api/projects/${ID}/chat/${ID}/wake$`),
     async ({ params: [pid, sid], body }) => {
       const b = parse(WakeBody, body);
-      const done = await chats.scheduleWake(pid!, sid!, b);
+      const done = await chats.scheduleWake(pid!, sid!, b).catch((err) => {
+        throw err instanceof WakeStreakError ? new BadRequest(err.message) : err;
+      });
       // Conversa que não é deste projeto (ou não está aberta aqui): 404.
       return done && { ok: true, at: new Date(done.at).toISOString(), seconds: b.seconds };
     },

@@ -284,7 +284,7 @@ function wakeSection(p: StaffProfile, ctx: FichaContext): string {
     '## Despertador',
     'Para acompanhar algo que demora e não roda neste computador (deploy em outro servidor, CI do GitHub, um site), peça ao Claudio’s Club que te chame de novo nesta conversa. Para o que roda aqui, prefira Bash em segundo plano ou a ferramenta Monitor: eles já te acordam quando terminam.',
     `Para agendar: \`curl -s -X POST -H "x-myco: 1" -H "content-type: application/json" -d '{"seconds": 120, "text": "Confira o deploy e conte como está"}' ${api}/chat/$MYCO_SESSION_ID/wake\` (\`$MYCO_SESSION_ID\` é o id desta conversa, já no seu ambiente). Na hora, o texto chega aqui como mensagem (a conversa reabre sozinha se tiver fechado): escreva o que conferir, sem aspas simples.`,
-    `De 10 s a 24 h (\`seconds\` de 10 a 86400), um por conversa: agendar de novo troca o anterior. Para desfazer: o mesmo curl em \`${api}/chat/$MYCO_SESSION_ID/wake/cancel\`, sem corpo. Não agende em laço curto sem motivo: cada volta gasta consumo.`,
+    `De 10 s a 24 h (\`seconds\` de 10 a 86400), um por conversa: agendar de novo troca o anterior. Para desfazer: o mesmo curl em \`${api}/chat/$MYCO_SESSION_ID/wake/cancel\`, sem corpo. Não agende em laço curto sem motivo: cada volta gasta consumo. Depois de 20 despertadores seguidos sem o usuário falar, o Claudio’s Club recusa o próximo: peça ao usuário antes de continuar acompanhando.`,
   ].join('\n');
 }
 

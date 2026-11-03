@@ -123,6 +123,7 @@ describe('ficha', () => {
       'De 10 s a 24 h',
       'um por conversa',
       'laço curto',
+      '20 despertadores seguidos sem o usuário falar',
     ]) {
       expect(section).toContain(part);
     }

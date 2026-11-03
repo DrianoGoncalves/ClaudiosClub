@@ -9,7 +9,7 @@ import { AutoContinue, type AutoContinueEvent, type AutoContinueOptions, type Pe
 import { ChatManager } from '../server/chat/manager';
 import { ChatProcess } from '../server/chat/process';
 import { SLACK_MS } from '../server/chat/usageLimit';
-import { WAKE_MAX_SECONDS, WAKE_MIN_SECONDS, WAKE_TEXT_MAX, WakeBody, wakeNotice } from '../server/chat/wake';
+import { WAKE_MAX_SECONDS, WAKE_MAX_STREAK, WAKE_MIN_SECONDS, WAKE_TEXT_MAX, WakeBody, WakeStreakError, wakeNotice, watchWakeups } from '../server/chat/wake';
 import { clockHM, secondsLeft } from '../client/src/chat/wakeCountdown';
 import dicts from '../client/src/i18n/chat';
 
@@ -291,6 +291,126 @@ describe('ChatManager: despertador', () => {
     await wakeups.tick();
     await settle();
     expect(texts(spawns[0]!)).toEqual(['faça X']);
+  });
+
+  // ---- A: a tarefa só é entregue com a conversa parada ----
+
+  describe('entrega da tarefa quando o despertador sai sem mandar', () => {
+    let delivered: string[];
+    beforeEach(() => {
+      delivered = [];
+      watchWakeups(wakeups, (sid) => manager.isWorking(sid), (sid) => void delivered.push(sid));
+    });
+    const endTurn = async () => {
+      spawns[0]!.emit({ type: 'result', is_error: false, result: 'ok' });
+      await settle();
+    };
+
+    it('o funcionário cancela no meio do próprio turno: nada é entregue (o fim do turno entrega)', async () => {
+      await manager.send('p', 'sx', 'ana', 'faça X');
+      await manager.scheduleWake('p', 'sx', { seconds: 60, text: 'a' });
+      expect(manager.isWorking('sx')).toBe(true);
+      expect(await manager.cancelWake('p', 'sx', 'staff')).toBe(true);
+      expect(delivered).toEqual([]);
+      await endTurn();
+      expect(manager.isWorking('sx')).toBe(false);
+      expect(delivered).toEqual([]); // o aviso do fim do turno vem de outro lugar (onIdle), não do despertador
+    });
+
+    it('o usuário cancela com a conversa trabalhando: não entrega; parada: entrega', async () => {
+      await manager.send('p', 'sx', 'ana', 'faça X');
+      await manager.scheduleWake('p', 'sx', { seconds: 60, text: 'a' });
+      expect(await manager.cancelWake('p', 'sx', 'user')).toBe(true);
+      expect(delivered).toEqual([]);
+
+      await endTurn();
+      await manager.scheduleWake('p', 'sx', { seconds: 60, text: 'b' });
+      expect(manager.isWorking('sx')).toBe(false);
+      expect(await manager.cancelWake('p', 'sx', 'user')).toBe(true);
+      expect(delivered).toEqual(['sx']);
+    });
+
+    it('conversa fechada conta como parada: o cancelamento do usuário entrega', async () => {
+      await manager.send('p', 'sx', 'ana', 'faça X');
+      await manager.scheduleWake('p', 'sx', { seconds: 600, text: 'a' });
+      manager.stop('sx');
+      await settle();
+      expect(manager.isWorking('sx')).toBe(false);
+      await manager.cancelWake('p', 'sx', 'user');
+      expect(delivered).toEqual(['sx']);
+    });
+
+    it('falhou com a conversa parada entrega; com ela trabalhando, não', async () => {
+      const failing = build(path.join(root, `wake-f-${n}.json`), path.join(root, `limit-f-${n}.json`), async () => {
+        throw new Error('a sessão continua aberta num terminal');
+      });
+      const got: string[] = [];
+      watchWakeups(failing.w, (sid) => failing.m.isWorking(sid), (sid) => void got.push(sid));
+      await failing.m.send('p', 'sx', 'ana', 'faça X');
+      await failing.m.scheduleWake('p', 'sx', { seconds: 60, text: 'a' });
+      clock.t = T0 + 60_000;
+      await failing.w.tick(); // a conversa ainda está no turno: não entrega
+      await settle();
+      expect(got).toEqual([]);
+
+      spawns.at(-1)!.emit({ type: 'result', is_error: false, result: 'ok' });
+      await settle();
+      await failing.m.scheduleWake('p', 'sx', { seconds: 60, text: 'b' });
+      clock.t = T0 + 120_000;
+      await failing.w.tick(); // parada: entrega
+      await settle();
+      expect(got).toEqual(['sx']);
+    });
+
+    it('solto (dropped) com a conversa parada entrega; trabalhando, não', async () => {
+      const got: string[] = [];
+      watchWakeups({ subscribe: (l) => (l({ type: 'dropped', pending: { projectId: 'p', sessionId: 'sx', staffId: 'ana', at: T0, resetsAt: T0 } }), () => {}) }, () => false, (sid) => void got.push(sid));
+      watchWakeups({ subscribe: (l) => (l({ type: 'dropped', pending: { projectId: 'p', sessionId: 'sy', staffId: 'ana', at: T0, resetsAt: T0 } }), () => {}) }, () => true, (sid) => void got.push(sid));
+      expect(got).toEqual(['sx']);
+    });
+  });
+
+  // ---- B: teto de despertadores seguidos ----
+
+  describe('teto de despertadores seguidos sem o usuário falar', () => {
+    const fire = async (i: number) => {
+      await manager.scheduleWake('p', 'sx', { seconds: 10, text: `volta ${i}` });
+      clock.t += 20_000; // passa do prazo e da folga entre um envio e outro do agendador
+      await wakeups.tick();
+      await settle();
+    };
+
+    it('o 21º é recusado com erro claro; a conversa e a pendência anterior ficam como estavam', async () => {
+      await manager.send('p', 'sx', 'ana', 'faça X');
+      for (let i = 1; i <= WAKE_MAX_STREAK; i++) await fire(i);
+      expect(texts(spawns[0]!)).toHaveLength(1 + WAKE_MAX_STREAK);
+      await expect(manager.scheduleWake('p', 'sx', { seconds: 10, text: 'a 21ª' })).rejects.toBeInstanceOf(WakeStreakError);
+      await expect(manager.scheduleWake('p', 'sx', { seconds: 10, text: 'a 21ª' })).rejects.toThrow(/muitos despertadores seguidos sem o usuário falar \(20\); peça ao usuário/);
+      expect(await wakeups.get('sx')).toBeNull();
+    });
+
+    it('uma mensagem do usuário zera a conta; o limite é por conversa', async () => {
+      await manager.send('p', 'sx', 'ana', 'faça X');
+      await manager.send('p', 'sy', 'bia', 'faça Y');
+      for (let i = 1; i <= WAKE_MAX_STREAK; i++) await fire(i);
+      await expect(manager.scheduleWake('p', 'sx', { seconds: 10, text: 'x' })).rejects.toBeInstanceOf(WakeStreakError);
+      await expect(manager.scheduleWake('p', 'sy', { seconds: 10, text: 'y' })).resolves.toEqual({ at: clock.t + 10_000 }); // outra conversa
+      await manager.cancelWake('p', 'sy', 'user'); // (o agendador manda um por vez: que não atrapalhe a contagem abaixo)
+
+      await manager.send('p', 'sx', 'ana', 'e então?');
+      await expect(manager.scheduleWake('p', 'sx', { seconds: 10, text: 'depois' })).resolves.toEqual({ at: clock.t + 10_000 });
+      for (let i = 1; i <= WAKE_MAX_STREAK; i++) await fire(i); // a conta recomeçou: mais 20 e recusa de novo
+      await expect(manager.scheduleWake('p', 'sx', { seconds: 10, text: 'x' })).rejects.toBeInstanceOf(WakeStreakError);
+    });
+
+    it('agendar de novo antes de disparar não conta; o "continue" do limite não zera a conta', async () => {
+      await manager.send('p', 'sx', 'ana', 'faça X');
+      for (let i = 0; i < WAKE_MAX_STREAK + 5; i++) await manager.scheduleWake('p', 'sx', { seconds: 60, text: `v${i}` });
+      for (let i = 1; i < WAKE_MAX_STREAK; i++) await fire(i); // 19 disparados
+      await manager.continueChat('p', 'sx', 'ana');
+      await fire(WAKE_MAX_STREAK); // o 20º
+      await expect(manager.scheduleWake('p', 'sx', { seconds: 10, text: 'x' })).rejects.toBeInstanceOf(WakeStreakError);
+    });
   });
 
   it('cancelar com o projeto errado: 404 (null) e a pendência fica; conversa de outro projeto não agenda', async () => {

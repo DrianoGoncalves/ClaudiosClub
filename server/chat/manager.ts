@@ -29,7 +29,7 @@ import { InboxState } from '../inboxState';
 import { isAlive, killTree, type ChatRegistry } from './registry';
 import { CONTINUE_TEXT, type AutoContinue, type AutoContinueEvent, type Pending } from './autoContinue';
 import { limitNotice, MAX_LIMIT_HITS, resumePlan, type LimitHit } from './usageLimit';
-import { wakeNotice, type WakeInput } from './wake';
+import { WAKE_MAX_STREAK, WakeStreakError, wakeNotice, type WakeInput } from './wake';
 import { readUsage } from '../usage';
 
 export interface ChatSpawn {
@@ -181,6 +181,8 @@ export class ChatManager {
   private readonly wakeNotices = new Map<string, string>();
   /** Estouros de limite seguidos por conversa, desde o último turno que terminou sem limite (ver `MAX_LIMIT_HITS`). */
   private readonly limitStreak = new Map<string, number>();
+  /** Despertadores que dispararam seguidos por conversa, desde a última mensagem que não foi de despertador (ver `WAKE_MAX_STREAK`). */
+  private readonly wakeStreak = new Map<string, number>();
   /** Estouros de limite ainda sendo agendados, por conversa (ver `awaitingLimit`). */
   private readonly limitRuns = new Map<string, Promise<unknown>>();
   private readonly timer: NodeJS.Timeout;
@@ -374,12 +376,14 @@ export class ChatManager {
   /**
    * Despertador: "me chame de novo nesta conversa daqui a `seconds` segundos com esta mensagem". Uma por conversa (a nova
    * troca a anterior, e o aviso na conversa troca a hora). Só vale para conversa aberta aqui e do projeto: do contrário
-   * devolve null (a rota responde 404). Devolve a hora marcada (ms).
+   * devolve null (a rota responde 404). Devolve a hora marcada (ms). Depois de `WAKE_MAX_STREAK` despertadores seguidos
+   * sem mensagem do usuário, recusa (`WakeStreakError`): quem acorda a si mesmo sem fim precisa pedir ao usuário.
    */
   async scheduleWake(projectId: string, sessionId: string, input: WakeInput): Promise<{ at: number } | null> {
     const wakeups = this.opts.wakeups;
     const chat = this.chats.get(sessionId);
     if (!wakeups || !chat?.running || chat.projectId !== projectId) return null;
+    if ((this.wakeStreak.get(sessionId) ?? 0) >= WAKE_MAX_STREAK) throw new WakeStreakError();
     const at = this.now() + input.seconds * 1000;
     const pending: Pending = { projectId, sessionId, staffId: chat.staffId, at, resetsAt: at, text: input.text };
     await wakeups.schedule(pending);
@@ -406,6 +410,7 @@ export class ChatManager {
   async wakeChat(p: Pending): Promise<void> {
     if (!p.text) throw new ChatError('o despertador está sem mensagem');
     await this.deliver(p.projectId, p.sessionId, p.staffId, p.text, 'later', [], [], this.delegated.has(p.sessionId), true);
+    this.wakeStreak.set(p.sessionId, (this.wakeStreak.get(p.sessionId) ?? 0) + 1);
   }
 
   private now(): number {
@@ -425,7 +430,10 @@ export class ChatManager {
   ): Promise<string> {
     const chat = await this.ensure(projectId, sessionId, staffId);
     // Qualquer mensagem sua (ou de outro funcionário) na conversa vale mais que o "continue" agendado.
-    if (!auto) await this.opts.autoContinue?.cancel(chat.sessionId, 'message');
+    if (!auto) {
+      await this.opts.autoContinue?.cancel(chat.sessionId, 'message');
+      this.wakeStreak.delete(chat.sessionId); // alguém falou: a conta dos despertadores seguidos recomeça
+    }
     if (delegated) this.delegated.add(chat.sessionId);
     else this.delegated.delete(chat.sessionId);
     this.inbox.setQuestion(chat.sessionId, null); // respondeu (ou mandou outra coisa): a pergunta sai da caixa
@@ -622,6 +630,12 @@ export class ChatManager {
   isBusy(sessionId: string): boolean {
     const chat = this.chats.get(sessionId);
     return !!chat?.running && chat.busy;
+  }
+
+  /** A conversa está aberta e no meio de um turno ou com algo em segundo plano (o "trabalhando" que decide o `onIdle`). */
+  isWorking(sessionId: string): boolean {
+    const chat = this.chats.get(sessionId);
+    return !!chat?.running && chat.working;
   }
 
   /** Conversas paradas numa pergunta para você, para a caixa "precisa de mim". */
