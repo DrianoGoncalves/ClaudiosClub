@@ -2,7 +2,7 @@ import { Handle, Position, type Node, type NodeProps, type NodeTypes } from '@xy
 import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { colorCss, type GitState, type LiveSession } from '../../../shared/model';
 import { employeeName, ENTRYPOINT_LABEL, formatAgo, formatShare, initials, STATUS_LABEL } from '../format';
-import { BranchIcon, GhostIcon, TasksIcon } from '../icons';
+import { BranchIcon, ChromeIcon, GhostIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { t } from '../i18n';
 import {
   HANDLE,
@@ -246,6 +246,26 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
                 </Fragment>
               ))}
           </div>
+          {/* Ferramentas que a ficha libera, em ícones pequenos abaixo do cargo. */}
+          {staff && (staff.worktree || staff.browser || staff.canHire) && (
+            <div className="bn-tools">
+              {staff.worktree && (
+                <span title={t('board.toolWorktree')} aria-label={t('board.toolWorktree')} role="img">
+                  <BranchIcon />
+                </span>
+              )}
+              {staff.browser && (
+                <span title={t('board.toolBrowser')} aria-label={t('board.toolBrowser')} role="img">
+                  <ChromeIcon />
+                </span>
+              )}
+              {staff.canHire && (
+                <span title={t('board.toolCanHire')} aria-label={t('board.toolCanHire')} role="img">
+                  <UserPlusIcon />
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
       {/* Só a bolinha no canto; o texto do status aparece ao passar o mouse. */}

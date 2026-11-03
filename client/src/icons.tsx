@@ -55,6 +55,31 @@ export function PlusIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+/** Logo do Chrome no traço da casa: usa o navegador pela extensão Claude in Chrome. */
+export function ChromeIcon({ size = 12 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <circle cx="12" cy="12" r="10" />
+      <circle cx="12" cy="12" r="4" />
+      <path d="M21.17 8H12" />
+      <path d="M3.95 6.06 8.54 14" />
+      <path d="M10.88 21.94 15.46 14" />
+    </svg>
+  );
+}
+
+/** Pessoa com "+": pode contratar subfuncionários. */
+export function UserPlusIcon({ size = 12 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M19 8v6" />
+      <path d="M22 11h-6" />
+    </svg>
+  );
+}
+
 /** Duas folhas sobrepostas: duplicar (uma cópia para seguir por outro caminho). */
 export function CopyIcon({ size = 15 }: { size?: number }) {
   return (
