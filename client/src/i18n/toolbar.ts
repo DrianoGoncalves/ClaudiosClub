@@ -7,8 +7,7 @@ export default defineMessages({
     // Configurações: topo e grupos
     'toolbar.settingsDialog': 'Configurações do Clube dos Claudios',
     'toolbar.searchSettings': 'Buscar configurações',
-    'toolbar.settingsCountOne': '{n} configuração',
-    'toolbar.settingsCountOther': '{n} configurações',
+    'toolbar.version': 'Versão {v}',
     'toolbar.ofTotal': '{n} de {total}',
     'toolbar.groupsNav': 'Grupos',
     'toolbar.noResults': 'Nenhuma configuração com “{q}”.',
@@ -250,8 +249,7 @@ export default defineMessages({
   en: {
     'toolbar.settingsDialog': 'Claudio’s Club settings',
     'toolbar.searchSettings': 'Search settings',
-    'toolbar.settingsCountOne': '{n} setting',
-    'toolbar.settingsCountOther': '{n} settings',
+    'toolbar.version': 'Version {v}',
     'toolbar.ofTotal': '{n} of {total}',
     'toolbar.groupsNav': 'Groups',
     'toolbar.noResults': 'No setting matches “{q}”.',
@@ -485,8 +483,7 @@ export default defineMessages({
   es: {
     'toolbar.settingsDialog': 'Configuración del Club de los Claudios',
     'toolbar.searchSettings': 'Buscar configuración',
-    'toolbar.settingsCountOne': '{n} configuración',
-    'toolbar.settingsCountOther': '{n} configuraciones',
+    'toolbar.version': 'Versión {v}',
     'toolbar.ofTotal': '{n} de {total}',
     'toolbar.groupsNav': 'Grupos',
     'toolbar.noResults': 'Ninguna configuración coincide con “{q}”.',

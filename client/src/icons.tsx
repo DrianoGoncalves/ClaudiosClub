@@ -76,6 +76,42 @@ export function McpIcon({ size = 18 }: { size?: number }) {
   );
 }
 
+/** Pessoa com +: contratar funcionário. */
+export function UserPlusIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M19 8v6" />
+      <path d="M22 11h-6" />
+    </svg>
+  );
+}
+
+/** Caixa de arquivo morto: arquivar (tirar do quadro). */
+export function ArchiveIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <rect x="2" y="3" width="20" height="5" rx="1" />
+      <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+      <path d="M10 12h4" />
+    </svg>
+  );
+}
+
+/** Caixa com seta para cima: desarquivar (voltar ao quadro). */
+export function ArchiveRestoreIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <rect x="2" y="3" width="20" height="5" rx="1" />
+      <path d="M4 8v11a2 2 0 0 0 2 2h2" />
+      <path d="M20 8v11a2 2 0 0 1-2 2h-2" />
+      <path d="m9 15 3-3 3 3" />
+      <path d="M12 12v9" />
+    </svg>
+  );
+}
+
 /** Gráfico de barras: o ranking (gastos e modelos). */
 export function ChartIcon({ size = 15 }: { size?: number }) {
   return (

@@ -31,7 +31,7 @@ import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatPercent,
 import { isLoss, type RankingGroup, type RankingRow, rankingRows, savingsList, teamSavings } from '../ranking';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
-import { CopyIcon, GhostIcon, PlusIcon } from '../icons';
+import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, PlusIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
 
 // Painel lateral: o que o nó selecionado no quadro tem por trás.
@@ -43,11 +43,14 @@ function ArchiveButton({
   onArchive,
   what,
   restoreLabel = t('detail.unarchive'),
+  iconOnly = false,
 }: {
   archived: boolean;
   onArchive: (v: boolean) => Promise<void>;
   what: string;
   restoreLabel?: string;
+  /** Só o ícone (com o texto no title e no aria-label). */
+  iconOnly?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,12 +68,13 @@ function ArchiveButton({
   return (
     <>
       <button
-        className="btn-secondary"
+        className={iconOnly ? 'btn-secondary btn-icon' : 'btn-secondary'}
         onClick={click}
         disabled={busy}
+        aria-label={iconOnly ? (archived ? restoreLabel : t('detail.archive')) : undefined}
         title={archived ? t('detail.showOnBoard', { what }) : t('detail.hideFromBoard', { what })}
       >
-        {archived ? restoreLabel : t('detail.archive')}
+        {iconOnly ? archived ? <ArchiveRestoreIcon /> : <ArchiveIcon /> : archived ? restoreLabel : t('detail.archive')}
       </button>
       {error && <span className="error">{error}</span>}
     </>
@@ -691,21 +695,22 @@ export function ProjectPanel({
         </p>
         <p className="actions">
           {project.exists && (
-            <button className="btn-primary" onClick={onHire}>
-              {t('detail.hireEmployee')}
+            <button className="btn-primary btn-with-icon" onClick={onHire} title={t('detail.hireEmployee')}>
+              <UserPlusIcon />
+              {t('detail.employee')}
             </button>
           )}
           {project.exists && onTasks && (
-            <button className="btn-secondary" onClick={onTasks} title={t('detail.boardTasksTitle')}>
-              {t('detail.tasks')}
+            <button className="btn-secondary btn-icon" onClick={onTasks} aria-label={t('detail.tasks')} title={t('detail.boardTasksTitle')}>
+              <TasksIcon size={16} />
             </button>
           )}
           {project.exists && onFiles && (
-            <button className="btn-secondary" onClick={onFiles} title={t('files.openTitle')}>
-              {t('files.open')}
+            <button className="btn-secondary btn-icon" onClick={onFiles} aria-label={t('files.open')} title={t('files.openTitle')}>
+              <FolderIcon size={16} />
             </button>
           )}
-          <ArchiveButton archived={archived} onArchive={onArchive} what={t('detail.whatProjectAndStaff')} />
+          <ArchiveButton archived={archived} onArchive={onArchive} what={t('detail.whatProjectAndStaff')} iconOnly />
         </p>
         {tasks && (
           <p className="muted small">

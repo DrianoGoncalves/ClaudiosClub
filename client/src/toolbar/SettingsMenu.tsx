@@ -8,7 +8,7 @@ import { useChatDetail } from '../chat/chatDetail';
 import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
 import { RolesEditor } from './RolesEditor';
 import { ThemeBackgrounds } from './ThemeBackgrounds';
-import { UpdateControls } from './UpdateNotice';
+import { UpdateControls, useUpdateStatus } from './UpdateNotice';
 
 // Configurações do Claudio’s Club, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
 // com título, descrição e o controle logo abaixo. Abre pelo botão "config" ou com Ctrl+,.
@@ -157,6 +157,8 @@ export function SettingsMenu(props: Props) {
     return () => window.removeEventListener('resize', place);
   }, [open]);
 
+  const [updateStatus] = useUpdateStatus();
+  const version = updateStatus?.current ?? null;
   const words = fold(query).split(/\s+/).filter(Boolean);
   const chatDetail = useChatDetail();
   const all = buildSettings(props, theme, () => setOpen(false), words, chatDetail);
@@ -205,7 +207,9 @@ export function SettingsMenu(props: Props) {
         <span className="muted small">
           {words.length
             ? t('toolbar.ofTotal', { n: visible.length, total: settings.length })
-            : plural(settings.length, 'toolbar.settingsCountOne', 'toolbar.settingsCountOther')}
+            : version
+              ? t('toolbar.version', { v: version })
+              : ''}
         </span>
       </div>
       <div className="settings-body">
