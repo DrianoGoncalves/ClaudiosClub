@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, Board, CostReport, InboxItem, LinkInfo, Project, Session, Skill, StaffProfile } from '../shared/model';
 import { buildGraph as buildGraphRaw, SIZES, type BoardNode, type BoardNodeType } from '../client/src/board/layout';
+import { portraitUrl } from '../client/src/board/nodes';
 
 // Estes testes contam com a sala do usuário; o padrão do quadro é escondê-la (ver "escopo do usuário" abaixo).
 const buildGraph = (b: Parameters<typeof buildGraphRaw>[0], o: Parameters<typeof buildGraphRaw>[1]) => buildGraphRaw(b, { showUserScope: true, ...o });
@@ -515,5 +516,14 @@ describe('escopo do usuário', () => {
     const ids = (show?: boolean) => buildGraphRaw(board(), { showUserScope: show }).nodes.map((n) => n.id);
     expect(ids()).not.toContain('u');
     expect(ids(true)).toContain('u');
+  });
+});
+
+describe('endereço do retrato', () => {
+  it('muda quando a ficha é salva, para o quadro buscar a foto nova sem recarregar', () => {
+    const before = portraitUrl('a', { ...staffProfile('ana', []), updatedAt: '2026-11-03T10:00:00.000Z' });
+    const after = portraitUrl('a', { ...staffProfile('ana', []), updatedAt: '2026-11-03T10:05:00.000Z' });
+    expect(before).toMatch(/^\/api\/projects\/a\/staff\/ana\/portrait\?v=/);
+    expect(after).not.toBe(before);
   });
 });

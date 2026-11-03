@@ -55,6 +55,19 @@ export function PlusIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+/** Logo do Chrome no traço da casa: usa o navegador pela extensão Claude in Chrome. */
+export function ChromeIcon({ size = 12 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <circle cx="12" cy="12" r="10" />
+      <circle cx="12" cy="12" r="4" />
+      <path d="M21.17 8H12" />
+      <path d="M3.95 6.06 8.54 14" />
+      <path d="M10.88 21.94 15.46 14" />
+    </svg>
+  );
+}
+
 /** Duas folhas sobrepostas: duplicar (uma cópia para seguir por outro caminho). */
 export function CopyIcon({ size = 15 }: { size?: number }) {
   return (

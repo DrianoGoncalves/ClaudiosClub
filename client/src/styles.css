@@ -137,6 +137,7 @@ body { background: var(--board); }
 .bn-portrait .bn-ghost { position: relative; display: grid; place-items: center; }
 .bn-role { color: var(--ink); }
 .bn-temp { color: var(--warn); }
+.bn-tools { display: flex; gap: 6px; margin-top: 2px; color: var(--muted); line-height: 0; }
 .temp-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; padding: 8px 10px; border: 1px dashed var(--warn); border-radius: 8px; color: var(--ink); }
 .temp-notice-actions { display: inline-flex; gap: 6px; margin-left: auto; }
 .bn-employee.is-busy .sketch path { stroke-dasharray: 14 6; animation: bn-redraw 1.6s linear infinite; }
