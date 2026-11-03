@@ -37,6 +37,7 @@ import { searchFiles } from './fileSearch';
 import { CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
 import { ChatRegistry } from './chat/registry';
 import { AutoContinue } from './chat/autoContinue';
+import { WakeBody } from './chat/wake';
 import { StaffError, StaffService } from './staff/service';
 import { mcpJsonWarnings } from './staff/mcp';
 import { permissionInboxItem, questionInboxItem } from './inboxItems';
@@ -187,24 +188,41 @@ const currentBoost = async () => ((await readConfig()).optimizeQuota ? quotaBoos
  * O limite de uso da assinatura acabou no meio de uma conversa: o "continue" sai sozinho quando ele volta
  * (opção `autoContinue`). Respeita a linha de parada do usuário e o orçamento do projeto, como o chat.
  */
+const usageStopHit = async (projectId: string) => {
+  try {
+    await staff.checkUsage(projectId);
+    return null;
+  } catch (err) {
+    if (err instanceof UsageStopError) return err.hit;
+    throw err;
+  }
+};
 const autoContinue = new AutoContinue({
   file: path.join(MYCO_HOME, 'auto-continue.json'),
   enabled: async () => (await readConfig()).autoContinue,
-  stopHit: async (projectId) => {
-    try {
-      await staff.checkUsage(projectId);
-      return null;
-    } catch (err) {
-      if (err instanceof UsageStopError) return err.hit;
-      throw err;
-    }
-  },
+  stopHit: usageStopHit,
   knownResets: async () => (await readUsage()).limits,
   send: (p) => chats.continueChat(p.projectId, p.sessionId, p.staffId),
+});
+/**
+ * Despertador: o funcionário pede para ser chamado de novo na conversa dele daqui a N segundos (ver chat/wake.ts). É o
+ * mesmo agendador, com arquivo próprio (as duas pendências da mesma conversa não se apagam) e sempre ligado.
+ * A linha de parada do usuário barra do mesmo jeito; o temporizador confere de perto, porque o prazo mínimo é de 10 s.
+ */
+const wakeups = new AutoContinue({
+  file: path.join(MYCO_HOME, 'wakeups.json'),
+  enabled: async () => true,
+  stopHit: usageStopHit,
+  knownResets: async () => (await readUsage()).limits,
+  send: (p) => chats.wakeChat(p),
+  tickMs: 2_000,
+  spacingMs: 2_000,
+  log: (line) => console.log(`[despertador] ${line}`),
 });
 
 const chats: ChatManager = new ChatManager({
   autoContinue,
+  wakeups,
   inbox: inboxState,
   contextSwitch: async () => (await readConfig()).contextSwitch,
   quotaBoost: currentBoost,
@@ -271,7 +289,8 @@ const tasks = new TaskService({
   sendTo: (projectId, sessionId, staffId, text, images) => chats.send(projectId, sessionId, staffId, text, 'next', images),
   secondOpinion: (input) => codex.review(input),
   // Turno que parou no limite de uso, com o "continue" agendado, não é entrega.
-  awaitingLimit: (sessionId) => chats.awaitingLimit(sessionId),
+  // Também com despertador marcado: o funcionário ainda está acompanhando algo, não entregou.
+  awaitingLimit: async (sessionId) => (await chats.awaitingLimit(sessionId)) || !!(await wakeups.get(sessionId)),
 });
 
 // "Continue" que não vai sair (cancelado na conversa, opção desligada, falhou): o turno que parou no limite
@@ -280,6 +299,10 @@ autoContinue.subscribe((e) => {
   if (e.type === 'dropped' || e.type === 'failed' || (e.type === 'cancelled' && e.by === 'user')) {
     void tasks.onTurnDone(e.pending.sessionId).catch(() => {});
   }
+});
+// Despertador cancelado, solto ou que falhou: a tarefa daquela conversa é entregue como antes.
+wakeups.subscribe((e) => {
+  if (e.type === 'dropped' || e.type === 'failed' || e.type === 'cancelled') void tasks.onTurnDone(e.pending.sessionId).catch(() => {});
 });
 
 // Rotinas: no horário, a mensagem vai ao funcionário pelo mesmo caminho do chat do painel.
@@ -576,6 +599,35 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       // Pendência de outro projeto: 404, e ela fica como está.
       const done = await chats.cancelAutoContinue(pid!, sid!);
+      return done === null ? null : { ok: done };
+    },
+  ],
+  // Despertador: o funcionário (x-myco, sem origem de navegador) pede para ser chamado de novo nesta conversa, e cancela.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/chat/${ID}/wake$`),
+    async ({ params: [pid, sid], body }) => {
+      const b = parse(WakeBody, body);
+      const done = await chats.scheduleWake(pid!, sid!, b);
+      // Conversa que não é deste projeto (ou não está aberta aqui): 404.
+      return done && { ok: true, at: new Date(done.at).toISOString(), seconds: b.seconds };
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/chat/${ID}/wake/cancel$`),
+    async ({ params: [pid, sid] }) => {
+      const done = await chats.cancelWake(pid!, sid!, 'staff');
+      return done === null ? null : { ok: done };
+    },
+  ],
+  // O botão Cancelar do aviso do despertador: só pelo Claudio’s Club, conferindo o projeto.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/chat/${ID}/wake/user-cancel$`),
+    async ({ params: [pid, sid], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      const done = await chats.cancelWake(pid!, sid!, 'user');
       return done === null ? null : { ok: done };
     },
   ],
@@ -1525,6 +1577,7 @@ server.listen(PORT, HOST, () => {
   routines.start();
   // Pelo mesmo motivo, só ele manda o "continue" das conversas que bateram no limite de uso.
   autoContinue.start();
+  wakeups.start();
   // Fila de tarefas: quem ficou com tarefa ou ajuste esperando (ex.: o Claudio’s Club reiniciou no meio).
   const queueTick = () => void tasks.tick().catch(() => {});
   setTimeout(queueTick, 15_000).unref();

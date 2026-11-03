@@ -180,6 +180,10 @@ export class ChatProcess {
     return this.state.background;
   }
 
+  get projectId(): string | null {
+    return this.opts.projectId ?? null;
+  }
+
   get staffId(): string | null {
     return this.opts.staffId ?? null;
   }
@@ -212,7 +216,8 @@ export class ChatProcess {
       ((cmd, args, o) => spawn(cmd, args, { ...o, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' }));
     // A lista de tarefas (TaskCreate/TaskUpdate) e os pontos de restauração das edições ("voltar até
     // aqui") não vêm ligados no modo -p.
-    const env = { ...cleanEnv(), CLAUDE_CODE_ENABLE_TODO_TOOLS: '1', CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1' };
+    // MYCO_SESSION_ID: o funcionário sabe o id da própria conversa (o despertador, ver wake.ts, o usa nos comandos dele).
+    const env = { ...cleanEnv(), CLAUDE_CODE_ENABLE_TODO_TOOLS: '1', CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1', MYCO_SESSION_ID: this.opts.sessionId };
     const child = run('claude', [...STREAM_FLAGS, ...this.opts.args], { cwd: this.opts.cwd, env });
     this.child = child;
     this.setState({ running: true, error: null });
@@ -264,6 +269,23 @@ export class ChatProcess {
    */
   setNotice(id: string, text: string, tone: 'info' | 'warn', action?: 'cancel-auto-continue') {
     this.putItem({ kind: 'notice', id, text, tone, at: new Date().toISOString(), ...(action && { action }) });
+  }
+
+  /**
+   * Aviso do despertador: cria o item, ou troca o que já tem esse id (a hora mudou, voltou, foi cancelado). A contagem
+   * regressiva não vem no texto: o cliente a faz a partir de `wakeAt`.
+   */
+  setWakeNotice(id: string, text: string, wake: 'waiting' | 'sent' | 'cancelled' | 'failed', wakeAt: number) {
+    this.putItem({
+      kind: 'notice',
+      id,
+      text,
+      tone: wake === 'failed' ? 'warn' : 'info',
+      at: new Date().toISOString(),
+      wake,
+      wakeAt,
+      ...(wake === 'waiting' && { action: 'cancel-wake' as const }),
+    });
   }
 
   send(text: string, priority: SendPriority = 'next', images: string[] = [], notice?: string, files: ChatAttachment[] = []) {

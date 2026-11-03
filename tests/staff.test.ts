@@ -106,6 +106,33 @@ describe('ficha', () => {
     expect(md).not.toContain('Você é temporário');
   });
 
+  it('despertador: seção curta com o curl (id da conversa em $MYCO_SESSION_ID), os limites e o que preferir para o que roda aqui', () => {
+    const md = renderFicha(profile({ projectId: 'proj-x' }), ctx);
+    const section = md.slice(md.indexOf('## Despertador'), md.indexOf('## Memória'));
+    expect(section.startsWith('## Despertador')).toBe(true);
+    for (const part of [
+      'deploy em outro servidor',
+      'CI do GitHub',
+      'Bash em segundo plano',
+      'ferramenta Monitor',
+      'curl -s -X POST -H "x-myco: 1"',
+      '"seconds": 120',
+      '"text":',
+      'http://127.0.0.1:4848/api/projects/proj-x/chat/$MYCO_SESSION_ID/wake`',
+      '$MYCO_SESSION_ID/wake/cancel',
+      'De 10 s a 24 h',
+      'um por conversa',
+      'laço curto',
+    ]) {
+      expect(section).toContain(part);
+    }
+    // Curta: cabe em poucas linhas.
+    expect(section.trim().split('\n').length).toBeLessThanOrEqual(5);
+    // Todo funcionário roda pelo Claudio’s Club, então toda ficha tem; sem o endereço do Claudio’s Club, não.
+    expect(renderFicha(profile({ canHire: true }), ctx)).toContain('## Despertador');
+    expect(renderFicha(profile(), { ...ctx, mycoUrl: '' })).not.toContain('## Despertador');
+  });
+
   it('prompt de sistema: identidade, onde fica a memória e a ficha inteira (vai por arquivo)', () => {
     const ficha = renderFicha(profile(), ctx);
     const sys = systemPrompt(profile(), ctx, ficha);

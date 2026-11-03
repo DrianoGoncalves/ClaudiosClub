@@ -238,6 +238,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     worktreeSection(ctx),
     teamSection(p, ctx),
     hiringSection(p, ctx),
+    wakeSection(p, ctx),
     memorySection(ctx),
   ];
   return sections.filter(Boolean).join('\n\n') + '\n';
@@ -269,6 +270,21 @@ function memorySection(ctx: FichaContext): string {
     '- Curta (até umas 60 linhas): ao registrar, substitua o que ficou velho em vez de só acrescentar. Nada que o código ou o git já contam, e nada de segredos (senhas, chaves, tokens).',
     '- Ponto de corte: quando terminar um assunto (tarefa entregue, decisão tomada, pergunta respondida e nada pendente nesta conversa), atualize a memória com o que vale levar e termine a resposta com esta linha, sozinha, por último: `[MyCo:ponto-de-corte]`. Assim a próxima mensagem pode começar numa conversa nova, mais barata, e você não perde nada. Não use no meio de um trabalho nem quando espera uma resposta para continuar.',
     '- Se a mensagem vier com `[MyCo] Contexto desta conversa: …`, ela já está grande e cada resposta custa mais: feche o assunto atual e use o ponto de corte assim que for natural.',
+  ].join('\n');
+}
+
+/**
+ * Despertador: para acompanhar o que demora e não roda neste computador, o funcionário pede ao Claudio’s Club que o
+ * chame de novo na própria conversa (o id vem em `MYCO_SESSION_ID`, ver server/chat/process.ts; a rota, em server/index.ts).
+ */
+function wakeSection(p: StaffProfile, ctx: FichaContext): string {
+  if (!ctx.mycoUrl) return '';
+  const api = `${ctx.mycoUrl}/api/projects/${p.projectId}`;
+  return [
+    '## Despertador',
+    'Para acompanhar algo que demora e não roda neste computador (deploy em outro servidor, CI do GitHub, um site), peça ao Claudio’s Club que te chame de novo nesta conversa. Para o que roda aqui, prefira Bash em segundo plano ou a ferramenta Monitor: eles já te acordam quando terminam.',
+    `Para agendar: \`curl -s -X POST -H "x-myco: 1" -H "content-type: application/json" -d '{"seconds": 120, "text": "Confira o deploy e conte como está"}' ${api}/chat/$MYCO_SESSION_ID/wake\` (\`$MYCO_SESSION_ID\` é o id desta conversa, já no seu ambiente). Na hora, o texto chega aqui como mensagem (a conversa reabre sozinha se tiver fechado): escreva o que conferir, sem aspas simples.`,
+    `De 10 s a 24 h (\`seconds\` de 10 a 86400), um por conversa: agendar de novo troca o anterior. Para desfazer: o mesmo curl em \`${api}/chat/$MYCO_SESSION_ID/wake/cancel\`, sem corpo. Não agende em laço curto sem motivo: cada volta gasta consumo.`,
   ].join('\n');
 }
 
