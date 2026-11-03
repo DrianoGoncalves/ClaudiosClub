@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { cleanRel, isSecretRel, listProjectTree, MAX_FILE_BYTES, parseWriteBody, ProjectFileError, readProjectFile, readProjectImageFile, writeProjectFile } from '../server/projectFiles';
+import { cleanRel, createProjectEntry, isSecretRel, listProjectTree, MAX_FILE_BYTES, parseCreateBody, parseWriteBody, ProjectFileError, readProjectFile, readProjectImageFile, writeProjectFile } from '../server/projectFiles';
 
 let base: string;
 let root: string;
@@ -243,6 +243,50 @@ describe('gravação', () => {
     expect(() => parseWriteBody({ path: 'a', content: 2, baseMtimeMs: 1 })).toThrow(ProjectFileError);
     expect(() => parseWriteBody({ path: 'a', content: '', baseMtimeMs: '1' })).toThrow(ProjectFileError);
     expect(parseWriteBody({ path: 'a', content: 'b', baseMtimeMs: 1 })).toEqual({ path: 'a', content: 'b', baseMtimeMs: 1 });
+  });
+});
+
+describe('criação', () => {
+  it('cria arquivo vazio e pasta, com pastas intermediárias, e devolve o caminho limpo', async () => {
+    expect(await createProjectEntry(root, { path: './novos//a.md', kind: 'file' })).toEqual({ path: 'novos/a.md' });
+    expect(await fs.readFile(path.join(root, 'novos', 'a.md'), 'utf8')).toBe('');
+    expect(await createProjectEntry(root, { path: 'novos\\x\\y', kind: 'dir' })).toEqual({ path: 'novos/x/y' });
+    expect((await fs.stat(path.join(root, 'novos', 'x', 'y'))).isDirectory()).toBe(true);
+  });
+
+  it('nunca sobrescreve: arquivo ou pasta que já existe dá 409', async () => {
+    expect(await statusOf(createProjectEntry(root, { path: 'README.md', kind: 'file' }))).toBe(409);
+    expect(await fs.readFile(path.join(root, 'README.md'), 'utf8')).toBe('# oi\n');
+    expect(await statusOf(createProjectEntry(root, { path: 'src', kind: 'dir' }))).toBe(409);
+    expect(await statusOf(createProjectEntry(root, { path: 'src', kind: 'file' }))).toBe(409);
+    // Arquivo no lugar de pasta intermediária.
+    expect(await statusOf(createProjectEntry(root, { path: 'README.md/x.txt', kind: 'file' }))).toBe(409);
+  });
+
+  it('segredo, .git, node_modules, .. e fora do projeto dão 403', async () => {
+    for (const p of ['.env', 'src/.env.local', 'keys/novo.pem', '.git/hooks/x', '.git', 'node_modules/y', '.vps/a.txt', '../fora/novo.txt', 'src/../../fora/x', path.join(outside, 'x.txt')]) {
+      expect(await statusOf(createProjectEntry(root, { path: p, kind: 'file' })), p).toBe(403);
+    }
+    expect(await statusOf(createProjectEntry(root, { path: '.ssh', kind: 'dir' }))).toBe(403);
+    await expect(fs.stat(path.join(outside, 'novo.txt'))).rejects.toThrow();
+    expect(await createProjectEntry(root, { path: 'cfg/.env.example', kind: 'file' })).toEqual({ path: 'cfg/.env.example' });
+  });
+
+  it('nome vazio, inválido no Windows ou corpo errado dá 400', async () => {
+    for (const p of ['', '.', './/', 'a<b.txt', 'x/a:b','x/what?.md', 'pipe|.txt', 'ponto.', 'espaco ', 'CON', 'nul.txt', 'src/com1', `a${'\x01'}b`, 'x'.repeat(256)]) {
+      expect(await statusOf(createProjectEntry(root, { path: p, kind: 'file' })), JSON.stringify(p)).toBe(400);
+    }
+    expect(() => parseCreateBody(null)).toThrow(ProjectFileError);
+    expect(() => parseCreateBody({ path: 1, kind: 'file' })).toThrow(ProjectFileError);
+    expect(() => parseCreateBody({ path: 'a', kind: 'link' })).toThrow(ProjectFileError);
+    expect(parseCreateBody({ path: 'a', kind: 'dir', extra: 1 })).toEqual({ path: 'a', kind: 'dir' });
+  });
+
+  it.runIf(canLink)('pasta-link que sai do projeto: 403 e nada é criado fora', async () => {
+    await fs.symlink(outside, path.join(root, 'link-fora'), 'junction');
+    expect(await statusOf(createProjectEntry(root, { path: 'link-fora/novo.txt', kind: 'file' }))).toBe(403);
+    expect(await statusOf(createProjectEntry(root, { path: 'link-fora/sub/novo', kind: 'dir' }))).toBe(403);
+    expect(await fs.readdir(outside)).toEqual(['segredo.txt']);
   });
 });
 

@@ -68,7 +68,8 @@ export function CompanyTitle({ name, onRename }: { name: string; onRename: (name
   );
 }
 
-const LIMIT_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7d', spend_limit: t('toolbar.limitShort') };
+const USAGE_URL = 'https://claude.ai/settings/usage';
+const LIMIT_LABEL: Record<string, string> ={ five_hour: '5h', seven_day: '7d', spend_limit: t('toolbar.limitShort') };
 
 /** Consumo da conta, relido a cada 15 s: as barras e a bolinha da folga de cota (no ícone da assinatura) leem daqui. */
 export function useAccountUsage(): AccountUsage | null {
@@ -110,11 +111,17 @@ export function UsageMeters({ usage }: { usage: AccountUsage | null }) {
   }
   const updated = usage.updatedAt ? t('toolbar.updatedAgo', { ago: formatAgo(now - Date.parse(usage.updatedAt)) }) : '';
   return (
-    <span className="usage" title={updated}>
+    <a
+      className="usage"
+      href={USAGE_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={updated ? `${t('toolbar.usageLink')} · ${updated}` : t('toolbar.usageLink')}
+    >
       {shown.map((l) => (
         <UsageMeter key={l.kind} limit={l} now={now} />
       ))}
-    </span>
+    </a>
   );
 }
 

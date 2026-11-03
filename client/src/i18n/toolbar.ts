@@ -194,6 +194,7 @@ export default defineMessages({
     'toolbar.usageOpenTitle':
       'O consumo 5h/7d chega pelo mod myco-tap, que só roda em sessões do app abertas depois da instalação (o claude do terminal está com mods desligados por enquanto). Abra uma sessão nova no app e mande uma mensagem.',
     'toolbar.updatedAgo': 'lido {ago}',
+    'toolbar.usageLink': 'Abrir o uso do Claude (nova aba)',
     'toolbar.resetDone': 'reiniciou',
     'toolbar.resetsIn': 'reinicia em {time}',
     'toolbar.subscription': 'assinatura',
@@ -430,6 +431,7 @@ export default defineMessages({
     'toolbar.usageOpenTitle':
       "The 5h/7d usage comes through the myco-tap mod, which only runs in app sessions opened after installing it (the terminal's claude has mods turned off for now). Open a new session in the app and send a message.",
     'toolbar.updatedAgo': 'read {ago}',
+    'toolbar.usageLink': 'Open Claude usage (new tab)',
     'toolbar.resetDone': 'reset',
     'toolbar.resetsIn': 'resets in {time}',
     'toolbar.subscription': 'subscription',
@@ -666,6 +668,7 @@ export default defineMessages({
     'toolbar.usageOpenTitle':
       'El consumo 5h/7d llega por el mod myco-tap, que solo corre en sesiones de la app abiertas después de instalarlo (el claude de la terminal tiene los mods apagados por ahora). Abre una sesión nueva en la app y envía un mensaje.',
     'toolbar.updatedAgo': 'leído {ago}',
+    'toolbar.usageLink': 'Abrir el uso de Claude (nueva pestaña)',
     'toolbar.resetDone': 'reiniciado',
     'toolbar.resetsIn': 'se reinicia en {time}',
     'toolbar.subscription': 'suscripción',

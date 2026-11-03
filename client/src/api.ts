@@ -418,7 +418,7 @@ async function filesFetch<T>(url: string, body?: unknown): Promise<T> {
   return data;
 }
 
-/** Arquivos do projeto (só existentes: sem criar, apagar ou renomear). */
+/** Arquivos do projeto (ler, editar e criar; sem apagar ou renomear). */
 export const filesApi = {
   tree: (projectId: string, path: string) =>
     filesFetch<{ entries: FileEntry[] }>(`/api/projects/${projectId}/files/tree?path=${encodeURIComponent(path)}`),
@@ -429,4 +429,7 @@ export const filesApi = {
   /** `baseMtimeMs` = versão carregada; se o disco mudou, o servidor responde 409 e não grava. */
   write: (projectId: string, path: string, content: string, baseMtimeMs: number) =>
     filesFetch<{ mtimeMs: number }>(`/api/projects/${projectId}/files/write`, { path, content, baseMtimeMs }),
+  /** Arquivo vazio ou pasta nova; nunca sobrescreve (409 se já existe). */
+  create: (projectId: string, path: string, kind: 'file' | 'dir') =>
+    filesFetch<{ path: string }>(`/api/projects/${projectId}/files/create`, { path, kind }),
 };
