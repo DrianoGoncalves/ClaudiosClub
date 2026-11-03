@@ -23,8 +23,8 @@ const DEFAULTS: AppConfig = {
   projectNames: {},
   boardBackground: { light: null, dark: null },
   projectBudgets: {},
-  // Segue numa conversa nova sozinho quando o assunto fecha e compensa (dá para voltar à anterior).
-  contextSwitch: 'auto',
+  // Só avisa quando o assunto fecha e uma conversa nova compensaria; trocar sozinho é escolha sua.
+  contextSwitch: 'suggest',
   // Desligado: gastar a sobra da cota é escolha de quem paga.
   optimizeQuota: false,
   // Ligado: a conversa que bateu no limite de uso segue sozinha quando o limite volta.
