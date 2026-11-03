@@ -40,7 +40,21 @@ describe('quando vale começar uma conversa nova', () => {
   it('o aviso para o funcionário traz o tamanho e quanto custa reler', () => {
     expect(rereadUsd(400_000, 'claude-opus-5-5')).toBeCloseTo(0.08);
     expect(contextNotice(412_000, 'claude-opus-5-5', CONTEXT_NOTICE)).toBe(
-      '[MyCo] Contexto desta conversa: 412k tokens (cerca de US$ 0,08 por resposta só para reler). Feche o assunto atual e use o ponto de corte assim que for natural.',
+      '[MyCo] Contexto desta conversa: 412k tokens (US$ 0,08 por chamada ao modelo só para reler). Feche o assunto atual e use o ponto de corte assim que for natural.',
+    );
+  });
+
+  it('reler custa o mesmo que a cobrança: faixa de prompt longo e modo rápido', () => {
+    // Haiku 5.5 acima de 100k: leitura a 0,05/M, não 0,01/M.
+    expect(rereadUsd(200_000, 'claude-haiku-5-5')).toBeCloseTo(0.01);
+    expect(rereadUsd(400_000, 'claude-opus-5-5', true)).toBeCloseTo(0.16);
+  });
+
+  it('sem preço para o modelo, não chuta valor: o aviso fala só do tamanho', () => {
+    expect(rereadUsd(200_000, null)).toBeNull();
+    expect(rereadUsd(200_000, 'gpt-x')).toBeNull();
+    expect(contextNotice(200_000, null, CONTEXT_NOTICE)).toBe(
+      '[MyCo] Contexto desta conversa: 200k tokens. Feche o assunto atual e use o ponto de corte assim que for natural.',
     );
     // A conversa não mostra o aviso como se fosse você falando.
     expect(isInjectedUserText(contextNotice(200_000, null, CONTEXT_NOTICE))).toBe(true);

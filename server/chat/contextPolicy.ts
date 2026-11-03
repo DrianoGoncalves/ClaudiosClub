@@ -1,5 +1,5 @@
 import type { ContextSwitch } from '../../shared/model';
-import { rateFor } from '../adapters/claude/pricing';
+import { costOf } from '../adapters/claude/pricing';
 
 // Quando vale começar uma conversa nova. Cada resposta relê o contexto inteiro (do cache), então
 // uma conversa grande custa caro a cada passo e o modelo presta menos atenção nela; uma nova lê só
@@ -29,6 +29,8 @@ export interface TurnInfo {
   model: string | null;
   /** Validade do cache da conversa (ms), lida das respostas; null enquanto nenhuma disse. */
   ttl: number | null;
+  /** A última resposta veio no modo rápido (preço multiplicado). */
+  fast?: boolean;
 }
 
 /**
@@ -50,17 +52,20 @@ export function switchDecision(t: TurnInfo, now: number, policy: ContextSwitch):
   return policy === 'auto' ? 'switch' : 'suggest';
 }
 
-/** US$ que cada resposta gasta só para reler o contexto (leitura de cache). */
-export function rereadUsd(used: number, model: string | null): number {
-  const rate = model ? rateFor(model) : null;
-  const read = rate ? (rate.cacheRead ?? rate.input * 0.1) : 0.3;
-  return (used * read) / 1_000_000;
+/**
+ * US$ que cada chamada ao modelo gasta só para reler o contexto (leitura de cache), com a mesma conta da
+ * cobrança (faixa de prompt longo, modo rápido). Sem preço para o modelo, null: aí o aviso fala só do tamanho.
+ */
+export function rereadUsd(used: number, model: string | null, fast = false): number | null {
+  return model ? costOf(model, { cache_read_input_tokens: used, speed: fast ? 'fast' : null }) : null;
 }
 
 export const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
 export const usd = (n: number) => `US$ ${n < 0.01 ? n.toFixed(3) : n.toFixed(2)}`.replace('.', ',');
 
 /** Linha que vai junto da mensagem ao funcionário (a conversa não mostra). */
-export function contextNotice(used: number, model: string | null, prefix: string): string {
-  return `${prefix} ${kTokens(used)} tokens (cerca de ${usd(rereadUsd(used, model))} por resposta só para reler). Feche o assunto atual e use o ponto de corte assim que for natural.`;
+export function contextNotice(used: number, model: string | null, prefix: string, fast = false): string {
+  const cost = rereadUsd(used, model, fast);
+  const price = cost === null ? '' : ` (${usd(cost)} por chamada ao modelo só para reler)`;
+  return `${prefix} ${kTokens(used)} tokens${price}. Feche o assunto atual e use o ponto de corte assim que for natural.`;
 }

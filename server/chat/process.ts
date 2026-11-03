@@ -254,6 +254,11 @@ export class ChatProcess {
     return this.cacheTtlMs;
   }
 
+  /** A última resposta veio no modo rápido. */
+  get fast(): boolean {
+    return this.fastMode;
+  }
+
   get model(): string | null {
     return this.state.model ?? null;
   }
@@ -583,6 +588,7 @@ export class ChatProcess {
           const window = this.window ?? contextWindowFor(msg.model ?? this.state.model);
           if (used > 0) this.setState({ context: { used, window, percent: Math.round((used / window) * 100) } });
           this.cacheTtlMs = cacheTtlOf(u) ?? this.cacheTtlMs;
+          this.fastMode = (u as { speed?: unknown }).speed === 'fast';
         }
         return;
       }
@@ -717,6 +723,7 @@ export class ChatProcess {
   private limitSeen: (LimitHit & { confirmed: boolean }) | null = null;
   private checkpointSeen = false;
   private cacheTtlMs: number | null = null;
+  private fastMode = false;
 
   private finish(error: string | null) {
     if (!this.state.running) return;

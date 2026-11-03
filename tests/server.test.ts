@@ -62,7 +62,7 @@ describe('config', () => {
   it('usa "Claudio’s Club" por padrão e grava o nome preservando outras chaves', async () => {
     const file = path.join(root, 'cfg', 'config.json');
     const usageStop = { fiveHour: 90, sevenDay: 95 };
-    const colors = { projectColors: {}, projectNames: {}, boardBackground: { light: null, dark: null }, projectBudgets: {}, contextSwitch: 'auto', workspaces: [], projectWorkspaces: {} };
+    const colors = { projectColors: {}, projectNames: {}, boardBackground: { light: null, dark: null }, projectBudgets: {}, contextSwitch: 'suggest', workspaces: [], projectWorkspaces: {} };
     // Quem chega (sem config) começa no simples.
     expect(await readConfig(file)).toEqual({
       companyName: 'Claudio’s Club',
