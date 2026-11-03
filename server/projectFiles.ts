@@ -2,9 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-// Arquivos do projeto na aba de arquivos: listar, ler e gravar um arquivo que já existe. Tudo fica preso à
-// pasta do projeto: o caminho é resolvido e o realpath conferido (link simbólico que sai do projeto é
-// recusado). Arquivo de segredo aparece na lista (locked), mas não abre nem grava.
+// Arquivos do projeto na aba de arquivos: listar, ler, gravar um arquivo que já existe e criar arquivo vazio
+// ou pasta (sem sobrescrever). Tudo fica preso à pasta do projeto: o caminho é resolvido e o realpath
+// conferido (link simbólico que sai do projeto é recusado). Arquivo de segredo aparece na lista (locked), mas não abre nem grava.
 
 export const MAX_FILE_BYTES = 1024 * 1024;
 const BINARY_PROBE_BYTES = 8 * 1024;
@@ -213,6 +213,83 @@ export async function writeProjectFile(root: string, input: WriteInput): Promise
   }
   await writeAtomic(abs, input.content, st.mode & 0o777);
   return { mtimeMs: (await fs.stat(abs)).mtimeMs };
+}
+
+export interface CreateInput {
+  path: string;
+  kind: 'file' | 'dir';
+}
+
+/** Valida o corpo do POST de criação; tipo errado vira 400. */
+export function parseCreateBody(body: unknown): CreateInput {
+  if (!body || typeof body !== 'object') throw new ProjectFileError(400, 'corpo inválido');
+  const b = body as Record<string, unknown>;
+  if (typeof b.path !== 'string') throw new ProjectFileError(400, 'path precisa ser texto');
+  if (b.kind !== 'file' && b.kind !== 'dir') throw new ProjectFileError(400, 'kind precisa ser "file" ou "dir"');
+  return { path: b.path, kind: b.kind };
+}
+
+// Nomes que o Windows não aceita (ou aceita e depois não abre): vale em qualquer sistema, o projeto pode ir para lá.
+const WIN_BAD_CHARS = /[<>:"|?*\x00-\x1f]/;
+const WIN_RESERVED = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
+
+function checkName(name: string): void {
+  const bad = (why: string) => new ProjectFileError(400, `nome inválido: ${why}`);
+  if (WIN_BAD_CHARS.test(name)) throw bad('não use < > : " | ? * nem caracteres de controle');
+  if (/[ .]$/.test(name)) throw bad('não pode terminar com ponto ou espaço');
+  if (WIN_RESERVED.test(name)) throw bad(`"${name}" é reservado no Windows`);
+  if (Buffer.byteLength(name, 'utf8') > 255) throw bad('nome grande demais');
+}
+
+const isErr = (err: unknown, ...codes: string[]) => codes.includes((err as NodeJS.ErrnoException).code ?? '');
+
+/**
+ * Cria um arquivo vazio ou uma pasta. Nunca sobrescreve: o que já existe dá 409. Pastas intermediárias que
+ * faltarem são criadas, mas só depois de conferir que cada pedaço que já existe fica dentro do projeto.
+ */
+export async function createProjectEntry(root: string, input: CreateInput): Promise<{ path: string }> {
+  const rel = cleanRel(input.path);
+  if (!rel) throw new ProjectFileError(400, 'informe o nome');
+  const parts = rel.split('/');
+  parts.forEach(checkName);
+  if (isSecretRel(rel)) throw forbidden('caminho protegido: não é criado pelo Claudio’s Club');
+  if (!isInside(root, path.resolve(root, rel))) throw forbidden();
+  const realRoot = await realOrNotFound(root, 'pasta do projeto não encontrada');
+
+  // Desce pelo que já existe seguindo os links; o primeiro pedaço que falta marca onde a criação começa.
+  let cur = realRoot;
+  let i = 0;
+  for (; i < parts.length; i++) {
+    const next = path.join(cur, parts[i]!);
+    let real: string;
+    try {
+      real = await fs.realpath(next);
+    } catch (err) {
+      if (!isErr(err, 'ENOENT')) throw err;
+      // Link quebrado também ocupa o nome.
+      if (await fs.lstat(next).then(() => true, () => false)) throw new ProjectFileError(409, 'já existe algo com esse nome');
+      break;
+    }
+    if (!isInside(realRoot, real)) throw forbidden('o caminho sai do projeto (link simbólico)');
+    if (isSecretRel(toRel(realRoot, real))) throw forbidden('caminho protegido: não é criado pelo Claudio’s Club');
+    if (i === parts.length - 1) throw new ProjectFileError(409, 'já existe algo com esse nome');
+    if (!(await fs.stat(real)).isDirectory()) throw new ProjectFileError(409, `"${parts.slice(0, i + 1).join('/')}" é um arquivo, não uma pasta`);
+    cur = real;
+  }
+
+  const target = path.join(cur, ...parts.slice(i));
+  try {
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    // Flag exclusiva: se alguém criou no meio do caminho, dá EEXIST em vez de sobrescrever.
+    if (input.kind === 'dir') await fs.mkdir(target);
+    else await fs.writeFile(target, '', { flag: 'wx' });
+  } catch (err) {
+    if (isErr(err, 'EEXIST')) throw new ProjectFileError(409, 'já existe algo com esse nome');
+    if (isErr(err, 'ENOTDIR')) throw new ProjectFileError(409, 'um pedaço do caminho é arquivo, não pasta');
+    if (isErr(err, 'ENAMETOOLONG')) throw new ProjectFileError(400, 'caminho grande demais');
+    throw err;
+  }
+  return { path: rel };
 }
 
 async function writeAtomic(abs: string, text: string, mode: number): Promise<void> {

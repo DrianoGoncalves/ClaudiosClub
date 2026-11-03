@@ -2,8 +2,9 @@
 // No celular, uma coisa por vez: a árvore, e ao abrir um arquivo o editor ocupa a tela (volta pelo "‹ Arquivos").
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { FileApiError, filesApi, type FileEntry } from '../api';
-import { t } from '../i18n';
-import { FileIcon, FolderIcon, LockIcon } from '../icons';
+import { t, type MsgKey } from '../i18n';
+import { FileIcon, FolderIcon, LockIcon, PlusIcon } from '../icons';
+import { foldersToShow, joinPath, nameProblem, parentOf, type NameProblem } from './newEntry';
 
 const CodeEditor = lazy(() => import('./CodeEditor'));
 
@@ -45,6 +46,9 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
   const [editing, setEditing] = useState(false);
   /** Há mudança que ainda não foi para o disco (`content !== saved`). */
   const [dirty, setDirty] = useState(false);
+  /** Pasta onde "+ Arquivo"/"+ Pasta" criam: a última pasta clicada, ou a do arquivo aberto ("" = raiz). */
+  const [targetDir, setTargetDir] = useState('');
+  const [creating, setCreating] = useState<'file' | 'dir' | null>(null);
 
   const doc = useRef<Doc | null>(null);
   const conflictRef = useRef<number | null>(null);
@@ -153,6 +157,7 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
   };
 
   const openFile = async (entry: FileEntry) => {
+    setTargetDir(parentOf(entry.path));
     setEditing(true);
     if (opened?.path === entry.path) return;
     if (!(await leave())) return;
@@ -168,6 +173,7 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
   };
 
   const toggleDir = (path: string) => {
+    setTargetDir(path);
     setExpanded((s) => {
       const next = new Set(s);
       if (next.has(path)) next.delete(path);
@@ -177,6 +183,30 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
     const dir = dirs[path];
     // Lê na primeira vez e tenta de novo se deu erro; enquanto carrega, não pede outra vez.
     if (!dir || (dir !== 'loading' && 'error' in dir)) loadDir(path);
+  };
+
+  /** Cria e mostra na árvore; arquivo novo já abre no editor. Devolve a mensagem de erro (a do servidor, se veio dele). */
+  const create = async (kind: 'file' | 'dir', name: string): Promise<string | null> => {
+    const path = joinPath(targetDir, name);
+    if (kind === 'file' && !(await leave())) return null;
+    try {
+      await filesApi.create(projectId, path, kind);
+    } catch (e) {
+      return (e as Error).message;
+    }
+    setCreating(null);
+    const folders = foldersToShow(targetDir, path);
+    setExpanded((s) => new Set([...s, ...folders, ...(kind === 'dir' ? [path] : [])]));
+    folders.forEach(loadDir);
+    if (kind === 'dir') {
+      loadDir(path);
+      setTargetDir(path);
+    } else {
+      setTargetDir(parentOf(path));
+      setEditing(true);
+      await load(path);
+    }
+    return null;
   };
 
   const close = useCallback(async () => {
@@ -222,7 +252,32 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
         </header>
         <div className={`files-body ${editing && opened ? 'is-editing' : ''}`}>
           <nav className="files-tree" aria-label={t('files.treeLabel')}>
-            <TreeLevel path="" depth={0} dirs={dirs} expanded={expanded} current={opened?.path ?? null} onDir={toggleDir} onFile={(f) => void openFile(f)} />
+            <div className="files-tools">
+              {(['file', 'dir'] as const).map((kind) => (
+                <button
+                  key={kind}
+                  className="btn-secondary files-new"
+                  aria-pressed={creating === kind}
+                  title={t(kind === 'file' ? 'files.newFileTitle' : 'files.newDirTitle', { dir: targetDir ? `${targetDir}/` : t('files.root') })}
+                  onClick={() => setCreating((c) => (c === kind ? null : kind))}
+                >
+                  <PlusIcon size={12} />
+                  {kind === 'file' ? <FileIcon size={13} /> : <FolderIcon size={13} />}
+                  {t(kind === 'file' ? 'files.newFile' : 'files.newDir')}
+                </button>
+              ))}
+            </div>
+            {creating && <NewEntryForm key={creating} kind={creating} dir={targetDir} onCancel={() => setCreating(null)} onCreate={(name) => create(creating, name)} />}
+            <TreeLevel
+              path=""
+              depth={0}
+              dirs={dirs}
+              expanded={expanded}
+              current={opened?.path ?? null}
+              target={targetDir}
+              onDir={toggleDir}
+              onFile={(f) => void openFile(f)}
+            />
           </nav>
           <section className="files-editor">
             {!opened ? (
@@ -309,12 +364,88 @@ function SaveState({ status, dirty, error, onRetry }: { status: SaveStatus; dirt
   );
 }
 
+const NAME_PROBLEM: Record<NameProblem, MsgKey> = { empty: 'files.nameEmpty', absolute: 'files.nameAbsolute', dots: 'files.nameDots' };
+
+/** Campo do nome novo, logo abaixo dos botões. Enter cria, Esc cancela (sem fechar a tela). */
+function NewEntryForm({
+  kind,
+  dir,
+  onCancel,
+  onCreate,
+}: {
+  kind: 'file' | 'dir';
+  dir: string;
+  onCancel: () => void;
+  onCreate: (name: string) => Promise<string | null>;
+}) {
+  const [name, setName] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    const problem = nameProblem(name);
+    if (problem) return setError(t(NAME_PROBLEM[problem]));
+    setBusy(true);
+    setError(null);
+    const err = await onCreate(name);
+    // Deu certo: o formulário some (o pai desmonta); só volta ao normal se ficou aberto.
+    setBusy(false);
+    setError(err);
+  };
+
+  return (
+    <form className="files-create" onSubmit={(e) => void submit(e)} noValidate>
+      <label className="files-create-field">
+        <span className="files-create-dir mono" title={dir ? `${dir}/` : t('files.root')}>
+          {dir ? t('files.in', { dir: `${dir}/` }) : t('files.inRoot')}
+        </span>
+        <input
+          className="mono"
+          autoFocus
+          value={name}
+          maxLength={255}
+          spellCheck={false}
+          autoComplete="off"
+          aria-label={t(kind === 'file' ? 'files.newFileLabel' : 'files.newDirLabel')}
+          aria-invalid={error ? true : undefined}
+          placeholder={t(kind === 'file' ? 'files.newFilePh' : 'files.newDirPh')}
+          onChange={(e) => {
+            setName(e.target.value);
+            setError(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return;
+            e.preventDefault();
+            onCancel();
+          }}
+        />
+      </label>
+      {error && (
+        <p className="error small files-create-error" role="alert">
+          {error}
+        </p>
+      )}
+      <p className="files-create-actions">
+        <button type="button" className="btn-secondary" onClick={onCancel}>
+          {t('files.cancelCreate')}
+        </button>
+        <button type="submit" className="btn-primary" disabled={busy}>
+          {busy ? t('files.creating') : t('files.create')}
+        </button>
+      </p>
+    </form>
+  );
+}
+
 function TreeLevel({
   path,
   depth,
   dirs,
   expanded,
   current,
+  target,
   onDir,
   onFile,
 }: {
@@ -323,6 +454,7 @@ function TreeLevel({
   dirs: Record<string, Dir>;
   expanded: Set<string>;
   current: string | null;
+  target: string;
   onDir: (path: string) => void;
   onFile: (entry: FileEntry) => void;
 }) {
@@ -353,7 +485,7 @@ function TreeLevel({
         return (
           <li key={e.path} role="treeitem" aria-expanded={e.type === 'dir' ? open : undefined} aria-selected={current === e.path}>
             <button
-              className={`files-item ${current === e.path ? 'is-current' : ''} ${e.locked ? 'is-locked' : ''}`}
+              className={`files-item ${current === e.path ? 'is-current' : ''} ${e.type === 'dir' && target === e.path ? 'is-target' : ''} ${e.locked ? 'is-locked' : ''}`}
               style={pad}
               onClick={() => (e.type === 'dir' ? onDir(e.path) : onFile(e))}
               title={e.path}
@@ -364,7 +496,9 @@ function TreeLevel({
               {e.type === 'dir' ? <FolderIcon /> : e.locked ? <LockIcon /> : <FileIcon />}
               <span className="files-name">{e.name}</span>
             </button>
-            {open && <TreeLevel path={e.path} depth={depth + 1} dirs={dirs} expanded={expanded} current={current} onDir={onDir} onFile={onFile} />}
+            {open && (
+              <TreeLevel path={e.path} depth={depth + 1} dirs={dirs} expanded={expanded} current={current} target={target} onDir={onDir} onFile={onFile} />
+            )}
           </li>
         );
       })}

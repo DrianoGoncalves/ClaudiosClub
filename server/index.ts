@@ -45,7 +45,7 @@ import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
 import { copyToLibrary, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill, SkillError } from './skillLibrary';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
-import { listProjectTree, parseWriteBody, ProjectFileError, readProjectFile, readProjectImageFile, writeProjectFile } from './projectFiles';
+import { createProjectEntry, listProjectTree, parseCreateBody, parseWriteBody, ProjectFileError, readProjectFile, readProjectImageFile, writeProjectFile } from './projectFiles';
 import { readUsage } from './usage';
 import { UsageStopError } from './usageStop';
 import { quotaBoost } from './quotaBoost';
@@ -1041,6 +1041,16 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       const input = parseWriteBody(body);
       const dir = await projectPathOf(id!);
       return dir ? writeProjectFile(dir, input) : null;
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/files/create$`),
+    async ({ params: [id], body, fromBrowser }) => {
+      if (!fromBrowser) throw new ProjectFileError(403, 'arquivos só são criados pelo Claudio’s Club');
+      const input = parseCreateBody(body);
+      const dir = await projectPathOf(id!);
+      return dir ? createProjectEntry(dir, input) : null;
     },
   ],
   ['GET', /^\/api\/account\/rules$/, () => readAccountRules()],
