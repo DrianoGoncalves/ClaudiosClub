@@ -23,6 +23,7 @@ import { QuestionCard } from './QuestionCard';
 import { useChatFocus } from './useChatFocus';
 import { Markdown, looksLikeMarkdown, useCopy } from './markdown';
 import { systemMessageText } from './systemMessage';
+import { ToolInput } from './ToolInput';
 import { clockHM, secondsLeft } from './wakeCountdown';
 
 /** Prints no chat: até 4 por mensagem, com o lado maior em até 1568 px (o que o Claude lê sem reduzir). */
@@ -706,7 +707,7 @@ function Item({
             <span className="tool-name">{item.name}</span> <span className="tool-summary">{item.summary}</span>
             {item.result === null && <span className="muted small"> · {t('chat.running')}</span>}
           </summary>
-          {item.input && <pre className="tool-io">{item.input}</pre>}
+          {item.input && <ToolInput tool={item.name} input={item.input} />}
           {item.result !== null && <pre className="tool-io">{item.result || t('chat.noOutput')}</pre>}
         </details>
       );
@@ -857,7 +858,7 @@ function PermissionCard({ item, onAnswer }: { item: Extract<ChatItem, { kind: 'p
       {item.description && <p className="small">{item.description}</p>}
       <details>
         <summary className="small">{t('chat.details')}</summary>
-        <pre className="tool-io">{item.input}</pre>
+        <ToolInput tool={item.tool} input={item.input} />
       </details>
       {item.status === 'pending' ? (
         <div className="actions">

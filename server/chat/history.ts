@@ -107,7 +107,7 @@ export async function readHistory(
           put({ kind: 'assistant', id, text, at });
         } else if (b.type === 'tool_use' && typeof b.id === 'string') {
           const name = typeof b.name === 'string' ? b.name : 'ferramenta';
-          put({ kind: 'tool', id: `t:${b.id}`, name, summary: toolSummary(name, b.input), input: inputText(b.input), result: null, isError: false, at });
+          put({ kind: 'tool', id: `t:${b.id}`, name, summary: toolSummary(name, b.input), input: inputText(b.input, name), result: null, isError: false, at });
         }
       }
     }
