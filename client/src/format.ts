@@ -48,6 +48,11 @@ export function bareVersion(version: string): string {
   return version.replace(/^v(?=\d)/i, '');
 }
 
+/** As versões do aviso de atualização sem o "v" ("Versão 0.2.9 disponível (você está na 0.2.8)"); '?' quando não se sabe a daqui. */
+export function updateVersions(status: { latest: string | null; current: string | null }): { latest: string; current: string } {
+  return { latest: bareVersion(status.latest ?? ''), current: bareVersion(status.current ?? '?') };
+}
+
 /** Nível de esforço como aparece na tela, sem a palavra "esforço": "high" → "High", "xhigh" → "XHigh". */
 export function effortLabel(effort: string): string {
   if (effort === 'xhigh') return 'XHigh';

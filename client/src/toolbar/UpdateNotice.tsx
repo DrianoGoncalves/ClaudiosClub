@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { UpdateStatus } from '../../../shared/model';
 import { api } from '../api';
-import { formatAgo } from '../format';
+import { formatAgo, updateVersions } from '../format';
 import { t } from '../i18n';
 
 // Versões do Claudio’s Club publicadas no GitHub (tags vX.Y.Z): "Nova versão" no topo do quadro quando há uma mais
@@ -149,7 +149,7 @@ export function UpdateNotice() {
   }, [open]);
 
   if (!status?.supported || status.behind === 0) return null;
-  const title = t('toolbar.updateAvailable', { latest: status.latest ?? '', current: status.current ?? '?' });
+  const title = t('toolbar.updateAvailable', updateVersions(status));
   return (
     <div className="update-notice" ref={root}>
       <button className="update-button" aria-haspopup="dialog" aria-expanded={open} title={title} onClick={() => setOpen(!open)}>
@@ -177,11 +177,11 @@ export function UpdateControls() {
 
   if (!status) return null;
   if (!status.supported) return <span className="muted small">{t('toolbar.updateUnsupported')}</span>;
-  const versions = { latest: status.latest ?? '', current: status.current ?? '?' };
+  const versions = updateVersions(status);
   const summary = !status.latest
     ? t('toolbar.updateNoRelease', versions)
     : status.behind === 0
-      ? t('toolbar.updateUpToDate', versions)
+      ? t('toolbar.updateUpToDate', { current: status.current ?? '?' })
       : t('toolbar.updateAvailable', versions);
   const checked = status.checkedAt ? ` · ${t('toolbar.updateChecked', { ago: formatAgo(Date.now() - Date.parse(status.checkedAt)) })}` : '';
   return (
