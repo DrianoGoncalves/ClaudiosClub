@@ -125,7 +125,7 @@ export function SettingsMenu(props: Props) {
   // Fecha ao clicar fora e com Esc. Só na busca com texto o Esc limpa primeiro, como no VS Code.
   useEffect(() => {
     if (!open) return;
-    const onDown = (e: MouseEvent) => {
+    const onDown = (e: PointerEvent) => {
       const t = e.target as Node;
       if (!root.current?.contains(t) && !panel.current?.contains(t)) setOpen(false);
     };
@@ -137,10 +137,12 @@ export function SettingsMenu(props: Props) {
       // O foco volta para a engrenagem, para quem navega pelo teclado não se perder.
       root.current?.querySelector<HTMLButtonElement>('.settings-button')?.focus();
     };
-    document.addEventListener('mousedown', onDown);
+    // Na captura: o quadro (d3-zoom do React Flow) para a propagação do clique no fundo, e sem isso clicar
+    // no quadro não fechava o painel.
+    document.addEventListener('pointerdown', onDown, true);
     document.addEventListener('keydown', onKey);
     return () => {
-      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('pointerdown', onDown, true);
       document.removeEventListener('keydown', onKey);
     };
   }, [open]);

@@ -295,6 +295,9 @@ export const api = {
   /** Cancela o "continue" agendado para quando o limite de uso voltar. */
   chatCancelAutoContinue: (projectId: string, sessionId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/chat/${sessionId}/auto-continue/cancel`),
+  /** Cancela o despertador da conversa (o botão do aviso "Volta a olhar em…"). */
+  chatCancelWake: (projectId: string, sessionId: string) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/chat/${sessionId}/wake/user-cancel`),
   chatStopTask: (sessionId: string, taskId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/stop-task`, { taskId }),
   /** Busca nas conversas dos funcionários (a partir de 3 letras). */
   search: (q: string) => get<ConversationHit[]>(`/api/search?q=${encodeURIComponent(q)}`),

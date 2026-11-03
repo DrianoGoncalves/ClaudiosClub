@@ -767,8 +767,15 @@ export type ChatItem =
       text: string;
       tone: 'info' | 'warn' | 'error';
       at: string | null;
-      /** O aviso leva um botão: `cancel-auto-continue` desfaz o "continue" agendado para quando o limite de uso voltar. */
-      action?: 'cancel-auto-continue';
+      /**
+       * O aviso leva um botão: `cancel-auto-continue` desfaz o "continue" agendado para quando o limite de uso voltar;
+       * `cancel-wake` desfaz o despertador.
+       */
+      action?: 'cancel-auto-continue' | 'cancel-wake';
+      /** Aviso do despertador: em que pé está. `waiting` tem a contagem regressiva (o cliente faz, com `wakeAt`). */
+      wake?: 'waiting' | 'sent' | 'cancelled' | 'failed';
+      /** Despertador: o instante (ms) da volta (`waiting`) ou em que voltou/foi desfeito (os demais). */
+      wakeAt?: number;
     };
 
 /** Uma opção de uma pergunta do Claude (`preview`: HTML de exemplo que o cartão mostra ao marcar). */

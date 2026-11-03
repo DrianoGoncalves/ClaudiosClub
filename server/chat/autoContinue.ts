@@ -5,6 +5,8 @@ import { resumePlan } from './usageLimit';
 
 // Conversa que bateu no limite de uso da assinatura: espera o limite voltar e manda "continue".
 // As pendências ficam em disco (sobrevivem a reiniciar o servidor); um temporizador confere as vencidas.
+// O despertador (ver wake.ts) é uma segunda instância desta classe, com arquivo próprio: cada pendência leva o
+// `text` a mandar, e as duas instâncias nunca se apagam uma à outra.
 
 /** A mensagem que o Claudio’s Club manda sozinho. Sempre esta. */
 export const CONTINUE_TEXT = 'continue';
@@ -19,10 +21,12 @@ export interface Pending {
   at: number;
   /** Quando o limite volta (ms), para o aviso na conversa. */
   resetsAt: number;
+  /** O que mandar na conversa (despertador). Sem ele, quem manda decide: o "continue" do limite. */
+  text?: string;
 }
 
 export type AutoContinueEvent =
-  | { type: 'cancelled'; by: 'user' | 'message'; pending: Pending }
+  | { type: 'cancelled'; by: 'user' | 'message' | 'staff'; pending: Pending }
   /** A opção foi desligada: a pendência saiu sem mandar (todas, de uma vez). */
   | { type: 'dropped'; pending: Pending }
   /** A linha de parada do usuário ainda barra: nova hora. */
@@ -40,7 +44,7 @@ export interface AutoContinueOptions {
   stopHit: (projectId: string) => Promise<{ resetsAt: string | null } | null>;
   /** Resets (5h/7d) que o app conhece, para reagendar quando a linha de parada barra. */
   knownResets: () => Promise<ReadonlyArray<{ kind: string; resetsAt: string | null }>>;
-  /** Manda o "continue" na conversa, acordando-a se estiver fechada. */
+  /** Manda o "continue" (ou o `text` da pendência) na conversa, acordando-a se estiver fechada. */
   send: (p: Pending) => Promise<void>;
   now?: () => number;
   /** Entre um "continue" e o seguinte, quando várias vencem juntas. */
@@ -56,6 +60,7 @@ const PendingEntry = z.object({
   staffId: z.string().nullable().catch(null),
   at: z.string(),
   resetsAt: z.string(),
+  text: z.string().optional(),
 });
 
 export class AutoContinue {
@@ -114,7 +119,7 @@ export class AutoContinue {
   }
 
   /** Tira a pendência da conversa (botão Cancelar, ou você mandou mensagem). Devolve se havia. */
-  async cancel(sessionId: string, by: 'user' | 'message'): Promise<boolean> {
+  async cancel(sessionId: string, by: 'user' | 'message' | 'staff'): Promise<boolean> {
     await this.load();
     const p = this.items.get(sessionId);
     if (!p) return false;
@@ -184,7 +189,7 @@ export class AutoContinue {
           await this.opts.send(p);
         } catch (err) {
           error = err instanceof Error ? err.message : String(err);
-          this.log(`${p.sessionId}: não consegui mandar o "continue": ${error}`);
+          this.log(`${p.sessionId}: não consegui mandar a mensagem: ${error}`);
         }
         // Durante o envio, mensagem sua (ou outro estouro) já tirou ou trocou a pendência, e quem fez isso já
         // avisou: não apaga de novo nem repete o aviso.
@@ -233,7 +238,14 @@ export class AutoContinue {
       }
       // O que já está na memória (agendado antes de ler) vale mais que o arquivo.
       if (!this.items.has(e.data.sessionId)) {
-        this.items.set(e.data.sessionId, { projectId: e.data.projectId, sessionId: e.data.sessionId, staffId: e.data.staffId, at, resetsAt });
+        this.items.set(e.data.sessionId, {
+          projectId: e.data.projectId,
+          sessionId: e.data.sessionId,
+          staffId: e.data.staffId,
+          at,
+          resetsAt,
+          ...(e.data.text !== undefined && { text: e.data.text }),
+        });
       }
     }
   }
@@ -258,6 +270,7 @@ export class AutoContinue {
         staffId: p.staffId,
         at: new Date(p.at).toISOString(),
         resetsAt: new Date(p.resetsAt).toISOString(),
+        ...(p.text !== undefined && { text: p.text }),
       })),
     };
     this.saving = this.saving.then(() => writeAtomic(this.opts.file, JSON.stringify(body, null, 2) + '\n')).catch((err) => this.log(`não consegui gravar as pendências: ${err instanceof Error ? err.message : String(err)}`));

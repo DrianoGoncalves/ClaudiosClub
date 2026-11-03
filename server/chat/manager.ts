@@ -29,6 +29,7 @@ import { InboxState } from '../inboxState';
 import { isAlive, killTree, type ChatRegistry } from './registry';
 import { CONTINUE_TEXT, type AutoContinue, type AutoContinueEvent, type Pending } from './autoContinue';
 import { limitNotice, MAX_LIMIT_HITS, resumePlan, type LimitHit } from './usageLimit';
+import { WAKE_MAX_STREAK, WakeStreakError, wakeNotice, type WakeInput } from './wake';
 import { readUsage } from '../usage';
 
 export interface ChatSpawn {
@@ -84,6 +85,10 @@ export interface ChatManagerOptions {
   quotaBoost?: () => Promise<QuotaBoost | null>;
   /** Limite de uso estourado: agenda o "continue" para quando ele voltar (ver autoContinue.ts); sem ele, só avisa. */
   autoContinue?: AutoContinue;
+  /** Despertador (ver wake.ts): outra instância do agendador, com arquivo e pendências próprios; sem ele, a rota responde 404. */
+  wakeups?: AutoContinue;
+  /** Relógio do despertador (testes trocam). */
+  now?: () => number;
 }
 
 export class ChatError extends Error {}
@@ -172,8 +177,12 @@ export class ChatManager {
    * aviso guarda a própria hora: um estouro novo não reescreve o anterior com a hora dele.
    */
   private readonly limitNotices = new Map<string, { id: string; resetsAt: number; scheduled: boolean }>();
+  /** O aviso do despertador de cada conversa aberta enquanto ele espera (para trocar a hora no mesmo aviso). */
+  private readonly wakeNotices = new Map<string, string>();
   /** Estouros de limite seguidos por conversa, desde o último turno que terminou sem limite (ver `MAX_LIMIT_HITS`). */
   private readonly limitStreak = new Map<string, number>();
+  /** Despertadores que dispararam seguidos por conversa, desde a última mensagem que não foi de despertador (ver `WAKE_MAX_STREAK`). */
+  private readonly wakeStreak = new Map<string, number>();
   /** Estouros de limite ainda sendo agendados, por conversa (ver `awaitingLimit`). */
   private readonly limitRuns = new Map<string, Promise<unknown>>();
   private readonly timer: NodeJS.Timeout;
@@ -181,6 +190,7 @@ export class ChatManager {
   constructor(private readonly opts: ChatManagerOptions) {
     this.inbox = opts.inbox ?? new InboxState();
     opts.autoContinue?.subscribe((e) => this.autoContinueEvent(e));
+    opts.wakeups?.subscribe((e) => this.wakeEvent(e));
     this.timer = setInterval(() => this.reap(), 60_000);
     this.timer.unref();
   }
@@ -212,9 +222,10 @@ export class ChatManager {
     // Sem processo (fechou por inatividade, ou o servidor reiniciou), o aviso de limite de uso não tem onde viver:
     // volta da pendência guardada, com a mesma hora e o mesmo botão.
     const waiting = live ? null : await this.opts.autoContinue?.get(sessionId);
+    const wake = live ? null : await this.opts.wakeups?.get(sessionId);
     return {
       sessionId,
-      history: waiting ? [...items, this.waitingNotice(waiting)] : items,
+      history: [...items, ...(waiting ? [this.waitingNotice(waiting)] : []), ...(wake?.projectId === projectId ? [this.waitingWake(wake)] : [])],
       live,
       context,
       elsewhere: await this.elsewhere(sessionId),
@@ -362,6 +373,50 @@ export class ChatManager {
     return auto.cancel(sessionId, 'user');
   }
 
+  /**
+   * Despertador: "me chame de novo nesta conversa daqui a `seconds` segundos com esta mensagem". Uma por conversa (a nova
+   * troca a anterior, e o aviso na conversa troca a hora). Só vale para conversa aberta aqui e do projeto: do contrário
+   * devolve null (a rota responde 404). Devolve a hora marcada (ms). Depois de `WAKE_MAX_STREAK` despertadores seguidos
+   * sem mensagem do usuário, recusa (`WakeStreakError`): quem acorda a si mesmo sem fim precisa pedir ao usuário.
+   */
+  async scheduleWake(projectId: string, sessionId: string, input: WakeInput): Promise<{ at: number } | null> {
+    const wakeups = this.opts.wakeups;
+    const chat = this.chats.get(sessionId);
+    if (!wakeups || !chat?.running || chat.projectId !== projectId) return null;
+    if ((this.wakeStreak.get(sessionId) ?? 0) >= WAKE_MAX_STREAK) throw new WakeStreakError();
+    const at = this.now() + input.seconds * 1000;
+    const pending: Pending = { projectId, sessionId, staffId: chat.staffId, at, resetsAt: at, text: input.text };
+    await wakeups.schedule(pending);
+    this.showWake(pending);
+    return { at };
+  }
+
+  /**
+   * Cancela o despertador da conversa (o botão do aviso, ou o próprio funcionário): devolve se havia algo marcado.
+   * Pendência de outro projeto não é desta rota: devolve null (404) e não mexe nela.
+   */
+  async cancelWake(projectId: string, sessionId: string, by: 'user' | 'staff'): Promise<boolean | null> {
+    const wakeups = this.opts.wakeups;
+    if (!wakeups) return false;
+    const pending = await wakeups.get(sessionId);
+    if (pending && pending.projectId !== projectId) return null;
+    return wakeups.cancel(sessionId, by);
+  }
+
+  /**
+   * Na hora marcada: a mensagem do despertador vai pelo mesmo caminho do envio normal (fila se a conversa estiver
+   * ocupada, reabre com a ficha se estiver fechada). Não cancela o "continue" do limite de uso agendado, nem o contrário.
+   */
+  async wakeChat(p: Pending): Promise<void> {
+    if (!p.text) throw new ChatError('o despertador está sem mensagem');
+    await this.deliver(p.projectId, p.sessionId, p.staffId, p.text, 'later', [], [], this.delegated.has(p.sessionId), true);
+    this.wakeStreak.set(p.sessionId, (this.wakeStreak.get(p.sessionId) ?? 0) + 1);
+  }
+
+  private now(): number {
+    return this.opts.now?.() ?? Date.now();
+  }
+
   private async deliver(
     projectId: string,
     sessionId: string | null,
@@ -375,7 +430,10 @@ export class ChatManager {
   ): Promise<string> {
     const chat = await this.ensure(projectId, sessionId, staffId);
     // Qualquer mensagem sua (ou de outro funcionário) na conversa vale mais que o "continue" agendado.
-    if (!auto) await this.opts.autoContinue?.cancel(chat.sessionId, 'message');
+    if (!auto) {
+      await this.opts.autoContinue?.cancel(chat.sessionId, 'message');
+      this.wakeStreak.delete(chat.sessionId); // alguém falou: a conta dos despertadores seguidos recomeça
+    }
     if (delegated) this.delegated.add(chat.sessionId);
     else this.delegated.delete(chat.sessionId);
     this.inbox.setQuestion(chat.sessionId, null); // respondeu (ou mandou outra coisa): a pergunta sai da caixa
@@ -574,6 +632,12 @@ export class ChatManager {
     return !!chat?.running && chat.busy;
   }
 
+  /** A conversa está aberta e no meio de um turno ou com algo em segundo plano (o "trabalhando" que decide o `onIdle`). */
+  isWorking(sessionId: string): boolean {
+    const chat = this.chats.get(sessionId);
+    return !!chat?.running && chat.working;
+  }
+
   /** Conversas paradas numa pergunta para você, para a caixa "precisa de mim". */
   pendingQuestions(): Array<{ sessionId: string; text: string; at: string; itemId?: string }> {
     return this.inbox.questions();
@@ -740,6 +804,7 @@ export class ChatManager {
     this.chats.set(spawn.sessionId, chat);
     // O aviso de limite de uso ficou no processo anterior (a pendência guardada recria o dele, logo abaixo).
     this.limitNotices.delete(spawn.sessionId);
+    this.wakeNotices.delete(spawn.sessionId);
     this.launched.set(chat, { model: argOf(spawn.args, '--model'), effort: argOf(spawn.args, '--effort') });
     // Escolha gravada (reabrir ou duplicar): vale a sua, a folga de cota não atropela.
     if (spawn.chosen) this.boosts.set(chat, 'manual');
@@ -760,6 +825,9 @@ export class ChatManager {
     // reiniciou): o aviso volta com a hora guardada.
     const waiting = await this.opts.autoContinue?.get(spawn.sessionId);
     if (waiting) this.showLimit(waiting, true);
+    // O mesmo vale para o despertador: o aviso volta com a hora guardada (a contagem continua de onde estava).
+    const waitingWake = await this.opts.wakeups?.get(spawn.sessionId);
+    if (waitingWake) this.showWake(waitingWake);
     return chat;
   }
 
@@ -917,6 +985,34 @@ export class ChatManager {
     if (e.type === 'sent') chat.setNotice(id, limitNotice.continued(now), 'info');
     else if (e.type === 'failed') chat.setNotice(id, e.gaveUp ? limitNotice.gaveUp : limitNotice.failed(e.error), 'warn');
     else if (old) chat.setNotice(old.id, limitNotice.back(old.resetsAt, now), 'warn');
+  }
+
+  /** O aviso do despertador que a conversa fechada mostra, vindo da pendência guardada (igual ao do processo aberto). */
+  private waitingWake(p: Pending): ChatItem {
+    return { kind: 'notice', id: `n:wake:${p.sessionId}:${p.at}`, text: wakeNotice.waiting(p.at), tone: 'info', at: null, action: 'cancel-wake', wake: 'waiting', wakeAt: p.at };
+  }
+
+  /** O aviso do despertador na conversa aberta: troca a hora do que já está lá, ou põe um novo. */
+  private showWake(p: Pending) {
+    const chat = this.chats.get(p.sessionId);
+    if (!chat?.running) return;
+    const id = this.wakeNotices.get(p.sessionId) ?? `n:wake:${randomUUID()}`;
+    this.wakeNotices.set(p.sessionId, id);
+    chat.setWakeNotice(id, wakeNotice.waiting(p.at), 'waiting', p.at);
+  }
+
+  /** O que o agendador fez com o despertador de uma conversa: reflete no aviso dela. */
+  private wakeEvent(e: AutoContinueEvent) {
+    const p = e.pending;
+    if (e.type === 'deferred') return this.showWake(p);
+    const old = this.wakeNotices.get(p.sessionId);
+    this.wakeNotices.delete(p.sessionId);
+    const chat = this.chats.get(p.sessionId);
+    if (!chat?.running) return;
+    const now = this.now();
+    if (e.type === 'sent') chat.setWakeNotice(old ?? `n:wake:${randomUUID()}`, wakeNotice.sent(now), 'sent', now);
+    else if (e.type === 'failed') chat.setWakeNotice(old ?? `n:wake:${randomUUID()}`, wakeNotice.failed(e.error), 'failed', now);
+    else if (old) chat.setWakeNotice(old, wakeNotice.cancelled, 'cancelled', now);
   }
 
   private async saveUsage(sessionId: string, limits: UsageLimit[]) {

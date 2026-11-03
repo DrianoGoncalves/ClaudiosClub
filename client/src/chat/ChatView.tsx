@@ -23,6 +23,7 @@ import { QuestionCard } from './QuestionCard';
 import { useChatFocus } from './useChatFocus';
 import { Markdown, looksLikeMarkdown, useCopy } from './markdown';
 import { systemMessageText } from './systemMessage';
+import { clockHM, secondsLeft } from './wakeCountdown';
 
 /** Prints no chat: até 4 por mensagem, com o lado maior em até 1568 px (o que o Claude lê sem reduzir). */
 const MAX_IMAGES = 4;
@@ -192,7 +193,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   const [bgOpen, setBgOpen] = useState(false);
   // "Mais": abre com o foco no painel; ao fechar, o foco volta para o "⋯".
   const [moreOpen, setMoreOpen] = useState(false);
-  // Avisos de limite já cancelados aqui: numa conversa fechada o aviso só some ao recarregar o histórico.
+  // Avisos de limite (e do despertador) já cancelados aqui: numa conversa fechada o aviso só some ao recarregar o histórico.
   const [autoCancelled, setAutoCancelled] = useState<ReadonlySet<string>>(new Set());
   const [moreTab, setMoreTab] = useState(moreTabs[0]?.id ?? '');
   const moreBtn = useRef<HTMLButtonElement>(null);
@@ -327,6 +328,15 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
                 ? () =>
                     void api
                       .chatCancelAutoContinue(projectId, chat.sessionId!)
+                      .then(() => setAutoCancelled((s) => new Set(s).add(item.id)))
+                      .catch((e: Error) => window.alert(e.message))
+                : undefined
+            }
+            onCancelWake={
+              chat.sessionId
+                ? () =>
+                    void api
+                      .chatCancelWake(projectId, chat.sessionId!)
                       .then(() => setAutoCancelled((s) => new Set(s).add(item.id)))
                       .catch((e: Error) => window.alert(e.message))
                 : undefined
@@ -643,6 +653,7 @@ function Item({
   onChangesRequested,
   onRewind,
   onCancelAutoContinue,
+  onCancelWake,
   autoCancelled,
 }: {
   item: ChatItem;
@@ -653,7 +664,9 @@ function Item({
   onRewind?: (uuid: string) => void;
   /** "Cancelar" no aviso de limite de uso: desfaz o "continue" agendado. */
   onCancelAutoContinue?: () => void;
-  /** O "continue" deste aviso já foi cancelado nesta tela. */
+  /** "Cancelar" no aviso do despertador. */
+  onCancelWake?: () => void;
+  /** O "continue" (ou o despertador) deste aviso já foi cancelado nesta tela. */
   autoCancelled?: boolean;
 }) {
   switch (item.kind) {
@@ -706,6 +719,7 @@ function Item({
         <PermissionCard item={item} onAnswer={onAnswer} />
       );
     case 'notice':
+      if (item.wake) return <WakeNotice item={item} cancelled={!!autoCancelled} onCancel={onCancelWake} />;
       return (
         <div className={`chat-notice chat-notice-${item.tone}`} data-item-id={item.id}>
           {item.action === 'cancel-auto-continue' && autoCancelled ? t('chat.autoContinueCancelled') : item.text}
@@ -720,6 +734,43 @@ function Item({
         </div>
       );
   }
+}
+
+/**
+ * Aviso do despertador. Esperando, mostra "Volta a olhar em 10:32h (90s)" e a contagem desce sozinha, de segundo em
+ * segundo (o intervalo sai quando o aviso deixa de esperar ou a tela fecha); o servidor só manda o instante (`wakeAt`).
+ */
+function WakeNotice({ item, cancelled, onCancel }: { item: Extract<ChatItem, { kind: 'notice' }>; cancelled: boolean; onCancel?: () => void }) {
+  const waiting = item.wake === 'waiting' && !cancelled;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!waiting) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [waiting, item.wakeAt]);
+  const at = item.wakeAt ?? now;
+  const text =
+    cancelled || item.wake === 'cancelled'
+      ? t('chat.wakeCancelled')
+      : item.wake === 'waiting'
+        ? t('chat.wakeWaiting', { time: clockHM(at), secs: secondsLeft(at, now) })
+        : item.wake === 'sent'
+          ? t('chat.wakeSent', { time: clockHM(at) })
+          : item.text;
+  return (
+    <div className={`chat-notice chat-notice-${item.tone}`} data-item-id={item.id}>
+      {text}
+      {waiting && onCancel && (
+        <>
+          {' '}
+          <button type="button" className="link" onClick={onCancel}>
+            {t('chat.cancelAutoContinue')}
+          </button>
+        </>
+      )}
+    </div>
+  );
 }
 
 const AUTONOMY_SHORT: Record<Autonomy, string> = {
