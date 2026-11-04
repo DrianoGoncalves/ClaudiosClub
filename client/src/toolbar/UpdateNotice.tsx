@@ -80,10 +80,11 @@ function UpdateButton({ status }: { status: UpdateStatus }) {
           <div className="server-overlay" role="alertdialog" aria-live="assertive">
             <div className="server-overlay-card">
               {state === 'updating' && (
-                <>
+                <div className="server-overlay-brand">
+                  <img src="/icon-192.png" alt="" width={112} height={112} />
                   <h2>{t('toolbar.updatingTitle')}</h2>
                   <p>{daemon ? t('toolbar.updatingBody') : t('toolbar.updatingBodyNoDaemon')}</p>
-                </>
+                </div>
               )}
               {state === 'updated' && done && (
                 <>

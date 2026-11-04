@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import type { AccountUsage, LaunchResult, McpServerInfo, Project, ProjectConnection, ServerInfo, StaffProfile } from '../../shared/model';
+import type { AccountUsage, BrowserStatus, LaunchResult, McpServerInfo, Project, ProjectConnection, ServerInfo, StaffProfile } from '../../shared/model';
 import { keyFilesOf, listServers, readConnections, removeConnection, saveConnection, testConnection, writeSshConfig } from './servers';
 import type { ToolAdapter } from '../adapters/types';
+import { effectiveBrowser } from '../browser';
 import { readConfig, setArchived, workspaceOf } from '../config';
 import { librarySkillsOf } from '../skillLibrary';
 import { readUsage } from '../usage';
@@ -50,6 +51,8 @@ export interface StaffServiceOptions {
   isWorking?: (staffId: string) => boolean;
   /** Arquivados (config → `staff:<id>`); os testes trocam para não mexer no config de verdade. */
   archive?: { has: (key: string) => Promise<boolean>; set: (key: string, archived: boolean) => Promise<void> };
+  /** Extensão do Chrome instalada? (padrão server/browser.ts; os testes trocam). */
+  browserStatus?: () => Promise<BrowserStatus | null>;
 }
 
 const configArchive = {
@@ -407,7 +410,9 @@ export class StaffService {
     const id = resume ? sessionId! : randomUUID();
     const ctx = await this.context(project, profile, true);
     const cwd = sessionCwd(profile, ctx, forkFrom ?? sessionId);
-    const run = await prepareRun(profile, ctx, id, cwd);
+    // Chrome só com a extensão instalada (vale só para esta conversa: a ficha salva segue como o dono escolheu).
+    const browser = await effectiveBrowser(profile.browser, this.opts.browserStatus);
+    const run = await prepareRun({ ...profile, browser }, ctx, id, cwd);
     // Modelo e esforço: o da conversa (reabrir, ou a de origem ao duplicar) > o da ficha > o último escolhido no chat.
     const origin = profile.sessions.find((x) => x.id === (forkFrom ?? sessionId));
     if (!resume) {
@@ -422,6 +427,7 @@ export class StaffService {
     }
     const effective: StaffProfile = {
       ...profile,
+      browser,
       model: origin?.model ?? profile.model ?? profile.lastModel ?? null,
       effort: origin?.effort ?? profile.effort ?? profile.lastEffort ?? null,
     };

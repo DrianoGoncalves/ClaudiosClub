@@ -371,6 +371,35 @@ describe('StaffService', () => {
     expect(list.find((s) => s.id === p.id)?.sessions).toHaveLength(1);
   });
 
+  it('Chrome só com a extensão instalada; sem como saber (ou com erro), vale a ficha; a ficha salva não muda', async () => {
+    const withStatus = (extension: boolean | null | 'erro') =>
+      new StaffService(adapter, {
+        runDir: path.join(root, 'run'),
+        claudeConfigFile: claudeJson,
+        mycoUrl: 'x',
+        readUsage: noUsage,
+        browserStatus: async () => {
+          if (extension === 'erro') throw new Error('falhou');
+          return extension === null ? null : { extension, bridge: false, installUrl: 'u' };
+        },
+      });
+    const { profile: p } = (await service().hire('proj-id', { ...input, name: 'Nav', launch: false }, true))!;
+    const open = async (extension: boolean | null | 'erro') => {
+      const s = (await withStatus(extension).chatSpawn('proj-id', null, p.id))!;
+      return { args: s.args, prompt: await fs.readFile(path.join(root, 'run', s.sessionId, 'system.md'), 'utf8') };
+    };
+    for (const ok of [true, null, 'erro'] as const) {
+      const r = await open(ok);
+      expect(r.args).toContain('--chrome');
+      expect(r.prompt).toContain('## Navegador');
+    }
+    const off = await open(false);
+    expect(off.args).toContain('--no-chrome');
+    expect(off.args).not.toContain('--chrome');
+    expect(off.prompt).not.toContain('## Navegador');
+    expect((await readProfile(projectPath, p.id))!.browser).toBe(true);
+  });
+
   it('pela API (sem navegador), só um gestor que pode contratar, e com a autonomia dele no máximo', async () => {
     const svc = service();
     await expect(svc.hire('proj-id', { ...input, name: 'Solto', launch: false }, false)).rejects.toBeInstanceOf(StaffError);

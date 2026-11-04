@@ -23,6 +23,15 @@ export function SendIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+/** Quadrado: parar o turno em andamento. */
+export function StopIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
+    </svg>
+  );
+}
+
 /** Seta para baixo: voltar ao fim da conversa. */
 export function ArrowDownIcon({ size = 16 }: { size?: number }) {
   return (

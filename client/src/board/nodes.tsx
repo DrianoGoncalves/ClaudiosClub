@@ -254,17 +254,17 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
             <div className="bn-tools">
               {staff.worktree && (
                 <span title={t('board.toolWorktree')} aria-label={t('board.toolWorktree')} role="img">
-                  <BranchIcon />
+                  <BranchIcon size={16} />
                 </span>
               )}
               {staff.browser && (
                 <span title={t('board.toolBrowser')} aria-label={t('board.toolBrowser')} role="img">
-                  <ChromeIcon />
+                  <ChromeIcon size={16} />
                 </span>
               )}
               {staff.canHire && (
                 <span title={t('board.toolCanHire')} aria-label={t('board.toolCanHire')} role="img">
-                  <UserPlusIcon size={12} />
+                  <UserPlusIcon size={16} />
                 </span>
               )}
             </div>
