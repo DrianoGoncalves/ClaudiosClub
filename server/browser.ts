@@ -27,6 +27,18 @@ export async function browserStatus(fresh = false): Promise<BrowserStatus> {
   return value;
 }
 
+/**
+ * Chrome de uma conversa: o da ficha, mas só com a extensão instalada (a ponte não conta: o próprio `claude --chrome`
+ * registra na 1ª vez). Sem como saber (null ou erro na checagem), vale a ficha. A ficha salva não muda.
+ */
+export async function effectiveBrowser(wanted: boolean, status: () => Promise<BrowserStatus | null> = browserStatus): Promise<boolean> {
+  if (!wanted) return false;
+  const extension = await Promise.resolve()
+    .then(status)
+    .then((s) => s?.extension ?? null, () => null);
+  return extension !== false;
+}
+
 /** Procura a pasta da extensão nos perfis (Default, Profile 1…). null = não dá para saber neste sistema. */
 async function hasExtension(): Promise<boolean | null> {
   const roots =

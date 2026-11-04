@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type { Autonomy, ChatAttachment, ChatItem, Effort, SendPriority, UiLevel } from '../../../shared/model';
 import { api, type PermissionOpts } from '../api';
-import { ArrowDownIcon, FileDiffIcon, ImageIcon, McpIcon, SendIcon } from '../icons';
+import { ArrowDownIcon, FileDiffIcon, ImageIcon, McpIcon, SendIcon, StopIcon } from '../icons';
 import { t, locale } from '../i18n';
 import { shrinkImage } from '../lib/shrinkImage';
 import {
@@ -482,8 +482,13 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
             />
           </label>
           {busy && (
-            <button className="btn-secondary chat-stop" onClick={() => void chat.interrupt()} title={t('chat.stopHelp')}>
-              {t('chat.stop')}
+            <button
+              className="btn-secondary chat-stop"
+              onClick={() => void chat.interrupt()}
+              aria-label={t('chat.stop')}
+              title={`${t('chat.stop')}: ${t('chat.stopHelp')}`}
+            >
+              <StopIcon />
             </button>
           )}
           <button

@@ -746,8 +746,18 @@ function ServerControls() {
         createPortal(
           <div className="server-overlay" role="alertdialog" aria-live="assertive">
             <div className="server-overlay-card">
-              {state === 'restarting' && <h2>{t('toolbar.restartingTitle')}</h2>}
-              {state === 'stopping' && <h2>{t('toolbar.stoppingTitle')}</h2>}
+              {state === 'restarting' && (
+                <div className="server-overlay-brand">
+                  <img src="/icon-192.png" alt="" width={112} height={112} />
+                  <h2>{t('toolbar.restartingTitle')}</h2>
+                </div>
+              )}
+              {state === 'stopping' && (
+                <div className="server-overlay-brand">
+                  <img src="/icon-192.png" alt="" width={112} height={112} />
+                  <h2>{t('toolbar.stoppingTitle')}</h2>
+                </div>
+              )}
               {state === 'stopped' && (
                 <>
                   <h2>{t('toolbar.stoppedTitle')}</h2>
