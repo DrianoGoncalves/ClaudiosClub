@@ -1,6 +1,6 @@
 {
   "name": "claudios-club",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "description": "Quadro branco para orquestrar agentes do Claude Code entre projetos",
   "type": "module",
