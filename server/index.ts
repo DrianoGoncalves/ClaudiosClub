@@ -506,6 +506,8 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     },
   ],
   ['GET', /^\/api\/projects$/, () => adapter.listProjects()],
+  // Fichas de todos os projetos, para copiar uma para outro (só os campos da lista; ver StaffService.directory).
+  ['GET', /^\/api\/staff-directory$/, () => staff.directory()],
   // "Novo projeto": a pasta sugerida (onde está a maioria) e criar ou abrir, já na empresa da aba.
   // Conta também os projetos do Claude Code que ficaram fora do quadro: quem só tem o demo ainda recebe a pasta onde trabalha.
   ['GET', /^\/api\/new-project$/, async () => ({ parent: usualParent([...(await adapter.listProjects()), ...(await offBoardFolders())]) })],
@@ -579,6 +581,8 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     },
   ],
   ['POST', new RegExp(`^/api/projects/${ID}/staff$`), ({ params: [id], body, fromBrowser }) => staff.hire(id!, body, fromBrowser)],
+  // Copiar uma ficha de outro projeto (só pelo Claudio’s Club). Antes da rota de edição: "copy" casaria como id.
+  ['POST', new RegExp(`^/api/projects/${ID}/staff/copy$`), ({ params: [id], body, fromBrowser }) => staff.copyFrom(id!, body, fromBrowser)],
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}$`),

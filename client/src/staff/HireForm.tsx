@@ -12,13 +12,14 @@ import type {
   StaffInput,
   StaffProfile,
 } from '../../../shared/model';
-import { api, withUsageConfirm } from '../api';
+import { api, withUsageConfirm, type DirectoryPerson } from '../api';
 import { portraitUrl } from '../board/nodes';
 import { effortLabel, employeeName, folderName } from '../format';
 import { t, locale } from '../i18n';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
 import { ProtocolBadge } from '../office/ProjectOffice';
 import { BrowserCheck } from './BrowserCheck';
+import { CopyFromCompany } from './CopyFromCompany';
 import type { RoleEntry } from '../../../shared/roles';
 import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, PLAYBOOK_OPTIONS } from './templates';
 
@@ -29,7 +30,8 @@ export const modelLabel = (m: string) => MODEL_OPTIONS.find((o) => o.value === m
 // (a versão anterior vai para o histórico, de onde dá para restaurar).
 
 export type StaffFormMode =
-  | { kind: 'hire'; reportsTo: string[] }
+  /** `copy`: já escolhida no organograma ("+" solto sobre ela): abre direto na confirmação de cópia. */
+  | { kind: 'hire'; reportsTo: string[]; copy?: DirectoryPerson }
   | { kind: 'edit'; profile: StaffProfile }
   /** Funcionário criado fora do Claudio’s Club: ganha ficha (nome, retrato, regras) sem perder a sessão. */
   | { kind: 'adopt'; session: Session };
@@ -59,7 +61,8 @@ const lines = (s: string) => s.split('\n').map((l) => l.trim()).filter(Boolean);
 type Tab = 'who' | 'tools' | 'run' | 'history';
 export type StaffFormTab = Tab;
 const TABS: Array<{ id: Tab; label: string; intro: string }> = [
-  { id: 'who', label: t('staff.tabWho'), intro: t('staff.tabWhoIntro') },  { id: 'tools', label: t('staff.tools'), intro: t('staff.tabToolsIntro') },
+  { id: 'who', label: t('staff.tabWho'), intro: t('staff.tabWhoIntro') },
+  { id: 'tools', label: t('staff.tools'), intro: t('staff.tabToolsIntro') },
   { id: 'run', label: t('staff.tabRun'), intro: t('staff.tabRunIntro') },
   { id: 'history', label: t('staff.tabHistory'), intro: t('staff.tabHistoryIntro') },
 ];
@@ -119,6 +122,10 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [versions, setVersions] = useState<Array<{ version: string; name: string; role: string; updatedAt: string }> | null>(null);
+  // Contratando: do zero (a ficha abaixo) ou cópia de alguém de outro projeto.
+  const preset = mode.kind === 'hire' ? mode.copy : undefined;
+  const [source, setSource] = useState<'new' | 'company'>(preset ? 'company' : 'new');
+  const canCopy = mode.kind === 'hire' && !embedded;
   const [ownTab, setOwnTab] = useState<Tab>('who');
   const tab = tabProp ?? ownTab;
   const setTab = onTab ?? setOwnTab;
@@ -291,19 +298,54 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
 
   const currentPortrait = editing?.portrait && portrait === undefined ? portraitUrl(projectId, editing) : portrait;
 
+  const head = (
+    <>
+      <button type="button" className="drawer-close" onClick={onClose} aria-label={t('staff.close')}>
+        ×
+      </button>
+      <p className="kicker">
+        {editing || adopting ? t('staff.kickerEdit') : t('staff.kickerHire')} · {project?.name}
+      </p>
+      <h2>{editing ? editing.name : adopting ? t('staff.titleAdopt') : source === 'company' ? t('staff.titleCopy') : t('staff.titleNew')}</h2>
+      {canCopy && (
+        <div className="templates hire-source" role="group" aria-label={t('staff.sourceLabel')}>
+          {(['new', 'company'] as const).map((s) => (
+            <button
+              key={s}
+              type="button"
+              className="btn-secondary btn-toggle"
+              aria-pressed={source === s}
+              onClick={() => setSource(s)}
+            >
+              {s === 'new' ? t('staff.sourceNew') : t('staff.sourceCompany')}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+
+  if (canCopy && source === 'company') {
+    return (
+      <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+        <div className="modal hire">
+          {head}
+          <CopyFromCompany
+            projectId={projectId}
+            projectName={project?.name ?? ''}
+            initial={preset}
+            managers={colleagues.filter((s) => managers.includes(s.id))}
+            onClose={onClose}
+            onCopied={(profile) => onHired(profile, null)}
+          />
+        </div>
+      </div>
+    );
+  }
+
   const form = (
       <form className={embedded ? 'hire-inline' : 'modal hire'} onSubmit={submit} noValidate>
-        {!embedded && (
-          <>
-            <button type="button" className="drawer-close" onClick={onClose} aria-label={t('staff.close')}>
-              ×
-            </button>
-            <p className="kicker">
-              {editing || adopting ? t('staff.kickerEdit') : t('staff.kickerHire')} · {project?.name}
-            </p>
-            <h2>{editing ? editing.name : adopting ? t('staff.titleAdopt') : t('staff.titleNew')}</h2>
-          </>
-        )}
+        {!embedded && head}
         {adopting && (
           <p className="muted small">
             {t('staff.adoptNote')}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { ChatChanges, TestRun } from '../../../shared/model';
 import { api, ApiError } from '../api';
 import { BranchIcon } from '../icons';
@@ -62,7 +63,8 @@ export function ChangesPanel({ projectId, sessionId, staffId, name, onClose }: {
       }
     });
 
-  return (
+  // No body: o vidro do painel lateral (backdrop-filter) prenderia o modal dentro dele.
+  return createPortal(
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal changes-modal" role="dialog" aria-label={t('chat.changedTitle', { name })}>
         <header className="tasks-head">
@@ -144,6 +146,7 @@ export function ChangesPanel({ projectId, sessionId, staffId, name, onClose }: {
         )}
         {error && <p className="error small">{error}</p>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
