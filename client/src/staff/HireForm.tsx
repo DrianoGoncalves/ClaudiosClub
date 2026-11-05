@@ -20,6 +20,7 @@ import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
 import { ProtocolBadge } from '../office/ProjectOffice';
 import { BrowserCheck } from './BrowserCheck';
 import { CopyFromCompany } from './CopyFromCompany';
+import { copiesOf } from './directory';
 import type { RoleEntry } from '../../../shared/roles';
 import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, PLAYBOOK_OPTIONS } from './templates';
 
@@ -126,6 +127,13 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const preset = mode.kind === 'hire' ? mode.copy : undefined;
   const [source, setSource] = useState<'new' | 'company'>(preset ? 'company' : 'new');
   const canCopy = mode.kind === 'hire' && !embedded;
+  // Editando quem tem cópias em outros projetos: a edição pode ir junto (desmarcado por padrão).
+  const [copies, setCopies] = useState(0);
+  const [applyCopies, setApplyCopies] = useState(false);
+  useEffect(() => {
+    if (!editing) return;
+    api.staffDirectory().then((r) => setCopies(copiesOf(r.people, { projectId, staffId: editing.id }).length), () => {});
+  }, [editing?.id, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [ownTab, setOwnTab] = useState<Tab>('who');
   const tab = tabProp ?? ownTab;
   const setTab = onTab ?? setOwnTab;
@@ -271,7 +279,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       ...(editing ? {} : adopting ? { adoptSessionId: adopting.id, launch: false } : { launch: false }),
     };
     try {
-      if (editing) onSaved(await api.updateStaff(projectId, editing.id, input));
+      if (editing) onSaved(await api.updateStaff(projectId, editing.id, input, copies > 0 && applyCopies));
       else if (adopting) onSaved((await api.hire(projectId, input)).profile);
       else {
         // Abrir a sessão ao contratar passa pela trava de consumo.
@@ -736,6 +744,13 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
 
         {/* Rodapé fixo: salvar está sempre à vista, em qualquer aba. */}
         <div className="modal-footer">
+        {editing && copies > 0 && (
+          <label className="check apply-copies">
+            <input type="checkbox" checked={applyCopies} onChange={(e) => setApplyCopies(e.target.checked)} />{' '}
+            {copies === 1 ? t('hr.applyCopiesOne') : t('hr.applyCopiesOther', { n: copies })}
+            <span className="muted small"> {t('hr.applyCopiesHint')}</span>
+          </label>
+        )}
         {error && <p className="error">{error}</p>}
         <div className="actions">
           <button type="submit" className="btn-primary" disabled={busy}>

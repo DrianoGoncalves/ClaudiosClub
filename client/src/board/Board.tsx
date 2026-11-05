@@ -18,7 +18,7 @@ import type { AppConfig, Board, BoardBackground, CostReport, GitState, InboxItem
 import { InboxMenu } from '../inbox/InboxMenu';
 import type { InboxView } from '../inbox/useInbox';
 import { EdgeActions, edgeTypes } from './edges';
-import { buildGraph, HANDLE, RANKING_ID, roomFrame, type BoardNode, type StaffLink } from './layout';
+import { buildGraph, HANDLE, HR_ID, RANKING_ID, roomFrame, type BoardNode, type StaffLink } from './layout';
 import { nodeTypes } from './nodes';
 import { ChartIcon } from '../icons';
 import { SettingsMenu } from '../toolbar/SettingsMenu';
@@ -378,6 +378,9 @@ export function BoardView(props: BoardViewProps) {
           <PendingRestartNotice />
           <span className="toolbar-sep" />
           <InboxMenu inbox={props.inbox} topicOf={topicOf} onOpen={props.onOpenInbox} />
+          <button onClick={() => onSelect(HR_ID)} title={t('hr.buttonTitle')}>
+            {t('hr.button')}
+          </button>
           <button className="toolbar-icon" onClick={() => onSelect(RANKING_ID)} title={t('board.rankingTitle')} aria-label={t('board.ranking')}>
             <ChartIcon />
           </button>

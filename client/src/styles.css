@@ -782,6 +782,28 @@ button.ranking-row:hover { border-color: var(--accent); }
 .copy-mission { margin: 0; white-space: pre-line; }
 .copy-ask { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
 .copy-confirm .check { flex-wrap: wrap; }
+/* Ficha com cópias: "aplicar também nas outras N cópias", no rodapé (vale em qualquer aba). */
+:is(.modal, .hire-inline) .check.apply-copies { flex-wrap: wrap; margin-bottom: 8px; }
+
+/* ---- RH: todas as fichas da empresa (painel lateral) ---- */
+.hr-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.hr-filters input { flex: 1 1 180px; min-width: 0; font: inherit; font-size: 14px; color: var(--ink); background: var(--board); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+.hr-filters input:focus { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); border-color: var(--ink-blue); }
+.hr-filters .setting-select { flex: 1 1 140px; min-width: 0; }
+.hr-list, .hr-group-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+/* Cada ficha é um cartão; as cópias da mesma pessoa ficam dentro de uma moldura tracejada, uma embaixo da outra. */
+.hr-row { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--card); }
+.hr-row.is-archived .hr-main > :not(.hr-more) { opacity: 0.6; }
+.hr-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.hr-main .copy-text { flex: 1; }
+.hr-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.hr-meta .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hr-meta .badge { flex: none; }
+.btn-secondary.hr-more { flex: none; align-self: start; min-width: 32px; min-height: 28px; font-size: 16px; line-height: 1; }
+.hr-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.hr-error { flex-basis: 100%; margin: 0; }
+.hr-group { border: 1.5px dashed var(--line); border-radius: 12px; padding: 6px 8px 8px; }
+.hr-group-head { margin: 0 2px 6px; color: var(--muted); font-weight: 600; }
 @media (max-width: 640px) { .grid2, .choices { grid-template-columns: 1fr; } }
 
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

@@ -159,6 +159,8 @@ const LIVE_RANK: Record<string, number> = { busy: 4, waiting: 3, idle: 2 };
 export const USER_NODE_ID = 'u';
 /** Não é um nó: abre o ranking de custo no painel lateral. */
 export const RANKING_ID = 'ranking';
+/** Não é um nó: abre o RH (todas as fichas da empresa) no painel lateral. */
+export const HR_ID = 'hr';
 export const SYNCED_NODE_ID = 'sg';
 export const projectNodeId = (projectId: string) => `p:${projectId}`;
 export const staffNodeId = (projectId: string, staffId: string) => `h:${projectId}:${staffId}`;

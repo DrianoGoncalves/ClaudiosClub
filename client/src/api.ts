@@ -205,6 +205,19 @@ export interface DirectoryPerson {
   updatedAt: string;
 }
 
+/** A ficha no índice com o que a tela RH usa: cópias da mesma pessoa têm o mesmo `personId` (null = sem vínculo). */
+export interface DirectoryStaff extends DirectoryPerson {
+  personId: string | null;
+  archived: boolean;
+  reportsTo: string[];
+}
+
+/** Uma ficha num projeto (ligar/desligar cópias). */
+export interface StaffRef {
+  projectId: string;
+  staffId: string;
+}
+
 /** Extras da resposta a um pedido de permissão. `answers`/`annotations`: respostas de uma pergunta com opções. */
 export interface PermissionOpts {
   message?: string;
@@ -325,7 +338,13 @@ export const api = {
   hire: (projectId: string, input: StaffInput) =>
     post<{ profile: StaffProfile; launch: LaunchResult | null }>(`/api/projects/${projectId}/staff`, input),
   /** Todas as fichas de todos os projetos (contratar "da empresa"). */
-  staffDirectory: () => get<{ people: DirectoryPerson[] }>('/api/staff-directory'),
+  staffDirectory: () => get<{ people: DirectoryStaff[] }>('/api/staff-directory'),
+  /** Liga duas fichas como cópias da mesma pessoa (as cópias antigas, sem vínculo). */
+  linkStaff: (from: StaffRef, to: StaffRef) => post<{ personId: string }>('/api/staff-link', { from, to }),
+  unlinkStaff: (ref: StaffRef) => post<{ ok: true }>('/api/staff-unlink', ref),
+  /** Apaga ficha, memória, foto e histórico; `orphaned` = subordinados que ficaram sem chefe. 409 se a conversa dele estiver trabalhando. */
+  deleteStaff: (projectId: string, staffId: string) =>
+    post<{ ok: true; orphaned: string[] }>(`/api/projects/${projectId}/staff/${staffId}/delete`),
   /** Cópia de uma ficha de outro projeto, com id novo; a memória só vai se pedir; `reportsTo` = chefes daqui. */
   copyStaff: (projectId: string, input: { fromProjectId: string; staffId: string; withMemory: boolean; reportsTo?: string[] }) =>
     post<{ profile: StaffProfile }>(`/api/projects/${projectId}/staff/copy`, input),
@@ -419,8 +438,12 @@ export const api = {
   runRoutine: (projectId: string, staffId: string, routineId: string) =>
     post<{ ok: boolean; text: string } | null>(`/api/projects/${projectId}/staff/${staffId}/routines/${routineId}/run`),
   chatInterrupt: (sessionId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/interrupt`),
-  updateStaff: (projectId: string, staffId: string, input: StaffInput) =>
-    post<StaffProfile>(`/api/projects/${projectId}/staff/${staffId}`, input),
+  /** `applyToCopies`: o que é da pessoa (nome, cargo, missão…) vai também para as cópias ligadas; `copiesUpdated` = quantas. */
+  updateStaff: (projectId: string, staffId: string, input: StaffInput, applyToCopies = false) =>
+    post<StaffProfile & { copiesUpdated?: number }>(`/api/projects/${projectId}/staff/${staffId}`, {
+      ...input,
+      ...(applyToCopies ? { applyToCopies: true } : {}),
+    }),
   staffVersions: (projectId: string, staffId: string) =>
     get<Array<{ version: string; name: string; role: string; updatedAt: string }>>(`/api/projects/${projectId}/staff/${staffId}/versions`),
   restoreStaff: (projectId: string, staffId: string, version: string) =>
