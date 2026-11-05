@@ -173,12 +173,12 @@ cd ClaudiosClub
 npm run setup
 ```
 
-Uma vez só: instala as dependências (e refaz com `npm ci` se o `node_modules` estiver incompleto), o Claude Code e o login se faltarem, pergunta se você quer o atalho no menu (opcional), oferece as barras de cota, sobe o Claudio's Club em **http://claudio.localhost:4848** e abre o navegador já pareado. Depois disso, tudo pelo navegador: com ele parado, a mesma porta mostra a página de início, com o checklist e um log recolhível.
+Uma vez só: instala as dependências (e refaz com `npm ci` se o `node_modules` estiver incompleto), o Claude Code e o login se faltarem, oferece as barras de cota, sobe o Claudio's Club em **http://claudio.localhost:4848** e abre o navegador já pareado. Depois disso, tudo pelo navegador: com ele parado (PC reiniciado, por exemplo), a mesma porta mostra a página de início, com o checklist, um log recolhível e o botão **Iniciar**, que sobe tudo sem janela.
 
 > [!IMPORTANT]
-> **Sem atalho, nada fica no sistema.** As ações só valem num navegador pareado (um cookie que dura 1 ano). Navegador novo (qualquer um)? Clique em **Parear este navegador** (no aviso que aparece ou em Configurações → Geral): ele mostra `npm run pair CÓDIGO`; rode num terminal seu, na pasta do projeto, confirme, e a aba se pareia sozinha. O terminal é a prova de que é você: os funcionários rodam comandos sem terminal interativo e não conseguem aprovar. Para ligar, use `npm run daily:start`.
+> As ações só valem num navegador pareado (um cookie que dura 1 ano). Navegador novo (qualquer um)? Clique em **Parear este navegador** (no aviso que aparece ou em Configurações → Geral): ele mostra `npm run pair CÓDIGO`; rode num terminal seu, na pasta do projeto, confirme, e a aba se pareia sozinha. O terminal é a prova de que é você: os funcionários rodam comandos sem terminal interativo e não conseguem aprovar. Para ligar, use `npm run daily:start`.
 >
-> O botão **Iniciar** da página de início e o atalho no menu são opcionais: dependem do `npm run launcher`, que cria o atalho e o link `myco://` no sistema (`npm run launcher:remove` tira). Na página de início, cada passo com problema mostra o comando de correção e um botão **Copiar**; a página nunca executa comandos, quem roda é você, no terminal.
+> O botão **Iniciar** chama o link `myco://`: uma página não liga programa nenhum sozinha, então esse link é o único registro que o Claudio's Club deixa no sistema (no Windows, a chave `HKCU\Software\Classes\myco`, só do seu usuário; no Linux, um `.desktop` escondido). Ele se registra sozinho no setup e a cada subida. Na primeira vez, o navegador pergunta se pode abrir: marque "sempre permitir". Atalho no menu de programas não é criado; quem quiser roda `npm run launcher` (`npm run launcher:remove` tira o atalho e o link). Na página de início, cada passo com problema mostra o comando de correção e um botão **Copiar**; a página nunca executa comandos, quem roda é você, no terminal.
 
 Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code ficam fora do quadro até você escolher quais trazer: **+ projeto → Importar do Claude Code**.
 
@@ -191,12 +191,12 @@ Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro)
 | Subir em primeiro plano, no terminal (Ctrl+C para parar) | `npm run daily` |
 | Subir em segundo plano · parar · ver o estado e o log | `npm run daily:start` · `npm run daily:stop` · `npm run daily:status` |
 | Subir junto com o sistema, em segundo plano | `npm run autostart` |
-| Opcional: atalho no menu e botão **Iniciar** da página de início (cria o link `myco://`) · tirar | `npm run launcher` · `npm run launcher:remove` |
+| Opcional: atalho no menu de programas · tirar o atalho e o link `myco://` | `npm run launcher` · `npm run launcher:remove` |
 | Parear um navegador: aprovar o código que o botão **Parear este navegador** mostra · sem código, abre o navegador padrão já pareado | `npm run pair CÓDIGO` · `npm run pair` (no `npm run dev`: `npm run pair:dev`) |
 | Desenvolver o Claudio's Club (recarrega a cada arquivo salvo, em http://claudio.localhost:5173) | `npm run dev` |
 | Barras de consumo 5 h / 7 d (instala o mod `myco-tap`) | `npm run mod:install` |
 | Testes e tipos | `npm test` · `npm run typecheck` |
-| Conferir o que falta para rodar (Node, Git, Claude Code, login, dependências, build; botão Iniciar opcional) | `npm run doctor` |
+| Conferir o que falta para rodar (Node, Git, Claude Code, login, dependências, build, botão Iniciar) | `npm run doctor` |
 
 ### Não abre ou a tela fica em branco
 
@@ -206,7 +206,7 @@ Rode `npm run doctor`: ele aponta o passo com problema e o comando de correção
 | --- | --- | --- |
 | Tela em branco, sem erro no console | O build aponta para arquivos de `dist/client/assets` que não existem (build interrompido ou arquivos apagados). O servidor responde 404 para eles. | `npm run build` |
 | O build falha com `Failed to resolve entry for package` | `node_modules` incompleto (arquivos `.js` apagados, instalação interrompida). `npm install` não repara. | `npm ci`, depois `npm run build` |
-| O botão **Iniciar** não faz nada | O link `myco://` (opcional) não está registrado neste computador | `npm run daily:start`, ou `npm run launcher` para usar o botão |
+| O botão **Iniciar** não faz nada, ou o Windows oferece a Microsoft Store | O link `myco://` não está registrado neste computador (nunca subiu por aqui, ou foi tirado com `launcher:remove`) | `npm run daily:start` uma vez: registra o link e sobe; daí em diante ele se refaz sozinho |
 | Ações dizem que o navegador não está pareado | O cookie do pareamento falta (navegador novo, outro endereço como `127.0.0.1`, cookies limpos) ou o atalho é antigo e só abre a página | **Parear este navegador** (aviso ou config) e rode no terminal o `npm run pair CÓDIGO` que aparece. O cookie é por endereço: use sempre o mesmo (`claudio.localhost`) |
 
 ### Atualizações e versões

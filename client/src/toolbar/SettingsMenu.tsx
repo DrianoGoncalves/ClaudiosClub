@@ -8,6 +8,7 @@ import { useSystemTheme } from '../board/colors';
 import { useChatDetail } from '../chat/chatDetail';
 import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
 import { PairControls } from './PairControls';
+import { useSystemMonitor } from './SystemMonitor';
 import { RolesEditor } from './RolesEditor';
 import { useServerAction } from './ServerAction';
 import { ThemeBackgrounds } from './ThemeBackgrounds';
@@ -168,7 +169,8 @@ export function SettingsMenu(props: Props) {
   const version = updateStatus?.current ?? null;
   const words = fold(query).split(/\s+/).filter(Boolean);
   const chatDetail = useChatDetail();
-  const all = buildSettings(props, theme, () => setOpen(false), words, chatDetail);
+  const systemMonitor = useSystemMonitor();
+  const all = buildSettings(props, theme, () => setOpen(false), words, chatDetail, systemMonitor);
   // No simples, só o essencial; o resto continua lá, no avançado.
   const settings = props.uiLevel === 'simple' ? all.filter((s) => !s.advanced) : all;
   const hidden = all.length - settings.length;
@@ -324,7 +326,14 @@ function SettingRow({ setting: s }: { setting: Setting }) {
 }
 
 /** A lista de configurações; itens que dependem do config.json só entram depois que ele chega. */
-function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, words: string[], [chatDetail, setChatDetail]: [boolean, (v: boolean) => void]): Setting[] {
+function buildSettings(
+  p: Props,
+  theme: 'light' | 'dark',
+  close: () => void,
+  words: string[],
+  [chatDetail, setChatDetail]: [boolean, (v: boolean) => void],
+  [systemMonitor, setSystemMonitor]: [boolean, (v: boolean) => void],
+): Setting[] {
   const out: Setting[] = [
     ...(p.uiLevel
       ? [
@@ -429,6 +438,14 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       description: t('toolbar.animationsDesc'),
       keywords: t('toolbar.animationsKeywords'),
       toggle: { checked: p.animations, onChange: p.onToggleAnimations },
+    },
+    {
+      id: 'sysmon',
+      group: 'general',
+      title: t('toolbar.sysmonTitle'),
+      description: t('toolbar.sysmonDesc'),
+      keywords: t('toolbar.sysmonKeywords'),
+      toggle: { checked: systemMonitor, onChange: setSystemMonitor },
     },
     {
       id: 'pair',

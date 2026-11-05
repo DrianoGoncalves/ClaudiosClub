@@ -34,7 +34,7 @@ export default defineMessages({
     // Configurações: itens
     'toolbar.uiLevelTitle': 'Nível de uso',
     'toolbar.uiLevelDesc':
-      'Simples: contratar com nome, cargo e primeira tarefa (o resto vem do cargo), o funcionário só com a conversa e aqui só o essencial. Avançado: cada detalhe da ficha, do painel e do config. Dá para trocar a qualquer hora; nada se perde.',
+      'Simples: contratar com nome e cargo (o resto vem do cargo), o funcionário só com a conversa e aqui só o essencial. Avançado: cada detalhe da ficha, do painel e do config. Dá para trocar a qualquer hora; nada se perde.',
     'toolbar.uiLevelKeywords': 'simples avancado basico completo modo interface detalhes',
     'toolbar.levelSimple': 'Simples',
     'toolbar.levelAdvanced': 'Avançado',
@@ -49,6 +49,11 @@ export default defineMessages({
     'toolbar.serverDesc':
       'Parar fecha as conversas abertas e desliga o Clube dos Claudios (as rotinas param junto). Reiniciar só aparece com o Clube dos Claudios em segundo plano (npm run daily:start ou o início automático).',
     'toolbar.serverKeywords': 'parar desligar encerrar reiniciar stop restart servidor',
+    'toolbar.sysmonTitle': 'Monitor de CPU e memória',
+    'toolbar.sysmonDesc':
+      'Mostra no canto superior direito o uso de CPU e de RAM da máquina inteira, atualizado a cada 5 s. Fica em vermelho a partir de 85% de CPU ou 90% de RAM. Vale para este navegador.',
+    'toolbar.sysmonKeywords': 'cpu memoria ram lento desempenho monitor processador',
+    'toolbar.sysmonLabel': 'Uso de CPU e memória da máquina',
     'toolbar.pairTitle': 'Pareamento deste navegador',
     'toolbar.pairDesc':
       'As ações (mensagens, botões) só valem num navegador pareado. O botão mostra um comando com um código; rodado no terminal, ele aprova este navegador, que fica pareado por 1 ano. Vale para qualquer navegador, sem atalho nem registro no sistema.',
@@ -300,7 +305,7 @@ export default defineMessages({
     'toolbar.groupUsageIntro': 'How far the account can spend before Claudio’s Club asks.',
     'toolbar.uiLevelTitle': 'Usage level',
     'toolbar.uiLevelDesc':
-      'Simple: hire with a name, role and first task (the rest comes from the role), employees with just the chat, and here only the essentials. Advanced: every detail of the profile, the panel and the config. You can switch any time; nothing is lost.',
+      'Simple: hire with a name and role (the rest comes from the role), employees with just the chat, and here only the essentials. Advanced: every detail of the profile, the panel and the config. You can switch any time; nothing is lost.',
     'toolbar.uiLevelKeywords': 'simple advanced basic full mode interface details',
     'toolbar.levelSimple': 'Simple',
     'toolbar.levelAdvanced': 'Advanced',
@@ -314,6 +319,11 @@ export default defineMessages({
     'toolbar.serverDesc':
       'Stop closes open chats and shuts Claudio’s Club down (routines stop too). Restart only appears when Claudio’s Club runs in the background (npm run daily:start or auto-start).',
     'toolbar.serverKeywords': 'stop shut down halt restart server',
+    'toolbar.sysmonTitle': 'CPU and memory monitor',
+    'toolbar.sysmonDesc':
+      'Shows the whole machine’s CPU and RAM usage in the top-right corner, refreshed every 5 s. Turns red from 85% CPU or 90% RAM. Applies to this browser.',
+    'toolbar.sysmonKeywords': 'cpu memory ram slow performance monitor processor',
+    'toolbar.sysmonLabel': 'Machine CPU and memory usage',
     'toolbar.pairTitle': 'Browser pairing',
     'toolbar.pairDesc':
       'Actions (messages, buttons) only work in a paired browser. The button shows a command with a code; run it in the terminal to approve this browser, which stays paired for 1 year. Works in any browser, with no shortcut or registry entry on the system.',
@@ -560,7 +570,7 @@ export default defineMessages({
     'toolbar.groupUsageIntro': 'Hasta dónde puede gastar la cuenta antes de que el Club de los Claudios pregunte.',
     'toolbar.uiLevelTitle': 'Nivel de uso',
     'toolbar.uiLevelDesc':
-      'Simple: contratar con nombre, cargo y primera tarea (lo demás viene del cargo), el empleado solo con la conversación y aquí solo lo esencial. Avanzado: cada detalle de la ficha, del panel y de la configuración. Se puede cambiar en cualquier momento; no se pierde nada.',
+      'Simple: contratar con nombre y cargo (lo demás viene del cargo), el empleado solo con la conversación y aquí solo lo esencial. Avanzado: cada detalle de la ficha, del panel y de la configuración. Se puede cambiar en cualquier momento; no se pierde nada.',
     'toolbar.uiLevelKeywords': 'simple avanzado basico completo modo interfaz detalles',
     'toolbar.levelSimple': 'Simple',
     'toolbar.levelAdvanced': 'Avanzado',
@@ -575,6 +585,11 @@ export default defineMessages({
     'toolbar.serverDesc':
       'Detener cierra las conversaciones abiertas y apaga el Club de los Claudios (las rutinas también se paran). Reiniciar solo aparece con el Club de los Claudios en segundo plano (npm run daily:start o el inicio automático).',
     'toolbar.serverKeywords': 'parar apagar cerrar reiniciar stop restart servidor',
+    'toolbar.sysmonTitle': 'Monitor de CPU y memoria',
+    'toolbar.sysmonDesc':
+      'Muestra en la esquina superior derecha el uso de CPU y RAM de toda la máquina, actualizado cada 5 s. Se pone en rojo desde 85% de CPU o 90% de RAM. Vale para este navegador.',
+    'toolbar.sysmonKeywords': 'cpu memoria ram lento rendimiento monitor procesador',
+    'toolbar.sysmonLabel': 'Uso de CPU y memoria de la máquina',
     'toolbar.pairTitle': 'Emparejamiento de este navegador',
     'toolbar.pairDesc':
       'Las acciones (mensajes, botones) solo valen en un navegador emparejado. El botón muestra un comando con un código; ejecutado en la terminal, aprueba este navegador, que queda emparejado por 1 año. Vale para cualquier navegador, sin acceso directo ni registro en el sistema.',

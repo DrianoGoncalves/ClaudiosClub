@@ -10,7 +10,7 @@ import { DEFAULT_SECRETS_DIR } from './secretVault';
 // - Chave de 32 bytes em ~/.myco/secrets/pairing.key (0600, pasta 0700), criada na subida. Fica no cofre porque as
 //   regras das sessões (ver staff/ficha.ts) já bloqueiam Read/Edit/Write ali e o MCP de FTP não envia nada de lá.
 // - Código de uso único, válido por 2 min: `<ms em base36>.<nonce>.<HMAC>`, gerado pelos scripts que abrem o painel
-//   (npm run daily/setup/pair, atalho e myco://open opcionais) e entregue só ao navegador, nunca impresso.
+//   (npm run daily/setup/pair, myco://open e o atalho opcional) e entregue só ao navegador, nunca impresso.
 // - "Parear este navegador" (config e aviso de não pareado), em qualquer navegador: POST /api/pair/request devolve um
 //   pedido (id secreto, só de quem pediu) e um código curto que a tela mostra, e abre um terminal com
 //   `npm run pair CÓDIGO` pronto. Lá você confere o código e confirma: o script aprova com a chave

@@ -104,6 +104,12 @@ export function portFrom(args: string[]): number {
   return fromArgs > 0 ? fromArgs : Number(process.env.MYCO_PORT) || DEFAULT_PORT;
 }
 
+/**
+ * O PowerShell pelo caminho completo: o link myco://, o vigia e os terminais de outros apps nem sempre têm a pasta
+ * dele no PATH. Pelo nome, a leitura da linha de comando voltava vazia, o vigia vivo parecia morto e subia um segundo.
+ */
+const POWERSHELL = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+
 export function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -117,7 +123,7 @@ export function isAlive(pid: number): boolean {
 export function commandLine(pid: number): string {
   try {
     if (process.platform === 'win32') {
-      return execFileSync('powershell', ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], {
+      return execFileSync(POWERSHELL, ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], {
         encoding: 'utf8',
         windowsHide: true,
         timeout: 10_000,
@@ -193,13 +199,63 @@ export function linuxAppsDir(): string {
   return path.join(linuxDataDir(), 'applications');
 }
 
-/** O link myco:// (botão Iniciar da página de início, opcional: npm run launcher) está registrado neste sistema? */
+const LINK_KEY = 'HKCU\\Software\\Classes\\myco';
+export const LINUX_LINK_DESKTOP = 'claudios-url.desktop';
+export const LINUX_MENU_DESKTOP = 'claudios.desktop';
+export const MENU_SHORTCUT = path.join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Claudio’s Club.lnk');
+
+/** O link myco:// (botão Iniciar da página de início) está registrado neste sistema? */
 export function launcherInstalled(): boolean {
   if (process.platform === 'win32') {
-    return spawnSync('reg', ['query', 'HKCU\\Software\\Classes\\myco\\shell\\open\\command'], { windowsHide: true }).status === 0;
+    return spawnSync('reg', ['query', `${LINK_KEY}\\shell\\open\\command`], { windowsHide: true }).status === 0;
   }
-  if (process.platform === 'linux') return fs.existsSync(path.join(linuxAppsDir(), 'claudios-url.desktop'));
+  if (process.platform === 'linux') return fs.existsSync(path.join(linuxAppsDir(), LINUX_LINK_DESKTOP));
   return false;
+}
+
+export function desktopEntry(fields: Record<string, string>): string {
+  return ['[Desktop Entry]', 'Type=Application', 'Terminal=false', ...Object.entries(fields).map(([k, v]) => `${k}=${v}`)].join('\n') + '\n';
+}
+
+/**
+ * Registra o link myco:// que o botão Iniciar da página de início chama: sem ele, o Windows só oferece a Microsoft
+ * Store. Uma página não liga programa nenhum sozinha; isto é o mínimo, só no seu usuário, sem administrador e sem
+ * atalho (Windows: a chave HKCU\Software\Classes\myco; Linux: um .desktop escondido). Refeito a cada subida, barato e
+ * idempotente: pasta movida ou Node trocado seguem valendo. O link só liga o Claudio’s Club (`daily.ts link`, lista
+ * fixa de ações) e o navegador pergunta antes. `npm run launcher:remove` tira.
+ */
+export function registerLink(): void {
+  const cmd = [process.execPath, TSX, DAILY, 'link'];
+  if (process.platform === 'win32') {
+    const reg = (args: string[]) => spawnSync('reg', args, { windowsHide: true, stdio: 'ignore' });
+    reg(['add', LINK_KEY, '/ve', '/d', 'URL:Claudio’s Club', '/f']);
+    reg(['add', LINK_KEY, '/v', 'URL Protocol', '/d', '', '/f']);
+    reg(['add', `${LINK_KEY}\\shell\\open\\command`, '/ve', '/d', [...cmd, '%1'].map((s) => `"${s}"`).join(' '), '/f']);
+  } else if (process.platform === 'linux') {
+    const dir = linuxAppsDir();
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, LINUX_LINK_DESKTOP),
+      desktopEntry({
+        Name: 'Claudio’s Club (iniciar)',
+        // Chamado pelo navegador (xdg-open): o comando, o PATH do terminal e a pasta ficam no script.
+        Exec: `${execArg(writeLinuxScript('iniciar', cmd, true))} %u`,
+        NoDisplay: 'true',
+        MimeType: 'x-scheme-handler/myco;',
+      }),
+    );
+    // Sem xdg-mime ou update-desktop-database, o link pode precisar de um relogin.
+    spawnSync('xdg-mime', ['default', LINUX_LINK_DESKTOP, 'x-scheme-handler/myco'], { stdio: 'ignore' });
+    spawnSync('update-desktop-database', [dir], { stdio: 'ignore' });
+  }
+}
+
+export function unregisterLink(): void {
+  if (process.platform === 'win32') spawnSync('reg', ['delete', LINK_KEY, '/f'], { windowsHide: true, stdio: 'ignore' });
+  else if (process.platform === 'linux') {
+    fs.rmSync(path.join(linuxAppsDir(), LINUX_LINK_DESKTOP), { force: true });
+    fs.rmSync(linuxScriptPath('iniciar'), { force: true });
+  }
 }
 
 /** Script que um .desktop chama no Linux (ver writeLinuxScript). */
@@ -237,7 +293,7 @@ export function writeLinuxScript(name: string, command: string[], passArgs = fal
 
 /** Roda um script do PowerShell no Windows. Os valores vão em variáveis de ambiente: sem escapar aspas. */
 function powershellRun(script: string, env: Record<string, string>): void {
-  execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
+  execFileSync(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', script], {
     env: { ...process.env, ...env },
     windowsHide: true,
     stdio: 'ignore',

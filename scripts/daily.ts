@@ -19,22 +19,22 @@ import {
   appendLog,
   brokenDeps,
   isAlive,
-  launcherInstalled,
   modInstalled,
   openUrl,
   portFrom,
+  registerLink,
   runningDaemon,
   stopProcess,
   writeLogSnapshot,
 } from './lib';
 
 // Claudio’s Club no dia a dia. Uso (npm run …, ou direto com tsx):
-//   setup   prepara tudo (dependências, Claude Code, login, atalho opcional, cota) e sobe; feito para um terminal (npm run setup)
+//   setup   prepara tudo (dependências, Claude Code, login, cota) e sobe; feito para um terminal (npm run setup)
 //   run     em primeiro plano: build, abre o navegador e segue no terminal até Ctrl+C (npm run daily)
 //   start   em segundo plano, sem janela, religando se cair (npm run daily:start)
 //   stop    para o vigia e tudo o que ele abriu (npm run daily:stop)
 //   status  vigia, servidor e fim do log (npm run daily:status)
-//   link    o botão Iniciar da página de início, pelo link myco:// (registrado por npm run launcher): sobe sem janela
+//   link    o botão Iniciar da página de início, pelo link myco:// (registrado sozinho a cada subida): sobe sem janela
 //           ou, se faltar algo, abre um terminal com o setup
 //   open    o atalho do menu: sobe se preciso e abre o navegador já pareado (código de uso único, ver server/pairing.ts)
 //   pair    com o código que o "Parear este navegador" mostra (npm run pair K7QX-4M2P): aprova aquela aba, em qualquer
@@ -113,6 +113,7 @@ async function ask(question: string, yesByDefault: boolean): Promise<boolean> {
 }
 
 function run(): void {
+  ensureLink();
   if (!npm(['run', 'build'])) {
     console.error('\nO build falhou; veja o erro acima.');
     process.exit(1);
@@ -135,7 +136,17 @@ async function offerModInstall(): Promise<void> {
   }
 }
 
+/** O botão Iniciar da página de início depende do link myco://: refeito a cada subida, nunca impede a subida. */
+function ensureLink(): void {
+  try {
+    registerLink();
+  } catch (err) {
+    appendLog('link', `não registrei o link myco:// (${(err as Error).message}); o botão Iniciar pode não funcionar`);
+  }
+}
+
 async function start(opts: { offerMod: boolean }): Promise<void> {
+  ensureLink();
   const running = runningDaemon();
   if (running) {
     console.log(`O Claudio’s Club já está rodando em segundo plano: ${url}`);
@@ -276,18 +287,11 @@ async function setup(fromLink: boolean): Promise<void> {
   }
   console.log('ok');
 
-  // Opcional: o atalho e o link myco:// ficam no sistema (menu, registro). Quem já tem segue atualizado; quem não
-  // tem só ganha se pedir. Sem eles: npm run daily:start e "Parear este navegador" no config.
-  step('Atalho e botão Iniciar (opcional)');
-  const wantsLauncher =
-    launcherInstalled() ||
-    (process.platform !== 'darwin' &&
-      (await ask('Criar o atalho no menu e o link myco:// do botão Iniciar da página de início? Fica no sistema (npm run launcher:remove tira)', false)));
-  if (wantsLauncher) spawnSync(process.execPath, ['--import', 'tsx', path.join(ROOT, 'scripts', 'launcher.ts')], { cwd: ROOT, stdio: 'inherit' });
-  else console.log('sem atalho (npm run launcher cria depois)');
-
+  // O link myco:// do botão Iniciar se registra sozinho na subida (ensureLink). Atalho no menu, nunca: quem quiser
+  // roda `npm run launcher`. Aberto pelo botão Iniciar, nada de pergunta opcional: o terminal só resolve o que impede
+  // a subida e fecha sozinho.
   step('Barras de cota (myco-tap)');
-  await offerModInstall();
+  if (!fromLink) await offerModInstall();
   console.log(modInstalled() ? 'ok' : 'sem as barras de cota por enquanto (npm run mod:install instala)');
 
   step('Subindo');
