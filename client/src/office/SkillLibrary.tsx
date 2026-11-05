@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { LibrarySkill } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
@@ -83,7 +84,8 @@ function SkillForm({ name, onClose, onSaved }: { name: string | null; onClose: (
     }
   };
 
-  return (
+  // No body: o vidro do painel lateral (backdrop-filter) prenderia o modal dentro dele.
+  return createPortal(
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <form className="modal hire" onSubmit={submit}>
         <button type="button" className="drawer-close" onClick={onClose} aria-label={t('office.cancel')}>
@@ -140,7 +142,8 @@ function SkillForm({ name, onClose, onSaved }: { name: string | null; onClose: (
           )}
         </div>
       </form>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

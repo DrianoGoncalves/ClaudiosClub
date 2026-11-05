@@ -19,6 +19,9 @@
   --card: var(--card-base);
 
   --panel: #f2f2f8;
+  /* Painéis flutuantes (topo, painel lateral, modais, menus, monitor): o --panel a 80%, com o que está atrás borrado. */
+  --panel-glass: color-mix(in srgb, var(--panel) 80%, transparent);
+  --glass-blur: blur(3px);
   --muted: #6b7076;
   --line: #e4e1da;
   --accent: #1f4fbf;
@@ -432,7 +435,7 @@ textarea.q-field { resize: vertical; }
 .setting-buttons { display: inline-flex; flex-wrap: wrap; gap: 8px; }
 .setting-danger { color: var(--ink-red); }
 .server-overlay { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 16px; background: color-mix(in srgb, var(--bg, #000) 70%, transparent); backdrop-filter: blur(3px); }
-.server-overlay-card { max-width: 520px; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3); display: grid; gap: 10px; }
+.server-overlay-card { max-width: 520px; background: var(--panel-glass); color: var(--ink); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3); display: grid; gap: 10px; }
 .server-overlay-card h2 { margin: 0; font-family: var(--hand); font-size: 32px; line-height: 1; }
 .server-overlay-card p { margin: 0; line-height: 1.45; }
 /* Reiniciando / parando / atualizando: o logo no meio e o texto embaixo (mesmo logo da página de início). */
@@ -549,7 +552,7 @@ textarea.q-field { resize: vertical; }
 .task-queue { justify-self: start; color: var(--muted); border: 1px dashed var(--line); border-radius: 999px; padding: 0 7px; font-size: 11px; }
 .task-form { display: grid; gap: 8px; border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; }
 /* z-index 3: o X do cabeçalho do quadro é item de flex com z-index 2 (vale mesmo static) e furava o painel. */
-.task-detail { position: absolute; z-index: 3; top: 0; right: 0; bottom: 0; width: min(420px, 100%); overflow-y: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; box-shadow: -10px 0 30px rgba(0, 0, 0, 0.15); }
+.task-detail { position: absolute; z-index: 3; top: 0; right: 0; bottom: 0; width: min(420px, 100%); overflow-y: auto; background: var(--panel-glass); border-left: 1px solid var(--line); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; box-shadow: -10px 0 30px rgba(0, 0, 0, 0.15); }
 .task-detail-head { display: flex; align-items: center; justify-content: space-between; }
 .task-detail .actions { flex-wrap: wrap; }
 .task-move { font: inherit; font-size: 12.5px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
@@ -602,7 +605,7 @@ textarea.q-field { resize: vertical; }
 .chat-top { position: relative; min-height: 28px; }
 .btn-secondary.chat-more-btn { position: absolute; top: 0; right: 10px; width: 30px; height: 28px; padding: 0; font-size: 18px; line-height: 1; display: grid; place-items: center; }
 /* "Mais": cobre o painel do funcionário, com rolagem própria; Esc fecha. */
-.chat-more { position: absolute; inset: 0; z-index: 3; display: grid; align-content: start; gap: 16px; overflow-y: auto; overscroll-behavior: contain; padding: 18px 20px 24px; background: var(--panel); border-radius: 12px; }
+.chat-more { position: absolute; inset: 0; z-index: 3; display: grid; align-content: start; gap: 16px; overflow-y: auto; overscroll-behavior: contain; padding: 18px 20px 24px; background: var(--panel-glass); border-radius: 12px; }
 .chat-more:focus { outline: none; }
 .chat-more-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .chat-more-head h3 { margin: 0; font-family: var(--hand); font-size: 26px; line-height: 1; }
@@ -683,7 +686,7 @@ textarea.q-field { resize: vertical; }
 .changes-diff { max-height: 50vh; overflow: auto; }
 /* Ctrl+K: ir para funcionário, projeto ou tarefa. */
 .quick-jump-backdrop { align-items: flex-start; padding-top: 12vh; }
-.quick-jump { width: min(560px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3); overflow: hidden; }
+.quick-jump { width: min(560px, calc(100vw - 32px)); background: var(--panel-glass); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3); overflow: hidden; }
 .quick-jump input { width: 100%; border: 0; border-bottom: 1px solid var(--line); padding: 12px 14px; font: inherit; font-size: 15px; background: transparent; color: var(--ink); outline: none; }
 .quick-jump-list { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow-y: auto; }
 .quick-jump-list button { display: grid; grid-template-columns: 90px 1fr; grid-template-areas: 'kind title' 'kind detail'; gap: 0 10px; width: 100%; text-align: left; padding: 6px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ink); cursor: pointer; font: inherit; }
@@ -725,7 +728,7 @@ button.ranking-row:hover { border-color: var(--accent); }
 .btn-primary:disabled { opacity: 0.6; cursor: default; }
 @media (prefers-color-scheme: dark) { .btn-primary { color: #10161f; } }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 18, 20, 0.45); display: grid; place-items: center; z-index: 20; padding: 16px; }
-.modal { position: relative; width: min(720px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px 18px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25); display: grid; gap: 12px; }
+.modal { position: relative; width: min(720px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px 18px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25); display: grid; gap: 12px; }
 .modal h2 { margin: 0; font-family: var(--hand); font-size: 34px; line-height: 1; }
 /* Campos do modal; o formulário de conexão do projeto (no drawer) usa o mesmo desenho. */
 :is(.modal, .conn-form, .hire-inline) label { display: grid; gap: 4px; font-size: 13px; font-weight: 600; }
@@ -743,7 +746,7 @@ button.ranking-row:hover { border-color: var(--accent); }
 .modal.hire { display: flex; flex-direction: column; height: min(780px, calc(100vh - 32px)); }
 .modal.hire h2 { padding-right: 24px; }
 /* Rola na horizontal em tela estreita, sem mostrar barra; a linha de base é uma sombra (não corta o sublinhado). */
-.tabs { position: sticky; top: -20px; z-index: 2; display: flex; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; margin: 0 -22px; padding: 4px 22px 0; background: var(--panel); box-shadow: inset 0 -1px 0 var(--line); flex: none; }
+.tabs { position: sticky; top: -20px; z-index: 2; display: flex; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; margin: 0 -22px; padding: 4px 22px 0; background: var(--panel-glass); box-shadow: inset 0 -1px 0 var(--line); flex: none; }
 .tabs::-webkit-scrollbar { display: none; }
 .tab { font-family: var(--hand); font-size: 20px; font-weight: 700; line-height: 1; white-space: nowrap; color: var(--muted); background: none; border: none; border-bottom: 2.5px solid transparent; border-radius: 0; padding: 6px 10px 7px; cursor: pointer; }
 .tab:hover { color: var(--ink); }
@@ -752,7 +755,7 @@ button.ranking-row:hover { border-color: var(--accent); }
 .tab-intro { margin: -4px 0 0; }
 .form-panel { display: grid; gap: 12px; align-content: start; flex: 1 0 auto; }
 .form-panel[hidden] { display: none; }
-.modal-footer { position: sticky; bottom: -18px; z-index: 2; display: grid; gap: 8px; margin: auto -22px -18px; padding: 10px 22px 14px; background: var(--panel); border-top: 1px solid var(--line); flex: none; }
+.modal-footer { position: sticky; bottom: -18px; z-index: 2; display: grid; gap: 8px; margin: auto -22px -18px; padding: 10px 22px 14px; background: var(--panel-glass); border-top: 1px solid var(--line); flex: none; }
 .modal-footer .actions { margin-top: 0 !important; flex-wrap: wrap; }
 .modal-footer-note { margin-left: auto; }
 .modal-footer .error { margin: 0; }
@@ -784,11 +787,11 @@ button.ranking-row:hover { border-color: var(--accent); }
 .plain { margin: 0; padding-left: 16px; }
 .ok { color: var(--ink-green); }
 .block { display: block; margin-top: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; word-break: break-all; color: var(--ink); }
-.notice { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: min(640px, calc(100vw - 32px)); display: flex; gap: 10px; align-items: flex-start; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 36px 10px 14px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15); font-size: 13px; z-index: 15; }
+.notice { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: min(640px, calc(100vw - 32px)); display: flex; gap: 10px; align-items: flex-start; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 10px; padding: 10px 36px 10px 14px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15); font-size: 13px; z-index: 15; }
 .notice .drawer-close { top: 6px; right: 8px; }
 /* Monitor de CPU e RAM (toolbar/SystemMonitor.tsx): meio transparente (inteiro com o mouse em cima) e embaixo do
    painel lateral (z-index 10). No celular some: a tela é pequena demais para mais uma camada. */
-.sysmon { position: fixed; top: 12px; right: 12px; z-index: 5; display: grid; gap: 4px; width: 190px; padding: 6px 10px; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.5; transition: opacity 0.15s; }
+.sysmon { position: fixed; top: 12px; right: 12px; z-index: 5; display: grid; gap: 4px; width: 190px; padding: 6px 10px; background: var(--panel-glass); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.5; transition: opacity 0.15s; }
 .sysmon:hover { opacity: 1; }
 .sysmon.is-hot { opacity: 0.95; border-color: var(--danger); }
 .sysmon.is-hot:hover { opacity: 1; }
@@ -800,7 +803,7 @@ button.ranking-row:hover { border-color: var(--accent); }
 @media (max-width: 640px) { .sysmon { display: none; } }
 /* Largura fixa: preso no meio (left: 50%), o aviso encolheria até metade da tela no celular. Por cima dos modais e do
    config (z-index 20 e 30), de onde a ação recusada pode ter vindo; amarelo de "precisa de você" (como .permission). */
-.notice-pair { flex-direction: column; gap: 6px; width: min(420px, calc(100vw - 32px)); z-index: 40; border-color: var(--waiting); background: color-mix(in srgb, var(--waiting) 8%, var(--panel)); }
+.notice-pair { flex-direction: column; gap: 6px; width: min(420px, calc(100vw - 32px)); z-index: 40; border-color: var(--waiting); background: color-mix(in srgb, var(--waiting) 8%, var(--panel-glass)); }
 .notice-pair code { white-space: nowrap; }
 .pair-command { display: flex; flex-direction: column; gap: 4px; }
 .pair-command code { user-select: all; white-space: nowrap; }
@@ -853,8 +856,9 @@ button.ranking-row:hover { border-color: var(--accent); }
 }
 
 /* ---- toolbar e legenda ---- */
-.toolbar { display: flex; flex-direction: column; gap: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06); }
+.toolbar { display: flex; flex-direction: column; gap: 10px; isolation: isolate; border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06); }
 .toolbar { max-width: calc(100vw - 24px); }
+.toolbar::before { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: var(--panel-glass); backdrop-filter: var(--glass-blur); }
 /* Linhas empilhadas: a largura do topo é a da maior (opções ou abas), não a soma das duas. */
 .toolbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .toolbar-title { font-family: var(--hand); font-weight: 700; font-size: 26px; line-height: 1; margin-right: 4px; color: var(--ink); }
@@ -953,7 +957,7 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 .toolbar .inbox-button { display: inline-flex; align-items: center; gap: 6px; }
 .toolbar .inbox-has { border-color: var(--waiting); color: var(--ink); font-weight: 600; }
 .inbox-count { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--waiting); color: #fff; font-size: 11.5px; font-weight: 700; line-height: 18px; text-align: center; }
-.inbox-menu { position: absolute; top: calc(100% + 8px); left: 0; width: min(440px, calc(100vw - 24px)); max-height: min(70vh, 520px); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2); overflow: hidden; font-size: 13px; z-index: 30; }
+.inbox-menu { position: absolute; top: calc(100% + 8px); left: 0; width: min(440px, calc(100vw - 24px)); max-height: min(70vh, 520px); display: flex; flex-direction: column; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2); overflow: hidden; font-size: 13px; z-index: 30; }
 .inbox-empty { margin: 0; padding: 14px; }
 .inbox-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; display: grid; gap: 2px; }
 .toolbar .inbox-item { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: 'kind who at' 'kind topic at' 'kind summary at'; column-gap: 10px; row-gap: 2px; align-items: center; text-align: left; padding: 7px 10px; border: 1px solid transparent; border-radius: 8px; }
@@ -1026,7 +1030,7 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
   height: min(600px, calc(100vh - var(--settings-top, 64px) - 12px));
   display: flex;
   flex-direction: column;
-  background: var(--panel);
+  background: var(--panel-glass);
   border: 1px solid var(--line);
   border-radius: 12px;
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2);
@@ -1137,6 +1141,17 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
 .legend-borrow { color: var(--ink-red); }
 .legend-borrow::before { border-top-style: dashed; }
 
+/* ---- vidro dos painéis flutuantes ---- */
+/* Fundo `--panel-glass` com o que está atrás borrado. O topo leva o vidro no ::before: com o filtro nele mesmo, os
+   menus que abrem dele (caixa, atualização) não borrariam o quadro. O filtro prende `position: fixed` dentro do
+   painel: modal aberto de dentro do painel lateral vai para o body (createPortal). As abas e o rodapé que grudam
+   usam o mesmo vidro: com fundo sólido, viravam uma faixa de outra cor. O cartão do reinício já fica sobre o blur
+   do .server-overlay. */
+:is(.drawer, .modal, .settings-menu, .inbox-menu, .update-menu, .quick-jump, .notice, .sysmon, .chat-more, .task-detail, .tabs, .modal-footer) {
+  backdrop-filter: var(--glass-blur);
+}
+.tabs.tabs-sub { backdrop-filter: none; }
+
 /* ---- painel lateral ---- */
 .drawer {
   position: absolute;
@@ -1145,7 +1160,7 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
   bottom: 12px;
   width: min(440px, calc(100vw - 24px));
   overflow-y: auto;
-  background: var(--panel);
+  background: var(--panel-glass);
   border: 1px solid var(--line);
   border-radius: 12px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
@@ -1272,7 +1287,7 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 .toolbar .restart-pending:hover:not([aria-disabled='true']) { color: var(--ink); }
 .toolbar .restart-pending[aria-disabled='true'] { cursor: help; }
 .toolbar .restart-pending.is-error { border-color: var(--ink-red); }
-.update-menu { position: absolute; top: calc(100% + 8px); left: 0; width: min(420px, calc(100vw - 24px)); max-height: min(70vh, 480px); overflow: auto; display: grid; gap: 8px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2); font-size: 13px; z-index: 30; }
+.update-menu { position: absolute; top: calc(100% + 8px); left: 0; width: min(420px, calc(100vw - 24px)); max-height: min(70vh, 480px); overflow: auto; display: grid; gap: 8px; padding: 12px 14px; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2); font-size: 13px; z-index: 30; }
 .update-menu p { margin: 0; }
 .update-commits { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 12px; line-height: 1.4; }
 .update-commits code { color: var(--muted); }

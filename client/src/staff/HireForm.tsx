@@ -59,7 +59,8 @@ const lines = (s: string) => s.split('\n').map((l) => l.trim()).filter(Boolean);
 type Tab = 'who' | 'tools' | 'run' | 'history';
 export type StaffFormTab = Tab;
 const TABS: Array<{ id: Tab; label: string; intro: string }> = [
-  { id: 'who', label: t('staff.tabWho'), intro: t('staff.tabWhoIntro') },  { id: 'tools', label: t('staff.tools'), intro: t('staff.tabToolsIntro') },
+  { id: 'who', label: t('staff.tabWho'), intro: t('staff.tabWhoIntro') },
+  { id: 'tools', label: t('staff.tools'), intro: t('staff.tabToolsIntro') },
   { id: 'run', label: t('staff.tabRun'), intro: t('staff.tabRunIntro') },
   { id: 'history', label: t('staff.tabHistory'), intro: t('staff.tabHistoryIntro') },
 ];
