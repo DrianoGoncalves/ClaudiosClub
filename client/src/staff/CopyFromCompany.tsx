@@ -3,7 +3,7 @@ import type { StaffProfile } from '../../../shared/model';
 import { api, type DirectoryPerson } from '../api';
 import { portraitUrl } from '../board/nodes';
 import { t } from '../i18n';
-import { copyCandidates } from './directory';
+import { copyBody, copyCandidates } from './directory';
 
 // Contratar "da empresa": copia a ficha de alguém de outro projeto (id novo; a memória só se pedir).
 
@@ -12,6 +12,8 @@ interface Props {
   projectName: string;
   /** Já escolhida (organograma): começa na confirmação; "Voltar" leva à lista. */
   initial?: DirectoryPerson;
+  /** Aberto pelo "+" de um funcionário: a cópia entra subordinada a ele. */
+  managers: StaffProfile[];
   onClose: () => void;
   onCopied: (profile: StaffProfile) => void;
 }
@@ -27,7 +29,7 @@ function Face({ person, big = false }: { person: DirectoryPerson; big?: boolean 
   );
 }
 
-export function CopyFromCompany({ projectId, projectName, initial, onClose, onCopied }: Props) {
+export function CopyFromCompany({ projectId, projectName, initial, managers, onClose, onCopied }: Props) {
   const [people, setPeople] = useState<DirectoryPerson[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -57,7 +59,7 @@ export function CopyFromCompany({ projectId, projectName, initial, onClose, onCo
     setBusy(true);
     setError(null);
     try {
-      const r = await api.copyStaff(projectId, { fromProjectId: picked.projectId, staffId: picked.staffId, withMemory });
+      const r = await api.copyStaff(projectId, copyBody(picked, withMemory, managers.map((m) => m.id)));
       onCopied(r.profile);
     } catch (err) {
       setError((err as Error).message);
@@ -69,7 +71,16 @@ export function CopyFromCompany({ projectId, projectName, initial, onClose, onCo
     <>
       {picked ? (
         <div className="form-panel copy-confirm">
-          <p className="copy-ask">{t('staff.copyAsk', { name: picked.name, from: picked.projectName, to: projectName })}</p>
+          <p className="copy-ask">
+            {managers.length
+              ? t('staff.copyAskUnder', {
+                  name: picked.name,
+                  from: picked.projectName,
+                  to: projectName,
+                  manager: managers.map((m) => m.name).join(', '),
+                })
+              : t('staff.copyAsk', { name: picked.name, from: picked.projectName, to: projectName })}
+          </p>
           <div className="copy-who">
             <Face person={picked} big />
             <span className="copy-text">

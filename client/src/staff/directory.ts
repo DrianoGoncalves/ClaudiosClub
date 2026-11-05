@@ -6,12 +6,14 @@ type HireSource = { projectId: string; staffId: string | null };
 /**
  * O "+" do organograma foi solto: sobre funcionário de outro projeto = copiar para cá; o "+" de um
  * funcionário sobre colega do mesmo projeto = vínculo; no vazio (ou no próprio projeto) = opções de contratar.
+ * A cópia vinda do "+" de um funcionário já entra subordinada a ele.
  */
 export function hireDrop(from: HireSource, onto: HireSource | null):
-  | { kind: 'copy'; fromProjectId: string; staffId: string }
+  | { kind: 'copy'; fromProjectId: string; staffId: string; reportsTo: string[] }
   | { kind: 'link'; staffId: string }
   | { kind: 'options' } {
-  if (onto?.staffId && onto.projectId !== from.projectId) return { kind: 'copy', fromProjectId: onto.projectId, staffId: onto.staffId };
+  if (onto?.staffId && onto.projectId !== from.projectId)
+    return { kind: 'copy', fromProjectId: onto.projectId, staffId: onto.staffId, reportsTo: from.staffId ? [from.staffId] : [] };
   if (from.staffId && onto?.staffId && onto.staffId !== from.staffId) return { kind: 'link', staffId: onto.staffId };
   return { kind: 'options' };
 }
@@ -26,6 +28,14 @@ export const directoryPerson = (s: StaffProfile, projectName: string): Directory
   mission: s.mission,
   hasPortrait: !!s.portrait,
   updatedAt: s.updatedAt,
+});
+
+/** Corpo do POST da cópia: `reportsTo` só vai quando há chefe (do "+" do projeto, entra sem chefe). */
+export const copyBody = (picked: DirectoryPerson, withMemory: boolean, reportsTo: string[]) => ({
+  fromProjectId: picked.projectId,
+  staffId: picked.staffId,
+  withMemory,
+  ...(reportsTo.length ? { reportsTo } : {}),
 });
 
 /** Sem acento e em minúsculas: "Gestão" acha "gestao". */

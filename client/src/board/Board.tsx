@@ -103,7 +103,7 @@ interface BoardViewProps {
   /** "+" de um funcionário solto sobre outro: `managerId` passa a também chamar `staffId`. */
   onLink: (projectId: string, staffId: string, managerId: string) => void;
   /** "+" solto sobre funcionário de outro projeto: copiar a ficha dele para `projectId` (pede confirmação). */
-  onCopyFrom: (projectId: string, fromProjectId: string, staffId: string) => void;
+  onCopyFrom: (projectId: string, fromProjectId: string, staffId: string, reportsTo: string[]) => void;
   /** Botão na linha entre dois funcionários: `managerId` deixa de chamar `staffId`. */
   onUnlink: (link: StaffLink) => void;
   /** O config mudou por aqui (empresa criada nas abas). */
@@ -220,7 +220,7 @@ export function BoardView(props: BoardViewProps) {
       const onto = dropId ? parseHireSource(dropId) : null;
       connectEndedAt.current = Date.now();
       const drop = hireDrop(from, onto);
-      if (drop.kind === 'copy') props.onCopyFrom(from.projectId, drop.fromProjectId, drop.staffId);
+      if (drop.kind === 'copy') props.onCopyFrom(from.projectId, drop.fromProjectId, drop.staffId, drop.reportsTo);
       else if (drop.kind === 'link' && from.staffId) props.onLink(from.projectId, drop.staffId, from.staffId);
       else props.onHireFrom(from.projectId, from.staffId);
     },

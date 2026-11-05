@@ -358,10 +358,10 @@ export function App() {
             onHireFrom={(projectId, managerId) =>
               setForm({ projectId, mode: { kind: 'hire', reportsTo: managerId ? [managerId] : [] } })
             }
-            onCopyFrom={(projectId, fromProjectId, staffId) => {
+            onCopyFrom={(projectId, fromProjectId, staffId, reportsTo) => {
               const who = board.staff.find((s) => s.projectId === fromProjectId && s.id === staffId);
               const from = board.projects.find((p) => p.id === fromProjectId);
-              if (who) setForm({ projectId, mode: { kind: 'hire', reportsTo: [], copy: directoryPerson(who, from?.name ?? fromProjectId) } });
+              if (who) setForm({ projectId, mode: { kind: 'hire', reportsTo, copy: directoryPerson(who, from?.name ?? fromProjectId) } });
             }}
             onLink={(projectId, staffId, managerId) => {
               const who = board.staff.find((s) => s.projectId === projectId && s.id === staffId);

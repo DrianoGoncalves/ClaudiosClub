@@ -326,8 +326,8 @@ export const api = {
     post<{ profile: StaffProfile; launch: LaunchResult | null }>(`/api/projects/${projectId}/staff`, input),
   /** Todas as fichas de todos os projetos (contratar "da empresa"). */
   staffDirectory: () => get<{ people: DirectoryPerson[] }>('/api/staff-directory'),
-  /** Cópia de uma ficha de outro projeto, com id novo; a memória só vai se pedir. */
-  copyStaff: (projectId: string, input: { fromProjectId: string; staffId: string; withMemory: boolean }) =>
+  /** Cópia de uma ficha de outro projeto, com id novo; a memória só vai se pedir; `reportsTo` = chefes daqui. */
+  copyStaff: (projectId: string, input: { fromProjectId: string; staffId: string; withMemory: boolean; reportsTo?: string[] }) =>
     post<{ profile: StaffProfile }>(`/api/projects/${projectId}/staff/copy`, input),
   chat: (projectId: string, sessionId: string) => get<ChatSnapshot>(`/api/projects/${projectId}/chat/${sessionId}`),
   /** Modelo, esforço e autonomia desta conversa, na hora (abre a conversa se preciso). */

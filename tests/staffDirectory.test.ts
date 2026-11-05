@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, type DirectoryPerson } from '../client/src/api';
-import { copyCandidates, hireDrop } from '../client/src/staff/directory';
+import { copyBody, copyCandidates, hireDrop } from '../client/src/staff/directory';
 
 const person = (over: Partial<DirectoryPerson>): DirectoryPerson => ({
   projectId: 'p1',
@@ -37,8 +37,14 @@ describe('contratar da empresa', () => {
   it('soltar o "+": outro projeto copia, colega do mesmo projeto vincula, o resto abre as opções', () => {
     const a = { projectId: 'A', staffId: null };
     const chefe = { projectId: 'A', staffId: 'chefe' };
-    expect(hireDrop(a, { projectId: 'B', staffId: 'x' })).toEqual({ kind: 'copy', fromProjectId: 'B', staffId: 'x' });
-    expect(hireDrop(chefe, { projectId: 'B', staffId: 'x' })).toEqual({ kind: 'copy', fromProjectId: 'B', staffId: 'x' });
+    expect(hireDrop(a, { projectId: 'B', staffId: 'x' })).toEqual({ kind: 'copy', fromProjectId: 'B', staffId: 'x', reportsTo: [] });
+    // Do "+" de um funcionário, a cópia já entra subordinada a ele.
+    expect(hireDrop(chefe, { projectId: 'B', staffId: 'x' })).toEqual({
+      kind: 'copy',
+      fromProjectId: 'B',
+      staffId: 'x',
+      reportsTo: ['chefe'],
+    });
     expect(hireDrop(chefe, { projectId: 'A', staffId: 'y' })).toEqual({ kind: 'link', staffId: 'y' });
     expect(hireDrop(a, { projectId: 'A', staffId: 'y' })).toEqual({ kind: 'options' });
     expect(hireDrop(a, null)).toEqual({ kind: 'options' });
@@ -55,5 +61,17 @@ describe('contratar da empresa', () => {
     expect(url).toBe('/api/projects/here/staff/copy');
     expect(init.method).toBe('POST');
     expect(JSON.parse(String(init.body))).toEqual({ fromProjectId: 'p2', staffId: 'b', withMemory: false });
+  });
+
+  it('o corpo da cópia leva reportsTo só quando há chefe', async () => {
+    const bia = person({ staffId: 'b', projectId: 'p2' });
+    expect(copyBody(bia, false, [])).toEqual({ fromProjectId: 'p2', staffId: 'b', withMemory: false });
+    expect(copyBody(bia, true, ['chefe'])).toEqual({ fromProjectId: 'p2', staffId: 'b', withMemory: true, reportsTo: ['chefe'] });
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ profile: { id: 'novo' } }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('window', new EventTarget());
+    await api.copyStaff('here', copyBody(bia, false, ['chefe']));
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ fromProjectId: 'p2', staffId: 'b', withMemory: false, reportsTo: ['chefe'] });
   });
 });

@@ -334,6 +334,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             projectId={projectId}
             projectName={project?.name ?? ''}
             initial={preset}
+            managers={colleagues.filter((s) => managers.includes(s.id))}
             onClose={onClose}
             onCopied={(profile) => onHired(profile, null)}
           />
