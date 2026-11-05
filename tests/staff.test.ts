@@ -241,7 +241,20 @@ describe('infra: servidores por SSH', () => {
     }
     expect(md).not.toContain('skill `vps`');
     expect(renderFicha({ ...p, skills: ['vps'] }, ctx)).toContain('skill `vps`');
-    expect(renderFicha(profile(), ctx)).not.toContain('## Servidores');
+    // Sem servidor: a ficha explica o bloqueio; só nomes, nunca host nem pasta.
+    const none = renderFicha(profile(), ctx);
+    expect(none).toContain('## Servidores');
+    expect(none).toContain('bloqueia ssh, scp, sftp e rsync');
+    expect(none).toContain('ainda não tem conexão cadastrada');
+    const withConns = renderFicha(profile(), { ...ctx, servers: [{ name: 'prod', source: 'vps', protocol: 'ssh', host: 'vps-a', remoteRoot: '/var/www/app' }] });
+    expect(withConns).toContain('`prod`');
+    expect(withConns).not.toContain('vps-a');
+    expect(withConns).not.toContain('/var/www/app');
+    expect(withConns).not.toContain('ainda não tem conexão');
+    // Só FTP: o ssh continua bloqueado e a ficha diz isso.
+    const ftpOnly = renderFicha(profile({ servers: ['site'] }), { ...ctx, servers: [{ name: 'site', source: 'ftp', protocol: 'ftps', host: 'ftp.x', remoteRoot: '/' }] });
+    expect(ftpOnly).toContain('as suas conexões são só FTP');
+    expect(md).not.toContain('as suas conexões são só FTP');
     // O workspace do projeto entra como contexto, sem tomar o lugar da empresa.
     expect(renderFicha(profile(), { ...ctx, workspace: 'Cliente X' })).toContain('Empresa: Acme & Cia. Workspace: Cliente X.');
     expect(renderFicha(profile(), ctx)).not.toContain('Workspace:');

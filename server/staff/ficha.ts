@@ -102,7 +102,19 @@ export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpSer
 const FTP_TOOLS = ['ftp_list', 'ftp_download', 'ftp_upload', 'ftp_delete', 'ftp_rename', 'ftp_mkdir'];
 
 function serversSection(p: StaffProfile, ctx: FichaContext): string {
-  if (!p.servers.length) return '';
+  if (!p.servers.length) {
+    // Sem isto, o funcionário vê "permission denied" no ssh, culpa o settings do Claude Code e pede chave nova.
+    // Só os nomes das conexões do projeto: host, usuário e pasta ficam fora da ficha.
+    const names = (ctx.servers ?? []).map((s) => `\`${s.name}\``);
+    const avail = names.length
+      ? `Conexões do projeto: ${names.join(', ')}.`
+      : 'O projeto ainda não tem conexão cadastrada (Servidores (SSH e FTP), no detalhe do projeto).';
+    return [
+      '## Servidores',
+      `Nesta conversa o Claudio’s Club bloqueia ssh, scp, sftp e rsync (Bash e PowerShell), porque a sua ficha não tem conexão; \`.vps\` e \`~/.ssh\` também. Liberar no settings do Claude Code ou trocar a chave não resolve. ${avail}`,
+      'Para acessar um servidor, peça ao usuário para marcar a conexão na sua ficha (“+ dar acesso a servidores (SSH e FTP)”) e abrir uma conversa nova. Não tente outro caminho.',
+    ].join('\n');
+  }
   const config = staffSshConfigFile(ctx.projectPath, p.id).replace(/\\/g, '/');
   const known = new Map((ctx.servers ?? []).map((s) => [s.name, s]));
   const ftpOf = (s: ServerInfo | undefined) => s?.source === 'ftp';
@@ -128,7 +140,7 @@ function serversSection(p: StaffProfile, ctx: FichaContext): string {
             `- SSH, comando remoto, um por vez: \`ssh -F "${config}" <conexão> "<comando>"\`. O arquivo é gerado pelo Claudio’s Club só com as suas conexões: não leia, não edite e não use outra configuração.`,
             `- SSH, arquivos: \`scp -F "${config}" <local> <conexão>:<caminho>\` para enviar (com backup do que for sobrescrito no servidor) e o contrário para baixar.${vps}`,
           ]
-        : []),
+        : ['- ssh, scp, sftp e rsync ficam bloqueados (Bash e PowerShell) porque as suas conexões são só FTP: não tente, liberar no settings do Claude Code não resolve.']),
       ...(hasFtp
         ? [
             `- FTP: só pelas ferramentas ${tools}, sempre com \`connection\` = o nome da conexão. Caminho local relativo ao projeto; o remoto fica preso à pasta da conexão. Antes de substituir ou apagar no servidor, baixe uma cópia (backup). Não use outro cliente FTP (curl, ftp, WinSCP).`,

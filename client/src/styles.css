@@ -542,7 +542,8 @@ textarea.q-field { resize: vertical; }
 .modal .check input[type='checkbox'] { accent-color: var(--ink-blue); }
 .task-queue { justify-self: start; color: var(--muted); border: 1px dashed var(--line); border-radius: 999px; padding: 0 7px; font-size: 11px; }
 .task-form { display: grid; gap: 8px; border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; }
-.task-detail { position: absolute; top: 0; right: 0; bottom: 0; width: min(420px, 100%); overflow-y: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; box-shadow: -10px 0 30px rgba(0, 0, 0, 0.15); }
+/* z-index 3: o X do cabeçalho do quadro é item de flex com z-index 2 (vale mesmo static) e furava o painel. */
+.task-detail { position: absolute; z-index: 3; top: 0; right: 0; bottom: 0; width: min(420px, 100%); overflow-y: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; box-shadow: -10px 0 30px rgba(0, 0, 0, 0.15); }
 .task-detail-head { display: flex; align-items: center; justify-content: space-between; }
 .task-detail .actions { flex-wrap: wrap; }
 .task-move { font: inherit; font-size: 12.5px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
