@@ -3,6 +3,7 @@ import type {
   Agent,
   CostReport,
   CostSummary,
+  InboxItem,
   LinkInfo,
   LiveSession,
   Project,
@@ -16,14 +17,16 @@ import type {
   UserScope,
 } from '../../../shared/model';
 import { TEMP_IDLE_DAYS } from '../../../shared/model';
-import { api } from '../api';
+import { alertError, api, isPairingError } from '../api';
 import { RoomColorPicker } from '../board/colors';
 import { portraitUrl } from '../board/nodes';
+import { showsStatus, useSeeIdle, useSeenIdle } from '../board/unread';
 import { ChatView, type MoreTab } from '../chat/ChatView';
 import type { ChatFocus } from '../chat/chatFocus';
 import { BrowserCheck } from '../staff/BrowserCheck';
 import { MAX_INPUT_BYTES, PROJECT_IMAGE_MAX, shrinkImage } from '../lib/shrinkImage';
 import { METRIC_LABEL, type Metric, ModelsChart } from '../toolbar/ModelsMenu';
+import { Attachments } from './Attachments';
 import { ProjectName } from './ProjectName';
 import { Routines } from './Routines';
 import { WorthIt } from './WorthIt';
@@ -83,6 +86,8 @@ function ArchiveButton({
 
 export function EmployeePanel(props: {
   session: Session | null;
+  /** Sessões vivas: a conversa aberta, parada, conta como vista (tira a bolinha de ocioso do quadro). */
+  live?: LiveSession[];
   staff: StaffProfile | null;
   managers: StaffProfile[];
   project: Project | null;
@@ -109,6 +114,8 @@ export function EmployeePanel(props: {
   /** Clique num aviso da caixa "precisa de mim": a conversa do aviso e o balão a mostrar nela. */
   focus?: ChatFocus | null;
   onFocusDone?: () => void;
+  /** A caixa "precisa de mim": conversa com aviso nela abre no fim, como antes. */
+  inbox?: InboxItem[];
 }) {
   const { session: s, staff, project } = props;
   // Qual conversa está aberta: a mais recente, outra da lista, ou uma nova (ainda sem sessão).
@@ -145,6 +152,8 @@ export function EmployeePanel(props: {
   /** A sessão que o ChatView abre: nenhuma na conversa nova (mesmo depois que ela ganhou id). */
   const opened = fresh ? null : picked;
   const current = fresh ? freshId : picked;
+  // Conversa na tela (sem projeto não há chat): parada, já foi vista.
+  useSeeIdle(project && current ? (props.live?.find((l) => l.sessionId === current) ?? (current === s?.id ? s.live : null)) : null);
   // Sem ficha, a lista é a própria conversa: dá para abrir uma nova (a pesada fica no quadro) e voltar a ela.
   const listed = props.conversations?.length
     ? props.conversations
@@ -177,7 +186,7 @@ export function EmployeePanel(props: {
       pick(r.sessionId);
       props.onSessionStarted?.(r.sessionId);
     } catch (e) {
-      window.alert((e as Error).message);
+      alertError(e);
     } finally {
       setConvBusy(false);
     }
@@ -396,6 +405,7 @@ export function EmployeePanel(props: {
       moreTabs={tabs}
       focus={props.focus}
       onFocusDone={props.onFocusDone}
+      awaiting={!!opened && !!props.inbox?.some((i) => i.sessionId === opened)}
     />
   );
 }
@@ -609,6 +619,8 @@ export function ProjectPanel({
   team,
   owned,
   onOpenStaff,
+  onOpenSession,
+  hiddenSessions,
   cost,
   archived,
   onArchive,
@@ -643,6 +655,10 @@ export function ProjectPanel({
   /** Sessões que têm dono (ficha): as outras aparecem à parte, como conversas sem ficha. */
   owned: Set<string>;
   onOpenStaff: (staffId: string) => void;
+  /** Abre uma conversa sem ficha no painel do fantasma (o mesmo do cartão no quadro). */
+  onOpenSession?: (sessionId: string) => void;
+  /** Conversas sem ficha que não aparecem (arquivadas, com "mostrar arquivados" desligado). */
+  hiddenSessions?: Set<string>;
   cost: ProjectCost | null;
   totalUsd: number;
   archived: boolean;
@@ -733,8 +749,14 @@ export function ProjectPanel({
       </section>
       {project.exists && !project.worktreeOf && office}
       {project.exists && <ImagePicker image={image} onChange={onImage} />}
+      {project.exists && <Attachments projectId={project.id} />}
       <TeamList rows={team} totalUsd={totalUsd} onOpen={onOpenStaff} />
-      <SessionList sessions={sessions.filter((s) => !owned.has(s.id))} costs={cost?.sessions ?? {}} totalUsd={totalUsd} />
+      <SessionList
+        sessions={sessions.filter((s) => !owned.has(s.id) && !hiddenSessions?.has(s.id))}
+        costs={cost?.sessions ?? {}}
+        totalUsd={totalUsd}
+        onOpen={onOpenSession}
+      />
       <AgentList
         agents={detail.agents}
         empty={t('detail.noAgentsProject')}
@@ -746,7 +768,7 @@ export function ProjectPanel({
   );
 }
 
-/** Logo ou print do projeto (fica em .myco/ do projeto). */
+/** Logo do projeto (fica em .myco/ do projeto). */
 function ImagePicker({ image, onChange }: { image: string | null; onChange: (dataUrl: string | null) => Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -813,7 +835,7 @@ function AccountRules() {
       setData(d);
       setMsg({ tone: 'ok', text: t('detail.rulesSaved') });
     } catch (e) {
-      setMsg({ tone: 'error', text: (e as Error).message });
+      if (!isPairingError(e)) setMsg({ tone: 'error', text: (e as Error).message });
     } finally {
       setBusy(false);
     }
@@ -1332,30 +1354,71 @@ function TeamList({ rows, totalUsd, onOpen }: { rows: TeamRow[]; totalUsd: numbe
   );
 }
 
-/** Conversas sem ficha (abertas no terminal, no app do Claude ou soltas): recolhidas, à parte da equipe. */
-function SessionList({ sessions, costs, totalUsd }: { sessions: Session[]; costs: Record<string, number>; totalUsd: number }) {
+/** Quantas conversas sem ficha ficam à mostra; o resto, em "ver todas". */
+const LOOSE_SHOWN = 5;
+
+/**
+ * Conversas sem ficha (abertas no terminal, no app do Claude ou soltas), à parte da equipe: as mais
+ * recentes à mostra, o resto recolhido. Clicar abre a conversa no painel do fantasma, para continuar aqui.
+ */
+function SessionList({
+  sessions,
+  costs,
+  totalUsd,
+  onOpen,
+}: {
+  sessions: Session[];
+  costs: Record<string, number>;
+  totalUsd: number;
+  onOpen?: (sessionId: string) => void;
+}) {
+  const seen = useSeenIdle();
   if (!sessions.length) return null;
+  const sorted = [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const row = (s: Session) => {
+    const body = (
+      <>
+        <span className="row-title">
+          {/* Ocioso só até você ver a conversa, como no quadro. */}
+          {s.live?.alive && showsStatus(seen, s.live) && (
+            <span className={`dot dot-${s.live.status ?? 'unknown'}`} title={STATUS_LABEL[s.live.status ?? ''] ?? ''} />
+          )}
+          {s.topic ?? s.title ?? <span className="muted mono">{s.id.slice(0, 8)}</span>}
+        </span>
+        <span className="row-meta">
+          {s.entrypoint && <span className="badge">{ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</span>}
+          {s.gitBranch && <span className="badge dim">{s.gitBranch}</span>}
+          {s.subagentCount > 0 && <span className="badge dim">{t('detail.subagentsCount', { n: s.subagentCount })}</span>}
+          {costs[s.id] !== undefined && <span title={t('detail.inTotalUsage')}>{formatShare(costs[s.id]!, totalUsd)}</span>}
+          <span className="muted">{formatDate(s.updatedAt)}</span>
+        </span>
+      </>
+    );
+    return onOpen ? (
+      <li key={s.id}>
+        <button type="button" className="row row-button" onClick={() => onOpen(s.id)} title={t('detail.openLoose')}>
+          {body}
+        </button>
+      </li>
+    ) : (
+      <li key={s.id} className="row">
+        {body}
+      </li>
+    );
+  };
+  const rest = sorted.slice(LOOSE_SHOWN);
   return (
-    <details className="section collapse">
-      <summary>{t('detail.looseCount', { n: sessions.length })}</summary>
-      <ul className="rows">
-        {sessions.map((s) => (
-          <li key={s.id} className="row">
-            <span className="row-title">
-              {s.live?.alive && <span className={`dot dot-${s.live.status ?? 'unknown'}`} title={STATUS_LABEL[s.live.status ?? ''] ?? ''} />}
-              {s.topic ?? s.title ?? <span className="muted mono">{s.id.slice(0, 8)}</span>}
-            </span>
-            <span className="row-meta">
-              {s.entrypoint && <span className="badge">{ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</span>}
-              {s.gitBranch && <span className="badge dim">{s.gitBranch}</span>}
-              {s.subagentCount > 0 && <span className="badge dim">{t('detail.subagentsCount', { n: s.subagentCount })}</span>}
-              {costs[s.id] !== undefined && <span title={t('detail.inTotalUsage')}>{formatShare(costs[s.id]!, totalUsd)}</span>}
-              <span className="muted">{formatDate(s.updatedAt)}</span>
-            </span>
-          </li>
-        ))}
-      </ul>
-    </details>
+    <section className="section">
+      <h3>{t('detail.looseCount', { n: sessions.length })}</h3>
+      {onOpen && <p className="muted small">{t('detail.looseNote')}</p>}
+      <ul className="rows">{sorted.slice(0, LOOSE_SHOWN).map(row)}</ul>
+      {rest.length > 0 && (
+        <details className="collapse">
+          <summary>{t('detail.looseMore', { n: rest.length })}</summary>
+          <ul className="rows">{rest.map(row)}</ul>
+        </details>
+      )}
+    </section>
   );
 }
 

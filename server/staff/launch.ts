@@ -3,6 +3,9 @@ import type { ServerInfo, StaffProfile } from '../../shared/model';
 import { defaultLocations } from '../adapters/claude/paths';
 import { ROOT } from '../root';
 import { renderFicha, systemPrompt, type FichaContext, type TeamMember } from './ficha';
+import { FTP_MCP_NAME } from '../../shared/model';
+import { DEFAULT_SECRETS_DIR } from '../secretVault';
+import { ftpMcpServerConfig } from './ftpMcp';
 import { buildMcpConfig } from './mcp';
 import { ensurePlaybookAgents } from './playbookAgents';
 import { buildSkillPlugin } from '../skillLibrary';
@@ -24,7 +27,7 @@ export interface LaunchContext {
   worktree?: Worktree | null;
   /** Servidores da ficha, resolvidos (só nomes e destinos). */
   servers?: ServerInfo[];
-  /** Arquivos das chaves desses servidores (a sessão não pode ler). */
+  /** Arquivos das chaves das conexões SSH do projeto (a sessão não pode ler). */
   serverKeys?: string[];
   /** Skills da ficha que estão na biblioteca do Claudio’s Club (vão no plugin da sessão). */
   librarySkills?: string[];
@@ -54,10 +57,12 @@ export function sessionCwd(profile: StaffProfile, ctx: Pick<LaunchContext, 'proj
 export interface PreparedRun {
   systemPromptFile: string;
   mcpConfigPath: string | null;
+  strictMcp: boolean;
   addDirs: string[];
   settingsFile: string;
   agentsFile: string | null;
   keyFiles: string[];
+  ftpServers: string[];
   pluginDir: string | null;
 }
 
@@ -72,10 +77,17 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   const dir = path.join(ctx.runDir, sessionId);
   const systemPromptFile = path.join(dir, 'system.md');
   await writeAtomic(systemPromptFile, systemPrompt(profile, fichaCtx, renderFicha(profile, fichaCtx)));
+  // FTP: as conexões da ficha que existem e têm senha (ctx.servers já vem filtrado assim).
+  const ftpServers = ftpServersOf(profile, ctx.servers);
   let mcpConfigPath: string | null = null;
-  if (profile.mcps !== null) {
+  if (profile.mcps !== null || ftpServers.length) {
     mcpConfigPath = path.join(dir, 'mcp.json');
-    await writeAtomic(mcpConfigPath, JSON.stringify(await buildMcpConfig(ctx.projectPath, profile.mcps, ctx.claudeConfigFile), null, 2));
+    const config = profile.mcps !== null ? await buildMcpConfig(ctx.projectPath, profile.mcps, ctx.claudeConfigFile) : { mcpServers: {} };
+    if (ftpServers.length) {
+      // Só nomes e caminhos: o MCP tira a senha do cofre sozinho.
+      config.mcpServers[FTP_MCP_NAME] = ftpMcpServerConfig({ projectPath: ctx.projectPath, root: cwd, staffId: profile.id, connections: ftpServers, vaultDir: DEFAULT_SECRETS_DIR });
+    }
+    await writeAtomic(mcpConfigPath, JSON.stringify(config, null, 2));
   }
   const settingsFile = path.join(dir, 'settings.json');
   await writeAtomic(settingsFile, JSON.stringify(staffSettings(), null, 2));
@@ -98,12 +110,21 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   return {
     systemPromptFile,
     mcpConfigPath,
+    // Sem lista de MCPs na ficha (todos), o de FTP só se soma aos do projeto e do usuário.
+    strictMcp: profile.mcps !== null,
     addDirs: away ? [staffDir(ctx.projectPath)] : [],
     settingsFile,
     agentsFile,
     keyFiles: ctx.serverKeys ?? [],
+    ftpServers,
     pluginDir: plugin?.dir ?? null,
   };
+}
+
+/** As conexões FTP da ficha que estão no projeto (com senha). */
+export function ftpServersOf(profile: Pick<StaffProfile, 'servers'>, servers: ServerInfo[] | undefined): string[] {
+  const ftp = new Set((servers ?? []).filter((s) => s.source === 'ftp').map((s) => s.name));
+  return profile.servers.filter((n) => ftp.has(n));
 }
 
 const DELIVERY_HOOK = path.join(ROOT, 'scripts', 'hooks', 'delivery-check.mjs');

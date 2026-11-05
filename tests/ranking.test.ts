@@ -45,7 +45,7 @@ describe('rankingGroups', () => {
       ['g:b', ['s4']],
     ]);
     expect(groups[0]).toMatchObject({ name: 'ANA', detail: 'Dev · Alfa', archived: false });
-    expect(groups[1]).toMatchObject({ name: 'Funcionário fantasma', detail: 'Alfa' });
+    expect(groups[1]).toMatchObject({ name: 'Freela', detail: 'Alfa' });
   });
 
   it('sessão listada em duas fichas do projeto conta uma vez só: fica com a última, como no quadro', () => {

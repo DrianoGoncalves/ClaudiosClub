@@ -29,3 +29,6 @@ export function foldersToShow(dir: string, path: string): string[] {
 
 /** Pasta de um caminho ("" = raiz). */
 export const parentOf = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf('/')));
+
+/** `path` é o próprio `base` ou fica dentro dele: o que sai junto quando `base` é apagado. */
+export const isWithin = (path: string, base: string) => path === base || path.startsWith(`${base}/`);

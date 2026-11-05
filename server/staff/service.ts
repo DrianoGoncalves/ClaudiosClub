@@ -1,7 +1,25 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import type { AccountUsage, BrowserStatus, LaunchResult, McpServerInfo, Project, ProjectConnection, ServerInfo, StaffProfile } from '../../shared/model';
-import { keyFilesOf, listServers, readConnections, removeConnection, saveConnection, testConnection, writeSshConfig } from './servers';
+import type {
+  AccountUsage,
+  AnyConnection,
+  BrowserStatus,
+  FtpConnection,
+  LaunchResult,
+  McpServerInfo,
+  Project,
+  ProjectConnection,
+  ServerInfo,
+  StaffProfile,
+} from '../../shared/model';
+import type { VaultOptions } from '../secretVault';
+import { isFtpConnection, listFtpServers, readFtpConnections, removeFtpConnection, saveFtpConnection, testFtpConnection, type FtpConnector } from './ftp';
+import { keyFilesOf, listServers, readConnections, removeConnection, saveConnection, testConnection, writeStaffSshConfig } from './servers';
+
+/** SSH completas e FTP com senha: o que dá para pôr numa ficha. */
+async function allServers(projectPath: string, vault?: VaultOptions): Promise<ServerInfo[]> {
+  return [...(await listServers(projectPath)), ...(await listFtpServers(projectPath, vault))];
+}
 import type { ToolAdapter } from '../adapters/types';
 import { effectiveBrowser } from '../browser';
 import { readConfig, setArchived, workspaceOf } from '../config';
@@ -53,6 +71,10 @@ export interface StaffServiceOptions {
   archive?: { has: (key: string) => Promise<boolean>; set: (key: string, archived: boolean) => Promise<void> };
   /** Extensão do Chrome instalada? (padrão server/browser.ts; os testes trocam). */
   browserStatus?: () => Promise<BrowserStatus | null>;
+  /** Cofre das senhas de FTP (padrão ~/.myco/secrets; os testes trocam). */
+  vault?: VaultOptions;
+  /** Cliente FTP do teste de conexão (padrão basic-ftp; os testes trocam). */
+  ftpConnect?: FtpConnector;
 }
 
 const configArchive = {
@@ -74,40 +96,65 @@ export class StaffService {
 
   async listServers(projectId: string): Promise<ServerInfo[] | null> {
     const project = await this.project(projectId);
-    return project ? listServers(project.path) : null;
+    return project ? allServers(project.path, this.opts.vault) : null;
   }
 
-  // ---- conexões SSH do projeto (só pelo Claudio’s Club: as rotas recusam pedido de funcionário) ----
+  // ---- conexões SSH e FTP do projeto (só pelo Claudio’s Club: as rotas recusam pedido de funcionário) ----
 
-  async listConnections(projectId: string): Promise<ProjectConnection[] | null> {
+  async listConnections(projectId: string): Promise<AnyConnection[] | null> {
     const project = await this.project(projectId);
-    return project ? readConnections(project.path) : null;
+    if (!project) return null;
+    return [...(await readConnections(project.path)), ...(await readFtpConnections(project.path, this.opts.vault))];
   }
 
-  /** `originalName` no corpo: a conexão editada (renomear mantém o acesso de quem já tinha). */
+  /** SSH. `originalName` no corpo: a conexão editada (renomear mantém o acesso de quem já tinha). */
   async saveConnection(projectId: string, body: unknown): Promise<ProjectConnection | null> {
     const project = await this.project(projectId);
     if (!project) return null;
     const original = (body as { originalName?: unknown } | null)?.originalName;
     const originalName = typeof original === 'string' && original ? original : undefined;
-    const saved = await saveConnection(project.path, body, originalName);
-    if (originalName && originalName !== saved.name) {
-      for (const s of await listProjectStaff(project.path, project.id)) {
-        if (!s.servers.includes(originalName)) continue;
-        await saveProfile(project.path, { ...s, servers: s.servers.map((n) => (n === originalName ? saved.name : n)), updatedAt: new Date().toISOString() });
-      }
+    const wanted = (body as { name?: unknown } | null)?.name;
+    // O nome é a referência na ficha: não repete entre SSH e FTP (nem só nas maiúsculas).
+    if (typeof wanted === 'string' && (await readFtpConnections(project.path, this.opts.vault)).some((c) => c.name.toLowerCase() === wanted.trim().toLowerCase())) {
+      throw new StaffError(`já existe uma conexão FTP ${wanted.trim()}`);
     }
+    const saved = await saveConnection(project.path, body, originalName);
+    if (originalName && originalName !== saved.name) await this.renameInFichas(project, originalName, saved.name);
     return saved;
+  }
+
+  /** FTP: criar ou editar (senha ausente na edição = mantém a do cofre). Nunca devolve a senha. */
+  async saveFtpConnection(projectId: string, body: unknown): Promise<FtpConnection | null> {
+    const project = await this.project(projectId);
+    if (!project) return null;
+    const original = (body as { originalName?: unknown } | null)?.originalName;
+    const saved = await saveFtpConnection(project.path, body, this.opts.vault);
+    if (typeof original === 'string' && original && original !== saved.name) await this.renameInFichas(project, original, saved.name);
+    return saved;
+  }
+
+  /** Renomear leva o acesso de quem já tinha (a ficha guarda o nome) e refaz o ssh_config dessas pessoas. */
+  private async renameInFichas(project: Project, from: string, to: string): Promise<void> {
+    for (const s of await listProjectStaff(project.path, project.id)) {
+      if (!s.servers.includes(from)) continue;
+      const servers = s.servers.map((n) => (n === from ? to : n));
+      await saveProfile(project.path, { ...s, servers, updatedAt: new Date().toISOString() });
+      await writeStaffSshConfig(project.path, s.id, servers);
+    }
   }
 
   async removeConnection(projectId: string, name: string): Promise<boolean | null> {
     const project = await this.project(projectId);
-    return project ? removeConnection(project.path, name) : null;
+    if (!project) return null;
+    if (await isFtpConnection(project.path, name)) return removeFtpConnection(project.path, name, this.opts.vault);
+    return removeConnection(project.path, name);
   }
 
   async testConnection(projectId: string, name: string): Promise<{ ok: boolean; message: string } | null> {
     const project = await this.project(projectId);
-    return project ? testConnection(project.path, name) : null;
+    if (!project) return null;
+    if (await isFtpConnection(project.path, name)) return testFtpConnection(project.path, name, { vault: this.opts.vault, connect: this.opts.ftpConnect });
+    return testConnection(project.path, name);
   }
 
   async listMcp(projectId: string): Promise<McpServerInfo[] | null> {
@@ -261,13 +308,15 @@ export class StaffService {
 
   /**
    * Encerra um temporário: sai do quadro (arquivado; ficha, memória e conversas ficam). Só
-   * temporários: um funcionário seu não é encerrado por outro.
+   * temporários: um funcionário seu não é encerrado por outro. Com `requestedBy` (um funcionário pela API), só quem
+   * contratou esse temporário encerra.
    */
-  async end(projectId: string, staffId: string, reason: string): Promise<StaffProfile | null> {
+  async end(projectId: string, staffId: string, reason: string, requestedBy?: string): Promise<StaffProfile | null> {
     const project = await this.project(projectId);
     const current = project ? await readProfile(project.path, staffId) : null;
     if (!project || !current) return null;
     if (!current.temporary) throw new StaffError(`${current.name} não é temporário: só você arquiva, pelo quadro`);
+    if (requestedBy !== undefined && current.hiredBy !== requestedBy) throw new StaffError(`só quem contratou ${current.name} encerra pela API`);
     const next: StaffProfile = { ...current, projectId, ended: { at: new Date().toISOString(), reason: reason.slice(0, 300) || 'encerrado' } };
     await saveProfile(project.path, next);
     await this.archive.set(`staff:${staffId}`, true);
@@ -455,8 +504,9 @@ export class StaffService {
     const [config, managers, servers, worktree, everyone] = await Promise.all([
       readConfig(),
       Promise.all(profile.reportsTo.map((id) => readProfile(project.path, id))),
-      // O ssh_config é refeito a cada sessão: vale o que está no .vps/config.json agora.
-      profile.servers.length ? writeSshConfig(project.path).then(() => listServers(project.path)) : [],
+      // O ssh_config dele é refeito a cada sessão e a cada mudança na ficha, só com as conexões dela:
+      // vale o que está no .vps/config.json agora (e tirar da ficha corta o acesso).
+      writeStaffSshConfig(project.path, profile.id, profile.servers).then(() => (profile.servers.length ? allServers(project.path, this.opts.vault) : [])),
       !profile.worktree
         ? null
         : createWorktree
@@ -477,7 +527,8 @@ export class StaffService {
       claudeConfigFile: this.opts.claudeConfigFile,
       worktree,
       servers,
-      serverKeys: profile.servers.length ? await keyFilesOf(project.path, profile.servers) : [],
+      // As chaves de todas as conexões SSH do projeto: nenhum funcionário precisa ler uma (quem lê é o ssh).
+      serverKeys: await keyFilesOf(project.path),
       librarySkills: profile.skills.length ? await librarySkillsOf(profile.skills, this.opts.skillLibraryDir) : [],
       skillLibraryDir: this.opts.skillLibraryDir,
       // A equipe dele: quem reporta a ele (os temporários encerrados já saíram do quadro, mas a ficha

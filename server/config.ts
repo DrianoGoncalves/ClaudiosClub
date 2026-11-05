@@ -33,9 +33,16 @@ const DEFAULTS: AppConfig = {
   showUserScope: false,
   // Desligada: mandar o diff para outra empresa é escolha sua.
   codexReview: false,
+  // Freela sem ficha parado há 3 dias é arquivado sozinho (0 = nunca); arquivar não apaga nada.
+  freelaArchiveDays: 3,
+  freelaAutoArchived: {},
   workspaces: [],
   projectWorkspaces: {},
 };
+
+const FREELA_DAYS = z.number().int('use um número inteiro de dias').min(0, 'mínimo 0 (nunca)').max(90, 'máximo de 90 dias');
+/** Quantas sessões arquivadas sozinhas o controle lembra (as mais recentes ficam). */
+const FREELA_RECORD_MAX = 500;
 
 const PRIORITY = z.enum(['now', 'next', 'later']);
 const UI_LEVEL = z.enum(['simple', 'advanced']);
@@ -75,6 +82,8 @@ const ConfigFile = z
     autoContinue: z.boolean().optional().catch(undefined),
     showUserScope: z.boolean().optional().catch(undefined),
     codexReview: z.boolean().optional().catch(undefined),
+    freelaArchiveDays: FREELA_DAYS.optional().catch(undefined),
+    freelaAutoArchived: z.record(z.string(), z.unknown()).optional().catch(undefined),
     workspaces: z.array(z.unknown()).optional().catch(undefined),
     projectWorkspaces: z.record(z.string(), z.unknown()).optional().catch(undefined),
   })
@@ -112,6 +121,8 @@ export const ConfigPatch = z.object({
   autoContinue: z.boolean().optional(),
   showUserScope: z.boolean().optional(),
   codexReview: z.boolean().optional(),
+  /** Dias parado até o freela (conversa sem ficha) ser arquivado sozinho; 0 = nunca. */
+  freelaArchiveDays: FREELA_DAYS.optional(),
   /** Por id de projeto: uma cor troca a da sala; null volta à padrão. Os outros projetos ficam como estão. */
   projectColors: z.record(z.string().min(1).max(200), COLOR.nullable()).optional(),
   /** Por id de projeto: só o apelido na tela (a pasta não muda); vazio ou null volta ao nome da pasta. */
@@ -163,6 +174,8 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     autoContinue: d.autoContinue ?? DEFAULTS.autoContinue,
     showUserScope: d.showUserScope ?? DEFAULTS.showUserScope,
     codexReview: d.codexReview ?? DEFAULTS.codexReview,
+    freelaArchiveDays: d.freelaArchiveDays ?? DEFAULTS.freelaArchiveDays,
+    freelaAutoArchived: readFreelaRecord(d.freelaAutoArchived),
     ...readWorkspaces(d.workspaces, d.projectWorkspaces),
   };
 }
@@ -310,18 +323,69 @@ export async function setArchived(req: z.infer<typeof ArchiveRequest>, file = CO
   });
 }
 
-/** Lê, transforma e grava de forma atômica (arquivo temporário + rename), preservando chaves desconhecidas. */
-async function mutate(
-  file: string,
-  fn: (current: Record<string, unknown>) => Record<string, unknown>,
+/** Controle do que foi arquivado sozinho: só id → updatedAt (texto); o resto some. */
+function readFreelaRecord(raw: unknown): Record<string, string> {
+  const rec = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  return Object.fromEntries(Object.entries(rec).filter((e): e is [string, string] => typeof e[1] === 'string'));
+}
+
+/**
+ * Arquiva de uma vez as sessões que a varredura de freelas escolheu (id + `updatedAt` de agora) e guarda o
+ * `updatedAt` no controle: se você desarquivar, elas só voltam a ser arquivadas com atividade nova.
+ * `existing` = ids de sessão que ainda existem; o controle esquece o resto (null = não sabemos, não poda).
+ * Sessão já arquivada (ex.: por você, nesse meio-tempo) fica como está. Não grava se nada mudou.
+ */
+export async function autoArchiveFreelas(
+  found: ReadonlyArray<{ id: string; updatedAt: string }>,
+  existing: ReadonlySet<string> | null,
+  file = CONFIG_FILE,
 ): Promise<AppConfig> {
+  return mutate(file, (current) => {
+    const parsed = ConfigFile.safeParse(current);
+    const archived = parsed.success ? (parsed.data.archived ?? {}) : {};
+    const sessions = archived.sessions ?? [];
+    const list = new Set(sessions);
+    const before = readFreelaRecord(current.freelaAutoArchived);
+    let record = Object.entries(before).filter(([id]) => !existing || existing.has(id));
+    for (const f of found) {
+      if (list.has(f.id)) continue;
+      list.add(f.id);
+      record = [...record.filter(([id]) => id !== f.id), [f.id, f.updatedAt]];
+    }
+    if (record.length > FREELA_RECORD_MAX) record = record.sort((a, b) => b[1].localeCompare(a[1])).slice(0, FREELA_RECORD_MAX);
+    const next = Object.fromEntries(record);
+    const same = list.size === sessions.length && Object.keys(next).length === Object.keys(before).length && Object.entries(next).every(([k, v]) => before[k] === v);
+    return same ? current : { ...current, archived: { ...archived, sessions: [...list] }, freelaAutoArchived: next };
+  });
+}
+
+/** Uma gravação por vez por arquivo: duas mudanças juntas (ex.: a varredura e uma tela) não se perdem nem pisam no temporário. */
+const writing = new Map<string, Promise<unknown>>();
+
+/**
+ * Lê, transforma e grava de forma atômica (arquivo temporário + rename), preservando chaves desconhecidas.
+ * Se `fn` devolve o mesmo objeto que recebeu, nada mudou e o arquivo não é gravado.
+ */
+function mutate(file: string, fn: (current: Record<string, unknown>) => Record<string, unknown>): Promise<AppConfig> {
+  const run = (writing.get(file) ?? Promise.resolve()).catch(() => {}).then(() => mutateNow(file, fn));
+  writing.set(file, run);
+  void run.then(
+    () => writing.get(file) === run && writing.delete(file),
+    () => writing.get(file) === run && writing.delete(file),
+  );
+  return run;
+}
+
+async function mutateNow(file: string, fn: (current: Record<string, unknown>) => Record<string, unknown>): Promise<AppConfig> {
   const raw = await readRaw(file);
   const current = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const next = fn(current);
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(next, null, 2) + '\n', 'utf8');
-  await fs.rename(tmp, file);
+  if (next !== current) {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify(next, null, 2) + '\n', 'utf8');
+    await fs.rename(tmp, file);
+  }
   return readConfig(file);
 }
 

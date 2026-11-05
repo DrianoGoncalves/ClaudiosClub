@@ -2,15 +2,17 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getAuthStatus } from '../server/auth';
-import { BUILT, ROOT, brokenBuild, brokenDeps, linuxAppsDir } from './lib';
+import { BUILT, ROOT, brokenBuild, brokenDeps, launcherInstalled } from './lib';
 
 // Checklist do Claudio’s Club: confere o que falta para rodar (Node 22+, Git, Claude Code, login, dependências, build
-// e o botão Iniciar) e grava scripts/status.js, que a página scripts/start.html lê. Só leitura: não instala nada e não
-// lê credencial nem valor de variável. Uso: npm run doctor
+// e, opcional, o botão Iniciar) e grava scripts/status.js, que a página scripts/start.html lê. Só leitura: não instala
+// nada e não lê credencial nem valor de variável. Uso: npm run doctor
 
 interface Check {
   id: 'node' | 'git' | 'claude' | 'login' | 'deps' | 'build' | 'launcher';
   ok: boolean;
+  /** Não impede de rodar: faltando, aparece como opcional, não como erro. */
+  optional?: boolean;
   detail: string;
 }
 
@@ -21,7 +23,7 @@ const LABELS: Record<Check['id'], string> = {
   login: 'Login no Claude Code',
   deps: 'Dependências',
   build: 'Build do app',
-  launcher: 'Botão Iniciar registrado',
+  launcher: 'Botão Iniciar (opcional)',
 };
 
 /** Primeira linha da saída de um programa do PATH; vazia se ele não existe ou falha. */
@@ -29,15 +31,6 @@ function firstLine(cmd: string, args: string[]): string {
   const r = spawnSync(cmd, args, { encoding: 'utf8', shell: process.platform === 'win32', windowsHide: true, timeout: 10_000 });
   if (r.error || r.status !== 0) return '';
   return (r.stdout ?? '').split('\n')[0]?.trim() ?? '';
-}
-
-/** O botão Iniciar (link myco://) está registrado neste sistema? */
-function launcherInstalled(): boolean {
-  if (process.platform === 'win32') {
-    return spawnSync('reg', ['query', 'HKCU\\Software\\Classes\\myco\\shell\\open\\command'], { windowsHide: true }).status === 0;
-  }
-  if (process.platform === 'linux') return fs.existsSync(path.join(linuxAppsDir(), 'claudios-url.desktop'));
-  return false;
 }
 
 async function collect(): Promise<Check[]> {
@@ -82,11 +75,12 @@ async function collect(): Promise<Check[]> {
   checks.push({
     id: 'launcher',
     ok: launcher,
+    optional: true,
     detail: launcher
       ? 'myco:// registrado'
       : process.platform === 'darwin'
         ? 'sem atalho no macOS: use npm run daily:start'
-        : 'registro não encontrado',
+        : 'não registrado (opcional: npm run launcher)',
   });
 
   return checks;
@@ -100,10 +94,10 @@ async function main(): Promise<void> {
   fs.writeFileSync(statusFile, `window.claudioStatus = ${JSON.stringify(payload)};`, 'utf8');
 
   for (const c of checks) {
-    console.log(`${c.ok ? '✓' : '✗'} ${LABELS[c.id].padEnd(26)} ${c.detail}`);
+    console.log(`${c.ok ? '✓' : c.optional ? '–' : '✗'} ${LABELS[c.id].padEnd(26)} ${c.detail}`);
   }
-  const okCount = checks.filter((c) => c.ok).length;
-  console.log(`${okCount} de ${checks.length} ok. Gravado em ${statusFile}`);
+  const required = checks.filter((c) => !c.optional);
+  console.log(`${required.filter((c) => c.ok).length} de ${required.length} ok. Gravado em ${statusFile}`);
 }
 
 await main();

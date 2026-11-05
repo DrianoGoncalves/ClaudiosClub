@@ -98,6 +98,33 @@ export function McpIcon({ size = 18 }: { size?: number }) {
   );
 }
 
+/** Robô (cabeça com antena): os agents que a ficha indica. */
+export function AgentIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M12 8V4H8" />
+      <rect x="4" y="8" width="16" height="12" rx="2" />
+      <path d="M2 14h2" />
+      <path d="M20 14h2" />
+      <path d="M9 13v2" />
+      <path d="M15 13v2" />
+    </svg>
+  );
+}
+
+/** Brilhos (estrela de quatro pontas): as skills que a ficha indica. */
+export function SkillIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z" />
+      <path d="M5 3v4" />
+      <path d="M3 5h4" />
+      <path d="M19 17v4" />
+      <path d="M17 19h4" />
+    </svg>
+  );
+}
+
 /** Pessoa com +: contratar funcionário. */
 export function UserPlusIcon({ size = 16 }: { size?: number }) {
   return (
@@ -225,6 +252,18 @@ export function FileIcon({ size = 14 }: { size?: number }) {
     <svg width={size} height={size} aria-hidden="true" {...base}>
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
       <path d="M14 2v6h6" />
+    </svg>
+  );
+}
+
+/** Lixeira: apagar o arquivo ou a pasta selecionada na árvore. */
+export function TrashIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6M14 11v6" />
     </svg>
   );
 }

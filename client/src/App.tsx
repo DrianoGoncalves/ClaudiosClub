@@ -18,10 +18,12 @@ import type {
   UsageStop,
 } from '../../shared/model';
 import { colorCss } from '../../shared/model';
-import { api, withUsageConfirm } from './api';
+import { api, isPairingError, NEEDS_PAIRING_EVENT, PAIRED_EVENT, withUsageConfirm } from './api';
 import { BoardView } from './board/Board';
 import { boardStyle, useBoardBackground, useSystemTheme } from './board/colors';
 import { archiveKey, ghostNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
+import { seedSeenIdle } from './board/unread';
+import { PairControls } from './toolbar/PairControls';
 import { QuickJump } from './toolbar/QuickJump';
 import {
   AgentPanel,
@@ -94,14 +96,28 @@ export function App() {
     const timer = setTimeout(() => setNoticeState(null), NOTICE_MS);
     return () => clearTimeout(timer);
   }, [notice]);
+  // Navegador não pareado: uma ação recusada por isso mostra um aviso só, que sai quando outra passa. Na abertura não
+  // dá para saber: o GET não leva Origin, e sem ele o `paired` de /api/server vem falso até no navegador pareado.
+  const [needsPairing, setNeedsPairing] = useState(false);
+  useEffect(() => {
+    const show = () => setNeedsPairing(true);
+    const hide = () => setNeedsPairing(false);
+    window.addEventListener(NEEDS_PAIRING_EVENT, show);
+    window.addEventListener(PAIRED_EVENT, hide);
+    return () => {
+      window.removeEventListener(NEEDS_PAIRING_EVENT, show);
+      window.removeEventListener(PAIRED_EVENT, hide);
+    };
+  }, []);
   /** Quadro de tarefas aberto (id do projeto). */
   const [tasksFor, setTasksFor] = useState<string | null>(null);
   /** Arquivos do projeto abertos (id do projeto). */
   const [filesFor, setFilesFor] = useState<string | null>(null);
   /** Tarefa escolhida no Ctrl+K: o quadro de tarefas abre com ela selecionada. */
   const [jumpTask, setJumpTask] = useState<string | null>(null);
-  /** Conversa achada na busca do Ctrl+K: o painel do funcionário abre nela. */
-  const [jumpConversation, setJumpConversation] = useState<string | null>(null);
+  /** Conversa achada na busca do Ctrl+K (ou a do aviso): o painel do funcionário abre nela. Vale só para a seleção que a pediu. */
+  const [jumpConversation, setJumpConversation] = useState<{ node: string; sessionId: string } | null>(null);
+  const jumpTo = jumpConversation?.node === selectedId ? jumpConversation.sessionId : null;
   /** Clique num aviso da caixa: o balão da conversa a mostrar (largado quando o chat o atende). */
   const [jumpTarget, setJumpTarget] = useState<ChatFocus | null>(null);
   const jumpNonce = useRef(0);
@@ -110,6 +126,8 @@ export function App() {
   const clearJumpTarget = useCallback(() => setJumpTarget(null), []);
   useEffect(() => {
     if (selectedId !== jumpSelection.current) setJumpTarget(null);
+    // Fechou o painel ou abriu outro: o próximo clique no cartão abre a conversa mais recente, não a pedida antes.
+    setJumpConversation((j) => (j && j.node !== selectedId ? null : j));
   }, [selectedId]);
   // O painel pode nunca atender o alvo (não montou, a conversa não tem o balão): não fica guardado para depois.
   useEffect(() => {
@@ -131,6 +149,8 @@ export function App() {
   const load = useCallback(() => {
     api.board().then(
       (b) => {
+        // Antes de desenhar: na primeira vez neste navegador, quem já está parado não acende a bolinha.
+        seedSeenIdle(b.live);
         setBoard(b);
         setError(null);
       },
@@ -166,7 +186,7 @@ export function App() {
     // faz um segundo clique no mesmo aviso rolar de novo.
     const node = item.staffId ? staffNodeId(item.projectId, item.staffId) : item.sessionId ? ghostNodeId(item.projectId) : projectNodeId(item.projectId);
     jumpSelection.current = node;
-    setJumpConversation(item.sessionId || null);
+    setJumpConversation(item.sessionId ? { node, sessionId: item.sessionId } : null);
     setJumpTarget(
       item.sessionId
         ? { projectId: item.projectId, staffId: item.staffId, sessionId: item.sessionId, itemId: item.itemId, quote: item.quote, nonce: ++jumpNonce.current }
@@ -346,7 +366,7 @@ export function App() {
                   );
                   load();
                 },
-                (e: Error) => setNotice(t('app.linkFailed', { error: e.message }), true),
+                (e: Error) => !isPairingError(e) && setNotice(t('app.linkFailed', { error: e.message }), true),
               );
             }}
             onUnlink={({ projectId, staffId, managerId }) => {
@@ -362,7 +382,7 @@ export function App() {
                   );
                   load();
                 },
-                (e: Error) => setNotice(t('app.unlinkFailed', { error: e.message }), true),
+                (e: Error) => !isPairingError(e) && setNotice(t('app.unlinkFailed', { error: e.message }), true),
               );
             }}
           />
@@ -407,6 +427,13 @@ export function App() {
               live={board.live}
               {...projectTeam(board, costs, selection.id)}
               onOpenStaff={(staffId) => setSelectedId(staffNodeId(selection.id, staffId))}
+              onOpenSession={(sessionId) => {
+                // O mesmo painel do cartão fantasma, já nesta conversa (Trazer e Efetivar ficam por lá).
+                const node = ghostNodeId(selection.id);
+                setJumpConversation({ node, sessionId });
+                setSelectedId(node);
+              }}
+              hiddenSessions={showArchived ? undefined : new Set(archivedList ?? [])}
               cost={costs?.projects[selection.id] ?? null}
               archived={isArchived('project', selection.id)}
               onArchive={(v) => archive('project', selection.id, v)}
@@ -424,16 +451,18 @@ export function App() {
           )}
           {selection.kind === 'employee' && (
             <EmployeePanel
-              key={`${selectedId}:${jumpConversation ?? ''}`}
-              initialConversation={jumpConversation}
+              key={`${selectedId}:${jumpTo ?? ''}`}
+              initialConversation={jumpTo}
               focus={jumpTarget}
               onFocusDone={clearJumpTarget}
+              inbox={inbox.items}
               session={
                 selection.session && {
                   ...selection.session,
                   live: board.live.find((l) => l.sessionId === selection.session!.id) ?? selection.session.live,
                 }
               }
+              live={board.live}
               staff={selection.staff}
               managers={board.staff.filter((s) => s.projectId === selection.projectId && selection.staff?.reportsTo.includes(s.id))}
               project={board.projects.find((p) => p.id === selection.projectId) ?? null}
@@ -523,8 +552,9 @@ export function App() {
               return;
             }
             setTasksFor(null);
-            setJumpConversation(t.kind === 'staff' ? (t.sessionId ?? null) : null);
-            setSelectedId(t.kind === 'staff' ? staffNodeId(t.projectId, t.staffId) : projectNodeId(t.projectId));
+            const node = t.kind === 'staff' ? staffNodeId(t.projectId, t.staffId) : projectNodeId(t.projectId);
+            setJumpConversation(t.kind === 'staff' && t.sessionId ? { node, sessionId: t.sessionId } : null);
+            setSelectedId(node);
           }}
         />
       )}
@@ -591,7 +621,20 @@ export function App() {
           }}
         />
       )}
-      {notice && (
+      {needsPairing ? (
+        <div className="notice notice-pair" role="alert">
+          <strong>{t('toolbar.pairNotice')}</strong>
+          <PairControls
+            onPaired={() => {
+              setNeedsPairing(false);
+              setNotice(t('toolbar.pairPaired'));
+            }}
+          />
+          <button className="drawer-close" onClick={() => setNeedsPairing(false)} aria-label={t('app.closeNotice')}>
+            ×
+          </button>
+        </div>
+      ) : notice && (
         <div className="notice" role="status">
           <span>{notice.text}</span>
           <button className="drawer-close" onClick={() => setNotice(null)} aria-label={t('app.closeNotice')}>

@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AccountUsage, Project, StaffProfile } from '../shared/model';
 import { usageStopHit, UsageStopError } from '../server/usageStop';
 import { ensureWorktree, worktreeFor } from '../server/staff/worktree';
@@ -101,6 +101,7 @@ describe('ficha', () => {
     expect(hiring).toContain('reportsTo: ["ana-1a2b"]');
     expect(hiring).toMatch(/use subagents[\s\S]*só para um papel contínuo/);
     expect(hiring).toContain('/api/projects/proj-x/staff/<id dele>/done');
+    expect(hiring).toContain('"requestedBy": "ana-1a2b"');
     // O próprio temporário sabe que é temporário.
     expect(renderFicha(profile({ temporary: true }), ctx)).toContain('Você é temporário');
     expect(md).not.toContain('Você é temporário');
@@ -227,14 +228,15 @@ describe('infra: servidores por SSH', () => {
       }),
     );
     const list = await listServers(path.join(dir, 'proj'));
-    expect(list).toEqual([{ name: 'prod', source: 'vps', host: 'vps-a.example.com', remoteRoot: '/var/www/app' }]);
+    expect(list).toEqual([{ name: 'prod', source: 'vps', protocol: 'ssh', host: 'vps-a.example.com', remoteRoot: '/var/www/app' }]);
     expect(JSON.stringify(list)).not.toMatch(/chave|deploy|identity/i);
   });
 
   it('a ficha traz as conexões e as regras; a linha de comando bloqueia chaves e .env', () => {
     const p = profile({ servers: ['prod', 'sumiu'] });
-    const md = renderFicha(p, { ...ctx, servers: [{ name: 'prod', source: 'vps', host: 'vps-a', remoteRoot: '/var/www/app' }] });
-    for (const part of ['## Servidores', '- `prod`: vps-a', '/var/www/app', 'ssh -F "', '.vps/ssh_config" <conexão>', 'não existe mais no projeto', 'Nunca, sem pedir antes']) {
+    const md = renderFicha(p, { ...ctx, servers: [{ name: 'prod', source: 'vps', protocol: 'ssh', host: 'vps-a', remoteRoot: '/var/www/app' }] });
+    // O ssh_config é o dele (só as conexões da ficha), não um com todas as do projeto.
+    for (const part of ['## Servidores', '- `prod`: vps-a', '/var/www/app', 'ssh -F "', '.vps/ssh_config.ana-1a2b" <conexão>', 'não existe mais no projeto', 'Nunca, sem pedir antes']) {
       expect(md).toContain(part);
     }
     expect(md).not.toContain('skill `vps`');
@@ -438,6 +440,13 @@ describe('StaffService', () => {
 
     // Você não é encerrado por outro; o temporário é.
     await expect(svc.end('proj-id', boss.id, 'x')).rejects.toThrow(/não é temporário/);
+    // Pela API (requestedBy), só quem contratou encerra: outro funcionário, não.
+    const { profile: other } = (await svc.hire('proj-id', { ...input, name: 'Outra', canHire: true, launch: false }, true))!;
+    await expect(svc.end('proj-id', r.profile.id, 'x', other.id)).rejects.toThrow(/só quem contratou/);
+    await expect(svc.end('proj-id', r.profile.id, 'x', r.profile.id)).rejects.toThrow(/só quem contratou/);
+    expect(archived.has(`staff:${r.profile.id}`)).toBe(false);
+    expect((await svc.end('proj-id', r.profile.id, 'pelo gestor', boss.id))?.ended).toMatchObject({ reason: 'pelo gestor' });
+    archived.delete(`staff:${r.profile.id}`);
     const ended = (await svc.end('proj-id', r.profile.id, 'entregou o mapa'))!;
     expect(ended.ended).toMatchObject({ reason: 'entregou o mapa' });
     expect(archived.has(`staff:${r.profile.id}`)).toBe(true);
@@ -707,6 +716,35 @@ describe('StaffService', () => {
       const file = path.join(root, 'atomic', 'f.json');
       await Promise.all(Array.from({ length: 20 }, (_, i) => writeAtomic(file, `${i}\n`)));
       expect(await fs.readFile(file, 'utf8')).toMatch(/^\d+\n$/);
+      expect((await fs.readdir(path.dirname(file))).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+    });
+
+    it('writeAtomic: rename que falha sempre (EPERM) relança o erro original e não deixa .tmp', async () => {
+      const file = path.join(root, 'atomic-fail', 'f.json');
+      const eperm = Object.assign(new Error('EPERM simulado'), { code: 'EPERM' });
+      const spy = vi.spyOn(fs, 'rename').mockRejectedValue(eperm);
+      try {
+        await expect(writeAtomic(file, 'x\n')).rejects.toBe(eperm);
+        expect(spy.mock.calls.length).toBeGreaterThan(1); // tentou de novo
+      } finally {
+        spy.mockRestore();
+      }
+      expect((await fs.readdir(path.dirname(file))).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+      // a falha não trava a fila: a próxima gravação funciona
+      await writeAtomic(file, 'ok\n');
+      expect(await fs.readFile(file, 'utf8')).toBe('ok\n');
+    });
+
+    it('writeAtomic: erro que não é de arquivo ocupado (ENOENT) sobe na hora, sem repetir', async () => {
+      const file = path.join(root, 'atomic-enoent', 'f.json');
+      const enoent = Object.assign(new Error('ENOENT simulado'), { code: 'ENOENT' });
+      const spy = vi.spyOn(fs, 'rename').mockRejectedValue(enoent);
+      try {
+        await expect(writeAtomic(file, 'x\n')).rejects.toBe(enoent);
+        expect(spy).toHaveBeenCalledTimes(1);
+      } finally {
+        spy.mockRestore();
+      }
       expect((await fs.readdir(path.dirname(file))).filter((n) => n.endsWith('.tmp'))).toEqual([]);
     });
 

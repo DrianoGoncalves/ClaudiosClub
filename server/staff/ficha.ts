@@ -1,6 +1,6 @@
 import { PLAYBOOK_AGENTS } from '../../shared/agentPresets';
-import { TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
-import { sshConfigFile } from './servers';
+import { FTP_MCP_NAME, TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
+import { staffSshConfigFile } from './servers';
 
 // A ficha vira um arquivo Markdown dentro do projeto (.myco/staff/<id>.md), que a sessão lê
 // no começo. Pela linha de comando só vai uma identidade curta apontando para ela: o CLI não
@@ -70,38 +70,71 @@ const REMOTE_TOOLS = ['ssh', 'ssh.exe', 'scp', 'scp.exe', 'sftp', 'sftp.exe', 'r
  * afins (segredos de produção costumam estar neles) e os arquivos das chaves das conexões dele.
  * É uma barreira a mais, não a única: quem tem terminal ainda consegue ler um arquivo por outro
  * comando; por isso a chave deve ter senha (ssh-agent) ou um usuário sem root no servidor.
+ * O cofre de senhas (~/.myco/secrets, onde também fica a chave do pareamento do navegador, pairing.key) fica
+ * bloqueado para todos. `ftpServers`: as conexões da ficha que
+ * são FTP (usadas pelo MCP do Claudio’s Club): só elas não liberam o ssh.
  */
-export function secretDenyRules(p: StaffProfile, keyFiles: string[] = []): string[] {
-  const always = ['Read(~/.ssh/**)', 'Edit(~/.ssh/**)', 'Write(~/.ssh/**)', 'Read(**/.vps/**)', 'Edit(**/.vps/**)', 'Write(**/.vps/**)'];
-  if (!p.servers.length) return [...always, ...REMOTE_TOOLS.flatMap((t) => [`Bash(${t}:*)`, `PowerShell(${t}:*)`])];
+export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpServers: string[] = []): string[] {
+  const always = [
+    'Read(~/.ssh/**)',
+    'Edit(~/.ssh/**)',
+    'Write(~/.ssh/**)',
+    'Read(**/.vps/**)',
+    'Edit(**/.vps/**)',
+    'Write(**/.vps/**)',
+    'Read(~/.myco/secrets/**)',
+    'Edit(~/.myco/secrets/**)',
+    'Write(~/.myco/secrets/**)',
+  ];
   // No Windows as regras usam o caminho em forma POSIX: C:/x → //c/x. Com espaço, a lista da linha
   // de comando quebraria a regra: fica só o bloqueio por nome (*.pem, *.key) e o de ~/.ssh.
   const keys = keyFiles
     .map((f) => f.replace(/\\/g, '/').replace(/^([A-Za-z]):\//, (_, d: string) => `//${d.toLowerCase()}/`))
     .filter((f) => !/\s/.test(f))
     .map((f) => `Read(${f.startsWith('//') ? f : `/${f}`})`);
-  return [...always, 'Read(**/.env)', 'Read(**/.env.*)', 'Read(**/*.pem)', 'Read(**/*.key)', 'Edit(**/.env)', 'Edit(**/.env.*)', ...keys];
+  const remote = REMOTE_TOOLS.flatMap((t) => [`Bash(${t}:*)`, `PowerShell(${t}:*)`]);
+  if (!p.servers.length) return [...always, ...remote, ...keys];
+  const secrets = ['Read(**/.env)', 'Read(**/.env.*)', 'Read(**/*.pem)', 'Read(**/*.key)', 'Edit(**/.env)', 'Edit(**/.env.*)'];
+  const ssh = p.servers.some((s) => !ftpServers.includes(s));
+  return [...always, ...secrets, ...keys, ...(ssh ? [] : remote)];
 }
+
+const FTP_TOOLS = ['ftp_list', 'ftp_download', 'ftp_upload', 'ftp_delete', 'ftp_rename', 'ftp_mkdir'];
 
 function serversSection(p: StaffProfile, ctx: FichaContext): string {
   if (!p.servers.length) return '';
-  const config = sshConfigFile(ctx.projectPath).replace(/\\/g, '/');
+  const config = staffSshConfigFile(ctx.projectPath, p.id).replace(/\\/g, '/');
   const known = new Map((ctx.servers ?? []).map((s) => [s.name, s]));
+  const ftpOf = (s: ServerInfo | undefined) => s?.source === 'ftp';
   const lines = p.servers.map((name) => {
     const s = known.get(name);
     if (!s) return `- \`${name}\` (a conexão não existe mais no projeto: avise o usuário antes de tentar)`;
-    return `- \`${name}\`: ${s.host}${s.remoteRoot ? `, projeto em \`${s.remoteRoot}\`` : ''}`;
+    const kind = s.protocol === 'ftps' ? ' (FTPS)' : s.protocol === 'ftp' ? ' (FTP sem criptografia: não envie segredos por ela)' : '';
+    return `- \`${name}\`${kind}: ${s.host}${s.remoteRoot ? `, projeto em \`${s.remoteRoot}\`` : ''}`;
   });
+  const hasFtp = p.servers.some((n) => ftpOf(known.get(n)));
+  // Conexão que sumiu conta como SSH: o texto avisa para não tentar.
+  const hasSsh = p.servers.some((n) => !ftpOf(known.get(n)));
   const vps = p.skills.includes('vps') ? ' Ou a skill `vps` (push, pull, status), que usa as mesmas conexões.' : '';
+  const tools = FTP_TOOLS.map((t) => `\`mcp__${FTP_MCP_NAME}__${t}\``).join(', ');
   return [
     '## Servidores',
     'Você pode acessar só estas conexões do projeto, sempre pelo nome:',
     lines.join('\n'),
     [
       '### Acesso seguro',
-      `- Comando remoto, um por vez: \`ssh -F "${config}" <conexão> "<comando>"\`. O arquivo é gerado pelo Claudio’s Club: não leia, não edite e não use outra configuração.`,
-      `- Arquivos: \`scp -F "${config}" <local> <conexão>:<caminho>\` para enviar (com backup do que for sobrescrito no servidor) e o contrário para baixar.${vps}`,
-      '- A chave fica no computador do usuário e é o Claudio’s Club que aponta para ela. Você nunca lê, pede, copia, mostra ou gera chaves e senhas. Se a conexão falhar por autenticação, pare e avise o usuário: não tente outra forma.',
+      ...(hasSsh
+        ? [
+            `- SSH, comando remoto, um por vez: \`ssh -F "${config}" <conexão> "<comando>"\`. O arquivo é gerado pelo Claudio’s Club só com as suas conexões: não leia, não edite e não use outra configuração.`,
+            `- SSH, arquivos: \`scp -F "${config}" <local> <conexão>:<caminho>\` para enviar (com backup do que for sobrescrito no servidor) e o contrário para baixar.${vps}`,
+          ]
+        : []),
+      ...(hasFtp
+        ? [
+            `- FTP: só pelas ferramentas ${tools}, sempre com \`connection\` = o nome da conexão. Caminho local relativo ao projeto; o remoto fica preso à pasta da conexão. Antes de substituir ou apagar no servidor, baixe uma cópia (backup). Não use outro cliente FTP (curl, ftp, WinSCP).`,
+          ]
+        : []),
+      '- A chave e a senha ficam no computador do usuário e é o Claudio’s Club que as usa. Você nunca lê, pede, procura, copia, mostra ou gera chaves e senhas. Se a conexão falhar por autenticação, pare e avise o usuário: não tente outra forma.',
       '- Nunca exiba no chat o conteúdo de `.env`, chaves, tokens ou senhas, nem os grave na memória. Para saber se um segredo local e o do servidor batem, compare só o hash (`sha256sum` no servidor, `Get-FileHash` aqui).',
       '- Um servidor pode ter mais de um projeto: confirme a pasta e o serviço do projeto antes de agir, e não mexa nos outros sites.',
     ].join('\n'),
@@ -304,7 +337,7 @@ function hiringSection(p: StaffProfile, ctx: FichaContext): string {
     'Para trabalho pontual (uma tarefa, uma busca, uma revisão), use subagents (ferramenta Agent): terminam junto com o trabalho e custam menos. Contrate um subfuncionário só para um papel contínuo, que precise de memória e conversa próprias, e só com o ok do usuário: diga em uma frase o papel e por que um subagent não basta.',
     `Para contratar: POST ${api}/staff com o cabeçalho \`x-myco: 1\` e um JSON com name, role, mission, firstTask, autonomy (plan, manual, acceptEdits ou auto), reportsTo: ["${p.id}"] e launch: true. Ele abre numa conversa do Claudio’s Club; a resposta traz o id dele (profile.id) e a conversa (launch.sessionId).`,
     `Para mandar outra mensagem a ele: POST ${api}/chat/send com {"sessionId", "staffId", "text"} (mesmo cabeçalho).`,
-    `Quem você contrata é temporário. Quando o trabalho dele terminar, encerre: POST ${api}/staff/<id dele>/done com {"note": "o que ele entregou"}. Ele sai do quadro (nada é apagado); parado há ${TEMP_IDLE_DAYS} dias, sai sozinho. Só o usuário efetiva.`,
+    `Quem você contrata é temporário. Quando o trabalho dele terminar, encerre: POST ${api}/staff/<id dele>/done com {"note": "o que ele entregou", "requestedBy": "${p.id}"} (mesmo cabeçalho; só vale para quem você contratou). Ele sai do quadro (nada é apagado); parado há ${TEMP_IDLE_DAYS} dias, sai sozinho. Só o usuário efetiva.`,
     'Você não pode dar a um subfuncionário mais autonomia do que a sua.',
   ]
     .filter(Boolean)
@@ -356,8 +389,12 @@ export interface ClaudeArgsOptions {
   forkFrom?: string;
   /** Pastas fora do diretório de trabalho que a sessão pode ler (a ficha, quando roda numa worktree). */
   addDirs?: string[];
-  /** Chaves SSH das conexões da ficha, para bloquear a leitura (ver secretDenyRules). */
+  /** Chaves SSH das conexões do projeto, para bloquear a leitura (ver secretDenyRules). */
   keyFiles?: string[];
+  /** Conexões da ficha que são FTP (ver secretDenyRules). */
+  ftpServers?: string[];
+  /** false: o mcpConfig só acrescenta (o MCP de FTP numa ficha sem lista de MCPs); padrão true (só os da ficha). */
+  strictMcp?: boolean;
   /** Plugin da sessão com as skills da biblioteca que a ficha tem (ver server/skillLibrary.ts). */
   pluginDir?: string | null;
 }
@@ -387,8 +424,8 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   if (o.addDirs?.length) args.push('--add-dir', ...o.addDirs);
   // Explícito nos dois sentidos: sem a opção, nem a configuração do usuário liga o Chrome.
   args.push(p.browser ? '--chrome' : '--no-chrome');
-  args.push('--disallowedTools', secretDenyRules(p, o.keyFiles).join(','));
-  if (o.mcpConfigPath) args.push('--mcp-config', o.mcpConfigPath, '--strict-mcp-config');
+  args.push('--disallowedTools', secretDenyRules(p, o.keyFiles, o.ftpServers).join(','));
+  if (o.mcpConfigPath) args.push('--mcp-config', o.mcpConfigPath, ...(o.strictMcp === false ? [] : ['--strict-mcp-config']));
   return args;
 }
 

@@ -1,8 +1,9 @@
 import { Handle, Position, type Node, type NodeProps, type NodeTypes } from '@xyflow/react';
 import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { PLAYBOOK_AGENTS } from '../../../shared/agentPresets';
 import { colorCss, type GitState, type LiveSession, type StaffProfile } from '../../../shared/model';
 import { employeeName, ENTRYPOINT_LABEL, formatAgo, formatShare, initials, STATUS_LABEL } from '../format';
-import { BranchIcon, ChromeIcon, GhostIcon, TasksIcon, UserPlusIcon } from '../icons';
+import { AgentIcon, BranchIcon, ChromeIcon, GhostIcon, McpIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { t } from '../i18n';
 import {
   HANDLE,
@@ -19,6 +20,7 @@ import {
   type UserNodeData,
 } from './layout';
 import { Sketch, type SketchVariant } from './sketch';
+import { showsStatus, useSeenIdle } from './unread';
 
 function Frame(props: {
   id: string;
@@ -183,6 +185,36 @@ function ProjectNode({ id, data, selected, width }: NodeProps<Node<ProjectNodeDa
   );
 }
 
+export type StaffTool = 'worktree' | 'browser' | 'canHire' | 'agents' | 'skills' | 'mcps';
+
+const TOOL_ICON: Record<StaffTool, typeof BranchIcon> = {
+  worktree: BranchIcon,
+  browser: ChromeIcon,
+  canHire: UserPlusIcon,
+  agents: AgentIcon,
+  skills: SkillIcon,
+  mcps: McpIcon,
+};
+
+/**
+ * O que a ficha libera, na ordem dos ícones do cartão, com o texto do tooltip. Agents: os da ficha e os do
+ * roteiro dela, como a ficha mostra ao funcionário. MCPs: null = todos os configurados; lista vazia = nenhum.
+ */
+export function staffTools(staff: StaffProfile): Array<{ tool: StaffTool; label: string }> {
+  const agents = [...new Set([...(staff.playbook ? PLAYBOOK_AGENTS[staff.playbook] : []), ...staff.agents])];
+  const tools: Array<{ tool: StaffTool; label: string } | false> = [
+    staff.worktree && { tool: 'worktree', label: t('board.toolWorktree') },
+    staff.browser && { tool: 'browser', label: t('board.toolBrowser') },
+    staff.canHire && { tool: 'canHire', label: t('board.toolCanHire') },
+    agents.length > 0 && { tool: 'agents', label: t('board.toolAgents', { list: agents.join(', ') }) },
+    staff.skills.length > 0 && { tool: 'skills', label: t('board.toolSkills', { list: staff.skills.join(', ') }) },
+    staff.mcps === null
+      ? { tool: 'mcps', label: t('board.toolMcpsAll') }
+      : staff.mcps.length > 0 && { tool: 'mcps', label: t('board.toolMcps', { list: staff.mcps.join(', ') }) },
+  ];
+  return tools.filter((x) => x !== false);
+}
+
 function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, 'employee'>>) {
   const { session: s, staff } = data;
   const ghost = data.ghost;
@@ -192,6 +224,8 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
   // Esperando você (amarelo) vale mesmo com a sessão parada: é o que a caixa "precisa de mim" mostra.
   const waiting = data.needsYou;
   const state = data.archived ? 'is-archived' : waiting ? 'is-waiting' : busy ? 'is-busy' : live ? '' : 'is-away';
+  const tools = staff ? staffTools(staff) : [];
+  const seen = useSeenIdle();
   return (
     <Frame
       id={id}
@@ -249,30 +283,23 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
                 </Fragment>
               ))}
           </div>
-          {/* Ferramentas que a ficha libera, em ícones pequenos abaixo do cargo. */}
-          {staff && (staff.worktree || staff.browser || staff.canHire) && (
+          {/* Ferramentas que a ficha libera, em ícones pequenos abaixo do cargo; os nomes vão no tooltip. */}
+          {tools.length > 0 && (
             <div className="bn-tools">
-              {staff.worktree && (
-                <span title={t('board.toolWorktree')} aria-label={t('board.toolWorktree')} role="img">
-                  <BranchIcon size={16} />
-                </span>
-              )}
-              {staff.browser && (
-                <span title={t('board.toolBrowser')} aria-label={t('board.toolBrowser')} role="img">
-                  <ChromeIcon size={16} />
-                </span>
-              )}
-              {staff.canHire && (
-                <span title={t('board.toolCanHire')} aria-label={t('board.toolCanHire')} role="img">
-                  <UserPlusIcon size={16} />
-                </span>
-              )}
+              {tools.map(({ tool, label }) => {
+                const Icon = TOOL_ICON[tool];
+                return (
+                  <span key={tool} title={label} aria-label={label} role="img">
+                    <Icon size={16} />
+                  </span>
+                );
+              })}
             </div>
           )}
         </div>
       </div>
-      {/* Só a bolinha no canto; o texto do status aparece ao passar o mouse. */}
-      {live && (
+      {/* Só a bolinha no canto; o texto do status aparece ao passar o mouse. Ocioso, só até você ver a conversa. */}
+      {live && showsStatus(seen, live) && (
         <span className="bn-status">
           <span className="bn-status-label">
             {busy ? <span className="bn-working">{t('board.working')}</span> : (STATUS_LABEL[live.status ?? ''] ?? live.status)}
@@ -401,9 +428,11 @@ function GitBadge({ git }: { git: GitState }) {
 }
 
 function LiveDots({ live, awaiting }: { live: LiveSession[]; awaiting: number }) {
+  const seen = useSeenIdle();
   return (
     <div className="bn-live" title={live.map((s) => `${s.name ?? s.sessionId.slice(0, 8)}: ${STATUS_LABEL[s.status ?? ''] ?? s.status}`).join('\n')}>
-      {live.map((s) => (
+      {/* Ocioso só até você ver a conversa, como no cartão; a conta segue com todas as abertas. */}
+      {live.filter((s) => showsStatus(seen, s)).map((s) => (
         <span key={s.sessionId} className={`dot dot-${s.status ?? 'unknown'}`} />
       ))}
       <span>{awaiting > 0 ? t('board.awaitingYou', { n: awaiting }) : t('board.liveCount', { n: live.length })}</span>

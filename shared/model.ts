@@ -268,6 +268,16 @@ export interface AppConfig {
    * ligar; desligada, o Claudio’s Club nem chama o `codex` (ver server/adapters/codex.ts).
    */
   codexReview: boolean;
+  /**
+   * Freela (conversa sem ficha) não efetivado e parado há esta quantidade de dias é arquivado sozinho
+   * (ver server/freelaSweep.ts). Inteiro de 0 a 90; 0 = nunca. Padrão 3.
+   */
+  freelaArchiveDays: number;
+  /**
+   * Controle da varredura acima: sessão arquivada sozinha → `updatedAt` dela naquele momento. Se você
+   * desarquivar, ela só é arquivada de novo depois de atividade nova (o `updatedAt` muda). Não é para editar.
+   */
+  freelaAutoArchived: Record<string, string>;
   /** Workspaces: abas do quadro que agrupam os projetos como você quiser (cliente, área, tipo…). */
   workspaces: Workspace[];
   /** Workspace de cada projeto, por id de projeto; sem entrada = sem workspace. */
@@ -408,6 +418,22 @@ export interface AuthStatus {
   checkedAt: string;
 }
 
+/** Anexo do projeto: arquivo guardado em `<projeto>/.myco/attachments/` (sem subpastas). */
+export interface ProjectAttachment {
+  name: string;
+  size: number;
+  mtimeMs: number;
+  /** Tipo MIME inferido pela extensão (`application/octet-stream` se desconhecida). */
+  type: string;
+  /** Raster (png, jpg, gif, webp): o download pode ser mostrado inline como pré-visualização. */
+  previewable: boolean;
+}
+
+/** Resposta do envio: `name` pode diferir do pedido (nome limpo ou com sufixo " (2)"). */
+export interface ProjectAttachmentUpload extends ProjectAttachment {
+  renamed: boolean;
+}
+
 /** Nível de autonomia da ficha → `--permission-mode` do Claude Code. */
 export type Autonomy = 'plan' | 'manual' | 'acceptEdits' | 'auto' | 'bypassPermissions';
 
@@ -462,6 +488,8 @@ export interface Task {
   reviewerId?: string | null;
   /** Rodadas de revisão automática já pedidas (no máximo 3). */
   reviewRounds?: number;
+  /** Quando a rede de segurança retomou a conversa que parou no meio do turno (uma vez só; ver TaskService.tick). */
+  resumedAt?: string | null;
   /** Deploy pedido ao funcionário de infra. */
   deploy?: TaskHandoff | null;
   /** A worktree foi mesclada no projeto. */
@@ -599,7 +627,7 @@ export interface StaffProfile {
   playbook: Playbook | null;
   /** Trabalha numa worktree git própria (escritores em paralelo sem pisar um no outro). */
   worktree: boolean;
-  /** Servidores (nomes de ServerInfo) que pode acessar por SSH; vazio = nenhum. */
+  /** Servidores (nomes de ServerInfo) que pode acessar, por SSH ou FTP; vazio = nenhum. */
   servers: string[];
   /** Usa o seu Chrome pela extensão Claude in Chrome (`--chrome`). */
   browser: boolean;
@@ -644,11 +672,19 @@ export interface McpServerInfo {
   transport: string | null;
 }
 
-/** Servidor que um funcionário pode acessar: uma conexão completa do projeto (sem usuário nem chave). */
+/** `ssh` = .vps/config.json (chave); `ftps` = FTP com TLS explícito; `ftp` = FTP puro, sem criptografia. */
+export type ConnectionProtocol = 'ssh' | 'ftps' | 'ftp';
+
+/**
+ * Servidor que um funcionário pode acessar: uma conexão completa do projeto (sem usuário, chave nem senha).
+ * SSH: completa = com usuário e chave. FTP: completa = com senha no cofre.
+ */
 export interface ServerInfo {
-  /** Nome da conexão no .vps/config.json do projeto. */
+  /** Nome da conexão (.vps/config.json para SSH, .vps/ftp.json para FTP); único entre os dois. */
   name: string;
-  source: 'vps';
+  /** `vps` = SSH (.vps/config.json); `ftp` = FTP/FTPS (.vps/ftp.json). */
+  source: 'vps' | 'ftp';
+  protocol: ConnectionProtocol;
   /** Endereço do servidor. */
   host: string;
   /** Pasta do projeto no servidor. */
@@ -683,6 +719,7 @@ export interface ServerAccess {
  * mesmo formato da skill vps). O conteúdo da chave nunca é lido: só o caminho.
  */
 export interface ProjectConnection {
+  protocol: 'ssh';
   name: string;
   host: string;
   port: number;
@@ -693,6 +730,43 @@ export interface ProjectConnection {
   complete: boolean;
   /** O arquivo da chave existe nesta máquina. */
   keyFound: boolean;
+}
+
+/**
+ * Conexão FTP do projeto (`.vps/ftp.json`, fora do git). A senha fica no cofre do sistema
+ * (`~/.myco/secrets`) e nunca volta: a tela só sabe se ela existe.
+ */
+export interface FtpConnection {
+  /** `ftps` = TLS explícito (padrão); `ftp` = sem criptografia (a senha e os arquivos passam abertos). */
+  protocol: 'ftps' | 'ftp';
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  /** Pasta onde o funcionário fica preso no servidor; null = sem limite (a pasta de login). */
+  remoteRoot: string | null;
+  hasPassword: boolean;
+}
+
+/** Nome do MCP de FTP na sessão do funcionário: as ferramentas aparecem como `mcp__myco-ftp__ftp_*`. */
+export const FTP_MCP_NAME = 'myco-ftp';
+
+/** Item de `POST /api/projects/:id/connections/list`: SSH e FTP juntos, pelo `protocol`. */
+export type AnyConnection = ProjectConnection | FtpConnection;
+
+/** Corpo de `POST /api/projects/:id/connections/ftp` (criar ou editar). */
+export interface FtpConnectionInput {
+  name: string;
+  protocol: 'ftps' | 'ftp';
+  host: string;
+  /** Padrão 21. */
+  port?: number;
+  user: string;
+  remoteRoot?: string | null;
+  /** Obrigatória ao criar; na edição, ausente ou vazia mantém a que está no cofre. */
+  password?: string;
+  /** A conexão que está sendo editada (renomear leva a senha e o acesso nas fichas). */
+  originalName?: string;
 }
 
 /** Pré-requisitos do Claude in Chrome nesta máquina; null = não dá para conferir neste sistema. */
@@ -992,4 +1066,32 @@ export interface UpdateStatus {
   error: string | null;
   /** Rodando com o vigia: atualizar já reinicia sozinho (só na resposta da API). */
   daemon?: boolean;
+}
+
+/**
+ * O que está no disco e ainda não está no ar (server/pendingRestart.ts). O vigia não reinicia por mudança de código:
+ * isso só entra pelo botão Reiniciar. `server`: código do servidor (server/, shared/, scripts/ que ele importa, o
+ * package-lock ou o pacote dist/server.mjs refeito); `client`: a tela (client/, shared/, vite.config.ts, o lock);
+ * `ftpMcp`: o pacote do MCP de FTP dos funcionários.
+ */
+export type PendingReason = 'server' | 'client' | 'ftpMcp';
+
+export interface PendingRestart {
+  /** Há mudança que só entra reiniciando. */
+  pendingRestart: boolean;
+  /** Por quê; vazio quando `pendingRestart` é false. */
+  pendingReasons: PendingReason[];
+}
+
+/** GET /api/server: o próprio servidor do Claudio’s Club, para Parar/Reiniciar no config. */
+export interface AppServerInfo extends PendingRestart {
+  /** Rodando pelo vigia: há "Reiniciar". */
+  daemon: boolean;
+  /** Quem pediu é um navegador pareado (sem isso, as ações recusam e o config mostra "Parear este navegador"). */
+  paired: boolean;
+  pid: number;
+  port: number;
+  startedAt: string;
+  /** Conversas trabalhando agora (o reinício as corta). */
+  working: { busy: number; background: number };
 }

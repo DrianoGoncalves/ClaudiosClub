@@ -29,6 +29,10 @@ const SAFE_ID = /^[a-z0-9-]{1,40}$/;
 const MAX_HISTORY = 30;
 /** Quantas revisões automáticas uma tarefa pede antes de ficar com você. */
 const AUTO_REVIEW_ROUNDS = 3;
+/** Conversa de tarefa parada há menos que isto não é dada como órfã (ver `orphan`). */
+const ORPHAN_MS = 2 * 60_000;
+const RESUME_TEXT =
+  'A conversa parou no meio (o Claudio’s Club reiniciou). Continue de onde parou e, ao terminar, responda com um resumo curto do que foi feito e do que falta.';
 
 export const TaskInput = z.object({
   title: z.string().trim().min(1, 'dê um título à tarefa').max(120, 'título longo demais (máx. 120)'),
@@ -258,13 +262,58 @@ export class TaskService {
     if (projectId && staffId) await this.kick(projectId, staffId);
   }
 
-  /** Rede de segurança (na subida e de tempos em tempos): quem tem fila ou ajuste esperando e está livre. */
-  async tick(): Promise<void> {
+  /**
+   * Rede de segurança (na subida e de tempos em tempos): tarefa em "fazendo" cuja conversa morreu no
+   * meio do turno (ver `orphan`), e quem tem fila ou ajuste esperando e está livre.
+   */
+  async tick(now = new Date()): Promise<void> {
     for (const projectId of await this.deps.projectIds()) {
       const tasks = (await this.list(projectId)) ?? [];
+      for (const t of tasks) if (t.status === 'doing' && t.sessionId && t.staffId) await this.orphan(projectId, t.id, t.staffId, now);
       const waiting = new Set(tasks.filter((t) => t.staffId && (t.queuedAt || t.held?.length)).map((t) => t.staffId!));
       for (const s of waiting) await this.kick(projectId, s);
     }
+  }
+
+  /**
+   * "Fazendo" com o funcionário parado (nenhuma conversa dele trabalhando), sem limite de uso nem
+   * despertador, e nada mudou há ORPHAN_MS: a conversa morreu no meio do turno (o servidor caiu) e o
+   * `onIdle` nunca vem. Na primeira vez, retoma a conversa; se morrer de novo, vai para revisão e a
+   * fila anda. Só "fazendo": em "planejando", parado pode ser só esperando a sua resposta.
+   */
+  private async orphan(projectId: string, taskId: string, staffId: string, now: Date): Promise<void> {
+    const isWorking = this.deps.isWorking;
+    if (!isWorking) return; // sem saber quem trabalha, não dá para dizer que parou
+    const freed = await this.locked(projectId, staffId, async () => {
+      const t = ((await this.list(projectId)) ?? []).find((x) => x.id === taskId);
+      if (!t?.sessionId || t.status !== 'doing' || t.staffId !== staffId || isWorking(staffId)) return false;
+      // A retomada vale para esta ida a "fazendo": se ela saiu e voltou depois, conta de novo.
+      const resumed = t.resumedAt && !t.history.some((h) => h.at > t.resumedAt! && h.status !== 'doing') ? t.resumedAt : null;
+      if (now.getTime() - Date.parse(resumed ?? t.updatedAt) < ORPHAN_MS) return false;
+      // Erro ao perguntar: não mexe (aqui, errar é mandar mensagem ou tirar de "fazendo" à toa).
+      if (await (this.deps.awaitingLimit?.(t.sessionId) ?? Promise.resolve(false)).catch(() => true)) return false;
+      if (resumed) {
+        let stopped: Task | null = null;
+        await this.change(projectId, taskId, (x) => (x.status === 'doing' ? (stopped = moved(x, 'review', 'auto', 'conversa parou sem terminar')) : x));
+        // Como numa entrega (commit e aviso ao gestor), mas sem testes nem revisão automática: está pela metade.
+        if (stopped) {
+          await this.markDelivery(projectId, stopped);
+          await this.tellManager(projectId, stopped, t.sessionId, true);
+        }
+        return true;
+      }
+      const at = now.toISOString();
+      try {
+        if (!this.deps.sendTo) throw new TaskError('sem envio para a conversa de trabalho');
+        await this.deps.sendTo(projectId, t.sessionId, staffId, RESUME_TEXT, []);
+        await this.change(projectId, taskId, (x) => noted({ ...x, resumedAt: at }, 'conversa parou sem terminar: retomada'));
+      } catch (err) {
+        // Conta como a tentativa: na próxima, sem conversa trabalhando, vai para revisão.
+        await this.change(projectId, taskId, (x) => noted({ ...x, resumedAt: at }, `conversa parou sem terminar; não deu para retomar: ${(err as Error).message}`));
+      }
+      return false;
+    });
+    if (freed) await this.kick(projectId, staffId);
   }
 
   /** Um por vez por funcionário (começar, pegar a próxima, mandar ajustes). */
@@ -568,22 +617,29 @@ export class TaskService {
    * Tarefa pedida por um gestor foi entregue: ele recebe, na conversa dele, quem entregou, o quê e
    * o resumo, para conferir.
    */
-  private async tellManager(projectId: string, task: Task, sessionId: string): Promise<void> {
+  private async tellManager(projectId: string, task: Task, sessionId: string, interrupted = false): Promise<void> {
     if (!task.requestedBy || !this.deps.notify) return;
     const who = task.staffId ? await this.deps.readProfile(projectId, task.staffId) : null;
     const name = who?.name ?? 'O funcionário';
     const summary = (this.deps.lastText?.(sessionId) ?? '').trim().slice(0, 1500);
-    const t = task.tests;
+    // Interrompida: testes guardados seriam de uma entrega anterior, não desta.
+    const t = interrupted ? undefined : task.tests;
     const tests = t
       ? t.ok
         ? `Testes (\`${t.command}\`, rodados pelo Claudio’s Club): passaram em ${Math.round(t.ms / 1000)} s. Não rode de novo.`
         : `Testes (\`${t.command}\`, rodados pelo Claudio’s Club): FALHARAM. Fim da saída:\n${t.output.slice(-800)}`
       : '';
     const text = [
-      `[MyCo] ${name} entregou a tarefa “${task.title}” (id ${task.id}, agora em revisão no quadro).`,
+      interrupted
+        ? `[MyCo] A conversa de ${name} na tarefa “${task.title}” (id ${task.id}) parou duas vezes sem terminar (o Claudio’s Club reiniciou no meio); ela foi para revisão e a fila dele andou. A entrega pode estar incompleta: confira e, se faltar algo, peça na conversa da tarefa.`
+        : `[MyCo] ${name} entregou a tarefa “${task.title}” (id ${task.id}, agora em revisão no quadro).`,
       summary ? `O que ${name} disse:\n${summary}` : `${name} não deixou resumo: veja a conversa da tarefa.`,
       tests,
-      t ? 'Confira o diff na medida do risco antes de dar como pronto.' : 'Confira (diff, testes) antes de dar como pronto.',
+      interrupted
+        ? 'Os testes não foram rodados (entrega incompleta).'
+        : t
+          ? 'Confira o diff na medida do risco antes de dar como pronto.'
+          : 'Confira (diff, testes) antes de dar como pronto.',
       'Ajuste vai para a pessoa, na conversa da tarefa dela, não refaça você.',
     ]
       .filter(Boolean)

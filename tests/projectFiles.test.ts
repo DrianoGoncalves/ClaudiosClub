@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { cleanRel, createProjectEntry, isSecretRel, listProjectTree, MAX_FILE_BYTES, parseCreateBody, parseWriteBody, ProjectFileError, readProjectFile, readProjectImageFile, writeProjectFile } from '../server/projectFiles';
+import { cleanRel, createProjectEntry, deleteProjectEntry, parseDeleteBody, isSecretRel, listProjectTree, MAX_FILE_BYTES, parseCreateBody, parseWriteBody, ProjectFileError, readProjectFile, readProjectImageFile, writeProjectFile } from '../server/projectFiles';
 
 let base: string;
 let root: string;
@@ -287,6 +287,85 @@ describe('criação', () => {
     expect(await statusOf(createProjectEntry(root, { path: 'link-fora/novo.txt', kind: 'file' }))).toBe(403);
     expect(await statusOf(createProjectEntry(root, { path: 'link-fora/sub/novo', kind: 'dir' }))).toBe(403);
     expect(await fs.readdir(outside)).toEqual(['segredo.txt']);
+  });
+});
+
+describe('exclusão', () => {
+  const exists = (p: string) => fs.lstat(p).then(() => true, () => false);
+
+  it('apaga arquivo e pasta (recursivo) e devolve quantos itens saíram', async () => {
+    await fs.mkdir(path.join(root, 'lixo', 'a', 'b'), { recursive: true });
+    await fs.writeFile(path.join(root, 'lixo', 'x.txt'), 'x');
+    await fs.writeFile(path.join(root, 'lixo', 'a', 'b', 'y.txt'), 'y');
+    await fs.writeFile(path.join(root, 'solto.txt'), 's');
+    expect(await deleteProjectEntry(root, './solto.txt')).toEqual({ path: 'solto.txt', removed: 1 });
+    expect(await exists(path.join(root, 'solto.txt'))).toBe(false);
+    expect(await deleteProjectEntry(root, 'lixo\\')).toEqual({ path: 'lixo', removed: 5 });
+    expect(await exists(path.join(root, 'lixo'))).toBe(false);
+  });
+
+  it('arquivo só-leitura também sai', async () => {
+    await fs.writeFile(path.join(root, 'ro.txt'), 'r');
+    await fs.chmod(path.join(root, 'ro.txt'), 0o444);
+    await deleteProjectEntry(root, 'ro.txt');
+    expect(await exists(path.join(root, 'ro.txt'))).toBe(false);
+  });
+
+  it('nunca a raiz; segredo, .git, node_modules, .myco e fora do projeto dão 403', async () => {
+    for (const p of ['', '.', './/']) expect(await statusOf(deleteProjectEntry(root, p)), JSON.stringify(p)).toBe(400);
+    await fs.mkdir(path.join(root, '.myco'), { recursive: true });
+    for (const p of ['.env', '.ENV.local', 'keys/server.pem', '.git', '.git/config', 'node_modules', 'node_modules/pkg', '.vps', '.myco', '.MYCO/staff', '../fora/segredo.txt', 'src/../../fora', path.join(outside, 'segredo.txt')]) {
+      expect(await statusOf(deleteProjectEntry(root, p)), p).toBe(403);
+    }
+    for (const p of ['.env', '.git/config', 'node_modules/pkg/index.js', 'keys/server.pem', '.myco']) expect(await exists(path.join(root, p)), p).toBe(true);
+    expect(await exists(path.join(outside, 'segredo.txt'))).toBe(true);
+  });
+
+  it('pasta com segredo dentro: 403 e nada sai', async () => {
+    await fs.mkdir(path.join(root, 'cfg2', 'sub'), { recursive: true });
+    await fs.writeFile(path.join(root, 'cfg2', 'a.txt'), 'a');
+    await fs.writeFile(path.join(root, 'cfg2', 'sub', '.env'), 'TOKEN=1');
+    expect(await statusOf(deleteProjectEntry(root, 'cfg2'))).toBe(403);
+    expect(await exists(path.join(root, 'cfg2', 'a.txt'))).toBe(true);
+  });
+
+  it('acima do limite de itens ou de bytes: 413 e nada sai', async () => {
+    await fs.mkdir(path.join(root, 'muito'));
+    for (let i = 0; i < 5; i++) await fs.writeFile(path.join(root, 'muito', `${i}.txt`), 'x'.repeat(10));
+    expect(await statusOf(deleteProjectEntry(root, 'muito', { maxEntries: 4 }))).toBe(413);
+    expect(await statusOf(deleteProjectEntry(root, 'muito', { maxBytes: 49 }))).toBe(413);
+    expect((await fs.readdir(path.join(root, 'muito'))).length).toBe(5);
+    expect(await deleteProjectEntry(root, 'muito', { maxEntries: 5, maxBytes: 50 })).toEqual({ path: 'muito', removed: 6 });
+  });
+
+  it('não encontrado: 404; corpo errado: 400', async () => {
+    expect(await statusOf(deleteProjectEntry(root, 'nao-existe.txt'))).toBe(404);
+    expect(await statusOf(deleteProjectEntry(root, 'nao-existe/x.txt'))).toBe(404);
+    expect(() => parseDeleteBody(null)).toThrow(ProjectFileError);
+    expect(() => parseDeleteBody({ path: 1 })).toThrow(ProjectFileError);
+    expect(parseDeleteBody({ path: 'a', x: 1 })).toEqual({ path: 'a' });
+  });
+
+  it.runIf(canLink)('link nunca é seguido: apaga só o link (arquivo, pasta e link dentro da pasta)', async () => {
+    await fs.mkdir(path.join(outside, 'alvo'), { recursive: true });
+    await fs.writeFile(path.join(outside, 'alvo', 'importante.txt'), 'fica');
+    await fs.symlink(path.join(outside, 'alvo'), path.join(root, 'link-dir'), 'junction');
+    await fs.symlink(path.join(outside, 'segredo.txt'), path.join(root, 'link-arq.txt'), 'file');
+    await fs.mkdir(path.join(root, 'com-link'));
+    await fs.symlink(path.join(outside, 'alvo'), path.join(root, 'com-link', 'dentro'), 'junction');
+
+    expect(await deleteProjectEntry(root, 'link-dir')).toEqual({ path: 'link-dir', removed: 1 });
+    expect(await deleteProjectEntry(root, 'link-arq.txt')).toEqual({ path: 'link-arq.txt', removed: 1 });
+    expect(await deleteProjectEntry(root, 'com-link')).toEqual({ path: 'com-link', removed: 2 });
+    for (const p of ['link-dir', 'link-arq.txt', 'com-link']) expect(await exists(path.join(root, p)), p).toBe(false);
+    expect(await fs.readFile(path.join(outside, 'alvo', 'importante.txt'), 'utf8')).toBe('fica');
+    expect(await fs.readFile(path.join(outside, 'segredo.txt'), 'utf8')).toBe('fora do projeto');
+  });
+
+  it.runIf(canLink)('pasta-link que sai do projeto no meio do caminho: 403 e nada sai lá fora', async () => {
+    await fs.symlink(outside, path.join(root, 'saida'), 'junction');
+    expect(await statusOf(deleteProjectEntry(root, 'saida/segredo.txt'))).toBe(403);
+    expect(await fs.readFile(path.join(outside, 'segredo.txt'), 'utf8')).toBe('fora do projeto');
   });
 });
 

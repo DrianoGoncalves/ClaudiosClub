@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { getAuthStatus } from '../server/auth';
+import { PAIR_APPROVE_PATH, PAIR_USER_CODE, pairCode, pairUrl, readOrCreatePairKey } from '../server/pairing';
 import { openTerminal } from '../server/terminal';
 import { DAEMON_BUNDLE, SERVER_BUNDLE, bundle } from './bundle';
 import {
@@ -12,11 +13,13 @@ import {
   PID_FILE,
   ROOT,
   RUN_DIR,
+  START_PAGE,
   STOP_FILE,
   TSX,
   appendLog,
   brokenDeps,
   isAlive,
+  launcherInstalled,
   modInstalled,
   openUrl,
   portFrom,
@@ -26,13 +29,16 @@ import {
 } from './lib';
 
 // Claudio’s Club no dia a dia. Uso (npm run …, ou direto com tsx):
-//   setup   prepara tudo (dependências, Claude Code, login, botões, cota) e sobe; feito para um terminal (npm run setup)
+//   setup   prepara tudo (dependências, Claude Code, login, atalho opcional, cota) e sobe; feito para um terminal (npm run setup)
 //   run     em primeiro plano: build, abre o navegador e segue no terminal até Ctrl+C (npm run daily)
 //   start   em segundo plano, sem janela, religando se cair (npm run daily:start)
 //   stop    para o vigia e tudo o que ele abriu (npm run daily:stop)
 //   status  vigia, servidor e fim do log (npm run daily:status)
 //   link    o botão Iniciar da página de início, pelo link myco:// (registrado por npm run launcher): sobe sem janela
 //           ou, se faltar algo, abre um terminal com o setup
+//   open    o atalho do menu: sobe se preciso e abre o navegador já pareado (código de uso único, ver server/pairing.ts)
+//   pair    com o código que o "Parear este navegador" mostra (npm run pair K7QX-4M2P): aprova aquela aba, em qualquer
+//           navegador. Sem código, abre o navegador padrão já pareado (no Vite: npm run pair:dev)
 // Porta: --port N, ou MYCO_PORT, ou 4848.
 
 const [action = 'status', ...rest] = process.argv.slice(2);
@@ -45,6 +51,54 @@ const isUp = () => fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortS
 /** O programa existe e responde a --version? (no Windows, o `claude` e o `npm` são .cmd: precisam do shell) */
 const has = (cmd: string) => spawnSync(cmd, ['--version'], { shell: win, stdio: 'ignore', windowsHide: true }).status === 0;
 const npm = (args: string[]) => spawnSync('npm', args, { cwd: ROOT, stdio: 'inherit', shell: win }).status === 0;
+
+/** Espera o servidor responder, até `ms`. */
+async function waitUp(ms: number): Promise<boolean> {
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(2000)) if (await isUp()) return true;
+  return isUp();
+}
+
+/**
+ * Abre o painel já pareando este navegador: o código (uso único, 2 min) vai só na URL entregue ao navegador, nunca
+ * na saída nem no log. Quem roda isto só consegue abrir uma aba no seu navegador, não levar o código.
+ */
+function openPaired(): void {
+  openUrl(pairUrl(url, pairCode(readOrCreatePairKey())));
+  appendLog('open', 'navegador aberto com um código de pareamento');
+}
+
+/**
+ * Aprova o pedido da aba que mostra `code`: a prova é um código de uso único feito com a chave (nunca impresso). Só
+ * num terminal interativo, com confirmação: um funcionário roda comandos sem terminal e não aprova o próprio pedido.
+ */
+async function approvePairing(code: string): Promise<void> {
+  // Aberto pelo botão, o terminal fecha ao sair: a mensagem fica uns segundos (o erro, até o Enter).
+  const done = async (message: string, ok: boolean) => {
+    (ok ? console.log : console.error)(message);
+    if (ok) await sleep(2500);
+    else if (process.stdin.isTTY) {
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      await rl.question('\nAperte Enter para fechar. ');
+      rl.close();
+    }
+    process.exit(ok ? 0 : 1);
+  };
+  console.log(`Pareamento do Claudio’s Club\n\n    Código: ${code.toUpperCase()}\n`);
+  console.log('Só aprove se você acabou de clicar em "Parear este navegador" e a aba mostra este mesmo código.');
+  // Padrão "não": um Enter distraído não aprova um pedido que não é seu.
+  if (!(await ask('Aprovar?', false))) {
+    return done(process.stdin.isTTY ? 'Não aprovei.' : 'Não aprovei: rode num terminal seu (interativo), não por script.', false);
+  }
+  const res = await fetch(`http://127.0.0.1:${port}${PAIR_APPROVE_PATH}`, {
+    method: 'POST',
+    headers: { 'x-myco': '1', 'x-pair-code': code, 'x-pair-proof': pairCode(readOrCreatePairKey()) },
+    signal: AbortSignal.timeout(5000),
+  }).catch(() => null);
+  const body = (await res?.json().catch(() => null)) as { error?: string } | null;
+  if (!res?.ok) return done(`Não aprovei: ${body?.error ?? 'o Claudio’s Club não respondeu'}`, false);
+  appendLog('pair', 'pedido de pareamento aprovado pelo terminal');
+  await done('Aprovado: a aba que mostrou o código fica pareada em alguns segundos.', true);
+}
 
 /** Login no Claude Code feito (ou chave de API definida)? */
 const loggedIn = async () => (await getAuthStatus({ fresh: true })).loggedIn || !!process.env.ANTHROPIC_API_KEY;
@@ -63,13 +117,14 @@ function run(): void {
     console.error('\nO build falhou; veja o erro acima.');
     process.exit(1);
   }
-  openUrl(url);
   const server = spawn(process.execPath, [SERVER_BUNDLE], {
     cwd: ROOT,
     env: { ...process.env, MYCO_PORT: String(port) },
     stdio: 'inherit',
   });
   server.on('exit', (code) => process.exit(code ?? 0));
+  // O navegador abre depois que o servidor responde: o código de pareamento só vale por 2 min.
+  void waitUp(60_000).then((up) => (up ? openPaired() : console.error(`\nO servidor não respondeu em 60 s: abra ${url} quando ele subir (npm run pair).`)));
 }
 
 /** Sem o myco-tap não há barras de cota: pergunta, no terminal, antes de subir. */
@@ -179,7 +234,7 @@ async function missingForStart(): Promise<string[]> {
 /**
  * Tudo o que falta para rodar, em ordem, num terminal: quando o botão Iniciar da página de início encontra algo
  * faltando, abre esta janela, e ela fecha sozinha quando o Claudio’s Club está no ar (a página entra nele). Sem o
- * botão registrado ainda, rode `npm run setup` uma vez.
+ * botão é opcional: `npm run setup` pergunta, ou `npm run launcher` registra.
  */
 async function setup(fromLink: boolean): Promise<void> {
   console.log('Claudio’s Club: preparando tudo para rodar.');
@@ -221,8 +276,15 @@ async function setup(fromLink: boolean): Promise<void> {
   }
   console.log('ok');
 
-  step('Botões da página de início');
-  spawnSync(process.execPath, ['--import', 'tsx', path.join(ROOT, 'scripts', 'launcher.ts')], { cwd: ROOT, stdio: 'inherit' });
+  // Opcional: o atalho e o link myco:// ficam no sistema (menu, registro). Quem já tem segue atualizado; quem não
+  // tem só ganha se pedir. Sem eles: npm run daily:start e "Parear este navegador" no config.
+  step('Atalho e botão Iniciar (opcional)');
+  const wantsLauncher =
+    launcherInstalled() ||
+    (process.platform !== 'darwin' &&
+      (await ask('Criar o atalho no menu e o link myco:// do botão Iniciar da página de início? Fica no sistema (npm run launcher:remove tira)', false)));
+  if (wantsLauncher) spawnSync(process.execPath, ['--import', 'tsx', path.join(ROOT, 'scripts', 'launcher.ts')], { cwd: ROOT, stdio: 'inherit' });
+  else console.log('sem atalho (npm run launcher cria depois)');
 
   step('Barras de cota (myco-tap)');
   await offerModInstall();
@@ -239,7 +301,7 @@ async function setup(fromLink: boolean): Promise<void> {
   await writeLogSnapshot();
   console.log(`\n\n✓ Pronto: ${url}`);
   // Pela página de início, ela mesma entra no app e esta janela fecha; pelo terminal, abrimos o navegador.
-  if (!fromLink) return openUrl(url);
+  if (!fromLink) return openPaired();
   console.log('Esta janela fecha em 5 s.');
   await sleep(5000);
 }
@@ -247,21 +309,50 @@ async function setup(fromLink: boolean): Promise<void> {
 /**
  * O botão Iniciar da página de início (myco://start). Com tudo pronto, sobe em segundo plano, sem janela; faltando
  * algo que só o setup resolve, abre um terminal com ele, que sobe no fim e fecha. myco://setup abre o terminal
- * sempre. O link não recebe nada de fora: só o nome da ação, de uma lista fixa; o resto é ignorado.
+ * sempre; myco://open faz o mesmo que o atalho (open). O link não recebe nada de fora: só o nome da ação, de uma
+ * lista fixa; o resto é ignorado. Uma página qualquer que chame myco://open só abre uma aba pareada no seu navegador
+ * (e o navegador pergunta antes): o código não volta para ela.
  */
 async function link(raw: string | undefined): Promise<void> {
   const what = (raw ?? '').replace(/^myco:\/*/i, '').split(/[/?#]/)[0]?.toLowerCase() || 'start';
-  appendLog('link', `pedido: myco://${what}`);
-  if (runningDaemon()) return start({ offerMod: false });
-  const missing = what === 'setup' ? ['pedido direto'] : await missingForStart();
+  appendLog('link', `pedido: myco://${what === 'setup' || what === 'open' ? what : 'start'}`);
+  if (what === 'open') return openPanel();
+  await bringUp(what === 'setup');
+}
+
+/** Sobe sem janela ou, faltando algo (ou com `setup`), abre o terminal do setup. Devolve como subiu. */
+async function bringUp(setupAlways: boolean): Promise<'background' | 'terminal'> {
+  if (runningDaemon()) {
+    await start({ offerMod: false });
+    return 'background';
+  }
+  const missing = setupAlways ? ['pedido direto'] : await missingForStart();
   if (missing.length) {
     appendLog('link', `falta: ${missing.join(', ')}; abrindo o terminal para preparar`);
     const r = openTerminal([process.execPath, TSX, DAILY, 'setup', '--from-link'], { title: 'Claudio’s Club - preparar', cwd: ROOT });
-    if (r.ok) return;
+    if (r.ok) return 'terminal';
     // Sem terminal para mostrar: sobe assim mesmo e registra o motivo.
     appendLog('link', `não abri o terminal (${r.error}); subindo sem ele`);
   }
   await start({ offerMod: false });
+  return 'background';
+}
+
+/**
+ * O atalho do menu (e myco://open): com o servidor no ar, abre o navegador pareado; parado, sobe (ou abre o setup) e
+ * abre quando ele responder. Não subiu a tempo: a página de início, com o checklist e o log.
+ */
+async function openPanel(): Promise<void> {
+  if (!(await isUp())) {
+    console.log('Subindo o Claudio’s Club; o navegador abre sozinho quando ele estiver no ar.');
+    const how = await bringUp(false);
+    if (!(await waitUp(how === 'terminal' ? 10 * 60_000 : 3 * 60_000))) {
+      appendLog('open', 'não respondeu a tempo: abrindo a página de início');
+      openUrl(START_PAGE);
+      return;
+    }
+  }
+  openPaired();
 }
 
 switch (action) {
@@ -283,8 +374,26 @@ switch (action) {
   case 'link':
     await link(rest[0]);
     break;
+  case 'open':
+    await openPanel();
+    break;
+  case 'pair': {
+    if (!(await isUp())) {
+      console.error(`Nada respondendo em ${url}: suba o Claudio’s Club antes (npm run daily:start ou npm run dev).`);
+      process.exit(1);
+    }
+    const code = rest.find((a) => PAIR_USER_CODE.test(a));
+    if (code) {
+      await approvePairing(code);
+      break;
+    }
+    openPaired();
+    console.log('Abri o navegador padrão com um código de pareamento (uso único, vale 2 min).');
+    console.log('Outro navegador? Nele, clique em "Parear este navegador" e rode o comando que aparece.');
+    break;
+  }
   default:
-    console.error(`Ação desconhecida: ${action}. Use setup, run, start, stop, status ou link.`);
+    console.error(`Ação desconhecida: ${action}. Use setup, run, start, stop, status, link, open ou pair.`);
     process.exit(1);
 }
 await writeLogSnapshot();

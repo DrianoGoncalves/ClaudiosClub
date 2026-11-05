@@ -767,6 +767,21 @@ describe('ChatProcess: segundo plano', () => {
     expect(chat.working).toBe(false);
     expect(chat.snapshot().state.background).toEqual([]);
   });
+
+  // Ao retomar uma conversa que morreu com um comando rodando, o claude registra que ele parou num "turno" só de
+  // histórico (init e result com num_turns 0). A entrega no meio do turno está em tasks.test.ts.
+  it('aviso de comando que parou, com a conversa aberta sem mensagem nossa: não fica "trabalhando" nem avisa que parou', async () => {
+    const f = fakeClaude();
+    const idle: string[] = [];
+    const chat = new ChatProcess({ sessionId: 's', cwd: '.', args: ['--resume', 's'], spawnImpl: f.spawnImpl, onIdle: (r) => idle.push(r) });
+    chat.start();
+    f.emit({ type: 'system', subtype: 'task_notification', task_id: 'b1', status: 'stopped' });
+    f.emit({ type: 'system', subtype: 'init' });
+    f.emit({ type: 'result', subtype: 'success', is_error: false, num_turns: 0, result: '', origin: { kind: 'task-notification' } });
+    await tick();
+    expect(chat.working).toBe(false);
+    expect(idle).toEqual([]);
+  });
 });
 
 let root: string;

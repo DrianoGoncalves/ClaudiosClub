@@ -16,6 +16,8 @@ export const LOG_FILE = path.join(MYCO_HOME, 'logs', 'server.log');
 export const RUN_DIR = path.join(MYCO_HOME, 'run');
 export const PID_FILE = path.join(RUN_DIR, 'daemon.pid');
 export const STOP_FILE = path.join(RUN_DIR, 'daemon.stop');
+/** O servidor grava ao sair pelo botão Reiniciar (ou Atualizar): só então o vigia refaz pacote e cliente. */
+export const RESTART_FILE = path.join(RUN_DIR, 'daemon.restart');
 export const BUILT = path.join(ROOT, 'dist', 'client', 'index.html');
 export const VITE = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
 export const DAEMON = path.join(ROOT, 'scripts', 'daemon.ts');
@@ -53,22 +55,29 @@ export function brokenDeps(): string[] {
 }
 
 /** Arquivos de /assets que o index.html do build pede e não existem em dist/client (build interrompido ou apagado). */
-export function brokenBuild(): string[] {
-  if (!fs.existsSync(BUILT)) return [];
-  const html = fs.readFileSync(BUILT, 'utf8');
+export function brokenBuild(built = BUILT): string[] {
+  if (!fs.existsSync(built)) return [];
+  const html = fs.readFileSync(built, 'utf8');
   const refs = [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1]!);
-  return refs.filter((ref) => !fs.existsSync(path.join(path.dirname(BUILT), ref)));
+  return refs.filter((ref) => !fs.existsSync(path.join(path.dirname(built), ref)));
+}
+
+/** Sem o build do cliente, ou com ele pela metade, não há tela: isso o vigia refaz até depois de uma queda. */
+export function clientMissing(root = ROOT): boolean {
+  const built = path.join(root, 'dist', 'client', 'index.html');
+  return !fs.existsSync(built) || brokenBuild(built).length > 0;
 }
 
 /** O cliente mudou desde o último build? (código, dependências ou config do Vite) */
-export function clientChanged(): boolean {
-  if (!fs.existsSync(BUILT) || brokenBuild().length > 0) return true;
-  const since = fs.statSync(BUILT).mtimeMs;
+export function clientChanged(root = ROOT): boolean {
+  if (clientMissing(root)) return true;
+  const since = fs.statSync(path.join(root, 'dist', 'client', 'index.html')).mtimeMs;
+  const under = (dir: string) => (fs.existsSync(dir) ? filesUnder(dir) : []);
   const sources = [
-    ...filesUnder(path.join(ROOT, 'client')),
-    ...filesUnder(path.join(ROOT, 'shared')),
-    path.join(ROOT, 'vite.config.ts'),
-    path.join(ROOT, 'package-lock.json'),
+    ...under(path.join(root, 'client')),
+    ...under(path.join(root, 'shared')),
+    path.join(root, 'vite.config.ts'),
+    path.join(root, 'package-lock.json'),
   ];
   return sources.some((f) => (fs.statSync(f, { throwIfNoEntry: false })?.mtimeMs ?? 0) > since);
 }
@@ -151,8 +160,13 @@ export function stopProcess(pid: number): void {
 
 /** Abre o endereço no navegador padrão. */
 export function openUrl(url: string): void {
+  // Windows: o explorer.exe chamado pelo Node não abria nada (nem dava erro); o rundll32 entrega ao navegador padrão.
   const [cmd, args] =
-    process.platform === 'win32' ? ['explorer.exe', [url]] : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
+    process.platform === 'win32'
+      ? ['rundll32.exe', ['url.dll,FileProtocolHandler', url]]
+      : process.platform === 'darwin'
+        ? ['open', [url]]
+        : ['xdg-open', [url]];
   const child = spawn(cmd, args, { stdio: 'ignore', detached: true, windowsHide: true });
   child.on('error', () => {});
   child.unref();
@@ -177,6 +191,15 @@ export function linuxDataDir(): string {
 /** Pasta de aplicativos do usuário no Linux (menu e links). */
 export function linuxAppsDir(): string {
   return path.join(linuxDataDir(), 'applications');
+}
+
+/** O link myco:// (botão Iniciar da página de início, opcional: npm run launcher) está registrado neste sistema? */
+export function launcherInstalled(): boolean {
+  if (process.platform === 'win32') {
+    return spawnSync('reg', ['query', 'HKCU\\Software\\Classes\\myco\\shell\\open\\command'], { windowsHide: true }).status === 0;
+  }
+  if (process.platform === 'linux') return fs.existsSync(path.join(linuxAppsDir(), 'claudios-url.desktop'));
+  return false;
 }
 
 /** Script que um .desktop chama no Linux (ver writeLinuxScript). */

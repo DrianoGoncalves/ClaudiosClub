@@ -9,7 +9,9 @@ import {
   removeConnection,
   saveConnection,
   sshConfigFile,
+  staffSshConfigFile,
   testConnection,
+  writeStaffSshConfig,
 } from '../server/staff/servers';
 
 let root: string;
@@ -72,7 +74,9 @@ describe('conexões SSH do projeto', () => {
     expect(file).toMatchObject({ default: 'prod', connections: { prod: { host: '72.61.33.164', localSubfolder: 'site', user: 'deploy' } } });
     expect(await fs.readFile(path.join(dir, '.vps', '.gitignore'), 'utf8')).toBe('*\n');
 
-    const cfg = await fs.readFile(sshConfigFile(dir), 'utf8');
+    // Não fica mais um ssh_config com todas as conexões: cada funcionário tem o dele.
+    await expect(fs.stat(sshConfigFile(dir))).rejects.toThrow();
+    const cfg = await fs.readFile((await writeStaffSshConfig(dir, 'ana-1', ['prod']))!, 'utf8');
     for (const line of ['Host prod', 'HostName 72.61.33.164', 'User deploy', `IdentityFile "${key.replace(/\\/g, '/')}"`, 'IdentitiesOnly yes', 'BatchMode yes', 'ForwardAgent no', 'ClearAllForwardings yes', 'StrictHostKeyChecking accept-new']) {
       expect(cfg).toContain(line);
     }
@@ -104,15 +108,47 @@ describe('conexões SSH do projeto', () => {
     const dir = await project('testar');
     await saveConnection(dir, conn());
     const calls: string[][] = [];
-    const ok = await testConnection(dir, 'prod', async (_cmd, args) => (calls.push(args), { code: 0, stdout: 'myco-ok\n', stderr: '' }));
+    let seen = '';
+    const ok = await testConnection(dir, 'prod', async (_cmd, args) => {
+      calls.push(args);
+      seen = await fs.readFile(args[1]!, 'utf8');
+      return { code: 0, stdout: 'myco-ok\n', stderr: '' };
+    });
     expect(ok).toEqual({ ok: true, message: 'conectou em deploy@72.61.33.164' });
-    expect(calls[0]).toEqual(['-F', sshConfigFile(dir), 'prod', 'echo myco-ok']);
+    expect(calls[0]!.slice(2)).toEqual(['prod', 'echo myco-ok']);
+    // Um arquivo só desta conexão, dentro de .vps, apagado depois do teste.
+    expect(calls[0]![0]).toBe('-F');
+    expect(path.dirname(calls[0]![1]!)).toBe(path.join(dir, '.vps'));
+    expect(seen).toContain('Host prod');
+    await expect(fs.stat(calls[0]![1]!)).rejects.toThrow();
 
     const denied = await testConnection(dir, 'prod', async () => ({ code: 255, stdout: '', stderr: 'deploy@72.61.33.164: Permission denied (publickey).' }));
     expect(denied.ok).toBe(false);
     expect(denied.message).toContain('recusou a chave');
     const noSsh = await testConnection(dir, 'prod', async () => ({ code: -1, stdout: '', stderr: '', missing: true }));
     expect(noSsh.message).toContain('não está instalado');
+  });
+
+  it('ssh_config por funcionário: só as conexões da ficha, refeito quando o config.json muda', async () => {
+    const dir = await project('por-funcionario');
+    await saveConnection(dir, conn());
+    await saveConnection(dir, conn({ name: 'staging', host: 'staging.example.com' }));
+    const file = (await writeStaffSshConfig(dir, 'ana-1', ['staging', 'sumiu']))!;
+    expect(file).toBe(staffSshConfigFile(dir, 'ana-1'));
+    let cfg = await fs.readFile(file, 'utf8');
+    expect(cfg).toContain('Host staging');
+    expect(cfg).not.toContain('Host prod'); // a ficha dele não tem prod: o arquivo também não
+    // Mudou o host no config.json: o arquivo dele é refeito, com as mesmas conexões.
+    await saveConnection(dir, conn({ name: 'staging', host: 'novo.example.com' }), 'staging');
+    cfg = await fs.readFile(file, 'utf8');
+    expect(cfg).toContain('HostName novo.example.com');
+    expect(cfg).not.toContain('Host prod');
+    // Apagou a conexão: o arquivo some (não sobra acesso).
+    await removeConnection(dir, 'staging');
+    await expect(fs.stat(file)).rejects.toThrow();
+    // Ficha sem servidor: nada de arquivo; id estranho não vira caminho.
+    expect(await writeStaffSshConfig(dir, 'ana-1', [])).toBeNull();
+    expect(() => staffSshConfigFile(dir, '../x')).toThrow();
   });
 
   it('erros do ssh em palavras', () => {

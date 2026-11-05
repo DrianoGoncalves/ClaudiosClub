@@ -1,11 +1,27 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DAEMON_BUNDLE, SERVER_BUNDLE, bundle, bundleStale } from './bundle';
-import { LOG_FILE, PID_FILE, ROOT, RUN_DIR, STOP_FILE, VITE, appendLog, clientChanged, portFrom, runningDaemon, writeLogSnapshot } from './lib';
+import { DAEMON_BUNDLE, FTP_MCP_BUNDLE, SERVER_BUNDLE, bundle, bundleStale } from './bundle';
+import {
+  LOG_FILE,
+  PID_FILE,
+  RESTART_FILE,
+  ROOT,
+  RUN_DIR,
+  STOP_FILE,
+  VITE,
+  appendLog,
+  clientChanged,
+  clientMissing,
+  portFrom,
+  runningDaemon,
+  writeLogSnapshot,
+} from './lib';
+import { startSteps, supervise, takeFlag } from './supervisor';
 
 // Vigia do Claudio’s Club: sobe o servidor sem janela, guarda a saída em ~/.myco/logs/server.log e religa sozinho se
-// ele cair. Para parar: npm run daily:stop. Quem chama (daily start, ou o login automático) já o põe em segundo plano.
+// ele cair (a mesma versão: código novo só entra pelo botão Reiniciar/Atualizar; ver scripts/supervisor.ts).
+// Para parar: npm run daily:stop. Quem chama (daily start, ou o login automático) já o põe em segundo plano.
 
 const LOG_MAX = 5 * 1024 * 1024;
 const port = portFrom(process.argv.slice(2));
@@ -31,19 +47,33 @@ if (import.meta.filename.endsWith('.ts') && process.platform !== 'win32' && proc
   }
 }
 
-/** Como subir o servidor: o pacote, refeito se o código mudou; sem ele (erro no build), pelo tsx como antes. */
+/**
+ * Como subir o servidor numa subida completa: o pacote, refeito se o código mudou; sem ele (erro no build), pelo
+ * tsx como antes. Numa queda o vigia reaproveita estes mesmos argumentos, sem chamar isto.
+ */
 async function serverArgs(): Promise<string[]> {
   if (bundleStale(SERVER_BUNDLE)) {
     await bundle('server/index.ts', SERVER_BUNDLE).catch((err: unknown) =>
       log(`o pacote do servidor falhou; sobe pelo tsx: ${err instanceof Error ? err.message : String(err)}`),
     );
   }
+  // O MCP de FTP dos funcionários: sem pacote em dia, o servidor sobe o .ts pelo tsx.
+  if (bundleStale(FTP_MCP_BUNDLE)) {
+    await bundle('server/ftp-mcp.ts', FTP_MCP_BUNDLE).catch((err: unknown) =>
+      log(`o pacote do MCP de FTP falhou; ele roda pelo tsx: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  }
   return bundleStale(SERVER_BUNDLE) ? ['--import', 'tsx', 'server/index.ts'] : [SERVER_BUNDLE];
 }
 
+/** Gera o cliente (só o build, sem checagem de tipos: um erro de tipo em edição não deixa o Claudio’s Club sem tela). */
+function buildClient(): void {
+  const build = spawnSync(process.execPath, [VITE, 'build'], { cwd: ROOT, stdio: 'inherit', windowsHide: true });
+  if (build.status !== 0) log('o build do cliente falhou (veja acima); o servidor sobe com a última versão do cliente');
+}
+
 /** Roda o servidor até ele sair; devolve o código de saída. */
-async function runServer(): Promise<number | null> {
-  const args = await serverArgs();
+async function runServer(args: string[]): Promise<number | null> {
   return new Promise((resolve) => {
     child = spawn(process.execPath, args, {
       cwd: ROOT,
@@ -59,7 +89,7 @@ async function runServer(): Promise<number | null> {
   });
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 async function main(): Promise<void> {
   // O servidor sabe que tem vigia: o config mostra "Reiniciar" (sair e voltar) além de "Parar".
@@ -87,27 +117,26 @@ async function main(): Promise<void> {
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
 
+  // Pedido de reinício que sobrou de outro vigia: esta subida já é completa.
+  fs.rmSync(RESTART_FILE, { force: true });
+
   log(`iniciando em ${ROOT} (porta ${port})`);
-  let delay = 5;
-  while (!stopping && !fs.existsSync(STOP_FILE)) {
-    // O cliente é gerado no (re)início quando mudou. Só o build (sem checagem de tipos): um erro de tipo em
-    // edição não deixa o Claudio’s Club sem tela.
-    if (clientChanged()) {
-      const build = spawnSync(process.execPath, [VITE, 'build'], { cwd: ROOT, stdio: 'inherit', windowsHide: true });
-      if (build.status !== 0) log('o build do cliente falhou (veja acima); o servidor sobe com a última versão do cliente');
-    }
-    const started = Date.now();
-    log(`subindo o servidor: http://claudio.localhost:${port}`);
-    const code = await runServer();
-    if (stopping || fs.existsSync(STOP_FILE)) break;
-    // Caiu logo de novo (porta ocupada, erro na subida): espera cada vez mais, até 1 min.
-    delay = Date.now() - started < 30_000 ? Math.min(delay * 2, 60) : 5;
-    log(`o servidor saiu (código ${code}); religando em ${delay} s`);
-    await sleep(delay * 1000);
-  }
+  // Código novo só entra pela subida completa (esta, e o botão Reiniciar/Atualizar). Queda sobe a mesma versão.
+  await supervise({
+    shouldStop: () => stopping || fs.existsSync(STOP_FILE),
+    takeRestartRequest: () => takeFlag(RESTART_FILE),
+    ...startSteps({ clientChanged: () => clientChanged(), clientMissing: () => clientMissing(), buildClient, serverArgs }),
+    run: (args) => {
+      log(`subindo o servidor: http://claudio.localhost:${port}`);
+      return runServer(args);
+    },
+    log,
+    sleep,
+  });
 
   log('parado');
   fs.rmSync(STOP_FILE, { force: true });
+  fs.rmSync(RESTART_FILE, { force: true });
   fs.rmSync(PID_FILE, { force: true });
 }
 
