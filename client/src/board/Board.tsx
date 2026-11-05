@@ -20,7 +20,7 @@ import type { InboxView } from '../inbox/useInbox';
 import { EdgeActions, edgeTypes } from './edges';
 import { buildGraph, HANDLE, HR_ID, RANKING_ID, roomFrame, type BoardNode, type StaffLink } from './layout';
 import { nodeTypes } from './nodes';
-import { ChartIcon } from '../icons';
+import { ChartIcon, UsersIcon } from '../icons';
 import { SettingsMenu } from '../toolbar/SettingsMenu';
 import { AuthBadge, CompanyTitle, UsageMeters, useAccountUsage } from '../toolbar/Toolbar';
 import { UpdateNotice } from '../toolbar/UpdateNotice';
@@ -378,8 +378,8 @@ export function BoardView(props: BoardViewProps) {
           <PendingRestartNotice />
           <span className="toolbar-sep" />
           <InboxMenu inbox={props.inbox} topicOf={topicOf} onOpen={props.onOpenInbox} />
-          <button onClick={() => onSelect(HR_ID)} title={t('hr.buttonTitle')}>
-            {t('hr.button')}
+          <button className="toolbar-icon" onClick={() => onSelect(HR_ID)} title={t('hr.button')} aria-label={t('hr.button')}>
+            <UsersIcon />
           </button>
           <button className="toolbar-icon" onClick={() => onSelect(RANKING_ID)} title={t('board.rankingTitle')} aria-label={t('board.ranking')}>
             <ChartIcon />

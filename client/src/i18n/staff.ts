@@ -26,7 +26,6 @@ export default defineMessages({
     'staff.copyBack': 'Voltar',
     // RH: todas as fichas da empresa
     'hr.button': 'RH',
-    'hr.buttonTitle': 'RH: todos os funcionários de todos os projetos',
     'hr.title': 'Funcionários',
     'hr.allProjects': 'Todos os projetos',
     'hr.projectFilter': 'Projeto',
@@ -253,7 +252,6 @@ export default defineMessages({
     'staff.copyAction': 'Copy to this project',
     'staff.copyBack': 'Back',
     'hr.button': 'HR',
-    'hr.buttonTitle': 'HR: every employee in every project',
     'hr.title': 'Employees',
     'hr.allProjects': 'All projects',
     'hr.projectFilter': 'Project',
@@ -476,7 +474,6 @@ export default defineMessages({
     'staff.copyAction': 'Copiar a este proyecto',
     'staff.copyBack': 'Volver',
     'hr.button': 'RRHH',
-    'hr.buttonTitle': 'RRHH: todos los empleados de todos los proyectos',
     'hr.title': 'Empleados',
     'hr.allProjects': 'Todos los proyectos',
     'hr.projectFilter': 'Proyecto',
