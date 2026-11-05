@@ -769,6 +769,18 @@ button.ranking-row:hover { border-color: var(--accent); }
 .import-list { display: grid; gap: 6px; max-height: 340px; overflow-y: auto; }
 .import-list .choice b { overflow-wrap: anywhere; }
 .portrait-preview { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 2px solid var(--ink); }
+/* Contratar "da empresa": lista das fichas dos outros projetos e a confirmação da cópia. */
+.hire-source { margin: 2px 0 10px; }
+.copy-pick, .copy-confirm { display: grid; gap: 10px; align-content: start; }
+.copy-search { width: 100%; }
+.row.copy-row { flex-direction: row; align-items: center; gap: 10px; }
+.copy-face { flex: none; width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid var(--ink); display: grid; place-items: center; font-family: var(--hand); font-weight: 700; font-size: 20px; color: var(--ink); background: var(--card); }
+.copy-face.is-big { width: 64px; height: 64px; font-size: 30px; }
+.copy-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.copy-text > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copy-who { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.copy-mission { margin: 0; white-space: pre-line; }
+.copy-confirm .check { flex-wrap: wrap; }
 @media (max-width: 640px) { .grid2, .choices { grid-template-columns: 1fr; } }
 
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

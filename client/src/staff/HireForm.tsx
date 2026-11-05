@@ -19,6 +19,7 @@ import { t, locale } from '../i18n';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
 import { ProtocolBadge } from '../office/ProjectOffice';
 import { BrowserCheck } from './BrowserCheck';
+import { CopyFromCompany } from './CopyFromCompany';
 import type { RoleEntry } from '../../../shared/roles';
 import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, PLAYBOOK_OPTIONS } from './templates';
 
@@ -120,6 +121,9 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [versions, setVersions] = useState<Array<{ version: string; name: string; role: string; updatedAt: string }> | null>(null);
+  // Contratando: do zero (a ficha abaixo) ou cópia de alguém de outro projeto.
+  const [source, setSource] = useState<'new' | 'company'>('new');
+  const canCopy = mode.kind === 'hire' && !embedded;
   const [ownTab, setOwnTab] = useState<Tab>('who');
   const tab = tabProp ?? ownTab;
   const setTab = onTab ?? setOwnTab;
@@ -292,19 +296,52 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
 
   const currentPortrait = editing?.portrait && portrait === undefined ? portraitUrl(projectId, editing) : portrait;
 
+  const head = (
+    <>
+      <button type="button" className="drawer-close" onClick={onClose} aria-label={t('staff.close')}>
+        ×
+      </button>
+      <p className="kicker">
+        {editing || adopting ? t('staff.kickerEdit') : t('staff.kickerHire')} · {project?.name}
+      </p>
+      <h2>{editing ? editing.name : adopting ? t('staff.titleAdopt') : source === 'company' ? t('staff.titleCopy') : t('staff.titleNew')}</h2>
+      {canCopy && (
+        <div className="templates hire-source" role="group" aria-label={t('staff.sourceLabel')}>
+          {(['new', 'company'] as const).map((s) => (
+            <button
+              key={s}
+              type="button"
+              className="btn-secondary btn-toggle"
+              aria-pressed={source === s}
+              onClick={() => setSource(s)}
+            >
+              {s === 'new' ? t('staff.sourceNew') : t('staff.sourceCompany')}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+
+  if (canCopy && source === 'company') {
+    return (
+      <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+        <div className="modal hire">
+          {head}
+          <CopyFromCompany
+            projectId={projectId}
+            projectName={project?.name ?? ''}
+            onClose={onClose}
+            onCopied={(profile) => onHired(profile, null)}
+          />
+        </div>
+      </div>
+    );
+  }
+
   const form = (
       <form className={embedded ? 'hire-inline' : 'modal hire'} onSubmit={submit} noValidate>
-        {!embedded && (
-          <>
-            <button type="button" className="drawer-close" onClick={onClose} aria-label={t('staff.close')}>
-              ×
-            </button>
-            <p className="kicker">
-              {editing || adopting ? t('staff.kickerEdit') : t('staff.kickerHire')} · {project?.name}
-            </p>
-            <h2>{editing ? editing.name : adopting ? t('staff.titleAdopt') : t('staff.titleNew')}</h2>
-          </>
-        )}
+        {!embedded && head}
         {adopting && (
           <p className="muted small">
             {t('staff.adoptNote')}
