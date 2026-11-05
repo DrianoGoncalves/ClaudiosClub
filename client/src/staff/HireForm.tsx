@@ -40,6 +40,11 @@ interface Props {
   mode: StaffFormMode;
   /** Nível simples: só cargo, nome e retrato; o resto vem do cargo. */
   simple?: boolean;
+  /** Dentro do "Mais" do funcionário (aba Ficha): sem modal, abas menores e "Desfazer" no lugar de "Cancelar". */
+  embedded?: boolean;
+  /** A aba aberta, se quem usa quiser guardá-la (a embutida remonta ao salvar). */
+  tab?: Tab;
+  onTab?: (tab: Tab) => void;
   onClose: () => void;
   onHired: (profile: StaffProfile, launch: LaunchResult | null) => void;
   onSaved: (profile: StaffProfile) => void;
@@ -51,16 +56,15 @@ const editsCode = (a: Autonomy) => a === 'acceptEdits' || a === 'auto' || a === 
 const lines = (s: string) => s.split('\n').map((l) => l.trim()).filter(Boolean);
 
 /** A ficha é longa: dividida em abas, cada uma com uma pergunta só. */
-type Tab = 'who' | 'work' | 'tools' | 'run' | 'history';
+type Tab = 'who' | 'tools' | 'run' | 'history';
+export type StaffFormTab = Tab;
 const TABS: Array<{ id: Tab; label: string; intro: string }> = [
-  { id: 'who', label: t('staff.tabWho'), intro: t('staff.tabWhoIntro') },
-  { id: 'work', label: t('staff.tabWork'), intro: t('staff.tabWorkIntro') },
-  { id: 'tools', label: t('staff.tools'), intro: t('staff.tabToolsIntro') },
+  { id: 'who', label: t('staff.tabWho'), intro: t('staff.tabWhoIntro') },  { id: 'tools', label: t('staff.tools'), intro: t('staff.tabToolsIntro') },
   { id: 'run', label: t('staff.tabRun'), intro: t('staff.tabRunIntro') },
   { id: 'history', label: t('staff.tabHistory'), intro: t('staff.tabHistoryIntro') },
 ];
 
-export function StaffForm({ board, projectId, mode, simple = false, onClose, onHired, onSaved }: Props) {
+export function StaffForm({ board, projectId, mode, simple = false, embedded = false, tab: tabProp, onTab, onClose, onHired, onSaved }: Props) {
   const editing = mode.kind === 'edit' ? mode.profile : null;
   const adopting = mode.kind === 'adopt' ? mode.session : null;
   // No simples, a ficha inteira fica a um clique ("Mostrar todos os campos").
@@ -115,7 +119,9 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [versions, setVersions] = useState<Array<{ version: string; name: string; role: string; updatedAt: string }> | null>(null);
-  const [tab, setTab] = useState<Tab>('who');
+  const [ownTab, setOwnTab] = useState<Tab>('who');
+  const tab = tabProp ?? ownTab;
+  const setTab = onTab ?? setOwnTab;
 
   useEffect(() => {
     api.mcp(projectId).then(
@@ -223,10 +229,10 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     // Validação própria: o navegador não consegue focar um campo obrigatório numa aba escondida.
-    const missing: Tab | null = !name.trim() || !role.trim() ? 'who' : !mission.trim() && full ? 'work' : null;
-    if (missing) {
-      setTab(missing);
-      return setError(missing === 'who' ? (full ? t('staff.errNameRole') : t('staff.errChooseRoleName')) : t('staff.errMission'));
+    const noName = !name.trim() || !role.trim();
+    if (noName || (!mission.trim() && full)) {
+      setTab('who');
+      return setError(noName ? (full ? t('staff.errNameRole') : t('staff.errChooseRoleName')) : t('staff.errMission'));
     }
     setBusy(true);
     setError(null);
@@ -285,16 +291,19 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
 
   const currentPortrait = editing?.portrait && portrait === undefined ? portraitUrl(projectId, editing) : portrait;
 
-  return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <form className="modal hire" onSubmit={submit} noValidate>
-        <button type="button" className="drawer-close" onClick={onClose} aria-label={t('staff.close')}>
-          ×
-        </button>
-        <p className="kicker">
-          {editing || adopting ? t('staff.kickerEdit') : t('staff.kickerHire')} · {project?.name}
-        </p>
-        <h2>{editing ? editing.name : adopting ? t('staff.titleAdopt') : t('staff.titleNew')}</h2>
+  const form = (
+      <form className={embedded ? 'hire-inline' : 'modal hire'} onSubmit={submit} noValidate>
+        {!embedded && (
+          <>
+            <button type="button" className="drawer-close" onClick={onClose} aria-label={t('staff.close')}>
+              ×
+            </button>
+            <p className="kicker">
+              {editing || adopting ? t('staff.kickerEdit') : t('staff.kickerHire')} · {project?.name}
+            </p>
+            <h2>{editing ? editing.name : adopting ? t('staff.titleAdopt') : t('staff.titleNew')}</h2>
+          </>
+        )}
         {adopting && (
           <p className="muted small">
             {t('staff.adoptNote')}
@@ -326,7 +335,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
             <div className="grid2">
               <label>
                 {t('staff.nameReq')}
-                <input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} required autoFocus />
+                <input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} required autoFocus={!embedded} />
               </label>
               <label>
                 {t('staff.portrait')}
@@ -370,7 +379,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
           </div>
         ) : (
           <>
-        <div className="tabs" role="tablist">
+        <div className={embedded ? 'tabs tabs-sub' : 'tabs'} role="tablist" aria-label={t('detail.tabSheet')}>
           {TABS.filter((tb) => tb.id !== 'history' || editing).map((tb) => (
             <button
               key={tb.id}
@@ -447,10 +456,8 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
             </div>
           </fieldset>
         </div>
-        </div>
 
-        {/* ---- Trabalho ---- */}
-        <div className="form-panel" role="tabpanel" hidden={tab !== 'work'}>
+        {/* Missão: na mesma aba de quem é. */}
         <label>
           {t('staff.missionReq')}
           <textarea value={mission} onChange={(e) => setMission(e.target.value)} rows={3} maxLength={4000} required />
@@ -653,6 +660,10 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
               {t('staff.worktreeHintA')}<code>myco/…</code>{t('staff.worktreeHintB')}
             </span>
           </label>
+          <label className="check">
+            <input type="checkbox" checked={canHire} onChange={(e) => setCanHire(e.target.checked)} /> {t('detail.canHire')}
+            <span className="muted small"> {t('detail.canHireHint')}</span>
+          </label>
         </fieldset>
         </div>
 
@@ -689,7 +700,7 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
             {busy ? t('staff.saving') : editing || adopting ? t('staff.saveProfile') : t('staff.hire')}
           </button>
           <button type="button" className="btn-secondary" onClick={onClose}>
-            {t('staff.cancel')}
+            {embedded ? t('staff.undo') : t('staff.cancel')}
           </button>
           <span className="muted small modal-footer-note">
             {t('staff.profileIn')} <code>{project ? `${folderName(project.path)}/.myco/staff/` : '.myco/staff/'}</code>
@@ -697,6 +708,11 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
         </div>
         </div>
       </form>
+  );
+  if (embedded) return form;
+  return (
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      {form}
     </div>
   );
 }
