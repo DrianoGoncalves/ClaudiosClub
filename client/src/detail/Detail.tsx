@@ -99,6 +99,8 @@ export function EmployeePanel(props: {
   onHireSub: () => void;
   /** Editar a ficha; sem ficha, dar uma para a conversa aberta (`sessionId`). */
   onEdit: (sessionId: string | null) => void;
+  /** A ficha editável (o formulário embutido), na aba Ficha do "Mais". */
+  sheetForm?: ReactNode;
   /** Funcionário fantasma: as conversas sem ficha do projeto, num nó só. */
   ghost?: boolean;
   onSessionStarted?: (sessionId: string) => void;
@@ -274,34 +276,14 @@ export function EmployeePanel(props: {
     </>
   );
   const enabledRoutines = staff?.routines?.filter((r) => r.enabled).length ?? 0;
-  // As abas do funcionário no "Mais". Editar a ficha é um botão só, na aba Ficha.
+  // As abas do funcionário no "Mais": Ficha (a própria edição, com as abas dela), Trabalho (expediente, rotinas,
+  // servidores) e Ações. Sem ficha, a aba Ficha só oferece dar uma.
   const tabs: MoreTab[] = [
     {
       id: 'ficha',
       label: t('detail.tabSheet'),
       content: (
         <>
-          <p className="badges">
-            {s?.entrypoint && <span className="badge">{ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</span>}
-            {s?.gitBranch && <span className="badge dim">{s.gitBranch}</span>}
-            {!staff && <span className="badge dim">{t('detail.noSheet')}</span>}
-            {props.archived && <span className="badge dim">{t('detail.archived')}</span>}
-          </p>
-          {staff ? (
-            !props.simple && <StaffSheet staff={staff} managers={props.managers} />
-          ) : (
-            <p className="muted small">{t(props.ghost ? 'detail.ghostAbout' : 'detail.outsideMyco')}</p>
-          )}
-          <div className="chat-more-row">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => props.onEdit(current)}
-              title={staff ? t('detail.editProfileTitle') : t('detail.giveProfileTitle')}
-            >
-              {staff ? t('detail.editProfile') : t('detail.giveProfile')}
-            </button>
-          </div>
           {props.simple && (
             <p className="muted small simple-more">
               {t('detail.simpleMore')}{' '}
@@ -312,6 +294,18 @@ export function EmployeePanel(props: {
               )}
             </p>
           )}
+          {staff && props.sheetForm ? (
+            props.sheetForm
+          ) : (
+            <>
+              <p className="muted small">{t(props.ghost ? 'detail.ghostAbout' : 'detail.outsideMyco')}</p>
+              <div className="chat-more-row">
+                <button type="button" className="btn-secondary" onClick={() => props.onEdit(current)} title={t('detail.giveProfileTitle')}>
+                  {t('detail.giveProfile')}
+                </button>
+              </div>
+            </>
+          )}
         </>
       ),
     },
@@ -319,10 +313,16 @@ export function EmployeePanel(props: {
       ? []
       : [
           {
-            id: 'expediente',
+            id: 'trabalho',
             label: t('detail.tabActivity'),
             content: (
               <>
+                <p className="badges">
+                  {s?.entrypoint && <span className="badge">{ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</span>}
+                  {s?.gitBranch && <span className="badge dim">{s.gitBranch}</span>}
+                  {!staff && <span className="badge dim">{t('detail.noSheet')}</span>}
+                  {props.archived && <span className="badge dim">{t('detail.archived')}</span>}
+                </p>
                 <dl className="stats">
                   <div><dt>{t('detail.costOfTotal')}</dt><dd>{props.costUsd === null ? '—' : formatShare(props.costUsd, props.totalUsd)}</dd></div>
                   <div><dt>{t('detail.subagents')}</dt><dd>{s?.subagentCount ?? 0}</dd></div>
@@ -333,18 +333,21 @@ export function EmployeePanel(props: {
                 <p className="muted small">{t('detail.shareNote')}</p>
                 {s && <WorthIt key={s.id} sessionId={s.id} />}
                 {s && <p className="muted small mono">{t('detail.sessionId', { id: s.id })}</p>}
+                {staff && project && (
+                  <>
+                    <h4>{enabledRoutines ? t('detail.routinesCount', { n: enabledRoutines }) : t('detail.tabRoutines')}</h4>
+                    <Routines projectId={project.id} staff={staff} onChanged={props.onChanged} />
+                  </>
+                )}
+                {staff && staff.servers.length > 0 && (
+                  <>
+                    <h4>{t('detail.servers')}</h4>
+                    <ServerLog projectId={staff.projectId} staffId={staff.id} />
+                  </>
+                )}
               </>
             ),
           },
-          ...(staff && project
-            ? [
-                {
-                  id: 'rotinas',
-                  label: enabledRoutines ? t('detail.routinesCount', { n: enabledRoutines }) : t('detail.tabRoutines'),
-                  content: <Routines projectId={project.id} staff={staff} onChanged={props.onChanged} />,
-                },
-              ]
-            : []),
           {
             id: 'acoes',
             label: t('detail.tabActions'),
@@ -363,7 +366,6 @@ export function EmployeePanel(props: {
                     restoreLabel={staff?.temporary ? t('detail.restore') : t('detail.unarchive')}
                   />
                 </p>
-                {staff && project && <CanHireToggle projectId={project.id} staff={staff} onChanged={props.onChanged} />}
               </>
             ),
           },
@@ -407,40 +409,6 @@ export function EmployeePanel(props: {
       onFocusDone={props.onFocusDone}
       awaiting={!!opened && !!props.inbox?.some((i) => i.sessionId === opened)}
     />
-  );
-}
-
-/**
- * Liga/desliga "pode contratar subfuncionários" sem abrir a ficha. Manda a ficha atual com só esse
- * campo trocado: o servidor guarda a anterior no histórico, como ao editar.
- */
-function CanHireToggle({ projectId, staff, onChanged }: { projectId: string; staff: StaffProfile; onChanged?: () => void }) {
-  const [on, setOn] = useState(staff.canHire);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => setOn(staff.canHire), [staff.canHire]);
-  const flip = async () => {
-    const { id: _i, projectId: _p, portrait: _r, sessions: _s, createdAt: _c, updatedAt: _u, ...input } = staff;
-    setBusy(true);
-    setError(null);
-    try {
-      await api.updateStaff(projectId, staff.id, { ...input, canHire: !on });
-      setOn(!on);
-      onChanged?.();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="chat-more-row">
-      <button type="button" className="btn-secondary btn-toggle" aria-pressed={on} disabled={busy} onClick={() => void flip()}>
-        {t('detail.canHire')}
-      </button>
-      <span className="muted small">{t('detail.canHireHint')}</span>
-      {error && <span className="error">{error}</span>}
-    </div>
   );
 }
 
@@ -526,80 +494,6 @@ function TempNotice(props: {
       </span>
       {error && <span className="error">{error}</span>}
     </div>
-  );
-}
-
-const AUTONOMY_TEXT: Record<string, string> = {
-  plan: t('detail.autPlan'),
-  manual: t('detail.autManual'),
-  acceptEdits: t('detail.autAcceptEdits'),
-  auto: t('detail.autAuto'),
-  bypassPermissions: t('detail.autBypass'),
-};
-
-function StaffSheet({ staff, managers }: { staff: StaffProfile; managers: StaffProfile[] }) {
-  const list = (items: string[]) => (items.length ? items.join(', ') : '—');
-  return (
-    <section className="section">
-      <dl className="sheet">
-        <dt>{t('detail.mission')}</dt>
-        <dd>{staff.mission}</dd>
-        {staff.firstTask && (
-          <>
-            <dt>{t('detail.firstTask')}</dt>
-            <dd>{staff.firstTask}</dd>
-          </>
-        )}
-        <dt>{t('detail.reportsTo')}</dt>
-        <dd>{managers.length ? managers.map((m) => `${m.name} (${m.role})`).join(', ') : t('detail.you')}</dd>
-        <dt>{t('detail.autonomy')}</dt>
-        <dd>{AUTONOMY_TEXT[staff.autonomy]}</dd>
-        <dt>Agents / skills</dt>
-        <dd>
-          {list(staff.agents)} / {list(staff.skills)}
-        </dd>
-        <dt>MCPs</dt>
-        <dd>{staff.mcps === null ? t('detail.allConfigured') : list(staff.mcps)}</dd>
-        {staff.knowledge.length > 0 && (
-          <>
-            <dt>{t('detail.knowledge')}</dt>
-            <dd className="mono">{staff.knowledge.join(' · ')}</dd>
-          </>
-        )}
-        {staff.rules.length > 0 && (
-          <>
-            <dt>{t('detail.rules')}</dt>
-            <dd>
-              <ul className="plain">
-                {staff.rules.map((r) => (
-                  <li key={r}>{r}</li>
-                ))}
-              </ul>
-            </dd>
-          </>
-        )}
-        {staff.doneWhen && (
-          <>
-            <dt>{t('detail.doneWhen')}</dt>
-            <dd>{staff.doneWhen}</dd>
-          </>
-        )}
-        <dt>{t('detail.modelEffort')}</dt>
-        <dd>
-          {staff.model ?? t('detail.default')} / {staff.effort ? effortLabel(staff.effort) : t('detail.default')}
-        </dd>
-        {staff.servers.length > 0 && (
-          <>
-            <dt>{t('detail.servers')}</dt>
-            <dd>{staff.servers.join(', ')}</dd>
-          </>
-        )}
-        <dt>{t('detail.browser')}</dt>
-        <dd>{staff.browser ? t('detail.usesChrome') : t('detail.no')}</dd>
-      </dl>
-      <p className="muted small mono">{t('detail.sheetFiles', { id: staff.id })}</p>
-      {staff.servers.length > 0 && <ServerLog projectId={staff.projectId} staffId={staff.id} />}
-    </section>
   );
 }
 

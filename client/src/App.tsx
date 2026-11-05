@@ -46,7 +46,7 @@ import { AgentForm, type AgentFormTarget } from './staff/AgentForm';
 import { NewProjectForm } from './office/NewProjectForm';
 import { readTab, workspaceByProject, writeTab } from './office/workspaces';
 import { ProjectOffice } from './office/ProjectOffice';
-import { StaffForm, type StaffFormMode } from './staff/HireForm';
+import { StaffForm, type StaffFormMode, type StaffFormTab } from './staff/HireForm';
 import { FilesBoard } from './files/FilesBoard';
 import { TasksBoard } from './tasks/TasksBoard';
 
@@ -86,6 +86,9 @@ export function App() {
   const [showArchived, setShowArchived] = useState(() => readFlag(ARCHIVED_KEY));
   const [animations, setAnimations] = useState(readAnimations);
   const [form, setForm] = useState<{ projectId: string; mode: StaffFormMode } | null>(null);
+  // A ficha embutida no "Mais" do funcionário: "Desfazer" relê; a aba aberta sobrevive a salvar.
+  const [sheetReset, setSheetReset] = useState(0);
+  const [sheetTab, setSheetTab] = useState<StaffFormTab>('who');
   const [agentForm, setAgentForm] = useState<AgentFormTarget | null>(null);
   /** "+ projeto" das abas: a empresa da aba de onde veio. */
   const [newProject, setNewProject] = useState<{ workspaceId: string | null } | null>(null);
@@ -485,6 +488,27 @@ export function App() {
                 const session = (sessionId && board.sessions[selection.projectId]?.find((s) => s.id === sessionId)) || selection.session;
                 if (session) setForm({ projectId: selection.projectId, mode: { kind: 'adopt', session } });
               }}
+              sheetForm={
+                selection.staff && (
+                  // A chave troca quando a ficha muda (salvar, restaurar, rotinas) ou ao desfazer: o formulário relê.
+                  <StaffForm
+                    key={`${selection.staff.id}:${selection.staff.updatedAt}:${sheetReset}`}
+                    embedded
+                    board={board}
+                    projectId={selection.projectId}
+                    mode={{ kind: 'edit', profile: selection.staff }}
+                    simple={simple}
+                    tab={sheetTab}
+                    onTab={setSheetTab}
+                    onClose={() => setSheetReset((n) => n + 1)}
+                    onHired={() => {}}
+                    onSaved={(profile) => {
+                      setNotice(t('app.profileSaved', { name: profile.name }));
+                      load();
+                    }}
+                  />
+                )
+              }
               onSessionStarted={reloadSoon}
               simple={simple}
               onShowAdvanced={() => void saveUiLevel('advanced')}
