@@ -1,5 +1,7 @@
 import type {
   AccountUsage,
+  AnyConnection,
+  AppServerInfo,
   AppConfig,
   AuthStatus,
   Autonomy,
@@ -14,6 +16,8 @@ import type {
   ConversationHit,
   CostReport,
   Effort,
+  FtpConnection,
+  FtpConnectionInput,
   RewindPreview,
   GitState,
   InboxItem,
@@ -24,6 +28,8 @@ import type {
   ModelBenchmarks,
   OrchestrationReport,
   Project,
+  ProjectAttachment,
+  ProjectAttachmentUpload,
   ProjectColor,
   ProjectConnection,
   ProjectDetail,
@@ -75,12 +81,12 @@ async function get<T>(url: string): Promise<T> {
 }
 
 /** Ações levam o cabeçalho `x-myco`, que o servidor exige em todo POST. Não repetem: um envio repetido duplicaria a ação (ex.: a mensagem do chat). */
-async function post<T>(url: string, body: unknown = {}): Promise<T> {
+async function post<T>(url: string, body: unknown = {}, headers: Record<string, string> = {}): Promise<T> {
   let res: Response;
   try {
     res = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-myco': '1' },
+      headers: { 'content-type': 'application/json', 'x-myco': '1', ...headers },
       body: JSON.stringify(body),
     });
   } catch (err) {
@@ -88,8 +94,34 @@ async function post<T>(url: string, body: unknown = {}): Promise<T> {
     throw err;
   }
   const data = (await res.json().catch(() => ({}))) as T & { error?: string; code?: string; hit?: UsageStopHit };
-  if (!res.ok) throw new ApiError(data.error ?? `${url}: ${res.status}`, data.code ?? null, data.hit ?? null);
+  pairingSignal(url, res.ok, data);
+  if (!res.ok) throw new ApiError(errorMessage(data, `${url}: ${res.status}`), data.code ?? null, data.hit ?? null);
   return data;
+}
+
+/**
+ * Pareamento (server/pairing.ts): todo POST de navegador não pareado volta 403 `needs-pairing`. O App mostra um aviso
+ * só (NEEDS_PAIRING_EVENT) e o tira quando um POST passa (PAIRED_EVENT). O erro dessa recusa vem sem texto, para não
+ * repetir o aviso no lugar (`{error && …}` não mostra nada); alerta e texto montado com o erro conferem `isPairingError`.
+ */
+export const NEEDS_PAIRING_EVENT = 'myco:needs-pairing';
+export const PAIRED_EVENT = 'myco:paired';
+const NEEDS_PAIRING = 'needs-pairing';
+
+/** Pedir e buscar o pareamento (/api/pair/…) passam sem o cookie: só contam quando respondem `paired`. */
+function pairingSignal(url: string, ok: boolean, data: { code?: string; paired?: unknown }): void {
+  if (data.code === NEEDS_PAIRING) window.dispatchEvent(new Event(NEEDS_PAIRING_EVENT));
+  else if (ok && (!url.startsWith('/api/pair/') || data.paired === true)) window.dispatchEvent(new Event(PAIRED_EVENT));
+}
+
+const errorMessage = (data: { error?: string; code?: string }, fallback: string) =>
+  data.code === NEEDS_PAIRING ? '' : (data.error ?? fallback);
+
+export const isPairingError = (e: unknown): boolean => (e instanceof ApiError || e instanceof FileApiError) && e.code === NEEDS_PAIRING;
+
+/** `window.alert` com o erro de uma ação; na recusa por pareamento, nada (o aviso do App já explica). */
+export function alertError(e: unknown): void {
+  if (!isPairingError(e)) window.alert((e as Error).message);
 }
 
 export class ApiError extends Error {
@@ -196,9 +228,13 @@ export const api = {
   deleteRole: (id: string) => post<RoleEntry[]>(`/api/roles/${id}/delete`),
   setDefaultRole: (id: string | null) => post<RoleEntry[]>('/api/roles/default', { id }),
   restoreRoles: () => post<RoleEntry[]>('/api/roles/restore'),
-  serverInfo: () =>
-    get<{ daemon: boolean; pid: number; port: number; startedAt: string; working: { busy: number; background: number } }>('/api/server'),
+  serverInfo: () => get<AppServerInfo>('/api/server'),
   serverAction: (action: 'stop' | 'restart') => post<{ ok: boolean; daemon: boolean }>(`/api/server/${action}`),
+  /** "Parear este navegador": `code` é o que a tela mostra para `npm run pair CÓDIGO`; `id` fica só aqui. */
+  /** `terminal`: o servidor abriu o terminal de aprovação com o comando pronto. */
+  pairRequest: () => post<{ paired: true } | { paired: false; id: string; code: string; terminal: boolean }>('/api/pair/request'),
+  /** Aprovado no terminal: a resposta grava o cookie. Expirado: ApiError com code `pair-gone`. */
+  pairClaim: (id: string) => post<{ paired: boolean }>('/api/pair/claim', {}, { 'x-pair-request': id }),
   updateStatus: (fresh = false) => get<UpdateStatus>(fresh ? '/api/update?fresh=1' : '/api/update'),
   applyUpdate: () => post<{ from: string; to: string; installed: boolean; restarting: boolean }>('/api/update'),
   usage: () => get<AccountUsage>('/api/usage'),
@@ -217,6 +253,8 @@ export const api = {
     autoContinue?: boolean;
     showUserScope?: boolean;
     codexReview?: boolean;
+    /** Dias parado até o Freela (conversa sem ficha) ser arquivado sozinho; 0 = nunca. */
+    freelaArchiveDays?: number;
     /** Só os projetos enviados mudam; null volta à cor padrão. */
     projectColors?: Record<string, ProjectColor | null>;
     /** Só os projetos enviados mudam; vazio ou null volta ao nome da pasta. */
@@ -243,12 +281,14 @@ export const api = {
   removeLibrarySkill: (name: string) => post<{ ok: boolean }>(`/api/skills/library/${encodeURIComponent(name)}/delete`),
   importSkill: (name: string) => post<LibrarySkill>('/api/skills/library/import', { name }),
   serverLog: (projectId: string, staffId: string) => get<ServerAccess[]>(`/api/projects/${projectId}/staff/${staffId}/server-log`),
-  // Conexões SSH do projeto (a lista também é POST: exige a página do Claudio’s Club).
-  connections: (projectId: string) => post<ProjectConnection[]>(`/api/projects/${projectId}/connections/list`),
+  // Conexões SSH e FTP do projeto (a lista também é POST: exige a página do Claudio’s Club).
+  connections: (projectId: string) => post<AnyConnection[]>(`/api/projects/${projectId}/connections/list`),
   saveConnection: (
     projectId: string,
     c: { name: string; host: string; port: number; user: string; identityFile: string; remoteRoot: string | null; originalName?: string },
   ) => post<ProjectConnection>(`/api/projects/${projectId}/connections`, c),
+  // A senha só vai: a resposta traz `hasPassword`, nunca o valor.
+  saveFtpConnection: (projectId: string, c: FtpConnectionInput) => post<FtpConnection>(`/api/projects/${projectId}/connections/ftp`, c),
   removeConnection: (projectId: string, name: string) => post<{ ok: boolean }>(`/api/projects/${projectId}/connections/${encodeURIComponent(name)}/delete`),
   testConnection: (projectId: string, name: string) =>
     post<{ ok: boolean; message: string }>(`/api/projects/${projectId}/connections/${encodeURIComponent(name)}/test`),
@@ -391,12 +431,13 @@ export interface FileContent {
   size: number;
 }
 
-/** Erro dos arquivos com o status HTTP (403, 404, 409, 413, 415…); no 409, o `mtimeMs` do disco. */
+/** Erro dos arquivos com o status HTTP (403, 404, 409, 413, 415…); no 409, o `mtimeMs` do disco; `code` = o do servidor (ex.: needs-pairing). */
 export class FileApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
     readonly mtimeMs: number | null = null,
+    readonly code: string | null = null,
   ) {
     super(message);
   }
@@ -413,12 +454,15 @@ async function filesFetch<T>(url: string, body?: unknown): Promise<T> {
     if (err instanceof TypeError) throw offlineError();
     throw err;
   }
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string; mtimeMs?: number };
-  if (!res.ok) throw new FileApiError(data.error ?? `${url}: ${res.status}`, res.status, typeof data.mtimeMs === 'number' ? data.mtimeMs : null);
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string; code?: string; mtimeMs?: number };
+  if (body !== undefined) pairingSignal(url, res.ok, data);
+  if (!res.ok) {
+    throw new FileApiError(errorMessage(data, `${url}: ${res.status}`), res.status, typeof data.mtimeMs === 'number' ? data.mtimeMs : null, data.code ?? null);
+  }
   return data;
 }
 
-/** Arquivos do projeto (ler, editar e criar; sem apagar ou renomear). */
+/** Arquivos do projeto (ler, editar, criar e apagar; sem renomear). */
 export const filesApi = {
   tree: (projectId: string, path: string) =>
     filesFetch<{ entries: FileEntry[] }>(`/api/projects/${projectId}/files/tree?path=${encodeURIComponent(path)}`),
@@ -432,4 +476,36 @@ export const filesApi = {
   /** Arquivo vazio ou pasta nova; nunca sobrescreve (409 se já existe). */
   create: (projectId: string, path: string, kind: 'file' | 'dir') =>
     filesFetch<{ path: string }>(`/api/projects/${projectId}/files/create`, { path, kind }),
+  /** Apaga de vez (sem lixeira) arquivo ou pasta com tudo dentro; `removed` = quantos itens saíram. */
+  remove: (projectId: string, path: string) =>
+    filesFetch<{ path: string; removed: number }>(`/api/projects/${projectId}/files/delete`, { path }),
+};
+
+/** Anexos do projeto (`.myco/attachments/`): prints, docs e afins. Erros com o status (400, 403, 404, 413). */
+export const attachmentsApi = {
+  list: (projectId: string) =>
+    filesFetch<{ attachments: ProjectAttachment[]; maxBytes: number }>(`/api/projects/${projectId}/attachments`),
+  /** Raster (previewable) abre inline; o resto o servidor manda como download. `v` evita o cache depois de trocar. */
+  fileUrl: (projectId: string, name: string, v: number) =>
+    `/api/projects/${projectId}/attachments/file?name=${encodeURIComponent(name)}&v=${Math.round(v)}`,
+  /** Corpo = os bytes do arquivo; o servidor nunca sobrescreve (nome repetido volta com " (2)"). */
+  upload: async (projectId: string, file: Blob, name: string) => {
+    const url = `/api/projects/${projectId}/attachments?name=${encodeURIComponent(name)}`;
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream', 'x-myco': '1' },
+        body: file,
+      });
+    } catch (err) {
+      if (err instanceof TypeError) throw offlineError();
+      throw err;
+    }
+    const data = (await res.json().catch(() => ({}))) as ProjectAttachmentUpload & { error?: string; code?: string };
+    pairingSignal(url, res.ok, data);
+    if (!res.ok) throw new FileApiError(errorMessage(data, `${name}: ${res.status}`), res.status, null, data.code ?? null);
+    return data;
+  },
+  remove: (projectId: string, name: string) => filesFetch<{ ok: true }>(`/api/projects/${projectId}/attachments/delete`, { name }),
 };

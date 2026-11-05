@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 // Arquivos do projeto na aba de arquivos: listar, ler, gravar um arquivo que já existe e criar arquivo vazio
-// ou pasta (sem sobrescrever). Tudo fica preso à pasta do projeto: o caminho é resolvido e o realpath
+// ou pasta (sem sobrescrever) e apagar (sem seguir links). Tudo fica preso à pasta do projeto: o caminho é resolvido e o realpath
 // conferido (link simbólico que sai do projeto é recusado). Arquivo de segredo aparece na lista (locked), mas não abre nem grava.
 
 export const MAX_FILE_BYTES = 1024 * 1024;
@@ -68,7 +68,17 @@ const notFound = (message: string) => new ProjectFileError(404, message);
 export function isSecretRel(rel: string): boolean {
   const parts = rel.split('/').filter(Boolean).map((p) => p.toLowerCase());
   // .git fica junto: o .git/config pode ter token na URL do remote.
-  if (parts.some((p) => SECRET_DIRS.has(p) || HIDDEN.has(p))) return true;
+  if (parts.some((p) => HIDDEN.has(p))) return true;
+  return isSecretFileRel(rel);
+}
+
+/**
+ * Só o critério de segredo (sem as pastas de build e dependências, que podem ser enviadas, como o
+ * dist/ de um site): dentro de .vps/, .ssh/ ou .git/, ou nome de segredo (.env, chave, certificado).
+ */
+export function isSecretFileRel(rel: string): boolean {
+  const parts = rel.split('/').filter(Boolean).map((p) => p.toLowerCase());
+  if (parts.some((p) => SECRET_DIRS.has(p) || p === '.git')) return true;
   const name = parts.at(-1) ?? '';
   if (ENV_TEMPLATES.has(name)) return false;
   return SECRET_NAME.test(name);
@@ -290,6 +300,103 @@ export async function createProjectEntry(root: string, input: CreateInput): Prom
     throw err;
   }
   return { path: rel };
+}
+
+/** Limites para apagar uma pasta inteira: passou disso, 413 e nada é apagado. */
+export const MAX_DELETE_ENTRIES = 1000;
+export const MAX_DELETE_BYTES = 200 * 1024 * 1024;
+/** Dados do próprio Claudio’s Club no projeto (equipe, anexos): não saem pela aba de arquivos. */
+const APP_DIR = '.myco';
+
+/** Valida o corpo do POST de exclusão; tipo errado vira 400. */
+export function parseDeleteBody(body: unknown): { path: string } {
+  if (!body || typeof body !== 'object') throw new ProjectFileError(400, 'corpo inválido');
+  const p = (body as Record<string, unknown>).path;
+  if (typeof p !== 'string') throw new ProjectFileError(400, 'path precisa ser texto');
+  return { path: p };
+}
+
+/**
+ * Apaga de vez (sem lixeira) um arquivo ou uma pasta do projeto. Nunca a raiz, nem segredo, .git, node_modules e
+ * afins, nem o .myco. Link (simbólico ou junção) nunca é seguido: apaga só o link. Pasta: recursivo, mas antes
+ * percorre tudo (sem seguir links) e recusa com 413 se passar de `maxEntries` entradas ou `maxBytes`, e com 403 se
+ * tiver segredo dentro. Só o que foi percorrido é apagado: algo criado no meio do caminho faz a pasta sobrar (409).
+ */
+export async function deleteProjectEntry(
+  root: string,
+  rawPath: string,
+  limits: { maxEntries?: number; maxBytes?: number } = {},
+): Promise<{ path: string; removed: number }> {
+  const maxEntries = limits.maxEntries ?? MAX_DELETE_ENTRIES;
+  const maxBytes = limits.maxBytes ?? MAX_DELETE_BYTES;
+  const rel = cleanRel(rawPath);
+  if (!rel) throw new ProjectFileError(400, 'a pasta do projeto não é apagada');
+  const protectedErr = () => forbidden('caminho protegido: não é apagado pelo Claudio’s Club');
+  const isProtected = (r: string) => isSecretRel(r) || r.split('/')[0]!.toLowerCase() === APP_DIR;
+  if (isProtected(rel)) throw protectedErr();
+
+  // A pasta de cima segue os links (tem de ficar no projeto); o último pedaço não: se for link, sai só o link.
+  const parentRel = rel.split('/').slice(0, -1).join('/');
+  const name = rel.split('/').at(-1)!;
+  const { abs: realParent, realRoot, realRel: realParentRel } = await resolveInside(root, parentRel);
+  const target = path.join(realParent, name);
+  const targetRel = realParentRel ? `${realParentRel}/${name}` : name;
+  if (target === realRoot || !isInside(realRoot, target)) throw forbidden();
+  if (isProtected(targetRel)) throw protectedErr();
+
+  const st = await fs.lstat(target).catch((err) => {
+    if (isErr(err, 'ENOENT', 'ENOTDIR')) throw notFound('não encontrado');
+    throw err;
+  });
+
+  // Pré-ordem (pasta antes do que tem dentro); apagar na ordem inversa tira o conteúdo antes da pasta.
+  const items: Array<{ abs: string; dir: boolean }> = [{ abs: target, dir: st.isDirectory() }];
+  if (st.isDirectory()) {
+    let bytes = 0;
+    const tooBig = () => new ProjectFileError(413, `pasta grande demais para apagar por aqui (máx. ${maxEntries} itens e ${Math.round(maxBytes / 1024 / 1024)} MB)`);
+    const walk = async (dir: string, dirRel: string): Promise<void> => {
+      for (const child of await fs.readdir(dir)) {
+        const childAbs = path.join(dir, child);
+        const childRel = `${dirRel}/${child}`;
+        if (isSecretRel(childRel)) throw forbidden(`a pasta tem um item protegido (${childRel}): não é apagada pelo Claudio’s Club`);
+        const cst = await fs.lstat(childAbs);
+        // lstat: link (inclusive junção no Windows) não conta como pasta, então não é percorrido.
+        const isDir = cst.isDirectory();
+        if (items.length >= maxEntries + 1) throw tooBig();
+        if (!isDir && !cst.isSymbolicLink()) bytes += cst.size;
+        if (bytes > maxBytes) throw tooBig();
+        items.push({ abs: childAbs, dir: isDir });
+        if (isDir) await walk(childAbs, childRel);
+      }
+    };
+    await walk(target, targetRel);
+  }
+
+  for (const item of items.reverse()) {
+    try {
+      if (item.dir) await fs.rmdir(item.abs);
+      else await unlinkEntry(item.abs);
+    } catch (err) {
+      if (isErr(err, 'ENOENT')) continue; // já tinha saído
+      if (isErr(err, 'ENOTEMPTY', 'EEXIST')) throw new ProjectFileError(409, 'a pasta mudou enquanto era apagada: parte ficou, confira e tente de novo');
+      if (isErr(err, 'EBUSY', 'EPERM', 'EACCES')) throw new ProjectFileError(409, 'arquivo em uso ou sem permissão: parte pode ter ficado');
+      throw err;
+    }
+  }
+  return { path: rel, removed: items.length };
+}
+
+/** Arquivo ou link. No Windows, arquivo só-leitura recusa o unlink: libera a escrita e tenta de novo. */
+async function unlinkEntry(abs: string): Promise<void> {
+  try {
+    await fs.unlink(abs);
+  } catch (err) {
+    if (!isErr(err, 'EPERM', 'EACCES')) throw err;
+    const st = await fs.lstat(abs);
+    if (st.isSymbolicLink()) throw err;
+    await fs.chmod(abs, 0o666);
+    await fs.unlink(abs);
+  }
 }
 
 async function writeAtomic(abs: string, text: string, mode: number): Promise<void> {

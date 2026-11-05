@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import { clientChanged, VITE } from '../scripts/lib';
+import { clientChanged, DAILY, TSX, VITE } from '../scripts/lib';
+import { openTerminal } from './terminal';
 import { ArtificialAnalysis } from './adapters/artificialAnalysis';
 import { CodexAdapter, CodexError } from './adapters/codex';
 import { ClaudeAdapter } from './adapters/claude';
@@ -39,13 +40,27 @@ import { ChatRegistry } from './chat/registry';
 import { AutoContinue } from './chat/autoContinue';
 import { WakeBody, WakeStreakError, watchWakeups } from './chat/wake';
 import { StaffError, StaffService } from './staff/service';
+import { sweepFreelas } from './freelaSweep';
 import { mcpJsonWarnings } from './staff/mcp';
 import { permissionInboxItem, questionInboxItem } from './inboxItems';
 import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
 import { copyToLibrary, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill, SkillError } from './skillLibrary';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
-import { createProjectEntry, listProjectTree, parseCreateBody, parseWriteBody, ProjectFileError, readProjectFile, readProjectImageFile, writeProjectFile } from './projectFiles';
+import { deleteAttachment, listAttachments, MAX_ATTACHMENT_BYTES, readAttachment, saveAttachment } from './projectAttachments';
+import {
+  createProjectEntry,
+  deleteProjectEntry,
+  listProjectTree,
+  parseCreateBody,
+  parseDeleteBody,
+  parseWriteBody,
+  ProjectFileError,
+  readProjectFile,
+  readProjectImageFile,
+  writeProjectFile,
+} from './projectFiles';
+import { staffMayPost } from './apiPolicy';
 import { readUsage } from './usage';
 import { UsageStopError } from './usageStop';
 import { quotaBoost } from './quotaBoost';
@@ -55,7 +70,7 @@ import { buildOrchestration, buildSavings, MarkBody, readAllMarks, readMarks, sa
 import type { Board, CostReport, InboxItem, InboxKind, LiveSession, Project, TurnNotice } from '../shared/model';
 import { TurnWatcher } from './turns';
 import { RoutineScheduler, type RoutineOutcome } from './routines';
-import type { Routine, StaffProfile } from '../shared/model';
+import type { AppServerInfo, Routine, StaffProfile } from '../shared/model';
 import { pathKey, worktreeParent } from './adapters/claude/paths';
 import { boardFilter } from './board';
 import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
@@ -66,11 +81,15 @@ import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefault
 import { ROOT } from './root';
 import { cleanRunDir } from './runCleanup';
 import { SelfUpdater, UpdateError } from './selfUpdate';
+import { pendingRestartCheck } from './pendingRestart';
+import { admit, Pairing } from './pairing';
 
 const PORT = Number(process.env.MYCO_PORT ?? 4848);
 /** Rodando pelo vigia (scripts/daemon.ts): ele religa o servidor quando este sai. */
 const UNDER_DAEMON = process.env.MYCO_DAEMON === '1';
 const STARTED_AT = new Date().toISOString();
+/** Código no disco mais novo que o no ar (marco: o pacote carregado agora, ou a subida pelo tsx). */
+const pendingRestart = pendingRestartCheck({ entry: import.meta.filename, startedAt: Date.parse(STARTED_AT) });
 /** Novidades do próprio Claudio’s Club no remoto (GitHub). */
 const updater = new SelfUpdater();
 
@@ -112,14 +131,20 @@ async function buildBeforeRestart(): Promise<void> {
 
 let leaving = false;
 
-/** Fecha as conversas (sem deixar processos órfãos) e sai. `stop`: o vigia não religa. */
-async function shutdown(stop: boolean) {
+/**
+ * Fecha as conversas (sem deixar processos órfãos) e sai. `stop`: o vigia não religa. Sem `stop`, grava o pedido de
+ * reinício: só com ele o vigia refaz o pacote e sobe o código novo (saída sem pedido é queda: sobe a mesma versão).
+ */
+async function shutdown(stop: boolean, userAgent = '') {
   // Parar grava o arquivo mesmo durante um reinício em curso: o vigia, ao ver o arquivo, não religa.
   if (stop && UNDER_DAEMON) await fs.writeFile(path.join(MYCO_HOME, 'run', 'daemon.stop'), '').catch(() => {});
   if (leaving) return;
   leaving = true;
-  console.log(`[servidor] ${stop ? 'parando' : 'reiniciando'} a pedido do config`);
-  if (!stop && UNDER_DAEMON) await buildBeforeRestart();
+  console.log(`[servidor] ${stop ? 'parando' : 'reiniciando'} a pedido do config${userAgent ? ` (${userAgent})` : ''}`);
+  if (!stop && UNDER_DAEMON) {
+    await fs.writeFile(path.join(MYCO_HOME, 'run', 'daemon.restart'), '').catch(() => {});
+    await buildBeforeRestart();
+  }
   await Promise.race([chats.stopAll(), new Promise((r) => setTimeout(r, 5000))]);
   process.exit(0);
 }
@@ -140,6 +165,8 @@ const CLIENT_DIR = path.join(ROOT, 'dist', 'client');
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', 'claudio.localhost', 'myco.localhost']);
 // Retratos chegam como data URL no JSON da contratação.
 const MAX_BODY = 4 * 1024 * 1024;
+/** Pareamento do navegador: a chave (~/.myco/secrets/pairing.key) é criada aqui, na subida, se ainda não existe. */
+const pairing = new Pairing();
 
 // No quadro: o demo, as pastas de `extraProjects` (novas ou importadas) e os projetos com equipe. O resto
 // do que o Claude Code conhece só entra se o usuário importar (`/api/import-projects`).
@@ -400,8 +427,15 @@ interface Request {
   params: string[];
   url: URL;
   body: unknown;
-  /** Veio da página do Claudio’s Club (tem Origin local), e não de uma ferramenta de linha de comando. */
+  /**
+   * Veio da página do Claudio’s Club num navegador pareado (Origin local e o cookie do pareamento), e não de uma
+   * ferramenta de linha de comando. Origin sem cookie num POST nem chega aqui (403 needs-pairing, ver pairing.ts).
+   */
   fromBrowser: boolean;
+  /** Só o cookie do pareamento é válido (o GET do navegador não manda Origin). Informação para a tela; NUNCA autoriza nada. */
+  paired: boolean;
+  /** Só para o log (quem pediu o reinício: navegador ou curl); cortado e sem caracteres de controle. */
+  userAgent: string;
 }
 
 type Handler = (r: Request) => Promise<unknown>;
@@ -411,28 +445,46 @@ class Raw {
   constructor(
     readonly bytes: Buffer,
     readonly type: string,
+    /** Cabeçalhos a mais (ex.: content-disposition dos anexos). */
+    readonly headers: Record<string, string> = {},
   ) {}
 }
 
 class BadRequest extends Error {}
 
 const ID = '([A-Za-z0-9-]+)';
-/** Nome de conexão SSH (o mesmo formato de server/staff/servers.ts). */
+/** Nome de conexão SSH ou FTP (o mesmo formato de server/staff/servers.ts). */
 const CONN = '([A-Za-z0-9][\\w.-]{0,39})';
+
+/** Envio de anexo: o corpo são os bytes do arquivo (não JSON), o nome vai em `?name=`. */
+const ATTACHMENT_UPLOAD = new RegExp(`^/api/projects/${ID}/attachments$`);
 
 const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ['GET', /^\/api\/health$/, async () => ({ ok: true, adapter: adapter.id })],
   // ---- o próprio servidor: parar e (com o vigia) reiniciar pelo config ----
-  ['GET', /^\/api\/server$/, async () => ({ daemon: UNDER_DAEMON, pid: process.pid, port: PORT, startedAt: STARTED_AT, working: chats.working() })],
+  // `pendingRestart`: há código no disco que só entra reiniciando (o vigia não reinicia por mudança de código).
+  [
+    'GET',
+    /^\/api\/server$/,
+    async ({ paired }): Promise<AppServerInfo> => ({
+      daemon: UNDER_DAEMON,
+      paired,
+      pid: process.pid,
+      port: PORT,
+      startedAt: STARTED_AT,
+      working: chats.working(),
+      ...pendingRestart(),
+    }),
+  ],
   [
     'POST',
     /^\/api\/server\/(stop|restart)$/,
-    async ({ params: [action], fromBrowser }) => {
+    async ({ params: [action], fromBrowser, userAgent }) => {
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       if (action === 'restart' && !UNDER_DAEMON) throw new BadRequest('reiniciar precisa do Claudio’s Club em segundo plano (npm run daily:start)');
       // Responde primeiro; fecha as conversas e sai logo depois. Parando com o vigia, o arquivo de
       // parada impede que ele religue; reiniciando, ele sobe o servidor de novo em poucos segundos.
-      setTimeout(() => void shutdown(action === 'stop'), 300);
+      setTimeout(() => void shutdown(action === 'stop', userAgent), 300);
       return { ok: true, daemon: UNDER_DAEMON };
     },
   ],
@@ -441,12 +493,12 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   [
     'POST',
     /^\/api\/update$/,
-    async ({ fromBrowser }) => {
+    async ({ fromBrowser, userAgent }) => {
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const result = await updater.apply();
       console.log(`[servidor] atualizado pelo config: ${result.from} → ${result.to}${result.installed ? ' (com npm install)' : ''}`);
       // Com o vigia, reinicia já na versão nova (ele refaz o build do cliente); sem ele, quem reinicia é você.
-      if (UNDER_DAEMON) setTimeout(() => void shutdown(false), 300);
+      if (UNDER_DAEMON) setTimeout(() => void shutdown(false, userAgent), 300);
       return { ...result, restarting: UNDER_DAEMON };
     },
   ],
@@ -502,6 +554,15 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     ({ params: [id], body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       return staff.saveConnection(id!, body);
+    },
+  ],
+  // FTP/FTPS: a senha vai para o cofre do sistema (~/.myco/secrets) e nunca volta em resposta nenhuma.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/connections/ftp$`),
+    ({ params: [id], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      return staff.saveFtpConnection(id!, body);
     },
   ],
   [
@@ -768,8 +829,9 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/chat/${ID}/compact$`),
     async ({ params: [pid, sid], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(StaffRef, body);
-      if (!(fromBrowser && b.force)) await staff.checkUsage(pid!);
+      if (!b.force) await staff.checkUsage(pid!);
       await chats.compact(pid!, sid!, b.staffId);
       return { ok: true };
     },
@@ -778,12 +840,14 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/chat/${ID}/permission$`),
     async ({ params: [sid], body, fromBrowser }) => {
+      // Um funcionário não aprova pedido de permissão (nem o dele, nem o de outro).
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(PermissionBody, body);
       return {
         ok: chats.answer(sid!, b.requestId, b.allow, {
           message: b.message,
-          executeAs: fromBrowser ? b.executeAs : undefined,
-          remember: fromBrowser ? b.remember : undefined,
+          executeAs: b.executeAs,
+          remember: b.remember,
           answers: b.answers,
           annotations: b.annotations,
         }),
@@ -892,13 +956,15 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       return staff.setRoutines(id!, staffId!, (body as { routines?: unknown } | null)?.routines);
     },
   ],
-  // Temporários: o gestor (pela API) ou você encerra; só você efetiva.
+  // Temporários: quem contratou (pela API, com requestedBy) ou você encerra; só você efetiva.
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}/done$`),
     ({ params: [id, staffId], body, fromBrowser }) => {
-      const note = (body as { note?: unknown } | null)?.note;
-      return staff.end(id!, staffId!, typeof note === 'string' && note.trim() ? note.trim() : fromBrowser ? 'você encerrou' : 'o gestor encerrou');
+      const b = parse(z.object({ note: z.unknown().optional(), requestedBy: z.string().max(40).optional() }), body ?? {});
+      if (!fromBrowser && !b.requestedBy) throw new BadRequest('pela API, diga quem encerra (requestedBy: o seu id)');
+      const note = typeof b.note === 'string' && b.note.trim() ? b.note.trim() : fromBrowser ? 'você encerrou' : 'o gestor encerrou';
+      return staff.end(id!, staffId!, note, fromBrowser ? undefined : b.requestedBy);
     },
   ],
   [
@@ -962,8 +1028,16 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       return { ok: !!l };
     },
   ],
-  ['POST', new RegExp(`^/api/chat/${ID}/interrupt$`), async ({ params: [sid] }) => (chats.interrupt(sid!), { ok: true })],
-  ['POST', new RegExp(`^/api/chat/${ID}/stop$`), async ({ params: [sid] }) => (chats.stop(sid!), { ok: true })],
+  [
+    'POST',
+    new RegExp(`^/api/chat/${ID}/(interrupt|stop)$`),
+    async ({ params: [sid, action], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      if (action === 'interrupt') chats.interrupt(sid!);
+      else chats.stop(sid!);
+      return { ok: true };
+    },
+  ],
   [
     'POST',
     new RegExp(`^/api/chat/${ID}/adopt$`),
@@ -1053,6 +1127,53 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       return dir ? createProjectEntry(dir, input) : null;
     },
   ],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/files/delete$`),
+    async ({ params: [id], body, fromBrowser }) => {
+      if (!fromBrowser) throw new ProjectFileError(403, 'arquivos só são apagados pelo Claudio’s Club');
+      const input = parseDeleteBody(body);
+      const dir = await projectPathOf(id!);
+      return dir ? deleteProjectEntry(dir, input.path) : null;
+    },
+  ],
+  // ---- anexos do projeto (<projeto>/.myco/attachments): listar e baixar; enviar e apagar só pelo Claudio’s Club ----
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/attachments$`),
+    async ({ params: [id] }) => {
+      const dir = await projectPathOf(id!);
+      return dir ? listAttachments(dir) : null;
+    },
+  ],
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/attachments/file$`),
+    async ({ params: [id], url }) => {
+      const dir = await projectPathOf(id!);
+      const file = dir ? await readAttachment(dir, url.searchParams.get('name')) : null;
+      return file ? new Raw(file.bytes, file.type, file.headers) : null;
+    },
+  ],
+  [
+    'POST',
+    ATTACHMENT_UPLOAD,
+    async ({ params: [id], url, body, fromBrowser }) => {
+      if (!fromBrowser) throw new ProjectFileError(403, 'anexos só são enviados pelo Claudio’s Club');
+      const dir = await projectPathOf(id!);
+      return dir ? saveAttachment(dir, url.searchParams.get('name'), body, fromBrowser) : null;
+    },
+  ],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/attachments/delete$`),
+    async ({ params: [id], body, fromBrowser }) => {
+      if (!fromBrowser) throw new ProjectFileError(403, 'anexos só são apagados pelo Claudio’s Club');
+      const dir = await projectPathOf(id!);
+      const name = body && typeof body === 'object' ? (body as Record<string, unknown>).name : undefined;
+      return dir ? deleteAttachment(dir, name, fromBrowser) : null;
+    },
+  ],
   ['GET', /^\/api\/account\/rules$/, () => readAccountRules()],
   [
     'POST',
@@ -1097,7 +1218,14 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     },
   ],
   ['GET', /^\/api\/auth$/, ({ url }) => getAuthStatus({ fresh: url.searchParams.has('fresh') })],
-  ['POST', /^\/api\/auth\/login$/, async () => openLoginTerminal()],
+  [
+    'POST',
+    /^\/api\/auth\/login$/,
+    async ({ fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      return openLoginTerminal();
+    },
+  ],
   [
     'GET',
     /^\/api\/usage$/,
@@ -1167,7 +1295,8 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   [
     'POST',
     /^\/api\/archive$/,
-    async ({ body }) => {
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const req = ArchiveRequest.safeParse(body);
       if (!req.success) throw new BadRequest('pedido de arquivamento inválido');
       const config = await setArchived(req.data);
@@ -1242,7 +1371,8 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   [
     'POST',
     /^\/api\/config$/,
-    async ({ body }) => {
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const patch = ConfigPatch.safeParse(body);
       if (!patch.success) throw new BadRequest(patch.error.issues[0]?.message ?? 'configuração inválida');
       return updateConfig(patch.data);
@@ -1266,13 +1396,21 @@ const server = http.createServer(async (req, res) => {
   const hostname = (req.headers.host ?? '').replace(/:\d+$/, '');
   if (!LOCAL_HOSTNAMES.has(hostname)) return send(res, 403, { error: 'host não permitido' });
   if (req.method !== 'GET' && req.method !== 'POST') return send(res, 405, { error: 'método não permitido' });
-  // Ações (POST) exigem um cabeçalho próprio: o navegador não deixa outro site enviá-lo sem CORS,
-  // que este servidor não libera. Assim uma página qualquer não consegue disparar ações locais.
-  if (req.method === 'POST' && (req.headers['x-myco'] !== '1' || !isLocalOrigin(req.headers.origin))) {
-    return send(res, 403, { error: 'origem não permitida' });
-  }
 
   const url = new URL(req.url ?? '/', 'http://localhost');
+  // Ações (POST) exigem um cabeçalho próprio: o navegador não deixa outro site enviá-lo sem CORS,
+  // que este servidor não libera. Assim uma página qualquer não consegue disparar ações locais.
+  // Com Origin (o navegador), também o cookie do pareamento: um Origin forjado num curl não basta (ver pairing.ts).
+  // Aqui também ficam GET /api/pair (o link com o código), POST /api/pair/request|claim|approve (o botão "Parear este
+  // navegador" + `npm run pair CÓDIGO`) e POST /api/pair/rotate (desparear todos).
+  const admission = admit(req, res, url, pairing, { isLocalOrigin, openApproval });
+  if (admission.done) return;
+  const { fromBrowser } = admission;
+  // Funcionário pela API: só os POSTs que a ficha manda usar (lista fechada em apiPolicy.ts); o resto, só pelo navegador.
+  if (req.method === 'POST' && !fromBrowser && url.pathname.startsWith('/api/') && !staffMayPost(url.pathname)) {
+    return send(res, 400, { error: 'só pelo Claudio’s Club' });
+  }
+
   const stream = STREAM_ROUTE.exec(url.pathname);
   if (stream && req.method === 'GET') return serveChatStream(stream[1]!, Number(url.searchParams.get('after') ?? 0), req, res);
   if (url.pathname.startsWith('/api/')) {
@@ -1280,8 +1418,10 @@ const server = http.createServer(async (req, res) => {
       const m = pattern.exec(url.pathname);
       if (!m || method !== req.method) continue;
       try {
-        const body = req.method === 'POST' ? await readJson(req) : undefined;
-        const out = await handler({ params: m.slice(1), url, body, fromBrowser: !!req.headers.origin });
+        // O envio de anexo manda os bytes do arquivo (até 10 MB) em vez de JSON.
+        const body = req.method === 'POST' ? (ATTACHMENT_UPLOAD.test(url.pathname) ? await readRaw(req, MAX_ATTACHMENT_BYTES) : await readJson(req)) : undefined;
+        const userAgent = (req.headers['user-agent'] ?? '').replace(/[^\x20-\x7e]/g, '').slice(0, 80);
+        const out = await handler({ params: m.slice(1), url, body, fromBrowser, paired: pairing.isPaired(req.headers.cookie), userAgent });
         if (out === null) return send(res, 404, { error: 'não encontrado' });
         if (out instanceof Raw) {
           // no-cache + ETag: o navegador confere a cada vez, mas só baixa de novo se a imagem mudou.
@@ -1290,7 +1430,7 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(304, { etag, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
             return res.end();
           }
-          res.writeHead(200, { 'content-type': out.type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', etag });
+          res.writeHead(200, { 'content-type': out.type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', ...out.headers, etag });
           return res.end(out.bytes);
         }
         return send(res, 200, out);
@@ -1345,6 +1485,20 @@ function serveChatStream(sessionId: string, after: number, req: http.IncomingMes
   });
 }
 
+/** Corpo binário até `limit` bytes; passou disso, 413 sem ler o resto. */
+async function readRaw(req: http.IncomingMessage, limit: number): Promise<Buffer> {
+  const tooBig = () => new ProjectFileError(413, 'arquivo grande demais (máx. 10 MB)');
+  if (Number(req.headers['content-length'] ?? 0) > limit) throw tooBig();
+  let size = 0;
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > limit) throw tooBig();
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
 async function readJson(req: http.IncomingMessage): Promise<unknown> {
   let size = 0;
   const chunks: Buffer[] = [];
@@ -1360,6 +1514,14 @@ async function readJson(req: http.IncomingMessage): Promise<unknown> {
   } catch {
     throw new BadRequest('JSON inválido');
   }
+}
+
+/** "Parear este navegador": terminal com `npm run pair CÓDIGO` pronto, que só pergunta e aprova (scripts/daily.ts). */
+function openApproval(code: string): boolean {
+  return openTerminal([process.execPath, TSX, DAILY, 'pair', code, '--port', String(PORT)], {
+    title: 'Claudio’s Club - parear navegador',
+    cwd: ROOT,
+  }).ok;
 }
 
 function isLocalOrigin(origin: string | undefined): boolean {
@@ -1605,6 +1767,13 @@ server.listen(PORT, HOST, () => {
       .catch(() => {});
   setTimeout(sweep, 30_000).unref();
   setInterval(sweep, 60 * 60_000).unref();
+  // Freelas (conversas sem ficha) parados há dias saem do quadro (arquivados, desarquivar vale): na subida e a cada 1 h.
+  const sweepFree = () =>
+    void sweepFreelas({ adapter, staff })
+      .then((ids) => ids.length && console.log(`[freela] ${ids.length} conversa(s) sem ficha arquivada(s) por inatividade`))
+      .catch(() => {});
+  setTimeout(sweepFree, 45_000).unref();
+  setInterval(sweepFree, 60 * 60_000).unref();
   // Configs de sessão antigas em ~/.myco/run (podem ter tokens de MCP): na subida e a cada 12 h.
   const cleanRun = () =>
     cleanRunDir(path.join(MYCO_HOME, 'run'))

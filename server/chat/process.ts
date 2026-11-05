@@ -146,6 +146,8 @@ export class ChatProcess {
   private readonly waiters = new Map<string, { resolve: (r: Record<string, unknown>) => void; reject: (e: Error) => void }>();
   /** O próximo resultado com erro é de um turno que nós paramos (botão Parar ou mensagem `now`). */
   private stopping = false;
+  /** Mandamos algo (mensagem ou /compact) e o turno disso ainda não terminou (ver o `result` de aviso). */
+  private waitingReply = false;
   /** A ficha mudou depois que o processo abriu: reabre quando estiver parado. */
   stale = false;
   private exitWaiters: Array<() => void> = [];
@@ -319,6 +321,7 @@ export class ChatProcess {
       ...(images.length && { images: images.length }),
       ...(files.length && { files: files.map((f) => f.name) }),
     });
+    this.waitingReply = true;
     this.setState({ busy: true, error: null });
   }
 
@@ -399,6 +402,7 @@ export class ChatProcess {
 
   compact() {
     this.write({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '/compact' }] } });
+    this.waitingReply = true;
     this.setState({ busy: true, compacting: true });
   }
 
@@ -687,6 +691,15 @@ export class ChatProcess {
         return;
       }
       case 'result': {
+        // Aviso de comando em segundo plano que só entra no histórico, sem chamar o modelo (num_turns 0): ao
+        // retomar uma conversa que morreu com um comando rodando, o claude registra que ele parou num "turno"
+        // próprio, com init e result, antes da nossa mensagem. Não é fim de turno: segue ocupado se a nossa
+        // ainda vai rodar, e ninguém é avisado de que parou.
+        if (ev.num_turns === 0 && (ev.origin as { kind?: unknown } | undefined)?.kind === 'task-notification') {
+          this.setState({ busy: this.waitingReply });
+          return;
+        }
+        this.waitingReply = false;
         const usage = ev.modelUsage as Record<string, { contextWindow?: number }> | undefined;
         const windows = Object.values(usage ?? {}).map((m) => m.contextWindow).filter((w): w is number => !!w);
         if (windows.length) {
@@ -738,6 +751,7 @@ export class ChatProcess {
     this.controls.clear();
     for (const w of this.waiters.values()) w.reject(new Error('a conversa fechou'));
     this.waiters.clear();
+    this.waitingReply = false;
     this.setState({ running: false, busy: false, compacting: false, error, background: [] });
     for (const done of this.exitWaiters.splice(0)) done();
     this.opts.onIdle?.('exit');

@@ -24,6 +24,7 @@ import { ChartIcon } from '../icons';
 import { SettingsMenu } from '../toolbar/SettingsMenu';
 import { AuthBadge, CompanyTitle, UsageMeters, useAccountUsage } from '../toolbar/Toolbar';
 import { UpdateNotice } from '../toolbar/UpdateNotice';
+import { PendingRestartNotice } from '../toolbar/ServerAction';
 import { t } from '../i18n';
 import { companyName } from '../format';
 import { WorkspaceTabs } from '../office/WorkspaceTabs';
@@ -368,6 +369,7 @@ export function BoardView(props: BoardViewProps) {
           <UsageMeters usage={usage} />
           <AuthBadge boost={usage?.boost ?? null} />
           <UpdateNotice />
+          <PendingRestartNotice />
           <span className="toolbar-sep" />
           <InboxMenu inbox={props.inbox} topicOf={topicOf} onOpen={props.onOpenInbox} />
           <button className="toolbar-icon" onClick={() => onSelect(RANKING_ID)} title={t('board.rankingTitle')} aria-label={t('board.ranking')}>
@@ -398,6 +400,7 @@ export function BoardView(props: BoardViewProps) {
             autoContinue={config?.autoContinue ?? null}
             showUserScope={config?.showUserScope ?? null}
             codexReview={config?.codexReview ?? null}
+            freelaArchiveDays={config?.freelaArchiveDays ?? null}
             onConfig={props.onConfig}
             // O demo não tem workspace: volta para "Todos", senão a sala dele ficaria escondida.
             onOpenProject={(projectId) => {

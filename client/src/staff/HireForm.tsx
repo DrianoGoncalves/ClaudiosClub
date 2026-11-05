@@ -17,6 +17,7 @@ import { portraitUrl } from '../board/nodes';
 import { effortLabel, employeeName, folderName } from '../format';
 import { t, locale } from '../i18n';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
+import { ProtocolBadge } from '../office/ProjectOffice';
 import { BrowserCheck } from './BrowserCheck';
 import type { RoleEntry } from '../../../shared/roles';
 import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, PLAYBOOK_OPTIONS } from './templates';
@@ -569,7 +570,8 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
             <div className="checks">
               {serverList?.map((s) => (
                 <label key={s.name} className="check">
-                  <input type="checkbox" checked={servers.includes(s.name)} onChange={() => toggle(servers, setServers, s.name)} /> {s.name}
+                  <input type="checkbox" checked={servers.includes(s.name)} onChange={() => toggle(servers, setServers, s.name)} />{' '}
+                  <ProtocolBadge protocol={s.protocol} /> {s.name}
                   <span className="muted small">
                     {' '}
                     {s.host}

@@ -1,8 +1,11 @@
+import { EventEmitter } from 'node:events';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { StaffProfile } from '../shared/model';
+import { ChatManager } from '../server/chat/manager';
 import { parseVerdict, TaskService } from '../server/tasks';
 import { cleanRunDir } from '../server/runCleanup';
 
@@ -304,6 +307,207 @@ describe('fila por funcionário', () => {
     await finish('s-1');
     expect(sent.at(-1)!.text).toContain('[Tarefa "C"]');
     expect((await svc.list('p'))!.find((t) => t.id === a.id)!.history.map((h) => h.note)).toContain('ajuste guardado enviado');
+  });
+});
+
+describe('conversa da tarefa que morreu no meio do turno', () => {
+  /** Ana com A fazendo (s-1) e B na fila. `working`: o que o ChatManager sabe; tirar dali sem onIdle = o processo morreu. */
+  async function orphaned(dirName: string, awaitingLimit?: () => Promise<boolean>) {
+    const dir = path.join(root, dirName);
+    const sent: string[] = [];
+    const delivered: Array<{ sessionId: string; text: string }> = [];
+    const working = new Set<string>();
+    let n = 0;
+    const ana = { id: 'ana-1', name: 'Ana', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'ana-1' ? ana : null),
+      send: async (_p, _s, text) => {
+        const session = `s-${++n}`;
+        sent.push(text);
+        working.add(session);
+        return session;
+      },
+      branchFor: async () => null,
+      isWorking: (_s, except) => [...working].some((s) => s !== except),
+      sendTo: async (_p, sessionId, _s, text) => {
+        delivered.push({ sessionId, text });
+        working.add(sessionId);
+        return sessionId;
+      },
+      ...(awaitingLimit && { awaitingLimit }),
+    });
+    const a = (await svc.create('p', { title: 'A', staffId: 'ana-1' }))!;
+    const b = (await svc.create('p', { title: 'B', staffId: 'ana-1' }))!;
+    await svc.start('p', a.id); // s-1
+    await svc.start('p', b.id); // fila
+    const later = (min: number) => new Date(Date.now() + min * 60_000);
+    const task = async (id: string) => (await svc.list('p'))!.find((t) => t.id === id)!;
+    return { svc, sent, delivered, working, a, b, later, task };
+  }
+
+  it('parada sem onIdle: retoma a conversa uma vez, e segue em fazendo', async () => {
+    const { svc, delivered, working, a, later, task } = await orphaned('orfa-1');
+    working.delete('s-1'); // o servidor caiu no meio do turno
+    await svc.tick(later(3));
+    expect(delivered).toEqual([{ sessionId: 's-1', text: expect.stringContaining('Continue de onde parou') }]);
+    const t = await task(a.id);
+    expect(t).toMatchObject({ status: 'doing', resumedAt: expect.any(String) });
+    expect(t.history.at(-1)?.note).toBe('conversa parou sem terminar: retomada');
+    await svc.tick(later(3)); // trabalhando de novo: nada
+    expect(delivered).toHaveLength(1);
+    // O turno retomado termina: entrega normal (a sessão é conhecida).
+    working.delete('s-1');
+    await svc.onIdle('s-1', 'p', 'ana-1');
+    expect((await task(a.id)).status).toBe('review');
+  });
+
+  it('retomada de conversa que morreu com comando em segundo plano: o aviso do claude não entrega a tarefa', async () => {
+    // ChatManager de verdade, com um claude falso que emite o que o 2.1.310 emite ao retomar (capturado sem
+    // chamada à API): o aviso de que o comando parou vira um "turno" só de histórico (init e result com
+    // num_turns 0) antes do turno da nossa mensagem.
+    const dir = path.join(root, 'orfa-aviso');
+    const stdout = new PassThrough();
+    const proc = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout, stderr: new PassThrough(), pid: 4242, kill: () => {} });
+    const emit = (ev: object) => stdout.write(JSON.stringify(ev) + '\n');
+    const idle: Array<Promise<void>> = [];
+    const settle = async () => {
+      await new Promise((r) => setTimeout(r, 20));
+      await Promise.all(idle);
+    };
+    const ana = { id: 'ana-1', name: 'Ana', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
+    let svc: TaskService | null = null;
+    const chats = new ChatManager({
+      transcriptsDir: root,
+      usageFile: path.join(root, 'usage-aviso.json'),
+      listLive: async () => [],
+      resolve: async (_p, sid) => ({ sessionId: sid!, cwd: '.', args: ['--resume', sid!] }),
+      spawnImpl: () => proc as never,
+      onIdle: (sid, pid, staffId) => void idle.push(svc!.onIdle(sid, pid, staffId)),
+    });
+    svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'ana-1' ? ana : null),
+      send: async () => 's-1', // a conversa da tarefa começou antes do reinício
+      branchFor: async () => null,
+      isWorking: (s, except) => chats.staffWorking(s, except),
+      sendTo: (p, sid, s, text, images) => chats.send(p, sid, s, text, 'next', images),
+    });
+    const a = (await svc.create('p', { title: 'A', staffId: 'ana-1' }))!;
+    await svc.start('p', a.id);
+    const status = async () => (await svc!.list('p'))!.find((t) => t.id === a.id)!.status;
+
+    await svc.tick(new Date(Date.now() + 3 * 60_000)); // o servidor subiu e a conversa não está aberta: retoma
+    emit({ type: 'system', subtype: 'task_notification', task_id: 'b1', tool_use_id: 'toolu_1', status: 'stopped', summary: "Background shell command didn't finish before the previous session ended" });
+    emit({ type: 'system', subtype: 'init', model: 'claude-opus-5-5' });
+    emit({ type: 'result', subtype: 'success', is_error: false, num_turns: 0, result: '', origin: { kind: 'task-notification' } });
+    emit({ type: 'system', subtype: 'init', model: 'claude-opus-5-5' });
+    emit({ type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: 'Retomando: o Vite parou com o reinício.' }] } });
+    await settle();
+    expect(await status()).toBe('doing');
+    expect(chats.isWorking('s-1')).toBe(true);
+    expect(idle).toHaveLength(0);
+
+    // O turno da retomada termina de verdade: aí sim é entrega.
+    emit({ type: 'result', subtype: 'success', is_error: false, num_turns: 4, result: 'Pronto.' });
+    await settle();
+    expect(await status()).toBe('review');
+  });
+
+  it('retomada e morreu de novo: vai para revisão e a próxima da fila começa', async () => {
+    const { svc, sent, delivered, working, a, b, later, task } = await orphaned('orfa-2');
+    working.delete('s-1');
+    await svc.tick(later(3)); // retoma
+    working.delete('s-1'); // morreu de novo
+    await svc.tick(later(4)); // ainda dentro da janela desde a retomada
+    expect((await task(a.id)).status).toBe('doing');
+    await svc.tick(later(6));
+    expect(delivered).toHaveLength(1); // não retoma de novo
+    const t = await task(a.id);
+    expect(t.status).toBe('review');
+    expect(t.history.at(-1)?.note).toBe('conversa parou sem terminar');
+    expect((await task(b.id)).status).toBe('doing');
+    expect(sent.at(-1)).toContain('[Tarefa "B"]');
+  });
+
+  it('morreu de novo, pedida por um gestor: ele é avisado da interrupção, sem testes nem revisão automática', async () => {
+    const dir = path.join(root, 'orfa-gestor');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
+    const sent: Array<{ staffId: string; text: string }> = [];
+    const notified: Array<{ staffId: string; text: string }> = [];
+    const ran: string[] = [];
+    const working = new Set<string>();
+    let n = 0;
+    const people: Record<string, StaffProfile> = {
+      'gio-1': { id: 'gio-1', name: 'Giovana', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+      'ana-1': { id: 'ana-1', name: 'Ana', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+      'rev-1': { id: 'rev-1', name: 'Rui', autonomy: 'manual', worktree: false } as StaffProfile,
+    };
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => people[id] ?? null,
+      send: async (_p, staffId, text) => {
+        const session = `s-${++n}`;
+        sent.push({ staffId, text });
+        working.add(session);
+        return session;
+      },
+      branchFor: async () => null,
+      isWorking: (_s, except) => [...working].some((s) => s !== except),
+      sendTo: async (_p, sessionId) => (working.add(sessionId), sessionId),
+      notify: async (_p, staffId, text) => void notified.push({ staffId, text }),
+      lastText: () => 'Fiz metade do formulário.',
+      runTests: async (_cwd, command) => (ran.push(command), { command, ok: true, output: '', ms: 1, at: '2026-11-04T12:00:00Z' }),
+    });
+    const a = (await svc.create('p', { title: 'Formulário', staffId: 'ana-1', reviewerId: 'rev-1' }, 'gio-1'))!;
+    await svc.start('p', a.id); // s-1
+    const later = (min: number) => new Date(Date.now() + min * 60_000);
+    working.delete('s-1');
+    await svc.tick(later(3)); // retoma
+    working.delete('s-1'); // morreu de novo
+    await svc.tick(later(6));
+
+    expect((await svc.list('p'))![0]!.status).toBe('review');
+    expect(notified).toEqual([{ staffId: 'gio-1', text: expect.stringContaining(`parou duas vezes sem terminar`) }]);
+    expect(notified[0]!.text).toContain(`(id ${a.id})`);
+    expect(notified[0]!.text).toContain('Fiz metade do formulário.');
+    expect(ran).toEqual([]); // sem testes
+    expect(sent.map((s) => s.staffId)).toEqual(['ana-1']); // o revisor não foi chamado
+  });
+
+  it('conversa trabalhando não é tocada', async () => {
+    const { svc, delivered, a, later, task } = await orphaned('orfa-3');
+    await svc.tick(later(30));
+    expect(delivered).toEqual([]);
+    expect(await task(a.id)).toMatchObject({ status: 'doing' });
+    expect((await task(a.id)).resumedAt).toBeUndefined();
+  });
+
+  it('parada no limite de uso (ou com despertador), ou erro ao perguntar: não é tocada', async () => {
+    for (const [dirName, ask] of [
+      ['orfa-4', async () => true],
+      ['orfa-4b', async () => Promise.reject(new Error('sem resposta'))],
+    ] as const) {
+      const { svc, delivered, working, a, later, task } = await orphaned(dirName, ask);
+      working.delete('s-1');
+      await svc.tick(later(30));
+      expect(delivered).toEqual([]);
+      expect((await task(a.id)).status).toBe('doing');
+    }
+  });
+
+  it('recém-começada (dentro da janela) não é tocada; depois dela, sim', async () => {
+    const { svc, delivered, working, later } = await orphaned('orfa-5');
+    working.delete('s-1');
+    await svc.tick(); // agora
+    await svc.tick(later(1));
+    expect(delivered).toEqual([]);
+    await svc.tick(later(3));
+    expect(delivered).toHaveLength(1);
   });
 });
 

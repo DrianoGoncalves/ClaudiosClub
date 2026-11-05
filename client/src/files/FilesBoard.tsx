@@ -3,8 +3,8 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { FileApiError, filesApi, type FileEntry } from '../api';
 import { t, type MsgKey } from '../i18n';
-import { FileIcon, FolderIcon, LockIcon, PlusIcon } from '../icons';
-import { foldersToShow, joinPath, nameProblem, parentOf, type NameProblem } from './newEntry';
+import { FileIcon, FolderIcon, LockIcon, PlusIcon, TrashIcon } from '../icons';
+import { foldersToShow, isWithin, joinPath, nameProblem, parentOf, type NameProblem } from './newEntry';
 
 const CodeEditor = lazy(() => import('./CodeEditor'));
 
@@ -34,6 +34,17 @@ function blockedReason(err: unknown): string {
   return (err as Error).message;
 }
 
+/** Recusa do servidor ao apagar, em palavras (o texto dele vem só em português). */
+function deleteProblem(err: unknown, isDir: boolean): string {
+  if (err instanceof FileApiError && err.code !== 'needs-pairing') {
+    if (err.status === 403) return t('files.deleteForbidden');
+    if (err.status === 404) return t('files.deleteGone');
+    if (err.status === 409) return t(isDir ? 'files.deleteBusy' : 'files.deleteBusyFile');
+    if (err.status === 413) return t('files.deleteTooBig');
+  }
+  return (err as Error).message;
+}
+
 export function FilesBoard({ projectId, projectName, onClose }: { projectId: string; projectName: string; onClose: () => void }) {
   const [dirs, setDirs] = useState<Record<string, Dir>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']));
@@ -49,6 +60,10 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
   /** Pasta onde "+ Arquivo"/"+ Pasta" criam: a última pasta clicada, ou a do arquivo aberto ("" = raiz). */
   const [targetDir, setTargetDir] = useState('');
   const [creating, setCreating] = useState<'file' | 'dir' | null>(null);
+  /** O último item clicado na árvore: é o que o "Apagar" apaga. */
+  const [selected, setSelected] = useState<FileEntry | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const doc = useRef<Doc | null>(null);
   const conflictRef = useRef<number | null>(null);
@@ -156,7 +171,13 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
     }
   };
 
+  const select = (entry: FileEntry) => {
+    setSelected(entry);
+    setDeleteError(null);
+  };
+
   const openFile = async (entry: FileEntry) => {
+    select(entry);
     setTargetDir(parentOf(entry.path));
     setEditing(true);
     if (opened?.path === entry.path) return;
@@ -172,7 +193,9 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
     await load(entry.path);
   };
 
-  const toggleDir = (path: string) => {
+  const toggleDir = (entry: FileEntry) => {
+    const path = entry.path;
+    select(entry);
     setTargetDir(path);
     setExpanded((s) => {
       const next = new Set(s);
@@ -195,6 +218,7 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
       return (e as Error).message;
     }
     setCreating(null);
+    select({ name: path.split('/').at(-1)!, path, type: kind });
     const folders = foldersToShow(targetDir, path);
     setExpanded((s) => new Set([...s, ...folders, ...(kind === 'dir' ? [path] : [])]));
     folders.forEach(loadDir);
@@ -207,6 +231,46 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
       await load(path);
     }
     return null;
+  };
+
+  /** Apaga de vez o item selecionado, depois de confirmar. Se o arquivo aberto sai junto, o editor fecha. */
+  const remove = async () => {
+    const entry = selected;
+    if (!entry || deleting) return;
+    const p = entry.path;
+    const losesEdits = doc.current !== null && isWithin(doc.current.path, p) && (dirtyRef.current || conflictRef.current !== null);
+    const ask = t(entry.type === 'dir' ? 'files.deleteDirConfirm' : 'files.deleteFileConfirm', { path: p });
+    if (!window.confirm(losesEdits ? `${ask}\n\n${t('files.deleteUnsaved')}` : ask)) return;
+    setDeleting(true);
+    setDeleteError(null);
+    // Uma gravação em andamento poderia recriar o arquivo depois de apagado.
+    if (inflight.current) await inflight.current;
+    let outcome: 'ok' | 'gone' | 'partial' | 'refused' = 'ok';
+    try {
+      await filesApi.remove(projectId, p);
+    } catch (e) {
+      setDeleteError(deleteProblem(e, entry.type === 'dir'));
+      const s = e instanceof FileApiError ? e.status : 0;
+      outcome = s === 404 ? 'gone' : s === 409 ? 'partial' : 'refused';
+    }
+    setDeleting(false);
+    if (outcome === 'refused') return;
+    if (outcome !== 'partial') {
+      if (doc.current && isWithin(doc.current.path, p)) {
+        doc.current = null;
+        markConflict(null);
+        markDirty(false);
+        setStatus('idle');
+        setSaveError(null);
+      }
+      setOpened((o) => (o && isWithin(o.path, p) ? null : o));
+      setSelected(null);
+      setTargetDir((d) => (isWithin(d, p) ? parentOf(p) : d));
+    }
+    // O que estava dentro é esquecido (relido se abrir de novo); a pasta de cima é relida.
+    setExpanded((s) => new Set([...s].filter((x) => !isWithin(x, p))));
+    setDirs((d) => Object.fromEntries(Object.entries(d).filter(([x]) => !isWithin(x, p))));
+    loadDir(parentOf(p));
   };
 
   const close = useCallback(async () => {
@@ -266,7 +330,24 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
                   {t(kind === 'file' ? 'files.newFile' : 'files.newDir')}
                 </button>
               ))}
+              {selected && !selected.locked && (
+                <button
+                  className="btn-secondary btn-icon files-delete"
+                  aria-label={t('files.deleteLabel', { path: selected.path })}
+                  title={t('files.deleteLabel', { path: selected.path })}
+                  aria-busy={deleting}
+                  disabled={deleting}
+                  onClick={() => void remove()}
+                >
+                  <TrashIcon />
+                </button>
+              )}
             </div>
+            {deleteError && (
+              <p className="error small files-delete-error" role="alert">
+                {deleteError}
+              </p>
+            )}
             {creating && <NewEntryForm key={creating} kind={creating} dir={targetDir} onCancel={() => setCreating(null)} onCreate={(name) => create(creating, name)} />}
             <TreeLevel
               path=""
@@ -274,6 +355,7 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
               dirs={dirs}
               expanded={expanded}
               current={opened?.path ?? null}
+              selected={selected?.path ?? null}
               target={targetDir}
               onDir={toggleDir}
               onFile={(f) => void openFile(f)}
@@ -445,6 +527,7 @@ function TreeLevel({
   dirs,
   expanded,
   current,
+  selected,
   target,
   onDir,
   onFile,
@@ -454,8 +537,9 @@ function TreeLevel({
   dirs: Record<string, Dir>;
   expanded: Set<string>;
   current: string | null;
+  selected: string | null;
   target: string;
-  onDir: (path: string) => void;
+  onDir: (entry: FileEntry) => void;
   onFile: (entry: FileEntry) => void;
 }) {
   const dir = dirs[path];
@@ -483,11 +567,11 @@ function TreeLevel({
       {dir.entries.map((e) => {
         const open = e.type === 'dir' && expanded.has(e.path);
         return (
-          <li key={e.path} role="treeitem" aria-expanded={e.type === 'dir' ? open : undefined} aria-selected={current === e.path}>
+          <li key={e.path} role="treeitem" aria-expanded={e.type === 'dir' ? open : undefined} aria-selected={selected === e.path}>
             <button
-              className={`files-item ${current === e.path ? 'is-current' : ''} ${e.type === 'dir' && target === e.path ? 'is-target' : ''} ${e.locked ? 'is-locked' : ''}`}
+              className={`files-item ${current === e.path ? 'is-current' : ''} ${selected === e.path ? 'is-selected' : ''} ${e.type === 'dir' && target === e.path ? 'is-target' : ''} ${e.locked ? 'is-locked' : ''}`}
               style={pad}
-              onClick={() => (e.type === 'dir' ? onDir(e.path) : onFile(e))}
+              onClick={() => (e.type === 'dir' ? onDir(e) : onFile(e))}
               title={e.path}
             >
               <span className="files-caret" aria-hidden="true">
@@ -497,7 +581,7 @@ function TreeLevel({
               <span className="files-name">{e.name}</span>
             </button>
             {open && (
-              <TreeLevel path={e.path} depth={depth + 1} dirs={dirs} expanded={expanded} current={current} target={target} onDir={onDir} onFile={onFile} />
+              <TreeLevel path={e.path} depth={depth + 1} dirs={dirs} expanded={expanded} current={current} selected={selected} target={target} onDir={onDir} onFile={onFile} />
             )}
           </li>
         );

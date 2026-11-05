@@ -1,6 +1,6 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Autonomy, ChatAttachment, ChatItem, Effort, SendPriority, UiLevel } from '../../../shared/model';
-import { api, type PermissionOpts } from '../api';
+import { alertError, api, isPairingError, type PermissionOpts } from '../api';
 import { ArrowDownIcon, FileDiffIcon, ImageIcon, McpIcon, SendIcon, StopIcon } from '../icons';
 import { t, locale } from '../i18n';
 import { shrinkImage } from '../lib/shrinkImage';
@@ -21,6 +21,7 @@ import { useChatDetail } from './chatDetail';
 import type { ChatFocus } from './chatFocus';
 import { QuestionCard } from './QuestionCard';
 import { useChatFocus } from './useChatFocus';
+import { useOpenAt } from './useOpenAt';
 import { Markdown, looksLikeMarkdown, useCopy } from './markdown';
 import { systemMessageText } from './systemMessage';
 import { ToolInput } from './ToolInput';
@@ -55,6 +56,8 @@ interface Props {
   focus?: ChatFocus | null;
   /** O alvo foi atendido (ou o balão não apareceu a tempo): pode ser largado. */
   onFocusDone?: () => void;
+  /** A conversa tem aviso na caixa "precisa de mim" (pergunta, permissão…): abre no fim, e não na sua última mensagem. */
+  awaiting?: boolean;
 }
 
 /** Uma aba do "Mais" (Ficha, Expediente, Rotinas, Ações…). */
@@ -65,7 +68,7 @@ export interface MoreTab {
 }
 
 /** Conversa com o funcionário dentro do Claudio’s Club, sem terminal. */
-export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, top, moreTabs = [], focus = null, onFocusDone }: Props) {
+export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, top, moreTabs = [], focus = null, onFocusDone, awaiting = false }: Props) {
   const chat = useChat(projectId, sessionId, staffId);
   const todos = useMemo(() => todosFrom(chat.items), [chat.items]);
   useEffect(() => {
@@ -90,20 +93,23 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   // Enquanto trabalha, uma linha discreta diz o que ele está fazendo agora.
   const doing = busy && last?.kind === 'tool' && last.result === null ? `${last.name} ${last.summary}` : null;
 
-  // Acompanha o fim da conversa, a menos que a pessoa tenha rolado para cima.
-  useEffect(() => {
+  // Ao abrir (ou trocar de conversa) sem pendência, a última mensagem enviada a ele fica no topo e a resposta logo
+  // abaixo, para ler do começo; com pendência, ou vindo de um aviso que aponta um balão, começa pelo fim.
+  const opening = useOpenAt({
+    list,
+    stick,
+    items: chat.items,
+    loading: chat.loading,
+    atEnd: pending || awaiting || (focus?.sessionId === sessionId && !!(focus.itemId || focus.quote)),
+    onAway: setAway,
+  });
+  // Acompanha o fim da conversa, a menos que a pessoa tenha rolado para cima (ou ela esteja aberta na mensagem).
+  // Antes da pintura: com as mensagens chegando juntas (o SSE repete o processo aberto), o fim não fica para trás.
+  useLayoutEffect(() => {
     const el = list.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
+    if (el && stick.current && !opening.holding()) el.scrollTop = el.scrollHeight;
   }, [chat.items, busy, showTools]);
-  // Ao abrir (ou trocar de conversa), começa pela última mensagem.
-  useEffect(() => {
-    const el = list.current;
-    if (!chat.loading && el) {
-      stick.current = true;
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [chat.loading]);
-  // Vindo de um aviso, rola até o balão dele (depois do passo acima) e não deixa o fim puxar de volta.
+  // Vindo de um aviso, rola até o balão dele (depois de abrir no fim) e não deixa o fim puxar de volta.
   const focusing = useChatFocus({ list, stick, items: chat.items, loading: chat.loading, sessionId, focus, onDone: onFocusDone, onAway: setAway });
 
   // Mensagem com o funcionário trabalhando: quem decide é o servidor, pela config geral (menu
@@ -169,6 +175,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
     const sent = images;
     const sentFiles = files;
     focusing.release(); // mandou mensagem: volta a acompanhar o fim
+    opening.release();
     setDraft('');
     setImages([]);
     setFiles([]);
@@ -215,7 +222,10 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   const rewind = async (uuid: string) => {
     const sid = chat.sessionId;
     if (!sid) return;
-    const p = await api.chatRewind(projectId, sid, staffId, uuid, true).catch((e: Error) => ({ canRewind: false, files: [], insertions: 0, deletions: 0, error: e.message }));
+    const p = await api
+      .chatRewind(projectId, sid, staffId, uuid, true)
+      .catch((e: Error) => (isPairingError(e) ? null : { canRewind: false, files: [], insertions: 0, deletions: 0, error: e.message }));
+    if (!p) return;
     if (!p.canRewind) {
       window.alert(p.error ? t('chat.rewindNoError', { error: p.error }) : t('chat.rewindNo'));
       return;
@@ -236,7 +246,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
       )
     )
       return;
-    await api.chatRewind(projectId, sid, staffId, uuid, false).catch((e: Error) => window.alert(e.message));
+    await api.chatRewind(projectId, sid, staffId, uuid, false).catch(alertError);
   };
 
   const activeTab = moreTabs.find((tab) => tab.id === moreTab) ?? moreTabs[0];
@@ -330,7 +340,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
                     void api
                       .chatCancelAutoContinue(projectId, chat.sessionId!)
                       .then(() => setAutoCancelled((s) => new Set(s).add(item.id)))
-                      .catch((e: Error) => window.alert(e.message))
+                      .catch(alertError)
                 : undefined
             }
             onCancelWake={
@@ -339,7 +349,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
                     void api
                       .chatCancelWake(projectId, chat.sessionId!)
                       .then(() => setAutoCancelled((s) => new Set(s).add(item.id)))
-                      .catch((e: Error) => window.alert(e.message))
+                      .catch(alertError)
                 : undefined
             }
           />
@@ -508,7 +518,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           {background.map((task) => (
             <li key={task.id}>
               <span className="muted">{task.kind === 'agent' ? 'agent' : task.kind === 'shell' ? t('chat.kindShell') : task.kind}</span> {task.label}{' '}
-              <button type="button" className="link small" onClick={() => void api.chatStopTask(chat.sessionId!, task.id).catch((e: Error) => window.alert(e.message))}>
+              <button type="button" className="link small" onClick={() => void api.chatStopTask(chat.sessionId!, task.id).catch(alertError)}>
                 {t('chat.stopTask')}
               </button>
             </li>

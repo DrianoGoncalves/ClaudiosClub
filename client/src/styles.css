@@ -22,7 +22,7 @@
   --muted: #6b7076;
   --line: #e4e1da;
   --accent: #1f4fbf;
-  --warn: #b25b00;
+  --warn: #ffc100;
   --danger: #c0362c;
   --busy: #1f4fbf;
   --idle: #8b9096;
@@ -41,12 +41,15 @@
   --msg-assistant-muted: #a3aca7;
   --msg-assistant-link: #9cc0ff;
   /* Pergunta com opções esperando você: balão amarelo com tinta escura nos dois temas; ao responder, volta a ser o balão do funcionário. */
-  --ask-bg: #ffd84d;
+  --ask-bg: #ffa019;
   --ask-ink: #1f2328;
   --ask-muted: #5b4a00;
   --ask-line: #8a6d00;
   --ask-accent: #1f4fbf;
   --ask-field: #fffbe8;
+  /* Folga de cota ligada: bolinha verde-escura com "+" branco nos dois temas (no escuro, um tom acima para destacar do topo). */
+  --boost-bg: #166534;
+  --boost-ink: #ffffff;
   /* Canetas da parede da sala (escolhidas por projeto): tom de marcador no claro, de giz no escuro. */
   --pen-red: #c9372c;
   --pen-orange: #d0650c;
@@ -82,11 +85,12 @@
     --muted: #a0a0a7;
     --line: #3a4540;
     --accent: #9cc0ff;
-    --warn: #f0a44b;
+    --warn: #ff6605;
     --danger: #ff7b70;
     --busy: #9cc0ff;
     --idle: #79837e;
     --waiting: #f0b43c;
+    --boost-bg: #15803d;
     --pen-red: #ff9c8f;
     --pen-orange: #ffb877;
     --pen-yellow: #f2d46b;
@@ -232,6 +236,18 @@ body { background: var(--board); }
 .project-image { display: block; max-width: 100%; max-height: 200px; border-radius: 8px; border: 1px solid var(--line); margin-bottom: 6px; }
 .file-btn { position: relative; overflow: hidden; display: inline-block; }
 .file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+/* Anexos do projeto: área de soltar/colar + lista com miniatura (só raster) ou ícone. */
+.attach-drop { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 10px; margin-bottom: 8px; }
+.attach-drop.is-over { border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 10%, transparent); }
+.attach-drop:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 1px; }
+.attach-drop .muted { flex: 1 1 180px; min-width: 0; }
+.row.attach-row { flex-direction: row; align-items: center; gap: 10px; }
+.attach-thumb { flex: none; width: 40px; height: 40px; border-radius: 6px; border: 1px solid var(--line); display: grid; place-items: center; overflow: hidden; color: var(--muted); }
+.attach-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.attach-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.attach-name { color: var(--ink); font-size: 14px; overflow-wrap: anywhere; text-decoration: none; }
+.attach-name:hover, .attach-name:focus-visible { color: var(--ink-blue); text-decoration: underline; text-underline-offset: 2px; }
+.attach-row .btn-secondary { flex: none; }
 
 .edge-label-calls { color: var(--ink-blue); font-size: 15px; }
 
@@ -344,7 +360,7 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .q-block { display: grid; gap: 4px; padding: 6px 0; }
 .q-block + .q-block { border-top: 1px solid var(--line); }
 .q-block p { margin: 0; }
-.q-header { justify-self: start; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
+.q-header { justify-self: start; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
 .q-text { font-size: 13.5px; font-weight: 600; }
 .tool-ask { padding: 2px 0; }
 .tool-ask-options { margin: 0; padding-left: 18px; font-size: 13px; }
@@ -420,8 +436,21 @@ textarea.q-field { resize: vertical; }
 .server-overlay-card h2 { margin: 0; font-family: var(--hand); font-size: 32px; line-height: 1; }
 .server-overlay-card p { margin: 0; line-height: 1.45; }
 /* Reiniciando / parando / atualizando: o logo no meio e o texto embaixo (mesmo logo da página de início). */
-.server-overlay-brand { display: grid; justify-items: center; gap: 12px; text-align: center; }
+.server-overlay-brand { position: relative; isolation: isolate; display: grid; justify-items: center; gap: 12px; text-align: center; }
 .server-overlay-brand img { width: 112px; height: 112px; }
+/* Enquanto a ação acontece: atrás do logo, um halo borrado que gira e cintila; o logo fica nítido na frente.
+   Leve: o blur é desenhado uma vez e só transform/opacity animam (rodam no compositor, fora da thread da página).
+   O scale estica o círculo numa elipse da largura do logo; o giro só troca as cores de lugar. */
+.server-overlay-brand::before,
+.server-overlay-brand::after { content: ''; position: absolute; z-index: -1; top: 0; left: 0; right: 0; width: 112px; height: 112px; margin: 0 auto; border-radius: 50%; scale: 1.7 1; filter: blur(18px); }
+.server-overlay-brand::before { background: conic-gradient(var(--pen-teal), transparent 25%, var(--pen-purple) 50%, transparent 75%, var(--pen-teal)); animation: overlay-spin 7s linear infinite, overlay-twinkle 2.6s ease-in-out infinite; }
+.server-overlay-brand::after { background: conic-gradient(from 90deg, var(--pen-blue), transparent 25%, var(--pen-teal) 50%, transparent 75%, var(--pen-blue)); animation: overlay-spin 4.5s linear infinite reverse, overlay-twinkle 1.9s ease-in-out infinite reverse; }
+@keyframes overlay-spin { to { transform: rotate(1turn); } }
+@keyframes overlay-twinkle { 0%, 100% { opacity: 0.35; } 30% { opacity: 0.9; } 50% { opacity: 0.55; } 75% { opacity: 1; } }
+/* "animações" desligado: o halo para de girar e só cintila (muda o brilho, sem movimento, como o bn-glow).
+   O modal vai para o body, fora do .app: daí o :has. */
+:root:has(.anim-off) .server-overlay-brand::before,
+:root:has(.anim-off) .server-overlay-brand::after { animation-name: none, overlay-twinkle; }
 /* Chip de tarefas no cabeçalho da sala. */
 .bn-tasks { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); font: inherit; font-size: 11.5px; cursor: pointer; white-space: nowrap; }
 .bn-tasks:hover { border-color: var(--room-wall); background: color-mix(in srgb, var(--room-wall) 14%, transparent); }
@@ -442,11 +471,16 @@ textarea.q-field { resize: vertical; }
 .files-item.is-current { background: color-mix(in srgb, var(--ink-blue) 16%, transparent); font-weight: 600; }
 .files-item.is-target:not(.is-current) { background: color-mix(in srgb, var(--ink-blue) 8%, transparent); }
 .files-item.is-locked { color: var(--muted); }
+/* Selecionado = o que o "Apagar" apaga (último item clicado). */
+.files-item.is-selected { box-shadow: inset 3px 0 0 var(--ink-blue); }
 .files-tools { position: sticky; top: -6px; z-index: 1; display: flex; gap: 6px; margin-top: -6px; padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--card); }
 .btn-secondary.files-new { display: inline-flex; align-items: center; gap: 3px; flex: 1; justify-content: center; }
 .btn-secondary.files-new[aria-pressed='true'] { border-color: var(--ink-blue); color: var(--ink-blue); }
 .btn-secondary.files-new svg { flex: none; }
-.btn-secondary.files-new:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 1px; }
+.btn-secondary.files-delete { flex: none; color: var(--danger); }
+.btn-secondary.files-delete:hover:not(:disabled) { border-color: var(--danger); }
+.files-delete-error { margin: 0; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.btn-secondary:is(.files-new, .files-delete):focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 1px; }
 .files-create { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
 .files-create-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .files-create-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--muted); }
@@ -481,6 +515,8 @@ textarea.q-field { resize: vertical; }
   .files-back { display: inline-block; flex: none; }
   .files-item { padding-top: 8px; padding-bottom: 8px; }
   .btn-secondary.files-new, .files-create-actions button { min-height: 36px; }
+  /* .files-tools na frente: o .btn-icon (28px) vem depois no CSS. */
+  .files-tools .btn-secondary.files-delete { width: 36px; height: auto; }
   /* 16px: o iOS não dá zoom ao focar. */
   .modal .files-create-field input { font-size: 16px; }
 }
@@ -684,12 +720,14 @@ button.ranking-row:hover { border-color: var(--accent); }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 18, 20, 0.45); display: grid; place-items: center; z-index: 20; padding: 16px; }
 .modal { position: relative; width: min(720px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px 18px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25); display: grid; gap: 12px; }
 .modal h2 { margin: 0; font-family: var(--hand); font-size: 34px; line-height: 1; }
-.modal label { display: grid; gap: 4px; font-size: 13px; font-weight: 600; }
-.modal input[type='text'], .modal input:not([type]), .modal textarea, .modal select {
+/* Campos do modal; o formulário de conexão do projeto (no drawer) usa o mesmo desenho. */
+:is(.modal, .conn-form) label { display: grid; gap: 4px; font-size: 13px; font-weight: 600; }
+:is(.modal, .conn-form) :is(input[type='text'], input[type='password'], input:not([type]), textarea, select) {
   font: inherit; font-size: 14px; font-weight: 400; color: var(--ink); background: var(--board); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px;
+  min-width: 0;
 }
 .modal textarea { resize: vertical; }
-.modal input:focus, .modal textarea:focus, .modal select:focus { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); border-color: var(--ink-blue); }
+:is(.modal, .conn-form) :is(input, textarea, select):focus { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); border-color: var(--ink-blue); }
 .modal fieldset { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px 10px; margin: 0; }
 .modal legend { font-size: 10px; font-weight: 600; padding: 0 4px; }
 
@@ -741,6 +779,12 @@ button.ranking-row:hover { border-color: var(--accent); }
 .block { display: block; margin-top: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; word-break: break-all; color: var(--ink); }
 .notice { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: min(640px, calc(100vw - 32px)); display: flex; gap: 10px; align-items: flex-start; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 36px 10px 14px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15); font-size: 13px; z-index: 15; }
 .notice .drawer-close { top: 6px; right: 8px; }
+/* Largura fixa: preso no meio (left: 50%), o aviso encolheria até metade da tela no celular. Por cima dos modais e do
+   config (z-index 20 e 30), de onde a ação recusada pode ter vindo; amarelo de "precisa de você" (como .permission). */
+.notice-pair { flex-direction: column; gap: 6px; width: min(420px, calc(100vw - 32px)); z-index: 40; border-color: var(--waiting); background: color-mix(in srgb, var(--waiting) 8%, var(--panel)); }
+.notice-pair code { white-space: nowrap; }
+.pair-command { display: flex; flex-direction: column; gap: 4px; }
+.pair-command code { user-select: all; white-space: nowrap; }
 .actions { margin-top: 10px !important; display: flex; gap: 8px; align-items: center; }
 .btn-secondary { font: inherit; font-size: 12px; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
 .btn-secondary:hover:not(:disabled) { border-color: var(--accent); }
@@ -766,7 +810,8 @@ button.ranking-row:hover { border-color: var(--accent); }
 .bn-flag-warn { color: var(--warn); }
 
 .bn-live { display: flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--ink); margin-top: 2px; }
-.bn-live span:last-child { margin-left: 3px; }
+/* Folga entre as bolinhas e a conta; sem bolinha (todas paradas e vistas), a conta encosta. */
+.bn-live .dot + :not(.dot) { margin-left: 3px; }
 
 /* Status do funcionário: só a bolinha no canto superior direito; o texto aparece ao passar o mouse. */
 .bn-status { position: absolute; top: 8px; right: 9px; display: flex; align-items: center; gap: 5px; padding: 3px; margin: -3px; z-index: 1; }
@@ -820,7 +865,7 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 .auth-plus {
   position: absolute; top: -5px; right: -6px; width: 11px; height: 11px; border-radius: 50%;
   display: grid; place-items: center; font: 700 9px/1 system-ui, sans-serif;
-  color: var(--panel); background: var(--ink-blue); box-shadow: 0 0 0 1.5px var(--panel);
+  color: var(--boost-ink); background: var(--boost-bg); box-shadow: 0 0 0 1.5px var(--panel);
 }
 .auth-ok { color: var(--ink-green); }
 .auth-api { color: var(--waiting); }
@@ -874,11 +919,14 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 .server-log-list { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 6px; max-height: 320px; overflow-y: auto; }
 .server-log-cmd { display: block; font-size: 12px; white-space: pre-wrap; word-break: break-all; color: var(--muted); }
 
-/* ---- servidores (SSH) do projeto ---- */
+/* ---- servidores (SSH e FTP) do projeto ---- */
 .conn-list { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 10px; }
 .conn-list li { display: grid; gap: 4px; }
+.conn-list li > .badge { justify-self: start; }
 .conn-list .actions { margin: 0; }
 .conn-form { display: grid; gap: 8px; }
+/* Aviso de FTP sem criptografia: texto, não pílula (quebra em duas linhas). */
+.conn-warn { margin: 0; padding: 4px 0 4px 10px; border-left: 3px solid var(--warn); color: var(--warn); font-size: 12.5px; }
 .ok { color: var(--ink-green); }
 
 /* ---- caixa "precisa de mim": botão com contador no topo e a lista embaixo ---- */
@@ -1192,6 +1240,11 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 /* Nova versão do Claudio’s Club no GitHub: aviso no topo do quadro e a lista de novidades embaixo dele. */
 .update-notice { position: relative; }
 .toolbar .update-button { border-color: var(--ink-blue); color: var(--ink-blue); font-weight: 600; }
+/* Mudanças pendentes: mais discreto que "Nova versão" (tracejado, cinza); só chama atenção no hover. */
+.toolbar .restart-pending { border-style: dashed; border-color: var(--ink-muted); color: var(--muted); text-align: left; }
+.toolbar .restart-pending:hover:not([aria-disabled='true']) { color: var(--ink); }
+.toolbar .restart-pending[aria-disabled='true'] { cursor: help; }
+.toolbar .restart-pending.is-error { border-color: var(--ink-red); }
 .update-menu { position: absolute; top: calc(100% + 8px); left: 0; width: min(420px, calc(100vw - 24px)); max-height: min(70vh, 480px); overflow: auto; display: grid; gap: 8px; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2); font-size: 13px; z-index: 30; }
 .update-menu p { margin: 0; }
 .update-commits { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 12px; line-height: 1.4; }

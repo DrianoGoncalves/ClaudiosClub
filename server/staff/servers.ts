@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,8 +10,9 @@ import { StaffError, writeAtomic } from './store';
 
 // Conexões SSH de cada projeto, cadastradas no Claudio’s Club: `<projeto>/.vps/config.json` (o formato da
 // skill vps; a pasta fica fora do git com um `.gitignore` "*"). Na ficha, o funcionário só ganha o
-// nome das conexões que pode usar; quem conecta é o `ssh` com o `.vps/ssh_config` que o Claudio’s Club gera
-// daqui. O Claudio’s Club nunca lê o conteúdo da chave, só confere que o arquivo existe.
+// nome das conexões que pode usar; quem conecta é o `ssh` com o `.vps/ssh_config.<id do funcionário>` que
+// o Claudio’s Club gera daqui só com as conexões da ficha dele. O Claudio’s Club nunca lê o conteúdo da chave,
+// só confere que o arquivo existe.
 //
 // O ssh_config é gerado a partir do que você digitou: cada campo passa por uma validação estrita
 // (sem espaço, aspas nem quebra de linha), senão um "host" com quebra de linha viraria um
@@ -53,11 +55,24 @@ export const ConnectionInput = z.object({
 
 type Entry = Omit<ProjectConnection, 'complete' | 'keyFound'>;
 
-const vpsDir = (projectPath: string) => path.join(projectPath, '.vps');
+export const vpsDir = (projectPath: string) => path.join(projectPath, '.vps');
 const configFile = (projectPath: string) => path.join(vpsDir(projectPath), 'config.json');
-/** O ssh_config que os funcionários usam: `ssh -F "<este arquivo>" <conexão>`. */
+/**
+ * O ssh_config antigo, com todas as conexões completas do projeto para todo funcionário (a ficha limitava
+ * só no texto). Não é mais gerado: some na próxima gravação.
+ */
 export function sshConfigFile(projectPath: string): string {
   return path.join(vpsDir(projectPath), 'ssh_config');
+}
+
+const STAFF_ID = /^[a-z0-9-]{1,40}$/;
+const STAFF_CONFIG = /^ssh_config\.([a-z0-9-]{1,40})$/;
+const NAMES_HEADER = /^# conexões: (.*)$/m;
+
+/** O ssh_config de um funcionário (`ssh -F "<este arquivo>" <conexão>`): só as conexões da ficha dele. */
+export function staffSshConfigFile(projectPath: string, staffId: string): string {
+  if (!STAFF_ID.test(staffId)) throw new StaffError('funcionário inválido');
+  return path.join(vpsDir(projectPath), `ssh_config.${staffId}`);
 }
 
 /** `~/x` → caminho absoluto, com barras normais (o ssh do Windows aceita). */
@@ -82,11 +97,11 @@ async function readFile(projectPath: string): Promise<VpsFile> {
 function parseEntry(name: string, c: Record<string, unknown>): Entry | null {
   const port = Number(c.port ?? 22);
   const full = ConnectionInput.safeParse({ ...c, name, port });
-  if (full.success) return full.data;
+  if (full.success) return { protocol: 'ssh', ...full.data };
   // Escrita à mão (ou pela skill vps com um apelido do ~/.ssh/config): aparece para completar.
   const partial = ConnectionInput.pick({ name: true, host: true, port: true }).safeParse({ name, host: c.host, port });
   const root = ConnectionInput.shape.remoteRoot.safeParse(c.remoteRoot);
-  return partial.success ? { ...partial.data, user: null, identityFile: null, remoteRoot: root.success ? root.data : null } : null;
+  return partial.success ? { protocol: 'ssh', ...partial.data, user: null, identityFile: null, remoteRoot: root.success ? root.data : null } : null;
 }
 
 /** As conexões do projeto, para a tela de cadastro (com caminho da chave, sem o conteúdo). */
@@ -104,13 +119,15 @@ export async function readConnections(projectPath: string): Promise<ProjectConne
 
 /** O que vai para a ficha: só as completas, sem usuário nem chave. */
 export async function listServers(projectPath: string): Promise<ServerInfo[]> {
-  return (await readConnections(projectPath)).filter((c) => c.complete).map((c) => ({ name: c.name, source: 'vps', host: c.host, remoteRoot: c.remoteRoot }));
+  return (await readConnections(projectPath))
+    .filter((c) => c.complete)
+    .map((c) => ({ name: c.name, source: 'vps', protocol: 'ssh', host: c.host, remoteRoot: c.remoteRoot }));
 }
 
-/** Os arquivos de chave das conexões `names` (para bloquear a leitura deles na sessão). */
-export async function keyFilesOf(projectPath: string, names: string[]): Promise<string[]> {
+/** Os arquivos de chave das conexões `names` (todas, sem `names`), para bloquear a leitura deles na sessão. */
+export async function keyFilesOf(projectPath: string, names?: string[]): Promise<string[]> {
   const conns = await readConnections(projectPath);
-  return conns.filter((c) => c.identityFile && names.includes(c.name)).map((c) => expandKeyPath(c.identityFile!));
+  return conns.filter((c) => c.identityFile && (!names || names.includes(c.name))).map((c) => expandKeyPath(c.identityFile!));
 }
 
 /** Cria ou troca uma conexão (`originalName`: a que está sendo editada, para renomear). */
@@ -149,11 +166,11 @@ export async function removeConnection(projectPath: string, name: string): Promi
 async function writeVps(projectPath: string, file: VpsFile): Promise<void> {
   await ensureVpsGitignore(projectPath);
   await writeAtomic(configFile(projectPath), JSON.stringify(file, null, 2) + '\n');
-  await writeSshConfig(projectPath);
+  await refreshStaffSshConfigs(projectPath);
 }
 
 /** `.vps/` fora do git, como a skill vps deixa. */
-async function ensureVpsGitignore(projectPath: string): Promise<void> {
+export async function ensureVpsGitignore(projectPath: string): Promise<void> {
   const file = path.join(vpsDir(projectPath), '.gitignore');
   const current = await fs.readFile(file, 'utf8').catch(() => null);
   if (current !== null && /^\*\s*$/m.test(current)) return;
@@ -166,9 +183,9 @@ async function ensureVpsGitignore(projectPath: string): Promise<void> {
  * senha (BatchMode), só a chave indicada, e a identidade do servidor guardada na primeira conexão:
  * se ela mudar depois, o ssh recusa.
  */
-export function renderSshConfig(conns: ProjectConnection[]): string {
+export function renderSshConfig(conns: ProjectConnection[], names?: string[]): string {
   const blocks = conns
-    .filter((c) => c.complete)
+    .filter((c) => c.complete && (!names || names.includes(c.name)))
     .map((c) =>
       [
         `Host ${c.name}`,
@@ -184,20 +201,40 @@ export function renderSshConfig(conns: ProjectConnection[]): string {
         '  ConnectTimeout 10',
       ].join('\n'),
     );
-  return ['# Gerado pelo Claudio’s Club a partir de config.json (refeito a cada mudança): não edite.', ...blocks].join('\n\n') + '\n';
+  const header = '# Gerado pelo Claudio’s Club a partir de config.json (refeito a cada mudança): não edite.';
+  // As conexões pedidas ficam anotadas: uma mudança no config.json refaz o arquivo com as mesmas.
+  return [names ? `${header}\n# conexões: ${names.join(',')}` : header, ...blocks].join('\n\n') + '\n';
 }
 
-/** Regrava o ssh_config; devolve o caminho, ou null sem conexão completa (e apaga o antigo). */
-export async function writeSshConfig(projectPath: string): Promise<string | null> {
+/**
+ * O ssh_config do funcionário só com as conexões completas de `names` (as da ficha). Devolve o caminho,
+ * ou null sem nenhuma (e apaga o que havia). Refeito a cada sessão e a cada mudança na ficha.
+ */
+export async function writeStaffSshConfig(projectPath: string, staffId: string, names: string[]): Promise<string | null> {
+  const file = staffSshConfigFile(projectPath, staffId);
+  await fs.rm(sshConfigFile(projectPath), { force: true }); // o antigo, com todas as conexões
   const conns = await readConnections(projectPath);
-  const file = sshConfigFile(projectPath);
-  if (!conns.some((c) => c.complete)) {
+  const mine = names.filter((n) => NAME.test(n));
+  if (!conns.some((c) => c.complete && mine.includes(c.name))) {
     await fs.rm(file, { force: true });
     return null;
   }
   await ensureVpsGitignore(projectPath);
-  await writeAtomic(file, renderSshConfig(conns));
+  await writeAtomic(file, renderSshConfig(conns, mine));
   return file;
+}
+
+/** Depois de mudar o config.json: cada ssh_config de funcionário refeito com as conexões que já tinha. */
+async function refreshStaffSshConfigs(projectPath: string): Promise<void> {
+  await fs.rm(sshConfigFile(projectPath), { force: true });
+  const entries = await fs.readdir(vpsDir(projectPath)).catch(() => [] as string[]);
+  for (const entry of entries) {
+    const id = STAFF_CONFIG.exec(entry)?.[1];
+    if (!id) continue;
+    const text = await fs.readFile(path.join(vpsDir(projectPath), entry), 'utf8').catch(() => '');
+    const names = (NAMES_HEADER.exec(text)?.[1] ?? '').split(',').filter(Boolean);
+    await writeStaffSshConfig(projectPath, id, names);
+  }
 }
 
 type Run = (cmd: string, args: string[]) => Promise<{ code: number | null; stdout: string; stderr: string; missing?: boolean }>;
@@ -216,8 +253,11 @@ export async function testConnection(projectPath: string, name: string, run: Run
   if (!conn) throw new StaffError('conexão não encontrada');
   if (!conn.complete) throw new StaffError('complete a conexão (usuário e chave) antes de testar');
   if (!conn.keyFound) return { ok: false, message: 'a chave não foi encontrada nesse caminho' };
-  const config = await writeSshConfig(projectPath);
-  const r = await run('ssh', ['-F', config!, name, 'echo myco-ok']);
+  // Um arquivo só desta conexão, apagado logo depois (não fica um ssh_config com todas no disco).
+  await ensureVpsGitignore(projectPath);
+  const config = path.join(vpsDir(projectPath), `test-${randomBytes(6).toString('hex')}.ssh_config`);
+  await writeAtomic(config, renderSshConfig([conn], [name]));
+  const r = await run('ssh', ['-F', config, name, 'echo myco-ok']).finally(() => fs.rm(config, { force: true }));
   if (r.missing) return { ok: false, message: 'o ssh não está instalado nesta máquina (no Windows: recurso opcional "Cliente OpenSSH")' };
   if (r.code === 0 && r.stdout.includes('myco-ok')) return { ok: true, message: `conectou em ${conn.user}@${conn.host}` };
   return { ok: false, message: explainSshError(r.stderr, conn.port) };

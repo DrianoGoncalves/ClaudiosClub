@@ -7,7 +7,9 @@ import { bareVersion } from '../format';
 import { useSystemTheme } from '../board/colors';
 import { useChatDetail } from '../chat/chatDetail';
 import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
+import { PairControls } from './PairControls';
 import { RolesEditor } from './RolesEditor';
+import { useServerAction } from './ServerAction';
 import { ThemeBackgrounds } from './ThemeBackgrounds';
 import { UpdateControls, useUpdateStatus } from './UpdateNotice';
 
@@ -51,6 +53,8 @@ interface Props {
   showUserScope: boolean | null;
   /** Segunda opinião do Codex na revisão das tarefas; null = config ainda não chegou. */
   codexReview: boolean | null;
+  /** Dias parado até o Freela ser arquivado sozinho (0 = nunca); null = config ainda não chegou. */
+  freelaArchiveDays: number | null;
 }
 
 type GroupId = 'general' | 'board' | 'chat' | 'roles' | 'usage';
@@ -427,6 +431,14 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       toggle: { checked: p.animations, onChange: p.onToggleAnimations },
     },
     {
+      id: 'pair',
+      group: 'general',
+      title: t('toolbar.pairTitle'),
+      description: t('toolbar.pairDesc'),
+      keywords: t('toolbar.pairKeywords'),
+      control: <PairControls />,
+    },
+    {
       id: 'server',
       group: 'general',
       title: t('toolbar.serverTitle'),
@@ -475,6 +487,18 @@ function buildSettings(p: Props, theme: 'light' | 'dark', close: () => void, wor
       description: t('office.ctxDesc'),
       keywords: t('office.ctxKeywords'),
       control: <ContextSwitchPicker value={p.contextSwitch} onConfig={p.onConfig} />,
+    });
+  }
+
+  if (p.freelaArchiveDays !== null) {
+    out.push({
+      id: 'freela-archive',
+      group: 'chat',
+      title: t('toolbar.freelaArchiveTitle'),
+      description: t('toolbar.freelaArchiveDesc'),
+      keywords: t('toolbar.freelaArchiveKeywords'),
+      control: <FreelaArchiveInput value={p.freelaArchiveDays} onConfig={p.onConfig} />,
+      advanced: true,
     });
   }
 
@@ -671,57 +695,49 @@ function BudgetInput({ value, label, onSave }: { value: number | null; label: st
   );
 }
 
+/** Dias parado até o Freela ser arquivado sozinho, inteiro de 0 (nunca) a 90; grava ao sair do campo. */
+function FreelaArchiveInput({ value, onConfig }: { value: number; onConfig: (c: AppConfig) => void }) {
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <span className="setting-number">
+      <input
+        key={String(value)}
+        type="number"
+        min={0}
+        max={90}
+        step={1}
+        inputMode="numeric"
+        defaultValue={value}
+        aria-label={t('toolbar.freelaArchiveTitle')}
+        onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+        onBlur={async (e) => {
+          const n = Number(e.target.value.trim());
+          // Vazio ou inválido volta ao valor salvo, em vez de gravar lixo.
+          if (e.target.value.trim() === '' || !Number.isFinite(n)) return void (e.target.value = String(value));
+          const days = Math.min(90, Math.max(0, Math.round(n)));
+          e.target.value = String(days);
+          if (days === value) return;
+          setError(null);
+          try {
+            onConfig(await api.saveConfig({ freelaArchiveDays: days }));
+          } catch (err) {
+            setError((err as Error).message);
+          }
+        }}
+      />
+      {t('toolbar.freelaArchiveLabel')}
+      {error && <span className="error small">{error}</span>}
+    </span>
+  );
+}
+
 /** Parar (e, com o vigia, reiniciar) o servidor do Claudio’s Club. Depois, a tela mostra como voltar. */
 function ServerControls() {
   const [info, setInfo] = useState<{ daemon: boolean; startedAt: string } | null>(null);
-  const [state, setState] = useState<'idle' | 'stopping' | 'stopped' | 'restarting'>('idle');
-  const [error, setError] = useState<string | null>(null);
+  const { state, error, act, overlay } = useServerAction();
   useEffect(() => {
     api.serverInfo().then(setInfo, () => {});
   }, []);
-
-  const act = async (action: 'stop' | 'restart') => {
-    // Na hora do clique, não de quando o menu abriu: quem está trabalhando agora perde o que faz.
-    const current = await api.serverInfo().catch(() => null);
-    const working = current?.working;
-    const startedAt = current?.startedAt;
-    const cut = [
-      working?.busy ? t('toolbar.cutBusy', { n: working.busy }) : '',
-      working?.background ? t('toolbar.cutBackground', { n: working.background }) : '',
-    ].filter(Boolean);
-    const warn = cut.length ? `\n\n${t('toolbar.warnCut', { cut: cut.join(` ${t('toolbar.and')} `) })}` : '';
-    const ask = (action === 'stop' ? t('toolbar.askStop') : t('toolbar.askRestart')) + warn;
-    if (!window.confirm(ask)) return;
-    setError(null);
-    setState(action === 'stop' ? 'stopping' : 'restarting');
-    try {
-      await api.serverAction(action);
-    } catch (e) {
-      setError((e as Error).message);
-      setState('idle');
-      return;
-    }
-    if (action === 'stop') {
-      // Espera o servidor sumir de verdade antes de dizer que parou.
-      for (let i = 0; i < 30; i++) {
-        await new Promise((r) => setTimeout(r, 1000));
-        if (!(await fetch('/api/health').then((r) => r.ok, () => false))) break;
-      }
-      // Com o service worker, recarregar já mostra a página de início (checklist e botão Iniciar).
-      if (navigator.serviceWorker?.controller) return window.location.reload();
-      setState('stopped');
-      return;
-    }
-    // Reiniciando: o servidor gera o build do cliente antes de sair, então o antigo segue no ar
-    // por até ~2 min. Só recarrega quando o startedAt mudou (servidor novo), senão cairia no antigo.
-    for (let i = 0; i < 120; i++) {
-      await new Promise((r) => setTimeout(r, 1500));
-      const now = await api.serverInfo().catch(() => null);
-      if (now && now.startedAt !== startedAt) return window.location.reload();
-    }
-    setError(t('toolbar.serverNotBack'));
-    setState('idle');
-  };
 
   return (
     <>
@@ -742,36 +758,7 @@ function ServerControls() {
         </span>
       )}
       {error && <span className="error small">{error}</span>}
-      {state !== 'idle' &&
-        createPortal(
-          <div className="server-overlay" role="alertdialog" aria-live="assertive">
-            <div className="server-overlay-card">
-              {state === 'restarting' && (
-                <div className="server-overlay-brand">
-                  <img src="/icon-192.png" alt="" width={112} height={112} />
-                  <h2>{t('toolbar.restartingTitle')}</h2>
-                </div>
-              )}
-              {state === 'stopping' && (
-                <div className="server-overlay-brand">
-                  <img src="/icon-192.png" alt="" width={112} height={112} />
-                  <h2>{t('toolbar.stoppingTitle')}</h2>
-                </div>
-              )}
-              {state === 'stopped' && (
-                <>
-                  <h2>{t('toolbar.stoppedTitle')}</h2>
-                  <p>{t('toolbar.stoppedBody')}</p>
-                  <p>
-                    {t('toolbar.startAgainA')} <b>Claudio’s Club</b> {t('toolbar.startAgainB')}{' '}
-                    <code>npm run daily:start</code> {t('toolbar.startAgainC')}
-                  </p>
-                </>
-              )}
-            </div>
-          </div>,
-          document.body,
-        )}
+      {overlay}
     </>
   );
 }

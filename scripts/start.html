@@ -37,7 +37,7 @@
       .step-fix { margin: 4px 0 0 calc(1em + 8px); overflow-wrap: anywhere; }
       .step.is-ok .step-icon, .step.is-ok .step-state { color: var(--ink-green); }
       .step.is-falta .step-icon, .step.is-falta .step-state { color: var(--danger); }
-      .step.is-nv .step-icon, .step.is-nv .step-state { color: var(--muted); }
+      .step.is-nv .step-icon, .step.is-nv .step-state, .step.is-opt .step-icon, .step.is-opt .step-state { color: var(--muted); }
       /* Log: as últimas linhas de ~/.myco/logs/server.log, a mais nova embaixo. Fechado até alguém abrir (ou a
          subida falhar). */
       .log summary { display: flex; align-items: baseline; gap: 8px; cursor: pointer; list-style: none; }
@@ -80,8 +80,9 @@
         <p class="muted small" id="hint">
           Com tudo pronto, sobe em segundo plano, sem janela. Se faltar algo (dependências, Claude Code, login), abre
           um terminal que resolve, sobe o Claudio’s Club e fecha sozinho. Na primeira vez, o navegador pergunta se pode
-          abrir o Claudio’s Club (no Linux, como “Abrir xdg-open?”): confirme. Se nada acontecer, rode
-          <code>npm run setup</code> uma vez na pasta do Claudio’s Club (registra este botão).
+          abrir o Claudio’s Club (no Linux, como “Abrir xdg-open?”): confirme. O botão é opcional (precisa do
+          <code>npm run launcher</code>, que cria um atalho e o link myco:// no sistema); sem ele, suba pelo terminal com
+          <code>npm run daily:start</code> na pasta do Claudio’s Club.
         </p>
         <details class="log" id="log">
           <summary><h2>Log</h2><span class="muted small" id="log-at"></span></summary>
@@ -180,11 +181,11 @@
         { id: 'login', label: 'Login no Claude Code', fix: 'O Iniciar abre o login, ou rode', cmd: 'claude auth login --claudeai' },
         { id: 'deps', label: 'Dependências', fix: 'O Iniciar instala, ou rode', cmd: 'npm install' },
         { id: 'build', label: 'Build do app', fix: 'Sai na subida (Iniciar), ou rode', cmd: 'npm run build' },
-        { id: 'launcher', label: 'Botão Iniciar registrado', fix: 'Rode uma vez na pasta do projeto:', cmd: 'npm run setup' },
+        { id: 'launcher', label: 'Botão Iniciar (opcional)', optional: true, fix: 'Sem ele, suba pelo terminal (npm run daily:start). Para usar o botão, rode uma vez:', cmd: 'npm run launcher' },
         { id: 'server', label: 'Claudio’s Club no ar', fix: 'Use o Iniciar, ou rode', cmd: 'npm run daily:start' },
       ];
-      const ICON = { ok: '✓', falta: '✗', nv: '?' };
-      const WORD = { ok: 'ok', falta: 'falta', nv: 'não verificado' };
+      const ICON = { ok: '✓', falta: '✗', nv: '?', opt: '–' };
+      const WORD = { ok: 'ok', falta: 'falta', nv: 'não verificado', opt: 'opcional' };
 
       // Copia o comando de correção. Como arquivo (file://) a API de área de transferência pode não existir: cai no
       // execCommand. A página nunca executa nada: quem roda é você, no terminal.
@@ -261,7 +262,7 @@
           let state = 'nv';
           if (step.id === 'server') state = up ? 'ok' : 'falta';
           else if (step.id === 'build' && buildOk) state = 'ok';
-          else if (byId[step.id]) state = byId[step.id].ok ? 'ok' : 'falta';
+          else if (byId[step.id]) state = byId[step.id].ok ? 'ok' : step.optional ? 'opt' : 'falta';
           const found = byId[step.id];
           list.append(stepRow(step, state, found && typeof found.detail === 'string' ? found.detail : ''));
         });
@@ -290,19 +291,28 @@
         await refresh(up);
       }
 
-      // O botão chama o link myco://start (o sistema roda scripts/daily.ts link), que decide: sobe sem janela ou,
+      // O botão chama o link myco:// (o sistema roda scripts/daily.ts link), que decide: sobe sem janela ou,
       // faltando algo, abre um terminal que prepara e sobe. Esperamos o app responder; com o terminal (npm install,
       // login no navegador) pode demorar: até 10 min.
+      // Aberta como arquivo, a página não tem como parear o navegador (o código sai de um script, nunca de uma
+      // página): pede myco://open, que abre o Claudio’s Club já pareado numa aba nova. Mostrada pelo service worker,
+      // ela já está no endereço do app (e no cookie do pareamento): myco://start e volta para ele aqui mesmo.
+      const viaFile = location.protocol === 'file:';
       const WAIT_MINUTES = 10;
       el('start').addEventListener('click', async () => {
         el('start').disabled = true;
         el('starting').hidden = false;
         el('starting').textContent = 'Iniciando… Se faltar algo, um terminal abre para resolver e fecha sozinho.';
-        location.href = 'myco://start';
+        location.href = viaFile ? 'myco://open' : 'myco://start';
         for (let i = 0; i < WAIT_MINUTES * 30; i++) {
           await new Promise((r) => setTimeout(r, 2000));
           const up = await isUp();
-          if (up) return location.replace(app);
+          if (up && !viaFile) return location.replace(app);
+          if (up) {
+            el('down').hidden = true;
+            el('starting').textContent = 'Pronto: o Claudio’s Club abriu numa aba nova, já pareado. Pode fechar esta.';
+            return;
+          }
           await refresh(up);
         }
         el('starting').textContent = `Não subiu em ${WAIT_MINUTES} minutos. Veja o log abaixo.`;

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import type { AppConfig, ProjectConnection } from '../../../shared/model';
-import { api } from '../api';
+import type { AnyConnection, AppConfig, ConnectionProtocol, FtpConnection } from '../../../shared/model';
+import { api, isPairingError } from '../api';
 import { t } from '../i18n';
 
-// No detalhe do projeto: o workspace dele (a aba onde aparece) e as conexões SSH, que os
-// funcionários usam conforme a ficha de cada um. O Claudio’s Club só guarda o caminho da chave, nunca o conteúdo.
+// No detalhe do projeto: o workspace dele (a aba onde aparece) e as conexões SSH e FTP, que os
+// funcionários usam conforme a ficha de cada um. O Claudio’s Club só guarda o caminho da chave, nunca o conteúdo;
+// a senha do FTP vai para o cofre do servidor e não volta para a tela.
 
 export function ProjectOffice({ projectId, config, onConfig }: { projectId: string; config: AppConfig | null; onConfig: (c: AppConfig) => void }) {
   const workspaces = config?.workspaces ?? [];
@@ -42,11 +43,27 @@ export function ProjectOffice({ projectId, config, onConfig }: { projectId: stri
   );
 }
 
-type Draft = { name: string; host: string; port: string; user: string; identityFile: string; remoteRoot: string; originalName?: string };
-const EMPTY: Draft = { name: '', host: '', port: '22', user: '', identityFile: '', remoteRoot: '' };
+type Draft = {
+  protocol: ConnectionProtocol;
+  name: string;
+  host: string;
+  port: string;
+  user: string;
+  identityFile: string;
+  remoteRoot: string;
+  /** Só FTP: a senha nova. Nunca vem do servidor; vazia na edição mantém a guardada. */
+  password: string;
+  hasPassword?: boolean;
+  originalName?: string;
+};
+const EMPTY: Draft = { protocol: 'ssh', name: '', host: '', port: '22', user: '', identityFile: '', remoteRoot: '', password: '' };
+const DEFAULT_PORT: Record<ConnectionProtocol, string> = { ssh: '22', ftps: '21', ftp: '21' };
+const PROTOCOLS: ConnectionProtocol[] = ['ssh', 'ftps', 'ftp'];
+
+const isFtp = (c: AnyConnection): c is FtpConnection => c.protocol !== 'ssh';
 
 function Connections({ projectId }: { projectId: string }) {
-  const [list, setList] = useState<ProjectConnection[] | null>(null);
+  const [list, setList] = useState<AnyConnection[] | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,15 +83,29 @@ function Connections({ projectId }: { projectId: string }) {
     setBusy(true);
     setError(null);
     try {
-      await api.saveConnection(projectId, {
-        name: draft.name.trim(),
-        host: draft.host.trim(),
-        port: Number(draft.port) || 22,
-        user: draft.user.trim(),
-        identityFile: draft.identityFile.trim(),
-        remoteRoot: draft.remoteRoot.trim() || null,
-        ...(draft.originalName && { originalName: draft.originalName }),
-      });
+      if (draft.protocol === 'ssh') {
+        await api.saveConnection(projectId, {
+          name: draft.name.trim(),
+          host: draft.host.trim(),
+          port: Number(draft.port) || 22,
+          user: draft.user.trim(),
+          identityFile: draft.identityFile.trim(),
+          remoteRoot: draft.remoteRoot.trim() || null,
+          ...(draft.originalName && { originalName: draft.originalName }),
+        });
+      } else {
+        await api.saveFtpConnection(projectId, {
+          protocol: draft.protocol,
+          name: draft.name.trim(),
+          host: draft.host.trim(),
+          port: Number(draft.port) || 21,
+          user: draft.user.trim(),
+          remoteRoot: draft.remoteRoot.trim() || null,
+          // Sem senha nova na edição: não manda o campo, e o servidor mantém a do cofre.
+          ...(draft.password && { password: draft.password }),
+          ...(draft.originalName && { originalName: draft.originalName }),
+        });
+      }
       setDraft(null);
       await reload();
     } catch (err) {
@@ -90,11 +121,12 @@ function Connections({ projectId }: { projectId: string }) {
       const r = await api.testConnection(projectId, name);
       setTests((s) => ({ ...s, [name]: r }));
     } catch (err) {
-      setTests((s) => ({ ...s, [name]: { ok: false, message: (err as Error).message } }));
+      // Recusa por pareamento: fica sem resultado (o aviso do App explica).
+      setTests(({ [name]: _, ...s }) => (isPairingError(err) ? s : { ...s, [name]: { ok: false, message: (err as Error).message } }));
     }
   };
 
-  const field = (key: keyof Draft, label: string, extra: React.InputHTMLAttributes<HTMLInputElement> = {}) => (
+  const field = (key: Exclude<keyof Draft, 'protocol' | 'hasPassword'>, label: string, extra: React.InputHTMLAttributes<HTMLInputElement> = {}) => (
     <label>
       {label}
       <input value={draft?.[key] ?? ''} onChange={(e) => setDraft((d) => d && { ...d, [key]: e.target.value })} {...extra} />
@@ -110,22 +142,25 @@ function Connections({ projectId }: { projectId: string }) {
       <ul className="conn-list">
         {list?.map((c) => {
           const r = tests[c.name];
+          const ftp = isFtp(c);
+          const ready = ftp ? c.hasPassword : c.complete;
           return (
             <li key={c.name}>
               <div>
-                <b>{c.name}</b>{' '}
+                <ProtocolBadge protocol={c.protocol} /> <b>{c.name}</b>{' '}
                 <span className="muted small mono">
                   {c.user ? `${c.user}@` : ''}
                   {c.host}
-                  {c.port !== 22 ? `:${c.port}` : ''}
+                  {c.port !== Number(DEFAULT_PORT[c.protocol]) ? `:${c.port}` : ''}
                   {c.remoteRoot ? ` · ${c.remoteRoot}` : ''}
                 </span>
               </div>
-              {!c.complete && <span className="badge warn">{t('office.connIncomplete')}</span>}
-              {c.complete && !c.keyFound && <span className="badge warn">{t('office.connKeyMissing')}</span>}
+              {ftp && !c.hasPassword && <span className="badge warn">{t('office.connNoPassword')}</span>}
+              {!ftp && !c.complete && <span className="badge warn">{t('office.connIncomplete')}</span>}
+              {!ftp && c.complete && !c.keyFound && <span className="badge warn">{t('office.connKeyMissing')}</span>}
               {c.user === 'root' && <span className="badge warn">{t('office.connRootUser')}</span>}
               <p className="actions">
-                <button type="button" className="btn-secondary" disabled={!c.complete || r === 'running'} onClick={() => void test(c.name)}>
+                <button type="button" className="btn-secondary" disabled={!ready || r === 'running'} onClick={() => void test(c.name)}>
                   {r === 'running' ? t('office.connTesting') : t('office.connTest')}
                 </button>
                 <button
@@ -133,12 +168,15 @@ function Connections({ projectId }: { projectId: string }) {
                   className="btn-secondary"
                   onClick={() =>
                     setDraft({
+                      protocol: c.protocol,
                       name: c.name,
                       host: c.host,
                       port: String(c.port),
                       user: c.user ?? '',
-                      identityFile: c.identityFile ?? '',
+                      identityFile: ftp ? '' : (c.identityFile ?? ''),
                       remoteRoot: c.remoteRoot ?? '',
+                      password: '',
+                      hasPassword: ftp && c.hasPassword,
                       originalName: c.name,
                     })
                   }
@@ -164,14 +202,58 @@ function Connections({ projectId }: { projectId: string }) {
       </ul>
       {draft ? (
         <form className="conn-form" onSubmit={save}>
+          {/* Trocar de protocolo só ao criar: editar mantém o arquivo onde a conexão mora (.vps/config.json ou ftp.json). */}
+          {!draft.originalName && (
+            <div className="segmented" role="group" aria-label={t('office.connProtocol')}>
+              {PROTOCOLS.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  className="btn-secondary btn-toggle"
+                  aria-pressed={draft.protocol === p}
+                  onClick={() =>
+                    setDraft((d) => d && { ...d, protocol: p, port: d.port === DEFAULT_PORT[d.protocol] || !d.port ? DEFAULT_PORT[p] : d.port })
+                  }
+                >
+                  {t(`office.proto.${p}`)}
+                </button>
+              ))}
+            </div>
+          )}
+          {draft.protocol === 'ftp' && (
+            <p className="conn-warn" role="note">
+              {t('office.connFtpPlain')}
+            </p>
+          )}
           <div className="grid2">
             {field('name', t('office.connName'), { required: true, maxLength: 40, placeholder: t('office.connNamePlaceholder') })}
             {field('host', t('office.connHost'), { required: true, maxLength: 253 })}
             {field('user', t('office.connUser'), { required: true, maxLength: 32 })}
             {field('port', t('office.connPort'), { inputMode: 'numeric', maxLength: 5 })}
           </div>
-          {field('identityFile', t('office.connKey'), { required: true, maxLength: 400, className: 'mono', placeholder: t('office.connKeyPlaceholder') })}
-          {field('remoteRoot', t('office.connRoot'), { maxLength: 300, className: 'mono', placeholder: t('office.connRootPlaceholder') })}
+          {draft.protocol === 'ssh' ? (
+            field('identityFile', t('office.connKey'), { required: true, maxLength: 400, className: 'mono', placeholder: t('office.connKeyPlaceholder') })
+          ) : (
+            <>
+              {draft.hasPassword && (
+                <p className="muted small">
+                  <span className="badge">{t('office.connPasswordSaved')}</span> {t('office.connPasswordKeep')}
+                </p>
+              )}
+              {/* Só se grava: nunca preenchido nem mostrado; new-password evita o navegador sugerir a senha salva dele. */}
+              {field('password', draft.originalName ? t('office.connPasswordNew') : t('office.connPassword'), {
+                type: 'password',
+                autoComplete: 'new-password',
+                required: !draft.originalName || !draft.hasPassword,
+                maxLength: 200,
+              })}
+            </>
+          )}
+          {field('remoteRoot', t(draft.protocol === 'ssh' ? 'office.connRoot' : 'office.connFtpRoot'), {
+            maxLength: 300,
+            className: 'mono',
+            placeholder: t(draft.protocol === 'ssh' ? 'office.connRootPlaceholder' : 'office.connFtpRootPlaceholder'),
+          })}
           <p className="actions">
             <button type="submit" className="btn-primary" disabled={busy}>
               {busy ? t('office.connSaving') : t('office.connSave')}
@@ -190,5 +272,14 @@ function Connections({ projectId }: { projectId: string }) {
       )}
       {error && <p className="error small">{error}</p>}
     </section>
+  );
+}
+
+/** Protocolo da conexão; FTP puro em aviso (sem criptografia). Usado também na ficha. */
+export function ProtocolBadge({ protocol }: { protocol: ConnectionProtocol }) {
+  return (
+    <span className={protocol === 'ftp' ? 'badge warn' : 'badge'} title={protocol === 'ftp' ? t('office.connFtpPlain') : undefined}>
+      {t(`office.proto.${protocol}`)}
+    </span>
   );
 }
