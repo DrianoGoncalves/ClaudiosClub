@@ -1,13 +1,13 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project, StaffProfile } from '../shared/model';
 import type { ToolAdapter } from '../server/adapters/types';
-import { setArchived } from '../server/config';
+import { readConfig, setArchived } from '../server/config';
 import { staffMayPost } from '../server/apiPolicy';
-import { StaffError, StaffService } from '../server/staff/service';
-import { fichaFile, memoryFile, readPortrait, readProfile, saveProfile } from '../server/staff/store';
+import { StaffBusyError, StaffError, StaffService, type StaffServiceOptions } from '../server/staff/service';
+import { fichaFile, listVersions, memoryFile, profileFile, readPortrait, readProfile, saveProfile } from '../server/staff/store';
 
 // O config (arquivados) grava em MYCO_HOME: aponta para uma pasta temporária antes de o config.ts carregar.
 const home = await vi.hoisted(async () => {
@@ -119,6 +119,9 @@ describe('fichas entre projetos', () => {
       mission: 'Revisar mudanças',
       hasPortrait: true,
       updatedAt: '2026-10-02T00:00:00.000Z',
+      personId: null,
+      archived: false,
+      reportsTo: ['chefe-0000'],
     });
     expect(people.find((p) => p.staffId === 'bia-3c4d')!.hasPortrait).toBe(false);
   });
@@ -157,8 +160,8 @@ describe('fichas entre projetos', () => {
     // Gravado no disco do destino, com o .md gerado.
     expect(await readProfile(dest, p.id)).toEqual(p);
     expect(await fs.readFile(fichaFile(dest, p.id), 'utf8')).toContain('Ana Souza');
-    // A origem não muda.
-    expect(await readProfile(origin, 'ana-1a2b')).toEqual(ana);
+    // A origem não muda, só ganha o personId do grupo (o da cópia).
+    expect(await readProfile(origin, 'ana-1a2b')).toEqual({ ...ana, personId: p.personId });
   });
 
   it('copia o retrato (mesmos bytes) para o destino', async () => {
@@ -222,5 +225,269 @@ describe('fichas entre projetos', () => {
     } finally {
       await setArchived({ kind: 'project', id: 'orig', archived: false });
     }
+  });
+});
+
+// ---- mesma pessoa entre projetos: personId, edição nas cópias, ligar/desligar e apagar ----
+
+const DATA_PNG = (texto: string) => `data:image/png;base64,${Buffer.from(texto).toString('base64')}`;
+const existe = (p: string) => fs.access(p).then(() => true, () => false);
+
+const perfil = (over: Partial<StaffProfile> & Pick<StaffProfile, 'id' | 'projectId' | 'name'>): StaffProfile => ({
+  role: 'Revisora',
+  portrait: null,
+  reportsTo: [],
+  mission: 'Revisar',
+  firstTask: '',
+  autonomy: 'plan',
+  agents: ['Explore'],
+  skills: ['lint'],
+  mcps: null,
+  knowledge: [],
+  rules: ['Regra antiga'],
+  doneWhen: 'Achados',
+  model: 'opus',
+  effort: 'high',
+  canHire: false,
+  playbook: null,
+  worktree: false,
+  servers: [],
+  browser: true,
+  sessions: [],
+  createdAt: '2026-10-01T00:00:00.000Z',
+  updatedAt: '2026-10-02T00:00:00.000Z',
+  ...over,
+});
+
+/** Corpo completo da edição (o que o questionário manda); `over` troca só o que interessa. */
+const corpo = (over: Record<string, unknown> = {}) => ({
+  name: 'Ana Souza',
+  role: 'Revisora',
+  reportsTo: [],
+  mission: 'Revisar',
+  autonomy: 'plan',
+  agents: ['Explore'],
+  skills: ['lint'],
+  mcps: null,
+  knowledge: [],
+  rules: ['Regra antiga'],
+  doneWhen: 'Achados',
+  model: 'opus',
+  effort: 'high',
+  canHire: false,
+  playbook: null,
+  worktree: false,
+  servers: [],
+  browser: true,
+  ...over,
+});
+
+/** Quatro empresas (a, b, c, d) em pastas novas, cada uma com .myco/staff. */
+async function mundo() {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-pessoa-'));
+  const dirs: Record<'a' | 'b' | 'c' | 'd', string> = { a: path.join(base, 'a'), b: path.join(base, 'b'), c: path.join(base, 'c'), d: path.join(base, 'd') };
+  for (const dir of Object.values(dirs)) await fs.mkdir(path.join(dir, '.myco', 'staff'), { recursive: true });
+  const adapterM = {
+    listProjects: async (): Promise<Project[]> => (['a', 'b', 'c', 'd'] as const).map((id) => project({ id, path: dirs[id], name: `Empresa ${id.toUpperCase()}` })),
+  } as unknown as ToolAdapter;
+  return { base, dirs, adapter: adapterM };
+}
+
+type Mundo = Awaited<ReturnType<typeof mundo>>;
+const servico = (w: Mundo, over: { isWorking?: (staffId: string) => boolean; tasksOf?: StaffServiceOptions['tasksOf'] } = {}) =>
+  new StaffService(w.adapter, { runDir: path.join(w.base, 'run'), claudeConfigFile: path.join(w.base, '.claude.json'), mycoUrl: 'x', ...over });
+
+describe('mesma pessoa entre projetos', () => {
+  let w: Mundo;
+  beforeEach(async () => {
+    w = await mundo();
+  });
+  afterEach(async () => {
+    await fs.rm(w.base, { recursive: true, force: true }).catch(() => undefined);
+  });
+
+  it('a cópia herda o personId; a origem sem vínculo ganha um (sem versão nova); a cópia da cópia herda', async () => {
+    await saveProfile(w.dirs.a, perfil({ id: 'ana-1a2b', projectId: 'a', name: 'Ana Souza' }));
+    const svc = servico(w);
+    const c1 = (await svc.copyFrom('b', { fromProjectId: 'a', staffId: 'ana-1a2b' }, true))!.profile;
+    expect(c1.personId).toMatch(/^[0-9a-f-]{36}$/);
+    expect((await readProfile(w.dirs.a, 'ana-1a2b'))!.personId).toBe(c1.personId);
+    expect(await listVersions(w.dirs.a, 'ana-1a2b')).toEqual([]);
+    const c2 = (await svc.copyFrom('c', { fromProjectId: 'b', staffId: c1.id }, true))!.profile;
+    expect(c2.personId).toBe(c1.personId);
+    const c3 = (await svc.copyFrom('c', { fromProjectId: 'a', staffId: 'ana-1a2b' }, true))!.profile;
+    expect(c3.personId).toBe(c1.personId);
+    expect(await readProfile(w.dirs.b, c1.id)).toEqual(c1);
+  });
+
+  it('lista com personId, arquivado (mesma regra do quadro) e gestores', async () => {
+    await saveProfile(w.dirs.a, perfil({ id: 'ana-1a2b', projectId: 'a', name: 'Ana', personId: 'grupo-1', reportsTo: ['chefe-a'] }));
+    await saveProfile(w.dirs.a, perfil({ id: 'chefe-a', projectId: 'a', name: 'Chefe' }));
+    await setArchived({ kind: 'session', id: 'staff:chefe-a', archived: true });
+    try {
+      const { people } = await servico(w).directory();
+      expect(people.find((p) => p.staffId === 'ana-1a2b')).toMatchObject({ personId: 'grupo-1', archived: false, reportsTo: ['chefe-a'] });
+      expect(people.find((p) => p.staffId === 'chefe-a')).toMatchObject({ personId: null, archived: true, reportsTo: [] });
+    } finally {
+      await setArchived({ kind: 'session', id: 'staff:chefe-a', archived: false });
+    }
+  });
+
+  it('applyToCopies leva só os campos permitidos e o retrato; reportsTo, servidores, memória e a outra pessoa ficam', async () => {
+    await saveProfile(w.dirs.a, perfil({ id: 'ana-1a2b', projectId: 'a', name: 'Ana Souza', personId: 'grupo-1', reportsTo: ['chefe-a'], servers: ['prod'] }));
+    await saveProfile(w.dirs.a, perfil({ id: 'chefe-a', projectId: 'a', name: 'Chefe' }));
+    await saveProfile(w.dirs.b, perfil({ id: 'copia-b', projectId: 'b', name: 'Ana Souza', personId: 'grupo-1', reportsTo: ['chefe-b'], servers: ['outro'] }));
+    await saveProfile(w.dirs.b, perfil({ id: 'chefe-b', projectId: 'b', name: 'Chefe B' }));
+    await fs.writeFile(memoryFile(w.dirs.b, 'copia-b'), 'Memória da cópia\n');
+    await saveProfile(w.dirs.c, perfil({ id: 'outra-c', projectId: 'c', name: 'Outra', personId: 'outro-grupo' }));
+    const svc = servico(w);
+
+    const r = await svc.update('a', 'ana-1a2b', corpo({ name: 'Ana Nova', role: 'Gerente', rules: ['Nova regra'], model: 'sonnet', effort: 'low', servers: ['prod', 'x'], reportsTo: ['chefe-a'], applyToCopies: true, portraitDataUrl: DATA_PNG('png-novo') }));
+    expect(r!.copiesUpdated).toBe(1);
+    const copia = (await readProfile(w.dirs.b, 'copia-b'))!;
+    expect(copia).toMatchObject({ name: 'Ana Nova', role: 'Gerente', rules: ['Nova regra'], model: 'sonnet', effort: 'low', mission: 'Revisar', doneWhen: 'Achados' });
+    expect(copia.reportsTo).toEqual(['chefe-b']);
+    expect(copia.servers).toEqual(['outro']);
+    expect(copia.personId).toBe('grupo-1');
+    expect(copia.sessions).toEqual([]);
+    expect((await readPortrait(w.dirs.b, copia))?.bytes.toString()).toBe('png-novo');
+    expect(await fs.readFile(memoryFile(w.dirs.b, 'copia-b'), 'utf8')).toBe('Memória da cópia\n');
+    expect(await listVersions(w.dirs.b, 'copia-b')).toHaveLength(1);
+    expect((await readProfile(w.dirs.c, 'outra-c'))!.name).toBe('Outra');
+
+    // Retrato removido na origem: some na cópia (e o arquivo).
+    const r2 = await svc.update('a', 'ana-1a2b', corpo({ name: 'Ana Nova', role: 'Gerente', rules: ['Nova regra'], model: 'sonnet', effort: 'low', reportsTo: ['chefe-a'], applyToCopies: true, portraitDataUrl: null }));
+    expect(r2!.copiesUpdated).toBe(1);
+    expect((await readProfile(w.dirs.b, 'copia-b'))!.portrait).toBeNull();
+    expect(await existe(path.join(w.dirs.b, '.myco', 'staff', 'copia-b.png'))).toBe(false);
+
+    // Sem o pedido: nada é propagado.
+    const r3 = await svc.update('a', 'ana-1a2b', corpo({ name: 'Sem propagar', reportsTo: ['chefe-a'], applyToCopies: false }));
+    expect(r3!.copiesUpdated).toBe(0);
+    expect((await readProfile(w.dirs.b, 'copia-b'))!.name).toBe('Ana Nova');
+
+    await expect(svc.update('a', 'ana-1a2b', corpo({ reportsTo: ['chefe-a'], applyToCopies: 'sim' }))).rejects.toThrow('applyToCopies tem que ser true ou false');
+  });
+
+  it('falha numa cópia não para as outras e não entra na conta', async () => {
+    await saveProfile(w.dirs.a, perfil({ id: 'ana-1a2b', projectId: 'a', name: 'Ana Souza', personId: 'grupo-1' }));
+    await saveProfile(w.dirs.b, perfil({ id: 'copia-b', projectId: 'b', name: 'Ana Souza', personId: 'grupo-1' }));
+    await saveProfile(w.dirs.c, perfil({ id: 'copia-c', projectId: 'c', name: 'Ana Souza', personId: 'grupo-1' }));
+    // Histórico da cópia em c travado (um arquivo no lugar da pasta): a versão anterior não grava e essa cópia falha.
+    await fs.writeFile(path.join(w.dirs.c, '.myco', 'staff', 'copia-c.history'), 'não é pasta');
+    const r = await servico(w).update('a', 'ana-1a2b', corpo({ name: 'Ana Nova', applyToCopies: true }));
+    expect(r!.copiesUpdated).toBe(1);
+    expect((await readProfile(w.dirs.b, 'copia-b'))!.name).toBe('Ana Nova');
+    expect((await readProfile(w.dirs.c, 'copia-c'))!.name).toBe('Ana Souza');
+  });
+
+  it('ligar: a mesma ficha é 400; sem navegador recusa; ficha inexistente é 404 (null)', async () => {
+    await saveProfile(w.dirs.a, perfil({ id: 'ana-1a2b', projectId: 'a', name: 'Ana' }));
+    const svc = servico(w);
+    await expect(svc.link({ from: { projectId: 'a', staffId: 'ana-1a2b' }, to: { projectId: 'a', staffId: 'ana-1a2b' } }, true)).rejects.toThrow('é a mesma ficha');
+    await expect(svc.link({ from: { projectId: 'a', staffId: 'ana-1a2b' }, to: { projectId: 'b', staffId: 'x' } }, false)).rejects.toThrow('só pelo Claudio’s Club');
+    expect(await svc.link({ from: { projectId: 'a', staffId: 'ana-1a2b' }, to: { projectId: 'b', staffId: 'ninguem' } }, true)).toBeNull();
+  });
+
+  it('ligar duas fichas sem vínculo cria um grupo novo; quem já tem grupo passa o seu', async () => {
+    await saveProfile(w.dirs.a, perfil({ id: 'ana-1a2b', projectId: 'a', name: 'Ana' }));
+    await saveProfile(w.dirs.b, perfil({ id: 'copia-b', projectId: 'b', name: 'Ana' }));
+    await saveProfile(w.dirs.c, perfil({ id: 'x-c', projectId: 'c', name: 'X' }));
+    const svc = servico(w);
+    const { personId } = (await svc.link({ from: { projectId: 'a', staffId: 'ana-1a2b' }, to: { projectId: 'b', staffId: 'copia-b' } }, true))!;
+    expect(personId).toMatch(/^[0-9a-f-]{36}$/);
+    expect((await readProfile(w.dirs.a, 'ana-1a2b'))!.personId).toBe(personId);
+    expect((await readProfile(w.dirs.b, 'copia-b'))!.personId).toBe(personId);
+    // Destino sem vínculo, origem no grupo: o id do grupo da origem vale.
+    const r2 = await svc.link({ from: { projectId: 'a', staffId: 'ana-1a2b' }, to: { projectId: 'c', staffId: 'x-c' } }, true);
+    expect(r2!.personId).toBe(personId);
+    expect((await readProfile(w.dirs.c, 'x-c'))!.personId).toBe(personId);
+  });
+
+  it('fundir grupos: o grupo de origem inteiro migra para o do destino', async () => {
+    await saveProfile(w.dirs.a, perfil({ id: 'ana-1a2b', projectId: 'a', name: 'Ana', personId: 'grupo-2' }));
+    await saveProfile(w.dirs.b, perfil({ id: 'copia-b', projectId: 'b', name: 'Ana', personId: 'grupo-1' }));
+    await saveProfile(w.dirs.c, perfil({ id: 'x-c', projectId: 'c', name: 'X', personId: 'grupo-2' }));
+    await saveProfile(w.dirs.c, perfil({ id: 'y-c', projectId: 'c', name: 'Y', personId: 'grupo-2' }));
+    await saveProfile(w.dirs.d, perfil({ id: 'z-d', projectId: 'd', name: 'Z' }));
+    const svc = servico(w);
+    // Origem em grupo-2 (X), destino em grupo-1: o grupo-2 inteiro passa para grupo-1.
+    const r = await svc.link({ from: { projectId: 'c', staffId: 'x-c' }, to: { projectId: 'b', staffId: 'copia-b' } }, true);
+    expect(r!.personId).toBe('grupo-1');
+    for (const [dir, id] of [[w.dirs.a, 'ana-1a2b'], [w.dirs.b, 'copia-b'], [w.dirs.c, 'x-c'], [w.dirs.c, 'y-c']] as const) {
+      expect((await readProfile(dir, id))!.personId).toBe('grupo-1');
+    }
+    // Quem não tinha grupo, e a origem sem vínculo: o grupo do destino.
+    await svc.link({ from: { projectId: 'd', staffId: 'z-d' }, to: { projectId: 'a', staffId: 'ana-1a2b' } }, true);
+    expect((await readProfile(w.dirs.d, 'z-d'))!.personId).toBe('grupo-1');
+  });
+
+  it('desligar tira o vínculo só dessa ficha (some do JSON); as outras continuam', async () => {
+    await saveProfile(w.dirs.a, perfil({ id: 'ana-1a2b', projectId: 'a', name: 'Ana', personId: 'grupo-1' }));
+    await saveProfile(w.dirs.b, perfil({ id: 'copia-b', projectId: 'b', name: 'Ana', personId: 'grupo-1' }));
+    const svc = servico(w);
+    expect(await svc.unlink({ projectId: 'b', staffId: 'copia-b' }, true)).toEqual({ ok: true });
+    expect(JSON.parse(await fs.readFile(profileFile(w.dirs.b, 'copia-b'), 'utf8')).personId).toBeUndefined();
+    expect((await readProfile(w.dirs.a, 'ana-1a2b'))!.personId).toBe('grupo-1');
+    expect(await svc.unlink({ projectId: 'b', staffId: 'ninguem' }, true)).toBeNull();
+    await expect(svc.unlink({ projectId: 'b', staffId: 'copia-b' }, false)).rejects.toThrow('só pelo Claudio’s Club');
+  });
+
+  it('apagar: arquivos somem, quem reportava a ela perde o gestor (orphaned), o arquivado sai do config', async () => {
+    const st = path.join(w.dirs.d, '.myco', 'staff');
+    await saveProfile(w.dirs.d, perfil({ id: 'boss', projectId: 'd', name: 'Chefe', portrait: 'boss.png' }));
+    await saveProfile(w.dirs.d, perfil({ id: 'sub1', projectId: 'd', name: 'Sub 1', reportsTo: ['boss'] }));
+    await saveProfile(w.dirs.d, perfil({ id: 'sub2', projectId: 'd', name: 'Sub 2', reportsTo: ['boss', 'other'] }));
+    await saveProfile(w.dirs.d, perfil({ id: 'other', projectId: 'd', name: 'Outro' }));
+    await fs.writeFile(path.join(st, 'boss.png'), 'png-boss');
+    await fs.writeFile(memoryFile(w.dirs.d, 'boss'), 'memória do chefe\n');
+    await fs.mkdir(path.join(st, 'boss.history'));
+    await fs.writeFile(path.join(st, 'boss.history', '2026-10-01T00-00-00-000Z.json'), '{}');
+    await setArchived({ kind: 'session', id: 'staff:boss', archived: true });
+
+    const svc = servico(w);
+    expect(await svc.deleteStaff('d', 'boss', true)).toEqual({ ok: true, orphaned: ['sub1'] });
+    for (const f of ['boss.json', 'boss.md', 'boss.memory.md', 'boss.png', 'boss.history']) expect(await existe(path.join(st, f))).toBe(false);
+    expect((await readProfile(w.dirs.d, 'sub1'))!.reportsTo).toEqual([]);
+    expect((await readProfile(w.dirs.d, 'sub2'))!.reportsTo).toEqual(['other']);
+    expect(await listVersions(w.dirs.d, 'sub1')).toHaveLength(1);
+    expect((await readConfig()).archived.sessions).not.toContain('staff:boss');
+    expect(await svc.deleteStaff('d', 'boss', true)).toBeNull();
+  });
+
+  it('apagar recusa (409) se a conversa dela está trabalhando, e recusa sem navegador', async () => {
+    await saveProfile(w.dirs.d, perfil({ id: 'boss', projectId: 'd', name: 'Chefe' }));
+    await expect(servico(w, { isWorking: (id) => id === 'boss' }).deleteStaff('d', 'boss', true)).rejects.toThrow(StaffBusyError);
+    expect(await existe(profileFile(w.dirs.d, 'boss'))).toBe(true);
+    await expect(servico(w).deleteStaff('d', 'boss', false)).rejects.toThrow('só pelo Claudio’s Club');
+  });
+
+  it('apagar recusa (409) com tarefa aberta da ficha (executora ou revisora); com só tarefas prontas, apaga', async () => {
+    await saveProfile(w.dirs.d, perfil({ id: 'boss', projectId: 'd', name: 'Chefe' }));
+    await saveProfile(w.dirs.d, perfil({ id: 'outra', projectId: 'd', name: 'Outra' }));
+    const abertas = servico(w, {
+      tasksOf: async () => [
+        { staffId: 'boss', reviewerId: null, status: 'doing' },
+        { staffId: 'outra', reviewerId: 'boss', status: 'review' },
+        { staffId: 'boss', reviewerId: null, status: 'done' },
+      ],
+    });
+    await expect(abertas.deleteStaff('d', 'boss', true)).rejects.toThrow(StaffBusyError);
+    await expect(abertas.deleteStaff('d', 'boss', true)).rejects.toThrow('Chefe tem 2 tarefa(s) aberta(s) no quadro');
+    expect(await existe(profileFile(w.dirs.d, 'boss'))).toBe(true);
+
+    const prontas = servico(w, {
+      tasksOf: async () => [
+        { staffId: 'boss', reviewerId: null, status: 'done' },
+        { staffId: 'boss', reviewerId: 'outra', status: 'live' },
+        { staffId: 'outra', reviewerId: null, status: 'todo' },
+      ],
+    });
+    expect(await prontas.deleteStaff('d', 'boss', true)).toEqual({ ok: true, orphaned: [] });
+    expect(await existe(profileFile(w.dirs.d, 'boss'))).toBe(false);
+  });
+
+  it('as rotas novas não entram na lista de funcionário (só navegador)', () => {
+    for (const p of ['/api/staff-link', '/api/staff-unlink', '/api/projects/d/staff/boss/delete']) expect(staffMayPost(p)).toBe(false);
   });
 });

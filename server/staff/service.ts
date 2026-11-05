@@ -13,6 +13,7 @@ import type {
   ProjectConnection,
   ServerInfo,
   StaffProfile,
+  Task,
 } from '../../shared/model';
 import type { VaultOptions } from '../secretVault';
 import { isFtpConnection, listFtpServers, readFtpConnections, removeFtpConnection, saveFtpConnection, testFtpConnection, type FtpConnector } from './ftp';
@@ -37,9 +38,11 @@ import {
   archiveVersion,
   createProfile,
   ensureMemory,
+  fichaFile,
   listProjectStaff,
   listVersions,
   memoryFile,
+  profileFile,
   readPortrait,
   readProfile,
   readVersion,
@@ -47,6 +50,7 @@ import {
   replacePortrait,
   saveChatChoice,
   saveProfile,
+  staffDir,
   StaffError,
   StaffInputSchema,
   type StaffInputParsed,
@@ -65,7 +69,19 @@ export interface StaffDirectoryPerson {
   mission: string;
   hasPortrait: boolean;
   updatedAt: string;
+  /** Mesma pessoa em outras fichas (cópias): o id do grupo; null sem vínculo. */
+  personId: string | null;
+  /** Arquivado no quadro (mesma regra do quadro: `staff:<id>` no config). */
+  archived: boolean;
+  /** Gestores (ids de funcionários do mesmo projeto). Vazio = reporta a você. */
+  reportsTo: string[];
 }
+
+/** Conflito com o estado atual (ex.: a conversa do funcionário está trabalhando): 409 na rota. */
+export class StaffBusyError extends StaffError {}
+
+const ID_TEXT = /^[A-Za-z0-9-]+$/;
+const PORTRAIT_FILE = /^[a-z0-9-]+\.(png|jpg|webp)$/;
 
 const CopyBody = z.object({
   fromProjectId: z.string().regex(/^[A-Za-z0-9-]+$/, 'projeto de origem inválido').max(200),
@@ -74,6 +90,23 @@ const CopyBody = z.object({
   // Gestores no projeto de destino (ids de funcionários de lá). Conferidos antes de criar qualquer coisa.
   reportsTo: z.array(z.string().regex(/^[A-Za-z0-9-]+$/, 'gestor inválido').max(40)).max(10).default([]),
 });
+
+const StaffRefBody = z.object({
+  projectId: z.string().regex(ID_TEXT, 'projeto inválido').max(200),
+  staffId: z.string().regex(ID_TEXT, 'funcionário inválido').max(40),
+});
+const LinkBody = z.object({ from: StaffRefBody, to: StaffRefBody });
+const UnlinkBody = StaffRefBody;
+const ApplyToCopiesBody = z.object({ applyToCopies: z.boolean().optional() });
+
+/** Campos que a edição leva para as cópias da mesma pessoa. Nunca: vínculos, servidores, memória, conversas, rotinas, MCPs. */
+const COPY_TEXT_FIELDS = ['name', 'role', 'mission', 'rules', 'doneWhen', 'model', 'effort', 'agents', 'skills'] as const;
+
+/** `child` está dentro de `dir` (sem sair por `..` nem por outro caminho). */
+function insideDir(dir: string, child: string): boolean {
+  const root = path.resolve(dir) + path.sep;
+  return path.resolve(child).startsWith(root);
+}
 
 export interface StaffServiceOptions {
   runDir: string;
@@ -93,6 +126,8 @@ export interface StaffServiceOptions {
   openChat?: (projectId: string, staffId: string, text: string) => Promise<string>;
   /** Alguma conversa do funcionário está trabalhando agora. */
   isWorking?: (staffId: string) => boolean;
+  /** Tarefas do quadro do projeto (o delete recusa se alguma aberta aponta para a ficha). Padrão: nenhuma. */
+  tasksOf?: (projectId: string) => Promise<Pick<Task, 'staffId' | 'reviewerId' | 'status'>[]>;
   /** Arquivados (config → `staff:<id>`); os testes trocam para não mexer no config de verdade. */
   archive?: { has: (key: string) => Promise<boolean>; set: (key: string, archived: boolean) => Promise<void> };
   /** Extensão do Chrome instalada? (padrão server/browser.ts; os testes trocam). */
@@ -275,6 +310,9 @@ export class StaffService {
           mission: s.mission,
           hasPortrait: !!s.portrait,
           updatedAt: s.updatedAt,
+          personId: s.personId ?? null,
+          archived: await this.archive.has(`staff:${s.id}`),
+          reportsTo: s.reportsTo,
         });
       }
     }
@@ -301,6 +339,8 @@ export class StaffService {
     // Mesma checagem de `hire`: cada gestor tem que ser funcionário deste projeto (senão lança e nada é criado).
     await this.managers(target.path, reportsTo);
 
+    // Mesma pessoa: a cópia herda o vínculo da origem (ou a origem ganha um agora, e a cópia entra no grupo).
+    const personId = await this.ensurePersonId(source.path, src);
     const portrait = await readPortrait(source.path, src);
     const input: StaffInputParsed = {
       name: src.name,
@@ -325,7 +365,9 @@ export class StaffService {
       portraitDataUrl: portrait ? `data:${portrait.type};base64,${portrait.bytes.toString('base64')}` : null,
     };
     const now = new Date();
-    const profile = await createProfile(target.path, projectId, input, now);
+    const created = await createProfile(target.path, projectId, input, now);
+    const profile: StaffProfile = { ...created, personId };
+    await saveProfile(target.path, profile);
 
     // Memória: a de origem (com a procedência no topo) ou a padrão. Antes do .md: ensureMemory nunca sobrescreve.
     const oldMemory = withMemory ? await fs.readFile(memoryFile(source.path, src.id), 'utf8').catch(() => null) : null;
@@ -338,15 +380,46 @@ export class StaffService {
   }
 
   /**
+   * O `personId` da ficha de origem; se não tem, gera um e grava só o JSON (sem versão nova, sem updatedAt). Com o
+   * lock da ficha: duas cópias ao mesmo tempo não criam dois grupos.
+   */
+  private async ensurePersonId(projectPath: string, src: StaffProfile): Promise<string> {
+    if (src.personId) return src.personId;
+    return withProfileLock(projectPath, src.id, async () => {
+      const fresh = (await readProfile(projectPath, src.id)) ?? src;
+      if (fresh.personId) return fresh.personId;
+      const personId = randomUUID();
+      await saveProfile(projectPath, { ...fresh, personId });
+      return personId;
+    });
+  }
+
+  /** Grava o vínculo (ou tira, com null) da ficha, pelo lock dela. Não mexe em versão nem em updatedAt. */
+  private async setPersonId(projectPath: string, staffId: string, personId: string | null): Promise<void> {
+    await withProfileLock(projectPath, staffId, async () => {
+      const fresh = await readProfile(projectPath, staffId);
+      if (!fresh) return;
+      const { personId: _old, ...rest } = fresh;
+      await saveProfile(projectPath, personId ? { ...rest, personId } : rest);
+    });
+  }
+
+  /**
    * Edita a ficha (só pelo navegador). A versão anterior vai para o histórico; sessões e data de
    * contratação ficam. Retrato: data URL troca, null remove, ausente mantém.
    */
-  async update(projectId: string, staffId: string, body: unknown): Promise<StaffProfile | null> {
+  /**
+   * `applyToCopies: true` leva a edição às cópias da mesma pessoa (ver applyToCopies). `copiesUpdated` vem sempre (0 quando
+   * não se aplica).
+   */
+  async update(projectId: string, staffId: string, body: unknown): Promise<(StaffProfile & { copiesUpdated: number }) | null> {
     const project = await this.project(projectId);
     const current = project ? await readProfile(project.path, staffId) : null;
     if (!project || !current) return null;
     const parsed = StaffInputSchema.safeParse(body);
     if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'ficha inválida');
+    const flags = ApplyToCopiesBody.safeParse(body);
+    if (!flags.success) throw new StaffError('applyToCopies tem que ser true ou false');
     const { portraitDataUrl, launch: _launch, adoptSessionId: _adopt, force: _force, ...fields } = parsed.data;
     if (fields.reportsTo.includes(staffId)) throw new StaffError('um funcionário não pode reportar a si mesmo');
     await this.managers(project.path, fields.reportsTo);
@@ -354,15 +427,55 @@ export class StaffService {
       throw new StaffError('esse vínculo criaria um ciclo (um subordinado não pode chefiar o próprio gestor)');
     }
 
+    const saved = await this.saveEdit(project, current, { ...current, ...fields, projectId }, portraitDataUrl);
+    const copiesUpdated = flags.data.applyToCopies && saved.personId ? await this.applyToCopies(project, saved) : 0;
+    return { ...saved, copiesUpdated };
+  }
+
+  /**
+   * Uma edição gravada: a versão anterior vai para o histórico; retrato (data URL troca, null remove, ausente mantém);
+   * JSON, .md e aviso às conversas abertas. É o caminho de salvar de toda edição, inclusive das cópias.
+   */
+  private async saveEdit(project: Project, current: StaffProfile, next: StaffProfile, portraitDataUrl: string | null | undefined): Promise<StaffProfile> {
     await archiveVersion(project.path, current);
     let portrait = current.portrait;
     if (portraitDataUrl === null) portrait = await removePortrait(project.path, current);
     else if (portraitDataUrl) portrait = await replacePortrait(project.path, current, portraitDataUrl);
-    const next: StaffProfile = { ...current, ...fields, projectId, portrait, updatedAt: new Date().toISOString() };
-    await saveProfile(project.path, next);
-    await writeFicha(next, await this.context(project, next));
-    this.opts.onChange?.(current, next);
-    return next;
+    const saved: StaffProfile = { ...next, portrait, updatedAt: new Date().toISOString() };
+    await saveProfile(project.path, saved);
+    await writeFicha(saved, await this.context(project, saved));
+    this.opts.onChange?.(current, saved);
+    return saved;
+  }
+
+  /**
+   * Leva a edição (já salva) às cópias da mesma pessoa, em todos os projetos do quadro (sem worktrees, como o diretório).
+   * Só os campos de COPY_TEXT_FIELDS e o retrato. Cada cópia passa por saveEdit, com o lock dela. Uma falha não para as
+   * outras: vai para o log e não conta. Devolve quantas foram atualizadas.
+   */
+  private async applyToCopies(source: Project, saved: StaffProfile): Promise<number> {
+    const picture = await readPortrait(source.path, saved);
+    const dataUrl = picture ? `data:${picture.type};base64,${picture.bytes.toString('base64')}` : null;
+    const text = Object.fromEntries(COPY_TEXT_FIELDS.map((k) => [k, saved[k]])) as Partial<StaffProfile>;
+    let updated = 0;
+    for (const project of (await this.adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf)) {
+      const copies = (await listProjectStaff(project.path, project.id).catch(() => [])).filter(
+        (s) => s.personId === saved.personId && !(project.id === source.id && s.id === saved.id),
+      );
+      for (const c of copies) {
+        try {
+          await withProfileLock(project.path, c.id, async () => {
+            const cur = await readProfile(project.path, c.id);
+            if (!cur || cur.personId !== saved.personId) return;
+            await this.saveEdit(project, cur, { ...cur, ...text, projectId: project.id }, dataUrl);
+            updated++;
+          });
+        } catch (err) {
+          console.warn(`[staff] cópia de ${saved.name} em ${project.name} (${c.id}) não atualizada: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+    return updated;
   }
 
   /** Troca as rotinas agendadas (só pelo Claudio’s Club). A ficha anterior vai para o histórico. */
@@ -477,6 +590,97 @@ export class StaffService {
       }
     }
     return out;
+  }
+
+  /**
+   * Liga duas fichas como a mesma pessoa. O `personId` é o do destino (`to`), senão o da origem (`from`), senão um novo.
+   * Se `from` estava em outro grupo, o grupo inteiro dele (em todos os projetos) passa para o escolhido.
+   */
+  async link(body: unknown, fromBrowser: boolean): Promise<{ personId: string } | null> {
+    if (!fromBrowser) throw new StaffError('só pelo Claudio’s Club');
+    const parsed = LinkBody.safeParse(body);
+    if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'pedido inválido');
+    const { from, to } = parsed.data;
+    if (from.projectId === to.projectId && from.staffId === to.staffId) throw new StaffError('é a mesma ficha: escolha duas');
+    const [fromProject, toProject] = await Promise.all([this.project(from.projectId), this.project(to.projectId)]);
+    const a = fromProject ? await readProfile(fromProject.path, from.staffId) : null;
+    const b = toProject ? await readProfile(toProject.path, to.staffId) : null;
+    if (!fromProject || !toProject || !a || !b) return null;
+    const personId = b.personId ?? a.personId ?? randomUUID();
+    if (a.personId && a.personId !== personId) await this.regroup(a.personId, personId);
+    await this.setPersonId(fromProject.path, a.id, personId);
+    await this.setPersonId(toProject.path, b.id, personId);
+    return { personId };
+  }
+
+  /** Tira o vínculo só desta ficha (as outras cópias continuam no grupo). */
+  async unlink(body: unknown, fromBrowser: boolean): Promise<{ ok: true } | null> {
+    if (!fromBrowser) throw new StaffError('só pelo Claudio’s Club');
+    const parsed = UnlinkBody.safeParse(body);
+    if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'pedido inválido');
+    const project = await this.project(parsed.data.projectId);
+    const ficha = project ? await readProfile(project.path, parsed.data.staffId) : null;
+    if (!project || !ficha) return null;
+    await this.setPersonId(project.path, ficha.id, null);
+    return { ok: true };
+  }
+
+  /** Todas as fichas do grupo `from` (em todos os projetos do quadro) passam para `to`. */
+  private async regroup(from: string, to: string): Promise<void> {
+    for (const project of (await this.adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf)) {
+      for (const s of await listProjectStaff(project.path, project.id).catch(() => [])) {
+        if (s.personId === from) await this.setPersonId(project.path, s.id, to);
+      }
+    }
+  }
+
+  /**
+   * Apaga a ficha de vez: JSON, .md, memória, retrato e histórico de versões. Quem reportava a ela (no mesmo projeto)
+   * perde esse gestor (versão anterior no histórico, .md refeito); `orphaned` lista os que ficaram sem gestor por isso.
+   * Recusa (409) se uma conversa dela está trabalhando. Fica de fora: o ssh_config (fica em .vps, fora de .myco/staff)
+   * e a worktree git, se houver.
+   */
+  async deleteStaff(projectId: string, staffId: string, fromBrowser: boolean): Promise<{ ok: true; orphaned: string[] } | null> {
+    if (!fromBrowser) throw new StaffError('só pelo Claudio’s Club');
+    const project = await this.project(projectId);
+    const current = project ? await readProfile(project.path, staffId) : null;
+    if (!project || !current) return null;
+    if (this.opts.isWorking?.(staffId)) {
+      throw new StaffBusyError(`${current.name} está trabalhando numa conversa agora: espere terminar para apagar`);
+    }
+    // Tarefa aberta (não pronta nem no ar) como executora ou revisora: apagar deixaria a tarefa sem dono.
+    const open = ((await this.opts.tasksOf?.(projectId)) ?? []).filter(
+      (t) => (t.staffId === staffId || t.reviewerId === staffId) && t.status !== 'done' && t.status !== 'live',
+    ).length;
+    if (open > 0) {
+      throw new StaffBusyError(`${current.name} tem ${open} tarefa(s) aberta(s) no quadro: conclua ou passe para outra pessoa antes de apagar`);
+    }
+
+    // Vínculos de quem reportava a ela: tira o id (idempotente: refazer depois de uma falha não muda nada a mais).
+    const orphaned: string[] = [];
+    for (const s of await listProjectStaff(project.path, project.id)) {
+      if (s.id === staffId || !s.reportsTo.includes(staffId)) continue;
+      await withProfileLock(project.path, s.id, async () => {
+        const fresh = await readProfile(project.path, s.id);
+        if (!fresh) return;
+        const reportsTo = fresh.reportsTo.filter((id) => id !== staffId);
+        await this.saveEdit(project, fresh, { ...fresh, reportsTo }, undefined);
+        if (reportsTo.length === 0) orphaned.push(s.id);
+      });
+    }
+
+    // Arquivos da ficha, todos dentro de .myco/staff (o id já passou pela checagem de readProfile; o retrato, pelo nome).
+    const dir = staffDir(project.path);
+    const targets = [fichaFile(project.path, staffId), memoryFile(project.path, staffId), path.join(dir, `${staffId}.history`)];
+    if (current.portrait && PORTRAIT_FILE.test(current.portrait)) targets.push(path.join(dir, current.portrait));
+    if (targets.some((t) => !insideDir(dir, t))) throw new StaffError('caminho fora de .myco/staff');
+    for (const t of targets) await fs.rm(t, { recursive: true, force: true });
+    // O JSON por último: se algo falhar antes, a ficha continua no quadro e dá para apagar de novo.
+    await fs.rm(profileFile(project.path, staffId), { force: true });
+
+    // Saiu do quadro (arquivado): o id não fica na lista de arquivados.
+    if (await this.archive.has(`staff:${staffId}`)) await this.archive.set(`staff:${staffId}`, false);
+    return { ok: true, orphaned };
   }
 
   private get archive() {

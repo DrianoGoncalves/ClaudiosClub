@@ -75,6 +75,8 @@ const ProfileSchema = StaffInputSchema.omit({ portraitDataUrl: true, launch: tru
   id: z.string(),
   projectId: z.string(),
   portrait: z.string().nullable(),
+  // Ligação entre cópias da mesma pessoa; valor inválido é ignorado (ficha sem vínculo).
+  personId: z.string().regex(/^[A-Za-z0-9-]{1,60}$/).optional().catch(undefined),
   routines: RoutinesSchema.optional().catch(undefined),
   hiredBy: z.string().nullable().optional().catch(undefined),
   temporary: z.boolean().optional().catch(undefined),
@@ -101,7 +103,7 @@ const ProfileSchema = StaffInputSchema.omit({ portraitDataUrl: true, launch: tru
 export const staffDir = (projectPath: string) => path.join(projectPath, '.myco', 'staff');
 export const fichaFile = (projectPath: string, id: string) => path.join(staffDir(projectPath), `${id}.md`);
 export const memoryFile = (projectPath: string, id: string) => path.join(staffDir(projectPath), `${id}.memory.md`);
-const profileFile = (projectPath: string, id: string) => path.join(staffDir(projectPath), `${id}.json`);
+export const profileFile = (projectPath: string, id: string) => path.join(staffDir(projectPath), `${id}.json`);
 
 const SAFE_ID = /^[a-z0-9-]{1,40}$/;
 
