@@ -24,6 +24,7 @@ import { boardStyle, useBoardBackground, useSystemTheme } from './board/colors';
 import { archiveKey, ghostNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
 import { seedSeenIdle } from './board/unread';
 import { PairControls } from './toolbar/PairControls';
+import { SystemMonitor } from './toolbar/SystemMonitor';
 import { QuickJump } from './toolbar/QuickJump';
 import {
   AgentPanel,
@@ -621,6 +622,7 @@ export function App() {
           }}
         />
       )}
+      <SystemMonitor />
       {needsPairing ? (
         <div className="notice notice-pair" role="alert">
           <strong>{t('toolbar.pairNotice')}</strong>

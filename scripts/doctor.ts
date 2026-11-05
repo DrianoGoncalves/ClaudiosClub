@@ -5,14 +5,12 @@ import { getAuthStatus } from '../server/auth';
 import { BUILT, ROOT, brokenBuild, brokenDeps, launcherInstalled } from './lib';
 
 // Checklist do Claudio’s Club: confere o que falta para rodar (Node 22+, Git, Claude Code, login, dependências, build
-// e, opcional, o botão Iniciar) e grava scripts/status.js, que a página scripts/start.html lê. Só leitura: não instala
+// e o link do botão Iniciar) e grava scripts/status.js, que a página scripts/start.html lê. Só leitura: não instala
 // nada e não lê credencial nem valor de variável. Uso: npm run doctor
 
 interface Check {
   id: 'node' | 'git' | 'claude' | 'login' | 'deps' | 'build' | 'launcher';
   ok: boolean;
-  /** Não impede de rodar: faltando, aparece como opcional, não como erro. */
-  optional?: boolean;
   detail: string;
 }
 
@@ -23,7 +21,7 @@ const LABELS: Record<Check['id'], string> = {
   login: 'Login no Claude Code',
   deps: 'Dependências',
   build: 'Build do app',
-  launcher: 'Botão Iniciar (opcional)',
+  launcher: 'Botão Iniciar registrado',
 };
 
 /** Primeira linha da saída de um programa do PATH; vazia se ele não existe ou falha. */
@@ -75,12 +73,11 @@ async function collect(): Promise<Check[]> {
   checks.push({
     id: 'launcher',
     ok: launcher,
-    optional: true,
     detail: launcher
       ? 'myco:// registrado'
       : process.platform === 'darwin'
         ? 'sem atalho no macOS: use npm run daily:start'
-        : 'não registrado (opcional: npm run launcher)',
+        : 'não registrado (registra sozinho na subida: npm run daily:start)',
   });
 
   return checks;
@@ -94,10 +91,10 @@ async function main(): Promise<void> {
   fs.writeFileSync(statusFile, `window.claudioStatus = ${JSON.stringify(payload)};`, 'utf8');
 
   for (const c of checks) {
-    console.log(`${c.ok ? '✓' : c.optional ? '–' : '✗'} ${LABELS[c.id].padEnd(26)} ${c.detail}`);
+    console.log(`${c.ok ? '✓' : '✗'} ${LABELS[c.id].padEnd(26)} ${c.detail}`);
   }
-  const required = checks.filter((c) => !c.optional);
-  console.log(`${required.filter((c) => c.ok).length} de ${required.length} ok. Gravado em ${statusFile}`);
+  const okCount = checks.filter((c) => c.ok).length;
+  console.log(`${okCount} de ${checks.length} ok. Gravado em ${statusFile}`);
 }
 
 await main();

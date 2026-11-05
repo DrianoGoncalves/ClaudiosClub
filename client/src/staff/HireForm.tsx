@@ -38,7 +38,7 @@ interface Props {
   board: Board;
   projectId: string;
   mode: StaffFormMode;
-  /** Nível simples: só cargo, nome, retrato e primeira tarefa; o resto vem do cargo. */
+  /** Nível simples: só cargo, nome e retrato; o resto vem do cargo. */
   simple?: boolean;
   onClose: () => void;
   onHired: (profile: StaffProfile, launch: LaunchResult | null) => void;
@@ -91,7 +91,6 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
   const [mission, setMission] = useState(
     editing?.mission ?? (adopting ? `Dar continuidade ao trabalho desta sessão${adopting.title ? `: ${adopting.title}` : ''}.` : ''),
   );
-  const [firstTask, setFirstTask] = useState(editing?.firstTask ?? '');
   const [managers, setManagers] = useState<string[]>(editing?.reportsTo ?? (mode.kind === 'hire' ? mode.reportsTo : []));
   const [autonomy, setAutonomy] = useState<Autonomy>(editing?.autonomy ?? 'manual');
   const [agents, setAgents] = useState<string[]>(editing?.agents ?? []);
@@ -113,7 +112,6 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
   const [showServers, setShowServers] = useState((editing?.servers.length ?? 0) > 0);
   // undefined = manter o retrato atual; null = remover; string = trocar.
   const [portrait, setPortrait] = useState<string | null | undefined>(undefined);
-  const [launch, setLaunch] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [versions, setVersions] = useState<Array<{ version: string; name: string; role: string; updatedAt: string }> | null>(null);
@@ -236,7 +234,8 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
       name,
       role,
       mission: mission.trim() || `Ajudar no projeto ${project?.name ?? ''} como ${role}.`,
-      firstTask,
+      // A tarefa vem pelo chat; a ficha antiga (ou de quem um gestor contratou pela API) mantém a dela.
+      firstTask: editing?.firstTask ?? '',
       reportsTo: managers,
       autonomy,
       agents,
@@ -255,9 +254,8 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
       servers,
       browser,
       ...(portrait !== undefined ? { portraitDataUrl: portrait } : {}),
-      // A conversa é sempre pelo painel do Claudio’s Club. No simples, espera você escrever; no avançado,
-      // `launch` já manda a saudação e ele começa pela primeira tarefa.
-      ...(editing ? {} : adopting ? { adoptSessionId: adopting.id, launch: false } : { launch: simpleHire ? false : launch }),
+      // A conversa é sempre pelo painel do Claudio’s Club e abre vazia, esperando você escrever.
+      ...(editing ? {} : adopting ? { adoptSessionId: adopting.id, launch: false } : { launch: false }),
     };
     try {
       if (editing) onSaved(await api.updateStaff(projectId, editing.id, input));
@@ -346,16 +344,6 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
                 <textarea value={mission} onChange={(e) => setMission(e.target.value)} rows={3} maxLength={4000} />
               </label>
             )}
-            <label>
-              {t('staff.firstTask')} <span className="muted small">{editing ? t('staff.firstTaskOptionalNext') : t('staff.firstTaskOptional')}</span>
-              <textarea
-                value={firstTask}
-                onChange={(e) => setFirstTask(e.target.value)}
-                rows={3}
-                maxLength={4000}
-                placeholder={t('staff.firstTaskPlaceholderSimple')}
-              />
-            </label>
             {!editing && template && (
               <p className="muted small simple-summary">
                 {t('staff.fromRole', {
@@ -466,10 +454,6 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
         <label>
           {t('staff.missionReq')}
           <textarea value={mission} onChange={(e) => setMission(e.target.value)} rows={3} maxLength={4000} required />
-        </label>
-        <label>
-          {t('staff.firstTask')}
-          <textarea value={firstTask} onChange={(e) => setFirstTask(e.target.value)} rows={2} maxLength={4000} placeholder={t('staff.firstTaskPlaceholder')} />
         </label>
         <label>
           {t('staff.doneWhen')}
@@ -699,13 +683,6 @@ export function StaffForm({ board, projectId, mode, simple = false, onClose, onH
 
         {/* Rodapé fixo: salvar está sempre à vista, em qualquer aba. */}
         <div className="modal-footer">
-        {full && !editing && !adopting && (
-          <label className="check">
-            <input type="checkbox" checked={launch} onChange={(e) => setLaunch(e.target.checked)} /> {t('staff.startChat')}
-            <span className="muted small"> {t('staff.startChatHint')}</span>
-          </label>
-        )}
-
         {error && <p className="error">{error}</p>}
         <div className="actions">
           <button type="submit" className="btn-primary" disabled={busy}>

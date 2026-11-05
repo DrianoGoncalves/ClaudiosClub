@@ -70,7 +70,8 @@ import { buildOrchestration, buildSavings, MarkBody, readAllMarks, readMarks, sa
 import type { Board, CostReport, InboxItem, InboxKind, LiveSession, Project, TurnNotice } from '../shared/model';
 import { TurnWatcher } from './turns';
 import { RoutineScheduler, type RoutineOutcome } from './routines';
-import type { AppServerInfo, Routine, StaffProfile } from '../shared/model';
+import type { AppServerInfo, Routine, StaffProfile, SystemStats } from '../shared/model';
+import { systemStats } from './systemStats';
 import { pathKey, worktreeParent } from './adapters/claude/paths';
 import { boardFilter } from './board';
 import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
@@ -461,6 +462,8 @@ const ATTACHMENT_UPLOAD = new RegExp(`^/api/projects/${ID}/attachments$`);
 
 const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ['GET', /^\/api\/health$/, async () => ({ ok: true, adapter: adapter.id })],
+  // CPU e RAM da máquina, para o monitor do canto (só números; ver systemStats.ts).
+  ['GET', /^\/api\/system$/, async (): Promise<SystemStats> => systemStats()],
   // ---- o próprio servidor: parar e (com o vigia) reiniciar pelo config ----
   // `pendingRestart`: há código no disco que só entra reiniciando (o vigia não reinicia por mudança de código).
   [

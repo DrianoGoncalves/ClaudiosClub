@@ -1088,6 +1088,13 @@ export interface PendingRestart {
 }
 
 /** GET /api/server: o próprio servidor do Claudio’s Club, para Parar/Reiniciar no config. */
+/** Monitor do canto superior direito: CPU e RAM da máquina inteira (bytes). `cpu` null até a 2ª leitura. */
+export interface SystemStats {
+  cpu: number | null;
+  memTotal: number;
+  memFree: number;
+}
+
 export interface AppServerInfo extends PendingRestart {
   /** Rodando pelo vigia: há "Reiniciar". */
   daemon: boolean;

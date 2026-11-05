@@ -43,6 +43,7 @@ import type {
   QuestionAnswers,
   ServerAccess,
   ServerInfo,
+  SystemStats,
   TurnNotice,
   StaffInput,
   StaffProfile,
@@ -229,6 +230,8 @@ export const api = {
   setDefaultRole: (id: string | null) => post<RoleEntry[]>('/api/roles/default', { id }),
   restoreRoles: () => post<RoleEntry[]>('/api/roles/restore'),
   serverInfo: () => get<AppServerInfo>('/api/server'),
+  /** CPU e RAM da máquina, para o monitor do canto. */
+  system: () => get<SystemStats>('/api/system'),
   serverAction: (action: 'stop' | 'restart') => post<{ ok: boolean; daemon: boolean }>(`/api/server/${action}`),
   /** "Parear este navegador": `code` é o que a tela mostra para `npm run pair CÓDIGO`; `id` fica só aqui. */
   /** `terminal`: o servidor abriu o terminal de aprovação com o comando pronto. */
