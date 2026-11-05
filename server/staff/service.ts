@@ -71,6 +71,8 @@ const CopyBody = z.object({
   fromProjectId: z.string().regex(/^[A-Za-z0-9-]+$/, 'projeto de origem inválido').max(200),
   staffId: z.string().regex(/^[A-Za-z0-9-]+$/, 'funcionário inválido').max(40),
   withMemory: z.boolean().default(false),
+  // Gestores no projeto de destino (ids de funcionários de lá). Conferidos antes de criar qualquer coisa.
+  reportsTo: z.array(z.string().regex(/^[A-Za-z0-9-]+$/, 'gestor inválido').max(40)).max(10).default([]),
 });
 
 export interface StaffServiceOptions {
@@ -252,13 +254,16 @@ export class StaffService {
     }
   }
 
-  /** Fichas de todos os projetos do quadro (sem os arquivados, os que não existem e os worktrees). Uma pasta ruim não derruba as demais. */
+  /**
+   * Fichas de todos os projetos do quadro. Arquivado não sai da lista (a regra é mostrar todos com fichas; só sai se for
+   * excluído numa ação explícita). Ficam de fora só os worktrees (repetiriam a ficha da pasta principal), os que não
+   * existem e as pastas que não dá para ler. Uma pasta ruim não derruba as demais.
+   */
   async directory(): Promise<{ people: StaffDirectoryPerson[] }> {
-    const [projects, config] = await Promise.all([this.adapter.listProjects(), readConfig()]);
-    const archived = new Set(config.archived.projects);
+    const projects = await this.adapter.listProjects();
     const people: StaffDirectoryPerson[] = [];
     for (const project of projects) {
-      if (!project.exists || project.worktreeOf || archived.has(project.id)) continue;
+      if (!project.exists || project.worktreeOf) continue;
       const staff = await listProjectStaff(project.path, project.id).catch(() => []);
       for (const s of staff) {
         people.push({
@@ -287,18 +292,20 @@ export class StaffService {
     if (!fromBrowser) throw new StaffError('só pelo Claudio’s Club');
     const parsed = CopyBody.safeParse(body);
     if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'pedido inválido');
-    const { fromProjectId, staffId, withMemory } = parsed.data;
+    const { fromProjectId, staffId, withMemory, reportsTo } = parsed.data;
     if (fromProjectId === projectId) throw new StaffError('a origem é este mesmo projeto');
     const target = await this.project(projectId);
     const source = await this.project(fromProjectId);
     const src = source ? await readProfile(source.path, staffId) : null;
     if (!target || !source || !src) return null;
+    // Mesma checagem de `hire`: cada gestor tem que ser funcionário deste projeto (senão lança e nada é criado).
+    await this.managers(target.path, reportsTo);
 
     const portrait = await readPortrait(source.path, src);
     const input: StaffInputParsed = {
       name: src.name,
       role: src.role,
-      reportsTo: [],
+      reportsTo,
       mission: src.mission,
       firstTask: '',
       autonomy: src.autonomy,

@@ -1,12 +1,22 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Project, StaffProfile } from '../shared/model';
 import type { ToolAdapter } from '../server/adapters/types';
+import { setArchived } from '../server/config';
 import { staffMayPost } from '../server/apiPolicy';
 import { StaffError, StaffService } from '../server/staff/service';
 import { fichaFile, memoryFile, readPortrait, readProfile, saveProfile } from '../server/staff/store';
+
+// O config (arquivados) grava em MYCO_HOME: aponta para uma pasta temporária antes de o config.ts carregar.
+const home = await vi.hoisted(async () => {
+  const os = await import('node:os');
+  const nodePath = await import('node:path');
+  const dir = nodePath.join(os.tmpdir(), `myco-copy-home-${process.pid}-${Date.now()}`);
+  process.env.MYCO_HOME = dir;
+  return dir;
+});
 
 let root: string;
 let origin: string;
@@ -93,6 +103,7 @@ describe('fichas entre projetos', () => {
 
   afterAll(async () => {
     await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
+    await fs.rm(home, { recursive: true, force: true }).catch(() => undefined);
   });
 
   it('lista as fichas de todos os projetos conhecidos, com só os campos da lista', async () => {
@@ -185,5 +196,31 @@ describe('fichas entre projetos', () => {
     await expect(service().copyFrom('dest', { fromProjectId: 'orig', staffId: 'ana-1a2b', withMemory: 'sim' }, true)).rejects.toThrow(StaffError);
     await expect(service().copyFrom('dest', { fromProjectId: '../etc', staffId: 'ana-1a2b' }, true)).rejects.toThrow('projeto de origem inválido');
     await expect(service().copyFrom('dest', { staffId: 'ana-1a2b' }, true)).rejects.toThrow(StaffError);
+  });
+
+  it('reportsTo válido vai para a ficha nova; gestor que não está no destino recusa e não cria nada', async () => {
+    const chefe: StaffProfile = { ...bia, id: 'chefe-dest', projectId: 'dest', name: 'Chefe Dest', role: 'Gestora', portrait: null, sessions: [], servers: [], reportsTo: [] };
+    await saveProfile(dest, chefe);
+
+    const ok = (await service().copyFrom('dest', { fromProjectId: 'orig', staffId: 'bia-3c4d', reportsTo: ['chefe-dest'] }, true))!.profile;
+    expect(ok.reportsTo).toEqual(['chefe-dest']);
+    expect(await readProfile(dest, ok.id)).toEqual(ok);
+
+    const antes = await fs.readdir(path.join(dest, '.myco', 'staff'));
+    // Id de funcionário que só existe na origem, id inexistente e id fora do limite: todos recusam.
+    await expect(service().copyFrom('dest', { fromProjectId: 'orig', staffId: 'bia-3c4d', reportsTo: ['ana-1a2b'] }, true)).rejects.toThrow('gestor não encontrado neste projeto');
+    await expect(service().copyFrom('dest', { fromProjectId: 'orig', staffId: 'bia-3c4d', reportsTo: ['nao-existe-0000'] }, true)).rejects.toThrow(StaffError);
+    await expect(service().copyFrom('dest', { fromProjectId: 'orig', staffId: 'bia-3c4d', reportsTo: ['x'.repeat(41)] }, true)).rejects.toThrow(StaffError);
+    expect(await fs.readdir(path.join(dest, '.myco', 'staff'))).toEqual(antes);
+  });
+
+  it('projeto arquivado continua na lista de fichas (arquivar só esconde do quadro)', async () => {
+    await setArchived({ kind: 'project', id: 'orig', archived: true });
+    try {
+      const { people } = await service().directory();
+      expect(people.filter((p) => p.projectId === 'orig').map((p) => p.staffId).sort()).toEqual(['ana-1a2b', 'bia-3c4d']);
+    } finally {
+      await setArchived({ kind: 'project', id: 'orig', archived: false });
+    }
   });
 });
