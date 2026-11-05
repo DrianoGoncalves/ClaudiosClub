@@ -125,6 +125,18 @@ export function SkillIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+/** Servidor (dois gabinetes empilhados): as conexões SSH e FTP que a ficha libera. */
+export function ServerIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <rect x="2" y="2" width="20" height="8" rx="2" />
+      <rect x="2" y="14" width="20" height="8" rx="2" />
+      <path d="M6 6h.01" />
+      <path d="M6 18h.01" />
+    </svg>
+  );
+}
+
 /** Pessoa com +: contratar funcionário. */
 export function UserPlusIcon({ size = 16 }: { size?: number }) {
   return (

@@ -3,7 +3,7 @@ import { staffTools } from '../client/src/board/nodes';
 import type { StaffProfile } from '../shared/model';
 
 const profile = (over: Partial<StaffProfile> = {}) =>
-  ({ agents: [], skills: [], mcps: [], playbook: null, worktree: false, browser: false, canHire: false, ...over }) as StaffProfile;
+  ({ agents: [], skills: [], mcps: [], servers: [], playbook: null, worktree: false, browser: false, canHire: false, ...over }) as StaffProfile;
 
 describe('ícones de ferramentas no cartão do funcionário', () => {
   it('sem nada na ficha, sem ícone (lista vazia de MCPs = nenhum)', () => {
@@ -22,9 +22,15 @@ describe('ícones de ferramentas no cartão do funcionário', () => {
     expect(agents).toEqual({ tool: 'agents', label: 'Agents indicados: executor, revisor, designer' });
   });
 
-  it('mantém a ordem: worktree, Chrome, contratar, agents, skills, MCPs', () => {
-    const all = profile({ worktree: true, browser: true, canHire: true, agents: ['executor'], skills: ['vps'], mcps: null });
-    expect(staffTools(all).map((x) => x.tool)).toEqual(['worktree', 'browser', 'canHire', 'agents', 'skills', 'mcps']);
+  it('servidores: ícone só com conexão na ficha, e o tooltip só com os nomes', () => {
+    expect(staffTools(profile({ servers: ['producao', 'ftp-site'] }))).toEqual([
+      { tool: 'servers', label: 'Servidores (SSH e FTP): producao, ftp-site' },
+    ]);
+  });
+
+  it('mantém a ordem: worktree, Chrome, servidores, contratar, agents, skills, MCPs', () => {
+    const all = profile({ worktree: true, browser: true, servers: ['vps'], canHire: true, agents: ['executor'], skills: ['vps'], mcps: null });
+    expect(staffTools(all).map((x) => x.tool)).toEqual(['worktree', 'browser', 'servers', 'canHire', 'agents', 'skills', 'mcps']);
     expect(staffTools(all).find((x) => x.tool === 'skills')?.label).toBe('Skills indicadas: vps');
   });
 });

@@ -3,7 +3,7 @@ import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } fro
 import { PLAYBOOK_AGENTS } from '../../../shared/agentPresets';
 import { colorCss, type GitState, type LiveSession, type StaffProfile } from '../../../shared/model';
 import { employeeName, ENTRYPOINT_LABEL, formatAgo, formatShare, initials, STATUS_LABEL } from '../format';
-import { AgentIcon, BranchIcon, ChromeIcon, GhostIcon, McpIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
+import { AgentIcon, BranchIcon, ChromeIcon, GhostIcon, McpIcon, ServerIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { t } from '../i18n';
 import {
   HANDLE,
@@ -185,11 +185,12 @@ function ProjectNode({ id, data, selected, width }: NodeProps<Node<ProjectNodeDa
   );
 }
 
-export type StaffTool = 'worktree' | 'browser' | 'canHire' | 'agents' | 'skills' | 'mcps';
+export type StaffTool = 'worktree' | 'browser' | 'servers' | 'canHire' | 'agents' | 'skills' | 'mcps';
 
 const TOOL_ICON: Record<StaffTool, typeof BranchIcon> = {
   worktree: BranchIcon,
   browser: ChromeIcon,
+  servers: ServerIcon,
   canHire: UserPlusIcon,
   agents: AgentIcon,
   skills: SkillIcon,
@@ -199,12 +200,14 @@ const TOOL_ICON: Record<StaffTool, typeof BranchIcon> = {
 /**
  * O que a ficha libera, na ordem dos ícones do cartão, com o texto do tooltip. Agents: os da ficha e os do
  * roteiro dela, como a ficha mostra ao funcionário. MCPs: null = todos os configurados; lista vazia = nenhum.
+ * Servidores: só os nomes das conexões (host, usuário e pasta não saem da ficha).
  */
 export function staffTools(staff: StaffProfile): Array<{ tool: StaffTool; label: string }> {
   const agents = [...new Set([...(staff.playbook ? PLAYBOOK_AGENTS[staff.playbook] : []), ...staff.agents])];
   const tools: Array<{ tool: StaffTool; label: string } | false> = [
     staff.worktree && { tool: 'worktree', label: t('board.toolWorktree') },
     staff.browser && { tool: 'browser', label: t('board.toolBrowser') },
+    staff.servers.length > 0 && { tool: 'servers', label: t('board.toolServers', { list: staff.servers.join(', ') }) },
     staff.canHire && { tool: 'canHire', label: t('board.toolCanHire') },
     agents.length > 0 && { tool: 'agents', label: t('board.toolAgents', { list: agents.join(', ') }) },
     staff.skills.length > 0 && { tool: 'skills', label: t('board.toolSkills', { list: staff.skills.join(', ') }) },
@@ -290,7 +293,7 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
                 const Icon = TOOL_ICON[tool];
                 return (
                   <span key={tool} title={label} aria-label={label} role="img">
-                    <Icon size={16} />
+                    <Icon size={14} />
                   </span>
                 );
               })}
