@@ -47,6 +47,7 @@ function ArchiveButton({
   what,
   restoreLabel = t('detail.unarchive'),
   iconOnly = false,
+  confirm = false,
 }: {
   archived: boolean;
   onArchive: (v: boolean) => Promise<void>;
@@ -54,10 +55,13 @@ function ArchiveButton({
   restoreLabel?: string;
   /** Só o ícone (com o texto no title e no aria-label). */
   iconOnly?: boolean;
+  /** Pede confirmação antes de arquivar (desarquivar não pergunta) e pinta o botão de vermelho. */
+  confirm?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const click = async () => {
+    if (confirm && !archived && !window.confirm(t('detail.archiveConfirm', { what }))) return;
     setBusy(true);
     setError(null);
     try {
@@ -71,7 +75,7 @@ function ArchiveButton({
   return (
     <>
       <button
-        className={iconOnly ? 'btn-secondary btn-icon' : 'btn-secondary'}
+        className={['btn-secondary', iconOnly && 'btn-icon', confirm && !archived && 'is-danger'].filter(Boolean).join(' ')}
         onClick={click}
         disabled={busy}
         aria-label={iconOnly ? (archived ? restoreLabel : t('detail.archive')) : undefined}
@@ -620,7 +624,7 @@ export function ProjectPanel({
               <FolderIcon size={16} />
             </button>
           )}
-          <ArchiveButton archived={archived} onArchive={onArchive} what={t('detail.whatProjectAndStaff')} iconOnly />
+          <ArchiveButton archived={archived} onArchive={onArchive} what={t('detail.whatProjectAndStaff')} iconOnly confirm />
         </p>
         {tasks && (
           <p className="muted small">

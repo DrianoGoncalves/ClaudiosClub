@@ -479,6 +479,9 @@ textarea.q-field { resize: vertical; }
 .btn-secondary.files-new svg { flex: none; }
 .btn-secondary.files-delete { flex: none; color: var(--danger); }
 .btn-secondary.files-delete:hover:not(:disabled) { border-color: var(--danger); }
+/* Ação que tira algo do quadro (arquivar projeto): vermelha, como a lixeira dos arquivos. */
+.btn-secondary.is-danger { color: var(--danger); }
+.btn-secondary.is-danger:hover:not(:disabled) { border-color: var(--danger); }
 .files-delete-error { margin: 0; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .btn-secondary:is(.files-new, .files-delete):focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 1px; }
 .files-create { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
