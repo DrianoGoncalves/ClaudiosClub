@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { z } from 'zod';
 import type {
   AccountUsage,
   AnyConnection,
@@ -34,8 +36,10 @@ import { listMcpServers } from './mcp';
 import {
   archiveVersion,
   createProfile,
+  ensureMemory,
   listProjectStaff,
   listVersions,
+  memoryFile,
   readPortrait,
   readProfile,
   readVersion,
@@ -45,9 +49,29 @@ import {
   saveProfile,
   StaffError,
   StaffInputSchema,
+  type StaffInputParsed,
   RoutinesSchema,
   withProfileLock,
+  writeAtomic,
 } from './store';
+
+/** Uma ficha na lista de todas as empresas (para copiar). Só estes campos: nada de memória, regras ou servidores. */
+export interface StaffDirectoryPerson {
+  projectId: string;
+  projectName: string;
+  staffId: string;
+  name: string;
+  role: string;
+  mission: string;
+  hasPortrait: boolean;
+  updatedAt: string;
+}
+
+const CopyBody = z.object({
+  fromProjectId: z.string().regex(/^[A-Za-z0-9-]+$/, 'projeto de origem inválido').max(200),
+  staffId: z.string().regex(/^[A-Za-z0-9-]+$/, 'funcionário inválido').max(40),
+  withMemory: z.boolean().default(false),
+});
 
 export interface StaffServiceOptions {
   runDir: string;
@@ -226,6 +250,84 @@ export class StaffService {
       await writeFicha(profile, await this.context(project, profile));
       return { profile, launch: { ok: false, sessionId: null, command: '', error: err instanceof Error ? err.message : String(err) } };
     }
+  }
+
+  /** Fichas de todos os projetos do quadro (sem os arquivados, os que não existem e os worktrees). Uma pasta ruim não derruba as demais. */
+  async directory(): Promise<{ people: StaffDirectoryPerson[] }> {
+    const [projects, config] = await Promise.all([this.adapter.listProjects(), readConfig()]);
+    const archived = new Set(config.archived.projects);
+    const people: StaffDirectoryPerson[] = [];
+    for (const project of projects) {
+      if (!project.exists || project.worktreeOf || archived.has(project.id)) continue;
+      const staff = await listProjectStaff(project.path, project.id).catch(() => []);
+      for (const s of staff) {
+        people.push({
+          projectId: project.id,
+          projectName: project.name,
+          staffId: s.id,
+          name: s.name,
+          role: s.role,
+          mission: s.mission,
+          hasPortrait: !!s.portrait,
+          updatedAt: s.updatedAt,
+        });
+      }
+    }
+    return { people };
+  }
+
+  /**
+   * Copia a ficha de outro projeto para este (só pelo Claudio’s Club). Vem o que é da pessoa: nome, cargo, missão, regras,
+   * autonomia, modelo e esforço, agents, skills, MCPs, conhecimento, navegador, worktree e o retrato (cópia do arquivo).
+   * Não vem o que é do projeto de origem: vínculos (reportsTo), servidores, conversas (sessions), última escolha do chat,
+   * rotinas, histórico de versões, situação de temporário (hiredBy, temporary, ended) e a primeira tarefa (é do trabalho
+   * de lá). Sem conversa aberta. `withMemory`: a memória de origem entra com uma linha de procedência no topo.
+   */
+  async copyFrom(projectId: string, body: unknown, fromBrowser: boolean): Promise<{ profile: StaffProfile } | null> {
+    if (!fromBrowser) throw new StaffError('só pelo Claudio’s Club');
+    const parsed = CopyBody.safeParse(body);
+    if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'pedido inválido');
+    const { fromProjectId, staffId, withMemory } = parsed.data;
+    if (fromProjectId === projectId) throw new StaffError('a origem é este mesmo projeto');
+    const target = await this.project(projectId);
+    const source = await this.project(fromProjectId);
+    const src = source ? await readProfile(source.path, staffId) : null;
+    if (!target || !source || !src) return null;
+
+    const portrait = await readPortrait(source.path, src);
+    const input: StaffInputParsed = {
+      name: src.name,
+      role: src.role,
+      reportsTo: [],
+      mission: src.mission,
+      firstTask: '',
+      autonomy: src.autonomy,
+      agents: src.agents,
+      skills: src.skills,
+      mcps: src.mcps,
+      knowledge: src.knowledge,
+      rules: src.rules,
+      doneWhen: src.doneWhen,
+      model: src.model,
+      effort: src.effort,
+      canHire: src.canHire,
+      playbook: src.playbook,
+      worktree: src.worktree,
+      servers: [],
+      browser: src.browser,
+      portraitDataUrl: portrait ? `data:${portrait.type};base64,${portrait.bytes.toString('base64')}` : null,
+    };
+    const now = new Date();
+    const profile = await createProfile(target.path, projectId, input, now);
+
+    // Memória: a de origem (com a procedência no topo) ou a padrão. Antes do .md: ensureMemory nunca sobrescreve.
+    const oldMemory = withMemory ? await fs.readFile(memoryFile(source.path, src.id), 'utf8').catch(() => null) : null;
+    if (oldMemory !== null) {
+      await writeAtomic(memoryFile(target.path, profile.id), `Copiada de ${source.name} em ${now.toLocaleDateString('pt-BR')}\n\n${oldMemory}`);
+    }
+    await ensureMemory(target.path, profile);
+    await writeFicha(profile, await this.context(target, profile));
+    return { profile };
   }
 
   /**
