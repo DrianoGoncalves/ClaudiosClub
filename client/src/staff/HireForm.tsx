@@ -56,12 +56,10 @@ const editsCode = (a: Autonomy) => a === 'acceptEdits' || a === 'auto' || a === 
 const lines = (s: string) => s.split('\n').map((l) => l.trim()).filter(Boolean);
 
 /** A ficha é longa: dividida em abas, cada uma com uma pergunta só. */
-type Tab = 'who' | 'work' | 'tools' | 'run' | 'history';
+type Tab = 'who' | 'tools' | 'run' | 'history';
 export type StaffFormTab = Tab;
 const TABS: Array<{ id: Tab; label: string; intro: string }> = [
-  { id: 'who', label: t('staff.tabWho'), intro: t('staff.tabWhoIntro') },
-  { id: 'work', label: t('staff.tabWork'), intro: t('staff.tabWorkIntro') },
-  { id: 'tools', label: t('staff.tools'), intro: t('staff.tabToolsIntro') },
+  { id: 'who', label: t('staff.tabWho'), intro: t('staff.tabWhoIntro') },  { id: 'tools', label: t('staff.tools'), intro: t('staff.tabToolsIntro') },
   { id: 'run', label: t('staff.tabRun'), intro: t('staff.tabRunIntro') },
   { id: 'history', label: t('staff.tabHistory'), intro: t('staff.tabHistoryIntro') },
 ];
@@ -231,10 +229,10 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     // Validação própria: o navegador não consegue focar um campo obrigatório numa aba escondida.
-    const missing: Tab | null = !name.trim() || !role.trim() ? 'who' : !mission.trim() && full ? 'work' : null;
-    if (missing) {
-      setTab(missing);
-      return setError(missing === 'who' ? (full ? t('staff.errNameRole') : t('staff.errChooseRoleName')) : t('staff.errMission'));
+    const noName = !name.trim() || !role.trim();
+    if (noName || (!mission.trim() && full)) {
+      setTab('who');
+      return setError(noName ? (full ? t('staff.errNameRole') : t('staff.errChooseRoleName')) : t('staff.errMission'));
     }
     setBusy(true);
     setError(null);
@@ -458,10 +456,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             </div>
           </fieldset>
         </div>
-        </div>
 
-        {/* ---- Trabalho ---- */}
-        <div className="form-panel" role="tabpanel" hidden={tab !== 'work'}>
+        {/* Missão: na mesma aba de quem é. */}
         <label>
           {t('staff.missionReq')}
           <textarea value={mission} onChange={(e) => setMission(e.target.value)} rows={3} maxLength={4000} required />
