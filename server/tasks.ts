@@ -114,7 +114,7 @@ export class TaskService {
       if (t.review?.sessionId) this.bySession.set(t.review.sessionId, { projectId, taskId: t.id, role: 'review' });
       if (t.deploy?.sessionId) this.bySession.set(t.deploy.sessionId, { projectId, taskId: t.id, role: 'deploy' });
     }
-    return tasks;
+    return tasks.map((t) => withArchive(t));
   }
 
   /** `requestedBy`: o gestor (funcionário) que pediu, pela API; recebe o resumo na entrega. */
@@ -748,6 +748,18 @@ export class TaskService {
 }
 
 const tasksFile = (dir: string) => path.join(dir, '.myco', 'tasks.json');
+
+/**
+ * Pronto (done/live) sem mudança há mais de 7 dias sai do quadro. Derivado na leitura, nunca gravado:
+ * qualquer mudança nova (updatedAt) tira do arquivo sozinha, e nada é apagado.
+ */
+export const ARCHIVE_AFTER_MS = 7 * 86_400_000;
+function withArchive(t: Task, now = Date.now()): Task {
+  const since = Date.parse(t.updatedAt);
+  if ((t.status === 'done' || t.status === 'live') && Number.isFinite(since) && now - since > ARCHIVE_AFTER_MS)
+    return { ...t, archived: true, archivedAt: new Date(since + ARCHIVE_AFTER_MS).toISOString() };
+  return t;
+}
 
 async function readTasks(dir: string): Promise<Task[]> {
   const raw = await fs.readFile(tasksFile(dir), 'utf8').catch(() => null);

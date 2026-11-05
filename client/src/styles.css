@@ -528,6 +528,9 @@ textarea.q-field { resize: vertical; }
 .task-card { display: grid; gap: 3px; text-align: left; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; cursor: grab; }
 .task-card:hover { border-color: var(--ink-blue); }
 .task-card.is-selected { outline: 2px solid var(--ink-blue); }
+.task-card.is-archived { opacity: 0.6; }
+.task-card.is-archived:hover, .task-card.is-archived.is-selected { opacity: 1; }
+.link.tasks-archived-toggle { align-self: flex-start; margin-top: 2px; color: var(--muted); }
 .task-title { font-weight: 600; font-size: 13.5px; line-height: 1.25; }
 .task-branch { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Selo de status no cartão: plano para aprovar (amarelo do "precisa de mim"), no ar (verde), não publicado (neutro). */

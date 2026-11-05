@@ -480,6 +480,10 @@ export interface Task {
   pr: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Só na listagem (derivado, não gravado): Pronto sem mudança há mais de 7 dias. A tela esconde por padrão. */
+  archived?: boolean;
+  /** Quando passou a contar como arquivada (updatedAt + 7 dias); só presente se `archived`. */
+  archivedAt?: string;
   /** Mudanças de coluna, a mais recente por último (no máximo 30). */
   history: Array<{ at: string; status: TaskStatus; by: 'you' | 'auto'; note?: string }>;
   /** Revisão pedida a outro funcionário (a conversa dele). */

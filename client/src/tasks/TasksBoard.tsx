@@ -97,6 +97,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<TaskStatus | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
   const now = Date.now();
 
   const load = useCallback(() => {
@@ -142,6 +143,49 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     tasks?.find((o) => o.id !== t.id && o.staffId === t.staffId && o.sessionId && (o.status === 'doing' || o.status === 'planning')) ?? null;
   /** Posição na fila dele (1 = a próxima), na ordem do quadro. */
   const queuePos = (t: Task) => (t.queuedAt ? (tasks ?? []).filter((o) => o.staffId === t.staffId && o.queuedAt && !o.sessionId).indexOf(t) + 1 : 0);
+  /** Pronto parado há mais de 7 dias (o servidor marca): fora do quadro, atrás do "Ver arquivadas". */
+  const archived = (tasks ?? []).filter((t) => t.archived);
+
+  const card = (task: Task) => (
+    <button
+      key={task.id}
+      className={`task-card ${selected === task.id ? 'is-selected' : ''} ${task.archived ? 'is-archived' : ''}`}
+      draggable
+      onDragStart={() => setDragging(task.id)}
+      onDragEnd={() => setDragging(null)}
+      onClick={() => setSelected(task.id)}
+    >
+      <span className="task-title">{task.title}</span>
+      <StatusBadge task={task} hasDeploy={hasDeploy} />
+      <VerdictBadge task={task} nameOf={nameOf} />
+      <span className="task-meta muted small">
+        {nameOf(task.staffId) ?? t('tasks.noOwner')}
+        {task.requestedBy && ` · ${t('tasks.requestedBy', { name: nameOf(task.requestedBy) ?? task.requestedBy })}`}
+        {costOf(task) && ` · ${costOf(task)}`} · {formatAgo(now - Date.parse(task.updatedAt))}
+      </span>
+      {task.branch && (
+        <span className="task-branch small">
+          <BranchIcon /> {task.branch}
+        </span>
+      )}
+      {task.reviewerId && (
+        <span className="task-reviewer small" title={t('tasks.autoReviewHint', { name: nameOf(task.reviewerId) ?? task.reviewerId })}>
+          <ReviewIcon /> {nameOf(task.reviewerId) ?? task.reviewerId}
+          {!!task.reviewRounds && ` · ${t('tasks.reviewRounds', { n: task.reviewRounds, max: REVIEW_ROUNDS_MAX })}`}
+        </span>
+      )}
+      {queuePos(task) > 0 && (
+        <span className="task-queue small" title={t('tasks.queuedHint')}>
+          {t('tasks.queuePos', { pos: queuePos(task) })}
+        </span>
+      )}
+      {!!task.held?.length && (
+        <span className="task-queue small" title={t('tasks.heldHint')}>
+          {t(task.held.length === 1 ? 'tasks.heldOne' : 'tasks.heldOther', { n: task.held.length })}
+        </span>
+      )}
+    </button>
+  );
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -183,7 +227,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
           <div className="tasks-columns">
             {COLUMNS.map(({ status, shows }) => {
               // Plano para aprovar primeiro: é o que espera por você.
-              const col = tasks.filter((t) => shows.includes(t.status)).sort((a, b) => shows.indexOf(a.status) - shows.indexOf(b.status));
+              const col = tasks.filter((t) => !t.archived && shows.includes(t.status)).sort((a, b) => shows.indexOf(a.status) - shows.indexOf(b.status));
               return (
                 <section
                   key={status}
@@ -205,46 +249,20 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                   <h3 title={HELP[status]}>
                     {LABEL[status]} <span className="muted">{col.length || ''}</span>
                   </h3>
-                  {col.map((task) => (
-                    <button
-                      key={task.id}
-                      className={`task-card ${selected === task.id ? 'is-selected' : ''}`}
-                      draggable
-                      onDragStart={() => setDragging(task.id)}
-                      onDragEnd={() => setDragging(null)}
-                      onClick={() => setSelected(task.id)}
-                    >
-                      <span className="task-title">{task.title}</span>
-                      <StatusBadge task={task} hasDeploy={hasDeploy} />
-                      <VerdictBadge task={task} nameOf={nameOf} />
-                      <span className="task-meta muted small">
-                        {nameOf(task.staffId) ?? t('tasks.noOwner')}
-                        {task.requestedBy && ` · ${t('tasks.requestedBy', { name: nameOf(task.requestedBy) ?? task.requestedBy })}`}
-                        {costOf(task) && ` · ${costOf(task)}`} · {formatAgo(now - Date.parse(task.updatedAt))}
-                      </span>
-                      {task.branch && (
-                        <span className="task-branch small">
-                          <BranchIcon /> {task.branch}
-                        </span>
-                      )}
-                      {task.reviewerId && (
-                        <span className="task-reviewer small" title={t('tasks.autoReviewHint', { name: nameOf(task.reviewerId) ?? task.reviewerId })}>
-                          <ReviewIcon /> {nameOf(task.reviewerId) ?? task.reviewerId}
-                          {!!task.reviewRounds && ` · ${t('tasks.reviewRounds', { n: task.reviewRounds, max: REVIEW_ROUNDS_MAX })}`}
-                        </span>
-                      )}
-                      {queuePos(task) > 0 && (
-                        <span className="task-queue small" title={t('tasks.queuedHint')}>
-                          {t('tasks.queuePos', { pos: queuePos(task) })}
-                        </span>
-                      )}
-                      {!!task.held?.length && (
-                        <span className="task-queue small" title={t('tasks.heldHint')}>
-                          {t(task.held.length === 1 ? 'tasks.heldOne' : 'tasks.heldOther', { n: task.held.length })}
-                        </span>
-                      )}
-                    </button>
-                  ))}
+                  {col.map(card)}
+                  {status === 'done' && archived.length > 0 && (
+                    <>
+                      <button
+                        className="link small tasks-archived-toggle"
+                        aria-expanded={showArchived}
+                        title={t('tasks.archivedHint')}
+                        onClick={() => setShowArchived((v) => !v)}
+                      >
+                        {showArchived ? t('tasks.hideArchived') : t('tasks.showArchived', { n: archived.length })}
+                      </button>
+                      {showArchived && archived.map(card)}
+                    </>
+                  )}
                 </section>
               );
             })}
@@ -478,7 +496,10 @@ function TaskDetail({
   return (
     <aside className="task-detail">
       <header className="task-detail-head">
-        <span className="kicker">{LABEL[task.status]}</span>
+        <span className="kicker" title={task.archived ? t('tasks.archivedHint') : undefined}>
+          {LABEL[task.status]}
+          {task.archived && ` · ${t('tasks.archivedTag')}`}
+        </span>
         <button className="drawer-close in-head" onClick={onClose} aria-label={t('tasks.closeDetails')}>
           ×
         </button>

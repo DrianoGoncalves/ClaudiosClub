@@ -76,6 +76,35 @@ describe('tarefas por projeto', () => {
     expect(saved[0].history.map((h: { status: string }) => h.status)).toEqual(['todo', 'doing', 'review', 'doing']);
   });
 
+  it('arquiva do quadro só o Pronto parado há mais de 7 dias; mexer na tarefa tira do arquivo', async () => {
+    const { svc, dir } = service('arq');
+    const ids: string[] = [];
+    for (const title of ['d-velha', 'l-velha', 'd-nova', 'rev-velha', 'doing-velha']) ids.push((await svc.create('p', { title }))!.id);
+    const day = 86_400_000;
+    const ago = (d: number) => new Date(Date.now() - d * day).toISOString();
+    const spec: Array<[string, number]> = [['done', 8], ['live', 8], ['done', 6.9], ['review', 30], ['doing', 30]];
+    const file = path.join(dir, '.myco', 'tasks.json');
+    const raw = JSON.parse(await fs.readFile(file, 'utf8')) as Array<Record<string, unknown>>;
+    raw.forEach((t, i) => Object.assign(t, { status: spec[i]![0], updatedAt: ago(spec[i]![1]) }));
+    await fs.writeFile(file, JSON.stringify(raw));
+
+    const by = async () => Object.fromEntries(((await svc.list('p'))!).map((t) => [t.title, t]));
+    let l = await by();
+    expect(l['d-velha']).toMatchObject({ archived: true });
+    expect(l['d-velha']!.archivedAt).toBeTruthy();
+    expect(l['l-velha']!.archived).toBe(true);
+    expect(l['d-nova']!.archived).toBeUndefined();
+    expect(l['rev-velha']!.archived).toBeUndefined();
+    expect(l['doing-velha']!.archived).toBeUndefined();
+
+    // Reabrir (voltar para outra coluna) atualiza updatedAt e tira do arquivo; nada foi gravado como arquivado.
+    await svc.update('p', ids[0]!, { status: 'doing' });
+    l = await by();
+    expect(l['d-velha']).toMatchObject({ status: 'doing' });
+    expect(l['d-velha']!.archived).toBeUndefined();
+    expect(await fs.readFile(file, 'utf8')).not.toContain('archived');
+  });
+
   it('com a ficha em "só planeja": planejando, e o plano aprovado leva para fazendo', async () => {
     const { svc } = service('b', 'plan');
     const t = (await svc.create('p', { title: 'Refatorar o login', staffId: 'ana-1' }))!;
