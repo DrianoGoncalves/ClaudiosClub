@@ -10,6 +10,8 @@ import { copyCandidates } from './directory';
 interface Props {
   projectId: string;
   projectName: string;
+  /** Já escolhida (organograma): começa na confirmação; "Voltar" leva à lista. */
+  initial?: DirectoryPerson;
   onClose: () => void;
   onCopied: (profile: StaffProfile) => void;
 }
@@ -25,11 +27,11 @@ function Face({ person, big = false }: { person: DirectoryPerson; big?: boolean 
   );
 }
 
-export function CopyFromCompany({ projectId, projectName, onClose, onCopied }: Props) {
+export function CopyFromCompany({ projectId, projectName, initial, onClose, onCopied }: Props) {
   const [people, setPeople] = useState<DirectoryPerson[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [picked, setPicked] = useState<DirectoryPerson | null>(null);
+  const [picked, setPicked] = useState<DirectoryPerson | null>(initial ?? null);
   const [withMemory, setWithMemory] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,17 +69,16 @@ export function CopyFromCompany({ projectId, projectName, onClose, onCopied }: P
     <>
       {picked ? (
         <div className="form-panel copy-confirm">
+          <p className="copy-ask">{t('staff.copyAsk', { name: picked.name, from: picked.projectName, to: projectName })}</p>
           <div className="copy-who">
             <Face person={picked} big />
             <span className="copy-text">
               <b>{picked.name}</b>
-              <span className="muted small">
-                {picked.role} · {t('staff.copyFrom', { project: picked.projectName })}
-              </span>
+              <span className="muted small">{picked.role}</span>
             </span>
           </div>
           {picked.mission && <p className="muted small copy-mission">{picked.mission}</p>}
-          <p className="small">{t('staff.copyNote', { project: projectName })}</p>
+          <p className="small">{t('staff.copyNote')}</p>
           <label className="check">
             <input type="checkbox" checked={withMemory} onChange={(e) => setWithMemory(e.target.checked)} /> {t('staff.copyMemory')}
             <span className="muted small"> {t('staff.copyMemoryHint')}</span>
@@ -126,7 +127,16 @@ export function CopyFromCompany({ projectId, projectName, onClose, onCopied }: P
               {busy ? t('staff.saving') : t('staff.copyAction')}
             </button>
           )}
-          <button type="button" className="btn-secondary" disabled={busy} onClick={picked ? () => setPicked(null) : onClose}>
+          <button type="button" className="btn-secondary" disabled={busy} 
+            onClick={
+              picked
+                ? () => {
+                    setPicked(null);
+                    setError(null);
+                  }
+                : onClose
+            }
+          >
             {picked ? t('staff.copyBack') : t('staff.cancel')}
           </button>
         </div>

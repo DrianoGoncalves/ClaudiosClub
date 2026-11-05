@@ -28,6 +28,7 @@ import { PendingRestartNotice } from '../toolbar/ServerAction';
 import { t } from '../i18n';
 import { companyName } from '../format';
 import { WorkspaceTabs } from '../office/WorkspaceTabs';
+import { hireDrop } from '../staff/directory';
 import { inTab, TAB_ALL, TAB_NONE, workspaceByProject } from '../office/workspaces';
 
 // Posições arrastadas ficam no navegador por enquanto; vão para `.myco/` quando houver escrita no disco.
@@ -101,6 +102,8 @@ interface BoardViewProps {
   onHireFrom: (projectId: string, managerId: string | null) => void;
   /** "+" de um funcionário solto sobre outro: `managerId` passa a também chamar `staffId`. */
   onLink: (projectId: string, staffId: string, managerId: string) => void;
+  /** "+" solto sobre funcionário de outro projeto: copiar a ficha dele para `projectId` (pede confirmação). */
+  onCopyFrom: (projectId: string, fromProjectId: string, staffId: string) => void;
   /** Botão na linha entre dois funcionários: `managerId` deixa de chamar `staffId`. */
   onUnlink: (link: StaffLink) => void;
   /** O config mudou por aqui (empresa criada nas abas). */
@@ -199,8 +202,9 @@ export function BoardView(props: BoardViewProps) {
   const connectEndedAt = useRef(0);
 
   // O "+" é uma alça de conexão: arrastar mostra a linha; soltar decide o que fazer.
-  // Solto sobre outro funcionário com ficha (do mesmo projeto) = vínculo; solto no vazio ou só
-  // clicado = contratar um novo, já subordinado.
+  // Solto sobre funcionário de outro projeto = copiar a ficha para cá; o de um funcionário sobre
+  // colega do mesmo projeto = vínculo; solto no vazio ou só clicado = opções de contratar (do zero
+  // ou da empresa), já subordinado. No celular só existe o toque: dá nas mesmas opções.
   const onConnectEnd = useCallback(
     (event: MouseEvent | TouchEvent, state: FinalConnectionState) => {
       if (state.fromHandle?.id !== HANDLE.hire || !state.fromNode) return;
@@ -215,10 +219,12 @@ export function BoardView(props: BoardViewProps) {
           .find((id) => id && id !== state.fromNode!.id && !id.startsWith('r:')) ?? null;
       const onto = dropId ? parseHireSource(dropId) : null;
       connectEndedAt.current = Date.now();
-      if (from.staffId && onto?.staffId && onto.projectId === from.projectId) props.onLink(from.projectId, onto.staffId, from.staffId);
+      const drop = hireDrop(from, onto);
+      if (drop.kind === 'copy') props.onCopyFrom(from.projectId, drop.fromProjectId, drop.staffId);
+      else if (drop.kind === 'link' && from.staffId) props.onLink(from.projectId, drop.staffId, from.staffId);
       else props.onHireFrom(from.projectId, from.staffId);
     },
-    [props.onLink, props.onHireFrom],
+    [props.onLink, props.onHireFrom, props.onCopyFrom],
   );
   const archivedCount = (config?.archived.projects.length ?? 0) + (config?.archived.sessions.length ?? 0);
   const [saved, setSaved] = useState(loadPositions);

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, type DirectoryPerson } from '../client/src/api';
-import { copyCandidates } from '../client/src/staff/directory';
+import { copyCandidates, hireDrop } from '../client/src/staff/directory';
 
 const person = (over: Partial<DirectoryPerson>): DirectoryPerson => ({
   projectId: 'p1',
@@ -32,6 +32,17 @@ describe('contratar da empresa', () => {
     expect(copyCandidates(people, 'here', 'BLOG').map((p) => p.staffId)).toEqual(['b']);
     expect(copyCandidates(people, 'here', 'design bia').map((p) => p.staffId)).toEqual(['b']);
     expect(copyCandidates(people, 'here', 'caio')).toEqual([]);
+  });
+
+  it('soltar o "+": outro projeto copia, colega do mesmo projeto vincula, o resto abre as opções', () => {
+    const a = { projectId: 'A', staffId: null };
+    const chefe = { projectId: 'A', staffId: 'chefe' };
+    expect(hireDrop(a, { projectId: 'B', staffId: 'x' })).toEqual({ kind: 'copy', fromProjectId: 'B', staffId: 'x' });
+    expect(hireDrop(chefe, { projectId: 'B', staffId: 'x' })).toEqual({ kind: 'copy', fromProjectId: 'B', staffId: 'x' });
+    expect(hireDrop(chefe, { projectId: 'A', staffId: 'y' })).toEqual({ kind: 'link', staffId: 'y' });
+    expect(hireDrop(a, { projectId: 'A', staffId: 'y' })).toEqual({ kind: 'options' });
+    expect(hireDrop(a, null)).toEqual({ kind: 'options' });
+    expect(hireDrop(a, { projectId: 'B', staffId: null })).toEqual({ kind: 'options' });
   });
 
   it('pede a cópia com a memória só quando marcada', async () => {

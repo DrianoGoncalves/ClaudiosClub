@@ -780,6 +780,7 @@ button.ranking-row:hover { border-color: var(--accent); }
 .copy-text > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .copy-who { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .copy-mission { margin: 0; white-space: pre-line; }
+.copy-ask { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
 .copy-confirm .check { flex-wrap: wrap; }
 @media (max-width: 640px) { .grid2, .choices { grid-template-columns: 1fr; } }
 

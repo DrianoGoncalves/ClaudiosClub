@@ -12,7 +12,7 @@ import type {
   StaffInput,
   StaffProfile,
 } from '../../../shared/model';
-import { api, withUsageConfirm } from '../api';
+import { api, withUsageConfirm, type DirectoryPerson } from '../api';
 import { portraitUrl } from '../board/nodes';
 import { effortLabel, employeeName, folderName } from '../format';
 import { t, locale } from '../i18n';
@@ -30,7 +30,8 @@ export const modelLabel = (m: string) => MODEL_OPTIONS.find((o) => o.value === m
 // (a versão anterior vai para o histórico, de onde dá para restaurar).
 
 export type StaffFormMode =
-  | { kind: 'hire'; reportsTo: string[] }
+  /** `copy`: já escolhida no organograma ("+" solto sobre ela): abre direto na confirmação de cópia. */
+  | { kind: 'hire'; reportsTo: string[]; copy?: DirectoryPerson }
   | { kind: 'edit'; profile: StaffProfile }
   /** Funcionário criado fora do Claudio’s Club: ganha ficha (nome, retrato, regras) sem perder a sessão. */
   | { kind: 'adopt'; session: Session };
@@ -122,7 +123,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const [error, setError] = useState<string | null>(null);
   const [versions, setVersions] = useState<Array<{ version: string; name: string; role: string; updatedAt: string }> | null>(null);
   // Contratando: do zero (a ficha abaixo) ou cópia de alguém de outro projeto.
-  const [source, setSource] = useState<'new' | 'company'>('new');
+  const preset = mode.kind === 'hire' ? mode.copy : undefined;
+  const [source, setSource] = useState<'new' | 'company'>(preset ? 'company' : 'new');
   const canCopy = mode.kind === 'hire' && !embedded;
   const [ownTab, setOwnTab] = useState<Tab>('who');
   const tab = tabProp ?? ownTab;
@@ -331,6 +333,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           <CopyFromCompany
             projectId={projectId}
             projectName={project?.name ?? ''}
+            initial={preset}
             onClose={onClose}
             onCopied={(profile) => onHired(profile, null)}
           />
