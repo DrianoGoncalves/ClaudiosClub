@@ -15,7 +15,7 @@ import type {
 import { api, withUsageConfirm, type DirectoryPerson } from '../api';
 import { portraitUrl } from '../board/nodes';
 import { effortLabel, employeeName, folderName } from '../format';
-import { t, locale } from '../i18n';
+import { t, locale, type MsgKey } from '../i18n';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
 import { ProtocolBadge } from '../office/ProjectOffice';
 import { BrowserCheck } from './BrowserCheck';
@@ -67,6 +67,9 @@ const TABS: Array<{ id: Tab; label: string; intro: string }> = [
   { id: 'run', label: t('staff.tabRun'), intro: t('staff.tabRunIntro') },
   { id: 'history', label: t('staff.tabHistory'), intro: t('staff.tabHistoryIntro') },
 ];
+
+/** De onde vem o MCP, na lista da ficha. */
+const MCP_SOURCE_LABEL = { club: 'staff.sourceClub', user: 'staff.sourceUser', local: 'staff.sourceLocal', project: 'staff.sourceProject' } as const satisfies Record<McpServerInfo['source'], MsgKey>;
 
 export function StaffForm({ board, projectId, mode, simple = false, embedded = false, tab: tabProp, onTab, onClose, onHired, onSaved }: Props) {
   const editing = mode.kind === 'edit' ? mode.profile : null;
@@ -581,7 +584,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                     {m.name}
                     <span className="muted small">
                       {' '}
-                      {m.source === 'user' ? t('staff.sourceUser') : m.source === 'local' ? t('staff.sourceLocal') : t('staff.sourceProject')}
+                      {t(MCP_SOURCE_LABEL[m.source])}
                     </span>
                   </label>
                 ))}
