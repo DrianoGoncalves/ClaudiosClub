@@ -455,6 +455,26 @@ describe('buildGraph', () => {
     expect(edges.some((e) => e.source === 'p:a' && e.target === 'h:a:novo')).toBe(false);
   });
 
+  it('ficha trabalhando numa conversa que não é a última: o cartão e a linha seguem a conversa viva', () => {
+    const b = { ...board(), staff: [staffProfile('chefe', ['s-a1', 's-a2'])] };
+    const working = { sessionId: 's-a2', pid: 9, cwd: A, name: null, status: 'busy', alive: true, entrypoint: null, kind: null, startedAt: null, statusUpdatedAt: null, delegated: true } as const;
+    b.live = [working];
+    const { nodes, edges } = buildGraph(b, {});
+    const chefe = nodes.find((n) => n.id === 'h:a:chefe');
+    expect(chefe?.type === 'employee' && chefe.data.session?.id).toBe('s-a2');
+    expect(chefe?.type === 'employee' && chefe.data.session?.live?.status).toBe('busy');
+    expect(edges.filter((e) => e.data?.active).map((e) => e.target)).toEqual(['h:a:chefe']);
+
+    // A mais recente também viva e no mesmo estado: no empate fica a mais recente.
+    b.live = [working, { ...working, sessionId: 's-a1' }];
+    const tie = buildGraph(b, {}).nodes.find((n) => n.id === 'h:a:chefe');
+    expect(tie?.type === 'employee' && tie.data.session?.id).toBe('s-a1');
+    // Trabalhando ganha de parada, mesmo na mais antiga.
+    b.live = [{ ...working, sessionId: 's-a1', status: 'idle' }, working];
+    const busy = buildGraph(b, {}).nodes.find((n) => n.id === 'h:a:chefe');
+    expect(busy?.type === 'employee' && busy.data.session?.id).toBe('s-a2');
+  });
+
   it('arquivados somem do quadro, ou aparecem marcados quando pedido', () => {
     const archived = { projects: ['b'], sessions: ['s-a2'] };
     const hidden = buildGraph(board(), { archived });

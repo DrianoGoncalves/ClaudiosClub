@@ -240,6 +240,11 @@ export function buildGraph(
   };
   const skillNode = (s: Skill): BoardNode => node(skillNodeId(s), 'skill', { skill: s });
   const withLive = (s: Session): Session => ({ ...s, live: liveById.get(s.id) ?? s.live });
+  /** A conversa mais viva (trabalhando, esperando, parada, sem processo); no empate fica a primeira, a mais recente. */
+  const mostLive = (list: Session[]): Session | null => {
+    const rank = (s: Session) => (s.live?.alive ? (LIVE_RANK[s.live.status ?? ''] ?? 1) : 0);
+    return list.reduce<Session | null>((best, s) => (!best || rank(s) > rank(best) ? s : best), null);
+  };
 
   const expanded = new Set(opts.expandedShelves ?? []);
   const collapsed = new Set(opts.collapsedRooms ?? []);
@@ -275,11 +280,11 @@ export function buildGraph(
     const trees: Tree[] = [];
     for (const st of staff) {
       const mine = st.sessions.map((s) => s.id);
-      // A lista de sessões já vem da mais recente para a mais antiga.
-      const latest = sessions.find((s) => mine.includes(s.id)) ?? null;
+      // O cartão mostra a conversa mais viva da ficha, não só a última: trabalhar numa antiga também anima.
+      // A lista de sessões já vem da mais recente para a mais antiga (o empate fica com a última).
+      const session = mostLive(sessions.filter((s) => mine.includes(s.id)).map(withLive));
       const costsOfMine = mine.map(sessionCost).filter((c): c is number => c !== undefined);
       const costUsd = costsOfMine.length ? costsOfMine.reduce((a, b) => a + b, 0) : null;
-      const session = latest ? withLive(latest) : null;
       const data: EmployeeNodeData = {
         session,
         staff: st,
@@ -302,8 +307,7 @@ export function buildGraph(
       const costsOfLoose = ids.map(sessionCost).filter((c): c is number => c !== undefined);
       const costUsd = costsOfLoose.length ? costsOfLoose.reduce((a, b) => a + b, 0) : null;
       // O cartão mostra a conversa mais viva (trabalhando, esperando, parada); sem nenhuma aberta, a mais recente.
-      const rank = (s: Session) => (s.live?.alive ? (LIVE_RANK[s.live.status ?? ''] ?? 1) : 0);
-      const session = loose.reduce((best, s) => (rank(s) > rank(best) ? s : best), loose[0]!);
+      const session = mostLive(loose)!;
       trees.push({
         node: node(ghostNodeId(p.id), 'employee', {
           session,
