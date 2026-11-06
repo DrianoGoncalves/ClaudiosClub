@@ -1,6 +1,10 @@
+import os from 'node:os';
+import path from 'node:path';
 import { PLAYBOOK_AGENTS } from '../../shared/agentPresets';
 import { FTP_MCP_NAME, TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
 import { staffSshConfigFile } from './servers';
+import { GUIDE_PATH } from '../projectGuide';
+import { MYCO_HOME } from '../config';
 
 // A ficha vira um arquivo Markdown dentro do projeto (.myco/staff/<id>.md), que a sessão lê
 // no começo. Pela linha de comando só vai uma identidade curta apontando para ela: o CLI não
@@ -29,6 +33,10 @@ export interface FichaContext {
   servers?: ServerInfo[];
   /** Quem reporta a este funcionário (a equipe dele). */
   team?: TeamMember[];
+  /** Há SPEC.md (guia do projeto) na raiz: a ficha manda consultá-lo (ver guideSection). Quem monta o ctx confere (ver writeFicha). */
+  guide?: boolean;
+  /** Cargos prontos (e seus) que este funcionário pode usar ao contratar (`roleId`). Só para quem tem canHire. */
+  roles?: { id: string; label: string }[];
 }
 
 export interface TeamMember {
@@ -54,7 +62,7 @@ function teamSection(p: StaffProfile, ctx: FichaContext): string {
     'Estas pessoas reportam a você. O que for da área de alguém daqui vai para essa pessoa, nem para o executor nem para você, mesmo que seja uma correção pequena: ela tem a ficha, as regras e a memória dessa área e trabalha numa conversa curta, enquanto a sua é longa e cada passo seu nela custa mais. O que não tem dono vai para os agents do roteiro.',
     ctx.team.map((m) => `- ${m.name} (${m.role}${m.temporary ? ', temporário' : ''}), id \`${m.id}\`: ${first(m.mission)}`).join('\n'),
     'Repasse sem pesquisar: não leia o código para escrever a tarefa. Mande o pedido do usuário nas palavras dele, o critério de pronto e o que não mexer (com o motivo); cite arquivos só se já souber quais são. Quem é da área acha as linhas. Pedido que é inteiro de uma área vai como está, numa tarefa só para essa pessoa, sem você dividir nem planejar; um pedido com partes de áreas diferentes vira uma tarefa para cada pessoa.',
-    `Para passar uma tarefa: POST ${api}/tasks com o cabeçalho \`x-myco: 1\` e um JSON com title, description (o pedido, o critério de pronto e o que não mexer), staffId (o id da pessoa), requestedBy: "${p.id}" e start: true. A tarefa entra na fila dela (uma por vez) e aparece no quadro de tarefas.`,
+    `Para passar uma tarefa: POST ${api}/tasks com o cabeçalho \`x-myco: 1\` e um JSON com title, description (o pedido, o critério de pronto e o que não mexer), staffId (o id da pessoa), requestedBy: "${p.id}" e start: true. A tarefa entra na fila dela (uma por vez), começa sozinha quando ela ficar livre (tarefa em revisão não segura a fila; no limite de consumo, espera ele baixar) e aparece no quadro de tarefas.`,
     'Quando a pessoa entregar, o Claudio’s Club te avisa (na conversa em que você pediu) com o resumo do que ela disse e, se o projeto tiver testes, o resultado deles, já rodados: não rode de novo. Confira na medida do risco: para mudança pequena, `git diff --stat` e o resumo bastam; abra o diff inteiro só no que for arriscado (segurança, dados, servidor) ou se o --stat não bater com o resumo. Não procure prints nem arquivos dela: se faltar prova, peça. Se faltar algo, peça a ela na conversa da tarefa, não refaça você.',
     `Para ver como estão: GET ${api}/tasks.`,
   ].join('\n');
@@ -74,7 +82,20 @@ const REMOTE_TOOLS = ['ssh', 'ssh.exe', 'scp', 'scp.exe', 'sftp', 'sftp.exe', 'r
  * bloqueado para todos. `ftpServers`: as conexões da ficha que
  * são FTP (usadas pelo MCP do Claudio’s Club): só elas não liberam o ssh.
  */
+/**
+ * A pasta da memória pessoal (MYCO_HOME/people) no formato das regras: `~/…` dentro da home (o caso comum, sem espaço);
+ * fora dela, o caminho absoluto no mesmo formato de secretDenyRules.
+ */
+export function peopleRuleDir(): string {
+  const dir = path.join(MYCO_HOME, 'people');
+  const rel = path.relative(os.homedir(), dir);
+  if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return `~/${rel.replace(/\\/g, '/')}`;
+  const abs = dir.replace(/\\/g, '/').replace(/^([A-Za-z]):\//, (_, d: string) => `//${d.toLowerCase()}/`);
+  return abs.startsWith('//') ? abs : `/${abs}`;
+}
+
 export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpServers: string[] = []): string[] {
+  const people = peopleRuleDir();
   const always = [
     'Read(~/.ssh/**)',
     'Edit(~/.ssh/**)',
@@ -85,6 +106,10 @@ export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpSer
     'Read(~/.myco/secrets/**)',
     'Edit(~/.myco/secrets/**)',
     'Write(~/.myco/secrets/**)',
+    // Memória pessoal: só o Claudio’s Club grava, e a conversa não lê o arquivo (ela recebe o texto no prompt).
+    `Read(${people}/**)`,
+    `Edit(${people}/**)`,
+    `Write(${people}/**)`,
   ];
   // No Windows as regras usam o caminho em forma POSIX: C:/x → //c/x. Com espaço, a lista da linha
   // de comando quebraria a regra: fica só o bloqueio por nome (*.pem, *.key) e o de ~/.ssh.
@@ -270,7 +295,9 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     p.firstTask ? `## Primeira tarefa\n${p.firstTask}` : '',
     `## Autonomia\n${AUTONOMY_LABEL[p.autonomy]}`,
     `## Agents e skills indicados\nAgents: ${agentList(p)}.\nSkills: ${skillList(p, ctx)}.\nPrefira estes quando a tarefa pedir; os demais do projeto continuam disponíveis.`,
+    guideSection(ctx),
     `## Conhecimento (leia antes de começar)\n${list(p.knowledge, 'Nada específico além do CLAUDE.md do projeto.')}`,
+    postureSection(),
     `## Regras\n${list(p.rules, 'Siga o CLAUDE.md do projeto.')}`,
     p.doneWhen ? `## Definição de pronto\n${p.doneWhen}` : '',
     // Quem pediu confere pela entrega: com as provas nela, não precisa abrir tudo de novo.
@@ -287,6 +314,25 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     memorySection(ctx),
   ];
   return sections.filter(Boolean).join('\n\n') + '\n';
+}
+
+/** Só com SPEC.md na raiz do projeto (ctx.guide); sem ele, a ficha fica como antes. */
+function guideSection(ctx: FichaContext): string {
+  if (!ctx.guide) return '';
+  return [
+    '## Guia do projeto',
+    `Leia \`${GUIDE_PATH}\` (raiz do projeto) antes de começar algo novo e sempre que tiver dúvida sobre o que o projeto precisa; não faça nada que contrarie ou fuja dele. Se o pedido conflitar com o guia, aponte o conflito em vez de seguir.`,
+  ].join('\n');
+}
+
+/** Postura de todo funcionário: testar a ideia antes de concordar. Fixa, sem depender do projeto. */
+function postureSection(): string {
+  return [
+    '## Postura',
+    'Antes de concordar, teste a ideia: aponte primeiro o que está errado, faltando ou arriscado e o contra-argumento mais forte. Não trate o enquadramento do pedido como fato. Sem elogio vazio nem pedido de desculpas: vá direto ao ponto técnico.',
+    'Se o pedido depende de algo que não existe (arquivo, rota, função, opção, recurso do produto) ou você não tem base para fazer, diga a lacuna na resposta ou na entrega em vez de improvisar ou inventar. Não invente API, comando nem resultado de teste.',
+    'Ao citar arquivo do projeto, use o caminho relativo à raiz entre crases (ex.: `docs/plano.md` ou `src/app.ts:42`): o Claudio’s Club transforma em link que abre o arquivo.',
+  ].join('\n');
 }
 
 /** Os agents da ficha e os do roteiro dela (que o Claudio’s Club garante no projeto ao abrir a sessão). */
@@ -309,10 +355,15 @@ function skillList(p: StaffProfile, ctx: FichaContext): string {
  * em dia: a próxima mensagem pode seguir numa conversa nova (ver server/chat/manager.ts).
  */
 function memorySection(ctx: FichaContext): string {
+  // Pasta irmã da memória (<id>.memory), com as mesmas barras do memoryPath; sem o sufixo esperado, não há linha da pasta.
+  const detailDir = ctx.memoryPath.endsWith('.memory.md') ? ctx.memoryPath.slice(0, -'.md'.length) : null;
   return [
     '## Memória',
     `Sua memória fica em \`${ctx.memoryPath}\`. Leia no início de cada conversa. Ela é o que você leva de uma conversa para a outra: decisões e o porquê, convenções do projeto, pendências e onde parou.`,
     '- Curta (até umas 60 linhas): ao registrar, substitua o que ficou velho em vez de só acrescentar. Nada que o código ou o git já contam, e nada de segredos (senhas, chaves, tokens).',
+    ...(detailDir
+      ? [`- Ela é um índice: o que não cabe em uma linha (o porquê de uma decisão longa, como um problema foi resolvido, passos de um procedimento) vai num arquivo curto em \`${detailDir}/<assunto>.md\` (nome em minúsculas com hífens), e na memória fica uma linha com o resumo e o nome do arquivo. Leia o arquivo só quando o assunto aparecer. Quando o assunto fechar ou ficar velho, apague o arquivo e a linha. As mesmas regras valem lá: nada de segredos nem do que o git já conta.`]
+      : []),
     '- Ponto de corte: quando terminar um assunto (tarefa entregue, decisão tomada, pergunta respondida e nada pendente nesta conversa), atualize a memória com o que vale levar e termine a resposta com esta linha, sozinha, por último: `[MyCo:ponto-de-corte]`. Assim a próxima mensagem pode começar numa conversa nova, mais barata, e você não perde nada. Não use no meio de um trabalho nem quando espera uma resposta para continuar.',
     '- Se a mensagem vier com `[MyCo] Contexto desta conversa: …`, ela já está grande e cada resposta custa mais: feche o assunto atual e use o ponto de corte assim que for natural.',
   ].join('\n');
@@ -346,8 +397,9 @@ function hiringSection(p: StaffProfile, ctx: FichaContext): string {
   return [
     '## Subfuncionários',
     temp,
-    'Para trabalho pontual (uma tarefa, uma busca, uma revisão), use subagents (ferramenta Agent): terminam junto com o trabalho e custam menos. Contrate um subfuncionário só para um papel contínuo, que precise de memória e conversa próprias, e só com o ok do usuário: diga em uma frase o papel e por que um subagent não basta.',
-    `Para contratar: POST ${api}/staff com o cabeçalho \`x-myco: 1\` e um JSON com name, role, mission, firstTask, autonomy (plan, manual, acceptEdits ou auto), reportsTo: ["${p.id}"] e launch: true. Ele abre numa conversa do Claudio’s Club; a resposta traz o id dele (profile.id) e a conversa (launch.sessionId).`,
+    'Antes de contratar, nesta ordem: é pouco? faça você. É pontual (tarefa, busca, revisão)? use um subagent (ferramenta Agent). É da área de alguém da sua equipe? passe a tarefa a essa pessoa. Contrate um temporário só para um trabalho que dure várias conversas ou dias, precise de memória entre elas e que o usuário queira acompanhar direto; cada contratado abre uma conversa nova e gasta do mesmo limite de uso. Peça o ok do usuário dizendo o trabalho, quanto deve durar e por que nenhuma das opções anteriores serve.',
+    `Para contratar: POST ${api}/staff com o cabeçalho \`x-myco: 1\` e um JSON com name, firstTask, reportsTo: ["${p.id}"], launch: true e roleId (um dos cargos prontos abaixo), que preenche cargo, missão, regras, definição de pronto, modelo, esforço e autonomia; o que você mandar junto (role, mission, rules, autonomy…) substitui o do cargo. Sem roleId, mande role, mission e autonomy (plan, manual, acceptEdits ou auto). Ele abre numa conversa do Claudio’s Club; a resposta traz o id dele (profile.id) e a conversa (launch.sessionId).`,
+    ctx.roles?.length ? `Cargos prontos (roleId): ${ctx.roles.map((r) => `\`${r.id}\` (${r.label})`).join(', ')}` : '',
     `Para mandar outra mensagem a ele: POST ${api}/chat/send com {"sessionId", "staffId", "text"} (mesmo cabeçalho).`,
     `Quem você contrata é temporário. Quando o trabalho dele terminar, encerre: POST ${api}/staff/<id dele>/done com {"note": "o que ele entregou", "requestedBy": "${p.id}"} (mesmo cabeçalho; só vale para quem você contratou). Ele sai do quadro (nada é apagado); parado há ${TEMP_IDLE_DAYS} dias, sai sozinho. Só o usuário efetiva.`,
     'Você não pode dar a um subfuncionário mais autonomia do que a sua.',
@@ -362,7 +414,7 @@ function hiringSection(p: StaffProfile, ctx: FichaContext): string {
  * (cache) em todas as outras e nas retomadas; depois de um /compact ele é montado de novo, então as
  * regras não viram resumo. A memória continua no arquivo dela (muda durante o trabalho).
  */
-export function systemPrompt(p: StaffProfile, ctx: FichaContext, ficha: string): string {
+export function systemPrompt(p: StaffProfile, ctx: FichaContext, ficha: string, personal: string | null = null): string {
   return [
     `Você é ${p.name}, ${p.role} da ${ctx.company}, trabalhando no projeto ${ctx.projectName}.`,
     `Sua ficha está abaixo (a mesma de ${ctx.fichaPath}): siga-a. Sua memória fica em ${ctx.memoryPath}: leia no início de cada conversa, antes de qualquer outra coisa.`,
@@ -370,7 +422,19 @@ export function systemPrompt(p: StaffProfile, ctx: FichaContext, ficha: string):
     '',
     ficha.trim(),
     '',
+    ...(personal?.trim() ? [personalMemorySection(personal), ''] : []),
   ].join('\n');
+}
+
+/**
+ * Memória pessoal: só no prompt de sistema (o .md da ficha vai para o git do projeto, então não leva). Somente leitura.
+ */
+function personalMemorySection(text: string): string {
+  return [
+    '## Memória pessoal (somente leitura: mantida pelo Claudio’s Club; peça ao usuário para mudar)',
+    'Vale para você em todos os projetos em que trabalha. Não é um arquivo seu: não tente gravá-la nem procurá-la no disco. Se algo estiver errado nela, diga ao usuário.',
+    text.trim(),
+  ].join('\n\n');
 }
 
 /**

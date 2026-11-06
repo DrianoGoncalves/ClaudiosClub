@@ -1,14 +1,14 @@
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { BrowserStatus } from '../shared/model';
+import { CHROME_EXTENSION_URL, type BrowserStatus } from '../shared/model';
 
 // Pré-requisitos do Claude in Chrome (`--chrome`), conferidos sem abrir o navegador:
 //   - a extensão instalada em algum perfil do Chrome (ou Edge/Brave, que usam a mesma loja)
 //   - a ponte do CLI (native messaging host), registrada quando o `claude --chrome` roda pela 1ª vez
 
 export const EXTENSION_ID = 'fcoeoabgfenejglbffodgkkbkcdhcgfn';
-export const EXTENSION_URL = `https://chromewebstore.google.com/detail/claude/${EXTENSION_ID}`;
+export const EXTENSION_URL = CHROME_EXTENSION_URL;
 const HOST_NAME = 'com.anthropic.claude_code_browser_extension';
 
 const BROWSERS = [

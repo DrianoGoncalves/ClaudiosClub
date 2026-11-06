@@ -20,8 +20,9 @@ import type {
 import { colorCss } from '../../shared/model';
 import { api, isPairingError, NEEDS_PAIRING_EVENT, PAIRED_EVENT, withUsageConfirm } from './api';
 import { BoardView } from './board/Board';
-import { boardStyle, useBoardBackground, useSystemTheme } from './board/colors';
-import { archiveKey, ghostNodeId, HR_ID, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
+import { boardStyle, useBoardBackground } from './board/colors';
+import { useTheme } from './theme';
+import { archiveKey, ghostNodeId, HR_ID, manageNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
 import { seedSeenIdle } from './board/unread';
 import { PairControls } from './toolbar/PairControls';
 import { SystemMonitor } from './toolbar/SystemMonitor';
@@ -46,7 +47,7 @@ import { AgentForm, type AgentFormTarget } from './staff/AgentForm';
 import { NewProjectForm } from './office/NewProjectForm';
 import { readTab, workspaceByProject, writeTab } from './office/workspaces';
 import { ProjectOffice } from './office/ProjectOffice';
-import { StaffForm, type StaffFormMode, type StaffFormTab } from './staff/HireForm';
+import { StaffForm, type StaffFormMode } from './staff/HireForm';
 import { directoryPerson } from './staff/directory';
 import { HrPanel } from './staff/HrPanel';
 import { FilesBoard } from './files/FilesBoard';
@@ -76,7 +77,8 @@ type Selection =
   | { kind: 'user' }
   | { kind: 'synced'; skills: Skill[] }
   | { kind: 'project'; id: string }
-  | { kind: 'employee'; session: Session | null; staff: StaffProfile | null; projectId: string; ghost?: Session[] }
+  /** manage: o RH editando a ficha (as abas do funcionário com o seletor de projeto), em vez da conversa. */
+  | { kind: 'employee'; session: Session | null; staff: StaffProfile | null; projectId: string; ghost?: Session[]; manage?: true }
   | { kind: 'agent'; agent: Agent; projectId: string | null }
   | { kind: 'skill'; skill: Skill };
 
@@ -89,9 +91,8 @@ export function App() {
   const [showArchived, setShowArchived] = useState(() => readFlag(ARCHIVED_KEY));
   const [animations, setAnimations] = useState(readAnimations);
   const [form, setForm] = useState<{ projectId: string; mode: StaffFormMode } | null>(null);
-  // A ficha embutida no "Mais" do funcionário: "Desfazer" relê; a aba aberta sobrevive a salvar.
+  // A ficha embutida no "Mais" do funcionário: "Desfazer" relê.
   const [sheetReset, setSheetReset] = useState(0);
-  const [sheetTab, setSheetTab] = useState<StaffFormTab>('who');
   const [agentForm, setAgentForm] = useState<AgentFormTarget | null>(null);
   /** "+ projeto" das abas: a empresa da aba de onde veio. */
   const [newProject, setNewProject] = useState<{ workspaceId: string | null } | null>(null);
@@ -120,6 +121,8 @@ export function App() {
   const [tasksFor, setTasksFor] = useState<string | null>(null);
   /** Arquivos do projeto abertos (id do projeto). */
   const [filesFor, setFilesFor] = useState<string | null>(null);
+  /** Arquivo que os Arquivos abrem já no editor (ex.: o guia SPEC.md). */
+  const [filesPath, setFilesPath] = useState<string | null>(null);
   /** Tarefa escolhida no Ctrl+K: o quadro de tarefas abre com ela selecionada. */
   const [jumpTask, setJumpTask] = useState<string | null>(null);
   /** Conversa achada na busca do Ctrl+K (ou a do aviso): o painel do funcionário abre nela. Vale só para a seleção que a pediu. */
@@ -180,6 +183,28 @@ export function App() {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [load]);
 
+  // A ficha do "Mais" do funcionário foi salva ou voltou a uma versão do histórico.
+  const onSheetSaved = (profile: StaffProfile) => {
+    setNotice(savedNotice(profile));
+    load();
+  };
+
+  // Editor do RH: a aba aberta (fica ao trocar de projeto) e se a ficha tem edição sem salvar.
+  const [manageTab, setManageTab] = useState('ficha');
+  const sheetDirty = useRef(false);
+  const onSheetDirty = useCallback((dirty: boolean) => {
+    sheetDirty.current = dirty;
+  }, []);
+  const openManage = (projectId: string, staffId: string) => {
+    setManageTab('ficha');
+    setSelectedId(manageNodeId(projectId, staffId));
+  };
+  /** Sai do editor do RH (outro projeto, Conversar, voltar à lista): com ficha mexida e não salva, pergunta antes. */
+  const leaveManage = (go: () => void) => {
+    if (sheetDirty.current && !window.confirm(t('hr.discardAsk'))) return;
+    go();
+  };
+
   // Uma conversa nova grava o transcript logo depois da primeira resposta.
   const reloadSoon = useCallback(() => {
     setTimeout(load, 2000);
@@ -202,6 +227,19 @@ export function App() {
     setSelectedId(node);
   }, []);
   const inbox = useInbox(openInbox);
+
+  // Conversa que acabou de nascer (pedido do guia do projeto): o painel do funcionário abre nela, mesmo antes de o quadro relê-la.
+  const openNewConversation = useCallback(
+    (projectId: string, staffId: string, sessionId: string) => {
+      const node = staffNodeId(projectId, staffId);
+      jumpSelection.current = node;
+      setJumpConversation({ node, sessionId });
+      setJumpTarget({ projectId, staffId, sessionId, nonce: ++jumpNonce.current });
+      setSelectedId(node);
+      reloadSoon();
+    },
+    [reloadSoon],
+  );
 
   // O título da aba traz quantas coisas esperam você: dá para ver sem trazer o Claudio’s Club para a frente.
   useEffect(() => {
@@ -310,7 +348,7 @@ export function App() {
   );
   // Chat do funcionário no fundo do workspace do projeto dele (não no da aba aberta): a cor diz de
   // quem é a conversa. Sem fundo no workspace, vale o geral; sem geral, o de fábrica.
-  const theme = useSystemTheme();
+  const theme = useTheme();
   const chatStyle = useMemo(() => {
     if (!board || selection?.kind !== 'employee') return undefined;
     const wsId = workspaceByProject(board.projects, config).get(selection.projectId);
@@ -417,13 +455,15 @@ export function App() {
                 .sort((a, b) => b.usd - a.usd)}
               scanning={costs?.scanning ?? true}
               onSelect={setSelectedId}
+              onOpenPerson={(p) => openManage(p.projectId, p.staffId)}
             />
           )}
           {selection.kind === 'hr' && (
             <HrPanel
-              onOpen={(p) => {
+              profiles={board.staff}
+              onEdit={(p) => {
                 // Projeto fora do quadro (arquivado): o painel do funcionário não teria onde abrir.
-                if (board.staff.some((s) => s.projectId === p.projectId && s.id === p.staffId)) setSelectedId(staffNodeId(p.projectId, p.staffId));
+                if (board.staff.some((s) => s.projectId === p.projectId && s.id === p.staffId)) openManage(p.projectId, p.staffId);
                 else setNotice(t('hr.openMissing', { project: p.projectName }), true);
               }}
               onConfig={setConfig}
@@ -442,7 +482,15 @@ export function App() {
           {selection.kind === 'project' && (
             <ProjectPanel
               onTasks={() => setTasksFor(selection.id)}
-              onFiles={() => setFilesFor(selection.id)}
+              onFiles={() => {
+                setFilesPath(null);
+                setFilesFor(selection.id);
+              }}
+              onOpenFile={(path) => {
+                setFilesPath(path);
+                setFilesFor(selection.id);
+              }}
+              onOpenConversation={(staffId, sessionId) => openNewConversation(selection.id, staffId, sessionId)}
               tasks={taskSummary[selection.id] ?? null}
               office={<ProjectOffice projectId={selection.id} config={config} onConfig={setConfig} />}
               onNewAgent={() => setAgentForm({ scope: 'project', projectId: selection.id })}
@@ -479,6 +527,10 @@ export function App() {
               initialConversation={jumpTo}
               focus={jumpTarget}
               onFocusDone={clearJumpTarget}
+              onOpenFile={(path) => {
+                setFilesPath(path);
+                setFilesFor(selection.projectId);
+              }}
               inbox={inbox.items}
               session={
                 selection.session && {
@@ -493,6 +545,7 @@ export function App() {
               costUsd={employeeCost(costs, selection)}
               totalUsd={costs?.total.usd ?? 0}
               ghost={!!selection.ghost}
+              manage={manageOf(board, selection, manageTab, setManageTab, leaveManage, setSelectedId)}
               archived={
                 selection.ghost ? selection.ghost.every((s) => isArchived('session', s.id)) : isArchived('session', archiveKey(selection))
               }
@@ -508,7 +561,7 @@ export function App() {
                 const session = (sessionId && board.sessions[selection.projectId]?.find((s) => s.id === sessionId)) || selection.session;
                 if (session) setForm({ projectId: selection.projectId, mode: { kind: 'adopt', session } });
               }}
-              sheetForm={
+              sheetForm={(tab, onTab) =>
                 selection.staff && (
                   // A chave troca quando a ficha muda (salvar, restaurar, rotinas) ou ao desfazer: o formulário relê.
                   <StaffForm
@@ -518,17 +571,16 @@ export function App() {
                     projectId={selection.projectId}
                     mode={{ kind: 'edit', profile: selection.staff }}
                     simple={simple}
-                    tab={sheetTab}
-                    onTab={setSheetTab}
+                    tab={tab}
+                    onTab={onTab}
+                    onDirty={onSheetDirty}
                     onClose={() => setSheetReset((n) => n + 1)}
                     onHired={() => {}}
-                    onSaved={(profile) => {
-                      setNotice(savedNotice(profile));
-                      load();
-                    }}
+                    onSaved={onSheetSaved}
                   />
                 )
               }
+              onRestored={onSheetSaved}
               onSessionStarted={reloadSoon}
               simple={simple}
               onShowAdvanced={() => void saveUiLevel('advanced')}
@@ -611,7 +663,6 @@ export function App() {
           projectName={board.projects.find((p) => p.id === tasksFor)?.name ?? tasksFor}
           staff={board.staff.filter((s) => s.projectId === tasksFor)}
           costs={costs}
-          lastDeploy={taskSummary[tasksFor]?.lastDeploy ?? null}
           onClose={() => {
             setTasksFor(null);
             setJumpTask(null);
@@ -632,6 +683,7 @@ export function App() {
           key={filesFor}
           projectId={filesFor}
           projectName={board.projects.find((p) => p.id === filesFor)?.name ?? filesFor}
+          openPath={filesPath}
           onClose={() => setFilesFor(null)}
         />
       )}
@@ -744,6 +796,39 @@ function projectTeam(board: Board, costs: CostReport | null, projectId: string):
   return { team, owned: new Set(staff.flatMap((s) => s.sessions.map((x) => x.id))) };
 }
 
+/** As fichas da mesma pessoa no quadro (mesmo personId), uma por projeto e em ordem de projeto; a própria sempre entra. */
+function personCopies(board: Board, staff: StaffProfile) {
+  const same = staff.personId ? board.staff.filter((s) => s.personId === staff.personId) : [staff];
+  return same
+    .map((s) => ({ projectId: s.projectId, staffId: s.id, projectName: board.projects.find((p) => p.id === s.projectId)?.name ?? s.projectId }))
+    .sort((a, b) => a.projectName.localeCompare(b.projectName));
+}
+
+/** O que o painel do funcionário precisa para ser o editor do RH (seletor de projeto, Conversar, voltar); undefined na conversa. */
+function manageOf(
+  board: Board,
+  selection: Extract<Selection, { kind: 'employee' }>,
+  tab: string,
+  onTab: (tab: string) => void,
+  leave: (go: () => void) => void,
+  select: (id: string) => void,
+) {
+  const staff = selection.manage && selection.staff;
+  if (!staff) return undefined;
+  const copies = personCopies(board, staff);
+  return {
+    copies,
+    tab,
+    onTab,
+    onProject: (projectId: string) => {
+      const to = copies.find((c) => c.projectId === projectId);
+      if (to) leave(() => select(manageNodeId(to.projectId, to.staffId)));
+    },
+    onChat: () => leave(() => select(staffNodeId(staff.projectId, staff.id))),
+    onBack: () => leave(() => select(HR_ID)),
+  };
+}
+
 function employeeCost(costs: CostReport | null, sel: { session: Session | null; staff: StaffProfile | null; projectId: string }) {
   const bySession = costs?.projects[sel.projectId]?.sessions;
   if (!bySession) return null;
@@ -768,13 +853,13 @@ function resolveSelection(board: Board, id: string | null, archivedSessions: Set
     const ghost = visible.length ? visible : loose;
     return ghost.length ? { kind: 'employee', session: ghost[0]!, staff: null, projectId, ghost } : null;
   }
-  if (id.startsWith('h:')) {
+  if (id.startsWith('h:') || id.startsWith('m:')) {
     const [, projectId, staffId] = id.split(':');
     const staff = board.staff.find((s) => s.projectId === projectId && s.id === staffId);
     if (!staff || !projectId) return null;
     const mine = new Set(staff.sessions.map((s) => s.id));
     const session = (board.sessions[projectId] ?? []).find((s) => mine.has(s.id)) ?? null;
-    return { kind: 'employee', session, staff, projectId };
+    return { kind: 'employee', session, staff, projectId, ...(id.startsWith('m:') ? { manage: true as const } : {}) };
   }
 
   const inventories = [board.user, ...Object.values(board.inventories)];

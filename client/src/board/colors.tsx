@@ -119,10 +119,13 @@ export function RoomColorPicker({
 export function BackgroundPicker({
   theme,
   value,
+  fallback = null,
   onChange,
 }: {
   theme: Theme;
   value: string | null;
+  /** O que "padrão" vale aqui (no workspace, o fundo geral do quadro); sem ele, o de fábrica. */
+  fallback?: string | null;
   onChange: (hex: string | null) => Promise<void>;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -155,9 +158,9 @@ export function BackgroundPicker({
         role="radio"
         aria-checked={shown === null}
         className="swatch"
-        style={{ '--swatch': def.hex } as CSSProperties}
-        title={t('board.defaultWithName', { name: def.label })}
-        aria-label={t('board.defaultNamed', { name: def.label })}
+        style={{ '--swatch': fallback ?? def.hex } as CSSProperties}
+        title={fallback ? t('board.defaultGeneral') : t('board.defaultWithName', { name: def.label })}
+        aria-label={fallback ? t('board.defaultGeneralNamed') : t('board.defaultNamed', { name: def.label })}
         onClick={() => save(null)}
       />
       {presets.map((p) => (
@@ -174,10 +177,10 @@ export function BackgroundPicker({
         />
       ))}
       <label className={`swatch swatch-custom ${custom ? 'is-on' : ''}`} title={t('board.otherColor')} style={custom ? ({ '--swatch': shown } as CSSProperties) : undefined}>
-        <input type="color" aria-label={t('board.otherColor')} value={shown ?? def.hex} onChange={(e) => pickCustom(e.target.value)} />
+        <input type="color" aria-label={t('board.otherColor')} value={shown ?? fallback ?? def.hex} onChange={(e) => pickCustom(e.target.value)} />
         {!custom && <span aria-hidden="true">+</span>}
       </label>
-      <span className="muted small mono">{shown ?? t('board.defaultLabel')}</span>
+      <span className="muted small mono">{shown ?? `${t('board.defaultLabel')} ${fallback ?? def.hex}`}</span>
       {error && <span className="error small">{error}</span>}
     </span>
   );
@@ -212,10 +215,10 @@ export function useBoardBackground(bg: BoardBackground | null | undefined) {
   const dark = bg?.dark && HEX.test(bg.dark) ? bg.dark : null;
   useEffect(() => {
     const rule = (hex: string, theme: Theme) =>
-      `:root:root { ${Object.entries(boardStyle(hex, theme)).map(([k, v]) => `${k}: ${v};`).join(' ')} }`;
+      `:root:root[data-theme='${theme}'] { ${Object.entries(boardStyle(hex, theme)).map(([k, v]) => `${k}: ${v};`).join(' ')} }`;
     const css = [
-      light && `@media (prefers-color-scheme: light) { ${rule(light, 'light')} }`,
-      dark && `@media (prefers-color-scheme: dark) { ${rule(dark, 'dark')} }`,
+      light && rule(light, 'light'),
+      dark && rule(dark, 'dark'),
     ]
       .filter(Boolean)
       .join('\n');
@@ -231,17 +234,4 @@ export function useBoardBackground(bg: BoardBackground | null | undefined) {
     }
     el.textContent = css;
   }, [light, dark]);
-}
-
-/** O tema do sistema agora (acompanha a troca sem recarregar). */
-export function useSystemTheme(): Theme {
-  const query = '(prefers-color-scheme: dark)';
-  const [dark, setDark] = useState(() => window.matchMedia(query).matches);
-  useEffect(() => {
-    const mq = window.matchMedia(query);
-    const on = () => setDark(mq.matches);
-    mq.addEventListener('change', on);
-    return () => mq.removeEventListener('change', on);
-  }, []);
-  return dark ? 'dark' : 'light';
 }

@@ -32,7 +32,7 @@ export function ThemeBackgrounds({
               {current === theme && <span className="badge">{t('toolbar.inUseNow')}</span>}
             </div>
             <span className="bg-theme-preview" style={{ '--swatch': shown } as CSSProperties} aria-hidden="true" />
-            <BackgroundPicker theme={theme} value={value[theme]} onChange={(hex) => onChange(theme, hex)} />
+            <BackgroundPicker theme={theme} value={value[theme]} fallback={fallback?.[theme]} onChange={(hex) => onChange(theme, hex)} />
             <span className="muted small">{fallback ? t('toolbar.bgDefaultGeneral') : t('toolbar.bgDefault', { name: def.label, hex: def.hex })}</span>
           </div>
         );

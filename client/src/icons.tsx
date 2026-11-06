@@ -149,6 +149,15 @@ export function UserPlusIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+/** Balão de conversa (Lucide message-square): abrir o chat do funcionário. */
+export function MessageIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
 /** Duas pessoas: o RH (todos os funcionários de todos os projetos). */
 export function UsersIcon({ size = 15 }: { size?: number }) {
   return (
