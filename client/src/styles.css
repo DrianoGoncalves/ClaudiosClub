@@ -12,7 +12,7 @@
   --ink-blue: #1f4fbf;
   --ink-green: #1d7a46;
   --ink-green-soft: #8fc9a3;
-  --ink-red: #c43b2f;
+  --ink-red: #d43b2f;
   --ink-muted: #8a8f96;
   --highlight: rgba(255, 214, 10, 0.55);
   --highlight-solid: #ffd60a;
@@ -25,13 +25,13 @@
   --muted: #6b7076;
   --line: #e4e1da;
   --accent: #1f4fbf;
-  --warn: #946200;
+  --warn: #f46000;
   --danger: #c0362c;
   --busy: #1f4fbf;
   --idle: #8b9096;
-  --waiting: #d98a00;
-  /* O --waiting serve a borda e a bolinha; texto (e fundo com texto branco) usa este, que no claro passa de 4,5:1. */
-  --waiting-ink: #946200;
+  --waiting: #d08000;
+  /* O --waiting serve a borda e a bolinha; texto (e fundo com texto branco) usa este (no claro, ~3:1: o dono preferiu o laranja mais vivo). */
+  --waiting-ink: #d08000;
   /* Barra de rolagem: grafite discreto; derivada das canetas, vale nos dois temas. */
   --scroll-thumb: color-mix(in srgb, var(--ink-muted) 45%, transparent);
   --scroll-thumb-hover: var(--ink-muted);
