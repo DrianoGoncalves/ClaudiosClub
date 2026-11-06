@@ -58,6 +58,15 @@ import type {
 } from '../../shared/model';
 import type { RoleEntry, RoleTemplate } from '../../shared/roles';
 import { locale, t } from './i18n';
+import type { GuideAction } from './detail/guideActions';
+import type { McpSaveBody, McpScope, McpServer } from './office/mcpForm';
+
+/** Um MCP pelo endereço: escopo, projeto (nos de projeto) e nome. */
+export interface McpRef {
+  scope: McpScope;
+  projectId?: string;
+  name: string;
+}
 
 /** Leituras tentam de novo só em erro de rede (servidor reiniciando): 3 tentativas no total. */
 const GET_ATTEMPTS = 3;
@@ -96,7 +105,7 @@ async function post<T>(url: string, body: unknown = {}, headers: Record<string, 
   }
   const data = (await res.json().catch(() => ({}))) as T & { error?: string; code?: string; hit?: UsageStopHit };
   pairingSignal(url, res.ok, data);
-  if (!res.ok) throw new ApiError(errorMessage(data, `${url}: ${res.status}`), data.code ?? null, data.hit ?? null);
+  if (!res.ok) throw new ApiError(errorMessage(data, `${url}: ${res.status}`), data.code ?? null, data.hit ?? null, data);
   return data;
 }
 
@@ -130,8 +139,24 @@ export class ApiError extends Error {
     message: string,
     readonly code: string | null,
     readonly hit: UsageStopHit | null,
+    /** O corpo da recusa, para campos que só um erro tem (ex.: `openTasks` do `open-tasks`). */
+    readonly details: Record<string, unknown> = {},
   ) {
     super(message);
+  }
+}
+
+/**
+ * Excluir ficha: se o servidor recusar por tarefas abertas no quadro (409 `open-tasks`), pergunta de novo e,
+ * confirmado, repete com `force` (as tarefas ficam sem responsável). Recusado, devolve null; outro erro sobe.
+ */
+export async function deleteStaffConfirm(projectId: string, staffId: string, ask: (openTasks: number) => boolean) {
+  try {
+    return await api.deleteStaff(projectId, staffId);
+  } catch (err) {
+    if (!(err instanceof ApiError) || err.code !== 'open-tasks') throw err;
+    if (!ask(Number(err.details.openTasks) || 0)) return null;
+    return api.deleteStaff(projectId, staffId, true);
   }
 }
 
@@ -308,6 +333,12 @@ export const api = {
   saveLibrarySkill: (s: { originalName?: string; name: string; description: string; body: string }) => post<LibrarySkill>('/api/skills/library', s),
   removeLibrarySkill: (name: string) => post<{ ok: boolean }>(`/api/skills/library/${encodeURIComponent(name)}/delete`),
   importSkill: (name: string) => post<LibrarySkill>('/api/skills/library/import', { name }),
+  // MCPs da conta e dos projetos (Configurações › MCPs). Valores de env/cabeçalho só vão; a lista traz só a chave e `set`.
+  mcpServers: (projectId: string | null) =>
+    get<{ servers: McpServer[] }>(`/api/mcp-servers${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+  saveMcpServer: (body: McpSaveBody) => post<{ server: McpServer }>('/api/mcp-servers/save', body),
+  deleteMcpServer: (ref: McpRef) => post<{ ok: true }>('/api/mcp-servers/delete', ref),
+  testMcpServer: (ref: McpRef) => post<{ ok: boolean; tools: string[]; error?: string }>('/api/mcp-servers/test', ref),
   serverLog: (projectId: string, staffId: string) => get<ServerAccess[]>(`/api/projects/${projectId}/staff/${staffId}/server-log`),
   // Conexões SSH e FTP do projeto (a lista também é POST: exige a página do Claudio’s Club).
   connections: (projectId: string) => post<AnyConnection[]>(`/api/projects/${projectId}/connections/list`),
@@ -343,8 +374,9 @@ export const api = {
   linkStaff: (from: StaffRef, to: StaffRef) => post<{ personId: string }>('/api/staff-link', { from, to }),
   unlinkStaff: (ref: StaffRef) => post<{ ok: true }>('/api/staff-unlink', ref),
   /** Apaga ficha, memória, foto e histórico; `orphaned` = subordinados que ficaram sem chefe. 409 se a conversa dele estiver trabalhando. */
-  deleteStaff: (projectId: string, staffId: string) =>
-    post<{ ok: true; orphaned: string[] }>(`/api/projects/${projectId}/staff/${staffId}/delete`),
+  /** `force`: exclui mesmo com tarefas abertas no quadro (ver deleteStaffConfirm). */
+  deleteStaff: (projectId: string, staffId: string, force = false) =>
+    post<{ ok: true; orphaned: string[] }>(`/api/projects/${projectId}/staff/${staffId}/delete`, force ? { force: true } : {}),
   /** Cópia de uma ficha de outro projeto, com id novo; a memória só vai se pedir; `reportsTo` = chefes daqui. */
   copyStaff: (projectId: string, input: { fromProjectId: string; staffId: string; withMemory: boolean; reportsTo?: string[] }) =>
     post<{ profile: StaffProfile }>(`/api/projects/${projectId}/staff/copy`, input),
@@ -454,9 +486,24 @@ export const api = {
     post<StaffProfile>(`/api/projects/${projectId}/staff/${staffId}/managers/remove`, { managerId }),
   saveProjectImage: (projectId: string, dataUrl: string | null) =>
     post<{ image: string | null }>(`/api/projects/${projectId}/image`, { dataUrl }),
+  /** Guia do projeto (SPEC.md na raiz): a equipe lê em caso de dúvida. */
+  projectGuide: (projectId: string) => get<ProjectGuide>(`/api/projects/${projectId}/guide`),
+  /** Cria o SPEC.md a partir do modelo; 409 se já existe. */
+  createProjectGuide: (projectId: string) => post<ProjectGuide>(`/api/projects/${projectId}/guide`),
+  /** Abre uma conversa nova do funcionário com o pedido do guia (testar, divergências ou rascunho); 400 se não vale agora. */
+  runProjectGuide: (projectId: string, action: GuideAction, staffId: string) =>
+    post<{ sessionId: string; staffId: string }>(`/api/projects/${projectId}/guide/run`, { action, staffId }),
   accountRules: () => get<{ path: string; text: string | null }>('/api/account/rules'),
   saveAccountRules: (text: string) => post<{ path: string; text: string | null }>('/api/account/rules', { text }),
 };
+
+/** Guia do projeto. `ignored` = está no .gitignore (só conta com `isGit`). */
+export interface ProjectGuide {
+  path: string;
+  exists: boolean;
+  isGit: boolean;
+  ignored: boolean;
+}
 
 /** Item da árvore de arquivos do projeto; `path` relativo à raiz, com "/". `locked` = segredo: listado, mas não abre. */
 export interface FileEntry {

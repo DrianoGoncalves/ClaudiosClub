@@ -8,6 +8,7 @@ import type { StaffProfile } from '../shared/model';
 import { ChatManager } from '../server/chat/manager';
 import { parseVerdict, TaskService } from '../server/tasks';
 import { cleanRunDir } from '../server/runCleanup';
+import { UsageStopError } from '../server/usageStop';
 
 let root: string;
 beforeAll(async () => {
@@ -755,21 +756,36 @@ describe('revisão automática', () => {
     expect(delivered).toEqual([{ sessionId: 's-1', text: expect.stringContaining('falta o teste da paginação') }]);
   });
 
-  it('no máximo 3 rodadas automáticas: depois, a tarefa fica com você e a entrega não pede mais revisão', async () => {
+  it('no máximo 2 rodadas automáticas (a entrega e uma reauditoria): depois, a tarefa fica com você e a entrega não pede mais revisão', async () => {
     const { svc, sent, texts, delivered, make, current } = reviewFlow('auto-limit');
     const t = await make('Relatório');
     await svc.start('p', t.id); // s-1
     await svc.onTurnDone('s-1'); // rodada 1 (s-2)
-    for (const round of [1, 2, 3]) {
+    for (const round of [1, 2]) {
       texts.set(`s-${round + 1}`, `REPROVADO\n\najuste ${round}`);
       await svc.onTurnDone(`s-${round + 1}`); // reprovou: volta para fazendo
-      await svc.onTurnDone('s-1'); // ajustou e terminou: vai para revisão
+      await svc.onTurnDone('s-1'); // ajustou e terminou: vai para revisão (a rodada 2 é a última, s-3)
     }
     const end = await current();
-    expect(sent.filter((m) => m.staffId === 'rev-1')).toHaveLength(3);
-    expect(delivered).toHaveLength(3);
-    expect(end).toMatchObject({ status: 'review', reviewRounds: 3 });
-    expect(end.history.at(-1)?.note).toBe('limite de 3 revisões automáticas; fica com você');
+    expect(sent.filter((m) => m.staffId === 'rev-1')).toHaveLength(2);
+    expect(delivered).toHaveLength(2);
+    expect(end).toMatchObject({ status: 'review', reviewRounds: 2 });
+    expect(end.history.at(-1)?.note).toBe(
+      'limite de 2 revisões automáticas; o que sobrou fica com você: aceitar como trade-off (anotar em "Decisões" no SPEC.md) ou pedir ajuste',
+    );
+  });
+
+  it('o pedido de revisão diz o que vale: com SPEC.md, manda ler o guia; a severidade só reprova com 🔴', async () => {
+    const { svc, dir, sent, make } = reviewFlow('auto-guide');
+    const t = await make('Ajuste de tela');
+    await svc.start('p', t.id); // s-1
+    await svc.requestReview('p', t.id, 'rev-1'); // s-2, sem SPEC.md
+    expect(sent.at(-1)!.text).not.toContain('Leia `SPEC.md`');
+    expect(sent.at(-1)!.text).toContain('REPROVADO só se houver algum 🔴');
+    await fs.writeFile(path.join(dir, 'SPEC.md'), '# Guia\n', 'utf8');
+    await svc.requestReview('p', t.id, 'rev-1'); // s-3, com SPEC.md
+    expect(sent.at(-1)!.text).toContain('Leia `SPEC.md`: o que contrariar o guia é 🔴.');
+    expect(sent.at(-1)!.text).toContain('APROVADO ou REPROVADO na primeira linha');
   });
 
   it('revisor: outro funcionário do projeto, que não é quem faz a tarefa, nem na troca', async () => {
@@ -808,5 +824,61 @@ describe('revisão automática', () => {
     expect(parseVerdict('APROVADOS os dois')).toBeNull();
     expect(parseVerdict('')).toBeNull();
     expect(parseVerdict(null)).toBeNull();
+  });
+});
+
+describe('limite de consumo ao começar', () => {
+  /** Ana com o consumo acima da linha: `state.capped` diz se o envio é recusado. */
+  function capped(dirName: string) {
+    const dir = path.join(root, dirName);
+    const state = { capped: true, n: 0 };
+    const ana = { id: 'ana-1', name: 'Ana', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'ana-1' ? ana : null),
+      send: async () => {
+        if (state.capped) throw new UsageStopError({ kind: 'five_hour', percentUsed: 91, limit: 85, resetsAt: null });
+        return `s-${++state.n}`;
+      },
+      branchFor: async () => null,
+    });
+    const task = async (id: string) => (await svc.list('p'))!.find((t) => t.id === id)!;
+    return { svc, state, task };
+  }
+  const STOP = 'não começou: o consumo 5h está em 91% (linha de parada: 85%)';
+
+  it('start com o consumo no limite: não lança, fica na fila com queuedAt e sem conversa', async () => {
+    const { svc, task } = capped('stop-1');
+    const t = (await svc.create('p', { title: 'Relatório', staffId: 'ana-1' }))!;
+    const got = (await svc.start('p', t.id, true))!;
+    expect(got).toMatchObject({ status: 'todo', sessionId: null, queuedAt: expect.any(String), queuedForce: true });
+    expect(got.history.at(-1)?.note).toBe(`${STOP}; na fila de Ana, começa quando o consumo baixar`);
+    expect(await task(t.id)).toMatchObject({ status: 'todo', sessionId: null, queuedAt: expect.any(String) });
+  });
+
+  it('depois que o consumo baixa, o tick começa a tarefa da fila', async () => {
+    const { svc, state, task } = capped('stop-2');
+    const t = (await svc.create('p', { title: 'Relatório', staffId: 'ana-1' }))!;
+    await svc.start('p', t.id);
+    await svc.tick(); // ainda no limite: segue na fila
+    expect(await task(t.id)).toMatchObject({ status: 'todo', sessionId: null });
+    state.capped = false;
+    await svc.tick();
+    expect(await task(t.id)).toMatchObject({ status: 'doing', sessionId: 's-1', queuedAt: null, queuedForce: false });
+  });
+
+  it('o tick repete a recusa sem duplicar a nota no histórico', async () => {
+    const { svc, task } = capped('stop-3');
+    const t = (await svc.create('p', { title: 'Relatório', staffId: 'ana-1' }))!;
+    await svc.start('p', t.id);
+    await svc.tick();
+    const once = (await task(t.id)).history.length;
+    expect((await task(t.id)).history.filter((h) => h.note === STOP)).toHaveLength(1);
+    await svc.tick();
+    await svc.tick();
+    const after = await task(t.id);
+    expect(after.history).toHaveLength(once);
+    expect(after.history.filter((h) => h.note === STOP)).toHaveLength(1);
   });
 });

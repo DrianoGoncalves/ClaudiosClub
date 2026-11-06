@@ -39,14 +39,17 @@ import { CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from
 import { ChatRegistry } from './chat/registry';
 import { AutoContinue } from './chat/autoContinue';
 import { WakeBody, WakeStreakError, watchWakeups } from './chat/wake';
-import { StaffBusyError, StaffError, StaffService } from './staff/service';
+import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService } from './staff/service';
 import { sweepFreelas } from './freelaSweep';
-import { mcpJsonWarnings } from './staff/mcp';
+import { CLUB_MCP_FILE, McpError, mcpJsonWarnings } from './staff/mcp';
+import { createMcpLibrary } from './staff/mcpLibrary';
 import { permissionInboxItem, questionInboxItem } from './inboxItems';
 import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
 import { copyToLibrary, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill, SkillError } from './skillLibrary';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
+import { createGuide, GuideExistsError, guideStatus } from './projectGuide';
+import { GuideActionError, runGuideAction } from './guideActions';
 import { deleteAttachment, listAttachments, MAX_ATTACHMENT_BYTES, readAttachment, saveAttachment } from './projectAttachments';
 import {
   createProjectEntry,
@@ -204,6 +207,8 @@ const staff: StaffService = new StaffService(adapter, {
   isWorking: (staffId) => chats.staffWorking(staffId),
   // Tarefas abertas da ficha impedem apagar (ver deleteStaff). `tasks` é declarado logo abaixo: só é lido na chamada.
   tasksOf: async (projectId) => (await tasks.list(projectId)) ?? [],
+  // Apagar com tarefas abertas e `force`: as tarefas ficam sem responsável (ver TaskService.releaseStaff).
+  releaseTasks: (projectId, staffId) => tasks.releaseStaff(projectId, staffId),
   weekCost: async (projectId) => {
     const c = await getCosts();
     return { project: c.projects[projectId]?.last7d ?? 0, total: c.total.last7d };
@@ -291,6 +296,12 @@ const projectPathOf = async (projectId: string) => {
 /** Codex CLI só como segunda opinião na revisão de tarefas (o motor dos funcionários é o Claude). */
 const codex = new CodexAdapter();
 
+/** Abre uma conversa nova com o funcionário e manda o texto. Sem `force`, confere o consumo antes. Usado pelas tarefas e pelas ações do guia. */
+const sendNewConversation = async (projectId: string, staffId: string, text: string, force: boolean) => {
+  if (!force) await staff.checkUsage(projectId);
+  return chats.send(projectId, null, staffId, text);
+};
+
 const tasks = new TaskService({
   projectPath: projectPathOf,
   projectIds: async () => (await adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf).map((p) => p.id),
@@ -298,10 +309,7 @@ const tasks = new TaskService({
     const dir = await projectPathOf(projectId);
     return dir ? readProfile(dir, staffId) : null;
   },
-  send: async (projectId, staffId, text, force) => {
-    if (!force) await staff.checkUsage(projectId);
-    return chats.send(projectId, null, staffId, text);
-  },
+  send: sendNewConversation,
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
   isWorking: (staffId, except) => chats.staffWorking(staffId, except),
   // O gestor que pediu recebe a entrega na conversa em que pediu (ou, sem ela, na mais recente dele),
@@ -462,6 +470,14 @@ const CONN = '([A-Za-z0-9][\\w.-]{0,39})';
 /** Envio de anexo: o corpo são os bytes do arquivo (não JSON), o nome vai em `?name=`. */
 const ATTACHMENT_UPLOAD = new RegExp(`^/api/projects/${ID}/attachments$`);
 
+/** Biblioteca de MCPs (cadastro e edição nos quatro escopos). A pasta do projeto vem do adapter, nunca do cliente. */
+const mcpLibrary = createMcpLibrary({
+  claudeConfigFile: defaultLocations().configFile,
+  clubFile: CLUB_MCP_FILE,
+  backupDir: path.join(MYCO_HOME, 'backups'),
+  resolveProject: projectPathOf,
+});
+
 const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ['GET', /^\/api\/health$/, async () => ({ ok: true, adapter: adapter.id })],
   // CPU e RAM da máquina, para o monitor do canto (só números; ver systemStats.ts).
@@ -544,6 +560,11 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ],
   ['GET', new RegExp(`^/api/projects/${ID}$`), ({ params: [id] }) => adapter.getProject(id!)],
   ['GET', new RegExp(`^/api/projects/${ID}/mcp$`), ({ params: [id] }) => staff.listMcp(id!)],
+  // Biblioteca de MCPs: a lista não traz valor (só nome e se está preenchido); cadastrar, editar, apagar e testar só pelo navegador.
+  ['GET', /^\/api\/mcp-servers$/, ({ url }) => mcpLibrary.list(url.searchParams.get('projectId'))],
+  ['POST', /^\/api\/mcp-servers\/save$/, ({ body, fromBrowser }) => mcpLibrary.save(body, fromBrowser)],
+  ['POST', /^\/api\/mcp-servers\/delete$/, ({ body, fromBrowser }) => mcpLibrary.remove(body, fromBrowser)],
+  ['POST', /^\/api\/mcp-servers\/test$/, ({ body, fromBrowser }) => mcpLibrary.test(body, fromBrowser)],
   ['GET', new RegExp(`^/api/projects/${ID}/servers$`), ({ params: [id] }) => staff.listServers(id!)],
   // Conexões SSH do projeto, só pela página do Claudio’s Club: até a lista é POST, para exigir o cabeçalho
   // x-myco e a origem local (um funcionário teria de forjar os dois num comando que você aprova).
@@ -591,7 +612,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}/delete$`),
-    ({ params: [id, staffId], fromBrowser }) => staff.deleteStaff(id!, staffId!, fromBrowser),
+    ({ params: [id, staffId], body, fromBrowser }) => staff.deleteStaff(id!, staffId!, fromBrowser, body),
   ],
   [
     'POST',
@@ -902,8 +923,8 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     new RegExp(`^/api/projects/${ID}/tasks$`),
     async ({ params: [id], body, fromBrowser }) => {
       if (fromBrowser) return tasks.create(id!, body);
-      // Pela API, só um gestor passando tarefa para quem reporta a ele (e ela já pode começar).
-      const b = parse(z.object({ staffId: z.string().max(40), requestedBy: z.string().max(40), start: z.boolean().default(false) }).passthrough(), body);
+      // Pela API, só um gestor passando tarefa para quem reporta a ele. Já entra na fila dela; `start: false` = rascunho.
+      const b = parse(z.object({ staffId: z.string().max(40), requestedBy: z.string().max(40), start: z.boolean().default(true) }).passthrough(), body);
       if (!(await staff.isManagerOf(id!, b.requestedBy, b.staffId))) throw new BadRequest('pela API, só para quem reporta a você (requestedBy)');
       const task = await tasks.create(id!, body, b.requestedBy);
       return task && b.start ? ((await tasks.start(id!, task.id)) ?? task) : task;
@@ -1096,6 +1117,39 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       const { dataUrl } = parse(z.object({ dataUrl: z.string().max(3_000_000).nullable() }), body);
       await saveProjectImage(p.path, dataUrl);
       return { image: await projectImageUrl(p.id, p.path) };
+    },
+  ],
+  // ---- guia do projeto (SPEC.md na raiz): ver o estado; criar o modelo só pelo Claudio’s Club (fora da lista de funcionários em apiPolicy.ts) ----
+  ['GET', new RegExp(`^/api/projects/${ID}/guide$`), async ({ params: [id] }) => {
+    const dir = await projectPathOf(id!);
+    return dir ? guideStatus(dir) : null;
+  }],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/guide$`),
+    async ({ params: [id], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('o guia só é criado pelo Claudio’s Club');
+      const dir = await projectPathOf(id!);
+      if (!dir) return null;
+      await createGuide(dir);
+      return guideStatus(dir);
+    },
+  ],
+  // Ações do guia (teste de compreensão, divergência, rascunho): abrem uma conversa nova do funcionário, com o texto da ação.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/guide/run$`),
+    async ({ params: [id], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('as ações do guia só pelo Claudio’s Club');
+      const dir = await projectPathOf(id!);
+      if (!dir) return null;
+      return runGuideAction(
+        { readProfile: (staffId) => readProfile(dir, staffId), send: (staffId, text, force) => sendNewConversation(id!, staffId, text, force) },
+        dir,
+        body,
+      ).catch((err) => {
+        throw err instanceof GuideActionError ? new BadRequest(err.message) : err;
+      });
     },
   ],
   // ---- arquivos do projeto (aba de arquivos): listar e ler; gravar só pelo Claudio’s Club ----
@@ -1457,7 +1511,10 @@ const server = http.createServer(async (req, res) => {
         // Mescla recusada (sem testes, teste vermelho, conflito): 409 com o motivo; `no-tests` dá para confirmar.
         if (err instanceof CodeError) return send(res, 409, { error: err.message, code: err.code });
         // Ficha em uso (conversa trabalhando): 409, antes do StaffError genérico (400).
+        if (err instanceof StaffOpenTasksError) return send(res, 409, { error: err.message, code: err.code, openTasks: err.openTasks });
         if (err instanceof StaffBusyError) return send(res, 409, { error: err.message });
+        // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
+        if (err instanceof GuideExistsError) return send(res, 409, { error: 'exists' });
         if (
           err instanceof BadRequest ||
           err instanceof StaffError ||
@@ -1469,6 +1526,7 @@ const server = http.createServer(async (req, res) => {
           err instanceof AgentError ||
           err instanceof WorkspaceError ||
           err instanceof SkillError ||
+          err instanceof McpError ||
           err instanceof ProjectError ||
           err instanceof UpdateError ||
           (err as NodeJS.ErrnoException | null)?.code === 'EEXIST'

@@ -120,6 +120,8 @@ export function App() {
   const [tasksFor, setTasksFor] = useState<string | null>(null);
   /** Arquivos do projeto abertos (id do projeto). */
   const [filesFor, setFilesFor] = useState<string | null>(null);
+  /** Arquivo que os Arquivos abrem já no editor (ex.: o guia SPEC.md). */
+  const [filesPath, setFilesPath] = useState<string | null>(null);
   /** Tarefa escolhida no Ctrl+K: o quadro de tarefas abre com ela selecionada. */
   const [jumpTask, setJumpTask] = useState<string | null>(null);
   /** Conversa achada na busca do Ctrl+K (ou a do aviso): o painel do funcionário abre nela. Vale só para a seleção que a pediu. */
@@ -202,6 +204,19 @@ export function App() {
     setSelectedId(node);
   }, []);
   const inbox = useInbox(openInbox);
+
+  // Conversa que acabou de nascer (pedido do guia do projeto): o painel do funcionário abre nela, mesmo antes de o quadro relê-la.
+  const openNewConversation = useCallback(
+    (projectId: string, staffId: string, sessionId: string) => {
+      const node = staffNodeId(projectId, staffId);
+      jumpSelection.current = node;
+      setJumpConversation({ node, sessionId });
+      setJumpTarget({ projectId, staffId, sessionId, nonce: ++jumpNonce.current });
+      setSelectedId(node);
+      reloadSoon();
+    },
+    [reloadSoon],
+  );
 
   // O título da aba traz quantas coisas esperam você: dá para ver sem trazer o Claudio’s Club para a frente.
   useEffect(() => {
@@ -442,7 +457,15 @@ export function App() {
           {selection.kind === 'project' && (
             <ProjectPanel
               onTasks={() => setTasksFor(selection.id)}
-              onFiles={() => setFilesFor(selection.id)}
+              onFiles={() => {
+                setFilesPath(null);
+                setFilesFor(selection.id);
+              }}
+              onOpenFile={(path) => {
+                setFilesPath(path);
+                setFilesFor(selection.id);
+              }}
+              onOpenConversation={(staffId, sessionId) => openNewConversation(selection.id, staffId, sessionId)}
               tasks={taskSummary[selection.id] ?? null}
               office={<ProjectOffice projectId={selection.id} config={config} onConfig={setConfig} />}
               onNewAgent={() => setAgentForm({ scope: 'project', projectId: selection.id })}
@@ -632,6 +655,7 @@ export function App() {
           key={filesFor}
           projectId={filesFor}
           projectName={board.projects.find((p) => p.id === filesFor)?.name ?? filesFor}
+          openPath={filesPath}
           onClose={() => setFilesFor(null)}
         />
       )}

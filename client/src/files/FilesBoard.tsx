@@ -45,7 +45,18 @@ function deleteProblem(err: unknown, isDir: boolean): string {
   return (err as Error).message;
 }
 
-export function FilesBoard({ projectId, projectName, onClose }: { projectId: string; projectName: string; onClose: () => void }) {
+/** `openPath`: arquivo que já abre no editor (ex.: o guia SPEC.md, pelo painel do projeto). */
+export function FilesBoard({
+  projectId,
+  projectName,
+  openPath,
+  onClose,
+}: {
+  projectId: string;
+  projectName: string;
+  openPath?: string | null;
+  onClose: () => void;
+}) {
   const [dirs, setDirs] = useState<Record<string, Dir>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']));
   const [opened, setOpened] = useState<Opened | null>(null);
@@ -192,6 +203,13 @@ export function FilesBoard({ projectId, projectName, onClose }: { projectId: str
     }
     await load(entry.path);
   };
+
+  // Só na abertura: o arquivo pedido de fora já entra no editor.
+  useEffect(() => {
+    if (!openPath) return;
+    void openFile({ name: openPath.split('/').at(-1)!, path: openPath, type: 'file' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const toggleDir = (entry: FileEntry) => {
     const path = entry.path;

@@ -512,9 +512,14 @@ textarea.q-field { resize: vertical; }
 .files-image { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .files-image-view { flex: 1; min-height: 0; display: grid; place-items: center; overflow: auto; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
 .files-image-view img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
-.files-conflict { border: 1px solid var(--waiting); border-radius: 10px; padding: 8px 12px; background: color-mix(in srgb, var(--waiting) 12%, transparent); font-size: 13px; }
+/* Aviso amarelo em caixa: conflito ao salvar e o alerta do guia (SPEC.md vai para o git). */
+:is(.files-conflict, .guide-alert) { border: 1px solid var(--waiting); border-radius: 10px; padding: 8px 12px; background: color-mix(in srgb, var(--waiting) 12%, transparent); font-size: 13px; }
 .files-conflict p { margin: 0 0 6px; }
 .files-conflict .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+.guide-who { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 8px 0 0; }
+.guide-who .setting-select { flex: 1 1 160px; min-width: 0; max-width: 100%; }
+.guide-actions { flex-wrap: wrap; }
+.guide-hints { margin: 8px 0 0; padding-left: 16px; display: grid; gap: 4px; }
 @media (max-width: 640px) {
   .files-body { grid-template-columns: minmax(0, 1fr); }
   .files-body.is-editing .files-tree, .files-body:not(.is-editing) .files-editor { display: none; }
@@ -847,7 +852,7 @@ button.ranking-row:hover { border-color: var(--accent); }
 .btn-secondary:hover:not(:disabled) { border-color: var(--accent); }
 .btn-secondary:disabled { opacity: 0.6; cursor: default; }
 .btn-secondary.btn-icon { width: 28px; height: 28px; padding: 0; display: inline-grid; place-items: center; }
-.btn-primary.btn-with-icon { display: inline-flex; align-items: center; gap: 6px; }
+:is(.btn-primary, .btn-secondary).btn-with-icon { display: inline-flex; align-items: center; gap: 6px; }
 .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 0; }
 .stats div { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
 .stats dt { font-size: 11px; color: var(--muted); }
@@ -986,6 +991,26 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 /* Aviso de FTP sem criptografia: texto, não pílula (quebra em duas linhas). */
 .conn-warn { margin: 0; padding: 4px 0 4px 10px; border-left: 3px solid var(--warn); color: var(--warn); font-size: 12.5px; }
 .ok { color: var(--ink-green); }
+
+/* ---- MCPs (Configurações › MCPs): grupos por origem, pares chave/valor ---- */
+.mcp-servers { flex: 1 1 100%; min-width: 0; display: grid; gap: 14px; }
+.mcp-group { display: grid; gap: 6px; min-width: 0; }
+.mcp-group > p, .mcp-servers > .actions, .mcp-servers li > p { margin: 0; }
+.mcp-group-title { margin: 0; font-size: 13px; }
+.mcp-project { display: grid; gap: 4px; font-size: 13px; font-weight: 600; padding-top: 8px; border-top: 1px solid var(--line); }
+.mcp-line, .mcp-keys, .mcp-tools { min-width: 0; overflow-wrap: anywhere; }
+.mcp-keys { margin: 0; }
+.mcp-form { padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+.mcp-form .segmented { flex-wrap: wrap; }
+.mcp-form > p { margin: 0; }
+.mcp-pairs { margin: 0; padding: 0; border: 0; display: grid; gap: 6px; min-width: 0; }
+.mcp-pairs legend { padding: 0 0 4px; font-size: 13px; font-weight: 600; }
+.mcp-pairs .actions { margin: 0; }
+.mcp-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto; gap: 6px; align-items: center; }
+.mcp-key { min-width: 0; overflow-wrap: anywhere; font-size: 12.5px; }
+.btn-secondary.mcp-pair-remove { padding: 6px; line-height: 0; }
+.mcp-pair-remove svg { width: 16px; height: 16px; }
+@media (max-width: 480px) { .mcp-pair { grid-template-columns: minmax(0, 1fr) auto; } .mcp-pair > :nth-child(2) { grid-column: 1; } .mcp-pair > :nth-child(3) { grid-row: 1 / span 2; grid-column: 2; } }
 
 /* ---- caixa "precisa de mim": botão com contador no topo e a lista embaixo ---- */
 .inbox { position: relative; }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AppConfig } from '../../../shared/model';
-import { api, isPairingError, type DirectoryStaff, type StaffRef } from '../api';
+import { api, deleteStaffConfirm, isPairingError, type DirectoryStaff, type StaffRef } from '../api';
 import { t } from '../i18n';
 import { Face } from './CopyFromCompany';
 import { hrGroups, linkCandidates, orphansOf } from './directory';
@@ -99,7 +99,8 @@ export function HrPanel({ onOpen, onConfig, onChanged, onNotice }: Props) {
     const ask = t('hr.deleteConfirm', { name: p.name, project: p.projectName });
     if (!window.confirm(orphans.length ? `${ask}\n\n${t('hr.deleteOrphans', { names: names(orphans) })}` : ask)) return;
     void act(async () => {
-      const r = await api.deleteStaff(p.projectId, p.staffId);
+      const r = await deleteStaffConfirm(p.projectId, p.staffId, (n) => window.confirm(t('hr.deleteOpenTasks', { name: p.name, n })));
+      if (!r) return null;
       // Quem ficou sem chefe vem do servidor (pode ter mudado desde a lista).
       const left = (people ?? []).filter((x) => x.projectId === p.projectId && r.orphaned.includes(x.staffId));
       return left.length ? t('hr.deletedOrphans', { name: p.name, names: names(left) }) : t('hr.deleted', { name: p.name });
