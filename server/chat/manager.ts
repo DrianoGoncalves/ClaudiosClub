@@ -24,7 +24,7 @@ import { readHistory } from './history';
 import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
 import { finalQuestion } from './question';
 import { CEILING_AT, contextNotice, kTokens, NOTICE_AT, rereadUsd, switchDecision, usd, type TurnInfo } from './contextPolicy';
-import { BOOST_NOTICE, CONTEXT_NOTICE } from './items';
+import { BOOST_NOTICE, CONTEXT_NOTICE, STAFF_NOTICE } from './items';
 import { InboxState } from '../inboxState';
 import { isAlive, killTree, type ChatRegistry } from './registry';
 import { CONTINUE_TEXT, type AutoContinue, type AutoContinueEvent, type Pending } from './autoContinue';
@@ -444,8 +444,10 @@ export class ChatManager {
     const used = chat.contextUsed;
     const big = used !== null && used >= NOTICE_AT ? contextNotice(used, chat.model, CONTEXT_NOTICE, chat.fast) : null;
     const boost = await this.applyBoost(chat);
-    const notice = [ficha, big, boost].filter(Boolean).join('\n\n') || undefined;
-    chat.send(text, priority, images, notice, files);
+    // "continue" e despertador são da plataforma, mesmo na conversa delegada: só a mensagem do colega leva a marca.
+    const fromStaff = delegated && !auto;
+    const notice = [fromStaff ? STAFF_NOTICE : null, ficha, big, boost].filter(Boolean).join('\n\n') || undefined;
+    chat.send(text, priority, images, notice, files, fromStaff);
     this.opts.onSent?.(chat.sessionId);
     return chat.sessionId;
   }

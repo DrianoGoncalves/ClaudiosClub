@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import type { ChatItem, ContextUsage } from '../../shared/model';
 import { tryJson } from '../adapters/claude/fsutil';
 import { contextWindowFor } from '../adapters/claude/pricing';
-import { inputText, isInjectedUserText, resultText, stripCheckpoint, toolSummary } from './items';
+import { hasStaffNotice, inputText, isInjectedUserText, resultText, stripCheckpoint, toolSummary } from './items';
 
 // Histórico da conversa a partir do transcript (~/.claude/projects/.../<sessão>.jsonl).
 // Transcripts passam de MB: lê só o final e devolve as últimas mensagens.
@@ -67,7 +67,8 @@ export async function readHistory(
       const images = blocks.filter((b) => b.type === 'image').length;
       const docs = blocks.filter((b) => b.type === 'document').map((b) => (typeof b.title === 'string' ? b.title : 'arquivo'));
       const texts = blocks.filter((b) => b.type === 'text' && typeof b.text === 'string' && !isInjectedUserText(b.text as string));
-      if ((images || docs.length) && !texts.length) put({ kind: 'user', id: `u:${at}:${items.length}`, text: '', at, ...(images && { images }), ...(docs.length && { files: docs }), ...uuid });
+      const fromStaff = hasStaffNotice(blocks) ? { fromStaff: true } : {};
+      if ((images || docs.length) && !texts.length) put({ kind: 'user', id: `u:${at}:${items.length}`, text: '', at, ...(images && { images }), ...(docs.length && { files: docs }), ...uuid, ...fromStaff });
       texts.forEach((b, i) =>
         put({
           kind: 'user',
@@ -77,6 +78,7 @@ export async function readHistory(
           ...(i === 0 && images && { images }),
           ...(i === 0 && docs.length && { files: docs }),
           ...(i === 0 && uuid),
+          ...fromStaff,
         }),
       );
       for (const b of blocks) {

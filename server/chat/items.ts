@@ -70,6 +70,14 @@ export const CONTEXT_NOTICE = '[MyCo] Contexto desta conversa:';
 /** Começo do aviso de folga de cota para o funcionário (ver server/quotaBoost.ts); a conversa não mostra. */
 export const BOOST_NOTICE = '[MyCo] Folga de cota';
 
+/** Marca que vai junto da mensagem de outro funcionário (delegação): a conversa não mostra, mas o histórico lê. */
+export const STAFF_NOTICE = '[MyCo] Mensagem de outro funcionário.';
+
+/** A mensagem veio com a marca de outro funcionário (blocos do transcript)? */
+export function hasStaffNotice(blocks: Array<Record<string, unknown>>): boolean {
+  return blocks.some((b) => b.type === 'text' && typeof b.text === 'string' && b.text.trimStart().startsWith(STAFF_NOTICE));
+}
+
 /**
  * Texto que o Claude Code injeta como se fosse do usuário (lembretes do sistema, saída de
  * comandos locais, avisos). Não é o que a pessoa digitou: fica fora da conversa.
@@ -87,6 +95,7 @@ export function isInjectedUserText(text: string): boolean {
     // Avisos do Claudio’s Club que vão junto com a sua mensagem: a ficha mudou, o contexto está grande.
     t.startsWith('[MyCo] Sua ficha foi atualizada') ||
     t.startsWith(CONTEXT_NOTICE) ||
-    t.startsWith(BOOST_NOTICE)
+    t.startsWith(BOOST_NOTICE) ||
+    t.startsWith(STAFF_NOTICE)
   );
 }

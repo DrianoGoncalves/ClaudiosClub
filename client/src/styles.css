@@ -295,7 +295,9 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .msg { max-width: 88%; padding: 8px 11px; border-radius: 12px; font-size: 14px; line-height: 1.45; word-wrap: break-word; }
 .msg-user { align-self: flex-end; background: var(--ink-blue); color: var(--card); border-bottom-right-radius: 4px; white-space: pre-wrap; }
 /* Resposta do funcionário: tokens trocados só dentro do balão (código, tabelas e links do markdown seguem legíveis no fundo escuro). */
-.msg-assistant { --ink: var(--msg-assistant-ink); --muted: var(--msg-assistant-muted); --ink-blue: var(--msg-assistant-link); --line: color-mix(in srgb, var(--msg-assistant-muted) 45%, transparent); align-self: flex-start; background: var(--msg-assistant-bg); color: var(--ink); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.msg-assistant, .msg-staff { --ink: var(--msg-assistant-ink); --muted: var(--msg-assistant-muted); --ink-blue: var(--msg-assistant-link); --line: color-mix(in srgb, var(--msg-assistant-muted) 45%, transparent); align-self: flex-start; background: var(--msg-assistant-bg); color: var(--ink); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+/* Mensagem de outro funcionário (delegação): a cor do balão dele, mas à direita como a sua. */
+.msg-staff { align-self: flex-end; border-bottom-left-radius: 12px; border-bottom-right-radius: 4px; white-space: pre-wrap; }
 /* Aviso automático da plataforma (chega como mensagem do usuário, com prefixo): à esquerda, neutro, tracejado. */
 .msg-system { position: relative; align-self: flex-start; background: var(--panel); border: 1px dashed var(--line); border-bottom-left-radius: 4px; font-size: 13px; }
 .msg-system-badge { display: inline-block; margin-bottom: 4px; white-space: nowrap; }
@@ -345,7 +347,7 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .md-code { margin: 0; padding: 4px 10px 8px; overflow-x: auto; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; line-height: 1.45; }
 .md-code code { background: none; padding: 0; overflow-wrap: normal; }
 /* Mensagem do usuário que já vem em markdown: a bolha é azul, então código e links herdam a cor dela. */
-.msg-user .md { white-space: normal; }
+.msg-user .md, .msg-staff .md { white-space: normal; }
 .msg-user .md :is(a, code, blockquote, del, .md-code-bar, .md-copy) { color: inherit; }
 .msg-user .md :is(code, .md-code-wrap, .md-table th) { background: color-mix(in srgb, var(--card) 18%, transparent); }
 .tool { align-self: flex-start; max-width: 92%; font-size: 12.5px; border-left: 3px solid var(--ink-muted); padding: 2px 8px; }
@@ -718,9 +720,9 @@ textarea.q-field { resize: vertical; }
 .chat-file { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; }
 .chat-file button { border: 0; background: transparent; color: var(--muted); cursor: pointer; }
 /* "Voltar até aqui", MCPs e segundo plano da conversa, "o que mudou". */
-.msg-user, .msg-assistant { position: relative; }
+.msg-user, .msg-assistant, .msg-staff { position: relative; }
 .msg-rewind { position: absolute; top: -9px; right: 6px; display: none; padding: 0 6px; font-size: 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); cursor: pointer; }
-.msg-user:hover .msg-rewind, .msg-system:hover .msg-rewind, .msg-assistant:hover .msg-copy, .msg-rewind:focus-visible { display: inline-block; }
+.msg-user:hover .msg-rewind, .msg-staff:hover .msg-rewind, .msg-system:hover .msg-rewind, .msg-assistant:hover .msg-copy, .msg-rewind:focus-visible { display: inline-block; }
 .msg-copy:hover { color: var(--ink); }
 /* Toque não tem hover: "Copiar" da resposta fica sempre visível. */
 @media (hover: none) { .msg-copy { display: inline-block; } }

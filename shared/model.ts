@@ -834,6 +834,8 @@ export type ChatItem =
       uuid?: string;
       /** Guardada pelo Claudio’s Club até o funcionário terminar a outra tarefa (o motivo). */
       held?: string;
+      /** Quem mandou foi outro funcionário (pela API), não você. */
+      fromStaff?: boolean;
     }
   | { kind: 'assistant'; id: string; text: string; at: string | null }
   | {

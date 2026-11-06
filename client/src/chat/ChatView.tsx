@@ -690,8 +690,10 @@ function Item({
     case 'user': {
       // Aviso automático da plataforma (entrega de tarefa, contexto…): à esquerda, neutro, com badge.
       const system = systemMessageText(item.text);
+      // Colega que delegou: no tom do funcionário (escuro), mas à direita, como quem fala com ele.
+      const kind = system !== null ? 'msg-system' : item.fromStaff ? 'msg-staff' : 'msg-user';
       return (
-        <div className={`msg ${system === null ? 'msg-user' : 'msg-system'}`} data-item-id={item.id}>
+        <div className={`msg ${kind}`} data-item-id={item.id}>
           {system !== null && (
             <span className="badge dim msg-system-badge" title={t('chat.systemMessageHelp')}>
               {t('chat.systemMessage')}

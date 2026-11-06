@@ -8,7 +8,7 @@ import type { AskedQuestion, ChatEvent, StaffProfile, UsageLimit } from '../shar
 import { answerOf, collectAnswers, initialDrafts, previewDoc } from '../client/src/chat/questionAnswers';
 import { AnnotationsField, AnswersField } from '../server/chat/questions';
 import { readHistory } from '../server/chat/history';
-import { toolSummary } from '../server/chat/items';
+import { STAFF_NOTICE, toolSummary } from '../server/chat/items';
 import { ChatManager } from '../server/chat/manager';
 import { ChatRegistry } from '../server/chat/registry';
 import { ChatProcess, STREAM_FLAGS } from '../server/chat/process';
@@ -815,6 +815,35 @@ describe('readHistory', () => {
     ]);
     expect(items[2]).toMatchObject({ summary: 'npm test', result: 'ok' });
     expect(context).toEqual({ used: 100_000, window: 1_000_000, percent: 10 });
+  });
+
+  it('mensagem de outro funcionário volta marcada (fromStaff) e a marca não aparece como texto', async () => {
+    const file = path.join(root, 'staff.jsonl');
+    const lines = [
+      { type: 'user', timestamp: '2026-10-26T10:00:00Z', message: { content: [{ type: 'text', text: STAFF_NOTICE }, { type: 'text', text: 'Revise o PR 12' }] } },
+      { type: 'user', timestamp: '2026-10-26T10:01:00Z', message: { content: [{ type: 'text', text: 'Pode seguir' }] } },
+    ];
+    await fs.writeFile(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    const { items } = await readHistory(file, {});
+    expect(items.map((i) => [i.kind === 'user' ? i.text : '', i.kind === 'user' ? !!i.fromStaff : null])).toEqual([
+      ['Revise o PR 12', true],
+      ['Pode seguir', false],
+    ]);
+  });
+});
+
+describe('mensagem de colega (delegação) na conversa ao vivo', () => {
+  it('leva a marca no que vai ao claude e no item; a sua mensagem não', async () => {
+    const f = fakeClaude();
+    const chat = new ChatProcess({ sessionId: 's', cwd: '.', args: [], spawnImpl: f.spawnImpl });
+    chat.start();
+    chat.send('Revise o PR 12', 'next', [], STAFF_NOTICE, [], true);
+    chat.send('ok, e o 13?');
+    await tick();
+    const sent = (f.written as Array<{ type: string; message: { content: Array<{ text: string }> } }>).filter((w) => w.type === 'user');
+    expect(sent[0]!.message.content.map((b) => b.text)).toEqual([STAFF_NOTICE, 'Revise o PR 12']);
+    expect(sent[1]!.message.content.map((b) => b.text)).toEqual(['ok, e o 13?']);
+    expect(chat.snapshot().items.map((i) => (i.kind === 'user' ? !!i.fromStaff : null))).toEqual([true, false]);
   });
 });
 
