@@ -1305,6 +1305,9 @@ body.is-resizing { cursor: ew-resize; user-select: none; }
 
 .browser-check { display: block; margin: 6px 0; line-height: 1.45; white-space: normal; }
 .browser-check a { color: inherit; font-weight: 600; }
+a.link { color: var(--ink-blue); text-decoration: underline; text-underline-offset: 2px; }
+.check-link { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.check-link a { flex: none; }
 button.link { background: none; border: none; padding: 0; color: var(--ink-blue); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 
 /* "Valeu a pena?" */

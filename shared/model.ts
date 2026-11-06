@@ -796,6 +796,9 @@ export interface FtpConnectionInput {
   originalName?: string;
 }
 
+/** Página da extensão Claude in Chrome na Chrome Web Store (sem parâmetros de rastreio). */
+export const CHROME_EXTENSION_URL = 'https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn';
+
 /** Pré-requisitos do Claude in Chrome nesta máquina; null = não dá para conferir neste sistema. */
 export interface BrowserStatus {
   /** A extensão está instalada em algum perfil do navegador. */

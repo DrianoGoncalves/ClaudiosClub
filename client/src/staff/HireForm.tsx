@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type {
-  Autonomy,
-  Board,
-  Effort,
-  GitState,
-  LaunchResult,
-  McpServerInfo,
-  Playbook,
-  ServerInfo,
-  Session,
-  StaffInput,
-  StaffProfile,
+import {
+  CHROME_EXTENSION_URL,
+  type Autonomy,
+  type Board,
+  type Effort,
+  type GitState,
+  type LaunchResult,
+  type McpServerInfo,
+  type Playbook,
+  type ServerInfo,
+  type Session,
+  type StaffInput,
+  type StaffProfile,
 } from '../../../shared/model';
 import { api, withUsageConfirm, type DirectoryPerson } from '../api';
 import { portraitUrl } from '../board/nodes';
@@ -641,13 +642,17 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           </p>
         )}
 
-        <label className="check">
-          <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} /> {t('staff.browserLabel')}
-          <span className="muted small">
-            {' '}
-            {t('staff.browserHintA')}<code>claude --chrome</code>{t('staff.browserHintB')}
-          </span>
-        </label>
+        <div className="check-link">
+          <label className="check">
+            <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} /> {t('staff.browserLabel')}
+          </label>
+          <a className="link small" href={CHROME_EXTENSION_URL} target="_blank" rel="noopener noreferrer">
+            {t('staff.installLink')}
+          </a>
+        </div>
+        <p className="muted small">
+          {t('staff.browserHintA')}<code>claude --chrome</code>{t('staff.browserHintB')}
+        </p>
         {browser && <BrowserCheck />}
         </div>
 
