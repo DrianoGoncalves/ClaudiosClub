@@ -405,9 +405,9 @@ export function buildGraph(
       const b = measure(r, memo);
       return { w: b.w + ROOM_PAD * 2, h: b.h + ROOM_PAD * 2 };
     }),
+    blocks,
     Math.min(ASPECT_MAX, Math.max(ASPECT_MIN, opts.aspect ?? GRID_ASPECT)),
   );
-    blocks,
   rooms.forEach((room, i) => {
     const start = nodes.length;
     place(room, spots[i]!.x + ROOM_PAD, spots[i]!.y + ROOM_PAD, memo, nodes, edges);
@@ -509,8 +509,6 @@ function gridSpots(boxes: Array<{ w: number; h: number }>, aspect: number, gap =
   return spots;
 }
 
-function roomNode(owner: string, members: BoardNode[], color: ProjectColor | null): BoardNode {
-  const n = node(roomNodeId(owner), 'room', { owner, members: members.map((m) => m.id), color });
 /**
  * Como `gridSpots`, mas as salas do mesmo bloco (`blocks[i]`, seguidos na lista) formam uma grade
  * própria, e os blocos formam a grade de fora, com folga maior. Um bloco só = a grade simples.
@@ -540,6 +538,8 @@ function blockSpots(boxes: Array<{ w: number; h: number }>, blocks: number[], as
   return out;
 }
 
+function roomNode(owner: string, members: BoardNode[], color: ProjectColor | null): BoardNode {
+  const n = node(roomNodeId(owner), 'room', { owner, members: members.map((m) => m.id), color });
   // Por baixo das linhas e dos cartões; clicar nela seleciona o dono (ver Board.tsx).
   return { ...n, ...roomFrame(members), selectable: false, focusable: false, zIndex: -1 } as BoardNode;
 }
