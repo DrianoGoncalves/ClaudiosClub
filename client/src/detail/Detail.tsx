@@ -576,6 +576,8 @@ export function ProjectPanel({
 }) {
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A aba fica ao trocar de projeto (o painel não remonta), como a do ⋯ do funcionário.
+  const [tab, setTab] = useState<ProjectTab>('project');
 
   useEffect(() => {
     setDetail(null);
@@ -642,34 +644,76 @@ export function ProjectPanel({
           </p>
         )}
       </header>
-      {project.exists && <ProjectGuide projectId={project.id} onOpen={onOpenFile} />}
-      <section className="section">
-        <h3>{t('detail.roomColor')}</h3>
-        <RoomColorPicker value={color} onChange={onColor} />
-        <p className="muted small">
-          {project.worktreeOf ? t('detail.worktreeRoomNote') : t('detail.roomColorNote')}
-        </p>
-      </section>
-      {project.exists && !project.worktreeOf && office}
-      {project.exists && <ImagePicker image={image} onChange={onImage} />}
-      {project.exists && <Attachments projectId={project.id} />}
-      <TeamList rows={team} totalUsd={totalUsd} onOpen={onOpenStaff} />
-      <SessionList
-        sessions={sessions.filter((s) => !owned.has(s.id) && !hiddenSessions?.has(s.id))}
-        costs={cost?.sessions ?? {}}
-        totalUsd={totalUsd}
-        onOpen={onOpenSession}
-      />
-      <AgentList
-        agents={detail.agents}
-        empty={t('detail.noAgentsProject')}
-        onNew={project.exists ? onNewAgent : undefined}
-        onEdit={project.exists ? onEditAgent : undefined}
-      />
-      <SkillList skills={detail.skills} />
+      <div className="tabs" role="tablist" aria-label={t('detail.kickerProject')}>
+        {PROJECT_TABS.map(([k, label]) => (
+          <button
+            key={k}
+            type="button"
+            role="tab"
+            id={`project-tab-${k}`}
+            aria-selected={tab === k}
+            aria-controls="project-tab-panel"
+            className={`tab ${tab === k ? 'is-active' : ''}`}
+            onClick={() => setTab(k)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div role="tabpanel" id="project-tab-panel" aria-labelledby={`project-tab-${tab}`}>
+        {tab === 'project' && (
+          <>
+            {project.exists && <ProjectGuide projectId={project.id} onOpen={onOpenFile} />}
+            {project.exists && !project.worktreeOf && office}
+            {project.exists && <Attachments projectId={project.id} />}
+          </>
+        )}
+        {tab === 'team' && (
+          <>
+            <TeamList rows={team} totalUsd={totalUsd} onOpen={onOpenStaff} />
+            <SessionList
+              sessions={sessions.filter((s) => !owned.has(s.id) && !hiddenSessions?.has(s.id))}
+              costs={cost?.sessions ?? {}}
+              totalUsd={totalUsd}
+              onOpen={onOpenSession}
+            />
+          </>
+        )}
+        {tab === 'tools' && (
+          <>
+            <AgentList
+              agents={detail.agents}
+              empty={t('detail.noAgentsProject')}
+              onNew={project.exists ? onNewAgent : undefined}
+              onEdit={project.exists ? onEditAgent : undefined}
+            />
+            <SkillList skills={detail.skills} />
+          </>
+        )}
+        {tab === 'look' && (
+          <>
+            <section className="section">
+              <h3>{t('detail.roomColor')}</h3>
+              <RoomColorPicker value={color} onChange={onColor} />
+              <p className="muted small">
+                {project.worktreeOf ? t('detail.worktreeRoomNote') : t('detail.roomColorNote')}
+              </p>
+            </section>
+            {project.exists && <ImagePicker image={image} onChange={onImage} />}
+          </>
+        )}
+      </div>
     </>
   );
 }
+
+type ProjectTab = 'project' | 'team' | 'tools' | 'look';
+const PROJECT_TABS: Array<[ProjectTab, string]> = [
+  ['project', t('detail.tabProject')],
+  ['team', t('detail.tabTeam')],
+  ['tools', t('detail.tabTools')],
+  ['look', t('detail.tabLook')],
+];
 
 /** Logo do projeto (fica em .myco/ do projeto). */
 function ImagePicker({ image, onChange }: { image: string | null; onChange: (dataUrl: string | null) => Promise<void> }) {
