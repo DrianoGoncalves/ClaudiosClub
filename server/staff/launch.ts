@@ -37,6 +37,8 @@ export interface LaunchContext {
   skillLibraryDir?: string;
   /** Quem reporta a este funcionário (a seção "Sua equipe" da ficha). */
   team?: TeamMember[];
+  /** Cargos prontos para contratar por roleId (só quem pode contratar; ver FichaContext.roles). */
+  roles?: { id: string; label: string }[];
   /** Agents da conta (padrão ~/.claude/agents); os testes trocam. */
   userAgentsDir?: string;
 }
@@ -152,7 +154,7 @@ export function staffSettings() {
  */
 export async function writeFicha(
   profile: StaffProfile,
-  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'librarySkills'>,
+  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'roles' | 'librarySkills'>,
   absolute = false,
 ): Promise<FichaContext> {
   const rel = (file: string) => (absolute ? file : path.relative(ctx.projectPath, file));
@@ -168,6 +170,7 @@ export async function writeFicha(
     worktree: profile.worktree ? (ctx.worktree ?? null) : null,
     servers: ctx.servers,
     team: ctx.team,
+    roles: ctx.roles,
     librarySkills: ctx.librarySkills,
     // Lido a cada sessão (writeFicha roda em prepareRun): criar ou apagar o SPEC.md vale na próxima conversa.
     guide: await hasGuide(ctx.projectPath),

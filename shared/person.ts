@@ -25,4 +25,4 @@ export const ALLOCATION_FIELDS = [
 ] as const satisfies readonly (keyof StaffProfile)[];
 
 /** Só do pedido: não são campos da ficha (abrir conversa, adotar sessão, confirmar consumo). */
-export const REQUEST_FIELDS = ['launch', 'adoptSessionId', 'force'] as const;
+export const REQUEST_FIELDS = ['launch', 'adoptSessionId', 'force', 'roleId'] as const;
