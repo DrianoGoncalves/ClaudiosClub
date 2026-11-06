@@ -28,6 +28,7 @@ import type { ToolAdapter } from '../adapters/types';
 import { effectiveBrowser } from '../browser';
 import { readConfig, setArchived, workspaceOf } from '../config';
 import { librarySkillsOf } from '../skillLibrary';
+import { listRoles } from '../roles';
 import { readUsage } from '../usage';
 import { projectBudgetHit, usageStopHit, UsageStopError } from '../usageStop';
 import { TEMP_IDLE_DAYS } from '../../shared/model';
@@ -81,6 +82,35 @@ export interface StaffDirectoryPerson {
 
 /** Conflito com o estado atual (ex.: a conversa do funcionário está trabalhando): 409 na rota. */
 export class StaffBusyError extends StaffError {}
+
+/** O que um cargo preenche na ficha quando o pedido não traz a chave. canHire, servidores e navegador seguem as regras do hire. */
+const ROLE_FIELDS = ['role', 'mission', 'rules', 'doneWhen', 'model', 'effort', 'autonomy', 'playbook', 'worktree'] as const;
+
+/**
+ * Com `roleId`, o cargo entra antes da validação: o que o pedido trouxe (inclusive null ou vazio) ganha do cargo.
+ * Cargo que não existe é erro (não se contrata um cargo adivinhado).
+ */
+async function withRole(body: unknown): Promise<unknown> {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+  const raw = body as Record<string, unknown>;
+  if (raw.roleId === undefined || raw.roleId === null) return body;
+  const id = String(raw.roleId);
+  const role = (await listRoles()).find((r) => r.id === id);
+  if (!role) throw new StaffError(`cargo não encontrado: ${id}`);
+  const fromRole: Record<(typeof ROLE_FIELDS)[number], unknown> = {
+    role: role.role,
+    mission: role.mission,
+    rules: role.rules,
+    doneWhen: role.doneWhen,
+    model: role.model || null, // '' (padrão do Claude Code) não passa no schema: vira null
+    effort: role.effort,
+    autonomy: role.autonomy,
+    playbook: role.playbook,
+    worktree: role.worktree,
+  };
+  const filled = Object.fromEntries(ROLE_FIELDS.filter((k) => !(k in raw) && fromRole[k] !== undefined).map((k) => [k, fromRole[k]]));
+  return { ...filled, ...raw };
+}
 
 /** Tarefas abertas da ficha, sem `force`: 409 com `code` e a quantidade, para a tela pedir a segunda confirmação. */
 export class StaffOpenTasksError extends StaffBusyError {
@@ -250,7 +280,7 @@ export class StaffService {
   ): Promise<{ profile: StaffProfile; launch: LaunchResult | null } | null> {
     const project = await this.project(projectId);
     if (!project) return null;
-    const parsed = StaffInputSchema.safeParse(body);
+    const parsed = StaffInputSchema.safeParse(await withRole(body));
     if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'ficha inválida');
     const input = parsed.data;
 
@@ -874,6 +904,13 @@ export class StaffService {
 
   /** `createWorktree`: vai abrir uma sessão agora, então a worktree da ficha precisa existir. */
   private async context(project: Project, profile: StaffProfile, createWorktree = false): Promise<LaunchContext> {
+    // Quem pode contratar vê os cargos prontos (roleId). Se a leitura falhar, a ficha sai sem a lista.
+    const roles = profile.canHire
+      ? await listRoles().then(
+          (rs) => rs.map((r) => ({ id: r.id, label: r.label })),
+          () => null,
+        )
+      : null;
     const [config, managers, servers, worktree, everyone] = await Promise.all([
       readConfig(),
       Promise.all(profile.reportsTo.map((id) => readProfile(project.path, id))),
@@ -909,6 +946,7 @@ export class StaffService {
       team: everyone
         .filter((s) => s.id !== profile.id && s.reportsTo.includes(profile.id) && !s.ended)
         .map((s) => ({ id: s.id, name: s.name, role: s.role, mission: s.mission, ...(s.temporary && { temporary: true }) })),
+      ...(roles && { roles }),
     };
   }
 

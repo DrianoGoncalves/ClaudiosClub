@@ -50,6 +50,8 @@ export const StaffInputSchema = z.object({
   adoptSessionId: z.string().uuid().optional(),
   /** Abrir mesmo com o consumo acima da linha de parada (confirmado no Claudio’s Club). */
   force: z.boolean().optional(),
+  /** Cargo pronto (ou seu) de server/roles.ts: preenche a ficha; o que vier no pedido ganha. Não vai para o perfil. */
+  roleId: z.string().regex(/^[a-z0-9-]{1,40}$/, 'cargo inválido').optional(),
 });
 export type StaffInputParsed = z.infer<typeof StaffInputSchema>;
 
@@ -71,7 +73,7 @@ export const RoutineSchema = z.object({
 });
 export const RoutinesSchema = z.array(RoutineSchema).max(10, 'no máximo 10 rotinas por funcionário');
 
-const ProfileSchema = StaffInputSchema.omit({ portraitDataUrl: true, launch: true, adoptSessionId: true, force: true }).extend({
+const ProfileSchema = StaffInputSchema.omit({ portraitDataUrl: true, launch: true, adoptSessionId: true, force: true, roleId: true }).extend({
   id: z.string(),
   projectId: z.string(),
   portrait: z.string().nullable(),
@@ -193,7 +195,7 @@ export async function createProfile(
   sessions: StaffProfile['sessions'] = [],
 ): Promise<StaffProfile> {
   const id = `${slugify(input.name)}-${randomBytes(2).toString('hex')}`;
-  const { portraitDataUrl, launch: _launch, adoptSessionId: _adopt, force: _force, ...fields } = input;
+  const { portraitDataUrl, launch: _launch, adoptSessionId: _adopt, force: _force, roleId: _role, ...fields } = input;
   const portrait = portraitDataUrl ? await savePortrait(projectPath, id, portraitDataUrl) : null;
   const profile: StaffProfile = {
     ...fields,

@@ -22,6 +22,16 @@ import {
 import { buildMcpConfig, listMcpServers } from '../server/staff/mcp';
 import { StaffError, StaffService } from '../server/staff/service';
 import { readProfile, saveChatChoice, writeAtomic } from '../server/staff/store';
+import { BUILTIN_ROLES } from '../shared/roles';
+
+// Os cargos (server/roles.ts) e a config leem MYCO_HOME: uma pasta temporária, para não usar o ~/.myco de quem roda os testes.
+const home = await vi.hoisted(async () => {
+  const os = await import('node:os');
+  const nodePath = await import('node:path');
+  const dir = nodePath.join(os.tmpdir(), `myco-staff-home-${process.pid}-${Date.now()}`);
+  process.env.MYCO_HOME = dir;
+  return dir;
+});
 
 const profile = (over: Partial<StaffProfile> = {}): StaffProfile => ({
   id: 'ana-1a2b',
@@ -122,12 +132,28 @@ describe('ficha', () => {
     const hiring = renderFicha(profile({ canHire: true, projectId: 'proj-x' }), ctx);
     expect(hiring).toContain('/api/projects/proj-x/staff com');
     expect(hiring).toContain('reportsTo: ["ana-1a2b"]');
-    expect(hiring).toMatch(/use subagents[\s\S]*só para um papel contínuo/);
+    expect(hiring).toContain('Antes de contratar, nesta ordem');
+    expect(hiring).toContain('roleId (um dos cargos prontos abaixo)');
+    // Sem cargos na ficha (ctx sem roles), a linha não aparece.
+    expect(hiring).not.toContain('Cargos prontos (roleId)');
     expect(hiring).toContain('/api/projects/proj-x/staff/<id dele>/done');
     expect(hiring).toContain('"requestedBy": "ana-1a2b"');
     // O próprio temporário sabe que é temporário.
     expect(renderFicha(profile({ temporary: true }), ctx)).toContain('Você é temporário');
     expect(md).not.toContain('Você é temporário');
+  });
+
+  it('cargos prontos: a linha com os roleId só para quem pode contratar', () => {
+    const roles = [
+      { id: 'dados', label: 'Dados (DBA)' },
+      { id: 'produto', label: 'Produto (PO)' },
+    ];
+    const hiring = renderFicha(profile({ canHire: true, projectId: 'proj-x' }), { ...ctx, roles });
+    expect(hiring).toContain('Antes de contratar, nesta ordem');
+    expect(hiring).toContain('Cargos prontos (roleId): `dados` (Dados (DBA)), `produto` (Produto (PO))');
+    const noHire = renderFicha(profile(), { ...ctx, roles });
+    expect(noHire).not.toContain('Antes de contratar, nesta ordem');
+    expect(noHire).not.toContain('Cargos prontos (roleId)');
   });
 
   it('despertador: seção curta com o curl (id da conversa em $MYCO_SESSION_ID), os limites e o que preferir para o que roda aqui', () => {
@@ -463,6 +489,61 @@ describe('StaffService', () => {
     expect(await svc.isManagerOf('proj-id', boss.id, r!.profile.id)).toBe(true);
     expect(await svc.isManagerOf('proj-id', r!.profile.id, boss.id)).toBe(false);
     expect(await svc.isManagerOf('proj-id', 'ninguem', r!.profile.id)).toBe(false);
+  });
+
+  describe('contratar pela API com cargo pronto (roleId)', () => {
+    const dev = BUILTIN_ROLES.find((r) => r.id === 'desenvolvedor')!;
+    const apiHire = (svc: StaffService, boss: string, extra: Record<string, unknown>) =>
+      svc.hire('proj-id', { name: 'Cargo', firstTask: 'Corrigir o login', reportsTo: [boss], launch: false, ...extra }, false);
+
+    it('o cargo preenche cargo, missão, regras, pronto, modelo, esforço e autonomia; temporário e sem poder contratar', async () => {
+      const svc = service();
+      const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestor Cargo', autonomy: 'acceptEdits', canHire: true, launch: false }, true))!;
+      // A ficha do gestor (que pode contratar) grava a lista de cargos prontos.
+      const bossFicha = await fs.readFile(path.join(projectPath, '.myco', 'staff', `${boss.id}.md`), 'utf8');
+      expect(bossFicha).toContain('Cargos prontos (roleId): `');
+      expect(bossFicha).toContain(`\`${dev.id}\` (${dev.label})`);
+      const r = (await apiHire(svc, boss.id, { roleId: dev.id, canHire: true }))!;
+      expect(r.profile).toMatchObject({
+        name: 'Cargo',
+        firstTask: 'Corrigir o login',
+        role: dev.role,
+        mission: dev.mission,
+        rules: dev.rules,
+        doneWhen: dev.doneWhen,
+        model: dev.model,
+        effort: dev.effort,
+        autonomy: dev.autonomy,
+        canHire: false,
+        hiredBy: boss.id,
+        temporary: true,
+      });
+      // O id do cargo não vai para o perfil.
+      expect(r.profile).not.toHaveProperty('roleId');
+      expect(await readProfile(projectPath, r.profile.id)).not.toHaveProperty('roleId');
+    });
+
+    it('o que vier no pedido ganha do cargo (a missão escrita substitui a do cargo)', async () => {
+      const svc = service();
+      const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestor Missao', autonomy: 'acceptEdits', canHire: true, launch: false }, true))!;
+      const r = (await apiHire(svc, boss.id, { name: 'Missao', roleId: dev.id, mission: 'Só o login' }))!;
+      expect(r.profile).toMatchObject({ mission: 'Só o login', role: dev.role, rules: dev.rules });
+    });
+
+    it('cargo que não existe: erro, sem contratar', async () => {
+      const svc = service();
+      const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestor Sem', autonomy: 'acceptEdits', canHire: true, launch: false }, true))!;
+      await expect(apiHire(svc, boss.id, { name: 'Fantasma', roleId: 'nao-existe' })).rejects.toThrow('cargo não encontrado: nao-existe');
+    });
+
+    it('a autonomia do cargo também é limitada à do gestor', async () => {
+      const svc = service();
+      // O cargo é acceptEdits; o gestor só plan: o temporário fica em plan.
+      const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestor Plan', autonomy: 'plan', canHire: true, launch: false }, true))!;
+      expect(dev.autonomy).toBe('acceptEdits');
+      const r = (await apiHire(svc, boss.id, { name: 'Limitado', roleId: dev.id }))!;
+      expect(r.profile.autonomy).toBe('plan');
+    });
   });
 
   it('temporário: abre numa conversa do Claudio’s Club, o gestor encerra, você efetiva; parado há dias sai sozinho', async () => {
