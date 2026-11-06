@@ -539,6 +539,7 @@ textarea.q-field { resize: vertical; }
 .tasks-col-review h3 { color: var(--waiting-ink); }
 .task-card { display: grid; gap: 3px; text-align: left; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; cursor: grab; }
 .task-card:hover { border-color: var(--ink-blue); }
+.task-card.is-waiting, .task-card.is-waiting:hover { border-color: var(--waiting); box-shadow: 0 0 0 1px var(--waiting); }
 .task-card.is-selected { outline: 2px solid var(--ink-blue); }
 .task-card.is-archived { opacity: 0.6; }
 .task-card.is-archived:hover, .task-card.is-archived.is-selected { opacity: 1; }

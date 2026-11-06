@@ -41,6 +41,23 @@ export function byRecent<T extends Pick<TaskModel, 'status' | 'updatedAt'>>(task
   const at = (t: T) => Date.parse(t.updatedAt) || 0;
   return [...tasks].sort((a, b) => Number(b.status === 'planning') - Number(a.status === 'planning') || at(b) - at(a));
 }
+
+/**
+ * Ordem de A fazer: a fila primeiro, na ordem em que o servidor começa (a 1ª de cada funcionário antes das 2ªs, em
+ * empate a mais antiga), então a próxima a ser feita fica no topo; as fora da fila vêm depois, pela última atualização.
+ */
+export function byQueue<T extends Pick<TaskModel, 'status' | 'updatedAt' | 'staffId' | 'queuedAt' | 'sessionId'>>(tasks: T[]): T[] {
+  const taken = new Map<string | null, number>();
+  const rank = new Map<T, number>();
+  for (const t of tasks) {
+    if (!t.queuedAt || t.sessionId) continue;
+    const n = taken.get(t.staffId) ?? 0;
+    rank.set(t, n);
+    taken.set(t.staffId, n + 1);
+  }
+  const queued = tasks.filter((t) => rank.has(t)).sort((a, b) => rank.get(a)! - rank.get(b)!);
+  return [...queued, ...byRecent(tasks.filter((t) => !rank.has(t)))];
+}
 const LABEL: Record<TaskStatus, string> = {
   todo: t('tasks.statusTodo'),
   planning: t('tasks.statusPlanning'),
@@ -157,7 +174,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const card = (task: Task) => (
     <button
       key={task.id}
-      className={`task-card ${selected === task.id ? 'is-selected' : ''} ${task.archived ? 'is-archived' : ''}`}
+      className={`task-card ${selected === task.id ? 'is-selected' : ''} ${task.archived ? 'is-archived' : ''} ${task.status === 'planning' ? 'is-waiting' : ''}`}
       draggable
       onDragStart={() => setDragging(task.id)}
       onDragEnd={() => setDragging(null)}
@@ -234,7 +251,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         ) : (
           <div className="tasks-columns">
             {COLUMNS.map(({ status, shows }) => {
-              const col = byRecent(tasks.filter((t) => !t.archived && shows.includes(t.status)));
+              const col = (status === 'todo' ? byQueue : byRecent)(tasks.filter((t) => !t.archived && shows.includes(t.status)));
               return (
                 <section
                   key={status}
