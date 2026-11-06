@@ -180,7 +180,7 @@ export function BackgroundPicker({
         <input type="color" aria-label={t('board.otherColor')} value={shown ?? fallback ?? def.hex} onChange={(e) => pickCustom(e.target.value)} />
         {!custom && <span aria-hidden="true">+</span>}
       </label>
-      <span className="muted small mono">{shown ?? t('board.defaultLabel')}</span>
+      <span className="muted small mono">{shown ?? `${t('board.defaultLabel')} ${fallback ?? def.hex}`}</span>
       {error && <span className="error small">{error}</span>}
     </span>
   );
