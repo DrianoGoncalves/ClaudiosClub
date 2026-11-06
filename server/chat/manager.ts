@@ -567,6 +567,17 @@ export class ChatManager {
     }
   }
 
+  /**
+   * A memória pessoal mudou: as conversas abertas dessas fichas (todas as cópias da pessoa) reabrem com o prompt novo
+   * na próxima mensagem, com o funcionário parado (mesmo caminho do `stale` da ficha). Sem aviso no chat: o texto vai no prompt.
+   */
+  personChanged(sessionIds: string[]) {
+    for (const id of sessionIds) {
+      const chat = this.chats.get(id);
+      if (chat?.running) chat.stale = true;
+    }
+  }
+
   async compact(projectId: string, sessionId: string, staffId: string | null) {
     (await this.ensure(projectId, sessionId, staffId)).compact();
   }
@@ -711,17 +722,20 @@ export class ChatManager {
     this.chats.get(sessionId)?.interrupt();
   }
 
-  /** Alguma conversa aberta do funcionário está trabalhando (fora `exceptSession`). */
-  staffWorking(staffId: string, exceptSession?: string): boolean {
+  /**
+   * Alguma conversa aberta deste funcionário, neste projeto, está trabalhando (fora `exceptSession`). A mesma ficha
+   * em outro projeto não conta: cada projeto tem o seu funcionário.
+   */
+  staffWorking(projectId: string, staffId: string, exceptSession?: string): boolean {
     for (const c of this.chats.values()) {
-      if (c.running && c.staffId === staffId && c.sessionId !== exceptSession && c.working) return true;
+      if (c.running && c.projectId === projectId && c.staffId === staffId && c.sessionId !== exceptSession && c.working) return true;
     }
     return false;
   }
 
-  /** A conversa do funcionário que está no meio de um turno agora, se for uma só (senão, null). */
-  workingSession(staffId: string): string | null {
-    const busy = [...this.chats.values()].filter((c) => c.running && c.staffId === staffId && c.busy);
+  /** A conversa deste funcionário, neste projeto, que está no meio de um turno agora, se for uma só (senão, null). */
+  workingSession(projectId: string, staffId: string): string | null {
+    const busy = [...this.chats.values()].filter((c) => c.running && c.projectId === projectId && c.staffId === staffId && c.busy);
     return busy.length === 1 ? busy[0]!.sessionId : null;
   }
 

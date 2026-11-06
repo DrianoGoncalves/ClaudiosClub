@@ -171,6 +171,8 @@ export const HR_ID = 'hr';
 export const SYNCED_NODE_ID = 'sg';
 export const projectNodeId = (projectId: string) => `p:${projectId}`;
 export const staffNodeId = (projectId: string, staffId: string) => `h:${projectId}:${staffId}`;
+/** Não é um nó: o RH editando esta ficha (as abas do funcionário, com o seletor de projeto), em vez da conversa dela. */
+export const manageNodeId = (projectId: string, staffId: string) => `m:${projectId}:${staffId}`;
 export const ghostNodeId = (projectId: string) => `g:${projectId}`;
 /** Chave de arquivamento: a ficha, para contratados; a sessão, para os demais. */
 export const archiveKey = (d: { staff: StaffProfile | null; session: Session | null }) =>

@@ -1,7 +1,10 @@
+import os from 'node:os';
+import path from 'node:path';
 import { PLAYBOOK_AGENTS } from '../../shared/agentPresets';
 import { FTP_MCP_NAME, TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
 import { staffSshConfigFile } from './servers';
 import { GUIDE_PATH } from '../projectGuide';
+import { MYCO_HOME } from '../config';
 
 // A ficha vira um arquivo Markdown dentro do projeto (.myco/staff/<id>.md), que a sessão lê
 // no começo. Pela linha de comando só vai uma identidade curta apontando para ela: o CLI não
@@ -77,7 +80,20 @@ const REMOTE_TOOLS = ['ssh', 'ssh.exe', 'scp', 'scp.exe', 'sftp', 'sftp.exe', 'r
  * bloqueado para todos. `ftpServers`: as conexões da ficha que
  * são FTP (usadas pelo MCP do Claudio’s Club): só elas não liberam o ssh.
  */
+/**
+ * A pasta da memória pessoal (MYCO_HOME/people) no formato das regras: `~/…` dentro da home (o caso comum, sem espaço);
+ * fora dela, o caminho absoluto no mesmo formato de secretDenyRules.
+ */
+export function peopleRuleDir(): string {
+  const dir = path.join(MYCO_HOME, 'people');
+  const rel = path.relative(os.homedir(), dir);
+  if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return `~/${rel.replace(/\\/g, '/')}`;
+  const abs = dir.replace(/\\/g, '/').replace(/^([A-Za-z]):\//, (_, d: string) => `//${d.toLowerCase()}/`);
+  return abs.startsWith('//') ? abs : `/${abs}`;
+}
+
 export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpServers: string[] = []): string[] {
+  const people = peopleRuleDir();
   const always = [
     'Read(~/.ssh/**)',
     'Edit(~/.ssh/**)',
@@ -88,6 +104,10 @@ export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpSer
     'Read(~/.myco/secrets/**)',
     'Edit(~/.myco/secrets/**)',
     'Write(~/.myco/secrets/**)',
+    // Memória pessoal: só o Claudio’s Club grava, e a conversa não lê o arquivo (ela recebe o texto no prompt).
+    `Read(${people}/**)`,
+    `Edit(${people}/**)`,
+    `Write(${people}/**)`,
   ];
   // No Windows as regras usam o caminho em forma POSIX: C:/x → //c/x. Com espaço, a lista da linha
   // de comando quebraria a regra: fica só o bloqueio por nome (*.pem, *.key) e o de ~/.ssh.
@@ -308,6 +328,7 @@ function postureSection(): string {
   return [
     '## Postura',
     'Antes de concordar, teste a ideia: aponte primeiro o que está errado, faltando ou arriscado e o contra-argumento mais forte. Não trate o enquadramento do pedido como fato. Sem elogio vazio nem pedido de desculpas: vá direto ao ponto técnico.',
+    'Se o pedido depende de algo que não existe (arquivo, rota, função, opção, recurso do produto) ou você não tem base para fazer, diga a lacuna na resposta ou na entrega em vez de improvisar ou inventar. Não invente API, comando nem resultado de teste.',
   ].join('\n');
 }
 
@@ -331,10 +352,15 @@ function skillList(p: StaffProfile, ctx: FichaContext): string {
  * em dia: a próxima mensagem pode seguir numa conversa nova (ver server/chat/manager.ts).
  */
 function memorySection(ctx: FichaContext): string {
+  // Pasta irmã da memória (<id>.memory), com as mesmas barras do memoryPath; sem o sufixo esperado, não há linha da pasta.
+  const detailDir = ctx.memoryPath.endsWith('.memory.md') ? ctx.memoryPath.slice(0, -'.md'.length) : null;
   return [
     '## Memória',
     `Sua memória fica em \`${ctx.memoryPath}\`. Leia no início de cada conversa. Ela é o que você leva de uma conversa para a outra: decisões e o porquê, convenções do projeto, pendências e onde parou.`,
     '- Curta (até umas 60 linhas): ao registrar, substitua o que ficou velho em vez de só acrescentar. Nada que o código ou o git já contam, e nada de segredos (senhas, chaves, tokens).',
+    ...(detailDir
+      ? [`- Ela é um índice: o que não cabe em uma linha (o porquê de uma decisão longa, como um problema foi resolvido, passos de um procedimento) vai num arquivo curto em \`${detailDir}/<assunto>.md\` (nome em minúsculas com hífens), e na memória fica uma linha com o resumo e o nome do arquivo. Leia o arquivo só quando o assunto aparecer. Quando o assunto fechar ou ficar velho, apague o arquivo e a linha. As mesmas regras valem lá: nada de segredos nem do que o git já conta.`]
+      : []),
     '- Ponto de corte: quando terminar um assunto (tarefa entregue, decisão tomada, pergunta respondida e nada pendente nesta conversa), atualize a memória com o que vale levar e termine a resposta com esta linha, sozinha, por último: `[MyCo:ponto-de-corte]`. Assim a próxima mensagem pode começar numa conversa nova, mais barata, e você não perde nada. Não use no meio de um trabalho nem quando espera uma resposta para continuar.',
     '- Se a mensagem vier com `[MyCo] Contexto desta conversa: …`, ela já está grande e cada resposta custa mais: feche o assunto atual e use o ponto de corte assim que for natural.',
   ].join('\n');
@@ -384,7 +410,7 @@ function hiringSection(p: StaffProfile, ctx: FichaContext): string {
  * (cache) em todas as outras e nas retomadas; depois de um /compact ele é montado de novo, então as
  * regras não viram resumo. A memória continua no arquivo dela (muda durante o trabalho).
  */
-export function systemPrompt(p: StaffProfile, ctx: FichaContext, ficha: string): string {
+export function systemPrompt(p: StaffProfile, ctx: FichaContext, ficha: string, personal: string | null = null): string {
   return [
     `Você é ${p.name}, ${p.role} da ${ctx.company}, trabalhando no projeto ${ctx.projectName}.`,
     `Sua ficha está abaixo (a mesma de ${ctx.fichaPath}): siga-a. Sua memória fica em ${ctx.memoryPath}: leia no início de cada conversa, antes de qualquer outra coisa.`,
@@ -392,7 +418,19 @@ export function systemPrompt(p: StaffProfile, ctx: FichaContext, ficha: string):
     '',
     ficha.trim(),
     '',
+    ...(personal?.trim() ? [personalMemorySection(personal), ''] : []),
   ].join('\n');
+}
+
+/**
+ * Memória pessoal: só no prompt de sistema (o .md da ficha vai para o git do projeto, então não leva). Somente leitura.
+ */
+function personalMemorySection(text: string): string {
+  return [
+    '## Memória pessoal (somente leitura: mantida pelo Claudio’s Club; peça ao usuário para mudar)',
+    'Vale para você em todos os projetos em que trabalha. Não é um arquivo seu: não tente gravá-la nem procurá-la no disco. Se algo estiver errado nela, diga ao usuário.',
+    text.trim(),
+  ].join('\n\n');
 }
 
 /**

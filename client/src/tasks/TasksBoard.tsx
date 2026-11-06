@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { type CostReport, type StaffProfile, type Task as TaskModel, type TaskHandoff, type TaskStatus, type TaskSummary } from '../../../shared/model';
+import { Fragment, useCallback, useEffect, useState } from 'react';
+import { type CostReport, type StaffProfile, type Task as TaskModel, type TaskHandoff, type TaskStatus } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
 import { Markdown } from '../chat/markdown';
 import { formatAgo, formatShare } from '../format';
@@ -7,8 +7,8 @@ import { t, locale } from '../i18n';
 import { BranchIcon, ReviewIcon } from '../icons';
 import { TaskCodePanel } from './TaskCodePanel';
 
-// Quadro de tarefas de um projeto: a fazer → fazendo → revisão → pronto.
-// Os status continuam 6 (ver server/tasks.ts); na tela, "planejando" vai em Fazendo e "no ar" em Pronto, com selo.
+// Quadro de tarefas de um projeto: aguardar → a fazer → fazendo → revisão → pronto.
+// Os status são 6 (ver server/tasks.ts); na tela, "planejando" vai em Fazendo.
 // Arrastar um cartão muda a coluna; o resto anda sozinho com a conversa da tarefa.
 
 /**
@@ -25,10 +25,11 @@ const REVIEW_ROUNDS_MAX = 3;
 
 /** Colunas do quadro: o status de quem é soltado nela e os que ela mostra. */
 const COLUMNS: { status: TaskStatus; shows: TaskStatus[] }[] = [
+  { status: 'waiting', shows: ['waiting'] },
   { status: 'todo', shows: ['todo'] },
   { status: 'doing', shows: ['planning', 'doing'] },
   { status: 'review', shows: ['review'] },
-  { status: 'done', shows: ['done', 'live'] },
+  { status: 'done', shows: ['done'] },
 ];
 /** A coluna em que o status aparece. */
 const columnOf = (s: TaskStatus) => COLUMNS.find((c) => c.shows.includes(s))!.status;
@@ -58,22 +59,23 @@ export function byQueue<T extends Pick<TaskModel, 'status' | 'updatedAt' | 'staf
   const queued = tasks.filter((t) => rank.has(t)).sort((a, b) => rank.get(a)! - rank.get(b)!);
   return [...queued, ...byRecent(tasks.filter((t) => !rank.has(t)))];
 }
+
 const LABEL: Record<TaskStatus, string> = {
+  waiting: t('tasks.statusWaiting'),
   todo: t('tasks.statusTodo'),
   planning: t('tasks.statusPlanning'),
   doing: t('tasks.statusDoing'),
   review: t('tasks.statusReview'),
   done: t('tasks.statusDone'),
-  live: t('tasks.statusLive'),
 };
 
 const HELP: Record<TaskStatus, string> = {
+  waiting: t('tasks.helpWaiting'),
   todo: t('tasks.helpTodo'),
   planning: t('tasks.helpPlanning'),
   doing: t('tasks.helpDoing'),
   review: t('tasks.helpReview'),
   done: t('tasks.helpDone'),
-  live: t('tasks.helpLive'),
 };
 
 /**
@@ -109,13 +111,11 @@ interface Props {
   onOpenStaff: (staffId: string) => void;
   /** As tarefas mudaram (o cabeçalho da sala relê o resumo). */
   onChanged: () => void;
-  /** A última tarefa que foi para "no ar". */
-  lastDeploy: TaskSummary['lastDeploy'];
   /** Abre com esta tarefa selecionada (Ctrl+K). */
   initialTaskId?: string | null;
 }
 
-export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOpenStaff, onChanged, lastDeploy, initialTaskId = null }: Props) {
+export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOpenStaff, onChanged, initialTaskId = null }: Props) {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [selected, setSelected] = useState<string | null>(initialTaskId);
   const [adding, setAdding] = useState(false);
@@ -161,8 +161,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     return usd !== undefined && costs?.total.usd ? formatShare(usd, costs.total.usd) : null;
   };
   const current = tasks?.find((t) => t.id === selected) ?? null;
-  /** O projeto publica? (tem funcionário com servidor ou já teve deploy): só aí "não publicado" faz sentido. */
-  const hasDeploy = !!lastDeploy || staff.some((s) => s.servers.length > 0) || !!tasks?.some((t) => t.status === 'live' || t.deploy);
+  /** O projeto publica? (tem funcionário com servidor ou já teve pedido de deploy): só aí "não publicado" faz sentido. */
+  const hasDeploy = staff.some((s) => s.servers.length > 0) || !!tasks?.some((t) => t.deploy);
   /** A tarefa que ocupa o funcionário agora (planejando ou fazendo). */
   const busyWith = (t: Task) =>
     tasks?.find((o) => o.id !== t.id && o.staffId === t.staffId && o.sessionId && (o.status === 'doing' || o.status === 'planning')) ?? null;
@@ -172,44 +172,63 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const archived = (tasks ?? []).filter((t) => t.archived);
 
   const card = (task: Task) => (
-    <button
-      key={task.id}
-      className={`task-card ${selected === task.id ? 'is-selected' : ''} ${task.archived ? 'is-archived' : ''} ${task.status === 'planning' ? 'is-waiting' : ''}`}
-      draggable
-      onDragStart={() => setDragging(task.id)}
-      onDragEnd={() => setDragging(null)}
-      onClick={() => setSelected(task.id)}
-    >
-      <span className="task-title">{task.title}</span>
-      <StatusBadge task={task} hasDeploy={hasDeploy} />
-      <VerdictBadge task={task} nameOf={nameOf} />
-      <span className="task-meta muted small">
-        {nameOf(task.staffId) ?? t('tasks.noOwner')}
-        {task.requestedBy && ` · ${t('tasks.requestedBy', { name: nameOf(task.requestedBy) ?? task.requestedBy })}`}
-        {costOf(task) && ` · ${costOf(task)}`} · {formatAgo(now - Date.parse(task.updatedAt))}
-      </span>
-      {task.branch && (
-        <span className="task-branch small">
-          <BranchIcon /> {task.branch}
+    <Fragment key={task.id}>
+      <button
+        className={`task-card ${selected === task.id ? 'is-selected' : ''} ${task.archived ? 'is-archived' : ''} ${task.status === 'planning' ? 'is-waiting' : ''}`}
+        draggable
+        onDragStart={() => setDragging(task.id)}
+        onDragEnd={() => setDragging(null)}
+        onClick={() => setSelected(task.id)}
+      >
+        <span className="task-title">{task.title}</span>
+        <StatusBadge task={task} hasDeploy={hasDeploy} />
+        <VerdictBadge task={task} nameOf={nameOf} />
+        <span className="task-meta muted small">
+          {nameOf(task.staffId) ?? t('tasks.noOwner')}
+          {task.requestedBy && ` · ${t('tasks.requestedBy', { name: nameOf(task.requestedBy) ?? task.requestedBy })}`}
+          {costOf(task) && ` · ${costOf(task)}`} · {formatAgo(now - Date.parse(task.updatedAt))}
         </span>
+        {task.branch && (
+          <span className="task-branch small">
+            <BranchIcon /> {task.branch}
+          </span>
+        )}
+        {task.reviewerId && (
+          <span className="task-reviewer small" title={t('tasks.autoReviewHint', { name: nameOf(task.reviewerId) ?? task.reviewerId })}>
+            <ReviewIcon /> {nameOf(task.reviewerId) ?? task.reviewerId}
+            {!!task.reviewRounds && ` · ${t('tasks.reviewRounds', { n: task.reviewRounds, max: REVIEW_ROUNDS_MAX })}`}
+          </span>
+        )}
+        {queuePos(task) > 0 && (
+          <span className="task-queue small" title={t('tasks.queuedHint')}>
+            {t('tasks.queuePos', { pos: queuePos(task) })}
+          </span>
+        )}
+        {!!task.held?.length && (
+          <span className="task-queue small" title={t('tasks.heldHint')}>
+            {t(task.held.length === 1 ? 'tasks.heldOne' : 'tasks.heldOther', { n: task.held.length })}
+          </span>
+        )}
+      </button>
+      {/* Motivo de Aguardar: fica fora do botão (o cartão é um botão, e campo não cabe dentro). Salva ao sair do campo. */}
+      {task.status === 'waiting' && (
+        <input
+          key={task.waitReason ?? ''}
+          className="task-wait-reason small"
+          defaultValue={task.waitReason ?? ''}
+          maxLength={200}
+          placeholder={t('tasks.waitReasonPlaceholder')}
+          aria-label={t('tasks.waitReasonPlaceholder')}
+          onBlur={(e) => {
+            const next = e.currentTarget.value.trim() || null;
+            if (next !== (task.waitReason ?? null)) void act(() => api.updateTask(projectId, task.id, { waitReason: next }));
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur();
+          }}
+        />
       )}
-      {task.reviewerId && (
-        <span className="task-reviewer small" title={t('tasks.autoReviewHint', { name: nameOf(task.reviewerId) ?? task.reviewerId })}>
-          <ReviewIcon /> {nameOf(task.reviewerId) ?? task.reviewerId}
-          {!!task.reviewRounds && ` · ${t('tasks.reviewRounds', { n: task.reviewRounds, max: REVIEW_ROUNDS_MAX })}`}
-        </span>
-      )}
-      {queuePos(task) > 0 && (
-        <span className="task-queue small" title={t('tasks.queuedHint')}>
-          {t('tasks.queuePos', { pos: queuePos(task) })}
-        </span>
-      )}
-      {!!task.held?.length && (
-        <span className="task-queue small" title={t('tasks.heldHint')}>
-          {t(task.held.length === 1 ? 'tasks.heldOne' : 'tasks.heldOther', { n: task.held.length })}
-        </span>
-      )}
-    </button>
+    </Fragment>
   );
 
   return (
@@ -217,12 +236,6 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
       <div className="modal tasks-modal" role="dialog" aria-label={t('tasks.dialogLabel', { name: projectName })}>
         <header className="tasks-head">
           <h2>{t('tasks.title', { name: projectName })}</h2>
-          {lastDeploy && (
-            <span className="muted small tasks-last-deploy" title={t('tasks.lastDeployTitle', { at: new Date(lastDeploy.at).toLocaleString(locale()) })}>
-              {t('tasks.lastDeploy', { ago: formatAgo(now - Date.parse(lastDeploy.at)), title: lastDeploy.title })}
-              {lastDeploy.by && ` (${t('tasks.byWho', { name: staff.find((s) => s.id === lastDeploy.by)?.name ?? lastDeploy.by })})`}
-            </span>
-          )}
           <span className="tasks-head-actions">
             <button className="btn-primary" onClick={() => setAdding(true)}>
               {t('tasks.newTask')}
@@ -239,7 +252,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             onCancel={() => setAdding(false)}
             onSave={async (input, andStart) => {
               await act(async () => {
-                const t = await api.createTask(projectId, input);
+                // Só criar (start false): a tarefa fica em Aguardar.
+                const t = await api.createTask(projectId, { ...input, start: andStart });
                 if (andStart && t?.staffId) await withUsageConfirm((force) => api.startTask(projectId, t.id, force));
               });
               setAdding(false);
@@ -326,22 +340,14 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   );
 }
 
-/** Selo do cartão: plano esperando você (Fazendo) e publicado ou não (Pronto). */
+/** Selo do cartão: plano esperando você (Fazendo) e, em Pronto, se ainda falta o deploy (projeto que publica). */
 function StatusBadge({ task, hasDeploy }: { task: Task; hasDeploy: boolean }) {
   if (task.status === 'planning')
     return (
-      <span className="task-badge is-waiting small" title={HELP.planning}>
+      <span className="task-badge is-waiting" title={HELP.planning}>
         {t('tasks.badgePlan')}
       </span>
     );
-  if (task.status === 'live') {
-    const at = [...task.history].reverse().find((h) => h.status === 'live')?.at ?? task.updatedAt;
-    return (
-      <span className="task-badge is-live small" title={new Date(at).toLocaleString(locale())}>
-        {t('tasks.badgeLive', { date: new Date(at).toLocaleDateString(locale(), { day: '2-digit', month: '2-digit' }) })}
-      </span>
-    );
-  }
   if (task.status === 'done' && hasDeploy)
     return (
       <span className="task-badge small" title={t('tasks.badgeNotLiveHint')}>
@@ -623,11 +629,6 @@ function TaskDetail({
         {task.status === 'review' && (
           <button className="btn-primary" onClick={() => onMove('done')}>
             {t('tasks.approve')}
-          </button>
-        )}
-        {task.status === 'done' && (
-          <button className="btn-secondary" onClick={() => onMove('live')}>
-            {t('tasks.markLive')}
           </button>
         )}
         <select className="task-move" value={columnOf(task.status)} onChange={(e) => onMove(e.target.value as TaskStatus)} aria-label={t('tasks.moveTo')}>

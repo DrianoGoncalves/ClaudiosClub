@@ -91,11 +91,20 @@ async function get<T>(url: string): Promise<T> {
 }
 
 /** Ações levam o cabeçalho `x-myco`, que o servidor exige em todo POST. Não repetem: um envio repetido duplicaria a ação (ex.: a mensagem do chat). */
-async function post<T>(url: string, body: unknown = {}, headers: Record<string, string> = {}): Promise<T> {
+function post<T>(url: string, body: unknown = {}, headers: Record<string, string> = {}): Promise<T> {
+  return send<T>('POST', url, body, headers);
+}
+
+/** Gravar um recurso inteiro (a memória pessoal): mesmo cabeçalho e mesma recusa por pareamento do POST. */
+function put<T>(url: string, body: unknown): Promise<T> {
+  return send<T>('PUT', url, body, {});
+}
+
+async function send<T>(method: 'POST' | 'PUT', url: string, body: unknown, headers: Record<string, string>): Promise<T> {
   let res: Response;
   try {
     res = await fetch(url, {
-      method: 'POST',
+      method,
       headers: { 'content-type': 'application/json', 'x-myco': '1', ...headers },
       body: JSON.stringify(body),
     });
@@ -235,6 +244,15 @@ export interface DirectoryStaff extends DirectoryPerson {
   personId: string | null;
   archived: boolean;
   reportsTo: string[];
+}
+
+/**
+ * A memória pessoal de uma pessoa (GET/PUT /api/people/:personId/memory). `ok`/`empty`: confiável; `fallback`: o arquivo
+ * foi mexido por fora e vale a versão anterior; `tampered`: mexido sem versão boa (nada é injetado); `unavailable`: cofre fora.
+ */
+export interface PersonMemory {
+  text: string;
+  status: 'ok' | 'empty' | 'fallback' | 'tampered' | 'unavailable';
 }
 
 /** Uma ficha num projeto (ligar/desligar cópias). */
@@ -453,12 +471,12 @@ export const api = {
   taskDeploy: (projectId: string, taskId: string, staffId: string, force = false) =>
     post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/deploy`, { staffId, force }),
   tasks: (projectId: string) => get<Task[] | null>(`/api/projects/${projectId}/tasks`),
-  createTask: (projectId: string, input: { title: string; description: string; staffId: string | null }) =>
+  createTask: (projectId: string, input: { title: string; description: string; staffId: string | null; start?: boolean }) =>
     post<Task | null>(`/api/projects/${projectId}/tasks`, input),
   updateTask: (
     projectId: string,
     taskId: string,
-    patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'status' | 'pr' | 'branch'>> & { queued?: false },
+    patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'status' | 'pr' | 'branch' | 'waitReason'>> & { queued?: false },
   ) =>
     post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}`, patch),
   /** Efetivar um temporário (contratado por outro funcionário). */
@@ -470,12 +488,13 @@ export const api = {
   runRoutine: (projectId: string, staffId: string, routineId: string) =>
     post<{ ok: boolean; text: string } | null>(`/api/projects/${projectId}/staff/${staffId}/routines/${routineId}/run`),
   chatInterrupt: (sessionId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/interrupt`),
-  /** `applyToCopies`: o que é da pessoa (nome, cargo, missão…) vai também para as cópias ligadas; `copiesUpdated` = quantas. */
-  updateStaff: (projectId: string, staffId: string, input: StaffInput, applyToCopies = false) =>
-    post<StaffProfile & { copiesUpdated?: number }>(`/api/projects/${projectId}/staff/${staffId}`, {
-      ...input,
-      ...(applyToCopies ? { applyToCopies: true } : {}),
-    }),
+  /** O que é da pessoa (nome, cargo, missão…) vai sempre às cópias ligadas; `copiesUpdated` = quantas mudaram. */
+  updateStaff: (projectId: string, staffId: string, input: StaffInput) =>
+    post<StaffProfile & { copiesUpdated?: number }>(`/api/projects/${projectId}/staff/${staffId}`, input),
+  /** Garante o `personId` da ficha (o servidor gera se faltar): a memória pessoal é da pessoa. */
+  personOf: (projectId: string, staffId: string) => post<{ personId: string }>(`/api/projects/${projectId}/staff/${staffId}/person`),
+  personMemory: (personId: string) => get<PersonMemory>(`/api/people/${personId}/memory`),
+  savePersonMemory: (personId: string, text: string) => put<PersonMemory>(`/api/people/${personId}/memory`, { text }),
   staffVersions: (projectId: string, staffId: string) =>
     get<Array<{ version: string; name: string; role: string; updatedAt: string }>>(`/api/projects/${projectId}/staff/${staffId}/versions`),
   restoreStaff: (projectId: string, staffId: string, version: string) =>

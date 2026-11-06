@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   CHROME_EXTENSION_URL,
   type Autonomy,
@@ -16,12 +16,13 @@ import {
 import { api, withUsageConfirm, type DirectoryPerson } from '../api';
 import { portraitUrl } from '../board/nodes';
 import { effortLabel, employeeName, folderName } from '../format';
-import { t, locale, type MsgKey } from '../i18n';
+import { t, type MsgKey } from '../i18n';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
 import { ProtocolBadge } from '../office/ProjectOffice';
 import { BrowserCheck } from './BrowserCheck';
 import { CopyFromCompany } from './CopyFromCompany';
-import { copiesOf } from './directory';
+import { differingFields, PERSON_FIELD_LABEL } from './directory';
+import { PersonMemory } from './PersonMemory';
 import type { RoleEntry } from '../../../shared/roles';
 import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, PLAYBOOK_OPTIONS } from './templates';
 
@@ -44,11 +45,14 @@ interface Props {
   mode: StaffFormMode;
   /** Nível simples: só cargo, nome e retrato; o resto vem do cargo. */
   simple?: boolean;
-  /** Dentro do "Mais" do funcionário (aba Ficha): sem modal, abas menores e "Desfazer" no lugar de "Cancelar". */
+  /** Dentro do "Mais" do funcionário (abas Ficha e Projeto): sem modal, sem abas próprias e "Desfazer" no lugar de "Cancelar". */
   embedded?: boolean;
-  /** A aba aberta, se quem usa quiser guardá-la (a embutida remonta ao salvar). */
-  tab?: Tab;
+  /** A aba que quem usa mostra (o "Mais" tem as abas); `null` = outra aba dele está aberta: o formulário fica escondido, com o que foi digitado. */
+  tab?: Tab | null;
+  /** Pede ao dono das abas para abrir uma (ex.: a que tem o campo obrigatório vazio). */
   onTab?: (tab: Tab) => void;
+  /** Mexeu na ficha e ainda não salvou (alse ao salvar ou desfazer): quem troca de projeto por cima pergunta antes. */
+  onDirty?: (dirty: boolean) => void;
   onClose: () => void;
   onHired: (profile: StaffProfile, launch: LaunchResult | null) => void;
   onSaved: (profile: StaffProfile) => void;
@@ -59,20 +63,18 @@ const editsCode = (a: Autonomy) => a === 'acceptEdits' || a === 'auto' || a === 
 
 const lines = (s: string) => s.split('\n').map((l) => l.trim()).filter(Boolean);
 
-/** A ficha é longa: dividida em abas, cada uma com uma pergunta só. */
-type Tab = 'who' | 'tools' | 'run' | 'history';
+/** A ficha é longa: dividida em abas. A ficha (quem é) e o projeto (o que usa e como trabalha nele). */
+type Tab = 'sheet' | 'project';
 export type StaffFormTab = Tab;
 const TABS: Array<{ id: Tab; label: string; intro: string }> = [
-  { id: 'who', label: t('staff.tabWho'), intro: t('staff.tabWhoIntro') },
-  { id: 'tools', label: t('staff.tools'), intro: t('staff.tabToolsIntro') },
-  { id: 'run', label: t('staff.tabRun'), intro: t('staff.tabRunIntro') },
-  { id: 'history', label: t('staff.tabHistory'), intro: t('staff.tabHistoryIntro') },
+  { id: 'sheet', label: t('detail.tabSheet'), intro: t('staff.tabSheetIntro') },
+  { id: 'project', label: t('detail.tabProject'), intro: t('staff.tabProjectIntro') },
 ];
 
 /** De onde vem o MCP, na lista da ficha. */
 const MCP_SOURCE_LABEL = { club: 'staff.sourceClub', user: 'staff.sourceUser', local: 'staff.sourceLocal', project: 'staff.sourceProject' } as const satisfies Record<McpServerInfo['source'], MsgKey>;
 
-export function StaffForm({ board, projectId, mode, simple = false, embedded = false, tab: tabProp, onTab, onClose, onHired, onSaved }: Props) {
+export function StaffForm({ board, projectId, mode, simple = false, embedded = false, tab: tabProp, onTab, onDirty, onClose, onHired, onSaved }: Props) {
   const editing = mode.kind === 'edit' ? mode.profile : null;
   const adopting = mode.kind === 'adopt' ? mode.session : null;
   // No simples, a ficha inteira fica a um clique ("Mostrar todos os campos").
@@ -126,21 +128,44 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const [portrait, setPortrait] = useState<string | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [versions, setVersions] = useState<Array<{ version: string; name: string; role: string; updatedAt: string }> | null>(null);
   // Contratando: do zero (a ficha abaixo) ou cópia de alguém de outro projeto.
   const preset = mode.kind === 'hire' ? mode.copy : undefined;
   const [source, setSource] = useState<'new' | 'company'>(preset ? 'company' : 'new');
   const canCopy = mode.kind === 'hire' && !embedded;
-  // Editando quem tem cópias em outros projetos: a edição pode ir junto (desmarcado por padrão).
-  const [copies, setCopies] = useState(0);
-  const [applyCopies, setApplyCopies] = useState(false);
-  useEffect(() => {
-    if (!editing) return;
-    api.staffDirectory().then((r) => setCopies(copiesOf(r.people, { projectId, staffId: editing.id }).length), () => {});
-  }, [editing?.id, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [ownTab, setOwnTab] = useState<Tab>('who');
-  const tab = tabProp ?? ownTab;
+  // Editando quem tem cópias em outros projetos (mesmo personId): o que é da pessoa vai a elas ao salvar, sempre.
+  const copyProfiles = useMemo(
+    () => (editing?.personId ? board.staff.filter((s) => s.personId === editing.personId && !(s.projectId === projectId && s.id === editing.id)) : []),
+    [board.staff, editing, projectId],
+  );
+  const projectNameOf = (id: string) => board.projects.find((p) => p.id === id)?.name ?? id;
+  // Os campos da pessoa em que as outras fichas diferem do que está no formulário: o salvar vai trocá-los.
+  const overwrites = copyProfiles.length
+    ? differingFields(
+        { name, role, mission, doneWhen, rules: lines(rules), model: model || null, effort: effort || null, playbook: playbook || null },
+        copyProfiles,
+      ).map((d) => `${t(PERSON_FIELD_LABEL[d.field])} (${[...new Set(d.others.map((o) => projectNameOf(o.projectId)))].join(', ')})`)
+    : [];
+  if (copyProfiles.length && portrait !== undefined) overwrites.push(`${t('hr.fieldPortrait')} (${copyProfiles.map((c) => projectNameOf(c.projectId)).join(', ')})`);
+  // Ficha mexida e ainda não salva: avisa quem hospeda o formulário (a conta fica fora dos campos da memória pessoal).
+  const dirty = useRef(false);
+  const onDirtyRef = useRef(onDirty);
+  onDirtyRef.current = onDirty;
+  const markDirty = (e: FormEvent) => {
+    if (dirty.current || (e.target as HTMLElement).closest('[data-skip-dirty]')) return;
+    dirty.current = true;
+    onDirtyRef.current?.(true);
+  };
+  useEffect(
+    () => () => {
+      if (dirty.current) onDirtyRef.current?.(false);
+    },
+    [],
+  );  const [ownTab, setOwnTab] = useState<Tab>('sheet');
+  const tab = tabProp === undefined ? ownTab : tabProp;
   const setTab = onTab ?? setOwnTab;
+  // No "Mais" do funcionário no nível simples só há a aba Ficha: com todos os campos, o projeto vem embaixo dela.
+  const projectBelow = embedded && simple;
+  const shows = (which: Tab) => tab === which || (which === 'project' && projectBelow && tab === 'sheet');
 
   useEffect(() => {
     api.mcp(projectId).then(
@@ -151,7 +176,6 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       },
       () => setMcps([]),
     );
-    if (editing) api.staffVersions(projectId, editing.id).then(setVersions, () => setVersions([]));
     api.servers(projectId).then(setServerList, () => setServerList([]));
   }, [projectId, editing]);
 
@@ -250,7 +274,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     // Validação própria: o navegador não consegue focar um campo obrigatório numa aba escondida.
     const noName = !name.trim() || !role.trim();
     if (noName || (!mission.trim() && full)) {
-      setTab('who');
+      setTab('sheet');
       return setError(noName ? (full ? t('staff.errNameRole') : t('staff.errChooseRoleName')) : t('staff.errMission'));
     }
     setBusy(true);
@@ -283,7 +307,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       ...(editing ? {} : adopting ? { adoptSessionId: adopting.id, launch: false } : { launch: false }),
     };
     try {
-      if (editing) onSaved(await api.updateStaff(projectId, editing.id, input, copies > 0 && applyCopies));
+      if (editing) onSaved(await api.updateStaff(projectId, editing.id, input));
       else if (adopting) onSaved((await api.hire(projectId, input)).profile);
       else {
         // Abrir a sessão ao contratar passa pela trava de consumo.
@@ -291,17 +315,6 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
         if (!r) return setBusy(false);
         onHired(r.profile, r.launch);
       }
-    } catch (err) {
-      setError((err as Error).message);
-      setBusy(false);
-    }
-  };
-
-  const restore = async (version: string) => {
-    setBusy(true);
-    setError(null);
-    try {
-      onSaved(await api.restoreStaff(projectId, editing!.id, version));
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -355,12 +368,26 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     );
   }
 
+  /** Um painel de aba: escondido, não desmontado, para não perder o que foi digitado ao trocar de aba. */
+  const panel = (which: Tab) => ({
+    className: 'form-panel',
+    hidden: !shows(which),
+    // No "Mais" quem tem o tablist (e o tabpanel) é o painel do funcionário.
+    ...(embedded ? {} : { role: 'tabpanel', id: `staff-panel-${which}`, 'aria-labelledby': `staff-tab-${which}` }),
+  });
+
   const form = (
-      <form className={embedded ? 'hire-inline' : 'modal hire'} onSubmit={submit} noValidate>
+      <form className={embedded ? 'hire-inline' : 'modal hire'} onSubmit={submit} onChange={markDirty} noValidate hidden={tab === null}>
         {!embedded && head}
         {adopting && (
           <p className="muted small">
             {t('staff.adoptNote')}
+          </p>
+        )}
+
+        {editing && copyProfiles.length > 0 && shows('sheet') && (
+          <p className="person-scope small">
+            {t('hr.scope', { n: copyProfiles.length + 1, projects: [project?.name ?? projectId, ...copyProfiles.map((c) => projectNameOf(c.projectId))].join(', ') })}
           </p>
         )}
 
@@ -433,25 +460,33 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           </div>
         ) : (
           <>
-        <div className={embedded ? 'tabs tabs-sub' : 'tabs'} role="tablist" aria-label={t('detail.tabSheet')}>
-          {TABS.filter((tb) => tb.id !== 'history' || editing).map((tb) => (
-            <button
-              key={tb.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === tb.id}
-              className={`tab ${tab === tb.id ? 'is-active' : ''}`}
-              onClick={() => setTab(tb.id)}
-            >
-              {tb.label}
-              {tb.id === 'history' && versions ? ` (${versions.length})` : ''}
-            </button>
-          ))}
-        </div>
-        <p className="muted small tab-intro">{TABS.find((tb) => tb.id === tab)?.intro}</p>
+        {!embedded && (
+          <div className="tabs" role="tablist" aria-label={t('detail.tabSheet')}>
+            {TABS.map((tb) => (
+              <button
+                key={tb.id}
+                type="button"
+                role="tab"
+                id={`staff-tab-${tb.id}`}
+                aria-selected={tab === tb.id}
+                aria-controls={`staff-panel-${tb.id}`}
+                className={`tab ${tab === tb.id ? 'is-active' : ''}`}
+                onClick={() => setTab(tb.id)}
+              >
+                {tb.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {tab && (
+          <p className="muted small tab-intro">
+            {TABS.find((tb) => tb.id === tab)?.intro}
+            {editing && ` ${t('staff.editNote')}`}
+          </p>
+        )}
 
-        {/* ---- Quem é ---- */}
-        <div className="form-panel" role="tabpanel" hidden={tab !== 'who'}>
+        {/* ---- Ficha: quem é e como trabalha ---- */}
+        <div {...panel('sheet')}>
         {!editing && roles && roles.length > 0 && (
           <div className="templates">
             <span className="muted small" title={t('staff.cargosTitle')}>
@@ -483,35 +518,19 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           </label>
         </div>
 
-        <div className="grid2">
-          <label>
-            {t('staff.portrait')}
-            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => pickPortrait(e.target.files?.[0])} />
-            {currentPortrait && (
-              <span className="portrait-row">
-                <img className="portrait-preview" src={currentPortrait} alt={t('staff.portrait')} />
-                <button type="button" className="btn-secondary" onClick={() => setPortrait(null)}>
-                  {t('staff.removePortrait')}
-                </button>
-              </span>
-            )}
-          </label>
-          <fieldset>
-            <legend>{t('staff.reportsTo')}</legend>
-            <p className="muted small">{t('staff.reportsToHint')}</p>
-            <div className="checks">
-              {colleagues.length === 0 && <span className="muted small">{t('staff.noColleagues')}</span>}
-              {colleagues.map((m) => (
-                <label key={m.id} className="check">
-                  <input type="checkbox" checked={managers.includes(m.id)} onChange={() => toggle(managers, setManagers, m.id)} /> {m.name}
-                  <span className="muted small"> {m.role}</span>
-                </label>
-              ))}
-            </div>
-          </fieldset>
-        </div>
+        <label>
+          {t('staff.portrait')}
+          <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => pickPortrait(e.target.files?.[0])} />
+          {currentPortrait && (
+            <span className="portrait-row">
+              <img className="portrait-preview" src={currentPortrait} alt={t('staff.portrait')} />
+              <button type="button" className="btn-secondary" onClick={() => setPortrait(null)}>
+                {t('staff.removePortrait')}
+              </button>
+            </span>
+          )}
+        </label>
 
-        {/* Missão: na mesma aba de quem é. */}
         <label>
           {t('staff.missionReq')}
           <textarea value={mission} onChange={(e) => setMission(e.target.value)} rows={3} maxLength={4000} required />
@@ -520,20 +539,75 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           {t('staff.doneWhen')}
           <input value={doneWhen} onChange={(e) => setDoneWhen(e.target.value)} maxLength={2000} placeholder={t('staff.doneWhenPlaceholder')} />
         </label>
+        <label>
+          {t('staff.rules')}
+          <textarea value={rules} onChange={(e) => setRules(e.target.value)} rows={4} placeholder={t('staff.rulesPlaceholder')} />
+        </label>
+
         <div className="grid2">
           <label>
-            {t('staff.rules')}
-            <textarea value={rules} onChange={(e) => setRules(e.target.value)} rows={4} placeholder={t('staff.rulesPlaceholder')} />
+            {t('staff.modelLabel')}
+            <select value={model} onChange={(e) => setModel(e.target.value)}>
+              {MODEL_OPTIONS.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
           </label>
           <label>
-            {t('staff.knowledge')}
-            <textarea value={knowledge} onChange={(e) => setKnowledge(e.target.value)} rows={4} placeholder={t('staff.knowledgePlaceholder')} />
+            {t('staff.effortLabel')}
+            <select value={effort} onChange={(e) => setEffort(e.target.value as '' | Effort)}>
+              {EFFORT_OPTIONS.map((v) => (
+                <option key={v} value={v}>
+                  {v ? effortLabel(v) : t('staff.effortDefault')}
+                </option>
+              ))}
+            </select>
           </label>
         </div>
+
+        <label>
+          {t('staff.playbookLabel')}
+          <select value={playbook} onChange={(e) => pickPlaybook(e.target.value as '' | Playbook)}>
+            <option value="">{t('staff.playbookNone')}</option>
+            {PLAYBOOK_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {playbook && <p className="muted small">{PLAYBOOK_OPTIONS.find((o) => o.value === playbook)?.help}</p>}
+        {tip && (
+          <p className="badge warn" role="note">
+            {tip}
+          </p>
+        )}
+        {editing && <PersonMemory key={editing.id} projectId={projectId} staffId={editing.id} name={editing.name} />}
         </div>
 
-        {/* ---- Ferramentas ---- */}
-        <div className="form-panel" role="tabpanel" hidden={tab !== 'tools'}>
+        {/* ---- Projeto: com quem fala, o que usa e quanto decide sozinho ---- */}
+        <div {...panel('project')}>
+        <fieldset>
+          <legend>{t('staff.reportsTo')}</legend>
+          <p className="muted small">{t('staff.reportsToHint')}</p>
+          <div className="checks">
+            {colleagues.length === 0 && <span className="muted small">{t('staff.noColleagues')}</span>}
+            {colleagues.map((m) => (
+              <label key={m.id} className="check">
+                <input type="checkbox" checked={managers.includes(m.id)} onChange={() => toggle(managers, setManagers, m.id)} /> {m.name}
+                <span className="muted small"> {m.role}</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
+        <label>
+          {t('staff.knowledge')}
+          <textarea value={knowledge} onChange={(e) => setKnowledge(e.target.value)} rows={4} placeholder={t('staff.knowledgePlaceholder')} />
+        </label>
+
         {agentNames.length === 0 && skillNames.length === 0 && (
           <p className="muted small">{t('staff.noAgentsSkills')}</p>
         )}
@@ -556,11 +630,6 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
               ))}
             </div>
           </fieldset>
-        )}
-        {tip && (
-          <p className="badge warn" role="note">
-            {tip}
-          </p>
         )}
 
         <fieldset>
@@ -654,11 +723,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           {t('staff.browserHintA')}<code>claude --chrome</code>{t('staff.browserHintB')}
         </p>
         {browser && <BrowserCheck />}
-        </div>
 
-        {/* ---- Como trabalha ---- */}
-        <div className="form-panel" role="tabpanel" hidden={tab !== 'run'}>
-        {editing && <p className="muted small">{t('staff.editNote')}</p>}
         <fieldset>
           <legend>{t('staff.autonomy')}</legend>
           <div className="choices">
@@ -674,90 +739,27 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           </div>
         </fieldset>
 
-        <div className="grid2">
-          <label>
-            {t('staff.modelLabel')}
-            <select value={model} onChange={(e) => setModel(e.target.value)}>
-              {MODEL_OPTIONS.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            {t('staff.effortLabel')}
-            <select value={effort} onChange={(e) => setEffort(e.target.value as '' | Effort)}>
-              {EFFORT_OPTIONS.map((v) => (
-                <option key={v} value={v}>
-                  {v ? effortLabel(v) : t('staff.effortDefault')}
-                </option>
-              ))}
-            </select>
-          </label>
+        <label className="check">
+          <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} /> {t('staff.worktreeLabel')}
+          <span className="muted small">
+            {' '}
+            {t('staff.worktreeHintA')}<code>myco/…</code>{t('staff.worktreeHintB')}
+          </span>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={canHire} onChange={(e) => setCanHire(e.target.checked)} /> {t('detail.canHire')}
+          <span className="muted small"> {t('detail.canHireHint')}</span>
+        </label>
         </div>
-
-        <fieldset>
-          <legend>{t('staff.orchestration')}</legend>
-          <label>
-            {t('staff.playbookLabel')}
-            <select value={playbook} onChange={(e) => pickPlaybook(e.target.value as '' | Playbook)}>
-              <option value="">{t('staff.playbookNone')}</option>
-              {PLAYBOOK_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          {playbook && <p className="muted small">{PLAYBOOK_OPTIONS.find((o) => o.value === playbook)?.help}</p>}
-          <label className="check">
-            <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} /> {t('staff.worktreeLabel')}
-            <span className="muted small">
-              {' '}
-              {t('staff.worktreeHintA')}<code>myco/…</code>{t('staff.worktreeHintB')}
-            </span>
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={canHire} onChange={(e) => setCanHire(e.target.checked)} /> {t('detail.canHire')}
-            <span className="muted small"> {t('detail.canHireHint')}</span>
-          </label>
-        </fieldset>
-        </div>
-
-        {/* ---- Histórico ---- */}
-        {editing && (
-          <div className="form-panel" role="tabpanel" hidden={tab !== 'history'}>
-            {versions === null && <p className="muted small">{t('staff.loading')}</p>}
-            {versions?.length === 0 && <p className="muted small">{t('staff.historyEmpty')}</p>}
-            <ul className="rows">
-              {versions?.map((v) => (
-                <li key={v.version} className="row row-inline">
-                  <span className="row-title">
-                    {v.name} <span className="muted small">{v.role}</span>
-                  </span>
-                  <span className="row-meta">
-                    <span className="muted">{new Date(v.updatedAt).toLocaleString(locale(), { dateStyle: 'short', timeStyle: 'short' })}</span>
-                    <button type="button" className="btn-secondary" disabled={busy} onClick={() => void restore(v.version)}>
-                      {t('staff.restore')}
-                    </button>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
           </>
         )}
 
         {/* Rodapé fixo: salvar está sempre à vista, em qualquer aba. */}
         <div className="modal-footer">
-        {editing && copies > 0 && (
-          <label className="check apply-copies">
-            <input type="checkbox" checked={applyCopies} onChange={(e) => setApplyCopies(e.target.checked)} />{' '}
-            {copies === 1 ? t('hr.applyCopiesOne') : t('hr.applyCopiesOther', { n: copies })}
-            <span className="muted small"> {t('hr.applyCopiesHint')}</span>
-          </label>
+        {editing && overwrites.length > 0 && (
+          <p className="person-note small" role="note">
+            {t('hr.overwrites', { project: project?.name ?? projectId, fields: overwrites.join(', ') })}
+          </p>
         )}
         {error && <p className="error">{error}</p>}
         <div className="actions">

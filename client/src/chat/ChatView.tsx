@@ -19,6 +19,7 @@ import {
 import { ChangesPanel } from './ChangesPanel';
 import { useChatDetail } from './chatDetail';
 import type { ChatFocus } from './chatFocus';
+import { MoreTabs } from './MoreTabs';
 import { QuestionCard } from './QuestionCard';
 import { useChatFocus } from './useChatFocus';
 import { useOpenAt } from './useOpenAt';
@@ -60,11 +61,14 @@ interface Props {
   awaiting?: boolean;
 }
 
-/** Uma aba do "Mais" (Ficha, Expediente, Rotinas, Ações…). */
+/**
+ * Uma aba do "Mais" (Ficha, Projeto, Desempenho, Ações…). Com função, o conteúdo recebe como trocar de aba:
+ * a ficha usa para levar a quem a salva com um campo obrigatório vazio até a aba dele.
+ */
 export interface MoreTab {
   id: string;
   label: string;
-  content: ReactNode;
+  content: ReactNode | ((select: (id: string) => void) => ReactNode);
 }
 
 /** Conversa com o funcionário dentro do Claudio’s Club, sem terminal. */
@@ -290,25 +294,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
               ×
             </button>
           </div>
-          <div className="tabs" role="tablist" aria-label={t('chat.moreOptions')}>
-            {moreTabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                id={`more-tab-${tab.id}`}
-                aria-selected={activeTab.id === tab.id}
-                aria-controls="chat-more-panel"
-                className={`tab ${activeTab.id === tab.id ? 'is-active' : ''}`}
-                onClick={() => setMoreTab(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          <div className="chat-more-sec" role="tabpanel" id="chat-more-panel" aria-labelledby={`more-tab-${activeTab.id}`}>
-            {activeTab.content}
-          </div>
+          <MoreTabs tabs={moreTabs} active={activeTab.id} onActive={setMoreTab} label={t('chat.moreOptions')} />
         </div>
       )}
       <div

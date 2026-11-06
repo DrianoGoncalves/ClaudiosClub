@@ -22,7 +22,7 @@ describe('byHierarchy (quem cuida, na nova tarefa)', () => {
 });
 
 describe('byRecent (ordem do cartão na coluna)', () => {
-  const k = (id: string, status: 'todo' | 'planning' | 'doing' | 'done' | 'live', updatedAt: string) => ({ id, status, updatedAt });
+  const k = (id: string, status: 'todo' | 'planning' | 'doing' | 'done', updatedAt: string) => ({ id, status, updatedAt });
 
   it('última atualização no topo', () => {
     const col = [k('a', 'todo', '2026-11-01T10:00:00Z'), k('b', 'todo', '2026-11-05T10:00:00Z'), k('c', 'todo', '2026-11-03T10:00:00Z')];
@@ -34,8 +34,8 @@ describe('byRecent (ordem do cartão na coluna)', () => {
     expect(byRecent(col).map((x) => x.id)).toEqual(['p', 'a', 'b']);
   });
 
-  it('Pronto e No ar misturam por data; empate mantém a ordem e a lista original não muda', () => {
-    const col = [k('d', 'done', '2026-11-02T10:00:00Z'), k('l', 'live', '2026-11-04T10:00:00Z'), k('e', 'done', '2026-11-02T10:00:00Z')];
+  it('Pronto por data; empate mantém a ordem e a lista original não muda', () => {
+    const col = [k('d', 'done', '2026-11-02T10:00:00Z'), k('l', 'done', '2026-11-04T10:00:00Z'), k('e', 'done', '2026-11-02T10:00:00Z')];
     expect(byRecent(col).map((x) => x.id)).toEqual(['l', 'd', 'e']);
     expect(col.map((x) => x.id)).toEqual(['d', 'l', 'e']);
   });

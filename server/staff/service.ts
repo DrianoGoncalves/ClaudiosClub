@@ -15,6 +15,7 @@ import type {
   StaffProfile,
   Task,
 } from '../../shared/model';
+import { PERSON_FIELDS } from '../../shared/person';
 import type { VaultOptions } from '../secretVault';
 import { isFtpConnection, listFtpServers, readFtpConnections, removeFtpConnection, saveFtpConnection, testFtpConnection, type FtpConnector } from './ftp';
 import { keyFilesOf, listServers, readConnections, removeConnection, saveConnection, testConnection, writeStaffSshConfig } from './servers';
@@ -41,6 +42,7 @@ import {
   fichaFile,
   listProjectStaff,
   listVersions,
+  memoryDir,
   memoryFile,
   profileFile,
   readPortrait,
@@ -108,12 +110,10 @@ const StaffRefBody = z.object({
 });
 const LinkBody = z.object({ from: StaffRefBody, to: StaffRefBody });
 const UnlinkBody = StaffRefBody;
+/** Aceito por compatibilidade (clientes antigos mandam). A propagação às cópias é sempre; o valor não muda nada. */
 const ApplyToCopiesBody = z.object({ applyToCopies: z.boolean().optional() });
 /** Apagar com tarefas abertas: `force` deixa as tarefas sem responsável (confirmado na tela). Sem corpo = sem force. */
 const DeleteStaffBody = z.object({ force: z.boolean().default(false) });
-
-/** Campos que a edição leva para as cópias da mesma pessoa. Nunca: vínculos, servidores, memória, conversas, rotinas, MCPs. */
-const COPY_TEXT_FIELDS = ['name', 'role', 'mission', 'rules', 'doneWhen', 'model', 'effort', 'agents', 'skills'] as const;
 
 /** `child` está dentro de `dir` (sem sair por `..` nem por outro caminho). */
 function insideDir(dir: string, child: string): boolean {
@@ -137,8 +137,8 @@ export interface StaffServiceOptions {
   weekCost?: (projectId: string) => Promise<{ project: number; total: number }>;
   /** Abre uma conversa nova no Claudio’s Club e manda a mensagem (subfuncionário contratado pela API). */
   openChat?: (projectId: string, staffId: string, text: string) => Promise<string>;
-  /** Alguma conversa do funcionário está trabalhando agora. */
-  isWorking?: (staffId: string) => boolean;
+  /** Alguma conversa deste funcionário, neste projeto, está trabalhando agora (outro projeto não conta). */
+  isWorking?: (projectId: string, staffId: string) => boolean;
   /** Tarefas do quadro do projeto (o delete recusa se alguma aberta aponta para a ficha). Padrão: nenhuma. */
   tasksOf?: (projectId: string) => Promise<Pick<Task, 'staffId' | 'reviewerId' | 'status'>[]>;
   /** Com `force`, solta as tarefas abertas da ficha (sem responsável; ver TaskService.releaseStaff). Sem ele, `force` recusa. */
@@ -389,6 +389,13 @@ export class StaffService {
     if (oldMemory !== null) {
       await writeAtomic(memoryFile(target.path, profile.id), `Copiada de ${source.name} em ${now.toLocaleDateString('pt-BR')}\n\n${oldMemory}`);
     }
+    // Arquivos de detalhe da memória (pasta irmã), se a origem tiver. fs.cp não segue links (dereference: false, o padrão).
+    if (withMemory) {
+      const srcDir = memoryDir(source.path, src.id);
+      if (await fs.stat(srcDir).then((s) => s.isDirectory(), () => false)) {
+        await fs.cp(srcDir, memoryDir(target.path, profile.id), { recursive: true });
+      }
+    }
     await ensureMemory(target.path, profile);
     await writeFicha(profile, await this.context(target, profile));
     return { profile };
@@ -409,6 +416,24 @@ export class StaffService {
     });
   }
 
+  /** O `personId` da ficha (gera e grava se faltar): a memória pessoal é da pessoa, então a tela precisa dele antes de editar. */
+  async personOf(projectId: string, staffId: string): Promise<{ personId: string } | null> {
+    const project = await this.project(projectId);
+    const current = project ? await readProfile(project.path, staffId) : null;
+    if (!project || !current) return null;
+    return { personId: await this.ensurePersonId(project.path, current) };
+  }
+
+  /** Ids das conversas de todas as fichas com este personId (em todos os projetos do quadro). */
+  async sessionsOfPerson(personId: string): Promise<string[]> {
+    const out: string[] = [];
+    for (const project of (await this.adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf)) {
+      const copies = await listProjectStaff(project.path, project.id).catch(() => []);
+      for (const s of copies) if (s.personId === personId) out.push(...s.sessions.map((x) => x.id));
+    }
+    return out;
+  }
+
   /** Grava o vínculo (ou tira, com null) da ficha, pelo lock dela. Não mexe em versão nem em updatedAt. */
   private async setPersonId(projectPath: string, staffId: string, personId: string | null): Promise<void> {
     await withProfileLock(projectPath, staffId, async () => {
@@ -424,8 +449,8 @@ export class StaffService {
    * contratação ficam. Retrato: data URL troca, null remove, ausente mantém.
    */
   /**
-   * `applyToCopies: true` leva a edição às cópias da mesma pessoa (ver applyToCopies). `copiesUpdated` vem sempre (0 quando
-   * não se aplica).
+   * Os campos da pessoa (PERSON_FIELDS e retrato) vão às cópias da mesma pessoa (ver applyToCopies). `copiesUpdated` = quantas
+   * cópias mudaram (0 sem vínculo ou sem nada da pessoa mudando).
    */
   async update(projectId: string, staffId: string, body: unknown): Promise<(StaffProfile & { copiesUpdated: number }) | null> {
     const project = await this.project(projectId);
@@ -443,7 +468,7 @@ export class StaffService {
     }
 
     const saved = await this.saveEdit(project, current, { ...current, ...fields, projectId }, portraitDataUrl);
-    const copiesUpdated = flags.data.applyToCopies && saved.personId ? await this.applyToCopies(project, saved) : 0;
+    const copiesUpdated = saved.personId ? await this.applyToCopies(project, saved, portraitDataUrl) : 0;
     return { ...saved, copiesUpdated };
   }
 
@@ -464,14 +489,15 @@ export class StaffService {
   }
 
   /**
-   * Leva a edição (já salva) às cópias da mesma pessoa, em todos os projetos do quadro (sem worktrees, como o diretório).
-   * Só os campos de COPY_TEXT_FIELDS e o retrato. Cada cópia passa por saveEdit, com o lock dela. Uma falha não para as
-   * outras: vai para o log e não conta. Devolve quantas foram atualizadas.
+   * Leva os campos da pessoa (PERSON_FIELDS) já salvos na origem às cópias da mesma pessoa, em todos os projetos do quadro
+   * (sem worktrees, como o diretório). `portraitDataUrl` como no pedido: undefined não mexe no retrato das cópias; null
+   * remove; data URL troca (vai o retrato da origem, já gravado). Cada cópia passa por saveEdit, com o lock dela; uma cópia
+   * já igual não ganha versão nova. Uma falha não para as outras: vai para o log e não conta. Devolve quantas mudaram.
    */
-  private async applyToCopies(source: Project, saved: StaffProfile): Promise<number> {
-    const picture = await readPortrait(source.path, saved);
-    const dataUrl = picture ? `data:${picture.type};base64,${picture.bytes.toString('base64')}` : null;
-    const text = Object.fromEntries(COPY_TEXT_FIELDS.map((k) => [k, saved[k]])) as Partial<StaffProfile>;
+  private async applyToCopies(source: Project, saved: StaffProfile, portraitDataUrl?: string | null): Promise<number> {
+    const picture = portraitDataUrl === undefined || portraitDataUrl === null ? null : await readPortrait(source.path, saved);
+    const dataUrl = portraitDataUrl === undefined ? undefined : picture ? `data:${picture.type};base64,${picture.bytes.toString('base64')}` : null;
+    const text = Object.fromEntries(PERSON_FIELDS.map((k) => [k, saved[k]])) as Partial<StaffProfile>;
     let updated = 0;
     for (const project of (await this.adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf)) {
       const copies = (await listProjectStaff(project.path, project.id).catch(() => [])).filter(
@@ -482,6 +508,8 @@ export class StaffService {
           await withProfileLock(project.path, c.id, async () => {
             const cur = await readProfile(project.path, c.id);
             if (!cur || cur.personId !== saved.personId) return;
+            const igual = PERSON_FIELDS.every((k) => JSON.stringify(cur[k]) === JSON.stringify(saved[k]));
+            if (igual && dataUrl === undefined) return;
             await this.saveEdit(project, cur, { ...cur, ...text, projectId: project.id }, dataUrl);
             updated++;
           });
@@ -512,7 +540,11 @@ export class StaffService {
     return project ? listVersions(project.path, staffId) : null;
   }
 
-  /** Volta a ficha para uma versão anterior (a atual também vai para o histórico). */
+  /**
+   * Volta a ficha para uma versão anterior (a atual também vai para o histórico). Com cópias da mesma pessoa, os campos
+   * da pessoa restaurados vão para elas (mesmo caminho da edição): assim a volta também desfaz uma mudança que tinha
+   * ido para as cópias, e nada diverge em silêncio.
+   */
   async restore(projectId: string, staffId: string, version: string): Promise<StaffProfile | null> {
     const project = await this.project(projectId);
     const current = project ? await readProfile(project.path, staffId) : null;
@@ -521,10 +553,12 @@ export class StaffService {
     await archiveVersion(project.path, current);
     // Sessões e retrato são do presente: só os campos da ficha voltam.
     // Rotinas também são do presente: voltar a ficha não desagenda nem reagenda nada.
+    // O vínculo com as cópias também é do presente: a versão antiga pode não ter `personId`, e perdê-lo sairia do grupo.
     const next: StaffProfile = {
       ...old,
       id: current.id,
       projectId,
+      personId: current.personId,
       sessions: current.sessions,
       // O último modelo/esforço do chat também é do presente.
       lastModel: current.lastModel,
@@ -540,6 +574,7 @@ export class StaffService {
     await saveProfile(project.path, next);
     await writeFicha(next, await this.context(project, next));
     this.opts.onChange?.(current, next);
+    if (next.personId) await this.applyToCopies(project, next);
     return next;
   }
 
@@ -596,7 +631,7 @@ export class StaffService {
       const sessions = (await this.adapter.getProjectSessions(project.id).catch(() => null)) ?? [];
       const touched = new Map(sessions.map((s) => [s.id, s.updatedAt]));
       for (const s of temps) {
-        if ((await this.archive.has(`staff:${s.id}`)) || this.opts.isWorking?.(s.id)) continue;
+        if ((await this.archive.has(`staff:${s.id}`)) || this.opts.isWorking?.(project.id, s.id)) continue;
         const last = [s.createdAt, s.updatedAt, ...s.sessions.map((x) => touched.get(x.id) ?? x.startedAt)].sort().at(-1)!;
         const idle = (now.getTime() - Date.parse(last)) / 86_400_000;
         if (idle < days) continue;
@@ -663,12 +698,12 @@ export class StaffService {
     const project = await this.project(projectId);
     const current = project ? await readProfile(project.path, staffId) : null;
     if (!project || !current) return null;
-    if (this.opts.isWorking?.(staffId)) {
+    if (this.opts.isWorking?.(projectId, staffId)) {
       throw new StaffBusyError(`${current.name} está trabalhando numa conversa agora: espere terminar para apagar`);
     }
-    // Tarefa aberta (não pronta nem no ar) como executora ou revisora: sem `force`, recusa; com ele, a tarefa fica sem responsável.
+    // Tarefa aberta (não pronta) como executora ou revisora: sem `force`, recusa; com ele, a tarefa fica sem responsável.
     const open = ((await this.opts.tasksOf?.(projectId)) ?? []).filter(
-      (t) => (t.staffId === staffId || t.reviewerId === staffId) && t.status !== 'done' && t.status !== 'live',
+      (t) => (t.staffId === staffId || t.reviewerId === staffId) && t.status !== 'done',
     ).length;
     if (open > 0 && !parsed.data.force) {
       throw new StaffOpenTasksError(
@@ -696,7 +731,7 @@ export class StaffService {
 
     // Arquivos da ficha, todos dentro de .myco/staff (o id já passou pela checagem de readProfile; o retrato, pelo nome).
     const dir = staffDir(project.path);
-    const targets = [fichaFile(project.path, staffId), memoryFile(project.path, staffId), path.join(dir, `${staffId}.history`)];
+    const targets = [fichaFile(project.path, staffId), memoryFile(project.path, staffId), memoryDir(project.path, staffId), path.join(dir, `${staffId}.history`)];
     if (current.portrait && PORTRAIT_FILE.test(current.portrait)) targets.push(path.join(dir, current.portrait));
     if (targets.some((t) => !insideDir(dir, t))) throw new StaffError('caminho fora de .myco/staff');
     for (const t of targets) await fs.rm(t, { recursive: true, force: true });

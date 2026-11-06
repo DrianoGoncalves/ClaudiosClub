@@ -80,6 +80,7 @@ import { boardFilter } from './board';
 import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
 import { AUTONOMY, readProfile } from './staff/store';
+import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
 import { TaskError, TaskService } from './tasks';
 import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefaultRole } from './roles';
 import { ROOT } from './root';
@@ -204,7 +205,7 @@ const staff: StaffService = new StaffService(adapter, {
   // Subfuncionário contratado pela API: abre numa conversa do Claudio’s Club, não num terminal.
   // O gestor que contratou pela API passa a primeira tarefa: é delegação (bolinhas na linha).
   openChat: (projectId, staffId, text): Promise<string> => chats.send(projectId, null, staffId, text, undefined, [], [], true),
-  isWorking: (staffId) => chats.staffWorking(staffId),
+  isWorking: (projectId, staffId) => chats.staffWorking(projectId, staffId),
   // Tarefas abertas da ficha impedem apagar (ver deleteStaff). `tasks` é declarado logo abaixo: só é lido na chamada.
   tasksOf: async (projectId) => (await tasks.list(projectId)) ?? [],
   // Apagar com tarefas abertas e `force`: as tarefas ficam sem responsável (ver TaskService.releaseStaff).
@@ -311,7 +312,7 @@ const tasks = new TaskService({
   },
   send: sendNewConversation,
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
-  isWorking: (staffId, except) => chats.staffWorking(staffId, except),
+  isWorking: (projectId, staffId, except) => chats.staffWorking(projectId, staffId, except),
   // O gestor que pediu recebe a entrega na conversa em que pediu (ou, sem ela, na mais recente dele),
   // depois que o turno dele acabar.
   notify: async (projectId, staffId, text, sessionId) => {
@@ -321,7 +322,7 @@ const tasks = new TaskService({
     const target = sessionId && manager.sessions.some((s) => s.id === sessionId) ? sessionId : (manager.sessions.at(-1)?.id ?? null);
     await chats.send(projectId, target, staffId, text, 'later');
   },
-  requesterSession: (staffId) => chats.workingSession(staffId),
+  requesterSession: (projectId, staffId) => chats.workingSession(projectId, staffId),
   lastText: (sessionId) => chats.lastAssistantText(sessionId),
   // O consumo já foi conferido quando você mandou (a mensagem só esperou a vez).
   sendTo: (projectId, sessionId, staffId, text, images) => chats.send(projectId, sessionId, staffId, text, 'next', images),
@@ -478,7 +479,7 @@ const mcpLibrary = createMcpLibrary({
   resolveProject: projectPathOf,
 });
 
-const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
+const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ['GET', /^\/api\/health$/, async () => ({ ok: true, adapter: adapter.id })],
   // CPU e RAM da máquina, para o monitor do canto (só números; ver systemStats.ts).
   ['GET', /^\/api\/system$/, async (): Promise<SystemStats> => systemStats()],
@@ -665,6 +666,27 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     async ({ params: [id, staffId] }) => {
       const img = await staff.portrait(id!, staffId!);
       return img ? new Raw(img.bytes, img.type) : null;
+    },
+  ],
+  // Memória pessoal (uma por pessoa, lida pelas fichas dela em todos os projetos). Lê qualquer um; grava só pelo navegador.
+  ['GET', new RegExp(`^/api/people/${ID}/memory$`), async ({ params: [pid] }) => readPersonMemory(pid!)],
+  [
+    'PUT',
+    new RegExp(`^/api/people/${ID}/memory$`),
+    async ({ params: [pid], body, fromBrowser }) => {
+      const saved = await savePersonMemory(pid!, body, fromBrowser);
+      // As conversas abertas dessa pessoa reabrem com a memória nova na próxima mensagem.
+      chats.personChanged(await staff.sessionsOfPerson(pid!));
+      return saved;
+    },
+  ],
+  // Garante o personId da ficha (gera se faltar) para a tela poder editar a memória. Grava o JSON: só pelo navegador.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/staff/${ID}/person$`),
+    ({ params: [id, staffId], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      return staff.personOf(id!, staffId!);
     },
   ],
   // ---- conversa ----
@@ -1490,7 +1512,7 @@ const server = http.createServer(async (req, res) => {
       if (!m || method !== req.method) continue;
       try {
         // O envio de anexo manda os bytes do arquivo (até 10 MB) em vez de JSON.
-        const body = req.method === 'POST' ? (ATTACHMENT_UPLOAD.test(url.pathname) ? await readRaw(req, MAX_ATTACHMENT_BYTES) : await readJson(req)) : undefined;
+        const body = method !== 'GET' ? (ATTACHMENT_UPLOAD.test(url.pathname) ? await readRaw(req, MAX_ATTACHMENT_BYTES) : await readJson(req)) : undefined;
         const userAgent = (req.headers['user-agent'] ?? '').replace(/[^\x20-\x7e]/g, '').slice(0, 80);
         const out = await handler({ params: m.slice(1), url, body, fromBrowser, paired: pairing.isPaired(req.headers.cookie), userAgent });
         if (out === null) return send(res, 404, { error: 'não encontrado' });

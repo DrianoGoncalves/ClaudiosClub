@@ -103,6 +103,8 @@ const ProfileSchema = StaffInputSchema.omit({ portraitDataUrl: true, launch: tru
 export const staffDir = (projectPath: string) => path.join(projectPath, '.myco', 'staff');
 export const fichaFile = (projectPath: string, id: string) => path.join(staffDir(projectPath), `${id}.md`);
 export const memoryFile = (projectPath: string, id: string) => path.join(staffDir(projectPath), `${id}.memory.md`);
+/** Pasta irmã da memória: arquivos de detalhe do índice. Não é criada aqui (o funcionário cria quando precisar). */
+export const memoryDir = (projectPath: string, id: string) => path.join(staffDir(projectPath), `${id}.memory`);
 export const profileFile = (projectPath: string, id: string) => path.join(staffDir(projectPath), `${id}.json`);
 
 const SAFE_ID = /^[a-z0-9-]{1,40}$/;

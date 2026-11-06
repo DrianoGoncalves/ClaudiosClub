@@ -158,6 +158,17 @@ describe('ficha', () => {
     expect(renderFicha(profile(), { ...ctx, mycoUrl: '' })).not.toContain('## Despertador');
   });
 
+  it('memória: a ficha cita a pasta <id>.memory/ como índice, e sem o sufixo .memory.md não mostra a linha da pasta', () => {
+    const md = renderFicha(profile(), ctx);
+    const section = md.slice(md.indexOf('## Memória'), md.indexOf('- Ponto de corte'));
+    expect(section).toContain('Ela é um índice');
+    expect(section).toContain('`.myco\\staff\\ana-1a2b.memory/<assunto>.md`');
+    expect(section).toContain('apague o arquivo e a linha');
+    expect(md).toContain('Sua memória fica em `.myco\\staff\\ana-1a2b.memory.md`');
+    const semSufixo = renderFicha(profile(), { ...ctx, memoryPath: '.myco\\staff\\ana-1a2b.txt' });
+    expect(semSufixo).not.toContain('Ela é um índice');
+  });
+
   it('prompt de sistema: identidade, onde fica a memória e a ficha inteira (vai por arquivo)', () => {
     const ficha = renderFicha(profile(), ctx);
     const sys = systemPrompt(profile(), ctx, ficha);
@@ -466,7 +477,7 @@ describe('StaffService', () => {
       mycoUrl: 'x',
       readUsage: noUsage,
       openChat: async (_p, staffId, text) => (chats.push({ staffId, text }), 'conversa-1'),
-      isWorking: (id) => working.has(id),
+      isWorking: (_p, id) => working.has(id),
       archive: { has: async (k) => archived.has(k), set: async (k, v) => void (v ? archived.add(k) : archived.delete(k)) },
     });
     const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestora', canHire: true, launch: false }, true))!;

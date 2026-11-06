@@ -153,8 +153,8 @@ describe('tarefas por projeto', () => {
     expect(deploying).toMatchObject({ status: 'done', deploy: { staffId: 'ops-1', sessionId: 's-3' } });
     expect(sent[2]!.text).toMatch(/\[Deploy da tarefa "Exportar CSV"\][\s\S]*backup[\s\S]*runbook/);
     await svc.onTurnDone('s-3');
-    await svc.update('p', t.id, { status: 'live' });
-    expect((await svc.summary()).p).toMatchObject({ open: 0, lastDeploy: { title: 'Exportar CSV', by: 'ops-1' } });
+    expect((await svc.list('p'))![0]).toMatchObject({ status: 'done', deploy: { staffId: 'ops-1' } });
+    expect(await svc.summary()).toEqual({}); // pronto não conta como aberto
   });
 
   it('valida, edita, move à mão e apaga; o índice sessão → tarefa sobrevive a um reinício', async () => {
@@ -172,7 +172,7 @@ describe('tarefas por projeto', () => {
     const { svc: fresh } = service('c'); // "reiniciou": índice vazio, achado pelo disco
     await fresh.onTurnDone('sess-1');
     expect((await fresh.list('p'))!.find((x) => x.id === u.id)!.status).toBe('review');
-    expect(await fresh.summary()).toEqual({ p: { open: 1, review: 1, lastDeploy: null } });
+    expect(await fresh.summary()).toEqual({ p: { open: 1, review: 1 } });
 
     expect(await svc.remove('p', t.id)).toBe(true);
     expect(await svc.remove('p', t.id)).toBe(false);
@@ -228,7 +228,7 @@ describe('tarefa pedida por um gestor', () => {
       notify: async (_p, _s, text, sessionId) => void notified.push({ text, sessionId }),
       lastText: () => 'Pronto.',
       // Giovana está no turno em que chamou a API: é para essa conversa que a entrega volta.
-      requesterSession: (staffId) => (staffId === 'gio-1' ? 's-gio-pediu' : null),
+      requesterSession: (_p, staffId) => (staffId === 'gio-1' ? 's-gio-pediu' : null),
       runTests: async (cwd, command) => (ran.push(`${cwd}|${command}`), { command, ok: false, output: 'FAIL botao.test.ts', ms: 4200, at: '2026-10-28T12:00:00Z' }),
     });
     const t = (await svc.create('p', { title: 'Botão', description: '', staffId: 'lu-1' }, 'gio-1'))!;
@@ -261,7 +261,7 @@ describe('fila por funcionário', () => {
         return session;
       },
       branchFor: async () => null,
-      isWorking: (_staffId, except) => [...working].some((s) => s !== except),
+      isWorking: (_p, _staffId, except) => [...working].some((s) => s !== except),
       sendTo: async (_p, sessionId, _staffId, text, images) => {
         delivered.push({ sessionId, text, images });
         working.add(sessionId);
@@ -360,7 +360,7 @@ describe('conversa da tarefa que morreu no meio do turno', () => {
         return session;
       },
       branchFor: async () => null,
-      isWorking: (_s, except) => [...working].some((s) => s !== except),
+      isWorking: (_p, _s, except) => [...working].some((s) => s !== except),
       sendTo: async (_p, sessionId, _s, text) => {
         delivered.push({ sessionId, text });
         working.add(sessionId);
@@ -422,7 +422,7 @@ describe('conversa da tarefa que morreu no meio do turno', () => {
       readProfile: async (_p, id) => (id === 'ana-1' ? ana : null),
       send: async () => 's-1', // a conversa da tarefa começou antes do reinício
       branchFor: async () => null,
-      isWorking: (s, except) => chats.staffWorking(s, except),
+      isWorking: (p, s, except) => chats.staffWorking(p, s, except),
       sendTo: (p, sid, s, text, images) => chats.send(p, sid, s, text, 'next', images),
     });
     const a = (await svc.create('p', { title: 'A', staffId: 'ana-1' }))!;
@@ -487,7 +487,7 @@ describe('conversa da tarefa que morreu no meio do turno', () => {
         return session;
       },
       branchFor: async () => null,
-      isWorking: (_s, except) => [...working].some((s) => s !== except),
+      isWorking: (_p, _s, except) => [...working].some((s) => s !== except),
       sendTo: async (_p, sessionId) => (working.add(sessionId), sessionId),
       notify: async (_p, staffId, text) => void notified.push({ staffId, text }),
       lastText: () => 'Fiz metade do formulário.',
@@ -880,5 +880,132 @@ describe('limite de consumo ao começar', () => {
     const after = await task(t.id);
     expect(after.history).toHaveLength(once);
     expect(after.history.filter((h) => h.note === STOP)).toHaveLength(1);
+  });
+});
+
+describe('quadro: Aguardar', () => {
+  /** Ana com o que o ChatManager sabe: `working` diz quais conversas estão trabalhando agora. */
+  function parked(dirName: string) {
+    const dir = path.join(root, dirName);
+    const sent: string[] = [];
+    const working = new Set<string>();
+    let n = 0;
+    const ana = { id: 'ana-1', name: 'Ana', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'ana-1' ? ana : null),
+      send: async (_p, _s, text) => {
+        const session = `s-${++n}`;
+        sent.push(text);
+        working.add(session);
+        return session;
+      },
+      branchFor: async () => null,
+      isWorking: (_p, _s, except) => [...working].some((s) => s !== except),
+    });
+    /** O turno acabou: o processo avisa (onIdle) e o vigia também (onTurnDone). */
+    const finish = async (session: string) => {
+      working.delete(session);
+      await svc.onIdle(session, 'p', 'ana-1');
+      await svc.onTurnDone(session);
+    };
+    const tasksFile = path.join(dir, '.myco', 'tasks.json');
+    return { svc, sent, finish, tasksFile };
+  }
+
+  it('criar sem começar (start false) vai para Aguardar, que conta como aberta; começar leva para fazendo', async () => {
+    const { svc, sent } = parked('aguardar-1');
+    const w = (await svc.create('p', { title: 'Espera', staffId: 'ana-1', start: false }))!;
+    expect(w).toMatchObject({ status: 'waiting', sessionId: null });
+    expect(w.history).toMatchObject([{ status: 'waiting' }]);
+    expect((await svc.create('p', { title: 'Com start', staffId: 'ana-1' }))!.status).toBe('todo');
+    expect(await svc.summary()).toEqual({ p: { open: 2, review: 0 } });
+
+    expect(await svc.start('p', w.id)).toMatchObject({ status: 'doing', sessionId: 's-1' });
+    expect(sent[0]).toContain('[Tarefa "Espera"]');
+  });
+
+  it('a fila nunca pega Aguardar: quando a da frente entrega, a próxima da fila começa e a de Aguardar fica', async () => {
+    const { svc, sent, finish } = parked('aguardar-2');
+    const [a, w, b] = [
+      (await svc.create('p', { title: 'A', staffId: 'ana-1' }))!,
+      (await svc.create('p', { title: 'W', staffId: 'ana-1', start: false }))!,
+      (await svc.create('p', { title: 'B', staffId: 'ana-1' }))!,
+    ];
+    await svc.start('p', a.id); // s-1
+    await svc.start('p', b.id); // fila
+    await finish('s-1');
+    expect((await svc.list('p'))!.map((t) => [t.title, t.status])).toEqual([
+      ['A', 'review'],
+      ['W', 'waiting'],
+      ['B', 'doing'],
+    ]);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toContain('[Tarefa "B"]');
+    const waiting = (await svc.list('p'))!.find((t) => t.id === w.id)!;
+    expect(waiting.status).toBe('waiting');
+    expect(waiting.queuedAt ?? null).toBeNull();
+  });
+
+  it('começar uma de Aguardar com ele ocupado põe na fila como A fazer; mover para Aguardar tira da fila', async () => {
+    const { svc, sent, finish } = parked('aguardar-3');
+    const [a, w, b] = [
+      (await svc.create('p', { title: 'A', staffId: 'ana-1' }))!,
+      (await svc.create('p', { title: 'W', staffId: 'ana-1', start: false }))!,
+      (await svc.create('p', { title: 'B', staffId: 'ana-1' }))!,
+    ];
+    await svc.start('p', a.id); // s-1
+    await svc.start('p', b.id); // fila
+    expect(await svc.start('p', w.id)).toMatchObject({ status: 'todo', queuedAt: expect.any(String) });
+    expect(await svc.update('p', b.id, { status: 'waiting' })).toMatchObject({ status: 'waiting', queuedAt: null, queuedForce: false });
+
+    await finish('s-1');
+    expect((await svc.list('p'))!.map((t) => [t.title, t.status])).toEqual([
+      ['A', 'review'],
+      ['W', 'doing'],
+      ['B', 'waiting'],
+    ]);
+    expect(sent[1]).toContain('[Tarefa "W"]');
+    expect(sent).toHaveLength(2);
+  });
+
+  it('Aguardar não arquiva: só Pronto parado há mais de 7 dias sai do quadro', async () => {
+    const { svc, tasksFile } = parked('aguardar-4');
+    await svc.create('p', { title: 'W', staffId: 'ana-1', start: false });
+    const raw = JSON.parse(await fs.readFile(tasksFile, 'utf8')) as Array<Record<string, unknown>>;
+    raw[0]!.updatedAt = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    await fs.writeFile(tasksFile, JSON.stringify(raw));
+    const [l] = (await svc.list('p'))!;
+    expect(l).toMatchObject({ status: 'waiting' });
+    expect(l!.archived).toBeUndefined();
+  });
+
+  it('"no ar" gravado antes carrega como pronto (tarefa e histórico), e não conta como aberto', async () => {
+    const { svc, tasksFile } = parked('aguardar-5');
+    await fs.mkdir(path.dirname(tasksFile), { recursive: true });
+    const now = new Date().toISOString();
+    const old = { id: 't-antiga', title: 'Antiga', description: '', status: 'live', staffId: null, sessionId: null, plan: null, branch: null, pr: null, createdAt: now, updatedAt: now, history: [{ at: now, status: 'live', by: 'you' }] };
+    await fs.writeFile(tasksFile, JSON.stringify([old]));
+    const [t] = (await svc.list('p'))!;
+    expect(t).toMatchObject({ status: 'done', history: [{ status: 'done' }] });
+    expect(await svc.summary()).toEqual({});
+  });
+
+  it('motivo: opcional, no máximo 200 caracteres, sem espaço nas bordas; sai junto com a coluna', async () => {
+    const { svc } = parked('aguardar-6');
+    const w = (await svc.create('p', { title: 'W', staffId: 'ana-1', start: false }))!;
+    expect(await svc.update('p', w.id, { waitReason: '  Esperando o cliente  ' })).toMatchObject({ status: 'waiting', waitReason: 'Esperando o cliente' });
+    await expect(svc.update('p', w.id, { waitReason: 'x'.repeat(201) })).rejects.toThrow(/máx. 200/);
+    expect(await svc.update('p', w.id, { waitReason: '' })).toMatchObject({ waitReason: null });
+    await svc.update('p', w.id, { waitReason: 'Cliente' });
+    expect(await svc.update('p', w.id, { status: 'todo' })).toMatchObject({ status: 'todo', waitReason: null });
+  });
+
+  it('apagar o responsável: a tarefa em Aguardar continua em Aguardar, só solta o responsável', async () => {
+    const { svc } = parked('aguardar-7');
+    await svc.create('p', { title: 'W', staffId: 'ana-1', start: false });
+    expect(await svc.releaseStaff('p', 'ana-1')).toBe(1);
+    expect((await svc.list('p'))![0]).toMatchObject({ status: 'waiting', staffId: null });
   });
 });

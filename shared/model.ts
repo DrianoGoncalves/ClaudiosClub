@@ -453,8 +453,8 @@ export interface Routine {
   enabled: boolean;
 }
 
-/** Colunas do quadro de tarefas, na ordem. */
-export const TASK_STATUSES = ['todo', 'planning', 'doing', 'review', 'done', 'live'] as const;
+/** Colunas do quadro de tarefas, na ordem. "waiting" (Aguardar) não é ocupado nem entra na fila. */
+export const TASK_STATUSES = ['waiting', 'todo', 'planning', 'doing', 'review', 'done'] as const;
 
 /** Temporário (contratado por outro funcionário) parado há mais que isso sai do quadro. */
 export const TEMP_IDLE_DAYS = 3;
@@ -513,6 +513,8 @@ export interface Task {
   queuedAt?: string | null;
   /** Começar mesmo com o limite de consumo batido (você confirmou ao pôr na fila). */
   queuedForce?: boolean;
+  /** Motivo de estar em Aguardar (opcional, texto puro, até 200 caracteres). Limpo ao sair da coluna. */
+  waitReason?: string | null;
   /** Mensagens suas nesta conversa esperando o funcionário terminar outra tarefa. */
   held?: HeldMessage[];
   /**
@@ -531,12 +533,10 @@ export interface HeldMessage {
   reason: string;
 }
 
-/** Tarefas de um projeto para o cabeçalho: abertas, em revisão e o último deploy. */
+/** Tarefas de um projeto para o cabeçalho: abertas (tudo que não é pronto) e em revisão. */
 export interface TaskSummary {
   open: number;
   review: number;
-  /** A tarefa que foi para "no ar" por último (by: o funcionário de infra, se o deploy foi pedido a ele). */
-  lastDeploy: { title: string; at: string; by: string | null } | null;
 }
 
 /** Trabalho passado a outro funcionário (revisão, deploy): quem, em qual conversa e quando. */

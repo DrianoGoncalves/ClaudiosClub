@@ -107,6 +107,14 @@ Ex.: 2026-11-06: SQLite, porque o cliente não tem servidor de banco.
 <!--
 O que ainda não foi decidido. Quando resolver, passe para Decisões.
 -->
+
+## Lições da revisão
+
+<!--
+Regras que saíram de um 🔴 da revisão e valem para o projeto todo, uma por linha, com data.
+No máximo 15: ao passar disso, junte ou tire as que ficaram velhas.
+Ex.: 2026-11-06: toda rota que grava confere o cabeçalho x-myco.
+-->
 `;
 
 /**

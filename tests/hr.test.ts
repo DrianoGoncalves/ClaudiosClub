@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, deleteStaffConfirm, type DirectoryStaff } from '../client/src/api';
-import { copiesOf, hrGroups, linkCandidates, orphansOf } from '../client/src/staff/directory';
+import type { StaffProfile } from '../shared/model';
+import { differingFields, fieldsThatDiffer, hrGroups, linkTargets, orphansOf, personGroup, sameNameGroups } from '../client/src/staff/directory';
+import { memoryUsage } from '../client/src/staff/memoryUsage';
 
 const person = (over: Partial<DirectoryStaff>): DirectoryStaff => ({
   projectId: 'p1',
@@ -46,19 +48,94 @@ describe('RH: agrupar as cópias da mesma pessoa', () => {
   it('servidor ainda sem os campos novos: tudo sem vínculo', () => {
     const old = all.map(({ personId: _p, archived: _a, reportsTo: _r, ...rest }) => rest as DirectoryStaff);
     expect(hrGroups(old, '', null)).toHaveLength(5);
-    expect(copiesOf(old, { projectId: 'p1', staffId: 'ana' })).toEqual([]);
     expect(orphansOf(old, { projectId: 'p1', staffId: 'ana' })).toEqual([]);
   });
 });
 
-describe('RH: contar as cópias', () => {
-  it('as outras fichas da mesma pessoa, sem a própria', () => {
-    expect(copiesOf(all, { projectId: 'p1', staffId: 'ana' }).map((p) => p.staffId)).toEqual(['ana2', 'ana3']);
+describe('RH: uma linha por pessoa', () => {
+  it('o grupo guarda todas as fichas da pessoa, mesmo as filtradas fora', () => {
+    const [ana] = hrGroups(all, '', 'p2');
+    expect(ana!.people.map((p) => p.staffId)).toEqual(['ana2']);
+    expect(ana!.all.map((p) => p.staffId)).toEqual(['ana2', 'ana', 'ana3']);
   });
 
-  it('sem vínculo (ou ficha que não está na lista), nenhuma cópia', () => {
-    expect(copiesOf(all, { projectId: 'p1', staffId: 'bruno' })).toEqual([]);
-    expect(copiesOf(all, { projectId: 'p9', staffId: 'x' })).toEqual([]);
+  it('a pessoa de uma ficha: as fichas com o mesmo personId, em ordem de projeto', () => {
+    expect(personGroup(all, ana1).map((p) => p.staffId)).toEqual(['ana2', 'ana', 'ana3']);
+    expect(personGroup(all, bruno).map((p) => p.staffId)).toEqual(['bruno']);
+  });
+});
+
+describe('RH: unificar fichas de mesmo nome', () => {
+  const james1 = person({ staffId: 'j1', name: 'James', role: 'Dev' });
+  const james2 = person({ projectId: 'p2', projectName: 'Blog', staffId: 'j2', name: ' james ', role: 'Dev' });
+  const james3 = person({ projectId: 'p3', projectName: 'Site', staffId: 'j3', name: 'JAMES' });
+  const group = (people: DirectoryStaff[], p: DirectoryStaff) => hrGroups(people, '', null).find((g) => g.all.includes(p))!;
+
+  it('mesmo nome (sem acento nem caixa), sem vínculo, em outro projeto', () => {
+    const people = [james1, james2, bruno];
+    expect(sameNameGroups(people, group(people, james1)).map((g) => g.map((p) => p.staffId))).toEqual([['j2']]);
+    expect(sameNameGroups(people, group(people, bruno))).toEqual([]);
+  });
+
+  it('já ligados não aparecem; um grupo inteiro vem junto', () => {
+    const a = { ...james1, personId: 'pj' };
+    const b = { ...james2, personId: 'pj' };
+    expect(sameNameGroups([a, b, james3], group([a, b, james3], a)).map((g) => g.map((p) => p.staffId))).toEqual([['j3']]);
+    expect(sameNameGroups([a, b], group([a, b], a))).toEqual([]);
+  });
+
+  it('não junta duas fichas de um mesmo projeto na mesma pessoa', () => {
+    const outra = person({ projectId: 'p1', projectName: 'Loja', staffId: 'j9', name: 'James' });
+    const people = [james1, james2, outra];
+    // A de p1 é do mesmo projeto de james1: não é candidata a ele; james2 é.
+    expect(sameNameGroups(people, group(people, james1)).map((g) => g.map((p) => p.staffId))).toEqual([['j2']]);
+    // Dois candidatos no mesmo projeto: entra só o primeiro.
+    const dup = person({ projectId: 'p2', projectName: 'Blog', staffId: 'j8', name: 'James' });
+    const trio = [james1, james2, dup];
+    expect(sameNameGroups(trio, group(trio, james1))).toHaveLength(1);
+  });
+});
+
+describe('RH: campos da pessoa que as fichas diferem', () => {
+  const values = { name: 'Ana', role: 'Dev', mission: 'Fazer', doneWhen: 'Pronto', rules: ['a', 'b'], model: 'opus', effort: 'high', playbook: null } as const;
+  const copy = (over: Partial<StaffProfile>) => ({ ...values, rules: [...values.rules], projectId: 'p2', id: 'x', ...over }) as unknown as StaffProfile;
+
+  it('nada difere quando só muda espaço, linha vazia ou null/vazio', () => {
+    const same = copy({ name: ' Ana ', rules: [' a', '', 'b '], playbook: null });
+    expect(differingFields({ ...values, rules: ['a', 'b'] }, [same])).toEqual([]);
+    expect(differingFields({ ...values, rules: ['a', 'b'], model: null, effort: null }, [copy({ model: null, effort: null })])).toEqual([]);
+  });
+
+  it('lista os campos e as fichas que diferem, na ordem dos campos', () => {
+    const other = copy({ projectId: 'p2', mission: 'Outra', rules: ['a'] });
+    const third = copy({ projectId: 'p3', mission: 'Outra', model: 'sonnet' });
+    const diffs = differingFields({ ...values, rules: ['a', 'b'] }, [other, third]);
+    expect(diffs.map((d) => [d.field, d.others.map((o) => o.projectId)])).toEqual([
+      ['mission', ['p2', 'p3']],
+      ['rules', ['p2']],
+      ['model', ['p3']],
+    ]);
+  });
+
+  it('entre várias fichas: os campos em que não são todas iguais', () => {
+    expect(fieldsThatDiffer([copy({}), copy({ role: 'QA' }), copy({ role: 'QA', effort: 'low' })])).toEqual(['role', 'effort']);
+    expect(fieldsThatDiffer([copy({})])).toEqual([]);
+    expect(fieldsThatDiffer([])).toEqual([]);
+  });
+});
+
+describe('memória pessoal: o que a tela conta', () => {
+  it('conta como o servidor grava: sem espaço no fim, uma quebra final, vazio é zero', () => {
+    expect(memoryUsage('')).toEqual({ lines: 0, bytes: 0, fits: true });
+    expect(memoryUsage('  \n\n')).toEqual({ lines: 0, bytes: 0, fits: true });
+    expect(memoryUsage('a  \r\nb\n\n')).toEqual({ lines: 2, bytes: 4, fits: true });
+  });
+
+  it('passa de 40 linhas ou de 4 KB: não cabe', () => {
+    expect(memoryUsage('x\n'.repeat(40)).fits).toBe(true);
+    expect(memoryUsage('x\n'.repeat(41))).toMatchObject({ lines: 41, fits: false });
+    expect(memoryUsage('é'.repeat(2048))).toMatchObject({ lines: 1, bytes: 4097, fits: false });
+    expect(memoryUsage('a'.repeat(4095))).toMatchObject({ bytes: 4096, fits: true });
   });
 });
 
@@ -80,10 +157,13 @@ describe('RH: aviso de quem fica sem chefe ao excluir', () => {
 });
 
 describe('RH: com quem ligar', () => {
-  it('fichas de outros projetos que ainda não são a mesma pessoa', () => {
-    expect(linkCandidates(all, { projectId: 'p1', staffId: 'ana' }, '').map((p) => p.staffId)).toEqual(['caio']);
-    expect(linkCandidates(all, { projectId: 'p1', staffId: 'bruno' }, '').map((p) => p.staffId)).toEqual(['ana2', 'ana3', 'caio']);
-    expect(linkCandidates(all, { projectId: 'p1', staffId: 'bruno' }, 'blog').map((p) => p.staffId)).toEqual(['ana2', 'caio']);
+  const targets = (who: DirectoryStaff, query = '') => linkTargets(all, hrGroups(all, '', null).find((g) => g.all.includes(who))!, query).map((p) => p.staffId);
+
+  it('fichas de quem ainda não é a mesma pessoa e não tem ficha em projeto dela', () => {
+    // Caio tem ficha em p2, onde a Ana também tem: juntar daria duas fichas num projeto.
+    expect(targets(ana1)).toEqual([]);
+    expect(targets(bruno)).toEqual(['caio']);
+    expect(targets(bruno, 'blog')).toEqual(['caio']);
   });
 });
 
@@ -154,13 +234,28 @@ describe('RH: chamadas da API', () => {
     expect(ask).not.toHaveBeenCalled();
   });
 
-  it('editar só manda applyToCopies quando marcado', async () => {
+  it('editar não manda mais applyToCopies: o servidor leva os campos da pessoa às cópias sempre', async () => {
     const input = { name: 'Ana' } as Parameters<typeof api.updateStaff>[2];
-    let f = stub({ id: 'a', copiesUpdated: 2 });
-    expect((await api.updateStaff('p1', 'a', input, true)).copiesUpdated).toBe(2);
-    expect(sent(f).body).toEqual({ name: 'Ana', applyToCopies: true });
-    f = stub({ id: 'a' });
-    await api.updateStaff('p1', 'a', input);
+    const f = stub({ id: 'a', copiesUpdated: 2 });
+    expect((await api.updateStaff('p1', 'a', input)).copiesUpdated).toBe(2);
     expect(sent(f).body).toEqual({ name: 'Ana' });
+  });
+
+  it('memória pessoal: garantir a pessoa é POST, ler é GET, gravar é PUT com x-myco', async () => {
+    let f = stub({ personId: 'pa' });
+    await api.personOf('p1', 'a');
+    expect(sent(f)).toMatchObject({ url: '/api/projects/p1/staff/a/person', method: 'POST', myco: '1' });
+    f = stub({ text: 'oi\n', status: 'ok' });
+    expect(await api.personMemory('pa')).toEqual({ text: 'oi\n', status: 'ok' });
+    expect(f.mock.calls[0]![0]).toBe('/api/people/pa/memory');
+    f = stub({ text: 'novo\n', status: 'ok' });
+    await api.savePersonMemory('pa', 'novo');
+    expect(sent(f)).toEqual({ url: '/api/people/pa/memory', method: 'PUT', myco: '1', body: { text: 'novo' } });
+  });
+
+  it('memória acima do limite: 400 vira erro com a mensagem do servidor', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'a memória passa de 40 linhas (são 41): resuma o que vale levar' }), { status: 400 })));
+    vi.stubGlobal('window', { dispatchEvent: () => true });
+    await expect(api.savePersonMemory('pa', 'x')).rejects.toThrow('passa de 40 linhas');
   });
 });

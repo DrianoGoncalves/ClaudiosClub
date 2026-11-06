@@ -119,10 +119,13 @@ export function RoomColorPicker({
 export function BackgroundPicker({
   theme,
   value,
+  fallback = null,
   onChange,
 }: {
   theme: Theme;
   value: string | null;
+  /** O que "padrão" vale aqui (no workspace, o fundo geral do quadro); sem ele, o de fábrica. */
+  fallback?: string | null;
   onChange: (hex: string | null) => Promise<void>;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -155,9 +158,9 @@ export function BackgroundPicker({
         role="radio"
         aria-checked={shown === null}
         className="swatch"
-        style={{ '--swatch': def.hex } as CSSProperties}
-        title={t('board.defaultWithName', { name: def.label })}
-        aria-label={t('board.defaultNamed', { name: def.label })}
+        style={{ '--swatch': fallback ?? def.hex } as CSSProperties}
+        title={fallback ? t('board.defaultGeneral') : t('board.defaultWithName', { name: def.label })}
+        aria-label={fallback ? t('board.defaultGeneralNamed') : t('board.defaultNamed', { name: def.label })}
         onClick={() => save(null)}
       />
       {presets.map((p) => (
@@ -174,7 +177,7 @@ export function BackgroundPicker({
         />
       ))}
       <label className={`swatch swatch-custom ${custom ? 'is-on' : ''}`} title={t('board.otherColor')} style={custom ? ({ '--swatch': shown } as CSSProperties) : undefined}>
-        <input type="color" aria-label={t('board.otherColor')} value={shown ?? def.hex} onChange={(e) => pickCustom(e.target.value)} />
+        <input type="color" aria-label={t('board.otherColor')} value={shown ?? fallback ?? def.hex} onChange={(e) => pickCustom(e.target.value)} />
         {!custom && <span aria-hidden="true">+</span>}
       </label>
       <span className="muted small mono">{shown ?? t('board.defaultLabel')}</span>

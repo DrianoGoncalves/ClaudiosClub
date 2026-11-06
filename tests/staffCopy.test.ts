@@ -8,7 +8,8 @@ import { readConfig, setArchived } from '../server/config';
 import { staffMayPost } from '../server/apiPolicy';
 import { TaskService } from '../server/tasks';
 import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService, type StaffServiceOptions } from '../server/staff/service';
-import { fichaFile, listVersions, memoryFile, profileFile, readPortrait, readProfile, saveProfile } from '../server/staff/store';
+import { fichaFile, listVersions, memoryDir, memoryFile, profileFile, readPortrait, readProfile, saveProfile, StaffInputSchema } from '../server/staff/store';
+import { ALLOCATION_FIELDS, PERSON_FIELDS, PERSON_PORTRAIT, REQUEST_FIELDS } from '../shared/person';
 
 // O config (arquivados) grava em MYCO_HOME: aponta para uma pasta temporária antes de o config.ts carregar.
 const home = await vi.hoisted(async () => {
@@ -181,6 +182,20 @@ describe('fichas entre projetos', () => {
     const comMemoria = (await service().copyFrom('dest', { fromProjectId: 'orig', staffId: 'ana-1a2b', withMemory: true }, true))!.profile;
     const copiada = await fs.readFile(memoryFile(dest, comMemoria.id), 'utf8');
     expect(copiada).toMatch(/^Copiada de Loja \(apelido\) em .+\n\nNota antiga: usar a convenção X\n$/);
+  });
+
+  it('withMemory true copia a pasta de detalhe da memória (<id>.memory/); withMemory false não copia', async () => {
+    const dirOrigem = memoryDir(origin, 'ana-1a2b');
+    await fs.mkdir(dirOrigem, { recursive: true });
+    await fs.writeFile(path.join(dirOrigem, 'deploy.md'), 'Passo 1\n');
+    try {
+      const sem = (await service().copyFrom('dest', { fromProjectId: 'orig', staffId: 'ana-1a2b', withMemory: false }, true))!.profile;
+      expect(await existe(memoryDir(dest, sem.id))).toBe(false);
+      const com = (await service().copyFrom('dest', { fromProjectId: 'orig', staffId: 'ana-1a2b', withMemory: true }, true))!.profile;
+      expect(await fs.readFile(path.join(memoryDir(dest, com.id), 'deploy.md'), 'utf8')).toBe('Passo 1\n');
+    } finally {
+      await fs.rm(dirOrigem, { recursive: true, force: true });
+    }
   });
 
   it('400 quando a origem é o próprio projeto', async () => {
@@ -359,7 +374,7 @@ describe('mesma pessoa entre projetos', () => {
     }
   });
 
-  it('applyToCopies leva só os campos permitidos e o retrato; reportsTo, servidores, memória e a outra pessoa ficam', async () => {
+  it('a edição leva os campos da pessoa e o retrato às cópias, sem pedir (applyToCopies é ignorado); reportsTo, servidores, memória e a outra pessoa ficam', async () => {
     await saveProfile(w.dirs.a, perfil({ id: 'ana-1a2b', projectId: 'a', name: 'Ana Souza', personId: 'grupo-1', reportsTo: ['chefe-a'], servers: ['prod'] }));
     await saveProfile(w.dirs.a, perfil({ id: 'chefe-a', projectId: 'a', name: 'Chefe' }));
     await saveProfile(w.dirs.b, perfil({ id: 'copia-b', projectId: 'b', name: 'Ana Souza', personId: 'grupo-1', reportsTo: ['chefe-b'], servers: ['outro'] }));
@@ -368,10 +383,11 @@ describe('mesma pessoa entre projetos', () => {
     await saveProfile(w.dirs.c, perfil({ id: 'outra-c', projectId: 'c', name: 'Outra', personId: 'outro-grupo' }));
     const svc = servico(w);
 
-    const r = await svc.update('a', 'ana-1a2b', corpo({ name: 'Ana Nova', role: 'Gerente', rules: ['Nova regra'], model: 'sonnet', effort: 'low', servers: ['prod', 'x'], reportsTo: ['chefe-a'], applyToCopies: true, portraitDataUrl: DATA_PNG('png-novo') }));
+    const r = await svc.update('a', 'ana-1a2b', corpo({ name: 'Ana Nova', role: 'Gerente', rules: ['Nova regra'], model: 'sonnet', effort: 'low', playbook: 'review-gate', servers: ['prod', 'x'], reportsTo: ['chefe-a'], applyToCopies: false, portraitDataUrl: DATA_PNG('png-novo') }));
     expect(r!.copiesUpdated).toBe(1);
     const copia = (await readProfile(w.dirs.b, 'copia-b'))!;
-    expect(copia).toMatchObject({ name: 'Ana Nova', role: 'Gerente', rules: ['Nova regra'], model: 'sonnet', effort: 'low', mission: 'Revisar', doneWhen: 'Achados' });
+    // Roteiro (playbook) propaga; os campos da pessoa iguais na origem seguem iguais.
+    expect(copia).toMatchObject({ name: 'Ana Nova', role: 'Gerente', rules: ['Nova regra'], model: 'sonnet', effort: 'low', playbook: 'review-gate', mission: 'Revisar', doneWhen: 'Achados' });
     expect(copia.reportsTo).toEqual(['chefe-b']);
     expect(copia.servers).toEqual(['outro']);
     expect(copia.personId).toBe('grupo-1');
@@ -382,17 +398,45 @@ describe('mesma pessoa entre projetos', () => {
     expect((await readProfile(w.dirs.c, 'outra-c'))!.name).toBe('Outra');
 
     // Retrato removido na origem: some na cópia (e o arquivo).
-    const r2 = await svc.update('a', 'ana-1a2b', corpo({ name: 'Ana Nova', role: 'Gerente', rules: ['Nova regra'], model: 'sonnet', effort: 'low', reportsTo: ['chefe-a'], applyToCopies: true, portraitDataUrl: null }));
+    const r2 = await svc.update('a', 'ana-1a2b', corpo({ name: 'Ana Nova', role: 'Gerente', rules: ['Nova regra'], model: 'sonnet', effort: 'low', playbook: 'review-gate', reportsTo: ['chefe-a'], portraitDataUrl: null }));
     expect(r2!.copiesUpdated).toBe(1);
     expect((await readProfile(w.dirs.b, 'copia-b'))!.portrait).toBeNull();
     expect(await existe(path.join(w.dirs.b, '.myco', 'staff', 'copia-b.png'))).toBe(false);
 
-    // Sem o pedido: nada é propagado.
-    const r3 = await svc.update('a', 'ana-1a2b', corpo({ name: 'Sem propagar', reportsTo: ['chefe-a'], applyToCopies: false }));
+    // Nada da pessoa mudou (só o gestor): a cópia não ganha versão nova nem conta.
+    const r3 = await svc.update('a', 'ana-1a2b', corpo({ name: 'Ana Nova', role: 'Gerente', rules: ['Nova regra'], model: 'sonnet', effort: 'low', playbook: 'review-gate', reportsTo: [] }));
     expect(r3!.copiesUpdated).toBe(0);
     expect((await readProfile(w.dirs.b, 'copia-b'))!.name).toBe('Ana Nova');
+    expect(await listVersions(w.dirs.b, 'copia-b')).toHaveLength(2);
 
     await expect(svc.update('a', 'ana-1a2b', corpo({ reportsTo: ['chefe-a'], applyToCopies: 'sim' }))).rejects.toThrow('applyToCopies tem que ser true ou false');
+  });
+
+  it('agents e skills (da alocação) não vão às cópias; a própria ficha muda', async () => {
+    await saveProfile(w.dirs.a, perfil({ id: 'ana-1a2b', projectId: 'a', name: 'Ana Souza', personId: 'grupo-1' }));
+    await saveProfile(w.dirs.b, perfil({ id: 'copia-b', projectId: 'b', name: 'Ana Souza', personId: 'grupo-1' }));
+    const r = await servico(w).update('a', 'ana-1a2b', corpo({ agents: ['Plan', 'Explore'], skills: ['deploy'] }));
+    expect(r!.copiesUpdated).toBe(0);
+    expect(r!.agents).toEqual(['Plan', 'Explore']);
+    expect(r!.skills).toEqual(['deploy']);
+    const copia = (await readProfile(w.dirs.b, 'copia-b'))!;
+    expect(copia.agents).toEqual(['Explore']);
+    expect(copia.skills).toEqual(['lint']);
+    expect(await listVersions(w.dirs.b, 'copia-b')).toEqual([]);
+  });
+
+  it('restaurar uma versão leva os campos da pessoa restaurados às cópias, e o vínculo da ficha fica', async () => {
+    await saveProfile(w.dirs.a, perfil({ id: 'ana-1a2b', projectId: 'a', name: 'Ana Souza', personId: 'grupo-1' }));
+    await saveProfile(w.dirs.b, perfil({ id: 'copia-b', projectId: 'b', name: 'Ana Souza', personId: 'grupo-1' }));
+    const svc = servico(w);
+    await svc.update('a', 'ana-1a2b', corpo({ name: 'Ana Nova', rules: ['Regra nova'] }));
+    expect((await readProfile(w.dirs.b, 'copia-b'))!.name).toBe('Ana Nova');
+
+    const [anterior] = await listVersions(w.dirs.a, 'ana-1a2b');
+    const volta = await svc.restore('a', 'ana-1a2b', anterior!.version);
+    expect(volta).toMatchObject({ name: 'Ana Souza', rules: ['Regra antiga'], personId: 'grupo-1' });
+    expect(await readProfile(w.dirs.b, 'copia-b')).toMatchObject({ name: 'Ana Souza', rules: ['Regra antiga'] });
+    expect((await readProfile(w.dirs.a, 'ana-1a2b'))!.personId).toBe('grupo-1');
   });
 
   it('falha numa cópia não para as outras e não entra na conta', async () => {
@@ -401,7 +445,7 @@ describe('mesma pessoa entre projetos', () => {
     await saveProfile(w.dirs.c, perfil({ id: 'copia-c', projectId: 'c', name: 'Ana Souza', personId: 'grupo-1' }));
     // Histórico da cópia em c travado (um arquivo no lugar da pasta): a versão anterior não grava e essa cópia falha.
     await fs.writeFile(path.join(w.dirs.c, '.myco', 'staff', 'copia-c.history'), 'não é pasta');
-    const r = await servico(w).update('a', 'ana-1a2b', corpo({ name: 'Ana Nova', applyToCopies: true }));
+    const r = await servico(w).update('a', 'ana-1a2b', corpo({ name: 'Ana Nova' }));
     expect(r!.copiesUpdated).toBe(1);
     expect((await readProfile(w.dirs.b, 'copia-b'))!.name).toBe('Ana Nova');
     expect((await readProfile(w.dirs.c, 'copia-c'))!.name).toBe('Ana Souza');
@@ -481,9 +525,18 @@ describe('mesma pessoa entre projetos', () => {
     expect(await svc.deleteStaff('d', 'boss', true)).toBeNull();
   });
 
+  it('apagar leva a pasta de detalhe da memória (<id>.memory/) com o que tiver dentro', async () => {
+    const st = path.join(w.dirs.d, '.myco', 'staff');
+    await saveProfile(w.dirs.d, perfil({ id: 'detalhe', projectId: 'd', name: 'Detalhe' }));
+    await fs.mkdir(memoryDir(w.dirs.d, 'detalhe'), { recursive: true });
+    await fs.writeFile(path.join(memoryDir(w.dirs.d, 'detalhe'), 'deploy.md'), 'Passo 1\n');
+    expect(await servico(w).deleteStaff('d', 'detalhe', true)).toEqual({ ok: true, orphaned: [] });
+    for (const f of ['detalhe.json', 'detalhe.memory', path.join('detalhe.memory', 'deploy.md')]) expect(await existe(path.join(st, f))).toBe(false);
+  });
+
   it('apagar recusa (409) se a conversa dela está trabalhando, e recusa sem navegador', async () => {
     await saveProfile(w.dirs.d, perfil({ id: 'boss', projectId: 'd', name: 'Chefe' }));
-    await expect(servico(w, { isWorking: (id) => id === 'boss' }).deleteStaff('d', 'boss', true)).rejects.toThrow(StaffBusyError);
+    await expect(servico(w, { isWorking: (p, id) => p === 'd' && id === 'boss' }).deleteStaff('d', 'boss', true)).rejects.toThrow(StaffBusyError);
     expect(await existe(profileFile(w.dirs.d, 'boss'))).toBe(true);
     await expect(servico(w).deleteStaff('d', 'boss', false)).rejects.toThrow('só pelo Claudio’s Club');
   });
@@ -505,7 +558,7 @@ describe('mesma pessoa entre projetos', () => {
     const prontas = servico(w, {
       tasksOf: async () => [
         { staffId: 'boss', reviewerId: null, status: 'done' },
-        { staffId: 'boss', reviewerId: 'outra', status: 'live' },
+        { staffId: 'boss', reviewerId: 'outra', status: 'done' },
         { staffId: 'outra', reviewerId: null, status: 'todo' },
       ],
     });
@@ -615,7 +668,7 @@ describe('mesma pessoa entre projetos', () => {
     });
     const agora = new Date(Date.now() + 3_600_000);
     await expect(tasksSvc.tick(agora)).resolves.toBeUndefined();
-    expect(await tasksSvc.summary()).toEqual({ d: { open: 2, review: 0, lastDeploy: null } });
+    expect(await tasksSvc.summary()).toEqual({ d: { open: 2, review: 0 } });
     expect(enviados).toEqual([]);
     const tasks = (await tasksSvc.list('d'))!;
     expect(tasks.map((t) => [t.id, t.status, t.staffId, t.sessionId])).toEqual([
@@ -628,7 +681,7 @@ describe('mesma pessoa entre projetos', () => {
     await saveProfile(w.dirs.d, perfil({ id: 'boss', projectId: 'd', name: 'Chefe' }));
     const release = vi.fn(async () => 0);
     const svc = servico(w, {
-      isWorking: (id) => id === 'boss',
+      isWorking: (p, id) => p === 'd' && id === 'boss',
       tasksOf: async () => [{ staffId: 'boss', reviewerId: null, status: 'doing' }],
       releaseTasks: release,
     });
@@ -644,6 +697,12 @@ describe('mesma pessoa entre projetos', () => {
     await saveProfile(w.dirs.d, perfil({ id: 'boss', projectId: 'd', name: 'Chefe' }));
     await expect(servico(w).deleteStaff('d', 'boss', true, { force: 'sim' })).rejects.toThrow(StaffError);
     expect(await existe(profileFile(w.dirs.d, 'boss'))).toBe(true);
+  });
+
+  it('o que é da pessoa e o que é do projeto: cada campo do pedido em exatamente uma lista', () => {
+    const listas = [...PERSON_FIELDS, PERSON_PORTRAIT, ...ALLOCATION_FIELDS, ...REQUEST_FIELDS];
+    expect(new Set(listas).size).toBe(listas.length);
+    expect([...listas].sort()).toEqual(Object.keys(StaffInputSchema.shape).sort());
   });
 
   it('as rotas novas não entram na lista de funcionário (só navegador)', () => {
