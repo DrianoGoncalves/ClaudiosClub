@@ -275,6 +275,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     `## Agents e skills indicados\nAgents: ${agentList(p)}.\nSkills: ${skillList(p, ctx)}.\nPrefira estes quando a tarefa pedir; os demais do projeto continuam disponíveis.`,
     guideSection(ctx),
     `## Conhecimento (leia antes de começar)\n${list(p.knowledge, 'Nada específico além do CLAUDE.md do projeto.')}`,
+    postureSection(),
     `## Regras\n${list(p.rules, 'Siga o CLAUDE.md do projeto.')}`,
     p.doneWhen ? `## Definição de pronto\n${p.doneWhen}` : '',
     // Quem pediu confere pela entrega: com as provas nela, não precisa abrir tudo de novo.
@@ -299,6 +300,14 @@ function guideSection(ctx: FichaContext): string {
   return [
     '## Guia do projeto',
     `Leia \`${GUIDE_PATH}\` (raiz do projeto) antes de começar algo novo e sempre que tiver dúvida sobre o que o projeto precisa; não faça nada que contrarie ou fuja dele. Se o pedido conflitar com o guia, aponte o conflito em vez de seguir.`,
+  ].join('\n');
+}
+
+/** Postura de todo funcionário: testar a ideia antes de concordar. Fixa, sem depender do projeto. */
+function postureSection(): string {
+  return [
+    '## Postura',
+    'Antes de concordar, teste a ideia: aponte primeiro o que está errado, faltando ou arriscado e o contra-argumento mais forte. Não trate o enquadramento do pedido como fato. Sem elogio vazio nem pedido de desculpas: vá direto ao ponto técnico.',
   ].join('\n');
 }
 

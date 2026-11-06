@@ -4,6 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { TASK_STATUSES, type ChatItem, type HeldMessage, type StaffProfile, type Task, type TaskCode, type TaskHandoff, type TaskStatus, type TaskSummary, type TestRun } from '../shared/model';
 import type { SecondOpinionInput } from './adapters/codex';
+import { hasGuide } from './projectGuide';
 import { writeAtomic } from './staff/store';
 import { checkpoint, CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
 import { UsageStopError } from './usageStop';
@@ -13,10 +14,12 @@ import { UsageStopError } from './usageStop';
 //   planejando → fazendo  quando você aprova o plano no cartão de plano (o plano fica guardado);
 //   fazendo → revisão     quando o turno dele termina (trabalhando → parado);
 //   revisão → fazendo     quando você manda outra mensagem na conversa da tarefa;
-//   revisão automática    com revisor marcado, ao entregar ele revisa sozinho (até 3 rodadas) e responde
-//                         APROVADO ou REPROVADO na primeira linha. Aprovada: pronto (fica em revisão se
-//                         falta mesclar a worktree). Reprovada: os ajustes vão para a conversa dele, e a
-//                         tarefa volta para fazendo.
+//   revisão automática    com revisor marcado, ao entregar ele revisa sozinho (até 2 rodadas: a entrega e uma
+//                         reauditoria). A resposta vem com APROVADO ou REPROVADO na primeira linha e os achados
+//                         com severidade (🔴 bloqueia, 🟡 importante, 🟢 detalhe; ver requestReview): REPROVADO só
+//                         com algum 🔴. Com SPEC.md no projeto, o revisor confere o guia. Aprovada: pronto (fica em
+//                         revisão se falta mesclar a worktree). Reprovada: os ajustes vão para a conversa dele, e a
+//                         tarefa volta para fazendo. Estourado o limite, a tarefa fica com você.
 // "No ar" é sua (o deploy, por enquanto, é marcado à mão); "pronto" também sai sozinho na aprovação.
 //
 // Uma tarefa por vez por funcionário. Começar com ele ocupado (outra tarefa planejando ou fazendo,
@@ -28,8 +31,8 @@ export class TaskError extends Error {}
 
 const SAFE_ID = /^[a-z0-9-]{1,40}$/;
 const MAX_HISTORY = 30;
-/** Quantas revisões automáticas uma tarefa pede antes de ficar com você. */
-const AUTO_REVIEW_ROUNDS = 3;
+/** Quantas revisões automáticas uma tarefa pede antes de ficar com você: a entrega e uma reauditoria. */
+const AUTO_REVIEW_ROUNDS = 2;
 /** Conversa de tarefa parada há menos que isto não é dada como órfã (ver `orphan`). */
 const ORPHAN_MS = 2 * 60_000;
 const RESUME_TEXT =
@@ -463,13 +466,16 @@ export class TaskService {
         ? `O código está na worktree \`${code.path}\` (branch \`${code.branch}\`), saindo de \`${code.base}\`. Veja com \`git -C "${code.path}" diff ${code.base}...HEAD\` e \`git -C "${code.path}" status\` (o que ainda não foi commitado).`
         : `As mudanças estão no próprio projeto, sem commit: veja com \`git diff HEAD\`.`;
     const files = code?.files.length ? `Arquivos: ${code.files.slice(0, 30).map((f) => `${f.path} (+${f.add} -${f.del})`).join(', ')}${code.files.length > 30 ? '…' : ''}` : '';
+    const guide = (await hasGuide(dir)) ? 'Leia `SPEC.md`: o que contrariar o guia é 🔴.' : '';
+    // Severidade: só 🔴 reprova. Com 🟡 ou 🟢 apenas, a primeira linha é APROVADO e a lista vira observações.
     const text = [
       `[Revisão da tarefa "${task.title}"]`,
       `${profile?.name ?? 'Um colega'} terminou a tarefa e ela precisa de revisão.`,
       task.description && `O que foi pedido:\n${task.description}`,
       where,
       files,
-      'Responda com APROVADO ou REPROVADO na primeira linha, exatamente assim. Se reprovar, em seguida a lista de ajustes (arquivo:linha e o porquê). Não mude o código: só revise.',
+      guide,
+      'Responda com APROVADO ou REPROVADO na primeira linha, exatamente assim. Em seguida, os achados, cada um com arquivo:linha, o porquê e a severidade: 🔴 bloqueia, 🟡 importante, 🟢 detalhe. REPROVADO só se houver algum 🔴; só 🟡 ou 🟢 é APROVADO, com a lista depois como observações. Não mude o código: só revise.',
     ]
       .filter(Boolean)
       .join('\n\n');
@@ -601,7 +607,9 @@ export class TaskService {
   private async autoReview(projectId: string, task: Task): Promise<void> {
     if (!task.reviewerId) return;
     if ((task.reviewRounds ?? 0) >= AUTO_REVIEW_ROUNDS) {
-      await this.change(projectId, task.id, (t) => noted(t, `limite de ${AUTO_REVIEW_ROUNDS} revisões automáticas; fica com você`));
+      await this.change(projectId, task.id, (t) =>
+        noted(t, `limite de ${AUTO_REVIEW_ROUNDS} revisões automáticas; o que sobrou fica com você: aceitar como trade-off (anotar em "Decisões" no SPEC.md) ou pedir ajuste`),
+      );
       return;
     }
     try {

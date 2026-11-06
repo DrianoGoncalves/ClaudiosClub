@@ -102,6 +102,18 @@ describe('ficha', () => {
     expect(none).not.toContain('SPEC.md');
   });
 
+  it('todo funcionário tem a postura antes das regras, com ou sem gestor, equipe ou guia', () => {
+    const cases = [
+      renderFicha(profile(), ctx),
+      renderFicha(profile({ canHire: true, projectId: 'proj-x' }), { ...ctx, managerNames: ['Daniel'], guide: true }),
+    ];
+    for (const md of cases) {
+      expect(md).toContain('## Postura\nAntes de concordar, teste a ideia: aponte primeiro o que está errado, faltando ou arriscado e o contra-argumento mais forte.');
+      expect(md).toContain('Sem elogio vazio nem pedido de desculpas: vá direto ao ponto técnico.');
+      expect(md.indexOf('## Postura')).toBeLessThan(md.indexOf('## Regras'));
+    }
+  });
+
   it('tem missão, autonomia, regras, memória e a seção de contratação', () => {
     const md = renderFicha(profile(), ctx);
     for (const part of ['## Missão', 'Revisar mudanças', '## Primeira tarefa', 'Só lê e planeja', '- Não altere arquivos', '## Memória', 'ana-1a2b.memory.md', 'substitua o que ficou velho', '`[MyCo:ponto-de-corte]`', 'não pode contratar']) {

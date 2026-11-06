@@ -49,6 +49,7 @@ import { readServerLog } from './staff/serverLog';
 import { copyToLibrary, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill, SkillError } from './skillLibrary';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
 import { createGuide, GuideExistsError, guideStatus } from './projectGuide';
+import { GuideActionError, runGuideAction } from './guideActions';
 import { deleteAttachment, listAttachments, MAX_ATTACHMENT_BYTES, readAttachment, saveAttachment } from './projectAttachments';
 import {
   createProjectEntry,
@@ -295,6 +296,12 @@ const projectPathOf = async (projectId: string) => {
 /** Codex CLI só como segunda opinião na revisão de tarefas (o motor dos funcionários é o Claude). */
 const codex = new CodexAdapter();
 
+/** Abre uma conversa nova com o funcionário e manda o texto. Sem `force`, confere o consumo antes. Usado pelas tarefas e pelas ações do guia. */
+const sendNewConversation = async (projectId: string, staffId: string, text: string, force: boolean) => {
+  if (!force) await staff.checkUsage(projectId);
+  return chats.send(projectId, null, staffId, text);
+};
+
 const tasks = new TaskService({
   projectPath: projectPathOf,
   projectIds: async () => (await adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf).map((p) => p.id),
@@ -302,10 +309,7 @@ const tasks = new TaskService({
     const dir = await projectPathOf(projectId);
     return dir ? readProfile(dir, staffId) : null;
   },
-  send: async (projectId, staffId, text, force) => {
-    if (!force) await staff.checkUsage(projectId);
-    return chats.send(projectId, null, staffId, text);
-  },
+  send: sendNewConversation,
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
   isWorking: (staffId, except) => chats.staffWorking(staffId, except),
   // O gestor que pediu recebe a entrega na conversa em que pediu (ou, sem ela, na mais recente dele),
@@ -1129,6 +1133,23 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       if (!dir) return null;
       await createGuide(dir);
       return guideStatus(dir);
+    },
+  ],
+  // Ações do guia (teste de compreensão, divergência, rascunho): abrem uma conversa nova do funcionário, com o texto da ação.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/guide/run$`),
+    async ({ params: [id], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('as ações do guia só pelo Claudio’s Club');
+      const dir = await projectPathOf(id!);
+      if (!dir) return null;
+      return runGuideAction(
+        { readProfile: (staffId) => readProfile(dir, staffId), send: (staffId, text, force) => sendNewConversation(id!, staffId, text, force) },
+        dir,
+        body,
+      ).catch((err) => {
+        throw err instanceof GuideActionError ? new BadRequest(err.message) : err;
+      });
     },
   ],
   // ---- arquivos do projeto (aba de arquivos): listar e ler; gravar só pelo Claudio’s Club ----

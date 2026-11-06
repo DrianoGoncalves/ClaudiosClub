@@ -756,21 +756,36 @@ describe('revisão automática', () => {
     expect(delivered).toEqual([{ sessionId: 's-1', text: expect.stringContaining('falta o teste da paginação') }]);
   });
 
-  it('no máximo 3 rodadas automáticas: depois, a tarefa fica com você e a entrega não pede mais revisão', async () => {
+  it('no máximo 2 rodadas automáticas (a entrega e uma reauditoria): depois, a tarefa fica com você e a entrega não pede mais revisão', async () => {
     const { svc, sent, texts, delivered, make, current } = reviewFlow('auto-limit');
     const t = await make('Relatório');
     await svc.start('p', t.id); // s-1
     await svc.onTurnDone('s-1'); // rodada 1 (s-2)
-    for (const round of [1, 2, 3]) {
+    for (const round of [1, 2]) {
       texts.set(`s-${round + 1}`, `REPROVADO\n\najuste ${round}`);
       await svc.onTurnDone(`s-${round + 1}`); // reprovou: volta para fazendo
-      await svc.onTurnDone('s-1'); // ajustou e terminou: vai para revisão
+      await svc.onTurnDone('s-1'); // ajustou e terminou: vai para revisão (a rodada 2 é a última, s-3)
     }
     const end = await current();
-    expect(sent.filter((m) => m.staffId === 'rev-1')).toHaveLength(3);
-    expect(delivered).toHaveLength(3);
-    expect(end).toMatchObject({ status: 'review', reviewRounds: 3 });
-    expect(end.history.at(-1)?.note).toBe('limite de 3 revisões automáticas; fica com você');
+    expect(sent.filter((m) => m.staffId === 'rev-1')).toHaveLength(2);
+    expect(delivered).toHaveLength(2);
+    expect(end).toMatchObject({ status: 'review', reviewRounds: 2 });
+    expect(end.history.at(-1)?.note).toBe(
+      'limite de 2 revisões automáticas; o que sobrou fica com você: aceitar como trade-off (anotar em "Decisões" no SPEC.md) ou pedir ajuste',
+    );
+  });
+
+  it('o pedido de revisão diz o que vale: com SPEC.md, manda ler o guia; a severidade só reprova com 🔴', async () => {
+    const { svc, dir, sent, make } = reviewFlow('auto-guide');
+    const t = await make('Ajuste de tela');
+    await svc.start('p', t.id); // s-1
+    await svc.requestReview('p', t.id, 'rev-1'); // s-2, sem SPEC.md
+    expect(sent.at(-1)!.text).not.toContain('Leia `SPEC.md`');
+    expect(sent.at(-1)!.text).toContain('REPROVADO só se houver algum 🔴');
+    await fs.writeFile(path.join(dir, 'SPEC.md'), '# Guia\n', 'utf8');
+    await svc.requestReview('p', t.id, 'rev-1'); // s-3, com SPEC.md
+    expect(sent.at(-1)!.text).toContain('Leia `SPEC.md`: o que contrariar o guia é 🔴.');
+    expect(sent.at(-1)!.text).toContain('APROVADO ou REPROVADO na primeira linha');
   });
 
   it('revisor: outro funcionário do projeto, que não é quem faz a tarefa, nem na troca', async () => {
