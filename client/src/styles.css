@@ -316,6 +316,15 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .md :is(h3, h4, h5, h6) { font-size: 1em; }
 .md a { color: var(--ink-blue); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
 .md .md-link-off { text-decoration: underline dotted; text-underline-offset: 2px; }
+/* Caminho de arquivo do projeto: cara de código, sublinhado pontilhado; abre no editor de arquivos. */
+.md .md-file { display: inline; max-width: 100%; margin: 0; border: 0; font: inherit; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; color: inherit; text-align: left; text-decoration: underline dotted; text-underline-offset: 2px; background: color-mix(in srgb, var(--ink) 8%, transparent); padding: 0 3px; border-radius: 3px; overflow-wrap: anywhere; cursor: pointer; }
+.md .md-file:hover, .md .md-file:focus-visible { color: var(--ink-blue); }
+.md .md-file:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; }
+/* Código inline que copia ao clicar: o <code> segue igual; o botão só tira a cara de botão. */
+.md .md-inline-copy { display: inline; max-width: 100%; margin: 0; border: 0; font: inherit; color: inherit; text-align: left; background: transparent; padding: 0; cursor: pointer; }
+.md .md-inline-copy:hover code { background: color-mix(in srgb, var(--ink) 14%, transparent); }
+.md .md-inline-copy:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; border-radius: 3px; }
+.md .md-inline-copy.is-copied code { color: var(--ink-blue); }
 .md-img { display: inline-flex; align-items: center; gap: 4px; }
 .md blockquote { margin: 0 0 6px; padding: 2px 0 2px 10px; border-left: 3px solid var(--line); color: var(--muted); }
 .md hr { margin: 10px 0; border: 0; border-top: 1px solid var(--line); }

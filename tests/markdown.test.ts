@@ -1,9 +1,13 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { Markdown, looksLikeMarkdown, safeUrl } from '../client/src/chat/markdown';
+import { Markdown, OpenFileContext, looksLikeMarkdown, safeUrl } from '../client/src/chat/markdown';
 
 const html = (text: string) => renderToStaticMarkup(createElement(Markdown, { text }));
+const withFiles = (text: string) =>
+  renderToStaticMarkup(
+    createElement(OpenFileContext.Provider, { value: { projectRoot: 'C:/x/MyCo', open: () => {} } }, createElement(Markdown, { text })),
+  );
 
 describe('Markdown do chat (GFM, seguro)', () => {
   it('link javascript: não vira link', () => {
@@ -46,6 +50,25 @@ describe('Markdown do chat (GFM, seguro)', () => {
   it('streaming: bloco de código e tabela abertos não quebram', () => {
     expect(html('```py\nprint(1)')).toContain('print(1)');
     expect(html('| a | b |\n|---|---|\n| 1')).toContain('<td>1</td>');
+  });
+
+  it('código inline comum vira botão de copiar (com ou sem context)', () => {
+    const out = html('use `npm test` agora');
+    expect(out).toMatch(/<button type="button" class="md-inline-copy"[^>]*><code>npm test<\/code><\/button>/);
+    expect(out).toContain('aria-live="polite"');
+  });
+
+  it('caminho de arquivo segue FileButton (não vira botão de copiar)', () => {
+    const out = withFiles('veja `src/a.ts` e `npm test`');
+    expect(out).toMatch(/<button type="button" class="md-file"[^>]*>src\/a\.ts<\/button>/);
+    expect(out.match(/md-inline-copy/g)).toHaveLength(1);
+    expect(out).toMatch(/md-inline-copy[^>]*><code>npm test<\/code>/);
+  });
+
+  it('código em bloco não vira botão de copiar inline', () => {
+    const out = html('```\nx = 1\n```');
+    expect(out).toContain('<code>x = 1');
+    expect(out).not.toContain('md-inline-copy');
   });
 
   it('safeUrl e detecção de markdown do usuário', () => {

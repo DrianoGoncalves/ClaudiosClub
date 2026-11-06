@@ -117,6 +117,8 @@ export function EmployeePanel(props: {
   /** Funcionário fantasma: as conversas sem ficha do projeto, num nó só. */
   ghost?: boolean;
   onSessionStarted?: (sessionId: string) => void;
+  /** Arquivo citado numa resposta do chat: abre no editor de arquivos do projeto (relativo à raiz). */
+  onOpenFile?: (path: string) => void;
   /** A ficha mudou por aqui (rotinas): o quadro relê. */
   onChanged?: () => void;
   /** Nível simples: o painel fica só com a conversa. */
@@ -467,6 +469,8 @@ export function EmployeePanel(props: {
       autonomy={staff?.autonomy ?? null}
       disabled={!project.exists ? t('detail.projectFolderMissing') : null}
       onSessionStarted={sessionStarted}
+      projectRoot={project.path}
+      onOpenFile={props.onOpenFile}
       level={props.simple ? 'simple' : 'advanced'}
       fichaModel={opening?.model ?? null}
       fichaEffort={opening?.effort ?? null}

@@ -527,6 +527,10 @@ export function App() {
               initialConversation={jumpTo}
               focus={jumpTarget}
               onFocusDone={clearJumpTarget}
+              onOpenFile={(path) => {
+                setFilesPath(path);
+                setFilesFor(selection.projectId);
+              }}
               inbox={inbox.items}
               session={
                 selection.session && {

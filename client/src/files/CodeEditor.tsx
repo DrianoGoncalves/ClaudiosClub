@@ -105,6 +105,8 @@ export default function CodeEditor({
         doc: initial,
         extensions: [
           basicSetup,
+          // Quebra linhas longas na tela (só exibição; o texto salvo não muda).
+          EditorView.lineWrapping,
           keymap.of([
             indentWithTab,
             { key: 'Mod-s', preventDefault: true, run: () => (handlers.current.onSave(), true) },
