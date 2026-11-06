@@ -33,6 +33,14 @@ const COLUMNS: { status: TaskStatus; shows: TaskStatus[] }[] = [
 /** A coluna em que o status aparece. */
 const columnOf = (s: TaskStatus) => COLUMNS.find((c) => c.shows.includes(s))!.status;
 
+/**
+ * Ordem dentro da coluna: a última atualização no topo. Plano para aprovar (planejando) vai antes de tudo,
+ * porque é o que espera por você; empate de data mantém a ordem que veio do servidor.
+ */
+export function byRecent<T extends Pick<TaskModel, 'status' | 'updatedAt'>>(tasks: T[]): T[] {
+  const at = (t: T) => Date.parse(t.updatedAt) || 0;
+  return [...tasks].sort((a, b) => Number(b.status === 'planning') - Number(a.status === 'planning') || at(b) - at(a));
+}
 const LABEL: Record<TaskStatus, string> = {
   todo: t('tasks.statusTodo'),
   planning: t('tasks.statusPlanning'),
@@ -226,8 +234,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         ) : (
           <div className="tasks-columns">
             {COLUMNS.map(({ status, shows }) => {
-              // Plano para aprovar primeiro: é o que espera por você.
-              const col = tasks.filter((t) => !t.archived && shows.includes(t.status)).sort((a, b) => shows.indexOf(a.status) - shows.indexOf(b.status));
+              const col = byRecent(tasks.filter((t) => !t.archived && shows.includes(t.status)));
               return (
                 <section
                   key={status}
@@ -260,7 +267,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                       >
                         {showArchived ? t('tasks.hideArchived') : t('tasks.showArchived', { n: archived.length })}
                       </button>
-                      {showArchived && archived.map(card)}
+                      {showArchived && byRecent(archived).map(card)}
                     </>
                   )}
                 </section>
