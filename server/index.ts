@@ -48,6 +48,7 @@ import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
 import { copyToLibrary, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill, SkillError } from './skillLibrary';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
+import { createGuide, GuideExistsError, guideStatus } from './projectGuide';
 import { deleteAttachment, listAttachments, MAX_ATTACHMENT_BYTES, readAttachment, saveAttachment } from './projectAttachments';
 import {
   createProjectEntry,
@@ -918,8 +919,8 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     new RegExp(`^/api/projects/${ID}/tasks$`),
     async ({ params: [id], body, fromBrowser }) => {
       if (fromBrowser) return tasks.create(id!, body);
-      // Pela API, só um gestor passando tarefa para quem reporta a ele (e ela já pode começar).
-      const b = parse(z.object({ staffId: z.string().max(40), requestedBy: z.string().max(40), start: z.boolean().default(false) }).passthrough(), body);
+      // Pela API, só um gestor passando tarefa para quem reporta a ele. Já entra na fila dela; `start: false` = rascunho.
+      const b = parse(z.object({ staffId: z.string().max(40), requestedBy: z.string().max(40), start: z.boolean().default(true) }).passthrough(), body);
       if (!(await staff.isManagerOf(id!, b.requestedBy, b.staffId))) throw new BadRequest('pela API, só para quem reporta a você (requestedBy)');
       const task = await tasks.create(id!, body, b.requestedBy);
       return task && b.start ? ((await tasks.start(id!, task.id)) ?? task) : task;
@@ -1112,6 +1113,22 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       const { dataUrl } = parse(z.object({ dataUrl: z.string().max(3_000_000).nullable() }), body);
       await saveProjectImage(p.path, dataUrl);
       return { image: await projectImageUrl(p.id, p.path) };
+    },
+  ],
+  // ---- guia do projeto (SPEC.md na raiz): ver o estado; criar o modelo só pelo Claudio’s Club (fora da lista de funcionários em apiPolicy.ts) ----
+  ['GET', new RegExp(`^/api/projects/${ID}/guide$`), async ({ params: [id] }) => {
+    const dir = await projectPathOf(id!);
+    return dir ? guideStatus(dir) : null;
+  }],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/guide$`),
+    async ({ params: [id], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('o guia só é criado pelo Claudio’s Club');
+      const dir = await projectPathOf(id!);
+      if (!dir) return null;
+      await createGuide(dir);
+      return guideStatus(dir);
     },
   ],
   // ---- arquivos do projeto (aba de arquivos): listar e ler; gravar só pelo Claudio’s Club ----
@@ -1475,6 +1492,8 @@ const server = http.createServer(async (req, res) => {
         // Ficha em uso (conversa trabalhando): 409, antes do StaffError genérico (400).
         if (err instanceof StaffOpenTasksError) return send(res, 409, { error: err.message, code: err.code, openTasks: err.openTasks });
         if (err instanceof StaffBusyError) return send(res, 409, { error: err.message });
+        // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
+        if (err instanceof GuideExistsError) return send(res, 409, { error: 'exists' });
         if (
           err instanceof BadRequest ||
           err instanceof StaffError ||

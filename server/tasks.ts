@@ -6,6 +6,7 @@ import { TASK_STATUSES, type ChatItem, type HeldMessage, type StaffProfile, type
 import type { SecondOpinionInput } from './adapters/codex';
 import { writeAtomic } from './staff/store';
 import { checkpoint, CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
+import { UsageStopError } from './usageStop';
 
 // Tarefas por projeto: `<projeto>/.myco/tasks.json`, ao lado das fichas. Cada tarefa vai para um
 // funcionário; ao começar, abre uma conversa nova com a descrição. Ela anda sozinha:
@@ -225,7 +226,16 @@ export class TaskService {
     // Na mesma vez do funcionário que a fila: dois "Começar" juntos não abrem duas conversas.
     return this.locked(projectId, staffId, async () => {
       const busyWith = occupant(await readTasks(dir), staffId, taskId);
-      if (!busyWith && !this.deps.isWorking?.(staffId)) return this.startNow(projectId, taskId, profile, force);
+      if (!busyWith && !this.deps.isWorking?.(staffId)) {
+        try {
+          return await this.startNow(projectId, taskId, profile, force);
+        } catch (err) {
+          // Limite de consumo na hora: não começou, mas fica na fila dele (o tick tenta de novo). Outros erros sobem.
+          if (!(err instanceof UsageStopError)) throw err;
+          const why = `não começou: ${err.message}; na fila de ${profile.name}, começa quando o consumo baixar`;
+          return this.change(projectId, taskId, (t) => noted({ ...t, queuedAt: t.queuedAt ?? new Date().toISOString(), queuedForce: force }, why));
+        }
+      }
       const note = busyWith ? `na fila de ${profile.name}, depois de “${busyWith.title}”` : `na fila de ${profile.name} (ele está numa conversa)`;
       return this.change(projectId, taskId, (t) => noted({ ...t, queuedAt: t.queuedAt ?? new Date().toISOString(), queuedForce: force }, note));
     });
@@ -388,8 +398,9 @@ export class TaskService {
     try {
       await this.startNow(projectId, next.id, profile, !!next.queuedForce);
     } catch (err) {
-      // Continua na fila (ex.: limite de consumo); "Começar" de novo tenta já.
-      await this.change(projectId, next.id, (t) => noted(t, `não começou: ${(err as Error).message}`));
+      // Continua na fila (ex.: limite de consumo); "Começar" de novo tenta já. Sem repetir a nota a cada tick.
+      const why = `não começou: ${(err as Error).message}`;
+      await this.change(projectId, next.id, (t) => (t.history.at(-1)?.note === why ? t : noted(t, why)));
     }
   }
 

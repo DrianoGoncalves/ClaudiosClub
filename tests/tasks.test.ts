@@ -8,6 +8,7 @@ import type { StaffProfile } from '../shared/model';
 import { ChatManager } from '../server/chat/manager';
 import { parseVerdict, TaskService } from '../server/tasks';
 import { cleanRunDir } from '../server/runCleanup';
+import { UsageStopError } from '../server/usageStop';
 
 let root: string;
 beforeAll(async () => {
@@ -808,5 +809,61 @@ describe('revisão automática', () => {
     expect(parseVerdict('APROVADOS os dois')).toBeNull();
     expect(parseVerdict('')).toBeNull();
     expect(parseVerdict(null)).toBeNull();
+  });
+});
+
+describe('limite de consumo ao começar', () => {
+  /** Ana com o consumo acima da linha: `state.capped` diz se o envio é recusado. */
+  function capped(dirName: string) {
+    const dir = path.join(root, dirName);
+    const state = { capped: true, n: 0 };
+    const ana = { id: 'ana-1', name: 'Ana', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'ana-1' ? ana : null),
+      send: async () => {
+        if (state.capped) throw new UsageStopError({ kind: 'five_hour', percentUsed: 91, limit: 85, resetsAt: null });
+        return `s-${++state.n}`;
+      },
+      branchFor: async () => null,
+    });
+    const task = async (id: string) => (await svc.list('p'))!.find((t) => t.id === id)!;
+    return { svc, state, task };
+  }
+  const STOP = 'não começou: o consumo 5h está em 91% (linha de parada: 85%)';
+
+  it('start com o consumo no limite: não lança, fica na fila com queuedAt e sem conversa', async () => {
+    const { svc, task } = capped('stop-1');
+    const t = (await svc.create('p', { title: 'Relatório', staffId: 'ana-1' }))!;
+    const got = (await svc.start('p', t.id, true))!;
+    expect(got).toMatchObject({ status: 'todo', sessionId: null, queuedAt: expect.any(String), queuedForce: true });
+    expect(got.history.at(-1)?.note).toBe(`${STOP}; na fila de Ana, começa quando o consumo baixar`);
+    expect(await task(t.id)).toMatchObject({ status: 'todo', sessionId: null, queuedAt: expect.any(String) });
+  });
+
+  it('depois que o consumo baixa, o tick começa a tarefa da fila', async () => {
+    const { svc, state, task } = capped('stop-2');
+    const t = (await svc.create('p', { title: 'Relatório', staffId: 'ana-1' }))!;
+    await svc.start('p', t.id);
+    await svc.tick(); // ainda no limite: segue na fila
+    expect(await task(t.id)).toMatchObject({ status: 'todo', sessionId: null });
+    state.capped = false;
+    await svc.tick();
+    expect(await task(t.id)).toMatchObject({ status: 'doing', sessionId: 's-1', queuedAt: null, queuedForce: false });
+  });
+
+  it('o tick repete a recusa sem duplicar a nota no histórico', async () => {
+    const { svc, task } = capped('stop-3');
+    const t = (await svc.create('p', { title: 'Relatório', staffId: 'ana-1' }))!;
+    await svc.start('p', t.id);
+    await svc.tick();
+    const once = (await task(t.id)).history.length;
+    expect((await task(t.id)).history.filter((h) => h.note === STOP)).toHaveLength(1);
+    await svc.tick();
+    await svc.tick();
+    const after = await task(t.id);
+    expect(after.history).toHaveLength(once);
+    expect(after.history.filter((h) => h.note === STOP)).toHaveLength(1);
   });
 });

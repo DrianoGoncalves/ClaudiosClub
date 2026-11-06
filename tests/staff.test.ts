@@ -91,6 +91,17 @@ describe('ficha', () => {
     expect(solo).not.toContain('## Entrega');
   });
 
+  it('com SPEC.md na raiz, a ficha manda consultar o guia antes do Conhecimento; sem ele, nada disso', () => {
+    const md = renderFicha(profile(), { ...ctx, guide: true });
+    expect(md).toContain('## Guia do projeto');
+    expect(md).toContain('Leia `SPEC.md` (raiz do projeto) antes de começar algo novo');
+    expect(md).toContain('Se o pedido conflitar com o guia, aponte o conflito em vez de seguir.');
+    expect(md.indexOf('## Guia do projeto')).toBeLessThan(md.indexOf('## Conhecimento'));
+    const none = renderFicha(profile(), ctx);
+    expect(none).not.toContain('Guia do projeto');
+    expect(none).not.toContain('SPEC.md');
+  });
+
   it('tem missão, autonomia, regras, memória e a seção de contratação', () => {
     const md = renderFicha(profile(), ctx);
     for (const part of ['## Missão', 'Revisar mudanças', '## Primeira tarefa', 'Só lê e planeja', '- Não altere arquivos', '## Memória', 'ana-1a2b.memory.md', 'substitua o que ficou velho', '`[MyCo:ponto-de-corte]`', 'não pode contratar']) {

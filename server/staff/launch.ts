@@ -9,6 +9,7 @@ import { ftpMcpServerConfig } from './ftpMcp';
 import { buildMcpConfig } from './mcp';
 import { ensurePlaybookAgents } from './playbookAgents';
 import { buildSkillPlugin } from '../skillLibrary';
+import { hasGuide } from '../projectGuide';
 import { ensureMemory, fichaFile, memoryFile, staffDir, writeAtomic } from './store';
 import type { Worktree } from './worktree';
 
@@ -165,6 +166,8 @@ export async function writeFicha(
     servers: ctx.servers,
     team: ctx.team,
     librarySkills: ctx.librarySkills,
+    // Lido a cada sessão (writeFicha roda em prepareRun): criar ou apagar o SPEC.md vale na próxima conversa.
+    guide: await hasGuide(ctx.projectPath),
   };
   await writeAtomic(fichaFile(ctx.projectPath, profile.id), renderFicha(profile, fichaCtx));
   await ensureMemory(ctx.projectPath, profile);
