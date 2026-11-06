@@ -21,7 +21,7 @@ import { colorCss } from '../../shared/model';
 import { api, isPairingError, NEEDS_PAIRING_EVENT, PAIRED_EVENT, withUsageConfirm } from './api';
 import { BoardView } from './board/Board';
 import { boardStyle, useBoardBackground, useSystemTheme } from './board/colors';
-import { archiveKey, ghostNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
+import { archiveKey, ghostNodeId, HR_ID, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
 import { seedSeenIdle } from './board/unread';
 import { PairControls } from './toolbar/PairControls';
 import { SystemMonitor } from './toolbar/SystemMonitor';
@@ -48,6 +48,7 @@ import { readTab, workspaceByProject, writeTab } from './office/workspaces';
 import { ProjectOffice } from './office/ProjectOffice';
 import { StaffForm, type StaffFormMode, type StaffFormTab } from './staff/HireForm';
 import { directoryPerson } from './staff/directory';
+import { HrPanel } from './staff/HrPanel';
 import { FilesBoard } from './files/FilesBoard';
 import { TasksBoard } from './tasks/TasksBoard';
 
@@ -71,6 +72,7 @@ function readAnimations(): boolean {
 
 type Selection =
   | { kind: 'ranking' }
+  | { kind: 'hr' }
   | { kind: 'user' }
   | { kind: 'synced'; skills: Skill[] }
   | { kind: 'project'; id: string }
@@ -417,6 +419,18 @@ export function App() {
               onSelect={setSelectedId}
             />
           )}
+          {selection.kind === 'hr' && (
+            <HrPanel
+              onOpen={(p) => {
+                // Projeto fora do quadro (arquivado): o painel do funcionário não teria onde abrir.
+                if (board.staff.some((s) => s.projectId === p.projectId && s.id === p.staffId)) setSelectedId(staffNodeId(p.projectId, p.staffId));
+                else setNotice(t('hr.openMissing', { project: p.projectName }), true);
+              }}
+              onConfig={setConfig}
+              onChanged={load}
+              onNotice={(text) => setNotice(text)}
+            />
+          )}
           {selection.kind === 'user' && (
             <UserPanel
               scope={board.user}
@@ -509,7 +523,7 @@ export function App() {
                     onClose={() => setSheetReset((n) => n + 1)}
                     onHired={() => {}}
                     onSaved={(profile) => {
-                      setNotice(t('app.profileSaved', { name: profile.name }));
+                      setNotice(savedNotice(profile));
                       load();
                     }}
                   />
@@ -645,7 +659,7 @@ export function App() {
           }}
           onSaved={(profile) => {
             setForm(null);
-            setNotice(t('app.profileSaved', { name: profile.name }));
+            setNotice(savedNotice(profile));
             // Quem ganhou ficha agora muda de nó (sessão solta → funcionário com ficha).
             setSelectedId(staffNodeId(profile.projectId, profile.id));
             load();
@@ -693,6 +707,13 @@ function staffConversations(board: Board, staff: StaffProfile) {
     .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
 }
 
+/** "Ficha salva", contando as cópias que receberam a edição junto (`copiesUpdated`, da resposta do servidor). */
+function savedNotice(profile: StaffProfile & { copiesUpdated?: number }): string {
+  const n = profile.copiesUpdated ?? 0;
+  if (!n) return t('app.profileSaved', { name: profile.name });
+  return t(n === 1 ? 'hr.savedCopiesOne' : 'hr.savedCopiesOther', { name: profile.name, n });
+}
+
 /** Prioridade do status ao vivo quando o funcionário tem mais de uma conversa aberta. */
 const STATUS_RANK: Record<string, number> = { busy: 3, waiting: 2, idle: 1 };
 
@@ -734,6 +755,7 @@ function employeeCost(costs: CostReport | null, sel: { session: Session | null; 
 function resolveSelection(board: Board, id: string | null, archivedSessions: Set<string>, showArchived: boolean): Selection | null {
   if (!id) return null;
   if (id === RANKING_ID) return { kind: 'ranking' };
+  if (id === HR_ID) return { kind: 'hr' };
   if (id === USER_NODE_ID) return { kind: 'user' };
   if (id === SYNCED_NODE_ID) return { kind: 'synced', skills: board.user.skills.filter((s) => s.scope === 'synced') };
   if (id.startsWith('p:')) return { kind: 'project', id: id.slice(2) };

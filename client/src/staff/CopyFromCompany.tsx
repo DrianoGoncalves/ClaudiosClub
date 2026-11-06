@@ -18,7 +18,7 @@ interface Props {
   onCopied: (profile: StaffProfile) => void;
 }
 
-function Face({ person, big = false }: { person: DirectoryPerson; big?: boolean }) {
+export function Face({ person, big = false }: { person: DirectoryPerson; big?: boolean }) {
   const cls = big ? 'copy-face is-big' : 'copy-face';
   return person.hasPortrait ? (
     <img className={cls} src={portraitUrl(person.projectId, { id: person.staffId, updatedAt: person.updatedAt })} alt="" />

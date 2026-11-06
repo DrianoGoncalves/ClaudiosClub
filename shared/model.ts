@@ -595,6 +595,11 @@ export interface RoutineRun {
 export interface StaffProfile {
   id: string;
   projectId: string;
+  /**
+   * Mesma pessoa em mais de uma ficha (cópias entre projetos): o mesmo `personId`. Ausente em fichas antigas
+   * e em fichas sem cópia. Só o Claudio’s Club grava (copiar, ligar, desligar).
+   */
+  personId?: string;
   name: string;
   role: string;
   /** Nome do arquivo do retrato ao lado da ficha, se houver. */

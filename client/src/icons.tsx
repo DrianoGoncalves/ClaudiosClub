@@ -149,6 +149,18 @@ export function UserPlusIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+/** Duas pessoas: o RH (todos os funcionários de todos os projetos). */
+export function UsersIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  );
+}
+
 /** Caixa de arquivo morto: arquivar (tirar do quadro). */
 export function ArchiveIcon({ size = 16 }: { size?: number }) {
   return (

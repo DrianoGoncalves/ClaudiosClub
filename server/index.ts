@@ -39,7 +39,7 @@ import { CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from
 import { ChatRegistry } from './chat/registry';
 import { AutoContinue } from './chat/autoContinue';
 import { WakeBody, WakeStreakError, watchWakeups } from './chat/wake';
-import { StaffError, StaffService } from './staff/service';
+import { StaffBusyError, StaffError, StaffService } from './staff/service';
 import { sweepFreelas } from './freelaSweep';
 import { mcpJsonWarnings } from './staff/mcp';
 import { permissionInboxItem, questionInboxItem } from './inboxItems';
@@ -202,6 +202,8 @@ const staff: StaffService = new StaffService(adapter, {
   // O gestor que contratou pela API passa a primeira tarefa: é delegação (bolinhas na linha).
   openChat: (projectId, staffId, text): Promise<string> => chats.send(projectId, null, staffId, text, undefined, [], [], true),
   isWorking: (staffId) => chats.staffWorking(staffId),
+  // Tarefas abertas da ficha impedem apagar (ver deleteStaff). `tasks` é declarado logo abaixo: só é lido na chamada.
+  tasksOf: async (projectId) => (await tasks.list(projectId)) ?? [],
   weekCost: async (projectId) => {
     const c = await getCosts();
     return { project: c.projects[projectId]?.last7d ?? 0, total: c.total.last7d };
@@ -583,6 +585,14 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ['POST', new RegExp(`^/api/projects/${ID}/staff$`), ({ params: [id], body, fromBrowser }) => staff.hire(id!, body, fromBrowser)],
   // Copiar uma ficha de outro projeto (só pelo Claudio’s Club). Antes da rota de edição: "copy" casaria como id.
   ['POST', new RegExp(`^/api/projects/${ID}/staff/copy$`), ({ params: [id], body, fromBrowser }) => staff.copyFrom(id!, body, fromBrowser)],
+  // Fichas da mesma pessoa (cópias): ligar, desligar e apagar de vez. Só pelo Claudio’s Club (o serviço confere).
+  ['POST', /^\/api\/staff-link$/, ({ body, fromBrowser }) => staff.link(body, fromBrowser)],
+  ['POST', /^\/api\/staff-unlink$/, ({ body, fromBrowser }) => staff.unlink(body, fromBrowser)],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/staff/${ID}/delete$`),
+    ({ params: [id, staffId], fromBrowser }) => staff.deleteStaff(id!, staffId!, fromBrowser),
+  ],
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}$`),
@@ -1446,6 +1456,8 @@ const server = http.createServer(async (req, res) => {
         if (err instanceof UsageStopError) return send(res, 409, { error: err.message, code: err.code, hit: err.hit });
         // Mescla recusada (sem testes, teste vermelho, conflito): 409 com o motivo; `no-tests` dá para confirmar.
         if (err instanceof CodeError) return send(res, 409, { error: err.message, code: err.code });
+        // Ficha em uso (conversa trabalhando): 409, antes do StaffError genérico (400).
+        if (err instanceof StaffBusyError) return send(res, 409, { error: err.message });
         if (
           err instanceof BadRequest ||
           err instanceof StaffError ||
