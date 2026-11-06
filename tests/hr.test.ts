@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, type DirectoryStaff } from '../client/src/api';
+import { api, deleteStaffConfirm, type DirectoryStaff } from '../client/src/api';
 import { copiesOf, hrGroups, linkCandidates, orphansOf } from '../client/src/staff/directory';
 
 const person = (over: Partial<DirectoryStaff>): DirectoryStaff => ({
@@ -122,6 +122,36 @@ describe('RH: chamadas da API', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'Ana está trabalhando.' }), { status: 409 })));
     vi.stubGlobal('window', { dispatchEvent: () => true });
     await expect(api.deleteStaff('p1', 'a')).rejects.toThrow('Ana está trabalhando.');
+  });
+
+  const reply = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
+  const openTasks = () => reply(409, { error: 'Ana tem 2 tarefa(s) aberta(s) no quadro.', code: 'open-tasks', openTasks: 2 });
+
+  it('excluir com tarefas abertas: pergunta de novo e, confirmado, repete com force', async () => {
+    const f = vi.fn().mockResolvedValueOnce(openTasks()).mockResolvedValueOnce(reply(200, { ok: true, orphaned: [] }));
+    vi.stubGlobal('fetch', f);
+    vi.stubGlobal('window', { dispatchEvent: () => true });
+    const ask = vi.fn().mockReturnValue(true);
+    expect(await deleteStaffConfirm('p1', 'a', ask)).toEqual({ ok: true, orphaned: [] });
+    expect(ask).toHaveBeenCalledWith(2);
+    const bodies = f.mock.calls.map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+    expect(bodies).toEqual([{}, { force: true }]);
+  });
+
+  it('excluir com tarefas abertas e recusado: não repete, devolve null', async () => {
+    const f = vi.fn().mockResolvedValueOnce(openTasks());
+    vi.stubGlobal('fetch', f);
+    vi.stubGlobal('window', { dispatchEvent: () => true });
+    expect(await deleteStaffConfirm('p1', 'a', () => false)).toBeNull();
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it('outro 409 (conversa trabalhando) só vira erro, sem 2ª pergunta', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply(409, { error: 'Ana está trabalhando.', code: 'busy' })));
+    vi.stubGlobal('window', { dispatchEvent: () => true });
+    const ask = vi.fn();
+    await expect(deleteStaffConfirm('p1', 'a', ask)).rejects.toThrow('Ana está trabalhando.');
+    expect(ask).not.toHaveBeenCalled();
   });
 
   it('editar só manda applyToCopies quando marcado', async () => {

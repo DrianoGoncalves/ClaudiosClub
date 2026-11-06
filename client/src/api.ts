@@ -96,7 +96,7 @@ async function post<T>(url: string, body: unknown = {}, headers: Record<string, 
   }
   const data = (await res.json().catch(() => ({}))) as T & { error?: string; code?: string; hit?: UsageStopHit };
   pairingSignal(url, res.ok, data);
-  if (!res.ok) throw new ApiError(errorMessage(data, `${url}: ${res.status}`), data.code ?? null, data.hit ?? null);
+  if (!res.ok) throw new ApiError(errorMessage(data, `${url}: ${res.status}`), data.code ?? null, data.hit ?? null, data);
   return data;
 }
 
@@ -130,8 +130,24 @@ export class ApiError extends Error {
     message: string,
     readonly code: string | null,
     readonly hit: UsageStopHit | null,
+    /** O corpo da recusa, para campos que só um erro tem (ex.: `openTasks` do `open-tasks`). */
+    readonly details: Record<string, unknown> = {},
   ) {
     super(message);
+  }
+}
+
+/**
+ * Excluir ficha: se o servidor recusar por tarefas abertas no quadro (409 `open-tasks`), pergunta de novo e,
+ * confirmado, repete com `force` (as tarefas ficam sem responsável). Recusado, devolve null; outro erro sobe.
+ */
+export async function deleteStaffConfirm(projectId: string, staffId: string, ask: (openTasks: number) => boolean) {
+  try {
+    return await api.deleteStaff(projectId, staffId);
+  } catch (err) {
+    if (!(err instanceof ApiError) || err.code !== 'open-tasks') throw err;
+    if (!ask(Number(err.details.openTasks) || 0)) return null;
+    return api.deleteStaff(projectId, staffId, true);
   }
 }
 
@@ -343,8 +359,9 @@ export const api = {
   linkStaff: (from: StaffRef, to: StaffRef) => post<{ personId: string }>('/api/staff-link', { from, to }),
   unlinkStaff: (ref: StaffRef) => post<{ ok: true }>('/api/staff-unlink', ref),
   /** Apaga ficha, memória, foto e histórico; `orphaned` = subordinados que ficaram sem chefe. 409 se a conversa dele estiver trabalhando. */
-  deleteStaff: (projectId: string, staffId: string) =>
-    post<{ ok: true; orphaned: string[] }>(`/api/projects/${projectId}/staff/${staffId}/delete`),
+  /** `force`: exclui mesmo com tarefas abertas no quadro (ver deleteStaffConfirm). */
+  deleteStaff: (projectId: string, staffId: string, force = false) =>
+    post<{ ok: true; orphaned: string[] }>(`/api/projects/${projectId}/staff/${staffId}/delete`, force ? { force: true } : {}),
   /** Cópia de uma ficha de outro projeto, com id novo; a memória só vai se pedir; `reportsTo` = chefes daqui. */
   copyStaff: (projectId: string, input: { fromProjectId: string; staffId: string; withMemory: boolean; reportsTo?: string[] }) =>
     post<{ profile: StaffProfile }>(`/api/projects/${projectId}/staff/copy`, input),
