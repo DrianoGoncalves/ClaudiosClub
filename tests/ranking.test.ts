@@ -48,6 +48,18 @@ describe('rankingGroups', () => {
     expect(groups[1]).toMatchObject({ name: 'Freela', detail: 'Alfa' });
   });
 
+  it('quem tem ficha aponta para ela no RH, com o projeto da linha; o fantasma não tem ficha', () => {
+    const b = board({
+      projects: [project('a', 'Alfa'), project('b', 'Beta')],
+      staff: [staff('ana', 'a', ['s1']), staff('ana2', 'b', ['s2'])],
+      sessions: { a: [session('s1'), session('s3')], b: [session('s2')] },
+    });
+    const groups = rankingGroups(b, null);
+    expect(groups.map((g) => g.person)).toEqual([{ projectId: 'a', staffId: 'ana' }, null, { projectId: 'b', staffId: 'ana2' }]);
+    const rows = rankingRows(groups, report([saving('s1', 1, 1), saving('s2', 2, 2), saving('s3', 3, 3)]));
+    expect(rows.map((r) => r.person)).toEqual([null, { projectId: 'b', staffId: 'ana2' }, { projectId: 'a', staffId: 'ana' }]);
+  });
+
   it('sessão listada em duas fichas do projeto conta uma vez só: fica com a última, como no quadro', () => {
     const b = board({
       projects: [project('a', 'Alfa')],

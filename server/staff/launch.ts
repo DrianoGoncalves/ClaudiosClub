@@ -9,7 +9,9 @@ import { ftpMcpServerConfig } from './ftpMcp';
 import { buildMcpConfig } from './mcp';
 import { ensurePlaybookAgents } from './playbookAgents';
 import { buildSkillPlugin } from '../skillLibrary';
+import { hasGuide } from '../projectGuide';
 import { ensureMemory, fichaFile, memoryFile, staffDir, writeAtomic } from './store';
+import { readPersonMemory } from './personalMemory';
 import type { Worktree } from './worktree';
 
 export interface LaunchContext {
@@ -76,7 +78,9 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   const fichaCtx = await writeFicha(profile, ctx, away);
   const dir = path.join(ctx.runDir, sessionId);
   const systemPromptFile = path.join(dir, 'system.md');
-  await writeAtomic(systemPromptFile, systemPrompt(profile, fichaCtx, renderFicha(profile, fichaCtx)));
+  // Memória pessoal: só no system.md desta execução (fora do .md da ficha, que vai para o git do projeto).
+  const personal = profile.personId ? await readPersonMemory(profile.personId) : null;
+  await writeAtomic(systemPromptFile, systemPrompt(profile, fichaCtx, renderFicha(profile, fichaCtx), personal?.text ?? null));
   // FTP: as conexões da ficha que existem e têm senha (ctx.servers já vem filtrado assim).
   const ftpServers = ftpServersOf(profile, ctx.servers);
   let mcpConfigPath: string | null = null;
@@ -165,6 +169,8 @@ export async function writeFicha(
     servers: ctx.servers,
     team: ctx.team,
     librarySkills: ctx.librarySkills,
+    // Lido a cada sessão (writeFicha roda em prepareRun): criar ou apagar o SPEC.md vale na próxima conversa.
+    guide: await hasGuide(ctx.projectPath),
   };
   await writeAtomic(fichaFile(ctx.projectPath, profile.id), renderFicha(profile, fichaCtx));
   await ensureMemory(ctx.projectPath, profile);

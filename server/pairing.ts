@@ -313,7 +313,8 @@ export type Admission = { done: true } | { done: false; fromBrowser: boolean };
 export function admit(req: http.IncomingMessage, res: http.ServerResponse, url: URL, pairing: Pairing, o: AdmitOptions): Admission {
   const log = o.log ?? ((line: string) => console.log(line));
   const origin = req.headers.origin;
-  if (req.method === 'POST') {
+  // PUT (a memória pessoal) entra pelo mesmo gate de POST: cabeçalho x-myco e Origin local.
+  if (req.method === 'POST' || req.method === 'PUT') {
     if (req.headers['x-myco'] !== '1' || !o.isLocalOrigin(origin)) {
       json(res, 403, { error: 'origem não permitida' });
       return { done: true };

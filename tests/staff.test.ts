@@ -91,6 +91,29 @@ describe('ficha', () => {
     expect(solo).not.toContain('## Entrega');
   });
 
+  it('com SPEC.md na raiz, a ficha manda consultar o guia antes do Conhecimento; sem ele, nada disso', () => {
+    const md = renderFicha(profile(), { ...ctx, guide: true });
+    expect(md).toContain('## Guia do projeto');
+    expect(md).toContain('Leia `SPEC.md` (raiz do projeto) antes de começar algo novo');
+    expect(md).toContain('Se o pedido conflitar com o guia, aponte o conflito em vez de seguir.');
+    expect(md.indexOf('## Guia do projeto')).toBeLessThan(md.indexOf('## Conhecimento'));
+    const none = renderFicha(profile(), ctx);
+    expect(none).not.toContain('Guia do projeto');
+    expect(none).not.toContain('SPEC.md');
+  });
+
+  it('todo funcionário tem a postura antes das regras, com ou sem gestor, equipe ou guia', () => {
+    const cases = [
+      renderFicha(profile(), ctx),
+      renderFicha(profile({ canHire: true, projectId: 'proj-x' }), { ...ctx, managerNames: ['Daniel'], guide: true }),
+    ];
+    for (const md of cases) {
+      expect(md).toContain('## Postura\nAntes de concordar, teste a ideia: aponte primeiro o que está errado, faltando ou arriscado e o contra-argumento mais forte.');
+      expect(md).toContain('Sem elogio vazio nem pedido de desculpas: vá direto ao ponto técnico.');
+      expect(md.indexOf('## Postura')).toBeLessThan(md.indexOf('## Regras'));
+    }
+  });
+
   it('tem missão, autonomia, regras, memória e a seção de contratação', () => {
     const md = renderFicha(profile(), ctx);
     for (const part of ['## Missão', 'Revisar mudanças', '## Primeira tarefa', 'Só lê e planeja', '- Não altere arquivos', '## Memória', 'ana-1a2b.memory.md', 'substitua o que ficou velho', '`[MyCo:ponto-de-corte]`', 'não pode contratar']) {
@@ -133,6 +156,17 @@ describe('ficha', () => {
     // Todo funcionário roda pelo Claudio’s Club, então toda ficha tem; sem o endereço do Claudio’s Club, não.
     expect(renderFicha(profile({ canHire: true }), ctx)).toContain('## Despertador');
     expect(renderFicha(profile(), { ...ctx, mycoUrl: '' })).not.toContain('## Despertador');
+  });
+
+  it('memória: a ficha cita a pasta <id>.memory/ como índice, e sem o sufixo .memory.md não mostra a linha da pasta', () => {
+    const md = renderFicha(profile(), ctx);
+    const section = md.slice(md.indexOf('## Memória'), md.indexOf('- Ponto de corte'));
+    expect(section).toContain('Ela é um índice');
+    expect(section).toContain('`.myco\\staff\\ana-1a2b.memory/<assunto>.md`');
+    expect(section).toContain('apague o arquivo e a linha');
+    expect(md).toContain('Sua memória fica em `.myco\\staff\\ana-1a2b.memory.md`');
+    const semSufixo = renderFicha(profile(), { ...ctx, memoryPath: '.myco\\staff\\ana-1a2b.txt' });
+    expect(semSufixo).not.toContain('Ela é um índice');
   });
 
   it('prompt de sistema: identidade, onde fica a memória e a ficha inteira (vai por arquivo)', () => {
@@ -443,7 +477,7 @@ describe('StaffService', () => {
       mycoUrl: 'x',
       readUsage: noUsage,
       openChat: async (_p, staffId, text) => (chats.push({ staffId, text }), 'conversa-1'),
-      isWorking: (id) => working.has(id),
+      isWorking: (_p, id) => working.has(id),
       archive: { has: async (k) => archived.has(k), set: async (k, v) => void (v ? archived.add(k) : archived.delete(k)) },
     });
     const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestora', canHire: true, launch: false }, true))!;
