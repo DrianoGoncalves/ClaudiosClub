@@ -27,6 +27,7 @@ import { BrowserCheck } from '../staff/BrowserCheck';
 import { MAX_INPUT_BYTES, PROJECT_IMAGE_MAX, shrinkImage } from '../lib/shrinkImage';
 import { METRIC_LABEL, type Metric, ModelsChart } from '../toolbar/ModelsMenu';
 import { Attachments } from './Attachments';
+import { ProjectGuide } from './ProjectGuide';
 import { ProjectName } from './ProjectName';
 import { Routines } from './Routines';
 import { WorthIt } from './WorthIt';
@@ -533,9 +534,12 @@ export function ProjectPanel({
   onEditAgent,
   onTasks,
   onFiles,
+  onOpenFile,
   tasks,
   office,
 }: {
+  /** Abre um arquivo do projeto direto no editor de Arquivos (ex.: o guia SPEC.md). */
+  onOpenFile?: (path: string) => void;
   /** Empresa e servidores do projeto (ver office/ProjectOffice.tsx). */
   office?: React.ReactNode;
   onNewAgent?: () => void;
@@ -638,6 +642,7 @@ export function ProjectPanel({
           </p>
         )}
       </header>
+      {project.exists && <ProjectGuide projectId={project.id} onOpen={onOpenFile} />}
       <section className="section">
         <h3>{t('detail.roomColor')}</h3>
         <RoomColorPicker value={color} onChange={onColor} />

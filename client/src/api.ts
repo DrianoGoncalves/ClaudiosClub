@@ -485,9 +485,21 @@ export const api = {
     post<StaffProfile>(`/api/projects/${projectId}/staff/${staffId}/managers/remove`, { managerId }),
   saveProjectImage: (projectId: string, dataUrl: string | null) =>
     post<{ image: string | null }>(`/api/projects/${projectId}/image`, { dataUrl }),
+  /** Guia do projeto (SPEC.md na raiz): a equipe lê em caso de dúvida. */
+  projectGuide: (projectId: string) => get<ProjectGuide>(`/api/projects/${projectId}/guide`),
+  /** Cria o SPEC.md a partir do modelo; 409 se já existe. */
+  createProjectGuide: (projectId: string) => post<ProjectGuide>(`/api/projects/${projectId}/guide`),
   accountRules: () => get<{ path: string; text: string | null }>('/api/account/rules'),
   saveAccountRules: (text: string) => post<{ path: string; text: string | null }>('/api/account/rules', { text }),
 };
+
+/** Guia do projeto. `ignored` = está no .gitignore (só conta com `isGit`). */
+export interface ProjectGuide {
+  path: string;
+  exists: boolean;
+  isGit: boolean;
+  ignored: boolean;
+}
 
 /** Item da árvore de arquivos do projeto; `path` relativo à raiz, com "/". `locked` = segredo: listado, mas não abre. */
 export interface FileEntry {
