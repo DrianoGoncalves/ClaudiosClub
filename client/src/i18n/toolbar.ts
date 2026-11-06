@@ -31,6 +31,11 @@ export default defineMessages({
     'toolbar.groupRolesIntro': 'Modelos de ficha para contratar: os prontos e os seus, cada um com o modelo em que o funcionário começa.',
     'toolbar.groupUsage': 'Consumo',
     'toolbar.groupUsageIntro': 'Até onde a conta pode gastar antes do Clube dos Claudios perguntar.',
+    'toolbar.groupCredits': 'Créditos',
+    'toolbar.groupCreditsIntro': 'Projetos de código aberto que o Clube dos Claudios usa na interface.',
+    'toolbar.creditsTitle': 'Bibliotecas',
+    'toolbar.creditsDesc': 'As principais, cada uma com a sua licença; os links abrem o site do projeto.',
+    'toolbar.creditsKeywords': 'react flow xyflow rough.js roughjs caveat codemirror licença atribuição',
     // Configurações: itens
     'toolbar.uiLevelTitle': 'Nível de uso',
     'toolbar.uiLevelDesc':
@@ -307,6 +312,11 @@ export default defineMessages({
     'toolbar.groupRolesIntro': 'Profile templates for hiring: the built-in ones and your own, each with the model the employee starts on.',
     'toolbar.groupUsage': 'Usage',
     'toolbar.groupUsageIntro': 'How far the account can spend before Claudio’s Club asks.',
+    'toolbar.groupCredits': 'Credits',
+    'toolbar.groupCreditsIntro': 'Open-source projects Claudio’s Club uses in the interface.',
+    'toolbar.creditsTitle': 'Libraries',
+    'toolbar.creditsDesc': 'The main ones, each under its own license; the links open the project site.',
+    'toolbar.creditsKeywords': 'react flow xyflow rough.js roughjs caveat codemirror license attribution',
     'toolbar.uiLevelTitle': 'Usage level',
     'toolbar.uiLevelDesc':
       'Simple: hire with a name and role (the rest comes from the role), employees with just the chat, and here only the essentials. Advanced: every detail of the profile, the panel and the config. You can switch any time; nothing is lost.',
@@ -576,6 +586,11 @@ export default defineMessages({
       'Plantillas de ficha para contratar: las predefinidas y las tuyas, cada una con el modelo con el que empieza el empleado.',
     'toolbar.groupUsage': 'Consumo',
     'toolbar.groupUsageIntro': 'Hasta dónde puede gastar la cuenta antes de que el Club de los Claudios pregunte.',
+    'toolbar.groupCredits': 'Créditos',
+    'toolbar.groupCreditsIntro': 'Proyectos de código abierto que el Club de los Claudios usa en la interfaz.',
+    'toolbar.creditsTitle': 'Bibliotecas',
+    'toolbar.creditsDesc': 'Las principales, cada una con su licencia; los enlaces abren el sitio del proyecto.',
+    'toolbar.creditsKeywords': 'react flow xyflow rough.js roughjs caveat codemirror licencia atribución',
     'toolbar.uiLevelTitle': 'Nivel de uso',
     'toolbar.uiLevelDesc':
       'Simple: contratar con nombre y cargo (lo demás viene del cargo), el empleado solo con la conversación y aquí solo lo esencial. Avanzado: cada detalle de la ficha, del panel y de la configuración. Se puede cambiar en cualquier momento; no se pierde nada.',

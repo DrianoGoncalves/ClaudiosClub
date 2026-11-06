@@ -59,7 +59,7 @@ interface Props {
   freelaArchiveDays: number | null;
 }
 
-type GroupId = 'general' | 'board' | 'chat' | 'roles' | 'mcp' | 'usage';
+type GroupId = 'general' | 'board' | 'chat' | 'roles' | 'mcp' | 'usage' | 'credits';
 
 const GROUPS: Array<{ id: GroupId; label: string; intro: string }> = [
   { id: 'general', label: t('toolbar.groupGeneral'), intro: t('toolbar.groupGeneralIntro') },
@@ -68,6 +68,15 @@ const GROUPS: Array<{ id: GroupId; label: string; intro: string }> = [
   { id: 'roles', label: t('toolbar.groupRoles'), intro: t('toolbar.groupRolesIntro') },
   { id: 'mcp', label: t('mcp.group'), intro: t('mcp.groupIntro') },
   { id: 'usage', label: t('toolbar.groupUsage'), intro: t('toolbar.groupUsageIntro') },
+  { id: 'credits', label: t('toolbar.groupCredits'), intro: t('toolbar.groupCreditsIntro') },
+];
+
+/** Bibliotecas que aparecem na interface. O React Flow pede o crédito, e ele mora aqui em vez de no canto do quadro. */
+const CREDITS = [
+  { name: 'React Flow', license: 'MIT', url: 'https://reactflow.dev' },
+  { name: 'Rough.js', license: 'MIT', url: 'https://roughjs.com' },
+  { name: 'CodeMirror', license: 'MIT', url: 'https://codemirror.net' },
+  { name: 'Caveat', license: 'SIL OFL 1.1', url: 'https://fonts.google.com/specimen/Caveat' },
 ];
 
 type SectionId = 'workspaces' | 'colors' | 'display';
@@ -504,6 +513,29 @@ function buildSettings(
       advanced: true,
     });
   }
+
+  out.push({
+    id: 'credits',
+    group: 'credits',
+    title: t('toolbar.creditsTitle'),
+    description: t('toolbar.creditsDesc'),
+    keywords: `${t('toolbar.creditsKeywords')} ${CREDITS.map((c) => c.name).join(' ')}`,
+    control: (
+      <ul className="room-colors">
+        {CREDITS.map((c) => (
+          <li key={c.name}>
+            <span className="room-colors-name">{c.name}</span>
+            <span className="muted small">
+              {c.license} ·{' '}
+              <a className="credits-link" href={c.url} target="_blank" rel="noopener noreferrer">
+                {c.url.replace(/^https:\/\/(www\.)?/, '')}
+              </a>
+            </span>
+          </li>
+        ))}
+      </ul>
+    ),
+  });
 
   out.push({
     id: 'chat-detail',

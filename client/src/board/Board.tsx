@@ -355,6 +355,8 @@ export function BoardView(props: BoardViewProps) {
       minZoom={0.1}
       maxZoom={2}
       colorMode="system"
+      // O crédito do React Flow fica em Configurações > Créditos, não no canto do quadro.
+      proOptions={{ hideAttribution: true }}
     >
       <Background variant={BackgroundVariant.Dots} gap={28} size={1.2} />
       <Controls showInteractive={false}>
@@ -437,7 +439,6 @@ export function BoardView(props: BoardViewProps) {
           <span className="legend-item legend-agent">{t('board.legendEmployee')}</span>
           <span className="legend-item legend-skill">{t('board.skillWord')}</span>
           <span className="legend-item legend-calls">{t('board.alsoCalls')}</span>
-          <span className="legend-item legend-borrow">{t('board.legendBorrow')}</span>
         </div>
         <button
           type="button"
