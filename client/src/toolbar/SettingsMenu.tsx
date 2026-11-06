@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from 'react-dom';
 import { CONTEXT_SWITCHES, type AppConfig, type BoardBackground, type ContextSwitch, type Project, type SendPriority, type UiLevel, type UsageStop, type Workspace } from '../../../shared/model';
 import { DemoButton, WorkspacesEditor } from '../office/WorkspacesSettings';
+import { McpServers } from '../office/McpServers';
 import { api } from '../api';
 import { bareVersion } from '../format';
 import { useSystemTheme } from '../board/colors';
@@ -58,13 +59,14 @@ interface Props {
   freelaArchiveDays: number | null;
 }
 
-type GroupId = 'general' | 'board' | 'chat' | 'roles' | 'usage';
+type GroupId = 'general' | 'board' | 'chat' | 'roles' | 'mcp' | 'usage';
 
 const GROUPS: Array<{ id: GroupId; label: string; intro: string }> = [
   { id: 'general', label: t('toolbar.groupGeneral'), intro: t('toolbar.groupGeneralIntro') },
   { id: 'board', label: t('toolbar.groupBoard'), intro: t('toolbar.groupBoardIntro') },
   { id: 'chat', label: t('toolbar.groupChat'), intro: t('toolbar.groupChatIntro') },
   { id: 'roles', label: t('toolbar.groupRoles'), intro: t('toolbar.groupRolesIntro') },
+  { id: 'mcp', label: t('mcp.group'), intro: t('mcp.groupIntro') },
   { id: 'usage', label: t('toolbar.groupUsage'), intro: t('toolbar.groupUsageIntro') },
 ];
 
@@ -470,6 +472,14 @@ function buildSettings(
       description: t('toolbar.updateDesc'),
       keywords: t('toolbar.updateKeywords'),
       control: <UpdateControls />,
+    },
+    {
+      id: 'mcp-servers',
+      group: 'mcp',
+      title: t('mcp.title'),
+      description: t('mcp.desc'),
+      keywords: t('mcp.keywords'),
+      control: <McpServers projects={p.projects} />,
     },
   ];
 

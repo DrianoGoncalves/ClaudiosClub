@@ -58,6 +58,14 @@ import type {
 } from '../../shared/model';
 import type { RoleEntry, RoleTemplate } from '../../shared/roles';
 import { locale, t } from './i18n';
+import type { McpSaveBody, McpScope, McpServer } from './office/mcpForm';
+
+/** Um MCP pelo endereço: escopo, projeto (nos de projeto) e nome. */
+export interface McpRef {
+  scope: McpScope;
+  projectId?: string;
+  name: string;
+}
 
 /** Leituras tentam de novo só em erro de rede (servidor reiniciando): 3 tentativas no total. */
 const GET_ATTEMPTS = 3;
@@ -324,6 +332,12 @@ export const api = {
   saveLibrarySkill: (s: { originalName?: string; name: string; description: string; body: string }) => post<LibrarySkill>('/api/skills/library', s),
   removeLibrarySkill: (name: string) => post<{ ok: boolean }>(`/api/skills/library/${encodeURIComponent(name)}/delete`),
   importSkill: (name: string) => post<LibrarySkill>('/api/skills/library/import', { name }),
+  // MCPs da conta e dos projetos (Configurações › MCPs). Valores de env/cabeçalho só vão; a lista traz só a chave e `set`.
+  mcpServers: (projectId: string | null) =>
+    get<{ servers: McpServer[] }>(`/api/mcp-servers${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+  saveMcpServer: (body: McpSaveBody) => post<{ server: McpServer }>('/api/mcp-servers/save', body),
+  deleteMcpServer: (ref: McpRef) => post<{ ok: true }>('/api/mcp-servers/delete', ref),
+  testMcpServer: (ref: McpRef) => post<{ ok: boolean; tools: string[]; error?: string }>('/api/mcp-servers/test', ref),
   serverLog: (projectId: string, staffId: string) => get<ServerAccess[]>(`/api/projects/${projectId}/staff/${staffId}/server-log`),
   // Conexões SSH e FTP do projeto (a lista também é POST: exige a página do Claudio’s Club).
   connections: (projectId: string) => post<AnyConnection[]>(`/api/projects/${projectId}/connections/list`),
