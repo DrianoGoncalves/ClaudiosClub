@@ -121,6 +121,11 @@ export interface GraphOptions {
    * direita; em pé: cresce para baixo. Sem ela, a de uma tela larga.
    */
   aspect?: number;
+  /**
+   * Workspace de cada projeto (id → workspace ou null) e a ordem das abas. Com isso as salas do mesmo
+   * workspace formam um bloco na planta (aba "Todos"); sem isso, todas seguem a ordem alfabética.
+   */
+  groups?: { of: Map<string, string | null>; order: string[] };
 }
 
 /**
@@ -146,6 +151,8 @@ const SIDE_ROW_GAP = 12;
 export const ROOM_PAD = 26;
 const ROOM_GAP_X = 56;
 const ROOM_GAP_Y = 56;
+/** Folga entre blocos de workspaces: maior que a entre salas, para o bloco se ler como um grupo. */
+const GROUP_GAP = ROOM_GAP_X * 2;
 /** Proporção (largura/altura) que a grade de salas procura quando a da tela não é informada. */
 const GRID_ASPECT = 16 / 10;
 /** Limites da proporção da tela: evita uma fila só (ou uma coluna só) em janelas extremas. */
@@ -368,28 +375,35 @@ export function buildGraph(
     children: [],
   };
 
-  const rooms = [
-    ...(opts.showUserScope ? [userTree] : []),
+  // Bloco de cada projeto na planta: a sala "você" abre (-1), depois um bloco por workspace na ordem das
+  // abas e, por fim, os sem workspace. Sem `groups` todos caem no mesmo bloco.
+  const blockOf = (p: Project): number => {
+    const i = opts.groups ? opts.groups.order.indexOf(opts.groups.of.get(p.id) ?? '') : -1;
+    return i < 0 ? (opts.groups?.order.length ?? 0) : i;
+  };
+  const visible = board.projects
+    .filter(visibleProject)
     // Worktrees (cópias de trabalho do Claude Code) ficam fora do quadro.
-    // Salas em ordem alfabética do nome (o servidor manda por atividade, que muda a toda hora).
-    ...board.projects
-      .filter(visibleProject)
-      .filter((p) => !p.worktreeOf)
-      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base', numeric: true }))
-      .map(projectTree),
-  ];
+    .filter((p) => !p.worktreeOf)
+    // Salas em ordem alfabética do nome (o servidor manda por atividade, que muda a toda hora);
+    // o sort é estável: dentro do bloco a ordem alfabética fica.
+    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base', numeric: true }))
+    .sort((a, b) => blockOf(a) - blockOf(b));
+  const rooms = [...(opts.showUserScope ? [userTree] : []), ...visible.map(projectTree)];
+  const blocks = [...(opts.showUserScope ? [opts.groups ? -1 : 0] : []), ...visible.map(blockOf)];
 
   const nodes: BoardNode[] = [];
   const edges: BoardEdge[] = [];
   const frames: BoardNode[] = [];
   const memo = new Map<Tree, Box>();
-  const spots = gridSpots(
+  const spots = blockSpots(
     rooms.map((r) => {
       const b = measure(r, memo);
       return { w: b.w + ROOM_PAD * 2, h: b.h + ROOM_PAD * 2 };
     }),
     Math.min(ASPECT_MAX, Math.max(ASPECT_MIN, opts.aspect ?? GRID_ASPECT)),
   );
+    blocks,
   rooms.forEach((room, i) => {
     const start = nodes.length;
     place(room, spots[i]!.x + ROOM_PAD, spots[i]!.y + ROOM_PAD, memo, nodes, edges);
@@ -470,9 +484,9 @@ function markStaffLinks(edges: BoardEdge[], nodes: BoardNode[]) {
  * Planta do escritório: as salas, na ordem recebida, preenchem linhas até a largura que deixa a
  * grade com a proporção da tela (`aspect` = largura/altura); aí quebram linha.
  */
-function gridSpots(boxes: Array<{ w: number; h: number }>, aspect: number): Array<{ x: number; y: number }> {
+function gridSpots(boxes: Array<{ w: number; h: number }>, aspect: number, gap = { x: ROOM_GAP_X, y: ROOM_GAP_Y }): Array<{ x: number; y: number }> {
   if (!boxes.length) return [];
-  const area = boxes.reduce((s, b) => s + (b.w + ROOM_GAP_X) * (b.h + ROOM_GAP_Y), 0);
+  const area = boxes.reduce((s, b) => s + (b.w + gap.x) * (b.h + gap.y), 0);
   const rowLimit = Math.max(...boxes.map((b) => b.w), Math.sqrt(area * aspect));
   const spots: Array<{ x: number; y: number }> = [];
   let x = 0;
@@ -481,11 +495,11 @@ function gridSpots(boxes: Array<{ w: number; h: number }>, aspect: number): Arra
   for (const b of boxes) {
     if (x > 0 && x + b.w > rowLimit) {
       x = 0;
-      y += rowH + ROOM_GAP_Y;
+      y += rowH + gap.y;
       rowH = 0;
     }
     spots.push({ x, y });
-    x += b.w + ROOM_GAP_X;
+    x += b.w + gap.x;
     rowH = Math.max(rowH, b.h);
   }
   return spots;
@@ -493,6 +507,35 @@ function gridSpots(boxes: Array<{ w: number; h: number }>, aspect: number): Arra
 
 function roomNode(owner: string, members: BoardNode[], color: ProjectColor | null): BoardNode {
   const n = node(roomNodeId(owner), 'room', { owner, members: members.map((m) => m.id), color });
+/**
+ * Como `gridSpots`, mas as salas do mesmo bloco (`blocks[i]`, seguidos na lista) formam uma grade
+ * própria, e os blocos formam a grade de fora, com folga maior. Um bloco só = a grade simples.
+ */
+function blockSpots(boxes: Array<{ w: number; h: number }>, blocks: number[], aspect: number): Array<{ x: number; y: number }> {
+  const groups: number[][] = [];
+  boxes.forEach((_, i) => {
+    if (i > 0 && blocks[i] === blocks[i - 1]) groups[groups.length - 1]!.push(i);
+    else groups.push([i]);
+  });
+  if (groups.length <= 1) return gridSpots(boxes, aspect);
+  const inner = groups.map((idx) => {
+    const spots = gridSpots(idx.map((i) => boxes[i]!), aspect);
+    return {
+      spots,
+      w: Math.max(...idx.map((i, k) => spots[k]!.x + boxes[i]!.w)),
+      h: Math.max(...idx.map((i, k) => spots[k]!.y + boxes[i]!.h)),
+    };
+  });
+  const outer = gridSpots(inner, aspect, { x: GROUP_GAP, y: GROUP_GAP });
+  const out: Array<{ x: number; y: number }> = [];
+  groups.forEach((idx, g) => {
+    idx.forEach((i, k) => {
+      out[i] = { x: outer[g]!.x + inner[g]!.spots[k]!.x, y: outer[g]!.y + inner[g]!.spots[k]!.y };
+    });
+  });
+  return out;
+}
+
   // Por baixo das linhas e dos cartões; clicar nela seleciona o dono (ver Board.tsx).
   return { ...n, ...roomFrame(members), selectable: false, focusable: false, zIndex: -1 } as BoardNode;
 }
