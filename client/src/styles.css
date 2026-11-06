@@ -516,6 +516,10 @@ textarea.q-field { resize: vertical; }
 :is(.files-conflict, .guide-alert) { border: 1px solid var(--waiting); border-radius: 10px; padding: 8px 12px; background: color-mix(in srgb, var(--waiting) 12%, transparent); font-size: 13px; }
 .files-conflict p { margin: 0 0 6px; }
 .files-conflict .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+.guide-who { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 8px 0 0; }
+.guide-who .setting-select { flex: 1 1 160px; min-width: 0; max-width: 100%; }
+.guide-actions { flex-wrap: wrap; }
+.guide-hints { margin: 8px 0 0; padding-left: 16px; display: grid; gap: 4px; }
 @media (max-width: 640px) {
   .files-body { grid-template-columns: minmax(0, 1fr); }
   .files-body.is-editing .files-tree, .files-body:not(.is-editing) .files-editor { display: none; }

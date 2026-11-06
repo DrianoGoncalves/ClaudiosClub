@@ -205,6 +205,19 @@ export function App() {
   }, []);
   const inbox = useInbox(openInbox);
 
+  // Conversa que acabou de nascer (pedido do guia do projeto): o painel do funcionário abre nela, mesmo antes de o quadro relê-la.
+  const openNewConversation = useCallback(
+    (projectId: string, staffId: string, sessionId: string) => {
+      const node = staffNodeId(projectId, staffId);
+      jumpSelection.current = node;
+      setJumpConversation({ node, sessionId });
+      setJumpTarget({ projectId, staffId, sessionId, nonce: ++jumpNonce.current });
+      setSelectedId(node);
+      reloadSoon();
+    },
+    [reloadSoon],
+  );
+
   // O título da aba traz quantas coisas esperam você: dá para ver sem trazer o Claudio’s Club para a frente.
   useEffect(() => {
     const name = companyName(config?.companyName);
@@ -452,6 +465,7 @@ export function App() {
                 setFilesPath(path);
                 setFilesFor(selection.id);
               }}
+              onOpenConversation={(staffId, sessionId) => openNewConversation(selection.id, staffId, sessionId)}
               tasks={taskSummary[selection.id] ?? null}
               office={<ProjectOffice projectId={selection.id} config={config} onConfig={setConfig} />}
               onNewAgent={() => setAgentForm({ scope: 'project', projectId: selection.id })}

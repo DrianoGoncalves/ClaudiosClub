@@ -535,11 +535,14 @@ export function ProjectPanel({
   onTasks,
   onFiles,
   onOpenFile,
+  onOpenConversation,
   tasks,
   office,
 }: {
   /** Abre um arquivo do projeto direto no editor de Arquivos (ex.: o guia SPEC.md). */
   onOpenFile?: (path: string) => void;
+  /** Abre uma conversa nova de um funcionário no painel dele (ex.: o pedido do guia SPEC.md). */
+  onOpenConversation?: (staffId: string, sessionId: string) => void;
   /** Empresa e servidores do projeto (ver office/ProjectOffice.tsx). */
   office?: React.ReactNode;
   onNewAgent?: () => void;
@@ -663,7 +666,14 @@ export function ProjectPanel({
       <div role="tabpanel" id="project-tab-panel" aria-labelledby={`project-tab-${tab}`}>
         {tab === 'project' && (
           <>
-            {project.exists && <ProjectGuide projectId={project.id} onOpen={onOpenFile} />}
+            {project.exists && (
+              <ProjectGuide
+                projectId={project.id}
+                staff={team.map((r) => r.staff)}
+                onOpen={onOpenFile}
+                onOpenConversation={onOpenConversation}
+              />
+            )}
             {project.exists && !project.worktreeOf && office}
             {project.exists && <Attachments projectId={project.id} />}
           </>

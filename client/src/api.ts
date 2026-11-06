@@ -58,6 +58,7 @@ import type {
 } from '../../shared/model';
 import type { RoleEntry, RoleTemplate } from '../../shared/roles';
 import { locale, t } from './i18n';
+import type { GuideAction } from './detail/guideActions';
 import type { McpSaveBody, McpScope, McpServer } from './office/mcpForm';
 
 /** Um MCP pelo endereço: escopo, projeto (nos de projeto) e nome. */
@@ -489,6 +490,9 @@ export const api = {
   projectGuide: (projectId: string) => get<ProjectGuide>(`/api/projects/${projectId}/guide`),
   /** Cria o SPEC.md a partir do modelo; 409 se já existe. */
   createProjectGuide: (projectId: string) => post<ProjectGuide>(`/api/projects/${projectId}/guide`),
+  /** Abre uma conversa nova do funcionário com o pedido do guia (testar, divergências ou rascunho); 400 se não vale agora. */
+  runProjectGuide: (projectId: string, action: GuideAction, staffId: string) =>
+    post<{ sessionId: string; staffId: string }>(`/api/projects/${projectId}/guide/run`, { action, staffId }),
   accountRules: () => get<{ path: string; text: string | null }>('/api/account/rules'),
   saveAccountRules: (text: string) => post<{ path: string; text: string | null }>('/api/account/rules', { text }),
 };
