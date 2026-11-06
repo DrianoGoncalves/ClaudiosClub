@@ -41,7 +41,8 @@ import { AutoContinue } from './chat/autoContinue';
 import { WakeBody, WakeStreakError, watchWakeups } from './chat/wake';
 import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService } from './staff/service';
 import { sweepFreelas } from './freelaSweep';
-import { mcpJsonWarnings } from './staff/mcp';
+import { CLUB_MCP_FILE, McpError, mcpJsonWarnings } from './staff/mcp';
+import { createMcpLibrary } from './staff/mcpLibrary';
 import { permissionInboxItem, questionInboxItem } from './inboxItems';
 import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
@@ -464,6 +465,14 @@ const CONN = '([A-Za-z0-9][\\w.-]{0,39})';
 /** Envio de anexo: o corpo são os bytes do arquivo (não JSON), o nome vai em `?name=`. */
 const ATTACHMENT_UPLOAD = new RegExp(`^/api/projects/${ID}/attachments$`);
 
+/** Biblioteca de MCPs (cadastro e edição nos quatro escopos). A pasta do projeto vem do adapter, nunca do cliente. */
+const mcpLibrary = createMcpLibrary({
+  claudeConfigFile: defaultLocations().configFile,
+  clubFile: CLUB_MCP_FILE,
+  backupDir: path.join(MYCO_HOME, 'backups'),
+  resolveProject: projectPathOf,
+});
+
 const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ['GET', /^\/api\/health$/, async () => ({ ok: true, adapter: adapter.id })],
   // CPU e RAM da máquina, para o monitor do canto (só números; ver systemStats.ts).
@@ -546,6 +555,11 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ],
   ['GET', new RegExp(`^/api/projects/${ID}$`), ({ params: [id] }) => adapter.getProject(id!)],
   ['GET', new RegExp(`^/api/projects/${ID}/mcp$`), ({ params: [id] }) => staff.listMcp(id!)],
+  // Biblioteca de MCPs: a lista não traz valor (só nome e se está preenchido); cadastrar, editar, apagar e testar só pelo navegador.
+  ['GET', /^\/api\/mcp-servers$/, ({ url }) => mcpLibrary.list(url.searchParams.get('projectId'))],
+  ['POST', /^\/api\/mcp-servers\/save$/, ({ body, fromBrowser }) => mcpLibrary.save(body, fromBrowser)],
+  ['POST', /^\/api\/mcp-servers\/delete$/, ({ body, fromBrowser }) => mcpLibrary.remove(body, fromBrowser)],
+  ['POST', /^\/api\/mcp-servers\/test$/, ({ body, fromBrowser }) => mcpLibrary.test(body, fromBrowser)],
   ['GET', new RegExp(`^/api/projects/${ID}/servers$`), ({ params: [id] }) => staff.listServers(id!)],
   // Conexões SSH do projeto, só pela página do Claudio’s Club: até a lista é POST, para exigir o cabeçalho
   // x-myco e a origem local (um funcionário teria de forjar os dois num comando que você aprova).
@@ -1472,6 +1486,7 @@ const server = http.createServer(async (req, res) => {
           err instanceof AgentError ||
           err instanceof WorkspaceError ||
           err instanceof SkillError ||
+          err instanceof McpError ||
           err instanceof ProjectError ||
           err instanceof UpdateError ||
           (err as NodeJS.ErrnoException | null)?.code === 'EEXIST'

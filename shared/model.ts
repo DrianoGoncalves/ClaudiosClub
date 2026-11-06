@@ -676,9 +676,27 @@ export type StaffInput = Omit<StaffProfile, 'id' | 'projectId' | 'portrait' | 's
 /** Servidor MCP disponível num projeto (só nome e origem: a configuração pode ter segredos). */
 export interface McpServerInfo {
   name: string;
-  /** `project` = .mcp.json; `local` = só este projeto; `user` = todos os projetos. */
-  source: 'project' | 'local' | 'user';
+  /** `club` = biblioteca do Claudio’s Club; `project` = .mcp.json; `local` = só este projeto; `user` = todos os projetos. */
+  source: 'club' | 'project' | 'local' | 'user';
   transport: string | null;
+}
+
+export type McpScope = 'club' | 'user' | 'project' | 'local';
+export type McpType = 'http' | 'sse' | 'stdio';
+
+/** MCP para a tela de biblioteca. Nunca traz valor de env/cabeçalho: só o nome e se está preenchido. */
+export interface McpServerView {
+  name: string;
+  scope: McpScope;
+  projectId?: string;
+  type: McpType;
+  url?: string;
+  command?: string;
+  args?: string[];
+  /** Algum argumento tinha segredo: vem trocado pelo marcador `••••`. */
+  argsMasked?: boolean;
+  env: Array<{ key: string; set: boolean }>;
+  headers: Array<{ key: string; set: boolean }>;
 }
 
 /** `ssh` = .vps/config.json (chave); `ftps` = FTP com TLS explícito; `ftp` = FTP puro, sem criptografia. */
