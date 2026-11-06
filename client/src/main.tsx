@@ -5,6 +5,9 @@ import '@fontsource/caveat/700.css';
 import '@xyflow/react/dist/style.css';
 import { App } from './App';
 import './styles.css';
+import { initTheme } from './theme';
+
+initTheme();
 
 // Com o Claudio’s Club parado, abrir a porta mostra a página de início (checklist e botão Iniciar) em vez de
 // "conexão recusada" (public/sw.js). Só no build: no `npm run dev` o Vite recarrega sozinho.

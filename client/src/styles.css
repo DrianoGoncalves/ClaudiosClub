@@ -69,40 +69,39 @@
   background: var(--board);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --board-base: #1f2a25;
-    --board-dot-base: #34433b;
-    --card-base: #27322c;
-    --ink: #eef0ea;
-    --ink-blue: #9cc0ff;
-    --ink-green: #9fe0b4;
-    --ink-green-soft: #4f8a63;
-    --ink-red: #ff9c8f;
-    --ink-muted: #8fa098;
-    --highlight: rgba(255, 230, 120, 0.25);
-    --highlight-solid: #8a7a2e;
-    --project-tint-mix: 16%;
+/* O tema vem de `data-theme` no <html> (theme.ts): "dark" quando escolhido ou quando o sistema é escuro. */
+:root[data-theme='dark'] {
+  --board-base: #1f2a25;
+  --board-dot-base: #34433b;
+  --card-base: #27322c;
+  --ink: #eef0ea;
+  --ink-blue: #9cc0ff;
+  --ink-green: #9fe0b4;
+  --ink-green-soft: #4f8a63;
+  --ink-red: #ff9c8f;
+  --ink-muted: #8fa098;
+  --highlight: rgba(255, 230, 120, 0.25);
+  --highlight-solid: #8a7a2e;
+  --project-tint-mix: 16%;
 
-    --panel: #222228;
-    --muted: #a0a0a7;
-    --line: #3a4540;
-    --accent: #9cc0ff;
-    --warn: #ff6605;
-    --danger: #ff7b70;
-    --busy: #9cc0ff;
-    --idle: #79837e;
-    --waiting: #f0b43c;
-    --boost-bg: #15803d;
-    --pen-red: #ff9c8f;
-    --pen-orange: #ffb877;
-    --pen-yellow: #f2d46b;
-    --pen-green: #9fe0b4;
-    --pen-teal: #7fd8cf;
-    --pen-blue: #9cc0ff;
-    --pen-purple: #caa8ff;
-    --pen-pink: #f5a3cf;
-  }
+  --panel: #222228;
+  --muted: #a0a0a7;
+  --line: #3a4540;
+  --accent: #9cc0ff;
+  --warn: #ff6605;
+  --danger: #ff7b70;
+  --busy: #9cc0ff;
+  --idle: #79837e;
+  --waiting: #f0b43c;
+  --boost-bg: #15803d;
+  --pen-red: #ff9c8f;
+  --pen-orange: #ffb877;
+  --pen-yellow: #f2d46b;
+  --pen-green: #9fe0b4;
+  --pen-teal: #7fd8cf;
+  --pen-blue: #9cc0ff;
+  --pen-purple: #caa8ff;
+  --pen-pink: #f5a3cf;
 }
 
 * { box-sizing: border-box; }
@@ -731,7 +730,7 @@ button.ranking-row:hover { border-color: var(--accent); }
 .btn-primary { font: inherit; font-size: 13px; font-weight: 600; color: #fff; background: var(--ink-blue); border: 1px solid var(--ink-blue); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
 .btn-primary:disabled { opacity: 0.6; cursor: default; }
-@media (prefers-color-scheme: dark) { .btn-primary { color: #10161f; } }
+:root[data-theme='dark'] .btn-primary { color: #10161f; }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 18, 20, 0.45); display: grid; place-items: center; z-index: 20; padding: 16px; }
 .modal { position: relative; width: min(720px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px 18px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25); display: grid; gap: 12px; }
 .modal h2 { margin: 0; font-family: var(--hand); font-size: 34px; line-height: 1; }
@@ -1131,7 +1130,7 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
 /* Campos do menu (inclusive os do cargo e do workspace): papel do cartão, linha fina e foco azul de caneta.
    O color-scheme deixa setinhas do número e a lista aberta do select no tema certo. */
 .settings-menu { color-scheme: light; }
-@media (prefers-color-scheme: dark) { .settings-menu { color-scheme: dark; } }
+:root[data-theme='dark'] .settings-menu { color-scheme: dark; }
 .settings-menu :is(input:not([type]), input[type='text'], input[type='number'], select, textarea):not(.workspace-rename) {
   font: inherit; font-size: 13px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px;
 }

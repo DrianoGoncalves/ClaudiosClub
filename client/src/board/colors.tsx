@@ -212,10 +212,10 @@ export function useBoardBackground(bg: BoardBackground | null | undefined) {
   const dark = bg?.dark && HEX.test(bg.dark) ? bg.dark : null;
   useEffect(() => {
     const rule = (hex: string, theme: Theme) =>
-      `:root:root { ${Object.entries(boardStyle(hex, theme)).map(([k, v]) => `${k}: ${v};`).join(' ')} }`;
+      `:root:root[data-theme='${theme}'] { ${Object.entries(boardStyle(hex, theme)).map(([k, v]) => `${k}: ${v};`).join(' ')} }`;
     const css = [
-      light && `@media (prefers-color-scheme: light) { ${rule(light, 'light')} }`,
-      dark && `@media (prefers-color-scheme: dark) { ${rule(dark, 'dark')} }`,
+      light && rule(light, 'light'),
+      dark && rule(dark, 'dark'),
     ]
       .filter(Boolean)
       .join('\n');
@@ -231,17 +231,4 @@ export function useBoardBackground(bg: BoardBackground | null | undefined) {
     }
     el.textContent = css;
   }, [light, dark]);
-}
-
-/** O tema do sistema agora (acompanha a troca sem recarregar). */
-export function useSystemTheme(): Theme {
-  const query = '(prefers-color-scheme: dark)';
-  const [dark, setDark] = useState(() => window.matchMedia(query).matches);
-  useEffect(() => {
-    const mq = window.matchMedia(query);
-    const on = () => setDark(mq.matches);
-    mq.addEventListener('change', on);
-    return () => mq.removeEventListener('change', on);
-  }, []);
-  return dark ? 'dark' : 'light';
 }

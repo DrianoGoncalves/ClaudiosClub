@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { AppConfig, BoardBackground, Workspace } from '../../../shared/model';
 import { api } from '../api';
-import { useSystemTheme } from '../board/colors';
+import { useTheme } from '../theme';
 import { t } from '../i18n';
 import { ThemeBackgrounds } from '../toolbar/ThemeBackgrounds';
 
@@ -20,7 +20,7 @@ export function WorkspacesEditor({
 }) {
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const theme = useSystemTheme();
+  const theme = useTheme();
   const run = async (fn: () => Promise<AppConfig>) => {
     setError(null);
     try {

@@ -20,7 +20,8 @@ import type {
 import { colorCss } from '../../shared/model';
 import { api, isPairingError, NEEDS_PAIRING_EVENT, PAIRED_EVENT, withUsageConfirm } from './api';
 import { BoardView } from './board/Board';
-import { boardStyle, useBoardBackground, useSystemTheme } from './board/colors';
+import { boardStyle, useBoardBackground } from './board/colors';
+import { useTheme } from './theme';
 import { archiveKey, ghostNodeId, HR_ID, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
 import { seedSeenIdle } from './board/unread';
 import { PairControls } from './toolbar/PairControls';
@@ -325,7 +326,7 @@ export function App() {
   );
   // Chat do funcionário no fundo do workspace do projeto dele (não no da aba aberta): a cor diz de
   // quem é a conversa. Sem fundo no workspace, vale o geral; sem geral, o de fábrica.
-  const theme = useSystemTheme();
+  const theme = useTheme();
   const chatStyle = useMemo(() => {
     if (!board || selection?.kind !== 'employee') return undefined;
     const wsId = workspaceByProject(board.projects, config).get(selection.projectId);

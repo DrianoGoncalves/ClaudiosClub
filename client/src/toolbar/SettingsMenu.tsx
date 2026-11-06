@@ -5,7 +5,7 @@ import { DemoButton, WorkspacesEditor } from '../office/WorkspacesSettings';
 import { McpServers } from '../office/McpServers';
 import { api } from '../api';
 import { bareVersion } from '../format';
-import { useSystemTheme } from '../board/colors';
+import { useTheme, useThemePref, type ThemePref } from '../theme';
 import { useChatDetail } from '../chat/chatDetail';
 import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
 import { PairControls } from './PairControls';
@@ -114,7 +114,7 @@ export function SettingsMenu(props: Props) {
   const root = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
-  const theme = useSystemTheme();
+  const theme = useTheme();
   const queryRef = useRef(query);
   queryRef.current = query;
 
@@ -349,6 +349,14 @@ function buildSettings(
           },
         ]
       : []),
+    {
+      id: 'theme',
+      group: 'general',
+      title: t('toolbar.themeTitle'),
+      description: t('toolbar.themeDesc'),
+      keywords: t('toolbar.themeKeywords'),
+      control: <ThemePicker />,
+    },
     // Idioma: a escolha vale para a página toda e recarrega.
     {
       id: 'language',
@@ -687,6 +695,26 @@ function UiLevelPicker({ value, onChange }: { value: UiLevel; onChange: (level: 
         ] as const
       ).map(([level, label]) => (
         <button key={level} type="button" className="btn-secondary btn-toggle" aria-pressed={value === level} disabled={busy} onClick={() => void pick(level)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Claro, escuro ou o do sistema; vale só neste navegador (ver theme.ts). */
+function ThemePicker() {
+  const [pref, setPref] = useThemePref();
+  return (
+    <div className="segmented" role="group" aria-label={t('toolbar.themeTitle')}>
+      {(
+        [
+          ['system', t('toolbar.themeSystem')],
+          ['light', t('toolbar.themeLight')],
+          ['dark', t('toolbar.themeDark')],
+        ] as Array<[ThemePref, string]>
+      ).map(([value, label]) => (
+        <button key={value} type="button" className="btn-secondary btn-toggle" aria-pressed={pref === value} onClick={() => setPref(value)}>
           {label}
         </button>
       ))}
