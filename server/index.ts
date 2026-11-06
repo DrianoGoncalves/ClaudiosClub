@@ -39,7 +39,7 @@ import { CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from
 import { ChatRegistry } from './chat/registry';
 import { AutoContinue } from './chat/autoContinue';
 import { WakeBody, WakeStreakError, watchWakeups } from './chat/wake';
-import { StaffBusyError, StaffError, StaffService } from './staff/service';
+import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService } from './staff/service';
 import { sweepFreelas } from './freelaSweep';
 import { mcpJsonWarnings } from './staff/mcp';
 import { permissionInboxItem, questionInboxItem } from './inboxItems';
@@ -204,6 +204,8 @@ const staff: StaffService = new StaffService(adapter, {
   isWorking: (staffId) => chats.staffWorking(staffId),
   // Tarefas abertas da ficha impedem apagar (ver deleteStaff). `tasks` é declarado logo abaixo: só é lido na chamada.
   tasksOf: async (projectId) => (await tasks.list(projectId)) ?? [],
+  // Apagar com tarefas abertas e `force`: as tarefas ficam sem responsável (ver TaskService.releaseStaff).
+  releaseTasks: (projectId, staffId) => tasks.releaseStaff(projectId, staffId),
   weekCost: async (projectId) => {
     const c = await getCosts();
     return { project: c.projects[projectId]?.last7d ?? 0, total: c.total.last7d };
@@ -591,7 +593,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}/delete$`),
-    ({ params: [id, staffId], fromBrowser }) => staff.deleteStaff(id!, staffId!, fromBrowser),
+    ({ params: [id, staffId], body, fromBrowser }) => staff.deleteStaff(id!, staffId!, fromBrowser, body),
   ],
   [
     'POST',
@@ -1457,6 +1459,7 @@ const server = http.createServer(async (req, res) => {
         // Mescla recusada (sem testes, teste vermelho, conflito): 409 com o motivo; `no-tests` dá para confirmar.
         if (err instanceof CodeError) return send(res, 409, { error: err.message, code: err.code });
         // Ficha em uso (conversa trabalhando): 409, antes do StaffError genérico (400).
+        if (err instanceof StaffOpenTasksError) return send(res, 409, { error: err.message, code: err.code, openTasks: err.openTasks });
         if (err instanceof StaffBusyError) return send(res, 409, { error: err.message });
         if (
           err instanceof BadRequest ||

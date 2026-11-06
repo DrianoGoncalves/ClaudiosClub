@@ -182,6 +182,33 @@ export class TaskService {
   }
 
   /**
+   * A ficha `staffId` foi apagada (com tarefas abertas, por sua confirmação). As tarefas abertas dela ficam no quadro
+   * sem responsável (staffId null, fora da fila); "fazendo", "planejando" e "a fazer" voltam para "a fazer", sem conversa
+   * (sessionId), plano nem mensagens guardadas; "revisão" mantém a conversa. Quem era o revisor dela fica sem revisor.
+   * Concluídas e no ar não mudam. Cada tarefa mudada ganha uma linha no histórico. Devolve quantas.
+   */
+  async releaseStaff(projectId: string, staffId: string): Promise<number> {
+    let released = 0;
+    await this.mutate(projectId, (tasks) =>
+      tasks.map((t) => {
+        if (t.status === 'done' || t.status === 'live') return t;
+        const asWorker = t.staffId === staffId;
+        const asReviewer = t.reviewerId === staffId;
+        if (!asWorker && !asReviewer) return t;
+        released++;
+        if (!asWorker) return noted({ ...t, reviewerId: null }, 'revisor excluído');
+        const loose: Task = { ...t, staffId: null, queuedAt: null, queuedForce: false, ...(asReviewer && { reviewerId: null }) };
+        // Em revisão, a conversa de trabalho continua (sessionId fica). Nas outras, a conversa e o plano são da
+        // pessoa que saiu e as mensagens guardadas iam para ela: zerados, quem pegar a tarefa começa do zero.
+        if (t.status === 'review') return noted(loose, 'responsável excluído');
+        const fresh: Task = { ...loose, sessionId: null, plan: null, held: [] };
+        return t.status === 'todo' ? noted(fresh, 'responsável excluído') : moved(fresh, 'todo', 'auto', 'responsável excluído');
+      }),
+    );
+    return released;
+  }
+
+  /**
    * Começa: conversa nova com o funcionário, com o título e a descrição. Com a ficha em "só
    * planeja", a tarefa vai para "planejando"; senão, para "fazendo". Com ele ocupado, entra na
    * fila dele e começa sozinha quando ele ficar livre.

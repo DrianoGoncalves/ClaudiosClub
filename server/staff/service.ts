@@ -80,6 +80,17 @@ export interface StaffDirectoryPerson {
 /** Conflito com o estado atual (ex.: a conversa do funcionário está trabalhando): 409 na rota. */
 export class StaffBusyError extends StaffError {}
 
+/** Tarefas abertas da ficha, sem `force`: 409 com `code` e a quantidade, para a tela pedir a segunda confirmação. */
+export class StaffOpenTasksError extends StaffBusyError {
+  readonly code = 'open-tasks';
+  constructor(
+    message: string,
+    readonly openTasks: number,
+  ) {
+    super(message);
+  }
+}
+
 const ID_TEXT = /^[A-Za-z0-9-]+$/;
 const PORTRAIT_FILE = /^[a-z0-9-]+\.(png|jpg|webp)$/;
 
@@ -98,6 +109,8 @@ const StaffRefBody = z.object({
 const LinkBody = z.object({ from: StaffRefBody, to: StaffRefBody });
 const UnlinkBody = StaffRefBody;
 const ApplyToCopiesBody = z.object({ applyToCopies: z.boolean().optional() });
+/** Apagar com tarefas abertas: `force` deixa as tarefas sem responsável (confirmado na tela). Sem corpo = sem force. */
+const DeleteStaffBody = z.object({ force: z.boolean().default(false) });
 
 /** Campos que a edição leva para as cópias da mesma pessoa. Nunca: vínculos, servidores, memória, conversas, rotinas, MCPs. */
 const COPY_TEXT_FIELDS = ['name', 'role', 'mission', 'rules', 'doneWhen', 'model', 'effort', 'agents', 'skills'] as const;
@@ -128,6 +141,8 @@ export interface StaffServiceOptions {
   isWorking?: (staffId: string) => boolean;
   /** Tarefas do quadro do projeto (o delete recusa se alguma aberta aponta para a ficha). Padrão: nenhuma. */
   tasksOf?: (projectId: string) => Promise<Pick<Task, 'staffId' | 'reviewerId' | 'status'>[]>;
+  /** Com `force`, solta as tarefas abertas da ficha (sem responsável; ver TaskService.releaseStaff). Sem ele, `force` recusa. */
+  releaseTasks?: (projectId: string, staffId: string) => Promise<number>;
   /** Arquivados (config → `staff:<id>`); os testes trocam para não mexer no config de verdade. */
   archive?: { has: (key: string) => Promise<boolean>; set: (key: string, archived: boolean) => Promise<void> };
   /** Extensão do Chrome instalada? (padrão server/browser.ts; os testes trocam). */
@@ -637,23 +652,33 @@ export class StaffService {
   /**
    * Apaga a ficha de vez: JSON, .md, memória, retrato e histórico de versões. Quem reportava a ela (no mesmo projeto)
    * perde esse gestor (versão anterior no histórico, .md refeito); `orphaned` lista os que ficaram sem gestor por isso.
-   * Recusa (409) se uma conversa dela está trabalhando. Fica de fora: o ssh_config (fica em .vps, fora de .myco/staff)
-   * e a worktree git, se houver.
+   * Recusa (409) se uma conversa dela está trabalhando, mesmo com `force`. Com tarefas abertas (executora ou revisora),
+   * recusa (409, code `open-tasks`, com `openTasks`) salvo `{ force: true }`: aí as tarefas ficam no quadro sem
+   * responsável (ver releaseTasks). Fica de fora: o ssh_config (fica em .vps, fora de .myco/staff) e a worktree git.
    */
-  async deleteStaff(projectId: string, staffId: string, fromBrowser: boolean): Promise<{ ok: true; orphaned: string[] } | null> {
+  async deleteStaff(projectId: string, staffId: string, fromBrowser: boolean, body?: unknown): Promise<{ ok: true; orphaned: string[] } | null> {
     if (!fromBrowser) throw new StaffError('só pelo Claudio’s Club');
+    const parsed = DeleteStaffBody.safeParse(body ?? {});
+    if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'pedido inválido');
     const project = await this.project(projectId);
     const current = project ? await readProfile(project.path, staffId) : null;
     if (!project || !current) return null;
     if (this.opts.isWorking?.(staffId)) {
       throw new StaffBusyError(`${current.name} está trabalhando numa conversa agora: espere terminar para apagar`);
     }
-    // Tarefa aberta (não pronta nem no ar) como executora ou revisora: apagar deixaria a tarefa sem dono.
+    // Tarefa aberta (não pronta nem no ar) como executora ou revisora: sem `force`, recusa; com ele, a tarefa fica sem responsável.
     const open = ((await this.opts.tasksOf?.(projectId)) ?? []).filter(
       (t) => (t.staffId === staffId || t.reviewerId === staffId) && t.status !== 'done' && t.status !== 'live',
     ).length;
+    if (open > 0 && !parsed.data.force) {
+      throw new StaffOpenTasksError(
+        `${current.name} tem ${open} tarefa(s) aberta(s) no quadro: apagar deixa essas tarefas sem responsável. Confirme para apagar mesmo assim.`,
+        open,
+      );
+    }
     if (open > 0) {
-      throw new StaffBusyError(`${current.name} tem ${open} tarefa(s) aberta(s) no quadro: conclua ou passe para outra pessoa antes de apagar`);
+      if (!this.opts.releaseTasks) throw new StaffError(`não dá para soltar as tarefas de ${current.name} sem o quadro de tarefas`);
+      await this.opts.releaseTasks(projectId, staffId);
     }
 
     // Vínculos de quem reportava a ela: tira o id (idempotente: refazer depois de uma falha não muda nada a mais).

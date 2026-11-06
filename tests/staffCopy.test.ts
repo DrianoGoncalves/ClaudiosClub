@@ -2,11 +2,12 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Project, StaffProfile } from '../shared/model';
+import type { Project, StaffProfile, Task } from '../shared/model';
 import type { ToolAdapter } from '../server/adapters/types';
 import { readConfig, setArchived } from '../server/config';
 import { staffMayPost } from '../server/apiPolicy';
-import { StaffBusyError, StaffError, StaffService, type StaffServiceOptions } from '../server/staff/service';
+import { TaskService } from '../server/tasks';
+import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService, type StaffServiceOptions } from '../server/staff/service';
 import { fichaFile, listVersions, memoryFile, profileFile, readPortrait, readProfile, saveProfile } from '../server/staff/store';
 
 // O config (arquivados) grava em MYCO_HOME: aponta para uma pasta temporária antes de o config.ts carregar.
@@ -294,8 +295,33 @@ async function mundo() {
 }
 
 type Mundo = Awaited<ReturnType<typeof mundo>>;
-const servico = (w: Mundo, over: { isWorking?: (staffId: string) => boolean; tasksOf?: StaffServiceOptions['tasksOf'] } = {}) =>
+const servico = (w: Mundo, over: Partial<Pick<StaffServiceOptions, 'isWorking' | 'tasksOf' | 'releaseTasks'>> = {}) =>
   new StaffService(w.adapter, { runDir: path.join(w.base, 'run'), claudeConfigFile: path.join(w.base, '.claude.json'), mycoUrl: 'x', ...over });
+
+/** Uma tarefa completa (o quadro grava o JSON inteiro; aqui só o que o teste precisa muda). */
+const tarefa = (over: Partial<Task> & Pick<Task, 'id' | 'status'>): Task => ({
+  title: 'Tarefa',
+  description: '',
+  staffId: null,
+  sessionId: null,
+  plan: null,
+  branch: null,
+  pr: null,
+  createdAt: '2026-10-01T00:00:00.000Z',
+  updatedAt: '2026-10-02T00:00:00.000Z',
+  history: [],
+  ...over,
+});
+
+/** O quadro de tarefas do projeto `d` do mundo (o mesmo que o servidor usa, com envio falso). */
+const tarefasDe = (w: Mundo) =>
+  new TaskService({
+    projectPath: async () => w.dirs.d,
+    projectIds: async () => ['d'],
+    readProfile: async (_p, id) => readProfile(w.dirs.d, id),
+    send: async () => 's-novo',
+    branchFor: async () => null,
+  });
 
 describe('mesma pessoa entre projetos', () => {
   let w: Mundo;
@@ -485,6 +511,139 @@ describe('mesma pessoa entre projetos', () => {
     });
     expect(await prontas.deleteStaff('d', 'boss', true)).toEqual({ ok: true, orphaned: [] });
     expect(await existe(profileFile(w.dirs.d, 'boss'))).toBe(false);
+  });
+
+  it('apagar com tarefa aberta sem force: 409 com code open-tasks e openTasks (só as abertas); sem corpo ou force false, igual', async () => {
+    await saveProfile(w.dirs.d, perfil({ id: 'boss', projectId: 'd', name: 'Chefe' }));
+    const release = vi.fn(async () => 0);
+    const svc = servico(w, {
+      tasksOf: async () => [
+        { staffId: 'boss', reviewerId: null, status: 'doing' },
+        { staffId: 'outra', reviewerId: 'boss', status: 'review' },
+        { staffId: 'boss', reviewerId: null, status: 'done' },
+      ],
+      releaseTasks: release,
+    });
+    const corpos: unknown[] = [undefined, {}, { force: false }];
+    for (const corpo of corpos) {
+      const err = await svc.deleteStaff('d', 'boss', true, corpo).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(StaffOpenTasksError);
+      expect(err).toBeInstanceOf(StaffBusyError);
+      expect((err as StaffOpenTasksError).code).toBe('open-tasks');
+      expect((err as StaffOpenTasksError).openTasks).toBe(2);
+      expect((err as StaffOpenTasksError).message).toContain('Chefe tem 2 tarefa(s) aberta(s) no quadro');
+    }
+    expect(release).not.toHaveBeenCalled();
+    expect(await existe(profileFile(w.dirs.d, 'boss'))).toBe(true);
+  });
+
+  it('apagar com force: as tarefas abertas ficam sem responsável, fora da fila, a fazer, sem revisor; history; as concluídas não mudam', async () => {
+    await saveProfile(w.dirs.d, perfil({ id: 'boss', projectId: 'd', name: 'Chefe' }));
+    await saveProfile(w.dirs.d, perfil({ id: 'outra', projectId: 'd', name: 'Outra' }));
+    await fs.writeFile(
+      path.join(w.dirs.d, '.myco', 'tasks.json'),
+      JSON.stringify([
+        tarefa({ id: 't-fazendo', title: 'Fazendo', status: 'doing', staffId: 'boss', sessionId: 's-1', reviewerId: 'outra' }),
+        tarefa({ id: 't-planejando', title: 'Planejando', status: 'planning', staffId: 'boss', sessionId: 's-2' }),
+        tarefa({ id: 't-fila', title: 'Na fila', status: 'todo', staffId: 'boss', queuedAt: '2026-10-03T00:00:00.000Z', queuedForce: true }),
+        tarefa({ id: 't-revisor', title: 'Revisada pela Outra', status: 'todo', staffId: 'outra', reviewerId: 'boss' }),
+        tarefa({ id: 't-pronta', title: 'Pronta', status: 'done', staffId: 'boss' }),
+      ]),
+    );
+    const tasksSvc = tarefasDe(w);
+    const svc = servico(w, { tasksOf: async (p) => (await tasksSvc.list(p)) ?? [], releaseTasks: (p, s) => tasksSvc.releaseStaff(p, s) });
+
+    await expect(svc.deleteStaff('d', 'boss', true)).rejects.toMatchObject({ code: 'open-tasks', openTasks: 4 });
+    expect(await svc.deleteStaff('d', 'boss', true, { force: true })).toEqual({ ok: true, orphaned: [] });
+    expect(await existe(profileFile(w.dirs.d, 'boss'))).toBe(false);
+
+    const por = Object.fromEntries((await tasksSvc.list('d'))!.map((t) => [t.id, t]));
+    expect(por['t-fazendo']).toMatchObject({ status: 'todo', staffId: null, reviewerId: 'outra', sessionId: null, queuedAt: null, queuedForce: false });
+    expect(por['t-fazendo']!.history.at(-1)).toMatchObject({ status: 'todo', by: 'auto', note: 'responsável excluído' });
+    expect(por['t-planejando']).toMatchObject({ status: 'todo', staffId: null });
+    expect(por['t-planejando']!.history.at(-1)).toMatchObject({ status: 'todo', note: 'responsável excluído' });
+    expect(por['t-fila']).toMatchObject({ status: 'todo', staffId: null, queuedAt: null, queuedForce: false });
+    expect(por['t-revisor']).toMatchObject({ status: 'todo', staffId: 'outra', reviewerId: null });
+    expect(por['t-revisor']!.history.at(-1)).toMatchObject({ note: 'revisor excluído' });
+    expect(por['t-pronta']).toMatchObject({ status: 'done', staffId: 'boss' });
+    expect(por['t-pronta']!.history).toEqual([]);
+  });
+
+  it('tarefa solta reatribuída pode ser começada do zero: sem conversa, plano nem mensagens guardadas da pessoa que saiu; revisão mantém a conversa', async () => {
+    await saveProfile(w.dirs.d, perfil({ id: 'boss', projectId: 'd', name: 'Chefe' }));
+    await saveProfile(w.dirs.d, perfil({ id: 'outra', projectId: 'd', name: 'Outra' }));
+    const guardada = { id: 'm1', at: '2026-10-03T00:00:00.000Z', text: 'ajuste para a conversa antiga', reason: 'espera Chefe terminar a conversa em que está' };
+    await fs.writeFile(
+      path.join(w.dirs.d, '.myco', 'tasks.json'),
+      JSON.stringify([
+        tarefa({ id: 't-plano', title: 'Com plano', status: 'doing', staffId: 'boss', sessionId: 's-velha', plan: 'plano antigo', held: [guardada] }),
+        tarefa({ id: 't-a-fazer', title: 'A fazer', status: 'todo', staffId: 'boss', sessionId: 's-velha-2' }),
+        tarefa({ id: 't-revisao', title: 'Em revisão', status: 'review', staffId: 'boss', sessionId: 's-rev' }),
+      ]),
+    );
+    const tasksSvc = tarefasDe(w);
+    expect(await tasksSvc.releaseStaff('d', 'boss')).toBe(3);
+
+    const por = Object.fromEntries((await tasksSvc.list('d'))!.map((t) => [t.id, t]));
+    expect(por['t-plano']).toMatchObject({ status: 'todo', staffId: null, sessionId: null, plan: null, held: [] });
+    expect(por['t-a-fazer']).toMatchObject({ status: 'todo', staffId: null, sessionId: null });
+    expect(por['t-revisao']).toMatchObject({ status: 'review', staffId: null, sessionId: 's-rev' });
+
+    // Reatribuída a outra pessoa: começa do zero (antes, "a tarefa já começou" barrava).
+    await tasksSvc.update('d', 't-plano', { staffId: 'outra' });
+    expect(await tasksSvc.start('d', 't-plano')).toMatchObject({ staffId: 'outra', sessionId: 's-novo', status: 'planning' });
+  });
+
+  it('tarefa sem responsável: tick não lança nem começa nada, e o resumo e o quadro leem normal', async () => {
+    await saveProfile(w.dirs.d, perfil({ id: 'outra', projectId: 'd', name: 'Outra' }));
+    await fs.writeFile(
+      path.join(w.dirs.d, '.myco', 'tasks.json'),
+      JSON.stringify([
+        tarefa({ id: 't-orfa', title: 'Em andamento sem dono', status: 'doing', staffId: null, sessionId: 's-orfa' }),
+        tarefa({ id: 't-solta', title: 'Sem dono, a fazer', status: 'todo', staffId: null }),
+      ]),
+    );
+    const enviados: string[] = [];
+    const tasksSvc = new TaskService({
+      projectPath: async () => w.dirs.d,
+      projectIds: async () => ['d'],
+      readProfile: async (_p, id) => readProfile(w.dirs.d, id),
+      send: async (_p, _s, text) => (enviados.push(text), 's-novo'),
+      sendTo: async (_p, _s, _st, text) => (enviados.push(text), 's-orfa'),
+      branchFor: async () => null,
+      isWorking: () => false,
+    });
+    const agora = new Date(Date.now() + 3_600_000);
+    await expect(tasksSvc.tick(agora)).resolves.toBeUndefined();
+    expect(await tasksSvc.summary()).toEqual({ d: { open: 2, review: 0, lastDeploy: null } });
+    expect(enviados).toEqual([]);
+    const tasks = (await tasksSvc.list('d'))!;
+    expect(tasks.map((t) => [t.id, t.status, t.staffId, t.sessionId])).toEqual([
+      ['t-orfa', 'doing', null, 's-orfa'],
+      ['t-solta', 'todo', null, null],
+    ]);
+  });
+
+  it('conversa trabalhando + force: continua 409 (sem code), não solta tarefa e não apaga', async () => {
+    await saveProfile(w.dirs.d, perfil({ id: 'boss', projectId: 'd', name: 'Chefe' }));
+    const release = vi.fn(async () => 0);
+    const svc = servico(w, {
+      isWorking: (id) => id === 'boss',
+      tasksOf: async () => [{ staffId: 'boss', reviewerId: null, status: 'doing' }],
+      releaseTasks: release,
+    });
+    const err = await svc.deleteStaff('d', 'boss', true, { force: true }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StaffBusyError);
+    expect(err).not.toBeInstanceOf(StaffOpenTasksError);
+    expect((err as { code?: string }).code).toBeUndefined();
+    expect(release).not.toHaveBeenCalled();
+    expect(await existe(profileFile(w.dirs.d, 'boss'))).toBe(true);
+  });
+
+  it('corpo inválido (force não booleano) recusa com 400 (StaffError) e não apaga', async () => {
+    await saveProfile(w.dirs.d, perfil({ id: 'boss', projectId: 'd', name: 'Chefe' }));
+    await expect(servico(w).deleteStaff('d', 'boss', true, { force: 'sim' })).rejects.toThrow(StaffError);
+    expect(await existe(profileFile(w.dirs.d, 'boss'))).toBe(true);
   });
 
   it('as rotas novas não entram na lista de funcionário (só navegador)', () => {
