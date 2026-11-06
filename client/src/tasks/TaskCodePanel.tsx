@@ -221,7 +221,7 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
         )}
       </div>
 
-      {(task.status === 'done' || task.status === 'live' || task.merged) && (
+      {(task.status === 'done' || task.merged) && (
         <div className="task-code-row">
           <b className="small">{t('tasks.deploy')}</b>
           {task.deploy ? (

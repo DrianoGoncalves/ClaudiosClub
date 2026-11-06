@@ -22,6 +22,16 @@ import {
 import { buildMcpConfig, listMcpServers } from '../server/staff/mcp';
 import { StaffError, StaffService } from '../server/staff/service';
 import { readProfile, saveChatChoice, writeAtomic } from '../server/staff/store';
+import { BUILTIN_ROLES } from '../shared/roles';
+
+// Os cargos (server/roles.ts) e a config leem MYCO_HOME: uma pasta temporária, para não usar o ~/.myco de quem roda os testes.
+const home = await vi.hoisted(async () => {
+  const os = await import('node:os');
+  const nodePath = await import('node:path');
+  const dir = nodePath.join(os.tmpdir(), `myco-staff-home-${process.pid}-${Date.now()}`);
+  process.env.MYCO_HOME = dir;
+  return dir;
+});
 
 const profile = (over: Partial<StaffProfile> = {}): StaffProfile => ({
   id: 'ana-1a2b',
@@ -91,6 +101,29 @@ describe('ficha', () => {
     expect(solo).not.toContain('## Entrega');
   });
 
+  it('com SPEC.md na raiz, a ficha manda consultar o guia antes do Conhecimento; sem ele, nada disso', () => {
+    const md = renderFicha(profile(), { ...ctx, guide: true });
+    expect(md).toContain('## Guia do projeto');
+    expect(md).toContain('Leia `SPEC.md` (raiz do projeto) antes de começar algo novo');
+    expect(md).toContain('Se o pedido conflitar com o guia, aponte o conflito em vez de seguir.');
+    expect(md.indexOf('## Guia do projeto')).toBeLessThan(md.indexOf('## Conhecimento'));
+    const none = renderFicha(profile(), ctx);
+    expect(none).not.toContain('Guia do projeto');
+    expect(none).not.toContain('SPEC.md');
+  });
+
+  it('todo funcionário tem a postura antes das regras, com ou sem gestor, equipe ou guia', () => {
+    const cases = [
+      renderFicha(profile(), ctx),
+      renderFicha(profile({ canHire: true, projectId: 'proj-x' }), { ...ctx, managerNames: ['Daniel'], guide: true }),
+    ];
+    for (const md of cases) {
+      expect(md).toContain('## Postura\nAntes de concordar, teste a ideia: aponte primeiro o que está errado, faltando ou arriscado e o contra-argumento mais forte.');
+      expect(md).toContain('Sem elogio vazio nem pedido de desculpas: vá direto ao ponto técnico.');
+      expect(md.indexOf('## Postura')).toBeLessThan(md.indexOf('## Regras'));
+    }
+  });
+
   it('tem missão, autonomia, regras, memória e a seção de contratação', () => {
     const md = renderFicha(profile(), ctx);
     for (const part of ['## Missão', 'Revisar mudanças', '## Primeira tarefa', 'Só lê e planeja', '- Não altere arquivos', '## Memória', 'ana-1a2b.memory.md', 'substitua o que ficou velho', '`[MyCo:ponto-de-corte]`', 'não pode contratar']) {
@@ -99,12 +132,28 @@ describe('ficha', () => {
     const hiring = renderFicha(profile({ canHire: true, projectId: 'proj-x' }), ctx);
     expect(hiring).toContain('/api/projects/proj-x/staff com');
     expect(hiring).toContain('reportsTo: ["ana-1a2b"]');
-    expect(hiring).toMatch(/use subagents[\s\S]*só para um papel contínuo/);
+    expect(hiring).toContain('Antes de contratar, nesta ordem');
+    expect(hiring).toContain('roleId (um dos cargos prontos abaixo)');
+    // Sem cargos na ficha (ctx sem roles), a linha não aparece.
+    expect(hiring).not.toContain('Cargos prontos (roleId)');
     expect(hiring).toContain('/api/projects/proj-x/staff/<id dele>/done');
     expect(hiring).toContain('"requestedBy": "ana-1a2b"');
     // O próprio temporário sabe que é temporário.
     expect(renderFicha(profile({ temporary: true }), ctx)).toContain('Você é temporário');
     expect(md).not.toContain('Você é temporário');
+  });
+
+  it('cargos prontos: a linha com os roleId só para quem pode contratar', () => {
+    const roles = [
+      { id: 'dados', label: 'Dados (DBA)' },
+      { id: 'produto', label: 'Produto (PO)' },
+    ];
+    const hiring = renderFicha(profile({ canHire: true, projectId: 'proj-x' }), { ...ctx, roles });
+    expect(hiring).toContain('Antes de contratar, nesta ordem');
+    expect(hiring).toContain('Cargos prontos (roleId): `dados` (Dados (DBA)), `produto` (Produto (PO))');
+    const noHire = renderFicha(profile(), { ...ctx, roles });
+    expect(noHire).not.toContain('Antes de contratar, nesta ordem');
+    expect(noHire).not.toContain('Cargos prontos (roleId)');
   });
 
   it('despertador: seção curta com o curl (id da conversa em $MYCO_SESSION_ID), os limites e o que preferir para o que roda aqui', () => {
@@ -133,6 +182,17 @@ describe('ficha', () => {
     // Todo funcionário roda pelo Claudio’s Club, então toda ficha tem; sem o endereço do Claudio’s Club, não.
     expect(renderFicha(profile({ canHire: true }), ctx)).toContain('## Despertador');
     expect(renderFicha(profile(), { ...ctx, mycoUrl: '' })).not.toContain('## Despertador');
+  });
+
+  it('memória: a ficha cita a pasta <id>.memory/ como índice, e sem o sufixo .memory.md não mostra a linha da pasta', () => {
+    const md = renderFicha(profile(), ctx);
+    const section = md.slice(md.indexOf('## Memória'), md.indexOf('- Ponto de corte'));
+    expect(section).toContain('Ela é um índice');
+    expect(section).toContain('`.myco\\staff\\ana-1a2b.memory/<assunto>.md`');
+    expect(section).toContain('apague o arquivo e a linha');
+    expect(md).toContain('Sua memória fica em `.myco\\staff\\ana-1a2b.memory.md`');
+    const semSufixo = renderFicha(profile(), { ...ctx, memoryPath: '.myco\\staff\\ana-1a2b.txt' });
+    expect(semSufixo).not.toContain('Ela é um índice');
   });
 
   it('prompt de sistema: identidade, onde fica a memória e a ficha inteira (vai por arquivo)', () => {
@@ -431,6 +491,61 @@ describe('StaffService', () => {
     expect(await svc.isManagerOf('proj-id', 'ninguem', r!.profile.id)).toBe(false);
   });
 
+  describe('contratar pela API com cargo pronto (roleId)', () => {
+    const dev = BUILTIN_ROLES.find((r) => r.id === 'desenvolvedor')!;
+    const apiHire = (svc: StaffService, boss: string, extra: Record<string, unknown>) =>
+      svc.hire('proj-id', { name: 'Cargo', firstTask: 'Corrigir o login', reportsTo: [boss], launch: false, ...extra }, false);
+
+    it('o cargo preenche cargo, missão, regras, pronto, modelo, esforço e autonomia; temporário e sem poder contratar', async () => {
+      const svc = service();
+      const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestor Cargo', autonomy: 'acceptEdits', canHire: true, launch: false }, true))!;
+      // A ficha do gestor (que pode contratar) grava a lista de cargos prontos.
+      const bossFicha = await fs.readFile(path.join(projectPath, '.myco', 'staff', `${boss.id}.md`), 'utf8');
+      expect(bossFicha).toContain('Cargos prontos (roleId): `');
+      expect(bossFicha).toContain(`\`${dev.id}\` (${dev.label})`);
+      const r = (await apiHire(svc, boss.id, { roleId: dev.id, canHire: true }))!;
+      expect(r.profile).toMatchObject({
+        name: 'Cargo',
+        firstTask: 'Corrigir o login',
+        role: dev.role,
+        mission: dev.mission,
+        rules: dev.rules,
+        doneWhen: dev.doneWhen,
+        model: dev.model,
+        effort: dev.effort,
+        autonomy: dev.autonomy,
+        canHire: false,
+        hiredBy: boss.id,
+        temporary: true,
+      });
+      // O id do cargo não vai para o perfil.
+      expect(r.profile).not.toHaveProperty('roleId');
+      expect(await readProfile(projectPath, r.profile.id)).not.toHaveProperty('roleId');
+    });
+
+    it('o que vier no pedido ganha do cargo (a missão escrita substitui a do cargo)', async () => {
+      const svc = service();
+      const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestor Missao', autonomy: 'acceptEdits', canHire: true, launch: false }, true))!;
+      const r = (await apiHire(svc, boss.id, { name: 'Missao', roleId: dev.id, mission: 'Só o login' }))!;
+      expect(r.profile).toMatchObject({ mission: 'Só o login', role: dev.role, rules: dev.rules });
+    });
+
+    it('cargo que não existe: erro, sem contratar', async () => {
+      const svc = service();
+      const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestor Sem', autonomy: 'acceptEdits', canHire: true, launch: false }, true))!;
+      await expect(apiHire(svc, boss.id, { name: 'Fantasma', roleId: 'nao-existe' })).rejects.toThrow('cargo não encontrado: nao-existe');
+    });
+
+    it('a autonomia do cargo também é limitada à do gestor', async () => {
+      const svc = service();
+      // O cargo é acceptEdits; o gestor só plan: o temporário fica em plan.
+      const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestor Plan', autonomy: 'plan', canHire: true, launch: false }, true))!;
+      expect(dev.autonomy).toBe('acceptEdits');
+      const r = (await apiHire(svc, boss.id, { name: 'Limitado', roleId: dev.id }))!;
+      expect(r.profile.autonomy).toBe('plan');
+    });
+  });
+
   it('temporário: abre numa conversa do Claudio’s Club, o gestor encerra, você efetiva; parado há dias sai sozinho', async () => {
     const archived = new Set<string>();
     const chats: Array<{ staffId: string; text: string }> = [];
@@ -443,7 +558,7 @@ describe('StaffService', () => {
       mycoUrl: 'x',
       readUsage: noUsage,
       openChat: async (_p, staffId, text) => (chats.push({ staffId, text }), 'conversa-1'),
-      isWorking: (id) => working.has(id),
+      isWorking: (_p, id) => working.has(id),
       archive: { has: async (k) => archived.has(k), set: async (k, v) => void (v ? archived.add(k) : archived.delete(k)) },
     });
     const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestora', canHire: true, launch: false }, true))!;
