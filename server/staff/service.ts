@@ -978,6 +978,7 @@ export class StaffService {
       serverKeys: await keyFilesOf(project.path),
       librarySkills: profile.skills.length ? await librarySkillsOf(profile.skills, this.opts.skillLibraryDir) : [],
       skillLibraryDir: this.opts.skillLibraryDir,
+      codex: config.codexReview,
       // A equipe dele: quem reporta a ele (os temporários encerrados já saíram do quadro, mas a ficha
       // não sabe disso; ficam de fora os que têm `ended`).
       team: everyone

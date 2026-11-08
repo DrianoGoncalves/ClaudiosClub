@@ -61,7 +61,7 @@ describe('segunda opinião do Codex', () => {
     const codex = new CodexAdapter(ok.runner, { tmpRoot: tmp, sleep });
     expect(await codex.review(input(section('src/a.js', 'x')))).toBe('Nada relevante.');
     const exec = ok.calls.find((c) => c[0] === 'exec')!;
-    expect(exec).toEqual(expect.arrayContaining(['-', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '-C', '-o']));
+    expect(exec).toEqual(expect.arrayContaining(['-', '--ignore-user-config', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '-C', '-o']));
     expect(waits).toHaveLength(1);
     // A pasta temporária some depois.
     expect(await fs.readdir(tmp)).toEqual([]);

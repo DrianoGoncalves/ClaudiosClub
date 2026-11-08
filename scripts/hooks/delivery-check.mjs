@@ -1,13 +1,13 @@
 // Hook do Claude Code que o Claudio’s Club liga em todo funcionário (--settings, ver server/staff/launch.ts).
 //   pre:  toda chamada ao Agent diz qual agent (sem subagent_type vira fork ou general-purpose, no
-//         modelo de quem chama), e os do roteiro (executor, pesquisador, revisor) rodam em primeiro
+//         modelo de quem chama), e os do roteiro (executor, pesquisador, revisor e, com o Codex ligado, consultor-gpt) rodam em primeiro
 //         plano. Sem `run_in_background: false` o Claude Code os põe em segundo plano: a entrega não
 //         volta para quem chamou conferir, e o agent morre se a conversa fechar.
 //   post: cada entrega do executor vem com o lembrete de conferir antes de seguir.
 // Lê o evento em JSON no stdin e responde em JSON no stdout. Qualquer erro: não responde nada, e o
 // Claude Code segue como se o hook não existisse.
 
-const ROTEIRO = new Set(['executor', 'pesquisador', 'revisor']);
+const ROTEIRO = new Set(['executor', 'pesquisador', 'revisor', 'consultor-gpt']);
 
 const SEM_TIPO =
   '[MyCo] Diga qual agent chamar (subagent_type). Sem ele, o Claude Code usa um fork ou o general-purpose, que rodam no seu modelo (o fork ainda copia esta conversa inteira). ' +

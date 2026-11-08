@@ -72,11 +72,21 @@ describe('consultor-gpt (Codex ligado)', () => {
     expect(r.created).toEqual(['executor', 'revisor', 'consultor-gpt']);
     const agent = await readAgentSource(path.join(on.projectPath, '.claude', 'agents'), 'consultor-gpt');
     expect(agent).toMatchObject({ model: 'haiku', tools: ['Bash'] });
-    // Sempre só leitura, sem forçar modelo nem liberar nada perigoso; o prompt vai por stdin, em heredoc entre aspas simples.
+    // Só leitura que nega .vps e ~/.ssh, sem config do usuário nem conectores, sem forçar modelo nem liberar nada;
+    // o prompt vai por stdin, em heredoc entre aspas simples.
     const cmd = agent!.prompt.split('\n').find((l) => l.includes('codex exec'))!;
-    expect(cmd).toContain('-s read-only --ephemeral --skip-git-repo-check -C "$PWD" -c model_reasoning_effort="high" -o "$out" -');
-    expect(cmd).toContain("<<'PROMPT_GPT'");
-    expect(cmd).not.toMatch(/ -m |--full-auto|--dangerously|--sandbox|-s (workspace|danger)/);
+    for (const part of [
+      'codex exec --ignore-user-config',
+      '-c features.apps=false',
+      `-c 'default_permissions="mycodeny"'`,
+      `-c 'permissions.mycodeny.extends=":read-only"'`,
+      `-c 'permissions.mycodeny.filesystem={":project_roots"={".vps"="deny"},"~/.ssh"="deny"}'`,
+      '--ephemeral --skip-git-repo-check -C "$PWD" -c model_reasoning_effort="high" -o "$out" -',
+      "<<'PROMPT_GPT'",
+    ]) {
+      expect(cmd).toContain(part);
+    }
+    expect(cmd).not.toMatch(/ -m |--full-auto|--dangerously|--sandbox| -s /);
     expect(agent!.prompt.match(/codex exec/g)).toHaveLength(1);
     expect(agent!.prompt).toMatch(/veio do GPT/);
     // Ligar depois num projeto que já tem o roteiro cria só o que faltava.
@@ -107,6 +117,9 @@ describe('hooks do Claudio’s Club', () => {
     expect(JSON.parse(run('pre', { tool_input: { subagent_type: 'pesquisador' } }))).toEqual(deny(/run_in_background: false/));
     expect(run('pre', { tool_input: { subagent_type: 'executor', run_in_background: false } })).toBe('');
     expect(run('pre', { tool_input: { subagent_type: 'Explore', run_in_background: true } })).toBe('');
+    // O consultor-gpt (Codex ligado) é do roteiro como os outros: a resposta dele precisa voltar na conversa.
+    expect(JSON.parse(run('pre', { tool_input: { subagent_type: 'consultor-gpt', run_in_background: true } }))).toEqual(deny(/run_in_background: false/));
+    expect(run('pre', { tool_input: { subagent_type: 'consultor-gpt', run_in_background: false } })).toBe('');
     // Sem subagent_type vira fork ou general-purpose, no modelo de quem chama.
     expect(JSON.parse(run('pre', { tool_input: { prompt: 'faça' } }))).toEqual(deny(/subagent_type/));
     expect(JSON.parse(run('post', { tool_input: { subagent_type: 'executor' } })).hookSpecificOutput.additionalContext).toMatch(/diff vazio = não foi feito/);

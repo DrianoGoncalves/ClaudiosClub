@@ -117,7 +117,9 @@ export class CodexAdapter {
     const { prompt } = buildReviewPrompt(input);
     const dir = await fs.mkdtemp(path.join(this.opts.tmpRoot ?? os.tmpdir(), 'myco-codex-'));
     const out = path.join(dir, 'resposta.md');
-    const args = ['exec', '-', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--color', 'never', '-C', dir, '-o', out];
+    // --ignore-user-config: nem o modelo do ~/.codex/config.toml (um que a conta ChatGPT não aceita derruba a
+    // revisão) nem MCPs e plugins do usuário, que rodariam fora da sandbox. A credencial continua valendo.
+    const args = ['exec', '-', '--ignore-user-config', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--color', 'never', '-C', dir, '-o', out];
     try {
       for (let attempt = 0; ; attempt++) {
         const r = await this.run(args, prompt, REVIEW_TIMEOUT);

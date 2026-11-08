@@ -37,6 +37,8 @@ export interface LaunchContext {
   team?: TeamMember[];
   /** Agents da conta (padrão ~/.claude/agents); os testes trocam. */
   userAgentsDir?: string;
+  /** Codex ligado nas configurações (`codexReview`): o roteiro ganha o `consultor-gpt`. */
+  codex?: boolean;
 }
 
 /** A primeira mensagem de uma sessão nova numa conversa do Claudio’s Club. */
@@ -96,6 +98,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     cwd,
     userAgentsDir: ctx.userAgentsDir ?? path.join(defaultLocations().home, 'agents'),
     backupDir: path.join(ctx.runDir, 'agent-backups'),
+    codex: ctx.codex,
   });
   if (agents.created.length) {
     console.log(`[staff] ${profile.name}: criado ${agents.created.join(', ')} em ${path.join(ctx.projectPath, '.claude', 'agents')} (roteiro da ficha)`);
@@ -175,7 +178,7 @@ export function staffSettings() {
  */
 export async function writeFicha(
   profile: StaffProfile,
-  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'librarySkills'>,
+  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'librarySkills' | 'codex'>,
   absolute = false,
 ): Promise<FichaContext> {
   const rel = (file: string) => (absolute ? file : path.relative(ctx.projectPath, file));
@@ -192,6 +195,7 @@ export async function writeFicha(
     servers: ctx.servers,
     team: ctx.team,
     librarySkills: ctx.librarySkills,
+    codex: ctx.codex,
   };
   await writeAtomic(fichaFile(ctx.projectPath, profile.id), renderFicha(profile, fichaCtx));
   await ensureMemory(ctx.projectPath, profile);

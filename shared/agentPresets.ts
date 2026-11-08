@@ -65,10 +65,14 @@ export const AGENT_PRESETS: AgentPreset[] = [
 export const CONSULTOR_GPT = 'consultor-gpt';
 
 // Fora de AGENT_PRESETS (o "Novo agent" do quadro): só nasce no projeto quando o Codex está ligado
-// nas configurações (`codexReview`) e a ficha tem roteiro. Só leitura no Codex, sempre; o modelo é o
-// padrão do usuário no Codex (nada de `-m`). Haiku só repassa: a resposta é do GPT.
+// nas configurações (`codexReview`) e a ficha tem roteiro. Haiku só repassa: a resposta é do GPT.
+// O Codex roda sempre só leitura, com estas travas (nada de `-s`, que não combina com o perfil):
+// - `--ignore-user-config`: não carrega o ~/.codex/config.toml (o modelo dele pode ser um que a conta
+//   ChatGPT não aceita, e os MCPs e plugins dele rodariam fora da sandbox). Sem `-m`: vale o padrão do Codex.
+// - `features.apps=false`: sem os conectores da conta ChatGPT (GitHub, e-mail, Notion, sites…): o GPT só lê.
+// - perfil `mycodeny`: somente leitura que nega `.vps` (conexões e senhas de servidor) e `~/.ssh`.
 const CONSULTOR_COMMAND = [
-  'out=$(mktemp) && codex exec -s read-only --ephemeral --skip-git-repo-check -C "$PWD" -c model_reasoning_effort="high" -o "$out" - >/dev/null 2>"$out.err" <<\'PROMPT_GPT\'',
+  `out=$(mktemp) && codex exec --ignore-user-config -c features.apps=false -c 'default_permissions="mycodeny"' -c 'permissions.mycodeny.extends=":read-only"' -c 'permissions.mycodeny.filesystem={":project_roots"={".vps"="deny"},"~/.ssh"="deny"}' --ephemeral --skip-git-repo-check -C "$PWD" -c model_reasoning_effort="high" -o "$out" - >/dev/null 2>"$out.err" <<'PROMPT_GPT'`,
   '<o prompt que você montou>',
   'PROMPT_GPT',
   'if [ -s "$out" ]; then cat "$out"; else tail -n 5 "$out.err"; fi; rm -f "$out" "$out.err"',
@@ -96,8 +100,7 @@ export const CONSULTOR_GPT_PRESET: AgentPreset = {
     '4. Devolva a resposta do GPT fiel (pode encurtar), dizendo no começo que veio do GPT. Não some a sua opinião.',
     '',
     'Regras:',
-    '- O Codex roda sempre com `-s read-only`. Nunca tire isso, nunca use `--dangerously-*` nem `--full-auto`, e não force modelo (`-m`): vale o padrão do usuário.',
-    '- Se o erro disser que o modelo não é aceito com a conta ChatGPT (model_not_found), diga em uma linha que o modelo padrão do Codex do usuário não funciona e que ele precisa escolher outro nas configurações do Codex, e pare.',
+    '- Rode o comando exatamente como está: o Codex só pode ler (e não lê `.vps` nem `~/.ssh`). Nunca tire nem troque as opções `--ignore-user-config` e `-c`, nem acrescente `-s`/`--sandbox`, `--dangerously-*`, `--full-auto` ou modelo (`-m`).',
     '- Outro erro do Codex: diga em uma linha qual foi e pare. Não tente de novo mudando opções.',
     '- Não chame outros agents e não edite arquivos.',
   ].join('\n'),
