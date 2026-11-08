@@ -61,6 +61,7 @@ import {
   writeProjectFile,
 } from './projectFiles';
 import { staffMayPost } from './apiPolicy';
+import { CodexUsageReader } from './codexUsage';
 import { readUsage } from './usage';
 import { UsageStopError } from './usageStop';
 import { quotaBoost } from './quotaBoost';
@@ -290,6 +291,7 @@ const projectPathOf = async (projectId: string) => {
 };
 /** Codex CLI só como segunda opinião na revisão de tarefas (o motor dos funcionários é o Claude). */
 const codex = new CodexAdapter();
+const codexUsage = new CodexUsageReader({ check: () => codex.check() });
 
 const tasks = new TaskService({
   projectPath: projectPathOf,
@@ -1248,7 +1250,9 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     /^\/api\/usage$/,
     async () => {
       const [usage, config] = await Promise.all([readUsage(), readConfig()]);
-      return { ...usage, boost: config.optimizeQuota ? quotaBoost(usage) : null };
+      // Codex só com a opção ligada; o campo `codex` não existe quando desligada. Nunca lança nem trava os dados do Claude.
+      const codexField = await codexUsage.read(config.codexReview);
+      return { ...usage, boost: config.optimizeQuota ? quotaBoost(usage) : null, ...(codexField ? { codex: codexField } : {}) };
     },
   ],
   ['GET', /^\/api\/browser$/, ({ url }) => browserStatus(url.searchParams.has('fresh'))],

@@ -198,7 +198,7 @@ export function withoutSecretFiles(diff: string): { diff: string; skipped: strin
 }
 
 /** O ambiente do servidor sem o que é do Claude e do Claudio’s Club: o Codex usa o login dele (~/.codex). */
-function codexEnv(): NodeJS.ProcessEnv {
+export function codexEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(ANTHROPIC|CLAUDE|MYCO)_/i.test(k)));
 }
 
