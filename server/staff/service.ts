@@ -925,7 +925,7 @@ export class StaffService {
   private async assertCodexUsable(): Promise<void> {
     const on = await (this.opts.codexEnabled ?? (async () => (await readConfig()).codexReview))();
     if (!on) {
-      throw new StaffError('O Codex está desligado nas configurações: ligue "Segunda opinião do Codex" para abrir conversas de quem roda no Codex (ou troque o motor da ficha para o Claude).');
+      throw new StaffError('O Codex está desligado nas configurações: ligue "Usar o Codex (GPT)" para abrir conversas de quem roda no Codex (ou troque o motor da ficha para o Claude).');
     }
     const env = await this.opts.codexEnv?.();
     if (env?.error) throw new StaffError(env.error);

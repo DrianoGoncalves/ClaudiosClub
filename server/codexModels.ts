@@ -20,7 +20,7 @@ export interface CodexModelsResult {
 }
 
 /** Por que a lista vem vazia com o Codex desligado nas configurações (a opção "Segunda opinião do Codex" é o "usar o Codex"). */
-export const CODEX_OFF_REASON = 'o Codex está desligado nas configurações: ligue "Segunda opinião do Codex" para usar o Codex';
+export const CODEX_OFF_REASON = 'o Codex está desligado nas configurações: ligue "Usar o Codex (GPT)" para usar o Codex';
 
 /** Quanto tempo o catálogo fica guardado: ele muda de vez em quando (o Codex atualiza), não a cada abertura da tela. */
 export const MODELS_TTL = 5 * 60_000;

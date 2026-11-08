@@ -385,7 +385,7 @@ describe('o Codex só vale ligado, na versão mínima e instalado', () => {
     const p = (await service().hire('proj-id', { ...base, name: 'Desligado', engine: 'codex' }, true))!.profile;
     const err = await off.chatSpawn('proj-id', null, p.id).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(StaffError);
-    expect((err as Error).message).toBe('O Codex está desligado nas configurações: ligue "Segunda opinião do Codex" para abrir conversas de quem roda no Codex (ou troque o motor da ficha para o Claude).');
+    expect((err as Error).message).toBe('O Codex está desligado nas configurações: ligue "Usar o Codex (GPT)" para abrir conversas de quem roda no Codex (ou troque o motor da ficha para o Claude).');
     expect((await readProfile(projectPath, p.id))?.sessions).toEqual([]); // nenhuma sessão registrada
     const claude = (await off.hire('proj-id', { ...base, name: 'Claude Com Codex Off' }, true))!.profile;
     expect((await off.chatSpawn('proj-id', null, claude.id))!.args).toContain('--session-id');
