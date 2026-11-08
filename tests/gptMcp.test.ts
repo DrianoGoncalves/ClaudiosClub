@@ -2,7 +2,8 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CODEX_MIN_VERSION } from '../server/codexEnv';
 import { ConfigPatch, readConfig, updateConfig } from '../server/config';
 import {
   buildAskArgs,
@@ -58,13 +59,20 @@ interface Call {
   input: string;
   cwd: string;
 }
-/** Runner falso: cada `exec` é respondido por `exec(args, n)`; `debug models` devolve o catálogo. */
-function fake(exec: (args: string[], n: number) => Partial<GptRun> & { answer?: string }, catalog: GptRun = { code: 0, stdout: MODELS, stderr: '' }) {
+const FEATURES = 'network_proxy                       experimental       true\napps                                stable             true\n';
+/** Runner falso: cada `exec` é respondido por `exec(args, n)`; `debug models` devolve o catálogo; `--version` e `features list`, o ambiente do Codex. */
+function fake(
+  exec: (args: string[], n: number) => Partial<GptRun> & { answer?: string },
+  catalog: GptRun = { code: 0, stdout: MODELS, stderr: '' },
+  version: GptRun = { code: 0, stdout: 'codex-cli 0.167.0\n', stderr: '' },
+) {
   const calls: Call[] = [];
   let n = 0;
   const run: GptRunner = async (args, input, o) => {
     calls.push({ args, input, cwd: o.cwd });
     if (args[0] === 'debug') return catalog;
+    if (args[0] === '--version') return version;
+    if (args[0] === 'features') return { code: 0, stdout: FEATURES, stderr: '' };
     const r = exec(args, n++);
     if (r.answer !== undefined) await fs.writeFile(args[args.indexOf('-o') + 1]!, r.answer);
     return { code: 0, stdout: '', stderr: '', ...r };
@@ -224,12 +232,95 @@ describe('perguntar_gpt: a ferramenta', () => {
   it('sem o codex instalado, sem resposta no prazo e resposta enorme', async () => {
     const enoent = Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }) as NodeJS.ErrnoException;
     expect((await ask(server(fake(() => ({ code: null, spawnError: enoent })).run))).text).toContain('não está instalado');
+    // Sem o codex já na conferência da versão: nenhum `exec` é aberto.
+    const gone = fake(() => ({ answer: 'ok' }), undefined, { code: null, stdout: '', stderr: '', spawnError: enoent });
+    expect(await ask(server(gone.run))).toMatchObject({ isError: true, text: expect.stringContaining('não está instalado') });
+    expect(gone.execs()).toHaveLength(0);
     const late = await ask(server(fake(() => ({ code: null, timedOut: true })).run, { timeoutMs: 60_000 }));
     expect(late).toMatchObject({ isError: true });
     expect(late.text).toContain('não respondeu em 1 minutos');
     const big = await ask(server(fake(() => ({ answer: 'a'.repeat(30_000) })).run));
     expect(big.text.length).toBeLessThan(21_000);
     expect(big.text).toContain('resposta cortada');
+  });
+});
+
+describe('perguntar_gpt: Codex velho e bloqueio de segredos', () => {
+  it('Codex abaixo do mínimo do motor: recusa com a mesma mensagem (mínimo e como atualizar) e não abre o exec', async () => {
+    const f = fake(() => ({ answer: 'ok' }), undefined, { code: 0, stdout: 'codex-cli 0.120.0\n', stderr: '' });
+    const r = await ask(server(f.run));
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain(`O Codex 0.120.0 é antigo demais para rodar funcionários no Claudio’s Club (o mínimo é ${CODEX_MIN_VERSION}). Atualize com: `);
+    expect(f.execs()).toHaveLength(0);
+    expect((await fs.readdir(root)).filter((n) => n.startsWith('myco-gpt-'))).toEqual([]);
+  });
+
+  it('versão que não dá para ler, ou o comando falhando: recusa; só a conferência que deu certo fica guardada', async () => {
+    for (const version of [{ code: 0, stdout: 'bom dia', stderr: '' }, { code: 3, stdout: '', stderr: 'boom' }, { code: null, stdout: '', stderr: '', timedOut: true }]) {
+      const f = fake(() => ({ answer: 'ok' }), undefined, version);
+      const r = await ask(server(f.run));
+      expect(r.isError).toBe(true);
+      expect(f.execs()).toHaveLength(0);
+    }
+    // Duas perguntas, uma conferência: o `--version` roda uma vez.
+    const ok = fake(() => ({ answer: 'ok' }));
+    const s = server(ok.run);
+    expect((await ask(s)).isError).toBe(false);
+    expect((await ask(s)).isError).toBe(false);
+    expect(ok.calls.filter((c) => c.args[0] === '--version')).toHaveLength(1);
+    expect(ok.execs()).toHaveLength(2);
+  });
+
+  it('o network_proxy não importa: Codex sem o recurso responde normalmente (a pergunta roda sem rede)', async () => {
+    const f = fake(() => ({ answer: 'ok' }));
+    const run: GptRunner = async (args, input, o) => (args[0] === 'features' ? { code: 1, stdout: '', stderr: 'sem features' } : f.run(args, input, o));
+    expect((await ask(server(run))).isError).toBe(false);
+  });
+
+  it('mais de um arquivo para negar: erro claro da ferramenta (CodexBlockedError), nada roda e o temporário some', async () => {
+    const w = await fs.mkdtemp(path.join(root, 'dois-arquivos-'));
+    const a = path.join(w, 'a');
+    const b = path.join(w, 'b');
+    await fs.mkdir(a);
+    await fs.mkdir(b);
+    await fs.writeFile(path.join(a, '.vps'), 'x'); // .vps que é arquivo, na pasta da sessão e no projeto
+    await fs.writeFile(path.join(b, '.vps'), 'y');
+    const f = fake(() => ({ answer: 'ok' }));
+    const r = await ask(server(f.run, { root: a, projectPath: b }));
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('mais de um arquivo para proteger');
+    expect(r.text).not.toContain('falha inesperada');
+    expect(f.execs()).toHaveLength(0);
+    expect((await fs.readdir(root)).filter((n) => n.startsWith('myco-gpt-'))).toEqual([]);
+  });
+
+  it('caminho secreto que não dá para conferir (link em laço no ~/.ssh): erro claro da ferramenta, nada roda', async () => {
+    const w = await fs.mkdtemp(path.join(root, 'laco-'));
+    await fs.symlink(path.join(w, '.ssh-b'), path.join(w, '.ssh'));
+    await fs.symlink(path.join(w, '.ssh'), path.join(w, '.ssh-b'));
+    const f = fake(() => ({ answer: 'ok' }));
+    const r = await ask(server(f.run, { home: w }));
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('Não consegui conferir');
+    expect(r.text).toContain('ELOOP');
+    expect(r.text).not.toContain('falha inesperada');
+    expect(f.execs()).toHaveLength(0);
+    expect((await fs.readdir(root)).filter((n) => n.startsWith('myco-gpt-'))).toEqual([]);
+  });
+
+  it('MYCO_HOME vale para o MCP: o servidor da sessão leva --myco-home com ele', async () => {
+    const old = process.env.MYCO_HOME;
+    process.env.MYCO_HOME = path.join(root, 'outro-myco');
+    try {
+      vi.resetModules();
+      const fresh = await import('../server/staff/gptMcp');
+      const c = fresh.gptMcpServerConfig({ projectPath: main, root: proj, home });
+      expect(c.args.slice(c.args.indexOf('--myco-home'))).toEqual(['--myco-home', path.join(root, 'outro-myco')]);
+    } finally {
+      if (old === undefined) delete process.env.MYCO_HOME;
+      else process.env.MYCO_HOME = old;
+      vi.resetModules();
+    }
   });
 });
 

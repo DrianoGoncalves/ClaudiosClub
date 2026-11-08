@@ -7,10 +7,11 @@ import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import { GPT_MCP_NAME, GPT_TOOL_NAME } from '../../shared/model';
 import { codexEnv } from '../adapters/codex';
-import { codexSafetyArgs, tomlString } from '../chat/codexArgs';
+import { CodexBlockedError, codexSafetyArgs, tomlString } from '../chat/codexArgs';
 import { isModelUnavailable } from '../chat/codexEvents';
 import { killTree } from '../chat/registry';
 import { findSecret } from '../chat/secrets';
+import { CodexEnv } from '../codexEnv';
 import { parseCodexModels, pickCodexSubstitute } from '../codexModels';
 import { MYCO_HOME, readConfig } from '../config';
 import { ROOT } from '../root';
@@ -19,6 +20,9 @@ import { ROOT } from '../root';
 // quando o Codex está ligado nas configurações (`codexReview`). A única ferramenta, `perguntar_gpt`, abre o `codex exec` por spawn
 // (array de argumentos: nenhum shell no meio do texto da pergunta, que vai pelo stdin), só leitura, sem rede, sem a config do usuário
 // e sem os conectores da conta, com as pastas de segredo negadas (`codexSafetyArgs`, o mesmo bloqueio do motor Codex).
+// Antes de abrir o `codex exec`, confere o Codex instalado com a mesma checagem do motor dos funcionários (`CodexEnv`: versão mínima), e recusa
+// com a mesma mensagem se for velho demais. O `network_proxy` não importa aqui: a pergunta roda sem rede. Se o bloqueio de segredos não consegue
+// provar que uma pasta secreta está protegida (`CodexBlockedError`), a ferramenta devolve esse texto como erro e não roda nada.
 // Sem o SDK oficial, como o MCP de FTP: o protocolo usado é pequeno (initialize, ping, tools/list e tools/call).
 
 export { GPT_MCP_NAME, GPT_TOOL_NAME };
@@ -191,6 +195,8 @@ export function createGptMcp(opts: GptMcpOptions) {
   const home = opts.home ?? os.homedir();
   const mycoHome = opts.mycoHome ?? MYCO_HOME;
   const configFile = path.join(mycoHome, 'config.json');
+  /** A versão do Codex conferida uma vez e guardada por 5 min (só o que deu certo): o mesmo `CodexEnv` do motor, pelo mesmo runner. */
+  const codexEnv = new CodexEnv((args, input, ms) => run(args, input, { cwd: opts.root, timeoutMs: ms }));
 
   /** O catálogo da conta para o plano B (`codex debug models`); sem ele, null. */
   async function catalog() {
@@ -205,6 +211,9 @@ export function createGptMcp(opts: GptMcpOptions) {
     const wanted = config.codexModel.trim() || null;
     const sent = findSecret(`${a.pergunta}\n${a.contexto ?? ''}`);
     if (sent) throw new GptError(`o pedido tem ${sent.label}: não mandei ao GPT. Tire o segredo do texto e pergunte de novo`);
+    // Codex ausente, sem versão legível ou velho demais: a mesma mensagem do motor (com como atualizar), e nada roda.
+    const env = await codexEnv.status();
+    if (env.error) throw new GptError(env.error);
 
     const dir = await fs.mkdtemp(path.join(opts.tmpRoot ?? os.tmpdir(), 'myco-gpt-'));
     const out = path.join(dir, 'resposta.md');
@@ -252,8 +261,8 @@ export function createGptMcp(opts: GptMcpOptions) {
     try {
       return text(await ask(parsed.data));
     } catch (err) {
-      // Erro nosso já vem em palavras; o resto, sem detalhe (pode ter caminho interno).
-      return text(err instanceof GptError ? err.message : 'falha inesperada no MCP do GPT', true);
+      // Erro nosso já vem em palavras (e a recusa do bloqueio de segredos, também: ela diz qual caminho corrigir); o resto, sem detalhe.
+      return text(err instanceof GptError || err instanceof CodexBlockedError ? err.message : 'falha inesperada no MCP do GPT', true);
     }
   }
 
