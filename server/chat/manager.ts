@@ -21,6 +21,8 @@ import type {
 } from '../../shared/model';
 import { writeAtomic } from '../staff/store';
 import { readHistory } from './history';
+import type { CodexSpawn } from './codexArgs';
+import { CodexProcess } from './codexProcess';
 import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
 import { finalQuestion } from './question';
 import { CEILING_AT, contextNotice, kTokens, NOTICE_AT, rereadUsd, switchDecision, usd, type TurnInfo } from './contextPolicy';
@@ -35,7 +37,12 @@ import { readUsage } from '../usage';
 export interface ChatSpawn {
   sessionId: string;
   cwd: string;
+  /** Argumentos do `claude`. Com `engine: 'codex'` ficam vazios: valem os de `codex`. */
   args: string[];
+  /** Quem roda a conversa; ausente = `claude`. */
+  engine?: 'claude' | 'codex';
+  /** Como abrir a conversa no Codex (só com `engine: 'codex'`). */
+  codex?: CodexSpawn;
   /**
    * O modelo/esforço da linha de comando vêm de uma escolha gravada nesta conversa (ou na de origem,
    * ao duplicar). Vale como escolha à mão: a folga de cota não troca nem desfaz.
@@ -457,6 +464,8 @@ export class ChatManager {
    * esforço à mão nesta conversa (ou a conversa abriu com uma escolha gravada), vale a sua escolha.
    */
   private async applyBoost(chat: ChatProcess): Promise<string | null> {
+    // A folga de cota é do Claude (Opus em esforço máximo): numa conversa do Codex nunca troca o modelo.
+    if (chat.engine === 'codex') return null;
     const state = this.boosts.get(chat);
     if (state === 'manual' || !this.opts.quotaBoost) return null;
     const boost = await this.opts.quotaBoost().catch(() => null);
@@ -781,14 +790,18 @@ export class ChatManager {
     }
     const spawn = await this.opts.resolve(projectId, sessionId, staffId, forkFrom);
     if (!spawn) throw new ChatError('funcionário ou projeto não encontrado');
-    const chat = new ChatProcess({
+    // Claude ou Codex: o resto do manager fala com os dois do mesmo jeito (ver codexProcess.ts).
+    const codex = spawn.engine === 'codex' ? spawn.codex : undefined;
+    if (spawn.engine === 'codex' && !codex) throw new ChatError('a conversa do Codex veio sem os dados para abrir');
+    const model = codex ? codex.model : argOf(spawn.args, '--model');
+    const effort = codex ? codex.effort : argOf(spawn.args, '--effort');
+    const base: Omit<ChatProcessOptions, 'args'> = {
       sessionId: spawn.sessionId,
       projectId,
       staffId,
       cwd: spawn.cwd,
-      args: spawn.args,
-      model: argOf(spawn.args, '--model'),
-      effort: argOf(spawn.args, '--effort'),
+      model,
+      effort,
       onUsage: (limits) => void this.saveUsage(spawn.sessionId, limits),
       onUsageLimit: (hit) => this.limitHit(spawn.sessionId, projectId, staffId, hit),
       onTurnWithoutLimit: () => void this.limitStreak.delete(spawn.sessionId),
@@ -804,12 +817,23 @@ export class ChatManager {
         if (pid !== null) void this.opts.registry?.remove(spawn.sessionId, pid).catch(() => {});
       },
       spawnImpl: this.opts.spawnImpl,
-    });
+    };
+    const chat = codex
+      ? new CodexProcess({
+          ...base,
+          permissionMode: CLI_MODE[codex.autonomy],
+          instructions: codex.instructions,
+          writableRoots: codex.writableRoots,
+          secretArgs: codex.secretArgs,
+          threadId: codex.threadId,
+          threadFile: codex.threadFile,
+        })
+      : new ChatProcess({ ...base, args: spawn.args });
     this.chats.set(spawn.sessionId, chat);
     // O aviso de limite de uso ficou no processo anterior (a pendência guardada recria o dele, logo abaixo).
     this.limitNotices.delete(spawn.sessionId);
     this.wakeNotices.delete(spawn.sessionId);
-    this.launched.set(chat, { model: argOf(spawn.args, '--model'), effort: argOf(spawn.args, '--effort') });
+    this.launched.set(chat, { model, effort });
     // Escolha gravada (reabrir ou duplicar): vale a sua, a folga de cota não atropela.
     if (spawn.chosen) this.boosts.set(chat, 'manual');
     // Abas já abertas nesta sessão passam a ouvir o processo novo, desde o começo dele.

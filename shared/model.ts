@@ -439,6 +439,12 @@ export type Autonomy = 'plan' | 'manual' | 'acceptEdits' | 'auto' | 'bypassPermi
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+/**
+ * Quem roda o funcionário: o Claude Code (padrão, e o que vale quando a ficha não diz) ou o Codex (CLI da OpenAI,
+ * pela cota do ChatGPT). Com `codex`, `model` e `effort` da ficha são os do Codex (slug `gpt-…`, esforço low a max).
+ */
+export type Engine = 'claude' | 'codex';
+
 /** Ficha do funcionário: `<projeto>/.myco/staff/<id>.json`. */
 /**
  * Rotina de um funcionário: no horário (cron de 5 campos, hora desta máquina), o Claudio’s Club manda a
@@ -621,7 +627,9 @@ export interface StaffProfile {
   knowledge: string[];
   rules: string[];
   doneWhen: string;
-  /** Alias (`opus`, `sonnet`…) ou id completo; null = padrão do Claude Code. */
+  /** Motor do funcionário; ausente = `claude`. */
+  engine?: Engine;
+  /** Alias (`opus`, `sonnet`…) ou id completo; null = padrão do Claude Code. Com `engine: 'codex'`, o slug do Codex (`gpt-6-sol`…). */
   model: string | null;
   effort: Effort | null;
   /**

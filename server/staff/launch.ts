@@ -121,6 +121,29 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   };
 }
 
+export interface PreparedCodexRun {
+  /** Identidade e ficha, para o `developer_instructions` do Codex (ver ficha.ts: sem o que o Codex não tem). */
+  instructions: string;
+  /** Pastas fora da pasta de trabalho onde a sandbox de escrita pode gravar (a ficha e a memória, numa worktree). */
+  writableRoots: string[];
+  /** Onde fica o thread_id da conversa (retomar depois), ao lado dos arquivos de lançamento dela. */
+  threadFile: string;
+}
+
+/**
+ * O que o Codex precisa para a conversa: a ficha atualizada (e a memória criada) e o texto de instruções. Sem MCPs, hooks,
+ * agents do roteiro nem skills da biblioteca: não existem no Codex. O texto vai na linha de comando (não há arquivo).
+ */
+export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string): Promise<PreparedCodexRun> {
+  const away = path.resolve(cwd) !== path.resolve(ctx.projectPath);
+  const fichaCtx = await writeFicha(profile, ctx, away);
+  return {
+    instructions: systemPrompt(profile, fichaCtx, renderFicha(profile, fichaCtx)),
+    writableRoots: away ? [staffDir(ctx.projectPath)] : [],
+    threadFile: path.join(ctx.runDir, sessionId, 'codex-thread.json'),
+  };
+}
+
 /** As conexões FTP da ficha que estão no projeto (com senha). */
 export function ftpServersOf(profile: Pick<StaffProfile, 'servers'>, servers: ServerInfo[] | undefined): string[] {
   const ftp = new Set((servers ?? []).filter((s) => s.source === 'ftp').map((s) => s.name));

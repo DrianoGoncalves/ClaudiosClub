@@ -51,7 +51,9 @@ function teamSection(p: StaffProfile, ctx: FichaContext): string {
   const first = (s: string) => s.split(/(?<=[.!?])\s/)[0]!.slice(0, 200);
   return [
     '## Sua equipe',
-    'Estas pessoas reportam a você. O que for da área de alguém daqui vai para essa pessoa, nem para o executor nem para você, mesmo que seja uma correção pequena: ela tem a ficha, as regras e a memória dessa área e trabalha numa conversa curta, enquanto a sua é longa e cada passo seu nela custa mais. O que não tem dono vai para os agents do roteiro.',
+    codexOf(p)
+      ? 'Estas pessoas reportam a você. O que for da área de alguém daqui vai para essa pessoa, não para você, mesmo que seja uma correção pequena: ela tem a ficha, as regras e a memória dessa área e trabalha numa conversa curta, enquanto a sua é longa e cada passo seu nela custa mais. O que não tem dono, faça você mesmo.'
+      : 'Estas pessoas reportam a você. O que for da área de alguém daqui vai para essa pessoa, nem para o executor nem para você, mesmo que seja uma correção pequena: ela tem a ficha, as regras e a memória dessa área e trabalha numa conversa curta, enquanto a sua é longa e cada passo seu nela custa mais. O que não tem dono vai para os agents do roteiro.',
     ctx.team.map((m) => `- ${m.name} (${m.role}${m.temporary ? ', temporário' : ''}), id \`${m.id}\`: ${first(m.mission)}`).join('\n'),
     'Repasse sem pesquisar: não leia o código para escrever a tarefa. Mande o pedido do usuário nas palavras dele, o critério de pronto e o que não mexer (com o motivo); cite arquivos só se já souber quais são. Quem é da área acha as linhas. Pedido que é inteiro de uma área vai como está, numa tarefa só para essa pessoa, sem você dividir nem planejar; um pedido com partes de áreas diferentes vira uma tarefa para cada pessoa.',
     `Para passar uma tarefa: POST ${api}/tasks com o cabeçalho \`x-myco: 1\` e um JSON com title, description (o pedido, o critério de pronto e o que não mexer), staffId (o id da pessoa), requestedBy: "${p.id}" e start: true. A tarefa entra na fila dela (uma por vez) e aparece no quadro de tarefas.`,
@@ -59,6 +61,24 @@ function teamSection(p: StaffProfile, ctx: FichaContext): string {
     `Para ver como estão: GET ${api}/tasks.`,
   ].join('\n');
 }
+
+/**
+ * Funcionário que roda no Codex (CLI da OpenAI) em vez do Claude Code: a ficha não pode mandar usar o que o Codex não tem
+ * (ferramenta Agent e roteiro de delegação, skills e agents do Claude, Chrome, Monitor, pedido de aprovação).
+ */
+const codexOf = (p: Pick<StaffProfile, 'engine'>) => p.engine === 'codex';
+
+/** Autonomia no Codex: não há pedido de aprovação, a sandbox decide (ver server/chat/codexArgs.ts). */
+export const CODEX_AUTONOMY_LABEL: Record<Autonomy, string> = {
+  plan: 'Só lê e planeja: a sandbox é somente leitura e você não altera arquivos; proponha o plano e espere o ok do usuário.',
+  manual:
+    'Sandbox somente leitura: você lê arquivos e roda comandos que não gravam, mas não edita nada nem pede aprovação. Quando uma mudança for necessária, descreva-a (arquivo e trecho) e peça ao usuário para liberar mais autonomia.',
+  acceptEdits:
+    'Edita arquivos sozinho dentro da pasta de trabalho e roda comandos na sandbox (sem rede). O que a sandbox bloquear, não tente contornar: conte ao usuário.',
+  auto: 'Autônomo dentro da sandbox: edita arquivos na pasta de trabalho e roda comandos sem pedir (sem rede). O que a sandbox bloquear, não contorne: avise o usuário antes de qualquer coisa que afete produção.',
+  bypassPermissions:
+    'Sem travas do Claudio’s Club, mas no Codex você segue na sandbox (escrita só na pasta de trabalho, sem rede). Antes de algo irreversível ou que afete produção, avise e confirme; e nunca contorne os bloqueios de segredos.',
+};
 
 /** Programas de acesso remoto: quem não tem servidor na ficha não roda nenhum deles. */
 const REMOTE_TOOLS = ['ssh', 'ssh.exe', 'scp', 'scp.exe', 'sftp', 'sftp.exe', 'rsync'];
@@ -102,6 +122,12 @@ export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpSer
 const FTP_TOOLS = ['ftp_list', 'ftp_download', 'ftp_upload', 'ftp_delete', 'ftp_rename', 'ftp_mkdir'];
 
 function serversSection(p: StaffProfile, ctx: FichaContext): string {
+  if (codexOf(p)) {
+    return [
+      '## Servidores',
+      'Nesta conversa a sandbox não tem rede: ssh, scp, sftp, rsync e FTP não funcionam, e `.vps` e `~/.ssh` não são para ler. Se a tarefa precisar de um servidor, avise o usuário: ele pode passá-la a um funcionário que rode no Claude.',
+    ].join('\n');
+  }
   if (!p.servers.length) {
     // Sem isto, o funcionário vê "permission denied" no ssh, culpa o settings do Claude Code e pede chave nova.
     // Só os nomes das conexões do projeto: host, usuário e pasta ficam fora da ficha.
@@ -208,6 +234,16 @@ export const PLAYBOOK_STEPS: Record<Playbook, { title: string; steps: string[] }
 function playbookSection(p: StaffProfile, ctx?: FichaContext): string {
   if (!p.playbook) return '';
   const pb = PLAYBOOK_STEPS[p.playbook];
+  if (codexOf(p)) {
+    // Os passos do roteiro mandam delegar para agents do Claude; aqui quem faz cada papel é o próprio funcionário.
+    return [
+      `## Roteiro: ${pb.title}`,
+      'Neste motor você trabalha sozinho, sem ajudantes para delegar: faça você mesmo cada papel do roteiro, na ordem. Primeiro entenda o pedido e mapeie o código só lendo; depois planeje; execute em passos pequenos, conferindo cada um; e antes de dar por pronto revise o próprio resultado (rode os testes, releia o diff). Termine com o resumo para o usuário, como pede a definição de pronto.',
+      ctx?.team?.length ? 'Antes de fazer você mesmo: se a tarefa é da área de alguém da sua equipe, ela vai para essa pessoa (veja "Sua equipe").' : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+  }
   return [
     `## Roteiro: ${pb.title}`,
     pb.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'),
@@ -228,7 +264,7 @@ export function tabTitleSnippet(name: string): string {
 }
 
 function browserSection(p: StaffProfile): string {
-  if (!p.browser) return '';
+  if (!p.browser || codexOf(p)) return '';
   return [
     '## Navegador',
     'Você pode usar o Chrome do usuário pela extensão Claude in Chrome. É o navegador real dele, com os logins dele.',
@@ -268,10 +304,13 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     `Esta ficha foi gerada pelo Claudio’s Club; para mudar, edite pelo Claudio’s Club (alterações à mão podem ser sobrescritas).`,
     `## Missão\n${p.mission}`,
     p.firstTask ? `## Primeira tarefa\n${p.firstTask}` : '',
-    `## Autonomia\n${AUTONOMY_LABEL[p.autonomy]}`,
-    `## Agents e skills indicados\nAgents: ${agentList(p)}.\nSkills: ${skillList(p, ctx)}.\nPrefira estes quando a tarefa pedir; os demais do projeto continuam disponíveis.`,
-    `## Conhecimento (leia antes de começar)\n${list(p.knowledge, 'Nada específico além do CLAUDE.md do projeto.')}`,
-    `## Regras\n${list(p.rules, 'Siga o CLAUDE.md do projeto.')}`,
+    `## Autonomia\n${(codexOf(p) ? CODEX_AUTONOMY_LABEL : AUTONOMY_LABEL)[p.autonomy]}`,
+    // Agents e skills são do Claude Code: no Codex a seção some.
+    codexOf(p)
+      ? ''
+      : `## Agents e skills indicados\nAgents: ${agentList(p)}.\nSkills: ${skillList(p, ctx)}.\nPrefira estes quando a tarefa pedir; os demais do projeto continuam disponíveis.`,
+    `## Conhecimento (leia antes de começar)\n${list(p.knowledge, codexOf(p) ? 'Nada específico além do AGENTS.md e do CLAUDE.md do projeto, se existirem.' : 'Nada específico além do CLAUDE.md do projeto.')}`,
+    `## Regras\n${list(p.rules, codexOf(p) ? 'Siga o AGENTS.md e o CLAUDE.md do projeto, se existirem.' : 'Siga o CLAUDE.md do projeto.')}`,
     p.doneWhen ? `## Definição de pronto\n${p.doneWhen}` : '',
     // Quem pediu confere pela entrega: com as provas nela, não precisa abrir tudo de novo.
     ctx.managerNames.length
@@ -327,7 +366,9 @@ function wakeSection(p: StaffProfile, ctx: FichaContext): string {
   const api = `${ctx.mycoUrl}/api/projects/${p.projectId}`;
   return [
     '## Despertador',
-    'Para acompanhar algo que demora e não roda neste computador (deploy em outro servidor, CI do GitHub, um site), peça ao Claudio’s Club que te chame de novo nesta conversa. Para o que roda aqui, prefira Bash em segundo plano ou a ferramenta Monitor: eles já te acordam quando terminam.',
+    codexOf(p)
+      ? 'Para acompanhar algo que demora e não roda neste computador (deploy em outro servidor, CI do GitHub, um site), peça ao Claudio’s Club que te chame de novo nesta conversa. Para o que roda aqui, rode o comando e espere ele terminar.'
+      : 'Para acompanhar algo que demora e não roda neste computador (deploy em outro servidor, CI do GitHub, um site), peça ao Claudio’s Club que te chame de novo nesta conversa. Para o que roda aqui, prefira Bash em segundo plano ou a ferramenta Monitor: eles já te acordam quando terminam.',
     `Para agendar: \`curl -s -X POST -H "x-myco: 1" -H "content-type: application/json" -d '{"seconds": 120, "text": "Confira o deploy e conte como está"}' ${api}/chat/$MYCO_SESSION_ID/wake\` (\`$MYCO_SESSION_ID\` é o id desta conversa, já no seu ambiente). Na hora, o texto chega aqui como mensagem (a conversa reabre sozinha se tiver fechado): escreva o que conferir, sem aspas simples.`,
     `De 10 s a 24 h (\`seconds\` de 10 a 86400), um por conversa: agendar de novo troca o anterior. Para desfazer: o mesmo curl em \`${api}/chat/$MYCO_SESSION_ID/wake/cancel\`, sem corpo. Não agende em laço curto sem motivo: cada volta gasta consumo. Depois de 20 despertadores seguidos sem o usuário falar, o Claudio’s Club recusa o próximo: peça ao usuário antes de continuar acompanhando.`,
   ].join('\n');
@@ -338,7 +379,13 @@ function hiringSection(p: StaffProfile, ctx: FichaContext): string {
     ? 'Você é temporário: quem te contratou (seu gestor) te chamou para um trabalho específico. Quando terminar, diga isso claramente na resposta; ele encerra e você sai do quadro (nada é apagado).'
     : '';
   if (!p.canHire) {
-    return ['## Subfuncionários', temp, 'Você não pode contratar subfuncionários. Se precisar de mais gente, peça ao usuário. Subagents (ferramenta Agent) continuam permitidos.']
+    return [
+      '## Subfuncionários',
+      temp,
+      codexOf(p)
+        ? 'Você não pode contratar subfuncionários. Se precisar de mais gente, peça ao usuário.'
+        : 'Você não pode contratar subfuncionários. Se precisar de mais gente, peça ao usuário. Subagents (ferramenta Agent) continuam permitidos.',
+    ]
       .filter(Boolean)
       .join('\n');
   }
@@ -346,7 +393,9 @@ function hiringSection(p: StaffProfile, ctx: FichaContext): string {
   return [
     '## Subfuncionários',
     temp,
-    'Para trabalho pontual (uma tarefa, uma busca, uma revisão), use subagents (ferramenta Agent): terminam junto com o trabalho e custam menos. Contrate um subfuncionário só para um papel contínuo, que precise de memória e conversa próprias, e só com o ok do usuário: diga em uma frase o papel e por que um subagent não basta.',
+    codexOf(p)
+      ? 'Para trabalho pontual (uma tarefa, uma busca, uma revisão), faça você mesmo. Contrate um subfuncionário só para um papel contínuo, que precise de memória e conversa próprias, e só com o ok do usuário: diga em uma frase o papel e por que fazer você mesmo não basta.'
+      : 'Para trabalho pontual (uma tarefa, uma busca, uma revisão), use subagents (ferramenta Agent): terminam junto com o trabalho e custam menos. Contrate um subfuncionário só para um papel contínuo, que precise de memória e conversa próprias, e só com o ok do usuário: diga em uma frase o papel e por que um subagent não basta.',
     `Para contratar: POST ${api}/staff com o cabeçalho \`x-myco: 1\` e um JSON com name, role, mission, firstTask, autonomy (plan, manual, acceptEdits ou auto), reportsTo: ["${p.id}"] e launch: true. Ele abre numa conversa do Claudio’s Club; a resposta traz o id dele (profile.id) e a conversa (launch.sessionId).`,
     `Para mandar outra mensagem a ele: POST ${api}/chat/send com {"sessionId", "staffId", "text"} (mesmo cabeçalho).`,
     `Quem você contrata é temporário. Quando o trabalho dele terminar, encerre: POST ${api}/staff/<id dele>/done com {"note": "o que ele entregou", "requestedBy": "${p.id}"} (mesmo cabeçalho; só vale para quem você contratou). Ele sai do quadro (nada é apagado); parado há ${TEMP_IDLE_DAYS} dias, sai sozinho. Só o usuário efetiva.`,

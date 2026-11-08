@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import type {
@@ -30,8 +31,10 @@ import { librarySkillsOf } from '../skillLibrary';
 import { readUsage } from '../usage';
 import { projectBudgetHit, usageStopHit, UsageStopError } from '../usageStop';
 import { TEMP_IDLE_DAYS } from '../../shared/model';
+import { codexModelOrNull, codexSecretArgs, type CodexSpawn } from '../chat/codexArgs';
+import { readCodexThread } from '../chat/codexProcess';
 import { buildClaudeArgs, capAutonomy } from './ficha';
-import { greeting, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
+import { greeting, prepareCodexRun, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
 import { ensureWorktree, worktreeFor, type Worktree } from './worktree';
 import { listMcpServers } from './mcp';
 import {
@@ -355,6 +358,7 @@ export class StaffService {
       knowledge: src.knowledge,
       rules: src.rules,
       doneWhen: src.doneWhen,
+      ...(src.engine && { engine: src.engine }),
       model: src.model,
       effort: src.effort,
       canHire: src.canHire,
@@ -752,7 +756,12 @@ export class StaffService {
    * aprovação para tudo. `forkFrom`: sessão nova como cópia desta (duplicar a conversa), na mesma
    * pasta da original.
    */
-  async chatSpawn(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string) {
+  async chatSpawn(
+    projectId: string,
+    sessionId: string | null,
+    staffId: string | null,
+    forkFrom?: string,
+  ): Promise<{ sessionId: string; cwd: string; args: string[]; chosen?: boolean; engine?: 'claude' | 'codex'; codex?: CodexSpawn } | null> {
     const project = await this.project(projectId);
     if (!project) return null;
     if (!staffId) {
@@ -772,9 +781,12 @@ export class StaffService {
     const id = resume ? sessionId! : randomUUID();
     const ctx = await this.context(project, profile, true);
     const cwd = sessionCwd(profile, ctx, forkFrom ?? sessionId);
-    // Chrome só com a extensão instalada (vale só para esta conversa: a ficha salva segue como o dono escolheu).
-    const browser = await effectiveBrowser(profile.browser, this.opts.browserStatus);
-    const run = await prepareRun({ ...profile, browser }, ctx, id, cwd);
+    const codex = profile.engine === 'codex';
+    if (codex && forkFrom) throw new StaffError('duplicar a conversa ainda não existe para funcionário que roda no Codex');
+    // Chrome só com a extensão instalada (vale só para esta conversa: a ficha salva segue como o dono escolheu). No Codex não há Chrome.
+    const browser = codex ? false : await effectiveBrowser(profile.browser, this.opts.browserStatus);
+    const codexRun = codex ? await prepareCodexRun(profile, ctx, id, cwd) : null;
+    const run = codexRun ? null : await prepareRun({ ...profile, browser }, ctx, id, cwd);
     // Modelo e esforço: o da conversa (reabrir, ou a de origem ao duplicar) > o da ficha > o último escolhido no chat.
     const origin = profile.sessions.find((x) => x.id === (forkFrom ?? sessionId));
     if (!resume) {
@@ -793,8 +805,23 @@ export class StaffService {
       model: origin?.model ?? profile.model ?? profile.lastModel ?? null,
       effort: origin?.effort ?? profile.effort ?? profile.lastEffort ?? null,
     };
-    const args = buildClaudeArgs(effective, { ...run, sessionId: id, resume, firstPrompt: null, ...(forkFrom && { forkFrom }) });
-    return { sessionId: id, cwd, args, ...((origin?.model || origin?.effort) && { chosen: true }) };
+    const chosen = (origin?.model || origin?.effort) && { chosen: true };
+    if (codexRun) {
+      // Uma ficha que trocou de motor pode ter ficado com o modelo do Claude (`opus`…): no Codex isso não vale, vai o padrão dele.
+      const spawn: CodexSpawn = {
+        autonomy: effective.autonomy,
+        model: codexModelOrNull(effective.model),
+        effort: effective.effort,
+        instructions: codexRun.instructions,
+        writableRoots: codexRun.writableRoots,
+        secretArgs: codexSecretArgs({ cwd, projectPath: project.path, home: os.homedir(), keyFiles: ctx.serverKeys }),
+        threadId: resume ? await readCodexThread(codexRun.threadFile) : null,
+        threadFile: codexRun.threadFile,
+      };
+      return { sessionId: id, cwd, args: [], engine: 'codex', codex: spawn, ...chosen };
+    }
+    const args = buildClaudeArgs(effective, { ...run!, sessionId: id, resume, firstPrompt: null, ...(forkFrom && { forkFrom }) });
+    return { sessionId: id, cwd, args, ...chosen };
   }
 
   /**

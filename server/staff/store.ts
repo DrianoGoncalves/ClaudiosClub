@@ -37,6 +37,8 @@ export const StaffInputSchema = z.object({
   knowledge: list(50),
   rules: list(50),
   doneWhen: line(2000).default(''),
+  // Ausente = claude. Com codex, `model` e `effort` são os do Codex (ver shared/model.ts).
+  engine: z.enum(['claude', 'codex']).optional(),
   model: ModelSchema.nullable().default(null),
   effort: EffortSchema.nullable().default(null),
   canHire: z.boolean().default(false),
@@ -77,6 +79,8 @@ const ProfileSchema = StaffInputSchema.omit({ portraitDataUrl: true, launch: tru
   portrait: z.string().nullable(),
   // Ligação entre cópias da mesma pessoa; valor inválido é ignorado (ficha sem vínculo).
   personId: z.string().regex(/^[A-Za-z0-9-]{1,60}$/).optional().catch(undefined),
+  // Valor inválido no arquivo: volta ao padrão (claude) em vez de derrubar a ficha.
+  engine: z.enum(['claude', 'codex']).optional().catch(undefined),
   routines: RoutinesSchema.optional().catch(undefined),
   hiredBy: z.string().nullable().optional().catch(undefined),
   temporary: z.boolean().optional().catch(undefined),
