@@ -119,7 +119,8 @@ export class CodexAdapter {
     const out = path.join(dir, 'resposta.md');
     // --ignore-user-config: nem o modelo do ~/.codex/config.toml (um que a conta ChatGPT não aceita derruba a
     // revisão) nem MCPs e plugins do usuário, que rodariam fora da sandbox. A credencial continua valendo.
-    const args = ['exec', '-', '--ignore-user-config', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--color', 'never', '-C', dir, '-o', out];
+    // features.apps=false: sem os conectores da conta ChatGPT (GitHub, e-mail, Notion, sites…), que a sandbox não alcança.
+    const args = ['exec', '-', '--ignore-user-config', '-c', 'features.apps=false', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--color', 'never', '-C', dir, '-o', out];
     try {
       for (let attempt = 0; ; attempt++) {
         const r = await this.run(args, prompt, REVIEW_TIMEOUT);
