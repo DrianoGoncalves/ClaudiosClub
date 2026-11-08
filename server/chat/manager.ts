@@ -22,6 +22,7 @@ import type {
 import { writeAtomic } from '../staff/store';
 import { readHistory } from './history';
 import type { CodexSpawn } from './codexArgs';
+import type { CodexEnvStatus } from '../codexEnv';
 import type { CodexModelInfo } from '../codexModels';
 import { CodexProcess } from './codexProcess';
 import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
@@ -73,6 +74,8 @@ export interface ChatManagerOptions {
   spawnImpl?: ChatProcessOptions['spawnImpl'];
   /** Modelos do Codex da conta, para o plano B de quem roda no Codex (ver CodexProcess); sem ele, o plano B roda no padrão do Codex. */
   codexModels?: () => Promise<ReadonlyArray<Pick<CodexModelInfo, 'slug'>>>;
+  /** Confere o `codex` instalado antes de cada execução (versão mínima e `network_proxy`, ver server/codexEnv.ts); sem ele, a rede do Codex fica desligada. */
+  codexEnv?: () => Promise<CodexEnvStatus>;
   /** Processos abertos, gravados em disco para achar os órfãos depois de um reinício. */
   registry?: ChatRegistry;
   /** Testes trocam (pid vivo? / encerrar processo). */
@@ -828,10 +831,12 @@ export class ChatManager {
           permissionMode: CLI_MODE[codex.autonomy],
           instructions: codex.instructions,
           writableRoots: codex.writableRoots,
+          readOnlyPaths: codex.readOnlyPaths,
           secrets: codex.secrets,
           threadId: codex.threadId,
           threadFile: codex.threadFile,
           models: this.opts.codexModels,
+          env: this.opts.codexEnv,
         })
       : new ChatProcess({ ...base, args: spawn.args });
     this.chats.set(spawn.sessionId, chat);

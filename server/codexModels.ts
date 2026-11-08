@@ -3,7 +3,7 @@ import { defaultRunner, type CodexRunner, type CodexStatus } from './adapters/co
 // Catálogo de modelos do Codex para a tela escolher (GET /api/codex/models): vem de `codex debug models`, que imprime um JSON
 // `{ models: [{ slug, display_name, visibility, supported_reasoning_levels: [{ effort }], default_reasoning_level, … }] }`.
 // Só os de `visibility: "list"` (os outros são internos ou escondidos). Sem o CLI ou sem login, devolve lista vazia com o motivo,
-// em vez de erro. Testado com o Codex CLI 0.156.1.
+// em vez de erro. Só vale com o Codex ligado nas configurações (`codexReview`). Testado com o Codex CLI 0.156.1 e 0.167.0.
 
 export interface CodexModelInfo {
   slug: string;
@@ -18,6 +18,9 @@ export interface CodexModelsResult {
   /** Por que a lista veio vazia (sem o CLI, sem login, catálogo ilegível); null quando há modelos. */
   reason: string | null;
 }
+
+/** Por que a lista vem vazia com o Codex desligado nas configurações (a opção "Segunda opinião do Codex" é o "usar o Codex"). */
+export const CODEX_OFF_REASON = 'o Codex está desligado nas configurações: ligue "Segunda opinião do Codex" para usar o Codex';
 
 /** Quanto tempo o catálogo fica guardado: ele muda de vez em quando (o Codex atualiza), não a cada abertura da tela. */
 export const MODELS_TTL = 5 * 60_000;
@@ -90,10 +93,13 @@ export class CodexModels {
     private readonly check: (fresh?: boolean) => Promise<CodexStatus>,
     private readonly run: CodexRunner = defaultRunner(),
     private readonly now: () => number = Date.now,
+    /** O Codex está ligado nas configurações (`codexReview`)? Desligado: lista vazia com o motivo, e nenhum processo é aberto. */
+    private readonly enabled: () => Promise<boolean> = async () => true,
   ) {}
 
   /** `fresh`: ignora o que está guardado (e confere de novo o login). Nunca lança: o motivo vai em `reason`. */
   async list(fresh = false): Promise<CodexModelsResult> {
+    if (!(await this.enabled().catch(() => false))) return { models: [], reason: CODEX_OFF_REASON };
     if (!fresh && this.cache && this.now() - this.cache.at < MODELS_TTL) return this.cache.value;
     let status: CodexStatus;
     try {

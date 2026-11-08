@@ -7,6 +7,7 @@ import { clientChanged, DAILY, TSX, VITE } from '../scripts/lib';
 import { openTerminal } from './terminal';
 import { ArtificialAnalysis } from './adapters/artificialAnalysis';
 import { CodexAdapter, CodexError } from './adapters/codex';
+import { CodexEnv } from './codexEnv';
 import { CodexModels } from './codexModels';
 import { ClaudeAdapter } from './adapters/claude';
 import { defaultLocations } from './adapters/claude/paths';
@@ -211,6 +212,8 @@ const staff: StaffService = new StaffService(adapter, {
   },
   // Salvar ficha do Codex com modelo fora do catálogo da conta é recusado. `codexModels` é declarado mais abaixo: só é lido na chamada.
   codexCatalog: () => codexModels.list(),
+  // Versão mínima e `network_proxy` do codex instalado: a conversa de quem roda no Codex só abre com um Codex que serve.
+  codexEnv: () => codexEnv.status(),
 });
 /** Perguntas em aberto e avisos marcados como "não é segredo", guardados entre reinícios. */
 const inboxState = new InboxState(path.join(MYCO_HOME, 'inbox.json'));
@@ -256,6 +259,8 @@ const wakeups = new AutoContinue({
 const chats: ChatManager = new ChatManager({
   // Plano B de quem roda no Codex: a conta recusou o modelo da ficha, o turno é refeito com o mais parecido do catálogo.
   codexModels: async () => (await codexModels.list()).models,
+  // Antes de cada execução do Codex: o recurso `network_proxy` presente (senão roda sem rede e avisa) e a versão mínima.
+  codexEnv: () => codexEnv.status(),
   autoContinue,
   wakeups,
   inbox: inboxState,
@@ -295,7 +300,9 @@ const projectPathOf = async (projectId: string) => {
 };
 /** Codex CLI só como segunda opinião na revisão de tarefas (o motor dos funcionários é o Claude). */
 const codex = new CodexAdapter();
-const codexModels = new CodexModels((fresh) => codex.check(fresh));
+/** Só com o Codex ligado nas configurações (`codexReview`): desligado, o catálogo vem vazio com o motivo e nada abre o `codex`. */
+const codexModels = new CodexModels((fresh) => codex.check(fresh), undefined, undefined, async () => (await readConfig()).codexReview);
+const codexEnv = new CodexEnv();
 
 const tasks = new TaskService({
   projectPath: projectPathOf,
@@ -943,7 +950,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
         : { enabled: false, available: false, reason: null },
   ],
   // Modelos e esforços do Codex para a ficha escolher (`codex debug models`, só os da lista). Sem o CLI ou sem login: lista vazia com o motivo.
-  // Não depende da segunda opinião estar ligada: é do motor dos funcionários.
+  // Só com o Codex ligado nas configurações (`codexReview`, o "usar o Codex"): desligado, lista vazia com o motivo (ver CodexModels).
   ['GET', /^\/api\/codex\/models$/, ({ url }) => codexModels.list(url.searchParams.has('fresh'))],
   [
     'POST',

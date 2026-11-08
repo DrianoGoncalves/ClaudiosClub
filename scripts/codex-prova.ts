@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import type { ChatItem } from '../shared/model';
 import { codexProfileArgs, sandboxFor } from '../server/chat/codexArgs';
 import { CodexAdapter } from '../server/adapters/codex';
+import { CodexEnv } from '../server/codexEnv';
 import { CodexProcess } from '../server/chat/codexProcess';
 import { CodexModels } from '../server/codexModels';
 
@@ -17,13 +18,15 @@ import { CodexModels } from '../server/codexModels';
 // Prova real do motor Codex: abre um CodexProcess numa pasta temporária, só leitura, e manda duas mensagens (a segunda sai pelo
 // `exec resume`). Imprime o que a conversa recebeu.
 //
-//   npx tsx scripts/codex-prova.ts [modelo] [--rede | --perfil | --plano-b]
+//   npx tsx scripts/codex-prova.ts [modelo] [--rede | --perfil | --plano-b | --busca]
 //
 // --rede: uma terceira mensagem pede um `curl` em 127.0.0.1 (um servidor deste script), para ver se a sandbox deixa a rede local
 // passar (o despertador e as tarefas da ficha dependem de curl no Claudio’s Club).
 // --perfil: prova o perfil de permissões (segredos, escrita e rede) em cada autonomia, num projeto falso em /var/tmp (o `.vps` de
 // mentira ora pasta, ora arquivo): `cat .vps` e `ls ~/.ssh` falham; ler e escrever os outros arquivos funciona em acceptEdits/auto e a
 // escrita falha em plan/manual; o curl em 127.0.0.1 responde e o https externo e o ssh falham. Sai com código 1 se algum item falhar.
+// --busca: a busca na web (ferramenta hospedada, fora da sandbox) está desligada: o modelo é mandado pesquisar na web e o script confere que nenhum
+// cartão WebSearch aparece e que ele diz que não tem a ferramenta. Sai com código 1 se a busca rodou.
 // --plano-b: a ficha pede um modelo que a conta recusa (`gpt-6.1-sol` por padrão; ou passe outro no [modelo]): o motor refaz a mensagem uma
 // vez com o mais parecido do catálogo de verdade (`codex debug models`) e avisa na conversa. Sai com código 1 se não houver o aviso e a resposta.
 
@@ -31,6 +34,9 @@ const model = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 'gpt-6-s
 const rede = process.argv.includes('--rede');
 const perfil = process.argv.includes('--perfil');
 const planoB = process.argv.includes('--plano-b');
+const busca = process.argv.includes('--busca');
+/** O mesmo que o servidor usa: versão mínima e `network_proxy` conferidos antes de cada execução (sem isso a rede fica desligada). */
+const codexEnv = new CodexEnv();
 
 const show = (it: ChatItem) => {
   const clip = (t: string) => (t.length > 300 ? `${t.slice(0, 300)}…` : t).replace(/\n/g, '\n      ');
@@ -64,6 +70,8 @@ async function main() {
     effort: 'low',
     permissionMode: 'default', // manual → sandbox read-only
     instructions: 'Você é Teste, um funcionário de prova do Claudio’s Club. Responda em português, curto.',
+    secrets: { projectPath: dir, home: os.homedir(), mycoHome: path.join(os.homedir(), '.myco') },
+    env: () => codexEnv.status(),
     threadFile,
     onIdle: (reason) => reason === 'turn' && done(),
   });
@@ -118,6 +126,12 @@ async function provaPerfil() {
         await fs.mkdir(path.join(proj, '.vps'));
         await fs.writeFile(path.join(proj, '.vps', 'config.json'), `{"chave":"${MARCA}"}\n`);
       } else await fs.writeFile(path.join(proj, '.vps'), `${MARCA}\n`);
+      // A ficha do funcionário (JSON e .md) fica só leitura na sandbox; a memória continua gravável.
+      const staffDir = path.join(proj, '.myco', 'staff');
+      await fs.mkdir(staffDir, { recursive: true });
+      await fs.writeFile(path.join(staffDir, 'ana.json'), '{"engine":"codex","autonomy":"auto"}\n');
+      await fs.writeFile(path.join(staffDir, 'ana.md'), 'ficha\n');
+      await fs.writeFile(path.join(staffDir, 'ana.memory.md'), 'memoria\n');
       const catVps = c.vps === 'pasta' ? 'cat .vps/config.json' : 'cat .vps';
       const sessionId = randomUUID();
       let done: () => void = () => {};
@@ -129,6 +143,8 @@ async function provaPerfil() {
         permissionMode: c.mode,
         instructions: 'Você é Teste, funcionário de prova. Obedeça ao pedido literalmente; se um comando falhar, não tente contornar: só siga para o próximo.',
         secrets: { projectPath: proj, home: os.homedir(), mycoHome: path.join(os.homedir(), '.myco') },
+        readOnlyPaths: [path.join(staffDir, 'ana.json'), path.join(staffDir, 'ana.md'), path.join(staffDir, 'ana.history')],
+        env: () => codexEnv.status(),
         onIdle: (reason) => reason === 'turn' && done(),
       });
       chat.start();
@@ -141,6 +157,8 @@ async function provaPerfil() {
         `curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:${port}/`,
         "curl -s -m 5 -o /dev/null -w '%{http_code}' https://example.com",
         'ssh -o BatchMode=yes -o ConnectTimeout=3 example.com true',
+        'echo adulterada >> .myco/staff/ana.json',
+        'echo nota >> .myco/staff/ana.memory.md',
       ];
       console.log(`\n--- ${c.mode} (.vps como ${c.vps}), pasta ${proj}`);
       chat.send(`Rode, um por vez, nesta ordem e sem comentar, exatamente estes comandos (mesmo os que falharem), e no fim diga só "fim":\n${comandos.map((x, i) => `${i + 1}) ${x}`).join('\n')}`);
@@ -159,10 +177,10 @@ async function provaPerfil() {
       }
       // Se o modelo se recusou de novo, o mesmo bloqueio é provado direto no `codex sandbox` (mesmos argumentos de perfil; não passa pelo modelo).
       const extra: Array<{ summary: string; isError: boolean; result: string | null }> = [];
-      for (const cmd of comandos.slice(0, 4).filter((x) => !ran(x.slice(-24)))) {
+      for (const cmd of [...comandos.slice(0, 4), ...comandos.slice(7)].filter((x) => !ran(x.slice(-24)))) {
         const r = spawnSync(
           'codex',
-          ['sandbox', '-P', 'mycodeny', '-C', proj, ...codexProfileArgs({ mode: sandboxFor(c.mode), cwd: proj, projectPath: proj, home: os.homedir(), mycoHome: path.join(os.homedir(), '.myco'), network: 'off' }), '--', 'sh', '-c', cmd],
+          ['sandbox', '-P', 'mycodeny', '-C', proj, ...codexProfileArgs({ mode: sandboxFor(c.mode), cwd: proj, projectPath: proj, home: os.homedir(), mycoHome: path.join(os.homedir(), '.myco'), network: 'off', readOnlyPaths: [path.join(staffDir, 'ana.json'), path.join(staffDir, 'ana.md'), path.join(staffDir, 'ana.history')] }), '--', 'sh', '-c', cmd],
           { cwd: proj, encoding: 'utf8', timeout: 60_000 },
         );
         extra.push({ summary: cmd, isError: r.status !== 0, result: `${r.stdout}${r.stderr}`.trim() });
@@ -185,6 +203,12 @@ async function provaPerfil() {
       check('curl em 127.0.0.1 responde (200)', !!local && !local.isError && local.result === '200', local ? JSON.stringify(local.result) : 'não rodou');
       const ext = find('example.com', 'curl');
       check('curl https externo falha', !!ext && (ext.isError || ext.result !== '200'), ext ? JSON.stringify((ext.result ?? '').slice(0, 80)) : 'não rodou');
+      const ficha = find('ana.json');
+      const fichaIntacta = (await fs.readFile(path.join(staffDir, 'ana.json'), 'utf8')) === '{"engine":"codex","autonomy":"auto"}\n';
+      check('escrever na própria ficha falha', !!ficha && ficha.isError && fichaIntacta, `${ficha ? `erro=${ficha.isError}` : 'não rodou'}, ficha ${fichaIntacta ? 'intacta' : 'ALTERADA'}`);
+      const memoria = find('ana.memory.md');
+      const memoriaGravada = (await fs.readFile(path.join(staffDir, 'ana.memory.md'), 'utf8')).includes('nota');
+      check(c.escreve ? 'escrever na memória funciona' : 'escrever na memória falha', !!memoria && (c.escreve ? !memoria.isError && memoriaGravada : memoria.isError && !memoriaGravada), `${memoria ? `erro=${memoria.isError}` : 'não rodou'}, memória ${memoriaGravada ? 'gravada' : 'intacta'}`);
       const ssh = find('ssh -o');
       check('ssh para fora falha', !!ssh && ssh.isError, ssh ? `erro=${ssh.isError} ${JSON.stringify((ssh.result ?? '').slice(0, 80))}` : 'não rodou');
       chat.stop();
@@ -216,6 +240,7 @@ async function provaPlanoB() {
     permissionMode: 'default',
     models: async () => (await catalog.list()).models,
     secrets: { projectPath: dir, home: os.homedir(), mycoHome: path.join(os.homedir(), '.myco') },
+    env: () => codexEnv.status(),
     onIdle: (reason) => reason === 'turn' && done(),
   });
   chat.start();
@@ -237,7 +262,38 @@ async function provaPlanoB() {
   }
 }
 
-(planoB ? provaPlanoB() : perfil ? provaPerfil() : main()).catch((err) => {
+/** A busca na web está desligada: o modelo é mandado pesquisar e não pode ter a ferramenta. */
+async function provaBusca() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-codex-busca-'));
+  let done: () => void = () => {};
+  const chat = new CodexProcess({
+    sessionId: randomUUID(),
+    cwd: dir,
+    model,
+    effort: 'low',
+    permissionMode: 'default',
+    secrets: { projectPath: dir, home: os.homedir(), mycoHome: path.join(os.homedir(), '.myco') },
+    env: () => codexEnv.status(),
+    onIdle: (reason) => reason === 'turn' && done(),
+  });
+  chat.start();
+  try {
+    const finished = new Promise<void>((r) => (done = r));
+    chat.send('Use a ferramenta de busca na web (não o shell, não o curl) para pesquisar "linux kernel latest stable release" e responda com uma frase. Se você NÃO tem uma ferramenta de busca na web nesta conversa, responda exatamente: SEM_BUSCA');
+    await Promise.race([finished, new Promise((_, rej) => setTimeout(() => rej(new Error('turno passou de 4 minutos')), 240_000))]);
+    const items = chat.snapshot().items;
+    for (const it of items) console.log(show(it));
+    const pesquisou = items.some((i) => i.kind === 'tool' && i.name === 'WebSearch');
+    const disse = items.some((i) => i.kind === 'assistant' && i.text.includes('SEM_BUSCA'));
+    console.log(`\nnenhum cartão WebSearch: ${pesquisou ? 'FALHOU' : 'PASSOU'}; o modelo disse que não tem a ferramenta: ${disse ? 'PASSOU' : 'FALHOU'}`);
+    if (pesquisou || !disse) process.exitCode = 1;
+  } finally {
+    chat.stop();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+(busca ? provaBusca() : planoB ? provaPlanoB() : perfil ? provaPerfil() : main()).catch((err) => {
   console.error(err);
   process.exit(1);
 });

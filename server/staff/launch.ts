@@ -9,7 +9,7 @@ import { ftpMcpServerConfig } from './ftpMcp';
 import { buildMcpConfig } from './mcp';
 import { ensurePlaybookAgents } from './playbookAgents';
 import { buildSkillPlugin } from '../skillLibrary';
-import { ensureMemory, fichaFile, memoryFile, staffDir, writeAtomic } from './store';
+import { ensureMemory, fichaFile, historyDir, memoryFile, profileFile, staffDir, writeAtomic } from './store';
 import type { Worktree } from './worktree';
 
 export interface LaunchContext {
@@ -124,15 +124,18 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
 export interface PreparedCodexRun {
   /** Identidade e ficha, para o `developer_instructions` do Codex (ver ficha.ts: sem o que o Codex não tem). */
   instructions: string;
-  /** Pastas fora da pasta de trabalho onde a sandbox de escrita pode gravar (a ficha e a memória, numa worktree). */
+  /** Pastas fora da pasta de trabalho onde a sandbox de escrita pode gravar (a pasta das fichas e da memória, numa worktree). */
   writableRoots: string[];
+  /** A ficha do próprio funcionário (JSON, Markdown e histórico): só leitura na sandbox, para ele não mudar o motor e a autonomia (ver seal.ts). */
+  readOnlyPaths: string[];
   /** Onde fica o thread_id da conversa (retomar depois), ao lado dos arquivos de lançamento dela. */
   threadFile: string;
 }
 
 /**
  * O que o Codex precisa para a conversa: a ficha atualizada (e a memória criada) e o texto de instruções. Sem MCPs, hooks,
- * agents do roteiro nem skills da biblioteca: não existem no Codex. O texto vai na linha de comando (não há arquivo).
+ * agents do roteiro nem skills da biblioteca: não existem no Codex. O texto vai em `developer_instructions` na linha de comando; passando de ~24 KB (ou
+ * no Windows) o CodexProcess o manda no começo do prompt da primeira mensagem (o Codex não tem arquivo para isso sem trocar as instruções base).
  */
 export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string): Promise<PreparedCodexRun> {
   const away = path.resolve(cwd) !== path.resolve(ctx.projectPath);
@@ -140,6 +143,7 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
   return {
     instructions: systemPrompt(profile, fichaCtx, renderFicha(profile, fichaCtx)),
     writableRoots: away ? [staffDir(ctx.projectPath)] : [],
+    readOnlyPaths: [profileFile(ctx.projectPath, profile.id), fichaFile(ctx.projectPath, profile.id), historyDir(ctx.projectPath, profile.id)],
     threadFile: path.join(ctx.runDir, sessionId, 'codex-thread.json'),
   };
 }

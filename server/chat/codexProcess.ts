@@ -4,9 +4,10 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { ChatAttachment, SendPriority } from '../../shared/model';
 import { CODEX_CONTEXT_WINDOW } from '../adapters/claude/pricing';
+import type { CodexEnvStatus } from '../codexEnv';
 import { pickCodexSubstitute, type CodexModelInfo } from '../codexModels';
 import { cleanEnv } from '../auth';
-import { buildCodexArgs, sandboxFor, type CodexSecretContext } from './codexArgs';
+import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexSecrets } from './codexArgs';
 import { contextUsed, isModelUnavailable, isToolCall, itemFromCodex, parseCodexFailure, type CodexPhase } from './codexEvents';
 import { hasCheckpoint, stripCheckpoint } from './items';
 import { ChatProcess, type ChatProcessOptions } from './process';
@@ -23,12 +24,21 @@ import { tryJson } from '../adapters/claude/fsutil';
 export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   /** Modo de permissão do Claudio’s Club (plan, default, acceptEdits, auto, bypassPermissions): vira a sandbox a cada execução. */
   permissionMode: string;
-  /** Texto da ficha (developer_instructions). */
+  /** Texto da ficha: vai em `developer_instructions`; passando de ~24 KB (ou no Windows), no começo do prompt da primeira mensagem (ver `instructionsInArgv`). */
   instructions?: string | null;
-  /** Pastas extras com escrita na sandbox de escrita (a ficha, quando a conversa roda numa worktree). */
+  /** Pastas extras com escrita na sandbox de escrita (a pasta das fichas, quando a conversa roda numa worktree). */
   writableRoots?: string[];
-  /** O que o bloqueio de segredos precisa saber (ver `codexSecretArgs` em codexArgs.ts). */
-  secrets?: Partial<Omit<CodexSecretContext, 'cwd'>>;
+  /** A ficha do próprio funcionário (os arquivos que existem): só leitura na sandbox de escrita. */
+  readOnlyPaths?: string[];
+  /** O que o bloqueio de segredos precisa saber; `mycoHome` é obrigatório (ver `CodexSecrets` em codexArgs.ts). */
+  secrets: CodexSecrets;
+  /**
+   * Confere o `codex` instalado antes de cada execução (versão mínima e `network_proxy`, ver codexEnv.ts): com erro, a mensagem vira o erro
+   * da conversa e nada roda; sem `network_proxy`, roda sem rede e avisa. Sem esta função a rede fica desligada (falha fechada).
+   */
+  env?: () => Promise<CodexEnvStatus>;
+  /** Sistema (os testes trocam). */
+  platform?: NodeJS.Platform;
   /** thread_id de uma conversa que já existe: a primeira mensagem já retoma. */
   threadId?: string | null;
   /** Onde guardar o thread_id para continuar depois que o processo fechar (ou o servidor reiniciar). */
@@ -95,8 +105,10 @@ export class CodexProcess extends ChatProcess {
   private readonly queue: Job[] = [];
   private thread: string | null;
   private closing = false;
-  /** O plano B está escolhendo o modelo: a fila espera (não abre outra execução no meio). */
+  /** O plano B está escolhendo o modelo, ou o Codex está sendo conferido: a fila espera (não abre outra execução no meio). */
   private holding = false;
+  /** O aviso de que a rede local ficou desligada (falta o `network_proxy`) já foi dado: uma vez por conversa. */
+  private networkWarned = false;
 
   constructor(private readonly codex: CodexProcessOptions) {
     super({ ...codex, args: [] });
@@ -180,7 +192,7 @@ export class CodexProcess extends ChatProcess {
 
   override setPermissionMode(mode: string, label: string) {
     this.setState({ permissionMode: mode });
-    const bypass = mode === 'bypassPermissions' ? ' No Codex, mesmo assim, a escrita fica na pasta de trabalho e sem rede.' : '';
+    const bypass = mode === 'bypassPermissions' ? ' No Codex, mesmo assim, a escrita fica na pasta de trabalho e a rede só alcança a própria máquina.' : '';
     const later = this.state.busy ? ' Vale a partir da próxima mensagem.' : '';
     this.addNotice(`${label}.${bypass}${later}`.replace(/\.\.$/, '.'));
   }
@@ -232,25 +244,66 @@ export class CodexProcess extends ChatProcess {
     this.launch(job);
   }
 
-  /** `override`: o plano B manda o modelo desta mensagem (null = sem `-m`); a ficha e o estado da conversa não mudam. */
+  /**
+   * Abre a execução de uma mensagem. Com `env`, confere antes o `codex` instalado (a fila espera enquanto isso); sem ele, a rede fica
+   * desligada. `override`: o plano B manda o modelo desta mensagem (null = sem `-m`); a ficha e o estado da conversa não mudam.
+   */
   private launch(job: Job, override?: { model: string | null }) {
+    const check = this.codex.env;
+    if (!check) {
+      this.exec(job, override, { error: null, version: null, networkProxy: false, notice: null });
+      return;
+    }
+    this.holding = true;
+    void check()
+      .catch((err): CodexEnvStatus => ({ error: `não consegui conferir o Codex: ${err instanceof Error ? err.message : String(err)}`, version: null, networkProxy: false, notice: null }))
+      .then((status) => {
+        this.holding = false;
+        if (this.closing || !this.state.running) return;
+        this.exec(job, override, status);
+      });
+  }
+
+  private exec(job: Job, override: { model: string | null } | undefined, status: CodexEnvStatus) {
     const o = this.codex;
-    const model = override ? override.model : this.state.model;
-    const args = buildCodexArgs({
-      cwd: o.cwd,
-      model,
-      effort: this.state.effort,
-      sandbox: sandboxFor(this.state.permissionMode),
-      instructions: o.instructions,
-      writableRoots: o.writableRoots,
-      secrets: o.secrets,
-      threadId: this.thread,
-    });
+    // Alias ou id do Claude (opus, sonnet…) não vale para o Codex: vai sem `-m` (o padrão dele), e o plano B nem entra (não há modelo pedido).
+    const model = override ? override.model : codexModelOrNull(this.state.model);
     const run = newRun();
     run.job = job;
     run.model = model;
     run.fresh = this.thread === null;
     this.run = run;
+    // Falha fechada: Codex que não serve, segredo que não dá para proteger ou qualquer erro ao montar a linha de comando acaba o turno com
+    // a mensagem (a conversa fica livre), em vez de rodar sem proteção ou travar em "trabalhando".
+    if (status.error) {
+      this.closeRun(run, null, status.error);
+      return;
+    }
+    if (!status.networkProxy && status.notice && !this.networkWarned) {
+      this.networkWarned = true;
+      this.addNotice(status.notice, 'warn');
+    }
+    let args: string[];
+    try {
+      args = buildCodexArgs({
+        cwd: o.cwd,
+        model,
+        effort: this.state.effort,
+        sandbox: sandboxFor(this.state.permissionMode),
+        instructions: o.instructions,
+        writableRoots: o.writableRoots,
+        readOnlyPaths: o.readOnlyPaths,
+        secrets: o.secrets,
+        network: status.networkProxy ? 'loopback' : 'off',
+        threadId: this.thread,
+        platform: o.platform,
+      });
+    } catch (err) {
+      this.closeRun(run, null, err instanceof CodexBlockedError ? err.message : `não foi possível preparar o codex: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    // Ficha grande demais para a linha de comando: vai no começo do prompt da primeira mensagem (as seguintes continuam a mesma thread).
+    const prompt = o.instructions && !instructionsInArgv(o.instructions, o.platform) && this.thread === null ? promptWithInstructions(o.instructions, job.prompt) : job.prompt;
     // O mesmo ambiente do Claude (MYCO_SESSION_ID para o despertador e as tarefas por curl), sem as variáveis CLAUDE*/ANTHROPIC*.
     const env = { ...cleanEnv(), MYCO_SESSION_ID: o.sessionId };
     // No Unix o processo vira líder do próprio grupo: encerrar o grupo leva também os comandos que ele abriu.
@@ -267,7 +320,7 @@ export class CodexProcess extends ChatProcess {
     }
     this.current = child;
     child.stdin.on('error', () => {}); // o codex pode sair antes de ler o prompt inteiro
-    child.stdin.end(job.prompt);
+    child.stdin.end(prompt);
     child.stdout.on('data', (chunk: Buffer) => this.feed(run, chunk.toString('utf8')));
     child.stderr.on('data', (chunk: Buffer) => {
       run.stderr = (run.stderr + chunk.toString('utf8')).slice(-2_000);

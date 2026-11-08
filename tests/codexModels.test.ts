@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { CodexRun, CodexRunner } from '../server/adapters/codex';
-import { CodexModels, codexFamily, MODELS_TTL, parseCodexModels, pickCodexSubstitute } from '../server/codexModels';
+import { CODEX_OFF_REASON, CodexModels, codexFamily, MODELS_TTL, parseCodexModels, pickCodexSubstitute } from '../server/codexModels';
 
 // GET /api/codex/models: catálogo do `codex debug models` (só visibility "list"), com cache e sem erro 500 quando o Codex falta.
 
@@ -72,6 +72,33 @@ describe('catálogo de modelos do Codex', () => {
     expect(await boom.list()).toEqual({ models: [], reason: 'não consegui verificar o Codex: quebrou' });
   });
 
+  it('com o Codex desligado nas configurações (codexReview): lista vazia com o motivo, sem conferir o login nem abrir o `debug models`; ligado, volta ao normal', async () => {
+    let on = false;
+    const calls: string[][] = [];
+    let checks = 0;
+    const models = new CodexModels(
+      async () => (checks++, { available: true, reason: null }),
+      async (args) => (calls.push(args), { code: 0, stdout: CATALOG, stderr: '' }),
+      Date.now,
+      async () => on,
+    );
+    expect(await models.list()).toEqual({ models: [], reason: CODEX_OFF_REASON });
+    expect(await models.list(true)).toEqual({ models: [], reason: CODEX_OFF_REASON });
+    expect(CODEX_OFF_REASON).toContain('desligado nas configurações');
+    expect(checks).toBe(0);
+    expect(calls).toEqual([]);
+    on = true;
+    expect((await models.list()).models).toHaveLength(3);
+    // Desligou depois: o que estava guardado não vaza.
+    on = false;
+    expect(await models.list()).toEqual({ models: [], reason: CODEX_OFF_REASON });
+    // Não conseguir ler o ajuste conta como desligado (falha fechada).
+    const quebrou = new CodexModels(async () => ({ available: true, reason: null }), undefined, undefined, async () => {
+      throw new Error('config ilegível');
+    });
+    expect(await quebrou.list()).toEqual({ models: [], reason: CODEX_OFF_REASON });
+  });
+
   it('o `debug models` falhando (não instalado, erro, tempo, JSON estranho) vira lista vazia com o motivo, e a falha não fica guardada', async () => {
     const enoent = Object.assign(new Error('x'), { code: 'ENOENT' }) as NodeJS.ErrnoException;
     expect((await fake({ code: null, spawnError: enoent }).models.list()).reason).toMatch(/não está instalado/);
@@ -106,9 +133,10 @@ describe('catálogo de modelos do Codex', () => {
     expect(pickCodexSubstitute('codex-mini', [{ slug: 'gpt-6-mini' }, { slug: 'gpt-6-sol' }])).toBe('gpt-6-mini');
   });
 
-  it('a rota GET /api/codex/models está ligada ao catálogo, fora do ajuste da segunda opinião', async () => {
+  it('a rota GET /api/codex/models está ligada ao catálogo, que só lista com o Codex ligado nas configurações (codexReview)', async () => {
     const index = await fs.readFile(path.join(process.cwd(), 'server', 'index.ts'), 'utf8');
     expect(index).toMatch(/\['GET', \/\^\\\/api\\\/codex\\\/models\$\/, \(\{ url \}\) => codexModels\.list\(url\.searchParams\.has\('fresh'\)\)\]/);
-    expect(index).toContain('new CodexModels((fresh) => codex.check(fresh))');
+    // Só com o Codex ligado nas configurações (`codexReview`): o servidor passa o ajuste ao catálogo.
+    expect(index).toContain('new CodexModels((fresh) => codex.check(fresh), undefined, undefined, async () => (await readConfig()).codexReview)');
   });
 });

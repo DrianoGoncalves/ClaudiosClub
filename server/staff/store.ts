@@ -278,7 +278,7 @@ export async function removePortrait(projectPath: string, p: StaffProfile): Prom
 
 // ---- histórico de versões: <id>.history/<data>.json ----
 
-const historyDir = (projectPath: string, id: string) => path.join(staffDir(projectPath), `${id}.history`);
+export const historyDir = (projectPath: string, id: string) => path.join(staffDir(projectPath), `${id}.history`);
 const SAFE_VERSION = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/;
 
 export async function archiveVersion(projectPath: string, p: StaffProfile): Promise<string> {

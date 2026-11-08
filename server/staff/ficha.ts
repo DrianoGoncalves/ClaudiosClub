@@ -74,10 +74,10 @@ export const CODEX_AUTONOMY_LABEL: Record<Autonomy, string> = {
   manual:
     'Sandbox somente leitura: você lê arquivos e roda comandos que não gravam, mas não edita nada nem pede aprovação. Quando uma mudança for necessária, descreva-a (arquivo e trecho) e peça ao usuário para liberar mais autonomia.',
   acceptEdits:
-    'Edita arquivos sozinho dentro da pasta de trabalho e roda comandos na sandbox (sem rede). O que a sandbox bloquear, não tente contornar: conte ao usuário.',
-  auto: 'Autônomo dentro da sandbox: edita arquivos na pasta de trabalho e roda comandos sem pedir (sem rede). O que a sandbox bloquear, não contorne: avise o usuário antes de qualquer coisa que afete produção.',
+    'Edita arquivos sozinho dentro da pasta de trabalho e roda comandos na sandbox (sem internet: só a própria máquina responde, em 127.0.0.1 e localhost, onde fica a API do Claudio’s Club). O que a sandbox bloquear, não tente contornar: conte ao usuário.',
+  auto: 'Autônomo dentro da sandbox: edita arquivos na pasta de trabalho e roda comandos sem pedir (sem internet: só a própria máquina responde, em 127.0.0.1 e localhost). O que a sandbox bloquear, não contorne: avise o usuário antes de qualquer coisa que afete produção.',
   bypassPermissions:
-    'Sem travas do Claudio’s Club, mas no Codex você segue na sandbox (escrita só na pasta de trabalho, sem rede). Antes de algo irreversível ou que afete produção, avise e confirme; e nunca contorne os bloqueios de segredos.',
+    'Sem travas do Claudio’s Club, mas no Codex você segue na sandbox (escrita só na pasta de trabalho; sem internet, só a própria máquina responde, em 127.0.0.1 e localhost). Antes de algo irreversível ou que afete produção, avise e confirme; e nunca contorne os bloqueios de segredos.',
 };
 
 /** Programas de acesso remoto: quem não tem servidor na ficha não roda nenhum deles. */
@@ -125,7 +125,7 @@ function serversSection(p: StaffProfile, ctx: FichaContext): string {
   if (codexOf(p)) {
     return [
       '## Servidores',
-      'Nesta conversa a sandbox não tem rede: ssh, scp, sftp, rsync e FTP não funcionam, e `.vps` e `~/.ssh` não são para ler. Se a tarefa precisar de um servidor, avise o usuário: ele pode passá-la a um funcionário que rode no Claude.',
+      'Nesta conversa a sandbox não tem internet (só 127.0.0.1 e localhost respondem): ssh, scp, sftp, rsync e FTP não funcionam, e `.vps` e `~/.ssh` não são para ler. Se a tarefa precisar de um servidor, avise o usuário: ele pode passá-la a um funcionário que rode no Claude.',
     ].join('\n');
   }
   if (!p.servers.length) {
@@ -400,6 +400,7 @@ function hiringSection(p: StaffProfile, ctx: FichaContext): string {
     `Para mandar outra mensagem a ele: POST ${api}/chat/send com {"sessionId", "staffId", "text"} (mesmo cabeçalho).`,
     `Quem você contrata é temporário. Quando o trabalho dele terminar, encerre: POST ${api}/staff/<id dele>/done com {"note": "o que ele entregou", "requestedBy": "${p.id}"} (mesmo cabeçalho; só vale para quem você contratou). Ele sai do quadro (nada é apagado); parado há ${TEMP_IDLE_DAYS} dias, sai sozinho. Só o usuário efetiva.`,
     'Você não pode dar a um subfuncionário mais autonomia do que a sua.',
+    codexOf(p) ? 'Quem você contrata roda no Codex como você, dentro da mesma sandbox, e não troca de motor.' : '',
   ]
     .filter(Boolean)
     .join('\n');
