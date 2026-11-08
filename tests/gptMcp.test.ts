@@ -1,0 +1,372 @@
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { Readable, Writable } from 'node:stream';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { ConfigPatch, readConfig, updateConfig } from '../server/config';
+import {
+  buildAskArgs,
+  buildAskPrompt,
+  createGptMcp,
+  gptMcpServerConfig,
+  runGptMcpStdio,
+  spawnCodex,
+  TOOLS,
+  windowsArg,
+  type GptRun,
+  type GptRunner,
+} from '../server/staff/gptMcp';
+
+// O MCP do GPT (`perguntar_gpt`): a montagem do `codex exec` (só leitura, sem shell, segredos negados), o plano B de modelo, o filtro de
+// segredos e o protocolo. O Codex de verdade é trocado por um runner falso; o spawn é testado com um `codex` de mentira no PATH.
+
+let root: string;
+let proj: string; // pasta da sessão
+let main: string; // pasta do projeto (numa worktree é outra)
+let mycoHome: string;
+let home: string;
+let configFile: string;
+
+beforeAll(async () => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-gpt-'));
+  proj = path.join(root, 'wt');
+  main = path.join(root, 'main');
+  mycoHome = path.join(root, 'myco');
+  home = path.join(root, 'home');
+  configFile = path.join(mycoHome, 'config.json');
+  for (const d of [proj, main, path.join(mycoHome, 'secrets'), path.join(home, '.ssh'), path.join(proj, '.vps'), path.join(main, '.vps')]) await fs.mkdir(d, { recursive: true });
+});
+afterAll(async () => {
+  await fs.rm(root, { recursive: true, force: true });
+});
+beforeEach(async () => {
+  await fs.rm(configFile, { force: true });
+  await updateConfig({ codexReview: true }, configFile);
+});
+
+const MODELS = JSON.stringify({
+  models: [
+    { slug: 'gpt-6-sol', display_name: 'GPT-6 Sol', visibility: 'list', supported_reasoning_levels: [{ effort: 'high' }], default_reasoning_level: 'high' },
+    { slug: 'gpt-5.6-sol', display_name: 'GPT-5.6 Sol', visibility: 'list', supported_reasoning_levels: [{ effort: 'high' }], default_reasoning_level: 'high' },
+    { slug: 'gpt-6-luna', display_name: 'GPT-6 Luna', visibility: 'list', supported_reasoning_levels: [{ effort: 'high' }], default_reasoning_level: 'high' },
+  ],
+});
+const GONE = `warning: Model metadata for gpt-6.1-sol not found\nERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.","code":"model_not_found"}}`;
+
+interface Call {
+  args: string[];
+  input: string;
+  cwd: string;
+}
+/** Runner falso: cada `exec` é respondido por `exec(args, n)`; `debug models` devolve o catálogo. */
+function fake(exec: (args: string[], n: number) => Partial<GptRun> & { answer?: string }, catalog: GptRun = { code: 0, stdout: MODELS, stderr: '' }) {
+  const calls: Call[] = [];
+  let n = 0;
+  const run: GptRunner = async (args, input, o) => {
+    calls.push({ args, input, cwd: o.cwd });
+    if (args[0] === 'debug') return catalog;
+    const r = exec(args, n++);
+    if (r.answer !== undefined) await fs.writeFile(args[args.indexOf('-o') + 1]!, r.answer);
+    return { code: 0, stdout: '', stderr: '', ...r };
+  };
+  return { run, calls, execs: () => calls.filter((c) => c.args[0] === 'exec') };
+}
+const server = (run: GptRunner, over = {}) => createGptMcp({ root: proj, projectPath: main, home, mycoHome, run, tmpRoot: root, ...over });
+const ask = async (s: ReturnType<typeof createGptMcp>, args: Record<string, unknown> = { pergunta: 'JSON ou SQLite?' }) => {
+  const r = await s.callTool('perguntar_gpt', args);
+  return { text: r.content[0]!.text, isError: !!r.isError };
+};
+
+describe('perguntar_gpt: argumentos do codex exec', () => {
+  let opts: Parameters<typeof buildAskArgs>[0];
+  let args: string[];
+  beforeAll(() => {
+    opts = { cwd: proj, projectPath: main, home, mycoHome, out: '/tmp/x/resposta.md', effort: 'high', model: null };
+    args = buildAskArgs(opts);
+  });
+  const has = (...seq: string[]) => args.join('\u0000').includes(seq.join('\u0000'));
+
+  it('só leitura e sem rede, pelo codexSafetyArgs; nunca -s, --dangerously nem rede liberada', () => {
+    expect(args[0]).toBe('exec');
+    expect(args).toEqual(expect.arrayContaining(['--ignore-user-config', '--ephemeral', '--skip-git-repo-check']));
+    expect(has('-c', 'features.apps=false')).toBe(true);
+    expect(has('-c', 'approval_policy="never"')).toBe(true);
+    expect(has('-c', 'default_permissions="mycodeny"')).toBe(true);
+    expect(has('-c', 'permissions.mycodeny.extends=":read-only"')).toBe(true);
+    expect(has('-c', 'permissions.mycodeny.network={enabled=false}')).toBe(true);
+    expect(args).not.toContain('network_proxy');
+    expect(args.some((a) => /^(-s|--sandbox|--full-auto|--dangerously\S*|--add-dir)$/.test(a) || /workspace|danger-full-access|:workspace/.test(a))).toBe(false);
+  });
+
+  it('nega os segredos: ~/.ssh, o cofre do Claudio’s Club e o .vps da sessão e o do projeto (worktree)', () => {
+    const fs = args.find((a) => a.startsWith('permissions.mycodeny.filesystem='))!;
+    for (const denied of ['~/.ssh', path.join(mycoHome, 'secrets'), path.join(proj, '.vps'), path.join(main, '.vps')]) expect(fs).toContain(`${JSON.stringify(denied)}="deny"`);
+  });
+
+  it('pasta da sessão em -C, resposta em -o, prompt pelo stdin (-), esforço high por padrão; o modelo só vai com -m quando há', () => {
+    expect(has('-C', proj, '-o', opts.out, '-')).toBe(true);
+    expect(args.at(-1)).toBe('-');
+    expect(has('-c', 'model_reasoning_effort="high"')).toBe(true);
+    expect(args).not.toContain('-m');
+    const withModel = buildAskArgs({ ...opts, model: 'gpt-6-sol', effort: 'max' });
+    expect(withModel.join(' ')).toContain('-m gpt-6-sol');
+    expect(withModel).toContain('model_reasoning_effort="max"');
+  });
+
+  it('o texto da pergunta nunca entra nos argumentos', () => {
+    const q = '$(rm -rf ~) ; `x` "aspas" \'simples\' PROMPT_GPT';
+    expect(buildAskArgs(opts).join(' ')).not.toContain('rm -rf');
+    expect(buildAskPrompt({ pergunta: q, contexto: 'ctx' })).toContain(q);
+  });
+});
+
+describe('perguntar_gpt: a ferramenta', () => {
+  it('manda o prompt pelo stdin, roda na pasta da sessão e devolve "Resposta do GPT (modelo)"; limpa o temporário', async () => {
+    const f = fake(() => ({ answer: '1) JSON\n2) simples\n3) risco: gravação interrompida', stderr: 'OpenAI Codex v0.156.1\nmodel: gpt-6-astra\n' }));
+    const r = await ask(server(f.run), { pergunta: 'JSON ou SQLite?', contexto: 'um usuário, 50 chaves' });
+    expect(r.isError).toBe(false);
+    expect(r.text).toMatch(/^Resposta do GPT \(gpt-6-astra\):\n\n1\) JSON/);
+    const [call] = f.execs();
+    expect(call!.cwd).toBe(proj);
+    expect(call!.input).toContain('JSON ou SQLite?');
+    expect(call!.input).toContain('um usuário, 50 chaves');
+    expect(call!.args.join(' ')).not.toContain('JSON ou SQLite?');
+    const out = call!.args[call!.args.indexOf('-o') + 1]!;
+    await expect(fs.stat(path.dirname(out))).rejects.toThrow();
+    expect((await fs.readdir(root)).filter((n) => n.startsWith('myco-gpt-'))).toEqual([]);
+  });
+
+  it('vazio = padrão do Codex (sem -m); o modelo da config vai com -m e vale já, sem reiniciar', async () => {
+    const f = fake(() => ({ answer: 'ok' }));
+    const s = server(f.run);
+    expect((await ask(s)).text).toContain('Resposta do GPT (padrão do Codex)');
+    expect(f.execs()[0]!.args).not.toContain('-m');
+    await updateConfig({ codexModel: 'gpt-6-sol' }, configFile);
+    expect((await ask(s)).text).toContain('Resposta do GPT (gpt-6-sol)');
+    expect(f.execs()[1]!.args.join(' ')).toContain('-m gpt-6-sol');
+  });
+
+  it('esforço: padrão high, o pedido vale, e um inválido é recusado antes de abrir o Codex', async () => {
+    const f = fake(() => ({ answer: 'ok' }));
+    const s = server(f.run);
+    await ask(s);
+    await ask(s, { pergunta: 'x', esforco: 'xhigh' });
+    await ask(s, { pergunta: 'x', esforco: '' });
+    expect(f.execs().map((c) => c.args.find((a) => a.startsWith('model_reasoning_effort=')))).toEqual(['model_reasoning_effort="high"', 'model_reasoning_effort="xhigh"', 'model_reasoning_effort="high"']);
+    const bad = await ask(s, { pergunta: 'x', esforco: 'turbo' });
+    expect(bad).toMatchObject({ isError: true });
+    expect(bad.text).toContain('argumentos inválidos');
+    expect(f.execs()).toHaveLength(3);
+    expect((await ask(s, {})).text).toContain('informe a pergunta');
+  });
+
+  it('plano B: a conta recusa o modelo da config, usa o mais parecido do catálogo e avisa', async () => {
+    await updateConfig({ codexModel: 'gpt-6.1-sol' }, configFile);
+    const f = fake((_a, n) => (n === 0 ? { code: 1, stderr: GONE } : { answer: 'segunda opinião' }));
+    const r = await ask(server(f.run));
+    expect(r.isError).toBe(false);
+    expect(f.execs().map((c) => c.args[c.args.indexOf('-m') + 1])).toEqual(['gpt-6.1-sol', 'gpt-6-sol']);
+    expect(r.text).toContain('Resposta do GPT (gpt-6-sol):');
+    expect(r.text).toContain('o modelo gpt-6.1-sol não está disponível na sua conta do Codex; usei gpt-6-sol nesta pergunta');
+  });
+
+  it('plano B sem parecido (ou sem catálogo): roda sem -m, no padrão do Codex, e avisa', async () => {
+    await updateConfig({ codexModel: 'gpt-9-zeta' }, configFile);
+    const f = fake((_a, n) => (n === 0 ? { code: 1, stderr: GONE } : { answer: 'ok', stderr: 'model: gpt-6-astra\n' }), { code: 1, stdout: '', stderr: 'sem rede' });
+    const r = await ask(server(f.run));
+    expect(f.execs()[1]!.args).not.toContain('-m');
+    expect(r.text).toContain('Resposta do GPT (gpt-6-astra):');
+    expect(r.text).toContain('usei o padrão do Codex nesta pergunta');
+  });
+
+  it('o plano B é uma vez só: se a segunda também falha, devolve o erro', async () => {
+    await updateConfig({ codexModel: 'gpt-6.1-sol' }, configFile);
+    const f = fake(() => ({ code: 1, stderr: GONE }));
+    const r = await ask(server(f.run));
+    expect(r.isError).toBe(true);
+    expect(f.execs()).toHaveLength(2);
+    expect(r.text).toContain('o Codex falhou');
+  });
+
+  it('outra falha não aciona o plano B; mostra a última linha do erro', async () => {
+    await updateConfig({ codexModel: 'gpt-6-sol' }, configFile);
+    const f = fake(() => ({ code: 1, stderr: 'linha 1\nERROR: rate limit reached' }));
+    const r = await ask(server(f.run));
+    expect(f.execs()).toHaveLength(1);
+    expect(r).toMatchObject({ isError: true });
+    expect(r.text).toContain('rate limit reached');
+  });
+
+  it('Codex desligado nas configurações: nem abre o processo (a flag é relida a cada chamada)', async () => {
+    const f = fake(() => ({ answer: 'ok' }));
+    const s = server(f.run);
+    await updateConfig({ codexReview: false }, configFile);
+    const r = await ask(s);
+    expect(r).toMatchObject({ isError: true });
+    expect(r.text).toContain('desligado nas configurações');
+    expect(f.calls).toHaveLength(0);
+  });
+
+  it('segredo na pergunta não vai ao GPT; segredo na resposta não volta para a sessão', async () => {
+    const f = fake(() => ({ answer: 'use DB_PASSWORD=Sup3rSecreta123 no .env' }));
+    const s = server(f.run);
+    const sent = await ask(s, { pergunta: 'minha chave é sk-ant-api03-Zx9Qw7Lm2Kp4Rt8Vb1Nc5Hd3Jf6', contexto: '' });
+    expect(sent).toMatchObject({ isError: true });
+    expect(sent.text).toContain('não mandei ao GPT');
+    expect(f.calls).toHaveLength(0);
+    const back = await ask(s);
+    expect(back.isError).toBe(true);
+    expect(back.text).toContain('foi retida');
+    expect(back.text).not.toContain('Sup3rSecreta123');
+    expect((await fs.readdir(root)).filter((n) => n.startsWith('myco-gpt-'))).toEqual([]);
+  });
+
+  it('sem o codex instalado, sem resposta no prazo e resposta enorme', async () => {
+    const enoent = Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }) as NodeJS.ErrnoException;
+    expect((await ask(server(fake(() => ({ code: null, spawnError: enoent })).run))).text).toContain('não está instalado');
+    const late = await ask(server(fake(() => ({ code: null, timedOut: true })).run, { timeoutMs: 60_000 }));
+    expect(late).toMatchObject({ isError: true });
+    expect(late.text).toContain('não respondeu em 1 minutos');
+    const big = await ask(server(fake(() => ({ answer: 'a'.repeat(30_000) })).run));
+    expect(big.text.length).toBeLessThan(21_000);
+    expect(big.text).toContain('resposta cortada');
+  });
+});
+
+describe('perguntar_gpt: protocolo MCP', () => {
+  it('initialize, tools/list e tools/call; ferramenta ou método desconhecido; notificação sem resposta', async () => {
+    const f = fake(() => ({ answer: 'opinião' }));
+    const s = server(f.run);
+    const init = (await s.handle({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } })) as { result: { protocolVersion: string; serverInfo: { name: string } } };
+    expect(init.result).toMatchObject({ protocolVersion: '2025-06-18', serverInfo: { name: 'myco-gpt' } });
+    expect(await s.handle({ jsonrpc: '2.0', method: 'notifications/initialized' })).toBeNull();
+    const list = (await s.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' })) as { result: { tools: typeof TOOLS } };
+    expect(list.result.tools.map((t) => t.name)).toEqual(['perguntar_gpt']);
+    expect(list.result.tools[0]!.inputSchema).toMatchObject({ required: ['pergunta'], properties: { pergunta: {}, contexto: {}, esforco: {} } });
+    const call = (await s.handle({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'perguntar_gpt', arguments: { pergunta: 'q' } } })) as { result: { content: Array<{ text: string }> } };
+    expect(call.result.content[0]!.text).toContain('Resposta do GPT');
+    expect(await s.handle({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'outra' } })).toMatchObject({ error: { code: -32602 } });
+    expect(await s.handle({ jsonrpc: '2.0', id: 5, method: 'resources/list' })).toMatchObject({ error: { code: -32601 } });
+    expect(await s.handle({ jsonrpc: '2.0', id: 6, method: 'ping' })).toMatchObject({ result: {} });
+  });
+
+  it('pelo stdio: uma mensagem JSON por linha', async () => {
+    await updateConfig({ codexReview: false }, configFile); // sem Codex: a chamada volta o erro, sem abrir nada
+    const lines: string[] = [];
+    const out = new Writable({ write: (c, _e, cb) => (lines.push(...c.toString().split('\n').filter(Boolean)), cb()) });
+    const input = Readable.from([
+      '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n',
+      'isto não é json\n',
+      '{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n',
+    ]);
+    await runGptMcpStdio(['--project', main, '--root', proj, '--home', home, '--myco-home', mycoHome], input, out);
+    const msgs = lines.map((l) => JSON.parse(l) as { id: number | null; result?: unknown; error?: { code: number } });
+    expect(msgs.find((m) => m.id === 1)?.result).toBeTruthy();
+    expect(msgs.find((m) => m.id === null)?.error?.code).toBe(-32700);
+    expect(msgs.find((m) => m.id === 2)?.result).toMatchObject({ tools: [{ name: 'perguntar_gpt' }] });
+    await expect(runGptMcpStdio(['--project', 'relativo'], Readable.from([]), out)).rejects.toThrow(/uso:/);
+  });
+
+  it('como a sessão sobe o servidor: só caminhos, nenhum segredo', () => {
+    const c = gptMcpServerConfig({ projectPath: main, root: proj, home, mycoHome });
+    expect(c.type).toBe('stdio');
+    expect(c.args).toEqual(expect.arrayContaining(['--project', main, '--root', proj, '--home', home, '--myco-home', mycoHome]));
+    expect(c.args.some((a) => /gpt-mcp\.(ts|mjs)$/.test(a))).toBe(true);
+  });
+});
+
+describe('spawnCodex', () => {
+  it('windowsArg: aspas e espaços entre aspas, aspas internas escapadas', () => {
+    expect(windowsArg('exec')).toBe('exec');
+    expect(windowsArg('a b')).toBe('"a b"');
+    expect(windowsArg('permissions.x.filesystem={":project_roots"={".vps"="deny"}}')).toBe('"permissions.x.filesystem={\\":project_roots\\"={\\".vps\\"=\\"deny\\"}}"');
+  });
+
+  // Um `codex` de mentira no PATH (script de shell): só no Unix.
+  const unix = process.platform !== 'win32';
+  let bin: string;
+  const fakeCodex = async (script: string) => {
+    bin = await fs.mkdtemp(path.join(root, 'bin-'));
+    await fs.writeFile(path.join(bin, 'codex'), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+    return { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+  };
+  const withEnv = async <T>(env: NodeJS.ProcessEnv, fn: () => Promise<T>) => {
+    const old = { PATH: process.env.PATH, MYCO_X: process.env.MYCO_X, CLAUDE_X: process.env.CLAUDE_X, ANTHROPIC_X: process.env.ANTHROPIC_X, KEEP_X: process.env.KEEP_X };
+    Object.assign(process.env, env, { MYCO_X: '1', CLAUDE_X: '1', ANTHROPIC_X: '1', KEEP_X: 'sim' });
+    try {
+      return await fn();
+    } finally {
+      for (const [k, v] of Object.entries(old)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  };
+
+  it.runIf(unix)('abre sem shell: argumentos intactos (nada é executado), prompt pelo stdin, pasta certa e ambiente sem MYCO_/CLAUDE_/ANTHROPIC_', async () => {
+    const env = await fakeCodex('printf "%s\\n" "$@" > "$OUTDIR/args.txt"; cat > "$OUTDIR/stdin.txt"; echo "$PWD" > "$OUTDIR/pwd.txt"; env > "$OUTDIR/env.txt"; echo ok');
+    const outdir = await fs.mkdtemp(path.join(root, 'out-'));
+    const marker = path.join(outdir, 'executou');
+    const nasty = ['$(touch ' + marker + ')', '; touch ' + marker, '`touch ' + marker + '`', 'com "aspas" e \'simples\'', 'a b'];
+    const r = await withEnv({ ...env, OUTDIR: outdir }, () => spawnCodex(nasty, 'prompt $(touch ' + marker + ')\nsegunda linha', { cwd: proj, timeoutMs: 20_000 }));
+    expect(r).toMatchObject({ code: 0, stdout: 'ok\n' });
+    expect((await fs.readFile(path.join(outdir, 'args.txt'), 'utf8')).trimEnd().split('\n')).toEqual(nasty);
+    expect(await fs.readFile(path.join(outdir, 'stdin.txt'), 'utf8')).toBe('prompt $(touch ' + marker + ')\nsegunda linha');
+    expect((await fs.readFile(path.join(outdir, 'pwd.txt'), 'utf8')).trim()).toBe(await fs.realpath(proj));
+    const seen = await fs.readFile(path.join(outdir, 'env.txt'), 'utf8');
+    expect(seen).toContain('KEEP_X=sim');
+    expect(seen).not.toMatch(/^(MYCO_X|CLAUDE_X|ANTHROPIC_X)=/m);
+    await expect(fs.stat(marker)).rejects.toThrow();
+  });
+
+  it.runIf(unix)('passado o prazo, o processo e o que ele abriu morrem (nada fica rodando)', async () => {
+    const env = await fakeCodex('sleep 60 & echo $! > "$OUTDIR/neto.pid"; echo $$ > "$OUTDIR/pai.pid"; wait');
+    const outdir = await fs.mkdtemp(path.join(root, 'out-'));
+    const t0 = Date.now();
+    const r = await withEnv({ ...env, OUTDIR: outdir }, () => spawnCodex([], '', { cwd: proj, timeoutMs: 700 }));
+    expect(r.timedOut).toBe(true);
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    await new Promise((res) => setTimeout(res, 500));
+    for (const f of ['pai.pid', 'neto.pid']) expect(alive(Number((await fs.readFile(path.join(outdir, f), 'utf8')).trim()))).toBe(false);
+  });
+
+  it('codex fora do PATH: spawnError ENOENT', async () => {
+    const old = process.env.PATH;
+    process.env.PATH = path.join(root, 'vazio');
+    try {
+      const r = await spawnCodex(['--version'], '', { cwd: proj, timeoutMs: 5_000 });
+      if (process.platform === 'win32') expect(r.code).not.toBe(0);
+      else expect(r.spawnError?.code).toBe('ENOENT');
+    } finally {
+      process.env.PATH = old;
+    }
+  });
+});
+
+describe('config codexModel', () => {
+  it('padrão vazio; grava e lê; o pedido tira os espaços; vazio volta ao padrão', async () => {
+    const file = path.join(root, 'cfg-model.json');
+    expect((await readConfig(file)).codexModel).toBe('');
+    expect((await updateConfig({ codexModel: ' gpt-6-sol ' }, file)).codexModel).toBe('gpt-6-sol');
+    expect((await readConfig(file)).codexModel).toBe('gpt-6-sol');
+    expect((await updateConfig({ codexModel: '' }, file)).codexModel).toBe('');
+    // Sem o campo no pedido, o que está gravado fica.
+    await updateConfig({ codexModel: 'gpt-6-luna' }, file);
+    expect((await updateConfig({ codexReview: true }, file)).codexModel).toBe('gpt-6-luna');
+  });
+
+  it('valor torto: o pedido é recusado; no arquivo, vira o padrão', async () => {
+    expect(ConfigPatch.safeParse({ codexModel: 'gpt 6; rm -rf' }).success).toBe(false);
+    expect(ConfigPatch.safeParse({ codexModel: '-m' }).success).toBe(false);
+    expect(ConfigPatch.safeParse({ codexModel: 'x'.repeat(101) }).success).toBe(false);
+    expect(ConfigPatch.safeParse({ codexModel: 'gpt-6-sol' }).success).toBe(true);
+    const file = path.join(root, 'cfg-bad.json');
+    await fs.writeFile(file, JSON.stringify({ codexModel: 'gpt 6; rm -rf', codexReview: true }));
+    expect(await readConfig(file)).toMatchObject({ codexModel: '', codexReview: true });
+  });
+});

@@ -61,51 +61,6 @@ export const AGENT_PRESETS: AgentPreset[] = [
   },
 ];
 
-/** Nome do agent que leva uma pergunta ao GPT (Codex CLI). */
-export const CONSULTOR_GPT = 'consultor-gpt';
-
-// Fora de AGENT_PRESETS (o "Novo agent" do quadro): só nasce no projeto quando o Codex está ligado
-// nas configurações (`codexReview`) e a ficha tem roteiro. Haiku só repassa: a resposta é do GPT.
-// O Codex roda sempre só leitura, com estas travas (nada de `-s`, que não combina com o perfil):
-// - `--ignore-user-config`: não carrega o ~/.codex/config.toml (o modelo dele pode ser um que a conta
-//   ChatGPT não aceita, e os MCPs e plugins dele rodariam fora da sandbox). Sem `-m`: vale o padrão do Codex.
-// - `features.apps=false`: sem os conectores da conta ChatGPT (GitHub, e-mail, Notion, sites…): o GPT só lê.
-// - perfil `mycodeny`: somente leitura que nega `.vps` (conexões e senhas de servidor) e `~/.ssh`.
-const CONSULTOR_COMMAND = [
-  `out=$(mktemp) && codex exec --ignore-user-config -c features.apps=false -c 'default_permissions="mycodeny"' -c 'permissions.mycodeny.extends=":read-only"' -c 'permissions.mycodeny.filesystem={":project_roots"={".vps"="deny"},"~/.ssh"="deny"}' --ephemeral --skip-git-repo-check -C "$PWD" -c model_reasoning_effort="high" -o "$out" - >/dev/null 2>"$out.err" <<'PROMPT_GPT'`,
-  '<o prompt que você montou>',
-  'PROMPT_GPT',
-  'if [ -s "$out" ]; then cat "$out"; else tail -n 5 "$out.err"; fi; rm -f "$out" "$out.err"',
-].join('\n');
-
-export const CONSULTOR_GPT_PRESET: AgentPreset = {
-  label: 'Consultor GPT (Codex, só leitura)',
-  name: CONSULTOR_GPT,
-  description:
-    'Leva uma pergunta ao GPT (OpenAI, pelo Codex CLI) e devolve a resposta dele: decisão que pesa (arquitetura, escolher entre caminhos, trade-off) ou revisão de algo arriscado. Mande a pergunta com as opções e o contexto. Não altera nada.',
-  model: 'haiku',
-  effort: 'low',
-  tools: 'Bash',
-  prompt: [
-    'Você é o consultor-gpt: leva uma pergunta ao GPT (OpenAI) pelo Codex CLI e devolve a resposta dele. Você não decide nem opina por cima.',
-    '',
-    'Você recebe uma decisão (com as opções e o contexto) ou algo para revisar. O GPT não vê esta conversa: no prompt dele vai tudo o que importa (o objetivo, as opções, o que já se sabe, caminhos de arquivo, restrições). Ele lê o projeto em só leitura, na pasta atual, então basta apontar os arquivos: não cole arquivos inteiros.',
-    '',
-    '1. Confira o Codex com `codex login status`. Se o comando não existir ou não estiver logado, responda em uma linha que o Codex não está instalado ou logado e pare.',
-    '2. Monte o prompt para o GPT: a pergunta e o contexto, e ao fim este pedido: "Responda curto, em português: 1) recomendação, 2) por quê, 3) riscos. Só leia, não altere nada. Não leia nem repita o conteúdo de .env, chaves, tokens ou senhas."',
-    '3. Rode no Bash (timeout de 300000 ms), com o prompt pela entrada padrão, num heredoc com o delimitador entre aspas simples (assim o shell não expande nada do texto):',
-    '```',
-    CONSULTOR_COMMAND,
-    '```',
-    '4. Devolva a resposta do GPT fiel (pode encurtar), dizendo no começo que veio do GPT. Não some a sua opinião.',
-    '',
-    'Regras:',
-    '- Rode o comando exatamente como está: o Codex só pode ler (e não lê `.vps` nem `~/.ssh`). Nunca tire nem troque as opções `--ignore-user-config` e `-c`, nem acrescente `-s`/`--sandbox`, `--dangerously-*`, `--full-auto` ou modelo (`-m`).',
-    '- Outro erro do Codex: diga em uma linha qual foi e pare. Não tente de novo mudando opções.',
-    '- Não chame outros agents e não edite arquivos.',
-  ].join('\n'),
-};
-
 /**
  * Agents que cada roteiro chama pelo nome (os passos estão em server/staff/ficha.ts). O padrão do
  * orquestrador escolhe entre os três conforme a tarefa: quem é contratado sozinho tem todos à mão.
@@ -115,8 +70,3 @@ export const PLAYBOOK_AGENTS: Record<Playbook, string[]> = {
   'scout-then-build': ['pesquisador', 'executor'],
   'review-gate': ['executor', 'revisor'],
 };
-
-/** Os agents do roteiro; com o Codex ligado nas configurações, o `consultor-gpt` também. */
-export function playbookAgentNames(playbook: Playbook, codex?: boolean): string[] {
-  return codex ? [...PLAYBOOK_AGENTS[playbook], CONSULTOR_GPT] : PLAYBOOK_AGENTS[playbook];
-}

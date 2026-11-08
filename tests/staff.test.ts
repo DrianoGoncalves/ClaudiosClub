@@ -91,16 +91,20 @@ describe('ficha', () => {
     expect(solo).not.toContain('## Entrega');
   });
 
-  it('Codex ligado: o roteiro manda pedir a opinião do consultor-gpt e o lista nos agents; desligado, nada disso', () => {
-    const on = renderFicha(profile({ playbook: 'plan-big-execute-small' }), { ...ctx, codex: true });
-    expect(on).toContain('peça também a opinião do `consultor-gpt`');
+  it('Codex ligado: o roteiro manda perguntar ao GPT pela ferramenta do MCP; desligado, nada disso', () => {
+    const roteiro = profile({ playbook: 'plan-big-execute-small' });
+    const on = renderFicha(roteiro, { ...ctx, codex: true });
+    expect(on).toContain('pergunte também ao GPT pela ferramenta `mcp__myco-gpt__perguntar_gpt`');
     expect(on).toContain('Se discordarem, mostre as duas ao usuário em linguagem simples');
-    expect(on).toContain('Agents: pesquisador, executor, revisor, consultor-gpt, Explore.');
-    for (const md of [renderFicha(profile({ playbook: 'plan-big-execute-small' }), ctx), renderFicha(profile({ playbook: 'plan-big-execute-small' }), { ...ctx, codex: false })]) {
-      expect(md).not.toContain('consultor-gpt');
+    // Os agents do roteiro não mudam: o GPT é uma ferramenta, não um agent.
+    expect(on).toContain('Agents: pesquisador, executor, revisor, Explore.');
+    for (const md of [renderFicha(roteiro, ctx), renderFicha(roteiro, { ...ctx, codex: false })]) {
+      expect(md).not.toContain('myco-gpt');
+      expect(md).not.toContain('perguntar_gpt');
     }
-    // Sem roteiro, o consultor não existe para ele: nada na ficha.
-    expect(renderFicha(profile(), { ...ctx, codex: true })).not.toContain('consultor-gpt');
+    // Sem roteiro, ou no motor Codex (que não tem MCPs), a ficha não fala disso.
+    expect(renderFicha(profile(), { ...ctx, codex: true })).not.toContain('perguntar_gpt');
+    expect(renderFicha(profile({ playbook: 'plan-big-execute-small', engine: 'codex' }), { ...ctx, codex: true })).not.toContain('perguntar_gpt');
   });
 
   it('tem missão, autonomia, regras, memória e a seção de contratação', () => {

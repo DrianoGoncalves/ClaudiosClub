@@ -264,10 +264,13 @@ export interface AppConfig {
   /** Mostrar no quadro a sala do escopo do usuário (agents e skills de ~/.claude); desligado por padrão. */
   showUserScope: boolean;
   /**
-   * Segunda opinião do Codex na revisão das tarefas (o diff vai para a OpenAI): desligada até você
-   * ligar; desligada, o Claudio’s Club nem chama o `codex` (ver server/adapters/codex.ts).
+   * Usar o Codex (GPT): a segunda opinião nas tarefas (o diff vai para a OpenAI), a ferramenta `perguntar_gpt` dos funcionários,
+   * os funcionários no motor Codex e os limites de uso do GPT. Desligada até você ligar; desligada, o Claudio’s Club nem chama o
+   * `codex` (ver server/adapters/codex.ts). O nome da chave é de quando só havia a revisão.
    */
   codexReview: boolean;
+  /** Modelo do Codex para o `perguntar_gpt` (slug do catálogo, ex.: `gpt-6-sol`); vazio = o padrão do Codex. */
+  codexModel: string;
   /**
    * Freela (conversa sem ficha) não efetivado e parado há esta quantidade de dias é arquivado sozinho
    * (ver server/freelaSweep.ts). Inteiro de 0 a 90; 0 = nunca. Padrão 3.
@@ -772,6 +775,10 @@ export interface FtpConnection {
 /** Nome do MCP de FTP na sessão do funcionário: as ferramentas aparecem como `mcp__myco-ftp__ftp_*`. */
 export const FTP_MCP_NAME = 'myco-ftp';
 
+/** MCP que leva uma pergunta ao GPT (Codex): a ferramenta aparece como `mcp__myco-gpt__perguntar_gpt`. */
+export const GPT_MCP_NAME = 'myco-gpt';
+export const GPT_TOOL_NAME = 'perguntar_gpt';
+
 /** Item de `POST /api/projects/:id/connections/list`: SSH e FTP juntos, pelo `protocol`. */
 export type AnyConnection = ProjectConnection | FtpConnection;
 
@@ -1095,7 +1102,7 @@ export interface UpdateStatus {
  * package-lock ou o pacote dist/server.mjs refeito); `client`: a tela (client/, shared/, vite.config.ts, o lock);
  * `ftpMcp`: o pacote do MCP de FTP dos funcionários.
  */
-export type PendingReason = 'server' | 'client' | 'ftpMcp';
+export type PendingReason = 'server' | 'client' | 'ftpMcp' | 'gptMcp';
 
 export interface PendingRestart {
   /** Há mudança que só entra reiniciando. */

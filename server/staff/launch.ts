@@ -3,9 +3,10 @@ import type { ServerInfo, StaffProfile } from '../../shared/model';
 import { defaultLocations } from '../adapters/claude/paths';
 import { ROOT } from '../root';
 import { renderFicha, systemPrompt, type FichaContext, type TeamMember } from './ficha';
-import { FTP_MCP_NAME } from '../../shared/model';
+import { FTP_MCP_NAME, GPT_MCP_NAME } from '../../shared/model';
 import { DEFAULT_SECRETS_DIR } from '../secretVault';
 import { ftpMcpServerConfig } from './ftpMcp';
+import { gptMcpServerConfig } from './gptMcp';
 import { buildMcpConfig } from './mcp';
 import { ensurePlaybookAgents } from './playbookAgents';
 import { buildSkillPlugin } from '../skillLibrary';
@@ -37,7 +38,7 @@ export interface LaunchContext {
   team?: TeamMember[];
   /** Agents da conta (padrão ~/.claude/agents); os testes trocam. */
   userAgentsDir?: string;
-  /** Codex ligado nas configurações (`codexReview`): o roteiro ganha o `consultor-gpt`. */
+  /** Codex ligado nas configurações (`codexReview`): o funcionário do Claude ganha o MCP `perguntar_gpt` e o roteiro manda usá-lo. */
   codex?: boolean;
 }
 
@@ -82,13 +83,16 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   // FTP: as conexões da ficha que existem e têm senha (ctx.servers já vem filtrado assim).
   const ftpServers = ftpServersOf(profile, ctx.servers);
   let mcpConfigPath: string | null = null;
-  if (profile.mcps !== null || ftpServers.length) {
+  // O `perguntar_gpt` entra só com o Codex ligado nas configurações e só aqui, no motor Claude (o motor Codex não tem MCPs).
+  const gpt = ctx.codex === true && profile.engine !== 'codex';
+  if (profile.mcps !== null || ftpServers.length || gpt) {
     mcpConfigPath = path.join(dir, 'mcp.json');
     const config = profile.mcps !== null ? await buildMcpConfig(ctx.projectPath, profile.mcps, ctx.claudeConfigFile) : { mcpServers: {} };
     if (ftpServers.length) {
       // Só nomes e caminhos: o MCP tira a senha do cofre sozinho.
       config.mcpServers[FTP_MCP_NAME] = ftpMcpServerConfig({ projectPath: ctx.projectPath, root: cwd, staffId: profile.id, connections: ftpServers, vaultDir: DEFAULT_SECRETS_DIR });
     }
+    if (gpt) config.mcpServers[GPT_MCP_NAME] = gptMcpServerConfig({ projectPath: ctx.projectPath, root: cwd });
     await writeAtomic(mcpConfigPath, JSON.stringify(config, null, 2));
   }
   const settingsFile = path.join(dir, 'settings.json');
@@ -98,7 +102,6 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     cwd,
     userAgentsDir: ctx.userAgentsDir ?? path.join(defaultLocations().home, 'agents'),
     backupDir: path.join(ctx.runDir, 'agent-backups'),
-    codex: ctx.codex,
   });
   if (agents.created.length) {
     console.log(`[staff] ${profile.name}: criado ${agents.created.join(', ')} em ${path.join(ctx.projectPath, '.claude', 'agents')} (roteiro da ficha)`);
@@ -113,7 +116,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   return {
     systemPromptFile,
     mcpConfigPath,
-    // Sem lista de MCPs na ficha (todos), o de FTP só se soma aos do projeto e do usuário.
+    // Sem lista de MCPs na ficha (todos), o de FTP e o do GPT só se somam aos do projeto e do usuário.
     strictMcp: profile.mcps !== null,
     addDirs: away ? [staffDir(ctx.projectPath)] : [],
     settingsFile,

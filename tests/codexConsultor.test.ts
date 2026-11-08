@@ -7,7 +7,8 @@ import type { ToolAdapter } from '../server/adapters/types';
 import { updateConfig } from '../server/config';
 import { StaffService } from '../server/staff/service';
 
-// A config (codexReview) e os agents da conta ficam em pastas temporárias, definidas antes de os módulos carregarem.
+// codexReview até o `perguntar_gpt`: com a flag ligada, o funcionário do Claude abre a conversa com o MCP do GPT no mcp.json e a ficha
+// manda usá-lo; desligada, ou no motor Codex, nada disso. A config e os agents da conta ficam em pastas temporárias.
 const homes = await vi.hoisted(async () => {
   const os = await import('node:os');
   const nodePath = await import('node:path');
@@ -39,37 +40,48 @@ afterAll(async () => {
   await fs.rm(homes, { recursive: true, force: true });
 });
 
-/** Contrata alguém com roteiro, abre a conversa e devolve o que a sessão vê: ficha, prompt de sistema e agents do projeto. */
-async function open(name: string) {
+/** Contrata alguém com roteiro, abre a conversa e devolve o que a sessão vê: mcp.json (se houver), ficha e agents do projeto. */
+async function open(name: string, engine?: 'codex') {
   const s = svc();
-  const { profile } = (await s.hire('proj-id', { name, role: 'Dev', mission: 'Entregar', playbook: 'plan-big-execute-small', launch: false }, true))!;
+  const { profile } = (await s.hire('proj-id', { name, role: 'Dev', mission: 'Entregar', playbook: 'plan-big-execute-small', ...(engine && { engine, model: 'gpt-6-sol' }), launch: false }, true))!;
   const spawn = (await s.chatSpawn('proj-id', null, profile.id))!;
   const ficha = await fs.readFile(path.join(proj, '.myco', 'staff', `${profile.id}.md`), 'utf8');
-  const system = await fs.readFile(path.join(root, 'run', spawn.sessionId, 'system.md'), 'utf8');
+  const mcpFile = path.join(root, 'run', spawn.sessionId, 'mcp.json');
+  const mcp = JSON.parse(await fs.readFile(mcpFile, 'utf8').catch(() => 'null')) as { mcpServers: Record<string, { command: string; args: string[] }> } | null;
   const agents = await fs.readdir(path.join(proj, '.claude', 'agents')).catch(() => [] as string[]);
-  return { ficha, system, agents };
+  return { ficha, mcp, args: spawn.args, agents };
 }
 
-describe('codexReview até o consultor-gpt', () => {
-  it('desligado (padrão): roteiro como sempre, sem consultor-gpt', async () => {
+describe('codexReview até o perguntar_gpt', () => {
+  it('desligado (padrão): sem MCP do GPT, roteiro como sempre', async () => {
     const r = await open('Ana');
-    expect(r.agents.sort()).toEqual(['executor.md', 'pesquisador.md', 'revisor.md']);
-    expect(r.ficha).not.toContain('consultor-gpt');
+    expect(r.mcp).toBeNull();
+    expect(r.args).not.toContain('--mcp-config');
+    expect(r.ficha).not.toContain('perguntar_gpt');
   });
 
-  it('ligado: cria o consultor-gpt no projeto e a ficha manda pedir a opinião dele', async () => {
+  it('ligado: o mcp.json leva o myco-gpt (somando aos MCPs do projeto) e a ficha manda perguntar ao GPT; nada de agent novo', async () => {
     await updateConfig({ codexReview: true });
     const r = await open('Bia');
-    expect(r.agents).toContain('consultor-gpt.md');
-    const agent = await fs.readFile(path.join(proj, '.claude', 'agents', 'consultor-gpt.md'), 'utf8');
-    expect(agent).toMatch(/^---\nname: consultor-gpt\n/);
-    expect(agent).toContain('codex exec');
-    for (const text of [r.ficha, r.system]) {
-      expect(text).toContain('peça também a opinião do `consultor-gpt`');
-      expect(text).toContain('Agents: pesquisador, executor, revisor, consultor-gpt.');
-    }
-    // Desligar de novo: a ficha seguinte volta ao roteiro simples (o arquivo já criado fica, como os outros).
+    const gpt = r.mcp!.mcpServers['myco-gpt']!;
+    expect(gpt.args).toEqual(expect.arrayContaining(['--project', proj, '--root', proj, '--myco-home', path.join(homes, 'myco')]));
+    // Ficha sem lista de MCPs (todos): o do GPT só se soma (sem --strict-mcp-config).
+    expect(r.args).toEqual(expect.arrayContaining(['--mcp-config']));
+    expect(r.args).not.toContain('--strict-mcp-config');
+    expect(r.ficha).toContain('pergunte também ao GPT pela ferramenta `mcp__myco-gpt__perguntar_gpt`');
+    expect(r.agents).not.toContain('consultor-gpt.md');
+  });
+
+  it('ligado, mas no motor Codex: nada de MCP (o Codex não tem) nem linha do roteiro', async () => {
+    const r = await open('Caio', 'codex');
+    expect(r.mcp).toBeNull();
+    expect(r.ficha).not.toContain('perguntar_gpt');
+  });
+
+  it('desligar de novo: a conversa seguinte volta sem o MCP', async () => {
     await updateConfig({ codexReview: false });
-    expect((await open('Caio')).ficha).not.toContain('consultor-gpt');
+    const r = await open('Duda');
+    expect(r.mcp).toBeNull();
+    expect(r.ficha).not.toContain('perguntar_gpt');
   });
 });
