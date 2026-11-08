@@ -1,4 +1,4 @@
-import { PLAYBOOK_AGENTS } from '../../shared/agentPresets';
+import { CONSULTOR_GPT, playbookAgentNames } from '../../shared/agentPresets';
 import { FTP_MCP_NAME, TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
 import { staffSshConfigFile } from './servers';
 
@@ -29,6 +29,8 @@ export interface FichaContext {
   servers?: ServerInfo[];
   /** Quem reporta a este funcionário (a equipe dele). */
   team?: TeamMember[];
+  /** Codex ligado nas configurações (`codexReview`): o roteiro passa a usar o `consultor-gpt`. */
+  codex?: boolean;
 }
 
 export interface TeamMember {
@@ -247,6 +249,7 @@ function playbookSection(p: StaffProfile, ctx?: FichaContext): string {
   return [
     `## Roteiro: ${pb.title}`,
     pb.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'),
+    ctx?.codex ? `Em decisão que pesa (arquitetura, escolher entre caminhos, trade-off) ou antes de dar por pronto algo arriscado, peça também a opinião do \`${CONSULTOR_GPT}\` (o GPT, pelo Codex) e compare com a sua. Se discordarem, mostre as duas ao usuário em linguagem simples.` : '',
     ctx?.team?.length ? 'Antes de chamar um agent (ou de fazer você mesmo): se a tarefa é da área de alguém da sua equipe, ela vai para essa pessoa (veja "Sua equipe").' : '',
     'Ao delegar: chame os agents do roteiro sempre com subagent_type e run_in_background: false; em segundo plano a entrega não volta nesta conversa para você conferir, e o agent morre se a conversa fechar. Evite fork, general-purpose e Explore: rodam no seu modelo (o fork ainda leva esta conversa inteira), e os do roteiro custam bem menos. Peça respostas curtas, nunca arquivos inteiros colados. Quem você chama não chama outros agents: dividir o trabalho é com você. Se um agent do roteiro não existir no projeto, avise o usuário em vez de improvisar.',
   ]
@@ -308,7 +311,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     // Agents e skills são do Claude Code: no Codex a seção some.
     codexOf(p)
       ? ''
-      : `## Agents e skills indicados\nAgents: ${agentList(p)}.\nSkills: ${skillList(p, ctx)}.\nPrefira estes quando a tarefa pedir; os demais do projeto continuam disponíveis.`,
+      : `## Agents e skills indicados\nAgents: ${agentList(p, ctx)}.\nSkills: ${skillList(p, ctx)}.\nPrefira estes quando a tarefa pedir; os demais do projeto continuam disponíveis.`,
     `## Conhecimento (leia antes de começar)\n${list(p.knowledge, codexOf(p) ? 'Nada específico além do AGENTS.md e do CLAUDE.md do projeto, se existirem.' : 'Nada específico além do CLAUDE.md do projeto.')}`,
     `## Regras\n${list(p.rules, codexOf(p) ? 'Siga o AGENTS.md e o CLAUDE.md do projeto, se existirem.' : 'Siga o CLAUDE.md do projeto.')}`,
     p.doneWhen ? `## Definição de pronto\n${p.doneWhen}` : '',
@@ -329,8 +332,8 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
 }
 
 /** Os agents da ficha e os do roteiro dela (que o Claudio’s Club garante no projeto ao abrir a sessão). */
-function agentList(p: StaffProfile): string {
-  const all = [...new Set([...(p.playbook ? PLAYBOOK_AGENTS[p.playbook] : []), ...p.agents])];
+function agentList(p: StaffProfile, ctx: FichaContext): string {
+  const all = [...new Set([...(p.playbook ? playbookAgentNames(p.playbook, ctx.codex) : []), ...p.agents])];
   return all.length ? all.join(', ') : 'nenhum em especial';
 }
 

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { AGENT_PRESETS, PLAYBOOK_AGENTS } from '../../shared/agentPresets';
+import { AGENT_PRESETS, CONSULTOR_GPT_PRESET, playbookAgentNames } from '../../shared/agentPresets';
 import type { StaffProfile } from '../../shared/model';
 import { AgentInput, readAgentSource, saveAgent, type AgentSource } from '../adapters/claude/agentWrite';
 import { pathKey } from '../adapters/claude/paths';
@@ -7,6 +7,7 @@ import { pathKey } from '../adapters/claude/paths';
 // O roteiro da ficha chama agents pelo nome (executor, pesquisador, revisor). Sem eles no projeto,
 // o funcionário não tem para quem delegar. Faltando no projeto e na conta, o Claudio’s Club cria o pronto em
 // `<projeto>/.claude/agents`: aparece no quadro e dá para editar. O que já existe não é tocado.
+// Com o Codex ligado nas configurações (`codex`), o roteiro ganha também o `consultor-gpt`.
 
 /** Formato de cada agent em `--agents` (o arquivo JSON que o claude aceita). */
 export interface InlineAgent {
@@ -29,13 +30,13 @@ export interface PlaybookAgentsResult {
 
 export async function ensurePlaybookAgents(
   profile: Pick<StaffProfile, 'playbook'>,
-  dirs: { projectPath: string; cwd: string; userAgentsDir: string; backupDir: string },
+  dirs: { projectPath: string; cwd: string; userAgentsDir: string; backupDir: string; codex?: boolean },
 ): Promise<PlaybookAgentsResult> {
   const out: PlaybookAgentsResult = { created: [], inline: {} };
   if (!profile.playbook) return out;
   const projectAgents = path.join(dirs.projectPath, '.claude', 'agents');
   const away = pathKey(dirs.cwd) !== pathKey(dirs.projectPath);
-  for (const name of PLAYBOOK_AGENTS[profile.playbook]) {
+  for (const name of playbookAgentNames(profile.playbook, dirs.codex)) {
     if (await readAgentSource(dirs.userAgentsDir, name)) continue; // o da conta vale em todo projeto
     let source = await readAgentSource(projectAgents, name);
     if (!source) {
@@ -49,7 +50,7 @@ export async function ensurePlaybookAgents(
 }
 
 async function createPreset(dir: string, name: string, backupDir: string): Promise<AgentSource | null> {
-  const preset = AGENT_PRESETS.find((p) => p.name === name);
+  const preset = [...AGENT_PRESETS, CONSULTOR_GPT_PRESET].find((p) => p.name === name);
   if (!preset) return null;
   const input = AgentInput.parse({
     name,

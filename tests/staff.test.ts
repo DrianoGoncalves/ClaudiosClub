@@ -91,6 +91,18 @@ describe('ficha', () => {
     expect(solo).not.toContain('## Entrega');
   });
 
+  it('Codex ligado: o roteiro manda pedir a opinião do consultor-gpt e o lista nos agents; desligado, nada disso', () => {
+    const on = renderFicha(profile({ playbook: 'plan-big-execute-small' }), { ...ctx, codex: true });
+    expect(on).toContain('peça também a opinião do `consultor-gpt`');
+    expect(on).toContain('Se discordarem, mostre as duas ao usuário em linguagem simples');
+    expect(on).toContain('Agents: pesquisador, executor, revisor, consultor-gpt, Explore.');
+    for (const md of [renderFicha(profile({ playbook: 'plan-big-execute-small' }), ctx), renderFicha(profile({ playbook: 'plan-big-execute-small' }), { ...ctx, codex: false })]) {
+      expect(md).not.toContain('consultor-gpt');
+    }
+    // Sem roteiro, o consultor não existe para ele: nada na ficha.
+    expect(renderFicha(profile(), { ...ctx, codex: true })).not.toContain('consultor-gpt');
+  });
+
   it('tem missão, autonomia, regras, memória e a seção de contratação', () => {
     const md = renderFicha(profile(), ctx);
     for (const part of ['## Missão', 'Revisar mudanças', '## Primeira tarefa', 'Só lê e planeja', '- Não altere arquivos', '## Memória', 'ana-1a2b.memory.md', 'substitua o que ficou velho', '`[MyCo:ponto-de-corte]`', 'não pode contratar']) {

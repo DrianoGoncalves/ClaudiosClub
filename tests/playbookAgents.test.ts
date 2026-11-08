@@ -61,6 +61,39 @@ describe('agents do roteiro', () => {
   });
 });
 
+describe('consultor-gpt (Codex ligado)', () => {
+  it('só nasce com o Codex ligado; desligado, o roteiro fica como era', async () => {
+    const off = await dirs('codex-off');
+    expect((await ensurePlaybookAgents({ playbook: 'review-gate' }, { ...off, codex: false })).created).toEqual(['executor', 'revisor']);
+    expect(await readAgentSource(path.join(off.projectPath, '.claude', 'agents'), 'consultor-gpt')).toBeNull();
+
+    const on = await dirs('codex-on');
+    const r = await ensurePlaybookAgents({ playbook: 'review-gate' }, { ...on, codex: true });
+    expect(r.created).toEqual(['executor', 'revisor', 'consultor-gpt']);
+    const agent = await readAgentSource(path.join(on.projectPath, '.claude', 'agents'), 'consultor-gpt');
+    expect(agent).toMatchObject({ model: 'haiku', tools: ['Bash'] });
+    // Sempre só leitura, sem forçar modelo nem liberar nada perigoso; o prompt vai por stdin, em heredoc entre aspas simples.
+    const cmd = agent!.prompt.split('\n').find((l) => l.includes('codex exec'))!;
+    expect(cmd).toContain('-s read-only --ephemeral --skip-git-repo-check -C "$PWD" -c model_reasoning_effort="high" -o "$out" -');
+    expect(cmd).toContain("<<'PROMPT_GPT'");
+    expect(cmd).not.toMatch(/ -m |--full-auto|--dangerously|--sandbox|-s (workspace|danger)/);
+    expect(agent!.prompt.match(/codex exec/g)).toHaveLength(1);
+    expect(agent!.prompt).toMatch(/veio do GPT/);
+    // Ligar depois num projeto que já tem o roteiro cria só o que faltava.
+    const later = await ensurePlaybookAgents({ playbook: 'review-gate' }, { ...off, codex: true });
+    expect(later.created).toEqual(['consultor-gpt']);
+  });
+
+  it('sem roteiro não cria nada; numa worktree vai por --agents', async () => {
+    const d = await dirs('codex-wt');
+    expect(await ensurePlaybookAgents({ playbook: null }, { ...d, codex: true })).toEqual({ created: [], inline: {} });
+    const wt = path.join(root, 'codex-wt-away');
+    await fs.mkdir(wt, { recursive: true });
+    const r = await ensurePlaybookAgents({ playbook: 'scout-then-build' }, { ...d, cwd: wt, codex: true });
+    expect(r.inline['consultor-gpt']).toMatchObject({ model: 'haiku', tools: ['Bash'], prompt: expect.stringMatching(/^Você é o consultor-gpt/) });
+  });
+});
+
 describe('hooks do Claudio’s Club', () => {
   const hook = fileURLToPath(new URL('../scripts/hooks/delivery-check.mjs', import.meta.url));
   const run = (stage: string, input: unknown) => execFileSync(process.execPath, [hook, stage], { input: JSON.stringify(input) }).toString();

@@ -113,8 +113,8 @@ export default defineMessages({
     'toolbar.autoContinueKeywords': 'continuar sozinho limite de uso acabou voltar retomar continue conversa assinatura reset 5h 7d',
     'toolbar.codexTitle': 'Segunda opinião do Codex',
     'toolbar.codexDesc':
-      'Na revisão das tarefas, um botão manda o diff para o Codex (OpenAI) revisar. Vai só o diff, sem arquivos de segredo, e gasta a cota do seu ChatGPT. Precisa do Codex CLI instalado e com login (npm i -g @openai/codex e codex login).',
-    'toolbar.codexKeywords': 'codex openai chatgpt gpt revisão revisar segunda opinião diff',
+      'Liga o Codex (OpenAI) como segunda IA, e gasta a cota do seu ChatGPT. Na revisão das tarefas, um botão manda o diff para o Codex revisar (só o diff, sem arquivos de segredo). Nos funcionários com roteiro, o agent consultor-gpt leva as decisões que pesam ao GPT, que lê o projeto em só leitura. Precisa do Codex CLI instalado e com login (npm i -g @openai/codex e codex login).',
+    'toolbar.codexKeywords': 'codex openai chatgpt gpt revisão revisar segunda opinião diff consultor decisão',
     'toolbar.freelaArchiveTitle': 'Arquivar Freela parado há (dias)',
     'toolbar.freelaArchiveDesc':
       'Conversa sem ficha que não for efetivada e ficar parada esse tempo é arquivada sozinha (dá para desarquivar). 0 = nunca.',
@@ -382,8 +382,8 @@ export default defineMessages({
     'toolbar.autoContinueKeywords': 'continue on its own usage limit ran out back resume chat subscription reset 5h 7d',
     'toolbar.codexTitle': 'Codex second opinion',
     'toolbar.codexDesc':
-      'In task review, a button sends the diff to Codex (OpenAI) for review. Only the diff goes, without secret files, and it uses your ChatGPT quota. Requires the Codex CLI installed and signed in (npm i -g @openai/codex and codex login).',
-    'toolbar.codexKeywords': 'codex openai chatgpt gpt review second opinion diff',
+      'Turns on Codex (OpenAI) as a second AI, and uses your ChatGPT quota. In task review, a button sends the diff to Codex for review (only the diff, without secret files). For staff with a playbook, the consultor-gpt agent takes the decisions that matter to GPT, which reads the project read-only. Requires the Codex CLI installed and signed in (npm i -g @openai/codex and codex login).',
+    'toolbar.codexKeywords': 'codex openai chatgpt gpt review second opinion diff consultant decision',
     'toolbar.freelaArchiveTitle': 'Archive idle Freelancer after (days)',
     'toolbar.freelaArchiveDesc':
       'A conversation without a profile that is not hired and stays idle this long is archived on its own (you can unarchive it). 0 = never.',
@@ -648,8 +648,8 @@ export default defineMessages({
     'toolbar.autoContinueKeywords': 'continuar solo límite de uso se acabó volver retomar continue conversación suscripción reinicio 5h 7d',
     'toolbar.codexTitle': 'Segunda opinión de Codex',
     'toolbar.codexDesc':
-      'En la revisión de tareas, un botón envía el diff a Codex (OpenAI) para revisarlo. Solo va el diff, sin archivos de secretos, y gasta la cuota de tu ChatGPT. Necesita el Codex CLI instalado y con sesión (npm i -g @openai/codex y codex login).',
-    'toolbar.codexKeywords': 'codex openai chatgpt gpt revisión revisar segunda opinión diff',
+      'Activa Codex (OpenAI) como segunda IA, y gasta la cuota de tu ChatGPT. En la revisión de tareas, un botón envía el diff a Codex para revisarlo (solo el diff, sin archivos de secretos). En los empleados con guion, el agent consultor-gpt lleva las decisiones que pesan a GPT, que lee el proyecto en solo lectura. Necesita el Codex CLI instalado y con sesión (npm i -g @openai/codex y codex login).',
+    'toolbar.codexKeywords': 'codex openai chatgpt gpt revisión revisar segunda opinión diff consultor decisión',
     'toolbar.freelaArchiveTitle': 'Archivar Freelance inactivo tras (días)',
     'toolbar.freelaArchiveDesc':
       'Una conversación sin ficha que no se contrate y quede inactiva ese tiempo se archiva sola (se puede desarchivar). 0 = nunca.',
