@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Autonomy, ChatAttachment, ChatItem, CodexEffort, SendPriority, UiLevel } from '../../../shared/model';
+import type { Autonomy, ChatAttachment, ChatItem, CodexEffort, Engine, SendPriority, UiLevel } from '../../../shared/model';
 import { alertError, api, isPairingError, type PermissionOpts } from '../api';
 import { ArrowDownIcon, FileDiffIcon, ImageIcon, McpIcon, SendIcon, StopIcon } from '../icons';
 import { t, locale } from '../i18n';
@@ -48,6 +48,8 @@ interface Props {
   /** Modelo e esforço que a conversa usa ao abrir (o da conversa > o da ficha > o último escolhido no chat); vale até o processo informar o dele. */
   fichaModel?: string | null;
   fichaEffort?: CodexEffort | null;
+  /** Quem roda o funcionário (a ficha): no Codex o seletor de modelo e esforço mostra os do Codex. */
+  engine?: Engine;
   /** Topo compacto do funcionário (montado pelo EmployeePanel); o "⋯" fica à direita dele. */
   top?: ReactNode;
   /** Abas do "Mais" (vêm do EmployeePanel): só coisas do funcionário; os ajustes da conversa ficam abaixo da caixa. */
@@ -68,7 +70,7 @@ export interface MoreTab {
 }
 
 /** Conversa com o funcionário dentro do Claudio’s Club, sem terminal. */
-export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, top, moreTabs = [], focus = null, onFocusDone, awaiting = false }: Props) {
+export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, engine = 'claude', top, moreTabs = [], focus = null, onFocusDone, awaiting = false }: Props) {
   const chat = useChat(projectId, sessionId, staffId);
   const todos = useMemo(() => todosFrom(chat.items), [chat.items]);
   useEffect(() => {
@@ -535,6 +537,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
             state={chat.state}
             fichaModel={fichaModel}
             fichaEffort={fichaEffort}
+            engine={engine}
             fichaAutonomy={autonomy}
             disabled={!!blocked}
             onChange={chat.settings}

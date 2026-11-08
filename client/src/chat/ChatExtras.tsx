@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { Autonomy, ChatAttachment, ChatCommand, ChatItem, ChatState, CodexEffort, Effort, UiLevel } from '../../../shared/model';
+import type { Autonomy, ChatAttachment, ChatCommand, ChatItem, ChatState, CodexEffort, Effort, Engine, UiLevel } from '../../../shared/model';
 import { effortLabel } from '../format';
 import { t } from '../i18n';
+import { chatEffortFor, codexAutonomyHelp, effortsOfModel, isClaudeModel, useCodexCatalog } from '../staff/codexEngine';
 
 // Pedaços da conversa que vieram do app do Claude: a lista de tarefas do funcionário, os ajustes
 // da conversa (modelo, esforço, autonomia), o menu de "/" e "@" e os anexos de arquivo.
@@ -105,6 +106,7 @@ const aliasOf = (model: string | null | undefined) => MODELS.find((m) => model?.
 
 export function ChatSettingsBar({
   level,
+  engine = 'claude',
   state,
   fichaModel,
   fichaEffort,
@@ -113,15 +115,19 @@ export function ChatSettingsBar({
   onChange,
 }: {
   level: UiLevel;
+  /** Quem roda esta conversa: no Codex, o modelo e o esforço são os do Codex (catálogo da conta), não os do Claude. */
+  engine?: Engine;
   state: ChatState | null;
   fichaModel: string | null;
   fichaEffort: CodexEffort | null;
   /** Sem processo aberto, vale a autonomia da ficha (é informação de segurança: aparece sempre). */
   fichaAutonomy?: Autonomy | null;
   disabled: boolean;
-  onChange: (s: { model?: string; effort?: Effort; autonomy?: Autonomy }) => Promise<void>;
+  onChange: (s: { model?: string; effort?: CodexEffort; autonomy?: Autonomy }) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
+  const codex = engine === 'codex';
+  const catalog = useCodexCatalog(codex);
   const model = aliasOf(state?.model) || aliasOf(fichaModel);
   const effort = (state?.effort as Effort | null) ?? fichaEffort ?? '';
   const autonomy = (state?.permissionMode ? MODE_AUTONOMY[state.permissionMode] : undefined) ?? fichaAutonomy ?? undefined;
@@ -136,21 +142,27 @@ export function ChatSettingsBar({
   };
   const off = disabled || busy;
   const hint = t('chat.settingsHint');
+  // No Codex, o modelo é um slug do catálogo (o alias do Claude que sobrou de outra época não vale) e o esforço pode ir até `ultra`.
+  const codexModel = [state?.model, fichaModel].find((m) => m && !isClaudeModel(m)) ?? '';
+  const codexEffort = (state?.effort ?? fichaEffort ?? '') as '' | CodexEffort;
 
   if (level === 'simple') {
     const pace = model === 'haiku' ? 'fast' : model === 'sonnet' ? 'balanced' : model ? 'careful' : '';
     const asks = !autonomy || autonomy === 'manual' || autonomy === 'plan';
     return (
       <span className="chat-settings" title={hint}>
+        {/* Os ritmos são modelos do Claude (Haiku, Sonnet, Opus): quem roda no Codex escolhe o modelo no nível avançado. */}
+        {!codex && (
+          <span className="segmented">
+            {PACES.map((p) => (
+              <button key={p.id} type="button" className="btn-toggle" aria-pressed={pace === p.id} disabled={off} title={p.help} onClick={() => void run({ model: p.model, effort: p.effort })}>
+                {p.label}
+              </button>
+            ))}
+          </span>
+        )}
         <span className="segmented">
-          {PACES.map((p) => (
-            <button key={p.id} type="button" className="btn-toggle" aria-pressed={pace === p.id} disabled={off} title={p.help} onClick={() => void run({ model: p.model, effort: p.effort })}>
-              {p.label}
-            </button>
-          ))}
-        </span>
-        <span className="segmented">
-          <button type="button" className="btn-toggle" aria-pressed={asks} disabled={off} title={t('chat.askBeforeHelp')} onClick={() => void run({ autonomy: 'manual' })}>
+          <button type="button" className="btn-toggle" aria-pressed={asks} disabled={off} title={codex ? codexAutonomyHelp('manual') : t('chat.askBeforeHelp')} onClick={() => void run({ autonomy: 'manual' })}>
             {t('chat.askBefore')}
           </button>
           <button
@@ -158,12 +170,62 @@ export function ChatSettingsBar({
             className="btn-toggle"
             aria-pressed={!asks}
             disabled={off}
-            title={t('chat.autoHelp')}
+            title={codex ? codexAutonomyHelp('auto') : t('chat.autoHelp')}
             onClick={() => void run({ autonomy: 'auto' })}
           >
             {t('chat.autoDo')}
           </button>
         </span>
+      </span>
+    );
+  }
+  const autonomySelect = (
+    <select
+      aria-label={t('chat.autonomyAria')}
+      className={alert}
+      title={codex && autonomy ? codexAutonomyHelp(autonomy) : undefined}
+      value={autonomy ?? ''}
+      disabled={off}
+      onChange={(e) => void run({ autonomy: e.target.value as Autonomy })}
+    >
+      {!autonomy && <option value="">{t('chat.autonomyPlaceholder')}</option>}
+      {AUTONOMIES.map((a) => (
+        <option key={a.value} value={a.value}>
+          {a.label}
+        </option>
+      ))}
+    </select>
+  );
+  if (codex) {
+    const models = catalog?.models ?? [];
+    const known = models.some((m) => m.slug === codexModel);
+    // Modelo que a lista não tem (ou a lista que não veio): continua aparecendo, com o esforço que já estava.
+    const efforts = known ? effortsOfModel(models, codexModel) : codexEffort ? [codexEffort] : [];
+    return (
+      <span className="chat-settings" title={catalog?.reason ?? hint}>
+        <select
+          aria-label={t('chat.modelAria')}
+          value={codexModel}
+          disabled={off}
+          onChange={(e) => void run({ model: e.target.value, effort: chatEffortFor(models, e.target.value, codexEffort) })}
+        >
+          {!codexModel && <option value="">{t('chat.modelPlaceholder')}</option>}
+          {codexModel && !known && <option value={codexModel}>{codexModel}</option>}
+          {models.map((m) => (
+            <option key={m.slug} value={m.slug} title={m.slug}>
+              {m.displayName}
+            </option>
+          ))}
+        </select>
+        <select aria-label={t('chat.effortAria')} value={codexEffort} disabled={off || !efforts.length} onChange={(e) => void run({ effort: e.target.value as CodexEffort })}>
+          {!codexEffort && <option value="">{t('chat.effortPlaceholder')}</option>}
+          {efforts.map((e) => (
+            <option key={e} value={e}>
+              {t('chat.effortOption', { e: effortLabel(e) })}
+            </option>
+          ))}
+        </select>
+        {autonomySelect}
       </span>
     );
   }
@@ -185,14 +247,7 @@ export function ChatSettingsBar({
           </option>
         ))}
       </select>
-      <select aria-label={t('chat.autonomyAria')} className={alert} value={autonomy ?? ''} disabled={off} onChange={(e) => void run({ autonomy: e.target.value as Autonomy })}>
-        {!autonomy && <option value="">{t('chat.autonomyPlaceholder')}</option>}
-        {AUTONOMIES.map((a) => (
-          <option key={a.value} value={a.value}>
-            {a.label}
-          </option>
-        ))}
-      </select>
+      {autonomySelect}
     </span>
   );
 }
