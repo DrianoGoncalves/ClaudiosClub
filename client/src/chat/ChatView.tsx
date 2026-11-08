@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Autonomy, ChatAttachment, ChatItem, Effort, SendPriority, UiLevel } from '../../../shared/model';
+import type { Autonomy, ChatAttachment, ChatItem, CodexEffort, SendPriority, UiLevel } from '../../../shared/model';
 import { alertError, api, isPairingError, type PermissionOpts } from '../api';
 import { ArrowDownIcon, FileDiffIcon, ImageIcon, McpIcon, SendIcon, StopIcon } from '../icons';
 import { t, locale } from '../i18n';
@@ -47,7 +47,7 @@ interface Props {
   level?: UiLevel;
   /** Modelo e esforço que a conversa usa ao abrir (o da conversa > o da ficha > o último escolhido no chat); vale até o processo informar o dele. */
   fichaModel?: string | null;
-  fichaEffort?: Effort | null;
+  fichaEffort?: CodexEffort | null;
   /** Topo compacto do funcionário (montado pelo EmployeePanel); o "⋯" fica à direita dele. */
   top?: ReactNode;
   /** Abas do "Mais" (vêm do EmployeePanel): só coisas do funcionário; os ajustes da conversa ficam abaixo da caixa. */

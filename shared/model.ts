@@ -439,6 +439,9 @@ export type Autonomy = 'plan' | 'manual' | 'acceptEdits' | 'auto' | 'bypassPermi
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+/** Esforço de quem roda no Codex: o `ultra` só existe lá (os modelos Sol aceitam; os Luna vão até `max`). O Claude nunca recebe `ultra`. */
+export type CodexEffort = Effort | 'ultra';
+
 /**
  * Quem roda o funcionário: o Claude Code (padrão, e o que vale quando a ficha não diz) ou o Codex (CLI da OpenAI,
  * pela cota do ChatGPT). Com `codex`, `model` e `effort` da ficha são os do Codex (slug `gpt-…`, esforço low a max).
@@ -631,13 +634,14 @@ export interface StaffProfile {
   engine?: Engine;
   /** Alias (`opus`, `sonnet`…) ou id completo; null = padrão do Claude Code. Com `engine: 'codex'`, o slug do Codex (`gpt-6-sol`…). */
   model: string | null;
-  effort: Effort | null;
+  /** `ultra` só com `engine: 'codex'` (o servidor recusa nas outras). */
+  effort: CodexEffort | null;
   /**
    * Último modelo/esforço escolhido no seletor do chat deste funcionário. Só vale para conversa nova
    * quando a ficha não tem `model`/`effort`. Gravado pelo Claudio’s Club, fora do questionário.
    */
   lastModel?: string;
-  lastEffort?: Effort;
+  lastEffort?: CodexEffort;
   /** Pode contratar subfuncionários (subsessões) pelo Claudio’s Club. */
   canHire: boolean;
   /** Roteiro de trabalho (orquestração); null = nenhum. */
@@ -664,7 +668,7 @@ export interface StaffProfile {
    * sessão roda (a worktree, se a ficha pede uma): retomar exige a mesma pasta. `model`/`effort`: o
    * que foi escolhido no chat desta conversa (vale ao reabrir); ausente = o da ficha.
    */
-  sessions: { id: string; startedAt: string; cwd?: string; model?: string; effort?: Effort }[];
+  sessions: { id: string; startedAt: string; cwd?: string; model?: string; effort?: CodexEffort }[];
   createdAt: string;
   updatedAt: string;
 }

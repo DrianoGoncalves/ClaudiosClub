@@ -7,6 +7,7 @@ import { clientChanged, DAILY, TSX, VITE } from '../scripts/lib';
 import { openTerminal } from './terminal';
 import { ArtificialAnalysis } from './adapters/artificialAnalysis';
 import { CodexAdapter, CodexError } from './adapters/codex';
+import { CodexModels } from './codexModels';
 import { ClaudeAdapter } from './adapters/claude';
 import { defaultLocations } from './adapters/claude/paths';
 import type { ToolAdapter } from './adapters/types';
@@ -208,6 +209,8 @@ const staff: StaffService = new StaffService(adapter, {
     const c = await getCosts();
     return { project: c.projects[projectId]?.last7d ?? 0, total: c.total.last7d };
   },
+  // Salvar ficha do Codex com modelo fora do catálogo da conta é recusado. `codexModels` é declarado mais abaixo: só é lido na chamada.
+  codexCatalog: () => codexModels.list(),
 });
 /** Perguntas em aberto e avisos marcados como "não é segredo", guardados entre reinícios. */
 const inboxState = new InboxState(path.join(MYCO_HOME, 'inbox.json'));
@@ -251,6 +254,8 @@ const wakeups = new AutoContinue({
 });
 
 const chats: ChatManager = new ChatManager({
+  // Plano B de quem roda no Codex: a conta recusou o modelo da ficha, o turno é refeito com o mais parecido do catálogo.
+  codexModels: async () => (await codexModels.list()).models,
   autoContinue,
   wakeups,
   inbox: inboxState,
@@ -290,6 +295,7 @@ const projectPathOf = async (projectId: string) => {
 };
 /** Codex CLI só como segunda opinião na revisão de tarefas (o motor dos funcionários é o Claude). */
 const codex = new CodexAdapter();
+const codexModels = new CodexModels((fresh) => codex.check(fresh));
 
 const tasks = new TaskService({
   projectPath: projectPathOf,
@@ -414,7 +420,8 @@ const ChatSettingsBody = z
   .object({
     staffId: z.string().max(40).nullable(),
     model: z.string().regex(/^[\w.[\]-]{1,60}$/, 'modelo inválido').optional(),
-    effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+    // `ultra` só vale para conversa do Codex (o manager recusa nas do Claude).
+    effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']).optional(),
     autonomy: z.enum(AUTONOMY).optional(),
   })
   .refine((b) => b.model || b.effort || b.autonomy, 'nada para mudar');
@@ -935,6 +942,9 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
         ? { enabled: true, ...(await codex.check(url.searchParams.has('fresh'))) }
         : { enabled: false, available: false, reason: null },
   ],
+  // Modelos e esforços do Codex para a ficha escolher (`codex debug models`, só os da lista). Sem o CLI ou sem login: lista vazia com o motivo.
+  // Não depende da segunda opinião estar ligada: é do motor dos funcionários.
+  ['GET', /^\/api\/codex\/models$/, ({ url }) => codexModels.list(url.searchParams.has('fresh'))],
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks/${ID}/(test|merge|review|deploy|second-opinion)$`),

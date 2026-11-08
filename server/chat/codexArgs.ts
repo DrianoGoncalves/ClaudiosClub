@@ -7,16 +7,16 @@ import type { Autonomy } from '../../shared/model';
 // de `codex exec --json` (a primeira) ou `codex exec resume <thread_id> --json` (as seguintes), com o prompt pelo stdin.
 // Montagem pura dos argumentos (só olha o disco para saber quais pastas secretas existem), para testar sem abrir processo. Testado com o Codex CLI 0.156.1.
 
-/** Sandbox do Codex. `danger-full-access` e `--dangerously-*` nunca saem daqui. */
-export type CodexSandbox = 'read-only' | 'workspace-write';
+/** Sandbox do Codex: só leitura, ou escrita na pasta de trabalho (`:workspace`). `danger-full-access` e `--dangerously-*` nunca saem daqui. */
+export type CodexSandbox = 'read-only' | 'workspace';
 
 /**
  * Modo de permissão do Claudio’s Club (o `--permission-mode` do Claude Code) → sandbox do Codex. O `exec` não pergunta nada:
  * quem decide o que pode é a sandbox. plan e manual só leem; acceptEdits e auto escrevem na pasta de trabalho. A rede só alcança a própria máquina.
- * "Sem travas" (bypassPermissions) também fica em workspace-write: no Codex ninguém roda sem sandbox por aqui. Modo desconhecido: só leitura.
+ * "Sem travas" (bypassPermissions) também fica na escrita da pasta de trabalho (`workspace`): no Codex ninguém roda sem sandbox por aqui. Modo desconhecido: só leitura.
  */
 export function sandboxFor(mode: string | null | undefined): CodexSandbox {
-  return mode === 'acceptEdits' || mode === 'auto' || mode === 'bypassPermissions' ? 'workspace-write' : 'read-only';
+  return mode === 'acceptEdits' || mode === 'auto' || mode === 'bypassPermissions' ? 'workspace' : 'read-only';
 }
 
 /** Autonomia da ficha → sandbox (o mesmo que `sandboxFor`, a partir do nome da ficha). */
@@ -52,37 +52,21 @@ export interface CodexSecretContext {
   projectPath: string;
   /** Pasta pessoal do usuário (onde fica `.ssh`). */
   home: string;
-  /** Chaves SSH das conexões do projeto (ver `secretDenyRules`). */
-  keyFiles?: string[];
-  /** Cofre de senhas do Claudio’s Club (`~/.myco/secrets`, onde fica também a chave do pareamento). */
-  secretsDir?: string;
-}
-
-export interface CodexPermissionOptions extends CodexSecretContext {
-  sandbox: CodexSandbox;
-  /** Pastas extras com escrita na sandbox de escrita (a ficha, quando a conversa roda numa worktree). */
-  writableRoots?: string[];
-  /** Hosts alcançáveis pela rede (o resto da rede fica barrado). Padrão: só a própria máquina. */
-  network?: string[];
+  /** Pasta de dados do Claudio’s Club (`~/.myco`): o cofre de senhas, que guarda também a chave do pareamento, fica em `secrets`. */
+  mycoHome: string;
 }
 
 const statOf = (p: string) => statSync(p, { throwIfNoEntry: false });
 
-/** `child` está dentro de `dir` (ou é ele)? */
-const inside = (child: string, dir: string) => {
-  const rel = path.relative(dir, child);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
-};
-
 /**
- * O que o funcionário não pode ler: `.vps` (conexões e ssh_config; o da pasta da conversa e o do projeto, que numa worktree é outro),
- * `~/.ssh`, o cofre `~/.myco/secrets` e as chaves SSH das conexões. Só entra o que existe: negar um caminho que não existe faz o Codex
- * criar no lugar um arquivo vazio e somente leitura (um `.vps` vazio impediria o Claudio’s Club de criar a pasta `.vps` depois). A lista
- * é refeita a cada execução, então um `.vps` criado no meio da conversa passa a valer na mensagem seguinte.
+ * O que o funcionário não pode ler: `~/.ssh`, o cofre `<mycoHome>/secrets` e `.vps` (conexões e ssh_config; o da pasta da conversa e o
+ * do projeto, que numa worktree são pastas diferentes). Só entra o que existe: negar um caminho que não existe faz o Codex criar no lugar
+ * um arquivo vazio e somente leitura (um `.vps` vazio impediria o Claudio’s Club de criar a pasta `.vps` depois). A lista é refeita a
+ * cada execução, então um `.vps` criado no meio da conversa passa a valer na mensagem seguinte.
  *
- * Limite provado no Codex 0.156.1 com o bwrap do sistema (0.13.1): só UM arquivo regular pode ser negado por execução (o segundo
- * quebra com "Bad file descriptor", falha segura); pastas não têm limite. Pastas primeiro; dos arquivos (um `.vps` que seja arquivo,
- * depois as chaves) entra o primeiro. Chave dentro de pasta já negada não conta.
+ * Limite provado no Codex 0.156.1 com o bwrap do sistema (0.13.1): só UM arquivo regular pode ser negado por execução (o segundo quebra
+ * com "Bad file descriptor", falha segura); pastas não têm limite. Por isso as chaves SSH das conexões não entram aqui (quem tem
+ * servidor na ficha não roda no Codex, ver `codexProfileError`): ficam só pastas, e se um `.vps` for arquivo, entra o primeiro.
  */
 export function codexDenyPaths(ctx: CodexSecretContext): string[] {
   const dirs: string[] = [];
@@ -94,45 +78,81 @@ export function codexDenyPaths(ctx: CodexSecretContext): string[] {
   };
   // `~/.ssh` vai com o til (o Codex expande); os outros, com o caminho completo.
   add('~/.ssh', path.join(ctx.home, '.ssh'));
-  if (ctx.secretsDir) add(ctx.secretsDir);
+  add(path.join(ctx.mycoHome, 'secrets'));
   for (const root of new Set([ctx.cwd, ctx.projectPath])) add(path.join(root, '.vps'));
-  const covered = [path.join(ctx.home, '.ssh'), ...dirs.filter((d) => path.isAbsolute(d))];
-  for (const key of ctx.keyFiles ?? []) if (!covered.some((d) => inside(key, d))) add(key);
   return [...dirs, ...files.slice(0, 1)];
 }
 
+export interface CodexSafetyOptions extends CodexSecretContext {
+  /** `read-only`: só lê. `workspace`: escreve na pasta de trabalho. */
+  mode: 'read-only' | 'workspace';
+  /** `off`: sem rede. `loopback`: só a própria máquina (127.0.0.1 e localhost), para a API do Claudio’s Club. */
+  network: 'off' | 'loopback';
+  /** Pastas extras com escrita no modo `workspace` (a ficha, quando a conversa roda numa worktree). */
+  writableRoots?: string[];
+}
+
 /**
- * Perfil de permissões da conversa, no lugar do `-s` (o perfil substitui o `-s`: os dois juntos não valem). É o ponto único dessa
- * regra; tudo que a linha de comando do Codex precisar para segredos e rede entra aqui. Provado com `codex sandbox` e `codex exec`
- * (0.156.1, sem editar o config.toml):
+ * Argumentos de segurança de TODA execução do Codex dentro do Claudio’s Club: os do motor dos funcionários e os de qualquer ferramenta que
+ * abra o `codex exec` (ex.: "perguntar ao GPT", só leitura). Não dependem de ficha. Devolve, para pôr depois de `exec`:
+ *
+ * - `--ignore-user-config`: não lê o ~/.codex/config.toml (MCPs, plugins e modelo padrão do usuário ficam de fora; o login continua).
+ * - `-c features.apps=false`: sem os conectores da conta do ChatGPT (GitHub, e-mail, Notion, deploy…), que rodam FORA da sandbox.
+ * - `-c approval_policy="never"`: o exec não tem quem responda; a sandbox decide.
+ * - o perfil de permissões (`codexProfileArgs`): sandbox, negações de segredos e rede. O perfil substitui o `-s`: nunca passe `-s` junto.
+ *
+ * Nunca `danger-full-access` nem `--dangerously-*`. Quem chama monta o resto (`-C`, `-m`, `--json`, o prompt).
+ */
+export function codexSafetyArgs(o: CodexSafetyOptions): string[] {
+  return ['--ignore-user-config', '-c', 'features.apps=false', '-c', 'approval_policy="never"', ...codexProfileArgs(o)];
+}
+
+/**
+ * Perfil de permissões da conversa. Provado com `codex sandbox` e `codex exec` (0.156.1, sem editar o config.toml):
  *
  *   -c default_permissions="mycodeny"
- *   -c permissions.mycodeny.extends=":workspace"            (":read-only" em plan/manual)
+ *   -c permissions.mycodeny.extends=":workspace"            (":read-only" no modo de só leitura)
  *   -c permissions.mycodeny.filesystem={"~/.ssh"="deny","/proj/.vps"="deny","/pasta/extra"="write"}
- *   -c permissions.mycodeny.network={enabled=true,domains={"127.0.0.1"="allow","localhost"="allow"}}
- *   --enable network_proxy
+ *   -c permissions.mycodeny.network={enabled=true,domains={"127.0.0.1"="allow","localhost"="allow"}}   (`loopback`)
+ *   --enable network_proxy                                                                              (`loopback`)
+ *   -c permissions.mycodeny.network={enabled=false}                                                     (`off`)
  *
  * - filesystem: `deny` barra leitura e escrita (caminho exato; glob como `**\/.vps` NÃO protege o conteúdo); `write` libera escrita extra.
- * - network: só com o `network_proxy` ligado (recurso experimental do Codex) a lista de domínios vale. A rede passa a sair só pelo proxy
- *   dele: 127.0.0.1 e localhost respondem; qualquer outro domínio é recusado ("not on the allowlist") e conexão direta (ssh, /dev/tcp,
- *   curl --noproxy) dá "Network is unreachable". Sem o recurso, `enabled=true` liberaria a rede inteira.
+ * - network `loopback`: só com o `network_proxy` ligado (recurso experimental do Codex) a lista de domínios vale. A rede passa a sair só
+ *   pelo proxy dele: 127.0.0.1 e localhost respondem; qualquer outro domínio é recusado ("not on the allowlist") e conexão direta (ssh,
+ *   /dev/tcp, curl --noproxy) dá "Network is unreachable". Sem o recurso, `enabled=true` liberaria a rede inteira.
  * - A lista de domínios não tem porta: qualquer serviço local da máquina fica ao alcance, não só o do Claudio’s Club.
  */
-export function codexSecretArgs(o: CodexPermissionOptions): string[] {
+export function codexProfileArgs(o: CodexSafetyOptions): string[] {
   const entries = [
     ...codexDenyPaths(o).map((p) => `${tomlString(p)}="deny"`),
-    // A escrita extra só faz sentido na sandbox de escrita (a de leitura nunca escreve).
-    ...(o.sandbox === 'workspace-write' ? (o.writableRoots ?? []).map((p) => `${tomlString(p)}="write"`) : []),
+    // A escrita extra só faz sentido no modo de escrita (o de leitura nunca escreve).
+    ...(o.mode === 'workspace' ? (o.writableRoots ?? []).map((p) => `${tomlString(p)}="write"`) : []),
   ];
-  const hosts = (o.network ?? CODEX_LOOPBACK_HOSTS).map((h) => `${tomlString(h)}="allow"`);
   const key = `permissions.${CODEX_PROFILE}`;
+  const network =
+    o.network === 'loopback'
+      ? [
+          '-c', `${key}.network={enabled=true,domains={${CODEX_LOOPBACK_HOSTS.map((h) => `${tomlString(h)}="allow"`).join(',')}}}`,
+          '--enable', 'network_proxy',
+        ]
+      : ['-c', `${key}.network={enabled=false}`];
   return [
     '-c', `default_permissions=${tomlString(CODEX_PROFILE)}`,
-    '-c', `${key}.extends=${tomlString(o.sandbox === 'workspace-write' ? ':workspace' : ':read-only')}`,
+    '-c', `${key}.extends=${tomlString(o.mode === 'workspace' ? ':workspace' : ':read-only')}`,
     '-c', `${key}.filesystem={${entries.join(',')}}`,
-    '-c', `${key}.network={enabled=true,domains={${hosts.join(',')}}}`,
-    '--enable', 'network_proxy',
+    ...network,
   ];
+}
+
+/**
+ * Por que esta ficha não pode rodar no Codex (null = pode). Servidor na ficha não combina: a sandbox não tem rede para eles, e as
+ * chaves SSH das conexões não cabem no bloqueio (o bwrap só nega um arquivo por execução). O esforço `ultra` é só do Codex.
+ */
+export function codexProfileError(p: { engine?: string; servers: readonly string[]; effort?: string | null }): string | null {
+  if (p.engine === 'codex' && p.servers.length) return 'Quem tem servidores na ficha não pode rodar no Codex: tire os servidores ou use o Claude';
+  if (p.effort === 'ultra' && p.engine !== 'codex') return 'O esforço ultra só existe no Codex';
+  return null;
 }
 
 /** O que o `chatSpawn` entrega para abrir uma conversa no Codex (no lugar dos argumentos do `claude`). */
@@ -160,39 +180,34 @@ export interface CodexRunOptions {
   sandbox: CodexSandbox;
   /** Texto da ficha, vai em `developer_instructions` (a cada execução: a retomada usa a ficha atual). */
   instructions?: string | null;
-  /** Pastas extras com escrita na sandbox de escrita (a ficha, quando a conversa roda numa worktree). */
+  /** Pastas extras com escrita no modo de escrita (a ficha, quando a conversa roda numa worktree). */
   writableRoots?: string[];
-  /** Para o bloqueio de segredos (ver `codexSecretArgs`); sem isso, vale a pasta de trabalho e a pasta pessoal desta máquina. */
-  secrets?: Omit<CodexSecretContext, 'cwd'>;
+  /** Para o bloqueio de segredos (ver `codexSafetyArgs`); sem isso, vale a pasta de trabalho e a pasta pessoal desta máquina. */
+  secrets?: Partial<Omit<CodexSecretContext, 'cwd'>>;
   /** thread_id da conversa: com ele, `exec resume`; sem, uma conversa nova. */
   threadId?: string | null;
 }
 
 /**
- * Argumentos depois de `codex`. O prompt vai pelo stdin (`-`). Sandbox, segredos e rede vão por um perfil de permissões
- * (`codexSecretArgs`), igual na primeira execução e no `resume` (que não aceita `-s` nem `-C`: a pasta é a do processo).
- * `--ignore-user-config`: não lê o ~/.codex/config.toml (MCPs, plugins e modelo padrão do usuário não entram na conversa do
- * funcionário; a autenticação continua a mesma) e `features.apps=false` (sem os conectores da conta do ChatGPT). A aprovação é `never` (o exec não tem quem responda). Nunca `-s`, nunca
- * `danger-full-access`, nunca `--dangerously-*`.
+ * Argumentos depois de `codex`. O prompt vai pelo stdin (`-`). Segurança (config do usuário, conectores, aprovação, sandbox, segredos e
+ * rede) vem toda de `codexSafetyArgs`, igual na primeira execução e no `resume` (que não aceita `-s` nem `-C`: a pasta é a do processo);
+ * a rede é a `loopback`, para o curl da API do Claudio’s Club (tarefas e despertador).
  */
 export function buildCodexArgs(o: CodexRunOptions): string[] {
   const resume = !!o.threadId;
-  const args = ['exec', ...(resume ? ['resume'] : []), '--json', '--skip-git-repo-check', '--ignore-user-config'];
+  const home = o.secrets?.home ?? os.homedir();
+  const args = ['exec', ...(resume ? ['resume'] : []), '--json', '--skip-git-repo-check'];
   if (!resume) args.push('-C', o.cwd);
   if (o.model) args.push('-m', o.model);
   if (o.effort) args.push('-c', `model_reasoning_effort=${tomlString(o.effort)}`);
-  args.push('-c', 'approval_policy="never"');
-  // Só o --ignore-user-config não basta: os conectores da conta do ChatGPT (GitHub, e-mail, Notion, deploy de sites…) continuam
-  // à vista do modelo, e rodam FORA da sandbox. `features.apps=false` os desliga (provado com `codex debug prompt-input`).
-  args.push('-c', 'features.apps=false');
   args.push(
-    ...codexSecretArgs({
+    ...codexSafetyArgs({
+      mode: o.sandbox,
       cwd: o.cwd,
       projectPath: o.secrets?.projectPath ?? o.cwd,
-      home: o.secrets?.home ?? os.homedir(),
-      keyFiles: o.secrets?.keyFiles,
-      secretsDir: o.secrets?.secretsDir,
-      sandbox: o.sandbox,
+      home,
+      mycoHome: o.secrets?.mycoHome ?? path.join(home, '.myco'),
+      network: 'loopback',
       writableRoots: o.writableRoots,
     }),
   );

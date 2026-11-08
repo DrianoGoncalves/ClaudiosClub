@@ -4,9 +4,10 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { ChatAttachment, SendPriority } from '../../shared/model';
 import { CODEX_CONTEXT_WINDOW } from '../adapters/claude/pricing';
+import { pickCodexSubstitute, type CodexModelInfo } from '../codexModels';
 import { cleanEnv } from '../auth';
 import { buildCodexArgs, sandboxFor, type CodexSecretContext } from './codexArgs';
-import { contextUsed, isToolCall, itemFromCodex, parseCodexFailure, type CodexPhase } from './codexEvents';
+import { contextUsed, isModelUnavailable, isToolCall, itemFromCodex, parseCodexFailure, type CodexPhase } from './codexEvents';
 import { hasCheckpoint, stripCheckpoint } from './items';
 import { ChatProcess, type ChatProcessOptions } from './process';
 import { killTree } from './registry';
@@ -27,11 +28,16 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   /** Pastas extras com escrita na sandbox de escrita (a ficha, quando a conversa roda numa worktree). */
   writableRoots?: string[];
   /** O que o bloqueio de segredos precisa saber (ver `codexSecretArgs` em codexArgs.ts). */
-  secrets?: Omit<CodexSecretContext, 'cwd'>;
+  secrets?: Partial<Omit<CodexSecretContext, 'cwd'>>;
   /** thread_id de uma conversa que já existe: a primeira mensagem já retoma. */
   threadId?: string | null;
   /** Onde guardar o thread_id para continuar depois que o processo fechar (ou o servidor reiniciar). */
   threadFile?: string;
+  /**
+   * Catálogo de modelos da conta (GET /api/codex/models), para o plano B: se a conta recusar o modelo da ficha, o turno é refeito uma vez
+   * com o mais parecido daqui (ver `pickCodexSubstitute`). Sem ele, o plano B roda sem `-m` (o padrão do Codex).
+   */
+  models?: () => Promise<ReadonlyArray<Pick<CodexModelInfo, 'slug'>>>;
   /** Troca o encerramento da execução nos testes (o padrão encerra o grupo de processos). */
   kill?: (child: ChildProcessWithoutNullStreams) => void;
 }
@@ -55,6 +61,8 @@ interface Job {
   prompt: string;
   /** Id do item da mensagem na conversa (perde o `queued` quando a vez dela chega). */
   itemId: string;
+  /** O plano B (outro modelo) já foi usado nesta mensagem: uma vez só. */
+  retried?: boolean;
 }
 
 /** O que se sabe de uma execução enquanto ela roda. */
@@ -70,9 +78,16 @@ interface Run {
   stderr: string;
   buf: string;
   closed: boolean;
+  /** A mensagem desta execução e o modelo que foi em `-m` (null: o padrão do Codex), para o plano B. */
+  job: Job | null;
+  model: string | null;
+  /** Começou sem thread: o `thread.started` dela, se o plano B entrar, é de uma thread vazia. */
+  fresh: boolean;
+  /** Falhou por modelo que a conta não aceita: quando o processo fechar, o plano B refaz o turno. */
+  retry: boolean;
 }
 
-const newRun = (): Run => ({ key: randomUUID().slice(0, 8), ended: false, tools: new Set(), lastError: null, stderr: '', buf: '', closed: false });
+const newRun = (): Run => ({ key: randomUUID().slice(0, 8), ended: false, tools: new Set(), lastError: null, stderr: '', buf: '', closed: false, job: null, model: null, fresh: false, retry: false });
 
 export class CodexProcess extends ChatProcess {
   private current: ChildProcessWithoutNullStreams | null = null;
@@ -80,6 +95,8 @@ export class CodexProcess extends ChatProcess {
   private readonly queue: Job[] = [];
   private thread: string | null;
   private closing = false;
+  /** O plano B está escolhendo o modelo: a fila espera (não abre outra execução no meio). */
+  private holding = false;
 
   constructor(private readonly codex: CodexProcessOptions) {
     super({ ...codex, args: [] });
@@ -204,7 +221,7 @@ export class CodexProcess extends ChatProcess {
 
   /** Próxima mensagem da fila, se nenhuma execução está rodando. */
   private pump() {
-    if (this.current || this.closing || !this.state.running) return;
+    if (this.current || this.closing || this.holding || !this.state.running) return;
     const job = this.queue.shift();
     if (!job) return;
     const item = this.items.get(job.itemId);
@@ -215,11 +232,13 @@ export class CodexProcess extends ChatProcess {
     this.launch(job);
   }
 
-  private launch(job: Job) {
+  /** `override`: o plano B manda o modelo desta mensagem (null = sem `-m`); a ficha e o estado da conversa não mudam. */
+  private launch(job: Job, override?: { model: string | null }) {
     const o = this.codex;
+    const model = override ? override.model : this.state.model;
     const args = buildCodexArgs({
       cwd: o.cwd,
-      model: this.state.model,
+      model,
       effort: this.state.effort,
       sandbox: sandboxFor(this.state.permissionMode),
       instructions: o.instructions,
@@ -228,6 +247,9 @@ export class CodexProcess extends ChatProcess {
       threadId: this.thread,
     });
     const run = newRun();
+    run.job = job;
+    run.model = model;
+    run.fresh = this.thread === null;
     this.run = run;
     // O mesmo ambiente do Claude (MYCO_SESSION_ID para o despertador e as tarefas por curl), sem as variáveis CLAUDE*/ANTHROPIC*.
     const env = { ...cleanEnv(), MYCO_SESSION_ID: o.sessionId };
@@ -282,16 +304,62 @@ export class CodexProcess extends ChatProcess {
     if (this.current && this.run === run) this.current = null;
     const stopped = this.stopping;
     this.stopping = false;
+    // Você parou a execução que ia refazer o turno: vale o parar.
+    if (run.retry && stopped) {
+      run.retry = false;
+      run.ended = false;
+    }
     if (!run.ended) {
       if (stopped) this.endTurn(run, { kind: 'stopped' });
       else {
         const failed = spawnError ?? (code && code !== 0 ? (run.lastError ?? (run.stderr.trim() || `o codex saiu com código ${code}`)) : run.lastError);
-        this.endTurn(run, { kind: 'failed', text: failed ?? 'O Codex terminou sem responder.' });
+        this.failTurn(run, failed ?? 'O Codex terminou sem responder.');
       }
     }
     if (this.run === run) this.run = null;
     if (this.closing) this.finishSession(null);
+    else if (run.retry) void this.retryWithSubstitute(run);
     else this.pump();
+  }
+
+  /**
+   * O turno falhou. Se foi porque a conta não aceita o modelo (o caso do `gpt-6.1-sol` configurado mas recusado), o turno não termina:
+   * o plano B o refaz uma vez com outro modelo (ver `retryWithSubstitute`). Qualquer outra falha, ou a segunda, vira o erro da conversa.
+   */
+  private failTurn(run: Run, text: string) {
+    if (run.ended) return;
+    if (run.job && !run.job.retried && run.model && isModelUnavailable(text)) {
+      run.ended = true;
+      run.retry = true;
+      return;
+    }
+    this.endTurn(run, { kind: 'failed', text });
+  }
+
+  /**
+   * Plano B: a mesma mensagem, uma vez, com o modelo mais parecido do catálogo (mesma família, versão mais nova) ou sem `-m` se não há
+   * parecido. Vale só para esta mensagem: a ficha não muda e a próxima volta a pedir o modelo dela. Se foi o `resume` que falhou, a thread
+   * é a mesma; se foi a primeira execução, a thread que ela abriu está vazia e é descartada (recomeça limpo).
+   */
+  private async retryWithSubstitute(run: Run) {
+    const job = run.job!;
+    const wanted = run.model!;
+    this.holding = true;
+    let substitute: string | null = null;
+    try {
+      substitute = pickCodexSubstitute(wanted, (await this.codex.models?.()) ?? []);
+    } catch {
+      // sem catálogo: roda no padrão do Codex
+    }
+    this.holding = false;
+    if (this.closing || !this.state.running) return;
+    if (run.fresh) {
+      this.thread = null;
+      if (this.codex.threadFile) void fs.rm(this.codex.threadFile, { force: true }).catch(() => {});
+    }
+    this.addNotice(`O modelo ${wanted} não está disponível na sua conta; usei ${substitute ?? 'o padrão do Codex'} nesta mensagem. Troque na ficha se quiser.`, 'warn');
+    job.retried = true;
+    this.launch(job, { model: substitute });
   }
 
   private endTurn(run: Run, outcome: { kind: 'ok' } | { kind: 'stopped' } | { kind: 'failed'; text: string }) {
@@ -350,7 +418,7 @@ export class CodexProcess extends ChatProcess {
       }
       case 'turn.failed': {
         const error = (ev.error ?? {}) as { message?: unknown };
-        this.endTurn(run, { kind: 'failed', text: typeof error.message === 'string' && error.message ? error.message : (run.lastError ?? '') });
+        this.failTurn(run, typeof error.message === 'string' && error.message ? error.message : (run.lastError ?? ''));
         return;
       }
       case 'error':

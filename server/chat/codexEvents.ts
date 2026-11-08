@@ -140,6 +140,28 @@ export function contextUsed(usage: unknown, toolCalls: number): number | null {
   return typeof input === 'number' && input > 0 ? Math.round(input / (toolCalls + 1)) : null;
 }
 
+const MODEL_GONE =
+  /\bmodel\b.{0,80}\b(?:not supported|unsupported|not found|does not exist|is not available|unavailable)\b|(?:do(?:es)? not have|no) access to (?:the )?(?:model|gpt)/i;
+
+/**
+ * A execução falhou porque a conta não aceita o modelo (`model_not_found`, "The 'gpt-6.1-sol' model is not supported when using Codex with
+ * a ChatGPT account"; ver tests/fixtures/codex/falha-modelo.jsonl)? É o que o plano B do motor confere antes de trocar de modelo.
+ */
+export function isModelUnavailable(message: unknown): boolean {
+  const raw = asString(message).trim();
+  let text = raw;
+  let kind = '';
+  try {
+    const outer = asRecord(JSON.parse(raw));
+    const inner = asRecord(outer.error);
+    text = asString(inner.message) || asString(outer.message) || raw;
+    kind = `${asString(inner.type)} ${asString(inner.code)} ${asString(outer.code)}`;
+  } catch {
+    // texto simples
+  }
+  return /model_not_found/i.test(kind) || MODEL_GONE.test(text);
+}
+
 export interface CodexFailure {
   /** Texto para a conversa (em português quando é o limite de uso). */
   text: string;

@@ -6,8 +6,8 @@ import { PassThrough } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ChatEvent, ChatItem, StaffProfile } from '../shared/model';
 import { contextWindowFor, costOf } from '../server/adapters/claude/pricing';
-import { buildCodexArgs, codexDenyPaths, codexModelOrNull, codexSecretArgs, sandboxFor, sandboxOfAutonomy, tomlString } from '../server/chat/codexArgs';
-import { itemFromCodex, parseCodexFailure, unwrapShell } from '../server/chat/codexEvents';
+import { buildCodexArgs, codexDenyPaths, codexModelOrNull, codexProfileArgs, codexProfileError, codexSafetyArgs, sandboxFor, sandboxOfAutonomy, tomlString } from '../server/chat/codexArgs';
+import { isModelUnavailable, itemFromCodex, parseCodexFailure, unwrapShell } from '../server/chat/codexEvents';
 import { CodexProcess, readCodexThread } from '../server/chat/codexProcess';
 import { ChatManager } from '../server/chat/manager';
 import { ChatProcess } from '../server/chat/process';
@@ -86,7 +86,8 @@ describe('Codex: argumentos', () => {
 
   it('primeira mensagem: exec --json com pasta, perfil de permissões, modelo, esforço e o prompt pelo stdin', () => {
     const args = buildCodexArgs({ ...base, model: 'gpt-6-sol', effort: 'high', instructions: 'Você é a Bia.' });
-    expect(args.slice(0, 5)).toEqual(['exec', '--json', '--skip-git-repo-check', '--ignore-user-config', '-C']);
+    expect(args.slice(0, 5)).toEqual(['exec', '--json', '--skip-git-repo-check', '-C', '/proj']);
+    expect(args).toContain('--ignore-user-config');
     expect(optionOf(args, '-C')).toBe('/proj');
     noLegacySandbox(args);
     expect(configOf(args, 'default_permissions')).toBe('"mycodeny"');
@@ -110,12 +111,12 @@ describe('Codex: argumentos', () => {
 
   it('as seguintes: exec resume <thread_id>, sem -C; o perfil de permissões é o mesmo da primeira execução', () => {
     const id = '01a1babd-2221-7471-bc6f-23be3a417793';
-    const args = buildCodexArgs({ ...base, sandbox: 'workspace-write', model: 'gpt-6-luna', threadId: id });
+    const args = buildCodexArgs({ ...base, sandbox: 'workspace', model: 'gpt-6-luna', threadId: id });
     expect(args.slice(0, 3)).toEqual(['exec', 'resume', '--json']);
     expect(args).not.toContain('-C');
     noLegacySandbox(args);
     expect(baseOf(args)).toBe('":workspace"');
-    const first = buildCodexArgs({ ...base, sandbox: 'workspace-write', model: 'gpt-6-luna' });
+    const first = buildCodexArgs({ ...base, sandbox: 'workspace', model: 'gpt-6-luna' });
     expect(configs(args)).toContain('features.apps=false'); // também no resume
     for (const key of ['default_permissions', 'permissions.mycodeny.extends', 'permissions.mycodeny.filesystem', 'permissions.mycodeny.network']) {
       expect(configOf(args, key)).toBe(configOf(first, key));
@@ -129,9 +130,9 @@ describe('Codex: argumentos', () => {
   it('autonomia → perfil: plan e manual partem de :read-only; acceptEdits, auto e sem travas, de :workspace; nunca danger-full-access', () => {
     expect(sandboxOfAutonomy('plan')).toBe('read-only');
     expect(sandboxOfAutonomy('manual')).toBe('read-only');
-    expect(sandboxOfAutonomy('acceptEdits')).toBe('workspace-write');
-    expect(sandboxOfAutonomy('auto')).toBe('workspace-write');
-    expect(sandboxOfAutonomy('bypassPermissions')).toBe('workspace-write');
+    expect(sandboxOfAutonomy('acceptEdits')).toBe('workspace');
+    expect(sandboxOfAutonomy('auto')).toBe('workspace');
+    expect(sandboxOfAutonomy('bypassPermissions')).toBe('workspace');
     // Os modos que o processo aberto reporta (`default` = manual) e um que não existe.
     expect(sandboxFor('default')).toBe('read-only');
     expect(sandboxFor(null)).toBe('read-only');
@@ -141,20 +142,20 @@ describe('Codex: argumentos', () => {
         const args = buildCodexArgs({ ...base, sandbox: sandboxFor(mode), threadId });
         expect(args.join(' ')).not.toMatch(/danger|bypass/i);
         noLegacySandbox(args);
-        expect(baseOf(args)).toBe(sandboxFor(mode) === 'workspace-write' ? '":workspace"' : '":read-only"');
+        expect(baseOf(args)).toBe(sandboxFor(mode) === 'workspace' ? '":workspace"' : '":read-only"');
       }
     }
   });
 
   it('pastas extras de escrita entram no perfil como "write" só na sandbox de escrita; a de leitura não ganha nenhuma', () => {
-    const write = buildCodexArgs({ ...base, sandbox: 'workspace-write', writableRoots: ['/proj/.myco/staff', 'C:\\x y'] });
+    const write = buildCodexArgs({ ...base, sandbox: 'workspace', writableRoots: ['/proj/.myco/staff', 'C:\\x y'] });
     expect(filesOf(write)).toBe('{"/proj/.myco/staff"="write","C:\\\\x y"="write"}');
     const read = buildCodexArgs({ ...base, writableRoots: ['/proj/.myco/staff'] });
     expect(filesOf(read)).toBe('{}');
   });
 
   it('rede: só a própria máquina (127.0.0.1 e localhost) pelo proxy do Codex, igual em qualquer autonomia', () => {
-    for (const sandbox of ['read-only', 'workspace-write'] as const) {
+    for (const sandbox of ['read-only', 'workspace'] as const) {
       const args = buildCodexArgs({ ...base, sandbox });
       // Sem o recurso network_proxy a lista de domínios não vale e `enabled=true` liberaria a rede inteira.
       expect(args.slice(args.indexOf('--enable'), args.indexOf('--enable') + 2)).toEqual(['--enable', 'network_proxy']);
@@ -171,54 +172,105 @@ describe('Codex: argumentos', () => {
     expect(configs(args)).toContain('developer_instructions="linha 1\\nlinha \\"2\\""');
   });
 
-  it('segredos: ~/.ssh, .vps (da pasta e do projeto), o cofre e as chaves entram como "deny" com caminho exato; só o que existe', async () => {
+  it('segredos: ~/.ssh, o cofre e o .vps (da pasta e do projeto) entram como "deny" com caminho exato, só pastas e só o que existe', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-deny-'));
     const home = path.join(dir, 'home');
     const proj = path.join(dir, 'proj');
     const wt = path.join(dir, 'wt');
-    const vault = path.join(home, '.myco', 'secrets');
+    const mycoHome = path.join(home, '.myco');
+    const vault = path.join(mycoHome, 'secrets');
     for (const d of [path.join(home, '.ssh'), vault, path.join(proj, '.vps'), wt]) await fs.mkdir(d, { recursive: true });
-    await fs.writeFile(path.join(dir, 'chave-solta'), 'x');
-    await fs.writeFile(path.join(home, '.ssh', 'id_dentro'), 'x');
-    const ctx = { cwd: wt, projectPath: proj, home, secretsDir: vault, keyFiles: [path.join(home, '.ssh', 'id_dentro'), path.join(dir, 'chave-solta')] };
-    const sandbox = 'workspace-write' as const;
+    const ctx = { cwd: wt, projectPath: proj, home, mycoHome };
 
     // Numa worktree o .vps do projeto é outro caminho que o da pasta da conversa; a worktree não tem `.vps` (não existe: nada a negar).
-    const args = codexSecretArgs({ ...ctx, sandbox, writableRoots: [path.join(proj, '.myco', 'staff')] });
-    expect(args.slice(0, 6)).toEqual([
+    const args = codexProfileArgs({ ...ctx, mode: 'workspace', network: 'loopback', writableRoots: [path.join(proj, '.myco', 'staff')] });
+    expect(args).toEqual([
       '-c', 'default_permissions="mycodeny"',
       '-c', 'permissions.mycodeny.extends=":workspace"',
-      '-c', `permissions.mycodeny.filesystem={"~/.ssh"="deny",${tomlString(vault)}="deny",${tomlString(path.join(proj, '.vps'))}="deny",${tomlString(path.join(dir, 'chave-solta'))}="deny",${tomlString(path.join(proj, '.myco', 'staff'))}="write"}`,
+      '-c', `permissions.mycodeny.filesystem={"~/.ssh"="deny",${tomlString(vault)}="deny",${tomlString(path.join(proj, '.vps'))}="deny",${tomlString(path.join(proj, '.myco', 'staff'))}="write"}`,
+      '-c', 'permissions.mycodeny.network={enabled=true,domains={"127.0.0.1"="allow","localhost"="allow"}}',
+      '--enable', 'network_proxy',
     ]);
-    expect(args.slice(6)).toEqual(['-c', 'permissions.mycodeny.network={enabled=true,domains={"127.0.0.1"="allow","localhost"="allow"}}', '--enable', 'network_proxy']);
-    // Na sandbox de leitura é o mesmo bloqueio, partindo de :read-only e sem a escrita extra.
-    const ro = codexSecretArgs({ ...ctx, sandbox: 'read-only', writableRoots: [path.join(proj, '.myco', 'staff')] });
+    // No modo de leitura é o mesmo bloqueio, partindo de :read-only e sem a escrita extra.
+    const ro = codexProfileArgs({ ...ctx, mode: 'read-only', network: 'loopback', writableRoots: [path.join(proj, '.myco', 'staff')] });
     expect(ro[3]).toBe('permissions.mycodeny.extends=":read-only"');
     expect(ro[5]).not.toContain('"write"');
-    expect(codexDenyPaths(ctx)).toEqual(['~/.ssh', vault, path.join(proj, '.vps'), path.join(dir, 'chave-solta')]);
+    expect(codexDenyPaths(ctx)).toEqual(['~/.ssh', vault, path.join(proj, '.vps')]);
 
     // Negar caminho que não existe faz o Codex criar um arquivo vazio no lugar (um `.vps` vazio atrapalharia a pasta `.vps`): fica de fora.
-    expect(codexDenyPaths({ cwd: wt, projectPath: wt, home: path.join(dir, 'sem-home') })).toEqual([]);
-    expect(filesOf(buildCodexArgs({ cwd: wt, sandbox, secrets: { projectPath: wt, home: path.join(dir, 'sem-home') } }))).toBe('{}');
+    const nada = { home: path.join(dir, 'sem-home'), mycoHome: path.join(dir, 'sem-myco') };
+    expect(codexDenyPaths({ cwd: wt, projectPath: wt, ...nada })).toEqual([]);
+    expect(filesOf(buildCodexArgs({ cwd: wt, sandbox: 'workspace', secrets: { projectPath: wt, ...nada } }))).toBe('{}');
     // Pasta da conversa = projeto: um .vps só.
-    expect(codexDenyPaths({ cwd: proj, projectPath: proj, home: path.join(dir, 'sem-home') })).toEqual([path.join(proj, '.vps')]);
+    expect(codexDenyPaths({ cwd: proj, projectPath: proj, ...nada })).toEqual([path.join(proj, '.vps')]);
     // O buildCodexArgs leva o contexto até o bloqueio.
-    expect(filesOf(buildCodexArgs({ cwd: wt, sandbox, secrets: { projectPath: proj, home: path.join(dir, 'sem-home') } }))).toBe(`{${tomlString(path.join(proj, '.vps'))}="deny"}`);
+    expect(filesOf(buildCodexArgs({ cwd: wt, sandbox: 'workspace', secrets: { projectPath: proj, ...nada } }))).toBe(`{${tomlString(path.join(proj, '.vps'))}="deny"}`);
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  it('segredos: só um arquivo regular pode ser negado por execução (limite do bwrap); pastas não têm limite', async () => {
+  it('segredos: se o .vps for um arquivo, só um arquivo regular é negado por execução (limite do bwrap); pastas não têm limite', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-deny1-'));
     const home = path.join(dir, 'home');
     const proj = path.join(dir, 'proj');
+    const wt = path.join(dir, 'wt');
     await fs.mkdir(path.join(home, '.ssh'), { recursive: true });
     await fs.mkdir(proj, { recursive: true });
-    await fs.writeFile(path.join(proj, '.vps'), 'x'); // .vps como arquivo
-    await fs.writeFile(path.join(dir, 'k1'), 'x');
-    await fs.writeFile(path.join(dir, 'k2'), 'x');
-    expect(codexDenyPaths({ cwd: proj, projectPath: proj, home, keyFiles: [path.join(dir, 'k1'), path.join(dir, 'k2')] })).toEqual(['~/.ssh', path.join(proj, '.vps')]);
-    expect(codexDenyPaths({ cwd: dir, projectPath: dir, home, keyFiles: [path.join(dir, 'k1'), path.join(dir, 'k2')] })).toEqual(['~/.ssh', path.join(dir, 'k1')]);
+    await fs.mkdir(wt, { recursive: true });
+    await fs.writeFile(path.join(proj, '.vps'), 'x');
+    await fs.writeFile(path.join(wt, '.vps'), 'x');
+    // Os dois `.vps` são arquivos: entra o da pasta da conversa; o segundo quebraria a execução ("Bad file descriptor").
+    expect(codexDenyPaths({ cwd: wt, projectPath: proj, home, mycoHome: path.join(dir, 'sem-myco') })).toEqual(['~/.ssh', path.join(wt, '.vps')]);
     await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it('codexSafetyArgs: a segurança de toda execução do Codex, sem depender de ficha; as ferramentas de leitura usam a mesma', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-safe-'));
+    const home = path.join(dir, 'home');
+    const proj = path.join(dir, 'proj');
+    await fs.mkdir(path.join(home, '.ssh'), { recursive: true });
+    await fs.mkdir(path.join(proj, '.vps'), { recursive: true });
+    const base = { cwd: proj, projectPath: proj, home, mycoHome: path.join(home, '.myco') };
+
+    // "Perguntar ao GPT": só leitura e sem rede.
+    const ask = codexSafetyArgs({ ...base, mode: 'read-only', network: 'off' });
+    expect(ask).toEqual([
+      '--ignore-user-config',
+      '-c', 'features.apps=false',
+      '-c', 'approval_policy="never"',
+      '-c', 'default_permissions="mycodeny"',
+      '-c', 'permissions.mycodeny.extends=":read-only"',
+      '-c', `permissions.mycodeny.filesystem={"~/.ssh"="deny",${tomlString(path.join(proj, '.vps'))}="deny"}`,
+      '-c', 'permissions.mycodeny.network={enabled=false}',
+    ]);
+    expect(ask).not.toContain('--enable'); // sem rede, sem o proxy
+
+    // Escrita na pasta e só a rede local.
+    const work = codexSafetyArgs({ ...base, mode: 'workspace', network: 'loopback' });
+    expect(work.slice(0, 6)).toEqual(ask.slice(0, 6));
+    expect(configOf(work, 'permissions.mycodeny.extends')).toBe('":workspace"');
+    expect(configOf(work, 'permissions.mycodeny.network')).toBe('{enabled=true,domains={"127.0.0.1"="allow","localhost"="allow"}}');
+    expect(work.slice(-2)).toEqual(['--enable', 'network_proxy']);
+
+    // Nunca o -s, nunca danger-full-access, nunca --dangerously-*, e é a mesma que o motor usa (buildCodexArgs só acrescenta o que é dele).
+    for (const args of [ask, work]) {
+      noLegacySandbox(args);
+      expect(args.join(' ')).not.toMatch(/danger|bypass/i);
+    }
+    const motor = buildCodexArgs({ cwd: proj, sandbox: 'workspace', model: 'gpt-6-sol', secrets: { projectPath: proj, home } });
+    expect(motor.join('\u0000')).toContain(work.join('\u0000'));
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it('servidores na ficha não combinam com o Codex (sem rede para eles, e o bwrap só nega um arquivo de chave); ultra só no Codex', () => {
+    const erro = 'Quem tem servidores na ficha não pode rodar no Codex: tire os servidores ou use o Claude';
+    expect(codexProfileError({ engine: 'codex', servers: ['vps1'] })).toBe(erro);
+    expect(codexProfileError({ engine: 'codex', servers: [] })).toBeNull();
+    // No Claude servidores seguem como sempre.
+    expect(codexProfileError({ servers: ['vps1'] })).toBeNull();
+    expect(codexProfileError({ engine: 'claude', servers: ['vps1'], effort: 'max' })).toBeNull();
+    expect(codexProfileError({ engine: 'codex', servers: [], effort: 'ultra' })).toBeNull();
+    expect(codexProfileError({ engine: 'claude', servers: [], effort: 'ultra' })).toBe('O esforço ultra só existe no Codex');
+    expect(codexProfileError({ servers: [], effort: 'ultra' })).toBe('O esforço ultra só existe no Codex');
   });
 
   it('modelo do Claude numa ficha que trocou de motor não vai para o Codex', () => {
@@ -611,6 +663,165 @@ describe('CodexProcess', () => {
   });
 });
 
+describe('CodexProcess: plano B quando a conta recusa o modelo', () => {
+  const profile = { cwd: '/proj', sessionId: 'sess-1', permissionMode: 'default', secrets: { projectPath: '/proj', home: '/nao-existe' } };
+  const catalog = ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol'].map((slug) => ({ slug }));
+  const AVISO = 'O modelo gpt-6.1-sol não está disponível na sua conta; usei gpt-6-sol nesta mensagem. Troque na ficha se quiser.';
+  const noticesOf = (chat: CodexProcess) => chat.snapshot().items.filter((i): i is Extract<ChatItem, { kind: 'notice' }> => i.kind === 'notice');
+  /** A falha real do dono (fixture): thread.started, aviso, turn.started, error e turn.failed com `model_not_found`. */
+  const falha = async (run: { emit: (ev: object) => void; close: (code?: number | null) => void }) => {
+    for (const ev of await fixture('falha-modelo')) run.emit(ev);
+    await tick();
+    run.close(1);
+    await tick();
+    await tick(); // o plano B espera o catálogo
+  };
+  const sucesso = async (run: { emit: (ev: object) => void; close: (code?: number | null) => void }, thread: string) => {
+    run.emit({ type: 'thread.started', thread_id: thread });
+    run.emit({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'Oi!' } });
+    run.emit({ type: 'turn.completed', usage: { input_tokens: 10 } });
+    await tick();
+    run.close(0);
+    await tick();
+  };
+
+  it('isModelUnavailable reconhece o model_not_found da fixture e só ele', async () => {
+    const failed = (await fixture('falha-modelo')).find((e) => e.type === 'turn.failed') as { error: { message: string } };
+    expect(isModelUnavailable(failed.error.message)).toBe(true);
+    expect(isModelUnavailable('{"error":{"type":"invalid_request_error","code":"model_not_found","message":"x"}}')).toBe(true);
+    expect(isModelUnavailable('The model `gpt-9-sol` does not exist or you do not have access to it.')).toBe(true);
+    expect(isModelUnavailable("The 'gpt-9' model is not supported when using Codex with a ChatGPT account.")).toBe(true);
+    expect(isModelUnavailable('{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}')).toBe(false);
+    expect(isModelUnavailable('context_length_exceeded: input too long')).toBe(false);
+    expect(isModelUnavailable('queda de rede')).toBe(false);
+    expect(isModelUnavailable('')).toBe(false);
+  });
+
+  it('primeira mensagem: refaz uma vez com o Sol mais novo do catálogo, avisa, descarta a thread vazia e não mexe no modelo da conversa', async () => {
+    const f = fakeCodex();
+    const threadFile = path.join(root, 'planb-1', 'codex-thread.json');
+    const idle: string[] = [];
+    const chat = new CodexProcess({ ...profile, sessionId: 'planb-1', model: 'gpt-6.1-sol', threadFile, models: async () => catalog, spawnImpl: f.spawnImpl, onIdle: (r) => idle.push(r) });
+    chat.start();
+    chat.send('oi');
+    await falha(f.last());
+    expect(f.runs).toHaveLength(2);
+    const [r1, r2] = f.runs as [(typeof f.runs)[number], (typeof f.runs)[number]];
+    expect(optionOf(r1.args, '-m')).toBe('gpt-6.1-sol');
+    expect(optionOf(r2.args, '-m')).toBe('gpt-6-sol');
+    expect(r2.args).not.toContain('resume'); // a thread que a execução falha abriu estava vazia
+    expect(r2.prompt()).toBe('oi'); // o mesmo turno
+    expect(noticesOf(chat).filter((n) => n.tone === 'error')).toEqual([]);
+    expect(noticesOf(chat).some((n) => n.text === AVISO && n.tone === 'warn')).toBe(true);
+    // O turno ainda não acabou: segue ocupado, ninguém foi avisado de que parou.
+    expect(chat.snapshot().state.busy).toBe(true);
+    expect(idle).toEqual([]);
+    expect(await readCodexThread(threadFile)).toBeNull();
+
+    await sucesso(r2, '01a1babe-0000-7000-8000-000000000002');
+    expect(idle).toEqual(['turn']);
+    expect(chat.lastAssistantText()).toBe('Oi!');
+    expect(chat.snapshot().state.model).toBe('gpt-6.1-sol'); // a ficha não muda sozinha
+    expect(await readCodexThread(threadFile)).toBe('01a1babe-0000-7000-8000-000000000002');
+
+    // A mensagem seguinte volta a pedir o modelo da ficha (e retoma a thread nova).
+    chat.send('de novo');
+    expect(optionOf(f.last().args, '-m')).toBe('gpt-6.1-sol');
+    expect(f.last().args.slice(-2)).toEqual(['01a1babe-0000-7000-8000-000000000002', '-']);
+  });
+
+  it('se foi o resume que falhou, o plano B vale do mesmo jeito, na mesma thread', async () => {
+    const f = fakeCodex();
+    const chat = new CodexProcess({ ...profile, model: 'gpt-6.1-sol', threadId: '01a1babc-b62c-79a1-baaf-622dd5b1dc25', models: async () => catalog, spawnImpl: f.spawnImpl });
+    chat.start();
+    chat.send('continua');
+    expect(f.last().args.slice(0, 2)).toEqual(['exec', 'resume']);
+    await falha(f.last());
+    expect(f.runs).toHaveLength(2);
+    expect(f.runs[1]!.args.slice(0, 2)).toEqual(['exec', 'resume']);
+    expect(f.runs[1]!.args.slice(-2)).toEqual(['01a1babc-b62c-79a1-baaf-622dd5b1dc25', '-']);
+    expect(optionOf(f.runs[1]!.args, '-m')).toBe('gpt-6-sol');
+    expect(chat.threadId).toBe('01a1babc-b62c-79a1-baaf-622dd5b1dc25');
+    expect(noticesOf(chat).some((n) => n.text === AVISO)).toBe(true);
+  });
+
+  it('sem parecido no catálogo (ou sem catálogo), roda sem -m: o padrão do Codex', async () => {
+    for (const models of [async () => [{ slug: 'gpt-6-luna' }], undefined]) {
+      const f = fakeCodex();
+      const chat = new CodexProcess({ ...profile, model: 'gpt-6.1-sol', models, spawnImpl: f.spawnImpl });
+      chat.start();
+      chat.send('oi');
+      await falha(f.last());
+      expect(f.runs).toHaveLength(2);
+      expect(f.runs[1]!.args).not.toContain('-m');
+      expect(noticesOf(chat).some((n) => n.text === 'O modelo gpt-6.1-sol não está disponível na sua conta; usei o padrão do Codex nesta mensagem. Troque na ficha se quiser.')).toBe(true);
+    }
+  });
+
+  it('uma vez só: se o plano B também falha, vira o erro da conversa e o turno termina', async () => {
+    const f = fakeCodex();
+    const idle: string[] = [];
+    const chat = new CodexProcess({ ...profile, model: 'gpt-6.1-sol', models: async () => catalog, spawnImpl: f.spawnImpl, onIdle: (r) => idle.push(r) });
+    chat.start();
+    chat.send('oi');
+    await falha(f.runs[0] ?? f.last());
+    await falha(f.runs[1]!);
+    expect(f.runs).toHaveLength(2); // não tenta uma terceira
+    const last = chat.snapshot().items.at(-1)!;
+    expect(last).toMatchObject({ kind: 'notice', tone: 'error', text: "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account." });
+    expect(chat.snapshot().state.busy).toBe(false);
+    expect(idle).toEqual(['turn']);
+  });
+
+  it('outra falha (limite de uso) e conversa sem modelo na ficha não entram no plano B', async () => {
+    const f = fakeCodex();
+    const chat = new CodexProcess({ ...profile, model: 'gpt-6-sol', models: async () => catalog, spawnImpl: f.spawnImpl });
+    chat.start();
+    chat.send('oi');
+    const msg = '{"type":"error","status":429,"error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}';
+    f.last().emit({ type: 'turn.failed', error: { message: msg } });
+    await tick();
+    f.last().close(1);
+    await tick();
+    await tick();
+    expect(f.runs).toHaveLength(1);
+    expect(chat.snapshot().items.at(-1)).toMatchObject({ kind: 'notice', tone: 'error' });
+
+    // Sem `-m` na linha de comando não há modelo da ficha para trocar: o erro aparece como está.
+    const g = fakeCodex();
+    const semModelo = new CodexProcess({ ...profile, models: async () => catalog, spawnImpl: g.spawnImpl });
+    semModelo.start();
+    semModelo.send('oi');
+    await falha(g.last());
+    expect(g.runs).toHaveLength(1);
+    expect(semModelo.snapshot().items.at(-1)).toMatchObject({ kind: 'notice', tone: 'error' });
+  });
+
+  it('mensagem que chega enquanto o plano B escolhe o modelo espera a vez (não abre outra execução no meio)', async () => {
+    const f = fakeCodex();
+    let release: () => void = () => {};
+    const slow = new Promise<void>((r) => (release = r));
+    const chat = new CodexProcess({ ...profile, model: 'gpt-6.1-sol', models: async () => (await slow, catalog), spawnImpl: f.spawnImpl });
+    chat.start();
+    chat.send('primeira');
+    for (const ev of await fixture('falha-modelo')) f.last().emit(ev);
+    await tick();
+    f.last().close(1);
+    await tick();
+    chat.send('segunda');
+    expect(f.runs).toHaveLength(1); // o catálogo ainda não veio
+    release();
+    await tick();
+    await tick();
+    expect(f.runs).toHaveLength(2);
+    expect(f.runs[1]!.prompt()).toBe('primeira'); // o turno refeito vem antes da fila
+    await sucesso(f.runs[1]!, '01a1babe-0000-7000-8000-000000000003');
+    expect(f.runs).toHaveLength(3);
+    expect(f.runs[2]!.prompt()).toBe('segunda');
+    expect(optionOf(f.runs[2]!.args, '-m')).toBe('gpt-6.1-sol');
+  });
+});
+
 describe('ChatManager: Claude ou Codex', () => {
   it('o spawn com engine codex abre um CodexProcess (`codex exec`); sem engine segue no `claude`', async () => {
     const f = fakeCodex();
@@ -630,7 +841,7 @@ describe('ChatManager: Claude ou Codex', () => {
               cwd: root,
               args: [],
               engine: 'codex',
-              codex: { autonomy: 'acceptEdits', model: 'gpt-6-sol', effort: 'high', instructions: 'Ficha', writableRoots: [], secrets: { projectPath: root, home: path.join(root, 'sem-home') }, threadId: null, threadFile: path.join(root, 'codex-1', 'codex-thread.json') },
+              codex: { autonomy: 'acceptEdits', model: 'gpt-6-sol', effort: 'high', instructions: 'Ficha', writableRoots: [], secrets: { projectPath: root, home: path.join(root, 'sem-home'), mycoHome: path.join(root, 'sem-myco') }, threadId: null, threadFile: path.join(root, 'codex-1', 'codex-thread.json') },
             }
           : { sessionId: sessionId ?? 'claude-1', cwd: root, args: ['--session-id', 'claude-1', '--model', 'sonnet'] },
       spawnImpl,
@@ -675,6 +886,35 @@ describe('ChatManager: Claude ou Codex', () => {
     f.last().child.emit('exit', 0);
     await m.stopAll();
     expect(m.isBusy(cid)).toBe(false);
+  });
+
+  it('o esforço ultra do seletor do chat só vale numa conversa do Codex', async () => {
+    const f = fakeCodex();
+    const m = new ChatManager({
+      transcriptsDir: root,
+      usageFile: path.join(root, 'usage-ultra.json'),
+      listLive: async () => [],
+      resolve: async (_p, sessionId, staffId) =>
+        staffId === 'cris'
+          ? {
+              sessionId: sessionId ?? 'codex-u',
+              cwd: root,
+              args: [],
+              engine: 'codex',
+              codex: { autonomy: 'manual', model: 'gpt-6-sol', effort: 'high', instructions: 'Ficha', writableRoots: [], secrets: { projectPath: root, home: path.join(root, 'sem-home'), mycoHome: path.join(root, 'sem-myco') }, threadId: null, threadFile: path.join(root, 'codex-u', 'codex-thread.json') },
+            }
+          : { sessionId: sessionId ?? 'claude-u', cwd: root, args: ['--session-id', 'claude-u', '--model', 'sonnet'] },
+      spawnImpl: f.spawnImpl,
+    });
+    const cid = await m.settings('p', null, 'cris', { effort: 'ultra' });
+    expect(m.has(cid)).toBe(true);
+    expect((await m.snapshot('p', cid)).live?.state.effort).toBe('ultra');
+    // Numa conversa do Claude o `ultra` é recusado, antes de qualquer troca.
+    await expect(m.settings('p', null, 'bia', { effort: 'ultra' })).rejects.toThrow('O esforço ultra só existe no Codex');
+    expect((await m.snapshot('p', 'claude-u')).live?.state.effort ?? null).toBeNull();
+    await expect(m.settings('p', 'claude-u', 'bia', { effort: 'max' })).resolves.toBe('claude-u'); // os de sempre seguem
+    f.last().child.emit('exit', 0); // o `claude` falso
+    await m.stopAll();
   });
 
   it('ChatProcess (Claude) continua com engine claude', () => {

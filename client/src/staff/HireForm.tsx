@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Autonomy,
   Board,
+  CodexEffort,
   Effort,
   GitState,
   LaunchResult,
@@ -109,7 +110,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const [rules, setRules] = useState((editing?.rules ?? []).join('\n'));
   const [doneWhen, setDoneWhen] = useState(editing?.doneWhen ?? '');
   const [model, setModel] = useState(editing?.model ?? '');
-  const [effort, setEffort] = useState<'' | Effort>(editing?.effort ?? '');
+  const [effort, setEffort] = useState<'' | CodexEffort>(editing?.effort ?? '');
   const [canHire, setCanHire] = useState(editing?.canHire ?? false);
   const [playbook, setPlaybook] = useState<'' | Playbook>(editing?.playbook ?? '');
   const [worktree, setWorktree] = useState(editing?.worktree ?? false);

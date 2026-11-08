@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Autonomy, ChatAttachment, ChatCommand, ChatItem, ChatState, Effort, UiLevel } from '../../../shared/model';
+import type { Autonomy, ChatAttachment, ChatCommand, ChatItem, ChatState, CodexEffort, Effort, UiLevel } from '../../../shared/model';
 import { effortLabel } from '../format';
 import { t } from '../i18n';
 
@@ -115,7 +115,7 @@ export function ChatSettingsBar({
   level: UiLevel;
   state: ChatState | null;
   fichaModel: string | null;
-  fichaEffort: Effort | null;
+  fichaEffort: CodexEffort | null;
   /** Sem processo aberto, vale a autonomia da ficha (é informação de segurança: aparece sempre). */
   fichaAutonomy?: Autonomy | null;
   disabled: boolean;

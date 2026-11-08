@@ -3,25 +3,34 @@ import { promises as fs } from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import type { ChatItem } from '../shared/model';
 import { spawnSync } from 'node:child_process';
-import { codexSecretArgs, sandboxFor } from '../server/chat/codexArgs';
+import type { ChatItem } from '../shared/model';
+import { codexProfileArgs, sandboxFor } from '../server/chat/codexArgs';
+import { CodexAdapter } from '../server/adapters/codex';
 import { CodexProcess } from '../server/chat/codexProcess';
+import { CodexModels } from '../server/codexModels';
 
-// Prova real do motor Codex: abre um CodexProcess numa pasta temporária, só leitura, e manda duas mensagens (a segunda sai pelo
-// `exec resume`). Imprime o que a conversa recebeu. Usa o `codex` instalado e logado (gasta um pouco da cota do ChatGPT).
+// Ferramenta de desenvolvimento (fora dos testes: usa o `codex` de verdade, instalado e logado, e gasta um pouco da cota do ChatGPT).
+// Rode depois de mexer em server/chat/codexArgs.ts ou ao subir a versão do Codex: a sandbox, o bloqueio de segredos e a rede local são
+// comportamento do Codex, e só o `codex exec` real diz se os argumentos ainda valem.
 //
-//   npx tsx scripts/codex-prova.ts [modelo] [--rede | --perfil]
+// Prova real do motor Codex: abre um CodexProcess numa pasta temporária, só leitura, e manda duas mensagens (a segunda sai pelo
+// `exec resume`). Imprime o que a conversa recebeu.
+//
+//   npx tsx scripts/codex-prova.ts [modelo] [--rede | --perfil | --plano-b]
 //
 // --rede: uma terceira mensagem pede um `curl` em 127.0.0.1 (um servidor deste script), para ver se a sandbox deixa a rede local
 // passar (o despertador e as tarefas da ficha dependem de curl no Claudio’s Club).
 // --perfil: prova o perfil de permissões (segredos, escrita e rede) em cada autonomia, num projeto falso em /var/tmp (o `.vps` de
 // mentira ora pasta, ora arquivo): `cat .vps` e `ls ~/.ssh` falham; ler e escrever os outros arquivos funciona em acceptEdits/auto e a
 // escrita falha em plan/manual; o curl em 127.0.0.1 responde e o https externo e o ssh falham. Sai com código 1 se algum item falhar.
+// --plano-b: a ficha pede um modelo que a conta recusa (`gpt-6.1-sol` por padrão; ou passe outro no [modelo]): o motor refaz a mensagem uma
+// vez com o mais parecido do catálogo de verdade (`codex debug models`) e avisa na conversa. Sai com código 1 se não houver o aviso e a resposta.
 
 const model = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 'gpt-6-sol';
 const rede = process.argv.includes('--rede');
 const perfil = process.argv.includes('--perfil');
+const planoB = process.argv.includes('--plano-b');
 
 const show = (it: ChatItem) => {
   const clip = (t: string) => (t.length > 300 ? `${t.slice(0, 300)}…` : t).replace(/\n/g, '\n      ');
@@ -119,7 +128,7 @@ async function provaPerfil() {
         effort: 'low',
         permissionMode: c.mode,
         instructions: 'Você é Teste, funcionário de prova. Obedeça ao pedido literalmente; se um comando falhar, não tente contornar: só siga para o próximo.',
-        secrets: { projectPath: proj, home: os.homedir(), keyFiles: [], secretsDir: path.join(os.homedir(), '.myco', 'secrets') },
+        secrets: { projectPath: proj, home: os.homedir(), mycoHome: path.join(os.homedir(), '.myco') },
         onIdle: (reason) => reason === 'turn' && done(),
       });
       chat.start();
@@ -153,7 +162,7 @@ async function provaPerfil() {
       for (const cmd of comandos.slice(0, 4).filter((x) => !ran(x.slice(-24)))) {
         const r = spawnSync(
           'codex',
-          ['sandbox', '-P', 'mycodeny', '-C', proj, ...codexSecretArgs({ cwd: proj, projectPath: proj, home: os.homedir(), sandbox: sandboxFor(c.mode) }), '--', 'sh', '-c', cmd],
+          ['sandbox', '-P', 'mycodeny', '-C', proj, ...codexProfileArgs({ mode: sandboxFor(c.mode), cwd: proj, projectPath: proj, home: os.homedir(), mycoHome: path.join(os.homedir(), '.myco'), network: 'off' }), '--', 'sh', '-c', cmd],
           { cwd: proj, encoding: 'utf8', timeout: 60_000 },
         );
         extra.push({ summary: cmd, isError: r.status !== 0, result: `${r.stdout}${r.stderr}`.trim() });
@@ -191,7 +200,44 @@ async function provaPerfil() {
   if (falhas) process.exitCode = 1;
 }
 
-(perfil ? provaPerfil() : main()).catch((err) => {
+/** A conta recusa o modelo da ficha: o turno é refeito com o mais parecido do catálogo real. */
+async function provaPlanoB() {
+  const wanted = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? 'gpt-6.1-sol';
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-codex-planob-'));
+  const adapter = new CodexAdapter();
+  const catalog = new CodexModels((fresh) => adapter.check(fresh));
+  console.log(`catálogo da conta: ${(await catalog.list()).models.map((m) => m.slug).join(', ') || '(vazio)'}`);
+  let done: () => void = () => {};
+  const chat = new CodexProcess({
+    sessionId: randomUUID(),
+    cwd: dir,
+    model: wanted,
+    effort: 'low',
+    permissionMode: 'default',
+    models: async () => (await catalog.list()).models,
+    secrets: { projectPath: dir, home: os.homedir(), mycoHome: path.join(os.homedir(), '.myco') },
+    onIdle: (reason) => reason === 'turn' && done(),
+  });
+  chat.start();
+  try {
+    const finished = new Promise<void>((r) => (done = r));
+    console.log(`\n--- a ficha pede ${wanted}; mensagem: responda só: ok`);
+    chat.send('responda só: ok');
+    await Promise.race([finished, new Promise((_, rej) => setTimeout(() => rej(new Error('turno passou de 4 minutos')), 240_000))]);
+    const items = chat.snapshot().items;
+    for (const it of items) console.log(show(it));
+    const aviso = items.find((i) => i.kind === 'notice' && i.tone === 'warn' && i.text.startsWith(`O modelo ${wanted} não está disponível na sua conta; usei `));
+    const erro = items.find((i) => i.kind === 'notice' && i.tone === 'error');
+    const resposta = items.find((i) => i.kind === 'assistant');
+    console.log(`\naviso do plano B: ${aviso ? 'PASSOU' : 'FALHOU'}; resposta: ${resposta ? 'PASSOU' : 'FALHOU'}; sem erro na conversa: ${erro ? 'FALHOU' : 'PASSOU'}; modelo da conversa continua ${chat.model} (a ficha não muda)`);
+    if (!aviso || !resposta || erro) process.exitCode = 1;
+  } finally {
+    chat.stop();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+(planoB ? provaPlanoB() : perfil ? provaPerfil() : main()).catch((err) => {
   console.error(err);
   process.exit(1);
 });

@@ -22,6 +22,7 @@ import type {
 import { writeAtomic } from '../staff/store';
 import { readHistory } from './history';
 import type { CodexSpawn } from './codexArgs';
+import type { CodexModelInfo } from '../codexModels';
 import { CodexProcess } from './codexProcess';
 import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
 import { finalQuestion } from './question';
@@ -70,6 +71,8 @@ export interface ChatManagerOptions {
   /** Conversa parada há mais que isso fecha o processo (a sessão continua no disco). */
   idleMs?: number;
   spawnImpl?: ChatProcessOptions['spawnImpl'];
+  /** Modelos do Codex da conta, para o plano B de quem roda no Codex (ver CodexProcess); sem ele, o plano B roda no padrão do Codex. */
+  codexModels?: () => Promise<ReadonlyArray<Pick<CodexModelInfo, 'slug'>>>;
   /** Processos abertos, gravados em disco para achar os órfãos depois de um reinício. */
   registry?: ChatRegistry;
   /** Testes trocam (pid vivo? / encerrar processo). */
@@ -595,6 +598,7 @@ export class ChatManager {
     s: { model?: string; effort?: string; autonomy?: Autonomy },
   ): Promise<string> {
     const chat = await this.ensure(projectId, sessionId, staffId);
+    if (s.effort === 'ultra' && chat.engine !== 'codex') throw new ChatError('O esforço ultra só existe no Codex');
     // Escolha sua nesta conversa: a folga de cota não troca nem desfaz mais (até o processo reabrir).
     if (s.model || s.effort) this.boosts.set(chat, 'manual');
     if (s.model) chat.setModel(s.model, `Modelo desta conversa: ${s.model}`);
@@ -827,6 +831,7 @@ export class ChatManager {
           secrets: codex.secrets,
           threadId: codex.threadId,
           threadFile: codex.threadFile,
+          models: this.opts.codexModels,
         })
       : new ChatProcess({ ...base, args: spawn.args });
     this.chats.set(spawn.sessionId, chat);

@@ -6,6 +6,7 @@ import type { StaffProfile } from '../../shared/model';
 import { cronError } from '../../shared/cron';
 import { listDir, tryJson } from '../adapters/claude/fsutil';
 import { ensureMycoGitignore } from '../mycoGitignore';
+import { codexProfileError } from '../chat/codexArgs';
 import { slugify } from './ficha';
 
 // Fichas ficam no próprio projeto: <projeto>/.myco/staff/<id>.json (+ .md gerado, memória e retrato).
@@ -16,11 +17,13 @@ const PLAYBOOKS = ['plan-big-execute-small', 'scout-then-build', 'review-gate'] 
 // Alias ou id de modelo: só caracteres seguros na linha de comando.
 const ModelSchema = z.string().regex(/^[\w.[\]-]{1,60}$/, 'modelo inválido');
 const EffortSchema = z.enum(EFFORT);
+// `ultra` só existe no Codex (os modelos Sol aceitam; os Luna vão até max): onde vale, ver `codexProfileError`.
+const CodexEffortSchema = z.enum([...EFFORT, 'ultra']);
 const line = (max: number) => z.string().trim().max(max);
 const list = (max: number) => z.array(line(500)).max(max).default([]);
 
-/** O que o questionário (ou um funcionário com permissão) envia. */
-export const StaffInputSchema = z.object({
+/** O que o questionário (ou um funcionário com permissão) envia, antes das regras que cruzam campos (ver `StaffInputSchema`). */
+const StaffInputObject = z.object({
   name: line(60).min(1, 'informe o nome'),
   role: line(60).min(1, 'informe o cargo'),
   // Fichas antigas (e pedidos pela API) podem trazer um gestor só, como texto.
@@ -40,7 +43,7 @@ export const StaffInputSchema = z.object({
   // Ausente = claude. Com codex, `model` e `effort` são os do Codex (ver shared/model.ts).
   engine: z.enum(['claude', 'codex']).optional(),
   model: ModelSchema.nullable().default(null),
-  effort: EffortSchema.nullable().default(null),
+  effort: CodexEffortSchema.nullable().default(null),
   canHire: z.boolean().default(false),
   playbook: z.enum(PLAYBOOKS).nullable().default(null),
   worktree: z.boolean().default(false),
@@ -53,7 +56,22 @@ export const StaffInputSchema = z.object({
   /** Abrir mesmo com o consumo acima da linha de parada (confirmado no Claudio’s Club). */
   force: z.boolean().optional(),
 });
+
+/**
+ * O questionário com as regras que cruzam campos: quem roda no Codex não tem servidores na ficha e só ele usa o esforço `ultra`
+ * (ver `codexProfileError`). Quem edita sem mandar `engine` também passa por `assertProfileRules` (junta com a ficha que já existe).
+ */
+export const StaffInputSchema = StaffInputObject.superRefine((v, ctx) => {
+  const error = codexProfileError(v);
+  if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, message: error, path: [v.engine === 'codex' && v.servers.length ? 'servers' : 'effort'] });
+});
 export type StaffInputParsed = z.infer<typeof StaffInputSchema>;
+
+/** Confere a ficha inteira, já com os campos que não vieram no pedido (o `engine` que ficou da ficha antiga). Lança `StaffError`. */
+export function assertProfileRules(p: Pick<StaffProfile, 'engine' | 'servers' | 'effort'>): void {
+  const error = codexProfileError(p);
+  if (error) throw new StaffError(error);
+}
 
 /** Rotina agendada: fica fora do questionário (editar a ficha não apaga as rotinas; pela API não se agenda). */
 export const RoutineSchema = z.object({
@@ -73,7 +91,7 @@ export const RoutineSchema = z.object({
 });
 export const RoutinesSchema = z.array(RoutineSchema).max(10, 'no máximo 10 rotinas por funcionário');
 
-const ProfileSchema = StaffInputSchema.omit({ portraitDataUrl: true, launch: true, adoptSessionId: true, force: true }).extend({
+const ProfileSchema = StaffInputObject.omit({ portraitDataUrl: true, launch: true, adoptSessionId: true, force: true }).extend({
   id: z.string(),
   projectId: z.string(),
   portrait: z.string().nullable(),
@@ -87,7 +105,7 @@ const ProfileSchema = StaffInputSchema.omit({ portraitDataUrl: true, launch: tru
   ended: z.object({ at: z.string(), reason: z.string() }).nullable().optional().catch(undefined),
   // Último modelo/esforço escolhido no chat (fora do questionário); valor inválido é ignorado.
   lastModel: ModelSchema.optional().catch(undefined),
-  lastEffort: EffortSchema.optional().catch(undefined),
+  lastEffort: CodexEffortSchema.optional().catch(undefined),
   sessions: z
     .array(
       z.object({
@@ -96,12 +114,23 @@ const ProfileSchema = StaffInputSchema.omit({ portraitDataUrl: true, launch: tru
         cwd: z.string().optional(),
         // O que se escolheu no chat nesta conversa; valor inválido é ignorado.
         model: ModelSchema.optional().catch(undefined),
-        effort: EffortSchema.optional().catch(undefined),
+        effort: CodexEffortSchema.optional().catch(undefined),
       }),
     )
     .default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
+}).transform((p) => {
+  // `ultra` só existe no Codex: numa ficha que voltou ao Claude (ou editada à mão) o valor sai em vez de ir para o `claude --effort`.
+  const ultra = (e: unknown) => e === 'ultra';
+  if (p.engine === 'codex' || !(ultra(p.effort) || ultra(p.lastEffort) || p.sessions.some((s) => ultra(s.effort)))) return p;
+  const { lastEffort, ...rest } = p;
+  return {
+    ...rest,
+    effort: ultra(p.effort) ? null : p.effort,
+    ...(lastEffort && !ultra(lastEffort) && { lastEffort }),
+    sessions: p.sessions.map(({ effort, ...s }) => (effort && !ultra(effort) ? { ...s, effort } : s)),
+  };
 });
 
 export const staffDir = (projectPath: string) => path.join(projectPath, '.myco', 'staff');
@@ -170,11 +199,14 @@ export async function saveChatChoice(
   choice: { model?: string; effort?: string },
 ): Promise<void> {
   const model = ModelSchema.safeParse(choice.model);
-  const effort = EffortSchema.safeParse(choice.effort);
-  if (!model.success && !effort.success) return;
+  const codexEffort = CodexEffortSchema.safeParse(choice.effort);
+  if (!model.success && !codexEffort.success) return;
   await withProfileLock(projectPath, staffId, async () => {
     const p = await readProfile(projectPath, staffId);
     if (!p) return;
+    // `ultra` só vale para quem roda no Codex; para os outros, a escolha de esforço inválida é ignorada como sempre.
+    const effort = p.engine === 'codex' ? codexEffort : EffortSchema.safeParse(choice.effort);
+    if (!model.success && !effort.success) return;
     const next: StaffProfile = {
       ...p,
       ...(model.success && { lastModel: model.data }),

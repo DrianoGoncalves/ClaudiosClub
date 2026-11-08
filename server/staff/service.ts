@@ -16,7 +16,7 @@ import type {
   StaffProfile,
   Task,
 } from '../../shared/model';
-import { DEFAULT_SECRETS_DIR, type VaultOptions } from '../secretVault';
+import type { VaultOptions } from '../secretVault';
 import { isFtpConnection, listFtpServers, readFtpConnections, removeFtpConnection, saveFtpConnection, testFtpConnection, type FtpConnector } from './ftp';
 import { keyFilesOf, listServers, readConnections, removeConnection, saveConnection, testConnection, writeStaffSshConfig } from './servers';
 
@@ -26,12 +26,13 @@ async function allServers(projectPath: string, vault?: VaultOptions): Promise<Se
 }
 import type { ToolAdapter } from '../adapters/types';
 import { effectiveBrowser } from '../browser';
-import { readConfig, setArchived, workspaceOf } from '../config';
+import { MYCO_HOME, readConfig, setArchived, workspaceOf } from '../config';
 import { librarySkillsOf } from '../skillLibrary';
 import { readUsage } from '../usage';
 import { projectBudgetHit, usageStopHit, UsageStopError } from '../usageStop';
 import { TEMP_IDLE_DAYS } from '../../shared/model';
 import { codexModelOrNull, type CodexSpawn } from '../chat/codexArgs';
+import type { CodexModelsResult } from '../codexModels';
 import { readCodexThread } from '../chat/codexProcess';
 import { buildClaudeArgs, capAutonomy } from './ficha';
 import { greeting, prepareCodexRun, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
@@ -55,6 +56,7 @@ import {
   saveProfile,
   staffDir,
   StaffError,
+  assertProfileRules,
   StaffInputSchema,
   type StaffInputParsed,
   RoutinesSchema,
@@ -139,6 +141,13 @@ export interface StaffServiceOptions {
   vault?: VaultOptions;
   /** Cliente FTP do teste de conexão (padrão basic-ftp; os testes trocam). */
   ftpConnect?: FtpConnector;
+  /**
+   * Catálogo de modelos do Codex da conta (o mesmo de GET /api/codex/models). Com ele, salvar uma ficha do Codex com modelo fora do
+   * catálogo é recusado; catálogo indisponível (codex ausente ou falha): aceita e registra um aviso. Sem ele, não confere.
+   */
+  codexCatalog?: () => Promise<CodexModelsResult>;
+  /** Aviso no log do servidor (padrão console.warn). */
+  log?: (line: string) => void;
 }
 
 const configArchive = {
@@ -242,6 +251,7 @@ export class StaffService {
     if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'ficha inválida');
     const input = parsed.data;
 
+    await this.checkCodexModel(input.engine, input.model);
     const managers = await this.managers(project.path, input.reportsTo);
     const hirer = fromBrowser ? undefined : managers.find((m) => m.canHire);
     if (!fromBrowser) {
@@ -431,6 +441,12 @@ export class StaffService {
       throw new StaffError('esse vínculo criaria um ciclo (um subordinado não pode chefiar o próprio gestor)');
     }
 
+    // O pedido pode não trazer o `engine` (fica o da ficha): as regras do Codex valem sobre a ficha já junta.
+    assertProfileRules({ ...current, ...fields });
+    // Só confere o que mudou: um modelo que já estava na ficha (e que a conta deixou de aceitar) não trava uma edição qualquer;
+    // quem roda no Codex tem o plano B (outro modelo na mensagem) para isso.
+    const engine = fields.engine ?? current.engine;
+    if (engine === 'codex' && (engine !== current.engine || fields.model !== current.model)) await this.checkCodexModel(engine, fields.model);
     const saved = await this.saveEdit(project, current, { ...current, ...fields, projectId }, portraitDataUrl);
     const copiesUpdated = flags.data.applyToCopies && saved.personId ? await this.applyToCopies(project, saved) : 0;
     return { ...saved, copiesUpdated };
@@ -471,6 +487,7 @@ export class StaffService {
           await withProfileLock(project.path, c.id, async () => {
             const cur = await readProfile(project.path, c.id);
             if (!cur || cur.personId !== saved.personId) return;
+            assertProfileRules({ ...cur, ...text }); // ex.: esforço `ultra` não vai para uma cópia que roda no Claude
             await this.saveEdit(project, cur, { ...cur, ...text, projectId: project.id }, dataUrl);
             updated++;
           });
@@ -751,6 +768,29 @@ export class StaffService {
   }
 
   /**
+   * Ficha do Codex com modelo que a conta não tem (o caso do `gpt-6.1-sol`, configurado mas recusado com `model_not_found`) não é salva.
+   * Sem catálogo (codex ausente, sem login, falha), não há como saber: aceita e deixa um aviso no log, sem travar o salvamento.
+   */
+  private async checkCodexModel(engine: string | undefined, model: string | null): Promise<void> {
+    if (engine !== 'codex' || !model || !this.opts.codexCatalog) return;
+    const warn = this.opts.log ?? ((line: string) => console.warn(`[staff] ${line}`));
+    let catalog: CodexModelsResult | null = null;
+    try {
+      catalog = await this.opts.codexCatalog();
+    } catch (err) {
+      warn(`modelo ${model} do Codex salvo sem conferir: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    if (!catalog.models.length) {
+      warn(`modelo ${model} do Codex salvo sem conferir: catálogo indisponível (${catalog.reason ?? 'vazio'})`);
+      return;
+    }
+    if (!catalog.models.some((m) => m.slug === model)) {
+      throw new StaffError(`O modelo ${model} não está no catálogo do Codex desta conta. Escolha um destes: ${catalog.models.map((m) => m.slug).join(', ')}`);
+    }
+  }
+
+  /**
    * Linha de comando para conversar pelo Claudio’s Club. Com ficha: autonomia, modelo, MCPs e identidade
    * da ficha (sessão nova quando `sessionId` é null). Sem ficha: só retoma a sessão, pedindo
    * aprovação para tudo. `forkFrom`: sessão nova como cópia desta (duplicar a conversa), na mesma
@@ -782,6 +822,8 @@ export class StaffService {
     const ctx = await this.context(project, profile, true);
     const cwd = sessionCwd(profile, ctx, forkFrom ?? sessionId);
     const codex = profile.engine === 'codex';
+    // Segunda barreira (a primeira é ao salvar a ficha): uma ficha antiga, ou editada à mão, com servidores no Codex não abre: recusa em vez de rodar.
+    assertProfileRules(profile);
     if (codex && forkFrom) throw new StaffError('duplicar a conversa ainda não existe para funcionário que roda no Codex');
     // Chrome só com a extensão instalada (vale só para esta conversa: a ficha salva segue como o dono escolheu). No Codex não há Chrome.
     const browser = codex ? false : await effectiveBrowser(profile.browser, this.opts.browserStatus);
@@ -814,7 +856,7 @@ export class StaffService {
         effort: effective.effort,
         instructions: codexRun.instructions,
         writableRoots: codexRun.writableRoots,
-        secrets: { projectPath: project.path, home: os.homedir(), keyFiles: ctx.serverKeys ?? [], secretsDir: DEFAULT_SECRETS_DIR },
+        secrets: { projectPath: project.path, home: os.homedir(), mycoHome: MYCO_HOME },
         threadId: resume ? await readCodexThread(codexRun.threadFile) : null,
         threadFile: codexRun.threadFile,
       };
