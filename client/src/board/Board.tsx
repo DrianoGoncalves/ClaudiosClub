@@ -22,7 +22,7 @@ import { buildGraph, HANDLE, HR_ID, RANKING_ID, roomFrame, type BoardNode, type 
 import { nodeTypes } from './nodes';
 import { ChartIcon, UsersIcon } from '../icons';
 import { SettingsMenu } from '../toolbar/SettingsMenu';
-import { AuthBadge, CompanyTitle, UsageMeters, useAccountUsage } from '../toolbar/Toolbar';
+import { AuthBadge, CodexUsageLine, CompanyTitle, UsageMeters, useAccountUsage } from '../toolbar/Toolbar';
 import { UpdateNotice } from '../toolbar/UpdateNotice';
 import { PendingRestartNotice } from '../toolbar/ServerAction';
 import { t } from '../i18n';
@@ -372,8 +372,13 @@ export function BoardView(props: BoardViewProps) {
         {/* Opções numa linha e abas embaixo: o topo fica com a largura da maior das duas. */}
         <div className="toolbar-row">
           <CompanyTitle name={companyName(config?.companyName)} onRename={props.onRename} />
-          <UsageMeters usage={usage} />
-          <AuthBadge boost={usage?.boost ?? null} />
+          <div className="usage-stack">
+            <div className="usage-line">
+              <UsageMeters usage={usage} />
+              <AuthBadge boost={usage?.boost ?? null} />
+            </div>
+            {usage?.codex && <CodexUsageLine codex={usage.codex} />}
+          </div>
           <UpdateNotice />
           <PendingRestartNotice />
           <span className="toolbar-sep" />
