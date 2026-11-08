@@ -409,6 +409,7 @@ export function BoardView(props: BoardViewProps) {
             autoContinue={config?.autoContinue ?? null}
             showUserScope={config?.showUserScope ?? null}
             codexReview={config?.codexReview ?? null}
+            codexModel={config?.codexModel ?? ''}
             freelaArchiveDays={config?.freelaArchiveDays ?? null}
             onConfig={props.onConfig}
             // O demo não tem workspace: volta para "Todos", senão a sala dele ficaria escondida.
