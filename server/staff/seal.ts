@@ -16,9 +16,14 @@ import { profileFile, writeAtomic } from './store';
 // Só quem roda no Codex tem selo (o caminho do Claude não muda): trocar de motor pela tela apaga o selo; salvar uma ficha do Codex pela
 // tela, contratar, copiar e restaurar o regravam. Ficha do Codex sem selo (anterior a ele, ou vinda de outro computador) é selada na
 // primeira vez que abre.
+//
+// Uma exceção no Claude: o contratado por um gestor que roda no Codex (`engine: 'claude'`, travado em `manual`). Ele roda fora da sandbox, então
+// sem selo poderia subir a própria autonomia editando a ficha. O selo dele (`engine: 'claude'`) vale como o do Codex e sobrevive a quem salva a
+// ficha pela tela (a trava só cai se o dono trocar o motor para o Codex e voltar).
 
 export interface FichaSeal {
-  engine: 'codex';
+  /** `codex`: ficha do Codex. `claude`: Claude contratado por um gestor no Codex (travado em `manual`). */
+  engine: 'codex' | 'claude';
   autonomy: Autonomy;
   sealedAt: string;
 }
@@ -29,14 +34,24 @@ export function sealFile(runDir: string, projectPath: string, staffId: string): 
   return path.join(runDir, 'seals', `${key}.json`);
 }
 
-/** Grava o selo da ficha (Codex) ou apaga o que houver (qualquer outro motor). Chamar só onde o Claudio’s Club decidiu motor e autonomia. */
-export async function writeSeal(runDir: string, projectPath: string, profile: Pick<StaffProfile, 'id' | 'engine' | 'autonomy'>): Promise<void> {
+/**
+ * Grava o selo da ficha (Codex) ou apaga o que houver (qualquer outro motor). Chamar só onde o Claudio’s Club decidiu motor e autonomia.
+ * `lockedClaude`: o Claude contratado por um gestor no Codex nasce selado; quem já tem esse selo o mantém (com a autonomia que o dono salvou).
+ */
+export async function writeSeal(
+  runDir: string,
+  projectPath: string,
+  profile: Pick<StaffProfile, 'id' | 'engine' | 'autonomy'>,
+  opts: { lockedClaude?: boolean } = {},
+): Promise<void> {
   const file = sealFile(runDir, projectPath, profile.id);
-  if (profile.engine !== 'codex') {
+  const codex = profile.engine === 'codex';
+  const locked = !codex && (opts.lockedClaude || (await readSeal(runDir, projectPath, profile.id))?.engine === 'claude');
+  if (!codex && !locked) {
     await fs.rm(file, { force: true });
     return;
   }
-  const seal: FichaSeal = { engine: 'codex', autonomy: profile.autonomy, sealedAt: new Date().toISOString() };
+  const seal: FichaSeal = { engine: codex ? 'codex' : 'claude', autonomy: profile.autonomy, sealedAt: new Date().toISOString() };
   await writeAtomic(file, JSON.stringify(seal) + '\n');
 }
 
@@ -44,7 +59,7 @@ export async function writeSeal(runDir: string, projectPath: string, profile: Pi
 export async function readSeal(runDir: string, projectPath: string, staffId: string): Promise<FichaSeal | null> {
   const raw = await fs.readFile(sealFile(runDir, projectPath, staffId), 'utf8').catch(() => null);
   const seal = raw === null ? null : (tryJson(raw) as Partial<FichaSeal> | null);
-  return seal && seal.engine === 'codex' && typeof seal.autonomy === 'string' ? (seal as FichaSeal) : null;
+  return seal && (seal.engine === 'codex' || seal.engine === 'claude') && typeof seal.autonomy === 'string' ? (seal as FichaSeal) : null;
 }
 
 /** Por que a ficha do disco não vale (diferente do selo); null = vale (ou não há selo). A mensagem é para o usuário. */
@@ -56,5 +71,6 @@ export function sealViolation(profile: Pick<StaffProfile, 'name' | 'engine' | 'a
     engine !== seal.engine ? `motor ${engine} em vez de ${seal.engine}` : '',
     profile.autonomy !== seal.autonomy ? `autonomia ${profile.autonomy} em vez de ${seal.autonomy}` : '',
   ].filter(Boolean);
-  return `A ficha de ${profile.name} foi mudada fora do Claudio’s Club (${diffs.join('; ')}). Quem roda no Codex não muda o próprio motor nem a própria autonomia, então a conversa não abre. Abra a ficha, confira e salve de novo para confirmar, ou volte a uma versão anterior pelo histórico.`;
+  const quem = seal.engine === 'claude' ? 'Quem foi contratado por um gestor no Codex' : 'Quem roda no Codex';
+  return `A ficha de ${profile.name} foi mudada fora do Claudio’s Club (${diffs.join('; ')}). ${quem} não muda o próprio motor nem a própria autonomia, então a conversa não abre. Abra a ficha, confira e salve de novo para confirmar, ou volte a uma versão anterior pelo histórico.`;
 }

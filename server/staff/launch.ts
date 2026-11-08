@@ -40,6 +40,8 @@ export interface LaunchContext {
   userAgentsDir?: string;
   /** Codex ligado nas configurações (`codexReview`): o funcionário do Claude ganha o MCP `perguntar_gpt` e o roteiro manda usá-lo. */
   codex?: boolean;
+  /** Claude contratado por um gestor no Codex e travado em `manual`: a ficha conta por que ele pede aprovação de tudo. */
+  lockedByCodexManager?: boolean;
 }
 
 /** A primeira mensagem de uma sessão nova numa conversa do Claudio’s Club. */
@@ -181,7 +183,7 @@ export function staffSettings() {
  */
 export async function writeFicha(
   profile: StaffProfile,
-  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'librarySkills' | 'codex'>,
+  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'librarySkills' | 'codex' | 'lockedByCodexManager'>,
   absolute = false,
 ): Promise<FichaContext> {
   const rel = (file: string) => (absolute ? file : path.relative(ctx.projectPath, file));
@@ -199,6 +201,7 @@ export async function writeFicha(
     team: ctx.team,
     librarySkills: ctx.librarySkills,
     codex: ctx.codex,
+    lockedByCodexManager: ctx.lockedByCodexManager,
   };
   await writeAtomic(fichaFile(ctx.projectPath, profile.id), renderFicha(profile, fichaCtx));
   await ensureMemory(ctx.projectPath, profile);

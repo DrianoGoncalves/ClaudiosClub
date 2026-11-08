@@ -31,6 +31,8 @@ export interface FichaContext {
   team?: TeamMember[];
   /** Codex ligado nas configurações (`codexReview`): o funcionário do Claude ganha a ferramenta `perguntar_gpt` e o roteiro manda usá-la. */
   codex?: boolean;
+  /** Claude contratado por um gestor no Codex e travado em `manual`: a seção Autonomia conta o porquê. */
+  lockedByCodexManager?: boolean;
 }
 
 export interface TeamMember {
@@ -307,7 +309,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     `Esta ficha foi gerada pelo Claudio’s Club; para mudar, edite pelo Claudio’s Club (alterações à mão podem ser sobrescritas).`,
     `## Missão\n${p.mission}`,
     p.firstTask ? `## Primeira tarefa\n${p.firstTask}` : '',
-    `## Autonomia\n${(codexOf(p) ? CODEX_AUTONOMY_LABEL : AUTONOMY_LABEL)[p.autonomy]}`,
+    `## Autonomia\n${(codexOf(p) ? CODEX_AUTONOMY_LABEL : AUTONOMY_LABEL)[p.autonomy]}${ctx.lockedByCodexManager ? '\nVocê foi contratado por um gestor no Codex e por isso pede aprovação de tudo; só o usuário muda isso.' : ''}`,
     // Agents e skills são do Claude Code: no Codex a seção some.
     codexOf(p)
       ? ''
@@ -403,7 +405,7 @@ function hiringSection(p: StaffProfile, ctx: FichaContext): string {
     `Para mandar outra mensagem a ele: POST ${api}/chat/send com {"sessionId", "staffId", "text"} (mesmo cabeçalho).`,
     `Quem você contrata é temporário. Quando o trabalho dele terminar, encerre: POST ${api}/staff/<id dele>/done com {"note": "o que ele entregou", "requestedBy": "${p.id}"} (mesmo cabeçalho; só vale para quem você contratou). Ele sai do quadro (nada é apagado); parado há ${TEMP_IDLE_DAYS} dias, sai sozinho. Só o usuário efetiva.`,
     'Você não pode dar a um subfuncionário mais autonomia do que a sua.',
-    codexOf(p) ? 'Quem você contrata roda no Codex como você, dentro da mesma sandbox, e não troca de motor.' : '',
+    codexOf(p) ? 'Quem você contrata roda no Codex como você, dentro da mesma sandbox; com `engine: "claude"` no pedido ele roda no Claude, mas só em `manual` (pede aprovação de tudo) e sem navegador, MCPs, servidores nem contratar.' : '',
   ]
     .filter(Boolean)
     .join('\n');

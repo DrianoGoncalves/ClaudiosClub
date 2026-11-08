@@ -210,15 +210,15 @@ describe('contratação por gestor que roda no Codex', () => {
   const codexBoss = async (svc: StaffService, name: string, over: Record<string, unknown> = {}) =>
     (await svc.hire('proj-id', { ...base, name, engine: 'codex', autonomy: 'auto', canHire: true, ...over }, true))!.profile;
 
-  it('quem o gestor Codex contrata pela API nasce no Codex, com a autonomia dele no máximo e sem servidores nem Chrome', async () => {
+  it('quem o gestor Codex contrata pela API sem pedir motor nasce no Codex, com a autonomia dele no máximo e sem servidores nem Chrome', async () => {
     const svc = service();
     const boss = await codexBoss(svc, 'Chefe Codex');
     const hired = (await svc.hire('proj-id', { ...hireBody, name: 'Sub 1', reportsTo: [boss.id], browser: true, canHire: true, servers: ['vps1'] }, false))!.profile;
     expect(hired).toMatchObject({ engine: 'codex', autonomy: 'auto', canHire: false, servers: [], browser: false, hiredBy: boss.id, temporary: true });
     expect((await readProfile(projectPath, hired.id))?.engine).toBe('codex'); // gravado, não só devolvido
-    // Pedir `engine: "claude"` no corpo não tira da sandbox: o do gestor manda.
-    const tentou = (await svc.hire('proj-id', { ...hireBody, name: 'Sub 2', reportsTo: [boss.id], engine: 'claude' }, false))!.profile;
-    expect(tentou).toMatchObject({ engine: 'codex', autonomy: 'auto' });
+    // Sem `engine` no pedido, nasce no Codex (o padrão do gestor Codex).
+    const semMotor = (await svc.hire('proj-id', { ...hireBody, name: 'Sub 2', reportsTo: [boss.id] }, false))!.profile;
+    expect(semMotor).toMatchObject({ engine: 'codex', autonomy: 'auto' });
     // Modelo do Claude não vale no Codex (vai o padrão); o do Codex fica; `ultra` (só do Codex) passa.
     const alias = (await svc.hire('proj-id', { ...hireBody, name: 'Sub 3', reportsTo: [boss.id], model: 'opus', effort: 'max' }, false))!.profile;
     expect(alias).toMatchObject({ engine: 'codex', model: null, effort: 'max' });
@@ -229,6 +229,52 @@ describe('contratação por gestor que roda no Codex', () => {
     expect(spawn).toMatchObject({ engine: 'codex', args: [], codex: { autonomy: 'auto' } });
   });
 
+  it('gestor Codex pedindo engine claude: nasce Claude travado em manual, sem Chrome, MCPs, servidores nem canHire, mesmo pedindo auto', async () => {
+    const svc = service();
+    const boss = await codexBoss(svc, 'Chefe Libera');
+    const pedido = { ...hireBody, reportsTo: [boss.id], engine: 'claude', autonomy: 'auto', browser: true, mcps: ['github'], canHire: true, servers: ['vps1'] };
+    const hired = (await svc.hire('proj-id', { ...pedido, name: 'Sub Claude Travado' }, false))!.profile;
+    expect(hired).toMatchObject({ engine: 'claude', autonomy: 'manual', browser: false, mcps: [], servers: [], canHire: false, hiredBy: boss.id, temporary: true });
+    const gravado = (await readProfile(projectPath, hired.id))!; // gravado, não só devolvido
+    expect(gravado).toMatchObject({ engine: 'claude', autonomy: 'manual', browser: false, mcps: [], servers: [], canHire: false });
+    // Também com `bypassPermissions`: a trava vale.
+    const bypass = (await svc.hire('proj-id', { ...pedido, name: 'Sub Claude Bypass', autonomy: 'bypassPermissions' }, false))!.profile;
+    expect(bypass).toMatchObject({ engine: 'claude', autonomy: 'manual', browser: false, mcps: [], servers: [], canHire: false });
+    // A conversa abre como Claude, no "Pede tudo" (manual), sem o Chrome, e a ficha conta por quê.
+    const spawn = (await svc.chatSpawn('proj-id', null, hired.id))!;
+    expect(spawn.engine).toBeUndefined();
+    expect(spawn.args.slice(spawn.args.indexOf('--permission-mode'), spawn.args.indexOf('--permission-mode') + 2)).toEqual(['--permission-mode', 'manual']);
+    expect(spawn.args).not.toContain('--chrome');
+    const ficha = await fs.readFile(fichaFile(projectPath, hired.id), 'utf8');
+    expect(ficha).toContain('Você foi contratado por um gestor no Codex e por isso pede aprovação de tudo');
+    // Quem o gestor Codex contrata sem pedir motor não ganha essa linha.
+    const codexSub = (await svc.hire('proj-id', { ...hireBody, name: 'Sub Sem Linha', reportsTo: [boss.id] }, false))!.profile;
+    expect(await fs.readFile(fichaFile(projectPath, codexSub.id), 'utf8')).not.toContain('contratado por um gestor no Codex');
+  });
+
+  it('o Claude contratado por gestor Codex fica selado: subir a autonomia na ficha do disco não abre a conversa; salvar pela tela confirma e a trava segue', async () => {
+    const svc = service();
+    const boss = await codexBoss(svc, 'Chefe Selo');
+    const hired = (await svc.hire('proj-id', { ...hireBody, name: 'Sub Selado', reportsTo: [boss.id], engine: 'claude' }, false))!.profile;
+    expect(await readSeal(path.join(root, 'run'), projectPath, hired.id)).toMatchObject({ engine: 'claude', autonomy: 'manual' });
+    // O contratado edita o próprio arquivo (fora da sandbox) para `bypassPermissions`: a conversa recusa, e nada novo é gravado.
+    await saveProfile(projectPath, { ...(await readProfile(projectPath, hired.id))!, autonomy: 'bypassPermissions' });
+    await expect(svc.chatSpawn('proj-id', null, hired.id)).rejects.toThrow(/foi mudada fora do Claudio’s Club \(autonomia bypassPermissions em vez de manual\)/);
+    await expect(svc.chatSpawn('proj-id', null, hired.id)).rejects.toThrow(/Quem foi contratado por um gestor no Codex/);
+    // Trocar o motor para o Codex no arquivo também não vale.
+    await saveProfile(projectPath, { ...(await readProfile(projectPath, hired.id))!, autonomy: 'manual', engine: 'codex' });
+    await expect(svc.chatSpawn('proj-id', null, hired.id)).rejects.toThrow(/motor codex em vez de claude/);
+    // Voltando ao que o selo guarda, abre de novo.
+    await saveProfile(projectPath, { ...(await readProfile(projectPath, hired.id))!, engine: 'claude' });
+    expect((await svc.chatSpawn('proj-id', null, hired.id))!.engine).toBeUndefined();
+    // O dono, pela tela, pode mudar a autonomia; a trava (o selo) segue com o valor novo.
+    const { id: _i, projectId: _p, portrait: _pt, sessions: _s, createdAt: _c, updatedAt: _u, ...fields } = (await readProfile(projectPath, hired.id))!;
+    await svc.update('proj-id', hired.id, { ...fields, autonomy: 'acceptEdits' });
+    expect(await readSeal(path.join(root, 'run'), projectPath, hired.id)).toMatchObject({ engine: 'claude', autonomy: 'acceptEdits' });
+    await saveProfile(projectPath, { ...(await readProfile(projectPath, hired.id))!, autonomy: 'bypassPermissions' });
+    await expect(svc.chatSpawn('proj-id', null, hired.id)).rejects.toThrow(/autonomia bypassPermissions em vez de acceptEdits/);
+  });
+
   it('a autonomia do subfuncionário nunca passa da do gestor Codex, mesmo com outro gestor mais livre na lista', async () => {
     const svc = service();
     const boss = await codexBoss(svc, 'Chefe Acaba', { autonomy: 'acceptEdits', canHire: false });
@@ -236,6 +282,9 @@ describe('contratação por gestor que roda no Codex', () => {
     // Quem contrata (canHire) é o do Claude, mas o pedido também aponta para um Codex: nasce no Codex, no teto dele.
     const hired = (await svc.hire('proj-id', { ...hireBody, name: 'Sub Misto', reportsTo: [claudeBoss.id, boss.id] }, false))!.profile;
     expect(hired).toMatchObject({ engine: 'codex', autonomy: 'acceptEdits', hiredBy: claudeBoss.id });
+    // Com `engine: "claude"` e um gestor Codex entre os gestores, vale a trava: manual e sem Chrome, MCPs, servidores e canHire.
+    const livre = (await svc.hire('proj-id', { ...hireBody, name: 'Sub Misto Claude', reportsTo: [claudeBoss.id, boss.id], engine: 'claude', browser: true, mcps: ['github'] }, false))!.profile;
+    expect(livre).toMatchObject({ engine: 'claude', autonomy: 'manual', browser: false, mcps: [], servers: [], canHire: false, hiredBy: claudeBoss.id });
   });
 
   it('gestor do Claude segue como sempre: contratado sem engine (Claude), autonomia limitada à do gestor', async () => {
@@ -244,6 +293,11 @@ describe('contratação por gestor que roda no Codex', () => {
     const hired = (await svc.hire('proj-id', { ...hireBody, name: 'Sub Claude', reportsTo: [boss.id], model: 'opus', browser: true }, false))!.profile;
     expect(hired.engine).toBeUndefined();
     expect(hired).toMatchObject({ autonomy: 'auto', model: 'opus', browser: true, canHire: false }); // o gestor usa o Chrome: o subfuncionário também
+    expect(await readSeal(path.join(root, 'run'), projectPath, hired.id)).toBeNull(); // sem selo: o caminho Claude → Claude não muda
+    // Pedindo `engine: "claude"` o gestor do Claude também não muda nada: autonomia limitada à dele, sem trava de manual.
+    const pediu = (await svc.hire('proj-id', { ...hireBody, name: 'Sub Pediu Claude', reportsTo: [boss.id], engine: 'claude', mcps: ['github'] }, false))!.profile;
+    expect(pediu).toMatchObject({ engine: 'claude', autonomy: 'auto', mcps: ['github'] });
+    expect(await readSeal(path.join(root, 'run'), projectPath, pediu.id)).toBeNull();
     expect((await svc.chatSpawn('proj-id', null, hired.id))!.engine).toBeUndefined();
     // Pelo navegador (o dono), qualquer motor e autonomia, como antes.
     const dono = (await svc.hire('proj-id', { ...hireBody, name: 'Sub Dono', reportsTo: [boss.id], engine: 'claude' }, true))!.profile;

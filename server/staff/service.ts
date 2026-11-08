@@ -249,7 +249,8 @@ export class StaffService {
    * Contrata. Pelo navegador (`fromBrowser`), qualquer ficha. Sem origem de navegador (um
    * funcionário chamando a API), só com `reportsTo` apontando para quem pode contratar, e com
    * autonomia limitada à do gestor. Se algum gestor roda no Codex, o contratado nasce no Codex (`engine: 'codex'`, sem servidores
-   * nem Chrome, autonomia no teto dele): o gestor não contrata alguém sem sandbox, nem pedindo `engine: "claude"`.
+   * nem Chrome, autonomia no teto dele). Pedindo `engine: "claude"`, nasce Claude mas travado: autonomia `manual` (tudo passa pela
+   * aprovação do usuário), sem Chrome, MCPs, servidores nem `canHire`, e selado (ver seal.ts) para não subir a própria autonomia.
    */
   async hire(
     projectId: string,
@@ -264,6 +265,7 @@ export class StaffService {
 
     const managers = await this.managers(project.path, input.reportsTo);
     const hirer = fromBrowser ? undefined : managers.find((m) => m.canHire);
+    let lockedClaude = false; // Claude contratado por gestor no Codex: nasce selado (ver seal.ts)
     if (!fromBrowser) {
       if (!hirer) throw new StaffError('só um funcionário com permissão de contratar pode contratar pela API');
       // Gestor cuja ficha foi mexida fora do Claudio’s Club (um Codex que se rebaixou): não contrata (ver seal.ts).
@@ -272,15 +274,22 @@ export class StaffService {
       input.canHire = false; // subfuncionário contratado por outro não contrata em cascata
       input.servers = input.servers.filter((s) => hirer.servers.includes(s)); // nem acessa servidor que o gestor não acessa
       input.browser = input.browser && hirer.browser; // nem usa o navegador se o gestor não usa
-      // Quem tem gestor no Codex nasce no Codex, com a autonomia dele no máximo e sem servidores nem Chrome: o gestor não pode contratar
-      // alguém sem a sandbox, nem escolhendo `engine: "claude"` no pedido (o Claude roda `auto` e `bypassPermissions` fora de sandbox).
+      // Quem tem gestor no Codex nasce no Codex (o padrão), com a autonomia dele no máximo e sem servidores nem Chrome. Pedindo
+      // `engine: "claude"` (que roda fora da sandbox) nasce Claude travado: `manual`, sem Chrome, MCPs, servidores nem canHire.
       const codexManagers = managers.filter((m) => m.engine === 'codex');
       if (codexManagers.length) {
-        input.engine = 'codex';
-        input.model = codexModelOrNull(input.model);
         input.servers = [];
         input.browser = false;
-        for (const m of codexManagers) input.autonomy = capAutonomy(input.autonomy, m.autonomy);
+        if (input.engine === 'claude') {
+          lockedClaude = true;
+          input.autonomy = 'manual';
+          input.mcps = [];
+          input.canHire = false;
+        } else {
+          input.engine = 'codex';
+          input.model = codexModelOrNull(input.model);
+          for (const m of codexManagers) input.autonomy = capAutonomy(input.autonomy, m.autonomy);
+        }
       }
     }
     await this.checkCodexModel(input.engine, input.model);
@@ -295,7 +304,7 @@ export class StaffService {
       if (owner) throw new StaffError(`essa sessão já é de ${owner.name}`);
       const sessions = [{ id: sessionId, startedAt: session.startedAt ?? session.updatedAt }];
       const profile = await createProfile(project.path, project.id, input, new Date(), sessions);
-      await this.seal(project, profile);
+      await this.seal(project, profile, lockedClaude);
       await writeFicha(profile, await this.context(project, profile));
       return { profile, launch: null };
     }
@@ -303,7 +312,7 @@ export class StaffService {
     // A trava vale também para quem contrata pela API (sem como confirmar, só recusa).
     if (input.launch && !(fromBrowser && input.force)) await this.checkUsage(project.id);
     let profile = await createProfile(project.path, project.id, input);
-    await this.seal(project, profile);
+    await this.seal(project, profile, lockedClaude);
     if (hirer) {
       // Contratado por outro funcionário: temporário, com quem contratou (ver end/sweepTemporaries).
       profile = { ...profile, hiredBy: hirer.id, temporary: true };
@@ -408,7 +417,7 @@ export class StaffService {
     const created = await createProfile(target.path, projectId, input, now);
     const profile: StaffProfile = { ...created, personId };
     await saveProfile(target.path, profile);
-    await this.seal(target, profile);
+    await this.seal(target, profile, (await readSeal(this.opts.runDir, source.path, src.id))?.engine === 'claude'); // a trava do contratado por gestor no Codex vai junto
 
     // Memória: a de origem (com a procedência no topo) ou a padrão. Antes do .md: ensureMemory nunca sobrescreve.
     const oldMemory = withMemory ? await fs.readFile(memoryFile(source.path, src.id), 'utf8').catch(() => null) : null;
@@ -905,9 +914,9 @@ export class StaffService {
     return { sessionId: id, cwd, args, ...chosen };
   }
 
-  /** Grava (Codex) ou apaga (outro motor) o selo da ficha. Só onde o Claudio’s Club decide motor e autonomia (ver seal.ts). */
-  private seal(project: Project, profile: StaffProfile): Promise<void> {
-    return writeSeal(this.opts.runDir, project.path, profile);
+  /** Grava (Codex ou Claude travado) ou apaga (outro motor) o selo da ficha. Só onde o Claudio’s Club decide motor e autonomia (ver seal.ts). */
+  private seal(project: Project, profile: StaffProfile, lockedClaude = false): Promise<void> {
+    return writeSeal(this.opts.runDir, project.path, profile, { lockedClaude });
   }
 
   /**
@@ -979,6 +988,8 @@ export class StaffService {
       librarySkills: profile.skills.length ? await librarySkillsOf(profile.skills, this.opts.skillLibraryDir) : [],
       skillLibraryDir: this.opts.skillLibraryDir,
       codex: config.codexReview,
+      // Claude contratado por gestor no Codex (selo `claude`) e ainda no "Pede tudo": a ficha conta o porquê.
+      lockedByCodexManager: profile.autonomy === 'manual' && profile.engine !== 'codex' && (await readSeal(this.opts.runDir, project.path, profile.id))?.engine === 'claude',
       // A equipe dele: quem reporta a ele (os temporários encerrados já saíram do quadro, mas a ficha
       // não sabe disso; ficam de fora os que têm `ended`).
       team: everyone
