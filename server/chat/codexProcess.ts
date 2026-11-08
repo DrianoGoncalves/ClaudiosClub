@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { ChatAttachment, SendPriority } from '../../shared/model';
 import { CODEX_CONTEXT_WINDOW } from '../adapters/claude/pricing';
 import { cleanEnv } from '../auth';
-import { buildCodexArgs, sandboxFor } from './codexArgs';
+import { buildCodexArgs, sandboxFor, type CodexSecretContext } from './codexArgs';
 import { contextUsed, isToolCall, itemFromCodex, parseCodexFailure, type CodexPhase } from './codexEvents';
 import { hasCheckpoint, stripCheckpoint } from './items';
 import { ChatProcess, type ChatProcessOptions } from './process';
@@ -26,8 +26,8 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   instructions?: string | null;
   /** Pastas extras com escrita na sandbox de escrita (a ficha, quando a conversa roda numa worktree). */
   writableRoots?: string[];
-  /** Saída de `codexSecretArgs` (ver codexArgs.ts). */
-  secretArgs?: string[];
+  /** O que o bloqueio de segredos precisa saber (ver `codexSecretArgs` em codexArgs.ts). */
+  secrets?: Omit<CodexSecretContext, 'cwd'>;
   /** thread_id de uma conversa que já existe: a primeira mensagem já retoma. */
   threadId?: string | null;
   /** Onde guardar o thread_id para continuar depois que o processo fechar (ou o servidor reiniciar). */
@@ -224,7 +224,7 @@ export class CodexProcess extends ChatProcess {
       sandbox: sandboxFor(this.state.permissionMode),
       instructions: o.instructions,
       writableRoots: o.writableRoots,
-      secretArgs: o.secretArgs,
+      secrets: o.secrets,
       threadId: this.thread,
     });
     const run = newRun();

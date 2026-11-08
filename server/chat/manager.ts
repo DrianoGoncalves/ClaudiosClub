@@ -824,7 +824,7 @@ export class ChatManager {
           permissionMode: CLI_MODE[codex.autonomy],
           instructions: codex.instructions,
           writableRoots: codex.writableRoots,
-          secretArgs: codex.secretArgs,
+          secrets: codex.secrets,
           threadId: codex.threadId,
           threadFile: codex.threadFile,
         })

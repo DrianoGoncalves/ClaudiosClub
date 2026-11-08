@@ -16,7 +16,7 @@ import type {
   StaffProfile,
   Task,
 } from '../../shared/model';
-import type { VaultOptions } from '../secretVault';
+import { DEFAULT_SECRETS_DIR, type VaultOptions } from '../secretVault';
 import { isFtpConnection, listFtpServers, readFtpConnections, removeFtpConnection, saveFtpConnection, testFtpConnection, type FtpConnector } from './ftp';
 import { keyFilesOf, listServers, readConnections, removeConnection, saveConnection, testConnection, writeStaffSshConfig } from './servers';
 
@@ -31,7 +31,7 @@ import { librarySkillsOf } from '../skillLibrary';
 import { readUsage } from '../usage';
 import { projectBudgetHit, usageStopHit, UsageStopError } from '../usageStop';
 import { TEMP_IDLE_DAYS } from '../../shared/model';
-import { codexModelOrNull, codexSecretArgs, type CodexSpawn } from '../chat/codexArgs';
+import { codexModelOrNull, type CodexSpawn } from '../chat/codexArgs';
 import { readCodexThread } from '../chat/codexProcess';
 import { buildClaudeArgs, capAutonomy } from './ficha';
 import { greeting, prepareCodexRun, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
@@ -814,7 +814,7 @@ export class StaffService {
         effort: effective.effort,
         instructions: codexRun.instructions,
         writableRoots: codexRun.writableRoots,
-        secretArgs: codexSecretArgs({ cwd, projectPath: project.path, home: os.homedir(), keyFiles: ctx.serverKeys }),
+        secrets: { projectPath: project.path, home: os.homedir(), keyFiles: ctx.serverKeys ?? [], secretsDir: DEFAULT_SECRETS_DIR },
         threadId: resume ? await readCodexThread(codexRun.threadFile) : null,
         threadFile: codexRun.threadFile,
       };
