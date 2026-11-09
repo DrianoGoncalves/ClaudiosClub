@@ -51,6 +51,7 @@ import { readServerLog } from './staff/serverLog';
 import { copyToLibrary, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill, SkillError } from './skillLibrary';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
 import { createGuide, GuideExistsError, guideStatus } from './projectGuide';
+import { checkProjectHealth } from './health/scan';
 import { GuideActionError, runGuideAction } from './guideActions';
 import { deleteAttachment, listAttachments, MAX_ATTACHMENT_BYTES, readAttachment, saveAttachment } from './projectAttachments';
 import {
@@ -1251,6 +1252,11 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       });
     },
   ],
+  // ---- health check do projeto: varredura de regras fixas (sem IA), só leitura ----
+  ['GET', new RegExp(`^/api/projects/${ID}/health-check$`), async ({ params: [id] }) => {
+    const dir = await projectPathOf(id!);
+    return dir ? checkProjectHealth(dir) : null;
+  }],
   // ---- arquivos do projeto (aba de arquivos): listar e ler; gravar só pelo Claudio’s Club ----
   [
     'GET',

@@ -1,6 +1,7 @@
 import { z } from 'zod';
-import type { StaffProfile } from '../shared/model';
-import { GUIDE_PATH, GUIDE_TEMPLATE, hasGuide } from './projectGuide';
+import type { StaffProfile, TaskCodeFile } from '../shared/model';
+import { GUIDE_PATH, GUIDE_TEMPLATE, headSha, hasGuide, recordCheck, validCheck } from './projectGuide';
+import { changedFiles } from './taskCode';
 
 // Ações do guia (POST /api/projects/:id/guide/run): abrem uma conversa NOVA de um funcionário com o texto da
 // ação. Quem faz o trabalho é ele, na conversa; aqui só escolhemos o texto e conferimos o estado do guia.
@@ -21,6 +22,26 @@ export const GuideRunBody = z.object({
 /** Pedido que não vale agora (sem SPEC.md, ou rascunho com ele já escrito). A rota responde 400. */
 export class GuideActionError extends Error {}
 
+/** Acima disso, a lista de arquivos vira só a contagem (o texto não cabe numa mensagem). */
+export const MAX_LISTED_FILES = 80;
+
+/** Mudanças desde a última conferência, para o texto do drift. */
+export interface GuideChanges {
+  /** Hora da última conferência (ISO). */
+  at: string;
+  files: TaskCodeFile[];
+}
+
+/** Resposta de `drift` sem mudanças desde a base: nada é aberto. */
+export interface GuideSkipped {
+  skipped: true;
+  reason: string;
+}
+
+export type GuideRunResult = { sessionId: string; staffId: string } | GuideSkipped;
+
+const dia = (at: string) => new Date(at).toLocaleDateString('pt-BR');
+
 export interface GuideRunDeps {
   /** O funcionário do projeto (null: não existe). */
   readProfile: (staffId: string) => Promise<StaffProfile | null>;
@@ -34,8 +55,11 @@ const LABEL: Record<GuideAction, string> = {
   draft: 'rascunho',
 };
 
-/** Texto da ação, em pt-BR. Começa com `[Guia do projeto: <ação>]`, como as outras mensagens automáticas. */
-export function guideActionText(action: GuideAction): string {
+/**
+ * Texto da ação, em pt-BR. Começa com `[Guia do projeto: <ação>]`, como as outras mensagens automáticas.
+ * `changes` (só no drift): há base de conferência; o texto manda conferir só os arquivos mudados desde ela.
+ */
+export function guideActionText(action: GuideAction, changes?: GuideChanges | null): string {
   const head = `[Guia do projeto: ${LABEL[action]}]`;
   if (action === 'test') {
     return [
@@ -47,10 +71,27 @@ export function guideActionText(action: GuideAction): string {
     ].join('\n\n');
   }
   if (action === 'drift') {
+    const report =
+      'Reporte SÓ divergências, cada uma com arquivo:linha, o trecho do guia e a severidade (🔴 grave, 🟡 importante, 🟢 detalhe). Categorias:\n- escopo descrito e não implementado;\n- implementado o que está em "Fora do escopo";\n- princípio violado;\n- decisão não seguida;\n- termo do glossário usado com outro sentido;\n- funcionalidade relevante do código que o guia não menciona.';
+    if (!changes) {
+      return [
+        head,
+        `Compare o ${GUIDE_PATH} com o código atual. Para buscas longas no código, use um subagent Explore, para não encher esta conversa.`,
+        report,
+        'Sem divergência, responda: "Nenhuma divergência".',
+        'Não edite nada.',
+      ].join('\n\n');
+    }
+    const { at, files } = changes;
+    const list =
+      files.length > MAX_LISTED_FILES
+        ? `${files.length} arquivos mudados desde ${dia(at)}: a lista é longa demais para caber aqui. Confira por pasta de nível alto, com um subagent Explore por pasta, passando só o caminho dela e os itens do guia que tocam nela.`
+        : `Arquivos mudados desde ${dia(at)} (${files.length}; status e caminho):\n${files.map((f) => `- ${f.status} ${f.path}`).join('\n')}`;
     return [
       head,
-      `Compare o ${GUIDE_PATH} com o código atual. Para buscas longas no código, use um subagent Explore, para não encher esta conversa.`,
-      'Reporte SÓ divergências, cada uma com arquivo:linha, o trecho do guia e a severidade (🔴 grave, 🟡 importante, 🟢 detalhe). Categorias:\n- escopo descrito e não implementado;\n- implementado o que está em "Fora do escopo";\n- princípio violado;\n- decisão não seguida;\n- termo do glossário usado com outro sentido;\n- funcionalidade relevante do código que o guia não menciona.',
+      `Confira o ${GUIDE_PATH} SÓ contra os arquivos mudados listados abaixo. Não varra o repo inteiro. Para cada arquivo, leia o trecho dele e o item do guia que ele afeta.`,
+      list,
+      report,
       'Sem divergência, responda: "Nenhuma divergência".',
       'Não edite nada.',
     ].join('\n\n');
@@ -68,8 +109,10 @@ export function guideActionText(action: GuideAction): string {
 /**
  * Valida o pedido e abre a conversa. `null`: o funcionário não existe (404). `test` e `drift` exigem o
  * SPEC.md; `draft` não sobrescreve um que já existe. Quem chama confere que o projeto existe.
+ * `drift` com base e sem mudanças desde ela: `{ skipped: true }`, sem conversa. Depois de abrir a conversa
+ * (draft ou drift, em git), grava o HEAD como nova base; falha de gravação não derruba a ação.
  */
-export async function runGuideAction(deps: GuideRunDeps, dir: string, body: unknown): Promise<{ sessionId: string; staffId: string } | null> {
+export async function runGuideAction(deps: GuideRunDeps, dir: string, body: unknown): Promise<GuideRunResult | null> {
   const parsed = GuideRunBody.safeParse(body);
   if (!parsed.success) throw new GuideActionError(parsed.error.issues[0]?.message ?? 'pedido inválido');
   const { action, staffId } = parsed.data;
@@ -78,6 +121,18 @@ export async function runGuideAction(deps: GuideRunDeps, dir: string, body: unkn
   const exists = await hasGuide(dir);
   if (action === 'draft' && exists) throw new GuideActionError(`já existe ${GUIDE_PATH}: o rascunho não sobrescreve (use o teste ou a divergência)`);
   if (action !== 'draft' && !exists) throw new GuideActionError(`não há ${GUIDE_PATH} neste projeto: crie o guia antes`);
-  const sessionId = await deps.send(profile.id, guideActionText(action), false);
+
+  let changes: GuideChanges | null = null;
+  if (action === 'drift') {
+    const base = await validCheck(dir);
+    if (base) {
+      const files = await changedFiles(dir, base.sha);
+      if (files.length === 0) return { skipped: true, reason: `sem mudanças desde ${dia(base.at)}` };
+      changes = { at: base.at, files };
+    }
+  }
+  const head = action === 'test' ? null : await headSha(dir);
+  const sessionId = await deps.send(profile.id, guideActionText(action, changes), false);
+  if (head) await recordCheck(dir, head).catch(() => {});
   return { sessionId, staffId: profile.id };
 }

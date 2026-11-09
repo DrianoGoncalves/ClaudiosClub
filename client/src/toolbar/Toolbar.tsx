@@ -344,6 +344,9 @@ export function CodexUsageLine({ codex }: { codex: CodexUsage }) {
     );
   }
 
+  // Sem o Codex instalado o botão "Instalar" já diz tudo: o ícone vermelho de "não logado" seria ruído.
+  const notInstalled = !cx.connected && cx.reason === 'not_installed';
+
   return (
     <div className="usage-line usage-codex">
       {shown.length > 0 && (
@@ -353,12 +356,14 @@ export function CodexUsageLine({ codex }: { codex: CodexUsage }) {
           ))}
         </span>
       )}
-      <span className="auth-conn">
-        <span className={`auth-light ${light}`} role="img" aria-label={iconLabel} title={iconLabel}>
-          <TerminalFilledIcon />
+      {!notInstalled && (
+        <span className="auth-conn">
+          <span className={`auth-light ${light}`} role="img" aria-label={iconLabel} title={iconLabel}>
+            <TerminalFilledIcon />
+          </span>
+          <ConnName name={name} />
         </span>
-        <ConnName name={name} />
-      </span>
+      )}
       {action}
       {shownError && <span className="error">{shownError}</span>}
       {cx.version?.outdated && cx.upgradeCommand && (

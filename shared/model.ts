@@ -554,6 +554,16 @@ export interface Task {
    * vem depois é da próxima tarefa dele, que já pode ter começado na mesma worktree.
    */
   checkpoint?: { sha: string; at: string } | null;
+  /** Entrega (quando foi para revisão): o resumo da conversa e, se a ficha pediu, o porquê de cada arquivo. */
+  delivery?: TaskDelivery;
+}
+
+export interface TaskDelivery {
+  at: string;
+  /** Última mensagem do funcionário, cortada em 1500 caracteres. */
+  summary: string;
+  /** Caminho relativo do arquivo → por que mudou (texto puro, até 200 caracteres). Ausente sem lista. */
+  notes?: Record<string, string>;
 }
 
 export interface HeldMessage {

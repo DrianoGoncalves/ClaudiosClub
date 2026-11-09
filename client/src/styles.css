@@ -308,6 +308,10 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 /* Aviso automático da plataforma (chega como mensagem do usuário, com prefixo): à esquerda, neutro, tracejado. */
 .msg-system { position: relative; align-self: flex-start; background: var(--panel); border: 1px dashed var(--line); border-bottom-left-radius: 4px; font-size: 13px; }
 .msg-system-badge { display: inline-block; margin-bottom: 4px; white-space: nowrap; }
+/* Rodapé do balão: data e hora da mensagem. No balão azul herda a cor do texto (75% mantém ≥4,5:1); nos demais usa o --muted do próprio balão. */
+.msg-time { display: block; margin-top: 3px; font-size: 10.5px; line-height: 1.2; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.msg-user .msg-time { color: inherit; opacity: 0.75; }
+.msg-user .msg-time, .msg-staff .msg-time { text-align: end; }
 /* Markdown (GFM) das respostas: compacto, títulos pouco maiores que o texto, tabela e código com rolagem própria. */
 .md { min-width: 0; }
 .md > :first-child { margin-top: 0; }
@@ -564,6 +568,8 @@ textarea.q-field { resize: vertical; }
 .guide-who .setting-select { flex: 1 1 160px; min-width: 0; max-width: 100%; }
 .guide-actions { flex-wrap: wrap; }
 .guide-hints { margin: 8px 0 0; padding-left: 16px; display: grid; gap: 4px; }
+/* "N arquivos mudaram desde …" (ou o aviso de que nada mudou), logo abaixo dos botões. */
+.guide-since { margin: 8px 0 0; }
 @media (max-width: 640px) {
   .files-body { grid-template-columns: minmax(0, 1fr); }
   .files-body.is-editing .files-tree, .files-body:not(.is-editing) .files-editor { display: none; }
@@ -590,6 +596,9 @@ textarea.q-field { resize: vertical; }
 .task-card.is-archived:hover, .task-card.is-archived.is-selected { opacity: 1; }
 .link.tasks-archived-toggle { align-self: flex-start; margin-top: 2px; color: var(--muted); }
 .task-title { font-weight: 600; font-size: 13.5px; line-height: 1.25; }
+/* Id da tarefa (t-1a2b3c): discreto, herda o cinza do texto ao redor; text-transform none por causa do .kicker em caixa alta. */
+.task-id { font-family: ui-monospace, Consolas, monospace; font-size: 0.9em; text-transform: none; letter-spacing: 0; }
+.task-detail .task-id { user-select: all; }
 .task-branch { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Selo de status no cartão: plano para aprovar (amarelo do "precisa de mim"), no ar (verde), não publicado (neutro). */
 .task-badge { justify-self: start; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; font-size: 11px; font-weight: 600; }
@@ -621,6 +630,11 @@ textarea.q-field { resize: vertical; }
 .task-file-status.s-D { color: var(--ink-red); }
 .task-file-delta .add { color: var(--ink-green); }
 .task-file-delta .del { color: var(--ink-red); }
+/* Porquê do arquivo (nota da entrega): linha própria sob o caminho, recuada à largura da letra de status. */
+.task-file-note { display: block; margin-left: 18px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.task-files.has-notes { max-height: 320px; }
+/* Resumo da entrega: texto puro, com as quebras de linha da mensagem. */
+.task-delivery-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .task-diff { margin: 6px 0 0; max-height: 320px; overflow: auto; font-size: 11.5px; line-height: 1.35; padding: 8px; border-radius: 6px; background: color-mix(in srgb, var(--ink) 6%, transparent); white-space: pre; }
 .task-code-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .task-code-row select { font: inherit; font-size: 12.5px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); max-width: 200px; }

@@ -198,7 +198,7 @@ describe('tarefa pedida por um gestor', () => {
       notify: async (_p, staffId, text) => void notified.push({ staffId, text }),
       lastText: () => 'Troquei os tokens de cor do botão.',
     });
-    const t = (await svc.create('p', { title: 'Botão no DS', description: 'Usar os tokens novos', staffId: 'lu-1' }, 'gio-1'))!;
+    const t = (await svc.create('p', { title: 'Botão no DS', description: 'Usar os tokens novos', staffId: 'lu-1', reviewerId: null }, 'gio-1'))!;
     expect(t).toMatchObject({ requestedBy: 'gio-1', history: [{ by: 'auto', note: 'pedida por Giovana' }] });
     await svc.start('p', t.id);
     expect(sent[0]).toMatchObject({ staffId: 'lu-1', text: expect.stringContaining('Pedida por Giovana (Orquestradora)') });
@@ -231,7 +231,7 @@ describe('tarefa pedida por um gestor', () => {
       requesterSession: (_p, staffId) => (staffId === 'gio-1' ? 's-gio-pediu' : null),
       runTests: async (cwd, command) => (ran.push(`${cwd}|${command}`), { command, ok: false, output: 'FAIL botao.test.ts', ms: 4200, at: '2026-10-28T12:00:00Z' }),
     });
-    const t = (await svc.create('p', { title: 'Botão', description: '', staffId: 'lu-1' }, 'gio-1'))!;
+    const t = (await svc.create('p', { title: 'Botão', description: '', staffId: 'lu-1', reviewerId: null }, 'gio-1'))!;
     expect(t.requestedSession).toBe('s-gio-pediu');
     await svc.start('p', t.id);
     await svc.onTurnDone('s-lu2');
@@ -1007,5 +1007,120 @@ describe('quadro: Aguardar', () => {
     await svc.create('p', { title: 'W', staffId: 'ana-1', start: false });
     expect(await svc.releaseStaff('p', 'ana-1')).toBe(1);
     expect((await svc.list('p'))![0]).toMatchObject({ status: 'waiting', staffId: null });
+  });
+});
+
+describe('gestor como revisor (tarefa que ele passou)', () => {
+  /** Giovana pede a Luana: sem `reviewerId` no pedido, Giovana revisa (conversa nova dela). `failReview`: a revisão não começa. */
+  async function selfFlow(dirName: string, opts: { failReview?: boolean } = {}) {
+    const dir = path.join(root, dirName);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
+    const sent: Array<{ staffId: string; text: string; session: string }> = [];
+    const notified: Array<{ staffId: string; text: string; sessionId: string | null | undefined }> = [];
+    const texts = new Map<string, string>();
+    let n = 0;
+    const people: Record<string, StaffProfile> = {
+      'gio-1': { id: 'gio-1', name: 'Giovana', role: 'Orquestradora', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+      'lu-1': { id: 'lu-1', name: 'Luana', role: 'Front-end', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+      'rev-1': { id: 'rev-1', name: 'Rui', role: 'Revisor', autonomy: 'manual', worktree: false } as StaffProfile,
+    };
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => people[id] ?? null,
+      send: async (_p, staffId, text) => {
+        if (opts.failReview && staffId === 'gio-1') throw new Error('sem conversa');
+        const session = `s-${++n}`;
+        sent.push({ staffId, text, session });
+        return session;
+      },
+      branchFor: async () => null,
+      notify: async (_p, staffId, text, sessionId) => void notified.push({ staffId, text, sessionId }),
+      lastText: (sid) => texts.get(sid) ?? 'Pronto.',
+      requesterSession: (_p, staffId) => (staffId === 'gio-1' ? 's-gio' : null),
+      runTests: async (_c, command) => ({ command, ok: true, output: '', ms: 2000, at: '2026-11-09T12:00:00Z' }),
+      sendTo: async (_p, sessionId) => sessionId,
+    });
+    const make = async (title: string) => (await svc.create('p', { title, staffId: 'lu-1' }, 'gio-1'))!;
+    const current = async () => (await svc.list('p'))![0]!;
+    return { svc, sent, notified, texts, make, current };
+  }
+
+  it('create: sem reviewerId no pedido, o gestor revisa; reviewerId mandado (null inclusive) vale; gestor = executor não revisa', async () => {
+    const { svc } = await selfFlow('self-create');
+    expect(await svc.create('p', { title: 'A', staffId: 'lu-1' }, 'gio-1')).toMatchObject({ reviewerId: 'gio-1' });
+    expect(await svc.create('p', { title: 'B', staffId: 'lu-1', reviewerId: null }, 'gio-1')).toMatchObject({ reviewerId: null });
+    expect(await svc.create('p', { title: 'C', staffId: 'lu-1', reviewerId: 'rev-1' }, 'gio-1')).toMatchObject({ reviewerId: 'rev-1' });
+    expect(await svc.create('p', { title: 'D', staffId: 'gio-1' }, 'gio-1')).toMatchObject({ reviewerId: null });
+    expect(await svc.create('p', { title: 'E', staffId: 'lu-1' })).toMatchObject({ reviewerId: null });
+  });
+
+  it('na entrega não avisa o gestor; a revisão vai para a conversa nova dele, com os testes já rodados', async () => {
+    const { svc, sent, notified, make, current } = await selfFlow('self-entrega');
+    const t = await make('Botão');
+    expect(t).toMatchObject({ requestedBy: 'gio-1', reviewerId: 'gio-1' });
+    await svc.start('p', t.id); // s-1 (Luana)
+    await svc.onTurnDone('s-1');
+    expect(notified).toEqual([]);
+    expect(sent.at(-1)).toMatchObject({ staffId: 'gio-1', session: 's-2' });
+    expect(sent.at(-1)!.text).toContain('passaram em 2 s. Não rode de novo.');
+    expect(await current()).toMatchObject({ status: 'review', tests: { ok: true }, review: { staffId: 'gio-1', sessionId: 's-2' } });
+  });
+
+  it('aprovada na revisão dele: ele é avisado na conversa em que pediu, com título e id', async () => {
+    const { svc, notified, texts, make } = await selfFlow('self-aprova');
+    const t = await make('Formulário');
+    await svc.start('p', t.id); // s-1
+    await svc.onTurnDone('s-1'); // s-2: revisão dela
+    texts.set('s-2', 'APROVADO\n\nok');
+    await svc.onTurnDone('s-2');
+    expect((await svc.list('p'))![0]!.status).toBe('done');
+    expect(notified).toEqual([{ staffId: 'gio-1', sessionId: 's-gio', text: `[MyCo] Tarefa “Formulário” (id ${t.id}): aprovada na sua revisão, foi para pronto.` }]);
+  });
+
+  it('reprovada: não avisa o gestor; o ajuste volta para a conversa da Luana e a próxima rodada é pedida sozinha', async () => {
+    const { svc, notified, texts, make, current } = await selfFlow('self-reprova');
+    const t = await make('Tabela');
+    await svc.start('p', t.id); // s-1
+    await svc.onTurnDone('s-1'); // s-2
+    texts.set('s-2', 'REPROVADO\n\ntabela.tsx:3 falta o aria-label');
+    await svc.onTurnDone('s-2');
+    expect(notified).toEqual([]);
+    expect(await current()).toMatchObject({ status: 'doing' });
+    await svc.onTurnDone('s-1'); // ajustou: a rodada 2 é pedida à Giovana (s-3)
+    expect(await current()).toMatchObject({ status: 'review', reviewRounds: 2, review: { sessionId: 's-3' } });
+    expect(notified).toEqual([]);
+  });
+
+  it('no limite de revisões, o que sobrou fica com ele: avisa a conversa em que pediu', async () => {
+    const { svc, notified, texts, make } = await selfFlow('self-limite');
+    const t = await make('Relatório');
+    await svc.start('p', t.id); // s-1
+    await svc.onTurnDone('s-1'); // rodada 1 (s-2)
+    for (const s of ['s-2', 's-3']) {
+      texts.set(s, 'REPROVADO\n\najuste');
+      await svc.onTurnDone(s); // reprovou: volta para fazendo
+      await svc.onTurnDone('s-1'); // ajustou e terminou: a rodada 2 (s-3) é a última
+    }
+    expect(notified).toEqual([{ staffId: 'gio-1', sessionId: 's-gio', text: expect.stringContaining(`(id ${t.id}): o limite de 2 revisões automáticas foi atingido; o que sobrou fica com você.`) }]);
+  });
+
+  it('revisão dele não começou: ele recebe o aviso da entrega, como antes', async () => {
+    const { svc, notified, make, current } = await selfFlow('self-falha', { failReview: true });
+    const t = await make('Cabeçalho');
+    await svc.start('p', t.id);
+    await svc.onTurnDone('s-1');
+    expect(notified).toEqual([{ staffId: 'gio-1', sessionId: 's-gio', text: expect.stringContaining('Luana entregou a tarefa “Cabeçalho”') }]);
+    expect((await current()).history.at(-1)?.note).toBe('revisão automática não começou: sem conversa');
+  });
+
+  it('revisor diferente do gestor: a entrega avisa o gestor como antes, e a revisão vai para o revisor', async () => {
+    const { svc, sent, notified } = await selfFlow('self-outro');
+    const t = (await svc.create('p', { title: 'Lista', staffId: 'lu-1', reviewerId: 'rev-1' }, 'gio-1'))!;
+    await svc.start('p', t.id);
+    await svc.onTurnDone('s-1');
+    expect(notified).toEqual([{ staffId: 'gio-1', sessionId: 's-gio', text: expect.stringContaining('Luana entregou a tarefa “Lista”') }]);
+    expect(sent.at(-1)).toMatchObject({ staffId: 'rev-1' });
   });
 });

@@ -1,12 +1,22 @@
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { writeAtomic } from './staff/store';
+import { changedFiles } from './taskCode';
 
 // Guia do projeto (SPEC.md, na raiz da pasta do projeto). Se existe, a ficha de todo funcionário dele manda
 // consultá-lo em caso de dúvida (ver server/staff/ficha.ts). O arquivo é do projeto: o Claudio’s Club só cria
 // o modelo e lê o estado; editar é com o usuário, no editor dele.
 
 export const GUIDE_PATH = 'SPEC.md';
+/** Última conferência do guia (draft ou drift): o HEAD da hora e a data. Fica na pasta do Club do projeto. */
+export const GUIDE_CHECK_PATH = path.join('.myco', 'guide.json');
+
+/** Base da conferência: o sha do HEAD quando o guia foi conferido, e a hora (ISO). */
+export interface GuideCheck {
+  sha: string;
+  at: string;
+}
 
 export interface GuideStatus {
   /** Caminho relativo à raiz do projeto. */
@@ -16,6 +26,10 @@ export interface GuideStatus {
   isGit: boolean;
   /** O git ignora o arquivo (.gitignore): só faz sentido com isGit. */
   ignored: boolean;
+  /** Base válida (o sha ainda existe no repo). Ausente: sem base, o drift confere tudo. */
+  lastCheck?: GuideCheck;
+  /** Arquivos mudados desde `lastCheck.sha` (inclui não rastreados; ignora `.myco/`). Só com `lastCheck`. */
+  changedSince?: number;
 }
 
 /** Já existe um SPEC.md: a criação não sobrescreve. A rota responde 409 com `{ error: 'exists' }`. */
@@ -37,12 +51,53 @@ export async function hasGuide(root: string): Promise<boolean> {
   return fs.stat(path.join(root, GUIDE_PATH)).then((st) => st.isFile(), () => false);
 }
 
+/** HEAD da pasta (git). Sem git ou sem commit: null. */
+export async function headSha(root: string): Promise<string | null> {
+  const out = await git(root, ['rev-parse', '--verify', '-q', 'HEAD']);
+  const sha = out?.trim() ?? '';
+  return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
+}
+
+/** Lê `.myco/guide.json`. Arquivo ausente ou fora do formato: null. */
+async function readCheck(root: string): Promise<GuideCheck | null> {
+  const raw = await fs.readFile(path.join(root, GUIDE_CHECK_PATH), 'utf8').catch(() => null);
+  if (raw === null) return null;
+  try {
+    const data = JSON.parse(raw) as Partial<GuideCheck>;
+    return typeof data.sha === 'string' && /^[0-9a-f]{40,64}$/.test(data.sha) && typeof data.at === 'string' ? { sha: data.sha, at: data.at } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Base válida: está gravada e o sha ainda existe no repo (um rebase pode tê-lo levado). Senão, null. */
+export async function validCheck(root: string): Promise<GuideCheck | null> {
+  const check = await readCheck(root);
+  if (!check) return null;
+  const exists = (await git(root, ['cat-file', '-e', `${check.sha}^{commit}`])) !== null;
+  return exists ? check : null;
+}
+
+/** Grava a base com o HEAD atual. Gravação atômica (a do Club), dentro de `.myco/`. */
+export async function recordCheck(root: string, sha: string): Promise<void> {
+  const file = path.join(root, GUIDE_CHECK_PATH);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const check: GuideCheck = { sha, at: new Date().toISOString() };
+  await writeAtomic(file, JSON.stringify(check, null, 2) + '\n');
+}
+
 export async function guideStatus(root: string): Promise<GuideStatus> {
   const exists = await hasGuide(root);
   const inside = (await git(root, ['rev-parse', '--is-inside-work-tree']))?.trim() === 'true';
   // check-ignore -q: código 0 = ignorado; 1 = não ignorado (o execFile devolve erro nos dois casos de falha).
   const ignored = inside ? (await git(root, ['check-ignore', '-q', GUIDE_PATH])) !== null : false;
-  return { path: GUIDE_PATH, exists, isGit: inside, ignored };
+  const status: GuideStatus = { path: GUIDE_PATH, exists, isGit: inside, ignored };
+  const base = inside ? await validCheck(root) : null;
+  if (base) {
+    status.lastCheck = base;
+    status.changedSince = (await changedFiles(root, base.sha)).length;
+  }
+  return status;
 }
 
 /**

@@ -17,6 +17,12 @@ const STATUS: Record<string, string> = {
   '?': t('tasks.fileUntracked'),
 };
 
+/** O porquê do arquivo, se houver: só chave própria com texto (um caminho como "constructor" não pega o protótipo). */
+function noteFor(notes: Record<string, string> | undefined, path: string): string | null {
+  const note = notes && Object.prototype.hasOwnProperty.call(notes, path) ? notes[path] : null;
+  return typeof note === 'string' && note.trim() ? note : null;
+}
+
 interface Props {
   projectId: string;
   task: Task;
@@ -96,22 +102,33 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
             )}
           </p>
           {code.files.length > 0 ? (
-            <ul className="task-files small">
-              {code.files.slice(0, 40).map((f) => (
-                <li key={f.path} title={STATUS[f.status] ?? f.status}>
-                  <span className={`task-file-status s-${f.status === '?' ? 'n' : f.status}`}>{f.status}</span> <span className="mono">{f.path}</span>
-                  {(f.add > 0 || f.del > 0) && (
-                    <span className="task-file-delta">
-                      {' '}
-                      <span className="add">+{f.add}</span> <span className="del">-{f.del}</span>
-                    </span>
-                  )}
-                </li>
-              ))}
+            <ul className={`task-files small${task.delivery?.notes ? ' has-notes' : ''}`}>
+              {code.files.slice(0, 40).map((f) => {
+                const why = noteFor(task.delivery?.notes, f.path);
+                return (
+                  <li key={f.path} title={STATUS[f.status] ?? f.status}>
+                    <span className={`task-file-status s-${f.status === '?' ? 'n' : f.status}`}>{f.status}</span> <span className="mono">{f.path}</span>
+                    {(f.add > 0 || f.del > 0) && (
+                      <span className="task-file-delta">
+                        {' '}
+                        <span className="add">+{f.add}</span> <span className="del">-{f.del}</span>
+                      </span>
+                    )}
+                    {why && <span className="task-file-note">{why}</span>}
+                  </li>
+                );
+              })}
               {code.files.length > 40 && <li className="muted">{t('tasks.andMore', { n: code.files.length - 40 })}</li>}
             </ul>
           ) : (
             <p className="muted small">{t('tasks.nothingChanged')}</p>
+          )}
+          {task.delivery?.summary.trim() && (
+            <details className="collapse">
+              <summary>{t('tasks.deliverySummary', { ago: formatAgo(now - Date.parse(task.delivery.at)) })}</summary>
+              {/* Texto puro: o resumo é a fala do funcionário, nunca vira HTML nem markdown. */}
+              <p className="task-delivery-text small">{task.delivery.summary}</p>
+            </details>
           )}
           {code.diff && (
             <details className="collapse">

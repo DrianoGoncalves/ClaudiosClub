@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { AskedQuestion, ChatItem } from '../../../shared/model';
 import type { PermissionOpts } from '../api';
 import { t } from '../i18n';
+import { MsgTime } from './MsgTime';
 import { answerOf, answerText, collectAnswers, initialDrafts, numberState, previewDoc, previewOption, type Draft } from './questionAnswers';
 
 // Pergunta com opções do Claude (ferramenta AskUserQuestion): você escolhe, escreve ou pula, e as
@@ -126,6 +127,7 @@ export function QuestionCard({
           </button>
         </div>
       )}
+      <MsgTime at={item.at} />
     </div>
   );
 }

@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import { GPT_MCP_NAME, GPT_TOOL_NAME } from '../../shared/model';
 import { codexEnv } from '../adapters/codex';
-import { CodexBlockedError, codexSafetyArgs, tomlString } from '../chat/codexArgs';
+import { CodexBlockedError, codexSafetyArgs, codexWindowsSandboxArgs, tomlString } from '../chat/codexArgs';
 import { isModelUnavailable } from '../chat/codexEvents';
 import { killTree } from '../chat/registry';
 import { findSecret } from '../chat/secrets';
@@ -252,6 +252,7 @@ export function buildAskArgs(o: { cwd: string; projectPath: string; home: string
     '-c',
     `model_reasoning_effort=${tomlString(o.effort)}`,
     ...codexSafetyArgs({ mode: 'read-only', network: 'off', cwd: o.cwd, projectPath: o.projectPath, home: o.home, mycoHome: o.mycoHome }),
+    ...codexWindowsSandboxArgs(),
     '--ephemeral',
     '--skip-git-repo-check',
     '--color',

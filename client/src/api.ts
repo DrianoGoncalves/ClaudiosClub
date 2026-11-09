@@ -525,20 +525,31 @@ export const api = {
   projectGuide: (projectId: string) => get<ProjectGuide>(`/api/projects/${projectId}/guide`),
   /** Cria o SPEC.md a partir do modelo; 409 se já existe. */
   createProjectGuide: (projectId: string) => post<ProjectGuide>(`/api/projects/${projectId}/guide`),
-  /** Abre uma conversa nova do funcionário com o pedido do guia (testar, divergências ou rascunho); 400 se não vale agora. */
+  /**
+   * Abre uma conversa nova do funcionário com o pedido do guia (testar, divergências ou rascunho); 400 se não vale agora.
+   * `drift` sem mudança desde a última conferência não abre nada: `{ skipped: true, reason }`, sem `sessionId`.
+   */
   runProjectGuide: (projectId: string, action: GuideAction, staffId: string) =>
-    post<{ sessionId: string; staffId: string }>(`/api/projects/${projectId}/guide/run`, { action, staffId }),
+    post<GuideRun>(`/api/projects/${projectId}/guide/run`, { action, staffId }),
   accountRules: () => get<{ path: string; text: string | null }>('/api/account/rules'),
   saveAccountRules: (text: string) => post<{ path: string; text: string | null }>('/api/account/rules', { text }),
 };
 
-/** Guia do projeto. `ignored` = está no .gitignore (só conta com `isGit`). */
+/**
+ * Guia do projeto. `ignored` = está no .gitignore (só conta com `isGit`).
+ * `lastCheck`/`changedSince`: última conferência com o código e quantos arquivos mudaram desde ela (ausentes sem base).
+ */
 export interface ProjectGuide {
   path: string;
   exists: boolean;
   isGit: boolean;
   ignored: boolean;
+  lastCheck?: { sha: string; at: string };
+  changedSince?: number;
 }
+
+/** Resposta do pedido ao guia: a conversa aberta, ou nada aberto (`skipped`) com o motivo em texto. */
+export type GuideRun = { sessionId: string; staffId: string } | { skipped: true; reason: string };
 
 /** Item da árvore de arquivos do projeto; `path` relativo à raiz, com "/". `locked` = segredo: listado, mas não abre. */
 export interface FileEntry {

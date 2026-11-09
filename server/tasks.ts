@@ -2,8 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { TASK_STATUSES, type ChatItem, type HeldMessage, type StaffProfile, type Task, type TaskCode, type TaskHandoff, type TaskStatus, type TaskSummary, type TestRun } from '../shared/model';
+import { TASK_STATUSES, type ChatItem, type HeldMessage, type StaffProfile, type Task, type TaskCode, type TaskDelivery, type TaskHandoff, type TaskStatus, type TaskSummary, type TestRun } from '../shared/model';
 import type { SecondOpinionInput } from './adapters/codex';
+import { DELIVERY_SUMMARY_MAX, parseDeliveryNotes } from './deliveryNotes';
 import { hasGuide } from './projectGuide';
 import { writeAtomic } from './staff/store';
 import { checkpoint, CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
@@ -129,8 +130,11 @@ export class TaskService {
   async create(projectId: string, body: unknown, requestedBy: string | null = null): Promise<Task | null> {
     const input = parseOr(TaskInput, body);
     if (input.staffId) await this.staffOrThrow(projectId, input.staffId);
-    await this.checkReviewer(projectId, input.reviewerId, input.staffId, true);
     const manager = requestedBy ? await this.staffOrThrow(projectId, requestedBy) : null;
+    // Pedida por um gestor sem `reviewerId` no pedido: ele mesmo confere a entrega. Um `reviewerId` mandado (null inclusive) vale.
+    const sentReviewer = typeof body === 'object' && body !== null && 'reviewerId' in body;
+    const reviewerId = manager && input.staffId && manager.id !== input.staffId && !sentReviewer ? manager.id : input.reviewerId;
+    await this.checkReviewer(projectId, reviewerId, input.staffId, true);
     const now = new Date().toISOString();
     // Sem começar, vai para Aguardar (e não para A fazer): só começa quando você mandar.
     const initial: TaskStatus = input.start ? 'todo' : 'waiting';
@@ -143,7 +147,7 @@ export class TaskService {
       description: input.description,
       status: initial,
       staffId: input.staffId,
-      reviewerId: input.reviewerId,
+      reviewerId,
       sessionId: null,
       plan: null,
       branch: null,
@@ -349,6 +353,7 @@ export class TaskService {
         // Como numa entrega (commit e aviso ao gestor), mas sem testes nem revisão automática: está pela metade.
         if (stopped) {
           await this.markDelivery(projectId, stopped);
+          await this.recordDelivery(projectId, stopped, t.sessionId);
           await this.tellManager(projectId, stopped, t.sessionId, true);
         }
         return true;
@@ -485,6 +490,8 @@ export class TaskService {
       task.description && `O que foi pedido:\n${task.description}`,
       where,
       files,
+      // Só de tarefa pedida por gestor os testes são da última entrega (workDone roda); fora disso podem ser velhos.
+      task.requestedBy ? testsLine(task.tests) : '',
       guide,
       'Responda com APROVADO ou REPROVADO na primeira linha, exatamente assim. Em seguida, os achados, cada um com arquivo:linha, o porquê e a severidade: 🔴 bloqueia, 🟡 importante, 🟢 detalhe. REPROVADO só se houver algum 🔴; só 🟡 ou 🟢 é APROVADO, com a lista depois como observações. Algo inventado (API, arquivo, opção ou resultado que não existe) é 🔴. Não mude o código: só revise.',
     ]
@@ -565,11 +572,14 @@ export class TaskService {
   private async approve(projectId: string, taskId: string, reviewer: string): Promise<void> {
     const { dir, task, profile } = await this.context(projectId, taskId);
     const place = task.staffId ? await locateCode(dir, task.staffId, !!profile?.worktree).catch(() => null) : null;
+    const head = `[MyCo] Tarefa “${task.title}” (id ${task.id}): `;
     if (place?.where === 'worktree' && !task.merged) {
       await this.change(projectId, taskId, (t) => (t.status === 'review' ? noted(t, `aprovada por ${reviewer}; falta mesclar`) : t));
+      if (selfReview(task)) await this.tellRequester(projectId, task, `${head}aprovada; falta mesclar a worktree.`);
       return;
     }
     await this.change(projectId, taskId, (t) => (t.status === 'review' ? moved(t, 'done', 'auto', `aprovada por ${reviewer}`) : t));
+    if (selfReview(task)) await this.tellRequester(projectId, task, `${head}aprovada na sua revisão, foi para pronto.`);
   }
 
   /**
@@ -625,6 +635,8 @@ export class TaskService {
       await this.change(projectId, task.id, (t) =>
         noted(t, `limite de ${AUTO_REVIEW_ROUNDS} revisões automáticas; o que sobrou fica com você: aceitar como trade-off (anotar em "Decisões" no SPEC.md) ou pedir ajuste`),
       );
+      if (selfReview(task))
+        await this.tellRequester(projectId, task, `[MyCo] Tarefa “${task.title}” (id ${task.id}): o limite de ${AUTO_REVIEW_ROUNDS} revisões automáticas foi atingido; o que sobrou fica com você.`);
       return;
     }
     try {
@@ -632,6 +644,8 @@ export class TaskService {
       await this.change(projectId, task.id, (t) => ({ ...t, reviewRounds: (t.reviewRounds ?? 0) + 1 }));
     } catch (err) {
       await this.change(projectId, task.id, (t) => noted(t, `revisão automática não começou: ${(err as Error).message}`));
+      // Quem pediu ia revisar e a revisão não começou: ele ainda tem de saber da entrega, como antes.
+      if (selfReview(task) && task.sessionId) await this.tellManager(projectId, task, task.sessionId);
     }
   }
 
@@ -661,17 +675,30 @@ export class TaskService {
       await this.change(where.projectId, where.taskId, (t) => (t.status === 'doing' ? (delivered = moved(t, 'review', 'auto', 'turno terminou')) : t));
       if (delivered) {
         await this.markDelivery(where.projectId, delivered);
+        delivered = await this.recordDelivery(where.projectId, delivered, sessionId);
         // Pedida por um gestor: o Claudio’s Club roda os testes antes de avisar, e o gestor não gasta a conversa
         // dele (a mais longa e cara) rodando de novo.
         const tests = (delivered as Task).requestedBy ? await this.deliveryTests(where.projectId, delivered) : null;
         if (tests) delivered = (await this.change(where.projectId, where.taskId, (t) => ({ ...t, tests }))) ?? delivered;
-        await this.tellManager(where.projectId, delivered, sessionId);
+        // Quem pediu é quem revisa: o aviso sai no desfecho da revisão automática (ver autoReview), não na entrega.
+        if (!selfReview(delivered)) await this.tellManager(where.projectId, delivered, sessionId);
       }
       return delivered as Task | null;
     });
     void this.kick(where.projectId, staffId);
     // Fora da vez dele: a revisão automática (com revisor marcado) é pedida depois da entrega.
     if (deliveredTask) await this.autoReview(where.projectId, deliveredTask);
+  }
+
+  /**
+   * Guarda a entrega no próprio Task (resumo e notas por arquivo), com ou sem gestor: sem isso, o
+   * resumo só existe na conversa do gestor.
+   */
+  private async recordDelivery(projectId: string, task: Task, sessionId: string): Promise<Task> {
+    const full = this.deps.lastText?.(sessionId) ?? '';
+    const notes = parseDeliveryNotes(full);
+    const delivery: TaskDelivery = { at: new Date().toISOString(), summary: full.trim().slice(0, DELIVERY_SUMMARY_MAX), ...(notes && { notes }) };
+    return (await this.change(projectId, task.id, (t) => ({ ...t, delivery }))) ?? task;
   }
 
   /**
@@ -685,11 +712,7 @@ export class TaskService {
     const summary = (this.deps.lastText?.(sessionId) ?? '').trim().slice(0, 1500);
     // Interrompida: testes guardados seriam de uma entrega anterior, não desta.
     const t = interrupted ? undefined : task.tests;
-    const tests = t
-      ? t.ok
-        ? `Testes (\`${t.command}\`, rodados pelo Claudio’s Club): passaram em ${Math.round(t.ms / 1000)} s. Não rode de novo.`
-        : `Testes (\`${t.command}\`, rodados pelo Claudio’s Club): FALHARAM. Fim da saída:\n${t.output.slice(-800)}`
-      : '';
+    const tests = testsLine(t);
     const text = [
       interrupted
         ? `[MyCo] A conversa de ${name} na tarefa “${task.title}” (id ${task.id}) parou duas vezes sem terminar (o Claudio’s Club reiniciou no meio); ela foi para revisão e a fila dele andou. A entrega pode estar incompleta: confira e, se faltar algo, peça na conversa da tarefa.`
@@ -705,6 +728,12 @@ export class TaskService {
     ]
       .filter(Boolean)
       .join('\n\n');
+    await this.deps.notify(projectId, task.requestedBy, text, task.requestedSession ?? null).catch(() => {});
+  }
+
+  /** Revisor é quem pediu: o desfecho vai para a conversa dele, a em que pediu (ver selfReview). */
+  private async tellRequester(projectId: string, task: Task, text: string): Promise<void> {
+    if (!task.requestedBy || !this.deps.notify) return;
     await this.deps.notify(projectId, task.requestedBy, text, task.requestedSession ?? null).catch(() => {});
   }
 
@@ -870,6 +899,17 @@ function occupant(tasks: Task[], staffId: string, except?: string): Task | undef
  */
 function deliveredAt(t: Task): string | null {
   return t.checkpoint && t.status !== 'doing' && t.status !== 'planning' ? t.checkpoint.sha : null;
+}
+
+/** Quem pediu a tarefa é quem revisa a entrega (revisor marcado igual ao gestor): ele recebe só o desfecho. */
+const selfReview = (t: Task) => !!t.reviewerId && t.reviewerId === t.requestedBy;
+
+/** O resultado dos testes da entrega, em linhas para o aviso (vazio sem testes). */
+function testsLine(t: TestRun | null | undefined): string {
+  if (!t) return '';
+  return t.ok
+    ? `Testes (\`${t.command}\`, rodados pelo Claudio’s Club): passaram em ${Math.round(t.ms / 1000)} s. Não rode de novo.`
+    : `Testes (\`${t.command}\`, rodados pelo Claudio’s Club): FALHARAM. Fim da saída:\n${t.output.slice(-800)}`;
 }
 
 /** Uma linha no histórico, sem mudar de coluna. */

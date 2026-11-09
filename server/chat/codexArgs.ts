@@ -267,6 +267,15 @@ export function promptWithInstructions(instructions: string, prompt: string): st
 }
 
 /**
+ * No Windows a sandbox padrão do Codex (restrita, sem admin) recusa rodar com negações de segredo. A elevada impõe o bloqueio pelo Windows;
+ * ela precisa de uma preparação única com administrador (o app do Codex para Windows já faz). Sem ela o Codex falha com a mensagem dele,
+ * e a conversa mostra o erro: falha fechada, nunca roda sem sandbox. Vale para o motor e para o myco-gpt (gptMcp.ts).
+ */
+export function codexWindowsSandboxArgs(platform: NodeJS.Platform = process.platform): string[] {
+  return platform === 'win32' ? ['-c', `windows.sandbox=${tomlString('elevated')}`] : [];
+}
+
+/**
  * Argumentos depois de `codex`. O prompt vai pelo stdin (`-`). Segurança (config do usuário, conectores, busca na web, aprovação, sandbox,
  * segredos e rede) vem toda de `codexSafetyArgs`, igual na primeira execução e no `resume` (que não aceita `-s` nem `-C`: a pasta é a do
  * processo). A rede é a que quem chama manda (`network`): `loopback` só depois de conferir o `network_proxy` (ver codexEnv.ts).
@@ -289,6 +298,7 @@ export function buildCodexArgs(o: CodexRunOptions): string[] {
       readOnlyPaths: o.readOnlyPaths,
     }),
   );
+  args.push(...codexWindowsSandboxArgs(o.platform));
   if (o.instructions && instructionsInArgv(o.instructions, o.platform)) args.push('-c', `developer_instructions=${tomlString(o.instructions)}`);
   if (resume) args.push(o.threadId!);
   args.push('-');

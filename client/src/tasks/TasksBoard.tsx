@@ -184,7 +184,10 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         <StatusBadge task={task} hasDeploy={hasDeploy} />
         <VerdictBadge task={task} nameOf={nameOf} />
         <span className="task-meta muted small">
-          {nameOf(task.staffId) ?? t('tasks.noOwner')}
+          <span className="task-id" title={t('tasks.idHint')}>
+            {task.id}
+          </span>{' '}
+          · {nameOf(task.staffId) ?? t('tasks.noOwner')}
           {task.requestedBy && ` · ${t('tasks.requestedBy', { name: nameOf(task.requestedBy) ?? task.requestedBy })}`}
           {costOf(task) && ` · ${costOf(task)}`} · {formatAgo(now - Date.parse(task.updatedAt))}
         </span>
@@ -529,6 +532,10 @@ function TaskDetail({
         <span className="kicker" title={task.archived ? t('tasks.archivedHint') : undefined}>
           {LABEL[task.status]}
           {task.archived && ` · ${t('tasks.archivedTag')}`}
+          {' · '}
+          <span className="task-id" title={t('tasks.idHint')}>
+            {task.id}
+          </span>
         </span>
         <button className="drawer-close in-head" onClick={onClose} aria-label={t('tasks.closeDetails')}>
           ×

@@ -1,9 +1,9 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CodexRun, CodexRunner } from '../server/adapters/codex';
-import { CODEX_ENV_TTL, CODEX_MIN_VERSION, CodexEnv, codexUpgradeHint, compareVersions, locateCodex, parseCodexFeatures, parseCodexVersion, withAppAddress, type CodexEnvStatus } from '../server/codexEnv';
+import { CODEX_ENV_TTL, CODEX_MIN_VERSION, CodexEnv, codexUpgradeHint, compareVersions, locateCodex, parseCodexFeatures, parseCodexVersion, resolveCodexCommand, withAppAddress, type CodexEnvStatus } from '../server/codexEnv';
 
 // Conferência do Codex instalado: versão mínima (0.156.1) e o recurso `network_proxy`, de que a rede local depende.
 
@@ -171,5 +171,56 @@ describe('codexEnv: o endereço do Claudio’s Club para o Codex (127.0.0.2)', (
     const semProxy: CodexEnvStatus = { error: null, version: '0.167.0', networkProxy: false, notice: 'sem network_proxy' };
     expect(withAppAddress(erro, { up: false, error: null }, '127.0.0.2:1')).toBe(erro);
     expect(withAppAddress(semProxy, { up: false, error: null }, '127.0.0.2:1')).toBe(semProxy);
+  });
+});
+
+describe('resolveCodexCommand: o codex sem shell (Windows acha o JS do .cmd do npm)', () => {
+  // PATH e plataforma passados explicitamente: o resultado é o mesmo no Ubuntu do CI.
+  const JS = path.join('node_modules', '@openai', 'codex', 'bin', 'codex.js');
+  let root: string;
+  beforeAll(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-codexcmd-'));
+  });
+  afterAll(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  /** Uma pasta de PATH com os arquivos (vazios) pedidos. */
+  async function folder(name: string, files: string[] = []) {
+    const dir = path.join(root, name);
+    for (const f of files) {
+      await fs.mkdir(path.dirname(path.join(dir, f)), { recursive: true });
+      await fs.writeFile(path.join(dir, f), '');
+    }
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  }
+  const pathOf = (...dirs: string[]) => ({ PATH: dirs.join(path.delimiter) });
+
+  it('codex.exe na pasta do PATH: abre ele direto', async () => {
+    const exe = await folder('exe', ['codex.exe', 'codex.cmd', JS]);
+    expect(resolveCodexCommand(pathOf(exe), 'win32')).toEqual({ command: path.join(exe, 'codex.exe'), prefix: [] });
+  });
+
+  it('codex.cmd do npm, sem node.exe ao lado: o node que roda o Claudio’s Club, com o codex.js como primeiro argumento', async () => {
+    const npm = await folder('npm-sem-node', ['codex.cmd', JS]);
+    const empty = await folder('vazia');
+    // A pasta vazia antes não atrapalha: a primeira que tem o codex é a que vale.
+    expect(resolveCodexCommand(pathOf(empty, npm), 'win32')).toEqual({ command: process.execPath, prefix: [path.join(npm, JS)] });
+  });
+
+  it('codex.cmd com node.exe ao lado: usa o node.exe da pasta, como o próprio codex.cmd', async () => {
+    const npm = await folder('npm-com-node', ['codex.cmd', JS, 'node.exe']);
+    expect(resolveCodexCommand(pathOf(npm), 'win32')).toEqual({ command: path.join(npm, 'node.exe'), prefix: [path.join(npm, JS)] });
+  });
+
+  it('nada achado no PATH: cai em codex (o spawn dá ENOENT, como antes)', async () => {
+    const vazia = await folder('nada');
+    expect(resolveCodexCommand(pathOf(vazia), 'win32')).toEqual({ command: 'codex', prefix: [] });
+    expect(resolveCodexCommand({}, 'win32')).toEqual({ command: 'codex', prefix: [] });
+  });
+
+  it('fora do Windows: codex, sem prefixo, mesmo com o codex.exe no PATH', async () => {
+    const exe = await folder('linux', ['codex.exe', 'codex.cmd', JS]);
+    expect(resolveCodexCommand(pathOf(exe), 'linux')).toEqual({ command: 'codex', prefix: [] });
   });
 });

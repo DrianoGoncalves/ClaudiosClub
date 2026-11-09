@@ -20,6 +20,7 @@ import { ChangesPanel } from './ChangesPanel';
 import { useChatDetail } from './chatDetail';
 import type { ChatFocus } from './chatFocus';
 import { MoreTabs } from './MoreTabs';
+import { MsgTime } from './MsgTime';
 import { QuestionCard } from './QuestionCard';
 import { useChatFocus } from './useChatFocus';
 import { useOpenAt } from './useOpenAt';
@@ -652,7 +653,7 @@ function ContextMeter({ context }: { context: { used: number; window: number; pe
 }
 
 /** Resposta da IA com "Copiar" (o texto em markdown, como veio) no canto, no hover/foco. */
-function AssistantMessage({ id, text }: { id: string; text: string }) {
+function AssistantMessage({ id, text, at }: { id: string; text: string; at: string | null }) {
   const [copied, copy] = useCopy();
   return (
     <div className="msg msg-assistant" data-item-id={id}>
@@ -660,6 +661,7 @@ function AssistantMessage({ id, text }: { id: string; text: string }) {
         {copied ? t('chat.mdCopied') : t('chat.mdCopy')}
       </button>
       <Markdown text={text} />
+      <MsgTime at={at} />
     </div>
   );
 }
@@ -716,11 +718,12 @@ function Item({
           {system !== null ? <Markdown text={system} /> : looksLikeMarkdown(item.text) ? <Markdown text={item.text} /> : item.text}
           {item.queued && <span className="msg-queued">{QUEUED_TEXT[item.queued]}</span>}
           {item.held && <span className="msg-queued">{t('chat.heldByMyco', { why: item.held })}</span>}
+          <MsgTime at={item.at} />
         </div>
       );
     }
     case 'assistant':
-      return item.text ? <AssistantMessage id={item.id} text={item.text} /> : null;
+      return item.text ? <AssistantMessage id={item.id} text={item.text} at={item.at} /> : null;
     case 'tool':
       return (
         <details className={`tool ${item.isError ? 'tool-error' : ''}`} data-item-id={item.id}>

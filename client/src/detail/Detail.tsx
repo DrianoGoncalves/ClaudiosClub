@@ -20,7 +20,7 @@ import { TEMP_IDLE_DAYS } from '../../../shared/model';
 import { alertError, api, isPairingError } from '../api';
 import { RoomColorPicker } from '../board/colors';
 import { portraitUrl } from '../board/nodes';
-import { showsStatus, useSeeIdle, useSeenIdle } from '../board/unread';
+import { idleUnseen, showsStatus, useSeeIdle, useSeenIdle } from '../board/unread';
 import { ChatView, type MoreTab } from '../chat/ChatView';
 import type { ChatFocus } from '../chat/chatFocus';
 import { MoreTabs } from '../chat/MoreTabs';
@@ -169,11 +169,13 @@ export function EmployeePanel(props: {
   );
   const first = useRef(true);
   useEffect(() => {
-    // Na primeira vez vale a conversa pedida (busca); depois, a mais recente quando ela muda.
+    // Na primeira vez vale a conversa pedida (busca). Depois, só adota a mais recente se não há conversa aberta:
+    // trocar sozinho com uma aberta remonta o chat e apaga o rascunho que o user estava digitando.
     if (first.current) {
       first.current = false;
       return;
     }
+    if (picked !== null || fresh) return;
     setPicked(s?.id ?? null);
     setFresh(false);
     setFreshId(null);
@@ -183,6 +185,12 @@ export function EmployeePanel(props: {
   const current = fresh ? freshId : picked;
   // Conversa na tela (sem projeto não há chat): parada, já foi vista.
   useSeeIdle(project && current && !props.manage ? (props.live?.find((l) => l.sessionId === current) ?? (current === s?.id ? s.live : null)) : null);
+  // Conversa parada e ainda não vista (a da tela não conta): o select põe "● " no nome, para lembrar o que falta ler.
+  const seen = useSeenIdle();
+  const unread = (id: string) => {
+    const l = id !== current ? props.live?.find((x) => x.sessionId === id) : undefined;
+    return !!l && idleUnseen(seen, l);
+  };
   // Sem ficha, a lista é a própria conversa: dá para abrir uma nova (a pesada fica no quadro) e voltar a ela.
   const listed = props.conversations?.length
     ? props.conversations
@@ -263,7 +271,7 @@ export function EmployeePanel(props: {
               <optgroup key={g.label} label={g.label}>
                 {g.items.map(({ c }) => (
                   <option key={c.id} value={c.id}>
-                    {conversationLabel(c)}
+                    {(unread(c.id) ? '● ' : '') + conversationLabel(c)}
                   </option>
                 ))}
               </optgroup>

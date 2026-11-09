@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { StaffProfile } from '../../../shared/model';
 import { api, isPairingError, type ProjectGuide as Guide } from '../api';
-import { t } from '../i18n';
+import { t, locale } from '../i18n';
 import { FileIcon } from '../icons';
 import { defaultGuideStaff, type GuideAction } from './guideActions';
 
@@ -27,6 +27,8 @@ export function ProjectGuide({
   const [guide, setGuide] = useState<Guide | null>(null);
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState<string | null>(null);
+  // Aviso que não é erro: o pedido não abriu conversa (nada mudou desde a última conferência). Texto do servidor.
+  const [note, setNote] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
   // Quem a pessoa escolheu, se ainda está na equipe; senão o do topo do organograma.
   const who = staff.some((s) => s.id === picked) ? picked : defaultGuideStaff(staff);
@@ -34,6 +36,7 @@ export function ProjectGuide({
   useEffect(() => {
     setGuide(null);
     setError(null);
+    setNote(null);
     setPicked(null);
     api.projectGuide(projectId).then(setGuide, (e: Error) => setError(e.message));
   }, [projectId]);
@@ -67,9 +70,17 @@ export function ProjectGuide({
     if (!who) return;
     setBusy(action);
     setError(null);
+    setNote(null);
     try {
       const r = await api.runProjectGuide(projectId, action, who);
-      onOpenConversation?.(r.staffId, r.sessionId);
+      if ('skipped' in r) {
+        // Sem conversa nova nem erro: só diz por quê. Relê para o contador de arquivos mudados acompanhar.
+        setNote(r.reason);
+      } else {
+        onOpenConversation?.(r.staffId, r.sessionId);
+      }
+      // O servidor grava o HEAD como nova base ao abrir a conversa: o "N arquivos mudaram" recomeça.
+      void reread();
     } catch (e) {
       if (isPairingError(e)) return;
       setError((e as Error).message);
@@ -108,6 +119,16 @@ export function ProjectGuide({
       <p className="muted small">{t('detail.guideNoStaff')}</p>
     );
 
+  // "N arquivos mudaram desde 09/11/2026": só com base de conferência (o servidor omite os dois campos sem ela).
+  const checkedAt = guide?.lastCheck ? Date.parse(guide.lastCheck.at) : NaN;
+  const since =
+    guide?.changedSince !== undefined && !Number.isNaN(checkedAt)
+      ? t(guide.changedSince === 1 ? 'detail.guideChangedOne' : 'detail.guideChangedOther', {
+          n: guide.changedSince,
+          date: new Date(checkedAt).toLocaleDateString(locale()),
+        })
+      : null;
+
   return (
     <section className="section">
       <h3>{t('detail.guideHeading')}</h3>
@@ -132,6 +153,13 @@ export function ProjectGuide({
             {runButton('test', t('detail.guideTest'), t('detail.guideTestHint'), 'btn-secondary')}
             {runButton('drift', t('detail.guideDrift'), t('detail.guideDriftHint'), 'btn-secondary')}
           </p>
+          {note ? (
+            <p className="guide-since small" role="status">
+              {note}
+            </p>
+          ) : (
+            since && <p className="guide-since muted small">{since}</p>
+          )}
           <ul className="guide-hints muted small">
             <li>{t('detail.guideTestHint')}</li>
             <li>{t('detail.guideDriftHint')}</li>
