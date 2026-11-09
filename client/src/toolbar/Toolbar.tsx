@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AccountUsage, AuthStatus, QuotaBoost, UsageLimit } from '../../../shared/model';
+import type { AccountUsage, AuthStatus, CodexUsage, QuotaBoost, UsageLimit } from '../../../shared/model';
 import { api } from '../api';
 import { formatAgo, formatDuration } from '../format';
 import { TerminalFilledIcon } from '../icons';
@@ -83,13 +83,23 @@ export function useAccountUsage(): AccountUsage | null {
   return usage;
 }
 
-export function UsageMeters({ usage }: { usage: AccountUsage | null }) {
+/** Relógio das barras: reavalia "reinicia em" e janelas já reiniciadas a cada 15 s. */
+function useNow(): number {
   const [now, setNow] = useState(() => Date.now());
-
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 15_000);
     return () => clearInterval(t);
   }, []);
+  return now;
+}
+
+/** Só as barras de 5 h e de 7 d, na ordem; o Claude e o Codex mandam `limits` no mesmo formato. */
+function pickLimits(limits: UsageLimit[]): UsageLimit[] {
+  return ['five_hour', 'seven_day'].map((kind) => limits.find((l) => l.kind === kind)).filter((l): l is UsageLimit => !!l);
+}
+
+export function UsageMeters({ usage }: { usage: AccountUsage | null }) {
+  const now = useNow();
 
   if (!usage) return null;
   if (!usage.tapInstalled) {
@@ -99,9 +109,7 @@ export function UsageMeters({ usage }: { usage: AccountUsage | null }) {
       </span>
     );
   }
-  const shown = ['five_hour', 'seven_day']
-    .map((kind) => usage.limits.find((l) => l.kind === kind))
-    .filter((l): l is UsageLimit => !!l);
+  const shown = pickLimits(usage.limits);
   if (!shown.length) {
     return (
       <span className="usage-note" title={t('toolbar.usageOpenTitle')}>
@@ -119,13 +127,13 @@ export function UsageMeters({ usage }: { usage: AccountUsage | null }) {
       title={updated ? `${t('toolbar.usageLink')} · ${updated}` : t('toolbar.usageLink')}
     >
       {shown.map((l) => (
-        <UsageMeter key={l.kind} limit={l} now={now} />
+        <UsageMeter key={l.kind} limit={l} now={now} service="claude" />
       ))}
     </a>
   );
 }
 
-function UsageMeter({ limit, now }: { limit: UsageLimit; now: number }) {
+function UsageMeter({ limit, now, service, name }: { limit: UsageLimit; now: number; service: 'claude' | 'codex'; name?: string }) {
   const resetMs = limit.resetsAt ? Date.parse(limit.resetsAt) - now : null;
   // Janela já reiniciada: a leitura gravada não vale mais até a próxima resposta.
   const expired = resetMs !== null && resetMs <= 0;
@@ -134,7 +142,7 @@ function UsageMeter({ limit, now }: { limit: UsageLimit; now: number }) {
   const label = LIMIT_LABEL[limit.kind] ?? limit.kind;
   const left = expired ? t('toolbar.resetDone') : resetMs !== null ? t('toolbar.resetsIn', { time: formatDuration(resetMs) }) : '';
   return (
-    <span className={`meter meter-${level}`} title={`${label}: ${expired ? '—' : `${Math.round(pct)}%`} ${left}`}>
+    <span className={`meter meter-${level} meter-${service}`} title={`${name ? `${name} · ` : ''}${label}: ${expired ? '—' : `${Math.round(pct)}%`} ${left}`}>
       <span className="meter-label">{label}</span>
       <span className="meter-track">
         <span className="meter-fill" style={{ width: `${pct}%` }} />
@@ -220,5 +228,64 @@ export function AuthBadge({ boost }: { boost: QuotaBoost | null }) {
       )}
       {error && <span className="error">{error}</span>}
     </span>
+  );
+}
+
+/**
+ * Linha do Codex, logo abaixo da do Claude: barras de 5 h e 7 d e o ícone de conexão (o mesmo >_ do Claude, no mesmo
+ * semáforo). Só existe com `usage.codex`, isto é, com "usar o Codex" ligado no config.
+ */
+export function CodexUsageLine({ codex }: { codex: CodexUsage }) {
+  const now = useNow();
+  const name = t('toolbar.codexName');
+  const shown = pickLimits(codex.limits);
+  const updated = codex.updatedAt ? t('toolbar.updatedAgo', { ago: formatAgo(now - Date.parse(codex.updatedAt)) }) : '';
+
+  // Semáforo do ícone: verde conectado, cinza lendo pela primeira vez, vermelho sem Codex utilizável.
+  const light = codex.connected ? 'auth-ok' : codex.reason === 'loading' ? 'auth-wait' : 'auth-off';
+  const version = codex.version?.installed ? ` (${codex.version.installed})` : '';
+  const status = codex.connected
+    ? t('toolbar.codexConnected', { version })
+    : codex.reason === 'not_installed'
+      ? t('toolbar.codexNotInstalled')
+      : codex.reason === 'not_logged_in'
+        ? t('toolbar.codexNotLoggedIn')
+        : codex.reason === 'loading'
+          ? t('toolbar.codexLoading')
+          : t('toolbar.codexError');
+  const iconLabel = !codex.connected && codex.detail ? `${status}: ${codex.detail}` : status;
+  // O que fazer quando não está conectado: texto curto ao lado do ícone, com o comando.
+  const todo =
+    codex.reason === 'not_logged_in'
+      ? t('toolbar.codexDoLogin')
+      : codex.reason === 'not_installed'
+        ? t('toolbar.codexDoInstall')
+        : codex.reason === 'error'
+          ? t('toolbar.codexDoError')
+          : null;
+
+  return (
+    <div className="usage-line usage-codex">
+      {shown.length > 0 && (
+        <span className="usage" title={updated ? `${name} · ${updated}` : name}>
+          {shown.map((l) => (
+            <UsageMeter key={l.kind} limit={l} now={now} service="codex" name={name} />
+          ))}
+        </span>
+      )}
+      <span className={`auth-light ${light}`} role="img" aria-label={iconLabel} title={iconLabel}>
+        <TerminalFilledIcon />
+      </span>
+      {todo && (
+        <span className="usage-note" title={iconLabel}>
+          {todo}
+        </span>
+      )}
+      {codex.version?.outdated && codex.upgradeCommand && (
+        <span className="usage-note usage-outdated" title={t('toolbar.codexOutdatedTitle', { command: codex.upgradeCommand })}>
+          {t('toolbar.codexOutdated', { command: codex.upgradeCommand })}
+        </span>
+      )}
+    </div>
   );
 }

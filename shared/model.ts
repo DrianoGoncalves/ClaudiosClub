@@ -136,6 +136,38 @@ export interface AccountUsage {
   updatedAt: string | null;
   /** Folga de cota ligada agora (só com "otimizar assinatura" no config; ver server/quotaBoost.ts). */
   boost?: QuotaBoost | null;
+  /** Limites do Codex (OpenAI), no mesmo formato dos do Claude. Só vem com "segunda opinião do Codex" ligada no config. */
+  codex?: CodexUsage;
+}
+
+export type CodexUsageReason = 'not_installed' | 'not_logged_in' | 'error' | 'loading';
+
+export interface CodexVersion {
+  /** Versão do `codex` instalado (ex.: `0.167.0`); null se não deu para ler. */
+  installed: string | null;
+  /** Última versão conhecida (o próprio Codex grava em ~/.codex/version.json); null se não se sabe. */
+  latest: string | null;
+  /** `installed` é mais velha que `latest`. */
+  outdated: boolean;
+}
+
+/**
+ * Consumo do Codex, espelhando AccountUsage: `limits` usa os mesmos `kind` (`five_hour`, `seven_day`), `percentUsed`
+ * e `resetsAt` (ISO) dos limites do Claude, então o mesmo medidor serve. Chega em `GET /api/usage`, no campo `codex`.
+ */
+export interface CodexUsage {
+  /** Instalado, com login e com os limites lidos. */
+  connected: boolean;
+  /** Por que não está conectado; null quando conectado. `loading`: a primeira leitura ainda está em andamento. */
+  reason: CodexUsageReason | null;
+  /** Texto curto do erro, quando há. */
+  detail: string | null;
+  limits: UsageLimit[];
+  /** Quando os limites foram lidos (ISO); null sem leitura. */
+  updatedAt: string | null;
+  version: CodexVersion | null;
+  /** Comando que atualiza o Codex (`mise upgrade codex` se veio do mise, senão `codex update`); null sem o CLI. */
+  upgradeCommand: string | null;
 }
 
 /** Folga de cota: até o reset da cota de 7 dias, conversas no Opus em esforço máximo. */

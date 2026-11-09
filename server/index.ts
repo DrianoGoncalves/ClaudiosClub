@@ -64,6 +64,7 @@ import {
 } from './projectFiles';
 import { actingStaff, SANDBOX_HOST, SessionTokens, type Caller } from './callers';
 import { gate } from './gate';
+import { CodexUsageReader } from './codexUsage';
 import { readUsage } from './usage';
 import { UsageStopError } from './usageStop';
 import { quotaBoost } from './quotaBoost';
@@ -313,6 +314,7 @@ const projectPathOf = async (projectId: string) => {
 };
 /** Codex CLI só como segunda opinião na revisão de tarefas (o motor dos funcionários é o Claude). */
 const codex = new CodexAdapter();
+const codexUsage = new CodexUsageReader({ check: () => codex.check() });
 /** Só com o Codex ligado nas configurações (`codexReview`): desligado, o catálogo vem vazio com o motivo e nada abre o `codex`. */
 const codexModels = new CodexModels((fresh) => codex.check(fresh), undefined, undefined, async () => (await readConfig()).codexReview);
 const codexEnv = new CodexEnv();
@@ -1315,7 +1317,9 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     /^\/api\/usage$/,
     async () => {
       const [usage, config] = await Promise.all([readUsage(), readConfig()]);
-      return { ...usage, boost: config.optimizeQuota ? quotaBoost(usage) : null };
+      // Codex só com a opção ligada; o campo `codex` não existe quando desligada. Nunca lança nem trava os dados do Claude.
+      const codexField = await codexUsage.read(config.codexReview);
+      return { ...usage, boost: config.optimizeQuota ? quotaBoost(usage) : null, ...(codexField ? { codex: codexField } : {}) };
     },
   ],
   ['GET', /^\/api\/browser$/, ({ url }) => browserStatus(url.searchParams.has('fresh'))],
