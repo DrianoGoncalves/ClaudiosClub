@@ -5,6 +5,7 @@ import { Markdown } from '../chat/markdown';
 import { formatAgo, formatShare } from '../format';
 import { t, locale } from '../i18n';
 import { BranchIcon, ReviewIcon } from '../icons';
+import { ReviewDelegate } from './ReviewDelegate';
 import { TaskCodePanel } from './TaskCodePanel';
 
 // Quadro de tarefas de um projeto: aguardar → a fazer → fazendo → revisão → pronto.
@@ -646,6 +647,7 @@ function TaskDetail({
           ))}
         </select>
       </p>
+      {task.status === 'review' && <ReviewDelegate projectId={projectId} task={task} staff={byHierarchy(staff)} onChanged={onChanged} onOpenStaff={onOpenStaff} />}
       {task.sessionId && (
         <details className="collapse" open={task.status === 'review' || task.status === 'done'}>
           <summary>{t('tasks.sectionCode')}</summary>

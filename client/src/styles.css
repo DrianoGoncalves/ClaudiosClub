@@ -640,6 +640,9 @@ textarea.q-field { resize: vertical; }
 .task-code-row select { font: inherit; font-size: 12.5px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); max-width: 200px; }
 .task-code .ok { color: var(--ink-green); }
 .task-code .fail { color: var(--ink-red); font-weight: 600; }
+/* Delegar a revisão, nas ações do detalhe: mesma caixa tracejada do .task-form (reusa .task-code-row para as linhas). */
+.task-review { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; }
+.task-review p { margin: 0; }
 @media (max-width: 760px) {
   /* Uma coluna por vez, com a beirada da próxima à vista; o arrasto lateral para em cada uma. */
   .tasks-columns { grid-template-columns: repeat(4, calc(100% - 28px)); scroll-snap-type: x mandatory; }

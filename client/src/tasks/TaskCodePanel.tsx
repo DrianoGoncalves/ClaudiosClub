@@ -5,8 +5,9 @@ import { Markdown } from '../chat/markdown';
 import { formatAgo } from '../format';
 import { t, locale } from '../i18n';
 import { BranchIcon } from '../icons';
+import { ReviewStatus } from './ReviewDelegate';
 
-// Código da tarefa, no cartão: o que mudou, testes, mesclar, pedir revisão e pedir deploy.
+// Código da tarefa, no cartão: o que mudou, testes, mesclar, status da revisão e pedir deploy.
 
 const STATUS: Record<string, string> = {
   A: t('tasks.fileAdded'),
@@ -42,9 +43,7 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const reviewers = staff.filter((s) => s.id !== task.staffId);
   const infra = staff.filter((s) => s.servers.length > 0);
-  const [reviewer, setReviewer] = useState(reviewers[0]?.id ?? '');
   const [deployer, setDeployer] = useState(infra[0]?.id ?? '');
   const now = Date.now();
   const nameOf = (id: string) => staff.find((s) => s.id === id)?.name ?? id;
@@ -207,36 +206,13 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
         </>
       )}
 
-      <div className="task-code-row">
-        <b className="small">{t('tasks.reviewLabel')}</b>
-        {task.review ? (
-          <span className="small">
-            {nameOf(task.review.staffId)} · {task.review.doneAt ? t('tasks.replied') : t('tasks.reviewing')} ·{' '}
-            <button className="link" onClick={() => onOpenStaff(task.review!.staffId)}>
-              {t('tasks.openConversation')}
-            </button>
-          </span>
-        ) : reviewers.length ? (
-          <>
-            <select value={reviewer} onChange={(e) => setReviewer(e.target.value)} aria-label={t('tasks.whoReviews')}>
-              {reviewers.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} — {s.role}
-                </option>
-              ))}
-            </select>
-            <button
-              className="btn-secondary"
-              disabled={!!busy || !reviewer}
-              onClick={() => void run('review', () => withUsageConfirm((force) => api.taskReview(projectId, task.id, reviewer, force)))}
-            >
-              {t('tasks.askReview')}
-            </button>
-          </>
-        ) : (
-          <span className="muted small">{t('tasks.hireReviewer')}</span>
-        )}
-      </div>
+      {/* Em revisão, quem revisa e o pedido ficam nas ações do detalhe (ReviewDelegate); aqui só o status dos demais. */}
+      {task.review && task.status !== 'review' && (
+        <div className="task-code-row">
+          <b className="small">{t('tasks.reviewLabel')}</b>
+          <ReviewStatus task={task} staff={staff} onOpenStaff={onOpenStaff} />
+        </div>
+      )}
 
       {(task.status === 'done' || task.merged) && (
         <div className="task-code-row">
