@@ -702,7 +702,7 @@ describe('mesma pessoa entre projetos', () => {
   it('o que é da pessoa e o que é do projeto: cada campo do pedido em exatamente uma lista', () => {
     const listas = [...PERSON_FIELDS, PERSON_PORTRAIT, ...ALLOCATION_FIELDS, ...REQUEST_FIELDS];
     expect(new Set(listas).size).toBe(listas.length);
-    expect([...listas].sort()).toEqual(Object.keys(StaffInputSchema.shape).sort());
+    expect([...listas].sort()).toEqual(Object.keys(StaffInputSchema.innerType().shape).sort());
   });
 
   it('as rotas novas não entram na lista de funcionário (só navegador)', () => {

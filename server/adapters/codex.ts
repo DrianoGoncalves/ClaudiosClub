@@ -117,7 +117,10 @@ export class CodexAdapter {
     const { prompt } = buildReviewPrompt(input);
     const dir = await fs.mkdtemp(path.join(this.opts.tmpRoot ?? os.tmpdir(), 'myco-codex-'));
     const out = path.join(dir, 'resposta.md');
-    const args = ['exec', '-', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--color', 'never', '-C', dir, '-o', out];
+    // --ignore-user-config: nem o modelo do ~/.codex/config.toml (um que a conta ChatGPT não aceita derruba a
+    // revisão) nem MCPs e plugins do usuário, que rodariam fora da sandbox. A credencial continua valendo.
+    // features.apps=false: sem os conectores da conta ChatGPT (GitHub, e-mail, Notion, sites…), que a sandbox não alcança.
+    const args = ['exec', '-', '--ignore-user-config', '-c', 'features.apps=false', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--color', 'never', '-C', dir, '-o', out];
     try {
       for (let attempt = 0; ; attempt++) {
         const r = await this.run(args, prompt, REVIEW_TIMEOUT);
@@ -198,7 +201,7 @@ export function withoutSecretFiles(diff: string): { diff: string; skipped: strin
 }
 
 /** O ambiente do servidor sem o que é do Claude e do Claudio’s Club: o Codex usa o login dele (~/.codex). */
-function codexEnv(): NodeJS.ProcessEnv {
+export function codexEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(ANTHROPIC|CLAUDE|MYCO)_/i.test(k)));
 }
 

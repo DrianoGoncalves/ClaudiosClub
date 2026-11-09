@@ -575,6 +575,7 @@ export function App() {
                     projectId={selection.projectId}
                     mode={{ kind: 'edit', profile: selection.staff }}
                     simple={simple}
+                    codexReview={config?.codexReview ?? false}
                     tab={tab}
                     onTab={onTab}
                     onDirty={onSheetDirty}
@@ -709,6 +710,7 @@ export function App() {
           projectId={form.projectId}
           mode={form.mode}
           simple={simple}
+          codexReview={config?.codexReview ?? false}
           onClose={() => setForm(null)}
           onHired={(profile, launch) => {
             setForm(null);

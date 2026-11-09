@@ -1,0 +1,13 @@
+{"type":"thread.started","thread_id":"01a1babd-0000-7000-8000-000000000001"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"Vou conferir a lista de tarefas e pesquisar."}}
+{"type":"item.started","item":{"id":"item_1","type":"todo_list","items":[{"text":"Pesquisar","completed":false},{"text":"Chamar o MCP","completed":false}]}}
+{"type":"item.updated","item":{"id":"item_1","type":"todo_list","items":[{"text":"Pesquisar","completed":true},{"text":"Chamar o MCP","completed":false}]}}
+{"type":"item.started","item":{"id":"item_2","type":"web_search","query":"codex exec json"}}
+{"type":"item.completed","item":{"id":"item_2","type":"web_search","query":"codex exec json"}}
+{"type":"item.started","item":{"id":"item_3","type":"mcp_tool_call","server":"docs","tool":"buscar","arguments":{"termo":"ficha"},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","server":"docs","tool":"buscar","arguments":{"termo":"ficha"},"result":{"content":[{"type":"text","text":"3 resultados"}]},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_4","type":"mcp_tool_call","server":"docs","tool":"abrir","arguments":{"id":"x"},"error":{"message":"não encontrado"},"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"todo_list","items":[{"text":"Pesquisar","completed":true},{"text":"Chamar o MCP","completed":true}]}}
+{"type":"item.completed","item":{"id":"item_5","type":"agent_message","text":"Pronto.\n\n[MyCo:ponto-de-corte]"}}
+{"type":"turn.completed","usage":{"input_tokens":50000,"cached_input_tokens":40000,"cache_write_input_tokens":0,"output_tokens":300,"reasoning_output_tokens":40}}

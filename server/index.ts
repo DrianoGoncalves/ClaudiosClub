@@ -7,6 +7,8 @@ import { clientChanged, DAILY, TSX, VITE } from '../scripts/lib';
 import { openTerminal } from './terminal';
 import { ArtificialAnalysis } from './adapters/artificialAnalysis';
 import { CodexAdapter, CodexError } from './adapters/codex';
+import { CodexEnv, withAppAddress, type CodexEnvStatus } from './codexEnv';
+import { CodexModels } from './codexModels';
 import { ClaudeAdapter } from './adapters/claude';
 import { defaultLocations } from './adapters/claude/paths';
 import type { ToolAdapter } from './adapters/types';
@@ -64,7 +66,9 @@ import {
   readProjectImageFile,
   writeProjectFile,
 } from './projectFiles';
-import { staffMayPost } from './apiPolicy';
+import { actingStaff, SANDBOX_HOST, SessionTokens, type Caller } from './callers';
+import { gate } from './gate';
+import { CodexUsageReader } from './codexUsage';
 import { readUsage } from './usage';
 import { UsageStopError } from './usageStop';
 import { quotaBoost } from './quotaBoost';
@@ -88,7 +92,7 @@ import { ROOT } from './root';
 import { cleanRunDir } from './runCleanup';
 import { SelfUpdater, UpdateError } from './selfUpdate';
 import { pendingRestartCheck } from './pendingRestart';
-import { admit, Pairing } from './pairing';
+import { Pairing } from './pairing';
 
 const PORT = Number(process.env.MYCO_PORT ?? 4848);
 /** Rodando pelo vigia (scripts/daemon.ts): ele religa o servidor quando este sai. */
@@ -164,6 +168,16 @@ for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
 }
 // Só local: o Claudio’s Club lê transcripts e configurações do usuário.
 const HOST = '127.0.0.1';
+/**
+ * Também escuta em 127.0.0.2 (mesma porta): é o único endereço que a sandbox do Codex alcança (a lista de domínios do perfil dela, ver
+ * server/chat/codexArgs.ts). Quem chega por ele é "da sandbox do Codex": nunca é tela, precisa do token da conversa e só usa as rotas liberadas
+ * (server/apiPolicy.ts, server/callers.ts). Todo 127/8 é loopback no Linux e no Windows; no macOS o endereço pode faltar.
+ */
+const SANDBOX_URL = `http://${SANDBOX_HOST}:${PORT}`;
+/** O servidor ficou de pé em 127.0.0.2? `up` falso: o Codex roda sem rede (a conversa avisa). */
+const sandboxListener: { up: boolean; error: string | null } = { up: false, error: null };
+/** Token de cada conversa (Claude e Codex): `MYCO_TOKEN` no ambiente; quem chama a API é o dono dele. */
+const sessionTokens = new SessionTokens();
 const CLIENT_DIR = path.join(ROOT, 'dist', 'client');
 // `claudio.localhost`: endereço fixo do Claudio’s Club. Todo `*.localhost` aponta para a própria máquina nos
 // navegadores (RFC 6761), sem mexer no arquivo hosts; continua protegido contra DNS rebinding.
@@ -199,6 +213,7 @@ const staff: StaffService = new StaffService(adapter, {
   runDir: path.join(MYCO_HOME, 'run'),
   claudeConfigFile: defaultLocations().configFile,
   mycoUrl: `http://127.0.0.1:${PORT}`,
+  codexUrl: SANDBOX_URL,
   onChange: (prev, next) =>
     void projectPathOf(next.projectId).then((dir) =>
       chats.profileChanged(prev, next, dir ? path.join(dir, '.myco', 'staff', `${next.id}.md`) : null),
@@ -215,6 +230,10 @@ const staff: StaffService = new StaffService(adapter, {
     const c = await getCosts();
     return { project: c.projects[projectId]?.last7d ?? 0, total: c.total.last7d };
   },
+  // Salvar ficha do Codex com modelo fora do catálogo da conta é recusado. `codexModels` é declarado mais abaixo: só é lido na chamada.
+  codexCatalog: () => codexModels.list(),
+  // Versão mínima e `network_proxy` do codex instalado: a conversa de quem roda no Codex só abre com um Codex que serve.
+  codexEnv: () => codexRunEnv(),
 });
 /** Perguntas em aberto e avisos marcados como "não é segredo", guardados entre reinícios. */
 const inboxState = new InboxState(path.join(MYCO_HOME, 'inbox.json'));
@@ -258,6 +277,11 @@ const wakeups = new AutoContinue({
 });
 
 const chats: ChatManager = new ChatManager({
+  // Plano B de quem roda no Codex: a conta recusou o modelo da ficha, o turno é refeito com o mais parecido do catálogo.
+  codexModels: async () => (await codexModels.list()).models,
+  // Antes de cada execução do Codex: o recurso `network_proxy` presente e o 127.0.0.2 de pé (senão roda sem rede e avisa) e a versão mínima.
+  codexEnv: () => codexRunEnv(),
+  tokens: sessionTokens,
   autoContinue,
   wakeups,
   inbox: inboxState,
@@ -297,6 +321,17 @@ const projectPathOf = async (projectId: string) => {
 };
 /** Codex CLI só como segunda opinião na revisão de tarefas (o motor dos funcionários é o Claude). */
 const codex = new CodexAdapter();
+const codexUsage = new CodexUsageReader({ check: () => codex.check() });
+/** Só com o Codex ligado nas configurações (`codexReview`): desligado, o catálogo vem vazio com o motivo e nada abre o `codex`. */
+const codexModels = new CodexModels((fresh) => codex.check(fresh), undefined, undefined, async () => (await readConfig()).codexReview);
+const codexEnv = new CodexEnv();
+/**
+ * O que o Codex confere antes de cada execução (ver codexEnv.ts) mais o endereço dele: sem o 127.0.0.2 de pé (o macOS sem o alias, por exemplo) a
+ * sandbox não teria por onde chegar à API, então roda sem rede e a conversa avisa.
+ */
+async function codexRunEnv(): Promise<CodexEnvStatus> {
+  return withAppAddress(await codexEnv.status(), sandboxListener, `${SANDBOX_HOST}:${PORT}`);
+}
 
 /** Abre uma conversa nova com o funcionário e manda o texto. Sem `force`, confere o consumo antes. Usado pelas tarefas e pelas ações do guia. */
 const sendNewConversation = async (projectId: string, staffId: string, text: string, force: boolean) => {
@@ -424,7 +459,8 @@ const ChatSettingsBody = z
   .object({
     staffId: z.string().max(40).nullable(),
     model: z.string().regex(/^[\w.[\]-]{1,60}$/, 'modelo inválido').optional(),
-    effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+    // `ultra` só vale para conversa do Codex (o manager recusa nas do Claude).
+    effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']).optional(),
     autonomy: z.enum(AUTONOMY).optional(),
   })
   .refine((b) => b.model || b.effort || b.autonomy, 'nada para mudar');
@@ -449,6 +485,11 @@ interface Request {
   paired: boolean;
   /** Só para o log (quem pediu o reinício: navegador ou curl); cortado e sem caracteres de controle. */
   userAgent: string;
+  /**
+   * Quem chama, pelo token da conversa (`x-myco-token`, ver callers.ts): vale no lugar do que o pedido declara. Pela sandbox do Codex (127.0.0.2) é
+   * sempre alguém; em 127.0.0.1 o token é opcional. Nunca existe para a tela (`fromBrowser`).
+   */
+  caller: Caller | null;
 }
 
 type Handler = (r: Request) => Promise<unknown>;
@@ -464,6 +505,22 @@ class Raw {
 }
 
 class BadRequest extends Error {}
+/** O pedido é de quem não pode (403). */
+class Forbidden extends Error {}
+
+/** Quem pede pela API: o dono do token da conversa, ou (sem token) o `requestedBy` declarado; conversa sem ficha não é ninguém. */
+function actorOf(caller: Caller | null, declared: string | undefined): string | undefined {
+  const who = actingStaff(caller, declared);
+  if (who.error) throw new BadRequest(who.error);
+  return who.staffId;
+}
+
+/** A sandbox do Codex só fala com a própria conversa e com as de quem reporta a ela. */
+async function checkReach(caller: Caller | null, projectId: string, target: { sessionId: string | null; staffId: string | null }): Promise<void> {
+  if (caller?.sandbox && !(await staff.mayReach(projectId, caller, target))) {
+    throw new Forbidden('a sandbox do Codex só fala com a própria conversa e com as de quem reporta a você');
+  }
+}
 
 const ID = '([A-Za-z0-9-]+)';
 /** Nome de conexão SSH ou FTP (o mesmo formato de server/staff/servers.ts). */
@@ -605,7 +662,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       return ok === null ? null : { ok };
     },
   ],
-  ['POST', new RegExp(`^/api/projects/${ID}/staff$`), ({ params: [id], body, fromBrowser }) => staff.hire(id!, body, fromBrowser)],
+  // Pela API, o gestor é quem chama (o token da conversa), não o `reportsTo` do pedido.
+  ['POST', new RegExp(`^/api/projects/${ID}/staff$`), ({ params: [id], body, fromBrowser, caller }) => staff.hire(id!, body, fromBrowser, caller)],
   // Copiar uma ficha de outro projeto (só pelo Claudio’s Club). Antes da rota de edição: "copy" casaria como id.
   ['POST', new RegExp(`^/api/projects/${ID}/staff/copy$`), ({ params: [id], body, fromBrowser }) => staff.copyFrom(id!, body, fromBrowser)],
   // Fichas da mesma pessoa (cópias): ligar, desligar e apagar de vez. Só pelo Claudio’s Club (o serviço confere).
@@ -699,8 +757,9 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/chat/send$`),
-    async ({ params: [pid], body, fromBrowser }) => {
+    async ({ params: [pid], body, fromBrowser, caller }) => {
       const b = parse(SendBody, body);
+      await checkReach(caller, pid!, { sessionId: b.sessionId, staffId: b.staffId });
       if (!(fromBrowser && b.force)) await staff.checkUsage(pid!);
       // Ajuste numa tarefa anterior com ele ocupado em outra: espera a vez (ver tasks.ts).
       if (b.sessionId && b.staffId) {
@@ -731,8 +790,9 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/chat/${ID}/wake$`),
-    async ({ params: [pid, sid], body }) => {
+    async ({ params: [pid, sid], body, caller }) => {
       const b = parse(WakeBody, body);
+      await checkReach(caller, pid!, { sessionId: sid!, staffId: null });
       const done = await chats.scheduleWake(pid!, sid!, b).catch((err) => {
         throw err instanceof WakeStreakError ? new BadRequest(err.message) : err;
       });
@@ -743,7 +803,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/chat/${ID}/wake/cancel$`),
-    async ({ params: [pid, sid] }) => {
+    async ({ params: [pid, sid], caller }) => {
+      await checkReach(caller, pid!, { sessionId: sid!, staffId: null });
       const done = await chats.cancelWake(pid!, sid!, 'staff');
       return done === null ? null : { ok: done };
     },
@@ -944,12 +1005,15 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks$`),
-    async ({ params: [id], body, fromBrowser }) => {
+    async ({ params: [id], body, fromBrowser, caller }) => {
       if (fromBrowser) return tasks.create(id!, body);
-      // Pela API, só um gestor passando tarefa para quem reporta a ele. Já entra na fila dela; `start: false` = rascunho.
-      const b = parse(z.object({ staffId: z.string().max(40), requestedBy: z.string().max(40), start: z.boolean().default(true) }).passthrough(), body);
-      if (!(await staff.isManagerOf(id!, b.requestedBy, b.staffId))) throw new BadRequest('pela API, só para quem reporta a você (requestedBy)');
-      const task = await tasks.create(id!, body, b.requestedBy);
+      // Pela API, só um gestor passando tarefa para quem reporta a ele. Já entra na fila dela; `start: false` = rascunho. Com o token da conversa,
+      // quem pede é quem chama: o `requestedBy` do pedido é descartado (sem o token, segue valendo o que ele declara, por compatibilidade).
+      const b = parse(z.object({ staffId: z.string().max(40), requestedBy: z.string().max(40).optional(), start: z.boolean().default(true) }).passthrough(), body);
+      const requestedBy = actorOf(caller, b.requestedBy);
+      if (!requestedBy) throw new BadRequest('pela API, diga quem pede (requestedBy: o seu id)');
+      if (!(await staff.isManagerOf(id!, requestedBy, b.staffId))) throw new BadRequest('pela API, só para quem reporta a você (requestedBy)');
+      const task = await tasks.create(id!, body, requestedBy);
       return task && b.start ? ((await tasks.start(id!, task.id)) ?? task) : task;
     },
   ],
@@ -979,6 +1043,9 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
         ? { enabled: true, ...(await codex.check(url.searchParams.has('fresh'))) }
         : { enabled: false, available: false, reason: null },
   ],
+  // Modelos e esforços do Codex para a ficha escolher (`codex debug models`, só os da lista). Sem o CLI ou sem login: lista vazia com o motivo.
+  // Só com o Codex ligado nas configurações (`codexReview`, o "usar o Codex"): desligado, lista vazia com o motivo (ver CodexModels).
+  ['GET', /^\/api\/codex\/models$/, ({ url }) => codexModels.list(url.searchParams.has('fresh'))],
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks/${ID}/(test|merge|review|deploy|second-opinion)$`),
@@ -1021,11 +1088,13 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}/done$`),
-    ({ params: [id, staffId], body, fromBrowser }) => {
+    ({ params: [id, staffId], body, fromBrowser, caller }) => {
       const b = parse(z.object({ note: z.unknown().optional(), requestedBy: z.string().max(40).optional() }), body ?? {});
-      if (!fromBrowser && !b.requestedBy) throw new BadRequest('pela API, diga quem encerra (requestedBy: o seu id)');
+      // Com o token da conversa, quem encerra é quem chama (só encerra quem contratou, ver StaffService.end).
+      const requestedBy = fromBrowser ? undefined : actorOf(caller, b.requestedBy);
+      if (!fromBrowser && !requestedBy) throw new BadRequest('pela API, diga quem encerra (requestedBy: o seu id)');
       const note = typeof b.note === 'string' && b.note.trim() ? b.note.trim() : fromBrowser ? 'você encerrou' : 'o gestor encerrou';
-      return staff.end(id!, staffId!, note, fromBrowser ? undefined : b.requestedBy);
+      return staff.end(id!, staffId!, note, requestedBy);
     },
   ],
   [
@@ -1341,7 +1410,9 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     /^\/api\/usage$/,
     async () => {
       const [usage, config] = await Promise.all([readUsage(), readConfig()]);
-      return { ...usage, boost: config.optimizeQuota ? quotaBoost(usage) : null };
+      // Codex só com a opção ligada; o campo `codex` não existe quando desligada. Nunca lança nem trava os dados do Claude.
+      const codexField = await codexUsage.read(config.codexReview);
+      return { ...usage, boost: config.optimizeQuota ? quotaBoost(usage) : null, ...(codexField ? { codex: codexField } : {}) };
     },
   ],
   ['GET', /^\/api\/browser$/, ({ url }) => browserStatus(url.searchParams.has('fresh'))],
@@ -1501,25 +1572,13 @@ const CONTENT_TYPES: Record<string, string> = {
   '.json': 'application/json; charset=utf-8',
 };
 
-const server = http.createServer(async (req, res) => {
-  // Bloqueia DNS rebinding: só aceita Host local.
-  const hostname = (req.headers.host ?? '').replace(/:\d+$/, '');
-  if (!LOCAL_HOSTNAMES.has(hostname)) return send(res, 403, { error: 'host não permitido' });
-  if (req.method !== 'GET' && req.method !== 'POST') return send(res, 405, { error: 'método não permitido' });
-
-  const url = new URL(req.url ?? '/', 'http://localhost');
-  // Ações (POST) exigem um cabeçalho próprio: o navegador não deixa outro site enviá-lo sem CORS,
-  // que este servidor não libera. Assim uma página qualquer não consegue disparar ações locais.
-  // Com Origin (o navegador), também o cookie do pareamento: um Origin forjado num curl não basta (ver pairing.ts).
-  // Aqui também ficam GET /api/pair (o link com o código), POST /api/pair/request|claim|approve (o botão "Parear este
-  // navegador" + `npm run pair CÓDIGO`) e POST /api/pair/rotate (desparear todos).
-  const admission = admit(req, res, url, pairing, { isLocalOrigin, openApproval });
-  if (admission.done) return;
-  const { fromBrowser } = admission;
-  // Funcionário pela API: só os POSTs que a ficha manda usar (lista fechada em apiPolicy.ts); o resto, só pelo navegador.
-  if (req.method === 'POST' && !fromBrowser && url.pathname.startsWith('/api/') && !staffMayPost(url.pathname)) {
-    return send(res, 400, { error: 'só pelo Claudio’s Club' });
-  }
+async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
+  // Porta de entrada (server/gate.ts): Host, método, navegador pareado (ver pairing.ts), quem chama (socket e token da conversa) e as listas de rotas.
+  // Aqui também ficam GET /api/pair (o link com o código), POST /api/pair/request|claim|approve (o botão "Parear este navegador" + `npm run pair
+  // CÓDIGO`) e POST /api/pair/rotate (desparear todos).
+  const admitted = gate(req, res, { pairing, tokens: sessionTokens, localHostnames: LOCAL_HOSTNAMES, isLocalOrigin, openApproval });
+  if (!admitted) return;
+  const { url, sandbox, fromBrowser, caller } = admitted;
 
   const stream = STREAM_ROUTE.exec(url.pathname);
   if (stream && req.method === 'GET') return serveChatStream(stream[1]!, Number(url.searchParams.get('after') ?? 0), req, res);
@@ -1531,7 +1590,7 @@ const server = http.createServer(async (req, res) => {
         // O envio de anexo manda os bytes do arquivo (até 10 MB) em vez de JSON.
         const body = method !== 'GET' ? (ATTACHMENT_UPLOAD.test(url.pathname) ? await readRaw(req, MAX_ATTACHMENT_BYTES) : await readJson(req)) : undefined;
         const userAgent = (req.headers['user-agent'] ?? '').replace(/[^\x20-\x7e]/g, '').slice(0, 80);
-        const out = await handler({ params: m.slice(1), url, body, fromBrowser, paired: pairing.isPaired(req.headers.cookie), userAgent });
+        const out = await handler({ params: m.slice(1), url, body, fromBrowser, paired: !sandbox && pairing.isPaired(req.headers.cookie), userAgent, caller });
         if (out === null) return send(res, 404, { error: 'não encontrado' });
         if (out instanceof Raw) {
           // no-cache + ETag: o navegador confere a cada vez, mas só baixa de novo se a imagem mudou.
@@ -1554,6 +1613,7 @@ const server = http.createServer(async (req, res) => {
         if (err instanceof StaffBusyError) return send(res, 409, { error: err.message });
         // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
         if (err instanceof GuideExistsError) return send(res, 409, { error: 'exists' });
+        if (err instanceof Forbidden) return send(res, 403, { error: err.message });
         if (
           err instanceof BadRequest ||
           err instanceof StaffError ||
@@ -1582,7 +1642,11 @@ const server = http.createServer(async (req, res) => {
   if (req.method !== 'GET') return send(res, 405, { error: 'método não permitido' });
   if (await serveStartFiles(url.pathname, res)) return;
   return serveStatic(url.pathname, res);
-});
+}
+
+const server = http.createServer(onRequest);
+/** O mesmo servidor no 127.0.0.2: quem chega por ele é a sandbox do Codex (ver `onRequest`). */
+const sandboxServer = http.createServer(onRequest);
 
 const STREAM_ROUTE = new RegExp(`^/api/chat/${ID}/stream$`);
 
@@ -1864,6 +1928,17 @@ async function isFile(p: string): Promise<boolean> {
 
 server.listen(PORT, HOST, () => {
   console.log(`Claudio’s Club em http://claudio.localhost:${PORT} (adaptador: ${adapter.id})`);
+  // Só depois de ficar com a porta: o segundo endereço é o da sandbox do Codex. Se não abrir (no macOS o 127.0.0.2 pode faltar), quem roda no
+  // Codex fica sem rede e a conversa avisa (ver `codexRunEnv`); o resto do app segue igual.
+  sandboxServer.once('error', (err: NodeJS.ErrnoException) => {
+    sandboxListener.up = false;
+    sandboxListener.error = err.code ?? err.message;
+    console.warn(`[servidor] não consegui escutar em ${SANDBOX_HOST}:${PORT} (${sandboxListener.error}): o Codex dos funcionários roda sem rede`);
+  });
+  sandboxServer.listen(PORT, SANDBOX_HOST, () => {
+    sandboxListener.up = true;
+    console.log(`[servidor] sandbox do Codex em ${SANDBOX_URL}`);
+  });
   // Só quem conseguiu a porta limpa: um segundo servidor que falhou não mexe nos processos do outro.
   chats.cleanOrphans().catch((err) => console.error('[chat] limpeza de órfãos falhou:', err));
   // Só o servidor que ficou com a porta agenda: um segundo que falhou não dispara rotinas em dobro.

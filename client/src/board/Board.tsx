@@ -22,7 +22,7 @@ import { nodeTypes } from './nodes';
 import { layoutKey, loadPositions, positionsOf, savePositions, withMoved, withReset, type Positions } from './positions';
 import { ChartIcon, UsersIcon } from '../icons';
 import { SettingsMenu } from '../toolbar/SettingsMenu';
-import { AuthBadge, CompanyTitle, UsageMeters, useAccountUsage } from '../toolbar/Toolbar';
+import { AuthBadge, CodexUsageLine, CompanyTitle, UsageMeters, useAccountUsage } from '../toolbar/Toolbar';
 import { UpdateNotice } from '../toolbar/UpdateNotice';
 import { PendingRestartNotice } from '../toolbar/ServerAction';
 import { t } from '../i18n';
@@ -381,8 +381,13 @@ export function BoardView(props: BoardViewProps) {
         {/* Opções numa linha e abas embaixo: o topo fica com a largura da maior das duas. */}
         <div className="toolbar-row">
           <CompanyTitle name={companyName(config?.companyName)} onRename={props.onRename} />
-          <UsageMeters usage={usage} />
-          <AuthBadge boost={usage?.boost ?? null} />
+          <div className="usage-stack">
+            <div className="usage-line">
+              <UsageMeters usage={usage} />
+              <AuthBadge boost={usage?.boost ?? null} />
+            </div>
+            {usage?.codex && <CodexUsageLine codex={usage.codex} />}
+          </div>
           <UpdateNotice />
           <PendingRestartNotice />
           <span className="toolbar-sep" />
@@ -418,6 +423,7 @@ export function BoardView(props: BoardViewProps) {
             autoContinue={config?.autoContinue ?? null}
             showUserScope={config?.showUserScope ?? null}
             codexReview={config?.codexReview ?? null}
+            codexModel={config?.codexModel ?? ''}
             freelaArchiveDays={config?.freelaArchiveDays ?? null}
             onConfig={props.onConfig}
             // O demo não tem workspace: volta para "Todos", senão a sala dele ficaria escondida.

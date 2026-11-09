@@ -21,6 +21,10 @@ import type {
 } from '../../shared/model';
 import { writeAtomic } from '../staff/store';
 import { readHistory } from './history';
+import type { CodexSpawn } from './codexArgs';
+import type { CodexEnvStatus } from '../codexEnv';
+import type { CodexModelInfo } from '../codexModels';
+import { CodexProcess } from './codexProcess';
 import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
 import { finalQuestion } from './question';
 import { CEILING_AT, contextNotice, kTokens, NOTICE_AT, rereadUsd, switchDecision, usd, type TurnInfo } from './contextPolicy';
@@ -31,11 +35,17 @@ import { CONTINUE_TEXT, type AutoContinue, type AutoContinueEvent, type Pending 
 import { limitNotice, MAX_LIMIT_HITS, resumePlan, type LimitHit } from './usageLimit';
 import { WAKE_MAX_STREAK, WakeStreakError, wakeNotice, type WakeInput } from './wake';
 import { readUsage } from '../usage';
+import type { SessionTokens } from '../callers';
 
 export interface ChatSpawn {
   sessionId: string;
   cwd: string;
+  /** Argumentos do `claude`. Com `engine: 'codex'` ficam vazios: valem os de `codex`. */
   args: string[];
+  /** Quem roda a conversa; ausente = `claude`. */
+  engine?: 'claude' | 'codex';
+  /** Como abrir a conversa no Codex (só com `engine: 'codex'`). */
+  codex?: CodexSpawn;
   /**
    * O modelo/esforço da linha de comando vêm de uma escolha gravada nesta conversa (ou na de origem,
    * ao duplicar). Vale como escolha à mão: a folga de cota não troca nem desfaz.
@@ -63,6 +73,12 @@ export interface ChatManagerOptions {
   /** Conversa parada há mais que isso fecha o processo (a sessão continua no disco). */
   idleMs?: number;
   spawnImpl?: ChatProcessOptions['spawnImpl'];
+  /** Modelos do Codex da conta, para o plano B de quem roda no Codex (ver CodexProcess); sem ele, o plano B roda no padrão do Codex. */
+  codexModels?: () => Promise<ReadonlyArray<Pick<CodexModelInfo, 'slug'>>>;
+  /** Confere o `codex` instalado antes de cada execução (versão mínima e `network_proxy`, ver server/codexEnv.ts); sem ele, a rede do Codex fica desligada. */
+  codexEnv?: () => Promise<CodexEnvStatus>;
+  /** Tokens das conversas (`MYCO_TOKEN` no ambiente de cada uma, ver server/callers.ts). Sem ele, as conversas abrem sem token. */
+  tokens?: SessionTokens;
   /** Processos abertos, gravados em disco para achar os órfãos depois de um reinício. */
   registry?: ChatRegistry;
   /** Testes trocam (pid vivo? / encerrar processo). */
@@ -459,6 +475,8 @@ export class ChatManager {
    * esforço à mão nesta conversa (ou a conversa abriu com uma escolha gravada), vale a sua escolha.
    */
   private async applyBoost(chat: ChatProcess): Promise<string | null> {
+    // A folga de cota é do Claude (Opus em esforço máximo): numa conversa do Codex nunca troca o modelo.
+    if (chat.engine === 'codex') return null;
     const state = this.boosts.get(chat);
     if (state === 'manual' || !this.opts.quotaBoost) return null;
     const boost = await this.opts.quotaBoost().catch(() => null);
@@ -599,6 +617,7 @@ export class ChatManager {
     s: { model?: string; effort?: string; autonomy?: Autonomy },
   ): Promise<string> {
     const chat = await this.ensure(projectId, sessionId, staffId);
+    if (s.effort === 'ultra' && chat.engine !== 'codex') throw new ChatError('O esforço ultra só existe no Codex');
     // Escolha sua nesta conversa: a folga de cota não troca nem desfaz mais (até o processo reabrir).
     if (s.model || s.effort) this.boosts.set(chat, 'manual');
     if (s.model) chat.setModel(s.model, `Modelo desta conversa: ${s.model}`);
@@ -797,14 +816,18 @@ export class ChatManager {
     }
     const spawn = await this.opts.resolve(projectId, sessionId, staffId, forkFrom);
     if (!spawn) throw new ChatError('funcionário ou projeto não encontrado');
-    const chat = new ChatProcess({
+    // Claude ou Codex: o resto do manager fala com os dois do mesmo jeito (ver codexProcess.ts).
+    const codex = spawn.engine === 'codex' ? spawn.codex : undefined;
+    if (spawn.engine === 'codex' && !codex) throw new ChatError('a conversa do Codex veio sem os dados para abrir');
+    const model = codex ? codex.model : argOf(spawn.args, '--model');
+    const effort = codex ? codex.effort : argOf(spawn.args, '--effort');
+    const base: Omit<ChatProcessOptions, 'args'> = {
       sessionId: spawn.sessionId,
       projectId,
       staffId,
       cwd: spawn.cwd,
-      args: spawn.args,
-      model: argOf(spawn.args, '--model'),
-      effort: argOf(spawn.args, '--effort'),
+      model,
+      effort,
       onUsage: (limits) => void this.saveUsage(spawn.sessionId, limits),
       onUsageLimit: (hit) => this.limitHit(spawn.sessionId, projectId, staffId, hit),
       onTurnWithoutLimit: () => void this.limitStreak.delete(spawn.sessionId),
@@ -815,17 +838,34 @@ export class ChatManager {
         this.opts.onIdle?.(spawn.sessionId, projectId, staffId, reason);
       },
       onCommands: (commands) => this.commands.set(projectId, commands),
+      // Quem ela é para a API: o mesmo token em toda execução da conversa (o Codex abre uma por mensagem), regerado se o servidor reiniciou.
+      mycoToken: this.opts.tokens?.issue({ staffId, projectId, sessionId: spawn.sessionId, engine: codex ? 'codex' : 'claude' }),
       onExit: (pid, error) => {
         this.log(`${spawn.sessionId} saiu (pid ${pid})${error ? `: ${error.slice(0, 200)}` : ''}`);
         if (pid !== null) void this.opts.registry?.remove(spawn.sessionId, pid).catch(() => {});
       },
       spawnImpl: this.opts.spawnImpl,
-    });
+    };
+    const chat = codex
+      ? new CodexProcess({
+          ...base,
+          permissionMode: CLI_MODE[codex.autonomy],
+          instructions: codex.instructions,
+          writableRoots: codex.writableRoots,
+          readOnlyPaths: codex.readOnlyPaths,
+          secrets: codex.secrets,
+          threadId: codex.threadId,
+          threadFile: codex.threadFile,
+          mycoUrl: codex.mycoUrl,
+          models: this.opts.codexModels,
+          env: this.opts.codexEnv,
+        })
+      : new ChatProcess({ ...base, args: spawn.args });
     this.chats.set(spawn.sessionId, chat);
     // O aviso de limite de uso ficou no processo anterior (a pendência guardada recria o dele, logo abaixo).
     this.limitNotices.delete(spawn.sessionId);
     this.wakeNotices.delete(spawn.sessionId);
-    this.launched.set(chat, { model: argOf(spawn.args, '--model'), effort: argOf(spawn.args, '--effort') });
+    this.launched.set(chat, { model, effort });
     // Escolha gravada (reabrir ou duplicar): vale a sua, a folga de cota não atropela.
     if (spawn.chosen) this.boosts.set(chat, 'manual');
     // Abas já abertas nesta sessão passam a ouvir o processo novo, desde o começo dele.
@@ -1046,8 +1086,10 @@ export class ChatManager {
   private reap() {
     const idle = this.opts.idleMs ?? 15 * 60_000;
     for (const [id, chat] of this.chats) {
-      if (!chat.running) this.chats.delete(id);
-      else if (!chat.working && Date.now() - chat.lastActivity > idle) chat.stop();
+      if (!chat.running) {
+        this.chats.delete(id);
+        this.opts.tokens?.revoke(id);
+      } else if (!chat.working && Date.now() - chat.lastActivity > idle) chat.stop();
     }
   }
 }

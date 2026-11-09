@@ -15,6 +15,7 @@ import type {
   ContextSwitch,
   ConversationHit,
   CostReport,
+  CodexEffort,
   Effort,
   FtpConnection,
   FtpConnectionInput,
@@ -217,6 +218,12 @@ export interface CodexState {
   reason: string | null;
 }
 
+/** Catálogo de modelos do Codex (GET /api/codex/models): vazio com o motivo quando não há CLI, login ou lista. */
+export interface CodexModelsState {
+  models: Array<{ slug: string; displayName: string; efforts: string[]; defaultEffort: string | null }>;
+  reason: string | null;
+}
+
 export interface AgentSource {
   name: string;
   description: string | null;
@@ -327,6 +334,8 @@ export const api = {
     autoContinue?: boolean;
     showUserScope?: boolean;
     codexReview?: boolean;
+    /** Modelo do Codex para perguntar ao GPT; vazio = o padrão do Codex. */
+    codexModel?: string;
     /** Dias parado até o Freela (conversa sem ficha) ser arquivado sozinho; 0 = nunca. */
     freelaArchiveDays?: number;
     /** Só os projetos enviados mudam; null volta à cor padrão. */
@@ -405,7 +414,7 @@ export const api = {
   /** Modelo, esforço e autonomia desta conversa, na hora (abre a conversa se preciso). */
   chatSettings: (
     projectId: string,
-    body: { sessionId: string | null; staffId: string | null; model?: string; effort?: Effort; autonomy?: Autonomy },
+    body: { sessionId: string | null; staffId: string | null; model?: string; effort?: CodexEffort; autonomy?: Autonomy },
   ) => post<{ sessionId: string }>(`/api/projects/${projectId}/chat/settings`, body),
   /** "O que mudou" na conversa (worktree inteira, ou só os arquivos que ele editou nela). */
   chatChanges: (projectId: string, sessionId: string, staffId: string | null) =>
@@ -468,6 +477,7 @@ export const api = {
   /** Segunda opinião do Codex sobre o diff da tarefa (o diff vai para a OpenAI). */
   taskSecondOpinion: (projectId: string, taskId: string) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/second-opinion`),
   codexStatus: () => get<CodexState>('/api/codex'),
+  codexModels: (fresh = false) => get<CodexModelsState>(fresh ? '/api/codex/models?fresh=1' : '/api/codex/models'),
   taskMerge: (projectId: string, taskId: string, skipTests = false) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/merge`, { skipTests }),
   taskReview: (projectId: string, taskId: string, staffId: string, force = false) =>
     post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/review`, { staffId, force }),

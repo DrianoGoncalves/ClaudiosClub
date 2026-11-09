@@ -256,6 +256,11 @@ export interface AdmitOptions {
   isLocalOrigin: (origin: string | undefined) => boolean;
   /** Abre o terminal de aprovação com `npm run pair CÓDIGO` pronto; devolve se abriu. */
   openApproval?: (code: string) => boolean;
+  /**
+   * O pedido chegou pelo socket da sandbox do Codex (127.0.0.2, ver callers.ts)? Esse pedido nunca é do navegador: `Origin` e cookie não valem,
+   * e o pareamento não existe ali. Quem decide o resto (token, rotas liberadas) é o servidor, depois da porta de entrada.
+   */
+  isSandbox?: (req: http.IncomingMessage) => boolean;
   log?: Log;
 }
 
@@ -309,12 +314,26 @@ export type Admission = { done: true } | { done: false; fromBrowser: boolean };
  * - POST com Origin local e sem cookie válido: 403 `needs-pairing` (navegador não pareado, ou um Origin forjado).
  *   As exceções são POST /api/pair/request e /api/pair/claim, que existem justamente para quem ainda não tem o cookie.
  * - POST sem Origin: segue como ferramenta (funcionário pela API); as rotas "só pelo Claudio’s Club" recusam.
+ * - Pela sandbox do Codex (`isSandbox`): POST sem x-myco é 403; o `Origin` e o cookie são ignorados (nunca é navegador, mesmo forjando os dois) e as
+ *   rotas do pareamento são 403. Segue como ferramenta (`fromBrowser` falso), e o servidor ainda pede o token e confere a lista de rotas.
  */
 export function admit(req: http.IncomingMessage, res: http.ServerResponse, url: URL, pairing: Pairing, o: AdmitOptions): Admission {
   const log = o.log ?? ((line: string) => console.log(line));
   const origin = req.headers.origin;
   // PUT (a memória pessoal) entra pelo mesmo gate de POST: cabeçalho x-myco e Origin local.
-  if (req.method === 'POST' || req.method === 'PUT') {
+  const writes = req.method === 'POST' || req.method === 'PUT';
+  if (o.isSandbox?.(req)) {
+    if (writes && req.headers['x-myco'] !== '1') {
+      json(res, 403, { error: 'origem não permitida' });
+      return { done: true };
+    }
+    if (url.pathname === PAIR_PATH || url.pathname.startsWith('/api/pair/')) {
+      json(res, 403, { error: 'o pareamento não existe na sandbox do Codex' });
+      return { done: true };
+    }
+    return { done: false, fromBrowser: false };
+  }
+  if (writes) {
     if (req.headers['x-myco'] !== '1' || !o.isLocalOrigin(origin)) {
       json(res, 403, { error: 'origem não permitida' });
       return { done: true };
