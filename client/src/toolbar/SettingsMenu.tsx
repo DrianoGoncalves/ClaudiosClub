@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from 'react-dom';
 import { CONTEXT_SWITCHES, type AppConfig, type BoardBackground, type ContextSwitch, type Project, type SendPriority, type UiLevel, type UsageStop, type Workspace } from '../../../shared/model';
 import { DemoButton, WorkspacesEditor } from '../office/WorkspacesSettings';
-import { api } from '../api';
+import { api, type CodexModelsState } from '../api';
 import { bareVersion } from '../format';
 import { useSystemTheme } from '../board/colors';
 import { useChatDetail } from '../chat/chatDetail';
@@ -52,8 +52,10 @@ interface Props {
   autoContinue: boolean | null;
   /** Sala do escopo do usuário no quadro; null = config ainda não chegou. */
   showUserScope: boolean | null;
-  /** Segunda opinião do Codex na revisão das tarefas; null = config ainda não chegou. */
+  /** Usar o Codex (GPT); null = config ainda não chegou. */
   codexReview: boolean | null;
+  /** Modelo do Codex para perguntar ao GPT; vazio = o padrão do Codex. */
+  codexModel: string;
   /** Dias parado até o Freela ser arquivado sozinho (0 = nunca); null = config ainda não chegou. */
   freelaArchiveDays: number | null;
 }
@@ -573,6 +575,18 @@ function buildSettings(
       toggle: { checked: p.codexReview, onChange: (v) => void api.saveConfig({ codexReview: v }).then(p.onConfig, () => {}) },
       advanced: true,
     });
+    // Só com o Codex ligado: o modelo que a pergunta ao GPT usa.
+    if (p.codexReview) {
+      out.push({
+        id: 'codex-model',
+        group: 'general',
+        title: t('toolbar.codexModelTitle'),
+        description: t('toolbar.codexModelDesc'),
+        keywords: t('toolbar.codexModelKeywords'),
+        control: <CodexModelPicker value={p.codexModel} onConfig={p.onConfig} />,
+        advanced: true,
+      });
+    }
   }
 
   if (p.optimizeQuota !== null) {
@@ -625,6 +639,52 @@ function buildSettings(
     });
   }
   return out;
+}
+
+/** Modelo do Codex para perguntar ao GPT: o catálogo da conta (`codex debug models`) ou "Padrão do Codex" (vazio). */
+function CodexModelPicker({ value, onConfig }: { value: string; onConfig: (c: AppConfig) => void }) {
+  const [catalog, setCatalog] = useState<CodexModelsState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api.codexModels().then(
+      (c) => alive && setCatalog(c),
+      (err: Error) => alive && setCatalog({ models: [], reason: err.message }),
+    );
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const models = catalog?.models ?? [];
+  // O modelo gravado que a lista não tem (ou a lista que não veio) continua aparecendo: a tela mostra o que vale.
+  const unknown = value && !models.some((m) => m.slug === value);
+  return (
+    <>
+      <select
+        className="setting-select"
+        value={value}
+        aria-label={t('toolbar.codexModelTitle')}
+        onChange={async (e) => {
+          setError(null);
+          try {
+            onConfig(await api.saveConfig({ codexModel: e.target.value }));
+          } catch (err) {
+            setError((err as Error).message);
+          }
+        }}
+      >
+        <option value="">{t('toolbar.codexModelDefault')}</option>
+        {unknown && <option value={value}>{value}</option>}
+        {models.map((m) => (
+          <option key={m.slug} value={m.slug}>
+            {m.displayName === m.slug ? m.slug : `${m.displayName} (${m.slug})`}
+          </option>
+        ))}
+      </select>
+      {catalog?.reason && <p className="muted small">{catalog.reason}</p>}
+      {error && <p className="error small">{error}</p>}
+    </>
+  );
 }
 
 /** Seguir sozinho numa conversa nova quando o assunto fecha, só avisar, ou deixar como está. */

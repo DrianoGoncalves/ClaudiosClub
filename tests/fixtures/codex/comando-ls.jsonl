@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"01a1babd-2221-7471-bc6f-23be3a417793"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"/usr/bin/bash -lc ls","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"/usr/bin/bash -lc ls","aggregated_output":"nota.txt\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Existe apenas o arquivo `nota.txt`."}}
+{"type":"turn.completed","usage":{"input_tokens":27999,"cached_input_tokens":25472,"cache_write_input_tokens":0,"output_tokens":51,"reasoning_output_tokens":0}}

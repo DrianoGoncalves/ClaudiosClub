@@ -3,13 +3,14 @@ import type { ServerInfo, StaffProfile } from '../../shared/model';
 import { defaultLocations } from '../adapters/claude/paths';
 import { ROOT } from '../root';
 import { renderFicha, systemPrompt, type FichaContext, type TeamMember } from './ficha';
-import { FTP_MCP_NAME } from '../../shared/model';
+import { FTP_MCP_NAME, GPT_MCP_NAME } from '../../shared/model';
 import { DEFAULT_SECRETS_DIR } from '../secretVault';
 import { ftpMcpServerConfig } from './ftpMcp';
+import { gptMcpServerConfig } from './gptMcp';
 import { buildMcpConfig } from './mcp';
 import { ensurePlaybookAgents } from './playbookAgents';
 import { buildSkillPlugin } from '../skillLibrary';
-import { ensureMemory, fichaFile, memoryFile, staffDir, writeAtomic } from './store';
+import { ensureMemory, fichaFile, historyDir, memoryFile, profileFile, staffDir, writeAtomic } from './store';
 import type { Worktree } from './worktree';
 
 export interface LaunchContext {
@@ -37,6 +38,10 @@ export interface LaunchContext {
   team?: TeamMember[];
   /** Agents da conta (padrão ~/.claude/agents); os testes trocam. */
   userAgentsDir?: string;
+  /** Codex ligado nas configurações (`codexReview`): o funcionário do Claude ganha o MCP `perguntar_gpt` e o roteiro manda usá-lo. */
+  codex?: boolean;
+  /** Claude contratado por um gestor no Codex e travado em `manual`: a ficha conta por que ele pede aprovação de tudo. */
+  lockedByCodexManager?: boolean;
 }
 
 /** A primeira mensagem de uma sessão nova numa conversa do Claudio’s Club. */
@@ -80,13 +85,16 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   // FTP: as conexões da ficha que existem e têm senha (ctx.servers já vem filtrado assim).
   const ftpServers = ftpServersOf(profile, ctx.servers);
   let mcpConfigPath: string | null = null;
-  if (profile.mcps !== null || ftpServers.length) {
+  // O `perguntar_gpt` entra só com o Codex ligado nas configurações e só aqui, no motor Claude (o motor Codex não tem MCPs).
+  const gpt = ctx.codex === true && profile.engine !== 'codex';
+  if (profile.mcps !== null || ftpServers.length || gpt) {
     mcpConfigPath = path.join(dir, 'mcp.json');
     const config = profile.mcps !== null ? await buildMcpConfig(ctx.projectPath, profile.mcps, ctx.claudeConfigFile) : { mcpServers: {} };
     if (ftpServers.length) {
       // Só nomes e caminhos: o MCP tira a senha do cofre sozinho.
       config.mcpServers[FTP_MCP_NAME] = ftpMcpServerConfig({ projectPath: ctx.projectPath, root: cwd, staffId: profile.id, connections: ftpServers, vaultDir: DEFAULT_SECRETS_DIR });
     }
+    if (gpt) config.mcpServers[GPT_MCP_NAME] = gptMcpServerConfig({ projectPath: ctx.projectPath, root: cwd });
     await writeAtomic(mcpConfigPath, JSON.stringify(config, null, 2));
   }
   const settingsFile = path.join(dir, 'settings.json');
@@ -110,7 +118,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   return {
     systemPromptFile,
     mcpConfigPath,
-    // Sem lista de MCPs na ficha (todos), o de FTP só se soma aos do projeto e do usuário.
+    // Sem lista de MCPs na ficha (todos), o de FTP e o do GPT só se somam aos do projeto e do usuário.
     strictMcp: profile.mcps !== null,
     addDirs: away ? [staffDir(ctx.projectPath)] : [],
     settingsFile,
@@ -118,6 +126,33 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     keyFiles: ctx.serverKeys ?? [],
     ftpServers,
     pluginDir: plugin?.dir ?? null,
+  };
+}
+
+export interface PreparedCodexRun {
+  /** Identidade e ficha, para o `developer_instructions` do Codex (ver ficha.ts: sem o que o Codex não tem). */
+  instructions: string;
+  /** Pastas fora da pasta de trabalho onde a sandbox de escrita pode gravar (a pasta das fichas e da memória, numa worktree). */
+  writableRoots: string[];
+  /** A ficha do próprio funcionário (JSON, Markdown e histórico): só leitura na sandbox, para ele não mudar o motor e a autonomia (ver seal.ts). */
+  readOnlyPaths: string[];
+  /** Onde fica o thread_id da conversa (retomar depois), ao lado dos arquivos de lançamento dela. */
+  threadFile: string;
+}
+
+/**
+ * O que o Codex precisa para a conversa: a ficha atualizada (e a memória criada) e o texto de instruções. Sem MCPs, hooks,
+ * agents do roteiro nem skills da biblioteca: não existem no Codex. O texto vai em `developer_instructions` na linha de comando; passando de ~24 KB (ou
+ * no Windows) o CodexProcess o manda no começo do prompt da primeira mensagem (o Codex não tem arquivo para isso sem trocar as instruções base).
+ */
+export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string): Promise<PreparedCodexRun> {
+  const away = path.resolve(cwd) !== path.resolve(ctx.projectPath);
+  const fichaCtx = await writeFicha(profile, ctx, away);
+  return {
+    instructions: systemPrompt(profile, fichaCtx, renderFicha(profile, fichaCtx)),
+    writableRoots: away ? [staffDir(ctx.projectPath)] : [],
+    readOnlyPaths: [profileFile(ctx.projectPath, profile.id), fichaFile(ctx.projectPath, profile.id), historyDir(ctx.projectPath, profile.id)],
+    threadFile: path.join(ctx.runDir, sessionId, 'codex-thread.json'),
   };
 }
 
@@ -148,7 +183,7 @@ export function staffSettings() {
  */
 export async function writeFicha(
   profile: StaffProfile,
-  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'librarySkills'>,
+  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'librarySkills' | 'codex' | 'lockedByCodexManager'>,
   absolute = false,
 ): Promise<FichaContext> {
   const rel = (file: string) => (absolute ? file : path.relative(ctx.projectPath, file));
@@ -165,6 +200,8 @@ export async function writeFicha(
     servers: ctx.servers,
     team: ctx.team,
     librarySkills: ctx.librarySkills,
+    codex: ctx.codex,
+    lockedByCodexManager: ctx.lockedByCodexManager,
   };
   await writeAtomic(fichaFile(ctx.projectPath, profile.id), renderFicha(profile, fichaCtx));
   await ensureMemory(ctx.projectPath, profile);

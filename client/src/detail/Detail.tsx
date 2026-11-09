@@ -407,6 +407,7 @@ export function EmployeePanel(props: {
       level={props.simple ? 'simple' : 'advanced'}
       fichaModel={opening?.model ?? null}
       fichaEffort={opening?.effort ?? null}
+      engine={staff?.engine ?? 'claude'}
       top={top}
       moreTabs={tabs}
       focus={props.focus}

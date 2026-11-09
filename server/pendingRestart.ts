@@ -57,6 +57,9 @@ export function pendingChanges(opts: { root: string; mark: number }): PendingRes
   // O MCP de FTP que as sessões sobem: o reinício refaz o pacote. Sem pacote, elas usam o .ts (nada pendente).
   const ftp = path.join(root, 'dist', 'ftp-mcp.mjs');
   if (safe(() => fs.existsSync(ftp) && bundleStale(ftp, root))) reasons.push('ftpMcp');
+  // O MCP do GPT (`perguntar_gpt`): o mesmo.
+  const gpt = path.join(root, 'dist', 'gpt-mcp.mjs');
+  if (safe(() => fs.existsSync(gpt) && bundleStale(gpt, root))) reasons.push('gptMcp');
   return { pendingRestart: reasons.length > 0, pendingReasons: reasons };
 }
 

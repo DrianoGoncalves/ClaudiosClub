@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import type {
@@ -25,15 +26,20 @@ async function allServers(projectPath: string, vault?: VaultOptions): Promise<Se
 }
 import type { ToolAdapter } from '../adapters/types';
 import { effectiveBrowser } from '../browser';
-import { readConfig, setArchived, workspaceOf } from '../config';
+import { MYCO_HOME, readConfig, setArchived, workspaceOf } from '../config';
 import { librarySkillsOf } from '../skillLibrary';
 import { readUsage } from '../usage';
 import { projectBudgetHit, usageStopHit, UsageStopError } from '../usageStop';
 import { TEMP_IDLE_DAYS } from '../../shared/model';
+import { codexModelOrNull, type CodexSpawn } from '../chat/codexArgs';
+import type { CodexEnvStatus } from '../codexEnv';
+import type { CodexModelsResult } from '../codexModels';
+import { readCodexThread } from '../chat/codexProcess';
 import { buildClaudeArgs, capAutonomy } from './ficha';
-import { greeting, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
+import { greeting, prepareCodexRun, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
 import { ensureWorktree, worktreeFor, type Worktree } from './worktree';
 import { listMcpServers } from './mcp';
+import { readSeal, sealViolation, writeSeal } from './seal';
 import {
   archiveVersion,
   createProfile,
@@ -52,6 +58,7 @@ import {
   saveProfile,
   staffDir,
   StaffError,
+  assertProfileRules,
   StaffInputSchema,
   type StaffInputParsed,
   RoutinesSchema,
@@ -101,6 +108,7 @@ const ApplyToCopiesBody = z.object({ applyToCopies: z.boolean().optional() });
 
 /** Campos que a edição leva para as cópias da mesma pessoa. Nunca: vínculos, servidores, memória, conversas, rotinas, MCPs. */
 const COPY_TEXT_FIELDS = ['name', 'role', 'mission', 'rules', 'doneWhen', 'model', 'effort', 'agents', 'skills'] as const;
+const engineOf = (p: Pick<StaffProfile, 'engine'>) => p.engine ?? 'claude';
 
 /** `child` está dentro de `dir` (sem sair por `..` nem por outro caminho). */
 function insideDir(dir: string, child: string): boolean {
@@ -111,7 +119,10 @@ function insideDir(dir: string, child: string): boolean {
 export interface StaffServiceOptions {
   runDir: string;
   claudeConfigFile: string;
+  /** Endereço do Claudio’s Club para as conversas do Claude (http://127.0.0.1:<porta>), nos textos da ficha. */
   mycoUrl: string;
+  /** O mesmo para quem roda no Codex: o endereço que a sandbox alcança (http://127.0.0.2:<porta>, ver server/callers.ts). Sem ele, o `mycoUrl`. */
+  codexUrl?: string;
   /** Consumo 5h/7d (testes trocam). */
   readUsage?: () => Promise<AccountUsage>;
   /** Cria a worktree da ficha (testes trocam o git). */
@@ -136,6 +147,20 @@ export interface StaffServiceOptions {
   vault?: VaultOptions;
   /** Cliente FTP do teste de conexão (padrão basic-ftp; os testes trocam). */
   ftpConnect?: FtpConnector;
+  /**
+   * Catálogo de modelos do Codex da conta (o mesmo de GET /api/codex/models). Com ele, salvar uma ficha do Codex com modelo fora do
+   * catálogo é recusado; catálogo indisponível (codex ausente ou falha): aceita e registra um aviso. Sem ele, não confere.
+   */
+  codexCatalog?: () => Promise<CodexModelsResult>;
+  /** O Codex está ligado nas configurações (`codexReview`, o "usar o Codex")? Padrão: lê o config. Desligado, a conversa de quem roda no Codex não abre. */
+  codexEnabled?: () => Promise<boolean>;
+  /**
+   * Confere o `codex` instalado (versão mínima 0.156.1 e `network_proxy`, ver server/codexEnv.ts). Com erro, a conversa de quem roda no Codex
+   * não abre e a mensagem diz como atualizar. Sem esta função, não confere.
+   */
+  codexEnv?: () => Promise<CodexEnvStatus>;
+  /** Aviso no log do servidor (padrão console.warn). */
+  log?: (line: string) => void;
 }
 
 const configArchive = {
@@ -226,12 +251,19 @@ export class StaffService {
   /**
    * Contrata. Pelo navegador (`fromBrowser`), qualquer ficha. Sem origem de navegador (um
    * funcionário chamando a API), só com `reportsTo` apontando para quem pode contratar, e com
-   * autonomia limitada à do gestor.
+   * autonomia limitada à do gestor. Se algum gestor roda no Codex, o contratado nasce no Codex (`engine: 'codex'`, sem servidores
+   * nem Chrome, autonomia no teto dele). Pedindo `engine: "claude"`, nasce Claude mas travado: autonomia `manual` (tudo passa pela
+   * aprovação do usuário), sem Chrome, MCPs, servidores nem `canHire`, e selado (ver seal.ts) para não subir a própria autonomia.
+   *
+   * `caller`: quem chama, pelo token da conversa (ver callers.ts). Com ele, o gestor é quem chama e o `reportsTo` do pedido é descartado: quem
+   * declara um gestor que não é ele não contrata em nome dele. Chamando uma conversa do Codex, valem as regras de gestor Codex mesmo que a
+   * ficha dele tenha mudado de motor desde que a conversa abriu.
    */
   async hire(
     projectId: string,
     body: unknown,
     fromBrowser: boolean,
+    caller?: { staffId: string | null; engine: 'claude' | 'codex' } | null,
   ): Promise<{ profile: StaffProfile; launch: LaunchResult | null } | null> {
     const project = await this.project(projectId);
     if (!project) return null;
@@ -239,15 +271,40 @@ export class StaffService {
     if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'ficha inválida');
     const input = parsed.data;
 
+    if (!fromBrowser && caller) {
+      if (!caller.staffId) throw new StaffError('só um funcionário (com ficha) contrata pela API');
+      input.reportsTo = [caller.staffId];
+    }
     const managers = await this.managers(project.path, input.reportsTo);
     const hirer = fromBrowser ? undefined : managers.find((m) => m.canHire);
+    let lockedClaude = false; // Claude contratado por gestor no Codex: nasce selado (ver seal.ts)
     if (!fromBrowser) {
       if (!hirer) throw new StaffError('só um funcionário com permissão de contratar pode contratar pela API');
+      // Gestor cuja ficha foi mexida fora do Claudio’s Club (um Codex que se rebaixou): não contrata (ver seal.ts).
+      for (const m of managers) await this.guardSeal(project, m);
       input.autonomy = capAutonomy(input.autonomy, hirer.autonomy);
       input.canHire = false; // subfuncionário contratado por outro não contrata em cascata
       input.servers = input.servers.filter((s) => hirer.servers.includes(s)); // nem acessa servidor que o gestor não acessa
       input.browser = input.browser && hirer.browser; // nem usa o navegador se o gestor não usa
+      // Quem tem gestor no Codex nasce no Codex (o padrão), com a autonomia dele no máximo e sem servidores nem Chrome. Pedindo
+      // `engine: "claude"` (que roda fora da sandbox) nasce Claude travado: `manual`, sem Chrome, MCPs, servidores nem canHire.
+      const codexManagers = managers.filter((m) => m.engine === 'codex');
+      if (codexManagers.length || caller?.engine === 'codex') {
+        input.servers = [];
+        input.browser = false;
+        if (input.engine === 'claude') {
+          lockedClaude = true;
+          input.autonomy = 'manual';
+          input.mcps = [];
+          input.canHire = false;
+        } else {
+          input.engine = 'codex';
+          input.model = codexModelOrNull(input.model);
+          for (const m of codexManagers) input.autonomy = capAutonomy(input.autonomy, m.autonomy);
+        }
+      }
     }
+    await this.checkCodexModel(input.engine, input.model);
 
     // Funcionário criado fora do Claudio’s Club: a sessão existente passa a ser dele, sem abrir outra.
     if (input.adoptSessionId) {
@@ -259,6 +316,7 @@ export class StaffService {
       if (owner) throw new StaffError(`essa sessão já é de ${owner.name}`);
       const sessions = [{ id: sessionId, startedAt: session.startedAt ?? session.updatedAt }];
       const profile = await createProfile(project.path, project.id, input, new Date(), sessions);
+      await this.seal(project, profile, lockedClaude);
       await writeFicha(profile, await this.context(project, profile));
       return { profile, launch: null };
     }
@@ -266,6 +324,7 @@ export class StaffService {
     // A trava vale também para quem contrata pela API (sem como confirmar, só recusa).
     if (input.launch && !(fromBrowser && input.force)) await this.checkUsage(project.id);
     let profile = await createProfile(project.path, project.id, input);
+    await this.seal(project, profile, lockedClaude);
     if (hirer) {
       // Contratado por outro funcionário: temporário, com quem contratou (ver end/sweepTemporaries).
       profile = { ...profile, hiredBy: hirer.id, temporary: true };
@@ -336,6 +395,7 @@ export class StaffService {
     const source = await this.project(fromProjectId);
     const src = source ? await readProfile(source.path, staffId) : null;
     if (!target || !source || !src) return null;
+    await this.guardSeal(source, src); // não leva para a cópia uma ficha do Codex mexida por fora
     // Mesma checagem de `hire`: cada gestor tem que ser funcionário deste projeto (senão lança e nada é criado).
     await this.managers(target.path, reportsTo);
 
@@ -355,6 +415,7 @@ export class StaffService {
       knowledge: src.knowledge,
       rules: src.rules,
       doneWhen: src.doneWhen,
+      ...(src.engine && { engine: src.engine }),
       model: src.model,
       effort: src.effort,
       canHire: src.canHire,
@@ -368,6 +429,7 @@ export class StaffService {
     const created = await createProfile(target.path, projectId, input, now);
     const profile: StaffProfile = { ...created, personId };
     await saveProfile(target.path, profile);
+    await this.seal(target, profile, (await readSeal(this.opts.runDir, source.path, src.id))?.engine === 'claude'); // a trava do contratado por gestor no Codex vai junto
 
     // Memória: a de origem (com a procedência no topo) ou a padrão. Antes do .md: ensureMemory nunca sobrescreve.
     const oldMemory = withMemory ? await fs.readFile(memoryFile(source.path, src.id), 'utf8').catch(() => null) : null;
@@ -427,7 +489,14 @@ export class StaffService {
       throw new StaffError('esse vínculo criaria um ciclo (um subordinado não pode chefiar o próprio gestor)');
     }
 
+    // O pedido pode não trazer o `engine` (fica o da ficha): as regras do Codex valem sobre a ficha já junta.
+    assertProfileRules({ ...current, ...fields });
+    // Só confere o que mudou: um modelo que já estava na ficha (e que a conta deixou de aceitar) não trava uma edição qualquer;
+    // quem roda no Codex tem o plano B (outro modelo na mensagem) para isso.
+    const engine = fields.engine ?? current.engine;
+    if (engine === 'codex' && (engine !== current.engine || fields.model !== current.model)) await this.checkCodexModel(engine, fields.model);
     const saved = await this.saveEdit(project, current, { ...current, ...fields, projectId }, portraitDataUrl);
+    await this.seal(project, saved); // salvar pela tela confirma motor e autonomia (inclusive de uma ficha que foi mexida por fora)
     const copiesUpdated = flags.data.applyToCopies && saved.personId ? await this.applyToCopies(project, saved) : 0;
     return { ...saved, copiesUpdated };
   }
@@ -457,6 +526,7 @@ export class StaffService {
     const picture = await readPortrait(source.path, saved);
     const dataUrl = picture ? `data:${picture.type};base64,${picture.bytes.toString('base64')}` : null;
     const text = Object.fromEntries(COPY_TEXT_FIELDS.map((k) => [k, saved[k]])) as Partial<StaffProfile>;
+    const { model: _model, effort: _effort, ...common } = text;
     let updated = 0;
     for (const project of (await this.adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf)) {
       const copies = (await listProjectStaff(project.path, project.id).catch(() => [])).filter(
@@ -467,7 +537,10 @@ export class StaffService {
           await withProfileLock(project.path, c.id, async () => {
             const cur = await readProfile(project.path, c.id);
             if (!cur || cur.personId !== saved.personId) return;
-            await this.saveEdit(project, cur, { ...cur, ...text, projectId: project.id }, dataUrl);
+            // Modelo e esforço só vão para cópia do mesmo motor (um alias do Claude não vale no Codex, nem `ultra` no Claude).
+            const patch = engineOf(cur) === engineOf(saved) ? text : common;
+            assertProfileRules({ ...cur, ...patch });
+            await this.saveEdit(project, cur, { ...cur, ...patch, projectId: project.id }, dataUrl);
             updated++;
           });
         } catch (err) {
@@ -523,6 +596,7 @@ export class StaffService {
       updatedAt: new Date().toISOString(),
     };
     await saveProfile(project.path, next);
+    await this.seal(project, next);
     await writeFicha(next, await this.context(project, next));
     this.opts.onChange?.(current, next);
     return next;
@@ -693,6 +767,7 @@ export class StaffService {
     const current = project ? await readProfile(project.path, staffId) : null;
     if (!project || !current) return null;
     if (current.reportsTo.includes(managerId)) return current;
+    await this.guardSeal(project, current); // `update` confirmaria (selaria) o que está no disco: uma ficha mexida por fora não passa por aqui
     const { id: _i, projectId: _p, portrait: _pt, sessions: _s, createdAt: _c, updatedAt: _u, ...fields } = current;
     return this.update(projectId, staffId, { ...fields, reportsTo: [...current.reportsTo, managerId] });
   }
@@ -706,6 +781,7 @@ export class StaffService {
     const current = project ? await readProfile(project.path, staffId) : null;
     if (!project || !current) return null;
     if (!current.reportsTo.includes(managerId)) return current;
+    await this.guardSeal(project, current);
     const { id: _i, projectId: _p, portrait: _pt, sessions: _s, createdAt: _c, updatedAt: _u, ...fields } = current;
     return this.update(projectId, staffId, { ...fields, reportsTo: current.reportsTo.filter((id) => id !== managerId) });
   }
@@ -747,12 +823,40 @@ export class StaffService {
   }
 
   /**
+   * Ficha do Codex com modelo que a conta não tem (o caso do `gpt-6.1-sol`, configurado mas recusado com `model_not_found`) não é salva.
+   * Sem catálogo (codex ausente, sem login, falha), não há como saber: aceita e deixa um aviso no log, sem travar o salvamento.
+   */
+  private async checkCodexModel(engine: string | undefined, model: string | null): Promise<void> {
+    if (engine !== 'codex' || !model || !this.opts.codexCatalog) return;
+    const warn = this.opts.log ?? ((line: string) => console.warn(`[staff] ${line}`));
+    let catalog: CodexModelsResult | null = null;
+    try {
+      catalog = await this.opts.codexCatalog();
+    } catch (err) {
+      warn(`modelo ${model} do Codex salvo sem conferir: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    if (!catalog.models.length) {
+      warn(`modelo ${model} do Codex salvo sem conferir: catálogo indisponível (${catalog.reason ?? 'vazio'})`);
+      return;
+    }
+    if (!catalog.models.some((m) => m.slug === model)) {
+      throw new StaffError(`O modelo ${model} não está no catálogo do Codex desta conta. Escolha um destes: ${catalog.models.map((m) => m.slug).join(', ')}`);
+    }
+  }
+
+  /**
    * Linha de comando para conversar pelo Claudio’s Club. Com ficha: autonomia, modelo, MCPs e identidade
    * da ficha (sessão nova quando `sessionId` é null). Sem ficha: só retoma a sessão, pedindo
    * aprovação para tudo. `forkFrom`: sessão nova como cópia desta (duplicar a conversa), na mesma
    * pasta da original.
    */
-  async chatSpawn(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string) {
+  async chatSpawn(
+    projectId: string,
+    sessionId: string | null,
+    staffId: string | null,
+    forkFrom?: string,
+  ): Promise<{ sessionId: string; cwd: string; args: string[]; chosen?: boolean; engine?: 'claude' | 'codex'; codex?: CodexSpawn } | null> {
     const project = await this.project(projectId);
     if (!project) return null;
     if (!staffId) {
@@ -770,11 +874,20 @@ export class StaffService {
     profile = { ...profile, projectId };
     const resume = !!sessionId && !forkFrom;
     const id = resume ? sessionId! : randomUUID();
+    const codex = profile.engine === 'codex';
+    // Antes de qualquer coisa que grave (worktree, ssh_config, ficha .md): uma ficha do Codex mexida por fora (motor ou autonomia
+    // diferentes dos que o Claudio’s Club gravou) não abre, nem como Claude. Ver seal.ts.
+    await this.guardSeal(project, profile);
+    if (codex) await this.assertCodexUsable();
     const ctx = await this.context(project, profile, true);
     const cwd = sessionCwd(profile, ctx, forkFrom ?? sessionId);
-    // Chrome só com a extensão instalada (vale só para esta conversa: a ficha salva segue como o dono escolheu).
-    const browser = await effectiveBrowser(profile.browser, this.opts.browserStatus);
-    const run = await prepareRun({ ...profile, browser }, ctx, id, cwd);
+    // Segunda barreira (a primeira é ao salvar a ficha): uma ficha antiga, ou editada à mão, com servidores no Codex não abre: recusa em vez de rodar.
+    assertProfileRules(profile);
+    if (codex && forkFrom) throw new StaffError('duplicar a conversa ainda não existe para funcionário que roda no Codex');
+    // Chrome só com a extensão instalada (vale só para esta conversa: a ficha salva segue como o dono escolheu). No Codex não há Chrome.
+    const browser = codex ? false : await effectiveBrowser(profile.browser, this.opts.browserStatus);
+    const codexRun = codex ? await prepareCodexRun(profile, ctx, id, cwd) : null;
+    const run = codexRun ? null : await prepareRun({ ...profile, browser }, ctx, id, cwd);
     // Modelo e esforço: o da conversa (reabrir, ou a de origem ao duplicar) > o da ficha > o último escolhido no chat.
     const origin = profile.sessions.find((x) => x.id === (forkFrom ?? sessionId));
     if (!resume) {
@@ -793,8 +906,51 @@ export class StaffService {
       model: origin?.model ?? profile.model ?? profile.lastModel ?? null,
       effort: origin?.effort ?? profile.effort ?? profile.lastEffort ?? null,
     };
-    const args = buildClaudeArgs(effective, { ...run, sessionId: id, resume, firstPrompt: null, ...(forkFrom && { forkFrom }) });
-    return { sessionId: id, cwd, args, ...((origin?.model || origin?.effort) && { chosen: true }) };
+    const chosen = (origin?.model || origin?.effort) && { chosen: true };
+    if (codexRun) {
+      // Uma ficha que trocou de motor pode ter ficado com o modelo do Claude (`opus`…): no Codex isso não vale, vai o padrão dele.
+      const spawn: CodexSpawn = {
+        autonomy: effective.autonomy,
+        model: codexModelOrNull(effective.model),
+        effort: effective.effort,
+        instructions: codexRun.instructions,
+        writableRoots: codexRun.writableRoots,
+        readOnlyPaths: codexRun.readOnlyPaths,
+        secrets: { projectPath: project.path, home: os.homedir(), mycoHome: MYCO_HOME },
+        threadId: resume ? await readCodexThread(codexRun.threadFile) : null,
+        threadFile: codexRun.threadFile,
+        mycoUrl: ctx.mycoUrl,
+      };
+      return { sessionId: id, cwd, args: [], engine: 'codex', codex: spawn, ...chosen };
+    }
+    const args = buildClaudeArgs(effective, { ...run!, sessionId: id, resume, firstPrompt: null, ...(forkFrom && { forkFrom }) });
+    return { sessionId: id, cwd, args, ...chosen };
+  }
+
+  /** Grava (Codex ou Claude travado) ou apaga (outro motor) o selo da ficha. Só onde o Claudio’s Club decide motor e autonomia (ver seal.ts). */
+  private seal(project: Project, profile: StaffProfile, lockedClaude = false): Promise<void> {
+    return writeSeal(this.opts.runDir, project.path, profile, { lockedClaude });
+  }
+
+  /**
+   * A ficha do disco bate com o selo? Não: recusa (StaffError). Ficha do Codex sem selo (anterior a ele, ou de outro computador) é selada
+   * agora, com o que o disco diz. Ficha que nunca foi do Codex não tem selo e passa direto (o caminho do Claude não muda).
+   */
+  private async guardSeal(project: Project, profile: StaffProfile): Promise<void> {
+    const seal = await readSeal(this.opts.runDir, project.path, profile.id);
+    const violation = sealViolation(profile, seal);
+    if (violation) throw new StaffError(violation);
+    if (!seal && profile.engine === 'codex') await this.seal(project, profile);
+  }
+
+  /** O Codex serve para abrir uma conversa agora? Ligado nas configurações, na versão mínima e instalado. Lança StaffError com o que fazer. */
+  private async assertCodexUsable(): Promise<void> {
+    const on = await (this.opts.codexEnabled ?? (async () => (await readConfig()).codexReview))();
+    if (!on) {
+      throw new StaffError('O Codex está desligado nas configurações: ligue "Usar o Codex (GPT)" para abrir conversas de quem roda no Codex (ou troque o motor da ficha para o Claude).');
+    }
+    const env = await this.opts.codexEnv?.();
+    if (env?.error) throw new StaffError(env.error);
   }
 
   /**
@@ -835,7 +991,8 @@ export class StaffService {
       projectName: path.basename(project.path),
       projectPath: project.path,
       managerNames: managers.filter((m): m is StaffProfile => !!m).map((m) => `${m.name} (${m.role})`),
-      mycoUrl: this.opts.mycoUrl,
+      // A sandbox do Codex só alcança 127.0.0.2: a ficha dele cita esse endereço.
+      mycoUrl: profile.engine === 'codex' ? (this.opts.codexUrl ?? this.opts.mycoUrl) : this.opts.mycoUrl,
       runDir: this.opts.runDir,
       claudeConfigFile: this.opts.claudeConfigFile,
       worktree,
@@ -844,6 +1001,9 @@ export class StaffService {
       serverKeys: await keyFilesOf(project.path),
       librarySkills: profile.skills.length ? await librarySkillsOf(profile.skills, this.opts.skillLibraryDir) : [],
       skillLibraryDir: this.opts.skillLibraryDir,
+      codex: config.codexReview,
+      // Claude contratado por gestor no Codex (selo `claude`) e ainda no "Pede tudo": a ficha conta o porquê.
+      lockedByCodexManager: profile.autonomy === 'manual' && profile.engine !== 'codex' && (await readSeal(this.opts.runDir, project.path, profile.id))?.engine === 'claude',
       // A equipe dele: quem reporta a ele (os temporários encerrados já saíram do quadro, mas a ficha
       // não sabe disso; ficam de fora os que têm `ended`).
       team: everyone
@@ -856,6 +1016,28 @@ export class StaffService {
    * Pode `managerId` passar trabalho para `staffId`? Só para quem reporta a ele (a API não deixa um
    * funcionário mandar tarefa para quem não é da equipe dele).
    */
+  /**
+   * A sandbox do Codex (quem chama, pelo token) pode falar com este alvo? Só com a própria conversa e com as de quem reporta a ele (`reportsTo`
+   * inclui quem chama). Com conversa e funcionário juntos, os dois têm que ser da mesma pessoa. Conversa sem ficha nunca chama nem é alvo.
+   */
+  async mayReach(
+    projectId: string,
+    caller: { staffId: string | null; sessionId: string },
+    target: { sessionId: string | null; staffId: string | null },
+  ): Promise<boolean> {
+    const project = await this.project(projectId);
+    if (!project || !caller.staffId) return false;
+    if (target.sessionId === caller.sessionId) return !target.staffId || target.staffId === caller.staffId;
+    const everyone = await listProjectStaff(project.path, project.id);
+    const mine = (s: StaffProfile) => s.reportsTo.includes(caller.staffId!);
+    if (target.sessionId) {
+      const owner = everyone.find((s) => s.sessions.some((x) => x.id === target.sessionId));
+      return !!owner && mine(owner) && (!target.staffId || target.staffId === owner.id);
+    }
+    const person = target.staffId ? everyone.find((s) => s.id === target.staffId) : undefined;
+    return !!person && mine(person);
+  }
+
   async isManagerOf(projectId: string, managerId: string, staffId: string): Promise<boolean> {
     const project = await this.project(projectId);
     const target = project ? await readProfile(project.path, staffId) : null;
