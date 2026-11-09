@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CODEX_MIN_VERSION } from '../server/codexEnv';
@@ -9,9 +10,11 @@ import {
   buildAskArgs,
   buildAskPrompt,
   createGptMcp,
+  gptMcpCommand,
   gptMcpServerConfig,
   runGptMcpStdio,
   spawnCodex,
+  sweepStaleTemps,
   TOOLS,
   windowsArg,
   type GptRun,
@@ -436,6 +439,219 @@ describe('spawnCodex', () => {
     } finally {
       process.env.PATH = old;
     }
+  });
+});
+
+// ---- encerramento: o codex em andamento não pode sobrar (nem o temporário) ----
+
+describe('encerramento do MCP e cancelamento', () => {
+  const unix = process.platform !== 'win32';
+  const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+  /** Vivo de verdade: `kill -0` responde também para zumbi, então no Linux olha o estado em /proc. */
+  const alive = async (pid: number) => {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return false;
+    }
+    const stat = await fs.readFile(`/proc/${pid}/stat`, 'utf8').catch(() => null);
+    return stat === null ? true : !/^\d+ \(.*\) Z /.test(stat);
+  };
+  const until = async (cond: () => Promise<boolean> | boolean, ms = 20_000) => {
+    const t0 = Date.now();
+    while (!(await cond())) {
+      if (Date.now() - t0 > ms) throw new Error('prazo esgotado esperando a condição');
+      await sleep(50);
+    }
+  };
+  const pidOf = async (f: string) => Number((await fs.readFile(f, 'utf8')).trim());
+  const tempsIn = async (dir: string) => (await fs.readdir(dir)).filter((n) => n.startsWith('myco-gpt-'));
+
+  /** Um runner que fica parado até o `signal` abortar, como o spawnCodex de verdade (e só devolve depois, como ele). */
+  function hang() {
+    let started!: () => void;
+    const begun = new Promise<void>((res) => (started = res));
+    let seen: AbortSignal | undefined;
+    const f = fake(() => ({}));
+    const run: GptRunner = async (args, input, o) => {
+      if (args[0] !== 'exec') return f.run(args, input, o);
+      seen = o.signal;
+      started();
+      await new Promise<void>((res) => (o.signal?.aborted ? res() : o.signal?.addEventListener('abort', () => res(), { once: true })));
+      await sleep(30); // o "processo" demora um pouco para fechar
+      return { code: null, stdout: '', stderr: '', aborted: true };
+    };
+    return { run, begun, signal: () => seen };
+  }
+  const callMsg = (id: number) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'perguntar_gpt', arguments: { pergunta: 'q' } } });
+
+  it('notifications/cancelled: aborta só aquela pergunta, não responde a ela e apaga o temporário', async () => {
+    const tmp = await fs.mkdtemp(path.join(root, 'tmp-'));
+    const h = hang();
+    const s = server(h.run, { tmpRoot: tmp });
+    const call = s.handle(callMsg(7));
+    await h.begun;
+    expect(await tempsIn(tmp)).toHaveLength(1);
+    expect(await s.handle({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 99 } })).toBeNull(); // outra: nada acontece
+    expect(h.signal()?.aborted).toBe(false);
+    expect(await s.handle({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 7, reason: 'user' } })).toBeNull();
+    expect(await call).toBeNull();
+    expect(h.signal()?.aborted).toBe(true);
+    expect(await tempsIn(tmp)).toEqual([]);
+  });
+
+  it('shutdown: aborta tudo o que está em andamento, espera e não deixa temporário; chamada nova depois não abre nada', async () => {
+    const tmp = await fs.mkdtemp(path.join(root, 'tmp-'));
+    const h = hang();
+    const f = fake(() => ({ answer: 'x' }));
+    const s = server(h.run, { tmpRoot: tmp });
+    const a = s.handle(callMsg(1));
+    const b = s.handle(callMsg(2));
+    await h.begun;
+    await s.shutdown();
+    expect(await a).toBeNull();
+    expect(await b).toBeNull();
+    expect(await tempsIn(tmp)).toEqual([]);
+    const late = server(f.run, { tmpRoot: tmp });
+    await late.shutdown();
+    expect(await late.handle(callMsg(3))).toBeNull();
+    expect(f.execs()).toHaveLength(0);
+  });
+
+  it('cancelada na conferência da versão ou antes do plano B: nada de codex exec novo', async () => {
+    const tmp = await fs.mkdtemp(path.join(root, 'tmp-'));
+    const f = fake(() => ({ code: 1, stderr: GONE }));
+    let s!: ReturnType<typeof createGptMcp>;
+    // O catálogo é pedido depois do primeiro exec falhar: a pergunta é cancelada bem aí.
+    const run: GptRunner = async (args, input, o) => {
+      if (args[0] === 'debug') void s.shutdown(); // sem esperar: o shutdown espera esta própria chamada
+      return f.run(args, input, o);
+    };
+    await updateConfig({ codexModel: 'gpt-6.1-sol' }, configFile);
+    s = server(run, { tmpRoot: tmp });
+    expect(await s.handle(callMsg(1))).toBeNull();
+    expect(f.execs()).toHaveLength(1);
+    expect(await tempsIn(tmp)).toEqual([]);
+    await updateConfig({ codexModel: '' }, configFile);
+  });
+
+  it('sweepStaleTemps: só myco-gpt-* de pasta com mais de 1 h', async () => {
+    const tmp = await fs.mkdtemp(path.join(root, 'tmp-'));
+    const mk = async (name: string, ageMin: number) => {
+      const d = path.join(tmp, name);
+      await fs.mkdir(d);
+      await fs.writeFile(path.join(d, 'resposta.md'), 'x');
+      const t = new Date(Date.now() - ageMin * 60_000);
+      await fs.utimes(d, t, t);
+      return d;
+    };
+    const velha = await mk('myco-gpt-AbC123', 90);
+    const nova = await mk('myco-gpt-xYz789', 5);
+    const outra = await mk('outra-coisa-velha', 500);
+    const comprida = await mk('myco-gpt-abc123-nao-e-do-mkdtemp', 500);
+    expect(await sweepStaleTemps(tmp)).toBe(1);
+    await expect(fs.stat(velha)).rejects.toThrow();
+    for (const d of [nova, outra, comprida]) await fs.stat(d);
+    expect(await sweepStaleTemps(path.join(tmp, 'nao-existe'))).toBe(0);
+  });
+
+  it.runIf(unix)('spawnCodex com signal: mata o processo e o neto, devolve aborted só depois de fechar; sinal já abortado não abre nada', async () => {
+    const bin = await fs.mkdtemp(path.join(root, 'bin-'));
+    const outdir = await fs.mkdtemp(path.join(root, 'out-'));
+    await fs.writeFile(path.join(bin, 'codex'), '#!/bin/sh\nsleep 60 & echo $! > "$OUTDIR/neto.pid"; echo $$ > "$OUTDIR/pai.pid"; wait\n', { mode: 0o755 });
+    const old = { PATH: process.env.PATH, OUTDIR: process.env.OUTDIR };
+    Object.assign(process.env, { PATH: `${bin}${path.delimiter}${process.env.PATH}`, OUTDIR: outdir });
+    try {
+      const ac = new AbortController();
+      const p = spawnCodex([], '', { cwd: proj, timeoutMs: 60_000, signal: ac.signal });
+      await until(async () => (await fs.readdir(outdir)).length === 2 && (await fs.readFile(path.join(outdir, 'pai.pid'), 'utf8')).trim() !== '');
+      const [pai, neto] = [await pidOf(path.join(outdir, 'pai.pid')), await pidOf(path.join(outdir, 'neto.pid'))];
+      ac.abort();
+      expect(await p).toMatchObject({ aborted: true }); // code: null (morto por sinal)
+      expect(await alive(pai)).toBe(false);
+      await until(async () => !(await alive(neto)), 2_000);
+      const again = await spawnCodex([], '', { cwd: proj, timeoutMs: 60_000, signal: ac.signal });
+      expect(again).toMatchObject({ aborted: true, code: null });
+      expect(again.spawnError).toBeUndefined();
+    } finally {
+      for (const [k, v] of Object.entries(old)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  });
+
+  it.runIf(unix)('spawnCodex: quem ignora o SIGTERM leva SIGKILL depois da carência (grupo inteiro)', async () => {
+    const bin = await fs.mkdtemp(path.join(root, 'bin-'));
+    const outdir = await fs.mkdtemp(path.join(root, 'out-'));
+    await fs.writeFile(path.join(bin, 'codex'), '#!/bin/sh\ntrap "" TERM\nsleep 60 & echo $! > "$OUTDIR/neto.pid"; echo $$ > "$OUTDIR/pai.pid"; while :; do sleep 0.2; done\n', { mode: 0o755 });
+    const old = { PATH: process.env.PATH, OUTDIR: process.env.OUTDIR };
+    Object.assign(process.env, { PATH: `${bin}${path.delimiter}${process.env.PATH}`, OUTDIR: outdir });
+    try {
+      const ac = new AbortController();
+      const p = spawnCodex([], '', { cwd: proj, timeoutMs: 60_000, signal: ac.signal, graceMs: 500 });
+      await until(async () => (await fs.readdir(outdir)).length === 2 && (await fs.readFile(path.join(outdir, 'pai.pid'), 'utf8')).trim() !== '');
+      const [pai, neto] = [await pidOf(path.join(outdir, 'pai.pid')), await pidOf(path.join(outdir, 'neto.pid'))];
+      const t0 = Date.now();
+      ac.abort();
+      expect(await p).toMatchObject({ aborted: true });
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(450); // esperou a carência antes do SIGKILL
+      expect(await alive(pai)).toBe(false);
+      expect(await alive(neto)).toBe(false);
+    } finally {
+      for (const [k, v] of Object.entries(old)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  });
+
+  // O MCP de verdade (o mesmo .ts que o app sobe, pelo tsx) com um `codex` de mentira que dorme: matar o MCP leva o codex junto.
+  describe.runIf(unix)('MCP real por stdio', () => {
+    type Stop = { how: 'SIGTERM' | 'SIGINT' | 'SIGHUP' | 'stdin'; ignoreTerm?: boolean };
+    const cases: Stop[] = [{ how: 'SIGTERM' }, { how: 'SIGINT' }, { how: 'SIGHUP' }, { how: 'stdin' }, { how: 'SIGTERM', ignoreTerm: true }];
+    it.each(cases)('$how (codex ignorando SIGTERM: $ignoreTerm): o codex e o neto morrem e /tmp/myco-gpt-* some', async ({ how, ignoreTerm }) => {
+      const bin = await fs.mkdtemp(path.join(root, 'bin-'));
+      const outdir = await fs.mkdtemp(path.join(root, 'out-'));
+      const tmp = await fs.mkdtemp(path.join(root, 'tmp-'));
+      const script = [
+        '#!/bin/sh',
+        'case "$1" in',
+        '  --version) echo "codex-cli 0.167.0"; exit 0;;',
+        '  features) echo "network_proxy experimental true"; exit 0;;',
+        'esac',
+        '[ -n "$IGNORE_TERM" ] && trap "" TERM',
+        'sleep 60 & echo $! > "$OUTDIR/neto.pid"; echo $$ > "$OUTDIR/pai.pid"',
+        'while :; do wait; done',
+      ].join('\n');
+      await fs.writeFile(path.join(bin, 'codex'), script + '\n', { mode: 0o755 });
+      const { command, args } = gptMcpCommand(false);
+      const mcp = spawn(command, [...args, '--project', main, '--root', proj, '--home', home, '--myco-home', mycoHome], {
+        env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, OUTDIR: outdir, TMPDIR: tmp, ...(ignoreTerm && { IGNORE_TERM: '1' }) },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      mcp.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
+      const exited = new Promise<number | null>((res) => mcp.on('exit', (code) => res(code)));
+      try {
+        mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } }) + '\n');
+        mcp.stdin.write(JSON.stringify(callMsg(2)) + '\n');
+        await until(async () => (await fs.readdir(outdir)).length === 2 && (await fs.readFile(path.join(outdir, 'pai.pid'), 'utf8')).trim() !== '', 40_000);
+        const [pai, neto] = [await pidOf(path.join(outdir, 'pai.pid')), await pidOf(path.join(outdir, 'neto.pid'))];
+        expect(await alive(pai)).toBe(true);
+        expect(await tempsIn(tmp)).toHaveLength(1); // a pasta da resposta existe enquanto a pergunta roda
+        const t0 = Date.now();
+        if (how === 'stdin') mcp.stdin.end();
+        else mcp.kill(how);
+        expect(await exited).toBe(0);
+        expect(Date.now() - t0).toBeLessThan(ignoreTerm ? 9_000 : 5_000);
+        if (ignoreTerm) expect(Date.now() - t0).toBeGreaterThanOrEqual(2_800); // esperou os 3 s antes do SIGKILL
+        expect(await alive(pai)).toBe(false);
+        expect(await alive(neto)).toBe(false);
+        expect(await tempsIn(tmp)).toEqual([]);
+        expect(stdout).not.toContain('"id":2'); // a pergunta abortada não é respondida
+      } finally {
+        mcp.kill('SIGKILL');
+        for (const f of ['pai.pid', 'neto.pid']) {
+          const pid = await pidOf(path.join(outdir, f)).catch(() => 0);
+          if (pid) try { process.kill(-pid, 'SIGKILL'); } catch { /* já saiu */ }
+        }
+      }
+    }, 60_000);
   });
 });
 
