@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Autonomy,
   Board,
+  CodexEffort,
   Effort,
+  Engine,
   GitState,
   LaunchResult,
   McpServerInfo,
@@ -22,6 +24,19 @@ import { BrowserCheck } from './BrowserCheck';
 import { CopyFromCompany } from './CopyFromCompany';
 import { copiesOf } from './directory';
 import type { RoleEntry } from '../../../shared/roles';
+import {
+  type CodexCatalog,
+  codexAutonomyHelp,
+  codexBlockedByServers,
+  defaultEffortOf,
+  effortsOfModel,
+  engineToSend,
+  isClaudeModel,
+  pickCodexModel,
+  showEngineField,
+  switchEngine,
+  useCodexCatalog,
+} from './codexEngine';
 import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, PLAYBOOK_OPTIONS } from './templates';
 
 /** "opus" → "Opus (mais recente)"; '' → "Padrão do Claude Code"; outro id fica como está. */
@@ -48,6 +63,8 @@ interface Props {
   /** A aba aberta, se quem usa quiser guardá-la (a embutida remonta ao salvar). */
   tab?: Tab;
   onTab?: (tab: Tab) => void;
+  /** Codex (GPT) ligado nas configurações: sem isso o campo "Motor" não aparece (a não ser que a ficha já rode no Codex). */
+  codexReview?: boolean | null;
   onClose: () => void;
   onHired: (profile: StaffProfile, launch: LaunchResult | null) => void;
   onSaved: (profile: StaffProfile) => void;
@@ -68,7 +85,7 @@ const TABS: Array<{ id: Tab; label: string; intro: string }> = [
   { id: 'history', label: t('staff.tabHistory'), intro: t('staff.tabHistoryIntro') },
 ];
 
-export function StaffForm({ board, projectId, mode, simple = false, embedded = false, tab: tabProp, onTab, onClose, onHired, onSaved }: Props) {
+export function StaffForm({ board, projectId, mode, simple = false, embedded = false, tab: tabProp, onTab, codexReview = false, onClose, onHired, onSaved }: Props) {
   const editing = mode.kind === 'edit' ? mode.profile : null;
   const adopting = mode.kind === 'adopt' ? mode.session : null;
   // No simples, a ficha inteira fica a um clique ("Mostrar todos os campos").
@@ -108,8 +125,10 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const [knowledge, setKnowledge] = useState((editing?.knowledge ?? []).join('\n'));
   const [rules, setRules] = useState((editing?.rules ?? []).join('\n'));
   const [doneWhen, setDoneWhen] = useState(editing?.doneWhen ?? '');
-  const [model, setModel] = useState(editing?.model ?? '');
-  const [effort, setEffort] = useState<'' | Effort>(editing?.effort ?? '');
+  const [engine, setEngine] = useState<Engine>(editing?.engine ?? 'claude');
+  // Ficha do Codex com um alias do Claude no modelo (sobra de antes da troca de motor): não vale para o Codex, começa sem modelo.
+  const [model, setModel] = useState(editing?.engine === 'codex' && isClaudeModel(editing.model) ? '' : (editing?.model ?? ''));
+  const [effort, setEffort] = useState<'' | CodexEffort>(editing?.effort ?? '');
   const [canHire, setCanHire] = useState(editing?.canHire ?? false);
   const [playbook, setPlaybook] = useState<'' | Playbook>(editing?.playbook ?? '');
   const [worktree, setWorktree] = useState(editing?.worktree ?? false);
@@ -134,6 +153,10 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     if (!editing) return;
     api.staffDirectory().then((r) => setCopies(copiesOf(r.people, { projectId, staffId: editing.id }).length), () => {});
   }, [editing?.id, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const codex = engine === 'codex';
+  // Quem adota uma sessão do Claude não escolhe motor; nos outros, só com o Codex ligado ou quando a ficha já é do Codex.
+  const showEngine = !adopting && showEngineField(codexReview, editing?.engine ?? 'claude');
+  const catalog = useCodexCatalog(codex && full);
   const [ownTab, setOwnTab] = useState<Tab>('who');
   const tab = tabProp ?? ownTab;
   const setTab = onTab ?? setOwnTab;
@@ -175,14 +198,17 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     setAutonomy(tpl.autonomy);
     setRules(tpl.rules.join('\n'));
     setDoneWhen(tpl.doneWhen);
-    setModel(tpl.model);
-    setEffort(tpl.effort ?? '');
+    // Os modelos do cargo são do Claude: no Codex a escolha do modelo e do esforço fica como está.
+    if (!codex) {
+      setModel(tpl.model);
+      setEffort(tpl.effort ?? '');
+    }
     setPlaybook(tpl.playbook ?? '');
     setCanHire(!!tpl.canHire);
     if (tpl.worktree !== undefined) setWorktree(tpl.worktree);
     if (tpl.skills) setSkills([...new Set([...skills, ...tpl.skills.filter((s) => skillNames.includes(s))])]);
     setShowServers(!!tpl.servers || servers.length > 0);
-    if (tpl.pickExecutors) {
+    if (tpl.pickExecutors && !codex) {
       // Agents com modelo menor que o do orquestrador são os executores naturais.
       const executors = [...inventory.agents, ...board.user.agents]
         .filter((a) => a.model && /haiku|sonnet/i.test(a.model))
@@ -219,7 +245,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const pickPlaybook = (value: '' | Playbook) => {
     setPlaybook(value);
     const option = PLAYBOOK_OPTIONS.find((o) => o.value === value);
-    if (!option) return setTip(null);
+    // No Codex não há agents para marcar: ele faz cada papel do roteiro sozinho.
+    if (!option || codex) return setTip(null);
     const found = option.agents.filter((a) => agentNames.includes(a));
     const missing = option.agents.filter((a) => !agentNames.includes(a));
     setAgents([...new Set([...agents, ...found])]);
@@ -232,6 +259,21 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           })
         : null,
     );
+  };
+
+  /** Trocar de motor limpa o modelo (e o esforço) que não servem ao outro. */
+  const pickEngine = (next: Engine) => {
+    if (next === engine) return;
+    const kept = switchEngine(next, { model, effort });
+    setEngine(next);
+    setModel(kept.model);
+    setEffort(kept.effort);
+    setTip(null);
+    // Ficha que estava salva no Codex (sai sem navegador e sem MCPs) voltando ao Claude: recomeça com o padrão dele, tudo ligado.
+    if (next === 'claude' && editing?.engine === 'codex') {
+      setBrowser(true);
+      setMcpOn(new Set((mcps ?? []).map((m) => m.name)));
+    }
   };
 
   // Contratando no simples: o recomendado para sair funcionando, sem perguntar.
@@ -251,6 +293,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     }
     setBusy(true);
     setError(null);
+    const sendEngine = engineToSend(engine, editing?.engine);
     const input: StaffInput = {
       name,
       role,
@@ -259,11 +302,12 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       firstTask: editing?.firstTask ?? '',
       reportsTo: managers,
       autonomy,
-      agents,
-      skills,
+      // O Codex não usa agents, skills, MCPs nem navegador: a ficha dele sai sem isso (o quadro não mostra o que ele não tem).
+      agents: codex ? [] : agents,
+      skills: codex ? [] : skills,
       // Todos marcados = não restringir (a sessão também recebe os conectores da conta). No simples,
       // nenhum: a sessão abre mais leve e rápida; quem precisa liga no avançado.
-      mcps: simpleHire ? [] : allMcps ? null : [...mcpOn],
+      mcps: codex || simpleHire ? [] : allMcps ? null : [...mcpOn],
       knowledge: lines(knowledge),
       rules: lines(rules),
       doneWhen,
@@ -273,7 +317,9 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       playbook: playbook || null,
       worktree: simpleHire ? autoWorktree : worktree,
       servers,
-      browser,
+      browser: codex ? false : browser,
+      // Claude fica sem o campo (a ficha igual à de sempre); o Codex vai explícito, e quem volta dele ao Claude também.
+      ...(sendEngine ? { engine: sendEngine } : {}),
       ...(portrait !== undefined ? { portraitDataUrl: portrait } : {}),
       // A conversa é sempre pelo painel do Claudio’s Club e abre vazia, esperando você escrever.
       ...(editing ? {} : adopting ? { adoptSessionId: adopting.id, launch: false } : { launch: false }),
@@ -444,7 +490,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             </button>
           ))}
         </div>
-        <p className="muted small tab-intro">{TABS.find((tb) => tb.id === tab)?.intro}</p>
+        <p className="muted small tab-intro">{codex && tab === 'tools' ? t('staff.codexToolsIntro') : TABS.find((tb) => tb.id === tab)?.intro}</p>
 
         {/* ---- Quem é ---- */}
         <div className="form-panel" role="tabpanel" hidden={tab !== 'who'}>
@@ -530,6 +576,11 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
 
         {/* ---- Ferramentas ---- */}
         <div className="form-panel" role="tabpanel" hidden={tab !== 'tools'}>
+        {codex ? (
+          // O Codex roda numa sandbox só com o projeto: nada disto existe lá, então os campos nem aparecem.
+          <p className="muted small">{t('staff.codexToolsNote')}</p>
+        ) : (
+          <>
         {agentNames.length === 0 && skillNames.length === 0 && (
           <p className="muted small">{t('staff.noAgentsSkills')}</p>
         )}
@@ -646,26 +697,75 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           </span>
         </label>
         {browser && <BrowserCheck />}
+          </>
+        )}
         </div>
 
         {/* ---- Como trabalha ---- */}
         <div className="form-panel" role="tabpanel" hidden={tab !== 'run'}>
         {editing && <p className="muted small">{t('staff.editNote')}</p>}
+        {showEngine && (
+          <fieldset>
+            <legend>{t('staff.engineLabel')}</legend>
+            <div className="templates" role="group" aria-label={t('staff.engineLabel')}>
+              {(['claude', 'codex'] as const).map((e) => (
+                <button
+                  key={e}
+                  type="button"
+                  className="btn-secondary btn-toggle"
+                  aria-pressed={engine === e}
+                  disabled={e === 'codex' && engine !== 'codex' && codexBlockedByServers(servers)}
+                  onClick={() => pickEngine(e)}
+                >
+                  {e === 'claude' ? t('staff.engineClaude') : t('staff.engineCodex')}
+                </button>
+              ))}
+            </div>
+            <p className="muted small">
+              {codexBlockedByServers(servers) ? t('staff.engineCodexServers', { tools: t('staff.tools') }) : codex ? t('staff.engineCodexHint') : t('staff.engineClaudeHint')}
+            </p>
+          </fieldset>
+        )}
         <fieldset>
           <legend>{t('staff.autonomy')}</legend>
           <div className="choices">
-            {AUTONOMY_OPTIONS.map((o) => (
-              <label key={o.value} className="choice" title={o.help}>
-                <input type="radio" name="autonomy" checked={autonomy === o.value} onChange={() => setAutonomy(o.value)} />
-                <span>
-                  <b>{o.label}</b>
-                  <span className="muted small">{o.help}</span>
-                </span>
-              </label>
-            ))}
+            {AUTONOMY_OPTIONS.map((o) => {
+              const help = codex ? codexAutonomyHelp(o.value) : o.help;
+              return (
+                <label key={o.value} className="choice" title={help}>
+                  <input type="radio" name="autonomy" checked={autonomy === o.value} onChange={() => setAutonomy(o.value)} />
+                  <span>
+                    <b>{o.label}</b>
+                    <span className="muted small">{help}</span>
+                  </span>
+                </label>
+              );
+            })}
           </div>
+          {codex && <p className="muted small">{t('staff.codexSandboxNote')}</p>}
         </fieldset>
 
+        {codex ? (
+          catalog === null ? (
+            <p className="muted small">{t('staff.codexModelsLoading')}</p>
+          ) : catalog.models.length === 0 ? (
+            // Sem lista (Codex desligado, não instalado, sem login, desatualizado): o motivo no lugar do seletor; o que a ficha já tem fica como está.
+            <p className="muted small" role="note">
+              {t('staff.codexNoModels', { reason: codexReview ? (catalog.reason ?? '') : t('staff.codexOffReason', { setting: t('toolbar.codexTitle') }) })}
+            </p>
+          ) : (
+            <CodexModelEffort
+              catalog={catalog.models}
+              model={model}
+              effort={effort}
+              onModel={(r) => {
+                setModel(r.model);
+                setEffort(r.effort);
+              }}
+              onEffort={setEffort}
+            />
+          )
+        ) : (
         <div className="grid2">
           <label>
             {t('staff.modelLabel')}
@@ -688,6 +788,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             </select>
           </label>
         </div>
+        )}
 
         <fieldset>
           <legend>{t('staff.orchestration')}</legend>
@@ -702,7 +803,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
               ))}
             </select>
           </label>
-          {playbook && <p className="muted small">{PLAYBOOK_OPTIONS.find((o) => o.value === playbook)?.help}</p>}
+          {playbook && <p className="muted small">{codex ? t('staff.codexPlaybookNote') : PLAYBOOK_OPTIONS.find((o) => o.value === playbook)?.help}</p>}
           <label className="check">
             <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} /> {t('staff.worktreeLabel')}
             <span className="muted small">
@@ -770,6 +871,54 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       {form}
+    </div>
+  );
+}
+
+/** Modelo e esforço do Codex: o modelo vem do catálogo da conta (nome de tela), e o esforço só tem os níveis que ele aceita. */
+function CodexModelEffort({
+  catalog,
+  model,
+  effort,
+  onModel,
+  onEffort,
+}: {
+  catalog: CodexCatalog;
+  model: string;
+  effort: '' | CodexEffort;
+  onModel: (r: { model: string; effort: '' | CodexEffort }) => void;
+  onEffort: (e: '' | CodexEffort) => void;
+}) {
+  // Um modelo da ficha que a lista não tem (a conta deixou de aceitar) continua aparecendo, com o esforço que já tinha.
+  const known = catalog.some((m) => m.slug === model);
+  const efforts = known ? effortsOfModel(catalog, model) : effort ? [effort] : [];
+  const standard = defaultEffortOf(catalog, model);
+  return (
+    <div className="grid2">
+      <label>
+        {t('staff.modelLabel')}
+        <select value={model} onChange={(e) => onModel(pickCodexModel(catalog, e.target.value, effort))}>
+          <option value="">{t('staff.codexModelDefault')}</option>
+          {model && !known && <option value={model}>{model}</option>}
+          {catalog.map((m) => (
+            <option key={m.slug} value={m.slug} title={m.slug}>
+              {m.displayName}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        {t('staff.effortLabel')}
+        <select value={effort} disabled={!efforts.length} onChange={(e) => onEffort(e.target.value as '' | CodexEffort)}>
+          <option value="">{standard ? t('staff.codexEffortDefault', { effort: effortLabel(standard) }) : t('staff.effortDefault')}</option>
+          {efforts.map((v) => (
+            <option key={v} value={v}>
+              {effortLabel(v)}
+            </option>
+          ))}
+        </select>
+        {!model && <span className="muted small">{t('staff.codexEffortPick')}</span>}
+      </label>
     </div>
   );
 }

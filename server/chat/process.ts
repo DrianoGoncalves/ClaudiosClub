@@ -108,6 +108,8 @@ export interface ChatProcessOptions {
   onIdle?: (reason: 'turn' | 'background' | 'exit') => void;
   /** Chegou a lista de comandos "/" da sessão. */
   onCommands?: (commands: ChatCommand[]) => void;
+  /** `MYCO_TOKEN` da conversa (ver server/callers.ts): vai no ambiente, ao lado do `MYCO_SESSION_ID`, para as chamadas à API do Claudio’s Club. */
+  mycoToken?: string;
   /** Troca o `spawn` real nos testes. */
   spawnImpl?: (cmd: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }) => ChildProcessWithoutNullStreams;
 }
@@ -121,13 +123,13 @@ export class ChatProcess {
   private child: ChildProcessWithoutNullStreams | null = null;
   private seq = 0;
   private readonly log: ChatEvent[] = [];
-  private readonly items = new Map<string, ChatItem>();
+  protected readonly items = new Map<string, ChatItem>();
   private readonly listeners = new Set<Listener>();
   /** Pedidos de permissão sem resposta: a entrada original e as sugestões de "permitir sempre". */
   private readonly pending = new Map<string, { input: unknown; tool: string; suggestions: Suggestion[]; questions?: AskedQuestion[] }>();
-  private stderr = '';
+  protected stderr = '';
   private buf = '';
-  private state: ChatState = {
+  protected state: ChatState = {
     running: false,
     busy: false,
     compacting: false,
@@ -139,22 +141,27 @@ export class ChatProcess {
     commands: [],
     effort: null,
   };
-  private window: number | null = null;
+  protected window: number | null = null;
   /** Pedidos de controle nossos esperando resposta (troca de modo, modelo, esforço): o que avisar no fim. */
   private readonly controls = new Map<string, { label: string; onOk?: (response: Record<string, unknown>) => void; mode?: boolean }>();
   /** Pedidos que esperam a resposta (ver `request`). */
   private readonly waiters = new Map<string, { resolve: (r: Record<string, unknown>) => void; reject: (e: Error) => void }>();
   /** O próximo resultado com erro é de um turno que nós paramos (botão Parar ou mensagem `now`). */
-  private stopping = false;
+  protected stopping = false;
   /** Mandamos algo (mensagem ou /compact) e o turno disso ainda não terminou (ver o `result` de aviso). */
-  private waitingReply = false;
+  protected waitingReply = false;
   /** A ficha mudou depois que o processo abriu: reabre quando estiver parado. */
   stale = false;
-  private exitWaiters: Array<() => void> = [];
+  protected exitWaiters: Array<() => void> = [];
 
-  constructor(private readonly opts: ChatProcessOptions) {
+  constructor(protected readonly opts: ChatProcessOptions) {
     this.sessionId = opts.sessionId;
     this.state = { ...this.state, model: opts.model ?? null, effort: opts.effort ?? null };
+  }
+
+  /** Quem roda esta conversa: o `claude` (aqui) ou o Codex (ver codexProcess.ts). */
+  get engine(): 'claude' | 'codex' {
+    return 'claude';
   }
 
   get pid(): number | null {
@@ -199,7 +206,7 @@ export class ChatProcess {
     this.opts.onCommands?.(commands);
   }
 
-  private idleCheck(reason: 'turn' | 'background') {
+  protected idleCheck(reason: 'turn' | 'background') {
     if (!this.working) this.opts.onIdle?.(reason);
   }
 
@@ -218,8 +225,15 @@ export class ChatProcess {
       ((cmd, args, o) => spawn(cmd, args, { ...o, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' }));
     // A lista de tarefas (TaskCreate/TaskUpdate) e os pontos de restauração das edições ("voltar até
     // aqui") não vêm ligados no modo -p.
-    // MYCO_SESSION_ID: o funcionário sabe o id da própria conversa (o despertador, ver wake.ts, o usa nos comandos dele).
-    const env = { ...cleanEnv(), CLAUDE_CODE_ENABLE_TODO_TOOLS: '1', CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1', MYCO_SESSION_ID: this.opts.sessionId };
+    // MYCO_SESSION_ID: o funcionário sabe o id da própria conversa (o despertador, ver wake.ts, o usa nos comandos dele). MYCO_TOKEN: quem ele é
+    // para a API (cabeçalho x-myco-token nos curl da ficha, ver server/callers.ts).
+    const env = {
+      ...cleanEnv(),
+      CLAUDE_CODE_ENABLE_TODO_TOOLS: '1',
+      CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1',
+      MYCO_SESSION_ID: this.opts.sessionId,
+      ...(this.opts.mycoToken && { MYCO_TOKEN: this.opts.mycoToken }),
+    };
     const child = run('claude', [...STREAM_FLAGS, ...this.opts.args], { cwd: this.opts.cwd, env });
     this.child = child;
     this.setState({ running: true, error: null });
@@ -456,7 +470,7 @@ export class ChatProcess {
   }
 
   /** Guarda de segredos: avisa o tipo do que apareceu (ver secrets.ts). */
-  private scan(text: string) {
+  protected scan(text: string) {
     if (!this.opts.onSecret) return;
     const hit = findSecret(text);
     if (hit) this.opts.onSecret(hit.label);
@@ -498,7 +512,7 @@ export class ChatProcess {
 
   // ---- leitura do stream ----
 
-  private onData(text: string) {
+  protected onData(text: string) {
     this.lastActivity = Date.now();
     this.buf += text;
     let nl: number;
@@ -734,7 +748,7 @@ export class ChatProcess {
   private readonly doneText = new Map<string, string[]>();
   /** Limite de uso visto neste turno; `confirmed`: um texto de erro de limite confirmou (não só o evento). */
   private limitSeen: (LimitHit & { confirmed: boolean }) | null = null;
-  private checkpointSeen = false;
+  protected checkpointSeen = false;
   private cacheTtlMs: number | null = null;
   private fastMode = false;
 
@@ -763,17 +777,17 @@ export class ChatProcess {
     this.child.stdin.write(JSON.stringify(obj) + '\n');
   }
 
-  private putItem(item: ChatItem) {
+  protected putItem(item: ChatItem) {
     this.items.set(item.id, item);
     this.emit({ type: 'item', seq: ++this.seq, item: { ...item } });
   }
 
-  private setState(patch: Partial<ChatState>) {
+  protected setState(patch: Partial<ChatState>) {
     this.state = { ...this.state, ...patch };
     this.emit({ type: 'state', seq: ++this.seq, state: { ...this.state } });
   }
 
-  private emit(e: ChatEvent) {
+  protected emit(e: ChatEvent) {
     this.log.push(e);
     if (this.log.length > MAX_LOG) this.log.splice(0, this.log.length - MAX_LOG);
     for (const l of this.listeners) l(e);

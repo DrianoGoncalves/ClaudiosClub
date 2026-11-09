@@ -46,9 +46,13 @@ export function normalizeModel(model: string): string {
   return model.replace(/\[.*\]$/, '').replace(/-\d{8}$/, '');
 }
 
-/** Janela de contexto por modelo; os atuais têm 1M. */
+/** Janela de contexto que o Codex usa nos modelos `gpt-…` (`codex debug models`: `context_window`; a máxima, 872k, só com opção própria). */
+export const CODEX_CONTEXT_WINDOW = 272_000;
+
+/** Janela de contexto por modelo; os atuais do Claude têm 1M, os `gpt-…` (Codex) 272k. */
 export function contextWindowFor(model: string | null | undefined): number {
   const m = model ? normalizeModel(model) : '';
+  if (/^gpt-/i.test(m)) return CODEX_CONTEXT_WINDOW;
   return m === 'claude-haiku-4-5' ? 200_000 : 1_000_000;
 }
 

@@ -7,8 +7,8 @@ import type {
   ChatItem,
   ChatSnapshot,
   ChatState,
+  CodexEffort,
   ContextUsage,
-  Effort,
   SendPriority,
 } from '../../../shared/model';
 import { api, ApiError, withUsageConfirm, type PermissionOpts } from '../api';
@@ -34,7 +34,7 @@ export interface ChatView {
    */
   answer: (requestId: string, allow: boolean, opts?: PermissionOpts) => Promise<void>;
   /** Modelo, esforço e autonomia desta conversa, na hora. */
-  settings: (s: { model?: string; effort?: Effort; autonomy?: Autonomy }) => Promise<void>;
+  settings: (s: { model?: string; effort?: CodexEffort; autonomy?: Autonomy }) => Promise<void>;
   /** Comandos "/" da sessão (ou os últimos vistos no projeto, antes de abrir). */
   commands: ChatCommand[];
   /** Trazer: órfã, retoma aqui; aberta em outro lugar, cria uma cópia aqui (com o histórico) e troca para ela. A original segue lá. */
@@ -238,7 +238,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     if (sessionId) await api.chatPermission(sessionId, requestId, allow, opts).catch(fail);
   };
 
-  const settings = async (s: { model?: string; effort?: Effort; autonomy?: Autonomy }) => {
+  const settings = async (s: { model?: string; effort?: CodexEffort; autonomy?: Autonomy }) => {
     setError(null);
     try {
       const r = await api.chatSettings(projectId, { sessionId, staffId, ...s });

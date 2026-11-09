@@ -264,10 +264,13 @@ export interface AppConfig {
   /** Mostrar no quadro a sala do escopo do usuário (agents e skills de ~/.claude); desligado por padrão. */
   showUserScope: boolean;
   /**
-   * Segunda opinião do Codex na revisão das tarefas (o diff vai para a OpenAI): desligada até você
-   * ligar; desligada, o Claudio’s Club nem chama o `codex` (ver server/adapters/codex.ts).
+   * Usar o Codex (GPT): a segunda opinião nas tarefas (o diff vai para a OpenAI), a ferramenta `perguntar_gpt` dos funcionários,
+   * os funcionários no motor Codex e os limites de uso do GPT. Desligada até você ligar; desligada, o Claudio’s Club nem chama o
+   * `codex` (ver server/adapters/codex.ts). O nome da chave é de quando só havia a revisão.
    */
   codexReview: boolean;
+  /** Modelo do Codex para o `perguntar_gpt` (slug do catálogo, ex.: `gpt-6-sol`); vazio = o padrão do Codex. */
+  codexModel: string;
   /**
    * Freela (conversa sem ficha) não efetivado e parado há esta quantidade de dias é arquivado sozinho
    * (ver server/freelaSweep.ts). Inteiro de 0 a 90; 0 = nunca. Padrão 3.
@@ -438,6 +441,15 @@ export interface ProjectAttachmentUpload extends ProjectAttachment {
 export type Autonomy = 'plan' | 'manual' | 'acceptEdits' | 'auto' | 'bypassPermissions';
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/** Esforço de quem roda no Codex: o `ultra` só existe lá (os modelos Sol aceitam; os Luna vão até `max`). O Claude nunca recebe `ultra`. */
+export type CodexEffort = Effort | 'ultra';
+
+/**
+ * Quem roda o funcionário: o Claude Code (padrão, e o que vale quando a ficha não diz) ou o Codex (CLI da OpenAI,
+ * pela cota do ChatGPT). Com `codex`, `model` e `effort` da ficha são os do Codex (slug `gpt-…`, esforço low a max).
+ */
+export type Engine = 'claude' | 'codex';
 
 /** Ficha do funcionário: `<projeto>/.myco/staff/<id>.json`. */
 /**
@@ -621,15 +633,18 @@ export interface StaffProfile {
   knowledge: string[];
   rules: string[];
   doneWhen: string;
-  /** Alias (`opus`, `sonnet`…) ou id completo; null = padrão do Claude Code. */
+  /** Motor do funcionário; ausente = `claude`. */
+  engine?: Engine;
+  /** Alias (`opus`, `sonnet`…) ou id completo; null = padrão do Claude Code. Com `engine: 'codex'`, o slug do Codex (`gpt-6-sol`…). */
   model: string | null;
-  effort: Effort | null;
+  /** `ultra` só com `engine: 'codex'` (o servidor recusa nas outras). */
+  effort: CodexEffort | null;
   /**
    * Último modelo/esforço escolhido no seletor do chat deste funcionário. Só vale para conversa nova
    * quando a ficha não tem `model`/`effort`. Gravado pelo Claudio’s Club, fora do questionário.
    */
   lastModel?: string;
-  lastEffort?: Effort;
+  lastEffort?: CodexEffort;
   /** Pode contratar subfuncionários (subsessões) pelo Claudio’s Club. */
   canHire: boolean;
   /** Roteiro de trabalho (orquestração); null = nenhum. */
@@ -656,7 +671,7 @@ export interface StaffProfile {
    * sessão roda (a worktree, se a ficha pede uma): retomar exige a mesma pasta. `model`/`effort`: o
    * que foi escolhido no chat desta conversa (vale ao reabrir); ausente = o da ficha.
    */
-  sessions: { id: string; startedAt: string; cwd?: string; model?: string; effort?: Effort }[];
+  sessions: { id: string; startedAt: string; cwd?: string; model?: string; effort?: CodexEffort }[];
   createdAt: string;
   updatedAt: string;
 }
@@ -759,6 +774,10 @@ export interface FtpConnection {
 
 /** Nome do MCP de FTP na sessão do funcionário: as ferramentas aparecem como `mcp__myco-ftp__ftp_*`. */
 export const FTP_MCP_NAME = 'myco-ftp';
+
+/** MCP que leva uma pergunta ao GPT (Codex): a ferramenta aparece como `mcp__myco-gpt__perguntar_gpt`. */
+export const GPT_MCP_NAME = 'myco-gpt';
+export const GPT_TOOL_NAME = 'perguntar_gpt';
 
 /** Item de `POST /api/projects/:id/connections/list`: SSH e FTP juntos, pelo `protocol`. */
 export type AnyConnection = ProjectConnection | FtpConnection;
@@ -1083,7 +1102,7 @@ export interface UpdateStatus {
  * package-lock ou o pacote dist/server.mjs refeito); `client`: a tela (client/, shared/, vite.config.ts, o lock);
  * `ftpMcp`: o pacote do MCP de FTP dos funcionários.
  */
-export type PendingReason = 'server' | 'client' | 'ftpMcp';
+export type PendingReason = 'server' | 'client' | 'ftpMcp' | 'gptMcp';
 
 export interface PendingRestart {
   /** Há mudança que só entra reiniciando. */

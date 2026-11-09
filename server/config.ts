@@ -33,6 +33,8 @@ const DEFAULTS: AppConfig = {
   showUserScope: false,
   // Desligada: mandar o diff para outra empresa é escolha sua.
   codexReview: false,
+  // Vazio: o modelo padrão do Codex (com plano B pelo catálogo quando a conta recusa o escolhido).
+  codexModel: '',
   // Freela sem ficha parado há 3 dias é arquivado sozinho (0 = nunca); arquivar não apaga nada.
   freelaArchiveDays: 3,
   freelaAutoArchived: {},
@@ -40,6 +42,12 @@ const DEFAULTS: AppConfig = {
   projectWorkspaces: {},
 };
 
+/** Slug de modelo do Codex (`gpt-6-sol`): só letras, números e `. _ : -`; vazio = o padrão do Codex. Vai a `-m` do `codex exec`. */
+const CODEX_MODEL = z
+  .string()
+  .trim()
+  .max(100, 'nome de modelo grande demais')
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$|^$/, 'nome de modelo inválido');
 const FREELA_DAYS = z.number().int('use um número inteiro de dias').min(0, 'mínimo 0 (nunca)').max(90, 'máximo de 90 dias');
 /** Quantas sessões arquivadas sozinhas o controle lembra (as mais recentes ficam). */
 const FREELA_RECORD_MAX = 500;
@@ -82,6 +90,7 @@ const ConfigFile = z
     autoContinue: z.boolean().optional().catch(undefined),
     showUserScope: z.boolean().optional().catch(undefined),
     codexReview: z.boolean().optional().catch(undefined),
+    codexModel: CODEX_MODEL.optional().catch(undefined),
     freelaArchiveDays: FREELA_DAYS.optional().catch(undefined),
     freelaAutoArchived: z.record(z.string(), z.unknown()).optional().catch(undefined),
     workspaces: z.array(z.unknown()).optional().catch(undefined),
@@ -121,6 +130,8 @@ export const ConfigPatch = z.object({
   autoContinue: z.boolean().optional(),
   showUserScope: z.boolean().optional(),
   codexReview: z.boolean().optional(),
+  /** Modelo do Codex para o `perguntar_gpt`; vazio volta ao padrão do Codex. */
+  codexModel: CODEX_MODEL.optional(),
   /** Dias parado até o freela (conversa sem ficha) ser arquivado sozinho; 0 = nunca. */
   freelaArchiveDays: FREELA_DAYS.optional(),
   /** Por id de projeto: uma cor troca a da sala; null volta à padrão. Os outros projetos ficam como estão. */
@@ -174,6 +185,7 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     autoContinue: d.autoContinue ?? DEFAULTS.autoContinue,
     showUserScope: d.showUserScope ?? DEFAULTS.showUserScope,
     codexReview: d.codexReview ?? DEFAULTS.codexReview,
+    codexModel: d.codexModel ?? DEFAULTS.codexModel,
     freelaArchiveDays: d.freelaArchiveDays ?? DEFAULTS.freelaArchiveDays,
     freelaAutoArchived: readFreelaRecord(d.freelaAutoArchived),
     ...readWorkspaces(d.workspaces, d.projectWorkspaces),
