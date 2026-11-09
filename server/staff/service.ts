@@ -375,7 +375,7 @@ export class StaffService {
     }
 
     // A trava vale também para quem contrata pela API (sem como confirmar, só recusa).
-    if (input.launch && !(fromBrowser && input.force)) await this.checkUsage(project.id);
+    if (input.launch && !(fromBrowser && input.force)) await this.checkUsage(project.id, { engine: input.engine });
     let profile = await createProfile(project.path, project.id, input);
     await this.seal(project, profile, lockedClaude);
     if (hirer) {
@@ -908,8 +908,10 @@ export class StaffService {
   /**
    * Trava de consumo antes de trabalho novo (conversa ou contratação): a linha de parada da empresa
    * (5h/7d) e o orçamento do projeto. Lança UsageStopError quando passou.
+   * `who`: para quem vai o trabalho. As duas travas leem o consumo do Claude: quem roda no Codex (outra conta) não passa por elas.
    */
-  async checkUsage(projectId: string): Promise<void> {
+  async checkUsage(projectId: string, who?: { staffId?: string | null; engine?: 'claude' | 'codex' }): Promise<void> {
+    if (await this.runsOnCodex(projectId, who)) return;
     const [usage, config] = await Promise.all([(this.opts.readUsage ?? readUsage)(), readConfig()]);
     const hit = usageStopHit(usage, config.usageStop);
     if (hit) throw new UsageStopError(hit);
@@ -918,6 +920,13 @@ export class StaffService {
     const [week, project] = await Promise.all([this.opts.weekCost(projectId), this.project(projectId)]);
     const over = projectBudgetHit(usage, week, budget, project?.name ?? projectId);
     if (over) throw new UsageStopError(over);
+  }
+
+  private async runsOnCodex(projectId: string, who?: { staffId?: string | null; engine?: 'claude' | 'codex' }): Promise<boolean> {
+    if (who?.engine) return who.engine === 'codex';
+    if (!who?.staffId) return false;
+    const project = await this.project(projectId);
+    return !!project && (await readProfile(project.path, who.staffId))?.engine === 'codex';
   }
 
   /**

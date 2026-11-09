@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AccountUsage, Project, StaffProfile } from '../shared/model';
 import type { ToolAdapter } from '../server/adapters/types';
 import { StaffError, StaffService, type StaffServiceOptions } from '../server/staff/service';
+import { UsageStopError } from '../server/usageStop';
 import { readSeal, sealFile, writeSeal } from '../server/staff/seal';
 import { fichaFile, memoryFile, profileFile, readProfile, saveChatChoice, saveProfile, StaffInputSchema } from '../server/staff/store';
 
@@ -463,6 +464,30 @@ describe('o Codex só vale ligado, na versão mínima e instalado', () => {
     // O Claude não passa por essa conferência.
     const claude = (await velho.hire('proj-id', { ...base, name: 'Claude Sem Conferir' }, true))!.profile;
     expect((await velho.chatSpawn('proj-id', null, claude.id))!.engine).toBeUndefined();
+  });
+});
+
+describe('trava de consumo: o 5h/7d é da conta do Claude', () => {
+  const future = new Date(Date.now() + 3600_000).toISOString();
+  const high = async (): Promise<AccountUsage> => ({ tapInstalled: true, updatedAt: future, limits: [{ kind: 'five_hour', percentUsed: 97, resetsAt: future }] });
+
+  it('quem roda no Codex não é barrado pelo consumo do Claude; o Claude, a conversa avulsa e o destino sem ficha seguem barrados', async () => {
+    const svc = service({ readUsage: high });
+    const codex = (await svc.hire('proj-id', { ...base, name: 'Trava Codex', engine: 'codex' }, true))!.profile;
+    const claude = (await svc.hire('proj-id', { ...base, name: 'Trava Claude' }, true))!.profile;
+    await expect(svc.checkUsage('proj-id', { staffId: codex.id })).resolves.toBeUndefined();
+    await expect(svc.checkUsage('proj-id', { engine: 'codex' })).resolves.toBeUndefined();
+    await expect(svc.checkUsage('proj-id', { staffId: claude.id })).rejects.toBeInstanceOf(UsageStopError);
+    await expect(svc.checkUsage('proj-id', { engine: 'claude' })).rejects.toBeInstanceOf(UsageStopError);
+    await expect(svc.checkUsage('proj-id', { staffId: null })).rejects.toBeInstanceOf(UsageStopError);
+    await expect(svc.checkUsage('proj-id', { staffId: 'sumiu' })).rejects.toBeInstanceOf(UsageStopError);
+    await expect(svc.checkUsage('proj-id')).rejects.toBeInstanceOf(UsageStopError);
+  });
+
+  it('contratar já começando a conversa: Codex passa, Claude é recusado', async () => {
+    const svc = service({ readUsage: high });
+    expect((await svc.hire('proj-id', { ...base, name: 'Contrata Codex', engine: 'codex', launch: true }, true))?.profile.engine).toBe('codex');
+    await expect(svc.hire('proj-id', { ...base, name: 'Contrata Claude', launch: true }, true)).rejects.toBeInstanceOf(UsageStopError);
   });
 });
 

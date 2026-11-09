@@ -245,9 +245,9 @@ const currentBoost = async () => ((await readConfig()).optimizeQuota ? quotaBoos
  * O limite de uso da assinatura acabou no meio de uma conversa: o "continue" sai sozinho quando ele volta
  * (opção `autoContinue`). Respeita a linha de parada do usuário e o orçamento do projeto, como o chat.
  */
-const usageStopHit = async (projectId: string) => {
+const usageStopHit = async (projectId: string, staffId: string | null) => {
   try {
-    await staff.checkUsage(projectId);
+    await staff.checkUsage(projectId, { staffId });
     return null;
   } catch (err) {
     if (err instanceof UsageStopError) return err.hit;
@@ -344,7 +344,7 @@ async function codexRunEnv(): Promise<CodexEnvStatus> {
 
 /** Abre uma conversa nova com o funcionário e manda o texto. Sem `force`, confere o consumo antes. Usado pelas tarefas e pelas ações do guia. */
 const sendNewConversation = async (projectId: string, staffId: string, text: string, force: boolean) => {
-  if (!force) await staff.checkUsage(projectId);
+  if (!force) await staff.checkUsage(projectId, { staffId });
   return chats.send(projectId, null, staffId, text);
 };
 
@@ -411,7 +411,7 @@ const routines = new RoutineScheduler({
  */
 async function runRoutine(profile: StaffProfile, r: Routine): Promise<RoutineOutcome> {
   try {
-    await staff.checkUsage(profile.projectId);
+    await staff.checkUsage(profile.projectId, { engine: profile.engine ?? 'claude' });
   } catch (err) {
     if (err instanceof UsageStopError) return { ok: false, text: `pulada: ${err.message}` };
     throw err;
@@ -769,7 +769,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     async ({ params: [pid], body, fromBrowser, caller }) => {
       const b = parse(SendBody, body);
       await checkReach(caller, pid!, { sessionId: b.sessionId, staffId: b.staffId });
-      if (!(fromBrowser && b.force)) await staff.checkUsage(pid!);
+      if (!(fromBrowser && b.force)) await staff.checkUsage(pid!, { staffId: b.staffId });
       // Ajuste numa tarefa anterior com ele ocupado em outra: espera a vez (ver tasks.ts).
       if (b.sessionId && b.staffId) {
         const held = await tasks.hold(b.sessionId, { text: b.text, images: b.images });
@@ -962,7 +962,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     async ({ params: [pid, sid], body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(StaffRef, body);
-      if (!b.force) await staff.checkUsage(pid!);
+      if (!b.force) await staff.checkUsage(pid!, { staffId: b.staffId });
       await chats.compact(pid!, sid!, b.staffId);
       return { ok: true };
     },
