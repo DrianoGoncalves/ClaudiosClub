@@ -122,7 +122,7 @@ export default defineMessages({
     'toolbar.autoContinueKeywords': 'continuar sozinho limite de uso acabou voltar retomar continue conversa assinatura reset 5h 7d',
     'toolbar.codexTitle': 'Usar o Codex (GPT)',
     'toolbar.codexDesc':
-      'Liga o GPT (OpenAI, pelo Codex) no Claudio’s Club: perguntar ao GPT nas decisões dos funcionários, segunda opinião do GPT nas tarefas (o diff vai para a OpenAI), funcionários que rodam no Codex e os limites de uso do GPT. Gasta a cota do seu ChatGPT. Precisa do Codex CLI instalado e com login (npm i -g @openai/codex e codex login).',
+      'Liga o GPT (OpenAI, pelo Codex) no Claudio’s Club: perguntar ao GPT nas decisões dos funcionários, segunda opinião do GPT nas tarefas (o diff vai para a OpenAI), funcionários que rodam no Codex e os limites de uso do GPT. Gasta a cota do seu ChatGPT. O Claudio’s Club instala o Codex CLI e você entra nele pelo botão do topo (abre o navegador).',
     'toolbar.codexKeywords': 'codex openai chatgpt gpt usar ligar revisão revisar segunda opinião diff perguntar decisão consultor funcionário motor limite de uso cota',
     'toolbar.codexModelTitle': 'Modelo do GPT',
     'toolbar.codexModelDesc':
@@ -257,8 +257,9 @@ export default defineMessages({
     'toolbar.codexNotLoggedIn': 'Codex sem login',
     'toolbar.codexLoading': 'Lendo os limites do Codex…',
     'toolbar.codexError': 'Não deu para ler os limites do Codex',
-    'toolbar.codexDoLogin': 'Codex: rode `codex login`',
-    'toolbar.codexDoInstall': 'Codex: rode `npm i -g @openai/codex`',
+    'toolbar.codexInstalling': 'Instalando Codex…',
+    'toolbar.codexInstall': 'Instalar o Codex',
+    'toolbar.codexLogin': 'Entrar no Codex',
     'toolbar.codexDoError': 'Codex: sem leitura',
     'toolbar.codexOutdated': 'atualize: {command}',
     'toolbar.codexOutdatedTitle': 'Há uma versão nova do Codex. Rode: {command}',
@@ -417,7 +418,7 @@ export default defineMessages({
     'toolbar.autoContinueKeywords': 'continue on its own usage limit ran out back resume chat subscription reset 5h 7d',
     'toolbar.codexTitle': 'Use Codex (GPT)',
     'toolbar.codexDesc':
-      'Turns on GPT (OpenAI, through Codex) in Claudio’s Club: asking GPT on staff decisions, a GPT second opinion on tasks (the diff goes to OpenAI), staff that run on Codex and GPT usage limits. Uses your ChatGPT quota. Requires the Codex CLI installed and signed in (npm i -g @openai/codex and codex login).',
+      'Turns on GPT (OpenAI, through Codex) in Claudio’s Club: asking GPT on staff decisions, a GPT second opinion on tasks (the diff goes to OpenAI), staff that run on Codex and GPT usage limits. Uses your ChatGPT quota. Claudio’s Club installs the Codex CLI and you sign in with the button at the top (opens the browser).',
     'toolbar.codexKeywords': 'codex openai chatgpt gpt use turn on review second opinion diff ask decision consultant staff engine usage limit quota',
     'toolbar.codexModelTitle': 'GPT model',
     'toolbar.codexModelDesc':
@@ -549,8 +550,9 @@ export default defineMessages({
     'toolbar.codexNotLoggedIn': 'Codex signed out',
     'toolbar.codexLoading': 'Reading Codex limits…',
     'toolbar.codexError': 'Could not read the Codex limits',
-    'toolbar.codexDoLogin': 'Codex: run `codex login`',
-    'toolbar.codexDoInstall': 'Codex: run `npm i -g @openai/codex`',
+    'toolbar.codexInstalling': 'Installing Codex…',
+    'toolbar.codexInstall': 'Install Codex',
+    'toolbar.codexLogin': 'Sign in to Codex',
     'toolbar.codexDoError': 'Codex: no reading',
     'toolbar.codexOutdated': 'update: {command}',
     'toolbar.codexOutdatedTitle': 'A new Codex version is available. Run: {command}',
@@ -709,7 +711,7 @@ export default defineMessages({
     'toolbar.autoContinueKeywords': 'continuar solo límite de uso se acabó volver retomar continue conversación suscripción reinicio 5h 7d',
     'toolbar.codexTitle': 'Usar Codex (GPT)',
     'toolbar.codexDesc':
-      'Activa GPT (OpenAI, por Codex) en Claudio’s Club: preguntar a GPT en las decisiones de los empleados, segunda opinión de GPT en las tareas (el diff va a OpenAI), empleados que corren en Codex y los límites de uso de GPT. Gasta la cuota de tu ChatGPT. Necesita el Codex CLI instalado y con sesión (npm i -g @openai/codex y codex login).',
+      'Activa GPT (OpenAI, por Codex) en Claudio’s Club: preguntar a GPT en las decisiones de los empleados, segunda opinión de GPT en las tareas (el diff va a OpenAI), empleados que corren en Codex y los límites de uso de GPT. Gasta la cuota de tu ChatGPT. Claudio’s Club instala el Codex CLI y entras con el botón de arriba (abre el navegador).',
     'toolbar.codexKeywords': 'codex openai chatgpt gpt usar activar revisión revisar segunda opinión diff preguntar decisión consultor empleado motor límite de uso cuota',
     'toolbar.codexModelTitle': 'Modelo de GPT',
     'toolbar.codexModelDesc':
@@ -841,8 +843,9 @@ export default defineMessages({
     'toolbar.codexNotLoggedIn': 'Codex sin sesión',
     'toolbar.codexLoading': 'Leyendo los límites de Codex…',
     'toolbar.codexError': 'No se pudieron leer los límites de Codex',
-    'toolbar.codexDoLogin': 'Codex: ejecuta `codex login`',
-    'toolbar.codexDoInstall': 'Codex: ejecuta `npm i -g @openai/codex`',
+    'toolbar.codexInstalling': 'Instalando Codex…',
+    'toolbar.codexInstall': 'Instalar Codex',
+    'toolbar.codexLogin': 'Entrar en Codex',
     'toolbar.codexDoError': 'Codex: sin lectura',
     'toolbar.codexOutdated': 'actualiza: {command}',
     'toolbar.codexOutdatedTitle': 'Hay una versión nueva de Codex. Ejecuta: {command}',

@@ -112,7 +112,7 @@ describe('codexEnv: versão e recurso network_proxy', () => {
 
   it('codex ausente, versão ilegível, comando que falha ou demora: erro claro (falha fechada), nunca lança', async () => {
     const enoent = Object.assign(new Error('x'), { code: 'ENOENT' }) as NodeJS.ErrnoException;
-    expect((await fake('', '', { version: { code: null, spawnError: enoent } }).env.status()).error).toBe('o Codex CLI não está instalado (npm i -g @openai/codex)');
+    expect((await fake('', '', { version: { code: null, spawnError: enoent } }).env.status()).error).toBe('o Codex CLI não está instalado: ligue o Codex nas Configurações do Claudio’s Club');
     expect((await fake('', '', { version: { code: null, spawnError: Object.assign(new Error('sem permissão'), { code: 'EACCES' }) as NodeJS.ErrnoException } }).env.status()).error).toBe('não consegui rodar o codex: sem permissão');
     expect((await fake('codex', FEATURES).env.status()).error).toMatch(/não reconheci a versão do Codex/);
     expect((await fake('', '', { version: { code: 2 } }).env.status()).error).toBe('não consegui conferir a versão do Codex (saída 2)');

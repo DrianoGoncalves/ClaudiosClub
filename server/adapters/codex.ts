@@ -101,10 +101,10 @@ export class CodexAdapter {
     // página de código do console (o texto pode chegar com acento quebrado).
     const value: CodexStatus =
       r.spawnError?.code === 'ENOENT' || r.code === 9009 || r.code === 127 || /not recognized|reconhecido|command not found/i.test(r.stderr)
-        ? { available: false, reason: 'o Codex CLI não está instalado (npm i -g @openai/codex)' }
+        ? { available: false, reason: 'o Codex CLI não está instalado: ligue o Codex nas Configurações do Claudio’s Club' }
         : r.code === 0
           ? { available: true, reason: null }
-          : { available: false, reason: 'o Codex CLI está sem login (rode codex login)' };
+          : { available: false, reason: 'o Codex CLI está sem login: entre nele pelo Claudio’s Club' };
     this.status = { at: now, value };
     return value;
   }

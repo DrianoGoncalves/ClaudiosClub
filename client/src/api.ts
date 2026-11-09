@@ -318,7 +318,12 @@ export const api = {
   pairClaim: (id: string) => post<{ paired: boolean }>('/api/pair/claim', {}, { 'x-pair-request': id }),
   updateStatus: (fresh = false) => get<UpdateStatus>(fresh ? '/api/update?fresh=1' : '/api/update'),
   applyUpdate: () => post<{ from: string; to: string; installed: boolean; restarting: boolean }>('/api/update'),
-  usage: () => get<AccountUsage>('/api/usage'),
+  /** `fresh`: relê o login do Codex na hora (a tela pede enquanto espera o login). */
+  usage: (fresh = false) => get<AccountUsage>(fresh ? '/api/usage?fresh=1' : '/api/usage'),
+  /** Instala o Codex CLI (npm) pelo Claudio’s Club; se já estiver, não faz nada. `error` é o texto curto para o usuário. */
+  installCodex: () => post<{ ok: boolean; error: string | null }>('/api/codex/install'),
+  /** Abre o terminal do `codex login` (o usuário conclui no navegador). */
+  loginCodex: () => post<{ ok: boolean; error: string | null }>('/api/codex/login'),
   models: (refresh = false) => post<ModelBenchmarks>('/api/models', { refresh }),
   browser: (fresh = false) => get<BrowserStatus>(fresh ? '/api/browser?fresh=1' : '/api/browser'),
   auth: (fresh = false) => get<AuthStatus>(fresh ? '/api/auth?fresh=1' : '/api/auth'),

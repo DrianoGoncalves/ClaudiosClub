@@ -68,7 +68,8 @@ import {
 } from './projectFiles';
 import { actingStaff, SANDBOX_HOST, SessionTokens, type Caller } from './callers';
 import { gate } from './gate';
-import { CodexUsageReader } from './codexUsage';
+import { CodexUsageReader, readInstalled } from './codexUsage';
+import { CodexSetup, CodexSetupError } from './codexSetup';
 import { readUsage } from './usage';
 import { UsageStopError } from './usageStop';
 import { quotaBoost } from './quotaBoost';
@@ -321,7 +322,15 @@ const projectPathOf = async (projectId: string) => {
 };
 /** Codex CLI só como segunda opinião na revisão de tarefas (o motor dos funcionários é o Claude). */
 const codex = new CodexAdapter();
-const codexUsage = new CodexUsageReader({ check: () => codex.check() });
+const codexUsage = new CodexUsageReader({ check: (fresh) => codex.check(fresh) });
+/** Instalar e entrar no Codex pelo Claudio’s Club (ver codexSetup.ts). Depois de instalar, o status do Codex é relido já. */
+const codexSetup = new CodexSetup({
+  installed: async () => !(await readInstalled()).missing,
+  afterInstall: async () => {
+    codexUsage.forget();
+    await codex.check(true);
+  },
+});
 /** Só com o Codex ligado nas configurações (`codexReview`): desligado, o catálogo vem vazio com o motivo e nada abre o `codex`. */
 const codexModels = new CodexModels((fresh) => codex.check(fresh), undefined, undefined, async () => (await readConfig()).codexReview);
 const codexEnv = new CodexEnv();
@@ -1405,13 +1414,17 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       return openLoginTerminal();
     },
   ],
+  // Codex: instalar (npm, uma vez; quem já tem não roda) e entrar (abre o terminal do login). Só pelo navegador.
+  ['POST', /^\/api\/codex\/install$/, ({ fromBrowser }) => codexSetup.install(fromBrowser)],
+  ['POST', /^\/api\/codex\/login$/, async ({ fromBrowser }) => codexSetup.login(fromBrowser)],
   [
     'GET',
     /^\/api\/usage$/,
-    async () => {
+    async ({ url }) => {
       const [usage, config] = await Promise.all([readUsage(), readConfig()]);
       // Codex só com a opção ligada; o campo `codex` não existe quando desligada. Nunca lança nem trava os dados do Claude.
-      const codexField = await codexUsage.read(config.codexReview);
+      // `?fresh=1` relê o login do Codex na hora (a tela pede isso enquanto espera o login).
+      const codexField = await codexUsage.read(config.codexReview, { fresh: url.searchParams.has('fresh') });
       return { ...usage, boost: config.optimizeQuota ? quotaBoost(usage) : null, ...(codexField ? { codex: codexField } : {}) };
     },
   ],
@@ -1628,6 +1641,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
           err instanceof McpError ||
           err instanceof ProjectError ||
           err instanceof UpdateError ||
+          err instanceof CodexSetupError ||
           (err as NodeJS.ErrnoException | null)?.code === 'EEXIST'
         ) {
           const message = (err as NodeJS.ErrnoException).code === 'EEXIST' ? 'já existe um arquivo com esse nome' : (err as Error).message;

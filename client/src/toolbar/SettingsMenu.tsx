@@ -14,6 +14,7 @@ import { RolesEditor } from './RolesEditor';
 import { useServerAction } from './ServerAction';
 import { ThemeBackgrounds } from './ThemeBackgrounds';
 import { UpdateControls, useUpdateStatus } from './UpdateNotice';
+import { installCodex } from './codexSetup';
 
 // Configurações do Claudio’s Club, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
 // com título, descrição e o controle logo abaixo. Abre pelo botão "config" ou com Ctrl+,.
@@ -622,7 +623,15 @@ function buildSettings(
       title: t('toolbar.codexTitle'),
       description: t('toolbar.codexDesc'),
       keywords: t('toolbar.codexKeywords'),
-      toggle: { checked: p.codexReview, onChange: (v) => void api.saveConfig({ codexReview: v }).then(p.onConfig, () => {}) },
+      // Ligar instala o Codex se faltar (o servidor não roda o npm de quem já tem). Login fica com o usuário, no header.
+      toggle: {
+        checked: p.codexReview,
+        onChange: (v) =>
+          void api.saveConfig({ codexReview: v }).then((c) => {
+            p.onConfig(c);
+            if (v) void installCodex();
+          }, () => {}),
+      },
       advanced: true,
     });
     // Só com o Codex ligado: o modelo que a pergunta ao GPT usa.

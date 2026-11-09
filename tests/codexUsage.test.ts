@@ -114,6 +114,25 @@ describe('CodexUsageReader', () => {
     expect(calls).toEqual({ check: 0, installed: 0, latest: 0, readLimits: 0 });
   });
 
+  it('fresh relê o login mesmo com a leitura guardada; forget esquece a leitura', async () => {
+    const seen: boolean[] = [];
+    const { d } = deps({
+      check: async (fresh) => {
+        seen.push(!!fresh);
+        return fresh ? { available: true, reason: null } : { available: false, reason: 'o Codex CLI está sem login' };
+      },
+    });
+    const reader = new CodexUsageReader(d);
+    expect(await reader.read(true)).toMatchObject({ connected: false, reason: 'not_logged_in' });
+    expect(await reader.read(true)).toMatchObject({ connected: false, reason: 'not_logged_in' });
+    expect(seen).toEqual([false]);
+    expect(await reader.read(true, { fresh: true })).toMatchObject({ connected: true });
+    expect(seen).toEqual([false, true]);
+    reader.forget();
+    await reader.read(true);
+    expect(seen).toEqual([false, true, false]);
+  });
+
   it('ligada e com tudo certo: connected, limites, versão e comando', async () => {
     const { d } = deps();
     const r = await new CodexUsageReader(d).read(true);
@@ -201,10 +220,10 @@ describe('CodexUsageReader', () => {
     let reads = 0;
     const { d } = deps({ readLimits: () => (reads++, new Promise<RateLimitsRead>((r) => (release = r))) });
     const reader = new CodexUsageReader(d);
-    expect(await reader.read(true, 20)).toMatchObject({ connected: false, reason: 'loading' });
+    expect(await reader.read(true, { waitMs: 20 })).toMatchObject({ connected: false, reason: 'loading' });
     release({ ok: true, result: REAL });
     await new Promise((r) => setTimeout(r, 10));
-    expect(await reader.read(true, 20)).toMatchObject({ connected: true });
+    expect(await reader.read(true, { waitMs: 20 })).toMatchObject({ connected: true });
     expect(reads).toBe(1);
   });
 

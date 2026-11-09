@@ -227,8 +227,8 @@ export async function readRateLimits(
 // ---- Leitor com cache ------------------------------------------------------------------------------------------
 
 export interface CodexUsageDeps {
-  /** `codex login status` (CodexAdapter.check). */
-  check: () => Promise<CodexStatus>;
+  /** `codex login status` (CodexAdapter.check); `fresh` ignora o cache dele. */
+  check: (fresh?: boolean) => Promise<CodexStatus>;
   installed?: () => Promise<InstalledCodex>;
   latest?: () => Promise<string | null>;
   readLimits?: () => Promise<RateLimitsRead>;
@@ -252,29 +252,35 @@ export class CodexUsageReader {
    * Nunca lança e espera no máximo `waitMs`: passado isso, entrega a última leitura (ou `loading`) e a leitura segue no
    * fundo para a próxima chamada.
    */
-  async read(enabled: boolean, waitMs = ROUTE_WAIT): Promise<CodexUsage | null> {
+  async read(enabled: boolean, opts: { waitMs?: number; fresh?: boolean } = {}): Promise<CodexUsage | null> {
     if (!enabled) {
       this.cache = null;
       return null;
     }
     const c = this.cache;
-    if (c && this.now() - c.at < c.ttl) return c.value;
+    // `fresh`: relê tudo, sem o cache do status nem o da leitura (o login recém-feito aparece já; a leitura antiga segue de reserva).
+    if (!opts.fresh && c && this.now() - c.at < c.ttl) return c.value;
     const fallback = c?.value ?? LOADING;
     let timer: NodeJS.Timeout | undefined;
-    const late = new Promise<CodexUsage>((r) => (timer = setTimeout(() => r(fallback), waitMs)));
+    const late = new Promise<CodexUsage>((r) => (timer = setTimeout(() => r(fallback), opts.waitMs ?? ROUTE_WAIT)));
     try {
-      return await Promise.race([this.refresh(), late]);
+      return await Promise.race([this.refresh(!!opts.fresh), late]);
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /** Esquece a leitura guardada: a próxima `read` vai ao Codex (usado depois de instalar). */
+  forget(): void {
+    this.cache = null;
   }
 
   private now() {
     return (this.deps.now ?? Date.now)();
   }
 
-  private refresh(): Promise<CodexUsage> {
-    this.inflight ??= this.load()
+  private refresh(fresh: boolean): Promise<CodexUsage> {
+    this.inflight ??= this.load(fresh)
       .catch((err) => failure('error', (err as Error).message.slice(0, 200)))
       .then((value) => {
         this.cache = { at: this.now(), ttl: value.connected ? OK_TTL : FAIL_TTL, value };
@@ -286,13 +292,13 @@ export class CodexUsageReader {
     return this.inflight;
   }
 
-  private async load(): Promise<CodexUsage> {
+  private async load(fresh: boolean): Promise<CodexUsage> {
     const inst = await (this.deps.installed ?? readInstalled)();
     if (inst.missing) return failure('not_installed', 'o Codex CLI não está instalado');
     const latest = await (this.deps.latest ?? readLatestVersion)();
     const version: CodexVersion = { installed: inst.version, latest, outdated: isOutdated(inst.version, latest) };
     const upgradeCommand = upgradeCommandFor(inst.binPaths);
-    const status = await this.deps.check();
+    const status = await this.deps.check(fresh);
     if (!status.available) {
       const reason = /não está instalado/.test(status.reason ?? '') ? 'not_installed' : 'not_logged_in';
       return failure(reason, status.reason, version, upgradeCommand);

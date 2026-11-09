@@ -106,7 +106,7 @@ export class CodexEnv {
   private async inspect(): Promise<CodexEnvStatus> {
     const fail = (error: string): CodexEnvStatus => ({ error, version: null, networkProxy: false, notice: null });
     const v = await this.run(['--version'], '', 15_000);
-    if (v.spawnError) return fail(v.spawnError.code === 'ENOENT' ? 'o Codex CLI não está instalado (npm i -g @openai/codex)' : `não consegui rodar o codex: ${v.spawnError.message}`);
+    if (v.spawnError) return fail(v.spawnError.code === 'ENOENT' ? 'o Codex CLI não está instalado: ligue o Codex nas Configurações do Claudio’s Club' : `não consegui rodar o codex: ${v.spawnError.message}`);
     if (v.timedOut || v.code !== 0) return fail(`não consegui conferir a versão do Codex (${v.timedOut ? 'demorou demais' : `saída ${v.code}`})`);
     const version = parseCodexVersion(v.stdout);
     if (!version) return fail(`não reconheci a versão do Codex (saída: ${JSON.stringify(v.stdout.trim().slice(0, 80))}): não rodo o motor Codex sem saber qual é`);

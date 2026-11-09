@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { AccountUsage, AuthStatus, CodexUsage, QuotaBoost, UsageLimit } from '../../../shared/model';
 import { api } from '../api';
 import { formatAgo, formatDuration } from '../format';
 import { TerminalFilledIcon } from '../icons';
 import { locale, t } from '../i18n';
+import { installCodex, useCodexSetup } from './codexSetup';
 
 // Topo do quadro: nome da empresa (editável), consumo da conta e login do CLI.
 
@@ -237,32 +238,96 @@ export function AuthBadge({ boost }: { boost: QuotaBoost | null }) {
  */
 export function CodexUsageLine({ codex }: { codex: CodexUsage }) {
   const now = useNow();
+  const setup = useCodexSetup();
+  const [waiting, setWaiting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Leitura pedida pela própria linha (depois do login ou da instalação); a próxima do quadro a substitui.
+  const [fresh, setFresh] = useState<CodexUsage | null>(null);
+  const wasInstalling = useRef(false);
+  useEffect(() => setFresh(null), [codex]);
+  const cx = fresh ?? codex;
   const name = t('toolbar.codexName');
-  const shown = pickLimits(codex.limits);
-  const updated = codex.updatedAt ? t('toolbar.updatedAgo', { ago: formatAgo(now - Date.parse(codex.updatedAt)) }) : '';
+  const shown = pickLimits(cx.limits);
+  const updated = cx.updatedAt ? t('toolbar.updatedAgo', { ago: formatAgo(now - Date.parse(cx.updatedAt)) }) : '';
+
+  // Depois do clique em "Entrar no Codex", confere a cada 3 s (até 3 min) se o login foi concluído no navegador.
+  useEffect(() => {
+    if (!waiting) return;
+    const started = Date.now();
+    const t = setInterval(async () => {
+      const u = await api.usage(true).catch(() => null);
+      if (u?.codex) setFresh(u.codex);
+      if (u?.codex?.connected || Date.now() - started > 180_000) setWaiting(false);
+    }, 3000);
+    return () => clearInterval(t);
+  }, [waiting]);
+
+  // Terminou uma instalação (aqui ou nas Configurações): relê o status já, sem esperar a próxima leitura do quadro.
+  useEffect(() => {
+    if (setup.installing) {
+      wasInstalling.current = true;
+    } else if (wasInstalling.current) {
+      wasInstalling.current = false;
+      void api.usage(true).then((u) => {
+        if (u.codex) setFresh(u.codex);
+      }, () => {});
+    }
+  }, [setup.installing]);
+
+  const login = async () => {
+    setError(null);
+    try {
+      const r = await api.loginCodex();
+      if (r.ok) setWaiting(true);
+      else setError(r.error ?? t('toolbar.terminalFailed'));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const install = () => {
+    setError(null);
+    void installCodex();
+  };
 
   // Semáforo do ícone: verde conectado, cinza lendo pela primeira vez, vermelho sem Codex utilizável.
-  const light = codex.connected ? 'auth-ok' : codex.reason === 'loading' ? 'auth-wait' : 'auth-off';
-  const version = codex.version?.installed ? ` (${codex.version.installed})` : '';
-  const status = codex.connected
+  const light = cx.connected ? 'auth-ok' : cx.reason === 'loading' ? 'auth-wait' : 'auth-off';
+  const version = cx.version?.installed ? ` (${cx.version.installed})` : '';
+  const status = cx.connected
     ? t('toolbar.codexConnected', { version })
-    : codex.reason === 'not_installed'
+    : cx.reason === 'not_installed'
       ? t('toolbar.codexNotInstalled')
-      : codex.reason === 'not_logged_in'
+      : cx.reason === 'not_logged_in'
         ? t('toolbar.codexNotLoggedIn')
-        : codex.reason === 'loading'
+        : cx.reason === 'loading'
           ? t('toolbar.codexLoading')
           : t('toolbar.codexError');
-  const iconLabel = !codex.connected && codex.detail ? `${status}: ${codex.detail}` : status;
-  // O que fazer quando não está conectado: texto curto ao lado do ícone, com o comando.
-  const todo =
-    codex.reason === 'not_logged_in'
-      ? t('toolbar.codexDoLogin')
-      : codex.reason === 'not_installed'
-        ? t('toolbar.codexDoInstall')
-        : codex.reason === 'error'
-          ? t('toolbar.codexDoError')
-          : null;
+  const iconLabel = !cx.connected && cx.detail ? `${status}: ${cx.detail}` : status;
+  // O erro da instalação aparece só enquanto o Codex não está instalado (depois, a linha já mostra o novo estado).
+  const shownError = error ?? (!setup.installing && cx.reason === 'not_installed' ? setup.error : null);
+  // O que fazer quando não está conectado: a ação ao lado do ícone, igual ao "Entrar" do Claude.
+  let action: ReactNode = null;
+  if (setup.installing) {
+    action = <span className="usage-note">{t('toolbar.codexInstalling')}</span>;
+  } else if (cx.reason === 'not_installed') {
+    action = (
+      <button className="btn-login" onClick={install} title={iconLabel}>
+        {t('toolbar.codexInstall')}
+      </button>
+    );
+  } else if (cx.reason === 'not_logged_in') {
+    action = (
+      <button className="btn-login" onClick={login} disabled={waiting} title={iconLabel}>
+        {waiting ? t('toolbar.waitingLogin') : t('toolbar.codexLogin')}
+      </button>
+    );
+  } else if (cx.reason === 'error') {
+    action = (
+      <span className="usage-note" title={iconLabel}>
+        {t('toolbar.codexDoError')}
+      </span>
+    );
+  }
 
   return (
     <div className="usage-line usage-codex">
@@ -276,14 +341,11 @@ export function CodexUsageLine({ codex }: { codex: CodexUsage }) {
       <span className={`auth-light ${light}`} role="img" aria-label={iconLabel} title={iconLabel}>
         <TerminalFilledIcon />
       </span>
-      {todo && (
-        <span className="usage-note" title={iconLabel}>
-          {todo}
-        </span>
-      )}
-      {codex.version?.outdated && codex.upgradeCommand && (
-        <span className="usage-note usage-outdated" title={t('toolbar.codexOutdatedTitle', { command: codex.upgradeCommand })}>
-          {t('toolbar.codexOutdated', { command: codex.upgradeCommand })}
+      {action}
+      {shownError && <span className="error">{shownError}</span>}
+      {cx.version?.outdated && cx.upgradeCommand && (
+        <span className="usage-note usage-outdated" title={t('toolbar.codexOutdatedTitle', { command: cx.upgradeCommand })}>
+          {t('toolbar.codexOutdated', { command: cx.upgradeCommand })}
         </span>
       )}
     </div>
