@@ -27,7 +27,6 @@ import type {
   LibrarySkill,
   LiveSession,
   McpServerInfo,
-  ModelBenchmarks,
   OrchestrationReport,
   Project,
   ProjectAttachment,
@@ -324,7 +323,6 @@ export const api = {
   installCodex: () => post<{ ok: boolean; error: string | null }>('/api/codex/install'),
   /** Abre o terminal do `codex login` (o usuário conclui no navegador). */
   loginCodex: () => post<{ ok: boolean; error: string | null }>('/api/codex/login'),
-  models: (refresh = false) => post<ModelBenchmarks>('/api/models', { refresh }),
   browser: (fresh = false) => get<BrowserStatus>(fresh ? '/api/browser?fresh=1' : '/api/browser'),
   auth: (fresh = false) => get<AuthStatus>(fresh ? '/api/auth?fresh=1' : '/api/auth'),
   login: () => post<{ ok: boolean; command: string; error: string | null }>('/api/auth/login'),

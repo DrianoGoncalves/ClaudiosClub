@@ -132,7 +132,7 @@ Quem pediu fica sabendo quando a parte dele termina. Funcionários que um gestor
 
 <img src="docs/img/barra.png" alt="Barra do topo: uso de 5 horas e 7 dias, precisa de mim, ranking e config" width="640">
 
-**"Ainda posso pedir mais?"** A barra do topo mostra o uso da assinatura e quanto falta para o reset, quantas coisas esperam por você e o ranking: quem mais gastou (funcionários e agents), quanto cada funcionário economizou ao delegar para modelos mais baratos (últimos 3 meses ou tudo, arquivados incluídos), mais duas abas de modelos para código, por índice (de código; de inteligência, se a API não trouxer o de código) e por preço, com dados do Artificial Analysis.
+**"Ainda posso pedir mais?"** A barra do topo mostra o uso da assinatura e quanto falta para o reset, quantas coisas esperam por você e o ranking: quem mais gastou (funcionários e agents), quanto cada funcionário economizou ao delegar para modelos mais baratos (últimos 3 meses ou tudo, arquivados incluídos).
 
 <img src="docs/img/sala.png" alt="A sala de um projeto: o orquestrador com a equipe de design system e infraestrutura logo abaixo" width="100%">
 
@@ -181,8 +181,6 @@ Uma vez só: instala as dependências (e refaz com `npm ci` se o `node_modules` 
 > O botão **Iniciar** chama o link `myco://`: uma página não liga programa nenhum sozinha, então esse link é o único registro que o Claudio's Club deixa no sistema (no Windows, a chave `HKCU\Software\Classes\myco`, só do seu usuário; no Linux, um `.desktop` escondido). Ele se registra sozinho no setup e a cada subida. Na primeira vez, o navegador pergunta se pode abrir: marque "sempre permitir". Atalho no menu de programas não é criado; quem quiser roda `npm run launcher` (`npm run launcher:remove` tira o atalho e o link). Na página de início, cada passo com problema mostra o comando de correção e um botão **Copiar**; a página nunca executa comandos, quem roda é você, no terminal.
 
 Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code ficam fora do quadro até você escolher quais trazer: **+ projeto → Importar do Claude Code**.
-
-**Opcional: ranking de modelos.** Crie uma chave grátis em [artificialanalysis.ai/api-reference](https://artificialanalysis.ai/api-reference) e ponha `ARTIFICIAL_ANALYSIS_API_KEY=<sua chave>` no `.env` (o formato está em `.env.example`). Sem ela tudo funciona; o ranking só mostra como configurar.
 
 | Para | Comando |
 | --- | --- |

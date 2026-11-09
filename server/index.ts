@@ -5,7 +5,6 @@ import http from 'node:http';
 import path from 'node:path';
 import { clientChanged, DAILY, TSX, VITE } from '../scripts/lib';
 import { openTerminal } from './terminal';
-import { ArtificialAnalysis } from './adapters/artificialAnalysis';
 import { CodexAdapter, CodexError } from './adapters/codex';
 import { CodexEnv, withAppAddress, type CodexEnvStatus } from './codexEnv';
 import { CodexModels } from './codexModels';
@@ -197,7 +196,6 @@ const adapter: ToolAdapter = new ClaudeAdapter({
   onBoard: boardFilter({ pinned: pinnedProjects }),
   projectNames: async () => (await readConfig()).projectNames,
 });
-const benchmarks = new ArtificialAnalysis();
 /** ~/.claude/projects: onde ficam os transcripts das conversas. */
 const defaultTranscripts = path.join(defaultLocations().home, 'projects');
 
@@ -1430,16 +1428,6 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ],
   ['GET', /^\/api\/browser$/, ({ url }) => browserStatus(url.searchParams.has('fresh'))],
   ['GET', /^\/api\/costs$/, () => getCosts()],
-  // Ranking de modelos (Artificial Analysis). POST: cada busca gasta da cota diária da chave, então
-  // só a página do Claudio’s Club dispara (uma página qualquer não manda o cabeçalho x-myco).
-  [
-    'POST',
-    /^\/api\/models$/,
-    async ({ body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
-      return benchmarks.get(parse(z.object({ refresh: z.boolean().default(false) }), body ?? {}).refresh);
-    },
-  ],
   // Projeto demo (equipe e tarefas de exemplo em ~/.myco/demo). Criar de novo não sobrescreve:
   // só traz de volta ao quadro, se estava arquivado.
   [

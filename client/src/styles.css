@@ -1132,38 +1132,6 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 }
 .inbox-notify { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--line); color: var(--muted); cursor: pointer; }
 
-/* ---- Ranking, abas "Coding Index" e "Preço": modelos do Artificial Analysis em barras ---- */
-.models { display: grid; gap: 8px; margin-top: 12px; }
-.models-refresh { justify-self: end; }
-.models-chart { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-/* Coluna do valor com largura fixa: as barras de todas as linhas começam e crescem alinhadas. */
-.models-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(70px, 38%) 8ch; align-items: center; gap: 8px; padding: 3px 4px; }
-button.models-row { width: 100%; min-height: 32px; text-align: left; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
-button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
-.models-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.models-caret { display: inline-block; width: 1.1em; color: var(--muted); }
-.models-effort { margin-left: 6px; padding: 0 5px; border: 1px solid var(--line); border-radius: 8px; font-size: 11px; color: var(--muted); }
-/* Esforços do modelo aberto: só o nome recua (as barras seguem alinhadas às dos modelos, na mesma
-   escala), e a barra é mais clara que a do esforço padrão. */
-.models-variants { list-style: none; margin: 0 0 4px; padding: 0; display: grid; gap: 1px; }
-.models-variant { font-size: 12px; padding: 1px 4px; }
-.models-variant .models-name { margin-left: 0.4em; padding-left: calc(0.7em + 4px); border-left: 2px solid var(--line); }
-.models-variant .models-bar { background: color-mix(in srgb, var(--ink-blue) 55%, var(--panel)); }
-.models-track { height: 10px; }
-.models-bar { display: block; height: 100%; min-width: 2px; background: var(--ink-blue); border-radius: 0 4px 4px 0; }
-.models-row:hover .models-bar { background: color-mix(in srgb, var(--ink-blue) 75%, var(--ink)); }
-.models-value { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.models-note { margin: 0; }
-.models-note p { margin: 0 0 6px; }
-.models-env { margin: 0 0 6px; padding: 6px 8px; background: color-mix(in srgb, var(--ink) 7%, transparent); border-radius: 6px; font-size: 12px; overflow-x: auto; }
-.models-foot { margin: 0; padding-top: 8px; border-top: 1px solid var(--line); }
-.models a { color: var(--ink-blue); text-underline-offset: 2px; }
-/* No celular não há hover para ler o nome cortado: o nome ganha a linha de cima inteira. */
-@media (max-width: 480px) {
-  .models-row { grid-template-columns: minmax(0, 1fr) 8ch; row-gap: 2px; }
-  .models-name { grid-column: 1 / -1; white-space: normal; }
-}
-
 /* ---- configurações: no jeito das do VS Code (busca, grupos à esquerda, item com título e descrição) ---- */
 .settings { position: relative; }
 .toolbar .settings-button { display: inline-flex; align-items: center; gap: 5px; position: relative; }

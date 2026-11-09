@@ -28,7 +28,6 @@ import { BrowserCheck } from '../staff/BrowserCheck';
 import type { StaffFormTab } from '../staff/HireForm';
 import { StaffHistory } from '../staff/StaffHistory';
 import { MAX_INPUT_BYTES, PROJECT_IMAGE_MAX, shrinkImage } from '../lib/shrinkImage';
-import { METRIC_LABEL, type Metric, ModelsChart } from '../toolbar/ModelsMenu';
 import { Attachments } from './Attachments';
 import { ProjectGuide } from './ProjectGuide';
 import { ProjectName } from './ProjectName';
@@ -915,8 +914,8 @@ export function UserPanel({
   );
 }
 
-type RankingTab = 'cost' | 'savings' | Metric;
-const RANKING_TABS: Array<[RankingTab, string]> = [['cost', t('detail.tabCost')], ['savings', t('detail.tabSavings')], ['index', METRIC_LABEL.index], ['price', METRIC_LABEL.price]];
+type RankingTab = 'cost' | 'savings';
+const RANKING_TABS: Array<[RankingTab, string]> = [['cost', t('detail.tabCost')], ['savings', t('detail.tabSavings')]];
 
 /** Período do ranking em dias (null = tudo); o padrão são os últimos 3 meses. */
 const RANKING_PERIODS: Array<[string, number | null, string]> = [['90', 90, t('detail.periodLast3Months')], ['all', null, t('detail.periodAll')]];
@@ -969,8 +968,8 @@ function RankingItem({
 }
 
 /**
- * Ranking, em abas: quem mais gasta e quem mais economiza (funcionários, no período escolhido), os
- * agents e os modelos para código (Artificial Analysis). Os gastos são equivalentes em API
+ * Ranking, em abas: quem mais gasta e quem mais economiza (funcionários, no período escolhido) e os
+ * agents. Os gastos são equivalentes em API
  * (estimativa): servem para comparar, não como conta a pagar.
  */
 export function RankingPanel({
@@ -1053,7 +1052,7 @@ export function RankingPanel({
     <>
       <header className="header">
         <p className="kicker">{t('detail.kickerRanking')}</p>
-        <h2>{tab === 'cost' ? t('detail.topSpenders') : tab === 'savings' ? t('detail.topSavers') : t('detail.modelsForCode')}</h2>
+        <h2>{tab === 'cost' ? t('detail.topSpenders') : t('detail.topSavers')}</h2>
         {tab === 'cost' && (
           <p className="muted small">
             {t('detail.costNote')}
@@ -1069,9 +1068,7 @@ export function RankingPanel({
           </button>
         ))}
       </div>
-      {tab === 'index' || tab === 'price' ? (
-        <ModelsChart metric={tab} />
-      ) : tab === 'savings' ? (
+      {tab === 'savings' ? (
         <section className="section">
           {employeesHead}
           {waiting}
