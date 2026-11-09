@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { applyUpdate, readUpdateStatus } from '../server/selfUpdate';
+import { applyUpdate, readUpdateStatus, SelfUpdater } from '../server/selfUpdate';
 
 // Um "GitHub" de mentira (repositório bare), o clone em que o Claudio’s Club roda e outro clone que publica
 // as versões (tags).
@@ -118,5 +118,17 @@ describe('atualizar o Claudio’s Club pela versão publicada no GitHub', () => 
 
   it('pasta sem git não tem o que buscar', async () => {
     expect((await readUpdateStatus(dir)).supported).toBe(false);
+  });
+
+  it('o quadro vê a mudança à mão sem nova busca no remoto (mesmo checkedAt)', async () => {
+    const u = new SelfUpdater(app);
+    const first = await u.check(true);
+    expect(first.dirty).toBe(false);
+
+    fs.writeFileSync(path.join(app, 'README.md'), 'mexido\n');
+    expect(await u.check()).toMatchObject({ dirty: true, checkedAt: first.checkedAt });
+
+    git(app, 'checkout', '-q', '--', 'README.md');
+    expect(await u.check()).toMatchObject({ dirty: false, checkedAt: first.checkedAt });
   });
 });
