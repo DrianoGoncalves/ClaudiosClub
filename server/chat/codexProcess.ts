@@ -41,6 +41,8 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   platform?: NodeJS.Platform;
   /** thread_id de uma conversa que já existe: a primeira mensagem já retoma. */
   threadId?: string | null;
+  /** Endereço do Claudio’s Club para a sandbox (http://127.0.0.2:<porta>, ver server/callers.ts): vai em `MYCO_URL` no ambiente de cada execução. */
+  mycoUrl?: string;
   /** Onde guardar o thread_id para continuar depois que o processo fechar (ou o servidor reiniciar). */
   threadFile?: string;
   /**
@@ -192,7 +194,7 @@ export class CodexProcess extends ChatProcess {
 
   override setPermissionMode(mode: string, label: string) {
     this.setState({ permissionMode: mode });
-    const bypass = mode === 'bypassPermissions' ? ' No Codex, mesmo assim, a escrita fica na pasta de trabalho e a rede só alcança a própria máquina.' : '';
+    const bypass = mode === 'bypassPermissions' ? ' No Codex, mesmo assim, a escrita fica na pasta de trabalho e a rede só alcança o Claudio’s Club (127.0.0.2).' : '';
     const later = this.state.busy ? ' Vale a partir da próxima mensagem.' : '';
     this.addNotice(`${label}.${bypass}${later}`.replace(/\.\.$/, '.'));
   }
@@ -304,8 +306,14 @@ export class CodexProcess extends ChatProcess {
     }
     // Ficha grande demais para a linha de comando: vai no começo do prompt da primeira mensagem (as seguintes continuam a mesma thread).
     const prompt = o.instructions && !instructionsInArgv(o.instructions, o.platform) && this.thread === null ? promptWithInstructions(o.instructions, job.prompt) : job.prompt;
-    // O mesmo ambiente do Claude (MYCO_SESSION_ID para o despertador e as tarefas por curl), sem as variáveis CLAUDE*/ANTHROPIC*.
-    const env = { ...cleanEnv(), MYCO_SESSION_ID: o.sessionId };
+    // O mesmo ambiente do Claude (MYCO_SESSION_ID e MYCO_TOKEN para o despertador e as tarefas por curl), sem as variáveis CLAUDE*/ANTHROPIC*, e
+    // MYCO_URL: o endereço do Claudio’s Club que a sandbox alcança. O token é o mesmo em todas as execuções da conversa (uma por mensagem).
+    const env = {
+      ...cleanEnv(),
+      MYCO_SESSION_ID: o.sessionId,
+      ...(o.mycoToken && { MYCO_TOKEN: o.mycoToken }),
+      ...(o.mycoUrl && { MYCO_URL: o.mycoUrl }),
+    };
     // No Unix o processo vira líder do próprio grupo: encerrar o grupo leva também os comandos que ele abriu.
     const make =
       o.spawnImpl ??

@@ -108,6 +108,8 @@ export interface ChatProcessOptions {
   onIdle?: (reason: 'turn' | 'background' | 'exit') => void;
   /** Chegou a lista de comandos "/" da sessão. */
   onCommands?: (commands: ChatCommand[]) => void;
+  /** `MYCO_TOKEN` da conversa (ver server/callers.ts): vai no ambiente, ao lado do `MYCO_SESSION_ID`, para as chamadas à API do Claudio’s Club. */
+  mycoToken?: string;
   /** Troca o `spawn` real nos testes. */
   spawnImpl?: (cmd: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }) => ChildProcessWithoutNullStreams;
 }
@@ -223,8 +225,15 @@ export class ChatProcess {
       ((cmd, args, o) => spawn(cmd, args, { ...o, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' }));
     // A lista de tarefas (TaskCreate/TaskUpdate) e os pontos de restauração das edições ("voltar até
     // aqui") não vêm ligados no modo -p.
-    // MYCO_SESSION_ID: o funcionário sabe o id da própria conversa (o despertador, ver wake.ts, o usa nos comandos dele).
-    const env = { ...cleanEnv(), CLAUDE_CODE_ENABLE_TODO_TOOLS: '1', CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1', MYCO_SESSION_ID: this.opts.sessionId };
+    // MYCO_SESSION_ID: o funcionário sabe o id da própria conversa (o despertador, ver wake.ts, o usa nos comandos dele). MYCO_TOKEN: quem ele é
+    // para a API (cabeçalho x-myco-token nos curl da ficha, ver server/callers.ts).
+    const env = {
+      ...cleanEnv(),
+      CLAUDE_CODE_ENABLE_TODO_TOOLS: '1',
+      CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1',
+      MYCO_SESSION_ID: this.opts.sessionId,
+      ...(this.opts.mycoToken && { MYCO_TOKEN: this.opts.mycoToken }),
+    };
     const child = run('claude', [...STREAM_FLAGS, ...this.opts.args], { cwd: this.opts.cwd, env });
     this.child = child;
     this.setState({ running: true, error: null });

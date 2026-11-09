@@ -146,7 +146,7 @@ Quem pediu fica sabendo quando a parte dele termina. Funcionários que um gestor
 
 - **O disco é a fonte da verdade.** O Claudio's Club grava o que o Claude Code já entende (`.claude/agents`, `.claude/skills`, `CLAUDE.md`) e as fichas em `<projeto>/.myco/`. Fechou o Claudio's Club, tudo continua funcionando.
 - **Sem nuvem própria.** Cada funcionário é um processo `claude` na sua máquina, falando em `stream-json`. Conta, login e cota são os seus.
-- **Só local.** O servidor escuta em `127.0.0.1`, recusa `Host` de fora (DNS rebinding) e só aceita escrita da própria página ou de ferramentas locais.
+- **Só local.** O servidor escuta em `127.0.0.1`, recusa `Host` de fora (DNS rebinding) e só aceita escrita da própria página ou de ferramentas locais. Para quem roda no Codex ele também escuta em `127.0.0.2` (mesma porta), o único endereço que a sandbox do Codex alcança: quem chega por ali precisa do `MYCO_TOKEN` da própria conversa (cabeçalho `x-myco-token`), nunca conta como a tela (mesmo mandando `Origin`) e só usa tarefas, contratar, mensagem, despertador e encerrar quem contratou. O servidor decide quem chama pelo socket e pelo token, não pelo que o pedido declara.
 - **Infra com cinto de segurança.** O Claudio's Club gera o `ssh_config` de cada projeto sem senha (`BatchMode`), sem túneis nem repasse do agente; quem não tem acesso na ficha não roda `ssh`/`scp`, e `~/.ssh`, `.env` e a chave ficam bloqueados para o agente.
 
 | Camada | Stack |

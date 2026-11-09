@@ -2,6 +2,7 @@ import { statSync, type Stats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Autonomy } from '../../shared/model';
+import { SANDBOX_HOST } from '../callers';
 
 // Linha de comando do Codex (CLI da OpenAI) para um funcionário com `engine: 'codex'`. Cada mensagem é uma execução
 // de `codex exec --json` (a primeira) ou `codex exec resume <thread_id> --json` (as seguintes), com o prompt pelo stdin.
@@ -12,7 +13,7 @@ export type CodexSandbox = 'read-only' | 'workspace';
 
 /**
  * Modo de permissão do Claudio’s Club (o `--permission-mode` do Claude Code) → sandbox do Codex. O `exec` não pergunta nada:
- * quem decide o que pode é a sandbox. plan e manual só leem; acceptEdits e auto escrevem na pasta de trabalho. A rede só alcança a própria máquina.
+ * quem decide o que pode é a sandbox. plan e manual só leem; acceptEdits e auto escrevem na pasta de trabalho. A rede só alcança o Claudio’s Club, em 127.0.0.2.
  * "Sem travas" (bypassPermissions) também fica na escrita da pasta de trabalho (`workspace`): no Codex ninguém roda sem sandbox por aqui. Modo desconhecido: só leitura.
  */
 export function sandboxFor(mode: string | null | undefined): CodexSandbox {
@@ -42,8 +43,12 @@ export function tomlString(text: string): string {
 /** Nome do perfil de permissões que a conversa usa (`default_permissions`). */
 export const CODEX_PROFILE = 'mycodeny';
 
-/** Hosts da própria máquina que a sandbox deixa alcançar (a API do Claudio’s Club, para tarefas e despertador por curl). */
-export const CODEX_LOOPBACK_HOSTS = ['127.0.0.1', 'localhost'];
+/**
+ * Hosts que a sandbox deixa alcançar: só o endereço do Claudio’s Club para o Codex (127.0.0.2, tarefas e despertador por curl). Nunca 127.0.0.1 nem
+ * `localhost`: o servidor escuta nos dois endereços e trata quem chega por 127.0.0.2 como "da sandbox do Codex" (ver server/callers.ts), com o
+ * token da conversa e só as rotas da lista (apiPolicy.ts). Pelo 127.0.0.1 a sandbox nem chega: o proxy recusa.
+ */
+export const CODEX_APP_HOSTS = [SANDBOX_HOST];
 
 export interface CodexSecretContext {
   /** Pasta onde a conversa roda (o projeto ou a worktree). */
@@ -106,7 +111,7 @@ export function codexDenyPaths(ctx: CodexSecretContext): string[] {
 export interface CodexSafetyOptions extends CodexSecretContext {
   /** `read-only`: só lê. `workspace`: escreve na pasta de trabalho. */
   mode: 'read-only' | 'workspace';
-  /** `off`: sem rede. `loopback`: só a própria máquina (127.0.0.1 e localhost), para a API do Claudio’s Club. */
+  /** `off`: sem rede. `loopback`: só o endereço do Claudio’s Club para o Codex (127.0.0.2, ver `CODEX_APP_HOSTS`), para a API dele. */
   network: 'off' | 'loopback';
   /** Pastas extras com escrita no modo `workspace` (a pasta das fichas, quando a conversa roda numa worktree). */
   writableRoots?: string[];
@@ -138,7 +143,7 @@ export function codexSafetyArgs(o: CodexSafetyOptions): string[] {
  *   -c default_permissions="mycodeny"
  *   -c permissions.mycodeny.extends=":workspace"            (":read-only" no modo de só leitura)
  *   -c permissions.mycodeny.filesystem={"~/.ssh"="deny","/proj/.vps"="deny","/pasta/extra"="write"}
- *   -c permissions.mycodeny.network={enabled=true,domains={"127.0.0.1"="allow","localhost"="allow"}}   (`loopback`)
+ *   -c permissions.mycodeny.network={enabled=true,domains={"127.0.0.2"="allow"}}   (`loopback`)
  *   --enable network_proxy                                                                              (`loopback`)
  *   -c permissions.mycodeny.network={enabled=false}                                                     (`off`)
  *
@@ -147,9 +152,10 @@ export function codexSafetyArgs(o: CodexSafetyOptions): string[] {
  *   mesmo dentro da pasta de trabalho (várias entradas juntas, com um `deny` de arquivo, também funcionam). Por isso a ficha do próprio
  *   funcionário (`readOnlyPaths`) fica só leitura, mas a pasta das fichas inteira NÃO pode ser `read` com a memória em `write`.
  * - network `loopback`: só com o `network_proxy` ligado (recurso experimental do Codex) a lista de domínios vale. A rede passa a sair só
- *   pelo proxy dele: 127.0.0.1 e localhost respondem; qualquer outro domínio é recusado ("not on the allowlist") e conexão direta (ssh,
- *   /dev/tcp, curl --noproxy) dá "Network is unreachable". Sem o recurso, `enabled=true` liberaria a rede inteira.
- * - A lista de domínios não tem porta: qualquer serviço local da máquina fica ao alcance, não só o do Claudio’s Club.
+ *   pelo proxy dele: 127.0.0.2 responde; qualquer outro domínio, inclusive 127.0.0.1 e localhost, é recusado (403 "not on the allowlist" do proxy)
+ *   e conexão direta (ssh, /dev/tcp, curl --noproxy) dá "Network is unreachable". Sem o recurso, `enabled=true` liberaria a rede inteira.
+ * - A lista de domínios não tem porta: serviço local que escute em todas as interfaces (0.0.0.0) fica ao alcance por 127.0.0.2, não só o do
+ *   Claudio’s Club. Os que escutam só em 127.0.0.1 (como o próprio Claudio’s Club, na tela) ficam fora.
  */
 export function codexProfileArgs(o: CodexSafetyOptions): string[] {
   /** Só o que existe: `read` num caminho que não existe faz o Codex criar um arquivo vazio no lugar (o mesmo cuidado do `deny`). */
@@ -164,7 +170,7 @@ export function codexProfileArgs(o: CodexSafetyOptions): string[] {
   const network =
     o.network === 'loopback'
       ? [
-          '-c', `${key}.network={enabled=true,domains={${CODEX_LOOPBACK_HOSTS.map((h) => `${tomlString(h)}="allow"`).join(',')}}}`,
+          '-c', `${key}.network={enabled=true,domains={${CODEX_APP_HOSTS.map((h) => `${tomlString(h)}="allow"`).join(',')}}}`,
           '--enable', 'network_proxy',
         ]
       : ['-c', `${key}.network={enabled=false}`];
@@ -201,6 +207,8 @@ export interface CodexSpawn {
   secrets: Omit<CodexSecretContext, 'cwd'>;
   /** thread_id gravado da conversa; null = a primeira mensagem abre uma thread nova. */
   threadId: string | null;
+  /** Endereço do Claudio’s Club para esta conversa (http://127.0.0.2:<porta>): vai em `MYCO_URL` no ambiente da execução. */
+  mycoUrl: string;
   /** Onde o thread_id é gravado (e lido ao reabrir). */
   threadFile: string;
 }
@@ -228,7 +236,7 @@ export interface CodexRunOptions {
   readOnlyPaths?: string[];
   /** Para o bloqueio de segredos (ver `codexSafetyArgs`). */
   secrets: CodexSecrets;
-  /** `loopback`: a API do Claudio’s Club por curl (só com o `network_proxy` conferido, ver codexEnv.ts). `off`: sem rede nenhuma. */
+  /** `loopback`: a API do Claudio’s Club por curl, só em 127.0.0.2 (só com o `network_proxy` conferido, ver codexEnv.ts). `off`: sem rede nenhuma. */
   network: 'off' | 'loopback';
   /** thread_id da conversa: com ele, `exec resume`; sem, uma conversa nova. */
   threadId?: string | null;

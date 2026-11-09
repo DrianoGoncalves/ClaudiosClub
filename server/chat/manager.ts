@@ -35,6 +35,7 @@ import { CONTINUE_TEXT, type AutoContinue, type AutoContinueEvent, type Pending 
 import { limitNotice, MAX_LIMIT_HITS, resumePlan, type LimitHit } from './usageLimit';
 import { WAKE_MAX_STREAK, WakeStreakError, wakeNotice, type WakeInput } from './wake';
 import { readUsage } from '../usage';
+import type { SessionTokens } from '../callers';
 
 export interface ChatSpawn {
   sessionId: string;
@@ -76,6 +77,8 @@ export interface ChatManagerOptions {
   codexModels?: () => Promise<ReadonlyArray<Pick<CodexModelInfo, 'slug'>>>;
   /** Confere o `codex` instalado antes de cada execução (versão mínima e `network_proxy`, ver server/codexEnv.ts); sem ele, a rede do Codex fica desligada. */
   codexEnv?: () => Promise<CodexEnvStatus>;
+  /** Tokens das conversas (`MYCO_TOKEN` no ambiente de cada uma, ver server/callers.ts). Sem ele, as conversas abrem sem token. */
+  tokens?: SessionTokens;
   /** Processos abertos, gravados em disco para achar os órfãos depois de um reinício. */
   registry?: ChatRegistry;
   /** Testes trocam (pid vivo? / encerrar processo). */
@@ -819,6 +822,8 @@ export class ChatManager {
         this.opts.onIdle?.(spawn.sessionId, projectId, staffId, reason);
       },
       onCommands: (commands) => this.commands.set(projectId, commands),
+      // Quem ela é para a API: o mesmo token em toda execução da conversa (o Codex abre uma por mensagem), regerado se o servidor reiniciou.
+      mycoToken: this.opts.tokens?.issue({ staffId, projectId, sessionId: spawn.sessionId, engine: codex ? 'codex' : 'claude' }),
       onExit: (pid, error) => {
         this.log(`${spawn.sessionId} saiu (pid ${pid})${error ? `: ${error.slice(0, 200)}` : ''}`);
         if (pid !== null) void this.opts.registry?.remove(spawn.sessionId, pid).catch(() => {});
@@ -835,6 +840,7 @@ export class ChatManager {
           secrets: codex.secrets,
           threadId: codex.threadId,
           threadFile: codex.threadFile,
+          mycoUrl: codex.mycoUrl,
           models: this.opts.codexModels,
           env: this.opts.codexEnv,
         })
@@ -1064,8 +1070,10 @@ export class ChatManager {
   private reap() {
     const idle = this.opts.idleMs ?? 15 * 60_000;
     for (const [id, chat] of this.chats) {
-      if (!chat.running) this.chats.delete(id);
-      else if (!chat.working && Date.now() - chat.lastActivity > idle) chat.stop();
+      if (!chat.running) {
+        this.chats.delete(id);
+        this.opts.tokens?.revoke(id);
+      } else if (!chat.working && Date.now() - chat.lastActivity > idle) chat.stop();
     }
   }
 }

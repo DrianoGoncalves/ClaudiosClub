@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { CodexRun, CodexRunner } from '../server/adapters/codex';
-import { CODEX_ENV_TTL, CODEX_MIN_VERSION, CodexEnv, codexUpgradeHint, compareVersions, locateCodex, parseCodexFeatures, parseCodexVersion } from '../server/codexEnv';
+import { CODEX_ENV_TTL, CODEX_MIN_VERSION, CodexEnv, codexUpgradeHint, compareVersions, locateCodex, parseCodexFeatures, parseCodexVersion, withAppAddress, type CodexEnvStatus } from '../server/codexEnv';
 
 // Conferência do Codex instalado: versão mínima (0.156.1) e o recurso `network_proxy`, de que a rede local depende.
 
@@ -144,6 +144,32 @@ describe('codexEnv: versão e recurso network_proxy', () => {
   it('o servidor usa a conferência: o catálogo e a conversa recusam com Codex que não serve; a rede vem do network_proxy', async () => {
     const index = await fs.readFile(path.join(process.cwd(), 'server', 'index.ts'), 'utf8');
     expect(index).toContain('const codexEnv = new CodexEnv();');
-    expect(index.match(/codexEnv: \(\) => codexEnv\.status\(\)/g)).toHaveLength(2); // StaffService (recusa ao abrir) e ChatManager (cada execução)
+    // StaffService (recusa ao abrir) e ChatManager (cada execução): os dois pela conferência que também olha o 127.0.0.2 de pé.
+    expect(index.match(/codexEnv: \(\) => codexRunEnv\(\)/g)).toHaveLength(2);
+    expect(index).toContain('withAppAddress(await codexEnv.status(), sandboxListener');
+  });
+});
+
+describe('codexEnv: o endereço do Claudio’s Club para o Codex (127.0.0.2)', () => {
+  const ok: CodexEnvStatus = { error: null, version: '0.167.0', networkProxy: true, notice: null };
+
+  it('com o 127.0.0.2 de pé, a conferência passa como veio', () => {
+    expect(withAppAddress(ok, { up: true, error: null }, '127.0.0.2:4848')).toBe(ok);
+  });
+
+  it('sem ele (macOS sem o alias), a conversa roda sem rede e o aviso diz o endereço, o motivo e o que fazer', () => {
+    const r = withAppAddress(ok, { up: false, error: 'EADDRNOTAVAIL' }, '127.0.0.2:4848');
+    expect(r).toMatchObject({ error: null, version: '0.167.0', networkProxy: false });
+    expect(r.notice).toContain('127.0.0.2:4848');
+    expect(r.notice).toContain('EADDRNOTAVAIL');
+    expect(r.notice).toContain('sem rede nenhuma');
+    expect(r.notice).toContain('sudo ifconfig lo0 alias 127.0.0.2 up');
+  });
+
+  it('Codex que não serve (erro) ou sem network_proxy já diz tudo: passa como veio', () => {
+    const erro: CodexEnvStatus = { error: 'antigo demais', version: '0.150.0', networkProxy: false, notice: null };
+    const semProxy: CodexEnvStatus = { error: null, version: '0.167.0', networkProxy: false, notice: 'sem network_proxy' };
+    expect(withAppAddress(erro, { up: false, error: null }, '127.0.0.2:1')).toBe(erro);
+    expect(withAppAddress(semProxy, { up: false, error: null }, '127.0.0.2:1')).toBe(semProxy);
   });
 });

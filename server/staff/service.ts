@@ -119,7 +119,10 @@ function insideDir(dir: string, child: string): boolean {
 export interface StaffServiceOptions {
   runDir: string;
   claudeConfigFile: string;
+  /** Endereço do Claudio’s Club para as conversas do Claude (http://127.0.0.1:<porta>), nos textos da ficha. */
   mycoUrl: string;
+  /** O mesmo para quem roda no Codex: o endereço que a sandbox alcança (http://127.0.0.2:<porta>, ver server/callers.ts). Sem ele, o `mycoUrl`. */
+  codexUrl?: string;
   /** Consumo 5h/7d (testes trocam). */
   readUsage?: () => Promise<AccountUsage>;
   /** Cria a worktree da ficha (testes trocam o git). */
@@ -251,11 +254,16 @@ export class StaffService {
    * autonomia limitada à do gestor. Se algum gestor roda no Codex, o contratado nasce no Codex (`engine: 'codex'`, sem servidores
    * nem Chrome, autonomia no teto dele). Pedindo `engine: "claude"`, nasce Claude mas travado: autonomia `manual` (tudo passa pela
    * aprovação do usuário), sem Chrome, MCPs, servidores nem `canHire`, e selado (ver seal.ts) para não subir a própria autonomia.
+   *
+   * `caller`: quem chama, pelo token da conversa (ver callers.ts). Com ele, o gestor é quem chama e o `reportsTo` do pedido é descartado: quem
+   * declara um gestor que não é ele não contrata em nome dele. Chamando uma conversa do Codex, valem as regras de gestor Codex mesmo que a
+   * ficha dele tenha mudado de motor desde que a conversa abriu.
    */
   async hire(
     projectId: string,
     body: unknown,
     fromBrowser: boolean,
+    caller?: { staffId: string | null; engine: 'claude' | 'codex' } | null,
   ): Promise<{ profile: StaffProfile; launch: LaunchResult | null } | null> {
     const project = await this.project(projectId);
     if (!project) return null;
@@ -263,6 +271,10 @@ export class StaffService {
     if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'ficha inválida');
     const input = parsed.data;
 
+    if (!fromBrowser && caller) {
+      if (!caller.staffId) throw new StaffError('só um funcionário (com ficha) contrata pela API');
+      input.reportsTo = [caller.staffId];
+    }
     const managers = await this.managers(project.path, input.reportsTo);
     const hirer = fromBrowser ? undefined : managers.find((m) => m.canHire);
     let lockedClaude = false; // Claude contratado por gestor no Codex: nasce selado (ver seal.ts)
@@ -277,7 +289,7 @@ export class StaffService {
       // Quem tem gestor no Codex nasce no Codex (o padrão), com a autonomia dele no máximo e sem servidores nem Chrome. Pedindo
       // `engine: "claude"` (que roda fora da sandbox) nasce Claude travado: `manual`, sem Chrome, MCPs, servidores nem canHire.
       const codexManagers = managers.filter((m) => m.engine === 'codex');
-      if (codexManagers.length) {
+      if (codexManagers.length || caller?.engine === 'codex') {
         input.servers = [];
         input.browser = false;
         if (input.engine === 'claude') {
@@ -907,6 +919,7 @@ export class StaffService {
         secrets: { projectPath: project.path, home: os.homedir(), mycoHome: MYCO_HOME },
         threadId: resume ? await readCodexThread(codexRun.threadFile) : null,
         threadFile: codexRun.threadFile,
+        mycoUrl: ctx.mycoUrl,
       };
       return { sessionId: id, cwd, args: [], engine: 'codex', codex: spawn, ...chosen };
     }
@@ -978,7 +991,8 @@ export class StaffService {
       projectName: path.basename(project.path),
       projectPath: project.path,
       managerNames: managers.filter((m): m is StaffProfile => !!m).map((m) => `${m.name} (${m.role})`),
-      mycoUrl: this.opts.mycoUrl,
+      // A sandbox do Codex só alcança 127.0.0.2: a ficha dele cita esse endereço.
+      mycoUrl: profile.engine === 'codex' ? (this.opts.codexUrl ?? this.opts.mycoUrl) : this.opts.mycoUrl,
       runDir: this.opts.runDir,
       claudeConfigFile: this.opts.claudeConfigFile,
       worktree,
@@ -1002,6 +1016,28 @@ export class StaffService {
    * Pode `managerId` passar trabalho para `staffId`? Só para quem reporta a ele (a API não deixa um
    * funcionário mandar tarefa para quem não é da equipe dele).
    */
+  /**
+   * A sandbox do Codex (quem chama, pelo token) pode falar com este alvo? Só com a própria conversa e com as de quem reporta a ele (`reportsTo`
+   * inclui quem chama). Com conversa e funcionário juntos, os dois têm que ser da mesma pessoa. Conversa sem ficha nunca chama nem é alvo.
+   */
+  async mayReach(
+    projectId: string,
+    caller: { staffId: string | null; sessionId: string },
+    target: { sessionId: string | null; staffId: string | null },
+  ): Promise<boolean> {
+    const project = await this.project(projectId);
+    if (!project || !caller.staffId) return false;
+    if (target.sessionId === caller.sessionId) return !target.staffId || target.staffId === caller.staffId;
+    const everyone = await listProjectStaff(project.path, project.id);
+    const mine = (s: StaffProfile) => s.reportsTo.includes(caller.staffId!);
+    if (target.sessionId) {
+      const owner = everyone.find((s) => s.sessions.some((x) => x.id === target.sessionId));
+      return !!owner && mine(owner) && (!target.staffId || target.staffId === owner.id);
+    }
+    const person = target.staffId ? everyone.find((s) => s.id === target.staffId) : undefined;
+    return !!person && mine(person);
+  }
+
   async isManagerOf(projectId: string, managerId: string, staffId: string): Promise<boolean> {
     const project = await this.project(projectId);
     const target = project ? await readProfile(project.path, staffId) : null;

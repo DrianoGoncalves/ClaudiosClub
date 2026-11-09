@@ -155,13 +155,17 @@ describe('Codex: argumentos', () => {
     expect(filesOf(read)).toBe('{}');
   });
 
-  it('rede: só a própria máquina (127.0.0.1 e localhost) pelo proxy do Codex, igual em qualquer autonomia', () => {
+  it('rede: só o 127.0.0.2 (o endereço do Claudio’s Club para o Codex) pelo proxy, nunca 127.0.0.1 nem localhost, igual em qualquer autonomia', () => {
     for (const sandbox of ['read-only', 'workspace'] as const) {
       const args = buildCodexArgs({ ...base, sandbox });
       // Sem o recurso network_proxy a lista de domínios não vale e `enabled=true` liberaria a rede inteira.
       expect(args.slice(args.indexOf('--enable'), args.indexOf('--enable') + 2)).toEqual(['--enable', 'network_proxy']);
-      expect(configOf(args, 'permissions.mycodeny.network')).toBe('{enabled=true,domains={"127.0.0.1"="allow","localhost"="allow"}}');
+      expect(configOf(args, 'permissions.mycodeny.network')).toBe('{enabled=true,domains={"127.0.0.2"="allow"}}');
       expect(args.join(' ')).not.toMatch(/network_access|"\*"/);
+      // A lista tem um host só: o perfil nem cita o 127.0.0.1 nem o localhost (o proxy os recusa; ver server/callers.ts).
+      const net = configOf(args, 'permissions.mycodeny.network')!;
+      expect(net).not.toMatch(/127\.0\.0\.1|localhost/);
+      expect(net.match(/"allow"/g)).toHaveLength(1);
     }
   });
 
@@ -189,7 +193,7 @@ describe('Codex: argumentos', () => {
       '-c', 'default_permissions="mycodeny"',
       '-c', 'permissions.mycodeny.extends=":workspace"',
       '-c', `permissions.mycodeny.filesystem={"~/.ssh"="deny",${tomlString(vault)}="deny",${tomlString(path.join(proj, '.vps'))}="deny",${tomlString(path.join(proj, '.myco', 'staff'))}="write"}`,
-      '-c', 'permissions.mycodeny.network={enabled=true,domains={"127.0.0.1"="allow","localhost"="allow"}}',
+      '-c', 'permissions.mycodeny.network={enabled=true,domains={"127.0.0.2"="allow"}}',
       '--enable', 'network_proxy',
     ]);
     // No modo de leitura é o mesmo bloqueio, partindo de :read-only e sem a escrita extra.
@@ -279,7 +283,7 @@ describe('Codex: argumentos', () => {
     const work = codexSafetyArgs({ ...base, mode: 'workspace', network: 'loopback' });
     expect(work.slice(0, 8)).toEqual(ask.slice(0, 8));
     expect(configOf(work, 'permissions.mycodeny.extends')).toBe('":workspace"');
-    expect(configOf(work, 'permissions.mycodeny.network')).toBe('{enabled=true,domains={"127.0.0.1"="allow","localhost"="allow"}}');
+    expect(configOf(work, 'permissions.mycodeny.network')).toBe('{enabled=true,domains={"127.0.0.2"="allow"}}');
     expect(work.slice(-2)).toEqual(['--enable', 'network_proxy']);
 
     // Nunca o -s, nunca danger-full-access, nunca --dangerously-*, e é a mesma que o motor usa (buildCodexArgs só acrescenta o que é dele).
@@ -631,7 +635,7 @@ describe('CodexProcess', () => {
     noLegacySandbox(f.last().args);
     expect(baseOf(f.last().args)).toBe('":workspace"'); // resume: o mesmo perfil
     expect(f.last().args.join(' ')).not.toMatch(/danger|bypass/i);
-    expect((chat.snapshot().items.filter((i) => i.kind === 'notice').at(-1) as { text: string }).text).toMatch(/a escrita fica na pasta de trabalho e a rede só alcança a própria máquina/);
+    expect((chat.snapshot().items.filter((i) => i.kind === 'notice').at(-1) as { text: string }).text).toMatch(/a escrita fica na pasta de trabalho e a rede só alcança o Claudio’s Club \(127\.0\.0\.2\)/);
   });
 
   it('segredos: comando, saída e resposta passam pelo filtro (só o tipo vai para o aviso)', async () => {
@@ -872,7 +876,7 @@ describe('ChatManager: Claude ou Codex', () => {
               cwd: root,
               args: [],
               engine: 'codex',
-              codex: { autonomy: 'acceptEdits', model: 'gpt-6-sol', effort: 'high', instructions: 'Ficha', writableRoots: [], readOnlyPaths: [], secrets: { projectPath: root, home: path.join(root, 'sem-home'), mycoHome: path.join(root, 'sem-myco') }, threadId: null, threadFile: path.join(root, 'codex-1', 'codex-thread.json') },
+              codex: { autonomy: 'acceptEdits', model: 'gpt-6-sol', effort: 'high', instructions: 'Ficha', writableRoots: [], readOnlyPaths: [], secrets: { projectPath: root, home: path.join(root, 'sem-home'), mycoHome: path.join(root, 'sem-myco') }, threadId: null, threadFile: path.join(root, 'codex-1', 'codex-thread.json'), mycoUrl: 'http://127.0.0.2:4848' },
             }
           : { sessionId: sessionId ?? 'claude-1', cwd: root, args: ['--session-id', 'claude-1', '--model', 'sonnet'] },
       spawnImpl,
@@ -932,7 +936,7 @@ describe('ChatManager: Claude ou Codex', () => {
               cwd: root,
               args: [],
               engine: 'codex',
-              codex: { autonomy: 'manual', model: 'gpt-6-sol', effort: 'high', instructions: 'Ficha', writableRoots: [], readOnlyPaths: [], secrets: { projectPath: root, home: path.join(root, 'sem-home'), mycoHome: path.join(root, 'sem-myco') }, threadId: null, threadFile: path.join(root, 'codex-u', 'codex-thread.json') },
+              codex: { autonomy: 'manual', model: 'gpt-6-sol', effort: 'high', instructions: 'Ficha', writableRoots: [], readOnlyPaths: [], secrets: { projectPath: root, home: path.join(root, 'sem-home'), mycoHome: path.join(root, 'sem-myco') }, threadId: null, threadFile: path.join(root, 'codex-u', 'codex-thread.json'), mycoUrl: 'http://127.0.0.2:4848' },
             }
           : { sessionId: sessionId ?? 'claude-u', cwd: root, args: ['--session-id', 'claude-u', '--model', 'sonnet'] },
       spawnImpl: f.spawnImpl,
@@ -1020,7 +1024,7 @@ describe('ficha de quem roda no Codex', () => {
     expect(text).toContain('Sandbox somente leitura');
     expect(text).not.toContain('Pede aprovação');
     // Servidores: sem rede na sandbox, e nada de MCP de FTP nem ssh_config.
-    expect(text).toContain('a sandbox não tem internet (só 127.0.0.1 e localhost respondem)');
+    expect(text).toContain('a sandbox não tem internet (só o Claudio’s Club responde, em 127.0.0.2)');
     expect(text).not.toMatch(/ssh -F|scp -F/);
   });
 
@@ -1256,7 +1260,7 @@ describe('Codex: endurecimento (revisão)', () => {
     ok.start();
     ok.send('oi');
     await tick();
-    expect(configOf(f.last().args, 'permissions.mycodeny.network')).toBe('{enabled=true,domains={"127.0.0.1"="allow","localhost"="allow"}}');
+    expect(configOf(f.last().args, 'permissions.mycodeny.network')).toBe('{enabled=true,domains={"127.0.0.2"="allow"}}');
     expect(f.last().args).toContain('network_proxy');
     expect(noticesOf(ok)).toHaveLength(0);
 

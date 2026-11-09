@@ -74,6 +74,9 @@ describe('ficha', () => {
     expect(md).toContain('- Raquel (Infra, temporário)');
     expect(md).toContain('POST http://127.0.0.1:4848/api/projects/proj-x/tasks');
     expect(md).toContain('requestedBy: "ana-1a2b"');
+    // Todo pedido da ficha à API leva o token da conversa (MYCO_TOKEN, já no ambiente).
+    expect(md).toContain('com os cabeçalhos `x-myco: 1` e `x-myco-token: $MYCO_TOKEN`');
+    expect(md).toContain('GET http://127.0.0.1:4848/api/projects/proj-x/tasks (com o cabeçalho `x-myco-token: $MYCO_TOKEN`)');
     expect(md).toContain('Antes de chamar um agent (ou de fazer você mesmo): se a tarefa é da área de alguém da sua equipe');
     // O que é da área não fica com o gestor, ele repassa sem pesquisar o código e confere na medida do risco.
     expect(md).toContain('nem para o executor nem para você');
@@ -118,6 +121,9 @@ describe('ficha', () => {
     expect(hiring).toMatch(/use subagents[\s\S]*só para um papel contínuo/);
     expect(hiring).toContain('/api/projects/proj-x/staff/<id dele>/done');
     expect(hiring).toContain('"requestedBy": "ana-1a2b"');
+    expect(hiring).toContain('POST http://127.0.0.1:4848/api/projects/proj-x/staff com os cabeçalhos `x-myco: 1` e `x-myco-token: $MYCO_TOKEN`');
+    expect(hiring).toContain('/chat/send com {"sessionId", "staffId", "text"} (mesmos cabeçalhos)');
+    expect(hiring).toContain('(mesmos cabeçalhos; só vale para quem você contratou)');
     // O próprio temporário sabe que é temporário.
     expect(renderFicha(profile({ temporary: true }), ctx)).toContain('Você é temporário');
     expect(md).not.toContain('Você é temporário');
@@ -132,7 +138,8 @@ describe('ficha', () => {
       'CI do GitHub',
       'Bash em segundo plano',
       'ferramenta Monitor',
-      'curl -s -X POST -H "x-myco: 1"',
+      'curl -s -X POST -H "x-myco: 1" -H "x-myco-token: $MYCO_TOKEN"',
+      '`$MYCO_TOKEN` é o token dela',
       '"seconds": 120',
       '"text":',
       'http://127.0.0.1:4848/api/projects/proj-x/chat/$MYCO_SESSION_ID/wake`',

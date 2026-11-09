@@ -60,9 +60,9 @@ function teamSection(p: StaffProfile, ctx: FichaContext): string {
       : 'Estas pessoas reportam a você. O que for da área de alguém daqui vai para essa pessoa, nem para o executor nem para você, mesmo que seja uma correção pequena: ela tem a ficha, as regras e a memória dessa área e trabalha numa conversa curta, enquanto a sua é longa e cada passo seu nela custa mais. O que não tem dono vai para os agents do roteiro.',
     ctx.team.map((m) => `- ${m.name} (${m.role}${m.temporary ? ', temporário' : ''}), id \`${m.id}\`: ${first(m.mission)}`).join('\n'),
     'Repasse sem pesquisar: não leia o código para escrever a tarefa. Mande o pedido do usuário nas palavras dele, o critério de pronto e o que não mexer (com o motivo); cite arquivos só se já souber quais são. Quem é da área acha as linhas. Pedido que é inteiro de uma área vai como está, numa tarefa só para essa pessoa, sem você dividir nem planejar; um pedido com partes de áreas diferentes vira uma tarefa para cada pessoa.',
-    `Para passar uma tarefa: POST ${api}/tasks com o cabeçalho \`x-myco: 1\` e um JSON com title, description (o pedido, o critério de pronto e o que não mexer), staffId (o id da pessoa), requestedBy: "${p.id}" e start: true. A tarefa entra na fila dela (uma por vez) e aparece no quadro de tarefas.`,
+    `Para passar uma tarefa: POST ${api}/tasks com os cabeçalhos \`x-myco: 1\` e \`x-myco-token: $MYCO_TOKEN\` (o token da sua conversa, já no seu ambiente) e um JSON com title, description (o pedido, o critério de pronto e o que não mexer), staffId (o id da pessoa), requestedBy: "${p.id}" e start: true. A tarefa entra na fila dela (uma por vez) e aparece no quadro de tarefas.`,
     'Quando a pessoa entregar, o Claudio’s Club te avisa (na conversa em que você pediu) com o resumo do que ela disse e, se o projeto tiver testes, o resultado deles, já rodados: não rode de novo. Confira na medida do risco: para mudança pequena, `git diff --stat` e o resumo bastam; abra o diff inteiro só no que for arriscado (segurança, dados, servidor) ou se o --stat não bater com o resumo. Não procure prints nem arquivos dela: se faltar prova, peça. Se faltar algo, peça a ela na conversa da tarefa, não refaça você.',
-    `Para ver como estão: GET ${api}/tasks.`,
+    `Para ver como estão: GET ${api}/tasks (com o cabeçalho \`x-myco-token: $MYCO_TOKEN\`).`,
   ].join('\n');
 }
 
@@ -78,10 +78,10 @@ export const CODEX_AUTONOMY_LABEL: Record<Autonomy, string> = {
   manual:
     'Sandbox somente leitura: você lê arquivos e roda comandos que não gravam, mas não edita nada nem pede aprovação. Quando uma mudança for necessária, descreva-a (arquivo e trecho) e peça ao usuário para liberar mais autonomia.',
   acceptEdits:
-    'Edita arquivos sozinho dentro da pasta de trabalho e roda comandos na sandbox (sem internet: só a própria máquina responde, em 127.0.0.1 e localhost, onde fica a API do Claudio’s Club). O que a sandbox bloquear, não tente contornar: conte ao usuário.',
-  auto: 'Autônomo dentro da sandbox: edita arquivos na pasta de trabalho e roda comandos sem pedir (sem internet: só a própria máquina responde, em 127.0.0.1 e localhost). O que a sandbox bloquear, não contorne: avise o usuário antes de qualquer coisa que afete produção.',
+    'Edita arquivos sozinho dentro da pasta de trabalho e roda comandos na sandbox (sem internet: só o Claudio’s Club responde, em 127.0.0.2, o endereço da variável MYCO_URL, onde fica a API dele). O que a sandbox bloquear, não tente contornar: conte ao usuário.',
+  auto: 'Autônomo dentro da sandbox: edita arquivos na pasta de trabalho e roda comandos sem pedir (sem internet: só o Claudio’s Club responde, em 127.0.0.2, o endereço da variável MYCO_URL). O que a sandbox bloquear, não contorne: avise o usuário antes de qualquer coisa que afete produção.',
   bypassPermissions:
-    'Sem travas do Claudio’s Club, mas no Codex você segue na sandbox (escrita só na pasta de trabalho; sem internet, só a própria máquina responde, em 127.0.0.1 e localhost). Antes de algo irreversível ou que afete produção, avise e confirme; e nunca contorne os bloqueios de segredos.',
+    'Sem travas do Claudio’s Club, mas no Codex você segue na sandbox (escrita só na pasta de trabalho; sem internet, só o Claudio’s Club responde, em 127.0.0.2). Antes de algo irreversível ou que afete produção, avise e confirme; e nunca contorne os bloqueios de segredos.',
 };
 
 /** Programas de acesso remoto: quem não tem servidor na ficha não roda nenhum deles. */
@@ -129,7 +129,7 @@ function serversSection(p: StaffProfile, ctx: FichaContext): string {
   if (codexOf(p)) {
     return [
       '## Servidores',
-      'Nesta conversa a sandbox não tem internet (só 127.0.0.1 e localhost respondem): ssh, scp, sftp, rsync e FTP não funcionam, e `.vps` e `~/.ssh` não são para ler. Se a tarefa precisar de um servidor, avise o usuário: ele pode passá-la a um funcionário que rode no Claude.',
+      'Nesta conversa a sandbox não tem internet (só o Claudio’s Club responde, em 127.0.0.2): ssh, scp, sftp, rsync e FTP não funcionam, e `.vps` e `~/.ssh` não são para ler. Se a tarefa precisar de um servidor, avise o usuário: ele pode passá-la a um funcionário que rode no Claude.',
     ].join('\n');
   }
   if (!p.servers.length) {
@@ -374,7 +374,7 @@ function wakeSection(p: StaffProfile, ctx: FichaContext): string {
     codexOf(p)
       ? 'Para acompanhar algo que demora e não roda neste computador (deploy em outro servidor, CI do GitHub, um site), peça ao Claudio’s Club que te chame de novo nesta conversa. Para o que roda aqui, rode o comando e espere ele terminar.'
       : 'Para acompanhar algo que demora e não roda neste computador (deploy em outro servidor, CI do GitHub, um site), peça ao Claudio’s Club que te chame de novo nesta conversa. Para o que roda aqui, prefira Bash em segundo plano ou a ferramenta Monitor: eles já te acordam quando terminam.',
-    `Para agendar: \`curl -s -X POST -H "x-myco: 1" -H "content-type: application/json" -d '{"seconds": 120, "text": "Confira o deploy e conte como está"}' ${api}/chat/$MYCO_SESSION_ID/wake\` (\`$MYCO_SESSION_ID\` é o id desta conversa, já no seu ambiente). Na hora, o texto chega aqui como mensagem (a conversa reabre sozinha se tiver fechado): escreva o que conferir, sem aspas simples.`,
+    `Para agendar: \`curl -s -X POST -H "x-myco: 1" -H "x-myco-token: $MYCO_TOKEN" -H "content-type: application/json" -d '{"seconds": 120, "text": "Confira o deploy e conte como está"}' ${api}/chat/$MYCO_SESSION_ID/wake\` (\`$MYCO_SESSION_ID\` é o id desta conversa e \`$MYCO_TOKEN\` é o token dela, os dois já no seu ambiente). Na hora, o texto chega aqui como mensagem (a conversa reabre sozinha se tiver fechado): escreva o que conferir, sem aspas simples.`,
     `De 10 s a 24 h (\`seconds\` de 10 a 86400), um por conversa: agendar de novo troca o anterior. Para desfazer: o mesmo curl em \`${api}/chat/$MYCO_SESSION_ID/wake/cancel\`, sem corpo. Não agende em laço curto sem motivo: cada volta gasta consumo. Depois de 20 despertadores seguidos sem o usuário falar, o Claudio’s Club recusa o próximo: peça ao usuário antes de continuar acompanhando.`,
   ].join('\n');
 }
@@ -401,9 +401,9 @@ function hiringSection(p: StaffProfile, ctx: FichaContext): string {
     codexOf(p)
       ? 'Para trabalho pontual (uma tarefa, uma busca, uma revisão), faça você mesmo. Contrate um subfuncionário só para um papel contínuo, que precise de memória e conversa próprias, e só com o ok do usuário: diga em uma frase o papel e por que fazer você mesmo não basta.'
       : 'Para trabalho pontual (uma tarefa, uma busca, uma revisão), use subagents (ferramenta Agent): terminam junto com o trabalho e custam menos. Contrate um subfuncionário só para um papel contínuo, que precise de memória e conversa próprias, e só com o ok do usuário: diga em uma frase o papel e por que um subagent não basta.',
-    `Para contratar: POST ${api}/staff com o cabeçalho \`x-myco: 1\` e um JSON com name, role, mission, firstTask, autonomy (plan, manual, acceptEdits ou auto), reportsTo: ["${p.id}"] e launch: true. Ele abre numa conversa do Claudio’s Club; a resposta traz o id dele (profile.id) e a conversa (launch.sessionId).`,
-    `Para mandar outra mensagem a ele: POST ${api}/chat/send com {"sessionId", "staffId", "text"} (mesmo cabeçalho).`,
-    `Quem você contrata é temporário. Quando o trabalho dele terminar, encerre: POST ${api}/staff/<id dele>/done com {"note": "o que ele entregou", "requestedBy": "${p.id}"} (mesmo cabeçalho; só vale para quem você contratou). Ele sai do quadro (nada é apagado); parado há ${TEMP_IDLE_DAYS} dias, sai sozinho. Só o usuário efetiva.`,
+    `Para contratar: POST ${api}/staff com os cabeçalhos \`x-myco: 1\` e \`x-myco-token: $MYCO_TOKEN\` (o token da sua conversa, já no seu ambiente) e um JSON com name, role, mission, firstTask, autonomy (plan, manual, acceptEdits ou auto), reportsTo: ["${p.id}"] e launch: true. Ele abre numa conversa do Claudio’s Club; a resposta traz o id dele (profile.id) e a conversa (launch.sessionId).`,
+    `Para mandar outra mensagem a ele: POST ${api}/chat/send com {"sessionId", "staffId", "text"} (mesmos cabeçalhos).`,
+    `Quem você contrata é temporário. Quando o trabalho dele terminar, encerre: POST ${api}/staff/<id dele>/done com {"note": "o que ele entregou", "requestedBy": "${p.id}"} (mesmos cabeçalhos; só vale para quem você contratou). Ele sai do quadro (nada é apagado); parado há ${TEMP_IDLE_DAYS} dias, sai sozinho. Só o usuário efetiva.`,
     'Você não pode dar a um subfuncionário mais autonomia do que a sua.',
     codexOf(p) ? 'Quem você contrata roda no Codex como você, dentro da mesma sandbox; com `engine: "claude"` no pedido ele roda no Claude, mas só em `manual` (pede aprovação de tudo) e sem navegador, MCPs, servidores nem contratar.' : '',
   ]

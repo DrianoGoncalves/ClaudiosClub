@@ -20,11 +20,11 @@ import { CodexModels } from '../server/codexModels';
 //
 //   npx tsx scripts/codex-prova.ts [modelo] [--rede | --perfil | --plano-b | --busca]
 //
-// --rede: uma terceira mensagem pede um `curl` em 127.0.0.1 (um servidor deste script), para ver se a sandbox deixa a rede local
+// --rede: uma terceira mensagem pede um `curl` em 127.0.0.2 (um servidor deste script, o endereço que o Claudio’s Club usa para o Codex), para ver se a sandbox deixa a rede local
 // passar (o despertador e as tarefas da ficha dependem de curl no Claudio’s Club).
 // --perfil: prova o perfil de permissões (segredos, escrita e rede) em cada autonomia, num projeto falso em /var/tmp (o `.vps` de
 // mentira ora pasta, ora arquivo): `cat .vps` e `ls ~/.ssh` falham; ler e escrever os outros arquivos funciona em acceptEdits/auto e a
-// escrita falha em plan/manual; o curl em 127.0.0.1 responde e o https externo e o ssh falham. Sai com código 1 se algum item falhar.
+// escrita falha em plan/manual; o curl em 127.0.0.2 responde e o curl em 127.0.0.1, o https externo e o ssh falham. Sai com código 1 se algum item falhar.
 // --busca: a busca na web (ferramenta hospedada, fora da sandbox) está desligada: o modelo é mandado pesquisar na web e o script confere que nenhum
 // cartão WebSearch aparece e que ele diz que não tem a ferramenta. Sai com código 1 se a busca rodou.
 // --plano-b: a ficha pede um modelo que a conta recusa (`gpt-6.1-sol` por padrão; ou passe outro no [modelo]): o motor refaz a mensagem uma
@@ -57,7 +57,7 @@ async function main() {
   let port = 0;
   if (rede) {
     server = http.createServer((_req, res) => res.end('resposta-do-servidor-local'));
-    await new Promise<void>((r) => server!.listen(0, '127.0.0.1', r));
+    await new Promise<void>((r) => server!.listen(0, '127.0.0.2', r));
     port = (server.address() as { port: number }).port;
   }
 
@@ -91,7 +91,7 @@ async function main() {
     console.log(`motor: codex, modelo ${model}, sandbox read-only, pasta ${dir}`);
     await turn('Meu código de teste é pera-azul. Rode o comando `echo $MYCO_SESSION_ID` e responda só com o valor que saiu, mais "anotei o código".');
     await turn('Qual foi a minha primeira mensagem? Depois tente criar o arquivo teste.txt com o texto oi e diga se conseguiu.');
-    if (rede) await turn(`Rode exatamente: curl -s -m 5 http://127.0.0.1:${port}/ ; echo "codigo=$?"  e me diga o que saiu.`);
+    if (rede) await turn(`Rode exatamente: curl -s -m 5 http://127.0.0.2:${port}/ ; echo "codigo=$?"  e me diga o que saiu.`);
     const wrote = await fs.access(path.join(dir, 'teste.txt')).then(() => true, () => false);
     console.log(`\nteste.txt criado na pasta? ${wrote ? 'SIM (a sandbox deixou escrever!)' : 'não (só leitura, como esperado)'}`);
     console.log(`thread_id gravado: ${(await fs.readFile(threadFile, 'utf8').catch(() => '(nada)')).trim()}`);
@@ -107,8 +107,12 @@ async function main() {
 async function provaPerfil() {
   const base = await fs.mkdtemp(path.join('/var/tmp', 'myco-codex-perfil-'));
   const server = http.createServer((_req, res) => res.end('api-local'));
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  await new Promise<void>((r) => server.listen(0, '127.0.0.2', r));
   const port = (server.address() as { port: number }).port;
+  // O mesmo serviço também em 127.0.0.1: a sandbox NÃO pode alcançá-lo (o perfil só libera o 127.0.0.2).
+  const other = http.createServer((_req, res) => res.end('api-local'));
+  await new Promise<void>((r) => other.listen(0, '127.0.0.1', r));
+  const otherPort = (other.address() as { port: number }).port;
   const rows: Array<{ modo: string; item: string; passou: boolean; detalhe: string }> = [];
   const MARCA = 'segredo-falso-vps';
   const cases = [
@@ -154,7 +158,8 @@ async function provaPerfil() {
         'ls ~/.ssh',
         'cat leia-me.txt',
         'echo novo > escrito.txt',
-        `curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:${port}/`,
+        `curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.2:${port}/`,
+        `curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:${otherPort}/`,
         "curl -s -m 5 -o /dev/null -w '%{http_code}' https://example.com",
         'ssh -o BatchMode=yes -o ConnectTimeout=3 example.com true',
         'echo adulterada >> .myco/staff/ana.json',
@@ -199,8 +204,10 @@ async function provaPerfil() {
       check('ler os outros arquivos funciona', !!leia && !leia.isError && !!leia.result?.includes('conteudo-legivel'), leia ? `erro=${leia.isError}` : 'não rodou');
       const wr = find('escrito.txt');
       check(c.escreve ? 'escrever funciona' : 'escrever falha', !!wr && (c.escreve ? !wr.isError && gravou : wr.isError && !gravou), `${wr ? `erro=${wr.isError}` : 'não rodou'}, arquivo ${gravou ? 'criado' : 'não criado'}`);
-      const local = find(`127.0.0.1:${port}`);
-      check('curl em 127.0.0.1 responde (200)', !!local && !local.isError && local.result === '200', local ? JSON.stringify(local.result) : 'não rodou');
+      const local = find(`127.0.0.2:${port}`);
+      check('curl em 127.0.0.2 responde (200)', !!local && !local.isError && local.result === '200', local ? JSON.stringify(local.result) : 'não rodou');
+      const loopback = find(`127.0.0.1:${otherPort}`);
+      check('curl em 127.0.0.1 é recusado', !!loopback && loopback.result !== '200', loopback ? JSON.stringify(loopback.result) : 'não rodou');
       const ext = find('example.com', 'curl');
       check('curl https externo falha', !!ext && (ext.isError || ext.result !== '200'), ext ? JSON.stringify((ext.result ?? '').slice(0, 80)) : 'não rodou');
       const ficha = find('ana.json');
@@ -215,6 +222,7 @@ async function provaPerfil() {
     }
   } finally {
     server.close();
+    other.close();
     await fs.rm(base, { recursive: true, force: true });
   }
   console.log('\n=== resultado');

@@ -6,7 +6,7 @@ import { defaultRunner, type CodexRunner } from './adapters/codex';
 //
 // - Versão: o motor foi feito e provado a partir do Codex CLI 0.156.1 (perfil de permissões, `exec --json`, `exec resume`). Abaixo disso
 //   a engine codex é recusada, com a mensagem de como atualizar.
-// - `network_proxy`: a rede local só é segura com ele ligado. O perfil usa `network={enabled=true,domains={"127.0.0.1"="allow",…}}` e
+// - `network_proxy`: a rede local só é segura com ele ligado. O perfil usa `network={enabled=true,domains={"127.0.0.2"="allow"}}` e
 //   `--enable network_proxy`; num Codex em que o recurso mudou ou saiu, `enabled=true` sem o proxy liberaria a rede inteira. Por isso
 //   `codex features list` é conferido (com cache) e, sem o recurso, a conversa roda com a rede desligada e um aviso.
 
@@ -23,6 +23,20 @@ export interface CodexEnvStatus {
   networkProxy: boolean;
   /** Aviso para a conversa (ex.: segue sem rede porque falta o `network_proxy`). */
   notice: string | null;
+}
+
+/**
+ * A conferência do Codex mais o endereço dele: a sandbox só alcança o Claudio’s Club em `address` (127.0.0.2:<porta>, ver server/callers.ts). Se o
+ * servidor não conseguiu escutar ali (o macOS sem o alias do 127.0.0.2, por exemplo), a conversa roda sem rede nenhuma e avisa, em vez de rodar
+ * com uma rede que não chega à API. Sem o `network_proxy`, ou com erro, a conferência já diz tudo e passa como veio.
+ */
+export function withAppAddress(status: CodexEnvStatus, listener: { up: boolean; error: string | null }, address: string): CodexEnvStatus {
+  if (status.error || !status.networkProxy || listener.up) return status;
+  return {
+    ...status,
+    networkProxy: false,
+    notice: `O Claudio’s Club não conseguiu escutar em ${address}${listener.error ? ` (${listener.error})` : ''}, o endereço que a sandbox do Codex alcança: esta conversa roda sem rede nenhuma. O curl para a API (tarefas e despertador) não vai funcionar. No macOS: sudo ifconfig lo0 alias ${address.split(':')[0]} up, e reinicie o Claudio’s Club.`,
+  };
 }
 
 /** `codex-cli 0.167.0` → [0, 167, 0]; sem número, null. */

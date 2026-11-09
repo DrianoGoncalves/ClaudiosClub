@@ -510,3 +510,115 @@ describe('applyToCopies não espalha modelo e esforço entre motores', () => {
     expect(await readSeal(path.join(root, 'run2'), b, codexCopy.id)).toMatchObject({ engine: 'codex', autonomy: 'plan' });
   });
 });
+
+describe('contratação e mensagens: quem chama é o dono do token, não o que o pedido declara', () => {
+  const hireBody = { name: 'Sub', role: 'Ajudante', mission: 'Ajudar', autonomy: 'bypassPermissions', launch: false };
+  const boss = async (svc: StaffService, name: string, over: Record<string, unknown> = {}) =>
+    (await svc.hire('proj-id', { ...base, name, autonomy: 'auto', canHire: true, ...over }, true))!.profile;
+  type Who = { staffId: string | null; engine: 'claude' | 'codex'; sessionId: string };
+  const callerOf = (p: StaffProfile, engine: 'claude' | 'codex' = p.engine === 'codex' ? 'codex' : 'claude'): Who => ({ staffId: p.id, engine, sessionId: `sess-${p.id}` });
+
+  it('Codex alegando um gestor Claude com canHire: o gestor passa a ser quem chama e o contratado nasce Codex (ou travado), nunca um Claude solto', async () => {
+    const svc = service();
+    const claudeBoss = await boss(svc, 'Gestor Claude Alegado', { autonomy: 'bypassPermissions' });
+    const codexBoss = await boss(svc, 'Gestor Codex Que Chama', { engine: 'codex' });
+    // O pedido forja reportsTo = o gestor do Claude e pede um Claude: sem a regra, nasceria Claude `bypassPermissions` fora da sandbox.
+    const pedido = { ...hireBody, reportsTo: [claudeBoss.id], engine: 'claude', browser: true, mcps: ['github'], canHire: true };
+    const travado = (await svc.hire('proj-id', { ...pedido, name: 'Forjado Claude' }, false, callerOf(codexBoss)))!.profile;
+    expect(travado).toMatchObject({ reportsTo: [codexBoss.id], hiredBy: codexBoss.id, temporary: true, engine: 'claude', autonomy: 'manual', browser: false, mcps: [], canHire: false });
+    expect(await readSeal(path.join(root, 'run'), projectPath, travado.id)).toMatchObject({ engine: 'claude', autonomy: 'manual' });
+    expect((await readProfile(projectPath, travado.id))?.reportsTo).toEqual([codexBoss.id]);
+    // Sem pedir motor: nasce no Codex, no teto da autonomia de quem chama.
+    const semMotor = (await svc.hire('proj-id', { ...hireBody, name: 'Forjado Codex', reportsTo: [claudeBoss.id] }, false, callerOf(codexBoss)))!.profile;
+    expect(semMotor).toMatchObject({ reportsTo: [codexBoss.id], hiredBy: codexBoss.id, engine: 'codex', autonomy: 'auto' });
+    // Vários gestores no pedido: só quem chama.
+    const varios = (await svc.hire('proj-id', { ...hireBody, name: 'Forjado Varios', reportsTo: [claudeBoss.id, 'ninguem', codexBoss.id] }, false, callerOf(codexBoss)))!.profile;
+    expect(varios.reportsTo).toEqual([codexBoss.id]);
+    // O gestor alegado não ganhou ninguém na equipe.
+    const equipe = (await svc.directory()).people.filter((p) => p.reportsTo.includes(claudeBoss.id));
+    expect(equipe).toEqual([]);
+  });
+
+  it('sem reportsTo no pedido também vale quem chama; gestor que não pode contratar, ou conversa sem ficha, não contrata', async () => {
+    const svc = service();
+    const codexBoss = await boss(svc, 'Gestor Sem Reports', { engine: 'codex' });
+    const hired = (await svc.hire('proj-id', { ...hireBody, name: 'Sem Reports' }, false, callerOf(codexBoss)))!.profile;
+    expect(hired).toMatchObject({ reportsTo: [codexBoss.id], hiredBy: codexBoss.id, engine: 'codex' });
+    const semPoder = await boss(svc, 'Codex Sem Poder', { engine: 'codex', canHire: false });
+    await expect(svc.hire('proj-id', { ...hireBody, name: 'Nao', reportsTo: [codexBoss.id] }, false, callerOf(semPoder))).rejects.toThrow('só um funcionário com permissão de contratar');
+    await expect(svc.hire('proj-id', { ...hireBody, name: 'Nao', reportsTo: [codexBoss.id] }, false, { staffId: null, engine: 'claude' })).rejects.toThrow('com ficha');
+    await expect(svc.hire('proj-id', { ...hireBody, name: 'Nao' }, false, { staffId: 'nao-existe', engine: 'codex' })).rejects.toThrow('gestor não encontrado');
+  });
+
+  it('Claude com token em 127.0.0.1 também não se passa por outro: o contratado é dele, e Claude contratando Claude não ganha a trava do Codex', async () => {
+    const svc = service();
+    const a = await boss(svc, 'Claude A');
+    const b = await boss(svc, 'Claude B', { autonomy: 'bypassPermissions' });
+    const hired = (await svc.hire('proj-id', { ...hireBody, name: 'De A', reportsTo: [b.id], engine: 'claude' }, false, callerOf(a)))!.profile;
+    expect(hired).toMatchObject({ reportsTo: [a.id], hiredBy: a.id, engine: 'claude', autonomy: 'auto' }); // teto: a autonomia de quem chama, não a do alegado
+    expect(await readSeal(path.join(root, 'run'), projectPath, hired.id)).toBeNull();
+    // O token de uma conversa do Codex vale as regras de gestor Codex mesmo em 127.0.0.1.
+    const codexBoss = await boss(svc, 'Codex Por Token', { engine: 'codex' });
+    const sub = (await svc.hire('proj-id', { ...hireBody, name: 'Do Codex', reportsTo: [a.id], engine: 'claude' }, false, callerOf(codexBoss)))!.profile;
+    expect(sub).toMatchObject({ reportsTo: [codexBoss.id], autonomy: 'manual' });
+    // Pelo navegador (o dono), o `caller` não entra: o pedido vale como sempre.
+    const dono = (await svc.hire('proj-id', { ...hireBody, name: 'Do Dono', reportsTo: [b.id], engine: 'claude' }, true, callerOf(a)))!.profile;
+    expect(dono).toMatchObject({ reportsTo: [b.id], autonomy: 'bypassPermissions' });
+  });
+
+  it('mayReach: a sandbox só fala com a própria conversa e com as de quem reporta a ela', async () => {
+    const svc = service();
+    const gestor = await boss(svc, 'Gestor Reach', { engine: 'codex' });
+    const outro = await boss(svc, 'Outro Reach', { engine: 'codex' });
+    const sub = (await svc.hire('proj-id', { ...hireBody, name: 'Sub Reach', reportsTo: [gestor.id], launch: false }, false, callerOf(gestor)))!.profile;
+    const alheio = (await svc.hire('proj-id', { ...hireBody, name: 'Alheio Reach', reportsTo: [outro.id], launch: false }, false, callerOf(outro)))!.profile;
+    // As conversas ficam gravadas na ficha (o chatSpawn faz isso ao abrir).
+    await saveProfile(projectPath, { ...(await readProfile(projectPath, sub.id))!, sessions: [{ id: 'sess-sub', startedAt: 'x' }] });
+    await saveProfile(projectPath, { ...(await readProfile(projectPath, alheio.id))!, sessions: [{ id: 'sess-alheio', startedAt: 'x' }] });
+    await saveProfile(projectPath, { ...(await readProfile(projectPath, gestor.id))!, sessions: [{ id: `sess-${gestor.id}`, startedAt: 'x' }, { id: 'sess-gestor-velha', startedAt: 'x' }] });
+    const me = callerOf(gestor);
+    const may = (target: { sessionId: string | null; staffId: string | null }, caller: Who = me) => svc.mayReach('proj-id', caller, target);
+    // A própria conversa (a do token), com ou sem o funcionário dela junto.
+    expect(await may({ sessionId: me.sessionId, staffId: null })).toBe(true);
+    expect(await may({ sessionId: me.sessionId, staffId: gestor.id })).toBe(true);
+    expect(await may({ sessionId: me.sessionId, staffId: alheio.id })).toBe(false);
+    // Conversa de quem reporta a ele, ou uma nova dele; de quem não reporta, não.
+    expect(await may({ sessionId: 'sess-sub', staffId: sub.id })).toBe(true);
+    expect(await may({ sessionId: 'sess-sub', staffId: null })).toBe(true);
+    expect(await may({ sessionId: null, staffId: sub.id })).toBe(true);
+    expect(await may({ sessionId: 'sess-sub', staffId: alheio.id })).toBe(false);
+    expect(await may({ sessionId: 'sess-alheio', staffId: alheio.id })).toBe(false);
+    expect(await may({ sessionId: null, staffId: alheio.id })).toBe(false);
+    // Nem outra conversa dele mesmo, nem a de um desconhecido, nem uma conversa nova sem funcionário.
+    expect(await may({ sessionId: 'sess-gestor-velha', staffId: null })).toBe(false);
+    expect(await may({ sessionId: 'sess-nao-existe', staffId: null })).toBe(false);
+    expect(await may({ sessionId: null, staffId: null })).toBe(false);
+    expect(await may({ sessionId: null, staffId: gestor.id })).toBe(false);
+    // O gestor de fora não alcança o sub dele, e conversa sem ficha não alcança ninguém.
+    expect(await may({ sessionId: 'sess-sub', staffId: sub.id }, callerOf(outro))).toBe(false);
+    expect(await may({ sessionId: null, staffId: sub.id }, { staffId: null, sessionId: 's-livre', engine: 'codex' })).toBe(false);
+    // Projeto que não existe.
+    expect(await svc.mayReach('outro-projeto', me, { sessionId: me.sessionId, staffId: null })).toBe(false);
+  });
+
+  it('a ficha do Codex cita o 127.0.0.2 (codexUrl) e a do Claude, o 127.0.0.1; os dois mandam o x-myco-token nos curl', async () => {
+    const svc = service({ mycoUrl: 'http://127.0.0.1:4849', codexUrl: 'http://127.0.0.2:4849' });
+    const codex = await boss(svc, 'Ficha Codex Url', { engine: 'codex' });
+    const claude = await boss(svc, 'Ficha Claude Url');
+    const spawn = (await svc.chatSpawn('proj-id', null, codex.id))!;
+    expect(spawn.codex!.mycoUrl).toBe('http://127.0.0.2:4849');
+    expect(spawn.codex!.instructions).toContain('http://127.0.0.2:4849/api/projects/proj-id/staff');
+    expect(spawn.codex!.instructions).not.toContain('127.0.0.1');
+    expect(spawn.codex!.instructions).toContain('-H "x-myco-token: $MYCO_TOKEN"');
+    const md = await fs.readFile(fichaFile(projectPath, claude.id), 'utf8');
+    await svc.chatSpawn('proj-id', null, claude.id);
+    const mdClaude = await fs.readFile(fichaFile(projectPath, claude.id), 'utf8');
+    expect(md.length).toBeGreaterThan(0);
+    expect(mdClaude).toContain('http://127.0.0.1:4849/api/projects/proj-id/staff');
+    expect(mdClaude).not.toContain('127.0.0.2');
+    expect(mdClaude).toContain('-H "x-myco-token: $MYCO_TOKEN"');
+    // Sem codexUrl, o do Claude (os testes e quem não configura).
+    const sem = service({ mycoUrl: 'http://127.0.0.1:4850' });
+    expect((await sem.chatSpawn('proj-id', null, codex.id))!.codex!.mycoUrl).toBe('http://127.0.0.1:4850');
+  });
+});
