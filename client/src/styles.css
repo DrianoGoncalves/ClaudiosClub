@@ -1017,6 +1017,10 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 .auth-off { color: var(--danger); }
 .auth-wait { color: var(--idle); }
 .auth-warn { display: inline-flex; align-items: center; gap: 6px; }
+/* Nome do serviço ao lado do ícone: texto neutro (o semáforo fica no ícone; o amarelo/vermelho como texto não passa em contraste). */
+.auth-conn { display: inline-flex; align-items: center; gap: 4px; }
+.auth-name { font-family: var(--hand); font-weight: 700; font-size: 17px; line-height: 1; color: var(--ink); white-space: nowrap; }
+@media (max-width: 640px) { .auth-name { display: none; } }
 .toolbar .btn-login { color: #fff; background: var(--ink-red); border-color: var(--ink-red); font-weight: 600; }
 .toolbar .btn-login:hover:not(:disabled) { filter: brightness(1.08); border-color: var(--ink-red); }
 .toolbar-check { display: flex; align-items: center; gap: 4px; font-size: 13px; }

@@ -154,6 +154,15 @@ function UsageMeter({ limit, now, service, name }: { limit: UsageLimit; now: num
   );
 }
 
+/** Nome do serviço ao lado do ícone >_ (só texto; em tela estreita some, e o nome segue no title/aria-label do ícone). */
+function ConnName({ name }: { name: string }) {
+  return (
+    <span className="auth-name" aria-hidden="true">
+      {name}
+    </span>
+  );
+}
+
 /** Folga de cota ligada: bolinha "+" no canto do ícone; acabou, o ícone volta sem ela. */
 export function AuthBadge({ boost }: { boost: QuotaBoost | null }) {
   const [auth, setAuth] = useState<AuthStatus | null>(null);
@@ -181,17 +190,22 @@ export function AuthBadge({ boost }: { boost: QuotaBoost | null }) {
 
   if (!auth) return null;
 
+  const name = t('toolbar.claudeName');
+
   if (auth.loggedIn && auth.subscription) {
     const base = t('toolbar.cliSubscription', { method: auth.authMethod ?? '?' });
-    const label = boost ? `${base}. ${t('toolbar.boostOn', { until: formatBoostEnd(boost.until) })}` : base;
+    const label = `${name} · ${boost ? `${base}. ${t('toolbar.boostOn', { until: formatBoostEnd(boost.until) })}` : base}`;
     return (
-      <span className="auth-light auth-ok" role="img" aria-label={label} title={label}>
-        <TerminalFilledIcon />
-        {boost && (
-          <span className="auth-plus" aria-hidden="true">
-            +
-          </span>
-        )}
+      <span className="auth-conn">
+        <span className="auth-light auth-ok" role="img" aria-label={label} title={label}>
+          <TerminalFilledIcon />
+          {boost && (
+            <span className="auth-plus" aria-hidden="true">
+              +
+            </span>
+          )}
+        </span>
+        <ConnName name={name} />
       </span>
     );
   }
@@ -217,9 +231,10 @@ export function AuthBadge({ boost }: { boost: QuotaBoost | null }) {
   const light = waiting || (auth.cliFound && auth.loggedIn) ? 'auth-api' : 'auth-off';
   return (
     <span className="auth-warn">
-      <span className={`auth-light ${light}`} role="img" aria-label={reason} title={reason}>
+      <span className={`auth-light ${light}`} role="img" aria-label={`${name} · ${reason}`} title={`${name} · ${reason}`}>
         <TerminalFilledIcon />
       </span>
+      <ConnName name={name} />
       {auth.cliFound ? (
         <button className="btn-login" onClick={login} disabled={waiting} title={reason}>
           {waiting ? t('toolbar.waitingLogin') : auth.loggedIn ? t('toolbar.loginSubscription') : t('toolbar.loginClaude')}
@@ -338,8 +353,11 @@ export function CodexUsageLine({ codex }: { codex: CodexUsage }) {
           ))}
         </span>
       )}
-      <span className={`auth-light ${light}`} role="img" aria-label={iconLabel} title={iconLabel}>
-        <TerminalFilledIcon />
+      <span className="auth-conn">
+        <span className={`auth-light ${light}`} role="img" aria-label={iconLabel} title={iconLabel}>
+          <TerminalFilledIcon />
+        </span>
+        <ConnName name={name} />
       </span>
       {action}
       {shownError && <span className="error">{shownError}</span>}
