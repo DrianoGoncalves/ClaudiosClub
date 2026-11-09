@@ -20,6 +20,7 @@ import type {
   FtpConnectionInput,
   RewindPreview,
   GitState,
+  UncommittedReport,
   InboxItem,
   LaunchResult,
   LibrarySkill,
@@ -292,6 +293,8 @@ export const api = {
   user: () => get<UserScope>('/api/user'),
   live: () => get<LiveSession[]>('/api/live'),
   git: () => get<Record<string, GitState>>('/api/git'),
+  /** Arquivos sem commit do projeto, por conversa que os editou (só leitura). */
+  gitUncommitted: (projectId: string) => get<UncommittedReport>(`/api/projects/${projectId}/git/uncommitted`),
   roles: () => get<RoleEntry[]>('/api/roles'),
   saveRole: (role: Omit<RoleTemplate, 'id'> & { id?: string }) => post<RoleEntry[]>('/api/roles', role),
   deleteRole: (id: string) => post<RoleEntry[]>(`/api/roles/${id}/delete`),

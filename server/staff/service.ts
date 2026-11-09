@@ -280,9 +280,12 @@ export class StaffService {
   ): Promise<{ profile: StaffProfile; launch: LaunchResult | null } | null> {
     const project = await this.project(projectId);
     if (!project) return null;
+    // Pedido sem a chave `mcps` nasce sem MCP (o default do schema é null = todos, só para fichas antigas).
+    const bodyHasMcps = !!body && typeof body === 'object' && 'mcps' in body;
     const parsed = StaffInputSchema.safeParse(await withRole(body));
     if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'ficha inválida');
     const input = parsed.data;
+    if (!bodyHasMcps) input.mcps = [];
 
     const managers = await this.managers(project.path, input.reportsTo);
     const hirer = fromBrowser ? undefined : managers.find((m) => m.canHire);
@@ -292,6 +295,11 @@ export class StaffService {
       input.canHire = false; // subfuncionário contratado por outro não contrata em cascata
       input.servers = input.servers.filter((s) => hirer.servers.includes(s)); // nem acessa servidor que o gestor não acessa
       input.browser = input.browser && hirer.browser; // nem usa o navegador se o gestor não usa
+      if (hirer.mcps !== null) {
+        // Nem MCP que o gestor não usa (se o gestor tem todos, `null`, o pedido vale como veio).
+        const allowed = hirer.mcps;
+        input.mcps = (input.mcps ?? allowed).filter((n) => allowed.includes(n));
+      }
     }
 
     // Funcionário criado fora do Claudio’s Club: a sessão existente passa a ser dele, sem abrir outra.
@@ -396,7 +404,7 @@ export class StaffService {
       autonomy: src.autonomy,
       agents: src.agents,
       skills: src.skills,
-      mcps: src.mcps,
+      mcps: src.mcps ?? [], // "todos" da origem não são os MCPs deste projeto; a lista explícita segue
       knowledge: src.knowledge,
       rules: src.rules,
       doneWhen: src.doneWhen,

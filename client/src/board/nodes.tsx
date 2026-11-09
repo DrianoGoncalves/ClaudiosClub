@@ -420,13 +420,21 @@ function GitBadge({ git }: { git: GitState }) {
     git.dirty ? t(git.dirty === 1 ? 'board.gitFileOne' : 'board.gitFileOther', { n: git.dirty }) : t('board.gitNothingUncommitted'),
     git.upstream ? t('board.gitAheadBehind', { ahead: git.ahead, behind: git.behind, upstream: git.upstream }) : t('board.gitNoRemote'),
   ].join('\n');
-  return (
-    <div className={`bn-git ${git.dirty ? 'is-dirty' : ''} ${git.behind ? 'is-behind' : ''}`} title={tip}>
+  const cls = `bn-git ${git.dirty ? 'is-dirty' : ''} ${git.behind ? 'is-behind' : ''}`;
+  const inner = (
+    <>
       <span className="bn-git-branch">
         <BranchIcon /> {git.branch ?? t('board.detached')}
       </span>
       <span className="bn-git-state">{parts.join(' ')}</span>
-    </div>
+    </>
+  );
+  // Com arquivos sem commit, o selo abre a lista deles por conversa (o Board trata o clique, pela classe).
+  if (!git.dirty) return <div className={cls} title={tip}>{inner}</div>;
+  return (
+    <button type="button" className={`${cls} bn-git-btn nodrag`} title={`${tip}\n${t('board.gitListHint')}`} aria-haspopup="dialog">
+      {inner}
+    </button>
   );
 }
 

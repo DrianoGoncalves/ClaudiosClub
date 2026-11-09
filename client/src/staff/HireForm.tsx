@@ -171,8 +171,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     api.mcp(projectId).then(
       (list) => {
         setMcps(list);
-        // Ficha sem restrição (null) = todos marcados.
-        setMcpOn(new Set(editing?.mcps ?? list.map((m) => m.name)));
+        // Editando: ficha sem restrição (null) = todos marcados. Contratando (ou adotando): nenhum marcado.
+        setMcpOn(new Set(editing ? (editing.mcps ?? list.map((m) => m.name)) : []));
       },
       () => setMcps([]),
     );
@@ -241,7 +241,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const toggle = (list: string[], set: (v: string[]) => void, value: string) =>
     set(list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);
 
-  const allMcps = mcps !== null && mcps.every((m) => mcpOn.has(m.name));
+  // Lista vazia ou que não carregou não conta como "todos marcados" (senão gravaria null).
+  const allMcps = mcps !== null && mcps.length > 0 && mcps.every((m) => mcpOn.has(m.name));
 
   /** Escolher um roteiro marca os agents que ele usa, se o projeto tiver. */
   const pickPlaybook = (value: '' | Playbook) => {
@@ -290,8 +291,9 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       agents,
       skills,
       // Todos marcados = não restringir (a sessão também recebe os conectores da conta). No simples,
-      // nenhum: a sessão abre mais leve e rápida; quem precisa liga no avançado.
-      mcps: simpleHire ? [] : allMcps ? null : [...mcpOn],
+      // nenhum: a sessão abre mais leve e rápida; quem precisa liga no avançado. Sem lista (vazia ou
+      // falhou), editando mantém o que a ficha tinha; contratando, nenhum.
+      mcps: simpleHire ? [] : !mcps?.length ? (editing ? editing.mcps : []) : allMcps ? null : [...mcpOn],
       knowledge: lines(knowledge),
       rules: lines(rules),
       doneWhen,

@@ -73,7 +73,7 @@
 
 /* O tema vem de `data-theme` no <html> (theme.ts): "dark" quando escolhido ou quando o sistema é escuro. */
 :root[data-theme='dark'] {
-  --board-base: #1f2a25;
+  --board-base: #0f1a15;
   --board-dot-base: #34433b;
   --card-base: #27322c;
   --ink: #eef0ea;
@@ -286,7 +286,7 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 /* Voltar ao fim: fica preso no canto de baixo da lista (sticky), sem ocupar espaço (margem negativa = altura + gap). */
 .chat-bottom {
   position: sticky; bottom: 0; align-self: flex-end; flex: none; margin-top: -44px;
-  width: 36px; height: 36px; padding: 0; display: grid; place-items: center; cursor: pointer;
+  width: 32px; height: 32px; padding: 0; display: grid; place-items: center; cursor: pointer;
   color: var(--ink-blue); background: var(--panel); border: 1.5px solid var(--ink-blue); border-radius: 999px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
@@ -423,7 +423,7 @@ textarea.q-field { resize: vertical; }
 .chat-actions { display: flex; align-items: center; gap: 6px; }
 .chat-actions .chat-attach { margin-right: auto; border-color: transparent; }
 .chat-actions .chat-attach:focus-within { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); }
-.chat-actions :is(.chat-attach, .chat-stop, .chat-send) { width: 36px; height: 36px; padding: 0; display: inline-grid; place-items: center; }
+.chat-actions :is(.chat-attach, .chat-stop, .chat-send) { width: 24px; height: 24px; padding: 0; display: inline-grid; place-items: center; }
 /* Cargos (config → Cargos). */
 .roles { display: grid; gap: 8px; width: 100%; }
 .roles-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
@@ -1427,3 +1427,11 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 }
 /* Motivo de Aguardar: campo abaixo do cartão, com a largura da coluna. */
 .task-wait-reason { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; font-size: 12px; padding: 4px 8px; border: 1px dashed var(--line); border-radius: 8px; background: var(--card); color: var(--ink); }
+
+/* Selo do git com arquivos sem commit: botão que abre a lista por conversa (ver UncommittedPanel). */
+.bn-git-btn { font: inherit; color: inherit; background: transparent; border: 1px solid transparent; border-radius: 10px; padding: 1px 6px; cursor: pointer; }
+.bn-git-btn:hover, .bn-git-btn:focus-visible { border-color: var(--line); }
+.git-unc-modal { width: min(560px, 100%); }
+.git-unc-group { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); }
+.git-unc-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px; font-size: 13.5px; }
+.git-unc-also { color: var(--warn); }

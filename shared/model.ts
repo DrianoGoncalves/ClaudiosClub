@@ -107,6 +107,34 @@ export interface GitState {
   behind: number;
 }
 
+/** Arquivo sem commit do projeto. `also`: nomes das outras conversas que também o editaram (recentes). */
+export interface UncommittedFile {
+  path: string;
+  status: string;
+  also: string[];
+}
+
+/** Uma conversa do projeto que editou arquivos que ainda estão sem commit. */
+export interface UncommittedConversation {
+  sessionId: string;
+  /** Null em conversa sem ficha: não recebe pedido de commit. */
+  staffId: string | null;
+  /** Nome do funcionário, ou o assunto/título da conversa sem ficha. */
+  name: string;
+  topic: string | null;
+  files: UncommittedFile[];
+}
+
+/** Arquivos sem commit do projeto agrupados pela conversa que os editou (ver server/uncommitted.ts). */
+export interface UncommittedReport {
+  total: number;
+  /** Janela das conversas que contam (dias de atividade). */
+  recentDays: number;
+  conversations: UncommittedConversation[];
+  /** Sem conversa recente que os editou: à mão, ou em conversa antiga. */
+  unowned: UncommittedFile[];
+}
+
 export interface ProjectInventory {
   agents: Agent[];
   skills: Skill[];

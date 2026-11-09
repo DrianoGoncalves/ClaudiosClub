@@ -62,6 +62,8 @@ interface BoardViewProps {
   /** Tarefas em aberto por projeto (chip no cabeçalho, que abre o quadro de tarefas). */
   tasks: Record<string, { open: number; review: number }>;
   onOpenTasks: (projectId: string) => void;
+  /** Selo do git com arquivos sem commit (abre a lista por conversa). */
+  onOpenUncommitted: (projectId: string) => void;
   showArchived: boolean;
   onToggleArchived: (value: boolean) => void;
   animations: boolean;
@@ -315,6 +317,8 @@ export function BoardView(props: BoardViewProps) {
     if ((event.target as Element).closest('.bn-collapse')) return toggleRoom(n.id);
     // Chip de tarefas do cabeçalho: abre o quadro de tarefas do projeto.
     if ((event.target as Element).closest('.bn-tasks') && n.id.startsWith('p:')) return props.onOpenTasks(n.id.slice(2));
+    // Selo do git com sujeira: abre os arquivos sem commit, por conversa.
+    if ((event.target as Element).closest('.bn-git-btn') && n.id.startsWith('p:')) return props.onOpenUncommitted(n.id.slice(2));
     if (n.type === 'shelf') toggleShelf(n.id);
     // Clicar na parede da sala é clicar no projeto dela.
     else if (n.type === 'room') onSelect(n.data.owner);

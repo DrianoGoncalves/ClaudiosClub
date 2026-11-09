@@ -52,6 +52,7 @@ import { directoryPerson } from './staff/directory';
 import { HrPanel } from './staff/HrPanel';
 import { FilesBoard } from './files/FilesBoard';
 import { TasksBoard } from './tasks/TasksBoard';
+import { UncommittedPanel } from './board/UncommittedPanel';
 
 const ARCHIVED_KEY = 'myco.showArchived';
 const ANIMATIONS_KEY = 'myco.animations';
@@ -119,6 +120,8 @@ export function App() {
   }, []);
   /** Quadro de tarefas aberto (id do projeto). */
   const [tasksFor, setTasksFor] = useState<string | null>(null);
+  /** Arquivos sem commit por conversa, aberto pelo selo do git (id do projeto). */
+  const [uncFor, setUncFor] = useState<string | null>(null);
   /** Arquivos do projeto abertos (id do projeto). */
   const [filesFor, setFilesFor] = useState<string | null>(null);
   /** Arquivo que os Arquivos abrem já no editor (ex.: o guia SPEC.md). */
@@ -375,6 +378,7 @@ export function App() {
             git={git}
             tasks={taskSummary}
             onOpenTasks={setTasksFor}
+            onOpenUncommitted={setUncFor}
             showArchived={showArchived}
             onToggleArchived={toggle(ARCHIVED_KEY, setShowArchived)}
             animations={animations}
@@ -653,6 +657,17 @@ export function App() {
             setJumpConversation(t.kind === 'staff' && t.sessionId ? { node, sessionId: t.sessionId } : null);
             setSelectedId(node);
           }}
+        />
+      )}
+      {board && uncFor && (
+        <UncommittedPanel
+          projectId={uncFor}
+          projectName={board.projects.find((p) => p.id === uncFor)?.name ?? uncFor}
+          onOpenConversation={(staffId, sessionId) => {
+            setUncFor(null);
+            openNewConversation(uncFor, staffId, sessionId);
+          }}
+          onClose={() => setUncFor(null)}
         />
       )}
       {board && tasksFor && (

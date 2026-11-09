@@ -544,6 +544,41 @@ describe('StaffService', () => {
       const r = (await apiHire(svc, boss.id, { name: 'Limitado', roleId: dev.id }))!;
       expect(r.profile.autonomy).toBe('plan');
     });
+
+    it('MCP: sem a chave mcps no pedido, o contratado nasce sem nenhum (não todos)', async () => {
+      const svc = service();
+      const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestor Mcp Todos', autonomy: 'acceptEdits', canHire: true, mcps: null, launch: false }, true))!;
+      const r = (await apiHire(svc, boss.id, { roleId: dev.id }))!;
+      expect(r.profile.mcps).toEqual([]);
+    });
+
+    it('MCP: o contratado pela API só ganha MCP que o gestor tem', async () => {
+      const svc = service();
+      const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestor Mcp A', autonomy: 'acceptEdits', canHire: true, mcps: ['a'], launch: false }, true))!;
+      const r = (await apiHire(svc, boss.id, { roleId: dev.id, mcps: ['a', 'b'] }))!;
+      expect(r.profile.mcps).toEqual(['a']);
+    });
+
+    it('MCP: gestor com MCP e pedido sem a chave mcps: contratado sem nenhum', async () => {
+      const svc = service();
+      const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestor Mcp Sem', autonomy: 'acceptEdits', canHire: true, mcps: ['a'], launch: false }, true))!;
+      const r = (await apiHire(svc, boss.id, { roleId: dev.id }))!;
+      expect(r.profile.mcps).toEqual([]);
+    });
+  });
+
+  it('copiar de outro projeto: "todos" (null) da origem vira nenhum neste projeto', async () => {
+    const origin = await fs.mkdtemp(path.join(root, 'orig-'));
+    const other = { ...project(), id: 'orig', path: origin, name: 'Origem' };
+    const svc = new StaffService({ listProjects: async () => [project(), other] } as unknown as ToolAdapter, {
+      runDir: path.join(root, 'run'),
+      claudeConfigFile: claudeJson,
+      mycoUrl: 'x',
+      readUsage: noUsage,
+    });
+    const { profile: all } = (await svc.hire('orig', { ...input, name: 'Todos MCP', mcps: null, launch: false }, true))!;
+    const copy = (await svc.copyFrom('proj-id', { fromProjectId: 'orig', staffId: all.id }, true))!;
+    expect(copy.profile.mcps).toEqual([]);
   });
 
   it('temporário: abre numa conversa do Claudio’s Club, o gestor encerra, você efetiva; parado há dias sai sozinho', async () => {

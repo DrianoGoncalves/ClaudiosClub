@@ -33,6 +33,7 @@ import { AgentError, AgentInput, readAgentSource, saveAgent } from './adapters/c
 import { ChatError, ChatManager, findTranscript } from './chat/manager';
 import { AnnotationsField, AnswersField } from './chat/questions';
 import { touchedFiles } from './chatChanges';
+import { uncommittedByConversation } from './uncommitted';
 import { searchConversations } from './chatSearch';
 import { searchFiles } from './fileSearch';
 import { CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
@@ -79,7 +80,7 @@ import { pathKey, worktreeParent } from './adapters/claude/paths';
 import { boardFilter } from './board';
 import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
-import { AUTONOMY, readProfile } from './staff/store';
+import { AUTONOMY, listProjectStaff, readProfile } from './staff/store';
 import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
 import { TaskError, TaskService } from './tasks';
 import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefaultRole } from './roles';
@@ -1308,6 +1309,22 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       const projects = (await adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf);
       const states = await Promise.all(projects.map(async (p) => [p.id, await gitState(p.path)] as const));
       return Object.fromEntries(states.filter(([, s]) => s !== null));
+    },
+  ],
+  // Arquivos sem commit do projeto, por conversa que os editou (só leitura; ver server/uncommitted.ts).
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/git/uncommitted$`),
+    async ({ params: [pid] }) => {
+      const dir = await projectPathOf(pid!);
+      if (!dir) throw new BadRequest('projeto não encontrado');
+      const [sessions, staff] = await Promise.all([adapter.getProjectSessions(pid!), listProjectStaff(dir, pid!)]);
+      return uncommittedByConversation({
+        projectPath: dir,
+        sessions: sessions ?? [],
+        staff,
+        transcriptOf: (sid) => findTranscript(defaultTranscripts, pid!, sid),
+      });
     },
   ],
   ['GET', /^\/api\/auth$/, ({ url }) => getAuthStatus({ fresh: url.searchParams.has('fresh') })],
