@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Autonomy, ChatAttachment, ChatItem, CodexEffort, Engine, SendPriority, UiLevel } from '../../../shared/model';
+import type { Autonomy, ChatAttachment, ChatItem, CodexEffort, Engine, EngineOverride, SendPriority, UiLevel } from '../../../shared/model';
 import { alertError, api, isPairingError, type PermissionOpts } from '../api';
 import { ArrowDownIcon, FileDiffIcon, ImageIcon, McpIcon, SendIcon, StopIcon } from '../icons';
 import { t, locale } from '../i18n';
@@ -334,6 +334,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
             <Item
               key={item.id}
               item={item}
+              fallback={chat.fallback}
               onAnswer={chat.answer}
               executeAs={executeAs}
               onChangesRequested={() => input.current?.focus()}
@@ -656,7 +657,7 @@ function ContextMeter({ context }: { context: { used: number; window: number; pe
 }
 
 /** Resposta da IA com "Copiar" (o texto em markdown, como veio) no canto, no hover/foco. */
-function AssistantMessage({ id, text, at }: { id: string; text: string; at: string | null }) {
+function AssistantMessage({ id, text, at, fallback }: { id: string; text: string; at: string | null; fallback: EngineOverride | null }) {
   const [copied, copy] = useCopy();
   return (
     <div className="msg msg-assistant" data-item-id={id}>
@@ -664,7 +665,7 @@ function AssistantMessage({ id, text, at }: { id: string; text: string; at: stri
         {copied ? t('chat.mdCopied') : t('chat.mdCopy')}
       </button>
       <Markdown text={text} />
-      <MsgTime at={at} />
+      <MsgTime at={at} fallback={fallback} />
     </div>
   );
 }
@@ -673,6 +674,7 @@ type Answer = (id: string, allow: boolean, opts?: PermissionOpts) => Promise<voi
 
 function Item({
   item,
+  fallback,
   onAnswer,
   executeAs,
   onChangesRequested,
@@ -682,6 +684,7 @@ function Item({
   autoCancelled,
 }: {
   item: ChatItem;
+  fallback: EngineOverride | null;
   onAnswer: Answer;
   executeAs: Autonomy;
   onChangesRequested: () => void;
@@ -726,7 +729,7 @@ function Item({
       );
     }
     case 'assistant':
-      return item.text ? <AssistantMessage id={item.id} text={item.text} at={item.at} /> : null;
+      return item.text ? <AssistantMessage id={item.id} text={item.text} at={item.at} fallback={fallback} /> : null;
     case 'tool':
       return (
         <details className={`tool ${item.isError ? 'tool-error' : ''}`} data-item-id={item.id}>

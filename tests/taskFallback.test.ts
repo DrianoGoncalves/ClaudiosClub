@@ -2,13 +2,13 @@ import { promises as fs, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ChatItem, ChatSnapshot, EngineOverride, StaffProfile, Task, TaskFallback } from '../shared/model';
+import type { ChatItem, ChatSnapshot, EngineOverride, StaffProfile, Task, TaskFallback, UsageStopHit } from '../shared/model';
 import { CONTINUE_TEXT } from '../server/chat/autoContinue';
 import { RESUME_TEXT } from '../server/chat/items';
 import { PLAN_REJECTED_MESSAGE } from '../server/chat/manager';
 import type { LimitHit } from '../server/chat/usageLimit';
 import { oldConversationExtract } from '../server/fallbackHandoff';
-import { shouldFallback } from '../server/taskFallback';
+import { limitOfStop, limitReading, shouldFallback } from '../server/taskFallback';
 import { TaskService } from '../server/tasks';
 import { UsageStopError } from '../server/usageStop';
 
@@ -78,6 +78,38 @@ describe('shouldFallback (decisão pura)', () => {
   });
 });
 
+/** Trava da empresa (5h/7d) que passou da linha, com o reset em `minutes` (null = desconhecido). */
+const trava = (kind: 'five_hour' | 'seven_day', minutes: number | null, percent = 96): UsageStopHit => ({
+  kind,
+  percentUsed: percent,
+  limit: 95,
+  resetsAt: minutes === null ? null : new Date(NOW + minutes * MIN).toISOString(),
+});
+const orcamento: UsageStopHit = { kind: 'project_week', percentUsed: 40, limit: 30, resetsAt: null, projectName: 'Projeto X' };
+
+describe('linha de parada como limite do motor (taskFallback)', () => {
+  it('o orçamento do projeto não é limite do motor', () => {
+    expect(limitOfStop(orcamento)).toBeNull();
+  });
+
+  it('a janela 5h/7d vira limite, com o reset em ms; reset ilegível ou ausente: longe (null)', () => {
+    expect(limitOfStop(trava('five_hour', 120))).toEqual({ resetsAt: NOW + 120 * MIN, window: 'five_hour' });
+    expect(limitOfStop(trava('seven_day', null))).toEqual({ resetsAt: null, window: 'seven_day' });
+    expect(limitOfStop({ ...trava('five_hour', 120), resetsAt: 'nada' })).toEqual({ resetsAt: null, window: 'five_hour' });
+  });
+
+  it('limitReading: o do provedor vem antes; sem leitura de um dos dois, unknown; sem limite nenhum, null', () => {
+    const provedor = hit(120);
+    const empresa = limitOfStop(trava('five_hour', 60))!;
+    expect(limitReading(provedor, empresa)).toBe(provedor);
+    expect(limitReading(null, empresa)).toBe(empresa);
+    expect(limitReading('unknown', empresa)).toBe(empresa);
+    expect(limitReading('unknown', null)).toBe('unknown');
+    expect(limitReading(null, 'unknown')).toBe('unknown');
+    expect(limitReading(null, null)).toBeNull();
+  });
+});
+
 interface ProjectOpts {
   /** Limite agora de cada motor (padrão: sem limite). */
   limits?: Partial<Record<'claude' | 'codex', LimitHit | null | 'unknown'>>;
@@ -95,6 +127,8 @@ interface ProjectOpts {
   awaitingLimit?: boolean;
   /** A tarefa foi pedida por um gestor (Gil), na conversa `sess-gestor`. */
   manager?: boolean;
+  /** Trava de consumo de cada motor (linha 5h/7d ou orçamento; 'unknown' = sem leitura). Sem `force`, o envio barra o Claude. */
+  stop?: Partial<Record<'claude' | 'codex', UsageStopHit | 'unknown'>>;
 }
 
 /** Projeto com tarefas já gravadas em `.myco/tasks.json` e os fakes do TaskService. `log` guarda a ordem do que o serviço fez. */
@@ -123,7 +157,12 @@ async function project(dirName: string, tasks: Array<Partial<Task> & { id: strin
     send: async (...args: unknown[]) => {
       sent.push(args);
       log.push('send');
-      const err = opts.sendError?.(args[4] as EngineOverride | undefined);
+      // Como a trava real (sendNewConversation): sem `force`, o motor da conversa confere a trava dele (o Codex não passa por ela).
+      const override = args[4] as EngineOverride | undefined;
+      const engineOfSend = override?.engine ?? (ana.engine === 'codex' ? 'codex' : 'claude');
+      const barrada = opts.stop?.[engineOfSend];
+      if (!args[3] && engineOfSend === 'claude' && barrada && barrada !== 'unknown') throw new UsageStopError(barrada);
+      const err = opts.sendError?.(override);
       if (err) throw err;
       return 'sess-novo';
     },
@@ -141,6 +180,13 @@ async function project(dirName: string, tasks: Array<Partial<Task> & { id: strin
     assertRunnable: async (_p, _s, override) => {
       asserted.push(override);
       if (opts.assertError) throw opts.assertError;
+      const barrada = opts.stop?.[override.engine];
+      if (override.engine === 'claude' && barrada && barrada !== 'unknown') throw new UsageStopError(barrada);
+    },
+    stopHit: async (_p, _s, engine) => {
+      const s = opts.stop?.[engine] ?? null;
+      if (s === 'unknown') throw new Error('sem leitura do consumo');
+      return s;
     },
     cancelContinue: async (sid) => {
       log.push(`cancel:${sid}`);
@@ -388,6 +434,74 @@ describe('início da tarefa com o motor da ficha no limite', () => {
     expect(t).toMatchObject({ status: 'doing', sessionId: 'sess-novo' });
     expect(t.fallback).toBeUndefined();
     expect(sent[0]![4]).toBeUndefined();
+  });
+});
+
+describe('trava da empresa (5h/7d) dispara a troca como o limite do provedor (início)', () => {
+  it('trava 5h com fallback: abre no Codex (a trava do Claude não barra o Codex), com "passou da linha de parada" no texto, e grava a troca', async () => {
+    const { svc, sent, asserted } = await project('stop-troca', [{ id: 'st' }], withFallback, { stop: { claude: trava('five_hour', 120) } });
+    const t = (await svc.start('p', 'st'))!;
+    expect(asserted).toEqual([{ engine: 'codex', model: 'gpt-5' }]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]![4]).toEqual({ engine: 'codex', model: 'gpt-5' });
+    expect(String(sent[0]![2])).toContain('porque Claude passou da linha de parada (volta às ');
+    expect(t).toMatchObject({ status: 'doing', sessionId: 'sess-novo', fallback: { engine: 'codex', from: 'claude', fromSession: null, reason: 'limit-start' } });
+  });
+
+  it('trava 7d com reset desconhecido: longe, então troca', async () => {
+    const { svc, sent } = await project('stop-sem-reset', [{ id: 'sr' }], withFallback, { stop: { claude: trava('seven_day', null) } });
+    await svc.start('p', 'sr');
+    expect(sent[0]![4]).toEqual({ engine: 'codex', model: 'gpt-5' });
+  });
+
+  it('trava 5h com reset em 15 min ou menos: espera na fila, não troca', async () => {
+    const { svc, sent } = await project('stop-curto', [{ id: 'curto' }], withFallback, { stop: { claude: trava('five_hour', 10) } });
+    const t = (await svc.start('p', 'curto'))!;
+    expect(sent).toHaveLength(0);
+    expect(t.queuedAt).toBeTruthy();
+    expect(t.fallback).toBeUndefined();
+  });
+
+  it('orçamento do projeto não troca: o envio no motor da ficha é barrado, e a tarefa fica na fila sem troca', async () => {
+    const { svc, sent, asserted } = await project('stop-orcamento', [{ id: 'orc' }], withFallback, { stop: { claude: orcamento } });
+    const t = (await svc.start('p', 'orc'))!;
+    expect(asserted).toHaveLength(0);
+    expect(sent).toHaveLength(1); // tentou no motor da ficha; o orçamento barrou
+    expect(sent[0]![4]).toBeUndefined();
+    expect(t).toMatchObject({ status: 'todo', sessionId: null });
+    expect(t.queuedAt).toBeTruthy();
+    expect(t.fallback).toBeUndefined();
+  });
+
+  it('trava 5h sem fallback na ficha: fica na fila como antes, sem troca', async () => {
+    const { svc, sent } = await project('stop-sem', [{ id: 'sem' }], {}, { stop: { claude: trava('five_hour', 120) } });
+    const t = (await svc.start('p', 'sem'))!;
+    expect(sent).toHaveLength(1); // o envio no Claude foi barrado pela trava, como hoje
+    expect(sent[0]![4]).toBeUndefined();
+    expect(t).toMatchObject({ status: 'todo' });
+    expect(t.queuedAt).toBeTruthy();
+    expect(t.fallback).toBeUndefined();
+  });
+
+  it('Codex como principal: a trava 5h do Claude (secundário) barra a troca, e a tarefa espera', async () => {
+    const { svc, sent } = await project('stop-codex-claude', [{ id: 'cc' }], { engine: 'codex', model: 'gpt-6-sol', fallback: { engine: 'claude', model: 'sonnet' } }, {
+      limits: { codex: hit(120) },
+      stop: { claude: trava('five_hour', 120) },
+    });
+    const t = (await svc.start('p', 'cc'))!;
+    expect(sent).toHaveLength(0);
+    expect(t.queuedAt).toBeTruthy();
+    expect(t.history.at(-1)!.note).toMatch(/claude também está no limite/);
+  });
+
+  it('no meio do turno, o Codex (secundário) também respeita a trava do Claude: segue como antes, sem trocar', async () => {
+    const { svc, log, sent } = await project('meio-trava-claude', [{ id: 'meio', status: 'doing', sessionId: 'sess-velha' }], { engine: 'codex', model: 'gpt-6-sol', fallback: { engine: 'claude', model: 'sonnet' } }, {
+      limits: { codex: hit(120) },
+      stop: { claude: trava('five_hour', 120) },
+    });
+    await svc.onLimit({ sessionId: 'sess-velha', engine: 'codex', hit: hit(120) });
+    expect(log).toEqual(['settle']);
+    expect(sent).toHaveLength(0);
   });
 });
 

@@ -1,4 +1,4 @@
-import type { Autonomy, Engine, EngineOverride, StaffProfile, Task, TaskFallback } from '../shared/model';
+import type { Autonomy, Engine, EngineOverride, StaffProfile, Task, TaskFallback, UsageStopHit } from '../shared/model';
 import type { LimitHit } from './chat/usageLimit';
 
 // Troca de motor por tarefa: a ficha do funcionário tem um motor secundário (`fallback`), e a tarefa que bate no limite
@@ -12,6 +12,26 @@ export const FALLBACK_MIN_WAIT_MS = 15 * 60_000;
  * (sem leitura, não se sabe: não troca).
  */
 export type OtherEngineReading = LimitHit | null | 'unknown';
+
+/**
+ * A linha de parada da empresa (5h/7d) como `LimitHit`, para a mesma decisão do limite do provedor. O orçamento do projeto
+ * (`project_week`) não é limite do motor: não troca, então é null.
+ */
+export function limitOfStop(stop: UsageStopHit): LimitHit | null {
+  if (stop.kind === 'project_week') return null;
+  const t = stop.resetsAt ? Date.parse(stop.resetsAt) : NaN;
+  return { resetsAt: Number.isFinite(t) ? t : null, window: stop.kind };
+}
+
+/**
+ * O limite do motor para a troca: o do provedor (100%) se há; senão, a linha de parada da empresa. Sem nenhum dos dois, null.
+ * Sem leitura de um deles (e nenhum dá limite), 'unknown'.
+ */
+export function limitReading(provider: LimitHit | null | 'unknown', stop: LimitHit | null | 'unknown'): OtherEngineReading {
+  if (provider && provider !== 'unknown') return provider;
+  if (stop && stop !== 'unknown') return stop;
+  return provider === 'unknown' || stop === 'unknown' ? 'unknown' : null;
+}
 
 export interface FallbackDecision {
   ok: boolean;

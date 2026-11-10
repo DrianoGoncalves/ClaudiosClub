@@ -12,7 +12,7 @@
   --ink-blue: #1f4fbf;
   --ink-green: #1d7a46;
   --ink-green-soft: #8fc9a3;
-  --ink-red: #d43b2f;
+  --ink-red: #e43b2f;
   --ink-muted: #8a8f96;
   --highlight: rgba(255, 214, 10, 0.5);
   --highlight-solid: #ffd60a;
@@ -84,7 +84,7 @@
   --ink-blue: #9cc0ff;
   --ink-green: #9fe0b4;
   --ink-green-soft: #4f8a63;
-  --ink-red: #ff9c8f;
+  --ink-red: #ff8c8f;
   --ink-muted: #8fa098;
   --highlight: rgba(255, 230, 120, 0.25);
   --highlight-solid: #8a7a2e;
@@ -1058,7 +1058,7 @@ a.usage:hover .meter-track { border-color: var(--ink-blue); }
 a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 3px; }
 .usage-note { font-size: 12px; color: var(--muted); }
 /* Claude e Codex em duas linhas: a do Claude em cima, a do Codex logo abaixo, com o ícone de conexão depois das barras. */
-.usage-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.usage-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 0px; }
 .usage-line { display: flex; align-items: center; gap: 10px; }
 .usage-outdated { color: var(--waiting); }
 .meter { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; }

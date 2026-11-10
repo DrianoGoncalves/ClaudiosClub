@@ -2,16 +2,17 @@ import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { TASK_STATUSES, type Autonomy, type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type HeldMessage, type StaffProfile, type Task, type TaskCode, type TaskDelivery, type TaskFallback, type TaskHandoff, type TaskStatus, type TaskSummary, type TestRun } from '../shared/model';
+import { TASK_STATUSES, type Autonomy, type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type HeldMessage, type StaffProfile, type Task, type TaskCode, type TaskDelivery, type TaskFallback, type TaskHandoff, type TaskStatus, type TaskSummary, type TestRun, type UsageStopHit } from '../shared/model';
 import type { SecondOpinionInput } from './adapters/codex';
 import { buildHandoff, collectGit, oldConversationExtract } from './fallbackHandoff';
 import { DELIVERY_SUMMARY_MAX, parseDeliveryNotes } from './deliveryNotes';
 import { hasGuide } from './projectGuide';
 import type { LimitHit } from './chat/usageLimit';
 import { CLOSING_LINE, RESUME_TEXT } from './chat/items';
+import type { Caller } from './callers';
 import { writeAtomic } from './staff/store';
 import { checkpoint, CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
-import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf, otherEngine, overrideOfFallback, shouldFallback } from './taskFallback';
+import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf, limitReading, limitOfStop, otherEngine, overrideOfFallback, shouldFallback, type OtherEngineReading } from './taskFallback';
 import { UsageStopError } from './usageStop';
 
 // Tarefas por projeto: `<projeto>/.myco/tasks.json`, ao lado das fichas. Cada tarefa vai para um
@@ -104,6 +105,11 @@ export interface TaskServiceDeps {
   setOverride?: (sessionId: string, override: EngineOverride) => void;
   /** Limite agora de um motor: LimitHit, null (sem limite) ou 'unknown' (sem leitura: não troca às cegas). */
   readLimit?: (engine: Engine) => Promise<LimitHit | null | 'unknown'>;
+  /**
+   * A trava de consumo deste motor agora (5h/7d da empresa, ou o orçamento do projeto), como `usageStopHit` do servidor. Null se
+   * não barra. Só a janela (5h/7d) dispara a troca; o orçamento espera na fila, como antes.
+   */
+  stopHit?: (projectId: string, staffId: string, engine: Engine) => Promise<UsageStopHit | null>;
   /** Espera o agendamento do limite desta conversa terminar (se houve um), antes de cancelar o "continue". */
   settleLimit?: (sessionId: string) => Promise<void>;
   /** Tira o "continue" e o despertador da conversa (motivo: troca de motor). Devolve a hora do despertador, se havia um. */
@@ -118,6 +124,8 @@ export interface TaskServiceDeps {
   snapshot?: (projectId: string, sessionId: string) => Promise<ChatSnapshot>;
   /** Endereço da API para quem roda fora da sandbox (http://127.0.0.1:<porta>): com ele, a dúvida da tarefa vai ao gestor. */
   apiUrl?: string;
+  /** Endereço da sandbox que o Codex alcança (http://127.0.0.2:<porta>): a dúvida do Codex vai por ele. */
+  sandboxApiUrl?: string;
 }
 
 type Role = 'work' | 'review' | 'deploy';
@@ -434,7 +442,7 @@ export class TaskService {
   private async requesterLines(projectId: string, task: Task, engine: Engine): Promise<string[]> {
     const manager = task.requestedBy ? await this.deps.readProfile(projectId, task.requestedBy) : null;
     if (!manager) return [];
-    const api = engine === 'codex' ? null : (this.deps.apiUrl ?? null);
+    const api = engine === 'codex' ? (this.deps.sandboxApiUrl ?? null) : (this.deps.apiUrl ?? null);
     return [
       `Pedida por ${manager.name} (${manager.role}), que vai conferir a sua entrega.`,
       task.requestedSession && api ? askManagerLine(`${api}/api/projects/${projectId}`, manager, task.requestedSession) : '',
@@ -442,35 +450,40 @@ export class TaskService {
   }
 
   /**
-   * Antes de abrir a conversa: o motor da ficha está no limite agora? Sem limite (ou sem leitura), começa como sempre.
-   * No limite, troca para o secundário se `shouldFallback` deixa; senão, `wait`: a tarefa fica na fila até o limite baixar.
+   * Antes de abrir a conversa: o motor da ficha está no limite agora (o do provedor, ou a linha de parada 5h/7d da empresa)?
+   * Sem limite (ou sem leitura), começa como sempre. No limite, troca para o secundário se `shouldFallback` deixa; senão,
+   * `wait`: a tarefa fica na fila até o limite baixar. O orçamento do projeto não entra aqui: o envio o barra, como antes.
    */
   private async startPlan(projectId: string, task: Task, profile: StaffProfile): Promise<{ switch?: Switch; wait?: string }> {
     // Ficha sem secundário: nada muda em relação ao que já existia (sem pré-checagem; o limite aparece no envio, como sempre).
     if (!profile.fallback) return {};
     const engine: Engine = profile.engine === 'codex' ? 'codex' : 'claude';
     // Início da fila: leitura do Codex em cache (ver readLimit). Quem decide no meio do turno lê fresco.
-    const hit = await this.readLimit(engine, { cache: true });
+    const provider = await this.readLimit(engine, { cache: true });
+    const hit = limitReading(provider, await this.stopLimit(projectId, profile.id, engine));
     if (hit === null || hit === 'unknown') return {};
+    // Veio da linha de parada da empresa (o provedor não deu limite): o texto diz isso, e a volta vai entre parênteses.
+    const porStop = provider === null || provider === 'unknown';
+    const situacao = porStop ? 'passou da linha de parada' : 'está no limite';
     const secondary = profile.fallback;
-    const otherHit = await this.readLimit(otherEngine(engine), { cache: true });
+    const otherHit = await this.readingOf(projectId, profile.id, otherEngine(engine), true);
     const decision = shouldFallback({ task, profile, engine, hit, otherEngineHit: otherHit, now: Date.now() });
     const volta = atHour(hit.resetsAt);
-    const quando = volta ? ` até ${volta}` : '';
-    if (!decision.ok) return { wait: `${ENGINE_LABEL[engine]} no limite${quando} (${decision.reason})` };
+    const quando = volta ? (porStop ? ` (volta às ${volta})` : ` até ${volta}`) : '';
+    if (!decision.ok) return { wait: `${ENGINE_LABEL[engine]} ${situacao}${quando} (${decision.reason})` };
     const override = overrideOfFallback(secondary);
     // Pré-checagem: a conversa nova abre? Se não, fica na fila: sem enviar e sem gravar sessão.
     try {
       await this.deps.assertRunnable?.(projectId, profile.id, override);
     } catch (err) {
-      return { wait: `${ENGINE_LABEL[engine]} no limite${quando}; a troca para ${ENGINE_LABEL[secondary.engine]} não abre (${(err as Error).message})` };
+      return { wait: `${ENGINE_LABEL[engine]} ${situacao}${quando}; a troca para ${ENGINE_LABEL[secondary.engine]} não abre (${(err as Error).message})` };
     }
     return {
       switch: {
         override,
         fallback: { ...override, from: engine, at: Date.now(), fromSession: null, reason: 'limit-start' },
-        line: `Você está no motor secundário (${ENGINE_LABEL[secondary.engine]}) porque ${ENGINE_LABEL[engine]} está no limite${quando}.`,
-        note: `${ENGINE_LABEL[engine]} no limite: começou no motor secundário (${ENGINE_LABEL[secondary.engine]})`,
+        line: `Você está no motor secundário (${ENGINE_LABEL[secondary.engine]}) porque ${ENGINE_LABEL[engine]} ${situacao}${quando}.`,
+        note: `${ENGINE_LABEL[engine]} ${situacao}: começou no motor secundário (${ENGINE_LABEL[secondary.engine]})`,
       },
     };
   }
@@ -485,6 +498,21 @@ export class TaskService {
     const value: LimitHit | null | 'unknown' = this.deps.readLimit ? await this.deps.readLimit(engine).catch(() => 'unknown' as const) : 'unknown';
     if (useCache) this.codexLimit = { at: Date.now(), value };
     return value;
+  }
+
+  /**
+   * A linha de parada da empresa (5h/7d) do motor, como limite (ver `limitOfStop`). Sem o gancho (`stopHit`), ou sem trava: null.
+   * Erro ao ler = 'unknown' (não troca às cegas).
+   */
+  private async stopLimit(projectId: string, staffId: string, engine: Engine): Promise<LimitHit | null | 'unknown'> {
+    if (!this.deps.stopHit) return null;
+    const stop = await this.deps.stopHit(projectId, staffId, engine).catch(() => 'unknown' as const);
+    return stop === 'unknown' ? 'unknown' : stop ? limitOfStop(stop) : null;
+  }
+
+  /** O limite de um motor para a troca: o do provedor e a linha de parada da empresa juntos (ver `limitReading`). */
+  private async readingOf(projectId: string, staffId: string, engine: Engine, cache: boolean): Promise<OtherEngineReading> {
+    return limitReading(await this.readLimit(engine, { cache }), await this.stopLimit(projectId, staffId, engine));
   }
 
   /**
@@ -508,7 +536,7 @@ export class TaskService {
       // Só a tarefa em andamento troca: parada, em revisão ou pronta, a conversa não é de quem decide trocar de motor.
       if (task.status !== 'doing' && task.status !== 'planning') return;
       const secondary = profile.fallback;
-      const decision = shouldFallback({ task, profile, engine: ev.engine, hit: ev.hit, otherEngineHit: await this.readLimit(otherEngine(ev.engine)), now: Date.now() });
+      const decision = shouldFallback({ task, profile, engine: ev.engine, hit: ev.hit, otherEngineHit: await this.readingOf(projectId, staffId, otherEngine(ev.engine), false), now: Date.now() });
       if (!decision.ok) {
         await this.change(projectId, taskId, (t) => noted(t, `limite do ${ENGINE_LABEL[ev.engine]} no meio do turno: segue como antes (${decision.reason})`));
         return;
@@ -609,6 +637,29 @@ export class TaskService {
     const where = await this.where(sessionId);
     if (where?.role !== 'work' || where.projectId !== projectId) return null;
     return ((await this.list(projectId)) ?? []).find((t) => t.id === where.taskId) ?? null;
+  }
+
+  /**
+   * Codex-only exception for a task worker's clarification message to its requester. The source
+   * session, active task, requester identity, and requester session must all match the recorded task.
+   */
+  async mayAskRequester(
+    projectId: string,
+    caller: Caller | null,
+    target: { sessionId: string | null; staffId: string | null },
+  ): Promise<boolean> {
+    if (!caller?.sandbox || caller.engine !== 'codex' || caller.projectId !== projectId || !caller.staffId || !target.sessionId || !target.staffId) {
+      return false;
+    }
+    const tasks = await this.list(projectId);
+    return !!tasks?.some(
+      (task) =>
+        (task.status === 'planning' || task.status === 'doing') &&
+        task.staffId === caller.staffId &&
+        task.sessionId === caller.sessionId &&
+        task.requestedBy === target.staffId &&
+        task.requestedSession === target.sessionId,
+    );
   }
 
   /** As mensagens guardadas desta conversa, como itens do chat. */

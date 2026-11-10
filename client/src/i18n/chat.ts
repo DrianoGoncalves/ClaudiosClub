@@ -78,6 +78,8 @@ export default defineMessages({
 
     'chat.moreOptions': 'Mais opções',
     'chat.fallbackBadge': 'No motor secundário: {engine} · {model}',
+    'chat.fallbackMessage': 'secundário: {engine}',
+    'chat.fallbackModelHint': 'Modelo: {model}',
     'chat.fallbackHint': 'O motor principal, {from}, estava no limite de uso. Esta conversa roda no secundário da ficha: o código e a conversa vão para o outro provedor.',
     'chat.compact': 'Compactar',
     'chat.compacting': 'Compactando…',
@@ -284,6 +286,8 @@ export default defineMessages({
 
     'chat.moreOptions': 'More options',
     'chat.fallbackBadge': 'On the secondary engine: {engine} · {model}',
+    'chat.fallbackMessage': 'secondary: {engine}',
+    'chat.fallbackModelHint': 'Model: {model}',
     'chat.fallbackHint': 'The main engine, {from}, was at its usage limit. This chat runs on the profile’s secondary: the code and the conversation go to the other provider.',
     'chat.compact': 'Compact',
     'chat.compacting': 'Compacting…',
@@ -490,6 +494,8 @@ export default defineMessages({
 
     'chat.moreOptions': 'Más opciones',
     'chat.fallbackBadge': 'En el motor secundario: {engine} · {model}',
+    'chat.fallbackMessage': 'secundario: {engine}',
+    'chat.fallbackModelHint': 'Modelo: {model}',
     'chat.fallbackHint': 'El motor principal, {from}, estaba en su límite de uso. Esta conversación corre en el secundario de la ficha: el código y la conversación van al otro proveedor.',
     'chat.compact': 'Compactar',
     'chat.compacting': 'Compactando…',

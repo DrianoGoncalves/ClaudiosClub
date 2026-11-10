@@ -398,6 +398,8 @@ const tasks = new TaskService({
     return usage && usage.limits.length ? claudeLimitHit(usage) : 'unknown';
   },
   settleLimit: (sessionId) => chats.settledLimit(sessionId),
+  // A linha de parada 5h/7d da empresa conta para a troca de motor (o orçamento do projeto não: espera, como antes).
+  stopHit: usageStopHit,
   // Tira o "continue" e o despertador da conversa antiga: ela não volta sozinha no motor principal. Devolve a hora do despertador.
   cancelContinue: async (sessionId) => {
     const wake = await wakeups.get(sessionId);
