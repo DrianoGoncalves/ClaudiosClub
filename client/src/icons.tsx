@@ -149,6 +149,15 @@ export function UserPlusIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+/** Balão de conversa (Lucide message-square): abrir o chat do funcionário. */
+export function MessageIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
 /** Duas pessoas: o RH (todos os funcionários de todos os projetos). */
 export function UsersIcon({ size = 15 }: { size?: number }) {
   return (
@@ -193,6 +202,16 @@ export function ChartIcon({ size = 15 }: { size?: number }) {
       <path d="M8 17v-3" />
       <path d="M13 17V5" />
       <path d="M18 17V9" />
+    </svg>
+  );
+}
+
+/** Lupa: analisar (revisão de custo do funcionário). */
+export function SearchIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.3-4.3" />
     </svg>
   );
 }

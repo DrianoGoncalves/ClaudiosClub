@@ -15,18 +15,20 @@ import type {
   ContextSwitch,
   ConversationHit,
   CostReport,
+  CostReview,
+  CostReviewApplyResult,
   CodexEffort,
   Effort,
   FtpConnection,
   FtpConnectionInput,
   RewindPreview,
   GitState,
+  UncommittedReport,
   InboxItem,
   LaunchResult,
   LibrarySkill,
   LiveSession,
   McpServerInfo,
-  ModelBenchmarks,
   OrchestrationReport,
   Project,
   ProjectAttachment,
@@ -59,6 +61,15 @@ import type {
 } from '../../shared/model';
 import type { RoleEntry, RoleTemplate } from '../../shared/roles';
 import { locale, t } from './i18n';
+import type { GuideAction } from './detail/guideActions';
+import type { McpSaveBody, McpScope, McpServer } from './office/mcpForm';
+
+/** Um MCP pelo endereço: escopo, projeto (nos de projeto) e nome. */
+export interface McpRef {
+  scope: McpScope;
+  projectId?: string;
+  name: string;
+}
 
 /** Leituras tentam de novo só em erro de rede (servidor reiniciando): 3 tentativas no total. */
 const GET_ATTEMPTS = 3;
@@ -83,11 +94,20 @@ async function get<T>(url: string): Promise<T> {
 }
 
 /** Ações levam o cabeçalho `x-myco`, que o servidor exige em todo POST. Não repetem: um envio repetido duplicaria a ação (ex.: a mensagem do chat). */
-async function post<T>(url: string, body: unknown = {}, headers: Record<string, string> = {}): Promise<T> {
+function post<T>(url: string, body: unknown = {}, headers: Record<string, string> = {}): Promise<T> {
+  return send<T>('POST', url, body, headers);
+}
+
+/** Gravar um recurso inteiro (a memória pessoal): mesmo cabeçalho e mesma recusa por pareamento do POST. */
+function put<T>(url: string, body: unknown): Promise<T> {
+  return send<T>('PUT', url, body, {});
+}
+
+async function send<T>(method: 'POST' | 'PUT', url: string, body: unknown, headers: Record<string, string>): Promise<T> {
   let res: Response;
   try {
     res = await fetch(url, {
-      method: 'POST',
+      method,
       headers: { 'content-type': 'application/json', 'x-myco': '1', ...headers },
       body: JSON.stringify(body),
     });
@@ -97,7 +117,7 @@ async function post<T>(url: string, body: unknown = {}, headers: Record<string, 
   }
   const data = (await res.json().catch(() => ({}))) as T & { error?: string; code?: string; hit?: UsageStopHit };
   pairingSignal(url, res.ok, data);
-  if (!res.ok) throw new ApiError(errorMessage(data, `${url}: ${res.status}`), data.code ?? null, data.hit ?? null);
+  if (!res.ok) throw new ApiError(errorMessage(data, `${url}: ${res.status}`), data.code ?? null, data.hit ?? null, data);
   return data;
 }
 
@@ -131,8 +151,24 @@ export class ApiError extends Error {
     message: string,
     readonly code: string | null,
     readonly hit: UsageStopHit | null,
+    /** O corpo da recusa, para campos que só um erro tem (ex.: `openTasks` do `open-tasks`). */
+    readonly details: Record<string, unknown> = {},
   ) {
     super(message);
+  }
+}
+
+/**
+ * Excluir ficha: se o servidor recusar por tarefas abertas no quadro (409 `open-tasks`), pergunta de novo e,
+ * confirmado, repete com `force` (as tarefas ficam sem responsável). Recusado, devolve null; outro erro sobe.
+ */
+export async function deleteStaffConfirm(projectId: string, staffId: string, ask: (openTasks: number) => boolean) {
+  try {
+    return await api.deleteStaff(projectId, staffId);
+  } catch (err) {
+    if (!(err instanceof ApiError) || err.code !== 'open-tasks') throw err;
+    if (!ask(Number(err.details.openTasks) || 0)) return null;
+    return api.deleteStaff(projectId, staffId, true);
   }
 }
 
@@ -219,6 +255,15 @@ export interface DirectoryStaff extends DirectoryPerson {
   reportsTo: string[];
 }
 
+/**
+ * A memória pessoal de uma pessoa (GET/PUT /api/people/:personId/memory). `ok`/`empty`: confiável; `fallback`: o arquivo
+ * foi mexido por fora e vale a versão anterior; `tampered`: mexido sem versão boa (nada é injetado); `unavailable`: cofre fora.
+ */
+export interface PersonMemory {
+  text: string;
+  status: 'ok' | 'empty' | 'fallback' | 'tampered' | 'unavailable';
+}
+
 /** Uma ficha num projeto (ligar/desligar cópias). */
 export interface StaffRef {
   projectId: string;
@@ -256,6 +301,8 @@ export const api = {
   user: () => get<UserScope>('/api/user'),
   live: () => get<LiveSession[]>('/api/live'),
   git: () => get<Record<string, GitState>>('/api/git'),
+  /** Arquivos sem commit do projeto, por conversa que os editou (só leitura). */
+  gitUncommitted: (projectId: string) => get<UncommittedReport>(`/api/projects/${projectId}/git/uncommitted`),
   roles: () => get<RoleEntry[]>('/api/roles'),
   saveRole: (role: Omit<RoleTemplate, 'id'> & { id?: string }) => post<RoleEntry[]>('/api/roles', role),
   deleteRole: (id: string) => post<RoleEntry[]>(`/api/roles/${id}/delete`),
@@ -272,8 +319,12 @@ export const api = {
   pairClaim: (id: string) => post<{ paired: boolean }>('/api/pair/claim', {}, { 'x-pair-request': id }),
   updateStatus: (fresh = false) => get<UpdateStatus>(fresh ? '/api/update?fresh=1' : '/api/update'),
   applyUpdate: () => post<{ from: string; to: string; installed: boolean; restarting: boolean }>('/api/update'),
-  usage: () => get<AccountUsage>('/api/usage'),
-  models: (refresh = false) => post<ModelBenchmarks>('/api/models', { refresh }),
+  /** `fresh`: relê o login do Codex na hora (a tela pede enquanto espera o login). */
+  usage: (fresh = false) => get<AccountUsage>(fresh ? '/api/usage?fresh=1' : '/api/usage'),
+  /** Instala o Codex CLI (npm) pelo Claudio’s Club; se já estiver, não faz nada. `error` é o texto curto para o usuário. */
+  installCodex: () => post<{ ok: boolean; error: string | null }>('/api/codex/install'),
+  /** Abre o terminal do `codex login` (o usuário conclui no navegador). */
+  loginCodex: () => post<{ ok: boolean; error: string | null }>('/api/codex/login'),
   browser: (fresh = false) => get<BrowserStatus>(fresh ? '/api/browser?fresh=1' : '/api/browser'),
   auth: (fresh = false) => get<AuthStatus>(fresh ? '/api/auth?fresh=1' : '/api/auth'),
   login: () => post<{ ok: boolean; command: string; error: string | null }>('/api/auth/login'),
@@ -307,6 +358,12 @@ export const api = {
   orchestration: (sessionId: string) => get<OrchestrationReport>(`/api/sessions/${sessionId}/orchestration`),
   /** Economia por sessão nos últimos `days` dias; null = desde sempre. */
   savings: (days: number | null) => get<SavingsReport>(days === null ? '/api/savings' : `/api/savings?days=${days}`),
+  /** Revisão de custo do funcionário nos últimos `days` dias (1 a 3650): regras fixas, sem IA; leva alguns segundos. */
+  costReview: (projectId: string, staffId: string, days: number) =>
+    get<CostReview>(`/api/projects/${encodeURIComponent(projectId)}/staff/${encodeURIComponent(staffId)}/cost-review?days=${days}`),
+  /** Aplica os ajustes dos achados `ids` (o servidor refaz a revisão de `days` dias e aplica só o que ainda dispara). Não repete: tarefa e regra duplicariam. */
+  applyCostReview: (projectId: string, staffId: string, ids: string[], days: number) =>
+    post<CostReviewApplyResult>(`/api/projects/${encodeURIComponent(projectId)}/staff/${encodeURIComponent(staffId)}/cost-review/apply`, { ids, days }),
   markRun: (sessionId: string, runId: string, mark: RunMark | null) =>
     post<Record<string, RunMark>>(`/api/sessions/${sessionId}/marks`, { runId, mark }),
   mcp: (projectId: string) => get<McpServerInfo[]>(`/api/projects/${projectId}/mcp`),
@@ -317,6 +374,12 @@ export const api = {
   saveLibrarySkill: (s: { originalName?: string; name: string; description: string; body: string }) => post<LibrarySkill>('/api/skills/library', s),
   removeLibrarySkill: (name: string) => post<{ ok: boolean }>(`/api/skills/library/${encodeURIComponent(name)}/delete`),
   importSkill: (name: string) => post<LibrarySkill>('/api/skills/library/import', { name }),
+  // MCPs da conta e dos projetos (Configurações › MCPs). Valores de env/cabeçalho só vão; a lista traz só a chave e `set`.
+  mcpServers: (projectId: string | null) =>
+    get<{ servers: McpServer[] }>(`/api/mcp-servers${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+  saveMcpServer: (body: McpSaveBody) => post<{ server: McpServer }>('/api/mcp-servers/save', body),
+  deleteMcpServer: (ref: McpRef) => post<{ ok: true }>('/api/mcp-servers/delete', ref),
+  testMcpServer: (ref: McpRef) => post<{ ok: boolean; tools: string[]; error?: string }>('/api/mcp-servers/test', ref),
   serverLog: (projectId: string, staffId: string) => get<ServerAccess[]>(`/api/projects/${projectId}/staff/${staffId}/server-log`),
   // Conexões SSH e FTP do projeto (a lista também é POST: exige a página do Claudio’s Club).
   connections: (projectId: string) => post<AnyConnection[]>(`/api/projects/${projectId}/connections/list`),
@@ -352,8 +415,9 @@ export const api = {
   linkStaff: (from: StaffRef, to: StaffRef) => post<{ personId: string }>('/api/staff-link', { from, to }),
   unlinkStaff: (ref: StaffRef) => post<{ ok: true }>('/api/staff-unlink', ref),
   /** Apaga ficha, memória, foto e histórico; `orphaned` = subordinados que ficaram sem chefe. 409 se a conversa dele estiver trabalhando. */
-  deleteStaff: (projectId: string, staffId: string) =>
-    post<{ ok: true; orphaned: string[] }>(`/api/projects/${projectId}/staff/${staffId}/delete`),
+  /** `force`: exclui mesmo com tarefas abertas no quadro (ver deleteStaffConfirm). */
+  deleteStaff: (projectId: string, staffId: string, force = false) =>
+    post<{ ok: true; orphaned: string[] }>(`/api/projects/${projectId}/staff/${staffId}/delete`, force ? { force: true } : {}),
   /** Cópia de uma ficha de outro projeto, com id novo; a memória só vai se pedir; `reportsTo` = chefes daqui. */
   copyStaff: (projectId: string, input: { fromProjectId: string; staffId: string; withMemory: boolean; reportsTo?: string[] }) =>
     post<{ profile: StaffProfile }>(`/api/projects/${projectId}/staff/copy`, input),
@@ -431,12 +495,12 @@ export const api = {
   taskDeploy: (projectId: string, taskId: string, staffId: string, force = false) =>
     post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/deploy`, { staffId, force }),
   tasks: (projectId: string) => get<Task[] | null>(`/api/projects/${projectId}/tasks`),
-  createTask: (projectId: string, input: { title: string; description: string; staffId: string | null }) =>
+  createTask: (projectId: string, input: { title: string; description: string; staffId: string | null; start?: boolean }) =>
     post<Task | null>(`/api/projects/${projectId}/tasks`, input),
   updateTask: (
     projectId: string,
     taskId: string,
-    patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'status' | 'pr' | 'branch'>> & { queued?: false },
+    patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'status' | 'pr' | 'branch' | 'waitReason'>> & { queued?: false },
   ) =>
     post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}`, patch),
   /** Efetivar um temporário (contratado por outro funcionário). */
@@ -448,12 +512,13 @@ export const api = {
   runRoutine: (projectId: string, staffId: string, routineId: string) =>
     post<{ ok: boolean; text: string } | null>(`/api/projects/${projectId}/staff/${staffId}/routines/${routineId}/run`),
   chatInterrupt: (sessionId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/interrupt`),
-  /** `applyToCopies`: o que é da pessoa (nome, cargo, missão…) vai também para as cópias ligadas; `copiesUpdated` = quantas. */
-  updateStaff: (projectId: string, staffId: string, input: StaffInput, applyToCopies = false) =>
-    post<StaffProfile & { copiesUpdated?: number }>(`/api/projects/${projectId}/staff/${staffId}`, {
-      ...input,
-      ...(applyToCopies ? { applyToCopies: true } : {}),
-    }),
+  /** O que é da pessoa (nome, cargo, missão…) vai sempre às cópias ligadas; `copiesUpdated` = quantas mudaram. */
+  updateStaff: (projectId: string, staffId: string, input: StaffInput) =>
+    post<StaffProfile & { copiesUpdated?: number }>(`/api/projects/${projectId}/staff/${staffId}`, input),
+  /** Garante o `personId` da ficha (o servidor gera se faltar): a memória pessoal é da pessoa. */
+  personOf: (projectId: string, staffId: string) => post<{ personId: string }>(`/api/projects/${projectId}/staff/${staffId}/person`),
+  personMemory: (personId: string) => get<PersonMemory>(`/api/people/${personId}/memory`),
+  savePersonMemory: (personId: string, text: string) => put<PersonMemory>(`/api/people/${personId}/memory`, { text }),
   staffVersions: (projectId: string, staffId: string) =>
     get<Array<{ version: string; name: string; role: string; updatedAt: string }>>(`/api/projects/${projectId}/staff/${staffId}/versions`),
   restoreStaff: (projectId: string, staffId: string, version: string) =>
@@ -464,9 +529,35 @@ export const api = {
     post<StaffProfile>(`/api/projects/${projectId}/staff/${staffId}/managers/remove`, { managerId }),
   saveProjectImage: (projectId: string, dataUrl: string | null) =>
     post<{ image: string | null }>(`/api/projects/${projectId}/image`, { dataUrl }),
+  /** Guia do projeto (SPEC.md na raiz): a equipe lê em caso de dúvida. */
+  projectGuide: (projectId: string) => get<ProjectGuide>(`/api/projects/${projectId}/guide`),
+  /** Cria o SPEC.md a partir do modelo; 409 se já existe. */
+  createProjectGuide: (projectId: string) => post<ProjectGuide>(`/api/projects/${projectId}/guide`),
+  /**
+   * Abre uma conversa nova do funcionário com o pedido do guia (testar, divergências ou rascunho); 400 se não vale agora.
+   * `drift` sem mudança desde a última conferência não abre nada: `{ skipped: true, reason }`, sem `sessionId`.
+   */
+  runProjectGuide: (projectId: string, action: GuideAction, staffId: string) =>
+    post<GuideRun>(`/api/projects/${projectId}/guide/run`, { action, staffId }),
   accountRules: () => get<{ path: string; text: string | null }>('/api/account/rules'),
   saveAccountRules: (text: string) => post<{ path: string; text: string | null }>('/api/account/rules', { text }),
 };
+
+/**
+ * Guia do projeto. `ignored` = está no .gitignore (só conta com `isGit`).
+ * `lastCheck`/`changedSince`: última conferência com o código e quantos arquivos mudaram desde ela (ausentes sem base).
+ */
+export interface ProjectGuide {
+  path: string;
+  exists: boolean;
+  isGit: boolean;
+  ignored: boolean;
+  lastCheck?: { sha: string; at: string };
+  changedSince?: number;
+}
+
+/** Resposta do pedido ao guia: a conversa aberta, ou nada aberto (`skipped`) com o motivo em texto. */
+export type GuideRun = { sessionId: string; staffId: string } | { skipped: true; reason: string };
 
 /** Item da árvore de arquivos do projeto; `path` relativo à raiz, com "/". `locked` = segredo: listado, mas não abre. */
 export interface FileEntry {

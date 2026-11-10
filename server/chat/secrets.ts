@@ -27,6 +27,9 @@ const PATTERNS: Array<{ label: string; re: RegExp; token?: boolean }> = [
   { label: 'uma senha numa URL de conexão', re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:(?![$<{%*])[^\s:@/]{4,}@[^\s/]+/i },
 ];
 
+// Cópias globais, feitas uma vez: findSecrets roda por linha, e recriar a regex a cada chamada custava à toa.
+const GLOBAL_PATTERNS = PATTERNS.map((p) => ({ ...p, re: new RegExp(p.re.source, p.re.flags.includes('g') ? p.re.flags : `${p.re.flags}g`) }));
+
 /** O primeiro segredo encontrado no texto, ou null. */
 export function findSecret(text: string): SecretFinding | null {
   if (!text || text.length < 8) return null;
@@ -38,6 +41,19 @@ export function findSecret(text: string): SecretFinding | null {
     for (const m of text.matchAll(p.re)) if (!looksFake(m[0])) return { label: p.label };
   }
   return null;
+}
+
+/** Todas as ocorrências no texto, com posição (o health check mascara cada uma). */
+export function findSecrets(text: string): Array<{ label: string; index: number; length: number }> {
+  const out: Array<{ label: string; index: number; length: number }> = [];
+  if (!text) return out;
+  for (const p of GLOBAL_PATTERNS) {
+    for (const m of text.matchAll(p.re)) {
+      if (p.token && looksFake(m[0])) continue;
+      out.push({ label: p.label, index: m.index ?? 0, length: m[0].length });
+    }
+  }
+  return out.sort((a, b) => a.index - b.index);
 }
 
 /**

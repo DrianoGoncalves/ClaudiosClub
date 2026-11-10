@@ -131,9 +131,14 @@ function UpdateDetails({ status }: { status: UpdateStatus }) {
 
 /** "Nova versão" no topo do quadro; some quando está em dia. */
 export function UpdateNotice() {
-  const [status] = useUpdateStatus();
+  const [status, setStatus] = useUpdateStatus();
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
+
+  // Ao abrir o menu, relê a parte local (sem buscar no GitHub) para não mostrar um estado velho.
+  useEffect(() => {
+    if (open) void api.updateStatus().then(setStatus, () => {});
+  }, [open, setStatus]);
 
   useEffect(() => {
     if (!open) return;

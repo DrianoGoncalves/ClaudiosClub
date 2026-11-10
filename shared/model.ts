@@ -107,6 +107,34 @@ export interface GitState {
   behind: number;
 }
 
+/** Arquivo sem commit do projeto. `also`: nomes das outras conversas que também o editaram (recentes). */
+export interface UncommittedFile {
+  path: string;
+  status: string;
+  also: string[];
+}
+
+/** Uma conversa do projeto que editou arquivos que ainda estão sem commit. */
+export interface UncommittedConversation {
+  sessionId: string;
+  /** Null em conversa sem ficha: não recebe pedido de commit. */
+  staffId: string | null;
+  /** Nome do funcionário, ou o assunto/título da conversa sem ficha. */
+  name: string;
+  topic: string | null;
+  files: UncommittedFile[];
+}
+
+/** Arquivos sem commit do projeto agrupados pela conversa que os editou (ver server/uncommitted.ts). */
+export interface UncommittedReport {
+  total: number;
+  /** Janela das conversas que contam (dias de atividade). */
+  recentDays: number;
+  conversations: UncommittedConversation[];
+  /** Sem conversa recente que os editou: à mão, ou em conversa antiga. */
+  unowned: UncommittedFile[];
+}
+
 export interface ProjectInventory {
   agents: Agent[];
   skills: Skill[];
@@ -176,46 +204,6 @@ export interface QuotaBoost {
   until: string;
   /** Uso projetado no reset, no ritmo da semana (%). */
   projected: number;
-}
-
-/**
- * Qual índice do Artificial Analysis o ranking usa. Vale para a lista inteira (não se misturam escalas):
- * o de código quando algum modelo o tem; senão, o de inteligência.
- */
-export type IndexMetric = 'coding' | 'intelligence';
-
-/** Um esforço (effort) de um modelo no Artificial Analysis. */
-export interface ModelVariant {
-  id: string;
-  /** low, medium, high, xhigh, max…; null quando o nome não diz. */
-  effort: string | null;
-  /** O índice da métrica do ranking (`ModelBenchmarks.metric`), do modelo, não o de agentes (que a API não traz). */
-  codingIndex: number;
-  /** US$ por 1M tokens, na mistura de 3 de entrada para 1 de saída. */
-  priceBlended: number;
-}
-
-/**
- * Um modelo no ranking de código do Artificial Analysis (API gratuita deles). Os números são os do
- * esforço padrão (a variante principal do AA); `variants` traz todos, do menor esforço ao maior.
- */
-export interface ModelBenchmark extends ModelVariant {
-  name: string;
-  creator: string;
-  variants: ModelVariant[];
-}
-
-export interface ModelBenchmarks {
-  /** Sem chave no .env: o painel explica como criar. */
-  configured: boolean;
-  /** A métrica dos `models`; null quando não há modelo com índice e preço. */
-  metric: IndexMetric | null;
-  /** Os de maior índice da `metric`. */
-  models: ModelBenchmark[];
-  /** Quando os dados vieram da API; null antes da primeira leitura que deu certo. */
-  fetchedAt: string | null;
-  /** A última busca falhou: os dados, se houver, são da anterior. */
-  error: string | null;
 }
 
 /** US$ equivalentes em API (estimativa: as sessões rodam pela assinatura). */
@@ -497,8 +485,8 @@ export interface Routine {
   enabled: boolean;
 }
 
-/** Colunas do quadro de tarefas, na ordem. */
-export const TASK_STATUSES = ['todo', 'planning', 'doing', 'review', 'done', 'live'] as const;
+/** Colunas do quadro de tarefas, na ordem. "waiting" (Aguardar) não é ocupado nem entra na fila. */
+export const TASK_STATUSES = ['waiting', 'todo', 'planning', 'doing', 'review', 'done'] as const;
 
 /** Temporário (contratado por outro funcionário) parado há mais que isso sai do quadro. */
 export const TEMP_IDLE_DAYS = 3;
@@ -557,6 +545,8 @@ export interface Task {
   queuedAt?: string | null;
   /** Começar mesmo com o limite de consumo batido (você confirmou ao pôr na fila). */
   queuedForce?: boolean;
+  /** Motivo de estar em Aguardar (opcional, texto puro, até 200 caracteres). Limpo ao sair da coluna. */
+  waitReason?: string | null;
   /** Mensagens suas nesta conversa esperando o funcionário terminar outra tarefa. */
   held?: HeldMessage[];
   /**
@@ -564,6 +554,16 @@ export interface Task {
    * vem depois é da próxima tarefa dele, que já pode ter começado na mesma worktree.
    */
   checkpoint?: { sha: string; at: string } | null;
+  /** Entrega (quando foi para revisão): o resumo da conversa e, se a ficha pediu, o porquê de cada arquivo. */
+  delivery?: TaskDelivery;
+}
+
+export interface TaskDelivery {
+  at: string;
+  /** Última mensagem do funcionário, cortada em 1500 caracteres. */
+  summary: string;
+  /** Caminho relativo do arquivo → por que mudou (texto puro, até 200 caracteres). Ausente sem lista. */
+  notes?: Record<string, string>;
 }
 
 export interface HeldMessage {
@@ -575,12 +575,10 @@ export interface HeldMessage {
   reason: string;
 }
 
-/** Tarefas de um projeto para o cabeçalho: abertas, em revisão e o último deploy. */
+/** Tarefas de um projeto para o cabeçalho: abertas (tudo que não é pronto) e em revisão. */
 export interface TaskSummary {
   open: number;
   review: number;
-  /** A tarefa que foi para "no ar" por último (by: o funcionário de infra, se o deploy foi pedido a ele). */
-  lastDeploy: { title: string; at: string; by: string | null } | null;
 }
 
 /** Trabalho passado a outro funcionário (revisão, deploy): quem, em qual conversa e quando. */
@@ -720,12 +718,108 @@ export type StaffInput = Omit<StaffProfile, 'id' | 'projectId' | 'portrait' | 's
   force?: boolean;
 };
 
+/**
+ * Achado da revisão de custo (regra fixa, sem IA). `id` é estável: a tela traduz o título pelo id;
+ * `evidence` e `suggestion` já vêm em português, com os números reais do período.
+ */
+export interface CostReviewFinding {
+  id: string;
+  severity: 'high' | 'medium' | 'low';
+  evidence: string;
+  suggestion: string;
+  /** Ajuste que o botão "Aplicar" faz (só pelo Claudio’s Club). Ausente = o achado é só leitura (comportamento ou processo). */
+  fix?: CostReviewFix;
+}
+
+/** O ajuste de um achado. `ficha`: muda só `model`/`effort` (os campos presentes); `rule`: acrescenta a regra às regras da ficha; `task`: cria tarefa para o próprio funcionário. */
+export type CostReviewFix =
+  | { kind: 'ficha'; model?: 'sonnet'; effort?: 'high' }
+  | { kind: 'rule'; text: string }
+  | { kind: 'task'; title: string; description: string };
+
+/** Ids de todos os achados da revisão (server/costReview.ts). A rota de aplicar só aceita estes. */
+export const COST_REVIEW_FINDING_IDS = [
+  'long-context',
+  'ignored-context-warning',
+  'heavy-model-on-implementation',
+  'no-model',
+  'big-memory',
+  'big-tool-output',
+  'repeated-reads',
+  'inherited-model-agents',
+  'rework',
+] as const;
+
+/** Um ajuste feito pelo `POST …/cost-review/apply`. `before`/`after` só dos campos da ficha que mudaram; `taskId` na tarefa criada. */
+export interface CostReviewApplied {
+  id: string;
+  kind: CostReviewFix['kind'];
+  before?: { model?: string | null; effort?: CodexEffort | null };
+  after?: { model?: string | null; effort?: CodexEffort | null };
+  taskId?: string;
+}
+
+/** Resposta do apply: o que foi feito e o que ficou de fora (com o motivo, em pt-BR). */
+export interface CostReviewApplyResult {
+  applied: CostReviewApplied[];
+  skipped: Array<{ id: string; reason: string }>;
+}
+
+/** Uma conversa do funcionário no período (principal e subagents somados), para o top de cache-read. */
+export interface CostReviewSession {
+  id: string;
+  /** Primeiro pedido da conversa (ou a tarefa que a abriu), até 80 caracteres; null se não há ou se parece segredo. */
+  title: string | null;
+  /** Respostas do modelo (cada uma conta uma vez, mesmo com o streaming repetindo a linha). */
+  calls: number;
+  cacheRead: number;
+  /** Maior contexto de uma chamada (entrada + escrita e leitura de cache), em tokens. */
+  maxContext: number;
+  model: string | null;
+  /** Último registro da conversa no período (ISO). */
+  lastAt: string | null;
+}
+
+/** Revisão de custo de um funcionário (`GET …/staff/<id>/cost-review?days=N`): só leitura, sem chamar IA. */
+export interface CostReview {
+  staffId: string;
+  days: number;
+  totals: { sessions: number; calls: number; cacheRead: number; cacheWrite: number; output: number; maxContext: number };
+  /** As 5 conversas com mais cache-read. */
+  sessions: CostReviewSession[];
+  /** Tarefas do funcionário criadas no período: `rework` = "Complemento de…"; `reopened` = voltaram de revisão para execução. */
+  tasks: { total: number; rework: number; reopened: number };
+  /** `bytes`/`lines` do índice (`<id>.memory.md`, o que entra no contexto); `detailBytes` da pasta `<id>.memory/`. */
+  memory: { bytes: number; lines: number; detailBytes: number };
+  ficha: { model: string | null; effort: CodexEffort | null; engine: Engine };
+  /** Ordenados por severidade (alta, média, baixa). Sem achados = lista vazia. */
+  findings: CostReviewFinding[];
+}
+
 /** Servidor MCP disponível num projeto (só nome e origem: a configuração pode ter segredos). */
 export interface McpServerInfo {
   name: string;
-  /** `project` = .mcp.json; `local` = só este projeto; `user` = todos os projetos. */
-  source: 'project' | 'local' | 'user';
+  /** `club` = biblioteca do Claudio’s Club; `project` = .mcp.json; `local` = só este projeto; `user` = todos os projetos. */
+  source: 'club' | 'project' | 'local' | 'user';
   transport: string | null;
+}
+
+export type McpScope = 'club' | 'user' | 'project' | 'local';
+export type McpType = 'http' | 'sse' | 'stdio';
+
+/** MCP para a tela de biblioteca. Nunca traz valor de env/cabeçalho: só o nome e se está preenchido. */
+export interface McpServerView {
+  name: string;
+  scope: McpScope;
+  projectId?: string;
+  type: McpType;
+  url?: string;
+  command?: string;
+  args?: string[];
+  /** Algum argumento tinha segredo: vem trocado pelo marcador `••••`. */
+  argsMasked?: boolean;
+  env: Array<{ key: string; set: boolean }>;
+  headers: Array<{ key: string; set: boolean }>;
 }
 
 /** `ssh` = .vps/config.json (chave); `ftps` = FTP com TLS explícito; `ftp` = FTP puro, sem criptografia. */
@@ -829,6 +923,9 @@ export interface FtpConnectionInput {
   originalName?: string;
 }
 
+/** Página da extensão Claude in Chrome na Chrome Web Store (sem parâmetros de rastreio). */
+export const CHROME_EXTENSION_URL = 'https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn';
+
 /** Pré-requisitos do Claude in Chrome nesta máquina; null = não dá para conferir neste sistema. */
 export interface BrowserStatus {
   /** A extensão está instalada em algum perfil do navegador. */
@@ -864,6 +961,8 @@ export type ChatItem =
       uuid?: string;
       /** Guardada pelo Claudio’s Club até o funcionário terminar a outra tarefa (o motivo). */
       held?: string;
+      /** Quem mandou foi outro funcionário (pela API), não você. */
+      fromStaff?: boolean;
     }
   | { kind: 'assistant'; id: string; text: string; at: string | null }
   | {

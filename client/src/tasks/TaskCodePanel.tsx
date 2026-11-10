@@ -5,8 +5,9 @@ import { Markdown } from '../chat/markdown';
 import { formatAgo } from '../format';
 import { t, locale } from '../i18n';
 import { BranchIcon } from '../icons';
+import { ReviewStatus } from './ReviewDelegate';
 
-// Código da tarefa, no cartão: o que mudou, testes, mesclar, pedir revisão e pedir deploy.
+// Código da tarefa, no cartão: o que mudou, testes, mesclar, status da revisão e pedir deploy.
 
 const STATUS: Record<string, string> = {
   A: t('tasks.fileAdded'),
@@ -16,6 +17,12 @@ const STATUS: Record<string, string> = {
   C: t('tasks.fileCopied'),
   '?': t('tasks.fileUntracked'),
 };
+
+/** O porquê do arquivo, se houver: só chave própria com texto (um caminho como "constructor" não pega o protótipo). */
+function noteFor(notes: Record<string, string> | undefined, path: string): string | null {
+  const note = notes && Object.prototype.hasOwnProperty.call(notes, path) ? notes[path] : null;
+  return typeof note === 'string' && note.trim() ? note : null;
+}
 
 interface Props {
   projectId: string;
@@ -36,9 +43,7 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const reviewers = staff.filter((s) => s.id !== task.staffId);
   const infra = staff.filter((s) => s.servers.length > 0);
-  const [reviewer, setReviewer] = useState(reviewers[0]?.id ?? '');
   const [deployer, setDeployer] = useState(infra[0]?.id ?? '');
   const now = Date.now();
   const nameOf = (id: string) => staff.find((s) => s.id === id)?.name ?? id;
@@ -96,22 +101,33 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
             )}
           </p>
           {code.files.length > 0 ? (
-            <ul className="task-files small">
-              {code.files.slice(0, 40).map((f) => (
-                <li key={f.path} title={STATUS[f.status] ?? f.status}>
-                  <span className={`task-file-status s-${f.status === '?' ? 'n' : f.status}`}>{f.status}</span> <span className="mono">{f.path}</span>
-                  {(f.add > 0 || f.del > 0) && (
-                    <span className="task-file-delta">
-                      {' '}
-                      <span className="add">+{f.add}</span> <span className="del">-{f.del}</span>
-                    </span>
-                  )}
-                </li>
-              ))}
+            <ul className={`task-files small${task.delivery?.notes ? ' has-notes' : ''}`}>
+              {code.files.slice(0, 40).map((f) => {
+                const why = noteFor(task.delivery?.notes, f.path);
+                return (
+                  <li key={f.path} title={STATUS[f.status] ?? f.status}>
+                    <span className={`task-file-status s-${f.status === '?' ? 'n' : f.status}`}>{f.status}</span> <span className="mono">{f.path}</span>
+                    {(f.add > 0 || f.del > 0) && (
+                      <span className="task-file-delta">
+                        {' '}
+                        <span className="add">+{f.add}</span> <span className="del">-{f.del}</span>
+                      </span>
+                    )}
+                    {why && <span className="task-file-note">{why}</span>}
+                  </li>
+                );
+              })}
               {code.files.length > 40 && <li className="muted">{t('tasks.andMore', { n: code.files.length - 40 })}</li>}
             </ul>
           ) : (
             <p className="muted small">{t('tasks.nothingChanged')}</p>
+          )}
+          {task.delivery?.summary.trim() && (
+            <details className="collapse">
+              <summary>{t('tasks.deliverySummary', { ago: formatAgo(now - Date.parse(task.delivery.at)) })}</summary>
+              {/* Texto puro: o resumo é a fala do funcionário, nunca vira HTML nem markdown. */}
+              <p className="task-delivery-text small">{task.delivery.summary}</p>
+            </details>
           )}
           {code.diff && (
             <details className="collapse">
@@ -190,38 +206,15 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
         </>
       )}
 
-      <div className="task-code-row">
-        <b className="small">{t('tasks.reviewLabel')}</b>
-        {task.review ? (
-          <span className="small">
-            {nameOf(task.review.staffId)} · {task.review.doneAt ? t('tasks.replied') : t('tasks.reviewing')} ·{' '}
-            <button className="link" onClick={() => onOpenStaff(task.review!.staffId)}>
-              {t('tasks.openConversation')}
-            </button>
-          </span>
-        ) : reviewers.length ? (
-          <>
-            <select value={reviewer} onChange={(e) => setReviewer(e.target.value)} aria-label={t('tasks.whoReviews')}>
-              {reviewers.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} — {s.role}
-                </option>
-              ))}
-            </select>
-            <button
-              className="btn-secondary"
-              disabled={!!busy || !reviewer}
-              onClick={() => void run('review', () => withUsageConfirm((force) => api.taskReview(projectId, task.id, reviewer, force)))}
-            >
-              {t('tasks.askReview')}
-            </button>
-          </>
-        ) : (
-          <span className="muted small">{t('tasks.hireReviewer')}</span>
-        )}
-      </div>
+      {/* Em revisão, quem revisa e o pedido ficam nas ações do detalhe (ReviewDelegate); aqui só o status dos demais. */}
+      {task.review && task.status !== 'review' && (
+        <div className="task-code-row">
+          <b className="small">{t('tasks.reviewLabel')}</b>
+          <ReviewStatus task={task} staff={staff} onOpenStaff={onOpenStaff} />
+        </div>
+      )}
 
-      {(task.status === 'done' || task.status === 'live' || task.merged) && (
+      {(task.status === 'done' || task.merged) && (
         <div className="task-code-row">
           <b className="small">{t('tasks.deploy')}</b>
           {task.deploy ? (

@@ -64,31 +64,40 @@ export const LOGIN_COMMAND = 'claude auth login --claudeai';
 
 /** Abre uma janela de terminal com o login pela assinatura. O usuário conclui no navegador. */
 export function openLoginTerminal(): { ok: boolean; command: string; error: string | null } {
-  if (process.platform === 'linux') return openLinuxLoginTerminal();
+  const r = openCliLoginTerminal(LOGIN_COMMAND, 'login no Claude');
+  if (r.ok) cache = null;
+  return { ...r, command: LOGIN_COMMAND };
+}
+
+/**
+ * Mecanismo do login de uma CLI num terminal de verdade (o mesmo do Claude): abre `command` numa janela e não espera o login
+ * (quem chama confere depois). Login concluído, a janela fecha sozinha; se falhar, segura para o usuário ler o erro.
+ */
+export function openCliLoginTerminal(command: string, title: string): { ok: boolean; error: string | null } {
+  if (process.platform === 'linux') return openLinuxLoginTerminal(command);
   if (process.platform !== 'win32') {
-    return { ok: false, command: LOGIN_COMMAND, error: 'abrir terminal automaticamente só no Windows e no Linux por enquanto' };
+    return { ok: false, error: 'abrir terminal automaticamente só no Windows e no Linux por enquanto' };
   }
   try {
-    // `start` abre uma janela nova; o primeiro argumento entre aspas é o título.
-    const child = spawn('cmd.exe', ['/d', '/s', '/c', `"start "Claudio’s Club - login no Claude" cmd /k ${LOGIN_COMMAND}"`], {
+    // `start` abre uma janela nova; o primeiro argumento entre aspas é o título. Com login concluído a
+    // janela fecha sozinha; se falhar, `pause` segura para o usuário ler o erro.
+    const child = spawn('cmd.exe', ['/d', '/s', '/c', `"start "Claudio’s Club - ${title}" cmd /c "${command} || pause""`], {
       env: cleanEnv(),
       detached: true,
       stdio: 'ignore',
       windowsVerbatimArguments: true,
     });
     child.unref();
-    cache = null;
-    return { ok: true, command: LOGIN_COMMAND, error: null };
+    return { ok: true, error: null };
   } catch (err) {
-    return { ok: false, command: LOGIN_COMMAND, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
-function openLinuxLoginTerminal(): { ok: boolean; command: string; error: string | null } {
-  // Depois do login a janela fica aberta, com um shell, para o usuário ver o resultado e fechar.
-  const script = `${LOGIN_COMMAND}; echo; echo 'Pode fechar esta janela.'; exec sh`;
+function openLinuxLoginTerminal(command: string): { ok: boolean; error: string | null } {
+  // Login concluído fecha a janela; se falhar, ela espera um Enter para o usuário ler o erro.
+  const script = `${command} || { echo; echo 'O login falhou. Enter para fechar.'; read _; }`;
   const r = openTerminal(['sh', '-c', script], { env: cleanEnv() });
-  if (r.ok) cache = null;
-  const error = r.error === 'nenhum terminal encontrado' ? 'nenhum terminal encontrado: rode claude auth login --claudeai num terminal' : r.error;
-  return { ok: r.ok, command: LOGIN_COMMAND, error };
+  const error = r.error === 'nenhum terminal encontrado' ? `nenhum terminal encontrado: rode ${command} num terminal` : r.error;
+  return { ok: r.ok, error };
 }

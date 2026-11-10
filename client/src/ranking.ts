@@ -6,8 +6,10 @@ import { t } from './i18n';
 
 /** Uma linha possível do ranking: a ficha de um funcionário, ou o fantasma de um projeto (conversas sem ficha). */
 export interface RankingGroup {
-  /** Nó do quadro a selecionar ao clicar. */
+  /** Nó do quadro a selecionar ao clicar (o fantasma, que não tem ficha no RH). */
   nodeId: string;
+  /** A ficha, quando há: o clique leva a ela no RH, já no projeto desta linha. */
+  person: { projectId: string; staffId: string } | null;
   name: string;
   /** `cargo · projeto` (o fantasma mostra só o projeto). */
   detail: string;
@@ -46,6 +48,7 @@ export function rankingGroups(board: Board, config: AppConfig | null): RankingGr
     for (const st of staff) {
       out.push({
         nodeId: staffNodeId(p.id, st.id),
+        person: { projectId: p.id, staffId: st.id },
         name: st.name,
         detail: `${st.role} · ${p.name}`,
         archived: projectArchived || archivedSessions.has(`staff:${st.id}`),
@@ -57,6 +60,7 @@ export function rankingGroups(board: Board, config: AppConfig | null): RankingGr
     if (loose.length > 0) {
       out.push({
         nodeId: ghostNodeId(p.id),
+        person: null,
         name: t('detail.ghostName'),
         detail: p.name,
         archived: projectArchived || loose.every((s) => archivedSessions.has(s.id)),
@@ -72,7 +76,7 @@ export function rankingRows(groups: RankingGroup[], report: SavingsReport): Rank
   const bySession = new Map<string, SessionSavings>(report.sessions.map((s) => [s.sessionId, s]));
   const rows: RankingRow[] = [];
   for (const g of groups) {
-    const row: RankingRow = { nodeId: g.nodeId, name: g.name, detail: g.detail, archived: g.archived, usd: 0, executorUsd: 0, discardedUsd: 0, runs: 0, savedUsd: 0, baseUsd: 0, savedPct: null };
+    const row: RankingRow = { nodeId: g.nodeId, person: g.person, name: g.name, detail: g.detail, archived: g.archived, usd: 0, executorUsd: 0, discardedUsd: 0, runs: 0, savedUsd: 0, baseUsd: 0, savedPct: null };
     for (const id of g.sessionIds) {
       const s = bySession.get(id);
       if (!s) continue;

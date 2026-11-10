@@ -19,10 +19,12 @@ import {
 import { ChangesPanel } from './ChangesPanel';
 import { useChatDetail } from './chatDetail';
 import type { ChatFocus } from './chatFocus';
+import { MoreTabs } from './MoreTabs';
+import { MsgTime } from './MsgTime';
 import { QuestionCard } from './QuestionCard';
 import { useChatFocus } from './useChatFocus';
 import { useOpenAt } from './useOpenAt';
-import { Markdown, looksLikeMarkdown, useCopy } from './markdown';
+import { Markdown, OpenFileContext, type OpenFileApi, looksLikeMarkdown, useCopy } from './markdown';
 import { systemMessageText } from './systemMessage';
 import { ToolInput } from './ToolInput';
 import { clockHM, secondsLeft } from './wakeCountdown';
@@ -60,17 +62,24 @@ interface Props {
   onFocusDone?: () => void;
   /** A conversa tem aviso na caixa "precisa de mim" (pergunta, permissão…): abre no fim, e não na sua última mensagem. */
   awaiting?: boolean;
+  /** Caminho absoluto do projeto: arquivo citado dentro dele abre no editor. */
+  projectRoot?: string;
+  /** Abre um arquivo do projeto (relativo) no editor de arquivos; sem ele, os caminhos da resposta são só texto. */
+  onOpenFile?: (path: string) => void;
 }
 
-/** Uma aba do "Mais" (Ficha, Expediente, Rotinas, Ações…). */
+/**
+ * Uma aba do "Mais" (Ficha, Projeto, Desempenho, Ações…). Com função, o conteúdo recebe como trocar de aba:
+ * a ficha usa para levar a quem a salva com um campo obrigatório vazio até a aba dele.
+ */
 export interface MoreTab {
   id: string;
   label: string;
-  content: ReactNode;
+  content: ReactNode | ((select: (id: string) => void) => ReactNode);
 }
 
 /** Conversa com o funcionário dentro do Claudio’s Club, sem terminal. */
-export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, engine = 'claude', top, moreTabs = [], focus = null, onFocusDone, awaiting = false }: Props) {
+export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, engine = 'claude', top, moreTabs = [], focus = null, onFocusDone, awaiting = false, projectRoot, onOpenFile }: Props) {
   const chat = useChat(projectId, sessionId, staffId);
   const todos = useMemo(() => todosFrom(chat.items), [chat.items]);
   useEffect(() => {
@@ -256,335 +265,328 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   const showDiff = !!staffId && !!chat.sessionId;
   const background = chat.state?.running && chat.sessionId ? (chat.state.background ?? []) : [];
 
+  // O callback do pai muda a cada render; o context recebe um `open` fixo (lê o atual por ref) para não re-renderizar as mensagens à toa.
+  const openRef = useRef(onOpenFile);
+  useLayoutEffect(() => {
+    openRef.current = onOpenFile;
+  });
+  const open = useMemo(() => (path: string) => openRef.current?.(path), []);
+  const canOpen = !!onOpenFile;
+  const fileLinks = useMemo<OpenFileApi | null>(() => (canOpen ? { projectRoot, open } : null), [canOpen, projectRoot, open]);
+
   return (
-    <section className="chat">
-      <div className="chat-top">
-        {top}
-        {activeTab && (
-          <button
-            type="button"
-            ref={moreBtn}
-            className="btn-secondary chat-more-btn"
-            aria-label={t('chat.moreOptions')}
-            aria-haspopup="dialog"
-            aria-expanded={moreOpen}
-            title={t('chat.moreOptions')}
-            onClick={() => setMoreOpen(true)}
+    <OpenFileContext.Provider value={fileLinks}>
+      <section className="chat">
+        <div className="chat-top">
+          {top}
+          {activeTab && (
+            <button
+              type="button"
+              ref={moreBtn}
+              className="btn-secondary chat-more-btn"
+              aria-label={t('chat.moreOptions')}
+              aria-haspopup="dialog"
+              aria-expanded={moreOpen}
+              title={t('chat.moreOptions')}
+              onClick={() => setMoreOpen(true)}
+            >
+              ⋯
+            </button>
+          )}
+        </div>
+        {moreOpen && activeTab && (
+          <div
+            className="chat-more"
+            role="dialog"
+            aria-labelledby="chat-more-title"
+            tabIndex={-1}
+            ref={moreRef}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') closeMore();
+            }}
           >
-            ⋯
-          </button>
+            <div className="chat-more-head">
+              <h3 id="chat-more-title">{t('chat.moreOptions')}</h3>
+              <button type="button" className="drawer-close in-head" onClick={closeMore} aria-label={t('chat.close')}>
+                ×
+              </button>
+            </div>
+            <MoreTabs tabs={moreTabs} active={activeTab.id} onActive={setMoreTab} label={t('chat.moreOptions')} />
+          </div>
         )}
-      </div>
-      {moreOpen && activeTab && (
         <div
-          className="chat-more"
-          role="dialog"
-          aria-labelledby="chat-more-title"
-          tabIndex={-1}
-          ref={moreRef}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') closeMore();
+          className="chat-list"
+          ref={list}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+            if (stick.current) focusing.release();
+            setAway(!stick.current);
           }}
         >
-          <div className="chat-more-head">
-            <h3 id="chat-more-title">{t('chat.moreOptions')}</h3>
-            <button type="button" className="drawer-close in-head" onClick={closeMore} aria-label={t('chat.close')}>
-              ×
-            </button>
-          </div>
-          <div className="tabs" role="tablist" aria-label={t('chat.moreOptions')}>
-            {moreTabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                id={`more-tab-${tab.id}`}
-                aria-selected={activeTab.id === tab.id}
-                aria-controls="chat-more-panel"
-                className={`tab ${activeTab.id === tab.id ? 'is-active' : ''}`}
-                onClick={() => setMoreTab(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          <div className="chat-more-sec" role="tabpanel" id="chat-more-panel" aria-labelledby={`more-tab-${activeTab.id}`}>
-            {activeTab.content}
-          </div>
-        </div>
-      )}
-      <div
-        className="chat-list"
-        ref={list}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-          if (stick.current) focusing.release();
-          setAway(!stick.current);
-        }}
-      >
-        {chat.loading && <p className="muted small chat-empty">{t('chat.loadingChat')}</p>}
-        {!chat.loading && visible.length === 0 && (
-          <p className="muted small chat-empty">{sessionId ? t('chat.noMessages') : t('chat.startChat', { name })}</p>
-        )}
-        {visible.map((item) => (
-          <Item
-            key={item.id}
-            item={item}
-            onAnswer={chat.answer}
-            executeAs={executeAs}
-            onChangesRequested={() => input.current?.focus()}
-            onRewind={staffId && chat.sessionId && !blocked ? (uuid) => void rewind(uuid) : undefined}
-            autoCancelled={autoCancelled.has(item.id)}
-            onCancelAutoContinue={
-              chat.sessionId
-                ? () =>
-                    void api
-                      .chatCancelAutoContinue(projectId, chat.sessionId!)
-                      .then(() => setAutoCancelled((s) => new Set(s).add(item.id)))
-                      .catch(alertError)
-                : undefined
-            }
-            onCancelWake={
-              chat.sessionId
-                ? () =>
-                    void api
-                      .chatCancelWake(projectId, chat.sessionId!)
-                      .then(() => setAutoCancelled((s) => new Set(s).add(item.id)))
-                      .catch(alertError)
-                : undefined
-            }
-          />
-        ))}
-        {busy && !streaming && !pending && (
-          <div className="chat-typing" aria-live="polite">
-            {chat.state?.compacting ? t('chat.compactingChat') : t('chat.working', { name })}
-            <span className="bn-working" />
-            {doing && !showTools && <span className="chat-doing mono" title={doing}>{doing}</span>}
-          </div>
-        )}
-        {away && (
-          <button
-            type="button"
-            className="chat-bottom"
-            aria-label={t('chat.scrollBottom')}
-            title={t('chat.scrollBottom')}
-            onClick={() => list.current?.scrollTo({ top: list.current.scrollHeight, behavior: 'smooth' })}
-          >
-            <ArrowDownIcon />
-          </button>
-        )}
-      </div>
-
-      {chat.elsewhere && (
-        <div className="chat-elsewhere">
-          {chat.elsewhere.orphan ? (
-            <>
-              <p>
-                {t('chat.orphanProc', {
-                  status: chat.elsewhere.status ? ` (${STATUS_TEXT[chat.elsewhere.status] ?? chat.elsewhere.status})` : '',
-                })}
-              </p>
-              <p className="muted small">
-                {t('chat.bringHere')}
-                {chat.elsewhere.status === 'busy' ? t('chat.stoppedMidTurn') : ''}
-              </p>
-            </>
-          ) : (
-            <>
-              <p>
-                {t('chat.sessionOpen', {
-                  where: t(chat.elsewhere.entrypoint === 'claude-desktop' ? 'chat.whereDesktop' : 'chat.whereTerminal'),
-                  status: chat.elsewhere.status ? ` (${STATUS_TEXT[chat.elsewhere.status] ?? chat.elsewhere.status})` : '',
-                })}
-              </p>
-              <p className="muted small">{t('chat.copyHere')}</p>
-            </>
+          {chat.loading && <p className="muted small chat-empty">{t('chat.loadingChat')}</p>}
+          {!chat.loading && visible.length === 0 && (
+            <p className="muted small chat-empty">{sessionId ? t('chat.noMessages') : t('chat.startChat', { name })}</p>
           )}
-          <button className="btn-primary" onClick={() => void chat.recheck()}>
-            {t('chat.bringToMyco')}
-          </button>
-          {!chat.elsewhere.orphan && chat.elsewhere.entrypoint !== 'claude-desktop' && (chat.elsewhere.status === 'waiting' || chat.elsewhere.status === 'idle') && (
-            <button className="btn-secondary" onClick={() => window.confirm(t('chat.takeOverConfirm')) && void chat.takeOver()}>
-              {t('chat.takeOver')}
-            </button>
-          )}
-        </div>
-      )}
-
-      {chat.error && <p className="error small">{chat.error}</p>}
-
-      <TodoPanel todos={todos} />
-
-      {(images.length > 0 || files.length > 0 || imageError) && (
-        <div className="chat-images">
-          {images.map((src, i) => (
-            <span key={i} className="chat-image">
-              <img src={src} alt={t('chat.imageAlt', { n: i + 1 })} />
-              <button type="button" onClick={() => setImages((prev) => prev.filter((_, j) => j !== i))} title={t('chat.removeImage')} aria-label={t('chat.removeImageAria')}>
-                ×
-              </button>
-            </span>
-          ))}
-          {files.map((f, i) => (
-            <span key={`f${i}`} className="chat-file small">
-              {f.name}
-              <button type="button" onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))} title={t('chat.removeFile')} aria-label={t('chat.removeNamed', { name: f.name })}>
-                ×
-              </button>
-            </span>
-          ))}
-          {imageError && <span className="error small">{imageError}</span>}
-        </div>
-      )}
-
-      <div className="chat-input">
-        {showSuggest && <SuggestionList items={suggestions} active={pick} onPick={(s) => choose(s.value)} />}
-        <textarea
-          ref={input}
-          value={draft}
-          placeholder={blocked ? t('chat.unavailable', { why: blocked }) : t('chat.placeholder', { name })}
-          title={blocked ? undefined : t('chat.inputHelp')}
-          disabled={!!blocked}
-          rows={2}
-          onChange={(e) => setDraft(e.target.value)}
-          onPaste={(e) => {
-            const pasted = [...e.clipboardData.files];
-            if (!pasted.length) return;
-            e.preventDefault();
-            void addFiles(pasted);
-          }}
-          onKeyDown={(e) => {
-            if (showSuggest) {
-              if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-                e.preventDefault();
-                setPick((p) => (p + (e.key === 'ArrowDown' ? 1 : suggestions.length - 1)) % suggestions.length);
-                return;
+          {visible.map((item) => (
+            <Item
+              key={item.id}
+              item={item}
+              onAnswer={chat.answer}
+              executeAs={executeAs}
+              onChangesRequested={() => input.current?.focus()}
+              onRewind={staffId && chat.sessionId && !blocked ? (uuid) => void rewind(uuid) : undefined}
+              autoCancelled={autoCancelled.has(item.id)}
+              onCancelAutoContinue={
+                chat.sessionId
+                  ? () =>
+                      void api
+                        .chatCancelAutoContinue(projectId, chat.sessionId!)
+                        .then(() => setAutoCancelled((s) => new Set(s).add(item.id)))
+                        .catch(alertError)
+                  : undefined
               }
-              if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
-                e.preventDefault();
-                choose(suggestions[pick]!.value);
-                return;
+              onCancelWake={
+                chat.sessionId
+                  ? () =>
+                      void api
+                        .chatCancelWake(projectId, chat.sessionId!)
+                        .then(() => setAutoCancelled((s) => new Set(s).add(item.id)))
+                        .catch(alertError)
+                  : undefined
               }
-              if (e.key === 'Escape') {
-                e.preventDefault();
-                setDismissed(draft);
-                return;
-              }
-            }
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              void submit();
-            }
-          }}
-        />
-        <div className="chat-actions">
-          <label className="btn-secondary chat-attach" title={t('chat.attachHelp')}>
-            <ImageIcon />
-            <span className="sr-only">{t('chat.attachFile')}</span>
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/*,.md,.csv,.json,.yml,.yaml,.ts,.tsx,.js,.php,.py,.sql,.log"
-              multiple
-              disabled={!!blocked}
-              onChange={(e) => {
-                void addFiles([...(e.target.files ?? [])]);
-                e.target.value = '';
-              }}
             />
-          </label>
-          {busy && (
+          ))}
+          {busy && !streaming && !pending && (
+            <div className="chat-typing" aria-live="polite">
+              {chat.state?.compacting ? t('chat.compactingChat') : t('chat.working', { name })}
+              <span className="bn-working" />
+              {doing && !showTools && <span className="chat-doing mono" title={doing}>{doing}</span>}
+            </div>
+          )}
+          {away && (
             <button
-              className="btn-secondary chat-stop"
-              onClick={() => void chat.interrupt()}
-              aria-label={t('chat.stop')}
-              title={`${t('chat.stop')}: ${t('chat.stopHelp')}`}
+              type="button"
+              className="chat-bottom"
+              aria-label={t('chat.scrollBottom')}
+              title={t('chat.scrollBottom')}
+              onClick={() => list.current?.scrollTo({ top: list.current.scrollHeight, behavior: 'smooth' })}
             >
-              <StopIcon />
+              <ArrowDownIcon />
             </button>
           )}
-          <button
-            className="btn-primary chat-send"
-            onClick={() => void submit()}
-            disabled={(!draft.trim() && !images.length && !files.length) || !!blocked || pending}
-            aria-label={busy ? PRIORITY_BUTTON[whileBusy] : t('chat.send')}
-            title={pending ? t('chat.answerFirst') : busy ? `${PRIORITY_BUTTON[whileBusy]}: ${PRIORITY_HELP[whileBusy]}` : t('chat.sendEnter')}
-          >
-            <SendIcon />
-          </button>
         </div>
-      </div>
 
-      {bgOpen && background.length > 0 && (
-        <ul className="chat-extra small">
-          {background.map((task) => (
-            <li key={task.id}>
-              <span className="muted">{task.kind === 'agent' ? 'agent' : task.kind === 'shell' ? t('chat.kindShell') : task.kind}</span> {task.label}{' '}
-              <button type="button" className="link small" onClick={() => void api.chatStopTask(chat.sessionId!, task.id).catch(alertError)}>
-                {t('chat.stopTask')}
+        {chat.elsewhere && (
+          <div className="chat-elsewhere">
+            {chat.elsewhere.orphan ? (
+              <>
+                <p>
+                  {t('chat.orphanProc', {
+                    status: chat.elsewhere.status ? ` (${STATUS_TEXT[chat.elsewhere.status] ?? chat.elsewhere.status})` : '',
+                  })}
+                </p>
+                <p className="muted small">
+                  {t('chat.bringHere')}
+                  {chat.elsewhere.status === 'busy' ? t('chat.stoppedMidTurn') : ''}
+                </p>
+              </>
+            ) : (
+              <>
+                <p>
+                  {t('chat.sessionOpen', {
+                    where: t(chat.elsewhere.entrypoint === 'claude-desktop' ? 'chat.whereDesktop' : 'chat.whereTerminal'),
+                    status: chat.elsewhere.status ? ` (${STATUS_TEXT[chat.elsewhere.status] ?? chat.elsewhere.status})` : '',
+                  })}
+                </p>
+                <p className="muted small">{t('chat.copyHere')}</p>
+              </>
+            )}
+            <button className="btn-primary" onClick={() => void chat.recheck()}>
+              {t('chat.bringToMyco')}
+            </button>
+            {!chat.elsewhere.orphan && chat.elsewhere.entrypoint !== 'claude-desktop' && (chat.elsewhere.status === 'waiting' || chat.elsewhere.status === 'idle') && (
+              <button className="btn-secondary" onClick={() => window.confirm(t('chat.takeOverConfirm')) && void chat.takeOver()}>
+                {t('chat.takeOver')}
               </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {mcpOpen && chat.sessionId && <McpMenu projectId={projectId} sessionId={chat.sessionId} staffId={staffId} />}
+            )}
+          </div>
+        )}
 
-      {/* Ajustes só desta conversa, logo abaixo da caixa (os gerais ficam na ficha). Sem ficha, a conversa só precisa existir. */}
-      <div className="chat-status">
-        {(staffId || chat.sessionId) && (
-          <ChatSettingsBar
-            level={level}
-            state={chat.state}
-            fichaModel={fichaModel}
-            fichaEffort={fichaEffort}
-            engine={engine}
-            fichaAutonomy={autonomy}
+        {chat.error && <p className="error small">{chat.error}</p>}
+
+        <TodoPanel todos={todos} />
+
+        {(images.length > 0 || files.length > 0 || imageError) && (
+          <div className="chat-images">
+            {images.map((src, i) => (
+              <span key={i} className="chat-image">
+                <img src={src} alt={t('chat.imageAlt', { n: i + 1 })} />
+                <button type="button" onClick={() => setImages((prev) => prev.filter((_, j) => j !== i))} title={t('chat.removeImage')} aria-label={t('chat.removeImageAria')}>
+                  ×
+                </button>
+              </span>
+            ))}
+            {files.map((f, i) => (
+              <span key={`f${i}`} className="chat-file small">
+                {f.name}
+                <button type="button" onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))} title={t('chat.removeFile')} aria-label={t('chat.removeNamed', { name: f.name })}>
+                  ×
+                </button>
+              </span>
+            ))}
+            {imageError && <span className="error small">{imageError}</span>}
+          </div>
+        )}
+
+        <div className="chat-input">
+          {showSuggest && <SuggestionList items={suggestions} active={pick} onPick={(s) => choose(s.value)} />}
+          <textarea
+            ref={input}
+            value={draft}
+            placeholder={blocked ? t('chat.unavailable', { why: blocked }) : t('chat.placeholder', { name })}
+            title={blocked ? undefined : t('chat.inputHelp')}
             disabled={!!blocked}
-            onChange={chat.settings}
+            rows={2}
+            onChange={(e) => setDraft(e.target.value)}
+            onPaste={(e) => {
+              const pasted = [...e.clipboardData.files];
+              if (!pasted.length) return;
+              e.preventDefault();
+              void addFiles(pasted);
+            }}
+            onKeyDown={(e) => {
+              if (showSuggest) {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setPick((p) => (p + (e.key === 'ArrowDown' ? 1 : suggestions.length - 1)) % suggestions.length);
+                  return;
+                }
+                if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+                  e.preventDefault();
+                  choose(suggestions[pick]!.value);
+                  return;
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setDismissed(draft);
+                  return;
+                }
+              }
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                void submit();
+              }
+            }}
           />
-        )}
-        <ContextMeter context={chat.context} />
-        {chat.sessionId && (
-          <button type="button" className="chat-chip" onClick={() => void chat.compact()} disabled={busy || !!blocked} title={t('chat.compactHelp')}>
-            {chat.state?.compacting ? t('chat.compacting') : t('chat.compact')}
-          </button>
-        )}
-        {background.length > 0 && (
-          <button
-            type="button"
-            className="chat-chip btn-toggle"
-            aria-pressed={bgOpen}
-            title={`${background.map((task) => task.label).join('\n')}\n\n${t('chat.clickToStop')}`}
-            onClick={() => setBgOpen(!bgOpen)}
-          >
-            {t('chat.background', { n: background.length })}
-          </button>
-        )}
-        {/* Botões de ícone, redondos e juntos no fim da linha: MCPs e o que mudou. */}
-        {(showMcp || showDiff) && (
-          <span className="chat-icon-btns">
-            {showMcp && (
+          <div className="chat-actions">
+            <label className="btn-secondary chat-attach" title={t('chat.attachHelp')}>
+              <ImageIcon />
+              <span className="sr-only">{t('chat.attachFile')}</span>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/*,.md,.csv,.json,.yml,.yaml,.ts,.tsx,.js,.php,.py,.sql,.log"
+                multiple
+                disabled={!!blocked}
+                onChange={(e) => {
+                  void addFiles([...(e.target.files ?? [])]);
+                  e.target.value = '';
+                }}
+              />
+            </label>
+            {busy && (
               <button
-                type="button"
-                className="btn-secondary chat-icon-btn btn-toggle"
-                aria-pressed={mcpOpen}
-                onClick={() => setMcpOpen(!mcpOpen)}
-                aria-label="MCPs"
-                title={t('chat.mcpsHelp')}
+                className="btn-secondary chat-stop"
+                onClick={() => void chat.interrupt()}
+                aria-label={t('chat.stop')}
+                title={`${t('chat.stop')}: ${t('chat.stopHelp')}`}
               >
-                <McpIcon size={16} />
+                <StopIcon />
               </button>
             )}
-            {showDiff && (
-              <button type="button" className="btn-secondary chat-icon-btn" onClick={() => setShowChanges(true)} aria-label={t('chat.changes')} title={t('chat.changesHelp')}>
-                <FileDiffIcon size={16} />
-              </button>
-            )}
-          </span>
+            <button
+              className="btn-primary chat-send"
+              onClick={() => void submit()}
+              disabled={(!draft.trim() && !images.length && !files.length) || !!blocked || pending}
+              aria-label={busy ? PRIORITY_BUTTON[whileBusy] : t('chat.send')}
+              title={pending ? t('chat.answerFirst') : busy ? `${PRIORITY_BUTTON[whileBusy]}: ${PRIORITY_HELP[whileBusy]}` : t('chat.sendEnter')}
+            >
+              <SendIcon />
+            </button>
+          </div>
+        </div>
+
+        {bgOpen && background.length > 0 && (
+          <ul className="chat-extra small">
+            {background.map((task) => (
+              <li key={task.id}>
+                <span className="muted">{task.kind === 'agent' ? 'agent' : task.kind === 'shell' ? t('chat.kindShell') : task.kind}</span> {task.label}{' '}
+                <button type="button" className="link small" onClick={() => void api.chatStopTask(chat.sessionId!, task.id).catch(alertError)}>
+                  {t('chat.stopTask')}
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
-      </div>
-      {showChanges && chat.sessionId && <ChangesPanel projectId={projectId} sessionId={chat.sessionId} staffId={staffId} name={name} onClose={() => setShowChanges(false)} />}
-    </section>
+        {mcpOpen && chat.sessionId && <McpMenu projectId={projectId} sessionId={chat.sessionId} staffId={staffId} />}
+
+        {/* Ajustes só desta conversa, logo abaixo da caixa (os gerais ficam na ficha). Sem ficha, a conversa só precisa existir. */}
+        <div className="chat-status">
+          {(staffId || chat.sessionId) && (
+            <ChatSettingsBar
+              level={level}
+              state={chat.state}
+              fichaModel={fichaModel}
+              fichaEffort={fichaEffort}
+              engine={engine}
+              fichaAutonomy={autonomy}
+              disabled={!!blocked}
+              onChange={chat.settings}
+            />
+          )}
+          <ContextMeter context={chat.context} />
+          {chat.sessionId && (
+            <button type="button" className="chat-chip" onClick={() => void chat.compact()} disabled={busy || !!blocked} title={t('chat.compactHelp')}>
+              {chat.state?.compacting ? t('chat.compacting') : t('chat.compact')}
+            </button>
+          )}
+          {background.length > 0 && (
+            <button
+              type="button"
+              className="chat-chip btn-toggle"
+              aria-pressed={bgOpen}
+              title={`${background.map((task) => task.label).join('\n')}\n\n${t('chat.clickToStop')}`}
+              onClick={() => setBgOpen(!bgOpen)}
+            >
+              {t('chat.background', { n: background.length })}
+            </button>
+          )}
+          {/* Botões de ícone, redondos e juntos no fim da linha: MCPs e o que mudou. */}
+          {(showMcp || showDiff) && (
+            <span className="chat-icon-btns">
+              {showMcp && (
+                <button
+                  type="button"
+                  className="btn-secondary chat-icon-btn btn-toggle"
+                  aria-pressed={mcpOpen}
+                  onClick={() => setMcpOpen(!mcpOpen)}
+                  aria-label="MCPs"
+                  title={t('chat.mcpsHelp')}
+                >
+                  <McpIcon size={16} />
+                </button>
+              )}
+              {showDiff && (
+                <button type="button" className="btn-secondary chat-icon-btn" onClick={() => setShowChanges(true)} aria-label={t('chat.changes')} title={t('chat.changesHelp')}>
+                  <FileDiffIcon size={16} />
+                </button>
+              )}
+            </span>
+          )}
+        </div>
+        {showChanges && chat.sessionId && <ChangesPanel projectId={projectId} sessionId={chat.sessionId} staffId={staffId} name={name} onClose={() => setShowChanges(false)} />}
+      </section>
+    </OpenFileContext.Provider>
   );
 }
 
@@ -651,7 +653,7 @@ function ContextMeter({ context }: { context: { used: number; window: number; pe
 }
 
 /** Resposta da IA com "Copiar" (o texto em markdown, como veio) no canto, no hover/foco. */
-function AssistantMessage({ id, text }: { id: string; text: string }) {
+function AssistantMessage({ id, text, at }: { id: string; text: string; at: string | null }) {
   const [copied, copy] = useCopy();
   return (
     <div className="msg msg-assistant" data-item-id={id}>
@@ -659,6 +661,7 @@ function AssistantMessage({ id, text }: { id: string; text: string }) {
         {copied ? t('chat.mdCopied') : t('chat.mdCopy')}
       </button>
       <Markdown text={text} />
+      <MsgTime at={at} />
     </div>
   );
 }
@@ -692,8 +695,10 @@ function Item({
     case 'user': {
       // Aviso automático da plataforma (entrega de tarefa, contexto…): à esquerda, neutro, com badge.
       const system = systemMessageText(item.text);
+      // Colega que delegou: no tom do funcionário (escuro), mas à direita, como quem fala com ele.
+      const kind = system !== null ? 'msg-system' : item.fromStaff ? 'msg-staff' : 'msg-user';
       return (
-        <div className={`msg ${system === null ? 'msg-user' : 'msg-system'}`} data-item-id={item.id}>
+        <div className={`msg ${kind}`} data-item-id={item.id}>
           {system !== null && (
             <span className="badge dim msg-system-badge" title={t('chat.systemMessageHelp')}>
               {t('chat.systemMessage')}
@@ -713,11 +718,12 @@ function Item({
           {system !== null ? <Markdown text={system} /> : looksLikeMarkdown(item.text) ? <Markdown text={item.text} /> : item.text}
           {item.queued && <span className="msg-queued">{QUEUED_TEXT[item.queued]}</span>}
           {item.held && <span className="msg-queued">{t('chat.heldByMyco', { why: item.held })}</span>}
+          <MsgTime at={item.at} />
         </div>
       );
     }
     case 'assistant':
-      return item.text ? <AssistantMessage id={item.id} text={item.text} /> : null;
+      return item.text ? <AssistantMessage id={item.id} text={item.text} at={item.at} /> : null;
     case 'tool':
       return (
         <details className={`tool ${item.isError ? 'tool-error' : ''}`} data-item-id={item.id}>

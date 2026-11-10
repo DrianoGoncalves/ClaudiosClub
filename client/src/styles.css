@@ -12,24 +12,26 @@
   --ink-blue: #1f4fbf;
   --ink-green: #1d7a46;
   --ink-green-soft: #8fc9a3;
-  --ink-red: #c43b2f;
+  --ink-red: #d43b2f;
   --ink-muted: #8a8f96;
-  --highlight: rgba(255, 214, 10, 0.55);
+  --highlight: rgba(255, 214, 10, 0.5);
   --highlight-solid: #ffd60a;
   --card: var(--card-base);
 
   --panel: #f2f2f8;
   /* Painéis flutuantes (topo, painel lateral, modais, menus, monitor): o --panel a 80%, com o que está atrás borrado. */
-  --panel-glass: color-mix(in srgb, var(--panel) 80%, transparent);
+  --panel-glass: color-mix(in srgb, var(--panel) 90%, transparent);
   --glass-blur: blur(3px);
   --muted: #6b7076;
   --line: #e4e1da;
   --accent: #1f4fbf;
-  --warn: #ffc100;
+  --warn: #f46000;
   --danger: #c0362c;
   --busy: #1f4fbf;
   --idle: #8b9096;
-  --waiting: #d98a00;
+  --waiting: #d08000;
+  /* O --waiting serve a borda e a bolinha; texto (e fundo com texto branco) usa este (no claro, ~3:1: o dono preferiu o laranja mais vivo). */
+  --waiting-ink: #d08000;
   /* Barra de rolagem: grafite discreto; derivada das canetas, vale nos dois temas. */
   --scroll-thumb: color-mix(in srgb, var(--ink-muted) 45%, transparent);
   --scroll-thumb-hover: var(--ink-muted);
@@ -64,9 +66,8 @@
   --pen-pink: #c23a82;
 
   /* Cor de cada serviço de IA nas barras de consumo: salmão do Claude, preto do Codex. */
-  --brand-claude: #d97757;
-  --brand-codex: #111111;
-  --brand-codex-track: transparent;
+  --brand-claude: #d9775700;
+  --brand-codex: #11111100;
 
   --hand: 'Caveat', 'Segoe Print', 'Comic Sans MS', cursive;
   font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -74,42 +75,40 @@
   background: var(--board);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --board-base: #1f2a25;
-    --board-dot-base: #34433b;
-    --card-base: #27322c;
-    --ink: #eef0ea;
-    --ink-blue: #9cc0ff;
-    --ink-green: #9fe0b4;
-    --ink-green-soft: #4f8a63;
-    --ink-red: #ff9c8f;
-    --ink-muted: #8fa098;
-    --highlight: rgba(255, 230, 120, 0.25);
-    --highlight-solid: #8a7a2e;
-    --project-tint-mix: 16%;
+/* O tema vem de `data-theme` no <html> (theme.ts): "dark" quando escolhido ou quando o sistema é escuro. */
+:root[data-theme='dark'] {
+  --board-base: #0f1a15;
+  --board-dot-base: #34433b;
+  --card-base: #27322c;
+  --ink: #eef0ea;
+  --ink-blue: #9cc0ff;
+  --ink-green: #9fe0b4;
+  --ink-green-soft: #4f8a63;
+  --ink-red: #ff9c8f;
+  --ink-muted: #8fa098;
+  --highlight: rgba(255, 230, 120, 0.25);
+  --highlight-solid: #8a7a2e;
+  --project-tint-mix: 16%;
 
-    --panel: #222228;
-    --muted: #a0a0a7;
-    --line: #3a4540;
-    --accent: #9cc0ff;
-    --warn: #ff6605;
-    --danger: #ff7b70;
-    --busy: #9cc0ff;
-    --idle: #79837e;
-    --waiting: #f0b43c;
-    --boost-bg: #15803d;
-    --pen-red: #ff9c8f;
-    --pen-orange: #ffb877;
-    --pen-yellow: #f2d46b;
-    --pen-green: #9fe0b4;
-    --pen-teal: #7fd8cf;
-    --pen-blue: #9cc0ff;
-    --pen-purple: #caa8ff;
-    --pen-pink: #f5a3cf;
-    /* Preto some no painel escuro: o Codex mantém o preto, sobre um trilho claro. */
-    --brand-codex-track: color-mix(in srgb, var(--ink) 82%, transparent);
-  }
+  --panel: #222229;
+  --muted: #aaaaaf;
+  --line: #3a4540;
+  --accent: #9cc0ff;
+  --warn: #ff6605;
+  --danger: #ff7b70;
+  --busy: #9cc0ff;
+  --idle: #79837e;
+  --waiting: #f0b43c;
+  --waiting-ink: #f0b43c;
+  --boost-bg: #15803d;
+  --pen-red: #ff9c8f;
+  --pen-orange: #ffb877;
+  --pen-yellow: #f2d46b;
+  --pen-green: #9fe0b4;
+  --pen-teal: #7fd8cf;
+  --pen-blue: #9cc0ff;
+  --pen-purple: #caa8ff;
+  --pen-pink: #f5a3cf;
 }
 
 * { box-sizing: border-box; }
@@ -128,7 +127,6 @@ body { background: var(--board); }
 .react-flow__handle { opacity: 0; pointer-events: none; }
 .react-flow__connectionline { z-index: 5; }
 .react-flow__node { cursor: pointer; }
-.react-flow__attribution { background: transparent; }
 
 /* ---- nós ---- */
 .bn { position: relative; color: var(--ink); }
@@ -292,7 +290,7 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 /* Voltar ao fim: fica preso no canto de baixo da lista (sticky), sem ocupar espaço (margem negativa = altura + gap). */
 .chat-bottom {
   position: sticky; bottom: 0; align-self: flex-end; flex: none; margin-top: -44px;
-  width: 36px; height: 36px; padding: 0; display: grid; place-items: center; cursor: pointer;
+  width: 32px; height: 32px; padding: 0; display: grid; place-items: center; cursor: pointer;
   color: var(--ink-blue); background: var(--panel); border: 1.5px solid var(--ink-blue); border-radius: 999px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
@@ -301,10 +299,16 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .msg { max-width: 88%; padding: 8px 11px; border-radius: 12px; font-size: 14px; line-height: 1.45; word-wrap: break-word; }
 .msg-user { align-self: flex-end; background: var(--ink-blue); color: var(--card); border-bottom-right-radius: 4px; white-space: pre-wrap; }
 /* Resposta do funcionário: tokens trocados só dentro do balão (código, tabelas e links do markdown seguem legíveis no fundo escuro). */
-.msg-assistant { --ink: var(--msg-assistant-ink); --muted: var(--msg-assistant-muted); --ink-blue: var(--msg-assistant-link); --line: color-mix(in srgb, var(--msg-assistant-muted) 45%, transparent); align-self: flex-start; background: var(--msg-assistant-bg); color: var(--ink); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.msg-assistant, .msg-staff { --ink: var(--msg-assistant-ink); --muted: var(--msg-assistant-muted); --ink-blue: var(--msg-assistant-link); --line: color-mix(in srgb, var(--msg-assistant-muted) 45%, transparent); align-self: flex-start; background: var(--msg-assistant-bg); color: var(--ink); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+/* Mensagem de outro funcionário (delegação): a cor do balão dele, mas à direita como a sua. */
+.msg-staff { align-self: flex-end; border-bottom-left-radius: 12px; border-bottom-right-radius: 4px; white-space: pre-wrap; }
 /* Aviso automático da plataforma (chega como mensagem do usuário, com prefixo): à esquerda, neutro, tracejado. */
 .msg-system { position: relative; align-self: flex-start; background: var(--panel); border: 1px dashed var(--line); border-bottom-left-radius: 4px; font-size: 13px; }
 .msg-system-badge { display: inline-block; margin-bottom: 4px; white-space: nowrap; }
+/* Rodapé do balão: data e hora da mensagem. No balão azul herda a cor do texto (75% mantém ≥4,5:1); nos demais usa o --muted do próprio balão. */
+.msg-time { display: block; margin-top: 3px; font-size: 10.5px; line-height: 1.2; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.msg-user .msg-time { color: inherit; opacity: 0.75; }
+.msg-user .msg-time, .msg-staff .msg-time { text-align: end; }
 /* Markdown (GFM) das respostas: compacto, títulos pouco maiores que o texto, tabela e código com rolagem própria. */
 .md { min-width: 0; }
 .md > :first-child { margin-top: 0; }
@@ -322,6 +326,15 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .md :is(h3, h4, h5, h6) { font-size: 1em; }
 .md a { color: var(--ink-blue); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
 .md .md-link-off { text-decoration: underline dotted; text-underline-offset: 2px; }
+/* Caminho de arquivo do projeto: cara de código, sublinhado pontilhado; abre no editor de arquivos. */
+.md .md-file { display: inline; max-width: 100%; margin: 0; border: 0; font: inherit; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; color: inherit; text-align: left; text-decoration: underline dotted; text-underline-offset: 2px; background: color-mix(in srgb, var(--ink) 8%, transparent); padding: 0 3px; border-radius: 3px; overflow-wrap: anywhere; cursor: pointer; }
+.md .md-file:hover, .md .md-file:focus-visible { color: var(--ink-blue); }
+.md .md-file:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; }
+/* Código inline que copia ao clicar: o <code> segue igual; o botão só tira a cara de botão. */
+.md .md-inline-copy { display: inline; max-width: 100%; margin: 0; border: 0; font: inherit; color: inherit; text-align: left; background: transparent; padding: 0; cursor: pointer; }
+.md .md-inline-copy:hover code { background: color-mix(in srgb, var(--ink) 14%, transparent); }
+.md .md-inline-copy:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; border-radius: 3px; }
+.md .md-inline-copy.is-copied code { color: var(--ink-blue); }
 .md-img { display: inline-flex; align-items: center; gap: 4px; }
 .md blockquote { margin: 0 0 6px; padding: 2px 0 2px 10px; border-left: 3px solid var(--line); color: var(--muted); }
 .md hr { margin: 10px 0; border: 0; border-top: 1px solid var(--line); }
@@ -342,7 +355,7 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .md-code { margin: 0; padding: 4px 10px 8px; overflow-x: auto; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; line-height: 1.45; }
 .md-code code { background: none; padding: 0; overflow-wrap: normal; }
 /* Mensagem do usuário que já vem em markdown: a bolha é azul, então código e links herdam a cor dela. */
-.msg-user .md { white-space: normal; }
+.msg-user .md, .msg-staff .md { white-space: normal; }
 .msg-user .md :is(a, code, blockquote, del, .md-code-bar, .md-copy) { color: inherit; }
 .msg-user .md :is(code, .md-code-wrap, .md-table th) { background: color-mix(in srgb, var(--card) 18%, transparent); }
 .tool { align-self: flex-start; max-width: 92%; font-size: 12.5px; border-left: 3px solid var(--ink-muted); padding: 2px 8px; }
@@ -418,7 +431,7 @@ textarea.q-field { resize: vertical; }
 .chat-actions { display: flex; align-items: center; gap: 6px; }
 .chat-actions .chat-attach { margin-right: auto; border-color: transparent; }
 .chat-actions .chat-attach:focus-within { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); }
-.chat-actions :is(.chat-attach, .chat-stop, .chat-send) { width: 36px; height: 36px; padding: 0; display: inline-grid; place-items: center; }
+.chat-actions :is(.chat-attach, .chat-stop, .chat-send) { width: 24px; height: 24px; padding: 0; display: inline-grid; place-items: center; }
 /* Cargos (config → Cargos). */
 .roles { display: grid; gap: 8px; width: 100%; }
 .roles-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
@@ -465,7 +478,7 @@ textarea.q-field { resize: vertical; }
 .bn-tasks { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--ink); font: inherit; font-size: 11.5px; cursor: pointer; white-space: nowrap; }
 .bn-tasks:hover { border-color: var(--room-wall); background: color-mix(in srgb, var(--room-wall) 14%, transparent); }
 .bn-tasks.is-empty { color: var(--muted); }
-.bn-tasks-review { color: var(--waiting); font-weight: 600; }
+.bn-tasks-review { color: var(--waiting-ink); font-weight: 600; }
 /* Quadro de tarefas. */
 .modal.tasks-modal { width: min(1280px, 100%); height: min(820px, calc(100vh - 32px)); display: flex; flex-direction: column; position: relative; overflow: hidden; }
 .tasks-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
@@ -514,14 +527,46 @@ textarea.q-field { resize: vertical; }
 .files-status.is-error { color: var(--danger); cursor: pointer; text-decoration: underline; }
 .files-back { display: none; }
 .files-cm { flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+/* Painel de busca/troca do editor (CodeMirror), que mora dentro do .modal. Botões e chaves (checkbox) reusam o desenho de
+   .btn-secondary / .btn-toggle (regras compartilhadas mais abaixo); aqui, a grade e o que o .modal vaza para ele (label em grid,
+   peso 600). O prefixo longo vence o tema base do CodeMirror e as regras do .modal. Ordem: busca | trocar, uma linha cada (quebram em tela estreita). */
+.files-cm .cm-panels .cm-panel.cm-search { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 36px 8px 8px; font-size: 12px; }
+.files-cm .cm-panels .cm-panel.cm-search br { display: none; }
+/* Quebra de linha entre o grupo "buscar" e o grupo "trocar". */
+.files-cm .cm-panels .cm-panel.cm-search::after { content: ''; order: 8; flex: 0 0 100%; height: 0; }
+.files-cm .cm-panels .cm-panel.cm-search input.cm-textfield { flex: 1 1 140px; min-width: 0; height: 26px; margin: 0; padding: 0 8px; font-size: 12px; }
+.files-cm .cm-panels .cm-panel.cm-search input[name='search'] { order: 1; }
+.files-cm .cm-panels .cm-panel.cm-search button[name='prev'] { order: 2; }
+.files-cm .cm-panels .cm-panel.cm-search button[name='next'] { order: 3; }
+.files-cm .cm-panels .cm-panel.cm-search button[name='select'] { order: 4; }
+.files-cm .cm-panels .cm-panel.cm-search label { order: 5; }
+.files-cm .cm-panels .cm-panel.cm-search input[name='replace'] { order: 9; }
+.files-cm .cm-panels .cm-panel.cm-search button[name='replace'] { order: 10; }
+.files-cm .cm-panels .cm-panel.cm-search button[name='replaceAll'] { order: 11; }
+.files-cm .cm-panels .cm-panel.cm-search :is(button.cm-button, label) { min-height: 26px; margin: 0; white-space: nowrap; }
+.files-cm .cm-panels .cm-panel.cm-search label { position: relative; display: inline-flex; align-items: center; user-select: none; }
+/* A chave de verdade fica por cima da label, invisível: o clique, o teclado e o leitor de tela seguem nela. */
+.files-cm .cm-panels .cm-panel.cm-search label input[type='checkbox'] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.files-cm .cm-panels .cm-panel.cm-search button.cm-button:focus-visible,
+.files-cm .cm-panels .cm-panel.cm-search label:has(input:focus-visible) { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 2px; }
+/* Fechar: o X do padrão .drawer-close, no canto. */
+.files-cm .cm-panels .cm-panel.cm-search button[name='close'] { position: absolute; top: 8px; right: 10px; width: 20px; height: 26px; padding: 0; margin: 0; font-size: 22px; line-height: 1; background: none; border: none; color: var(--muted); cursor: pointer; }
+.files-cm .cm-panels .cm-panel.cm-search button[name='close']:hover { color: var(--ink); }
 .files-pick { margin: auto; text-align: center; }
 .files-blocked { margin: 0; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); }
 .files-image { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .files-image-view { flex: 1; min-height: 0; display: grid; place-items: center; overflow: auto; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
 .files-image-view img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
-.files-conflict { border: 1px solid var(--waiting); border-radius: 10px; padding: 8px 12px; background: color-mix(in srgb, var(--waiting) 12%, transparent); font-size: 13px; }
+/* Aviso amarelo em caixa: conflito ao salvar e o alerta do guia (SPEC.md vai para o git). */
+:is(.files-conflict, .guide-alert) { border: 1px solid var(--waiting); border-radius: 10px; padding: 8px 12px; background: color-mix(in srgb, var(--waiting) 12%, transparent); font-size: 13px; }
 .files-conflict p { margin: 0 0 6px; }
 .files-conflict .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+.guide-who { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 8px 0 0; }
+.guide-who .setting-select { flex: 1 1 160px; min-width: 0; max-width: 100%; }
+.guide-actions { flex-wrap: wrap; }
+.guide-hints { margin: 8px 0 0; padding-left: 16px; display: grid; gap: 4px; }
+/* "N arquivos mudaram desde …" (ou o aviso de que nada mudou), logo abaixo dos botões. */
+.guide-since { margin: 8px 0 0; }
 @media (max-width: 640px) {
   .files-body { grid-template-columns: minmax(0, 1fr); }
   .files-body.is-editing .files-tree, .files-body:not(.is-editing) .files-editor { display: none; }
@@ -532,19 +577,25 @@ textarea.q-field { resize: vertical; }
   .files-tools .btn-secondary.files-delete { width: 36px; height: auto; }
   /* 16px: o iOS não dá zoom ao focar. */
   .modal .files-create-field input { font-size: 16px; }
+  .files-cm .cm-panels .cm-panel.cm-search input.cm-textfield { font-size: 16px; height: 34px; }
+  .files-cm .cm-panels .cm-panel.cm-search :is(button.cm-button, label) { min-height: 34px; }
 }
 .tasks-columns { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(200px, 1fr)); gap: 10px; overflow-x: auto; }
-.tasks-col { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--board-dot) 18%, transparent); }
+.tasks-col { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--board-dot) 90%, transparent); }
 .tasks-col.is-over { border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 10%, transparent); }
 .tasks-col h3 { margin: 0 0 2px; font-family: var(--hand); font-size: 21px; line-height: 1; cursor: help; }
-.tasks-col-review h3 { color: var(--waiting); }
+.tasks-col-review h3 { color: var(--waiting-ink); }
 .task-card { display: grid; gap: 3px; text-align: left; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; cursor: grab; }
 .task-card:hover { border-color: var(--ink-blue); }
+.task-card.is-waiting, .task-card.is-waiting:hover { border-color: var(--waiting); box-shadow: 0 0 0 1px var(--waiting); }
 .task-card.is-selected { outline: 2px solid var(--ink-blue); }
 .task-card.is-archived { opacity: 0.6; }
 .task-card.is-archived:hover, .task-card.is-archived.is-selected { opacity: 1; }
 .link.tasks-archived-toggle { align-self: flex-start; margin-top: 2px; color: var(--muted); }
 .task-title { font-weight: 600; font-size: 13.5px; line-height: 1.25; }
+/* Id da tarefa (t-1a2b3c): discreto, herda o cinza do texto ao redor; text-transform none por causa do .kicker em caixa alta. */
+.task-id { font-family: ui-monospace, Consolas, monospace; font-size: 0.9em; text-transform: none; letter-spacing: 0; }
+.task-detail .task-id { user-select: all; }
 .task-branch { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Selo de status no cartão: plano para aprovar (amarelo do "precisa de mim"), no ar (verde), não publicado (neutro). */
 .task-badge { justify-self: start; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; font-size: 11px; font-weight: 600; }
@@ -576,11 +627,19 @@ textarea.q-field { resize: vertical; }
 .task-file-status.s-D { color: var(--ink-red); }
 .task-file-delta .add { color: var(--ink-green); }
 .task-file-delta .del { color: var(--ink-red); }
+/* Porquê do arquivo (nota da entrega): linha própria sob o caminho, recuada à largura da letra de status. */
+.task-file-note { display: block; margin-left: 18px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.task-files.has-notes { max-height: 320px; }
+/* Resumo da entrega: texto puro, com as quebras de linha da mensagem. */
+.task-delivery-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .task-diff { margin: 6px 0 0; max-height: 320px; overflow: auto; font-size: 11.5px; line-height: 1.35; padding: 8px; border-radius: 6px; background: color-mix(in srgb, var(--ink) 6%, transparent); white-space: pre; }
 .task-code-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .task-code-row select { font: inherit; font-size: 12.5px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); max-width: 200px; }
 .task-code .ok { color: var(--ink-green); }
 .task-code .fail { color: var(--ink-red); font-weight: 600; }
+/* Delegar a revisão, nas ações do detalhe: mesma caixa tracejada do .task-form (reusa .task-code-row para as linhas). */
+.task-review { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; }
+.task-review p { margin: 0; }
 @media (max-width: 760px) {
   /* Uma coluna por vez, com a beirada da próxima à vista; o arrasto lateral para em cada uma. */
   .tasks-columns { grid-template-columns: repeat(4, calc(100% - 28px)); scroll-snap-type: x mandatory; }
@@ -612,7 +671,7 @@ textarea.q-field { resize: vertical; }
 .chat-top { position: relative; min-height: 28px; }
 .btn-secondary.chat-more-btn { position: absolute; top: 0; right: 10px; width: 30px; height: 28px; padding: 0; font-size: 18px; line-height: 1; display: grid; place-items: center; }
 /* "Mais": cobre o painel do funcionário, com rolagem própria; Esc fecha. */
-.chat-more { position: absolute; inset: 0; z-index: 3; display: grid; align-content: start; gap: 16px; overflow-y: auto; overscroll-behavior: contain; padding: 18px 20px 24px; background: var(--panel-glass); border-radius: 12px; }
+.chat-more { position: absolute; inset: 0; z-index: 3; display: grid; grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; align-content: start; gap: 16px; overflow-y: auto; overscroll-behavior: contain; padding: 18px 20px 24px; background: var(--panel-glass); border-radius: 12px; }
 .chat-more:focus { outline: none; }
 .chat-more-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .chat-more-head h3 { margin: 0; font-family: var(--hand); font-size: 26px; line-height: 1; }
@@ -643,17 +702,17 @@ textarea.q-field { resize: vertical; }
 
 /* Rolagem do painel lateral, do chat, dos modais, das caixas de texto, do quadro de tarefas e das configurações: fina, sem trilho, ponta irregular como os traços de caneta.
    A borda transparente (com background-clip) afasta o polegar da beira, qualquer que seja o fundo. */
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav)::-webkit-scrollbar { width: 10px; height: 10px; }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav)::-webkit-scrollbar-track,
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav)::-webkit-scrollbar-corner { background: transparent; }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav)::-webkit-scrollbar-thumb {
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar { width: 10px; height: 10px; }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-track,
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-corner { background: transparent; }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb); background-clip: padding-box; border: 3px solid transparent; border-radius: 4px 6px 4px 5px;
 }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav)::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-thumb-hover); }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav)::-webkit-scrollbar-thumb:active { background-color: var(--scroll-thumb-active); }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-thumb-hover); }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb:active { background-color: var(--scroll-thumb-active); }
 /* Firefox (sem ::-webkit-scrollbar): o equivalente padrão. */
 @supports not selector(::-webkit-scrollbar) {
-  .drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
+  .drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
 }
 /* Botão liga/desliga: o btn-secondary com estado pressionado em azul de caneta. */
 .segmented { display: inline-flex; gap: 6px; }
@@ -682,9 +741,9 @@ textarea.q-field { resize: vertical; }
 .chat-file { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; }
 .chat-file button { border: 0; background: transparent; color: var(--muted); cursor: pointer; }
 /* "Voltar até aqui", MCPs e segundo plano da conversa, "o que mudou". */
-.msg-user, .msg-assistant { position: relative; }
+.msg-user, .msg-assistant, .msg-staff { position: relative; }
 .msg-rewind { position: absolute; top: -9px; right: 6px; display: none; padding: 0 6px; font-size: 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); cursor: pointer; }
-.msg-user:hover .msg-rewind, .msg-system:hover .msg-rewind, .msg-assistant:hover .msg-copy, .msg-rewind:focus-visible { display: inline-block; }
+.msg-user:hover .msg-rewind, .msg-staff:hover .msg-rewind, .msg-system:hover .msg-rewind, .msg-assistant:hover .msg-copy, .msg-rewind:focus-visible { display: inline-block; }
 .msg-copy:hover { color: var(--ink); }
 /* Toque não tem hover: "Copiar" da resposta fica sempre visível. */
 @media (hover: none) { .msg-copy { display: inline-block; } }
@@ -706,7 +765,7 @@ textarea.q-field { resize: vertical; }
 .simple-summary { margin: 0; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; }
 .simple-more { margin: 8px 2px; }
 .settings-more { margin-top: 12px; }
-.btn-toggle[aria-pressed='true'] { color: var(--ink-blue); border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 12%, transparent); }
+.btn-toggle[aria-pressed='true'], .files-cm .cm-panels .cm-panel.cm-search label:has(input:checked) { color: var(--ink-blue); border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 12%, transparent); }
 .msg-queued { display: block; margin-top: 3px; font-size: 11px; opacity: 0.75; font-style: italic; }
 .chat-doing { display: block; margin-top: 2px; font-size: 10px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -728,12 +787,51 @@ button.ranking-row:hover { border-color: var(--accent); }
 .section .ranking-head h3 { margin: 0; }
 .ranking-period { font: inherit; font-size: 12px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); cursor: pointer; }
 .ranking-total { margin: 6px 0 0; font-weight: 600; }
+/* Analisar (revisão de custo): o botão fica ao lado da linha e o resultado abre embaixo, na largura toda. */
+.ranking > li.has-review { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 6px; }
+.has-review > .btn-secondary.ranking-review { width: 36px; height: auto; align-self: stretch; }
+.has-review > .btn-secondary.ranking-review[aria-expanded='true'] { border-color: var(--ink-blue); color: var(--ink-blue); }
+.ranking-review.is-loading svg { animation: review-pulse 1s ease-in-out infinite; }
+@keyframes review-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .ranking-review.is-loading svg { animation: none; } }
+.ranking-review-panel { grid-column: 1 / -1; display: grid; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.ranking-review-panel > * { margin: 0; }
+.ranking-review-panel details.collapse { margin-top: 0; }
+.ranking-review-panel .stats .review-wide { grid-column: 1 / -1; }
+.review-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.review-error .error { margin: 0; }
+.review-group h4 { margin: 0 0 6px; font-size: 12px; }
+.review-findings, .review-sessions { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.review-findings li { display: grid; gap: 2px; padding-left: 10px; border-left: 3px solid var(--muted); }
+.review-findings.is-high li { border-left-color: var(--ink-red); }
+.review-findings.is-medium li { border-left-color: var(--waiting-ink); }
+.review-sessions li { display: grid; gap: 1px; min-width: 0; }
+.review-session-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Aplicar sugestões: caixa de seleção por achado (alvo de 36px), confirmação na própria tela e o resultado. */
+.review-pick { display: flex; align-items: flex-start; gap: 8px; min-height: 36px; padding: 2px 0; cursor: pointer; }
+.review-pick:has(input:disabled) { cursor: default; }
+.review-pick input { flex: none; width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--ink-blue); cursor: inherit; }
+.review-pick input:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; }
+.review-pick-text { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.review-change { font-weight: 600; }
+.review-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.review-actions :is(.btn-primary, .btn-secondary) { min-height: 36px; }
+.review-confirm { display: grid; gap: 8px; font-size: 13px; }
+.review-confirm:focus { outline: none; }
+.review-confirm > *, .review-confirm li { margin: 0; }
+.review-confirm ul { list-style: none; padding: 0; display: grid; gap: 6px; }
+.review-confirm li { display: grid; gap: 1px; }
+.review-confirm li > span { font-size: 12px; }
+.review-result { display: grid; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.review-findings.is-applied li { border-left-color: var(--ink-green); }
+.review-task-link { display: inline-flex; align-items: center; min-height: 36px; margin-left: 6px; }
+button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; font-size: 0.9em; }
 
 /* ---- contratação ---- */
 .btn-primary { font: inherit; font-size: 13px; font-weight: 600; color: #fff; background: var(--ink-blue); border: 1px solid var(--ink-blue); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
 .btn-primary:disabled { opacity: 0.6; cursor: default; }
-@media (prefers-color-scheme: dark) { .btn-primary { color: #10161f; } }
+:root[data-theme='dark'] :is(.btn-primary, .workspace-pending, .inbox-count) { color: #10161f; }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 18, 20, 0.45); display: grid; place-items: center; z-index: 20; padding: 16px; }
 .modal { position: relative; width: min(720px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px 18px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25); display: grid; gap: 12px; }
 .modal h2 { margin: 0; font-family: var(--hand); font-size: 34px; line-height: 1; }
@@ -744,6 +842,7 @@ button.ranking-row:hover { border-color: var(--accent); }
   min-width: 0;
 }
 :is(.modal, .hire-inline) textarea { resize: vertical; }
+.hire-inline input[type='file'] { max-width: 100%; }
 :is(.modal, .conn-form, .hire-inline) :is(input, textarea, select):focus { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); border-color: var(--ink-blue); }
 :is(.modal, .hire-inline) fieldset { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px 10px; margin: 0; }
 :is(.modal, .hire-inline) legend { font-size: 10px; font-weight: 600; padding: 0 4px; }
@@ -789,28 +888,53 @@ button.ranking-row:hover { border-color: var(--accent); }
 .copy-mission { margin: 0; white-space: pre-line; }
 .copy-ask { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
 .copy-confirm .check { flex-wrap: wrap; }
-/* Ficha com cópias: "aplicar também nas outras N cópias", no rodapé (vale em qualquer aba). */
-:is(.modal, .hire-inline) .check.apply-copies { flex-wrap: wrap; margin-bottom: 8px; }
+/* Pessoa em mais de um projeto: onde a ficha vale (topo da aba Ficha) e o que o salvar vai trocar nas outras (rodapé,
+   em qualquer aba). Aviso com borda de aviso: não é erro, mas pede olho antes de salvar. */
+.person-scope { margin: 0; color: var(--muted); }
+.person-note { margin: 0; padding: 8px 10px; border: 1px solid var(--warn); border-radius: 8px; color: var(--ink); line-height: 1.4; overflow-wrap: anywhere; }
+.modal-footer .person-note { max-height: 6.5em; overflow-y: auto; }
+/* Memória pessoal (aba Ficha): campo próprio, gravado à parte da ficha. */
+.person-memory { display: grid; gap: 8px; }
+.person-memory textarea { font: inherit; font-size: 13px; width: 100%; box-sizing: border-box; resize: vertical; }
 
 /* ---- RH: todas as fichas da empresa (painel lateral) ---- */
 .hr-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
 .hr-filters input { flex: 1 1 180px; min-width: 0; font: inherit; font-size: 14px; color: var(--ink); background: var(--board); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
 .hr-filters input:focus { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); border-color: var(--ink-blue); }
 .hr-filters .setting-select { flex: 1 1 140px; min-width: 0; }
-.hr-list, .hr-group-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-/* Cada ficha é um cartão; as cópias da mesma pessoa ficam dentro de uma moldura tracejada, uma embaixo da outra. */
+.hr-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+/* Cada pessoa é um cartão: a linha (abre a edição), os chips dos projetos dela e, abertas pelo ⋯, as ações. */
 .hr-row { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--card); }
 .hr-row.is-archived .hr-main > :not(.hr-more) { opacity: 0.6; }
 .hr-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.hr-main .copy-text { flex: 1; }
-.hr-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.hr-meta .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hr-meta .badge { flex: none; }
+.hr-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 0; background: none; border: 0; border-radius: 8px; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.hr-open:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 2px; }
+.hr-open .copy-text { flex: 1; }
 .btn-secondary.hr-more { flex: none; align-self: start; min-width: 32px; min-height: 28px; font-size: 16px; line-height: 1; }
+.hr-chips { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.chip.hr-chip { background: none; color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip.hr-chip:hover { border-color: var(--accent); }
+.chip.hr-chip:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 1px; }
+.chip.hr-chip.is-archived { opacity: 0.6; }
+/* Mesmo nome em outro projeto, sem vínculo: oferece unificar sem abrir o ⋯. */
+.hr-suggest { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 8px 0 0; }
 .hr-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.hr-proj { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex-basis: 100%; }
+.hr-proj-name { flex-basis: 100%; }
 .hr-error { flex-basis: 100%; margin: 0; }
-.hr-group { border: 1.5px dashed var(--line); border-radius: 12px; padding: 6px 8px 8px; }
-.hr-group-head { margin: 0 2px 6px; color: var(--muted); font-weight: 600; }
+/* Editor da pessoa no RH: o painel do funcionário sem a conversa. Barra do projeto (seletor + Conversar) sob o topo; as abas
+   e a ficha rolam em .manage-body, com a mesma medida do "Mais" do chat (o rodapé de salvar gruda embaixo). */
+.manage-bar { display: grid; gap: 6px; }
+.manage-back { justify-self: start; font-size: 13px; }
+.manage-project { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
+.manage-project label { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.manage-project .setting-select { min-width: 0; width: 100%; }
+.manage-project .btn-secondary { flex: none; white-space: nowrap; }
+.manage-bar > p { margin: 0; }
+.drawer-chat .manage { min-height: 0; }
+.manage-body { flex: 1; min-height: 0; margin: 0 -20px -24px; padding: 0 20px 24px; overflow-y: auto; overscroll-behavior: contain; display: grid; grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; align-content: start; gap: 16px; }
+.drawer .manage-body .tabs { top: 0; margin-top: 0; }
+.manage-body .hire-inline .modal-footer { position: sticky; bottom: -24px; margin: 0 -20px -24px; padding: 10px 20px 14px; }
 @media (max-width: 640px) { .grid2, .choices { grid-template-columns: 1fr; } }
 
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -850,17 +974,17 @@ button.ranking-row:hover { border-color: var(--accent); }
 .pair-command { display: flex; flex-direction: column; gap: 4px; }
 .pair-command code { user-select: all; white-space: nowrap; }
 .actions { margin-top: 10px !important; display: flex; gap: 8px; align-items: center; }
-.btn-secondary { font: inherit; font-size: 12px; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
-.btn-secondary:hover:not(:disabled) { border-color: var(--accent); }
+.btn-secondary, .files-cm .cm-panels .cm-panel.cm-search :is(button.cm-button, label) { font: inherit; font-size: 12px; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+.btn-secondary:hover:not(:disabled), .files-cm .cm-panels .cm-panel.cm-search :is(button.cm-button, label):hover { border-color: var(--accent); }
 .btn-secondary:disabled { opacity: 0.6; cursor: default; }
 .btn-secondary.btn-icon { width: 28px; height: 28px; padding: 0; display: inline-grid; place-items: center; }
-.btn-primary.btn-with-icon { display: inline-flex; align-items: center; gap: 6px; }
+:is(.btn-primary, .btn-secondary).btn-with-icon { display: inline-flex; align-items: center; gap: 6px; }
 .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 0; }
 .stats div { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
 .stats dt { font-size: 11px; color: var(--muted); }
 .stats dd { margin: 2px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; }
-.small { font-size: 12px; }
-.row-inline { flex-direction: row; justify-content: space-between; align-items: center; }
+.small { font-size: 10px; }
+.row.row-inline { flex-direction: row; justify-content: space-between; align-items: center; }
 /* O véu vai sobre o papel do cartão, não no lugar dele: as linhas do quadro continuam por trás. */
 .bn.is-selected::before { background: linear-gradient(var(--card-selected), var(--card-selected)), var(--card); }
 
@@ -915,20 +1039,19 @@ a.usage:hover .meter-track { border-color: var(--ink-blue); }
 a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 3px; }
 .usage-note { font-size: 12px; color: var(--muted); }
 /* Claude e Codex em duas linhas: a do Claude em cima, a do Codex logo abaixo, com o ícone de conexão depois das barras. */
-.usage-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.usage-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
 .usage-line { display: flex; align-items: center; gap: 10px; }
 .usage-outdated { color: var(--waiting); }
-.meter { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.meter { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; }
 .meter-label { font-family: var(--hand); font-weight: 700; font-size: 17px; }
-.meter-track { position: relative; width: 64px; height: 8px; border: 1.5px solid var(--ink); border-radius: 3px 5px 3px 4px; overflow: hidden; }
-.meter-fill { position: absolute; inset: 0 auto 0 0; background: repeating-linear-gradient(-45deg, var(--meter-brand, var(--meter)) 0 3px, transparent 3px 5px); }
+/* O fundo da barra tem a cor do serviço (Claude/Codex); o preenchimento é o semáforo (verde <50%, amarelo <70%, vermelho depois). */
+.meter-track { position: relative; width: 64px; height: 8px; border: 1.5px solid var(--ink); border-radius: 3px 5px 3px 4px; overflow: hidden; background: var(--meter-brand); }
+.meter-fill { position: absolute; inset: 0 auto 0 0; background: var(--meter); }
 .meter-low { --meter: var(--ink-green); }
 .meter-mid { --meter: var(--waiting); }
 .meter-high { --meter: var(--ink-red); }
 .meter-claude { --meter-brand: var(--brand-claude); }
 .meter-codex { --meter-brand: var(--brand-codex); }
-.meter-codex .meter-track { background: var(--brand-codex-track); }
-/* A barra tem a cor do serviço; o aviso de nível (amarelo a partir de 70%, vermelho a partir de 90%) passa para o número. */
 .meter-mid .meter-value, .meter-high .meter-value { color: var(--meter); font-weight: 700; }
 .meter-value { font-variant-numeric: tabular-nums; min-width: 3ch; }
 .meter-reset { color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -942,10 +1065,14 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
   color: var(--boost-ink); background: var(--boost-bg); box-shadow: 0 0 0 1.5px var(--panel);
 }
 .auth-ok { color: var(--ink-green); }
-.auth-api { color: var(--waiting); }
+.auth-api { color: var(--waiting-ink); }
 .auth-off { color: var(--danger); }
 .auth-wait { color: var(--idle); }
 .auth-warn { display: inline-flex; align-items: center; gap: 6px; }
+/* Nome do serviço ao lado do ícone: texto neutro (o semáforo fica no ícone; o amarelo/vermelho como texto não passa em contraste). */
+.auth-conn { display: inline-flex; align-items: center; gap: 4px; }
+.auth-name { font-family: var(--hand); font-weight: 700; font-size: 17px; line-height: 1; color: var(--ink); white-space: nowrap; }
+@media (max-width: 640px) { .auth-name { display: none; } }
 .toolbar .btn-login { color: #fff; background: var(--ink-red); border-color: var(--ink-red); font-weight: 600; }
 .toolbar .btn-login:hover:not(:disabled) { filter: brightness(1.08); border-color: var(--ink-red); }
 .toolbar-check { display: flex; align-items: center; gap: 4px; font-size: 13px; }
@@ -963,7 +1090,7 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 .toolbar .workspace-tab:hover:not(:disabled) { border-color: transparent; border-bottom-color: var(--ink-muted); }
 .toolbar .workspace-tab.is-active:hover:not(:disabled) { border-bottom-color: var(--ink); }
 .toolbar .workspace-tab-add { color: var(--muted); }
-.workspace-pending { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--waiting); color: #fff; font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; }
+.workspace-pending { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--waiting-ink); color: #fff; font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; }
 .workspace-add { display: inline-flex; align-items: center; gap: 6px; flex: none; }
 .workspace-add input { width: 16ch; font: inherit; font-size: 13px; padding: 2px 6px; }
 .workspace-empty { margin: 0; }
@@ -1004,17 +1131,37 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 .conn-warn { margin: 0; padding: 4px 0 4px 10px; border-left: 3px solid var(--warn); color: var(--warn); font-size: 12.5px; }
 .ok { color: var(--ink-green); }
 
+/* ---- MCPs (Configurações › MCPs): grupos por origem, pares chave/valor ---- */
+.mcp-servers { flex: 1 1 100%; min-width: 0; display: grid; gap: 14px; }
+.mcp-group { display: grid; gap: 6px; min-width: 0; }
+.mcp-group > p, .mcp-servers > .actions, .mcp-servers li > p { margin: 0; }
+.mcp-group-title { margin: 0; font-size: 13px; }
+.mcp-project { display: grid; gap: 4px; font-size: 13px; font-weight: 600; padding-top: 8px; border-top: 1px solid var(--line); }
+.mcp-line, .mcp-keys, .mcp-tools { min-width: 0; overflow-wrap: anywhere; }
+.mcp-keys { margin: 0; }
+.mcp-form { padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+.mcp-form .segmented { flex-wrap: wrap; }
+.mcp-form > p { margin: 0; }
+.mcp-pairs { margin: 0; padding: 0; border: 0; display: grid; gap: 6px; min-width: 0; }
+.mcp-pairs legend { padding: 0 0 4px; font-size: 13px; font-weight: 600; }
+.mcp-pairs .actions { margin: 0; }
+.mcp-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto; gap: 6px; align-items: center; }
+.mcp-key { min-width: 0; overflow-wrap: anywhere; font-size: 12.5px; }
+.btn-secondary.mcp-pair-remove { padding: 6px; line-height: 0; }
+.mcp-pair-remove svg { width: 16px; height: 16px; }
+@media (max-width: 480px) { .mcp-pair { grid-template-columns: minmax(0, 1fr) auto; } .mcp-pair > :nth-child(2) { grid-column: 1; } .mcp-pair > :nth-child(3) { grid-row: 1 / span 2; grid-column: 2; } }
+
 /* ---- caixa "precisa de mim": botão com contador no topo e a lista embaixo ---- */
 .inbox { position: relative; }
 .toolbar .inbox-button { display: inline-flex; align-items: center; gap: 6px; }
 .toolbar .inbox-has { border-color: var(--waiting); color: var(--ink); font-weight: 600; }
-.inbox-count { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--waiting); color: #fff; font-size: 11.5px; font-weight: 700; line-height: 18px; text-align: center; }
+.inbox-count { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--waiting-ink); color: #fff; font-size: 11.5px; font-weight: 700; line-height: 18px; text-align: center; }
 .inbox-menu { position: absolute; top: calc(100% + 8px); left: 0; width: min(440px, calc(100vw - 24px)); max-height: min(70vh, 520px); display: flex; flex-direction: column; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2); overflow: hidden; font-size: 13px; z-index: 30; }
 .inbox-empty { margin: 0; padding: 14px; }
 .inbox-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; display: grid; gap: 2px; }
 .toolbar .inbox-item { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: 'kind who at' 'kind topic at' 'kind summary at'; column-gap: 10px; row-gap: 2px; align-items: center; text-align: left; padding: 7px 10px; border: 1px solid transparent; border-radius: 8px; }
 .toolbar .inbox-item:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); border-color: transparent; }
-.inbox-kind { grid-area: kind; font-family: var(--hand); font-weight: 700; font-size: 16px; line-height: 1; color: var(--waiting); min-width: 64px; }
+.inbox-kind { grid-area: kind; font-family: var(--hand); font-weight: 700; font-size: 16px; line-height: 1; color: var(--waiting-ink); min-width: 64px; }
 .inbox-plan .inbox-kind { color: var(--ink-blue); }
 .inbox-error .inbox-kind, .inbox-orphan .inbox-kind, .inbox-secret .inbox-kind { color: var(--ink-red); }
 /* "já troquei" / "não é segredo": linha própria embaixo do item (fora do botão que abre o painel),
@@ -1036,38 +1183,6 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
   .inbox-menu { position: fixed; top: auto; left: 12px; right: 12px; width: auto; margin-top: 8px; }
 }
 .inbox-notify { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--line); color: var(--muted); cursor: pointer; }
-
-/* ---- Ranking, abas "Coding Index" e "Preço": modelos do Artificial Analysis em barras ---- */
-.models { display: grid; gap: 8px; margin-top: 12px; }
-.models-refresh { justify-self: end; }
-.models-chart { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-/* Coluna do valor com largura fixa: as barras de todas as linhas começam e crescem alinhadas. */
-.models-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(70px, 38%) 8ch; align-items: center; gap: 8px; padding: 3px 4px; }
-button.models-row { width: 100%; min-height: 32px; text-align: left; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
-button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
-.models-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.models-caret { display: inline-block; width: 1.1em; color: var(--muted); }
-.models-effort { margin-left: 6px; padding: 0 5px; border: 1px solid var(--line); border-radius: 8px; font-size: 11px; color: var(--muted); }
-/* Esforços do modelo aberto: só o nome recua (as barras seguem alinhadas às dos modelos, na mesma
-   escala), e a barra é mais clara que a do esforço padrão. */
-.models-variants { list-style: none; margin: 0 0 4px; padding: 0; display: grid; gap: 1px; }
-.models-variant { font-size: 12px; padding: 1px 4px; }
-.models-variant .models-name { margin-left: 0.4em; padding-left: calc(0.7em + 4px); border-left: 2px solid var(--line); }
-.models-variant .models-bar { background: color-mix(in srgb, var(--ink-blue) 55%, var(--panel)); }
-.models-track { height: 10px; }
-.models-bar { display: block; height: 100%; min-width: 2px; background: var(--ink-blue); border-radius: 0 4px 4px 0; }
-.models-row:hover .models-bar { background: color-mix(in srgb, var(--ink-blue) 75%, var(--ink)); }
-.models-value { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.models-note { margin: 0; }
-.models-note p { margin: 0 0 6px; }
-.models-env { margin: 0 0 6px; padding: 6px 8px; background: color-mix(in srgb, var(--ink) 7%, transparent); border-radius: 6px; font-size: 12px; overflow-x: auto; }
-.models-foot { margin: 0; padding-top: 8px; border-top: 1px solid var(--line); }
-.models a { color: var(--ink-blue); text-underline-offset: 2px; }
-/* No celular não há hover para ler o nome cortado: o nome ganha a linha de cima inteira. */
-@media (max-width: 480px) {
-  .models-row { grid-template-columns: minmax(0, 1fr) 8ch; row-gap: 2px; }
-  .models-name { grid-column: 1 / -1; white-space: normal; }
-}
 
 /* ---- configurações: no jeito das do VS Code (busca, grupos à esquerda, item com título e descrição) ---- */
 .settings { position: relative; }
@@ -1123,7 +1238,7 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
 /* Campos do menu (inclusive os do cargo e do workspace): papel do cartão, linha fina e foco azul de caneta.
    O color-scheme deixa setinhas do número e a lista aberta do select no tema certo. */
 .settings-menu { color-scheme: light; }
-@media (prefers-color-scheme: dark) { .settings-menu { color-scheme: dark; } }
+:root[data-theme='dark'] .settings-menu { color-scheme: dark; }
 .settings-menu :is(input:not([type]), input[type='text'], input[type='number'], select, textarea):not(.workspace-rename) {
   font: inherit; font-size: 13px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px;
 }
@@ -1151,6 +1266,7 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
 .room-colors { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; width: 100%; }
 .room-colors li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .room-colors-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--hand); font-size: 19px; font-weight: 700; }
+.credits-link { color: var(--ink-blue); text-decoration: underline; text-underline-offset: 2px; }
 @media (max-width: 640px) {
   .settings-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .settings-nav { flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--line); padding: 6px 8px; }
@@ -1173,7 +1289,7 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
 .swatch-custom span { font: 700 14px/1 system-ui, sans-serif; color: #fff; text-shadow: 0 0 2px rgba(0, 0, 0, 0.6); pointer-events: none; }
 .swatch-custom input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: none; opacity: 0; cursor: pointer; }
 
-.legend { display: flex; gap: 14px; font-family: var(--hand); font-size: 18px; background: color-mix(in srgb, var(--board) 85%, transparent); padding: 2px 10px; border-radius: 8px; }
+.legend { display: flex; gap: 14px; font-family: var(--hand); font-size: 18px; letter-spacing: -0.04em; background: color-mix(in srgb, var(--board) 85%, transparent); padding: 2px 10px; border-radius: 8px; }
 /* Escondida até o mouse chegar no canto inferior direito (o painel continua lá, invisível, como área de hover). */
 .board-corner .legend { opacity: 0; transition: opacity 0.15s; }
 .board-corner .legend:hover { opacity: 1; }
@@ -1190,8 +1306,6 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
 .legend-project { color: var(--ink-blue); }
 .legend-agent { color: var(--ink); }
 .legend-skill { color: var(--ink-green); }
-.legend-borrow { color: var(--ink-red); }
-.legend-borrow::before { border-top-style: dashed; }
 
 /* ---- vidro dos painéis flutuantes ---- */
 /* Fundo `--panel-glass` com o que está atrás borrado. O topo leva o vidro no ::before: com o filtro nele mesmo, os
@@ -1202,7 +1316,6 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
 :is(.drawer, .modal, .settings-menu, .inbox-menu, .update-menu, .quick-jump, .notice, .sysmon, .chat-more, .task-detail, .tabs, .modal-footer) {
   backdrop-filter: var(--glass-blur);
 }
-.tabs.tabs-sub { backdrop-filter: none; }
 
 /* ---- painel lateral ---- */
 .drawer {
@@ -1228,12 +1341,13 @@ button.models-row:hover { background: color-mix(in srgb, var(--ink) 6%, transpar
 /* Abas no painel lateral (ex.: ranking): as mesmas da ficha, na medida do padding do painel. */
 .drawer .tabs { top: -18px; margin: 12px -20px 0; padding: 4px 20px 0; }
 .drawer .chat-more .tabs { margin-top: 0; }
-/* Ficha embutida no "Mais" (aba Ficha): as abas dela ficam abaixo das do "Mais", menores e sem grudar no topo;
-   o rodapé (salvar) gruda embaixo do painel. */
+/* Ficha embutida no "Mais" (abas Ficha e Projeto): as abas são as do "Mais"; nas outras (Desempenho, Ações) ela fica
+   escondida, com o que foi digitado. O rodapé (salvar) gruda embaixo do painel. */
+/* Colunas que encolhem: o campo de arquivo (largo demais para 360px) não alarga o painel. */
+.hire-inline, .hire-inline .form-panel, .hire-inline label { grid-template-columns: minmax(0, 1fr); }
 .hire-inline { display: grid; gap: 12px; }
+.hire-inline[hidden] { display: none; }
 .hire-inline .check { flex-wrap: wrap; }
-.chat-more .tabs.tabs-sub { position: static; margin: 0; padding: 0; background: none; }
-.tabs-sub .tab { font-size: 17px; padding: 4px 8px 5px; }
 .hire-inline .modal-footer { position: static; margin: 0; padding: 10px 0 0; }
 .chat-more .hire-inline .modal-footer { position: sticky; bottom: -24px; margin: 0 -20px -24px; padding: 10px 20px 14px; }
 /* Painel do funcionário: a conversa ocupa a altura toda; só a lista de mensagens rola e a caixa fica fixa embaixo.
@@ -1297,6 +1411,9 @@ body.is-resizing { cursor: ew-resize; user-select: none; }
 
 .browser-check { display: block; margin: 6px 0; line-height: 1.45; white-space: normal; }
 .browser-check a { color: inherit; font-weight: 600; }
+a.link { color: var(--ink-blue); text-decoration: underline; text-underline-offset: 2px; }
+.check-link { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.check-link a { flex: none; }
 button.link { background: none; border: none; padding: 0; color: var(--ink-blue); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 
 /* "Valeu a pena?" */
@@ -1344,3 +1461,18 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 .update-commits { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 12px; line-height: 1.4; }
 .update-commits code { color: var(--muted); }
 .update-notes { white-space: pre-wrap; line-height: 1.45; }
+/* Quadro com 5 colunas (Aguardar entrou na frente): mesmas medidas das 4 de antes, no celular também. */
+.tasks-columns { grid-template-columns: repeat(5, minmax(200px, 1fr)); }
+@media (max-width: 760px) {
+  .tasks-columns { grid-template-columns: repeat(5, calc(100% - 28px)); }
+}
+/* Motivo de Aguardar: campo abaixo do cartão, com a largura da coluna. */
+.task-wait-reason { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; font-size: 12px; padding: 4px 8px; border: 1px dashed var(--line); border-radius: 8px; background: var(--card); color: var(--ink); }
+
+/* Selo do git com arquivos sem commit: botão que abre a lista por conversa (ver UncommittedPanel). */
+.bn-git-btn { font: inherit; color: inherit; background: transparent; border: 1px solid transparent; border-radius: 10px; padding: 1px 6px; cursor: pointer; }
+.bn-git-btn:hover, .bn-git-btn:focus-visible { border-color: var(--line); }
+.git-unc-modal { width: min(560px, 100%); }
+.git-unc-group { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); }
+.git-unc-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px; font-size: 13.5px; }
+.git-unc-also { color: var(--warn); }

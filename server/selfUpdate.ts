@@ -167,7 +167,9 @@ export async function applyUpdate(root = ROOT, install = npmInstall): Promise<Up
 
 /**
  * Status guardado para o quadro: busca no remoto ao subir e a cada 6 h; "procurar agora" busca de novo, no
- * máximo uma vez por minuto. Um pedido por vez (fetch e atualização não se cruzam).
+ * máximo uma vez por minuto. A parte local (mudado à mão, atrás, commits, notas) é relida a cada pedido, sem rede;
+ * o erro e a hora ("verificado há") são sempre os da última busca no remoto. Um pedido por vez (fetch e
+ * atualização não se cruzam).
  */
 export class SelfUpdater {
   private status: UpdateStatus | null = null;
@@ -188,7 +190,9 @@ export class SelfUpdater {
 
   async check(fresh = false): Promise<UpdateStatus> {
     const age = this.status?.checkedAt ? Date.now() - Date.parse(this.status.checkedAt) : Infinity;
-    if (this.status && (!fresh || age < 60_000)) return this.status;
+    const guardado = this.status;
+    // Com uma busca ou atualização em andamento, não espera por ela: vai o guardado.
+    if (guardado && (!fresh || age < 60_000)) return this.running ? guardado : this.exclusive(async () => (await this.readLocal()) ?? guardado);
     return this.exclusive(async () => (this.status = await readUpdateStatus(this.root)));
   }
 
@@ -197,9 +201,20 @@ export class SelfUpdater {
       try {
         return await applyUpdate(this.root);
       } finally {
-        this.status = await readUpdateStatus(this.root, { fetch: false }).catch(() => this.status);
+        await this.readLocal();
       }
     });
+  }
+
+  /**
+   * Relê só a parte local (sem rede). Com status guardado, mantém dele o erro e a hora da última busca no remoto.
+   * Se a leitura falhar, devolve o guardado.
+   */
+  private async readLocal(): Promise<UpdateStatus | null> {
+    const guardado = this.status;
+    const local = await readUpdateStatus(this.root, { fetch: false }).catch(() => null);
+    if (!local) return guardado;
+    return (this.status = guardado ? { ...local, error: guardado.error, checkedAt: guardado.checkedAt } : local);
   }
 
   private async exclusive<T>(fn: () => Promise<T>): Promise<T> {

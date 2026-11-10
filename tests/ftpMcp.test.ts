@@ -319,7 +319,8 @@ describe('MCP de FTP: lançamento e ficha', () => {
     const hired = (await svc.hire('proj-id', { name: 'Fê', role: 'Deploy', mission: 'Publicar o site', servers: ['site'], launch: false }, true))!;
     const spawned = (await svc.chatSpawn('proj-id', null, hired.profile.id))!;
     const mcpPath = spawned.args[spawned.args.indexOf('--mcp-config') + 1]!;
-    expect(spawned.args).not.toContain('--strict-mcp-config');
+    // Contratado sem lista de MCPs nasce com nenhum (strict), mas o de FTP da ficha sobe mesmo assim.
+    expect(spawned.args).toContain('--strict-mcp-config');
     const raw = await fs.readFile(mcpPath, 'utf8');
     expect(raw).not.toContain(PASSWORD);
     const cfg = JSON.parse(raw) as { mcpServers: Record<string, { command: string; args: string[] }> };

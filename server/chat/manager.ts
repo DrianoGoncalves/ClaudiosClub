@@ -28,7 +28,7 @@ import { CodexProcess } from './codexProcess';
 import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
 import { finalQuestion } from './question';
 import { CEILING_AT, contextNotice, kTokens, NOTICE_AT, rereadUsd, switchDecision, usd, type TurnInfo } from './contextPolicy';
-import { BOOST_NOTICE, CONTEXT_NOTICE } from './items';
+import { BOOST_NOTICE, CONTEXT_NOTICE, STAFF_NOTICE } from './items';
 import { InboxState } from '../inboxState';
 import { isAlive, killTree, type ChatRegistry } from './registry';
 import { CONTINUE_TEXT, type AutoContinue, type AutoContinueEvent, type Pending } from './autoContinue';
@@ -182,6 +182,8 @@ export class ChatManager {
   private readonly inbox: InboxState;
   /** Fim do último turno de cada conversa: tamanho do contexto, ponto de corte (sobrevive ao processo fechar). */
   private readonly turns = new Map<string, TurnInfo & { ceilingNoted?: number }>();
+  /** Avisos de tarefa desviados: conversa de origem → conversa nova para onde o aviso seguiu (ver `sendToRequester`). */
+  private readonly requesterRedirects = new Map<string, string>();
   /** Modelo e esforço com que cada processo abriu (para onde a folga de cota volta). */
   private readonly launched = new WeakMap<ChatProcess, { model: string | null; effort: string | null }>();
   /** Folga de cota em cada processo: ligada, ou você trocou o modelo/esforço à mão (vale a sua escolha). */
@@ -460,8 +462,10 @@ export class ChatManager {
     const used = chat.contextUsed;
     const big = used !== null && used >= NOTICE_AT ? contextNotice(used, chat.model, CONTEXT_NOTICE, chat.fast) : null;
     const boost = await this.applyBoost(chat);
-    const notice = [ficha, big, boost].filter(Boolean).join('\n\n') || undefined;
-    chat.send(text, priority, images, notice, files);
+    // "continue" e despertador são da plataforma, mesmo na conversa delegada: só a mensagem do colega leva a marca.
+    const fromStaff = delegated && !auto;
+    const notice = [fromStaff ? STAFF_NOTICE : null, ficha, big, boost].filter(Boolean).join('\n\n') || undefined;
+    chat.send(text, priority, images, notice, files, fromStaff);
     this.opts.onSent?.(chat.sessionId);
     return chat.sessionId;
   }
@@ -533,6 +537,40 @@ export class ChatManager {
   }
 
   /**
+   * Aviso de desfecho de tarefa (entregue, ou a revisão terminou) para o gestor que pediu, na conversa dele.
+   * Mesma regra da sua mensagem (ver sendFromUser): conversa grande com o assunto fechado, ou acima do teto,
+   * segue numa conversa nova. Desfechos seguintes que caem numa conversa desviada vão para a mesma nova
+   * (`requesterRedirects`, seguindo a cadeia). A anterior continua na lista; não cancela nada nela.
+   */
+  async sendToRequester(projectId: string, sessionId: string | null, staffId: string | null, text: string): Promise<string> {
+    let target = sessionId;
+    while (target && this.requesterRedirects.has(target)) target = this.requesterRedirects.get(target)!;
+    const info = target ? this.turns.get(target) : undefined;
+    const open = target ? this.chats.get(target) : undefined;
+    if (target && staffId && info && !open?.busy && !(await this.opts.keepSession?.(target))) {
+      // Continue do limite ou despertador pendente: o gestor ainda está acompanhando algo nela.
+      const waiting = !!(await this.opts.autoContinue?.get(target)) || !!(await this.opts.wakeups?.get(target));
+      const policy = (await this.opts.contextSwitch?.()) ?? 'suggest';
+      const closed = policy === 'auto' && switchDecision(info, this.now(), 'auto') === 'switch';
+      const ceiling = policy === 'auto' && info.used !== null && info.used >= CEILING_AT;
+      if (!waiting && (closed || ceiling)) {
+        const fresh = await this.ensure(projectId, null, staffId);
+        this.requesterRedirects.set(target, fresh.sessionId);
+        const used = info.used!;
+        const cost = rereadUsd(used, info.model, info.fast);
+        const reread = cost === null ? '' : ` Cada chamada ao modelo relia tudo (${usd(cost)}).`;
+        const why = closed ? 'o assunto dela tinha fechado' : `passou do teto de ${kTokens(CEILING_AT)} sem fechar o assunto`;
+        fresh.addNotice(
+          `Seguiu numa conversa nova: o aviso desta tarefa não entrou na anterior, que tinha ${kTokens(used)} e ${why}.${reread} Esta começa só com a ficha e a memória. A anterior continua na lista de conversas.`,
+        );
+        this.log(`${target}: aviso da tarefa seguiu em ${fresh.sessionId} (a anterior tinha ${kTokens(used)})`);
+        return this.send(projectId, fresh.sessionId, staffId, text, 'later');
+      }
+    }
+    return this.send(projectId, target, staffId, text, 'later');
+  }
+
+  /**
    * Fim de um turno: guarda o tamanho e o ponto de corte para decidir a próxima mensagem, e avisa
    * você quando não troca sozinho (o ajuste está em "sugerir", ou a conversa passou do teto sem
    * fechar o assunto).
@@ -582,6 +620,17 @@ export class ChatManager {
       if (prev.autonomy !== next.autonomy || (chat.permissionMode && chat.permissionMode !== mode)) {
         chat.setPermissionMode(mode, `Autonomia agora: ${AUTONOMY_NAME[next.autonomy]}`);
       }
+    }
+  }
+
+  /**
+   * A memória pessoal mudou: as conversas abertas dessas fichas (todas as cópias da pessoa) reabrem com o prompt novo
+   * na próxima mensagem, com o funcionário parado (mesmo caminho do `stale` da ficha). Sem aviso no chat: o texto vai no prompt.
+   */
+  personChanged(sessionIds: string[]) {
+    for (const id of sessionIds) {
+      const chat = this.chats.get(id);
+      if (chat?.running) chat.stale = true;
     }
   }
 
@@ -730,17 +779,20 @@ export class ChatManager {
     this.chats.get(sessionId)?.interrupt();
   }
 
-  /** Alguma conversa aberta do funcionário está trabalhando (fora `exceptSession`). */
-  staffWorking(staffId: string, exceptSession?: string): boolean {
+  /**
+   * Alguma conversa aberta deste funcionário, neste projeto, está trabalhando (fora `exceptSession`). A mesma ficha
+   * em outro projeto não conta: cada projeto tem o seu funcionário.
+   */
+  staffWorking(projectId: string, staffId: string, exceptSession?: string): boolean {
     for (const c of this.chats.values()) {
-      if (c.running && c.staffId === staffId && c.sessionId !== exceptSession && c.working) return true;
+      if (c.running && c.projectId === projectId && c.staffId === staffId && c.sessionId !== exceptSession && c.working) return true;
     }
     return false;
   }
 
-  /** A conversa do funcionário que está no meio de um turno agora, se for uma só (senão, null). */
-  workingSession(staffId: string): string | null {
-    const busy = [...this.chats.values()].filter((c) => c.running && c.staffId === staffId && c.busy);
+  /** A conversa deste funcionário, neste projeto, que está no meio de um turno agora, se for uma só (senão, null). */
+  workingSession(projectId: string, staffId: string): string | null {
+    const busy = [...this.chats.values()].filter((c) => c.running && c.projectId === projectId && c.staffId === staffId && c.busy);
     return busy.length === 1 ? busy[0]!.sessionId : null;
   }
 

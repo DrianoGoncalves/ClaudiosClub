@@ -220,6 +220,51 @@ describe('buildGraph', () => {
     expect(wide).toBeGreaterThan(tall);
   });
 
+  it('com workspaces (aba Todos), as salas do mesmo workspace formam um bloco; os sem workspace vêm por último', () => {
+    // Nomes que, em ordem alfabética, alternam os workspaces: p1(x) p2(y) p3(x) p4(y) p5(x) p6(-) p7(y) p8(-).
+    const ws = ['x', 'y', 'x', 'y', 'x', null, 'y', null];
+    const projects = ws.map((_, i) => project(`p${i + 1}`, `C:\\www\\p${i + 1}`));
+    const b: Board = { ...board(), projects, inventories: {}, sessions: {} };
+    const of = new Map(projects.map((p, i) => [p.id, ws[i]!] as const));
+    const groups = { of, order: ['y', 'x'] }; // a ordem das abas, não a alfabética
+    const roomsOf = (id: string | null, opts: Parameters<typeof buildGraph>[1]) => {
+      const rooms = buildGraph(b, opts).nodes.filter((n) => n.type === 'room');
+      return rooms.filter((r) => r.type === 'room' && of.get(r.data.owner.slice(2)) === id).map(rect);
+    };
+    const box = (rs: ReturnType<typeof rect>[]) => ({
+      x: Math.min(...rs.map((r) => r.x)),
+      y: Math.min(...rs.map((r) => r.y)),
+      x2: Math.max(...rs.map((r) => r.x + r.w)),
+      y2: Math.max(...rs.map((r) => r.y + r.h)),
+    });
+    const apart = (a: ReturnType<typeof box>, c: ReturnType<typeof box>) => a.x2 <= c.x || c.x2 <= a.x || a.y2 <= c.y || c.y2 <= a.y;
+    const grouped = { aspect: 16 / 9, groups };
+    const [bx, by, bn] = [box(roomsOf('x', grouped)), box(roomsOf('y', grouped)), box(roomsOf(null, grouped))];
+    expect(apart(bx, by) && apart(bx, bn) && apart(by, bn)).toBe(true);
+    // Sem `groups` a ordem alfabética mistura os workspaces: os blocos se cruzam.
+    const mixed = { aspect: 16 / 9 };
+    expect(apart(box(roomsOf('x', mixed)), box(roomsOf('y', mixed)))).toBe(false);
+    // Ordem das abas: y antes de x (lendo linha por linha); sem workspace por último.
+    const first = (rs: ReturnType<typeof rect>[]) => [...rs].sort((p, q) => p.y - q.y || p.x - q.x)[0]!;
+    const reading = (r: ReturnType<typeof rect>) => r.y * 1e6 + r.x;
+    expect(reading(first(roomsOf('y', grouped)))).toBeLessThan(reading(first(roomsOf('x', grouped))));
+    expect(reading(first(roomsOf('x', grouped)))).toBeLessThan(reading(first(roomsOf(null, grouped))));
+    // Dentro do bloco, continua a ordem alfabética, e nada se sobrepõe.
+    const owners = (o: Parameters<typeof buildGraph>[1]) => buildGraph(b, o).nodes.flatMap((n) => (n.type === 'room' ? [n.data.owner] : []));
+    expect(owners(grouped)).toEqual(['u', 'p:p2', 'p:p4', 'p:p7', 'p:p1', 'p:p3', 'p:p5', 'p:p6', 'p:p8']);
+    const all = buildGraph(b, grouped).nodes.filter((n) => n.type !== 'room');
+    for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) expect(overlaps(all[i]!, all[j]!)).toBe(false);
+  });
+
+  it('com `groups` mas um workspace só, a planta é a mesma da grade simples', () => {
+    const projects = Array.from({ length: 7 }, (_, i) => project(`p${i}`, `C:\\www\\p${i}`));
+    const b: Board = { ...board(), projects, inventories: {}, sessions: {} };
+    const of = new Map(projects.map((p) => [p.id, 'x'] as const));
+    // Sem a sala "você" (que abre um bloco próprio quando há workspaces).
+    const at = (o: Parameters<typeof buildGraph>[1]) => buildGraph(b, { aspect: 2, showUserScope: false, ...o }).nodes.map((n) => [n.id, n.position.x, n.position.y]);
+    expect(at({ groups: { of, order: ['x'] } })).toEqual(at({}));
+  });
+
   it('muitos agents/skills vão para uma estante, que abre quando pedido', () => {
     const closed = buildGraph(board(), {}).nodes;
     const shelf = closed.find((n) => n.id === 'sh:p:a');
@@ -286,9 +331,7 @@ describe('buildGraph', () => {
     const b1 = nodes.find((n) => n.id === 'g:b');
     expect(b1?.type === 'employee' && b1.data.costUsd).toBeNull();
     const ds = nodes.find((n) => n.type === 'agent' && n.data.agent.filePath.startsWith(A));
-    // Único agent com consumo: 100% dos subagents. Funcionário: 7,5 de 10 no total.
-    expect(ds?.type === 'agent' && ds.data.cost).toEqual({ usd: 2, runs: 3, share: 1 });
-    expect(a1?.type === 'employee' && a1.data.costShare).toBe(0.75);
+    expect(ds?.type === 'agent' && ds.data.cost).toEqual({ usd: 2, runs: 3 });
   });
 
   it('salas em grade; hierarquia de cima para baixo; agents e skills ao lado do projeto', () => {
@@ -408,6 +451,26 @@ describe('buildGraph', () => {
     expect(novo?.type === 'employee' && novo.data.session).toBeNull();
     expect(edges.some((e) => e.source === 'h:a:chefe' && e.target === 'h:a:novo')).toBe(true);
     expect(edges.some((e) => e.source === 'p:a' && e.target === 'h:a:novo')).toBe(false);
+  });
+
+  it('ficha trabalhando numa conversa que não é a última: o cartão e a linha seguem a conversa viva', () => {
+    const b = { ...board(), staff: [staffProfile('chefe', ['s-a1', 's-a2'])] };
+    const working = { sessionId: 's-a2', pid: 9, cwd: A, name: null, status: 'busy', alive: true, entrypoint: null, kind: null, startedAt: null, statusUpdatedAt: null, delegated: true } as const;
+    b.live = [working];
+    const { nodes, edges } = buildGraph(b, {});
+    const chefe = nodes.find((n) => n.id === 'h:a:chefe');
+    expect(chefe?.type === 'employee' && chefe.data.session?.id).toBe('s-a2');
+    expect(chefe?.type === 'employee' && chefe.data.session?.live?.status).toBe('busy');
+    expect(edges.filter((e) => e.data?.active).map((e) => e.target)).toEqual(['h:a:chefe']);
+
+    // A mais recente também viva e no mesmo estado: no empate fica a mais recente.
+    b.live = [working, { ...working, sessionId: 's-a1' }];
+    const tie = buildGraph(b, {}).nodes.find((n) => n.id === 'h:a:chefe');
+    expect(tie?.type === 'employee' && tie.data.session?.id).toBe('s-a1');
+    // Trabalhando ganha de parada, mesmo na mais antiga.
+    b.live = [{ ...working, sessionId: 's-a1', status: 'idle' }, working];
+    const busy = buildGraph(b, {}).nodes.find((n) => n.id === 'h:a:chefe');
+    expect(busy?.type === 'employee' && busy.data.session?.id).toBe('s-a2');
   });
 
   it('arquivados somem do quadro, ou aparecem marcados quando pedido', () => {

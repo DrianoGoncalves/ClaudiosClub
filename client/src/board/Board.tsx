@@ -11,7 +11,6 @@ import {
   getViewportForBounds,
   type FinalConnectionState,
   type NodeChange,
-  type XYPosition,
 } from '@xyflow/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AppConfig, Board, BoardBackground, CostReport, GitState, InboxItem, SendPriority, UiLevel, UsageStop } from '../../../shared/model';
@@ -20,6 +19,7 @@ import type { InboxView } from '../inbox/useInbox';
 import { EdgeActions, edgeTypes } from './edges';
 import { buildGraph, HANDLE, HR_ID, RANKING_ID, roomFrame, type BoardNode, type StaffLink } from './layout';
 import { nodeTypes } from './nodes';
+import { layoutKey, loadPositions, positionsOf, savePositions, withMoved, withReset, type Positions } from './positions';
 import { ChartIcon, UsersIcon } from '../icons';
 import { SettingsMenu } from '../toolbar/SettingsMenu';
 import { AuthBadge, CodexUsageLine, CompanyTitle, UsageMeters, useAccountUsage } from '../toolbar/Toolbar';
@@ -31,9 +31,6 @@ import { WorkspaceTabs } from '../office/WorkspaceTabs';
 import { hireDrop } from '../staff/directory';
 import { inTab, TAB_ALL, TAB_NONE, workspaceByProject } from '../office/workspaces';
 
-// Posições arrastadas ficam no navegador por enquanto; vão para `.myco/` quando houver escrita no disco.
-// v3: as salas passaram a formar uma grade; as posições da v2 (uma linha só) não servem mais.
-const POSITIONS_KEY = 'myco.positions.v3';
 /** Estantes abertas e salas dobradas: conveniência por navegador. */
 const SHELVES_KEY = 'myco.shelves';
 const COLLAPSED_KEY = 'myco.collapsedRooms';
@@ -56,22 +53,6 @@ function saveList(key: string, ids: string[]) {
 
 const toggleIn = (list: string[], id: string) => (list.includes(id) ? list.filter((s) => s !== id) : [...list, id]);
 
-function loadPositions(): Record<string, XYPosition> {
-  try {
-    return JSON.parse(localStorage.getItem(POSITIONS_KEY) ?? '{}') as Record<string, XYPosition>;
-  } catch {
-    return {};
-  }
-}
-
-function savePositions(positions: Record<string, XYPosition>) {
-  try {
-    localStorage.setItem(POSITIONS_KEY, JSON.stringify(positions));
-  } catch {
-    // armazenamento indisponível: as posições valem só nesta aba
-  }
-}
-
 interface BoardViewProps {
   board: Board;
   config: AppConfig | null;
@@ -81,6 +62,8 @@ interface BoardViewProps {
   /** Tarefas em aberto por projeto (chip no cabeçalho, que abre o quadro de tarefas). */
   tasks: Record<string, { open: number; review: number }>;
   onOpenTasks: (projectId: string) => void;
+  /** Selo do git com arquivos sem commit (abre a lista por conversa). */
+  onOpenUncommitted: (projectId: string) => void;
   showArchived: boolean;
   onToggleArchived: (value: boolean) => void;
   animations: boolean;
@@ -154,6 +137,11 @@ export function BoardView(props: BoardViewProps) {
   // Proporção da tela usada na planta: medida na abertura e a cada "reorganizar" (não a cada
   // redimensionamento, para o quadro não se rearrumar sozinho enquanto você mexe na janela).
   const [aspect, setAspect] = useState(measureAspect);
+  // Em "Todos", as salas do mesmo workspace ficam juntas na planta; nas outras abas há um workspace só.
+  const groups = useMemo(
+    () => (tab === TAB_ALL && config?.workspaces.length ? { of: workspaceOf, order: config.workspaces.map((w) => w.id) } : undefined),
+    [tab, workspaceOf, config?.workspaces],
+  );
   const graph = useMemo(
     () =>
       buildGraph(
@@ -170,10 +158,11 @@ export function BoardView(props: BoardViewProps) {
           tasks,
           aspect,
           inbox: props.inbox.items,
+          groups,
         },
         props.images,
       ),
-    [board, showArchived, config?.archived, costs, shelves, props.images, config?.projectColors, collapsed, git, tasks, aspect, props.inbox.items],
+    [board, showArchived, config?.archived, costs, shelves, props.images, config?.projectColors, collapsed, git, tasks, aspect, props.inbox.items, groups],
   );
   // Salas de projeto no quadro agora, na ordem da planta: as que o orçamento por projeto lista.
   const rooms = useMemo(
@@ -227,7 +216,10 @@ export function BoardView(props: BoardViewProps) {
     [props.onLink, props.onHireFrom, props.onCopyFrom],
   );
   const archivedCount = (config?.archived.projects.length ?? 0) + (config?.archived.sessions.length ?? 0);
-  const [saved, setSaved] = useState(loadPositions);
+  // Cada aba tem a sua planta: arrastar ou "reorganizar" numa não mexe nas outras.
+  const [store, setStore] = useState(loadPositions);
+  const posKey = layoutKey(tab, config);
+  const saved = useMemo(() => positionsOf(store, posKey), [store, posKey]);
   const [nodes, setNodes] = useState<BoardNode[]>(() => fitRooms(withSaved(graph.nodes, saved)));
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
@@ -260,12 +252,20 @@ export function BoardView(props: BoardViewProps) {
     fitStart();
   }, [nodesReady, fitStart]);
   // Mostrar/esconder arquivados é um pedido explícito: aí, sim, reenquadra. Trocar de aba também.
+  // O enquadre espera os nós novos chegarem ao React Flow (efeito em `nodes`): um timer fixo pegava, em
+  // abas com muitas salas, os nós da aba anterior.
+  const refit = useRef(false);
   const toggles = useRef({ showArchived, tab });
   useEffect(() => {
     const prev = toggles.current;
     toggles.current = { showArchived, tab };
-    if (fitted.current && (prev.showArchived !== showArchived || prev.tab !== tab)) setTimeout(fitStart, 50);
-  }, [showArchived, tab, fitStart]);
+    if (fitted.current && (prev.showArchived !== showArchived || prev.tab !== tab)) refit.current = true;
+  }, [showArchived, tab]);
+  useEffect(() => {
+    if (!refit.current) return;
+    refit.current = false;
+    fitStart();
+  }, [nodes, fitStart]);
 
   // A seleção é controlada pelo App (painel lateral); aqui só entram arrastos e medições.
   // Arrastar a sala leva junto tudo que está dentro dela; a moldura sempre se reajusta aos nós.
@@ -288,19 +288,23 @@ export function BoardView(props: BoardViewProps) {
     });
   }, []);
 
-  const onNodeDragStop = useCallback((_: unknown, __: BoardNode, dragged: BoardNode[]) => {
-    // A sala não tem posição própria: salva a dos nós de dentro.
-    const byId = new Map(nodesRef.current.map((n) => [n.id, n]));
-    const toSave = dragged.flatMap((n) =>
-      n.type === 'room' ? n.data.members.map((id) => byId.get(id)).filter((m): m is BoardNode => !!m) : [n],
-    );
-    setSaved((prev) => {
-      const next = { ...prev };
-      for (const n of toSave) next[n.id] = n.position;
-      savePositions(next);
-      return next;
-    });
-  }, []);
+  const onNodeDragStop = useCallback(
+    (_: unknown, __: BoardNode, dragged: BoardNode[]) => {
+      // A sala não tem posição própria: salva a dos nós de dentro.
+      const byId = new Map(nodesRef.current.map((n) => [n.id, n]));
+      const toSave = dragged.flatMap((n) =>
+        n.type === 'room' ? n.data.members.map((id) => byId.get(id)).filter((m): m is BoardNode => !!m) : [n],
+      );
+      const moved: Positions = {};
+      for (const n of toSave) moved[n.id] = n.position;
+      setStore((prev) => {
+        const next = withMoved(prev, posKey, moved);
+        savePositions(next);
+        return next;
+      });
+    },
+    [posKey],
+  );
 
   const onNodeClick = (event: React.MouseEvent, n: BoardNode) => {
     // Clique simples no "+" (sem arrastar): o React Flow não chama onConnectEnd, então contrata aqui.
@@ -313,6 +317,8 @@ export function BoardView(props: BoardViewProps) {
     if ((event.target as Element).closest('.bn-collapse')) return toggleRoom(n.id);
     // Chip de tarefas do cabeçalho: abre o quadro de tarefas do projeto.
     if ((event.target as Element).closest('.bn-tasks') && n.id.startsWith('p:')) return props.onOpenTasks(n.id.slice(2));
+    // Selo do git com sujeira: abre os arquivos sem commit, por conversa.
+    if ((event.target as Element).closest('.bn-git-btn') && n.id.startsWith('p:')) return props.onOpenUncommitted(n.id.slice(2));
     if (n.type === 'shelf') toggleShelf(n.id);
     // Clicar na parede da sala é clicar no projeto dela.
     else if (n.type === 'room') onSelect(n.data.owner);
@@ -320,10 +326,11 @@ export function BoardView(props: BoardViewProps) {
   };
 
   const resetLayout = () => {
-    savePositions({});
-    setSaved({});
+    const next = withReset(store, posKey);
+    savePositions(next);
+    setStore(next);
     setAspect(measureAspect());
-    setTimeout(fitStart, 80);
+    refit.current = true;
   };
 
   const displayNodes = useMemo(
@@ -355,6 +362,8 @@ export function BoardView(props: BoardViewProps) {
       minZoom={0.1}
       maxZoom={2}
       colorMode="system"
+      // O crédito do React Flow fica em Configurações > Créditos, não no canto do quadro.
+      proOptions={{ hideAttribution: true }}
     >
       <Background variant={BackgroundVariant.Dots} gap={28} size={1.2} />
       <Controls showInteractive={false}>
@@ -443,7 +452,6 @@ export function BoardView(props: BoardViewProps) {
           <span className="legend-item legend-agent">{t('board.legendEmployee')}</span>
           <span className="legend-item legend-skill">{t('board.skillWord')}</span>
           <span className="legend-item legend-calls">{t('board.alsoCalls')}</span>
-          <span className="legend-item legend-borrow">{t('board.legendBorrow')}</span>
         </div>
         <button
           type="button"
@@ -472,7 +480,7 @@ function measureAspect(): number {
   return area.width / Math.max(100, area.height - top);
 }
 
-function withSaved(nodes: BoardNode[], saved: Record<string, XYPosition>): BoardNode[] {
+function withSaved(nodes: BoardNode[], saved: Positions): BoardNode[] {
   return nodes.map((n) => (saved[n.id] ? { ...n, position: saved[n.id]! } : n));
 }
 

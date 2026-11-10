@@ -194,7 +194,7 @@ export function runTests(dir: string, command: string): Promise<TestRun> {
 }
 
 /** De `from` até o que está no disco, ou até o commit `to` (aí sem os arquivos novos não commitados). */
-async function changedFiles(dir: string, from: string, to?: string | null): Promise<TaskCodeFile[]> {
+export async function changedFiles(dir: string, from: string, to?: string | null): Promise<TaskCodeFile[]> {
   const range = to ? [from, to] : [from];
   const numstat = await git(dir, ['diff', '--numstat', ...range, '--', '.', ...NOT_MYCO]).catch(() => '');
   const status = await git(dir, ['diff', '--name-status', ...range, '--', '.', ...NOT_MYCO]).catch(() => '');

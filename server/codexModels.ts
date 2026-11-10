@@ -109,7 +109,7 @@ export class CodexModels {
     }
     if (!status.available) return { models: [], reason: status.reason ?? 'o Codex não está disponível' };
     const r = await this.run(['debug', 'models'], '', RUN_TIMEOUT);
-    if (r.spawnError) return { models: [], reason: 'o Codex CLI não está instalado (npm i -g @openai/codex)' };
+    if (r.spawnError) return { models: [], reason: 'o Codex CLI não está instalado: ligue o Codex nas Configurações do Claudio’s Club' };
     if (r.timedOut) return { models: [], reason: 'o Codex demorou demais para listar os modelos' };
     if (r.code !== 0) return { models: [], reason: `o codex debug models falhou${r.stderr.trim() ? `: ${r.stderr.trim().split('\n')[0]!.slice(0, 200)}` : ''}` };
     const models = parseCodexModels(r.stdout);

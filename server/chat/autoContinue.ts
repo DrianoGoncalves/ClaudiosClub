@@ -41,7 +41,7 @@ export interface AutoContinueOptions {
   /** A opção `autoContinue` do config, conferida na hora de agendar e na hora de mandar. */
   enabled: () => Promise<boolean>;
   /** A linha de parada do usuário (5h/7d da conta, orçamento do projeto) barra agora? Devolve onde ela volta. */
-  stopHit: (projectId: string) => Promise<{ resetsAt: string | null } | null>;
+  stopHit: (projectId: string, staffId: string | null) => Promise<{ resetsAt: string | null } | null>;
   /** Resets (5h/7d) que o app conhece, para reagendar quando a linha de parada barra. */
   knownResets: () => Promise<ReadonlyArray<{ kind: string; resetsAt: string | null }>>;
   /** Manda o "continue" (ou o `text` da pendência) na conversa, acordando-a se estiver fechada. */
@@ -167,7 +167,7 @@ export class AutoContinue {
         // Cancelada enquanto conferia: não manda.
         if (this.items.get(p.sessionId) !== p) continue;
         // Sem conseguir conferir a linha de parada, não arrisca: espera mais um pouco.
-        const stop = await this.opts.stopHit(p.projectId).catch((err) => {
+        const stop = await this.opts.stopHit(p.projectId, p.staffId).catch((err) => {
           this.log(`${p.sessionId}: não consegui conferir a linha de parada: ${err instanceof Error ? err.message : String(err)}`);
           return { resetsAt: null };
         });

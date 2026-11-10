@@ -110,6 +110,20 @@ describe('Codex: argumentos', () => {
     expect(configs(args).some((c) => c.startsWith('developer_instructions'))).toBe(false);
   });
 
+  it('no Windows a sandbox elevada (o bloqueio de segredos é imposto pelo Windows) vai na primeira execução e no resume, antes do thread e do "-"; no Linux não vai', () => {
+    const id = '01a1babd-2221-7471-bc6f-23be3a417793';
+    const elevated = 'windows.sandbox="elevated"';
+    const win = buildCodexArgs({ ...base, platform: 'win32' });
+    expect(configs(win)).toContain(elevated);
+    const winResume = buildCodexArgs({ ...base, platform: 'win32', threadId: id });
+    expect(configs(winResume)).toContain(elevated);
+    expect(winResume.indexOf(elevated)).toBeLessThan(winResume.indexOf(id));
+    const linux = buildCodexArgs({ ...base, platform: 'linux' });
+    const linuxResume = buildCodexArgs({ ...base, platform: 'linux', threadId: id });
+    expect(configs(linux).some((c) => c.startsWith('windows.sandbox'))).toBe(false);
+    expect(configs(linuxResume).some((c) => c.startsWith('windows.sandbox'))).toBe(false);
+  });
+
   it('as seguintes: exec resume <thread_id>, sem -C; o perfil de permissões é o mesmo da primeira execução', () => {
     const id = '01a1babd-2221-7471-bc6f-23be3a417793';
     const args = buildCodexArgs({ ...base, sandbox: 'workspace', model: 'gpt-6-luna', threadId: id });
@@ -1042,7 +1056,7 @@ describe('ficha de quem roda no Codex', () => {
       expect(text).toContain('## Navegador');
       expect(text).toContain('Pede aprovação antes de cada edição ou comando.');
       expect(text).toContain('ferramenta Monitor');
-      expect(text).toContain('use subagents (ferramenta Agent)');
+      expect(text).toContain('use um subagent (ferramenta Agent)');
     }
   });
 });

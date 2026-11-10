@@ -2,9 +2,10 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from 'react-dom';
 import { CONTEXT_SWITCHES, type AppConfig, type BoardBackground, type ContextSwitch, type Project, type SendPriority, type UiLevel, type UsageStop, type Workspace } from '../../../shared/model';
 import { DemoButton, WorkspacesEditor } from '../office/WorkspacesSettings';
+import { McpServers } from '../office/McpServers';
 import { api, type CodexModelsState } from '../api';
 import { bareVersion } from '../format';
-import { useSystemTheme } from '../board/colors';
+import { useTheme, useThemePref, type ThemePref } from '../theme';
 import { useChatDetail } from '../chat/chatDetail';
 import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
 import { PairControls } from './PairControls';
@@ -13,6 +14,7 @@ import { RolesEditor } from './RolesEditor';
 import { useServerAction } from './ServerAction';
 import { ThemeBackgrounds } from './ThemeBackgrounds';
 import { UpdateControls, useUpdateStatus } from './UpdateNotice';
+import { installCodex } from './codexSetup';
 
 // Configurações do Claudio’s Club, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
 // com título, descrição e o controle logo abaixo. Abre pelo botão "config" ou com Ctrl+,.
@@ -60,14 +62,24 @@ interface Props {
   freelaArchiveDays: number | null;
 }
 
-type GroupId = 'general' | 'board' | 'chat' | 'roles' | 'usage';
+type GroupId = 'general' | 'board' | 'chat' | 'roles' | 'mcp' | 'usage' | 'credits';
 
 const GROUPS: Array<{ id: GroupId; label: string; intro: string }> = [
   { id: 'general', label: t('toolbar.groupGeneral'), intro: t('toolbar.groupGeneralIntro') },
   { id: 'board', label: t('toolbar.groupBoard'), intro: t('toolbar.groupBoardIntro') },
   { id: 'chat', label: t('toolbar.groupChat'), intro: t('toolbar.groupChatIntro') },
   { id: 'roles', label: t('toolbar.groupRoles'), intro: t('toolbar.groupRolesIntro') },
+  { id: 'mcp', label: t('mcp.group'), intro: t('mcp.groupIntro') },
   { id: 'usage', label: t('toolbar.groupUsage'), intro: t('toolbar.groupUsageIntro') },
+  { id: 'credits', label: t('toolbar.groupCredits'), intro: t('toolbar.groupCreditsIntro') },
+];
+
+/** Bibliotecas que aparecem na interface. O React Flow pede o crédito, e ele mora aqui em vez de no canto do quadro. */
+const CREDITS = [
+  { name: 'React Flow', license: 'MIT', url: 'https://reactflow.dev' },
+  { name: 'Rough.js', license: 'MIT', url: 'https://roughjs.com' },
+  { name: 'CodeMirror', license: 'MIT', url: 'https://codemirror.net' },
+  { name: 'Caveat', license: 'SIL OFL 1.1', url: 'https://fonts.google.com/specimen/Caveat' },
 ];
 
 type SectionId = 'workspaces' | 'colors' | 'display';
@@ -114,7 +126,7 @@ export function SettingsMenu(props: Props) {
   const root = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
-  const theme = useSystemTheme();
+  const theme = useTheme();
   const queryRef = useRef(query);
   queryRef.current = query;
 
@@ -349,6 +361,14 @@ function buildSettings(
           },
         ]
       : []),
+    {
+      id: 'theme',
+      group: 'general',
+      title: t('toolbar.themeTitle'),
+      description: t('toolbar.themeDesc'),
+      keywords: t('toolbar.themeKeywords'),
+      control: <ThemePicker />,
+    },
     // Idioma: a escolha vale para a página toda e recarrega.
     {
       id: 'language',
@@ -473,6 +493,14 @@ function buildSettings(
       keywords: t('toolbar.updateKeywords'),
       control: <UpdateControls />,
     },
+    {
+      id: 'mcp-servers',
+      group: 'mcp',
+      title: t('mcp.title'),
+      description: t('mcp.desc'),
+      keywords: t('mcp.keywords'),
+      control: <McpServers projects={p.projects} />,
+    },
   ];
 
   // Fundo geral: claro e escuro lado a lado, cada um com o padrão de fábrica.
@@ -488,6 +516,29 @@ function buildSettings(
       advanced: true,
     });
   }
+
+  out.push({
+    id: 'credits',
+    group: 'credits',
+    title: t('toolbar.creditsTitle'),
+    description: t('toolbar.creditsDesc'),
+    keywords: `${t('toolbar.creditsKeywords')} ${CREDITS.map((c) => c.name).join(' ')}`,
+    control: (
+      <ul className="room-colors">
+        {CREDITS.map((c) => (
+          <li key={c.name}>
+            <span className="room-colors-name">{c.name}</span>
+            <span className="muted small">
+              {c.license} ·{' '}
+              <a className="credits-link" href={c.url} target="_blank" rel="noopener noreferrer">
+                {c.url.replace(/^https:\/\/(www\.)?/, '')}
+              </a>
+            </span>
+          </li>
+        ))}
+      </ul>
+    ),
+  });
 
   out.push({
     id: 'chat-detail',
@@ -572,7 +623,15 @@ function buildSettings(
       title: t('toolbar.codexTitle'),
       description: t('toolbar.codexDesc'),
       keywords: t('toolbar.codexKeywords'),
-      toggle: { checked: p.codexReview, onChange: (v) => void api.saveConfig({ codexReview: v }).then(p.onConfig, () => {}) },
+      // Ligar instala o Codex se faltar (o servidor não roda o npm de quem já tem). Login fica com o usuário, no header.
+      toggle: {
+        checked: p.codexReview,
+        onChange: (v) =>
+          void api.saveConfig({ codexReview: v }).then((c) => {
+            p.onConfig(c);
+            if (v) void installCodex();
+          }, () => {}),
+      },
       advanced: true,
     });
     // Só com o Codex ligado: o modelo que a pergunta ao GPT usa.
@@ -737,6 +796,26 @@ function UiLevelPicker({ value, onChange }: { value: UiLevel; onChange: (level: 
         ] as const
       ).map(([level, label]) => (
         <button key={level} type="button" className="btn-secondary btn-toggle" aria-pressed={value === level} disabled={busy} onClick={() => void pick(level)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Claro, escuro ou o do sistema; vale só neste navegador (ver theme.ts). */
+function ThemePicker() {
+  const [pref, setPref] = useThemePref();
+  return (
+    <div className="segmented" role="group" aria-label={t('toolbar.themeTitle')}>
+      {(
+        [
+          ['system', t('toolbar.themeSystem')],
+          ['light', t('toolbar.themeLight')],
+          ['dark', t('toolbar.themeDark')],
+        ] as Array<[ThemePref, string]>
+      ).map(([value, label]) => (
+        <button key={value} type="button" className="btn-secondary btn-toggle" aria-pressed={pref === value} onClick={() => setPref(value)}>
           {label}
         </button>
       ))}

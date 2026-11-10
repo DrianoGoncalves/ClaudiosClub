@@ -320,8 +320,10 @@ export type Admission = { done: true } | { done: false; fromBrowser: boolean };
 export function admit(req: http.IncomingMessage, res: http.ServerResponse, url: URL, pairing: Pairing, o: AdmitOptions): Admission {
   const log = o.log ?? ((line: string) => console.log(line));
   const origin = req.headers.origin;
+  // PUT (a memória pessoal) entra pelo mesmo gate de POST: cabeçalho x-myco e Origin local.
+  const writes = req.method === 'POST' || req.method === 'PUT';
   if (o.isSandbox?.(req)) {
-    if (req.method === 'POST' && req.headers['x-myco'] !== '1') {
+    if (writes && req.headers['x-myco'] !== '1') {
       json(res, 403, { error: 'origem não permitida' });
       return { done: true };
     }
@@ -331,7 +333,7 @@ export function admit(req: http.IncomingMessage, res: http.ServerResponse, url: 
     }
     return { done: false, fromBrowser: false };
   }
-  if (req.method === 'POST') {
+  if (writes) {
     if (req.headers['x-myco'] !== '1' || !o.isLocalOrigin(origin)) {
       json(res, 403, { error: 'origem não permitida' });
       return { done: true };

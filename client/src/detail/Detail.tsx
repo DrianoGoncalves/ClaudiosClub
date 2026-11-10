@@ -20,21 +20,26 @@ import { TEMP_IDLE_DAYS } from '../../../shared/model';
 import { alertError, api, isPairingError } from '../api';
 import { RoomColorPicker } from '../board/colors';
 import { portraitUrl } from '../board/nodes';
-import { showsStatus, useSeeIdle, useSeenIdle } from '../board/unread';
+import { idleUnseen, showsStatus, useSeeIdle, useSeenIdle } from '../board/unread';
 import { ChatView, type MoreTab } from '../chat/ChatView';
 import type { ChatFocus } from '../chat/chatFocus';
+import { MoreTabs } from '../chat/MoreTabs';
 import { BrowserCheck } from '../staff/BrowserCheck';
+import type { StaffFormTab } from '../staff/HireForm';
+import { StaffHistory } from '../staff/StaffHistory';
 import { MAX_INPUT_BYTES, PROJECT_IMAGE_MAX, shrinkImage } from '../lib/shrinkImage';
-import { METRIC_LABEL, type Metric, ModelsChart } from '../toolbar/ModelsMenu';
 import { Attachments } from './Attachments';
+import { ProjectGuide } from './ProjectGuide';
 import { ProjectName } from './ProjectName';
 import { Routines } from './Routines';
+import { StaffReview } from './StaffReview';
 import { WorthIt } from './WorthIt';
+import { reviewDays } from '../costReview';
 import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatPercent, formatShare, formatUsd, STATUS_LABEL } from '../format';
 import { isLoss, type RankingGroup, type RankingRow, rankingRows, savingsList, teamSavings } from '../ranking';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
-import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, PlusIcon, TasksIcon, UserPlusIcon } from '../icons';
+import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PlusIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
 
 // Painel lateral: o que o nó selecionado no quadro tem por trás.
@@ -103,11 +108,18 @@ export function EmployeePanel(props: {
   onHireSub: () => void;
   /** Editar a ficha; sem ficha, dar uma para a conversa aberta (`sessionId`). */
   onEdit: (sessionId: string | null) => void;
-  /** A ficha editável (o formulário embutido), na aba Ficha do "Mais". */
-  sheetForm?: ReactNode;
+  /**
+   * A ficha editável (o formulário embutido), repartida nas abas Ficha e Projeto do "Mais": recebe a aba do formulário
+   * (`null` = a aberta é outra: fica escondido, sem perder o que foi digitado) e como pedir a troca de aba.
+   */
+  sheetForm?: (tab: StaffFormTab | null, onTab: (tab: StaffFormTab) => void) => ReactNode;
+  /** A ficha voltou a uma versão do histórico: o quadro relê. */
+  onRestored?: (profile: StaffProfile) => void;
   /** Funcionário fantasma: as conversas sem ficha do projeto, num nó só. */
   ghost?: boolean;
   onSessionStarted?: (sessionId: string) => void;
+  /** Arquivo citado numa resposta do chat: abre no editor de arquivos do projeto (relativo à raiz). */
+  onOpenFile?: (path: string) => void;
   /** A ficha mudou por aqui (rotinas): o quadro relê. */
   onChanged?: () => void;
   /** Nível simples: o painel fica só com a conversa. */
@@ -122,6 +134,19 @@ export function EmployeePanel(props: {
   onFocusDone?: () => void;
   /** A caixa "precisa de mim": conversa com aviso nela abre no fim, como antes. */
   inbox?: InboxItem[];
+  /**
+   * Editando pelo RH: as mesmas abas do "Mais", mas no lugar da conversa, com o seletor de projeto (a mesma pessoa em
+   * outros projetos) e o "Conversar", que abre o painel dela no chat do projeto escolhido.
+   */
+  manage?: {
+    /** As fichas da pessoa, uma por projeto (a deste painel inclusive). */
+    copies: Array<{ projectId: string; staffId: string; projectName: string }>;
+    tab: string;
+    onTab: (tab: string) => void;
+    onProject: (projectId: string) => void;
+    onChat: () => void;
+    onBack: () => void;
+  };
 }) {
   const { session: s, staff, project } = props;
   // Qual conversa está aberta: a mais recente, outra da lista, ou uma nova (ainda sem sessão).
@@ -146,11 +171,13 @@ export function EmployeePanel(props: {
   );
   const first = useRef(true);
   useEffect(() => {
-    // Na primeira vez vale a conversa pedida (busca); depois, a mais recente quando ela muda.
+    // Na primeira vez vale a conversa pedida (busca). Depois, só adota a mais recente se não há conversa aberta:
+    // trocar sozinho com uma aberta remonta o chat e apaga o rascunho que o user estava digitando.
     if (first.current) {
       first.current = false;
       return;
     }
+    if (picked !== null || fresh) return;
     setPicked(s?.id ?? null);
     setFresh(false);
     setFreshId(null);
@@ -159,7 +186,13 @@ export function EmployeePanel(props: {
   const opened = fresh ? null : picked;
   const current = fresh ? freshId : picked;
   // Conversa na tela (sem projeto não há chat): parada, já foi vista.
-  useSeeIdle(project && current ? (props.live?.find((l) => l.sessionId === current) ?? (current === s?.id ? s.live : null)) : null);
+  useSeeIdle(project && current && !props.manage ? (props.live?.find((l) => l.sessionId === current) ?? (current === s?.id ? s.live : null)) : null);
+  // Conversa parada e ainda não vista (a da tela não conta): o select põe "● " no nome, para lembrar o que falta ler.
+  const seen = useSeenIdle();
+  const unread = (id: string) => {
+    const l = id !== current ? props.live?.find((x) => x.sessionId === id) : undefined;
+    return !!l && idleUnseen(seen, l);
+  };
   // Sem ficha, a lista é a própria conversa: dá para abrir uma nova (a pesada fica no quadro) e voltar a ela.
   const listed = props.conversations?.length
     ? props.conversations
@@ -228,7 +261,7 @@ export function EmployeePanel(props: {
           )}
         </div>
       </div>
-      {showConvos && (
+      {showConvos && !props.manage && (
         <div className="chat-convos">
           <select
             aria-label={t('detail.conversation')}
@@ -240,7 +273,7 @@ export function EmployeePanel(props: {
               <optgroup key={g.label} label={g.label}>
                 {g.items.map(({ c }) => (
                   <option key={c.id} value={c.id}>
-                    {conversationLabel(c)}
+                    {(unread(c.id) ? '● ' : '') + conversationLabel(c)}
                   </option>
                 ))}
               </optgroup>
@@ -276,114 +309,155 @@ export function EmployeePanel(props: {
       {staff?.temporary && project && (
         <TempNotice staff={staff} managers={props.managers} projectId={project.id} archived={props.archived} onArchive={props.onArchive} onChanged={props.onChanged} />
       )}
-      {staff?.browser && <BrowserCheck />}
+      {staff?.browser && !props.manage && <BrowserCheck />}
     </>
   );
   const enabledRoutines = staff?.routines?.filter((r) => r.enabled).length ?? 0;
-  // As abas do funcionário no "Mais": Ficha (a própria edição, com as abas dela), Trabalho (expediente, rotinas,
-  // servidores) e Ações. Sem ficha, a aba Ficha só oferece dar uma.
-  const tabs: MoreTab[] = [
-    {
-      id: 'ficha',
-      label: t('detail.tabSheet'),
-      content: (
+  // As abas do funcionário no "Mais": Ficha e Projeto (a edição da ficha, repartida), Desempenho (consumo e atividade)
+  // e Ações (rotinas, contratar, arquivar, histórico). Sem ficha, a aba Ficha só oferece dar uma.
+  const editable = !!staff && !!project && !!props.sheetForm;
+  const formTab: Record<string, StaffFormTab | undefined> = { ficha: 'sheet', projeto: 'project' };
+  const sheetTabId = (tab: StaffFormTab) => (tab === 'sheet' ? 'ficha' : 'projeto');
+  const performance = (
+    <>
+      <dl className="stats">
+        <div><dt>{t('detail.costOfTotal')}</dt><dd>{props.costUsd === null ? '—' : formatShare(props.costUsd, props.totalUsd)}</dd></div>
+        <div><dt>{t('detail.subagents')}</dt><dd>{s?.subagentCount ?? 0}</dd></div>
+        <div><dt>{t('detail.start')}</dt><dd>{s?.startedAt ? formatDate(s.startedAt) : '—'}</dd></div>
+        <div><dt>{t('detail.lastActivity')}</dt><dd>{s ? formatDate(s.updatedAt) : '—'}</dd></div>
+      </dl>
+      {staff && staff.sessions.length > 1 && <p className="muted small">{t('detail.sessionsSinceHire', { n: staff.sessions.length })}</p>}
+      <p className="muted small">{t('detail.shareNote')}</p>
+      {s && <WorthIt key={s.id} sessionId={s.id} />}
+      {(s?.entrypoint || s?.gitBranch || !staff || props.archived) && (
+        <p className="badges">
+          {s?.entrypoint && <span className="badge">{ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</span>}
+          {s?.gitBranch && <span className="badge dim">{s.gitBranch}</span>}
+          {!staff && <span className="badge dim">{t('detail.noSheet')}</span>}
+          {props.archived && <span className="badge dim">{t('detail.archived')}</span>}
+        </p>
+      )}
+      {s && <p className="muted small mono">{t('detail.sessionId', { id: s.id })}</p>}
+      {staff && staff.servers.length > 0 && (
         <>
-          {props.simple && (
-            <p className="muted small simple-more">
-              {t('detail.simpleMore')}{' '}
-              {props.onShowAdvanced && (
-                <button type="button" className="link" onClick={props.onShowAdvanced}>
-                  {t('detail.show')}
-                </button>
-              )}
-            </p>
-          )}
-          {staff && props.sheetForm ? (
-            props.sheetForm
-          ) : (
-            <>
-              <p className="muted small">{t(props.ghost ? 'detail.ghostAbout' : 'detail.outsideMyco')}</p>
-              <div className="chat-more-row">
-                <button type="button" className="btn-secondary" onClick={() => props.onEdit(current)} title={t('detail.giveProfileTitle')}>
-                  {t('detail.giveProfile')}
-                </button>
-              </div>
-            </>
-          )}
+          <h4>{t('detail.servers')}</h4>
+          <ServerLog projectId={staff.projectId} staffId={staff.id} />
         </>
-      ),
-    },
+      )}
+    </>
+  );
+  const actions = (
+    <>
+      {staff && project && (
+        <>
+          <h4>{enabledRoutines ? t('detail.routinesCount', { n: enabledRoutines }) : t('detail.tabRoutines')}</h4>
+          <Routines projectId={project.id} staff={staff} onChanged={props.onChanged} />
+        </>
+      )}
+      <p className="actions">
+        {staff?.canHire && (
+          <button className="btn-secondary" onClick={props.onHireSub}>
+            {t('detail.hireSub')}
+          </button>
+        )}
+        <ArchiveButton
+          archived={props.archived}
+          onArchive={props.onArchive}
+          what={t('detail.whatEmployee')}
+          restoreLabel={staff?.temporary ? t('detail.restore') : t('detail.unarchive')}
+        />
+      </p>
+      {staff && project && (
+        <StaffHistory key={staff.updatedAt} projectId={project.id} staffId={staff.id} onRestored={(profile) => props.onRestored?.(profile)} />
+      )}
+    </>
+  );
+  /**
+   * O que a aba mostra. O formulário da ficha é o mesmo elemento em toda aba (escondido nas que não são dele), então
+   * trocar de Ficha para Projeto, ou ir ver o Desempenho, não perde o que foi digitado e ainda não salvo.
+   */
+  const page = (id: string, select: (id: string) => void): ReactNode => (
+    <>
+      {id === 'ficha' && props.simple && (
+        <p className="muted small simple-more">
+          {t('detail.simpleMore')}{' '}
+          {props.onShowAdvanced && (
+            <button type="button" className="link" onClick={props.onShowAdvanced}>
+              {t('detail.show')}
+            </button>
+          )}
+        </p>
+      )}
+      {editable ? (
+        props.sheetForm!(formTab[id] ?? null, (tab) => select(sheetTabId(tab)))
+      ) : (
+        id === 'ficha' && (
+          <>
+            <p className="muted small">{t(props.ghost ? 'detail.ghostAbout' : 'detail.outsideMyco')}</p>
+            <div className="chat-more-row">
+              <button type="button" className="btn-secondary" onClick={() => props.onEdit(current)} title={t('detail.giveProfileTitle')}>
+                {t('detail.giveProfile')}
+              </button>
+            </div>
+          </>
+        )
+      )}
+      {id === 'desempenho' && performance}
+      {id === 'acoes' && actions}
+    </>
+  );
+  const tabs: MoreTab[] = [
+    { id: 'ficha', label: t('detail.tabSheet') },
+    // No nível simples o painel fica só com a Ficha (o formulário põe o projeto embaixo, com "Mostrar todos os campos").
+    ...(editable && !props.simple ? [{ id: 'projeto', label: t('detail.tabProject') }] : []),
     ...(props.simple
       ? []
       : [
-          {
-            id: 'trabalho',
-            label: t('detail.tabActivity'),
-            content: (
-              <>
-                <p className="badges">
-                  {s?.entrypoint && <span className="badge">{ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</span>}
-                  {s?.gitBranch && <span className="badge dim">{s.gitBranch}</span>}
-                  {!staff && <span className="badge dim">{t('detail.noSheet')}</span>}
-                  {props.archived && <span className="badge dim">{t('detail.archived')}</span>}
-                </p>
-                <dl className="stats">
-                  <div><dt>{t('detail.costOfTotal')}</dt><dd>{props.costUsd === null ? '—' : formatShare(props.costUsd, props.totalUsd)}</dd></div>
-                  <div><dt>{t('detail.subagents')}</dt><dd>{s?.subagentCount ?? 0}</dd></div>
-                  <div><dt>{t('detail.start')}</dt><dd>{s?.startedAt ? formatDate(s.startedAt) : '—'}</dd></div>
-                  <div><dt>{t('detail.lastActivity')}</dt><dd>{s ? formatDate(s.updatedAt) : '—'}</dd></div>
-                </dl>
-                {staff && staff.sessions.length > 1 && <p className="muted small">{t('detail.sessionsSinceHire', { n: staff.sessions.length })}</p>}
-                <p className="muted small">{t('detail.shareNote')}</p>
-                {s && <WorthIt key={s.id} sessionId={s.id} />}
-                {s && <p className="muted small mono">{t('detail.sessionId', { id: s.id })}</p>}
-                {staff && project && (
-                  <>
-                    <h4>{enabledRoutines ? t('detail.routinesCount', { n: enabledRoutines }) : t('detail.tabRoutines')}</h4>
-                    <Routines projectId={project.id} staff={staff} onChanged={props.onChanged} />
-                  </>
-                )}
-                {staff && staff.servers.length > 0 && (
-                  <>
-                    <h4>{t('detail.servers')}</h4>
-                    <ServerLog projectId={staff.projectId} staffId={staff.id} />
-                  </>
-                )}
-              </>
-            ),
-          },
-          {
-            id: 'acoes',
-            label: t('detail.tabActions'),
-            content: (
-              <>
-                <p className="actions">
-                  {staff?.canHire && (
-                    <button className="btn-secondary" onClick={props.onHireSub}>
-                      {t('detail.hireSub')}
-                    </button>
-                  )}
-                  <ArchiveButton
-                    archived={props.archived}
-                    onArchive={props.onArchive}
-                    what={t('detail.whatEmployee')}
-                    restoreLabel={staff?.temporary ? t('detail.restore') : t('detail.unarchive')}
-                  />
-                </p>
-              </>
-            ),
-          },
+          { id: 'desempenho', label: t('detail.tabPerformance') },
+          { id: 'acoes', label: t('detail.tabActions') },
         ]),
-  ];
+  ].map((tab) => ({ ...tab, content: (select: (id: string) => void) => page(tab.id, select) }));
+  if (props.manage && project && staff) {
+    const m = props.manage;
+    return (
+      <section className="chat manage">
+        <div className="chat-top">{top}</div>
+        <div className="manage-bar">
+          <button type="button" className="link manage-back" onClick={m.onBack} title={t('hr.backTitle')} aria-label={t('hr.backTitle')}>
+            ‹ {t('hr.back')}
+          </button>
+          <div className="manage-project">
+            <label>
+              <span className="muted small">{t('hr.manageProject')}</span>
+              <select className="setting-select" value={project.id} disabled={m.copies.length < 2} onChange={(e) => m.onProject(e.target.value)}>
+                {m.copies.map((c) => (
+                  <option key={c.projectId} value={c.projectId}>
+                    {c.projectName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="button" className="btn-secondary btn-with-icon" onClick={m.onChat} title={t('hr.chatTitle', { name: staff.name, project: project.name })}>
+              <MessageIcon /> {t('hr.chat')}
+            </button>
+          </div>
+          <p className="muted small">{t('hr.manageHint')}</p>
+        </div>
+        <div className="manage-body">
+          <MoreTabs tabs={tabs} active={m.tab} onActive={m.onTab} label={t('chat.moreOptions')} />
+        </div>
+      </section>
+    );
+  }
   // Sem projeto não há conversa (nem "Mais"): o topo e as abas, uma embaixo da outra, com rolagem própria.
   if (!project) {
     return (
       <div className="employee-scroll">
         {top}
-        {tabs.map((t) => (
-          <section key={t.id} className="section">
-            <h3>{t.label}</h3>
-            {t.content}
+        {tabs.map((tab) => (
+          <section key={tab.id} className="section">
+            <h3>{tab.label}</h3>
+            {typeof tab.content === 'function' ? tab.content(() => {}) : tab.content}
           </section>
         ))}
       </div>
@@ -404,6 +478,8 @@ export function EmployeePanel(props: {
       autonomy={staff?.autonomy ?? null}
       disabled={!project.exists ? t('detail.projectFolderMissing') : null}
       onSessionStarted={sessionStarted}
+      projectRoot={project.path}
+      onOpenFile={props.onOpenFile}
       level={props.simple ? 'simple' : 'advanced'}
       fichaModel={opening?.model ?? null}
       fichaEffort={opening?.effort ?? null}
@@ -534,9 +610,15 @@ export function ProjectPanel({
   onEditAgent,
   onTasks,
   onFiles,
+  onOpenFile,
+  onOpenConversation,
   tasks,
   office,
 }: {
+  /** Abre um arquivo do projeto direto no editor de Arquivos (ex.: o guia SPEC.md). */
+  onOpenFile?: (path: string) => void;
+  /** Abre uma conversa nova de um funcionário no painel dele (ex.: o pedido do guia SPEC.md). */
+  onOpenConversation?: (staffId: string, sessionId: string) => void;
   /** Empresa e servidores do projeto (ver office/ProjectOffice.tsx). */
   office?: React.ReactNode;
   onNewAgent?: () => void;
@@ -573,6 +655,8 @@ export function ProjectPanel({
 }) {
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A aba fica ao trocar de projeto (o painel não remonta), como a do ⋯ do funcionário.
+  const [tab, setTab] = useState<ProjectTab>('project');
 
   useEffect(() => {
     setDetail(null);
@@ -631,41 +715,86 @@ export function ProjectPanel({
           <p className="muted small">
             {tasks.open === 1 ? t('detail.taskOpenOne', { n: tasks.open }) : t('detail.taskOpenOther', { n: tasks.open })}
             {tasks.review ? `, ${t('detail.inReview', { n: tasks.review })}` : ''}
-            {tasks.lastDeploy &&
-              ` · ${t('detail.lastDeploy', {
-                date: new Date(tasks.lastDeploy.at).toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }),
-                title: tasks.lastDeploy.title,
-              })}`}
           </p>
         )}
       </header>
-      <section className="section">
-        <h3>{t('detail.roomColor')}</h3>
-        <RoomColorPicker value={color} onChange={onColor} />
-        <p className="muted small">
-          {project.worktreeOf ? t('detail.worktreeRoomNote') : t('detail.roomColorNote')}
-        </p>
-      </section>
-      {project.exists && !project.worktreeOf && office}
-      {project.exists && <ImagePicker image={image} onChange={onImage} />}
-      {project.exists && <Attachments projectId={project.id} />}
-      <TeamList rows={team} totalUsd={totalUsd} onOpen={onOpenStaff} />
-      <SessionList
-        sessions={sessions.filter((s) => !owned.has(s.id) && !hiddenSessions?.has(s.id))}
-        costs={cost?.sessions ?? {}}
-        totalUsd={totalUsd}
-        onOpen={onOpenSession}
-      />
-      <AgentList
-        agents={detail.agents}
-        empty={t('detail.noAgentsProject')}
-        onNew={project.exists ? onNewAgent : undefined}
-        onEdit={project.exists ? onEditAgent : undefined}
-      />
-      <SkillList skills={detail.skills} />
+      <div className="tabs" role="tablist" aria-label={t('detail.kickerProject')}>
+        {PROJECT_TABS.map(([k, label]) => (
+          <button
+            key={k}
+            type="button"
+            role="tab"
+            id={`project-tab-${k}`}
+            aria-selected={tab === k}
+            aria-controls="project-tab-panel"
+            className={`tab ${tab === k ? 'is-active' : ''}`}
+            onClick={() => setTab(k)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div role="tabpanel" id="project-tab-panel" aria-labelledby={`project-tab-${tab}`}>
+        {tab === 'project' && (
+          <>
+            {project.exists && (
+              <ProjectGuide
+                projectId={project.id}
+                staff={team.map((r) => r.staff)}
+                onOpen={onOpenFile}
+                onOpenConversation={onOpenConversation}
+              />
+            )}
+            {project.exists && !project.worktreeOf && office}
+            {project.exists && <Attachments projectId={project.id} />}
+          </>
+        )}
+        {tab === 'team' && (
+          <>
+            <TeamList rows={team} totalUsd={totalUsd} onOpen={onOpenStaff} />
+            <SessionList
+              sessions={sessions.filter((s) => !owned.has(s.id) && !hiddenSessions?.has(s.id))}
+              costs={cost?.sessions ?? {}}
+              totalUsd={totalUsd}
+              onOpen={onOpenSession}
+            />
+          </>
+        )}
+        {tab === 'tools' && (
+          <>
+            <AgentList
+              agents={detail.agents}
+              empty={t('detail.noAgentsProject')}
+              onNew={project.exists ? onNewAgent : undefined}
+              onEdit={project.exists ? onEditAgent : undefined}
+            />
+            <SkillList skills={detail.skills} />
+          </>
+        )}
+        {tab === 'look' && (
+          <>
+            <section className="section">
+              <h3>{t('detail.roomColor')}</h3>
+              <RoomColorPicker value={color} onChange={onColor} />
+              <p className="muted small">
+                {project.worktreeOf ? t('detail.worktreeRoomNote') : t('detail.roomColorNote')}
+              </p>
+            </section>
+            {project.exists && <ImagePicker image={image} onChange={onImage} />}
+          </>
+        )}
+      </div>
     </>
   );
 }
+
+type ProjectTab = 'project' | 'team' | 'tools' | 'look';
+const PROJECT_TABS: Array<[ProjectTab, string]> = [
+  ['project', t('detail.tabProject')],
+  ['team', t('detail.tabTeam')],
+  ['tools', t('detail.tabTools')],
+  ['look', t('detail.tabLook')],
+];
 
 /** Logo do projeto (fica em .myco/ do projeto). */
 function ImagePicker({ image, onChange }: { image: string | null; onChange: (dataUrl: string | null) => Promise<void> }) {
@@ -795,11 +924,17 @@ export function UserPanel({
   );
 }
 
-type RankingTab = 'cost' | 'savings' | Metric;
-const RANKING_TABS: Array<[RankingTab, string]> = [['cost', t('detail.tabCost')], ['savings', t('detail.tabSavings')], ['index', METRIC_LABEL.index], ['price', METRIC_LABEL.price]];
+type RankingTab = 'cost' | 'savings';
+const RANKING_TABS: Array<[RankingTab, string]> = [['cost', t('detail.tabCost')], ['savings', t('detail.tabSavings')]];
 
-/** Período do ranking em dias (null = tudo); o padrão são os últimos 3 meses. */
-const RANKING_PERIODS: Array<[string, number | null, string]> = [['90', 90, t('detail.periodLast3Months')], ['all', null, t('detail.periodAll')]];
+/** Período do ranking em dias (null = tudo): hoje (desde a meia-noite), 7 dias, 1 mês, 3 meses (o padrão) e tudo. */
+const RANKING_PERIODS: Array<[string, number | null, string]> = [
+  ['1', 1, t('detail.periodToday')],
+  ['7', 7, t('detail.period7d')],
+  ['30', 30, t('detail.period1m')],
+  ['90', 90, t('detail.periodLast3Months')],
+  ['all', null, t('detail.periodAll')],
+];
 
 /** Uma linha do ranking de funcionários; arquivado fica apagado e com a etiqueta. */
 function RankingItem({
@@ -810,7 +945,10 @@ function RankingItem({
   bad,
   bar,
   saving,
+  analyzeDays,
   onSelect,
+  onOpenPerson,
+  onOpenTask,
 }: {
   pos: number;
   row: RankingRow;
@@ -820,11 +958,20 @@ function RankingItem({
   /** Tamanho da barra, de 0 a 1. */
   bar: number;
   saving?: boolean;
+  /** Dias da análise de custo (o filtro do ranking); sem isso, ou sem ficha, a linha não tem o botão Analisar. */
+  analyzeDays?: number;
   onSelect: (nodeId: string) => void;
+  onOpenPerson: (person: { projectId: string; staffId: string }) => void;
+  onOpenTask?: (projectId: string, taskId: string) => void;
 }) {
+  const person = row.person;
   return (
-    <li>
-      <button className={`ranking-row ${row.archived ? 'is-archived' : ''}`} onClick={() => onSelect(row.nodeId)} title={t('detail.showOnBoardLink')}>
+    <li className={analyzeDays !== undefined && person ? 'has-review' : undefined}>
+      <button
+        className={`ranking-row ${row.archived ? 'is-archived' : ''}`}
+        onClick={() => (person ? onOpenPerson(person) : onSelect(row.nodeId))}
+        title={person ? t('detail.openInHr') : t('detail.showOnBoardLink')}
+      >
         <span className="ranking-pos">{pos}</span>
         <span className="ranking-text">
           <span className="ranking-name">{row.name}</span>
@@ -837,13 +984,14 @@ function RankingItem({
         <span className={`ranking-value ${bad ? 'worth-bad' : ''}`}>{value}</span>
         <span className={`ranking-bar ${saving ? 'is-saving' : ''}`} style={{ width: `${bar * 100}%` }} />
       </button>
+      {analyzeDays !== undefined && person && <StaffReview key={analyzeDays} projectId={person.projectId} staffId={person.staffId} name={row.name} days={analyzeDays} onOpenTask={onOpenTask} />}
     </li>
   );
 }
 
 /**
- * Ranking, em abas: quem mais gasta e quem mais economiza (funcionários, no período escolhido), os
- * agents e os modelos para código (Artificial Analysis). Os gastos são equivalentes em API
+ * Ranking, em abas: quem mais gasta e quem mais economiza (funcionários, no período escolhido) e os
+ * agents. Os gastos são equivalentes em API
  * (estimativa): servem para comparar, não como conta a pagar.
  */
 export function RankingPanel({
@@ -851,11 +999,18 @@ export function RankingPanel({
   agents,
   scanning,
   onSelect,
+  onOpenPerson,
+  onOpenTask,
 }: {
   groups: RankingGroup[];
   agents: Array<{ type: string; usd: number; runs: number }>;
   scanning: boolean;
+  /** O fantasma (conversas sem ficha): seleciona o nó dele no quadro. */
   onSelect: (nodeId: string) => void;
+  /** Quem tem ficha: abre no RH, no projeto da linha. */
+  onOpenPerson: (person: { projectId: string; staffId: string }) => void;
+  /** Abre uma tarefa no quadro do projeto (a que o "Aplicar sugestões" da análise criou). */
+  onOpenTask?: (projectId: string, taskId: string) => void;
 }) {
   const [tab, setTab] = useState<RankingTab>('cost');
   const [limit, setLimit] = useState(10);
@@ -895,6 +1050,7 @@ export function RankingPanel({
     };
   }, [period]);
   const rows = report ? rankingRows(groups, report) : null;
+  const analysisDays = reviewDays(RANKING_PERIODS.find(([k]) => k === period)?.[1] ?? null);
   const topEmployee = rows?.[0]?.usd ?? 0;
   const topAgent = agents[0]?.usd ?? 0;
   // Participação de cada um no gasto da lista (funcionários entre si; agents entre si).
@@ -922,7 +1078,7 @@ export function RankingPanel({
     <>
       <header className="header">
         <p className="kicker">{t('detail.kickerRanking')}</p>
-        <h2>{tab === 'cost' ? t('detail.topSpenders') : tab === 'savings' ? t('detail.topSavers') : t('detail.modelsForCode')}</h2>
+        <h2>{tab === 'cost' ? t('detail.topSpenders') : t('detail.topSavers')}</h2>
         {tab === 'cost' && (
           <p className="muted small">
             {t('detail.costNote')}
@@ -938,9 +1094,7 @@ export function RankingPanel({
           </button>
         ))}
       </div>
-      {tab === 'index' || tab === 'price' ? (
-        <ModelsChart metric={tab} />
-      ) : tab === 'savings' ? (
+      {tab === 'savings' ? (
         <section className="section">
           {employeesHead}
           {waiting}
@@ -985,6 +1139,7 @@ export function RankingPanel({
                       saving={!loss}
                       bar={topSaved ? Math.abs(e.savedUsd) / topSaved : 0}
                       onSelect={onSelect}
+                      onOpenPerson={onOpenPerson}
                     />
                   );
                 })}
@@ -1006,7 +1161,7 @@ export function RankingPanel({
             {rows && rows.length === 0 && <p className="muted">{t('detail.noCostYet')}</p>}
             <ol className="ranking">
               {rows?.slice(0, limit).map((e, i) => (
-                <RankingItem key={e.nodeId} pos={i + 1} row={e} value={formatShare(e.usd, employeesTotal)} bar={topEmployee ? e.usd / topEmployee : 0} onSelect={onSelect} />
+                <RankingItem key={e.nodeId} pos={i + 1} row={e} value={formatShare(e.usd, employeesTotal)} bar={topEmployee ? e.usd / topEmployee : 0} analyzeDays={analysisDays} onSelect={onSelect} onOpenPerson={onOpenPerson} onOpenTask={onOpenTask} />
               ))}
             </ol>
             {rows && rows.length > limit && (

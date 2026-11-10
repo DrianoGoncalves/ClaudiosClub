@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { ChatAttachment, SendPriority } from '../../shared/model';
 import { CODEX_CONTEXT_WINDOW } from '../adapters/claude/pricing';
-import type { CodexEnvStatus } from '../codexEnv';
+import { resolveCodexCommand, type CodexEnvStatus } from '../codexEnv';
 import { pickCodexSubstitute, type CodexModelInfo } from '../codexModels';
 import { cleanEnv } from '../auth';
 import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexSecrets } from './codexArgs';
@@ -314,10 +314,14 @@ export class CodexProcess extends ChatProcess {
       ...(o.mycoToken && { MYCO_TOKEN: o.mycoToken }),
       ...(o.mycoUrl && { MYCO_URL: o.mycoUrl }),
     };
-    // No Unix o processo vira líder do próprio grupo: encerrar o grupo leva também os comandos que ele abriu.
+    // No Unix o processo vira líder do próprio grupo: encerrar o grupo leva também os comandos que ele abriu. No Windows o `codex` é um
+    // `.cmd` do npm: `resolveCodexCommand` acha o JS dele, sem shell (ver codexEnv.ts). Só o spawn padrão passa por aí.
     const make =
       o.spawnImpl ??
-      ((cmd, a, so) => spawn(cmd, a, { ...so, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' }));
+      ((_cmd, a, so) => {
+        const { command, prefix } = resolveCodexCommand();
+        return spawn(command, [...prefix, ...a], { ...so, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
+      });
     let child: ChildProcessWithoutNullStreams;
     try {
       child = make('codex', args, { cwd: o.cwd, env });

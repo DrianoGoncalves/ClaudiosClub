@@ -5,7 +5,6 @@ import http from 'node:http';
 import path from 'node:path';
 import { clientChanged, DAILY, TSX, VITE } from '../scripts/lib';
 import { openTerminal } from './terminal';
-import { ArtificialAnalysis } from './adapters/artificialAnalysis';
 import { CodexAdapter, CodexError } from './adapters/codex';
 import { CodexEnv, withAppAddress, type CodexEnvStatus } from './codexEnv';
 import { CodexModels } from './codexModels';
@@ -35,20 +34,25 @@ import { AgentError, AgentInput, readAgentSource, saveAgent } from './adapters/c
 import { ChatError, ChatManager, findTranscript } from './chat/manager';
 import { AnnotationsField, AnswersField } from './chat/questions';
 import { touchedFiles } from './chatChanges';
+import { uncommittedByConversation } from './uncommitted';
 import { searchConversations } from './chatSearch';
 import { searchFiles } from './fileSearch';
 import { CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
 import { ChatRegistry } from './chat/registry';
 import { AutoContinue } from './chat/autoContinue';
 import { WakeBody, WakeStreakError, watchWakeups } from './chat/wake';
-import { StaffBusyError, StaffError, StaffService } from './staff/service';
+import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService } from './staff/service';
 import { sweepFreelas } from './freelaSweep';
-import { mcpJsonWarnings } from './staff/mcp';
+import { CLUB_MCP_FILE, McpError, mcpJsonWarnings } from './staff/mcp';
+import { createMcpLibrary } from './staff/mcpLibrary';
 import { permissionInboxItem, questionInboxItem } from './inboxItems';
 import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
 import { copyToLibrary, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill, SkillError } from './skillLibrary';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
+import { createGuide, GuideExistsError, guideStatus } from './projectGuide';
+import { checkProjectHealth } from './health/scan';
+import { GuideActionError, runGuideAction } from './guideActions';
 import { deleteAttachment, listAttachments, MAX_ATTACHMENT_BYTES, readAttachment, saveAttachment } from './projectAttachments';
 import {
   createProjectEntry,
@@ -64,13 +68,16 @@ import {
 } from './projectFiles';
 import { actingStaff, SANDBOX_HOST, SessionTokens, type Caller } from './callers';
 import { gate } from './gate';
-import { CodexUsageReader } from './codexUsage';
+import { CodexUsageReader, readInstalled } from './codexUsage';
+import { CodexSetup, CodexSetupError } from './codexSetup';
 import { readUsage } from './usage';
 import { UsageStopError } from './usageStop';
 import { quotaBoost } from './quotaBoost';
 import { browserStatus } from './browser';
 import { gitState } from './git';
 import { buildOrchestration, buildSavings, MarkBody, readAllMarks, readMarks, saveMark, savingsSince, withRunInfo } from './orchestration';
+import { buildCostReview, COST_REVIEW_MAX_DAYS, parseCostReviewDays } from './costReview';
+import { CostReviewApplyError, runCostReviewApply } from './costReviewApply';
 import type { Board, CostReport, InboxItem, InboxKind, LiveSession, Project, TurnNotice } from '../shared/model';
 import { TurnWatcher } from './turns';
 import { RoutineScheduler, type RoutineOutcome } from './routines';
@@ -80,7 +87,8 @@ import { pathKey, worktreeParent } from './adapters/claude/paths';
 import { boardFilter } from './board';
 import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
-import { AUTONOMY, readProfile } from './staff/store';
+import { AUTONOMY, listProjectStaff, readProfile } from './staff/store';
+import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
 import { TaskError, TaskService } from './tasks';
 import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefaultRole } from './roles';
 import { ROOT } from './root';
@@ -191,7 +199,6 @@ const adapter: ToolAdapter = new ClaudeAdapter({
   onBoard: boardFilter({ pinned: pinnedProjects }),
   projectNames: async () => (await readConfig()).projectNames,
 });
-const benchmarks = new ArtificialAnalysis();
 /** ~/.claude/projects: onde ficam os transcripts das conversas. */
 const defaultTranscripts = path.join(defaultLocations().home, 'projects');
 
@@ -216,9 +223,11 @@ const staff: StaffService = new StaffService(adapter, {
   // Subfuncionário contratado pela API: abre numa conversa do Claudio’s Club, não num terminal.
   // O gestor que contratou pela API passa a primeira tarefa: é delegação (bolinhas na linha).
   openChat: (projectId, staffId, text): Promise<string> => chats.send(projectId, null, staffId, text, undefined, [], [], true),
-  isWorking: (staffId) => chats.staffWorking(staffId),
+  isWorking: (projectId, staffId) => chats.staffWorking(projectId, staffId),
   // Tarefas abertas da ficha impedem apagar (ver deleteStaff). `tasks` é declarado logo abaixo: só é lido na chamada.
   tasksOf: async (projectId) => (await tasks.list(projectId)) ?? [],
+  // Apagar com tarefas abertas e `force`: as tarefas ficam sem responsável (ver TaskService.releaseStaff).
+  releaseTasks: (projectId, staffId) => tasks.releaseStaff(projectId, staffId),
   weekCost: async (projectId) => {
     const c = await getCosts();
     return { project: c.projects[projectId]?.last7d ?? 0, total: c.total.last7d };
@@ -237,9 +246,9 @@ const currentBoost = async () => ((await readConfig()).optimizeQuota ? quotaBoos
  * O limite de uso da assinatura acabou no meio de uma conversa: o "continue" sai sozinho quando ele volta
  * (opção `autoContinue`). Respeita a linha de parada do usuário e o orçamento do projeto, como o chat.
  */
-const usageStopHit = async (projectId: string) => {
+const usageStopHit = async (projectId: string, staffId: string | null) => {
   try {
-    await staff.checkUsage(projectId);
+    await staff.checkUsage(projectId, { staffId });
     return null;
   } catch (err) {
     if (err instanceof UsageStopError) return err.hit;
@@ -314,7 +323,15 @@ const projectPathOf = async (projectId: string) => {
 };
 /** Codex CLI só como segunda opinião na revisão de tarefas (o motor dos funcionários é o Claude). */
 const codex = new CodexAdapter();
-const codexUsage = new CodexUsageReader({ check: () => codex.check() });
+const codexUsage = new CodexUsageReader({ check: (fresh) => codex.check(fresh) });
+/** Instalar e entrar no Codex pelo Claudio’s Club (ver codexSetup.ts). Depois de instalar, o status do Codex é relido já. */
+const codexSetup = new CodexSetup({
+  installed: async () => !(await readInstalled()).missing,
+  afterInstall: async () => {
+    codexUsage.forget();
+    await codex.check(true);
+  },
+});
 /** Só com o Codex ligado nas configurações (`codexReview`): desligado, o catálogo vem vazio com o motivo e nada abre o `codex`. */
 const codexModels = new CodexModels((fresh) => codex.check(fresh), undefined, undefined, async () => (await readConfig()).codexReview);
 const codexEnv = new CodexEnv();
@@ -326,6 +343,12 @@ async function codexRunEnv(): Promise<CodexEnvStatus> {
   return withAppAddress(await codexEnv.status(), sandboxListener, `${SANDBOX_HOST}:${PORT}`);
 }
 
+/** Abre uma conversa nova com o funcionário e manda o texto. Sem `force`, confere o consumo antes. Usado pelas tarefas e pelas ações do guia. */
+const sendNewConversation = async (projectId: string, staffId: string, text: string, force: boolean) => {
+  if (!force) await staff.checkUsage(projectId, { staffId });
+  return chats.send(projectId, null, staffId, text);
+};
+
 const tasks = new TaskService({
   projectPath: projectPathOf,
   projectIds: async () => (await adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf).map((p) => p.id),
@@ -333,12 +356,9 @@ const tasks = new TaskService({
     const dir = await projectPathOf(projectId);
     return dir ? readProfile(dir, staffId) : null;
   },
-  send: async (projectId, staffId, text, force) => {
-    if (!force) await staff.checkUsage(projectId);
-    return chats.send(projectId, null, staffId, text);
-  },
+  send: sendNewConversation,
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
-  isWorking: (staffId, except) => chats.staffWorking(staffId, except),
+  isWorking: (projectId, staffId, except) => chats.staffWorking(projectId, staffId, except),
   // O gestor que pediu recebe a entrega na conversa em que pediu (ou, sem ela, na mais recente dele),
   // depois que o turno dele acabar.
   notify: async (projectId, staffId, text, sessionId) => {
@@ -346,9 +366,9 @@ const tasks = new TaskService({
     const manager = dir ? await readProfile(dir, staffId) : null;
     if (!manager) return;
     const target = sessionId && manager.sessions.some((s) => s.id === sessionId) ? sessionId : (manager.sessions.at(-1)?.id ?? null);
-    await chats.send(projectId, target, staffId, text, 'later');
+    await chats.sendToRequester(projectId, target, staffId, text);
   },
-  requesterSession: (staffId) => chats.workingSession(staffId),
+  requesterSession: (projectId, staffId) => chats.workingSession(projectId, staffId),
   lastText: (sessionId) => chats.lastAssistantText(sessionId),
   // O consumo já foi conferido quando você mandou (a mensagem só esperou a vez).
   sendTo: (projectId, sessionId, staffId, text, images) => chats.send(projectId, sessionId, staffId, text, 'next', images),
@@ -392,7 +412,7 @@ const routines = new RoutineScheduler({
  */
 async function runRoutine(profile: StaffProfile, r: Routine): Promise<RoutineOutcome> {
   try {
-    await staff.checkUsage(profile.projectId);
+    await staff.checkUsage(profile.projectId, { engine: profile.engine ?? 'claude' });
   } catch (err) {
     if (err instanceof UsageStopError) return { ok: false, text: `pulada: ${err.message}` };
     throw err;
@@ -519,7 +539,15 @@ const CONN = '([A-Za-z0-9][\\w.-]{0,39})';
 /** Envio de anexo: o corpo são os bytes do arquivo (não JSON), o nome vai em `?name=`. */
 const ATTACHMENT_UPLOAD = new RegExp(`^/api/projects/${ID}/attachments$`);
 
-const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
+/** Biblioteca de MCPs (cadastro e edição nos quatro escopos). A pasta do projeto vem do adapter, nunca do cliente. */
+const mcpLibrary = createMcpLibrary({
+  claudeConfigFile: defaultLocations().configFile,
+  clubFile: CLUB_MCP_FILE,
+  backupDir: path.join(MYCO_HOME, 'backups'),
+  resolveProject: projectPathOf,
+});
+
+const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ['GET', /^\/api\/health$/, async () => ({ ok: true, adapter: adapter.id })],
   // CPU e RAM da máquina, para o monitor do canto (só números; ver systemStats.ts).
   ['GET', /^\/api\/system$/, async (): Promise<SystemStats> => systemStats()],
@@ -601,6 +629,11 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   ],
   ['GET', new RegExp(`^/api/projects/${ID}$`), ({ params: [id] }) => adapter.getProject(id!)],
   ['GET', new RegExp(`^/api/projects/${ID}/mcp$`), ({ params: [id] }) => staff.listMcp(id!)],
+  // Biblioteca de MCPs: a lista não traz valor (só nome e se está preenchido); cadastrar, editar, apagar e testar só pelo navegador.
+  ['GET', /^\/api\/mcp-servers$/, ({ url }) => mcpLibrary.list(url.searchParams.get('projectId'))],
+  ['POST', /^\/api\/mcp-servers\/save$/, ({ body, fromBrowser }) => mcpLibrary.save(body, fromBrowser)],
+  ['POST', /^\/api\/mcp-servers\/delete$/, ({ body, fromBrowser }) => mcpLibrary.remove(body, fromBrowser)],
+  ['POST', /^\/api\/mcp-servers\/test$/, ({ body, fromBrowser }) => mcpLibrary.test(body, fromBrowser)],
   ['GET', new RegExp(`^/api/projects/${ID}/servers$`), ({ params: [id] }) => staff.listServers(id!)],
   // Conexões SSH do projeto, só pela página do Claudio’s Club: até a lista é POST, para exigir o cabeçalho
   // x-myco e a origem local (um funcionário teria de forjar os dois num comando que você aprova).
@@ -649,7 +682,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/staff/${ID}/delete$`),
-    ({ params: [id, staffId], fromBrowser }) => staff.deleteStaff(id!, staffId!, fromBrowser),
+    ({ params: [id, staffId], body, fromBrowser }) => staff.deleteStaff(id!, staffId!, fromBrowser, body),
   ],
   [
     'POST',
@@ -704,6 +737,27 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       return img ? new Raw(img.bytes, img.type) : null;
     },
   ],
+  // Memória pessoal (uma por pessoa, lida pelas fichas dela em todos os projetos). Lê qualquer um; grava só pelo navegador.
+  ['GET', new RegExp(`^/api/people/${ID}/memory$`), async ({ params: [pid] }) => readPersonMemory(pid!)],
+  [
+    'PUT',
+    new RegExp(`^/api/people/${ID}/memory$`),
+    async ({ params: [pid], body, fromBrowser }) => {
+      const saved = await savePersonMemory(pid!, body, fromBrowser);
+      // As conversas abertas dessa pessoa reabrem com a memória nova na próxima mensagem.
+      chats.personChanged(await staff.sessionsOfPerson(pid!));
+      return saved;
+    },
+  ],
+  // Garante o personId da ficha (gera se faltar) para a tela poder editar a memória. Grava o JSON: só pelo navegador.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/staff/${ID}/person$`),
+    ({ params: [id, staffId], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      return staff.personOf(id!, staffId!);
+    },
+  ],
   // ---- conversa ----
   [
     'GET',
@@ -716,7 +770,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     async ({ params: [pid], body, fromBrowser, caller }) => {
       const b = parse(SendBody, body);
       await checkReach(caller, pid!, { sessionId: b.sessionId, staffId: b.staffId });
-      if (!(fromBrowser && b.force)) await staff.checkUsage(pid!);
+      if (!(fromBrowser && b.force)) await staff.checkUsage(pid!, { staffId: b.staffId });
       // Ajuste numa tarefa anterior com ele ocupado em outra: espera a vez (ver tasks.ts).
       if (b.sessionId && b.staffId) {
         const held = await tasks.hold(b.sessionId, { text: b.text, images: b.images });
@@ -909,7 +963,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     async ({ params: [pid, sid], body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(StaffRef, body);
-      if (!b.force) await staff.checkUsage(pid!);
+      if (!b.force) await staff.checkUsage(pid!, { staffId: b.staffId });
       await chats.compact(pid!, sid!, b.staffId);
       return { ok: true };
     },
@@ -963,9 +1017,9 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
     new RegExp(`^/api/projects/${ID}/tasks$`),
     async ({ params: [id], body, fromBrowser, caller }) => {
       if (fromBrowser) return tasks.create(id!, body);
-      // Pela API, só um gestor passando tarefa para quem reporta a ele (e ela já pode começar). Com o token da conversa, quem pede é quem chama: o
-      // `requestedBy` do pedido é descartado (sem o token, segue valendo o que ele declara, por compatibilidade).
-      const b = parse(z.object({ staffId: z.string().max(40), requestedBy: z.string().max(40).optional(), start: z.boolean().default(false) }).passthrough(), body);
+      // Pela API, só um gestor passando tarefa para quem reporta a ele. Já entra na fila dela; `start: false` = rascunho. Com o token da conversa,
+      // quem pede é quem chama: o `requestedBy` do pedido é descartado (sem o token, segue valendo o que ele declara, por compatibilidade).
+      const b = parse(z.object({ staffId: z.string().max(40), requestedBy: z.string().max(40).optional(), start: z.boolean().default(true) }).passthrough(), body);
       const requestedBy = actorOf(caller, b.requestedBy);
       if (!requestedBy) throw new BadRequest('pela API, diga quem pede (requestedBy: o seu id)');
       if (!(await staff.isManagerOf(id!, requestedBy, b.staffId))) throw new BadRequest('pela API, só para quem reporta a você (requestedBy)');
@@ -1018,7 +1072,7 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       }
       if (action === 'merge') return tasks.merge(id!, taskId!, b.skipTests);
       if (!b.staffId) throw new BadRequest(action === 'review' ? 'escolha quem revisa' : 'escolha quem faz o deploy');
-      return action === 'review' ? tasks.requestReview(id!, taskId!, b.staffId, b.force) : tasks.requestDeploy(id!, taskId!, b.staffId, b.force);
+      return action === 'review' ? tasks.requestReview(id!, taskId!, b.staffId, b.force, { assign: true }) : tasks.requestDeploy(id!, taskId!, b.staffId, b.force);
     },
   ],
   [
@@ -1167,6 +1221,44 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       return { image: await projectImageUrl(p.id, p.path) };
     },
   ],
+  // ---- guia do projeto (SPEC.md na raiz): ver o estado; criar o modelo só pelo Claudio’s Club (fora da lista de funcionários em apiPolicy.ts) ----
+  ['GET', new RegExp(`^/api/projects/${ID}/guide$`), async ({ params: [id] }) => {
+    const dir = await projectPathOf(id!);
+    return dir ? guideStatus(dir) : null;
+  }],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/guide$`),
+    async ({ params: [id], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('o guia só é criado pelo Claudio’s Club');
+      const dir = await projectPathOf(id!);
+      if (!dir) return null;
+      await createGuide(dir);
+      return guideStatus(dir);
+    },
+  ],
+  // Ações do guia (teste de compreensão, divergência, rascunho): abrem uma conversa nova do funcionário, com o texto da ação.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/guide/run$`),
+    async ({ params: [id], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('as ações do guia só pelo Claudio’s Club');
+      const dir = await projectPathOf(id!);
+      if (!dir) return null;
+      return runGuideAction(
+        { readProfile: (staffId) => readProfile(dir, staffId), send: (staffId, text, force) => sendNewConversation(id!, staffId, text, force) },
+        dir,
+        body,
+      ).catch((err) => {
+        throw err instanceof GuideActionError ? new BadRequest(err.message) : err;
+      });
+    },
+  ],
+  // ---- health check do projeto: varredura de regras fixas (sem IA), só leitura ----
+  ['GET', new RegExp(`^/api/projects/${ID}/health-check$`), async ({ params: [id] }) => {
+    const dir = await projectPathOf(id!);
+    return dir ? checkProjectHealth(dir) : null;
+  }],
   // ---- arquivos do projeto (aba de arquivos): listar e ler; gravar só pelo Claudio’s Club ----
   [
     'GET',
@@ -1303,6 +1395,22 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       return Object.fromEntries(states.filter(([, s]) => s !== null));
     },
   ],
+  // Arquivos sem commit do projeto, por conversa que os editou (só leitura; ver server/uncommitted.ts).
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/git/uncommitted$`),
+    async ({ params: [pid] }) => {
+      const dir = await projectPathOf(pid!);
+      if (!dir) throw new BadRequest('projeto não encontrado');
+      const [sessions, staff] = await Promise.all([adapter.getProjectSessions(pid!), listProjectStaff(dir, pid!)]);
+      return uncommittedByConversation({
+        projectPath: dir,
+        sessions: sessions ?? [],
+        staff,
+        transcriptOf: (sid) => findTranscript(defaultTranscripts, pid!, sid),
+      });
+    },
+  ],
   ['GET', /^\/api\/auth$/, ({ url }) => getAuthStatus({ fresh: url.searchParams.has('fresh') })],
   [
     'POST',
@@ -1312,28 +1420,22 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       return openLoginTerminal();
     },
   ],
+  // Codex: instalar (npm, uma vez; quem já tem não roda) e entrar (abre o terminal do login). Só pelo navegador.
+  ['POST', /^\/api\/codex\/install$/, ({ fromBrowser }) => codexSetup.install(fromBrowser)],
+  ['POST', /^\/api\/codex\/login$/, async ({ fromBrowser }) => codexSetup.login(fromBrowser)],
   [
     'GET',
     /^\/api\/usage$/,
-    async () => {
+    async ({ url }) => {
       const [usage, config] = await Promise.all([readUsage(), readConfig()]);
       // Codex só com a opção ligada; o campo `codex` não existe quando desligada. Nunca lança nem trava os dados do Claude.
-      const codexField = await codexUsage.read(config.codexReview);
+      // `?fresh=1` relê o login do Codex na hora (a tela pede isso enquanto espera o login).
+      const codexField = await codexUsage.read(config.codexReview, { fresh: url.searchParams.has('fresh') });
       return { ...usage, boost: config.optimizeQuota ? quotaBoost(usage) : null, ...(codexField ? { codex: codexField } : {}) };
     },
   ],
   ['GET', /^\/api\/browser$/, ({ url }) => browserStatus(url.searchParams.has('fresh'))],
   ['GET', /^\/api\/costs$/, () => getCosts()],
-  // Ranking de modelos (Artificial Analysis). POST: cada busca gasta da cota diária da chave, então
-  // só a página do Claudio’s Club dispara (uma página qualquer não manda o cabeçalho x-myco).
-  [
-    'POST',
-    /^\/api\/models$/,
-    async ({ body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
-      return benchmarks.get(parse(z.object({ refresh: z.boolean().default(false) }), body ?? {}).refresh);
-    },
-  ],
   // Projeto demo (equipe e tarefas de exemplo em ~/.myco/demo). Criar de novo não sobrescreve:
   // só traz de volta ao quadro, se estava arquivado.
   [
@@ -1369,6 +1471,41 @@ const routes: Array<['GET' | 'POST', RegExp, Handler]> = [
       const since = savingsSince(days);
       const { files, scanning } = await adapter.getSavingsFiles(since);
       return buildSavings(files, await readAllMarks(), since, scanning);
+    },
+  ],
+  // Revisão de custo de um funcionário (botão "Analisar" do ranking): regras fixas, sem IA. `days` como em /api/savings.
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/staff/${ID}/cost-review$`),
+    async ({ params: [id, staffId], url }) => {
+      const days = parseCostReviewDays(url.searchParams.get('days'));
+      if (days === null) throw new BadRequest(`days deve ser um inteiro de 1 a ${COST_REVIEW_MAX_DAYS}`);
+      const dir = await projectPathOf(id!);
+      if (!dir) return null;
+      return buildCostReview({ projectPath: dir, projectId: id!, staffId: staffId!, days, transcriptsDir: defaultTranscripts, now: Date.now() });
+    },
+  ],
+  // Aplicar as sugestões da revisão (botão "Aplicar"): só pelo Claudio’s Club (a guarda fica em costReviewApply.ts). Ficha pelo mesmo caminho da tela.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/staff/${ID}/cost-review/apply$`),
+    async ({ params: [id, staffId], body, fromBrowser }) => {
+      const dir = await projectPathOf(id!);
+      if (!dir) return null;
+      return runCostReviewApply({
+        fromBrowser,
+        body,
+        projectPath: dir,
+        projectId: id!,
+        staffId: staffId!,
+        transcriptsDir: defaultTranscripts,
+        now: Date.now(),
+        updateFicha: (fields) => staff.update(id!, staffId!, fields),
+        createTask: async ({ staffId: sid, title, description }) => {
+          const task = await tasks.create(id!, { title, description, staffId: sid });
+          return task ? ((await tasks.start(id!, task.id)) ?? task) : null;
+        },
+      });
     },
   ],
   [
@@ -1495,7 +1632,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
       if (!m || method !== req.method) continue;
       try {
         // O envio de anexo manda os bytes do arquivo (até 10 MB) em vez de JSON.
-        const body = req.method === 'POST' ? (ATTACHMENT_UPLOAD.test(url.pathname) ? await readRaw(req, MAX_ATTACHMENT_BYTES) : await readJson(req)) : undefined;
+        const body = method !== 'GET' ? (ATTACHMENT_UPLOAD.test(url.pathname) ? await readRaw(req, MAX_ATTACHMENT_BYTES) : await readJson(req)) : undefined;
         const userAgent = (req.headers['user-agent'] ?? '').replace(/[^\x20-\x7e]/g, '').slice(0, 80);
         const out = await handler({ params: m.slice(1), url, body, fromBrowser, paired: !sandbox && pairing.isPaired(req.headers.cookie), userAgent, caller });
         if (out === null) return send(res, 404, { error: 'não encontrado' });
@@ -1516,10 +1653,14 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         // Mescla recusada (sem testes, teste vermelho, conflito): 409 com o motivo; `no-tests` dá para confirmar.
         if (err instanceof CodeError) return send(res, 409, { error: err.message, code: err.code });
         // Ficha em uso (conversa trabalhando): 409, antes do StaffError genérico (400).
+        if (err instanceof StaffOpenTasksError) return send(res, 409, { error: err.message, code: err.code, openTasks: err.openTasks });
         if (err instanceof StaffBusyError) return send(res, 409, { error: err.message });
+        // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
+        if (err instanceof GuideExistsError) return send(res, 409, { error: 'exists' });
         if (err instanceof Forbidden) return send(res, 403, { error: err.message });
         if (
           err instanceof BadRequest ||
+          err instanceof CostReviewApplyError ||
           err instanceof StaffError ||
           err instanceof ChatError ||
           err instanceof TaskError ||
@@ -1529,8 +1670,10 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
           err instanceof AgentError ||
           err instanceof WorkspaceError ||
           err instanceof SkillError ||
+          err instanceof McpError ||
           err instanceof ProjectError ||
           err instanceof UpdateError ||
+          err instanceof CodexSetupError ||
           (err as NodeJS.ErrnoException | null)?.code === 'EEXIST'
         ) {
           const message = (err as NodeJS.ErrnoException).code === 'EEXIST' ? 'já existe um arquivo com esse nome' : (err as Error).message;

@@ -39,8 +39,6 @@ export type ProjectNodeData = {
   /** URL da imagem do projeto (logo ou print), se houver. */
   image: string | null;
   header: HeaderData;
-  /** Parte do projeto no consumo total (0–1), para o resumo da sala dobrada. */
-  costShare: number | null;
   /** Estado do código (null: não é repositório git ou ainda não foi lido). */
   git: GitState | null;
   /** Tarefas em aberto e quantas esperam revisão (null: nenhuma). */
@@ -58,8 +56,6 @@ export type EmployeeNodeData = {
   costUsd: number | null;
   /** Funcionário fantasma: as conversas sem ficha do projeto, num nó só (da mais recente à mais antiga). */
   ghost: Session[] | null;
-  /** Parte do funcionário no consumo total (0 a 1). */
-  costShare: number | null;
   archived: boolean;
   /**
    * Esperando você (cartão amarelo): tem item na caixa "precisa de mim" (ver GraphOptions.inbox),
@@ -67,8 +63,7 @@ export type EmployeeNodeData = {
    */
   needsYou: boolean;
 };
-/** `share`: parte do agent no consumo de todos os subagents (0 a 1). */
-export type AgentNodeData = { agent: Agent; cost: { usd: number; runs: number; share: number } | null };
+export type AgentNodeData = { agent: Agent; cost: { usd: number; runs: number } | null };
 export type SkillNodeData = { skill: Skill };
 export type SyncedNodeData = { skills: Skill[] };
 export type ShelfNodeData = { agents: number; skills: number; expanded: boolean };
@@ -121,6 +116,11 @@ export interface GraphOptions {
    * direita; em pé: cresce para baixo. Sem ela, a de uma tela larga.
    */
   aspect?: number;
+  /**
+   * Workspace de cada projeto (id → workspace ou null) e a ordem das abas. Com isso as salas do mesmo
+   * workspace formam um bloco na planta (aba "Todos"); sem isso, todas seguem a ordem alfabética.
+   */
+  groups?: { of: Map<string, string | null>; order: string[] };
 }
 
 /**
@@ -146,6 +146,8 @@ const SIDE_ROW_GAP = 12;
 export const ROOM_PAD = 26;
 const ROOM_GAP_X = 56;
 const ROOM_GAP_Y = 56;
+/** Folga entre blocos de workspaces: maior que a entre salas, para o bloco se ler como um grupo. */
+const GROUP_GAP = ROOM_GAP_X * 2;
 /** Proporção (largura/altura) que a grade de salas procura quando a da tela não é informada. */
 const GRID_ASPECT = 16 / 10;
 /** Limites da proporção da tela: evita uma fila só (ou uma coluna só) em janelas extremas. */
@@ -164,6 +166,8 @@ export const HR_ID = 'hr';
 export const SYNCED_NODE_ID = 'sg';
 export const projectNodeId = (projectId: string) => `p:${projectId}`;
 export const staffNodeId = (projectId: string, staffId: string) => `h:${projectId}:${staffId}`;
+/** Não é um nó: o RH editando esta ficha (as abas do funcionário, com o seletor de projeto), em vez da conversa dela. */
+export const manageNodeId = (projectId: string, staffId: string) => `m:${projectId}:${staffId}`;
 export const ghostNodeId = (projectId: string) => `g:${projectId}`;
 /** Chave de arquivamento: a ficha, para contratados; a sessão, para os demais. */
 export const archiveKey = (d: { staff: StaffProfile | null; session: Session | null }) =>
@@ -208,9 +212,6 @@ export function buildGraph(
   const visibleProject = (p: Project) => opts.showArchived || !archivedProjects.has(p.id);
   const liveById = new Map(board.live.map((s) => [s.sessionId, s]));
   const costs = opts.costs ?? null;
-  const totalUsd = costs?.total.usd ?? 0;
-  const agentsUsd = Object.values(costs?.agents ?? {}).reduce((s, a) => s + a.usd, 0);
-  const share = (usd: number | null, total: number) => (usd === null || !total ? null : usd / total);
   const extraManagers: Array<{ projectId: string; staff: StaffProfile; managerId: string }> = [];
   // A caixa é a fonte única de "precisa de mim": cartão e contador da sala leem o mesmo conjunto.
   const inbox = opts.inbox ?? [];
@@ -228,11 +229,16 @@ export function buildGraph(
     const c = costs?.agents[a.name];
     return node(agentNodeId(a), 'agent', {
       agent: a,
-      cost: c ? { usd: c.usd, runs: c.runs, share: share(c.usd, agentsUsd) ?? 0 } : null,
+      cost: c ? { usd: c.usd, runs: c.runs } : null,
     });
   };
   const skillNode = (s: Skill): BoardNode => node(skillNodeId(s), 'skill', { skill: s });
   const withLive = (s: Session): Session => ({ ...s, live: liveById.get(s.id) ?? s.live });
+  /** A conversa mais viva (trabalhando, esperando, parada, sem processo); no empate fica a primeira, a mais recente. */
+  const mostLive = (list: Session[]): Session | null => {
+    const rank = (s: Session) => (s.live?.alive ? (LIVE_RANK[s.live.status ?? ''] ?? 1) : 0);
+    return list.reduce<Session | null>((best, s) => (!best || rank(s) > rank(best) ? s : best), null);
+  };
 
   const expanded = new Set(opts.expandedShelves ?? []);
   const collapsed = new Set(opts.collapsedRooms ?? []);
@@ -268,18 +274,17 @@ export function buildGraph(
     const trees: Tree[] = [];
     for (const st of staff) {
       const mine = st.sessions.map((s) => s.id);
-      // A lista de sessões já vem da mais recente para a mais antiga.
-      const latest = sessions.find((s) => mine.includes(s.id)) ?? null;
+      // O cartão mostra a conversa mais viva da ficha, não só a última: trabalhar numa antiga também anima.
+      // A lista de sessões já vem da mais recente para a mais antiga (o empate fica com a última).
+      const session = mostLive(sessions.filter((s) => mine.includes(s.id)).map(withLive));
       const costsOfMine = mine.map(sessionCost).filter((c): c is number => c !== undefined);
       const costUsd = costsOfMine.length ? costsOfMine.reduce((a, b) => a + b, 0) : null;
-      const session = latest ? withLive(latest) : null;
       const data: EmployeeNodeData = {
         session,
         staff: st,
         projectId: p.id,
         costUsd,
         ghost: null,
-        costShare: share(costUsd, totalUsd),
         archived: archivedSessions.has(`staff:${st.id}`),
         needsYou: needsYou(session?.live, mine, st.id),
       };
@@ -295,8 +300,7 @@ export function buildGraph(
       const costsOfLoose = ids.map(sessionCost).filter((c): c is number => c !== undefined);
       const costUsd = costsOfLoose.length ? costsOfLoose.reduce((a, b) => a + b, 0) : null;
       // O cartão mostra a conversa mais viva (trabalhando, esperando, parada); sem nenhuma aberta, a mais recente.
-      const rank = (s: Session) => (s.live?.alive ? (LIVE_RANK[s.live.status ?? ''] ?? 1) : 0);
-      const session = loose.reduce((best, s) => (rank(s) > rank(best) ? s : best), loose[0]!);
+      const session = mostLive(loose)!;
       trees.push({
         node: node(ghostNodeId(p.id), 'employee', {
           session,
@@ -304,7 +308,6 @@ export function buildGraph(
           projectId: p.id,
           costUsd,
           ghost: loose,
-          costShare: share(costUsd, totalUsd),
           archived: ids.every((id) => archivedSessions.has(id)),
           needsYou: needsYou(session.live, ids, null),
         }),
@@ -338,7 +341,6 @@ export function buildGraph(
         archived: archivedProjects.has(p.id),
         image: images[p.id] ?? null,
         header: { color: opts.projectColors?.[p.id] ?? null, sideAt: null, collapsed: folded, resources: inv.agents.length + inv.skills.length },
-        costShare: share(costs?.projects[p.id]?.usd ?? null, totalUsd),
         git: opts.git?.[p.id] ?? null,
         tasks: opts.tasks?.[p.id] ?? null,
         // Só as sessões vivas da sala (as que o cabeçalho mostra as bolinhas).
@@ -368,26 +370,33 @@ export function buildGraph(
     children: [],
   };
 
-  const rooms = [
-    ...(opts.showUserScope ? [userTree] : []),
+  // Bloco de cada projeto na planta: a sala "você" abre (-1), depois um bloco por workspace na ordem das
+  // abas e, por fim, os sem workspace. Sem `groups` todos caem no mesmo bloco.
+  const blockOf = (p: Project): number => {
+    const i = opts.groups ? opts.groups.order.indexOf(opts.groups.of.get(p.id) ?? '') : -1;
+    return i < 0 ? (opts.groups?.order.length ?? 0) : i;
+  };
+  const visible = board.projects
+    .filter(visibleProject)
     // Worktrees (cópias de trabalho do Claude Code) ficam fora do quadro.
-    // Salas em ordem alfabética do nome (o servidor manda por atividade, que muda a toda hora).
-    ...board.projects
-      .filter(visibleProject)
-      .filter((p) => !p.worktreeOf)
-      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base', numeric: true }))
-      .map(projectTree),
-  ];
+    .filter((p) => !p.worktreeOf)
+    // Salas em ordem alfabética do nome (o servidor manda por atividade, que muda a toda hora);
+    // o sort é estável: dentro do bloco a ordem alfabética fica.
+    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base', numeric: true }))
+    .sort((a, b) => blockOf(a) - blockOf(b));
+  const rooms = [...(opts.showUserScope ? [userTree] : []), ...visible.map(projectTree)];
+  const blocks = [...(opts.showUserScope ? [opts.groups ? -1 : 0] : []), ...visible.map(blockOf)];
 
   const nodes: BoardNode[] = [];
   const edges: BoardEdge[] = [];
   const frames: BoardNode[] = [];
   const memo = new Map<Tree, Box>();
-  const spots = gridSpots(
+  const spots = blockSpots(
     rooms.map((r) => {
       const b = measure(r, memo);
       return { w: b.w + ROOM_PAD * 2, h: b.h + ROOM_PAD * 2 };
     }),
+    blocks,
     Math.min(ASPECT_MAX, Math.max(ASPECT_MIN, opts.aspect ?? GRID_ASPECT)),
   );
   rooms.forEach((room, i) => {
@@ -470,9 +479,9 @@ function markStaffLinks(edges: BoardEdge[], nodes: BoardNode[]) {
  * Planta do escritório: as salas, na ordem recebida, preenchem linhas até a largura que deixa a
  * grade com a proporção da tela (`aspect` = largura/altura); aí quebram linha.
  */
-function gridSpots(boxes: Array<{ w: number; h: number }>, aspect: number): Array<{ x: number; y: number }> {
+function gridSpots(boxes: Array<{ w: number; h: number }>, aspect: number, gap = { x: ROOM_GAP_X, y: ROOM_GAP_Y }): Array<{ x: number; y: number }> {
   if (!boxes.length) return [];
-  const area = boxes.reduce((s, b) => s + (b.w + ROOM_GAP_X) * (b.h + ROOM_GAP_Y), 0);
+  const area = boxes.reduce((s, b) => s + (b.w + gap.x) * (b.h + gap.y), 0);
   const rowLimit = Math.max(...boxes.map((b) => b.w), Math.sqrt(area * aspect));
   const spots: Array<{ x: number; y: number }> = [];
   let x = 0;
@@ -481,14 +490,43 @@ function gridSpots(boxes: Array<{ w: number; h: number }>, aspect: number): Arra
   for (const b of boxes) {
     if (x > 0 && x + b.w > rowLimit) {
       x = 0;
-      y += rowH + ROOM_GAP_Y;
+      y += rowH + gap.y;
       rowH = 0;
     }
     spots.push({ x, y });
-    x += b.w + ROOM_GAP_X;
+    x += b.w + gap.x;
     rowH = Math.max(rowH, b.h);
   }
   return spots;
+}
+
+/**
+ * Como `gridSpots`, mas as salas do mesmo bloco (`blocks[i]`, seguidos na lista) formam uma grade
+ * própria, e os blocos formam a grade de fora, com folga maior. Um bloco só = a grade simples.
+ */
+function blockSpots(boxes: Array<{ w: number; h: number }>, blocks: number[], aspect: number): Array<{ x: number; y: number }> {
+  const groups: number[][] = [];
+  boxes.forEach((_, i) => {
+    if (i > 0 && blocks[i] === blocks[i - 1]) groups[groups.length - 1]!.push(i);
+    else groups.push([i]);
+  });
+  if (groups.length <= 1) return gridSpots(boxes, aspect);
+  const inner = groups.map((idx) => {
+    const spots = gridSpots(idx.map((i) => boxes[i]!), aspect);
+    return {
+      spots,
+      w: Math.max(...idx.map((i, k) => spots[k]!.x + boxes[i]!.w)),
+      h: Math.max(...idx.map((i, k) => spots[k]!.y + boxes[i]!.h)),
+    };
+  });
+  const outer = gridSpots(inner, aspect, { x: GROUP_GAP, y: GROUP_GAP });
+  const out: Array<{ x: number; y: number }> = [];
+  groups.forEach((idx, g) => {
+    idx.forEach((i, k) => {
+      out[i] = { x: outer[g]!.x + inner[g]!.spots[k]!.x, y: outer[g]!.y + inner[g]!.spots[k]!.y };
+    });
+  });
+  return out;
 }
 
 function roomNode(owner: string, members: BoardNode[], color: ProjectColor | null): BoardNode {

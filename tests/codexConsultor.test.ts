@@ -43,7 +43,7 @@ afterAll(async () => {
 /** Contrata alguém com roteiro, abre a conversa e devolve o que a sessão vê: mcp.json (se houver), ficha e agents do projeto. */
 async function open(name: string, engine?: 'codex') {
   const s = svc();
-  const { profile } = (await s.hire('proj-id', { name, role: 'Dev', mission: 'Entregar', playbook: 'plan-big-execute-small', ...(engine && { engine, model: 'gpt-6-sol' }), launch: false }, true))!;
+  const { profile } = (await s.hire('proj-id', { name, role: 'Dev', mission: 'Entregar', playbook: 'plan-big-execute-small', mcps: null, ...(engine && { engine, model: 'gpt-6-sol' }), launch: false }, true))!;
   const spawn = (await s.chatSpawn('proj-id', null, profile.id))!;
   const ficha = await fs.readFile(path.join(proj, '.myco', 'staff', `${profile.id}.md`), 'utf8');
   const mcpFile = path.join(root, 'run', spawn.sessionId, 'mcp.json');

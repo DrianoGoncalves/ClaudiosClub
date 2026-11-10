@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findSecret } from '../server/chat/secrets';
+import { findSecret, findSecrets } from '../server/chat/secrets';
 import { TurnWatcher } from '../server/turns';
 import type { LiveSession } from '../shared/model';
 
@@ -34,6 +34,18 @@ describe('guarda de segredos', () => {
     expect(findSecret('DB_PASSWORD=<sua senha>')).toBeNull();
     expect(findSecret('postgres://user:${PASS}@db/app')).toBeNull();
     expect(findSecret('A senha precisa ter 8 caracteres.')).toBeNull();
+  });
+
+  it('findSecrets devolve todas as ocorrências, com posição, e não muda o findSecret', () => {
+    const text = `${'sk-ant-'}api03-${noise(28)} e depois ${'ghp'}_${noise(36)}`;
+    const hits = findSecrets(text);
+    expect(hits.map((h) => h.label)).toEqual(['uma chave da API da Anthropic', 'um token do GitHub']);
+    expect(hits[0]!.index).toBe(0);
+    expect(hits[1]!.index).toBe(text.indexOf('ghp'));
+    expect(text.slice(hits[1]!.index, hits[1]!.index + hits[1]!.length)).toBe(`${'ghp'}_${noise(36)}`);
+    // Chamar de novo acha o mesmo: nenhum `lastIndex` ficou no meio.
+    expect(findSecrets(text)).toEqual(hits);
+    expect(findSecrets('mysql -uroot -p app')).toEqual([]);
   });
 });
 

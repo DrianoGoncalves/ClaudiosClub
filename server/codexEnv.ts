@@ -1,4 +1,4 @@
-import { promises as fs, constants as fsc } from 'node:fs';
+import { existsSync, promises as fs, constants as fsc } from 'node:fs';
 import path from 'node:path';
 import { defaultRunner, type CodexRunner } from './adapters/codex';
 
@@ -86,6 +86,26 @@ export async function locateCodex(env: NodeJS.ProcessEnv = process.env, platform
   return [];
 }
 
+/**
+ * O comando que o spawn abre para o `codex`, sem shell. No Windows o `codex` do npm é `codex.cmd` (ou `.ps1`), que o spawn não acha; e o
+ * shell não serve, porque os argumentos têm aspas e chaves do TOML que o cmd.exe estragaria. Então abre direto o JS que o `.cmd` chama, com
+ * o node (o `node.exe` ao lado, como o `.cmd` faz, ou o node que roda o Claudio’s Club). Sem achar nada, `codex`: o spawn dá ENOENT.
+ */
+export function resolveCodexCommand(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): { command: string; prefix: string[] } {
+  if (platform !== 'win32') return { command: 'codex', prefix: [] };
+  for (const dir of (env.PATH ?? env.Path ?? '').split(path.delimiter).filter(Boolean)) {
+    const exe = path.join(dir, 'codex.exe');
+    if (existsSync(exe)) return { command: exe, prefix: [] };
+    const shim = existsSync(path.join(dir, 'codex.cmd')) || existsSync(path.join(dir, 'codex'));
+    const js = path.join(dir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+    if (shim && existsSync(js)) {
+      const node = path.join(dir, 'node.exe');
+      return { command: existsSync(node) ? node : process.execPath, prefix: [js] };
+    }
+  }
+  return { command: 'codex', prefix: [] };
+}
+
 export class CodexEnv {
   private cache: { at: number; value: CodexEnvStatus } | null = null;
 
@@ -106,7 +126,7 @@ export class CodexEnv {
   private async inspect(): Promise<CodexEnvStatus> {
     const fail = (error: string): CodexEnvStatus => ({ error, version: null, networkProxy: false, notice: null });
     const v = await this.run(['--version'], '', 15_000);
-    if (v.spawnError) return fail(v.spawnError.code === 'ENOENT' ? 'o Codex CLI não está instalado (npm i -g @openai/codex)' : `não consegui rodar o codex: ${v.spawnError.message}`);
+    if (v.spawnError) return fail(v.spawnError.code === 'ENOENT' ? 'o Codex CLI não está instalado: ligue o Codex nas Configurações do Claudio’s Club' : `não consegui rodar o codex: ${v.spawnError.message}`);
     if (v.timedOut || v.code !== 0) return fail(`não consegui conferir a versão do Codex (${v.timedOut ? 'demorou demais' : `saída ${v.code}`})`);
     const version = parseCodexVersion(v.stdout);
     if (!version) return fail(`não reconheci a versão do Codex (saída: ${JSON.stringify(v.stdout.trim().slice(0, 80))}): não rodo o motor Codex sem saber qual é`);

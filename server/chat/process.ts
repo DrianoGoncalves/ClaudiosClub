@@ -309,7 +309,7 @@ export class ChatProcess {
     });
   }
 
-  send(text: string, priority: SendPriority = 'next', images: string[] = [], notice?: string, files: ChatAttachment[] = []) {
+  send(text: string, priority: SendPriority = 'next', images: string[] = [], notice?: string, files: ChatAttachment[] = [], fromStaff = false) {
     this.checkpointSeen = false;
     const queued = this.state.busy ? priority : undefined;
     if (queued === 'now') this.stopping = true;
@@ -334,6 +334,7 @@ export class ChatProcess {
       ...(queued && { queued }),
       ...(images.length && { images: images.length }),
       ...(files.length && { files: files.map((f) => f.name) }),
+      ...(fromStaff && { fromStaff }),
     });
     this.waitingReply = true;
     this.setState({ busy: true, error: null });

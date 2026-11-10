@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import { GPT_MCP_NAME, GPT_TOOL_NAME } from '../../shared/model';
 import { codexEnv } from '../adapters/codex';
-import { CodexBlockedError, codexSafetyArgs, tomlString } from '../chat/codexArgs';
+import { CodexBlockedError, codexSafetyArgs, codexWindowsSandboxArgs, tomlString } from '../chat/codexArgs';
 import { isModelUnavailable } from '../chat/codexEvents';
 import { killTree } from '../chat/registry';
 import { findSecret } from '../chat/secrets';
@@ -252,6 +252,7 @@ export function buildAskArgs(o: { cwd: string; projectPath: string; home: string
     '-c',
     `model_reasoning_effort=${tomlString(o.effort)}`,
     ...codexSafetyArgs({ mode: 'read-only', network: 'off', cwd: o.cwd, projectPath: o.projectPath, home: o.home, mycoHome: o.mycoHome }),
+    ...codexWindowsSandboxArgs(),
     '--ephemeral',
     '--skip-git-repo-check',
     '--color',
@@ -332,10 +333,10 @@ export function createGptMcp(opts: GptMcpOptions) {
         ({ r, answer } = await once(substitute));
       }
       if (!answer) {
-        if (r.spawnError?.code === 'ENOENT' || r.code === 9009 || r.code === 127) throw new GptError('o Codex CLI não está instalado (npm i -g @openai/codex): avise o usuário');
+        if (r.spawnError?.code === 'ENOENT' || r.code === 9009 || r.code === 127) throw new GptError('o Codex CLI não está instalado: avise o usuário para ligar o Codex nas Configurações do Claudio’s Club');
         if (r.timedOut) throw new GptError(`o GPT não respondeu em ${Math.round(timeoutMs / 60_000)} minutos: tente uma pergunta menor ou com menos esforço`);
         const why = lastLine(r.stderr) || (r.spawnError ? r.spawnError.message : `saída ${r.code}`);
-        throw new GptError(`o Codex falhou${/login|auth|sign in|unauthorized/i.test(r.stderr) ? ' (sem login? o usuário precisa rodar `codex login`)' : ''}: ${why}`);
+        throw new GptError(`o Codex falhou${/login|auth|sign in|unauthorized/i.test(r.stderr) ? ' (sem login? o usuário entra no Codex pelo Claudio’s Club)' : ''}: ${why}`);
       }
       // O que volta passa pelo mesmo filtro de segredos das conversas: com cara de segredo, não vai para a sessão.
       const found = findSecret(answer);

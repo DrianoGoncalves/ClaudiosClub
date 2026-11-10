@@ -7,6 +7,25 @@ import { keymap } from '@codemirror/view';
 import { indentWithTab } from '@codemirror/commands';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
+import { t } from '../i18n';
+
+/** Textos do painel de busca e do "ir para a linha": o CodeMirror os pede em inglês, pela frase original. */
+const phrases = () =>
+  EditorState.phrases.of({
+    Find: t('files.find'),
+    next: t('files.findNext'),
+    previous: t('files.findPrev'),
+    all: t('files.findAll'),
+    'match case': t('files.matchCase'),
+    regexp: t('files.regexp'),
+    'by word': t('files.byWord'),
+    Replace: t('files.replaceWith'),
+    replace: t('files.replaceOne'),
+    'replace all': t('files.replaceAll'),
+    close: t('files.closeSearch'),
+    'Go to line': t('files.gotoLine'),
+    go: t('files.gotoGo'),
+  });
 
 /** Linguagem pela extensão do arquivo; null = texto puro. */
 async function languageFor(path: string): Promise<Extension | null> {
@@ -70,8 +89,15 @@ const theme = EditorView.theme({
   },
   '.cm-matchingBracket': { backgroundColor: 'color-mix(in srgb, var(--ink-green) 25%, transparent)', outline: 'none' },
   '.cm-searchMatch': { backgroundColor: 'var(--highlight)' },
+  '.cm-searchMatch-selected': { backgroundColor: 'var(--highlight-solid)', outline: '1px solid var(--ink-blue)' },
   '.cm-panels': { backgroundColor: 'var(--panel)', color: 'var(--ink)', borderColor: 'var(--line)' },
+  '.cm-panels-bottom': { borderTop: '1px solid var(--line)' },
+  '.cm-panels-top': { borderBottom: '1px solid var(--line)' },
   '.cm-tooltip': { backgroundColor: 'var(--panel)', color: 'var(--ink)', border: '1px solid var(--line)' },
+  '.cm-tooltip-autocomplete ul li[aria-selected]': {
+    backgroundColor: 'color-mix(in srgb, var(--ink-blue) 18%, transparent)',
+    color: 'var(--ink)',
+  },
   '&.cm-focused': { outline: 'none' },
 });
 
@@ -105,11 +131,14 @@ export default function CodeEditor({
         doc: initial,
         extensions: [
           basicSetup,
+          // Quebra linhas longas na tela (só exibição; o texto salvo não muda).
+          EditorView.lineWrapping,
           keymap.of([
             indentWithTab,
             { key: 'Mod-s', preventDefault: true, run: () => (handlers.current.onSave(), true) },
           ]),
           language.of([]),
+          phrases(),
           syntaxHighlighting(highlight),
           theme,
           EditorView.contentAttributes.of({ 'aria-label': label }),
