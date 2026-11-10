@@ -76,6 +76,8 @@ import { quotaBoost } from './quotaBoost';
 import { browserStatus } from './browser';
 import { gitState } from './git';
 import { buildOrchestration, buildSavings, MarkBody, readAllMarks, readMarks, saveMark, savingsSince, withRunInfo } from './orchestration';
+import { buildCostReview, COST_REVIEW_MAX_DAYS, parseCostReviewDays } from './costReview';
+import { CostReviewApplyError, runCostReviewApply } from './costReviewApply';
 import type { Board, CostReport, InboxItem, InboxKind, LiveSession, Project, TurnNotice } from '../shared/model';
 import { TurnWatcher } from './turns';
 import { RoutineScheduler, type RoutineOutcome } from './routines';
@@ -364,7 +366,7 @@ const tasks = new TaskService({
     const manager = dir ? await readProfile(dir, staffId) : null;
     if (!manager) return;
     const target = sessionId && manager.sessions.some((s) => s.id === sessionId) ? sessionId : (manager.sessions.at(-1)?.id ?? null);
-    await chats.send(projectId, target, staffId, text, 'later');
+    await chats.sendToRequester(projectId, target, staffId, text);
   },
   requesterSession: (projectId, staffId) => chats.workingSession(projectId, staffId),
   lastText: (sessionId) => chats.lastAssistantText(sessionId),
@@ -1070,7 +1072,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       }
       if (action === 'merge') return tasks.merge(id!, taskId!, b.skipTests);
       if (!b.staffId) throw new BadRequest(action === 'review' ? 'escolha quem revisa' : 'escolha quem faz o deploy');
-      return action === 'review' ? tasks.requestReview(id!, taskId!, b.staffId, b.force) : tasks.requestDeploy(id!, taskId!, b.staffId, b.force);
+      return action === 'review' ? tasks.requestReview(id!, taskId!, b.staffId, b.force, { assign: true }) : tasks.requestDeploy(id!, taskId!, b.staffId, b.force);
     },
   ],
   [
@@ -1471,6 +1473,41 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       return buildSavings(files, await readAllMarks(), since, scanning);
     },
   ],
+  // Revisão de custo de um funcionário (botão "Analisar" do ranking): regras fixas, sem IA. `days` como em /api/savings.
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/staff/${ID}/cost-review$`),
+    async ({ params: [id, staffId], url }) => {
+      const days = parseCostReviewDays(url.searchParams.get('days'));
+      if (days === null) throw new BadRequest(`days deve ser um inteiro de 1 a ${COST_REVIEW_MAX_DAYS}`);
+      const dir = await projectPathOf(id!);
+      if (!dir) return null;
+      return buildCostReview({ projectPath: dir, projectId: id!, staffId: staffId!, days, transcriptsDir: defaultTranscripts, now: Date.now() });
+    },
+  ],
+  // Aplicar as sugestões da revisão (botão "Aplicar"): só pelo Claudio’s Club (a guarda fica em costReviewApply.ts). Ficha pelo mesmo caminho da tela.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/staff/${ID}/cost-review/apply$`),
+    async ({ params: [id, staffId], body, fromBrowser }) => {
+      const dir = await projectPathOf(id!);
+      if (!dir) return null;
+      return runCostReviewApply({
+        fromBrowser,
+        body,
+        projectPath: dir,
+        projectId: id!,
+        staffId: staffId!,
+        transcriptsDir: defaultTranscripts,
+        now: Date.now(),
+        updateFicha: (fields) => staff.update(id!, staffId!, fields),
+        createTask: async ({ staffId: sid, title, description }) => {
+          const task = await tasks.create(id!, { title, description, staffId: sid });
+          return task ? ((await tasks.start(id!, task.id)) ?? task) : null;
+        },
+      });
+    },
+  ],
   [
     'POST',
     new RegExp(`^/api/sessions/${ID}/marks$`),
@@ -1623,6 +1660,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         if (err instanceof Forbidden) return send(res, 403, { error: err.message });
         if (
           err instanceof BadRequest ||
+          err instanceof CostReviewApplyError ||
           err instanceof StaffError ||
           err instanceof ChatError ||
           err instanceof TaskError ||

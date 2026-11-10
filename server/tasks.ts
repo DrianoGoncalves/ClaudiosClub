@@ -469,12 +469,16 @@ export class TaskService {
     }
   }
 
-  /** Pede a outro funcionário que revise o código da tarefa (numa conversa nova dele). */
-  async requestReview(projectId: string, taskId: string, reviewerId: string, force = false): Promise<Task | null> {
+  /**
+   * Pede a outro funcionário que revise o código da tarefa (numa conversa nova dele). `assign`: o pedido
+   * do quadro marca esse revisor na tarefa (reviewerId), e o veredito move a tarefa como na revisão
+   * automática. Sem ele, só anota a revisão e o revisor marcado (se houver) não muda.
+   */
+  async requestReview(projectId: string, taskId: string, reviewerId: string, force = false, opts: { assign?: boolean } = {}): Promise<Task | null> {
     const { dir, task, profile } = await this.context(projectId, taskId);
     if (reviewerId === task.staffId) throw new TaskError('a revisão precisa ser de outro funcionário');
     const reviewer = await this.staffOrThrow(projectId, reviewerId);
-    const place = await locateCode(dir, task.staffId, !!profile?.worktree);
+    const place = await locateCode(dir, task.staffId, !!profile?.worktree).catch(() => null);
     const code = place ? await readCode(dir, place).catch(() => null) : null;
     const where = !code
       ? 'O projeto não é um repositório git: leia os arquivos citados na conversa da tarefa.'
@@ -500,7 +504,7 @@ export class TaskService {
     const sessionId = await this.deps.send(projectId, reviewer.id, text, force);
     this.bySession.set(sessionId, { projectId, taskId, role: 'review' });
     return this.change(projectId, taskId, (t) =>
-      moved({ ...t, review: { staffId: reviewer.id, sessionId, at: new Date().toISOString() } }, 'review', 'auto', `revisão pedida a ${reviewer.name}`),
+      moved({ ...t, review: { staffId: reviewer.id, sessionId, at: new Date().toISOString() }, ...(opts.assign && { reviewerId: reviewer.id }) }, 'review', 'auto', `revisão pedida a ${reviewer.name}`),
     );
   }
 
@@ -551,8 +555,9 @@ export class TaskService {
 
   /**
    * A revisão respondeu: anota o veredito (APROVADO ou REPROVADO, na primeira linha). Só a revisão
-   * atual da tarefa conta, e só com o revisor marcado nela é que o veredito move a tarefa: aprovada
-   * vai para pronto; reprovada, os ajustes voltam para a conversa de trabalho.
+   * atual da tarefa conta, e só com o revisor marcado nela (pela revisão automática ou pelo pedido do
+   * quadro, com `assign`) é que o veredito move a tarefa: aprovada vai para pronto; reprovada, os
+   * ajustes voltam para a conversa de trabalho.
    */
   private async onReviewTurn(sessionId: string): Promise<void> {
     const where = await this.where(sessionId);
@@ -850,7 +855,8 @@ function withArchive(t: Task, now = Date.now()): Task {
 /** "No ar" saiu do quadro: o que foi gravado com ele segue como "pronto" (o histórico também). */
 const fromLegacy = (s: string): TaskStatus => (s === 'live' ? 'done' : (s as TaskStatus));
 
-async function readTasks(dir: string): Promise<Task[]> {
+/** As tarefas do projeto (`.myco/tasks.json`), só leitura; lista vazia se não há arquivo. */
+export async function readTasks(dir: string): Promise<Task[]> {
   const raw = await fs.readFile(tasksFile(dir), 'utf8').catch(() => null);
   if (!raw) return [];
   try {

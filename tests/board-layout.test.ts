@@ -331,9 +331,7 @@ describe('buildGraph', () => {
     const b1 = nodes.find((n) => n.id === 'g:b');
     expect(b1?.type === 'employee' && b1.data.costUsd).toBeNull();
     const ds = nodes.find((n) => n.type === 'agent' && n.data.agent.filePath.startsWith(A));
-    // Único agent com consumo: 100% dos subagents. Funcionário: 7,5 de 10 no total.
-    expect(ds?.type === 'agent' && ds.data.cost).toEqual({ usd: 2, runs: 3, share: 1 });
-    expect(a1?.type === 'employee' && a1.data.costShare).toBe(0.75);
+    expect(ds?.type === 'agent' && ds.data.cost).toEqual({ usd: 2, runs: 3 });
   });
 
   it('salas em grade; hierarquia de cima para baixo; agents e skills ao lado do projeto', () => {

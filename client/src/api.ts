@@ -15,6 +15,8 @@ import type {
   ContextSwitch,
   ConversationHit,
   CostReport,
+  CostReview,
+  CostReviewApplyResult,
   CodexEffort,
   Effort,
   FtpConnection,
@@ -356,6 +358,12 @@ export const api = {
   orchestration: (sessionId: string) => get<OrchestrationReport>(`/api/sessions/${sessionId}/orchestration`),
   /** Economia por sessão nos últimos `days` dias; null = desde sempre. */
   savings: (days: number | null) => get<SavingsReport>(days === null ? '/api/savings' : `/api/savings?days=${days}`),
+  /** Revisão de custo do funcionário nos últimos `days` dias (1 a 3650): regras fixas, sem IA; leva alguns segundos. */
+  costReview: (projectId: string, staffId: string, days: number) =>
+    get<CostReview>(`/api/projects/${encodeURIComponent(projectId)}/staff/${encodeURIComponent(staffId)}/cost-review?days=${days}`),
+  /** Aplica os ajustes dos achados `ids` (o servidor refaz a revisão de `days` dias e aplica só o que ainda dispara). Não repete: tarefa e regra duplicariam. */
+  applyCostReview: (projectId: string, staffId: string, ids: string[], days: number) =>
+    post<CostReviewApplyResult>(`/api/projects/${encodeURIComponent(projectId)}/staff/${encodeURIComponent(staffId)}/cost-review/apply`, { ids, days }),
   markRun: (sessionId: string, runId: string, mark: RunMark | null) =>
     post<Record<string, RunMark>>(`/api/sessions/${sessionId}/marks`, { runId, mark }),
   mcp: (projectId: string) => get<McpServerInfo[]>(`/api/projects/${projectId}/mcp`),

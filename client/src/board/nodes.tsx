@@ -2,7 +2,7 @@ import { Handle, Position, type Node, type NodeProps, type NodeTypes } from '@xy
 import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { PLAYBOOK_AGENTS } from '../../../shared/agentPresets';
 import { colorCss, type GitState, type LiveSession, type StaffProfile } from '../../../shared/model';
-import { employeeName, ENTRYPOINT_LABEL, formatAgo, formatShare, initials, STATUS_LABEL } from '../format';
+import { employeeName, ENTRYPOINT_LABEL, formatAgo, initials, STATUS_LABEL } from '../format';
 import { AgentIcon, BranchIcon, ChromeIcon, GhostIcon, McpIcon, ServerIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { t } from '../i18n';
 import {
@@ -164,9 +164,6 @@ function ProjectNode({ id, data, selected, width }: NodeProps<Node<ProjectNodeDa
           <div className="bn-meta">
             {p.sessionCount} {t(p.sessionCount === 1 ? 'board.employeeOne' : 'board.employeeOther')}
             {data.header.collapsed && resourcesText(data.header.resources)}
-            {data.header.collapsed && data.costShare !== null && (
-              <span title={t('board.shareOfProject')}> · {formatShare(data.costShare, 1)}</span>
-            )}
             {!p.exists && ` · ${t('board.folderMissing')}`}
           </div>
         </div>
@@ -271,11 +268,6 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
                 : s
                   ? formatAgo(Date.now() - Date.parse(s.updatedAt))
                   : t('board.hiredNoSession'),
-              data.costShare !== null && (
-                <span key="share" title={t('board.employeeShareTitle')}>
-                  {formatShare(data.costShare, 1)}
-                </span>
-              ),
               !staff && !ghost && s?.entrypoint && (ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint),
             ]
               .filter(Boolean)
@@ -333,11 +325,7 @@ function AgentNode({ id, data, selected }: NodeProps<Node<AgentNodeData, 'agent'
         {a.duplicate && <span className="bn-flag bn-flag-warn">{t('board.duplicateName')}</span>}
         {a.error && <span className="bn-flag bn-flag-warn">{t('board.errorFlag')}</span>}
         {!borrowed && !a.duplicate && !a.error && t('board.agentWord')}
-        {data.cost && (
-          <span title={t('board.agentShareTitle')}>
-            {' '}· {formatShare(data.cost.share, 1)} {t(data.cost.runs === 1 ? 'board.runOne' : 'board.runOther', { n: data.cost.runs })}
-          </span>
-        )}
+        {data.cost && ` · ${t(data.cost.runs === 1 ? 'board.runOne' : 'board.runOther', { n: data.cost.runs })}`}
       </div>
     </Frame>
   );

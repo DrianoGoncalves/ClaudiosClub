@@ -32,7 +32,9 @@ import { Attachments } from './Attachments';
 import { ProjectGuide } from './ProjectGuide';
 import { ProjectName } from './ProjectName';
 import { Routines } from './Routines';
+import { StaffReview } from './StaffReview';
 import { WorthIt } from './WorthIt';
+import { reviewDays } from '../costReview';
 import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatPercent, formatShare, formatUsd, STATUS_LABEL } from '../format';
 import { isLoss, type RankingGroup, type RankingRow, rankingRows, savingsList, teamSavings } from '../ranking';
 import { t, locale } from '../i18n';
@@ -925,8 +927,14 @@ export function UserPanel({
 type RankingTab = 'cost' | 'savings';
 const RANKING_TABS: Array<[RankingTab, string]> = [['cost', t('detail.tabCost')], ['savings', t('detail.tabSavings')]];
 
-/** Período do ranking em dias (null = tudo); o padrão são os últimos 3 meses. */
-const RANKING_PERIODS: Array<[string, number | null, string]> = [['90', 90, t('detail.periodLast3Months')], ['all', null, t('detail.periodAll')]];
+/** Período do ranking em dias (null = tudo): hoje (desde a meia-noite), 7 dias, 1 mês, 3 meses (o padrão) e tudo. */
+const RANKING_PERIODS: Array<[string, number | null, string]> = [
+  ['1', 1, t('detail.periodToday')],
+  ['7', 7, t('detail.period7d')],
+  ['30', 30, t('detail.period1m')],
+  ['90', 90, t('detail.periodLast3Months')],
+  ['all', null, t('detail.periodAll')],
+];
 
 /** Uma linha do ranking de funcionários; arquivado fica apagado e com a etiqueta. */
 function RankingItem({
@@ -937,8 +945,10 @@ function RankingItem({
   bad,
   bar,
   saving,
+  analyzeDays,
   onSelect,
   onOpenPerson,
+  onOpenTask,
 }: {
   pos: number;
   row: RankingRow;
@@ -948,12 +958,15 @@ function RankingItem({
   /** Tamanho da barra, de 0 a 1. */
   bar: number;
   saving?: boolean;
+  /** Dias da análise de custo (o filtro do ranking); sem isso, ou sem ficha, a linha não tem o botão Analisar. */
+  analyzeDays?: number;
   onSelect: (nodeId: string) => void;
   onOpenPerson: (person: { projectId: string; staffId: string }) => void;
+  onOpenTask?: (projectId: string, taskId: string) => void;
 }) {
   const person = row.person;
   return (
-    <li>
+    <li className={analyzeDays !== undefined && person ? 'has-review' : undefined}>
       <button
         className={`ranking-row ${row.archived ? 'is-archived' : ''}`}
         onClick={() => (person ? onOpenPerson(person) : onSelect(row.nodeId))}
@@ -971,6 +984,7 @@ function RankingItem({
         <span className={`ranking-value ${bad ? 'worth-bad' : ''}`}>{value}</span>
         <span className={`ranking-bar ${saving ? 'is-saving' : ''}`} style={{ width: `${bar * 100}%` }} />
       </button>
+      {analyzeDays !== undefined && person && <StaffReview key={analyzeDays} projectId={person.projectId} staffId={person.staffId} name={row.name} days={analyzeDays} onOpenTask={onOpenTask} />}
     </li>
   );
 }
@@ -986,6 +1000,7 @@ export function RankingPanel({
   scanning,
   onSelect,
   onOpenPerson,
+  onOpenTask,
 }: {
   groups: RankingGroup[];
   agents: Array<{ type: string; usd: number; runs: number }>;
@@ -994,6 +1009,8 @@ export function RankingPanel({
   onSelect: (nodeId: string) => void;
   /** Quem tem ficha: abre no RH, no projeto da linha. */
   onOpenPerson: (person: { projectId: string; staffId: string }) => void;
+  /** Abre uma tarefa no quadro do projeto (a que o "Aplicar sugestões" da análise criou). */
+  onOpenTask?: (projectId: string, taskId: string) => void;
 }) {
   const [tab, setTab] = useState<RankingTab>('cost');
   const [limit, setLimit] = useState(10);
@@ -1033,6 +1050,7 @@ export function RankingPanel({
     };
   }, [period]);
   const rows = report ? rankingRows(groups, report) : null;
+  const analysisDays = reviewDays(RANKING_PERIODS.find(([k]) => k === period)?.[1] ?? null);
   const topEmployee = rows?.[0]?.usd ?? 0;
   const topAgent = agents[0]?.usd ?? 0;
   // Participação de cada um no gasto da lista (funcionários entre si; agents entre si).
@@ -1143,7 +1161,7 @@ export function RankingPanel({
             {rows && rows.length === 0 && <p className="muted">{t('detail.noCostYet')}</p>}
             <ol className="ranking">
               {rows?.slice(0, limit).map((e, i) => (
-                <RankingItem key={e.nodeId} pos={i + 1} row={e} value={formatShare(e.usd, employeesTotal)} bar={topEmployee ? e.usd / topEmployee : 0} onSelect={onSelect} onOpenPerson={onOpenPerson} />
+                <RankingItem key={e.nodeId} pos={i + 1} row={e} value={formatShare(e.usd, employeesTotal)} bar={topEmployee ? e.usd / topEmployee : 0} analyzeDays={analysisDays} onSelect={onSelect} onOpenPerson={onOpenPerson} onOpenTask={onOpenTask} />
               ))}
             </ol>
             {rows && rows.length > limit && (

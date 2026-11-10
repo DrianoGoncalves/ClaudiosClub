@@ -811,6 +811,43 @@ describe('revisão automática', () => {
     texts.set('s-2', 'APROVADO');
     await svc.onTurnDone('s-2');
     expect(await current()).toMatchObject({ status: 'review', review: { verdict: 'approved' } });
+    expect((await current()).reviewerId).toBeNull();
+  });
+
+  it('pedido à mão com assign marca o revisor: APROVADO vai para pronto, sem contar rodada', async () => {
+    const { svc, texts, make, current } = reviewFlow('manual-ok');
+    const t = await make('Pedido do quadro', null);
+    await svc.start('p', t.id); // s-1
+    await svc.onTurnDone('s-1'); // entregue, sem revisor: fica em revisão
+    await svc.requestReview('p', t.id, 'rev-1', false, { assign: true }); // s-2
+    expect(await current()).toMatchObject({ status: 'review', reviewerId: 'rev-1', review: { staffId: 'rev-1', sessionId: 's-2' } });
+    expect((await current()).reviewRounds).toBeUndefined();
+    texts.set('s-2', 'APROVADO\n\nok');
+    await svc.onTurnDone('s-2');
+    expect(await current()).toMatchObject({ status: 'done', review: { verdict: 'approved' } });
+  });
+
+  it('pedido à mão com assign: REPROVADO manda o ajuste para a conversa de trabalho (fazendo)', async () => {
+    const { svc, delivered, texts, make, current } = reviewFlow('manual-no');
+    const t = await make('Pedido reprovado', null);
+    await svc.start('p', t.id); // s-1
+    await svc.onTurnDone('s-1');
+    await svc.requestReview('p', t.id, 'rev-1', false, { assign: true }); // s-2
+    texts.set('s-2', 'REPROVADO\n\n- 🔴 a.ts:1 quebra o login');
+    await svc.onTurnDone('s-2');
+    expect(await current()).toMatchObject({ status: 'doing', reviewerId: 'rev-1' });
+    expect(delivered.at(-1)).toMatchObject({ sessionId: 's-1' });
+    expect(delivered.at(-1)!.text).toContain('quebra o login');
+  });
+
+  it('pedido à mão com assign numa tarefa sem executor: não quebra, e a reprovação fica com você', async () => {
+    const { svc, texts, current } = reviewFlow('manual-noexec');
+    const t = (await svc.create('p', { title: 'Sem executor' }))!;
+    expect(await svc.requestReview('p', t.id, 'rev-1', false, { assign: true })).toMatchObject({ status: 'review', reviewerId: 'rev-1' });
+    texts.set('s-1', 'REPROVADO\n\n- 🔴 x');
+    await svc.onTurnDone('s-1');
+    expect(await current()).toMatchObject({ status: 'review', reviewerId: 'rev-1', review: { verdict: 'rejected' } });
+    expect((await current()).history.at(-1)?.note).toBe('reprovada por Rui, mas não tem conversa de trabalho: fica com você');
   });
 
   it('o veredito é a primeira linha, sem markdown e em maiúsculas; o resto não decide', () => {

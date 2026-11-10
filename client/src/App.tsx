@@ -460,6 +460,10 @@ export function App() {
               scanning={costs?.scanning ?? true}
               onSelect={setSelectedId}
               onOpenPerson={(p) => openManage(p.projectId, p.staffId)}
+              onOpenTask={(projectId, taskId) => {
+                setJumpTask(taskId);
+                setTasksFor(projectId);
+              }}
             />
           )}
           {selection.kind === 'hr' && (

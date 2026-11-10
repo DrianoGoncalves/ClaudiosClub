@@ -66,8 +66,8 @@
   --pen-pink: #c23a82;
 
   /* Cor de cada serviço de IA nas barras de consumo: salmão do Claude, preto do Codex. */
-  --brand-claude: #d97757;
-  --brand-codex: #111111;
+  --brand-claude: #d9775700;
+  --brand-codex: #11111100;
 
   --hand: 'Caveat', 'Segoe Print', 'Comic Sans MS', cursive;
   font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -787,6 +787,45 @@ button.ranking-row:hover { border-color: var(--accent); }
 .section .ranking-head h3 { margin: 0; }
 .ranking-period { font: inherit; font-size: 12px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); cursor: pointer; }
 .ranking-total { margin: 6px 0 0; font-weight: 600; }
+/* Analisar (revisão de custo): o botão fica ao lado da linha e o resultado abre embaixo, na largura toda. */
+.ranking > li.has-review { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 6px; }
+.has-review > .btn-secondary.ranking-review { width: 36px; height: auto; align-self: stretch; }
+.has-review > .btn-secondary.ranking-review[aria-expanded='true'] { border-color: var(--ink-blue); color: var(--ink-blue); }
+.ranking-review.is-loading svg { animation: review-pulse 1s ease-in-out infinite; }
+@keyframes review-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .ranking-review.is-loading svg { animation: none; } }
+.ranking-review-panel { grid-column: 1 / -1; display: grid; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.ranking-review-panel > * { margin: 0; }
+.ranking-review-panel details.collapse { margin-top: 0; }
+.ranking-review-panel .stats .review-wide { grid-column: 1 / -1; }
+.review-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.review-error .error { margin: 0; }
+.review-group h4 { margin: 0 0 6px; font-size: 12px; }
+.review-findings, .review-sessions { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.review-findings li { display: grid; gap: 2px; padding-left: 10px; border-left: 3px solid var(--muted); }
+.review-findings.is-high li { border-left-color: var(--ink-red); }
+.review-findings.is-medium li { border-left-color: var(--waiting-ink); }
+.review-sessions li { display: grid; gap: 1px; min-width: 0; }
+.review-session-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Aplicar sugestões: caixa de seleção por achado (alvo de 36px), confirmação na própria tela e o resultado. */
+.review-pick { display: flex; align-items: flex-start; gap: 8px; min-height: 36px; padding: 2px 0; cursor: pointer; }
+.review-pick:has(input:disabled) { cursor: default; }
+.review-pick input { flex: none; width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--ink-blue); cursor: inherit; }
+.review-pick input:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; }
+.review-pick-text { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.review-change { font-weight: 600; }
+.review-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.review-actions :is(.btn-primary, .btn-secondary) { min-height: 36px; }
+.review-confirm { display: grid; gap: 8px; font-size: 13px; }
+.review-confirm:focus { outline: none; }
+.review-confirm > *, .review-confirm li { margin: 0; }
+.review-confirm ul { list-style: none; padding: 0; display: grid; gap: 6px; }
+.review-confirm li { display: grid; gap: 1px; }
+.review-confirm li > span { font-size: 12px; }
+.review-result { display: grid; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.review-findings.is-applied li { border-left-color: var(--ink-green); }
+.review-task-link { display: inline-flex; align-items: center; min-height: 36px; margin-left: 6px; }
+button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; font-size: 0.9em; }
 
 /* ---- contratação ---- */
 .btn-primary { font: inherit; font-size: 13px; font-weight: 600; color: #fff; background: var(--ink-blue); border: 1px solid var(--ink-blue); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
@@ -944,7 +983,7 @@ button.ranking-row:hover { border-color: var(--accent); }
 .stats div { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
 .stats dt { font-size: 11px; color: var(--muted); }
 .stats dd { margin: 2px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; }
-.small { font-size: 12px; }
+.small { font-size: 10px; }
 .row.row-inline { flex-direction: row; justify-content: space-between; align-items: center; }
 /* O véu vai sobre o papel do cartão, não no lugar dele: as linhas do quadro continuam por trás. */
 .bn.is-selected::before { background: linear-gradient(var(--card-selected), var(--card-selected)), var(--card); }
@@ -1000,10 +1039,10 @@ a.usage:hover .meter-track { border-color: var(--ink-blue); }
 a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 3px; }
 .usage-note { font-size: 12px; color: var(--muted); }
 /* Claude e Codex em duas linhas: a do Claude em cima, a do Codex logo abaixo, com o ícone de conexão depois das barras. */
-.usage-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.usage-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
 .usage-line { display: flex; align-items: center; gap: 10px; }
 .usage-outdated { color: var(--waiting); }
-.meter { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.meter { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; }
 .meter-label { font-family: var(--hand); font-weight: 700; font-size: 17px; }
 /* O fundo da barra tem a cor do serviço (Claude/Codex); o preenchimento é o semáforo (verde <50%, amarelo <70%, vermelho depois). */
 .meter-track { position: relative; width: 64px; height: 8px; border: 1.5px solid var(--ink); border-radius: 3px 5px 3px 4px; overflow: hidden; background: var(--meter-brand); }

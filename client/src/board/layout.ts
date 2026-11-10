@@ -39,8 +39,6 @@ export type ProjectNodeData = {
   /** URL da imagem do projeto (logo ou print), se houver. */
   image: string | null;
   header: HeaderData;
-  /** Parte do projeto no consumo total (0–1), para o resumo da sala dobrada. */
-  costShare: number | null;
   /** Estado do código (null: não é repositório git ou ainda não foi lido). */
   git: GitState | null;
   /** Tarefas em aberto e quantas esperam revisão (null: nenhuma). */
@@ -58,8 +56,6 @@ export type EmployeeNodeData = {
   costUsd: number | null;
   /** Funcionário fantasma: as conversas sem ficha do projeto, num nó só (da mais recente à mais antiga). */
   ghost: Session[] | null;
-  /** Parte do funcionário no consumo total (0 a 1). */
-  costShare: number | null;
   archived: boolean;
   /**
    * Esperando você (cartão amarelo): tem item na caixa "precisa de mim" (ver GraphOptions.inbox),
@@ -67,8 +63,7 @@ export type EmployeeNodeData = {
    */
   needsYou: boolean;
 };
-/** `share`: parte do agent no consumo de todos os subagents (0 a 1). */
-export type AgentNodeData = { agent: Agent; cost: { usd: number; runs: number; share: number } | null };
+export type AgentNodeData = { agent: Agent; cost: { usd: number; runs: number } | null };
 export type SkillNodeData = { skill: Skill };
 export type SyncedNodeData = { skills: Skill[] };
 export type ShelfNodeData = { agents: number; skills: number; expanded: boolean };
@@ -217,9 +212,6 @@ export function buildGraph(
   const visibleProject = (p: Project) => opts.showArchived || !archivedProjects.has(p.id);
   const liveById = new Map(board.live.map((s) => [s.sessionId, s]));
   const costs = opts.costs ?? null;
-  const totalUsd = costs?.total.usd ?? 0;
-  const agentsUsd = Object.values(costs?.agents ?? {}).reduce((s, a) => s + a.usd, 0);
-  const share = (usd: number | null, total: number) => (usd === null || !total ? null : usd / total);
   const extraManagers: Array<{ projectId: string; staff: StaffProfile; managerId: string }> = [];
   // A caixa é a fonte única de "precisa de mim": cartão e contador da sala leem o mesmo conjunto.
   const inbox = opts.inbox ?? [];
@@ -237,7 +229,7 @@ export function buildGraph(
     const c = costs?.agents[a.name];
     return node(agentNodeId(a), 'agent', {
       agent: a,
-      cost: c ? { usd: c.usd, runs: c.runs, share: share(c.usd, agentsUsd) ?? 0 } : null,
+      cost: c ? { usd: c.usd, runs: c.runs } : null,
     });
   };
   const skillNode = (s: Skill): BoardNode => node(skillNodeId(s), 'skill', { skill: s });
@@ -293,7 +285,6 @@ export function buildGraph(
         projectId: p.id,
         costUsd,
         ghost: null,
-        costShare: share(costUsd, totalUsd),
         archived: archivedSessions.has(`staff:${st.id}`),
         needsYou: needsYou(session?.live, mine, st.id),
       };
@@ -317,7 +308,6 @@ export function buildGraph(
           projectId: p.id,
           costUsd,
           ghost: loose,
-          costShare: share(costUsd, totalUsd),
           archived: ids.every((id) => archivedSessions.has(id)),
           needsYou: needsYou(session.live, ids, null),
         }),
@@ -351,7 +341,6 @@ export function buildGraph(
         archived: archivedProjects.has(p.id),
         image: images[p.id] ?? null,
         header: { color: opts.projectColors?.[p.id] ?? null, sideAt: null, collapsed: folded, resources: inv.agents.length + inv.skills.length },
-        costShare: share(costs?.projects[p.id]?.usd ?? null, totalUsd),
         git: opts.git?.[p.id] ?? null,
         tasks: opts.tasks?.[p.id] ?? null,
         // Só as sessões vivas da sala (as que o cabeçalho mostra as bolinhas).

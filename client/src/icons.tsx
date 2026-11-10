@@ -206,6 +206,16 @@ export function ChartIcon({ size = 15 }: { size?: number }) {
   );
 }
 
+/** Lupa: analisar (revisão de custo do funcionário). */
+export function SearchIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.3-4.3" />
+    </svg>
+  );
+}
+
 /** Tarefas (lista com marcações): o quadro de tarefas do projeto. */
 export function TasksIcon({ size = 12 }: { size?: number }) {
   return (

@@ -182,6 +182,8 @@ export class ChatManager {
   private readonly inbox: InboxState;
   /** Fim do último turno de cada conversa: tamanho do contexto, ponto de corte (sobrevive ao processo fechar). */
   private readonly turns = new Map<string, TurnInfo & { ceilingNoted?: number }>();
+  /** Avisos de tarefa desviados: conversa de origem → conversa nova para onde o aviso seguiu (ver `sendToRequester`). */
+  private readonly requesterRedirects = new Map<string, string>();
   /** Modelo e esforço com que cada processo abriu (para onde a folga de cota volta). */
   private readonly launched = new WeakMap<ChatProcess, { model: string | null; effort: string | null }>();
   /** Folga de cota em cada processo: ligada, ou você trocou o modelo/esforço à mão (vale a sua escolha). */
@@ -532,6 +534,40 @@ export class ChatManager {
       }
     }
     return this.send(projectId, sessionId, staffId, text, priority, images, files);
+  }
+
+  /**
+   * Aviso de desfecho de tarefa (entregue, ou a revisão terminou) para o gestor que pediu, na conversa dele.
+   * Mesma regra da sua mensagem (ver sendFromUser): conversa grande com o assunto fechado, ou acima do teto,
+   * segue numa conversa nova. Desfechos seguintes que caem numa conversa desviada vão para a mesma nova
+   * (`requesterRedirects`, seguindo a cadeia). A anterior continua na lista; não cancela nada nela.
+   */
+  async sendToRequester(projectId: string, sessionId: string | null, staffId: string | null, text: string): Promise<string> {
+    let target = sessionId;
+    while (target && this.requesterRedirects.has(target)) target = this.requesterRedirects.get(target)!;
+    const info = target ? this.turns.get(target) : undefined;
+    const open = target ? this.chats.get(target) : undefined;
+    if (target && staffId && info && !open?.busy && !(await this.opts.keepSession?.(target))) {
+      // Continue do limite ou despertador pendente: o gestor ainda está acompanhando algo nela.
+      const waiting = !!(await this.opts.autoContinue?.get(target)) || !!(await this.opts.wakeups?.get(target));
+      const policy = (await this.opts.contextSwitch?.()) ?? 'suggest';
+      const closed = policy === 'auto' && switchDecision(info, this.now(), 'auto') === 'switch';
+      const ceiling = policy === 'auto' && info.used !== null && info.used >= CEILING_AT;
+      if (!waiting && (closed || ceiling)) {
+        const fresh = await this.ensure(projectId, null, staffId);
+        this.requesterRedirects.set(target, fresh.sessionId);
+        const used = info.used!;
+        const cost = rereadUsd(used, info.model, info.fast);
+        const reread = cost === null ? '' : ` Cada chamada ao modelo relia tudo (${usd(cost)}).`;
+        const why = closed ? 'o assunto dela tinha fechado' : `passou do teto de ${kTokens(CEILING_AT)} sem fechar o assunto`;
+        fresh.addNotice(
+          `Seguiu numa conversa nova: o aviso desta tarefa não entrou na anterior, que tinha ${kTokens(used)} e ${why}.${reread} Esta começa só com a ficha e a memória. A anterior continua na lista de conversas.`,
+        );
+        this.log(`${target}: aviso da tarefa seguiu em ${fresh.sessionId} (a anterior tinha ${kTokens(used)})`);
+        return this.send(projectId, fresh.sessionId, staffId, text, 'later');
+      }
+    }
+    return this.send(projectId, target, staffId, text, 'later');
   }
 
   /**

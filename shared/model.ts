@@ -718,6 +718,84 @@ export type StaffInput = Omit<StaffProfile, 'id' | 'projectId' | 'portrait' | 's
   force?: boolean;
 };
 
+/**
+ * Achado da revisão de custo (regra fixa, sem IA). `id` é estável: a tela traduz o título pelo id;
+ * `evidence` e `suggestion` já vêm em português, com os números reais do período.
+ */
+export interface CostReviewFinding {
+  id: string;
+  severity: 'high' | 'medium' | 'low';
+  evidence: string;
+  suggestion: string;
+  /** Ajuste que o botão "Aplicar" faz (só pelo Claudio’s Club). Ausente = o achado é só leitura (comportamento ou processo). */
+  fix?: CostReviewFix;
+}
+
+/** O ajuste de um achado. `ficha`: muda só `model`/`effort` (os campos presentes); `rule`: acrescenta a regra às regras da ficha; `task`: cria tarefa para o próprio funcionário. */
+export type CostReviewFix =
+  | { kind: 'ficha'; model?: 'sonnet'; effort?: 'high' }
+  | { kind: 'rule'; text: string }
+  | { kind: 'task'; title: string; description: string };
+
+/** Ids de todos os achados da revisão (server/costReview.ts). A rota de aplicar só aceita estes. */
+export const COST_REVIEW_FINDING_IDS = [
+  'long-context',
+  'ignored-context-warning',
+  'heavy-model-on-implementation',
+  'no-model',
+  'big-memory',
+  'big-tool-output',
+  'repeated-reads',
+  'inherited-model-agents',
+  'rework',
+] as const;
+
+/** Um ajuste feito pelo `POST …/cost-review/apply`. `before`/`after` só dos campos da ficha que mudaram; `taskId` na tarefa criada. */
+export interface CostReviewApplied {
+  id: string;
+  kind: CostReviewFix['kind'];
+  before?: { model?: string | null; effort?: CodexEffort | null };
+  after?: { model?: string | null; effort?: CodexEffort | null };
+  taskId?: string;
+}
+
+/** Resposta do apply: o que foi feito e o que ficou de fora (com o motivo, em pt-BR). */
+export interface CostReviewApplyResult {
+  applied: CostReviewApplied[];
+  skipped: Array<{ id: string; reason: string }>;
+}
+
+/** Uma conversa do funcionário no período (principal e subagents somados), para o top de cache-read. */
+export interface CostReviewSession {
+  id: string;
+  /** Primeiro pedido da conversa (ou a tarefa que a abriu), até 80 caracteres; null se não há ou se parece segredo. */
+  title: string | null;
+  /** Respostas do modelo (cada uma conta uma vez, mesmo com o streaming repetindo a linha). */
+  calls: number;
+  cacheRead: number;
+  /** Maior contexto de uma chamada (entrada + escrita e leitura de cache), em tokens. */
+  maxContext: number;
+  model: string | null;
+  /** Último registro da conversa no período (ISO). */
+  lastAt: string | null;
+}
+
+/** Revisão de custo de um funcionário (`GET …/staff/<id>/cost-review?days=N`): só leitura, sem chamar IA. */
+export interface CostReview {
+  staffId: string;
+  days: number;
+  totals: { sessions: number; calls: number; cacheRead: number; cacheWrite: number; output: number; maxContext: number };
+  /** As 5 conversas com mais cache-read. */
+  sessions: CostReviewSession[];
+  /** Tarefas do funcionário criadas no período: `rework` = "Complemento de…"; `reopened` = voltaram de revisão para execução. */
+  tasks: { total: number; rework: number; reopened: number };
+  /** `bytes`/`lines` do índice (`<id>.memory.md`, o que entra no contexto); `detailBytes` da pasta `<id>.memory/`. */
+  memory: { bytes: number; lines: number; detailBytes: number };
+  ficha: { model: string | null; effort: CodexEffort | null; engine: Engine };
+  /** Ordenados por severidade (alta, média, baixa). Sem achados = lista vazia. */
+  findings: CostReviewFinding[];
+}
+
 /** Servidor MCP disponível num projeto (só nome e origem: a configuração pode ter segredos). */
 export interface McpServerInfo {
   name: string;

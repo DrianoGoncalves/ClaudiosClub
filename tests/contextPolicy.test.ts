@@ -5,6 +5,7 @@ import type { ContextSwitch } from '../shared/model';
 import { CACHE_TTL_1H_MS, CACHE_TTL_MS, cacheTtlOf, contextNotice, rereadUsd, switchDecision } from '../server/chat/contextPolicy';
 import { CHECKPOINT, CONTEXT_NOTICE, hasCheckpoint, isInjectedUserText, stripCheckpoint } from '../server/chat/items';
 import { ChatManager } from '../server/chat/manager';
+import type { AutoContinue } from '../server/chat/autoContinue';
 
 const turn = (over: Partial<Parameters<typeof switchDecision>[0]> = {}) => ({ at: 0, used: 200_000, checkpoint: true, model: 'claude-opus-5-5', ttl: null, ...over });
 
@@ -69,7 +70,7 @@ describe('quando vale começar uma conversa nova', () => {
 });
 
 /** Um processo `claude` falso por conversa aberta, com o que o Claudio’s Club escreveu nele. */
-function setup(opts: { policy?: ContextSwitch; keep?: boolean } = {}) {
+function setup(opts: { policy?: ContextSwitch; keep?: boolean; wake?: string } = {}) {
   const procs: Array<{ sid: string; written: Array<{ message?: { content?: Array<{ text?: string }> } }>; emit: (ev: object) => void }> = [];
   let n = 0;
   const m = new ChatManager({
@@ -88,6 +89,10 @@ function setup(opts: { policy?: ContextSwitch; keep?: boolean } = {}) {
     },
     contextSwitch: async () => opts.policy ?? 'auto',
     keepSession: async () => !!opts.keep,
+    // Despertador pendente só na conversa `wake` (o resto da lista fica sem).
+    wakeups: opts.wake
+      ? ({ subscribe: () => () => {}, get: async (sid: string) => (sid === opts.wake ? { projectId: 'p', sessionId: sid, staffId: 'ana', at: 0, resetsAt: 0, text: 'depois' } : null) } as unknown as AutoContinue)
+      : undefined,
   });
   const reply = async (i: number, text: string, used: number, cacheCreation?: object) => {
     const usage = { input_tokens: 10, cache_read_input_tokens: used - 10, cache_creation: cacheCreation };
@@ -126,6 +131,54 @@ describe('conversa nova no momento barato', () => {
     // Você voltou à anterior pela lista: a mensagem fica nela, não desvia de novo.
     expect(await m.sendFromUser('p', 'nova-1', 'ana', 'voltei para cá')).toBe('nova-1');
     expect(procs).toHaveLength(2);
+  });
+
+  it('aviso de tarefa com assunto fechado numa conversa grande segue numa nova; o próximo desfecho vai para ela (sem terceira)', async () => {
+    const { m, procs, reply, lastText, texts } = setup();
+    await m.sendFromUser('p', null, 'ana', 'pedido');
+    await reply(0, `Pedi a tarefa.\n${CHECKPOINT}`, 150_000);
+
+    expect(await m.sendToRequester('p', 'nova-1', 'ana', 'entregue: relatório')).toBe('nova-2');
+    expect(procs).toHaveLength(2);
+    expect(lastText(1)).toBe('entregue: relatório');
+    expect((await texts('nova-2', 'notice'))[0]).toContain('o aviso desta tarefa não entrou na anterior, que tinha 150k e o assunto dela tinha fechado');
+
+    // Desfecho seguinte: cai na conversa desviada, não abre outra (a nova ainda não tem turno, então não troca de novo).
+    expect(await m.sendToRequester('p', 'nova-1', 'ana', 'revisão: ok')).toBe('nova-2');
+    expect(procs).toHaveLength(2);
+  });
+
+  it('acima de 300k sem ponto de corte, o aviso de tarefa também segue numa conversa nova', async () => {
+    const { m, reply, texts } = setup();
+    await m.sendFromUser('p', null, 'ana', 'oi');
+    await reply(0, 'Trabalhando…', 320_000);
+    expect(await m.sendToRequester('p', 'nova-1', 'ana', 'entregue')).toBe('nova-2');
+    expect((await texts('nova-2', 'notice'))[0]).toContain('passou do teto de 300k sem fechar o assunto');
+  });
+
+  it('com "sugerir", o aviso de tarefa fica na conversa do gestor', async () => {
+    const { m, procs, reply } = setup({ policy: 'suggest' });
+    await m.sendFromUser('p', null, 'ana', 'oi');
+    await reply(0, `Feito.\n${CHECKPOINT}`, 150_000);
+    expect(await m.sendToRequester('p', 'nova-1', 'ana', 'entregue')).toBe('nova-1');
+    expect(procs).toHaveLength(1);
+  });
+
+  it('gestor no meio do turno: o aviso de tarefa fica na conversa dele (vai na fila)', async () => {
+    const { m, procs, reply } = setup();
+    await m.sendFromUser('p', null, 'ana', 'oi');
+    await reply(0, `Feito.\n${CHECKPOINT}`, 150_000);
+    await m.send('p', 'nova-1', 'ana', 'mais uma coisa'); // deixa a conversa ocupada (sem fim de turno)
+    expect(await m.sendToRequester('p', 'nova-1', 'ana', 'entregue')).toBe('nova-1');
+    expect(procs).toHaveLength(1);
+  });
+
+  it('despertador pendente na conversa do gestor: não troca', async () => {
+    const { m, procs, reply } = setup({ wake: 'nova-1' });
+    await m.sendFromUser('p', null, 'ana', 'oi');
+    await reply(0, `Feito.\n${CHECKPOINT}`, 150_000);
+    expect(await m.sendToRequester('p', 'nova-1', 'ana', 'entregue')).toBe('nova-1');
+    expect(procs).toHaveLength(1);
   });
 
   it('pausa curta com cache de 1 h não troca; passada a hora, troca', async () => {
