@@ -4,7 +4,7 @@ import { api, withUsageConfirm } from '../api';
 import { Markdown } from '../chat/markdown';
 import { formatAgo, formatShare } from '../format';
 import { t, locale } from '../i18n';
-import { BranchIcon, ReviewIcon } from '../icons';
+import { BranchIcon, ClockIcon, ReviewIcon } from '../icons';
 import { ReviewDelegate } from './ReviewDelegate';
 import { TaskCodePanel } from './TaskCodePanel';
 
@@ -114,9 +114,11 @@ interface Props {
   onChanged: () => void;
   /** Abre com esta tarefa selecionada (Ctrl+K). */
   initialTaskId?: string | null;
+  /** Abre os agendamentos (despertadores) do projeto. */
+  onOpenSchedules?: () => void;
 }
 
-export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOpenStaff, onChanged, initialTaskId = null }: Props) {
+export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOpenStaff, onChanged, initialTaskId = null, onOpenSchedules }: Props) {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [selected, setSelected] = useState<string | null>(initialTaskId);
   const [adding, setAdding] = useState(false);
@@ -241,6 +243,11 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         <header className="tasks-head">
           <h2>{t('tasks.title', { name: projectName })}</h2>
           <span className="tasks-head-actions">
+            {onOpenSchedules && (
+              <button className="btn-secondary btn-with-icon" onClick={onOpenSchedules} title={t('schedules.openTitle')}>
+                <ClockIcon /> {t('schedules.open')}
+              </button>
+            )}
             <button className="btn-primary" onClick={() => setAdding(true)}>
               {t('tasks.newTask')}
             </button>

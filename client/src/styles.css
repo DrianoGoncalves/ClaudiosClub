@@ -483,6 +483,21 @@ textarea.q-field { resize: vertical; }
 .modal.tasks-modal { width: min(1280px, 100%); height: min(820px, calc(100vh - 32px)); display: flex; flex-direction: column; position: relative; overflow: hidden; }
 .tasks-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .tasks-head-actions { display: inline-flex; gap: 8px; }
+/* Agendamentos do projeto: um cartão por despertador ou "continue" pendente. O texto é do funcionário: pre-wrap, nunca HTML. */
+.sched-intro, .sched-notice { margin: 0; font-size: 13px; }
+.sched-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.sched-item { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); min-width: 0; }
+.sched-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
+.sched-who { overflow-wrap: anywhere; }
+.sched-kind { padding: 0 7px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.sched-when { margin: 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+.sched-eta { font-weight: 600; }
+.sched-text { margin: 0; padding-left: 8px; border-left: 3px solid var(--line); font-size: 13px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sched-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.sched-confirm { display: grid; gap: 8px; padding: 8px 10px; border: 1px solid var(--danger); border-radius: 8px; }
+.sched-confirm p, .sched-error { margin: 0; font-size: 13px; }
+.sched-empty { display: grid; gap: 4px; padding: 18px 0 8px; text-align: center; }
+.sched-empty p { margin: 0; }
 /* ---- arquivos do projeto: árvore | editor; no celular, um de cada vez ---- */
 .modal.files-modal { width: min(1280px, 100%); height: min(820px, calc(100vh - 32px)); display: flex; flex-direction: column; overflow: hidden; }
 .files-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); gap: 10px; }

@@ -230,6 +230,16 @@ export function TasksIcon({ size = 12 }: { size?: number }) {
   );
 }
 
+/** Relógio: os agendamentos (despertadores) do projeto. */
+export function ClockIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 6v6l4 2" />
+    </svg>
+  );
+}
+
 /**
  * Terminal preenchido (janela cheia com o >_ vazado): o login do CLI no topo, na cor do semáforo. O >_
  * é furo (evenodd), então mostra o fundo do topo em qualquer tema.

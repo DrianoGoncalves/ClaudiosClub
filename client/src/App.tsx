@@ -51,6 +51,7 @@ import { StaffForm, type StaffFormMode } from './staff/HireForm';
 import { directoryPerson } from './staff/directory';
 import { HrPanel } from './staff/HrPanel';
 import { FilesBoard } from './files/FilesBoard';
+import { SchedulesBoard } from './schedules/SchedulesBoard';
 import { TasksBoard } from './tasks/TasksBoard';
 import { UncommittedPanel } from './board/UncommittedPanel';
 
@@ -120,6 +121,7 @@ export function App() {
   }, []);
   /** Quadro de tarefas aberto (id do projeto). */
   const [tasksFor, setTasksFor] = useState<string | null>(null);
+  const [schedulesFor, setSchedulesFor] = useState<string | null>(null);
   /** Arquivos sem commit por conversa, aberto pelo selo do git (id do projeto). */
   const [uncFor, setUncFor] = useState<string | null>(null);
   /** Arquivos do projeto abertos (id do projeto). */
@@ -233,8 +235,9 @@ export function App() {
 
   // Conversa que acabou de nascer (pedido do guia do projeto): o painel do funcionário abre nela, mesmo antes de o quadro relê-la.
   const openNewConversation = useCallback(
-    (projectId: string, staffId: string, sessionId: string) => {
-      const node = staffNodeId(projectId, staffId);
+    (projectId: string, staffId: string | null, sessionId: string) => {
+      // Sem ficha: o funcionário fantasma (Freela) do projeto, já na conversa.
+      const node = staffId ? staffNodeId(projectId, staffId) : ghostNodeId(projectId);
       jumpSelection.current = node;
       setJumpConversation({ node, sessionId });
       setJumpTarget({ projectId, staffId, sessionId, nonce: ++jumpNonce.current });
@@ -652,6 +655,7 @@ export function App() {
           board={board}
           taskProjects={Object.keys(taskSummary)}
           onJump={(t) => {
+            setSchedulesFor(null);
             if (t.kind === 'task') {
               setJumpTask(t.taskId);
               setTasksFor(t.projectId);
@@ -695,6 +699,28 @@ export function App() {
           onChanged={() => {
             readTaskSummary();
             reloadSoon();
+          }}
+          onOpenSchedules={() => {
+            setSchedulesFor(tasksFor);
+            setTasksFor(null);
+            setJumpTask(null);
+          }}
+        />
+      )}
+      {board && schedulesFor && (
+        <SchedulesBoard
+          key={schedulesFor}
+          projectId={schedulesFor}
+          projectName={board.projects.find((p) => p.id === schedulesFor)?.name ?? schedulesFor}
+          staff={board.staff.filter((s) => s.projectId === schedulesFor)}
+          onClose={() => setSchedulesFor(null)}
+          onOpenConversation={(staffId, sessionId) => {
+            setSchedulesFor(null);
+            openNewConversation(schedulesFor, staffId, sessionId);
+          }}
+          onOpenTasks={() => {
+            setTasksFor(schedulesFor);
+            setSchedulesFor(null);
           }}
         />
       )}

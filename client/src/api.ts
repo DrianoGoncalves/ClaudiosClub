@@ -62,6 +62,7 @@ import type {
 import type { RoleEntry, RoleTemplate } from '../../shared/roles';
 import { locale, t } from './i18n';
 import type { GuideAction } from './detail/guideActions';
+import type { Schedule } from './schedules/scheduleView';
 import type { McpSaveBody, McpScope, McpServer } from './office/mcpForm';
 
 /** Um MCP pelo endereço: escopo, projeto (nos de projeto) e nome. */
@@ -450,6 +451,8 @@ export const api = {
   /** Cancela o despertador da conversa (o botão do aviso "Volta a olhar em…"). */
   chatCancelWake: (projectId: string, sessionId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/chat/${sessionId}/wake/user-cancel`),
+  /** Agendamentos pendentes do projeto (despertadores e "continue" do limite de uso), do que vence primeiro ao último. */
+  schedules: (projectId: string) => get<{ items: Schedule[] }>(`/api/projects/${projectId}/schedules`),
   chatStopTask: (sessionId: string, taskId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/stop-task`, { taskId }),
   /** Busca nas conversas dos funcionários (a partir de 3 letras). */
   search: (q: string) => get<ConversationHit[]>(`/api/search?q=${encodeURIComponent(q)}`),
