@@ -68,7 +68,6 @@
   /* Cor de cada serviço de IA nas barras de consumo: salmão do Claude, preto do Codex. */
   --brand-claude: #d97757;
   --brand-codex: #111111;
-  --brand-codex-track: transparent;
 
   --hand: 'Caveat', 'Segoe Print', 'Comic Sans MS', cursive;
   font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -110,8 +109,6 @@
   --pen-blue: #9cc0ff;
   --pen-purple: #caa8ff;
   --pen-pink: #f5a3cf;
-  /* Preto some no painel escuro: o Codex mantém o preto, sobre um trilho claro. */
-  --brand-codex-track: color-mix(in srgb, var(--ink) 82%, transparent);
 }
 
 * { box-sizing: border-box; }
@@ -1008,15 +1005,14 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 .usage-outdated { color: var(--waiting); }
 .meter { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
 .meter-label { font-family: var(--hand); font-weight: 700; font-size: 17px; }
-.meter-track { position: relative; width: 64px; height: 8px; border: 1.5px solid var(--ink); border-radius: 3px 5px 3px 4px; overflow: hidden; }
-.meter-fill { position: absolute; inset: 0 auto 0 0; background: repeating-linear-gradient(-45deg, var(--meter-brand, var(--meter)) 0 3px, transparent 3px 5px); }
+/* O fundo da barra tem a cor do serviço (Claude/Codex); o preenchimento é o semáforo (verde <50%, amarelo <70%, vermelho depois). */
+.meter-track { position: relative; width: 64px; height: 8px; border: 1.5px solid var(--ink); border-radius: 3px 5px 3px 4px; overflow: hidden; background: var(--meter-brand); }
+.meter-fill { position: absolute; inset: 0 auto 0 0; background: var(--meter); }
 .meter-low { --meter: var(--ink-green); }
 .meter-mid { --meter: var(--waiting); }
 .meter-high { --meter: var(--ink-red); }
 .meter-claude { --meter-brand: var(--brand-claude); }
 .meter-codex { --meter-brand: var(--brand-codex); }
-.meter-codex .meter-track { background: var(--brand-codex-track); }
-/* A barra tem a cor do serviço; o aviso de nível (amarelo a partir de 70%, vermelho a partir de 90%) passa para o número. */
 .meter-mid .meter-value, .meter-high .meter-value { color: var(--meter); font-weight: 700; }
 .meter-value { font-variant-numeric: tabular-nums; min-width: 3ch; }
 .meter-reset { color: var(--muted); font-variant-numeric: tabular-nums; }

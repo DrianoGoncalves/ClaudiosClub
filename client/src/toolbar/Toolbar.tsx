@@ -134,12 +134,17 @@ export function UsageMeters({ usage }: { usage: AccountUsage | null }) {
   );
 }
 
+/** Semáforo do consumo: verde abaixo de 50%, amarelo abaixo de 70%, vermelho dali em diante. */
+export function usageLevel(pct: number): 'low' | 'mid' | 'high' {
+  return pct >= 70 ? 'high' : pct >= 50 ? 'mid' : 'low';
+}
+
 function UsageMeter({ limit, now, service, name }: { limit: UsageLimit; now: number; service: 'claude' | 'codex'; name?: string }) {
   const resetMs = limit.resetsAt ? Date.parse(limit.resetsAt) - now : null;
   // Janela já reiniciada: a leitura gravada não vale mais até a próxima resposta.
   const expired = resetMs !== null && resetMs <= 0;
   const pct = expired ? 0 : Math.min(100, Math.max(0, limit.percentUsed));
-  const level = pct >= 90 ? 'high' : pct >= 70 ? 'mid' : 'low';
+  const level = usageLevel(pct);
   const label = LIMIT_LABEL[limit.kind] ?? limit.kind;
   const left = expired ? t('toolbar.resetDone') : resetMs !== null ? t('toolbar.resetsIn', { time: formatDuration(resetMs) }) : '';
   return (
