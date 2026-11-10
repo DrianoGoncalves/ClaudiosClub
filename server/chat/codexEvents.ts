@@ -167,9 +167,16 @@ export interface CodexFailure {
   text: string;
   /** Limite de uso (cota do ChatGPT) estourado. */
   limit: boolean;
+  /** Segundos até o limite voltar, como o próprio erro disse (`resets_in_seconds`, válido: entre 1 s e 8 dias). */
+  resetsIn?: number;
 }
 
-const LIMIT = /usage[_ ]limit|rate[_ ]limit|limit (?:has been )?reached|hit your .{0,30}limit|insufficient_quota|exceeded your (?:current )?quota/i;
+/** Maior `resets_in_seconds` que se aceita: 8 dias. Acima disso (ou negativo, NaN, não número) é lixo e é ignorado. */
+const MAX_RESET_SECONDS = 8 * 86_400;
+
+// Só a cota do plano (ChatGPT) que volta sozinha. Fora: o limite por minuto (`rate_limit`, 429 passageiro, que também diz
+// "limit reached") e a cota da API (`insufficient_quota`, sem reset): viram erro da conversa.
+const LIMIT = /usage[_ ]limit|hit your (?!rate ).{0,30}limit/i;
 
 /** "daqui a 3 h 20 min", a partir dos segundos que o Codex manda em `resets_in_seconds`. */
 function inTime(seconds: number): string {
@@ -182,8 +189,8 @@ function inTime(seconds: number): string {
 
 /**
  * A mensagem do `turn.failed`/`error` chega como texto, muitas vezes um JSON dentro dele (`{"type":"error","status":400,
- * "error":{"type":…,"message":…}}`): tira a mensagem de dentro. Limite de uso (cota do ChatGPT) é reconhecido e avisa como erro
- * da conversa; o Claudio’s Club não continua sozinho (v1).
+ * "error":{"type":…,"message":…}}`): tira a mensagem de dentro. Limite de uso (cota do ChatGPT) é reconhecido: a conversa
+ * mostra o erro e o gerente de limite agenda o "continue", como no Claude.
  */
 export function parseCodexFailure(message: unknown): CodexFailure {
   const raw = asString(message).trim();
@@ -196,11 +203,12 @@ export function parseCodexFailure(message: unknown): CodexFailure {
     text = asString(inner.message) || asString(outer.message) || raw;
     kind = [asString(inner.type), asString(inner.code), asString(outer.status)].join(' ');
     const r = inner.resets_in_seconds ?? outer.resets_in_seconds;
-    resets = typeof r === 'number' && r > 0 ? r : null;
+    resets = typeof r === 'number' && Number.isFinite(r) && r > 0 && r <= MAX_RESET_SECONDS ? r : null;
   } catch {
     // texto simples
   }
   const limit = LIMIT.test(`${kind} ${text}`);
   if (!limit) return { text: text || 'O turno terminou com erro.', limit: false };
-  return { text: `Limite de uso do Codex atingido${resets ? ` (volta em ${inTime(resets)})` : ''}: ${text || 'sem detalhe'}. A conversa não continua sozinha: mande outra mensagem quando o limite voltar.`, limit: true };
+  // O aviso de "continua sozinha" ou "volta às" é do gerente de limite (ver manager.noteUsageLimit); aqui só o erro.
+  return { text: `Limite de uso do Codex atingido${resets ? ` (volta em ${inTime(resets)})` : ''}: ${text || 'sem detalhe'}.`, limit: true, ...(resets !== null && { resetsIn: resets }) };
 }

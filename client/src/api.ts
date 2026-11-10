@@ -271,9 +271,13 @@ export interface StaffRef {
   staffId: string;
 }
 
-/** Extras da resposta a um pedido de permissão. `answers`/`annotations`: respostas de uma pergunta com opções. */
+/**
+ * Extras da resposta a um pedido de permissão. `answers`/`annotations`: respostas de uma pergunta com opções;
+ * `reject`: recusa o plano de vez (não executa e tira a tarefa da fila), sem `message`.
+ */
 export interface PermissionOpts {
   message?: string;
+  reject?: boolean;
   executeAs?: Autonomy;
   remember?: 'session' | 'project';
   answers?: QuestionAnswers;

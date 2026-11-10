@@ -5,6 +5,7 @@ import { Markdown } from '../chat/markdown';
 import { formatAgo, formatShare } from '../format';
 import { t, locale } from '../i18n';
 import { BranchIcon, ClockIcon, ReviewIcon } from '../icons';
+import { TaskFallbackBadge } from '../staff/FallbackBadge';
 import { ReviewDelegate } from './ReviewDelegate';
 import { TaskCodePanel } from './TaskCodePanel';
 
@@ -205,6 +206,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             {!!task.reviewRounds && ` · ${t('tasks.reviewRounds', { n: task.reviewRounds, max: REVIEW_ROUNDS_MAX })}`}
           </span>
         )}
+        {task.fallback && <TaskFallbackBadge fallback={task.fallback} />}
         {queuePos(task) > 0 && (
           <span className="task-queue small" title={t('tasks.queuedHint')}>
             {t('tasks.queuePos', { pos: queuePos(task) })}
@@ -603,6 +605,11 @@ function TaskDetail({
           </>
         )}
       </p>
+      {task.fallback && (
+        <p className="small">
+          <TaskFallbackBadge fallback={task.fallback} />
+        </p>
+      )}
       {queuePos > 0 && (
         <p className="muted small">
           {busyWith

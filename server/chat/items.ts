@@ -73,6 +73,13 @@ export const BOOST_NOTICE = '[MyCo] Folga de cota';
 /** Marca que vai junto da mensagem de outro funcionário (delegação): a conversa não mostra, mas o histórico lê. */
 export const STAFF_NOTICE = '[MyCo] Mensagem de outro funcionário.';
 
+/** Mensagem que o Claudio’s Club manda quando a conversa de tarefa parou no meio (o servidor reiniciou). Não é do dono. */
+export const RESUME_TEXT =
+  'A conversa parou no meio (o Claudio’s Club reiniciou). Continue de onde parou e, ao terminar, responda com um resumo curto do que foi feito e do que falta.';
+
+/** Fim de tarefa: o que a conversa deve responder ao terminar (igual no texto de início e no handoff). */
+export const CLOSING_LINE = 'Quando terminar, responda com um resumo curto do que foi feito e do que falta.';
+
 /** A mensagem veio com a marca de outro funcionário (blocos do transcript)? */
 export function hasStaffNotice(blocks: Array<Record<string, unknown>>): boolean {
   return blocks.some((b) => b.type === 'text' && typeof b.text === 'string' && b.text.trimStart().startsWith(STAFF_NOTICE));

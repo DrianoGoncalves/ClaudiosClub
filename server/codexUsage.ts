@@ -5,6 +5,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { CodexUsage, CodexUsageReason, CodexVersion, UsageLimit } from '../shared/model';
 import { codexEnv, type CodexStatus } from './adapters/codex';
+import { windowOf, type LimitHit } from './chat/usageLimit';
 import { ROOT } from './root';
 
 // Limites de uso do Codex (assinatura ChatGPT), no mesmo formato dos do Claude (server/usage.ts).
@@ -57,6 +58,21 @@ export function limitsFromRateLimits(result: unknown): UsageLimit[] | null {
     });
   }
   return limits;
+}
+
+/**
+ * O Codex está no limite agora? Janela em 100% com reset ainda no futuro: devolve quando volta (a última das que
+ * estão esgotadas, pois a conversa só anda com todas livres) e a janela. Null se nenhuma está esgotada ou sem leitura.
+ * Mesmo formato (`LimitHit`) que o Claude devolve do stream (`limitFromRateLimitEvent`, `limitFromText`).
+ */
+export function codexLimitHit(usage: { limits: UsageLimit[] } | null | undefined, now = Date.now()): LimitHit | null {
+  let hit: LimitHit | null = null;
+  for (const l of usage?.limits ?? []) {
+    const t = l.resetsAt ? Date.parse(l.resetsAt) : NaN;
+    if (l.percentUsed < 100 || !(t > now)) continue;
+    if (!hit || t > hit.resetsAt!) hit = { resetsAt: t, window: windowOf(l.kind) };
+  }
+  return hit;
 }
 
 // ---- Versão ----------------------------------------------------------------------------------------------------

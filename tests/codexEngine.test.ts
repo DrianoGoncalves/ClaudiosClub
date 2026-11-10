@@ -525,7 +525,7 @@ describe('CodexProcess', () => {
     expect(chat.snapshot().state.busy).toBe(false);
   });
 
-  it('limite de uso do Codex: erro da conversa, e o Claudio’s Club não agenda "continue" sozinho', async () => {
+  it('limite de uso do Codex: erro da conversa, e o processo avisa o limite (o gerente agenda o "continue")', async () => {
     const f = fakeCodex();
     let limit = 0;
     const idle: string[] = [];
@@ -541,7 +541,7 @@ describe('CodexProcess', () => {
     await tick();
     const last = chat.snapshot().items.at(-1)!;
     expect(last).toMatchObject({ kind: 'notice', tone: 'error', text: expect.stringContaining('Limite de uso do Codex atingido (volta em 2 h)') });
-    expect(limit).toBe(0);
+    expect(limit).toBe(1);
     expect(idle).toEqual(['turn']);
   });
 

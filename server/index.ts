@@ -66,12 +66,13 @@ import {
   readProjectImageFile,
   writeProjectFile,
 } from './projectFiles';
-import { actingStaff, SANDBOX_HOST, SessionTokens, type Caller } from './callers';
+import { actingStaff, requesterSessionOf, SANDBOX_HOST, SessionTokens, type Caller } from './callers';
+import { staffOrigin, type OriginDeps } from './chat/origin';
 import { gate } from './gate';
-import { CodexUsageReader, readInstalled } from './codexUsage';
+import { CodexUsageReader, codexLimitHit, readInstalled } from './codexUsage';
 import { CodexSetup, CodexSetupError } from './codexSetup';
 import { readUsage } from './usage';
-import { UsageStopError } from './usageStop';
+import { claudeLimitHit, UsageStopError } from './usageStop';
 import { quotaBoost } from './quotaBoost';
 import { browserStatus } from './browser';
 import { gitState } from './git';
@@ -81,9 +82,10 @@ import { CostReviewApplyError, runCostReviewApply } from './costReviewApply';
 import type { Board, CostReport, InboxItem, InboxKind, LiveSession, Project, TurnNotice } from '../shared/model';
 import { TurnWatcher } from './turns';
 import { RoutineScheduler, type RoutineOutcome } from './routines';
-import type { AppServerInfo, Routine, StaffProfile, SystemStats } from '../shared/model';
+import type { AppServerInfo, EngineOverride, Routine, StaffProfile, SystemStats } from '../shared/model';
 import { systemStats } from './systemStats';
 import { pathKey, worktreeParent } from './adapters/claude/paths';
+import { codexSession } from './adapters/codex/rollout';
 import { boardFilter } from './board';
 import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
@@ -245,10 +247,11 @@ const currentBoost = async () => ((await readConfig()).optimizeQuota ? quotaBoos
 /**
  * O limite de uso da assinatura acabou no meio de uma conversa: o "continue" sai sozinho quando ele volta
  * (opção `autoContinue`). Respeita a linha de parada do usuário e o orçamento do projeto, como o chat.
+ * O `engine` é o da conversa: a trava confere o consumo desse motor (Codex e Claude não se barram um ao outro).
  */
-const usageStopHit = async (projectId: string, staffId: string | null) => {
+const usageStopHit = async (projectId: string, staffId: string | null, engine: 'claude' | 'codex') => {
   try {
-    await staff.checkUsage(projectId, { staffId });
+    await staff.checkUsage(projectId, { staffId, engine });
     return null;
   } catch (err) {
     if (err instanceof UsageStopError) return err.hit;
@@ -292,13 +295,17 @@ const chats: ChatManager = new ChatManager({
   // A conversa de uma tarefa fica onde está: o quadro (revisão, ajustes, mescla) segue por ela.
   keepSession: (sessionId) => tasks.isTaskSession(sessionId),
   transcriptsDir: defaultTranscripts,
+  runDir: path.join(MYCO_HOME, 'run'),
   usageFile: path.join(MYCO_HOME, 'usage.json'),
+  // Limite do Codex estourado: a hora de voltar vem da leitura fresca dos limites do Codex (só com `codexReview` ligado).
+  codexLimits: async () => codexUsage.read((await readConfig()).codexReview, { fresh: true, waitMs: 8_000 }),
   listLive: () => adapter.listLiveSessions(),
-  resolve: (projectId, sessionId, staffId, forkFrom) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom),
+  resolve: (projectId, sessionId, staffId, forkFrom, engineOverride) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom, engineOverride),
   rememberChoice: (projectId, staffId, sessionId, choice) => staff.rememberChoice(projectId, staffId, sessionId, choice),
   registry: new ChatRegistry(path.join(MYCO_HOME, 'run', 'chats.json')),
   copiesFile: path.join(MYCO_HOME, 'run', 'copies.json'),
   onPlanApproved: (sid, plan) => void tasks.onPlanApproved(sid, plan).catch(() => {}),
+  onPlanRejected: (sid) => void tasks.onPlanRejected(sid).catch(() => {}),
   onSent: (sid) => void tasks.onSent(sid).catch(() => {}),
   // Ficou livre: os ajustes guardados e a próxima tarefa da fila dele.
   onIdle: (sid, pid, staffId, reason) => {
@@ -344,9 +351,11 @@ async function codexRunEnv(): Promise<CodexEnvStatus> {
 }
 
 /** Abre uma conversa nova com o funcionário e manda o texto. Sem `force`, confere o consumo antes. Usado pelas tarefas e pelas ações do guia. */
-const sendNewConversation = async (projectId: string, staffId: string, text: string, force: boolean) => {
-  if (!force) await staff.checkUsage(projectId, { staffId });
-  return chats.send(projectId, null, staffId, text);
+const sendNewConversation = async (projectId: string, staffId: string, text: string, force: boolean, override?: EngineOverride) => {
+  // A trava confere o motor que a conversa vai usar: o do override (Claude→Codex não cai na trava do Claude; Codex→Claude
+  // respeita a do Claude). Sem override, é a do motor da ficha, como sempre.
+  if (!force) await staff.checkUsage(projectId, { staffId, ...(override && { engine: override.engine }) });
+  return chats.send(projectId, null, staffId, text, undefined, [], [], false, undefined, override);
 };
 
 const tasks = new TaskService({
@@ -357,6 +366,7 @@ const tasks = new TaskService({
     return dir ? readProfile(dir, staffId) : null;
   },
   send: sendNewConversation,
+  apiUrl: `http://127.0.0.1:${PORT}`,
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
   isWorking: (projectId, staffId, except) => chats.staffWorking(projectId, staffId, except),
   // O gestor que pediu recebe a entrega na conversa em que pediu (ou, sem ela, na mais recente dele),
@@ -371,12 +381,48 @@ const tasks = new TaskService({
   requesterSession: (projectId, staffId) => chats.workingSession(projectId, staffId),
   lastText: (sessionId) => chats.lastAssistantText(sessionId),
   // O consumo já foi conferido quando você mandou (a mensagem só esperou a vez).
-  sendTo: (projectId, sessionId, staffId, text, images) => chats.send(projectId, sessionId, staffId, text, 'next', images),
+  // Com carimbo (mensagem guardada de outro funcionário), vai como delegada: a marca vai junto, como no envio direto.
+  sendTo: (projectId, sessionId, staffId, text, images, origin) => chats.send(projectId, sessionId, staffId, text, 'next', images, [], !!origin, origin),
   secondOpinion: (input) => codex.review(input),
   // Turno que parou no limite de uso, com o "continue" agendado, não é entrega.
   // Também com despertador marcado: o funcionário ainda está acompanhando algo, não entregou.
   awaitingLimit: async (sessionId) => (await chats.awaitingLimit(sessionId)) || !!(await wakeups.get(sessionId)),
+  setOverride: (sessionId, override) => chats.setOverride(sessionId, override),
+  // O limite de cada motor agora (ver taskFallback.ts). Sem leitura, 'unknown': não troca às cegas.
+  readLimit: async (engine) => {
+    if (engine === 'codex') {
+      const usage = await codexUsage.read((await readConfig()).codexReview, { fresh: true, waitMs: 8_000 }).catch(() => null);
+      return usage ? codexLimitHit(usage) : 'unknown';
+    }
+    const usage = await readUsage().catch(() => null);
+    return usage && usage.limits.length ? claudeLimitHit(usage) : 'unknown';
+  },
+  settleLimit: (sessionId) => chats.settledLimit(sessionId),
+  // Tira o "continue" e o despertador da conversa antiga: ela não volta sozinha no motor principal. Devolve a hora do despertador.
+  cancelContinue: async (sessionId) => {
+    const wake = await wakeups.get(sessionId);
+    await autoContinue.cancel(sessionId, 'fallback');
+    await wakeups.cancel(sessionId, 'fallback');
+    return wake ? wake.at : null;
+  },
+  // Pré-checagem da troca: a conversa no motor do override abriria? (as barreiras do envio, sem gravar nada).
+  assertRunnable: (projectId, staffId, override) => staff.assertOverrideRunnable(projectId, staffId, override),
+  clearOverride: (sessionId) => chats.clearOverride(sessionId),
+  stopSession: (sessionId) => chats.stop(sessionId),
+  snapshot: (projectId, sessionId) => chats.snapshot(projectId, sessionId),
 });
+// Limite no meio do turno: a tarefa pode trocar de motor (ver TaskService.onLimit). Depois de agendado o "continue".
+chats.onUsageLimit((ev) => {
+  void tasks.onLimit(ev).catch((err) => console.error('[tarefas] limite no meio do turno:', err));
+});
+/** O carimbo das mensagens entre funcionários (ver server/chat/origin.ts). */
+const originDeps: OriginDeps = {
+  projectPath: projectPathOf,
+  readProfile,
+  taskOfWork: (projectId, sessionId) => tasks.taskOfWork(projectId, sessionId),
+  mycoUrl: `http://127.0.0.1:${PORT}`,
+  codexUrl: SANDBOX_URL,
+};
 
 // "Continue" que não vai sair (cancelado na conversa, opção desligada, falhou): o turno que parou no limite
 // vale como fim, e a tarefa daquela conversa é entregue como antes, sem prender a fila do funcionário.
@@ -458,6 +504,8 @@ const PermissionBody = z.object({
   message: z.string().trim().min(1).max(500).optional(),
   /** Ao aprovar um plano: autonomia com que ele executa (só pelo Claudio’s Club). */
   executeAs: z.enum(AUTONOMY).optional(),
+  /** Ao negar um plano: recusa de vez (não executa; a tarefa sai da fila e vai para Aguardar). Só pelo Claudio’s Club. */
+  reject: z.boolean().optional(),
   /** Ao aprovar: liberar de vez, nesta conversa ou no projeto (só pelo Claudio’s Club). */
   remember: z.enum(['session', 'project']).optional(),
   /** Ao aprovar uma pergunta com opções: texto da pergunta → a opção, várias opções ou o que foi escrito. */
@@ -771,9 +819,11 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       const b = parse(SendBody, body);
       await checkReach(caller, pid!, { sessionId: b.sessionId, staffId: b.staffId });
       if (!(fromBrowser && b.force)) await staff.checkUsage(pid!, { staffId: b.staffId });
+      // De outro funcionário, quem manda é o dono do token (nunca o corpo): o carimbo vai junto, também se a mensagem ficar guardada.
+      const origin = fromBrowser ? undefined : await staffOrigin(originDeps, pid!, caller, b.staffId);
       // Ajuste numa tarefa anterior com ele ocupado em outra: espera a vez (ver tasks.ts).
       if (b.sessionId && b.staffId) {
-        const held = await tasks.hold(b.sessionId, { text: b.text, images: b.images });
+        const held = await tasks.hold(b.sessionId, { text: b.text, images: b.images, origin });
         if (held) return { sessionId: b.sessionId, held };
       }
       const priority = b.priority ?? (await readConfig()).sendWhileBusy;
@@ -781,7 +831,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       // a mensagem pode seguir numa conversa nova se o assunto da atual fechou (ver contextPolicy.ts).
       const sessionId = fromBrowser
         ? await chats.sendFromUser(pid!, b.sessionId, b.staffId, b.text, priority, b.images, b.files)
-        : await chats.send(pid!, b.sessionId, b.staffId, b.text, priority, b.images, b.files, true);
+        : await chats.send(pid!, b.sessionId, b.staffId, b.text, priority, b.images, b.files, true, origin);
       return { sessionId };
     },
   ],
@@ -827,6 +877,15 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const done = await chats.cancelWake(pid!, sid!, 'user');
       return done === null ? null : { ok: done };
+    },
+  ],
+  // Agendamentos pendentes do projeto (despertadores e "continue" do limite), para a tela central. Só pelo Claudio’s Club.
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/schedules$`),
+    async ({ params: [pid], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      return { items: await chats.listSchedules(pid!) };
     },
   ],
   [
@@ -979,6 +1038,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
         ok: chats.answer(sid!, b.requestId, b.allow, {
           message: b.message,
           executeAs: b.executeAs,
+          reject: b.reject,
           remember: b.remember,
           answers: b.answers,
           annotations: b.annotations,
@@ -1023,7 +1083,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       const requestedBy = actorOf(caller, b.requestedBy);
       if (!requestedBy) throw new BadRequest('pela API, diga quem pede (requestedBy: o seu id)');
       if (!(await staff.isManagerOf(id!, requestedBy, b.staffId))) throw new BadRequest('pela API, só para quem reporta a você (requestedBy)');
-      const task = await tasks.create(id!, body, requestedBy);
+      // A entrega volta para a conversa dele que pediu (a do token), e não para a que está no turno agora.
+      const task = await tasks.create(id!, body, requestedBy, requesterSessionOf(caller, requestedBy));
       return task && b.start ? ((await tasks.start(id!, task.id)) ?? task) : task;
     },
   ],
@@ -1786,8 +1847,24 @@ async function getBoard(): Promise<Board> {
       if (image) images[p.id] = image;
     }),
   ]);
+  // Conversa do Codex não tem transcript em ~/.claude/projects: cada id da ficha que ainda não está na lista vira uma sessão,
+  // com o assunto e a hora do rollout (ver adapters/codex/rollout.ts). Entra antes do fold de worktree, que a trata igual.
+  const listed = new Set(Object.values(sessions).flat().map((s) => s.id));
+  const projectIds = new Set(projects.map((p) => p.id));
+  const added: Record<string, number> = {};
+  for (const f of staffList) {
+    if (f.engine !== 'codex' || !projectIds.has(f.projectId)) continue;
+    for (const entry of f.sessions) {
+      if (listed.has(entry.id)) continue;
+      listed.add(entry.id);
+      if (!sessions[f.projectId]) sessions[f.projectId] = [];
+      sessions[f.projectId]!.push(await codexSession(path.join(MYCO_HOME, 'run'), f.name, entry));
+      added[f.projectId] = (added[f.projectId] ?? 0) + 1;
+    }
+  }
+  for (const pid of Object.keys(added)) sessions[pid]!.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   // Sessões de funcionário numa worktree própria contam como do projeto (onde está a ficha).
-  const folded = projects.map((p) => ({ ...p }));
+  const folded = projects.map((p) => ({ ...p, sessionCount: p.sessionCount + (added[p.id] ?? 0) }));
   for (const [child, parent] of mycoWorktreeParents(projects)) {
     const moved = sessions[child] ?? [];
     if (!moved.length) continue;
@@ -1989,13 +2066,20 @@ server.listen(PORT, HOST, () => {
   chats.cleanOrphans().catch((err) => console.error('[chat] limpeza de órfãos falhou:', err));
   // Só o servidor que ficou com a porta agenda: um segundo que falhou não dispara rotinas em dobro.
   routines.start();
-  // Pelo mesmo motivo, só ele manda o "continue" das conversas que bateram no limite de uso.
-  autoContinue.start();
-  wakeups.start();
-  // Fila de tarefas: quem ficou com tarefa ou ajuste esperando (ex.: o Claudio’s Club reiniciou no meio).
-  const queueTick = () => void tasks.tick().catch(() => {});
-  setTimeout(queueTick, 15_000).unref();
-  setInterval(queueTick, 60_000).unref();
+  // Tarefas que trocaram de motor voltam ao secundário ANTES do "continue", do despertador e da fila: o override vive só na
+  // memória, e sem ele a conversa cairia no motor da ficha. Se falhar, o erro vai para o log e o resto sobe igual.
+  void tasks
+    .restoreFallbacks()
+    .catch((err) => console.error('[tarefas] motor secundário não reaberto:', err))
+    .then(() => {
+      // Só ele manda o "continue" das conversas que bateram no limite de uso (e o despertador).
+      autoContinue.start();
+      wakeups.start();
+      // Fila de tarefas: quem ficou com tarefa ou ajuste esperando (ex.: o Claudio’s Club reiniciou no meio).
+      const queueTick = () => void tasks.tick().catch(() => {});
+      setTimeout(queueTick, 15_000).unref();
+      setInterval(queueTick, 60_000).unref();
+    });
   // Temporários parados há dias saem do quadro (arquivados, nada apagado).
   const sweep = () =>
     void staff

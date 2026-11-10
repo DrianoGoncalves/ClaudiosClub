@@ -8,6 +8,7 @@ import type { ChatItem } from '../shared/model';
 import { AutoContinue, type AutoContinueEvent, type AutoContinueOptions, type Pending } from '../server/chat/autoContinue';
 import { ChatManager } from '../server/chat/manager';
 import { ChatProcess } from '../server/chat/process';
+import { sandboxVerdict, staffMayPost } from '../server/apiPolicy';
 import { SLACK_MS } from '../server/chat/usageLimit';
 import { WAKE_MAX_SECONDS, WAKE_MAX_STREAK, WAKE_MIN_SECONDS, WAKE_TEXT_MAX, WakeBody, WakeStreakError, wakeNotice, watchWakeups } from '../server/chat/wake';
 import { clockHM, secondsLeft } from '../client/src/chat/wakeCountdown';
@@ -615,6 +616,59 @@ describe('ChatManager: despertador', () => {
     await manager.send('p', 'sx', 'ana', 'faça X');
     await expect(manager.wakeChat({ projectId: 'p', sessionId: 'sx', staffId: 'ana', at: T0, resetsAt: T0 })).rejects.toThrow(/sem mensagem/);
     expect(texts(spawns[0]!)).toEqual(['faça X']);
+  });
+
+  // ---- agendamentos do projeto (a tela central) ----
+
+  describe('listSchedules: despertadores e "continue" do projeto', () => {
+    const ms = (o: number) => new Date(T0 + o).toISOString();
+
+    it('junta os dois tipos, do que vence primeiro ao último, com `at` em ISO', async () => {
+      await manager.send('p', 'sx', 'ana', 'faça X');
+      await manager.scheduleWake('p', 'sx', { seconds: 300, text: 'confira o deploy' });
+      await limit.schedule({ projectId: 'p', sessionId: 'sy', staffId: 'bia', at: T0 + 120_000, resetsAt: T0 + 120_000 });
+      await wakeups.schedule({ projectId: 'p', sessionId: 'sz', staffId: null, at: T0 + 60_000, resetsAt: T0 + 60_000, text: 'cedo' });
+
+      expect(await manager.listSchedules('p')).toEqual([
+        { kind: 'wake', sessionId: 'sz', staffId: null, at: ms(60_000), text: 'cedo' },
+        { kind: 'continue', sessionId: 'sy', staffId: 'bia', at: ms(120_000), text: 'continue' },
+        { kind: 'wake', sessionId: 'sx', staffId: 'ana', at: ms(300_000), text: 'confira o deploy' },
+      ]);
+    });
+
+    it('só entra o que é do projeto pedido; projeto sem nada devolve lista vazia', async () => {
+      await wakeups.schedule({ projectId: 'outro', sessionId: 'sz', staffId: 'cy', at: T0 + 60_000, resetsAt: T0 + 60_000, text: 'de outro' });
+      await limit.schedule({ projectId: 'outro', sessionId: 'sw', staffId: 'dan', at: T0 + 70_000, resetsAt: T0 + 70_000 });
+      await manager.send('p', 'sx', 'ana', 'faça X');
+      await manager.scheduleWake('p', 'sx', { seconds: 60, text: 'meu' });
+
+      expect((await manager.listSchedules('p')).map((i) => i.sessionId)).toEqual(['sx']);
+      expect((await manager.listSchedules('outro')).map((i) => i.sessionId)).toEqual(['sz', 'sw']);
+      expect(await manager.listSchedules('nenhum')).toEqual([]);
+    });
+
+    it('o "continue" sai sempre com o texto "continue", mesmo que a pendência traga outro', async () => {
+      await limit.schedule({ projectId: 'p', sessionId: 'sy', staffId: 'bia', at: T0 + 1_000, resetsAt: T0 + 1_000, text: 'algo à mão' });
+      expect(await manager.listSchedules('p')).toEqual([{ kind: 'continue', sessionId: 'sy', staffId: 'bia', at: ms(1_000), text: 'continue' }]);
+    });
+
+    it('sem o agendador configurado, aquele tipo vem vazio (e sem nenhum, a lista é vazia)', async () => {
+      const base = { transcriptsDir: root, usageFile, listLive: async () => [], resolve: async (_p: string, sid: string | null) => ({ sessionId: sid ?? 'sx', cwd: '.', args: [] }), spawnImpl: () => fakeClaude().proc as never, now: () => clock.t, log: () => {} };
+      await limit.schedule({ projectId: 'p', sessionId: 'sy', staffId: 'bia', at: T0 + 1_000, resetsAt: T0 + 1_000 });
+
+      expect((await new ChatManager({ ...base, autoContinue: limit }).listSchedules('p')).map((i) => i.kind)).toEqual(['continue']);
+      expect((await new ChatManager({ ...base, wakeups }).listSchedules('p')).map((i) => i.kind)).toEqual([]);
+      expect(await new ChatManager(base).listSchedules('p')).toEqual([]);
+    });
+  });
+
+  it('a rota GET /schedules só responde ao navegador; fora da sandbox e da lista de funcionário, nada a libera', async () => {
+    const index = await fs.readFile(path.join(process.cwd(), 'server', 'index.ts'), 'utf8');
+    const at = index.indexOf('new RegExp(`^/api/projects/${ID}/schedules$`)');
+    expect(at).toBeGreaterThan(0);
+    expect(index.slice(at, at + 260)).toContain("if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');");
+    expect(staffMayPost('/api/projects/p1/schedules')).toBe(false);
+    expect(sandboxVerdict('GET', '/api/projects/p1/schedules', 'p1')).not.toBeNull();
   });
 });
 

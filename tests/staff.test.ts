@@ -123,6 +123,7 @@ describe('ficha', () => {
     for (const md of cases) {
       expect(md).toContain('## Postura\nAntes de concordar, teste a ideia: aponte primeiro o que está errado, faltando ou arriscado e o contra-argumento mais forte.');
       expect(md).toContain('Sem elogio vazio nem pedido de desculpas: vá direto ao ponto técnico.');
+      expect(md).toContain('Não anuncie nem narre os passos');
       expect(md.indexOf('## Postura')).toBeLessThan(md.indexOf('## Regras'));
     }
   });

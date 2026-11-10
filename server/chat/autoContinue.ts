@@ -23,10 +23,12 @@ export interface Pending {
   resetsAt: number;
   /** O que mandar na conversa (despertador). Sem ele, quem manda decide: o "continue" do limite. */
   text?: string;
+  /** Motor da conversa (ausente = claude): a trava de consumo confere o uso desse motor, não o do outro. */
+  engine?: 'claude' | 'codex';
 }
 
 export type AutoContinueEvent =
-  | { type: 'cancelled'; by: 'user' | 'message' | 'staff'; pending: Pending }
+  | { type: 'cancelled'; by: 'user' | 'message' | 'staff' | 'fallback'; pending: Pending }
   /** A opção foi desligada: a pendência saiu sem mandar (todas, de uma vez). */
   | { type: 'dropped'; pending: Pending }
   /** A linha de parada do usuário ainda barra: nova hora. */
@@ -40,8 +42,11 @@ export interface AutoContinueOptions {
   file: string;
   /** A opção `autoContinue` do config, conferida na hora de agendar e na hora de mandar. */
   enabled: () => Promise<boolean>;
-  /** A linha de parada do usuário (5h/7d da conta, orçamento do projeto) barra agora? Devolve onde ela volta. */
-  stopHit: (projectId: string, staffId: string | null) => Promise<{ resetsAt: string | null } | null>;
+  /**
+   * A linha de parada do usuário (5h/7d da conta, orçamento do projeto) barra agora? Devolve onde ela volta. `engine` é o
+   * motor da conversa: o uso conferido é o dele (a conta do Codex não é barrada pelo consumo do Claude, nem o contrário).
+   */
+  stopHit: (projectId: string, staffId: string | null, engine: 'claude' | 'codex') => Promise<{ resetsAt: string | null } | null>;
   /** Resets (5h/7d) que o app conhece, para reagendar quando a linha de parada barra. */
   knownResets: () => Promise<ReadonlyArray<{ kind: string; resetsAt: string | null }>>;
   /** Manda o "continue" (ou o `text` da pendência) na conversa, acordando-a se estiver fechada. */
@@ -61,6 +66,7 @@ const PendingEntry = z.object({
   at: z.string(),
   resetsAt: z.string(),
   text: z.string().optional(),
+  engine: z.enum(['claude', 'codex']).optional().catch(undefined),
 });
 
 export class AutoContinue {
@@ -119,7 +125,7 @@ export class AutoContinue {
   }
 
   /** Tira a pendência da conversa (botão Cancelar, ou você mandou mensagem). Devolve se havia. */
-  async cancel(sessionId: string, by: 'user' | 'message' | 'staff'): Promise<boolean> {
+  async cancel(sessionId: string, by: 'user' | 'message' | 'staff' | 'fallback'): Promise<boolean> {
     await this.load();
     const p = this.items.get(sessionId);
     if (!p) return false;
@@ -167,7 +173,7 @@ export class AutoContinue {
         // Cancelada enquanto conferia: não manda.
         if (this.items.get(p.sessionId) !== p) continue;
         // Sem conseguir conferir a linha de parada, não arrisca: espera mais um pouco.
-        const stop = await this.opts.stopHit(p.projectId, p.staffId).catch((err) => {
+        const stop = await this.opts.stopHit(p.projectId, p.staffId, p.engine ?? 'claude').catch((err) => {
           this.log(`${p.sessionId}: não consegui conferir a linha de parada: ${err instanceof Error ? err.message : String(err)}`);
           return { resetsAt: null };
         });
@@ -245,6 +251,7 @@ export class AutoContinue {
           at,
           resetsAt,
           ...(e.data.text !== undefined && { text: e.data.text }),
+          ...(e.data.engine !== undefined && { engine: e.data.engine }),
         });
       }
     }
@@ -271,6 +278,7 @@ export class AutoContinue {
         at: new Date(p.at).toISOString(),
         resetsAt: new Date(p.resetsAt).toISOString(),
         ...(p.text !== undefined && { text: p.text }),
+        ...(p.engine !== undefined && { engine: p.engine }),
       })),
     };
     this.saving = this.saving.then(() => writeAtomic(this.opts.file, JSON.stringify(body, null, 2) + '\n')).catch((err) => this.log(`não consegui gravar as pendências: ${err instanceof Error ? err.message : String(err)}`));

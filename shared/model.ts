@@ -471,6 +471,33 @@ export type CodexEffort = Effort | 'ultra';
  */
 export type Engine = 'claude' | 'codex';
 
+/**
+ * Motor e modelo de uma conversa que não é o da ficha (o secundário, ver `StaffProfile.fallback`). Vale para a conversa inteira:
+ * sem `effort`, é o padrão do motor (não o da ficha). Ver `ChatManager.send` (server/chat/manager.ts).
+ */
+export interface EngineOverride {
+  engine: Engine;
+  model: string;
+  effort?: CodexEffort;
+  /**
+   * Modo de execução da conversa, quando ela não é o da ficha (a troca no meio da tarefa: a conversa nova abre no modo que a
+   * antiga tinha, não no da ficha). Ausente = o da ficha. Não entra em `TaskFallback`: lá o modo vem da ficha atual.
+   */
+  autonomy?: Autonomy;
+}
+
+/**
+ * Troca de motor de uma tarefa (ver `server/taskFallback.ts`): ela passou a rodar no secundário da ficha, em conversa nova
+ * (o transcript não migra). Presente = a tarefa já trocou e não troca de novo, nem depois de reiniciar. `fromSession`: a
+ * conversa do motor da ficha, que ficou para trás.
+ */
+export interface TaskFallback extends EngineOverride {
+  from: Engine;
+  at: number;
+  fromSession: string | null;
+  reason: 'limit-start' | 'limit-mid';
+}
+
 /** Ficha do funcionário: `<projeto>/.myco/staff/<id>.json`. */
 /**
  * Rotina de um funcionário: no horário (cron de 5 campos, hora desta máquina), o Claudio’s Club manda a
@@ -505,6 +532,8 @@ export interface Task {
   staffId: string | null;
   /** A conversa da tarefa (aberta ao começar). */
   sessionId: string | null;
+  /** Troca de motor da tarefa (ausente = ainda no motor da ficha). Ver `TaskFallback`. */
+  fallback?: TaskFallback;
   /** O plano aprovado no cartão de plano, em Markdown. */
   plan: string | null;
   branch: string | null;
@@ -573,6 +602,8 @@ export interface HeldMessage {
   images?: string[];
   /** Por que está esperando ("Bia está em “Exportar CSV”"). */
   reason: string;
+  /** Carimbo de quem mandou (outro funcionário): vai junto quando a mensagem for enviada (ver server/chat/origin.ts). */
+  origin?: string;
 }
 
 /** Tarefas de um projeto para o cabeçalho: abertas (tudo que não é pronto) e em revisão. */
@@ -670,6 +701,11 @@ export interface StaffProfile {
   /** `ultra` só com `engine: 'codex'` (o servidor recusa nas outras). */
   effort: CodexEffort | null;
   /**
+   * Motor secundário (fallback quando o principal bate o limite de uso). Ausente = sem secundário. Por enquanto só o dado:
+   * nada o usa. Motor diferente do principal; `ultra` só com o Codex; com Codex, sem servidores na ficha.
+   */
+  fallback?: { engine: Engine; model: string; effort?: CodexEffort };
+  /**
    * Último modelo/esforço escolhido no seletor do chat deste funcionário. Só vale para conversa nova
    * quando a ficha não tem `model`/`effort`. Gravado pelo Claudio’s Club, fora do questionário.
    */
@@ -707,7 +743,9 @@ export interface StaffProfile {
 }
 
 /** O que o questionário de contratação envia. */
-export type StaffInput = Omit<StaffProfile, 'id' | 'projectId' | 'portrait' | 'sessions' | 'lastModel' | 'lastEffort' | 'createdAt' | 'updatedAt'> & {
+export type StaffInput = Omit<StaffProfile, 'id' | 'projectId' | 'portrait' | 'sessions' | 'lastModel' | 'lastEffort' | 'createdAt' | 'updatedAt' | 'fallback'> & {
+  /** Motor secundário: ausente = mantém o da ficha; `null` (na edição) tira; objeto = troca. */
+  fallback?: StaffProfile['fallback'] | null;
   /** Retrato como data URL (png, jpeg ou webp). */
   portraitDataUrl?: string | null;
   /** Abrir a primeira sessão logo após contratar. */
@@ -1179,6 +1217,8 @@ export interface ChatSnapshot {
   /** A sessão está aberta em outro lugar (app ou terminal): conversar daqui criaria uma cópia. */
   /** `orphan`: processo do próprio Claudio’s Club que ficou sem dono num reinício do servidor. */
   elsewhere: { pid: number; entrypoint: string | null; status: string | null; orphan: boolean } | null;
+  /** A conversa roda no motor/modelo secundário (ver `EngineOverride`); ausente = o da ficha. */
+  fallback?: EngineOverride;
 }
 
 /** Tudo que o quadro precisa de uma vez (sem as sessões, que são caras de ler). */

@@ -9,6 +9,7 @@ import type {
   ChatState,
   CodexEffort,
   ContextUsage,
+  EngineOverride,
   SendPriority,
 } from '../../../shared/model';
 import { api, ApiError, withUsageConfirm, type PermissionOpts } from '../api';
@@ -21,6 +22,8 @@ export interface ChatView {
   state: ChatState | null;
   context: ContextUsage | null;
   elsewhere: ChatSnapshot['elsewhere'];
+  /** A conversa roda no motor secundário da ficha (o principal estava no limite); null = no da ficha. */
+  fallback: EngineOverride | null;
   loading: boolean;
   error: string | null;
   /** false = não foi enviada (erro ou trava de consumo recusada). */
@@ -29,8 +32,8 @@ export interface ChatView {
   interrupt: () => Promise<void>;
   /**
    * `executeAs`: ao aprovar um plano, a autonomia com que ele executa; `message`: o que ele lê ao
-   * negar; `remember`: aprovar de vez, nesta conversa ou no projeto; `answers`: as respostas de uma
-   * pergunta com opções.
+   * negar; `reject`: recusar o plano de vez (sem `message`); `remember`: aprovar de vez, nesta
+   * conversa ou no projeto; `answers`: as respostas de uma pergunta com opções.
    */
   answer: (requestId: string, allow: boolean, opts?: PermissionOpts) => Promise<void>;
   /** Modelo, esforço e autonomia desta conversa, na hora. */
@@ -52,6 +55,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
   const [state, setState] = useState<ChatState | null>(null);
   const [baseContext, setBaseContext] = useState<ContextUsage | null>(null);
   const [elsewhere, setElsewhere] = useState<ChatSnapshot['elsewhere']>(null);
+  const [fallback, setFallback] = useState<EngineOverride | null>(null);
   const [knownCommands, setKnownCommands] = useState<ChatCommand[]>([]);
   const [loading, setLoading] = useState(!!initialSessionId);
   const [error, setError] = useState<string | null>(null);
@@ -111,6 +115,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
       setKnownCommands(snap.commands ?? []);
       setBaseContext(snap.context);
       setElsewhere(snap.elsewhere);
+      setFallback(snap.fallback ?? null);
       if (snap.live) {
         seq.current = 0;
         setLive([]);
@@ -139,6 +144,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     setLive([]);
     setHeld([]);
     setState(null);
+    setFallback(null);
     setError(null);
     setOffline(false);
     seq.current = 0;
@@ -290,6 +296,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     state,
     context: state?.context ?? baseContext,
     elsewhere,
+    fallback,
     loading,
     error: error ?? state?.error ?? null,
     send,

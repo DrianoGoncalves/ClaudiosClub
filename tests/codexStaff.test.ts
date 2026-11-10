@@ -230,6 +230,14 @@ describe('contratação por gestor que roda no Codex', () => {
     expect(spawn).toMatchObject({ engine: 'codex', args: [], codex: { autonomy: 'auto' } });
   });
 
+  it('gestor Codex contrata sem motor e com secundário Codex: o motor vira Codex antes, e a regra do secundário vale de novo (recusa o mesmo motor)', async () => {
+    const svc = service();
+    const boss = await codexBoss(svc, 'Chefe Secundario');
+    await expect(svc.hire('proj-id', { ...hireBody, name: 'Sub Mesmo Motor', reportsTo: [boss.id], fallback: { engine: 'codex', model: 'gpt-6-sol' } }, false)).rejects.toThrow(
+      'o motor secundário tem que ser diferente do principal',
+    );
+  });
+
   it('gestor Codex pedindo engine claude: nasce Claude travado em manual, sem Chrome, MCPs, servidores nem canHire, mesmo pedindo auto', async () => {
     const svc = service();
     const boss = await codexBoss(svc, 'Chefe Libera');

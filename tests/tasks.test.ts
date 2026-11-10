@@ -5,7 +5,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { StaffProfile } from '../shared/model';
-import { ChatManager } from '../server/chat/manager';
+import { ChatManager, PLAN_REJECTED_MESSAGE } from '../server/chat/manager';
 import { parseVerdict, TaskService } from '../server/tasks';
 import { cleanRunDir } from '../server/runCleanup';
 import { UsageStopError } from '../server/usageStop';
@@ -181,6 +181,33 @@ describe('tarefas por projeto', () => {
 });
 
 describe('tarefa pedida por um gestor', () => {
+  it('a dúvida vai para a conversa de quem pediu (não ao usuário); no Codex, sem a linha', async () => {
+    const dir = path.join(root, 'gestor-duvida');
+    const sent: Array<{ staffId: string; text: string }> = [];
+    const people: Record<string, StaffProfile> = {
+      'gio-1': { id: 'gio-1', name: 'Giovana', role: 'Orquestradora', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+      'lu-1': { id: 'lu-1', name: 'Luana', role: 'Design system', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+      'cx-1': { id: 'cx-1', name: 'Mick', role: 'Back-end', autonomy: 'acceptEdits', worktree: false, engine: 'codex' } as StaffProfile,
+    };
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => people[id] ?? null,
+      send: async (_p, staffId, text) => (sent.push({ staffId, text }), `s-${staffId}`),
+      branchFor: async () => null,
+      requesterSession: () => 's-gio',
+      apiUrl: 'http://127.0.0.1:4848',
+    });
+    const a = (await svc.create('p', { title: 'A', description: 'x', staffId: 'lu-1' }, 'gio-1'))!;
+    const b = (await svc.create('p', { title: 'B', description: 'x', staffId: 'cx-1' }, 'gio-1'))!;
+    await svc.start('p', a.id);
+    await svc.start('p', b.id);
+    expect(sent[0]!.text).toContain('pergunte a Giovana, não ao usuário');
+    expect(sent[0]!.text).toContain('POST http://127.0.0.1:4848/api/projects/p/chat/send');
+    expect(sent[0]!.text).toContain('"sessionId":"s-gio","staffId":"gio-1"');
+    expect(sent[1]!.text).not.toContain('chat/send');
+  });
+
   it('a pessoa sabe quem pediu; na entrega, o gestor recebe o resumo para conferir', async () => {
     const dir = path.join(root, 'gestor');
     const sent: Array<{ staffId: string; text: string }> = [];
@@ -239,13 +266,42 @@ describe('tarefa pedida por um gestor', () => {
     expect(notified).toEqual([{ sessionId: 's-gio-pediu', text: expect.stringContaining('FALHARAM. Fim da saída:\nFAIL botao.test.ts') }]);
     expect((await svc.list('p'))![0]!.tests).toMatchObject({ ok: false, command: 'npm test' });
   });
+
+  it('pedida pela API com o token do gestor: a entrega volta para a conversa do token, não para a do turno', async () => {
+    const dir = path.join(root, 'pedido-token');
+    await fs.mkdir(dir, { recursive: true });
+    const people: Record<string, StaffProfile> = {
+      'gio-1': { id: 'gio-1', name: 'Giovana', role: 'Orquestradora', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+      'lu-1': { id: 'lu-1', name: 'Luana', role: 'Front-end', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+    };
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => people[id] ?? null,
+      send: async () => 's-lu',
+      branchFor: async () => null,
+      requesterSession: () => 's-turno-outro',
+    });
+    const body = { title: 'Botão', description: '', staffId: 'lu-1', reviewerId: null };
+    expect((await svc.create('p', body, 'gio-1', 's-do-token'))!.requestedSession).toBe('s-do-token');
+    expect((await svc.create('p', body, 'gio-1'))!.requestedSession).toBe('s-turno-outro');
+  });
+
+  it('taskOfWork: só a conversa de trabalho de uma tarefa, e só neste projeto', async () => {
+    const { svc } = service('tow');
+    const t = (await svc.create('p', { title: 'A', staffId: 'ana-1' }))!;
+    await svc.start('p', t.id); // sess-1
+    expect((await svc.taskOfWork('p', 'sess-1'))?.id).toBe(t.id);
+    expect(await svc.taskOfWork('p', 'outra-conversa')).toBeNull();
+    expect(await svc.taskOfWork('outro', 'sess-1')).toBeNull();
+  });
 });
 
 describe('fila por funcionário', () => {
   function queued(dirName: string) {
     const dir = path.join(root, dirName);
     const sent: Array<{ text: string; session: string }> = [];
-    const delivered: Array<{ sessionId: string; text: string; images: string[] }> = [];
+    const delivered: Array<{ sessionId: string; text: string; images: string[]; origin?: string }> = [];
     /** Conversas trabalhando agora (o que o ChatManager sabe). */
     const working = new Set<string>();
     let n = 0;
@@ -262,8 +318,8 @@ describe('fila por funcionário', () => {
       },
       branchFor: async () => null,
       isWorking: (_p, _staffId, except) => [...working].some((s) => s !== except),
-      sendTo: async (_p, sessionId, _staffId, text, images) => {
-        delivered.push({ sessionId, text, images });
+      sendTo: async (_p, sessionId, _staffId, text, images, origin) => {
+        delivered.push({ sessionId, text, images, origin });
         working.add(sessionId);
         return sessionId;
       },
@@ -337,6 +393,21 @@ describe('fila por funcionário', () => {
     await finish('s-1');
     expect(sent.at(-1)!.text).toContain('[Tarefa "C"]');
     expect((await svc.list('p'))!.find((t) => t.id === a.id)!.history.map((h) => h.note)).toContain('ajuste guardado enviado');
+  });
+
+  it('o carimbo de outro funcionário fica com a mensagem guardada e vai junto quando ela sai', async () => {
+    const { svc, delivered, finish, make } = queued('q4');
+    const [a, b] = [await make('A'), await make('B')];
+    await svc.start('p', a.id); // s-1
+    await finish('s-1'); // A em revisão
+    await svc.start('p', b.id); // s-2
+
+    const origin = '[MyCo] Mensagem de outro funcionário. Quem mandou: Tupac (Analista de segurança, id tupac-91e7), na conversa s-x.';
+    expect(await svc.hold('s-1', { text: 'faltou o cabeçalho', origin })).toBe('espera Ana terminar “B”');
+    expect((await svc.list('p'))!.find((t) => t.id === a.id)!.held).toEqual([expect.objectContaining({ text: 'faltou o cabeçalho', origin })]);
+
+    await finish('s-2');
+    expect(delivered.at(-1)).toEqual({ sessionId: 's-1', text: 'faltou o cabeçalho', images: [], origin });
   });
 });
 
@@ -1159,5 +1230,134 @@ describe('gestor como revisor (tarefa que ele passou)', () => {
     await svc.onTurnDone('s-1');
     expect(notified).toEqual([{ staffId: 'gio-1', sessionId: 's-gio', text: expect.stringContaining('Luana entregou a tarefa “Lista”') }]);
     expect(sent.at(-1)).toMatchObject({ staffId: 'rev-1' });
+  });
+});
+
+describe('recusar o plano pelo Claudio’s Club', () => {
+  /** Ana (ficha "só planeja") com um claude falso por conversa; o ChatManager de verdade. Sem plano pendente, nada muda. */
+  function rejectHarness(dirName: string) {
+    const dir = path.join(root, dirName);
+    const procs: Array<{ emit: (ev: object) => void; written: string[] }> = [];
+    const idle: Array<Promise<void>> = [];
+    const rejected: Array<Promise<void>> = [];
+    const notified: Array<{ staffId: string; text: string; sessionId: string | null }> = [];
+    let n = 0;
+    const settle = async () => {
+      for (let i = 0; i < 2; i++) {
+        await new Promise((r) => setTimeout(r, 20));
+        await Promise.all([...idle, ...rejected]);
+      }
+    };
+    const ana = { id: 'ana-1', name: 'Ana', autonomy: 'plan', worktree: false } as StaffProfile;
+    const gio = { id: 'gio-1', name: 'Giovana', role: 'Orquestradora', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
+    let svc: TaskService | null = null;
+    const chats = new ChatManager({
+      transcriptsDir: dir,
+      usageFile: path.join(dir, 'usage.json'),
+      listLive: async () => [],
+      resolve: async (_p, sid) => ({ sessionId: sid ?? `s-${++n}`, cwd: '.', args: [] }),
+      spawnImpl: () => {
+        const stdout = new PassThrough();
+        const stdin = new PassThrough();
+        const written: string[] = [];
+        stdin.on('data', (c) => written.push(String(c)));
+        const proc = Object.assign(new EventEmitter(), { stdin, stdout, stderr: new PassThrough(), pid: 6000 + procs.length, kill: () => {} });
+        procs.push({ emit: (ev) => stdout.write(JSON.stringify(ev) + '\n'), written });
+        return proc as never;
+      },
+      onIdle: (sid, pid, staffId) => void idle.push(svc!.onIdle(sid, pid, staffId)),
+      onPlanRejected: (sid) => void rejected.push(svc!.onPlanRejected(sid)),
+    });
+    svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'ana-1' ? ana : id === 'gio-1' ? gio : null),
+      send: async (_p, staffId, text) => chats.send('p', null, staffId, text, 'next'),
+      branchFor: async () => null,
+      isWorking: (p, s, except) => chats.staffWorking(p, s, except),
+      sendTo: (p, sid, s, text, images) => chats.send(p, sid, s, text, 'next', images),
+      notify: async (_p, staffId, text, sessionId) => void notified.push({ staffId, text, sessionId: sessionId ?? null }),
+      requesterSession: () => 's-gio',
+    });
+    const task = async (id: string) => (await svc!.list('p'))!.find((t) => t.id === id)!;
+    return { svc, chats, procs, notified, rejected, settle, task };
+  }
+
+  it('recusa: vai para Aguardar sem executar, o gestor é avisado, a fila anda quando a conversa termina o turno', async () => {
+    const { svc, chats, procs, notified, settle, task } = rejectHarness('rejeita-1');
+    const a = (await svc.create('p', { title: 'A', description: 'refazer o login', staffId: 'ana-1' }, 'gio-1'))!;
+    const b = (await svc.create('p', { title: 'B', staffId: 'ana-1' }))!;
+    expect((await svc.start('p', a.id))!).toMatchObject({ status: 'planning', sessionId: 's-1' });
+    await svc.start('p', b.id); // fila: A ocupa o funcionário enquanto planeja
+    procs[0]!.emit({ type: 'control_request', request_id: 'r1', request: { subtype: 'can_use_tool', tool_name: 'ExitPlanMode', input: { plan: '1. Trocar a senha' } } });
+    await settle();
+
+    expect(chats.answer('s-1', 'r1', false, { reject: true, message: 'quero mudar tudo' })).toBe(true);
+    await settle();
+    // O texto que a conversa recebe é o fixo do servidor, não o que foi digitado.
+    const denied = procs[0]!.written.join('').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    expect(denied.at(-1)).toMatchObject({ response: { response: { behavior: 'deny', message: PLAN_REJECTED_MESSAGE } } });
+    expect(await task(a.id)).toMatchObject({ status: 'waiting' });
+    expect((await task(a.id)).history.at(-1)?.note).toBe('plano recusado pelo usuário');
+    expect(notified).toEqual([
+      { staffId: 'gio-1', sessionId: 's-gio', text: `[MyCo] O usuário recusou o plano da tarefa “A” (id ${a.id}); ela foi para Aguardar e não será executada.` },
+    ]);
+    // A conversa ainda termina o turno (o "entendi"): B só começa quando ela fica livre.
+    expect((await task(b.id)).status).toBe('todo');
+
+    procs[0]!.emit({ type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: 'Entendi, parei.' }] } });
+    procs[0]!.emit({ type: 'result', subtype: 'success', is_error: false, num_turns: 2, result: 'Entendi, parei.' });
+    await settle();
+    expect(await task(b.id)).toMatchObject({ status: 'planning', sessionId: 's-2' });
+    // O fim do turno (processo e vigia) não move A para revisão nem entrega: ela segue em Aguardar.
+    await svc.onTurnDone('s-1');
+    await svc.onIdle('s-1', 'p', 'ana-1');
+    expect(await task(a.id)).toMatchObject({ status: 'waiting' });
+    expect(notified).toHaveLength(1);
+    expect(chats.isWorking('s-1')).toBe(false);
+  });
+
+  it('sem plano pendente, recusar é negar normal: a mensagem digitada vai, nada muda na tarefa', async () => {
+    const { svc, chats, procs, rejected, settle, task } = rejectHarness('rejeita-2');
+    const t = (await svc.create('p', { title: 'C', staffId: 'ana-1' }))!;
+    await svc.start('p', t.id); // s-1, planejando
+    procs[0]!.emit({ type: 'control_request', request_id: 'r1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' } } });
+    await settle();
+    expect(chats.answer('s-1', 'r1', false, { reject: true, message: 'agora não' })).toBe(true);
+    await settle();
+    const denied = procs[0]!.written.join('').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    expect(denied.at(-1)).toMatchObject({ response: { response: { behavior: 'deny', message: 'agora não' } } });
+    expect(rejected).toHaveLength(0);
+    expect(await task(t.id)).toMatchObject({ status: 'planning' });
+  });
+
+  it('pedido de permissão que não é de plano, recusado com reject, não chama a recusa de plano', async () => {
+    const { svc, chats, procs, rejected, settle, task } = rejectHarness('rejeita-3');
+    const t = (await svc.create('p', { title: 'D', staffId: 'ana-1' }))!;
+    await svc.start('p', t.id); // s-1
+    procs[0]!.emit({ type: 'control_request', request_id: 'r9', request: { subtype: 'can_use_tool', tool_name: 'Edit', input: {} } });
+    await settle();
+    expect(chats.answer('s-1', 'r9', false, { reject: true })).toBe(true);
+    expect(rejected).toHaveLength(0);
+    expect(await task(t.id)).toMatchObject({ status: 'planning' });
+  });
+
+  it('recusa sem a tarefa em planejando (já aprovada) não mexe nela', async () => {
+    const dir = path.join(root, 'rejeita-4');
+    const ana = { id: 'ana-1', name: 'Ana', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
+    const notified: string[] = [];
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'ana-1' ? ana : null),
+      send: async () => 'sess-1',
+      branchFor: async () => null,
+      notify: async (_p, _s, text) => void notified.push(text),
+    });
+    const t = (await svc.create('p', { title: 'E', staffId: 'ana-1' }))!;
+    await svc.start('p', t.id); // doing
+    await svc.onPlanRejected('sess-1');
+    expect((await svc.list('p'))![0]).toMatchObject({ status: 'doing' });
+    expect(notified).toEqual([]);
   });
 });

@@ -19,6 +19,14 @@ const ModelSchema = z.string().regex(/^[\w.[\]-]{1,60}$/, 'modelo inválido');
 const EffortSchema = z.enum(EFFORT);
 // `ultra` só existe no Codex (os modelos Sol aceitam; os Luna vão até max): onde vale, ver `codexProfileError`.
 const CodexEffortSchema = z.enum([...EFFORT, 'ultra']);
+// Motor secundário (fallback quando o principal bate o limite): só o dado por enquanto. Regras que cruzam com o principal: `fallbackError`.
+const FallbackSchema = z.object({
+  engine: z.enum(['claude', 'codex']),
+  // Vai para a linha de comando do motor: a mesma regra do modelo principal.
+  model: ModelSchema,
+  // Esforço do Codex (inclui `ultra`); no Claude o `ultra` é recusado em `fallbackError`.
+  effort: CodexEffortSchema.optional(),
+});
 const line = (max: number) => z.string().trim().max(max);
 const list = (max: number) => z.array(line(500)).max(max).default([]);
 
@@ -44,6 +52,8 @@ const StaffInputObject = z.object({
   engine: z.enum(['claude', 'codex']).optional(),
   model: ModelSchema.nullable().default(null),
   effort: CodexEffortSchema.nullable().default(null),
+  // Ausente = sem secundário; `null` no PATCH tira (como o retrato). Regras cruzadas: `assertFallbackRules`.
+  fallback: FallbackSchema.nullable().optional(),
   canHire: z.boolean().default(false),
   playbook: z.enum(PLAYBOOKS).nullable().default(null),
   worktree: z.boolean().default(false),
@@ -72,6 +82,27 @@ export type StaffInputParsed = z.infer<typeof StaffInputSchema>;
 /** Confere a ficha inteira, já com os campos que não vieram no pedido (o `engine` que ficou da ficha antiga). Lança `StaffError`. */
 export function assertProfileRules(p: Pick<StaffProfile, 'engine' | 'servers' | 'effort'>): void {
   const error = codexProfileError(p);
+  if (error) throw new StaffError(error);
+}
+
+/**
+ * Motor secundário: o que cruza com o motor principal e com os servidores da ficha (null = ok, ou sem secundário).
+ * Reusa `codexProfileError`: servidor não vai ao Codex, e `ultra` só existe no Codex (também vale para o secundário).
+ */
+export function fallbackError(p: { engine?: StaffProfile['engine']; servers: readonly string[]; fallback?: StaffProfile['fallback'] | null }): string | null {
+  const fb = p.fallback;
+  if (!fb) return null;
+  if (fb.engine === (p.engine ?? 'claude')) return 'o motor secundário tem que ser diferente do principal';
+  if (codexProfileError({ engine: fb.engine, servers: p.servers })) return 'o motor secundário Codex não aceita servidores na ficha: tire os servidores ou use o Claude como secundário';
+  return codexProfileError({ engine: fb.engine, servers: [], effort: fb.effort });
+}
+
+/**
+ * Lança `StaffError` se o secundário não combina com a ficha (ver `fallbackError`). Fica fora de `assertProfileRules`:
+ * abrir conversa não deve travar por um secundário que ainda ninguém usa.
+ */
+export function assertFallbackRules(p: Parameters<typeof fallbackError>[0]): void {
+  const error = fallbackError(p);
   if (error) throw new StaffError(error);
 }
 
@@ -108,6 +139,8 @@ const ProfileSchema = StaffInputObject.omit({ portraitDataUrl: true, launch: tru
   // Último modelo/esforço escolhido no chat (fora do questionário); valor inválido é ignorado.
   lastModel: ModelSchema.optional().catch(undefined),
   lastEffort: CodexEffortSchema.optional().catch(undefined),
+  // Secundário inválido no arquivo: some (a ficha segue sem ele) em vez de derrubar a ficha.
+  fallback: FallbackSchema.optional().catch(undefined),
   sessions: z
     .array(
       z.object({
@@ -231,10 +264,11 @@ export async function createProfile(
   sessions: StaffProfile['sessions'] = [],
 ): Promise<StaffProfile> {
   const id = `${slugify(input.name)}-${randomBytes(2).toString('hex')}`;
-  const { portraitDataUrl, launch: _launch, adoptSessionId: _adopt, force: _force, roleId: _role, ...fields } = input;
+  const { portraitDataUrl, launch: _launch, adoptSessionId: _adopt, force: _force, roleId: _role, fallback, ...fields } = input;
   const portrait = portraitDataUrl ? await savePortrait(projectPath, id, portraitDataUrl) : null;
   const profile: StaffProfile = {
     ...fields,
+    ...(fallback && { fallback }),
     id,
     projectId,
     portrait,
