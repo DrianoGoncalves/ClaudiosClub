@@ -6,7 +6,7 @@ import type { ChatAttachment, SendPriority } from '../../shared/model';
 import { CODEX_CONTEXT_WINDOW } from '../adapters/claude/pricing';
 import { resolveCodexCommand, type CodexEnvStatus } from '../codexEnv';
 import { pickCodexSubstitute, type CodexModelInfo } from '../codexModels';
-import { cleanEnv } from '../auth';
+import { cleanEnv, withoutMycoToken } from '../auth';
 import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexSecrets } from './codexArgs';
 import { contextUsed, isModelUnavailable, isToolCall, itemFromCodex, parseCodexFailure, type CodexPhase } from './codexEvents';
 import { hasCheckpoint, stripCheckpoint } from './items';
@@ -314,7 +314,7 @@ export class CodexProcess extends ChatProcess {
     // O mesmo ambiente do Claude (MYCO_SESSION_ID e MYCO_TOKEN para o despertador e as tarefas por curl), sem as variáveis CLAUDE*/ANTHROPIC*, e
     // MYCO_URL: o endereço do Claudio’s Club que a sandbox alcança. O token é o mesmo em todas as execuções da conversa (uma por mensagem).
     const env = {
-      ...cleanEnv(),
+      ...withoutMycoToken(cleanEnv()),
       MYCO_SESSION_ID: o.sessionId,
       ...(o.mycoToken && { MYCO_TOKEN: o.mycoToken }),
       ...(o.mycoUrl && { MYCO_URL: o.mycoUrl }),

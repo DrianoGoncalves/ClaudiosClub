@@ -28,7 +28,7 @@ const ABSOLUTE = /^(?:[a-z]:)?\//i;
 
 /**
  * Caminho relativo ao projeto (com "/") se o texto parece um arquivo dele; senão null.
- * Absoluto só vale dentro de `projectRoot` (comparação sem diferenciar maiúsculas, `\` ou `/`).
+ * Absoluto só vale dentro de `projectRoot` (`\` ou `/`; maiúsculas só não contam com letra de unidade, como no Windows).
  */
 export function projectRelativePath(text: string, projectRoot?: string): string | null {
   let s = clean(text);
@@ -37,7 +37,10 @@ export function projectRelativePath(text: string, projectRoot?: string): string 
     const root = (projectRoot ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
     if (!root) return null;
     const prefix = `${root}/`;
-    if (s.slice(0, prefix.length).toLowerCase() !== prefix.toLowerCase()) return null;
+    // Sem diferenciar maiúsculas só com letra de unidade (Windows); no Linux/macOS, /home/a/Proj e /home/a/proj são pastas diferentes.
+    const head = s.slice(0, prefix.length);
+    const same = /^[a-z]:\//i.test(prefix) ? head.toLowerCase() === prefix.toLowerCase() : head === prefix;
+    if (!same) return null;
     s = s.slice(prefix.length);
   }
   return relativeOk(s);

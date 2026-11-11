@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { TaskCode, TaskCodeFile, TestRun } from '../shared/model';
 import { cleanEnv } from './auth';
+import { killTree } from './chat/registry';
 import { worktreeFor } from './staff/worktree';
 
 // O código de uma tarefa: onde está (worktree do funcionário ou o próprio projeto), o que mudou,
@@ -177,11 +178,13 @@ export function runTests(dir: string, command: string): Promise<TestRun> {
   const started = Date.now();
   return new Promise((resolve) => {
     let out = '';
-    const child = spawn(command, { cwd: dir, shell: true, env: { ...cleanEnv(), CI: '1' }, windowsHide: true });
+    // No Unix o `sh -c` vira líder do próprio grupo: no tempo esgotado, o grupo inteiro sai (não só o sh, deixando o npm test rodando).
+    const unix = process.platform !== 'win32';
+    const child = spawn(command, { cwd: dir, shell: true, env: { ...cleanEnv(), CI: '1' }, windowsHide: true, detached: unix });
     const keep = (d: Buffer) => (out = (out + d.toString('utf8')).slice(-6000));
     child.stdout.on('data', keep);
     child.stderr.on('data', keep);
-    const timer = setTimeout(() => child.kill(), 10 * 60_000);
+    const timer = setTimeout(() => (unix && child.pid ? void killTree(child.pid) : child.kill()), 10 * 60_000);
     child.on('close', (code) => {
       clearTimeout(timer);
       resolve({ command, ok: code === 0, output: out.trim(), ms: Date.now() - started, at: new Date().toISOString() });

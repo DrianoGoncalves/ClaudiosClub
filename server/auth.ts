@@ -19,6 +19,12 @@ export function cleanEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEn
   return Object.fromEntries(Object.entries(env).filter(([k]) => !/^(CLAUDE|ANTHROPIC)/i.test(k)));
 }
 
+/** Sem o `MYCO_TOKEN` herdado: se o servidor sobe de dentro de uma conversa (teste, `npm run dev`), a conversa sem token não leva o de quem o abriu. */
+export function withoutMycoToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { MYCO_TOKEN: _, ...rest } = env;
+  return rest;
+}
+
 export function parseAuthStatus(stdout: string, checkedAt = new Date()): AuthStatus {
   const json = stdout.slice(stdout.indexOf('{'), stdout.lastIndexOf('}') + 1);
   let parsed: z.SafeParseReturnType<unknown, z.infer<typeof StatusOutput>>;
