@@ -502,7 +502,8 @@ function gridSpots(boxes: Array<{ w: number; h: number }>, aspect: number, gap =
 
 /**
  * Como `gridSpots`, mas as salas do mesmo bloco (`blocks[i]`, seguidos na lista) formam uma grade
- * própria, e os blocos formam a grade de fora, com folga maior. Um bloco só = a grade simples.
+ * própria, e os blocos ficam numa fila só, com folga maior: lado a lado na tela deitada, um embaixo
+ * do outro na tela em pé (`aspect` < 1, o celular). Um bloco só = a grade simples.
  */
 function blockSpots(boxes: Array<{ w: number; h: number }>, blocks: number[], aspect: number): Array<{ x: number; y: number }> {
   const groups: number[][] = [];
@@ -511,15 +512,24 @@ function blockSpots(boxes: Array<{ w: number; h: number }>, blocks: number[], as
     else groups.push([i]);
   });
   if (groups.length <= 1) return gridSpots(boxes, aspect);
+  const stacked = aspect < 1;
+  // Lado a lado, cada bloco ocupa uma fatia da largura: a grade de dentro é mais estreita (senão a fila
+  // sairia N vezes mais larga que a tela). Empilhados, cada bloco já usa a largura toda.
+  const innerAspect = stacked ? aspect : Math.max(ASPECT_MIN, aspect / groups.length);
   const inner = groups.map((idx) => {
-    const spots = gridSpots(idx.map((i) => boxes[i]!), aspect);
+    const spots = gridSpots(idx.map((i) => boxes[i]!), innerAspect);
     return {
       spots,
       w: Math.max(...idx.map((i, k) => spots[k]!.x + boxes[i]!.w)),
       h: Math.max(...idx.map((i, k) => spots[k]!.y + boxes[i]!.h)),
     };
   });
-  const outer = gridSpots(inner, aspect, { x: GROUP_GAP, y: GROUP_GAP });
+  let at = 0;
+  const outer = inner.map((g) => {
+    const spot = stacked ? { x: 0, y: at } : { x: at, y: 0 };
+    at += (stacked ? g.h : g.w) + GROUP_GAP;
+    return spot;
+  });
   const out: Array<{ x: number; y: number }> = [];
   groups.forEach((idx, g) => {
     idx.forEach((i, k) => {

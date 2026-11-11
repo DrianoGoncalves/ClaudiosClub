@@ -256,6 +256,29 @@ describe('buildGraph', () => {
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) expect(overlaps(all[i]!, all[j]!)).toBe(false);
   });
 
+  it('os workspaces ficam lado a lado na tela deitada e empilhados na em pé', () => {
+    const ws = ['x', 'x', 'y', 'y', 'z', 'z'];
+    const projects = ws.map((_, i) => project(`p${i + 1}`, `C:\\www\\p${i + 1}`));
+    const b: Board = { ...board(), projects, inventories: {}, sessions: {} };
+    const of = new Map(projects.map((p, i) => [p.id, ws[i]!] as const));
+    const groups = { of, order: ['x', 'y', 'z'] };
+    const blocks = (aspect: number) => {
+      const rooms = buildGraph(b, { aspect, groups, showUserScope: false }).nodes.filter((n) => n.type === 'room');
+      return ['x', 'y', 'z'].map((id) => {
+        const rs = rooms.filter((r) => r.type === 'room' && of.get(r.data.owner.slice(2)) === id).map(rect);
+        return { x: Math.min(...rs.map((r) => r.x)), y: Math.min(...rs.map((r) => r.y)), x2: Math.max(...rs.map((r) => r.x + r.w)), y2: Math.max(...rs.map((r) => r.y + r.h)) };
+      });
+    };
+    const [a, c, d] = blocks(16 / 9);
+    expect(a!.x2).toBeLessThanOrEqual(c!.x);
+    expect(c!.x2).toBeLessThanOrEqual(d!.x);
+    expect([a!.y, c!.y, d!.y]).toEqual([a!.y, a!.y, a!.y]);
+    const [e, f, g] = blocks(9 / 16);
+    expect(e!.y2).toBeLessThanOrEqual(f!.y);
+    expect(f!.y2).toBeLessThanOrEqual(g!.y);
+    expect([e!.x, f!.x, g!.x]).toEqual([e!.x, e!.x, e!.x]);
+  });
+
   it('com `groups` mas um workspace só, a planta é a mesma da grade simples', () => {
     const projects = Array.from({ length: 7 }, (_, i) => project(`p${i}`, `C:\\www\\p${i}`));
     const b: Board = { ...board(), projects, inventories: {}, sessions: {} };
