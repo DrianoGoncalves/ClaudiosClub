@@ -15,6 +15,8 @@ const STAFF_POSTS: RegExp[] = [
   new RegExp(`^/api/projects/${ID}/chat/${ID}/wake(?:/cancel)?$`),
   // Encerrar temporário que ele contratou (a rota confere hiredBy).
   new RegExp(`^/api/projects/${ID}/staff/${ID}/done$`),
+  // Responder à dúvida de uma tarefa que ele pediu (a rota confere o gestor e a conversa dele).
+  new RegExp(`^/api/projects/${ID}/tasks/${ID}/answer$`),
 ];
 
 /** O POST em `pathname` pode vir de um funcionário pela API? */

@@ -414,6 +414,46 @@ describe('ChatProcess', () => {
       expect(Object.keys(sent)).toEqual(['__proto__']);
     });
 
+    it('sem pedido pendente, answer devolve false e não escreve nada; hasPending diz se a pergunta espera', async () => {
+      const f = fakeClaude();
+      const chat = new ChatProcess({ sessionId: 'q11', cwd: '.', args: [], spawnImpl: f.spawnImpl });
+      chat.start();
+      f.emit(ask('q11', input));
+      await tick();
+      expect(chat.hasPending('q11')).toBe(true);
+      expect(chat.hasPending('nada')).toBe(false);
+      expect(chat.answer('nada', true, undefined, undefined, { answers: { 'Qual banco?': 'SQLite' } })).toBe(false);
+      await tick();
+      expect(f.written).toEqual([]);
+      expect(chat.answer('q11', true, undefined, undefined, { answers: { 'Qual banco?': 'SQLite' } })).toBe(true);
+      expect(chat.hasPending('q11')).toBe(false);
+      expect(chat.answer('q11', true)).toBe(false); // já respondida
+      await tick();
+      expect(f.written).toHaveLength(1);
+    });
+
+    it('avisa quem ouve com as perguntas só de escolha, no formato da dúvida da tarefa; com texto ou número, não avisa', async () => {
+      const f = fakeClaude();
+      const seen: unknown[] = [];
+      const chat = new ChatProcess({ sessionId: 'q12', cwd: '.', args: [], spawnImpl: f.spawnImpl, onAsk: (rid, qs) => seen.push([rid, qs]) });
+      chat.start();
+      f.emit(ask('q12', { questions: [input.questions[0], input.questions[1]] }));
+      await tick();
+      expect(seen).toEqual([
+        [
+          'q12',
+          [
+            { question: 'Qual banco?', options: ['SQLite', 'Postgres'] },
+            { question: 'Quais extras?', options: ['Docs', 'Testes'], multiSelect: true },
+          ],
+        ],
+      ]);
+      f.emit(ask('q13', input)); // tem texto e número: fica com você
+      await tick();
+      expect(seen).toHaveLength(1);
+      expect(chat.hasPending('q13')).toBe(true);
+    });
+
     it('o resumo da chamada é o texto da primeira pergunta', () => {
       expect(toolSummary('AskUserQuestion', input)).toBe('Qual banco?');
       expect(toolSummary('AskUserQuestion', {})).toBe('AskUserQuestion');
@@ -557,7 +597,7 @@ describe('ChatManager: assumir sessão aberta em outro lugar', () => {
 });
 
 describe('ChatManager: ficha editada com a conversa aberta', () => {
-  function manager() {
+  function manager(extra: Partial<ConstructorParameters<typeof ChatManager>[0]> = {}) {
     const procs: Array<ReturnType<typeof fakeClaude>> = [];
     const spawnImpl = (cmd: string, args: string[], opts: { cwd: string }) => {
       const f = fakeClaude();
@@ -572,6 +612,7 @@ describe('ChatManager: ficha editada com a conversa aberta', () => {
       listLive: async () => [],
       resolve: async (_p, sid) => ({ sessionId: sid ?? 'sx', cwd: '.', args }),
       spawnImpl,
+      ...extra,
     });
     return { m, procs, setArgs: (a: string[]) => (args = a) };
   }
@@ -666,6 +707,53 @@ describe('ChatManager: ficha editada com a conversa aberta', () => {
     f.proc.emit('exit', 1); // o claude caiu: a conversa parada com erro entra na caixa
     await tick();
     expect(m.attention()).toEqual([{ sessionId: 'sx', pending: [], error: 'o claude saiu com código 1' }]);
+  });
+
+  it('pergunta com opções: o gestor é avisado; a resposta (sua ou dele) vai como resumo; pular e recusar também; sem pendente, nada', async () => {
+    const asked: unknown[] = [];
+    const closed: unknown[] = [];
+    const { m, procs } = manager({
+      onAsk: (sid, rid, qs) => void asked.push([sid, rid, qs]),
+      onAskAnswered: (sid, rid, by, summary) => void closed.push([sid, rid, by, summary]),
+    });
+    await m.send('p', 'sx', 'ana', 'pergunte');
+    const f = procs[0]!;
+    const banco = { question: 'Qual banco?', header: 'Banco', multiSelect: false, options: [{ label: 'SQLite' }, { label: 'Postgres' }] };
+    const extras = { question: 'Quais extras?', header: 'Extras', multiSelect: true, options: [{ label: 'Docs' }, { label: 'Testes' }] };
+    const pergunta = (id: string, questions: unknown[]) =>
+      f.emit({ type: 'control_request', request_id: id, request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input: { questions } } });
+    pergunta('a1', [banco, extras]);
+    pergunta('a2', [banco]);
+    pergunta('a3', [banco]);
+    pergunta('a4', [banco]);
+    await tick();
+    expect(asked).toEqual([
+      ['sx', 'a1', [{ question: 'Qual banco?', options: ['SQLite', 'Postgres'] }, { question: 'Quais extras?', options: ['Docs', 'Testes'], multiSelect: true }]],
+      ['sx', 'a2', [{ question: 'Qual banco?', options: ['SQLite', 'Postgres'] }]],
+      ['sx', 'a3', [{ question: 'Qual banco?', options: ['SQLite', 'Postgres'] }]],
+      ['sx', 'a4', [{ question: 'Qual banco?', options: ['SQLite', 'Postgres'] }]],
+    ]);
+    expect(m.hasPending('sx', 'a1')).toBe(true);
+    expect(m.hasPending('outra', 'a1')).toBe(false);
+
+    // O gestor responde a primeira (as duas perguntas): fecha como do gestor.
+    expect(m.answer('sx', 'a1', true, { by: 'manager', answers: { 'Qual banco?': 'Postgres', 'Quais extras?': ['Docs', 'Testes'] } })).toBe(true);
+    expect(closed.at(-1)).toEqual(['sx', 'a1', 'manager', 'Qual banco?: Postgres\nQuais extras?: Docs, Testes']);
+    // Você responde sem dizer quem (padrão: você).
+    expect(m.answer('sx', 'a2', true, { answers: { 'Qual banco?': 'SQLite' } })).toBe(true);
+    expect(closed.at(-1)).toEqual(['sx', 'a2', 'user', 'Qual banco?: SQLite']);
+    // Pulou: aprova sem escolher.
+    expect(m.answer('sx', 'a3', true, { answers: {} })).toBe(true);
+    expect(closed.at(-1)).toEqual(['sx', 'a3', 'user', 'pulou a pergunta']);
+    // Recusou.
+    expect(m.answer('sx', 'a4', false)).toBe(true);
+    expect(closed.at(-1)).toEqual(['sx', 'a4', 'user', 'recusou a pergunta']);
+
+    // Já respondida: nem responde nem avisa.
+    const antes = closed.length;
+    expect(m.answer('sx', 'a4', true)).toBe(false);
+    expect(m.hasPending('sx', 'a4')).toBe(false);
+    expect(closed).toHaveLength(antes);
   });
 
   it('ficha mudou: a próxima mensagem de cada conversa dela leva o aviso para reler, uma vez só', async () => {

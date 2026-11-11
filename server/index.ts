@@ -92,7 +92,7 @@ import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
 import { AUTONOMY, listProjectStaff, readProfile } from './staff/store';
 import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
-import { TaskError, TaskService } from './tasks';
+import { TaskConflictError, TaskError, TaskForbiddenError, TaskService } from './tasks';
 import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefaultRole } from './roles';
 import { ROOT } from './root';
 import { cleanRunDir } from './runCleanup';
@@ -311,6 +311,8 @@ const chats: ChatManager = new ChatManager({
   copiesFile: path.join(MYCO_HOME, 'run', 'copies.json'),
   onPlanApproved: (sid, plan) => void tasks.onPlanApproved(sid, plan).catch(() => {}),
   onPlanRejected: (sid) => void tasks.onPlanRejected(sid).catch(() => {}),
+  onAsk: (sid, rid, qs) => void tasks.onAsk(sid, rid, qs).catch(() => {}),
+  onAskAnswered: (sid, rid, by, summary) => void tasks.onAskAnswered(sid, rid, by, summary).catch(() => {}),
   onSent: (sid) => void tasks.onSent(sid).catch(() => {}),
   // Ficou livre: os ajustes guardados e a próxima tarefa da fila dele.
   onIdle: (sid, pid, staffId, reason) => {
@@ -383,6 +385,9 @@ const tasks = new TaskService({
   send: sendNewConversation,
   apiUrl: `http://127.0.0.1:${PORT}`,
   sandboxApiUrl: SANDBOX_URL,
+  // A pergunta por opções ainda aberta na conversa de trabalho, e a resposta do gestor (vai à conversa do funcionário).
+  hasAsk: (sid, rid) => chats.hasPending(sid, rid),
+  answerAsk: (sid, rid, answers) => chats.answer(sid, rid, true, { answers, by: 'manager' }),
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
   isWorking: (projectId, staffId, except) => chats.staffWorking(projectId, staffId, except),
   // O gestor que pediu recebe a entrega na conversa em que pediu (ou, sem ela, na mais recente dele),
@@ -559,6 +564,13 @@ const ChatSettingsBody = z
   })
   .refine((b) => b.model || b.effort || b.autonomy, 'nada para mudar');
 const StaffRef = z.object({ staffId: z.string().max(40).nullable().default(null), force: z.boolean().default(false) });
+// Resposta do gestor à dúvida da tarefa (ver TaskService.answerQuestion): `answers` por pergunta; `text` na dúvida escrita; `escalate` passa a você.
+const TaskAnswerBody = z.object({
+  questionId: z.string().min(1).max(100),
+  answers: z.record(z.string().max(500), z.union([z.string().max(500), z.array(z.string().max(500)).max(20)])).optional(),
+  text: z.string().max(2_000).optional(),
+  escalate: z.boolean().optional(),
+});
 
 function parse<S extends z.ZodTypeAny>(schema: S, body: unknown): z.output<S> {
   const r = schema.safeParse(body);
@@ -1185,6 +1197,16 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     },
   ],
   ['GET', new RegExp(`^/api/projects/${ID}/tasks/${ID}/code$`), ({ params: [id, taskId] }) => tasks.code(id!, taskId!)],
+  // Dúvida da tarefa respondida pelo gestor que pediu (pela API, com o token da conversa dele). Sem quem chama (ex.: o navegador), o serviço recusa (403).
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/tasks/${ID}/answer$`),
+    async ({ params: [id, taskId], body, caller }) => {
+      const b = parse(TaskAnswerBody, body);
+      const who = caller?.staffId ? { staffId: caller.staffId, sessionId: caller.sessionId } : null;
+      return { ok: true, task: await tasks.answerQuestion(id!, taskId!, who, b) };
+    },
+  ],
   // Desligada nas configurações: nem procura o `codex` (nenhum processo é aberto).
   [
     'GET',
@@ -1796,6 +1818,9 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         // Ficha em uso (conversa trabalhando): 409, antes do StaffError genérico (400).
         if (err instanceof StaffOpenTasksError) return send(res, 409, { error: err.message, code: err.code, openTasks: err.openTasks });
         if (err instanceof StaffBusyError) return send(res, 409, { error: err.message });
+        // Dúvida já respondida, ou pergunta que não está mais aberta na conversa: 409; quem não é o gestor: 403 (antes do TaskError, 400).
+        if (err instanceof TaskConflictError) return send(res, 409, { error: err.message });
+        if (err instanceof TaskForbiddenError) return send(res, 403, { error: err.message });
         // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
         if (err instanceof GuideExistsError) return send(res, 409, { error: 'exists' });
         if (err instanceof Forbidden) return send(res, 403, { error: err.message });

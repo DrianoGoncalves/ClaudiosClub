@@ -395,7 +395,6 @@ describe('o servidor (server/index.ts) usa tudo isso', () => {
     expect(index.match(/await checkReach\(caller, /g)).toHaveLength(3);
     expect(index.match(/tasks\.mayAskRequester\(pid!, caller, target\)/g)).toHaveLength(2);
     expect(index).toContain('requesterAskLimiter.check');
-    expect(index).toContain('sandboxApiUrl: SANDBOX_URL');
     expect(index).toContain('staff.hire(id!, body, fromBrowser, caller)');
     expect(index.match(/actorOf\(caller, b\.requestedBy\)/g)).toHaveLength(2);
     // Sem o 127.0.0.2 de pé, o Codex roda sem rede (e a conversa avisa), em vez de rodar com a rede aberta.

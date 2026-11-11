@@ -430,6 +430,19 @@ function buildSettings(
         );
       })(),
     },
+    // O manual é um arquivo estático (client/public/manual.html), só em português; abre fora do app.
+    {
+      id: 'manual',
+      group: 'general',
+      title: t('toolbar.manualTitle'),
+      description: t('toolbar.manualDesc'),
+      keywords: t('toolbar.manualKeywords'),
+      control: (
+        <a className="btn-secondary setting-link" href="/manual.html" target="_blank" rel="noopener noreferrer">
+          {t('toolbar.manualOpen')}
+        </a>
+      ),
+    },
     ...(p.showUserScope !== null
       ? [
           {

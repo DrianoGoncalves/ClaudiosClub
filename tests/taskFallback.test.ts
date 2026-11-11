@@ -668,32 +668,36 @@ describe('limite no meio do turno (onLimit)', () => {
   });
 });
 
-describe('dúvida ao gestor pelo motor EFETIVO da conversa', () => {
-  it('no Claude, a dúvida vai pela API local', async () => {
+describe('dúvida ao gestor: a instrução DÚVIDA: é a mesma nos dois motores (sem URL na linha)', () => {
+  /** Quem pediu e a instrução `DÚVIDA:`; a linha não leva endereço da API (o gestor responde pela conversa dele, ver doubtText). */
+  const temInstrucaoDuvida = (texto: string) => {
+    expect(texto).toContain('Pedida por Gil');
+    expect(texto).toContain('DÚVIDA:');
+    expect(texto).not.toContain('/api/projects/');
+  };
+
+  it('no Claude, a instrução DÚVIDA: vai no texto de partida', async () => {
     const { svc, sent } = await project('duv-claude', [{ id: 'c' }], {}, { manager: true });
     await svc.start('p', 'c');
-    expect(String(sent[0]![2])).toContain('Pedida por Gil');
-    expect(String(sent[0]![2])).toContain('http://127.0.0.1:4848/api/projects/p');
+    temInstrucaoDuvida(String(sent[0]![2]));
   });
 
-  it('no Codex como principal, não há linha de dúvida (a sandbox não fala com subordinados: mayReach)', async () => {
+  it('no Codex como principal, a mesma instrução vai no texto de partida', async () => {
     const { svc, sent } = await project('duv-codex', [{ id: 'c' }], { engine: 'codex', model: 'gpt-6-sol' }, { manager: true });
     await svc.start('p', 'c');
-    expect(String(sent[0]![2])).toContain('Pedida por Gil');
-    expect(String(sent[0]![2])).not.toContain('/api/projects/');
+    temInstrucaoDuvida(String(sent[0]![2]));
   });
 
-  it('no Codex como secundário (troca no meio), o handoff não leva linha de dúvida', async () => {
+  it('handoff Claude→Codex (troca no meio): a mesma instrução vai no texto do handoff', async () => {
     const { svc, sent } = await project('duv-meio', [{ id: 'meio', status: 'doing', sessionId: 'sess-velha' }], withFallback, { limits: { claude: hit(120) }, manager: true });
     await svc.onLimit({ sessionId: 'sess-velha', engine: 'claude', hit: hit(120) });
-    expect(String(sent[0]![2])).toContain('Pedida por Gil');
-    expect(String(sent[0]![2])).not.toContain('/api/projects/');
+    temInstrucaoDuvida(String(sent[0]![2]));
   });
 
-  it('a troca no meio de Codex para Claude (ficha Codex) leva a linha da API local: o motor efetivo é o Claude', async () => {
+  it('handoff Codex→Claude (ficha Codex, troca no meio): a mesma instrução vai no texto do handoff', async () => {
     const { svc, sent } = await project('duv-volta', [{ id: 'meio', status: 'doing', sessionId: 'sess-velha' }], { engine: 'codex', model: 'gpt-6-sol', fallback: { engine: 'claude', model: 'sonnet' } }, { limits: { codex: hit(120) }, manager: true });
     await svc.onLimit({ sessionId: 'sess-velha', engine: 'codex', hit: hit(120) });
-    expect(String(sent[0]![2])).toContain('http://127.0.0.1:4848/api/projects/p');
+    temInstrucaoDuvida(String(sent[0]![2]));
   });
 });
 

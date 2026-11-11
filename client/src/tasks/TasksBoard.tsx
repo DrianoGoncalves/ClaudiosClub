@@ -8,6 +8,7 @@ import { BranchIcon, ClockIcon, ReviewIcon } from '../icons';
 import { TaskFallbackBadge } from '../staff/FallbackBadge';
 import { ReviewDelegate } from './ReviewDelegate';
 import { TaskCodePanel } from './TaskCodePanel';
+import { DoubtBadge, DoubtBlock } from './TaskDoubt';
 
 // Quadro de tarefas de um projeto: aguardar → a fazer → fazendo → revisão → pronto.
 // Os status são 6 (ver server/tasks.ts); na tela, "planejando" vai em Fazendo.
@@ -187,6 +188,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         <span className="task-title">{task.title}</span>
         <StatusBadge task={task} hasDeploy={hasDeploy} />
         <VerdictBadge task={task} nameOf={nameOf} />
+        <DoubtBadge question={task.question} requestedBy={task.requestedBy} nameOf={nameOf} />
         <span className="task-meta muted small">
           <span className="task-id" title={t('tasks.idHint')}>
             {task.id}
@@ -610,6 +612,12 @@ function TaskDetail({
           <TaskFallbackBadge fallback={task.fallback} />
         </p>
       )}
+      <DoubtBlock
+        question={task.question}
+        requestedBy={task.requestedBy}
+        nameOf={(id) => staff.find((s) => s.id === id)?.name ?? null}
+        now={Date.now()}
+      />
       {queuePos > 0 && (
         <p className="muted small">
           {busyWith

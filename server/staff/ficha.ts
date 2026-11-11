@@ -5,6 +5,7 @@ import { FTP_MCP_NAME, GPT_MCP_NAME, GPT_TOOL_NAME, TEMP_IDLE_DAYS, type Autonom
 import { staffSshConfigFile } from './servers';
 import { GUIDE_PATH } from '../projectGuide';
 import { MYCO_HOME } from '../config';
+import { ROOT } from '../root';
 
 // A ficha vira um arquivo Markdown dentro do projeto (.myco/staff/<id>.md), que a sessão lê
 // no começo. Pela linha de comando só vai uma identidade curta apontando para ela: o CLI não
@@ -107,20 +108,31 @@ const REMOTE_TOOLS = ['ssh', 'ssh.exe', 'scp', 'scp.exe', 'sftp', 'sftp.exe', 'r
  * são FTP (usadas pelo MCP do Claudio’s Club): só elas não liberam o ssh.
  */
 /**
- * A pasta da memória pessoal (MYCO_HOME/people) no formato das regras: `~/…` dentro da home (o caso comum, sem espaço);
- * fora dela, o caminho absoluto no mesmo formato de secretDenyRules.
+ * Uma pasta no formato das regras: `~/…` dentro da home (o caso comum, sem espaço); fora dela, o caminho
+ * absoluto no mesmo formato de secretDenyRules.
  */
-export function peopleRuleDir(): string {
-  const dir = path.join(MYCO_HOME, 'people');
+function ruleDirOf(dir: string): string {
   const rel = path.relative(os.homedir(), dir);
   if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return `~/${rel.replace(/\\/g, '/')}`;
   const abs = dir.replace(/\\/g, '/').replace(/^([A-Za-z]):\//, (_, d: string) => `//${d.toLowerCase()}/`);
   return abs.startsWith('//') ? abs : `/${abs}`;
 }
 
+/** A pasta da memória pessoal (MYCO_HOME/people) no formato das regras. */
+export function peopleRuleDir(): string {
+  return ruleDirOf(path.join(MYCO_HOME, 'people'));
+}
+
+/** O manual de uso do Claudio’s Club (docs/uso, na pasta do programa): todo funcionário lê, ninguém edita pela conversa. */
+export const MANUAL_DIR = path.join(ROOT, 'docs', 'uso');
+
 export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpServers: string[] = []): string[] {
   const people = peopleRuleDir();
+  // O manual é lido (--add-dir, ver buildClaudeArgs), mas não editado. Com espaço no caminho a regra sairia quebrada na linha de comando: fica de fora, como as chaves.
+  const manual = ruleDirOf(MANUAL_DIR);
+  const manualRules = /\s/.test(manual) ? [] : [`Edit(${manual}/**)`, `Write(${manual}/**)`, `NotebookEdit(${manual}/**)`];
   const always = [
+    ...manualRules,
     'Read(~/.ssh/**)',
     'Edit(~/.ssh/**)',
     'Write(~/.ssh/**)',
@@ -298,7 +310,7 @@ function browserSection(p: StaffProfile): string {
   return [
     '## Navegador',
     'Você pode usar o Chrome do usuário pela extensão Claude in Chrome. É o navegador real dele, com os logins dele.',
-    `- Use uma aba só, para gastar menos memória: antes de abrir outra, veja as abas do seu grupo com tabs_context_mcp; se uma delas já tiver "[${p.name}]" no começo do título, trabalhe nela e navegue nela para ir a outra página. Abra aba nova só se não tiver nenhuma (ou se precisar de duas páginas ao mesmo tempo) e feche com tabs_close_mcp as que não for mais usar.`,
+    `- Use uma aba só, para gastar menos memória: antes de abrir outra, veja as abas do seu grupo com tabs_context_mcp; se uma delas já tiver "[${p.name}]" no começo do título, trabalhe nela e navegue nela para ir a outra página. Abra aba nova só se não tiver nenhuma (ou se precisar de duas páginas ao mesmo tempo) e feche com tabs_close_mcp as que não for mais usar. Ao terminar o que tinha para fazer no navegador, antes da resposta final, feche com tabs_close_mcp todas as abas que você abriu: cada conversa ganha um grupo de abas próprio, e o que fica aberto vira aba esquecida gastando memória.`,
     '- Não feche nem mexa nas abas que o usuário já tem abertas.',
     `- Para o usuário saber quem está em cada aba: logo depois de abrir uma aba ou ir para outra página, rode na aba, com a ferramenta javascript_tool, \`${tabTitleSnippet(p.name)}\`. Ele põe "[${p.name}]" no começo do título da aba e mantém mesmo que o site troque o título.`,
     '- Antes de enviar mensagem, publicar, comprar, aceitar termos, apagar ou enviar qualquer formulário, pergunte no chat e espere o ok.',
@@ -342,6 +354,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     guideSection(ctx),
     `## Conhecimento (leia antes de começar)\n${list(p.knowledge, codexOf(p) ? 'Nada específico além do AGENTS.md e do CLAUDE.md do projeto, se existirem.' : 'Nada específico além do CLAUDE.md do projeto.')}`,
     postureSection(),
+    manualSection(),
     `## Regras\n${list(p.rules, codexOf(p) ? 'Siga o AGENTS.md e o CLAUDE.md do projeto, se existirem.' : 'Siga o CLAUDE.md do projeto.')}`,
     p.doneWhen ? `## Definição de pronto\n${p.doneWhen}` : '',
     // Quem pediu confere pela entrega: com as provas nela, não precisa abrir tudo de novo.
@@ -377,6 +390,15 @@ function postureSection(): string {
     'Se o pedido depende de algo que não existe (arquivo, rota, função, opção, recurso do produto) ou você não tem base para fazer, diga a lacuna na resposta ou na entrega em vez de improvisar ou inventar. Não invente API, comando nem resultado de teste.',
     'Ao citar arquivo do projeto, use o caminho relativo à raiz entre crases (ex.: `docs/plano.md` ou `src/app.ts:42`): o Claudio’s Club transforma em link que abre o arquivo.',
     'Responda curto e objetivo, só com o que interessa a quem lê: resultado, decisão, problema ou o que precisa de resposta. Não anuncie nem narre os passos (ler a memória, abrir arquivos, conferir o diff): faça em silêncio e mostre o resultado.',
+  ].join('\n');
+}
+
+/** Manual de uso do Claudio’s Club: só leitura (ver MANUAL_DIR, em --add-dir e nas regras de negação). */
+function manualSection(): string {
+  const readme = path.join(MANUAL_DIR, 'README.md').replace(/\\/g, '/');
+  return [
+    '## Manual do Claudio’s Club',
+    `Se o usuário perguntar como usar o Claudio’s Club, consulte o manual em \`${readme}\` (só leitura) e responda com base nele; se não estiver lá, diga que não sabe.`,
   ].join('\n');
 }
 
@@ -553,9 +575,12 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   args.push('--permission-mode', p.autonomy);
   if (p.model) args.push('--model', p.model);
   if (p.effort) args.push('--effort', p.effort);
-  if (o.addDirs?.length) args.push('--add-dir', ...o.addDirs);
+  // O manual entra sempre (leitura); as regras que impedem de editá-lo estão em secretDenyRules.
+  args.push('--add-dir', ...(o.addDirs ?? []), MANUAL_DIR);
   // Explícito nos dois sentidos: sem a opção, nem a configuração do usuário liga o Chrome.
   args.push(p.browser ? '--chrome' : '--no-chrome');
+  // Edita sozinho em diante: o navegador não pede permissão a cada clique; as regras de segredo seguem negadas pelo --disallowedTools.
+  if (p.browser && AUTONOMY_ORDER.indexOf(p.autonomy) >= AUTONOMY_ORDER.indexOf('acceptEdits')) args.push('--allowedTools', 'mcp__claude-in-chrome');
   args.push('--disallowedTools', secretDenyRules(p, o.keyFiles, o.ftpServers).join(','));
   if (o.mcpConfigPath) args.push('--mcp-config', o.mcpConfigPath, ...(o.strictMcp === false ? [] : ['--strict-mcp-config']));
   return args;

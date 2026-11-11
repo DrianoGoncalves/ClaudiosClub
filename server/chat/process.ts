@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { AskedQuestion, BackgroundTask, ChatAttachment, ChatCommand, ChatEvent, ChatItem, ChatState, SendPriority, UsageLimit } from '../../shared/model';
+import type { AskedQuestion, BackgroundTask, ChatAttachment, ChatCommand, ChatEvent, ChatItem, ChatState, SendPriority, TaskQuestion, UsageLimit } from '../../shared/model';
 import { cleanEnv, withoutMycoToken } from '../auth';
 import { tryJson } from '../adapters/claude/fsutil';
 import { contextWindowFor } from '../adapters/claude/pricing';
@@ -108,6 +108,8 @@ export interface ChatProcessOptions {
   onIdle?: (reason: 'turn' | 'background' | 'exit') => void;
   /** Chegou a lista de comandos "/" da sessão. */
   onCommands?: (commands: ChatCommand[]) => void;
+  /** Pergunta só de escolhas (AskUserQuestion) esperando resposta: no formato da dúvida da tarefa (ver TaskQuestion). Texto e número não vão. */
+  onAsk?: (requestId: string, questions: NonNullable<TaskQuestion['questions']>) => void;
   /** `MYCO_TOKEN` da conversa (ver server/callers.ts): vai no ambiente, ao lado do `MYCO_SESSION_ID`, para as chamadas à API do Claudio’s Club. */
   mycoToken?: string;
   /** Troca o `spawn` real nos testes. */
@@ -496,6 +498,11 @@ export class ChatProcess {
     return null;
   }
 
+  /** Há pedido (permissão ou pergunta) com este id ainda sem resposta. */
+  hasPending(requestId: string): boolean {
+    return this.pending.has(requestId);
+  }
+
   /** Pedidos de permissão ainda sem resposta (a caixa "precisa de mim" lê daqui). */
   pendingPermissions(): Array<Extract<ChatItem, { kind: 'permission' }>> {
     return [...this.items.values()].filter(
@@ -690,6 +697,10 @@ export class ChatProcess {
           ...(typeof plan === 'string' && { plan }),
           ...(questions && { questions }),
         });
+        // Só perguntas de escolha vão ao gestor: o formato dele não tem texto livre nem número (ficam com você).
+        if (questions?.every((q) => q.kind === 'choice')) {
+          this.opts.onAsk?.(requestId, questions.map((q) => ({ question: q.question, options: q.options.map((o) => o.label), ...(q.multiSelect && { multiSelect: true }) })));
+        }
         return;
       }
       case 'rate_limit_event': {

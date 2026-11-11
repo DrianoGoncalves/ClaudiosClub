@@ -112,7 +112,7 @@ export function AgentIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-/** Livro: skills e agents que a ficha indica. */
+/** Livro: as skills que a ficha indica. */
 export function SkillIcon({ size = 16 }: { size?: number }) {
   return (
     <svg width={size} height={size} aria-hidden="true" {...base}>
