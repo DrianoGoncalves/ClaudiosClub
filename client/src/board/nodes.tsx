@@ -3,7 +3,7 @@ import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } fro
 import { PLAYBOOK_AGENTS } from '../../../shared/agentPresets';
 import { colorCss, type GitState, type LiveSession, type StaffProfile } from '../../../shared/model';
 import { employeeName, ENTRYPOINT_LABEL, formatAgo, initials, STATUS_LABEL } from '../format';
-import { BranchIcon, ChromeIcon, FallbackModelIcon, GhostIcon, McpIcon, ServerIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
+import { AgentIcon, BranchIcon, ChromeIcon, FallbackModelIcon, GhostIcon, McpIcon, ServerIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { t } from '../i18n';
 import { engineName } from '../staff/fallbackEngine';
 import {
@@ -190,7 +190,7 @@ const TOOL_ICON: Record<StaffTool, typeof BranchIcon> = {
   browser: ChromeIcon,
   servers: ServerIcon,
   canHire: UserPlusIcon,
-  agents: SkillIcon,
+  agents: AgentIcon,
   skills: SkillIcon,
   mcps: McpIcon,
 };

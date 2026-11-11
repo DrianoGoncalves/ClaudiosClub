@@ -6,7 +6,7 @@ import { PassThrough } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { StaffProfile } from '../shared/model';
 import { ChatManager, PLAN_REJECTED_MESSAGE } from '../server/chat/manager';
-import { parseVerdict, TaskService } from '../server/tasks';
+import { parseVerdict, TaskConflictError, TaskForbiddenError, TaskService } from '../server/tasks';
 import { cleanRunDir } from '../server/runCleanup';
 import { UsageStopError } from '../server/usageStop';
 import { REQUESTER_ASK_INTERVAL_MS, REQUESTER_ASK_MAX_BYTES, RequesterAskLimiter } from '../server/chat/requesterAsk';
@@ -198,7 +198,7 @@ describe('tarefas por projeto', () => {
 });
 
 describe('tarefa pedida por um gestor', () => {
-  it('a dúvida usa a conversa exata de quem pediu, com endpoint de cada motor', async () => {
+  it('a regra da dúvida vai para quem pediu, em qualquer motor', async () => {
     const dir = path.join(root, 'gestor-duvida');
     const sent: Array<{ staffId: string; text: string }> = [];
     const people: Record<string, StaffProfile> = {
@@ -216,7 +216,6 @@ describe('tarefa pedida por um gestor', () => {
       branchFor: async () => null,
       requesterSession: () => 's-gio',
       apiUrl: 'http://127.0.0.1:4848',
-      sandboxApiUrl: 'http://127.0.0.2:4848',
     });
     const a = (await svc.create('p', { title: 'A', description: 'x', staffId: 'lu-1' }, 'gio-1'))!;
     const b = (await svc.create('p', { title: 'B', description: 'x', staffId: 'cx-1' }, 'gio-1'))!;
@@ -224,11 +223,11 @@ describe('tarefa pedida por um gestor', () => {
     await svc.start('p', a.id);
     await svc.start('p', b.id);
     await svc.start('p', c.id);
-    expect(sent[0]!.text).toContain('pergunte a Giovana, não ao usuário');
-    expect(sent[0]!.text).toContain('POST http://127.0.0.1:4848/api/projects/p/chat/send');
-    expect(sent[0]!.text).toContain('"sessionId":"s-gio","staffId":"gio-1"');
-    expect(sent[1]!.text).toContain('pergunte a Giovana, não ao usuário');
-    expect(sent[1]!.text).toContain('POST http://127.0.0.2:4848/api/projects/p/chat/send');
+    expect(sent[0]!.text).toContain('Dúvida ou decisão desta tarefa vai para Giovana, não para o usuário');
+    expect(sent[0]!.text).toContain('`DÚVIDA:`');
+    expect(sent[0]!.text).not.toContain('chat/send');
+    expect(sent[1]!.text).toContain('Dúvida ou decisão desta tarefa vai para Giovana, não para o usuário');
+    expect(sent[1]!.text).not.toContain('chat/send');
 
     const caller = { staffId: 'cx-1', projectId: 'p', sessionId: 's-cx-1', engine: 'codex' as const, sandbox: true };
     const target = { sessionId: 's-gio', staffId: 'gio-1' };
@@ -256,7 +255,6 @@ describe('tarefa pedida por um gestor', () => {
       branchFor: async () => null,
       requesterSession: () => 's-gio',
       apiUrl: 'http://127.0.0.1:4848',
-      sandboxApiUrl: 'http://127.0.0.2:4848',
     });
     const b = (await svc.create('p', { title: 'B', description: 'x', staffId: 'cx-1' }, 'gio-1'))!;
     await svc.start('p', b.id);
@@ -1474,5 +1472,275 @@ describe('recusar o plano pelo Claudio’s Club', () => {
     await svc.onPlanRejected('sess-1');
     expect((await svc.list('p'))![0]).toMatchObject({ status: 'doing' });
     expect(notified).toEqual([]);
+  });
+});
+
+describe('dúvida da tarefa ao gestor', () => {
+  const people: Record<string, StaffProfile> = {
+    'gio-1': { id: 'gio-1', name: 'Giovana', role: 'Orquestradora', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+    'ana-1': { id: 'ana-1', name: 'Ana', role: 'Back-end', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+  };
+
+  /** Tarefa da Ana pedida pela Giovana (sem revisor), já começada: a sessão de trabalho é `task().sessionId`. */
+  async function pedida(dirName: string, perfilGestor: Partial<StaffProfile> = {}) {
+    const dir = path.join(root, dirName);
+    const gio = { ...people['gio-1'], ...perfilGestor } as StaffProfile; // ficha do gestor (ex.: `engine: 'codex'`)
+    const sent: Array<{ staffId: string; text: string; force: boolean }> = [];
+    const delivered: Array<{ sessionId: string; text: string }> = [];
+    const asks = new Set<string>(); // perguntas por opções abertas na conversa de trabalho
+    const answeredAsks: Array<{ sessionId: string; requestId: string; answers: Record<string, string | string[]> }> = [];
+    const lastTexts: Record<string, string> = {};
+    const working = new Set<string>();
+    const gestor = { falha: false };
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'gio-1' ? gio : people[id] ?? null),
+      send: async (_p, staffId, text, force) => {
+        sent.push({ staffId, text, force });
+        if (staffId === 'gio-1' && gestor.falha) throw new Error('sem conversa');
+        return `${staffId}-${sent.length}`;
+      },
+      branchFor: async () => null,
+      isWorking: (_p, _s, except) => [...working].some((s) => s !== except),
+      sendTo: async (_p, sessionId, _s, text) => {
+        delivered.push({ sessionId, text });
+        return sessionId;
+      },
+      lastText: (s) => lastTexts[s] ?? null,
+      hasAsk: (_s, id) => asks.has(id),
+      answerAsk: (sessionId, requestId, answers) => {
+        if (!asks.has(requestId)) return false;
+        asks.delete(requestId);
+        answeredAsks.push({ sessionId, requestId, answers });
+        return true;
+      },
+      apiUrl: 'http://127.0.0.1:4848',
+      sandboxApiUrl: 'http://127.0.0.2:4848',
+    });
+    const t = (await svc.create('p', { title: 'Relatório', description: 'Exportar CSV', staffId: 'ana-1', reviewerId: null }, 'gio-1', 'gio-s'))!;
+    await svc.start('p', t.id);
+    const task = async () => (await svc.list('p'))![0]!;
+    return { svc, sent, delivered, asks, answeredAsks, lastTexts, working, gestor, task };
+  }
+
+  it('onAsk leva a pergunta com opções ao gestor, numa conversa nova dele; a tarefa segue', async () => {
+    const h = await pedida('d-ask');
+    const antes = await h.task();
+    h.asks.add('req-1');
+    expect(await h.svc.onAsk(antes.sessionId!, 'req-1', [{ question: 'Qual banco?', options: ['Postgres', 'MySQL'] }])).toBe(true);
+
+    const msg = h.sent.at(-1)!;
+    expect(msg).toMatchObject({ staffId: 'gio-1', force: false });
+    expect(msg.text).toContain('Qual banco?');
+    expect(msg.text).toContain('Postgres | MySQL');
+    expect(msg.text).toContain(`POST http://127.0.0.1:4848/api/projects/p/tasks/${antes.id}/answer`);
+    expect(msg.text).toContain('{"questionId": "req-1", "answers": {"<pergunta>": "<opção>"}}');
+    expect(msg.text).toContain('"escalate": true');
+
+    const depois = await h.task();
+    expect(depois).toMatchObject({ status: 'doing', questionCount: 1, question: { id: 'req-1', source: 'ask', status: 'open', managerSession: expect.stringMatching(/^gio-1-/) } });
+    // A conversa do gestor não é da tarefa: a resposta dele ao fim do turno não muda nada.
+    await h.svc.onTurnDone(depois.question!.managerSession!);
+    expect(await h.task()).toMatchObject({ status: 'doing', question: { status: 'open' } });
+  });
+
+  it('a 4ª dúvida não vai ao gestor: fica escalada, com você', async () => {
+    const h = await pedida('d-limite');
+    const work = (await h.task()).sessionId!;
+    for (const id of ['req-1', 'req-2', 'req-3']) {
+      h.asks.add(id);
+      expect(await h.svc.onAsk(work, id, [{ question: id, options: ['sim', 'não'] }])).toBe(true);
+      const t = await h.task();
+      await h.svc.answerQuestion('p', t.id, { staffId: 'gio-1', sessionId: t.question!.managerSession! }, { questionId: id, answers: { [id]: 'sim' } });
+    }
+    const enviados = h.sent.length;
+    h.asks.add('req-4');
+    expect(await h.svc.onAsk(work, 'req-4', [{ question: 'Quarta?', options: ['a'] }])).toBe(false);
+    expect(h.sent.length).toBe(enviados);
+    expect(await h.task()).toMatchObject({ questionCount: 3, question: { id: 'req-4', status: 'escalated' } });
+  });
+
+  it('se o envio ao gestor falha, a dúvida escala para você', async () => {
+    const h = await pedida('d-falha');
+    const work = (await h.task()).sessionId!;
+    h.gestor.falha = true;
+    h.asks.add('req-1');
+    expect(await h.svc.onAsk(work, 'req-1', [{ question: 'Qual?', options: ['a'] }])).toBe(false);
+    const t = await h.task();
+    expect(t).toMatchObject({ questionCount: 1, question: { id: 'req-1', status: 'escalated' } });
+    expect(t.question!.managerSession).toBeUndefined();
+  });
+
+  it('answerQuestion: quem não pediu, ou fala de outra conversa, leva 403; id errado, 400', async () => {
+    const h = await pedida('d-403');
+    const work = (await h.task()).sessionId!;
+    h.asks.add('req-1');
+    await h.svc.onAsk(work, 'req-1', [{ question: 'Qual?', options: ['a', 'b'] }]);
+    const t = await h.task();
+    const body = { questionId: 'req-1', answers: { 'Qual?': 'a' } };
+    await expect(h.svc.answerQuestion('p', t.id, null, body)).rejects.toBeInstanceOf(TaskForbiddenError);
+    await expect(h.svc.answerQuestion('p', t.id, { staffId: 'ana-1', sessionId: t.question!.managerSession! }, body)).rejects.toBeInstanceOf(TaskForbiddenError);
+    await expect(h.svc.answerQuestion('p', t.id, { staffId: 'gio-1', sessionId: 'outra' }, body)).rejects.toBeInstanceOf(TaskForbiddenError);
+    await expect(h.svc.answerQuestion('p', t.id, { staffId: 'gio-1', sessionId: t.question!.managerSession! }, { ...body, questionId: 'outra' })).rejects.toThrow('não há essa dúvida');
+    expect(h.answeredAsks).toEqual([]);
+  });
+
+  it('answerQuestion numa pergunta por opções chama answerAsk e fecha como resposta do gestor', async () => {
+    const h = await pedida('d-ok-ask');
+    const work = (await h.task()).sessionId!;
+    h.asks.add('req-1');
+    await h.svc.onAsk(work, 'req-1', [{ question: 'Qual?', options: ['a', 'b'] }]);
+    const t = await h.task();
+    const answers = { 'Qual?': 'a' };
+    const out = await h.svc.answerQuestion('p', t.id, { staffId: 'gio-1', sessionId: t.question!.managerSession! }, { questionId: 'req-1', answers });
+    expect(h.answeredAsks).toEqual([{ sessionId: work, requestId: 'req-1', answers }]);
+    expect(out?.question).toMatchObject({ status: 'answered', answeredBy: 'manager', answer: 'Qual?: a' });
+  });
+
+  it('pergunta por opções que já não está aberta na conversa: 409', async () => {
+    const h = await pedida('d-409');
+    const work = (await h.task()).sessionId!;
+    h.asks.add('req-1');
+    await h.svc.onAsk(work, 'req-1', [{ question: 'Qual?', options: ['a'] }]);
+    const t = await h.task();
+    h.asks.delete('req-1'); // sumiu da conversa (já respondida ali, ou o processo caiu)
+    await expect(
+      h.svc.answerQuestion('p', t.id, { staffId: 'gio-1', sessionId: t.question!.managerSession! }, { questionId: 'req-1', answers: { 'Qual?': 'a' } }),
+    ).rejects.toBeInstanceOf(TaskConflictError);
+  });
+
+  it('dúvida escrita: a resposta do gestor vai ao funcionário como mensagem', async () => {
+    const h = await pedida('d-texto');
+    const before = await h.task();
+    const work = before.sessionId!;
+    h.lastTexts[work] = 'Até aqui ok.\nDÚVIDA: devo mexer no SPEC?';
+    await h.svc.onTurnDone(work);
+    const q = (await h.task()).question!;
+    expect(q).toMatchObject({ source: 'text', status: 'open', text: 'DÚVIDA: devo mexer no SPEC?' });
+
+    const out = await h.svc.answerQuestion('p', before.id, { staffId: 'gio-1', sessionId: q.managerSession! }, { questionId: q.id, text: 'Não, só o código.' });
+    expect(h.delivered).toEqual([{ sessionId: work, text: 'Resposta de Giovana à sua dúvida: Não, só o código.' }]);
+    expect(out?.question).toMatchObject({ status: 'answered', answeredBy: 'manager' });
+  });
+
+  it('escalate: a dúvida passa para você, e nada vai à conversa do funcionário', async () => {
+    const h = await pedida('d-escala');
+    const work = (await h.task()).sessionId!;
+    h.asks.add('req-1');
+    await h.svc.onAsk(work, 'req-1', [{ question: 'Apagar a base?', options: ['sim', 'não'] }]);
+    const t = await h.task();
+    const out = await h.svc.answerQuestion('p', t.id, { staffId: 'gio-1', sessionId: t.question!.managerSession! }, { questionId: 'req-1', escalate: true });
+    expect(out?.question).toMatchObject({ status: 'escalated' });
+    expect(h.answeredAsks).toEqual([]);
+    expect(h.delivered).toEqual([]);
+  });
+
+  it('respondida pelo usuário no chat: o gestor que tentar depois leva 409 com o resumo', async () => {
+    const h = await pedida('d-usuario');
+    const work = (await h.task()).sessionId!;
+    h.asks.add('req-1');
+    await h.svc.onAsk(work, 'req-1', [{ question: 'Qual?', options: ['a'] }]);
+    const t = await h.task();
+    await h.svc.onAskAnswered(work, 'req-1', 'user', 'Postgres');
+    const fechada = (await h.task()).question!;
+    expect(fechada).toMatchObject({ status: 'answered', answeredBy: 'user', answer: 'Postgres' });
+
+    // Repetida (ou de outro lado), não muda nada.
+    await h.svc.onAskAnswered(work, 'req-1', 'manager', 'MySQL');
+    expect((await h.task()).question).toMatchObject({ answeredBy: 'user', answer: 'Postgres', answeredAt: fechada.answeredAt });
+
+    const body = { questionId: 'req-1', answers: { 'Qual?': 'a' } };
+    const gestor = { staffId: 'gio-1', sessionId: t.question!.managerSession! };
+    await expect(h.svc.answerQuestion('p', t.id, gestor, body)).rejects.toBeInstanceOf(TaskConflictError);
+    await expect(h.svc.answerQuestion('p', t.id, gestor, body)).rejects.toThrow('o usuário já respondeu: Postgres');
+    expect(h.answeredAsks).toEqual([]);
+  });
+
+  it('DÚVIDA: no fim do turno segura a entrega; o turno seguinte sem marcador fecha a dúvida e entrega', async () => {
+    const h = await pedida('d-segura');
+    const work = (await h.task()).sessionId!;
+    h.lastTexts[work] = '**Dúvida:** o endpoint é público?\nAté lá, sigo.';
+    await h.svc.onTurnDone(work);
+    await h.svc.onTurnDone(work); // o mesmo turno de novo: não abre outra dúvida
+    expect(await h.task()).toMatchObject({ status: 'doing', questionCount: 1, question: { source: 'text', status: 'open' } });
+    expect((await h.task()).question!.text).toBe('**Dúvida:** o endpoint é público?\nAté lá, sigo.');
+
+    h.lastTexts[work] = 'Segui com o SPEC.';
+    await h.svc.onTurnDone(work);
+    expect(await h.task()).toMatchObject({ status: 'review', question: { status: 'answered', answeredBy: 'user' } });
+  });
+
+  it('tarefa com dúvida ao gestor não é órfã: a conversa parada de propósito não é retomada', async () => {
+    const h = await pedida('d-orfa');
+    const work = (await h.task()).sessionId!;
+    h.asks.add('req-1');
+    await h.svc.onAsk(work, 'req-1', [{ question: 'Qual?', options: ['a'] }]);
+    await h.svc.tick(new Date(Date.now() + 5 * 60_000)); // passou do ORPHAN_MS, mas não do prazo da dúvida
+    expect(h.delivered).toEqual([]);
+    const t = await h.task();
+    expect(t).toMatchObject({ status: 'doing', question: { status: 'open' } });
+    expect(t.resumedAt).toBeFalsy();
+  });
+
+  it('dúvida sem resposta do gestor em 15 min escala para você; a demora não conta como resposta', async () => {
+    const h = await pedida('d-prazo');
+    const work = (await h.task()).sessionId!;
+    h.asks.add('req-1');
+    await h.svc.onAsk(work, 'req-1', [{ question: 'Qual?', options: ['a'] }]);
+    await h.svc.tick(new Date(Date.now() + 16 * 60_000));
+    const t = await h.task();
+    expect(t.question).toMatchObject({ status: 'escalated' });
+    expect(t.question!.answeredBy).toBeUndefined();
+    expect(t.history.at(-1)?.note).toBe('dúvida sem resposta do gestor no prazo: vai para você');
+    expect(h.delivered).toEqual([]);
+  });
+
+  it('no reinício, a pergunta por opções que ficou aberta vira dúvida escrita; a resposta do gestor chega como mensagem', async () => {
+    const dir = path.join(root, 'd-reinicio');
+    await fs.mkdir(path.join(dir, '.myco'), { recursive: true });
+    const antes = new Date(Date.now() - 60_000).toISOString();
+    const tarefa = {
+      id: 't-old', title: 'Antiga', description: '', status: 'doing', staffId: 'ana-1', sessionId: 'ana-sess', plan: null, branch: null, pr: null,
+      createdAt: antes, updatedAt: antes, history: [], requestedBy: 'gio-1', requestedSession: 'gio-s', questionCount: 1,
+      question: { id: 'req-old', source: 'ask', questions: [{ question: 'Qual?', options: ['a'] }], status: 'open', askedAt: antes, managerSession: 'gio-old' },
+    };
+    await fs.writeFile(path.join(dir, '.myco', 'tasks.json'), JSON.stringify([tarefa]));
+    const delivered: Array<{ sessionId: string; text: string }> = [];
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => people[id] ?? null,
+      send: async () => 'nova',
+      branchFor: async () => null,
+      sendTo: async (_p, sessionId, _s, text) => {
+        delivered.push({ sessionId, text });
+        return sessionId;
+      },
+      hasAsk: () => false,
+      apiUrl: 'http://127.0.0.1:4848',
+    });
+    const t = (await svc.list('p'))![0]!;
+    expect(t.question).toMatchObject({ id: 'req-old', source: 'text', status: 'open' });
+    expect(t.history.at(-1)?.note).toBe('dúvida de antes do reinício: a resposta do gestor chega como mensagem');
+
+    await expect(
+      svc.answerQuestion('p', 't-old', { staffId: 'gio-1', sessionId: 'gio-old' }, { questionId: 'req-old', text: 'Use a' }),
+    ).resolves.toMatchObject({ question: { status: 'answered', answeredBy: 'manager' } });
+    expect(delivered).toEqual([{ sessionId: 'ana-sess', text: 'Resposta de Giovana à sua dúvida: Use a' }]);
+  });
+
+  it('a URL da dúvida segue o motor da ficha do gestor: Codex, a da sandbox; Claude, a da API local', async () => {
+    const codex = await pedida('d-url-codex', { engine: 'codex' });
+    codex.asks.add('req-1');
+    await codex.svc.onAsk((await codex.task()).sessionId!, 'req-1', [{ question: 'Qual?', options: ['a'] }]);
+    expect(codex.sent.at(-1)!.text).toContain('POST http://127.0.0.2:4848/api/projects/p/tasks/');
+    expect(codex.sent.at(-1)!.text).not.toContain('127.0.0.1');
+
+    const claude = await pedida('d-url-claude');
+    claude.asks.add('req-1');
+    await claude.svc.onAsk((await claude.task()).sessionId!, 'req-1', [{ question: 'Qual?', options: ['a'] }]);
+    expect(claude.sent.at(-1)!.text).toContain('POST http://127.0.0.1:4848/api/projects/p/tasks/');
+    expect(claude.sent.at(-1)!.text).not.toContain('127.0.0.2');
   });
 });

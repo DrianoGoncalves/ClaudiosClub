@@ -11,6 +11,7 @@ import type { ToolAdapter } from '../server/adapters/types';
 import {
   buildClaudeArgs,
   capAutonomy,
+  MANUAL_DIR,
   renderFicha,
   systemPrompt,
   sanitizeArg,
@@ -19,6 +20,7 @@ import {
   tabTitleSnippet,
   type FichaContext,
 } from '../server/staff/ficha';
+import { ROOT } from '../server/root';
 import { buildMcpConfig, listMcpServers } from '../server/staff/mcp';
 import { StaffError, StaffService } from '../server/staff/service';
 import { readProfile, saveChatChoice, writeAtomic } from '../server/staff/store';
@@ -237,6 +239,7 @@ describe('ficha', () => {
       'Olá', '--session-id', 'uuid-1', '--name', 'Ana Revisora Souza - Revisora 100',
       '--append-system-prompt-file', 'C:\\run\\system.md', '--exclude-dynamic-system-prompt-sections',
       '--permission-mode', 'plan', '--model', 'opus', '--effort', 'high',
+      '--add-dir', MANUAL_DIR,
       '--no-chrome', '--disallowedTools', secretDenyRules(profile()).join(','),
     ]);
     const withChrome = buildClaudeArgs(profile({ browser: true }), { sessionId: 'u', resume: false, systemPromptFile: 'S', mcpConfigPath: null, firstPrompt: null });
@@ -253,6 +256,41 @@ describe('ficha', () => {
     const resumed = buildClaudeArgs(profile(), { sessionId: 'uuid-1', resume: true, systemPromptFile: 'S', mcpConfigPath: 'C:\\m.json', firstPrompt: 'Olá' });
     expect(resumed.slice(0, 2)).toEqual(['--resume', 'uuid-1']);
     expect(resumed.slice(-3)).toEqual(['--mcp-config', 'C:\\m.json', '--strict-mcp-config']);
+  });
+
+  it('navegador liberado sem prompt só a partir de acceptEdits', () => {
+    const opts = { sessionId: 'u', resume: false, systemPromptFile: 'S', mcpConfigPath: null, firstPrompt: null };
+    const edita = buildClaudeArgs(profile({ browser: true, autonomy: 'acceptEdits' }), opts);
+    const i = edita.indexOf('--allowedTools');
+    expect(i).toBeGreaterThan(-1);
+    expect(edita[i + 1]).toBe('mcp__claude-in-chrome');
+    expect(buildClaudeArgs(profile({ browser: true, autonomy: 'manual' }), opts)).not.toContain('--allowedTools');
+    expect(buildClaudeArgs(profile({ autonomy: 'acceptEdits' }), opts)).not.toContain('--allowedTools');
+  });
+
+  it('manual de uso: a ficha manda consultar docs/uso (só leitura); a sessão lê por --add-dir e não edita pelas regras de negação', () => {
+    const readme = path.join(ROOT, 'docs', 'uso', 'README.md').replace(/\\/g, '/');
+    const md = renderFicha(profile(), ctx);
+    const section = md.slice(md.indexOf('## Manual do Claudio’s Club'), md.indexOf('## Regras'));
+    expect(section).toContain(`\`${readme}\` (só leitura)`);
+    expect(section).toContain('diga que não sabe');
+    // Mesma seção com servidor e com retomada: vem sempre.
+    expect(renderFicha(profile({ servers: ['prod'] }), { ...ctx, servers: [{ name: 'prod', source: 'vps', protocol: 'ssh', host: 'vps-a', remoteRoot: '/x' }] })).toContain('## Manual do Claudio’s Club');
+
+    // Sempre no --add-dir, junto das pastas que a sessão já tinha (a ficha, quando roda numa worktree).
+    const away = buildClaudeArgs(profile(), { sessionId: 's', resume: true, systemPromptFile: 'S', mcpConfigPath: null, firstPrompt: null, addDirs: ['C:\\www\\painel\\.myco\\staff'] });
+    const i = away.indexOf('--add-dir');
+    expect(away.slice(i + 1, i + 3)).toEqual(['C:\\www\\painel\\.myco\\staff', MANUAL_DIR]);
+    const plain = buildClaudeArgs(profile(), { sessionId: 's', resume: false, systemPromptFile: 'S', mcpConfigPath: null, firstPrompt: null });
+    expect(plain.slice(plain.indexOf('--add-dir') + 1, plain.indexOf('--add-dir') + 2)).toEqual([MANUAL_DIR]);
+
+    // Edição negada (Edit, Write, NotebookEdit), sem servidor e com servidor; leitura não é negada (é o que a sessão precisa).
+    for (const deny of [secretDenyRules(profile()), secretDenyRules(profile({ servers: ['prod'] }))]) {
+      for (const tool of ['Edit', 'Write', 'NotebookEdit']) {
+        expect(deny).toContainEqual(expect.stringMatching(new RegExp(`^${tool}\\(.*/docs/uso/\\*\\*\\)$`)));
+      }
+      expect(deny.some((r) => r.startsWith('Read(') && r.includes('docs/uso'))).toBe(false);
+    }
   });
 
   it('subfuncionário não passa da autonomia do gestor', () => {

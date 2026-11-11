@@ -585,6 +585,32 @@ export interface Task {
   checkpoint?: { sha: string; at: string } | null;
   /** Entrega (quando foi para revisão): o resumo da conversa e, se a ficha pediu, o porquê de cada arquivo. */
   delivery?: TaskDelivery;
+  /** Dúvida do funcionário numa tarefa pedida por gestor: vai para o gestor (ou, escalada, para você). A mais recente. */
+  question?: TaskQuestion;
+  /** Quantas dúvidas a tarefa já levou ao gestor (no máximo 3). */
+  questionCount?: number;
+}
+
+/**
+ * Dúvida de uma tarefa pedida por gestor. `ask`: a pergunta com opções (AskUserQuestion); `text`: a linha `DÚVIDA:` do
+ * funcionário. Ver TaskService.onAsk e answerQuestion.
+ */
+export interface TaskQuestion {
+  /** requestId do AskUserQuestion, ou `q-` + aleatório na dúvida escrita. */
+  id: string;
+  source: 'ask' | 'text';
+  questions?: Array<{ question: string; options: string[]; multiSelect?: boolean }>;
+  /** Da dúvida escrita: do marcador até o fim, cortado em ~2000 caracteres. */
+  text?: string;
+  /** open: com o gestor; escalated: com você; answered: resolvida. */
+  status: 'open' | 'escalated' | 'answered';
+  askedAt: string;
+  /** Conversa nova do gestor em que a dúvida chegou. */
+  managerSession?: string;
+  answeredBy?: 'manager' | 'user';
+  answeredAt?: string;
+  /** Resumo curto da resposta. */
+  answer?: string;
 }
 
 export interface TaskDelivery {

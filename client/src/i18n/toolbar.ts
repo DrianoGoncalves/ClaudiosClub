@@ -58,6 +58,10 @@ export default defineMessages({
     'toolbar.sysmonDesc':
       'Mostra no canto superior direito o uso de CPU e de RAM da máquina inteira, atualizado a cada 5 s. Fica em vermelho a partir de 85% de CPU ou 90% de RAM. Vale para este navegador.',
     'toolbar.sysmonKeywords': 'cpu memoria ram lento desempenho monitor processador',
+    'toolbar.manualTitle': 'Manual',
+    'toolbar.manualDesc': 'Guia visual de como usar o Clube dos Claudios, com telas e passo a passo. Abre em outra aba e está só em português.',
+    'toolbar.manualKeywords': 'manual guia ajuda tutorial como usar passo a passo documentação',
+    'toolbar.manualOpen': 'Abrir o manual',
     'toolbar.sysmonLabel': 'Uso de CPU e memória da máquina',
     'toolbar.pairTitle': 'Pareamento deste navegador',
     'toolbar.pairDesc':
@@ -332,6 +336,10 @@ export default defineMessages({
     'toolbar.sysmonDesc':
       'Shows the whole machine’s CPU and RAM usage in the top-right corner, refreshed every 5 s. Turns red from 85% CPU or 90% RAM. Applies to this browser.',
     'toolbar.sysmonKeywords': 'cpu memory ram slow performance monitor processor',
+    'toolbar.manualTitle': 'Manual',
+    'toolbar.manualDesc': 'Visual guide to using Claudio’s Club, with screens and step by step. Opens in a new tab and is available in Portuguese only.',
+    'toolbar.manualKeywords': 'manual guide help tutorial how to use step by step documentation',
+    'toolbar.manualOpen': 'Open the manual',
     'toolbar.sysmonLabel': 'Machine CPU and memory usage',
     'toolbar.pairTitle': 'Browser pairing',
     'toolbar.pairDesc':
@@ -602,6 +610,10 @@ export default defineMessages({
     'toolbar.sysmonDesc':
       'Muestra en la esquina superior derecha el uso de CPU y RAM de toda la máquina, actualizado cada 5 s. Se pone en rojo desde 85% de CPU o 90% de RAM. Vale para este navegador.',
     'toolbar.sysmonKeywords': 'cpu memoria ram lento rendimiento monitor procesador',
+    'toolbar.manualTitle': 'Manual',
+    'toolbar.manualDesc': 'Guía visual para usar el Club de los Claudios, con pantallas y paso a paso. Se abre en otra pestaña y está solo en portugués.',
+    'toolbar.manualKeywords': 'manual guía ayuda tutorial cómo usar paso a paso documentación',
+    'toolbar.manualOpen': 'Abrir el manual',
     'toolbar.sysmonLabel': 'Uso de CPU y memoria de la máquina',
     'toolbar.pairTitle': 'Emparejamiento de este navegador',
     'toolbar.pairDesc':

@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type {
+  AskedQuestion,
   Autonomy,
   ChatAttachment,
   ChatCommand,
@@ -20,6 +21,7 @@ import type {
   RewindPreview,
   SendPriority,
   StaffProfile,
+  TaskQuestion,
   UsageLimit,
 } from '../../shared/model';
 import { writeAtomic } from '../staff/store';
@@ -30,6 +32,7 @@ import type { CodexEnvStatus } from '../codexEnv';
 import type { CodexModelInfo } from '../codexModels';
 import { CodexProcess } from './codexProcess';
 import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
+import { cleanAnswers } from './questions';
 import { finalQuestion } from './question';
 import { CEILING_AT, contextNotice, kTokens, NOTICE_AT, rereadUsd, switchDecision, usd, type TurnInfo } from './contextPolicy';
 import { BOOST_NOTICE, CONTEXT_NOTICE, STAFF_NOTICE } from './items';
@@ -110,6 +113,10 @@ export interface ChatManagerOptions {
   onPlanApproved?: (sessionId: string, plan: string) => void;
   /** Você recusou o plano de uma conversa (a tarefa dela sai da fila e vai para Aguardar). */
   onPlanRejected?: (sessionId: string) => void;
+  /** Uma pergunta só de escolhas (AskUserQuestion) espera resposta numa conversa (a dúvida da tarefa dela vai ao gestor). */
+  onAsk?: (sessionId: string, requestId: string, questions: NonNullable<TaskQuestion['questions']>) => void;
+  /** Uma pergunta (AskUserQuestion) foi respondida, recusada ou pulada: `by` diz quem fechou, `summary` é o resumo para a tarefa. */
+  onAskAnswered?: (sessionId: string, requestId: string, by: 'manager' | 'user', summary: string) => void;
   /** Uma mensagem sua foi para a conversa (a tarefa dela volta para "fazendo"). */
   onSent?: (sessionId: string) => void;
   /** Uma conversa parou de trabalhar (a fila de tarefas do funcionário anda). */
@@ -155,6 +162,17 @@ function holdMessage(o: NonNullable<ChatSnapshot['elsewhere']>): string {
   if (o.orphan) return `ficou um processo do Claudio’s Club de antes do reinício do servidor (pid ${o.pid}): clique em Trazer para encerrá-lo`;
   const where = o.entrypoint === 'claude-desktop' ? 'no app do Claude' : o.entrypoint === 'sdk-cli' ? 'em outro programa (sdk-cli)' : 'num terminal';
   return `a sessão continua aberta ${where} (pid ${o.pid}): feche lá e tente de novo`;
+}
+
+/**
+ * O que a tarefa guarda da pergunta: uma resposta por linha (`pergunta: opção`). Sem resposta, "pulou" (aprovou sem escolher)
+ * ou "recusou" (negou).
+ */
+function askSummary(questions: AskedQuestion[], allow: boolean, answers: QuestionAnswers | undefined): string {
+  if (!allow) return 'recusou a pergunta';
+  const given = cleanAnswers(questions, answers, undefined).answers;
+  const lines = Object.entries(given).map(([pergunta, a]) => `${pergunta}: ${Array.isArray(a) ? a.join(', ') : a}`);
+  return lines.length ? lines.join('\n') : 'pulou a pergunta';
 }
 
 /** Valor de uma opção na linha de comando (`--model opus` → 'opus'), ou null. */
@@ -735,14 +753,22 @@ export class ChatManager {
     return chat.sessionId;
   }
 
+  /** Há pedido (permissão ou pergunta) com este id sem resposta nesta conversa. */
+  hasPending(sessionId: string, requestId: string): boolean {
+    return this.chats.get(sessionId)?.hasPending(requestId) ?? false;
+  }
+
+  /** Responde um pedido. Só com o pedido pendente é que os ganchos rodam (`by`: quem responde; padrão, você). */
   answer(
     sessionId: string,
     requestId: string,
     allow: boolean,
-    opts: { message?: string; executeAs?: Autonomy; reject?: boolean; remember?: Remember; answers?: QuestionAnswers; annotations?: QuestionAnnotations } = {},
+    opts: { message?: string; executeAs?: Autonomy; reject?: boolean; remember?: Remember; answers?: QuestionAnswers; annotations?: QuestionAnnotations; by?: 'manager' | 'user' } = {},
   ): boolean {
     const chat = this.chats.get(sessionId);
-    const plan = chat?.pendingPermissions().find((p) => p.id === `p:${requestId}`)?.plan;
+    const pending = chat?.pendingPermissions().find((p) => p.id === `p:${requestId}`);
+    const plan = pending?.plan;
+    const asked = pending?.questions;
     // Recusar um plano é de vez: o texto que o funcionário lê é fixo (não vai o que foi digitado na tela).
     const rejectPlan = !allow && !!opts.reject && plan !== undefined;
     const message = rejectPlan ? PLAN_REJECTED_MESSAGE : opts.message;
@@ -750,6 +776,7 @@ export class ChatManager {
     if (allow && opts.executeAs) chat.setPermissionMode(CLI_MODE[opts.executeAs], `Executando como: ${AUTONOMY_NAME[opts.executeAs]}`);
     if (allow && plan !== undefined) this.opts.onPlanApproved?.(sessionId, plan);
     if (rejectPlan) this.opts.onPlanRejected?.(sessionId);
+    if (asked) this.opts.onAskAnswered?.(sessionId, requestId, opts.by ?? 'user', askSummary(asked, allow, opts.answers));
     return true;
   }
 
@@ -972,6 +999,7 @@ export class ChatManager {
         this.opts.onIdle?.(spawn.sessionId, projectId, staffId, reason);
       },
       onCommands: (commands) => this.commands.set(projectId, commands),
+      onAsk: (requestId, questions) => this.opts.onAsk?.(spawn.sessionId, requestId, questions),
       // Quem ela é para a API: o mesmo token em toda execução da conversa (o Codex abre uma por mensagem), regerado se o servidor reiniciou.
       mycoToken: this.opts.tokens?.issue({ staffId, projectId, sessionId: spawn.sessionId, engine: codex ? 'codex' : 'claude' }),
       onExit: (pid, error) => {
