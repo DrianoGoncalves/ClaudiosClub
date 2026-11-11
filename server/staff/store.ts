@@ -150,6 +150,8 @@ const ProfileSchema = StaffInputObject.omit({ portraitDataUrl: true, launch: tru
         // O que se escolheu no chat nesta conversa; valor inválido é ignorado.
         model: ModelSchema.optional().catch(undefined),
         effort: CodexEffortSchema.optional().catch(undefined),
+        // Conversa trocada para o secundário (ver server/directFallback.ts): motor, modelo e esforço. O boot confere com a ficha atual.
+        fallback: FallbackSchema.optional().catch(undefined),
       }),
     )
     .default([]),

@@ -77,6 +77,9 @@ export default defineMessages({
     'chat.mergeHelp': 'Testa o resultado e mescla; teste vermelho desfaz',
 
     'chat.moreOptions': 'Mais opções',
+    'chat.fallbackNoticeTitle': 'Conversa no motor secundário',
+    'chat.fallbackNoticeText': 'O limite de uso do {from} foi atingido. Esta conversa com {name} passou para o motor secundário: {engine} · {model}. A conversa anterior continua no histórico.',
+    'chat.fallbackDontWarn': 'Não avisar nesta sessão',
     'chat.fallbackBadge': 'No motor secundário: {engine} · {model}',
     'chat.fallbackMessage': 'secundário: {engine}',
     'chat.fallbackModelHint': 'Modelo: {model}',
@@ -285,6 +288,9 @@ export default defineMessages({
     'chat.mergeHelp': 'Tests the result and merges; a failing test undoes it',
 
     'chat.moreOptions': 'More options',
+    'chat.fallbackNoticeTitle': 'Conversation on the secondary engine',
+    'chat.fallbackNoticeText': 'The {from} usage limit was reached. This conversation with {name} moved to the secondary engine: {engine} · {model}. The previous conversation stays in the history.',
+    'chat.fallbackDontWarn': 'Don’t warn this session',
     'chat.fallbackBadge': 'On the secondary engine: {engine} · {model}',
     'chat.fallbackMessage': 'secondary: {engine}',
     'chat.fallbackModelHint': 'Model: {model}',
@@ -493,6 +499,9 @@ export default defineMessages({
     'chat.mergeHelp': 'Prueba el resultado y fusiona; si una prueba falla, lo deshace',
 
     'chat.moreOptions': 'Más opciones',
+    'chat.fallbackNoticeTitle': 'Conversación en el motor secundario',
+    'chat.fallbackNoticeText': 'Se alcanzó el límite de uso de {from}. Esta conversación con {name} pasó al motor secundario: {engine} · {model}. La conversación anterior sigue en el historial.',
+    'chat.fallbackDontWarn': 'No avisar en esta sesión',
     'chat.fallbackBadge': 'En el motor secundario: {engine} · {model}',
     'chat.fallbackMessage': 'secundario: {engine}',
     'chat.fallbackModelHint': 'Modelo: {model}',

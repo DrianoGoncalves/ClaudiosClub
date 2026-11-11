@@ -737,7 +737,7 @@ export interface StaffProfile {
    * sessão roda (a worktree, se a ficha pede uma): retomar exige a mesma pasta. `model`/`effort`: o
    * que foi escolhido no chat desta conversa (vale ao reabrir); ausente = o da ficha.
    */
-  sessions: { id: string; startedAt: string; cwd?: string; model?: string; effort?: CodexEffort }[];
+  sessions: { id: string; startedAt: string; cwd?: string; model?: string; effort?: CodexEffort; fallback?: { engine: Engine; model: string; effort?: CodexEffort } }[];
   createdAt: string;
   updatedAt: string;
 }

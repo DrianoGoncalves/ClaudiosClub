@@ -53,6 +53,7 @@ import { HrPanel } from './staff/HrPanel';
 import { FilesBoard } from './files/FilesBoard';
 import { SchedulesBoard } from './schedules/SchedulesBoard';
 import { TasksBoard } from './tasks/TasksBoard';
+import { UsageWarnings } from './chat/usageWarning';
 import { UncommittedPanel } from './board/UncommittedPanel';
 
 const ARCHIVED_KEY = 'myco.showArchived';
@@ -766,6 +767,7 @@ export function App() {
         />
       )}
       <SystemMonitor />
+      <UsageWarnings />
       {needsPairing ? (
         <div className="notice notice-pair" role="alert">
           <strong>{t('toolbar.pairNotice')}</strong>

@@ -853,6 +853,11 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 :root[data-theme='dark'] :is(.btn-primary, .workspace-pending, .inbox-count) { color: #10161f; }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 18, 20, 0.45); display: grid; place-items: center; z-index: 20; padding: 16px; }
 .modal { position: relative; width: min(720px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px 18px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25); display: grid; gap: 12px; }
+.usage-warning { width: min(440px, 100%); min-width: 0; box-sizing: border-box; }
+.usage-warning h2 { padding-right: 28px; }
+.usage-warning p { margin: 0; }
+.usage-warning-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+@media (max-width: 640px) { .usage-warning-actions { flex-direction: column-reverse; } .usage-warning-actions :is(.btn-primary, .btn-secondary) { min-height: 36px; } }
 .modal h2 { margin: 0; font-family: var(--hand); font-size: 34px; line-height: 1; }
 /* Campos do modal; o formulário de conexão do projeto (no drawer) usa o mesmo desenho. */
 :is(.modal, .conn-form, .hire-inline) label { display: grid; gap: 4px; font-size: 13px; font-weight: 600; }

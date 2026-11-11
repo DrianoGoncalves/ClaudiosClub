@@ -779,6 +779,32 @@ export class ChatManager {
     return !!chat?.running && chat.working;
   }
 
+  /**
+   * As conversas do Codex abertas, como sessões vivas. O Codex não grava ~/.claude/sessions, então sem isto o quadro não mostra o
+   * "trabalhando" delas. `claude` são as sessões do adapter: o que já está lá (pelo id) fica de fora, para não duplicar.
+   * `pid`: o processo da execução em andamento; 0 entre as mensagens (o Codex não mantém processo aberto entre elas).
+   */
+  codexLive(claude: LiveSession[]): LiveSession[] {
+    const known = new Set(claude.map((s) => s.sessionId));
+    const out: LiveSession[] = [];
+    for (const c of this.chats.values()) {
+      if (!c.running || c.engine !== 'codex' || known.has(c.sessionId)) continue;
+      out.push({
+        sessionId: c.sessionId,
+        pid: c.pid ?? 0,
+        cwd: c.cwd,
+        name: null,
+        status: c.working ? 'busy' : 'idle',
+        alive: true,
+        entrypoint: null,
+        kind: null,
+        startedAt: c.startedAt,
+        statusUpdatedAt: new Date(c.lastActivity).toISOString(),
+      });
+    }
+    return out;
+  }
+
   /** Conversas paradas numa pergunta para você, para a caixa "precisa de mim". */
   pendingQuestions(): Array<{ sessionId: string; text: string; at: string; itemId?: string }> {
     return this.inbox.questions();
@@ -1125,6 +1151,11 @@ export class ChatManager {
   /** Tira o motor secundário da conversa (a tarefa fechou, ou a conversa deixou de ser a dela). */
   clearOverride(sessionId: string): void {
     this.overrides.delete(sessionId);
+  }
+
+  /** O motor/modelo secundário com que a conversa roda agora (undefined = no motor da ficha). */
+  overrideOf(sessionId: string): EngineOverride | undefined {
+    return this.overrides.get(sessionId);
   }
 
   /**

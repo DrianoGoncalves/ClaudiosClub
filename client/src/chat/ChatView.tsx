@@ -81,7 +81,7 @@ export interface MoreTab {
 
 /** Conversa com o funcionário dentro do Claudio’s Club, sem terminal. */
 export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, engine = 'claude', top, moreTabs = [], focus = null, onFocusDone, awaiting = false, projectRoot, onOpenFile }: Props) {
-  const chat = useChat(projectId, sessionId, staffId);
+  const chat = useChat(projectId, sessionId, staffId, name);
   const todos = useMemo(() => todosFrom(chat.items), [chat.items]);
   useEffect(() => {
     if (chat.sessionId && chat.sessionId !== sessionId) onSessionStarted?.(chat.sessionId);

@@ -437,7 +437,7 @@ export class TaskService {
 
   /**
    * As linhas de quem pediu a tarefa: "Pedida por…" e, quando dá, a dúvida ao gestor. `engine`: o motor EFETIVO da conversa
-   * (o do override, quando há). No Codex não há linha de dúvida: a sandbox não fala com subordinados (`mayReach`, service.ts).
+   * (o do override, quando há). O Codex recebe a URL acessível pela sandbox.
    */
   private async requesterLines(projectId: string, task: Task, engine: Engine): Promise<string[]> {
     const manager = task.requestedBy ? await this.deps.readProfile(projectId, task.requestedBy) : null;
@@ -1185,6 +1185,18 @@ export class TaskService {
   /** A conversa é de uma tarefa (o trabalho, a revisão ou o deploy dela)? */
   async isTaskSession(sessionId: string): Promise<boolean> {
     return !!(await this.where(sessionId));
+  }
+
+  /**
+   * A conversa é de tarefa, ativa ou não: a de trabalho, revisão ou deploy; as retiradas (antes de um reinício); e a antiga de
+   * uma troca de motor (que depois do reinício já não está no índice). O envio direto (server/directFallback.ts) não mexe nelas.
+   */
+  async isTaskConversation(sessionId: string): Promise<boolean> {
+    if (this.retired.has(sessionId) || (await this.isTaskSession(sessionId))) return true;
+    for (const projectId of await this.deps.projectIds()) {
+      if ((await this.list(projectId) ?? []).some((t) => t.fallback?.fromSession === sessionId)) return true;
+    }
+    return false;
   }
 
   private async where(sessionId: string) {

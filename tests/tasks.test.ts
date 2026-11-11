@@ -9,6 +9,8 @@ import { ChatManager, PLAN_REJECTED_MESSAGE } from '../server/chat/manager';
 import { parseVerdict, TaskService } from '../server/tasks';
 import { cleanRunDir } from '../server/runCleanup';
 import { UsageStopError } from '../server/usageStop';
+import { REQUESTER_ASK_INTERVAL_MS, REQUESTER_ASK_MAX_BYTES, RequesterAskLimiter } from '../server/chat/requesterAsk';
+import { isUnverifiedOrigin, staffOrigin } from '../server/chat/origin';
 
 let root: string;
 beforeAll(async () => {
@@ -50,6 +52,21 @@ describe('limpeza de ~/.myco/run', () => {
     await fs.utimes(path.join(run, 'outra-coisa'), old, old);
     expect(await cleanRunDir(run)).toBe(1);
     expect((await fs.readdir(run)).sort()).toEqual([newId, 'chats.json', 'outra-coisa'].sort());
+  });
+});
+
+describe('limites da dúvida ao gestor', () => {
+  it('conta bytes UTF-8, rejeita anexos, e limita por conversa a uma pergunta por minuto', () => {
+    const limiter = new RequesterAskLimiter();
+    expect(limiter.check('p:s1', 'pergunta', false, 1_000)).toBeNull();
+    expect(limiter.reserve('p:s1', 1_000)).not.toBeNull();
+    expect(limiter.check('p:s1', 'outra', false, 1_001)).toBe('rate-limited');
+    expect(limiter.reserve('p:s1', 1_001)).toBeNull();
+    expect(limiter.reserve('p:s2', 1_001)).not.toBeNull();
+    expect(limiter.check('p:s3', 'é'.repeat(2_048), false, 2_000)).toBeNull();
+    expect(limiter.check('p:s4', 'é'.repeat(2_049), false, 2_000)).toBe('too-large');
+    expect(limiter.check('p:s5', 'pergunta', true, 2_000)).toBe('attachments');
+    expect(limiter.check('p:s1', 'liberada após um minuto', false, 61_000)).toBeNull();
   });
 });
 
@@ -181,13 +198,15 @@ describe('tarefas por projeto', () => {
 });
 
 describe('tarefa pedida por um gestor', () => {
-  it('a dúvida vai para a conversa de quem pediu (não ao usuário); no Codex, sem a linha', async () => {
+  it('a dúvida usa a conversa exata de quem pediu, com endpoint de cada motor', async () => {
     const dir = path.join(root, 'gestor-duvida');
     const sent: Array<{ staffId: string; text: string }> = [];
     const people: Record<string, StaffProfile> = {
       'gio-1': { id: 'gio-1', name: 'Giovana', role: 'Orquestradora', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
       'lu-1': { id: 'lu-1', name: 'Luana', role: 'Design system', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
       'cx-1': { id: 'cx-1', name: 'Mick', role: 'Back-end', autonomy: 'acceptEdits', worktree: false, engine: 'codex' } as StaffProfile,
+      'ou-1': { id: 'ou-1', name: 'Outra gestora', role: 'Orquestradora', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+      'worker-2': { id: 'worker-2', name: 'Outra pessoa', role: 'Back-end', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
     };
     const svc = new TaskService({
       projectPath: async () => dir,
@@ -197,15 +216,111 @@ describe('tarefa pedida por um gestor', () => {
       branchFor: async () => null,
       requesterSession: () => 's-gio',
       apiUrl: 'http://127.0.0.1:4848',
+      sandboxApiUrl: 'http://127.0.0.2:4848',
     });
     const a = (await svc.create('p', { title: 'A', description: 'x', staffId: 'lu-1' }, 'gio-1'))!;
     const b = (await svc.create('p', { title: 'B', description: 'x', staffId: 'cx-1' }, 'gio-1'))!;
+    const c = (await svc.create('p', { title: 'C', description: 'x', staffId: 'worker-2' }, 'ou-1', 's-ou'))!;
     await svc.start('p', a.id);
     await svc.start('p', b.id);
+    await svc.start('p', c.id);
     expect(sent[0]!.text).toContain('pergunte a Giovana, não ao usuário');
     expect(sent[0]!.text).toContain('POST http://127.0.0.1:4848/api/projects/p/chat/send');
     expect(sent[0]!.text).toContain('"sessionId":"s-gio","staffId":"gio-1"');
-    expect(sent[1]!.text).not.toContain('chat/send');
+    expect(sent[1]!.text).toContain('pergunte a Giovana, não ao usuário');
+    expect(sent[1]!.text).toContain('POST http://127.0.0.2:4848/api/projects/p/chat/send');
+
+    const caller = { staffId: 'cx-1', projectId: 'p', sessionId: 's-cx-1', engine: 'codex' as const, sandbox: true };
+    const target = { sessionId: 's-gio', staffId: 'gio-1' };
+    expect(await svc.mayAskRequester('p', caller, target)).toBe(true);
+    expect(await svc.mayAskRequester('p', caller, { ...target, sessionId: 's-gio-outra' })).toBe(false);
+    expect(await svc.mayAskRequester('p', caller, { sessionId: 's-ou', staffId: 'ou-1' })).toBe(false);
+    expect(await svc.mayAskRequester('p', { ...caller, engine: 'claude', sandbox: false }, target)).toBe(false);
+
+    await svc.update('p', b.id, { status: 'done' });
+    expect(await svc.mayAskRequester('p', caller, target)).toBe(false);
+  });
+
+  it('a dúvida ao gestor só passa com a tarefa em planejamento ou execução, da mesma sessão e do mesmo funcionário, no mesmo projeto', async () => {
+    const dir = path.join(root, 'duvida-status');
+    const people: Record<string, StaffProfile> = {
+      'gio-1': { id: 'gio-1', name: 'Giovana', role: 'Orquestradora', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+      'cx-1': { id: 'cx-1', name: 'Cássio', role: 'Back-end', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+      'worker-2': { id: 'worker-2', name: 'Outra pessoa', role: 'Back-end', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+    };
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => people[id] ?? null,
+      send: async (_p, staffId) => `s-${staffId}`,
+      branchFor: async () => null,
+      requesterSession: () => 's-gio',
+      apiUrl: 'http://127.0.0.1:4848',
+      sandboxApiUrl: 'http://127.0.0.2:4848',
+    });
+    const b = (await svc.create('p', { title: 'B', description: 'x', staffId: 'cx-1' }, 'gio-1'))!;
+    await svc.start('p', b.id);
+
+    const caller = { staffId: 'cx-1', projectId: 'p', sessionId: 's-cx-1', engine: 'codex' as const, sandbox: true };
+    const target = { sessionId: 's-gio', staffId: 'gio-1' };
+    await svc.update('p', b.id, { status: 'planning' });
+    expect(await svc.mayAskRequester('p', caller, target)).toBe(true);
+
+    // Fora de planejamento e execução (a sessão da tarefa não muda), a dúvida não passa.
+    for (const status of ['review', 'waiting', 'todo'] as const) {
+      await svc.update('p', b.id, { status });
+      expect(await svc.mayAskRequester('p', caller, target)).toBe(false);
+    }
+    await svc.update('p', b.id, { status: 'doing' });
+    expect(await svc.mayAskRequester('p', caller, target)).toBe(true);
+
+    // Mesma sessão, mas outro funcionário que chama: não passa.
+    expect(await svc.mayAskRequester('p', { ...caller, staffId: 'worker-2' }, target)).toBe(false);
+    // Chamada com outro projeto: não passa.
+    expect(await svc.mayAskRequester('outro', caller, target)).toBe(false);
+    expect(await svc.mayAskRequester('p', { ...caller, projectId: 'outro' }, target)).toBe(false);
+  });
+
+  it('dúvida ao gestor: um slot por minuto para cada par de conversas; o slot volta se o envio falha', () => {
+    const limiter = new RequesterAskLimiter();
+    const key = 'p:s-cx-1:s-gio';
+    const t0 = 1_000_000;
+    expect(limiter.check(key, 'oi', false, t0)).toBeNull();
+    expect(limiter.check(key, 'oi', false, t0)).toBeNull(); // check não grava o slot
+    expect(limiter.check(key, 'x'.repeat(REQUESTER_ASK_MAX_BYTES + 1), false, t0)).toBe('too-large');
+    expect(limiter.check(key, 'oi', true, t0)).toBe('attachments');
+
+    const undo = limiter.reserve(key, t0);
+    expect(undo).not.toBeNull();
+    expect(limiter.check(key, 'oi', false, t0 + 1)).toBe('rate-limited');
+    expect(limiter.reserve(key, t0 + 1)).toBeNull();
+    // Outro funcionário, com a sua sessão, tem o seu slot.
+    expect(limiter.reserve('p:s-lu-1:s-gio', t0 + 1)).not.toBeNull();
+
+    // Envio falhou: o slot volta e a próxima tentativa passa.
+    undo!();
+    expect(limiter.reserve(key, t0 + 2)).not.toBeNull();
+    expect(limiter.check(key, 'oi', false, t0 + 2 + REQUESTER_ASK_INTERVAL_MS)).toBeNull();
+  });
+
+  it('sem a ficha de quem pergunta, o carimbo sai como não verificado; o título da tarefa não quebra a marca', async () => {
+    const people: Record<string, StaffProfile> = {
+      'cx-1': { id: 'cx-1', name: 'Cássio', role: 'Back-end' } as StaffProfile,
+    };
+    const deps = {
+      projectPath: async () => root,
+      readProfile: async (_p: string, id: string) => people[id] ?? null,
+      taskOfWork: async () => ({ id: 't-1', title: 'Abre\n"x" “y”' }),
+      mycoUrl: 'http://127.0.0.1:4848',
+      codexUrl: 'http://127.0.0.2:4848',
+    };
+    const caller = { staffId: 'cx-1', projectId: 'p', sessionId: 's-cx-1', engine: 'codex' as const, sandbox: true };
+    const ok = await staffOrigin(deps, 'p', caller, 'gio-1');
+    expect(isUnverifiedOrigin(ok)).toBe(false);
+    expect(ok).toContain('da tarefa t-1 “Abre x y”, na conversa s-cx-1');
+
+    const semFicha = await staffOrigin({ ...deps, readProfile: async () => null }, 'p', caller, 'gio-1');
+    expect(isUnverifiedOrigin(semFicha)).toBe(true);
   });
 
   it('a pessoa sabe quem pediu; na entrega, o gestor recebe o resumo para conferir', async () => {

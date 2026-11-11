@@ -46,7 +46,8 @@ const wait = (reason: string): FallbackDecision => ({ ok: false, reason });
  * trocou, o reset do limite é longo (ou desconhecido) e o secundário não está no limite. Senão, espera como antes.
  */
 export function shouldFallback(input: {
-  task: Pick<Task, 'fallback'>;
+  /** A tarefa; null na conversa direta (não tem tarefa, ver server/directFallback.ts), que ainda não trocou por definição. */
+  task: Pick<Task, 'fallback'> | null;
   profile: Pick<StaffProfile, 'fallback'>;
   /** O motor principal, o que estourou o limite. */
   engine: Engine;
@@ -58,7 +59,7 @@ export function shouldFallback(input: {
   const secondary = profile.fallback;
   if (!secondary) return wait('a ficha não tem motor secundário');
   if (secondary.engine === engine) return wait('o motor secundário é o mesmo da ficha');
-  if (task.fallback) return wait('a tarefa já trocou de motor: não troca de novo');
+  if (task?.fallback) return wait('a tarefa já trocou de motor: não troca de novo');
   if (hit.resetsAt !== null && hit.resetsAt - now <= FALLBACK_MIN_WAIT_MS) return wait('o limite volta em menos de 15 min: espera');
   if (otherEngineHit === 'unknown') return wait(`não sei se ${secondary.engine} está no limite (leitura indisponível): espera`);
   if (otherEngineHit) return wait(`${secondary.engine} também está no limite`);

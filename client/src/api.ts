@@ -19,6 +19,7 @@ import type {
   CostReviewApplyResult,
   CodexEffort,
   Effort,
+  Engine,
   FtpConnection,
   FtpConnectionInput,
   RewindPreview,
@@ -61,6 +62,7 @@ import type {
 } from '../../shared/model';
 import type { RoleEntry, RoleTemplate } from '../../shared/roles';
 import { locale, t } from './i18n';
+import { askUsageStop } from './chat/usageNotice';
 import type { GuideAction } from './detail/guideActions';
 import type { Schedule } from './schedules/scheduleView';
 import type { McpSaveBody, McpScope, McpServer } from './office/mcpForm';
@@ -175,7 +177,7 @@ export async function deleteStaffConfirm(projectId: string, staffId: string, ask
 
 /**
  * Trava de consumo: tenta sem `force`; se o servidor recusar por passar da linha de parada,
- * pergunta e, confirmado, repete com `force`. Recusado, devolve null.
+ * pergunta no modal do design system (chat/usageWarning.tsx) e, confirmado, repete com `force`. Recusado, devolve null.
  */
 export async function withUsageConfirm<T>(run: (force: boolean) => Promise<T>): Promise<T | null> {
   try {
@@ -200,8 +202,7 @@ export async function withUsageConfirm<T>(run: (force: boolean) => Promise<T>): 
         limit: h.limit,
       });
     }
-    const ok = window.confirm(`${why}${reset}\n\n${t('app.continueAnyway')}`);
-    return ok ? run(true) : null;
+    return (await askUsageStop(`${why}${reset}`)) ? run(true) : null;
   }
 }
 
@@ -475,7 +476,7 @@ export const api = {
     },
   ) =>
     /** `held`: guardada até ele terminar outra tarefa (o motivo). */
-    post<{ sessionId: string; held?: string }>(`/api/projects/${projectId}/chat/send`, body),
+    post<{ sessionId: string; held?: string; fallback?: { movedFrom: string | null; engine: Engine; model: string } }>(`/api/projects/${projectId}/chat/send`, body),
   chatCompact: (projectId: string, sessionId: string, staffId: string | null, force = false) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/chat/${sessionId}/compact`, { staffId, force }),
   chatAdopt: (sessionId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/adopt`),

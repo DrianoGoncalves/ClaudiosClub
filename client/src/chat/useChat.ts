@@ -13,6 +13,7 @@ import type {
   SendPriority,
 } from '../../../shared/model';
 import { api, ApiError, withUsageConfirm, type PermissionOpts } from '../api';
+import { announceSent } from './usageNotice';
 
 // Estado de uma conversa: histórico do transcript + o que chega ao vivo pelo SSE.
 
@@ -46,7 +47,7 @@ export interface ChatView {
   takeOver: () => Promise<void>;
 }
 
-export function useChat(projectId: string, initialSessionId: string | null, staffId: string | null): ChatView {
+export function useChat(projectId: string, initialSessionId: string | null, staffId: string | null, name: string): ChatView {
   const [sessionId, setSessionId] = useState(initialSessionId);
   const [history, setHistory] = useState<ChatItem[]>([]);
   const [live, setLive] = useState<ChatItem[]>([]);
@@ -197,6 +198,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     try {
       const r = await withUsageConfirm((force) => api.chatSend(projectId, { sessionId, staffId, text, force, priority, images, files }));
       if (!r) return false;
+      announceSent(projectId, name, r);
       // O servidor encerrou o órfão para mandar a mensagem: a conversa já está aqui.
       if (elsewhere?.orphan) setElsewhere(null);
       if (r.sessionId !== sessionId) {

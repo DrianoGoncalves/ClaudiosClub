@@ -3,8 +3,9 @@ import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } fro
 import { PLAYBOOK_AGENTS } from '../../../shared/agentPresets';
 import { colorCss, type GitState, type LiveSession, type StaffProfile } from '../../../shared/model';
 import { employeeName, ENTRYPOINT_LABEL, formatAgo, initials, STATUS_LABEL } from '../format';
-import { AgentIcon, BranchIcon, ChromeIcon, GhostIcon, McpIcon, ServerIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
+import { BranchIcon, ChromeIcon, FallbackModelIcon, GhostIcon, McpIcon, ServerIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { t } from '../i18n';
+import { engineName } from '../staff/fallbackEngine';
 import {
   HANDLE,
   SIZES,
@@ -189,7 +190,7 @@ const TOOL_ICON: Record<StaffTool, typeof BranchIcon> = {
   browser: ChromeIcon,
   servers: ServerIcon,
   canHire: UserPlusIcon,
-  agents: AgentIcon,
+  agents: SkillIcon,
   skills: SkillIcon,
   mcps: McpIcon,
 };
@@ -213,6 +214,12 @@ export function staffTools(staff: StaffProfile): Array<{ tool: StaffTool; label:
       : staff.mcps.length > 0 && { tool: 'mcps', label: t('board.toolMcps', { list: staff.mcps.join(', ') }) },
   ];
   return tools.filter((x) => x !== false);
+}
+
+export function FallbackIcon({ fallback }: { fallback?: StaffProfile['fallback'] }) {
+  if (!fallback) return null;
+  const label = t('board.secondaryEngine', { engine: t(engineName(fallback.engine)), model: fallback.model });
+  return <span title={label} aria-label={label} role="img"><FallbackModelIcon size={14} /></span>;
 }
 
 function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, 'employee'>>) {
@@ -279,8 +286,9 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
               ))}
           </div>
           {/* Ferramentas que a ficha libera, em ícones pequenos abaixo do cargo; os nomes vão no tooltip. */}
-          {tools.length > 0 && (
+          {(tools.length > 0 || staff?.fallback) && (
             <div className="bn-tools">
+              <FallbackIcon fallback={staff?.fallback} />
               {tools.map(({ tool, label }) => {
                 const Icon = TOOL_ICON[tool];
                 return (

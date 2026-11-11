@@ -1031,7 +1031,15 @@ export class StaffService {
     if (!resume) {
       const now = new Date().toISOString();
       // A cópia nasce com a escolha da origem gravada: ao reabrir depois, sai igual.
-      const entry = { id, startedAt: now, cwd, ...(forkFrom && origin?.model && { model: origin.model }), ...(forkFrom && origin?.effort && { effort: origin.effort }) };
+      // Conversa no secundário: motor, modelo e esforço ficam na entrada (o boot re-registra; ver directFallback.ts). Sem autonomia: a da ficha vale a cada abertura.
+      const entry = {
+        id,
+        startedAt: now,
+        cwd,
+        ...(forkFrom && origin?.model && { model: origin.model }),
+        ...(forkFrom && origin?.effort && { effort: origin.effort }),
+        ...(engineOverride && { fallback: { engine: engineOverride.engine, model: engineOverride.model, ...(engineOverride.effort && { effort: engineOverride.effort }) } }),
+      };
       // Ficha fresca, na fila das trocas do chat: uma troca de modelo pode ter gravado algo desde a leitura lá em cima.
       await withProfileLock(project.path, staffId, async () => {
         const fresh = (await readProfile(project.path, staffId)) ?? profile;
@@ -1179,10 +1187,6 @@ export class StaffService {
   }
 
   /**
-   * Pode `managerId` passar trabalho para `staffId`? Só para quem reporta a ele (a API não deixa um
-   * funcionário mandar tarefa para quem não é da equipe dele).
-   */
-  /**
    * A sandbox do Codex (quem chama, pelo token) pode falar com este alvo? Só com a própria conversa e com as de quem reporta a ele (`reportsTo`
    * inclui quem chama). Com conversa e funcionário juntos, os dois têm que ser da mesma pessoa. Conversa sem ficha nunca chama nem é alvo.
    */
@@ -1204,6 +1208,10 @@ export class StaffService {
     return !!person && mine(person);
   }
 
+  /**
+   * Pode `managerId` passar trabalho para `staffId`? Só para quem reporta a ele (a API não deixa um
+   * funcionário mandar tarefa para quem não é da equipe dele).
+   */
   async isManagerOf(projectId: string, managerId: string, staffId: string): Promise<boolean> {
     const project = await this.project(projectId);
     const target = project ? await readProfile(project.path, staffId) : null;
