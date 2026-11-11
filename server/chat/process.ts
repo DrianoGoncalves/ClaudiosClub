@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { AskedQuestion, BackgroundTask, ChatAttachment, ChatCommand, ChatEvent, ChatItem, ChatState, SendPriority, UsageLimit } from '../../shared/model';
-import { cleanEnv } from '../auth';
+import { cleanEnv, withoutMycoToken } from '../auth';
 import { tryJson } from '../adapters/claude/fsutil';
 import { contextWindowFor } from '../adapters/claude/pricing';
 import { cacheTtlOf } from './contextPolicy';
@@ -233,7 +233,7 @@ export class ChatProcess {
     // MYCO_SESSION_ID: o funcionário sabe o id da própria conversa (o despertador, ver wake.ts, o usa nos comandos dele). MYCO_TOKEN: quem ele é
     // para a API (cabeçalho x-myco-token nos curl da ficha, ver server/callers.ts).
     const env = {
-      ...cleanEnv(),
+      ...withoutMycoToken(cleanEnv()),
       CLAUDE_CODE_ENABLE_TODO_TOOLS: '1',
       CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1',
       MYCO_SESSION_ID: this.opts.sessionId,

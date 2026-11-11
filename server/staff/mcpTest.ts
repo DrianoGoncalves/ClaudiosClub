@@ -241,7 +241,8 @@ function testStdio(cfg: Obj, o: McpTestOptions, left: () => number, budget: numb
   return new Promise<string[]>((resolve, reject) => {
     let child: ChildProcess;
     try {
-      child = spawn(command, args, { cwd: o.cwd, env, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      // No Unix vira líder do próprio grupo: o killTree leva junto o que ele abriu (o npx/uvx sobem um processo filho).
+      child = spawn(command, args, { cwd: o.cwd, env, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     } catch {
       return reject(new TestFail('não consegui iniciar o comando'));
     }
@@ -310,11 +311,17 @@ function testStdio(cfg: Obj, o: McpTestOptions, left: () => number, budget: numb
   });
 }
 
-/** Mata o processo (e, no Windows, a árvore: o npx sobe um node filho). */
+/** Mata o processo e a árvore dele (o npx sobe um node filho): taskkill /T no Windows, o grupo no Unix. */
 function killTree(child: ChildProcess): void {
   if (child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === 'win32' && child.pid) {
     spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => {});
+  } else if (child.pid) {
+    try {
+      process.kill(-child.pid, 'SIGTERM');
+    } catch {
+      // sem grupo (já saiu): cai no kill abaixo
+    }
   }
   child.kill();
 }

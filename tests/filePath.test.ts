@@ -21,6 +21,11 @@ describe('caminho de arquivo do projeto citado na resposta', () => {
     expect(projectRelativePath('/home/a/MyCo/x.md', '/home/a/MyCo')).toBe('x.md');
   });
 
+  it('Linux/macOS: maiúsculas contam (/home/a/MyCo e /home/a/myco são pastas diferentes)', () => {
+    expect(projectRelativePath('/home/a/myco/x.md', '/home/a/MyCo')).toBeNull();
+    expect(projectRelativePath('/home/a/MyCo/docs/x.md', '/home/a/MyCo/')).toBe('docs/x.md');
+  });
+
   it('absoluto fora do projeto, sem raiz ou com prefixo parecido: null', () => {
     expect(projectRelativePath('C:\\Users\\me\\Other\\x.md', ROOT)).toBeNull();
     expect(projectRelativePath('C:\\Users\\me\\MyCo2\\x.md', ROOT)).toBeNull();
