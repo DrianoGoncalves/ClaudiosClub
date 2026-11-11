@@ -168,6 +168,11 @@ export class ChatProcess {
     return this.child?.pid ?? null;
   }
 
+  /** Pasta onde a conversa roda (a da ficha, ou o worktree do funcionário). */
+  get cwd(): string {
+    return this.opts.cwd;
+  }
+
   get running(): boolean {
     return this.state.running;
   }

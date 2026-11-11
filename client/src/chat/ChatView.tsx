@@ -1,9 +1,10 @@
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Autonomy, ChatAttachment, ChatItem, CodexEffort, Engine, SendPriority, UiLevel } from '../../../shared/model';
+import type { Autonomy, ChatAttachment, ChatItem, CodexEffort, Engine, EngineOverride, SendPriority, UiLevel } from '../../../shared/model';
 import { alertError, api, isPairingError, type PermissionOpts } from '../api';
 import { ArrowDownIcon, FileDiffIcon, ImageIcon, McpIcon, SendIcon, StopIcon } from '../icons';
 import { t, locale } from '../i18n';
 import { shrinkImage } from '../lib/shrinkImage';
+import { ChatFallbackBadge } from '../staff/FallbackBadge';
 import {
   applySuggestion,
   ChatSettingsBar,
@@ -80,7 +81,7 @@ export interface MoreTab {
 
 /** Conversa com o funcionário dentro do Claudio’s Club, sem terminal. */
 export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, engine = 'claude', top, moreTabs = [], focus = null, onFocusDone, awaiting = false, projectRoot, onOpenFile }: Props) {
-  const chat = useChat(projectId, sessionId, staffId);
+  const chat = useChat(projectId, sessionId, staffId, name);
   const todos = useMemo(() => todosFrom(chat.items), [chat.items]);
   useEffect(() => {
     if (chat.sessionId && chat.sessionId !== sessionId) onSessionStarted?.(chat.sessionId);
@@ -294,6 +295,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
             </button>
           )}
         </div>
+        {chat.fallback && <ChatFallbackBadge fallback={chat.fallback} />}
         {moreOpen && activeTab && (
           <div
             className="chat-more"
@@ -332,6 +334,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
             <Item
               key={item.id}
               item={item}
+              fallback={chat.fallback}
               onAnswer={chat.answer}
               executeAs={executeAs}
               onChangesRequested={() => input.current?.focus()}
@@ -536,9 +539,10 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
             <ChatSettingsBar
               level={level}
               state={chat.state}
-              fichaModel={fichaModel}
-              fichaEffort={fichaEffort}
-              engine={engine}
+              // Na conversa do motor secundário, o seletor mostra o motor, o modelo e o esforço dela (sem esforço = o padrão do motor), não os da ficha.
+              fichaModel={chat.fallback ? chat.fallback.model : fichaModel}
+              fichaEffort={chat.fallback ? (chat.fallback.effort ?? null) : fichaEffort}
+              engine={chat.fallback?.engine ?? engine}
               fichaAutonomy={autonomy}
               disabled={!!blocked}
               onChange={chat.settings}
@@ -653,7 +657,7 @@ function ContextMeter({ context }: { context: { used: number; window: number; pe
 }
 
 /** Resposta da IA com "Copiar" (o texto em markdown, como veio) no canto, no hover/foco. */
-function AssistantMessage({ id, text, at }: { id: string; text: string; at: string | null }) {
+function AssistantMessage({ id, text, at, fallback }: { id: string; text: string; at: string | null; fallback: EngineOverride | null }) {
   const [copied, copy] = useCopy();
   return (
     <div className="msg msg-assistant" data-item-id={id}>
@@ -661,7 +665,7 @@ function AssistantMessage({ id, text, at }: { id: string; text: string; at: stri
         {copied ? t('chat.mdCopied') : t('chat.mdCopy')}
       </button>
       <Markdown text={text} />
-      <MsgTime at={at} />
+      <MsgTime at={at} fallback={fallback} />
     </div>
   );
 }
@@ -670,6 +674,7 @@ type Answer = (id: string, allow: boolean, opts?: PermissionOpts) => Promise<voi
 
 function Item({
   item,
+  fallback,
   onAnswer,
   executeAs,
   onChangesRequested,
@@ -679,6 +684,7 @@ function Item({
   autoCancelled,
 }: {
   item: ChatItem;
+  fallback: EngineOverride | null;
   onAnswer: Answer;
   executeAs: Autonomy;
   onChangesRequested: () => void;
@@ -723,7 +729,7 @@ function Item({
       );
     }
     case 'assistant':
-      return item.text ? <AssistantMessage id={item.id} text={item.text} at={item.at} /> : null;
+      return item.text ? <AssistantMessage id={item.id} text={item.text} at={item.at} fallback={fallback} /> : null;
     case 'tool':
       return (
         <details className={`tool ${item.isError ? 'tool-error' : ''}`} data-item-id={item.id}>
@@ -824,6 +830,8 @@ function PlanCard({
   onChangesRequested: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  // Como o dono negou, só neste cartão: o servidor devolve "denied" para os dois casos.
+  const [denied, setDenied] = useState<'changes' | 'reject' | null>(null);
   const requestId = item.id.replace(/^p:/, '');
   const approve = async () => {
     setBusy(true);
@@ -832,16 +840,26 @@ function PlanCard({
   };
   const changes = async () => {
     setBusy(true);
+    setDenied('changes');
     // Vai ao agente: fica em português de propósito (é o prompt que ele lê, não a interface).
     await onAnswer(requestId, false, { message: 'O usuário quer mudanças no plano. Pergunte o que mudar e espere a resposta dele.' });
     setBusy(false);
     onChangesRequested();
   };
+  const reject = async () => {
+    setBusy(true);
+    setDenied('reject');
+    await onAnswer(requestId, false, { reject: true });
+    setBusy(false);
+  };
+  const rejected = item.status === 'denied' && denied === 'reject';
   return (
     <div className={`permission permission-plan permission-${item.status}`} data-item-id={item.id}>
       <p className="permission-title">
         <b>{t('chat.planReady')}</b>{' '}
-        <span className="muted small">{item.status === 'pending' ? t('chat.planPending') : item.status === 'allowed' ? t('chat.planApproved') : t('chat.planReturned')}</span>
+        <span className="muted small">
+          {item.status === 'pending' ? t('chat.planPending') : item.status === 'allowed' ? t('chat.planApproved') : rejected ? t('chat.planRejectedShort') : t('chat.planReturned')}
+        </span>
       </p>
       <div className="plan-body">
         <Markdown text={plan} />
@@ -854,10 +872,15 @@ function PlanCard({
           <button className="btn-secondary" disabled={busy} onClick={() => void changes()} title={t('chat.askChangesHelp')}>
             {t('chat.askChanges')}
           </button>
+          <button className="btn-secondary is-danger" disabled={busy} onClick={() => void reject()} title={t('chat.rejectPlanHelp')}>
+            {t('chat.rejectPlan')}
+          </button>
           <span className="muted small">{t('chat.runsHow', { how: AUTONOMY_SHORT[executeAs] })}</span>
         </div>
       ) : (
-        <p className="small muted">{item.status === 'allowed' ? t('chat.approvedRunning', { how: AUTONOMY_SHORT[executeAs] }) : t('chat.returnedForChanges')}</p>
+        <p className="small muted">
+          {item.status === 'allowed' ? t('chat.approvedRunning', { how: AUTONOMY_SHORT[executeAs] }) : rejected ? t('chat.planRejected') : t('chat.returnedForChanges')}
+        </p>
       )}
     </div>
   );

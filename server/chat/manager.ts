@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type {
   Autonomy,
@@ -9,7 +10,9 @@ import type {
   ChatItem,
   ChatMcp,
   ChatSnapshot,
+  CodexUsage,
   ContextSwitch,
+  EngineOverride,
   LiveSession,
   QuestionAnnotations,
   QuestionAnswers,
@@ -20,6 +23,7 @@ import type {
   UsageLimit,
 } from '../../shared/model';
 import { writeAtomic } from '../staff/store';
+import { codexHistoryOf } from '../adapters/codex/rollout';
 import { readHistory } from './history';
 import type { CodexSpawn } from './codexArgs';
 import type { CodexEnvStatus } from '../codexEnv';
@@ -32,7 +36,8 @@ import { BOOST_NOTICE, CONTEXT_NOTICE, STAFF_NOTICE } from './items';
 import { InboxState } from '../inboxState';
 import { isAlive, killTree, type ChatRegistry } from './registry';
 import { CONTINUE_TEXT, type AutoContinue, type AutoContinueEvent, type Pending } from './autoContinue';
-import { limitNotice, MAX_LIMIT_HITS, resumePlan, type LimitHit } from './usageLimit';
+import { limitNotice, MAX_LIMIT_HITS, resumePlan, type LimitHit, type ResumePlan } from './usageLimit';
+import { codexLimitHit } from '../codexUsage';
 import { WAKE_MAX_STREAK, WakeStreakError, wakeNotice, type WakeInput } from './wake';
 import { readUsage } from '../usage';
 import type { SessionTokens } from '../callers';
@@ -53,17 +58,33 @@ export interface ChatSpawn {
   chosen?: boolean;
 }
 
+/** O limite de uso estourou numa conversa (ver `onUsageLimit`). `engine`: o motor da conversa, não o da ficha. */
+export interface UsageLimitEvent {
+  sessionId: string;
+  projectId: string;
+  staffId: string | null;
+  engine: 'claude' | 'codex';
+  hit: LimitHit;
+}
+
 export interface ChatManagerOptions {
   /** ~/.claude/projects */
   transcriptsDir: string;
+  /** Onde o Codex guarda o id de cada conversa (`<runDir>/<sessão>/codex-thread.json`). Padrão: ~/.myco/run. */
+  runDir?: string;
   /** Cópias trazidas ("Trazer" de uma conversa aberta em outro lugar): original → cópia. Sem ele, só em memória. */
   copiesFile?: string;
   /** Onde gravar o consumo lido das conversas (o mesmo arquivo que o mod myco-tap grava). */
   usageFile: string;
+  /**
+   * Os limites do Codex (conta do ChatGPT), lidos na hora em que a conversa do Codex bate no limite: é de onde sai a hora
+   * de voltar. Sem ele (ou sem leitura), o "continue" do Codex vai daqui a 30 min.
+   */
+  codexLimits?: () => Promise<CodexUsage | null>;
   listLive: () => Promise<LiveSession[]>;
   /** Monta a linha de comando (ficha, autonomia, MCPs) de quem vai conversar. */
   /** `forkFrom`: sessão nova que começa como cópia desta (duplicar a conversa). */
-  resolve: (projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string) => Promise<ChatSpawn | null>;
+  resolve: (projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride) => Promise<ChatSpawn | null>;
   /**
    * Você escolheu modelo/esforço no seletor do chat: guarda na ficha, na conversa e como "último" do
    * funcionário (a conversa reabre assim; conversa nova sem modelo na ficha herda o último). Só grava
@@ -87,6 +108,8 @@ export interface ChatManagerOptions {
   log?: (line: string) => void;
   /** Você aprovou o plano de uma conversa (a tarefa dela passa para "fazendo", com o plano). */
   onPlanApproved?: (sessionId: string, plan: string) => void;
+  /** Você recusou o plano de uma conversa (a tarefa dela sai da fila e vai para Aguardar). */
+  onPlanRejected?: (sessionId: string) => void;
   /** Uma mensagem sua foi para a conversa (a tarefa dela volta para "fazendo"). */
   onSent?: (sessionId: string) => void;
   /** Uma conversa parou de trabalhar (a fila de tarefas do funcionário anda). */
@@ -113,6 +136,9 @@ type Listener = (e: ChatEvent) => void;
 
 /** Começo do aviso de ficha atualizada (o histórico do chat o esconde, ver items.ts). */
 export const FICHA_NOTICE = '[MyCo] Sua ficha foi atualizada depois que esta conversa começou.';
+
+/** O que o funcionário lê quando o usuário recusa o plano (fixo: nada do que foi digitado vai junto). */
+export const PLAN_REJECTED_MESSAGE = 'O usuário recusou o plano: não execute nada desta tarefa. Responda em uma linha que entendeu e pare.';
 
 /** Autonomia da ficha → modo que o processo aberto reporta e aceita em `set_permission_mode`. */
 const CLI_MODE: Record<Autonomy, string> = { plan: 'plan', manual: 'default', acceptEdits: 'acceptEdits', auto: 'auto', bypassPermissions: 'bypassPermissions' };
@@ -178,6 +204,13 @@ export class ChatManager {
   private readonly secrets: Array<{ id: string; sessionId: string; label: string; at: string }> = [];
   /** Conversas cuja última mensagem veio de outro funcionário (delegação), e não de você. */
   private readonly delegated = new Set<string>();
+  /**
+   * Conversas no motor/modelo secundário (sessão → override). Vale para a conversa inteira: continue, respawn e reabrir usam o mesmo.
+   * Só na memória do processo: depois de reiniciar o Claudio’s Club, a conversa volta ao motor da ficha.
+   */
+  private readonly overrides = new Map<string, EngineOverride>();
+  /** Quem assinou o limite no meio do turno (ver `onUsageLimit`). */
+  private readonly limitListeners: Array<(ev: UsageLimitEvent) => void> = [];
   /** Perguntas em aberto e avisos que não são segredo (sobrevivem a um reinício, ver inboxState.ts). */
   private readonly inbox: InboxState;
   /** Fim do último turno de cada conversa: tamanho do contexto, ponto de corte (sobrevive ao processo fechar). */
@@ -204,8 +237,10 @@ export class ChatManager {
   /** Estouros de limite ainda sendo agendados, por conversa (ver `awaitingLimit`). */
   private readonly limitRuns = new Map<string, Promise<unknown>>();
   private readonly timer: NodeJS.Timeout;
+  private readonly runDir: string;
 
   constructor(private readonly opts: ChatManagerOptions) {
+    this.runDir = opts.runDir ?? path.join(os.homedir(), '.myco', 'run');
     this.inbox = opts.inbox ?? new InboxState();
     opts.autoContinue?.subscribe((e) => this.autoContinueEvent(e));
     opts.wakeups?.subscribe((e) => this.wakeEvent(e));
@@ -236,7 +271,11 @@ export class ChatManager {
     const source = this.forks.get(sessionId);
     if (source && !(await fs.access(file).then(() => true, () => false))) file = await findTranscript(this.opts.transcriptsDir, projectId, source);
     // Com processo aberto, o histórico vai até o início dele; o resto vem pelo SSE.
-    const { items, context } = await readHistory(file, { before: live && !source ? chat!.startedAt : undefined });
+    const before = live && !source ? chat!.startedAt : undefined;
+    // Sem transcript do Claude, a conversa é do Codex: o histórico vem do rollout dele (ver adapters/codex/rollout.ts).
+    const claude = await fs.access(file).then(() => true, () => false);
+    const codex = claude ? null : await codexHistoryOf(this.runDir, sessionId, { before }).catch(() => null);
+    const { items, context } = codex ?? (await readHistory(file, { before }));
     // Sem processo (fechou por inatividade, ou o servidor reiniciou), o aviso de limite de uso não tem onde viver:
     // volta da pendência guardada, com a mesma hora e o mesmo botão.
     const waiting = live ? null : await this.opts.autoContinue?.get(sessionId);
@@ -249,6 +288,7 @@ export class ChatManager {
       elsewhere: await this.elsewhere(sessionId),
       commands: this.commands.get(projectId) ?? [],
       copy: await this.copyOf(sessionId),
+      ...(this.overrides.has(sessionId) && { fallback: this.overrides.get(sessionId) }),
     };
   }
 
@@ -356,7 +396,10 @@ export class ChatManager {
   /**
    * Manda uma mensagem, abrindo o processo se preciso. `sessionId` null = sessão nova da ficha.
    * `priority` só conta com o funcionário trabalhando; `images` são data URLs (prints colados).
-   * `delegated`: quem mandou foi outro funcionário (pela API), não você pelo Claudio’s Club.
+   * `delegated`: quem mandou foi outro funcionário (pela API), não você pelo Claudio’s Club. `origin`: o carimbo de quem
+   * mandou (ver server/chat/origin.ts); sem ele, a marca genérica.
+   * `engineOverride`: conversa nova no motor/modelo secundário (vale para a conversa inteira). Numa sessão já aberta, vale o que
+   * ela guardou; o que vier aqui é ignorado.
    */
   async send(
     projectId: string,
@@ -367,8 +410,10 @@ export class ChatManager {
     images: string[] = [],
     files: ChatAttachment[] = [],
     delegated = false,
+    origin?: string,
+    engineOverride?: EngineOverride,
   ): Promise<string> {
-    return this.deliver(projectId, sessionId, staffId, text, priority, images, files, delegated, false);
+    return this.deliver(projectId, sessionId, staffId, text, priority, images, files, delegated, false, origin, engineOverride);
   }
 
   /**
@@ -403,7 +448,7 @@ export class ChatManager {
     if (!wakeups || !chat?.running || chat.projectId !== projectId) return null;
     if ((this.wakeStreak.get(sessionId) ?? 0) >= WAKE_MAX_STREAK) throw new WakeStreakError();
     const at = this.now() + input.seconds * 1000;
-    const pending: Pending = { projectId, sessionId, staffId: chat.staffId, at, resetsAt: at, text: input.text };
+    const pending: Pending = { projectId, sessionId, staffId: chat.staffId, at, resetsAt: at, text: input.text, ...(chat.engine === 'codex' && { engine: 'codex' as const }) };
     await wakeups.schedule(pending);
     this.showWake(pending);
     return { at };
@@ -419,6 +464,20 @@ export class ChatManager {
     const pending = await wakeups.get(sessionId);
     if (pending && pending.projectId !== projectId) return null;
     return wakeups.cancel(sessionId, by);
+  }
+
+  /**
+   * Agendamentos pendentes de um projeto (a tela central): os despertadores e os "continue" do limite de uso, do que
+   * vence primeiro ao último. Sem o agendador configurado, aquele tipo vem vazio.
+   */
+  async listSchedules(projectId: string): Promise<Array<{ kind: 'wake' | 'continue'; sessionId: string; staffId: string | null; at: string; text: string }>> {
+    const wakes = ((await this.opts.wakeups?.list()) ?? []).filter((p) => p.projectId === projectId);
+    const continues = ((await this.opts.autoContinue?.list()) ?? []).filter((p) => p.projectId === projectId);
+    const items = [
+      ...wakes.map((p) => ({ kind: 'wake' as const, sessionId: p.sessionId, staffId: p.staffId, at: p.at, text: p.text ?? '' })),
+      ...continues.map((p) => ({ kind: 'continue' as const, sessionId: p.sessionId, staffId: p.staffId, at: p.at, text: CONTINUE_TEXT })),
+    ];
+    return items.sort((a, b) => a.at - b.at).map((i) => ({ ...i, at: new Date(i.at).toISOString() }));
   }
 
   /**
@@ -445,8 +504,10 @@ export class ChatManager {
     files: ChatAttachment[],
     delegated: boolean,
     auto: boolean,
+    origin?: string,
+    engineOverride?: EngineOverride,
   ): Promise<string> {
-    const chat = await this.ensure(projectId, sessionId, staffId);
+    const chat = await this.ensure(projectId, sessionId, staffId, undefined, engineOverride);
     // Qualquer mensagem sua (ou de outro funcionário) na conversa vale mais que o "continue" agendado.
     if (!auto) {
       await this.opts.autoContinue?.cancel(chat.sessionId, 'message');
@@ -464,7 +525,7 @@ export class ChatManager {
     const boost = await this.applyBoost(chat);
     // "continue" e despertador são da plataforma, mesmo na conversa delegada: só a mensagem do colega leva a marca.
     const fromStaff = delegated && !auto;
-    const notice = [fromStaff ? STAFF_NOTICE : null, ficha, big, boost].filter(Boolean).join('\n\n') || undefined;
+    const notice = [fromStaff ? (origin ?? STAFF_NOTICE) : null, ficha, big, boost].filter(Boolean).join('\n\n') || undefined;
     chat.send(text, priority, images, notice, files, fromStaff);
     this.opts.onSent?.(chat.sessionId);
     return chat.sessionId;
@@ -652,6 +713,10 @@ export class ChatManager {
     staffId: string | null,
     s: { model?: string; effort?: string; autonomy?: Autonomy },
   ): Promise<string> {
+    // Conversa no secundário: o modelo e o esforço são os dele. Trocar aqui gravaria na ficha uma escolha que o secundário não usa.
+    if (sessionId && (s.model || s.effort) && this.overrides.has(sessionId)) {
+      throw new ChatError('Esta conversa roda no motor secundário: o modelo e o esforço são os dele e não mudam aqui.');
+    }
     const chat = await this.ensure(projectId, sessionId, staffId);
     if (s.effort === 'ultra' && chat.engine !== 'codex') throw new ChatError('O esforço ultra só existe no Codex');
     // Escolha sua nesta conversa: a folga de cota não troca nem desfaz mais (até o processo reabrir).
@@ -674,13 +739,17 @@ export class ChatManager {
     sessionId: string,
     requestId: string,
     allow: boolean,
-    opts: { message?: string; executeAs?: Autonomy; remember?: Remember; answers?: QuestionAnswers; annotations?: QuestionAnnotations } = {},
+    opts: { message?: string; executeAs?: Autonomy; reject?: boolean; remember?: Remember; answers?: QuestionAnswers; annotations?: QuestionAnnotations } = {},
   ): boolean {
     const chat = this.chats.get(sessionId);
     const plan = chat?.pendingPermissions().find((p) => p.id === `p:${requestId}`)?.plan;
-    if (!chat?.answer(requestId, allow, opts.message, opts.remember, { answers: opts.answers, annotations: opts.annotations })) return false;
+    // Recusar um plano é de vez: o texto que o funcionário lê é fixo (não vai o que foi digitado na tela).
+    const rejectPlan = !allow && !!opts.reject && plan !== undefined;
+    const message = rejectPlan ? PLAN_REJECTED_MESSAGE : opts.message;
+    if (!chat?.answer(requestId, allow, message, opts.remember, { answers: opts.answers, annotations: opts.annotations })) return false;
     if (allow && opts.executeAs) chat.setPermissionMode(CLI_MODE[opts.executeAs], `Executando como: ${AUTONOMY_NAME[opts.executeAs]}`);
     if (allow && plan !== undefined) this.opts.onPlanApproved?.(sessionId, plan);
+    if (rejectPlan) this.opts.onPlanRejected?.(sessionId);
     return true;
   }
 
@@ -708,6 +777,32 @@ export class ChatManager {
   isWorking(sessionId: string): boolean {
     const chat = this.chats.get(sessionId);
     return !!chat?.running && chat.working;
+  }
+
+  /**
+   * As conversas do Codex abertas, como sessões vivas. O Codex não grava ~/.claude/sessions, então sem isto o quadro não mostra o
+   * "trabalhando" delas. `claude` são as sessões do adapter: o que já está lá (pelo id) fica de fora, para não duplicar.
+   * `pid`: o processo da execução em andamento; 0 entre as mensagens (o Codex não mantém processo aberto entre elas).
+   */
+  codexLive(claude: LiveSession[]): LiveSession[] {
+    const known = new Set(claude.map((s) => s.sessionId));
+    const out: LiveSession[] = [];
+    for (const c of this.chats.values()) {
+      if (!c.running || c.engine !== 'codex' || known.has(c.sessionId)) continue;
+      out.push({
+        sessionId: c.sessionId,
+        pid: c.pid ?? 0,
+        cwd: c.cwd,
+        name: null,
+        status: c.working ? 'busy' : 'idle',
+        alive: true,
+        entrypoint: null,
+        kind: null,
+        startedAt: c.startedAt,
+        statusUpdatedAt: new Date(c.lastActivity).toISOString(),
+      });
+    }
+    return out;
   }
 
   /** Conversas paradas numa pergunta para você, para a caixa "precisa de mim". */
@@ -834,7 +929,7 @@ export class ChatManager {
     };
   }
 
-  private async ensure(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string): Promise<ChatProcess> {
+  private async ensure(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride): Promise<ChatProcess> {
     const existing = sessionId ? this.chats.get(sessionId) : undefined;
     // Ficha nova só reabre com tudo parado: agents em segundo plano morreriam com o processo.
     if (existing?.running && !(existing.stale && !existing.working)) return existing;
@@ -850,8 +945,11 @@ export class ChatManager {
         throw new ChatError(holdMessage(other));
       }
     }
-    const spawn = await this.opts.resolve(projectId, sessionId, staffId, forkFrom);
+    // Conversa já aberta no secundário segue nele (continue, respawn, reabrir); o pedido de uma conversa nova vale só para ela.
+    const override = sessionId ? this.overrides.get(sessionId) : engineOverride;
+    const spawn = await this.opts.resolve(projectId, sessionId, staffId, forkFrom, override);
     if (!spawn) throw new ChatError('funcionário ou projeto não encontrado');
+    if (override) this.overrides.set(spawn.sessionId, override);
     // Claude ou Codex: o resto do manager fala com os dois do mesmo jeito (ver codexProcess.ts).
     const codex = spawn.engine === 'codex' ? spawn.codex : undefined;
     if (spawn.engine === 'codex' && !codex) throw new ChatError('a conversa do Codex veio sem os dados para abrir');
@@ -865,7 +963,7 @@ export class ChatManager {
       model,
       effort,
       onUsage: (limits) => void this.saveUsage(spawn.sessionId, limits),
-      onUsageLimit: (hit) => this.limitHit(spawn.sessionId, projectId, staffId, hit),
+      onUsageLimit: (hit) => this.limitHit(spawn.sessionId, projectId, staffId, hit, codex ? 'codex' : 'claude'),
       onTurnWithoutLimit: () => void this.limitStreak.delete(spawn.sessionId),
       onSecret: (label) => this.noteSecret(spawn.sessionId, label),
       onIdle: (reason) => {
@@ -895,6 +993,8 @@ export class ChatManager {
           mycoUrl: codex.mycoUrl,
           models: this.opts.codexModels,
           env: this.opts.codexEnv,
+          // Modelo do secundário: sem plano B (a conta recusa, a conversa mostra o erro).
+          noSubstitute: !!override,
         })
       : new ChatProcess({ ...base, args: spawn.args });
     this.chats.set(spawn.sessionId, chat);
@@ -902,8 +1002,8 @@ export class ChatManager {
     this.limitNotices.delete(spawn.sessionId);
     this.wakeNotices.delete(spawn.sessionId);
     this.launched.set(chat, { model, effort });
-    // Escolha gravada (reabrir ou duplicar): vale a sua, a folga de cota não atropela.
-    if (spawn.chosen) this.boosts.set(chat, 'manual');
+    // Escolha gravada (reabrir ou duplicar): vale a sua, a folga de cota não atropela. O mesmo no secundário (o modelo dele é o da conversa).
+    if (spawn.chosen || override) this.boosts.set(chat, 'manual');
     // Abas já abertas nesta sessão passam a ouvir o processo novo, desde o começo dele.
     const subs = this.streams.get(spawn.sessionId);
     if (subs) for (const [listener, unsubscribe] of subs) {
@@ -1010,12 +1110,24 @@ export class ChatManager {
    * promessa do agendamento aqui, de forma síncrona, é o que deixa `awaitingLimit` certo para quem
    * perguntar depois, venha o fim do turno antes ou depois de o agendamento terminar.
    */
-  private limitHit(sessionId: string, projectId: string, staffId: string | null, hit: LimitHit) {
-    const run = this.noteUsageLimit(sessionId, projectId, staffId, hit).catch((err) => this.log(`${sessionId}: limite de uso: ${err instanceof Error ? err.message : String(err)}`));
+  private limitHit(sessionId: string, projectId: string, staffId: string | null, hit: LimitHit, engine: 'claude' | 'codex' = 'claude') {
+    const run = this.noteUsageLimit(sessionId, projectId, staffId, hit, engine).catch((err) => this.log(`${sessionId}: limite de uso: ${err instanceof Error ? err.message : String(err)}`));
     this.limitRuns.set(sessionId, run);
     void run.then(() => {
       if (this.limitRuns.get(sessionId) === run) this.limitRuns.delete(sessionId);
     });
+    // Depois de guardar o agendamento: quem ouve pode esperar `settledLimit` e cancelar o "continue" sem corrida.
+    for (const cb of this.limitListeners) cb({ sessionId, projectId, staffId, engine, hit });
+  }
+
+  /** Quem quer saber do limite no meio do turno (ex.: a troca de motor de uma tarefa). Chamado logo depois de agendar o "continue". */
+  onUsageLimit(cb: (ev: UsageLimitEvent) => void): void {
+    this.limitListeners.push(cb);
+  }
+
+  /** Espera o agendamento do limite desta conversa terminar (se houve um): só então a pendência do "continue" existe. */
+  async settledLimit(sessionId: string): Promise<void> {
+    await this.limitRuns.get(sessionId);
   }
 
   /**
@@ -1029,17 +1141,46 @@ export class ChatManager {
   }
 
   /**
+   * Põe a conversa no motor/modelo secundário (ver `overrides`). No boot, a tarefa que trocou de motor (`Task.fallback`)
+   * volta a rodar no secundário, para o continue e o resume seguirem nele.
+   */
+  setOverride(sessionId: string, override: EngineOverride): void {
+    this.overrides.set(sessionId, override);
+  }
+
+  /** Tira o motor secundário da conversa (a tarefa fechou, ou a conversa deixou de ser a dela). */
+  clearOverride(sessionId: string): void {
+    this.overrides.delete(sessionId);
+  }
+
+  /** O motor/modelo secundário com que a conversa roda agora (undefined = no motor da ficha). */
+  overrideOf(sessionId: string): EngineOverride | undefined {
+    return this.overrides.get(sessionId);
+  }
+
+  /**
    * O turno parou no limite de uso da assinatura: agenda o "continue" (se a opção estiver ligada) e avisa na
    * conversa. Na `MAX_LIMIT_HITS`-ésima vez seguida desiste: a tarefa é entregue como antes e o aviso diz que
    * não deu (a conta recomeça; o próximo estouro, depois de uma mensagem sua, volta a agendar).
+   * A hora de voltar é da conta do motor da conversa: o Codex não usa a janela do Claude, e vice-versa.
    */
-  private async noteUsageLimit(sessionId: string, projectId: string, staffId: string | null, hit: LimitHit) {
+  private async noteUsageLimit(sessionId: string, projectId: string, staffId: string | null, hit: LimitHit, engine: 'claude' | 'codex') {
     const streak = (this.limitStreak.get(sessionId) ?? 0) + 1;
     this.limitStreak.set(sessionId, streak);
     const now = Date.now();
-    const file = await readUsage(this.opts.usageFile).catch(() => null);
-    const plan = resumePlan(hit, [...(file?.limits ?? []), ...this.knownLimits.values()], now);
-    const pending: Pending = { projectId, sessionId, staffId, at: plan.at, resetsAt: plan.resetsAt };
+    let plan: ResumePlan;
+    if (engine === 'codex') {
+      // Ordem: o reset que o próprio erro deu (`resets_in_seconds`); senão a janela esgotada do leitor do Codex; senão 30 min.
+      if (hit.resetsAt !== null) plan = resumePlan(hit, [], now);
+      else {
+        const usage = (await this.opts.codexLimits?.().catch(() => null)) ?? null;
+        plan = resumePlan(codexLimitHit(usage, now) ?? { resetsAt: null, window: null }, [], now);
+      }
+    } else {
+      const file = await readUsage(this.opts.usageFile).catch(() => null);
+      plan = resumePlan(hit, [...(file?.limits ?? []), ...this.knownLimits.values()], now);
+    }
+    const pending: Pending = { projectId, sessionId, staffId, at: plan.at, resetsAt: plan.resetsAt, ...(engine === 'codex' && { engine }) };
     if (streak >= MAX_LIMIT_HITS && (await this.opts.autoContinue?.giveUp(pending, `o limite de uso estourou ${streak} vezes seguidas`))) {
       this.limitStreak.delete(sessionId);
       this.log(`${sessionId}: limite de uso atingido ${streak} vezes seguidas; desisti do "continue" sozinho`);

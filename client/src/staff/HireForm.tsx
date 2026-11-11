@@ -24,6 +24,8 @@ import { ProtocolBadge } from '../office/ProjectOffice';
 import { BrowserCheck } from './BrowserCheck';
 import { CopyFromCompany } from './CopyFromCompany';
 import { differingFields, PERSON_FIELD_LABEL } from './directory';
+import { FallbackField } from './FallbackField';
+import { draftOf, fallbackProblem, fallbackToSend, showFallbackField, type FallbackDraft } from './fallbackEngine';
 import { PersonMemory } from './PersonMemory';
 import type { RoleEntry } from '../../../shared/roles';
 import {
@@ -135,6 +137,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   // Ficha do Codex com um alias do Claude no modelo (sobra de antes da troca de motor): não vale para o Codex, começa sem modelo.
   const [model, setModel] = useState(editing?.engine === 'codex' && isClaudeModel(editing.model) ? '' : (editing?.model ?? ''));
   const [effort, setEffort] = useState<'' | CodexEffort>(editing?.effort ?? '');
+  // Motor secundário (quando o principal bate o limite); o motor dele é sempre o outro, então não entra no estado.
+  const [fallback, setFallback] = useState<FallbackDraft>(draftOf(editing?.fallback));
   const [canHire, setCanHire] = useState(editing?.canHire ?? false);
   const [playbook, setPlaybook] = useState<'' | Playbook>(editing?.playbook ?? '');
   const [worktree, setWorktree] = useState(editing?.worktree ?? false);
@@ -183,6 +187,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const codex = engine === 'codex';
   // Quem adota uma sessão do Claude não escolhe motor; nos outros, só com o Codex ligado ou quando a ficha já é do Codex.
   const showEngine = !adopting && showEngineField(codexReview, editing?.engine ?? 'claude');
+  // O secundário só aparece com a ficha inteira (no simples nem há modelo) e fora da adoção; sem o campo, o pedido não leva a chave (mantém).
+  const showFallback = full && !adopting && showFallbackField(codexReview, engine, !!editing?.fallback);
   const catalog = useCodexCatalog(codex && full);
   const [ownTab, setOwnTab] = useState<Tab>('sheet');
   const tab = tabProp === undefined ? ownTab : tabProp;
@@ -298,6 +304,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     setEngine(next);
     setModel(kept.model);
     setEffort(kept.effort);
+    // O secundário passa a ser o outro motor: o modelo e o esforço que estavam não servem a ele.
+    setFallback((f) => ({ ...f, model: '', effort: '' }));
     setTip(null);
     // Ficha que estava salva no Codex (sai sem navegador e sem MCPs) voltando ao Claude: recomeça com o padrão dele, tudo ligado.
     if (next === 'claude' && editing?.engine === 'codex') {
@@ -320,6 +328,11 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     if (noName || (!mission.trim() && full)) {
       setTab('sheet');
       return setError(noName ? (full ? t('staff.errNameRole') : t('staff.errChooseRoleName')) : t('staff.errMission'));
+    }
+    const fallbackIssue = showFallback ? fallbackProblem(fallback) : null;
+    if (fallbackIssue) {
+      setTab('sheet');
+      return setError(t(fallbackIssue));
     }
     setBusy(true);
     setError(null);
@@ -351,6 +364,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       browser: codex ? false : browser,
       // Claude fica sem o campo (a ficha igual à de sempre); o Codex vai explícito, e quem volta dele ao Claude também.
       ...(sendEngine ? { engine: sendEngine } : {}),
+      // Ligado manda o secundário; desligado tira o que a ficha tinha (`null`); campo escondido não manda (mantém).
+      ...fallbackToSend(fallback, engine, !!editing?.fallback, showFallback),
       ...(portrait !== undefined ? { portraitDataUrl: portrait } : {}),
       // A conversa é sempre pelo painel do Claudio’s Club e abre vazia, esperando você escrever.
       ...(editing ? {} : adopting ? { adoptSessionId: adopting.id, launch: false } : { launch: false }),
@@ -660,6 +675,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           </label>
         </div>
         )}
+
+        {showFallback && <FallbackField main={engine} servers={servers} draft={fallback} onChange={setFallback} />}
 
         <label>
           {t('staff.playbookLabel')}

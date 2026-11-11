@@ -2,12 +2,17 @@ import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { TASK_STATUSES, type ChatItem, type HeldMessage, type StaffProfile, type Task, type TaskCode, type TaskDelivery, type TaskHandoff, type TaskStatus, type TaskSummary, type TestRun } from '../shared/model';
+import { TASK_STATUSES, type Autonomy, type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type HeldMessage, type StaffProfile, type Task, type TaskCode, type TaskDelivery, type TaskFallback, type TaskHandoff, type TaskStatus, type TaskSummary, type TestRun, type UsageStopHit } from '../shared/model';
 import type { SecondOpinionInput } from './adapters/codex';
+import { buildHandoff, collectGit, oldConversationExtract } from './fallbackHandoff';
 import { DELIVERY_SUMMARY_MAX, parseDeliveryNotes } from './deliveryNotes';
 import { hasGuide } from './projectGuide';
+import type { LimitHit } from './chat/usageLimit';
+import { CLOSING_LINE, RESUME_TEXT } from './chat/items';
+import type { Caller } from './callers';
 import { writeAtomic } from './staff/store';
 import { checkpoint, CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
+import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf, limitReading, limitOfStop, otherEngine, overrideOfFallback, shouldFallback, type OtherEngineReading } from './taskFallback';
 import { UsageStopError } from './usageStop';
 
 // Tarefas por projeto: `<projeto>/.myco/tasks.json`, ao lado das fichas. Cada tarefa vai para um
@@ -37,8 +42,6 @@ const MAX_HISTORY = 30;
 const AUTO_REVIEW_ROUNDS = 2;
 /** Conversa de tarefa parada há menos que isto não é dada como órfã (ver `orphan`). */
 const ORPHAN_MS = 2 * 60_000;
-const RESUME_TEXT =
-  'A conversa parou no meio (o Claudio’s Club reiniciou). Continue de onde parou e, ao terminar, responda com um resumo curto do que foi feito e do que falta.';
 
 export const TaskInput = z.object({
   title: z.string().trim().min(1, 'dê um título à tarefa').max(120, 'título longo demais (máx. 120)'),
@@ -75,8 +78,8 @@ export interface TaskServiceDeps {
   /** Projetos onde procurar tarefas quando chega um aviso de uma conversa (aprovou, terminou…). */
   projectIds: () => Promise<string[]>;
   readProfile: (projectId: string, staffId: string) => Promise<StaffProfile | null>;
-  /** Abre uma conversa nova com o funcionário e manda a mensagem; devolve a sessão. */
-  send: (projectId: string, staffId: string, text: string, force: boolean) => Promise<string>;
+  /** Abre uma conversa nova com o funcionário e manda a mensagem; devolve a sessão. `override`: o motor secundário (ver `Switch`). */
+  send: (projectId: string, staffId: string, text: string, force: boolean, override?: EngineOverride) => Promise<string>;
   /** Avisa um funcionário (o gestor que pediu a tarefa): na conversa `sessionId`, ou na mais recente dele. */
   notify?: (projectId: string, staffId: string, text: string, sessionId?: string | null) => Promise<void>;
   /** A conversa do funcionário, neste projeto, que está no meio de um turno agora (quem chamou a API), se for uma só. */
@@ -90,7 +93,7 @@ export interface TaskServiceDeps {
   /** Alguma conversa dele, neste projeto, no Claudio’s Club está trabalhando (turno ou segundo plano), fora `exceptSession`. */
   isWorking?: (projectId: string, staffId: string, exceptSession?: string) => boolean;
   /** Manda na conversa que já existe (os ajustes guardados). */
-  sendTo?: (projectId: string, sessionId: string, staffId: string, text: string, images: string[]) => Promise<string>;
+  sendTo?: (projectId: string, sessionId: string, staffId: string, text: string, images: string[], origin?: string) => Promise<string>;
   /** Segunda opinião de outro modelo sobre o diff (o Codex, ver adapters/codex.ts); sem ele, indisponível. */
   secondOpinion?: (input: SecondOpinionInput) => Promise<string>;
   /**
@@ -98,15 +101,63 @@ export interface TaskServiceDeps {
    * não é entrega: a tarefa fica em "fazendo" até o "continue" rodar e o turno terminar de verdade.
    */
   awaitingLimit?: (sessionId: string) => Promise<boolean>;
+  /** Põe a conversa no motor secundário (ver `restoreFallbacks`): só na memória do servidor. */
+  setOverride?: (sessionId: string, override: EngineOverride) => void;
+  /** Limite agora de um motor: LimitHit, null (sem limite) ou 'unknown' (sem leitura: não troca às cegas). */
+  readLimit?: (engine: Engine) => Promise<LimitHit | null | 'unknown'>;
+  /**
+   * A trava de consumo deste motor agora (5h/7d da empresa, ou o orçamento do projeto), como `usageStopHit` do servidor. Null se
+   * não barra. Só a janela (5h/7d) dispara a troca; o orçamento espera na fila, como antes.
+   */
+  stopHit?: (projectId: string, staffId: string, engine: Engine) => Promise<UsageStopHit | null>;
+  /** Espera o agendamento do limite desta conversa terminar (se houve um), antes de cancelar o "continue". */
+  settleLimit?: (sessionId: string) => Promise<void>;
+  /** Tira o "continue" e o despertador da conversa (motivo: troca de motor). Devolve a hora do despertador, se havia um. */
+  cancelContinue?: (sessionId: string) => Promise<number | null>;
+  /** Pré-checagem da troca: a conversa no motor do override abriria? Lança o erro que ela daria (ver StaffService.assertOverrideRunnable). */
+  assertRunnable?: (projectId: string, staffId: string, override: EngineOverride) => Promise<void>;
+  /** Tira o motor secundário da conversa no manager (a tarefa fechou). */
+  clearOverride?: (sessionId: string) => void;
+  /** Para o processo da conversa (o turno que estourou o limite). */
+  stopSession?: (sessionId: string) => void;
+  /** Foto da conversa, para o handoff (o histórico do motor antigo). */
+  snapshot?: (projectId: string, sessionId: string) => Promise<ChatSnapshot>;
+  /** Endereço da API para quem roda fora da sandbox (http://127.0.0.1:<porta>): com ele, a dúvida da tarefa vai ao gestor. */
+  apiUrl?: string;
+  /** Endereço da sandbox que o Codex alcança (http://127.0.0.2:<porta>): a dúvida do Codex vai por ele. */
+  sandboxApiUrl?: string;
 }
 
 type Role = 'work' | 'review' | 'deploy';
 
 const OCCUPIED: TaskStatus[] = ['planning', 'doing'];
+/** Tarefas cuja conversa de troca volta no boot e segue no secundário: tudo, menos pronta (que sai do quadro ou é arquivada). */
+const RESTORABLE: TaskStatus[] = ['todo', 'waiting', 'planning', 'doing', 'review'];
+/** Leitura do limite do Codex na fila de início: guardada por este tempo (não abre um `codex` a cada tick). O meio do turno lê fresco. */
+const CODEX_LIMIT_TTL_MS = 5 * 60_000;
+
+/** O motor da ficha está no limite e a tarefa não pode começar agora: fica na fila até o limite baixar (ver `startPlan`). */
+class LimitWaitError extends Error {}
+
+/** Troca de motor combinada para abrir a conversa: começo (o limite da ficha) ou meio do turno (o handoff). */
+interface Switch {
+  override: EngineOverride;
+  fallback: TaskFallback;
+  /** Uma linha a mais no texto da tarefa ("Você está no motor secundário…"). */
+  line?: string;
+  /** No meio do turno: a mensagem inteira é o handoff (ver `onLimit`). */
+  text?: string;
+  /** Para o histórico, quando a conversa nova abre. */
+  note: string;
+}
 
 export class TaskService {
   /** sessionId → onde está a tarefa daquela conversa (e se é o trabalho, a revisão ou o deploy). */
   private readonly bySession = new Map<string, { projectId: string; taskId: string; role: Role }>();
+  /** Conversas que a troca de motor já deixou para trás: o que chegar delas (fim do turno, limite…) não é da tarefa. */
+  private readonly retired = new Set<string>();
+  /** Última leitura do limite do Codex feita para a fila de início (ver readLimit). */
+  private codexLimit: { at: number; value: LimitHit | null | 'unknown' } | null = null;
   private indexed = false;
   private readonly queues = new Map<string, Promise<unknown>>();
   /** Uma "vez de quem é" por funcionário: dois avisos juntos não começam duas tarefas. */
@@ -119,15 +170,85 @@ export class TaskService {
     if (!dir) return null;
     const tasks = await readTasks(dir);
     for (const t of tasks) {
-      if (t.sessionId) this.bySession.set(t.sessionId, { projectId, taskId: t.id, role: 'work' });
+      if (t.sessionId && !this.retired.has(t.sessionId)) this.bySession.set(t.sessionId, { projectId, taskId: t.id, role: 'work' });
       if (t.review?.sessionId) this.bySession.set(t.review.sessionId, { projectId, taskId: t.id, role: 'review' });
       if (t.deploy?.sessionId) this.bySession.set(t.deploy.sessionId, { projectId, taskId: t.id, role: 'deploy' });
     }
     return tasks.map((t) => withArchive(t));
   }
 
-  /** `requestedBy`: o gestor (funcionário) que pediu, pela API; recebe o resumo na entrega. */
-  async create(projectId: string, body: unknown, requestedBy: string | null = null): Promise<Task | null> {
+  /**
+   * No boot: a conversa de cada tarefa que trocou de motor (`Task.fallback`) volta a rodar no secundário, para o continue
+   * e o resume não caírem no motor da ficha. Devolve quantas conversas foram re-registradas.
+   */
+  async restoreFallbacks(): Promise<number> {
+    let n = 0;
+    for (const projectId of await this.deps.projectIds()) {
+      for (const t of (await this.list(projectId)) ?? []) {
+        if (!t.fallback || !t.sessionId || !RESTORABLE.includes(t.status)) continue;
+        // A troca não terminou (o servidor caiu entre gravá-la e abrir a conversa nova): a troca sai da tarefa, e a conversa
+        // antiga volta ao motor principal. Se bater o limite de novo, a tarefa pode trocar.
+        if (t.fallback.fromSession === t.sessionId) {
+          await this.change(projectId, t.id, (x) => noted({ ...x, fallback: undefined }, 'troca interrompida pelo reinício: a conversa volta ao motor da ficha'));
+          continue;
+        }
+        const override = await this.fallbackOverride(projectId, t);
+        if (!override) {
+          await this.noteSecondaryMoved(projectId, t.id);
+          continue;
+        }
+        this.deps.setOverride?.(t.sessionId, override);
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /**
+   * O motor secundário da tarefa e a autonomia dela, da ficha ATUAL (não do arquivo da tarefa, que pode estar desatualizado ou
+   * forjado). Null se a ficha não tem mais secundário, ou se o motor dela não é o da troca. A autonomia segue a fase ("planejando"
+   * é plano; o resto, o que executa depois do plano aprovado) e nunca passa da ficha.
+   */
+  private async fallbackOverride(projectId: string, t: Task): Promise<EngineOverride | null> {
+    if (!t.fallback || !t.staffId) return null;
+    const profile = await this.deps.readProfile(projectId, t.staffId);
+    const sec = profile?.fallback;
+    if (!profile || !sec || sec.engine !== t.fallback.engine) return null;
+    // Claude como secundário de ficha Codex roda em "aceitar edições" (decisão do dono); o teto da ficha é aplicado em asEngine.
+    const claudeDoCodex = sec.engine === 'claude' && profile.engine === 'codex';
+    const mode = t.status === 'planning' ? 'plan' : claudeDoCodex ? 'acceptEdits' : executeAutonomyOf(profile.autonomy);
+    return { ...overrideOfFallback(sec), autonomy: atMostAutonomy(mode, profile.autonomy) };
+  }
+
+  /** A ficha mudou o secundário depois da troca: a conversa volta ao principal, e a tarefa diz isso no histórico (uma vez). */
+  private async noteSecondaryMoved(projectId: string, taskId: string): Promise<void> {
+    const msg = 'o motor secundário da ficha mudou; a conversa volta ao principal';
+    await this.change(projectId, taskId, (t) => (t.history.at(-1)?.note === msg ? t : noted(t, msg)));
+  }
+
+  /**
+   * O motor secundário da conversa acompanha o estado da tarefa: pronta (ou arquivada), a conversa sai do manager; saindo de
+   * pronta ou de aguardar, volta com a ficha atual. A troca que deixou a conversa antiga para trás não é do secundário: nada.
+   */
+  private async syncOverride(projectId: string, before: Task, after: Task): Promise<void> {
+    if (!after.fallback || !after.sessionId || before.status === after.status) return;
+    if (after.fallback.fromSession === after.sessionId) return;
+    if (after.status === 'done') {
+      this.deps.clearOverride?.(after.sessionId);
+      return;
+    }
+    if (before.status === 'done' || before.status === 'waiting') {
+      const override = await this.fallbackOverride(projectId, after);
+      if (override) this.deps.setOverride?.(after.sessionId, override);
+      else await this.noteSecondaryMoved(projectId, after.id);
+    }
+  }
+
+  /**
+   * `requestedBy`: o gestor (funcionário) que pediu, pela API; recebe o resumo na entrega. `requestedSession`: a conversa dele
+   * que pediu (o token dele, pela API); sem ela, a que está no turno agora.
+   */
+  async create(projectId: string, body: unknown, requestedBy: string | null = null, requestedSession?: string): Promise<Task | null> {
     const input = parseOr(TaskInput, body);
     if (input.staffId) await this.staffOrThrow(projectId, input.staffId);
     const manager = requestedBy ? await this.staffOrThrow(projectId, requestedBy) : null;
@@ -141,7 +262,7 @@ export class TaskService {
     // A entrega volta para a conversa em que o gestor pediu (a que está no turno agora, chamando a
     // API), e não para a mais recente dele, que pode ser outro assunto.
     const task: Task = {
-      ...(manager && { requestedBy: manager.id, requestedSession: this.deps.requesterSession?.(projectId, manager.id) ?? null }),
+      ...(manager && { requestedBy: manager.id, requestedSession: requestedSession ?? this.deps.requesterSession?.(projectId, manager.id) ?? null }),
       id: `t-${randomBytes(3).toString('hex')}`,
       title: input.title,
       description: input.description,
@@ -215,7 +336,7 @@ export class TaskService {
         // Em revisão, a conversa de trabalho continua (sessionId fica). Nas outras, a conversa e o plano são da
         // pessoa que saiu e as mensagens guardadas iam para ela: zerados, quem pegar a tarefa começa do zero.
         if (t.status === 'review' || t.status === 'waiting') return noted(loose, 'responsável excluído');
-        const fresh: Task = { ...loose, sessionId: null, plan: null, held: [] };
+        const fresh: Task = { ...loose, sessionId: null, plan: null, held: [], fallback: undefined };
         return t.status === 'todo' ? noted(fresh, 'responsável excluído') : moved(fresh, 'todo', 'auto', 'responsável excluído');
       }),
     );
@@ -248,8 +369,9 @@ export class TaskService {
         try {
           return await this.startNow(projectId, taskId, profile, force);
         } catch (err) {
-          // Limite de consumo na hora: não começou, mas fica na fila dele (o tick tenta de novo). Outros erros sobem.
-          if (!(err instanceof UsageStopError)) throw err;
+          // Limite de consumo na hora (da empresa, ou o do motor da ficha sem troca): não começou, mas fica na fila dele
+          // (o tick tenta de novo). Outros erros sobem.
+          if (!(err instanceof UsageStopError || err instanceof LimitWaitError)) throw err;
           const why = `não começou: ${err.message}; na fila de ${profile.name}, começa quando o consumo baixar`;
           return this.change(projectId, taskId, (t) => enqueue(t, why));
         }
@@ -259,33 +381,243 @@ export class TaskService {
     });
   }
 
-  private async startNow(projectId: string, taskId: string, profile: StaffProfile, force: boolean): Promise<Task | null> {
+  private async startNow(projectId: string, taskId: string, profile: StaffProfile, force: boolean, sw?: Switch): Promise<Task | null> {
     const dir = await this.deps.projectPath(projectId);
     const task = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
-    if (!dir || !task || task.sessionId) return null;
-    const manager = task.requestedBy ? await this.deps.readProfile(projectId, task.requestedBy) : null;
-    const text = [
-      `[Tarefa "${task.title}"]`,
-      manager ? `Pedida por ${manager.name} (${manager.role}), que vai conferir a sua entrega.` : '',
-      task.description,
-      'Quando terminar, responda com um resumo curto do que foi feito e do que falta.',
-    ]
-      .filter(Boolean)
-      .join('\n\n');
-    const sessionId = await this.deps.send(projectId, profile.id, text, force);
+    // Com troca combinada (no meio do turno), a conversa antiga ainda é a da tarefa até a nova abrir.
+    if (!dir || !task || (task.sessionId && !sw)) return null;
+    // Sem troca combinada: o limite do motor da ficha agora decide (começa, troca para o secundário, ou espera na fila).
+    const plan = sw ? {} : await this.startPlan(projectId, task, profile);
+    if (plan.wait) throw new LimitWaitError(plan.wait);
+    const s = sw ?? plan.switch;
+    const text =
+      s?.text ??
+      [
+        `[Tarefa "${task.title}"]`,
+        s?.line ?? '',
+        ...(await this.requesterLines(projectId, task, s?.override.engine ?? (profile.engine === 'codex' ? 'codex' : 'claude'))),
+        task.description,
+        CLOSING_LINE,
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+    let sessionId: string;
+    try {
+      // Sem override, o envio é o de sempre (4 argumentos): só a troca carrega o motor secundário.
+      sessionId = s?.override
+        ? await this.deps.send(projectId, profile.id, text, force, s.override)
+        : await this.deps.send(projectId, profile.id, text, force);
+    } catch (err) {
+      if (!s) throw err;
+      const why = `não abriu no motor secundário: ${(err as Error).message}`;
+      // No meio do turno, a antiga já foi parada: a tarefa vai para Aguardar com o motivo, e quem decide é você.
+      if (sw) {
+        await this.change(projectId, taskId, (t) => moved({ ...t, queuedAt: null, waitReason: why }, 'waiting', 'auto', why));
+        throw err;
+      }
+      // Limite da empresa (UsageStopError) sobe: quem chamou põe na fila, como sempre.
+      if (err instanceof UsageStopError) throw err;
+      // No início, a tarefa continua na fila, como estaria sem fallback. A troca não é gravada: a fila tenta de novo com o limite de hoje.
+      return this.change(projectId, taskId, (t) => {
+        const from = t.status === 'waiting' ? moved(t, 'todo', 'auto', 'saiu de aguardar') : t;
+        const queued = { ...from, queuedAt: from.queuedAt ?? new Date().toISOString(), queuedForce: force };
+        return from.history.at(-1)?.note === why ? queued : noted(queued, why);
+      });
+    }
     const branch = await this.deps.branchFor(dir, profile).catch(() => null);
     this.bySession.set(sessionId, { projectId, taskId, role: 'work' });
-    const next: TaskStatus = profile.autonomy === 'plan' ? 'planning' : 'doing';
-    return this.change(projectId, taskId, (t) =>
-      moved({ ...t, sessionId, branch: branch ?? t.branch, queuedAt: null, queuedForce: false }, next, 'auto', `com ${profile.name}`),
-    );
+    return this.change(projectId, taskId, (t) => {
+      // A troca no meio do turno não muda a fase: a tarefa segue em "fazendo" ou "planejando", como estava.
+      const next: TaskStatus = sw ? t.status : profile.autonomy === 'plan' ? 'planning' : 'doing';
+      const started = { ...t, sessionId, branch: branch ?? t.branch, queuedAt: null, queuedForce: false, ...(s && { fallback: s.fallback }) };
+      const moving = moved(started, next, 'auto', `com ${profile.name}`);
+      return s ? noted(moving, s.note) : moving;
+    });
+  }
+
+  /**
+   * As linhas de quem pediu a tarefa: "Pedida por…" e, quando dá, a dúvida ao gestor. `engine`: o motor EFETIVO da conversa
+   * (o do override, quando há). O Codex recebe a URL acessível pela sandbox.
+   */
+  private async requesterLines(projectId: string, task: Task, engine: Engine): Promise<string[]> {
+    const manager = task.requestedBy ? await this.deps.readProfile(projectId, task.requestedBy) : null;
+    if (!manager) return [];
+    const api = engine === 'codex' ? (this.deps.sandboxApiUrl ?? null) : (this.deps.apiUrl ?? null);
+    return [
+      `Pedida por ${manager.name} (${manager.role}), que vai conferir a sua entrega.`,
+      task.requestedSession && api ? askManagerLine(`${api}/api/projects/${projectId}`, manager, task.requestedSession) : '',
+    ].filter(Boolean);
+  }
+
+  /**
+   * Antes de abrir a conversa: o motor da ficha está no limite agora (o do provedor, ou a linha de parada 5h/7d da empresa)?
+   * Sem limite (ou sem leitura), começa como sempre. No limite, troca para o secundário se `shouldFallback` deixa; senão,
+   * `wait`: a tarefa fica na fila até o limite baixar. O orçamento do projeto não entra aqui: o envio o barra, como antes.
+   */
+  private async startPlan(projectId: string, task: Task, profile: StaffProfile): Promise<{ switch?: Switch; wait?: string }> {
+    // Ficha sem secundário: nada muda em relação ao que já existia (sem pré-checagem; o limite aparece no envio, como sempre).
+    if (!profile.fallback) return {};
+    const engine: Engine = profile.engine === 'codex' ? 'codex' : 'claude';
+    // Início da fila: leitura do Codex em cache (ver readLimit). Quem decide no meio do turno lê fresco.
+    const provider = await this.readLimit(engine, { cache: true });
+    const hit = limitReading(provider, await this.stopLimit(projectId, profile.id, engine));
+    if (hit === null || hit === 'unknown') return {};
+    // Veio da linha de parada da empresa (o provedor não deu limite): o texto diz isso, e a volta vai entre parênteses.
+    const porStop = provider === null || provider === 'unknown';
+    const situacao = porStop ? 'passou da linha de parada' : 'está no limite';
+    const secondary = profile.fallback;
+    const otherHit = await this.readingOf(projectId, profile.id, otherEngine(engine), true);
+    const decision = shouldFallback({ task, profile, engine, hit, otherEngineHit: otherHit, now: Date.now() });
+    const volta = atHour(hit.resetsAt);
+    const quando = volta ? (porStop ? ` (volta às ${volta})` : ` até ${volta}`) : '';
+    if (!decision.ok) return { wait: `${ENGINE_LABEL[engine]} ${situacao}${quando} (${decision.reason})` };
+    const override = overrideOfFallback(secondary);
+    // Pré-checagem: a conversa nova abre? Se não, fica na fila: sem enviar e sem gravar sessão.
+    try {
+      await this.deps.assertRunnable?.(projectId, profile.id, override);
+    } catch (err) {
+      return { wait: `${ENGINE_LABEL[engine]} ${situacao}${quando}; a troca para ${ENGINE_LABEL[secondary.engine]} não abre (${(err as Error).message})` };
+    }
+    return {
+      switch: {
+        override,
+        fallback: { ...override, from: engine, at: Date.now(), fromSession: null, reason: 'limit-start' },
+        line: `Você está no motor secundário (${ENGINE_LABEL[secondary.engine]}) porque ${ENGINE_LABEL[engine]} ${situacao}${quando}.`,
+        note: `${ENGINE_LABEL[engine]} ${situacao}: começou no motor secundário (${ENGINE_LABEL[secondary.engine]})`,
+      },
+    };
+  }
+
+  /**
+   * O limite de um motor agora (ver `TaskServiceDeps.readLimit`). Erro ao ler = 'unknown': não troca às cegas. Com `cache`, a
+   * leitura do Codex é guardada por `CODEX_LIMIT_TTL_MS` (a fila de início, que roda a cada tick); sem ele, sempre fresca.
+   */
+  private async readLimit(engine: Engine, opts: { cache?: boolean } = {}): Promise<LimitHit | null | 'unknown'> {
+    const useCache = engine === 'codex' && !!opts.cache;
+    if (useCache && this.codexLimit && Date.now() - this.codexLimit.at < CODEX_LIMIT_TTL_MS) return this.codexLimit.value;
+    const value: LimitHit | null | 'unknown' = this.deps.readLimit ? await this.deps.readLimit(engine).catch(() => 'unknown' as const) : 'unknown';
+    if (useCache) this.codexLimit = { at: Date.now(), value };
+    return value;
+  }
+
+  /**
+   * A linha de parada da empresa (5h/7d) do motor, como limite (ver `limitOfStop`). Sem o gancho (`stopHit`), ou sem trava: null.
+   * Erro ao ler = 'unknown' (não troca às cegas).
+   */
+  private async stopLimit(projectId: string, staffId: string, engine: Engine): Promise<LimitHit | null | 'unknown'> {
+    if (!this.deps.stopHit) return null;
+    const stop = await this.deps.stopHit(projectId, staffId, engine).catch(() => 'unknown' as const);
+    return stop === 'unknown' ? 'unknown' : stop ? limitOfStop(stop) : null;
+  }
+
+  /** O limite de um motor para a troca: o do provedor e a linha de parada da empresa juntos (ver `limitReading`). */
+  private async readingOf(projectId: string, staffId: string, engine: Engine, cache: boolean): Promise<OtherEngineReading> {
+    return limitReading(await this.readLimit(engine, { cache }), await this.stopLimit(projectId, staffId, engine));
+  }
+
+  /**
+   * O motor da tarefa estourou o limite no meio do turno (`ChatManager.onUsageLimit`). Se `shouldFallback` deixa, a tarefa
+   * passa ao secundário numa conversa nova, com o handoff da antiga. Senão, segue como antes (o "continue" agendado).
+   * Ordem: grava a troca antes de matar a antiga; tira o "continue" dela; para o processo; abre a nova.
+   */
+  async onLimit(ev: { sessionId: string; engine: Engine; hit: LimitHit }): Promise<void> {
+    const where = await this.where(ev.sessionId);
+    if (where?.role !== 'work') return;
+    const { projectId, taskId } = where;
+    const staffId = ((await this.list(projectId)) ?? []).find((t) => t.id === taskId)?.staffId;
+    if (!staffId) return;
+    await this.locked(projectId, staffId, async () => {
+      // Antes de tudo: se o limite agendou o "continue", a pendência já existe quando for cancelada.
+      await this.deps.settleLimit?.(ev.sessionId);
+      const dir = await this.deps.projectPath(projectId);
+      const task = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
+      const profile = await this.deps.readProfile(projectId, staffId);
+      if (!dir || !task || !profile || task.sessionId !== ev.sessionId || !profile.fallback) return;
+      // Só a tarefa em andamento troca: parada, em revisão ou pronta, a conversa não é de quem decide trocar de motor.
+      if (task.status !== 'doing' && task.status !== 'planning') return;
+      const secondary = profile.fallback;
+      const decision = shouldFallback({ task, profile, engine: ev.engine, hit: ev.hit, otherEngineHit: await this.readingOf(projectId, staffId, otherEngine(ev.engine), false), now: Date.now() });
+      if (!decision.ok) {
+        await this.change(projectId, taskId, (t) => noted(t, `limite do ${ENGINE_LABEL[ev.engine]} no meio do turno: segue como antes (${decision.reason})`));
+        return;
+      }
+      const override = overrideOfFallback(secondary);
+      const fallback: TaskFallback = { ...override, from: ev.engine, at: Date.now(), fromSession: ev.sessionId, reason: 'limit-mid' };
+      // A foto da antiga, antes de matá-la: o que estava em andamento só existe no processo. O modo em que ela estava também.
+      const snap = await (this.deps.snapshot?.(projectId, ev.sessionId) ?? Promise.resolve(null)).catch(() => null);
+      // A fase não muda: "planejando" abre em plano; "fazendo" abre no modo em que a antiga estava. Sem leitura do modo, o mínimo
+      // (manual). Nunca acima da ficha (ver atMostAutonomy).
+      const candidate: Autonomy = task.status === 'planning' ? 'plan' : (autonomyOfMode(snap?.live?.state.permissionMode) ?? 'manual');
+      const autonomy = atMostAutonomy(candidate, profile.autonomy);
+      const sw: Switch = {
+        override: { ...override, autonomy },
+        fallback,
+        note: `conversa nova no motor secundário (${ENGINE_LABEL[secondary.engine]}), com o resumo da anterior`,
+      };
+      // Pré-checagem: a conversa nova abriria? (as barreiras do envio, sem gravar nada). Não abre: segue como antes, com o "continue".
+      try {
+        await this.deps.assertRunnable?.(projectId, staffId, sw.override);
+      } catch (err) {
+        const why = `troca para ${ENGINE_LABEL[secondary.engine]} não feita: ${(err as Error).message}`;
+        await this.change(projectId, taskId, (t) => noted(t, `limite do ${ENGINE_LABEL[ev.engine]} no meio do turno: ${why}; segue como antes`));
+        return;
+      }
+      // a) grava a troca antes de matar a antiga; daqui para a frente, o que chegar dela não é da tarefa.
+      this.retired.add(ev.sessionId);
+      this.bySession.delete(ev.sessionId);
+      await this.change(projectId, taskId, (t) => noted({ ...t, fallback }, `limite do ${ENGINE_LABEL[ev.engine]} no meio do turno: passa para o secundário`));
+      try {
+        // b) tira o "continue" (e o despertador, se havia: a hora dele vai para o handoff); c) para o processo dela.
+        const wakeAt = await this.deps.cancelContinue?.(ev.sessionId);
+        this.deps.stopSession?.(ev.sessionId);
+        // d) o handoff; e) a conversa nova, com o override e o handoff como mensagem.
+        sw.text = await this.handoffText(projectId, dir, task, profile, ev.engine, { engine: secondary.engine, model: secondary.model }, ev.hit, snap, wakeAt ?? null);
+        await this.startNow(projectId, taskId, profile, false, sw);
+      } catch (err) {
+        // Falhou antes de a conversa nova abrir (o startNow já marcou o que dava): fica em Aguardar, sem tentar de novo.
+        const why = `troca para o motor secundário não deu certo: ${(err as Error).message}`;
+        await this.change(projectId, taskId, (t) => (t.status === 'waiting' ? t : moved({ ...t, queuedAt: null, waitReason: why }, 'waiting', 'auto', why)));
+      }
+    });
+  }
+
+  /**
+   * O handoff da conversa antiga: o pedido, as correções do dono, a última resposta, o git, a memória da ficha, o fim de
+   * tarefa (o mesmo do texto de início) e o que havia agendado (despertador cancelado, com a hora, se havia).
+   */
+  private async handoffText(
+    projectId: string,
+    dir: string,
+    task: Task,
+    profile: StaffProfile,
+    from: Engine,
+    to: { engine: Engine; model: string },
+    hit: LimitHit,
+    snap: ChatSnapshot | null,
+    wakeAt: number | null,
+  ): Promise<string> {
+    const old = oldConversationExtract(snap ?? { history: [], live: null });
+    const place = await locateCode(dir, profile.id, !!profile.worktree).catch(() => null);
+    const git = await collectGit(place?.path ?? dir).catch(() => null);
+    return buildHandoff({
+      task: { id: task.id, title: task.title, description: task.description },
+      from: { engine: from, reason: 'limit', resetsAt: hit.resetsAt },
+      to,
+      userMessages: old.userMessages,
+      lastAssistantText: old.lastAssistantText,
+      git,
+      // Com `/` também no Windows: a instrução vai para o modelo, que lê o caminho como texto.
+      memoryPath: path.posix.join('.myco', 'staff', `${profile.id}.memory.md`),
+      closing: [...(await this.requesterLines(projectId, task, to.engine)), CLOSING_LINE],
+      notes: wakeAt ? [`havia um despertador agendado para ${atHour(wakeAt)}: reagende se ainda fizer sentido.`] : [],
+    });
   }
 
   /**
    * Sua mensagem para a conversa de uma tarefa enquanto o funcionário está em outra: fica guardada
    * na tarefa e vai quando ele ficar livre. Devolve o motivo, ou null se pode mandar já.
    */
-  async hold(sessionId: string, msg: { text: string; images?: string[] }): Promise<string | null> {
+  async hold(sessionId: string, msg: { text: string; images?: string[]; origin?: string }): Promise<string | null> {
     const where = await this.where(sessionId);
     if (!where || where.role !== 'work') return null;
     const tasks = (await this.list(where.projectId)) ?? [];
@@ -295,9 +627,39 @@ export class TaskService {
     if (!busyWith && !this.deps.isWorking?.(where.projectId, task.staffId, sessionId)) return null;
     const name = (await this.deps.readProfile(where.projectId, task.staffId))?.name ?? 'ele';
     const reason = busyWith ? `espera ${name} terminar “${busyWith.title}”` : `espera ${name} terminar a conversa em que está`;
-    const held: HeldMessage = { id: randomBytes(4).toString('hex'), at: new Date().toISOString(), text: msg.text, ...(msg.images?.length && { images: msg.images }), reason };
+    const held: HeldMessage = { id: randomBytes(4).toString('hex'), at: new Date().toISOString(), text: msg.text, ...(msg.images?.length && { images: msg.images }), ...(msg.origin && { origin: msg.origin }), reason };
     await this.change(where.projectId, task.id, (t) => noted({ ...t, held: [...(t.held ?? []), held] }, `ajuste guardado: ${reason}`));
     return reason;
+  }
+
+  /** A tarefa cuja conversa de trabalho é `sessionId`, neste projeto (null se não é de tarefa). */
+  async taskOfWork(projectId: string, sessionId: string): Promise<Task | null> {
+    const where = await this.where(sessionId);
+    if (where?.role !== 'work' || where.projectId !== projectId) return null;
+    return ((await this.list(projectId)) ?? []).find((t) => t.id === where.taskId) ?? null;
+  }
+
+  /**
+   * Codex-only exception for a task worker's clarification message to its requester. The source
+   * session, active task, requester identity, and requester session must all match the recorded task.
+   */
+  async mayAskRequester(
+    projectId: string,
+    caller: Caller | null,
+    target: { sessionId: string | null; staffId: string | null },
+  ): Promise<boolean> {
+    if (!caller?.sandbox || caller.engine !== 'codex' || caller.projectId !== projectId || !caller.staffId || !target.sessionId || !target.staffId) {
+      return false;
+    }
+    const tasks = await this.list(projectId);
+    return !!tasks?.some(
+      (task) =>
+        (task.status === 'planning' || task.status === 'doing') &&
+        task.staffId === caller.staffId &&
+        task.sessionId === caller.sessionId &&
+        task.requestedBy === target.staffId &&
+        task.requestedSession === target.sessionId,
+    );
   }
 
   /** As mensagens guardadas desta conversa, como itens do chat. */
@@ -400,8 +762,9 @@ export class TaskService {
     if (adjust && this.deps.sendTo) {
       const held = adjust.held!;
       const text = held.map((m) => m.text).filter(Boolean).join('\n\n');
+      const origin = held.map((m) => m.origin).filter(Boolean).join('\n\n');
       try {
-        await this.deps.sendTo(projectId, adjust.sessionId!, staffId, text, held.flatMap((m) => m.images ?? []));
+        await this.deps.sendTo(projectId, adjust.sessionId!, staffId, text, held.flatMap((m) => m.images ?? []), origin || undefined);
       } catch (err) {
         await this.change(projectId, adjust.id, (t) => noted(t, `o ajuste guardado não foi: ${(err as Error).message}`));
         return;
@@ -535,6 +898,25 @@ export class TaskService {
   /** Aprovou o plano da conversa: planejando → fazendo, com o plano guardado. */
   async onPlanApproved(sessionId: string, plan: string): Promise<void> {
     await this.onSession(sessionId, 'work', (t) => (t.status === 'planning' || t.status === 'todo' ? moved({ ...t, plan }, 'doing', 'auto', 'plano aprovado') : { ...t, plan }));
+  }
+
+  /**
+   * Recusou o plano da conversa: planejando → aguardar, sem executar. Quem pediu é avisado e a fila do
+   * funcionário anda. Fora de planejando, não mexe.
+   */
+  async onPlanRejected(sessionId: string): Promise<void> {
+    const where = await this.where(sessionId);
+    if (!where || where.role !== 'work') return;
+    let rejected: Task | null = null;
+    await this.change(where.projectId, where.taskId, (t) => {
+      if (t.status !== 'planning') return t;
+      rejected = moved(t, 'waiting', 'auto', 'plano recusado pelo usuário');
+      return rejected;
+    });
+    const out = rejected as Task | null;
+    if (!out) return;
+    await this.tellRequester(where.projectId, out, `[MyCo] O usuário recusou o plano da tarefa “${out.title}” (id ${out.id}); ela foi para Aguardar e não será executada.`);
+    if (out.staffId) await this.kick(where.projectId, out.staffId);
   }
 
   /** Mandou mensagem na conversa da tarefa: em revisão, ela volta para "fazendo". */
@@ -672,12 +1054,18 @@ export class TaskService {
     // Parou no limite de uso com o "continue" agendado: não é entrega. Fica em "fazendo", ninguém é avisado
     // e a fila não anda (a tarefa segue ocupando o funcionário). Erro ao perguntar: vale como hoje, entrega.
     if (await this.deps.awaitingLimit?.(sessionId).catch(() => false)) return;
-    const staffId = ((await this.list(where.projectId)) ?? []).find((t) => t.id === where.taskId)?.staffId;
+    const current = ((await this.list(where.projectId)) ?? []).find((t) => t.id === where.taskId);
+    // Fim de uma conversa que já não é a da tarefa (trocou de motor, ou outra): não entrega, não fecha, não anda a fila.
+    if (!current || current.sessionId !== sessionId) return;
+    const staffId = current.staffId;
     if (!staffId) return;
     // Na vez dele: a próxima tarefa só começa depois que a entrega desta tem o seu commit.
     const deliveredTask = await this.locked(where.projectId, staffId, async () => {
       let delivered: Task | null = null;
-      await this.change(where.projectId, where.taskId, (t) => (t.status === 'doing' ? (delivered = moved(t, 'review', 'auto', 'turno terminou')) : t));
+      // Confere de novo, lá dentro: o estado pode ter mudado enquanto esperava a vez.
+      await this.change(where.projectId, where.taskId, (t) =>
+        t.status === 'doing' && t.sessionId === sessionId ? (delivered = moved(t, 'review', 'auto', 'turno terminou')) : t,
+      );
       if (delivered) {
         await this.markDelivery(where.projectId, delivered);
         delivered = await this.recordDelivery(where.projectId, delivered, sessionId);
@@ -799,21 +1187,36 @@ export class TaskService {
     return !!(await this.where(sessionId));
   }
 
+  /**
+   * A conversa é de tarefa, ativa ou não: a de trabalho, revisão ou deploy; as retiradas (antes de um reinício); e a antiga de
+   * uma troca de motor (que depois do reinício já não está no índice). O envio direto (server/directFallback.ts) não mexe nelas.
+   */
+  async isTaskConversation(sessionId: string): Promise<boolean> {
+    if (this.retired.has(sessionId) || (await this.isTaskSession(sessionId))) return true;
+    for (const projectId of await this.deps.projectIds()) {
+      if ((await this.list(projectId) ?? []).some((t) => t.fallback?.fromSession === sessionId)) return true;
+    }
+    return false;
+  }
+
   private async where(sessionId: string) {
+    if (this.retired.has(sessionId)) return null;
     if (!this.bySession.has(sessionId) && !this.indexed) await this.summary(); // primeira vez depois de subir: monta o índice sessão → tarefa
     return this.bySession.get(sessionId) ?? null;
   }
 
   private async change(projectId: string, taskId: string, fn: (t: Task) => Task): Promise<Task | null> {
-    let out: Task | null = null;
+    const seen: { before?: Task; after?: Task } = {};
     const ok = await this.mutate(projectId, (tasks) =>
       tasks.map((t) => {
         if (t.id !== taskId) return t;
-        out = fn(t);
-        return out;
+        seen.before = t;
+        seen.after = fn(t);
+        return seen.after;
       }),
     );
-    return ok ? out : null;
+    if (ok && seen.before && seen.after) await this.syncOverride(projectId, seen.before, seen.after);
+    return ok ? (seen.after ?? null) : null;
   }
 
   /** Lê, muda e grava o arquivo do projeto, um pedido por vez (duas mudanças juntas não se perdem). */
@@ -905,6 +1308,15 @@ function occupant(tasks: Task[], staffId: string, except?: string): Task | undef
  */
 function deliveredAt(t: Task): string | null {
   return t.checkpoint && t.status !== 'doing' && t.status !== 'planning' ? t.checkpoint.sha : null;
+}
+
+/** Dúvida da tarefa vai para quem pediu, na conversa em que pediu, nunca para o usuário. */
+function askManagerLine(api: string, manager: StaffProfile, sessionId: string): string {
+  const body = JSON.stringify({ sessionId, staffId: manager.id, text: 'sua pergunta' });
+  return (
+    `Dúvida ou decisão desta tarefa: pergunte a ${manager.name}, não ao usuário (sem pergunta com opções), e siga no que não depende da resposta. ` +
+    `POST ${api}/chat/send com os cabeçalhos \`x-myco: 1\` e \`x-myco-token: $MYCO_TOKEN\` e o JSON \`${body}\`.`
+  );
 }
 
 /** Quem pediu a tarefa é quem revisa a entrega (revisor marcado igual ao gestor): ele recebe só o desfecho. */

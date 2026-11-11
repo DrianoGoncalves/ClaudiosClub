@@ -1,6 +1,8 @@
-import type { AccountUsage, UsageStop, UsageStopHit } from '../shared/model';
+import type { AccountUsage, UsageLimit, UsageStop, UsageStopHit } from '../shared/model';
+import { windowOf, type LimitHit } from './chat/usageLimit';
 
 // Trava de consumo: antes de mandar trabalho novo, compara o 5h/7d da conta com a linha de parada.
+// `claudeLimitHit` é outra pergunta (o Claude está no limite agora, e até quando), feita sobre a mesma leitura.
 
 const KINDS = [
   ['five_hour', 'fiveHour'],
@@ -52,4 +54,20 @@ export function usageStopHit(usage: AccountUsage, company: UsageStop, now = Date
     return { kind, percentUsed: reading.percentUsed, limit, resetsAt: reading.resetsAt };
   }
   return null;
+}
+
+/**
+ * O Claude está no limite agora? Janela (5h ou 7d) em 100% com reset ainda no futuro: devolve quando volta (a de reset
+ * mais tardio, pois a conversa só anda com todas livres) e a janela. Null se nenhuma está esgotada ou sem leitura.
+ * Mesmo formato (`LimitHit`) que o Codex devolve (`codexLimitHit`). Não é a linha de parada da empresa (`usageStopHit`).
+ */
+export function claudeLimitHit(usage: { limits: UsageLimit[] } | null | undefined, now = Date.now()): LimitHit | null {
+  let hit: LimitHit | null = null;
+  for (const l of usage?.limits ?? []) {
+    const window = windowOf(l.kind);
+    const t = l.resetsAt ? Date.parse(l.resetsAt) : NaN;
+    if (!window || l.percentUsed < 100 || !(t > now)) continue;
+    if (!hit || t > hit.resetsAt!) hit = { resetsAt: t, window };
+  }
+  return hit;
 }

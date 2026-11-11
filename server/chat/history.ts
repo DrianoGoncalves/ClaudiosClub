@@ -7,8 +7,8 @@ import { hasStaffNotice, inputText, isInjectedUserText, resultText, stripCheckpo
 // Histórico da conversa a partir do transcript (~/.claude/projects/.../<sessão>.jsonl).
 // Transcripts passam de MB: lê só o final e devolve as últimas mensagens.
 
-const TAIL_BYTES = 3 * 1024 * 1024;
-const MAX_ITEMS = 200;
+export const TAIL_BYTES = 3 * 1024 * 1024;
+export const MAX_ITEMS = 200;
 
 interface Line {
   type?: string;

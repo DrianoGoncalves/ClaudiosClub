@@ -23,6 +23,7 @@ export const ALLOCATION_FIELDS = [
   'servers',
   'browser',
   'engine',
+  'fallback',
 ] as const satisfies readonly (keyof StaffProfile)[];
 
 /** Só do pedido: não são campos da ficha (abrir conversa, adotar sessão, confirmar consumo). */

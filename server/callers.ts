@@ -112,3 +112,8 @@ export function actingStaff(caller: Caller | null, declared: string | undefined)
   if (!caller.staffId) return { staffId: undefined, error: 'só um funcionário (com ficha) faz isto pela API' };
   return { staffId: caller.staffId };
 }
+
+/** A conversa de quem pede a tarefa (o token dele): a entrega volta para ela, e não para a mais recente dele. Sem token, undefined. */
+export function requesterSessionOf(caller: Caller | null, requestedBy: string | undefined): string | undefined {
+  return caller?.staffId && caller.staffId === requestedBy ? caller.sessionId : undefined;
+}

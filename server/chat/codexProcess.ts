@@ -50,6 +50,11 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
    * com o mais parecido daqui (ver `pickCodexSubstitute`). Sem ele, o plano B roda sem `-m` (o padrão do Codex).
    */
   models?: () => Promise<ReadonlyArray<Pick<CodexModelInfo, 'slug'>>>;
+  /**
+   * Conversa no motor/modelo secundário (ver `EngineOverride`): o modelo escolhido vale. Se a conta recusar, o turno falha com o erro
+   * do modelo recusado, sem o plano B (que trocaria de modelo).
+   */
+  noSubstitute?: boolean;
   /** Troca o encerramento da execução nos testes (o padrão encerra o grupo de processos). */
   kill?: (child: ChildProcessWithoutNullStreams) => void;
 }
@@ -394,6 +399,11 @@ export class CodexProcess extends ChatProcess {
   private failTurn(run: Run, text: string) {
     if (run.ended) return;
     if (run.job && !run.job.retried && run.model && isModelUnavailable(text)) {
+      // Modelo que o dono escolheu para o secundário: não há plano B, o erro diz qual modelo a conta recusou.
+      if (this.codex.noSubstitute) {
+        this.endTurn(run, { kind: 'failed', text: `modelo secundário ${run.model} recusado pelo Codex` });
+        return;
+      }
       run.ended = true;
       run.retry = true;
       return;
@@ -431,12 +441,18 @@ export class CodexProcess extends ChatProcess {
     if (run.ended) return;
     run.ended = true;
     const at = new Date().toISOString();
+    let limit: { resetsIn?: number } | null = null;
     if (outcome.kind === 'stopped') {
       if (!this.closing) this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text: 'Turno interrompido', tone: 'info', at });
     } else if (outcome.kind === 'failed') {
-      // O limite de uso do ChatGPT aparece como erro da conversa; o Claudio’s Club não continua sozinho (v1).
-      this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text: parseCodexFailure(outcome.text).text, tone: 'error', at });
+      // O limite de uso do ChatGPT aparece como erro da conversa e o gerente agenda o "continue", como no Claude (ver manager.limitHit).
+      const failure = parseCodexFailure(outcome.text);
+      if (failure.limit) limit = failure;
+      this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text: failure.text, tone: 'error', at });
     }
+    // Uma vez por turno, como o ChatProcess: o limite (com a hora que o próprio erro deu, se deu), ou o fim sem limite.
+    if (limit) this.codex.onUsageLimit?.({ resetsAt: limit.resetsIn === undefined ? null : Date.now() + limit.resetsIn * 1000, window: null });
+    else this.codex.onTurnWithoutLimit?.();
     if (this.queue.length && !this.closing) return; // a próxima mensagem já espera: segue ocupado
     this.waitingReply = false;
     this.setState({ busy: false, compacting: false });

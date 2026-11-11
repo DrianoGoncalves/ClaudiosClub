@@ -158,7 +158,9 @@ export function EmployeePanel(props: {
     props.initialConversation && (props.initialConversation === noticed || props.conversations?.some((c) => c.id === props.initialConversation))
       ? props.initialConversation
       : null;
-  const [picked, setPicked] = useState<string | null>(wanted ?? s?.id ?? null);
+  // Sem sessão (ex.: motor Codex, que o quadro não lê), abre a mais recente das conversas da ficha.
+  const latest = latestConversation(props.conversations);
+  const [picked, setPicked] = useState<string | null>(wanted ?? s?.id ?? latest);
   const [fresh, setFresh] = useState(false);
   // A conversa nova, depois da primeira mensagem, já tem sessão: o ChatView segue nela sem remontar (fica com a
   // chave de "nova"), e ela entra na lista na hora, para dar para trocar de conversa e voltar antes do quadro
@@ -178,7 +180,7 @@ export function EmployeePanel(props: {
       return;
     }
     if (picked !== null || fresh) return;
-    setPicked(s?.id ?? null);
+    setPicked(s?.id ?? latest);
     setFresh(false);
     setFreshId(null);
   }, [s?.id]);
@@ -491,6 +493,17 @@ export function EmployeePanel(props: {
       awaiting={!!opened && !!props.inbox?.some((i) => i.sessionId === opened)}
     />
   );
+}
+
+/** A conversa mais recente pelo `updatedAt` (sem data conta como a mais antiga): a ordem da lista não é garantida (as fantasmas vêm sem ordenar). */
+function latestConversation(list: Array<{ id: string; updatedAt: string | null }> | undefined): string | null {
+  let best: { id: string; at: number } | null = null;
+  for (const c of list ?? []) {
+    const parsed = c.updatedAt ? Date.parse(c.updatedAt) : NaN;
+    const at = Number.isNaN(parsed) ? -Infinity : parsed;
+    if (!best || at > best.at) best = { id: c.id, at };
+  }
+  return best?.id ?? null;
 }
 
 /** "14:05 — Ajustar o header da sala" (o dia vem do grupo). */

@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sandboxVerdict, staffMayPost } from '../server/apiPolicy';
-import { actingStaff, isSandboxAddress, resolveCaller, SANDBOX_HOST, SessionTokens, type TokenOwner } from '../server/callers';
+import { actingStaff, isSandboxAddress, requesterSessionOf, resolveCaller, SANDBOX_HOST, SessionTokens, type TokenOwner } from '../server/callers';
 import { ChatManager } from '../server/chat/manager';
 import { ChatProcess } from '../server/chat/process';
 import { CodexProcess } from '../server/chat/codexProcess';
@@ -108,6 +108,13 @@ describe('requestedBy: o token corrige o que o pedido declara', () => {
 
   it('conversa sem ficha com token não é ninguém: não declara quem pede', () => {
     expect(actingStaff({ ...claude, staffId: null }, 'bia')).toMatchObject({ staffId: undefined, error: expect.stringContaining('com ficha') });
+  });
+
+  it('a conversa que pede a tarefa é a do token, quando o token é do próprio gestor', () => {
+    expect(requesterSessionOf(claude, 'ana')).toBe('s-claude');
+    expect(requesterSessionOf(claude, 'bia')).toBeUndefined();
+    expect(requesterSessionOf(null, 'ana')).toBeUndefined();
+    expect(requesterSessionOf({ ...claude, staffId: null }, undefined)).toBeUndefined();
   });
 });
 
@@ -386,6 +393,9 @@ describe('o servidor (server/index.ts) usa tudo isso', () => {
     expect(index).toContain('tokens: sessionTokens');
     // Mensagem e despertador (agendar e desfazer) conferem a sandbox; contratar, tarefa e encerrar usam o dono do token.
     expect(index.match(/await checkReach\(caller, /g)).toHaveLength(3);
+    expect(index.match(/tasks\.mayAskRequester\(pid!, caller, target\)/g)).toHaveLength(2);
+    expect(index).toContain('requesterAskLimiter.check');
+    expect(index).toContain('sandboxApiUrl: SANDBOX_URL');
     expect(index).toContain('staff.hire(id!, body, fromBrowser, caller)');
     expect(index.match(/actorOf\(caller, b\.requestedBy\)/g)).toHaveLength(2);
     // Sem o 127.0.0.2 de pé, o Codex roda sem rede (e a conversa avisa), em vez de rodar com a rede aberta.

@@ -7,6 +7,7 @@ import type {
   AccountUsage,
   AnyConnection,
   BrowserStatus,
+  EngineOverride,
   FtpConnection,
   LaunchResult,
   McpServerInfo,
@@ -31,6 +32,7 @@ import { MYCO_HOME, readConfig, setArchived, workspaceOf } from '../config';
 import { librarySkillsOf } from '../skillLibrary';
 import { listRoles } from '../roles';
 import { readUsage } from '../usage';
+import { atMostAutonomy } from '../taskFallback';
 import { projectBudgetHit, usageStopHit, UsageStopError } from '../usageStop';
 import { TEMP_IDLE_DAYS } from '../../shared/model';
 import { codexModelOrNull, type CodexSpawn } from '../chat/codexArgs';
@@ -61,6 +63,7 @@ import {
   saveProfile,
   staffDir,
   StaffError,
+  assertFallbackRules,
   assertProfileRules,
   StaffInputSchema,
   type StaffInputParsed,
@@ -152,6 +155,22 @@ const ApplyToCopiesBody = z.object({ applyToCopies: z.boolean().optional() });
 /** Apagar com tarefas abertas: `force` deixa as tarefas sem responsável (confirmado na tela). Sem corpo = sem force. */
 const DeleteStaffBody = z.object({ force: z.boolean().default(false) });
 const engineOf = (p: Pick<StaffProfile, 'engine'>) => p.engine ?? 'claude';
+
+/**
+ * A ficha como a conversa do motor secundário a enxerga (ver `chatSpawn`). Claude no lugar de Codex roda fora da sandbox: sem
+ * Chrome, MCPs, servidores nem contratar. A autonomia é `aceitar edições` (o padrão), ou o modo que a conversa já tinha
+ * (`o.autonomy`), nunca acima de `aceitar edições` (sem sandbox, `auto` daria ao Claude mais do que o Codex tinha) nem da
+ * ficha Codex: se ela é `plan` ou `manual`, fica a dela. Modo desconhecido já chega como `manual` (ver tasks.ts).
+ */
+function asEngine(profile: StaffProfile, o: EngineOverride): StaffProfile {
+  const base: StaffProfile = { ...profile, engine: o.engine, model: o.model, effort: o.effort ?? null, ...(o.autonomy && { autonomy: o.autonomy }) };
+  if (o.engine === 'claude' && profile.engine === 'codex') {
+    const teto = profile.autonomy;
+    const autonomy = teto === 'plan' || teto === 'manual' ? teto : atMostAutonomy(atMostAutonomy(o.autonomy ?? 'acceptEdits', teto), 'acceptEdits');
+    return { ...base, autonomy, browser: false, mcps: [], canHire: false, servers: [] };
+  }
+  return base;
+}
 
 /** `child` está dentro de `dir` (sem sair por `..` nem por outro caminho). */
 function insideDir(dir: string, child: string): boolean {
@@ -318,6 +337,8 @@ export class StaffService {
     if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'ficha inválida');
     const input = parsed.data;
     if (!bodyHasMcps) input.mcps = [];
+    // Ficha nova sem `engine` é do Claude: o secundário não pode ser o mesmo motor, e servidor não vai ao secundário Codex.
+    assertFallbackRules({ engine: input.engine, servers: input.servers, fallback: input.fallback });
 
     if (!fromBrowser && caller) {
       if (!caller.staffId) throw new StaffError('só um funcionário (com ficha) contrata pela API');
@@ -354,6 +375,8 @@ export class StaffService {
           input.engine = 'codex';
           input.model = codexModelOrNull(input.model);
           for (const m of codexManagers) input.autonomy = capAutonomy(input.autonomy, m.autonomy);
+          // O motor foi forçado a Codex: o secundário tem de ser outro motor, e o Codex não leva servidor (de novo, agora com o motor certo).
+          assertFallbackRules({ engine: input.engine, servers: input.servers, fallback: input.fallback });
         }
       }
     }
@@ -560,7 +583,7 @@ export class StaffService {
     if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'ficha inválida');
     const flags = ApplyToCopiesBody.safeParse(body);
     if (!flags.success) throw new StaffError('applyToCopies tem que ser true ou false');
-    const { portraitDataUrl, launch: _launch, adoptSessionId: _adopt, force: _force, ...fields } = parsed.data;
+    const { portraitDataUrl, launch: _launch, adoptSessionId: _adopt, force: _force, fallback, ...fields } = parsed.data;
     if (fields.reportsTo.includes(staffId)) throw new StaffError('um funcionário não pode reportar a si mesmo');
     await this.managers(project.path, fields.reportsTo);
     if (await this.wouldCycle(project.path, staffId, fields.reportsTo)) {
@@ -569,11 +592,14 @@ export class StaffService {
 
     // O pedido pode não trazer o `engine` (fica o da ficha): as regras do Codex valem sobre a ficha já junta.
     assertProfileRules({ ...current, ...fields });
+    // Secundário: ausente = fica o da ficha; null = tira; objeto = troca.
+    const nextFallback = fallback === undefined ? current.fallback : (fallback ?? undefined);
+    assertFallbackRules({ ...current, ...fields, fallback: nextFallback });
     // Só confere o que mudou: um modelo que já estava na ficha (e que a conta deixou de aceitar) não trava uma edição qualquer;
     // quem roda no Codex tem o plano B (outro modelo na mensagem) para isso.
     const engine = fields.engine ?? current.engine;
     if (engine === 'codex' && (engine !== current.engine || fields.model !== current.model)) await this.checkCodexModel(engine, fields.model);
-    const saved = await this.saveEdit(project, current, { ...current, ...fields, projectId }, portraitDataUrl);
+    const saved = await this.saveEdit(project, current, { ...current, ...fields, fallback: nextFallback, projectId }, portraitDataUrl);
     await this.seal(project, saved); // salvar pela tela confirma motor e autonomia (inclusive de uma ficha que foi mexida por fora)
     const copiesUpdated = saved.personId ? await this.applyToCopies(project, saved, portraitDataUrl) : 0;
     return { ...saved, copiesUpdated };
@@ -957,12 +983,14 @@ export class StaffService {
    * da ficha (sessão nova quando `sessionId` é null). Sem ficha: só retoma a sessão, pedindo
    * aprovação para tudo. `forkFrom`: sessão nova como cópia desta (duplicar a conversa), na mesma
    * pasta da original.
+   * `engineOverride`: a conversa roda no motor/modelo secundário (ver `asEngine`); a ficha gravada não muda.
    */
   async chatSpawn(
     projectId: string,
     sessionId: string | null,
     staffId: string | null,
     forkFrom?: string,
+    engineOverride?: EngineOverride,
   ): Promise<{ sessionId: string; cwd: string; args: string[]; chosen?: boolean; engine?: 'claude' | 'codex'; codex?: CodexSpawn } | null> {
     const project = await this.project(projectId);
     if (!project) return null;
@@ -981,37 +1009,49 @@ export class StaffService {
     profile = { ...profile, projectId };
     const resume = !!sessionId && !forkFrom;
     const id = resume ? sessionId! : randomUUID();
-    const codex = profile.engine === 'codex';
+    // Motor da conversa: o da ficha, ou o secundário (`engineOverride`), montado como se a ficha fosse dele. Só a montagem muda:
+    // o que grava a ficha (selo, JSON) segue o `profile` de verdade.
+    const runProfile = engineOverride ? asEngine(profile, engineOverride) : profile;
+    const codex = runProfile.engine === 'codex';
     // Antes de qualquer coisa que grave (worktree, ssh_config, ficha .md): uma ficha do Codex mexida por fora (motor ou autonomia
     // diferentes dos que o Claudio’s Club gravou) não abre, nem como Claude. Ver seal.ts.
     await this.guardSeal(project, profile);
     if (codex) await this.assertCodexUsable();
-    const ctx = await this.context(project, profile, true);
-    const cwd = sessionCwd(profile, ctx, forkFrom ?? sessionId);
+    const ctx = await this.context(project, runProfile, true);
+    const cwd = sessionCwd(runProfile, ctx, forkFrom ?? sessionId);
     // Segunda barreira (a primeira é ao salvar a ficha): uma ficha antiga, ou editada à mão, com servidores no Codex não abre: recusa em vez de rodar.
-    assertProfileRules(profile);
+    assertProfileRules(runProfile);
     if (codex && forkFrom) throw new StaffError('duplicar a conversa ainda não existe para funcionário que roda no Codex');
     // Chrome só com a extensão instalada (vale só para esta conversa: a ficha salva segue como o dono escolheu). No Codex não há Chrome.
-    const browser = codex ? false : await effectiveBrowser(profile.browser, this.opts.browserStatus);
-    const codexRun = codex ? await prepareCodexRun(profile, ctx, id, cwd) : null;
-    const run = codexRun ? null : await prepareRun({ ...profile, browser }, ctx, id, cwd);
+    const browser = codex ? false : await effectiveBrowser(runProfile.browser, this.opts.browserStatus);
+    const codexRun = codex ? await prepareCodexRun(runProfile, ctx, id, cwd) : null;
+    const run = codexRun ? null : await prepareRun({ ...runProfile, browser }, ctx, id, cwd);
     // Modelo e esforço: o da conversa (reabrir, ou a de origem ao duplicar) > o da ficha > o último escolhido no chat.
     const origin = profile.sessions.find((x) => x.id === (forkFrom ?? sessionId));
     if (!resume) {
       const now = new Date().toISOString();
       // A cópia nasce com a escolha da origem gravada: ao reabrir depois, sai igual.
-      const entry = { id, startedAt: now, cwd, ...(forkFrom && origin?.model && { model: origin.model }), ...(forkFrom && origin?.effort && { effort: origin.effort }) };
+      // Conversa no secundário: motor, modelo e esforço ficam na entrada (o boot re-registra; ver directFallback.ts). Sem autonomia: a da ficha vale a cada abertura.
+      const entry = {
+        id,
+        startedAt: now,
+        cwd,
+        ...(forkFrom && origin?.model && { model: origin.model }),
+        ...(forkFrom && origin?.effort && { effort: origin.effort }),
+        ...(engineOverride && { fallback: { engine: engineOverride.engine, model: engineOverride.model, ...(engineOverride.effort && { effort: engineOverride.effort }) } }),
+      };
       // Ficha fresca, na fila das trocas do chat: uma troca de modelo pode ter gravado algo desde a leitura lá em cima.
       await withProfileLock(project.path, staffId, async () => {
         const fresh = (await readProfile(project.path, staffId)) ?? profile;
         await saveProfile(project.path, { ...fresh, projectId, sessions: [...fresh.sessions, entry], updatedAt: now });
       });
     }
+    // Com `engineOverride`, o modelo e o esforço são os do secundário (a escolha gravada na conversa não entra: ela é do principal).
     const effective: StaffProfile = {
-      ...profile,
+      ...runProfile,
       browser,
-      model: origin?.model ?? profile.model ?? profile.lastModel ?? null,
-      effort: origin?.effort ?? profile.effort ?? profile.lastEffort ?? null,
+      model: engineOverride ? runProfile.model : (origin?.model ?? profile.model ?? profile.lastModel ?? null),
+      effort: engineOverride ? runProfile.effort : (origin?.effort ?? profile.effort ?? profile.lastEffort ?? null),
     };
     const chosen = (origin?.model || origin?.effort) && { chosen: true };
     if (codexRun) {
@@ -1032,6 +1072,25 @@ export class StaffService {
     }
     const args = buildClaudeArgs(effective, { ...run!, sessionId: id, resume, firstPrompt: null, ...(forkFrom && { forkFrom }) });
     return { sessionId: id, cwd, args, ...chosen };
+  }
+
+  /**
+   * Pré-checagem da troca de motor no meio da tarefa (ver TaskService.onLimit): as mesmas barreiras que `chatSpawn` aplicaria
+   * a uma conversa no motor `override` (selo, Codex usável, regras da ficha, consumo do motor do override, modelo), sem gravar
+   * nada: sem selo novo, sem contexto, sem processo. Lança o erro que a conversa daria.
+   */
+  async assertOverrideRunnable(projectId: string, staffId: string, override: EngineOverride): Promise<void> {
+    const project = await this.project(projectId);
+    if (!project) throw new StaffError('projeto não encontrado');
+    const profile = await readProfile(project.path, staffId);
+    if (!profile) throw new StaffError('funcionário não encontrado neste projeto');
+    const runProfile = asEngine({ ...profile, projectId }, override);
+    const violation = sealViolation(profile, await readSeal(this.opts.runDir, project.path, profile.id));
+    if (violation) throw new StaffError(violation);
+    if (runProfile.engine === 'codex') await this.assertCodexUsable();
+    assertProfileRules(runProfile);
+    await this.checkUsage(projectId, { staffId, engine: runProfile.engine });
+    await this.checkCodexModel(runProfile.engine, runProfile.model);
   }
 
   /** Grava (Codex ou Claude travado) ou apaga (outro motor) o selo da ficha. Só onde o Claudio’s Club decide motor e autonomia (ver seal.ts). */
@@ -1128,10 +1187,6 @@ export class StaffService {
   }
 
   /**
-   * Pode `managerId` passar trabalho para `staffId`? Só para quem reporta a ele (a API não deixa um
-   * funcionário mandar tarefa para quem não é da equipe dele).
-   */
-  /**
    * A sandbox do Codex (quem chama, pelo token) pode falar com este alvo? Só com a própria conversa e com as de quem reporta a ele (`reportsTo`
    * inclui quem chama). Com conversa e funcionário juntos, os dois têm que ser da mesma pessoa. Conversa sem ficha nunca chama nem é alvo.
    */
@@ -1153,6 +1208,10 @@ export class StaffService {
     return !!person && mine(person);
   }
 
+  /**
+   * Pode `managerId` passar trabalho para `staffId`? Só para quem reporta a ele (a API não deixa um
+   * funcionário mandar tarefa para quem não é da equipe dele).
+   */
   async isManagerOf(projectId: string, managerId: string, staffId: string): Promise<boolean> {
     const project = await this.project(projectId);
     const target = project ? await readProfile(project.path, staffId) : null;

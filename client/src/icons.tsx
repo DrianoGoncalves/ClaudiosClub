@@ -112,8 +112,18 @@ export function AgentIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-/** Brilhos (estrela de quatro pontas): as skills que a ficha indica. */
+/** Livro: skills e agents que a ficha indica. */
 export function SkillIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+    </svg>
+  );
+}
+
+/** Brilhos: modelo secundário configurado. */
+export function FallbackModelIcon({ size = 16 }: { size?: number }) {
   return (
     <svg width={size} height={size} aria-hidden="true" {...base}>
       <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z" />
@@ -226,6 +236,16 @@ export function TasksIcon({ size = 12 }: { size?: number }) {
       <path d="M4 6l1 1 2-2" />
       <path d="M4 12l1 1 2-2" />
       <path d="M4 18h2" />
+    </svg>
+  );
+}
+
+/** Relógio: os agendamentos (despertadores) do projeto. */
+export function ClockIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 6v6l4 2" />
     </svg>
   );
 }
