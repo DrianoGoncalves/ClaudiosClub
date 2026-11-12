@@ -9,7 +9,6 @@ import { useTheme, useThemePref, type ThemePref } from '../theme';
 import { useChatDetail } from '../chat/chatDetail';
 import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
 import { PairControls } from './PairControls';
-import { SpotifySetting } from './SpotifyPlayer';
 import { useSystemMonitor } from './SystemMonitor';
 import { RolesEditor } from './RolesEditor';
 import { useServerAction } from './ServerAction';
@@ -491,14 +490,6 @@ function buildSettings(
       description: t('toolbar.sysmonDesc'),
       keywords: t('toolbar.sysmonKeywords'),
       toggle: { checked: systemMonitor, onChange: setSystemMonitor },
-    },
-    {
-      id: 'spotify',
-      group: 'general',
-      title: t('toolbar.spotifyTitle'),
-      description: t('toolbar.spotifyDesc'),
-      keywords: t('toolbar.spotifyKeywords'),
-      control: <SpotifySetting />,
     },
     {
       id: 'pair',

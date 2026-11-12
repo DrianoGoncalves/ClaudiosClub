@@ -997,12 +997,9 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .block { display: block; margin-top: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; word-break: break-all; color: var(--ink); }
 .notice { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: min(640px, calc(100vw - 32px)); display: flex; gap: 10px; align-items: flex-start; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 10px; padding: 10px 36px 10px 14px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15); font-size: 13px; z-index: 15; }
 .notice .drawer-close { top: 6px; right: 8px; }
-/* Canto superior direito (toolbar/CornerDock.tsx): o monitor e o player do Spotify lado a lado, embaixo do painel
-   lateral (z-index 10). O `top` vem do componente (desce da barra do topo em janela estreita). */
-.corner-dock { position: fixed; right: 12px; z-index: 5; display: flex; align-items: flex-start; gap: 8px; }
-/* Monitor de CPU e RAM (toolbar/SystemMonitor.tsx) e player (toolbar/SpotifyPlayer.tsx): meio transparentes (inteiros
-   com o mouse em cima). No celular somem: a tela é pequena demais para mais uma camada. */
-.sysmon { display: grid; gap: 4px; width: 190px; padding: 6px 10px; background: var(--panel-glass); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.5; transition: opacity 0.15s; }
+/* Monitor de CPU e RAM (toolbar/SystemMonitor.tsx): meio transparente (inteiro com o mouse em cima) e embaixo do
+   painel lateral (z-index 10). No celular some: a tela é pequena demais para mais uma camada. */
+.sysmon { position: fixed; top: 12px; right: 12px; z-index: 5; display: grid; gap: 4px; width: 190px; padding: 6px 10px; background: var(--panel-glass); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.5; transition: opacity 0.15s; }
 .sysmon:hover { opacity: 1; }
 .sysmon.is-hot { opacity: 0.95; border-color: var(--danger); }
 .sysmon.is-hot:hover { opacity: 1; }
@@ -1011,11 +1008,6 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .sysmon-bar > span { display: block; height: 100%; background: var(--ink-blue); transition: width 0.4s; }
 .sysmon-row.is-hot { color: var(--danger); font-weight: 600; }
 .sysmon-row.is-hot .sysmon-bar > span { background: var(--danger); }
-/* O raio é o do próprio embed (12px); 300×80px é o compacto do Spotify (capa, título e play): content-box deixa os 80px
-   inteiros para o iframe, senão a borda o encolhe e o embed ganha barra de rolagem. */
-.spotify { box-sizing: content-box; width: 300px; height: 80px; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; opacity: 0.5; transition: opacity 0.15s; }
-.spotify:hover, .spotify:focus-within { opacity: 1; }
-.spotify iframe { display: block; width: 100%; height: 100%; border: 0; }
 @media (max-width: 640px) { .sysmon { display: none; } }
 /* Largura fixa: preso no meio (left: 50%), o aviso encolheria até metade da tela no celular. Por cima dos modais e do
    config (z-index 20 e 30), de onde a ação recusada pode ter vindo; amarelo de "precisa de você" (como .permission). */
@@ -1292,9 +1284,6 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 .setting-number { display: inline-flex; align-items: center; gap: 4px; }
 .setting-number input { width: 64px; }
 .setting-number.is-wide input { width: 92px; }
-.setting-spotify { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%; }
-.setting-spotify input { flex: 1 1 220px; min-width: 0; }
-.setting-spotify-error { flex-basis: 100%; margin: 0; }
 /* Campos do menu (inclusive os do cargo e do workspace): papel do cartão, linha fina e foco azul de caneta.
    O color-scheme deixa setinhas do número e a lista aberta do select no tema certo. */
 .settings-menu { color-scheme: light; }
@@ -1332,7 +1321,6 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 .settings-menu a.setting-link:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 2px; }
 @media (max-width: 640px) {
   .btn-secondary.setting-link { min-height: 36px; }
-  .setting-spotify :is(input, .btn-secondary) { min-height: 36px; }
   .settings-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .settings-nav { flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--line); padding: 6px 8px; }
   .settings-menu .settings-nav-item { white-space: nowrap; }
@@ -1378,7 +1366,7 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
    painel: modal aberto de dentro do painel lateral vai para o body (createPortal). As abas e o rodapé que grudam
    usam o mesmo vidro: com fundo sólido, viravam uma faixa de outra cor. O cartão do reinício já fica sobre o blur
    do .server-overlay. */
-:is(.drawer, .modal, .settings-menu, .inbox-menu, .update-menu, .quick-jump, .notice, .sysmon, .spotify, .chat-more, .task-detail, .tabs, .modal-footer) {
+:is(.drawer, .modal, .settings-menu, .inbox-menu, .update-menu, .quick-jump, .notice, .sysmon, .chat-more, .task-detail, .tabs, .modal-footer) {
   backdrop-filter: var(--glass-blur);
 }
 

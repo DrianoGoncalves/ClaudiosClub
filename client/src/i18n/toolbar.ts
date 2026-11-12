@@ -63,17 +63,6 @@ export default defineMessages({
     'toolbar.manualKeywords': 'manual guia ajuda tutorial como usar passo a passo documentação',
     'toolbar.manualOpen': 'Abrir o manual',
     'toolbar.sysmonLabel': 'Uso de CPU e memória da máquina',
-    'toolbar.spotifyTitle': 'Player do Spotify',
-    'toolbar.spotifyDesc':
-      'Mostra o player do Spotify ao lado do monitor, no canto superior direito (meio transparente; inteiro com o mouse em cima). Cole um link de música, álbum, playlist, artista, episódio ou podcast; salvar o campo vazio desliga. O link fica só neste navegador. Entrando no Spotify neste navegador toca a faixa inteira; sem login, só uma prévia. Em tela estreita não aparece.',
-    'toolbar.spotifyKeywords': 'spotify musica player tocar playlist podcast som album',
-    'toolbar.spotifyLabel': 'Link do Spotify',
-    'toolbar.spotifyPlaceholder': 'https://open.spotify.com/…',
-    'toolbar.spotifySave': 'Salvar',
-    'toolbar.spotifyOff': 'Desligar',
-    'toolbar.spotifyInvalid':
-      'Link não reconhecido. Use um link de música, álbum, playlist, artista, episódio ou podcast do Spotify (open.spotify.com ou spotify:tipo:id).',
-    'toolbar.spotifyFrame': 'Player do Spotify',
     'toolbar.pairTitle': 'Pareamento deste navegador',
     'toolbar.pairDesc':
       'As ações (mensagens, botões) só valem num navegador pareado. O botão mostra um comando com um código; rodado no terminal, ele aprova este navegador, que fica pareado por 1 ano. Vale para qualquer navegador, sem atalho nem registro no sistema.',
@@ -384,17 +373,6 @@ export default defineMessages({
     'toolbar.manualKeywords': 'manual guide help tutorial how to use step by step documentation',
     'toolbar.manualOpen': 'Open the manual',
     'toolbar.sysmonLabel': 'Machine CPU and memory usage',
-    'toolbar.spotifyTitle': 'Spotify player',
-    'toolbar.spotifyDesc':
-      'Shows the Spotify player next to the monitor, in the top right corner (half transparent; fully opaque on hover). Paste a track, album, playlist, artist, episode or podcast link; saving the empty field turns it off. The link stays in this browser only. Signed in to Spotify in this browser it plays the full track; signed out, only a preview. Hidden on narrow screens.',
-    'toolbar.spotifyKeywords': 'spotify music player play playlist podcast sound album',
-    'toolbar.spotifyLabel': 'Spotify link',
-    'toolbar.spotifyPlaceholder': 'https://open.spotify.com/…',
-    'toolbar.spotifySave': 'Save',
-    'toolbar.spotifyOff': 'Turn off',
-    'toolbar.spotifyInvalid':
-      'Link not recognized. Use a Spotify track, album, playlist, artist, episode or show link (open.spotify.com or spotify:type:id).',
-    'toolbar.spotifyFrame': 'Spotify player',
     'toolbar.pairTitle': 'Browser pairing',
     'toolbar.pairDesc':
       'Actions (messages, buttons) only work in a paired browser. The button shows a command with a code; run it in the terminal to approve this browser, which stays paired for 1 year. Works in any browser, with no shortcut or registry entry on the system.',
@@ -701,17 +679,6 @@ export default defineMessages({
     'toolbar.manualKeywords': 'manual guía ayuda tutorial cómo usar paso a paso documentación',
     'toolbar.manualOpen': 'Abrir el manual',
     'toolbar.sysmonLabel': 'Uso de CPU y memoria de la máquina',
-    'toolbar.spotifyTitle': 'Reproductor de Spotify',
-    'toolbar.spotifyDesc':
-      'Muestra el reproductor de Spotify junto al monitor, en la esquina superior derecha (semitransparente; opaco con el mouse encima). Pega un enlace de canción, álbum, playlist, artista, episodio o podcast; guardar el campo vacío lo apaga. El enlace queda solo en este navegador. Con sesión iniciada en Spotify en este navegador suena la pista completa; sin sesión, solo un adelanto. No aparece en pantallas estrechas.',
-    'toolbar.spotifyKeywords': 'spotify musica reproductor tocar playlist podcast sonido album',
-    'toolbar.spotifyLabel': 'Enlace de Spotify',
-    'toolbar.spotifyPlaceholder': 'https://open.spotify.com/…',
-    'toolbar.spotifySave': 'Guardar',
-    'toolbar.spotifyOff': 'Apagar',
-    'toolbar.spotifyInvalid':
-      'Enlace no reconocido. Usa un enlace de canción, álbum, playlist, artista, episodio o podcast de Spotify (open.spotify.com o spotify:tipo:id).',
-    'toolbar.spotifyFrame': 'Reproductor de Spotify',
     'toolbar.pairTitle': 'Emparejamiento de este navegador',
     'toolbar.pairDesc':
       'Las acciones (mensajes, botones) solo valen en un navegador emparejado. El botón muestra un comando con un código; ejecutado en la terminal, aprueba este navegador, que queda emparejado por 1 año. Vale para cualquier navegador, sin acceso directo ni registro en el sistema.',

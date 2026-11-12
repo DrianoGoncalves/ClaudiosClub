@@ -25,8 +25,6 @@ import { useTheme } from './theme';
 import { archiveKey, ghostNodeId, HR_ID, manageNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
 import { seedSeenIdle } from './board/unread';
 import { PairControls } from './toolbar/PairControls';
-import { CornerDock } from './toolbar/CornerDock';
-import { SpotifyPlayer } from './toolbar/SpotifyPlayer';
 import { SystemMonitor } from './toolbar/SystemMonitor';
 import { QuickJump } from './toolbar/QuickJump';
 import {
@@ -769,10 +767,7 @@ export function App() {
           }}
         />
       )}
-      <CornerDock>
-        <SpotifyPlayer />
-        <SystemMonitor />
-      </CornerDock>
+      <SystemMonitor />
       <UsageWarnings />
       {needsPairing ? (
         <div className="notice notice-pair" role="alert">
