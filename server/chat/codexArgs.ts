@@ -87,6 +87,10 @@ function statOf(p: string): Stats | null {
  * quebra com "Bad file descriptor"); pastas não têm limite. Por isso as chaves SSH das conexões não entram aqui: o cadastro só aceita chave
  * em ~/.ssh, no `.vps` ou no cofre (ver servers.ts), e as três pastas já são negadas. Se sobrar mais de um arquivo regular (um `.vps` que é arquivo na
  * pasta da conversa e outro no projeto), os de sobra ficariam legíveis em silêncio: falha fechada, `CodexBlockedError` e nada roda.
+ *
+ * Também as pastas de lançamento (`<mycoHome>/run`, com o mcp.json das sessões) e os backups do ~/.claude.json (`<mycoHome>/backups`
+ * e `~/.claude/backups`). O `~/.claude.json` só entra se, depois de tudo, não sobrou arquivo: é o único arquivo da home que cabe.
+ * Limite da sandbox: os `.claude.json.backup*` e `.tmp.*` da home ficam legíveis no Codex.
  */
 export function codexDenyPaths(ctx: CodexSecretContext): string[] {
   const dirs: string[] = [];
@@ -99,12 +103,17 @@ export function codexDenyPaths(ctx: CodexSecretContext): string[] {
   // `~/.ssh` vai com o til (o Codex expande); os outros, com o caminho completo.
   add('~/.ssh', path.join(ctx.home, '.ssh'));
   add(path.join(ctx.mycoHome, 'secrets'));
+  add(path.join(ctx.mycoHome, 'run'));
+  add(path.join(ctx.mycoHome, 'backups'));
+  add(path.join(ctx.home, '.claude', 'backups'));
   for (const root of new Set([ctx.cwd, ctx.projectPath])) add(path.join(root, '.vps'));
   if (files.length > 1) {
     throw new CodexBlockedError(
       `Há mais de um arquivo para proteger (${files.join(', ')}) e a sandbox do Codex só consegue negar um arquivo regular por execução: os outros ficariam legíveis. Não rodo o Codex assim. Troque esses arquivos por pastas (ou apague os que não usa) e tente de novo.`,
     );
   }
+  // Depois dos `.vps` (que têm prioridade): só entra se sobrou o lugar do arquivo.
+  if (files.length === 0) add(path.join(ctx.home, '.claude.json'));
   return [...dirs, ...files];
 }
 
@@ -209,19 +218,61 @@ export interface CodexMcpServer {
 /** Nome do MCP de SSH na configuração do Codex (`mcp_servers.<nome>`). É o mesmo do Claude (`SSH_MCP_NAME`, em server/staff/sshMcp.ts). */
 export const CODEX_SSH_MCP_NAME = 'myco-ssh';
 
+/** Nome do MCP do Chrome do usuário (Playwright MCP em modo extensão) na configuração do Codex. Ver `codexChromeMcpArgs`. */
+export const CODEX_CHROME_MCP_NAME = 'myco-chrome';
+
+/** Os `-c mcp_servers.<nome>.*` de um MCP da conversa (command, args, cwd e aprovação). Igual para o SSH e para o Chrome. */
+function codexMcpArgs(name: string, s: CodexMcpServer | null | undefined): string[] {
+  if (!s) return [];
+  const key = `mcp_servers.${name}`;
+  return [
+    '-c', `${key}.command=${tomlString(s.command)}`,
+    '-c', `${key}.args=[${s.args.map((a) => tomlString(a)).join(',')}]`,
+    ...(s.cwd ? ['-c', `${key}.cwd=${tomlString(s.cwd.replace(/\\/g, '/'))}`] : []),
+    '-c', `${key}.default_tools_approval_mode=${tomlString('approve')}`,
+  ];
+}
+
 /**
  * Os `-c mcp_servers.myco-ssh.*` da conversa. Só este MCP entra por aqui. `default_tools_approval_mode="approve"` é obrigatório no
  * `codex exec` (provado no 0.167): sem ele, com `approval_policy="never"`, o Codex recusa a chamada. Por isso a barreira é o próprio
  * MCP (conexões da ficha e `sshWrite`) e o texto da ficha, não a aprovação do Codex.
  */
 export function codexSshMcpArgs(s: CodexMcpServer | null | undefined): string[] {
+  return codexMcpArgs(CODEX_SSH_MCP_NAME, s);
+}
+
+/**
+ * Ferramentas do Playwright MCP que a conversa do Codex vê (`enabled_tools`, allowlist): navegar, ler (snapshot e screenshot), clicar,
+ * digitar, abas e espera. Fica DE FORA, de propósito: código no processo do MCP (`browser_run_code_unsafe`), script na página
+ * (`browser_evaluate`), cookies e armazenamento do navegador (`browser_cookie_*`, `browser_storage_state`, `*storage_*`), rede e rotas
+ * (`browser_network_*`, `browser_route*`), upload e PDF de arquivo local (`browser_file_upload`, `browser_drop`, `browser_pdf_save`),
+ * ferramentas que a página registra (`browser_webmcp_*`) e o resto (`browser_fill_form`, `browser_hover`, `browser_select_option`...).
+ */
+export const CHROME_MCP_TOOLS = [
+  'browser_navigate',
+  'browser_navigate_back',
+  'browser_snapshot',
+  'browser_take_screenshot',
+  'browser_click',
+  'browser_type',
+  'browser_press_key',
+  'browser_tabs',
+  'browser_wait_for',
+];
+
+/**
+ * Os `-c mcp_servers.myco-chrome.*` da conversa: o Chrome do usuário (abas e logins) pelo Playwright MCP em modo extensão. Mesma regra de
+ * aprovação do SSH (`approve`, ver `codexSshMcpArgs`): sem ela o Codex recusa a chamada. Por isso a barreira é a allowlist
+ * (`CHROME_MCP_TOOLS`, o Codex não expõe as outras), a ficha (pedir o ok antes de enviar, publicar, comprar, apagar ou enviar formulário)
+ * e a extensão, que pede a aprovação do usuário ao conectar (sem token). Só entra com "Permitir que o GPT use meu Chrome" ligada, ficha
+ * com Navegador e sem o MCP de SSH (ver launch.ts).
+ */
+export function codexChromeMcpArgs(s: CodexMcpServer | null | undefined): string[] {
   if (!s) return [];
-  const key = `mcp_servers.${CODEX_SSH_MCP_NAME}`;
   return [
-    '-c', `${key}.command=${tomlString(s.command)}`,
-    '-c', `${key}.args=[${s.args.map((a) => tomlString(a)).join(',')}]`,
-    ...(s.cwd ? ['-c', `${key}.cwd=${tomlString(s.cwd.replace(/\\/g, '/'))}`] : []),
-    '-c', `${key}.default_tools_approval_mode=${tomlString('approve')}`,
+    ...codexMcpArgs(CODEX_CHROME_MCP_NAME, s),
+    '-c', `mcp_servers.${CODEX_CHROME_MCP_NAME}.enabled_tools=[${CHROME_MCP_TOOLS.map((t) => tomlString(t)).join(',')}]`,
   ];
 }
 
@@ -248,6 +299,8 @@ export interface CodexSpawn {
   internetAccess?: () => Promise<boolean>;
   /** MCP de SSH da ficha (conexões SSH), ou null: sem ele. Ver `codexSshMcpArgs`. */
   sshMcp?: CodexMcpServer | null;
+  /** MCP do Chrome do usuário (só sem SSH na conversa), ou null: sem ele. Ver `codexChromeMcpArgs`. */
+  chromeMcp?: CodexMcpServer | null;
 }
 
 /**
@@ -283,6 +336,8 @@ export interface CodexRunOptions {
   platform?: NodeJS.Platform;
   /** MCP de SSH da ficha (só conexões SSH; null = sem ele). Ver `codexSshMcpArgs`. */
   sshMcp?: CodexMcpServer | null;
+  /** MCP do Chrome do usuário (null = sem ele). Ver `codexChromeMcpArgs`. */
+  chromeMcp?: CodexMcpServer | null;
 }
 
 /**
@@ -344,6 +399,7 @@ export function buildCodexArgs(o: CodexRunOptions): string[] {
   );
   args.push(...codexWindowsSandboxArgs(o.platform));
   args.push(...codexSshMcpArgs(o.sshMcp));
+  args.push(...codexChromeMcpArgs(o.chromeMcp));
   if (o.instructions && instructionsInArgv(o.instructions, o.platform)) args.push('-c', `developer_instructions=${tomlString(o.instructions)}`);
   if (resume) args.push(o.threadId!);
   args.push('-');

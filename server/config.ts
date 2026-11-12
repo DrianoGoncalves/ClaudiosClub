@@ -38,6 +38,8 @@ const DEFAULTS: AppConfig = {
   codexModel: '',
   // Ligada: funcionários (Claude e Codex) e o perguntar_gpt podem pesquisar na web (WebSearch/WebFetch; no Codex, web_search). Não mexe no terminal: o do Codex segue sem rede pela sandbox, o do Claude não tem sandbox de rede.
   internetAccess: true,
+  // Desligada: o GPT (Codex) usar o Chrome com os logins do usuário é escolha sua.
+  codexBrowser: false,
   // Freela sem ficha parado há 3 dias é arquivado sozinho (0 = nunca); arquivar não apaga nada.
   freelaArchiveDays: 3,
   freelaAutoArchived: {},
@@ -125,6 +127,7 @@ const ConfigFile = z
     codexReview: z.boolean().optional().catch(undefined),
     codexModel: CODEX_MODEL.optional().catch(undefined),
     internetAccess: z.boolean().optional().catch(undefined),
+    codexBrowser: z.boolean().optional().catch(undefined),
     freelaArchiveDays: FREELA_DAYS.optional().catch(undefined),
     freelaAutoArchived: z.record(z.string(), z.unknown()).optional().catch(undefined),
     workspaces: z.array(z.unknown()).optional().catch(undefined),
@@ -174,6 +177,8 @@ export const ConfigPatch = z.object({
   codexModel: CODEX_MODEL.optional(),
   /** "Permitir acesso à internet": funcionários (Claude e Codex) e o perguntar_gpt pesquisam na web. */
   internetAccess: z.boolean().optional(),
+  /** "Permitir que o GPT use meu Chrome": o funcionário no Codex usa o Chrome do usuário (ver AppConfig). */
+  codexBrowser: z.boolean().optional(),
   /** Dias parado até o freela (conversa sem ficha) ser arquivado sozinho; 0 = nunca. */
   freelaArchiveDays: FREELA_DAYS.optional(),
   /** Por id de projeto: uma cor troca a da sala; null volta à padrão. Os outros projetos ficam como estão. */
@@ -249,6 +254,7 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     codexReview: d.codexReview ?? DEFAULTS.codexReview,
     codexModel: d.codexModel ?? DEFAULTS.codexModel,
     internetAccess: d.internetAccess ?? DEFAULTS.internetAccess,
+    codexBrowser: d.codexBrowser ?? DEFAULTS.codexBrowser,
     freelaArchiveDays: d.freelaArchiveDays ?? DEFAULTS.freelaArchiveDays,
     freelaAutoArchived: readFreelaRecord(d.freelaAutoArchived),
     resourceGate: d.resourceGate ?? DEFAULTS.resourceGate,

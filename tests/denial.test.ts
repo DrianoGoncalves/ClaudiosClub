@@ -10,6 +10,8 @@ const CLASSIFIER_CUT = 'The server-side auto mode classifier gave no verdict (th
 const CLUB_SSH = 'Permission to use PowerShell with command ssh deploy@10.0.0.5 "ls" has been denied.';
 const CLUB_SCP = 'Permission to use Bash with command scp ./a.txt deploy@host:/tmp has been denied.';
 const CLUB_SECRET = 'Permission to use PowerShell with command Get-Content .ssh/id_ed25519 has been denied.';
+const SAFETY_REMOVE = `Remove-Item on system path '"x":'' is blocked. This path is protected from removal.`;
+const SETTINGS_DENY = '<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>';
 
 describe('classifyDenial', () => {
   it('classificador com motivo entre colchetes', () => {
@@ -39,9 +41,18 @@ describe('classifyDenial', () => {
     expect(classifyDenial('Permission to use Bash with command ssh-keygen -t ed25519 has been denied.')).toEqual({ layer: 'club', hint: null });
   });
 
-  it('erro comum, sem negação, fica em other', () => {
-    expect(classifyDenial('exit code 1: arquivo não encontrado')).toEqual({ layer: 'other', hint: null });
+  it('checagem embutida do Claude Code (caminho protegido) é safety, com o texto como motivo', () => {
+    expect(classifyDenial(SAFETY_REMOVE)).toEqual({ layer: 'safety', reason: SAFETY_REMOVE.replace(/\.$/, ''), hint: null });
+  });
+
+  it('arquivo ou pasta negado nas regras de permissão é settings', () => {
+    expect(classifyDenial(SETTINGS_DENY)).toEqual({ layer: 'settings', hint: null });
+  });
+
+  it('erro comum, sem negação, fica em other com o texto curto como motivo', () => {
+    expect(classifyDenial('exit code 1: arquivo não encontrado')).toEqual({ layer: 'other', reason: 'exit code 1: arquivo não encontrado', hint: null });
     expect(classifyDenial('')).toEqual({ layer: 'other', hint: null });
+    expect(classifyDenial('x'.repeat(300)).reason).toHaveLength(120);
   });
 });
 
@@ -58,7 +69,14 @@ describe('denialNotice', () => {
     );
     expect(denialNotice('PowerShell', classifyDenial(CLUB_SSH))).toBe('`PowerShell` bloqueado pelo Club: a ficha não tem conexão SSH.');
     expect(denialNotice('PowerShell', classifyDenial(CLUB_SECRET))).toBe('`PowerShell` bloqueado pelo Club: arquivo protegido (segredo ou chave).');
-    expect(denialNotice('Read', classifyDenial('exit code 1'))).toBe('Read: permissão negada');
+    expect(denialNotice('PowerShell', classifyDenial(SAFETY_REMOVE))).toBe(
+      `\`PowerShell\` barrado pela checagem de segurança do Claude Code: Remove-Item on system path '"x":'' is blocked. This path is protected from removal. Costuma ser o comando lido errado; o agente normalmente refaz.`,
+    );
+    expect(denialNotice('Edit', classifyDenial(SETTINGS_DENY))).toBe(
+      '`Edit` bloqueado: arquivo ou pasta negado nas regras de permissão (Club ou settings do Claude Code).',
+    );
+    expect(denialNotice('Read', classifyDenial('exit code 1'))).toBe('Read: permissão negada (exit code 1)');
+    expect(denialNotice('Read', classifyDenial(''))).toBe('Read: permissão negada');
   });
 });
 
@@ -110,12 +128,21 @@ describe('aviso de negação no chat (ChatProcess)', () => {
     expect(notices(chat)).toEqual([]);
   });
 
-  it('negação sem texto reconhecível mantém o aviso genérico, com o denial em other', () => {
+  it('negação sem texto reconhecível mantém o aviso genérico, agora com o motivo', () => {
     const chat = turn('Read', { file_path: 'x.ts' });
     chat.handle({ type: 'system', subtype: 'permission_denied', tool_name: 'Read', tool_use_id: 'tu1' });
     result(chat, 'texto novo que não conheço');
     expect(notices(chat)).toEqual([
-      expect.objectContaining({ text: 'Read: permissão negada', denial: { layer: 'other', hint: null } }),
+      expect.objectContaining({
+        text: 'Read: permissão negada (texto novo que não conheço)',
+        denial: { layer: 'other', reason: 'texto novo que não conheço', hint: null },
+      }),
     ]);
+  });
+
+  it('checagem embutida sem evento: o resultado abre o aviso', () => {
+    const chat = turn('PowerShell', { command: 'Remove-Item $out' });
+    result(chat, SAFETY_REMOVE);
+    expect(notices(chat)).toEqual([expect.objectContaining({ tool: 'PowerShell', denial: expect.objectContaining({ layer: 'safety' }) })]);
   });
 });

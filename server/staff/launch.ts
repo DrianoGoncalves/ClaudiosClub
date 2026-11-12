@@ -1,9 +1,10 @@
 import { existsSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerInfo, StaffProfile } from '../../shared/model';
 import { defaultLocations } from '../adapters/claude/paths';
 import { ROOT } from '../root';
-import { isClaudeRoot, renderFicha, systemPrompt, type CodexSshInfo, type FichaContext, type TeamMember } from './ficha';
+import { isClaudeRoot, renderFicha, systemPrompt, type CodexChromeInfo, type CodexSshInfo, type FichaContext, type TeamMember } from './ficha';
 import { FTP_MCP_NAME, GPT_MCP_NAME } from '../../shared/model';
 import { DEFAULT_SECRETS_DIR } from '../secretVault';
 import { ftpMcpServerConfig } from './ftpMcp';
@@ -53,7 +54,14 @@ export interface LaunchContext {
   lockedByCodexManager?: boolean;
   /** Pacote do MCP de SSH para o Codex (os testes trocam; padrão dist/ssh-mcp.mjs). Sem ele, o MCP não entra e a ficha diz "indisponível". */
   sshMcpBundle?: string;
+  /** "Permitir que o GPT use meu Chrome" (`codexBrowser`), lida ao abrir a conversa. Sem ela, o Chrome não entra no Codex. */
+  codexBrowser?: boolean;
+  /** CLI do Playwright MCP (os testes trocam; padrão CHROME_MCP_CLI). Sem ele, o Chrome não entra e a ficha diz "indisponível". */
+  chromeMcpCli?: string;
 }
+
+/** CLI do Playwright MCP instalado com o Claudio’s Club (dependência fixa). Roda com o node do Club, nunca com npx. */
+export const CHROME_MCP_CLI = path.join(ROOT, 'node_modules', '@playwright', 'mcp', 'cli.js');
 
 /** A primeira mensagem de uma sessão nova numa conversa do Claudio’s Club. */
 export function greeting(profile: Pick<StaffProfile, 'name' | 'firstTask'>): string {
@@ -106,6 +114,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   const gpt = ctx.codex === true && profile.engine !== 'codex';
   if (profile.mcps !== null || ftpServers.length || gpt) {
     mcpConfigPath = path.join(dir, 'mcp.json');
+    // Os da biblioteca do Club entram sem valor: o comando é o lançador, que tira o segredo do cofre ao subir (mcpLaunch.ts).
     const config = profile.mcps !== null ? await buildMcpConfig(ctx.projectPath, profile.mcps, ctx.claudeConfigFile) : { mcpServers: {} };
     if (ftpServers.length) {
       // Só nomes e caminhos: o MCP tira a senha do cofre sozinho.
@@ -160,6 +169,32 @@ export interface PreparedCodexRun {
   threadFile: string;
   /** MCP de SSH (só conexões SSH da ficha; null = sem). Nunca no projeto do próprio Claudio’s Club (ver `codexSshRoot`). */
   sshMcp: CodexMcpServer | null;
+  /** MCP do Chrome do usuário (null = sem). Só com a opção ligada, Navegador na ficha e sem o MCP de SSH na conversa (ver `codexChromeOf`). */
+  chromeMcp: CodexMcpServer | null;
+}
+
+/**
+ * O Chrome do usuário no Codex: o MCP só entra com a opção "Permitir que o GPT use meu Chrome" ligada, Navegador na ficha, sem o MCP de SSH
+ * na mesma conversa (não juntar servidor e logins) e com o pacote instalado. `info` é o que a ficha diz (undefined: a ficha não tem Navegador).
+ */
+export function codexChromeOf(
+  profile: Pick<StaffProfile, 'browser'>,
+  ctx: Pick<LaunchContext, 'codexBrowser' | 'chromeMcpCli'>,
+  sshAttached: boolean,
+  chromeDir: string,
+): { mcp: CodexMcpServer | null; info?: CodexChromeInfo } {
+  if (!profile.browser) return { mcp: null };
+  const cli = ctx.chromeMcpCli ?? CHROME_MCP_CLI;
+  const motivos: CodexChromeInfo['motivos'] = [];
+  if (ctx.codexBrowser !== true) motivos.push('config');
+  if (sshAttached) motivos.push('ssh');
+  if (!existsSync(cli)) motivos.push('indisponivel');
+  if (motivos.length) return { mcp: null, info: { mcp: false, motivos } };
+  // A pasta é da conversa (`<mycoHome>/run/<sessionId>/chrome`), fora de qualquer projeto e do repo do Club: o MCP não lê nem grava fora dela.
+  return {
+    mcp: { command: process.execPath, args: [cli, '--extension', '--output-dir', chromeDir], cwd: chromeDir },
+    info: { mcp: true, motivos: [] },
+  };
 }
 
 /** As conexões SSH da ficha que existem no projeto (FTP fica de fora: no Codex não há). */
@@ -186,7 +221,6 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
   const mcp = names.length > 0 && !root && existsSync(bundle);
   const indisponivel = names.length > 0 && !root && !mcp;
   const sshInfo: CodexSshInfo | undefined = names.length ? { mcp, names, writable: mcp ? write : [], root, indisponivel } : undefined;
-  const fichaCtx = await writeFicha(profile, ctx, away, sshInfo);
   let sshMcp: CodexMcpServer | null = null;
   if (mcp) {
     const { command, args } = sshMcpServerConfig({
@@ -200,12 +234,19 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
     });
     sshMcp = { command, args, cwd: ROOT };
   }
+  // Chrome do usuário: depois do SSH, porque o MCP de SSH na conversa desliga o Chrome (não juntar servidor e logins).
+  const chromeDir = path.join(ctx.runDir, sessionId, 'chrome');
+  const chrome = codexChromeOf(profile, ctx, sshMcp !== null, chromeDir);
+  // A pasta do MCP existe antes do processo (o cwd dele): só quando o MCP entra.
+  if (chrome.mcp) await mkdir(chromeDir, { recursive: true });
+  const fichaCtx = await writeFicha(profile, ctx, away, sshInfo, chrome.info);
   return {
     instructions: systemPrompt(profile, fichaCtx, renderFicha(profile, fichaCtx)),
     writableRoots: away ? [staffDir(ctx.projectPath)] : [],
     readOnlyPaths: [profileFile(ctx.projectPath, profile.id), fichaFile(ctx.projectPath, profile.id), historyDir(ctx.projectPath, profile.id)],
     threadFile: path.join(ctx.runDir, sessionId, 'codex-thread.json'),
     sshMcp,
+    chromeMcp: chrome.mcp,
   };
 }
 
@@ -239,6 +280,7 @@ export async function writeFicha(
   ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'roles' | 'librarySkills' | 'codex' | 'internetAccess' | 'lockedByCodexManager'>,
   absolute = false,
   codexSsh?: CodexSshInfo,
+  codexChrome?: CodexChromeInfo,
 ): Promise<FichaContext> {
   const rel = (file: string) => (absolute ? file : path.relative(ctx.projectPath, file));
   const fichaCtx: FichaContext = {
@@ -261,6 +303,7 @@ export async function writeFicha(
     internetAccess: ctx.internetAccess,
     lockedByCodexManager: ctx.lockedByCodexManager,
     codexSsh,
+    codexChrome,
     // Mesma regra de prepareRun (manualEditable): só o projeto do Claudio’s Club, fora de worktree.
     manualEditable: !absolute && isClaudeRoot(ctx.projectPath),
   };

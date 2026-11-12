@@ -39,6 +39,7 @@ import {
   effortsOfModel,
   engineToSend,
   isClaudeModel,
+  PLAYWRIGHT_BRIDGE_URL,
   pickCodexModel,
   showEngineField,
   switchEngine,
@@ -75,6 +76,8 @@ interface Props {
   onDirty?: (dirty: boolean) => void;
   /** Codex (GPT) ligado nas configurações: sem isso o campo "Motor" não aparece (a não ser que a ficha já rode no Codex). */
   codexReview?: boolean | null;
+  /** "Permitir que o GPT use meu Chrome" nas configurações: desligado, a caixa do Chrome da ficha Codex não vale (a ficha avisa). */
+  codexBrowser?: boolean | null;
   onClose: () => void;
   onHired: (profile: StaffProfile, launch: LaunchResult | null) => void;
   onSaved: (profile: StaffProfile) => void;
@@ -96,7 +99,7 @@ const TABS: Array<{ id: Tab; label: string; intro: string }> = [
 /** De onde vem o MCP, na lista da ficha. */
 const MCP_SOURCE_LABEL = { club: 'staff.sourceClub', user: 'staff.sourceUser', local: 'staff.sourceLocal', project: 'staff.sourceProject' } as const satisfies Record<McpServerInfo['source'], MsgKey>;
 
-export function StaffForm({ board, projectId, mode, simple = false, embedded = false, tab: tabProp, onTab, onDirty, codexReview = false, onClose, onHired, onSaved }: Props) {
+export function StaffForm({ board, projectId, mode, simple = false, embedded = false, tab: tabProp, onTab, onDirty, codexReview = false, codexBrowser = false, onClose, onHired, onSaved }: Props) {
   const editing = mode.kind === 'edit' ? mode.profile : null;
   const adopting = mode.kind === 'adopt' ? mode.session : null;
   // No simples, a ficha inteira fica a um clique ("Mostrar todos os campos").
@@ -357,7 +360,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       firstTask: editing?.firstTask ?? '',
       reportsTo: managers,
       autonomy,
-      // O Codex não usa agents, skills, MCPs nem navegador: a ficha dele sai sem isso (o quadro não mostra o que ele não tem).
+      // O Codex não usa agents, skills nem MCPs: a ficha dele sai sem isso (o quadro não mostra o que ele não tem). O Chrome vale, se ligado nas configurações.
       agents: codex ? [] : agents,
       skills: codex ? [] : skills,
       // Todos marcados = não restringir (a sessão também recebe os conectores da conta). No simples,
@@ -376,7 +379,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       worktree: simpleHire ? autoWorktree : worktree,
       servers,
       sshWrite: sshWrite.filter((n) => servers.includes(n)),
-      browser: codex ? false : browser,
+      browser,
       // Claude fica sem o campo (a ficha igual à de sempre); o Codex vai explícito, e quem volta dele ao Claude também.
       ...(sendEngine ? { engine: sendEngine } : {}),
       // Ligado manda o secundário; desligado tira o que a ficha tinha (`null`); campo escondido não manda (mantém).
@@ -878,20 +881,25 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           </p>
         )}
 
-        {!codex && (
-          <>
         <div className="check-link">
           <label className="check">
-            <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} /> {t('staff.browserLabel')}
+            <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} /> {codex ? t('staff.browserLabelCodex') : t('staff.browserLabel')}
           </label>
-          <a className="link small" href={CHROME_EXTENSION_URL} target="_blank" rel="noopener noreferrer">
-            {t('staff.installLink')}
+          <a className="link small" href={codex ? PLAYWRIGHT_BRIDGE_URL : CHROME_EXTENSION_URL} target="_blank" rel="noopener noreferrer">
+            {codex ? t('staff.installLinkCodex') : t('staff.installLink')}
           </a>
         </div>
-        <p className="muted small">
-          {t('staff.browserHintA')}<code>claude --chrome</code>{t('staff.browserHintB')}
-        </p>
-        {browser && <BrowserCheck />}
+        {codex ? (
+          <p className="muted small">
+            {t('staff.browserHintCodex')}
+            {browser && !codexBrowser && <> {t('staff.browserCodexOff', { setting: t('toolbar.codexBrowserTitle') })}</>}
+          </p>
+        ) : (
+          <>
+            <p className="muted small">
+              {t('staff.browserHintA')}<code>claude --chrome</code>{t('staff.browserHintB')}
+            </p>
+            {browser && <BrowserCheck />}
           </>
         )}
 

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { hasSecret, getSecret } from '../server/secretVault';
 import { buildMcpConfig, clubSecretId, listMcpServers, McpError } from '../server/staff/mcp';
+import { mcpLaunchCommand } from '../server/staff/mcpLaunch';
 import { createMcpLibrary, MASK, maskArgs, maskUrl } from '../server/staff/mcpLibrary';
 
 // Tudo em pastas temporárias: nunca o ~/.claude.json real. O cofre usa o modo arquivo (platform linux).
@@ -277,8 +278,12 @@ describe('buildMcpConfig com a biblioteca', () => {
     await env.lib.save({ scope: 'club', name: 'dup', type: 'stdio', command: 'club-cmd' }, true);
 
     const cfg = await buildMcpConfig(env.proj, ['fs', 'dup'], env.claude, { clubFile: env.club, vault: env.vault });
-    expect(cfg.mcpServers.fs).toEqual({ type: 'stdio', command: 'node', args: ['srv.js'], env: { FS_TOKEN: 'valor-do-cofre-999' } });
-    expect(cfg.mcpServers.dup).toEqual({ type: 'stdio', command: 'club-cmd' });
+    // O club sai pelo lançador (sem valor e sem env): o comando e o nome vêm da biblioteca na hora de subir.
+    const launch = mcpLaunchCommand();
+    const viaLauncher = (name: string) => ({ type: 'stdio', command: launch.command, args: [...launch.args, '--server', name, '--club', env.club, '--vault', env.vault.dir] });
+    expect(cfg.mcpServers.fs).toEqual(viaLauncher('fs'));
+    expect(JSON.stringify(cfg)).not.toContain('valor-do-cofre-999');
+    expect(cfg.mcpServers.dup).toEqual(viaLauncher('dup'));
 
     // Projeto com o mesmo nome: o .mcp.json ganha do club; o local ganha de todos.
     await fs.writeFile(path.join(env.proj, '.mcp.json'), JSON.stringify({ mcpServers: { dup: { command: 'project-cmd' } } }));

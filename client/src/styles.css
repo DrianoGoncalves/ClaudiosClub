@@ -154,7 +154,8 @@ body { background: var(--board); }
 .temp-notice-actions { display: inline-flex; gap: 6px; margin-left: auto; }
 .bn-employee.is-busy .sketch path { stroke-dasharray: 14 6; animation: bn-redraw 1.6s linear infinite; }
 .bn-employee.is-busy { animation: bn-glow 2.4s ease-in-out infinite; }
-.bn-pencil { position: absolute; right: -8px; bottom: -6px; font-size: 18px; color: var(--busy); transform-origin: 20% 80%; animation: bn-write 0.9s ease-in-out infinite; }
+/* Ocupa o mesmo espaço da bolinha (9px): o ícone de 14px sobra 2,5px de cada lado. */
+.bn-pencil { display: inline-flex; flex: none; margin: -2.5px; line-height: 0; color: var(--busy); transform-origin: 20% 80%; animation: bn-write 0.9s ease-in-out infinite; }
 .bn-working::after { content: '…'; display: inline-block; width: 1.2em; text-align: left; animation: bn-dots 1.2s steps(4, end) infinite; overflow: hidden; vertical-align: bottom; }
 .bn-employee.is-waiting { animation: bn-nudge 2.4s ease-in-out infinite; }
 @keyframes bn-redraw { to { stroke-dashoffset: -40; } }
@@ -927,6 +928,9 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 :is(.modal, .hire-inline) .check { display: flex; flex-direction: row; align-items: center; gap: 6px; font-weight: 400; }
 .import-list { display: grid; gap: 6px; max-height: 340px; overflow-y: auto; }
 .import-list .choice b { overflow-wrap: anywhere; }
+/* Nome do projeto e, ao lado, de onde ele vem (>_ Claude, >_ Codex); quebra de linha em tela estreita. */
+.import-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.import-source { font-size: 12px; line-height: 1.4; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; white-space: nowrap; }
 .portrait-preview { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 2px solid var(--ink); }
 /* Contratar "da empresa": lista das fichas dos outros projetos e a confirmação da cópia. */
 .hire-source { margin: 2px 0 10px; }

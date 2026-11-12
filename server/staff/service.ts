@@ -1040,7 +1040,8 @@ export class StaffService {
     // Segunda barreira (a primeira é ao salvar a ficha): uma ficha antiga, ou editada à mão, com servidores no Codex não abre: recusa em vez de rodar.
     assertProfileRules(runProfile, await ftpNames(project.path, this.opts.vault));
     if (codex && forkFrom) throw new StaffError('duplicar a conversa ainda não existe para funcionário que roda no Codex');
-    // Chrome só com a extensão instalada (vale só para esta conversa: a ficha salva segue como o dono escolheu). No Codex não há Chrome.
+    // Chrome só com a extensão instalada (vale só para esta conversa: a ficha salva segue como o dono escolheu). No Codex o Chrome é outro:
+    // o MCP `myco-chrome`, montado em prepareCodexRun (ver codexChromeOf), e não usa esta extensão.
     const browser = codex ? false : await effectiveBrowser(runProfile.browser, this.opts.browserStatus);
     const codexRun = codex ? await prepareCodexRun(runProfile, ctx, id, cwd) : null;
     const run = codexRun ? null : await prepareRun({ ...runProfile, browser }, ctx, id, cwd);
@@ -1082,6 +1083,7 @@ export class StaffService {
         writableRoots: codexRun.writableRoots,
         readOnlyPaths: codexRun.readOnlyPaths,
         sshMcp: codexRun.sshMcp,
+        chromeMcp: codexRun.chromeMcp,
         secrets: { projectPath: project.path, home: os.homedir(), mycoHome: MYCO_HOME },
         threadId: resume ? await readCodexThread(codexRun.threadFile) : null,
         threadFile: codexRun.threadFile,
@@ -1197,6 +1199,8 @@ export class StaffService {
       skillLibraryDir: this.opts.skillLibraryDir,
       codex: config.codexReview,
       internetAccess: config.internetAccess,
+      // "Permitir que o GPT use meu Chrome": lida ao abrir a conversa (o MCP do Chrome entra só se ligada, ver prepareCodexRun).
+      codexBrowser: config.codexBrowser,
       // Claude contratado por gestor no Codex (selo `claude`) e ainda no "Pede tudo": a ficha conta o porquê.
       lockedByCodexManager: profile.autonomy === 'manual' && profile.engine !== 'codex' && (await readSeal(this.opts.runDir, project.path, profile.id))?.engine === 'claude',
       // A equipe dele: quem reporta a ele (os temporários encerrados já saíram do quadro, mas a ficha

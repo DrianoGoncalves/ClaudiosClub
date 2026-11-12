@@ -305,6 +305,11 @@ export interface AppConfig {
   /** Permitir acesso à internet: funcionários Claude e Codex e o `perguntar_gpt` podem pesquisar na web. Ligado por padrão. */
   internetAccess: boolean;
   /**
+   * "Permitir que o GPT use meu Chrome": funcionário no Codex (com "Navegador" na ficha) usa o Chrome do usuário, com as abas e os logins
+   * dele, pelo Playwright MCP em modo extensão (ver `codexChromeMcpArgs`). Desligada até você ligar; lida ao abrir a conversa.
+   */
+  codexBrowser: boolean;
+  /**
    * Freela (conversa sem ficha) não efetivado e parado há esta quantidade de dias é arquivado sozinho
    * (ver server/freelaSweep.ts). Inteiro de 0 a 90; 0 = nunca. Padrão 3.
    */
@@ -1120,9 +1125,10 @@ export interface TurnCapHit {
   limit: number;
 }
 
-/** Quem barrou uma ferramenta: `layer`; `reason` é o motivo do classificador (sem ele, ausente). */
+/** Quem barrou uma ferramenta: `layer`; `reason` é o motivo dado (sem ele, ausente). `safety` = checagem embutida
+ *  do Claude Code (ex.: Remove-Item em caminho do sistema); `settings` = arquivo ou pasta negado nas regras de permissão. */
 export interface DenialInfo {
-  layer: 'classifier' | 'classifierError' | 'club' | 'other';
+  layer: 'classifier' | 'classifierError' | 'club' | 'safety' | 'settings' | 'other';
   reason?: string;
   /** `servers`: dar acesso a servidores; `autonomy`: o classificador do Autônomo barrou; `retry`: tentar de novo. */
   hint: 'servers' | 'autonomy' | 'retry' | null;

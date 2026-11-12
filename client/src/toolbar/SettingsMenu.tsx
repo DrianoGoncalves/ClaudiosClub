@@ -14,6 +14,7 @@ import { RolesEditor } from './RolesEditor';
 import { useServerAction } from './ServerAction';
 import { ThemeBackgrounds } from './ThemeBackgrounds';
 import { UpdateControls, useUpdateStatus } from './UpdateNotice';
+import { PLAYWRIGHT_BRIDGE_URL } from '../staff/codexEngine';
 import { installCodex } from './codexSetup';
 import { MAX_CHATS_MAX, RAM_GB_MAX, normalizeMaxChats, normalizeRamGb } from './queueGate';
 import { TURN_MINUTES_MAX, TURN_TOOLS_MAX, normalizeTurnMinutes, normalizeTurnTools } from './turnCap';
@@ -62,6 +63,8 @@ interface Props {
   codexModel: string;
   /** Permitir acesso à internet (Claude e GPT pesquisam na web); null = config ainda não chegou. */
   internetAccess: boolean | null;
+  /** Permitir que o GPT (Codex) use o Chrome do usuário; null = config ainda não chegou. */
+  codexBrowser: boolean | null;
   /** Dias parado até o Freela ser arquivado sozinho (0 = nunca); null = config ainda não chegou. */
   freelaArchiveDays: number | null;
   /** Gate de recursos da fila (só o início automático); null = config ainda não chegou. */
@@ -334,10 +337,13 @@ function SettingRow({ setting: s }: { setting: Setting }) {
         {s.badge && <span className="badge">{s.badge}</span>}
       </div>
       {s.toggle ? (
-        <label className="setting-check">
-          <input type="checkbox" checked={s.toggle.checked} disabled={s.toggle.disabled} onChange={(e) => s.toggle!.onChange(e.target.checked)} />
-          <span className="setting-desc">{s.description}</span>
-        </label>
+        <>
+          <label className="setting-check">
+            <input type="checkbox" checked={s.toggle.checked} disabled={s.toggle.disabled} onChange={(e) => s.toggle!.onChange(e.target.checked)} />
+            <span className="setting-desc">{s.description}</span>
+          </label>
+          {s.control && <div className="setting-control">{s.control}</div>}
+        </>
       ) : (
         <>
           <p className="setting-desc">{s.description}</p>
@@ -678,6 +684,23 @@ function buildSettings(
       description: t('toolbar.internetDesc'),
       keywords: t('toolbar.internetKeywords'),
       toggle: { checked: p.internetAccess, onChange: (v) => void api.saveConfig({ internetAccess: v }).then(p.onConfig, () => {}) },
+    });
+  }
+
+  if (p.codexBrowser !== null) {
+    out.push({
+      id: 'codex-browser',
+      group: 'general',
+      title: t('toolbar.codexBrowserTitle'),
+      description: t('toolbar.codexBrowserDesc'),
+      keywords: t('toolbar.codexBrowserKeywords'),
+      toggle: { checked: p.codexBrowser, onChange: (v) => void api.saveConfig({ codexBrowser: v }).then(p.onConfig, () => {}) },
+      control: (
+        <a className="link small" href={PLAYWRIGHT_BRIDGE_URL} target="_blank" rel="noopener noreferrer">
+          {t('toolbar.codexBrowserInstall')}
+        </a>
+      ),
+      advanced: true,
     });
   }
 

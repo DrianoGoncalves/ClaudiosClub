@@ -425,6 +425,7 @@ export function BoardView(props: BoardViewProps) {
             codexReview={config?.codexReview ?? null}
             codexModel={config?.codexModel ?? ''}
             internetAccess={config?.internetAccess ?? null}
+            codexBrowser={config?.codexBrowser ?? null}
             freelaArchiveDays={config?.freelaArchiveDays ?? null}
             queueGate={
               config

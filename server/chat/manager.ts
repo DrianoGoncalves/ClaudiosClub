@@ -1113,6 +1113,7 @@ export class ChatManager {
           writableRoots: codex.writableRoots,
           readOnlyPaths: codex.readOnlyPaths,
           sshMcp: codex.sshMcp,
+          chromeMcp: codex.chromeMcp,
           secrets: codex.secrets,
           threadId: codex.threadId,
           threadFile: codex.threadFile,

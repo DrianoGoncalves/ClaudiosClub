@@ -208,12 +208,14 @@ export async function withUsageConfirm<T>(run: (force: boolean) => Promise<T>): 
   }
 }
 
-/** Um projeto do Claude Code que ainda está fora do quadro. */
+/** Um projeto do Claude Code ou do Codex que ainda está fora do quadro. */
 export interface ImportableProject {
   id: string;
   name: string;
   path: string;
   lastActivityAt: string | null;
+  /** Quem conhece a pasta (as duas, se as duas). Ausente em servidor antigo. */
+  sources?: Array<'claude' | 'codex'>;
 }
 
 /** Segunda opinião do Codex: ligada nas configurações, e se dá para usar (instalado, com login). */
@@ -351,6 +353,8 @@ export const api = {
     codexModel?: string;
     /** Permitir acesso à internet: funcionários (Claude e Codex) e o perguntar_gpt pesquisam na web. */
     internetAccess?: boolean;
+    /** "Permitir que o GPT use meu Chrome": o funcionário no Codex usa o Chrome do usuário (só o tipo; a tela é de outra pessoa). */
+    codexBrowser?: boolean;
     /** Dias parado até o Freela (conversa sem ficha) ser arquivado sozinho; 0 = nunca. */
     freelaArchiveDays?: number;
     /** Gate de recursos da fila (só o início automático): liga/desliga, RAM livre mínima em GB (0 ou 0,5–64), CPU, teto de conversas (0–50, 0 = sem). */

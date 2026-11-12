@@ -8,6 +8,9 @@ import { t } from '../i18n';
 
 export type CodexCatalog = CodexModelsState['models'];
 
+/** Extensão do Chrome que o Playwright MCP usa para o GPT agir nas abas e logins do usuário (Configurações e ficha apontam para ela). */
+export const PLAYWRIGHT_BRIDGE_URL = 'https://chromewebstore.google.com/detail/playwright-mcp-bridge/mmlmfjhmonkocbjadbfplnigmagldckm';
+
 /** Os esforços que a ficha guarda, do menor ao maior (o servidor só aceita estes; o catálogo do Codex pode trazer outros). */
 export const CODEX_EFFORTS: readonly CodexEffort[] = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 

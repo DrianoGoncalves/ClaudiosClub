@@ -110,7 +110,9 @@ describe('ficha no Codex: servidores', () => {
     expect(spawn.codex!.secrets.mycoHome).toBe(process.env.MYCO_HOME ?? path.join(os.homedir(), '.myco'));
     expect(spawn.codex!.secrets).not.toHaveProperty('keyFiles'); // só pastas: as chaves das conexões não entram no bloqueio
     expect(spawn.codex!.instructions).toContain('Ficha de Abre');
-    expect(spawn.codex!.instructions).not.toMatch(/ferramenta Agent|subagent|Chrome/);
+    expect(spawn.codex!.instructions).not.toMatch(/ferramenta Agent|subagent/);
+    // Com Navegador na ficha, a seção existe sempre: ou o MCP do Chrome entrou, ou diz o motivo (ver codexChrome.test.ts).
+    expect(spawn.codex!.instructions).toContain('## Navegador');
     // Reabrir: a mesma sessão, retomando a thread gravada (nenhuma ainda).
     expect((await svc.chatSpawn('proj-id', spawn.sessionId, p.id))!.sessionId).toBe(spawn.sessionId);
   });

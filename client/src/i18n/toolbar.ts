@@ -137,6 +137,11 @@ export default defineMessages({
     'toolbar.internetDesc':
       'Funcionários (Claude e GPT) e o Perguntar ao GPT pesquisam e leem páginas na web. A consulta sai do seu computador: desligue se o projeto for sigiloso. No Claude vale para conversas novas; no GPT, já na próxima mensagem.',
     'toolbar.internetKeywords': 'internet web rede pesquisar busca navegar páginas acesso online sigilo privacidade claude gpt codex websearch webfetch',
+    'toolbar.codexBrowserTitle': 'Permitir que o GPT use meu Chrome',
+    'toolbar.codexBrowserDesc':
+      'O GPT usa suas abas e logins pela extensão Playwright MCP Bridge. Sem pedir aprovação a cada clique: ligue só se confiar. Não vale em conversa com servidor.',
+    'toolbar.codexBrowserKeywords': 'chrome navegador browser gpt codex playwright mcp extensão abas logins bridge',
+    'toolbar.codexBrowserInstall': 'Instalar a extensão Playwright MCP Bridge',
     'toolbar.freelaArchiveTitle': 'Arquivar Freela parado há (dias)',
     'toolbar.freelaArchiveDesc':
       'Conversa sem ficha que não for efetivada e ficar parada esse tempo é arquivada sozinha (dá para desarquivar). 0 = nunca.',
@@ -447,6 +452,11 @@ export default defineMessages({
     'toolbar.internetDesc':
       'Staff (Claude and GPT) and Ask GPT search and read web pages. The query leaves your computer: turn this off if the project is confidential. On Claude it applies to new conversations; on GPT, from the next message.',
     'toolbar.internetKeywords': 'internet web network search browse pages access online confidential privacy claude gpt codex websearch webfetch',
+    'toolbar.codexBrowserTitle': 'Let GPT use my Chrome',
+    'toolbar.codexBrowserDesc':
+      'GPT uses your tabs and logins through the Playwright MCP Bridge extension. It does not ask for approval on every click: turn this on only if you trust it. Does not apply in a conversation with a server.',
+    'toolbar.codexBrowserKeywords': 'chrome browser gpt codex playwright mcp extension tabs logins bridge',
+    'toolbar.codexBrowserInstall': 'Install the Playwright MCP Bridge extension',
     'toolbar.freelaArchiveTitle': 'Archive idle Freelancer after (days)',
     'toolbar.freelaArchiveDesc':
       'A conversation without a profile that is not hired and stays idle this long is archived on its own (you can unarchive it). 0 = never.',
@@ -754,6 +764,11 @@ export default defineMessages({
     'toolbar.internetDesc':
       'Los empleados (Claude y GPT) y Preguntar a GPT buscan y leen páginas en la web. La consulta sale de tu computadora: desactívalo si el proyecto es confidencial. En Claude vale para conversaciones nuevas; en GPT, desde el próximo mensaje.',
     'toolbar.internetKeywords': 'internet web red buscar búsqueda navegar páginas acceso online confidencial privacidad claude gpt codex websearch webfetch',
+    'toolbar.codexBrowserTitle': 'Permitir que GPT use mi Chrome',
+    'toolbar.codexBrowserDesc':
+      'GPT usa tus pestañas y sesiones mediante la extensión Playwright MCP Bridge. No pide aprobación en cada clic: actívalo solo si confías. No vale en una conversación con servidor.',
+    'toolbar.codexBrowserKeywords': 'chrome navegador browser gpt codex playwright mcp extensión pestañas sesiones bridge',
+    'toolbar.codexBrowserInstall': 'Instalar la extensión Playwright MCP Bridge',
     'toolbar.freelaArchiveTitle': 'Archivar Freelance inactivo tras (días)',
     'toolbar.freelaArchiveDesc':
       'Una conversación sin ficha que no se contrate y quede inactiva ese tiempo se archiva sola (se puede desarchivar). 0 = nunca.',

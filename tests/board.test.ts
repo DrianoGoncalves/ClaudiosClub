@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -14,6 +14,7 @@ import { createProfile, StaffInputSchema } from '../server/staff/store';
 let root: string;
 let home: string;
 let cfg: string;
+let prevCodexHome: string | undefined;
 const dir = (name: string) => path.join(root, 'work', name);
 const names = (list: Array<{ name: string }>) => list.map((p) => p.name).sort();
 
@@ -37,6 +38,9 @@ beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-board-'));
   home = path.join(root, 'home', '.claude');
   cfg = path.join(root, 'myco-config.json');
+  // Sem isto, a lista do Codex leria o ~/.codex de quem roda o teste.
+  prevCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = path.join(root, 'codex');
 
   for (const name of ['semFicha', 'comFicha', 'extra', 'demo', 'outro']) await fs.mkdir(dir(name), { recursive: true });
   await hire(dir('comFicha'));
@@ -62,6 +66,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = prevCodexHome;
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -106,7 +112,7 @@ describe('o que entra no quadro', () => {
     const found = await adapter().listImportable();
     expect(names(found)).toEqual(['outro', 'semFicha']);
     expect(await importableList(adapter())).toEqual(
-      expect.arrayContaining([{ id: encodeProjectDir(dir('semFicha')), name: 'semFicha', path: dir('semFicha'), lastActivityAt: expect.any(String) }]),
+      expect.arrayContaining([{ id: encodeProjectDir(dir('semFicha')), name: 'semFicha', path: dir('semFicha'), lastActivityAt: expect.any(String), sources: ['claude'] }]),
     );
   });
 
@@ -207,5 +213,58 @@ describe('importar do Claude Code', () => {
     await expect(importProjects(a, { paths: [] }, fresh)).rejects.toThrow('ao menos um');
     await expect(importProjects(a, { paths: [dir('outro')], workspaceId: 'nao-existe' }, fresh)).rejects.toThrow('workspace');
     expect(await readExtraProjects(fresh)).toEqual([dir('extra')]);
+  });
+});
+
+describe('o Codex entra na lista de importáveis', () => {
+  const codex = () => path.join(root, 'codex');
+  const cfgCodex = () => path.join(root, 'cfg-codex.json');
+  // O config.toml do Codex traz as pastas em minúsculas no Windows; a lista tem que voltar com a caixa do disco.
+  const caixa = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
+  const real = (p: string) => realpathSync.native(p);
+
+  /** Um rollout com o cwd na 1ª linha (session_meta), no dia `day` (AAAA/MM/DD). */
+  async function rollout(day: string, id: string, cwd: string) {
+    const stamp = day.replaceAll('/', '-');
+    const meta = { timestamp: `${stamp}T10:00:00.000Z`, ordinal: 0, type: 'session_meta', payload: { id, cwd } };
+    await write(path.join(codex(), 'sessions', ...day.split('/'), `rollout-${stamp}T10-00-00-${id}.jsonl`), `${JSON.stringify(meta)}\n`);
+  }
+
+  beforeAll(async () => {
+    await fs.mkdir(dir('codexSo'), { recursive: true });
+    await write(
+      path.join(codex(), 'config.toml'),
+      `[projects.'${caixa(dir('codexSo'))}']\ntrust_level = "trusted"\n\n[projects.'${caixa(dir('outro'))}']\n\n[projects.'${caixa(dir('comFicha'))}']\n`,
+    );
+    await rollout('2026/11/10', 'r1', dir('outro'));
+    await rollout('2026/11/11', 'r2', dir('codexSo'));
+  });
+
+  it('a lista junta as duas fontes: a pasta que as duas conhecem sai uma vez com as duas; a do Codex sozinha entra; a do quadro não', async () => {
+    const list = await importableList(adapter(true, cfgCodex()), { includeTemp: true });
+    const byName = new Map(list.map((p) => [p.name, p]));
+    expect(byName.get('codexSo')).toEqual({
+      id: encodeProjectDir(real(dir('codexSo'))),
+      name: 'codexSo',
+      path: real(dir('codexSo')),
+      lastActivityAt: expect.any(String),
+      sources: ['codex'],
+    });
+    expect(byName.get('outro')?.sources).toEqual(['claude', 'codex']);
+    expect(byName.get('semFicha')?.sources).toEqual(['claude']);
+    expect(list.filter((p) => p.name === 'outro')).toHaveLength(1);
+    expect(byName.has('comFicha')).toBe(false); // já está no quadro (tem equipe)
+  });
+
+  it('importar uma pasta só do Codex põe no quadro como as outras; sem includeTemp, pasta da temporária é recusada', async () => {
+    const file = cfgCodex();
+    const a = adapter(true, file);
+    await expect(importProjects(a, { paths: [dir('codexSo')] }, file)).rejects.toBeInstanceOf(ProjectError);
+
+    const id = encodeProjectDir(real(dir('codexSo')));
+    expect(await importProjects(a, { paths: [dir('codexSo')] }, file, { includeTemp: true })).toEqual({ projectIds: [id], imported: 1 });
+    expect(await readExtraProjects(file)).toEqual([real(dir('codexSo'))]);
+    expect(names((await a.listProjects()).filter((p) => !p.worktreeOf))).toContain('codexSo');
+    expect(await importableList(a, { includeTemp: true })).not.toContainEqual(expect.objectContaining({ name: 'codexSo' }));
   });
 });
