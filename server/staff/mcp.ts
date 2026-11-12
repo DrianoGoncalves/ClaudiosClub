@@ -7,7 +7,8 @@ import { MYCO_HOME } from '../config';
 import { tryJson } from '../adapters/claude/fsutil';
 import { pathKey } from '../adapters/claude/paths';
 import { findSecret } from '../chat/secrets';
-import { getSecret, type VaultOptions } from '../secretVault';
+import { DEFAULT_SECRETS_DIR, getSecret, type VaultOptions } from '../secretVault';
+import { mcpLaunchCommand } from './mcpLaunch';
 
 // MCPs que vão para a conversa de um funcionário, de quatro origens (da mais específica para a mais geral):
 //   local   = só este projeto, em ~/.claude.json (projects[<caminho>].mcpServers)
@@ -216,8 +217,8 @@ export async function resolveClub(
 }
 
 /**
- * Configuração para `--mcp-config` só com os servidores escolhidos na ficha. Os da biblioteca saem com os
- * valores do cofre (só aqui, na hora de montar a conversa).
+ * Configuração para `--mcp-config` só com os servidores escolhidos na ficha. Os da biblioteca não levam valor: o comando é o
+ * lançador (mcpLaunch.ts), que tira env e cabeçalhos do cofre ao subir. Aqui só se confere que os valores existem.
  */
 export async function buildMcpConfig(
   projectPath: string,
@@ -225,7 +226,9 @@ export async function buildMcpConfig(
   claudeConfigFile: string,
   o: { clubFile?: string; vault?: VaultOptions } = {},
 ): Promise<{ mcpServers: Record<string, ServerConfig> }> {
-  const found = await collect(projectPath, claudeConfigFile, o.clubFile ?? CLUB_MCP_FILE);
+  const clubFile = o.clubFile ?? CLUB_MCP_FILE;
+  const vaultDir = o.vault?.dir ?? DEFAULT_SECRETS_DIR;
+  const found = await collect(projectPath, claudeConfigFile, clubFile);
   const mcpServers: Record<string, ServerConfig> = {};
   for (const name of names) {
     const f = found.get(name);
@@ -234,13 +237,34 @@ export async function buildMcpConfig(
       mcpServers[name] = f.config;
       continue;
     }
-    const r = await resolveClub(name, f.config, f.club, o.vault);
+    const r = await resolveClub(name, {}, f.club, o.vault);
     if ('missing' in r) {
       // Sem o valor, o servidor sobe quebrado e a conversa só erra depois: deixa de fora e avisa no log (sem valor).
       console.warn(`[staff] MCP ${name}: não achei o valor de ${r.missing} no cofre; fora desta conversa (cadastre de novo)`);
       continue;
     }
-    mcpServers[name] = r.config as ServerConfig;
+    const cfg = clubConfig(name, f.config, f.club, { clubFile, vaultDir });
+    if (!cfg) {
+      console.warn(`[staff] MCP ${name}: caminho com aspas, % ou $ (ou caractere de controle); fora desta conversa`);
+      continue;
+    }
+    mcpServers[name] = cfg;
   }
   return { mcpServers };
+}
+
+/**
+ * A entrada do mcp.json de um servidor da biblioteca, sem valor. stdio: o lançador com `--server`. http/sse com cabeçalho:
+ * `headersHelper`, o comando que o Claude Code roda antes de conectar (sai o JSON dos cabeçalhos). Sem cabeçalho, como estava.
+ * null se a linha de comando não pode ser citada com segurança (aspas duplas, `%`, `$`, crase ou controle no caminho).
+ */
+function clubConfig(name: string, config: ServerConfig, keys: { env: string[]; headers: string[] }, o: { clubFile: string; vaultDir: string }): ServerConfig | null {
+  const launch = mcpLaunchCommand();
+  if (config.type === 'stdio') {
+    return { type: 'stdio', command: launch.command, args: [...launch.args, '--server', name, '--club', o.clubFile, '--vault', o.vaultDir] };
+  }
+  if (keys.headers.length === 0) return config;
+  const parts = [launch.command, ...launch.args, '--headers', '--server', name, '--club', o.clubFile, '--vault', o.vaultDir];
+  if (parts.some((p) => /["%$`\u0000-\u001f\u007f]/.test(p))) return null;
+  return { type: config.type, url: config.url, headersHelper: parts.map((p) => `"${p}"`).join(' ') };
 }

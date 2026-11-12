@@ -4,7 +4,7 @@ import type { StaffProfile } from './model';
  * O que é da pessoa: vale igual em todas as fichas com o mesmo `personId` (cópias entre projetos). Editar uma ficha
  * leva estes campos às outras (StaffService.update e restore, em server/staff/service.ts).
  */
-export const PERSON_FIELDS = ['name', 'role', 'mission', 'doneWhen', 'rules', 'model', 'effort', 'playbook'] as const satisfies readonly (keyof StaffProfile)[];
+export const PERSON_FIELDS = ['name', 'role', 'mission', 'doneWhen', 'rules', 'model', 'effort', 'playbook', 'personality'] as const satisfies readonly (keyof StaffProfile)[];
 
 /** O retrato também é da pessoa, mas vem como arquivo (`portraitDataUrl` no pedido), então fica à parte. */
 export const PERSON_PORTRAIT = 'portraitDataUrl';
@@ -21,6 +21,7 @@ export const ALLOCATION_FIELDS = [
   'canHire',
   'worktree',
   'servers',
+  'sshWrite',
   'browser',
   'engine',
   'fallback',

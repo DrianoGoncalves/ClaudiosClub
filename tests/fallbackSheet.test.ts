@@ -112,8 +112,12 @@ describe('textos de ajuda', () => {
 });
 
 const html = (el: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(el);
+const connections = [
+  { name: 'vps', source: 'vps' as const },
+  { name: 'site', source: 'ftp' as const },
+];
 const field = (main: 'claude' | 'codex', draft: FallbackDraft, servers: string[] = []) =>
-  html(createElement(FallbackField, { main, servers, draft, onChange: () => {} }));
+  html(createElement(FallbackField, { main, servers, serverList: connections, draft, onChange: () => {} }));
 
 describe('campo na ficha', () => {
   it('desligado: só o botão e a frase de que a tarefa espera; nada de modelo', () => {
@@ -139,13 +143,18 @@ describe('campo na ficha', () => {
     expect(out).toContain('<b>Codex (GPT)</b>');
     expect(out).toContain('value="ultra"');
   });
-  it('Codex como secundário com servidores na ficha: botão desligado e o motivo na tela', () => {
-    const out = field('claude', off, ['vps']);
+  it('Codex como secundário com conexão FTP na ficha: botão desligado e o motivo na tela', () => {
+    const out = field('claude', off, ['site']);
     expect(out).toContain('disabled');
-    expect(out).toContain('não roda quem tem servidores');
+    expect(out).toContain('Conexão FTP não funciona no Codex');
   });
-  it('Codex já ligado e servidores adicionados depois: o botão continua livre (para desligar) e o aviso fica', () => {
-    const out = field('claude', { on: true, model: 'gpt-6-sol', effort: '' }, ['vps']);
+  it('Codex como secundário com só SSH na ficha: botão livre, sem aviso', () => {
+    const out = field('claude', off, ['vps']);
+    expect(out).not.toContain('disabled');
+    expect(out).not.toContain('Conexão FTP não funciona');
+  });
+  it('Codex já ligado e FTP adicionado depois: o botão continua livre (para desligar) e o aviso fica', () => {
+    const out = field('claude', { on: true, model: 'gpt-6-sol', effort: '' }, ['site']);
     expect(out).not.toMatch(/<button[^>]*disabled/);
     expect(out).toContain('role="note"');
   });

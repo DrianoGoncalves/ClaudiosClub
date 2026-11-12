@@ -20,6 +20,7 @@ describe('POST de funcionário pela API (lista fechada)', () => {
       '/api/chat/s-1/permission',
       '/api/config',
       '/api/archive',
+      '/api/conversation-title',
       '/api/auth/login',
       '/api/codex/install',
       '/api/codex/login',

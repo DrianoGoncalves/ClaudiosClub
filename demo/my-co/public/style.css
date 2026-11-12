@@ -1,0 +1,280 @@
+/* Mobile first: a base serve para 360 px; os ajustes de tela larga ficam no fim. */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color: #2b1d16;
+  background: #fdf8f3;
+}
+
+h1 {
+  font-size: 2rem;
+  line-height: 1.2;
+  margin: 0 0 12px;
+}
+
+h2 {
+  font-size: 1.25rem;
+  margin: 0 0 8px;
+}
+
+p {
+  margin: 0;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+output:focus-visible {
+  outline: 3px solid #f2a900;
+  outline-offset: 2px;
+}
+
+.topo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px;
+  min-height: 56px;
+  background: #b3261e;
+  color: #fff;
+}
+
+.topo a,
+.topo-pagina {
+  color: #fff;
+}
+
+.marca {
+  font-size: 1.25rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.topo-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.hero {
+  padding: 24px 0 8px;
+}
+
+.selo {
+  font-size: 0.875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #b3261e;
+  margin-bottom: 8px;
+}
+
+.lead {
+  font-size: 1.05rem;
+  color: #5d4a40;
+  margin-bottom: 20px;
+}
+
+.botao {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 999px;
+  background: #b3261e;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.destaques ul {
+  list-style: none;
+  margin: 24px 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.destaques li,
+.horario,
+.bloco,
+.pizza {
+  background: #fff;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 1px 2px rgba(43, 29, 22, 0.08);
+}
+
+.horario {
+  margin-bottom: 24px;
+}
+
+.rodape {
+  padding: 16px;
+  text-align: center;
+  font-size: 0.875rem;
+  color: #5d4a40;
+}
+
+.pizzas {
+  list-style: none;
+  margin: 0 0 24px;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.pizza {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pizza .preco {
+  font-weight: 700;
+}
+
+.quantidade {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.quantidade button {
+  width: 44px;
+  height: 44px;
+  border: 1px solid #b3261e;
+  border-radius: 50%;
+  background: #fff;
+  color: #b3261e;
+  font-size: 1.25rem;
+  cursor: pointer;
+}
+
+.quantidade output {
+  min-width: 2ch;
+  text-align: center;
+  font-weight: 700;
+}
+
+.carrinho {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.carrinho li {
+  padding: 8px 0;
+  border-bottom: 1px solid #eadfd6;
+}
+
+.carrinho .vazio {
+  color: #5d4a40;
+  border-bottom: 0;
+}
+
+.form {
+  display: grid;
+  gap: 12px;
+}
+
+.form label {
+  display: grid;
+  gap: 4px;
+  font-weight: 600;
+}
+
+.form input {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid #b9a79c;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 16px; /* 16 px ou mais: o iOS não dá zoom no campo */
+  font-weight: 400;
+  background: #fff;
+}
+
+.form .botao {
+  width: 100%;
+}
+
+.aviso {
+  margin-bottom: 16px;
+  padding: 12px;
+  border-radius: 8px;
+}
+
+.aviso:empty {
+  display: none;
+}
+
+.aviso.ok {
+  background: #e6f4ea;
+  color: #14532d;
+}
+
+.aviso.erro {
+  background: #fdecea;
+  color: #8a1c14;
+}
+
+.aviso.info {
+  background: #eef2ff;
+  color: #1e3a8a;
+}
+
+@media (min-width: 720px) {
+  h1 {
+    font-size: 2.75rem;
+  }
+
+  .hero {
+    padding-top: 48px;
+  }
+
+  .destaques ul {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .pizzas {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .pedido {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    align-items: start;
+  }
+
+  .form .botao {
+    width: auto;
+    align-self: start;
+  }
+}

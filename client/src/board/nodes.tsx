@@ -3,7 +3,7 @@ import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } fro
 import { PLAYBOOK_AGENTS } from '../../../shared/agentPresets';
 import { colorCss, type GitState, type LiveSession, type StaffProfile } from '../../../shared/model';
 import { employeeName, ENTRYPOINT_LABEL, formatAgo, initials, STATUS_LABEL } from '../format';
-import { AgentIcon, BranchIcon, ChromeIcon, FallbackModelIcon, GhostIcon, McpIcon, ServerIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
+import { AgentIcon, BranchIcon, ChromeIcon, FallbackModelIcon, GhostIcon, McpIcon, PencilIcon, ServerIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { t } from '../i18n';
 import { engineName } from '../staff/fallbackEngine';
 import {
@@ -219,7 +219,7 @@ export function staffTools(staff: StaffProfile): Array<{ tool: StaffTool; label:
 export function FallbackIcon({ fallback }: { fallback?: StaffProfile['fallback'] }) {
   if (!fallback) return null;
   const label = t('board.secondaryEngine', { engine: t(engineName(fallback.engine)), model: fallback.model });
-  return <span title={label} aria-label={label} role="img"><FallbackModelIcon size={14} /></span>;
+  return <span title={label} aria-label={label} role="img"><FallbackModelIcon size={12} /></span>;
 }
 
 function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, 'employee'>>) {
@@ -246,8 +246,6 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
       <div className="bn-agent">
         <div className="bn-portrait-wrap">
           <Portrait id={id} label={name} src={staff?.portrait ? portraitUrl(data.projectId, staff) : null} ghost={!!ghost} />
-          {/* Lápis que "escreve" enquanto a sessão trabalha. */}
-          {busy && <span className="bn-pencil" aria-hidden="true">✎</span>}
         </div>
         <div className="bn-agent-text">
           <div className="bn-title bn-title-sm">{name}</div>
@@ -293,7 +291,7 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
                 const Icon = TOOL_ICON[tool];
                 return (
                   <span key={tool} title={label} aria-label={label} role="img">
-                    <Icon size={14} />
+                    <Icon size={12} />
                   </span>
                 );
               })}
@@ -301,13 +299,19 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
           )}
         </div>
       </div>
-      {/* Só a bolinha no canto; o texto do status aparece ao passar o mouse. Ocioso, só até você ver a conversa. */}
+      {/* Só a bolinha no canto (trabalhando = lápis escrevendo no lugar dela); o texto do status aparece ao passar o mouse. Ocioso, só até você ver a conversa. */}
       {live && showsStatus(seen, live) && (
         <span className="bn-status">
           <span className="bn-status-label">
             {busy ? <span className="bn-working">{t('board.working')}</span> : (STATUS_LABEL[live.status ?? ''] ?? live.status)}
           </span>
-          <span className={`dot dot-${live.status ?? 'unknown'}`} />
+          {busy ? (
+            <span className="bn-pencil">
+              <PencilIcon size={14} />
+            </span>
+          ) : (
+            <span className={`dot dot-${live.status ?? 'unknown'}`} />
+          )}
         </span>
       )}
     </Frame>

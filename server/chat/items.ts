@@ -77,6 +77,13 @@ export const STAFF_NOTICE = '[MyCo] Mensagem de outro funcionário.';
 export const RESUME_TEXT =
   'A conversa parou no meio (o Claudio’s Club reiniciou). Continue de onde parou e, ao terminar, responda com um resumo curto do que foi feito e do que falta.';
 
+/** Começo das mensagens que o Claudio’s Club manda na conversa retomada depois do reinício (ver server/chat/resume.ts). Não é do dono. */
+export const RESTART_PREFIX = '[MyCo] O Claudio’s Club reiniciou no meio do seu turno';
+/** Retomada sem pedido pendente. */
+export const RESTART_TEXT = `${RESTART_PREFIX}. Continue de onde parou.`;
+/** Retomada com um pedido de permissão ou pergunta sem resposta: refaz o pedido. */
+export const RESTART_PENDING_TEXT = `${RESTART_PREFIX}, quando havia um pedido de permissão ou uma pergunta pendente. Refaça o pedido e espere a resposta antes de seguir.`;
+
 /** Fim de tarefa: o que a conversa deve responder ao terminar (igual no texto de início e no handoff). */
 export const CLOSING_LINE = 'Quando terminar, responda com um resumo curto do que foi feito e do que falta.';
 
@@ -103,6 +110,8 @@ export function isInjectedUserText(text: string): boolean {
     t.startsWith('[MyCo] Sua ficha foi atualizada') ||
     t.startsWith(CONTEXT_NOTICE) ||
     t.startsWith(BOOST_NOTICE) ||
-    t.startsWith(STAFF_NOTICE)
+    t.startsWith(STAFF_NOTICE) ||
+    // Retomada depois do reinício: o Claudio’s Club manda, não é o dono.
+    t.startsWith(RESTART_PREFIX)
   );
 }

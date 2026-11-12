@@ -14,7 +14,8 @@ const DEFAULTS: AppConfig = {
   companyName: 'Claudio’s Club',
   // Quem chega começa no simples; quem já tinha config (já usava) fica no avançado (ver readConfig).
   uiLevel: 'simple',
-  archived: { projects: [], sessions: [] },
+  archived: { projects: [], sessions: [], conversations: {} },
+  conversationTitles: {},
   // Para antes de esgotar: sobra margem para terminar o que está em andamento.
   usageStop: { fiveHour: 90, sevenDay: 95 },
   // O padrão do Claude Code: a mensagem entra no trabalho em andamento, sem interromper.
@@ -35,11 +36,25 @@ const DEFAULTS: AppConfig = {
   codexReview: false,
   // Vazio: o modelo padrão do Codex (com plano B pelo catálogo quando a conta recusa o escolhido).
   codexModel: '',
+  // Ligada: funcionários (Claude e Codex) e o perguntar_gpt podem pesquisar na web (WebSearch/WebFetch; no Codex, web_search). Não mexe no terminal: o do Codex segue sem rede pela sandbox, o do Claude não tem sandbox de rede.
+  internetAccess: true,
+  // Desligada: o GPT (Codex) usar o Chrome com os logins do usuário é escolha sua.
+  codexBrowser: false,
   // Freela sem ficha parado há 3 dias é arquivado sozinho (0 = nunca); arquivar não apaga nada.
   freelaArchiveDays: 3,
   freelaAutoArchived: {},
   workspaces: [],
   projectWorkspaces: {},
+  // Ligado: a fila só começa a próxima tarefa com RAM livre e sem passar do teto (ver resourceGate.ts).
+  resourceGate: true,
+  minFreeRamGb: 1.5,
+  // Desligada: segurar por CPU alta é escolha sua.
+  cpuGate: false,
+  // 0 = sem teto de conversas.
+  maxActiveChats: 0,
+  // Turno que passa do teto é interrompido (como o Parar) e você é avisado; 0 desliga cada teto.
+  maxTurnTools: 500,
+  maxTurnMinutes: 180,
 };
 
 /** Slug de modelo do Codex (`gpt-6-sol`): só letras, números e `. _ : -`; vazio = o padrão do Codex. Vai a `-m` do `codex exec`. */
@@ -49,8 +64,21 @@ const CODEX_MODEL = z
   .max(100, 'nome de modelo grande demais')
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$|^$/, 'nome de modelo inválido');
 const FREELA_DAYS = z.number().int('use um número inteiro de dias').min(0, 'mínimo 0 (nunca)').max(90, 'máximo de 90 dias');
+/** 0 desliga a parte de RAM do gate de recursos; senão, de 0,5 a 64 GB (passo livre). */
+const RAM_GB = z.number().refine((n) => n === 0 || (n >= 0.5 && n <= 64), 'use 0 (desliga) ou um valor de 0,5 a 64 GB');
+const MAX_CHATS = z.number().int('use um número inteiro').min(0, 'mínimo 0 (sem teto)').max(50, 'máximo de 50 conversas');
+const MAX_TURN_TOOLS = z.number().int('use um número inteiro').min(0, 'mínimo 0 (desligado)').max(100000, 'máximo de 100000 ferramentas');
+const MAX_TURN_MINUTES = z.number().int('use um número inteiro').min(0, 'mínimo 0 (desligado)').max(1440, 'máximo de 1440 minutos (24 h)');
 /** Quantas sessões arquivadas sozinhas o controle lembra (as mais recentes ficam). */
 const FREELA_RECORD_MAX = 500;
+/** Quantas conversas arquivadas (só do seletor) o config guarda (as de data mais recente ficam). */
+const CONVERSATION_RECORD_MAX = 500;
+/** Títulos manuais de conversa: passando do teto, só edita ou apaga (não cria). Sem descarte automático. */
+const CONVERSATION_TITLES_MAX = 2000;
+/** Título de conversa: depois do trim, 1 a 120 caracteres (vazio apaga). */
+const CONVERSATION_TITLE = z.string().trim().min(1).max(120);
+/** Mesmo formato do id da rota de rename (`/chat/:sid/rename`). */
+const CONVERSATION_ID = /^[A-Za-z0-9-]+$/;
 
 const PRIORITY = z.enum(['now', 'next', 'later']);
 const UI_LEVEL = z.enum(['simple', 'advanced']);
@@ -73,8 +101,15 @@ const ConfigFile = z
     companyName: z.string().optional(),
     uiLevel: UI_LEVEL.optional().catch(undefined),
     archived: z
-      .object({ projects: z.array(z.string()).optional(), sessions: z.array(z.string()).optional() })
+      .object({
+        projects: z.array(z.string()).optional(),
+        sessions: z.array(z.string()).optional(),
+        // Valor estranho à mão zera só este mapa; o resto do config segue.
+        conversations: z.record(z.string(), z.string()).optional().catch(undefined),
+      })
       .optional(),
+    // Editado à mão, entrada estranha some (ver titlesOf).
+    conversationTitles: z.record(z.string(), z.unknown()).optional().catch(undefined),
     usageStop: UsageStopFile.optional(),
     sendWhileBusy: PRIORITY.optional().catch(undefined),
     // Editado à mão, um valor estranho volta ao padrão sem derrubar o resto (ver readConfig).
@@ -91,10 +126,18 @@ const ConfigFile = z
     showUserScope: z.boolean().optional().catch(undefined),
     codexReview: z.boolean().optional().catch(undefined),
     codexModel: CODEX_MODEL.optional().catch(undefined),
+    internetAccess: z.boolean().optional().catch(undefined),
+    codexBrowser: z.boolean().optional().catch(undefined),
     freelaArchiveDays: FREELA_DAYS.optional().catch(undefined),
     freelaAutoArchived: z.record(z.string(), z.unknown()).optional().catch(undefined),
     workspaces: z.array(z.unknown()).optional().catch(undefined),
     projectWorkspaces: z.record(z.string(), z.unknown()).optional().catch(undefined),
+    resourceGate: z.boolean().optional().catch(undefined),
+    minFreeRamGb: RAM_GB.optional().catch(undefined),
+    cpuGate: z.boolean().optional().catch(undefined),
+    maxActiveChats: MAX_CHATS.optional().catch(undefined),
+    maxTurnTools: MAX_TURN_TOOLS.optional().catch(undefined),
+    maxTurnMinutes: MAX_TURN_MINUTES.optional().catch(undefined),
   })
   .passthrough();
 
@@ -132,6 +175,10 @@ export const ConfigPatch = z.object({
   codexReview: z.boolean().optional(),
   /** Modelo do Codex para o `perguntar_gpt`; vazio volta ao padrão do Codex. */
   codexModel: CODEX_MODEL.optional(),
+  /** "Permitir acesso à internet": funcionários (Claude e Codex) e o perguntar_gpt pesquisam na web. */
+  internetAccess: z.boolean().optional(),
+  /** "Permitir que o GPT use meu Chrome": o funcionário no Codex usa o Chrome do usuário (ver AppConfig). */
+  codexBrowser: z.boolean().optional(),
   /** Dias parado até o freela (conversa sem ficha) ser arquivado sozinho; 0 = nunca. */
   freelaArchiveDays: FREELA_DAYS.optional(),
   /** Por id de projeto: uma cor troca a da sala; null volta à padrão. Os outros projetos ficam como estão. */
@@ -144,13 +191,32 @@ export const ConfigPatch = z.object({
     .optional(),
   /** Por id de projeto: % da cota de 7 dias (1–100); null tira o orçamento. Os outros ficam como estão. */
   projectBudgets: z.record(z.string().min(1).max(200), z.number().int('use um número inteiro').min(1).max(100).nullable()).optional(),
+  /** Gate de recursos da fila (só o início automático; ver resourceGate.ts). */
+  resourceGate: z.boolean().optional(),
+  minFreeRamGb: RAM_GB.optional(),
+  cpuGate: z.boolean().optional(),
+  maxActiveChats: MAX_CHATS.optional(),
+  /** Teto de ferramentas por turno (0 = desligado). */
+  maxTurnTools: MAX_TURN_TOOLS.optional(),
+  /** Teto de minutos por turno (0 = desligado). */
+  maxTurnMinutes: MAX_TURN_MINUTES.optional(),
 });
 
 export const ArchiveRequest = z.object({
-  kind: z.enum(['project', 'session']),
+  kind: z.enum(['project', 'session', 'conversation']),
   id: z.string().min(1).max(200),
   archived: z.boolean(),
 });
+
+export const ConversationTitleRequest = z.object({
+  id: z.string().regex(CONVERSATION_ID, 'conversa inválida'),
+  title: z.string().nullable(),
+});
+
+/** Pedido inválido (id ou título fora da regra): 400. */
+export class ConversationTitleError extends Error {}
+/** Teto de títulos atingido: criar outro recusa (409); editar ou apagar um que já existe segue. */
+export class ConversationTitlesFullError extends Error {}
 
 export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
   const parsed = ConfigFile.safeParse(await readRaw(file));
@@ -161,7 +227,8 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     companyName: d.companyName && d.companyName !== 'MyCo' ? d.companyName : DEFAULTS.companyName,
     // Simples até você escolher o avançado, também para quem já tinha config de antes da opção.
     uiLevel: d.uiLevel ?? DEFAULTS.uiLevel,
-    archived: { projects: d.archived?.projects ?? [], sessions: d.archived?.sessions ?? [] },
+    archived: { projects: d.archived?.projects ?? [], sessions: d.archived?.sessions ?? [], conversations: d.archived?.conversations ?? {} },
+    conversationTitles: titlesOf(d.conversationTitles),
     usageStop: {
       fiveHour: d.usageStop?.fiveHour === undefined ? DEFAULTS.usageStop.fiveHour : d.usageStop.fiveHour,
       sevenDay: d.usageStop?.sevenDay === undefined ? DEFAULTS.usageStop.sevenDay : d.usageStop.sevenDay,
@@ -186,8 +253,16 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     showUserScope: d.showUserScope ?? DEFAULTS.showUserScope,
     codexReview: d.codexReview ?? DEFAULTS.codexReview,
     codexModel: d.codexModel ?? DEFAULTS.codexModel,
+    internetAccess: d.internetAccess ?? DEFAULTS.internetAccess,
+    codexBrowser: d.codexBrowser ?? DEFAULTS.codexBrowser,
     freelaArchiveDays: d.freelaArchiveDays ?? DEFAULTS.freelaArchiveDays,
     freelaAutoArchived: readFreelaRecord(d.freelaAutoArchived),
+    resourceGate: d.resourceGate ?? DEFAULTS.resourceGate,
+    minFreeRamGb: d.minFreeRamGb ?? DEFAULTS.minFreeRamGb,
+    cpuGate: d.cpuGate ?? DEFAULTS.cpuGate,
+    maxActiveChats: d.maxActiveChats ?? DEFAULTS.maxActiveChats,
+    maxTurnTools: d.maxTurnTools ?? DEFAULTS.maxTurnTools,
+    maxTurnMinutes: d.maxTurnMinutes ?? DEFAULTS.maxTurnMinutes,
     ...readWorkspaces(d.workspaces, d.projectWorkspaces),
   };
 }
@@ -322,16 +397,58 @@ function mergePartial(current: unknown, patch: Record<string, unknown>): Record<
   return out;
 }
 
-/** Arquiva ou desarquiva um projeto ou funcionário (só esconde do quadro). */
+/** Arquiva ou desarquiva um projeto, funcionário (só esconde do quadro) ou conversa (só do seletor de conversas). */
 export async function setArchived(req: z.infer<typeof ArchiveRequest>, file = CONFIG_FILE): Promise<AppConfig> {
   return mutate(file, (current) => {
     const parsed = ConfigFile.safeParse(current);
     const archived = parsed.success ? (parsed.data.archived ?? {}) : {};
+    if (req.kind === 'conversation') {
+      const conversations: Record<string, string> = { ...(archived.conversations ?? {}) };
+      // Re-arquivar troca a data por agora; desarquivar apaga a entrada.
+      if (req.archived) conversations[req.id] = new Date().toISOString();
+      else delete conversations[req.id];
+      const newest = Object.entries(conversations)
+        .sort((a, b) => b[1].localeCompare(a[1]))
+        .slice(0, CONVERSATION_RECORD_MAX);
+      return { ...current, archived: { ...archived, conversations: Object.fromEntries(newest) } };
+    }
     const key = req.kind === 'project' ? 'projects' : 'sessions';
     const list = new Set(archived[key] ?? []);
     if (req.archived) list.add(req.id);
     else list.delete(req.id);
     return { ...current, archived: { ...archived, [key]: [...list] } };
+  });
+}
+
+/** Os títulos gravados; entrada estranha (editada à mão) some e o resto segue. */
+function titlesOf(raw: unknown): Record<string, string> {
+  const rec = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  return Object.fromEntries(
+    Object.entries(rec).flatMap(([id, v]) => {
+      const title = CONVERSATION_TITLE.safeParse(v);
+      return CONVERSATION_ID.test(id) && title.success ? [[id, title.data] as const] : [];
+    }),
+  );
+}
+
+/** Dá ou troca o título de uma conversa (só o nome que você deu). Vazio ou null apaga: volta ao último assunto. */
+export async function setConversationTitle(id: string, title: string | null, file = CONFIG_FILE): Promise<AppConfig> {
+  if (!CONVERSATION_ID.test(id)) throw new ConversationTitleError('conversa inválida');
+  const clean = title === null ? '' : title.trim();
+  if (clean.length > 120) throw new ConversationTitleError('máximo de 120 caracteres');
+  return mutate(file, (current) => {
+    const titles = titlesOf(current.conversationTitles);
+    const has = Object.prototype.hasOwnProperty.call(titles, id);
+    if (clean === '') {
+      if (!has) return current;
+      delete titles[id];
+    } else {
+      if (!has && Object.keys(titles).length >= CONVERSATION_TITLES_MAX) {
+        throw new ConversationTitlesFullError(`já há ${CONVERSATION_TITLES_MAX} conversas com título; apague algum antes`);
+      }
+      titles[id] = clean;
+    }
+    return { ...current, conversationTitles: titles };
   });
 }
 

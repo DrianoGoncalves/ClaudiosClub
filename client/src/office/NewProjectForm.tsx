@@ -4,7 +4,10 @@ import { api, type ImportableProject } from '../api';
 import { t } from '../i18n';
 
 // Novo projeto: cria uma pasta (com git, se quiser), abre uma que já existe ou importa projetos do
-// Claude Code que ainda estão fora do quadro, já no workspace da aba.
+// Claude Code ou do Codex que ainda estão fora do quadro, já no workspace da aba.
+
+/** Nome de cada fonte de importação (os mesmos do cabeçalho). */
+const SOURCE_NAME = { claude: 'toolbar.claudeName', codex: 'toolbar.codexName' } as const;
 
 interface Props {
   workspaces: Workspace[];
@@ -162,7 +165,14 @@ export function NewProjectForm({ workspaces, workspaceId, onClose, onCreated }: 
                 <label key={p.path} className="choice">
                   <input type="checkbox" checked={picked.has(p.path)} onChange={() => toggle(p.path)} />
                   <span>
-                    <b>{p.name}</b>
+                    <span className="import-head">
+                      <b>{p.name}</b>
+                      {p.sources?.map((s) => (
+                        <span key={s} className="import-source">
+                          {`>_ ${t(SOURCE_NAME[s])}`}
+                        </span>
+                      ))}
+                    </span>
                     <span className="muted small mono">{p.path}</span>
                   </span>
                 </label>

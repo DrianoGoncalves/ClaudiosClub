@@ -10,14 +10,21 @@ import { ensureMycoGitignore } from './mycoGitignore';
 import { ROOT } from './root';
 import { saveProfile, staffDir, writeAtomic } from './staff/store';
 
-// Projeto demo: uma API pequena de cafeteria (com um bug de propósito) e uma equipe pronta, para
-// quem acabou de baixar o Claudio’s Club ver fichas, hierarquia e tarefas no quadro sem gastar nada. O app
+// Projeto demo: a My.Co Pizzaria (landing, cardápio e pedidos, com problemas de propósito) e uma equipe pronta,
+// para quem acabou de baixar o Claudio’s Club ver fichas, hierarquia e tarefas no quadro sem gastar nada. O app
 // vem de demo/ no repositório; a cópia vai para ~/.myco/demo, fora do clone (o trabalho dos
 // funcionários não suja o git do Claudio’s Club). Abrir um funcionário é o Claude Code de verdade: gasta a
 // cota de quem usa. A equipe sai dos cargos prontos, então acompanha as revisões deles.
 
-export const DEMO_DIR = path.join(MYCO_HOME, 'demo', 'cafe-demo');
-const TEMPLATE_DIR = path.join(ROOT, 'demo', 'cafe-demo');
+export const DEMO_DIR = path.join(MYCO_HOME, 'demo', 'my-co');
+const TEMPLATE_DIR = path.join(ROOT, 'demo', 'my-co');
+/** O demo da versão anterior (cafeteria). Não é migrado: só continua fixado no quadro se ainda estiver na máquina. */
+const LEGACY_DEMO_DIR = path.join(MYCO_HOME, 'demo', 'cafe-demo');
+
+/** Pastas do demo que ficam fixadas no quadro: o atual e, se existir, o antigo. */
+export async function demoPaths(): Promise<string[]> {
+  return (await exists(LEGACY_DEMO_DIR)) ? [DEMO_DIR, LEGACY_DEMO_DIR] : [DEMO_DIR];
+}
 
 const exec = promisify(execFile);
 
@@ -31,47 +38,62 @@ interface Member {
 // Dois níveis: a orquestradora divide o trabalho; o front-end coordena quem cuida do visual.
 const TEAM: Member[] = [
   { id: 'lia-demo', name: 'Lia', roleId: 'orquestrador', reportsTo: [] },
-  { id: 'caio-demo', name: 'Caio', roleId: 'planejador', reportsTo: ['lia-demo'] },
+  { id: 'paulo-demo', name: 'Paulo', roleId: 'produto', reportsTo: ['lia-demo'] },
   { id: 'bruno-demo', name: 'Bruno', roleId: 'desenvolvedor', reportsTo: ['lia-demo'] },
   { id: 'fernanda-demo', name: 'Fernanda', roleId: 'frontend', reportsTo: ['lia-demo'] },
   { id: 'duda-demo', name: 'Duda', roleId: 'design-system', reportsTo: ['fernanda-demo'] },
   { id: 'tais-demo', name: 'Taís', roleId: 'testador', reportsTo: ['lia-demo'] },
-  { id: 'rui-demo', name: 'Rui', roleId: 'revisor', reportsTo: ['lia-demo'] },
+  { id: 'sergio-demo', name: 'Sérgio', roleId: 'seguranca', reportsTo: ['lia-demo'] },
 ];
 
 // Repasses da orquestradora, como ela faria pela API: cada um com dono, pronto e o que não mexer.
 const TASKS: Array<{ title: string; description: string; staffId: string; status: TaskStatus }> = [
   {
-    title: 'Montar o cardápio e a rota do pedido',
-    description: 'GET /api/cardapio e POST /api/pedidos em server.js, com validação dos itens.',
+    title: 'API do cardápio e do pedido',
+    description: 'GET /api/cardapio e POST /api/pedidos em server.js, com validação do pedido em pizzaria.js.',
     staffId: 'bruno-demo',
     status: 'done',
   },
   {
-    title: 'Corrigir o total do pedido',
+    title: 'Critérios de aceite do pedido',
     description:
-      'calcularTotal (pedidos.js) soma o preço sem multiplicar pela quantidade.\nPronto quando: o total é a soma de preço × quantidade, com um teste que falhava antes.\nNão mexer: o cardápio e as rotas.',
-    staffId: 'bruno-demo',
+      'Fechar no SPEC.md as regras do pedido: itens, dados do cliente, total e as respostas da API.\nPronto quando: cada regra tem um critério que dá para testar, sem ambiguidade.\nNão mexer: o código.',
+    staffId: 'paulo-demo',
     status: 'todo',
   },
   {
-    title: 'Testes da validação do pedido',
+    title: 'Revisar a landing no celular',
     description:
-      'Cobrir validarItens (pedidos.js) com node --test: item fora do cardápio, quantidade 0, 51 e fracionada, pedido vazio.\nNão mexer: o código de produção.',
-    staffId: 'tais-demo',
-    status: 'todo',
-  },
-  {
-    title: 'Montar o pedido na página',
-    description:
-      'Em public/index.html: escolher a quantidade de cada item, enviar para POST /api/pedidos e mostrar o total devolvido.\nPronto quando: funciona em 360px e no desktop.\nNão mexer: a API.',
+      'Hero e chamada para o cardápio em public/index.html.\nPronto quando: em 360 px o botão "Ver cardápio" fica visível sem rolar a tela e tem pelo menos 44 px de altura.\nNão mexer: o cardápio e o formulário.',
     staffId: 'fernanda-demo',
     status: 'todo',
   },
   {
-    title: 'Planejar cupons de desconto',
-    description: 'Como aplicar um cupom no pedido (formato, validação, onde guardar). Só o plano, com até três alternativas.',
-    staffId: 'caio-demo',
+    title: 'Aplicar os tokens da pizzaria no CSS',
+    description:
+      'Cores e tipografia da My.Co em public/style.css, como variáveis CSS em :root.\nPronto quando: as cores e fontes vêm das variáveis, sem valor solto no resto do arquivo.\nNão mexer: a estrutura do HTML.',
+    staffId: 'duda-demo',
+    status: 'todo',
+  },
+  {
+    title: 'Testes do total e das regras do pedido',
+    description:
+      'Cobrir calcularTotal e validarPedido em pizzaria.test.js com node --test: quantidade acima de 1, item fora do cardápio, telefone com letra, endereço curto, campo do tipo errado.\nPronto quando: os testes novos rodam com npm test e, se falharem, mostram o motivo.\nNão mexer: o código de produção.',
+    staffId: 'tais-demo',
+    status: 'todo',
+  },
+  {
+    title: 'Parecer de segurança do formulário e do POST /api/pedidos',
+    description:
+      'Só o parecer, por escrito: entrada, limite do corpo, dados pessoais em log e cabeçalhos das páginas.\nPronto quando: cada achado tem gravidade e o que corrigir. A correção vai para o Back-end (Bruno).\nNão mexer: o código.',
+    staffId: 'sergio-demo',
+    status: 'todo',
+  },
+  {
+    title: 'Corrigir o que o QA achar',
+    description:
+      'Quando a Taís abrir os achados, corrigir em pizzaria.js e server.js.\nPronto quando: os testes da Taís passam e o total do pedido confere com o cardápio.\nNão mexer: o cardápio e o layout das páginas.',
+    staffId: 'bruno-demo',
     status: 'todo',
   },
 ];
@@ -153,7 +175,7 @@ function profileOf(m: Member, at: string): StaffProfile {
     agents: [],
     skills: [],
     mcps: null,
-    knowledge: ['README.md'],
+    knowledge: ['README.md', 'SPEC.md'],
     rules: role.rules,
     doneWhen: role.doneWhen,
     model: role.model || null,

@@ -43,7 +43,9 @@ function UpdateButton({ status }: { status: UpdateStatus }) {
       working?.background ? t('toolbar.cutBackground', { n: working.background }) : '',
     ].filter(Boolean);
     const warn = daemon && cut.length ? `\n\n${t('toolbar.warnCut', { cut: cut.join(` ${t('toolbar.and')} `) })}` : '';
-    if (!window.confirm((daemon ? t('toolbar.askUpdate') : t('toolbar.askUpdateNoDaemon')) + warn)) return;
+    // Com o vigia, o servidor reinicia: quem está no meio do turno volta sozinho (ver server/chat/resume.ts).
+    const back = daemon && working?.busy ? `\n\n${t('toolbar.resumeAfterRestart')}` : '';
+    if (!window.confirm((daemon ? t('toolbar.askUpdate') : t('toolbar.askUpdateNoDaemon')) + warn + back)) return;
     setError(null);
     setState('updating');
     let result: Awaited<ReturnType<typeof api.applyUpdate>>;

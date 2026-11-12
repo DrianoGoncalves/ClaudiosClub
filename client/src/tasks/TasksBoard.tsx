@@ -9,6 +9,7 @@ import { TaskFallbackBadge } from '../staff/FallbackBadge';
 import { ReviewDelegate } from './ReviewDelegate';
 import { TaskCodePanel } from './TaskCodePanel';
 import { DoubtBadge, DoubtBlock } from './TaskDoubt';
+import { ResourceWaitBadge, resourceWaitText } from './ResourceWait';
 
 // Quadro de tarefas de um projeto: aguardar → a fazer → fazendo → revisão → pronto.
 // Os status são 6 (ver server/tasks.ts); na tela, "planejando" vai em Fazendo.
@@ -214,6 +215,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             {t('tasks.queuePos', { pos: queuePos(task) })}
           </span>
         )}
+        <ResourceWaitBadge wait={task.resourceWait} now={now} />
         {!!task.held?.length && (
           <span className="task-queue small" title={t('tasks.heldHint')}>
             {t(task.held.length === 1 ? 'tasks.heldOne' : 'tasks.heldOther', { n: task.held.length })}
@@ -626,6 +628,11 @@ function TaskDetail({
           <button className="link small" onClick={onUnqueue}>
             {t('tasks.unqueue')}
           </button>
+        </p>
+      )}
+      {task.resourceWait && (
+        <p className="muted small">
+          {resourceWaitText(task.resourceWait, Date.now())}. {t('tasks.resourceWaitHint')}
         </p>
       )}
       {!!task.held?.length && (

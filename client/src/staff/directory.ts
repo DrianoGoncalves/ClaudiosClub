@@ -165,6 +165,7 @@ export const PERSON_FIELD_LABEL: Record<PersonField, MsgKey> = {
   model: 'hr.fieldModel',
   effort: 'hr.fieldEffort',
   playbook: 'hr.fieldPlaybook',
+  personality: 'hr.fieldPersonality',
 };
 
 /** O valor como o servidor compara: lista vira texto, vazio e null são o mesmo, espaço nas pontas não conta. */

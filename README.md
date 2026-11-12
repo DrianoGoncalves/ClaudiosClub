@@ -106,11 +106,15 @@ A conexão SSH fica no projeto (host, usuário, caminho da chave, pasta remota),
 <td valign="top">
 
 ### 🌎 Três idiomas e um demo
-Interface em português, inglês e espanhol. O projeto demo traz uma cafeteria com equipe, hierarquia e tarefas prontas para você ver tudo funcionando sem gastar nada.
+Interface em português, inglês e espanhol. O projeto demo é a pizzaria My.Co, com landing, cardápio online, pedidos, equipe, hierarquia e tarefas prontas para você ver tudo funcionando sem gastar nada.
 
 </td>
 </tr>
 </table>
+
+**Funciona em segundo plano.** O trabalho roda no servidor do Claudio's Club, não no navegador: fechar a aba não para os funcionários. A fila anda, revisões e despertadores seguem, e o que precisa de você (permissões, planos, perguntas) fica em **precisa de mim** até você voltar.
+
+**Freios contra laço:** teto de ferramentas e de minutos por turno, e limite de mensagens entre funcionários. Quando um bate, a conversa para e você é avisado.
 
 ## Como o trabalho anda
 
@@ -180,7 +184,7 @@ Uma vez só: instala as dependências (e refaz com `npm ci` se o `node_modules` 
 >
 > O botão **Iniciar** chama o link `myco://`: uma página não liga programa nenhum sozinha, então esse link é o único registro que o Claudio's Club deixa no sistema (no Windows, a chave `HKCU\Software\Classes\myco`, só do seu usuário; no Linux, um `.desktop` escondido). Ele se registra sozinho no setup e a cada subida. Na primeira vez, o navegador pergunta se pode abrir: marque "sempre permitir". Atalho no menu de programas não é criado; quem quiser roda `npm run launcher` (`npm run launcher:remove` tira o atalho e o link). Na página de início, cada passo com problema mostra o comando de correção e um botão **Copiar**; a página nunca executa comandos, quem roda é você, no terminal.
 
-Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Quadro); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code ficam fora do quadro até você escolher quais trazer: **+ projeto → Importar do Claude Code**.
+Para ver uma equipe pronta, crie o **projeto demo** (Configurações → Geral); para o seu, use **+ projeto** nas abas do topo e contrate o primeiro funcionário. Os projetos em que você já usou o Claude Code ficam fora do quadro até você escolher quais trazer: **+ projeto → Importar do Claude Code**.
 
 | Para | Comando |
 | --- | --- |

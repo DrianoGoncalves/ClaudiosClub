@@ -27,15 +27,19 @@ import { differingFields, PERSON_FIELD_LABEL } from './directory';
 import { FallbackField } from './FallbackField';
 import { draftOf, fallbackProblem, fallbackToSend, showFallbackField, type FallbackDraft } from './fallbackEngine';
 import { PersonMemory } from './PersonMemory';
+import { PERSONALITY_TEXT, personalityToSend } from './personalityField';
+import { PERSONALITIES, type Personality } from '../../../shared/personality';
 import type { RoleEntry } from '../../../shared/roles';
 import {
   type CodexCatalog,
+  canWriteSsh,
   codexAutonomyHelp,
   codexBlockedByServers,
   defaultEffortOf,
   effortsOfModel,
   engineToSend,
   isClaudeModel,
+  PLAYWRIGHT_BRIDGE_URL,
   pickCodexModel,
   showEngineField,
   switchEngine,
@@ -72,6 +76,8 @@ interface Props {
   onDirty?: (dirty: boolean) => void;
   /** Codex (GPT) ligado nas configurações: sem isso o campo "Motor" não aparece (a não ser que a ficha já rode no Codex). */
   codexReview?: boolean | null;
+  /** "Permitir que o GPT use meu Chrome" nas configurações: desligado, a caixa do Chrome da ficha Codex não vale (a ficha avisa). */
+  codexBrowser?: boolean | null;
   onClose: () => void;
   onHired: (profile: StaffProfile, launch: LaunchResult | null) => void;
   onSaved: (profile: StaffProfile) => void;
@@ -93,7 +99,7 @@ const TABS: Array<{ id: Tab; label: string; intro: string }> = [
 /** De onde vem o MCP, na lista da ficha. */
 const MCP_SOURCE_LABEL = { club: 'staff.sourceClub', user: 'staff.sourceUser', local: 'staff.sourceLocal', project: 'staff.sourceProject' } as const satisfies Record<McpServerInfo['source'], MsgKey>;
 
-export function StaffForm({ board, projectId, mode, simple = false, embedded = false, tab: tabProp, onTab, onDirty, codexReview = false, onClose, onHired, onSaved }: Props) {
+export function StaffForm({ board, projectId, mode, simple = false, embedded = false, tab: tabProp, onTab, onDirty, codexReview = false, codexBrowser = false, onClose, onHired, onSaved }: Props) {
   const editing = mode.kind === 'edit' ? mode.profile : null;
   const adopting = mode.kind === 'adopt' ? mode.session : null;
   // No simples, a ficha inteira fica a um clique ("Mostrar todos os campos").
@@ -141,8 +147,11 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const [fallback, setFallback] = useState<FallbackDraft>(draftOf(editing?.fallback));
   const [canHire, setCanHire] = useState(editing?.canHire ?? false);
   const [playbook, setPlaybook] = useState<'' | Playbook>(editing?.playbook ?? '');
+  const [personality, setPersonality] = useState<'' | Personality>(editing?.personality ?? '');
   const [worktree, setWorktree] = useState(editing?.worktree ?? false);
   const [servers, setServers] = useState<string[]>(editing?.servers ?? []);
+  // Conexões SSH de `servers` com escrita liberada (o Codex roda comandos livres só nelas); desmarcar o servidor tira daqui também.
+  const [sshWrite, setSshWrite] = useState<string[]>(editing?.sshWrite ?? []);
   const [browser, setBrowser] = useState(editing?.browser ?? true);
   const [serverList, setServerList] = useState<ServerInfo[] | null>(null);
   // O campo só aparece para quem é de infra (cargo pronto) ou já tem servidores.
@@ -164,7 +173,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   // Os campos da pessoa em que as outras fichas diferem do que está no formulário: o salvar vai trocá-los.
   const overwrites = copyProfiles.length
     ? differingFields(
-        { name, role, mission, doneWhen, rules: lines(rules), model: model || null, effort: effort || null, playbook: playbook || null },
+        { name, role, mission, doneWhen, rules: lines(rules), model: model || null, effort: effort || null, playbook: playbook || null, personality: personality || null },
         copyProfiles,
       ).map((d) => `${t(PERSON_FIELD_LABEL[d.field])} (${[...new Set(d.others.map((o) => projectNameOf(o.projectId)))].join(', ')})`)
     : [];
@@ -185,6 +194,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     [],
   );
   const codex = engine === 'codex';
+  // Conexão FTP marcada na ficha: o Codex não roda (SSH roda).
+  const ftpBlocked = codexBlockedByServers(servers, serverList);
   // Quem adota uma sessão do Claude não escolhe motor; nos outros, só com o Codex ligado ou quando a ficha já é do Codex.
   const showEngine = !adopting && showEngineField(codexReview, editing?.engine ?? 'claude');
   // O secundário só aparece com a ficha inteira (no simples nem há modelo) e fora da adoção; sem o campo, o pedido não leva a chave (mantém).
@@ -273,6 +284,10 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
 
   const toggle = (list: string[], set: (v: string[]) => void, value: string) =>
     set(list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);
+  const toggleServer = (name: string) => {
+    toggle(servers, setServers, name);
+    if (servers.includes(name)) setSshWrite((w) => w.filter((n) => n !== name));
+  };
 
   // Lista vazia ou que não carregou não conta como "todos marcados" (senão gravaria null).
   const allMcps = mcps !== null && mcps.length > 0 && mcps.every((m) => mcpOn.has(m.name));
@@ -345,7 +360,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       firstTask: editing?.firstTask ?? '',
       reportsTo: managers,
       autonomy,
-      // O Codex não usa agents, skills, MCPs nem navegador: a ficha dele sai sem isso (o quadro não mostra o que ele não tem).
+      // O Codex não usa agents, skills nem MCPs: a ficha dele sai sem isso (o quadro não mostra o que ele não tem). O Chrome vale, se ligado nas configurações.
       agents: codex ? [] : agents,
       skills: codex ? [] : skills,
       // Todos marcados = não restringir (a sessão também recebe os conectores da conta). No simples,
@@ -359,9 +374,12 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       effort: effort || null,
       canHire,
       playbook: playbook || null,
+      // Só vai se mudou (ausente mantém o salvo; null limpa). No simples o campo nem aparece: nunca muda.
+      ...(full ? personalityToSend(personality, editing?.personality) : {}),
       worktree: simpleHire ? autoWorktree : worktree,
       servers,
-      browser: codex ? false : browser,
+      sshWrite: sshWrite.filter((n) => servers.includes(n)),
+      browser,
       // Claude fica sem o campo (a ficha igual à de sempre); o Codex vai explícito, e quem volta dele ao Claude também.
       ...(sendEngine ? { engine: sendEngine } : {}),
       // Ligado manda o secundário; desligado tira o que a ficha tinha (`null`); campo escondido não manda (mantém).
@@ -618,7 +636,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                   type="button"
                   className="btn-secondary btn-toggle"
                   aria-pressed={engine === e}
-                  disabled={e === 'codex' && engine !== 'codex' && codexBlockedByServers(servers)}
+                  disabled={e === 'codex' && engine !== 'codex' && ftpBlocked}
                   onClick={() => pickEngine(e)}
                 >
                   {e === 'claude' ? t('staff.engineClaude') : t('staff.engineCodex')}
@@ -626,7 +644,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
               ))}
             </div>
             <p className="muted small">
-              {codexBlockedByServers(servers) ? t('staff.engineCodexServers', { tools: t('detail.tabProject') }) : codex ? t('staff.engineCodexHint') : t('staff.engineClaudeHint')}
+              {ftpBlocked ? t('staff.engineCodexServers', { tools: t('detail.tabProject') }) : codex ? t('staff.engineCodexHint') : t('staff.engineClaudeHint')}
             </p>
           </fieldset>
         )}
@@ -676,7 +694,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
         </div>
         )}
 
-        {showFallback && <FallbackField main={engine} servers={servers} draft={fallback} onChange={setFallback} />}
+        {showFallback && <FallbackField main={engine} servers={servers} serverList={serverList} draft={fallback} onChange={setFallback} />}
 
         <label>
           {t('staff.playbookLabel')}
@@ -695,6 +713,19 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             {tip}
           </p>
         )}
+        <label>
+          {t('staff.personalityLabel')}
+          <select value={personality} onChange={(e) => setPersonality(e.target.value as '' | Personality)}>
+            <option value="">{t('staff.personalityNone')}</option>
+            {PERSONALITIES.map((p) => (
+              <option key={p} value={p}>
+                {t(PERSONALITY_TEXT[p].name)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="muted small">{personality ? t(PERSONALITY_TEXT[personality].hint) : t('staff.personalityNoneHint')}</p>
+        <p className="muted small">{t('staff.personalityHelp')}</p>
         {editing && <PersonMemory key={editing.id} projectId={projectId} staffId={editing.id} name={editing.name} />}
         </div>
 
@@ -779,48 +810,71 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             </>
           )}
         </fieldset>
+          </>
+        )}
 
+        {/* Servidores valem nos dois motores: o Codex usa só as conexões SSH (pelo MCP myco-ssh); FTP não funciona nele. */}
         {showServers ? (
-          <fieldset>
+          <fieldset id="staff-servers">
             <legend>{t('staff.sshLegend')}</legend>
             <p className="muted small">
               {t('office.hireServersNote')}{' '}
-              {(() => {
-                // Só no "só planeja", "manual" e "edita sozinho" um comando no servidor espera você.
-                const label = AUTONOMY_OPTIONS.find((o) => o.value === autonomy)?.label ?? autonomy;
-                return autonomy === 'auto' || autonomy === 'bypassPermissions' ? (
-                  <b>{t('office.hireNoApproval', { autonomy: label, manual: t('staff.autonomyManualLabel') })}</b>
-                ) : (
-                  t('office.hireApproval', { autonomy: label })
-                );
-              })()}
+              {codex
+                ? t('staff.sshCodexNote')
+                : (() => {
+                    // Só no "só planeja", "manual" e "edita sozinho" um comando no servidor espera você.
+                    const label = AUTONOMY_OPTIONS.find((o) => o.value === autonomy)?.label ?? autonomy;
+                    return autonomy === 'auto' || autonomy === 'bypassPermissions' ? (
+                      <b>{t('office.hireNoApproval', { autonomy: label, manual: t('staff.autonomyManualLabel') })}</b>
+                    ) : (
+                      t('office.hireApproval', { autonomy: label })
+                    );
+                  })()}
             </p>
             {serverList === null && <p className="muted small">{t('staff.loading')}</p>}
             {serverList?.length === 0 && <p className="muted small">{t('office.hireServersEmpty')}</p>}
             <div className="checks">
-              {serverList?.map((s) => (
-                <label key={s.name} className="check">
-                  <input type="checkbox" checked={servers.includes(s.name)} onChange={() => toggle(servers, setServers, s.name)} />{' '}
-                  <ProtocolBadge protocol={s.protocol} /> {s.name}
-                  <span className="muted small">
-                    {' '}
-                    {s.host}
-                    {s.remoteRoot ? ` · ${s.remoteRoot}` : ''}
-                  </span>
-                </label>
-              ))}
+              {serverList?.map((s) => {
+                // A escrita só vale no Codex (no Claude o campo não muda nada hoje), por isso só aparece com ele.
+                const write = codex && canWriteSsh(s, servers);
+                return (
+                  <div key={s.name} className={write ? 'check-server has-write' : 'check-server'}>
+                    <label className="check">
+                      <input type="checkbox" checked={servers.includes(s.name)} onChange={() => toggleServer(s.name)} />{' '}
+                      <ProtocolBadge protocol={s.protocol} /> {s.name}
+                      <span className="muted small">
+                        {' '}
+                        {s.host}
+                        {s.remoteRoot ? ` · ${s.remoteRoot}` : ''}
+                      </span>
+                    </label>
+                    {write && (
+                      <div className="check-write">
+                        <label className="check">
+                          <input type="checkbox" checked={sshWrite.includes(s.name)} onChange={() => toggle(sshWrite, setSshWrite, s.name)} />{' '}
+                          {t('staff.sshWrite')}
+                        </label>
+                        <p className="muted small">{t('staff.sshWriteHint')}</p>
+                        {sshWrite.includes(s.name) && !editsCode(autonomy) && (
+                          <p className="muted small">{t('staff.sshWriteAutonomy', { mode: t('staff.autonomyEditsLabel') })}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
               {servers
                 .filter((n) => serverList && !serverList.some((s) => s.name === n))
                 .map((n) => (
                   <label key={n} className="check">
-                    <input type="checkbox" checked onChange={() => toggle(servers, setServers, n)} /> {n}
+                    <input type="checkbox" checked onChange={() => toggleServer(n)} /> {n}
                     <span className="muted small"> {t('office.hireServerGone')}</span>
                   </label>
                 ))}
             </div>
           </fieldset>
         ) : (
-          <p className="muted small">
+          <p className="muted small" id="staff-servers">
             <button type="button" className="link" onClick={() => setShowServers(true)}>
               {t('staff.addSsh')}
             </button>
@@ -829,16 +883,23 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
 
         <div className="check-link">
           <label className="check">
-            <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} /> {t('staff.browserLabel')}
+            <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} /> {codex ? t('staff.browserLabelCodex') : t('staff.browserLabel')}
           </label>
-          <a className="link small" href={CHROME_EXTENSION_URL} target="_blank" rel="noopener noreferrer">
-            {t('staff.installLink')}
+          <a className="link small" href={codex ? PLAYWRIGHT_BRIDGE_URL : CHROME_EXTENSION_URL} target="_blank" rel="noopener noreferrer">
+            {codex ? t('staff.installLinkCodex') : t('staff.installLink')}
           </a>
         </div>
-        <p className="muted small">
-          {t('staff.browserHintA')}<code>claude --chrome</code>{t('staff.browserHintB')}
-        </p>
-        {browser && <BrowserCheck />}
+        {codex ? (
+          <p className="muted small">
+            {t('staff.browserHintCodex')}
+            {browser && !codexBrowser && <> {t('staff.browserCodexOff', { setting: t('toolbar.codexBrowserTitle') })}</>}
+          </p>
+        ) : (
+          <>
+            <p className="muted small">
+              {t('staff.browserHintA')}<code>claude --chrome</code>{t('staff.browserHintB')}
+            </p>
+            {browser && <BrowserCheck />}
           </>
         )}
 

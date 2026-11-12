@@ -134,8 +134,8 @@ body { background: var(--board); }
 .bn::before { content: ''; position: absolute; inset: 3px; background: var(--card); border-radius: 3px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06); }
 .bn .sketch { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
 .bn-body { position: relative; height: 100%; padding: 8px 10px; display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; }
-.bn-title { font-family: var(--hand); font-weight: 700; font-size: 25px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bn-title-sm { font-size: 21px; }
+.bn-title { font-family: var(--hand); font-weight: 700; font-size: 26px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bn-title-sm { font-size: 20px; }
 .bn-meta { font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bn-tag { font-family: system-ui, sans-serif; font-weight: 500; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin-right: 6px; vertical-align: middle; }
 .bn-project .bn-title { color: var(--ink-blue); }
@@ -154,7 +154,8 @@ body { background: var(--board); }
 .temp-notice-actions { display: inline-flex; gap: 6px; margin-left: auto; }
 .bn-employee.is-busy .sketch path { stroke-dasharray: 14 6; animation: bn-redraw 1.6s linear infinite; }
 .bn-employee.is-busy { animation: bn-glow 2.4s ease-in-out infinite; }
-.bn-pencil { position: absolute; right: -8px; bottom: -6px; font-size: 18px; color: var(--busy); transform-origin: 20% 80%; animation: bn-write 0.9s ease-in-out infinite; }
+/* Ocupa o mesmo espaço da bolinha (9px): o ícone de 14px sobra 2,5px de cada lado. */
+.bn-pencil { display: inline-flex; flex: none; margin: -2.5px; line-height: 0; color: var(--busy); transform-origin: 20% 80%; animation: bn-write 0.9s ease-in-out infinite; }
 .bn-working::after { content: '…'; display: inline-block; width: 1.2em; text-align: left; animation: bn-dots 1.2s steps(4, end) infinite; overflow: hidden; vertical-align: bottom; }
 .bn-employee.is-waiting { animation: bn-nudge 2.4s ease-in-out infinite; }
 @keyframes bn-redraw { to { stroke-dashoffset: -40; } }
@@ -377,9 +378,9 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .permission-plan .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 @media (max-width: 640px) { .permission-plan .actions :is(.btn-primary, .btn-secondary) { min-height: 36px; } }
 /* Pergunta com opções do Claude: cada pergunta com suas opções clicáveis, "outra resposta" e a prévia. */
-.msg-question { --ink: var(--ask-ink); --muted: var(--ask-muted); --line: var(--ask-line); --ink-blue: var(--ask-accent); --accent: var(--ask-accent); --panel: var(--ask-field); --board: var(--ask-field); width: 88%; align-self: flex-start; background: var(--ask-bg); color: var(--ink); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.msg-question { --ink: var(--ask-ink); --muted: var(--ask-muted); --line: var(--ask-line); --ink-blue: var(--ask-accent); --accent: var(--ask-accent); --panel: var(--ask-field); --board: var(--ask-field); width: 90%; align-self: flex-start; background: var(--ask-bg); color: var(--ink); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .msg-question .btn-primary { color: #fff; }
-.msg-system.permission-question { width: 88%; }
+.msg-system.permission-question { width: 90%; }
 .permission-question .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .q-block { display: grid; gap: 4px; padding: 6px 0; }
 .q-block + .q-block { border-top: 1px solid var(--line); }
@@ -407,6 +408,9 @@ textarea.q-field { resize: vertical; }
 .chat-notice { align-self: center; font-size: 12px; color: var(--muted); }
 .chat-notice-warn { color: var(--warn); }
 .chat-notice-error { color: var(--danger); }
+/* Aviso de negação com botão (dica do servidor): o texto e, embaixo, o botão com alvo de toque de 36px. */
+.chat-notice.has-action { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
+.chat-notice.has-action .chat-notice-btn { min-height: 36px; padding-inline: 14px; }
 /* O balão que o aviso da caixa "precisa de mim" apontou: pisca de leve e volta ao normal (2,5 s, ver useChatFocus.ts). */
 .chat-list .is-flash { outline: 2px solid transparent; outline-offset: 2px; animation: msg-flash 2.5s ease-out; }
 @keyframes msg-flash {
@@ -580,6 +584,9 @@ textarea.q-field { resize: vertical; }
 .guide-who { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 8px 0 0; }
 .guide-who .setting-select { flex: 1 1 160px; min-width: 0; max-width: 100%; }
 .guide-actions { flex-wrap: wrap; }
+/* "Abrir vitrine": <a> com cara de botão (sem sublinhado, mesma altura dos botões vizinhos) e o mesmo anel de foco. */
+.btn-secondary.guide-link { display: inline-flex; align-items: center; text-decoration: none; }
+.guide-link:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 2px; }
 .guide-hints { margin: 8px 0 0; padding-left: 16px; display: grid; gap: 4px; }
 /* "N arquivos mudaram desde …" (ou o aviso de que nada mudou), logo abaixo dos botões. */
 .guide-since { margin: 8px 0 0; }
@@ -661,6 +668,8 @@ textarea.q-field { resize: vertical; }
 .task-review p { margin: 0; }
 /* Dúvida do funcionário: selo de uma linha no cartão (nome longo corta; o title tem o texto inteiro) e bloco no detalhe (amarelo quando é com você, como o .files-conflict). */
 .task-badge.task-doubt { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Espera do gate de recursos: o motivo é o que importa, então quebra linha (raio dos blocos tracejados, não pílula). */
+.task-queue.task-resource { max-width: 100%; border-radius: 10px; padding: 1px 8px; text-align: left; overflow-wrap: anywhere; }
 .task-doubt-box { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
 .task-doubt-box.is-escalated { border: 1px solid var(--waiting); background: color-mix(in srgb, var(--waiting) 12%, transparent); }
 .task-doubt-box p, .task-doubt-box ul { margin: 0; overflow-wrap: anywhere; }
@@ -746,8 +755,15 @@ textarea.q-field { resize: vertical; }
 /* Botão liga/desliga: o btn-secondary com estado pressionado em azul de caneta. */
 .segmented { display: inline-flex; gap: 6px; }
 /* Conversa: qual delas, lista de tarefas do funcionário, ajustes, menu de "/" e "@", anexos. */
-.chat-convos { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+.chat-convos { display: flex; gap: 6px; align-items: center; margin: 0px 0; }
 .chat-convos select { flex: 1; min-width: 0; font: inherit; font-size: 12.5px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
+/* Celular: a linha das conversas (seletor e botões) sobe para 36px de alvo de toque. */
+@media (max-width: 640px) { .chat-convos select { min-height: 36px; } .chat-convos .btn-secondary.chat-icon-btn { width: 36px; height: 36px; } }
+/* Renomear a conversa: o campo no lugar da linha do seletor, com Salvar/Cancelar e a dica quebrando linha embaixo. */
+.chat-rename { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0; }
+.chat-rename input { flex: 1 1 160px; min-width: 0; font: inherit; font-size: 12.5px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
+.chat-rename .error { flex: 1 1 100%; }
+@media (max-width: 640px) { .chat-rename input { flex-basis: 100%; min-height: 36px; } .chat-rename :is(.btn-primary, .btn-secondary) { min-height: 36px; padding-inline: 14px; } }
 /* Tarefas: fechadas por padrão, numa linha; abertas, a lista com rolagem curta. */
 .chat-todos { margin: 4px 0; padding: 4px 10px; border: 1px dashed var(--line); border-radius: 8px; }
 .chat-todos ul { list-style: none; margin: 2px 0 6px; padding: 0; display: grid; gap: 2px; font-size: 12.5px; max-height: 30vh; overflow-y: auto; }
@@ -905,9 +921,16 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 :is(.modal, .hire-inline) .choice { display: flex; flex-direction: row; gap: 8px; align-items: flex-start; font-weight: 400; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; cursor: pointer; }
 .choice > span { display: grid; gap: 2px; }
 .checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+/* Conexão SSH marcada no Codex: o "Permitir comandos de escrita" fica numa linha própria, recuado sob o nome, com o aviso embaixo. */
+.check-server.has-write { flex: 1 1 100%; min-width: 0; }
+.check-write { display: grid; gap: 2px; margin: 4px 0 0 22px; }
+.check-write p { margin: 0; overflow-wrap: anywhere; }
 :is(.modal, .hire-inline) .check { display: flex; flex-direction: row; align-items: center; gap: 6px; font-weight: 400; }
 .import-list { display: grid; gap: 6px; max-height: 340px; overflow-y: auto; }
 .import-list .choice b { overflow-wrap: anywhere; }
+/* Nome do projeto e, ao lado, de onde ele vem (>_ Claude, >_ Codex); quebra de linha em tela estreita. */
+.import-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.import-source { font-size: 12px; line-height: 1.4; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; white-space: nowrap; }
 .portrait-preview { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 2px solid var(--ink); }
 /* Contratar "da empresa": lista das fichas dos outros projetos e a confirmação da cópia. */
 .hire-source { margin: 2px 0 10px; }
@@ -1078,9 +1101,15 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 .usage-outdated { color: var(--waiting); }
 .meter { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; }
 .meter-label { font-family: var(--hand); font-weight: 700; font-size: 17px; }
-/* O fundo da barra tem a cor do serviço (Claude/Codex); o preenchimento é o semáforo (verde <50%, amarelo <70%, vermelho depois). */
+/* O fundo da barra tem a cor do serviço (Claude/Codex); o preenchimento é o semáforo (verde <70%, amarelo <90%, vermelho depois). */
 .meter-track { position: relative; width: 64px; height: 8px; border: 1.5px solid var(--ink); border-radius: 3px 5px 3px 4px; overflow: hidden; background: var(--meter-brand); }
 .meter-fill { position: absolute; inset: 0 auto 0 0; background: var(--meter); }
+/* Barra de 7d: o que resta (fundo da trilha) ganha listra no semáforo do ritmo, a 50%; o usado fica sólido por cima. >14%/dia sobra (verde), 7–14 no ritmo (amarelo), <7 apertado (vermelho). */
+.meter { --pace-slack: var(--ink-green); --pace-even: var(--waiting); --pace-tight: var(--ink-red); }
+.meter-track[class*='pace-'] { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--stripe) 50%, transparent) 0 3px, transparent 3px 6px); }
+.meter-track.pace-slack { --stripe: var(--pace-slack); }
+.meter-track.pace-even { --stripe: var(--pace-even); }
+.meter-track.pace-tight { --stripe: var(--pace-tight); }
 .meter-low { --meter: var(--ink-green); }
 .meter-mid { --meter: var(--waiting); }
 .meter-high { --meter: var(--ink-red); }
@@ -1269,6 +1298,7 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 .setting-select:focus { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); border-color: var(--ink-blue); }
 .setting-number { display: inline-flex; align-items: center; gap: 4px; }
 .setting-number input { width: 64px; }
+.setting-number.is-wide input { width: 92px; }
 /* Campos do menu (inclusive os do cargo e do workspace): papel do cartão, linha fina e foco azul de caneta.
    O color-scheme deixa setinhas do número e a lista aberta do select no tema certo. */
 .settings-menu { color-scheme: light; }
@@ -1476,7 +1506,7 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 
 .muted { color: var(--muted); }
 .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; }
-.error { color: var(--danger); font-size: 13px; }
+.error { color: var(--danger); font-size: 14px; }
 
 @media (max-width: 640px) {
   .legend { display: none; }
@@ -1494,7 +1524,7 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 .toolbar .restart-pending:hover:not([aria-disabled='true']) { color: var(--ink); }
 .toolbar .restart-pending[aria-disabled='true'] { cursor: help; }
 .toolbar .restart-pending.is-error { border-color: var(--ink-red); }
-.update-menu { position: absolute; top: calc(100% + 8px); left: 0; width: min(420px, calc(100vw - 24px)); max-height: min(70vh, 480px); overflow: auto; display: grid; gap: 8px; padding: 12px 14px; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2); font-size: 13px; z-index: 30; }
+.update-menu { position: absolute; top: calc(100% + 8px); left: 0; width: min(420px, calc(100vw - 24px)); max-height: min(70vh, 480px); overflow: auto; display: grid; gap: 8px; padding: 12px 14px; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2); font-size: 14px; z-index: 30; }
 .update-menu p { margin: 0; }
 .update-commits { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 12px; line-height: 1.4; }
 .update-commits code { color: var(--muted); }
@@ -1512,5 +1542,5 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 .bn-git-btn:hover, .bn-git-btn:focus-visible { border-color: var(--line); }
 .git-unc-modal { width: min(560px, 100%); }
 .git-unc-group { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); }
-.git-unc-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px; font-size: 13.5px; }
+.git-unc-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px; font-size: 12px; }
 .git-unc-also { color: var(--warn); }

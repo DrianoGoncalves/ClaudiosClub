@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { InboxItem } from '../../../shared/model';
 import { formatAgo } from '../format';
 import { t } from '../i18n';
+import { secretText } from './secretText';
 import type { InboxView } from './useInbox';
 
 // Botão "precisa de mim" no topo do quadro, com o contador, e a lista que abre embaixo dele.
@@ -94,7 +95,7 @@ export function InboxMenu({
                       {item.projectName && <span className="muted"> · {item.projectName}</span>}
                     </span>
                     {topic && <span className="inbox-topic" title={topic}>{topic}</span>}
-                    <span className="inbox-summary">{item.summary}</span>
+                    <span className="inbox-summary">{secretText(item)}</span>
                     {item.at && <span className="muted small inbox-at">{formatAgo(now - Date.parse(item.at))}</span>}
                   </button>
                   {item.kind === 'secret' && (

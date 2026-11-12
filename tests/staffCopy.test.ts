@@ -163,7 +163,7 @@ describe('fichas entre projetos', () => {
     expect(await readProfile(dest, p.id)).toEqual(p);
     expect(await fs.readFile(fichaFile(dest, p.id), 'utf8')).toContain('Ana Souza');
     // A origem não muda, só ganha o personId do grupo (o da cópia).
-    expect(await readProfile(origin, 'ana-1a2b')).toEqual({ ...ana, personId: p.personId });
+    expect(await readProfile(origin, 'ana-1a2b')).toEqual({ ...ana, personId: p.personId, sshWrite: [] });
   });
 
   it('copia o retrato (mesmos bytes) para o destino', async () => {
@@ -410,6 +410,17 @@ describe('mesma pessoa entre projetos', () => {
     expect(await listVersions(w.dirs.b, 'copia-b')).toHaveLength(2);
 
     await expect(svc.update('a', 'ana-1a2b', corpo({ reportsTo: ['chefe-a'], applyToCopies: 'sim' }))).rejects.toThrow('applyToCopies tem que ser true ou false');
+  });
+
+  it('o estilo de comunicação vai com a pessoa: a cópia leva, a edição propaga e null tira nas cópias também', async () => {
+    await saveProfile(w.dirs.a, perfil({ id: 'ana-1a2b', projectId: 'a', name: 'Ana Souza', personality: 'tiozao' }));
+    const svc = servico(w);
+    const c = (await svc.copyFrom('b', { fromProjectId: 'a', staffId: 'ana-1a2b' }, true))!.profile;
+    expect(c.personality).toBe('tiozao');
+    await svc.update('a', 'ana-1a2b', corpo({ personality: 'caveman' }));
+    expect((await readProfile(w.dirs.b, c.id))!.personality).toBe('caveman');
+    await svc.update('a', 'ana-1a2b', corpo({ personality: null }));
+    expect((await readProfile(w.dirs.b, c.id))!.personality).toBeNull();
   });
 
   it('agents e skills (da alocação) não vão às cópias; a própria ficha muda', async () => {

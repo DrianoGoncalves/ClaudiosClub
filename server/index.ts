@@ -23,16 +23,22 @@ import {
   removeWorkspace,
   saveWorkspace,
   setArchived,
+  setConversationTitle,
   setProjectWorkspace,
   updateConfig,
   WorkspaceError,
+  ConversationTitleError,
+  ConversationTitleRequest,
+  ConversationTitlesFullError,
 } from './config';
 import { openProject, parseNewProject, ProjectError, usualParent } from './newProject';
-import { createDemo, DEMO_DIR } from './demo';
+import { createDemo, demoPaths } from './demo';
 import { z } from 'zod';
 import { AgentError, AgentInput, readAgentSource, saveAgent } from './adapters/claude/agentWrite';
-import { ChatError, ChatManager, findTranscript } from './chat/manager';
+import { ChatClosingError, ChatError, ChatManager, findTranscript } from './chat/manager';
+import { ResumeFile, bootResume } from './chat/resume';
 import { AnnotationsField, AnswersField } from './chat/questions';
+import { secretAlert } from './chat/secrets';
 import { touchedFiles } from './chatChanges';
 import { uncommittedByConversation } from './uncommitted';
 import { searchConversations } from './chatSearch';
@@ -41,16 +47,18 @@ import { CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from
 import { ChatRegistry } from './chat/registry';
 import { AutoContinue } from './chat/autoContinue';
 import { WakeBody, WakeStreakError, watchWakeups } from './chat/wake';
+import { StaffSendLimitError, StaffSendRate, sendTargetKey } from './chat/sendRate';
 import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService } from './staff/service';
 import { sweepFreelas } from './freelaSweep';
 import { CLUB_MCP_FILE, McpError, mcpJsonWarnings } from './staff/mcp';
 import { createMcpLibrary } from './staff/mcpLibrary';
 import { permissionInboxItem, questionInboxItem } from './inboxItems';
+import { capText } from './chat/turnCap';
 import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
 import { copyToLibrary, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill, SkillError } from './skillLibrary';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
-import { createGuide, GuideExistsError, guideStatus } from './projectGuide';
+import { createGuide, GuideExistsError, guideStatus, readShowcase } from './projectGuide';
 import { checkProjectHealth } from './health/scan';
 import { GuideActionError, runGuideAction } from './guideActions';
 import { deleteAttachment, listAttachments, MAX_ATTACHMENT_BYTES, readAttachment, saveAttachment } from './projectAttachments';
@@ -85,6 +93,8 @@ import { TurnWatcher } from './turns';
 import { RoutineScheduler, type RoutineOutcome } from './routines';
 import type { AppServerInfo, EngineOverride, Routine, StaffProfile, SystemStats } from '../shared/model';
 import { systemStats } from './systemStats';
+import { ResourceGate } from './resourceGate';
+import { ShowcaseBusyError, ShowcaseRefusedError, ShowcaseRunner, spawnClaudeProcess } from './showcaseRunner';
 import { pathKey, worktreeParent } from './adapters/claude/paths';
 import { codexSession } from './adapters/codex/rollout';
 import { boardFilter } from './board';
@@ -149,22 +159,43 @@ async function buildBeforeRestart(): Promise<void> {
 }
 
 let leaving = false;
+/** Pedido de retomada das conversas em turno: gravado ao reiniciar, apagado por Parar e pelo boot (ver server/chat/resume.ts). */
+const resumeFile = new ResumeFile(path.join(MYCO_HOME, 'run', 'resume.json'));
 
 /**
  * Fecha as conversas (sem deixar processos órfãos) e sai. `stop`: o vigia não religa. Sem `stop`, grava o pedido de
  * reinício: só com ele o vigia refaz o pacote e sobe o código novo (saída sem pedido é queda: sobe a mesma versão).
+ * Reiniciando, quem estava em turno fica no pedido de retomada e o boot reabre a conversa.
  */
 async function shutdown(stop: boolean, userAgent = '') {
   // Parar grava o arquivo mesmo durante um reinício em curso: o vigia, ao ver o arquivo, não religa.
   if (stop && UNDER_DAEMON) await fs.writeFile(path.join(MYCO_HOME, 'run', 'daemon.stop'), '').catch(() => {});
+  // Parar nunca agenda retomada, nem a de um reinício em curso (o pedido dele não é gravado depois disto).
+  if (stop) await resumeFile.stop().catch(() => {});
   if (leaving) return;
   leaving = true;
   console.log(`[servidor] ${stop ? 'parando' : 'reiniciando'} a pedido do config${userAgent ? ` (${userAgent})` : ''}`);
+  // Nada novo entra daqui em diante: o build abaixo leva até 2 min com o servidor no ar.
+  if (!stop) {
+    chats.closing();
+    // As pendências do "continue" e do despertador ficam no disco e disparam no boot (o `start` delas).
+    autoContinue.stop();
+    wakeups.stop();
+  }
   if (!stop && UNDER_DAEMON) {
     await fs.writeFile(path.join(MYCO_HOME, 'run', 'daemon.restart'), '').catch(() => {});
     await buildBeforeRestart();
   }
-  await Promise.race([chats.stopAll(), new Promise((r) => setTimeout(r, 5000))]);
+  // Depois do build: quem está em turno agora é o que volta sozinho (o turno que acabou no build não precisa).
+  if (!stop) {
+    try {
+      const sessions = chats.busySessions();
+      if (await resumeFile.save(sessions, Date.now())) console.log(`[servidor] ${sessions.length} conversa(s) em turno: voltam sozinhas quando o servidor subir`);
+    } catch (err) {
+      console.error('[servidor] não consegui gravar as conversas em turno:', err);
+    }
+  }
+  await Promise.race([Promise.all([chats.stopAll(), showcases.stopAll()]), new Promise((r) => setTimeout(r, 5000))]);
   process.exit(0);
 }
 // Parado por sinal (npm run daily:stop, o vigia religando, tsx watch): as conversas são líderes do próprio
@@ -172,7 +203,7 @@ async function shutdown(stop: boolean, userAgent = '') {
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
   process.once(signal, () => {
     console.log(`[servidor] ${signal}: fechando as conversas`);
-    void Promise.race([chats.stopAll(), new Promise((r) => setTimeout(r, 5000))]).then(() => process.exit(0));
+    void Promise.race([Promise.all([chats.stopAll(), showcases.stopAll()]), new Promise((r) => setTimeout(r, 5000))]).then(() => process.exit(0));
   });
 }
 // Só local: o Claudio’s Club lê transcripts e configurações do usuário.
@@ -186,6 +217,8 @@ const SANDBOX_URL = `http://${SANDBOX_HOST}:${PORT}`;
 /** O servidor ficou de pé em 127.0.0.2? `up` falso: o Codex roda sem rede (a conversa avisa). */
 const sandboxListener: { up: boolean; error: string | null } = { up: false, error: null };
 const requesterAskLimiter = new RequesterAskLimiter();
+/** Mensagens de funcionários por conversa de destino (em memória): o freio contra laço, ver sendRate.ts. */
+const staffSendRate = new StaffSendRate();
 /** Token de cada conversa (Claude e Codex): `MYCO_TOKEN` no ambiente; quem chama a API é o dono dele. */
 const sessionTokens = new SessionTokens();
 const CLIENT_DIR = path.join(ROOT, 'dist', 'client');
@@ -198,9 +231,9 @@ const MAX_BODY = 4 * 1024 * 1024;
 /** Pareamento do navegador: a chave (~/.myco/secrets/pairing.key) é criada aqui, na subida, se ainda não existe. */
 const pairing = new Pairing();
 
-// No quadro: o demo, as pastas de `extraProjects` (novas ou importadas) e os projetos com equipe. O resto
-// do que o Claude Code conhece só entra se o usuário importar (`/api/import-projects`).
-const pinnedProjects = async () => [DEMO_DIR, ...(await readExtraProjects())];
+// No quadro: o demo (e o antigo, se ainda existir), as pastas de `extraProjects` (novas ou importadas) e os
+// projetos com equipe. O resto do que o Claude Code conhece só entra se o usuário importar (`/api/import-projects`).
+const pinnedProjects = async () => [...(await demoPaths()), ...(await readExtraProjects())];
 const adapter: ToolAdapter = new ClaudeAdapter({
   extraPaths: pinnedProjects,
   onBoard: boardFilter({ pinned: pinnedProjects }),
@@ -296,6 +329,11 @@ const chats: ChatManager = new ChatManager({
   wakeups,
   inbox: inboxState,
   contextSwitch: async () => (await readConfig()).contextSwitch,
+  // Teto por turno (ferramentas e minutos): lido a cada turno, mudança vale sem reiniciar (0 = desligado).
+  turnCaps: async () => {
+    const c = await readConfig();
+    return { maxTools: c.maxTurnTools, maxMinutes: c.maxTurnMinutes };
+  },
   quotaBoost: currentBoost,
   // A conversa de uma tarefa fica onde está: o quadro (revisão, ajustes, mescla) segue por ela.
   keepSession: (sessionId) => tasks.isTaskSession(sessionId),
@@ -375,6 +413,15 @@ const sendNewConversation = async (projectId: string, staffId: string, text: str
   return chats.send(projectId, null, staffId, text, undefined, [], [], false, undefined, override);
 };
 
+// Gate de recursos da fila (RAM, CPU e teto de conversas; ver resourceGate.ts). A config é lida a cada partida.
+const resourceGate = new ResourceGate({ config: () => readConfig(), activeTurns: () => chats.activeTurns() });
+// Vitrine: o gerador oculto (ver showcaseRunner.ts). Motor Claude: a trava de consumo é a do Claude (`engine: 'claude'`).
+const showcases = new ShowcaseRunner({
+  spawnClaude: spawnClaudeProcess,
+  checkUsage: (projectId) => staff.checkUsage(projectId, { engine: 'claude' }),
+  reserve: () => resourceGate.reserve(),
+  log: (line) => console.log(line),
+});
 const tasks = new TaskService({
   projectPath: projectPathOf,
   projectIds: async () => (await adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf).map((p) => p.id),
@@ -390,6 +437,10 @@ const tasks = new TaskService({
   answerAsk: (sid, rid, answers) => chats.answer(sid, rid, true, { answers, by: 'manager' }),
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
   isWorking: (projectId, staffId, except) => chats.staffWorking(projectId, staffId, except),
+  // Só a partida automática da fila passa pelo gate (o start à mão não): sem RAM, CPU ou vaga, a tarefa espera na fila.
+  resourceGate: () => resourceGate.reserve(),
+  // Reiniciando: fim de turno não conclui tarefa (ver tasks.ts `closing`).
+  closing: () => chats.isClosing(),
   // O gestor que pediu recebe a entrega na conversa em que pediu (ou, sem ela, na mais recente dele),
   // depois que o turno dele acabar.
   notify: async (projectId, staffId, text, sessionId) => {
@@ -408,6 +459,8 @@ const tasks = new TaskService({
   // Turno que parou no limite de uso, com o "continue" agendado, não é entrega.
   // Também com despertador marcado: o funcionário ainda está acompanhando algo, não entregou.
   awaitingLimit: async (sessionId) => (await chats.awaitingLimit(sessionId)) || !!(await wakeups.get(sessionId)),
+  // Turno que parou no teto de ferramentas ou de minutos: vai para Aguardar, não para revisão (o motivo fica guardado antes da interrupção).
+  turnCap: (sessionId) => chats.turnCapOf(sessionId),
   setOverride: (sessionId, override) => chats.setOverride(sessionId, override),
   // O limite de cada motor agora (ver taskFallback.ts). Sem leitura, 'unknown': não troca às cegas.
   readLimit: readLimitOf,
@@ -878,6 +931,10 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       } else {
         await checkReach(caller, pid!, target);
       }
+      // Freio contra laço entre funcionários (ver sendRate.ts): o dono zera a janela da conversa; funcionário com token conta (429 na 21ª).
+      const rateKey = sendTargetKey(pid!, b.sessionId, b.staffId);
+      if (fromBrowser) staffSendRate.reset(rateKey);
+      else if (caller) staffSendRate.count(rateKey);
       // Trava de consumo. Conversa que já roda no secundário confere o motor dela, não o da ficha.
       const onFallback = b.sessionId ? chats.overrideOf(b.sessionId) : undefined;
       let barred: UsageStopError | null = null;
@@ -1095,7 +1152,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
           s.sessions.map(async (x) => ({ projectId: s.projectId, staffId: s.id, staffName: s.name, sessionId: x.id, file: await findTranscript(defaultTranscripts, s.projectId, x.id) })),
         ),
       );
-      return searchConversations(targets, q);
+      return searchConversations(targets, q, (await readConfig()).conversationTitles);
     },
   ],
   // "@" no chat: arquivos do projeto que batem com o que foi digitado.
@@ -1401,6 +1458,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     },
   ],
   // Ações do guia (teste de compreensão, divergência, rascunho): abrem uma conversa nova do funcionário, com o texto da ação.
+  // A vitrine não abre conversa: o gerador oculto roda em segundo plano (`started`; o estado sai em /showcase/status).
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/guide/run$`),
@@ -1409,12 +1467,43 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       const dir = await projectPathOf(id!);
       if (!dir) return null;
       return runGuideAction(
-        { readProfile: (staffId) => readProfile(dir, staffId), send: (staffId, text, force) => sendNewConversation(id!, staffId, text, force) },
+        {
+          readProfile: (staffId) => readProfile(dir, staffId),
+          send: (staffId, text, force) => sendNewConversation(id!, staffId, text, force),
+          showcase: (showcaseDir, prompt, head) => showcases.start({ projectId: id!, dir: showcaseDir, prompt, head }),
+        },
         dir,
         body,
       ).catch((err) => {
         throw err instanceof GuideActionError ? new BadRequest(err.message) : err;
       });
+    },
+  ],
+  // Estado da geração da vitrine (idle, running, done, failed). Só leitura, pelo Claudio’s Club.
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/showcase/status$`),
+    async ({ params: [id] }) => {
+      const dir = await projectPathOf(id!);
+      return dir ? showcases.status(id!) : null;
+    },
+  ],
+  // Vitrine (VITRINE.html, ação `showcase`): a página abre numa aba nova (GET sem Origin, sem cabeçalho). Só leitura, em sandbox e sem script
+  // (a CSP bloqueia tudo que não é o próprio HTML e o CSS embutido). Fora das listas da sandbox do Codex e dos funcionários (apiPolicy.ts).
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/showcase$`),
+    async ({ params: [id] }) => {
+      const dir = await projectPathOf(id!);
+      const bytes = dir ? await readShowcase(dir) : null;
+      return bytes
+        ? new Raw(bytes, 'text/html; charset=utf-8', {
+            'content-security-policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            'referrer-policy': 'no-referrer',
+            'x-frame-options': 'DENY',
+            'content-disposition': 'inline',
+          })
+        : null;
     },
   ],
   // ---- health check do projeto: varredura de regras fixas (sem IA), só leitura ----
@@ -1693,6 +1782,17 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       return config;
     },
   ],
+  // Título manual da conversa (null ou vazio apaga: volta ao último assunto). Só pelo Claudio’s Club.
+  [
+    'POST',
+    /^\/api\/conversation-title$/,
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      const req = ConversationTitleRequest.safeParse(body);
+      if (!req.success) throw new BadRequest('pedido de título inválido');
+      return setConversationTitle(req.data.id, req.data.title);
+    },
+  ],
   ['GET', /^\/api\/config$/, () => readConfig()],
   // Biblioteca de skills da conta (~/.myco/skills): só quem tem a skill na ficha carrega.
   ['GET', /^\/api\/skills\/library$/, () => listLibrary()],
@@ -1813,6 +1913,9 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
       } catch (err) {
         if (err instanceof ProjectFileError) return send(res, err.status, { error: err.message, ...err.extra });
         if (err instanceof UsageStopError) return send(res, 409, { error: err.message, code: err.code, hit: err.hit });
+        // Vitrine: já sendo gerada (409); recusada antes de começar, pelo uso (429) ou pelos recursos (503).
+        if (err instanceof ShowcaseBusyError) return send(res, 409, { error: err.message });
+        if (err instanceof ShowcaseRefusedError) return send(res, err.status, { error: err.message });
         // Mescla recusada (sem testes, teste vermelho, conflito): 409 com o motivo; `no-tests` dá para confirmar.
         if (err instanceof CodeError) return send(res, 409, { error: err.message, code: err.code });
         // Ficha em uso (conversa trabalhando): 409, antes do StaffError genérico (400).
@@ -1823,8 +1926,13 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         if (err instanceof TaskForbiddenError) return send(res, 403, { error: err.message });
         // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
         if (err instanceof GuideExistsError) return send(res, 409, { error: 'exists' });
+        // Teto de títulos manuais: só criar outro recusa (409); editar ou apagar um que existe segue.
+        if (err instanceof ConversationTitlesFullError) return send(res, 409, { error: err.message });
         if (err instanceof Forbidden) return send(res, 403, { error: err.message });
         if (err instanceof RateLimited) return send(res, 429, { error: err.message });
+        if (err instanceof StaffSendLimitError) return send(res, 429, { error: err.message }, { 'retry-after': String(err.retryAfter) });
+        // Reiniciando: a entrega é recusada e a conversa não abre (tentar de novo em instantes).
+        if (err instanceof ChatClosingError) return send(res, 503, { error: err.message });
         if (
           err instanceof BadRequest ||
           err instanceof CostReviewApplyError ||
@@ -1836,6 +1944,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
           err instanceof FileError ||
           err instanceof AgentError ||
           err instanceof WorkspaceError ||
+          err instanceof ConversationTitleError ||
           err instanceof SkillError ||
           err instanceof McpError ||
           err instanceof ProjectError ||
@@ -2009,6 +2118,11 @@ async function getInbox(): Promise<InboxItem[]> {
     for (const p of pending) out.push(permissionInboxItem(p, w));
     if (error) out.push({ id: `error:${sessionId}`, kind: 'error', ...w, summary: error, at: null });
   }
+  // Turno que parou no teto (ferramentas ou minutos): some quando você manda mensagem nova na conversa.
+  for (const c of chats.turnCaps()) {
+    const w = where(c.sessionId, liveById.get(c.sessionId));
+    if (!hidden(w)) out.push({ id: `cap:${c.sessionId}`, kind: 'error', ...w, summary: capText(c), at: c.at });
+  }
   // Terminou o turno perguntando algo no texto (sem pedido de permissão): espera até você responder.
   for (const q of chats.pendingQuestions()) {
     const w = where(q.sessionId, liveById.get(q.sessionId));
@@ -2048,7 +2162,8 @@ async function getInbox(): Promise<InboxItem[]> {
   // Segredos que apareceram nas conversas do Claudio’s Club (senha num comando, token colado…).
   for (const s of chats.secretHits()) {
     const w = where(s.sessionId, liveById.get(s.sessionId));
-    if (!hidden(w)) out.push({ id: `secret:${s.id}`, kind: 'secret', ...w, summary: `${s.label} apareceu no chat: troque e não cole segredos na conversa`, at: s.at });
+    // `summary` é o fallback em pt-BR; o cliente monta a frase no idioma da página a partir de `secret`.
+    if (!hidden(w)) out.push({ id: `secret:${s.id}`, kind: 'secret', ...w, summary: secretAlert(s.label, s.source), secret: { kind: s.kind, ...(s.detail && { detail: s.detail }), ...(s.source && { source: s.source }) }, at: s.at });
   }
   // Chave escrita no .mcp.json de um projeto: o arquivo vai para o git junto com o código.
   for (const p of projects.filter((x) => x.exists && !x.worktreeOf)) {
@@ -2129,8 +2244,8 @@ async function projectById(id: string) {
   return p?.exists ? p : null;
 }
 
-function send(res: http.ServerResponse, status: number, body: unknown) {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+function send(res: http.ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers });
   res.end(JSON.stringify(body));
 }
 
@@ -2192,12 +2307,20 @@ server.listen(PORT, HOST, () => {
     .catch((err) => console.error('[chat] conversa no motor secundário não reaberta:', err))
     .then(() => {
       // Só ele manda o "continue" das conversas que bateram no limite de uso (e o despertador).
-      autoContinue.start();
-      wakeups.start();
-      // Fila de tarefas: quem ficou com tarefa ou ajuste esperando (ex.: o Claudio’s Club reiniciou no meio).
-      const queueTick = () => void tasks.tick().catch(() => {});
-      setTimeout(queueTick, 15_000).unref();
-      setInterval(queueTick, 60_000).unref();
+      // Quem estava em turno volta antes de tudo (ver server/chat/resume.ts). Só depois ligam o "continue", o despertador
+      // e a fila: eles mandam mensagem, e não podem mandar de novo numa conversa que a retomada ainda está abrindo.
+      void bootResume({ file: resumeFile.file, stopHit: usageStopHit, send: (entry) => chats.resumeChat(entry) }, () => {
+        autoContinue.start();
+        wakeups.start();
+        // Fila de tarefas: quem ficou com tarefa ou ajuste esperando. Reiniciando, a fila espera o boot (ver tasks.ts).
+        // A coleta de CPU do gate começa aqui (a média vale depois de ~2 min).
+      resourceGate.start();
+      const queueTick = () => {
+          if (!chats.isClosing()) void tasks.tick().catch(() => {});
+        };
+        setTimeout(queueTick, 15_000).unref();
+        setInterval(queueTick, 60_000).unref();
+      }).catch((err) => console.error('[retomar] falhou:', err));
     });
   // Temporários parados há dias saem do quadro (arquivados, nada apagado).
   const sweep = () =>

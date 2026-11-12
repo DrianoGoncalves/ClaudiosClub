@@ -20,6 +20,8 @@ import {
 import { ChangesPanel } from './ChangesPanel';
 import { useChatDetail } from './chatDetail';
 import type { ChatFocus } from './chatFocus';
+import { type DenialAction, DenialNotice } from './DenialNotice';
+import { actionableDenials, denialHintOf } from './denialHint';
 import { MoreTabs } from './MoreTabs';
 import { MsgTime } from './MsgTime';
 import { QuestionCard } from './QuestionCard';
@@ -216,11 +218,18 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   // Avisos de limite (e do despertador) já cancelados aqui: numa conversa fechada o aviso só some ao recarregar o histórico.
   const [autoCancelled, setAutoCancelled] = useState<ReadonlySet<string>>(new Set());
   const [moreTab, setMoreTab] = useState(moreTabs[0]?.id ?? '');
+  // Id do ponto da ficha a rolar à vista ao abrir o "Mais" (o botão do aviso de servidores).
+  const [moreAnchor, setMoreAnchor] = useState<string | null>(null);
   const moreBtn = useRef<HTMLButtonElement>(null);
   const moreRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (moreOpen) moreRef.current?.focus();
   }, [moreOpen]);
+  useEffect(() => {
+    if (!moreOpen || !moreAnchor) return;
+    moreRef.current?.querySelector(`#${moreAnchor}`)?.scrollIntoView({ block: 'center' });
+    setMoreAnchor(null);
+  }, [moreOpen, moreAnchor]);
   // Vindo de um aviso, mostra a conversa (e não o "Mais" aberto por cima dela).
   useEffect(() => {
     if (focus) setMoreOpen(false);
@@ -262,6 +271,54 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   };
 
   const activeTab = moreTabs.find((tab) => tab.id === moreTab) ?? moreTabs[0];
+
+  // Aviso de ferramenta negada: o botão da dica. Só os avisos sem mensagem sua depois; o de "Sem travas" some se já está assim.
+  const [hinting, setHinting] = useState(false);
+  const denials = useMemo(() => actionableDenials(chat.items), [chat.items]);
+  const bypassed = (chat.state?.permissionMode ?? (autonomy === 'bypassPermissions' ? 'bypassPermissions' : null)) === 'bypassPermissions';
+  const hintRun = async (job: () => Promise<unknown> | void) => {
+    setHinting(true);
+    try {
+      await job();
+    } finally {
+      setHinting(false);
+    }
+  };
+  const denialAction = (item: ChatItem): DenialAction | null => {
+    const hint = denials.has(item.id) ? denialHintOf(item) : null;
+    if (hint === 'autonomy' && !bypassed && !blocked) {
+      return {
+        label: t('chat.denialAutonomy', { mode: t('chat.autoBypass') }),
+        disabled: hinting,
+        // Tira todas as travas desta conversa: só com o ok de quem clicou (a ficha não muda).
+        run: () => window.confirm(t('chat.denialAutonomyConfirm', { mode: t('chat.autoBypass') })) && void hintRun(() => chat.settings({ autonomy: 'bypassPermissions' })),
+      };
+    }
+    if (hint === 'servers' && activeTab) {
+      return {
+        label: t('chat.denialServers'),
+        run: () => {
+          setMoreTab(moreTabs.some((x) => x.id === 'projeto') ? 'projeto' : activeTab.id);
+          setMoreAnchor('staff-servers');
+          setMoreOpen(true);
+        },
+      };
+    }
+    if (hint === 'retry' && !blocked) {
+      return {
+        label: t('chat.denialRetry'),
+        disabled: hinting || pending,
+        title: pending ? t('chat.answerFirst') : undefined,
+        run: () => {
+          focusing.release();
+          opening.release();
+          void hintRun(() => chat.send(t('chat.denialRetryText')));
+        },
+      };
+    }
+    return null;
+  };
+
   const showMcp = level === 'advanced' && !!chat.state?.running && !!chat.sessionId;
   const showDiff = !!staffId && !!chat.sessionId;
   const background = chat.state?.running && chat.sessionId ? (chat.state.background ?? []) : [];
@@ -338,6 +395,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
               onAnswer={chat.answer}
               executeAs={executeAs}
               onChangesRequested={() => input.current?.focus()}
+              denialAction={denialAction(item)}
               onRewind={staffId && chat.sessionId && !blocked ? (uuid) => void rewind(uuid) : undefined}
               autoCancelled={autoCancelled.has(item.id)}
               onCancelAutoContinue={
@@ -678,6 +736,7 @@ function Item({
   onAnswer,
   executeAs,
   onChangesRequested,
+  denialAction,
   onRewind,
   onCancelAutoContinue,
   onCancelWake,
@@ -688,6 +747,8 @@ function Item({
   onAnswer: Answer;
   executeAs: Autonomy;
   onChangesRequested: () => void;
+  /** Botão do aviso de ferramenta negada (conforme a dica do servidor); sem ele, só o texto. */
+  denialAction: DenialAction | null;
   /** "Voltar até aqui" nas suas mensagens (as que têm o id do transcript). */
   onRewind?: (uuid: string) => void;
   /** "Cancelar" no aviso de limite de uso: desfaz o "continue" agendado. */
@@ -751,6 +812,7 @@ function Item({
       );
     case 'notice':
       if (item.wake) return <WakeNotice item={item} cancelled={!!autoCancelled} onCancel={onCancelWake} />;
+      if (item.denial) return <DenialNotice item={item} action={denialAction} />;
       return (
         <div className={`chat-notice chat-notice-${item.tone}`} data-item-id={item.id}>
           {item.action === 'cancel-auto-continue' && autoCancelled ? t('chat.autoContinueCancelled') : item.text}

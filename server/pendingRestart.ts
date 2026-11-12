@@ -60,6 +60,9 @@ export function pendingChanges(opts: { root: string; mark: number }): PendingRes
   // O MCP do GPT (`perguntar_gpt`): o mesmo.
   const gpt = path.join(root, 'dist', 'gpt-mcp.mjs');
   if (safe(() => fs.existsSync(gpt) && bundleStale(gpt, root))) reasons.push('gptMcp');
+  // O MCP de SSH do Codex (`myco-ssh`): o mesmo.
+  const ssh = path.join(root, 'dist', 'ssh-mcp.mjs');
+  if (safe(() => fs.existsSync(ssh) && bundleStale(ssh, root))) reasons.push('sshMcp');
   return { pendingRestart: reasons.length > 0, pendingReasons: reasons };
 }
 

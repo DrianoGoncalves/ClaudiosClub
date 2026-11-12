@@ -17,7 +17,8 @@ export interface SearchTarget {
   file: string;
 }
 
-export async function searchConversations(targets: SearchTarget[], query: string): Promise<ConversationHit[]> {
+/** `titles`: os títulos manuais do config (id da sessão → título); valem no lugar do título do transcript. */
+export async function searchConversations(targets: SearchTarget[], query: string, titles: Record<string, string> = {}): Promise<ConversationHit[]> {
   const q = fold(query.trim());
   if (q.length < 3) return [];
   const hits: ConversationHit[] = [];
@@ -35,7 +36,8 @@ export async function searchConversations(targets: SearchTarget[], query: string
       found++;
       hits.push({ projectId: t.projectId, staffId: t.staffId, staffName: t.staffName, sessionId: t.sessionId, title: null, snippet: snippet(text, at, q.length), at: l.timestamp ?? null });
     }
-    for (const h of hits) if (h.sessionId === t.sessionId) h.title = title;
+    const manual = Object.prototype.hasOwnProperty.call(titles, t.sessionId) ? titles[t.sessionId] : undefined;
+    for (const h of hits) if (h.sessionId === t.sessionId) h.title = manual ?? title;
   }
   return hits.sort((a, b) => (b.at ?? '').localeCompare(a.at ?? '')).slice(0, MAX_HITS);
 }

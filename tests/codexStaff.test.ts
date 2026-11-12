@@ -16,7 +16,9 @@ let projectPath: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-codex-staff-'));
   projectPath = path.join(root, 'proj');
-  await fs.mkdir(projectPath, { recursive: true });
+  await fs.mkdir(path.join(projectPath, '.vps'), { recursive: true });
+  // Uma conexão FTP ('site') para o Codex recusar; 'vps1' não existe no projeto (o SSH não é conferido aqui).
+  await fs.writeFile(path.join(projectPath, '.vps', 'ftp.json'), JSON.stringify({ connections: { site: { protocol: 'ftps', host: 'ftp.example.com', port: 21, user: 'deploy', remoteRoot: '/' } } }));
 });
 afterAll(async () => {
   await fs.rm(root, { recursive: true, force: true });
@@ -40,13 +42,26 @@ const service = (over: Partial<StaffServiceOptions> = {}) =>
   new StaffService(adapter, { runDir: path.join(root, 'run'), claudeConfigFile: path.join(root, 'claude.json'), mycoUrl: 'http://127.0.0.1:4848', readUsage: noUsage, codexEnabled: async () => true, ...over });
 
 const base = { name: 'Cris', role: 'Dev', mission: 'Implementar', autonomy: 'acceptEdits', launch: false };
-const SERVERS = 'Quem tem servidores na ficha não pode rodar no Codex: tire os servidores ou use o Claude';
+const SERVERS = 'Conexão FTP não funciona no Codex: tire as conexões FTP ou use o Claude';
+
+describe('contratação pela API: a escrita SSH do subordinado não passa da do gestor', () => {
+  it('o pedido de escrita vira o que o gestor que contrata tem; gestor sem escrita, subordinado sem escrita', async () => {
+    const svc = service();
+    const comEscrita = (await svc.hire('proj-id', { ...base, name: 'Gestora Escrita', canHire: true, servers: ['vps1'], sshWrite: ['vps1'] }, true))!.profile;
+    const semEscrita = (await svc.hire('proj-id', { ...base, name: 'Gestora Leitura', canHire: true, servers: ['vps1'], sshWrite: [] }, true))!.profile;
+    const sub1 = (await svc.hire('proj-id', { ...base, name: 'Sub Escrita', servers: ['vps1'], sshWrite: ['vps1'] }, false, { staffId: comEscrita.id, engine: 'claude' }))!.profile;
+    expect(sub1.sshWrite).toEqual(['vps1']);
+    const sub2 = (await svc.hire('proj-id', { ...base, name: 'Sub Leitura', servers: ['vps1'], sshWrite: ['vps1'] }, false, { staffId: semEscrita.id, engine: 'claude' }))!.profile;
+    expect(sub2.servers).toEqual(['vps1']);
+    expect(sub2.sshWrite).toEqual([]);
+  });
+});
 
 describe('ficha no Codex: servidores', () => {
-  it('ao contratar, engine codex com servidores é recusado com o erro em português; sem servidores passa, e no Claude servidores seguem como sempre', async () => {
+  it('ao contratar, engine codex com conexão FTP é recusado com o erro em português; sem servidores passa, e no Claude servidores seguem como sempre', async () => {
     const svc = service();
-    await expect(svc.hire('proj-id', { ...base, engine: 'codex', servers: ['vps1'] }, true)).rejects.toThrow(SERVERS);
-    await expect(svc.hire('proj-id', { ...base, engine: 'codex', servers: ['vps1'] }, true)).rejects.toBeInstanceOf(StaffError);
+    await expect(svc.hire('proj-id', { ...base, engine: 'codex', servers: ['site'] }, true)).rejects.toThrow(SERVERS);
+    await expect(svc.hire('proj-id', { ...base, engine: 'codex', servers: ['site'] }, true)).rejects.toBeInstanceOf(StaffError);
     const codex = (await svc.hire('proj-id', { ...base, name: 'Cris Codex', engine: 'codex', model: 'gpt-6-sol', effort: 'high' }, true))!.profile;
     expect(codex).toMatchObject({ engine: 'codex', model: 'gpt-6-sol', servers: [] });
     expect((await readProfile(projectPath, codex.id))?.engine).toBe('codex');
@@ -55,19 +70,21 @@ describe('ficha no Codex: servidores', () => {
     expect(claude.engine).toBeUndefined();
   });
 
-  it('o schema recusa na raiz (o erro aponta o campo servers)', () => {
-    const r = StaffInputSchema.safeParse({ ...base, engine: 'codex', servers: ['a'] });
+  it('o schema aceita conexão SSH no Codex (o FTP só se confere com o projeto) e recusa escrita SSH fora dos servidores, com o campo sshWrite', () => {
+    expect(StaffInputSchema.safeParse({ ...base, engine: 'codex', servers: ['vps1'] }).success).toBe(true);
+    const r = StaffInputSchema.safeParse({ ...base, servers: ['vps1'], sshWrite: ['outra'] });
     expect(r.success).toBe(false);
-    if (!r.success) expect(r.error.issues[0]).toMatchObject({ message: SERVERS, path: ['servers'] });
+    if (!r.success) expect(r.error.issues[0]).toMatchObject({ path: ['sshWrite'] });
+    expect(StaffInputSchema.safeParse({ ...base, servers: ['vps1'], sshWrite: ['vps1'] }).success).toBe(true);
   });
 
   it('ao editar, vale a ficha já junta: o pedido sem `engine` numa ficha do Codex, ou trocar para o Codex mantendo servidores, é recusado', async () => {
     const svc = service();
     const codex = (await svc.hire('proj-id', { ...base, name: 'Edita Codex', engine: 'codex' }, true))!.profile;
     // A tela não manda `engine` ao editar: o da ficha continua e os servidores novos não passam.
-    await expect(svc.update('proj-id', codex.id, { ...base, name: 'Edita Codex', servers: ['vps1'] })).rejects.toThrow(SERVERS);
-    const claude = (await svc.hire('proj-id', { ...base, name: 'Edita Claude', servers: ['vps1'] }, true))!.profile;
-    await expect(svc.update('proj-id', claude.id, { ...base, name: 'Edita Claude', servers: ['vps1'], engine: 'codex' })).rejects.toThrow(SERVERS);
+    await expect(svc.update('proj-id', codex.id, { ...base, name: 'Edita Codex', servers: ['site'] })).rejects.toThrow(SERVERS);
+    const claude = (await svc.hire('proj-id', { ...base, name: 'Edita Claude', servers: ['site'] }, true))!.profile;
+    await expect(svc.update('proj-id', claude.id, { ...base, name: 'Edita Claude', servers: ['site'], engine: 'codex' })).rejects.toThrow(SERVERS);
     // Tirando os servidores, troca de motor.
     const moved = await svc.update('proj-id', claude.id, { ...base, name: 'Edita Claude', servers: [], engine: 'codex' });
     expect(moved?.engine).toBe('codex');
@@ -79,7 +96,7 @@ describe('ficha no Codex: servidores', () => {
     const svc = service();
     const p = (await svc.hire('proj-id', { ...base, name: 'Mao', engine: 'codex' }, true))!.profile;
     // Servidores escritos direto no arquivo, sem passar pela validação.
-    await saveProfile(projectPath, { ...p, servers: ['vps1'] });
+    await saveProfile(projectPath, { ...p, servers: ['site'] });
     await expect(svc.chatSpawn('proj-id', null, p.id)).rejects.toThrow(SERVERS);
     await expect(svc.chatSpawn('proj-id', null, p.id)).rejects.toBeInstanceOf(StaffError);
   });
@@ -93,7 +110,9 @@ describe('ficha no Codex: servidores', () => {
     expect(spawn.codex!.secrets.mycoHome).toBe(process.env.MYCO_HOME ?? path.join(os.homedir(), '.myco'));
     expect(spawn.codex!.secrets).not.toHaveProperty('keyFiles'); // só pastas: as chaves das conexões não entram no bloqueio
     expect(spawn.codex!.instructions).toContain('Ficha de Abre');
-    expect(spawn.codex!.instructions).not.toMatch(/ferramenta Agent|subagent|Chrome/);
+    expect(spawn.codex!.instructions).not.toMatch(/ferramenta Agent|subagent/);
+    // Com Navegador na ficha, a seção existe sempre: ou o MCP do Chrome entrou, ou diz o motivo (ver codexChrome.test.ts).
+    expect(spawn.codex!.instructions).toContain('## Navegador');
     // Reabrir: a mesma sessão, retomando a thread gravada (nenhuma ainda).
     expect((await svc.chatSpawn('proj-id', spawn.sessionId, p.id))!.sessionId).toBe(spawn.sessionId);
   });

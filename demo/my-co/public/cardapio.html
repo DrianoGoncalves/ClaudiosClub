@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cardápio · My.Co Pizzaria</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topo">
+      <a class="marca" href="/">My.Co</a>
+      <span class="topo-pagina">Cardápio</span>
+    </header>
+
+    <main>
+      <h1>Cardápio</h1>
+      <p id="aviso" class="aviso" role="status"></p>
+      <ul id="cardapio" class="pizzas"></ul>
+
+      <section class="pedido" aria-labelledby="titulo-pedido">
+        <div class="bloco">
+          <h2 id="titulo-pedido">Seu pedido</h2>
+          <ul id="carrinho" class="carrinho"></ul>
+        </div>
+
+        <form id="pedido-form" class="bloco form">
+          <h2>Seus dados</h2>
+          <label>
+            Nome
+            <input name="nome" type="text" autocomplete="name" required minlength="2" maxlength="60" />
+          </label>
+          <label>
+            Telefone com DDD
+            <input
+              name="telefone"
+              type="tel"
+              inputmode="numeric"
+              autocomplete="tel"
+              required
+              pattern="[0-9]{10,11}"
+              maxlength="11"
+              title="10 ou 11 números, com DDD"
+            />
+          </label>
+          <label>
+            Endereço para entrega
+            <input name="endereco" type="text" autocomplete="street-address" required minlength="5" maxlength="120" />
+          </label>
+          <button id="enviar" type="submit" class="botao" disabled>Enviar pedido</button>
+        </form>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

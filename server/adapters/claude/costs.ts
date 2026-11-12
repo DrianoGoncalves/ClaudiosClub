@@ -81,10 +81,14 @@ export class CostIndex {
   private scanning: Promise<void> | null = null;
   private lastScanAt = 0;
   private lastTargets: CostTarget[] = [];
+  /** Linhas do ledger do Sistema, relidas a cada varredura (arquivo pequeno). */
+  private system: SystemCostRow[] = [];
 
   constructor(
     private readonly projectsDir: string,
     private readonly cacheFile: string,
+    /** Ledger do Sistema (ver systemCostsPath); sem ele, não há gasto do Sistema. */
+    private readonly systemFile?: string,
   ) {}
 
   /** Relê o que mudou. Chamadas simultâneas compartilham a mesma varredura. */
@@ -153,6 +157,30 @@ export class CostIndex {
       }
     }
 
+    // Gasto do Sistema (ledger): entra no total, no projeto a que pertence e no modelo; `system` é a parte dele.
+    // Mesmo corte do quadro: o total conta tudo; o resto, só os projetos de `only`.
+    const systemDays: Record<string, number> = {};
+    const systemProjects: Record<string, number> = {};
+    let systemRuns = 0;
+    for (const row of this.system) {
+      const inScope = !only || only.has(row.projectId);
+      if (inScope) systemRuns++;
+      const m = normalizeModel(row.model ?? SEM_MODELO);
+      const usd = systemUsd(row);
+      if (usd === null) {
+        if (inScope) unpriced.add(m);
+        continue;
+      }
+      const day = dayKey(new Date(row.at));
+      totalDays[day] = (totalDays[day] ?? 0) + usd;
+      if (!inScope) continue;
+      const days = getOr(projectDays, row.projectId, (): Record<string, number> => ({}));
+      days[day] = (days[day] ?? 0) + usd;
+      systemDays[day] = (systemDays[day] ?? 0) + usd;
+      systemProjects[row.projectId] = (systemProjects[row.projectId] ?? 0) + usd;
+      models[m] = (models[m] ?? 0) + usd;
+    }
+
     return {
       generatedAt: now.toISOString(),
       pricingAsOf: PRICING_AS_OF,
@@ -172,6 +200,7 @@ export class CostIndex {
       ),
       models,
       unpricedModels: [...unpriced].sort(),
+      ...(systemRuns > 0 ? { system: { ...summarize(systemDays), runs: systemRuns, projects: systemProjects } } : {}),
     };
   }
 
@@ -216,6 +245,7 @@ export class CostIndex {
 
   private async scan(): Promise<void> {
     if (!this.loaded) await this.loadCache();
+    this.system = this.systemFile ? await readSystemCosts(this.systemFile) : [];
     const targets = await findTargets(this.projectsDir);
     const live = new Set(targets.map((t) => t.file));
     for (const file of this.files.keys()) if (!live.has(file)) this.files.delete(file);
@@ -264,6 +294,60 @@ export class CostIndex {
     await fs.writeFile(tmp, JSON.stringify({ version: CACHE_VERSION, files: Object.fromEntries(this.files) }));
     await fs.rename(tmp, this.cacheFile);
   }
+}
+
+/** Ledger do Sistema: `logs/system-costs.jsonl` em MYCO_HOME (uma linha por modelo e geração). */
+export function systemCostsPath(mycoHome: string): string {
+  return path.join(mycoHome, 'logs', 'system-costs.jsonl');
+}
+
+/** Uma linha do ledger: só custo e tokens (sem prompt, sem HTML). */
+const SystemRow = z.object({
+  at: z.string().refine((s) => !Number.isNaN(Date.parse(s)), 'data inválida'),
+  projectId: z.string().min(1),
+  source: z.string(),
+  costUsd: z.number().nonnegative().optional(),
+  model: z.string().min(1).optional(),
+  inputTokens: z.number().nonnegative().optional(),
+  outputTokens: z.number().nonnegative().optional(),
+  cacheReadTokens: z.number().nonnegative().optional(),
+  cacheCreationTokens: z.number().nonnegative().optional(),
+});
+export type SystemCostRow = z.infer<typeof SystemRow>;
+
+/** Acrescenta uma linha (cria a pasta). Quem chama decide o que fazer com a falha. */
+export async function appendSystemCost(file: string, row: SystemCostRow): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.appendFile(file, JSON.stringify(row) + '\n');
+}
+
+/** As linhas válidas do ledger: arquivo ausente é vazio, linha ruim é pulada. */
+export async function readSystemCosts(file: string): Promise<SystemCostRow[]> {
+  const raw = await fs.readFile(file, 'utf8').catch(() => '');
+  const rows: SystemCostRow[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    const parsed = SystemRow.safeParse(tryJson(line));
+    if (parsed.success) rows.push(parsed.data);
+  }
+  return rows;
+}
+
+const SEM_MODELO = '(sem modelo)';
+
+/**
+ * US$ de uma linha do Sistema, pelo mesmo critério das respostas: tokens × preço (o custo que o CLI informou não entra).
+ * Sem modelo, sem tokens ou sem preço: null.
+ */
+function systemUsd(row: SystemCostRow): number | null {
+  const hasTokens = [row.inputTokens, row.outputTokens, row.cacheReadTokens, row.cacheCreationTokens].some((v) => v !== undefined);
+  if (!row.model || !hasTokens) return null;
+  return costOf(row.model, {
+    input_tokens: row.inputTokens,
+    output_tokens: row.outputTokens,
+    cache_read_input_tokens: row.cacheReadTokens,
+    cache_creation_input_tokens: row.cacheCreationTokens,
+  });
 }
 
 /** Transcripts principais e de subagents, com o projeto e a sessão a que pertencem. */

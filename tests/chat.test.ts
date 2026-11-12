@@ -10,6 +10,7 @@ import { AnnotationsField, AnswersField } from '../server/chat/questions';
 import { readHistory } from '../server/chat/history';
 import { STAFF_NOTICE, toolSummary } from '../server/chat/items';
 import { ChatManager } from '../server/chat/manager';
+import { InboxState } from '../server/inboxState';
 import { ChatRegistry } from '../server/chat/registry';
 import { ChatProcess, STREAM_FLAGS } from '../server/chat/process';
 import { readProfile, saveChatChoice, saveProfile } from '../server/staff/store';
@@ -168,12 +169,12 @@ describe('ChatProcess', () => {
   it('segredo no chat ou no comando vira aviso (só o tipo, nunca o valor)', async () => {
     const f = fakeClaude();
     const seen: string[] = [];
-    const chat = new ChatProcess({ sessionId: 's-sec', cwd: '.', args: [], spawnImpl: f.spawnImpl, onSecret: (l) => seen.push(l) });
+    const chat = new ChatProcess({ sessionId: 's-sec', cwd: '.', args: [], spawnImpl: f.spawnImpl, onSecret: (l) => seen.push(l.label) });
     chat.start();
     chat.send('oi');
     f.emit({ type: 'assistant', message: { id: 'm', content: [{ type: 'tool_use', id: 'tu', name: 'Bash', input: { command: 'mysql -uroot -pS3nh4Forte app' } }] } });
     await tick();
-    expect(seen).toEqual(['uma senha']);
+    expect(seen).toEqual(['senha no comando mysql (-p)']);
   });
 
   it('`now` interrompe: o turno parado vira aviso discreto, não erro', async () => {
@@ -664,13 +665,23 @@ describe('ChatManager: ficha editada com a conversa aberta', () => {
     leak('a');
     await tick();
     const [hit] = m.secretHits();
-    expect(hit).toMatchObject({ sessionId: 'sx', label: 'uma senha' });
+    expect(hit).toMatchObject({ sessionId: 'sx', label: 'senha no comando mysql (-p)', source: 'tool-input' });
     expect(m.dismissSecret(hit!.id)).toBe(true);
     leak('b');
     await tick();
     expect(m.secretHits()).toHaveLength(1); // trocou e colou de novo: volta
     expect(m.dismissSecret(hit!.id, true)).toBe(true);
     leak('c');
+    await tick();
+    expect(m.secretHits()).toEqual([]);
+  });
+
+  it('"não é segredo" gravado com o rótulo de antes ("uma senha") continua valendo', async () => {
+    const inbox = new InboxState(); // em memória: o que importa é o id gravado, não o arquivo
+    inbox.mute('sx:uma senha');
+    const { m, procs } = manager({ inbox });
+    await m.send('p', 'sx', 'ana', 'rode');
+    procs[0]!.emit({ type: 'assistant', message: { id: 'a', content: [{ type: 'tool_use', id: 'tu-a', name: 'Bash', input: { command: 'mysql -uroot -pS3nh4Forte app' } }] } });
     await tick();
     expect(m.secretHits()).toEqual([]);
   });

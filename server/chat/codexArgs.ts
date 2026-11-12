@@ -84,9 +84,13 @@ function statOf(p: string): Stats | null {
  * cada execução, então um `.vps` criado no meio da conversa passa a valer na mensagem seguinte.
  *
  * Limite provado no Codex 0.156.1 e 0.167.0 com o bwrap do sistema (0.13.1): só UM arquivo regular pode ser negado por execução (o segundo
- * quebra com "Bad file descriptor"); pastas não têm limite. Por isso as chaves SSH das conexões não entram aqui (quem tem servidor na
- * ficha não roda no Codex, ver `codexProfileError`): ficam só pastas. Se sobrar mais de um arquivo regular (um `.vps` que é arquivo na
+ * quebra com "Bad file descriptor"); pastas não têm limite. Por isso as chaves SSH das conexões não entram aqui: o cadastro só aceita chave
+ * em ~/.ssh, no `.vps` ou no cofre (ver servers.ts), e as três pastas já são negadas. Se sobrar mais de um arquivo regular (um `.vps` que é arquivo na
  * pasta da conversa e outro no projeto), os de sobra ficariam legíveis em silêncio: falha fechada, `CodexBlockedError` e nada roda.
+ *
+ * Também as pastas de lançamento (`<mycoHome>/run`, com o mcp.json das sessões) e os backups do ~/.claude.json (`<mycoHome>/backups`
+ * e `~/.claude/backups`). O `~/.claude.json` só entra se, depois de tudo, não sobrou arquivo: é o único arquivo da home que cabe.
+ * Limite da sandbox: os `.claude.json.backup*` e `.tmp.*` da home ficam legíveis no Codex.
  */
 export function codexDenyPaths(ctx: CodexSecretContext): string[] {
   const dirs: string[] = [];
@@ -99,12 +103,17 @@ export function codexDenyPaths(ctx: CodexSecretContext): string[] {
   // `~/.ssh` vai com o til (o Codex expande); os outros, com o caminho completo.
   add('~/.ssh', path.join(ctx.home, '.ssh'));
   add(path.join(ctx.mycoHome, 'secrets'));
+  add(path.join(ctx.mycoHome, 'run'));
+  add(path.join(ctx.mycoHome, 'backups'));
+  add(path.join(ctx.home, '.claude', 'backups'));
   for (const root of new Set([ctx.cwd, ctx.projectPath])) add(path.join(root, '.vps'));
   if (files.length > 1) {
     throw new CodexBlockedError(
       `Há mais de um arquivo para proteger (${files.join(', ')}) e a sandbox do Codex só consegue negar um arquivo regular por execução: os outros ficariam legíveis. Não rodo o Codex assim. Troque esses arquivos por pastas (ou apague os que não usa) e tente de novo.`,
     );
   }
+  // Depois dos `.vps` (que têm prioridade): só entra se sobrou o lugar do arquivo.
+  if (files.length === 0) add(path.join(ctx.home, '.claude.json'));
   return [...dirs, ...files];
 }
 
@@ -113,6 +122,8 @@ export interface CodexSafetyOptions extends CodexSecretContext {
   mode: 'read-only' | 'workspace';
   /** `off`: sem rede. `loopback`: só o endereço do Claudio’s Club para o Codex (127.0.0.2, ver `CODEX_APP_HOSTS`), para a API dele. */
   network: 'off' | 'loopback';
+  /** Busca na web ("Permitir acesso à internet"): `true` = `live`; ausente ou `false` = `disabled` (falha fechada). Não mexe no terminal, que segue sem rede (`network`). */
+  webSearch?: boolean;
   /** Pastas extras com escrita no modo `workspace` (a pasta das fichas, quando a conversa roda numa worktree). */
   writableRoots?: string[];
   /** Arquivos e pastas que existem e ficam só para leitura no modo `workspace`, mesmo dentro da pasta de trabalho (a própria ficha do funcionário). */
@@ -126,15 +137,18 @@ export interface CodexSafetyOptions extends CodexSecretContext {
  * - `--ignore-user-config`: não lê o ~/.codex/config.toml (MCPs, plugins e modelo padrão do usuário ficam de fora; o login continua).
  * - `-c features.apps=false`: sem os conectores da conta do ChatGPT (GitHub, e-mail, Notion, deploy…), que rodam FORA da sandbox.
  * - `-c approval_policy="never"`: o exec não tem quem responda; a sandbox decide.
- * - `-c web_search="disabled"`: a busca na web é uma ferramenta hospedada (roda nos servidores da OpenAI, fora da sandbox) e serviria de
- *   canal para vazar dados na consulta. Provado no 0.167.0: sem isso o `codex exec --json` emite o item `web_search`; com isso o modelo
- *   responde que não tem a ferramenta. Os valores aceitos são `disabled`, `cached`, `indexed` e `live`.
+ * - `-c web_search="live"` ou `"disabled"` (opção `webSearch`, a "Permitir acesso à internet" das Configurações): a busca na web é uma
+ *   ferramenta hospedada (roda nos servidores da OpenAI, fora da sandbox), então pode levar dado da consulta para fora. Por isso é escolha
+ *   do usuário: ligada, o modelo pesquisa; desligada, não tem a ferramenta. O terminal do funcionário continua sem rede (`network`), com
+ *   ou sem ela. Provado no 0.167.0: com `disabled` o `codex exec --json` não emite o item `web_search` e o modelo diz que não tem a
+ *   ferramenta. Os valores aceitos são `disabled`, `cached`, `indexed` e `live`.
  * - o perfil de permissões (`codexProfileArgs`): sandbox, negações de segredos e rede. O perfil substitui o `-s`: nunca passe `-s` junto.
  *
  * Nunca `danger-full-access` nem `--dangerously-*`. Quem chama monta o resto (`-C`, `-m`, `--json`, o prompt).
  */
 export function codexSafetyArgs(o: CodexSafetyOptions): string[] {
-  return ['--ignore-user-config', '-c', 'features.apps=false', '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', ...codexProfileArgs(o)];
+  const webSearch = o.webSearch === true ? 'web_search="live"' : 'web_search="disabled"';
+  return ['--ignore-user-config', '-c', 'features.apps=false', '-c', 'approval_policy="never"', '-c', webSearch, ...codexProfileArgs(o)];
 }
 
 /**
@@ -183,13 +197,83 @@ export function codexProfileArgs(o: CodexSafetyOptions): string[] {
 }
 
 /**
- * Por que esta ficha não pode rodar no Codex (null = pode). Servidor na ficha não combina: a sandbox não tem rede para eles, e as
- * chaves SSH das conexões não cabem no bloqueio (o bwrap só nega um arquivo por execução). O esforço `ultra` é só do Codex.
+ * Por que esta ficha não pode rodar no Codex (null = pode). Conexão FTP não combina com o Codex (o MCP de FTP roda como o do Claude, sem
+ * o bloqueio do Codex; quem a confere é o projeto, via `ftpServers`). Conexão SSH combina: o MCP myco-ssh roda fora da sandbox (ver
+ * `codexSshMcpArgs`). O esforço `ultra` é só do Codex.
  */
-export function codexProfileError(p: { engine?: string; servers: readonly string[]; effort?: string | null }): string | null {
-  if (p.engine === 'codex' && p.servers.length) return 'Quem tem servidores na ficha não pode rodar no Codex: tire os servidores ou use o Claude';
+export function codexProfileError(p: { engine?: string; servers: readonly string[]; effort?: string | null; ftpServers?: readonly string[] }): string | null {
+  if (p.engine === 'codex' && p.ftpServers?.some((n) => p.servers.includes(n))) return 'Conexão FTP não funciona no Codex: tire as conexões FTP ou use o Claude';
   if (p.effort === 'ultra' && p.engine !== 'codex') return 'O esforço ultra só existe no Codex';
   return null;
+}
+
+/** Servidor MCP que a conversa do Codex sobe (`command` + `args`), montado fora daqui (ver server/staff/sshMcp.ts). */
+export interface CodexMcpServer {
+  command: string;
+  args: string[];
+  /** Pasta do processo do MCP (o ROOT do Claudio’s Club, fora do projeto da conversa). Sem ela, o Codex usa a pasta de trabalho. */
+  cwd?: string;
+}
+
+/** Nome do MCP de SSH na configuração do Codex (`mcp_servers.<nome>`). É o mesmo do Claude (`SSH_MCP_NAME`, em server/staff/sshMcp.ts). */
+export const CODEX_SSH_MCP_NAME = 'myco-ssh';
+
+/** Nome do MCP do Chrome do usuário (Playwright MCP em modo extensão) na configuração do Codex. Ver `codexChromeMcpArgs`. */
+export const CODEX_CHROME_MCP_NAME = 'myco-chrome';
+
+/** Os `-c mcp_servers.<nome>.*` de um MCP da conversa (command, args, cwd e aprovação). Igual para o SSH e para o Chrome. */
+function codexMcpArgs(name: string, s: CodexMcpServer | null | undefined): string[] {
+  if (!s) return [];
+  const key = `mcp_servers.${name}`;
+  return [
+    '-c', `${key}.command=${tomlString(s.command)}`,
+    '-c', `${key}.args=[${s.args.map((a) => tomlString(a)).join(',')}]`,
+    ...(s.cwd ? ['-c', `${key}.cwd=${tomlString(s.cwd.replace(/\\/g, '/'))}`] : []),
+    '-c', `${key}.default_tools_approval_mode=${tomlString('approve')}`,
+  ];
+}
+
+/**
+ * Os `-c mcp_servers.myco-ssh.*` da conversa. Só este MCP entra por aqui. `default_tools_approval_mode="approve"` é obrigatório no
+ * `codex exec` (provado no 0.167): sem ele, com `approval_policy="never"`, o Codex recusa a chamada. Por isso a barreira é o próprio
+ * MCP (conexões da ficha e `sshWrite`) e o texto da ficha, não a aprovação do Codex.
+ */
+export function codexSshMcpArgs(s: CodexMcpServer | null | undefined): string[] {
+  return codexMcpArgs(CODEX_SSH_MCP_NAME, s);
+}
+
+/**
+ * Ferramentas do Playwright MCP que a conversa do Codex vê (`enabled_tools`, allowlist): navegar, ler (snapshot e screenshot), clicar,
+ * digitar, abas e espera. Fica DE FORA, de propósito: código no processo do MCP (`browser_run_code_unsafe`), script na página
+ * (`browser_evaluate`), cookies e armazenamento do navegador (`browser_cookie_*`, `browser_storage_state`, `*storage_*`), rede e rotas
+ * (`browser_network_*`, `browser_route*`), upload e PDF de arquivo local (`browser_file_upload`, `browser_drop`, `browser_pdf_save`),
+ * ferramentas que a página registra (`browser_webmcp_*`) e o resto (`browser_fill_form`, `browser_hover`, `browser_select_option`...).
+ */
+export const CHROME_MCP_TOOLS = [
+  'browser_navigate',
+  'browser_navigate_back',
+  'browser_snapshot',
+  'browser_take_screenshot',
+  'browser_click',
+  'browser_type',
+  'browser_press_key',
+  'browser_tabs',
+  'browser_wait_for',
+];
+
+/**
+ * Os `-c mcp_servers.myco-chrome.*` da conversa: o Chrome do usuário (abas e logins) pelo Playwright MCP em modo extensão. Mesma regra de
+ * aprovação do SSH (`approve`, ver `codexSshMcpArgs`): sem ela o Codex recusa a chamada. Por isso a barreira é a allowlist
+ * (`CHROME_MCP_TOOLS`, o Codex não expõe as outras), a ficha (pedir o ok antes de enviar, publicar, comprar, apagar ou enviar formulário)
+ * e a extensão, que pede a aprovação do usuário ao conectar (sem token). Só entra com "Permitir que o GPT use meu Chrome" ligada, ficha
+ * com Navegador e sem o MCP de SSH (ver launch.ts).
+ */
+export function codexChromeMcpArgs(s: CodexMcpServer | null | undefined): string[] {
+  if (!s) return [];
+  return [
+    ...codexMcpArgs(CODEX_CHROME_MCP_NAME, s),
+    '-c', `mcp_servers.${CODEX_CHROME_MCP_NAME}.enabled_tools=[${CHROME_MCP_TOOLS.map((t) => tomlString(t)).join(',')}]`,
+  ];
 }
 
 /** O que o `chatSpawn` entrega para abrir uma conversa no Codex (no lugar dos argumentos do `claude`). */
@@ -211,6 +295,12 @@ export interface CodexSpawn {
   mycoUrl: string;
   /** Onde o thread_id é gravado (e lido ao reabrir). */
   threadFile: string;
+  /** "Permitir acesso à internet", lida a cada execução (ver `CodexProcess`). Ausente = desligada. */
+  internetAccess?: () => Promise<boolean>;
+  /** MCP de SSH da ficha (conexões SSH), ou null: sem ele. Ver `codexSshMcpArgs`. */
+  sshMcp?: CodexMcpServer | null;
+  /** MCP do Chrome do usuário (só sem SSH na conversa), ou null: sem ele. Ver `codexChromeMcpArgs`. */
+  chromeMcp?: CodexMcpServer | null;
 }
 
 /**
@@ -238,10 +328,16 @@ export interface CodexRunOptions {
   secrets: CodexSecrets;
   /** `loopback`: a API do Claudio’s Club por curl, só em 127.0.0.2 (só com o `network_proxy` conferido, ver codexEnv.ts). `off`: sem rede nenhuma. */
   network: 'off' | 'loopback';
+  /** "Permitir acesso à internet" (busca na web do Codex). Sem ele, desligada: falha fechada. O terminal segue sem rede (`network`). */
+  internetAccess?: boolean;
   /** thread_id da conversa: com ele, `exec resume`; sem, uma conversa nova. */
   threadId?: string | null;
   /** Sistema (os testes trocam): no Windows as instruções nunca vão na linha de comando. */
   platform?: NodeJS.Platform;
+  /** MCP de SSH da ficha (só conexões SSH; null = sem ele). Ver `codexSshMcpArgs`. */
+  sshMcp?: CodexMcpServer | null;
+  /** MCP do Chrome do usuário (null = sem ele). Ver `codexChromeMcpArgs`. */
+  chromeMcp?: CodexMcpServer | null;
 }
 
 /**
@@ -279,6 +375,8 @@ export function codexWindowsSandboxArgs(platform: NodeJS.Platform = process.plat
  * Argumentos depois de `codex`. O prompt vai pelo stdin (`-`). Segurança (config do usuário, conectores, busca na web, aprovação, sandbox,
  * segredos e rede) vem toda de `codexSafetyArgs`, igual na primeira execução e no `resume` (que não aceita `-s` nem `-C`: a pasta é a do
  * processo). A rede é a que quem chama manda (`network`): `loopback` só depois de conferir o `network_proxy` (ver codexEnv.ts).
+ * Com o MCP de SSH anexado, a busca na web fica DESLIGADA mesmo com "Permitir acesso à internet": por ela o conteúdo dos servidores
+ * podia sair para fora (canal de vazamento). A ficha diz isso (ver ficha.ts).
  */
 export function buildCodexArgs(o: CodexRunOptions): string[] {
   const resume = !!o.threadId;
@@ -294,11 +392,14 @@ export function buildCodexArgs(o: CodexRunOptions): string[] {
       home: o.secrets.home ?? os.homedir(),
       mycoHome: o.secrets.mycoHome,
       network: o.network,
+      webSearch: o.internetAccess === true && !o.sshMcp,
       writableRoots: o.writableRoots,
       readOnlyPaths: o.readOnlyPaths,
     }),
   );
   args.push(...codexWindowsSandboxArgs(o.platform));
+  args.push(...codexSshMcpArgs(o.sshMcp));
+  args.push(...codexChromeMcpArgs(o.chromeMcp));
   if (o.instructions && instructionsInArgv(o.instructions, o.platform)) args.push('-c', `developer_instructions=${tomlString(o.instructions)}`);
   if (resume) args.push(o.threadId!);
   args.push('-');

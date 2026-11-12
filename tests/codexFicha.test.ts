@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   chatEffortFor,
+  canWriteSsh,
   codexAutonomyHelp,
   codexBlockedByServers,
   defaultEffortOf,
@@ -36,10 +37,26 @@ describe('campo "Motor" na ficha', () => {
     expect(showEngineField(true, 'codex')).toBe(true);
   });
 
-  it('quem tem servidores na ficha não pode escolher o Codex', () => {
-    expect(codexBlockedByServers([])).toBe(false);
-    expect(codexBlockedByServers(['prod'])).toBe(true);
-    expect(t('staff.engineCodexServers', { tools: t('staff.tools') })).toMatch(/^Quem tem servidores na ficha não pode rodar no Codex/);
+  it('só conexão FTP marcada na ficha impede o Codex; SSH não', () => {
+    const list = [
+      { name: 'prod', source: 'vps' as const },
+      { name: 'site', source: 'ftp' as const },
+    ];
+    expect(codexBlockedByServers([], list)).toBe(false);
+    expect(codexBlockedByServers(['prod'], list)).toBe(false);
+    expect(codexBlockedByServers(['prod', 'site'], list)).toBe(true);
+    // FTP que existe no projeto mas não está marcada na ficha não conta; sem a lista (carregando), o servidor confere ao salvar.
+    expect(codexBlockedByServers(['prod'], [...list, { name: 'outro', source: 'ftp' as const }])).toBe(false);
+    expect(codexBlockedByServers(['site'], null)).toBe(false);
+    expect(t('staff.engineCodexServers', { tools: t('staff.tools') })).toMatch(/^Conexão FTP não funciona no Codex/);
+  });
+
+  it('a escrita SSH só se oferece na conexão SSH marcada', () => {
+    expect(canWriteSsh({ name: 'prod', protocol: 'ssh' }, ['prod'])).toBe(true);
+    expect(canWriteSsh({ name: 'prod', protocol: 'ssh' }, [])).toBe(false);
+    expect(canWriteSsh({ name: 'site', protocol: 'ftps' }, ['site'])).toBe(false);
+    expect(canWriteSsh({ name: 'site', protocol: 'ftp' }, ['site'])).toBe(false);
+    expect(t('staff.sshWriteHint')).toBe('Comandos livres no servidor, sem pedir aprovação no Codex. Só leitura se desmarcado.');
   });
 
   it('o Claude fica sem `engine` na ficha (como sempre foi); o Codex vai explícito, e a volta dele também', () => {

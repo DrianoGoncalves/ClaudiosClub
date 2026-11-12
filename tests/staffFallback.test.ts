@@ -14,7 +14,9 @@ let projectPath: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-staff-fallback-'));
   projectPath = path.join(root, 'proj');
-  await fs.mkdir(projectPath, { recursive: true });
+  await fs.mkdir(path.join(projectPath, '.vps'), { recursive: true });
+  // 'site' é uma conexão FTP (o Codex não aceita); 'vps1' não existe e não conta como FTP.
+  await fs.writeFile(path.join(projectPath, '.vps', 'ftp.json'), JSON.stringify({ connections: { site: { protocol: 'ftps', host: 'ftp.example.com', port: 21, user: 'deploy', remoteRoot: '/' } } }));
 });
 afterAll(async () => {
   await fs.rm(root, { recursive: true, force: true });
@@ -39,7 +41,7 @@ const service = (over: Partial<StaffServiceOptions> = {}) =>
 
 const base = { name: 'Cris', role: 'Dev', mission: 'Implementar', autonomy: 'acceptEdits', launch: false };
 const MESMO = 'o motor secundário tem que ser diferente do principal';
-const SERVIDORES = 'o motor secundário Codex não aceita servidores na ficha: tire os servidores ou use o Claude como secundário';
+const SERVIDORES = 'o motor secundário Codex não aceita conexões FTP na ficha: tire as conexões FTP ou use o Claude como secundário';
 
 describe('ficha: motor secundário (fallback)', () => {
   it('aceita um secundário válido (Claude com Codex) e o devolve na leitura', async () => {
@@ -80,12 +82,12 @@ describe('ficha: motor secundário (fallback)', () => {
     expect(codex.fallback?.effort).toBe('ultra');
   });
 
-  it('recusa Codex como secundário quando a ficha tem servidores (contratar e editar)', async () => {
+  it('recusa Codex como secundário quando a ficha tem conexão FTP (contratar e editar)', async () => {
     const svc = service();
     const fallback = { engine: 'codex', model: 'gpt-6-sol' };
-    await expect(svc.hire('proj-id', { ...base, name: 'Com servidor', servers: ['vps1'], fallback }, true)).rejects.toThrow(SERVIDORES);
-    const ficha = (await svc.hire('proj-id', { ...base, name: 'Edita servidor', servers: ['vps1'] }, true))!.profile;
-    await expect(svc.update('proj-id', ficha.id, { ...base, name: 'Edita servidor', servers: ['vps1'], fallback })).rejects.toThrow(SERVIDORES);
+    await expect(svc.hire('proj-id', { ...base, name: 'Com servidor', servers: ['site'], fallback }, true)).rejects.toThrow(SERVIDORES);
+    const ficha = (await svc.hire('proj-id', { ...base, name: 'Edita servidor', servers: ['site'] }, true))!.profile;
+    await expect(svc.update('proj-id', ficha.id, { ...base, name: 'Edita servidor', servers: ['site'], fallback })).rejects.toThrow(SERVIDORES);
     expect((await readProfile(projectPath, ficha.id))?.fallback).toBeUndefined();
   });
 

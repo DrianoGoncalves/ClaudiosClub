@@ -11,6 +11,7 @@ import type { ToolAdapter } from '../server/adapters/types';
 import {
   buildClaudeArgs,
   capAutonomy,
+  isClaudeRoot,
   MANUAL_DIR,
   renderFicha,
   systemPrompt,
@@ -23,8 +24,9 @@ import {
 import { ROOT } from '../server/root';
 import { buildMcpConfig, listMcpServers } from '../server/staff/mcp';
 import { StaffError, StaffService } from '../server/staff/service';
-import { readProfile, saveChatChoice, writeAtomic } from '../server/staff/store';
+import { readProfile, saveChatChoice, StaffInputSchema, writeAtomic } from '../server/staff/store';
 import { BUILTIN_ROLES } from '../shared/roles';
+import { PERSONALITY_PROMPTS } from '../shared/personality';
 
 // Os cargos (server/roles.ts) e a config leem MYCO_HOME: uma pasta temporária, para não usar o ~/.myco de quem roda os testes.
 const home = await vi.hoisted(async () => {
@@ -134,7 +136,8 @@ describe('ficha', () => {
     const roteiro = profile({ playbook: 'plan-big-execute-small' });
     const on = renderFicha(roteiro, { ...ctx, codex: true });
     expect(on).toContain('pergunte também ao GPT pela ferramenta `mcp__myco-gpt__perguntar_gpt`');
-    expect(on).toContain('Se discordarem, mostre as duas ao usuário em linguagem simples');
+    expect(on).toContain('mostre em 1-2 linhas o veredito do GPT');
+    expect(on).toContain('se discordarem, mostre as duas posições em linguagem simples');
     // Os agents do roteiro não mudam: o GPT é uma ferramenta, não um agent.
     expect(on).toContain('Agents: pesquisador, executor, revisor, Explore.');
     for (const md of [renderFicha(roteiro, ctx), renderFicha(roteiro, { ...ctx, codex: false })]) {
@@ -232,6 +235,29 @@ describe('ficha', () => {
     expect(sanitizeArg('a "b"\n%c% & d')).toBe('a b c d');
   });
 
+  it('internet desligada (Configurações): o Claude perde WebSearch e WebFetch no --disallowedTools; ligada ou sem a opção, não muda', () => {
+    const base = { sessionId: 's', resume: false, systemPromptFile: 'S', mcpConfigPath: null, firstPrompt: null };
+    const denyOf = (o: Parameters<typeof buildClaudeArgs>[1]) => {
+      const args = buildClaudeArgs(profile(), o);
+      return args[args.indexOf('--disallowedTools') + 1];
+    };
+    const secrets = secretDenyRules(profile()).join(',');
+    expect(denyOf({ ...base, internetAccess: false })).toBe(`${secrets},WebSearch,WebFetch`);
+    expect(denyOf({ ...base, internetAccess: true })).toBe(secrets);
+    expect(denyOf(base)).toBe(secrets);
+  });
+
+  it('Codex: a ficha diz se pode pesquisar na web (internetAccess) e que o terminal não tem internet', () => {
+    // Com autonomia de edição: o rótulo do terminal (sem internet) só aparece nela.
+    const codex = profile({ engine: 'codex', autonomy: 'acceptEdits' });
+    const on = renderFicha(codex, { ...ctx, internetAccess: true });
+    expect(on).toContain('Para pesquisar na web e ler páginas, use a sua ferramenta de busca (web_search) direto; não há navegador.');
+    expect(on).toContain('o terminal não tem internet');
+    const off = renderFicha(codex, { ...ctx, internetAccess: false });
+    expect(off).toContain('Sem acesso à internet: se precisar, avise o usuário.');
+    expect(off).not.toContain('web_search');
+  });
+
   it('argumentos: prompt primeiro; sessão nova com --session-id; MCP só quando restrito', () => {
     const args = buildClaudeArgs(profile(), { sessionId: 'uuid-1', resume: false, systemPromptFile: 'C:\\run\\system.md', mcpConfigPath: null, firstPrompt: 'Olá' });
     expect(args[0]).toBe('Olá');
@@ -293,6 +319,30 @@ describe('ficha', () => {
     }
   });
 
+  it('manual editável só quando o projeto é o próprio Claudio’s Club (sem worktree); qualquer outro projeto segue negado', () => {
+    const manualDeny = (deny: string[]) => deny.filter((r) => r.includes('docs/uso'));
+    // Projeto = ROOT: nenhuma regra do manual.
+    expect(manualDeny(secretDenyRules(profile(), [], [], true))).toEqual([]);
+    // Outro projeto, ou sem a informação (padrão): as três regras de edição.
+    expect(manualDeny(secretDenyRules(profile()))).toHaveLength(3);
+    expect(manualDeny(secretDenyRules(profile(), [], [], false))).toHaveLength(3);
+    // Pela linha de comando: manualEditable liga/desliga o bloqueio; o resto das regras não muda.
+    const base = { sessionId: 's', resume: false, systemPromptFile: 'S', mcpConfigPath: null, firstPrompt: null };
+    const denyOf = (o: Parameters<typeof buildClaudeArgs>[1]) => {
+      const args = buildClaudeArgs(profile(), o);
+      return args[args.indexOf('--disallowedTools') + 1]!.split(',');
+    };
+    expect(manualDeny(denyOf({ ...base, manualEditable: true }))).toEqual([]);
+    expect(manualDeny(denyOf(base))).toHaveLength(3);
+    expect(denyOf({ ...base, manualEditable: true }).length).toBe(denyOf(base).length - 3);
+    // isClaudeRoot: a própria pasta (com barra final), sim; outra pasta, não.
+    expect(isClaudeRoot(ROOT)).toBe(true);
+    expect(isClaudeRoot(ROOT + path.sep)).toBe(true);
+    if (process.platform === 'win32') expect(isClaudeRoot(ROOT.toUpperCase())).toBe(true);
+    expect(isClaudeRoot(path.join(os.tmpdir(), 'outro-projeto'))).toBe(false);
+    expect(isClaudeRoot(MANUAL_DIR)).toBe(false);
+  });
+
   it('subfuncionário não passa da autonomia do gestor', () => {
     expect(capAutonomy('auto', 'acceptEdits')).toBe('acceptEdits');
     expect(capAutonomy('plan', 'auto')).toBe('plan');
@@ -331,6 +381,24 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await fs.rm(root, { recursive: true, force: true });
+});
+
+describe('estilo de comunicação', () => {
+  it('sem estilo a ficha não tem a seção; com caveman tem, depois da postura, com o texto do preset', () => {
+    expect(renderFicha(profile(), ctx)).not.toContain('## Estilo de comunicação');
+    const md = renderFicha(profile({ personality: 'caveman' }), ctx);
+    expect(md).toContain('## Estilo de comunicação');
+    expect(md).toContain(PERSONALITY_PROMPTS.caveman);
+    expect(md.indexOf('## Estilo de comunicação')).toBeGreaterThan(md.indexOf('## Postura'));
+  });
+
+  it('no pedido: valor fora da lista vira null; nulo e ausente seguem como estão', () => {
+    const base = { name: 'Bia', role: 'Dev', mission: 'Implementar' };
+    expect(StaffInputSchema.parse({ ...base, personality: 'pirata' }).personality).toBeNull();
+    expect(StaffInputSchema.parse({ ...base, personality: 'nerd' }).personality).toBe('nerd');
+    expect(StaffInputSchema.parse({ ...base, personality: null }).personality).toBeNull();
+    expect(StaffInputSchema.parse(base)).not.toHaveProperty('personality');
+  });
 });
 
 describe('infra: servidores por SSH', () => {
@@ -391,7 +459,17 @@ describe('infra: servidores por SSH', () => {
   it('sem servidor na ficha: nada de ssh, scp, sftp ou rsync, no Bash nem no PowerShell', () => {
     const deny = secretDenyRules(profile());
     expect(deny).toEqual(expect.arrayContaining(['Bash(ssh:*)', 'PowerShell(ssh:*)', 'Bash(scp:*)', 'PowerShell(scp.exe:*)', 'Bash(rsync:*)', 'Edit(**/.vps/**)']));
-    expect(deny).not.toContain('Read(**/.env)');
+  });
+
+  it('.env de verdade e chaves privadas: negados para todos; o .env.example só fica livre sem servidor', () => {
+    const none = secretDenyRules(profile());
+    const prod = secretDenyRules(profile({ servers: ['prod'] }));
+    for (const deny of [none, prod]) {
+      expect(deny).toEqual(expect.arrayContaining(['Read(**/.env)', 'Edit(**/.env)', 'Read(**/.env.local)', 'Read(**/.env.*.local)', 'Read(**/.env.production)', 'Read(**/*.pem)', 'Read(**/*.key)']));
+    }
+    expect(none).not.toContain('Read(**/.env.*)');
+    expect(none.some((r) => /example|sample|template/.test(r))).toBe(false);
+    expect(prod).toEqual(expect.arrayContaining(['Read(**/.env.*)', 'Edit(**/.env.*)']));
   });
 });
 
@@ -551,6 +629,19 @@ describe('StaffService', () => {
     expect(await svc.isManagerOf('proj-id', boss.id, r!.profile.id)).toBe(true);
     expect(await svc.isManagerOf('proj-id', r!.profile.id, boss.id)).toBe(false);
     expect(await svc.isManagerOf('proj-id', 'ninguem', r!.profile.id)).toBe(false);
+  });
+
+  it('PATCH: sem o campo mantém o estilo; null tira, e a seção sai da ficha', async () => {
+    const svc = service();
+    const { profile: p } = (await svc.hire('proj-id', { ...input, name: 'Estilo', personality: 'nerd', launch: false }, true))!;
+    const ficha = path.join(projectPath, '.myco', 'staff', `${p.id}.md`);
+    const corpo = { name: 'Estilo', role: 'Dev', mission: 'Implementar', autonomy: 'acceptEdits', mcps: ['docs'] };
+    await svc.update('proj-id', p.id, corpo);
+    expect((await readProfile(projectPath, p.id))!.personality).toBe('nerd');
+    expect(await fs.readFile(ficha, 'utf8')).toContain('## Estilo de comunicação');
+    await svc.update('proj-id', p.id, { ...corpo, personality: null });
+    expect((await readProfile(projectPath, p.id))!.personality).toBeNull();
+    expect(await fs.readFile(ficha, 'utf8')).not.toContain('## Estilo de comunicação');
   });
 
   describe('contratar pela API com cargo pronto (roleId)', () => {

@@ -1,6 +1,6 @@
 {
   "name": "claudios-club",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "private": true,
   "description": "Quadro branco para orquestrar agentes do Claude Code entre projetos",
   "type": "module",
@@ -42,6 +42,7 @@
     "@codemirror/view": "^6.43.15",
     "@fontsource/caveat": "^5.3.0",
     "@lezer/highlight": "^1.2.5",
+    "@playwright/mcp": "0.0.85",
     "@xyflow/react": "^12.12.0",
     "basic-ftp": "^6.2.5",
     "codemirror": "^6.0.2",

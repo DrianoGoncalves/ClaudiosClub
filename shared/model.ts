@@ -1,5 +1,7 @@
 // Modelo de dados exposto pela API, preenchido a partir do Claude Code (via adaptador).
 
+import type { Personality } from './personality';
+
 export type LinkKind = 'file' | 'symlink' | 'hardlink';
 
 export interface LinkInfo {
@@ -230,6 +232,11 @@ export interface CostReport {
   models: Record<string, number>;
   /** Modelos vistos sem preço na tabela (ficam fora dos totais). */
   unpricedModels: string[];
+  /**
+   * Gasto do Sistema (o gerador oculto da vitrine: sem transcript). Já está em `total`, em `models` e em `projects[id]`
+   * do projeto a que pertence; aqui é só a parte dele. `projects` por id de projeto. Ausente sem nenhuma linha no período.
+   */
+  system?: CostSummary & { runs: number; projects: Record<string, number> };
 }
 
 /** Configuração do Claudio’s Club (~/.myco/config.json). */
@@ -250,7 +257,11 @@ export interface AppConfig {
     projects: string[];
     /** Ids de sessão (= funcionário). */
     sessions: string[];
+    /** Id da conversa → quando foi arquivada (ISO). Só some do seletor de conversas; volta se ela tiver atividade depois dessa data. */
+    conversations: Record<string, string>;
   };
+  /** Título que você deu à conversa (id da sessão → título). Sem entrada, vale o último assunto. */
+  conversationTitles?: Record<string, string>;
   /** Linha de parada do consumo da conta: passar dela pede confirmação antes de trabalhar. */
   usageStop: UsageStop;
   /** O que acontece com a mensagem mandada enquanto o funcionário trabalha. */
@@ -291,6 +302,13 @@ export interface AppConfig {
   codexReview: boolean;
   /** Modelo do Codex para o `perguntar_gpt` (slug do catálogo, ex.: `gpt-6-sol`); vazio = o padrão do Codex. */
   codexModel: string;
+  /** Permitir acesso à internet: funcionários Claude e Codex e o `perguntar_gpt` podem pesquisar na web. Ligado por padrão. */
+  internetAccess: boolean;
+  /**
+   * "Permitir que o GPT use meu Chrome": funcionário no Codex (com "Navegador" na ficha) usa o Chrome do usuário, com as abas e os logins
+   * dele, pelo Playwright MCP em modo extensão (ver `codexChromeMcpArgs`). Desligada até você ligar; lida ao abrir a conversa.
+   */
+  codexBrowser: boolean;
   /**
    * Freela (conversa sem ficha) não efetivado e parado há esta quantidade de dias é arquivado sozinho
    * (ver server/freelaSweep.ts). Inteiro de 0 a 90; 0 = nunca. Padrão 3.
@@ -305,6 +323,21 @@ export interface AppConfig {
   workspaces: Workspace[];
   /** Workspace de cada projeto, por id de projeto; sem entrada = sem workspace. */
   projectWorkspaces: Record<string, string>;
+  /**
+   * Gate de recursos da fila: o início automático da próxima tarefa espera RAM livre, e a CPU se `cpuGate`, e o teto de
+   * conversas (ver server/resourceGate.ts). Começar à mão não passa por ele.
+   */
+  resourceGate: boolean;
+  /** RAM livre mínima para começar, em GB (0 = não olha a RAM). */
+  minFreeRamGb: number;
+  /** Também segura o início quando a CPU média dos últimos 2 min está alta (90% ou mais). */
+  cpuGate: boolean;
+  /** Conversas rodando ao mesmo tempo, em todos os projetos, antes de começar outra (0 = sem teto). */
+  maxActiveChats: number;
+  /** Teto de ferramentas por turno (0 = desligado): passou disso, o turno é interrompido e você é avisado. Lido a cada turno. */
+  maxTurnTools: number;
+  /** Teto de minutos por turno (0 = desligado), sem contar o tempo esperando sua permissão ou resposta. Lido a cada turno. */
+  maxTurnMinutes: number;
 }
 
 export const CONTEXT_SWITCHES = ['auto', 'suggest', 'off'] as const;
@@ -574,6 +607,8 @@ export interface Task {
   queuedAt?: string | null;
   /** Começar mesmo com o limite de consumo batido (você confirmou ao pôr na fila). */
   queuedForce?: boolean;
+  /** Na fila, a partida foi segurada pelo gate de recursos (ver server/resourceGate.ts): o motivo e desde quando. Limpo ao começar. */
+  resourceWait?: { reason: string; since: string } | null;
   /** Motivo de estar em Aguardar (opcional, texto puro, até 200 caracteres). Limpo ao sair da coluna. */
   waitReason?: string | null;
   /** Mensagens suas nesta conversa esperando o funcionário terminar outra tarefa. */
@@ -726,6 +761,8 @@ export interface StaffProfile {
   model: string | null;
   /** `ultra` só com `engine: 'codex'` (o servidor recusa nas outras). */
   effort: CodexEffort | null;
+  /** Estilo de comunicação (seção na ficha, ver shared/personality.ts); ausente ou null = sem estilo. */
+  personality?: Personality | null;
   /**
    * Motor secundário (fallback quando o principal bate o limite de uso). Ausente = sem secundário. Por enquanto só o dado:
    * nada o usa. Motor diferente do principal; `ultra` só com o Codex; com Codex, sem servidores na ficha.
@@ -745,6 +782,8 @@ export interface StaffProfile {
   worktree: boolean;
   /** Servidores (nomes de ServerInfo) que pode acessar, por SSH ou FTP; vazio = nenhum. */
   servers: string[];
+  /** Conexões SSH de `servers` com escrita liberada (ssh_executar no MCP myco-ssh, no Codex). Subconjunto de `servers`; ausente = nenhuma. */
+  sshWrite?: string[];
   /** Usa o seu Chrome pela extensão Claude in Chrome (`--chrome`). */
   browser: boolean;
   /** Rotinas agendadas (o Claudio’s Club manda a mensagem no horário). Só pelo Claudio’s Club; fichas antigas não têm. */
@@ -1073,7 +1112,27 @@ export type ChatItem =
       wake?: 'waiting' | 'sent' | 'cancelled' | 'failed';
       /** Despertador: o instante (ms) da volta (`waiting`) ou em que voltou/foi desfeito (os demais). */
       wakeAt?: number;
+      /** Ferramenta negada: a ferramenta, e quem barrou (`denial`, a dica que a tela mostra). */
+      tool?: string;
+      denial?: DenialInfo;
+      /** O turno parou no teto (ferramentas ou minutos): o aviso diz qual e quanto era. */
+      cap?: TurnCapHit;
     };
+
+/** Turno interrompido pelo teto (ver server/chat/turnCap.ts): o que passou do limite e quanto era. */
+export interface TurnCapHit {
+  kind: 'tools' | 'minutes';
+  limit: number;
+}
+
+/** Quem barrou uma ferramenta: `layer`; `reason` é o motivo dado (sem ele, ausente). `safety` = checagem embutida
+ *  do Claude Code (ex.: Remove-Item em caminho do sistema); `settings` = arquivo ou pasta negado nas regras de permissão. */
+export interface DenialInfo {
+  layer: 'classifier' | 'classifierError' | 'club' | 'safety' | 'settings' | 'other';
+  reason?: string;
+  /** `servers`: dar acesso a servidores; `autonomy`: o classificador do Autônomo barrou; `retry`: tentar de novo. */
+  hint: 'servers' | 'autonomy' | 'retry' | null;
+}
 
 /** Uma opção de uma pergunta do Claude (`preview`: HTML de exemplo que o cartão mostra ao marcar). */
 export interface AskedOption {
@@ -1119,6 +1178,12 @@ export interface TurnNotice {
   at: string;
 }
 
+/** Tipo do segredo achado no chat (a guarda está em server/chat/secrets.ts). */
+export type SecretKind = 'private-key' | 'api-key' | 'password-cli' | 'password-env' | 'password-url';
+
+/** De onde veio o texto com o segredo: o aviso diz isso. Sem origem, o aviso diz "no chat". */
+export type SecretSource = 'owner' | 'staff-reply' | 'tool-input' | 'tool-result';
+
 export interface InboxItem {
   /** Estável enquanto o item existir (o navegador avisa só o que é novo). */
   id: string;
@@ -1138,6 +1203,8 @@ export interface InboxItem {
   itemId?: string;
   /** Pergunta detectada no texto da resposta: o cliente acha o trecho dentro do balão (ou nos últimos balões, sem `itemId`). */
   quote?: string;
+  /** Segredo no chat: o cliente monta a frase no idioma da página (sem isso, vale `summary`, em pt-BR). Nunca traz o valor. */
+  secret?: { kind: SecretKind; detail?: string; source?: SecretSource };
 }
 
 export interface ContextUsage {
@@ -1299,7 +1366,7 @@ export interface UpdateStatus {
  * package-lock ou o pacote dist/server.mjs refeito); `client`: a tela (client/, shared/, vite.config.ts, o lock);
  * `ftpMcp`: o pacote do MCP de FTP dos funcionários.
  */
-export type PendingReason = 'server' | 'client' | 'ftpMcp' | 'gptMcp';
+export type PendingReason = 'server' | 'client' | 'ftpMcp' | 'gptMcp' | 'sshMcp';
 
 export interface PendingRestart {
   /** Há mudança que só entra reiniciando. */
