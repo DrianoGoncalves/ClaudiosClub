@@ -32,8 +32,10 @@ describe('pacePerDay', () => {
     expect(pacePerDay(0, 7 * DAY)).toBeCloseTo(100 / 7);
   });
 
-  it('aceita fração de dia', () => {
-    expect(pacePerDay(80, DAY / 2)).toBeCloseTo(40);
+  it('no último dia vale o que resta, sem estourar', () => {
+    expect(pacePerDay(76, DAY / 8)).toBeCloseTo(24);
+    expect(pacePerDay(80, DAY / 2)).toBeCloseTo(20);
+    expect(pacePerDay(76, DAY)).toBeCloseTo(24);
   });
 });
 

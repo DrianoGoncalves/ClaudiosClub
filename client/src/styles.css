@@ -1097,12 +1097,12 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 /* O fundo da barra tem a cor do serviço (Claude/Codex); o preenchimento é o semáforo (verde <70%, amarelo <90%, vermelho depois). */
 .meter-track { position: relative; width: 64px; height: 8px; border: 1.5px solid var(--ink); border-radius: 3px 5px 3px 4px; overflow: hidden; background: var(--meter-brand); }
 .meter-fill { position: absolute; inset: 0 auto 0 0; background: var(--meter); }
-/* Barra de 7d: listra no preenchimento pelo que resta por dia até o reset (>14% sobra, 7–14 no ritmo, <7 apertado). */
-.meter { --pace-slack: #ffffff88; --pace-even: #88888888; --pace-tight: #00000088; }
-.meter-fill[class*='pace-'] { background-image: repeating-linear-gradient(135deg, var(--stripe) 0 3px, transparent 3px 6px); }
-.meter-fill.pace-slack { --stripe: var(--pace-slack); }
-.meter-fill.pace-even { --stripe: var(--pace-even); }
-.meter-fill.pace-tight { --stripe: var(--pace-tight); }
+/* Barra de 7d: o que resta (fundo da trilha) ganha listra no semáforo do ritmo, a 50%; o usado fica sólido por cima. >14%/dia sobra (verde), 7–14 no ritmo (amarelo), <7 apertado (vermelho). */
+.meter { --pace-slack: var(--ink-green); --pace-even: var(--waiting); --pace-tight: var(--ink-red); }
+.meter-track[class*='pace-'] { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--stripe) 50%, transparent) 0 3px, transparent 3px 6px); }
+.meter-track.pace-slack { --stripe: var(--pace-slack); }
+.meter-track.pace-even { --stripe: var(--pace-even); }
+.meter-track.pace-tight { --stripe: var(--pace-tight); }
 .meter-low { --meter: var(--ink-green); }
 .meter-mid { --meter: var(--waiting); }
 .meter-high { --meter: var(--ink-red); }

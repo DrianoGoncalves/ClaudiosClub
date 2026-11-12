@@ -141,12 +141,12 @@ export function usageLevel(pct: number): 'low' | 'mid' | 'high' {
 
 const DAY_MS = 86_400_000;
 
-/** Média do que ainda resta da cota por dia que falta para o reset (em % por dia). */
+/** Média do que ainda resta da cota por dia que falta para o reset (em % por dia); no último dia vale o que resta, sem estourar. */
 export function pacePerDay(pct: number, resetMs: number): number {
-  return (100 - pct) / (resetMs / DAY_MS);
+  return (100 - pct) / Math.max(1, resetMs / DAY_MS);
 }
 
-/** Ritmo da cota de 7 dias: acima de 14%/dia sobra (listra branca), de 7 a 14 está no ritmo (cinza), abaixo de 7 está apertado (preta). */
+/** Ritmo da cota de 7 dias: acima de 14%/dia sobra (listra verde), de 7 a 14 está no ritmo (amarela), abaixo de 7 está apertado (vermelha). */
 export function paceLevel(perDay: number): 'slack' | 'even' | 'tight' {
   return perDay > 14 ? 'slack' : perDay >= 7 ? 'even' : 'tight';
 }
@@ -165,8 +165,8 @@ function UsageMeter({ limit, now, service, name }: { limit: UsageLimit; now: num
   return (
     <span className={`meter meter-${level} meter-${service}`} title={`${name ? `${name} · ` : ''}${label}: ${expired ? '—' : `${Math.round(pct)}%`} ${left}${pace ? ` · ${pace}` : ''}`}>
       <span className="meter-label">{label}</span>
-      <span className="meter-track">
-        <span className={`meter-fill${perDay === null ? '' : ` pace-${paceLevel(perDay)}`}`} style={{ width: `${pct}%` }} />
+      <span className={`meter-track${perDay === null ? '' : ` pace-${paceLevel(perDay)}`}`}>
+        <span className="meter-fill" style={{ width: `${pct}%` }} />
       </span>
       <span className="meter-value">{expired ? '—' : `${Math.round(pct)}%`}</span>
       {resetMs !== null && !expired && <span className="meter-reset">{formatDuration(resetMs)}</span>}
