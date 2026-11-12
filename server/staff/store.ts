@@ -4,6 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { StaffProfile } from '../../shared/model';
 import { cronError } from '../../shared/cron';
+import { PERSONALITIES } from '../../shared/personality';
 import { listDir, tryJson } from '../adapters/claude/fsutil';
 import { ensureMycoGitignore } from '../mycoGitignore';
 import { codexProfileError } from '../chat/codexArgs';
@@ -52,6 +53,8 @@ const StaffInputObject = z.object({
   engine: z.enum(['claude', 'codex']).optional(),
   model: ModelSchema.nullable().default(null),
   effort: CodexEffortSchema.nullable().default(null),
+  // Estilo de comunicação: null = sem estilo; ausente = fica o que a ficha já tinha (PATCH sem o campo); valor desconhecido vira null.
+  personality: z.enum(PERSONALITIES).nullable().optional().catch(null),
   // Ausente = sem secundário; `null` no PATCH tira (como o retrato). Regras cruzadas: `assertFallbackRules`.
   fallback: FallbackSchema.nullable().optional(),
   canHire: z.boolean().default(false),

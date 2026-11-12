@@ -1,6 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { PLAYBOOK_AGENTS } from '../../shared/agentPresets';
+import { personalitySection } from '../../shared/personality';
 import { FTP_MCP_NAME, GPT_MCP_NAME, GPT_TOOL_NAME, TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
 import { staffSshConfigFile } from './servers';
 import { GUIDE_PATH } from '../projectGuide';
@@ -421,6 +422,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     guideSection(ctx),
     `## Conhecimento (leia antes de começar)\n${list(p.knowledge, codexOf(p) ? 'Nada específico além do AGENTS.md e do CLAUDE.md do projeto, se existirem.' : 'Nada específico além do CLAUDE.md do projeto.')}`,
     postureSection(),
+    personalitySection(p.personality),
     manualSection(ctx.manualEditable === true),
     `## Regras\n${list(p.rules, codexOf(p) ? 'Siga o AGENTS.md e o CLAUDE.md do projeto, se existirem.' : 'Siga o CLAUDE.md do projeto.')}`,
     p.doneWhen ? `## Definição de pronto\n${p.doneWhen}` : '',

@@ -507,6 +507,7 @@ export class StaffService {
       ...(src.engine && { engine: src.engine }),
       model: src.model,
       effort: src.effort,
+      ...(src.personality && { personality: src.personality }),
       canHire: src.canHire,
       playbook: src.playbook,
       worktree: src.worktree,

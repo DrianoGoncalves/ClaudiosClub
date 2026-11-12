@@ -1,5 +1,7 @@
 // Modelo de dados exposto pela API, preenchido a partir do Claude Code (via adaptador).
 
+import type { Personality } from './personality';
+
 export type LinkKind = 'file' | 'symlink' | 'hardlink';
 
 export interface LinkInfo {
@@ -754,6 +756,8 @@ export interface StaffProfile {
   model: string | null;
   /** `ultra` só com `engine: 'codex'` (o servidor recusa nas outras). */
   effort: CodexEffort | null;
+  /** Estilo de comunicação (seção na ficha, ver shared/personality.ts); ausente ou null = sem estilo. */
+  personality?: Personality | null;
   /**
    * Motor secundário (fallback quando o principal bate o limite de uso). Ausente = sem secundário. Por enquanto só o dado:
    * nada o usa. Motor diferente do principal; `ultra` só com o Codex; com Codex, sem servidores na ficha.

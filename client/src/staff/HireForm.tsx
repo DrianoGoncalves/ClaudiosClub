@@ -27,6 +27,8 @@ import { differingFields, PERSON_FIELD_LABEL } from './directory';
 import { FallbackField } from './FallbackField';
 import { draftOf, fallbackProblem, fallbackToSend, showFallbackField, type FallbackDraft } from './fallbackEngine';
 import { PersonMemory } from './PersonMemory';
+import { PERSONALITY_TEXT, personalityToSend } from './personalityField';
+import { PERSONALITIES, type Personality } from '../../../shared/personality';
 import type { RoleEntry } from '../../../shared/roles';
 import {
   type CodexCatalog,
@@ -142,6 +144,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const [fallback, setFallback] = useState<FallbackDraft>(draftOf(editing?.fallback));
   const [canHire, setCanHire] = useState(editing?.canHire ?? false);
   const [playbook, setPlaybook] = useState<'' | Playbook>(editing?.playbook ?? '');
+  const [personality, setPersonality] = useState<'' | Personality>(editing?.personality ?? '');
   const [worktree, setWorktree] = useState(editing?.worktree ?? false);
   const [servers, setServers] = useState<string[]>(editing?.servers ?? []);
   // Conexões SSH de `servers` com escrita liberada (o Codex roda comandos livres só nelas); desmarcar o servidor tira daqui também.
@@ -167,7 +170,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   // Os campos da pessoa em que as outras fichas diferem do que está no formulário: o salvar vai trocá-los.
   const overwrites = copyProfiles.length
     ? differingFields(
-        { name, role, mission, doneWhen, rules: lines(rules), model: model || null, effort: effort || null, playbook: playbook || null },
+        { name, role, mission, doneWhen, rules: lines(rules), model: model || null, effort: effort || null, playbook: playbook || null, personality: personality || null },
         copyProfiles,
       ).map((d) => `${t(PERSON_FIELD_LABEL[d.field])} (${[...new Set(d.others.map((o) => projectNameOf(o.projectId)))].join(', ')})`)
     : [];
@@ -368,6 +371,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       effort: effort || null,
       canHire,
       playbook: playbook || null,
+      // Só vai se mudou (ausente mantém o salvo; null limpa). No simples o campo nem aparece: nunca muda.
+      ...(full ? personalityToSend(personality, editing?.personality) : {}),
       worktree: simpleHire ? autoWorktree : worktree,
       servers,
       sshWrite: sshWrite.filter((n) => servers.includes(n)),
@@ -705,6 +710,19 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             {tip}
           </p>
         )}
+        <label>
+          {t('staff.personalityLabel')}
+          <select value={personality} onChange={(e) => setPersonality(e.target.value as '' | Personality)}>
+            <option value="">{t('staff.personalityNone')}</option>
+            {PERSONALITIES.map((p) => (
+              <option key={p} value={p}>
+                {t(PERSONALITY_TEXT[p].name)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="muted small">{personality ? t(PERSONALITY_TEXT[personality].hint) : t('staff.personalityNoneHint')}</p>
+        <p className="muted small">{t('staff.personalityHelp')}</p>
         {editing && <PersonMemory key={editing.id} projectId={projectId} staffId={editing.id} name={editing.name} />}
         </div>
 

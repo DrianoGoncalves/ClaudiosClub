@@ -24,8 +24,9 @@ import {
 import { ROOT } from '../server/root';
 import { buildMcpConfig, listMcpServers } from '../server/staff/mcp';
 import { StaffError, StaffService } from '../server/staff/service';
-import { readProfile, saveChatChoice, writeAtomic } from '../server/staff/store';
+import { readProfile, saveChatChoice, StaffInputSchema, writeAtomic } from '../server/staff/store';
 import { BUILTIN_ROLES } from '../shared/roles';
+import { PERSONALITY_PROMPTS } from '../shared/personality';
 
 // Os cargos (server/roles.ts) e a config leem MYCO_HOME: uma pasta temporária, para não usar o ~/.myco de quem roda os testes.
 const home = await vi.hoisted(async () => {
@@ -382,6 +383,24 @@ afterAll(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
+describe('estilo de comunicação', () => {
+  it('sem estilo a ficha não tem a seção; com caveman tem, depois da postura, com o texto do preset', () => {
+    expect(renderFicha(profile(), ctx)).not.toContain('## Estilo de comunicação');
+    const md = renderFicha(profile({ personality: 'caveman' }), ctx);
+    expect(md).toContain('## Estilo de comunicação');
+    expect(md).toContain(PERSONALITY_PROMPTS.caveman);
+    expect(md.indexOf('## Estilo de comunicação')).toBeGreaterThan(md.indexOf('## Postura'));
+  });
+
+  it('no pedido: valor fora da lista vira null; nulo e ausente seguem como estão', () => {
+    const base = { name: 'Bia', role: 'Dev', mission: 'Implementar' };
+    expect(StaffInputSchema.parse({ ...base, personality: 'pirata' }).personality).toBeNull();
+    expect(StaffInputSchema.parse({ ...base, personality: 'nerd' }).personality).toBe('nerd');
+    expect(StaffInputSchema.parse({ ...base, personality: null }).personality).toBeNull();
+    expect(StaffInputSchema.parse(base)).not.toHaveProperty('personality');
+  });
+});
+
 describe('infra: servidores por SSH', () => {
   it('lista só as conexões completas do projeto, sem usuário nem chave (o ~/.ssh/config fica de fora)', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-srv-'));
@@ -610,6 +629,19 @@ describe('StaffService', () => {
     expect(await svc.isManagerOf('proj-id', boss.id, r!.profile.id)).toBe(true);
     expect(await svc.isManagerOf('proj-id', r!.profile.id, boss.id)).toBe(false);
     expect(await svc.isManagerOf('proj-id', 'ninguem', r!.profile.id)).toBe(false);
+  });
+
+  it('PATCH: sem o campo mantém o estilo; null tira, e a seção sai da ficha', async () => {
+    const svc = service();
+    const { profile: p } = (await svc.hire('proj-id', { ...input, name: 'Estilo', personality: 'nerd', launch: false }, true))!;
+    const ficha = path.join(projectPath, '.myco', 'staff', `${p.id}.md`);
+    const corpo = { name: 'Estilo', role: 'Dev', mission: 'Implementar', autonomy: 'acceptEdits', mcps: ['docs'] };
+    await svc.update('proj-id', p.id, corpo);
+    expect((await readProfile(projectPath, p.id))!.personality).toBe('nerd');
+    expect(await fs.readFile(ficha, 'utf8')).toContain('## Estilo de comunicação');
+    await svc.update('proj-id', p.id, { ...corpo, personality: null });
+    expect((await readProfile(projectPath, p.id))!.personality).toBeNull();
+    expect(await fs.readFile(ficha, 'utf8')).not.toContain('## Estilo de comunicação');
   });
 
   describe('contratar pela API com cargo pronto (roleId)', () => {

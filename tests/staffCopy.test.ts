@@ -412,6 +412,17 @@ describe('mesma pessoa entre projetos', () => {
     await expect(svc.update('a', 'ana-1a2b', corpo({ reportsTo: ['chefe-a'], applyToCopies: 'sim' }))).rejects.toThrow('applyToCopies tem que ser true ou false');
   });
 
+  it('o estilo de comunicação vai com a pessoa: a cópia leva, a edição propaga e null tira nas cópias também', async () => {
+    await saveProfile(w.dirs.a, perfil({ id: 'ana-1a2b', projectId: 'a', name: 'Ana Souza', personality: 'tiozao' }));
+    const svc = servico(w);
+    const c = (await svc.copyFrom('b', { fromProjectId: 'a', staffId: 'ana-1a2b' }, true))!.profile;
+    expect(c.personality).toBe('tiozao');
+    await svc.update('a', 'ana-1a2b', corpo({ personality: 'caveman' }));
+    expect((await readProfile(w.dirs.b, c.id))!.personality).toBe('caveman');
+    await svc.update('a', 'ana-1a2b', corpo({ personality: null }));
+    expect((await readProfile(w.dirs.b, c.id))!.personality).toBeNull();
+  });
+
   it('agents e skills (da alocação) não vão às cópias; a própria ficha muda', async () => {
     await saveProfile(w.dirs.a, perfil({ id: 'ana-1a2b', projectId: 'a', name: 'Ana Souza', personId: 'grupo-1' }));
     await saveProfile(w.dirs.b, perfil({ id: 'copia-b', projectId: 'b', name: 'Ana Souza', personId: 'grupo-1' }));
