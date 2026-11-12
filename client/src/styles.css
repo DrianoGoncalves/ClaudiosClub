@@ -134,8 +134,8 @@ body { background: var(--board); }
 .bn::before { content: ''; position: absolute; inset: 3px; background: var(--card); border-radius: 3px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06); }
 .bn .sketch { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
 .bn-body { position: relative; height: 100%; padding: 8px 10px; display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; }
-.bn-title { font-family: var(--hand); font-weight: 700; font-size: 25px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bn-title-sm { font-size: 21px; }
+.bn-title { font-family: var(--hand); font-weight: 700; font-size: 26px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bn-title-sm { font-size: 20px; }
 .bn-meta { font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bn-tag { font-family: system-ui, sans-serif; font-weight: 500; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin-right: 6px; vertical-align: middle; }
 .bn-project .bn-title { color: var(--ink-blue); }
@@ -377,9 +377,9 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .permission-plan .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 @media (max-width: 640px) { .permission-plan .actions :is(.btn-primary, .btn-secondary) { min-height: 36px; } }
 /* Pergunta com opções do Claude: cada pergunta com suas opções clicáveis, "outra resposta" e a prévia. */
-.msg-question { --ink: var(--ask-ink); --muted: var(--ask-muted); --line: var(--ask-line); --ink-blue: var(--ask-accent); --accent: var(--ask-accent); --panel: var(--ask-field); --board: var(--ask-field); width: 88%; align-self: flex-start; background: var(--ask-bg); color: var(--ink); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.msg-question { --ink: var(--ask-ink); --muted: var(--ask-muted); --line: var(--ask-line); --ink-blue: var(--ask-accent); --accent: var(--ask-accent); --panel: var(--ask-field); --board: var(--ask-field); width: 90%; align-self: flex-start; background: var(--ask-bg); color: var(--ink); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .msg-question .btn-primary { color: #fff; }
-.msg-system.permission-question { width: 88%; }
+.msg-system.permission-question { width: 90%; }
 .permission-question .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .q-block { display: grid; gap: 4px; padding: 6px 0; }
 .q-block + .q-block { border-top: 1px solid var(--line); }
@@ -407,6 +407,9 @@ textarea.q-field { resize: vertical; }
 .chat-notice { align-self: center; font-size: 12px; color: var(--muted); }
 .chat-notice-warn { color: var(--warn); }
 .chat-notice-error { color: var(--danger); }
+/* Aviso de negação com botão (dica do servidor): o texto e, embaixo, o botão com alvo de toque de 36px. */
+.chat-notice.has-action { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
+.chat-notice.has-action .chat-notice-btn { min-height: 36px; padding-inline: 14px; }
 /* O balão que o aviso da caixa "precisa de mim" apontou: pisca de leve e volta ao normal (2,5 s, ver useChatFocus.ts). */
 .chat-list .is-flash { outline: 2px solid transparent; outline-offset: 2px; animation: msg-flash 2.5s ease-out; }
 @keyframes msg-flash {
@@ -580,6 +583,9 @@ textarea.q-field { resize: vertical; }
 .guide-who { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 8px 0 0; }
 .guide-who .setting-select { flex: 1 1 160px; min-width: 0; max-width: 100%; }
 .guide-actions { flex-wrap: wrap; }
+/* "Abrir vitrine": <a> com cara de botão (sem sublinhado, mesma altura dos botões vizinhos) e o mesmo anel de foco. */
+.btn-secondary.guide-link { display: inline-flex; align-items: center; text-decoration: none; }
+.guide-link:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 2px; }
 .guide-hints { margin: 8px 0 0; padding-left: 16px; display: grid; gap: 4px; }
 /* "N arquivos mudaram desde …" (ou o aviso de que nada mudou), logo abaixo dos botões. */
 .guide-since { margin: 8px 0 0; }
@@ -661,6 +667,8 @@ textarea.q-field { resize: vertical; }
 .task-review p { margin: 0; }
 /* Dúvida do funcionário: selo de uma linha no cartão (nome longo corta; o title tem o texto inteiro) e bloco no detalhe (amarelo quando é com você, como o .files-conflict). */
 .task-badge.task-doubt { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Espera do gate de recursos: o motivo é o que importa, então quebra linha (raio dos blocos tracejados, não pílula). */
+.task-queue.task-resource { max-width: 100%; border-radius: 10px; padding: 1px 8px; text-align: left; overflow-wrap: anywhere; }
 .task-doubt-box { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
 .task-doubt-box.is-escalated { border: 1px solid var(--waiting); background: color-mix(in srgb, var(--waiting) 12%, transparent); }
 .task-doubt-box p, .task-doubt-box ul { margin: 0; overflow-wrap: anywhere; }
@@ -746,7 +754,7 @@ textarea.q-field { resize: vertical; }
 /* Botão liga/desliga: o btn-secondary com estado pressionado em azul de caneta. */
 .segmented { display: inline-flex; gap: 6px; }
 /* Conversa: qual delas, lista de tarefas do funcionário, ajustes, menu de "/" e "@", anexos. */
-.chat-convos { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+.chat-convos { display: flex; gap: 6px; align-items: center; margin: 0px 0; }
 .chat-convos select { flex: 1; min-width: 0; font: inherit; font-size: 12.5px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
 /* Tarefas: fechadas por padrão, numa linha; abertas, a lista com rolagem curta. */
 .chat-todos { margin: 4px 0; padding: 4px 10px; border: 1px dashed var(--line); border-radius: 8px; }
@@ -989,9 +997,12 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .block { display: block; margin-top: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; word-break: break-all; color: var(--ink); }
 .notice { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: min(640px, calc(100vw - 32px)); display: flex; gap: 10px; align-items: flex-start; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 10px; padding: 10px 36px 10px 14px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15); font-size: 13px; z-index: 15; }
 .notice .drawer-close { top: 6px; right: 8px; }
-/* Monitor de CPU e RAM (toolbar/SystemMonitor.tsx): meio transparente (inteiro com o mouse em cima) e embaixo do
-   painel lateral (z-index 10). No celular some: a tela é pequena demais para mais uma camada. */
-.sysmon { position: fixed; top: 12px; right: 12px; z-index: 5; display: grid; gap: 4px; width: 190px; padding: 6px 10px; background: var(--panel-glass); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.5; transition: opacity 0.15s; }
+/* Canto superior direito (toolbar/CornerDock.tsx): o monitor e o player do Spotify lado a lado, embaixo do painel
+   lateral (z-index 10). O `top` vem do componente (desce da barra do topo em janela estreita). */
+.corner-dock { position: fixed; right: 12px; z-index: 5; display: flex; align-items: flex-start; gap: 8px; }
+/* Monitor de CPU e RAM (toolbar/SystemMonitor.tsx) e player (toolbar/SpotifyPlayer.tsx): meio transparentes (inteiros
+   com o mouse em cima). No celular somem: a tela é pequena demais para mais uma camada. */
+.sysmon { display: grid; gap: 4px; width: 190px; padding: 6px 10px; background: var(--panel-glass); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.5; transition: opacity 0.15s; }
 .sysmon:hover { opacity: 1; }
 .sysmon.is-hot { opacity: 0.95; border-color: var(--danger); }
 .sysmon.is-hot:hover { opacity: 1; }
@@ -1000,6 +1011,11 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .sysmon-bar > span { display: block; height: 100%; background: var(--ink-blue); transition: width 0.4s; }
 .sysmon-row.is-hot { color: var(--danger); font-weight: 600; }
 .sysmon-row.is-hot .sysmon-bar > span { background: var(--danger); }
+/* O raio é o do próprio embed (12px); 300×80px é o compacto do Spotify (capa, título e play): content-box deixa os 80px
+   inteiros para o iframe, senão a borda o encolhe e o embed ganha barra de rolagem. */
+.spotify { box-sizing: content-box; width: 300px; height: 80px; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; opacity: 0.5; transition: opacity 0.15s; }
+.spotify:hover, .spotify:focus-within { opacity: 1; }
+.spotify iframe { display: block; width: 100%; height: 100%; border: 0; }
 @media (max-width: 640px) { .sysmon { display: none; } }
 /* Largura fixa: preso no meio (left: 50%), o aviso encolheria até metade da tela no celular. Por cima dos modais e do
    config (z-index 20 e 30), de onde a ação recusada pode ter vindo; amarelo de "precisa de você" (como .permission). */
@@ -1078,9 +1094,15 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 .usage-outdated { color: var(--waiting); }
 .meter { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; }
 .meter-label { font-family: var(--hand); font-weight: 700; font-size: 17px; }
-/* O fundo da barra tem a cor do serviço (Claude/Codex); o preenchimento é o semáforo (verde <50%, amarelo <70%, vermelho depois). */
+/* O fundo da barra tem a cor do serviço (Claude/Codex); o preenchimento é o semáforo (verde <70%, amarelo <90%, vermelho depois). */
 .meter-track { position: relative; width: 64px; height: 8px; border: 1.5px solid var(--ink); border-radius: 3px 5px 3px 4px; overflow: hidden; background: var(--meter-brand); }
 .meter-fill { position: absolute; inset: 0 auto 0 0; background: var(--meter); }
+/* Barra de 7d: listra no preenchimento pelo que resta por dia até o reset (>14% sobra, 7–14 no ritmo, <7 apertado). */
+.meter { --pace-slack: #ffffff88; --pace-even: #88888888; --pace-tight: #00000088; }
+.meter-fill[class*='pace-'] { background-image: repeating-linear-gradient(135deg, var(--stripe) 0 3px, transparent 3px 6px); }
+.meter-fill.pace-slack { --stripe: var(--pace-slack); }
+.meter-fill.pace-even { --stripe: var(--pace-even); }
+.meter-fill.pace-tight { --stripe: var(--pace-tight); }
 .meter-low { --meter: var(--ink-green); }
 .meter-mid { --meter: var(--waiting); }
 .meter-high { --meter: var(--ink-red); }
@@ -1269,6 +1291,10 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 .setting-select:focus { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); border-color: var(--ink-blue); }
 .setting-number { display: inline-flex; align-items: center; gap: 4px; }
 .setting-number input { width: 64px; }
+.setting-number.is-wide input { width: 92px; }
+.setting-spotify { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%; }
+.setting-spotify input { flex: 1 1 220px; min-width: 0; }
+.setting-spotify-error { flex-basis: 100%; margin: 0; }
 /* Campos do menu (inclusive os do cargo e do workspace): papel do cartão, linha fina e foco azul de caneta.
    O color-scheme deixa setinhas do número e a lista aberta do select no tema certo. */
 .settings-menu { color-scheme: light; }
@@ -1306,6 +1332,7 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 .settings-menu a.setting-link:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 2px; }
 @media (max-width: 640px) {
   .btn-secondary.setting-link { min-height: 36px; }
+  .setting-spotify :is(input, .btn-secondary) { min-height: 36px; }
   .settings-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .settings-nav { flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--line); padding: 6px 8px; }
   .settings-menu .settings-nav-item { white-space: nowrap; }
@@ -1351,7 +1378,7 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
    painel: modal aberto de dentro do painel lateral vai para o body (createPortal). As abas e o rodapé que grudam
    usam o mesmo vidro: com fundo sólido, viravam uma faixa de outra cor. O cartão do reinício já fica sobre o blur
    do .server-overlay. */
-:is(.drawer, .modal, .settings-menu, .inbox-menu, .update-menu, .quick-jump, .notice, .sysmon, .chat-more, .task-detail, .tabs, .modal-footer) {
+:is(.drawer, .modal, .settings-menu, .inbox-menu, .update-menu, .quick-jump, .notice, .sysmon, .spotify, .chat-more, .task-detail, .tabs, .modal-footer) {
   backdrop-filter: var(--glass-blur);
 }
 
@@ -1476,7 +1503,7 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 
 .muted { color: var(--muted); }
 .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; }
-.error { color: var(--danger); font-size: 13px; }
+.error { color: var(--danger); font-size: 14px; }
 
 @media (max-width: 640px) {
   .legend { display: none; }
@@ -1494,7 +1521,7 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 .toolbar .restart-pending:hover:not([aria-disabled='true']) { color: var(--ink); }
 .toolbar .restart-pending[aria-disabled='true'] { cursor: help; }
 .toolbar .restart-pending.is-error { border-color: var(--ink-red); }
-.update-menu { position: absolute; top: calc(100% + 8px); left: 0; width: min(420px, calc(100vw - 24px)); max-height: min(70vh, 480px); overflow: auto; display: grid; gap: 8px; padding: 12px 14px; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2); font-size: 13px; z-index: 30; }
+.update-menu { position: absolute; top: calc(100% + 8px); left: 0; width: min(420px, calc(100vw - 24px)); max-height: min(70vh, 480px); overflow: auto; display: grid; gap: 8px; padding: 12px 14px; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2); font-size: 14px; z-index: 30; }
 .update-menu p { margin: 0; }
 .update-commits { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 12px; line-height: 1.4; }
 .update-commits code { color: var(--muted); }
@@ -1512,5 +1539,5 @@ button.link { background: none; border: none; padding: 0; color: var(--ink-blue)
 .bn-git-btn:hover, .bn-git-btn:focus-visible { border-color: var(--line); }
 .git-unc-modal { width: min(560px, 100%); }
 .git-unc-group { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); }
-.git-unc-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px; font-size: 13.5px; }
+.git-unc-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px; font-size: 12px; }
 .git-unc-also { color: var(--warn); }

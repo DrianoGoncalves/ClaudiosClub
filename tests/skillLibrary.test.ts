@@ -39,7 +39,7 @@ describe('biblioteca de skills', () => {
     await expect(saveLibrarySkill({ name: 'ok', description: '', body: '' }, lib)).rejects.toThrow('descrição');
     await saveLibrarySkill({ name: 'dupla', description: 'x', body: '' }, lib);
     await expect(saveLibrarySkill({ name: 'dupla', description: 'y', body: '' }, lib)).rejects.toThrow('já existe');
-    await expect(saveLibrarySkill({ name: 'banco', description: 'Conectar no banco', body: 'Use DB_PASSWORD=senhaForte123 no comando' }, lib)).rejects.toThrow('uma senha');
+    await expect(saveLibrarySkill({ name: 'banco', description: 'Conectar no banco', body: 'Use DB_PASSWORD=senhaForte123 no comando' }, lib)).rejects.toThrow('senha na variável DB_PASSWORD');
   });
 
   it('tirar da biblioteca manda para a lixeira (nada é apagado)', async () => {

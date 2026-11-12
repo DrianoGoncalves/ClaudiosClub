@@ -35,11 +35,23 @@ const DEFAULTS: AppConfig = {
   codexReview: false,
   // Vazio: o modelo padrão do Codex (com plano B pelo catálogo quando a conta recusa o escolhido).
   codexModel: '',
+  // Ligada: funcionários (Claude e Codex) e o perguntar_gpt podem pesquisar na web (WebSearch/WebFetch; no Codex, web_search). Não mexe no terminal: o do Codex segue sem rede pela sandbox, o do Claude não tem sandbox de rede.
+  internetAccess: true,
   // Freela sem ficha parado há 3 dias é arquivado sozinho (0 = nunca); arquivar não apaga nada.
   freelaArchiveDays: 3,
   freelaAutoArchived: {},
   workspaces: [],
   projectWorkspaces: {},
+  // Ligado: a fila só começa a próxima tarefa com RAM livre e sem passar do teto (ver resourceGate.ts).
+  resourceGate: true,
+  minFreeRamGb: 1.5,
+  // Desligada: segurar por CPU alta é escolha sua.
+  cpuGate: false,
+  // 0 = sem teto de conversas.
+  maxActiveChats: 0,
+  // Turno que passa do teto é interrompido (como o Parar) e você é avisado; 0 desliga cada teto.
+  maxTurnTools: 500,
+  maxTurnMinutes: 180,
 };
 
 /** Slug de modelo do Codex (`gpt-6-sol`): só letras, números e `. _ : -`; vazio = o padrão do Codex. Vai a `-m` do `codex exec`. */
@@ -49,6 +61,11 @@ const CODEX_MODEL = z
   .max(100, 'nome de modelo grande demais')
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$|^$/, 'nome de modelo inválido');
 const FREELA_DAYS = z.number().int('use um número inteiro de dias').min(0, 'mínimo 0 (nunca)').max(90, 'máximo de 90 dias');
+/** 0 desliga a parte de RAM do gate de recursos; senão, de 0,5 a 64 GB (passo livre). */
+const RAM_GB = z.number().refine((n) => n === 0 || (n >= 0.5 && n <= 64), 'use 0 (desliga) ou um valor de 0,5 a 64 GB');
+const MAX_CHATS = z.number().int('use um número inteiro').min(0, 'mínimo 0 (sem teto)').max(50, 'máximo de 50 conversas');
+const MAX_TURN_TOOLS = z.number().int('use um número inteiro').min(0, 'mínimo 0 (desligado)').max(100000, 'máximo de 100000 ferramentas');
+const MAX_TURN_MINUTES = z.number().int('use um número inteiro').min(0, 'mínimo 0 (desligado)').max(1440, 'máximo de 1440 minutos (24 h)');
 /** Quantas sessões arquivadas sozinhas o controle lembra (as mais recentes ficam). */
 const FREELA_RECORD_MAX = 500;
 
@@ -91,10 +108,17 @@ const ConfigFile = z
     showUserScope: z.boolean().optional().catch(undefined),
     codexReview: z.boolean().optional().catch(undefined),
     codexModel: CODEX_MODEL.optional().catch(undefined),
+    internetAccess: z.boolean().optional().catch(undefined),
     freelaArchiveDays: FREELA_DAYS.optional().catch(undefined),
     freelaAutoArchived: z.record(z.string(), z.unknown()).optional().catch(undefined),
     workspaces: z.array(z.unknown()).optional().catch(undefined),
     projectWorkspaces: z.record(z.string(), z.unknown()).optional().catch(undefined),
+    resourceGate: z.boolean().optional().catch(undefined),
+    minFreeRamGb: RAM_GB.optional().catch(undefined),
+    cpuGate: z.boolean().optional().catch(undefined),
+    maxActiveChats: MAX_CHATS.optional().catch(undefined),
+    maxTurnTools: MAX_TURN_TOOLS.optional().catch(undefined),
+    maxTurnMinutes: MAX_TURN_MINUTES.optional().catch(undefined),
   })
   .passthrough();
 
@@ -132,6 +156,8 @@ export const ConfigPatch = z.object({
   codexReview: z.boolean().optional(),
   /** Modelo do Codex para o `perguntar_gpt`; vazio volta ao padrão do Codex. */
   codexModel: CODEX_MODEL.optional(),
+  /** "Permitir acesso à internet": funcionários (Claude e Codex) e o perguntar_gpt pesquisam na web. */
+  internetAccess: z.boolean().optional(),
   /** Dias parado até o freela (conversa sem ficha) ser arquivado sozinho; 0 = nunca. */
   freelaArchiveDays: FREELA_DAYS.optional(),
   /** Por id de projeto: uma cor troca a da sala; null volta à padrão. Os outros projetos ficam como estão. */
@@ -144,6 +170,15 @@ export const ConfigPatch = z.object({
     .optional(),
   /** Por id de projeto: % da cota de 7 dias (1–100); null tira o orçamento. Os outros ficam como estão. */
   projectBudgets: z.record(z.string().min(1).max(200), z.number().int('use um número inteiro').min(1).max(100).nullable()).optional(),
+  /** Gate de recursos da fila (só o início automático; ver resourceGate.ts). */
+  resourceGate: z.boolean().optional(),
+  minFreeRamGb: RAM_GB.optional(),
+  cpuGate: z.boolean().optional(),
+  maxActiveChats: MAX_CHATS.optional(),
+  /** Teto de ferramentas por turno (0 = desligado). */
+  maxTurnTools: MAX_TURN_TOOLS.optional(),
+  /** Teto de minutos por turno (0 = desligado). */
+  maxTurnMinutes: MAX_TURN_MINUTES.optional(),
 });
 
 export const ArchiveRequest = z.object({
@@ -186,8 +221,15 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     showUserScope: d.showUserScope ?? DEFAULTS.showUserScope,
     codexReview: d.codexReview ?? DEFAULTS.codexReview,
     codexModel: d.codexModel ?? DEFAULTS.codexModel,
+    internetAccess: d.internetAccess ?? DEFAULTS.internetAccess,
     freelaArchiveDays: d.freelaArchiveDays ?? DEFAULTS.freelaArchiveDays,
     freelaAutoArchived: readFreelaRecord(d.freelaAutoArchived),
+    resourceGate: d.resourceGate ?? DEFAULTS.resourceGate,
+    minFreeRamGb: d.minFreeRamGb ?? DEFAULTS.minFreeRamGb,
+    cpuGate: d.cpuGate ?? DEFAULTS.cpuGate,
+    maxActiveChats: d.maxActiveChats ?? DEFAULTS.maxActiveChats,
+    maxTurnTools: d.maxTurnTools ?? DEFAULTS.maxTurnTools,
+    maxTurnMinutes: d.maxTurnMinutes ?? DEFAULTS.maxTurnMinutes,
     ...readWorkspaces(d.workspaces, d.projectWorkspaces),
   };
 }

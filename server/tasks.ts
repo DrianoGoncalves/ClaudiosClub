@@ -2,14 +2,16 @@ import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { TASK_STATUSES, type Autonomy, type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type HeldMessage, type StaffProfile, type Task, type TaskCode, type TaskDelivery, type TaskFallback, type TaskHandoff, type TaskQuestion, type TaskStatus, type TaskSummary, type TestRun, type UsageStopHit } from '../shared/model';
+import { TASK_STATUSES, type Autonomy, type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type HeldMessage, type StaffProfile, type Task, type TaskCode, type TaskDelivery, type TaskFallback, type TaskHandoff, type TaskQuestion, type TaskStatus, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
 import type { SecondOpinionInput } from './adapters/codex';
 import { buildHandoff, collectGit, oldConversationExtract } from './fallbackHandoff';
 import { DELIVERY_SUMMARY_MAX, parseDeliveryNotes } from './deliveryNotes';
 import { hasGuide } from './projectGuide';
 import type { LimitHit } from './chat/usageLimit';
 import { CLOSING_LINE, RESUME_TEXT } from './chat/items';
+import { ChatClosingError } from './chat/manager';
 import type { Caller } from './callers';
+import type { Reservation } from './resourceGate';
 import { writeAtomic } from './staff/store';
 import { checkpoint, CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
 import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf, limitReading, limitOfStop, otherEngine, overrideOfFallback, shouldFallback, type OtherEngineReading } from './taskFallback';
@@ -104,6 +106,13 @@ export interface TaskServiceDeps {
   branchFor: (projectPath: string, profile: StaffProfile) => Promise<string | null>;
   /** Alguma conversa dele, neste projeto, no Claudio’s Club está trabalhando (turno ou segundo plano), fora `exceptSession`. */
   isWorking?: (projectId: string, staffId: string, exceptSession?: string) => boolean;
+  /** O servidor está fechando para reiniciar: fim de turno não conclui tarefa (a órfã do boot retoma). */
+  closing?: () => boolean;
+  /**
+   * Gate de recursos da fila (ver resourceGate.ts): só a partida automática da próxima tarefa passa por ele (começar à mão não).
+   * Ok, devolve o `release`, chamado ao fim da partida (sempre). Segurada, a tarefa fica na fila com o motivo.
+   */
+  resourceGate?: () => Promise<Reservation>;
   /** Manda na conversa que já existe (os ajustes guardados). */
   sendTo?: (projectId: string, sessionId: string, staffId: string, text: string, images: string[], origin?: string) => Promise<string>;
   /** Segunda opinião de outro modelo sobre o diff (o Codex, ver adapters/codex.ts); sem ele, indisponível. */
@@ -113,6 +122,11 @@ export interface TaskServiceDeps {
    * não é entrega: a tarefa fica em "fazendo" até o "continue" rodar e o turno terminar de verdade.
    */
   awaitingLimit?: (sessionId: string) => Promise<boolean>;
+  /**
+   * O turno desta conversa parou no teto de ferramentas ou de minutos (ver turnCap.ts) e ninguém mandou mensagem depois? Então
+   * não é entrega nem órfã: a tarefa vai para Aguardar, com o motivo.
+   */
+  turnCap?: (sessionId: string) => TurnCapHit | null;
   /** Põe a conversa no motor secundário (ver `restoreFallbacks`): só na memória do servidor. */
   setOverride?: (sessionId: string, override: EngineOverride) => void;
   /** Limite agora de um motor: LimitHit, null (sem limite) ou 'unknown' (sem leitura: não troca às cegas). */
@@ -332,7 +346,7 @@ export class TaskService {
       const next = withPatch(t, patch, 'you');
       // Fora da fila: você tirou, trocou o responsável ou levou o cartão para outra coluna.
       const leaves = patch.queued === false || next.staffId !== t.staffId || next.status !== 'todo';
-      return leaves && next.queuedAt ? { ...next, queuedAt: null, queuedForce: false } : next;
+      return leaves && next.queuedAt ? { ...next, queuedAt: null, queuedForce: false, resourceWait: null } : next;
     });
     // Saiu de "fazendo" à mão (ou mudou de dono): quem estava com ela pode pegar a próxima.
     for (const s of new Set([before?.staffId, out?.staffId])) if (s) void this.kick(projectId, s);
@@ -365,7 +379,7 @@ export class TaskService {
         if (!asWorker && !asReviewer) return t;
         released++;
         if (!asWorker) return noted({ ...t, reviewerId: null }, 'revisor excluído');
-        const loose: Task = { ...t, staffId: null, queuedAt: null, queuedForce: false, ...(asReviewer && { reviewerId: null }) };
+        const loose: Task = { ...t, staffId: null, queuedAt: null, queuedForce: false, resourceWait: null, ...(asReviewer && { reviewerId: null }) };
         // Em revisão, a conversa de trabalho continua (sessionId fica). Nas outras, a conversa e o plano são da
         // pessoa que saiu e as mensagens guardadas iam para ela: zerados, quem pegar a tarefa começa do zero.
         if (t.status === 'review' || t.status === 'waiting') return noted(loose, 'responsável excluído');
@@ -402,10 +416,13 @@ export class TaskService {
         try {
           return await this.startNow(projectId, taskId, profile, force);
         } catch (err) {
-          // Limite de consumo na hora (da empresa, ou o do motor da ficha sem troca): não começou, mas fica na fila dele
-          // (o tick tenta de novo). Outros erros sobem.
-          if (!(err instanceof UsageStopError || err instanceof LimitWaitError)) throw err;
-          const why = `não começou: ${err.message}; na fila de ${profile.name}, começa quando o consumo baixar`;
+          // Limite de consumo na hora (da empresa, ou o do motor da ficha sem troca), ou o servidor reiniciando: não começou,
+          // mas fica na fila dele (o tick tenta de novo; no reinício, o tick do boot). Outros erros sobem.
+          if (!(err instanceof UsageStopError || err instanceof LimitWaitError || err instanceof ChatClosingError)) throw err;
+          const why =
+            err instanceof ChatClosingError
+              ? `não começou: o Claudio’s Club está reiniciando; na fila de ${profile.name}, começa quando o servidor voltar`
+              : `não começou: ${err.message}; na fila de ${profile.name}, começa quando o consumo baixar`;
           return this.change(projectId, taskId, (t) => enqueue(t, why));
         }
       }
@@ -442,6 +459,8 @@ export class TaskService {
         : await this.deps.send(projectId, profile.id, text, force);
     } catch (err) {
       if (!s) throw err;
+      // Reiniciando: não foi o motor secundário que falhou; quem chamou põe na fila (no meio do turno, ver `sw`).
+      if (err instanceof ChatClosingError && !sw) throw err;
       const why = `não abriu no motor secundário: ${(err as Error).message}`;
       // No meio do turno, a antiga já foi parada: a tarefa vai para Aguardar com o motivo, e quem decide é você.
       if (sw) {
@@ -462,7 +481,7 @@ export class TaskService {
     return this.change(projectId, taskId, (t) => {
       // A troca no meio do turno não muda a fase: a tarefa segue em "fazendo" ou "planejando", como estava.
       const next: TaskStatus = sw ? t.status : profile.autonomy === 'plan' ? 'planning' : 'doing';
-      const started = { ...t, sessionId, branch: branch ?? t.branch, queuedAt: null, queuedForce: false, ...(s && { fallback: s.fallback }) };
+      const started = { ...t, sessionId, branch: branch ?? t.branch, queuedAt: null, queuedForce: false, resourceWait: null, ...(s && { fallback: s.fallback }) };
       const moving = moved(started, next, 'auto', `com ${profile.name}`);
       return s ? noted(moving, s.note) : moving;
     });
@@ -701,6 +720,7 @@ export class TaskService {
    * funcionário, ele pode pegar o que espera.
    */
   async onIdle(sessionId: string, projectId: string | null, staffId: string | null): Promise<void> {
+    if (this.deps.closing?.()) return;
     await this.workDone(sessionId);
     if (projectId && staffId) await this.kick(projectId, staffId);
   }
@@ -737,6 +757,9 @@ export class TaskService {
       if (!t?.sessionId || t.status !== 'doing' || t.staffId !== staffId || isWorking(projectId, staffId)) return false;
       // Dúvida ao gestor ou a você: a conversa parou de propósito, à espera da resposta. Não é órfã.
       if (t.question?.status === 'open' || t.question?.status === 'escalated') return false;
+      // Parou no teto (o motivo ficou guardado antes da interrupção): não é órfã nem vai para revisão. Vai para Aguardar.
+      const cap = this.deps.turnCap?.(t.sessionId);
+      if (cap) return !!(await this.parkForCap(projectId, taskId, t.sessionId, cap));
       // A retomada vale para esta ida a "fazendo": se ela saiu e voltou depois, conta de novo.
       const resumed = t.resumedAt && !t.history.some((h) => h.at > t.resumedAt! && h.status !== 'doing') ? t.resumedAt : null;
       if (now.getTime() - Date.parse(resumed ?? t.updatedAt) < ORPHAN_MS) return false;
@@ -759,6 +782,8 @@ export class TaskService {
         await this.deps.sendTo(projectId, t.sessionId, staffId, RESUME_TEXT, []);
         await this.change(projectId, taskId, (x) => noted({ ...x, resumedAt: at }, 'conversa parou sem terminar: retomada'));
       } catch (err) {
+        // Reiniciando: a retomada não chegou e não conta como tentativa; o tick do boot tenta de novo.
+        if (err instanceof ChatClosingError) return false;
         // Conta como a tentativa: na próxima, sem conversa trabalhando, vai para revisão.
         await this.change(projectId, taskId, (x) => noted({ ...x, resumedAt: at }, `conversa parou sem terminar; não deu para retomar: ${(err as Error).message}`));
       }
@@ -810,13 +835,33 @@ export class TaskService {
     if (!next) return;
     const profile = await this.deps.readProfile(projectId, staffId);
     if (!profile) return;
+    // Só a partida automática passa pelo gate: começar à mão (start) ignora. Segurada, a tarefa fica na fila com o motivo.
+    const gate = await this.deps.resourceGate?.();
+    if (gate && !gate.ok) return this.holdForResources(projectId, next.id, gate.reason);
     try {
+      // Passou: a espera acabou (sai já, para não ficar "aguardando" se o limite de consumo barrar a partida logo depois).
+      if (next.resourceWait) await this.change(projectId, next.id, (t) => ({ ...t, resourceWait: null }));
       await this.startNow(projectId, next.id, profile, !!next.queuedForce);
     } catch (err) {
       // Continua na fila (ex.: limite de consumo); "Começar" de novo tenta já. Sem repetir a nota a cada tick.
       const why = `não começou: ${(err as Error).message}`;
       await this.change(projectId, next.id, (t) => (t.history.at(-1)?.note === why ? t : noted(t, why)));
+    } finally {
+      gate?.release();
     }
+  }
+
+  /**
+   * O gate de recursos segurou a partida: a tarefa fica na fila com o motivo e desde quando (`resourceWait`). A nota no
+   * histórico só quando o estado muda (de liberado para segurado); o tick repete o motivo sem gravar nota nova.
+   */
+  private async holdForResources(projectId: string, taskId: string, reason: string): Promise<void> {
+    const at = new Date().toISOString();
+    await this.change(projectId, taskId, (t) => {
+      if (t.resourceWait?.reason === reason) return t;
+      const next = { ...t, resourceWait: { reason, since: t.resourceWait?.since ?? at } };
+      return t.resourceWait ? next : noted(next, `aguardando recursos: ${reason}`);
+    });
   }
 
   /** O código da tarefa: onde está, o que mudou e se dá para mesclar. */
@@ -1077,6 +1122,8 @@ export class TaskService {
    * anota que a resposta chegou (a tarefa não muda de coluna sozinha por isso).
    */
   async onTurnDone(sessionId: string): Promise<void> {
+    // Fechando: nada conclui (ver `onIdle`). A tarefa fica em "fazendo" e a órfã do boot retoma a conversa.
+    if (this.deps.closing?.()) return;
     await this.onReviewTurn(sessionId);
     await this.onSession(sessionId, 'deploy', (t) => noteHandoff(t, 'deploy', 'deploy respondeu'));
     await this.workDone(sessionId);
@@ -1198,6 +1245,13 @@ export class TaskService {
   private async workDone(sessionId: string): Promise<void> {
     const where = await this.where(sessionId);
     if (where?.role !== 'work') return;
+    // Parou no teto de ferramentas ou de minutos: não é entrega (nem revisão). Vai para Aguardar, com o motivo, e a fila anda.
+    const cap = this.deps.turnCap?.(sessionId);
+    if (cap) {
+      const parked = await this.parkForCap(where.projectId, where.taskId, sessionId, cap);
+      if (parked?.staffId) void this.kick(where.projectId, parked.staffId);
+      return;
+    }
     // Parou no limite de uso com o "continue" agendado: não é entrega. Fica em "fazendo", ninguém é avisado
     // e a fila não anda (a tarefa segue ocupando o funcionário). Erro ao perguntar: vale como hoje, entrega.
     if (await this.deps.awaitingLimit?.(sessionId).catch(() => false)) return;
@@ -1230,6 +1284,21 @@ export class TaskService {
     void this.kick(where.projectId, staffId);
     // Fora da vez dele: a revisão automática (com revisor marcado) é pedida depois da entrega.
     if (deliveredTask) await this.autoReview(where.projectId, deliveredTask);
+  }
+
+  /**
+   * Turno da tarefa parou no teto: ela sai de "fazendo" para Aguardar, com o motivo (sem commit, sem revisão, sem aviso ao
+   * gestor). Só se ainda estiver "fazendo" com esta conversa. Devolve a tarefa, se foi para Aguardar agora.
+   */
+  private async parkForCap(projectId: string, taskId: string, sessionId: string, hit: TurnCapHit): Promise<Task | null> {
+    const why = `turno parado: passou de ${hit.limit} ${hit.kind === 'tools' ? 'ferramentas' : 'minutos'}`;
+    let parked: Task | null = null;
+    await this.change(projectId, taskId, (t) => {
+      if (t.status !== 'doing' || t.sessionId !== sessionId) return t;
+      parked = moved({ ...t, queuedAt: null, waitReason: why }, 'waiting', 'auto', why);
+      return parked;
+    });
+    return parked;
   }
 
   /**

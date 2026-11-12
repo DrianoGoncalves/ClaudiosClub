@@ -12,6 +12,7 @@ import {
   createGptMcp,
   gptMcpCommand,
   gptMcpServerConfig,
+  parseVerdict,
   runGptMcpStdio,
   spawnCodex,
   sweepStaleTemps,
@@ -92,12 +93,12 @@ describe('perguntar_gpt: argumentos do codex exec', () => {
   let opts: Parameters<typeof buildAskArgs>[0];
   let args: string[];
   beforeAll(() => {
-    opts = { cwd: proj, projectPath: main, home, mycoHome, out: '/tmp/x/resposta.md', effort: 'high', model: null };
+    opts = { cwd: proj, projectPath: main, home, mycoHome, out: '/tmp/x/resposta.md', effort: 'high', model: null, internetAccess: false };
     args = buildAskArgs(opts);
   });
   const has = (...seq: string[]) => args.join('\u0000').includes(seq.join('\u0000'));
 
-  it('só leitura e sem rede, pelo codexSafetyArgs; nunca -s, --dangerously nem rede liberada', () => {
+  it('só leitura e terminal sem rede, pelo codexSafetyArgs; nunca -s, --dangerously nem rede liberada', () => {
     expect(args[0]).toBe('exec');
     expect(args).toEqual(expect.arrayContaining(['--ignore-user-config', '--ephemeral', '--skip-git-repo-check']));
     expect(has('-c', 'features.apps=false')).toBe(true);
@@ -107,6 +108,16 @@ describe('perguntar_gpt: argumentos do codex exec', () => {
     expect(has('-c', 'permissions.mycodeny.network={enabled=false}')).toBe(true);
     expect(args).not.toContain('network_proxy');
     expect(args.some((a) => /^(-s|--sandbox|--full-auto|--dangerously\S*|--add-dir)$/.test(a) || /workspace|danger-full-access|:workspace/.test(a))).toBe(false);
+  });
+
+  it('a busca na web segue "Permitir acesso à internet": desligada com false, live com true, e a sandbox continua só leitura', () => {
+    expect(has('-c', 'web_search="disabled"')).toBe(true);
+    expect(args).not.toContain('web_search="live"');
+    const on = buildAskArgs({ ...opts, internetAccess: true });
+    expect(on).toEqual(expect.arrayContaining(['-c', 'web_search="live"']));
+    expect(on).not.toContain('web_search="disabled"');
+    expect(on).toEqual(expect.arrayContaining(['-c', 'permissions.mycodeny.extends=":read-only"', '-c', 'permissions.mycodeny.network={enabled=false}']));
+    expect(on).not.toContain('network_proxy');
   });
 
   it('nega os segredos: ~/.ssh, o cofre do Claudio’s Club e o .vps da sessão e o do projeto (worktree)', () => {
@@ -128,6 +139,67 @@ describe('perguntar_gpt: argumentos do codex exec', () => {
     const q = '$(rm -rf ~) ; `x` "aspas" \'simples\' PROMPT_GPT';
     expect(buildAskArgs(opts).join(' ')).not.toContain('rm -rf');
     expect(buildAskPrompt({ pergunta: q, contexto: 'ctx' })).toContain(q);
+  });
+});
+
+describe('perguntar_gpt: veredito, hipótese e log', () => {
+  it('o prompt pede o veredito na primeira linha; a hipótese só entra quando informada, entre a pergunta e o contexto', () => {
+    const sem = buildAskPrompt({ pergunta: 'Q1' });
+    expect(sem).toContain('1) Primeira linha exatamente `Veredito: CONCORDO`');
+    expect(sem).not.toContain('## Hipótese do chamador');
+    const com = buildAskPrompt({ pergunta: 'Q1', hipotese: 'H1', contexto: 'C1' });
+    expect(com).toContain('## Hipótese do chamador (a atacar, não é fato)\nH1');
+    expect(com.indexOf('## Pergunta')).toBeLessThan(com.indexOf('## Hipótese do chamador'));
+    expect(com.indexOf('## Hipótese do chamador')).toBeLessThan(com.indexOf('## Contexto'));
+  });
+
+  it('a hipótese vai ao GPT e passa pelo filtro de segredos (com segredo, nada roda)', async () => {
+    const f = fake(() => ({ answer: 'ok' }));
+    const s = server(f.run);
+    expect((await ask(s, { pergunta: 'q', hipotese: 'acho que é JSON' })).isError).toBe(false);
+    expect(f.execs()[0]!.input).toContain('## Hipótese do chamador (a atacar, não é fato)\nacho que é JSON');
+    const sent = await ask(s, { pergunta: 'q', hipotese: 'minha chave é sk-ant-api03-Zx9Qw7Lm2Kp4Rt8Vb1Nc5Hd3Jf6' });
+    expect(sent).toMatchObject({ isError: true });
+    expect(sent.text).toContain('não mandei ao GPT');
+    expect(f.execs()).toHaveLength(1);
+  });
+
+  it('parseVerdict: os três vereditos, null sem a linha nas primeiras linhas, e RESSALVAS antes de CONCORDO', () => {
+    expect(parseVerdict('Veredito: CONCORDO\n\nresto')).toBe('concordo');
+    expect(parseVerdict('Veredito: DISCORDO')).toBe('discordo');
+    expect(parseVerdict('**Veredito:** concordo com ressalvas')).toBe('ressalvas');
+    expect(parseVerdict('VEREDITO: CONCORDO COM RESSALVAS')).toBe('ressalvas');
+    expect(parseVerdict('Veredito: talvez')).toBeNull();
+    expect(parseVerdict('Concordo, no fim.')).toBeNull();
+    expect(parseVerdict('1\n2\n3\n4\n5\nVeredito: CONCORDO')).toBeNull();
+  });
+
+  it('log: uma linha JSON por chamada, sucesso ou falha, sem o texto da pergunta, da hipótese nem da resposta', async () => {
+    const log = path.join(mycoHome, 'logs', 'gpt-consultas.jsonl');
+    await fs.rm(log, { force: true });
+    const pergunta = 'PERGUNTA-SECRETA-XYZ';
+    const hipotese = 'HIPOTESE-SECRETA-XYZ';
+    const resposta = 'Veredito: DISCORDO\nTRECHO-SECRETO-DA-RESPOSTA';
+    const f = fake(() => ({ answer: resposta, stderr: 'model: gpt-6-astra\n' }));
+    const s = server(f.run);
+    await ask(s, { pergunta, hipotese, esforco: 'xhigh' });
+    await updateConfig({ codexReview: false }, configFile);
+    await ask(s, { pergunta: 'segunda' });
+    await updateConfig({ codexReview: true }, configFile);
+    const [a, b] = (await fs.readFile(log, 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(a).toEqual({
+      ts: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+      project: main,
+      effort: 'xhigh',
+      model: 'gpt-6-astra',
+      ok: true,
+      verdict: 'discordo',
+      questionChars: pergunta.length + hipotese.length,
+      answerChars: resposta.length,
+    });
+    expect(b).toMatchObject({ ok: false, verdict: null, model: null, answerChars: 0, effort: 'high' });
+    const texto = await fs.readFile(log, 'utf8');
+    for (const secreto of [pergunta, hipotese, 'TRECHO-SECRETO-DA-RESPOSTA']) expect(texto).not.toContain(secreto);
   });
 });
 
@@ -336,7 +408,7 @@ describe('perguntar_gpt: protocolo MCP', () => {
     expect(await s.handle({ jsonrpc: '2.0', method: 'notifications/initialized' })).toBeNull();
     const list = (await s.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' })) as { result: { tools: typeof TOOLS } };
     expect(list.result.tools.map((t) => t.name)).toEqual(['perguntar_gpt']);
-    expect(list.result.tools[0]!.inputSchema).toMatchObject({ required: ['pergunta'], properties: { pergunta: {}, contexto: {}, esforco: {} } });
+    expect(list.result.tools[0]!.inputSchema).toMatchObject({ required: ['pergunta'], properties: { pergunta: {}, hipotese: {}, contexto: {}, esforco: {} } });
     const call = (await s.handle({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'perguntar_gpt', arguments: { pergunta: 'q' } } })) as { result: { content: Array<{ text: string }> } };
     expect(call.result.content[0]!.text).toContain('Resposta do GPT');
     expect(await s.handle({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'outra' } })).toMatchObject({ error: { code: -32602 } });

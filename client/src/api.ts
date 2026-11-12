@@ -347,8 +347,18 @@ export const api = {
     codexReview?: boolean;
     /** Modelo do Codex para perguntar ao GPT; vazio = o padrão do Codex. */
     codexModel?: string;
+    /** Permitir acesso à internet: funcionários (Claude e Codex) e o perguntar_gpt pesquisam na web. */
+    internetAccess?: boolean;
     /** Dias parado até o Freela (conversa sem ficha) ser arquivado sozinho; 0 = nunca. */
     freelaArchiveDays?: number;
+    /** Gate de recursos da fila (só o início automático): liga/desliga, RAM livre mínima em GB (0 ou 0,5–64), CPU, teto de conversas (0–50, 0 = sem). */
+    resourceGate?: boolean;
+    minFreeRamGb?: number;
+    cpuGate?: boolean;
+    maxActiveChats?: number;
+    /** Freio de turno em laço: ferramentas (0–100000) e minutos (0–1440) por turno; 0 desliga. */
+    maxTurnTools?: number;
+    maxTurnMinutes?: number;
     /** Só os projetos enviados mudam; null volta à cor padrão. */
     projectColors?: Record<string, ProjectColor | null>;
     /** Só os projetos enviados mudam; vazio ou null volta ao nome da pasta. */
@@ -547,6 +557,15 @@ export const api = {
    */
   runProjectGuide: (projectId: string, action: GuideAction, staffId: string) =>
     post<GuideRun>(`/api/projects/${projectId}/guide/run`, { action, staffId }),
+  /**
+   * Gera a vitrine num gerador oculto do servidor (sem funcionário nem conversa): `{ started }` e o andamento sai em
+   * `showcaseStatus`. Recusa com o texto do servidor: 409 (já gerando), 429 (limite de uso), 503 (sem recursos/reiniciando).
+   */
+  runShowcase: (projectId: string) => post<ShowcaseRun>(`/api/projects/${projectId}/guide/run`, { action: 'showcase' }),
+  /** Andamento da geração da vitrine; fica em memória do servidor (depois de reiniciar volta a `idle`). */
+  showcaseStatus: (projectId: string) => get<ShowcaseStatus>(`/api/projects/${projectId}/showcase/status`),
+  /** A vitrine em HTML (abre em outra aba; o servidor serve com CSP sandbox). 404 se ainda não existe. */
+  showcaseUrl: (projectId: string) => `/api/projects/${projectId}/showcase`,
   accountRules: () => get<{ path: string; text: string | null }>('/api/account/rules'),
   saveAccountRules: (text: string) => post<{ path: string; text: string | null }>('/api/account/rules', { text }),
 };
@@ -562,10 +581,24 @@ export interface ProjectGuide {
   ignored: boolean;
   lastCheck?: { sha: string; at: string };
   changedSince?: number;
+  /** Vitrine (VITRINE.html na raiz); ausente em servidor sem a função. */
+  showcase?: { path: string; exists: boolean; lastCheck?: { sha: string; at: string } };
 }
 
 /** Resposta do pedido ao guia: a conversa aberta, ou nada aberto (`skipped`) com o motivo em texto. */
 export type GuideRun = { sessionId: string; staffId: string } | { skipped: true; reason: string };
+
+/** Pedido da vitrine: gerando em segundo plano (`started`), ou nada a fazer (`skipped`, sem mudanças desde a última) com o motivo. */
+export type ShowcaseRun = { started: true } | { skipped: true; reason: string };
+
+/** Andamento da geração da vitrine. `error` só em `failed` (texto do servidor); `costUsd` ausente se o motor não informou. */
+export interface ShowcaseStatus {
+  state: 'idle' | 'running' | 'done' | 'failed';
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
+  costUsd?: number;
+}
 
 /** Item da árvore de arquivos do projeto; `path` relativo à raiz, com "/". `locked` = segredo: listado, mas não abre. */
 export interface FileEntry {

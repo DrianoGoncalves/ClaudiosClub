@@ -424,7 +424,14 @@ export function BoardView(props: BoardViewProps) {
             showUserScope={config?.showUserScope ?? null}
             codexReview={config?.codexReview ?? null}
             codexModel={config?.codexModel ?? ''}
+            internetAccess={config?.internetAccess ?? null}
             freelaArchiveDays={config?.freelaArchiveDays ?? null}
+            queueGate={
+              config
+                ? { resourceGate: config.resourceGate, minFreeRamGb: config.minFreeRamGb, cpuGate: config.cpuGate, maxActiveChats: config.maxActiveChats }
+                : null
+            }
+            turnCap={config ? { maxTurnTools: config.maxTurnTools, maxTurnMinutes: config.maxTurnMinutes } : null}
             onConfig={props.onConfig}
             // O demo não tem workspace: volta para "Todos", senão a sala dele ficaria escondida.
             onOpenProject={(projectId) => {

@@ -781,7 +781,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
         </fieldset>
 
         {showServers ? (
-          <fieldset>
+          <fieldset id="staff-servers">
             <legend>{t('staff.sshLegend')}</legend>
             <p className="muted small">
               {t('office.hireServersNote')}{' '}
@@ -820,7 +820,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             </div>
           </fieldset>
         ) : (
-          <p className="muted small">
+          <p className="muted small" id="staff-servers">
             <button type="button" className="link" onClick={() => setShowServers(true)}>
               {t('staff.addSsh')}
             </button>

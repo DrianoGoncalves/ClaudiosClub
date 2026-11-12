@@ -112,6 +112,10 @@ Interface em português, inglês e espanhol. O projeto demo traz uma cafeteria c
 </tr>
 </table>
 
+**Funciona em segundo plano.** O trabalho roda no servidor do Claudio's Club, não no navegador: fechar a aba não para os funcionários. A fila anda, revisões e despertadores seguem, e o que precisa de você (permissões, planos, perguntas) fica em **precisa de mim** até você voltar.
+
+**Freios contra laço:** teto de ferramentas e de minutos por turno, e limite de mensagens entre funcionários. Quando um bate, a conversa para e você é avisado.
+
 ## Como o trabalho anda
 
 ```mermaid

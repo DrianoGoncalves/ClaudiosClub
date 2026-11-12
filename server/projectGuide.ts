@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { writeAtomic } from './staff/store';
+import { ProjectFileError } from './projectFiles';
 import { changedFiles } from './taskCode';
 
 // Guia do projeto (SPEC.md, na raiz da pasta do projeto). Se existe, a ficha de todo funcionário dele manda
@@ -11,6 +12,12 @@ import { changedFiles } from './taskCode';
 export const GUIDE_PATH = 'SPEC.md';
 /** Última conferência do guia (draft ou drift): o HEAD da hora e a data. Fica na pasta do Club do projeto. */
 export const GUIDE_CHECK_PATH = path.join('.myco', 'guide.json');
+
+/** Vitrine do projeto (ação `showcase` do guia): página única, na raiz. Base da conferência em arquivo próprio. */
+export const SHOWCASE_PATH = 'VITRINE.html';
+export const SHOWCASE_CHECK_PATH = path.join('.myco', 'showcase.json');
+/** Acima disso, a vitrine não é servida (413). */
+export const MAX_SHOWCASE_BYTES = 5 * 1024 * 1024;
 
 /** Base da conferência: o sha do HEAD quando o guia foi conferido, e a hora (ISO). */
 export interface GuideCheck {
@@ -30,6 +37,14 @@ export interface GuideStatus {
   lastCheck?: GuideCheck;
   /** Arquivos mudados desde `lastCheck.sha` (inclui não rastreados; ignora `.myco/`). Só com `lastCheck`. */
   changedSince?: number;
+  /** Vitrine (VITRINE.html): existe, e a última conferência dela (base válida, ver showcase.json). */
+  showcase: ShowcaseStatus;
+}
+
+export interface ShowcaseStatus {
+  path: string;
+  exists: boolean;
+  lastCheck?: GuideCheck;
 }
 
 /** Já existe um SPEC.md: a criação não sobrescreve. A rota responde 409 com `{ error: 'exists' }`. */
@@ -51,6 +66,32 @@ export async function hasGuide(root: string): Promise<boolean> {
   return fs.stat(path.join(root, GUIDE_PATH)).then((st) => st.isFile(), () => false);
 }
 
+/** A vitrine está lá como arquivo comum (link simbólico conta como ausente, igual à leitura de `readShowcase`). */
+export async function hasShowcase(root: string): Promise<boolean> {
+  return fs.lstat(path.join(root, SHOWCASE_PATH)).then((st) => st.isFile(), () => false);
+}
+
+/**
+ * Lê a vitrine para a tela. `null`: não existe, ou não é arquivo comum (link simbólico fica de fora). Acima de
+ * MAX_SHOWCASE_BYTES: 413. O tamanho vem do lstat, antes de ler.
+ */
+export async function readShowcase(root: string): Promise<Buffer | null> {
+  const file = path.join(root, SHOWCASE_PATH);
+  const st = await fs.lstat(file).catch(() => null);
+  if (!st || !st.isFile()) return null;
+  if (st.size > MAX_SHOWCASE_BYTES) throw new ProjectFileError(413, `${SHOWCASE_PATH} grande demais (máx. 5 MB)`);
+  const bytes = await fs.readFile(file).catch(() => null);
+  if (bytes && unsafeShowcase(bytes.toString('utf8'))) {
+    throw new ProjectFileError(422, 'VITRINE.html tem <link>, <base> ou <meta http-equiv>: esses elementos fogem da CSP. Gere de novo pelo botão do guia.');
+  }
+  return bytes;
+}
+
+/** `<link>`, `<base>` ou `<meta http-equiv>` na vitrine: dns-prefetch/preconnect e meta refresh escapam da CSP. */
+export function unsafeShowcase(html: string): boolean {
+  return /<link[\s>\/]/i.test(html) || /<base[\s>\/]/i.test(html) || /<meta\b[^>]*http-equiv/i.test(html);
+}
+
 /** HEAD da pasta (git). Sem git ou sem commit: null. */
 export async function headSha(root: string): Promise<string | null> {
   const out = await git(root, ['rev-parse', '--verify', '-q', 'HEAD']);
@@ -58,9 +99,9 @@ export async function headSha(root: string): Promise<string | null> {
   return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
 }
 
-/** Lê `.myco/guide.json`. Arquivo ausente ou fora do formato: null. */
-async function readCheck(root: string): Promise<GuideCheck | null> {
-  const raw = await fs.readFile(path.join(root, GUIDE_CHECK_PATH), 'utf8').catch(() => null);
+/** Lê a base (`.myco/guide.json`, ou o `rel` dado). Arquivo ausente ou fora do formato: null. */
+async function readCheck(root: string, rel: string = GUIDE_CHECK_PATH): Promise<GuideCheck | null> {
+  const raw = await fs.readFile(path.join(root, rel), 'utf8').catch(() => null);
   if (raw === null) return null;
   try {
     const data = JSON.parse(raw) as Partial<GuideCheck>;
@@ -71,16 +112,16 @@ async function readCheck(root: string): Promise<GuideCheck | null> {
 }
 
 /** Base válida: está gravada e o sha ainda existe no repo (um rebase pode tê-lo levado). Senão, null. */
-export async function validCheck(root: string): Promise<GuideCheck | null> {
-  const check = await readCheck(root);
+export async function validCheck(root: string, rel: string = GUIDE_CHECK_PATH): Promise<GuideCheck | null> {
+  const check = await readCheck(root, rel);
   if (!check) return null;
   const exists = (await git(root, ['cat-file', '-e', `${check.sha}^{commit}`])) !== null;
   return exists ? check : null;
 }
 
-/** Grava a base com o HEAD atual. Gravação atômica (a do Club), dentro de `.myco/`. */
-export async function recordCheck(root: string, sha: string): Promise<void> {
-  const file = path.join(root, GUIDE_CHECK_PATH);
+/** Grava a base com o HEAD atual (em `rel`, por padrão `.myco/guide.json`). Gravação atômica (a do Club), dentro de `.myco/`. */
+export async function recordCheck(root: string, sha: string, rel: string = GUIDE_CHECK_PATH): Promise<void> {
+  const file = path.join(root, rel);
   await fs.mkdir(path.dirname(file), { recursive: true });
   const check: GuideCheck = { sha, at: new Date().toISOString() };
   await writeAtomic(file, JSON.stringify(check, null, 2) + '\n');
@@ -91,12 +132,15 @@ export async function guideStatus(root: string): Promise<GuideStatus> {
   const inside = (await git(root, ['rev-parse', '--is-inside-work-tree']))?.trim() === 'true';
   // check-ignore -q: código 0 = ignorado; 1 = não ignorado (o execFile devolve erro nos dois casos de falha).
   const ignored = inside ? (await git(root, ['check-ignore', '-q', GUIDE_PATH])) !== null : false;
-  const status: GuideStatus = { path: GUIDE_PATH, exists, isGit: inside, ignored };
+  const showcase: ShowcaseStatus = { path: SHOWCASE_PATH, exists: await hasShowcase(root) };
+  const status: GuideStatus = { path: GUIDE_PATH, exists, isGit: inside, ignored, showcase };
   const base = inside ? await validCheck(root) : null;
   if (base) {
     status.lastCheck = base;
     status.changedSince = (await changedFiles(root, base.sha)).length;
   }
+  const showcaseBase = inside ? await validCheck(root, SHOWCASE_CHECK_PATH) : null;
+  if (showcaseBase) showcase.lastCheck = showcaseBase;
   return status;
 }
 

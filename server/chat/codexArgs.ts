@@ -113,6 +113,8 @@ export interface CodexSafetyOptions extends CodexSecretContext {
   mode: 'read-only' | 'workspace';
   /** `off`: sem rede. `loopback`: só o endereço do Claudio’s Club para o Codex (127.0.0.2, ver `CODEX_APP_HOSTS`), para a API dele. */
   network: 'off' | 'loopback';
+  /** Busca na web ("Permitir acesso à internet"): `true` = `live`; ausente ou `false` = `disabled` (falha fechada). Não mexe no terminal, que segue sem rede (`network`). */
+  webSearch?: boolean;
   /** Pastas extras com escrita no modo `workspace` (a pasta das fichas, quando a conversa roda numa worktree). */
   writableRoots?: string[];
   /** Arquivos e pastas que existem e ficam só para leitura no modo `workspace`, mesmo dentro da pasta de trabalho (a própria ficha do funcionário). */
@@ -126,15 +128,18 @@ export interface CodexSafetyOptions extends CodexSecretContext {
  * - `--ignore-user-config`: não lê o ~/.codex/config.toml (MCPs, plugins e modelo padrão do usuário ficam de fora; o login continua).
  * - `-c features.apps=false`: sem os conectores da conta do ChatGPT (GitHub, e-mail, Notion, deploy…), que rodam FORA da sandbox.
  * - `-c approval_policy="never"`: o exec não tem quem responda; a sandbox decide.
- * - `-c web_search="disabled"`: a busca na web é uma ferramenta hospedada (roda nos servidores da OpenAI, fora da sandbox) e serviria de
- *   canal para vazar dados na consulta. Provado no 0.167.0: sem isso o `codex exec --json` emite o item `web_search`; com isso o modelo
- *   responde que não tem a ferramenta. Os valores aceitos são `disabled`, `cached`, `indexed` e `live`.
+ * - `-c web_search="live"` ou `"disabled"` (opção `webSearch`, a "Permitir acesso à internet" das Configurações): a busca na web é uma
+ *   ferramenta hospedada (roda nos servidores da OpenAI, fora da sandbox), então pode levar dado da consulta para fora. Por isso é escolha
+ *   do usuário: ligada, o modelo pesquisa; desligada, não tem a ferramenta. O terminal do funcionário continua sem rede (`network`), com
+ *   ou sem ela. Provado no 0.167.0: com `disabled` o `codex exec --json` não emite o item `web_search` e o modelo diz que não tem a
+ *   ferramenta. Os valores aceitos são `disabled`, `cached`, `indexed` e `live`.
  * - o perfil de permissões (`codexProfileArgs`): sandbox, negações de segredos e rede. O perfil substitui o `-s`: nunca passe `-s` junto.
  *
  * Nunca `danger-full-access` nem `--dangerously-*`. Quem chama monta o resto (`-C`, `-m`, `--json`, o prompt).
  */
 export function codexSafetyArgs(o: CodexSafetyOptions): string[] {
-  return ['--ignore-user-config', '-c', 'features.apps=false', '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', ...codexProfileArgs(o)];
+  const webSearch = o.webSearch === true ? 'web_search="live"' : 'web_search="disabled"';
+  return ['--ignore-user-config', '-c', 'features.apps=false', '-c', 'approval_policy="never"', '-c', webSearch, ...codexProfileArgs(o)];
 }
 
 /**
@@ -211,6 +216,8 @@ export interface CodexSpawn {
   mycoUrl: string;
   /** Onde o thread_id é gravado (e lido ao reabrir). */
   threadFile: string;
+  /** "Permitir acesso à internet", lida a cada execução (ver `CodexProcess`). Ausente = desligada. */
+  internetAccess?: () => Promise<boolean>;
 }
 
 /**
@@ -238,6 +245,8 @@ export interface CodexRunOptions {
   secrets: CodexSecrets;
   /** `loopback`: a API do Claudio’s Club por curl, só em 127.0.0.2 (só com o `network_proxy` conferido, ver codexEnv.ts). `off`: sem rede nenhuma. */
   network: 'off' | 'loopback';
+  /** "Permitir acesso à internet" (busca na web do Codex). Sem ele, desligada: falha fechada. O terminal segue sem rede (`network`). */
+  internetAccess?: boolean;
   /** thread_id da conversa: com ele, `exec resume`; sem, uma conversa nova. */
   threadId?: string | null;
   /** Sistema (os testes trocam): no Windows as instruções nunca vão na linha de comando. */
@@ -294,6 +303,7 @@ export function buildCodexArgs(o: CodexRunOptions): string[] {
       home: o.secrets.home ?? os.homedir(),
       mycoHome: o.secrets.mycoHome,
       network: o.network,
+      webSearch: o.internetAccess === true,
       writableRoots: o.writableRoots,
       readOnlyPaths: o.readOnlyPaths,
     }),

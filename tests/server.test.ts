@@ -62,7 +62,7 @@ describe('config', () => {
   it('usa "Claudio’s Club" por padrão e grava o nome preservando outras chaves', async () => {
     const file = path.join(root, 'cfg', 'config.json');
     const usageStop = { fiveHour: 90, sevenDay: 95 };
-    const colors = { projectColors: {}, projectNames: {}, boardBackground: { light: null, dark: null }, projectBudgets: {}, contextSwitch: 'suggest', freelaArchiveDays: 3, freelaAutoArchived: {}, workspaces: [], projectWorkspaces: {} };
+    const colors = { projectColors: {}, projectNames: {}, boardBackground: { light: null, dark: null }, projectBudgets: {}, contextSwitch: 'suggest', freelaArchiveDays: 3, freelaAutoArchived: {}, workspaces: [], projectWorkspaces: {}, resourceGate: true, minFreeRamGb: 1.5, cpuGate: false, maxActiveChats: 0, maxTurnTools: 500, maxTurnMinutes: 180 };
     // Quem chega (sem config) começa no simples.
     expect(await readConfig(file)).toEqual({
       companyName: 'Claudio’s Club',
@@ -75,6 +75,7 @@ describe('config', () => {
       showUserScope: false,
       codexReview: false,
       codexModel: '',
+      internetAccess: true,
       ...colors,
     });
 
@@ -92,6 +93,7 @@ describe('config', () => {
       showUserScope: false,
       codexReview: false,
       codexModel: '',
+      internetAccess: true,
       ...colors,
     });
     expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ futuro: 1, companyName: 'Acme Labs' });
@@ -173,6 +175,39 @@ describe('config', () => {
     expect(ConfigPatch.safeParse({ sendWhileBusy: 'ja' }).success).toBe(false);
     await fs.writeFile(file, JSON.stringify({ sendWhileBusy: 'ja' }));
     expect((await readConfig(file)).sendWhileBusy).toBe('next');
+  });
+
+  it('gate de recursos da fila: liga/desliga, RAM (0 ou 0,5–64 GB), CPU e teto (0–50); valor estranho no arquivo volta ao padrão', async () => {
+    const file = path.join(root, 'cfg-gate', 'config.json');
+    expect(await readConfig(file)).toMatchObject({ resourceGate: true, minFreeRamGb: 1.5, cpuGate: false, maxActiveChats: 0 });
+    expect(await updateConfig(ConfigPatch.parse({ resourceGate: false, minFreeRamGb: 0, cpuGate: true, maxActiveChats: 3 }), file)).toMatchObject({
+      resourceGate: false,
+      minFreeRamGb: 0,
+      cpuGate: true,
+      maxActiveChats: 3,
+    });
+    expect(ConfigPatch.parse({ minFreeRamGb: 0.5 }).minFreeRamGb).toBe(0.5);
+    expect(ConfigPatch.parse({ minFreeRamGb: 2.25 }).minFreeRamGb).toBe(2.25);
+    expect(ConfigPatch.parse({ minFreeRamGb: 64 }).minFreeRamGb).toBe(64);
+    for (const bad of [0.3, -1, 65, Number.NaN, '2']) expect(ConfigPatch.safeParse({ minFreeRamGb: bad }).success, String(bad)).toBe(false);
+    expect(ConfigPatch.parse({ maxActiveChats: 50 }).maxActiveChats).toBe(50);
+    for (const bad of [-1, 51, 2.5, '3']) expect(ConfigPatch.safeParse({ maxActiveChats: bad }).success, String(bad)).toBe(false);
+    expect(ConfigPatch.safeParse({ resourceGate: 'sim' }).success).toBe(false);
+    expect(ConfigPatch.safeParse({ cpuGate: 1 }).success).toBe(false);
+    await fs.writeFile(file, JSON.stringify({ minFreeRamGb: 'muito', maxActiveChats: -4, cpuGate: 'x', resourceGate: 'talvez' }));
+    expect(await readConfig(file)).toMatchObject({ resourceGate: true, minFreeRamGb: 1.5, cpuGate: false, maxActiveChats: 0 });
+  });
+
+  it('permitir acesso à internet: vem ligada; o PATCH aceita só boolean; valor estranho no arquivo volta ao padrão (ligada)', async () => {
+    const file = path.join(root, 'cfg-internet', 'config.json');
+    expect(await readConfig(file)).toMatchObject({ internetAccess: true });
+    expect(await updateConfig(ConfigPatch.parse({ internetAccess: false }), file)).toMatchObject({ internetAccess: false });
+    expect(ConfigPatch.parse({ internetAccess: true }).internetAccess).toBe(true);
+    for (const bad of ['nao', 0, 1, null]) expect(ConfigPatch.safeParse({ internetAccess: bad }).success, String(bad)).toBe(false);
+    await fs.writeFile(file, JSON.stringify({ internetAccess: 'talvez' }));
+    expect(await readConfig(file)).toMatchObject({ internetAccess: true });
+    await fs.writeFile(file, JSON.stringify({ internetAccess: false }));
+    expect(await readConfig(file)).toMatchObject({ internetAccess: false });
   });
 
   it('cor da sala: define e limpa por projeto, sem mexer nos outros', async () => {

@@ -44,6 +44,10 @@ import { codexLimitHit } from '../codexUsage';
 import { WAKE_MAX_STREAK, WakeStreakError, wakeNotice, type WakeInput } from './wake';
 import { readUsage } from '../usage';
 import type { SessionTokens } from '../callers';
+import { resumeText, type ResumeEntry } from './resume';
+import { legacyLabel, type SecretFinding, type SecretSource } from './secrets';
+import type { TurnCaps } from './turnCap';
+import type { TurnCapHit } from '../../shared/model';
 
 export interface ChatSpawn {
   sessionId: string;
@@ -135,9 +139,18 @@ export interface ChatManagerOptions {
   wakeups?: AutoContinue;
   /** Relógio do despertador (testes trocam). */
   now?: () => number;
+  /** Teto por turno (ferramentas e minutos), lido a cada turno que começa (ver turnCap.ts); sem ele, sem teto. */
+  turnCaps?: () => Promise<TurnCaps>;
 }
 
 export class ChatError extends Error {}
+
+/** Entrega recusada: o servidor está reiniciando (a rota responde 503). */
+export class ChatClosingError extends ChatError {
+  constructor() {
+    super('o Claudio’s Club está reiniciando; tente de novo em instantes');
+  }
+}
 
 type Listener = (e: ChatEvent) => void;
 
@@ -219,7 +232,7 @@ export class ChatManager {
   private readonly forks = new Map<string, string>();
   private copies: Record<string, string> | null = null;
   /** Segredos vistos nas conversas (um aviso por tipo por sessão, até você dispensar). */
-  private readonly secrets: Array<{ id: string; sessionId: string; label: string; at: string }> = [];
+  private readonly secrets: Array<{ id: string; sessionId: string; label: string; kind: SecretFinding['kind']; detail?: string; source?: SecretSource; at: string }> = [];
   /** Conversas cuja última mensagem veio de outro funcionário (delegação), e não de você. */
   private readonly delegated = new Set<string>();
   /**
@@ -254,6 +267,8 @@ export class ChatManager {
   private readonly wakeStreak = new Map<string, number>();
   /** Estouros de limite ainda sendo agendados, por conversa (ver `awaitingLimit`). */
   private readonly limitRuns = new Map<string, Promise<unknown>>();
+  /** O servidor está reiniciando: nenhuma entrega nova entra (ver `closing`). */
+  private shuttingDown = false;
   private readonly timer: NodeJS.Timeout;
   private readonly runDir: string;
 
@@ -443,6 +458,21 @@ export class ChatManager {
   }
 
   /**
+   * Retoma depois do reinício: a conversa estava no meio de um turno quando o servidor saiu. Reabre com a ficha e
+   * manda o aviso (ver resume.ts). Não mexe no "continue" nem no despertador agendados: são de outra fila.
+   */
+  async resumeChat(entry: ResumeEntry): Promise<void> {
+    try {
+      const sid = await this.deliver(entry.projectId, entry.sessionId, entry.staffId, resumeText(entry.hadPending), undefined, [], [], false, true);
+      this.chats.get(sid)?.addNotice('Retomada após o reinício do Claudio’s Club.');
+    } catch (err) {
+      // Se a conversa chegou a abrir, o aviso fica nela; senão, só o log de quem chamou.
+      this.chats.get(entry.sessionId)?.addNotice(`Não retomada após o reinício: ${err instanceof Error ? err.message : String(err)}`, 'warn');
+      throw err;
+    }
+  }
+
+  /**
    * O botão Cancelar do aviso de limite de uso: devolve se havia algo agendado. Pendência de outro projeto
    * não é desta rota: devolve null (a rota responde 404) e não mexe nela.
    */
@@ -512,6 +542,11 @@ export class ChatManager {
     return this.opts.now?.() ?? Date.now();
   }
 
+  /** Recusa entrega nova enquanto o servidor reinicia (antes de abrir processo, para não deixar conversa pela metade). */
+  private assertOpen(): void {
+    if (this.shuttingDown) throw new ChatClosingError();
+  }
+
   private async deliver(
     projectId: string,
     sessionId: string | null,
@@ -525,6 +560,7 @@ export class ChatManager {
     origin?: string,
     engineOverride?: EngineOverride,
   ): Promise<string> {
+    this.assertOpen();
     const chat = await this.ensure(projectId, sessionId, staffId, undefined, engineOverride);
     // Qualquer mensagem sua (ou de outro funcionário) na conversa vale mais que o "continue" agendado.
     if (!auto) {
@@ -534,6 +570,7 @@ export class ChatManager {
     if (delegated) this.delegated.add(chat.sessionId);
     else this.delegated.delete(chat.sessionId);
     this.inbox.setQuestion(chat.sessionId, null); // respondeu (ou mandou outra coisa): a pergunta sai da caixa
+    this.inbox.setTurnCap(chat.sessionId, null); // turno novo: o aviso do teto (caixa e tarefa) já não vale
     // A ficha mudou depois que esta conversa começou: o aviso vai junto, uma vez só. Conversa grande:
     // o funcionário fica sabendo do tamanho e do custo (ele não vê isso sozinho).
     const ficha = this.fichaNotices.get(chat.sessionId);
@@ -545,7 +582,8 @@ export class ChatManager {
     const fromStaff = delegated && !auto;
     const notice = [fromStaff ? (origin ?? STAFF_NOTICE) : null, ficha, big, boost].filter(Boolean).join('\n\n') || undefined;
     chat.send(text, priority, images, notice, files, fromStaff);
-    this.opts.onSent?.(chat.sessionId);
+    // Mensagem da plataforma (continue, despertador, retomada) não é "você respondeu": a tarefa em revisão não se mexe.
+    if (!auto) this.opts.onSent?.(chat.sessionId);
     return chat.sessionId;
   }
 
@@ -593,6 +631,7 @@ export class ChatManager {
     images: string[] = [],
     files: ChatAttachment[] = [],
   ): Promise<string> {
+    this.assertOpen();
     const info = sessionId ? this.turns.get(sessionId) : undefined;
     const open = sessionId ? this.chats.get(sessionId) : undefined;
     if (sessionId && staffId && info && !open?.busy && !(await this.opts.keepSession?.(sessionId))) {
@@ -622,6 +661,7 @@ export class ChatManager {
    * (`requesterRedirects`, seguindo a cadeia). A anterior continua na lista; não cancela nada nela.
    */
   async sendToRequester(projectId: string, sessionId: string | null, staffId: string | null, text: string): Promise<string> {
+    this.assertOpen();
     let target = sessionId;
     while (target && this.requesterRedirects.has(target)) target = this.requesterRedirects.get(target)!;
     const info = target ? this.turns.get(target) : undefined;
@@ -871,10 +911,14 @@ export class ChatManager {
     return true;
   }
 
-  private noteSecret(sessionId: string, label: string) {
+  private noteSecret(sessionId: string, hit: SecretFinding, source?: SecretSource) {
+    const { label } = hit;
     const id = `${sessionId}:${label}`;
-    if (this.secrets.some((s) => s.id === id) || this.inbox.isMuted(id)) return;
-    this.secrets.push({ id, sessionId, label, at: new Date().toISOString() });
+    // "Não é segredo" gravado com o rótulo da versão anterior ainda vale (ver legacyLabel).
+    const old = legacyLabel(label);
+    const muted = this.inbox.isMuted(id) || (old !== null && this.inbox.isMuted(`${sessionId}:${old}`));
+    if (this.secrets.some((s) => s.id === id) || muted) return;
+    this.secrets.push({ id, sessionId, label, kind: hit.kind, ...(hit.detail && { detail: hit.detail }), ...(source && { source }), at: new Date().toISOString() });
     this.log(`${sessionId}: ${label} apareceu na conversa (aviso na caixa)`);
   }
 
@@ -897,6 +941,27 @@ export class ChatManager {
     return out;
   }
 
+  /**
+   * O turno da conversa estourou o teto (ferramentas ou minutos). Antes da interrupção: guarda o motivo (a tarefa lê ao
+   * terminar o turno, ver tasks.ts) e tira o "continue" e o despertador, para ela não retomar sozinha.
+   */
+  private turnCapped(sessionId: string, hit: TurnCapHit): void {
+    this.inbox.setTurnCap(sessionId, { ...hit, at: new Date().toISOString() });
+    this.log(`${sessionId}: turno parado pelo teto (${hit.kind === 'tools' ? 'ferramentas' : 'minutos'}, limite ${hit.limit})`);
+    void this.opts.autoContinue?.cancel(sessionId, 'cap').catch(() => {});
+    void this.opts.wakeups?.cancel(sessionId, 'cap').catch(() => {});
+  }
+
+  /** O motivo do teto desta conversa, se o turno dela parou nele e ninguém mandou mensagem depois. */
+  turnCapOf(sessionId: string): TurnCapHit | null {
+    return this.inbox.turnCapOf(sessionId);
+  }
+
+  /** As conversas que pararam no teto (a caixa de entrada lê daqui). */
+  turnCaps(): Array<TurnCapHit & { sessionId: string; at: string }> {
+    return this.inbox.turnCaps();
+  }
+
   interrupt(sessionId: string) {
     this.chats.get(sessionId)?.interrupt();
   }
@@ -910,6 +975,13 @@ export class ChatManager {
       if (c.running && c.projectId === projectId && c.staffId === staffId && c.sessionId !== exceptSession && c.working) return true;
     }
     return false;
+  }
+
+  /** Quantas conversas, em todos os projetos, estão trabalhando agora (o teto do gate de recursos conta isto). */
+  activeTurns(): number {
+    let n = 0;
+    for (const c of this.chats.values()) if (c.running && c.working) n++;
+    return n;
   }
 
   /** A conversa deste funcionário, neste projeto, que está no meio de um turno agora, se for uma só (senão, null). */
@@ -928,6 +1000,29 @@ export class ChatManager {
       else if (c.background.length) background++;
     }
     return { busy, background };
+  }
+
+  /**
+   * O servidor vai sair para reiniciar: nenhuma entrega nova entra (mensagem sua, de outro funcionário, "continue",
+   * despertador, tarefa). As que já estão no meio do turno seguem até o snapshot (ver `busySessions`).
+   */
+  closing(): void {
+    this.shuttingDown = true;
+  }
+
+  /** O servidor já está fechando para reiniciar (ver `closing`). */
+  isClosing(): boolean {
+    return this.shuttingDown;
+  }
+
+  /** Conversas abertas no meio de um turno (ou com pedido pendente), com o que o reinício precisa para reabri-las. */
+  busySessions(): ResumeEntry[] {
+    const out: ResumeEntry[] = [];
+    for (const c of this.chats.values()) {
+      if (!c.running || !c.busy || !c.projectId) continue;
+      out.push({ projectId: c.projectId, sessionId: c.sessionId, staffId: c.staffId, engine: c.engine, cwd: c.cwd, hadPending: c.awaitingAnswer });
+    }
+    return out;
   }
 
   /** Fecha todas as conversas e espera os processos saírem (o Claudio’s Club vai parar ou reiniciar). */
@@ -992,13 +1087,15 @@ export class ChatManager {
       onUsage: (limits) => void this.saveUsage(spawn.sessionId, limits),
       onUsageLimit: (hit) => this.limitHit(spawn.sessionId, projectId, staffId, hit, codex ? 'codex' : 'claude'),
       onTurnWithoutLimit: () => void this.limitStreak.delete(spawn.sessionId),
-      onSecret: (label) => this.noteSecret(spawn.sessionId, label),
+      onSecret: (hit, source) => this.noteSecret(spawn.sessionId, hit, source),
       onIdle: (reason) => {
         if (reason !== 'exit') this.noteQuestion(spawn.sessionId);
         if (reason === 'turn') void this.noteTurn(spawn.sessionId).catch(() => {});
         this.opts.onIdle?.(spawn.sessionId, projectId, staffId, reason);
       },
       onCommands: (commands) => this.commands.set(projectId, commands),
+      turnCaps: this.opts.turnCaps,
+      onTurnCap: (hit) => this.turnCapped(spawn.sessionId, hit),
       onAsk: (requestId, questions) => this.opts.onAsk?.(spawn.sessionId, requestId, questions),
       // Quem ela é para a API: o mesmo token em toda execução da conversa (o Codex abre uma por mensagem), regerado se o servidor reiniciou.
       mycoToken: this.opts.tokens?.issue({ staffId, projectId, sessionId: spawn.sessionId, engine: codex ? 'codex' : 'claude' }),
@@ -1021,6 +1118,7 @@ export class ChatManager {
           mycoUrl: codex.mycoUrl,
           models: this.opts.codexModels,
           env: this.opts.codexEnv,
+          internetAccess: codex.internetAccess,
           // Modelo do secundário: sem plano B (a conta recusa, a conversa mostra o erro).
           noSubstitute: !!override,
         })

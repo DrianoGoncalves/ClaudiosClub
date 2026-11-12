@@ -1003,6 +1003,37 @@ function RankingItem({
 }
 
 /**
+ * Gasto do Sistema (o gerador oculto da vitrine, que não é funcionário). Fica fora do ranking e da participação dos
+ * agents: é só uma linha à parte, nos períodos que o servidor manda (`CostSummary`). Sem valor, não desenha.
+ */
+export function SystemCostBlock({ system }: { system?: CostReport['system'] }) {
+  if (!system || !(system.usd > 0)) return null;
+  const stats: Array<[string, number]> = [
+    [t('detail.periodToday'), system.today],
+    [t('detail.period7d'), system.last7d],
+    [t('detail.systemMonth'), system.month],
+    [t('detail.periodAll'), system.usd],
+  ];
+  return (
+    <section className="section">
+      <div className="ranking-head">
+        <h3>{t('detail.systemHeading')}</h3>
+        <span className="muted small">{system.runs === 1 ? t('detail.runOne', { n: system.runs }) : t('detail.runOther', { n: system.runs })}</span>
+      </div>
+      <p className="muted small">{t('detail.systemHint')}</p>
+      <dl className="stats">
+        {stats.map(([label, usd]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{formatUsd(usd)}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+/**
  * Ranking, em abas: quem mais gasta e quem mais economiza (funcionários, no período escolhido) e os
  * agents. Os gastos são equivalentes em API
  * (estimativa): servem para comparar, não como conta a pagar.
@@ -1010,6 +1041,7 @@ function RankingItem({
 export function RankingPanel({
   groups,
   agents,
+  system,
   scanning,
   onSelect,
   onOpenPerson,
@@ -1017,6 +1049,8 @@ export function RankingPanel({
 }: {
   groups: RankingGroup[];
   agents: Array<{ type: string; usd: number; runs: number }>;
+  /** Gasto do Sistema (gerador da vitrine): linha à parte, fora do ranking e da participação dos agents. */
+  system?: CostReport['system'];
   scanning: boolean;
   /** O fantasma (conversas sem ficha): seleciona o nó dele no quadro. */
   onSelect: (nodeId: string) => void;
@@ -1183,6 +1217,7 @@ export function RankingPanel({
               </button>
             )}
           </section>
+          <SystemCostBlock system={system} />
           <section className="section">
             <div className="ranking-head">
               <h3>{t('detail.agentsSubagentsHeading')}</h3>

@@ -44,6 +44,8 @@ export interface LaunchContext {
   userAgentsDir?: string;
   /** Codex ligado nas configurações (`codexReview`): o funcionário do Claude ganha o MCP `perguntar_gpt` e o roteiro manda usá-lo. */
   codex?: boolean;
+  /** "Permitir acesso à internet" (`internetAccess`): sem ela, o Claude perde WebSearch e WebFetch; o Codex ganha a frase da ficha. */
+  internetAccess?: boolean;
   /** Claude contratado por um gestor no Codex e travado em `manual`: a ficha conta por que ele pede aprovação de tudo. */
   lockedByCodexManager?: boolean;
 }
@@ -73,6 +75,8 @@ export interface PreparedRun {
   keyFiles: string[];
   ftpServers: string[];
   pluginDir: string | null;
+  /** "Permitir acesso à internet" (ver ClaudeArgsOptions.internetAccess): o que o buildClaudeArgs nega. */
+  internetAccess?: boolean;
 }
 
 /**
@@ -132,6 +136,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     keyFiles: ctx.serverKeys ?? [],
     ftpServers,
     pluginDir: plugin?.dir ?? null,
+    internetAccess: ctx.internetAccess,
   };
 }
 
@@ -189,7 +194,7 @@ export function staffSettings() {
  */
 export async function writeFicha(
   profile: StaffProfile,
-  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'roles' | 'librarySkills' | 'codex' | 'lockedByCodexManager'>,
+  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'roles' | 'librarySkills' | 'codex' | 'internetAccess' | 'lockedByCodexManager'>,
   absolute = false,
 ): Promise<FichaContext> {
   const rel = (file: string) => (absolute ? file : path.relative(ctx.projectPath, file));
@@ -210,6 +215,7 @@ export async function writeFicha(
     // Lido a cada sessão (writeFicha roda em prepareRun): criar ou apagar o SPEC.md vale na próxima conversa.
     guide: await hasGuide(ctx.projectPath),
     codex: ctx.codex,
+    internetAccess: ctx.internetAccess,
     lockedByCodexManager: ctx.lockedByCodexManager,
   };
   await writeAtomic(fichaFile(ctx.projectPath, profile.id), renderFicha(profile, fichaCtx));

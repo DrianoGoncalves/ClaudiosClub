@@ -9,12 +9,15 @@ import { useTheme, useThemePref, type ThemePref } from '../theme';
 import { useChatDetail } from '../chat/chatDetail';
 import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
 import { PairControls } from './PairControls';
+import { SpotifySetting } from './SpotifyPlayer';
 import { useSystemMonitor } from './SystemMonitor';
 import { RolesEditor } from './RolesEditor';
 import { useServerAction } from './ServerAction';
 import { ThemeBackgrounds } from './ThemeBackgrounds';
 import { UpdateControls, useUpdateStatus } from './UpdateNotice';
 import { installCodex } from './codexSetup';
+import { MAX_CHATS_MAX, RAM_GB_MAX, normalizeMaxChats, normalizeRamGb } from './queueGate';
+import { TURN_MINUTES_MAX, TURN_TOOLS_MAX, normalizeTurnMinutes, normalizeTurnTools } from './turnCap';
 
 // Configurações do Claudio’s Club, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
 // com título, descrição e o controle logo abaixo. Abre pelo botão "config" ou com Ctrl+,.
@@ -58,11 +61,17 @@ interface Props {
   codexReview: boolean | null;
   /** Modelo do Codex para perguntar ao GPT; vazio = o padrão do Codex. */
   codexModel: string;
+  /** Permitir acesso à internet (Claude e GPT pesquisam na web); null = config ainda não chegou. */
+  internetAccess: boolean | null;
   /** Dias parado até o Freela ser arquivado sozinho (0 = nunca); null = config ainda não chegou. */
   freelaArchiveDays: number | null;
+  /** Gate de recursos da fila (só o início automático); null = config ainda não chegou. */
+  queueGate: Pick<AppConfig, 'resourceGate' | 'minFreeRamGb' | 'cpuGate' | 'maxActiveChats'> | null;
+  /** Freio de turno em laço (ferramentas e minutos por turno, 0 = desligado); null = config ainda não chegou. */
+  turnCap: Pick<AppConfig, 'maxTurnTools' | 'maxTurnMinutes'> | null;
 }
 
-type GroupId = 'general' | 'board' | 'chat' | 'roles' | 'mcp' | 'usage' | 'credits';
+type GroupId = 'general' | 'board' | 'chat' | 'roles' | 'mcp' | 'usage' | 'queue' | 'credits';
 
 const GROUPS: Array<{ id: GroupId; label: string; intro: string }> = [
   { id: 'general', label: t('toolbar.groupGeneral'), intro: t('toolbar.groupGeneralIntro') },
@@ -71,6 +80,7 @@ const GROUPS: Array<{ id: GroupId; label: string; intro: string }> = [
   { id: 'roles', label: t('toolbar.groupRoles'), intro: t('toolbar.groupRolesIntro') },
   { id: 'mcp', label: t('mcp.group'), intro: t('mcp.groupIntro') },
   { id: 'usage', label: t('toolbar.groupUsage'), intro: t('toolbar.groupUsageIntro') },
+  { id: 'queue', label: t('toolbar.groupQueue'), intro: t('toolbar.groupQueueIntro') },
   { id: 'credits', label: t('toolbar.groupCredits'), intro: t('toolbar.groupCreditsIntro') },
 ];
 
@@ -105,7 +115,7 @@ interface Setting {
   /** Selo ao lado do título (ex.: "em uso agora"). */
   badge?: string;
   /** Liga/desliga: a descrição vira o rótulo da caixinha, como no VS Code. */
-  toggle?: { checked: boolean; onChange: (v: boolean) => void };
+  toggle?: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean };
   control?: ReactNode;
   /** Só aparece no nível avançado. */
   advanced?: boolean;
@@ -326,7 +336,7 @@ function SettingRow({ setting: s }: { setting: Setting }) {
       </div>
       {s.toggle ? (
         <label className="setting-check">
-          <input type="checkbox" checked={s.toggle.checked} onChange={(e) => s.toggle!.onChange(e.target.checked)} />
+          <input type="checkbox" checked={s.toggle.checked} disabled={s.toggle.disabled} onChange={(e) => s.toggle!.onChange(e.target.checked)} />
           <span className="setting-desc">{s.description}</span>
         </label>
       ) : (
@@ -481,6 +491,14 @@ function buildSettings(
       description: t('toolbar.sysmonDesc'),
       keywords: t('toolbar.sysmonKeywords'),
       toggle: { checked: systemMonitor, onChange: setSystemMonitor },
+    },
+    {
+      id: 'spotify',
+      group: 'general',
+      title: t('toolbar.spotifyTitle'),
+      description: t('toolbar.spotifyDesc'),
+      keywords: t('toolbar.spotifyKeywords'),
+      control: <SpotifySetting />,
     },
     {
       id: 'pair',
@@ -661,6 +679,17 @@ function buildSettings(
     }
   }
 
+  if (p.internetAccess !== null) {
+    out.push({
+      id: 'internet-access',
+      group: 'general',
+      title: t('toolbar.internetTitle'),
+      description: t('toolbar.internetDesc'),
+      keywords: t('toolbar.internetKeywords'),
+      toggle: { checked: p.internetAccess, onChange: (v) => void api.saveConfig({ internetAccess: v }).then(p.onConfig, () => {}) },
+    });
+  }
+
   if (p.optimizeQuota !== null) {
     out.push({
       id: 'optimize-quota',
@@ -681,6 +710,126 @@ function buildSettings(
       keywords: t('toolbar.autoContinueKeywords'),
       toggle: { checked: p.autoContinue, onChange: (v) => void api.saveConfig({ autoContinue: v }).then(p.onConfig, () => {}) },
     });
+  }
+
+  if (p.turnCap) {
+    const cap = p.turnCap;
+    out.push(
+      {
+        id: 'turn-cap-tools',
+        group: 'usage',
+        title: t('toolbar.turnToolsTitle'),
+        description: t('toolbar.turnToolsDesc'),
+        keywords: t('toolbar.turnToolsKeywords'),
+        control: (
+          <ConfigNumberInput
+            field="maxTurnTools"
+            value={cap.maxTurnTools}
+            normalize={normalizeTurnTools}
+            min={0}
+            max={TURN_TOOLS_MAX}
+            step={1}
+            wide
+            unit={t('toolbar.turnToolsUnit')}
+            label={t('toolbar.turnToolsTitle')}
+            disabled={false}
+            onConfig={p.onConfig}
+          />
+        ),
+        advanced: true,
+      },
+      {
+        id: 'turn-cap-minutes',
+        group: 'usage',
+        title: t('toolbar.turnMinutesTitle'),
+        description: t('toolbar.turnMinutesDesc'),
+        keywords: t('toolbar.turnMinutesKeywords'),
+        control: (
+          <ConfigNumberInput
+            field="maxTurnMinutes"
+            value={cap.maxTurnMinutes}
+            normalize={normalizeTurnMinutes}
+            min={0}
+            max={TURN_MINUTES_MAX}
+            step={1}
+            wide
+            unit={t('toolbar.turnMinutesUnit')}
+            label={t('toolbar.turnMinutesTitle')}
+            disabled={false}
+            onConfig={p.onConfig}
+          />
+        ),
+        advanced: true,
+      },
+    );
+  }
+
+  if (p.queueGate) {
+    const gate = p.queueGate;
+    const on = gate.resourceGate;
+    out.push(
+      {
+        id: 'queue-gate',
+        group: 'queue',
+        title: t('toolbar.queueGateTitle'),
+        description: t('toolbar.queueGateDesc'),
+        keywords: t('toolbar.queueGateKeywords'),
+        toggle: { checked: on, onChange: (v) => void api.saveConfig({ resourceGate: v }).then(p.onConfig, () => {}) },
+      },
+      {
+        id: 'queue-ram',
+        group: 'queue',
+        title: t('toolbar.queueRamTitle'),
+        description: t('toolbar.queueRamDesc'),
+        keywords: t('toolbar.queueRamKeywords'),
+        control: (
+          <ConfigNumberInput
+            field="minFreeRamGb"
+            value={gate.minFreeRamGb}
+            normalize={normalizeRamGb}
+            min={0}
+            max={RAM_GB_MAX}
+            step={0.5}
+            unit={t('toolbar.queueRamUnit')}
+            label={t('toolbar.queueRamTitle')}
+            disabled={!on}
+            onConfig={p.onConfig}
+          />
+        ),
+        advanced: true,
+      },
+      {
+        id: 'queue-cpu',
+        group: 'queue',
+        title: t('toolbar.queueCpuTitle'),
+        description: t('toolbar.queueCpuDesc'),
+        keywords: t('toolbar.queueCpuKeywords'),
+        toggle: { checked: gate.cpuGate, disabled: !on, onChange: (v) => void api.saveConfig({ cpuGate: v }).then(p.onConfig, () => {}) },
+        advanced: true,
+      },
+      {
+        id: 'queue-chats',
+        group: 'queue',
+        title: t('toolbar.queueChatsTitle'),
+        description: t('toolbar.queueChatsDesc'),
+        keywords: t('toolbar.queueChatsKeywords'),
+        control: (
+          <ConfigNumberInput
+            field="maxActiveChats"
+            value={gate.maxActiveChats}
+            normalize={normalizeMaxChats}
+            min={0}
+            max={MAX_CHATS_MAX}
+            step={1}
+            unit={t('toolbar.queueChatsUnit')}
+            label={t('toolbar.queueChatsTitle')}
+            disabled={!on}
+            onConfig={p.onConfig}
+          />
+        ),
+        advanced: true,
+      },
+    );
   }
 
   if (p.projectBudgets) {
@@ -895,6 +1044,65 @@ function FreelaArchiveInput({ value, onConfig }: { value: number; onConfig: (c: 
         }}
       />
       {t('toolbar.freelaArchiveLabel')}
+      {error && <span className="error small">{error}</span>}
+    </span>
+  );
+}
+
+/** Número da config (gate da fila: RAM mínima e teto de conversas; teto por turno); grava ao sair do campo, inválido volta ao salvo. `wide` = campo de até 6 dígitos. */
+function ConfigNumberInput({
+  field,
+  value,
+  normalize,
+  min,
+  max,
+  step,
+  wide,
+  unit,
+  label,
+  disabled,
+  onConfig,
+}: {
+  field: 'minFreeRamGb' | 'maxActiveChats' | 'maxTurnTools' | 'maxTurnMinutes';
+  value: number;
+  normalize: (raw: string) => number | null;
+  min: number;
+  max: number;
+  step: number;
+  wide?: boolean;
+  unit: string;
+  label: string;
+  disabled: boolean;
+  onConfig: (c: AppConfig) => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <span className={wide ? 'setting-number is-wide' : 'setting-number'}>
+      <input
+        key={String(value)}
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        inputMode={step < 1 ? 'decimal' : 'numeric'}
+        defaultValue={value}
+        disabled={disabled}
+        aria-label={label}
+        onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+        onBlur={async (e) => {
+          const n = normalize(e.target.value);
+          if (n === null) return void (e.target.value = String(value));
+          e.target.value = String(n);
+          if (n === value) return;
+          setError(null);
+          try {
+            onConfig(await api.saveConfig({ [field]: n }));
+          } catch (err) {
+            setError((err as Error).message);
+          }
+        }}
+      />
+      {unit}
       {error && <span className="error small">{error}</span>}
     </span>
   );

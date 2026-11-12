@@ -31,7 +31,7 @@ describe('chave escrita no .mcp.json', () => {
       }),
     );
     expect(found.map((f) => f.server)).toEqual(['anthropic', 'sentry', 'github', 'busca', 'banco']);
-    expect(found[0]!.label).toBe('uma chave da API da Anthropic');
+    expect(found[0]!.label).toBe('chave de API da Anthropic');
     // Só o tipo: o valor nunca sai.
     expect(JSON.stringify(found)).not.toMatch(/sk-ant|abc123|ghp_|segredo|senhaForte/);
     expect(findMcpJsonSecrets('nada')).toEqual([]);

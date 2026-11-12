@@ -803,6 +803,13 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     </div>
   </article>
 
+  <article class="blk" id="segundo-plano">
+    <h3>Segundo plano</h3>
+    <p>O trabalho roda no servidor do Claudio’s Club (um processo Node na sua máquina, porta 4848), não no navegador. Fechar a aba ou o navegador <b>não para</b> os funcionários: as conversas em andamento terminam o turno, a fila anda, e revisões, despertadores e continuações agendadas seguem.</p>
+    <p>O que precisa de você (aprovar permissão, aprovar ou recusar plano, mover card, responder pergunta) continua esperando até você abrir o Claudio’s Club de novo.</p>
+    <p>Para de verdade só se você fechar o servidor (terminal ou processo), clicar em <b class="ui">Parar o Clube dos Claudios</b> (<b class="ui">Configurações</b> → <b class="ui">Geral</b> → <b class="ui">Servidor</b>), ou se o computador hibernar ou desligar.</p>
+  </article>
+
   <article class="blk" id="parear">
     <h3>Parear o navegador</h3>
     <p>As ações (mandar mensagem, botões) só funcionam em navegador pareado. Num navegador novo:</p>
@@ -1694,6 +1701,30 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     </div>
     <p>Limite de consumo e motores: <a href="#consumo-motores">capítulo 6</a>. Tarefas: <a href="#tarefas">capítulo 4</a>.</p>
   </article>
+
+  <article class="blk" id="freios">
+    <h3>Freios contra laço</h3>
+    <p>Limites que param um turno ou uma conversa antes que fiquem presos num laço. Quando um bate, a conversa para e você é avisado. Os de turno valem para todos os funcionários, Claude e Codex.</p>
+    <div class="tw"><table class="tbl stack">
+      <thead><tr><th>Limite</th><th>Padrão</th><th>O que acontece ao passar</th></tr></thead>
+      <tbody>
+        <tr><td data-label="Limite">Ferramentas por turno</td><td data-label="Padrão">500 (0 desliga)</td><td data-label="O que acontece ao passar">O turno é interrompido como <b class="ui">Parar</b> e aparece o aviso “Turno parado: passou de 500 ferramentas”.</td></tr>
+        <tr><td data-label="Limite">Minutos por turno</td><td data-label="Padrão">180 (0 desliga)</td><td data-label="O que acontece ao passar">Igual ao de cima, com o aviso “Turno parado: passou de 180 minutos”.</td></tr>
+        <tr><td data-label="Limite">Mensagens entre funcionários</td><td data-label="Padrão">20 em 30 min, por conversa</td><td data-label="O que acontece ao passar">A 21ª é recusada e o funcionário é orientado a falar com você.</td></tr>
+        <tr><td data-label="Limite">Despertadores seguidos</td><td data-label="Padrão">20 sem você falar</td><td data-label="O que acontece ao passar">O próximo é recusado e ele pede o seu ok.</td></tr>
+        <tr><td data-label="Limite">Estouros de limite de uso seguidos</td><td data-label="Padrão">5</td><td data-label="O que acontece ao passar">O “continue” automático desiste.</td></tr>
+        <tr><td data-label="Limite">Revisão automática</td><td data-label="Padrão">2 rodadas</td><td data-label="O que acontece ao passar">Depois disso, a revisão fica com você.</td></tr>
+        <tr><td data-label="Limite">Dúvidas ao gestor</td><td data-label="Padrão">3 por tarefa</td><td data-label="O que acontece ao passar">A próxima dúvida vai para você.</td></tr>
+      </tbody>
+    </table></div>
+    <ul>
+      <li><b class="ui">Ferramentas por turno</b> e <b class="ui">Minutos por turno</b> ficam em <b class="ui">Configurações</b> → <b class="ui">Executar</b>. Contam também as ferramentas dos subagents. O tempo em que o turno espera sua permissão ou resposta não conta.</li>
+      <li>Ao passar do teto, o turno para, o aviso aparece na conversa e na caixa de entrada, e o “continue” automático e o despertador daquela conversa são cancelados. Ela não retoma sozinha.</li>
+      <li>Se a conversa é de uma tarefa da fila, a tarefa vai para <b class="ui">Aguardar</b> com o motivo (não vai para revisão como entrega), e a fila do funcionário anda.</li>
+      <li>Para seguir: mande uma mensagem na conversa (o aviso some) ou mova o card. Se o trabalho é legitimamente longo, aumente o teto.</li>
+      <li><b>Mensagens entre funcionários</b>: uma conversa recebe no máximo 20 mensagens de funcionários em 30 minutos, somando todos os remetentes. A 21ª é recusada. Uma mensagem sua nessa conversa zera a conta. Mensagens internas do Club (revisão, desfecho, continue, despertador) não contam.</li>
+    </ul>
+  </article>
   <p><a class="back" href="#indice">↑ Voltar ao índice</a></p>
 </section>
 
@@ -2089,9 +2120,9 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         </ul>
         <p><b>Cores:</b></p>
         <ul class="chips">
-          <li><span class="chip"><span class="mdot ok"></span>verde: abaixo de 50%</span></li>
-          <li><span class="chip"><span class="mdot wait"></span>amarelo: de 50% a 69%</span></li>
-          <li><span class="chip"><span class="mdot bad"></span>vermelho: a partir de 70%</span></li>
+          <li><span class="chip"><span class="mdot ok"></span>verde: abaixo de 70%</span></li>
+          <li><span class="chip"><span class="mdot wait"></span>amarelo: de 70% a 89%</span></li>
+          <li><span class="chip"><span class="mdot bad"></span>vermelho: a partir de 90%</span></li>
         </ul>
       </div>
       <figure class="mock panel" role="img" aria-label="Barras de consumo do Claude: 5h em 34% verde, 7d em 58% amarelo; exemplo em 82% vermelho; dica ao passar o mouse com reinicia em e lido há">
@@ -2134,7 +2165,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <div class="split">
       <ul>
         <li>Na ficha do funcionário, campo <b class="ui">Motor</b>: <b class="ui">Claude</b> ou <b class="ui">Codex (GPT)</b>.</li>
-        <li>O <b>Codex (GPT)</b> roda numa <b>sandbox</b>: só o projeto, sem internet. Precisa de <b class="ui">Usar o Codex (GPT)</b> ligado. Com ele desligado, a conversa de quem roda no Codex <b>não abre</b>.</li>
+        <li>O <b>Codex (GPT)</b> roda numa <b>sandbox</b>: só o projeto, e o terminal não tem internet. A busca na web fica com <b class="ui">Permitir acesso à internet</b> (ligada por padrão), que vale também para o <code>perguntar_gpt</code>. Precisa de <b class="ui">Usar o Codex (GPT)</b> ligado. Com ele desligado, a conversa de quem roda no Codex <b>não abre</b>.</li>
         <li>Quem tem <b>servidor</b> na ficha não pode rodar no Codex. Para escolher o Codex, tire os servidores na aba <b class="ui">Projeto</b>.</li>
       </ul>
       <figure class="mock panel" role="img" aria-label="Campo Motor da ficha com Claude e Codex (GPT)">
@@ -2354,6 +2385,8 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <tr><td data-label="Item">Modelo do GPT</td><td data-label="Grupo">Geral (avançado)</td><td data-label="O que faz">Modelo do Codex usado nas perguntas ao GPT. <b class="ui">Padrão do Codex</b> deixa o Codex escolher. Só aparece com o Codex ligado.</td></tr>
         <tr><td data-label="Item">Atualizações</td><td data-label="Grupo">Geral</td><td data-label="O que faz">Mostra a versão e tem <b class="ui">Procurar agora</b>. Veja <a href="#atualizar">Atualizar o Club</a>.</td></tr>
         <tr><td data-label="Item">Servidor</td><td data-label="Grupo">Geral</td><td data-label="O que faz"><b class="ui">Reiniciar</b> e <b class="ui">Parar o Clube dos Claudios</b>. Ao parar, as conversas abertas fecham e as rotinas param até o servidor voltar.</td></tr>
+        <tr><td data-label="Item">Ferramentas por turno</td><td data-label="Grupo">Executar</td><td data-label="O que faz">Teto de ferramentas por turno (padrão 500; 0 desliga). Passando dele, o turno para e você é avisado. Veja <a href="#freios">Freios contra laço</a>.</td></tr>
+        <tr><td data-label="Item">Minutos por turno</td><td data-label="Grupo">Executar</td><td data-label="O que faz">Teto de minutos por turno (padrão 180; 0 desliga), sem contar o tempo esperando sua permissão ou resposta.</td></tr>
       </tbody>
     </table></div>
     <div class="note"><svg class="i ico"><use href="#i-info"/></svg><div><p>Se você não acha <b class="ui">Usar o Codex (GPT)</b>, mude <b class="ui">Nível de uso</b> para <b>Avançado</b>.</p></div></div>
@@ -2767,9 +2800,9 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
               <span class="mb p" style="justify-self:start">Aplicar sugestões (n)</span>
             </div>
           </figure>
-          <figure class="mock panel" role="img" aria-label="Barras 5h e 7d em verde, abaixo de 50%, e o anel de contexto da conversa">
+          <figure class="mock panel" role="img" aria-label="Barras 5h e 7d em verde, abaixo de 70%, e o anel de contexto da conversa">
             <div class="mock-b m-col">
-              <div class="m-row"><b style="width:26px">5h</b><span class="bar lg"><i style="width:34%"></i></span><span class="m-note">verde: abaixo de 50%</span></div>
+              <div class="m-row"><b style="width:26px">5h</b><span class="bar lg"><i style="width:34%"></i></span><span class="m-note">verde: abaixo de 70%</span></div>
               <div class="m-row"><b style="width:26px">7d</b><span class="bar lg"><i style="width:42%"></i></span></div>
               <div class="m-row"><span class="ring" aria-hidden="true"></span><span>anel de contexto da conversa</span></div>
             </div>
@@ -2778,7 +2811,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
             <p class="chk-t"><svg class="i ico"><use href="#i-check"/></svg>Conferir no fim</p>
             <ul>
               <li>o anel de contexto da conversa baixou;</li>
-              <li>as barras 5h e 7d estão em verde (abaixo de 50%);</li>
+              <li>as barras 5h e 7d estão em verde (abaixo de 70%);</li>
               <li>a ficha mostra o modelo e o esforço novos.</li>
             </ul>
           </div>
@@ -2834,6 +2867,14 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       <li>
         <p class="pb"><svg class="i" aria-hidden="true"><use href="#i-alert"/></svg><span>A conversa de um funcionário com motor Codex não abre</span></p>
         <p class="fx"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span><b class="ui">Usar o Codex (GPT)</b> está desligado. Ligue-o em <b class="ui">Geral</b>.</span></p>
+      </li>
+      <li>
+        <p class="pb"><svg class="i" aria-hidden="true"><use href="#i-alert"/></svg><span><b class="ui">Turno parado: passou de…</b> (ferramentas ou minutos)</span></p>
+        <p class="fx"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>O turno bateu o teto por turno e parou. Mande uma mensagem na conversa para seguir, ou mova o card. Se o trabalho é longo de verdade, aumente <b class="ui">Ferramentas por turno</b> ou <b class="ui">Minutos por turno</b> em <b class="ui">Configurações</b> → <b class="ui">Executar</b> (0 desliga).</span></p>
+      </li>
+      <li>
+        <p class="pb"><svg class="i" aria-hidden="true"><use href="#i-alert"/></svg><span>Funcionário diz que há muitas mensagens entre funcionários</span></p>
+        <p class="fx"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>A conversa passou de 20 mensagens de funcionários em 30 min. Responda na conversa (sua mensagem zera a conta). Veja <a href="#freios">Freios contra laço</a>.</span></p>
       </li>
     </ul>
   </section>

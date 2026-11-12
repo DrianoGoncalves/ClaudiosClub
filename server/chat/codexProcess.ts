@@ -37,6 +37,11 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
    * da conversa e nada roda; sem `network_proxy`, roda sem rede e avisa. Sem esta função a rede fica desligada (falha fechada).
    */
   env?: () => Promise<CodexEnvStatus>;
+  /**
+   * "Permitir acesso à internet" (a busca na web do Codex, ver `codexSafetyArgs`), lida a CADA execução: a mudança nas Configurações vale na
+   * próxima mensagem. Sem esta função, ou se ela falhar, a busca fica desligada (falha fechada).
+   */
+  internetAccess?: () => Promise<boolean>;
   /** Sistema (os testes trocam). */
   platform?: NodeJS.Platform;
   /** thread_id de uma conversa que já existe: a primeira mensagem já retoma. */
@@ -144,12 +149,13 @@ export class CodexProcess extends ChatProcess {
 
   // ---- mensagens ----
 
-  override send(text: string, priority: SendPriority = 'next', images: string[] = [], notice?: string, files: ChatAttachment[] = []) {
+  override send(text: string, priority: SendPriority = 'next', images: string[] = [], notice?: string, files: ChatAttachment[] = [], fromStaff = false) {
     if (!this.state.running || this.closing) throw new Error('a conversa não está aberta');
     this.lastActivity = Date.now();
     this.checkpointSeen = false;
     const queued = this.state.busy ? priority : undefined;
-    this.scan(text);
+    // Mesma regra do processo Claude: o que você escreve é "owner"; o que outro funcionário manda não tem origem.
+    this.scan(text, fromStaff ? undefined : 'owner');
     // Arquivo de texto vai dentro do prompt; imagem e PDF ainda não vão ao Codex (aviso).
     const inline = files.filter((f) => f.mediaType !== 'application/pdf');
     const skipped = images.length + (files.length - inline.length);
@@ -257,21 +263,26 @@ export class CodexProcess extends ChatProcess {
    */
   private launch(job: Job, override?: { model: string | null }) {
     const check = this.codex.env;
-    if (!check) {
-      this.exec(job, override, { error: null, version: null, networkProxy: false, notice: null });
+    const internet = this.codex.internetAccess;
+    const none: CodexEnvStatus = { error: null, version: null, networkProxy: false, notice: null };
+    if (!check && !internet) {
+      this.exec(job, override, none, false);
       return;
     }
     this.holding = true;
-    void check()
-      .catch((err): CodexEnvStatus => ({ error: `não consegui conferir o Codex: ${err instanceof Error ? err.message : String(err)}`, version: null, networkProxy: false, notice: null }))
-      .then((status) => {
-        this.holding = false;
-        if (this.closing || !this.state.running) return;
-        this.exec(job, override, status);
-      });
+    // A opção de internet é lida nesta execução (não na criação da conversa); erro ao ler = desligada.
+    const access = internet ? internet().catch(() => false) : Promise.resolve(false);
+    const status = check
+      ? check().catch((err): CodexEnvStatus => ({ error: `não consegui conferir o Codex: ${err instanceof Error ? err.message : String(err)}`, version: null, networkProxy: false, notice: null }))
+      : Promise.resolve(none);
+    void Promise.all([status, access]).then(([st, internetAccess]) => {
+      this.holding = false;
+      if (this.closing || !this.state.running) return;
+      this.exec(job, override, st, internetAccess);
+    });
   }
 
-  private exec(job: Job, override: { model: string | null } | undefined, status: CodexEnvStatus) {
+  private exec(job: Job, override: { model: string | null } | undefined, status: CodexEnvStatus, internetAccess: boolean) {
     const o = this.codex;
     // Alias ou id do Claude (opus, sonnet…) não vale para o Codex: vai sem `-m` (o padrão dele), e o plano B nem entra (não há modelo pedido).
     const model = override ? override.model : codexModelOrNull(this.state.model);
@@ -280,6 +291,8 @@ export class CodexProcess extends ChatProcess {
     run.model = model;
     run.fresh = this.thread === null;
     this.run = run;
+    // Cada execução é um turno do Codex (o fim do turno é o fim da execução): o teto começa aqui, zerado.
+    this.startTurnBudget();
     // Falha fechada: Codex que não serve, segredo que não dá para proteger ou qualquer erro ao montar a linha de comando acaba o turno com
     // a mensagem (a conversa fica livre), em vez de rodar sem proteção ou travar em "trabalhando".
     if (status.error) {
@@ -302,6 +315,7 @@ export class CodexProcess extends ChatProcess {
         readOnlyPaths: o.readOnlyPaths,
         secrets: o.secrets,
         network: status.networkProxy ? 'loopback' : 'off',
+        internetAccess,
         threadId: this.thread,
         platform: o.platform,
       });
@@ -369,6 +383,7 @@ export class CodexProcess extends ChatProcess {
   private closeRun(run: Run, code: number | null, spawnError?: string) {
     if (run.closed) return;
     run.closed = true;
+    this.endTurnBudget();
     if (run.buf.trim()) this.handle(tryJson(run.buf.trim()) as Record<string, unknown> | null);
     run.buf = '';
     if (this.current && this.run === run) this.current = null;
@@ -440,6 +455,7 @@ export class CodexProcess extends ChatProcess {
   private endTurn(run: Run, outcome: { kind: 'ok' } | { kind: 'stopped' } | { kind: 'failed'; text: string }) {
     if (run.ended) return;
     run.ended = true;
+    this.endTurnBudget();
     const at = new Date().toISOString();
     let limit: { resetsIn?: number } | null = null;
     if (outcome.kind === 'stopped') {
@@ -461,6 +477,7 @@ export class CodexProcess extends ChatProcess {
 
   private finishSession(error: string | null) {
     if (!this.state.running) return;
+    this.endTurnBudget();
     this.opts.onExit?.(null, error);
     this.waitingReply = false;
     this.setState({ running: false, busy: false, compacting: false, error, background: [] });
@@ -474,6 +491,8 @@ export class CodexProcess extends ChatProcess {
   override handle(ev: Record<string, unknown> | null) {
     if (!ev || typeof ev.type !== 'string') return;
     const run = (this.run ??= newRun());
+    // Teto do turno: confere o tempo a cada evento (o fim do turno não entra: quem acaba o turno é ele).
+    if (ev.type !== 'turn.completed' && ev.type !== 'turn.failed') this.checkTurnCap();
     switch (ev.type) {
       case 'thread.started': {
         const id = typeof ev.thread_id === 'string' && THREAD_ID.test(ev.thread_id) ? ev.thread_id : null;
@@ -490,6 +509,7 @@ export class CodexProcess extends ChatProcess {
       case 'item.updated':
       case 'item.completed':
         this.onItem(run, ev.type.slice(5) as CodexPhase, ev.item);
+        this.checkTurnCap();
         return;
       case 'turn.completed': {
         const used = contextUsed(ev.usage, run.tools.size);
@@ -513,15 +533,19 @@ export class CodexProcess extends ChatProcess {
     const next = itemFromCodex(raw, run.key, new Date().toISOString(), phase);
     if (!next) return;
     const prev = this.items.get(next.id);
-    if (isToolCall(raw)) run.tools.add(next.id);
+    if (isToolCall(raw)) {
+      run.tools.add(next.id);
+      // Teto do turno: a ferramenta conta uma vez (o id já vem com a chave da execução, e o dedupe é pelo id).
+      this.budget.countTool(next.id);
+    }
     // Segredos: tudo que o funcionário escreve, roda e lê passa pelo filtro (só o tipo vai para o aviso; ver secrets.ts).
     if (next.kind === 'assistant') {
-      this.scan(next.text);
+      this.scan(next.text, 'staff-reply');
       if (hasCheckpoint(next.text)) this.checkpointSeen = true;
       this.putItem({ ...next, text: stripCheckpoint(next.text), at: (prev?.kind === 'assistant' ? prev.at : null) ?? next.at });
     } else if (next.kind === 'tool') {
-      this.scan(next.input);
-      if (next.result) this.scan(next.result);
+      this.scan(next.input, 'tool-input');
+      if (next.result) this.scan(next.result, 'tool-result');
       this.putItem({ ...next, at: (prev?.kind === 'tool' ? prev.at : null) ?? next.at });
     } else {
       this.putItem(next);

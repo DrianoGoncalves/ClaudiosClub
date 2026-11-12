@@ -18,10 +18,11 @@ import { ROOT } from '../root';
 
 // MCP do Claudio’s Club que leva uma pergunta ao GPT: um servidor stdio (JSON-RPC por linha) que o Claude Code do funcionário sobe
 // quando o Codex está ligado nas configurações (`codexReview`). A única ferramenta, `perguntar_gpt`, abre o `codex exec` por spawn
-// (array de argumentos: nenhum shell no meio do texto da pergunta, que vai pelo stdin), só leitura, sem rede, sem a config do usuário
-// e sem os conectores da conta, com as pastas de segredo negadas (`codexSafetyArgs`, o mesmo bloqueio do motor Codex).
+// (array de argumentos: nenhum shell no meio do texto da pergunta, que vai pelo stdin), só leitura, sem a config do usuário
+// e sem os conectores da conta, com as pastas de segredo negadas (`codexSafetyArgs`, o mesmo bloqueio do motor Codex). A busca na web
+// só existe se "Permitir acesso à internet" estiver ligado nas Configurações (`internetAccess`, lida a cada pergunta).
 // Antes de abrir o `codex exec`, confere o Codex instalado com a mesma checagem do motor dos funcionários (`CodexEnv`: versão mínima), e recusa
-// com a mesma mensagem se for velho demais. O `network_proxy` não importa aqui: a pergunta roda sem rede. Se o bloqueio de segredos não consegue
+// com a mesma mensagem se for velho demais. O `network_proxy` não importa aqui: o terminal da pergunta segue sem rede. Se o bloqueio de segredos não consegue
 // provar que uma pasta secreta está protegida (`CodexBlockedError`), a ferramenta devolve esse texto como erro e não roda nada.
 // Sem o SDK oficial, como o MCP de FTP: o protocolo usado é pequeno (initialize, ping, tools/list, tools/call e notifications/cancelled).
 // Encerramento: o prazo de 10 min e a limpeza dos temporários só existem dentro deste processo, então quando o Claude Code o encerra
@@ -207,6 +208,8 @@ export const spawnCodex: GptRunner = (args, input, o) =>
 
 const Ask = z.object({
   pergunta: z.string({ required_error: 'informe a pergunta' }).trim().min(1, 'informe a pergunta').max(MAX_QUESTION, `pergunta grande demais (máx. ${MAX_QUESTION} caracteres)`),
+  /** A preferência ou conclusão do chamador: o GPT a ataca, não a toma como fato. */
+  hipotese: z.string().trim().max(MAX_QUESTION, `hipótese grande demais (máx. ${MAX_QUESTION} caracteres)`).optional(),
   contexto: z.string().trim().max(MAX_CONTEXT, `contexto grande demais (máx. ${MAX_CONTEXT} caracteres)`).optional(),
   esforco: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.enum(EFFORTS, { errorMap: () => ({ message: `esforço: ${EFFORTS.join(', ')}` }) }).optional()),
 });
@@ -217,12 +220,13 @@ export const TOOLS = [
     name: GPT_TOOL_NAME,
     description:
       'Pergunta ao GPT (OpenAI, pelo Codex) uma opinião independente: decisão que pesa (arquitetura, escolher entre caminhos, trade-off) ou revisão de algo arriscado. ' +
-      'O GPT lê o projeto (pasta da sessão) em só leitura, sem rede, e não altera nada; ele não vê esta conversa, então ponha a decisão, as opções e o que já se sabe (caminhos de arquivo, restrições). ' +
-      'Demora de 15 s a alguns minutos e gasta a cota ChatGPT do usuário: use em decisão que pesa, não em dúvida pequena. A resposta é do GPT: compare com a sua e, se discordarem, mostre as duas ao usuário.',
+      'O GPT lê o projeto (pasta da sessão) em só leitura e não altera nada; pesquisa na web só se "Permitir acesso à internet" estiver ligado nas Configurações. Ele não vê esta conversa, então ponha a decisão, as opções em termos neutros e o que já se sabe (caminhos de arquivo, restrições); a sua preferência vai em hipotese. ' +
+      'Demora de 15 s a alguns minutos e gasta a cota ChatGPT do usuário: use em decisão que pesa, não em dúvida pequena. A resposta começa com um veredito (CONCORDO, CONCORDO COM RESSALVAS ou DISCORDO): mostre ao usuário o veredito e as divergências em 1-2 linhas, mesmo com ressalvas, e se discordarem mostre as duas posições.',
     inputSchema: {
       type: 'object',
       properties: {
-        pergunta: { type: 'string', description: 'A decisão ou o que revisar, com as opções (o GPT não vê esta conversa).' },
+        pergunta: { type: 'string', description: 'A decisão ou o que revisar, com as opções em termos neutros, sem a sua preferência (ela vai em hipotese). O GPT não vê esta conversa.' },
+        hipotese: { type: 'string', description: 'A sua preferência ou conclusão, separada da pergunta: o GPT vai atacá-la, não tomá-la como fato. Opcional.' },
         contexto: { type: 'string', description: 'O que já se sabe: objetivo, arquivos (caminho), restrições, o que já foi decidido. Opcional.' },
         esforco: { type: 'string', enum: [...EFFORTS], description: `Quanto o GPT pensa (padrão ${DEFAULT_EFFORT}). Mais alto demora mais.` },
       },
@@ -231,27 +235,63 @@ export const TOOLS = [
   },
 ];
 
-/** O prompt do GPT: o pedido e as regras (só leitura, sem segredos, resposta curta). */
-export function buildAskPrompt(a: Pick<AskInput, 'pergunta' | 'contexto'>): string {
+/** O prompt do GPT: o pedido e as regras (só leitura, sem segredos, veredito na primeira linha, resposta curta). */
+export function buildAskPrompt(a: Pick<AskInput, 'pergunta' | 'contexto' | 'hipotese'>): string {
   return [
     'Você é um consultor técnico independente. Outro assistente de IA (Claude), que está trabalhando no projeto da pasta atual, pede a sua opinião. Você não vê a conversa dele: tudo o que precisa está abaixo, e pode ler arquivos do projeto (só leitura) para conferir.',
     'Não altere nada e não rode comandos que mudem arquivos, dados ou servidores. Não leia nem repita o conteúdo de .env, chaves, tokens ou senhas.',
-    'Responda em português do Brasil, curto, em Markdown: 1) recomendação; 2) por quê; 3) riscos e o que conferir antes. Se faltar informação, diga qual e dê a melhor recomendação mesmo assim. Seja direto: discorde de uma premissa se ela parecer errada.',
+    'Responda em português do Brasil, curto, em Markdown, nesta ordem:\n' +
+      '1) Primeira linha exatamente `Veredito: CONCORDO`, `Veredito: CONCORDO COM RESSALVAS` ou `Veredito: DISCORDO` (sobre a hipótese do chamador; sem hipótese, sobre a opção que parece preferida ou sobre a premissa da pergunta).\n' +
+      '2) O argumento mais forte contra a hipótese ou a opção que você recomenda, mesmo que você concorde.\n' +
+      '3) Uma alternativa que não está na pergunta (ou diga por que nenhuma é melhor).\n' +
+      '4) Recomendação e o que você mudaria.\n' +
+      '5) Riscos e o que conferir antes (confira no código o que puder; fatos do chamador podem estar errados ou desatualizados).\n' +
+      'Não concorde por educação: concordar sem ter achado nada é a resposta menos útil. Se faltar informação para decidir, diga qual e se ela muda a recomendação.',
     `## Pergunta\n${a.pergunta}`,
+    a.hipotese ? `## Hipótese do chamador (a atacar, não é fato)\n${a.hipotese}` : '',
     a.contexto ? `## Contexto\n${a.contexto}` : '',
   ]
     .filter(Boolean)
     .join('\n\n');
 }
 
-/** Argumentos depois de `codex`: só leitura, sem rede, ephemeral, a resposta final em `out`, o prompt pelo stdin (`-`). */
-export function buildAskArgs(o: { cwd: string; projectPath: string; home: string; mycoHome: string; out: string; effort: string; model: string | null }): string[] {
+export type Verdict = 'concordo' | 'ressalvas' | 'discordo';
+const semAcento = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toUpperCase();
+
+/** O veredito da linha `Veredito: ...` nas primeiras linhas da resposta (sem diferenciar maiúsculas nem acentos). RESSALVAS vence CONCORDO. */
+export function parseVerdict(answer: string): Verdict | null {
+  const line = answer.split(/\r?\n/).slice(0, 5).map(semAcento).find((l) => /^\W*VEREDITO\s*:/.test(l));
+  if (!line) return null;
+  if (line.includes('RESSALVAS')) return 'ressalvas';
+  if (line.includes('CONCORDO')) return 'concordo';
+  if (line.includes('DISCORDO')) return 'discordo';
+  return null;
+}
+
+/** Uma linha por chamada, para medir (sem o texto da pergunta nem da resposta). Erro no log é engolido. */
+export interface ConsultaLog {
+  ts: string;
+  project: string;
+  effort: string;
+  model: string | null;
+  ok: boolean;
+  verdict: Verdict | null;
+  /** Caracteres de pergunta, hipótese e contexto somados. */
+  questionChars: number;
+  answerChars: number;
+}
+async function logConsulta(file: string, e: ConsultaLog): Promise<void> {
+  await fs.mkdir(path.dirname(file), { recursive: true }).then(() => fs.appendFile(file, JSON.stringify(e) + '\n')).catch(() => {});
+}
+
+/** Argumentos depois de `codex`: só leitura, terminal sem rede, busca na web só com `internetAccess`, ephemeral, a resposta final em `out`, o prompt pelo stdin (`-`). */
+export function buildAskArgs(o: { cwd: string; projectPath: string; home: string; mycoHome: string; out: string; effort: string; model: string | null; internetAccess: boolean }): string[] {
   return [
     'exec',
     ...(o.model ? ['-m', o.model] : []),
     '-c',
     `model_reasoning_effort=${tomlString(o.effort)}`,
-    ...codexSafetyArgs({ mode: 'read-only', network: 'off', cwd: o.cwd, projectPath: o.projectPath, home: o.home, mycoHome: o.mycoHome }),
+    ...codexSafetyArgs({ mode: 'read-only', network: 'off', webSearch: o.internetAccess, cwd: o.cwd, projectPath: o.projectPath, home: o.home, mycoHome: o.mycoHome }),
     ...codexWindowsSandboxArgs(),
     '--ephemeral',
     '--skip-git-repo-check',
@@ -291,7 +331,13 @@ export function createGptMcp(opts: GptMcpOptions) {
     return r && r.code === 0 ? parseCodexModels(r.stdout) : null;
   }
 
-  async function ask(a: AskInput, signal: AbortSignal): Promise<string> {
+  /** O que o log precisa da chamada: o modelo que rodou e o tamanho da resposta (preenchido conforme a chamada anda). */
+  interface Seen {
+    model?: string | null;
+    answer?: string;
+  }
+
+  async function ask(a: AskInput, signal: AbortSignal, seen: Seen): Promise<string> {
     const check = () => {
       if (signal.aborted) throw new GptError('pergunta cancelada');
     };
@@ -299,7 +345,7 @@ export function createGptMcp(opts: GptMcpOptions) {
     const config = await readConfig(configFile);
     if (!config.codexReview) throw new GptError('o Codex está desligado nas configurações do Claudio’s Club: peça ao usuário para ligar "Usar o Codex (GPT)"');
     const wanted = config.codexModel.trim() || null;
-    const sent = findSecret(`${a.pergunta}\n${a.contexto ?? ''}`);
+    const sent = findSecret(`${a.pergunta}\n${a.hipotese ?? ''}\n${a.contexto ?? ''}`);
     if (sent) throw new GptError(`o pedido tem ${sent.label}: não mandei ao GPT. Tire o segredo do texto e pergunte de novo`);
     // Codex ausente, sem versão legível ou velho demais: a mesma mensagem do motor (com como atualizar), e nada roda.
     const env = await codexEnv.status();
@@ -314,9 +360,11 @@ export function createGptMcp(opts: GptMcpOptions) {
     const once = async (model: string | null) => {
       check();
       await fs.rm(out, { force: true });
-      const r = await run(buildAskArgs({ cwd: opts.root, projectPath: opts.projectPath, home, mycoHome, out, effort, model }), prompt, { cwd: opts.root, timeoutMs, signal });
+      const r = await run(buildAskArgs({ cwd: opts.root, projectPath: opts.projectPath, home, mycoHome, out, effort, model, internetAccess: config.internetAccess }), prompt, { cwd: opts.root, timeoutMs, signal });
       check(); // cancelada: o codex já fechou (o runner só devolve depois), a resposta não interessa e a pasta sai no finally
       const answer = (await fs.readFile(out, 'utf8').catch(() => '')).trim() || (r.code === 0 ? r.stdout.trim() : '');
+      seen.model = model ?? modelOf(r.stderr);
+      seen.answer = answer;
       return { r, answer };
     };
 
@@ -354,12 +402,28 @@ export function createGptMcp(opts: GptMcpOptions) {
     if (name !== GPT_TOOL_NAME) return text(`ferramenta desconhecida: ${String(name).slice(0, 60)}`, true);
     const parsed = Ask.safeParse(args ?? {});
     if (!parsed.success) return text(`argumentos inválidos: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'entrada'}: ${i.message}`).join('; ')}`, true);
+    const a = parsed.data;
+    const seen: Seen = {};
+    let ok = true;
+    let out: ReturnType<typeof text>;
     try {
-      return text(await ask(parsed.data, signal));
+      out = text(await ask(a, signal, seen));
     } catch (err) {
       // Erro nosso já vem em palavras (e a recusa do bloqueio de segredos, também: ela diz qual caminho corrigir); o resto, sem detalhe.
-      return text(err instanceof GptError || err instanceof CodexBlockedError ? err.message : 'falha inesperada no MCP do GPT', true);
+      ok = false;
+      out = text(err instanceof GptError || err instanceof CodexBlockedError ? err.message : 'falha inesperada no MCP do GPT', true);
     }
+    await logConsulta(path.join(mycoHome, 'logs', 'gpt-consultas.jsonl'), {
+      ts: new Date().toISOString(),
+      project: opts.projectPath,
+      effort: a.esforco ?? DEFAULT_EFFORT,
+      model: seen.model ?? null,
+      ok,
+      verdict: ok && seen.answer !== undefined ? parseVerdict(seen.answer) : null,
+      questionChars: a.pergunta.length + (a.hipotese?.length ?? 0) + (a.contexto?.length ?? 0),
+      answerChars: seen.answer?.length ?? 0,
+    });
+    return out;
   }
 
   type Msg = { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: Record<string, unknown> };
@@ -385,7 +449,7 @@ export function createGptMcp(opts: GptMcpOptions) {
           protocolVersion: typeof asked === 'string' && PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: GPT_MCP_NAME, version: VERSION },
-          instructions: 'Opinião do GPT (OpenAI, pelo Codex) do Claudio’s Club: só leitura, sem rede. Use em decisão que pesa e compare a resposta com a sua.',
+          instructions: 'Opinião do GPT (OpenAI, pelo Codex) do Claudio’s Club: só leitura; pesquisa na web se "Permitir acesso à internet" estiver ligado nas Configurações. Use em decisão que pesa e compare a resposta com a sua.',
         });
       }
       case 'ping':

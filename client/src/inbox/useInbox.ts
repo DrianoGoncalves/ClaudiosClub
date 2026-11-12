@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { InboxItem, TurnNotice } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
+import { secretText } from './secretText';
 
 // A caixa "precisa de mim": o que espera você em todas as salas, lida a cada poucos segundos.
 // Com "avisar no sistema" ligado, cada item novo vira uma notificação do sistema (só o que é novo:
@@ -133,7 +134,7 @@ function showDone(d: TurnNotice, onOpen: (item: InboxItem) => void, inbox: Inbox
 
 function show(item: InboxItem, onOpen: (item: InboxItem) => void) {
   try {
-    const n = new Notification(`${item.name} ${KIND_TITLE[item.kind]}`, { body: item.summary, tag: item.id });
+    const n = new Notification(`${item.name} ${KIND_TITLE[item.kind]}`, { body: secretText(item), tag: item.id });
     n.onclick = () => {
       window.focus();
       onOpen(item);

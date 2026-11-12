@@ -23,7 +23,9 @@ export function useServerAction(): { state: ServerState; error: string | null; a
       working?.background ? t('toolbar.cutBackground', { n: working.background }) : '',
     ].filter(Boolean);
     const warn = cut.length ? `\n\n${t('toolbar.warnCut', { cut: cut.join(` ${t('toolbar.and')} `) })}` : '';
-    const ask = (action === 'stop' ? t('toolbar.askStop') : t('toolbar.askRestart')) + warn;
+    // Reiniciando, quem está no meio do turno volta sozinho (ver server/chat/resume.ts): o aviso diz isso.
+    const back = action === 'restart' && working?.busy ? `\n\n${t('toolbar.resumeAfterRestart')}` : '';
+    const ask = (action === 'stop' ? t('toolbar.askStop') : t('toolbar.askRestart')) + warn + back;
     if (!window.confirm(ask)) return;
     setError(null);
     setState(action === 'stop' ? 'stopping' : 'restarting');

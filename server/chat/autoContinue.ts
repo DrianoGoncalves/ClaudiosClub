@@ -28,7 +28,7 @@ export interface Pending {
 }
 
 export type AutoContinueEvent =
-  | { type: 'cancelled'; by: 'user' | 'message' | 'staff' | 'fallback'; pending: Pending }
+  | { type: 'cancelled'; by: 'user' | 'message' | 'staff' | 'fallback' | 'cap'; pending: Pending }
   /** A opção foi desligada: a pendência saiu sem mandar (todas, de uma vez). */
   | { type: 'dropped'; pending: Pending }
   /** A linha de parada do usuário ainda barra: nova hora. */
@@ -77,6 +77,8 @@ export class AutoContinue {
   private timer: NodeJS.Timeout | null = null;
   private ticking = false;
   private lastSentAt = -Infinity;
+  /** Parado (reinício): nada mais sai até o `start` do boot. */
+  private halted = false;
 
   constructor(private readonly opts: AutoContinueOptions) {}
 
@@ -87,12 +89,18 @@ export class AutoContinue {
 
   /** Liga o temporizador (não segura o processo aberto). */
   start() {
+    this.halted = false;
     if (this.timer) return;
     this.timer = setInterval(() => void this.tick().catch((err) => this.log(`erro ao conferir: ${err instanceof Error ? err.message : String(err)}`)), this.opts.tickMs ?? 10_000);
     this.timer.unref();
   }
 
+  /**
+   * Para o temporizador e não manda mais nada (o reinício: as pendências ficam no disco e voltam no `start` do boot).
+   * Um envio já conferido, mas ainda não mandado, também não sai.
+   */
   stop() {
+    this.halted = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
   }
@@ -125,7 +133,7 @@ export class AutoContinue {
   }
 
   /** Tira a pendência da conversa (botão Cancelar, ou você mandou mensagem). Devolve se havia. */
-  async cancel(sessionId: string, by: 'user' | 'message' | 'staff' | 'fallback'): Promise<boolean> {
+  async cancel(sessionId: string, by: 'user' | 'message' | 'staff' | 'fallback' | 'cap'): Promise<boolean> {
     await this.load();
     const p = this.items.get(sessionId);
     if (!p) return false;
@@ -189,6 +197,7 @@ export class AutoContinue {
         }
         // Manda primeiro e só depois tira do disco: se o servidor cair entre os dois passos, o "continue" pode
         // sair de novo na volta (aceitável); perder a pendência deixaria a tarefa presa em "fazendo".
+        if (this.halted) return;
         this.lastSentAt = now();
         let error: string | null = null;
         try {

@@ -134,9 +134,21 @@ export function UsageMeters({ usage }: { usage: AccountUsage | null }) {
   );
 }
 
-/** Semáforo do consumo: verde abaixo de 50%, amarelo abaixo de 70%, vermelho dali em diante. */
+/** Semáforo do consumo: verde abaixo de 70%, amarelo abaixo de 90%, vermelho dali em diante. */
 export function usageLevel(pct: number): 'low' | 'mid' | 'high' {
-  return pct >= 70 ? 'high' : pct >= 50 ? 'mid' : 'low';
+  return pct >= 90 ? 'high' : pct >= 70 ? 'mid' : 'low';
+}
+
+const DAY_MS = 86_400_000;
+
+/** Média do que ainda resta da cota por dia que falta para o reset (em % por dia). */
+export function pacePerDay(pct: number, resetMs: number): number {
+  return (100 - pct) / (resetMs / DAY_MS);
+}
+
+/** Ritmo da cota de 7 dias: acima de 14%/dia sobra (listra branca), de 7 a 14 está no ritmo (cinza), abaixo de 7 está apertado (preta). */
+export function paceLevel(perDay: number): 'slack' | 'even' | 'tight' {
+  return perDay > 14 ? 'slack' : perDay >= 7 ? 'even' : 'tight';
 }
 
 function UsageMeter({ limit, now, service, name }: { limit: UsageLimit; now: number; service: 'claude' | 'codex'; name?: string }) {
@@ -147,11 +159,14 @@ function UsageMeter({ limit, now, service, name }: { limit: UsageLimit; now: num
   const level = usageLevel(pct);
   const label = LIMIT_LABEL[limit.kind] ?? limit.kind;
   const left = expired ? t('toolbar.resetDone') : resetMs !== null ? t('toolbar.resetsIn', { time: formatDuration(resetMs) }) : '';
+  // Só a janela de 7 dias: na de 5h a média por dia dispararia sempre.
+  const perDay = limit.kind === 'seven_day' && resetMs !== null && !expired ? pacePerDay(pct, resetMs) : null;
+  const pace = perDay === null ? null : t('toolbar.pacePerDay', { n: perDay.toLocaleString(locale(), { maximumFractionDigits: perDay < 10 ? 1 : 0 }) });
   return (
-    <span className={`meter meter-${level} meter-${service}`} title={`${name ? `${name} · ` : ''}${label}: ${expired ? '—' : `${Math.round(pct)}%`} ${left}`}>
+    <span className={`meter meter-${level} meter-${service}`} title={`${name ? `${name} · ` : ''}${label}: ${expired ? '—' : `${Math.round(pct)}%`} ${left}${pace ? ` · ${pace}` : ''}`}>
       <span className="meter-label">{label}</span>
       <span className="meter-track">
-        <span className="meter-fill" style={{ width: `${pct}%` }} />
+        <span className={`meter-fill${perDay === null ? '' : ` pace-${paceLevel(perDay)}`}`} style={{ width: `${pct}%` }} />
       </span>
       <span className="meter-value">{expired ? '—' : `${Math.round(pct)}%`}</span>
       {resetMs !== null && !expired && <span className="meter-reset">{formatDuration(resetMs)}</span>}

@@ -1,15 +1,17 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { AskedQuestion, BackgroundTask, ChatAttachment, ChatCommand, ChatEvent, ChatItem, ChatState, SendPriority, TaskQuestion, UsageLimit } from '../../shared/model';
+import type { AskedQuestion, BackgroundTask, ChatAttachment, ChatCommand, ChatEvent, ChatItem, ChatState, SendPriority, TaskQuestion, TurnCapHit, UsageLimit } from '../../shared/model';
 import { cleanEnv, withoutMycoToken } from '../auth';
 import { tryJson } from '../adapters/claude/fsutil';
 import { contextWindowFor } from '../adapters/claude/pricing';
 import { cacheTtlOf } from './contextPolicy';
+import { classifyDenial, denialNotice } from './denial';
 import { hasCheckpoint, inputText, resultText, stripCheckpoint, toolSummary } from './items';
 import { ASK_TOOL, cleanAnswers, parseQuestions } from './questions';
 import { killTree } from './registry';
-import { findSecret } from './secrets';
+import { findSecret, type SecretFinding, type SecretSource } from './secrets';
+import { capText, TurnBudget, type TurnCaps } from './turnCap';
 import { limitFromRateLimitEvent, limitFromText, mergeHits, type LimitHit } from './usageLimit';
 
 // Um funcionário conversando pelo Claudio’s Club: o `claude` em modo stream-json (o mesmo protocolo do SDK),
@@ -100,7 +102,7 @@ export interface ChatProcessOptions {
   /** O processo saiu (`error` com o motivo, se saiu com erro). */
   onExit?: (pid: number | null, error: string | null) => void;
   /** Algo com cara de segredo passou pela conversa (só o tipo; o valor nunca sai daqui). */
-  onSecret?: (label: string) => void;
+  onSecret?: (hit: SecretFinding, source?: SecretSource) => void;
   /**
    * Parou de trabalhar: o turno acabou (`turn`), o que estava em segundo plano terminou
    * (`background`) ou o processo saiu (`exit`).
@@ -108,6 +110,12 @@ export interface ChatProcessOptions {
   onIdle?: (reason: 'turn' | 'background' | 'exit') => void;
   /** Chegou a lista de comandos "/" da sessão. */
   onCommands?: (commands: ChatCommand[]) => void;
+  /** Teto por turno (ver turnCap.ts), lido a cada turno que começa; sem ele, sem teto. */
+  turnCaps?: () => Promise<TurnCaps>;
+  /** O turno passou do teto: chamado antes de interromper, para o manager guardar o motivo (a tarefa lê depois). */
+  onTurnCap?: (hit: TurnCapHit) => void;
+  /** Relógio do teto (os testes trocam). */
+  clock?: () => number;
   /** Pergunta só de escolhas (AskUserQuestion) esperando resposta: no formato da dúvida da tarefa (ver TaskQuestion). Texto e número não vão. */
   onAsk?: (requestId: string, questions: NonNullable<TaskQuestion['questions']>) => void;
   /** `MYCO_TOKEN` da conversa (ver server/callers.ts): vai no ambiente, ao lado do `MYCO_SESSION_ID`, para as chamadas à API do Claudio’s Club. */
@@ -155,6 +163,9 @@ export class ChatProcess {
   /** A ficha mudou depois que o processo abriu: reabre quando estiver parado. */
   stale = false;
   protected exitWaiters: Array<() => void> = [];
+  /** Conta do turno em andamento contra o teto (ferramentas e minutos; ver turnCap.ts). */
+  protected readonly budget = new TurnBudget();
+  private capTimer: NodeJS.Timeout | null = null;
 
   constructor(protected readonly opts: ChatProcessOptions) {
     this.sessionId = opts.sessionId;
@@ -185,6 +196,11 @@ export class ChatProcess {
 
   get busy(): boolean {
     return this.state.busy || this.pending.size > 0;
+  }
+
+  /** Algum pedido (permissão ou pergunta) sem resposta agora (o reinício avisa para refazê-lo, ver resume.ts). */
+  get awaitingAnswer(): boolean {
+    return this.pending.size > 0;
   }
 
   /** Turno em andamento ou algo em segundo plano: fechar o processo agora interromperia trabalho. */
@@ -320,7 +336,8 @@ export class ChatProcess {
     this.checkpointSeen = false;
     const queued = this.state.busy ? priority : undefined;
     if (queued === 'now') this.stopping = true;
-    this.scan(text);
+    // Mensagem de outro funcionário (delegação) não é "sua": sem origem, o aviso diz só "no chat".
+    this.scan(text, fromStaff ? undefined : 'owner');
     // Imagens e arquivos antes do texto (como o Claude Code faz ao colar um print): blocos da API.
     // Um aviso do Claudio’s Club (ficha atualizada) vai num bloco à parte; a conversa mostra só o seu texto.
     const content = [
@@ -344,6 +361,7 @@ export class ChatProcess {
       ...(fromStaff && { fromStaff }),
     });
     this.waitingReply = true;
+    this.startTurnBudget();
     this.setState({ busy: true, error: null });
   }
 
@@ -433,6 +451,51 @@ export class ChatProcess {
     this.write({ type: 'control_request', request_id: randomUUID(), request: { subtype: 'interrupt' } });
   }
 
+  protected clock(): number {
+    return this.opts.clock?.() ?? Date.now();
+  }
+
+  /**
+   * Um turno começa (mensagem numa conversa parada, ou o `init` do claude): zera a conta e lê os tetos. Confere
+   * de 15 s em 15 s (e a cada evento, ver `checkTurnCap`). Com turno já contado, não faz nada.
+   */
+  protected startTurnBudget(): void {
+    if (this.budget.active) return;
+    this.budget.begin(this.clock());
+    const caps = this.opts.turnCaps?.();
+    if (caps) void caps.then((c) => { this.budget.setCaps(c); this.checkTurnCap(); }, () => {});
+    this.capTimer = setInterval(() => this.checkTurnCap(), 15_000);
+    this.capTimer.unref?.();
+  }
+
+  /** O turno acabou (ou o processo saiu): para de contar e de conferir. */
+  protected endTurnBudget(): void {
+    this.budget.end();
+    if (this.capTimer) clearInterval(this.capTimer);
+    this.capTimer = null;
+  }
+
+  /**
+   * Estourou o teto: avisa o manager (que guarda o motivo antes da interrupção), põe o aviso no chat e interrompe como o
+   * botão Parar. Uma vez por turno: a conta para de disparar depois disso.
+   */
+  protected checkTurnCap(): void {
+    const hit = this.budget.check(this.clock());
+    if (!hit) return;
+    this.opts.onTurnCap?.(hit);
+    this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text: capText(hit), tone: 'warn', at: new Date().toISOString(), cap: hit });
+    try {
+      this.interrupt();
+    } catch {
+      // sem processo aberto: o turno já tinha acabado
+    }
+  }
+
+  /** Pedido seu (permissão ou pergunta) entrou ou saiu da fila: o relógio do teto para enquanto você decide. */
+  private pendingChanged(): void {
+    this.budget.setPaused(this.pending.size > 0, this.clock());
+  }
+
   /**
    * Responde um pedido de permissão. Aprovar devolve a entrada original, sem mudanças; com
    * `remember`, ainda libera de vez (nesta conversa ou no projeto). Negar leva `message` (o que o
@@ -450,6 +513,7 @@ export class ChatProcess {
     const p = this.pending.get(requestId);
     if (!p) return false;
     this.pending.delete(requestId);
+    this.pendingChanged();
     const asking = p.tool === ASK_TOOL;
     const updatedPermissions = allow && remember && !asking ? rememberRules(p.tool, p.suggestions, remember) : undefined;
     const given = allow && p.questions ? cleanAnswers(p.questions, reply?.answers, reply?.annotations) : undefined;
@@ -478,10 +542,10 @@ export class ChatProcess {
   }
 
   /** Guarda de segredos: avisa o tipo do que apareceu (ver secrets.ts). */
-  protected scan(text: string) {
+  protected scan(text: string, source?: SecretSource) {
     if (!this.opts.onSecret) return;
     const hit = findSecret(text);
-    if (hit) this.opts.onSecret(hit.label);
+    if (hit) this.opts.onSecret(hit, source);
   }
 
   lastAssistantText(): string | null {
@@ -525,6 +589,16 @@ export class ChatProcess {
 
   // ---- leitura do stream ----
 
+  /** Conta as ferramentas de uma mensagem do assistente (também as dos subagents) e confere o teto logo depois. */
+  private countToolUses(ev: Record<string, unknown>): void {
+    const content = (ev.message as { content?: unknown } | undefined)?.content;
+    if (!Array.isArray(content)) return;
+    for (const b of content as Array<Record<string, unknown>>) {
+      if (b.type === 'tool_use' && typeof b.id === 'string') this.budget.countTool(b.id);
+    }
+    this.checkTurnCap();
+  }
+
   protected onData(text: string) {
     this.lastActivity = Date.now();
     this.buf += text;
@@ -539,6 +613,9 @@ export class ChatProcess {
   /** Exposto para os testes alimentarem eventos sem processo. */
   handle(ev: Record<string, unknown> | null) {
     if (!ev || typeof ev.type !== 'string') return;
+    // Teto do turno: as ferramentas contam antes do filtro abaixo (as dos subagents também gastam), e o tempo é conferido a cada evento.
+    if (ev.type === 'assistant') this.countToolUses(ev);
+    if (ev.type !== 'result') this.checkTurnCap();
     // Eventos de subagents (parent_tool_use_id preenchido) ficam fora da conversa principal.
     if (ev.parent_tool_use_id) return;
     const at = new Date().toISOString();
@@ -549,6 +626,8 @@ export class ChatProcess {
         const mode = typeof ev.permissionMode === 'string' ? ev.permissionMode : null;
         // Cada turno começa com um init, inclusive o da mensagem que esperou na fila (`later`).
         if (subtype === 'init') {
+          // Turno que o próprio claude começa (mensagem da fila dele): a conta começa aqui; com turno já contado, não muda nada.
+          this.startTurnBudget();
           this.setState({ busy: true, ...(typeof ev.model === 'string' && { model: ev.model }), ...(mode && { permissionMode: mode }) });
           // Sem a lista com descrições (commands_changed), ao menos os nomes.
           const names = Array.isArray(ev.slash_commands) ? ev.slash_commands.filter((c): c is string => typeof c === 'string') : [];
@@ -562,7 +641,10 @@ export class ChatProcess {
           this.setState({ compacting: false });
         } else if (subtype === 'permission_denied') {
           const tool = typeof ev.tool_name === 'string' ? ev.tool_name : 'ferramenta';
-          this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text: `${tool}: permissão negada`, tone: 'warn', at });
+          // O texto da negação (quem barrou e por quê) vem no resultado da ferramenta: ele troca este aviso.
+          const id = `n:${randomUUID()}`;
+          this.denialNotices.set(typeof ev.tool_use_id === 'string' ? ev.tool_use_id : `name:${tool}`, id);
+          this.putItem({ kind: 'notice', id, text: `${tool}: permissão negada`, tone: 'warn', at, tool });
         } else if (subtype === 'background_tasks_changed') {
           const tasks = BackgroundTasks.safeParse(ev.tasks);
           if (tasks.success) {
@@ -609,7 +691,7 @@ export class ChatProcess {
           } else if (b.type === 'tool_use' && typeof b.id === 'string') {
             const name = typeof b.name === 'string' ? b.name : 'ferramenta';
             const input = inputText(b.input, name);
-            this.scan(input);
+            this.scan(input, 'tool-input');
             this.putItem({ kind: 'tool', id: `t:${b.id}`, name, summary: toolSummary(name, b.input), input, result: null, isError: false, at });
           }
         }
@@ -629,8 +711,9 @@ export class ChatProcess {
           if (b.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue;
           const tool = this.items.get(`t:${b.tool_use_id}`);
           const result = resultText(b.content);
-          this.scan(result);
+          this.scan(result, 'tool-result');
           if (tool?.kind === 'tool') this.putItem({ ...tool, result, isError: b.is_error === true });
+          if (b.is_error === true && tool?.kind === 'tool') this.denialFromResult(b.tool_use_id, tool.name, result);
         }
         return;
       }
@@ -683,6 +766,7 @@ export class ChatProcess {
         // que não dá para ler fica no cartão genérico).
         const questions = req.tool_name === ASK_TOOL ? parseQuestions(req.input) : null;
         this.pending.set(requestId, { input: req.input, tool: req.tool_name ?? tool, suggestions, ...(questions && { questions }) });
+        this.pendingChanged();
         // Fim do modo plano: o plano vem inteiro em `input.plan` e vira um cartão para aprovar.
         const plan = req.tool_name === 'ExitPlanMode' ? (req.input as { plan?: unknown } | undefined)?.plan : undefined;
         this.putItem({
@@ -755,6 +839,7 @@ export class ChatProcess {
         this.limitSeen = null;
         if (!stopped && limit && (limit.confirmed || ev.is_error === true)) this.opts.onUsageLimit?.({ resetsAt: limit.resetsAt, window: limit.window });
         else this.opts.onTurnWithoutLimit?.();
+        this.endTurnBudget();
         this.setState({ busy: false, compacting: false });
         this.idleCheck('turn');
         return;
@@ -768,11 +853,14 @@ export class ChatProcess {
   protected checkpointSeen = false;
   private cacheTtlMs: number | null = null;
   private fastMode = false;
+  /** Avisos de negação esperando o texto do resultado (chave: id do tool_use, ou `name:<ferramenta>` sem id). */
+  private readonly denialNotices = new Map<string, string>();
 
   private finish(error: string | null) {
     if (!this.state.running) return;
     const pid = this.child?.pid ?? null;
     this.child = null;
+    this.endTurnBudget();
     this.opts.onExit?.(pid, error);
     for (const id of this.pending.keys()) {
       const item = this.items.get(`p:${id}`);
@@ -797,6 +885,18 @@ export class ChatProcess {
   protected putItem(item: ChatItem) {
     this.items.set(item.id, item);
     this.emit({ type: 'item', seq: ++this.seq, item: { ...item } });
+  }
+
+  /** Erro de ferramenta: se for negação, o texto troca o aviso do evento (ou abre um, se o evento não veio). */
+  private denialFromResult(toolUseId: string, tool: string, text: string) {
+    const denial = classifyDenial(text);
+    const key = this.denialNotices.has(toolUseId) ? toolUseId : `name:${tool}`;
+    const id = this.denialNotices.get(key) ?? (denial.layer === 'other' ? null : `n:${randomUUID()}`);
+    this.denialNotices.delete(key);
+    if (!id) return;
+    const prev = this.items.get(id);
+    const at = prev?.kind === 'notice' ? prev.at : new Date().toISOString();
+    this.putItem({ kind: 'notice', id, text: denialNotice(tool, denial), tone: 'warn', at, tool, denial });
   }
 
   protected setState(patch: Partial<ChatState>) {

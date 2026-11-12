@@ -25,6 +25,8 @@ import { useTheme } from './theme';
 import { archiveKey, ghostNodeId, HR_ID, manageNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
 import { seedSeenIdle } from './board/unread';
 import { PairControls } from './toolbar/PairControls';
+import { CornerDock } from './toolbar/CornerDock';
+import { SpotifyPlayer } from './toolbar/SpotifyPlayer';
 import { SystemMonitor } from './toolbar/SystemMonitor';
 import { QuickJump } from './toolbar/QuickJump';
 import {
@@ -461,6 +463,7 @@ export function App() {
               agents={Object.entries(costs?.agents ?? {})
                 .map(([type, c]) => ({ type, usd: c.usd, runs: c.runs }))
                 .sort((a, b) => b.usd - a.usd)}
+              system={costs?.system}
               scanning={costs?.scanning ?? true}
               onSelect={setSelectedId}
               onOpenPerson={(p) => openManage(p.projectId, p.staffId)}
@@ -766,7 +769,10 @@ export function App() {
           }}
         />
       )}
-      <SystemMonitor />
+      <CornerDock>
+        <SpotifyPlayer />
+        <SystemMonitor />
+      </CornerDock>
       <UsageWarnings />
       {needsPairing ? (
         <div className="notice notice-pair" role="alert">

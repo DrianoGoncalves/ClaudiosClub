@@ -11,7 +11,7 @@ import type {
 } from '../../../shared/model';
 import type { ToolAdapter } from '../types';
 import { markDuplicates, readAgentsDir } from './agents';
-import { CostIndex } from './costs';
+import { CostIndex, systemCostsPath } from './costs';
 import { defaultLocations, worktreeParent, type ClaudeLocations } from './paths';
 import {
   discoverProjects,
@@ -29,6 +29,8 @@ export interface ClaudeAdapterOptions extends DiscoverOptions {
   discoveryTtlMs?: number;
   /** Onde guardar o cache dos custos lidos dos transcripts. */
   costCacheFile?: string;
+  /** Ledger do gasto do Sistema (padrão: logs/system-costs.jsonl em MYCO_HOME). */
+  systemCostsFile?: string;
   /** Intervalo mínimo entre releituras de custo. */
   costTtlMs?: number;
   /** Apelidos de exibição por id de projeto (lidos a cada chamada: mudam sem reiniciar). */
@@ -56,6 +58,7 @@ export class ClaudeAdapter implements ToolAdapter {
     this.costs = new CostIndex(
       path.join(this.loc.home, 'projects'),
       opts.costCacheFile ?? path.join(mycoHome, 'cache', 'claude-costs.json'),
+      opts.systemCostsFile ?? systemCostsPath(mycoHome),
     );
   }
 

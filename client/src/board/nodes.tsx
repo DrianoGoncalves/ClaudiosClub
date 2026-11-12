@@ -219,7 +219,7 @@ export function staffTools(staff: StaffProfile): Array<{ tool: StaffTool; label:
 export function FallbackIcon({ fallback }: { fallback?: StaffProfile['fallback'] }) {
   if (!fallback) return null;
   const label = t('board.secondaryEngine', { engine: t(engineName(fallback.engine)), model: fallback.model });
-  return <span title={label} aria-label={label} role="img"><FallbackModelIcon size={14} /></span>;
+  return <span title={label} aria-label={label} role="img"><FallbackModelIcon size={12} /></span>;
 }
 
 function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, 'employee'>>) {
@@ -293,7 +293,7 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
                 const Icon = TOOL_ICON[tool];
                 return (
                   <span key={tool} title={label} aria-label={label} role="img">
-                    <Icon size={14} />
+                    <Icon size={12} />
                   </span>
                 );
               })}

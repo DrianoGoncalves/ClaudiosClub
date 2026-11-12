@@ -1067,6 +1067,8 @@ export class StaffService {
         threadId: resume ? await readCodexThread(codexRun.threadFile) : null,
         threadFile: codexRun.threadFile,
         mycoUrl: ctx.mycoUrl,
+        // Lida a cada execução (não só ao abrir a conversa): a Configuração vale na próxima mensagem.
+        internetAccess: async () => (await readConfig()).internetAccess,
       };
       return { sessionId: id, cwd, args: [], engine: 'codex', codex: spawn, ...chosen };
     }
@@ -1175,6 +1177,7 @@ export class StaffService {
       librarySkills: profile.skills.length ? await librarySkillsOf(profile.skills, this.opts.skillLibraryDir) : [],
       skillLibraryDir: this.opts.skillLibraryDir,
       codex: config.codexReview,
+      internetAccess: config.internetAccess,
       // Claude contratado por gestor no Codex (selo `claude`) e ainda no "Pede tudo": a ficha conta o porquê.
       lockedByCodexManager: profile.autonomy === 'manual' && profile.engine !== 'codex' && (await readSeal(this.opts.runDir, project.path, profile.id))?.engine === 'claude',
       // A equipe dele: quem reporta a ele (os temporários encerrados já saíram do quadro, mas a ficha

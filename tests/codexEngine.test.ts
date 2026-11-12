@@ -279,8 +279,8 @@ describe('Codex: argumentos', () => {
     await fs.mkdir(path.join(proj, '.vps'), { recursive: true });
     const base = { cwd: proj, projectPath: proj, home, mycoHome: path.join(home, '.myco') };
 
-    // "Perguntar ao GPT": só leitura e sem rede.
-    const ask = codexSafetyArgs({ ...base, mode: 'read-only', network: 'off' });
+    // "Perguntar ao GPT": só leitura e sem rede; a busca na web segue a opção (aqui desligada).
+    const ask = codexSafetyArgs({ ...base, mode: 'read-only', network: 'off', webSearch: false });
     expect(ask).toEqual([
       '--ignore-user-config',
       '-c', 'features.apps=false',
@@ -294,7 +294,7 @@ describe('Codex: argumentos', () => {
     expect(ask).not.toContain('--enable'); // sem rede, sem o proxy
 
     // Escrita na pasta e só a rede local.
-    const work = codexSafetyArgs({ ...base, mode: 'workspace', network: 'loopback' });
+    const work = codexSafetyArgs({ ...base, mode: 'workspace', network: 'loopback', webSearch: false });
     expect(work.slice(0, 8)).toEqual(ask.slice(0, 8));
     expect(configOf(work, 'permissions.mycodeny.extends')).toBe('":workspace"');
     expect(configOf(work, 'permissions.mycodeny.network')).toBe('{enabled=true,domains={"127.0.0.2"="allow"}}');
@@ -655,7 +655,7 @@ describe('CodexProcess', () => {
   it('segredos: comando, saída e resposta passam pelo filtro (só o tipo vai para o aviso)', async () => {
     const f = fakeCodex();
     const found: string[] = [];
-    const chat = new CodexProcess({ ...profile, spawnImpl: f.spawnImpl, onSecret: (l) => found.push(l) });
+    const chat = new CodexProcess({ ...profile, spawnImpl: f.spawnImpl, onSecret: (l) => found.push(l.label) });
     chat.start();
     chat.send('rode isso');
     const r = f.last();
@@ -663,8 +663,39 @@ describe('CodexProcess', () => {
     r.emit({ type: 'item.completed', item: { id: 'item_1', type: 'command_execution', command: 'cat .env', aggregated_output: 'DB_PASSWORD=outraSenha456\n', exit_code: 0, status: 'completed' } });
     r.emit({ type: 'item.completed', item: { id: 'item_2', type: 'agent_message', text: `a chave é ghp_${'aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3hJ6'}` } });
     await tick();
-    expect(found).toEqual(['uma senha', 'uma senha', 'um token do GitHub']);
+    expect(found).toEqual(['senha no comando mysql (-p)', 'senha na variável DB_PASSWORD', 'token do GitHub']);
     expect(JSON.stringify(found)).not.toMatch(/SenhaSecreta|outraSenha/);
+  });
+
+  it('segredos: o aviso leva a origem (comando, saída ou resposta)', async () => {
+    const f = fakeCodex();
+    const found: Array<[string, string | undefined]> = [];
+    const chat = new CodexProcess({ ...profile, spawnImpl: f.spawnImpl, onSecret: (l, s) => found.push([l.label, s]) });
+    chat.start();
+    chat.send('rode isso');
+    const r = f.last();
+    r.emit({ type: 'item.started', item: { id: 'item_0', type: 'command_execution', command: "/usr/bin/bash -lc 'mysql -u root -pSenhaSecreta123 db'", aggregated_output: '', exit_code: null, status: 'in_progress' } });
+    r.emit({ type: 'item.completed', item: { id: 'item_1', type: 'command_execution', command: 'cat .env', aggregated_output: 'DB_PASSWORD=outraSenha456\n', exit_code: 0, status: 'completed' } });
+    r.emit({ type: 'item.completed', item: { id: 'item_2', type: 'agent_message', text: `a chave é ghp_${'aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0eF3hJ6'}` } });
+    await tick();
+    expect(found).toEqual([
+      ['senha no comando mysql (-p)', 'tool-input'],
+      ['senha na variável DB_PASSWORD', 'tool-result'],
+      ['token do GitHub', 'staff-reply'],
+    ]);
+  });
+
+  it('segredos do Codex: o que você manda tem origem "owner"; o que outro funcionário manda não tem', () => {
+    const f = fakeCodex();
+    const found: Array<[string, string | undefined]> = [];
+    const chat = new CodexProcess({ ...profile, spawnImpl: f.spawnImpl, onSecret: (l, s) => found.push([l.label, s]) });
+    chat.start();
+    chat.send('DB_PASSWORD=S3nh4fict1ca');
+    chat.send('DB_PASSWORD=outraSenha9', 'next', [], undefined, [], true);
+    expect(found).toEqual([
+      ['senha na variável DB_PASSWORD', 'owner'],
+      ['senha na variável DB_PASSWORD', undefined],
+    ]);
   });
 
   it('ponto de corte na resposta: fica guardado e some do texto', async () => {
@@ -1069,19 +1100,24 @@ describe('Codex: endurecimento (revisão)', () => {
 
   // ---- web_search ----
 
-  it('web_search desligado em toda execução (hospedada, fora da sandbox): codexSafetyArgs, o motor, primeira mensagem e resume, qualquer autonomia', () => {
+  it('web_search: desligado sem a opção (padrão) e com internetAccess false; live só com internetAccess true, em toda execução (codexSafetyArgs, o motor, primeira mensagem e resume)', () => {
     const ctx = { cwd: '/proj', projectPath: '/proj', home: '/nao-existe', mycoHome: '/nao-existe/.myco' };
     for (const mode of ['read-only', 'workspace'] as const) {
       for (const network of ['off', 'loopback'] as const) {
-        expect(configs(codexSafetyArgs({ ...ctx, mode, network }))).toContain('web_search="disabled"');
+        expect(configs(codexSafetyArgs({ ...ctx, mode, network, webSearch: false }))).toContain('web_search="disabled"');
+        expect(configs(codexSafetyArgs({ ...ctx, mode, network, webSearch: true }))).toContain('web_search="live"');
       }
     }
     for (const threadId of [null, '01a1babd-2221-7471-bc6f-23be3a417793']) {
       for (const sandbox of ['read-only', 'workspace'] as const) {
-        const args = buildCodexArgs({ ...base, sandbox, threadId });
-        expect(configOf(args, 'web_search')).toBe('"disabled"');
-        // Nenhum jeito de religar (`live`, `cached`, `indexed`) nem pela linha de comando do Codex (`--search`).
-        expect(args.join(' ')).not.toMatch(/web_search="(live|cached|indexed)"|--search/);
+        // Sem a opção (padrão de quem chama) e com ela desligada: desligado.
+        const off = buildCodexArgs({ ...base, sandbox, threadId });
+        expect(configOf(off, 'web_search')).toBe('"disabled"');
+        expect(configOf(buildCodexArgs({ ...base, sandbox, threadId, internetAccess: false }), 'web_search')).toBe('"disabled"');
+        const on = buildCodexArgs({ ...base, sandbox, threadId, internetAccess: true });
+        expect(configOf(on, 'web_search')).toBe('"live"');
+        // Nenhum outro valor (`cached`, `indexed`) nem pela linha de comando do Codex (`--search`), ligado ou não.
+        for (const args of [off, on]) expect(args.join(' ')).not.toMatch(/web_search="(cached|indexed)"|--search/);
       }
     }
   });

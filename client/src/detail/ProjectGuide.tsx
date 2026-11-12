@@ -4,6 +4,7 @@ import { api, isPairingError, type ProjectGuide as Guide } from '../api';
 import { t, locale } from '../i18n';
 import { FileIcon } from '../icons';
 import { defaultGuideStaff, type GuideAction } from './guideActions';
+import { ShowcaseBlock } from './ShowcaseBlock';
 
 type Busy = GuideAction | 'create' | null;
 
@@ -103,7 +104,7 @@ export function ProjectGuide({
     </button>
   );
 
-  const whoPicker =
+  const whoPicker = () =>
     staff.length > 0 ? (
       <label className="guide-who small">
         <span className="muted">{t('detail.guideWho')}</span>
@@ -130,57 +131,60 @@ export function ProjectGuide({
       : null;
 
   return (
-    <section className="section">
-      <h3>{t('detail.guideHeading')}</h3>
-      {!guide ? (
-        !error && <p className="muted small">{t('detail.loading')}</p>
-      ) : guide.exists ? (
-        <>
-          <p className="muted small">{t('detail.guideExists', { path: guide.path })}</p>
-          {guide.isGit && !guide.ignored && (
-            <p className="guide-alert small" role="note">
-              {t('detail.guideGitAlert', { path: guide.path })}
-            </p>
-          )}
-          {whoPicker}
-          <p className="actions guide-actions">
-            {onOpen && (
-              <button className="btn-secondary btn-with-icon" onClick={() => onOpen(guide.path)}>
-                <FileIcon />
-                {t('detail.guideOpen')}
-              </button>
+    <>
+      <section className="section">
+        <h3>{t('detail.guideHeading')}</h3>
+        {!guide ? (
+          !error && <p className="muted small">{t('detail.loading')}</p>
+        ) : guide.exists ? (
+          <>
+            <p className="muted small">{t('detail.guideExists', { path: guide.path })}</p>
+            {guide.isGit && !guide.ignored && (
+              <p className="guide-alert small" role="note">
+                {t('detail.guideGitAlert', { path: guide.path })}
+              </p>
             )}
-            {runButton('test', t('detail.guideTest'), t('detail.guideTestHint'), 'btn-secondary')}
-            {runButton('drift', t('detail.guideDrift'), t('detail.guideDriftHint'), 'btn-secondary')}
-          </p>
-          {note ? (
-            <p className="guide-since small" role="status">
-              {note}
+            {whoPicker()}
+            <p className="actions guide-actions">
+              {onOpen && (
+                <button className="btn-secondary btn-with-icon" onClick={() => onOpen(guide.path)}>
+                  <FileIcon />
+                  {t('detail.guideOpen')}
+                </button>
+              )}
+              {runButton('test', t('detail.guideTest'), t('detail.guideTestHint'), 'btn-secondary')}
+              {runButton('drift', t('detail.guideDrift'), t('detail.guideDriftHint'), 'btn-secondary')}
             </p>
-          ) : (
-            since && <p className="guide-since muted small">{since}</p>
-          )}
-          <ul className="guide-hints muted small">
-            <li>{t('detail.guideTestHint')}</li>
-            <li>{t('detail.guideDriftHint')}</li>
-          </ul>
-        </>
-      ) : (
-        <>
-          <p className="muted small">{t('detail.guideNone')}</p>
-          {whoPicker}
-          <p className="actions guide-actions">
-            <button className="btn-primary" onClick={() => void create()} disabled={busy !== null}>
-              {busy === 'create' ? t('detail.guideCreating') : t('detail.guideCreate')}
-            </button>
-            {runButton('draft', t('detail.guideDraft'), t('detail.guideDraftHint'), 'btn-secondary')}
-          </p>
-          <ul className="guide-hints muted small">
-            <li>{t('detail.guideDraftHint')}</li>
-          </ul>
-        </>
-      )}
-      {error && <p className="error small">{error}</p>}
-    </section>
+            {note ? (
+              <p className="guide-since small" role="status">
+                {note}
+              </p>
+            ) : (
+              since && <p className="guide-since muted small">{since}</p>
+            )}
+            <ul className="guide-hints muted small">
+              <li>{t('detail.guideTestHint')}</li>
+              <li>{t('detail.guideDriftHint')}</li>
+            </ul>
+          </>
+        ) : (
+          <>
+            <p className="muted small">{t('detail.guideNone')}</p>
+            {whoPicker()}
+            <p className="actions guide-actions">
+              <button className="btn-primary" onClick={() => void create()} disabled={busy !== null}>
+                {busy === 'create' ? t('detail.guideCreating') : t('detail.guideCreate')}
+              </button>
+              {runButton('draft', t('detail.guideDraft'), t('detail.guideDraftHint'), 'btn-secondary')}
+            </p>
+            <ul className="guide-hints muted small">
+              <li>{t('detail.guideDraftHint')}</li>
+            </ul>
+          </>
+        )}
+        {error && <p className="error small">{error}</p>}
+      </section>
+      {guide?.showcase && <ShowcaseBlock key={projectId} projectId={projectId} exists={guide.showcase.exists} onDone={() => void reread()} />}
+    </>
   );
 }
