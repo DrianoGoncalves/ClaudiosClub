@@ -204,6 +204,16 @@ export function ArchiveRestoreIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+/** Lápis: renomear (o título da conversa). */
+export function PencilIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M17 3a2.85 2.85 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+      <path d="m15 5 4 4" />
+    </svg>
+  );
+}
+
 /** Gráfico de barras: o ranking (gastos e modelos). */
 export function ChartIcon({ size = 15 }: { size?: number }) {
   return (

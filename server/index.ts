@@ -23,12 +23,16 @@ import {
   removeWorkspace,
   saveWorkspace,
   setArchived,
+  setConversationTitle,
   setProjectWorkspace,
   updateConfig,
   WorkspaceError,
+  ConversationTitleError,
+  ConversationTitleRequest,
+  ConversationTitlesFullError,
 } from './config';
 import { openProject, parseNewProject, ProjectError, usualParent } from './newProject';
-import { createDemo, DEMO_DIR } from './demo';
+import { createDemo, demoPaths } from './demo';
 import { z } from 'zod';
 import { AgentError, AgentInput, readAgentSource, saveAgent } from './adapters/claude/agentWrite';
 import { ChatClosingError, ChatError, ChatManager, findTranscript } from './chat/manager';
@@ -227,9 +231,9 @@ const MAX_BODY = 4 * 1024 * 1024;
 /** Pareamento do navegador: a chave (~/.myco/secrets/pairing.key) é criada aqui, na subida, se ainda não existe. */
 const pairing = new Pairing();
 
-// No quadro: o demo, as pastas de `extraProjects` (novas ou importadas) e os projetos com equipe. O resto
-// do que o Claude Code conhece só entra se o usuário importar (`/api/import-projects`).
-const pinnedProjects = async () => [DEMO_DIR, ...(await readExtraProjects())];
+// No quadro: o demo (e o antigo, se ainda existir), as pastas de `extraProjects` (novas ou importadas) e os
+// projetos com equipe. O resto do que o Claude Code conhece só entra se o usuário importar (`/api/import-projects`).
+const pinnedProjects = async () => [...(await demoPaths()), ...(await readExtraProjects())];
 const adapter: ToolAdapter = new ClaudeAdapter({
   extraPaths: pinnedProjects,
   onBoard: boardFilter({ pinned: pinnedProjects }),
@@ -1148,7 +1152,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
           s.sessions.map(async (x) => ({ projectId: s.projectId, staffId: s.id, staffName: s.name, sessionId: x.id, file: await findTranscript(defaultTranscripts, s.projectId, x.id) })),
         ),
       );
-      return searchConversations(targets, q);
+      return searchConversations(targets, q, (await readConfig()).conversationTitles);
     },
   ],
   // "@" no chat: arquivos do projeto que batem com o que foi digitado.
@@ -1778,6 +1782,17 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       return config;
     },
   ],
+  // Título manual da conversa (null ou vazio apaga: volta ao último assunto). Só pelo Claudio’s Club.
+  [
+    'POST',
+    /^\/api\/conversation-title$/,
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      const req = ConversationTitleRequest.safeParse(body);
+      if (!req.success) throw new BadRequest('pedido de título inválido');
+      return setConversationTitle(req.data.id, req.data.title);
+    },
+  ],
   ['GET', /^\/api\/config$/, () => readConfig()],
   // Biblioteca de skills da conta (~/.myco/skills): só quem tem a skill na ficha carrega.
   ['GET', /^\/api\/skills\/library$/, () => listLibrary()],
@@ -1911,6 +1926,8 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         if (err instanceof TaskForbiddenError) return send(res, 403, { error: err.message });
         // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
         if (err instanceof GuideExistsError) return send(res, 409, { error: 'exists' });
+        // Teto de títulos manuais: só criar outro recusa (409); editar ou apagar um que existe segue.
+        if (err instanceof ConversationTitlesFullError) return send(res, 409, { error: err.message });
         if (err instanceof Forbidden) return send(res, 403, { error: err.message });
         if (err instanceof RateLimited) return send(res, 429, { error: err.message });
         if (err instanceof StaffSendLimitError) return send(res, 429, { error: err.message }, { 'retry-after': String(err.retryAfter) });
@@ -1927,6 +1944,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
           err instanceof FileError ||
           err instanceof AgentError ||
           err instanceof WorkspaceError ||
+          err instanceof ConversationTitleError ||
           err instanceof SkillError ||
           err instanceof McpError ||
           err instanceof ProjectError ||

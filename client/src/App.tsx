@@ -38,6 +38,7 @@ import {
   type TeamRow,
 } from './detail/Detail';
 import type { ChatFocus } from './chat/chatFocus';
+import { type ConversationTitles, conversationTitle } from './detail/conversationTitle';
 import { DrawerResize, useDrawerWidth } from './detail/DrawerResize';
 import { companyName, effortLabel, employeeName } from './format';
 import { t } from './i18n';
@@ -348,6 +349,10 @@ export function App() {
     if (archived && !showArchived) setSelectedId(null);
   };
 
+  // Conversa arquivada só some do seletor do chat: não fecha o painel nem mexe na seleção (por isso não passa pelo `archive`).
+  const archiveConversation = async (id: string, archived: boolean) => setConfig(await api.archive('conversation', id, archived));
+  // Renomear grava só no config (não no transcript: a data da conversa não muda, então ela não desarquiva).
+  const renameConversation = async (id: string, title: string | null) => setConfig(await api.setConversationTitle(id, title));
   const archivedList = config?.archived.sessions;
   const selection = useMemo(
     () => (board ? resolveSelection(board, selectedId, new Set(archivedList ?? []), showArchived) : null),
@@ -519,6 +524,7 @@ export function App() {
                 setSelectedId(node);
               }}
               hiddenSessions={showArchived ? undefined : new Set(archivedList ?? [])}
+              conversationTitles={config?.conversationTitles}
               cost={costs?.projects[selection.id] ?? null}
               archived={isArchived('project', selection.id)}
               onArchive={(v) => archive('project', selection.id, v)}
@@ -600,9 +606,13 @@ export function App() {
               onShowAdvanced={() => void saveUiLevel('advanced')}
               conversations={
                 selection.staff
-                  ? staffConversations(board, selection.staff)
-                  : (selection.ghost ?? []).map((s) => ({ id: s.id, title: s.topic ?? s.title, updatedAt: s.updatedAt }))
+                  ? staffConversations(board, selection.staff, config?.conversationTitles)
+                  : (selection.ghost ?? []).map((s) => ({ id: s.id, title: conversationTitle(s, config?.conversationTitles), updatedAt: s.updatedAt }))
               }
+              conversationTitles={config?.conversationTitles}
+              onRenameConversation={renameConversation}
+              archivedConversations={config?.archived.conversations}
+              onArchiveConversation={archiveConversation}
               onChanged={() => {
                 load();
                 // Efetivar desarquiva no servidor: os arquivados do config mudam também.
@@ -797,14 +807,15 @@ export function App() {
 /**
  * Conversas de um funcionário, da mais recente à mais antiga, cada uma pelo assunto (a tarefa ou a
  * 1ª mensagem): o título do Claude Code é o nome dele em todas. As da worktree dele ficam noutra
- * pasta do Claude Code; as que ainda não gravaram nada entram pela data de início.
+ * pasta do Claude Code; as que ainda não gravaram nada entram pela data de início. O título que o
+ * user deu à conversa (`titles`) vale mais que o assunto.
  */
-function staffConversations(board: Board, staff: StaffProfile) {
+function staffConversations(board: Board, staff: StaffProfile, titles?: ConversationTitles) {
   const known = new Map(Object.values(board.sessions).flat().map((s) => [s.id, s]));
   return staff.sessions
     .map((x) => {
       const s = known.get(x.id);
-      return { id: x.id, title: s?.topic ?? null, updatedAt: s?.updatedAt ?? x.startedAt };
+      return { id: x.id, title: conversationTitle({ id: x.id, topic: s?.topic }, titles), updatedAt: s?.updatedAt ?? x.startedAt };
     })
     .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
 }

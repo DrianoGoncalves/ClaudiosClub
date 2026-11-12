@@ -52,8 +52,8 @@ export default defineMessages({
     'office.workspaceBg': 'Fundo do quadro nesta aba',
 
     'office.demoTitle': 'Projeto demo',
-    'office.demoDesc': 'Uma cafeteria de exemplo com equipe, hierarquia e tarefas prontas. Ver o quadro e as fichas não gasta nada; abrir um funcionário usa a sua cota.',
-    'office.demoKeywords': 'exemplo tutorial cafeteria equipe',
+    'office.demoDesc': 'A My.Co Pizzaria de exemplo: landing, cardápio online, pedidos e uma equipe com hierarquia e tarefas prontas. Ver o quadro e as fichas não gasta nada; abrir um funcionário usa a sua cota.',
+    'office.demoKeywords': 'exemplo tutorial pizzaria my.co cardápio equipe',
     'office.demoCreate': 'Criar projeto demo',
     'office.demoOpen': 'Abrir o demo',
     'office.demoWorking': 'Criando…',
@@ -243,8 +243,8 @@ export default defineMessages({
     'office.workspaceBg': 'Board background in this tab',
 
     'office.demoTitle': 'Demo project',
-    'office.demoDesc': 'A sample coffee shop with a ready-made team, hierarchy and tasks. Viewing the board and profiles costs nothing; opening an employee uses your quota.',
-    'office.demoKeywords': 'example tutorial coffee team',
+    'office.demoDesc': 'The My.Co pizzeria sample: landing page, online menu, orders, and a ready-made team with hierarchy and tasks. Viewing the board and profiles costs nothing; opening an employee uses your quota.',
+    'office.demoKeywords': 'example tutorial pizzeria my.co menu team',
     'office.demoCreate': 'Create demo project',
     'office.demoOpen': 'Open the demo',
     'office.demoWorking': 'Creating…',
@@ -434,8 +434,8 @@ export default defineMessages({
     'office.workspaceBg': 'Fondo del tablero en esta pestaña',
 
     'office.demoTitle': 'Proyecto demo',
-    'office.demoDesc': 'Una cafetería de ejemplo con equipo, jerarquía y tareas listas. Ver el tablero y las fichas no cuesta nada; abrir un empleado usa tu cuota.',
-    'office.demoKeywords': 'ejemplo tutorial cafetería equipo',
+    'office.demoDesc': 'La pizzería My.Co de ejemplo: landing, menú en línea, pedidos y un equipo listo, con jerarquía y tareas. Ver el tablero y las fichas no cuesta nada; abrir un empleado usa tu cuota.',
+    'office.demoKeywords': 'ejemplo tutorial pizzería my.co menú equipo',
     'office.demoCreate': 'Crear proyecto demo',
     'office.demoOpen': 'Abrir el demo',
     'office.demoWorking': 'Creando…',

@@ -97,6 +97,7 @@ const REASON_KEY: Record<PendingReason, MsgKey> = {
   client: 'toolbar.pendingClient',
   ftpMcp: 'toolbar.pendingFtpMcp',
   gptMcp: 'toolbar.pendingGptMcp',
+  sshMcp: 'toolbar.pendingSshMcp',
 };
 
 /** O servidor guarda o resultado por 30 s; relido aqui no mesmo ritmo. */

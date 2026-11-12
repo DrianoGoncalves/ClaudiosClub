@@ -1,11 +1,14 @@
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { ServerInfo, StaffProfile } from '../../shared/model';
 import { defaultLocations } from '../adapters/claude/paths';
 import { ROOT } from '../root';
-import { renderFicha, systemPrompt, type FichaContext, type TeamMember } from './ficha';
+import { isClaudeRoot, renderFicha, systemPrompt, type CodexSshInfo, type FichaContext, type TeamMember } from './ficha';
 import { FTP_MCP_NAME, GPT_MCP_NAME } from '../../shared/model';
 import { DEFAULT_SECRETS_DIR } from '../secretVault';
 import { ftpMcpServerConfig } from './ftpMcp';
+import { SSH_MCP_BUNDLE, WRITE_AUTONOMY, sshMcpServerConfig } from './sshMcp';
+import type { CodexMcpServer } from '../chat/codexArgs';
 import { gptMcpServerConfig } from './gptMcp';
 import { buildMcpConfig } from './mcp';
 import { ensurePlaybookAgents } from './playbookAgents';
@@ -48,6 +51,8 @@ export interface LaunchContext {
   internetAccess?: boolean;
   /** Claude contratado por um gestor no Codex e travado em `manual`: a ficha conta por que ele pede aprovação de tudo. */
   lockedByCodexManager?: boolean;
+  /** Pacote do MCP de SSH para o Codex (os testes trocam; padrão dist/ssh-mcp.mjs). Sem ele, o MCP não entra e a ficha diz "indisponível". */
+  sshMcpBundle?: string;
 }
 
 /** A primeira mensagem de uma sessão nova numa conversa do Claudio’s Club. */
@@ -77,6 +82,8 @@ export interface PreparedRun {
   pluginDir: string | null;
   /** "Permitir acesso à internet" (ver ClaudeArgsOptions.internetAccess): o que o buildClaudeArgs nega. */
   internetAccess?: boolean;
+  /** Manual (docs/uso) editável: o projeto é o próprio Claudio’s Club e a sessão não roda numa worktree (ver ClaudeArgsOptions.manualEditable). */
+  manualEditable: boolean;
 }
 
 /**
@@ -137,6 +144,8 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     ftpServers,
     pluginDir: plugin?.dir ?? null,
     internetAccess: ctx.internetAccess,
+    // Só o projeto ROOT sem worktree: a worktree (away) tem o próprio docs/uso, que não é o do ROOT, e continua negada.
+    manualEditable: !away && isClaudeRoot(ctx.projectPath),
   };
 }
 
@@ -149,6 +158,14 @@ export interface PreparedCodexRun {
   readOnlyPaths: string[];
   /** Onde fica o thread_id da conversa (retomar depois), ao lado dos arquivos de lançamento dela. */
   threadFile: string;
+  /** MCP de SSH (só conexões SSH da ficha; null = sem). Nunca no projeto do próprio Claudio’s Club (ver `codexSshRoot`). */
+  sshMcp: CodexMcpServer | null;
+}
+
+/** As conexões SSH da ficha que existem no projeto (FTP fica de fora: no Codex não há). */
+export function sshServersOf(profile: Pick<StaffProfile, 'servers'>, servers: ServerInfo[] | undefined): string[] {
+  const ssh = new Set((servers ?? []).filter((s) => s.source === 'vps').map((s) => s.name));
+  return profile.servers.filter((n) => ssh.has(n));
 }
 
 /**
@@ -158,12 +175,37 @@ export interface PreparedCodexRun {
  */
 export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string): Promise<PreparedCodexRun> {
   const away = path.resolve(cwd) !== path.resolve(ctx.projectPath);
-  const fichaCtx = await writeFicha(profile, ctx, away);
+  // MCP de SSH: só com conexão SSH na ficha, e fora do projeto do próprio Claudio’s Club (o MCP roda fora da sandbox: o funcionário
+  // não pode editar o código dele). A escrita (`ssh_executar`) só nas conexões de `sshWrite`.
+  const names = sshServersOf(profile, ctx.servers);
+  const root = names.length > 0 && isClaudeRoot(ctx.projectPath);
+  const bundle = ctx.sshMcpBundle ?? SSH_MCP_BUNDLE;
+  // Escrita do lançamento: a sshWrite da ficha (de conexões do projeto), só com autonomia que altera algo. Vai no `--write`.
+  const write = WRITE_AUTONOMY.includes(profile.autonomy) ? (profile.sshWrite ?? []).filter((n) => names.includes(n)) : [];
+  // Sem o pacote do build, o MCP não sobe (nunca pelo tsx a partir do Codex): a ficha diz que o servidor está indisponível.
+  const mcp = names.length > 0 && !root && existsSync(bundle);
+  const indisponivel = names.length > 0 && !root && !mcp;
+  const sshInfo: CodexSshInfo | undefined = names.length ? { mcp, names, writable: mcp ? write : [], root, indisponivel } : undefined;
+  const fichaCtx = await writeFicha(profile, ctx, away, sshInfo);
+  let sshMcp: CodexMcpServer | null = null;
+  if (mcp) {
+    const { command, args } = sshMcpServerConfig({
+      projectPath: ctx.projectPath,
+      root: cwd,
+      staffId: profile.id,
+      connections: names,
+      write,
+      autonomy: profile.autonomy,
+      bundle,
+    });
+    sshMcp = { command, args, cwd: ROOT };
+  }
   return {
     instructions: systemPrompt(profile, fichaCtx, renderFicha(profile, fichaCtx)),
     writableRoots: away ? [staffDir(ctx.projectPath)] : [],
     readOnlyPaths: [profileFile(ctx.projectPath, profile.id), fichaFile(ctx.projectPath, profile.id), historyDir(ctx.projectPath, profile.id)],
     threadFile: path.join(ctx.runDir, sessionId, 'codex-thread.json'),
+    sshMcp,
   };
 }
 
@@ -196,6 +238,7 @@ export async function writeFicha(
   profile: StaffProfile,
   ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'roles' | 'librarySkills' | 'codex' | 'internetAccess' | 'lockedByCodexManager'>,
   absolute = false,
+  codexSsh?: CodexSshInfo,
 ): Promise<FichaContext> {
   const rel = (file: string) => (absolute ? file : path.relative(ctx.projectPath, file));
   const fichaCtx: FichaContext = {
@@ -217,6 +260,9 @@ export async function writeFicha(
     codex: ctx.codex,
     internetAccess: ctx.internetAccess,
     lockedByCodexManager: ctx.lockedByCodexManager,
+    codexSsh,
+    // Mesma regra de prepareRun (manualEditable): só o projeto do Claudio’s Club, fora de worktree.
+    manualEditable: !absolute && isClaudeRoot(ctx.projectPath),
   };
   await writeAtomic(fichaFile(ctx.projectPath, profile.id), renderFicha(profile, fichaCtx));
   await ensureMemory(ctx.projectPath, profile);

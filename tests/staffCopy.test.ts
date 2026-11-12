@@ -163,7 +163,7 @@ describe('fichas entre projetos', () => {
     expect(await readProfile(dest, p.id)).toEqual(p);
     expect(await fs.readFile(fichaFile(dest, p.id), 'utf8')).toContain('Ana Souza');
     // A origem não muda, só ganha o personId do grupo (o da cópia).
-    expect(await readProfile(origin, 'ana-1a2b')).toEqual({ ...ana, personId: p.personId });
+    expect(await readProfile(origin, 'ana-1a2b')).toEqual({ ...ana, personId: p.personId, sshWrite: [] });
   });
 
   it('copia o retrato (mesmos bytes) para o destino', async () => {

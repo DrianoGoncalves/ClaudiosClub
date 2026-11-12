@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import type { CodexEffort, Engine } from '../../../shared/model';
+import type { CodexEffort, Engine, ServerInfo } from '../../../shared/model';
 import { effortLabel } from '../format';
 import { t } from '../i18n';
 import { codexBlockedByServers, useCodexCatalog } from './codexEngine';
@@ -13,20 +13,23 @@ import { MODEL_OPTIONS } from './templates';
 export function FallbackField({
   main,
   servers,
+  serverList,
   draft,
   onChange,
 }: {
   /** O motor principal da ficha, como está no formulário. */
   main: Engine;
-  /** Servidores marcados na ficha: com eles o Codex não pode ser o secundário. */
+  /** Servidores marcados na ficha: com conexão FTP entre eles o Codex não pode ser o secundário (SSH pode). */
   servers: readonly string[];
+  /** Conexões do projeto (para saber quais das marcadas são FTP); null = ainda carregando. */
+  serverList: readonly Pick<ServerInfo, 'name' | 'source'>[] | null;
   draft: FallbackDraft;
   onChange: (next: FallbackDraft) => void;
 }) {
   const engine = otherEngine(main);
   const listId = useId();
   const catalog = useCodexCatalog(draft.on && engine === 'codex');
-  const blocked = engine === 'codex' && codexBlockedByServers(servers);
+  const blocked = engine === 'codex' && codexBlockedByServers(servers, serverList);
   const suggestions =
     engine === 'codex' ? (catalog?.models ?? []).map((m) => ({ value: m.slug, label: m.displayName })) : MODEL_OPTIONS.filter((m) => m.value);
   const efforts = fallbackEfforts(engine, draft.model, catalog?.models ?? null);

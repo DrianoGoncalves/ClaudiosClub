@@ -310,12 +310,15 @@ describe('Codex: argumentos', () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  it('servidores na ficha não combinam com o Codex (sem rede para eles, e o bwrap só nega um arquivo de chave); ultra só no Codex', () => {
-    const erro = 'Quem tem servidores na ficha não pode rodar no Codex: tire os servidores ou use o Claude';
-    expect(codexProfileError({ engine: 'codex', servers: ['vps1'] })).toBe(erro);
+  it('FTP na ficha não combina com o Codex; SSH combina (o MCP myco-ssh); ultra só no Codex', () => {
+    const erro = 'Conexão FTP não funciona no Codex: tire as conexões FTP ou use o Claude';
+    expect(codexProfileError({ engine: 'codex', servers: ['site'], ftpServers: ['site'] })).toBe(erro);
+    // SSH no Codex passa; FTP sem o projeto por perto não é conferido aqui (quem confere é o StaffService).
+    expect(codexProfileError({ engine: 'codex', servers: ['vps1'], ftpServers: ['site'] })).toBeNull();
+    expect(codexProfileError({ engine: 'codex', servers: ['site'] })).toBeNull();
     expect(codexProfileError({ engine: 'codex', servers: [] })).toBeNull();
     // No Claude servidores seguem como sempre.
-    expect(codexProfileError({ servers: ['vps1'] })).toBeNull();
+    expect(codexProfileError({ servers: ['site'], ftpServers: ['site'] })).toBeNull();
     expect(codexProfileError({ engine: 'claude', servers: ['vps1'], effort: 'max' })).toBeNull();
     expect(codexProfileError({ engine: 'codex', servers: [], effort: 'ultra' })).toBeNull();
     expect(codexProfileError({ engine: 'claude', servers: [], effort: 'ultra' })).toBe('O esforço ultra só existe no Codex');

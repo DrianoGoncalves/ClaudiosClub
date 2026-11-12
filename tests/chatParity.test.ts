@@ -233,6 +233,9 @@ describe('voltar no tempo, duplicar, renomear, MCPs, parar, buscar e o que mudou
       ['Pagamentos', 'Precisamos trocar o gateway de pagamento'],
     ]);
     expect(await searchConversations([], 'ga')).toEqual([]);
+    // O título manual do config vale no lugar do título do transcript.
+    const manual = await searchConversations([{ projectId: 'p', staffId: 'ana', staffName: 'Ana', sessionId: 's', file }], 'gateway', { s: 'Título manual' });
+    expect(manual.map((h) => h.title)).toEqual(['Título manual', 'Título manual']);
   });
 });
 

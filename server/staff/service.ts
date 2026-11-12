@@ -26,6 +26,11 @@ import { keyFilesOf, listServers, readConnections, removeConnection, saveConnect
 async function allServers(projectPath: string, vault?: VaultOptions): Promise<ServerInfo[]> {
   return [...(await listServers(projectPath)), ...(await listFtpServers(projectPath, vault))];
 }
+
+/** Nomes de todas as conexões FTP do projeto, com ou sem senha: o Codex não aceita nenhuma na ficha (ver `codexProfileError`). */
+async function ftpNames(projectPath: string, vault?: VaultOptions): Promise<string[]> {
+  return (await readFtpConnections(projectPath, vault)).map((c) => c.name);
+}
 import type { ToolAdapter } from '../adapters/types';
 import { effectiveBrowser } from '../browser';
 import { MYCO_HOME, readConfig, setArchived, workspaceOf } from '../config';
@@ -288,7 +293,8 @@ export class StaffService {
     for (const s of await listProjectStaff(project.path, project.id)) {
       if (!s.servers.includes(from)) continue;
       const servers = s.servers.map((n) => (n === from ? to : n));
-      await saveProfile(project.path, { ...s, servers, updatedAt: new Date().toISOString() });
+      const sshWrite = (s.sshWrite ?? []).map((n) => (n === from ? to : n));
+      await saveProfile(project.path, { ...s, servers, sshWrite, updatedAt: new Date().toISOString() });
       await writeStaffSshConfig(project.path, s.id, servers);
     }
   }
@@ -338,7 +344,10 @@ export class StaffService {
     const input = parsed.data;
     if (!bodyHasMcps) input.mcps = [];
     // Ficha nova sem `engine` é do Claude: o secundário não pode ser o mesmo motor, e servidor não vai ao secundário Codex.
-    assertFallbackRules({ engine: input.engine, servers: input.servers, fallback: input.fallback });
+    // FTP não vai ao Codex (o projeto diz quais são as conexões FTP).
+    const ftpServers = await ftpNames(project.path, this.opts.vault);
+    assertProfileRules({ ...input, sshWrite: input.sshWrite ?? [] }, ftpServers);
+    assertFallbackRules({ engine: input.engine, servers: input.servers, fallback: input.fallback, ftpServers });
 
     if (!fromBrowser && caller) {
       if (!caller.staffId) throw new StaffError('só um funcionário (com ficha) contrata pela API');
@@ -376,10 +385,14 @@ export class StaffService {
           input.model = codexModelOrNull(input.model);
           for (const m of codexManagers) input.autonomy = capAutonomy(input.autonomy, m.autonomy);
           // O motor foi forçado a Codex: o secundário tem de ser outro motor, e o Codex não leva servidor (de novo, agora com o motor certo).
-          assertFallbackRules({ engine: input.engine, servers: input.servers, fallback: input.fallback });
+          assertFallbackRules({ engine: input.engine, servers: input.servers, fallback: input.fallback, ftpServers });
         }
       }
     }
+    // A escrita SSH só vale para conexão que ficou na ficha (os filtros acima podem ter tirado servidores).
+    input.sshWrite = (input.sshWrite ?? []).filter((n) => input.servers.includes(n));
+    // Contratado pela API: a escrita SSH do subordinado é no máximo a do gestor que contratou (o pedido não amplia).
+    if (hirer) input.sshWrite = input.sshWrite.filter((n) => (hirer.sshWrite ?? []).includes(n));
     await this.checkCodexModel(input.engine, input.model);
 
     // Funcionário criado fora do Claudio’s Club: a sessão existente passa a ser dele, sem abrir outra.
@@ -498,6 +511,7 @@ export class StaffService {
       playbook: src.playbook,
       worktree: src.worktree,
       servers: [],
+      sshWrite: [],
       browser: src.browser,
       portraitDataUrl: portrait ? `data:${portrait.type};base64,${portrait.bytes.toString('base64')}` : null,
     };
@@ -584,6 +598,8 @@ export class StaffService {
     const flags = ApplyToCopiesBody.safeParse(body);
     if (!flags.success) throw new StaffError('applyToCopies tem que ser true ou false');
     const { portraitDataUrl, launch: _launch, adoptSessionId: _adopt, force: _force, fallback, ...fields } = parsed.data;
+    // Pedido sem `sshWrite` (a tela ainda não manda o campo): fica o que a ficha já tinha, para editar não zerar a escrita SSH.
+    if (!(typeof body === 'object' && body !== null && 'sshWrite' in body)) fields.sshWrite = current.sshWrite ?? [];
     if (fields.reportsTo.includes(staffId)) throw new StaffError('um funcionário não pode reportar a si mesmo');
     await this.managers(project.path, fields.reportsTo);
     if (await this.wouldCycle(project.path, staffId, fields.reportsTo)) {
@@ -591,10 +607,11 @@ export class StaffService {
     }
 
     // O pedido pode não trazer o `engine` (fica o da ficha): as regras do Codex valem sobre a ficha já junta.
-    assertProfileRules({ ...current, ...fields });
+    const ftpServers = await ftpNames(project.path, this.opts.vault);
+    assertProfileRules({ ...current, ...fields }, ftpServers);
     // Secundário: ausente = fica o da ficha; null = tira; objeto = troca.
     const nextFallback = fallback === undefined ? current.fallback : (fallback ?? undefined);
-    assertFallbackRules({ ...current, ...fields, fallback: nextFallback });
+    assertFallbackRules({ ...current, ...fields, fallback: nextFallback, ftpServers });
     // Só confere o que mudou: um modelo que já estava na ficha (e que a conta deixou de aceitar) não trava uma edição qualquer;
     // quem roda no Codex tem o plano B (outro modelo na mensagem) para isso.
     const engine = fields.engine ?? current.engine;
@@ -1020,7 +1037,7 @@ export class StaffService {
     const ctx = await this.context(project, runProfile, true);
     const cwd = sessionCwd(runProfile, ctx, forkFrom ?? sessionId);
     // Segunda barreira (a primeira é ao salvar a ficha): uma ficha antiga, ou editada à mão, com servidores no Codex não abre: recusa em vez de rodar.
-    assertProfileRules(runProfile);
+    assertProfileRules(runProfile, await ftpNames(project.path, this.opts.vault));
     if (codex && forkFrom) throw new StaffError('duplicar a conversa ainda não existe para funcionário que roda no Codex');
     // Chrome só com a extensão instalada (vale só para esta conversa: a ficha salva segue como o dono escolheu). No Codex não há Chrome.
     const browser = codex ? false : await effectiveBrowser(runProfile.browser, this.opts.browserStatus);
@@ -1063,6 +1080,7 @@ export class StaffService {
         instructions: codexRun.instructions,
         writableRoots: codexRun.writableRoots,
         readOnlyPaths: codexRun.readOnlyPaths,
+        sshMcp: codexRun.sshMcp,
         secrets: { projectPath: project.path, home: os.homedir(), mycoHome: MYCO_HOME },
         threadId: resume ? await readCodexThread(codexRun.threadFile) : null,
         threadFile: codexRun.threadFile,

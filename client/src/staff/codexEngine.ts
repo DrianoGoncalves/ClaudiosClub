@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Autonomy, CodexEffort, Engine } from '../../../shared/model';
+import type { Autonomy, CodexEffort, Engine, ServerInfo } from '../../../shared/model';
 import { api, type CodexModelsState } from '../api';
 import { t } from '../i18n';
 
@@ -23,8 +23,16 @@ export function showEngineField(codexReview: boolean | null | undefined, engine:
   return codexReview === true || engine === 'codex';
 }
 
-/** Quem tem servidores na ficha não pode rodar no Codex (a sandbox não tem rede para eles): o botão do Codex fica desligado. */
-export const codexBlockedByServers = (servers: readonly string[]): boolean => servers.length > 0;
+/**
+ * Quem tem conexão FTP marcada na ficha não pode rodar no Codex (o SSH pode, pelo MCP myco-ssh): o botão do Codex fica desligado.
+ * Sem a lista de conexões (ainda carregando), nenhuma conta como FTP: o servidor confere de novo ao salvar.
+ */
+export const codexBlockedByServers = (servers: readonly string[], list: readonly Pick<ServerInfo, 'name' | 'source'>[] | null): boolean =>
+  !!list && list.some((s) => s.source === 'ftp' && servers.includes(s.name));
+
+/** Escrita SSH só se oferece na conexão SSH marcada (o campo da ficha é um subconjunto de `servers`). */
+export const canWriteSsh = (s: Pick<ServerInfo, 'name' | 'protocol'>, servers: readonly string[]): boolean =>
+  s.protocol === 'ssh' && servers.includes(s.name);
 
 /** `Claude` fica sem `engine` na ficha (como sempre foi); só quem volta do Codex manda `claude` de forma explícita. */
 export function engineToSend(engine: Engine, saved: Engine | undefined): Engine | undefined {

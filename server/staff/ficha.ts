@@ -6,6 +6,7 @@ import { staffSshConfigFile } from './servers';
 import { GUIDE_PATH } from '../projectGuide';
 import { MYCO_HOME } from '../config';
 import { ROOT } from '../root';
+import { pathKey } from '../adapters/claude/paths';
 
 // A ficha vira um arquivo Markdown dentro do projeto (.myco/staff/<id>.md), que a sessão lê
 // no começo. Pela linha de comando só vai uma identidade curta apontando para ela: o CLI não
@@ -44,6 +45,24 @@ export interface FichaContext {
   internetAccess?: boolean;
   /** Claude contratado por um gestor no Codex e travado em `manual`: a seção Autonomia conta o porquê. */
   lockedByCodexManager?: boolean;
+  /** Codex com conexões SSH na ficha: o que a seção Servidores diz (ver `serversSection`). Ausente = sem conexão SSH. */
+  codexSsh?: CodexSshInfo;
+  /** O manual é editável nesta conversa (projeto do Claudio’s Club, sem worktree): ver `manualSection`. */
+  manualEditable?: boolean;
+}
+
+/** Estado do MCP de SSH no Codex, para a ficha: as conexões, as com escrita e se o projeto é o do Claudio’s Club (sem MCP). */
+export interface CodexSshInfo {
+  /** O MCP foi anexado à conversa. */
+  mcp: boolean;
+  /** Conexões SSH da ficha que o MCP alcança. */
+  names: string[];
+  /** As que têm escrita liberada (`ssh_executar`). */
+  writable: string[];
+  /** O projeto é o do Claudio’s Club: servidor só pelo Claude. */
+  root: boolean;
+  /** Há conexões SSH, mas o MCP não entrou porque falta o build do Claudio’s Club (dist/ssh-mcp.mjs). */
+  indisponivel?: boolean;
 }
 
 export interface TeamMember {
@@ -96,8 +115,15 @@ export const CODEX_AUTONOMY_LABEL: Record<Autonomy, string> = {
 };
 
 /** Codex com "Permitir acesso à internet" ligado: a busca é a ferramenta do modelo (web_search), não o terminal. */
-const CODEX_INTERNET_ON = 'Para pesquisar na web e ler páginas, use a sua ferramenta de busca (web_search) direto; não há Chrome.';
+const CODEX_INTERNET_ON = 'Para pesquisar na web e ler páginas, use a sua ferramenta de busca (web_search) direto; não há navegador.';
 const CODEX_INTERNET_OFF = 'Sem acesso à internet: se precisar, avise o usuário.';
+/** Com o MCP de SSH anexado, a busca na web sai nesta conversa (ver buildCodexArgs): a ficha diz isso, não a frase de internet. */
+const CODEX_INTERNET_SSH = 'Busca na web desligada nesta conversa porque você tem acesso a servidor.';
+
+function codexInternet(ctx: FichaContext): string {
+  if (ctx.codexSsh?.mcp) return CODEX_INTERNET_SSH;
+  return ctx.internetAccess === true ? CODEX_INTERNET_ON : CODEX_INTERNET_OFF;
+}
 
 /** Programas de acesso remoto: quem não tem servidor na ficha não roda nenhum deles. */
 const REMOTE_TOOLS = ['ssh', 'ssh.exe', 'scp', 'scp.exe', 'sftp', 'sftp.exe', 'rsync'];
@@ -129,14 +155,20 @@ export function peopleRuleDir(): string {
   return ruleDirOf(path.join(MYCO_HOME, 'people'));
 }
 
-/** O manual de uso do Claudio’s Club (docs/uso, na pasta do programa): todo funcionário lê, ninguém edita pela conversa. */
+/** O manual de uso do Claudio’s Club (docs/uso, na pasta do programa): todo funcionário lê; ninguém edita pela conversa, salvo quando o projeto é o próprio Claudio’s Club (ver isClaudeRoot). */
 export const MANUAL_DIR = path.join(ROOT, 'docs', 'uso');
 
-export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpServers: string[] = []): string[] {
+/** O projeto é a própria pasta do Claudio’s Club (ROOT), sem worktree: o manual é código do projeto. Quem chama confere a worktree (ver prepareRun). */
+export function isClaudeRoot(projectPath: string): boolean {
+  return pathKey(projectPath) === pathKey(ROOT);
+}
+
+export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpServers: string[] = [], manualEditable = false): string[] {
   const people = peopleRuleDir();
-  // O manual é lido (--add-dir, ver buildClaudeArgs), mas não editado. Com espaço no caminho a regra sairia quebrada na linha de comando: fica de fora, como as chaves.
+  // O manual é lido (--add-dir, ver buildClaudeArgs). Editável só quando o projeto é o próprio ROOT (manualEditable): senão, negado.
+  // Com espaço no caminho a regra sairia quebrada na linha de comando: fica de fora, como as chaves.
   const manual = ruleDirOf(MANUAL_DIR);
-  const manualRules = /\s/.test(manual) ? [] : [`Edit(${manual}/**)`, `Write(${manual}/**)`, `NotebookEdit(${manual}/**)`];
+  const manualRules = manualEditable || /\s/.test(manual) ? [] : [`Edit(${manual}/**)`, `Write(${manual}/**)`, `NotebookEdit(${manual}/**)`];
   const always = [
     ...manualRules,
     'Read(~/.ssh/**)',
@@ -174,6 +206,30 @@ export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpSer
 const FTP_TOOLS = ['ftp_list', 'ftp_download', 'ftp_upload', 'ftp_delete', 'ftp_rename', 'ftp_mkdir'];
 
 function serversSection(p: StaffProfile, ctx: FichaContext): string {
+  if (codexOf(p) && ctx.codexSsh?.root) {
+    return [
+      '## Servidores',
+      'Aqui servidor só pelo Claude: as ferramentas `ssh_*` não estão com você, e ssh, scp, sftp, rsync e FTP não funcionam na sandbox. Se a tarefa precisar de um servidor, avise o usuário: ele pode passá-la a um funcionário que rode no Claude.',
+    ].join('\n');
+  }
+  if (codexOf(p) && ctx.codexSsh?.indisponivel) {
+    return ['## Servidores', 'Servidor indisponível: falta o build do Club. As conexões SSH da sua ficha não estão ao seu alcance agora: avise o usuário, sem tentar ssh pelo terminal.'].join('\n');
+  }
+  if (codexOf(p) && ctx.codexSsh?.mcp) {
+    const { names, writable } = ctx.codexSsh;
+    return [
+      '## Servidores',
+      `Você acessa estas conexões do projeto, pelo nome: ${names.map((n) => `\`${n}\``).join(', ')}.`,
+      [
+        '### Acesso seguro',
+        '- Leia e diagnostique com as ferramentas `ssh_*` do MCP `myco-ssh` (status, processos, logs do Docker, serviços, journal, listar e ler arquivos). Elas rodam fora da sandbox, pelo Claudio’s Club; o terminal continua sem rede.',
+        '- No terminal não há ssh, scp, sftp nem rsync, e não há transferência de arquivos.',
+        `- Escrita (\`ssh_executar\`, comando livre) só nos servidores liberados: ${writable.length ? writable.map((n) => `\`${n}\``).join(', ') : 'nenhum, só leitura'}.`,
+        '- Antes de algo irreversível ou que afete produção (reiniciar, apagar, mudar configuração), avise e confirme com o usuário. Um servidor pode ter mais de um projeto: confirme a pasta e o serviço antes de agir.',
+        '- Nunca exiba no chat chaves, senhas ou `.env`, nem os grave na memória.',
+      ].join('\n'),
+    ].join('\n');
+  }
   if (codexOf(p)) {
     return [
       '## Servidores',
@@ -357,7 +413,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     `Esta ficha foi gerada pelo Claudio’s Club; para mudar, edite pelo Claudio’s Club (alterações à mão podem ser sobrescritas).`,
     `## Missão\n${p.mission}`,
     p.firstTask ? `## Primeira tarefa\n${p.firstTask}` : '',
-    `## Autonomia\n${codexOf(p) ? `${CODEX_AUTONOMY_LABEL[p.autonomy]}\n${ctx.internetAccess === true ? CODEX_INTERNET_ON : CODEX_INTERNET_OFF}` : AUTONOMY_LABEL[p.autonomy]}${ctx.lockedByCodexManager ? '\nVocê foi contratado por um gestor no Codex e por isso pede aprovação de tudo; só o usuário muda isso.' : ''}`,
+    `## Autonomia\n${codexOf(p) ? `${CODEX_AUTONOMY_LABEL[p.autonomy]}\n${codexInternet(ctx)}` : AUTONOMY_LABEL[p.autonomy]}${ctx.lockedByCodexManager ? '\nVocê foi contratado por um gestor no Codex e por isso pede aprovação de tudo; só o usuário muda isso.' : ''}`,
     // Agents e skills são do Claude Code: no Codex a seção some.
     codexOf(p)
       ? ''
@@ -365,7 +421,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     guideSection(ctx),
     `## Conhecimento (leia antes de começar)\n${list(p.knowledge, codexOf(p) ? 'Nada específico além do AGENTS.md e do CLAUDE.md do projeto, se existirem.' : 'Nada específico além do CLAUDE.md do projeto.')}`,
     postureSection(),
-    manualSection(),
+    manualSection(ctx.manualEditable === true),
     `## Regras\n${list(p.rules, codexOf(p) ? 'Siga o AGENTS.md e o CLAUDE.md do projeto, se existirem.' : 'Siga o CLAUDE.md do projeto.')}`,
     p.doneWhen ? `## Definição de pronto\n${p.doneWhen}` : '',
     // Quem pediu confere pela entrega: com as provas nela, não precisa abrir tudo de novo.
@@ -404,12 +460,15 @@ function postureSection(): string {
   ].join('\n');
 }
 
-/** Manual de uso do Claudio’s Club: só leitura (ver MANUAL_DIR, em --add-dir e nas regras de negação). */
-function manualSection(): string {
+/**
+ * Manual de uso do Claudio’s Club (ver MANUAL_DIR). Só leitura, salvo quando o projeto é o próprio Claudio’s Club (`editable`, ver isClaudeRoot):
+ * aí o manual é código do projeto e o "(só leitura)" seria falso.
+ */
+function manualSection(editable: boolean): string {
   const readme = path.join(MANUAL_DIR, 'README.md').replace(/\\/g, '/');
   return [
     '## Manual do Claudio’s Club',
-    `Se o usuário perguntar como usar o Claudio’s Club, consulte o manual em \`${readme}\` (só leitura) e responda com base nele; se não estiver lá, diga que não sabe.`,
+    `Se o usuário perguntar como usar o Claudio’s Club, consulte o manual em \`${readme}\`${editable ? '' : ' (só leitura)'} e responda com base nele; se não estiver lá, diga que não sabe.`,
   ].join('\n');
 }
 
@@ -560,6 +619,8 @@ export interface ClaudeArgsOptions {
   keyFiles?: string[];
   /** Conexões da ficha que são FTP (ver secretDenyRules). */
   ftpServers?: string[];
+  /** O manual (docs/uso do ROOT) pode ser editado: projeto é o próprio Claudio’s Club e a sessão não está numa worktree (ver prepareRun). Ausente = negado. */
+  manualEditable?: boolean;
   /** false: o mcpConfig só acrescenta (o MCP de FTP numa ficha sem lista de MCPs); padrão true (só os da ficha). */
   strictMcp?: boolean;
   /** Plugin da sessão com as skills da biblioteca que a ficha tem (ver server/skillLibrary.ts). */
@@ -596,7 +657,7 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   if (p.browser && AUTONOMY_ORDER.indexOf(p.autonomy) >= AUTONOMY_ORDER.indexOf('acceptEdits')) args.push('--allowedTools', 'mcp__claude-in-chrome');
   // Com a internet desligada (Configurações), a busca na web do Claude também sai: a ferramenta é recusada antes de rodar.
   const web = o.internetAccess === false ? ['WebSearch', 'WebFetch'] : [];
-  args.push('--disallowedTools', [...secretDenyRules(p, o.keyFiles, o.ftpServers), ...web].join(','));
+  args.push('--disallowedTools', [...secretDenyRules(p, o.keyFiles, o.ftpServers, o.manualEditable === true), ...web].join(','));
   if (o.mcpConfigPath) args.push('--mcp-config', o.mcpConfigPath, ...(o.strictMcp === false ? [] : ['--strict-mcp-config']));
   return args;
 }

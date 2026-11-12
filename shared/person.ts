@@ -21,6 +21,7 @@ export const ALLOCATION_FIELDS = [
   'canHire',
   'worktree',
   'servers',
+  'sshWrite',
   'browser',
   'engine',
   'fallback',

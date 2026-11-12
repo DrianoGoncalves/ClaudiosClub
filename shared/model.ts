@@ -255,7 +255,11 @@ export interface AppConfig {
     projects: string[];
     /** Ids de sessão (= funcionário). */
     sessions: string[];
+    /** Id da conversa → quando foi arquivada (ISO). Só some do seletor de conversas; volta se ela tiver atividade depois dessa data. */
+    conversations: Record<string, string>;
   };
+  /** Título que você deu à conversa (id da sessão → título). Sem entrada, vale o último assunto. */
+  conversationTitles?: Record<string, string>;
   /** Linha de parada do consumo da conta: passar dela pede confirmação antes de trabalhar. */
   usageStop: UsageStop;
   /** O que acontece com a mensagem mandada enquanto o funcionário trabalha. */
@@ -769,6 +773,8 @@ export interface StaffProfile {
   worktree: boolean;
   /** Servidores (nomes de ServerInfo) que pode acessar, por SSH ou FTP; vazio = nenhum. */
   servers: string[];
+  /** Conexões SSH de `servers` com escrita liberada (ssh_executar no MCP myco-ssh, no Codex). Subconjunto de `servers`; ausente = nenhuma. */
+  sshWrite?: string[];
   /** Usa o seu Chrome pela extensão Claude in Chrome (`--chrome`). */
   browser: boolean;
   /** Rotinas agendadas (o Claudio’s Club manda a mensagem no horário). Só pelo Claudio’s Club; fichas antigas não têm. */
@@ -1350,7 +1356,7 @@ export interface UpdateStatus {
  * package-lock ou o pacote dist/server.mjs refeito); `client`: a tela (client/, shared/, vite.config.ts, o lock);
  * `ftpMcp`: o pacote do MCP de FTP dos funcionários.
  */
-export type PendingReason = 'server' | 'client' | 'ftpMcp' | 'gptMcp';
+export type PendingReason = 'server' | 'client' | 'ftpMcp' | 'gptMcp' | 'sshMcp';
 
 export interface PendingRestart {
   /** Há mudança que só entra reiniciando. */

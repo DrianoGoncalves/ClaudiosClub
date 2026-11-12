@@ -163,6 +163,7 @@ describe('rotas da sandbox do Codex', () => {
       ['POST', '/api/server/restart'],
       ['POST', '/api/update'],
       ['POST', '/api/archive'],
+      ['POST', '/api/conversation-title'],
       ['POST', '/api/pair/rotate'],
       ['POST', '/api/projects/p1/chat/s1/wake/user-cancel'],
       ['POST', '/api/projects/p1/chat/s1/merge'],

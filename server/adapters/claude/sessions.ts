@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import type { LiveSession, Session } from '../../../shared/model';
-import { isInjectedUserText } from '../../chat/items';
+import { hasCheckpoint, isInjectedUserText } from '../../chat/items';
 import { listDir, readHeadTail, tryJson } from './fsutil';
 import { encodeProjectDir } from './paths';
 
@@ -123,7 +123,8 @@ async function readSession(
       agentLine?.agentName ??
       liveInfo?.name ??
       null,
-    topic: sessionTopic(headLines),
+    // Arquivo pequeno: head e tail são o mesmo array (não entra duas vezes).
+    topic: sessionTopic(headLines, head === tail ? [] : tail.map(parseLine)),
     entrypoint: origin?.entrypoint ?? liveInfo?.entrypoint ?? null,
     gitBranch: origin?.gitBranch ?? null,
     version: origin?.version ?? null,
@@ -149,29 +150,73 @@ export async function readTranscriptCwd(projectDir: string): Promise<string | nu
 const TOPIC_MAX = 80;
 
 /**
- * Assunto da conversa, do começo do transcript: a tarefa do quadro que a abriu (`[Tarefa "…"]`) ou
- * a 1ª linha da 1ª mensagem sua. Pula o que o Claude Code ou o Claudio’s Club injetam e a saudação
- * de sessão nova ("Olá, X. Leia sua memória…"), que não diz o assunto.
+ * Assunto da conversa: o da última virada de assunto. Virada = a tarefa do quadro que a puxou (`[Tarefa "…"]`)
+ * ou a próxima mensagem sua substantiva depois de um ponto de corte (`hasCheckpoint`). Sem virada, é a 1ª
+ * mensagem sua. Pula o que o Claude Code ou o Claudio’s Club injetam, a saudação de sessão nova ("Olá, X. Leia
+ * sua memória…") e, depois do ponto de corte, a confirmação curta ("ok", "pode seguir").
+ * `head` e `tail` em ordem cronológica e sem sobreposição (o tail vazio quando o arquivo é pequeno).
  */
-export function sessionTopic(lines: TranscriptLine[]): string | null {
-  for (const l of lines) {
-    if (l.type !== 'user' || !l.message || typeof l.message !== 'object') continue;
-    const content = (l.message as { content?: unknown }).content;
-    const texts =
-      typeof content === 'string'
-        ? [content]
-        : Array.isArray(content)
-          ? content.flatMap((b) => (b && typeof b === 'object' && (b as { type?: unknown }).type === 'text' && typeof (b as { text?: unknown }).text === 'string' ? [(b as { text: string }).text] : []))
-          : [];
-    for (const raw of texts) {
+export function sessionTopic(head: TranscriptLine[], tail: TranscriptLine[] = []): string | null {
+  let topic: string | null = null;
+  // Depois de um ponto de corte, o próximo assunto é a próxima mensagem substantiva.
+  let waiting = false;
+  for (const l of [...head, ...tail]) {
+    if (l.type === 'assistant') {
+      if (textsOf(l).some((t) => hasCheckpoint(t))) waiting = true;
+      continue;
+    }
+    if (l.type !== 'user') continue;
+    for (const raw of textsOf(l)) {
       const text = raw.trim();
       const task = /^\[Tarefa "(.+?)"\]/.exec(text);
-      if (task) return clipTopic(task[1]!);
+      if (task) {
+        topic = clipTopic(task[1]!);
+        waiting = false;
+        break;
+      }
       if (!text || isInjectedUserText(text) || text.startsWith('[MyCo]') || /^Olá, [^.]+\. Leia sua (memória|ficha)/.test(text)) continue;
-      return clipTopic(text.split(/\r?\n/)[0]!);
+      if (waiting) {
+        if (isShortConfirmation(text)) continue;
+        topic = clipTopic(text.split(/\r?\n/)[0]!);
+        waiting = false;
+        break;
+      }
+      // Sem virada: a 1ª mensagem sua (só a primeira define).
+      if (topic === null) {
+        topic = clipTopic(text.split(/\r?\n/)[0]!);
+        break;
+      }
     }
   }
-  return null;
+  return topic;
+}
+
+/** Os textos de uma mensagem (string ou blocos de texto). */
+function textsOf(l: TranscriptLine): string[] {
+  if (!l.message || typeof l.message !== 'object') return [];
+  const content = (l.message as { content?: unknown }).content;
+  if (typeof content === 'string') return [content];
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((b) =>
+    b && typeof b === 'object' && (b as { type?: unknown }).type === 'text' && typeof (b as { text?: unknown }).text === 'string' ? [(b as { text: string }).text] : [],
+  );
+}
+
+/** Palavras de confirmação (pt/en/es), sem acento. Lista fechada: "Corrige o bug" é assunto, "ok, valeu" não. */
+const CONFIRMATION_WORDS = new Set(
+  'ok okay oks blz beleza certo certinho perfeito otimo show top valeu vlw obrigado obrigada brigado grato sim nao pode seguir segue siga continua continue manda bora aprovado aprovada entendi combinado feito isso fechado thanks thank you yes no go ahead great nice gracias si vale perfecto listo de acordo'.split(' '),
+);
+
+/** "ok", "obrigado", "pode seguir": só palavras de confirmação, sem pergunta. Não é um assunto novo. */
+function isShortConfirmation(text: string): boolean {
+  if (text.includes('?')) return false;
+  const words = text
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .filter(Boolean);
+  return words.length <= 4 && words.every((w) => CONFIRMATION_WORDS.has(w));
 }
 
 function clipTopic(s: string): string {

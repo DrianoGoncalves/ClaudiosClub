@@ -14,7 +14,8 @@ const DEFAULTS: AppConfig = {
   companyName: 'Claudio’s Club',
   // Quem chega começa no simples; quem já tinha config (já usava) fica no avançado (ver readConfig).
   uiLevel: 'simple',
-  archived: { projects: [], sessions: [] },
+  archived: { projects: [], sessions: [], conversations: {} },
+  conversationTitles: {},
   // Para antes de esgotar: sobra margem para terminar o que está em andamento.
   usageStop: { fiveHour: 90, sevenDay: 95 },
   // O padrão do Claude Code: a mensagem entra no trabalho em andamento, sem interromper.
@@ -68,6 +69,14 @@ const MAX_TURN_TOOLS = z.number().int('use um número inteiro').min(0, 'mínimo 
 const MAX_TURN_MINUTES = z.number().int('use um número inteiro').min(0, 'mínimo 0 (desligado)').max(1440, 'máximo de 1440 minutos (24 h)');
 /** Quantas sessões arquivadas sozinhas o controle lembra (as mais recentes ficam). */
 const FREELA_RECORD_MAX = 500;
+/** Quantas conversas arquivadas (só do seletor) o config guarda (as de data mais recente ficam). */
+const CONVERSATION_RECORD_MAX = 500;
+/** Títulos manuais de conversa: passando do teto, só edita ou apaga (não cria). Sem descarte automático. */
+const CONVERSATION_TITLES_MAX = 2000;
+/** Título de conversa: depois do trim, 1 a 120 caracteres (vazio apaga). */
+const CONVERSATION_TITLE = z.string().trim().min(1).max(120);
+/** Mesmo formato do id da rota de rename (`/chat/:sid/rename`). */
+const CONVERSATION_ID = /^[A-Za-z0-9-]+$/;
 
 const PRIORITY = z.enum(['now', 'next', 'later']);
 const UI_LEVEL = z.enum(['simple', 'advanced']);
@@ -90,8 +99,15 @@ const ConfigFile = z
     companyName: z.string().optional(),
     uiLevel: UI_LEVEL.optional().catch(undefined),
     archived: z
-      .object({ projects: z.array(z.string()).optional(), sessions: z.array(z.string()).optional() })
+      .object({
+        projects: z.array(z.string()).optional(),
+        sessions: z.array(z.string()).optional(),
+        // Valor estranho à mão zera só este mapa; o resto do config segue.
+        conversations: z.record(z.string(), z.string()).optional().catch(undefined),
+      })
       .optional(),
+    // Editado à mão, entrada estranha some (ver titlesOf).
+    conversationTitles: z.record(z.string(), z.unknown()).optional().catch(undefined),
     usageStop: UsageStopFile.optional(),
     sendWhileBusy: PRIORITY.optional().catch(undefined),
     // Editado à mão, um valor estranho volta ao padrão sem derrubar o resto (ver readConfig).
@@ -182,10 +198,20 @@ export const ConfigPatch = z.object({
 });
 
 export const ArchiveRequest = z.object({
-  kind: z.enum(['project', 'session']),
+  kind: z.enum(['project', 'session', 'conversation']),
   id: z.string().min(1).max(200),
   archived: z.boolean(),
 });
+
+export const ConversationTitleRequest = z.object({
+  id: z.string().regex(CONVERSATION_ID, 'conversa inválida'),
+  title: z.string().nullable(),
+});
+
+/** Pedido inválido (id ou título fora da regra): 400. */
+export class ConversationTitleError extends Error {}
+/** Teto de títulos atingido: criar outro recusa (409); editar ou apagar um que já existe segue. */
+export class ConversationTitlesFullError extends Error {}
 
 export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
   const parsed = ConfigFile.safeParse(await readRaw(file));
@@ -196,7 +222,8 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     companyName: d.companyName && d.companyName !== 'MyCo' ? d.companyName : DEFAULTS.companyName,
     // Simples até você escolher o avançado, também para quem já tinha config de antes da opção.
     uiLevel: d.uiLevel ?? DEFAULTS.uiLevel,
-    archived: { projects: d.archived?.projects ?? [], sessions: d.archived?.sessions ?? [] },
+    archived: { projects: d.archived?.projects ?? [], sessions: d.archived?.sessions ?? [], conversations: d.archived?.conversations ?? {} },
+    conversationTitles: titlesOf(d.conversationTitles),
     usageStop: {
       fiveHour: d.usageStop?.fiveHour === undefined ? DEFAULTS.usageStop.fiveHour : d.usageStop.fiveHour,
       sevenDay: d.usageStop?.sevenDay === undefined ? DEFAULTS.usageStop.sevenDay : d.usageStop.sevenDay,
@@ -364,16 +391,58 @@ function mergePartial(current: unknown, patch: Record<string, unknown>): Record<
   return out;
 }
 
-/** Arquiva ou desarquiva um projeto ou funcionário (só esconde do quadro). */
+/** Arquiva ou desarquiva um projeto, funcionário (só esconde do quadro) ou conversa (só do seletor de conversas). */
 export async function setArchived(req: z.infer<typeof ArchiveRequest>, file = CONFIG_FILE): Promise<AppConfig> {
   return mutate(file, (current) => {
     const parsed = ConfigFile.safeParse(current);
     const archived = parsed.success ? (parsed.data.archived ?? {}) : {};
+    if (req.kind === 'conversation') {
+      const conversations: Record<string, string> = { ...(archived.conversations ?? {}) };
+      // Re-arquivar troca a data por agora; desarquivar apaga a entrada.
+      if (req.archived) conversations[req.id] = new Date().toISOString();
+      else delete conversations[req.id];
+      const newest = Object.entries(conversations)
+        .sort((a, b) => b[1].localeCompare(a[1]))
+        .slice(0, CONVERSATION_RECORD_MAX);
+      return { ...current, archived: { ...archived, conversations: Object.fromEntries(newest) } };
+    }
     const key = req.kind === 'project' ? 'projects' : 'sessions';
     const list = new Set(archived[key] ?? []);
     if (req.archived) list.add(req.id);
     else list.delete(req.id);
     return { ...current, archived: { ...archived, [key]: [...list] } };
+  });
+}
+
+/** Os títulos gravados; entrada estranha (editada à mão) some e o resto segue. */
+function titlesOf(raw: unknown): Record<string, string> {
+  const rec = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  return Object.fromEntries(
+    Object.entries(rec).flatMap(([id, v]) => {
+      const title = CONVERSATION_TITLE.safeParse(v);
+      return CONVERSATION_ID.test(id) && title.success ? [[id, title.data] as const] : [];
+    }),
+  );
+}
+
+/** Dá ou troca o título de uma conversa (só o nome que você deu). Vazio ou null apaga: volta ao último assunto. */
+export async function setConversationTitle(id: string, title: string | null, file = CONFIG_FILE): Promise<AppConfig> {
+  if (!CONVERSATION_ID.test(id)) throw new ConversationTitleError('conversa inválida');
+  const clean = title === null ? '' : title.trim();
+  if (clean.length > 120) throw new ConversationTitleError('máximo de 120 caracteres');
+  return mutate(file, (current) => {
+    const titles = titlesOf(current.conversationTitles);
+    const has = Object.prototype.hasOwnProperty.call(titles, id);
+    if (clean === '') {
+      if (!has) return current;
+      delete titles[id];
+    } else {
+      if (!has && Object.keys(titles).length >= CONVERSATION_TITLES_MAX) {
+        throw new ConversationTitlesFullError(`já há ${CONVERSATION_TITLES_MAX} conversas com título; apague algum antes`);
+      }
+      titles[id] = clean;
+    }
+    return { ...current, conversationTitles: titles };
   });
 }
 

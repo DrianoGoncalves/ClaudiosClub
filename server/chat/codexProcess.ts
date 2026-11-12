@@ -7,7 +7,7 @@ import { CODEX_CONTEXT_WINDOW } from '../adapters/claude/pricing';
 import { resolveCodexCommand, type CodexEnvStatus } from '../codexEnv';
 import { pickCodexSubstitute, type CodexModelInfo } from '../codexModels';
 import { cleanEnv, withoutMycoToken } from '../auth';
-import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexSecrets } from './codexArgs';
+import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexMcpServer, type CodexSecrets } from './codexArgs';
 import { contextUsed, isModelUnavailable, isToolCall, itemFromCodex, parseCodexFailure, type CodexPhase } from './codexEvents';
 import { hasCheckpoint, stripCheckpoint } from './items';
 import { ChatProcess, type ChatProcessOptions } from './process';
@@ -30,6 +30,8 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   writableRoots?: string[];
   /** A ficha do próprio funcionário (os arquivos que existem): só leitura na sandbox de escrita. */
   readOnlyPaths?: string[];
+  /** MCP de SSH da ficha (conexões SSH; null = sem ele). Ver `codexSshMcpArgs` em codexArgs.ts. */
+  sshMcp?: CodexMcpServer | null;
   /** O que o bloqueio de segredos precisa saber; `mycoHome` é obrigatório (ver `CodexSecrets` em codexArgs.ts). */
   secrets: CodexSecrets;
   /**
@@ -313,6 +315,7 @@ export class CodexProcess extends ChatProcess {
         instructions: o.instructions,
         writableRoots: o.writableRoots,
         readOnlyPaths: o.readOnlyPaths,
+        sshMcp: o.sshMcp,
         secrets: o.secrets,
         network: status.networkProxy ? 'loopback' : 'off',
         internetAccess,

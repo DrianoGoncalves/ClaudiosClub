@@ -120,7 +120,7 @@ async function send<T>(method: 'POST' | 'PUT', url: string, body: unknown, heade
   }
   const data = (await res.json().catch(() => ({}))) as T & { error?: string; code?: string; hit?: UsageStopHit };
   pairingSignal(url, res.ok, data);
-  if (!res.ok) throw new ApiError(errorMessage(data, `${url}: ${res.status}`), data.code ?? null, data.hit ?? null, data);
+  if (!res.ok) throw new ApiError(errorMessage(data, `${url}: ${res.status}`), data.code ?? null, data.hit ?? null, data, res.status);
   return data;
 }
 
@@ -156,6 +156,8 @@ export class ApiError extends Error {
     readonly hit: UsageStopHit | null,
     /** O corpo da recusa, para campos que só um erro tem (ex.: `openTasks` do `open-tasks`). */
     readonly details: Record<string, unknown> = {},
+    /** O status HTTP da recusa (null = o servidor nem respondeu). */
+    readonly status: number | null = null,
   ) {
     super(message);
   }
@@ -368,8 +370,10 @@ export const api = {
     /** Só os projetos enviados mudam; null tira o orçamento. */
     projectBudgets?: Record<string, number | null>;
   }) => post<AppConfig>('/api/config', patch),
-  archive: (kind: 'project' | 'session', id: string, archived: boolean) =>
+  archive: (kind: 'project' | 'session' | 'conversation', id: string, archived: boolean) =>
     post<AppConfig>('/api/archive', { kind, id, archived }),
+  /** Título da conversa dado pelo user; null (ou vazio) apaga e a lista volta ao último assunto. 409 = teto de títulos cheio. */
+  setConversationTitle: (id: string, title: string | null) => post<AppConfig>('/api/conversation-title', { id, title }),
   costs: () => get<CostReport>('/api/costs'),
   orchestration: (sessionId: string) => get<OrchestrationReport>(`/api/sessions/${sessionId}/orchestration`),
   /** Economia por sessão nos últimos `days` dias; null = desde sempre. */

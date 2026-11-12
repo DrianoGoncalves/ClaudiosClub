@@ -417,7 +417,7 @@ function buildSettings(
       description: t('office.demoDesc'),
       keywords: t('office.demoKeywords'),
       control: (() => {
-        const demo = p.projects.find((x) => /[\\/]\.myco[\\/]demo[\\/]cafe-demo$/i.test(x.path));
+        const demo = p.projects.find((x) => /[\\/]\.myco[\\/]demo[\\/]my-co$/i.test(x.path));
         return demo ? (
           <button
             type="button"

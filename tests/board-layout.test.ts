@@ -497,7 +497,7 @@ describe('buildGraph', () => {
   });
 
   it('arquivados somem do quadro, ou aparecem marcados quando pedido', () => {
-    const archived = { projects: ['b'], sessions: ['s-a2'] };
+    const archived = { projects: ['b'], sessions: ['s-a2'], conversations: {} };
     const hidden = buildGraph(board(), { archived });
     const ids = hidden.nodes.map((n) => n.id);
     expect(ids).not.toContain('p:b');
@@ -511,7 +511,7 @@ describe('buildGraph', () => {
     const a = shown.nodes.find((n) => n.id === 'g:a');
     expect(a?.type === 'employee' && a.data.ghost?.map((x) => x.id).sort()).toEqual(['s-a1', 's-a2']);
     expect(a?.type === 'employee' && a.data.archived).toBe(false); // só arquivado com todas as conversas arquivadas
-    const onlyArchived = buildGraph(board(), { archived: { projects: [], sessions: ['s-a1', 's-a2'] }, showArchived: true });
+    const onlyArchived = buildGraph(board(), { archived: { projects: [], sessions: ['s-a1', 's-a2'], conversations: {} }, showArchived: true });
     const all = onlyArchived.nodes.find((n) => n.id === 'g:a');
     expect(all?.type === 'employee' && all.data.archived).toBe(true);
   });

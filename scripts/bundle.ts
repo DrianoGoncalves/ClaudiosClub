@@ -12,6 +12,8 @@ export const DAEMON_BUNDLE = path.join(ROOT, 'dist', 'daemon.mjs');
 export const FTP_MCP_BUNDLE = path.join(ROOT, 'dist', 'ftp-mcp.mjs');
 /** MCP do GPT (`perguntar_gpt`) que as sessões dos funcionários sobem (server/staff/gptMcp.ts acha o pacote aqui). */
 export const GPT_MCP_BUNDLE = path.join(ROOT, 'dist', 'gpt-mcp.mjs');
+/** MCP de SSH que as sessões dos funcionários sobem (server/staff/sshMcp.ts acha o pacote aqui). */
+export const SSH_MCP_BUNDLE = path.join(ROOT, 'dist', 'ssh-mcp.mjs');
 
 /** Ao lado do pacote, os arquivos que entraram nele: é por eles que se sabe se ficou velho. */
 const inputsFile = (out: string) => out.replace(/\.mjs$/, '.inputs.json');
@@ -59,6 +61,7 @@ export async function bundleAll(): Promise<void> {
   await bundle('scripts/daemon.ts', DAEMON_BUNDLE);
   await bundle('server/ftp-mcp.ts', FTP_MCP_BUNDLE);
   await bundle('server/gpt-mcp.ts', GPT_MCP_BUNDLE);
+  await bundle('server/ssh-mcp.ts', SSH_MCP_BUNDLE);
 }
 
 if (path.basename(process.argv[1] ?? '') === 'bundle.ts') await bundleAll();

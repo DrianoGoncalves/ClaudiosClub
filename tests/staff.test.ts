@@ -11,6 +11,7 @@ import type { ToolAdapter } from '../server/adapters/types';
 import {
   buildClaudeArgs,
   capAutonomy,
+  isClaudeRoot,
   MANUAL_DIR,
   renderFicha,
   systemPrompt,
@@ -249,7 +250,7 @@ describe('ficha', () => {
     // Com autonomia de edição: o rótulo do terminal (sem internet) só aparece nela.
     const codex = profile({ engine: 'codex', autonomy: 'acceptEdits' });
     const on = renderFicha(codex, { ...ctx, internetAccess: true });
-    expect(on).toContain('Para pesquisar na web e ler páginas, use a sua ferramenta de busca (web_search) direto; não há Chrome.');
+    expect(on).toContain('Para pesquisar na web e ler páginas, use a sua ferramenta de busca (web_search) direto; não há navegador.');
     expect(on).toContain('o terminal não tem internet');
     const off = renderFicha(codex, { ...ctx, internetAccess: false });
     expect(off).toContain('Sem acesso à internet: se precisar, avise o usuário.');
@@ -315,6 +316,30 @@ describe('ficha', () => {
       }
       expect(deny.some((r) => r.startsWith('Read(') && r.includes('docs/uso'))).toBe(false);
     }
+  });
+
+  it('manual editável só quando o projeto é o próprio Claudio’s Club (sem worktree); qualquer outro projeto segue negado', () => {
+    const manualDeny = (deny: string[]) => deny.filter((r) => r.includes('docs/uso'));
+    // Projeto = ROOT: nenhuma regra do manual.
+    expect(manualDeny(secretDenyRules(profile(), [], [], true))).toEqual([]);
+    // Outro projeto, ou sem a informação (padrão): as três regras de edição.
+    expect(manualDeny(secretDenyRules(profile()))).toHaveLength(3);
+    expect(manualDeny(secretDenyRules(profile(), [], [], false))).toHaveLength(3);
+    // Pela linha de comando: manualEditable liga/desliga o bloqueio; o resto das regras não muda.
+    const base = { sessionId: 's', resume: false, systemPromptFile: 'S', mcpConfigPath: null, firstPrompt: null };
+    const denyOf = (o: Parameters<typeof buildClaudeArgs>[1]) => {
+      const args = buildClaudeArgs(profile(), o);
+      return args[args.indexOf('--disallowedTools') + 1]!.split(',');
+    };
+    expect(manualDeny(denyOf({ ...base, manualEditable: true }))).toEqual([]);
+    expect(manualDeny(denyOf(base))).toHaveLength(3);
+    expect(denyOf({ ...base, manualEditable: true }).length).toBe(denyOf(base).length - 3);
+    // isClaudeRoot: a própria pasta (com barra final), sim; outra pasta, não.
+    expect(isClaudeRoot(ROOT)).toBe(true);
+    expect(isClaudeRoot(ROOT + path.sep)).toBe(true);
+    if (process.platform === 'win32') expect(isClaudeRoot(ROOT.toUpperCase())).toBe(true);
+    expect(isClaudeRoot(path.join(os.tmpdir(), 'outro-projeto'))).toBe(false);
+    expect(isClaudeRoot(MANUAL_DIR)).toBe(false);
   });
 
   it('subfuncionário não passa da autonomia do gestor', () => {

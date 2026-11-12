@@ -84,8 +84,8 @@ function statOf(p: string): Stats | null {
  * cada execução, então um `.vps` criado no meio da conversa passa a valer na mensagem seguinte.
  *
  * Limite provado no Codex 0.156.1 e 0.167.0 com o bwrap do sistema (0.13.1): só UM arquivo regular pode ser negado por execução (o segundo
- * quebra com "Bad file descriptor"); pastas não têm limite. Por isso as chaves SSH das conexões não entram aqui (quem tem servidor na
- * ficha não roda no Codex, ver `codexProfileError`): ficam só pastas. Se sobrar mais de um arquivo regular (um `.vps` que é arquivo na
+ * quebra com "Bad file descriptor"); pastas não têm limite. Por isso as chaves SSH das conexões não entram aqui: o cadastro só aceita chave
+ * em ~/.ssh, no `.vps` ou no cofre (ver servers.ts), e as três pastas já são negadas. Se sobrar mais de um arquivo regular (um `.vps` que é arquivo na
  * pasta da conversa e outro no projeto), os de sobra ficariam legíveis em silêncio: falha fechada, `CodexBlockedError` e nada roda.
  */
 export function codexDenyPaths(ctx: CodexSecretContext): string[] {
@@ -188,13 +188,41 @@ export function codexProfileArgs(o: CodexSafetyOptions): string[] {
 }
 
 /**
- * Por que esta ficha não pode rodar no Codex (null = pode). Servidor na ficha não combina: a sandbox não tem rede para eles, e as
- * chaves SSH das conexões não cabem no bloqueio (o bwrap só nega um arquivo por execução). O esforço `ultra` é só do Codex.
+ * Por que esta ficha não pode rodar no Codex (null = pode). Conexão FTP não combina com o Codex (o MCP de FTP roda como o do Claude, sem
+ * o bloqueio do Codex; quem a confere é o projeto, via `ftpServers`). Conexão SSH combina: o MCP myco-ssh roda fora da sandbox (ver
+ * `codexSshMcpArgs`). O esforço `ultra` é só do Codex.
  */
-export function codexProfileError(p: { engine?: string; servers: readonly string[]; effort?: string | null }): string | null {
-  if (p.engine === 'codex' && p.servers.length) return 'Quem tem servidores na ficha não pode rodar no Codex: tire os servidores ou use o Claude';
+export function codexProfileError(p: { engine?: string; servers: readonly string[]; effort?: string | null; ftpServers?: readonly string[] }): string | null {
+  if (p.engine === 'codex' && p.ftpServers?.some((n) => p.servers.includes(n))) return 'Conexão FTP não funciona no Codex: tire as conexões FTP ou use o Claude';
   if (p.effort === 'ultra' && p.engine !== 'codex') return 'O esforço ultra só existe no Codex';
   return null;
+}
+
+/** Servidor MCP que a conversa do Codex sobe (`command` + `args`), montado fora daqui (ver server/staff/sshMcp.ts). */
+export interface CodexMcpServer {
+  command: string;
+  args: string[];
+  /** Pasta do processo do MCP (o ROOT do Claudio’s Club, fora do projeto da conversa). Sem ela, o Codex usa a pasta de trabalho. */
+  cwd?: string;
+}
+
+/** Nome do MCP de SSH na configuração do Codex (`mcp_servers.<nome>`). É o mesmo do Claude (`SSH_MCP_NAME`, em server/staff/sshMcp.ts). */
+export const CODEX_SSH_MCP_NAME = 'myco-ssh';
+
+/**
+ * Os `-c mcp_servers.myco-ssh.*` da conversa. Só este MCP entra por aqui. `default_tools_approval_mode="approve"` é obrigatório no
+ * `codex exec` (provado no 0.167): sem ele, com `approval_policy="never"`, o Codex recusa a chamada. Por isso a barreira é o próprio
+ * MCP (conexões da ficha e `sshWrite`) e o texto da ficha, não a aprovação do Codex.
+ */
+export function codexSshMcpArgs(s: CodexMcpServer | null | undefined): string[] {
+  if (!s) return [];
+  const key = `mcp_servers.${CODEX_SSH_MCP_NAME}`;
+  return [
+    '-c', `${key}.command=${tomlString(s.command)}`,
+    '-c', `${key}.args=[${s.args.map((a) => tomlString(a)).join(',')}]`,
+    ...(s.cwd ? ['-c', `${key}.cwd=${tomlString(s.cwd.replace(/\\/g, '/'))}`] : []),
+    '-c', `${key}.default_tools_approval_mode=${tomlString('approve')}`,
+  ];
 }
 
 /** O que o `chatSpawn` entrega para abrir uma conversa no Codex (no lugar dos argumentos do `claude`). */
@@ -218,6 +246,8 @@ export interface CodexSpawn {
   threadFile: string;
   /** "Permitir acesso à internet", lida a cada execução (ver `CodexProcess`). Ausente = desligada. */
   internetAccess?: () => Promise<boolean>;
+  /** MCP de SSH da ficha (conexões SSH), ou null: sem ele. Ver `codexSshMcpArgs`. */
+  sshMcp?: CodexMcpServer | null;
 }
 
 /**
@@ -251,6 +281,8 @@ export interface CodexRunOptions {
   threadId?: string | null;
   /** Sistema (os testes trocam): no Windows as instruções nunca vão na linha de comando. */
   platform?: NodeJS.Platform;
+  /** MCP de SSH da ficha (só conexões SSH; null = sem ele). Ver `codexSshMcpArgs`. */
+  sshMcp?: CodexMcpServer | null;
 }
 
 /**
@@ -288,6 +320,8 @@ export function codexWindowsSandboxArgs(platform: NodeJS.Platform = process.plat
  * Argumentos depois de `codex`. O prompt vai pelo stdin (`-`). Segurança (config do usuário, conectores, busca na web, aprovação, sandbox,
  * segredos e rede) vem toda de `codexSafetyArgs`, igual na primeira execução e no `resume` (que não aceita `-s` nem `-C`: a pasta é a do
  * processo). A rede é a que quem chama manda (`network`): `loopback` só depois de conferir o `network_proxy` (ver codexEnv.ts).
+ * Com o MCP de SSH anexado, a busca na web fica DESLIGADA mesmo com "Permitir acesso à internet": por ela o conteúdo dos servidores
+ * podia sair para fora (canal de vazamento). A ficha diz isso (ver ficha.ts).
  */
 export function buildCodexArgs(o: CodexRunOptions): string[] {
   const resume = !!o.threadId;
@@ -303,12 +337,13 @@ export function buildCodexArgs(o: CodexRunOptions): string[] {
       home: o.secrets.home ?? os.homedir(),
       mycoHome: o.secrets.mycoHome,
       network: o.network,
-      webSearch: o.internetAccess === true,
+      webSearch: o.internetAccess === true && !o.sshMcp,
       writableRoots: o.writableRoots,
       readOnlyPaths: o.readOnlyPaths,
     }),
   );
   args.push(...codexWindowsSandboxArgs(o.platform));
+  args.push(...codexSshMcpArgs(o.sshMcp));
   if (o.instructions && instructionsInArgv(o.instructions, o.platform)) args.push('-c', `developer_instructions=${tomlString(o.instructions)}`);
   if (resume) args.push(o.threadId!);
   args.push('-');

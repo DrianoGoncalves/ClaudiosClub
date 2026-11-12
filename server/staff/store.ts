@@ -58,6 +58,8 @@ const StaffInputObject = z.object({
   playbook: z.enum(PLAYBOOKS).nullable().default(null),
   worktree: z.boolean().default(false),
   servers: z.array(z.string().regex(/^[\w.-]{1,60}$/, 'servidor inválido')).max(30).default([]),
+  // Conexões SSH de `servers` com escrita liberada (ver `sshWriteError`).
+  sshWrite: z.array(z.string().regex(/^[\w.-]{1,60}$/, 'servidor inválido')).max(30).default([]),
   browser: z.boolean().default(true),
   portraitDataUrl: z.string().max(3_000_000, 'retrato grande demais (máx. 2 MB)').nullable().optional(),
   launch: z.boolean().optional(),
@@ -73,27 +75,37 @@ const StaffInputObject = z.object({
  * O questionário com as regras que cruzam campos: quem roda no Codex não tem servidores na ficha e só ele usa o esforço `ultra`
  * (ver `codexProfileError`). Quem edita sem mandar `engine` também passa por `assertProfileRules` (junta com a ficha que já existe).
  */
+/** Escrita SSH liberada só para conexão que está nos servidores da ficha (`sshWrite` ⊆ `servers`). Null = ok. */
+export function sshWriteError(p: { servers: readonly string[]; sshWrite?: readonly string[] }): string | null {
+  const fora = (p.sshWrite ?? []).filter((n) => !p.servers.includes(n));
+  return fora.length ? `escrita liberada para conexão que não está nos servidores da ficha: ${fora.join(', ')}` : null;
+}
+
 export const StaffInputSchema = StaffInputObject.superRefine((v, ctx) => {
-  const error = codexProfileError(v);
-  if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, message: error, path: [v.engine === 'codex' && v.servers.length ? 'servers' : 'effort'] });
+  const sshErr = sshWriteError(v);
+  const error = sshErr ?? codexProfileError(v);
+  if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, message: error, path: [sshErr ? 'sshWrite' : v.engine === 'codex' && v.servers.length ? 'servers' : 'effort'] });
 });
 export type StaffInputParsed = z.infer<typeof StaffInputSchema>;
 
-/** Confere a ficha inteira, já com os campos que não vieram no pedido (o `engine` que ficou da ficha antiga). Lança `StaffError`. */
-export function assertProfileRules(p: Pick<StaffProfile, 'engine' | 'servers' | 'effort'>): void {
-  const error = codexProfileError(p);
+/**
+ * Confere a ficha inteira, já com os campos que não vieram no pedido (o `engine` que ficou da ficha antiga). Lança `StaffError`.
+ * `ftpServers`: as conexões FTP do projeto. Quem tem o projeto em mãos passa; sem ele, o FTP no Codex não é conferido aqui (ver StaffService).
+ */
+export function assertProfileRules(p: Pick<StaffProfile, 'engine' | 'servers' | 'effort' | 'sshWrite'>, ftpServers?: readonly string[]): void {
+  const error = sshWriteError(p) ?? codexProfileError({ ...p, ftpServers });
   if (error) throw new StaffError(error);
 }
 
 /**
  * Motor secundário: o que cruza com o motor principal e com os servidores da ficha (null = ok, ou sem secundário).
- * Reusa `codexProfileError`: servidor não vai ao Codex, e `ultra` só existe no Codex (também vale para o secundário).
+ * Reusa `codexProfileError`: conexão FTP não vai ao Codex (SSH vai), e `ultra` só existe no Codex (também vale para o secundário).
  */
-export function fallbackError(p: { engine?: StaffProfile['engine']; servers: readonly string[]; fallback?: StaffProfile['fallback'] | null }): string | null {
+export function fallbackError(p: { engine?: StaffProfile['engine']; servers: readonly string[]; fallback?: StaffProfile['fallback'] | null; ftpServers?: readonly string[] }): string | null {
   const fb = p.fallback;
   if (!fb) return null;
   if (fb.engine === (p.engine ?? 'claude')) return 'o motor secundário tem que ser diferente do principal';
-  if (codexProfileError({ engine: fb.engine, servers: p.servers })) return 'o motor secundário Codex não aceita servidores na ficha: tire os servidores ou use o Claude como secundário';
+  if (codexProfileError({ engine: fb.engine, servers: p.servers, ftpServers: p.ftpServers })) return 'o motor secundário Codex não aceita conexões FTP na ficha: tire as conexões FTP ou use o Claude como secundário';
   return codexProfileError({ engine: fb.engine, servers: [], effort: fb.effort });
 }
 

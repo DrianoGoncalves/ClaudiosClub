@@ -17,7 +17,7 @@ import type {
   UserScope,
 } from '../../../shared/model';
 import { TEMP_IDLE_DAYS } from '../../../shared/model';
-import { alertError, api, isPairingError } from '../api';
+import { alertError, api, ApiError, isPairingError } from '../api';
 import { RoomColorPicker } from '../board/colors';
 import { portraitUrl } from '../board/nodes';
 import { idleUnseen, showsStatus, useSeeIdle, useSeenIdle } from '../board/unread';
@@ -29,6 +29,8 @@ import type { StaffFormTab } from '../staff/HireForm';
 import { StaffHistory } from '../staff/StaffHistory';
 import { MAX_INPUT_BYTES, PROJECT_IMAGE_MAX, shrinkImage } from '../lib/shrinkImage';
 import { Attachments } from './Attachments';
+import { type ArchivedConversations, isConversationArchived, splitArchived } from './conversationArchive';
+import { type ConversationTitles, conversationTitle, manualTitle, titleToSave } from './conversationTitle';
 import { ProjectGuide } from './ProjectGuide';
 import { ProjectName } from './ProjectName';
 import { Routines } from './Routines';
@@ -39,12 +41,17 @@ import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatPercent,
 import { isLoss, type RankingGroup, type RankingRow, rankingRows, savingsList, teamSavings } from '../ranking';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
-import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PlusIcon, TasksIcon, UserPlusIcon } from '../icons';
+import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
 
 // Painel lateral: o que o nó selecionado no quadro tem por trás.
 
 type ProjectCost = CostSummary & { sessions: Record<string, number> };
+
+/** Últimas opções do seletor de conversas (valores que nenhum id de conversa tem): abrem as arquivadas / voltam às ativas. */
+const ARCHIVED_OPTION = '__archived__';
+const BACK_OPTION = '__back__';
+const NO_ARCHIVED: ArchivedConversations = {};
 
 function ArchiveButton({
   archived,
@@ -127,6 +134,13 @@ export function EmployeePanel(props: {
   onShowAdvanced?: () => void;
   /** Conversas do funcionário, da mais recente à mais antiga. */
   conversations?: Array<{ id: string; title: string | null; updatedAt: string | null }>;
+  /** Conversas arquivadas (id → quando): saem do seletor, até terem atividade depois. */
+  archivedConversations?: ArchivedConversations;
+  onArchiveConversation?: (id: string, archived: boolean) => Promise<void>;
+  /** Títulos que o user deu às conversas: valem mais que o assunto automático. */
+  conversationTitles?: ConversationTitles;
+  /** Dar título à conversa (null = volta ao automático). Sem isto, o botão Renomear não aparece. */
+  onRenameConversation?: (id: string, title: string | null) => Promise<void>;
   /** Abrir nesta conversa (achada na busca do Ctrl+K). */
   initialConversation?: string | null;
   /** Clique num aviso da caixa "precisa de mim": a conversa do aviso e o balão a mostrar nela. */
@@ -158,9 +172,13 @@ export function EmployeePanel(props: {
     props.initialConversation && (props.initialConversation === noticed || props.conversations?.some((c) => c.id === props.initialConversation))
       ? props.initialConversation
       : null;
-  // Sem sessão (ex.: motor Codex, que o quadro não lê), abre a mais recente das conversas da ficha.
-  const latest = latestConversation(props.conversations);
-  const [picked, setPicked] = useState<string | null>(wanted ?? s?.id ?? latest);
+  // Conversas que abrem mesmo arquivadas: a do aviso (e as dos avisos seguintes), enquanto o painel estiver aberto.
+  const [shown, setShown] = useState<string[]>(() => (noticed ? [noticed] : []));
+  const archivedMap = props.archivedConversations ?? NO_ARCHIVED;
+  // Sem sessão (ex.: motor Codex, que o quadro não lê), abre a mais recente das conversas da ficha; as arquivadas ficam de fora.
+  const latest = latestConversation(splitArchived(props.conversations ?? [], archivedMap, shown).active);
+  const openable = s && !isConversationArchived({ id: s.id, updatedAt: s.updatedAt }, archivedMap, shown) ? s.id : latest;
+  const [picked, setPicked] = useState<string | null>(wanted ?? openable);
   const [fresh, setFresh] = useState(false);
   // A conversa nova, depois da primeira mensagem, já tem sessão: o ChatView segue nela sem remontar (fica com a
   // chave de "nova"), e ela entra na lista na hora, para dar para trocar de conversa e voltar antes do quadro
@@ -180,7 +198,7 @@ export function EmployeePanel(props: {
       return;
     }
     if (picked !== null || fresh) return;
-    setPicked(s?.id ?? latest);
+    setPicked(openable);
     setFresh(false);
     setFreshId(null);
   }, [s?.id]);
@@ -199,9 +217,16 @@ export function EmployeePanel(props: {
   const listed = props.conversations?.length
     ? props.conversations
     : !staff && s
-      ? [{ id: s.id, title: s.topic ?? s.title, updatedAt: s.updatedAt }]
+      ? [{ id: s.id, title: conversationTitle(s, props.conversationTitles), updatedAt: s.updatedAt }]
       : [];
-  const conversations = [...started.filter((c) => !listed.some((l) => l.id === c.id)), ...listed];
+  // As recém-começadas ainda não têm assunto: só o título dado à mão (renomear logo após a 1ª mensagem) vale.
+  const conversations = [
+    ...started.filter((c) => !listed.some((l) => l.id === c.id)).map((c) => ({ ...c, title: manualTitle(c.id, props.conversationTitles) ?? c.title })),
+    ...listed,
+  ];
+  // O seletor mostra as ativas, ou só as arquivadas quando a conversa aberta é uma delas (o modo vem da própria conversa aberta).
+  const { active, archived: archivedList } = splitArchived(conversations, archivedMap, shown);
+  const inArchive = !!current && archivedList.some((c) => c.id === current);
   const sessionStarted = (id: string) => {
     if (fresh) setFreshId(id);
     setStarted((prev) => (prev.some((c) => c.id === id) ? prev : [{ id, title: t('detail.newConversation'), updatedAt: new Date().toISOString() }, ...prev]));
@@ -216,9 +241,76 @@ export function EmployeePanel(props: {
   // Só depende do aviso de propósito: com `conversations`/`current` aqui, trocar de conversa à mão voltaria para a do aviso.
   useEffect(() => {
     const want = props.focus?.sessionId;
+    if (want) setShown((prev) => (prev.includes(want) ? prev : [...prev, want]));
     if (want && want !== current && conversations.some((c) => c.id === want)) pick(want);
   }, [props.focus]);
   const [convBusy, setConvBusy] = useState(false);
+  // Uma conversa nova, sem sessão ainda: o chat abre vazio.
+  const startFresh = () => {
+    setFresh(true);
+    setFreshId(null);
+    setFreshN((n) => n + 1);
+  };
+  // Sair das arquivadas, ou tirar a aberta da lista: abre a mais recente ativa (ou uma conversa nova se não sobrou nenhuma).
+  const openLatestActive = (skip?: string) => {
+    const next = latestConversation(active.filter((c) => c.id !== skip));
+    if (next) pick(next);
+    else startFresh();
+  };
+  const archiveCurrent = async () => {
+    if (!current || !props.onArchiveConversation) return;
+    const id = current;
+    const restoring = inArchive;
+    setConvBusy(true);
+    try {
+      await props.onArchiveConversation(id, !restoring);
+      if (restoring) return; // fica nela: com o carimbo apagado, ela volta para a lista das ativas
+      setShown((prev) => prev.filter((x) => x !== id));
+      openLatestActive(id);
+    } catch (e) {
+      alertError(e);
+    } finally {
+      setConvBusy(false);
+    }
+  };
+  const onSelect = (value: string) => {
+    if (value === ARCHIVED_OPTION) {
+      const newest = latestConversation(archivedList);
+      if (newest) pick(newest);
+    } else if (value === BACK_OPTION) openLatestActive();
+    else pick(value);
+  };
+  // Renomear a conversa aberta: `renaming` é o texto do campo (null = fechado). Trocar de conversa fecha o campo.
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  useEffect(() => {
+    setRenaming(null);
+    setRenameError(null);
+  }, [current]);
+  const shownTitle = conversations.find((c) => c.id === current)?.title ?? null;
+  const startRename = () => {
+    setRenameError(null);
+    setRenaming(shownTitle ?? '');
+  };
+  const saveRename = async () => {
+    if (!current || renaming === null || !props.onRenameConversation) return;
+    const next = titleToSave(renaming, shownTitle, !!manualTitle(current, props.conversationTitles));
+    if (next === undefined) {
+      setRenaming(null);
+      return;
+    }
+    setConvBusy(true);
+    setRenameError(null);
+    try {
+      await props.onRenameConversation(current, next);
+      setRenaming(null);
+    } catch (e) {
+      // Sem pareamento o aviso do App já explica; o teto de títulos (409) vem do servidor só em pt-BR.
+      if (!isPairingError(e)) setRenameError(e instanceof ApiError && e.status === 409 ? t('detail.renameFull') : (e as Error).message);
+    } finally {
+      setConvBusy(false);
+    }
+  };
   const duplicate = async () => {
     if (!project || !current) return;
     setConvBusy(true);
@@ -263,15 +355,50 @@ export function EmployeePanel(props: {
           )}
         </div>
       </div>
-      {showConvos && !props.manage && (
+      {showConvos && !props.manage && renaming !== null && (
+        <form
+          className="chat-rename"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void saveRename();
+          }}
+        >
+          <input
+            type="text"
+            value={renaming}
+            maxLength={120}
+            autoFocus
+            autoComplete="off"
+            aria-label={t('detail.renameLabel')}
+            placeholder={t('detail.renamePlaceholder')}
+            onFocus={(e) => e.currentTarget.select()}
+            onChange={(e) => setRenaming(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.stopPropagation();
+                setRenaming(null);
+              }
+            }}
+          />
+          <button type="submit" className="btn-primary" disabled={convBusy}>
+            {t('detail.renameSave')}
+          </button>
+          <button type="button" className="btn-secondary" disabled={convBusy} onClick={() => setRenaming(null)}>
+            {t('detail.cancel')}
+          </button>
+          <span className="muted small">{t('detail.renameHint')}</span>
+          {renameError && <span className="error">{renameError}</span>}
+        </form>
+      )}
+      {showConvos && !props.manage && renaming === null && (
         <div className="chat-convos">
           <select
             aria-label={t('detail.conversation')}
             value={current ?? ''}
-            onChange={(e) => pick(e.target.value)}
+            onChange={(e) => onSelect(e.target.value)}
           >
-            {fresh && !freshId && <option value="">{t('detail.newConversation')}</option>}
-            {byDay(conversations).map((g) => (
+            {!current && <option value="">{t('detail.newConversation')}</option>}
+            {byDay(inArchive ? archivedList : active).map((g) => (
               <optgroup key={g.label} label={g.label}>
                 {g.items.map(({ c }) => (
                   <option key={c.id} value={c.id}>
@@ -280,16 +407,17 @@ export function EmployeePanel(props: {
                 ))}
               </optgroup>
             ))}
+            {inArchive ? (
+              <option value={BACK_OPTION}>{t('detail.backToConversations')}</option>
+            ) : (
+              archivedList.length > 0 && <option value={ARCHIVED_OPTION}>{t('detail.archivedConversations', { n: archivedList.length })}</option>
+            )}
           </select>
           <button
             type="button"
             className="btn-secondary chat-icon-btn"
             disabled={(fresh && !freshId) || convBusy}
-            onClick={() => {
-              setFresh(true);
-              setFreshId(null);
-              setFreshN((n) => n + 1);
-            }}
+            onClick={startFresh}
             aria-label={t('detail.newConversation')}
             title={t('detail.newConversationTitle')}
           >
@@ -306,6 +434,32 @@ export function EmployeePanel(props: {
           >
             <CopyIcon />
           </button>
+          {/* Renomear a conversa aberta: só o título da lista (o transcript e a data da conversa ficam como estão). */}
+          {props.onRenameConversation && (
+            <button
+              type="button"
+              className="btn-secondary chat-icon-btn"
+              disabled={!current || convBusy}
+              onClick={startRename}
+              aria-label={t('detail.renameConversation')}
+              title={t('detail.renameConversationTitle')}
+            >
+              <PencilIcon />
+            </button>
+          )}
+          {/* Arquivar a conversa aberta (reversível, sem confirmação); com uma arquivada aberta, devolve à lista. */}
+          {props.onArchiveConversation && (
+            <button
+              type="button"
+              className="btn-secondary chat-icon-btn"
+              disabled={!current || convBusy}
+              onClick={() => void archiveCurrent()}
+              aria-label={t(inArchive ? 'detail.unarchiveConversation' : 'detail.archiveConversation')}
+              title={t(inArchive ? 'detail.unarchiveConversationTitle' : 'detail.archiveConversationTitle')}
+            >
+              {inArchive ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
+            </button>
+          )}
         </div>
       )}
       {staff?.temporary && project && (
@@ -609,6 +763,7 @@ export function ProjectPanel({
   onOpenStaff,
   onOpenSession,
   hiddenSessions,
+  conversationTitles,
   cost,
   archived,
   onArchive,
@@ -653,6 +808,8 @@ export function ProjectPanel({
   onOpenSession?: (sessionId: string) => void;
   /** Conversas sem ficha que não aparecem (arquivadas, com "mostrar arquivados" desligado). */
   hiddenSessions?: Set<string>;
+  /** Títulos que o user deu às conversas (valem mais que o assunto automático na lista das sem ficha). */
+  conversationTitles?: ConversationTitles;
   cost: ProjectCost | null;
   totalUsd: number;
   archived: boolean;
@@ -769,6 +926,7 @@ export function ProjectPanel({
               sessions={sessions.filter((s) => !owned.has(s.id) && !hiddenSessions?.has(s.id))}
               costs={cost?.sessions ?? {}}
               totalUsd={totalUsd}
+              titles={conversationTitles}
               onOpen={onOpenSession}
             />
           </>
@@ -1467,11 +1625,13 @@ function SessionList({
   sessions,
   costs,
   totalUsd,
+  titles,
   onOpen,
 }: {
   sessions: Session[];
   costs: Record<string, number>;
   totalUsd: number;
+  titles?: ConversationTitles;
   onOpen?: (sessionId: string) => void;
 }) {
   const seen = useSeenIdle();
@@ -1485,7 +1645,7 @@ function SessionList({
           {s.live?.alive && showsStatus(seen, s.live) && (
             <span className={`dot dot-${s.live.status ?? 'unknown'}`} title={STATUS_LABEL[s.live.status ?? ''] ?? ''} />
           )}
-          {s.topic ?? s.title ?? <span className="muted mono">{s.id.slice(0, 8)}</span>}
+          {conversationTitle(s, titles) ?? <span className="muted mono">{s.id.slice(0, 8)}</span>}
         </span>
         <span className="row-meta">
           {s.entrypoint && <span className="badge">{ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</span>}

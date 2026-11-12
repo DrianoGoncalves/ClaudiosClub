@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cleanEnv, parseAuthStatus } from '../server/auth';
-import { ConfigPatch, readConfig, removeWorkspace, saveWorkspace, setArchived, setProjectWorkspace, updateConfig, workspaceOf } from '../server/config';
+import { ConfigPatch, ConversationTitlesFullError, readConfig, removeWorkspace, saveWorkspace, setArchived, setConversationTitle, setProjectWorkspace, updateConfig, workspaceOf } from '../server/config';
 import { readUsage } from '../server/usage';
 import { projectBudgetHit, UsageStopError } from '../server/usageStop';
 import type { AccountUsage } from '../shared/model';
@@ -67,7 +67,8 @@ describe('config', () => {
     expect(await readConfig(file)).toEqual({
       companyName: 'Claudio’s Club',
       uiLevel: 'simple',
-      archived: { projects: [], sessions: [] },
+      archived: { projects: [], sessions: [], conversations: {} },
+      conversationTitles: {},
       usageStop,
       sendWhileBusy: 'next',
       optimizeQuota: false,
@@ -85,7 +86,8 @@ describe('config', () => {
     expect(await updateConfig({ companyName: 'Acme Labs' }, file)).toEqual({
       companyName: 'Acme Labs',
       uiLevel: 'simple',
-      archived: { projects: [], sessions: [] },
+      archived: { projects: [], sessions: [], conversations: {} },
+      conversationTitles: {},
       usageStop,
       sendWhileBusy: 'next',
       optimizeQuota: false,
@@ -281,11 +283,96 @@ describe('config', () => {
     await setArchived({ kind: 'project', id: 'p1', archived: true }, file);
     await setArchived({ kind: 'project', id: 'p1', archived: true }, file);
     const cfg = await setArchived({ kind: 'session', id: 's1', archived: true }, file);
-    expect(cfg.archived).toEqual({ projects: ['p1'], sessions: ['s1'] });
+    expect(cfg.archived).toEqual({ projects: ['p1'], sessions: ['s1'], conversations: {} });
     expect((await setArchived({ kind: 'project', id: 'p1', archived: false }, file)).archived).toEqual({
       projects: [],
       sessions: ['s1'],
+      conversations: {},
     });
+  });
+
+  it('arquiva e desarquiva conversas (só do seletor), sem mexer em projetos nem funcionários', async () => {
+    const file = path.join(root, 'cfg-conv', 'config.json');
+    const on = await setArchived({ kind: 'conversation', id: 'c1', archived: true }, file);
+    expect(on.archived).toEqual({ projects: [], sessions: [], conversations: { c1: expect.any(String) } });
+    expect(Number.isNaN(Date.parse(on.archived.conversations.c1 ?? ''))).toBe(false);
+    const off = await setArchived({ kind: 'conversation', id: 'c1', archived: false }, file);
+    expect(off.archived).toEqual({ projects: [], sessions: [], conversations: {} });
+  });
+
+  it('re-arquivar uma conversa troca a data pela de agora', async () => {
+    const file = path.join(root, 'cfg-conv-data', 'config.json');
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify({ archived: { conversations: { c1: '2026-01-01T00:00:00.000Z' } } }));
+    const again = await setArchived({ kind: 'conversation', id: 'c1', archived: true }, file);
+    const at = again.archived.conversations.c1 ?? '';
+    expect(Date.parse(at)).toBeGreaterThan(Date.parse('2026-01-01T00:00:00.000Z'));
+    expect(at).toBe(new Date(at).toISOString());
+  });
+
+  it('passando de 500 conversas arquivadas, descarta as de data mais antiga', async () => {
+    const file = path.join(root, 'cfg-conv-max', 'config.json');
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const base = Date.parse('2026-01-01T00:00:00.000Z');
+    const conversations = Object.fromEntries(Array.from({ length: 500 }, (_, i) => [`c${i}`, new Date(base + i * 60_000).toISOString()]));
+    await fs.writeFile(file, JSON.stringify({ archived: { conversations } }));
+    const cfg = await setArchived({ kind: 'conversation', id: 'novo', archived: true }, file);
+    const ids = Object.keys(cfg.archived.conversations);
+    expect(ids).toHaveLength(500);
+    expect(ids).toContain('novo');
+    expect(ids).not.toContain('c0');
+    expect(ids).toContain('c1');
+    expect(ids).toContain('c499');
+  });
+
+  it('título da conversa: grava com trim, apaga com null ou vazio, recusa passar de 120', async () => {
+    const file = path.join(root, 'cfg-titulo', 'config.json');
+    const set = await setConversationTitle('c1', '  Relatório de vendas  ', file);
+    expect(set.conversationTitles).toEqual({ c1: 'Relatório de vendas' });
+    expect((await setConversationTitle('c1', null, file)).conversationTitles).toEqual({});
+    await setConversationTitle('c2', 'Outra', file);
+    expect((await setConversationTitle('c2', '   ', file)).conversationTitles).toEqual({});
+    await expect(setConversationTitle('c3', 'x'.repeat(121), file)).rejects.toThrow('120');
+    expect((await setConversationTitle('c3', 'x'.repeat(120), file)).conversationTitles?.c3).toHaveLength(120);
+    await expect(setConversationTitle('bad id!', 'Oi', file)).rejects.toThrow('conversa inválida');
+  });
+
+  it('título da conversa: passando de 2000, recusa criar um novo (409), mas edita e apaga os que existem', async () => {
+    const file = path.join(root, 'cfg-titulo-teto', 'config.json');
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const titles = Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [`c${i}`, `Título ${i}`]));
+    await fs.writeFile(file, JSON.stringify({ conversationTitles: titles }));
+    await expect(setConversationTitle('novo', 'Oi', file)).rejects.toBeInstanceOf(ConversationTitlesFullError);
+    expect((await setConversationTitle('c5', 'Trocado', file)).conversationTitles?.c5).toBe('Trocado');
+    const cfg = await setConversationTitle('c6', null, file);
+    expect(Object.keys(cfg.conversationTitles ?? {})).toHaveLength(1999);
+    // Com uma vaga aberta, o novo entra.
+    expect((await setConversationTitle('novo', 'Oi', file)).conversationTitles?.novo).toBe('Oi');
+  });
+
+  it('título da conversa: entrada estranha à mão some e o resto segue', async () => {
+    const file = path.join(root, 'cfg-titulo-sujo', 'config.json');
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify({ conversationTitles: { ok: '  Bom  ', vazio: '  ', numero: 7, 'com espaco': 'x' } }));
+    expect((await readConfig(file)).conversationTitles).toEqual({ ok: 'Bom' });
+  });
+
+  it('config sem a chave de conversas lê {} e não perde projetos/funcionários arquivados', async () => {
+    const file = path.join(root, 'cfg-conv-sem', 'config.json');
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify({ archived: { projects: ['p'], sessions: ['s'] } }));
+    expect((await readConfig(file)).archived).toEqual({ projects: ['p'], sessions: ['s'], conversations: {} });
+  });
+
+  it('valor inválido na chave de conversas não derruba o resto do config', async () => {
+    const file = path.join(root, 'cfg-conv-invalido', 'config.json');
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify({ companyName: 'Acme', codexModel: 'gpt-6-sol', archived: { projects: ['p'], sessions: ['s'], conversations: { c: 123 } } }));
+    const cfg = await readConfig(file);
+    expect(cfg).toMatchObject({ companyName: 'Acme', codexModel: 'gpt-6-sol', archived: { projects: ['p'], sessions: ['s'], conversations: {} } });
+    const after = await setArchived({ kind: 'conversation', id: 'c2', archived: true }, file);
+    expect(after.archived).toMatchObject({ projects: ['p'], sessions: ['s'], conversations: { c2: expect.any(String) } });
+    expect(after.companyName).toBe('Acme');
   });
 });
 

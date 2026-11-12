@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DAEMON_BUNDLE, FTP_MCP_BUNDLE, GPT_MCP_BUNDLE, SERVER_BUNDLE, bundle, bundleStale } from './bundle';
+import { DAEMON_BUNDLE, FTP_MCP_BUNDLE, GPT_MCP_BUNDLE, SERVER_BUNDLE, SSH_MCP_BUNDLE, bundle, bundleStale } from './bundle';
 import {
   LOG_FILE,
   PID_FILE,
@@ -67,6 +67,12 @@ async function serverArgs(): Promise<string[]> {
   if (bundleStale(GPT_MCP_BUNDLE)) {
     await bundle('server/gpt-mcp.ts', GPT_MCP_BUNDLE).catch((err: unknown) =>
       log(`o pacote do MCP do GPT falhou; ele roda pelo tsx: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  }
+  // O MCP de SSH (`ssh_*`, o Claude e o Codex): o mesmo.
+  if (bundleStale(SSH_MCP_BUNDLE)) {
+    await bundle('server/ssh-mcp.ts', SSH_MCP_BUNDLE).catch((err: unknown) =>
+      log(`o pacote do MCP de SSH falhou; ele roda pelo tsx: ${err instanceof Error ? err.message : String(err)}`),
     );
   }
   return bundleStale(SERVER_BUNDLE) ? ['--import', 'tsx', 'server/index.ts'] : [SERVER_BUNDLE];
