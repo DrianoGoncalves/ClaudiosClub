@@ -427,24 +427,42 @@ describe('buildGraph', () => {
     expect(color('r:u')).toBeNull();
   });
 
-  it('funcionário com mais de um gestor: o segundo vira ligação extra, lateral se no mesmo nível', () => {
+  it('funcionário com mais de um gestor: uma linha abaixo de todos, com a mesma ligação de cada um', () => {
+    // ana e bia no mesmo nível: caio fica abaixo das duas e recebe a mesma linha (base → topo) de cada.
     const b = {
       ...board(),
       staff: [staffProfile('ana', ['s-a1']), staffProfile('bia', ['s-a2']), staffProfile('caio', [], ['ana', 'bia'])],
     };
     const { nodes, edges } = buildGraph(b, {});
-    expect(edges.find((e) => e.source === 'h:a:ana' && e.target === 'h:a:caio')?.data?.kind).toBe('contains');
-    const extra = edges.find((e) => e.source === 'h:a:bia' && e.target === 'h:a:caio');
-    expect(extra?.data?.kind).toBe('calls');
-    // ana e bia estão no mesmo nível; caio, abaixo: a ligação extra desce (base → topo).
-    expect(extra).toMatchObject({ sourceHandle: 'b', targetHandle: 't' });
+    const posOf = (list: typeof nodes, id: string) => list.find((n) => n.id === id)!.position;
+    expect(posOf(nodes, 'h:a:caio').y).toBeGreaterThan(posOf(nodes, 'h:a:ana').y);
+    for (const manager of ['ana', 'bia']) {
+      const link = edges.find((e) => e.source === `h:a:${manager}` && e.target === 'h:a:caio');
+      expect(link?.data?.kind).toBe('contains');
+      expect(link).toMatchObject({ sourceHandle: 'b', targetHandle: 't' });
+      expect(link?.data?.detour).toBeUndefined();
+    }
 
-    const peers = { ...board(), staff: [staffProfile('ana', ['s-a1']), staffProfile('bia', ['s-a2'], ['ana']), staffProfile('caio', [], ['ana', 'bia'])] };
-    const g = buildGraph(peers, {});
-    const y = (id: string) => g.nodes.find((n) => n.id === id)!.position.y;
-    expect(y('h:a:bia')).toBe(y('h:a:caio'));
-    expect(g.edges.find((e) => e.source === 'h:a:bia' && e.target === 'h:a:caio')?.sourceHandle).toMatch(/^(ro|lo)$/);
-    expect(nodes.some((n) => n.id === 'h:a:caio')).toBe(true);
+    // ana chefia bia; caio reporta a ana e a bia: fica abaixo de bia (a mais funda), nunca ao lado dela.
+    const chain = { ...board(), staff: [staffProfile('ana', ['s-a1']), staffProfile('bia', ['s-a2'], ['ana']), staffProfile('caio', [], ['ana', 'bia'])] };
+    const g = buildGraph(chain, {});
+    const [ana, bia, caio] = ['ana', 'bia', 'caio'].map((id) => posOf(g.nodes, `h:a:${id}`));
+    expect(caio!.y).toBeGreaterThan(bia!.y);
+    expect(bia!.y).toBeGreaterThan(ana!.y);
+    const fromBia = g.edges.find((e) => e.source === 'h:a:bia' && e.target === 'h:a:caio');
+    expect(fromBia?.data?.kind).toBe('contains');
+    expect(fromBia?.data?.detour).toBeUndefined();
+    // De ana (duas fileiras acima) a linha contorna o cartão de bia por fora, com as barras no meio dos vãos.
+    const fromAna = g.edges.find((e) => e.source === 'h:a:ana' && e.target === 'h:a:caio');
+    expect(fromAna?.data?.kind).toBe('contains');
+    const detour = fromAna?.data?.detour;
+    expect(detour).toBeDefined();
+    const { w, h } = SIZES.employee;
+    expect(detour!.x < bia!.x || detour!.x > bia!.x + w).toBe(true);
+    expect(detour!.y1).toBeGreaterThan(ana!.y + h);
+    expect(detour!.y1).toBeLessThan(bia!.y);
+    expect(detour!.y2).toBeGreaterThan(bia!.y + h);
+    expect(detour!.y2).toBeLessThan(caio!.y);
   });
 
   it('ciclo de gestores não trava o layout', () => {

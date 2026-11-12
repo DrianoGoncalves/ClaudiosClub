@@ -459,7 +459,6 @@ export function BoardView(props: BoardViewProps) {
           <span className="legend-item legend-project">{t('board.legendProject')}</span>
           <span className="legend-item legend-agent">{t('board.legendEmployee')}</span>
           <span className="legend-item legend-skill">{t('board.skillWord')}</span>
-          <span className="legend-item legend-calls">{t('board.alsoCalls')}</span>
         </div>
         <button
           type="button"

@@ -258,8 +258,6 @@ body { background: var(--board); }
 .attach-name:hover, .attach-name:focus-visible { color: var(--ink-blue); text-decoration: underline; text-underline-offset: 2px; }
 .attach-row .btn-secondary { flex: none; }
 
-.edge-label-calls { color: var(--ink-blue); font-size: 15px; }
-
 /* Desfazer vínculo entre funcionários: a linha fica vermelha no hover e mostra o botão. */
 .rough-edge-hit { fill: none; stroke: transparent; stroke-width: 16; }
 .rough-edge.is-hover path:not(.rough-edge-hit) { stroke: var(--ink-red) !important; }
@@ -271,8 +269,6 @@ body { background: var(--board); }
   font: 700 16px/19px system-ui, sans-serif; text-align: center;
 }
 .edge-unlink:hover { background: var(--ink-red); color: var(--card); }
-.legend-calls { color: var(--ink-blue); }
-.legend-calls::before { border-top-style: dashed; }
 
 /* ---- regras da conta ---- */
 .rules-editor { width: 100%; resize: vertical; font-size: 13px; color: var(--ink); background: var(--board); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }

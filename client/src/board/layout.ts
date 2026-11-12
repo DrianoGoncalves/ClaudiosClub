@@ -18,11 +18,10 @@ import type {
 // Organograma: cada projeto é uma sala com moldura, e as salas formam uma grade (planta do escritório),
 // quebrando linha para caber na tela mesmo com muitos projetos.
 // - Hierarquia de cima para baixo: a linha sai da base do gestor e entra no topo do subordinado.
-// - O que é paralelo fica de lado: agents e skills ao lado do projeto, ligados pela lateral,
-//   e chamadas entre funcionários do mesmo nível. Quando são muitos, ficam guardados numa
-//   "estante" (um nó só, com as contagens) que abre ao clicar.
-// - Um funcionário pode ter vários gestores: o primeiro define onde ele fica; os demais viram
-//   ligações extras (tracejadas).
+// - O que é paralelo fica de lado: agents e skills ao lado do projeto, ligados pela lateral.
+//   Quando são muitos, ficam guardados numa "estante" (um nó só, com as contagens) que abre ao clicar.
+// - Um funcionário pode ter vários gestores: ele fica uma linha abaixo do mais fundo deles e recebe
+//   de cada um a mesma linha de hierarquia (a que vem de longe contorna as fileiras do meio).
 // - Vínculos de symlink/junction são curvas tracejadas entre salas.
 
 /**
@@ -85,11 +84,13 @@ export type BoardNode =
 
 export type BoardNodeType = NonNullable<BoardNode['type']>;
 
-/** contains = hierarquia; side = recurso ao lado do projeto; calls = gestor extra; borrow = vínculo entre salas. */
+/** contains = hierarquia; side = recurso ao lado do projeto; borrow = vínculo entre salas. */
 /** `active`: o funcionário na ponta está trabalhando (a linha ganha a bolinha animada). */
+/** `detour`: gestor de longe; a linha passa por fora das fileiras do meio (x do corredor e y das duas barras horizontais). */
 /** Vínculo gestor → subordinado entre dois funcionários com ficha (pode ser desfeito no quadro). */
 export type StaffLink = { projectId: string; staffId: string; managerId: string };
-export type BoardEdgeData = { kind: 'contains' | 'side' | 'calls' | 'borrow' | 'delegates'; active?: boolean; link?: StaffLink };
+export type EdgeDetour = { x: number; y1: number; y2: number };
+export type BoardEdgeData = { kind: 'contains' | 'side' | 'borrow' | 'delegates'; active?: boolean; link?: StaffLink; detour?: EdgeDetour };
 export type BoardEdge = Edge<BoardEdgeData, 'rough'>;
 
 export interface GraphOptions {
@@ -140,6 +141,8 @@ export const SIZES: Record<BoardNodeType, { w: number; h: number }> = {
 
 const GAP_X = 28;
 const LEVEL_GAP = 70;
+/** Folga entre a fileira e a linha que a contorna (cabe na folga da moldura da sala). */
+const DETOUR_GAP = 18;
 const SIDE_GAP = 46;
 const SIDE_ROW_GAP = 12;
 /** Folga entre a moldura da sala e os nós dela. */
@@ -316,15 +319,33 @@ export function buildGraph(
       });
     }
 
-    // Hierarquia pelo primeiro gestor visível; os outros gestores viram ligações extras.
+    // Hierarquia: quem tem mais de um gestor visível fica pendurado no mais fundo (no empate, o primeiro),
+    // uma linha abaixo de todos; os outros gestores ganham a mesma ligação por cima (extraManagers).
+    const managersOf = (t: Tree): string[] => {
+      const st = (t.node.data as EmployeeNodeData).staff;
+      return (st?.reportsTo ?? []).filter((id) => byId.has(id) && id !== st!.id);
+    };
+    const depth = new Map<string, number>();
+    const depthOf = (id: string, path = new Set<string>()): number => {
+      const known = depth.get(id);
+      if (known !== undefined) return known;
+      if (path.has(id)) return 0; // ciclo de gestores: a volta não conta
+      path.add(id);
+      const above = managersOf(byId.get(id)!).map((m) => depthOf(m, path));
+      path.delete(id);
+      const d = above.length ? 1 + Math.max(...above) : 0;
+      depth.set(id, d);
+      return d;
+    };
     const roots: Tree[] = [];
     for (const t of trees) {
       const st = (t.node.data as EmployeeNodeData).staff;
-      const managers = (st?.reportsTo ?? []).filter((id) => byId.has(id) && id !== st!.id);
-      const primary = managers[0] ? byId.get(managers[0]) : undefined;
+      const managers = managersOf(t);
+      const primaryId = managers.reduce<string | undefined>((best, m) => (best === undefined || depthOf(m) > depthOf(best) ? m : best), undefined);
+      const primary = primaryId ? byId.get(primaryId) : undefined;
       if (primary && !isAncestor(t, primary)) primary.children.push(t);
       else roots.push(t);
-      for (const extra of managers.slice(primary ? 1 : 0)) extraManagers.push({ projectId: p.id, staff: st!, managerId: extra });
+      for (const extra of managers.filter((m) => m !== primaryId)) extraManagers.push({ projectId: p.id, staff: st!, managerId: extra });
     }
     return roots;
   };
@@ -459,7 +480,7 @@ function markActive(edges: BoardEdge[], nodes: BoardNode[]) {
       .map((n) => n.id),
   );
   for (const e of edges) {
-    if (e.data && (e.data.kind === 'contains' || e.data.kind === 'calls') && busy.has(e.target)) e.data = { ...e.data, active: true };
+    if (e.data?.kind === 'contains' && busy.has(e.target)) e.data = { ...e.data, active: true };
   }
 }
 
@@ -467,7 +488,7 @@ function markActive(edges: BoardEdge[], nodes: BoardNode[]) {
 function markStaffLinks(edges: BoardEdge[], nodes: BoardNode[]) {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   for (const e of edges) {
-    if (!e.data || (e.data.kind !== 'contains' && e.data.kind !== 'calls')) continue;
+    if (e.data?.kind !== 'contains') continue;
     const from = byId.get(e.source);
     const to = byId.get(e.target);
     if (from?.type !== 'employee' || to?.type !== 'employee' || !from.data.staff || !to.data.staff) continue;
@@ -699,7 +720,10 @@ function edge(source: string, target: string, kind: BoardEdgeData['kind'], sourc
   return { id: `${kind}:${source}->${target}`, source, target, sourceHandle, targetHandle, type: 'rough', data: { kind } };
 }
 
-/** Gestores extras: lateral se estão no mesmo nível, de cima para baixo nos outros casos. */
+/**
+ * Gestores que não penduram o funcionário: a mesma linha de hierarquia, da base do gestor ao topo dele.
+ * Se há fileiras no meio (o gestor não é da fileira logo acima), a linha desce por fora delas.
+ */
 function managerEdges(extra: Array<{ projectId: string; staff: StaffProfile; managerId: string }>, nodes: BoardNode[]): BoardEdge[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const out: BoardEdge[] = [];
@@ -707,15 +731,26 @@ function managerEdges(extra: Array<{ projectId: string; staff: StaffProfile; man
     const from = byId.get(staffNodeId(projectId, managerId));
     const to = byId.get(staffNodeId(projectId, staff.id));
     if (!from || !to) continue;
-    const sameLevel = Math.abs(from.position.y - to.position.y) < 1;
-    if (sameLevel) {
-      const leftToRight = from.position.x < to.position.x;
-      out.push(
-        edge(from.id, to.id, 'calls', leftToRight ? HANDLE.rightOut : HANDLE.leftOut, leftToRight ? HANDLE.leftIn : HANDLE.rightIn),
-      );
-    } else {
-      out.push(edge(from.id, to.id, 'calls', HANDLE.bottom, HANDLE.top));
+    const e = edge(from.id, to.id, 'contains', HANDLE.bottom, HANDLE.top);
+    const between = nodes.filter(
+      (n) => n.type === 'employee' && n.data.projectId === projectId && n.position.y > from.position.y && n.position.y < to.position.y,
+    );
+    if (between.length) {
+      const left = Math.min(...between.map((n) => n.position.x)) - DETOUR_GAP;
+      const right = Math.max(...between.map((n) => n.position.x + sizeOf(n).w)) + DETOUR_GAP;
+      const centerX = (n: BoardNode) => n.position.x + sizeOf(n).w / 2;
+      const reach = (x: number) => Math.abs(x - centerX(from)) + Math.abs(x - centerX(to));
+      // As barras ficam no meio do vão de cada fileira, onde já correm as dos outros gestores.
+      e.data = {
+        kind: 'contains',
+        detour: {
+          x: reach(left) <= reach(right) ? left : right,
+          y1: from.position.y + sizeOf(from).h + LEVEL_GAP / 2,
+          y2: to.position.y - LEVEL_GAP / 2,
+        },
+      };
     }
+    out.push(e);
   }
   return out;
 }

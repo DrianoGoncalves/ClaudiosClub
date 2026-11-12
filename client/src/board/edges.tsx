@@ -12,8 +12,6 @@ const STYLE: Record<BoardEdgeData['kind'], { stroke: string; width: number; dash
   contains: { stroke: 'var(--ink-muted)', width: 1.3, roughness: 0.7 },
   // Recursos do projeto, ao lado: mais discretas.
   side: { stroke: 'var(--ink-muted)', width: 1, roughness: 0.6, dash: '3 5' },
-  // Gestor extra (funcionário chamado por mais de um).
-  calls: { stroke: 'var(--ink-blue)', width: 1.5, roughness: 0.8, dash: '7 5', label: t('board.alsoCalls') },
   // Empréstimo entre salas (symlink/junction).
   borrow: { stroke: 'var(--ink-red)', width: 1.8, roughness: 1.1, dash: '9 7', label: t('board.edgeBorrow') },
   // Funcionário delegando a um agent agora (orquestrador → executor). Só existe enquanto dura.
@@ -25,8 +23,15 @@ function RoughEdge(props: EdgeProps<BoardEdge>) {
   const kind = data?.kind ?? 'contains';
   const s = STYLE[kind];
   const geometry = { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition };
-  const [d, labelX, labelY] =
-    kind === 'borrow' || kind === 'delegates'
+  // Gestor de longe: desce por um corredor fora das fileiras do meio, em vez de atravessar os cartões.
+  const detour = data?.detour;
+  const [d, labelX, labelY] = detour
+    ? [
+        `M ${sourceX} ${sourceY} L ${sourceX} ${detour.y1} L ${detour.x} ${detour.y1} L ${detour.x} ${detour.y2} L ${targetX} ${detour.y2} L ${targetX} ${targetY}`,
+        detour.x,
+        (detour.y1 + detour.y2) / 2,
+      ]
+    : kind === 'borrow' || kind === 'delegates'
       ? getBezierPath(geometry)
       : getSmoothStepPath({ ...geometry, borderRadius: 0, offset: kind === 'side' ? 14 : 20 });
 

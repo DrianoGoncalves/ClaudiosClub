@@ -100,7 +100,8 @@ Salve com **Salvar ficha** (ou **Contratar**, ao criar). **Cancelar** fecha; no 
 - Cada projeto é uma sala; os funcionários ficam dentro dela. As linhas entre eles mostram **empresta** e **delegando**.
 - Para desfazer um vínculo, clique em **Desfazer vínculo** na linha entre os dois. A ficha anterior fica no histórico.
 - **Reorganizar o quadro** (botão do canto do quadro) desfaz os arrastos e volta à grade de salas.
-- Legenda: **projeto**, **funcionário / agent**, **skill**, **também chama**.
+- Quem tem mais de um gestor fica uma linha abaixo do mais fundo deles e recebe a mesma linha de cada um.
+- Legenda: **projeto**, **funcionário / agent**, **skill**.
 
 ## RH
 
