@@ -9,6 +9,7 @@ import { readCodexThread } from '../../chat/codexProcess';
 import { MAX_ITEMS, TAIL_BYTES, tailLines } from '../../chat/history';
 import { isInjectedUserText, STAFF_NOTICE } from '../../chat/items';
 import { tryJson } from '../claude/fsutil';
+import { getRegisteredSession, REGISTRY_FILE } from '../../sessionsRegistry';
 
 // Adaptador do formato do Codex. A conversa de um funcionário no motor Codex não tem transcript em ~/.claude/projects:
 // o Codex grava um "rollout" em ${CODEX_HOME}/sessions/AAAA/MM/DD/rollout-<data>-<threadId>.jsonl (uma linha JSON por
@@ -239,7 +240,7 @@ async function readZst(file: string): Promise<Buffer | null> {
  * Linhas de um rollout: o fim (`tail`) ou o começo (`head`) nos primeiros `bytes`, como no tailLines do Claude. `.zst` é
  * descompactado antes e fatiado do mesmo jeito.
  */
-async function rolloutLines(file: string, where: 'tail' | 'head', bytes: number): Promise<string[]> {
+export async function rolloutLines(file: string, where: 'tail' | 'head', bytes: number): Promise<string[]> {
   if (!file.endsWith('.zst')) return where === 'tail' ? tailLines(file, bytes) : readHead(file, bytes);
   const text = await readZst(file);
   if (!text) return [];
@@ -292,6 +293,76 @@ export async function rolloutSummary(file: string): Promise<CodexRolloutSummary 
   if (!st) return null;
   const head = await headInfo(file);
   return { topic: head.topic, startedAt: head.startedAt, updatedAt: st.mtime.toISOString(), sizeBytes: st.size };
+}
+
+/**
+ * Última gravação do rollout de uma conversa do Codex, só com `stat` (nada é lido). Null se a conversa não tem thread ou o
+ * rollout não existe: quem chama mantém a conversa como antes.
+ */
+export interface CodexRolloutStat {
+  threadId: string;
+  file: string;
+  mtime: Date;
+  size: number;
+}
+
+/**
+ * O rollout de uma conversa do Club, só com `stat` (nada é lido). O threadId vem de run/ ou, se a limpeza já levou o
+ * codex-thread.json, do registro de conversas. Null se não há threadId ou o rollout não existe.
+ */
+export async function rolloutStat(runDir: string, sessionId: string, registryFile = REGISTRY_FILE): Promise<CodexRolloutStat | null> {
+  // O codex-thread.json de run/ some em 3 dias (cleanRunDir): sem ele, vale o threadId do registro de conversas do Club.
+  const threadId =
+    (await codexThreadOf(runDir, sessionId)) ?? (await getRegisteredSession(sessionId, registryFile).catch(() => null))?.threadId ?? null;
+  if (!threadId) return null;
+  const file = await findRollout(threadId);
+  if (!file) return null;
+  const st = await fs.stat(file).catch(() => null);
+  return st ? { threadId, file, mtime: st.mtime, size: st.size } : null;
+}
+
+/** Última gravação do rollout (ver rolloutStat). */
+export async function rolloutUpdatedAt(runDir: string, sessionId: string, registryFile = REGISTRY_FILE): Promise<Date | null> {
+  return (await rolloutStat(runDir, sessionId, registryFile))?.mtime ?? null;
+}
+
+/** Entradas de uma pasta, sem engolir erro: ausente = vazia; qualquer outra falha LANÇA (a exclusão aborta). */
+async function entriesStrict(dir: string): Promise<Dirent[]> {
+  try {
+    return await fs.readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+}
+
+/**
+ * O rollout deste thread existe em ~/.codex (ou CODEX_HOME)? Varredura estrita: pasta que existe e não lê LANÇA, nunca vira
+ * "não existe". Compactado (`.zst`) também conta.
+ */
+export async function codexRolloutExists(threadId: string, home = codexHome()): Promise<boolean> {
+  if (!/^[0-9A-Za-z-]+$/.test(threadId)) return false;
+  const suffix = `-${threadId}.jsonl`;
+  const root = path.join(home, 'sessions');
+  const subdirs = async (d: string) => (await entriesStrict(d)).filter((e) => e.isDirectory()).map((e) => e.name);
+  for (const y of await subdirs(root))
+    for (const m of await subdirs(path.join(root, y)))
+      for (const d of await subdirs(path.join(root, y, m))) {
+        const names = (await entriesStrict(path.join(root, y, m, d))).filter((e) => e.isFile()).map((e) => e.name);
+        if (names.some((n) => n.startsWith('rollout-') && (n.endsWith(suffix) || n.endsWith(`${suffix}.zst`)))) return true;
+      }
+  return false;
+}
+
+/**
+ * A conversa do Club tem thread conhecido e o rollout dele SUMIU do ~/.codex? Sem threadId conhecido, não dá para saber: false
+ * (a entrada fica). Leitura estrita (ver codexRolloutExists).
+ */
+export async function codexRolloutMissing(runDir: string, sessionId: string, registryFile = REGISTRY_FILE): Promise<boolean> {
+  const threadId =
+    (await codexThreadOf(runDir, sessionId)) ?? (await getRegisteredSession(sessionId, registryFile).catch(() => null))?.threadId ?? null;
+  if (!threadId) return false;
+  return !(await codexRolloutExists(threadId));
 }
 
 /**

@@ -480,6 +480,10 @@ textarea.q-field { resize: vertical; }
 .bn-tasks:hover { border-color: var(--room-wall); background: color-mix(in srgb, var(--room-wall) 14%, transparent); }
 .bn-tasks.is-empty { color: var(--muted); }
 .bn-tasks-review { color: var(--waiting-ink); font-weight: 600; }
+/* Barra fina do progresso do kanban, colada embaixo do chip (a largura é a do chip). */
+.bn-tasks-wrap { display: flex; flex-direction: column; align-items: stretch; gap: 3px; min-width: 0; }
+.bn-progress { height: 4px; border-radius: 2px; overflow: hidden; background: color-mix(in srgb, var(--muted) 28%, transparent); }
+.bn-progress-fill { display: block; height: 100%; border-radius: 2px; background: var(--ink-green); }
 /* Quadro de tarefas. */
 .modal.tasks-modal { width: min(1280px, 100%); height: min(820px, calc(100vh - 32px)); display: flex; flex-direction: column; position: relative; overflow: hidden; }
 .tasks-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
@@ -665,7 +669,7 @@ textarea.q-field { resize: vertical; }
 /* Dúvida do funcionário: selo de uma linha no cartão (nome longo corta; o title tem o texto inteiro) e bloco no detalhe (amarelo quando é com você, como o .files-conflict). */
 .task-badge.task-doubt { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Espera do gate de recursos: o motivo é o que importa, então quebra linha (raio dos blocos tracejados, não pílula). */
-.task-queue.task-resource { max-width: 100%; border-radius: 10px; padding: 1px 8px; text-align: left; overflow-wrap: anywhere; }
+.task-queue.task-resource, .task-queue.task-blocked { max-width: 100%; border-radius: 10px; padding: 1px 8px; text-align: left; overflow-wrap: anywhere; }
 .task-doubt-box { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
 .task-doubt-box.is-escalated { border: 1px solid var(--waiting); background: color-mix(in srgb, var(--waiting) 12%, transparent); }
 .task-doubt-box p, .task-doubt-box ul { margin: 0; overflow-wrap: anywhere; }
@@ -674,6 +678,37 @@ textarea.q-field { resize: vertical; }
 .task-doubt-q { display: grid; gap: 4px; }
 .task-doubt-text { white-space: pre-wrap; max-height: 180px; overflow-y: auto; }
 .task-doubt-answer { display: grid; gap: 4px; border-top: 1px solid var(--line); padding-top: 6px; }
+/* Formulário de criar com os opcionais abertos: rola por dentro; sem teto ele empurra o quadro (altura 0 no celular). */
+.tasks-modal .task-form { max-height: 60%; overflow-y: auto; }
+.tasks-modal .task-form > .actions { position: sticky; bottom: -10px; z-index: 1; margin-bottom: -10px; padding: 6px 0 10px; background: var(--panel); }
+.task-form-more-body { display: grid; gap: 8px; padding-top: 4px; }
+/* Bloqueada por: lista de tarefas para marcar, rola a partir de umas 5 linhas. */
+.task-deps { min-width: 0; }
+.task-deps legend { font-size: 13px; }
+.task-deps p { margin: 0 0 4px; }
+.task-deps-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 168px; overflow-y: auto; }
+.task-deps .check { flex-wrap: wrap; min-height: 28px; }
+.task-deps-title { flex: 1 1 140px; min-width: 0; overflow-wrap: anywhere; }
+.task-deps-meta { flex: none; }
+@media (max-width: 640px) { .task-deps .check { min-height: 36px; } }
+/* Erro da última ação no detalhe: gruda no topo ao rolar (o botão que falhou pode estar longe). */
+.task-detail-error { position: sticky; top: 0; z-index: 1; margin: 0; padding: 6px 10px; border: 1px solid var(--danger); border-radius: 8px; background: var(--card); overflow-wrap: anywhere; }
+/* Execuções: uma linha por tentativa, com o motivo (se houver) embaixo, em até 2 linhas. */
+.task-runs { list-style: none; margin: 0 0 4px; padding: 0; display: grid; gap: 6px; }
+.task-runs li { display: grid; gap: 1px; min-width: 0; }
+.task-run-line { overflow-wrap: anywhere; }
+.task-run-note { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.task-runs .ok { color: var(--ink-green); }
+.task-runs .fail { color: var(--ink-red); }
+/* Custo da tarefa: total em cima (largura toda) e fazer/revisar/dúvida em duas colunas; a linha de apoio vai embaixo do valor. */
+.task-cost .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 8px; }
+.task-cost .stats .is-wide { grid-column: 1 / -1; }
+.task-cost .stats dd { overflow-wrap: anywhere; }
+.task-cost-sub { display: block; font-weight: 400; }
+.task-cost-note, .task-cost > p { margin: 0 0 8px; }
+.task-cost-nodes { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.task-cost-nodes li { display: grid; gap: 1px; min-width: 0; }
+.task-cost-node-who, .task-cost-node-value { overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   /* Uma coluna por vez, com a beirada da próxima à vista; o arrasto lateral para em cada uma. */
   .tasks-columns { grid-template-columns: repeat(4, calc(100% - 28px)); scroll-snap-type: x mandatory; }
@@ -691,6 +726,14 @@ textarea.q-field { resize: vertical; }
 .routine-form label { display: grid; gap: 3px; font-size: 12.5px; }
 .routine-when { display: flex; flex-wrap: wrap; gap: 10px; }
 .routine-when label { flex: 1 1 140px; }
+/* Equipe em arquivo (aba Equipe do projeto). */
+.team-file > p { margin: 0 0 6px; }
+.team-file .actions { flex-wrap: wrap; }
+.team-file-pick { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 200px; overflow-y: auto; }
+.team-file-pick .check { min-height: 28px; }
+.team-file-result p { margin: 0 0 6px; }
+.team-file-result .person-note ul { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 2px; }
+@media (max-width: 640px) { .team-file-pick .check { min-height: 36px; } .team-file .actions :is(.btn-secondary) { min-height: 36px; } }
 /* Prints colados, antes de enviar: miniaturas com × para tirar. */
 .chat-images { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
 .chat-image { position: relative; width: 64px; height: 64px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--card); }
@@ -736,17 +779,17 @@ textarea.q-field { resize: vertical; }
 
 /* Rolagem do painel lateral, do chat, dos modais, das caixas de texto, do quadro de tarefas e das configurações: fina, sem trilho, ponta irregular como os traços de caneta.
    A borda transparente (com background-clip) afasta o polegar da beira, qualquer que seja o fundo. */
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar { width: 10px; height: 10px; }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-track,
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-corner { background: transparent; }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb {
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar { width: 10px; height: 10px; }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-track,
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-corner { background: transparent; }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb); background-clip: padding-box; border: 3px solid transparent; border-radius: 4px 6px 4px 5px;
 }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-thumb-hover); }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb:active { background-color: var(--scroll-thumb-active); }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-thumb-hover); }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb:active { background-color: var(--scroll-thumb-active); }
 /* Firefox (sem ::-webkit-scrollbar): o equivalente padrão. */
 @supports not selector(::-webkit-scrollbar) {
-  .drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
+  .drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
 }
 /* Botão liga/desliga: o btn-secondary com estado pressionado em azul de caneta. */
 .segmented { display: inline-flex; gap: 6px; }
@@ -824,6 +867,8 @@ button.ranking-row:hover { border-color: var(--accent); }
 .ranking-row.is-archived { opacity: 0.5; }
 .ranking-row.is-archived:hover { opacity: 0.8; }
 .ranking-tag { margin-left: 6px; }
+/* Título comprido (tarefa): até 2 linhas em vez de uma só cortada. */
+.ranking-name.is-wrap { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
 .ranking-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .section .ranking-head h3 { margin: 0; }
 .ranking-period { font: inherit; font-size: 12px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); cursor: pointer; }
@@ -921,10 +966,16 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .check-server.has-write { flex: 1 1 100%; min-width: 0; }
 .check-write { display: grid; gap: 2px; margin: 4px 0 0 22px; }
 .check-write p { margin: 0; overflow-wrap: anywhere; }
-/* MCP marcado na ficha: o seletor de escrita (livre / pede antes / bloqueada) fica sob o nome, como o da escrita SSH. */
-.mcp-write { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.mcp-write select { max-width: 100%; }
-@media (max-width: 640px) { .mcp-write select { min-height: 36px; } }
+/* Acesso por MCP (e do navegador): o seletor fica na linha do nome e só desce, à esquerda, se faltar largura; a dica vem embaixo, recuada sob o nome. */
+.mcp-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; }
+.mcp-row label.check { flex: 1 1 80px; min-width: 0; flex-wrap: nowrap; align-items: flex-start; overflow-wrap: anywhere; }
+.mcp-row label.check input { flex: none; }
+.mcp-row-name { flex: 1 1 80px; min-width: 0; font-size: 13px; font-weight: 600; }
+.mcp-row select.mcp-access { flex: 0 1 160px; min-width: 0; font-size: 12.5px; padding: 5px 4px 5px 6px; }
+.mcp-hint { margin: 4px 0 0 22px; overflow-wrap: anywhere; }
+.mcp-browser { display: grid; gap: 4px; }
+.mcp-browser .mcp-hint { margin-left: 0; }
+@media (max-width: 640px) { .mcp-row select.mcp-access { min-height: 36px; } }
 :is(.modal, .hire-inline) .check { display: flex; flex-direction: row; align-items: center; gap: 6px; font-weight: 400; }
 .import-list { display: grid; gap: 6px; max-height: 340px; overflow-y: auto; }
 .import-list .choice b { overflow-wrap: anywhere; }
@@ -1012,6 +1063,8 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .block { display: block; margin-top: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; word-break: break-all; color: var(--ink); }
 .notice { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: min(640px, calc(100vw - 32px)); display: flex; gap: 10px; align-items: flex-start; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 10px; padding: 10px 36px 10px 14px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15); font-size: 13px; z-index: 15; }
 .notice .drawer-close { top: 6px; right: 8px; }
+/* Caminhos de pasta e de backup no texto (excluir skill) não têm onde quebrar: sem isto o texto vaza do aviso. */
+.notice > span { min-width: 0; overflow-wrap: anywhere; }
 /* Monitor de CPU e RAM (toolbar/SystemMonitor.tsx): meio transparente (inteiro com o mouse em cima) e embaixo do
    painel lateral (z-index 10). No celular some: a tela é pequena demais para mais uma camada. */
 .sysmon { position: fixed; top: 12px; right: 12px; z-index: 5; display: grid; gap: 4px; width: 190px; padding: 6px 10px; background: var(--panel-glass); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.5; transition: opacity 0.15s; }
@@ -1139,6 +1192,9 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 .toolbar .btn-login { color: #fff; background: var(--ink-red); border-color: var(--ink-red); font-weight: 600; }
 .toolbar .btn-login:hover:not(:disabled) { filter: brightness(1.08); border-color: var(--ink-red); }
 .toolbar-check { display: flex; align-items: center; gap: 4px; font-size: 13px; }
+/* `.toolbar button` (abaixo) ganha de `.btn-primary` no fundo; sem isto o texto escuro do tema escuro cai sobre o fundo transparente (Atualizar, Salvar das configurações). */
+.toolbar .btn-primary { color: #fff; background: var(--ink-blue); border-color: var(--ink-blue); font-weight: 600; padding: 5px 12px; }
+.toolbar .btn-primary:hover:not(:disabled) { border-color: var(--ink-blue); }
 .toolbar button { font: inherit; font-size: 13px; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
 .toolbar button:hover:not(:disabled) { border-color: var(--accent); }
 .toolbar button:disabled { opacity: 0.6; cursor: default; }
@@ -1177,6 +1233,17 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 
 /* ---- biblioteca de skills (no painel da conta) ---- */
 .skill-lib { display: grid; gap: 6px; }
+/* Editar/excluir skill (painel da skill): confirmação na própria seção, no padrão do cancelar agendamento. */
+.skill-manage { display: grid; gap: 8px; }
+.skill-manage :is(h3, p) { margin: 0; overflow-wrap: anywhere; }
+.skill-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.skill-confirm { display: grid; gap: 8px; padding: 8px 10px; border: 1px solid var(--danger); border-radius: 8px; }
+.skill-confirm p { font-size: 13px; }
+.skill-editor textarea { width: 100%; box-sizing: border-box; resize: vertical; font-size: 13px; }
+/* Alerta dos hooks vinculados (modal no padrão do .usage-warning): a lista rola sozinha e o Sim/Cancelar fica à vista. */
+.skill-hooks { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; max-height: 40vh; overflow-y: auto; }
+.skill-hooks li { display: grid; gap: 2px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .skill-actions .btn-secondary { min-height: 36px; } }
 
 /* ---- registro de acesso aos servidores (na ficha) ---- */
 .server-log { margin-top: 10px; }
@@ -1240,6 +1307,7 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 /* Assunto da conversa: 1 linha, corta com reticências. Sem assunto a linha não existe e a área fica vazia (altura 0). */
 .inbox-topic { grid-area: topic; font-size: 12px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inbox-summary { grid-area: summary; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-blocked .inbox-summary { white-space: normal; overflow-wrap: anywhere; }
 .inbox-at { grid-area: at; white-space: nowrap; }
 /* No celular o botão não fica na borda esquerda: ancorada nele, a caixa saía pela direita. Ocupa a largura da tela. */
 @media (max-width: 480px) {
@@ -1299,6 +1367,12 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 .setting-number { display: inline-flex; align-items: center; gap: 4px; }
 .setting-number input { width: 64px; }
 .setting-number.is-wide input { width: 92px; }
+/* Conversas antigas (config): estado da exclusão, prévia do que seria apagado e o aviso fixo do Claude Code. */
+.retention { display: grid; gap: 8px; width: 100%; }
+.retention p { margin: 0; }
+.retention-state { font-size: 13px; }
+.retention-preview { display: grid; gap: 4px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; font-size: 12.5px; line-height: 1.45; }
+.retention-preview ul { margin: 0; padding-left: 18px; }
 /* Campos do menu (inclusive os do cargo e do workspace): papel do cartão, linha fina e foco azul de caneta.
    O color-scheme deixa setinhas do número e a lista aberta do select no tema certo. */
 .settings-menu { color-scheme: light; }

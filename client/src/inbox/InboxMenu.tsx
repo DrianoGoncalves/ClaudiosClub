@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { InboxItem } from '../../../shared/model';
 import { formatAgo } from '../format';
 import { t } from '../i18n';
-import { secretText } from './secretText';
+import { inboxText, inboxWho } from './inboxText';
 import type { InboxView } from './useInbox';
 
 // Botão "precisa de mim" no topo do quadro, com o contador, e a lista que abre embaixo dele.
@@ -16,6 +16,8 @@ const KIND_LABEL: Record<InboxItem['kind'], string> = {
   error: t('inbox.kindError'),
   routine: t('inbox.kindRoutine'),
   orphan: t('inbox.kindOrphan'),
+  usage: t('inbox.kindUsage'),
+  blocked: t('inbox.kindBlocked'),
 };
 
 /** Itens que só se dispensam ganham um X no canto; o title explica o que o X faz. Segredo tem duas ações, com texto. */
@@ -91,11 +93,11 @@ export function InboxMenu({
                   >
                     <span className="inbox-kind">{KIND_LABEL[item.kind]}</span>
                     <span className="inbox-who">
-                      <b>{item.name}</b>
-                      {item.projectName && <span className="muted"> · {item.projectName}</span>}
+                      <b>{inboxWho(item)}</b>
+                      {item.name && item.projectName && <span className="muted"> · {item.projectName}</span>}
                     </span>
                     {topic && <span className="inbox-topic" title={topic}>{topic}</span>}
-                    <span className="inbox-summary">{secretText(item)}</span>
+                    <span className="inbox-summary" title={item.kind === 'blocked' ? inboxText(item) : undefined}>{inboxText(item)}</span>
                     {item.at && <span className="muted small inbox-at">{formatAgo(now - Date.parse(item.at))}</span>}
                   </button>
                   {item.kind === 'secret' && (

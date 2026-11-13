@@ -9,7 +9,6 @@ import {
   type GitState,
   type LaunchResult,
   type McpServerInfo,
-  type McpWritePolicy,
   type Playbook,
   type ServerInfo,
   type Session,
@@ -26,10 +25,22 @@ import { BrowserCheck } from './BrowserCheck';
 import { CopyFromCompany } from './CopyFromCompany';
 import { differingFields, PERSON_FIELD_LABEL } from './directory';
 import { FallbackField } from './FallbackField';
-import { MCP_WRITE_OPTIONS, mcpWriteHint, mcpWriteToSend, setMcpWrite, type McpWriteChoice } from './mcpWrite';
 import { draftOf, fallbackProblem, fallbackToSend, showFallbackField, type FallbackDraft } from './fallbackEngine';
+import {
+  accessOf,
+  accessToSend,
+  browserAccess,
+  browserAccessHints,
+  hasAccessKey,
+  mcpAccessHints,
+  withAccess,
+  withBrowserAccess,
+  type McpAccessMap,
+} from './mcpAccessField';
+import { McpAccessHint, McpAccessSelect } from './McpAccessSelect';
 import { PersonMemory } from './PersonMemory';
 import { PERSONALITY_TEXT, personalityToSend } from './personalityField';
+import { goneSkills, skillIsGone, type LibraryState } from './skillGone';
 import { PERSONALITIES, type Personality } from '../../../shared/personality';
 import type { RoleEntry } from '../../../shared/roles';
 import {
@@ -118,13 +129,26 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   );
   // As da biblioteca do Claudio’s Club só carregam para quem tem na ficha (as do projeto e da conta, todos veem).
   const [library, setLibrary] = useState<string[]>([]);
+  // Só com a biblioteca lida dá para dizer que uma skill marcada sumiu (a da biblioteca chega depois das do projeto e da conta).
+  const [libraryState, setLibraryState] = useState<LibraryState>('loading');
   useEffect(() => {
-    api.skillLibrary().then((l) => setLibrary(l.map((s) => s.name)), () => {});
+    api.skillLibrary().then(
+      (l) => {
+        setLibrary(l.map((s) => s.name));
+        setLibraryState('ok');
+      },
+      () => setLibraryState('failed'),
+    );
   }, []);
   const skillNames = useMemo(
     () => [...new Set([...inventory.skills, ...board.user.skills.filter((s) => s.scope !== 'synced')].map((s) => s.name).concat(library))].sort(),
     [inventory, board.user, library],
   );
+  // Skill que a ficha já tinha marcada e a lista não oferece mais (apagada ou renomeada; a sincronizada nunca é oferecida): continua à
+  // vista para dar para desmarcar. Vem da ficha ao abrir, e não do que está marcado agora: desmarcar não faz a linha sumir.
+  const gone = useMemo(() => goneSkills(editing?.skills ?? [], skillNames, libraryState), [editing, skillNames, libraryState]);
+  const syncedSkills = useMemo(() => new Set(board.user.skills.filter((s) => s.scope === 'synced').map((s) => s.name)), [board.user]);
+  const skillGone = (s: string) => skillIsGone(s, libraryState, syncedSkills);
   const colleagues = board.staff.filter((s) => s.projectId === projectId && s.id !== editing?.id);
 
   const [name, setName] = useState(editing?.name ?? (adopting ? employeeName(adopting).slice(0, 60) : ''));
@@ -138,8 +162,9 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const [skills, setSkills] = useState<string[]>(editing?.skills ?? []);
   const [mcps, setMcps] = useState<McpServerInfo[] | null>(null);
   const [mcpOn, setMcpOn] = useState<Set<string>>(new Set());
-  // Escrita por MCP (livre / pede antes / bloqueada); só vale no motor Claude.
-  const [mcpWrite, setMcpWriteState] = useState<Record<string, McpWritePolicy>>(editing?.mcpWrite ?? {});
+  // Acesso por MCP (Livre / Pede antes de escrever / Só leitura / Desligado), nos dois motores. Guarda também as chaves que a tela não
+  // mostra (MCP desmarcado, `myco-ssh`): o servidor troca o mapa todo, então elas voltam ao salvar.
+  const [mcpAccess, setMcpAccess] = useState<McpAccessMap>(editing?.mcpAccess ?? {});
   const [knowledge, setKnowledge] = useState((editing?.knowledge ?? []).join('\n'));
   const [rules, setRules] = useState((editing?.rules ?? []).join('\n'));
   const [doneWhen, setDoneWhen] = useState(editing?.doneWhen ?? '');
@@ -371,8 +396,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       // nenhum: a sessão abre mais leve e rápida; quem precisa liga no avançado. Sem lista (vazia ou
       // falhou), editando mantém o que a ficha tinha; contratando, nenhum.
       mcps: codex || simpleHire ? [] : !mcps?.length ? (editing ? editing.mcps : []) : allMcps ? null : [...mcpOn],
-      // Só com a lista na tela; sem ela (Codex, simples, lista que não veio), o pedido não leva o campo e a ficha mantém a política.
-      ...(!codex && !simpleHire && mcps?.length ? { mcpWrite: mcpWriteToSend(mcpWrite, allMcps ? null : mcpOn) } : {}),
+      // Só vai se mudou (ausente mantém o salvo; `{}` limpa).
+      ...accessToSend(mcpAccess, editing?.mcpAccess),
       knowledge: lines(knowledge),
       rules: lines(rules),
       doneWhen,
@@ -761,10 +786,10 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           <p className="muted small">{t('staff.codexToolsNote')}</p>
         ) : (
           <>
-        {agentNames.length === 0 && skillNames.length === 0 && (
+        {agentNames.length === 0 && skillNames.length === 0 && gone.length === 0 && (
           <p className="muted small">{t('staff.noAgentsSkills')}</p>
         )}
-        {(agentNames.length > 0 || skillNames.length > 0) && (
+        {(agentNames.length > 0 || skillNames.length > 0 || gone.length > 0) && (
           <fieldset>
             <legend>{t('staff.suggested')}</legend>
             <p className="muted small">{t('staff.suggestedHint')}</p>
@@ -781,7 +806,18 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                   <span className="muted small"> {library.includes(s) ? t('office.libTag') : t('staff.skillTag')}</span>
                 </label>
               ))}
+              {gone.map((s) => (
+                <label key={`gone:${s}`} className="check">
+                  <input type="checkbox" checked={skills.includes(s)} onChange={() => toggle(skills, setSkills, s)} /> {s}
+                  {skillGone(s) ? (
+                    <span className="badge warn">{t('staff.skillGone')}</span>
+                  ) : (
+                    <span className="muted small"> {syncedSkills.has(s) ? t('detail.synced') : t('staff.skillTag')}</span>
+                  )}
+                </label>
+              ))}
             </div>
+            {gone.some((s) => skillGone(s)) && <p className="muted small">{t('staff.skillGoneHint')}</p>}
           </fieldset>
         )}
 
@@ -794,51 +830,42 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
               <div className="checks">
                 {mcps.map((m) => {
                   const on = mcpOn.has(m.name);
-                  const hint = mcpWriteHint(m);
+                  const level = accessOf(mcpAccess, m.name);
                   return (
                     <div key={m.name} className={on ? 'check-server has-write' : 'check-server'}>
-                      <label className="check">
-                        <input
-                          type="checkbox"
-                          checked={on}
-                          onChange={() => {
-                            const next = new Set(mcpOn);
-                            if (next.has(m.name)) next.delete(m.name);
-                            else next.add(m.name);
-                            setMcpOn(next);
-                          }}
-                        />{' '}
-                        {m.name}
-                        <span className="muted small">
-                          {' '}
-                          {t(MCP_SOURCE_LABEL[m.source])}
-                        </span>
-                      </label>
-                      {on && (
-                        <div className="check-write">
-                          <label className="mcp-write">
-                            {t('staff.mcpWrite')}{' '}
-                            <select
-                              value={mcpWrite[m.name] ?? 'free'}
-                              onChange={(e) => setMcpWriteState(setMcpWrite(mcpWrite, m.name, e.target.value as McpWriteChoice))}
-                            >
-                              {MCP_WRITE_OPTIONS.map((o) => (
-                                <option key={o.value} value={o.value}>
-                                  {t(o.label)}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          {mcpWrite[m.name] && (
-                            <p className="muted small">{t(hint.key, hint.params)}</p>
-                          )}
-                        </div>
-                      )}
+                      <div className="mcp-row">
+                        <label className="check">
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={() => {
+                              const next = new Set(mcpOn);
+                              if (next.has(m.name)) next.delete(m.name);
+                              else next.add(m.name);
+                              setMcpOn(next);
+                            }}
+                          />
+                          <span>
+                            {m.name}
+                            <span className="muted small"> {t(MCP_SOURCE_LABEL[m.source])}</span>
+                          </span>
+                        </label>
+                        {on && hasAccessKey(m.name) && (
+                          <McpAccessSelect
+                            label={t('staff.mcpAccessFor', { name: m.name })}
+                            value={level}
+                            onChange={(l) => setMcpAccess(withAccess(mcpAccess, m.name, l))}
+                          />
+                        )}
+                      </div>
+                      {on && !hasAccessKey(m.name) && <p className="muted small mcp-hint">{t('staff.mcpAccessNoKey')}</p>}
+                      {on && <McpAccessHint hints={mcpAccessHints(level, m)} />}
                     </div>
                   );
                 })}
               </div>
               <p className="muted small">{allMcps ? t('staff.mcpAllOn') : t('staff.mcpSomeOff')}</p>
+              {mcps.some((m) => mcpOn.has(m.name)) && <p className="muted small">{t('staff.mcpAccessIntro')}</p>}
             </>
           )}
         </fieldset>
@@ -933,6 +960,20 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             </p>
             {browser && <BrowserCheck />}
           </>
+        )}
+        {/* Um seletor só: o Claude in Chrome e o Chrome do GPT são o mesmo navegador (vale o mais restritivo). */}
+        {browser && (
+          <div className="mcp-browser">
+            <div className="mcp-row">
+              <span className="mcp-row-name">{t('staff.browserAccess')}</span>
+              <McpAccessSelect
+                label={t('staff.browserAccess')}
+                value={browserAccess(mcpAccess)}
+                onChange={(l) => setMcpAccess(withBrowserAccess(mcpAccess, l))}
+              />
+            </div>
+            <McpAccessHint hints={browserAccessHints(browserAccess(mcpAccess))} />
+          </div>
         )}
 
         <fieldset>

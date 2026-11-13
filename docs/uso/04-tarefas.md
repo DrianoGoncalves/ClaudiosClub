@@ -15,7 +15,7 @@ Tarefa é um pedido de trabalho para um funcionário. Cada tarefa tem uma conver
 | Coluna | O que quer dizer |
 | --- | --- |
 | **Aguardar** | Parada. Não começa sozinha nem entra na fila. O campo **Motivo (opcional)** fica no cartão. |
-| **A fazer** | Na fila. Começa sozinha quando o funcionário entrega a atual. |
+| **A fazer** | Deve ser iniciada. Com responsável, começa sozinha (ou entra na fila dele). Sem responsável, espera. Para não começar, deixe em **Aguardar**. |
 | **Fazendo** | Trabalhando. Inclui as tarefas com plano para aprovar (selo **Plano para aprovar**). |
 | **Revisão** | Ele terminou um turno. Confira a entrega. |
 | **Pronto** | Entregue e conferido. |
@@ -37,6 +37,7 @@ Tarefa é um pedido de trabalho para um funcionário. Cada tarefa tem uma conver
 ## Começar e fila
 
 - Cartão sem conversa: botão **Começar**. Com o funcionário ocupado, o botão vira **Pôr na fila**.
+- Arrastar ou mover um cartão com responsável para **A fazer** faz o mesmo que **Começar**: começa na hora, ou entra na fila dele.
 - Cada funcionário faz uma tarefa por vez. A posição aparece no cartão ("na fila · 1ª") e no detalhe.
 - Quando ele fica livre, o Club manda primeiro os ajustes guardados e depois a próxima da fila.
 - **tirar da fila** desfaz a entrada na fila.
@@ -77,6 +78,8 @@ Na seção **Revisão**, escolha **Quem revisa** e clique em **Delegar revisão*
 - O Club faz no máximo **2** revisões automáticas por tarefa. Depois disso, o que sobrar fica com você, anotado no histórico.
 - Atenção: o cartão mostra `n/3` e a opção diz "até 3 rodadas", mas o limite que vale é 2.
 - Precisa de outro funcionário no projeto. Se quem pediu a tarefa é o revisor, ele recebe só o resultado.
+- Quando um funcionário passa várias tarefas a outros, ele só é avisado das aprovadas quando todas as tarefas que ele pediu fecharem: aí recebe uma única mensagem com a lista. O quadro mostra cada aprovação normalmente.
+- Reprovação, limite de revisões, bloqueio e falha avisam na hora.
 
 ## Testes, mesclar e deploy
 

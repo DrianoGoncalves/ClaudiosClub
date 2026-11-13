@@ -34,7 +34,7 @@ async function ftpNames(projectPath: string, vault?: VaultOptions): Promise<stri
 import type { ToolAdapter } from '../adapters/types';
 import { effectiveBrowser } from '../browser';
 import { MYCO_HOME, readConfig, setArchived, workspaceOf } from '../config';
-import { librarySkillsOf } from '../skillLibrary';
+import { LIBRARY_DIR, librarySkillsOf } from '../skillLibrary';
 import { listRoles } from '../roles';
 import { readUsage } from '../usage';
 import { atMostAutonomy } from '../taskFallback';
@@ -45,10 +45,11 @@ import type { CodexEnvStatus } from '../codexEnv';
 import type { CodexModelsResult } from '../codexModels';
 import { readCodexThread } from '../chat/codexProcess';
 import { buildClaudeArgs, capAutonomy } from './ficha';
+import { mcpAccessOfInput, mergeMcpAccess } from './mcpAccess';
 import { greeting, prepareCodexRun, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
+import { attachThreadId, recordSession, type NewRegisteredSession } from '../sessionsRegistry';
 import { ensureWorktree, worktreeFor, type Worktree } from './worktree';
 import { listMcpServers } from './mcp';
-import { cleanMcpWrite, stricterMcpWrite } from './mcpTools';
 import { readSeal, sealViolation, writeSeal } from './seal';
 import {
   archiveVersion,
@@ -77,6 +78,7 @@ import {
   withProfileLock,
   writeAtomic,
 } from './store';
+import { buildTeamExport, planTeamImport, type TeamFile } from './teamExport';
 
 /** Uma ficha na lista de todas as empresas (para copiar). Só estes campos: nada de memória, regras ou servidores. */
 export interface StaffDirectoryPerson {
@@ -186,6 +188,11 @@ function insideDir(dir: string, child: string): boolean {
 
 export interface StaffServiceOptions {
   runDir: string;
+  /**
+   * Registro das conversas lançadas pelo Club (sessions-registry.json em MYCO_HOME; ver sessionsRegistry.ts). Sem ele, o lançamento
+   * não grava nada (o `index.ts` liga o padrão; os testes não tocam na pasta do usuário).
+   */
+  sessionsFile?: string;
   claudeConfigFile: string;
   /** Endereço do Claudio’s Club para as conversas do Claude (http://127.0.0.1:<porta>), nos textos da ficha. */
   mycoUrl: string;
@@ -392,9 +399,9 @@ export class StaffService {
     }
     // A escrita SSH só vale para conexão que ficou na ficha (os filtros acima podem ter tirado servidores).
     input.sshWrite = (input.sshWrite ?? []).filter((n) => input.servers.includes(n));
-    // Contratado pela API: a escrita nos MCPs é no mínimo tão travada quanto a do gestor (o pedido não afrouxa).
-    if (hirer) input.mcpWrite = stricterMcpWrite(input.mcpWrite, hirer.mcpWrite);
-    input.mcpWrite = cleanMcpWrite(input.mcpWrite);
+    // Acesso por MCP: a tela antiga (legado) vira mcpAccess; contratado por outro, nunca mais solto que o gestor (o pedido não afrouxa).
+    input.mcpAccess = mcpAccessOfInput(input);
+    if (hirer) input.mcpAccess = mergeMcpAccess(input.mcpAccess, hirer.mcpAccess);
     // Contratado pela API: a escrita SSH do subordinado é no máximo a do gestor que contratou (o pedido não amplia).
     if (hirer) input.sshWrite = input.sshWrite.filter((n) => (hirer.sshWrite ?? []).includes(n));
     await this.checkCodexModel(input.engine, input.model);
@@ -403,7 +410,8 @@ export class StaffService {
     if (input.adoptSessionId) {
       if (!fromBrowser) throw new StaffError('só pelo Claudio’s Club');
       const sessionId = input.adoptSessionId;
-      const session = ((await this.adapter.getProjectSessions(project.id)) ?? []).find((s) => s.id === sessionId);
+      // Adotar é de qualquer data: a sessão antiga também entra (includeOld).
+      const session = ((await this.adapter.getProjectSessions(project.id, { includeOld: true })) ?? []).find((s) => s.id === sessionId);
       if (!session) throw new StaffError('sessão não encontrada neste projeto');
       const owner = (await listProjectStaff(project.path, project.id)).find((s) => s.sessions.some((x) => x.id === sessionId));
       if (owner) throw new StaffError(`essa sessão já é de ${owner.name}`);
@@ -505,8 +513,8 @@ export class StaffService {
       agents: src.agents,
       skills: src.skills,
       mcps: src.mcps ?? [], // "todos" da origem não são os MCPs deste projeto; a lista explícita segue
-      // A trava de escrita dos MCPs segue junto (pelo nome): copiar não afrouxa.
-      ...(src.mcpWrite && { mcpWrite: src.mcpWrite }),
+      // O acesso aos MCPs segue junto (pelo nome): copiar não afrouxa.
+      ...(src.mcpAccess && { mcpAccess: src.mcpAccess }),
       knowledge: src.knowledge,
       rules: src.rules,
       doneWhen: src.doneWhen,
@@ -543,6 +551,76 @@ export class StaffService {
     await ensureMemory(target.path, profile);
     await writeFicha(profile, await this.context(target, profile));
     return { profile };
+  }
+
+  /**
+   * Exporta fichas (`ids`; sem ids = as ativas, não arquivadas nem encerradas) com as skills da biblioteca que usam
+   * (ver teamExport.ts). Só leitura; o arquivo não tem segredo nem o que é deste projeto ou da máquina.
+   */
+  async exportTeam(projectId: string, ids: string | null): Promise<TeamFile | null> {
+    const project = await this.project(projectId);
+    if (!project) return null;
+    const all = await listProjectStaff(project.path, projectId);
+    const picked: StaffProfile[] = [];
+    if (ids === null) {
+      for (const p of all) if (!p.ended && !(await this.archive.has(`staff:${p.id}`))) picked.push(p);
+    } else {
+      const wanted = [...new Set(ids.split(',').map((s) => s.trim()).filter(Boolean))];
+      if (!wanted.length || wanted.length > 100) throw new StaffError('informe de 1 a 100 ids de ficha');
+      for (const id of wanted) {
+        const found = all.find((p) => p.id === id);
+        if (!found) throw new StaffError(`ficha não encontrada: ${id.slice(0, 40)}`);
+        picked.push(found);
+      }
+    }
+    if (!picked.length) throw new StaffError('nenhuma ficha ativa para exportar');
+    return buildTeamExport(picked, { libraryDir: LIBRARY_DIR });
+  }
+
+  /**
+   * Importa um arquivo de equipe (só pelo Claudio’s Club). Tudo ou nada: o arquivo inteiro é conferido por `planTeamImport`
+   * antes; depois só grava (skills novas, fichas com id novo, com o .md e a memória). Nada é iniciado: sem conversa.
+   * Se a gravação falhar no meio, o que já foi criado nesta importação sai de volta.
+   */
+  async importTeam(projectId: string, body: unknown, fromBrowser: boolean): Promise<{ created: string[]; warnings: string[] } | null> {
+    if (!fromBrowser) throw new StaffError('só pelo Claudio’s Club');
+    const project = await this.project(projectId);
+    if (!project) return null;
+    const localMcps = ((await this.listMcp(projectId)) ?? []).map((m) => m.name);
+    const plan = await planTeamImport(body, { localMcps });
+
+    const created: string[] = [];
+    const skillDirs: string[] = [];
+    const refIds = new Map<string, string>();
+    const now = new Date();
+    try {
+      for (const s of plan.skills) {
+        const dir = path.join(LIBRARY_DIR, s.name);
+        skillDirs.push(dir);
+        for (const f of s.files) await writeAtomic(path.join(dir, ...f.path.split('/')), f.content);
+      }
+      for (const p of plan.staff) {
+        const profile = await createProfile(project.path, projectId, { ...p.input, reportsTo: p.reportsTo.map((r) => refIds.get(r)!) }, now);
+        created.push(profile.id);
+        refIds.set(p.ref, profile.id);
+        let saved = profile;
+        if (p.routines.length) {
+          saved = { ...profile, routines: p.routines };
+          await saveProfile(project.path, saved);
+        }
+        await this.seal(project, saved);
+        await this.checkCodexModel(saved.engine, saved.model);
+        await ensureMemory(project.path, saved);
+        await writeFicha(saved, await this.context(project, saved));
+      }
+    } catch (err) {
+      for (const id of created) {
+        for (const file of [profileFile(project.path, id), fichaFile(project.path, id), memoryFile(project.path, id)]) await fs.rm(file, { force: true }).catch(() => undefined);
+      }
+      for (const dir of skillDirs) await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      throw err;
+    }
+    return { created, warnings: plan.warnings };
   }
 
   /**
@@ -607,8 +685,10 @@ export class StaffService {
     const { portraitDataUrl, launch: _launch, adoptSessionId: _adopt, force: _force, fallback, ...fields } = parsed.data;
     // Pedido sem `sshWrite` (a tela ainda não manda o campo): fica o que a ficha já tinha, para editar não zerar a escrita SSH.
     if (!(typeof body === 'object' && body !== null && 'sshWrite' in body)) fields.sshWrite = current.sshWrite ?? [];
-    // Sem `mcpWrite` no pedido, fica a política que a ficha tinha; `{}` limpa (tudo livre).
-    fields.mcpWrite = cleanMcpWrite(typeof body === 'object' && body !== null && 'mcpWrite' in body ? fields.mcpWrite : current.mcpWrite);
+    // Sem `mcpAccess` no pedido, a tela antiga (legado) só aperta o que a ficha tem; sem nada, fica o da ficha; `{}` limpa.
+    fields.mcpAccess = mcpAccessOfInput(fields, current.mcpAccess);
+    delete fields.mcpPolicy;
+    delete fields.mcpWrite;
     if (fields.reportsTo.includes(staffId)) throw new StaffError('um funcionário não pode reportar a si mesmo');
     await this.managers(project.path, fields.reportsTo);
     if (await this.wouldCycle(project.path, staffId, fields.reportsTo)) {
@@ -792,7 +872,8 @@ export class StaffService {
     for (const project of (await this.adapter.listProjects()).filter((p) => p.exists)) {
       const temps = (await listProjectStaff(project.path, project.id)).filter((s) => s.temporary);
       if (!temps.length) continue;
-      const sessions = (await this.adapter.getProjectSessions(project.id).catch(() => null)) ?? [];
+      // A data real de cada uma (inclusive as antigas): a limpeza de temporários não depende da retenção.
+      const sessions = (await this.adapter.getProjectSessions(project.id, { includeOld: true }).catch(() => null)) ?? [];
       const touched = new Map(sessions.map((s) => [s.id, s.updatedAt]));
       for (const s of temps) {
         if ((await this.archive.has(`staff:${s.id}`)) || this.opts.isWorking?.(project.id, s.id)) continue;
@@ -1011,6 +1092,21 @@ export class StaffService {
    * pasta da original.
    * `engineOverride`: a conversa roda no motor/modelo secundário (ver `asEngine`); a ficha gravada não muda.
    */
+  /**
+   * Anota no registro (sessionsRegistry.ts) a conversa que o Club acabou de lançar. Falha de gravação não derruba o lançamento:
+   * a conversa só fica fora da exclusão futura, e o aviso vai para o log.
+   */
+  private async registerLaunch(s: NewRegisteredSession): Promise<void> {
+    const file = this.opts.sessionsFile;
+    if (!file) return;
+    await recordSession(s, file).catch((err) => this.warnRegistry(s.sessionId, err));
+  }
+
+  private warnRegistry(sessionId: string, err: unknown): void {
+    const warn = this.opts.log ?? ((line: string) => console.warn(`[staff] ${line}`));
+    warn(`registro de conversas: ${sessionId} não foi anotada (${err instanceof Error ? err.message : String(err)})`);
+  }
+
   async chatSpawn(
     projectId: string,
     sessionId: string | null,
@@ -1023,11 +1119,13 @@ export class StaffService {
     if (!staffId) {
       if (forkFrom) {
         const id = randomUUID();
+        await this.registerLaunch({ sessionId: id, engine: 'claude', projectPath: project.path, cwd: project.path });
         return { sessionId: id, cwd: project.path, args: ['--resume', forkFrom, '--fork-session', '--session-id', id, '--permission-mode', 'manual'] };
       }
       if (sessionId) return { sessionId, cwd: project.path, args: ['--resume', sessionId, '--permission-mode', 'manual'] };
       // Conversa nova sem ficha (ex.: a anterior ficou pesada): começa vazia, na pasta do projeto, pedindo antes de agir.
       const id = randomUUID();
+      await this.registerLaunch({ sessionId: id, engine: 'claude', projectPath: project.path, cwd: project.path });
       return { sessionId: id, cwd: project.path, args: ['--session-id', id, '--permission-mode', 'manual'] };
     }
     let profile = await readProfile(project.path, staffId);
@@ -1052,7 +1150,8 @@ export class StaffService {
     // o MCP `myco-chrome`, montado em prepareCodexRun (ver codexChromeOf), e não usa esta extensão.
     const browser = codex ? false : await effectiveBrowser(runProfile.browser, this.opts.browserStatus);
     const codexRun = codex ? await prepareCodexRun(runProfile, ctx, id, cwd) : null;
-    const run = codexRun ? null : await prepareRun({ ...runProfile, browser }, ctx, id, cwd);
+    // O navegador limpo segue o que a ficha pede (`runProfile.browser`), não a extensão do Chrome (`browser` efetivo).
+    const run = codexRun ? null : await prepareRun({ ...runProfile, browser }, { ...ctx, cleanBrowser: runProfile.browser }, id, cwd);
     // Modelo e esforço: o da conversa (reabrir, ou a de origem ao duplicar) > o da ficha > o último escolhido no chat.
     const origin = profile.sessions.find((x) => x.id === (forkFrom ?? sessionId));
     if (!resume) {
@@ -1072,6 +1171,9 @@ export class StaffService {
         const fresh = (await readProfile(project.path, staffId)) ?? profile;
         await saveProfile(project.path, { ...fresh, projectId, sessions: [...fresh.sessions, entry], updatedAt: now });
       });
+      // Conversa nova de ficha (inclusive a duplicada e a do secundário): entra no registro. Reabrir não entra (ver registerLaunch).
+      // `cwd` é a pasta real da sessão (a worktree, quando roda noutra pasta que o projeto).
+      await this.registerLaunch({ sessionId: id, engine: codex ? 'codex' : 'claude', projectPath: project.path, cwd, staffId });
     }
     // Com `engineOverride`, o modelo e o esforço são os do secundário (a escolha gravada na conversa não entra: ela é do principal).
     const effective: StaffProfile = {
@@ -1092,9 +1194,17 @@ export class StaffService {
         readOnlyPaths: codexRun.readOnlyPaths,
         sshMcp: codexRun.sshMcp,
         chromeMcp: codexRun.chromeMcp,
+        cleanMcp: codexRun.cleanMcp,
+        extraMcps: codexRun.extraMcps,
+        mcpSnapshotFile: codexRun.mcpSnapshotFile,
         secrets: { projectPath: project.path, home: os.homedir(), mycoHome: MYCO_HOME },
         threadId: resume ? await readCodexThread(codexRun.threadFile) : null,
         threadFile: codexRun.threadFile,
+        // O thread_id vai para o registro quando o Codex o dá (só atualiza a conversa já registrada).
+        onThread: (threadId) => {
+          const file = this.opts.sessionsFile;
+          if (file) void attachThreadId(id, threadId, file).catch((err) => this.warnRegistry(id, err));
+        },
         mycoUrl: ctx.mycoUrl,
         // Lida a cada execução (não só ao abrir a conversa): a Configuração vale na próxima mensagem.
         internetAccess: async () => (await readConfig()).internetAccess,
@@ -1187,6 +1297,8 @@ export class StaffService {
           : worktreeFor(project.path, profile.id),
       listProjectStaff(project.path, project.id),
     ]);
+    // Sem a leitura das skills, a ficha sai sem a marcação de "não existe mais" (como a lista de cargos, ver `roles`).
+    const knownSkills = profile.skills.length ? await this.existingSkills(project, profile.skills) : null;
     return {
       company: config.companyName,
       // O workspace do projeto (aba do quadro) entra na ficha como contexto (cliente, área…).
@@ -1204,6 +1316,8 @@ export class StaffService {
       // As chaves de todas as conexões SSH do projeto: nenhum funcionário precisa ler uma (quem lê é o ssh).
       serverKeys: await keyFilesOf(project.path),
       librarySkills: profile.skills.length ? await librarySkillsOf(profile.skills, this.opts.skillLibraryDir) : [],
+      // As skills da ficha que ainda existem (biblioteca, projeto ou conta): a ficha avisa as que sumiram (ver knownSkills).
+      ...(knownSkills ? { knownSkills } : {}),
       skillLibraryDir: this.opts.skillLibraryDir,
       codex: config.codexReview,
       internetAccess: config.internetAccess,
@@ -1220,6 +1334,23 @@ export class StaffService {
         .map((s) => ({ id: s.id, name: s.name, role: s.role, mission: s.mission, ...(s.temporary && { temporary: true }) })),
       ...(roles && { roles }),
     };
+  }
+
+  /**
+   * Os nomes das skills que existem agora: do projeto, da conta (sincronizadas incluídas) e da biblioteca. Erro na leitura: null
+   * (a ficha sai sem a marcação, em vez de derrubar a abertura da conversa).
+   */
+  private async existingSkills(project: Project, names: string[]): Promise<string[] | null> {
+    try {
+      const [inventory, account, library] = await Promise.all([
+        this.adapter.getProjectInventory(project.id),
+        this.adapter.getUserScope(),
+        librarySkillsOf(names, this.opts.skillLibraryDir),
+      ]);
+      return [...(inventory?.skills ?? []), ...account.skills].map((s) => s.name).concat(library);
+    } catch {
+      return null;
+    }
   }
 
   /**

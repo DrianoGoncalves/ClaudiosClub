@@ -22,8 +22,10 @@ import { api, isPairingError, NEEDS_PAIRING_EVENT, PAIRED_EVENT, withUsageConfir
 import { BoardView } from './board/Board';
 import { boardStyle, useBoardBackground } from './board/colors';
 import { useTheme } from './theme';
+import { pollVisible, pollVisibleLoop } from './usePoll';
 import { archiveKey, ghostNodeId, HR_ID, manageNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
 import { seedSeenIdle } from './board/unread';
+import { openSettings } from './toolbar/openSettings';
 import { PairControls } from './toolbar/PairControls';
 import { SystemMonitor } from './toolbar/SystemMonitor';
 import { QuickJump } from './toolbar/QuickJump';
@@ -40,10 +42,15 @@ import {
 import type { ChatFocus } from './chat/chatFocus';
 import { type ConversationTitles, conversationTitle } from './detail/conversationTitle';
 import { DrawerResize, useDrawerWidth } from './detail/DrawerResize';
+import { leftOutByRetention } from './detail/oldConversations';
+import { deletedNotice } from './detail/skillAccess';
+import { PeoplePanel } from './detail/PeoplePanel';
+import { TaskCostPanel } from './detail/TaskCostPanel';
 import { companyName, effortLabel, employeeName } from './format';
 import { t } from './i18n';
 import { useInbox } from './inbox/useInbox';
 import { rankingGroups } from './ranking';
+import { staffIndex } from './taskCost';
 import { AgentForm, type AgentFormTarget } from './staff/AgentForm';
 import { NewProjectForm } from './office/NewProjectForm';
 import { readTab, workspaceByProject, writeTab } from './office/workspaces';
@@ -84,7 +91,7 @@ type Selection =
   /** manage: o RH editando a ficha (as abas do funcionário com o seletor de projeto), em vez da conversa. */
   | { kind: 'employee'; session: Session | null; staff: StaffProfile | null; projectId: string; ghost?: Session[]; manage?: true }
   | { kind: 'agent'; agent: Agent; projectId: string | null }
-  | { kind: 'skill'; skill: Skill };
+  | { kind: 'skill'; skill: Skill; projectId: string | null };
 
 export function App() {
   const [board, setBoard] = useState<Board | null>(null);
@@ -159,8 +166,7 @@ export function App() {
   }, []);
   useEffect(() => {
     readTaskSummary();
-    const t = setInterval(readTaskSummary, 15_000);
-    return () => clearInterval(t);
+    return pollVisible(readTaskSummary, 15_000);
   }, [readTaskSummary]);
 
   const load = useCallback(() => {
@@ -219,6 +225,15 @@ export function App() {
 
   // Clicar num item da caixa (ou na notificação) abre o painel de quem espera.
   const openInbox = useCallback((item: InboxItem) => {
+    // Aviso de consumo (conta, sem projeto, ou orçamento de um projeto): não há quem abrir; o que se muda é a trava, em Configurações > Consumo.
+    if (item.kind === 'usage') return openSettings('usage');
+    // Tarefa esperando outra empacada: não há conversa; abre o quadro de tarefas do projeto já na tarefa que espera.
+    if (item.kind === 'blocked' && item.blocked) {
+      setSchedulesFor(null);
+      setJumpTask(item.blocked.taskId);
+      setTasksFor(item.projectId);
+      return;
+    }
     // Sem funcionário nem conversa (aviso do projeto, como chave no .mcp.json): a sala do projeto.
     // Conversa sem ficha: o funcionário fantasma do projeto, já nela.
     // Com conversa: a do aviso (não a mais recente do funcionário), rolada até o que o causou; o contador
@@ -262,7 +277,7 @@ export function App() {
   boardRef.current = board;
   useEffect(() => {
     const reloads = new Map<string, number>();
-    const t = setInterval(() => {
+    return pollVisible(() => {
       api.live().then(
         (live) => {
           setBoard((b) => (b && JSON.stringify(b.live) !== JSON.stringify(live) ? { ...b, live } : b));
@@ -278,7 +293,6 @@ export function App() {
         () => {},
       );
     }, 3000);
-    return () => clearInterval(t);
   }, [load]);
 
   // Estado do código (branch, sem commit, remoto) no cabeçalho de cada sala; muda devagar.
@@ -287,20 +301,16 @@ export function App() {
     const read = () =>
       api.git().then((next) => setGit((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next)), () => {});
     void read();
-    const t = setInterval(read, 30_000);
-    return () => clearInterval(t);
+    return pollVisible(read, 30_000);
   }, []);
 
   // Custos: a 1ª leitura dos transcripts demora; enquanto isso, consulta mais vezes.
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    const tick = async () => {
+    return pollVisibleLoop(async () => {
       const next = await api.costs().catch(() => null);
       if (next) setCosts((prev) => (prev && sameCosts(prev, next) ? prev : next));
-      timer = setTimeout(tick, next?.scanning ? 3000 : 30_000);
-    };
-    void tick();
-    return () => clearTimeout(timer);
+      return next?.scanning ? 3000 : 30_000;
+    });
   }, []);
 
   const toggle = (key: string, set: (v: boolean) => void) => (value: boolean) => {
@@ -353,6 +363,16 @@ export function App() {
   const archiveConversation = async (id: string, archived: boolean) => setConfig(await api.archive('conversation', id, archived));
   // Renomear grava só no config (não no transcript: a data da conversa não muda, então ela não desarquiva).
   const renameConversation = async (id: string, title: string | null) => setConfig(await api.setConversationTitle(id, title));
+  // "Mostrar antigas" do seletor: as conversas que a retenção tirou da lista, por projeto (a chave existe = estão sendo mostradas).
+  // Vêm só do projeto pedido (`?old=1`), sem reler o quadro todo; o quadro continua com a lista curta.
+  const [oldSessions, setOldSessions] = useState<Record<string, Session[]>>({});
+  const showOldConversations = async (projectId: string, shown: boolean) => {
+    if (!shown) return setOldSessions(({ [projectId]: _drop, ...rest }) => rest);
+    const detail = await api.project(projectId, { old: true });
+    setOldSessions((prev) => ({ ...prev, [projectId]: detail.sessions }));
+  };
+  /** A retenção do projeto como o seletor lê: o prazo de arquivar e, se já pediu, as antigas. */
+  const retentionOf = (projectId: string) => ({ archiveAfterDays: config?.archiveAfterDays ?? 0, old: oldSessions[projectId] });
   const archivedList = config?.archived.sessions;
   const selection = useMemo(
     () => (board ? resolveSelection(board, selectedId, new Set(archivedList ?? []), showArchived) : null),
@@ -460,33 +480,45 @@ export function App() {
           <button className="drawer-close" onClick={() => setSelectedId(null)} aria-label={t('app.close')}>
             ×
           </button>
-          {selection.kind === 'ranking' && (
-            <RankingPanel
-              groups={rankingGroups(board, config)}
-              agents={Object.entries(costs?.agents ?? {})
-                .map(([type, c]) => ({ type, usd: c.usd, runs: c.runs }))
-                .sort((a, b) => b.usd - a.usd)}
-              system={costs?.system}
-              scanning={costs?.scanning ?? true}
-              onSelect={setSelectedId}
-              onOpenPerson={(p) => openManage(p.projectId, p.staffId)}
-              onOpenTask={(projectId, taskId) => {
-                setJumpTask(taskId);
-                setTasksFor(projectId);
+          {(selection.kind === 'hr' || selection.kind === 'ranking') && (
+            <PeoplePanel
+              view={selection.kind}
+              onView={(view) => setSelectedId(view === 'hr' ? HR_ID : RANKING_ID)}
+              hr={
+                <HrPanel
+                  profiles={board.staff}
+                  onEdit={(p) => {
+                    // Projeto fora do quadro (arquivado): o painel do funcionário não teria onde abrir.
+                    if (board.staff.some((s) => s.projectId === p.projectId && s.id === p.staffId)) openManage(p.projectId, p.staffId);
+                    else setNotice(t('hr.openMissing', { project: p.projectName }), true);
+                  }}
+                  onConfig={setConfig}
+                  onChanged={load}
+                  onNotice={(text) => setNotice(text)}
+                />
+              }
+              ranking={(tab) => {
+                const openTask = (projectId: string, taskId: string) => {
+                  setJumpTask(taskId);
+                  setTasksFor(projectId);
+                };
+                return tab === 'tasks' ? (
+                  <TaskCostPanel staff={staffIndex(board)} onOpenTask={openTask} onOpenPerson={(p) => openManage(p.projectId, p.staffId)} />
+                ) : (
+                  <RankingPanel
+                    tab={tab}
+                    groups={rankingGroups(board, config)}
+                    agents={Object.entries(costs?.agents ?? {})
+                      .map(([type, c]) => ({ type, usd: c.usd, runs: c.runs }))
+                      .sort((a, b) => b.usd - a.usd)}
+                    system={costs?.system}
+                    scanning={costs?.scanning ?? true}
+                    onSelect={setSelectedId}
+                    onOpenPerson={(p) => openManage(p.projectId, p.staffId)}
+                    onOpenTask={openTask}
+                  />
+                );
               }}
-            />
-          )}
-          {selection.kind === 'hr' && (
-            <HrPanel
-              profiles={board.staff}
-              onEdit={(p) => {
-                // Projeto fora do quadro (arquivado): o painel do funcionário não teria onde abrir.
-                if (board.staff.some((s) => s.projectId === p.projectId && s.id === p.staffId)) openManage(p.projectId, p.staffId);
-                else setNotice(t('hr.openMissing', { project: p.projectName }), true);
-              }}
-              onConfig={setConfig}
-              onChanged={load}
-              onNotice={(text) => setNotice(text)}
             />
           )}
           {selection.kind === 'user' && (
@@ -509,13 +541,14 @@ export function App() {
                 setFilesFor(selection.id);
               }}
               onOpenConversation={(staffId, sessionId) => openNewConversation(selection.id, staffId, sessionId)}
+              onTeamImported={load}
               tasks={taskSummary[selection.id] ?? null}
               office={<ProjectOffice projectId={selection.id} config={config} onConfig={setConfig} />}
               onNewAgent={() => setAgentForm({ scope: 'project', projectId: selection.id })}
               onEditAgent={(name) => setAgentForm({ scope: 'project', projectId: selection.id, name })}
               id={selection.id}
               live={board.live}
-              {...projectTeam(board, costs, selection.id)}
+              {...projectTeam(board, costs, selection.id, retentionOf(selection.id))}
               onOpenStaff={(staffId) => setSelectedId(staffNodeId(selection.id, staffId))}
               onOpenSession={(sessionId) => {
                 // O mesmo painel do cartão fantasma, já nesta conversa (Trazer e Efetivar ficam por lá).
@@ -607,8 +640,17 @@ export function App() {
               onShowAdvanced={() => void saveUiLevel('advanced')}
               conversations={
                 selection.staff
-                  ? staffConversations(board, selection.staff, config?.conversationTitles)
+                  ? staffConversations(board, selection.staff, config?.conversationTitles, retentionOf(selection.projectId))
                   : (selection.ghost ?? []).map((s) => ({ id: s.id, title: conversationTitle(s, config?.conversationTitles), updatedAt: s.updatedAt }))
+              }
+              oldConversations={
+                selection.staff && (config?.archiveAfterDays ?? 0) > 0
+                  ? {
+                      shown: !!oldSessions[selection.projectId],
+                      hidden: leftOutOf(board, selection.staff, retentionOf(selection.projectId)).size,
+                      onChange: (shown) => showOldConversations(selection.projectId, shown),
+                    }
+                  : undefined
               }
               conversationTitles={config?.conversationTitles}
               onRenameConversation={renameConversation}
@@ -635,7 +677,21 @@ export function App() {
               agentsUsd={Object.values(costs?.agents ?? {}).reduce((s, a) => s + a.usd, 0)}
             />
           )}
-          {selection.kind === 'skill' && <SkillPanel skill={selection.skill} />}
+          {selection.kind === 'skill' && (
+            <SkillPanel
+              skill={selection.skill}
+              projectId={selection.projectId}
+              onChanged={load}
+              onDeleted={(done) => {
+                const { skill } = selection;
+                const { key, hooks, backups } = deletedNotice(done);
+                setSelectedId(null);
+                // O caminho da lixeira (e os backups dos settings, se saíram hooks) ficam no aviso até o ×: é o que a pessoa precisa para recuperar.
+                setNotice(t(key, { name: skill.name, trash: done.trash, dir: skill.dirPath, hooks, backups }), true);
+                load();
+              }}
+            />
+          )}
         </aside>
       )}
       {newProject && (
@@ -810,16 +866,30 @@ export function App() {
  * Conversas de um funcionário, da mais recente à mais antiga, cada uma pelo assunto (a tarefa ou a
  * 1ª mensagem): o título do Claude Code é o nome dele em todas. As da worktree dele ficam noutra
  * pasta do Claude Code; as que ainda não gravaram nada entram pela data de início. O título que o
- * user deu à conversa (`titles`) vale mais que o assunto.
+ * user deu à conversa (`titles`) vale mais que o assunto. Retenção (`retention`): as que o quadro não lista por estarem paradas além
+ * do prazo ficam de fora, até pedirem "Mostrar antigas" (`old` = as do projeto que o servidor devolveu com `?old=1`).
  */
-function staffConversations(board: Board, staff: StaffProfile, titles?: ConversationTitles) {
+function staffConversations(board: Board, staff: StaffProfile, titles?: ConversationTitles, retention?: Retention) {
   const known = new Map(Object.values(board.sessions).flat().map((s) => [s.id, s]));
+  for (const s of retention?.old ?? []) if (!known.has(s.id)) known.set(s.id, s);
+  const out = leftOutOf(board, staff, retention);
   return staff.sessions
+    .filter((x) => !out.has(x.id))
     .map((x) => {
       const s = known.get(x.id);
       return { id: x.id, title: conversationTitle({ id: x.id, topic: s?.topic }, titles), updatedAt: s?.updatedAt ?? x.startedAt };
     })
     .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
+}
+
+/** O prazo de arquivar da retenção e as conversas antigas que já foram buscadas (ver `staffConversations`). */
+type Retention = { archiveAfterDays: number; old?: Session[] };
+
+/** As conversas da ficha que a retenção deixou fora da lista; vazio com "Mostrar antigas" ligado ou sem prazo. */
+function leftOutOf(board: Board, staff: StaffProfile, retention?: Retention): Set<string> {
+  if (!retention || retention.old) return new Set();
+  const listed = new Set(Object.values(board.sessions).flat().map((s) => s.id));
+  return leftOutByRetention(staff.sessions, listed, retention.archiveAfterDays);
 }
 
 /** "Ficha salva", contando as cópias que receberam a edição junto (`copiesUpdated`, da resposta do servidor). */
@@ -836,7 +906,7 @@ const STATUS_RANK: Record<string, number> = { busy: 3, waiting: 2, idle: 1 };
  * A equipe do projeto no painel: uma linha por funcionário (as conversas dele somadas), em vez de
  * uma por conversa. `owned`: as sessões que têm dono, para o painel separar as sem ficha.
  */
-function projectTeam(board: Board, costs: CostReport | null, projectId: string): { team: TeamRow[]; owned: Set<string> } {
+function projectTeam(board: Board, costs: CostReport | null, projectId: string, retention?: Retention): { team: TeamRow[]; owned: Set<string> } {
   const staff = board.staff.filter((s) => s.projectId === projectId);
   const bySession = costs?.projects[projectId]?.sessions ?? {};
   const team = staff
@@ -845,7 +915,7 @@ function projectTeam(board: Board, costs: CostReport | null, projectId: string):
       const ids = new Set(s.sessions.map((x) => x.id));
       const live = board.live.filter((l) => l.alive && ids.has(l.sessionId));
       const status = live.map((l) => l.status ?? 'idle').sort((a, b) => (STATUS_RANK[b] ?? 0) - (STATUS_RANK[a] ?? 0))[0] ?? null;
-      const conversations = staffConversations(board, s);
+      const conversations = staffConversations(board, s, undefined, retention);
       const spent = [...ids].map((id) => bySession[id]).filter((v): v is number => v !== undefined);
       return {
         staff: s,
@@ -925,7 +995,6 @@ function resolveSelection(board: Board, id: string | null, archivedSessions: Set
     return { kind: 'employee', session, staff, projectId, ...(id.startsWith('m:') ? { manage: true as const } : {}) };
   }
 
-  const inventories = [board.user, ...Object.values(board.inventories)];
   if (id.startsWith('a:')) {
     const agentId = id.slice(2);
     const userAgent = board.user.agents.find((a) => a.id === agentId);
@@ -937,8 +1006,14 @@ function resolveSelection(board: Board, id: string | null, archivedSessions: Set
     return null;
   }
   if (id.startsWith('s:')) {
-    const skill = inventories.flatMap((i) => i.skills).find((s) => s.id === id.slice(2));
-    return skill ? { kind: 'skill', skill } : null;
+    const skillId = id.slice(2);
+    const userSkill = board.user.skills.find((s) => s.id === skillId);
+    if (userSkill) return { kind: 'skill', skill: userSkill, projectId: null };
+    for (const [projectId, inv] of Object.entries(board.inventories)) {
+      const skill = inv.skills.find((s) => s.id === skillId);
+      if (skill) return { kind: 'skill', skill, projectId };
+    }
+    return null;
   }
   return null;
 }

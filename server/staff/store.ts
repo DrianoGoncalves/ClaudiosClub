@@ -2,13 +2,14 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import type { McpWritePolicy, StaffProfile } from '../../shared/model';
+import type { McpAccess, StaffProfile } from '../../shared/model';
 import { cronError } from '../../shared/cron';
 import { PERSONALITIES } from '../../shared/personality';
 import { listDir, tryJson } from '../adapters/claude/fsutil';
 import { ensureMycoGitignore } from '../mycoGitignore';
 import { codexProfileError } from '../chat/codexArgs';
 import { slugify } from './ficha';
+import { readMcpAccess } from './mcpAccess';
 
 // Fichas ficam no próprio projeto: <projeto>/.myco/staff/<id>.json (+ .md gerado, memória e retrato).
 
@@ -31,6 +32,37 @@ const FallbackSchema = z.object({
 const line = (max: number) => z.string().trim().max(max);
 const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const list = (max: number) => z.array(line(500)).max(max).default([]);
+// Política legada por ferramenta (`mcpPolicy`, ver shared/model.ts): só a tela antiga manda. A entrada aceita (e converte em mcpAccess,
+// ver mcpAccessOfInput); o que é lido do arquivo antigo passa por readMcpAccess, sem recusar.
+// As chaves são checadas na entrada crua (antes do record): no zod 4 a chave que falha dentro do record sai como "Invalid key in record".
+const MCP_POLICY_KEY = /^mcp__[A-Za-z0-9_-]{1,128}$/;
+export const McpPolicySchema = z
+  .any()
+  .superRefine((v, ctx) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return;
+    if (Object.keys(v).some((k) => !MCP_POLICY_KEY.test(k) || k.endsWith('__'))) ctx.addIssue({ code: 'custom', message: 'ferramenta MCP inválida' });
+  })
+  .pipe(
+    z
+      .record(z.string(), z.enum(['allow', 'ask', 'off']))
+      .refine((o) => Object.keys(o).length <= 200, 'políticas demais'),
+  );
+// Acesso por MCP (`mcpAccess`, ver shared/model.ts e server/staff/mcpAccess.ts). Chave = nome do MCP na ficha; nomes reservados de objeto
+// e tamanho fora de 1 a 100 são recusados na entrada crua (como na escrita antiga: o zod 4 descarta `__proto__` ao montar o record).
+// `{}` limpa; valor fora dos quatro é erro (a tela não manda outro).
+export const McpAccessSchema = z
+  .any()
+  .superRefine((v, ctx) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return;
+    const keys = Object.keys(v);
+    if (keys.some((k) => RESERVED_KEYS.has(k))) ctx.addIssue({ code: 'custom', message: 'nome de MCP reservado' });
+    else if (keys.some((k) => k.length < 1 || k.length > 100)) ctx.addIssue({ code: 'custom', message: 'nome de MCP com tamanho inválido (1 a 100 letras)' });
+  })
+  .pipe(
+    z
+      .record(z.string(), z.enum(['off', 'readonly', 'ask', 'free'], { error: 'acesso ao MCP: off, readonly, ask ou free' }))
+      .refine((r) => Object.keys(r).length <= 100, 'MCPs demais no acesso'),
+  );
 
 /** O que o questionário (ou um funcionário com permissão) envia, antes das regras que cruzam campos (ver `StaffInputSchema`). */
 const StaffInputObject = z.object({
@@ -47,8 +79,11 @@ const StaffInputObject = z.object({
   agents: list(100),
   skills: list(100),
   mcps: z.array(line(100)).max(100).nullable().default(null),
-  // Escrita por MCP (ver StaffProfile.mcpWrite): ausente = livre. O nome é o do MCP na ficha; nomes reservados de objeto são recusados.
-  // Os nomes são checados na entrada crua: o zod 4 descarta `__proto__` ao montar o record e troca a mensagem do refine de chave.
+  // Ausente = sem acesso (o que a ficha já tinha, no PATCH); `{}` limpa. Quando a tela antiga manda só os legados, ver mcpAccessOfInput.
+  mcpAccess: McpAccessSchema.optional(),
+  // Legados (tela atual): ausente = nada deles. Com `mcpAccess` no pedido, são ignorados.
+  mcpPolicy: McpPolicySchema.optional(),
+  // Escrita por MCP legada (`deny` = readonly, `ask` = ask). Os nomes são checados na entrada crua, como o acesso.
   mcpWrite: z
     .any()
     .superRefine((v, ctx) => {
@@ -151,30 +186,19 @@ export const RoutineSchema = z.object({
       if (err) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `horário: ${err}` });
     }),
   message: line(4000).min(1, 'escreva a mensagem da rotina'),
-  mode: z.enum(['continue', 'new']).default('continue'),
+  mode: z.enum(['continue', 'new', 'task']).default('continue'),
   enabled: z.boolean().default(true),
 });
 export const RoutinesSchema = z.array(RoutineSchema).max(10, 'no máximo 10 rotinas por funcionário');
-
-/**
- * A política de escrita como está no arquivo (lida sem recusar, e nunca mais fraca por erro de digitação): valor que não é `deny` vira
- * `ask` (um `denny` à mão pede antes, não libera); chave inválida (nome reservado ou fora de 1 a 100 letras) sai. A escrita segue
- * recusando o que não é `ask` nem `deny` (StaffInputObject).
- */
-function readMcpWrite(v: unknown): Record<string, McpWritePolicy> | undefined {
-  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
-  const entries = Object.entries(v)
-    .filter(([k]) => !RESERVED_KEYS.has(k) && k.length >= 1 && k.length <= 100)
-    .map(([k, mode]): [string, McpWritePolicy] => [k, mode === 'deny' ? 'deny' : 'ask']);
-  return entries.length ? Object.fromEntries(entries) : undefined;
-}
 
 const ProfileSchema = StaffInputObject.omit({ portraitDataUrl: true, launch: true, adoptSessionId: true, force: true, roleId: true }).extend({
   id: z.string(),
   projectId: z.string(),
   portrait: z.string().nullable(),
-  // `optional()` antes do transform: no zod 4 sem ele a chave vira obrigatória e a ficha sem `mcpWrite` deixa de abrir.
-  mcpWrite: z.unknown().optional().transform(readMcpWrite),
+  // Lidos sem recusar (ver readMcpAccess, no transform abaixo): a ficha antiga vira `mcpAccess` e estes campos somem do perfil.
+  mcpAccess: z.unknown().optional(),
+  mcpPolicy: z.unknown().optional(),
+  mcpWrite: z.unknown().optional(),
   // Ligação entre cópias da mesma pessoa; valor inválido é ignorado (ficha sem vínculo).
   personId: z.string().regex(/^[A-Za-z0-9-]{1,60}$/).optional().catch(undefined),
   // Valor inválido no arquivo: volta ao padrão (claude) em vez de derrubar a ficha.
@@ -204,7 +228,10 @@ const ProfileSchema = StaffInputObject.omit({ portraitDataUrl: true, launch: tru
     .default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
-}).transform((p) => {
+}).transform(({ mcpAccess, mcpPolicy, mcpWrite, ...base }) => {
+  // Acesso por MCP: a ficha antiga (mcpPolicy/mcpWrite) vira mcpAccess pela mais restrita; uma entrada inválida fica fechada (ver readMcpAccess).
+  const access = readMcpAccess({ mcpAccess, mcpPolicy, mcpWrite });
+  const p = { ...base, ...(access && { mcpAccess: access }) };
   // `ultra` só existe no Codex: numa ficha que voltou ao Claude (ou editada à mão) o valor sai em vez de ir para o `claude --effort`.
   const ultra = (e: unknown) => e === 'ultra';
   if (p.engine === 'codex' || !(ultra(p.effort) || ultra(p.lastEffort) || p.sessions.some((s) => ultra(s.effort)))) return p;
@@ -247,6 +274,30 @@ export async function listProjectStaff(projectPath: string, projectId: string): 
   return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
+/**
+ * Como listProjectStaff, mas lança se alguma ficha existe e não lê (arquivo ilegível ou JSON/esquema inválido). A exclusão da
+ * retenção usa esta: ficha que não carrega deixaria a proteção incompleta, então o projeto inteiro é pulado.
+ */
+export async function listProjectStaffStrict(projectPath: string, projectId: string): Promise<StaffProfile[]> {
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = await fs.readdir(staffDir(projectPath), { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+  const out: StaffProfile[] = [];
+  for (const e of entries) {
+    const id = fichaIdOf(e);
+    if (!id) continue;
+    const raw = await fs.readFile(profileFile(projectPath, id), 'utf8');
+    const parsed = ProfileSchema.safeParse(tryJson(raw.replace(/^﻿/, '')));
+    if (!parsed.success) throw new Error(`ficha ${id} não lê (esquema inválido)`);
+    out.push({ ...(parsed.data as StaffProfile), projectId });
+  }
+  return out;
+}
+
 export async function readProfile(projectPath: string, id: string): Promise<StaffProfile | null> {
   if (!SAFE_ID.test(id)) return null;
   const raw = await fs.readFile(profileFile(projectPath, id), 'utf8').catch(() => null);
@@ -267,6 +318,22 @@ export function withProfileLock<T>(projectPath: string, staffId: string, fn: () 
     if (profileQueues.get(key) === tail) profileQueues.delete(key);
   });
   return run;
+}
+
+/**
+ * Tira da ficha as conversas apagadas pela retenção (ver retentionSweep.ts). Ficha que não existe não faz nada; devolve se mudou.
+ * Não mexe no selo: o selo guarda só motor e autonomia, e elas não mudam.
+ */
+export async function dropStaffSessions(projectPath: string, staffId: string, ids: string[]): Promise<boolean> {
+  return withProfileLock(projectPath, staffId, async () => {
+    const fresh = await readProfile(projectPath, staffId);
+    if (!fresh) return false;
+    const gone = new Set(ids);
+    const sessions = fresh.sessions.filter((s) => !gone.has(s.id));
+    if (sessions.length === fresh.sessions.length) return false;
+    await saveProfile(projectPath, { ...fresh, sessions });
+    return true;
+  });
 }
 
 export async function saveProfile(projectPath: string, p: StaffProfile): Promise<void> {
@@ -313,7 +380,8 @@ export async function createProfile(
   sessions: StaffProfile['sessions'] = [],
 ): Promise<StaffProfile> {
   const id = `${slugify(input.name)}-${randomBytes(2).toString('hex')}`;
-  const { portraitDataUrl, launch: _launch, adoptSessionId: _adopt, force: _force, roleId: _role, fallback, ...fields } = input;
+  // Os legados não vão para a ficha nova: quem chama já os converteu em `mcpAccess` (ver mcpAccessOfInput).
+  const { portraitDataUrl, launch: _launch, adoptSessionId: _adopt, force: _force, roleId: _role, fallback, mcpPolicy: _mp, mcpWrite: _mw, ...fields } = input;
   const portrait = portraitDataUrl ? await savePortrait(projectPath, id, portraitDataUrl) : null;
   const profile: StaffProfile = {
     ...fields,

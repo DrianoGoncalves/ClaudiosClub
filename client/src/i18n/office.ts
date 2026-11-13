@@ -42,7 +42,8 @@ export default defineMessages({
     'office.cancel': 'Cancelar',
 
     'office.workspacesTitle': 'Workspaces',
-    'office.workspacesDesc': 'Agrupe os projetos como preferir (por cliente, área, pessoal, estudos…): cada workspace vira uma aba no quadro, com cor e fundo próprios, e o nome dele vai para a ficha de quem trabalha nos projetos dele.',
+    'office.workspacesDesc':
+      'Um workspace é um grupo de projetos (por cliente, área, pessoal, estudos…). Cada workspace vira uma aba no quadro, com cor e fundo próprios, e o nome dele vai para a ficha de quem trabalha nos projetos do grupo.',
     'office.workspacesKeywords': 'abas grupos cliente área organização empresa freela fundo',
     'office.workspaceNone': 'Nenhum workspace ainda.',
     'office.workspaceAdd': 'Adicionar',
@@ -52,7 +53,8 @@ export default defineMessages({
     'office.workspaceBg': 'Fundo do quadro nesta aba',
 
     'office.demoTitle': 'Projeto demo',
-    'office.demoDesc': 'A My.Co Pizzaria de exemplo: landing, cardápio online, pedidos e uma equipe com hierarquia e tarefas prontas. Ver o quadro e as fichas não gasta nada; abrir um funcionário usa a sua cota.',
+    'office.demoDesc':
+      'Um projeto de exemplo, a My.Co Pizzaria (landing, cardápio online e pedidos), já com equipe, hierarquia e tarefas prontas, para você explorar sem montar nada. Ver o quadro e as fichas não gasta nada; abrir uma conversa com um funcionário usa a cota da sua assinatura.',
     'office.demoKeywords': 'exemplo tutorial pizzaria my.co cardápio equipe',
     'office.demoCreate': 'Criar projeto demo',
     'office.demoOpen': 'Abrir o demo',
@@ -135,9 +137,11 @@ export default defineMessages({
     'office.libCopied': 'Copiada: marque myco:{name} na ficha de quem deve usar.',
     'office.libTag': 'skill da biblioteca · só desta ficha',
     'mcp.group': 'MCPs',
-    'mcp.groupIntro': 'Servidores MCP (n8n, bancos, APIs…) que as conversas podem usar. Dá para editar também os que foram cadastrados fora do Claudio’s Club.',
+    'mcp.groupIntro':
+      'MCP é um jeito de ligar as conversas a ferramentas de fora, como n8n, bancos de dados e APIs. Dá para editar também os servidores cadastrados fora do Clube dos Claudios.',
     'mcp.title': 'Servidores MCP',
-    'mcp.desc': 'Os valores de variáveis e cabeçalhos nunca voltam para a tela: aparece só “definido”. Na ficha, cada funcionário marca os MCPs que usa.',
+    'mcp.desc':
+      'Cada funcionário marca na ficha quais MCPs usa. Por segurança, os valores de variáveis e cabeçalhos (como chaves de acesso) nunca voltam para a tela: aparece só “definido”.',
     'mcp.keywords': 'mcp n8n servidor ferramentas integração token chave api cabeçalho variável ambiente',
     'mcp.scope.club': 'Da conta (Club)',
     'mcp.scope.user': 'Da conta (Claude Code)',
@@ -234,7 +238,8 @@ export default defineMessages({
     'office.cancel': 'Cancel',
 
     'office.workspacesTitle': 'Workspaces',
-    'office.workspacesDesc': 'Group projects however you like (by client, area, personal, study…): each workspace becomes a tab on the board, with its own color and background, and its name goes into the profile of whoever works on its projects.',
+    'office.workspacesDesc':
+      'A workspace is a group of projects (by client, area, personal, study…). Each workspace becomes a tab on the board, with its own color and background, and its name goes into the profile of whoever works on the group’s projects.',
     'office.workspacesKeywords': 'tabs groups client area organization company freelance background',
     'office.workspaceNone': 'No workspaces yet.',
     'office.workspaceAdd': 'Add',
@@ -244,7 +249,8 @@ export default defineMessages({
     'office.workspaceBg': 'Board background in this tab',
 
     'office.demoTitle': 'Demo project',
-    'office.demoDesc': 'The My.Co pizzeria sample: landing page, online menu, orders, and a ready-made team with hierarchy and tasks. Viewing the board and profiles costs nothing; opening an employee uses your quota.',
+    'office.demoDesc':
+      'A sample project, the My.Co Pizzeria (landing page, online menu and orders), with a team, hierarchy and tasks already in place, so you can explore without building anything. Viewing the board and profiles costs nothing; opening a chat with an employee uses your subscription quota.',
     'office.demoKeywords': 'example tutorial pizzeria my.co menu team',
     'office.demoCreate': 'Create demo project',
     'office.demoOpen': 'Open the demo',
@@ -327,9 +333,11 @@ export default defineMessages({
     'office.libCopied': 'Copied: check myco:{name} in the profile of whoever should use it.',
     'office.libTag': 'library skill · this profile only',
     'mcp.group': 'MCPs',
-    'mcp.groupIntro': 'MCP servers (n8n, databases, APIs…) that conversations can use. You can also edit the ones added outside Claudio’s Club.',
+    'mcp.groupIntro':
+      'MCP is a way to connect chats to outside tools, like n8n, databases and APIs. You can also edit the servers added outside Claudio’s Club.',
     'mcp.title': 'MCP servers',
-    'mcp.desc': 'Variable and header values never come back to the screen: only “set” shows. In each profile, staff check the MCPs they use.',
+    'mcp.desc':
+      'Each employee checks in their profile which MCPs they use. For safety, variable and header values (like access keys) never come back to the screen: only “set” shows.',
     'mcp.keywords': 'mcp n8n server tools integration token key api header variable environment',
     'mcp.scope.club': 'Account (Club)',
     'mcp.scope.user': 'Account (Claude Code)',
@@ -426,7 +434,8 @@ export default defineMessages({
     'office.cancel': 'Cancelar',
 
     'office.workspacesTitle': 'Workspaces',
-    'office.workspacesDesc': 'Agrupa los proyectos como prefieras (por cliente, área, personal, estudios…): cada workspace es una pestaña en el tablero, con color y fondo propios, y su nombre va a la ficha de quien trabaja en sus proyectos.',
+    'office.workspacesDesc':
+      'Un workspace es un grupo de proyectos (por cliente, área, personal, estudios…). Cada workspace es una pestaña en el tablero, con color y fondo propios, y su nombre va a la ficha de quien trabaja en los proyectos del grupo.',
     'office.workspacesKeywords': 'pestañas grupos cliente área organización empresa freelance fondo',
     'office.workspaceNone': 'Aún no hay workspaces.',
     'office.workspaceAdd': 'Añadir',
@@ -436,7 +445,8 @@ export default defineMessages({
     'office.workspaceBg': 'Fondo del tablero en esta pestaña',
 
     'office.demoTitle': 'Proyecto demo',
-    'office.demoDesc': 'La pizzería My.Co de ejemplo: landing, menú en línea, pedidos y un equipo listo, con jerarquía y tareas. Ver el tablero y las fichas no cuesta nada; abrir un empleado usa tu cuota.',
+    'office.demoDesc':
+      'Un proyecto de ejemplo, la pizzería My.Co (landing, menú en línea y pedidos), con equipo, jerarquía y tareas ya listos, para que explores sin armar nada. Ver el tablero y las fichas no cuesta nada; abrir una conversación con un empleado usa la cuota de tu suscripción.',
     'office.demoKeywords': 'ejemplo tutorial pizzería my.co menú equipo',
     'office.demoCreate': 'Crear proyecto demo',
     'office.demoOpen': 'Abrir el demo',
@@ -519,9 +529,11 @@ export default defineMessages({
     'office.libCopied': 'Copiada: marca myco:{name} en la ficha de quien deba usarla.',
     'office.libTag': 'skill de la biblioteca · solo esta ficha',
     'mcp.group': 'MCPs',
-    'mcp.groupIntro': 'Servidores MCP (n8n, bases de datos, APIs…) que las conversaciones pueden usar. También se pueden editar los registrados fuera de Claudio’s Club.',
+    'mcp.groupIntro':
+      'MCP es una forma de conectar las conversaciones con herramientas externas, como n8n, bases de datos y APIs. También se pueden editar los servidores registrados fuera del Club de los Claudios.',
     'mcp.title': 'Servidores MCP',
-    'mcp.desc': 'Los valores de variables y cabeceras nunca vuelven a la pantalla: solo aparece “definido”. En la ficha, cada empleado marca los MCPs que usa.',
+    'mcp.desc':
+      'Cada empleado marca en su ficha qué MCPs usa. Por seguridad, los valores de variables y cabeceras (como claves de acceso) nunca vuelven a la pantalla: solo aparece “definido”.',
     'mcp.keywords': 'mcp n8n servidor herramientas integración token clave api cabecera variable entorno',
     'mcp.scope.club': 'De la cuenta (Club)',
     'mcp.scope.user': 'De la cuenta (Claude Code)',

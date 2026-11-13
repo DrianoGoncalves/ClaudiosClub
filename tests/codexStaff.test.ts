@@ -456,7 +456,13 @@ describe('selo da ficha do Codex: a ficha mexida por fora não abre', () => {
     const svc = service();
     const p = await codexPerson(svc, 'So Leitura');
     const spawn = (await svc.chatSpawn('proj-id', null, p.id))!;
-    expect(spawn.codex!.readOnlyPaths).toEqual([profileFile(projectPath, p.id), fichaFile(projectPath, p.id), path.join(path.dirname(profileFile(projectPath, p.id)), `${p.id}.history`)]);
+    // O .mcp.json do projeto também fica só leitura (a configuração dos MCPs do projeto não muda no meio da conversa).
+    expect(spawn.codex!.readOnlyPaths).toEqual([
+      profileFile(projectPath, p.id),
+      fichaFile(projectPath, p.id),
+      path.join(path.dirname(profileFile(projectPath, p.id)), `${p.id}.history`),
+      path.join(projectPath, '.mcp.json'),
+    ]);
     expect(spawn.codex!.readOnlyPaths).not.toContain(memoryFile(projectPath, p.id));
   });
 });

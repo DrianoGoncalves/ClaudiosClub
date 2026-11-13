@@ -1,6 +1,6 @@
 # Funcionários
 
-Fontes: `client/src/staff/HireForm.tsx`, `AgentForm.tsx`, `HrPanel.tsx`, `client/src/office/ProjectOffice.tsx`, `McpServers.tsx`, `SkillLibrary.tsx`, `client/src/toolbar/RolesEditor.tsx`, `shared/roles.ts`, `server/staff/ficha.ts`.
+Fontes: `client/src/staff/HireForm.tsx`, `AgentForm.tsx`, `HrPanel.tsx`, `client/src/office/ProjectOffice.tsx`, `McpServers.tsx`, `SkillLibrary.tsx`, `client/src/detail/SkillManage.tsx`, `client/src/toolbar/RolesEditor.tsx`, `shared/roles.ts`, `server/staff/ficha.ts`.
 
 ## Contratar
 
@@ -66,9 +66,9 @@ Na aba **Projeto**:
 
 - **Reporta a**: quem pode chamá-lo. Nenhum marcado = só você.
 - **Conhecimento (um caminho por linha)**: arquivos que ele lê antes de começar. **Agents e skills indicados** aparecem se o projeto tiver algum.
-- **MCPs**: marque os que ele usa (ver **MCPs** abaixo).
+- **MCPs**: marque os que ele usa e, em cada um, escolha o acesso: **Livre**, **Pede antes de escrever**, **Só leitura** ou **Desligado** (ver **MCPs** abaixo).
 - **Servidores (SSH e FTP)**: clique em **+ dar acesso a servidores (SSH e FTP)** e marque as conexões que ele pode usar. A chave fica no seu computador; a ficha guarda só o nome da conexão.
-- **Usar o navegador (Claude in Chrome)**: usa o seu Chrome, com os seus logins. Envios, compras e formulários pedem o seu ok. Precisa da extensão instalada.
+- **Usar o navegador (Claude in Chrome)**: usa o seu Chrome, com os seus logins. Envios, compras e formulários pedem o seu ok. Precisa da extensão instalada. Com ele marcado, **Acesso do navegador** limita o que ele faz (ver **MCPs** abaixo).
 
 Salve com **Salvar ficha** (ou **Contratar**, ao criar). **Cancelar** fecha; no painel, o botão é **Desfazer**. Mudanças na ficha e nos MCPs valem a partir da próxima sessão.
 
@@ -105,7 +105,7 @@ Salve com **Salvar ficha** (ou **Contratar**, ao criar). **Cancelar** fecha; no 
 
 ## RH
 
-- Botão **RH** na barra do topo (título **Funcionários**): uma linha por pessoa, com um chip por projeto em que ela tem ficha.
+- Botão **RH e ranking** na barra do topo (título **Funcionários**), aba **RH**: uma linha por pessoa, com um chip por projeto em que ela tem ficha. As abas **Gastos** e **Economia** do mesmo painel são o ranking (veja o capítulo 6).
 - Clique na linha ou num chip para editar. Filtre pela busca ou por **Projeto**.
 - Se houver ficha de mesmo nome em outro projeto, aparece **Unificar** ("É a mesma pessoa?"). Ele pede confirmação com **Juntar**.
 - Em **⋯** (ações da pessoa): **Ligar a outra ficha**, **Arquivar** ou **Desarquivar** por projeto, **Separar deste projeto** (se estiver em mais de um) e **Excluir**.
@@ -116,12 +116,30 @@ Salve com **Salvar ficha** (ou **Contratar**, ao criar). **Cancelar** fecha; no 
 - Em **Configurações** → **MCPs** (**Servidores MCP**), há quatro escopos: **Da conta (Club)** (recomendado: segredos no cofre do sistema, e só quem tem o MCP na ficha carrega), **Da conta (Claude Code)** (todas as sessões do Claude Code veem), **Do projeto** (vai para o git: não ponha chave ali) e **Locais do projeto** (só neste computador).
 - Tipos: **HTTP**, **SSE** e **Comando local**. Valores de variáveis e cabeçalhos nunca voltam para a tela; aparece "definido".
 - Botões: **+ MCP**, **Testar**, **Editar**, **Excluir**.
-- Na ficha, cada MCP marcado tem **Escrita**: **livre** (como sempre), **pede antes** (as ferramentas que escrevem pedem sua aprovação, em qualquer autonomia) ou **bloqueada**. Quem só lê é o que o próprio MCP declara no **Testar**; sem teste, ou se o MCP mudou depois dele, a regra vale para todas as ferramentas dele. Só no motor Claude.
+- Na ficha, cada MCP marcado tem um seletor de acesso, na linha do nome:
+  - **Livre**: segue a autonomia da ficha (como sempre).
+  - **Pede antes de escrever**: as ferramentas de leitura passam; as que escrevem pedem a sua aprovação, em qualquer autonomia.
+  - **Só leitura**: as de leitura passam; as que escrevem ficam bloqueadas.
+  - **Desligado**: o MCP não entra na conversa.
+- Quem só lê é o que o próprio MCP declara no **Testar**. Sem teste, ou se o MCP mudou depois dele, nenhuma ferramenta conta como leitura: em **Só leitura** o MCP inteiro fica bloqueado e em **Pede antes de escrever** toda ferramenta pede antes. Com um desses dois escolhidos, a ficha mostra quantas ferramentas contam como escrita, ou avisa que o MCP não foi testado.
+- No modo sem travas, e sempre no GPT, *Pede antes de escrever* vira *Só leitura*, porque não há quem confirme.
+- O **navegador** tem um seletor só, **Acesso do navegador**, que aparece com **Usar o navegador** marcado. Vale para o Claude in Chrome e para o Chrome do GPT, que são o mesmo navegador (vale o mais restritivo dos dois). Ele não tem teste: **Só leitura** bloqueia o navegador inteiro e **Pede antes de escrever** pede a cada ação.
+- No GPT a lista de MCPs não aparece na ficha; só o **Acesso do navegador** vale nos dois motores.
 
 ## Skills e agents
 
-- Skill da biblioteca: ative **Mostrar o escopo do usuário** em **Configurações** → **Quadro**. Na sala **~ você**, veja **Biblioteca de skills (restritas)**. **+ skill na biblioteca** cria uma (**Nome**, **Descrição (quando usar)**, **Instruções**). **Tirar da biblioteca** manda para a lixeira da biblioteca (dá para recuperar).
+- Skill da biblioteca: ative **Mostrar o escopo do usuário** em **Configurações** → **Quadro**. No projeto **~ você**, veja **Biblioteca de skills (restritas)**. **+ skill na biblioteca** cria uma (**Nome**, **Descrição (quando usar)**, **Instruções**). **Tirar da biblioteca** manda para a lixeira da biblioteca (dá para recuperar).
 - Só quem tem a skill marcada na ficha carrega. Ela aparece como `myco:<nome>`.
+- Skill da conta ou do projeto (a pasta `skills` do Claude Code): clique no cartão da skill no quadro (as da conta ficam no projeto **~ você**, com **Mostrar o escopo do usuário** ligado). O painel tem a seção **Editar ou excluir**:
+  - **Editar** abre o `SKILL.md` inteiro, com o cabeçalho no topo. **Salvar** grava só esse arquivo; o nome da pasta não muda e a versão anterior fica em backup no servidor (`~/.myco/backups/skills`).
+  - **Excluir** pede confirmação (**Mover para a lixeira** ou **Manter**). A pasta inteira vai para a lixeira do servidor (`~/.myco/backups/skills/.lixeira`) e pode ser recuperada de lá: o aviso do canto mostra o caminho exato e fica até você fechar no ×.
+  - Se algum hook dos `settings.json` (da conta ou do projeto) chama a skill, nada é apagado e abre o alerta **Hooks vinculados a esta skill**, com cada hook (evento e arquivo). Ele avisa que, ao continuar, esses hooks deixam de rodar (podem ser proteções, como um bloqueio antes de um comando) e que o Claudio’s Club guarda uma cópia de cada `settings.json` em `~/.myco/backups/settings` antes de mexer. A pergunta é **Deseja continuar?**:
+    - **Cancelar** (também Esc ou clicar fora): não apaga nada, nem a skill nem os hooks.
+    - **Sim**: tira esses hooks dos `settings.json` e só depois manda a skill para a lixeira. O aviso do canto lista a pasta da lixeira, os hooks que saíram e os backups dos settings (para voltar um hook, copie o backup sobre o `settings.json` do mesmo nome).
+    - Se os hooks mudaram entre o alerta e o **Sim** (alguém editou o settings), a mensagem do servidor aparece no alerta, a lista é refeita e você decide de novo; nada foi apagado.
+  - Settings que não dá para ler, que não é um JSON válido ou com um hook da skill em formato que não dá para tirar sozinho: o servidor recusa, a mensagem diz o arquivo e o evento (corrija ou tire o hook à mão) e nada é apagado. O mesmo vale para o `SKILL.md` com chave de API escrita no texto, ao salvar.
+  - Sem **Editar** nem **Excluir**: skill que é link (symlink ou junction; o painel mostra o destino, mexa na origem) e skill sincronizada da conta (só leitura). O painel diz o motivo.
+- Skill apagada ou renomeada que uma ficha tinha marcada continua na lista **Agents e skills indicados**, marcada e com o selo **não existe mais**: desmarque e salve para tirá-la da ficha.
 - **Agents** (subagents do Claude Code): crie com **Novo agent** no painel do projeto. Há três prontos: **Executor (Haiku)**, **Pesquisador (Haiku, só leitura)** e **Revisor (Sonnet)**.
 - Skills e agents não existem no Codex.
 

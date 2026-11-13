@@ -3,6 +3,7 @@ import type {
   AnyConnection,
   AppServerInfo,
   AppConfig,
+  RetentionPreview,
   AuthStatus,
   Autonomy,
   Board,
@@ -53,6 +54,8 @@ import type {
   StaffProfile,
   Task,
   TaskCode,
+  TaskCost,
+  TaskCostRanking,
   TestRun,
   TaskSummary,
   UsageStop,
@@ -66,6 +69,23 @@ import { askUsageStop } from './chat/usageNotice';
 import type { GuideAction } from './detail/guideActions';
 import type { Schedule } from './schedules/scheduleView';
 import type { McpSaveBody, McpScope, McpServer } from './office/mcpForm';
+
+/**
+ * Um evento do registro de execuções da tarefa (server/taskRuns.ts): `start` abre a tentativa e `end` a fecha, com o
+ * mesmo `runId`. Só o `start` traz `trigger`; só o `end` traz `outcome`.
+ */
+export interface TaskRunEvent {
+  ev: 'start' | 'end';
+  runId: string;
+  taskId: string;
+  staffId: string;
+  sessionId?: string;
+  trigger?: 'queue' | 'manual' | 'resume' | 'adjust' | 'routine';
+  outcome?: 'delivered' | 'stopped' | 'limit' | 'cancelled' | 'failed';
+  note?: string;
+  skills?: Record<string, string>;
+  at: string;
+}
 
 /** Um MCP pelo endereço: escopo, projeto (nos de projeto) e nome. */
 export interface McpRef {
@@ -94,6 +114,20 @@ async function get<T>(url: string): Promise<T> {
     if (!res.ok) throw new Error(`${url}: ${res.status}`);
     return (await res.json()) as T;
   }
+}
+
+/** Leitura que pode ser recusada com motivo (ex.: exportar equipe com segredo no texto): o erro leva a mensagem do servidor. */
+async function getExplained<T>(url: string): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(url);
+  } catch (err) {
+    if (err instanceof TypeError) throw offlineError();
+    throw err;
+  }
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string; code?: string };
+  if (!res.ok) throw new ApiError(errorMessage(data, `${url}: ${res.status}`), data.code ?? null, null, data, res.status);
+  return data;
 }
 
 /** Ações levam o cabeçalho `x-myco`, que o servidor exige em todo POST. Não repetem: um envio repetido duplicaria a ação (ex.: a mensagem do chat). */
@@ -242,6 +276,38 @@ export interface AgentSource {
   linked: boolean;
 }
 
+/** O SKILL.md de uma skill da conta ou do projeto (GET /api/skills/source, POST /api/skills/save). */
+export interface SkillSource {
+  name: string;
+  content: string;
+  /** Dá para salvar e excluir (sem link, dentro da pasta de skills do escopo e não sincronizada). */
+  editable: boolean;
+  /** Destino do link, quando a pasta ou o SKILL.md é um symlink/junction. */
+  link: string | null;
+}
+
+/** Qual skill: a da conta (`user`) ou a do projeto (`project`, com o id). O servidor monta a pasta; o navegador só manda o nome. */
+export interface SkillRef {
+  scope: 'project' | 'user';
+  projectId: string | null;
+  name: string;
+}
+
+/** Um hook (arquivo de settings e evento) que aponta para a skill. Nunca leva o comando. */
+export interface SkillHook {
+  file: string;
+  event: string;
+}
+
+/** A skill foi para a lixeira (`trash`); com hooks confirmados, vêm também os que saíram e os backups dos settings. */
+export interface SkillDeleted {
+  trash: string;
+  removedHooks?: SkillHook[];
+  settingsBackups?: string[];
+}
+
+export type SkillDeleteResult = { needsConfirm: true; hooks: SkillHook[] } | SkillDeleted;
+
 /** Uma ficha no índice da empresa (GET /api/staff-directory). */
 export interface DirectoryPerson {
   projectId: string;
@@ -305,9 +371,23 @@ export const api = {
     tools: string[] | null;
     prompt: string;
   }) => post<AgentSource>('/api/agents/save', body),
-  board: () => get<Board>('/api/board'),
+  /** Erros (400) levam a mensagem do servidor, pronta para mostrar (ex.: link, hook apontando para a skill). */
+  skillSource: (ref: SkillRef) =>
+    getExplained<SkillSource>(
+      `/api/skills/source?scope=${ref.scope}&name=${encodeURIComponent(ref.name)}${ref.projectId ? `&projectId=${encodeURIComponent(ref.projectId)}` : ''}`,
+    ),
+  /** Grava só o SKILL.md (o servidor guarda a versão anterior em backup). Não renomeia. */
+  saveSkill: (ref: SkillRef, content: string) => post<SkillSource>('/api/skills/save', { ...ref, content }),
+  /**
+   * Manda a pasta inteira para a lixeira do servidor. Com hooks apontando para a skill e sem `removeHooks`, não apaga
+   * nada e devolve `needsConfirm` com a lista; reenviar com essa lista tira os hooks (com backup) e depois a skill.
+   */
+  deleteSkill: (ref: SkillRef, removeHooks?: SkillHook[]) =>
+    post<SkillDeleteResult>('/api/skills/delete', removeHooks ? { ...ref, removeHooks } : ref),
+  /** `old: true` traz também as conversas antigas (arquivadas pela retenção). Sem o parâmetro, a lista segue como antes. */
+  board: (opts: { old?: boolean } = {}) => get<Board>(`/api/board${opts.old ? '?old=1' : ''}`),
   projects: () => get<Project[]>('/api/projects'),
-  project: (id: string) => get<ProjectDetail>(`/api/projects/${id}`),
+  project: (id: string, opts: { old?: boolean } = {}) => get<ProjectDetail>(`/api/projects/${id}${opts.old ? '?old=1' : ''}`),
   user: () => get<UserScope>('/api/user'),
   live: () => get<LiveSession[]>('/api/live'),
   git: () => get<Record<string, GitState>>('/api/git'),
@@ -339,6 +419,12 @@ export const api = {
   auth: (fresh = false) => get<AuthStatus>(fresh ? '/api/auth?fresh=1' : '/api/auth'),
   login: () => post<{ ok: boolean; command: string; error: string | null }>('/api/auth/login'),
   config: () => get<AppConfig>('/api/config'),
+  /** Prévia da exclusão da retenção: o que seria apagado agora (só lê). Só a API; a tela não é desta etapa. */
+  retentionPreview: () => get<RetentionPreview>('/api/retention/preview'),
+  /** Liga a exclusão. Só o navegador liga (agentes recebem erro). Exige dias para apagar > 0. */
+  retentionEnable: () => post<AppConfig>('/api/retention/enable'),
+  /** Desliga a exclusão (sempre permitido). */
+  retentionDisable: () => post<AppConfig>('/api/retention/disable'),
   saveConfig: (patch: {
     companyName?: string;
     uiLevel?: UiLevel;
@@ -359,6 +445,10 @@ export const api = {
     clubGuard?: boolean;
     /** Dias parado até o Freela (conversa sem ficha) ser arquivado sozinho; 0 = nunca. */
     freelaArchiveDays?: number;
+    /** Retenção: dias sem atividade até a conversa sair da lista (0 = desligado). Só o tipo; a tela não é desta etapa. */
+    archiveAfterDays?: number;
+    /** Retenção: dias sem atividade até apagar as conversas do Club (0 = desligado); tem de passar de archiveAfterDays. */
+    deleteAfterDays?: number;
     /** Gate de recursos da fila (só o início automático): liga/desliga, RAM livre mínima em GB (0 ou 0,5–64), CPU, teto de conversas (0–50, 0 = sem). */
     resourceGate?: boolean;
     minFreeRamGb?: number;
@@ -523,14 +613,28 @@ export const api = {
   taskDeploy: (projectId: string, taskId: string, staffId: string, force = false) =>
     post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/deploy`, { staffId, force }),
   tasks: (projectId: string) => get<Task[] | null>(`/api/projects/${projectId}/tasks`),
-  createTask: (projectId: string, input: { title: string; description: string; staffId: string | null; start?: boolean }) =>
-    post<Task | null>(`/api/projects/${projectId}/tasks`, input),
+  createTask: (
+    projectId: string,
+    input: { title: string; description: string; staffId: string | null; start?: boolean; goal?: string | null; acceptance?: string | null; blockedBy?: string[] },
+  ) => post<Task | null>(`/api/projects/${projectId}/tasks`, input),
   updateTask: (
     projectId: string,
     taskId: string,
-    patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'status' | 'pr' | 'branch' | 'waitReason'>> & { queued?: false },
+    patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'status' | 'pr' | 'branch' | 'waitReason' | 'goal' | 'acceptance' | 'blockedBy'>> & { queued?: false },
   ) =>
     post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}`, patch),
+  /** Começos e fins das execuções da tarefa (null = projeto ou tarefa que não existem). */
+  taskRuns: (projectId: string, taskId: string) => get<TaskRunEvent[] | null>(`/api/projects/${projectId}/tasks/${taskId}/runs`),
+  /** Custo da tarefa: todas as conversas dela, por papel (fazer, revisar, dúvida), com as voltas de retrabalho. */
+  taskCost: (projectId: string, taskId: string) => get<TaskCost>(`/api/projects/${projectId}/tasks/${taskId}/cost`),
+  /** Custo por tarefa concluída nos últimos `days` dias (null = desde sempre), por executor e por gestor. */
+  taskCosts: (days: number | null) => get<TaskCostRanking>(days === null ? '/api/task-costs' : `/api/task-costs?days=${days}`),
+  /** Equipe em arquivo: as fichas de `ids` (sem ids = todas as ativas) e as skills da biblioteca que usam. O JSON vira download. */
+  exportTeam: (projectId: string, ids?: string[]) =>
+    getExplained<unknown>(`/api/projects/${projectId}/staff/export${ids?.length ? `?ids=${ids.map(encodeURIComponent).join(',')}` : ''}`),
+  /** Importar o arquivo de equipe: tudo ou nada. `created` = ids das fichas novas; `warnings` = o que o servidor mudou ou descartou. */
+  importTeam: (projectId: string, file: unknown) =>
+    post<{ created: string[]; warnings: string[] } | null>(`/api/projects/${projectId}/staff/import`, file),
   /** Efetivar um temporário (contratado por outro funcionário). */
   keepStaff: (projectId: string, staffId: string) => post<StaffProfile>(`/api/projects/${projectId}/staff/${staffId}/keep`),
   startTask: (projectId: string, taskId: string, force = false) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/start`, { force }),

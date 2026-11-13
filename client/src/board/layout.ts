@@ -13,7 +13,9 @@ import type {
   Session,
   Skill,
   StaffProfile,
+  TaskSummary,
 } from '../../../shared/model';
+import { liveLines, type LiveLine } from './liveWho';
 
 // Organograma: cada projeto é uma sala com moldura, e as salas formam uma grade (planta do escritório),
 // quebrando linha para caber na tela mesmo com muitos projetos.
@@ -33,6 +35,8 @@ export type UserNodeData = { agentCount: number; skillCount: number; header: Hea
 export type ProjectNodeData = {
   project: Project;
   live: LiveSession[];
+  /** Quem está ao vivo, uma linha por funcionário (o hover do "N ao vivo"); `live` segue com uma entrada por conversa. */
+  liveWho: LiveLine[];
   cost: CostSummary | null;
   archived: boolean;
   /** URL da imagem do projeto (logo ou print), se houver. */
@@ -40,10 +44,12 @@ export type ProjectNodeData = {
   header: HeaderData;
   /** Estado do código (null: não é repositório git ou ainda não foi lido). */
   git: GitState | null;
-  /** Tarefas em aberto e quantas esperam revisão (null: nenhuma). */
-  tasks: { open: number; review: number } | null;
+  /** Tarefas em aberto, quantas esperam revisão e o progresso do kanban (null: nenhuma aberta). */
+  tasks: TaskSummary | null;
   /** Funcionários da sala esperando você (ver EmployeeNodeData.needsYou): o contador do cabeçalho. */
   awaiting: number;
+  /** Funcionários com ficha que o quadro mostra na sala (sem encerrados nem arquivados, a menos que "arquivados" esteja ligado). */
+  employees: number;
 };
 export type EmployeeNodeData = {
   /** A sessão mais recente; null para quem foi contratado e ainda não abriu sessão. */
@@ -86,10 +92,15 @@ export type BoardNodeType = NonNullable<BoardNode['type']>;
 
 /** contains = hierarquia; side = recurso ao lado do projeto; borrow = vínculo entre salas. */
 /** `active`: o funcionário na ponta está trabalhando (a linha ganha a bolinha animada). */
-/** `detour`: gestor de longe; a linha passa por fora das fileiras do meio (x do corredor e y das duas barras horizontais). */
+/** `detour`: gestor de longe; a linha passa por fora das fileiras do meio. */
 /** Vínculo gestor → subordinado entre dois funcionários com ficha (pode ser desfeito no quadro). */
 export type StaffLink = { projectId: string; staffId: string; managerId: string };
-export type EdgeDetour = { x: number; y1: number; y2: number };
+/**
+ * Medidas relativas às pontas da linha, não à planta: assim ela anda junto com os cartões no arraste.
+ * `dx`: corredor, a partir da saída do gestor; `dy1`: barra de cima, abaixo da saída do gestor;
+ * `dy2`: barra de baixo, acima da entrada do funcionário.
+ */
+export type EdgeDetour = { dx: number; dy1: number; dy2: number };
 export type BoardEdgeData = { kind: 'contains' | 'side' | 'borrow' | 'delegates'; active?: boolean; link?: StaffLink; detour?: EdgeDetour };
 export type BoardEdge = Edge<BoardEdgeData, 'rough'>;
 
@@ -109,7 +120,7 @@ export interface GraphOptions {
   /** Estado do código por id de projeto (ver /api/git). */
   git?: Record<string, GitState>;
   /** Tarefas em aberto por id de projeto (ver /api/tasks/summary). */
-  tasks?: Record<string, { open: number; review: number }>;
+  tasks?: Record<string, TaskSummary>;
   /** Itens da caixa "precisa de mim" (useInbox): quem tem item fica com o cartão amarelo. */
   inbox?: InboxItem[];
   /**
@@ -224,7 +235,8 @@ export function buildGraph(
   const costs = opts.costs ?? null;
   const extraManagers: Array<{ projectId: string; staff: StaffProfile; managerId: string }> = [];
   // A caixa é a fonte única de "precisa de mim": cartão e contador da sala leem o mesmo conjunto.
-  const inbox = opts.inbox ?? [];
+  // Tarefa bloqueada (kind 'blocked') não é conversa esperando: o item leva o staffId de quem é dono da tarefa, mas pintar o cartão dele de amarelo diria que a conversa dele espera você.
+  const inbox = (opts.inbox ?? []).filter((i) => i.kind !== 'blocked');
   const awaitingSessions = new Set(inbox.map((i) => i.sessionId).filter((id) => id !== ''));
   const awaitingStaff = new Set(inbox.map((i) => i.staffId).filter((id): id is string => id !== null));
   /**
@@ -269,6 +281,10 @@ export function buildGraph(
     return [shelf];
   };
 
+  const staffOf = (p: Project): StaffProfile[] => (board.staff ?? []).filter((s) => s.projectId === p.id);
+  /** Ficha que aparece no quadro: arquivada (inclui temporário encerrado) só com "arquivados" ligado. */
+  const staffShown = (st: StaffProfile): boolean => opts.showArchived || !archivedSessions.has(`staff:${st.id}`);
+
   /**
    * Funcionários do projeto: cada ficha (com a sessão mais recente dela) e cada sessão aberta
    * fora do Claudio’s Club. Quem reporta a outro funcionário fica pendurado no primeiro gestor.
@@ -276,7 +292,7 @@ export function buildGraph(
   const employeeTrees = (p: Project): Tree[] => {
     const sessions = board.sessions[p.id] ?? [];
     const sessionCost = (id: string) => costs?.projects[p.id]?.sessions[id];
-    const staff = (board.staff ?? []).filter((s) => s.projectId === p.id);
+    const staff = staffOf(p);
     const ownedBy = new Map<string, StaffProfile>();
     for (const st of staff) for (const s of st.sessions) ownedBy.set(s.id, st);
 
@@ -298,7 +314,7 @@ export function buildGraph(
         archived: archivedSessions.has(`staff:${st.id}`),
         needsYou: needsYou(session?.live, mine, st.id),
       };
-      if (data.archived && !opts.showArchived) continue;
+      if (!staffShown(st)) continue;
       const tree: Tree = { node: node(staffNodeId(p.id, st.id), 'employee', data), side: [], children: [] };
       byId.set(st.id, tree);
       trees.push(tree);
@@ -361,10 +377,12 @@ export function buildGraph(
     const inv = board.inventories[p.id] ?? { agents: [], skills: [] };
     const id = projectNodeId(p.id);
     const folded = collapsed.has(id);
+    const live = liveFor(board.live, p.path);
     return {
       node: node(id, 'project', {
         project: p,
-        live: liveFor(board.live, p.path),
+        live,
+        liveWho: liveLines(live, staffOf(p)),
         cost: costs?.projects[p.id] ?? null,
         archived: archivedProjects.has(p.id),
         image: images[p.id] ?? null,
@@ -373,6 +391,7 @@ export function buildGraph(
         tasks: opts.tasks?.[p.id] ?? null,
         // Só as sessões vivas da sala (as que o cabeçalho mostra as bolinhas).
         awaiting: liveFor(board.live, p.path).filter((s) => awaitingSessions.has(s.sessionId)).length,
+        employees: staffOf(p).filter(staffShown).length,
       }),
       // Dobrada: só o cabeçalho, com o resumo; nada de equipe nem recursos.
       side: folded ? [] : sideOf(id, [...inv.agents.map(agentNode), ...inv.skills.map(skillNode)]),
@@ -773,9 +792,9 @@ function managerEdges(extra: Array<{ projectId: string; staff: StaffProfile; man
       e.data = {
         kind: 'contains',
         detour: {
-          x: reach(left) <= reach(right) ? left : right,
-          y1: from.position.y + sizeOf(from).h + LEVEL_GAP / 2,
-          y2: to.position.y - LEVEL_GAP / 2,
+          dx: (reach(left) <= reach(right) ? left : right) - centerX(from),
+          dy1: LEVEL_GAP / 2,
+          dy2: LEVEL_GAP / 2,
         },
       };
     }

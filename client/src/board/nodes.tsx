@@ -6,6 +6,7 @@ import { employeeName, ENTRYPOINT_LABEL, formatAgo, initials, STATUS_LABEL } fro
 import { AgentIcon, BranchIcon, ChromeIcon, FallbackModelIcon, GhostIcon, McpIcon, ServerIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { t } from '../i18n';
 import { engineName } from '../staff/fallbackEngine';
+import { KanbanProgressBar } from '../tasks/KanbanProgressBar';
 import {
   HANDLE,
   SIZES,
@@ -20,6 +21,7 @@ import {
   type SyncedNodeData,
   type UserNodeData,
 } from './layout';
+import { type LiveLine } from './liveWho';
 import { Sketch, type SketchVariant } from './sketch';
 import { showsStatus, useSeenIdle } from './unread';
 
@@ -120,7 +122,21 @@ function CollapseToggle({ collapsed }: { collapsed: boolean }) {
   );
 }
 
-const resourcesText = (n: number) => (n ? ` · ${t(n === 1 ? 'board.resourceOne' : 'board.resourceOther', { n })}` : '');
+const resourcesText = (n: number) => t(n === 1 ? 'board.resourceOne' : 'board.resourceOther', { n });
+
+/**
+ * Linha abaixo do nome da sala: funcionários com ficha (sem ficha, a parte some, em vez de "0 funcionários"),
+ * recursos quando a sala está dobrada e o aviso de pasta sumida. Vazia: o cabeçalho fica só com o nome.
+ */
+export function projectMeta({ employees, resources, collapsed, exists }: { employees: number; resources: number; collapsed: boolean; exists: boolean }): string {
+  return [
+    employees > 0 && `${employees} ${t(employees === 1 ? 'board.employeeOne' : 'board.employeeOther')}`,
+    collapsed && resources > 0 && resourcesText(resources),
+    !exists && t('board.folderMissing'),
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
 
 /** Cabeçalho da sala "você", colado nas bordas, como o do projeto. */
 function UserNode({ id, data, selected, width }: NodeProps<Node<UserNodeData, 'user'>>) {
@@ -140,6 +156,7 @@ function UserNode({ id, data, selected, width }: NodeProps<Node<UserNodeData, 'u
 /** Cabeçalho da sala: faixa colada nas bordas, na cor da parede, com nome à esquerda e quem está ao vivo à direita. */
 function ProjectNode({ id, data, selected, width }: NodeProps<Node<ProjectNodeData, 'project'>>) {
   const p = data.project;
+  const meta = projectMeta({ employees: data.employees, resources: data.header.resources, collapsed: data.header.collapsed, exists: p.exists });
   return (
     <Frame
       id={id}
@@ -162,19 +179,18 @@ function ProjectNode({ id, data, selected, width }: NodeProps<Node<ProjectNodeDa
             {data.archived && <span className="bn-tag">{t('board.archivedTag')}</span>}
             {p.name}
           </div>
-          <div className="bn-meta">
-            {p.sessionCount} {t(p.sessionCount === 1 ? 'board.employeeOne' : 'board.employeeOther')}
-            {data.header.collapsed && resourcesText(data.header.resources)}
-            {!p.exists && ` · ${t('board.folderMissing')}`}
-          </div>
+          {meta && <div className="bn-meta">{meta}</div>}
         </div>
-        {/* À direita, em duas linhas: tarefas em cima; branch e quem está ao vivo embaixo. */}
+        {/* À direita, em duas linhas: tarefas em cima (com a barra de progresso embaixo do botão); branch e quem está ao vivo embaixo. */}
         <div className="bn-header-side">
-          <TasksChip tasks={data.tasks} />
+          <div className="bn-tasks-wrap">
+            <TasksChip tasks={data.tasks} />
+            <KanbanProgressBar progress={data.tasks?.progress} open={data.tasks?.open ?? 0} />
+          </div>
           {(data.git || data.live.length > 0) && (
             <div className="bn-header-status">
               {data.git && <GitBadge git={data.git} />}
-              {data.live.length > 0 && <LiveDots live={data.live} awaiting={data.awaiting} />}
+              {data.live.length > 0 && <LiveDots live={data.live} who={data.liveWho} awaiting={data.awaiting} />}
             </div>
           )}
         </div>
@@ -436,10 +452,17 @@ function GitBadge({ git }: { git: GitState }) {
   );
 }
 
-function LiveDots({ live, awaiting }: { live: LiveSession[]; awaiting: number }) {
+/** O hover do "ao vivo": uma linha por funcionário, com o status mais ativo e, se tiver várias abertas, quantas. */
+export function liveTitle(who: LiveLine[]): string {
+  return who
+    .map((l) => `${l.name}: ${STATUS_LABEL[l.status ?? ''] ?? l.status}${l.conversations > 1 ? ` (${t('board.liveConversations', { n: l.conversations })})` : ''}`)
+    .join('\n');
+}
+
+function LiveDots({ live, who, awaiting }: { live: LiveSession[]; who: LiveLine[]; awaiting: number }) {
   const seen = useSeenIdle();
   return (
-    <div className="bn-live" title={live.map((s) => `${s.name ?? s.sessionId.slice(0, 8)}: ${STATUS_LABEL[s.status ?? ''] ?? s.status}`).join('\n')}>
+    <div className="bn-live" title={liveTitle(who)}>
       {/* Ocioso só até você ver a conversa, como no cartão; a conta segue com todas as abertas. */}
       {live.filter((s) => showsStatus(seen, s)).map((s) => (
         <span key={s.sessionId} className={`dot dot-${s.status ?? 'unknown'}`} />

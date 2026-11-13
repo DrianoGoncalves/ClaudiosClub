@@ -62,7 +62,7 @@ describe('config', () => {
   it('usa "Claudio’s Club" por padrão e grava o nome preservando outras chaves', async () => {
     const file = path.join(root, 'cfg', 'config.json');
     const usageStop = { fiveHour: 90, sevenDay: 95 };
-    const colors = { projectColors: {}, projectNames: {}, boardBackground: { light: null, dark: null }, projectBudgets: {}, contextSwitch: 'suggest', freelaArchiveDays: 3, freelaAutoArchived: {}, workspaces: [], projectWorkspaces: {}, resourceGate: true, minFreeRamGb: 1.5, cpuGate: false, maxActiveChats: 0, maxTurnTools: 500, maxTurnMinutes: 180 };
+    const colors = { projectColors: {}, projectNames: {}, boardBackground: { light: null, dark: null }, projectBudgets: {}, contextSwitch: 'suggest', freelaArchiveDays: 3, freelaAutoArchived: {}, archiveAfterDays: 7, deleteAfterDays: 30, retentionDeleteEnabledAt: null, workspaces: [], projectWorkspaces: {}, resourceGate: true, minFreeRamGb: 1.5, cpuGate: false, maxActiveChats: 0, maxTurnTools: 500, maxTurnMinutes: 180 };
     // Quem chega (sem config) começa no simples.
     expect(await readConfig(file)).toEqual({
       companyName: 'Claudio’s Club',

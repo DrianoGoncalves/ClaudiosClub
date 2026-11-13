@@ -3,13 +3,15 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { StaffProfile, TurnCapHit } from '../shared/model';
 import { ChatClosingError, ChatManager, PLAN_REJECTED_MESSAGE } from '../server/chat/manager';
-import { parseVerdict, TaskConflictError, TaskForbiddenError, TaskService } from '../server/tasks';
+import { parseVerdict, readTasks, stuckDependencies, TaskConflictError, TaskForbiddenError, TaskService } from '../server/tasks';
+import { blockedInboxItem } from '../server/inboxItems';
 import type { Reservation } from '../server/resourceGate';
 import { cleanRunDir } from '../server/runCleanup';
 import { UsageStopError } from '../server/usageStop';
+import { readRuns } from '../server/taskRuns';
 import { REQUESTER_ASK_INTERVAL_MS, REQUESTER_ASK_MAX_BYTES, RequesterAskLimiter } from '../server/chat/requesterAsk';
 import { isUnverifiedOrigin, staffOrigin } from '../server/chat/origin';
 
@@ -190,7 +192,7 @@ describe('tarefas por projeto', () => {
     const { svc: fresh } = service('c'); // "reiniciou": índice vazio, achado pelo disco
     await fresh.onTurnDone('sess-1');
     expect((await fresh.list('p'))!.find((x) => x.id === u.id)!.status).toBe('review');
-    expect(await fresh.summary()).toEqual({ p: { open: 1, review: 1 } });
+    expect(await fresh.summary()).toMatchObject({ p: { open: 1, review: 1 } });
 
     expect(await svc.remove('p', t.id)).toBe(true);
     expect(await svc.remove('p', t.id)).toBe(false);
@@ -408,6 +410,114 @@ describe('tarefa pedida por um gestor', () => {
     expect((await svc.taskOfWork('p', 'sess-1'))?.id).toBe(t.id);
     expect(await svc.taskOfWork('p', 'outra-conversa')).toBeNull();
     expect(await svc.taskOfWork('outro', 'sess-1')).toBeNull();
+  });
+});
+
+describe('meta e critério de aceite', () => {
+  it('vão ao funcionário depois da descrição; sem eles, o texto segue como antes', async () => {
+    const { svc, sent } = service('meta-texto');
+    const t = (await svc.create('p', { title: 'Login', description: 'Trocar a senha.', goal: 'Menos chamados de senha', acceptance: 'O teste de troca passa.', staffId: 'ana-1' }))!;
+    expect(t).toMatchObject({ goal: 'Menos chamados de senha', acceptance: 'O teste de troca passa.' });
+    await svc.start('p', t.id);
+    const text = sent[0]!.text;
+    expect(text.indexOf('Meta: Menos chamados de senha')).toBeGreaterThan(text.indexOf('Trocar a senha.'));
+    expect(text.indexOf('Critério de aceite: O teste de troca passa.')).toBeGreaterThan(text.indexOf('Meta: Menos'));
+    const outro = service('meta-nada');
+    await outro.svc.start('p', (await outro.svc.create('p', { title: 'Sem nada', staffId: 'ana-1' }))!.id);
+    expect(outro.sent[0]!.text).not.toMatch(/Meta:|Critério de aceite:/);
+  });
+
+  it('limites: meta até 300 e aceite até 2000; em branco vira vazio', async () => {
+    const { svc } = service('meta-limite');
+    await expect(svc.create('p', { title: 'A', goal: 'x'.repeat(301), staffId: 'ana-1' })).rejects.toThrow('meta longa demais');
+    await expect(svc.create('p', { title: 'A', acceptance: 'x'.repeat(2001), staffId: 'ana-1' })).rejects.toThrow('critério de aceite longo demais');
+    expect(await svc.create('p', { title: 'A', goal: '   ', staffId: 'ana-1' })).toMatchObject({ goal: null });
+  });
+});
+
+describe('registro de execuções (task-runs.jsonl)', () => {
+  /** Ana, uma conversa por vez. `working`: o que o ChatManager sabe; tirar dali sem onIdle = o processo morreu. */
+  function runsService(dirName: string) {
+    const dir = path.join(root, dirName);
+    const working = new Set<string>();
+    let n = 0;
+    const ana = { id: 'ana-1', name: 'Ana', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'ana-1' ? ana : null),
+      send: async () => {
+        const session = `s-${++n}`;
+        working.add(session);
+        return session;
+      },
+      branchFor: async () => null,
+      isWorking: (_p, _s, except) => [...working].some((s) => s !== except),
+      sendTo: async (_p, sessionId) => {
+        working.add(sessionId);
+        return sessionId;
+      },
+    });
+    // O turno acabou: o processo avisa (onIdle) e o vigia também (onTurnDone), como no bloco da fila.
+    const finish = async (session: string) => {
+      working.delete(session);
+      await svc.onIdle(session, 'p', 'ana-1');
+      await svc.onTurnDone(session);
+    };
+    const make = async (title: string) => (await svc.create('p', { title, staffId: 'ana-1' }))!;
+    const task = async (id: string) => (await svc.list('p'))!.find((t) => t.id === id)!;
+    return { dir, svc, working, finish, make, task };
+  }
+
+  it('começo e fim com o mesmo runId; a tarefa guarda o runId só enquanto a tentativa está aberta', async () => {
+    const { dir, svc, finish, make, task } = runsService('runs-1');
+    const a = await make('A');
+    const started = (await svc.start('p', a.id))!;
+    const runId = (await task(a.id)).runId;
+    expect(runId).toEqual(expect.any(String));
+    await finish(started.sessionId!);
+    expect(await task(a.id)).toMatchObject({ status: 'review', runId: null });
+    expect((await readRuns(dir, a.id)).map((e) => [e.ev, e.trigger ?? e.outcome, e.runId])).toEqual([
+      ['start', 'manual', runId],
+      ['end', 'delivered', runId],
+    ]);
+  });
+
+  it('a tarefa que espera na fila abre a tentativa com trigger queue', async () => {
+    const { dir, svc, finish, make } = runsService('runs-2');
+    const [a, b] = [await make('A'), await make('B')];
+    const sa = (await svc.start('p', a.id))!.sessionId!;
+    await svc.start('p', b.id); // na fila: ainda sem tentativa
+    await finish(sa); // A vai para revisão e a fila anda
+    expect((await readRuns(dir, b.id)).map((e) => [e.ev, e.trigger])).toEqual([['start', 'queue']]);
+  });
+
+  it('retomada de órfã: start resume na mesma tentativa, e o fim dela leva o mesmo runId', async () => {
+    const { dir, svc, working, make, task, finish } = runsService('runs-3');
+    const a = await make('A');
+    const started = (await svc.start('p', a.id))!;
+    const runId = (await task(a.id)).runId;
+    working.delete(started.sessionId!); // o servidor caiu no meio do turno
+    await svc.tick(new Date(Date.now() + 3 * 60_000));
+    expect((await task(a.id)).resumedAt).toEqual(expect.any(String));
+    await finish(started.sessionId!);
+    expect((await readRuns(dir, a.id)).map((e) => [e.ev, e.trigger ?? e.outcome, e.runId === runId])).toEqual([
+      ['start', 'manual', true],
+      ['start', 'resume', true],
+      ['end', 'delivered', true],
+    ]);
+  });
+
+  it('linha quebrada ou incompleta é ignorada na leitura, e não atrapalha as gravações seguintes', async () => {
+    const { dir, svc, finish, make } = runsService('runs-4');
+    const file = path.join(dir, '.myco', 'task-runs.jsonl');
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, '{"ev":"start","runId":"r-x"\nlixo\n{"ev":"start","runId":"r-y"'); // a última sem quebra de linha
+    const a = await make('A');
+    const started = (await svc.start('p', a.id))!;
+    await finish(started.sessionId!);
+    expect((await readRuns(dir, a.id)).map((e) => e.ev)).toEqual(['start', 'end']);
+    expect(await readRuns(dir)).toHaveLength(2);
   });
 });
 
@@ -1335,7 +1445,7 @@ describe('quadro: Aguardar', () => {
     expect(w).toMatchObject({ status: 'waiting', sessionId: null });
     expect(w.history).toMatchObject([{ status: 'waiting' }]);
     expect((await svc.create('p', { title: 'Com start', staffId: 'ana-1' }))!.status).toBe('todo');
-    expect(await svc.summary()).toEqual({ p: { open: 2, review: 0 } });
+    expect(await svc.summary()).toMatchObject({ p: { open: 2, review: 0 } });
 
     expect(await svc.start('p', w.id)).toMatchObject({ status: 'doing', sessionId: 's-1' });
     expect(sent[0]).toContain('[Tarefa "Espera"]');
@@ -1414,7 +1524,7 @@ describe('quadro: Aguardar', () => {
     await expect(svc.update('p', w.id, { waitReason: 'x'.repeat(201) })).rejects.toThrow(/máx. 200/);
     expect(await svc.update('p', w.id, { waitReason: '' })).toMatchObject({ waitReason: null });
     await svc.update('p', w.id, { waitReason: 'Cliente' });
-    expect(await svc.update('p', w.id, { status: 'todo' })).toMatchObject({ status: 'todo', waitReason: null });
+    expect(await svc.update('p', w.id, { status: 'todo' })).toMatchObject({ status: 'doing', waitReason: null });
   });
 
   it('apagar o responsável: a tarefa em Aguardar continua em Aguardar, só solta o responsável', async () => {
@@ -1422,6 +1532,87 @@ describe('quadro: Aguardar', () => {
     await svc.create('p', { title: 'W', staffId: 'ana-1', start: false });
     expect(await svc.releaseStaff('p', 'ana-1')).toBe(1);
     expect((await svc.list('p'))![0]).toMatchObject({ status: 'waiting', staffId: null });
+  });
+
+  it('Aguardar → a fazer com responsável livre: começa na hora (fazendo, com conversa)', async () => {
+    const { svc, sent } = parked('aguardar-8');
+    const w = (await svc.create('p', { title: 'Agora', staffId: 'ana-1', start: false }))!;
+    expect(await svc.update('p', w.id, { status: 'todo' })).toMatchObject({ status: 'doing', sessionId: 's-1' });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('[Tarefa "Agora"]');
+  });
+
+  it('a fazer com responsável ocupado: entra na fila dele e começa quando ele termina', async () => {
+    const { svc, sent, finish } = parked('aguardar-9');
+    const [a, w] = [
+      (await svc.create('p', { title: 'A', staffId: 'ana-1' }))!,
+      (await svc.create('p', { title: 'W', staffId: 'ana-1', start: false }))!,
+    ];
+    await svc.start('p', a.id); // s-1
+    expect(await svc.update('p', w.id, { status: 'todo' })).toMatchObject({ status: 'todo', queuedAt: expect.any(String) });
+    expect(sent).toHaveLength(1);
+    await finish('s-1');
+    expect((await svc.list('p'))!.find((t) => t.id === w.id)).toMatchObject({ status: 'doing' });
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toContain('[Tarefa "W"]');
+  });
+
+  it('a fazer sem responsável: fica em a fazer, sem fila e sem conversa', async () => {
+    const { svc, sent } = parked('aguardar-10');
+    const w = (await svc.create('p', { title: 'Solta', start: false }))!;
+    expect(await svc.update('p', w.id, { status: 'todo' })).toMatchObject({ status: 'todo', staffId: null, sessionId: null });
+    expect((await svc.list('p'))![0]!.queuedAt ?? null).toBeNull();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('revisão → a fazer (cartão com conversa): não manda nem enfileira, e a mudança não lança', async () => {
+    const { svc, sent, finish } = parked('aguardar-11');
+    const a = (await svc.create('p', { title: 'A', staffId: 'ana-1' }))!;
+    await svc.start('p', a.id); // s-1
+    await finish('s-1');
+    expect((await svc.list('p'))!.find((t) => t.id === a.id)).toMatchObject({ status: 'review', sessionId: 's-1' });
+    expect(await svc.update('p', a.id, { status: 'todo' })).toMatchObject({ status: 'todo', sessionId: 's-1', queuedAt: null });
+    expect(sent).toHaveLength(1);
+  });
+
+  it('trocar o responsável de um cartão em a fazer: começa com o novo (ou entra na fila dele)', async () => {
+    const dir = path.join(root, 'aguardar-trocar');
+    const names: Record<string, string> = { 'ana-1': 'Ana', 'bia-2': 'Bia' };
+    const sent: Array<{ staffId: string; text: string }> = [];
+    /** Conversa → funcionário que está nela (ocupado enquanto a conversa estiver aberta). */
+    const busyBy = new Map<string, string>();
+    let n = 0;
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (names[id] ? ({ id, name: names[id], autonomy: 'acceptEdits', worktree: false } as StaffProfile) : null),
+      send: async (_p, staffId, text) => {
+        const session = `s-${++n}`;
+        sent.push({ staffId, text });
+        busyBy.set(session, staffId);
+        return session;
+      },
+      branchFor: async () => null,
+      isWorking: (_p, staffId) => [...busyBy.values()].includes(staffId),
+    });
+    const [a, w] = [
+      (await svc.create('p', { title: 'A', staffId: 'ana-1' }))!,
+      (await svc.create('p', { title: 'W', staffId: 'ana-1', start: false }))!,
+    ];
+    await svc.start('p', a.id); // Ana, s-1
+    expect(await svc.update('p', w.id, { status: 'todo' })).toMatchObject({ status: 'todo', staffId: 'ana-1', queuedAt: expect.any(String) });
+    expect(await svc.update('p', w.id, { staffId: 'bia-2' })).toMatchObject({ status: 'doing', staffId: 'bia-2' });
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toMatchObject({ staffId: 'bia-2' });
+    expect(sent[1]!.text).toContain('[Tarefa "W"]');
+  });
+
+  it('{ queued: false } junto de Aguardar → a fazer: fica em a fazer, fora da fila, sem começar', async () => {
+    const { svc, sent } = parked('aguardar-12');
+    const w = (await svc.create('p', { title: 'W', staffId: 'ana-1', start: false }))!;
+    expect(await svc.update('p', w.id, { status: 'todo', queued: false })).toMatchObject({ status: 'todo', staffId: 'ana-1' });
+    expect((await svc.list('p'))![0]!.queuedAt ?? null).toBeNull();
+    expect(sent).toHaveLength(0);
   });
 });
 
@@ -1519,6 +1710,111 @@ describe('gestor como revisor (tarefa que ele passou)', () => {
       await svc.onTurnDone('s-1'); // ajustou e terminou: a rodada 2 (s-3) é a última
     }
     expect(notified).toEqual([{ staffId: 'gio-1', sessionId: 's-gio', text: expect.stringContaining(`(id ${t.id}): o limite de 2 revisões automáticas foi atingido; o que sobrou fica com você.`) }]);
+  });
+
+  /** Entrega a tarefa em `work` (conversa da Luana) e aprova na revisão dele (`review`). */
+  async function approveFlow(f: Awaited<ReturnType<typeof selfFlow>>, id: string, work: string, review: string) {
+    await f.svc.start('p', id);
+    await f.svc.onTurnDone(work);
+    f.texts.set(review, 'APROVADO\n\nok');
+    await f.svc.onTurnDone(review);
+  }
+  const byId = async (f: Awaited<ReturnType<typeof selfFlow>>, id: string) => (await f.svc.list('p'))!.find((t) => t.id === id)!;
+
+  describe('aprovadas agrupadas (aviso só quando o gestor fecha tudo que pediu)', () => {
+    it('com outra tarefa dele aberta, a aprovação não avisa: fica retida', async () => {
+      const f = await selfFlow('self-retem');
+      const a = await f.make('A');
+      await f.make('B'); // Aguardar: aberta
+      f.texts.set('s-1', 'Fiz o A.\nDetalhe.');
+      await approveFlow(f, a.id, 's-1', 's-2');
+      expect(f.notified).toEqual([]);
+      expect(await byId(f, a.id)).toMatchObject({ status: 'done', outcomeHeld: true });
+    });
+
+    it('a última a fechar manda UMA mensagem com o desfecho dela e a lista das retidas, e limpa as marcas', async () => {
+      const f = await selfFlow('self-despeja');
+      const a = await f.make('A');
+      const b = await f.make('B');
+      f.texts.set('s-1', 'Fiz o A.\nDetalhe.');
+      await approveFlow(f, a.id, 's-1', 's-2');
+      await approveFlow(f, b.id, 's-3', 's-4');
+      expect(f.notified).toHaveLength(1);
+      const msg = f.notified[0]!;
+      expect(msg).toMatchObject({ staffId: 'gio-1', sessionId: 's-gio' });
+      expect(msg.text).toContain(`Tarefa “B” (id ${b.id}): aprovada na sua revisão, foi para pronto.`);
+      expect(msg.text).toContain(`- “A” (id ${a.id}): aprovada por Giovana; Fiz o A.`);
+      expect(msg.text).not.toContain(`“B” (id ${b.id}): aprovada por`);
+      expect((await f.svc.list('p').then((l) => l!)).some((t) => t.outcomeHeld)).toBe(false);
+    });
+
+    it('limite de revisões vai na hora e não despeja as retidas', async () => {
+      const f = await selfFlow('self-limite-retida');
+      const a = await f.make('A');
+      const b = await f.make('B');
+      await approveFlow(f, a.id, 's-1', 's-2');
+      await f.svc.start('p', b.id); // s-3
+      await f.svc.onTurnDone('s-3'); // rodada 1 (s-4)
+      for (const s of ['s-4', 's-5']) {
+        f.texts.set(s, 'REPROVADO\n\najuste');
+        await f.svc.onTurnDone(s);
+        await f.svc.onTurnDone('s-3');
+      }
+      expect(f.notified).toHaveLength(1);
+      expect(f.notified[0]!.text).toContain('o limite de 2 revisões automáticas foi atingido');
+      expect(f.notified[0]!.text).not.toContain('Aprovadas antes');
+      expect(await byId(f, a.id)).toMatchObject({ outcomeHeld: true });
+    });
+
+    it('reprovada: nada vai ao gestor e a retida continua retida', async () => {
+      const f = await selfFlow('self-reprova-retida');
+      const a = await f.make('A');
+      const b = await f.make('B');
+      await approveFlow(f, a.id, 's-1', 's-2');
+      await f.svc.start('p', b.id); // s-3
+      await f.svc.onTurnDone('s-3'); // s-4
+      f.texts.set('s-4', 'REPROVADO\n\najuste');
+      await f.svc.onTurnDone('s-4');
+      expect(f.notified).toEqual([]);
+      expect(await byId(f, a.id)).toMatchObject({ outcomeHeld: true });
+    });
+
+    it('quem pediu é o usuário (sem gestor): nada muda, nem aviso nem marca', async () => {
+      const f = await selfFlow('self-usuario');
+      const a = (await f.svc.create('p', { title: 'A', staffId: 'lu-1', reviewerId: 'rev-1' }))!;
+      await f.svc.create('p', { title: 'B', staffId: 'lu-1', reviewerId: 'rev-1' });
+      await f.svc.start('p', a.id);
+      await f.svc.onTurnDone('s-1'); // revisão do Rui (s-2)
+      f.texts.set('s-2', 'APROVADO\n\nok');
+      await f.svc.onTurnDone('s-2');
+      expect(await byId(f, a.id)).toMatchObject({ status: 'done' });
+      expect((await byId(f, a.id)).outcomeHeld).toBeUndefined();
+      expect(f.notified).toEqual([]);
+    });
+
+    it('apagar a última aberta despeja as retidas', async () => {
+      const f = await selfFlow('self-cancela');
+      const a = await f.make('A');
+      const b = await f.make('B');
+      await approveFlow(f, a.id, 's-1', 's-2');
+      expect(await f.svc.remove('p', b.id)).toBe(true);
+      expect(f.notified).toHaveLength(1);
+      expect(f.notified[0]!.text).toContain(`Tarefa “B” (id ${b.id}): foi apagada.`);
+      expect(f.notified[0]!.text).toContain(`- “A” (id ${a.id}):`);
+      expect((await f.svc.list('p').then((l) => l!)).some((t) => t.outcomeHeld)).toBe(false);
+    });
+
+    it('duas fechando quase juntas: uma só mensagem, sem perder a retida', async () => {
+      const f = await selfFlow('self-corrida');
+      const a = await f.make('A');
+      const b = await f.make('B');
+      const c = await f.make('C');
+      await approveFlow(f, a.id, 's-1', 's-2');
+      await Promise.all([f.svc.update('p', b.id, { status: 'done' }), f.svc.update('p', c.id, { status: 'done' })]);
+      expect(f.notified).toHaveLength(1);
+      expect(f.notified[0]!.text).toContain(`- “A” (id ${a.id}):`);
+      expect((await f.svc.list('p').then((l) => l!)).some((t) => t.outcomeHeld)).toBe(false);
+    });
   });
 
   it('revisão dele não começou: ele recebe o aviso da entrega, como antes', async () => {
@@ -1936,5 +2232,548 @@ describe('dúvida da tarefa ao gestor', () => {
     await claude.svc.onAsk((await claude.task()).sessionId!, 'req-1', [{ question: 'Qual?', options: ['a'] }]);
     expect(claude.sent.at(-1)!.text).toContain('POST http://127.0.0.1:4848/api/projects/p/tasks/');
     expect(claude.sent.at(-1)!.text).not.toContain('127.0.0.2');
+  });
+});
+
+describe('conversas da tarefa (sessions) e retrabalho (reworkRounds)', () => {
+  /** Ana faz, Rui revisa, Giovana pede (`requestedBy`). `limit`: o motor que está no limite agora; `ana.fallback`: o secundário dela. */
+  function flow(dirName: string, opts: { ana?: Partial<StaffProfile>; limit?: 'claude' | 'codex'; fixedReviewSession?: string; gestorEngine?: 'claude' | 'codex' } = {}) {
+    const dir = path.join(root, dirName);
+    const texts = new Map<string, string>();
+    let n = 0;
+    const people: Record<string, StaffProfile> = {
+      'gio-1': { id: 'gio-1', name: 'Giovana', role: 'Orquestradora', autonomy: 'acceptEdits', worktree: false, engine: opts.gestorEngine } as StaffProfile,
+      'ana-1': { id: 'ana-1', name: 'Ana', role: 'Back-end', autonomy: 'acceptEdits', worktree: false, ...opts.ana } as StaffProfile,
+      'rev-1': { id: 'rev-1', name: 'Rui', role: 'Revisor', autonomy: 'manual', worktree: false } as StaffProfile,
+    };
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => people[id] ?? null,
+      send: async (_p, staffId) => {
+        if (staffId === 'rev-1' && opts.fixedReviewSession) return opts.fixedReviewSession;
+        return `s-${++n}`;
+      },
+      branchFor: async () => null,
+      apiUrl: 'http://127.0.0.1:4848',
+      sandboxApiUrl: 'http://127.0.0.2:4848',
+      lastText: (sid) => texts.get(sid) ?? null,
+      sendTo: async (_p, sessionId) => sessionId,
+      readLimit: async (engine) => (opts.limit === engine ? { resetsAt: Date.now() + 120 * 60_000, window: 'five_hour' } : null),
+    });
+    const make = async (title: string, reviewerId: string | null = 'rev-1', requestedBy?: string) =>
+      (await svc.create('p', { title, staffId: 'ana-1', reviewerId }, requestedBy ?? null, requestedBy ? 'gio-s' : undefined))!;
+    const current = async () => (await svc.list('p'))![0]!;
+    const sessions = async () => ((await current()).sessions ?? []).map(({ id, role, staffId, engine }) => ({ id, role, staffId, engine }));
+    return { svc, texts, make, current, sessions };
+  }
+
+  it('a partida registra a conversa de trabalho; começar no limite abre no secundário, e essa conversa também fica registrada', async () => {
+    const { svc, make, current, sessions } = flow('ss-partida', { ana: { fallback: { engine: 'codex', model: 'gpt-5' } }, limit: 'claude' });
+    const t = await make('Tabela');
+    await svc.start('p', t.id);
+    expect(await sessions()).toEqual([{ id: 's-1', role: 'work', staffId: 'ana-1', engine: 'codex' }]);
+    expect(await current()).toMatchObject({ sessionId: 's-1', fallback: { engine: 'codex' } });
+  });
+
+  it('troca de motor no meio do turno: a conversa antiga e a nova ficam na lista, cada uma com o motor dela', async () => {
+    const { svc, make, current, sessions } = flow('ss-meio', { ana: { fallback: { engine: 'codex', model: 'gpt-5' } } });
+    const t = await make('Filtro');
+    await svc.start('p', t.id); // s-1 (Claude)
+    await svc.onLimit({ sessionId: 's-1', engine: 'claude', hit: { resetsAt: Date.now() + 120 * 60_000, window: 'five_hour' } }); // s-2 (Codex)
+    expect(await sessions()).toEqual([
+      { id: 's-1', role: 'work', staffId: 'ana-1', engine: 'claude' },
+      { id: 's-2', role: 'work', staffId: 'ana-1', engine: 'codex' },
+    ]);
+    expect(await current()).toMatchObject({ sessionId: 's-2' });
+  });
+
+  it('revisão automática entra na lista; a reprovação manda o ajuste para a conversa de trabalho, sem repetir nela', async () => {
+    const { svc, texts, make, sessions } = flow('ss-revisao');
+    const t = await make('Botão');
+    await svc.start('p', t.id); // s-1
+    await svc.onTurnDone('s-1'); // entregue: o Rui revisa sozinho (s-2)
+    expect(await sessions()).toEqual([
+      { id: 's-1', role: 'work', staffId: 'ana-1', engine: 'claude' },
+      { id: 's-2', role: 'review', staffId: 'rev-1', engine: 'claude' },
+    ]);
+    texts.set('s-2', 'REPROVADO\n\nbotao.tsx:12 falta o aria-label');
+    await svc.onTurnDone('s-2'); // reprovou: o ajuste volta para s-1 (retomada, não é conversa nova)
+    await svc.onTurnDone('s-1'); // ajustou: revisão de novo (s-3)
+    expect((await sessions()).map((s) => s.id)).toEqual(['s-1', 's-2', 's-3']);
+  });
+
+  it('dúvida ao gestor: a conversa nova dele entra na lista com o papel de dúvida e o motor dele', async () => {
+    const { svc, make, sessions } = flow('ss-duvida', { gestorEngine: 'codex' });
+    const t = await make('Relatório', null, 'gio-1');
+    await svc.start('p', t.id); // s-1
+    expect(await svc.onAsk('s-1', 'req-1', [{ question: 'Qual banco?', options: ['Postgres', 'MySQL'] }])).toBe(true); // s-2 (gestor)
+    expect(await sessions()).toEqual([
+      { id: 's-1', role: 'work', staffId: 'ana-1', engine: 'claude' },
+      { id: 's-2', role: 'question', staffId: 'gio-1', engine: 'codex' },
+    ]);
+  });
+
+  it('a mesma conversa não entra duas vezes', async () => {
+    const { svc, make, sessions } = flow('ss-dup', { fixedReviewSession: 'rev-fixa' });
+    const t = await make('Duplicada');
+    await svc.start('p', t.id); // s-1
+    await svc.requestReview('p', t.id, 'rev-1'); // rev-fixa
+    await svc.requestReview('p', t.id, 'rev-1'); // rev-fixa de novo: não repete
+    expect((await sessions()).map((s) => s.id)).toEqual(['s-1', 'rev-fixa']);
+  });
+
+  it('passando de 50 conversas, sai a mais antiga', async () => {
+    const { svc, make, sessions } = flow('ss-limite');
+    const t = await make('Longa');
+    await svc.start('p', t.id); // s-1
+    for (let i = 0; i < 52; i++) await svc.requestReview('p', t.id, 'rev-1'); // s-2 a s-53, uma conversa nova a cada pedido
+    const list = await sessions();
+    expect(list).toHaveLength(50);
+    expect(list[0]!.id).toBe('s-4'); // s-1, s-2 e s-3 saíram
+    expect(list.at(-1)!.id).toBe('s-53');
+  }, 20_000);
+
+  it('reworkRounds conta cada reprovação automática; a aprovação não conta', async () => {
+    const { svc, texts, make, current } = flow('ss-rw-auto');
+    const t = await make('Exportar');
+    await svc.start('p', t.id); // s-1
+    await svc.onTurnDone('s-1'); // revisão automática: s-2
+    texts.set('s-2', 'REPROVADO\n\nfalta o teste');
+    await svc.onTurnDone('s-2'); // 1ª reprovação
+    expect(await current()).toMatchObject({ status: 'doing', reworkRounds: 1, reviewRounds: 1 });
+    await svc.onTurnDone('s-1'); // ajustou: revisão 2 (s-3)
+    texts.set('s-3', 'APROVADO\n\nok');
+    await svc.onTurnDone('s-3');
+    expect(await current()).toMatchObject({ status: 'done', reworkRounds: 1, reviewRounds: 2 });
+  });
+
+  it('reworkRounds conta a reprovação manual: revisão que você delegou (assign) e que foi reprovada', async () => {
+    const { svc, texts, make, current } = flow('ss-rw-manual');
+    const t = await make('Relatório', null); // sem revisão automática
+    await svc.start('p', t.id); // s-1
+    await svc.onTurnDone('s-1'); // entregue: em revisão, sem revisor
+    await svc.requestReview('p', t.id, 'rev-1', false, { assign: true }); // s-2, delegada à mão
+    texts.set('s-2', 'REPROVADO\n\nfalta o teste da paginação');
+    await svc.onTurnDone('s-2');
+    const back = await current();
+    expect(back).toMatchObject({ status: 'doing', reworkRounds: 1 });
+    expect(back.reviewRounds).toBeUndefined(); // não foi automática
+  });
+});
+
+describe('dependências entre tarefas (bloqueada por)', () => {
+  /** Ana, uma conversa por vez. `gate()`: quantas partidas automáticas a fila pediu ao gate de recursos. */
+  function depsService(dirName: string) {
+    const dir = path.join(root, dirName);
+    const sent: Array<{ text: string; session: string }> = [];
+    const working = new Set<string>();
+    let gate = 0;
+    let n = 0;
+    const ana = { id: 'ana-1', name: 'Ana', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'ana-1' ? ana : null),
+      send: async (_p, _staffId, text) => {
+        const session = `s-${++n}`;
+        sent.push({ text, session });
+        working.add(session);
+        return session;
+      },
+      branchFor: async () => null,
+      isWorking: (_p, _staffId, except) => [...working].some((s) => s !== except),
+      sendTo: async (_p, sessionId) => {
+        working.add(sessionId);
+        return sessionId;
+      },
+      resourceGate: async () => {
+        gate++;
+        return { ok: true, release: () => {} };
+      },
+    });
+    // O turno acabou: o processo avisa (onIdle) e o vigia também (onTurnDone), como nos outros blocos de fila.
+    const finish = async (session: string) => {
+      working.delete(session);
+      await svc.onIdle(session, 'p', 'ana-1');
+      await svc.onTurnDone(session);
+    };
+    const make = async (title: string, blockedBy?: string[]) => (await svc.create('p', { title, staffId: 'ana-1', ...(blockedBy && { blockedBy }) }))!;
+    const list = async () => (await svc.list('p'))!;
+    const titled = async () => Object.fromEntries((await list()).map((t) => [t.title, t]));
+    return { svc, sent, finish, make, list, titled, gate: () => gate };
+  }
+
+  it('ciclo, dependência inexistente e a própria tarefa são recusados, e a recusa não grava nada', async () => {
+    const { svc, make, list } = depsService('dep-ciclo');
+    const a = await make('A');
+    const b = await make('B', [a.id]);
+    await expect(svc.update('p', a.id, { blockedBy: [b.id] })).rejects.toThrow(/ciclo de dependências/);
+    await expect(svc.update('p', a.id, { blockedBy: [a.id] })).rejects.toThrow(/não pode depender dela mesma/);
+    await expect(make('C', ['t-nope1'])).rejects.toThrow(/não encontrada neste projeto/);
+    await expect(svc.create('p', { title: 'D', staffId: 'ana-1', blockedBy: ['t-a', 't-a'] })).rejects.toThrow(/mais de uma vez/);
+    expect((await list()).map((t) => [t.title, t.blockedBy])).toEqual([
+      ['A', undefined],
+      ['B', [a.id]],
+    ]);
+  });
+
+  it('a fila pula a tarefa bloqueada e começa a seguinte desbloqueada', async () => {
+    const { svc, sent, finish, make, titled } = depsService('dep-fila');
+    const a = await make('A');
+    const d = await make('D'); // dependência ainda a fazer
+    const x = await make('X', [d.id]);
+    const b = await make('B');
+    expect((await svc.start('p', a.id))!.status).toBe('doing'); // s-1
+    // X é começada enquanto A ocupa Ana: fica na fila, bloqueada por D.
+    expect(await svc.start('p', x.id)).toMatchObject({ status: 'todo', sessionId: null, queuedAt: expect.any(String) });
+    await svc.start('p', b.id); // na fila, depois de X
+    await finish('s-1'); // A vai para revisão e a fila anda
+    expect(sent.at(-1)!.text).toContain('[Tarefa "B"]');
+    expect(await titled()).toMatchObject({ A: { status: 'review' }, B: { status: 'doing' }, X: { status: 'todo', queuedAt: expect.any(String) } });
+    expect((await svc.list('p'))!.find((t) => t.id === x.id)!.history.some((h) => h.note?.startsWith('esperando'))).toBe(false);
+  });
+
+  it('começar numa bloqueada não abre conversa: entra na fila com o motivo, e começa sozinha quando a dependência fica pronta', async () => {
+    const { svc, sent, make, list } = depsService('dep-start');
+    const d = await make('Migrar banco');
+    const x = await make('Tela nova', [d.id]);
+    const queued = (await svc.start('p', x.id))!;
+    expect(queued).toMatchObject({ status: 'todo', sessionId: null, queuedAt: expect.any(String) });
+    expect(queued.history.some((h) => h.note?.startsWith('esperando'))).toBe(false); // o motivo é calculado na leitura, não gravado
+    expect(sent).toHaveLength(0);
+    await svc.update('p', d.id, { status: 'done' }); // a dependência fica pronta: o dono é acordado (sem await, de propósito)
+    // A partida manda a mensagem antes de gravar a tarefa como "fazendo": espera o estado final, não o envio.
+    await vi.waitFor(async () => expect((await list()).find((t) => t.id === x.id)).toMatchObject({ status: 'doing', queuedAt: null, sessionId: expect.any(String) }));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.text).toContain('[Tarefa "Tela nova"]');
+  });
+
+  it('apagar uma dependência que outra tarefa ainda espera é recusado, listando quem depende; pronta, só tira o id', async () => {
+    const { svc, make, list } = depsService('dep-remove');
+    const d = await make('Base');
+    const x = await make('Usa a base', [d.id]);
+    await expect(svc.remove('p', d.id)).rejects.toThrow(TaskConflictError);
+    await expect(svc.remove('p', d.id)).rejects.toThrow(/“Usa a base”/);
+    expect((await list()).map((t) => t.id)).toContain(d.id);
+    // Com a dependente já pronta, apagar a dependência só tira o id dela.
+    await svc.update('p', x.id, { status: 'done' });
+    expect(await svc.remove('p', d.id)).toBe(true);
+    expect((await list()).find((t) => t.id === x.id)!.blockedBy).toEqual([]);
+  });
+
+  it('tick não acorda quem tem na fila só tarefas bloqueadas', async () => {
+    const { svc, sent, make, gate } = depsService('dep-tick');
+    const d = await make('Pré-requisito');
+    const x = await make('Depende', [d.id]);
+    await svc.start('p', x.id); // na fila, bloqueada: sem conversa
+    const before = gate();
+    await svc.tick();
+    expect(sent).toHaveLength(0);
+    expect(gate()).toBe(before); // nenhuma partida automática foi tentada
+  });
+});
+
+describe('dependências: aviso ao gestor de quem espera e caixa "blocked"', () => {
+  /** Ana faz as tarefas (Rui e Lia revisam; Gio é gestor e pede as dependentes). `notified`: o que vai aos gestores. */
+  function warnFlow(dirName: string, opts: { autonomy?: StaffProfile['autonomy']; turnCap?: string; failNotify?: boolean } = {}) {
+    const dir = path.join(root, dirName);
+    const notified: Array<{ staffId: string; text: string; sessionId: string | null }> = [];
+    const texts = new Map<string, string>();
+    let n = 0;
+    const person = (id: string, name: string, autonomy: StaffProfile['autonomy'] = 'acceptEdits') =>
+      ({ id, name, autonomy, worktree: false, servers: [] }) as unknown as StaffProfile;
+    const people: Record<string, StaffProfile> = {
+      'ana-1': person('ana-1', 'Ana', opts.autonomy),
+      'rev-1': person('rev-1', 'Rui', 'manual'),
+      'rev-2': person('rev-2', 'Lia', 'manual'),
+      'gio-1': person('gio-1', 'Gio', 'manual'),
+    };
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => people[id] ?? null,
+      send: async () => `s-${++n}`,
+      sendTo: async (_p, sessionId) => sessionId,
+      branchFor: async () => null,
+      // Nenhuma conversa de funcionário está trabalhando (como em `reviewFlow`): o turno termina quando o teste manda.
+      isWorking: () => false,
+      lastText: (sessionId) => texts.get(sessionId) ?? null,
+      turnCap: (sessionId) => (sessionId === opts.turnCap ? { kind: 'tools', limit: 5 } : null),
+      notify: async (_p, staffId, text, sessionId) => {
+        if (opts.failNotify) throw new Error('conversa do gestor fechada');
+        notified.push({ staffId, text, sessionId: sessionId ?? null });
+      },
+    });
+    const make = async (title: string, o: { reviewerId?: string; blockedBy?: string[]; by?: string } = {}) =>
+      (await svc.create('p', { title, staffId: 'ana-1', ...(o.reviewerId && { reviewerId: o.reviewerId }), ...(o.blockedBy && { blockedBy: o.blockedBy }) }, o.by ?? null))!;
+    const list = async () => (await svc.list('p'))!;
+    const byTitle = async (title: string) => (await list()).find((t) => t.title === title)!;
+    // Para o que NÃO deve acontecer: o aviso não tem await (de propósito), então dá um tempo antes de conferir a ausência.
+    const settle = () => new Promise((r) => setTimeout(r, 25));
+    return { svc, dir, notified, texts, make, list, byTitle, settle };
+  }
+
+  it('caso 3: a bloqueadora perde o responsável (ficha apagada) → o gestor de quem espera é avisado, uma vez', async () => {
+    const { svc, notified, make } = warnFlow('w-sem-resp');
+    const b = await make('Base');
+    await make('Tela', { blockedBy: [b.id], by: 'gio-1' });
+    expect(await svc.releaseStaff('p', 'ana-1')).toBe(2);
+    await vi.waitFor(() => expect(notified).toHaveLength(1));
+    expect(notified[0]).toMatchObject({ staffId: 'gio-1', sessionId: null, text: expect.stringContaining('parou: sem responsável') });
+    expect(notified[0]!.text).toContain('“Tela” (id');
+  });
+
+  it('caso 1: limite de revisões automáticas atingido → o gestor de quem espera é avisado', async () => {
+    const { svc, notified, texts, make } = warnFlow('w-limite');
+    const b = await make('Relatório', { reviewerId: 'rev-1' });
+    await make('Dashboard', { blockedBy: [b.id], by: 'gio-1' });
+    await svc.start('p', b.id); // s-1
+    await svc.onTurnDone('s-1'); // entregou: o Rui revisa (s-2)
+    for (const round of [1, 2]) {
+      texts.set(`s-${round + 1}`, `REPROVADO\n\najuste ${round}`);
+      await svc.onTurnDone(`s-${round + 1}`); // reprovou: volta para fazendo
+      await svc.onTurnDone('s-1'); // ajustou e terminou: a rodada 2 é a última
+    }
+    await vi.waitFor(() => expect(notified).toHaveLength(1));
+    expect(notified[0]).toMatchObject({ staffId: 'gio-1', text: expect.stringContaining('parou: limite de revisões automáticas atingido') });
+  });
+
+  it('limite de revisões: com a 2ª revisão em curso não conta como empacada; encerrada sem aprovar, conta', async () => {
+    const { svc, dir, texts, make, byTitle } = warnFlow('w-limite-curso');
+    const b = await make('Parecer', { reviewerId: 'rev-1' });
+    await make('Anexo', { blockedBy: [b.id], by: 'gio-1' });
+    await svc.start('p', b.id); // s-1
+    await svc.onTurnDone('s-1'); // 1ª revisão: o Rui (s-2)
+    texts.set('s-2', 'REPROVADO\n\najuste');
+    await svc.onTurnDone('s-2'); // reprovou: volta para fazendo
+    await svc.onTurnDone('s-1'); // ajustou: 2ª revisão (s-3) em curso, reviewRounds já é 2
+    expect(await byTitle('Parecer')).toMatchObject({ status: 'review', reviewRounds: 2, review: { sessionId: 's-3' } });
+    expect(stuckDependencies(await readTasks(dir))).toEqual([]);
+    texts.set('s-3', 'REPROVADO\n\nmais um ajuste');
+    await svc.onTurnDone('s-3'); // a 2ª revisão respondeu sem aprovar: volta para fazendo
+    await svc.onTurnDone('s-1'); // ajustou de novo: no limite, a tarefa fica com você
+    expect(await byTitle('Parecer')).toMatchObject({ status: 'review', reviewRounds: 2, review: { verdict: 'rejected' } });
+    expect(stuckDependencies(await readTasks(dir)).map((s) => [s.blocker.title, s.reason])).toEqual([['Parecer', 'limite de revisões automáticas atingido']]);
+  });
+
+  it('caso 2: teto de ferramentas no meio do turno → Aguardar, e o gestor de quem espera é avisado', async () => {
+    const { svc, notified, make } = warnFlow('w-teto', { turnCap: 's-1' });
+    const b = await make('Pesquisa');
+    await make('Resumo', { blockedBy: [b.id], by: 'gio-1' });
+    await svc.start('p', b.id); // s-1
+    await svc.onTurnDone('s-1'); // parou no teto: vai para Aguardar, não para revisão
+    await vi.waitFor(() => expect(notified).toHaveLength(1));
+    expect(notified[0]!.text).toMatch(/parou: em Aguardar: /);
+  });
+
+  it('caso 2: plano recusado → Aguardar, e o gestor de quem espera é avisado', async () => {
+    const { svc, notified, make } = warnFlow('w-plano', { autonomy: 'plan' });
+    const b = await make('Plano');
+    await make('Depois', { blockedBy: [b.id], by: 'gio-1' });
+    await svc.start('p', b.id); // s-1, planejando
+    expect((await svc.list('p'))!.find((t) => t.id === b.id)).toMatchObject({ status: 'planning' });
+    await svc.onPlanRejected('s-1');
+    await vi.waitFor(() => expect(notified).toHaveLength(1));
+    expect(notified[0]!.text).toContain('parou: em Aguardar');
+  });
+
+  it('caso 4: conversa órfã que vira revisão → o gestor de quem espera é avisado', async () => {
+    const { svc, notified, make } = warnFlow('w-orfa');
+    const b = await make('Migração');
+    await make('Painel', { blockedBy: [b.id], by: 'gio-1' });
+    await svc.start('p', b.id); // s-1; nenhuma conversa trabalha (isWorking false): o processo "morreu"
+    const later = (min: number) => new Date(Date.now() + min * 60_000);
+    await svc.tick(later(3)); // retoma sozinha (a retomada conta como tentativa)
+    await svc.tick(later(6)); // parou sem terminar de novo: vai para revisão
+    await vi.waitFor(() => expect(notified).toHaveLength(1));
+    expect(notified[0]!.text).toContain('parou: conversa parou sem terminar; está em revisão');
+  });
+
+  it('agrupa: dois dependentes do mesmo gestor = uma mensagem só', async () => {
+    const { svc, notified, make } = warnFlow('w-grupo');
+    const b = await make('Base');
+    await make('Um', { blockedBy: [b.id], by: 'gio-1' });
+    await make('Dois', { blockedBy: [b.id], by: 'gio-1' });
+    await svc.releaseStaff('p', 'ana-1');
+    await vi.waitFor(() => expect(notified).toHaveLength(1));
+    expect(notified[0]!.text).toContain('“Um” (id');
+    expect(notified[0]!.text).toContain('“Dois” (id');
+    expect(notified[0]!.text).toContain('Estas tarefas esperam');
+  });
+
+  it('sem gestor no dependente: ninguém é avisado pelo gestor (quem vê é o dono, na caixa)', async () => {
+    const { svc, notified, make, settle } = warnFlow('w-sem-gestor');
+    const b = await make('Sozinha');
+    await make('Órfã de gestor', { blockedBy: [b.id] });
+    await svc.releaseStaff('p', 'ana-1');
+    await settle();
+    expect(notified).toEqual([]);
+  });
+
+  it('não repete o mesmo motivo; volta a avisar se o motivo mudar; e limpa quando a bloqueadora volta a andar', async () => {
+    const { svc, notified, make, byTitle, settle } = warnFlow('w-repete');
+    const b = await make('Fonte', { reviewerId: 'rev-1' });
+    await make('Uso', { blockedBy: [b.id], by: 'gio-1' });
+    await svc.releaseStaff('p', 'rev-1'); // perdeu o revisor: avisa
+    await vi.waitFor(async () => expect((await byTitle('Fonte')).blockAlert).toBe('sem revisor'));
+    expect(notified).toHaveLength(1);
+    await svc.update('p', b.id, { reviewerId: 'rev-2' });
+    await svc.releaseStaff('p', 'rev-2'); // mesmo motivo: não repete
+    await settle();
+    expect(notified).toHaveLength(1);
+    await svc.releaseStaff('p', 'ana-1'); // o motivo mudou (sem responsável): avisa de novo
+    await vi.waitFor(async () => expect((await byTitle('Fonte')).blockAlert).toBe('sem responsável'));
+    expect(notified).toHaveLength(2);
+    await svc.update('p', b.id, { status: 'doing' }); // voltou a andar: a marca sai
+    expect((await byTitle('Fonte')).blockAlert ?? null).toBeNull();
+  });
+
+  it('falha do aviso não quebra a transição: a tarefa muda mesmo assim, e sem marca (a próxima tenta de novo)', async () => {
+    const { svc, make, byTitle, settle } = warnFlow('w-falha', { failNotify: true });
+    const b = await make('Dados');
+    await make('Gráfico', { blockedBy: [b.id], by: 'gio-1' });
+    expect(await svc.releaseStaff('p', 'ana-1')).toBe(2);
+    await settle();
+    expect(await byTitle('Dados')).toMatchObject({ staffId: null, status: 'todo' });
+    expect((await byTitle('Dados')).blockAlert ?? null).toBeNull();
+  });
+
+  it('caixa "blocked": aparece com a bloqueadora empacada e o motivo; some quando ela volta a andar ou fica pronta', async () => {
+    const { svc, dir, make } = warnFlow('w-caixa');
+    const b = await make('Contrato');
+    const d = await make('Aceite', { blockedBy: [b.id] });
+    const inbox = async () =>
+      stuckDependencies(await readTasks(dir)).map((s) => blockedInboxItem(s, { projectId: 'p', projectName: 'P', sessionId: '', staffId: s.task.staffId, name: 'Ana' }));
+    expect(await inbox()).toEqual([]); // a fazer, com responsável: ainda não empacou
+    await svc.update('p', b.id, { status: 'waiting', waitReason: 'Cliente' });
+    expect(await inbox()).toEqual([
+      expect.objectContaining({
+        id: `blocked:${d.id}:${b.id}`,
+        kind: 'blocked',
+        sessionId: '',
+        summary: '“Aceite” espera “Contrato”: em Aguardar: Cliente',
+        blocked: { taskId: d.id, taskTitle: 'Aceite', blockerId: b.id, blockerTitle: 'Contrato', blockerStatus: 'waiting', reason: 'em Aguardar: Cliente' },
+      }),
+    ]);
+    await svc.update('p', b.id, { status: 'doing' }); // voltou a andar: some
+    expect(await inbox()).toEqual([]);
+    await svc.update('p', b.id, { status: 'waiting', waitReason: null });
+    expect(await inbox()).toHaveLength(1);
+    await svc.update('p', b.id, { status: 'done' }); // pronta: some
+    expect(await inbox()).toEqual([]);
+  });
+});
+
+describe('rotina de tarefa (mode task)', () => {
+  /** Ana, uma conversa por vez (`working`). `state.capped`: o envio recusa pelo consumo, como no limite de 5h. */
+  function routineService(dirName: string) {
+    const dir = path.join(root, dirName);
+    const working = new Set<string>();
+    const state = { capped: false, n: 0 };
+    const ana = { id: 'ana-1', name: 'Ana', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'ana-1' ? ana : null),
+      send: async () => {
+        if (state.capped) throw new UsageStopError({ kind: 'five_hour', percentUsed: 91, limit: 85, resetsAt: null });
+        const session = `s-${++state.n}`;
+        working.add(session);
+        return session;
+      },
+      branchFor: async () => null,
+      isWorking: (_p, _s, except) => [...working].some((s) => s !== except),
+    });
+    const finish = async (session: string) => {
+      working.delete(session);
+      await svc.onIdle(session, 'p', 'ana-1');
+      await svc.onTurnDone(session);
+    };
+    const list = async () => (await svc.list('p'))!;
+    const task = async (id: string) => (await list()).find((t) => t.id === id)!;
+    /** Uma rodada da rotina, como `runRoutineAsTask` (index.ts): cria já na fila e manda o funcionário andar a fila. */
+    const fire = async (routineId: string, minute: string) => {
+      const made = await svc.createFromRoutine('p', 'ana-1', { id: routineId, name: 'Revisar PRs', message: 'Revise os PRs abertos.' }, minute);
+      if (made.kind === 'created') await svc.kickStaff('p', 'ana-1');
+      return made;
+    };
+    return { svc, dir, state, finish, list, task, fire };
+  }
+
+  it('cria a tarefa com a mensagem como descrição, e começa com o gatilho routine (idemKey no registro)', async () => {
+    const { dir, fire, task } = routineService('rot-1');
+    const made = await fire('r1', '2026-10-26T19:00');
+    expect(made.kind).toBe('created');
+    expect(await task(made.task.id)).toMatchObject({
+      title: 'Rotina: Revisar PRs',
+      description: 'Revise os PRs abertos.',
+      staffId: 'ana-1',
+      routineId: 'r1',
+      idemKey: 'rotina:ana-1:r1:2026-10-26T19:00',
+      status: 'doing',
+      sessionId: 's-1',
+    });
+    expect((await readRuns(dir, made.task.id)).map((e) => [e.ev, e.trigger, e.idemKey])).toEqual([['start', 'routine', 'rotina:ana-1:r1:2026-10-26T19:00']]);
+  });
+
+  it('o mesmo minuto não cria de novo (idemKey), nem depois que a tarefa ficou pronta', async () => {
+    const { svc, list, fire, task } = routineService('rot-2');
+    const first = await fire('r1', 'M1');
+    expect((await svc.createFromRoutine('p', 'ana-1', { id: 'r1', name: 'Revisar PRs', message: 'x' }, 'M1')).kind).toBe('repeated');
+    await svc.update('p', first.task.id, { status: 'done' });
+    expect(await svc.createFromRoutine('p', 'ana-1', { id: 'r1', name: 'Revisar PRs', message: 'x' }, 'M1')).toMatchObject({ kind: 'repeated', task: { id: first.task.id } });
+    expect(await list()).toHaveLength(1);
+    expect((await task(first.task.id)).status).toBe('done');
+  });
+
+  it('com a anterior da mesma rotina ainda aberta, não cria; outra rotina da ficha cria normal', async () => {
+    const { svc, list, fire } = routineService('rot-3');
+    const first = await fire('r1', 'M1');
+    expect(await svc.createFromRoutine('p', 'ana-1', { id: 'r1', name: 'Revisar PRs', message: 'x' }, 'M2')).toMatchObject({ kind: 'open', task: { id: first.task.id } });
+    expect((await svc.createFromRoutine('p', 'ana-1', { id: 'r2', name: 'Outra', message: 'x' }, 'M2')).kind).toBe('created');
+    expect(await list()).toHaveLength(2);
+  });
+
+  it('depois que a anterior fica pronta, a rotina cria outra no minuto seguinte', async () => {
+    const { svc, list, fire } = routineService('rot-4');
+    const first = await fire('r1', 'M1');
+    await svc.update('p', first.task.id, { status: 'done' });
+    expect((await fire('r1', 'M2')).kind).toBe('created');
+    expect(await list()).toHaveLength(2);
+  });
+
+  it('consumo no limite: a tarefa entra na fila (a rotina não pula) e começa com routine quando o consumo baixa', async () => {
+    const { dir, state, fire, task, svc } = routineService('rot-5');
+    state.capped = true;
+    const made = await fire('r1', 'M1');
+    expect(await task(made.task.id)).toMatchObject({ status: 'todo', sessionId: null, queuedAt: expect.any(String) });
+    state.capped = false;
+    await svc.tick();
+    expect(await task(made.task.id)).toMatchObject({ status: 'doing', sessionId: 's-1', queuedAt: null });
+    expect((await readRuns(dir, made.task.id)).map((e) => [e.ev, e.trigger])).toEqual([['start', 'routine']]);
+  });
+
+  it('ele ocupado: a tarefa da rotina na fila começa com trigger routine (não queue) quando ele fica livre', async () => {
+    const { dir, svc, finish, fire, task } = routineService('rot-6');
+    const busy = (await svc.create('p', { title: 'Outra', staffId: 'ana-1' }))!;
+    await svc.start('p', busy.id); // s-1: Ana ocupada
+    const made = await fire('r1', 'M1'); // na fila
+    expect(await task(made.task.id)).toMatchObject({ status: 'todo', queuedAt: expect.any(String) });
+    await finish('s-1'); // a outra vai para revisão e a fila anda
+    expect(await task(made.task.id)).toMatchObject({ status: 'doing' });
+    expect((await readRuns(dir, made.task.id)).map((e) => [e.ev, e.trigger])).toEqual([['start', 'routine']]);
+  });
+
+  it('nasce na fila no mesmo gravar: queda antes do kick não perde a rotina, o tick do boot a começa com routine', async () => {
+    const { dir, svc, task } = routineService('rot-7');
+    // Só a criação (sem o kickStaff): é o que sobra se o servidor cair logo depois de gravar.
+    const made = await svc.createFromRoutine('p', 'ana-1', { id: 'r1', name: 'Revisar PRs', message: 'x' }, 'M1');
+    expect(made.kind).toBe('created');
+    expect(await task(made.task.id)).toMatchObject({ status: 'todo', sessionId: null, queuedAt: expect.any(String), queuedForce: false });
+    expect(await readRuns(dir, made.task.id)).toEqual([]);
+    await svc.tick(); // o tick do boot
+    expect(await task(made.task.id)).toMatchObject({ status: 'doing', sessionId: 's-1', queuedAt: null });
+    expect((await readRuns(dir, made.task.id)).map((e) => [e.ev, e.trigger])).toEqual([['start', 'routine']]);
   });
 });

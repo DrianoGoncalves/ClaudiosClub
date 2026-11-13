@@ -653,9 +653,9 @@ describe('mesma pessoa entre projetos', () => {
     expect(por['t-a-fazer']).toMatchObject({ status: 'todo', staffId: null, sessionId: null });
     expect(por['t-revisao']).toMatchObject({ status: 'review', staffId: null, sessionId: 's-rev' });
 
-    // Reatribuída a outra pessoa: começa do zero (antes, "a tarefa já começou" barrava).
+    // Reatribuída a outra pessoa: começa do zero (antes, "a tarefa já começou" barrava). "A fazer" com responsável já inicia no update.
     await tasksSvc.update('d', 't-plano', { staffId: 'outra' });
-    expect(await tasksSvc.start('d', 't-plano')).toMatchObject({ staffId: 'outra', sessionId: 's-novo', status: 'planning' });
+    expect((await tasksSvc.list('d'))!.find((t) => t.id === 't-plano')).toMatchObject({ staffId: 'outra', sessionId: 's-novo', status: 'planning' });
   });
 
   it('tarefa sem responsável: tick não lança nem começa nada, e o resumo e o quadro leem normal', async () => {
@@ -679,7 +679,7 @@ describe('mesma pessoa entre projetos', () => {
     });
     const agora = new Date(Date.now() + 3_600_000);
     await expect(tasksSvc.tick(agora)).resolves.toBeUndefined();
-    expect(await tasksSvc.summary()).toEqual({ d: { open: 2, review: 0 } });
+    expect(await tasksSvc.summary()).toMatchObject({ d: { open: 2, review: 0 } });
     expect(enviados).toEqual([]);
     const tasks = (await tasksSvc.list('d'))!;
     expect(tasks.map((t) => [t.id, t.status, t.staffId, t.sessionId])).toEqual([
@@ -713,7 +713,9 @@ describe('mesma pessoa entre projetos', () => {
   it('o que é da pessoa e o que é do projeto: cada campo do pedido em exatamente uma lista', () => {
     const listas = [...PERSON_FIELDS, PERSON_PORTRAIT, ...ALLOCATION_FIELDS, ...REQUEST_FIELDS];
     expect(new Set(listas).size).toBe(listas.length);
-    expect([...listas].sort()).toEqual(Object.keys(StaffInputSchema.shape).sort());
+    // `mcpPolicy` e `mcpWrite` são só da entrada da tela antiga: viram `mcpAccess` (ver mcpAccessOfInput) e não são campo da pessoa nem do projeto.
+    const legados = ['mcpPolicy', 'mcpWrite'];
+    expect([...listas].sort()).toEqual(Object.keys(StaffInputSchema.shape).filter((k) => !legados.includes(k)).sort());
   });
 
   it('as rotas novas não entram na lista de funcionário (só navegador)', () => {

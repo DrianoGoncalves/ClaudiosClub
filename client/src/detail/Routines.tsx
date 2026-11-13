@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { cronError, describeCron, nextRun, parseCron } from '../../../shared/cron';
 import type { Routine, RoutineRun, StaffProfile } from '../../../shared/model';
 import { api } from '../api';
+import { pollVisible } from '../usePoll';
 import { formatAgo } from '../format';
 import { t, locale } from '../i18n';
 
@@ -83,8 +84,7 @@ export function Routines({ projectId, staff, onChanged }: { projectId: string; s
   useEffect(() => {
     const read = () => api.routineState().then(setRuns, () => {});
     read();
-    const t = setInterval(read, 30_000);
-    return () => clearInterval(t);
+    return pollVisible(read, 30_000);
   }, []);
 
   const save = async (next: Routine[]) => {
@@ -167,7 +167,7 @@ export function Routines({ projectId, staff, onChanged }: { projectId: string; s
                   ? t('detail.routineNext', { when: next.toLocaleString(locale(), { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) })
                   : t('detail.off')}
                 {' · '}
-                {r.mode === 'continue' ? t('detail.inLastConv') : t('detail.inNewConv')}
+                {r.mode === 'task' ? t('detail.inTask') : r.mode === 'continue' ? t('detail.inLastConv') : t('detail.inNewConv')}
                 {run && (
                   <span className={run.ok ? '' : 'routine-fail'}>
                     {' · '}
@@ -275,8 +275,10 @@ export function Routines({ projectId, staff, onChanged }: { projectId: string; s
             <select value={editing.mode} onChange={(e) => setEditing({ ...editing, mode: e.target.value as Routine['mode'] })}>
               <option value="continue">{t('detail.modeContinue')}</option>
               <option value="new">{t('detail.modeNew')}</option>
+              <option value="task">{t('detail.modeTask')}</option>
             </select>
           </label>
+          {editing.mode === 'task' && <p className="muted small">{t('detail.modeTaskHint')}</p>}
           <p className="actions">
             <button type="submit" className="btn-primary" disabled={busy}>
               {t('detail.saveRoutine')}

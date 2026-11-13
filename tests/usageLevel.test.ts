@@ -33,13 +33,13 @@ describe('weekPace', () => {
     expect(weekPace(0, 7 * DAY)).toEqual({ value: 14.3, perDay: true, level: 'slack' });
   });
 
-  it('a cor sai do mesmo número da tela: 14,2 e 13,96 não ficam com cores diferentes sob o mesmo "14"', () => {
-    // 3% usado com 6d19h: 14,25 → 14,3 (no ritmo exato, verde)
+  it('a cor sai do mesmo número da tela: 13,99 vira 14 e fica verde, 13,8 fica amarelo', () => {
+    // 3% usado com 6d19h: 14,25 → 14,3 (verde)
     expect(weekPace(3, 6 * DAY + 19 * HOUR)).toMatchObject({ value: 14.3, level: 'slack' });
-    // 4% usado: 14,1 (amarela)
-    expect(weekPace(4, 6 * DAY + 19 * HOUR)).toMatchObject({ value: 14.1, level: 'even' });
-    // 5% usado: 13,96 → 14,0 (amarela)
-    expect(weekPace(5, 6 * DAY + 19 * HOUR)).toMatchObject({ value: 14, level: 'even' });
+    // 5% usado: 13,99 → 14,0 (verde: a tela mostra 14)
+    expect(weekPace(5, 6 * DAY + 19 * HOUR)).toMatchObject({ value: 14, level: 'slack' });
+    // 6% usado: 13,84 → 13,8 (amarela)
+    expect(weekPace(6, 6 * DAY + 19 * HOUR)).toMatchObject({ value: 13.8, level: 'even' });
   });
 
   it('nas últimas 24h mostra o total até reiniciar, e a cor vem do ritmo real', () => {
@@ -61,13 +61,14 @@ describe('weekPace', () => {
 });
 
 describe('paceLevel', () => {
-  it('verde do ritmo exato (14,3%/dia) para cima', () => {
+  it('verde de 14%/dia para cima', () => {
+    expect(paceLevel(14)).toBe('slack');
     expect(paceLevel(14.3)).toBe('slack');
     expect(paceLevel(40)).toBe('slack');
   });
 
-  it('amarela de 7 até abaixo do ritmo exato', () => {
-    expect(paceLevel(14.2)).toBe('even');
+  it('amarela de 7 até abaixo de 14', () => {
+    expect(paceLevel(13.9)).toBe('even');
     expect(paceLevel(10)).toBe('even');
     expect(paceLevel(7)).toBe('even');
   });

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { stringify } from 'yaml';
@@ -124,6 +125,45 @@ export async function buildSkillPlugin(names: string[], target: string, dir = LI
   );
   for (const n of found) await fs.cp(path.join(dir, n), path.join(target, 'skills', n), { recursive: true });
   return { dir: target, skills: found };
+}
+
+/**
+ * A versão de cada skill da biblioteca, para o registro de execuções (ver taskRuns.ts): sha256 (12 primeiros caracteres hex)
+ * de TODO o pacote da pasta, com os caminhos relativos em ordem (com `/`) e o conteúdo de cada arquivo. Skill inexistente fica
+ * de fora. Erro ao ler um arquivo deixa a skill de fora (um hash sem um arquivo seria uma versão falsa); não derruba as outras.
+ */
+export async function hashLibrarySkills(names: string[], dir = LIBRARY_DIR): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const n of [...new Set(names)]) {
+    if (!NAME.test(n)) continue;
+    const root = path.join(dir, n);
+    try {
+      const files = (await allFiles(root)).sort();
+      if (!files.includes('SKILL.md')) continue;
+      const h = createHash('sha256');
+      for (const rel of files) {
+        const body = await fs.readFile(path.join(root, rel));
+        h.update(`${rel}\n${body.length}\n`);
+        h.update(body);
+      }
+      out[n] = h.digest('hex').slice(0, 12);
+    } catch {
+      // Sem ler a pasta inteira, não há versão: fica de fora.
+    }
+  }
+  return out;
+}
+
+/** Todos os arquivos da pasta, em qualquer profundidade, com caminho relativo e `/` (sem limite de quantidade). */
+async function allFiles(root: string, rel = ''): Promise<string[]> {
+  const entries = await fs.readdir(path.join(root, rel), { withFileTypes: true });
+  const out: string[] = [];
+  for (const e of entries) {
+    const p = rel ? `${rel}/${e.name}` : e.name;
+    if (e.isDirectory()) out.push(...(await allFiles(root, p)));
+    else out.push(p);
+  }
+  return out;
 }
 
 /** Os campos do frontmatter que o Claudio’s Club não edita (allowed-tools, disable-model-invocation…). */

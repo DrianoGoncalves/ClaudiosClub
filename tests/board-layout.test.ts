@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, Board, CostReport, InboxItem, LinkInfo, Project, Session, Skill, StaffProfile } from '../shared/model';
 import { buildGraph as buildGraphRaw, readingOrder, SIZES, type BoardNode, type BoardNodeType } from '../client/src/board/layout';
-import { portraitUrl } from '../client/src/board/nodes';
+import { portraitUrl, projectMeta } from '../client/src/board/nodes';
 
 // Estes testes contam com a sala do usuário; o padrão do quadro é escondê-la (ver "escopo do usuário" abaixo).
 const buildGraph = (b: Parameters<typeof buildGraphRaw>[0], o: Parameters<typeof buildGraphRaw>[1]) => buildGraphRaw(b, { showUserScope: true, ...o });
@@ -479,11 +479,15 @@ describe('buildGraph', () => {
     const detour = fromAna?.data?.detour;
     expect(detour).toBeDefined();
     const { w, h } = SIZES.employee;
-    expect(detour!.x < bia!.x || detour!.x > bia!.x + w).toBe(true);
-    expect(detour!.y1).toBeGreaterThan(ana!.y + h);
-    expect(detour!.y1).toBeLessThan(bia!.y);
-    expect(detour!.y2).toBeGreaterThan(bia!.y + h);
-    expect(detour!.y2).toBeLessThan(caio!.y);
+    // As medidas são relativas às pontas (a linha anda junto no arraste): as absolutas saem delas.
+    const x = ana!.x + w / 2 + detour!.dx;
+    const y1 = ana!.y + h + detour!.dy1;
+    const y2 = caio!.y - detour!.dy2;
+    expect(x < bia!.x || x > bia!.x + w).toBe(true);
+    expect(y1).toBeGreaterThan(ana!.y + h);
+    expect(y1).toBeLessThan(bia!.y);
+    expect(y2).toBeGreaterThan(bia!.y + h);
+    expect(y2).toBeLessThan(caio!.y);
   });
 
   it('ciclo de gestores não trava o layout', () => {
@@ -555,6 +559,24 @@ describe('buildGraph', () => {
     expect(all?.type === 'employee' && all.data.archived).toBe(true);
   });
 
+  it('contador do cabeçalho: fichas que o quadro mostra, não as conversas (sessionCount) nem o fantasma', () => {
+    const b = { ...board(), staff: [staffProfile('ana', ['s-a1']), staffProfile('bia', []), staffProfile('caio', [])] };
+    b.projects[0]!.sessionCount = 251; // todas as conversas do disco: não é o número de funcionários
+    const employeesOf = (g: ReturnType<typeof buildGraph>, id: string) => {
+      const n = g.nodes.find((x) => x.id === id);
+      return n?.type === 'project' ? n.data.employees : undefined;
+    };
+    expect(employeesOf(buildGraph(b, {}), 'p:a')).toBe(3);
+    expect(employeesOf(buildGraph(b, {}), 'p:b')).toBe(0); // só conversa sem ficha: nada a contar
+
+    // Temporário encerrado/arquivado sai do quadro e da conta; com "arquivados" ligado volta nas duas.
+    const archived = { projects: [], sessions: ['staff:caio'], conversations: {} };
+    expect(employeesOf(buildGraph(b, { archived }), 'p:a')).toBe(2);
+    expect(employeesOf(buildGraph(b, { archived, showArchived: true }), 'p:a')).toBe(3);
+    // Dobrada, a sala não monta os cartões mas o contador segue.
+    expect(employeesOf(buildGraph(b, { archived, collapsedRooms: ['p:a'] }), 'p:a')).toBe(2);
+  });
+
   it('marca como ativa só a linha que chega a um funcionário trabalhando numa tarefa delegada', () => {
     const b = board();
     const working = { sessionId: 's-a1', pid: 9, cwd: A, name: null, status: 'busy', alive: true, entrypoint: null, kind: null, startedAt: null, statusUpdatedAt: null } as const;
@@ -623,6 +645,18 @@ describe('buildGraph', () => {
     expect(proj(graph([]), 'p:a')?.awaiting).toBe(0);
   });
 
+  it('tarefa bloqueada na caixa não pinta o cartão do dono da tarefa: não há conversa esperando você', () => {
+    const b = board();
+    b.staff = [staffProfile('ana', ['s-a1'])];
+    const blocked: InboxItem = {
+      id: 'blocked:t2:t1', kind: 'blocked', projectId: 'a', projectName: 'a', sessionId: '', staffId: 'ana', name: 'ANA',
+      summary: '“B” espera “A”: sem responsável', at: null,
+      blocked: { taskId: 't2', taskTitle: 'B', blockerId: 't1', blockerTitle: 'A', blockerStatus: 'review', reason: 'sem responsável' },
+    };
+    const n = buildGraph(b, { inbox: [blocked] }).nodes.find((x) => x.id === 'h:a:ana');
+    expect(n?.type === 'employee' && n.data.needsYou).toBe(false);
+  });
+
   it('conversa solta com item na caixa destaca o fantasma, que mostra a conversa viva', () => {
     const b = board();
     b.live = [{ sessionId: 's-a2', pid: 8, cwd: A, name: null, status: 'idle', alive: true, entrypoint: null, kind: null, startedAt: null, statusUpdatedAt: null }];
@@ -641,6 +675,21 @@ describe('escopo do usuário', () => {
     const ids = (show?: boolean) => buildGraphRaw(board(), { showUserScope: show }).nodes.map((n) => n.id);
     expect(ids()).not.toContain('u');
     expect(ids(true)).toContain('u');
+  });
+});
+
+describe('linha abaixo do nome da sala', () => {
+  const base = { employees: 4, resources: 0, collapsed: false, exists: true };
+  it('conta funcionários com singular/plural; sem ficha, a parte some (nada de "0 funcionários")', () => {
+    expect(projectMeta(base)).toBe('4 funcionários');
+    expect(projectMeta({ ...base, employees: 1 })).toBe('1 funcionário');
+    expect(projectMeta({ ...base, employees: 0 })).toBe('');
+  });
+  it('junta recursos (só dobrada) e pasta sumida com " · ", sem separador solto quando falta a contagem', () => {
+    expect(projectMeta({ ...base, resources: 3 })).toBe('4 funcionários');
+    expect(projectMeta({ ...base, resources: 3, collapsed: true })).toBe('4 funcionários · 3 agents/skills');
+    expect(projectMeta({ ...base, employees: 0, resources: 1, collapsed: true, exists: false })).toMatch(/^1 agent\/skill · /);
+    expect(projectMeta({ ...base, employees: 0, exists: false }).startsWith(' ·')).toBe(false);
   });
 });
 

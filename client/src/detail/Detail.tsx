@@ -17,7 +17,7 @@ import type {
   UserScope,
 } from '../../../shared/model';
 import { TEMP_IDLE_DAYS } from '../../../shared/model';
-import { alertError, api, ApiError, isPairingError } from '../api';
+import { alertError, api, ApiError, isPairingError, type SkillDeleted } from '../api';
 import { RoomColorPicker } from '../board/colors';
 import { portraitUrl } from '../board/nodes';
 import { idleUnseen, showsStatus, useSeeIdle, useSeenIdle } from '../board/unread';
@@ -27,6 +27,7 @@ import { MoreTabs } from '../chat/MoreTabs';
 import { BrowserCheck } from '../staff/BrowserCheck';
 import type { StaffFormTab } from '../staff/HireForm';
 import { StaffHistory } from '../staff/StaffHistory';
+import { TeamFile } from '../staff/TeamFile';
 import { MAX_INPUT_BYTES, PROJECT_IMAGE_MAX, shrinkImage } from '../lib/shrinkImage';
 import { Attachments } from './Attachments';
 import { type ArchivedConversations, isConversationArchived, splitArchived } from './conversationArchive';
@@ -38,11 +39,12 @@ import { StaffReview } from './StaffReview';
 import { WorthIt } from './WorthIt';
 import { reviewDays } from '../costReview';
 import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatPercent, formatShare, formatUsd, STATUS_LABEL } from '../format';
-import { isLoss, type RankingGroup, type RankingRow, rankingRows, savingsList, teamSavings } from '../ranking';
+import { isLoss, RANKING_PERIODS, type RankingGroup, type RankingRow, rankingRows, savingsList, teamSavings } from '../ranking';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
 import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
+import { SkillManage } from './SkillManage';
 
 // Painel lateral: o que o nó selecionado no quadro tem por trás.
 
@@ -51,6 +53,7 @@ type ProjectCost = CostSummary & { sessions: Record<string, number> };
 /** Últimas opções do seletor de conversas (valores que nenhum id de conversa tem): abrem as arquivadas / voltam às ativas. */
 const ARCHIVED_OPTION = '__archived__';
 const BACK_OPTION = '__back__';
+const OLD_OPTION = '__old__';
 const NO_ARCHIVED: ArchivedConversations = {};
 
 function ArchiveButton({
@@ -137,6 +140,11 @@ export function EmployeePanel(props: {
   /** Conversas arquivadas (id → quando): saem do seletor, até terem atividade depois. */
   archivedConversations?: ArchivedConversations;
   onArchiveConversation?: (id: string, archived: boolean) => Promise<void>;
+  /**
+   * Conversas antigas (a retenção as tirou da lista): `hidden` = quantas ficam de fora, `shown` = já listadas. O item "Mostrar antigas"
+   * do seletor chama `onChange`. Sem isto (ou sem antigas), o item não aparece.
+   */
+  oldConversations?: { shown: boolean; hidden: number; onChange: (shown: boolean) => Promise<void> };
   /** Títulos que o user deu às conversas: valem mais que o assunto automático. */
   conversationTitles?: ConversationTitles;
   /** Dar título à conversa (null = volta ao automático). Sem isto, o botão Renomear não aparece. */
@@ -273,11 +281,32 @@ export function EmployeePanel(props: {
       setConvBusy(false);
     }
   };
+  // "Mostrar antigas" / "Só as recentes": busca as conversas que a retenção tirou da lista (ou volta a escondê-las). A seleção não muda.
+  const old = props.oldConversations;
+  const toggleOld = async () => {
+    if (!old) return;
+    setConvBusy(true);
+    try {
+      await old.onChange(!old.shown);
+    } catch (e) {
+      alertError(e);
+    } finally {
+      setConvBusy(false);
+    }
+  };
+  // Escondeu as antigas com uma delas aberta: ela sai da lista, então abre a mais recente.
+  const oldShown = old?.shown ?? false;
+  const wasOldShown = useRef(oldShown);
+  useEffect(() => {
+    if (wasOldShown.current && !oldShown && current && !conversations.some((c) => c.id === current)) openLatestActive(current);
+    wasOldShown.current = oldShown;
+  }, [oldShown]);
   const onSelect = (value: string) => {
     if (value === ARCHIVED_OPTION) {
       const newest = latestConversation(archivedList);
       if (newest) pick(newest);
     } else if (value === BACK_OPTION) openLatestActive();
+    else if (value === OLD_OPTION) void toggleOld();
     else pick(value);
   };
   // Renomear a conversa aberta: `renaming` é o texto do campo (null = fechado). Trocar de conversa fecha o campo.
@@ -410,7 +439,12 @@ export function EmployeePanel(props: {
             {inArchive ? (
               <option value={BACK_OPTION}>{t('detail.backToConversations')}</option>
             ) : (
-              archivedList.length > 0 && <option value={ARCHIVED_OPTION}>{t('detail.archivedConversations', { n: archivedList.length })}</option>
+              <>
+                {archivedList.length > 0 && <option value={ARCHIVED_OPTION}>{t('detail.archivedConversations', { n: archivedList.length })}</option>}
+                {old && (old.shown || old.hidden > 0) && (
+                  <option value={OLD_OPTION}>{old.shown ? t('detail.hideOldConversations') : t('detail.showOldConversations', { n: old.hidden })}</option>
+                )}
+              </>
             )}
           </select>
           <button
@@ -780,11 +814,14 @@ export function ProjectPanel({
   onFiles,
   onOpenFile,
   onOpenConversation,
+  onTeamImported,
   tasks,
   office,
 }: {
   /** Abre um arquivo do projeto direto no editor de Arquivos (ex.: o guia SPEC.md). */
   onOpenFile?: (path: string) => void;
+  /** Fichas novas vieram de um arquivo de equipe: o quadro relê. */
+  onTeamImported?: () => void;
   /** Abre uma conversa nova de um funcionário no painel dele (ex.: o pedido do guia SPEC.md). */
   onOpenConversation?: (staffId: string, sessionId: string) => void;
   /** Empresa e servidores do projeto (ver office/ProjectOffice.tsx). */
@@ -929,6 +966,7 @@ export function ProjectPanel({
               titles={conversationTitles}
               onOpen={onOpenSession}
             />
+            {project.exists && <TeamFile projectId={project.id} projectName={project.name} staff={team.map((r) => r.staff)} onImported={() => onTeamImported?.()} />}
           </>
         )}
         {tab === 'tools' && (
@@ -1095,17 +1133,11 @@ export function UserPanel({
   );
 }
 
-type RankingTab = 'cost' | 'savings';
-const RANKING_TABS: Array<[RankingTab, string]> = [['cost', t('detail.tabCost')], ['savings', t('detail.tabSavings')]];
-
-/** Período do ranking em dias (null = tudo): hoje (desde a meia-noite), 7 dias, 1 mês, 3 meses (o padrão) e tudo. */
-const RANKING_PERIODS: Array<[string, number | null, string]> = [
-  ['1', 1, t('detail.periodToday')],
-  ['7', 7, t('detail.period7d')],
-  ['30', 30, t('detail.period1m')],
-  ['90', 90, t('detail.periodLast3Months')],
-  ['all', null, t('detail.periodAll')],
-];
+/**
+ * As telas do ranking: quem mais gasta, quem mais economiza e o custo por tarefa. As abas ficam no painel RH e ranking
+ * (PeoplePanel); as duas primeiras são do `RankingPanel` e a de tarefas é a `TaskCostPanel`.
+ */
+export type RankingTab = 'cost' | 'savings' | 'tasks';
 
 /** Uma linha do ranking de funcionários; arquivado fica apagado e com a etiqueta. */
 function RankingItem({
@@ -1192,11 +1224,12 @@ export function SystemCostBlock({ system }: { system?: CostReport['system'] }) {
 }
 
 /**
- * Ranking, em abas: quem mais gasta e quem mais economiza (funcionários, no período escolhido) e os
- * agents. Os gastos são equivalentes em API
- * (estimativa): servem para comparar, não como conta a pagar.
+ * Ranking: quem mais gasta e quem mais economiza (funcionários, no período escolhido) e os agents; a aba vem do
+ * PeoplePanel, que põe o cabeçalho e as abas. Os gastos são equivalentes em API (estimativa): servem para comparar,
+ * não como conta a pagar.
  */
 export function RankingPanel({
+  tab = 'cost',
   groups,
   agents,
   system,
@@ -1205,6 +1238,7 @@ export function RankingPanel({
   onOpenPerson,
   onOpenTask,
 }: {
+  tab?: Exclude<RankingTab, 'tasks'>;
   groups: RankingGroup[];
   agents: Array<{ type: string; usd: number; runs: number }>;
   /** Gasto do Sistema (gerador da vitrine): linha à parte, fora do ranking e da participação dos agents. */
@@ -1217,7 +1251,6 @@ export function RankingPanel({
   /** Abre uma tarefa no quadro do projeto (a que o "Aplicar sugestões" da análise criou). */
   onOpenTask?: (projectId: string, taskId: string) => void;
 }) {
-  const [tab, setTab] = useState<RankingTab>('cost');
   const [limit, setLimit] = useState(10);
   const [period, setPeriod] = useState('90');
   const [report, setReport] = useState<SavingsReport | null>(null);
@@ -1267,7 +1300,7 @@ export function RankingPanel({
   const idle = rows ? rows.length - savers.length : 0;
   const employeesHead = (
     <div className="ranking-head">
-      <h3>{t('detail.employees')}</h3>
+      <h3>{tab === 'cost' ? t('detail.topSpenders') : t('detail.topSavers')}</h3>
       <select className="ranking-period" value={period} onChange={(e) => (setPeriod(e.target.value), setLimit(10))} aria-label={t('detail.period')}>
         {RANKING_PERIODS.map(([k, , label]) => (
           <option key={k} value={k}>
@@ -1281,24 +1314,13 @@ export function RankingPanel({
   const waiting = error ? <p className="error small">{error}</p> : !rows ? <p className="muted small">{t('detail.calculating')}</p> : null;
   return (
     <>
-      <header className="header">
-        <p className="kicker">{t('detail.kickerRanking')}</p>
-        <h2>{tab === 'cost' ? t('detail.topSpenders') : t('detail.topSavers')}</h2>
-        {tab === 'cost' && (
-          <p className="muted small">
-            {t('detail.costNote')}
-            {(scanning || report?.scanning) && ` ${t('detail.stillScanning')}`}
-          </p>
-        )}
-        {tab === 'savings' && report?.scanning && <p className="muted small">{t('detail.stillReading')}</p>}
-      </header>
-      <div className="tabs" role="tablist">
-        {RANKING_TABS.map(([k, label]) => (
-          <button key={k} type="button" role="tab" aria-selected={tab === k} className={`tab ${tab === k ? 'is-active' : ''}`} onClick={() => setTab(k)}>
-            {label}
-          </button>
-        ))}
-      </div>
+      {tab === 'cost' && (
+        <p className="muted small">
+          {t('detail.costNote')}
+          {(scanning || report?.scanning) && ` ${t('detail.stillScanning')}`}
+        </p>
+      )}
+      {tab === 'savings' && report?.scanning && <p className="muted small">{t('detail.stillReading')}</p>}
       {tab === 'savings' ? (
         <section className="section">
           {employeesHead}
@@ -1484,7 +1506,18 @@ export function AgentPanel({
   );
 }
 
-export function SkillPanel({ skill }: { skill: Skill }) {
+export function SkillPanel({
+  skill,
+  projectId,
+  onChanged,
+  onDeleted,
+}: {
+  skill: Skill;
+  /** O projeto da skill (null = conta). */
+  projectId: string | null;
+  onChanged: () => void;
+  onDeleted: (done: SkillDeleted) => void;
+}) {
   return (
     <>
       <header className="header">
@@ -1504,6 +1537,7 @@ export function SkillPanel({ skill }: { skill: Skill }) {
       {skill.error && <p className="error">{skill.error}</p>}
       {skill.link.target && <Field label={t('detail.origin')} mono value={skill.link.target} />}
       {skill.description && <Field label={t('detail.description')} value={skill.description} />}
+      <SkillManage skill={skill} projectId={projectId} onChanged={onChanged} onDeleted={onDeleted} />
       {/* Skill da conta aparece em todas as sessões: dá para copiar para a biblioteca (só quem tem na ficha). */}
       {skill.scope === 'user' && !skill.readOnly && !skill.link.target && <CopyToLibrary name={skill.name} />}
     </>

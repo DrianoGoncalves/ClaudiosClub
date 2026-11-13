@@ -266,6 +266,29 @@ export class AutoContinue {
     }
   }
 
+  /**
+   * Sessões com pendência (memória + arquivo), para a exclusão da retenção. Sem quarentena: arquivo que existe e não lê, JSON
+   * ruim ou entrada estragada LANÇAM (a varredura aborta em vez de apagar sem saber quem tem despertador).
+   */
+  async sessionIdsStrict(): Promise<string[]> {
+    const ids = new Set(this.items.keys());
+    let raw: string;
+    try {
+      raw = await fs.readFile(this.opts.file, 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [...ids];
+      throw err;
+    }
+    const list = (JSON.parse(raw.replace(/^﻿/, '')) as { pending?: unknown } | null)?.pending;
+    if (!Array.isArray(list)) throw new Error(`${this.opts.file}: falta a lista "pending"`);
+    for (const item of list) {
+      const e = PendingEntry.safeParse(item);
+      if (!e.success) throw new Error(`${this.opts.file}: entrada de pendência estragada`);
+      ids.add(e.data.sessionId);
+    }
+    return [...ids];
+  }
+
   /** Arquivo que não dá para ler: guarda como `.bad` (não é sobrescrito na próxima gravação) e segue vazio. */
   private async quarantine(why: string): Promise<void> {
     const bad = `${this.opts.file}.bad`;

@@ -28,6 +28,7 @@ import { readProfile, saveChatChoice, StaffInputSchema, writeAtomic } from '../s
 import { BUILTIN_ROLES } from '../shared/roles';
 import { PERSONALITIES, PERSONALITY_PROMPTS, personalityName, personalityReminder, personalitySection } from '../shared/personality';
 import { staffSettings } from '../server/staff/launch';
+import { CLEAN_BROWSER_MCP_NAME } from '../server/chat/codexArgs';
 
 // Os cargos (server/roles.ts) e a config leem MYCO_HOME: uma pasta temporária, para não usar o ~/.myco de quem roda os testes.
 const home = await vi.hoisted(async () => {
@@ -88,6 +89,8 @@ describe('ficha', () => {
     expect(md).toContain('- Luana (Design system), id `luana-0d88`: Cuidar do design system.');
     expect(md).toContain('- Raquel (Infra, temporário)');
     expect(md).toContain('POST http://127.0.0.1:4848/api/projects/proj-x/tasks');
+    expect(md).toContain('acceptance (o critério de pronto), goal (opcional');
+    expect(md).toContain('blockedBy (ids das tarefas que precisam terminar antes');
     expect(md).toContain('requestedBy: "ana-1a2b"');
     // Todo pedido da ficha à API leva o token da conversa (MYCO_TOKEN, já no ambiente).
     expect(md).toContain('com os cabeçalhos `x-myco: 1` e `x-myco-token: $MYCO_TOKEN`');
@@ -519,7 +522,8 @@ describe('infra: servidores por SSH', () => {
       expect(md).toContain(part);
     }
     expect(md).not.toContain('skill `vps`');
-    expect(renderFicha({ ...p, skills: ['vps'] }, ctx)).toContain('skill `vps`');
+    // A skill `vps` entra na lista de skills (sem o texto fixo sobre servidor: o acesso é o do Club).
+    expect(renderFicha({ ...p, skills: ['vps'] }, ctx)).toContain('Skills: vps.');
     // Sem servidor: a ficha explica o bloqueio; só nomes, nunca host nem pasta.
     const none = renderFicha(profile(), ctx);
     expect(none).toContain('## Servidores');
@@ -659,9 +663,10 @@ describe('StaffService', () => {
     const spawn = (await svc.chatSpawn('proj-id', null, p.id))!;
     const sid = spawn.sessionId;
     expect(spawn.args).toEqual(expect.arrayContaining(['--session-id', sid, '--permission-mode', 'acceptEdits', '--strict-mcp-config']));
-    // A config de MCP (com possíveis segredos) fica fora do projeto, só com o escolhido.
+    // A config de MCP (com possíveis segredos) fica fora do projeto, só com o escolhido. O navegador limpo (ficha com Navegador) entra à
+    // parte, se o Chrome ou o Edge estiver nesta máquina: não conta aqui (ver cleanBrowser.test.ts).
     const mcp = JSON.parse(await fs.readFile(path.join(root, 'run', sid, 'mcp.json'), 'utf8'));
-    expect(Object.keys(mcp.mcpServers)).toEqual(['docs']);
+    expect(Object.keys(mcp.mcpServers).filter((k) => k !== CLEAN_BROWSER_MCP_NAME)).toEqual(['docs']);
   });
 
   it('retomar a conversa usa --resume na mesma sessão, sem duplicar', async () => {
@@ -700,7 +705,8 @@ describe('StaffService', () => {
     const off = await open(false);
     expect(off.args).toContain('--no-chrome');
     expect(off.args).not.toContain('--chrome');
-    expect(off.prompt).not.toContain('## Navegador');
+    // Sem a extensão, a parte do Chrome do usuário some; o navegador limpo não depende dela (pode entrar, conforme o Chrome instalado).
+    expect(off.prompt).not.toContain('Claude in Chrome');
     expect((await readProfile(projectPath, p.id))!.browser).toBe(true);
   });
 

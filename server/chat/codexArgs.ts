@@ -1,7 +1,7 @@
 import { statSync, type Stats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { Autonomy } from '../../shared/model';
+import { FTP_MCP_NAME, GPT_MCP_NAME, type Autonomy } from '../../shared/model';
 import { SANDBOX_HOST } from '../callers';
 
 // Linha de comando do Codex (CLI da OpenAI) para um funcionário com `engine: 'codex'`. Cada mensagem é uma execução
@@ -213,6 +213,8 @@ export interface CodexMcpServer {
   args: string[];
   /** Pasta do processo do MCP (o ROOT do Claudio’s Club, fora do projeto da conversa). Sem ela, o Codex usa a pasta de trabalho. */
   cwd?: string;
+  /** Ferramentas que a conversa vê (acesso da ficha, ver server/staff/mcpAccess.ts): `enabled_tools`. Ausente = todas as do MCP. */
+  enabledTools?: string[];
 }
 
 /** Nome do MCP de SSH na configuração do Codex (`mcp_servers.<nome>`). É o mesmo do Claude (`SSH_MCP_NAME`, em server/staff/sshMcp.ts). */
@@ -221,8 +223,11 @@ export const CODEX_SSH_MCP_NAME = 'myco-ssh';
 /** Nome do MCP do Chrome do usuário (Playwright MCP em modo extensão) na configuração do Codex. Ver `codexChromeMcpArgs`. */
 export const CODEX_CHROME_MCP_NAME = 'myco-chrome';
 
-/** Os `-c mcp_servers.<nome>.*` de um MCP da conversa (command, args, cwd e aprovação). Igual para o SSH e para o Chrome. */
-function codexMcpArgs(name: string, s: CodexMcpServer | null | undefined): string[] {
+/**
+ * Os `-c mcp_servers.<nome>.*` de um MCP da conversa (command, args, cwd e aprovação). Igual para o SSH e para o Chrome. `enabled`: as
+ * ferramentas que a conversa vê (allowlist, `enabled_tools`); ausente = o Codex não põe filtro.
+ */
+function codexMcpArgs(name: string, s: CodexMcpServer | null | undefined, enabled?: string[]): string[] {
   if (!s) return [];
   const key = `mcp_servers.${name}`;
   return [
@@ -230,6 +235,7 @@ function codexMcpArgs(name: string, s: CodexMcpServer | null | undefined): strin
     '-c', `${key}.args=[${s.args.map((a) => tomlString(a)).join(',')}]`,
     ...(s.cwd ? ['-c', `${key}.cwd=${tomlString(s.cwd.replace(/\\/g, '/'))}`] : []),
     '-c', `${key}.default_tools_approval_mode=${tomlString('approve')}`,
+    ...(enabled ? ['-c', `${key}.enabled_tools=[${enabled.map((t) => tomlString(t)).join(',')}]`] : []),
   ];
 }
 
@@ -239,7 +245,7 @@ function codexMcpArgs(name: string, s: CodexMcpServer | null | undefined): strin
  * MCP (conexões da ficha e `sshWrite`) e o texto da ficha, não a aprovação do Codex.
  */
 export function codexSshMcpArgs(s: CodexMcpServer | null | undefined): string[] {
-  return codexMcpArgs(CODEX_SSH_MCP_NAME, s);
+  return codexMcpArgs(CODEX_SSH_MCP_NAME, s, s?.enabledTools);
 }
 
 /**
@@ -270,10 +276,88 @@ export const CHROME_MCP_TOOLS = [
  */
 export function codexChromeMcpArgs(s: CodexMcpServer | null | undefined): string[] {
   if (!s) return [];
-  return [
-    ...codexMcpArgs(CODEX_CHROME_MCP_NAME, s),
-    '-c', `mcp_servers.${CODEX_CHROME_MCP_NAME}.enabled_tools=[${CHROME_MCP_TOOLS.map((t) => tomlString(t)).join(',')}]`,
-  ];
+  // Com lista da ficha, só as que estão na allowlist do Chrome (interseção: a ficha tira, não põe).
+  const only = s.enabledTools;
+  const enabled = only ? CHROME_MCP_TOOLS.filter((t) => only.includes(t)) : CHROME_MCP_TOOLS;
+  return codexMcpArgs(CODEX_CHROME_MCP_NAME, s, enabled);
+}
+
+/** Nome do navegador limpo (Playwright MCP com perfil em memória, sem logins) na configuração do Codex e no mcp.json do Claude. */
+export const CLEAN_BROWSER_MCP_NAME = 'myco-navegador';
+
+/**
+ * Ferramentas do navegador limpo: as do Chrome do usuário, mais as que testam sem login (redimensionar, para ver o celular; console; passar o
+ * mouse; selecionar). Perfil isolado, então nada do dono aparece nele. Continua de fora: código no processo do MCP, script na página, upload e
+ * arrastar arquivo, PDF, cookies e armazenamento, rede e rotas, e as ferramentas que a página registra (webmcp).
+ */
+export const CLEAN_BROWSER_TOOLS = [...CHROME_MCP_TOOLS, 'browser_resize', 'browser_console_messages', 'browser_hover', 'browser_select_option'];
+
+/**
+ * Ferramentas do navegador limpo que o Claude não usa (`--disallowedTools`). No Claude não há allowlist de ferramenta de MCP, então se nega o que
+ * roda código no processo do MCP ou mexe em arquivo local (um upload de `.env` passaria por cima das regras de segredo). É denylist: vale para a
+ * versão do Playwright MCP fixada no package.json; uma ferramenta nova dele precisa ser revista aqui.
+ */
+export const CLEAN_BROWSER_DENIED = [
+  'browser_run_code_unsafe',
+  'browser_evaluate',
+  'browser_file_upload',
+  'browser_drop',
+  'browser_pdf_save',
+  'browser_storage_state',
+  'browser_set_storage_state',
+  'browser_route',
+  'browser_network_state_set',
+];
+
+/** Os `-c mcp_servers.myco-navegador.*` da conversa do Codex (ver `codexMcpArgs`). Sem o MCP, nada. */
+export function codexCleanBrowserMcpArgs(s: CodexMcpServer | null | undefined): string[] {
+  return codexMcpArgs(CLEAN_BROWSER_MCP_NAME, s, CLEAN_BROWSER_TOOLS);
+}
+
+/**
+ * MCP extra da conversa do Codex: os da biblioteca do Club e os da ficha (projeto, usuário ou local), montados em `codexMcpServers`
+ * (server/staff/mcp.ts). Stdio: o comando e os argumentos (o lançador). http: a `url` e, com cabeçalho, `headersHelper` (o comando que imprime
+ * o JSON dos cabeçalhos; é o mesmo formato do `headersHelper` do Claude Code, ver `quotedCommand`). Nunca valor de env ou cabeçalho aqui:
+ * eles ficam no cofre ou no arquivo de lançamento da conversa, que a sandbox nega.
+ */
+export type CodexExtraMcp = { name: string; enabledTools?: string[] } & ({ command: string; args: string[] } | { url: string; headersHelper?: string });
+
+/** Nome de MCP que o Codex aceita em `mcp_servers.<nome>`. Sem ponto: o ponto vira tabela aninhada no TOML. */
+export const CODEX_EXTRA_MCP_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * Nomes que um MCP da biblioteca ou da ficha não pode usar no Codex: os internos (SSH, Chrome do usuário, navegador limpo, FTP e GPT) e o
+ * "claude-in-chrome" (a chave do Chrome do Claude, ver mcpAccess.ts). Se um MCP do projeto tivesse um desses nomes, sobrescreveria o interno.
+ */
+export const CODEX_RESERVED_MCP_NAMES: ReadonlySet<string> = new Set([
+  CODEX_SSH_MCP_NAME,
+  CODEX_CHROME_MCP_NAME,
+  CLEAN_BROWSER_MCP_NAME,
+  FTP_MCP_NAME,
+  GPT_MCP_NAME,
+  'claude-in-chrome',
+]);
+
+/**
+ * Os `-c mcp_servers.<nome>.*` dos MCPs extras da conversa. Mesma regra de aprovação dos internos (`approve`, sem ela o `codex exec` recusa a
+ * chamada), e `enabled_tools` só quando a ficha limita as ferramentas (`readonly`/`ask` com teste). Nome fora do padrão ou reservado é pulado
+ * aqui também, por segurança: quem monta a lista já recusou, mas a linha de comando não depende disso.
+ */
+export function codexExtraMcpArgs(list: readonly CodexExtraMcp[] | undefined): string[] {
+  return (list ?? [])
+    .filter((m) => CODEX_EXTRA_MCP_NAME.test(m.name) && !CODEX_RESERVED_MCP_NAMES.has(m.name))
+    .flatMap((m) => {
+      const key = `mcp_servers.${m.name}`;
+      const transport =
+        'url' in m
+          ? ['-c', `${key}.url=${tomlString(m.url)}`, ...(m.headersHelper ? ['-c', `${key}.http_headers_helper=${tomlString(m.headersHelper)}`] : [])]
+          : ['-c', `${key}.command=${tomlString(m.command)}`, '-c', `${key}.args=[${m.args.map((a) => tomlString(a)).join(',')}]`];
+      return [
+        ...transport,
+        '-c', `${key}.default_tools_approval_mode=${tomlString('approve')}`,
+        ...(m.enabledTools ? ['-c', `${key}.enabled_tools=[${m.enabledTools.map((t) => tomlString(t)).join(',')}]`] : []),
+      ];
+    });
 }
 
 /** O que o `chatSpawn` entrega para abrir uma conversa no Codex (no lugar dos argumentos do `claude`). */
@@ -295,12 +379,20 @@ export interface CodexSpawn {
   mycoUrl: string;
   /** Onde o thread_id é gravado (e lido ao reabrir). */
   threadFile: string;
+  /** Chamado quando o Codex dá o thread_id desta conversa (o registro de conversas do Club anota; ver sessionsRegistry.ts). */
+  onThread?: (threadId: string) => void;
   /** "Permitir acesso à internet", lida a cada execução (ver `CodexProcess`). Ausente = desligada. */
   internetAccess?: () => Promise<boolean>;
   /** MCP de SSH da ficha (conexões SSH), ou null: sem ele. Ver `codexSshMcpArgs`. */
   sshMcp?: CodexMcpServer | null;
   /** MCP do Chrome do usuário (só sem SSH na conversa), ou null: sem ele. Ver `codexChromeMcpArgs`. */
   chromeMcp?: CodexMcpServer | null;
+  /** MCP do navegador limpo (sem logins; ver `codexCleanBrowserMcpArgs`), ou null: sem ele. */
+  cleanMcp?: CodexMcpServer | null;
+  /** MCPs da biblioteca e da ficha (projeto, usuário, local), já montados em `codexMcpServers`. Ver `codexExtraMcpArgs`. */
+  extraMcps?: CodexExtraMcp[];
+  /** Arquivo de lançamento desses MCPs (`codex-mcp.json`), ou null: o CodexProcess o apaga quando a conversa fecha. */
+  mcpSnapshotFile?: string | null;
 }
 
 /**
@@ -338,6 +430,10 @@ export interface CodexRunOptions {
   sshMcp?: CodexMcpServer | null;
   /** MCP do Chrome do usuário (null = sem ele). Ver `codexChromeMcpArgs`. */
   chromeMcp?: CodexMcpServer | null;
+  /** MCP do navegador limpo (null = sem ele). Ver `codexCleanBrowserMcpArgs`. */
+  cleanMcp?: CodexMcpServer | null;
+  /** MCPs da biblioteca e da ficha (projeto, usuário, local); ausente = nenhum. Ver `codexExtraMcpArgs`. */
+  extraMcps?: CodexExtraMcp[];
 }
 
 /**
@@ -400,6 +496,8 @@ export function buildCodexArgs(o: CodexRunOptions): string[] {
   args.push(...codexWindowsSandboxArgs(o.platform));
   args.push(...codexSshMcpArgs(o.sshMcp));
   args.push(...codexChromeMcpArgs(o.chromeMcp));
+  args.push(...codexCleanBrowserMcpArgs(o.cleanMcp));
+  args.push(...codexExtraMcpArgs(o.extraMcps));
   if (o.instructions && instructionsInArgv(o.instructions, o.platform)) args.push('-c', `developer_instructions=${tomlString(o.instructions)}`);
   if (resume) args.push(o.threadId!);
   args.push('-');

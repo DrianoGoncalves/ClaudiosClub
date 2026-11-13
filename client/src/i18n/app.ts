@@ -16,6 +16,9 @@ export default defineMessages({
     'app.modelValue': 'modelo {value}',
     'app.effortValue': '{value}',
     'app.agentSaved': 'Agent {name} salvo{how}. Vale para as sessões abertas a partir de agora.',
+    'app.skillDeleted': 'Skill “{name}” movida para a lixeira: {trash}. Para recuperar, mova essa pasta de volta para {dir}.',
+    'app.skillDeletedHooks':
+      'Skill “{name}” movida para a lixeira: {trash}. Hooks tirados dos settings: {hooks}. Backups dos settings: {backups}. Para recuperar, mova a pasta da skill de volta para {dir} e copie cada backup sobre o settings do mesmo nome.',
     'app.hiredChat': '{name} foi contratado(a). Converse pelo painel quando quiser.',
     'app.hiredLaunched': '{name} foi contratado(a) e já começou a conversa no painel.',
     'app.hiredNotLaunched': '{name} foi contratado(a), mas a conversa não começou: {error}. Escreva para ele(a) pelo painel.',
@@ -52,6 +55,9 @@ export default defineMessages({
     'app.modelValue': 'model {value}',
     'app.effortValue': '{value}',
     'app.agentSaved': 'Agent {name} saved{how}. Applies to sessions opened from now on.',
+    'app.skillDeleted': 'Skill “{name}” moved to the trash: {trash}. To recover it, move that folder back to {dir}.',
+    'app.skillDeletedHooks':
+      'Skill “{name}” moved to the trash: {trash}. Hooks removed from the settings: {hooks}. Settings backups: {backups}. To recover it, move the skill folder back to {dir} and copy each backup over the settings file with the same name.',
     'app.hiredChat': '{name} was hired. Chat with them from the panel whenever you like.',
     'app.hiredLaunched': '{name} was hired and has already started the conversation in the panel.',
     'app.hiredNotLaunched': '{name} was hired, but the conversation did not start: {error}. Write to them from the panel.',
@@ -88,6 +94,9 @@ export default defineMessages({
     'app.modelValue': 'modelo {value}',
     'app.effortValue': '{value}',
     'app.agentSaved': 'Agent {name} guardado{how}. Aplica a las sesiones que se abran desde ahora.',
+    'app.skillDeleted': 'Skill “{name}” movida a la papelera: {trash}. Para recuperarla, mueve esa carpeta de vuelta a {dir}.',
+    'app.skillDeletedHooks':
+      'Skill “{name}” movida a la papelera: {trash}. Hooks quitados de los settings: {hooks}. Respaldos de los settings: {backups}. Para recuperarla, mueve la carpeta de la skill de vuelta a {dir} y copia cada respaldo sobre el settings con el mismo nombre.',
     'app.hiredChat': '{name} fue contratado/a. Conversa desde el panel cuando quieras.',
     'app.hiredLaunched': '{name} fue contratado/a y ya empezó la conversación en el panel.',
     'app.hiredNotLaunched': '{name} fue contratado/a, pero la conversación no empezó: {error}. Escríbele desde el panel.',

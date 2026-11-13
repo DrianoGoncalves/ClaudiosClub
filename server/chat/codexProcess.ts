@@ -7,7 +7,7 @@ import { CODEX_CONTEXT_WINDOW } from '../adapters/claude/pricing';
 import { resolveCodexCommand, type CodexEnvStatus } from '../codexEnv';
 import { pickCodexSubstitute, type CodexModelInfo } from '../codexModels';
 import { cleanEnv, withoutMycoToken } from '../auth';
-import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexMcpServer, type CodexSecrets } from './codexArgs';
+import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexExtraMcp, type CodexMcpServer, type CodexSecrets } from './codexArgs';
 import { contextUsed, isModelUnavailable, isToolCall, itemFromCodex, parseCodexFailure, type CodexPhase } from './codexEvents';
 import { hasCheckpoint, stripCheckpoint } from './items';
 import { ChatProcess, type ChatProcessOptions } from './process';
@@ -34,6 +34,15 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   sshMcp?: CodexMcpServer | null;
   /** MCP do Chrome do usuário (null = sem ele). Ver `codexChromeMcpArgs` em codexArgs.ts. */
   chromeMcp?: CodexMcpServer | null;
+  /** MCP do navegador limpo (null = sem ele). Ver `codexCleanBrowserMcpArgs` em codexArgs.ts. */
+  cleanMcp?: CodexMcpServer | null;
+  /** MCPs da biblioteca e da ficha (projeto, usuário, local). Ver `codexExtraMcpArgs` em codexArgs.ts. */
+  extraMcps?: CodexExtraMcp[];
+  /**
+   * Arquivo de lançamento dos MCPs da ficha (`codex-mcp.json`, com os valores expandidos). Ele vale enquanto a conversa está aberta: quando
+   * a conversa fecha (stop, ou o servidor desligando), sai do disco. A próxima abertura grava de novo (prepareCodexRun).
+   */
+  mcpSnapshotFile?: string | null;
   /** O que o bloqueio de segredos precisa saber; `mycoHome` é obrigatório (ver `CodexSecrets` em codexArgs.ts). */
   secrets: CodexSecrets;
   /**
@@ -54,6 +63,8 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   mycoUrl?: string;
   /** Onde guardar o thread_id para continuar depois que o processo fechar (ou o servidor reiniciar). */
   threadFile?: string;
+  /** Chamado quando o Codex dá o thread_id desta conversa (ver CodexSpawn.onThread). */
+  onThread?: (threadId: string) => void;
   /**
    * Catálogo de modelos da conta (GET /api/codex/models), para o plano B: se a conta recusar o modelo da ficha, o turno é refeito uma vez
    * com o mais parecido daqui (ver `pickCodexSubstitute`). Sem ele, o plano B roda sem `-m` (o padrão do Codex).
@@ -319,6 +330,8 @@ export class CodexProcess extends ChatProcess {
         readOnlyPaths: o.readOnlyPaths,
         sshMcp: o.sshMcp,
         chromeMcp: o.chromeMcp,
+        cleanMcp: o.cleanMcp,
+        extraMcps: o.extraMcps,
         secrets: o.secrets,
         network: status.networkProxy ? 'loopback' : 'off',
         internetAccess,
@@ -482,6 +495,8 @@ export class CodexProcess extends ChatProcess {
   }
 
   private finishSession(error: string | null) {
+    // O arquivo de lançamento dos MCPs da ficha sai com a conversa. Falhar ao apagar não derruba nada (o `force` ignora o que não existe).
+    if (this.codex.mcpSnapshotFile) void fs.rm(this.codex.mcpSnapshotFile, { force: true }).catch(() => {});
     if (!this.state.running) return;
     this.endTurnBudget();
     this.opts.onExit?.(null, error);
@@ -505,6 +520,7 @@ export class CodexProcess extends ChatProcess {
         if (id && id !== this.thread) {
           this.thread = id;
           if (this.codex.threadFile) void writeCodexThread(this.codex.threadFile, id).catch(() => {});
+          this.codex.onThread?.(id);
         }
         return;
       }

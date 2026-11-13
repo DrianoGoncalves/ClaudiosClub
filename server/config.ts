@@ -45,6 +45,11 @@ const DEFAULTS: AppConfig = {
   // Freela sem ficha parado há 3 dias é arquivado sozinho (0 = nunca); arquivar não apaga nada.
   freelaArchiveDays: 3,
   freelaAutoArchived: {},
+  // Conversa sem atividade há 7 dias sai da lista (o arquivo nem é lido); 0 = desligado. Arquivar não apaga nada.
+  archiveAfterDays: 7,
+  // Só para conversas lançadas pelo Club (sessions-registry.json); 0 = desligado. Esta etapa ainda não apaga nada.
+  deleteAfterDays: 30,
+  retentionDeleteEnabledAt: null,
   workspaces: [],
   projectWorkspaces: {},
   // Ligado: a fila só começa a próxima tarefa com RAM livre e sem passar do teto (ver resourceGate.ts).
@@ -66,6 +71,8 @@ const CODEX_MODEL = z
   .max(100, 'nome de modelo grande demais')
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$|^$/, 'nome de modelo inválido');
 const FREELA_DAYS = z.number().int('use um número inteiro de dias').min(0, 'mínimo 0 (nunca)').max(90, 'máximo de 90 dias');
+/** Retenção de conversas (arquivar e apagar): 0 desliga. O par é conferido à parte (ver retentionPairOk). */
+const RETENTION_DAYS = z.number().int('use um número inteiro de dias').min(0, 'mínimo 0 (desligado)').max(365, 'máximo de 365 dias');
 /** 0 desliga a parte de RAM do gate de recursos; senão, de 0,5 a 64 GB (passo livre). */
 const RAM_GB = z.number().refine((n) => n === 0 || (n >= 0.5 && n <= 64), 'use 0 (desliga) ou um valor de 0,5 a 64 GB');
 const MAX_CHATS = z.number().int('use um número inteiro').min(0, 'mínimo 0 (sem teto)').max(50, 'máximo de 50 conversas');
@@ -133,6 +140,9 @@ const ConfigFile = z
     clubGuard: z.boolean().optional().catch(undefined),
     freelaArchiveDays: FREELA_DAYS.optional().catch(undefined),
     freelaAutoArchived: z.record(z.string(), z.unknown()).optional().catch(undefined),
+    archiveAfterDays: RETENTION_DAYS.optional().catch(undefined),
+    deleteAfterDays: RETENTION_DAYS.optional().catch(undefined),
+    retentionDeleteEnabledAt: z.string().datetime().nullable().optional().catch(undefined),
     workspaces: z.array(z.unknown()).optional().catch(undefined),
     projectWorkspaces: z.record(z.string(), z.unknown()).optional().catch(undefined),
     resourceGate: z.boolean().optional().catch(undefined),
@@ -163,6 +173,8 @@ export const WorkspaceInput = z.object({
 });
 
 export class WorkspaceError extends Error {}
+/** Retenção que não fecha (apagar antes ou junto de arquivar, com os dois ligados): 400, nada é gravado. */
+export class RetentionError extends Error {}
 
 const BUDGET = z.number().int().min(1).max(100);
 
@@ -186,6 +198,10 @@ export const ConfigPatch = z.object({
   clubGuard: z.boolean().optional(),
   /** Dias parado até o freela (conversa sem ficha) ser arquivado sozinho; 0 = nunca. */
   freelaArchiveDays: FREELA_DAYS.optional(),
+  /** Dias sem atividade até a conversa sair da lista; 0 = desligado. */
+  archiveAfterDays: RETENTION_DAYS.optional(),
+  /** Dias sem atividade até as conversas do Club poderem ser apagadas; 0 = desligado. Passa do arquivamento (ver updateConfig). */
+  deleteAfterDays: RETENTION_DAYS.optional(),
   /** Por id de projeto: uma cor troca a da sala; null volta à padrão. Os outros projetos ficam como estão. */
   projectColors: z.record(z.string().min(1).max(200), COLOR.nullable()).optional(),
   /** Por id de projeto: só o apelido na tela (a pasta não muda); vazio ou null volta ao nome da pasta. */
@@ -263,6 +279,8 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     clubGuard: d.clubGuard ?? DEFAULTS.clubGuard,
     freelaArchiveDays: d.freelaArchiveDays ?? DEFAULTS.freelaArchiveDays,
     freelaAutoArchived: readFreelaRecord(d.freelaAutoArchived),
+    ...retentionOf(d.archiveAfterDays, d.deleteAfterDays),
+    retentionDeleteEnabledAt: d.retentionDeleteEnabledAt ?? null,
     resourceGate: d.resourceGate ?? DEFAULTS.resourceGate,
     minFreeRamGb: d.minFreeRamGb ?? DEFAULTS.minFreeRamGb,
     cpuGate: d.cpuGate ?? DEFAULTS.cpuGate,
@@ -380,10 +398,37 @@ function uniqueId(base: string, taken: Set<string>): string {
   for (let i = 2; ; i++) if (!taken.has(`${base}-${i}`)) return `${base}-${i}`;
 }
 
+/** Com os dois ligados (> 0), apagar tem de passar de arquivar. Com um deles em 0, não há par para conferir. */
+function retentionPairOk(archive: number, del: number): boolean {
+  return archive === 0 || del === 0 || del > archive;
+}
+
+/** Os dias de retenção (ausente = padrão). Par que não fecha (editado à mão) volta aos dois padrões. */
+function retentionOf(archive: number | undefined, del: number | undefined): { archiveAfterDays: number; deleteAfterDays: number } {
+  const a = archive ?? DEFAULTS.archiveAfterDays;
+  const d = del ?? DEFAULTS.deleteAfterDays;
+  if (retentionPairOk(a, d)) return { archiveAfterDays: a, deleteAfterDays: d };
+  return { archiveAfterDays: DEFAULTS.archiveAfterDays, deleteAfterDays: DEFAULTS.deleteAfterDays };
+}
+
 export async function updateConfig(patch: z.infer<typeof ConfigPatch>, file = CONFIG_FILE): Promise<AppConfig> {
   const { projectColors, projectNames, boardBackground, projectBudgets, ...rest } = patch;
   return mutate(file, (current) => {
     const next: Record<string, unknown> = { ...current, ...stripUndefined(rest) };
+    // Quem mexeu em um dos dois confere o par já com o outro como está gravado; se não fecha, recusa e não grava.
+    if (rest.archiveAfterDays !== undefined || rest.deleteAfterDays !== undefined) {
+      const a = RETENTION_DAYS.safeParse(next.archiveAfterDays);
+      const d = RETENTION_DAYS.safeParse(next.deleteAfterDays);
+      const archive = a.success ? a.data : DEFAULTS.archiveAfterDays;
+      const del = d.success ? d.data : DEFAULTS.deleteAfterDays;
+      if (!retentionPairOk(archive, del)) {
+        throw new RetentionError(`apagar depois de arquivar: os dias para apagar (${del}) têm de passar dos dias para arquivar (${archive}); use 0 para desligar um deles`);
+      }
+      // Dias para apagar diminuídos: o que seria apagado mudou, então a exclusão volta a precisar de confirmação no navegador.
+      const prev = RETENTION_DAYS.safeParse(current.deleteAfterDays);
+      const prevDel = prev.success ? prev.data : DEFAULTS.deleteAfterDays;
+      if (rest.deleteAfterDays !== undefined && del < prevDel) next.retentionDeleteEnabledAt = null;
+    }
     // Cores, nomes, fundo e orçamentos mudam por partes: o que não veio no pedido fica como está.
     if (projectColors) next.projectColors = mergePartial(current.projectColors, projectColors);
     if (projectNames) next.projectNames = mergePartial(current.projectNames, projectNames);
@@ -491,6 +536,28 @@ export async function autoArchiveFreelas(
     const next = Object.fromEntries(record);
     const same = list.size === sessions.length && Object.keys(next).length === Object.keys(before).length && Object.entries(next).every(([k, v]) => before[k] === v);
     return same ? current : { ...current, archived: { ...archived, sessions: [...list] }, freelaAutoArchived: next };
+  });
+}
+
+/** Liga (data ISO) ou desliga (null) a exclusão da retenção. Quem chama confere o navegador (ver retentionSweep.ts). */
+export async function setRetentionDeleteEnabledAt(value: string | null, file = CONFIG_FILE): Promise<AppConfig> {
+  return mutate(file, (current) => ({ ...current, retentionDeleteEnabledAt: value }));
+}
+
+/** Tira as conversas apagadas de tudo que o config guarda sobre elas: arquivadas, por conversa, títulos e o controle do freela. */
+export async function forgetSessions(ids: string[], file = CONFIG_FILE): Promise<AppConfig> {
+  const gone = new Set(ids);
+  const keepKeys = (o: unknown) =>
+    o && typeof o === 'object' && !Array.isArray(o) ? Object.fromEntries(Object.entries(o as Record<string, unknown>).filter(([k]) => !gone.has(k))) : o;
+  return mutate(file, (current) => {
+    const archived = (current.archived && typeof current.archived === 'object' ? current.archived : {}) as Record<string, unknown>;
+    const sessions = Array.isArray(archived.sessions) ? archived.sessions.filter((s) => typeof s !== 'string' || !gone.has(s)) : archived.sessions;
+    return {
+      ...current,
+      archived: { ...archived, sessions, conversations: keepKeys(archived.conversations) },
+      conversationTitles: keepKeys(current.conversationTitles),
+      freelaAutoArchived: keepKeys(current.freelaAutoArchived),
+    };
   });
 }
 

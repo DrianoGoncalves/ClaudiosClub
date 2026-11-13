@@ -68,13 +68,15 @@ export type Remember = 'session' | 'project';
 type Suggestion = Record<string, unknown> & { type?: string; rules?: unknown[] };
 
 /**
- * As regras do "permitir sempre". Na conversa, as sugestões do próprio Claude Code (que podem ser
- * trocar o modo, como "edita sozinho"). No projeto, só regras de ferramenta: trocar o modo do
- * projeto inteiro seria demais.
+ * As regras do "permitir sempre". Na conversa, as sugestões do próprio Claude Code que liberam ou mudam o modo (como
+ * "edita sozinho"). No projeto, só regras de ferramenta: trocar o modo do projeto inteiro seria demais.
+ * Só regras de `allow`: uma sugestão que remove, substitui ou põe ask/deny derrubaria o acesso aos MCPs da ficha (ver mcpAccess.ts).
  */
 export function rememberRules(tool: string, suggestions: Suggestion[], where: Remember): unknown[] {
-  if (where === 'session' && suggestions.length) return suggestions.map((s) => ({ ...s, destination: 'session' }));
-  const rules = suggestions.filter((s) => s.type === 'addRules').flatMap((s) => (Array.isArray(s.rules) ? s.rules : []));
+  const allowRules = (s: Suggestion) => s.type === 'addRules' && s.behavior === 'allow';
+  const safe = suggestions.filter((s) => s.type === 'setMode' || s.type === 'addDirectories' || allowRules(s));
+  if (where === 'session' && safe.length) return safe.map((s) => ({ ...s, destination: 'session' }));
+  const rules = suggestions.filter(allowRules).flatMap((s) => (Array.isArray(s.rules) ? s.rules : []));
   return [{ type: 'addRules', rules: rules.length ? rules : [{ toolName: tool }], behavior: 'allow', destination: where === 'session' ? 'session' : 'localSettings' }];
 }
 

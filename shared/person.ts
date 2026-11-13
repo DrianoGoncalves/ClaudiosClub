@@ -17,7 +17,7 @@ export const ALLOCATION_FIELDS = [
   'agents',
   'skills',
   'mcps',
-  'mcpWrite',
+  'mcpAccess',
   'knowledge',
   'canHire',
   'worktree',

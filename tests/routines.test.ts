@@ -79,4 +79,38 @@ describe('rotinas agendadas', () => {
     expect(RoutinesSchema.safeParse([routine({ message: ' ' })]).success).toBe(false);
     expect(RoutinesSchema.safeParse(Array.from({ length: 11 }, (_, i) => routine({ id: `r${i}` }))).success).toBe(false);
   });
+
+  it('aceita o modo task (cria tarefa) e recusa modo desconhecido', () => {
+    expect(RoutinesSchema.safeParse([routine({ mode: 'task' })]).success).toBe(true);
+    expect(RoutinesSchema.safeParse([{ ...routine(), mode: 'outro' }]).success).toBe(false);
+  });
+
+  it('a execução recebe o minuto que disparou (chave da tarefa de rotina)', async () => {
+    const minutes: string[] = [];
+    const s = new RoutineScheduler({
+      file: path.join(root, 'd.json'),
+      listStaff: async () => [profile([routine({ mode: 'task' })])],
+      run: async (_p, _r, minute) => {
+        minutes.push(minute);
+        return { ok: true, text: 'ok' };
+      },
+      log: () => {},
+    });
+    await s.tick(monday19);
+    expect(minutes).toEqual(['2026-10-26T19:00']);
+  });
+
+  it('erro do servidor na execução vira aviso, com o rótulo de erro (não de pulada)', async () => {
+    const s = new RoutineScheduler({
+      file: path.join(root, 'e.json'),
+      listStaff: async () => [profile([routine()])],
+      run: async () => {
+        throw new Error('disco cheio');
+      },
+      log: () => {},
+    });
+    await s.tick(monday19);
+    expect(s.alerts()).toEqual([expect.objectContaining({ text: 'erro do servidor: disco cheio' })]);
+    expect((await s.state())['proj:ana-1:r1']).toMatchObject({ ok: false, text: 'erro do servidor: disco cheio' });
+  });
 });

@@ -85,18 +85,62 @@ export async function activeSubagents(claudeHome: string, cwd: string, sessionId
   return [...types].sort();
 }
 
-/** Lista os transcripts de uma pasta de projeto em ~/.claude/projects, do mais recente ao mais antigo. */
+export interface SessionListOptions {
+  /** Dias sem atividade a partir dos quais a conversa fica de fora da lista (0 ou ausente = sem corte). */
+  archiveAfterDays?: number;
+  /** Lista também as antigas (o modo "incluir antigas", `?old=1`). */
+  includeOld?: boolean;
+  /** Sessões que a retenção nunca arquiva (ver server/retention.ts): ficam mesmo paradas além do prazo. */
+  keep?: ReadonlySet<string>;
+  /** Relógio (só os testes trocam). */
+  now?: number;
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * Lista os transcripts de uma pasta de projeto em ~/.claude/projects, do mais recente ao mais antigo. Com `archiveAfterDays`
+ * (e sem `includeOld`), a conversa sem atividade há mais dias que isso fica de fora SEM ler o arquivo: só `stat` do
+ * transcript e da pasta `subagents`. Sessão ao vivo entra sempre.
+ */
 export async function readProjectSessions(
   projectDir: string,
   live: ReadonlyMap<string, LiveSession>,
+  opts: SessionListOptions = {},
 ): Promise<Session[]> {
+  const cutoff = archiveCutoff(opts);
   const files = (await listDir(projectDir)).filter((e) => e.isFile() && e.name.endsWith('.jsonl'));
   const sessions = await Promise.all(
-    files.map((e) => readSession(projectDir, path.basename(e.name, '.jsonl'), live).catch(() => null)),
+    files.map(async (e): Promise<Session | null> => {
+      const id = path.basename(e.name, '.jsonl');
+      // Ao vivo = processo vivo agora (a entrada de um processo morto não protege). Protegida pela retenção: fica sempre.
+      if (cutoff !== null && live.get(id)?.alive !== true && !opts.keep?.has(id) && !(await recentlyActive(projectDir, id, cutoff))) return null;
+      return readSession(projectDir, id, live).catch(() => null);
+    }),
   );
   return sessions
     .filter((s): s is Session => s !== null)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/** Instante antes do qual a conversa é antiga (null = sem corte: `includeOld`, ou `archiveAfterDays` desligado). */
+function archiveCutoff(opts: SessionListOptions): number | null {
+  if (opts.includeOld || !opts.archiveAfterDays || opts.archiveAfterDays <= 0) return null;
+  return (opts.now ?? Date.now()) - opts.archiveAfterDays * DAY_MS;
+}
+
+/** A atividade (transcript ou subagent) foi depois do corte? Só `stat`: o transcript primeiro, a pasta `subagents` depois. */
+async function recentlyActive(projectDir: string, id: string, cutoff: number): Promise<boolean> {
+  const st = await fs.stat(path.join(projectDir, `${id}.jsonl`)).catch(() => null);
+  if (st && st.mtimeMs >= cutoff) return true;
+  const sub = path.join(projectDir, id, 'subagents');
+  let last = (await fs.stat(sub).catch(() => null))?.mtimeMs ?? 0;
+  for (const e of await listDir(sub)) {
+    if (!e.isFile() || !e.name.endsWith('.jsonl')) continue;
+    const s = await fs.stat(path.join(sub, e.name)).catch(() => null);
+    if (s && s.mtimeMs > last) last = s.mtimeMs;
+  }
+  return last >= cutoff;
 }
 
 async function readSession(

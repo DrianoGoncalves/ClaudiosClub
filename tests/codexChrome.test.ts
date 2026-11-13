@@ -200,7 +200,8 @@ describe('prepareCodexRun: o Chrome na conversa e na ficha', () => {
   it('config desligada: não entra, e a ficha diz o motivo', async () => {
     const proj = path.join(root, 'proj-off');
     await fs.mkdir(proj, { recursive: true });
-    const run = await prepareCodexRun(profile(), launch(proj, { codexBrowser: false, chromeMcpCli: CLI }), 'sess-off', proj);
+    // Sem navegador limpo (canal null): a ficha só fala do Chrome do usuário, que é o que este teste confere.
+    const run = await prepareCodexRun(profile(), launch(proj, { codexBrowser: false, chromeMcpCli: CLI, cleanBrowserChannel: null }), 'sess-off', proj);
     expect(run.chromeMcp).toBeNull();
     expect(existsSync(CHROME_DIR('sess-off'))).toBe(false); // sem MCP, sem pasta
     expect(await fichaDe(proj)).toContain('Sem navegador nesta conversa: a opção "Permitir que o GPT use meu Chrome" está desligada nas Configurações.');

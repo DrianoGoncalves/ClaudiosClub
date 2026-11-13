@@ -17,10 +17,10 @@ import type { AppConfig, Board, BoardBackground, CostReport, GitState, InboxItem
 import { InboxMenu } from '../inbox/InboxMenu';
 import type { InboxView } from '../inbox/useInbox';
 import { EdgeActions, edgeTypes } from './edges';
-import { buildGraph, HANDLE, HR_ID, RANKING_ID, readingOrder, roomFrame, type BoardNode, type StaffLink } from './layout';
+import { buildGraph, HANDLE, HR_ID, readingOrder, roomFrame, type BoardNode, type StaffLink } from './layout';
 import { nodeTypes } from './nodes';
 import { layoutKey, loadPositions, positionsOf, savePositions, withMoved, withReset, type Positions } from './positions';
-import { ChartIcon, UsersIcon } from '../icons';
+import { UsersIcon } from '../icons';
 import { SettingsMenu } from '../toolbar/SettingsMenu';
 import { AuthBadge, CodexUsageLine, CompanyTitle, UsageMeters, useAccountUsage } from '../toolbar/Toolbar';
 import { UpdateNotice } from '../toolbar/UpdateNotice';
@@ -402,11 +402,8 @@ export function BoardView(props: BoardViewProps) {
           <PendingRestartNotice />
           <span className="toolbar-sep" />
           <InboxMenu inbox={props.inbox} topicOf={topicOf} onOpen={props.onOpenInbox} />
-          <button className="toolbar-icon" onClick={() => onSelect(HR_ID)} title={t('hr.button')} aria-label={t('hr.button')}>
+          <button className="toolbar-icon" onClick={() => onSelect(HR_ID)} title={t('hr.people')} aria-label={t('hr.people')}>
             <UsersIcon />
-          </button>
-          <button className="toolbar-icon" onClick={() => onSelect(RANKING_ID)} title={t('board.rankingTitle')} aria-label={t('board.ranking')}>
-            <ChartIcon />
           </button>
           <SettingsMenu
             showArchived={showArchived}
@@ -444,6 +441,12 @@ export function BoardView(props: BoardViewProps) {
                 : null
             }
             turnCap={config ? { maxTurnTools: config.maxTurnTools, maxTurnMinutes: config.maxTurnMinutes } : null}
+            // Servidor anterior à retenção não manda os prazos: o bloco "Conversas antigas" nem aparece.
+            retention={
+              config && typeof config.archiveAfterDays === 'number' && typeof config.deleteAfterDays === 'number'
+                ? { archiveAfterDays: config.archiveAfterDays, deleteAfterDays: config.deleteAfterDays, retentionDeleteEnabledAt: config.retentionDeleteEnabledAt ?? null }
+                : null
+            }
             onConfig={props.onConfig}
             // O demo não tem workspace: volta para "Todos", senão a sala dele ficaria escondida.
             onOpenProject={(projectId) => {
