@@ -38,7 +38,7 @@ const REWORK_RATIO = 0.3;
 const REWORK_MIN_TASKS = 3;
 const REWORK_PREFIX = 'Complemento de';
 /** Cargos de execução (ids de shared/roles.ts): modelo pesado e esforço alto não compensam aqui. */
-const EXECUTION_ROLE_IDS = ['desenvolvedor', 'frontend', 'design-system', 'dados', 'testador'];
+const EXECUTION_ROLE_IDS = ['desenvolvedor', 'frontend', 'design-system', 'web-designer', 'dados', 'testador'];
 const HEAVY_MODEL = /opus|fable/i;
 const HIGH_EFFORTS: readonly CodexEffort[] = ['xhigh', 'max'];
 /** Subagents sem tipo próprio (ou com um destes) herdam o modelo da conversa. */
