@@ -11,13 +11,30 @@
 //     Em bypassPermissions, "ask" vira "deny": não se comprova que o pedido aparece nesse modo.
 // Fail-closed: arquivo ausente, ilegível ou fora do formato; nome que não separa servidor de ferramenta; nome que casa com mais
 // de uma política; entrada ilegível; qualquer erro: "deny" (nunca libera por erro). Sem política nenhuma, não responde.
-// Os nomes são comparados como o Claude Code os põe: o que não é letra, número, `_` ou `-` vira `_` (igual a claudeName em mcpTools.ts).
+// Nome do servidor como o Claude Code o põe no nome da ferramenta: o caractere fora de [A-Za-z0-9_-] vira `_` (igual a
+// claudeName em mcpTools.ts). Não se tem certeza dessa regra para todo caractere (o Club aceita `.`), então o nome da política
+// casa também com as outras formas plausíveis (`-` ou o caractere como está): a chamada que casa com uma delas segue a política,
+// sem ser lida como "sem política". Não se considera apagar o caractere: `github` casaria com `git.hub` e liberaria o servidor
+// sem política (ver ../../tests/mcpWriteGuard.test.ts).
 // Lê o evento em JSON no stdin e responde em JSON no stdout.
 
 import { readFileSync } from 'node:fs';
 
 const MCP = 'mcp__';
 const clean = (s) => s.replace(/[^A-Za-z0-9_-]/g, '_');
+
+/** As formas em que o nome do servidor pode aparecer na ferramenta (a de `clean` e as que trocam o caractere estranho). */
+function forms(name) {
+  // Até 6 caracteres estranhos com as 3 opções (4^6 formas no pior caso); além disso, só a de `_` (a de `clean`).
+  let out = [''];
+  let odd = 0;
+  for (const ch of name.split('')) {
+    const plain = /[A-Za-z0-9_-]/.test(ch);
+    const opts = plain ? [ch] : odd++ < 6 ? ['_', '-', ch] : ['_'];
+    out = out.flatMap((a) => opts.map((o) => a + o));
+  }
+  return [...new Set(out)];
+}
 
 const out = (permissionDecision, reason) => ({
   hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason: `[MyCo] ${reason}` },
@@ -33,7 +50,7 @@ function loadPolicy(file) {
       e && typeof e === 'object' && (e.policy === 'ask' || e.policy === 'deny') &&
       Array.isArray(e.readOnly) && e.readOnly.every((t) => typeof t === 'string' && t !== '');
     if (!ok) throw new Error(`entrada fora do formato: ${name}`);
-    return { name, norm: clean(name), policy: e.policy, readOnly: new Set(e.readOnly.map(clean)) };
+    return { name, forms: forms(name), policy: e.policy, readOnly: new Set(e.readOnly.map(clean)) };
   });
 }
 
@@ -46,14 +63,19 @@ function decide(tool, policies, bypass) {
   if (sep < 1 || sep + 2 >= rest.length) {
     return out('deny', `não dá para conferir a política de escrita de "${tool}" (nome fora do padrão): bloqueado por segurança.`);
   }
-  // Nome de MCP com `__` ou que normaliza igual a outro: se casa com mais de uma política, não se sabe qual é: bloqueado.
-  const hits = policies.filter((p) => rest.startsWith(`${p.norm}__`));
+  // Para cada política, as ferramentas que a chamada tem com alguma forma do nome dela.
+  const hits = [];
+  for (const p of policies) {
+    const suffixes = p.forms.filter((f) => rest.startsWith(`${f}__`) && rest.length > f.length + 2).map((f) => rest.slice(f.length + 2));
+    if (suffixes.length) hits.push({ p, suffixes });
+  }
   if (hits.length === 0) return null;
+  // Nome que casa com mais de uma política (ex.: `a` e `a__b`): não se sabe qual é: bloqueado.
   if (hits.length > 1) return out('deny', `"${tool}" casa com mais de um MCP da política de escrita: bloqueado por segurança.`);
-  const p = hits[0];
+  const { p, suffixes } = hits[0];
   const name = p.name;
-  const toolName = rest.slice(p.norm.length + 2);
-  if (p.readOnly.has(toolName)) return null;
+  const toolName = suffixes[0];
+  if (suffixes.every((t) => p.readOnly.has(t))) return null;
   if (p.policy === 'deny') return out('deny', `a ficha bloqueia escrita por MCP: "${toolName}" do MCP "${name}" não é só leitura. Siga sem essa ferramenta.`);
   if (bypass) {
     return out('deny', `a ficha pede confirmação antes de "${toolName}" do MCP "${name}", e no modo sem travas não há quem confirme: bloqueado. Siga sem essa ferramenta.`);

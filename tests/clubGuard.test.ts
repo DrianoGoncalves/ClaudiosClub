@@ -68,7 +68,7 @@ describe('club-guard: o navegador do funcionário não abre o Claudio’s Club',
   it('entra em todo funcionário, antes das ferramentas de navegador', () => {
     const pre = staffSettings().hooks.PreToolUse;
     const guard = pre.find((h) => h.matcher === BROWSER_TOOLS_MATCHER);
-    expect(guard?.hooks[0]).toMatchObject({ type: 'command', command: process.execPath, args: [hook, 'pre'] });
+    expect(guard?.hooks[0]).toMatchObject({ type: 'command', command: process.execPath, args: [hook, 'pre'], onFailure: 'block' });
     expect(staffSettings().hooks.PostToolUse.some((h) => h.matcher === BROWSER_TOOLS_MATCHER)).toBe(false);
     const re = new RegExp(`^(?:${BROWSER_TOOLS_MATCHER})$`);
     expect(re.test('mcp__claude-in-chrome__navigate')).toBe(true);

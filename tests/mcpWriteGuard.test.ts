@@ -111,6 +111,23 @@ describe('hook de escrita por MCP: a política da ficha', () => {
     expect(decision(run(ev('mcp__git_hub__criar_issue'), policy))).toBe('deny');
   });
 
+  it('nome do servidor com caractere estranho (o Club aceita "."): as outras formas plausíveis seguem a política', () => {
+    // "git.hub" pode chegar como git_hub (a nossa), git-hub ou git.hub: nenhuma delas passa como "sem política".
+    expect(decision(run(ev('mcp__git-hub__criar_issue'), policy))).toBe('deny');
+    expect(decision(run(ev('mcp__git.hub__criar_issue'), policy))).toBe('deny');
+    expect(run(ev('mcp__git-hub__listar_issues'), policy)).toBe('');
+    // Sem apagar o caractere: "github" é outro servidor, sem política, e segue livre.
+    expect(run(ev('mcp__github__criar_issue'), policy)).toBe('');
+  });
+
+  it('nome com espaço (o que o ~/.claude.json traz): a forma com "_" e com "-" casam', async () => {
+    const sp = path.join(dir, 'espaco.json');
+    await fs.writeFile(sp, JSON.stringify({ 'meu mcp': { policy: 'deny', readOnly: [] } }));
+    expect(decision(run(ev('mcp__meu_mcp__x'), sp))).toBe('deny');
+    expect(decision(run(ev('mcp__meu-mcp__x'), sp))).toBe('deny');
+    expect(run(ev('mcp__meumcp__x'), sp)).toBe('');
+  });
+
   it('nome que não separa servidor de ferramenta, com política no arquivo: deny', () => {
     for (const tool of ['mcp__falso', 'mcp__falso__', 'mcp____buscar', 'mcp__']) expect(decision(run(ev(tool), policy))).toBe('deny');
   });
@@ -237,8 +254,14 @@ describe('a conversa: cópia dos hooks, política no run dir e nada por ferramen
     };
     expect(settings).not.toHaveProperty('permissions');
     const pre = settings.hooks.PreToolUse;
-    expect(pre.find((h) => h.matcher === MCP_TOOLS_MATCHER)?.hooks[0]?.args).toEqual([path.join(sessionDir, 'hooks', 'mcp-write-guard.mjs'), path.join(sessionDir, 'mcp-write.json')]);
-    expect(pre.find((h) => h.matcher === BROWSER_TOOLS_MATCHER)?.hooks[0]?.args[0]).toBe(path.join(sessionDir, 'hooks', 'club-guard.mjs'));
+    expect(pre.find((h) => h.matcher === MCP_TOOLS_MATCHER)?.hooks[0]).toMatchObject({
+      args: [path.join(sessionDir, 'hooks', 'mcp-write-guard.mjs'), path.join(sessionDir, 'mcp-write.json')],
+      onFailure: 'block',
+    });
+    expect(pre.find((h) => h.matcher === BROWSER_TOOLS_MATCHER)?.hooks[0]).toMatchObject({
+      args: [path.join(sessionDir, 'hooks', 'club-guard.mjs'), 'pre'],
+      onFailure: 'block',
+    });
 
     const file = JSON.parse(await fs.readFile(path.join(sessionDir, 'mcp-write.json'), 'utf8'));
     expect(file).toEqual({ falso: { policy: 'deny', readOnly: ['buscar'] }, outro: { policy: 'ask', readOnly: [] } });

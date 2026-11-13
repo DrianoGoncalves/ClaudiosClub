@@ -315,9 +315,11 @@ export function staffSettings(
   const hook = (stage: 'pre' | 'post') => [
     { matcher: 'Agent|Task', hooks: [{ type: 'command', command: process.execPath, args: [DELIVERY_HOOK, stage], timeout: 10 }] },
     // O navegador do funcionário não abre a tela do Club (ver scripts/hooks/club-guard.mjs e server/clubAddress.ts).
-    ...(stage === 'pre' && o.clubGuard !== false ? [{ matcher: BROWSER_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'club-guard.mjs'), 'pre'], timeout: 10 }] }] : []),
+    // `onFailure: 'block'` (Claude Code 2.1.295+): comando que não inicia, saída de erro, timeout ou saída inválida bloqueiam a
+    // chamada em vez de deixá-la passar. Sem helper de versão do Claude no Club, vai sempre (ver doc de hooks).
+    ...(stage === 'pre' && o.clubGuard !== false ? [{ matcher: BROWSER_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'club-guard.mjs'), 'pre'], timeout: 10, onFailure: 'block' }] }] : []),
     // Escrita por MCP: a política da ficha (ver mcpTools.ts). Sem política, a conversa não tem o hook.
-    ...(stage === 'pre' && o.mcpWriteFile ? [{ matcher: MCP_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'mcp-write-guard.mjs'), o.mcpWriteFile], timeout: 10 }] }] : []),
+    ...(stage === 'pre' && o.mcpWriteFile ? [{ matcher: MCP_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'mcp-write-guard.mjs'), o.mcpWriteFile], timeout: 10, onFailure: 'block' }] }] : []),
   ];
   const styled = !!p && personalityName(p.personality) !== '' && (p.engine ?? 'claude') === 'claude';
   const style = styled && styleFile ? { UserPromptSubmit: [{ hooks: [{ type: 'command', command: process.execPath, args: [STYLE_HOOK, styleFile], timeout: 10 }] }] } : {};
