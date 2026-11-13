@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, Board, CostReport, InboxItem, LinkInfo, Project, Session, Skill, StaffProfile } from '../shared/model';
-import { buildGraph as buildGraphRaw, SIZES, type BoardNode, type BoardNodeType } from '../client/src/board/layout';
+import { buildGraph as buildGraphRaw, readingOrder, SIZES, type BoardNode, type BoardNodeType } from '../client/src/board/layout';
 import { portraitUrl } from '../client/src/board/nodes';
 
 // Estes testes contam com a sala do usuário; o padrão do quadro é escondê-la (ver "escopo do usuário" abaixo).
@@ -256,6 +256,27 @@ describe('buildGraph', () => {
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) expect(overlaps(all[i]!, all[j]!)).toBe(false);
   });
 
+  it('`order` manda dentro do bloco: os fora da lista vêm depois, em ordem alfabética; as abas seguem a ordem delas', () => {
+    const ws = ['x', 'y', 'x', 'y', 'x', 'y'];
+    const projects = ws.map((_, i) => project(`p${i + 1}`, `C:\\www\\p${i + 1}`));
+    const b: Board = { ...board(), projects, inventories: {}, sessions: {} };
+    const groups = { of: new Map(projects.map((p, i) => [p.id, ws[i]!] as const)), order: ['y', 'x'] };
+    const owners = (order?: string[]) => buildGraph(b, { aspect: 16 / 9, groups, order, showUserScope: false }).nodes.flatMap((n) => (n.type === 'room' ? [n.data.owner] : []));
+    expect(owners()).toEqual(['p:p2', 'p:p4', 'p:p6', 'p:p1', 'p:p3', 'p:p5']);
+    // p5 e p4 sobem; p1 e p3 (fora da lista) ficam depois, alfabéticos; o bloco y continua antes do x.
+    expect(owners(['p5', 'p4'])).toEqual(['p:p4', 'p:p2', 'p:p6', 'p:p5', 'p:p1', 'p:p3']);
+  });
+
+  it('ordem de leitura: de cima para baixo e da esquerda para a direita, por bloco', () => {
+    const at = (id: string, block: string, x: number, y: number) => ({ id, block, x, y });
+    expect(readingOrder([at('c', 'x', 0, 400), at('b', 'x', 500, 0), at('a', 'x', 0, 0), at('z', 'y', 0, 0)])).toEqual(['a', 'b', 'c', 'z']);
+    // Topo quase na mesma altura = mesma linha (vale o x); uma linha de verdade abaixo vem depois.
+    expect(readingOrder([at('b', 'x', 500, 0), at('a', 'x', 0, 40), at('c', 'x', 0, 300)])).toEqual(['a', 'b', 'c']);
+    // Cada bloco é lido à parte: uma sala de outro workspace entre as linhas não as junta nem separa.
+    expect(readingOrder([at('a', 'x', 0, 0), at('o', 'y', 0, 100), at('b', 'x', 500, 50)])).toEqual(['a', 'b', 'o']);
+    expect(readingOrder([])).toEqual([]);
+  });
+
   it('os workspaces ficam lado a lado na tela deitada e empilhados na em pé', () => {
     const ws = ['x', 'x', 'y', 'y', 'z', 'z'];
     const projects = ws.map((_, i) => project(`p${i + 1}`, `C:\\www\\p${i + 1}`));
@@ -427,24 +448,42 @@ describe('buildGraph', () => {
     expect(color('r:u')).toBeNull();
   });
 
-  it('funcionário com mais de um gestor: o segundo vira ligação extra, lateral se no mesmo nível', () => {
+  it('funcionário com mais de um gestor: uma linha abaixo de todos, com a mesma ligação de cada um', () => {
+    // ana e bia no mesmo nível: caio fica abaixo das duas e recebe a mesma linha (base → topo) de cada.
     const b = {
       ...board(),
       staff: [staffProfile('ana', ['s-a1']), staffProfile('bia', ['s-a2']), staffProfile('caio', [], ['ana', 'bia'])],
     };
     const { nodes, edges } = buildGraph(b, {});
-    expect(edges.find((e) => e.source === 'h:a:ana' && e.target === 'h:a:caio')?.data?.kind).toBe('contains');
-    const extra = edges.find((e) => e.source === 'h:a:bia' && e.target === 'h:a:caio');
-    expect(extra?.data?.kind).toBe('calls');
-    // ana e bia estão no mesmo nível; caio, abaixo: a ligação extra desce (base → topo).
-    expect(extra).toMatchObject({ sourceHandle: 'b', targetHandle: 't' });
+    const posOf = (list: typeof nodes, id: string) => list.find((n) => n.id === id)!.position;
+    expect(posOf(nodes, 'h:a:caio').y).toBeGreaterThan(posOf(nodes, 'h:a:ana').y);
+    for (const manager of ['ana', 'bia']) {
+      const link = edges.find((e) => e.source === `h:a:${manager}` && e.target === 'h:a:caio');
+      expect(link?.data?.kind).toBe('contains');
+      expect(link).toMatchObject({ sourceHandle: 'b', targetHandle: 't' });
+      expect(link?.data?.detour).toBeUndefined();
+    }
 
-    const peers = { ...board(), staff: [staffProfile('ana', ['s-a1']), staffProfile('bia', ['s-a2'], ['ana']), staffProfile('caio', [], ['ana', 'bia'])] };
-    const g = buildGraph(peers, {});
-    const y = (id: string) => g.nodes.find((n) => n.id === id)!.position.y;
-    expect(y('h:a:bia')).toBe(y('h:a:caio'));
-    expect(g.edges.find((e) => e.source === 'h:a:bia' && e.target === 'h:a:caio')?.sourceHandle).toMatch(/^(ro|lo)$/);
-    expect(nodes.some((n) => n.id === 'h:a:caio')).toBe(true);
+    // ana chefia bia; caio reporta a ana e a bia: fica abaixo de bia (a mais funda), nunca ao lado dela.
+    const chain = { ...board(), staff: [staffProfile('ana', ['s-a1']), staffProfile('bia', ['s-a2'], ['ana']), staffProfile('caio', [], ['ana', 'bia'])] };
+    const g = buildGraph(chain, {});
+    const [ana, bia, caio] = ['ana', 'bia', 'caio'].map((id) => posOf(g.nodes, `h:a:${id}`));
+    expect(caio!.y).toBeGreaterThan(bia!.y);
+    expect(bia!.y).toBeGreaterThan(ana!.y);
+    const fromBia = g.edges.find((e) => e.source === 'h:a:bia' && e.target === 'h:a:caio');
+    expect(fromBia?.data?.kind).toBe('contains');
+    expect(fromBia?.data?.detour).toBeUndefined();
+    // De ana (duas fileiras acima) a linha contorna o cartão de bia por fora, com as barras no meio dos vãos.
+    const fromAna = g.edges.find((e) => e.source === 'h:a:ana' && e.target === 'h:a:caio');
+    expect(fromAna?.data?.kind).toBe('contains');
+    const detour = fromAna?.data?.detour;
+    expect(detour).toBeDefined();
+    const { w, h } = SIZES.employee;
+    expect(detour!.x < bia!.x || detour!.x > bia!.x + w).toBe(true);
+    expect(detour!.y1).toBeGreaterThan(ana!.y + h);
+    expect(detour!.y1).toBeLessThan(bia!.y);
+    expect(detour!.y2).toBeGreaterThan(bia!.y + h);
+    expect(detour!.y2).toBeLessThan(caio!.y);
   });
 
   it('ciclo de gestores não trava o layout', () => {

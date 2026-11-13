@@ -9,6 +9,10 @@ export const PERSONALITY_TEXT = {
   desbocado: { name: 'staff.personalityDesbocado', hint: 'staff.personalityDesbocadoHint' },
   cansado: { name: 'staff.personalityCansado', hint: 'staff.personalityCansadoHint' },
   nerd: { name: 'staff.personalityNerd', hint: 'staff.personalityNerdHint' },
+  executivo: { name: 'staff.personalityExecutivo', hint: 'staff.personalityExecutivoHint' },
+  narrador: { name: 'staff.personalityNarrador', hint: 'staff.personalityNarradorHint' },
+  mineiro: { name: 'staff.personalityMineiro', hint: 'staff.personalityMineiroHint' },
+  yoda: { name: 'staff.personalityYoda', hint: 'staff.personalityYodaHint' },
 } as const satisfies Record<Personality, { name: MsgKey; hint: MsgKey }>;
 
 /**

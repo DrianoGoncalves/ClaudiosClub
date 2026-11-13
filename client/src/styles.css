@@ -154,8 +154,8 @@ body { background: var(--board); }
 .temp-notice-actions { display: inline-flex; gap: 6px; margin-left: auto; }
 .bn-employee.is-busy .sketch path { stroke-dasharray: 14 6; animation: bn-redraw 1.6s linear infinite; }
 .bn-employee.is-busy { animation: bn-glow 2.4s ease-in-out infinite; }
-/* Ocupa o mesmo espaço da bolinha (9px): o ícone de 14px sobra 2,5px de cada lado. */
-.bn-pencil { display: inline-flex; flex: none; margin: -2.5px; line-height: 0; color: var(--busy); transform-origin: 20% 80%; animation: bn-write 0.9s ease-in-out infinite; }
+/* Lápis "✎" de sempre (18px), no canto no lugar da bolinha: a caixa tem os 9px dela e o glifo sobra centrado. */
+.bn-pencil { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 9px; height: 9px; font-size: 18px; line-height: 1; color: var(--busy); transform-origin: 20% 80%; animation: bn-write 0.9s ease-in-out infinite; }
 .bn-working::after { content: '…'; display: inline-block; width: 1.2em; text-align: left; animation: bn-dots 1.2s steps(4, end) infinite; overflow: hidden; vertical-align: bottom; }
 .bn-employee.is-waiting { animation: bn-nudge 2.4s ease-in-out infinite; }
 @keyframes bn-redraw { to { stroke-dashoffset: -40; } }
@@ -258,8 +258,6 @@ body { background: var(--board); }
 .attach-name:hover, .attach-name:focus-visible { color: var(--ink-blue); text-decoration: underline; text-underline-offset: 2px; }
 .attach-row .btn-secondary { flex: none; }
 
-.edge-label-calls { color: var(--ink-blue); font-size: 15px; }
-
 /* Desfazer vínculo entre funcionários: a linha fica vermelha no hover e mostra o botão. */
 .rough-edge-hit { fill: none; stroke: transparent; stroke-width: 16; }
 .rough-edge.is-hover path:not(.rough-edge-hit) { stroke: var(--ink-red) !important; }
@@ -271,8 +269,6 @@ body { background: var(--board); }
   font: 700 16px/19px system-ui, sans-serif; text-align: center;
 }
 .edge-unlink:hover { background: var(--ink-red); color: var(--card); }
-.legend-calls { color: var(--ink-blue); }
-.legend-calls::before { border-top-style: dashed; }
 
 /* ---- regras da conta ---- */
 .rules-editor { width: 100%; resize: vertical; font-size: 13px; color: var(--ink); background: var(--board); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }

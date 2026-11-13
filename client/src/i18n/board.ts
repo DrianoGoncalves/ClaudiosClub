@@ -9,7 +9,6 @@ export default defineMessages({
     'board.ranking': 'Ranking',
     'board.legendProject': 'projeto',
     'board.legendEmployee': 'funcionário / agent',
-    'board.alsoCalls': 'também chama',
     'board.skillWord': 'skill',
     // Cores (colors.tsx)
     'board.colorRed': 'vermelho',
@@ -140,7 +139,6 @@ export default defineMessages({
     'board.ranking': 'Ranking',
     'board.legendProject': 'project',
     'board.legendEmployee': 'employee / agent',
-    'board.alsoCalls': 'also calls',
     'board.skillWord': 'skill',
     'board.colorRed': 'red',
     'board.colorOrange': 'orange',
@@ -268,7 +266,6 @@ export default defineMessages({
     'board.ranking': 'Ranking',
     'board.legendProject': 'proyecto',
     'board.legendEmployee': 'empleado / agente',
-    'board.alsoCalls': 'también llama',
     'board.skillWord': 'skill',
     'board.colorRed': 'rojo',
     'board.colorOrange': 'naranja',

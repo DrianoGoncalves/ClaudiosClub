@@ -7,12 +7,15 @@ import { TAB_ALL, TAB_NONE } from '../office/workspaces';
 // v3 era uma só para todas as abas; vale como ponto de partida de cada aba até ela ser mexida (a v3 não é reescrita).
 const POSITIONS_KEY = 'myco.positions.v4';
 const LEGACY_KEY = 'myco.positions.v3';
+// Ordem dos projetos que o "reorganizar" fixa (ids, por aba): sem ela a grade nova voltaria à ordem alfabética.
+const ORDER_KEY = 'myco.order.v1';
 
 export type Positions = Record<string, XYPosition>;
 
 export interface PositionStore {
   byTab: Record<string, Positions>;
   legacy: Positions;
+  order: Record<string, string[]>;
 }
 
 function read<T>(key: string): T | null {
@@ -24,12 +27,17 @@ function read<T>(key: string): T | null {
 }
 
 export function loadPositions(): PositionStore {
-  return { byTab: read<Record<string, Positions>>(POSITIONS_KEY) ?? {}, legacy: read<Positions>(LEGACY_KEY) ?? {} };
+  return {
+    byTab: read<Record<string, Positions>>(POSITIONS_KEY) ?? {},
+    legacy: read<Positions>(LEGACY_KEY) ?? {},
+    order: read<Record<string, string[]>>(ORDER_KEY) ?? {},
+  };
 }
 
 export function savePositions(store: PositionStore) {
   try {
     localStorage.setItem(POSITIONS_KEY, JSON.stringify(store.byTab));
+    localStorage.setItem(ORDER_KEY, JSON.stringify(store.order));
   } catch {
     // armazenamento indisponível: as posições valem só nesta aba
   }
@@ -47,7 +55,10 @@ export function withMoved(store: PositionStore, key: string, moved: Positions): 
   return { ...store, byTab: { ...store.byTab, [key]: { ...positionsOf(store, key), ...moved } } };
 }
 
-/** "Reorganizar": zera só a planta da aba (`{}` explícito, para não voltar à v3). */
-export function withReset(store: PositionStore, key: string): PositionStore {
-  return { ...store, byTab: { ...store.byTab, [key]: {} } };
+/**
+ * "Reorganizar": zera só a planta da aba (`{}` explícito, para não voltar à v3) e guarda a ordem
+ * dos projetos que a grade nova deve seguir.
+ */
+export function withReset(store: PositionStore, key: string, order: string[]): PositionStore {
+  return { ...store, byTab: { ...store.byTab, [key]: {} }, order: { ...store.order, [key]: order } };
 }

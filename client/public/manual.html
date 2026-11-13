@@ -662,7 +662,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       <li><span><b>Abas</b>: <b class="ui">Todos</b>, <b class="ui">Sem workspace</b> e uma por workspace. <a href="#workspaces">Ver 1</a></span></li>
       <li><span><b>Sala do projeto</b>, com os funcionários e o <b>+</b> para contratar. <a href="#contratar">Ver 2</a></span></li>
       <li><span><b>+ projeto</b>, no canto de baixo do quadro. <a href="#projeto">Ver 1</a></span></li>
-      <li><span><b>Reorganizar o quadro</b>: desfaz os arrastos e volta à grade de salas. <a href="#organograma">Ver 2</a></span></li>
+      <li><span><b>Reorganizar o quadro</b>: desfaz os arrastos e refaz a grade na ordem de agora. <a href="#organograma">Ver 2</a></span></li>
       <li><span><b>n sem commit</b> (ou <b>limpo</b>) no selo do projeto. <a href="#sem-commit">Ver 5</a></span></li>
     </ol>
     <figure class="mock" role="img" aria-label="Ilustração da tela principal: barra do topo com barras de consumo, precisa de mim, RH, Ranking e configurações; abas; uma sala de projeto com funcionários; botões + projeto e Reorganizar o quadro no rodapé.">
@@ -1273,14 +1273,13 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <ul>
           <li>Cada projeto é uma <b>sala</b>; os funcionários ficam dentro dela. As linhas entre eles mostram <b>empresta</b> e <b>delegando</b>.</li>
           <li>Para desfazer um vínculo, clique em <b class="ui">Desfazer vínculo</b> na linha entre os dois. A ficha anterior fica no histórico.</li>
-          <li><b class="ui">Reorganizar o quadro</b> (botão do canto do quadro) desfaz os arrastos e volta à grade de salas.</li>
+          <li><b class="ui">Reorganizar o quadro</b> (botão do canto do quadro) desfaz os arrastos e refaz a grade de salas mantendo a ordem de agora (de cima para baixo, da esquerda para a direita) dentro de cada workspace.</li>
         </ul>
         <p>Legenda do quadro:</p>
         <ul class="chips">
           <li><span class="chip">projeto</span></li>
           <li><span class="chip">funcionário / agent</span></li>
           <li><span class="chip">skill</span></li>
-          <li><span class="chip">também chama</span></li>
         </ul>
       </div>
       <figure class="mock" role="img" aria-label="Sala de projeto com dois funcionários ligados por uma linha com o rótulo delegando, e o botão Desfazer vínculo na linha">

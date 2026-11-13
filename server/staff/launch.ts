@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerInfo, StaffProfile } from '../../shared/model';
+import { personalityName, personalityReminder } from '../../shared/personality';
 import { defaultLocations } from '../adapters/claude/paths';
 import { ROOT } from '../root';
 import { isClaudeRoot, renderFicha, systemPrompt, type CodexChromeInfo, type CodexSshInfo, type FichaContext, type TeamMember } from './ficha';
@@ -123,8 +124,13 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     if (gpt) config.mcpServers[GPT_MCP_NAME] = gptMcpServerConfig({ projectPath: ctx.projectPath, root: cwd });
     await writeAtomic(mcpConfigPath, JSON.stringify(config, null, 2));
   }
+  // Lembrete do estilo a cada mensagem (hook UserPromptSubmit): só com estilo no motor Claude; sem ele, nem arquivo nem hook.
+  const styleFile = path.join(dir, 'style.txt');
+  const reminder = (profile.engine ?? 'claude') === 'claude' ? personalityReminder(profile.personality) : '';
+  if (reminder) await writeAtomic(styleFile, reminder);
+  else await rm(styleFile, { force: true });
   const settingsFile = path.join(dir, 'settings.json');
-  await writeAtomic(settingsFile, JSON.stringify(staffSettings(), null, 2));
+  await writeAtomic(settingsFile, JSON.stringify(staffSettings(profile, reminder ? styleFile : undefined), null, 2));
   const agents = await ensurePlaybookAgents(profile, {
     projectPath: ctx.projectPath,
     cwd,
@@ -257,18 +263,23 @@ export function ftpServersOf(profile: Pick<StaffProfile, 'servers'>, servers: Se
 }
 
 const DELIVERY_HOOK = path.join(ROOT, 'scripts', 'hooks', 'delivery-check.mjs');
+const STYLE_HOOK = path.join(ROOT, 'scripts', 'hooks', 'style-reminder.mjs');
 
 /**
  * Hooks do Claudio’s Club em todo funcionário (`--settings`, somados aos do usuário e do projeto): os agents
  * do roteiro rodam em primeiro plano e cada entrega do executor chega com o lembrete de conferir
  * (scripts/hooks/delivery-check.mjs). O node é chamado direto, sem shell: no Windows sem Git Bash
  * o Claude Code rodaria o comando no PowerShell.
+ * Com estilo de comunicação (motor Claude), `outputStyle: 'default'`: o output style global do usuário (ex.: "Concise") brigaria com o estilo.
+ * E, com o `styleFile` (style.txt da conversa), um hook UserPromptSubmit põe o lembrete do estilo em cada mensagem (scripts/hooks/style-reminder.mjs).
  */
-export function staffSettings() {
+export function staffSettings(p?: Pick<StaffProfile, 'personality' | 'engine'>, styleFile?: string) {
   const hook = (stage: 'pre' | 'post') => [
     { matcher: 'Agent|Task', hooks: [{ type: 'command', command: process.execPath, args: [DELIVERY_HOOK, stage], timeout: 10 }] },
   ];
-  return { hooks: { PreToolUse: hook('pre'), PostToolUse: hook('post') } };
+  const styled = !!p && personalityName(p.personality) !== '' && (p.engine ?? 'claude') === 'claude';
+  const style = styled && styleFile ? { UserPromptSubmit: [{ hooks: [{ type: 'command', command: process.execPath, args: [STYLE_HOOK, styleFile], timeout: 10 }] }] } : {};
+  return { hooks: { PreToolUse: hook('pre'), PostToolUse: hook('post'), ...style }, ...(styled ? { outputStyle: 'default' } : {}) };
 }
 
 /**

@@ -26,7 +26,8 @@ import { buildMcpConfig, listMcpServers } from '../server/staff/mcp';
 import { StaffError, StaffService } from '../server/staff/service';
 import { readProfile, saveChatChoice, StaffInputSchema, writeAtomic } from '../server/staff/store';
 import { BUILTIN_ROLES } from '../shared/roles';
-import { PERSONALITY_PROMPTS } from '../shared/personality';
+import { PERSONALITIES, PERSONALITY_PROMPTS, personalityName, personalityReminder, personalitySection } from '../shared/personality';
+import { staffSettings } from '../server/staff/launch';
 
 // Os cargos (server/roles.ts) e a config leem MYCO_HOME: uma pasta temporária, para não usar o ~/.myco de quem roda os testes.
 const home = await vi.hoisted(async () => {
@@ -384,12 +385,100 @@ afterAll(async () => {
 });
 
 describe('estilo de comunicação', () => {
-  it('sem estilo a ficha não tem a seção; com caveman tem, depois da postura, com o texto do preset', () => {
+  it('sem estilo a ficha não tem a seção; com caveman tem, como última seção, com o texto do preset', () => {
     expect(renderFicha(profile(), ctx)).not.toContain('## Estilo de comunicação');
     const md = renderFicha(profile({ personality: 'caveman' }), ctx);
     expect(md).toContain('## Estilo de comunicação');
     expect(md).toContain(PERSONALITY_PROMPTS.caveman);
-    expect(md.indexOf('## Estilo de comunicação')).toBeGreaterThan(md.indexOf('## Postura'));
+    expect(md.indexOf('## Estilo de comunicação')).toBeGreaterThan(md.indexOf('## Memória'));
+    expect(md.trimEnd().endsWith(personalitySection('caveman'))).toBe(true);
+  });
+
+  it('o prompt de sistema ganha uma linha na identidade só com estilo', () => {
+    const semEstilo = systemPrompt(profile(), ctx, renderFicha(profile(), ctx));
+    expect(semEstilo).not.toContain('Estilo de comunicação:');
+    const sys = systemPrompt(profile({ personality: 'nerd' }), ctx, renderFicha(profile({ personality: 'nerd' }), ctx));
+    const linhas = sys.split('\n');
+    expect(linhas[0]).toMatch(/^Você é /);
+    expect(linhas[1]).toBe('Estilo de comunicação: Nerd (seção no fim da ficha): use em toda resposta ao usuário.');
+  });
+
+  it('o exemplo de cada preset vai no fim do texto e o escopo usa a regra nova', () => {
+    for (const p of PERSONALITIES) {
+      expect(PERSONALITY_PROMPTS[p]).toMatch(/ Exemplo: ".+"$/);
+      expect(personalitySection(p)).toContain('Use este estilo em toda resposta ao usuário nesta conversa');
+    }
+    expect(personalityName('caveman')).toBe('Caveman');
+    expect(personalityName('tiozao')).toBe('Tiozão do Pavê');
+    expect(personalityName(null)).toBe('');
+    expect(personalitySection(undefined)).toBe('');
+  });
+
+  it('os quatro presets novos: nome e exemplo', () => {
+    expect(personalityName('executivo')).toBe('Executivo');
+    expect(personalityName('narrador')).toBe('Narrador de futebol');
+    expect(personalityName('mineiro')).toBe('Mineiro');
+    expect(personalityName('yoda')).toBe('Mestre Yoda');
+    expect(PERSONALITY_PROMPTS.executivo).toContain('Exemplo: "Pedido online no ar. Risco: nenhum. Próximo: você testar o checkout."');
+    expect(PERSONALITY_PROMPTS.narrador).toContain('Exemplo: "E É DO BUILD! Passou de primeira! Testes: 151 verdes."');
+    expect(PERSONALITY_PROMPTS.mineiro).toContain('Exemplo: "Uai, o trem tá pronto, sô. Testes bão, tudo verde."');
+    expect(PERSONALITY_PROMPTS.yoda).toContain('Exemplo: "Corrigido o bug está. Verdes, os testes ficaram."');
+    for (const p of ['executivo', 'narrador', 'mineiro', 'yoda'] as const) {
+      expect(PERSONALITIES).toContain(p);
+      expect(PERSONALITY_PROMPTS[p]).not.toMatch(/Chrome|subagent|ferramenta Agent/);
+    }
+  });
+
+  it('prompt de sistema: memória pessoal antes da ficha; o estilo, última seção da ficha, fica por último', () => {
+    const p = profile({ personality: 'yoda' });
+    const ficha = renderFicha(p, ctx);
+    const sys = systemPrompt(p, ctx, ficha, 'Ana prefere respostas curtas.');
+    expect(sys.indexOf('## Memória pessoal')).toBeGreaterThan(-1);
+    expect(sys.indexOf('## Memória pessoal')).toBeLessThan(sys.indexOf(ficha.trim()));
+    expect(sys.trimEnd().endsWith(personalitySection('yoda'))).toBe(true);
+    // Sem memória pessoal, a seção não aparece e o estilo continua por último.
+    expect(systemPrompt(p, ctx, ficha).includes('## Memória pessoal')).toBe(false);
+    expect(systemPrompt(p, ctx, ficha).trimEnd().endsWith(personalitySection('yoda'))).toBe(true);
+  });
+
+  it('settings do run: com estilo (motor Claude) sai outputStyle default; sem estilo, ou no Codex, não sai', () => {
+    expect(staffSettings(profile({ personality: 'mineiro' }))).toMatchObject({ outputStyle: 'default' });
+    expect(staffSettings(profile())).not.toHaveProperty('outputStyle');
+    expect(staffSettings()).not.toHaveProperty('outputStyle');
+    expect(staffSettings(profile({ personality: 'mineiro', engine: 'codex' }))).not.toHaveProperty('outputStyle');
+  });
+
+  it('lembrete por mensagem: com estilo (motor Claude) o settings tem o hook UserPromptSubmit com o style.txt; sem estilo ou no Codex, não', () => {
+    const arquivo = path.join(os.tmpdir(), 'style.txt');
+    const hook = path.join(ROOT, 'scripts', 'hooks', 'style-reminder.mjs');
+    expect(staffSettings(profile({ personality: 'mineiro' }), arquivo).hooks).toMatchObject({
+      UserPromptSubmit: [{ hooks: [{ type: 'command', command: process.execPath, args: [hook, arquivo], timeout: 10 }] }],
+    });
+    expect(staffSettings(profile(), arquivo).hooks).not.toHaveProperty('UserPromptSubmit');
+    expect(staffSettings(profile({ personality: 'mineiro', engine: 'codex' }), arquivo).hooks).not.toHaveProperty('UserPromptSubmit');
+    // Com estilo mas sem o caminho do arquivo, não tem como lembrar: sem o hook.
+    expect(staffSettings(profile({ personality: 'mineiro' })).hooks).not.toHaveProperty('UserPromptSubmit');
+    expect(personalityReminder(null)).toBe('');
+    expect(personalityReminder('nerd')).toBe(
+      `Estilo de comunicação: ${PERSONALITY_PROMPTS.nerd}\nEscreva a resposta ao usuário nesse estilo, sem anunciar nem nomear o estilo (nenhum rótulo antes da mensagem). Entrega ao gestor, parecer de revisão, mensagem a outro funcionário, commit, código e documentação ficam neutros.`,
+    );
+  });
+
+  it('o hook do lembrete: com o style.txt responde additionalContext; sem arquivo ou vazio, não responde nada', async () => {
+    const script = path.join(ROOT, 'scripts', 'hooks', 'style-reminder.mjs');
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-style-'));
+    try {
+      const arquivo = path.join(dir, 'style.txt');
+      await fs.writeFile(arquivo, 'Estilo de comunicação: Nerd');
+      expect(JSON.parse(execFileSync(process.execPath, [script, arquivo]).toString())).toEqual({
+        hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'Estilo de comunicação: Nerd' },
+      });
+      expect(execFileSync(process.execPath, [script, path.join(dir, 'nao-existe.txt')]).toString()).toBe('');
+      await fs.writeFile(arquivo, '  \n');
+      expect(execFileSync(process.execPath, [script, arquivo]).toString()).toBe('');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('no pedido: valor fora da lista vira null; nulo e ausente seguem como estão', () => {

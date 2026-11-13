@@ -17,7 +17,7 @@ import type { AppConfig, Board, BoardBackground, CostReport, GitState, InboxItem
 import { InboxMenu } from '../inbox/InboxMenu';
 import type { InboxView } from '../inbox/useInbox';
 import { EdgeActions, edgeTypes } from './edges';
-import { buildGraph, HANDLE, HR_ID, RANKING_ID, roomFrame, type BoardNode, type StaffLink } from './layout';
+import { buildGraph, HANDLE, HR_ID, RANKING_ID, readingOrder, roomFrame, type BoardNode, type StaffLink } from './layout';
 import { nodeTypes } from './nodes';
 import { layoutKey, loadPositions, positionsOf, savePositions, withMoved, withReset, type Positions } from './positions';
 import { ChartIcon, UsersIcon } from '../icons';
@@ -137,6 +137,9 @@ export function BoardView(props: BoardViewProps) {
   // Proporção da tela usada na planta: medida na abertura e a cada "reorganizar" (não a cada
   // redimensionamento, para o quadro não se rearrumar sozinho enquanto você mexe na janela).
   const [aspect, setAspect] = useState(measureAspect);
+  // Cada aba tem a sua planta: arrastar ou "reorganizar" numa não mexe nas outras.
+  const [store, setStore] = useState(loadPositions);
+  const posKey = layoutKey(tab, config);
   // Em "Todos", as salas do mesmo workspace ficam juntas na planta; nas outras abas há um workspace só.
   const groups = useMemo(
     () => (tab === TAB_ALL && config?.workspaces.length ? { of: workspaceOf, order: config.workspaces.map((w) => w.id) } : undefined),
@@ -159,10 +162,11 @@ export function BoardView(props: BoardViewProps) {
           aspect,
           inbox: props.inbox.items,
           groups,
+          order: store.order[posKey],
         },
         props.images,
       ),
-    [board, showArchived, config?.archived, costs, shelves, props.images, config?.projectColors, collapsed, git, tasks, aspect, props.inbox.items, groups],
+    [board, showArchived, config?.archived, costs, shelves, props.images, config?.projectColors, collapsed, git, tasks, aspect, props.inbox.items, groups, store.order, posKey],
   );
   // Salas de projeto no quadro agora, na ordem da planta: as que o orçamento por projeto lista.
   const rooms = useMemo(
@@ -216,9 +220,6 @@ export function BoardView(props: BoardViewProps) {
     [props.onLink, props.onHireFrom, props.onCopyFrom],
   );
   const archivedCount = (config?.archived.projects.length ?? 0) + (config?.archived.sessions.length ?? 0);
-  // Cada aba tem a sua planta: arrastar ou "reorganizar" numa não mexe nas outras.
-  const [store, setStore] = useState(loadPositions);
-  const posKey = layoutKey(tab, config);
   const saved = useMemo(() => positionsOf(store, posKey), [store, posKey]);
   const [nodes, setNodes] = useState<BoardNode[]>(() => fitRooms(withSaved(graph.nodes, saved)));
   const nodesRef = useRef(nodes);
@@ -326,7 +327,16 @@ export function BoardView(props: BoardViewProps) {
   };
 
   const resetLayout = () => {
-    const next = withReset(store, posKey);
+    // A grade nova segue a ordem de agora (cima→baixo, esquerda→direita) dentro de cada workspace; a ordem
+    // dos workspaces é a das abas, como sempre.
+    const order = readingOrder(
+      nodesRef.current.flatMap((n) => {
+        if (n.type !== 'room' || !n.data.owner.startsWith('p:')) return [];
+        const id = n.data.owner.slice(2);
+        return [{ id, block: groups?.of.get(id) ?? '', x: n.position.x, y: n.position.y }];
+      }),
+    );
+    const next = withReset(store, posKey, order);
     savePositions(next);
     setStore(next);
     setAspect(measureAspect());
@@ -459,7 +469,6 @@ export function BoardView(props: BoardViewProps) {
           <span className="legend-item legend-project">{t('board.legendProject')}</span>
           <span className="legend-item legend-agent">{t('board.legendEmployee')}</span>
           <span className="legend-item legend-skill">{t('board.skillWord')}</span>
-          <span className="legend-item legend-calls">{t('board.alsoCalls')}</span>
         </div>
         <button
           type="button"
