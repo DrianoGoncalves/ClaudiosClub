@@ -310,6 +310,12 @@ export interface AppConfig {
    */
   codexBrowser: boolean;
   /**
+   * "Bloquear a tela do Claudio’s Club no navegador dos funcionários": o navegador deles não abre o Club (o hook club-guard e o
+   * --blocked-origins do Codex, ver server/clubAddress.ts). Ligado por padrão; desligado, o funcionário com Navegador age na tela
+   * com os seus poderes (aprova, mescla). Lida ao abrir a conversa.
+   */
+  clubGuard: boolean;
+  /**
    * Freela (conversa sem ficha) não efetivado e parado há esta quantidade de dias é arquivado sozinho
    * (ver server/freelaSweep.ts). Inteiro de 0 a 90; 0 = nunca. Padrão 3.
    */

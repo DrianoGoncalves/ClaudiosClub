@@ -58,6 +58,8 @@ export interface LaunchContext {
   sshMcpBundle?: string;
   /** "Permitir que o GPT use meu Chrome" (`codexBrowser`), lida ao abrir a conversa. Sem ela, o Chrome não entra no Codex. */
   codexBrowser?: boolean;
+  /** "Bloquear a tela do Claudio’s Club no navegador dos funcionários" (`clubGuard`). Só `false` desliga: ausente, bloqueia. */
+  clubGuard?: boolean;
   /** CLI do Playwright MCP (os testes trocam; padrão CHROME_MCP_CLI). Sem ele, o Chrome não entra e a ficha diz "indisponível". */
   chromeMcpCli?: string;
 }
@@ -131,7 +133,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   if (reminder) await writeAtomic(styleFile, reminder);
   else await rm(styleFile, { force: true });
   const settingsFile = path.join(dir, 'settings.json');
-  await writeAtomic(settingsFile, JSON.stringify(staffSettings(profile, reminder ? styleFile : undefined), null, 2));
+  await writeAtomic(settingsFile, JSON.stringify(staffSettings(profile, reminder ? styleFile : undefined, { clubGuard: ctx.clubGuard }), null, 2));
   const agents = await ensurePlaybookAgents(profile, {
     projectPath: ctx.projectPath,
     cwd,
@@ -186,7 +188,7 @@ export interface PreparedCodexRun {
  */
 export function codexChromeOf(
   profile: Pick<StaffProfile, 'browser'>,
-  ctx: Pick<LaunchContext, 'codexBrowser' | 'chromeMcpCli'>,
+  ctx: Pick<LaunchContext, 'codexBrowser' | 'chromeMcpCli' | 'clubGuard'>,
   sshAttached: boolean,
   chromeDir: string,
 ): { mcp: CodexMcpServer | null; info?: CodexChromeInfo } {
@@ -200,7 +202,12 @@ export function codexChromeOf(
   // A pasta é da conversa (`<mycoHome>/run/<sessionId>/chrome`), fora de qualquer projeto e do repo do Club: o MCP não lê nem grava fora dela.
   return {
     // --blocked-origins: o Chrome é o do dono, pareado; a tela do Club fica fora do alcance do agente (ver server/clubAddress.ts).
-    mcp: { command: process.execPath, args: [cli, '--extension', '--output-dir', chromeDir, '--blocked-origins', clubBlockedOrigins()], cwd: chromeDir },
+    // Sem ele só com o bloqueio desligado nas Configurações (`clubGuard: false`).
+    mcp: {
+      command: process.execPath,
+      args: [cli, '--extension', '--output-dir', chromeDir, ...(ctx.clubGuard === false ? [] : ['--blocked-origins', clubBlockedOrigins()])],
+      cwd: chromeDir,
+    },
     info: { mcp: true, motivos: [] },
   };
 }
@@ -278,11 +285,11 @@ export const BROWSER_TOOLS_MATCHER = 'mcp__claude-in-chrome__.*|mcp__.*__browser
  * Com estilo de comunicação (motor Claude), `outputStyle: 'default'`: o output style global do usuário (ex.: "Concise") brigaria com o estilo.
  * E, com o `styleFile` (style.txt da conversa), um hook UserPromptSubmit põe o lembrete do estilo em cada mensagem (scripts/hooks/style-reminder.mjs).
  */
-export function staffSettings(p?: Pick<StaffProfile, 'personality' | 'engine'>, styleFile?: string) {
+export function staffSettings(p?: Pick<StaffProfile, 'personality' | 'engine'>, styleFile?: string, o: { clubGuard?: boolean } = {}) {
   const hook = (stage: 'pre' | 'post') => [
     { matcher: 'Agent|Task', hooks: [{ type: 'command', command: process.execPath, args: [DELIVERY_HOOK, stage], timeout: 10 }] },
     // O navegador do funcionário não abre a tela do Club (ver scripts/hooks/club-guard.mjs e server/clubAddress.ts).
-    ...(stage === 'pre' ? [{ matcher: BROWSER_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [CLUB_GUARD_HOOK, 'pre'], timeout: 10 }] }] : []),
+    ...(stage === 'pre' && o.clubGuard !== false ? [{ matcher: BROWSER_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [CLUB_GUARD_HOOK, 'pre'], timeout: 10 }] }] : []),
   ];
   const styled = !!p && personalityName(p.personality) !== '' && (p.engine ?? 'claude') === 'claude';
   const style = styled && styleFile ? { UserPromptSubmit: [{ hooks: [{ type: 'command', command: process.execPath, args: [STYLE_HOOK, styleFile], timeout: 10 }] }] } : {};
@@ -295,7 +302,7 @@ export function staffSettings(p?: Pick<StaffProfile, 'personality' | 'engine'>, 
  */
 export async function writeFicha(
   profile: StaffProfile,
-  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'roles' | 'librarySkills' | 'codex' | 'internetAccess' | 'lockedByCodexManager'>,
+  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'roles' | 'librarySkills' | 'codex' | 'internetAccess' | 'clubGuard' | 'lockedByCodexManager'>,
   absolute = false,
   codexSsh?: CodexSshInfo,
   codexChrome?: CodexChromeInfo,
@@ -319,6 +326,7 @@ export async function writeFicha(
     guide: await hasGuide(ctx.projectPath),
     codex: ctx.codex,
     internetAccess: ctx.internetAccess,
+    clubGuard: ctx.clubGuard,
     lockedByCodexManager: ctx.lockedByCodexManager,
     codexSsh,
     codexChrome,

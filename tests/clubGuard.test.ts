@@ -1,8 +1,22 @@
 import { execFileSync } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { StaffProfile } from '../shared/model';
 import { clubBlockedOrigins } from '../server/clubAddress';
-import { BROWSER_TOOLS_MATCHER, staffSettings } from '../server/staff/launch';
+import { ConfigPatch, MYCO_HOME, readConfig, updateConfig } from '../server/config';
+import { renderFicha, secretDenyRules } from '../server/staff/ficha';
+import { BROWSER_TOOLS_MATCHER, codexChromeOf, staffSettings } from '../server/staff/launch';
+
+let root: string;
+beforeAll(async () => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-guard-'));
+});
+afterAll(async () => {
+  await fs.rm(root, { recursive: true, force: true });
+});
 
 // O navegador do funcionário não abre a tela do Club (scripts/hooks/club-guard.mjs e o --blocked-origins do Codex).
 
@@ -64,5 +78,47 @@ describe('club-guard: o navegador do funcionário não abre o Claudio’s Club',
 describe('clubBlockedOrigins: o Playwright MCP do Codex', () => {
   it('os nomes em qualquer porta; localhost e 127.0.0.1 só na porta do Club', () => {
     expect(clubBlockedOrigins(4848)).toBe('http://claudio.localhost:*;http://myco.localhost:*;http://localhost:4848;http://127.0.0.1:4848');
+  });
+});
+
+describe('a opção nas Configurações: "Bloquear o Claudio’s Club no navegador dos funcionários"', () => {
+  const ficha = (over: Partial<StaffProfile> = {}) =>
+    ({
+      id: 'ana-1', projectId: 'p', name: 'Ana', role: 'Dev', mission: '', firstTask: '', autonomy: 'acceptEdits', agents: [], skills: [], mcps: [],
+      knowledge: [], rules: [], doneWhen: '', reportsTo: [], engine: 'claude', model: null, effort: null, canHire: false, playbook: null,
+      worktree: false, servers: [], sshWrite: [], browser: true, portrait: null, sessions: [], ...over,
+    }) as unknown as StaffProfile;
+  const ctx = { company: 'Co', projectName: 'p', projectPath: '/p', managerNames: [], fichaPath: 'f.md', memoryPath: 'm.md', mycoUrl: 'http://127.0.0.1:4848' };
+
+  it('padrão ligada; o PATCH aceita só booleano; o arquivo guarda e lê', async () => {
+    const file = path.join(root, 'config.json');
+    expect((await readConfig(file)).clubGuard).toBe(true);
+    expect(ConfigPatch.safeParse({ clubGuard: false }).success).toBe(true);
+    expect(ConfigPatch.safeParse({ clubGuard: 'não' }).success).toBe(false);
+    await updateConfig({ clubGuard: false }, file);
+    expect((await readConfig(file)).clubGuard).toBe(false);
+  });
+
+  it('só `false` desliga: sem o hook, sem --blocked-origins e sem a regra na ficha', () => {
+    const guarded = (o?: { clubGuard?: boolean }) => staffSettings(undefined, undefined, o).hooks.PreToolUse.some((h) => h.matcher === BROWSER_TOOLS_MATCHER);
+    expect(guarded()).toBe(true);
+    expect(guarded({ clubGuard: true })).toBe(true);
+    expect(guarded({ clubGuard: false })).toBe(false);
+
+    const codex = (clubGuard?: boolean) => codexChromeOf({ browser: true }, { codexBrowser: true, chromeMcpCli: hook, clubGuard }, false, root).mcp?.args ?? [];
+    expect(codex()).toContain('--blocked-origins');
+    expect(codex(false)).not.toContain('--blocked-origins');
+
+    const regra = 'Nunca abra o Claudio’s Club no navegador';
+    expect(renderFicha(ficha(), ctx)).toContain(regra);
+    expect(renderFicha(ficha(), { ...ctx, clubGuard: false })).not.toContain(regra);
+    expect(renderFicha(ficha({ engine: 'codex' } as Partial<StaffProfile>), { ...ctx, codexChrome: { mcp: true, motivos: [] } })).toContain(regra);
+  });
+
+  it('o funcionário não edita o arquivo da configuração (desligaria o bloqueio por fora da tela)', () => {
+    const rules = secretDenyRules(ficha());
+    const file = path.basename(path.dirname(path.join(MYCO_HOME, 'config.json')));
+    for (const tool of ['Edit', 'Write']) expect(rules.some((r) => r.startsWith(`${tool}(`) && r.includes(`${file}/config.json`))).toBe(true);
+    expect(rules.some((r) => r.startsWith('Read(') && r.includes('config.json') && !r.includes('claude'))).toBe(false); // ler pode
   });
 });

@@ -1201,6 +1201,8 @@ export class StaffService {
       internetAccess: config.internetAccess,
       // "Permitir que o GPT use meu Chrome": lida ao abrir a conversa (o MCP do Chrome entra só se ligada, ver prepareCodexRun).
       codexBrowser: config.codexBrowser,
+      // O navegador do funcionário não abre a tela do Club (hook e --blocked-origins); lida ao abrir a conversa.
+      clubGuard: config.clubGuard,
       // Claude contratado por gestor no Codex (selo `claude`) e ainda no "Pede tudo": a ficha conta o porquê.
       lockedByCodexManager: profile.autonomy === 'manual' && profile.engine !== 'codex' && (await readSeal(this.opts.runDir, project.path, profile.id))?.engine === 'claude',
       // A equipe dele: quem reporta a ele (os temporários encerrados já saíram do quadro, mas a ficha

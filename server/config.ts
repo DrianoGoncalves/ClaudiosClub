@@ -40,6 +40,8 @@ const DEFAULTS: AppConfig = {
   internetAccess: true,
   // Desligada: o GPT (Codex) usar o Chrome com os logins do usuário é escolha sua.
   codexBrowser: false,
+  // Ligado: o navegador dos funcionários não abre a tela do Club (ver server/clubAddress.ts). Desligar é para quem testa o próprio Club.
+  clubGuard: true,
   // Freela sem ficha parado há 3 dias é arquivado sozinho (0 = nunca); arquivar não apaga nada.
   freelaArchiveDays: 3,
   freelaAutoArchived: {},
@@ -128,6 +130,7 @@ const ConfigFile = z
     codexModel: CODEX_MODEL.optional().catch(undefined),
     internetAccess: z.boolean().optional().catch(undefined),
     codexBrowser: z.boolean().optional().catch(undefined),
+    clubGuard: z.boolean().optional().catch(undefined),
     freelaArchiveDays: FREELA_DAYS.optional().catch(undefined),
     freelaAutoArchived: z.record(z.string(), z.unknown()).optional().catch(undefined),
     workspaces: z.array(z.unknown()).optional().catch(undefined),
@@ -179,6 +182,8 @@ export const ConfigPatch = z.object({
   internetAccess: z.boolean().optional(),
   /** "Permitir que o GPT use meu Chrome": o funcionário no Codex usa o Chrome do usuário (ver AppConfig). */
   codexBrowser: z.boolean().optional(),
+  /** "Bloquear a tela do Claudio’s Club no navegador dos funcionários" (ver AppConfig). */
+  clubGuard: z.boolean().optional(),
   /** Dias parado até o freela (conversa sem ficha) ser arquivado sozinho; 0 = nunca. */
   freelaArchiveDays: FREELA_DAYS.optional(),
   /** Por id de projeto: uma cor troca a da sala; null volta à padrão. Os outros projetos ficam como estão. */
@@ -255,6 +260,7 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     codexModel: d.codexModel ?? DEFAULTS.codexModel,
     internetAccess: d.internetAccess ?? DEFAULTS.internetAccess,
     codexBrowser: d.codexBrowser ?? DEFAULTS.codexBrowser,
+    clubGuard: d.clubGuard ?? DEFAULTS.clubGuard,
     freelaArchiveDays: d.freelaArchiveDays ?? DEFAULTS.freelaArchiveDays,
     freelaAutoArchived: readFreelaRecord(d.freelaAutoArchived),
     resourceGate: d.resourceGate ?? DEFAULTS.resourceGate,

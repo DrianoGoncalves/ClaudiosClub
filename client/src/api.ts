@@ -355,6 +355,8 @@ export const api = {
     internetAccess?: boolean;
     /** "Permitir que o GPT use meu Chrome": o funcionário no Codex usa o Chrome do usuário (só o tipo; a tela é de outra pessoa). */
     codexBrowser?: boolean;
+    /** "Bloquear o Claudio’s Club no navegador dos funcionários" (só o tipo; ver AppConfig). */
+    clubGuard?: boolean;
     /** Dias parado até o Freela (conversa sem ficha) ser arquivado sozinho; 0 = nunca. */
     freelaArchiveDays?: number;
     /** Gate de recursos da fila (só o início automático): liga/desliga, RAM livre mínima em GB (0 ou 0,5–64), CPU, teto de conversas (0–50, 0 = sem). */
