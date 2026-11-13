@@ -1119,11 +1119,12 @@ export type ChatItem =
       cap?: TurnCapHit;
     };
 
-/** Turno interrompido pelo teto (ver server/chat/turnCap.ts): o que passou do limite e quanto era. */
-export interface TurnCapHit {
-  kind: 'tools' | 'minutes';
-  limit: number;
-}
+/**
+ * Turno parado que não volta sozinho: pelo teto (ver server/chat/turnCap.ts: o que passou do limite e quanto era) ou pelo
+ * reinício, que cortou no meio uma ação com efeito fora do projeto (ver server/chat/cutAction.ts: `action`, o resumo dela).
+ * Fica na caixa (e põe a tarefa em Aguardar) até você mandar mensagem nova.
+ */
+export type TurnCapHit = { kind: 'tools' | 'minutes'; limit: number } | { kind: 'restart'; action: string };
 
 /** Quem barrou uma ferramenta: `layer`; `reason` é o motivo dado (sem ele, ausente). `safety` = checagem embutida
  *  do Claude Code (ex.: Remove-Item em caminho do sistema); `settings` = arquivo ou pasta negado nas regras de permissão. */
