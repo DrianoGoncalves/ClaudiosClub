@@ -1,7 +1,7 @@
 import { statSync, type Stats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { Autonomy } from '../../shared/model';
+import { FTP_MCP_NAME, GPT_MCP_NAME, type Autonomy } from '../../shared/model';
 import { SANDBOX_HOST } from '../callers';
 
 // Linha de comando do Codex (CLI da OpenAI) para um funcionário com `engine: 'codex'`. Cada mensagem é uma execução
@@ -314,6 +314,52 @@ export function codexCleanBrowserMcpArgs(s: CodexMcpServer | null | undefined): 
   return codexMcpArgs(CLEAN_BROWSER_MCP_NAME, s, CLEAN_BROWSER_TOOLS);
 }
 
+/**
+ * MCP extra da conversa do Codex: os da biblioteca do Club e os da ficha (projeto, usuário ou local), montados em `codexMcpServers`
+ * (server/staff/mcp.ts). Stdio: o comando e os argumentos (o lançador). http: a `url` e, com cabeçalho, `headersHelper` (o comando que imprime
+ * o JSON dos cabeçalhos; é o mesmo formato do `headersHelper` do Claude Code, ver `quotedCommand`). Nunca valor de env ou cabeçalho aqui:
+ * eles ficam no cofre ou no arquivo de lançamento da conversa, que a sandbox nega.
+ */
+export type CodexExtraMcp = { name: string; enabledTools?: string[] } & ({ command: string; args: string[] } | { url: string; headersHelper?: string });
+
+/** Nome de MCP que o Codex aceita em `mcp_servers.<nome>`. Sem ponto: o ponto vira tabela aninhada no TOML. */
+export const CODEX_EXTRA_MCP_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * Nomes que um MCP da biblioteca ou da ficha não pode usar no Codex: os internos (SSH, Chrome do usuário, navegador limpo, FTP e GPT) e o
+ * "claude-in-chrome" (a chave do Chrome do Claude, ver mcpAccess.ts). Se um MCP do projeto tivesse um desses nomes, sobrescreveria o interno.
+ */
+export const CODEX_RESERVED_MCP_NAMES: ReadonlySet<string> = new Set([
+  CODEX_SSH_MCP_NAME,
+  CODEX_CHROME_MCP_NAME,
+  CLEAN_BROWSER_MCP_NAME,
+  FTP_MCP_NAME,
+  GPT_MCP_NAME,
+  'claude-in-chrome',
+]);
+
+/**
+ * Os `-c mcp_servers.<nome>.*` dos MCPs extras da conversa. Mesma regra de aprovação dos internos (`approve`, sem ela o `codex exec` recusa a
+ * chamada), e `enabled_tools` só quando a ficha limita as ferramentas (`readonly`/`ask` com teste). Nome fora do padrão ou reservado é pulado
+ * aqui também, por segurança: quem monta a lista já recusou, mas a linha de comando não depende disso.
+ */
+export function codexExtraMcpArgs(list: readonly CodexExtraMcp[] | undefined): string[] {
+  return (list ?? [])
+    .filter((m) => CODEX_EXTRA_MCP_NAME.test(m.name) && !CODEX_RESERVED_MCP_NAMES.has(m.name))
+    .flatMap((m) => {
+      const key = `mcp_servers.${m.name}`;
+      const transport =
+        'url' in m
+          ? ['-c', `${key}.url=${tomlString(m.url)}`, ...(m.headersHelper ? ['-c', `${key}.http_headers_helper=${tomlString(m.headersHelper)}`] : [])]
+          : ['-c', `${key}.command=${tomlString(m.command)}`, '-c', `${key}.args=[${m.args.map((a) => tomlString(a)).join(',')}]`];
+      return [
+        ...transport,
+        '-c', `${key}.default_tools_approval_mode=${tomlString('approve')}`,
+        ...(m.enabledTools ? ['-c', `${key}.enabled_tools=[${m.enabledTools.map((t) => tomlString(t)).join(',')}]`] : []),
+      ];
+    });
+}
+
 /** O que o `chatSpawn` entrega para abrir uma conversa no Codex (no lugar dos argumentos do `claude`). */
 export interface CodexSpawn {
   /** Autonomia da ficha: vira a sandbox (ver `sandboxFor`). */
@@ -343,6 +389,8 @@ export interface CodexSpawn {
   chromeMcp?: CodexMcpServer | null;
   /** MCP do navegador limpo (sem logins; ver `codexCleanBrowserMcpArgs`), ou null: sem ele. */
   cleanMcp?: CodexMcpServer | null;
+  /** MCPs da biblioteca e da ficha (projeto, usuário, local), já montados em `codexMcpServers`. Ver `codexExtraMcpArgs`. */
+  extraMcps?: CodexExtraMcp[];
 }
 
 /**
@@ -382,6 +430,8 @@ export interface CodexRunOptions {
   chromeMcp?: CodexMcpServer | null;
   /** MCP do navegador limpo (null = sem ele). Ver `codexCleanBrowserMcpArgs`. */
   cleanMcp?: CodexMcpServer | null;
+  /** MCPs da biblioteca e da ficha (projeto, usuário, local); ausente = nenhum. Ver `codexExtraMcpArgs`. */
+  extraMcps?: CodexExtraMcp[];
 }
 
 /**
@@ -445,6 +495,7 @@ export function buildCodexArgs(o: CodexRunOptions): string[] {
   args.push(...codexSshMcpArgs(o.sshMcp));
   args.push(...codexChromeMcpArgs(o.chromeMcp));
   args.push(...codexCleanBrowserMcpArgs(o.cleanMcp));
+  args.push(...codexExtraMcpArgs(o.extraMcps));
   if (o.instructions && instructionsInArgv(o.instructions, o.platform)) args.push('-c', `developer_instructions=${tomlString(o.instructions)}`);
   if (resume) args.push(o.threadId!);
   args.push('-');

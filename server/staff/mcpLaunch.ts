@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { z } from 'zod';
+import { tryJson } from '../adapters/claude/fsutil';
 import { ROOT } from '../root';
 import { DEFAULT_SECRETS_DIR, type VaultOptions } from '../secretVault';
 import { CLUB_MCP_FILE, readClub, resolveClub } from './mcp';
@@ -12,6 +14,8 @@ import { CLUB_MCP_FILE, readClub, resolveClub } from './mcp';
 //   stdio (padrão): sobe o comando com o ambiente do cofre e repassa sinais e código de saída.
 //   --headers: imprime no stdout os cabeçalhos do cofre em JSON (é o `headersHelper` do Claude Code, para http e sse).
 // Mesmo padrão do MCP de FTP (ftpMcp.ts).
+// Modo --snapshot (o Codex): o MCP não é da biblioteca, é da ficha (projeto ou usuário), e os valores já estão expandidos num arquivo
+// JSON da pasta da conversa (`--snapshot <arquivo> --server <nome>`), que a sandbox do Codex nega ao agente. Ver codexMcpServers (mcp.ts).
 
 export const MCP_LAUNCH_BUNDLE = path.join(ROOT, 'dist', 'mcp-launch.mjs');
 export const MCP_LAUNCH_ENTRY = path.join(ROOT, 'server', 'mcp-launch.ts');
@@ -43,20 +47,67 @@ export async function launchSpec(name: string, o: { clubFile?: string; vault?: V
   return { headers: headers ?? {} };
 }
 
+/**
+ * O arquivo de lançamento de uma conversa do Codex (`codex-mcp.json`, ver codexMcpServers): os MCPs da ficha que não são da biblioteca,
+ * já com as variáveis expandidas. Só stdio (comando, argumentos e ambiente) e http com cabeçalhos. Chave que não bate com o schema = arquivo estragado.
+ */
+const SnapshotDoc = z.object({
+  servers: z.record(
+    z.string(),
+    z.discriminatedUnion('type', [
+      z.object({ type: z.literal('stdio'), command: z.string(), args: z.array(z.string()), env: z.record(z.string(), z.string()) }),
+      z.object({ type: z.literal('http'), headers: z.record(z.string(), z.string()) }),
+    ]),
+  ),
+});
+
+/**
+ * O que subir para o MCP `name` a partir do arquivo de lançamento da conversa (`--snapshot`). Mesmas regras de `launchSpec`: nome
+ * validado, `hasOwn` (nada de `__proto__`) e erro sem valor na mensagem.
+ */
+export async function snapshotSpec(name: string, file: string): Promise<LaunchSpec> {
+  if (!NAME.test(name)) throw new McpLaunchError('nome de MCP inválido');
+  const raw = await fs.readFile(file, 'utf8').catch(() => null);
+  const doc = raw === null ? null : SnapshotDoc.safeParse(tryJson(raw.replace(/^﻿/, '')));
+  if (!doc?.success || !Object.prototype.hasOwnProperty.call(doc.data.servers, name)) {
+    throw new McpLaunchError(`o MCP ${name} não está nesta conversa (o arquivo de lançamento falta ou está estragado)`);
+  }
+  const s = doc.data.servers[name]!;
+  if (s.type === 'stdio') return { command: s.command, args: s.args, env: s.env };
+  return { headers: s.headers };
+}
+
+/** O lançador do Codex: só o pacote do build (`dist/mcp-launch.mjs`), com node. Nunca o .ts pelo tsx: o Codex não sobe código do repo. Null = não existe. */
+export function mcpLaunchBundle(): { command: string; args: string[] } | null {
+  return existsSync(MCP_LAUNCH_BUNDLE) ? { command: process.execPath, args: [MCP_LAUNCH_BUNDLE] } : null;
+}
+
+/**
+ * Uma linha de comando citada para `headersHelper` (aspas duplas em cada parte, separadas por espaço). null se alguma parte não pode ir
+ * citada com segurança: aspas, `%`, `$`, crase ou caractere de controle (o Claude Code e o Codex passam a linha por um shell).
+ */
+export function quotedCommand(parts: string[]): string | null {
+  if (parts.some((p) => /["%$`\u0000-\u001f\u007f]/.test(p))) return null;
+  return parts.map((p) => `"${p}"`).join(' ');
+}
+
 export interface LaunchArgs {
   headers: boolean;
   server?: string;
   club: string;
   vault: string;
+  /** Arquivo de lançamento da conversa (modo do Codex): quando vem, substitui a biblioteca. */
+  snapshot?: string;
 }
 
-/** Lê `--server`, `--club`, `--vault` e `--headers`. Não há flag de comando: o comando vem sempre da biblioteca. */
+/** Lê `--server`, `--club`, `--vault`, `--snapshot` e `--headers`. Não há flag de comando: o comando vem sempre da biblioteca ou do arquivo. */
 export function parseLaunchArgs(argv: string[]): LaunchArgs {
   return {
     headers: argv.includes('--headers'),
     server: argOf(argv, '--server'),
     club: argOf(argv, '--club') ?? CLUB_MCP_FILE,
     vault: argOf(argv, '--vault') ?? DEFAULT_SECRETS_DIR,
+    snapshot: argOf(argv, '--snapshot'),
   };
 }
 
@@ -113,9 +164,9 @@ export async function runMcpLaunchCli(argv: string[]): Promise<number> {
     return 1;
   };
   const a = parseLaunchArgs(argv);
-  if (!a.server) return fail('uso: --server <nome> --club <mcps.json> --vault <pasta> [--headers]');
+  if (!a.server) return fail('uso: --server <nome> --club <mcps.json> --vault <pasta> [--headers] ou --snapshot <arquivo> --server <nome> [--headers]');
   try {
-    const spec = await launchSpec(a.server, { clubFile: a.club, vault: { dir: a.vault } });
+    const spec = a.snapshot ? await snapshotSpec(a.server, a.snapshot) : await launchSpec(a.server, { clubFile: a.club, vault: { dir: a.vault } });
     if (a.headers) {
       if (!('headers' in spec)) return fail(`MCP ${a.server}: não é http nem sse`);
       process.stdout.write(JSON.stringify(spec.headers));

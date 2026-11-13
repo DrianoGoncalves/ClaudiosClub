@@ -7,7 +7,7 @@ import { CODEX_CONTEXT_WINDOW } from '../adapters/claude/pricing';
 import { resolveCodexCommand, type CodexEnvStatus } from '../codexEnv';
 import { pickCodexSubstitute, type CodexModelInfo } from '../codexModels';
 import { cleanEnv, withoutMycoToken } from '../auth';
-import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexMcpServer, type CodexSecrets } from './codexArgs';
+import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexExtraMcp, type CodexMcpServer, type CodexSecrets } from './codexArgs';
 import { contextUsed, isModelUnavailable, isToolCall, itemFromCodex, parseCodexFailure, type CodexPhase } from './codexEvents';
 import { hasCheckpoint, stripCheckpoint } from './items';
 import { ChatProcess, type ChatProcessOptions } from './process';
@@ -36,6 +36,8 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   chromeMcp?: CodexMcpServer | null;
   /** MCP do navegador limpo (null = sem ele). Ver `codexCleanBrowserMcpArgs` em codexArgs.ts. */
   cleanMcp?: CodexMcpServer | null;
+  /** MCPs da biblioteca e da ficha (projeto, usuário, local). Ver `codexExtraMcpArgs` em codexArgs.ts. */
+  extraMcps?: CodexExtraMcp[];
   /** O que o bloqueio de segredos precisa saber; `mycoHome` é obrigatório (ver `CodexSecrets` em codexArgs.ts). */
   secrets: CodexSecrets;
   /**
@@ -324,6 +326,7 @@ export class CodexProcess extends ChatProcess {
         sshMcp: o.sshMcp,
         chromeMcp: o.chromeMcp,
         cleanMcp: o.cleanMcp,
+        extraMcps: o.extraMcps,
         secrets: o.secrets,
         network: status.networkProxy ? 'loopback' : 'off',
         internetAccess,

@@ -11,10 +11,11 @@ import { FTP_MCP_NAME, GPT_MCP_NAME } from '../../shared/model';
 import { DEFAULT_SECRETS_DIR } from '../secretVault';
 import { ftpMcpServerConfig } from './ftpMcp';
 import { SSH_MCP_BUNDLE, SSH_READ_TOOLS, WRITE_AUTONOMY, sshMcpServerConfig } from './sshMcp';
-import { CLEAN_BROWSER_MCP_NAME, CODEX_CHROME_MCP_NAME, CODEX_SSH_MCP_NAME, type CodexMcpServer } from '../chat/codexArgs';
+import { CLEAN_BROWSER_MCP_NAME, CODEX_CHROME_MCP_NAME, CODEX_SSH_MCP_NAME, type CodexExtraMcp, type CodexMcpServer } from '../chat/codexArgs';
 import { codexMcpAccess } from './mcpAccess';
 import { gptMcpServerConfig } from './gptMcp';
-import { buildMcpConfig, mcpWriteFileFor } from './mcp';
+import { buildMcpConfig, codexMcpServers, mcpWriteFileFor, type CodexMcpMotivo } from './mcp';
+import { MCP_LAUNCH_BUNDLE, mcpLaunchBundle } from './mcpLaunch';
 import { ensurePlaybookAgents } from './playbookAgents';
 import { buildSkillPlugin } from '../skillLibrary';
 import { hasGuide } from '../projectGuide';
@@ -47,6 +48,11 @@ export interface LaunchContext {
   team?: TeamMember[];
   /** Cargos prontos para contratar por roleId (só quem pode contratar; ver FichaContext.roles). */
   roles?: { id: string; label: string }[];
+  /**
+   * Lançador dos MCPs da biblioteca e da ficha no Codex (os testes trocam; ausente = `mcpLaunchBundle()`, o pacote do build). null = sem lançador:
+   * os MCPs que precisam dele ficam de fora e a ficha diz que estão indisponíveis.
+   */
+  mcpLauncher?: { command: string; args: string[] } | null;
   /** Agents da conta (padrão ~/.claude/agents); os testes trocam. */
   userAgentsDir?: string;
   /** Codex ligado nas configurações (`codexReview`): o funcionário do Claude ganha o MCP `perguntar_gpt` e o roteiro manda usá-lo. */
@@ -124,7 +130,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   // FTP: as conexões da ficha que existem e têm senha (ctx.servers já vem filtrado assim).
   const ftpServers = ftpServersOf(profile, ctx.servers);
   let mcpConfigPath: string | null = null;
-  // O `perguntar_gpt` entra só com o Codex ligado nas configurações e só aqui, no motor Claude (o motor Codex não tem MCPs).
+  // O `perguntar_gpt` entra só com o Codex ligado nas configurações e só aqui, no motor Claude (no Codex, os MCPs da ficha entram por prepareCodexRun).
   const gpt = ctx.codex === true && profile.engine !== 'codex';
   if (profile.mcps !== null || ftpServers.length || gpt || clean.mcp) {
     mcpConfigPath = path.join(dir, 'mcp.json');
@@ -213,6 +219,8 @@ export interface PreparedCodexRun {
   chromeMcp: CodexMcpServer | null;
   /** MCP do navegador limpo (null = sem). Pedido na ficha (Navegador), com ou sem a extensão do Chrome; ver `cleanBrowserOf`. */
   cleanMcp: CodexMcpServer | null;
+  /** MCPs da biblioteca do Club e da ficha (projeto, usuário, local), com o acesso da ficha (ver `codexMcpServers`). Sem valor de env ou cabeçalho. */
+  extraMcps: CodexExtraMcp[];
 }
 
 /**
@@ -316,8 +324,9 @@ export function sshServersOf(profile: Pick<StaffProfile, 'servers'>, servers: Se
 }
 
 /**
- * O que o Codex precisa para a conversa: a ficha atualizada (e a memória criada) e o texto de instruções. Sem MCPs, hooks,
- * agents do roteiro nem skills da biblioteca: não existem no Codex. O texto vai em `developer_instructions` na linha de comando; passando de ~24 KB (ou
+ * O que o Codex precisa para a conversa: a ficha atualizada (e a memória criada) e o texto de instruções. Os MCPs são o de SSH, o do Chrome,
+ * o do navegador limpo e os da biblioteca e da ficha (projeto, usuário e local, pelo lançador; ver `codexMcpServers`). Sem hooks, agents do
+ * roteiro nem skills da biblioteca: não existem no Codex. O texto vai em `developer_instructions` na linha de comando; passando de ~24 KB (ou
  * no Windows) o CodexProcess o manda no começo do prompt da primeira mensagem (o Codex não tem arquivo para isso sem trocar as instruções base).
  */
 export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string): Promise<PreparedCodexRun> {
@@ -358,18 +367,49 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
   const cleanDir = path.join(ctx.runDir, sessionId, 'navegador');
   const clean = cleanBrowserOf(ctx.cleanBrowser ?? profile.browser, ctx, sshMcp !== null, cleanDir);
   if (clean.mcp) await mkdir(cleanDir, { recursive: true });
-  // O que o Codex deixou só leitura por causa de "pede antes" (a ficha diz). O Chrome não entra aqui: sem lista de leitura, ask o desliga.
-  const asked = names.length && !root && ssh.askAsReadonly ? [CODEX_SSH_MCP_NAME] : [];
-  const fichaCtx = await writeFicha(profile, ctx, away, { codexSsh: sshInfo, codexChrome: chrome.info, codexMcpAsked: asked, cleanBrowser: clean.info });
+  // MCPs da biblioteca e da ficha (projeto, usuário, local), pelo lançador: o arquivo de lançamento fica na pasta da conversa (a sandbox nega).
+  // Sem lançador (o build não existe), os que precisam dele ficam de fora e a ficha diz. Os de HTTP sem cabeçalho não precisam.
+  const launcher = ctx.mcpLauncher !== undefined ? ctx.mcpLauncher : mcpLaunchBundle();
+  const extra = await codexMcpServers(ctx.projectPath, profile.mcps, ctx.claudeConfigFile, {
+    access: profile.mcpAccess,
+    snapshotFile: path.join(ctx.runDir, sessionId, 'codex-mcp.json'),
+    launcher,
+  });
+  // O que o Codex deixou só leitura por causa de "pede antes" (a ficha diz): o SSH e os MCPs da ficha. O Chrome não entra aqui: sem lista de leitura, ask o desliga.
+  const asked = [...(names.length && !root && ssh.askAsReadonly ? [CODEX_SSH_MCP_NAME] : []), ...extra.asked];
+  const fichaCtx = await writeFicha(profile, ctx, away, {
+    codexSsh: sshInfo,
+    codexChrome: chrome.info,
+    codexMcpAsked: asked,
+    codexMcpOut: extra.out,
+    cleanBrowser: clean.info,
+  });
+  // A config dos MCPs do projeto e deste projeto (.mcp.json) e o próprio lançador ficam só leitura: o agente não troca o comando de um MCP
+  // no meio do caminho (o Codex lê a ficha a cada mensagem), e o lançador, que roda fora da sandbox, não é reescrito por ele (quando o projeto é o do Club).
+  const mcpJson = [...new Set([path.join(cwd, '.mcp.json'), path.join(ctx.projectPath, '.mcp.json')])];
+  const bundleInCwd = isInside(cwd, MCP_LAUNCH_BUNDLE) ? [MCP_LAUNCH_BUNDLE] : [];
   return {
     instructions: systemPrompt(profile, fichaCtx, renderFicha(profile, fichaCtx)),
     writableRoots: away ? [staffDir(ctx.projectPath)] : [],
-    readOnlyPaths: [profileFile(ctx.projectPath, profile.id), fichaFile(ctx.projectPath, profile.id), historyDir(ctx.projectPath, profile.id)],
+    readOnlyPaths: [
+      profileFile(ctx.projectPath, profile.id),
+      fichaFile(ctx.projectPath, profile.id),
+      historyDir(ctx.projectPath, profile.id),
+      ...mcpJson,
+      ...bundleInCwd,
+    ],
     threadFile: path.join(ctx.runDir, sessionId, 'codex-thread.json'),
     sshMcp,
     chromeMcp: chrome.mcp,
     cleanMcp: clean.mcp,
+    extraMcps: extra.servers,
   };
+}
+
+/** `file` está dentro de `dir` (sem sair por `..` nem por outro drive). */
+function isInside(dir: string, file: string): boolean {
+  const rel = path.relative(dir, file);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
 /** As conexões FTP da ficha que estão no projeto (com senha). */
@@ -427,6 +467,8 @@ export interface FichaRunInfo {
   codexSsh?: CodexSshInfo;
   codexChrome?: CodexChromeInfo;
   codexMcpAsked?: string[];
+  /** Codex: os MCPs da ficha que ficaram fora da conversa, com o motivo (ver `codexMcpServers`). */
+  codexMcpOut?: Array<{ name: string; motivo: CodexMcpMotivo }>;
   cleanBrowser?: CleanBrowserInfo;
 }
 
@@ -464,6 +506,7 @@ export async function writeFicha(
     codexSsh: run.codexSsh,
     codexChrome: run.codexChrome,
     codexMcpAsked: run.codexMcpAsked,
+    codexMcpOut: run.codexMcpOut,
     cleanBrowser: run.cleanBrowser,
     // Mesma regra de prepareRun (manualEditable): só o projeto do Claudio’s Club, fora de worktree.
     manualEditable: !absolute && isClaudeRoot(ctx.projectPath),

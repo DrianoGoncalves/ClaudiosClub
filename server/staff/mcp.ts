@@ -7,10 +7,12 @@ import { MYCO_HOME } from '../config';
 import { tryJson } from '../adapters/claude/fsutil';
 import { pathKey } from '../adapters/claude/paths';
 import { findSecret } from '../chat/secrets';
+import { CODEX_EXTRA_MCP_NAME, CODEX_RESERVED_MCP_NAMES, type CodexExtraMcp } from '../chat/codexArgs';
 import { DEFAULT_SECRETS_DIR, getSecret, type VaultOptions } from '../secretVault';
-import { mcpLaunchCommand } from './mcpLaunch';
+import { mcpLaunchCommand, quotedCommand } from './mcpLaunch';
 import { MCP_TOOLS_FILE, mcpFingerprint, testedToolsMany, toolsKey, type McpTool } from './mcpTools';
-import { mcpAccessFile, type McpAccessFile } from './mcpAccess';
+import { codexMcpAccess, mcpAccessFile, validMcpName, type McpAccessFile, type McpAccessMap } from './mcpAccess';
+import { writeAtomic } from './store';
 
 // MCPs que vão para a conversa de um funcionário, de quatro origens (da mais específica para a mais geral):
 //   local   = só este projeto, em ~/.claude.json (projects[<caminho>].mcpServers)
@@ -303,7 +305,257 @@ function clubConfig(name: string, config: ServerConfig, keys: { env: string[]; h
     return { type: 'stdio', command: launch.command, args: [...launch.args, '--server', name, '--club', o.clubFile, '--vault', o.vaultDir] };
   }
   if (keys.headers.length === 0) return config;
-  const parts = [launch.command, ...launch.args, '--headers', '--server', name, '--club', o.clubFile, '--vault', o.vaultDir];
-  if (parts.some((p) => /["%$`\u0000-\u001f\u007f]/.test(p))) return null;
-  return { type: config.type, url: config.url, headersHelper: parts.map((p) => `"${p}"`).join(' ') };
+  const helper = quotedCommand([launch.command, ...launch.args, '--headers', '--server', name, '--club', o.clubFile, '--vault', o.vaultDir]);
+  if (helper === null) return null;
+  return { type: config.type, url: config.url, headersHelper: helper };
+}
+
+/**
+ * Por que um MCP da ficha ficou fora da conversa do Codex (a ficha diz, em pt-br; ver codexMcpSection). Nenhum motivo leva valor.
+ */
+export type CodexMcpMotivo = 'nome' | 'politica' | 'sse' | 'transporte' | 'indisponivel' | 'cofre' | 'caminho' | 'variavel' | 'url-segredo';
+
+export interface CodexMcpResult {
+  /** Os MCPs que entram na conversa (ver codexExtraMcpArgs). Nenhum valor de env ou cabeçalho aqui: eles vão no arquivo de lançamento ou ficam no cofre. */
+  servers: CodexExtraMcp[];
+  /** Os que entram só com as ferramentas de leitura porque "pede antes" não tem como perguntar no Codex (a ficha avisa). */
+  asked: string[];
+  /** Os que a ficha pediu e não entraram, com o motivo. Nível `off` explícito não entra aqui: ele só fica de fora. */
+  out: Array<{ name: string; motivo: CodexMcpMotivo }>;
+}
+
+/** Uma entrada do arquivo de lançamento da conversa (ver mcpLaunch.ts, `snapshotSpec`): o que o lançador sobe, já com as variáveis expandidas. */
+type SnapshotEntry = { type: 'stdio'; command: string; args: string[]; env: Record<string, string> } | { type: 'http'; headers: Record<string, string> };
+
+/**
+ * `${VAR}` e `${VAR:-padrão}`, a sintaxe que o Claude Code aceita no mcp.json. Vazia conta como definida, exceto no `:-` (aí vale o padrão).
+ * Variável que falta sem padrão devolve o nome (nunca o valor). Expande só no que o Codex recebe (comando, argumentos, ambiente, URL e cabeçalhos).
+ */
+const VAR_REF = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g;
+export function expandVars(text: string, env: NodeJS.ProcessEnv): { value: string } | { missing: string } {
+  const miss: { name?: string } = {};
+  const value = text.replace(VAR_REF, (_, name: string, fallback: string | undefined) => {
+    const v = env[name];
+    if (v !== undefined && (v !== '' || fallback === undefined)) return v;
+    if (fallback !== undefined) return fallback;
+    miss.name ??= name;
+    return '';
+  });
+  return miss.name === undefined ? { value } : { missing: miss.name };
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * O MCP do usuário, do projeto ou deste projeto, com as variáveis expandidas. `invalid`: algum campo não tem o formato que o Codex lê
+ * (argumento ou valor que não é texto). `missing`: uma variável falta e não tem padrão.
+ */
+function expandConfig(
+  cfg: ServerConfig,
+  env: NodeJS.ProcessEnv,
+): { value: { command: string | null; args: string[]; env: Record<string, string>; url: string | null; headers: Record<string, string> } } | { missing: string } | { invalid: true } {
+  const strs = (v: unknown): string[] | null => (v === undefined ? [] : Array.isArray(v) && v.every((x) => typeof x === 'string') ? (v as string[]) : null);
+  const map = (v: unknown): Record<string, string> | null => {
+    if (v === undefined) return {};
+    if (!isObj(v) || !Object.values(v).every((x) => typeof x === 'string')) return null;
+    return v as Record<string, string>;
+  };
+  const args = strs(cfg.args);
+  const envIn = map(cfg.env);
+  const headersIn = map(cfg.headers);
+  if (!args || !envIn || !headersIn) return { invalid: true };
+  if ((cfg.command !== undefined && typeof cfg.command !== 'string') || (cfg.url !== undefined && typeof cfg.url !== 'string')) return { invalid: true };
+  const miss: { name?: string } = {};
+  const ex = (s: string): string => {
+    const r = expandVars(s, env);
+    if ('missing' in r) {
+      miss.name ??= r.missing;
+      return '';
+    }
+    return r.value;
+  };
+  const exMap = (m: Record<string, string>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, ex(v)]));
+  const value = {
+    command: typeof cfg.command === 'string' ? ex(cfg.command) : null,
+    args: args.map(ex),
+    env: exMap(envIn),
+    url: typeof cfg.url === 'string' ? ex(cfg.url) : null,
+    headers: exMap(headersIn),
+  };
+  return miss.name === undefined ? { value } : { missing: miss.name };
+}
+
+/**
+ * Chave na URL (no caminho ou na query): a linha de comando do Codex não leva segredo. A mesma checagem de `secretIn`, mas sem o .mcp.json
+ * inteiro. Limite: segredo que não casa com um padrão conhecido no caminho passa (ver findSecret).
+ */
+function urlSecret(url: string): string | null {
+  const direct = findSecret(url);
+  if (direct) return direct.label;
+  if (!URL.canParse(url)) return null;
+  for (const [k, v] of new URL(url).searchParams) {
+    const label = isLiteralSecret(k, v);
+    if (label) return label;
+  }
+  return null;
+}
+
+/**
+ * Os MCPs da ficha que entram na conversa do Codex, no mesmo critério do Claude (`buildMcpConfig` e `mcpWriteFileFor`): a biblioteca do Club
+ * pelo lançador, e o do usuário, do projeto e deste projeto pelo arquivo de lançamento (`o.snapshotFile`, gravado aqui só se houver entrada;
+ * senão é apagado). `names` null = sem lista na ficha: entram os do usuário, do projeto e deste projeto (a biblioteca só com nome, como no Claude).
+ * `o.launcher` é o `node` + pacote do lançador (ver mcpLaunchBundle); null = nenhum MCP que precise dele, e a ficha diz que está indisponível.
+ * Nenhum valor de env ou cabeçalho sai em `servers`: a biblioteca fica no cofre, e o resto no arquivo de lançamento (que a sandbox nega).
+ */
+export async function codexMcpServers(
+  projectPath: string,
+  names: string[] | null,
+  claudeConfigFile: string,
+  o: {
+    access?: McpAccessMap;
+    snapshotFile: string;
+    launcher: { command: string; args: string[] } | null;
+    clubFile?: string;
+    vault?: VaultOptions;
+    toolsFile?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<CodexMcpResult> {
+  const clubFile = o.clubFile ?? CLUB_MCP_FILE;
+  const vaultDir = o.vault?.dir ?? DEFAULT_SECRETS_DIR;
+  const env = o.env ?? process.env;
+  const launcher = o.launcher;
+  const found = await collect(projectPath, claudeConfigFile, clubFile);
+  // Sem teste (ou arquivo estragado), a lista de leitura fica vazia: `readonly` e `ask` ficam de fora (ver codexMcpAccess).
+  const tools = await toolsOf(found, projectPath, o.toolsFile ?? MCP_TOOLS_FILE).catch(() => new Map<string, McpTool[]>());
+  const wanted = names ?? [...found].filter(([, f]) => f.info.source !== 'club').map(([n]) => n);
+  const servers: CodexExtraMcp[] = [];
+  const asked: string[] = [];
+  const out: CodexMcpResult['out'] = [];
+  const snapshot = new Map<string, SnapshotEntry>();
+  for (const name of new Set(wanted)) {
+    const f = found.get(name);
+    if (!f) continue;
+    if (CODEX_RESERVED_MCP_NAMES.has(name)) continue;
+    if (!CODEX_EXTRA_MCP_NAME.test(name) || !validMcpName(name)) {
+      out.push({ name, motivo: 'nome' });
+      continue;
+    }
+    // `off` explícito: fica de fora sem aviso (a ficha não precisa dizer o que ela mesma proibiu).
+    if (o.access && Object.prototype.hasOwnProperty.call(o.access, name) && o.access[name] === 'off') continue;
+    const leitura = tools.get(name)?.filter((t) => t.readOnly).map((t) => t.name) ?? null;
+    const acc = codexMcpAccess(o.access, name, [], leitura);
+    if (!acc.attached) {
+      out.push({ name, motivo: 'politica' });
+      continue;
+    }
+    const access = acc.enabledTools ? { enabledTools: acc.enabledTools } : {};
+    // `pede antes` só vira leitura: o aviso da ficha vale só para o que entrou (por isso entra aqui, não antes).
+    const add = (server: CodexExtraMcp) => {
+      servers.push(server);
+      if (acc.askAsReadonly) asked.push(name);
+    };
+    const cfg = f.config;
+    const type = cfg.type ?? (cfg.url ? 'http' : cfg.command ? 'stdio' : null);
+    if (type === 'sse') {
+      out.push({ name, motivo: 'sse' });
+      continue;
+    }
+    if (type !== 'stdio' && type !== 'http') {
+      out.push({ name, motivo: 'transporte' });
+      continue;
+    }
+    if (f.club) {
+      // A biblioteca: confere o cofre como o Claude (buildMcpConfig), sem sair valor no log.
+      const r = await resolveClub(name, {}, f.club, o.vault);
+      if ('missing' in r) {
+        console.warn(`[staff] MCP ${name}: não achei o valor de ${r.missing} no cofre; fora desta conversa do Codex (cadastre de novo)`);
+        out.push({ name, motivo: 'cofre' });
+        continue;
+      }
+      if (type === 'stdio') {
+        if (!cfg.command) {
+          out.push({ name, motivo: 'transporte' });
+          continue;
+        }
+        if (!launcher) {
+          out.push({ name, motivo: 'indisponivel' });
+          continue;
+        }
+        add({ name, command: launcher.command, args: [...launcher.args, '--server', name, '--club', clubFile, '--vault', vaultDir], ...access });
+        continue;
+      }
+      if (!cfg.url) {
+        out.push({ name, motivo: 'transporte' });
+        continue;
+      }
+      if (f.club.headers.length === 0) {
+        add({ name, url: cfg.url, ...access });
+        continue;
+      }
+      if (!launcher) {
+        out.push({ name, motivo: 'indisponivel' });
+        continue;
+      }
+      const helper = quotedCommand([launcher.command, ...launcher.args, '--headers', '--server', name, '--club', clubFile, '--vault', vaultDir]);
+      if (helper === null) {
+        out.push({ name, motivo: 'caminho' });
+        continue;
+      }
+      add({ name, url: cfg.url, headersHelper: helper, ...access });
+      continue;
+    }
+    // Usuário, projeto ou local: os valores estão no próprio arquivo (com `${VAR}`), então expande agora, do ambiente do Club.
+    const vars = expandConfig(cfg, env);
+    if ('invalid' in vars) {
+      out.push({ name, motivo: 'transporte' });
+      continue;
+    }
+    if ('missing' in vars) {
+      console.warn(`[staff] MCP ${name}: a variável ${vars.missing} não está definida e não tem padrão; fora desta conversa do Codex`);
+      out.push({ name, motivo: 'variavel' });
+      continue;
+    }
+    const x = vars.value;
+    if (type === 'stdio') {
+      if (!x.command) {
+        out.push({ name, motivo: 'transporte' });
+        continue;
+      }
+      if (!launcher) {
+        out.push({ name, motivo: 'indisponivel' });
+        continue;
+      }
+      // Comando, argumentos e ambiente vão só no arquivo de lançamento: nada disso na linha de comando.
+      snapshot.set(name, { type: 'stdio', command: x.command, args: x.args, env: x.env });
+      add({ name, command: launcher.command, args: [...launcher.args, '--snapshot', o.snapshotFile, '--server', name], ...access });
+      continue;
+    }
+    if (!x.url) {
+      out.push({ name, motivo: 'transporte' });
+      continue;
+    }
+    if (urlSecret(x.url)) {
+      out.push({ name, motivo: 'url-segredo' });
+      continue;
+    }
+    if (Object.keys(x.headers).length === 0) {
+      add({ name, url: x.url, ...access });
+      continue;
+    }
+    if (!launcher) {
+      out.push({ name, motivo: 'indisponivel' });
+      continue;
+    }
+    const helper = quotedCommand([launcher.command, ...launcher.args, '--headers', '--snapshot', o.snapshotFile, '--server', name]);
+    if (helper === null) {
+      out.push({ name, motivo: 'caminho' });
+      continue;
+    }
+    snapshot.set(name, { type: 'http', headers: x.headers });
+    add({ name, url: x.url, headersHelper: helper, ...access });
+  }
+  if (snapshot.size) await writeAtomic(o.snapshotFile, JSON.stringify({ servers: Object.fromEntries(snapshot) }, null, 2));
+  else await fs.rm(o.snapshotFile, { force: true });
+  return { servers, asked, out };
 }

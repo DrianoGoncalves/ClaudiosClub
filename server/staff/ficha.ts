@@ -10,6 +10,7 @@ import { ROOT } from '../root';
 import { defaultLocations, pathKey } from '../adapters/claude/paths';
 import { mcpOffDenyRules } from './mcpAccess';
 import { CLEAN_BROWSER_DENIED, CLEAN_BROWSER_MCP_NAME } from '../chat/codexArgs';
+import type { CodexMcpMotivo } from './mcp';
 
 // A ficha vira um arquivo Markdown dentro do projeto (.myco/staff/<id>.md), que a sessão lê
 // no começo. Pela linha de comando só vai uma identidade curta apontando para ela: o CLI não
@@ -58,6 +59,8 @@ export interface FichaContext {
   cleanBrowser?: CleanBrowserInfo;
   /** Codex: as ferramentas MCP marcadas como Perguntar que ficaram desligadas (sem pergunta no Codex; ver `codexMcpSection`). */
   codexMcpAsked?: string[];
+  /** Codex: os MCPs da biblioteca e da ficha que ficaram fora desta conversa, com o motivo (ver `codexMcpSection`). */
+  codexMcpOut?: Array<{ name: string; motivo: CodexMcpMotivo }>;
   /** O manual é editável nesta conversa (projeto do Claudio’s Club, sem worktree): ver `manualSection`. */
   manualEditable?: boolean;
 }
@@ -491,16 +494,38 @@ function cleanBrowserLines(ctx: FichaContext): string[] {
   ];
 }
 
+/** Por que um MCP da ficha ficou fora da conversa do Codex (os motivos vêm de `codexMcpServers` em mcp.ts). */
+const CODEX_MCP_MOTIVO: Record<CodexMcpMotivo, string> = {
+  nome: 'nome que o Codex não aceita: só letras, números, `_` e `-`, até 64',
+  politica: 'sem teste das ferramentas, com acesso só leitura ou pede antes',
+  sse: 'SSE não existe no Codex; o servidor precisa de HTTP ou stdio',
+  transporte: 'tipo de transporte que o Codex não conhece, ou configuração incompleta',
+  indisponivel: 'o lançador do Claudio’s Club não está instalado (falta `npm run build`)',
+  cofre: 'falta um valor no cofre (cadastre de novo na biblioteca)',
+  caminho: 'caminho com aspas, `%`, `$` ou caractere de controle, que não dá para passar com segurança',
+  variavel: 'variável de ambiente que não está definida e não tem padrão',
+  'url-segredo': 'a URL leva uma chave, que não pode ir na linha de comando',
+};
+
 /**
  * Codex: o MCP marcado como "pede antes de escrever" não tem como perguntar, então fica só leitura (ver codexMcpAccess). A ficha diz
- * quais, para o funcionário não tentar escrever e para o usuário saber por que não escreve.
+ * quais, para o funcionário não tentar escrever e para o usuário saber por que não escreve. Os MCPs da ficha que não entraram (SSE,
+ * sem teste, sem o lançador…) também aparecem aqui, com o motivo: sem isso o funcionário ficaria procurando a ferramenta.
  */
 function codexMcpSection(p: StaffProfile, ctx: FichaContext): string {
-  if (!codexOf(p) || !ctx.codexMcpAsked?.length) return '';
-  return [
-    '## Ferramentas MCP',
-    `No Codex não há como perguntar antes: os MCPs marcados como "pede antes de escrever" ficam só leitura (${ctx.codexMcpAsked.map((k) => `\`${k}\``).join(', ')}). Se precisar escrever, avise o usuário.`,
-  ].join('\n');
+  if (!codexOf(p)) return '';
+  const lines: string[] = [];
+  if (ctx.codexMcpAsked?.length) {
+    lines.push(
+      `No Codex não há como perguntar antes: os MCPs marcados como "pede antes de escrever" ficam só leitura (${ctx.codexMcpAsked.map((k) => `\`${k}\``).join(', ')}). Se precisar escrever, avise o usuário.`,
+    );
+  }
+  if (ctx.codexMcpOut?.length) {
+    // O nome vem do arquivo do projeto (.mcp.json): só o que tem cara de nome vai para a ficha, o resto aparece sem o texto.
+    const shown = (n: string) => (/^[A-Za-z0-9_.-]{1,64}$/.test(n) ? `\`${n}\`` : '(nome inválido)');
+    lines.push(`Ficaram fora desta conversa no Codex: ${ctx.codexMcpOut.map((m) => `${shown(m.name)} (${CODEX_MCP_MOTIVO[m.motivo]})`).join('; ')}. Se precisar deles, avise o usuário.`);
+  }
+  return lines.length ? ['## Ferramentas MCP', ...lines].join('\n') : '';
 }
 /** A tela do Club é do dono: o navegador do funcionário não vai lá (o hook e o --blocked-origins barram; ver server/clubAddress.ts). */
 const CLUB_OFF_LIMITS =
