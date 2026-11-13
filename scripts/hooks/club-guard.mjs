@@ -11,8 +11,8 @@ const PORT = Number(process.env.MYCO_PORT ?? 4848);
 
 const CLUB_NAME = /(?:^|[^a-z0-9-])(?:claudio|myco)\.localhost\b/i;
 // Qualquer host na porta do Club (localhost, 127.x, [::1], 0.0.0.0, o IP da máquina...). Só a porta: o projeto do
-// funcionário pode rodar em outra porta de localhost à vontade.
-const CLUB_PORT = new RegExp(`[a-z0-9.\\]-]:${PORT}(?![0-9])`, 'i');
+// funcionário pode rodar em outra porta de localhost à vontade. Zeros à esquerda contam: o navegador lê :04848 como :4848.
+const CLUB_PORT = new RegExp(`[a-z0-9.\\]-]:0*${PORT}(?![0-9])`, 'i');
 
 const NEGADO =
   '[MyCo] O navegador dos funcionários não abre o Claudio’s Club: a tela dele é do dono (aprovações, permissões e mesclas são dele). ' +
