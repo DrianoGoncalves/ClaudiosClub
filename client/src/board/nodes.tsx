@@ -3,7 +3,7 @@ import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } fro
 import { PLAYBOOK_AGENTS } from '../../../shared/agentPresets';
 import { colorCss, type GitState, type LiveSession, type StaffProfile } from '../../../shared/model';
 import { employeeName, ENTRYPOINT_LABEL, formatAgo, initials, STATUS_LABEL } from '../format';
-import { AgentIcon, BranchIcon, ChromeIcon, FallbackModelIcon, GhostIcon, McpIcon, PencilIcon, ServerIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
+import { AgentIcon, BranchIcon, ChromeIcon, FallbackModelIcon, GhostIcon, McpIcon, ServerIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { t } from '../i18n';
 import { engineName } from '../staff/fallbackEngine';
 import {
@@ -306,9 +306,7 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
             {busy ? <span className="bn-working">{t('board.working')}</span> : (STATUS_LABEL[live.status ?? ''] ?? live.status)}
           </span>
           {busy ? (
-            <span className="bn-pencil">
-              <PencilIcon size={14} />
-            </span>
+            <span className="bn-pencil" aria-hidden="true">✎</span>
           ) : (
             <span className={`dot dot-${live.status ?? 'unknown'}`} />
           )}

@@ -1,7 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { PLAYBOOK_AGENTS } from '../../shared/agentPresets';
-import { personalitySection } from '../../shared/personality';
+import { personalityName, personalitySection } from '../../shared/personality';
 import { FTP_MCP_NAME, GPT_MCP_NAME, GPT_TOOL_NAME, TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
 import { staffSshConfigFile } from './servers';
 import { GUIDE_PATH } from '../projectGuide';
@@ -489,7 +489,6 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     guideSection(ctx),
     `## Conhecimento (leia antes de começar)\n${list(p.knowledge, codexOf(p) ? 'Nada específico além do AGENTS.md e do CLAUDE.md do projeto, se existirem.' : 'Nada específico além do CLAUDE.md do projeto.')}`,
     postureSection(),
-    personalitySection(p.personality),
     manualSection(ctx.manualEditable === true),
     `## Regras\n${list(p.rules, codexOf(p) ? 'Siga o AGENTS.md e o CLAUDE.md do projeto, se existirem.' : 'Siga o CLAUDE.md do projeto.')}`,
     p.doneWhen ? `## Definição de pronto\n${p.doneWhen}` : '',
@@ -505,6 +504,8 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     hiringSection(p, ctx),
     wakeSection(p, ctx),
     memorySection(ctx),
+    // Última seção: o estilo vale mais perto do fim, onde o modelo lê por último.
+    personalitySection(p.personality),
   ];
   return sections.filter(Boolean).join('\n\n') + '\n';
 }
@@ -630,16 +631,18 @@ function hiringSection(p: StaffProfile, ctx: FichaContext): string {
  * e a ficha inteira. O Claude Code grava o prompt de sistema na 1ª mensagem e o reaproveita igual
  * (cache) em todas as outras e nas retomadas; depois de um /compact ele é montado de novo, então as
  * regras não viram resumo. A memória continua no arquivo dela (muda durante o trabalho).
+ * A memória pessoal vai antes da ficha, e a ficha termina com o estilo (última seção): o estilo fica por último no prompt.
  */
 export function systemPrompt(p: StaffProfile, ctx: FichaContext, ficha: string, personal: string | null = null): string {
   return [
     `Você é ${p.name}, ${p.role} da ${ctx.company}, trabalhando no projeto ${ctx.projectName}.`,
+    ...(personalityName(p.personality) ? [`Estilo de comunicação: ${personalityName(p.personality)} (seção no fim da ficha): use em toda resposta ao usuário.`] : []),
     `Sua ficha está abaixo (a mesma de ${ctx.fichaPath}): siga-a. Sua memória fica em ${ctx.memoryPath}: leia no início de cada conversa, antes de qualquer outra coisa, sem avisar que vai ler.`,
     `Se avisarem que a ficha foi atualizada, releia ${ctx.fichaPath}: vale a versão do arquivo.`,
     '',
-    ficha.trim(),
-    '',
+    // Memória pessoal antes da ficha: o estilo de comunicação (última seção da ficha) fica no fim do prompt.
     ...(personal?.trim() ? [personalMemorySection(personal), ''] : []),
+    ficha.trim(),
   ].join('\n');
 }
 
