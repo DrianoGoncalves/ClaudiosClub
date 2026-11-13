@@ -264,6 +264,32 @@ describe('ficha: o campo mcpWrite', () => {
     expect(StaffInputSchema.safeParse({ ...base, mcpWrite: { github: 'allow' } }).success).toBe(false);
     expect(StaffInputSchema.safeParse({ ...base, mcpWrite: JSON.parse('{"__proto__":"deny"}') }).success).toBe(false);
   });
+
+  it('nome reservado sai com a mensagem em português (o zod 4 trocaria por "Invalid key in record")', () => {
+    const r = StaffInputSchema.safeParse({ ...base, mcpWrite: { constructor: 'deny' } });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.map((i) => i.message)).toContain('nome de MCP reservado');
+  });
+
+  it('ficha com mcpWrite inválido editado à mão: o campo some na leitura e a ficha continua abrindo', async () => {
+    const { createProfile, profileFile, readProfile } = await import('../server/staff/store');
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-mcpwrite-ficha-'));
+    try {
+      const p = await createProfile(dir, 'proj', StaffInputSchema.parse({ ...base, mcpWrite: { github: 'deny' } }));
+      const file = profileFile(dir, p.id);
+      const json = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>;
+      json.mcpWrite = { github: 'allow' }; // valor que a escrita recusa
+      await fs.writeFile(file, JSON.stringify(json));
+      const got = await readProfile(dir, p.id);
+      expect(got).not.toBeNull();
+      expect(got?.name).toBe('Ana');
+      expect(got?.mcpWrite).toBeUndefined();
+      // A escrita continua recusando o mesmo valor.
+      expect(StaffInputSchema.safeParse({ ...base, mcpWrite: { github: 'allow' } }).success).toBe(false);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('tela: seletor de escrita', () => {

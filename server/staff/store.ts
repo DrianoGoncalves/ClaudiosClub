@@ -160,6 +160,8 @@ const ProfileSchema = StaffInputObject.omit({ portraitDataUrl: true, launch: tru
   id: z.string(),
   projectId: z.string(),
   portrait: z.string().nullable(),
+  // Política de escrita editada à mão e inválida: o campo some na leitura (a ficha segue) em vez de derrubar a ficha. A escrita continua exigindo o formato (StaffInputSchema).
+  mcpWrite: StaffInputObject.shape.mcpWrite.catch(undefined),
   // Ligação entre cópias da mesma pessoa; valor inválido é ignorado (ficha sem vínculo).
   personId: z.string().regex(/^[A-Za-z0-9-]{1,60}$/).optional().catch(undefined),
   // Valor inválido no arquivo: volta ao padrão (claude) em vez de derrubar a ficha.

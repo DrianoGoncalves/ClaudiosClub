@@ -1042,7 +1042,8 @@ export class ChatManager {
     for (const c of this.chats.values()) {
       if (!c.running || !c.busy || !c.projectId) continue;
       // `cut`: a ação com efeito fora do projeto que o fechamento vai cortar no meio (ver cutAction.ts); com ela, a conversa não volta sozinha.
-      const cut = externalCut(c.snapshot().items);
+      // Com pedido de permissão pendente, a ferramenta que espera a permissão não rodou: não conta (ver externalCut).
+      const cut = externalCut(c.snapshot().items, c.awaitingAnswer);
       out.push({ projectId: c.projectId, sessionId: c.sessionId, staffId: c.staffId, engine: c.engine, cwd: c.cwd, hadPending: c.awaitingAnswer, ...(cut && { cut }) });
     }
     return out;
