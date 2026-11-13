@@ -43,6 +43,7 @@ Tarefa é um pedido de trabalho para um funcionário. Cada tarefa tem uma conver
 - Mensagem enviada à conversa de uma tarefa enquanto ele está ocupado fica guardada ("{n} ajuste esperando") e vai quando ele termina.
 - Se o consumo estiver no limite na hora de começar, a tarefa fica na fila e tenta de novo.
 - Se a conversa parar no meio do trabalho (por exemplo, o servidor reiniciou), o Club retoma uma vez. Se parar de novo, a tarefa vai para **Revisão** com "conversa parou sem terminar" no histórico.
+- Exceção: se ela parou no meio de uma ação que mexe fora do projeto (push, deploy, comando no servidor, MCP que escreve), o Club não retoma sozinho, porque não dá para saber se a ação aconteceu. A tarefa vai para **Aguardar** com o motivo, e a conversa aparece em **precisa de mim**. Confira e mande uma mensagem para seguir.
 - O responsável só pode ser trocado antes de começar. Depois, aparece "A tarefa já começou com este funcionário".
 
 ## Plano para aprovar
