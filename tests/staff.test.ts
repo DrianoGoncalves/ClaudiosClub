@@ -460,7 +460,7 @@ describe('estilo de comunicação', () => {
     expect(staffSettings(profile({ personality: 'mineiro' })).hooks).not.toHaveProperty('UserPromptSubmit');
     expect(personalityReminder(null)).toBe('');
     expect(personalityReminder('nerd')).toBe(
-      `Estilo de comunicação: ${PERSONALITY_PROMPTS.nerd}\nEscreva a resposta ao usuário nesse estilo. Entrega ao gestor, parecer de revisão, mensagem a outro funcionário, commit, código e documentação ficam neutros.`,
+      `Estilo de comunicação: ${PERSONALITY_PROMPTS.nerd}\nEscreva a resposta ao usuário nesse estilo, sem anunciar nem nomear o estilo (nenhum rótulo antes da mensagem). Entrega ao gestor, parecer de revisão, mensagem a outro funcionário, commit, código e documentação ficam neutros.`,
     );
   });
 

@@ -26,7 +26,7 @@ export const PERSONALITY_PROMPTS: Record<Personality, string> = {
 };
 
 const ESCOPO =
-  'Use este estilo em toda resposta ao usuário nesta conversa, desde a primeira, inclusive nas curtas e no resumo do que você fez. Fica no tom neutro só no que vai para outra pessoa ou para o projeto: entrega de tarefa ao gestor, parecer de revisão, mensagem a outro funcionário, commit, PR, código, comentário, documentação e descrição de tarefa. O estilo não omite aviso de segurança, erro nem bloqueio, não afrouxa as regras desta ficha e não muda o idioma.';
+  'Use este estilo em toda resposta ao usuário nesta conversa, desde a primeira, inclusive nas curtas e no resumo do que você fez. Fica no tom neutro só no que vai para outra pessoa ou para o projeto: entrega de tarefa ao gestor, parecer de revisão, mensagem a outro funcionário, commit, PR, código, comentário, documentação e descrição de tarefa. O estilo não omite aviso de segurança, erro nem bloqueio, não afrouxa as regras desta ficha e não muda o idioma. Não anuncie o estilo: nada de nome dele nem rótulo (ex.: "Caveman:") antes da mensagem; só escreva assim.';
 
 /** Nome do estilo (o que vem antes dos dois-pontos do preset); '' sem estilo. */
 export function personalityName(p: Personality | null | undefined): string {
@@ -43,5 +43,5 @@ export function personalitySection(p: Personality | null | undefined): string {
 /** Lembrete curto do estilo, enviado a cada mensagem do usuário (hook UserPromptSubmit); '' sem estilo. */
 export function personalityReminder(p: Personality | null | undefined): string {
   if (!p || !PERSONALITIES.includes(p)) return '';
-  return `Estilo de comunicação: ${PERSONALITY_PROMPTS[p]}\nEscreva a resposta ao usuário nesse estilo. Entrega ao gestor, parecer de revisão, mensagem a outro funcionário, commit, código e documentação ficam neutros.`;
+  return `Estilo de comunicação: ${PERSONALITY_PROMPTS[p]}\nEscreva a resposta ao usuário nesse estilo, sem anunciar nem nomear o estilo (nenhum rótulo antes da mensagem). Entrega ao gestor, parecer de revisão, mensagem a outro funcionário, commit, código e documentação ficam neutros.`;
 }
