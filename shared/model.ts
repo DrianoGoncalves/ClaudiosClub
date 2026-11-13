@@ -751,6 +751,11 @@ export interface StaffProfile {
   skills: string[];
   /** MCPs ligados; null = todos os configurados (inclusive os conectores da conta). */
   mcps: string[] | null;
+  /**
+   * Escrita por MCP (nome → política), só no motor Claude: as ferramentas sem `readOnlyHint` pedem antes (`ask`) ou ficam
+   * bloqueadas (`deny`), em qualquer autonomia. Ausente (ou o MCP fora do mapa) = livre, como antes.
+   */
+  mcpWrite?: Record<string, McpWritePolicy>;
   /** Arquivos e pastas para ler antes de começar. */
   knowledge: string[];
   rules: string[];
@@ -905,7 +910,12 @@ export interface McpServerInfo {
   /** `club` = biblioteca do Claudio’s Club; `project` = .mcp.json; `local` = só este projeto; `user` = todos os projetos. */
   source: 'club' | 'project' | 'local' | 'user';
   transport: string | null;
+  /** Do último teste na biblioteca (ver server/staff/mcpTools.ts): total e quantas são de escrita. Ausente = nunca testado ou mudou desde o teste. */
+  tools?: { total: number; write: number };
 }
+
+/** Política de escrita de um MCP na ficha: `ask` = as ferramentas de escrita pedem antes; `deny` = bloqueadas. Ausente = livre. */
+export type McpWritePolicy = 'ask' | 'deny';
 
 export type McpScope = 'club' | 'user' | 'project' | 'local';
 export type McpType = 'http' | 'sse' | 'stdio';

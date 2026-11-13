@@ -12,7 +12,7 @@ import { ftpMcpServerConfig } from './ftpMcp';
 import { SSH_MCP_BUNDLE, WRITE_AUTONOMY, sshMcpServerConfig } from './sshMcp';
 import type { CodexMcpServer } from '../chat/codexArgs';
 import { gptMcpServerConfig } from './gptMcp';
-import { buildMcpConfig } from './mcp';
+import { buildMcpConfig, mcpWriteRulesFor } from './mcp';
 import { ensurePlaybookAgents } from './playbookAgents';
 import { buildSkillPlugin } from '../skillLibrary';
 import { hasGuide } from '../projectGuide';
@@ -93,6 +93,8 @@ export interface PreparedRun {
   internetAccess?: boolean;
   /** Manual (docs/uso) editável: o projeto é o próprio Claudio’s Club e a sessão não roda numa worktree (ver ClaudeArgsOptions.manualEditable). */
   manualEditable: boolean;
+  /** Ferramentas de MCP bloqueadas pela política de escrita da ficha (ver ClaudeArgsOptions.mcpDeny). */
+  mcpDeny: string[];
 }
 
 /**
@@ -130,7 +132,9 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   if (reminder) await writeAtomic(styleFile, reminder);
   else await rm(styleFile, { force: true });
   const settingsFile = path.join(dir, 'settings.json');
-  await writeAtomic(settingsFile, JSON.stringify(staffSettings(profile, reminder ? styleFile : undefined), null, 2));
+  // Política de escrita dos MCPs da ficha: `deny` vai ao --disallowedTools (buildClaudeArgs), `ask` ao permissions.ask deste arquivo.
+  const mcpRules = await mcpWriteRulesFor(ctx.projectPath, profile, ctx.claudeConfigFile);
+  await writeAtomic(settingsFile, JSON.stringify(withAskRules(staffSettings(profile, reminder ? styleFile : undefined), mcpRules.ask), null, 2));
   const agents = await ensurePlaybookAgents(profile, {
     projectPath: ctx.projectPath,
     cwd,
@@ -161,7 +165,16 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     internetAccess: ctx.internetAccess,
     // Só o projeto ROOT sem worktree: a worktree (away) tem o próprio docs/uso, que não é o do ROOT, e continua negada.
     manualEditable: !away && isClaudeRoot(ctx.projectPath),
+    mcpDeny: mcpRules.deny,
   };
+}
+
+/**
+ * As ferramentas que pedem antes (política `ask` da ficha) em `permissions.ask` do `--settings`: o Claude Code pede mesmo no `auto` e
+ * no "sem travas". Sem nenhuma, o objeto sai como veio.
+ */
+export function withAskRules<T extends object>(settings: T, ask: string[]): T | (T & { permissions: { ask: string[] } }) {
+  return ask.length ? { ...settings, permissions: { ask } } : settings;
 }
 
 export interface PreparedCodexRun {

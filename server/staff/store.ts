@@ -29,6 +29,7 @@ const FallbackSchema = z.object({
   effort: CodexEffortSchema.optional(),
 });
 const line = (max: number) => z.string().trim().max(max);
+const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const list = (max: number) => z.array(line(500)).max(max).default([]);
 
 /** O que o questionário (ou um funcionário com permissão) envia, antes das regras que cruzam campos (ver `StaffInputSchema`). */
@@ -46,6 +47,14 @@ const StaffInputObject = z.object({
   agents: list(100),
   skills: list(100),
   mcps: z.array(line(100)).max(100).nullable().default(null),
+  // Escrita por MCP (ver StaffProfile.mcpWrite): ausente = livre. O nome é o do MCP na ficha; nomes reservados de objeto são recusados.
+  mcpWrite: z
+    .record(
+      z.string().min(1).max(100).refine((k) => !RESERVED_KEYS.has(k), 'nome de MCP reservado'),
+      z.enum(['ask', 'deny'], { errorMap: () => ({ message: 'escrita do MCP: ask ou deny' }) }),
+    )
+    .refine((r) => Object.keys(r).length <= 100, 'MCPs demais na política de escrita')
+    .optional(),
   knowledge: list(50),
   rules: list(50),
   doneWhen: line(2000).default(''),

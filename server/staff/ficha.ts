@@ -181,6 +181,7 @@ export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpSer
   const people = peopleRuleDir();
   const run = ruleDirOf(path.join(MYCO_HOME, 'run'));
   const backups = ruleDirOf(path.join(MYCO_HOME, 'backups'));
+  const toolsList = ruleDirOf(path.join(MYCO_HOME, 'mcp-tools.json'));
   // Um ~/.claude.json fora da home (MYCO_CLAUDE_CONFIG) entra com o caminho dele; com espaço, a regra sairia quebrada (como as outras).
   const claudeConfig = defaultLocations().configFile;
   const claudeConfigRule = ruleDirOf(claudeConfig);
@@ -222,6 +223,10 @@ export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpSer
     `Read(${run}/**/mcp.json)`,
     `Edit(${run}/**)`,
     `Write(${run}/**)`,
+    // A lista de ferramentas do último teste dos MCPs (MCP_TOOLS_FILE em mcpTools.ts, o que é só leitura): mexer nela afrouxaria a
+    // política de escrita das fichas.
+    `Edit(${toolsList})`,
+    `Write(${toolsList})`,
     ...customClaudeConfig,
   ];
   // No Windows as regras usam o caminho em forma POSIX: C:/x → //c/x. Com espaço, a lista da linha
@@ -697,6 +702,8 @@ export interface ClaudeArgsOptions {
   strictMcp?: boolean;
   /** Plugin da sessão com as skills da biblioteca que a ficha tem (ver server/skillLibrary.ts). */
   pluginDir?: string | null;
+  /** Ferramentas de MCP bloqueadas pela política de escrita da ficha (`mcpWrite: deny`, ver mcpTools.ts): entram no `--disallowedTools`. */
+  mcpDeny?: string[];
 }
 
 /**
@@ -729,7 +736,7 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   if (p.browser && AUTONOMY_ORDER.indexOf(p.autonomy) >= AUTONOMY_ORDER.indexOf('acceptEdits')) args.push('--allowedTools', 'mcp__claude-in-chrome');
   // Com a internet desligada (Configurações), a busca na web do Claude também sai: a ferramenta é recusada antes de rodar.
   const web = o.internetAccess === false ? ['WebSearch', 'WebFetch'] : [];
-  args.push('--disallowedTools', [...secretDenyRules(p, o.keyFiles, o.ftpServers, o.manualEditable === true), ...web].join(','));
+  args.push('--disallowedTools', [...secretDenyRules(p, o.keyFiles, o.ftpServers, o.manualEditable === true), ...web, ...(o.mcpDeny ?? [])].join(','));
   if (o.mcpConfigPath) args.push('--mcp-config', o.mcpConfigPath, ...(o.strictMcp === false ? [] : ['--strict-mcp-config']));
   return args;
 }

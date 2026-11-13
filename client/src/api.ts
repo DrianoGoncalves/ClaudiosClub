@@ -403,7 +403,7 @@ export const api = {
     get<{ servers: McpServer[] }>(`/api/mcp-servers${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
   saveMcpServer: (body: McpSaveBody) => post<{ server: McpServer }>('/api/mcp-servers/save', body),
   deleteMcpServer: (ref: McpRef) => post<{ ok: true }>('/api/mcp-servers/delete', ref),
-  testMcpServer: (ref: McpRef) => post<{ ok: boolean; tools: string[]; error?: string }>('/api/mcp-servers/test', ref),
+  testMcpServer: (ref: McpRef) => post<{ ok: boolean; tools: string[]; readOnly?: string[]; error?: string }>('/api/mcp-servers/test', ref),
   serverLog: (projectId: string, staffId: string) => get<ServerAccess[]>(`/api/projects/${projectId}/staff/${staffId}/server-log`),
   // Conexões SSH e FTP do projeto (a lista também é POST: exige a página do Claudio’s Club).
   connections: (projectId: string) => post<AnyConnection[]>(`/api/projects/${projectId}/connections/list`),
