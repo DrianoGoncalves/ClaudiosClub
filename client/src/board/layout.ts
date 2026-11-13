@@ -122,6 +122,11 @@ export interface GraphOptions {
    * workspace formam um bloco na planta (aba "Todos"); sem isso, todas seguem a ordem alfabética.
    */
   groups?: { of: Map<string, string | null>; order: string[] };
+  /**
+   * Ordem dos projetos (ids) dentro de cada bloco; os que não estão na lista vêm depois, em ordem
+   * alfabética. Sem ela, todos seguem a ordem alfabética.
+   */
+  order?: string[];
 }
 
 /**
@@ -149,6 +154,8 @@ const SIDE_ROW_GAP = 12;
 export const ROOM_PAD = 26;
 const ROOM_GAP_X = 56;
 const ROOM_GAP_Y = 56;
+/** Duas salas cujo topo difere menos que isto contam como da mesma linha na ordem de leitura. */
+const ROW_TOLERANCE = ROOM_GAP_Y;
 /** Folga entre blocos de workspaces: maior que a entre salas, para o bloco se ler como um grupo. */
 const GROUP_GAP = ROOM_GAP_X * 2;
 /** Proporção (largura/altura) que a grade de salas procura quando a da tela não é informada. */
@@ -397,13 +404,16 @@ export function buildGraph(
     const i = opts.groups ? opts.groups.order.indexOf(opts.groups.of.get(p.id) ?? '') : -1;
     return i < 0 ? (opts.groups?.order.length ?? 0) : i;
   };
+  const rank = new Map((opts.order ?? []).map((id, i) => [id, i] as const));
+  const rankOf = (p: Project): number => rank.get(p.id) ?? rank.size;
   const visible = board.projects
     .filter(visibleProject)
     // Worktrees (cópias de trabalho do Claude Code) ficam fora do quadro.
     .filter((p) => !p.worktreeOf)
     // Salas em ordem alfabética do nome (o servidor manda por atividade, que muda a toda hora);
-    // o sort é estável: dentro do bloco a ordem alfabética fica.
+    // o sort é estável: a ordem escolhida (`opts.order`) vem por cima da alfabética, e o bloco por cima das duas.
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base', numeric: true }))
+    .sort((a, b) => rankOf(a) - rankOf(b))
     .sort((a, b) => blockOf(a) - blockOf(b));
   const rooms = [...(opts.showUserScope ? [userTree] : []), ...visible.map(projectTree)];
   const blocks = [...(opts.showUserScope ? [opts.groups ? -1 : 0] : []), ...visible.map(blockOf)];
@@ -558,6 +568,25 @@ function blockSpots(boxes: Array<{ w: number; h: number }>, blocks: number[], as
     });
   });
   return out;
+}
+
+/**
+ * Ordem de leitura das salas (de cima para baixo, da esquerda para a direita), por bloco: é a ordem
+ * que o "reorganizar" guarda para a grade nova repetir a posição de agora. Salas com o topo quase na
+ * mesma altura contam como da mesma linha, senão um arrasto de poucos pixels trocaria a ordem.
+ */
+export function readingOrder(rooms: Array<{ id: string; block: string; x: number; y: number }>): string[] {
+  const byBlock = new Map<string, typeof rooms>();
+  for (const r of rooms) byBlock.set(r.block, [...(byBlock.get(r.block) ?? []), r]);
+  return [...byBlock.values()].flatMap((list) => {
+    const rows: Array<typeof rooms> = [];
+    for (const r of [...list].sort((a, b) => a.y - b.y)) {
+      const row = rows[rows.length - 1];
+      if (row && r.y - row[0]!.y <= ROW_TOLERANCE) row.push(r);
+      else rows.push([r]);
+    }
+    return rows.flatMap((row) => row.sort((a, b) => a.x - b.x).map((r) => r.id));
+  });
 }
 
 function roomNode(owner: string, members: BoardNode[], color: ProjectColor | null): BoardNode {

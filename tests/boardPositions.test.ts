@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { layoutKey, positionsOf, withMoved, withReset, type PositionStore } from '../client/src/board/positions';
 
 const ws = { workspaces: [{ id: 'part', name: 'Particular', background: null }] } as never;
-const empty = (legacy: PositionStore['legacy'] = {}): PositionStore => ({ byTab: {}, legacy });
+const empty = (legacy: PositionStore['legacy'] = {}): PositionStore => ({ byTab: {}, legacy, order: {} });
 
 describe('planta por aba', () => {
   it('arrastar numa aba não mexe nas outras', () => {
@@ -14,10 +14,17 @@ describe('planta por aba', () => {
 
   it('reorganizar zera só a aba e não devolve a planta antiga (v3)', () => {
     const start = withMoved(withMoved(empty({ 'p:x': { x: 5, y: 5 } }), 'all', { 'p:y': { x: 1, y: 1 } }), 'part', { 'p:y': { x: 2, y: 2 } });
-    const after = withReset(start, 'all');
+    const after = withReset(start, 'all', []);
     expect(positionsOf(after, 'all')).toEqual({});
     expect(positionsOf(after, 'part')['p:y']).toEqual({ x: 2, y: 2 });
-    expect(positionsOf(withReset(empty({ 'p:x': { x: 5, y: 5 } }), 'all'), 'all')).toEqual({});
+    expect(positionsOf(withReset(empty({ 'p:x': { x: 5, y: 5 } }), 'all', []), 'all')).toEqual({});
+  });
+
+  it('reorganizar guarda a ordem dos projetos só da aba', () => {
+    const a = withReset(empty(), 'all', ['b', 'a']);
+    const b = withReset(a, 'part', ['a']);
+    expect(b.order).toEqual({ all: ['b', 'a'], part: ['a'] });
+    expect(withReset(b, 'all', ['a', 'b']).order).toEqual({ all: ['a', 'b'], part: ['a'] });
   });
 
   it('aba ainda não mexida parte da planta v3; ao mexer, vira uma cópia própria', () => {

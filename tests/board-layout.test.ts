@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, Board, CostReport, InboxItem, LinkInfo, Project, Session, Skill, StaffProfile } from '../shared/model';
-import { buildGraph as buildGraphRaw, SIZES, type BoardNode, type BoardNodeType } from '../client/src/board/layout';
+import { buildGraph as buildGraphRaw, readingOrder, SIZES, type BoardNode, type BoardNodeType } from '../client/src/board/layout';
 import { portraitUrl } from '../client/src/board/nodes';
 
 // Estes testes contam com a sala do usuário; o padrão do quadro é escondê-la (ver "escopo do usuário" abaixo).
@@ -254,6 +254,27 @@ describe('buildGraph', () => {
     expect(owners(grouped)).toEqual(['u', 'p:p2', 'p:p4', 'p:p7', 'p:p1', 'p:p3', 'p:p5', 'p:p6', 'p:p8']);
     const all = buildGraph(b, grouped).nodes.filter((n) => n.type !== 'room');
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) expect(overlaps(all[i]!, all[j]!)).toBe(false);
+  });
+
+  it('`order` manda dentro do bloco: os fora da lista vêm depois, em ordem alfabética; as abas seguem a ordem delas', () => {
+    const ws = ['x', 'y', 'x', 'y', 'x', 'y'];
+    const projects = ws.map((_, i) => project(`p${i + 1}`, `C:\\www\\p${i + 1}`));
+    const b: Board = { ...board(), projects, inventories: {}, sessions: {} };
+    const groups = { of: new Map(projects.map((p, i) => [p.id, ws[i]!] as const)), order: ['y', 'x'] };
+    const owners = (order?: string[]) => buildGraph(b, { aspect: 16 / 9, groups, order, showUserScope: false }).nodes.flatMap((n) => (n.type === 'room' ? [n.data.owner] : []));
+    expect(owners()).toEqual(['p:p2', 'p:p4', 'p:p6', 'p:p1', 'p:p3', 'p:p5']);
+    // p5 e p4 sobem; p1 e p3 (fora da lista) ficam depois, alfabéticos; o bloco y continua antes do x.
+    expect(owners(['p5', 'p4'])).toEqual(['p:p4', 'p:p2', 'p:p6', 'p:p5', 'p:p1', 'p:p3']);
+  });
+
+  it('ordem de leitura: de cima para baixo e da esquerda para a direita, por bloco', () => {
+    const at = (id: string, block: string, x: number, y: number) => ({ id, block, x, y });
+    expect(readingOrder([at('c', 'x', 0, 400), at('b', 'x', 500, 0), at('a', 'x', 0, 0), at('z', 'y', 0, 0)])).toEqual(['a', 'b', 'c', 'z']);
+    // Topo quase na mesma altura = mesma linha (vale o x); uma linha de verdade abaixo vem depois.
+    expect(readingOrder([at('b', 'x', 500, 0), at('a', 'x', 0, 40), at('c', 'x', 0, 300)])).toEqual(['a', 'b', 'c']);
+    // Cada bloco é lido à parte: uma sala de outro workspace entre as linhas não as junta nem separa.
+    expect(readingOrder([at('a', 'x', 0, 0), at('o', 'y', 0, 100), at('b', 'x', 500, 50)])).toEqual(['a', 'b', 'o']);
+    expect(readingOrder([])).toEqual([]);
   });
 
   it('os workspaces ficam lado a lado na tela deitada e empilhados na em pé', () => {
