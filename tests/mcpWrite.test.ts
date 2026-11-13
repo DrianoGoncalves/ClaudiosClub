@@ -27,7 +27,6 @@ const { createMcpLibrary } = await import('../server/staff/mcpLibrary');
 const { buildClaudeArgs, secretDenyRules } = await import('../server/staff/ficha');
 const { MCP_TOOLS_MATCHER, staffSettings } = await import('../server/staff/launch');
 const { StaffInputSchema } = await import('../server/staff/store');
-const { mcpWriteHint, mcpWriteToSend, setMcpWrite } = await import('../client/src/staff/mcpWrite');
 
 const roots: string[] = [home];
 afterAll(async () => {
@@ -324,20 +323,5 @@ describe('ficha: o campo mcpWrite', () => {
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
-  });
-});
-
-describe('tela: seletor de escrita', () => {
-  it('livre tira do mapa; o pedido leva só os MCPs ligados', () => {
-    const p = setMcpWrite(setMcpWrite({}, 'a', 'deny'), 'b', 'ask');
-    expect(p).toEqual({ a: 'deny', b: 'ask' });
-    expect(setMcpWrite(p, 'a', 'free')).toEqual({ b: 'ask' });
-    expect(mcpWriteToSend(p, new Set(['b']))).toEqual({ b: 'ask' });
-    expect(mcpWriteToSend(p, null)).toEqual(p);
-  });
-
-  it('a dica diz quantas são de escrita, ou que sem teste vale para todas', () => {
-    expect(mcpWriteHint({ tools: { total: 5, write: 4 } })).toEqual({ key: 'staff.mcpWriteCount', params: { write: 4, total: 5 } });
-    expect(mcpWriteHint({})).toEqual({ key: 'staff.mcpWriteUntested' });
   });
 });

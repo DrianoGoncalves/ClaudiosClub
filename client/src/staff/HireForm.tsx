@@ -8,9 +8,7 @@ import {
   type Engine,
   type GitState,
   type LaunchResult,
-  type McpPolicy,
   type McpServerInfo,
-  type McpWritePolicy,
   type Playbook,
   type ServerInfo,
   type Session,
@@ -27,9 +25,19 @@ import { BrowserCheck } from './BrowserCheck';
 import { CopyFromCompany } from './CopyFromCompany';
 import { differingFields, PERSON_FIELD_LABEL } from './directory';
 import { FallbackField } from './FallbackField';
-import { MCP_WRITE_OPTIONS, mcpWriteHint, mcpWriteToSend, setMcpWrite, type McpWriteChoice } from './mcpWrite';
 import { draftOf, fallbackProblem, fallbackToSend, showFallbackField, type FallbackDraft } from './fallbackEngine';
-import { levelOf, MCP_LEVEL_LABEL, MCP_LEVELS, mcpPolicyToSend, serverPolicyKey, toolKeysOf, toolNameOf, withLevel, type McpPolicyMap } from './mcpPolicyField';
+import {
+  accessOf,
+  accessToSend,
+  browserAccess,
+  browserAccessHints,
+  hasAccessKey,
+  mcpAccessHints,
+  withAccess,
+  withBrowserAccess,
+  type McpAccessMap,
+} from './mcpAccessField';
+import { McpAccessHint, McpAccessSelect } from './McpAccessSelect';
 import { PersonMemory } from './PersonMemory';
 import { PERSONALITY_TEXT, personalityToSend } from './personalityField';
 import { PERSONALITIES, type Personality } from '../../../shared/personality';
@@ -140,12 +148,9 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const [skills, setSkills] = useState<string[]>(editing?.skills ?? []);
   const [mcps, setMcps] = useState<McpServerInfo[] | null>(null);
   const [mcpOn, setMcpOn] = useState<Set<string>>(new Set());
-  // Política por MCP (Permitir/Perguntar/Desligado). Guarda também as chaves que a tela não mostra (MCP desmarcado, Chrome, FTP, por
-  // ferramenta): a ficha as mantém ao salvar. `toolKeys` = as regras por ferramenta que já vieram salvas (a API não lista as ferramentas).
-  const [mcpPolicy, setMcpPolicy] = useState<McpPolicyMap>(editing?.mcpPolicy ?? {});
-  const [toolKeys] = useState(() => Object.keys(editing?.mcpPolicy ?? {}));
-  // Escrita por MCP (livre / pede antes / bloqueada); só vale no motor Claude.
-  const [mcpWrite, setMcpWriteState] = useState<Record<string, McpWritePolicy>>(editing?.mcpWrite ?? {});
+  // Acesso por MCP (Livre / Pede antes de escrever / Só leitura / Desligado), nos dois motores. Guarda também as chaves que a tela não
+  // mostra (MCP desmarcado, `myco-ssh`): o servidor troca o mapa todo, então elas voltam ao salvar.
+  const [mcpAccess, setMcpAccess] = useState<McpAccessMap>(editing?.mcpAccess ?? {});
   const [knowledge, setKnowledge] = useState((editing?.knowledge ?? []).join('\n'));
   const [rules, setRules] = useState((editing?.rules ?? []).join('\n'));
   const [doneWhen, setDoneWhen] = useState(editing?.doneWhen ?? '');
@@ -378,9 +383,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       // falhou), editando mantém o que a ficha tinha; contratando, nenhum.
       mcps: codex || simpleHire ? [] : !mcps?.length ? (editing ? editing.mcps : []) : allMcps ? null : [...mcpOn],
       // Só vai se mudou (ausente mantém o salvo; `{}` limpa).
-      ...mcpPolicyToSend(mcpPolicy, editing?.mcpPolicy),
-      // Só com a lista na tela; sem ela (Codex, simples, lista que não veio), o pedido não leva o campo e a ficha mantém a política.
-      ...(!codex && !simpleHire && mcps?.length ? { mcpWrite: mcpWriteToSend(mcpWrite, allMcps ? null : mcpOn) } : {}),
+      ...accessToSend(mcpAccess, editing?.mcpAccess),
       knowledge: lines(knowledge),
       rules: lines(rules),
       doneWhen,
@@ -802,104 +805,42 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
               <div className="checks">
                 {mcps.map((m) => {
                   const on = mcpOn.has(m.name);
-                  const hint = mcpWriteHint(m);
+                  const level = accessOf(mcpAccess, m.name);
                   return (
                     <div key={m.name} className={on ? 'check-server has-write' : 'check-server'}>
-                      <label className="check">
-                        <input
-                          type="checkbox"
-                          checked={on}
-                          onChange={() => {
-                            const next = new Set(mcpOn);
-                            if (next.has(m.name)) next.delete(m.name);
-                            else next.add(m.name);
-                            setMcpOn(next);
-                          }}
-                        />{' '}
-                        {m.name}
-                        <span className="muted small">
-                          {' '}
-                          {t(MCP_SOURCE_LABEL[m.source])}
-                        </span>
-                      </label>
-                      {on && (
-                        <div className="check-write">
-                          <label className="mcp-write">
-                            {t('staff.mcpWrite')}{' '}
-                            <select
-                              value={mcpWrite[m.name] ?? 'free'}
-                              onChange={(e) => setMcpWriteState(setMcpWrite(mcpWrite, m.name, e.target.value as McpWriteChoice))}
-                            >
-                              {MCP_WRITE_OPTIONS.map((o) => (
-                                <option key={o.value} value={o.value}>
-                                  {t(o.label)}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          {mcpWrite[m.name] && (
-                            <p className="muted small">{t(hint.key, hint.params)}</p>
-                          )}
-                        </div>
-                      )}
+                      <div className="mcp-row">
+                        <label className="check">
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={() => {
+                              const next = new Set(mcpOn);
+                              if (next.has(m.name)) next.delete(m.name);
+                              else next.add(m.name);
+                              setMcpOn(next);
+                            }}
+                          />
+                          <span>
+                            {m.name}
+                            <span className="muted small"> {t(MCP_SOURCE_LABEL[m.source])}</span>
+                          </span>
+                        </label>
+                        {on && hasAccessKey(m.name) && (
+                          <McpAccessSelect
+                            label={t('staff.mcpAccessFor', { name: m.name })}
+                            value={level}
+                            onChange={(l) => setMcpAccess(withAccess(mcpAccess, m.name, l))}
+                          />
+                        )}
+                      </div>
+                      {on && !hasAccessKey(m.name) && <p className="muted small mcp-hint">{t('staff.mcpAccessNoKey')}</p>}
+                      {on && <McpAccessHint hints={mcpAccessHints(level, m)} />}
                     </div>
                   );
                 })}
               </div>
               <p className="muted small">{allMcps ? t('staff.mcpAllOn') : t('staff.mcpSomeOff')}</p>
-              {mcps.some((m) => mcpOn.has(m.name)) && (
-                <div className="mcp-policy">
-                  <p className="mcp-policy-title">{t('staff.mcpPolicyTitle')}</p>
-                  <p className="muted small">{t('staff.mcpPolicyIntro')}</p>
-                  <ul className="mcp-policy-list">
-                    {mcps
-                      .filter((m) => mcpOn.has(m.name))
-                      .map((m) => {
-                        const key = serverPolicyKey(m.name);
-                        const tools = key ? toolKeysOf(toolKeys, key) : [];
-                        const level = (k: string, label: string) => (
-                          <select aria-label={label} value={levelOf(mcpPolicy, k)} onChange={(e) => setMcpPolicy(withLevel(mcpPolicy, k, e.target.value as McpPolicy))}>
-                            {MCP_LEVELS.map((l) => (
-                              <option key={l} value={l}>
-                                {t(MCP_LEVEL_LABEL[l])}
-                              </option>
-                            ))}
-                          </select>
-                        );
-                        return (
-                          <li key={m.name}>
-                            <div className="mcp-policy-row">
-                              <span className="mcp-policy-name">{m.name}</span>
-                              {key && level(key, t('staff.mcpPolicyFor', { name: m.name }))}
-                            </div>
-                            {!key && <p className="muted small">{t('staff.mcpPolicyNoKey')}</p>}
-                            {key && tools.length > 0 && (
-                              <>
-                                <p className="muted small mcp-policy-tools-head">{t('staff.mcpPolicyTools')}</p>
-                                <ul className="mcp-policy-tools">
-                                  {tools.map((k) => (
-                                    <li key={k} className="mcp-policy-row">
-                                      <span className="mcp-policy-name">{toolNameOf(k, key)}</span>
-                                      {level(k, t('staff.mcpPolicyForTool', { tool: toolNameOf(k, key), name: m.name }))}
-                                    </li>
-                                  ))}
-                                </ul>
-                              </>
-                            )}
-                          </li>
-                        );
-                      })}
-                  </ul>
-                  <details className="collapse">
-                    <summary>{t('staff.mcpPolicyHow')}</summary>
-                    <ul className="muted small mcp-policy-rules">
-                      {(['staff.mcpPolicyRule1', 'staff.mcpPolicyRule2', 'staff.mcpPolicyRule3', 'staff.mcpPolicyRule4', 'staff.mcpPolicyRule5'] as const).map((k) => (
-                        <li key={k}>{t(k)}</li>
-                      ))}
-                    </ul>
-                  </details>
-                </div>
-              )}
+              {mcps.some((m) => mcpOn.has(m.name)) && <p className="muted small">{t('staff.mcpAccessIntro')}</p>}
             </>
           )}
         </fieldset>
@@ -994,6 +935,20 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             </p>
             {browser && <BrowserCheck />}
           </>
+        )}
+        {/* Um seletor só: o Claude in Chrome e o Chrome do GPT são o mesmo navegador (vale o mais restritivo). */}
+        {browser && (
+          <div className="mcp-browser">
+            <div className="mcp-row">
+              <span className="mcp-row-name">{t('staff.browserAccess')}</span>
+              <McpAccessSelect
+                label={t('staff.browserAccess')}
+                value={browserAccess(mcpAccess)}
+                onChange={(l) => setMcpAccess(withBrowserAccess(mcpAccess, l))}
+              />
+            </div>
+            <McpAccessHint hints={browserAccessHints(browserAccess(mcpAccess))} />
+          </div>
         )}
 
         <fieldset>

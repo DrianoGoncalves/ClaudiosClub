@@ -951,22 +951,16 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .check-server.has-write { flex: 1 1 100%; min-width: 0; }
 .check-write { display: grid; gap: 2px; margin: 4px 0 0 22px; }
 .check-write p { margin: 0; overflow-wrap: anywhere; }
-/* Política por MCP: nome à esquerda e o seletor à direita; em tela estreita o seletor desce para a linha de baixo. */
-.mcp-policy { display: grid; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
-.mcp-policy p { margin: 0; }
-.mcp-policy-title { font-size: 13px; font-weight: 600; }
-.mcp-policy-list, .mcp-policy-tools, .mcp-policy-rules { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.mcp-policy-rules { gap: 4px; padding-left: 14px; list-style: disc; }
-.mcp-policy-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; }
-.mcp-policy-name { flex: 1 1 140px; min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
-.mcp-policy-row select { flex: 0 1 150px; min-width: 0; }
-.mcp-policy-tools-head { margin-top: 4px !important; }
-.mcp-policy-tools { margin: 4px 0 0 4px; padding-left: 10px; border-left: 2px solid var(--line); gap: 6px; }
-@media (max-width: 640px) { .mcp-policy-row select { flex: 1 1 100%; min-height: 36px; } }
-/* MCP marcado na ficha: o seletor de escrita (livre / pede antes / bloqueada) fica sob o nome, como o da escrita SSH. */
-.mcp-write { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.mcp-write select { max-width: 100%; }
-@media (max-width: 640px) { .mcp-write select { min-height: 36px; } }
+/* Acesso por MCP (e do navegador): o seletor fica na linha do nome e só desce, à esquerda, se faltar largura; a dica vem embaixo, recuada sob o nome. */
+.mcp-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; }
+.mcp-row label.check { flex: 1 1 80px; min-width: 0; flex-wrap: nowrap; align-items: flex-start; overflow-wrap: anywhere; }
+.mcp-row label.check input { flex: none; }
+.mcp-row-name { flex: 1 1 80px; min-width: 0; font-size: 13px; font-weight: 600; }
+.mcp-row select.mcp-access { flex: 0 1 160px; min-width: 0; font-size: 12.5px; padding: 5px 4px 5px 6px; }
+.mcp-hint { margin: 4px 0 0 22px; overflow-wrap: anywhere; }
+.mcp-browser { display: grid; gap: 4px; }
+.mcp-browser .mcp-hint { margin-left: 0; }
+@media (max-width: 640px) { .mcp-row select.mcp-access { min-height: 36px; } }
 :is(.modal, .hire-inline) .check { display: flex; flex-direction: row; align-items: center; gap: 6px; font-weight: 400; }
 .import-list { display: grid; gap: 6px; max-height: 340px; overflow-y: auto; }
 .import-list .choice b { overflow-wrap: anywhere; }

@@ -66,9 +66,9 @@ Na aba **Projeto**:
 
 - **Reporta a**: quem pode chamá-lo. Nenhum marcado = só você.
 - **Conhecimento (um caminho por linha)**: arquivos que ele lê antes de começar. **Agents e skills indicados** aparecem se o projeto tiver algum.
-- **MCPs**: marque os que ele usa (ver **MCPs** abaixo).
+- **MCPs**: marque os que ele usa e, em cada um, escolha o acesso: **Livre**, **Pede antes de escrever**, **Só leitura** ou **Desligado** (ver **MCPs** abaixo).
 - **Servidores (SSH e FTP)**: clique em **+ dar acesso a servidores (SSH e FTP)** e marque as conexões que ele pode usar. A chave fica no seu computador; a ficha guarda só o nome da conexão.
-- **Usar o navegador (Claude in Chrome)**: usa o seu Chrome, com os seus logins. Envios, compras e formulários pedem o seu ok. Precisa da extensão instalada.
+- **Usar o navegador (Claude in Chrome)**: usa o seu Chrome, com os seus logins. Envios, compras e formulários pedem o seu ok. Precisa da extensão instalada. Com ele marcado, **Acesso do navegador** limita o que ele faz (ver **MCPs** abaixo).
 
 Salve com **Salvar ficha** (ou **Contratar**, ao criar). **Cancelar** fecha; no painel, o botão é **Desfazer**. Mudanças na ficha e nos MCPs valem a partir da próxima sessão.
 
@@ -116,7 +116,15 @@ Salve com **Salvar ficha** (ou **Contratar**, ao criar). **Cancelar** fecha; no 
 - Em **Configurações** → **MCPs** (**Servidores MCP**), há quatro escopos: **Da conta (Club)** (recomendado: segredos no cofre do sistema, e só quem tem o MCP na ficha carrega), **Da conta (Claude Code)** (todas as sessões do Claude Code veem), **Do projeto** (vai para o git: não ponha chave ali) e **Locais do projeto** (só neste computador).
 - Tipos: **HTTP**, **SSE** e **Comando local**. Valores de variáveis e cabeçalhos nunca voltam para a tela; aparece "definido".
 - Botões: **+ MCP**, **Testar**, **Editar**, **Excluir**.
-- Na ficha, cada MCP marcado tem **Escrita**: **livre** (como sempre), **pede antes** (as ferramentas que escrevem pedem sua aprovação, em qualquer autonomia) ou **bloqueada**. Quem só lê é o que o próprio MCP declara no **Testar**; sem teste, ou se o MCP mudou depois dele, a regra vale para todas as ferramentas dele. Só no motor Claude.
+- Na ficha, cada MCP marcado tem um seletor de acesso, na linha do nome:
+  - **Livre**: segue a autonomia da ficha (como sempre).
+  - **Pede antes de escrever**: as ferramentas de leitura passam; as que escrevem pedem a sua aprovação, em qualquer autonomia.
+  - **Só leitura**: as de leitura passam; as que escrevem ficam bloqueadas.
+  - **Desligado**: o MCP não entra na conversa.
+- Quem só lê é o que o próprio MCP declara no **Testar**. Sem teste, ou se o MCP mudou depois dele, nenhuma ferramenta conta como leitura: em **Só leitura** o MCP inteiro fica bloqueado e em **Pede antes de escrever** toda ferramenta pede antes. Com um desses dois escolhidos, a ficha mostra quantas ferramentas contam como escrita, ou avisa que o MCP não foi testado.
+- No modo sem travas, e sempre no GPT, *Pede antes de escrever* vira *Só leitura*, porque não há quem confirme.
+- O **navegador** tem um seletor só, **Acesso do navegador**, que aparece com **Usar o navegador** marcado. Vale para o Claude in Chrome e para o Chrome do GPT, que são o mesmo navegador (vale o mais restritivo dos dois). Ele não tem teste: **Só leitura** bloqueia o navegador inteiro e **Pede antes de escrever** pede a cada ação.
+- No GPT a lista de MCPs não aparece na ficha; só o **Acesso do navegador** vale nos dois motores.
 
 ## Skills e agents
 
