@@ -56,7 +56,7 @@ export interface FtpMcpOptions {
 
 // ---- ferramentas ----
 
-const conn = z.string({ required_error: 'informe a conexão' });
+const conn = z.string({ error: (iss) => (iss.input === undefined ? 'informe a conexão' : undefined) });
 const flag = z.boolean().optional().default(false);
 const Schemas = {
   ftp_list: z.object({ connection: conn, path: z.string().optional() }),

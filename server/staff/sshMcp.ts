@@ -170,13 +170,13 @@ export function resolverSsh(o: { env: NodeJS.ProcessEnv; platform: NodeJS.Platfo
 
 // ---- ferramentas ----
 
-const srv = z.string({ required_error: 'informe o servidor' }).regex(NAME, 'servidor: nome da conexão da sua ficha');
+const srv = z.string({ error: (iss) => (iss.input === undefined ? 'informe o servidor' : undefined) }).regex(NAME, 'servidor: nome da conexão da sua ficha');
 const linhas = z.number().int('linhas: número inteiro').min(1, 'linhas: de 1 a 500').max(500, 'linhas: de 1 a 500').default(100);
-const container = z.string({ required_error: 'informe o container' }).regex(CONTAINER, 'container: nome do Docker (letras, números, _ . @ -)');
-const unidade = z.string({ required_error: 'informe a unidade' }).regex(UNIT, 'unidade: nome do serviço (ex.: nginx.service)');
-const caminho = z.string({ required_error: 'informe o caminho' }).refine(caminhoOk, 'caminho absoluto (começa com /), só letras, números e _ . / @ + -, sem .. nem //');
+const container = z.string({ error: (iss) => (iss.input === undefined ? 'informe o container' : undefined) }).regex(CONTAINER, 'container: nome do Docker (letras, números, _ . @ -)');
+const unidade = z.string({ error: (iss) => (iss.input === undefined ? 'informe a unidade' : undefined) }).regex(UNIT, 'unidade: nome do serviço (ex.: nginx.service)');
+const caminho = z.string({ error: (iss) => (iss.input === undefined ? 'informe o caminho' : undefined) }).refine(caminhoOk, 'caminho absoluto (começa com /), só letras, números e _ . / @ + -, sem .. nem //');
 const comandoLivre = z
-  .string({ required_error: 'informe o comando' })
+  .string({ error: (iss) => (iss.input === undefined ? 'informe o comando' : undefined) })
   .refine((s) => s.trim().length > 0, 'comando vazio')
   .refine((s) => s.length <= 4000, 'comando grande demais (máx. 4000 caracteres)')
   .refine((s) => !s.includes('\u0000'), 'comando com byte NUL');
