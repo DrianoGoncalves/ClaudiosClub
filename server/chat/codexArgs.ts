@@ -282,6 +282,38 @@ export function codexChromeMcpArgs(s: CodexMcpServer | null | undefined): string
   return codexMcpArgs(CODEX_CHROME_MCP_NAME, s, enabled);
 }
 
+/** Nome do navegador limpo (Playwright MCP com perfil em memória, sem logins) na configuração do Codex e no mcp.json do Claude. */
+export const CLEAN_BROWSER_MCP_NAME = 'myco-navegador';
+
+/**
+ * Ferramentas do navegador limpo: as do Chrome do usuário, mais as que testam sem login (redimensionar, para ver o celular; console; passar o
+ * mouse; selecionar). Perfil isolado, então nada do dono aparece nele. Continua de fora: código no processo do MCP, script na página, upload e
+ * arrastar arquivo, PDF, cookies e armazenamento, rede e rotas, e as ferramentas que a página registra (webmcp).
+ */
+export const CLEAN_BROWSER_TOOLS = [...CHROME_MCP_TOOLS, 'browser_resize', 'browser_console_messages', 'browser_hover', 'browser_select_option'];
+
+/**
+ * Ferramentas do navegador limpo que o Claude não usa (`--disallowedTools`). No Claude não há allowlist de ferramenta de MCP, então se nega o que
+ * roda código no processo do MCP ou mexe em arquivo local (um upload de `.env` passaria por cima das regras de segredo). É denylist: vale para a
+ * versão do Playwright MCP fixada no package.json; uma ferramenta nova dele precisa ser revista aqui.
+ */
+export const CLEAN_BROWSER_DENIED = [
+  'browser_run_code_unsafe',
+  'browser_evaluate',
+  'browser_file_upload',
+  'browser_drop',
+  'browser_pdf_save',
+  'browser_storage_state',
+  'browser_set_storage_state',
+  'browser_route',
+  'browser_network_state_set',
+];
+
+/** Os `-c mcp_servers.myco-navegador.*` da conversa do Codex (ver `codexMcpArgs`). Sem o MCP, nada. */
+export function codexCleanBrowserMcpArgs(s: CodexMcpServer | null | undefined): string[] {
+  return codexMcpArgs(CLEAN_BROWSER_MCP_NAME, s, CLEAN_BROWSER_TOOLS);
+}
+
 /** O que o `chatSpawn` entrega para abrir uma conversa no Codex (no lugar dos argumentos do `claude`). */
 export interface CodexSpawn {
   /** Autonomia da ficha: vira a sandbox (ver `sandboxFor`). */
@@ -309,6 +341,8 @@ export interface CodexSpawn {
   sshMcp?: CodexMcpServer | null;
   /** MCP do Chrome do usuário (só sem SSH na conversa), ou null: sem ele. Ver `codexChromeMcpArgs`. */
   chromeMcp?: CodexMcpServer | null;
+  /** MCP do navegador limpo (sem logins; ver `codexCleanBrowserMcpArgs`), ou null: sem ele. */
+  cleanMcp?: CodexMcpServer | null;
 }
 
 /**
@@ -346,6 +380,8 @@ export interface CodexRunOptions {
   sshMcp?: CodexMcpServer | null;
   /** MCP do Chrome do usuário (null = sem ele). Ver `codexChromeMcpArgs`. */
   chromeMcp?: CodexMcpServer | null;
+  /** MCP do navegador limpo (null = sem ele). Ver `codexCleanBrowserMcpArgs`. */
+  cleanMcp?: CodexMcpServer | null;
 }
 
 /**
@@ -408,6 +444,7 @@ export function buildCodexArgs(o: CodexRunOptions): string[] {
   args.push(...codexWindowsSandboxArgs(o.platform));
   args.push(...codexSshMcpArgs(o.sshMcp));
   args.push(...codexChromeMcpArgs(o.chromeMcp));
+  args.push(...codexCleanBrowserMcpArgs(o.cleanMcp));
   if (o.instructions && instructionsInArgv(o.instructions, o.platform)) args.push('-c', `developer_instructions=${tomlString(o.instructions)}`);
   if (resume) args.push(o.threadId!);
   args.push('-');

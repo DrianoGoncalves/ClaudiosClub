@@ -1150,7 +1150,8 @@ export class StaffService {
     // o MCP `myco-chrome`, montado em prepareCodexRun (ver codexChromeOf), e não usa esta extensão.
     const browser = codex ? false : await effectiveBrowser(runProfile.browser, this.opts.browserStatus);
     const codexRun = codex ? await prepareCodexRun(runProfile, ctx, id, cwd) : null;
-    const run = codexRun ? null : await prepareRun({ ...runProfile, browser }, ctx, id, cwd);
+    // O navegador limpo segue o que a ficha pede (`runProfile.browser`), não a extensão do Chrome (`browser` efetivo).
+    const run = codexRun ? null : await prepareRun({ ...runProfile, browser }, { ...ctx, cleanBrowser: runProfile.browser }, id, cwd);
     // Modelo e esforço: o da conversa (reabrir, ou a de origem ao duplicar) > o da ficha > o último escolhido no chat.
     const origin = profile.sessions.find((x) => x.id === (forkFrom ?? sessionId));
     if (!resume) {
@@ -1193,6 +1194,7 @@ export class StaffService {
         readOnlyPaths: codexRun.readOnlyPaths,
         sshMcp: codexRun.sshMcp,
         chromeMcp: codexRun.chromeMcp,
+        cleanMcp: codexRun.cleanMcp,
         secrets: { projectPath: project.path, home: os.homedir(), mycoHome: MYCO_HOME },
         threadId: resume ? await readCodexThread(codexRun.threadFile) : null,
         threadFile: codexRun.threadFile,

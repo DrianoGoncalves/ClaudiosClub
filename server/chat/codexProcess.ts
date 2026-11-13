@@ -34,6 +34,8 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   sshMcp?: CodexMcpServer | null;
   /** MCP do Chrome do usuário (null = sem ele). Ver `codexChromeMcpArgs` em codexArgs.ts. */
   chromeMcp?: CodexMcpServer | null;
+  /** MCP do navegador limpo (null = sem ele). Ver `codexCleanBrowserMcpArgs` em codexArgs.ts. */
+  cleanMcp?: CodexMcpServer | null;
   /** O que o bloqueio de segredos precisa saber; `mycoHome` é obrigatório (ver `CodexSecrets` em codexArgs.ts). */
   secrets: CodexSecrets;
   /**
@@ -321,6 +323,7 @@ export class CodexProcess extends ChatProcess {
         readOnlyPaths: o.readOnlyPaths,
         sshMcp: o.sshMcp,
         chromeMcp: o.chromeMcp,
+        cleanMcp: o.cleanMcp,
         secrets: o.secrets,
         network: status.networkProxy ? 'loopback' : 'off',
         internetAccess,
