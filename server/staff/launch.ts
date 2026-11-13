@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { ServerInfo, StaffProfile } from '../../shared/model';
 import { personalityName, personalityReminder } from '../../shared/personality';
 import { defaultLocations } from '../adapters/claude/paths';
+import { clubBlockedOrigins } from '../clubAddress';
 import { ROOT } from '../root';
 import { isClaudeRoot, renderFicha, systemPrompt, type CodexChromeInfo, type CodexSshInfo, type FichaContext, type TeamMember } from './ficha';
 import { FTP_MCP_NAME, GPT_MCP_NAME } from '../../shared/model';
@@ -198,7 +199,8 @@ export function codexChromeOf(
   if (motivos.length) return { mcp: null, info: { mcp: false, motivos } };
   // A pasta é da conversa (`<mycoHome>/run/<sessionId>/chrome`), fora de qualquer projeto e do repo do Club: o MCP não lê nem grava fora dela.
   return {
-    mcp: { command: process.execPath, args: [cli, '--extension', '--output-dir', chromeDir], cwd: chromeDir },
+    // --blocked-origins: o Chrome é o do dono, pareado; a tela do Club fica fora do alcance do agente (ver server/clubAddress.ts).
+    mcp: { command: process.execPath, args: [cli, '--extension', '--output-dir', chromeDir, '--blocked-origins', clubBlockedOrigins()], cwd: chromeDir },
     info: { mcp: true, motivos: [] },
   };
 }
@@ -264,6 +266,9 @@ export function ftpServersOf(profile: Pick<StaffProfile, 'servers'>, servers: Se
 
 const DELIVERY_HOOK = path.join(ROOT, 'scripts', 'hooks', 'delivery-check.mjs');
 const STYLE_HOOK = path.join(ROOT, 'scripts', 'hooks', 'style-reminder.mjs');
+const CLUB_GUARD_HOOK = path.join(ROOT, 'scripts', 'hooks', 'club-guard.mjs');
+/** Ferramentas de navegador: o Claude in Chrome e os MCPs no padrão `browser_*` (Playwright e afins da biblioteca). */
+export const BROWSER_TOOLS_MATCHER = 'mcp__claude-in-chrome__.*|mcp__.*__browser_.*';
 
 /**
  * Hooks do Claudio’s Club em todo funcionário (`--settings`, somados aos do usuário e do projeto): os agents
@@ -276,6 +281,8 @@ const STYLE_HOOK = path.join(ROOT, 'scripts', 'hooks', 'style-reminder.mjs');
 export function staffSettings(p?: Pick<StaffProfile, 'personality' | 'engine'>, styleFile?: string) {
   const hook = (stage: 'pre' | 'post') => [
     { matcher: 'Agent|Task', hooks: [{ type: 'command', command: process.execPath, args: [DELIVERY_HOOK, stage], timeout: 10 }] },
+    // O navegador do funcionário não abre a tela do Club (ver scripts/hooks/club-guard.mjs e server/clubAddress.ts).
+    ...(stage === 'pre' ? [{ matcher: BROWSER_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [CLUB_GUARD_HOOK, 'pre'], timeout: 10 }] }] : []),
   ];
   const styled = !!p && personalityName(p.personality) !== '' && (p.engine ?? 'claude') === 'claude';
   const style = styled && styleFile ? { UserPromptSubmit: [{ hooks: [{ type: 'command', command: process.execPath, args: [STYLE_HOOK, styleFile], timeout: 10 }] }] } : {};

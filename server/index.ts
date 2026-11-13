@@ -108,12 +108,13 @@ import { ROOT } from './root';
 import { cleanRunDir } from './runCleanup';
 import { SelfUpdater, UpdateError } from './selfUpdate';
 import { pendingRestartCheck } from './pendingRestart';
+import { CLUB_PORT } from './clubAddress';
 import { Pairing } from './pairing';
 import type { LimitHit } from './chat/usageLimit';
 import { collectGit } from './fallbackHandoff';
 import { DirectFallback, ownerMaySwitch, restoreDirectFallbacks } from './directFallback';
 
-const PORT = Number(process.env.MYCO_PORT ?? 4848);
+const PORT = CLUB_PORT;
 /** Rodando pelo vigia (scripts/daemon.ts): ele religa o servidor quando este sai. */
 const UNDER_DAEMON = process.env.MYCO_DAEMON === '1';
 const STARTED_AT = new Date().toISOString();
@@ -461,6 +462,7 @@ const tasks = new TaskService({
   awaitingLimit: async (sessionId) => (await chats.awaitingLimit(sessionId)) || !!(await wakeups.get(sessionId)),
   // Turno que parou no teto de ferramentas ou de minutos: vai para Aguardar, não para revisão (o motivo fica guardado antes da interrupção).
   turnCap: (sessionId) => chats.turnCapOf(sessionId),
+  restartCut: (projectId, sessionId) => chats.restartCut(projectId, sessionId),
   setOverride: (sessionId, override) => chats.setOverride(sessionId, override),
   // O limite de cada motor agora (ver taskFallback.ts). Sem leitura, 'unknown': não troca às cegas.
   readLimit: readLimitOf,
@@ -2309,7 +2311,7 @@ server.listen(PORT, HOST, () => {
       // Só ele manda o "continue" das conversas que bateram no limite de uso (e o despertador).
       // Quem estava em turno volta antes de tudo (ver server/chat/resume.ts). Só depois ligam o "continue", o despertador
       // e a fila: eles mandam mensagem, e não podem mandar de novo numa conversa que a retomada ainda está abrindo.
-      void bootResume({ file: resumeFile.file, stopHit: usageStopHit, send: (entry) => chats.resumeChat(entry) }, () => {
+      void bootResume({ file: resumeFile.file, stopHit: usageStopHit, send: (entry) => chats.resumeChat(entry), hold: (entry) => void chats.holdCut(entry.sessionId, entry.cut) }, () => {
         autoContinue.start();
         wakeups.start();
         // Fila de tarefas: quem ficou com tarefa ou ajuste esperando. Reiniciando, a fila espera o boot (ver tasks.ts).
