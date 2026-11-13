@@ -54,6 +54,8 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   mycoUrl?: string;
   /** Onde guardar o thread_id para continuar depois que o processo fechar (ou o servidor reiniciar). */
   threadFile?: string;
+  /** Chamado quando o Codex dá o thread_id desta conversa (ver CodexSpawn.onThread). */
+  onThread?: (threadId: string) => void;
   /**
    * Catálogo de modelos da conta (GET /api/codex/models), para o plano B: se a conta recusar o modelo da ficha, o turno é refeito uma vez
    * com o mais parecido daqui (ver `pickCodexSubstitute`). Sem ele, o plano B roda sem `-m` (o padrão do Codex).
@@ -505,6 +507,7 @@ export class CodexProcess extends ChatProcess {
         if (id && id !== this.thread) {
           this.thread = id;
           if (this.codex.threadFile) void writeCodexThread(this.codex.threadFile, id).catch(() => {});
+          this.codex.onThread?.(id);
         }
         return;
       }

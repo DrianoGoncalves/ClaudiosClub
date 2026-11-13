@@ -16,6 +16,7 @@ const KIND_LABEL: Record<InboxItem['kind'], string> = {
   error: t('inbox.kindError'),
   routine: t('inbox.kindRoutine'),
   orphan: t('inbox.kindOrphan'),
+  usage: t('inbox.kindUsage'),
 };
 
 /** Itens que só se dispensam ganham um X no canto; o title explica o que o X faz. Segredo tem duas ações, com texto. */

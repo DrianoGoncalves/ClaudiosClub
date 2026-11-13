@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { buildSkillPlugin, copyToLibrary, librarySkillsOf, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill } from '../server/skillLibrary';
+import { buildSkillPlugin, copyToLibrary, hashLibrarySkills, librarySkillsOf, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill } from '../server/skillLibrary';
 import { buildClaudeArgs, renderFicha } from '../server/staff/ficha';
 import type { StaffProfile } from '../shared/model';
 
@@ -82,5 +82,32 @@ describe('biblioteca de skills', () => {
     const args = buildClaudeArgs(p, { sessionId: 's', resume: false, systemPromptFile: 'S', mcpConfigPath: null, firstPrompt: null, pluginDir: 'C:/run/s/myco-plugin' });
     expect(args.slice(args.indexOf('--plugin-dir'), args.indexOf('--plugin-dir') + 2)).toEqual(['--plugin-dir', 'C:/run/s/myco-plugin']);
     expect(buildClaudeArgs(p, { sessionId: 's', resume: false, systemPromptFile: 'S', mcpConfigPath: null, firstPrompt: null })).not.toContain('--plugin-dir');
+  });
+});
+
+describe('versão das skills da biblioteca (hashLibrarySkills)', () => {
+  it('estável para o mesmo pacote (em qualquer pasta); muda quando um arquivo do pacote muda; fora quem não existe', async () => {
+    const dir = path.join(root, 'versoes');
+    await fs.mkdir(path.join(dir, 'vps', 'scripts'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'vps', 'SKILL.md'), '---\nname: vps\ndescription: x\n---\n\nPasso 1.\n');
+    await fs.writeFile(path.join(dir, 'vps', 'scripts', 'deploy.sh'), 'echo ok\n');
+
+    const first = await hashLibrarySkills(['vps', 'nao-existe'], dir);
+    expect(Object.keys(first)).toEqual(['vps']);
+    expect(first.vps).toMatch(/^[0-9a-f]{12}$/);
+    expect(await hashLibrarySkills(['vps'], dir)).toEqual(first);
+
+    // Mesmo pacote copiado para outro lugar: mesmo hash (os caminhos são relativos ao pacote).
+    await fs.cp(path.join(dir, 'vps'), path.join(dir, 'copia', 'vps'), { recursive: true });
+    expect((await hashLibrarySkills(['vps'], path.join(dir, 'copia')))).toEqual(first);
+
+    // Um arquivo do pacote que não é o SKILL.md também conta.
+    await fs.writeFile(path.join(dir, 'vps', 'scripts', 'deploy.sh'), 'echo outra coisa\n');
+    const changed = await hashLibrarySkills(['vps'], dir);
+    expect(changed.vps).not.toBe(first.vps);
+
+    // Arquivo novo na pasta da skill também muda a versão.
+    await fs.writeFile(path.join(dir, 'vps', 'notas.md'), 'nova\n');
+    expect((await hashLibrarySkills(['vps'], dir)).vps).not.toBe(changed.vps);
   });
 });

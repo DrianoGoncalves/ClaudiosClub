@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Agent, Board, CostReport, InboxItem, LinkInfo, Project, Session, Skill, StaffProfile } from '../shared/model';
 import { buildGraph as buildGraphRaw, readingOrder, SIZES, type BoardNode, type BoardNodeType } from '../client/src/board/layout';
-import { portraitUrl } from '../client/src/board/nodes';
+import { portraitUrl, projectMeta } from '../client/src/board/nodes';
 
 // Estes testes contam com a sala do usuário; o padrão do quadro é escondê-la (ver "escopo do usuário" abaixo).
 const buildGraph = (b: Parameters<typeof buildGraphRaw>[0], o: Parameters<typeof buildGraphRaw>[1]) => buildGraphRaw(b, { showUserScope: true, ...o });
@@ -555,6 +555,24 @@ describe('buildGraph', () => {
     expect(all?.type === 'employee' && all.data.archived).toBe(true);
   });
 
+  it('contador do cabeçalho: fichas que o quadro mostra, não as conversas (sessionCount) nem o fantasma', () => {
+    const b = { ...board(), staff: [staffProfile('ana', ['s-a1']), staffProfile('bia', []), staffProfile('caio', [])] };
+    b.projects[0]!.sessionCount = 251; // todas as conversas do disco: não é o número de funcionários
+    const employeesOf = (g: ReturnType<typeof buildGraph>, id: string) => {
+      const n = g.nodes.find((x) => x.id === id);
+      return n?.type === 'project' ? n.data.employees : undefined;
+    };
+    expect(employeesOf(buildGraph(b, {}), 'p:a')).toBe(3);
+    expect(employeesOf(buildGraph(b, {}), 'p:b')).toBe(0); // só conversa sem ficha: nada a contar
+
+    // Temporário encerrado/arquivado sai do quadro e da conta; com "arquivados" ligado volta nas duas.
+    const archived = { projects: [], sessions: ['staff:caio'], conversations: {} };
+    expect(employeesOf(buildGraph(b, { archived }), 'p:a')).toBe(2);
+    expect(employeesOf(buildGraph(b, { archived, showArchived: true }), 'p:a')).toBe(3);
+    // Dobrada, a sala não monta os cartões mas o contador segue.
+    expect(employeesOf(buildGraph(b, { archived, collapsedRooms: ['p:a'] }), 'p:a')).toBe(2);
+  });
+
   it('marca como ativa só a linha que chega a um funcionário trabalhando numa tarefa delegada', () => {
     const b = board();
     const working = { sessionId: 's-a1', pid: 9, cwd: A, name: null, status: 'busy', alive: true, entrypoint: null, kind: null, startedAt: null, statusUpdatedAt: null } as const;
@@ -641,6 +659,21 @@ describe('escopo do usuário', () => {
     const ids = (show?: boolean) => buildGraphRaw(board(), { showUserScope: show }).nodes.map((n) => n.id);
     expect(ids()).not.toContain('u');
     expect(ids(true)).toContain('u');
+  });
+});
+
+describe('linha abaixo do nome da sala', () => {
+  const base = { employees: 4, resources: 0, collapsed: false, exists: true };
+  it('conta funcionários com singular/plural; sem ficha, a parte some (nada de "0 funcionários")', () => {
+    expect(projectMeta(base)).toBe('4 funcionários');
+    expect(projectMeta({ ...base, employees: 1 })).toBe('1 funcionário');
+    expect(projectMeta({ ...base, employees: 0 })).toBe('');
+  });
+  it('junta recursos (só dobrada) e pasta sumida com " · ", sem separador solto quando falta a contagem', () => {
+    expect(projectMeta({ ...base, resources: 3 })).toBe('4 funcionários');
+    expect(projectMeta({ ...base, resources: 3, collapsed: true })).toBe('4 funcionários · 3 agents/skills');
+    expect(projectMeta({ ...base, employees: 0, resources: 1, collapsed: true, exists: false })).toMatch(/^1 agent\/skill · /);
+    expect(projectMeta({ ...base, employees: 0, exists: false }).startsWith(' ·')).toBe(false);
   });
 });
 

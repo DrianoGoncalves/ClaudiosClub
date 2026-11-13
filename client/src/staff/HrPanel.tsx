@@ -123,13 +123,8 @@ export function HrPanel({ onEdit, profiles, onConfig, onChanged, onNotice }: Pro
     });
   };
 
-  const head = (
-    <header className="header">
-      <p className="kicker">{t('hr.button')}</p>
-      <h2>{t('hr.title')}</h2>
-      {people && <p className="muted small">{t(groups.length === 1 ? 'hr.countOne' : 'hr.countOther', { n: groups.length })}</p>}
-    </header>
-  );
+  // O cabeçalho (RH e ranking) e as abas são do PeoplePanel; aqui fica só a contagem.
+  const head = people && <p className="muted small">{t(groups.length === 1 ? 'hr.countOne' : 'hr.countOther', { n: groups.length })}</p>;
   const back = (to: () => void) => (
     <p className="actions">
       <button type="button" className="btn-secondary" disabled={busy} onClick={to}>

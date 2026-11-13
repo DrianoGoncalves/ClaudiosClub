@@ -246,6 +246,20 @@ export interface CostReport {
  */
 export type UiLevel = 'simple' | 'advanced';
 
+/** Prévia da exclusão da retenção (só leitura): o que a próxima varredura apagaria, sem apagar nada. */
+export interface RetentionPreview {
+  /** Dias para apagar (0 = desligado). */
+  deleteAfterDays: number;
+  /** Quando a exclusão foi confirmada no navegador (ISO); null = não ligada. */
+  enabledAt: string | null;
+  claude: { count: number; bytes: number };
+  codex: { count: number; bytes: number };
+  /** Atividade mais antiga entre os candidatos (ISO), ou null sem candidatos. */
+  oldest: string | null;
+  /** Nomes dos projetos pulados (ficha ou tarefas ilegíveis): a tela avisa que a prévia deles não está completa. */
+  skipped: string[];
+}
+
 export interface AppConfig {
   /** Nome exibido no topo do quadro; "Claudio’s Club" por padrão. */
   companyName: string;
@@ -319,6 +333,18 @@ export interface AppConfig {
    * desarquivar, ela só é arquivada de novo depois de atividade nova (o `updatedAt` muda). Não é para editar.
    */
   freelaAutoArchived: Record<string, string>;
+  /**
+   * Retenção: conversa sem atividade há mais de N dias sai da lista (o arquivo nem é lido). Inteiro 0–365; 0 = desligado. Padrão 7.
+   * Arquivar não apaga nada; a conversa volta com `?old=1` (ver server/adapters/claude/sessions.ts).
+   */
+  archiveAfterDays: number;
+  /**
+   * Retenção: conversa lançada pelo Claudio’s Club (registro em sessions-registry.json) sem atividade há mais de N dias pode ser apagada
+   * (etapa posterior, ainda sem exclusão). Inteiro 0–365; 0 = desligado. Padrão 30. Com os dois ligados, passa do `archiveAfterDays`.
+   */
+  deleteAfterDays: number;
+  /** Quando a exclusão foi ligada (ISO); null = nunca. Só a rota própria grava (fora do config genérico). */
+  retentionDeleteEnabledAt: string | null;
   /** Workspaces: abas do quadro que agrupam os projetos como você quiser (cliente, área, tipo…). */
   workspaces: Workspace[];
   /** Workspace de cada projeto, por id de projeto; sem entrada = sem workspace. */
@@ -534,14 +560,15 @@ export interface TaskFallback extends EngineOverride {
 /** Ficha do funcionário: `<projeto>/.myco/staff/<id>.json`. */
 /**
  * Rotina de um funcionário: no horário (cron de 5 campos, hora desta máquina), o Claudio’s Club manda a
- * mensagem para ele, como se você tivesse digitado. `continue`: na última conversa; `new`: numa nova.
+ * mensagem para ele, como se você tivesse digitado. `continue`: na última conversa; `new`: numa nova; `task`: cria uma
+ * tarefa no quadro, na ficha, com a mensagem como descrição (ver `TaskService.createFromRoutine`).
  */
 export interface Routine {
   id: string;
   name: string;
   schedule: string;
   message: string;
-  mode: 'continue' | 'new';
+  mode: 'continue' | 'new' | 'task';
   enabled: boolean;
 }
 
@@ -560,6 +587,12 @@ export interface Task {
   id: string;
   title: string;
   description: string;
+  /** Meta: o porquê da tarefa, em uma frase. Vai ao funcionário no início. */
+  goal?: string | null;
+  /** Critério de aceite: como quem revisa confere que a entrega está pronta. */
+  acceptance?: string | null;
+  /** Dependências: tarefas do mesmo projeto que precisam estar prontas ('done') antes de esta começar (ver `blockers` em server/tasks.ts). */
+  blockedBy?: string[];
   status: TaskStatus;
   /** Funcionário com ficha que cuida dela; null = ninguém ainda. */
   staffId: string | null;
@@ -588,6 +621,12 @@ export interface Task {
   reviewRounds?: number;
   /** Quando a rede de segurança retomou a conversa que parou no meio do turno (uma vez só; ver TaskService.tick). */
   resumedAt?: string | null;
+  /** Tentativa corrente (ver server/taskRuns.ts): aberta ao começar ou retomar, fechada na entrega, na parada ou no cancelamento. */
+  runId?: string | null;
+  /** Criada por uma rotina de tarefa (`mode: 'task'`): o id da rotina. Ausente = tarefa comum. Quem começa pela fila usa o gatilho 'routine'. */
+  routineId?: string;
+  /** Chave de idempotência da rotina (`rotina:<ficha>:<rotina>:<minuto>`): o mesmo minuto não cria a tarefa de novo. */
+  idemKey?: string;
   /** Deploy pedido ao funcionário de infra. */
   deploy?: TaskHandoff | null;
   /** A worktree foi mesclada no projeto. */
@@ -726,6 +765,12 @@ export interface RoutineRun {
   text: string;
 }
 
+/**
+ * Política de uma ferramenta MCP na ficha (`StaffProfile.mcpPolicy`). `allow` segue a autonomia (não libera nada além dela);
+ * `ask` pergunta sempre, em qualquer autonomia; `off` tira a ferramenta da sessão. No Codex, `ask` vira `off` (não há pergunta).
+ */
+export type McpPolicy = 'allow' | 'ask' | 'off';
+
 export interface StaffProfile {
   id: string;
   projectId: string;
@@ -751,6 +796,11 @@ export interface StaffProfile {
   skills: string[];
   /** MCPs ligados; null = todos os configurados (inclusive os conectores da conta). */
   mcps: string[] | null;
+  /**
+   * Política por ferramenta MCP. Chave `mcp__servidor` (todas as ferramentas dele) ou `mcp__servidor__ferramenta`; ausente = sem
+   * política. Entre a regra do servidor e a da ferramenta vale a mais restritiva (off > ask > allow). Ver server/staff/mcpPolicy.ts.
+   */
+  mcpPolicy?: Record<string, McpPolicy>;
   /** Arquivos e pastas para ler antes de começar. */
   knowledge: string[];
   rules: string[];
@@ -1163,7 +1213,7 @@ export type QuestionAnswers = Record<string, string | string[]>;
 export type QuestionAnnotations = Record<string, { preview?: string; notes?: string }>;
 
 /** O que espera você, de todas as salas (a caixa "precisa de mim"). */
-export type InboxKind = 'plan' | 'permission' | 'secret' | 'waiting' | 'error' | 'routine' | 'orphan';
+export type InboxKind = 'plan' | 'permission' | 'secret' | 'waiting' | 'error' | 'routine' | 'orphan' | 'usage';
 
 /** Um turno que acabou (trabalhando → parado): vira o aviso "Fulano terminou". */
 export interface TurnNotice {

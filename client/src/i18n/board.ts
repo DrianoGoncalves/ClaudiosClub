@@ -5,8 +5,6 @@ export default defineMessages({
     // Quadro (Board.tsx) e legenda
     'board.resetLayoutTitle': 'Reorganizar o quadro (desfaz os arrastos)',
     'board.resetLayout': 'Reorganizar o quadro',
-    'board.rankingTitle': 'Ranking: quem mais gasta e modelos para código',
-    'board.ranking': 'Ranking',
     'board.legendProject': 'projeto',
     'board.legendEmployee': 'funcionário / agent',
     'board.skillWord': 'skill',
@@ -135,8 +133,6 @@ export default defineMessages({
   en: {
     'board.resetLayoutTitle': 'Reset layout (undoes drags)',
     'board.resetLayout': 'Reset layout',
-    'board.rankingTitle': 'Ranking: who spends the most, and models for code',
-    'board.ranking': 'Ranking',
     'board.legendProject': 'project',
     'board.legendEmployee': 'employee / agent',
     'board.skillWord': 'skill',
@@ -262,8 +258,6 @@ export default defineMessages({
   es: {
     'board.resetLayoutTitle': 'Reorganizar el tablero (deshace los arrastres)',
     'board.resetLayout': 'Reorganizar el tablero',
-    'board.rankingTitle': 'Ranking: quién gasta más y modelos para código',
-    'board.ranking': 'Ranking',
     'board.legendProject': 'proyecto',
     'board.legendEmployee': 'empleado / agente',
     'board.skillWord': 'skill',

@@ -6,7 +6,8 @@
 ## Barras de consumo (topo do quadro)
 
 - Linha **Claude**: barras **5h** e **7d**, com a porcentagem e o tempo até reiniciar.
-- Cores: verde abaixo de 50%, amarelo de 50% a 69%, vermelho a partir de 70%.
+- Cores: verde abaixo de 70%, amarelo de 70% a 89%, vermelho a partir de 90%.
+- Na barra **7d**, o fundo da barra tem uma listra que mostra o ritmo: quanto da cota ainda resta por dia até reiniciar. Verde: 14,3% por dia ou mais (sobra). Amarelo: de 7% a menos de 14,3% (aperta). Vermelho: abaixo de 7% (apertado). Nas últimas 24 h o texto passa a "restam N% até reiniciar".
 - Passe o mouse para ver "reinicia em {tempo}" (ou "reiniciou") e "lido {tempo atrás}". O link abre o uso do Claude numa nova aba.
 - Sinal "+" no ícone do Claude: a **Otimizar assinatura** está ativa (ver a tabela de travas abaixo).
 - Sem leitura, aparece uma destas mensagens:
@@ -65,7 +66,7 @@ Sinais na tela:
 
 ## Ranking
 
-- O botão **Ranking** no topo do quadro abre o painel lateral.
+- O botão **RH e ranking** (ícone de pessoas) no topo do quadro abre o painel lateral, com as abas **RH**, **Gastos** e **Economia**.
 - Aba **Gastos** ("Quem mais gasta"): a parte de cada um no consumo total. Serve para comparar; as sessões rodam pela assinatura.
 - Aba **Economia** ("Quem mais economiza"): estimativa, comparada com o chefe fazendo tudo no modelo dele.
 - **Período**: **Hoje**, **7 dias**, **1 mês**, **Últimos 3 meses** (padrão) ou **Tudo**.

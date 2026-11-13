@@ -88,6 +88,8 @@ describe('ficha', () => {
     expect(md).toContain('- Luana (Design system), id `luana-0d88`: Cuidar do design system.');
     expect(md).toContain('- Raquel (Infra, temporário)');
     expect(md).toContain('POST http://127.0.0.1:4848/api/projects/proj-x/tasks');
+    expect(md).toContain('acceptance (o critério de pronto), goal (opcional');
+    expect(md).toContain('blockedBy (ids das tarefas que precisam terminar antes');
     expect(md).toContain('requestedBy: "ana-1a2b"');
     // Todo pedido da ficha à API leva o token da conversa (MYCO_TOKEN, já no ambiente).
     expect(md).toContain('com os cabeçalhos `x-myco: 1` e `x-myco-token: $MYCO_TOKEN`');

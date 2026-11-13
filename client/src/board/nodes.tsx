@@ -120,7 +120,21 @@ function CollapseToggle({ collapsed }: { collapsed: boolean }) {
   );
 }
 
-const resourcesText = (n: number) => (n ? ` · ${t(n === 1 ? 'board.resourceOne' : 'board.resourceOther', { n })}` : '');
+const resourcesText = (n: number) => t(n === 1 ? 'board.resourceOne' : 'board.resourceOther', { n });
+
+/**
+ * Linha abaixo do nome da sala: funcionários com ficha (sem ficha, a parte some, em vez de "0 funcionários"),
+ * recursos quando a sala está dobrada e o aviso de pasta sumida. Vazia: o cabeçalho fica só com o nome.
+ */
+export function projectMeta({ employees, resources, collapsed, exists }: { employees: number; resources: number; collapsed: boolean; exists: boolean }): string {
+  return [
+    employees > 0 && `${employees} ${t(employees === 1 ? 'board.employeeOne' : 'board.employeeOther')}`,
+    collapsed && resources > 0 && resourcesText(resources),
+    !exists && t('board.folderMissing'),
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
 
 /** Cabeçalho da sala "você", colado nas bordas, como o do projeto. */
 function UserNode({ id, data, selected, width }: NodeProps<Node<UserNodeData, 'user'>>) {
@@ -140,6 +154,7 @@ function UserNode({ id, data, selected, width }: NodeProps<Node<UserNodeData, 'u
 /** Cabeçalho da sala: faixa colada nas bordas, na cor da parede, com nome à esquerda e quem está ao vivo à direita. */
 function ProjectNode({ id, data, selected, width }: NodeProps<Node<ProjectNodeData, 'project'>>) {
   const p = data.project;
+  const meta = projectMeta({ employees: data.employees, resources: data.header.resources, collapsed: data.header.collapsed, exists: p.exists });
   return (
     <Frame
       id={id}
@@ -162,11 +177,7 @@ function ProjectNode({ id, data, selected, width }: NodeProps<Node<ProjectNodeDa
             {data.archived && <span className="bn-tag">{t('board.archivedTag')}</span>}
             {p.name}
           </div>
-          <div className="bn-meta">
-            {p.sessionCount} {t(p.sessionCount === 1 ? 'board.employeeOne' : 'board.employeeOther')}
-            {data.header.collapsed && resourcesText(data.header.resources)}
-            {!p.exists && ` · ${t('board.folderMissing')}`}
-          </div>
+          {meta && <div className="bn-meta">{meta}</div>}
         </div>
         {/* À direita, em duas linhas: tarefas em cima; branch e quem está ao vivo embaixo. */}
         <div className="bn-header-side">

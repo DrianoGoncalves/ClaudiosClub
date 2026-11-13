@@ -10,7 +10,8 @@ import { FTP_MCP_NAME, GPT_MCP_NAME } from '../../shared/model';
 import { DEFAULT_SECRETS_DIR } from '../secretVault';
 import { ftpMcpServerConfig } from './ftpMcp';
 import { SSH_MCP_BUNDLE, WRITE_AUTONOMY, sshMcpServerConfig } from './sshMcp';
-import type { CodexMcpServer } from '../chat/codexArgs';
+import { CODEX_CHROME_MCP_NAME, CODEX_SSH_MCP_NAME, type CodexMcpServer } from '../chat/codexArgs';
+import { CHROME_EXTENSION_KEY, codexMcpPolicy, mcpPolicyRules } from './mcpPolicy';
 import { gptMcpServerConfig } from './gptMcp';
 import { buildMcpConfig } from './mcp';
 import { ensurePlaybookAgents } from './playbookAgents';
@@ -184,21 +185,29 @@ export interface PreparedCodexRun {
  * na mesma conversa (não juntar servidor e logins) e com o pacote instalado. `info` é o que a ficha diz (undefined: a ficha não tem Navegador).
  */
 export function codexChromeOf(
-  profile: Pick<StaffProfile, 'browser'>,
+  profile: Pick<StaffProfile, 'browser' | 'mcpPolicy'>,
   ctx: Pick<LaunchContext, 'codexBrowser' | 'chromeMcpCli'>,
   sshAttached: boolean,
   chromeDir: string,
 ): { mcp: CodexMcpServer | null; info?: CodexChromeInfo } {
   if (!profile.browser) return { mcp: null };
   const cli = ctx.chromeMcpCli ?? CHROME_MCP_CLI;
+  // A chave do Claude in Chrome vale aqui também: é o mesmo Chrome do usuário (ver mcpPolicy.ts).
+  const policy = codexMcpPolicy(profile.mcpPolicy, CODEX_CHROME_MCP_NAME, [CHROME_EXTENSION_KEY]);
   const motivos: CodexChromeInfo['motivos'] = [];
   if (ctx.codexBrowser !== true) motivos.push('config');
   if (sshAttached) motivos.push('ssh');
+  if (policy.disabled) motivos.push('politica');
   if (!existsSync(cli)) motivos.push('indisponivel');
   if (motivos.length) return { mcp: null, info: { mcp: false, motivos } };
   // A pasta é da conversa (`<mycoHome>/run/<sessionId>/chrome`), fora de qualquer projeto e do repo do Club: o MCP não lê nem grava fora dela.
   return {
-    mcp: { command: process.execPath, args: [cli, '--extension', '--output-dir', chromeDir], cwd: chromeDir },
+    mcp: {
+      command: process.execPath,
+      args: [cli, '--extension', '--output-dir', chromeDir],
+      cwd: chromeDir,
+      ...(policy.disabledTools.length ? { disabledTools: policy.disabledTools } : {}),
+    },
     info: { mcp: true, motivos: [] },
   };
 }
@@ -223,9 +232,12 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
   const bundle = ctx.sshMcpBundle ?? SSH_MCP_BUNDLE;
   // Escrita do lançamento: a sshWrite da ficha (de conexões do projeto), só com autonomia que altera algo. Vai no `--write`.
   const write = WRITE_AUTONOMY.includes(profile.autonomy) ? (profile.sshWrite ?? []).filter((n) => names.includes(n)) : [];
+  // Política de MCP: servidor `off` ou `ask` (no Codex, ask é off) fica fora da conversa; as ferramentas `off` saem pelo disabled_tools.
+  const ssh = codexMcpPolicy(profile.mcpPolicy, CODEX_SSH_MCP_NAME);
   // Sem o pacote do build, o MCP não sobe (nunca pelo tsx a partir do Codex): a ficha diz que o servidor está indisponível.
-  const mcp = names.length > 0 && !root && existsSync(bundle);
-  const indisponivel = names.length > 0 && !root && !mcp;
+  const bundleOk = existsSync(bundle);
+  const mcp = names.length > 0 && !root && bundleOk && !ssh.disabled;
+  const indisponivel = names.length > 0 && !root && !bundleOk;
   const sshInfo: CodexSshInfo | undefined = names.length ? { mcp, names, writable: mcp ? write : [], root, indisponivel } : undefined;
   let sshMcp: CodexMcpServer | null = null;
   if (mcp) {
@@ -238,14 +250,17 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
       autonomy: profile.autonomy,
       bundle,
     });
-    sshMcp = { command, args, cwd: ROOT };
+    sshMcp = { command, args, cwd: ROOT, ...(ssh.disabledTools.length ? { disabledTools: ssh.disabledTools } : {}) };
   }
   // Chrome do usuário: depois do SSH, porque o MCP de SSH na conversa desliga o Chrome (não juntar servidor e logins).
   const chromeDir = path.join(ctx.runDir, sessionId, 'chrome');
   const chrome = codexChromeOf(profile, ctx, sshMcp !== null, chromeDir);
   // A pasta do MCP existe antes do processo (o cwd dele): só quando o MCP entra.
   if (chrome.mcp) await mkdir(chromeDir, { recursive: true });
-  const fichaCtx = await writeFicha(profile, ctx, away, sshInfo, chrome.info);
+  // O que a política desligou para a ficha dizer (só o que se aplica: servidor de SSH com conexão, Chrome com Navegador).
+  const chromeAsk = profile.browser ? codexMcpPolicy(profile.mcpPolicy, CODEX_CHROME_MCP_NAME, [CHROME_EXTENSION_KEY]).askedAsOff : [];
+  const asked = [...(names.length && !root ? ssh.askedAsOff : []), ...chromeAsk];
+  const fichaCtx = await writeFicha(profile, ctx, away, sshInfo, chrome.info, asked);
   return {
     instructions: systemPrompt(profile, fichaCtx, renderFicha(profile, fichaCtx)),
     writableRoots: away ? [staffDir(ctx.projectPath)] : [],
@@ -273,13 +288,19 @@ const STYLE_HOOK = path.join(ROOT, 'scripts', 'hooks', 'style-reminder.mjs');
  * Com estilo de comunicação (motor Claude), `outputStyle: 'default'`: o output style global do usuário (ex.: "Concise") brigaria com o estilo.
  * E, com o `styleFile` (style.txt da conversa), um hook UserPromptSubmit põe o lembrete do estilo em cada mensagem (scripts/hooks/style-reminder.mjs).
  */
-export function staffSettings(p?: Pick<StaffProfile, 'personality' | 'engine'>, styleFile?: string) {
+export function staffSettings(p?: Pick<StaffProfile, 'personality' | 'engine' | 'mcpPolicy'>, styleFile?: string) {
   const hook = (stage: 'pre' | 'post') => [
     { matcher: 'Agent|Task', hooks: [{ type: 'command', command: process.execPath, args: [DELIVERY_HOOK, stage], timeout: 10 }] },
   ];
   const styled = !!p && personalityName(p.personality) !== '' && (p.engine ?? 'claude') === 'claude';
   const style = styled && styleFile ? { UserPromptSubmit: [{ hooks: [{ type: 'command', command: process.execPath, args: [STYLE_HOOK, styleFile], timeout: 10 }] }] } : {};
-  return { hooks: { PreToolUse: hook('pre'), PostToolUse: hook('post'), ...style }, ...(styled ? { outputStyle: 'default' } : {}) };
+  // Ferramentas MCP de Perguntar: o ask do settings vence o allow de local, de sessão e do hook (provado no 2.1.310).
+  const ask = mcpPolicyRules(p?.mcpPolicy).ask;
+  return {
+    hooks: { PreToolUse: hook('pre'), PostToolUse: hook('post'), ...style },
+    ...(styled ? { outputStyle: 'default' } : {}),
+    ...(ask.length ? { permissions: { ask } } : {}),
+  };
 }
 
 /**
@@ -292,6 +313,7 @@ export async function writeFicha(
   absolute = false,
   codexSsh?: CodexSshInfo,
   codexChrome?: CodexChromeInfo,
+  codexMcpAsked?: string[],
 ): Promise<FichaContext> {
   const rel = (file: string) => (absolute ? file : path.relative(ctx.projectPath, file));
   const fichaCtx: FichaContext = {
@@ -315,6 +337,7 @@ export async function writeFicha(
     lockedByCodexManager: ctx.lockedByCodexManager,
     codexSsh,
     codexChrome,
+    codexMcpAsked,
     // Mesma regra de prepareRun (manualEditable): só o projeto do Claudio’s Club, fora de worktree.
     manualEditable: !absolute && isClaudeRoot(ctx.projectPath),
   };

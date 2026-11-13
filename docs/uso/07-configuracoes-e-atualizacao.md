@@ -3,7 +3,7 @@
 ## Abrir as configurações
 
 - Engrenagem no topo, ou Ctrl+, (vírgula).
-- O painel tem o campo **Buscar configurações** e os grupos **Geral**, **Quadro**, **Conversa**, **Cargos**, **MCPs**, **Consumo** e **Créditos**.
+- O painel tem o campo **Buscar configurações** e os grupos **Geral**, **Quadro**, **Conversa**, **Consumo**, **Fila de tarefas**, **Cargos**, **MCPs** e **Créditos**. Dentro de **Geral** há as seções **Ajuda**, **Internet e GPT** e **Sistema**.
 - **Nível de uso**: **Simples** esconde o que é avançado. Para ver tudo, use **Mostrar tudo** ou escolha **Avançado**.
 
 ## Itens mais usados
@@ -11,10 +11,10 @@
 | Item | Grupo | O que faz |
 | --- | --- | --- |
 | **Idioma** | Geral | Português (Brasil), English ou Español. Vale neste navegador e recarrega a página. |
-| **Usar o Codex (GPT)** | Geral (avançado) | Liga o Codex. Ao ligar, o Club instala o Codex CLI se ele faltar. Gasta a cota do seu ChatGPT. |
-| **Modelo do GPT** | Geral (avançado) | Modelo do Codex usado nas perguntas ao GPT. **Padrão do Codex** deixa o Codex escolher. Só aparece com o Codex ligado. |
-| **Atualizações** | Geral | Mostra a versão e tem **Procurar agora**. Ver "Atualizar o Club" abaixo. |
-| **Servidor** | Geral | **Reiniciar** e **Parar o Clube dos Claudios**. Ao parar, as conversas abertas fecham e as rotinas param até o servidor voltar. |
+| **Usar o Codex (GPT)** | Geral, seção Internet e GPT (avançado) | Liga o Codex. Ao ligar, o Club instala o Codex CLI se ele faltar. Gasta a cota do seu ChatGPT. |
+| **Modelo do GPT** | Geral, seção Internet e GPT (avançado) | Modelo do Codex usado nas perguntas ao GPT. **Padrão do Codex** deixa o Codex escolher. Só aparece com o Codex ligado. |
+| **Atualizações** | Geral, seção Sistema | Mostra a versão e tem **Procurar agora**. Ver "Atualizar o Club" abaixo. |
+| **Servidor** | Geral, seção Sistema | **Reiniciar** e **Parar o Clube dos Claudios**. Ao parar, as conversas abertas fecham e as rotinas param até o servidor voltar. |
 
 Se você não acha **Usar o Codex (GPT)**, mude **Nível de uso** para **Avançado**.
 

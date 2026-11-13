@@ -40,6 +40,9 @@ const STATUS_TTL = 5 * 60_000;
 // Uma revisão pequena levou ~4 min no Codex CLI 0.165 (ele pensa bastante): folga até 8.
 const REVIEW_TIMEOUT = 8 * 60_000;
 const MAX_DIFF = 120_000;
+/** Apagar uma conversa do Codex: o CLI só aceita UUID; o tempo é curto (é só apagar o arquivo da sessão). */
+const DELETE_TIMEOUT_MS = 60_000;
+const CODEX_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_ANSWER = 20_000;
 /** Uma nova tentativa, com espera exponencial e variação aleatória (falha passageira do CLI ou da rede). */
 const RETRIES = 1;
@@ -107,6 +110,16 @@ export class CodexAdapter {
           : { available: false, reason: 'o Codex CLI está sem login: entre nele pelo Claudio’s Club' };
     this.status = { at: now, value };
     return value;
+  }
+
+  /**
+   * Apaga uma conversa do Codex: `codex delete <id> --force` (o CLI exige UUID). Só `true` quando sai com 0; sem CLI, erro,
+   * tempo esgotado ou id fora do formato é `false`, e quem chama mantém a referência para tentar no próximo ciclo.
+   */
+  async deleteThread(threadId: string): Promise<boolean> {
+    if (!CODEX_SESSION_ID.test(threadId)) return false;
+    const r = await this.run(['delete', threadId, '--force'], '', DELETE_TIMEOUT_MS);
+    return r.code === 0 && !r.timedOut && !r.spawnError;
   }
 
   /** Revisão do diff pelo Codex; devolve a resposta dele em Markdown. */

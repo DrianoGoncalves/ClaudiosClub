@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { CONTEXT_SWITCHES, type AppConfig, type BoardBackground, type ContextSwitch, type Project, type SendPriority, type UiLevel, type UsageStop, type Workspace } from '../../../shared/model';
+import { CONTEXT_SWITCHES, type AppConfig, type BoardBackground, type ContextSwitch, type Project, type RetentionPreview, type SendPriority, type UiLevel, type UsageStop, type Workspace } from '../../../shared/model';
+import { formatBytes } from '../detail/attachmentFiles';
 import { DemoButton, WorkspacesEditor } from '../office/WorkspacesSettings';
 import { McpServers } from '../office/McpServers';
 import { api, type CodexModelsState } from '../api';
@@ -8,6 +9,7 @@ import { bareVersion } from '../format';
 import { useTheme, useThemePref, type ThemePref } from '../theme';
 import { useChatDetail } from '../chat/chatDetail';
 import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
+import { OPEN_SETTINGS_EVENT } from './openSettings';
 import { PairControls } from './PairControls';
 import { useSystemMonitor } from './SystemMonitor';
 import { RolesEditor } from './RolesEditor';
@@ -17,6 +19,7 @@ import { UpdateControls, useUpdateStatus } from './UpdateNotice';
 import { PLAYWRIGHT_BRIDGE_URL } from '../staff/codexEngine';
 import { installCodex } from './codexSetup';
 import { MAX_CHATS_MAX, RAM_GB_MAX, normalizeMaxChats, normalizeRamGb } from './queueGate';
+import { RETENTION_DAYS_MAX, normalizeRetentionDays, previewFor, previewTotal, retentionOrderBroken, skippedProjects } from './retention';
 import { TURN_MINUTES_MAX, TURN_TOOLS_MAX, normalizeTurnMinutes, normalizeTurnTools } from './turnCap';
 
 // Configurações do Claudio’s Club, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
@@ -71,6 +74,8 @@ interface Props {
   queueGate: Pick<AppConfig, 'resourceGate' | 'minFreeRamGb' | 'cpuGate' | 'maxActiveChats'> | null;
   /** Freio de turno em laço (ferramentas e minutos por turno, 0 = desligado); null = config ainda não chegou. */
   turnCap: Pick<AppConfig, 'maxTurnTools' | 'maxTurnMinutes'> | null;
+  /** Conversas antigas (arquivar e apagar); null = config ainda não chegou, ou o servidor é anterior à retenção. */
+  retention: Pick<AppConfig, 'archiveAfterDays' | 'deleteAfterDays' | 'retentionDeleteEnabledAt'> | null;
 }
 
 type GroupId = 'general' | 'board' | 'chat' | 'roles' | 'mcp' | 'usage' | 'queue' | 'credits';
@@ -95,7 +100,7 @@ const CREDITS = [
   { name: 'Caveat', license: 'SIL OFL 1.1', url: 'https://fonts.google.com/specimen/Caveat' },
 ];
 
-type SectionId = 'workspaces' | 'colors' | 'display' | 'help' | 'ai' | 'system';
+type SectionId = 'workspaces' | 'colors' | 'display' | 'help' | 'ai' | 'system' | 'retention';
 
 /** Blocos com título dentro de um grupo, nesta ordem. Itens sem bloco vêm antes. */
 const SECTIONS: Array<{ id: SectionId; group: GroupId; label: string }> = [
@@ -105,6 +110,7 @@ const SECTIONS: Array<{ id: SectionId; group: GroupId; label: string }> = [
   { id: 'workspaces', group: 'board', label: t('toolbar.sectionWorkspaces') },
   { id: 'display', group: 'board', label: t('toolbar.sectionDisplay') },
   { id: 'colors', group: 'board', label: t('toolbar.sectionColors') },
+  { id: 'retention', group: 'chat', label: t('toolbar.sectionRetention') },
 ];
 
 /** Singular ou plural da chave conforme n. */
@@ -157,6 +163,25 @@ export function SettingsMenu(props: Props) {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, []);
+
+  // Abre num grupo quando outra parte da tela pede (ver openSettings.ts).
+  const [want, setWant] = useState<GroupId | null>(null);
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      setQuery('');
+      setOpen(true);
+      setWant(GROUPS.find((g) => g.id === (e as CustomEvent<string>).detail)?.id ?? null);
+    };
+    window.addEventListener(OPEN_SETTINGS_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, onOpen);
+  }, []);
+  // O painel acabou de montar (ou já estava aberto): rola até o grupo pedido, sem animar, e esquece o pedido.
+  useEffect(() => {
+    if (!open || !want) return;
+    setActive(want);
+    list.current?.querySelector(`[data-group="${want}"]`)?.scrollIntoView({ block: 'start' });
+    setWant(null);
+  }, [open, want]);
 
   // Fecha ao clicar fora e com Esc. Só na busca com texto o Esc limpa primeiro, como no VS Code.
   useEffect(() => {
@@ -624,6 +649,72 @@ function buildSettings(
     });
   }
 
+  // Conversas antigas: arquivar (some da lista, nada se perde) e apagar (de vez, só as do Club), cada um com o seu prazo.
+  if (p.retention) {
+    const r = p.retention;
+    const orderProblem = (archive: number, del: number) => (retentionOrderBroken(archive, del) ? t('toolbar.retentionOrder') : null);
+    out.push(
+      {
+        id: 'retention-archive',
+        group: 'chat',
+        section: 'retention',
+        title: t('toolbar.retentionArchiveTitle'),
+        description: t('toolbar.retentionArchiveDesc'),
+        keywords: t('toolbar.retentionArchiveKeywords'),
+        control: (
+          <ConfigNumberInput
+            field="archiveAfterDays"
+            value={r.archiveAfterDays}
+            normalize={normalizeRetentionDays}
+            min={0}
+            max={RETENTION_DAYS_MAX}
+            step={1}
+            unit={t('toolbar.retentionLabel')}
+            label={t('toolbar.retentionArchiveTitle')}
+            disabled={false}
+            check={(n) => orderProblem(n, r.deleteAfterDays)}
+            onConfig={p.onConfig}
+          />
+        ),
+        advanced: true,
+      },
+      {
+        id: 'retention-delete',
+        group: 'chat',
+        section: 'retention',
+        title: t('toolbar.retentionDeleteTitle'),
+        description: t('toolbar.retentionDeleteDesc'),
+        keywords: t('toolbar.retentionDeleteKeywords'),
+        control: (
+          <ConfigNumberInput
+            field="deleteAfterDays"
+            value={r.deleteAfterDays}
+            normalize={normalizeRetentionDays}
+            min={0}
+            max={RETENTION_DAYS_MAX}
+            step={1}
+            unit={t('toolbar.retentionLabel')}
+            label={t('toolbar.retentionDeleteTitle')}
+            disabled={false}
+            check={(n) => orderProblem(r.archiveAfterDays, n)}
+            onConfig={p.onConfig}
+          />
+        ),
+        advanced: true,
+      },
+      {
+        id: 'retention-state',
+        group: 'chat',
+        section: 'retention',
+        title: t('toolbar.retentionStateTitle'),
+        description: t('toolbar.retentionStateDesc'),
+        keywords: t('toolbar.retentionStateKeywords'),
+        control: <RetentionDelete deleteAfterDays={r.deleteAfterDays} enabledAt={r.retentionDeleteEnabledAt} onConfig={p.onConfig} />,
+        advanced: true,
+      },
+    );
+  }
+
   out.push({
     id: 'roles',
     group: 'roles',
@@ -1082,11 +1173,100 @@ function FreelaArchiveInput({ value, onConfig }: { value: number; onConfig: (c: 
   );
 }
 
-/** Número da config (gate da fila: RAM mínima e teto de conversas; teto por turno); grava ao sair do campo, inválido volta ao salvo. `wide` = campo de até 6 dígitos. */
+/** Data e hora curtas no idioma da tela. */
+const shortWhen = (iso: string) => new Date(iso).toLocaleString(locale(), { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+/** "3 conversas · 2,1 MB", do motor `engine`. */
+const retentionCount = (engine: string, c: { count: number; bytes: number }) =>
+  t(c.count === 1 ? 'toolbar.retentionCountOne' : 'toolbar.retentionCountOther', { engine, n: c.count, size: formatBytes(c.bytes, locale()) });
+
+/**
+ * Exclusão das conversas antigas: mostra se está ligada, deixa ver o que seria apagado e só liga depois dessa prévia,
+ * com confirmação. Desligar vale sempre. A prévia só vale para o prazo com que foi feita (mudou o prazo, vê de novo).
+ */
+function RetentionDelete({ deleteAfterDays, enabledAt, onConfig }: { deleteAfterDays: number; enabledAt: string | null; onConfig: (c: AppConfig) => void }) {
+  const [preview, setPreview] = useState<RetentionPreview | null>(null);
+  const [busy, setBusy] = useState<'preview' | 'enable' | 'disable' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const ready = previewFor(preview, deleteAfterDays);
+  const skipped = ready ? skippedProjects(ready) : [];
+  const total = ready ? previewTotal(ready) : null;
+
+  const run = async (what: NonNullable<typeof busy>, job: () => Promise<void>) => {
+    setBusy(what);
+    setError(null);
+    try {
+      await job();
+    } catch (err) {
+      // Sem pareamento a mensagem vem vazia e o aviso do topo da tela já explica.
+      setError((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const enable = () => {
+    if (!ready) return;
+    const sum = (c: { count: number; bytes: number }) => `${c.count} (${formatBytes(c.bytes, locale())})`;
+    if (!window.confirm(t('toolbar.retentionConfirm', { days: ready.deleteAfterDays, claude: sum(ready.claude), codex: sum(ready.codex) }))) return;
+    void run('enable', async () => {
+      onConfig(await api.retentionEnable());
+      setPreview(null);
+    });
+  };
+
+  return (
+    <div className="retention">
+      <p className="retention-state">
+        <b>{enabledAt ? t('toolbar.retentionOn', { when: shortWhen(enabledAt) }) : t('toolbar.retentionOff')}</b>
+      </p>
+      {deleteAfterDays === 0 && !enabledAt && <p className="muted small">{t('toolbar.retentionNoDays')}</p>}
+      <span className="setting-buttons">
+        <button type="button" className="btn-secondary" disabled={busy !== null || deleteAfterDays === 0} onClick={() => void run('preview', async () => setPreview(await api.retentionPreview()))}>
+          {busy === 'preview' ? t('toolbar.retentionPreviewing') : t('toolbar.retentionPreviewBtn')}
+        </button>
+        {ready && !enabledAt && (
+          <button type="button" className="btn-secondary is-danger" disabled={busy !== null} onClick={enable}>
+            {t('toolbar.retentionEnableBtn')}
+          </button>
+        )}
+        {enabledAt && (
+          <button type="button" className="btn-secondary" disabled={busy !== null} onClick={() => void run('disable', async () => onConfig(await api.retentionDisable()))}>
+            {t('toolbar.retentionDisableBtn')}
+          </button>
+        )}
+      </span>
+      {ready && total && (
+        <div className="retention-preview" role="status">
+          <p>{t('toolbar.retentionPreviewTitle', { days: ready.deleteAfterDays })}</p>
+          {total.count === 0 ? (
+            <p className="muted">{t('toolbar.retentionNothing')}</p>
+          ) : (
+            <>
+              <ul>
+                <li>{retentionCount('Claude', ready.claude)}</li>
+                <li>{retentionCount('Codex', ready.codex)}</li>
+              </ul>
+              {ready.oldest && <p className="muted">{t('toolbar.retentionOldest', { when: new Date(ready.oldest).toLocaleDateString(locale()) })}</p>}
+            </>
+          )}
+          {skipped.length > 0 && <p className="muted">{t('toolbar.retentionSkipped', { list: skipped.join(', ') })}</p>}
+        </div>
+      )}
+      {error && <span className="error small">{error}</span>}
+      <p className="person-note small">{t('toolbar.retentionWarn')}</p>
+    </div>
+  );
+}
+
+/**
+ * Número da config (gate da fila: RAM mínima e teto de conversas; teto por turno; prazos das conversas antigas); grava ao sair do campo,
+ * inválido volta ao salvo. `wide` = campo de até 6 dígitos. `check` recusa o valor antes de gravar (devolve o aviso; o campo volta ao salvo).
+ */
 function ConfigNumberInput({
   field,
   value,
   normalize,
+  check,
   min,
   max,
   step,
@@ -1096,9 +1276,10 @@ function ConfigNumberInput({
   disabled,
   onConfig,
 }: {
-  field: 'minFreeRamGb' | 'maxActiveChats' | 'maxTurnTools' | 'maxTurnMinutes';
+  field: 'minFreeRamGb' | 'maxActiveChats' | 'maxTurnTools' | 'maxTurnMinutes' | 'archiveAfterDays' | 'deleteAfterDays';
   value: number;
   normalize: (raw: string) => number | null;
+  check?: (n: number) => string | null;
   min: number;
   max: number;
   step: number;
@@ -1127,6 +1308,11 @@ function ConfigNumberInput({
           if (n === null) return void (e.target.value = String(value));
           e.target.value = String(n);
           if (n === value) return;
+          const problem = check?.(n);
+          if (problem) {
+            e.target.value = String(value);
+            return setError(problem);
+          }
           setError(null);
           try {
             onConfig(await api.saveConfig({ [field]: n }));

@@ -9,7 +9,7 @@ import type {
   Session,
   UserScope,
 } from '../../../shared/model';
-import type { ToolAdapter } from '../types';
+import type { SessionQuery, ToolAdapter } from '../types';
 import { markDuplicates, readAgentsDir } from './agents';
 import { CostIndex, systemCostsPath } from './costs';
 import { defaultLocations, worktreeParent, type ClaudeLocations } from './paths';
@@ -20,7 +20,7 @@ import {
   type DiscoverOptions,
   type ProjectRef,
 } from './projects';
-import { readLiveSessions, readProjectSessions } from './sessions';
+import { readLiveSessions, readProjectSessions, type SessionListOptions } from './sessions';
 import { readSkillsDir, readSyncedSkills } from './skills';
 
 export interface ClaudeAdapterOptions extends DiscoverOptions {
@@ -40,6 +40,10 @@ export interface ClaudeAdapterOptions extends DiscoverOptions {
    * olham esses). Sem isto, entram todos. Roda junto com a descoberta, dentro do cache.
    */
   onBoard?: (refs: ProjectRef[]) => Promise<ProjectRef[]>;
+  /** Dias de arquivamento da retenção (lidos a cada listagem: a mudança vale sem reiniciar). 0 ou ausente = sem corte. */
+  archiveAfterDays?: () => Promise<number>;
+  /** Conversas que a retenção nunca arquiva, por projeto (a última de cada ficha e as de tarefa não concluída; ver server/retention.ts). */
+  keepSessions?: (projectId: string, projectPath: string) => Promise<ReadonlySet<string>>;
 }
 
 /** Leitura (somente) do que o Claude Code grava em ~/.claude e nas pastas `.claude/` dos projetos. */
@@ -86,16 +90,29 @@ export class ClaudeAdapter implements ToolAdapter {
       .sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? '') || a.name.localeCompare(b.name));
   }
 
-  async getProject(id: string): Promise<ProjectDetail | null> {
+  async getProject(id: string, query: SessionQuery = {}): Promise<ProjectDetail | null> {
     const ref = await this.ref(id);
     if (!ref) return null;
-    const [project, inventory, live] = await Promise.all([
+    const [project, inventory, live, opts] = await Promise.all([
       this.displayNames().then((names) => summarizeProject(this.loc, ref, names[ref.id])),
       this.inventory(ref),
       this.liveById(),
+      this.listOptions(ref, query),
     ]);
-    const sessions = await readProjectSessions(path.join(this.loc.home, 'projects', ref.id), live);
+    const sessions = await readProjectSessions(path.join(this.loc.home, 'projects', ref.id), live, opts);
     return { project, ...inventory, sessions };
+  }
+
+  /**
+   * As opções de listagem: o arquivamento vem do config (lido a cada chamada), salvo `includeOld`. Só com corte ativo é que se
+   * pergunta quais sessões a retenção não pode tirar da lista (`keepSessions`).
+   */
+  private async listOptions(ref: ProjectRef, query: SessionQuery): Promise<SessionListOptions> {
+    const archiveAfterDays = this.opts.archiveAfterDays ? await this.opts.archiveAfterDays() : 0;
+    const includeOld = query.includeOld === true;
+    const cut = !includeOld && archiveAfterDays > 0;
+    const keep = cut && this.opts.keepSessions ? await this.opts.keepSessions(ref.id, ref.path) : undefined;
+    return { archiveAfterDays, includeOld, keep };
   }
 
   async getProjectInventory(id: string): Promise<ProjectInventory | null> {
@@ -132,10 +149,10 @@ export class ClaudeAdapter implements ToolAdapter {
     return readLiveSessions(this.loc.home);
   }
 
-  async getProjectSessions(id: string): Promise<Session[] | null> {
+  async getProjectSessions(id: string, query: SessionQuery = {}): Promise<Session[] | null> {
     const ref = await this.ref(id);
     if (!ref) return null;
-    return readProjectSessions(path.join(this.loc.home, 'projects', ref.id), await this.liveById());
+    return readProjectSessions(path.join(this.loc.home, 'projects', ref.id), await this.liveById(), await this.listOptions(ref, query));
   }
 
   async getCosts(): Promise<CostReport> {

@@ -32,8 +32,8 @@ export interface RoutineSchedulerOptions {
   file: string;
   /** Fichas de todos os projetos (as arquivadas ficam de fora). */
   listStaff: () => Promise<StaffProfile[]>;
-  /** Manda a mensagem da rotina; devolve se começou ou por que foi pulada. */
-  run: (profile: StaffProfile, routine: Routine) => Promise<RoutineOutcome>;
+  /** Manda a mensagem da rotina (ou cria a tarefa, no modo `task`); devolve se começou ou por que foi pulada. `minute`: o minuto que disparou (ver minuteKey). */
+  run: (profile: StaffProfile, routine: Routine, minute: string) => Promise<RoutineOutcome>;
   log?: (line: string) => void;
 }
 
@@ -111,9 +111,10 @@ export class RoutineScheduler {
   private async execute(profile: StaffProfile, r: Routine, now: Date, minute: string | undefined): Promise<RoutineOutcome> {
     let outcome: RoutineOutcome;
     try {
-      outcome = await this.opts.run(profile, r);
+      outcome = await this.opts.run(profile, r, minute ?? minuteKey(now));
     } catch (err) {
-      outcome = { ok: false, text: err instanceof Error ? err.message : String(err) };
+      // Erro do servidor (não é "pulada"): vira aviso na caixa, com esse rótulo para não se confundir com a trava.
+      outcome = { ok: false, text: `erro do servidor: ${err instanceof Error ? err.message : String(err)}` };
     }
     const runs = await this.load();
     runs[routineKey(profile.projectId, profile.id, r.id)] = { at: now.toISOString(), ok: outcome.ok, text: outcome.text, ...(minute && { minute }) };

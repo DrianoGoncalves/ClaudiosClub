@@ -656,8 +656,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <ol class="legend">
       <li><span><b>Barras de consumo</b>: quanto da assinatura já foi usado em 5 h e em 7 dias. <a href="#barras">Ver 6</a></span></li>
       <li><span><b>precisa de mim</b>, com contador: o que espera uma resposta sua. <a href="#precisa-de-mim">Ver 3</a></span></li>
-      <li><span><b>RH</b> (título “Funcionários”): uma linha por pessoa. <a href="#rh">Ver 2</a></span></li>
-      <li><span><b>Ranking</b>: quem mais gasta e quem mais economiza. <a href="#ranking">Ver 6</a></span></li>
+      <li><span><b>RH e ranking</b> (título “Funcionários”): <b class="ui">RH</b> com uma linha por pessoa; <b class="ui">Gastos</b> e <b class="ui">Economia</b> mostram quem mais gasta e quem mais economiza. <a href="#rh">Ver 2</a> e <a href="#ranking">Ver 6</a></span></li>
       <li><span><b>Configurações</b> (engrenagem, ou <kbd>Ctrl</kbd>+<kbd>,</kbd>). <a href="#abrir-config">Ver 7</a></span></li>
       <li><span><b>Abas</b>: <b class="ui">Todos</b>, <b class="ui">Sem workspace</b> e uma por workspace. <a href="#workspaces">Ver 1</a></span></li>
       <li><span><b>Sala do projeto</b>, com os funcionários e o <b>+</b> para contratar. <a href="#contratar">Ver 2</a></span></li>
@@ -665,19 +664,18 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       <li><span><b>Reorganizar o quadro</b>: desfaz os arrastos e refaz a grade na ordem de agora. <a href="#organograma">Ver 2</a></span></li>
       <li><span><b>n sem commit</b> (ou <b>limpo</b>) no selo do projeto. <a href="#sem-commit">Ver 5</a></span></li>
     </ol>
-    <figure class="mock" role="img" aria-label="Ilustração da tela principal: barra do topo com barras de consumo, precisa de mim, RH, Ranking e configurações; abas; uma sala de projeto com funcionários; botões + projeto e Reorganizar o quadro no rodapé.">
+    <figure class="mock" role="img" aria-label="Ilustração da tela principal: barra do topo com barras de consumo, precisa de mim, RH e ranking e configurações; abas; uma sala de projeto com funcionários; botões + projeto e Reorganizar o quadro no rodapé.">
       <div class="s-top">
         <span class="s-meters"><i class="pin in">1</i>Claude <span class="bar"><i style="width:34%"></i></span><small>5h</small> <span class="bar"><i class="mid" style="width:62%"></i></span><small>7d</small></span>
         <span class="mb pn"><i class="pin l">2</i>precisa de mim <span class="cnt">5</span></span>
-        <span class="mb pn"><i class="pin">3</i><svg class="i"><use href="#i-users"/></svg>RH</span>
-        <span class="mb pn"><i class="pin">4</i><svg class="i"><use href="#i-chart"/></svg>Ranking</span>
-        <span class="mb pn"><i class="pin">5</i><svg class="i"><use href="#i-gear"/></svg></span>
+        <span class="mb pn"><i class="pin">3</i><svg class="i"><use href="#i-users"/></svg>RH e ranking</span>
+        <span class="mb pn"><i class="pin">4</i><svg class="i"><use href="#i-gear"/></svg></span>
       </div>
-      <div class="s-tabs pn"><i class="pin l">6</i><span class="on">Todos</span><span>Sem workspace</span><span>Cliente</span></div>
+      <div class="s-tabs pn"><i class="pin l">5</i><span class="on">Todos</span><span>Sem workspace</span><span>Cliente</span></div>
       <div class="s-board">
         <div class="room pn">
-          <i class="pin">7</i>
-          <div class="room-h"><b>Meu site</b><span class="tag sq"><i class="pin in sm" style="margin-right:4px">10</i>2 sem commit</span></div>
+          <i class="pin">6</i>
+          <div class="room-h"><b>Meu site</b><span class="tag sq"><i class="pin in sm" style="margin-right:4px">9</i>2 sem commit</span></div>
           <div class="room-g">
             <div class="cd busy"><span class="port">A</span><span class="cd-t"><b>Ana</b><small>Orquestrador(a)</small></span><span class="plus">+</span></div>
             <div class="cd"><span class="port">D</span><span class="cd-t"><b>Davi</b><small>Front-end</small></span><span class="plus">+</span></div>
@@ -685,8 +683,8 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         </div>
       </div>
       <div class="s-foot">
-        <span class="mb pn"><i class="pin b">8</i>+ projeto</span>
-        <span class="mb pn"><i class="pin b">9</i>Reorganizar o quadro</span>
+        <span class="mb pn"><i class="pin b">7</i>+ projeto</span>
+        <span class="mb pn"><i class="pin b">8</i>Reorganizar o quadro</span>
       </div>
     </figure>
   </div>
@@ -1302,7 +1300,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <h3>RH</h3>
     <div class="split wide-r">
       <ul>
-        <li>Botão <b class="ui">RH</b> na barra do topo (título <b>Funcionários</b>): <b>uma linha por pessoa</b>, com um chip por projeto em que ela tem ficha.</li>
+        <li>Botão <b class="ui">RH e ranking</b> na barra do topo (título <b>Funcionários</b>), aba <b class="ui">RH</b>: <b>uma linha por pessoa</b>, com um chip por projeto em que ela tem ficha. As abas <b class="ui">Gastos</b> e <b class="ui">Economia</b> do mesmo painel são o ranking (capítulo 6).</li>
         <li>Clique na linha ou num chip para editar. Filtre pela busca ou por <b class="ui">Projeto</b>.</li>
         <li>Se houver ficha de mesmo nome em outro projeto, aparece <b class="ui">Unificar</b> (“É a mesma pessoa?”). Ele pede confirmação com <b class="ui">Juntar</b>.</li>
         <li>Em <b class="ui">⋯</b> (ações da pessoa): <b class="ui">Ligar a outra ficha</b>, <b class="ui">Arquivar</b> ou <b class="ui">Desarquivar</b> por projeto, <b class="ui">Separar deste projeto</b> (se estiver em mais de um) e <b class="ui">Excluir</b>.</li>
@@ -2254,17 +2252,17 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <h3>Ranking</h3>
     <div class="split wide-r">
       <ul>
-        <li>O botão <b class="ui">Ranking</b> no topo do quadro abre o painel lateral.</li>
+        <li>O botão <b class="ui">RH e ranking</b> (ícone de pessoas) no topo do quadro abre o painel lateral, com as abas <b class="ui">RH</b>, <b class="ui">Gastos</b> e <b class="ui">Economia</b>.</li>
         <li>Aba <b class="ui">Gastos</b> (“Quem mais gasta”): a parte de cada um no consumo total. Serve para comparar; as sessões rodam pela assinatura.</li>
         <li>Aba <b class="ui">Economia</b> (“Quem mais economiza”): estimativa, comparada com o chefe fazendo tudo no modelo dele.</li>
         <li><b>Período:</b> <b class="ui">Hoje</b>, <b class="ui">7 dias</b>, <b class="ui">1 mês</b>, <b class="ui">Últimos 3 meses</b> (padrão) ou <b class="ui">Tudo</b>.</li>
         <li>Enquanto os transcripts são lidos: “Ainda lendo os transcripts: os números vão crescer.”</li>
         <li>Na aba <b>Gastos</b>, quem tem ficha tem uma <b>lupa</b>: <b class="ui">Analisar o custo de {nome}</b>. Conversa sem ficha (<b class="ui">Freela</b>) só leva ao nó no quadro.</li>
       </ul>
-      <figure class="mock panel" role="img" aria-label="Painel Ranking: abas Gastos e Economia, Período com cinco opções, linhas com a parte de cada um e a lupa Analisar; a linha Freela sem lupa">
-        <div class="mock-t"><svg class="i"><use href="#i-chart"/></svg>Ranking<span class="x"><svg class="i"><use href="#i-x"/></svg></span></div>
+      <figure class="mock panel" role="img" aria-label="Painel RH e ranking: abas RH, Gastos e Economia, Período com cinco opções, linhas com a parte de cada um e a lupa Analisar; a linha Freela sem lupa">
+        <div class="mock-t"><svg class="i"><use href="#i-users"/></svg>RH e ranking<span class="x"><svg class="i"><use href="#i-x"/></svg></span></div>
         <div class="mock-b m-col">
-          <div class="mtabs" style="margin:0"><span class="on">Gastos</span><span>Economia</span></div>
+          <div class="mtabs" style="margin:0"><span>RH</span><span class="on">Gastos</span><span>Economia</span></div>
           <div class="m-row"><span class="m-note">Período</span><span class="mb sm">Hoje</span><span class="mb sm">7 dias</span><span class="mb sm">1 mês</span><span class="mb sm on">Últimos 3 meses</span><span class="mb sm">Tudo</span></div>
           <ul class="mlist">
             <li><span class="port sm">A</span><span class="grow">Ana<br><span class="bar lg"><i class="mid" style="width:62%"></i></span></span><span class="mb sm pn" aria-label="lupa"><svg class="i"><use href="#i-search"/></svg></span></li>
@@ -2783,7 +2781,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       </div>
       <div class="case-body">
         <ol class="steps">
-          <li><p class="st"><b class="ui">Ranking</b> (topo do quadro) → aba <b class="ui">Gastos</b> → escolha o <b class="ui">Período</b> → lupa <b class="ui">Analisar o custo de {nome}</b>.</p></li>
+          <li><p class="st"><b class="ui">RH e ranking</b> (topo do quadro) → aba <b class="ui">Gastos</b> → escolha o <b class="ui">Período</b> → lupa <b class="ui">Analisar o custo de {nome}</b>.</p></li>
           <li><p class="st">Veja os achados por prioridade. Revise as caixas marcadas e clique em <b class="ui">Aplicar sugestões (n)</b> → <b class="ui">Confirmar e aplicar</b>.</p></li>
           <li><p class="st">Na ficha, aba <b class="ui">Ficha</b>, ajuste <b class="ui">Modelo</b> e <b class="ui">Esforço</b> (valem a partir da próxima sessão). Tarefa simples não precisa de Opus.</p></li>
           <li><p class="st"><b class="ui">Configurações</b> → <b class="ui">Consumo</b> → <b class="ui">Orçamento por projeto</b> e <b class="ui">Trava de consumo: 5 horas</b> / <b class="ui">7 dias</b>. Passando da porcentagem, o Club pergunta antes de conversar.</p></li>
@@ -2791,8 +2789,8 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
           <li><p class="st">Dentro de uma conversa grande, clique em <b class="ui">Compactar</b> para liberar contexto. Para começar do zero, use <b>+</b> (Nova conversa) no painel do funcionário; a ficha e a memória continuam.</p></li>
         </ol>
         <div class="case-side">
-          <figure class="mock panel" role="img" aria-label="Ranking: campo Período, uma linha de funcionário com a lupa de análise e o botão Aplicar sugestões (n)">
-            <div class="mock-t"><svg class="i"><use href="#i-chart"/></svg>Ranking</div>
+          <figure class="mock panel" role="img" aria-label="RH e ranking: campo Período, uma linha de funcionário com a lupa de análise e o botão Aplicar sugestões (n)">
+            <div class="mock-t"><svg class="i"><use href="#i-users"/></svg>RH e ranking</div>
             <div class="mock-b m-col">
               <div><span class="ml">Período</span><span class="mf sel"></span></div>
               <ul class="mlist"><li><span class="port sm">F</span><span class="grow">Funcionário</span><span class="mb sm"><svg class="i"><use href="#i-search"/></svg></span></li></ul>

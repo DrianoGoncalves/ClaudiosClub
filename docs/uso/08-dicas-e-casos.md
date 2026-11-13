@@ -138,7 +138,7 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 
 **Quem contratar:** nenhum. Ajuste as fichas que já existem. O **Orquestrador(a)** e o **Arquiteto(a)** (Opus, High) são os mais caros: use-os para dividir e planejar, não para tarefa simples.
 
-1. **Ranking** (topo do quadro) → aba **Gastos** → escolha o **Período** → lupa **Analisar o custo de {nome}**.
+1. **RH e ranking** (topo do quadro) → aba **Gastos** → escolha o **Período** → lupa **Analisar o custo de {nome}**.
 2. Veja os achados por prioridade. Revise as caixas marcadas e clique em **Aplicar sugestões (n)** → **Confirmar e aplicar**.
 3. Na ficha, aba **Ficha**, ajuste **Modelo** e **Esforço** (valem a partir da próxima sessão). Tarefa simples não precisa de Opus.
 4. **Configurações** → **Consumo** → **Orçamento por projeto** e **Trava de consumo: 5 horas** / **7 dias**. Passando da porcentagem, o Club pergunta antes de conversar.
@@ -148,7 +148,7 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 **Conferir no fim:**
 
 - o anel de contexto da conversa baixou;
-- as barras 5h e 7d estão em verde (abaixo de 50%);
+- as barras 5h e 7d estão em verde (abaixo de 70%);
 - a ficha mostra o modelo e o esforço novos.
 
 ## Dicas

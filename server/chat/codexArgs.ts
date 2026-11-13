@@ -213,6 +213,8 @@ export interface CodexMcpServer {
   args: string[];
   /** Pasta do processo do MCP (o ROOT do Claudio’s Club, fora do projeto da conversa). Sem ela, o Codex usa a pasta de trabalho. */
   cwd?: string;
+  /** Ferramentas que a conversa não vê (política da ficha, ver server/staff/mcpPolicy.ts): `disabled_tools`. */
+  disabledTools?: string[];
 }
 
 /** Nome do MCP de SSH na configuração do Codex (`mcp_servers.<nome>`). É o mesmo do Claude (`SSH_MCP_NAME`, em server/staff/sshMcp.ts). */
@@ -230,6 +232,8 @@ function codexMcpArgs(name: string, s: CodexMcpServer | null | undefined): strin
     '-c', `${key}.args=[${s.args.map((a) => tomlString(a)).join(',')}]`,
     ...(s.cwd ? ['-c', `${key}.cwd=${tomlString(s.cwd.replace(/\\/g, '/'))}`] : []),
     '-c', `${key}.default_tools_approval_mode=${tomlString('approve')}`,
+    // Ferramentas desligadas pela ficha: o Codex não as oferece à conversa (não é a allowlist do Chrome, que segue como está).
+    ...(s.disabledTools?.length ? ['-c', `${key}.disabled_tools=[${s.disabledTools.map((t) => tomlString(t)).join(',')}]`] : []),
   ];
 }
 
@@ -295,6 +299,8 @@ export interface CodexSpawn {
   mycoUrl: string;
   /** Onde o thread_id é gravado (e lido ao reabrir). */
   threadFile: string;
+  /** Chamado quando o Codex dá o thread_id desta conversa (o registro de conversas do Club anota; ver sessionsRegistry.ts). */
+  onThread?: (threadId: string) => void;
   /** "Permitir acesso à internet", lida a cada execução (ver `CodexProcess`). Ausente = desligada. */
   internetAccess?: () => Promise<boolean>;
   /** MCP de SSH da ficha (conexões SSH), ou null: sem ele. Ver `codexSshMcpArgs`. */

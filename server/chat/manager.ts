@@ -1025,6 +1025,11 @@ export class ChatManager {
     return out;
   }
 
+  /** Conversas com processo aberto, em turno ou ociosas (a exclusão da retenção não mexe nelas). */
+  runningSessionIds(): string[] {
+    return [...this.chats.values()].filter((c) => c.running).map((c) => c.sessionId);
+  }
+
   /** Fecha todas as conversas e espera os processos saírem (o Claudio’s Club vai parar ou reiniciar). */
   async stopAll(): Promise<void> {
     await Promise.all([...this.chats.values()].map((c) => c.stopAndWait()));
@@ -1117,6 +1122,7 @@ export class ChatManager {
           secrets: codex.secrets,
           threadId: codex.threadId,
           threadFile: codex.threadFile,
+          onThread: codex.onThread,
           mycoUrl: codex.mycoUrl,
           models: this.opts.codexModels,
           env: this.opts.codexEnv,

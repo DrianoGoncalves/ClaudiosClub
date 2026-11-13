@@ -34,9 +34,11 @@ function world(sessions: Session[], opts: { owned?: string[]; alive?: string[]; 
     configFile: file,
     adapter: {
       listProjects: async () => [project],
-      getProjectSessions: async () => {
+      getProjectSessions: async (_id: string, query?: { includeOld?: boolean }) => {
         if (opts.failList) throw new Error('falhou');
-        return state.sessions;
+        // Como o adapter real: sem includeOld, a retenção (7 dias) esconde as antigas.
+        if (query?.includeOld) return state.sessions;
+        return state.sessions.filter((s) => Date.parse(s.updatedAt) >= NOW.getTime() - 7 * 86_400_000);
       },
       listLiveSessions: async () => (opts.alive ?? []).map((sessionId) => ({ sessionId, alive: true }) as LiveSession),
     },
@@ -63,6 +65,11 @@ describe('varredura de freelas', () => {
     const c = await readConfig(file);
     expect(c.archived.sessions).toEqual(['velho']);
     expect(c.freelaAutoArchived).toEqual({ velho: daysAgo(5) });
+  });
+
+  it('a varredura vê as antigas (includeOld): freela parada há 10 dias é arquivado mesmo com o corte da listagem', async () => {
+    const { deps } = world([session('velho10', daysAgo(10))]);
+    expect(await sweepFreelas(deps, NOW)).toEqual(['velho10']);
   });
 
   it('usa o N configurado e 0 desliga', async () => {

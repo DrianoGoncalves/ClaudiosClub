@@ -34,7 +34,7 @@ async function ftpNames(projectPath: string, vault?: VaultOptions): Promise<stri
 import type { ToolAdapter } from '../adapters/types';
 import { effectiveBrowser } from '../browser';
 import { MYCO_HOME, readConfig, setArchived, workspaceOf } from '../config';
-import { librarySkillsOf } from '../skillLibrary';
+import { LIBRARY_DIR, librarySkillsOf } from '../skillLibrary';
 import { listRoles } from '../roles';
 import { readUsage } from '../usage';
 import { atMostAutonomy } from '../taskFallback';
@@ -45,7 +45,9 @@ import type { CodexEnvStatus } from '../codexEnv';
 import type { CodexModelsResult } from '../codexModels';
 import { readCodexThread } from '../chat/codexProcess';
 import { buildClaudeArgs, capAutonomy } from './ficha';
+import { capMcpPolicy } from './mcpPolicy';
 import { greeting, prepareCodexRun, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
+import { attachThreadId, recordSession, type NewRegisteredSession } from '../sessionsRegistry';
 import { ensureWorktree, worktreeFor, type Worktree } from './worktree';
 import { listMcpServers } from './mcp';
 import { readSeal, sealViolation, writeSeal } from './seal';
@@ -76,6 +78,7 @@ import {
   withProfileLock,
   writeAtomic,
 } from './store';
+import { buildTeamExport, planTeamImport, type TeamFile } from './teamExport';
 
 /** Uma ficha na lista de todas as empresas (para copiar). Só estes campos: nada de memória, regras ou servidores. */
 export interface StaffDirectoryPerson {
@@ -185,6 +188,11 @@ function insideDir(dir: string, child: string): boolean {
 
 export interface StaffServiceOptions {
   runDir: string;
+  /**
+   * Registro das conversas lançadas pelo Club (sessions-registry.json em MYCO_HOME; ver sessionsRegistry.ts). Sem ele, o lançamento
+   * não grava nada (o `index.ts` liga o padrão; os testes não tocam na pasta do usuário).
+   */
+  sessionsFile?: string;
   claudeConfigFile: string;
   /** Endereço do Claudio’s Club para as conversas do Claude (http://127.0.0.1:<porta>), nos textos da ficha. */
   mycoUrl: string;
@@ -364,6 +372,7 @@ export class StaffService {
       input.canHire = false; // subfuncionário contratado por outro não contrata em cascata
       input.servers = input.servers.filter((s) => hirer.servers.includes(s)); // nem acessa servidor que o gestor não acessa
       input.browser = input.browser && hirer.browser; // nem usa o navegador se o gestor não usa
+      input.mcpPolicy = capMcpPolicy(input.mcpPolicy, hirer.mcpPolicy); // nem ferramenta MCP mais solta que a do gestor
       if (hirer.mcps !== null) {
         // Nem MCP que o gestor não usa (se o gestor tem todos, `null`, o pedido vale como veio).
         const allowed = hirer.mcps;
@@ -399,7 +408,8 @@ export class StaffService {
     if (input.adoptSessionId) {
       if (!fromBrowser) throw new StaffError('só pelo Claudio’s Club');
       const sessionId = input.adoptSessionId;
-      const session = ((await this.adapter.getProjectSessions(project.id)) ?? []).find((s) => s.id === sessionId);
+      // Adotar é de qualquer data: a sessão antiga também entra (includeOld).
+      const session = ((await this.adapter.getProjectSessions(project.id, { includeOld: true })) ?? []).find((s) => s.id === sessionId);
       if (!session) throw new StaffError('sessão não encontrada neste projeto');
       const owner = (await listProjectStaff(project.path, project.id)).find((s) => s.sessions.some((x) => x.id === sessionId));
       if (owner) throw new StaffError(`essa sessão já é de ${owner.name}`);
@@ -514,6 +524,7 @@ export class StaffService {
       servers: [],
       sshWrite: [],
       browser: src.browser,
+      ...(src.mcpPolicy && { mcpPolicy: src.mcpPolicy }),
       portraitDataUrl: portrait ? `data:${portrait.type};base64,${portrait.bytes.toString('base64')}` : null,
     };
     const now = new Date();
@@ -537,6 +548,76 @@ export class StaffService {
     await ensureMemory(target.path, profile);
     await writeFicha(profile, await this.context(target, profile));
     return { profile };
+  }
+
+  /**
+   * Exporta fichas (`ids`; sem ids = as ativas, não arquivadas nem encerradas) com as skills da biblioteca que usam
+   * (ver teamExport.ts). Só leitura; o arquivo não tem segredo nem o que é deste projeto ou da máquina.
+   */
+  async exportTeam(projectId: string, ids: string | null): Promise<TeamFile | null> {
+    const project = await this.project(projectId);
+    if (!project) return null;
+    const all = await listProjectStaff(project.path, projectId);
+    const picked: StaffProfile[] = [];
+    if (ids === null) {
+      for (const p of all) if (!p.ended && !(await this.archive.has(`staff:${p.id}`))) picked.push(p);
+    } else {
+      const wanted = [...new Set(ids.split(',').map((s) => s.trim()).filter(Boolean))];
+      if (!wanted.length || wanted.length > 100) throw new StaffError('informe de 1 a 100 ids de ficha');
+      for (const id of wanted) {
+        const found = all.find((p) => p.id === id);
+        if (!found) throw new StaffError(`ficha não encontrada: ${id.slice(0, 40)}`);
+        picked.push(found);
+      }
+    }
+    if (!picked.length) throw new StaffError('nenhuma ficha ativa para exportar');
+    return buildTeamExport(picked, { libraryDir: LIBRARY_DIR });
+  }
+
+  /**
+   * Importa um arquivo de equipe (só pelo Claudio’s Club). Tudo ou nada: o arquivo inteiro é conferido por `planTeamImport`
+   * antes; depois só grava (skills novas, fichas com id novo, com o .md e a memória). Nada é iniciado: sem conversa.
+   * Se a gravação falhar no meio, o que já foi criado nesta importação sai de volta.
+   */
+  async importTeam(projectId: string, body: unknown, fromBrowser: boolean): Promise<{ created: string[]; warnings: string[] } | null> {
+    if (!fromBrowser) throw new StaffError('só pelo Claudio’s Club');
+    const project = await this.project(projectId);
+    if (!project) return null;
+    const localMcps = ((await this.listMcp(projectId)) ?? []).map((m) => m.name);
+    const plan = await planTeamImport(body, { localMcps });
+
+    const created: string[] = [];
+    const skillDirs: string[] = [];
+    const refIds = new Map<string, string>();
+    const now = new Date();
+    try {
+      for (const s of plan.skills) {
+        const dir = path.join(LIBRARY_DIR, s.name);
+        skillDirs.push(dir);
+        for (const f of s.files) await writeAtomic(path.join(dir, ...f.path.split('/')), f.content);
+      }
+      for (const p of plan.staff) {
+        const profile = await createProfile(project.path, projectId, { ...p.input, reportsTo: p.reportsTo.map((r) => refIds.get(r)!) }, now);
+        created.push(profile.id);
+        refIds.set(p.ref, profile.id);
+        let saved = profile;
+        if (p.routines.length) {
+          saved = { ...profile, routines: p.routines };
+          await saveProfile(project.path, saved);
+        }
+        await this.seal(project, saved);
+        await this.checkCodexModel(saved.engine, saved.model);
+        await ensureMemory(project.path, saved);
+        await writeFicha(saved, await this.context(project, saved));
+      }
+    } catch (err) {
+      for (const id of created) {
+        for (const file of [profileFile(project.path, id), fichaFile(project.path, id), memoryFile(project.path, id)]) await fs.rm(file, { force: true }).catch(() => undefined);
+      }
+      for (const dir of skillDirs) await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      throw err;
+    }
+    return { created, warnings: plan.warnings };
   }
 
   /**
@@ -784,7 +865,8 @@ export class StaffService {
     for (const project of (await this.adapter.listProjects()).filter((p) => p.exists)) {
       const temps = (await listProjectStaff(project.path, project.id)).filter((s) => s.temporary);
       if (!temps.length) continue;
-      const sessions = (await this.adapter.getProjectSessions(project.id).catch(() => null)) ?? [];
+      // A data real de cada uma (inclusive as antigas): a limpeza de temporários não depende da retenção.
+      const sessions = (await this.adapter.getProjectSessions(project.id, { includeOld: true }).catch(() => null)) ?? [];
       const touched = new Map(sessions.map((s) => [s.id, s.updatedAt]));
       for (const s of temps) {
         if ((await this.archive.has(`staff:${s.id}`)) || this.opts.isWorking?.(project.id, s.id)) continue;
@@ -1003,6 +1085,21 @@ export class StaffService {
    * pasta da original.
    * `engineOverride`: a conversa roda no motor/modelo secundário (ver `asEngine`); a ficha gravada não muda.
    */
+  /**
+   * Anota no registro (sessionsRegistry.ts) a conversa que o Club acabou de lançar. Falha de gravação não derruba o lançamento:
+   * a conversa só fica fora da exclusão futura, e o aviso vai para o log.
+   */
+  private async registerLaunch(s: NewRegisteredSession): Promise<void> {
+    const file = this.opts.sessionsFile;
+    if (!file) return;
+    await recordSession(s, file).catch((err) => this.warnRegistry(s.sessionId, err));
+  }
+
+  private warnRegistry(sessionId: string, err: unknown): void {
+    const warn = this.opts.log ?? ((line: string) => console.warn(`[staff] ${line}`));
+    warn(`registro de conversas: ${sessionId} não foi anotada (${err instanceof Error ? err.message : String(err)})`);
+  }
+
   async chatSpawn(
     projectId: string,
     sessionId: string | null,
@@ -1015,11 +1112,13 @@ export class StaffService {
     if (!staffId) {
       if (forkFrom) {
         const id = randomUUID();
+        await this.registerLaunch({ sessionId: id, engine: 'claude', projectPath: project.path, cwd: project.path });
         return { sessionId: id, cwd: project.path, args: ['--resume', forkFrom, '--fork-session', '--session-id', id, '--permission-mode', 'manual'] };
       }
       if (sessionId) return { sessionId, cwd: project.path, args: ['--resume', sessionId, '--permission-mode', 'manual'] };
       // Conversa nova sem ficha (ex.: a anterior ficou pesada): começa vazia, na pasta do projeto, pedindo antes de agir.
       const id = randomUUID();
+      await this.registerLaunch({ sessionId: id, engine: 'claude', projectPath: project.path, cwd: project.path });
       return { sessionId: id, cwd: project.path, args: ['--session-id', id, '--permission-mode', 'manual'] };
     }
     let profile = await readProfile(project.path, staffId);
@@ -1064,6 +1163,9 @@ export class StaffService {
         const fresh = (await readProfile(project.path, staffId)) ?? profile;
         await saveProfile(project.path, { ...fresh, projectId, sessions: [...fresh.sessions, entry], updatedAt: now });
       });
+      // Conversa nova de ficha (inclusive a duplicada e a do secundário): entra no registro. Reabrir não entra (ver registerLaunch).
+      // `cwd` é a pasta real da sessão (a worktree, quando roda noutra pasta que o projeto).
+      await this.registerLaunch({ sessionId: id, engine: codex ? 'codex' : 'claude', projectPath: project.path, cwd, staffId });
     }
     // Com `engineOverride`, o modelo e o esforço são os do secundário (a escolha gravada na conversa não entra: ela é do principal).
     const effective: StaffProfile = {
@@ -1087,6 +1189,11 @@ export class StaffService {
         secrets: { projectPath: project.path, home: os.homedir(), mycoHome: MYCO_HOME },
         threadId: resume ? await readCodexThread(codexRun.threadFile) : null,
         threadFile: codexRun.threadFile,
+        // O thread_id vai para o registro quando o Codex o dá (só atualiza a conversa já registrada).
+        onThread: (threadId) => {
+          const file = this.opts.sessionsFile;
+          if (file) void attachThreadId(id, threadId, file).catch((err) => this.warnRegistry(id, err));
+        },
         mycoUrl: ctx.mycoUrl,
         // Lida a cada execução (não só ao abrir a conversa): a Configuração vale na próxima mensagem.
         internetAccess: async () => (await readConfig()).internetAccess,

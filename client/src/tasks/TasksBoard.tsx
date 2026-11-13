@@ -10,6 +10,8 @@ import { ReviewDelegate } from './ReviewDelegate';
 import { TaskCodePanel } from './TaskCodePanel';
 import { DoubtBadge, DoubtBlock } from './TaskDoubt';
 import { ResourceWaitBadge, resourceWaitText } from './ResourceWait';
+import { BlockedBadge, BlockedByField, openBlockers, sameDeps } from './TaskDeps';
+import { TaskRuns } from './TaskRuns';
 
 // Quadro de tarefas de um projeto: aguardar → a fazer → fazendo → revisão → pronto.
 // Os status são 6 (ver server/tasks.ts); na tela, "planejando" vai em Fazendo.
@@ -26,6 +28,9 @@ type Task = TaskModel & {
 };
 type TaskPatch = Parameters<typeof api.updateTask>[2];
 const REVIEW_ROUNDS_MAX = 3;
+/** Limites do servidor (TaskInput em server/tasks.ts). */
+const GOAL_MAX = 300;
+const ACCEPTANCE_MAX = 2000;
 
 /** Colunas do quadro: o status de quem é soltado nela e os que ela mostra. */
 const COLUMNS: { status: TaskStatus; shows: TaskStatus[] }[] = [
@@ -148,6 +153,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose, selected]);
 
+  // O erro de uma tarefa não segue para a próxima.
+  useEffect(() => setError(null), [selected]);
+
   const act = async (fn: () => Promise<unknown>) => {
     setError(null);
     try {
@@ -174,6 +182,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     tasks?.find((o) => o.id !== t.id && o.staffId === t.staffId && o.sessionId && (o.status === 'doing' || o.status === 'planning')) ?? null;
   /** Posição na fila dele (1 = a próxima), na ordem do quadro. */
   const queuePos = (t: Task) => (t.queuedAt ? (tasks ?? []).filter((o) => o.staffId === t.staffId && o.queuedAt && !o.sessionId).indexOf(t) + 1 : 0);
+  /** As dependências que seguram a tarefa (só a que ainda não começou espera por elas). */
+  const waitingOn = (t: Task) => (!t.sessionId && (t.status === 'todo' || t.status === 'waiting') ? openBlockers(t, tasks ?? []) : []);
   /** Pronto parado há mais de 7 dias (o servidor marca): fora do quadro, atrás do "Ver arquivadas". */
   const archived = (tasks ?? []).filter((t) => t.archived);
 
@@ -210,7 +220,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
           </span>
         )}
         {task.fallback && <TaskFallbackBadge fallback={task.fallback} />}
-        {queuePos(task) > 0 && (
+        {/* Esperando dependência: o selo diz por quais tarefas; na fila ou não, ela só começa quando ficarem prontas. */}
+        <BlockedBadge blockers={waitingOn(task)} />
+        {queuePos(task) > 0 && !waitingOn(task).length && (
           <span className="task-queue small" title={t('tasks.queuedHint')}>
             {t('tasks.queuePos', { pos: queuePos(task) })}
           </span>
@@ -262,18 +274,28 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             </button>
           </span>
         </header>
-        {error && <p className="error small">{error}</p>}
+        {/* Com o detalhe aberto o erro aparece nele: no celular o detalhe cobre o quadro inteiro. */}
+        {error && !current && <p className="error small" role="alert">{error}</p>}
         {adding && (
           <TaskForm
             staff={byHierarchy(staff)}
+            tasks={tasks ?? []}
             onCancel={() => setAdding(false)}
             onSave={async (input, andStart) => {
-              await act(async () => {
+              setError(null);
+              let made: TaskModel | null;
+              try {
                 // Só criar (start false): a tarefa fica em Aguardar.
-                const t = await api.createTask(projectId, { ...input, start: andStart });
-                if (andStart && t?.staffId) await withUsageConfirm((force) => api.startTask(projectId, t.id, force));
-              });
+                made = await api.createTask(projectId, { ...input, start: andStart });
+              } catch (e) {
+                // Recusada (ex.: dependência que não existe): o formulário fica aberto, com o que foi digitado.
+                setError((e as Error).message);
+                return;
+              }
               setAdding(false);
+              await act(async () => {
+                if (andStart && made?.staffId) await withUsageConfirm((force) => api.startTask(projectId, made!.id, force));
+              });
             }}
           />
         )}
@@ -339,6 +361,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             onSave={(patch) => act(() => api.updateTask(projectId, current.id, patch as TaskPatch))}
             onMove={(s) => void move(current, s)}
             onStart={() => void start(current)}
+            error={error}
+            tasks={tasks ?? []}
+            waitingOn={waitingOn(current)}
             busyWith={busyWith(current)}
             queuePos={queuePos(current)}
             onUnqueue={() => void act(() => api.updateTask(projectId, current.id, { queued: false }))}
@@ -431,24 +456,70 @@ function ReviewerField({
   );
 }
 
+/** Meta e critério de aceite: o servidor aceita vazio (= sem), então só vão os preenchidos. */
+function GoalFields({
+  goal,
+  acceptance,
+  onGoal,
+  onAcceptance,
+}: {
+  goal: string;
+  acceptance: string;
+  onGoal: (v: string) => void;
+  onAcceptance: (v: string) => void;
+}) {
+  return (
+    <>
+      <label title={t('tasks.goalHint')}>
+        {t('tasks.fieldGoal')}
+        <input value={goal} maxLength={GOAL_MAX} placeholder={t('tasks.goalPlaceholder')} onChange={(e) => onGoal(e.target.value)} />
+      </label>
+      <label title={t('tasks.acceptanceHint')}>
+        {t('tasks.fieldAcceptance')}
+        <textarea rows={3} value={acceptance} maxLength={ACCEPTANCE_MAX} placeholder={t('tasks.acceptancePlaceholder')} onChange={(e) => onAcceptance(e.target.value)} />
+      </label>
+    </>
+  );
+}
+
 function TaskForm({
   staff,
+  tasks,
   onSave,
   onCancel,
 }: {
   staff: StaffProfile[];
-  onSave: (input: { title: string; description: string; staffId: string | null; reviewerId: string | null }, andStart: boolean) => Promise<void>;
+  /** As outras tarefas do projeto (para marcar "Bloqueada por"). */
+  tasks: Task[];
+  onSave: (
+    input: { title: string; description: string; staffId: string | null; reviewerId: string | null; goal?: string; acceptance?: string; blockedBy?: string[] },
+    andStart: boolean,
+  ) => Promise<void>;
   onCancel: () => void;
 }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [staffId, setStaffId] = useState<string>(staff[0]?.id ?? '');
   const [reviewerId, setReviewerId] = useState<string | null>(null);
+  const [goal, setGoal] = useState('');
+  const [acceptance, setAcceptance] = useState('');
+  const [blockedBy, setBlockedBy] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const submit = async (andStart: boolean) => {
     if (!title.trim()) return;
     setBusy(true);
-    await onSave({ title: title.trim(), description: description.trim(), staffId: staffId || null, reviewerId }, andStart);
+    await onSave(
+      {
+        title: title.trim(),
+        description: description.trim(),
+        staffId: staffId || null,
+        reviewerId,
+        ...(goal.trim() && { goal: goal.trim() }),
+        ...(acceptance.trim() && { acceptance: acceptance.trim() }),
+        ...(blockedBy.length && { blockedBy }),
+      },
+      andStart,
+    );
     setBusy(false);
   };
   return (
@@ -486,6 +557,14 @@ function TaskForm({
         </select>
       </label>
       <ReviewerField staff={staff} ownerId={staffId || null} value={reviewerId} onChange={setReviewerId} />
+      {/* Opcionais, recolhidos: o formulário curto basta para a maioria das tarefas. */}
+      <details className="collapse task-form-more">
+        <summary>{t('tasks.formMore')}</summary>
+        <div className="task-form-more-body">
+          <GoalFields goal={goal} acceptance={acceptance} onGoal={setGoal} onAcceptance={setAcceptance} />
+          <BlockedByField tasks={tasks} selfId={null} value={blockedBy} labels={LABEL} onChange={setBlockedBy} />
+        </div>
+      </details>
       <p className="actions">
         <button type="submit" className="btn-primary" disabled={busy || !title.trim() || !staffId} title={t('tasks.createHint')}>
           {t('tasks.createAndStart')}
@@ -510,6 +589,9 @@ function TaskDetail({
   onSave,
   onMove,
   onStart,
+  error,
+  tasks,
+  waitingOn,
   busyWith,
   queuePos,
   onUnqueue,
@@ -525,9 +607,15 @@ function TaskDetail({
   onChanged: () => void;
   onOpenStaff: (staffId: string) => void;
   onClose: () => void;
-  onSave: (patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'pr' | 'branch' | 'reviewerId'>>) => Promise<void>;
+  onSave: (patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'pr' | 'branch' | 'reviewerId' | 'goal' | 'acceptance' | 'blockedBy'>>) => Promise<void>;
   onMove: (s: TaskStatus) => void;
   onStart: () => void;
+  /** O erro da última ação (ex.: dependência em ciclo, apagar tarefa de que outra depende): aparece aqui, onde o dedo está. */
+  error: string | null;
+  /** Todas as tarefas do projeto (as candidatas a dependência). */
+  tasks: Task[];
+  /** As dependências que ainda seguram esta tarefa. */
+  waitingOn: { id: string; title: string }[];
   /** A tarefa em que o responsável está agora (aí "Começar" põe na fila). */
   busyWith: Task | null;
   queuePos: number;
@@ -538,7 +626,13 @@ function TaskDetail({
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
   const [pr, setPr] = useState(task.pr ?? '');
-  const dirty = title !== task.title || description !== task.description || pr !== (task.pr ?? '');
+  const [goal, setGoal] = useState(task.goal ?? '');
+  const [acceptance, setAcceptance] = useState(task.acceptance ?? '');
+  const [blockedBy, setBlockedBy] = useState(task.blockedBy ?? []);
+  const goalChanged = goal.trim() !== (task.goal ?? '');
+  const acceptanceChanged = acceptance.trim() !== (task.acceptance ?? '');
+  const depsChanged = !sameDeps(blockedBy, task.blockedBy ?? []);
+  const dirty = title !== task.title || description !== task.description || pr !== (task.pr ?? '') || goalChanged || acceptanceChanged || depsChanged;
   const who = staff.find((s) => s.id === task.staffId);
   return (
     <aside className="task-detail">
@@ -555,6 +649,12 @@ function TaskDetail({
           ×
         </button>
       </header>
+      {/* Gruda no topo ao rolar: o botão que falhou (Salvar, Apagar) pode estar longe daqui. */}
+      {error && (
+        <p className="error small task-detail-error" role="alert">
+          {error}
+        </p>
+      )}
       <label>
         {t('tasks.fieldTitle')}
         <input value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} />
@@ -563,6 +663,8 @@ function TaskDetail({
         {t('tasks.description')}
         <textarea rows={4} value={description} maxLength={8000} onChange={(e) => setDescription(e.target.value)} />
       </label>
+      <GoalFields goal={goal} acceptance={acceptance} onGoal={setGoal} onAcceptance={setAcceptance} />
+      <BlockedByField tasks={tasks} selfId={task.id} value={blockedBy} labels={LABEL} onChange={setBlockedBy} />
       <label>
         {t('tasks.fieldOwner')}
         <select
@@ -588,7 +690,20 @@ function TaskDetail({
       </label>
       {dirty && (
         <p className="actions">
-          <button className="btn-primary" onClick={() => void onSave({ title, description, pr: pr || null })}>
+          <button
+            className="btn-primary"
+            onClick={() =>
+              void onSave({
+                title,
+                description,
+                pr: pr || null,
+                // Só o que mudou: o servidor confere dependência (existe? faz ciclo?) a cada envio.
+                ...(goalChanged && { goal: goal.trim() || null }),
+                ...(acceptanceChanged && { acceptance: acceptance.trim() || null }),
+                ...(depsChanged && { blockedBy }),
+              })
+            }
+          >
             {t('tasks.save')}
           </button>
         </p>
@@ -620,7 +735,17 @@ function TaskDetail({
         nameOf={(id) => staff.find((s) => s.id === id)?.name ?? null}
         now={Date.now()}
       />
-      {queuePos > 0 && (
+      {waitingOn.length > 0 && (
+        <p className="muted small">
+          {t('tasks.blockedDetail', { names: waitingOn.map((o) => `“${o.title}”`).join(', ') })}{' '}
+          {queuePos > 0 && (
+            <button className="link small" onClick={onUnqueue}>
+              {t('tasks.unqueue')}
+            </button>
+          )}
+        </p>
+      )}
+      {queuePos > 0 && waitingOn.length === 0 && (
         <p className="muted small">
           {busyWith
             ? t('tasks.queueBusy', { who: who?.name ?? t('tasks.ownerFallback'), pos: queuePos, title: busyWith.title })
@@ -650,12 +775,14 @@ function TaskDetail({
             title={
               !task.staffId
                 ? t('tasks.pickOwner')
-                : busyWith
-                  ? t('tasks.startBusyHint', { who: who?.name ?? '', title: busyWith.title })
-                  : t('tasks.startHint', { who: who?.name ?? '' })
+                : waitingOn.length
+                  ? t('tasks.startBlockedHint')
+                  : busyWith
+                    ? t('tasks.startBusyHint', { who: who?.name ?? '', title: busyWith.title })
+                    : t('tasks.startHint', { who: who?.name ?? '' })
             }
           >
-            {busyWith ? t('tasks.enqueue') : t('tasks.start')}
+            {busyWith || waitingOn.length ? t('tasks.enqueue') : t('tasks.start')}
           </button>
         )}
         {task.sessionId && who && (
@@ -704,6 +831,7 @@ function TaskDetail({
           ))}
         </ul>
       </details>
+      <TaskRuns projectId={projectId} taskId={task.id} version={`${task.updatedAt}:${task.runId ?? ''}`} />
       <p className="actions">
         <button className="btn-secondary task-delete" onClick={onDelete}>
           {t('tasks.deleteTask')}

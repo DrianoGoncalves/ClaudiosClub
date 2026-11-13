@@ -3,13 +3,14 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { StaffProfile } from '../shared/model';
 import { ChatClosingError, ChatManager, PLAN_REJECTED_MESSAGE } from '../server/chat/manager';
 import { parseVerdict, TaskConflictError, TaskForbiddenError, TaskService } from '../server/tasks';
 import type { Reservation } from '../server/resourceGate';
 import { cleanRunDir } from '../server/runCleanup';
 import { UsageStopError } from '../server/usageStop';
+import { readRuns } from '../server/taskRuns';
 import { REQUESTER_ASK_INTERVAL_MS, REQUESTER_ASK_MAX_BYTES, RequesterAskLimiter } from '../server/chat/requesterAsk';
 import { isUnverifiedOrigin, staffOrigin } from '../server/chat/origin';
 
@@ -408,6 +409,114 @@ describe('tarefa pedida por um gestor', () => {
     expect((await svc.taskOfWork('p', 'sess-1'))?.id).toBe(t.id);
     expect(await svc.taskOfWork('p', 'outra-conversa')).toBeNull();
     expect(await svc.taskOfWork('outro', 'sess-1')).toBeNull();
+  });
+});
+
+describe('meta e critério de aceite', () => {
+  it('vão ao funcionário depois da descrição; sem eles, o texto segue como antes', async () => {
+    const { svc, sent } = service('meta-texto');
+    const t = (await svc.create('p', { title: 'Login', description: 'Trocar a senha.', goal: 'Menos chamados de senha', acceptance: 'O teste de troca passa.', staffId: 'ana-1' }))!;
+    expect(t).toMatchObject({ goal: 'Menos chamados de senha', acceptance: 'O teste de troca passa.' });
+    await svc.start('p', t.id);
+    const text = sent[0]!.text;
+    expect(text.indexOf('Meta: Menos chamados de senha')).toBeGreaterThan(text.indexOf('Trocar a senha.'));
+    expect(text.indexOf('Critério de aceite: O teste de troca passa.')).toBeGreaterThan(text.indexOf('Meta: Menos'));
+    const outro = service('meta-nada');
+    await outro.svc.start('p', (await outro.svc.create('p', { title: 'Sem nada', staffId: 'ana-1' }))!.id);
+    expect(outro.sent[0]!.text).not.toMatch(/Meta:|Critério de aceite:/);
+  });
+
+  it('limites: meta até 300 e aceite até 2000; em branco vira vazio', async () => {
+    const { svc } = service('meta-limite');
+    await expect(svc.create('p', { title: 'A', goal: 'x'.repeat(301), staffId: 'ana-1' })).rejects.toThrow('meta longa demais');
+    await expect(svc.create('p', { title: 'A', acceptance: 'x'.repeat(2001), staffId: 'ana-1' })).rejects.toThrow('critério de aceite longo demais');
+    expect(await svc.create('p', { title: 'A', goal: '   ', staffId: 'ana-1' })).toMatchObject({ goal: null });
+  });
+});
+
+describe('registro de execuções (task-runs.jsonl)', () => {
+  /** Ana, uma conversa por vez. `working`: o que o ChatManager sabe; tirar dali sem onIdle = o processo morreu. */
+  function runsService(dirName: string) {
+    const dir = path.join(root, dirName);
+    const working = new Set<string>();
+    let n = 0;
+    const ana = { id: 'ana-1', name: 'Ana', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'ana-1' ? ana : null),
+      send: async () => {
+        const session = `s-${++n}`;
+        working.add(session);
+        return session;
+      },
+      branchFor: async () => null,
+      isWorking: (_p, _s, except) => [...working].some((s) => s !== except),
+      sendTo: async (_p, sessionId) => {
+        working.add(sessionId);
+        return sessionId;
+      },
+    });
+    // O turno acabou: o processo avisa (onIdle) e o vigia também (onTurnDone), como no bloco da fila.
+    const finish = async (session: string) => {
+      working.delete(session);
+      await svc.onIdle(session, 'p', 'ana-1');
+      await svc.onTurnDone(session);
+    };
+    const make = async (title: string) => (await svc.create('p', { title, staffId: 'ana-1' }))!;
+    const task = async (id: string) => (await svc.list('p'))!.find((t) => t.id === id)!;
+    return { dir, svc, working, finish, make, task };
+  }
+
+  it('começo e fim com o mesmo runId; a tarefa guarda o runId só enquanto a tentativa está aberta', async () => {
+    const { dir, svc, finish, make, task } = runsService('runs-1');
+    const a = await make('A');
+    const started = (await svc.start('p', a.id))!;
+    const runId = (await task(a.id)).runId;
+    expect(runId).toEqual(expect.any(String));
+    await finish(started.sessionId!);
+    expect(await task(a.id)).toMatchObject({ status: 'review', runId: null });
+    expect((await readRuns(dir, a.id)).map((e) => [e.ev, e.trigger ?? e.outcome, e.runId])).toEqual([
+      ['start', 'manual', runId],
+      ['end', 'delivered', runId],
+    ]);
+  });
+
+  it('a tarefa que espera na fila abre a tentativa com trigger queue', async () => {
+    const { dir, svc, finish, make } = runsService('runs-2');
+    const [a, b] = [await make('A'), await make('B')];
+    const sa = (await svc.start('p', a.id))!.sessionId!;
+    await svc.start('p', b.id); // na fila: ainda sem tentativa
+    await finish(sa); // A vai para revisão e a fila anda
+    expect((await readRuns(dir, b.id)).map((e) => [e.ev, e.trigger])).toEqual([['start', 'queue']]);
+  });
+
+  it('retomada de órfã: start resume na mesma tentativa, e o fim dela leva o mesmo runId', async () => {
+    const { dir, svc, working, make, task, finish } = runsService('runs-3');
+    const a = await make('A');
+    const started = (await svc.start('p', a.id))!;
+    const runId = (await task(a.id)).runId;
+    working.delete(started.sessionId!); // o servidor caiu no meio do turno
+    await svc.tick(new Date(Date.now() + 3 * 60_000));
+    expect((await task(a.id)).resumedAt).toEqual(expect.any(String));
+    await finish(started.sessionId!);
+    expect((await readRuns(dir, a.id)).map((e) => [e.ev, e.trigger ?? e.outcome, e.runId === runId])).toEqual([
+      ['start', 'manual', true],
+      ['start', 'resume', true],
+      ['end', 'delivered', true],
+    ]);
+  });
+
+  it('linha quebrada ou incompleta é ignorada na leitura, e não atrapalha as gravações seguintes', async () => {
+    const { dir, svc, finish, make } = runsService('runs-4');
+    const file = path.join(dir, '.myco', 'task-runs.jsonl');
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, '{"ev":"start","runId":"r-x"\nlixo\n{"ev":"start","runId":"r-y"'); // a última sem quebra de linha
+    const a = await make('A');
+    const started = (await svc.start('p', a.id))!;
+    await finish(started.sessionId!);
+    expect((await readRuns(dir, a.id)).map((e) => e.ev)).toEqual(['start', 'end']);
+    expect(await readRuns(dir)).toHaveLength(2);
   });
 });
 
@@ -1907,5 +2016,230 @@ describe('dúvida da tarefa ao gestor', () => {
     await claude.svc.onAsk((await claude.task()).sessionId!, 'req-1', [{ question: 'Qual?', options: ['a'] }]);
     expect(claude.sent.at(-1)!.text).toContain('POST http://127.0.0.1:4848/api/projects/p/tasks/');
     expect(claude.sent.at(-1)!.text).not.toContain('127.0.0.2');
+  });
+});
+
+describe('dependências entre tarefas (bloqueada por)', () => {
+  /** Ana, uma conversa por vez. `gate()`: quantas partidas automáticas a fila pediu ao gate de recursos. */
+  function depsService(dirName: string) {
+    const dir = path.join(root, dirName);
+    const sent: Array<{ text: string; session: string }> = [];
+    const working = new Set<string>();
+    let gate = 0;
+    let n = 0;
+    const ana = { id: 'ana-1', name: 'Ana', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'ana-1' ? ana : null),
+      send: async (_p, _staffId, text) => {
+        const session = `s-${++n}`;
+        sent.push({ text, session });
+        working.add(session);
+        return session;
+      },
+      branchFor: async () => null,
+      isWorking: (_p, _staffId, except) => [...working].some((s) => s !== except),
+      sendTo: async (_p, sessionId) => {
+        working.add(sessionId);
+        return sessionId;
+      },
+      resourceGate: async () => {
+        gate++;
+        return { ok: true, release: () => {} };
+      },
+    });
+    // O turno acabou: o processo avisa (onIdle) e o vigia também (onTurnDone), como nos outros blocos de fila.
+    const finish = async (session: string) => {
+      working.delete(session);
+      await svc.onIdle(session, 'p', 'ana-1');
+      await svc.onTurnDone(session);
+    };
+    const make = async (title: string, blockedBy?: string[]) => (await svc.create('p', { title, staffId: 'ana-1', ...(blockedBy && { blockedBy }) }))!;
+    const list = async () => (await svc.list('p'))!;
+    const titled = async () => Object.fromEntries((await list()).map((t) => [t.title, t]));
+    return { svc, sent, finish, make, list, titled, gate: () => gate };
+  }
+
+  it('ciclo, dependência inexistente e a própria tarefa são recusados, e a recusa não grava nada', async () => {
+    const { svc, make, list } = depsService('dep-ciclo');
+    const a = await make('A');
+    const b = await make('B', [a.id]);
+    await expect(svc.update('p', a.id, { blockedBy: [b.id] })).rejects.toThrow(/ciclo de dependências/);
+    await expect(svc.update('p', a.id, { blockedBy: [a.id] })).rejects.toThrow(/não pode depender dela mesma/);
+    await expect(make('C', ['t-nope1'])).rejects.toThrow(/não encontrada neste projeto/);
+    await expect(svc.create('p', { title: 'D', staffId: 'ana-1', blockedBy: ['t-a', 't-a'] })).rejects.toThrow(/mais de uma vez/);
+    expect((await list()).map((t) => [t.title, t.blockedBy])).toEqual([
+      ['A', undefined],
+      ['B', [a.id]],
+    ]);
+  });
+
+  it('a fila pula a tarefa bloqueada e começa a seguinte desbloqueada', async () => {
+    const { svc, sent, finish, make, titled } = depsService('dep-fila');
+    const a = await make('A');
+    const d = await make('D'); // dependência ainda a fazer
+    const x = await make('X', [d.id]);
+    const b = await make('B');
+    expect((await svc.start('p', a.id))!.status).toBe('doing'); // s-1
+    // X é começada enquanto A ocupa Ana: fica na fila, bloqueada por D.
+    expect(await svc.start('p', x.id)).toMatchObject({ status: 'todo', sessionId: null, queuedAt: expect.any(String) });
+    await svc.start('p', b.id); // na fila, depois de X
+    await finish('s-1'); // A vai para revisão e a fila anda
+    expect(sent.at(-1)!.text).toContain('[Tarefa "B"]');
+    expect(await titled()).toMatchObject({ A: { status: 'review' }, B: { status: 'doing' }, X: { status: 'todo', queuedAt: expect.any(String) } });
+    expect((await svc.list('p'))!.find((t) => t.id === x.id)!.history.at(-1)?.note).toBe('esperando: D');
+  });
+
+  it('começar numa bloqueada não abre conversa: entra na fila com o motivo, e começa sozinha quando a dependência fica pronta', async () => {
+    const { svc, sent, make, list } = depsService('dep-start');
+    const d = await make('Migrar banco');
+    const x = await make('Tela nova', [d.id]);
+    const queued = (await svc.start('p', x.id))!;
+    expect(queued).toMatchObject({ status: 'todo', sessionId: null, queuedAt: expect.any(String) });
+    expect(queued.history.at(-1)?.note).toBe('esperando: Migrar banco');
+    expect(sent).toHaveLength(0);
+    await svc.update('p', d.id, { status: 'done' }); // a dependência fica pronta: o dono é acordado (sem await, de propósito)
+    // A partida manda a mensagem antes de gravar a tarefa como "fazendo": espera o estado final, não o envio.
+    await vi.waitFor(async () => expect((await list()).find((t) => t.id === x.id)).toMatchObject({ status: 'doing', queuedAt: null, sessionId: expect.any(String) }));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.text).toContain('[Tarefa "Tela nova"]');
+  });
+
+  it('apagar uma dependência que outra tarefa ainda espera é recusado, listando quem depende; pronta, só tira o id', async () => {
+    const { svc, make, list } = depsService('dep-remove');
+    const d = await make('Base');
+    const x = await make('Usa a base', [d.id]);
+    await expect(svc.remove('p', d.id)).rejects.toThrow(TaskConflictError);
+    await expect(svc.remove('p', d.id)).rejects.toThrow(/“Usa a base”/);
+    expect((await list()).map((t) => t.id)).toContain(d.id);
+    // Com a dependente já pronta, apagar a dependência só tira o id dela.
+    await svc.update('p', x.id, { status: 'done' });
+    expect(await svc.remove('p', d.id)).toBe(true);
+    expect((await list()).find((t) => t.id === x.id)!.blockedBy).toEqual([]);
+  });
+
+  it('tick não acorda quem tem na fila só tarefas bloqueadas', async () => {
+    const { svc, sent, make, gate } = depsService('dep-tick');
+    const d = await make('Pré-requisito');
+    const x = await make('Depende', [d.id]);
+    await svc.start('p', x.id); // na fila, bloqueada: sem conversa
+    const before = gate();
+    await svc.tick();
+    expect(sent).toHaveLength(0);
+    expect(gate()).toBe(before); // nenhuma partida automática foi tentada
+  });
+});
+
+describe('rotina de tarefa (mode task)', () => {
+  /** Ana, uma conversa por vez (`working`). `state.capped`: o envio recusa pelo consumo, como no limite de 5h. */
+  function routineService(dirName: string) {
+    const dir = path.join(root, dirName);
+    const working = new Set<string>();
+    const state = { capped: false, n: 0 };
+    const ana = { id: 'ana-1', name: 'Ana', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'ana-1' ? ana : null),
+      send: async () => {
+        if (state.capped) throw new UsageStopError({ kind: 'five_hour', percentUsed: 91, limit: 85, resetsAt: null });
+        const session = `s-${++state.n}`;
+        working.add(session);
+        return session;
+      },
+      branchFor: async () => null,
+      isWorking: (_p, _s, except) => [...working].some((s) => s !== except),
+    });
+    const finish = async (session: string) => {
+      working.delete(session);
+      await svc.onIdle(session, 'p', 'ana-1');
+      await svc.onTurnDone(session);
+    };
+    const list = async () => (await svc.list('p'))!;
+    const task = async (id: string) => (await list()).find((t) => t.id === id)!;
+    /** Uma rodada da rotina, como `runRoutineAsTask` (index.ts): cria já na fila e manda o funcionário andar a fila. */
+    const fire = async (routineId: string, minute: string) => {
+      const made = await svc.createFromRoutine('p', 'ana-1', { id: routineId, name: 'Revisar PRs', message: 'Revise os PRs abertos.' }, minute);
+      if (made.kind === 'created') await svc.kickStaff('p', 'ana-1');
+      return made;
+    };
+    return { svc, dir, state, finish, list, task, fire };
+  }
+
+  it('cria a tarefa com a mensagem como descrição, e começa com o gatilho routine (idemKey no registro)', async () => {
+    const { dir, fire, task } = routineService('rot-1');
+    const made = await fire('r1', '2026-10-26T19:00');
+    expect(made.kind).toBe('created');
+    expect(await task(made.task.id)).toMatchObject({
+      title: 'Rotina: Revisar PRs',
+      description: 'Revise os PRs abertos.',
+      staffId: 'ana-1',
+      routineId: 'r1',
+      idemKey: 'rotina:ana-1:r1:2026-10-26T19:00',
+      status: 'doing',
+      sessionId: 's-1',
+    });
+    expect((await readRuns(dir, made.task.id)).map((e) => [e.ev, e.trigger, e.idemKey])).toEqual([['start', 'routine', 'rotina:ana-1:r1:2026-10-26T19:00']]);
+  });
+
+  it('o mesmo minuto não cria de novo (idemKey), nem depois que a tarefa ficou pronta', async () => {
+    const { svc, list, fire, task } = routineService('rot-2');
+    const first = await fire('r1', 'M1');
+    expect((await svc.createFromRoutine('p', 'ana-1', { id: 'r1', name: 'Revisar PRs', message: 'x' }, 'M1')).kind).toBe('repeated');
+    await svc.update('p', first.task.id, { status: 'done' });
+    expect(await svc.createFromRoutine('p', 'ana-1', { id: 'r1', name: 'Revisar PRs', message: 'x' }, 'M1')).toMatchObject({ kind: 'repeated', task: { id: first.task.id } });
+    expect(await list()).toHaveLength(1);
+    expect((await task(first.task.id)).status).toBe('done');
+  });
+
+  it('com a anterior da mesma rotina ainda aberta, não cria; outra rotina da ficha cria normal', async () => {
+    const { svc, list, fire } = routineService('rot-3');
+    const first = await fire('r1', 'M1');
+    expect(await svc.createFromRoutine('p', 'ana-1', { id: 'r1', name: 'Revisar PRs', message: 'x' }, 'M2')).toMatchObject({ kind: 'open', task: { id: first.task.id } });
+    expect((await svc.createFromRoutine('p', 'ana-1', { id: 'r2', name: 'Outra', message: 'x' }, 'M2')).kind).toBe('created');
+    expect(await list()).toHaveLength(2);
+  });
+
+  it('depois que a anterior fica pronta, a rotina cria outra no minuto seguinte', async () => {
+    const { svc, list, fire } = routineService('rot-4');
+    const first = await fire('r1', 'M1');
+    await svc.update('p', first.task.id, { status: 'done' });
+    expect((await fire('r1', 'M2')).kind).toBe('created');
+    expect(await list()).toHaveLength(2);
+  });
+
+  it('consumo no limite: a tarefa entra na fila (a rotina não pula) e começa com routine quando o consumo baixa', async () => {
+    const { dir, state, fire, task, svc } = routineService('rot-5');
+    state.capped = true;
+    const made = await fire('r1', 'M1');
+    expect(await task(made.task.id)).toMatchObject({ status: 'todo', sessionId: null, queuedAt: expect.any(String) });
+    state.capped = false;
+    await svc.tick();
+    expect(await task(made.task.id)).toMatchObject({ status: 'doing', sessionId: 's-1', queuedAt: null });
+    expect((await readRuns(dir, made.task.id)).map((e) => [e.ev, e.trigger])).toEqual([['start', 'routine']]);
+  });
+
+  it('ele ocupado: a tarefa da rotina na fila começa com trigger routine (não queue) quando ele fica livre', async () => {
+    const { dir, svc, finish, fire, task } = routineService('rot-6');
+    const busy = (await svc.create('p', { title: 'Outra', staffId: 'ana-1' }))!;
+    await svc.start('p', busy.id); // s-1: Ana ocupada
+    const made = await fire('r1', 'M1'); // na fila
+    expect(await task(made.task.id)).toMatchObject({ status: 'todo', queuedAt: expect.any(String) });
+    await finish('s-1'); // a outra vai para revisão e a fila anda
+    expect(await task(made.task.id)).toMatchObject({ status: 'doing' });
+    expect((await readRuns(dir, made.task.id)).map((e) => [e.ev, e.trigger])).toEqual([['start', 'routine']]);
+  });
+
+  it('nasce na fila no mesmo gravar: queda antes do kick não perde a rotina, o tick do boot a começa com routine', async () => {
+    const { dir, svc, task } = routineService('rot-7');
+    // Só a criação (sem o kickStaff): é o que sobra se o servidor cair logo depois de gravar.
+    const made = await svc.createFromRoutine('p', 'ana-1', { id: 'r1', name: 'Revisar PRs', message: 'x' }, 'M1');
+    expect(made.kind).toBe('created');
+    expect(await task(made.task.id)).toMatchObject({ status: 'todo', sessionId: null, queuedAt: expect.any(String), queuedForce: false });
+    expect(await readRuns(dir, made.task.id)).toEqual([]);
+    await svc.tick(); // o tick do boot
+    expect(await task(made.task.id)).toMatchObject({ status: 'doing', sessionId: 's-1', queuedAt: null });
+    expect((await readRuns(dir, made.task.id)).map((e) => [e.ev, e.trigger])).toEqual([['start', 'routine']]);
   });
 });

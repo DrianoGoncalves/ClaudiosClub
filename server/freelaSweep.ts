@@ -34,7 +34,8 @@ export async function sweepFreelas(deps: FreelaSweepDeps, now = new Date()): Pro
   let complete = true;
   const found: Array<{ id: string; updatedAt: string }> = [];
   for (const p of projects) {
-    const sessions = await deps.adapter.getProjectSessions(p.id).catch(() => null);
+    // includeOld: a varredura precisa ver também as antigas (senão o controle apagaria os marcadores delas).
+    const sessions = await deps.adapter.getProjectSessions(p.id, { includeOld: true }).catch(() => null);
     if (!sessions) {
       complete = false; // não deu para listar: o controle não pode esquecer ninguém desse projeto
       continue;

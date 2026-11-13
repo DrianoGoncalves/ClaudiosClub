@@ -26,7 +26,7 @@ const MYCO_NOTE = '[MyCo]';
 const ENGINE_NAME: Record<Engine, string> = { claude: 'Claude', codex: 'Codex' };
 
 export interface HandoffInput {
-  task: { id: string; title: string; description: string };
+  task: { id: string; title: string; description: string; goal?: string | null; acceptance?: string | null };
   from: { engine: Engine; reason: 'limit'; resetsAt: number | null };
   to: { engine: Engine; model: string };
   /** Mensagens do dono/gestor depois do pedido inicial (correções, restrições), da mais antiga para a mais nova. */
@@ -170,9 +170,13 @@ function sections(i: HandoffInput, now: number): Block[] {
   ];
 
   const description = task.description.trim();
+  const goal = task.goal?.trim();
+  const acceptance = task.acceptance?.trim();
   blocks.push({
     title: 'Pedido da tarefa',
-    text: [`${task.id} · ${task.title}`, description && clip(description, MAX_TASK)].filter(Boolean).join('\n\n'),
+    text: [`${task.id} · ${task.title}`, description && clip(description, MAX_TASK), goal && `Meta: ${goal}`, acceptance && `Critério de aceite: ${acceptance}`]
+      .filter(Boolean)
+      .join('\n\n'),
     fenced: true,
   });
   blocks.push(ownerBlock(i.userMessages, 'Correções do dono (depois do pedido)', 'Nenhuma, além do pedido.'));

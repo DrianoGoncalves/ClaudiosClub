@@ -44,6 +44,8 @@ export type ProjectNodeData = {
   tasks: { open: number; review: number } | null;
   /** Funcionários da sala esperando você (ver EmployeeNodeData.needsYou): o contador do cabeçalho. */
   awaiting: number;
+  /** Funcionários com ficha que o quadro mostra na sala (sem encerrados nem arquivados, a menos que "arquivados" esteja ligado). */
+  employees: number;
 };
 export type EmployeeNodeData = {
   /** A sessão mais recente; null para quem foi contratado e ainda não abriu sessão. */
@@ -269,6 +271,10 @@ export function buildGraph(
     return [shelf];
   };
 
+  const staffOf = (p: Project): StaffProfile[] => (board.staff ?? []).filter((s) => s.projectId === p.id);
+  /** Ficha que aparece no quadro: arquivada (inclui temporário encerrado) só com "arquivados" ligado. */
+  const staffShown = (st: StaffProfile): boolean => opts.showArchived || !archivedSessions.has(`staff:${st.id}`);
+
   /**
    * Funcionários do projeto: cada ficha (com a sessão mais recente dela) e cada sessão aberta
    * fora do Claudio’s Club. Quem reporta a outro funcionário fica pendurado no primeiro gestor.
@@ -276,7 +282,7 @@ export function buildGraph(
   const employeeTrees = (p: Project): Tree[] => {
     const sessions = board.sessions[p.id] ?? [];
     const sessionCost = (id: string) => costs?.projects[p.id]?.sessions[id];
-    const staff = (board.staff ?? []).filter((s) => s.projectId === p.id);
+    const staff = staffOf(p);
     const ownedBy = new Map<string, StaffProfile>();
     for (const st of staff) for (const s of st.sessions) ownedBy.set(s.id, st);
 
@@ -298,7 +304,7 @@ export function buildGraph(
         archived: archivedSessions.has(`staff:${st.id}`),
         needsYou: needsYou(session?.live, mine, st.id),
       };
-      if (data.archived && !opts.showArchived) continue;
+      if (!staffShown(st)) continue;
       const tree: Tree = { node: node(staffNodeId(p.id, st.id), 'employee', data), side: [], children: [] };
       byId.set(st.id, tree);
       trees.push(tree);
@@ -373,6 +379,7 @@ export function buildGraph(
         tasks: opts.tasks?.[p.id] ?? null,
         // Só as sessões vivas da sala (as que o cabeçalho mostra as bolinhas).
         awaiting: liveFor(board.live, p.path).filter((s) => awaitingSessions.has(s.sessionId)).length,
+        employees: staffOf(p).filter(staffShown).length,
       }),
       // Dobrada: só o cabeçalho, com o resumo; nada de equipe nem recursos.
       side: folded ? [] : sideOf(id, [...inv.agents.map(agentNode), ...inv.skills.map(skillNode)]),

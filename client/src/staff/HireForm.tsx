@@ -8,6 +8,7 @@ import {
   type Engine,
   type GitState,
   type LaunchResult,
+  type McpPolicy,
   type McpServerInfo,
   type Playbook,
   type ServerInfo,
@@ -26,6 +27,7 @@ import { CopyFromCompany } from './CopyFromCompany';
 import { differingFields, PERSON_FIELD_LABEL } from './directory';
 import { FallbackField } from './FallbackField';
 import { draftOf, fallbackProblem, fallbackToSend, showFallbackField, type FallbackDraft } from './fallbackEngine';
+import { levelOf, MCP_LEVEL_LABEL, MCP_LEVELS, mcpPolicyToSend, serverPolicyKey, toolKeysOf, toolNameOf, withLevel, type McpPolicyMap } from './mcpPolicyField';
 import { PersonMemory } from './PersonMemory';
 import { PERSONALITY_TEXT, personalityToSend } from './personalityField';
 import { PERSONALITIES, type Personality } from '../../../shared/personality';
@@ -136,6 +138,10 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const [skills, setSkills] = useState<string[]>(editing?.skills ?? []);
   const [mcps, setMcps] = useState<McpServerInfo[] | null>(null);
   const [mcpOn, setMcpOn] = useState<Set<string>>(new Set());
+  // Política por MCP (Permitir/Perguntar/Desligado). Guarda também as chaves que a tela não mostra (MCP desmarcado, Chrome, FTP, por
+  // ferramenta): a ficha as mantém ao salvar. `toolKeys` = as regras por ferramenta que já vieram salvas (a API não lista as ferramentas).
+  const [mcpPolicy, setMcpPolicy] = useState<McpPolicyMap>(editing?.mcpPolicy ?? {});
+  const [toolKeys] = useState(() => Object.keys(editing?.mcpPolicy ?? {}));
   const [knowledge, setKnowledge] = useState((editing?.knowledge ?? []).join('\n'));
   const [rules, setRules] = useState((editing?.rules ?? []).join('\n'));
   const [doneWhen, setDoneWhen] = useState(editing?.doneWhen ?? '');
@@ -367,6 +373,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       // nenhum: a sessão abre mais leve e rápida; quem precisa liga no avançado. Sem lista (vazia ou
       // falhou), editando mantém o que a ficha tinha; contratando, nenhum.
       mcps: codex || simpleHire ? [] : !mcps?.length ? (editing ? editing.mcps : []) : allMcps ? null : [...mcpOn],
+      // Só vai se mudou (ausente mantém o salvo; `{}` limpa).
+      ...mcpPolicyToSend(mcpPolicy, editing?.mcpPolicy),
       knowledge: lines(knowledge),
       rules: lines(rules),
       doneWhen,
@@ -807,6 +815,59 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                 ))}
               </div>
               <p className="muted small">{allMcps ? t('staff.mcpAllOn') : t('staff.mcpSomeOff')}</p>
+              {mcps.some((m) => mcpOn.has(m.name)) && (
+                <div className="mcp-policy">
+                  <p className="mcp-policy-title">{t('staff.mcpPolicyTitle')}</p>
+                  <p className="muted small">{t('staff.mcpPolicyIntro')}</p>
+                  <ul className="mcp-policy-list">
+                    {mcps
+                      .filter((m) => mcpOn.has(m.name))
+                      .map((m) => {
+                        const key = serverPolicyKey(m.name);
+                        const tools = key ? toolKeysOf(toolKeys, key) : [];
+                        const level = (k: string, label: string) => (
+                          <select aria-label={label} value={levelOf(mcpPolicy, k)} onChange={(e) => setMcpPolicy(withLevel(mcpPolicy, k, e.target.value as McpPolicy))}>
+                            {MCP_LEVELS.map((l) => (
+                              <option key={l} value={l}>
+                                {t(MCP_LEVEL_LABEL[l])}
+                              </option>
+                            ))}
+                          </select>
+                        );
+                        return (
+                          <li key={m.name}>
+                            <div className="mcp-policy-row">
+                              <span className="mcp-policy-name">{m.name}</span>
+                              {key && level(key, t('staff.mcpPolicyFor', { name: m.name }))}
+                            </div>
+                            {!key && <p className="muted small">{t('staff.mcpPolicyNoKey')}</p>}
+                            {key && tools.length > 0 && (
+                              <>
+                                <p className="muted small mcp-policy-tools-head">{t('staff.mcpPolicyTools')}</p>
+                                <ul className="mcp-policy-tools">
+                                  {tools.map((k) => (
+                                    <li key={k} className="mcp-policy-row">
+                                      <span className="mcp-policy-name">{toolNameOf(k, key)}</span>
+                                      {level(k, t('staff.mcpPolicyForTool', { tool: toolNameOf(k, key), name: m.name }))}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </>
+                            )}
+                          </li>
+                        );
+                      })}
+                  </ul>
+                  <details className="collapse">
+                    <summary>{t('staff.mcpPolicyHow')}</summary>
+                    <ul className="muted small mcp-policy-rules">
+                      {(['staff.mcpPolicyRule1', 'staff.mcpPolicyRule2', 'staff.mcpPolicyRule3', 'staff.mcpPolicyRule4', 'staff.mcpPolicyRule5'] as const).map((k) => (
+                        <li key={k}>{t(k)}</li>
+                      ))}
+                    </ul>
+                  </details>
+                </div>
+              )}
             </>
           )}
         </fieldset>

@@ -105,7 +105,7 @@ Salve com **Salvar ficha** (ou **Contratar**, ao criar). **Cancelar** fecha; no 
 
 ## RH
 
-- Botão **RH** na barra do topo (título **Funcionários**): uma linha por pessoa, com um chip por projeto em que ela tem ficha.
+- Botão **RH e ranking** na barra do topo (título **Funcionários**), aba **RH**: uma linha por pessoa, com um chip por projeto em que ela tem ficha. As abas **Gastos** e **Economia** do mesmo painel são o ranking (veja o capítulo 6).
 - Clique na linha ou num chip para editar. Filtre pela busca ou por **Projeto**.
 - Se houver ficha de mesmo nome em outro projeto, aparece **Unificar** ("É a mesma pessoa?"). Ele pede confirmação com **Juntar**.
 - Em **⋯** (ações da pessoa): **Ligar a outra ficha**, **Arquivar** ou **Desarquivar** por projeto, **Separar deste projeto** (se estiver em mais de um) e **Excluir**.
@@ -119,7 +119,7 @@ Salve com **Salvar ficha** (ou **Contratar**, ao criar). **Cancelar** fecha; no 
 
 ## Skills e agents
 
-- Skill da biblioteca: ative **Mostrar o escopo do usuário** em **Configurações** → **Quadro**. Na sala **~ você**, veja **Biblioteca de skills (restritas)**. **+ skill na biblioteca** cria uma (**Nome**, **Descrição (quando usar)**, **Instruções**). **Tirar da biblioteca** manda para a lixeira da biblioteca (dá para recuperar).
+- Skill da biblioteca: ative **Mostrar o escopo do usuário** em **Configurações** → **Quadro**. No projeto **~ você**, veja **Biblioteca de skills (restritas)**. **+ skill na biblioteca** cria uma (**Nome**, **Descrição (quando usar)**, **Instruções**). **Tirar da biblioteca** manda para a lixeira da biblioteca (dá para recuperar).
 - Só quem tem a skill marcada na ficha carrega. Ela aparece como `myco:<nome>`.
 - **Agents** (subagents do Claude Code): crie com **Novo agent** no painel do projeto. Há três prontos: **Executor (Haiku)**, **Pesquisador (Haiku, só leitura)** e **Revisor (Sonnet)**.
 - Skills e agents não existem no Codex.

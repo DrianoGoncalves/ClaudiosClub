@@ -19,6 +19,7 @@ const KIND_TITLE: Record<InboxItem['kind'], string> = {
   error: t('inbox.titleError'),
   routine: t('inbox.titleRoutine'),
   orphan: t('inbox.titleOrphan'),
+  usage: t('inbox.titleUsage'),
 };
 
 export interface InboxView {

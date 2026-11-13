@@ -27,6 +27,7 @@ import {
   setProjectWorkspace,
   updateConfig,
   WorkspaceError,
+  RetentionError,
   ConversationTitleError,
   ConversationTitleRequest,
   ConversationTitlesFullError,
@@ -82,6 +83,7 @@ import { CodexUsageReader, codexLimitHit, readInstalled } from './codexUsage';
 import { CodexSetup, CodexSetupError } from './codexSetup';
 import { readUsage } from './usage';
 import { claudeLimitHit, UsageStopError } from './usageStop';
+import { UsageWarnings } from './usageWarn';
 import { quotaBoost } from './quotaBoost';
 import { browserStatus } from './browser';
 import { gitState } from './git';
@@ -96,13 +98,16 @@ import { systemStats } from './systemStats';
 import { ResourceGate } from './resourceGate';
 import { ShowcaseBusyError, ShowcaseRefusedError, ShowcaseRunner, spawnClaudeProcess } from './showcaseRunner';
 import { pathKey, worktreeParent } from './adapters/claude/paths';
-import { codexSession } from './adapters/codex/rollout';
+import { codexSession, rolloutUpdatedAt } from './adapters/codex/rollout';
+import { REGISTRY_FILE } from './sessionsRegistry';
 import { boardFilter } from './board';
 import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
-import { AUTONOMY, listProjectStaff, readProfile } from './staff/store';
+import { AUTONOMY, dropStaffSessions, listProjectStaff, listProjectStaffStrict, readProfile } from './staff/store';
+import { lastRetentionRun, nextRetentionDelay, retentionPreview, runRetentionSweep, setRetentionDeletion, type RetentionDeps } from './retentionSweep';
 import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
-import { TaskConflictError, TaskError, TaskForbiddenError, TaskService } from './tasks';
+import { TaskConflictError, TaskError, TaskForbiddenError, TaskService, readTasks } from './tasks';
+import { retainedSessionIds } from './retention';
 import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefaultRole } from './roles';
 import { ROOT } from './root';
 import { cleanRunDir } from './runCleanup';
@@ -238,7 +243,35 @@ const adapter: ToolAdapter = new ClaudeAdapter({
   extraPaths: pinnedProjects,
   onBoard: boardFilter({ pinned: pinnedProjects }),
   projectNames: async () => (await readConfig()).projectNames,
+  // Retenção: conversa sem atividade há mais dias que isso sai da lista (sem ler o arquivo); `?old=1` traz de volta.
+  archiveAfterDays: async () => (await readConfig()).archiveAfterDays,
+  keepSessions: retainedOf,
 });
+/** `?old=1` na rota: lista também as conversas antigas (arquivadas pela retenção). */
+const includeOld = (url: URL) => url.searchParams.get('old') === '1';
+/** Conversas que a retenção nunca arquiva no projeto (ver server/retention.ts). Lê ficha e tarefas do disco, sem efeito colateral. */
+async function retainedOf(projectId: string, projectPath: string): Promise<Set<string>> {
+  return retainedSessionIds(await listProjectStaff(projectPath, projectId), await readTasks(projectPath));
+}
+/** A exclusão da retenção (ver retentionSweep.ts): as mesmas fontes que o quadro usa. Só lê o que as closures pedem, na hora. */
+/** Horário da última varredura da retenção (sobrevive a reinícios). */
+const retentionLastRun = path.join(MYCO_HOME, 'retention-last-run.json');
+const retentionDeps: RetentionDeps = {
+  claudeHome: defaultLocations().home,
+  runDir: path.join(MYCO_HOME, 'run'),
+  lastRunFile: retentionLastRun,
+  projects: () => adapter.listProjects(),
+  // Fichas lidas por inteiro: uma que não carrega tira o projeto da varredura (ver retentionSweep.ts).
+  staffOf: (project) => listProjectStaffStrict(project.path, project.id),
+  liveSessions: () => adapter.listLiveSessions(),
+  // Protegidas: abertas (em turno, na fila ou ociosas), e com despertador ou auto-continue pendente. Ler a pendência não quarentena:
+  // arquivo estragado LANÇA e a varredura aborta.
+  busy: async () =>
+    new Set([...chats.runningSessionIds(), ...(await autoContinue.sessionIdsStrict()), ...(await wakeups.sessionIdsStrict())]),
+  codex: { deleteThread: (threadId) => codex.deleteThread(threadId) },
+  dropStaffSession: (projectPath, staffId, sessionId) => dropStaffSessions(projectPath, staffId, [sessionId]),
+  log: (line) => console.log(line),
+};
 /** ~/.claude/projects: onde ficam os transcripts das conversas. */
 const defaultTranscripts = path.join(defaultLocations().home, 'projects');
 
@@ -253,6 +286,8 @@ async function chatPlace(projectId: string, staffId: string | null) {
 }
 const staff: StaffService = new StaffService(adapter, {
   runDir: path.join(MYCO_HOME, 'run'),
+  // Conversas lançadas pelo Club (fora de run/, que a limpeza apaga): base da exclusão futura (ver sessionsRegistry.ts).
+  sessionsFile: REGISTRY_FILE,
   claudeConfigFile: defaultLocations().configFile,
   mycoUrl: `http://127.0.0.1:${PORT}`,
   codexUrl: SANDBOX_URL,
@@ -549,8 +584,10 @@ const routines = new RoutineScheduler({
  * Uma rotina disparando. As mesmas travas do chat valem, mas não há a quem perguntar: passou da
  * trava de consumo ou do orçamento, a rotina é pulada (e o aviso vai para a caixa). Também não
  * começa com o funcionário trabalhando ou com a sessão aberta em outro lugar.
+ * Modo `task`: sem checagem aqui; a tarefa é criada antes, e o `start` põe na fila se o consumo barrar.
  */
-async function runRoutine(profile: StaffProfile, r: Routine): Promise<RoutineOutcome> {
+async function runRoutine(profile: StaffProfile, r: Routine, minute: string): Promise<RoutineOutcome> {
+  if (r.mode === 'task') return runRoutineAsTask(profile, r, minute);
   try {
     await staff.checkUsage(profile.projectId, { engine: profile.engine ?? 'claude' });
   } catch (err) {
@@ -566,6 +603,18 @@ async function runRoutine(profile: StaffProfile, r: Routine): Promise<RoutineOut
     if (err instanceof ChatError) return { ok: false, text: `pulada: ${err.message}` };
     throw err;
   }
+}
+
+/**
+ * Rotina de tarefa: cria no quadro já na fila dele (idempotente por minuto e por tarefa aberta) e manda o funcionário andar a fila.
+ * A partida é do `takeNext`, com o gatilho 'routine'; se o servidor cair antes do kick, o tick do boot pega a tarefa.
+ */
+async function runRoutineAsTask(profile: StaffProfile, r: Routine, minute: string): Promise<RoutineOutcome> {
+  const made = await tasks.createFromRoutine(profile.projectId, profile.id, r, minute);
+  if (made.kind === 'open') return { ok: false, text: `pulada: a anterior ainda está aberta (${made.task.id})` };
+  if (made.kind === 'repeated') return { ok: true, text: `já criada neste minuto (${made.task.id})` };
+  await tasks.kickStaff(profile.projectId, profile.id);
+  return { ok: true, text: `tarefa ${made.task.id} criada na fila de ${profile.name}` };
 }
 
 /** Imagem colada no chat (já reduzida no navegador): data URL PNG, JPEG, WebP ou GIF. */
@@ -777,7 +826,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       return importProjects(adapter, body);
     },
   ],
-  ['GET', new RegExp(`^/api/projects/${ID}$`), ({ params: [id] }) => adapter.getProject(id!)],
+  ['GET', new RegExp(`^/api/projects/${ID}$`), ({ params: [id], url }) => adapter.getProject(id!, { includeOld: includeOld(url) })],
   ['GET', new RegExp(`^/api/projects/${ID}/mcp$`), ({ params: [id] }) => staff.listMcp(id!)],
   // Biblioteca de MCPs: a lista não traz valor (só nome e se está preenchido); cadastrar, editar, apagar e testar só pelo navegador.
   ['GET', /^\/api\/mcp-servers$/, ({ url }) => mcpLibrary.list(url.searchParams.get('projectId'))],
@@ -826,6 +875,9 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ['POST', new RegExp(`^/api/projects/${ID}/staff$`), ({ params: [id], body, fromBrowser, caller }) => staff.hire(id!, body, fromBrowser, caller)],
   // Copiar uma ficha de outro projeto (só pelo Claudio’s Club). Antes da rota de edição: "copy" casaria como id.
   ['POST', new RegExp(`^/api/projects/${ID}/staff/copy$`), ({ params: [id], body, fromBrowser }) => staff.copyFrom(id!, body, fromBrowser)],
+  // Equipe em arquivo (server/staff/teamExport.ts): exportar lê, sem segredo; importar só pela tela, tudo ou nada. Antes da rota de edição: "import" casaria como id.
+  ['GET', new RegExp(`^/api/projects/${ID}/staff/export$`), ({ params: [id], url }) => staff.exportTeam(id!, url.searchParams.get('ids'))],
+  ['POST', new RegExp(`^/api/projects/${ID}/staff/import$`), ({ params: [id], body, fromBrowser }) => staff.importTeam(id!, body, fromBrowser)],
   // Fichas da mesma pessoa (cópias): ligar, desligar e apagar de vez. Só pelo Claudio’s Club (o serviço confere).
   ['POST', /^\/api\/staff-link$/, ({ body, fromBrowser }) => staff.link(body, fromBrowser)],
   ['POST', /^\/api\/staff-unlink$/, ({ body, fromBrowser }) => staff.unlink(body, fromBrowser)],
@@ -1254,6 +1306,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     },
   ],
   ['GET', new RegExp(`^/api/projects/${ID}/tasks/${ID}/code$`), ({ params: [id, taskId] }) => tasks.code(id!, taskId!)],
+  // Execuções da tarefa (começos e fins, do registro task-runs.jsonl). Lê quem lê o código; a sandbox do Codex não (ver apiPolicy.ts).
+  ['GET', new RegExp(`^/api/projects/${ID}/tasks/${ID}/runs$`), ({ params: [id, taskId] }) => tasks.runs(id!, taskId!)],
   // Dúvida da tarefa respondida pelo gestor que pediu (pela API, com o token da conversa dele). Sem quem chama (ex.: o navegador), o serviço recusa (403).
   [
     'POST',
@@ -1635,7 +1689,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     },
   ],
   ['GET', /^\/api\/user$/, () => adapter.getUserScope()],
-  ['GET', /^\/api\/board$/, () => getBoard()],
+  // Quadro (e a lista de conversas de cada funcionário, que lê daqui). `?old=1` inclui as antigas (retenção).
+  ['GET', /^\/api\/board$/, ({ url }) => getBoard({ includeOld: includeOld(url) })],
   ['GET', /^\/api\/live$/, () => liveForBoard()],
   // Estado do código de cada projeto (git status, com cache curto); worktrees ficam de fora.
   [
@@ -1654,7 +1709,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     async ({ params: [pid] }) => {
       const dir = await projectPathOf(pid!);
       if (!dir) throw new BadRequest('projeto não encontrado');
-      const [sessions, staff] = await Promise.all([adapter.getProjectSessions(pid!), listProjectStaff(dir, pid!)]);
+      // Conversa antiga também conta para o "sem commit" (o arquivamento só esconde da lista).
+      const [sessions, staff] = await Promise.all([adapter.getProjectSessions(pid!, { includeOld: true }), listProjectStaff(dir, pid!)]);
       return uncommittedByConversation({
         projectPath: dir,
         sessions: sessions ?? [],
@@ -1866,6 +1922,10 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       return updateConfig(patch.data);
     },
   ],
+  // Retenção (etapa 2): a prévia só lê; ligar a exclusão exige o navegador (ver retentionSweep.ts); desligar é sempre permitido.
+  ['GET', /^\/api\/retention\/preview$/, () => retentionPreview(retentionDeps)],
+  ['POST', /^\/api\/retention\/enable$/, ({ fromBrowser }) => setRetentionDeletion(true, { fromBrowser })],
+  ['POST', /^\/api\/retention\/disable$/, () => setRetentionDeletion(false, { fromBrowser: false })],
 ];
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -1944,6 +2004,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
           err instanceof FileError ||
           err instanceof AgentError ||
           err instanceof WorkspaceError ||
+          err instanceof RetentionError ||
           err instanceof ConversationTitleError ||
           err instanceof SkillError ||
           err instanceof McpError ||
@@ -2044,7 +2105,7 @@ async function liveForBoard(): Promise<LiveSession[]> {
   return [...claude, ...chats.codexLive(claude)].map((s) => (chats.isDelegated(s.sessionId) ? { ...s, delegated: true } : s));
 }
 
-async function getBoard(): Promise<Board> {
+async function getBoard(opts: { includeOld?: boolean } = {}): Promise<Board> {
   const [projects, user, live] = await Promise.all([
     adapter.listProjects(),
     adapter.getUserScope(),
@@ -2058,7 +2119,7 @@ async function getBoard(): Promise<Board> {
     ...projects.map(async (p) => {
       const [inv, list, image] = await Promise.all([
         adapter.getProjectInventory(p.id),
-        adapter.getProjectSessions(p.id),
+        adapter.getProjectSessions(p.id, { includeOld: opts.includeOld === true }),
         p.exists ? projectImageUrl(p.id, p.path) : null,
       ]);
       if (inv) inventories[p.id] = inv;
@@ -2070,18 +2131,33 @@ async function getBoard(): Promise<Board> {
   // com o assunto e a hora do rollout (ver adapters/codex/rollout.ts). Entra antes do fold de worktree, que a trata igual.
   const listed = new Set(Object.values(sessions).flat().map((s) => s.id));
   const projectIds = new Set(projects.map((p) => p.id));
+  // Retenção: a conversa do Codex sem atividade há mais dias que `archiveAfterDays` sai da lista só com `stat` do rollout (sem
+  // rollout, fica como antes). Conta no `sessionCount` mesmo assim, como o transcript do Claude.
+  const archiveDays = opts.includeOld ? 0 : (await readConfig()).archiveAfterDays;
+  const cutoff = archiveDays > 0 ? Date.now() - archiveDays * 86_400_000 : null;
+  const liveIds = new Set(live.filter((l) => l.alive).map((l) => l.sessionId));
+  // Os mesmos protegidos do adapter (última de cada ficha, tarefas não concluídas): nunca saem pela retenção.
+  const retained = cutoff === null ? new Map<string, Set<string>>() : new Map(await Promise.all(projects.map(async (p) => [p.id, await retainedOf(p.id, p.path)] as const)));
+  const runDir = path.join(MYCO_HOME, 'run');
   const added: Record<string, number> = {};
+  const shown = new Set<string>();
   for (const f of staffList) {
     if (f.engine !== 'codex' || !projectIds.has(f.projectId)) continue;
     for (const entry of f.sessions) {
       if (listed.has(entry.id)) continue;
       listed.add(entry.id);
-      if (!sessions[f.projectId]) sessions[f.projectId] = [];
-      sessions[f.projectId]!.push(await codexSession(path.join(MYCO_HOME, 'run'), f.name, entry));
       added[f.projectId] = (added[f.projectId] ?? 0) + 1;
+      if (cutoff !== null && !liveIds.has(entry.id) && !retained.get(f.projectId)?.has(entry.id)) {
+        // Só `stat` do rollout (o threadId vem de run/ ou, se a limpeza já levou, do registro de conversas).
+        const at = await rolloutUpdatedAt(runDir, entry.id);
+        if (at && at.getTime() < cutoff) continue;
+      }
+      if (!sessions[f.projectId]) sessions[f.projectId] = [];
+      sessions[f.projectId]!.push(await codexSession(runDir, f.name, entry));
+      shown.add(f.projectId);
     }
   }
-  for (const pid of Object.keys(added)) sessions[pid]!.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  for (const pid of shown) sessions[pid]!.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   // Sessões de funcionário numa worktree própria contam como do projeto (onde está a ficha).
   const folded = projects.map((p) => ({ ...p, sessionCount: p.sessionCount + (added[p.id] ?? 0) }));
   for (const [child, parent] of mycoWorktreeParents(projects)) {
@@ -2099,7 +2175,9 @@ async function getBoard(): Promise<Board> {
   return { projects: folded, inventories, sessions, staff: staffList, images, user, live };
 }
 
-const INBOX_ORDER: Record<InboxKind, number> = { plan: 0, permission: 1, secret: 2, waiting: 3, error: 4, routine: 5, orphan: 6 };
+const INBOX_ORDER: Record<InboxKind, number> = { plan: 0, permission: 1, secret: 2, waiting: 3, error: 4, routine: 5, usage: 6, orphan: 7 };
+/** Avisos de consumo (conta e orçamento de projeto) que a caixa mostra; guardados entre leituras da caixa. */
+const usageWarnings = new UsageWarnings();
 
 /**
  * Tudo que espera você, de todas as salas: planos prontos e permissões pendentes das conversas
@@ -2158,6 +2236,31 @@ async function getInbox(): Promise<InboxItem[]> {
       summary: `rotina "${a.routineName}" não rodou: ${a.text.replace(/^pulada: /, '')}`,
       at: a.at,
     });
+  }
+  // Consumo da conta Claude 10 pontos antes da linha de parada, e orçamento de projeto a 80% (estimativa). Sem leitura recente, não avisa.
+  const cfg = await readConfig();
+  const budgeted = Object.keys(cfg.projectBudgets);
+  const costs = budgeted.length ? await getCosts() : null;
+  const week = Object.fromEntries(
+    budgeted.map((id) => [id, { project: costs?.projects[id]?.last7d ?? 0, total: costs?.total.last7d ?? 0 }]),
+  );
+  const warned = usageWarnings.update({
+    usage: await readUsage(),
+    usageStop: cfg.usageStop,
+    projectBudgets: cfg.projectBudgets,
+    week,
+    projectName: (id) => projects.find((p) => p.id === id)?.name ?? id,
+    now: Date.now(),
+  });
+  for (const u of warned.active) {
+    if (u.projectId === null) {
+      // Conta inteira: sem projeto nem funcionário.
+      out.push({ id: u.id, kind: 'usage', projectId: '', projectName: '', sessionId: '', staffId: null, name: 'Conta Claude', summary: u.summary, at: null });
+      continue;
+    }
+    if (hidden({ projectId: u.projectId, staffId: null, sessionId: '' })) continue;
+    const projectName = projects.find((p) => p.id === u.projectId)?.name ?? u.projectId;
+    out.push({ id: u.id, kind: 'usage', projectId: u.projectId, projectName, sessionId: '', staffId: null, name: projectName, summary: u.summary, at: null });
   }
   // Segredos que apareceram nas conversas do Claudio’s Club (senha num comando, token colado…).
   for (const s of chats.secretHits()) {
@@ -2344,6 +2447,18 @@ server.listen(PORT, HOST, () => {
       .catch(() => {});
   void cleanRun();
   setInterval(cleanRun, 12 * 60 * 60_000).unref();
+  // Retenção: apaga conversas do Club paradas além de deleteAfterDays, só com a exclusão confirmada no navegador. A primeira
+  // varredura só ~5 min depois da subida (o resume das conversas abertas acaba antes), depois a cada 12 h.
+  const RETENTION_EVERY_MS = 12 * 60 * 60_000;
+  const retentionRound = () => {
+    void runRetentionSweep(retentionDeps)
+      .catch((err) => console.error('[retencao] falhou:', err instanceof Error ? err.message : err))
+      .finally(() => setTimeout(retentionRound, RETENTION_EVERY_MS).unref());
+  };
+  // No boot: o que falta das 12 h desde a última varredura guardada (com piso de 5 min). Reiniciar muitas vezes não zera a conta.
+  void lastRetentionRun(retentionLastRun).then((last) =>
+    setTimeout(retentionRound, nextRetentionDelay(last, Date.now(), RETENTION_EVERY_MS, 5 * 60_000)).unref(),
+  );
   // Novidades do Claudio’s Club no GitHub: na subida e a cada 6 h.
   updater.start();
 });

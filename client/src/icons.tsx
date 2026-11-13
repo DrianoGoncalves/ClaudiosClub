@@ -214,18 +214,6 @@ export function PencilIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-/** Gráfico de barras: o ranking (gastos e modelos). */
-export function ChartIcon({ size = 15 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} aria-hidden="true" {...base}>
-      <path d="M3 3v16a2 2 0 0 0 2 2h16" />
-      <path d="M8 17v-3" />
-      <path d="M13 17V5" />
-      <path d="M18 17V9" />
-    </svg>
-  );
-}
-
 /** Lupa: analisar (revisão de custo do funcionário). */
 export function SearchIcon({ size = 15 }: { size?: number }) {
   return (

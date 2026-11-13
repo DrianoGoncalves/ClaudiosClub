@@ -30,6 +30,14 @@ const FallbackSchema = z.object({
 });
 const line = (max: number) => z.string().trim().max(max);
 const list = (max: number) => z.array(line(500)).max(max).default([]);
+// Política de MCP por ferramenta (ver shared/model.ts e server/staff/mcpPolicy.ts). A chave entra na linha de comando (--disallowedTools,
+// permissions.ask): por isso só `mcp__` seguido de caracteres seguros, sem vírgula, espaço ou aspas.
+export const McpPolicySchema = z
+  .record(
+    z.string().regex(/^mcp__[A-Za-z0-9_-]{1,128}$/, 'ferramenta MCP inválida').refine((k) => !k.endsWith('__'), 'ferramenta MCP inválida'),
+    z.enum(['allow', 'ask', 'off']),
+  )
+  .refine((o) => Object.keys(o).length <= 200, 'políticas demais');
 
 /** O que o questionário (ou um funcionário com permissão) envia, antes das regras que cruzam campos (ver `StaffInputSchema`). */
 const StaffInputObject = z.object({
@@ -46,6 +54,8 @@ const StaffInputObject = z.object({
   agents: list(100),
   skills: list(100),
   mcps: z.array(line(100)).max(100).nullable().default(null),
+  // Ausente = sem política (fica o que a ficha já tinha no PATCH); `{}` limpa.
+  mcpPolicy: McpPolicySchema.optional(),
   knowledge: list(50),
   rules: list(50),
   doneWhen: line(2000).default(''),
@@ -134,7 +144,7 @@ export const RoutineSchema = z.object({
       if (err) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `horário: ${err}` });
     }),
   message: line(4000).min(1, 'escreva a mensagem da rotina'),
-  mode: z.enum(['continue', 'new']).default('continue'),
+  mode: z.enum(['continue', 'new', 'task']).default('continue'),
   enabled: z.boolean().default(true),
 });
 export const RoutinesSchema = z.array(RoutineSchema).max(10, 'no máximo 10 rotinas por funcionário');
@@ -156,6 +166,8 @@ const ProfileSchema = StaffInputObject.omit({ portraitDataUrl: true, launch: tru
   lastEffort: CodexEffortSchema.optional().catch(undefined),
   // Secundário inválido no arquivo: some (a ficha segue sem ele) em vez de derrubar a ficha.
   fallback: FallbackSchema.optional().catch(undefined),
+  // Política inválida no arquivo (editado à mão): some, a ficha segue (como o secundário), em vez de a ficha sumir da lista.
+  mcpPolicy: McpPolicySchema.optional().catch(undefined),
   sessions: z
     .array(
       z.object({
@@ -215,6 +227,30 @@ export async function listProjectStaff(projectPath: string, projectId: string): 
   return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
+/**
+ * Como listProjectStaff, mas lança se alguma ficha existe e não lê (arquivo ilegível ou JSON/esquema inválido). A exclusão da
+ * retenção usa esta: ficha que não carrega deixaria a proteção incompleta, então o projeto inteiro é pulado.
+ */
+export async function listProjectStaffStrict(projectPath: string, projectId: string): Promise<StaffProfile[]> {
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = await fs.readdir(staffDir(projectPath), { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+  const out: StaffProfile[] = [];
+  for (const e of entries) {
+    const id = fichaIdOf(e);
+    if (!id) continue;
+    const raw = await fs.readFile(profileFile(projectPath, id), 'utf8');
+    const parsed = ProfileSchema.safeParse(tryJson(raw.replace(/^﻿/, '')));
+    if (!parsed.success) throw new Error(`ficha ${id} não lê (esquema inválido)`);
+    out.push({ ...(parsed.data as StaffProfile), projectId });
+  }
+  return out;
+}
+
 export async function readProfile(projectPath: string, id: string): Promise<StaffProfile | null> {
   if (!SAFE_ID.test(id)) return null;
   const raw = await fs.readFile(profileFile(projectPath, id), 'utf8').catch(() => null);
@@ -235,6 +271,22 @@ export function withProfileLock<T>(projectPath: string, staffId: string, fn: () 
     if (profileQueues.get(key) === tail) profileQueues.delete(key);
   });
   return run;
+}
+
+/**
+ * Tira da ficha as conversas apagadas pela retenção (ver retentionSweep.ts). Ficha que não existe não faz nada; devolve se mudou.
+ * Não mexe no selo: o selo guarda só motor e autonomia, e elas não mudam.
+ */
+export async function dropStaffSessions(projectPath: string, staffId: string, ids: string[]): Promise<boolean> {
+  return withProfileLock(projectPath, staffId, async () => {
+    const fresh = await readProfile(projectPath, staffId);
+    if (!fresh) return false;
+    const gone = new Set(ids);
+    const sessions = fresh.sessions.filter((s) => !gone.has(s.id));
+    if (sessions.length === fresh.sessions.length) return false;
+    await saveProfile(projectPath, { ...fresh, sessions });
+    return true;
+  });
 }
 
 export async function saveProfile(projectPath: string, p: StaffProfile): Promise<void> {
