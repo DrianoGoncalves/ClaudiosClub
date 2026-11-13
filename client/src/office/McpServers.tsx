@@ -158,11 +158,13 @@ export function McpServers({ projects }: { projects: Project[] }) {
   );
 }
 
-function TestOutcome({ result }: { result: { ok: boolean; tools: string[]; error?: string } }) {
+function TestOutcome({ result }: { result: { ok: boolean; tools: string[]; readOnly?: string[]; error?: string } }) {
   if (!result.ok) return <p className="error small">{t('mcp.testFail', { error: result.error ?? '' })}</p>;
   return (
     <p className="small ok">
       {t('mcp.testOk', { n: result.tools.length })}
+      {/* Quantas o próprio MCP marca como só leitura: o resto conta como escrita na política da ficha. */}
+      {result.tools.length > 0 && ` ${t('mcp.testReadOnly', { n: result.readOnly?.length ?? 0 })}`}
       {result.tools.length > 0 && <span className="mono mcp-tools"> {result.tools.join(', ')}</span>}
     </p>
   );

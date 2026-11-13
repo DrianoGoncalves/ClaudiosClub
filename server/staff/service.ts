@@ -48,6 +48,7 @@ import { buildClaudeArgs, capAutonomy } from './ficha';
 import { greeting, prepareCodexRun, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
 import { ensureWorktree, worktreeFor, type Worktree } from './worktree';
 import { listMcpServers } from './mcp';
+import { cleanMcpWrite, stricterMcpWrite } from './mcpTools';
 import { readSeal, sealViolation, writeSeal } from './seal';
 import {
   archiveVersion,
@@ -391,6 +392,9 @@ export class StaffService {
     }
     // A escrita SSH só vale para conexão que ficou na ficha (os filtros acima podem ter tirado servidores).
     input.sshWrite = (input.sshWrite ?? []).filter((n) => input.servers.includes(n));
+    // Contratado pela API: a escrita nos MCPs é no mínimo tão travada quanto a do gestor (o pedido não afrouxa).
+    if (hirer) input.mcpWrite = stricterMcpWrite(input.mcpWrite, hirer.mcpWrite);
+    input.mcpWrite = cleanMcpWrite(input.mcpWrite);
     // Contratado pela API: a escrita SSH do subordinado é no máximo a do gestor que contratou (o pedido não amplia).
     if (hirer) input.sshWrite = input.sshWrite.filter((n) => (hirer.sshWrite ?? []).includes(n));
     await this.checkCodexModel(input.engine, input.model);
@@ -501,6 +505,8 @@ export class StaffService {
       agents: src.agents,
       skills: src.skills,
       mcps: src.mcps ?? [], // "todos" da origem não são os MCPs deste projeto; a lista explícita segue
+      // A trava de escrita dos MCPs segue junto (pelo nome): copiar não afrouxa.
+      ...(src.mcpWrite && { mcpWrite: src.mcpWrite }),
       knowledge: src.knowledge,
       rules: src.rules,
       doneWhen: src.doneWhen,
@@ -601,6 +607,8 @@ export class StaffService {
     const { portraitDataUrl, launch: _launch, adoptSessionId: _adopt, force: _force, fallback, ...fields } = parsed.data;
     // Pedido sem `sshWrite` (a tela ainda não manda o campo): fica o que a ficha já tinha, para editar não zerar a escrita SSH.
     if (!(typeof body === 'object' && body !== null && 'sshWrite' in body)) fields.sshWrite = current.sshWrite ?? [];
+    // Sem `mcpWrite` no pedido, fica a política que a ficha tinha; `{}` limpa (tudo livre).
+    fields.mcpWrite = cleanMcpWrite(typeof body === 'object' && body !== null && 'mcpWrite' in body ? fields.mcpWrite : current.mcpWrite);
     if (fields.reportsTo.includes(staffId)) throw new StaffError('um funcionário não pode reportar a si mesmo');
     await this.managers(project.path, fields.reportsTo);
     if (await this.wouldCycle(project.path, staffId, fields.reportsTo)) {

@@ -9,6 +9,7 @@ import {
   type GitState,
   type LaunchResult,
   type McpServerInfo,
+  type McpWritePolicy,
   type Playbook,
   type ServerInfo,
   type Session,
@@ -25,6 +26,7 @@ import { BrowserCheck } from './BrowserCheck';
 import { CopyFromCompany } from './CopyFromCompany';
 import { differingFields, PERSON_FIELD_LABEL } from './directory';
 import { FallbackField } from './FallbackField';
+import { MCP_WRITE_OPTIONS, mcpWriteHint, mcpWriteToSend, setMcpWrite, type McpWriteChoice } from './mcpWrite';
 import { draftOf, fallbackProblem, fallbackToSend, showFallbackField, type FallbackDraft } from './fallbackEngine';
 import { PersonMemory } from './PersonMemory';
 import { PERSONALITY_TEXT, personalityToSend } from './personalityField';
@@ -136,6 +138,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   const [skills, setSkills] = useState<string[]>(editing?.skills ?? []);
   const [mcps, setMcps] = useState<McpServerInfo[] | null>(null);
   const [mcpOn, setMcpOn] = useState<Set<string>>(new Set());
+  // Escrita por MCP (livre / pede antes / bloqueada); só vale no motor Claude.
+  const [mcpWrite, setMcpWriteState] = useState<Record<string, McpWritePolicy>>(editing?.mcpWrite ?? {});
   const [knowledge, setKnowledge] = useState((editing?.knowledge ?? []).join('\n'));
   const [rules, setRules] = useState((editing?.rules ?? []).join('\n'));
   const [doneWhen, setDoneWhen] = useState(editing?.doneWhen ?? '');
@@ -367,6 +371,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       // nenhum: a sessão abre mais leve e rápida; quem precisa liga no avançado. Sem lista (vazia ou
       // falhou), editando mantém o que a ficha tinha; contratando, nenhum.
       mcps: codex || simpleHire ? [] : !mcps?.length ? (editing ? editing.mcps : []) : allMcps ? null : [...mcpOn],
+      // Só com a lista na tela; sem ela (Codex, simples, lista que não veio), o pedido não leva o campo e a ficha mantém a política.
+      ...(!codex && !simpleHire && mcps?.length ? { mcpWrite: mcpWriteToSend(mcpWrite, allMcps ? null : mcpOn) } : {}),
       knowledge: lines(knowledge),
       rules: lines(rules),
       doneWhen,
@@ -786,25 +792,51 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           {mcps && mcps.length > 0 && (
             <>
               <div className="checks">
-                {mcps.map((m) => (
-                  <label key={m.name} className="check">
-                    <input
-                      type="checkbox"
-                      checked={mcpOn.has(m.name)}
-                      onChange={() => {
-                        const next = new Set(mcpOn);
-                        if (next.has(m.name)) next.delete(m.name);
-                        else next.add(m.name);
-                        setMcpOn(next);
-                      }}
-                    />{' '}
-                    {m.name}
-                    <span className="muted small">
-                      {' '}
-                      {t(MCP_SOURCE_LABEL[m.source])}
-                    </span>
-                  </label>
-                ))}
+                {mcps.map((m) => {
+                  const on = mcpOn.has(m.name);
+                  const hint = mcpWriteHint(m);
+                  return (
+                    <div key={m.name} className={on ? 'check-server has-write' : 'check-server'}>
+                      <label className="check">
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={() => {
+                            const next = new Set(mcpOn);
+                            if (next.has(m.name)) next.delete(m.name);
+                            else next.add(m.name);
+                            setMcpOn(next);
+                          }}
+                        />{' '}
+                        {m.name}
+                        <span className="muted small">
+                          {' '}
+                          {t(MCP_SOURCE_LABEL[m.source])}
+                        </span>
+                      </label>
+                      {on && (
+                        <div className="check-write">
+                          <label className="mcp-write">
+                            {t('staff.mcpWrite')}{' '}
+                            <select
+                              value={mcpWrite[m.name] ?? 'free'}
+                              onChange={(e) => setMcpWriteState(setMcpWrite(mcpWrite, m.name, e.target.value as McpWriteChoice))}
+                            >
+                              {MCP_WRITE_OPTIONS.map((o) => (
+                                <option key={o.value} value={o.value}>
+                                  {t(o.label)}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          {mcpWrite[m.name] && (
+                            <p className="muted small">{t(hint.key, hint.params)}</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
               <p className="muted small">{allMcps ? t('staff.mcpAllOn') : t('staff.mcpSomeOff')}</p>
             </>

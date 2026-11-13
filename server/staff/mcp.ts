@@ -2,13 +2,14 @@ import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import type { McpServerInfo } from '../../shared/model';
+import type { McpServerInfo, StaffProfile } from '../../shared/model';
 import { MYCO_HOME } from '../config';
 import { tryJson } from '../adapters/claude/fsutil';
 import { pathKey } from '../adapters/claude/paths';
 import { findSecret } from '../chat/secrets';
 import { DEFAULT_SECRETS_DIR, getSecret, type VaultOptions } from '../secretVault';
 import { mcpLaunchCommand } from './mcpLaunch';
+import { MCP_TOOLS_FILE, mcpFingerprint, mcpWriteRules, testedToolsMany, toolsKey, type McpTool } from './mcpTools';
 
 // MCPs que vão para a conversa de um funcionário, de quatro origens (da mais específica para a mais geral):
 //   local   = só este projeto, em ~/.claude.json (projects[<caminho>].mcpServers)
@@ -106,10 +107,48 @@ async function collect(projectPath: string, claudeConfigFile: string, clubFile: 
   return found;
 }
 
-export async function listMcpServers(projectPath: string, claudeConfigFile: string, clubFile = CLUB_MCP_FILE): Promise<McpServerInfo[]> {
-  return [...(await collect(projectPath, claudeConfigFile, clubFile)).values()]
-    .map((f) => f.info)
+/** As ferramentas do último teste de cada servidor achado (só os que ainda batem com o teste; ver mcpTools.ts). */
+async function toolsOf(found: Map<string, Found>, projectPath: string, toolsFile: string): Promise<Map<string, McpTool[]>> {
+  const keyOf = (name: string, f: Found) => toolsKey(f.info.source, projectPath, name);
+  const tested = await testedToolsMany(
+    toolsFile,
+    [...found].map(([name, f]) => ({ key: keyOf(name, f), fingerprint: mcpFingerprint(f.config) })),
+  );
+  const out = new Map<string, McpTool[]>();
+  for (const [name, f] of found) {
+    const tools = tested.get(keyOf(name, f));
+    if (tools) out.set(name, tools);
+  }
+  return out;
+}
+
+export async function listMcpServers(projectPath: string, claudeConfigFile: string, clubFile = CLUB_MCP_FILE, toolsFile = MCP_TOOLS_FILE): Promise<McpServerInfo[]> {
+  const found = await collect(projectPath, claudeConfigFile, clubFile);
+  const tools = await toolsOf(found, projectPath, toolsFile).catch(() => new Map<string, McpTool[]>());
+  return [...found.values()]
+    .map((f) => {
+      const list = tools.get(f.info.name);
+      return list ? { ...f.info, tools: { total: list.length, write: list.filter((t) => !t.readOnly).length } } : f.info;
+    })
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * As regras da política de escrita da ficha (`mcpWrite`) para esta sessão: `deny` vai ao `--disallowedTools`, `ask` ao
+ * `permissions.ask` do `--settings`. Só o motor Claude (o Codex não tem MCPs). MCP que não está no projeto fica de fora.
+ */
+export async function mcpWriteRulesFor(
+  projectPath: string,
+  profile: Pick<StaffProfile, 'engine' | 'mcpWrite'>,
+  claudeConfigFile: string,
+  o: { clubFile?: string; toolsFile?: string } = {},
+): Promise<{ deny: string[]; ask: string[] }> {
+  if ((profile.engine ?? 'claude') !== 'claude' || !profile.mcpWrite || !Object.keys(profile.mcpWrite).length) return { deny: [], ask: [] };
+  const found = await collect(projectPath, claudeConfigFile, o.clubFile ?? CLUB_MCP_FILE);
+  // Arquivo ilegível = sem lista: a regra vale para o servidor inteiro (nunca libera por erro de leitura).
+  const tools = await toolsOf(found, projectPath, o.toolsFile ?? MCP_TOOLS_FILE).catch(() => new Map<string, McpTool[]>());
+  const servers = new Map<string, McpTool[] | null>([...found.keys()].map((name) => [name, tools.get(name) ?? null]));
+  return mcpWriteRules(profile.mcpWrite, servers);
 }
 
 export interface McpSecret {
