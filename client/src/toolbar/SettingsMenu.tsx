@@ -75,14 +75,15 @@ interface Props {
 
 type GroupId = 'general' | 'board' | 'chat' | 'roles' | 'mcp' | 'usage' | 'queue' | 'credits';
 
+/** Ordem do menu: o dia a dia primeiro, o que gasta cota e a máquina no meio, o que se configura raramente por último. */
 const GROUPS: Array<{ id: GroupId; label: string; intro: string }> = [
   { id: 'general', label: t('toolbar.groupGeneral'), intro: t('toolbar.groupGeneralIntro') },
   { id: 'board', label: t('toolbar.groupBoard'), intro: t('toolbar.groupBoardIntro') },
   { id: 'chat', label: t('toolbar.groupChat'), intro: t('toolbar.groupChatIntro') },
-  { id: 'roles', label: t('toolbar.groupRoles'), intro: t('toolbar.groupRolesIntro') },
-  { id: 'mcp', label: t('mcp.group'), intro: t('mcp.groupIntro') },
   { id: 'usage', label: t('toolbar.groupUsage'), intro: t('toolbar.groupUsageIntro') },
   { id: 'queue', label: t('toolbar.groupQueue'), intro: t('toolbar.groupQueueIntro') },
+  { id: 'roles', label: t('toolbar.groupRoles'), intro: t('toolbar.groupRolesIntro') },
+  { id: 'mcp', label: t('mcp.group'), intro: t('mcp.groupIntro') },
   { id: 'credits', label: t('toolbar.groupCredits'), intro: t('toolbar.groupCreditsIntro') },
 ];
 
@@ -94,13 +95,16 @@ const CREDITS = [
   { name: 'Caveat', license: 'SIL OFL 1.1', url: 'https://fonts.google.com/specimen/Caveat' },
 ];
 
-type SectionId = 'workspaces' | 'colors' | 'display';
+type SectionId = 'workspaces' | 'colors' | 'display' | 'help' | 'ai' | 'system';
 
 /** Blocos com título dentro de um grupo, nesta ordem. Itens sem bloco vêm antes. */
 const SECTIONS: Array<{ id: SectionId; group: GroupId; label: string }> = [
+  { id: 'help', group: 'general', label: t('toolbar.sectionHelp') },
+  { id: 'ai', group: 'general', label: t('toolbar.sectionAi') },
+  { id: 'system', group: 'general', label: t('toolbar.sectionSystem') },
   { id: 'workspaces', group: 'board', label: t('toolbar.sectionWorkspaces') },
-  { id: 'colors', group: 'board', label: t('toolbar.sectionColors') },
   { id: 'display', group: 'board', label: t('toolbar.sectionDisplay') },
+  { id: 'colors', group: 'board', label: t('toolbar.sectionColors') },
 ];
 
 /** Singular ou plural da chave conforme n. */
@@ -376,14 +380,6 @@ function buildSettings(
           },
         ]
       : []),
-    {
-      id: 'theme',
-      group: 'general',
-      title: t('toolbar.themeTitle'),
-      description: t('toolbar.themeDesc'),
-      keywords: t('toolbar.themeKeywords'),
-      control: <ThemePicker />,
-    },
     // Idioma: a escolha vale para a página toda e recarrega.
     {
       id: 'language',
@@ -401,6 +397,14 @@ function buildSettings(
         </select>
       ),
     },
+    {
+      id: 'theme',
+      group: 'general',
+      title: t('toolbar.themeTitle'),
+      description: t('toolbar.themeDesc'),
+      keywords: t('toolbar.themeKeywords'),
+      control: <ThemePicker />,
+    },
     ...(p.workspaces && p.projectWorkspaces
       ? [
           {
@@ -416,9 +420,24 @@ function buildSettings(
           },
         ]
       : []),
+    // O manual é um arquivo estático (client/public/manual.html), só em português; abre fora do app.
+    {
+      id: 'manual',
+      group: 'general',
+      section: 'help',
+      title: t('toolbar.manualTitle'),
+      description: t('toolbar.manualDesc'),
+      keywords: t('toolbar.manualKeywords'),
+      control: (
+        <a className="btn-secondary setting-link" href="/manual.html" target="_blank" rel="noopener noreferrer">
+          {t('toolbar.manualOpen')}
+        </a>
+      ),
+    },
     {
       id: 'demo',
       group: 'general',
+      section: 'help',
       title: t('office.demoTitle'),
       description: t('office.demoDesc'),
       keywords: t('office.demoKeywords'),
@@ -445,32 +464,6 @@ function buildSettings(
         );
       })(),
     },
-    // O manual é um arquivo estático (client/public/manual.html), só em português; abre fora do app.
-    {
-      id: 'manual',
-      group: 'general',
-      title: t('toolbar.manualTitle'),
-      description: t('toolbar.manualDesc'),
-      keywords: t('toolbar.manualKeywords'),
-      control: (
-        <a className="btn-secondary setting-link" href="/manual.html" target="_blank" rel="noopener noreferrer">
-          {t('toolbar.manualOpen')}
-        </a>
-      ),
-    },
-    ...(p.showUserScope !== null
-      ? [
-          {
-            id: 'user-scope',
-            group: 'board' as const,
-            section: 'display' as const,
-            title: t('toolbar.userScopeTitle'),
-            description: t('toolbar.userScopeDesc'),
-            keywords: t('toolbar.userScopeKeywords'),
-            toggle: { checked: p.showUserScope, onChange: (v: boolean) => void api.saveConfig({ showUserScope: v }).then(p.onConfig, () => {}) },
-          },
-        ]
-      : []),
     {
       id: 'archived',
       group: 'board',
@@ -489,37 +482,56 @@ function buildSettings(
       keywords: t('toolbar.animationsKeywords'),
       toggle: { checked: p.animations, onChange: p.onToggleAnimations },
     },
-    {
-      id: 'sysmon',
-      group: 'general',
-      title: t('toolbar.sysmonTitle'),
-      description: t('toolbar.sysmonDesc'),
-      keywords: t('toolbar.sysmonKeywords'),
-      toggle: { checked: systemMonitor, onChange: setSystemMonitor },
-    },
+    // O escopo do usuário é o item mais técnico do bloco: por último.
+    ...(p.showUserScope !== null
+      ? [
+          {
+            id: 'user-scope',
+            group: 'board' as const,
+            section: 'display' as const,
+            title: t('toolbar.userScopeTitle'),
+            description: t('toolbar.userScopeDesc'),
+            keywords: t('toolbar.userScopeKeywords'),
+            toggle: { checked: p.showUserScope, onChange: (v: boolean) => void api.saveConfig({ showUserScope: v }).then(p.onConfig, () => {}) },
+          },
+        ]
+      : []),
+    // Sistema: o pareamento primeiro (sem ele nenhuma ação vale), parar/reiniciar por último.
     {
       id: 'pair',
       group: 'general',
+      section: 'system',
       title: t('toolbar.pairTitle'),
       description: t('toolbar.pairDesc'),
       keywords: t('toolbar.pairKeywords'),
       control: <PairControls />,
     },
     {
-      id: 'server',
-      group: 'general',
-      title: t('toolbar.serverTitle'),
-      description: t('toolbar.serverDesc'),
-      keywords: t('toolbar.serverKeywords'),
-      control: <ServerControls />,
-    },
-    {
       id: 'update',
       group: 'general',
+      section: 'system',
       title: t('toolbar.updateTitle'),
       description: t('toolbar.updateDesc'),
       keywords: t('toolbar.updateKeywords'),
       control: <UpdateControls />,
+    },
+    {
+      id: 'sysmon',
+      group: 'general',
+      section: 'system',
+      title: t('toolbar.sysmonTitle'),
+      description: t('toolbar.sysmonDesc'),
+      keywords: t('toolbar.sysmonKeywords'),
+      toggle: { checked: systemMonitor, onChange: setSystemMonitor },
+    },
+    {
+      id: 'server',
+      group: 'general',
+      section: 'system',
+      title: t('toolbar.serverTitle'),
+      description: t('toolbar.serverDesc'),
+      keywords: t('toolbar.serverKeywords'),
+      control: <ServerControls />,
     },
     {
       id: 'mcp-servers',
@@ -577,6 +589,18 @@ function buildSettings(
     toggle: { checked: chatDetail, onChange: setChatDetail },
   });
 
+  if (p.sendWhileBusy) {
+    out.push({
+      id: 'send-while-busy',
+      group: 'chat',
+      title: t('toolbar.sendBusyTitle'),
+      description: t('toolbar.sendBusyDesc', { how: SEND_HELP[p.sendWhileBusy] }),
+      keywords: t('toolbar.sendBusyKeywords'),
+      control: <SendWhileBusyEditor value={p.sendWhileBusy} onSave={p.onSendWhileBusy} />,
+      advanced: true,
+    });
+  }
+
   if (p.contextSwitch) {
     out.push({
       id: 'context-switch',
@@ -596,18 +620,6 @@ function buildSettings(
       description: t('toolbar.freelaArchiveDesc'),
       keywords: t('toolbar.freelaArchiveKeywords'),
       control: <FreelaArchiveInput value={p.freelaArchiveDays} onConfig={p.onConfig} />,
-      advanced: true,
-    });
-  }
-
-  if (p.sendWhileBusy) {
-    out.push({
-      id: 'send-while-busy',
-      group: 'chat',
-      title: t('toolbar.sendBusyTitle'),
-      description: t('toolbar.sendBusyDesc', { how: SEND_HELP[p.sendWhileBusy] }),
-      keywords: t('toolbar.sendBusyKeywords'),
-      control: <SendWhileBusyEditor value={p.sendWhileBusy} onSave={p.onSendWhileBusy} />,
       advanced: true,
     });
   }
@@ -644,10 +656,53 @@ function buildSettings(
     );
   }
 
+  // O orçamento por projeto é a mesma trava, só que por projeto: fica junto das travas de 5 h e 7 dias.
+  if (p.projectBudgets) {
+    const budgets = p.projectBudgets;
+    const text = t('toolbar.budgetsSearch');
+    const rooms = words.length && !matches(text, words) ? p.rooms.filter((r) => matches(r.name, words)) : p.rooms;
+    out.push({
+      id: 'project-budgets',
+      group: 'usage',
+      title: t('toolbar.budgetsTitle'),
+      description: t('toolbar.budgetsDesc'),
+      keywords: `${t('toolbar.budgetsKeywords')} ${p.rooms.map((r) => r.name).join(' ')}`,
+      control: rooms.length ? (
+        <ul className="room-colors">
+          {rooms.map((r) => (
+            <li key={r.id}>
+              <span className="room-colors-name" title={r.name}>
+                {r.name}
+              </span>
+              <BudgetInput value={budgets[r.id] ?? null} label={t('toolbar.budgetOf', { name: r.name })} onSave={(b) => p.onProjectBudget(r.id, b)} />
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted small">{t('toolbar.noRooms')}</p>
+      ),
+      advanced: true,
+    });
+  }
+
+  // Internet e GPT: a internet vale para o Claude também e é a única que aparece no nível simples, então abre o bloco.
+  if (p.internetAccess !== null) {
+    out.push({
+      id: 'internet-access',
+      group: 'general',
+      section: 'ai',
+      title: t('toolbar.internetTitle'),
+      description: t('toolbar.internetDesc'),
+      keywords: t('toolbar.internetKeywords'),
+      toggle: { checked: p.internetAccess, onChange: (v) => void api.saveConfig({ internetAccess: v }).then(p.onConfig, () => {}) },
+    });
+  }
+
   if (p.codexReview !== null) {
     out.push({
       id: 'codex-review',
       group: 'general',
+      section: 'ai',
       title: t('toolbar.codexTitle'),
       description: t('toolbar.codexDesc'),
       keywords: t('toolbar.codexKeywords'),
@@ -667,6 +722,7 @@ function buildSettings(
       out.push({
         id: 'codex-model',
         group: 'general',
+        section: 'ai',
         title: t('toolbar.codexModelTitle'),
         description: t('toolbar.codexModelDesc'),
         keywords: t('toolbar.codexModelKeywords'),
@@ -676,21 +732,11 @@ function buildSettings(
     }
   }
 
-  if (p.internetAccess !== null) {
-    out.push({
-      id: 'internet-access',
-      group: 'general',
-      title: t('toolbar.internetTitle'),
-      description: t('toolbar.internetDesc'),
-      keywords: t('toolbar.internetKeywords'),
-      toggle: { checked: p.internetAccess, onChange: (v) => void api.saveConfig({ internetAccess: v }).then(p.onConfig, () => {}) },
-    });
-  }
-
   if (p.codexBrowser !== null) {
     out.push({
       id: 'codex-browser',
       group: 'general',
+      section: 'ai',
       title: t('toolbar.codexBrowserTitle'),
       description: t('toolbar.codexBrowserDesc'),
       keywords: t('toolbar.codexBrowserKeywords'),
@@ -846,33 +892,6 @@ function buildSettings(
     );
   }
 
-  if (p.projectBudgets) {
-    const budgets = p.projectBudgets;
-    const text = t('toolbar.budgetsSearch');
-    const rooms = words.length && !matches(text, words) ? p.rooms.filter((r) => matches(r.name, words)) : p.rooms;
-    out.push({
-      id: 'project-budgets',
-      group: 'usage',
-      title: t('toolbar.budgetsTitle'),
-      description: t('toolbar.budgetsDesc'),
-      keywords: `${t('toolbar.budgetsKeywords')} ${p.rooms.map((r) => r.name).join(' ')}`,
-      control: rooms.length ? (
-        <ul className="room-colors">
-          {rooms.map((r) => (
-            <li key={r.id}>
-              <span className="room-colors-name" title={r.name}>
-                {r.name}
-              </span>
-              <BudgetInput value={budgets[r.id] ?? null} label={t('toolbar.budgetOf', { name: r.name })} onSave={(b) => p.onProjectBudget(r.id, b)} />
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="muted small">{t('toolbar.noRooms')}</p>
-      ),
-      advanced: true,
-    });
-  }
   return out;
 }
 
