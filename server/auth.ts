@@ -27,7 +27,7 @@ export function withoutMycoToken(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 export function parseAuthStatus(stdout: string, checkedAt = new Date()): AuthStatus {
   const json = stdout.slice(stdout.indexOf('{'), stdout.lastIndexOf('}') + 1);
-  let parsed: z.SafeParseReturnType<unknown, z.infer<typeof StatusOutput>>;
+  let parsed: z.ZodSafeParseResult<z.infer<typeof StatusOutput>>;
   try {
     parsed = StatusOutput.safeParse(JSON.parse(json));
   } catch {

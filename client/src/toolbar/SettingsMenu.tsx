@@ -68,6 +68,8 @@ interface Props {
   internetAccess: boolean | null;
   /** Permitir que o GPT (Codex) use o Chrome do usuário; null = config ainda não chegou. */
   codexBrowser: boolean | null;
+  /** Bloquear a tela do Club no navegador dos funcionários; null = config ainda não chegou. */
+  clubGuard: boolean | null;
   /** Dias parado até o Freela ser arquivado sozinho (0 = nunca); null = config ainda não chegou. */
   freelaArchiveDays: number | null;
   /** Gate de recursos da fila (só o início automático); null = config ainda não chegou. */
@@ -837,6 +839,19 @@ function buildSettings(
           {t('toolbar.codexBrowserInstall')}
         </a>
       ),
+      advanced: true,
+    });
+  }
+
+  // Bloqueio da tela do Club no navegador dos funcionários: desligar é para quem testa o próprio Club (o agente age com os seus poderes).
+  if (p.clubGuard !== null) {
+    out.push({
+      id: 'club-guard',
+      group: 'general',
+      title: t('toolbar.clubGuardTitle'),
+      description: t('toolbar.clubGuardDesc'),
+      keywords: t('toolbar.clubGuardKeywords'),
+      toggle: { checked: p.clubGuard, onChange: (v) => void api.saveConfig({ clubGuard: v }).then(p.onConfig, () => {}) },
       advanced: true,
     });
   }

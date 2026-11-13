@@ -153,6 +153,10 @@ export default defineMessages({
       'O GPT usa suas abas e logins pela extensão Playwright MCP Bridge. Sem pedir aprovação a cada clique: ligue só se confiar. Não vale em conversa com servidor.',
     'toolbar.codexBrowserKeywords': 'chrome navegador browser gpt codex playwright mcp extensão abas logins bridge',
     'toolbar.codexBrowserInstall': 'Instalar a extensão Playwright MCP Bridge',
+    'toolbar.clubGuardTitle': 'Bloquear o Claudio’s Club no navegador dos funcionários',
+    'toolbar.clubGuardDesc':
+      'O navegador deles é o seu, já pareado: sem o bloqueio, um funcionário com Navegador aprova permissões e planos e mescla entregas no seu lugar. Desligue só para testar o próprio Claudio’s Club (para só ver a tela, use http://localhost:5173, sem pareamento). Vale para conversas novas.',
+    'toolbar.clubGuardKeywords': 'bloquear bloqueio localhost claudio club tela navegador browser chrome funcionário pareamento aprovar segurança',
     'toolbar.freelaArchiveTitle': 'Arquivar Freela parado há (dias)',
     'toolbar.freelaArchiveDesc':
       'Freela é uma conversa avulsa, sem ficha de funcionário. Se ficar parada por esse número de dias sem ser efetivada (virar funcionário), é arquivada sozinha; dá para desarquivar. 0 = nunca.',
@@ -515,6 +519,10 @@ export default defineMessages({
       'GPT uses your tabs and logins through the Playwright MCP Bridge extension. It does not ask for approval on every click: turn this on only if you trust it. Does not apply in a conversation with a server.',
     'toolbar.codexBrowserKeywords': 'chrome browser gpt codex playwright mcp extension tabs logins bridge',
     'toolbar.codexBrowserInstall': 'Install the Playwright MCP Bridge extension',
+    'toolbar.clubGuardTitle': 'Block Claudio’s Club in the staff browser',
+    'toolbar.clubGuardDesc':
+      'Their browser is yours, already paired: without the block, a staff member with Browser can approve permissions and plans and merge deliveries in your place. Turn it off only to test Claudio’s Club itself (to just look at the screen, use http://localhost:5173, unpaired). Applies to new conversations.',
+    'toolbar.clubGuardKeywords': 'block localhost claudio club screen browser chrome staff pairing approve security',
     'toolbar.freelaArchiveTitle': 'Archive idle Freelancer after (days)',
     'toolbar.freelaArchiveDesc':
       'A Freelancer is a standalone chat without an employee profile. If it stays idle this many days without being hired (turned into an employee), it is archived on its own; you can unarchive it. 0 = never.',
@@ -872,6 +880,10 @@ export default defineMessages({
       'GPT usa tus pestañas y sesiones mediante la extensión Playwright MCP Bridge. No pide aprobación en cada clic: actívalo solo si confías. No vale en una conversación con servidor.',
     'toolbar.codexBrowserKeywords': 'chrome navegador browser gpt codex playwright mcp extensión pestañas sesiones bridge',
     'toolbar.codexBrowserInstall': 'Instalar la extensión Playwright MCP Bridge',
+    'toolbar.clubGuardTitle': 'Bloquear Claudio’s Club en el navegador de los empleados',
+    'toolbar.clubGuardDesc':
+      'Su navegador es el tuyo, ya emparejado: sin el bloqueo, un empleado con Navegador aprueba permisos y planes y fusiona entregas en tu lugar. Desactívalo solo para probar el propio Claudio’s Club (para solo ver la pantalla, usa http://localhost:5173, sin emparejar). Vale para conversaciones nuevas.',
+    'toolbar.clubGuardKeywords': 'bloquear bloqueo localhost claudio club pantalla navegador browser chrome empleado emparejamiento aprobar seguridad',
     'toolbar.freelaArchiveTitle': 'Archivar Freelance inactivo tras (días)',
     'toolbar.freelaArchiveDesc':
       'Un Freelance es una conversación suelta, sin ficha de empleado. Si queda inactiva esta cantidad de días sin ser contratada (convertirse en empleado), se archiva sola; se puede desarchivar. 0 = nunca.',

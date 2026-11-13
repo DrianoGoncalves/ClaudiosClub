@@ -17,6 +17,8 @@ export interface ResumeEntry {
   cwd: string;
   /** Havia pedido de permissão ou pergunta sem resposta: o aviso manda refazer o pedido. */
   hadPending: boolean;
+  /** O fechamento cortou no meio esta ação com efeito fora do projeto (ver cutAction.ts): não retoma sozinha, vai para você. */
+  cut?: string;
 }
 
 /** Pedido com mais que isso não é retomado (o servidor demorou demais, ou o arquivo é de outra vez). */
@@ -34,6 +36,7 @@ const Entry = z.object({
   engine: z.enum(['claude', 'codex']),
   cwd: z.string(),
   hadPending: z.boolean(),
+  cut: z.string().min(1).max(200).optional(),
 });
 const Body = z.object({ savedAt: z.string(), sessions: z.array(z.unknown()) });
 
@@ -106,18 +109,31 @@ export interface ResumeDeps {
   stopHit: (projectId: string, staffId: string | null, engine: 'claude' | 'codex') => Promise<{ resetsAt: string | null } | null>;
   /** Reabre a conversa e manda o aviso (ChatManager.resumeChat). */
   send: (entry: ResumeEntry) => Promise<void>;
+  /** Conversa cortada numa ação com efeito fora do projeto (`cut`): não envia; segura para você (ChatManager.holdCut). */
+  hold?: (entry: ResumeEntry & { cut: string }) => void;
   now?: () => number;
   log?: (line: string) => void;
 }
 
 /**
- * Boot, com o servidor ouvindo e os motores prontos: retoma cada conversa que estava em turno. Confere o limite antes
- * (barrado: não envia). Uma tentativa por conversa; se o envio falhar, segue sem repetir.
+ * Boot, com o servidor ouvindo e os motores prontos: retoma cada conversa que estava em turno. Antes, o corte (ação com efeito
+ * fora do projeto pela metade: segura para você) e o limite (barrado: não envia). Uma tentativa por conversa; se o envio falhar,
+ * segue sem repetir.
  */
 export async function resumeAfterRestart(d: ResumeDeps): Promise<void> {
   const log = d.log ?? ((line: string) => console.log(`[retomar] ${line}`));
   const entries = await takeResume(d.file, d.now?.() ?? Date.now(), log);
   for (const e of entries) {
+    // Ninguém sabe se a ação cortada chegou a acontecer: retomar sozinho poderia repeti-la (push, deploy, comando no servidor).
+    if (e.cut) {
+      try {
+        d.hold?.({ ...e, cut: e.cut });
+      } catch (err) {
+        log(`${e.sessionId}: não consegui avisar o corte: ${errorText(err)}`);
+      }
+      log(`${e.sessionId}: não retomada: o reinício cortou "${e.cut}" no meio (vai para você)`);
+      continue;
+    }
     let stop: { resetsAt: string | null } | null;
     try {
       stop = await d.stopHit(e.projectId, e.staffId, e.engine);

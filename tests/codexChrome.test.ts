@@ -10,6 +10,7 @@ import { renderFicha } from '../server/staff/ficha';
 import { CHROME_MCP_CLI, codexChromeOf, prepareCodexRun, type LaunchContext } from '../server/staff/launch';
 import { StaffService, type StaffServiceOptions } from '../server/staff/service';
 import { ROOT } from '../server/root';
+import { clubBlockedOrigins } from '../server/clubAddress';
 
 // O Chrome do usuário no Codex (MCP `myco-chrome`, Playwright em modo extensão): quando entra, como vai na linha de comando, o que a ficha diz.
 
@@ -149,7 +150,7 @@ describe('codexChromeOf: o Chrome só entra nas quatro condições', () => {
 
   it('ligada, com Navegador, sem SSH e com o pacote: entra com node, o cli, --extension e --output-dir na pasta da conversa, e o cwd é essa pasta', () => {
     const r = codexChromeOf({ browser: true }, on(), false, dir());
-    expect(r.mcp).toEqual({ command: process.execPath, args: [CLI, '--extension', '--output-dir', dir()], cwd: dir() });
+    expect(r.mcp).toEqual({ command: process.execPath, args: [CLI, '--extension', '--output-dir', dir(), '--blocked-origins', clubBlockedOrigins()], cwd: dir() });
     expect(r.info).toEqual({ mcp: true, motivos: [] });
   });
 
@@ -183,7 +184,7 @@ describe('prepareCodexRun: o Chrome na conversa e na ficha', () => {
     await fs.mkdir(proj, { recursive: true });
     const run = await prepareCodexRun(profile(), launch(proj, { codexBrowser: true, chromeMcpCli: CLI }), 'sess-on', proj);
     const pasta = CHROME_DIR('sess-on');
-    expect(run.chromeMcp).toEqual({ command: process.execPath, args: [CLI, '--extension', '--output-dir', pasta], cwd: pasta });
+    expect(run.chromeMcp).toEqual({ command: process.execPath, args: [CLI, '--extension', '--output-dir', pasta, '--blocked-origins', clubBlockedOrigins()], cwd: pasta });
     expect(existsSync(pasta)).toBe(true); // criada no lançamento
     expect(pasta.startsWith(proj)).toBe(false); // nunca dentro do projeto
     const md = await fichaDe(proj);

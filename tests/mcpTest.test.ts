@@ -86,12 +86,12 @@ afterAll(async () => {
 describe('teste de MCP: HTTP (streamable)', () => {
   it('lista as ferramentas (resposta em JSON)', async () => {
     const r = await testMcpConfig({ type: 'http', url: `${base}/mcp`, headers: AUTH });
-    expect(r).toEqual({ ok: true, tools: ['busca', 'resumo'] });
+    expect(r).toEqual({ ok: true, tools: ['busca', 'resumo'], readOnly: [] });
   });
 
   it('lista as ferramentas quando a resposta vem em SSE', async () => {
     const r = await testMcpConfig({ type: 'http', url: `${base}/sse`, headers: AUTH });
-    expect(r).toEqual({ ok: true, tools: ['busca', 'resumo'] });
+    expect(r).toEqual({ ok: true, tools: ['busca', 'resumo'], readOnly: [] });
   });
 
   it('autenticação recusada: mensagem clara, sem o token', async () => {
@@ -146,7 +146,7 @@ describe('teste de MCP: HTTP (streamable)', () => {
         },
       },
     );
-    expect(r).toEqual({ ok: true, tools: ['busca', 'resumo'] });
+    expect(r).toEqual({ ok: true, tools: ['busca', 'resumo'], readOnly: [] });
     expect(calls).toBeGreaterThanOrEqual(2);
   });
 
@@ -166,7 +166,7 @@ describe('teste de MCP: stdio', () => {
         args: [stdioScript],
         env: { NOME_DA_FERRAMENTA: '${MYCO_TESTE_FERRAMENTA}' },
       });
-      expect(r).toEqual({ ok: true, tools: ['vinda-do-ambiente', 'soma'] });
+      expect(r).toEqual({ ok: true, tools: ['vinda-do-ambiente', 'soma'], readOnly: [] });
     } finally {
       delete process.env.MYCO_TESTE_FERRAMENTA;
     }
@@ -174,7 +174,7 @@ describe('teste de MCP: stdio', () => {
 
   it('${VAR:-padrão} usa o padrão quando a variável não existe', async () => {
     const r = await testMcpConfig({ type: 'stdio', command: process.execPath, args: [stdioScript], env: { NOME_DA_FERRAMENTA: '${MYCO_TESTE_NAO_EXISTE:-padrao-do-teste}' } });
-    expect(r).toEqual({ ok: true, tools: ['padrao-do-teste', 'soma'] });
+    expect(r).toEqual({ ok: true, tools: ['padrao-do-teste', 'soma'], readOnly: [] });
   });
 
   it('variável ausente sem padrão: erro com o nome da variável', async () => {

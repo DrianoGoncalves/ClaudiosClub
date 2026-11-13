@@ -14,6 +14,7 @@
 | **Usar o Codex (GPT)** | Geral, seção Internet e GPT (avançado) | Liga o Codex. Ao ligar, o Club instala o Codex CLI se ele faltar. Gasta a cota do seu ChatGPT. |
 | **Modelo do GPT** | Geral, seção Internet e GPT (avançado) | Modelo do Codex usado nas perguntas ao GPT. **Padrão do Codex** deixa o Codex escolher. Só aparece com o Codex ligado. |
 | **Atualizações** | Geral, seção Sistema | Mostra a versão e tem **Procurar agora**. Ver "Atualizar o Club" abaixo. |
+| **Bloquear o Claudio’s Club no navegador dos funcionários** | Geral (avançado) | Ligado por padrão: o navegador do funcionário (que é o seu, já pareado) não abre a tela do Club, para ele não aprovar nem mesclar no seu lugar. Desligue só para testar o próprio Club. Para só ver a tela, use `http://localhost:5173` (sem pareamento). Vale para conversas novas. |
 | **Servidor** | Geral, seção Sistema | **Reiniciar** e **Parar o Clube dos Claudios**. Ao parar, as conversas abertas fecham e as rotinas param até o servidor voltar. |
 
 Se você não acha **Usar o Codex (GPT)**, mude **Nível de uso** para **Avançado**.

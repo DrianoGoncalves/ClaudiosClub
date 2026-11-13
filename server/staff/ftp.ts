@@ -22,7 +22,7 @@ const FTP_USER = /^[A-Za-z0-9_][\w.@+-]{0,99}$/;
 
 export const FtpInput = z.object({
   name: ConnectionInput.shape.name,
-  protocol: z.enum(['ftps', 'ftp'], { errorMap: () => ({ message: 'protocolo: ftps (com TLS) ou ftp (sem criptografia)' }) }).default('ftps'),
+  protocol: z.enum(['ftps', 'ftp'], { error: 'protocolo: ftps (com TLS) ou ftp (sem criptografia)' }).default('ftps'),
   host: ConnectionInput.shape.host,
   port: z.number().int('porta inválida').min(1, 'porta inválida').max(65535, 'porta inválida').default(21),
   user: z.string().trim().regex(FTP_USER, 'usuário inválido (letras, números, . _ @ + -, sem espaços)'),

@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import type { StaffProfile } from '../../shared/model';
+import type { McpWritePolicy, StaffProfile } from '../../shared/model';
 import { cronError } from '../../shared/cron';
 import { PERSONALITIES } from '../../shared/personality';
 import { listDir, tryJson } from '../adapters/claude/fsutil';
@@ -29,15 +29,23 @@ const FallbackSchema = z.object({
   effort: CodexEffortSchema.optional(),
 });
 const line = (max: number) => z.string().trim().max(max);
+const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const list = (max: number) => z.array(line(500)).max(max).default([]);
 // Política de MCP por ferramenta (ver shared/model.ts e server/staff/mcpPolicy.ts). A chave entra na linha de comando (--disallowedTools,
 // permissions.ask): por isso só `mcp__` seguido de caracteres seguros, sem vírgula, espaço ou aspas.
+// As chaves são checadas na entrada crua (antes do record): no zod 4 a chave que falha dentro do record sai como "Invalid key in record".
+const MCP_POLICY_KEY = /^mcp__[A-Za-z0-9_-]{1,128}$/;
 export const McpPolicySchema = z
-  .record(
-    z.string().regex(/^mcp__[A-Za-z0-9_-]{1,128}$/, 'ferramenta MCP inválida').refine((k) => !k.endsWith('__'), 'ferramenta MCP inválida'),
-    z.enum(['allow', 'ask', 'off']),
-  )
-  .refine((o) => Object.keys(o).length <= 200, 'políticas demais');
+  .any()
+  .superRefine((v, ctx) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return;
+    if (Object.keys(v).some((k) => !MCP_POLICY_KEY.test(k) || k.endsWith('__'))) ctx.addIssue({ code: 'custom', message: 'ferramenta MCP inválida' });
+  })
+  .pipe(
+    z
+      .record(z.string(), z.enum(['allow', 'ask', 'off']))
+      .refine((o) => Object.keys(o).length <= 200, 'políticas demais'),
+  );
 
 /** O que o questionário (ou um funcionário com permissão) envia, antes das regras que cruzam campos (ver `StaffInputSchema`). */
 const StaffInputObject = z.object({
@@ -56,6 +64,22 @@ const StaffInputObject = z.object({
   mcps: z.array(line(100)).max(100).nullable().default(null),
   // Ausente = sem política (fica o que a ficha já tinha no PATCH); `{}` limpa.
   mcpPolicy: McpPolicySchema.optional(),
+  // Escrita por MCP (ver StaffProfile.mcpWrite): ausente = livre. O nome é o do MCP na ficha; nomes reservados de objeto são recusados.
+  // Os nomes são checados na entrada crua: o zod 4 descarta `__proto__` ao montar o record e troca a mensagem do refine de chave.
+  mcpWrite: z
+    .any()
+    .superRefine((v, ctx) => {
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return;
+      const keys = Object.keys(v);
+      if (keys.some((k) => RESERVED_KEYS.has(k))) ctx.addIssue({ code: 'custom', message: 'nome de MCP reservado' });
+      else if (keys.some((k) => k.length < 1 || k.length > 100)) ctx.addIssue({ code: 'custom', message: 'nome de MCP com tamanho inválido (1 a 100 letras)' });
+    })
+    .pipe(
+      z
+        .record(z.string(), z.enum(['ask', 'deny'], { error: 'escrita do MCP: ask ou deny' }))
+        .refine((r) => Object.keys(r).length <= 100, 'MCPs demais na política de escrita'),
+    )
+    .optional(),
   knowledge: list(50),
   rules: list(50),
   doneWhen: line(2000).default(''),
@@ -149,10 +173,25 @@ export const RoutineSchema = z.object({
 });
 export const RoutinesSchema = z.array(RoutineSchema).max(10, 'no máximo 10 rotinas por funcionário');
 
+/**
+ * A política de escrita como está no arquivo (lida sem recusar, e nunca mais fraca por erro de digitação): valor que não é `deny` vira
+ * `ask` (um `denny` à mão pede antes, não libera); chave inválida (nome reservado ou fora de 1 a 100 letras) sai. A escrita segue
+ * recusando o que não é `ask` nem `deny` (StaffInputObject).
+ */
+function readMcpWrite(v: unknown): Record<string, McpWritePolicy> | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const entries = Object.entries(v)
+    .filter(([k]) => !RESERVED_KEYS.has(k) && k.length >= 1 && k.length <= 100)
+    .map(([k, mode]): [string, McpWritePolicy] => [k, mode === 'deny' ? 'deny' : 'ask']);
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
 const ProfileSchema = StaffInputObject.omit({ portraitDataUrl: true, launch: true, adoptSessionId: true, force: true, roleId: true }).extend({
   id: z.string(),
   projectId: z.string(),
   portrait: z.string().nullable(),
+  // `optional()` antes do transform: no zod 4 sem ele a chave vira obrigatória e a ficha sem `mcpWrite` deixa de abrir.
+  mcpWrite: z.unknown().optional().transform(readMcpWrite),
   // Ligação entre cópias da mesma pessoa; valor inválido é ignorado (ficha sem vínculo).
   personId: z.string().regex(/^[A-Za-z0-9-]{1,60}$/).optional().catch(undefined),
   // Valor inválido no arquivo: volta ao padrão (claude) em vez de derrubar a ficha.

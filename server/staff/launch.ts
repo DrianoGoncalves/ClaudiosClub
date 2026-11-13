@@ -1,9 +1,10 @@
 import { existsSync } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { copyFile, mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerInfo, StaffProfile } from '../../shared/model';
 import { personalityName, personalityReminder } from '../../shared/personality';
 import { defaultLocations } from '../adapters/claude/paths';
+import { clubBlockedOrigins } from '../clubAddress';
 import { ROOT } from '../root';
 import { isClaudeRoot, renderFicha, systemPrompt, type CodexChromeInfo, type CodexSshInfo, type FichaContext, type TeamMember } from './ficha';
 import { FTP_MCP_NAME, GPT_MCP_NAME } from '../../shared/model';
@@ -13,7 +14,7 @@ import { SSH_MCP_BUNDLE, WRITE_AUTONOMY, sshMcpServerConfig } from './sshMcp';
 import { CODEX_CHROME_MCP_NAME, CODEX_SSH_MCP_NAME, type CodexMcpServer } from '../chat/codexArgs';
 import { CHROME_EXTENSION_KEY, codexMcpPolicy, mcpPolicyRules } from './mcpPolicy';
 import { gptMcpServerConfig } from './gptMcp';
-import { buildMcpConfig } from './mcp';
+import { buildMcpConfig, mcpWriteFileFor } from './mcp';
 import { ensurePlaybookAgents } from './playbookAgents';
 import { buildSkillPlugin } from '../skillLibrary';
 import { hasGuide } from '../projectGuide';
@@ -58,6 +59,8 @@ export interface LaunchContext {
   sshMcpBundle?: string;
   /** "Permitir que o GPT use meu Chrome" (`codexBrowser`), lida ao abrir a conversa. Sem ela, o Chrome não entra no Codex. */
   codexBrowser?: boolean;
+  /** "Bloquear a tela do Claudio’s Club no navegador dos funcionários" (`clubGuard`). Só `false` desliga: ausente, bloqueia. */
+  clubGuard?: boolean;
   /** CLI do Playwright MCP (os testes trocam; padrão CHROME_MCP_CLI). Sem ele, o Chrome não entra e a ficha diz "indisponível". */
   chromeMcpCli?: string;
 }
@@ -131,7 +134,22 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   if (reminder) await writeAtomic(styleFile, reminder);
   else await rm(styleFile, { force: true });
   const settingsFile = path.join(dir, 'settings.json');
-  await writeAtomic(settingsFile, JSON.stringify(staffSettings(profile, reminder ? styleFile : undefined), null, 2));
+  // Hooks do Claudio’s Club na pasta da conversa (cópia): o agente não edita o hook que guarda a regra (Edit e Write negados em run/**).
+  const hooksDir = path.join(dir, 'hooks');
+  await mkdir(hooksDir, { recursive: true });
+  for (const file of GUARD_HOOK_FILES) await copyFile(path.join(HOOKS_DIR, file), path.join(hooksDir, file));
+  // Política de escrita dos MCPs da ficha: o hook mcp-write-guard lê este arquivo. Sem política, nem arquivo nem hook.
+  const mcpWriteFilePath = path.join(dir, 'mcp-write.json');
+  const mcpWrite = await mcpWriteFileFor(ctx.projectPath, profile, ctx.claudeConfigFile);
+  const hasPolicy = Object.keys(mcpWrite).length > 0;
+  if (hasPolicy) await writeAtomic(mcpWriteFilePath, JSON.stringify(mcpWrite, null, 2));
+  else await rm(mcpWriteFilePath, { force: true });
+  const settings = staffSettings(profile, reminder ? styleFile : undefined, {
+    clubGuard: ctx.clubGuard,
+    hooksDir,
+    mcpWriteFile: hasPolicy ? mcpWriteFilePath : null,
+  });
+  await writeAtomic(settingsFile, JSON.stringify(settings, null, 2));
   const agents = await ensurePlaybookAgents(profile, {
     projectPath: ctx.projectPath,
     cwd,
@@ -186,7 +204,7 @@ export interface PreparedCodexRun {
  */
 export function codexChromeOf(
   profile: Pick<StaffProfile, 'browser' | 'mcpPolicy'>,
-  ctx: Pick<LaunchContext, 'codexBrowser' | 'chromeMcpCli'>,
+  ctx: Pick<LaunchContext, 'codexBrowser' | 'chromeMcpCli' | 'clubGuard'>,
   sshAttached: boolean,
   chromeDir: string,
 ): { mcp: CodexMcpServer | null; info?: CodexChromeInfo } {
@@ -202,9 +220,11 @@ export function codexChromeOf(
   if (motivos.length) return { mcp: null, info: { mcp: false, motivos } };
   // A pasta é da conversa (`<mycoHome>/run/<sessionId>/chrome`), fora de qualquer projeto e do repo do Club: o MCP não lê nem grava fora dela.
   return {
+    // --blocked-origins: o Chrome é o do dono, pareado; a tela do Club fica fora do alcance do agente (ver server/clubAddress.ts).
+    // Sem ele só com o bloqueio desligado nas Configurações (`clubGuard: false`).
     mcp: {
       command: process.execPath,
-      args: [cli, '--extension', '--output-dir', chromeDir],
+      args: [cli, '--extension', '--output-dir', chromeDir, ...(ctx.clubGuard === false ? [] : ['--blocked-origins', clubBlockedOrigins()])],
       cwd: chromeDir,
       ...(policy.disabledTools.length ? { disabledTools: policy.disabledTools } : {}),
     },
@@ -277,8 +297,15 @@ export function ftpServersOf(profile: Pick<StaffProfile, 'servers'>, servers: Se
   return profile.servers.filter((n) => ftp.has(n));
 }
 
-const DELIVERY_HOOK = path.join(ROOT, 'scripts', 'hooks', 'delivery-check.mjs');
-const STYLE_HOOK = path.join(ROOT, 'scripts', 'hooks', 'style-reminder.mjs');
+const HOOKS_DIR = path.join(ROOT, 'scripts', 'hooks');
+const DELIVERY_HOOK = path.join(HOOKS_DIR, 'delivery-check.mjs');
+const STYLE_HOOK = path.join(HOOKS_DIR, 'style-reminder.mjs');
+/** Os hooks de guarda que a conversa leva na própria pasta (cópia, ver prepareRun): o agente não edita o que os aplica. */
+const GUARD_HOOK_FILES = ['club-guard.mjs', 'mcp-write-guard.mjs'] as const;
+/** Ferramentas de navegador: o Claude in Chrome e os MCPs no padrão `browser_*` (Playwright e afins da biblioteca). */
+export const BROWSER_TOOLS_MATCHER = 'mcp__claude-in-chrome__.*|mcp__.*__browser_.*';
+/** Toda ferramenta de MCP: o hook de escrita decide pela política da ficha (sem política, não responde). */
+export const MCP_TOOLS_MATCHER = 'mcp__.*';
 
 /**
  * Hooks do Claudio’s Club em todo funcionário (`--settings`, somados aos do usuário e do projeto): os agents
@@ -287,10 +314,23 @@ const STYLE_HOOK = path.join(ROOT, 'scripts', 'hooks', 'style-reminder.mjs');
  * o Claude Code rodaria o comando no PowerShell.
  * Com estilo de comunicação (motor Claude), `outputStyle: 'default'`: o output style global do usuário (ex.: "Concise") brigaria com o estilo.
  * E, com o `styleFile` (style.txt da conversa), um hook UserPromptSubmit põe o lembrete do estilo em cada mensagem (scripts/hooks/style-reminder.mjs).
+ * `hooksDir`: a pasta com a cópia dos hooks de guarda da conversa (prepareRun); sem ela, a do programa (só os testes usam). `mcpWriteFile`:
+ * a política de escrita dos MCPs (mcp-write.json); sem ela, não há hook de MCP.
  */
-export function staffSettings(p?: Pick<StaffProfile, 'personality' | 'engine' | 'mcpPolicy'>, styleFile?: string) {
+export function staffSettings(
+  p?: Pick<StaffProfile, 'personality' | 'engine' | 'mcpPolicy'>,
+  styleFile?: string,
+  o: { clubGuard?: boolean; hooksDir?: string; mcpWriteFile?: string | null } = {},
+) {
+  const guards = o.hooksDir ?? HOOKS_DIR;
   const hook = (stage: 'pre' | 'post') => [
     { matcher: 'Agent|Task', hooks: [{ type: 'command', command: process.execPath, args: [DELIVERY_HOOK, stage], timeout: 10 }] },
+    // O navegador do funcionário não abre a tela do Club (ver scripts/hooks/club-guard.mjs e server/clubAddress.ts).
+    // `onFailure: 'block'` (Claude Code 2.1.295+): comando que não inicia, saída de erro, timeout ou saída inválida bloqueiam a
+    // chamada em vez de deixá-la passar. Sem helper de versão do Claude no Club, vai sempre (ver doc de hooks).
+    ...(stage === 'pre' && o.clubGuard !== false ? [{ matcher: BROWSER_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'club-guard.mjs'), 'pre'], timeout: 10, onFailure: 'block' }] }] : []),
+    // Escrita por MCP: a política da ficha (ver mcpTools.ts). Sem política, a conversa não tem o hook.
+    ...(stage === 'pre' && o.mcpWriteFile ? [{ matcher: MCP_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'mcp-write-guard.mjs'), o.mcpWriteFile], timeout: 10, onFailure: 'block' }] }] : []),
   ];
   const styled = !!p && personalityName(p.personality) !== '' && (p.engine ?? 'claude') === 'claude';
   const style = styled && styleFile ? { UserPromptSubmit: [{ hooks: [{ type: 'command', command: process.execPath, args: [STYLE_HOOK, styleFile], timeout: 10 }] }] } : {};
@@ -309,7 +349,7 @@ export function staffSettings(p?: Pick<StaffProfile, 'personality' | 'engine' | 
  */
 export async function writeFicha(
   profile: StaffProfile,
-  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'roles' | 'librarySkills' | 'codex' | 'internetAccess' | 'lockedByCodexManager'>,
+  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'roles' | 'librarySkills' | 'codex' | 'internetAccess' | 'clubGuard' | 'lockedByCodexManager'>,
   absolute = false,
   codexSsh?: CodexSshInfo,
   codexChrome?: CodexChromeInfo,
@@ -334,6 +374,7 @@ export async function writeFicha(
     guide: await hasGuide(ctx.projectPath),
     codex: ctx.codex,
     internetAccess: ctx.internetAccess,
+    clubGuard: ctx.clubGuard,
     lockedByCodexManager: ctx.lockedByCodexManager,
     codexSsh,
     codexChrome,

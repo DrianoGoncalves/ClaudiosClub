@@ -963,6 +963,10 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .mcp-policy-tools-head { margin-top: 4px !important; }
 .mcp-policy-tools { margin: 4px 0 0 4px; padding-left: 10px; border-left: 2px solid var(--line); gap: 6px; }
 @media (max-width: 640px) { .mcp-policy-row select { flex: 1 1 100%; min-height: 36px; } }
+/* MCP marcado na ficha: o seletor de escrita (livre / pede antes / bloqueada) fica sob o nome, como o da escrita SSH. */
+.mcp-write { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.mcp-write select { max-width: 100%; }
+@media (max-width: 640px) { .mcp-write select { min-height: 36px; } }
 :is(.modal, .hire-inline) .check { display: flex; flex-direction: row; align-items: center; gap: 6px; font-weight: 400; }
 .import-list { display: grid; gap: 6px; max-height: 340px; overflow-y: auto; }
 .import-list .choice b { overflow-wrap: anywhere; }

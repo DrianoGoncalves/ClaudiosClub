@@ -9,6 +9,7 @@ import { DELIVERY_SUMMARY_MAX, parseDeliveryNotes } from './deliveryNotes';
 import { hasGuide } from './projectGuide';
 import type { LimitHit } from './chat/usageLimit';
 import { CLOSING_LINE, RESUME_TEXT } from './chat/items';
+import { capReason } from './chat/turnCap';
 import { ChatClosingError } from './chat/manager';
 import type { Caller } from './callers';
 import type { Reservation } from './resourceGate';
@@ -143,6 +144,11 @@ export interface TaskServiceDeps {
    * não é entrega nem órfã: a tarefa vai para Aguardar, com o motivo.
    */
   turnCap?: (sessionId: string) => TurnCapHit | null;
+  /**
+   * Conversa órfã (o servidor caiu no meio do turno): a última ação ficou sem resultado e mexe fora do projeto? Então já fica
+   * segura na caixa (ver ChatManager.restartCut) e volta o motivo; a tarefa vai para Aguardar em vez de retomar sozinha.
+   */
+  restartCut?: (projectId: string, sessionId: string) => Promise<TurnCapHit | null>;
   /** Põe a conversa no motor secundário (ver `restoreFallbacks`): só na memória do servidor. */
   setOverride?: (sessionId: string, override: EngineOverride) => void;
   /** Limite agora de um motor: LimitHit, null (sem limite) ou 'unknown' (sem leitura: não troca às cegas). */
@@ -911,6 +917,10 @@ export class TaskService {
         }
         return true;
       }
+      // A última ação ficou pela metade e mexe fora do projeto (push, deploy, servidor): retomar sozinho poderia repeti-la.
+      // Segura a conversa para você (caixa de entrada) e a tarefa vai para Aguardar. Erro ao conferir: retoma como sempre.
+      const cut = await (this.deps.restartCut?.(projectId, t.sessionId) ?? Promise.resolve(null)).catch(() => null);
+      if (cut) return !!(await this.parkForCap(projectId, taskId, t.sessionId, cut));
       const at = now.toISOString();
       try {
         if (!this.deps.sendTo) throw new TaskError('sem envio para a conversa de trabalho');
@@ -1465,7 +1475,7 @@ export class TaskService {
    * gestor). Só se ainda estiver "fazendo" com esta conversa. Devolve a tarefa, se foi para Aguardar agora.
    */
   private async parkForCap(projectId: string, taskId: string, sessionId: string, hit: TurnCapHit): Promise<Task | null> {
-    const why = `turno parado: passou de ${hit.limit} ${hit.kind === 'tools' ? 'ferramentas' : 'minutos'}`;
+    const why = capReason(hit);
     let parked: Task | null = null;
     const seen: { before?: Task } = {};
     await this.change(projectId, taskId, (t) => {

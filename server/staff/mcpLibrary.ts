@@ -7,6 +7,7 @@ import { pathKey } from '../adapters/claude/paths';
 import { deleteSecret, hasSecret, moveSecret, setSecret, VaultError, type VaultOptions } from '../secretVault';
 import { CLUB_MCP_FILE, clubSecretId, isLiteralSecret, McpError, readClub, resolveClub, type ClubEntry } from './mcp';
 import { testMcpConfig, type McpTestResult } from './mcpTest';
+import { MCP_TOOLS_FILE, mcpFingerprint, saveTestedTools, toolsKey } from './mcpTools';
 import { writeAtomic } from './store';
 
 // Biblioteca de MCPs: cadastro e edição nos quatro escopos, inclusive os que já existem fora do Claudio’s Club.
@@ -37,7 +38,7 @@ const Value = z
   .refine((v) => !/[\r\n\0]/.test(v), 'valor com quebra de linha');
 const EnvKey = z.string().regex(ENV_KEY, 'nome de variável inválido (letras, números e _)').refine(notReserved, 'nome reservado');
 const HeaderKey = z.string().regex(HEADER_KEY, 'nome de cabeçalho inválido (letras, números e -)').refine(notReserved, 'nome reservado');
-const Scope = z.enum(['club', 'user', 'project', 'local'], { errorMap: () => ({ message: 'escopo: club, user, project ou local' }) });
+const Scope = z.enum(['club', 'user', 'project', 'local'], { error: 'escopo: club, user, project ou local' });
 const ProjectId = z.string().regex(PROJECT_ID, 'projeto inválido').optional();
 
 const SaveInput = z.object({
@@ -46,7 +47,7 @@ const SaveInput = z.object({
   /** O nome atual, para editar (e renomear); ausente = MCP novo. */
   originalName: Name.optional(),
   name: Name,
-  type: z.enum(['http', 'sse', 'stdio'], { errorMap: () => ({ message: 'tipo: http, sse ou stdio' }) }),
+  type: z.enum(['http', 'sse', 'stdio'], { error: 'tipo: http, sse ou stdio' }),
   url: z.string().trim().max(2048, 'URL grande demais').optional(),
   command: z.string().trim().max(500, 'comando grande demais').optional(),
   args: z.array(z.string().max(2000)).max(100, 'argumentos demais (até 100)').optional(),
@@ -69,6 +70,8 @@ export interface McpLibraryOptions {
   resolveProject: (projectId: string) => Promise<string | null>;
   /** Cofre (padrão: o do sistema, DPAPI no Windows). */
   vault?: VaultOptions;
+  /** Onde fica a lista de ferramentas do último teste (padrão ~/.myco/mcp-tools.json; ver mcpTools.ts). */
+  toolsFile?: string;
 }
 
 type Obj = Record<string, unknown>;
@@ -80,9 +83,15 @@ const strRecord = (v: unknown): Record<string, string> =>
 const has = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 const exists = (p: string) => fs.stat(p).then(() => true, () => false);
 
+/** zod 4 embrulha o erro de chave de record em "Invalid key in record": a mensagem da chave fica dentro dele. */
+function firstMessage(issue: z.ZodError['issues'][number] | undefined): string | undefined {
+  if (issue?.code === 'invalid_key' && issue.issues[0]) return issue.issues[0].message;
+  return issue?.message;
+}
+
 function parseInput<S extends z.ZodTypeAny>(schema: S, body: unknown): z.output<S> {
   const r = schema.safeParse(body ?? {});
-  if (!r.success) throw new McpError(r.error.issues[0]?.message ?? 'dados inválidos');
+  if (!r.success) throw new McpError(firstMessage(r.error.issues[0]) ?? 'dados inválidos');
   return r.data;
 }
 
@@ -546,7 +555,10 @@ export function createMcpLibrary(o: McpLibraryOptions) {
     return { ok: true };
   }
 
-  /** Testa com o config resolvido (segredos incluídos); o erro não traz valor. */
+  /**
+   * Testa com o config resolvido (segredos incluídos); o erro não traz valor. Deu certo: a lista (com o que é só leitura) fica
+   * guardada para a política de escrita das fichas (mcpTools.ts). Falha ao guardar não derruba o teste.
+   */
   async function test(body: unknown, fromBrowser: boolean): Promise<McpTestResult> {
     requireBrowser(fromBrowser);
     const input = parseInput(RefInput, body);
@@ -571,7 +583,15 @@ export function createMcpLibrary(o: McpLibraryOptions) {
       if (!isObj(e)) throw new McpError('MCP não encontrado neste escopo');
       cfg = e;
     }
-    return testMcpConfig(cfg, { cwd: dir ?? undefined });
+    const result = await testMcpConfig(cfg, { cwd: dir ?? undefined });
+    if (result.ok) {
+      const readOnly = new Set(result.readOnly);
+      const tools = result.tools.map((name) => ({ name, readOnly: readOnly.has(name) }));
+      await saveTestedTools(o.toolsFile ?? MCP_TOOLS_FILE, toolsKey(input.scope, dir, input.name), mcpFingerprint(cfg), tools).catch((err: Error) =>
+        console.warn(`[mcp] ${input.name}: não deu para guardar a lista de ferramentas (${err.message})`),
+      );
+    }
+    return result;
   }
 
   return { list, save, remove, test };

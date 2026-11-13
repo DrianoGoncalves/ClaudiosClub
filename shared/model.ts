@@ -324,6 +324,12 @@ export interface AppConfig {
    */
   codexBrowser: boolean;
   /**
+   * "Bloquear a tela do Claudio’s Club no navegador dos funcionários": o navegador deles não abre o Club (o hook club-guard e o
+   * --blocked-origins do Codex, ver server/clubAddress.ts). Ligado por padrão; desligado, o funcionário com Navegador age na tela
+   * com os seus poderes (aprova, mescla). Lida ao abrir a conversa.
+   */
+  clubGuard: boolean;
+  /**
    * Freela (conversa sem ficha) não efetivado e parado há esta quantidade de dias é arquivado sozinho
    * (ver server/freelaSweep.ts). Inteiro de 0 a 90; 0 = nunca. Padrão 3.
    */
@@ -801,6 +807,11 @@ export interface StaffProfile {
    * política. Entre a regra do servidor e a da ferramenta vale a mais restritiva (off > ask > allow). Ver server/staff/mcpPolicy.ts.
    */
   mcpPolicy?: Record<string, McpPolicy>;
+  /**
+   * Escrita por MCP (nome → política), só no motor Claude: as ferramentas sem `readOnlyHint` pedem antes (`ask`) ou ficam
+   * bloqueadas (`deny`), em qualquer autonomia (no "sem travas", o pedido vira bloqueio). Ausente (ou o MCP fora do mapa) = livre, como antes.
+   */
+  mcpWrite?: Record<string, McpWritePolicy>;
   /** Arquivos e pastas para ler antes de começar. */
   knowledge: string[];
   rules: string[];
@@ -955,7 +966,12 @@ export interface McpServerInfo {
   /** `club` = biblioteca do Claudio’s Club; `project` = .mcp.json; `local` = só este projeto; `user` = todos os projetos. */
   source: 'club' | 'project' | 'local' | 'user';
   transport: string | null;
+  /** Do último teste na biblioteca (ver server/staff/mcpTools.ts): total e quantas são de escrita. Ausente = nunca testado ou mudou desde o teste. */
+  tools?: { total: number; write: number };
 }
+
+/** Política de escrita de um MCP na ficha: `ask` = as ferramentas de escrita pedem antes; `deny` = bloqueadas. Ausente = livre. */
+export type McpWritePolicy = 'ask' | 'deny';
 
 export type McpScope = 'club' | 'user' | 'project' | 'local';
 export type McpType = 'http' | 'sse' | 'stdio';
@@ -1169,11 +1185,12 @@ export type ChatItem =
       cap?: TurnCapHit;
     };
 
-/** Turno interrompido pelo teto (ver server/chat/turnCap.ts): o que passou do limite e quanto era. */
-export interface TurnCapHit {
-  kind: 'tools' | 'minutes';
-  limit: number;
-}
+/**
+ * Turno parado que não volta sozinho: pelo teto (ver server/chat/turnCap.ts: o que passou do limite e quanto era) ou pelo
+ * reinício, que cortou no meio uma ação com efeito fora do projeto (ver server/chat/cutAction.ts: `action`, o resumo dela).
+ * Fica na caixa (e põe a tarefa em Aguardar) até você mandar mensagem nova.
+ */
+export type TurnCapHit = { kind: 'tools' | 'minutes'; limit: number } | { kind: 'restart'; action: string };
 
 /** Quem barrou uma ferramenta: `layer`; `reason` é o motivo dado (sem ele, ausente). `safety` = checagem embutida
  *  do Claude Code (ex.: Remove-Item em caminho do sistema); `settings` = arquivo ou pasta negado nas regras de permissão. */

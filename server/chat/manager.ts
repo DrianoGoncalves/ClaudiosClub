@@ -45,6 +45,7 @@ import { WAKE_MAX_STREAK, WakeStreakError, wakeNotice, type WakeInput } from './
 import { readUsage } from '../usage';
 import type { SessionTokens } from '../callers';
 import { resumeText, type ResumeEntry } from './resume';
+import { externalCut } from './cutAction';
 import { legacyLabel, type SecretFinding, type SecretSource } from './secrets';
 import type { TurnCaps } from './turnCap';
 import type { TurnCapHit } from '../../shared/model';
@@ -947,9 +948,29 @@ export class ChatManager {
    */
   private turnCapped(sessionId: string, hit: TurnCapHit): void {
     this.inbox.setTurnCap(sessionId, { ...hit, at: new Date().toISOString() });
-    this.log(`${sessionId}: turno parado pelo teto (${hit.kind === 'tools' ? 'ferramentas' : 'minutos'}, limite ${hit.limit})`);
+    this.log(`${sessionId}: ${hit.kind === 'restart' ? `não retomada: o reinício cortou "${hit.action}"` : `turno parado pelo teto (${hit.kind === 'tools' ? 'ferramentas' : 'minutos'}, limite ${hit.limit})`}`);
     void this.opts.autoContinue?.cancel(sessionId, 'cap').catch(() => {});
     void this.opts.wakeups?.cancel(sessionId, 'cap').catch(() => {});
+  }
+
+  /**
+   * O reinício cortou a conversa numa ação com efeito fora do projeto (ver cutAction.ts): ela não volta sozinha. Fica na caixa
+   * como o teto (e a tarefa vai para Aguardar) até você mandar mensagem nova.
+   */
+  holdCut(sessionId: string, action: string): TurnCapHit {
+    const hit: TurnCapHit = { kind: 'restart', action };
+    this.turnCapped(sessionId, hit);
+    return hit;
+  }
+
+  /**
+   * Conversa de tarefa que parou sem o servidor ter fechado direito (queda): a última ação, no transcript, ficou sem resultado
+   * e mexe fora do projeto? Então segura (ver `holdCut`) e devolve o motivo; senão, null (a tarefa retoma como sempre).
+   */
+  async restartCut(projectId: string, sessionId: string): Promise<TurnCapHit | null> {
+    const { history } = await this.snapshot(projectId, sessionId);
+    const action = externalCut(history);
+    return action ? this.holdCut(sessionId, action) : null;
   }
 
   /** O motivo do teto desta conversa, se o turno dela parou nele e ninguém mandou mensagem depois. */
@@ -1020,7 +1041,10 @@ export class ChatManager {
     const out: ResumeEntry[] = [];
     for (const c of this.chats.values()) {
       if (!c.running || !c.busy || !c.projectId) continue;
-      out.push({ projectId: c.projectId, sessionId: c.sessionId, staffId: c.staffId, engine: c.engine, cwd: c.cwd, hadPending: c.awaitingAnswer });
+      // `cut`: a ação com efeito fora do projeto que o fechamento vai cortar no meio (ver cutAction.ts); com ela, a conversa não volta sozinha.
+      // Com pedido de permissão pendente, a ferramenta que espera a permissão não rodou: não conta (ver externalCut).
+      const cut = externalCut(c.snapshot().items, c.awaitingAnswer);
+      out.push({ projectId: c.projectId, sessionId: c.sessionId, staffId: c.staffId, engine: c.engine, cwd: c.cwd, hadPending: c.awaitingAnswer, ...(cut && { cut }) });
     }
     return out;
   }
