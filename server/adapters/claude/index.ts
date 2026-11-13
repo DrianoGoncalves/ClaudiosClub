@@ -161,21 +161,31 @@ export class ClaudeAdapter implements ToolAdapter {
     return this.costs.report(new Date(), await this.boardIds());
   }
 
-  async getSessionCostFiles(sessionId: string) {
-    // Depois da 1ª varredura, a releitura é incremental e rápida: espera para vir atualizado.
-    // Antes dela (até ~1 min com muitos transcripts), devolve o que já tem.
+  /**
+   * Depois da 1ª varredura, a releitura é incremental e rápida: espera para vir atualizado, mas só se os dados passaram
+   * do mesmo prazo do getCosts (`costTtlMs`, 30 s). Antes dela (até ~1 min com muitos transcripts), devolve o que já tem.
+   */
+  private async refreshCostsIfStale(): Promise<void> {
     if (this.costs.scannedAt === 0) void this.costs.refresh();
-    else if (!this.costs.isScanning) await this.costs.refresh();
+    else if (!this.costs.isScanning && Date.now() - this.costs.scannedAt > (this.opts.costTtlMs ?? 30_000)) await this.costs.refresh();
+  }
+
+  async getSessionCostFiles(sessionId: string) {
+    await this.refreshCostsIfStale();
     return { files: this.costs.sessionFiles(sessionId), scanning: this.costs.isScanning };
   }
 
   async getSavingsFiles(since: string | null) {
-    // Mesma regra de getSessionCostFiles: só espera a releitura depois da 1ª varredura.
-    if (this.costs.scannedAt === 0) void this.costs.refresh();
-    else if (!this.costs.isScanning) await this.costs.refresh();
+    await this.refreshCostsIfStale();
     const board = await this.boardIds();
     const files = this.costs.transcripts(since);
     return { files: board ? files.filter((f) => board.has(f.projectId)) : files, scanning: this.costs.isScanning };
+  }
+
+  async getAllSessionCostFiles() {
+    // Sem filtro de quadro.
+    await this.refreshCostsIfStale();
+    return { files: this.costs.transcripts(null), scanning: this.costs.isScanning };
   }
 
   forgetProjects(): void {

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { cronError, describeCron, nextRun, parseCron } from '../../../shared/cron';
 import type { Routine, RoutineRun, StaffProfile } from '../../../shared/model';
 import { api } from '../api';
+import { pollVisible } from '../usePoll';
 import { formatAgo } from '../format';
 import { t, locale } from '../i18n';
 
@@ -83,8 +84,7 @@ export function Routines({ projectId, staff, onChanged }: { projectId: string; s
   useEffect(() => {
     const read = () => api.routineState().then(setRuns, () => {});
     read();
-    const t = setInterval(read, 30_000);
-    return () => clearInterval(t);
+    return pollVisible(read, 30_000);
   }, []);
 
   const save = async (next: Routine[]) => {

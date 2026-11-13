@@ -479,11 +479,15 @@ describe('buildGraph', () => {
     const detour = fromAna?.data?.detour;
     expect(detour).toBeDefined();
     const { w, h } = SIZES.employee;
-    expect(detour!.x < bia!.x || detour!.x > bia!.x + w).toBe(true);
-    expect(detour!.y1).toBeGreaterThan(ana!.y + h);
-    expect(detour!.y1).toBeLessThan(bia!.y);
-    expect(detour!.y2).toBeGreaterThan(bia!.y + h);
-    expect(detour!.y2).toBeLessThan(caio!.y);
+    // As medidas são relativas às pontas (a linha anda junto no arraste): as absolutas saem delas.
+    const x = ana!.x + w / 2 + detour!.dx;
+    const y1 = ana!.y + h + detour!.dy1;
+    const y2 = caio!.y - detour!.dy2;
+    expect(x < bia!.x || x > bia!.x + w).toBe(true);
+    expect(y1).toBeGreaterThan(ana!.y + h);
+    expect(y1).toBeLessThan(bia!.y);
+    expect(y2).toBeGreaterThan(bia!.y + h);
+    expect(y2).toBeLessThan(caio!.y);
   });
 
   it('ciclo de gestores não trava o layout', () => {
@@ -639,6 +643,18 @@ describe('buildGraph', () => {
     b.live = [{ ...b.live[0]!, status: 'waiting' }];
     expect(emp(graph([]), 'h:a:ana')?.needsYou).toBe(false);
     expect(proj(graph([]), 'p:a')?.awaiting).toBe(0);
+  });
+
+  it('tarefa bloqueada na caixa não pinta o cartão do dono da tarefa: não há conversa esperando você', () => {
+    const b = board();
+    b.staff = [staffProfile('ana', ['s-a1'])];
+    const blocked: InboxItem = {
+      id: 'blocked:t2:t1', kind: 'blocked', projectId: 'a', projectName: 'a', sessionId: '', staffId: 'ana', name: 'ANA',
+      summary: '“B” espera “A”: sem responsável', at: null,
+      blocked: { taskId: 't2', taskTitle: 'B', blockerId: 't1', blockerTitle: 'A', blockerStatus: 'review', reason: 'sem responsável' },
+    };
+    const n = buildGraph(b, { inbox: [blocked] }).nodes.find((x) => x.id === 'h:a:ana');
+    expect(n?.type === 'employee' && n.data.needsYou).toBe(false);
   });
 
   it('conversa solta com item na caixa destaca o fantasma, que mostra a conversa viva', () => {

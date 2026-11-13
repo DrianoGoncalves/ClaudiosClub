@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { type CostReport, type StaffProfile, type Task as TaskModel, type TaskHandoff, type TaskStatus } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
+import { pollVisible } from '../usePoll';
 import { Markdown } from '../chat/markdown';
 import { formatAgo, formatShare } from '../format';
 import { t, locale } from '../i18n';
@@ -11,6 +12,7 @@ import { TaskCodePanel } from './TaskCodePanel';
 import { DoubtBadge, DoubtBlock } from './TaskDoubt';
 import { ResourceWaitBadge, resourceWaitText } from './ResourceWait';
 import { BlockedBadge, BlockedByField, openBlockers, sameDeps } from './TaskDeps';
+import { TaskCostBlock } from './TaskCostBlock';
 import { TaskRuns } from './TaskRuns';
 
 // Quadro de tarefas de um projeto: aguardar → a fazer → fazendo → revisão → pronto.
@@ -143,8 +145,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   // As tarefas andam sozinhas (plano aprovado, turno terminado): relê de tempos em tempos.
   useEffect(() => {
     load();
-    const t = setInterval(load, 5000);
-    return () => clearInterval(t);
+    return pollVisible(load, 5000);
   }, [load]);
 
   useEffect(() => {
@@ -724,6 +725,16 @@ function TaskDetail({
           </>
         )}
       </p>
+      {/* Tarefa que nunca começou (criada e parada) não tem conversa: sem custo para mostrar. */}
+      {(task.sessionId || task.history.length > 1) && (
+        <TaskCostBlock
+          projectId={projectId}
+          taskId={task.id}
+          version={`${task.updatedAt}:${task.runId ?? ''}`}
+          nameOf={(id) => (id ? (staff.find((s) => s.id === id)?.name ?? id) : t('tasks.noOwner'))}
+          open={task.status === 'review' || task.status === 'done'}
+        />
+      )}
       {task.fallback && (
         <p className="small">
           <TaskFallbackBadge fallback={task.fallback} />

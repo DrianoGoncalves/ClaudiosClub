@@ -13,7 +13,7 @@ import {
 // Os avisos da trava de consumo no modal do design system (nunca window.alert/confirm). Montados uma vez no App.
 
 /** Esc fecha o modal aberto. */
-function useEscape(open: boolean, close: () => void) {
+export function useEscape(open: boolean, close: () => void) {
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {

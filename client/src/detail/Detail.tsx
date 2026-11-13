@@ -17,7 +17,7 @@ import type {
   UserScope,
 } from '../../../shared/model';
 import { TEMP_IDLE_DAYS } from '../../../shared/model';
-import { alertError, api, ApiError, isPairingError } from '../api';
+import { alertError, api, ApiError, isPairingError, type SkillDeleted } from '../api';
 import { RoomColorPicker } from '../board/colors';
 import { portraitUrl } from '../board/nodes';
 import { idleUnseen, showsStatus, useSeeIdle, useSeenIdle } from '../board/unread';
@@ -39,11 +39,12 @@ import { StaffReview } from './StaffReview';
 import { WorthIt } from './WorthIt';
 import { reviewDays } from '../costReview';
 import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatPercent, formatShare, formatUsd, STATUS_LABEL } from '../format';
-import { isLoss, type RankingGroup, type RankingRow, rankingRows, savingsList, teamSavings } from '../ranking';
+import { isLoss, RANKING_PERIODS, type RankingGroup, type RankingRow, rankingRows, savingsList, teamSavings } from '../ranking';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
 import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
+import { SkillManage } from './SkillManage';
 
 // Painel lateral: o que o nó selecionado no quadro tem por trás.
 
@@ -1132,17 +1133,11 @@ export function UserPanel({
   );
 }
 
-/** As duas telas do ranking: quem mais gasta e quem mais economiza. As abas ficam no painel RH e ranking (PeoplePanel). */
-export type RankingTab = 'cost' | 'savings';
-
-/** Período do ranking em dias (null = tudo): hoje (desde a meia-noite), 7 dias, 1 mês, 3 meses (o padrão) e tudo. */
-const RANKING_PERIODS: Array<[string, number | null, string]> = [
-  ['1', 1, t('detail.periodToday')],
-  ['7', 7, t('detail.period7d')],
-  ['30', 30, t('detail.period1m')],
-  ['90', 90, t('detail.periodLast3Months')],
-  ['all', null, t('detail.periodAll')],
-];
+/**
+ * As telas do ranking: quem mais gasta, quem mais economiza e o custo por tarefa. As abas ficam no painel RH e ranking
+ * (PeoplePanel); as duas primeiras são do `RankingPanel` e a de tarefas é a `TaskCostPanel`.
+ */
+export type RankingTab = 'cost' | 'savings' | 'tasks';
 
 /** Uma linha do ranking de funcionários; arquivado fica apagado e com a etiqueta. */
 function RankingItem({
@@ -1243,7 +1238,7 @@ export function RankingPanel({
   onOpenPerson,
   onOpenTask,
 }: {
-  tab?: RankingTab;
+  tab?: Exclude<RankingTab, 'tasks'>;
   groups: RankingGroup[];
   agents: Array<{ type: string; usd: number; runs: number }>;
   /** Gasto do Sistema (gerador da vitrine): linha à parte, fora do ranking e da participação dos agents. */
@@ -1511,7 +1506,18 @@ export function AgentPanel({
   );
 }
 
-export function SkillPanel({ skill }: { skill: Skill }) {
+export function SkillPanel({
+  skill,
+  projectId,
+  onChanged,
+  onDeleted,
+}: {
+  skill: Skill;
+  /** O projeto da skill (null = conta). */
+  projectId: string | null;
+  onChanged: () => void;
+  onDeleted: (done: SkillDeleted) => void;
+}) {
   return (
     <>
       <header className="header">
@@ -1531,6 +1537,7 @@ export function SkillPanel({ skill }: { skill: Skill }) {
       {skill.error && <p className="error">{skill.error}</p>}
       {skill.link.target && <Field label={t('detail.origin')} mono value={skill.link.target} />}
       {skill.description && <Field label={t('detail.description')} value={skill.description} />}
+      <SkillManage skill={skill} projectId={projectId} onChanged={onChanged} onDeleted={onDeleted} />
       {/* Skill da conta aparece em todas as sessões: dá para copiar para a biblioteca (só quem tem na ficha). */}
       {skill.scope === 'user' && !skill.readOnly && !skill.link.target && <CopyToLibrary name={skill.name} />}
     </>

@@ -22,6 +22,7 @@ import { api, isPairingError, NEEDS_PAIRING_EVENT, PAIRED_EVENT, withUsageConfir
 import { BoardView } from './board/Board';
 import { boardStyle, useBoardBackground } from './board/colors';
 import { useTheme } from './theme';
+import { pollVisible, pollVisibleLoop } from './usePoll';
 import { archiveKey, ghostNodeId, HR_ID, manageNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
 import { seedSeenIdle } from './board/unread';
 import { openSettings } from './toolbar/openSettings';
@@ -42,11 +43,14 @@ import type { ChatFocus } from './chat/chatFocus';
 import { type ConversationTitles, conversationTitle } from './detail/conversationTitle';
 import { DrawerResize, useDrawerWidth } from './detail/DrawerResize';
 import { leftOutByRetention } from './detail/oldConversations';
+import { deletedNotice } from './detail/skillAccess';
 import { PeoplePanel } from './detail/PeoplePanel';
+import { TaskCostPanel } from './detail/TaskCostPanel';
 import { companyName, effortLabel, employeeName } from './format';
 import { t } from './i18n';
 import { useInbox } from './inbox/useInbox';
 import { rankingGroups } from './ranking';
+import { staffIndex } from './taskCost';
 import { AgentForm, type AgentFormTarget } from './staff/AgentForm';
 import { NewProjectForm } from './office/NewProjectForm';
 import { readTab, workspaceByProject, writeTab } from './office/workspaces';
@@ -87,7 +91,7 @@ type Selection =
   /** manage: o RH editando a ficha (as abas do funcionário com o seletor de projeto), em vez da conversa. */
   | { kind: 'employee'; session: Session | null; staff: StaffProfile | null; projectId: string; ghost?: Session[]; manage?: true }
   | { kind: 'agent'; agent: Agent; projectId: string | null }
-  | { kind: 'skill'; skill: Skill };
+  | { kind: 'skill'; skill: Skill; projectId: string | null };
 
 export function App() {
   const [board, setBoard] = useState<Board | null>(null);
@@ -162,8 +166,7 @@ export function App() {
   }, []);
   useEffect(() => {
     readTaskSummary();
-    const t = setInterval(readTaskSummary, 15_000);
-    return () => clearInterval(t);
+    return pollVisible(readTaskSummary, 15_000);
   }, [readTaskSummary]);
 
   const load = useCallback(() => {
@@ -224,6 +227,13 @@ export function App() {
   const openInbox = useCallback((item: InboxItem) => {
     // Aviso de consumo (conta, sem projeto, ou orçamento de um projeto): não há quem abrir; o que se muda é a trava, em Configurações > Consumo.
     if (item.kind === 'usage') return openSettings('usage');
+    // Tarefa esperando outra empacada: não há conversa; abre o quadro de tarefas do projeto já na tarefa que espera.
+    if (item.kind === 'blocked' && item.blocked) {
+      setSchedulesFor(null);
+      setJumpTask(item.blocked.taskId);
+      setTasksFor(item.projectId);
+      return;
+    }
     // Sem funcionário nem conversa (aviso do projeto, como chave no .mcp.json): a sala do projeto.
     // Conversa sem ficha: o funcionário fantasma do projeto, já nela.
     // Com conversa: a do aviso (não a mais recente do funcionário), rolada até o que o causou; o contador
@@ -267,7 +277,7 @@ export function App() {
   boardRef.current = board;
   useEffect(() => {
     const reloads = new Map<string, number>();
-    const t = setInterval(() => {
+    return pollVisible(() => {
       api.live().then(
         (live) => {
           setBoard((b) => (b && JSON.stringify(b.live) !== JSON.stringify(live) ? { ...b, live } : b));
@@ -283,7 +293,6 @@ export function App() {
         () => {},
       );
     }, 3000);
-    return () => clearInterval(t);
   }, [load]);
 
   // Estado do código (branch, sem commit, remoto) no cabeçalho de cada sala; muda devagar.
@@ -292,20 +301,16 @@ export function App() {
     const read = () =>
       api.git().then((next) => setGit((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next)), () => {});
     void read();
-    const t = setInterval(read, 30_000);
-    return () => clearInterval(t);
+    return pollVisible(read, 30_000);
   }, []);
 
   // Custos: a 1ª leitura dos transcripts demora; enquanto isso, consulta mais vezes.
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    const tick = async () => {
+    return pollVisibleLoop(async () => {
       const next = await api.costs().catch(() => null);
       if (next) setCosts((prev) => (prev && sameCosts(prev, next) ? prev : next));
-      timer = setTimeout(tick, next?.scanning ? 3000 : 30_000);
-    };
-    void tick();
-    return () => clearTimeout(timer);
+      return next?.scanning ? 3000 : 30_000;
+    });
   }, []);
 
   const toggle = (key: string, set: (v: boolean) => void) => (value: boolean) => {
@@ -492,23 +497,28 @@ export function App() {
                   onNotice={(text) => setNotice(text)}
                 />
               }
-              ranking={(tab) => (
-                <RankingPanel
-                  tab={tab}
-                  groups={rankingGroups(board, config)}
-                  agents={Object.entries(costs?.agents ?? {})
-                    .map(([type, c]) => ({ type, usd: c.usd, runs: c.runs }))
-                    .sort((a, b) => b.usd - a.usd)}
-                  system={costs?.system}
-                  scanning={costs?.scanning ?? true}
-                  onSelect={setSelectedId}
-                  onOpenPerson={(p) => openManage(p.projectId, p.staffId)}
-                  onOpenTask={(projectId, taskId) => {
-                    setJumpTask(taskId);
-                    setTasksFor(projectId);
-                  }}
-                />
-              )}
+              ranking={(tab) => {
+                const openTask = (projectId: string, taskId: string) => {
+                  setJumpTask(taskId);
+                  setTasksFor(projectId);
+                };
+                return tab === 'tasks' ? (
+                  <TaskCostPanel staff={staffIndex(board)} onOpenTask={openTask} onOpenPerson={(p) => openManage(p.projectId, p.staffId)} />
+                ) : (
+                  <RankingPanel
+                    tab={tab}
+                    groups={rankingGroups(board, config)}
+                    agents={Object.entries(costs?.agents ?? {})
+                      .map(([type, c]) => ({ type, usd: c.usd, runs: c.runs }))
+                      .sort((a, b) => b.usd - a.usd)}
+                    system={costs?.system}
+                    scanning={costs?.scanning ?? true}
+                    onSelect={setSelectedId}
+                    onOpenPerson={(p) => openManage(p.projectId, p.staffId)}
+                    onOpenTask={openTask}
+                  />
+                );
+              }}
             />
           )}
           {selection.kind === 'user' && (
@@ -667,7 +677,21 @@ export function App() {
               agentsUsd={Object.values(costs?.agents ?? {}).reduce((s, a) => s + a.usd, 0)}
             />
           )}
-          {selection.kind === 'skill' && <SkillPanel skill={selection.skill} />}
+          {selection.kind === 'skill' && (
+            <SkillPanel
+              skill={selection.skill}
+              projectId={selection.projectId}
+              onChanged={load}
+              onDeleted={(done) => {
+                const { skill } = selection;
+                const { key, hooks, backups } = deletedNotice(done);
+                setSelectedId(null);
+                // O caminho da lixeira (e os backups dos settings, se saíram hooks) ficam no aviso até o ×: é o que a pessoa precisa para recuperar.
+                setNotice(t(key, { name: skill.name, trash: done.trash, dir: skill.dirPath, hooks, backups }), true);
+                load();
+              }}
+            />
+          )}
         </aside>
       )}
       {newProject && (
@@ -971,7 +995,6 @@ function resolveSelection(board: Board, id: string | null, archivedSessions: Set
     return { kind: 'employee', session, staff, projectId, ...(id.startsWith('m:') ? { manage: true as const } : {}) };
   }
 
-  const inventories = [board.user, ...Object.values(board.inventories)];
   if (id.startsWith('a:')) {
     const agentId = id.slice(2);
     const userAgent = board.user.agents.find((a) => a.id === agentId);
@@ -983,8 +1006,14 @@ function resolveSelection(board: Board, id: string | null, archivedSessions: Set
     return null;
   }
   if (id.startsWith('s:')) {
-    const skill = inventories.flatMap((i) => i.skills).find((s) => s.id === id.slice(2));
-    return skill ? { kind: 'skill', skill } : null;
+    const skillId = id.slice(2);
+    const userSkill = board.user.skills.find((s) => s.id === skillId);
+    if (userSkill) return { kind: 'skill', skill: userSkill, projectId: null };
+    for (const [projectId, inv] of Object.entries(board.inventories)) {
+      const skill = inv.skills.find((s) => s.id === skillId);
+      if (skill) return { kind: 'skill', skill, projectId };
+    }
+    return null;
   }
   return null;
 }

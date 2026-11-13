@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { AccountUsage, AuthStatus, CodexUsage, QuotaBoost, UsageLimit } from '../../../shared/model';
 import { api } from '../api';
+import { pollVisible } from '../usePoll';
 import { formatAgo, formatDuration } from '../format';
 import { TerminalFilledIcon } from '../icons';
 import { locale, t } from '../i18n';
@@ -78,8 +79,7 @@ export function useAccountUsage(): AccountUsage | null {
   useEffect(() => {
     const load = () => api.usage().then(setUsage, () => {});
     load();
-    const t = setInterval(load, 15_000);
-    return () => clearInterval(t);
+    return pollVisible(load, 15_000);
   }, []);
   return usage;
 }
@@ -144,9 +144,6 @@ const DAY_MS = 86_400_000;
 /** Uma casa decimal, como o ritmo aparece na tela: a cor sai deste mesmo número. */
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
-/** Ritmo exato da cota de 7 dias (100% em 7 dias), na mesma casa decimal da tela: 14,3%/dia. */
-const EVEN_PACE = round1(100 / 7);
-
 export type WeekPace = { value: number; perDay: boolean; level: 'slack' | 'even' | 'tight' };
 
 /**
@@ -161,9 +158,9 @@ export function weekPace(pct: number, resetMs: number): WeekPace {
   return days >= 1 ? { value: rate, perDay: true, level: paceLevel(rate) } : { value: round1(left), perDay: false, level: paceLevel(rate) };
 }
 
-/** Ritmo da cota de 7 dias: no ritmo exato (14,3%/dia) ou acima sobra (listra verde), de 7 até ali aperta (amarela), abaixo de 7 está apertado (vermelha). */
+/** Ritmo da cota de 7 dias: 14%/dia ou mais sobra (listra verde), de 7 até abaixo de 14 aperta (amarela), abaixo de 7 está apertado (vermelha). */
 export function paceLevel(perDay: number): 'slack' | 'even' | 'tight' {
-  return perDay >= EVEN_PACE ? 'slack' : perDay >= 7 ? 'even' : 'tight';
+  return perDay >= 14 ? 'slack' : perDay >= 7 ? 'even' : 'tight';
 }
 
 function UsageMeter({ limit, now, service, name }: { limit: UsageLimit; now: number; service: 'claude' | 'codex'; name?: string }) {
@@ -212,8 +209,7 @@ export function AuthBadge({ boost }: { boost: QuotaBoost | null }) {
   useEffect(() => {
     const load = () => api.auth().then(setAuth, () => {});
     load();
-    const t = setInterval(load, 60_000);
-    return () => clearInterval(t);
+    return pollVisible(load, 60_000);
   }, []);
 
   // Depois do clique, confere a cada 3 s (até 3 min) se o login foi concluído no navegador.

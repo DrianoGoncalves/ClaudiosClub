@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { InboxItem, TurnNotice } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
-import { secretText } from './secretText';
+import { pollVisible } from '../usePoll';
+import { inboxText, inboxWho } from './inboxText';
 
 // A caixa "precisa de mim": o que espera você em todas as salas, lida a cada poucos segundos.
 // Com "avisar no sistema" ligado, cada item novo vira uma notificação do sistema (só o que é novo:
@@ -10,6 +11,7 @@ import { secretText } from './secretText';
 
 const NOTIFY_KEY = 'myco.notify';
 const POLL_MS = 5000;
+const POLL_HIDDEN_MS = 30_000;
 
 const KIND_TITLE: Record<InboxItem['kind'], string> = {
   plan: t('inbox.titlePlan'),
@@ -20,6 +22,7 @@ const KIND_TITLE: Record<InboxItem['kind'], string> = {
   routine: t('inbox.titleRoutine'),
   orphan: t('inbox.titleOrphan'),
   usage: t('inbox.titleUsage'),
+  blocked: t('inbox.titleBlocked'),
 };
 
 export interface InboxView {
@@ -64,10 +67,11 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
       seen.current = new Set(next.map((i) => i.id));
     };
     void tick();
-    const t = setInterval(() => void tick(), POLL_MS);
+    // Aba escondida: não para (avisos do sistema e contador do título dependem dele), só desacelera.
+    const stop = pollVisible(() => void tick(), POLL_MS, POLL_HIDDEN_MS);
     return () => {
       stopped = true;
-      clearInterval(t);
+      stop();
     };
   }, []);
 
@@ -135,7 +139,7 @@ function showDone(d: TurnNotice, onOpen: (item: InboxItem) => void, inbox: Inbox
 
 function show(item: InboxItem, onOpen: (item: InboxItem) => void) {
   try {
-    const n = new Notification(`${item.name} ${KIND_TITLE[item.kind]}`, { body: secretText(item), tag: item.id });
+    const n = new Notification(`${inboxWho(item)} ${KIND_TITLE[item.kind]}`, { body: inboxText(item), tag: item.id });
     n.onclick = () => {
       window.focus();
       onOpen(item);

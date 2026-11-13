@@ -7,7 +7,7 @@
 
 - Linha **Claude**: barras **5h** e **7d**, com a porcentagem e o tempo até reiniciar.
 - Cores: verde abaixo de 70%, amarelo de 70% a 89%, vermelho a partir de 90%.
-- Na barra **7d**, o fundo da barra tem uma listra que mostra o ritmo: quanto da cota ainda resta por dia até reiniciar. Verde: 14,3% por dia ou mais (sobra). Amarelo: de 7% a menos de 14,3% (aperta). Vermelho: abaixo de 7% (apertado). Nas últimas 24 h o texto passa a "restam N% até reiniciar".
+- Na barra **7d**, o fundo da barra tem uma listra que mostra o ritmo: quanto da cota ainda resta por dia até reiniciar. Verde: 14% por dia ou mais (sobra). Amarelo: de 7% a menos de 14% (aperta). Vermelho: abaixo de 7% (apertado). Nas últimas 24 h o texto passa a "restam N% até reiniciar".
 - Passe o mouse para ver "reinicia em {tempo}" (ou "reiniciou") e "lido {tempo atrás}". O link abre o uso do Claude numa nova aba.
 - Sinal "+" no ícone do Claude: a **Otimizar assinatura** está ativa (ver a tabela de travas abaixo).
 - Sem leitura, aparece uma destas mensagens:

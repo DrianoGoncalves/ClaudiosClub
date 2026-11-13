@@ -4,7 +4,7 @@ import { api, ApiError } from '../api';
 import { type ApplySummary, findingTitle, fixable, fixChange, formatTokens, groupFindings, summarizeApply, touchesFicha } from '../costReview';
 import { effortLabel } from '../format';
 import { locale, t } from '../i18n';
-import { SearchIcon } from '../icons';
+import { AnalyzeIcon } from '../icons';
 import { modelLabel } from '../staff/HireForm';
 import { formatBytes } from './attachmentFiles';
 
@@ -266,7 +266,7 @@ export function StaffReview({
   return (
     <>
       <button type="button" className={`btn-secondary btn-icon ranking-review ${loading ? 'is-loading' : ''}`} aria-expanded={open} aria-busy={loading} aria-label={label} title={label} onClick={toggle}>
-        <SearchIcon />
+        <AnalyzeIcon />
       </button>
       {open && (
         <div className="ranking-review-panel" role="region" aria-label={label}>

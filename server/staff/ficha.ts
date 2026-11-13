@@ -24,6 +24,8 @@ export interface FichaContext {
   workspace?: string | null;
   /** Skills da ficha que são da biblioteca do Claudio’s Club (só esta sessão vê, como `myco:<nome>`). */
   librarySkills?: string[];
+  /** Skills que existem agora (biblioteca, projeto ou conta). Sem ela, a lista não marca nenhuma como ausente (ver skillList). */
+  knownSkills?: string[];
   projectName: string;
   projectPath: string;
   /** Nomes de quem chama este funcionário; vazio = o usuário. */
@@ -329,7 +331,6 @@ function serversSection(p: StaffProfile, ctx: FichaContext): string {
   const hasFtp = p.servers.some((n) => ftpOf(known.get(n)));
   // Conexão que sumiu conta como SSH: o texto avisa para não tentar.
   const hasSsh = p.servers.some((n) => !ftpOf(known.get(n)));
-  const vps = p.skills.includes('vps') ? ' Ou a skill `vps` (push, pull, status), que usa as mesmas conexões.' : '';
   const tools = FTP_TOOLS.map((t) => `\`mcp__${FTP_MCP_NAME}__${t}\``).join(', ');
   return [
     '## Servidores',
@@ -340,7 +341,7 @@ function serversSection(p: StaffProfile, ctx: FichaContext): string {
       ...(hasSsh
         ? [
             `- SSH, comando remoto, um por vez: \`ssh -F "${config}" <conexão> "<comando>"\`. O arquivo é gerado pelo Claudio’s Club só com as suas conexões: não leia, não edite e não use outra configuração.`,
-            `- SSH, arquivos: \`scp -F "${config}" <local> <conexão>:<caminho>\` para enviar (com backup do que for sobrescrito no servidor) e o contrário para baixar.${vps}`,
+            `- SSH, arquivos: \`scp -F "${config}" <local> <conexão>:<caminho>\` para enviar (com backup do que for sobrescrito no servidor) e o contrário para baixar.`,
           ]
         : ['- ssh, scp, sftp e rsync ficam bloqueados (Bash e PowerShell) porque as suas conexões são só FTP: não tente, liberar no settings do Claude Code não resolve.']),
       ...(hasFtp
@@ -390,8 +391,8 @@ export const PLAYBOOK_STEPS: Record<Playbook, { title: string; steps: string[] }
   'scout-then-build': {
     title: 'Reconhece, depois constrói',
     steps: [
-      'Antes de planejar, mande o agent `pesquisador` mapear o terreno: onde está o código envolvido, as convenções e os testes que já existem.',
-      'Com o mapa em mãos, escreva o plano sem reler o que o pesquisador já trouxe.',
+      'Antes de planejar, se a mudança passa de 2 arquivos ou toca uma área que você ainda não conhece, mande o agent `pesquisador` mapear o terreno: onde está o código envolvido, as convenções e os testes que já existem. Pedido pequeno em código que você já conhece dispensa o mapa.',
+      'Com o mapa em mãos (quando houver), escreva o plano sem reler o que o pesquisador já trouxe.',
       'Delegue a construção ao agent `executor`, tarefa por tarefa, mandando os arquivo:linha que o pesquisador apontou.',
       'Confira cada entrega e termine com um resumo do que foi feito e do que ficou pendente.',
     ],
@@ -656,7 +657,15 @@ function agentList(p: StaffProfile): string {
 function skillList(p: StaffProfile, ctx: FichaContext): string {
   if (!p.skills.length) return 'nenhuma em especial';
   const library = new Set(ctx.librarySkills ?? []);
-  return p.skills.map((s) => (library.has(s) ? `\`myco:${s}\` (só sua)` : s)).join(', ');
+  const known = ctx.knownSkills ? new Set(ctx.knownSkills) : null;
+  return p.skills
+    .map((s) => {
+      if (library.has(s)) return `\`myco:${s}\` (só sua)`;
+      // Skill que sumiu (apagada ou renomeada): a ficha avisa, no padrão da conexão que não existe mais.
+      if (known && !known.has(s)) return `\`${s}\` (não existe mais: avise o usuário)`;
+      return s;
+    })
+    .join(', ');
 }
 
 /**

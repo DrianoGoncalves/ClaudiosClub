@@ -480,6 +480,10 @@ textarea.q-field { resize: vertical; }
 .bn-tasks:hover { border-color: var(--room-wall); background: color-mix(in srgb, var(--room-wall) 14%, transparent); }
 .bn-tasks.is-empty { color: var(--muted); }
 .bn-tasks-review { color: var(--waiting-ink); font-weight: 600; }
+/* Barra fina do progresso do kanban, colada embaixo do chip (a largura é a do chip). */
+.bn-tasks-wrap { display: flex; flex-direction: column; align-items: stretch; gap: 3px; min-width: 0; }
+.bn-progress { height: 4px; border-radius: 2px; overflow: hidden; background: color-mix(in srgb, var(--muted) 28%, transparent); }
+.bn-progress-fill { display: block; height: 100%; border-radius: 2px; background: var(--ink-green); }
 /* Quadro de tarefas. */
 .modal.tasks-modal { width: min(1280px, 100%); height: min(820px, calc(100vh - 32px)); display: flex; flex-direction: column; position: relative; overflow: hidden; }
 .tasks-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
@@ -696,6 +700,15 @@ textarea.q-field { resize: vertical; }
 .task-run-note { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .task-runs .ok { color: var(--ink-green); }
 .task-runs .fail { color: var(--ink-red); }
+/* Custo da tarefa: total em cima (largura toda) e fazer/revisar/dúvida em duas colunas; a linha de apoio vai embaixo do valor. */
+.task-cost .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 8px; }
+.task-cost .stats .is-wide { grid-column: 1 / -1; }
+.task-cost .stats dd { overflow-wrap: anywhere; }
+.task-cost-sub { display: block; font-weight: 400; }
+.task-cost-note, .task-cost > p { margin: 0 0 8px; }
+.task-cost-nodes { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.task-cost-nodes li { display: grid; gap: 1px; min-width: 0; }
+.task-cost-node-who, .task-cost-node-value { overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   /* Uma coluna por vez, com a beirada da próxima à vista; o arrasto lateral para em cada uma. */
   .tasks-columns { grid-template-columns: repeat(4, calc(100% - 28px)); scroll-snap-type: x mandatory; }
@@ -766,17 +779,17 @@ textarea.q-field { resize: vertical; }
 
 /* Rolagem do painel lateral, do chat, dos modais, das caixas de texto, do quadro de tarefas e das configurações: fina, sem trilho, ponta irregular como os traços de caneta.
    A borda transparente (com background-clip) afasta o polegar da beira, qualquer que seja o fundo. */
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar { width: 10px; height: 10px; }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-track,
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-corner { background: transparent; }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb {
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar { width: 10px; height: 10px; }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-track,
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-corner { background: transparent; }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb); background-clip: padding-box; border: 3px solid transparent; border-radius: 4px 6px 4px 5px;
 }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-thumb-hover); }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb:active { background-color: var(--scroll-thumb-active); }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-thumb-hover); }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb:active { background-color: var(--scroll-thumb-active); }
 /* Firefox (sem ::-webkit-scrollbar): o equivalente padrão. */
 @supports not selector(::-webkit-scrollbar) {
-  .drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
+  .drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
 }
 /* Botão liga/desliga: o btn-secondary com estado pressionado em azul de caneta. */
 .segmented { display: inline-flex; gap: 6px; }
@@ -854,6 +867,8 @@ button.ranking-row:hover { border-color: var(--accent); }
 .ranking-row.is-archived { opacity: 0.5; }
 .ranking-row.is-archived:hover { opacity: 0.8; }
 .ranking-tag { margin-left: 6px; }
+/* Título comprido (tarefa): até 2 linhas em vez de uma só cortada. */
+.ranking-name.is-wrap { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
 .ranking-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .section .ranking-head h3 { margin: 0; }
 .ranking-period { font: inherit; font-size: 12px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); cursor: pointer; }
@@ -1048,6 +1063,8 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .block { display: block; margin-top: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; word-break: break-all; color: var(--ink); }
 .notice { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: min(640px, calc(100vw - 32px)); display: flex; gap: 10px; align-items: flex-start; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 10px; padding: 10px 36px 10px 14px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15); font-size: 13px; z-index: 15; }
 .notice .drawer-close { top: 6px; right: 8px; }
+/* Caminhos de pasta e de backup no texto (excluir skill) não têm onde quebrar: sem isto o texto vaza do aviso. */
+.notice > span { min-width: 0; overflow-wrap: anywhere; }
 /* Monitor de CPU e RAM (toolbar/SystemMonitor.tsx): meio transparente (inteiro com o mouse em cima) e embaixo do
    painel lateral (z-index 10). No celular some: a tela é pequena demais para mais uma camada. */
 .sysmon { position: fixed; top: 12px; right: 12px; z-index: 5; display: grid; gap: 4px; width: 190px; padding: 6px 10px; background: var(--panel-glass); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.5; transition: opacity 0.15s; }
@@ -1216,6 +1233,17 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 
 /* ---- biblioteca de skills (no painel da conta) ---- */
 .skill-lib { display: grid; gap: 6px; }
+/* Editar/excluir skill (painel da skill): confirmação na própria seção, no padrão do cancelar agendamento. */
+.skill-manage { display: grid; gap: 8px; }
+.skill-manage :is(h3, p) { margin: 0; overflow-wrap: anywhere; }
+.skill-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.skill-confirm { display: grid; gap: 8px; padding: 8px 10px; border: 1px solid var(--danger); border-radius: 8px; }
+.skill-confirm p { font-size: 13px; }
+.skill-editor textarea { width: 100%; box-sizing: border-box; resize: vertical; font-size: 13px; }
+/* Alerta dos hooks vinculados (modal no padrão do .usage-warning): a lista rola sozinha e o Sim/Cancelar fica à vista. */
+.skill-hooks { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; max-height: 40vh; overflow-y: auto; }
+.skill-hooks li { display: grid; gap: 2px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .skill-actions .btn-secondary { min-height: 36px; } }
 
 /* ---- registro de acesso aos servidores (na ficha) ---- */
 .server-log { margin-top: 10px; }
@@ -1279,6 +1307,7 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 /* Assunto da conversa: 1 linha, corta com reticências. Sem assunto a linha não existe e a área fica vazia (altura 0). */
 .inbox-topic { grid-area: topic; font-size: 12px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inbox-summary { grid-area: summary; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-blocked .inbox-summary { white-space: normal; overflow-wrap: anywhere; }
 .inbox-at { grid-area: at; white-space: nowrap; }
 /* No celular o botão não fica na borda esquerda: ancorada nele, a caixa saía pela direita. Ocupa a largura da tela. */
 @media (max-width: 480px) {

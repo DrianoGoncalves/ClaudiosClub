@@ -522,7 +522,8 @@ describe('infra: servidores por SSH', () => {
       expect(md).toContain(part);
     }
     expect(md).not.toContain('skill `vps`');
-    expect(renderFicha({ ...p, skills: ['vps'] }, ctx)).toContain('skill `vps`');
+    // A skill `vps` entra na lista de skills (sem o texto fixo sobre servidor: o acesso é o do Club).
+    expect(renderFicha({ ...p, skills: ['vps'] }, ctx)).toContain('Skills: vps.');
     // Sem servidor: a ficha explica o bloqueio; só nomes, nunca host nem pasta.
     const none = renderFicha(profile(), ctx);
     expect(none).toContain('## Servidores');

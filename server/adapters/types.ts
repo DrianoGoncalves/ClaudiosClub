@@ -44,4 +44,6 @@ export interface ToolAdapter {
   getSessionCostFiles(sessionId: string): Promise<{ files: FileCost[]; scanning: boolean }>;
   /** Todos os transcripts com o gasto a partir de `since` (AAAA-MM-DD local; null = tudo), para o ranking de economia. */
   getSavingsFiles(since: string | null): Promise<{ files: TranscriptCost[]; scanning: boolean }>;
+  /** Todos os transcripts, sem filtro de quadro: a conversa de uma tarefa pode estar numa worktree fora do quadro. */
+  getAllSessionCostFiles(): Promise<{ files: TranscriptCost[]; scanning: boolean }>;
 }

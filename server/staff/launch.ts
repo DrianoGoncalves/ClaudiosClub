@@ -42,6 +42,8 @@ export interface LaunchContext {
   serverKeys?: string[];
   /** Skills da ficha que estão na biblioteca do Claudio’s Club (vão no plugin da sessão). */
   librarySkills?: string[];
+  /** Skills que existem agora (biblioteca, projeto ou conta): a ficha avisa as da lista que sumiram (ver FichaContext.knownSkills). */
+  knownSkills?: string[];
   /** Pasta da biblioteca (os testes trocam). */
   skillLibraryDir?: string;
   /** Quem reporta a este funcionário (a seção "Sua equipe" da ficha). */
@@ -481,7 +483,7 @@ export interface FichaRunInfo {
  */
 export async function writeFicha(
   profile: StaffProfile,
-  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'roles' | 'librarySkills' | 'codex' | 'internetAccess' | 'clubGuard' | 'lockedByCodexManager'>,
+  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'roles' | 'librarySkills' | 'knownSkills' | 'codex' | 'internetAccess' | 'clubGuard' | 'lockedByCodexManager'>,
   absolute = false,
   run: FichaRunInfo = {},
 ): Promise<FichaContext> {
@@ -500,6 +502,7 @@ export async function writeFicha(
     team: ctx.team,
     roles: ctx.roles,
     librarySkills: ctx.librarySkills,
+    knownSkills: ctx.knownSkills,
     // Lido a cada sessão (writeFicha roda em prepareRun): criar ou apagar o SPEC.md vale na próxima conversa.
     guide: await hasGuide(ctx.projectPath),
     codex: ctx.codex,

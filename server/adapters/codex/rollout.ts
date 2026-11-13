@@ -240,7 +240,7 @@ async function readZst(file: string): Promise<Buffer | null> {
  * Linhas de um rollout: o fim (`tail`) ou o começo (`head`) nos primeiros `bytes`, como no tailLines do Claude. `.zst` é
  * descompactado antes e fatiado do mesmo jeito.
  */
-async function rolloutLines(file: string, where: 'tail' | 'head', bytes: number): Promise<string[]> {
+export async function rolloutLines(file: string, where: 'tail' | 'head', bytes: number): Promise<string[]> {
   if (!file.endsWith('.zst')) return where === 'tail' ? tailLines(file, bytes) : readHead(file, bytes);
   const text = await readZst(file);
   if (!text) return [];

@@ -4,6 +4,15 @@ import type { AppConfig, Board, SavingsReport, SessionSavings } from '../../shar
 import { ghostNodeId, staffNodeId } from './board/layout';
 import { t } from './i18n';
 
+/** Período do ranking em dias (null = tudo): hoje (desde a meia-noite), 7 dias, 1 mês, 3 meses (o padrão) e tudo. */
+export const RANKING_PERIODS: Array<[string, number | null, string]> = [
+  ['1', 1, t('detail.periodToday')],
+  ['7', 7, t('detail.period7d')],
+  ['30', 30, t('detail.period1m')],
+  ['90', 90, t('detail.periodLast3Months')],
+  ['all', null, t('detail.periodAll')],
+];
+
 /** Uma linha possível do ranking: a ficha de um funcionário, ou o fantasma de um projeto (conversas sem ficha). */
 export interface RankingGroup {
   /** Nó do quadro a selecionar ao clicar (o fantasma, que não tem ficha no RH). */

@@ -599,11 +599,15 @@ export interface Task {
   acceptance?: string | null;
   /** Dependências: tarefas do mesmo projeto que precisam estar prontas ('done') antes de esta começar (ver `blockers` em server/tasks.ts). */
   blockedBy?: string[];
+  /** Último motivo avisado aos gestores de quem espera esta tarefa (ver TaskService.doWarnDependents); limpo quando ela volta a andar ou fica pronta. */
+  blockAlert?: string | null;
   status: TaskStatus;
   /** Funcionário com ficha que cuida dela; null = ninguém ainda. */
   staffId: string | null;
   /** A conversa da tarefa (aberta ao começar). */
   sessionId: string | null;
+  /** Todas as conversas que já foram da tarefa (trabalho, revisão, dúvida ao gestor), a mais antiga primeiro; no máximo 50. */
+  sessions?: TaskSession[];
   /** Troca de motor da tarefa (ausente = ainda no motor da ficha). Ver `TaskFallback`. */
   fallback?: TaskFallback;
   /** O plano aprovado no cartão de plano, em Markdown. */
@@ -623,8 +627,10 @@ export interface Task {
   review?: TaskHandoff | null;
   /** Revisor automático: quando a tarefa é entregue, ele revisa sozinho; null/ausente = sem revisão automática. */
   reviewerId?: string | null;
-  /** Rodadas de revisão automática já pedidas (no máximo 3). */
+  /** Rodadas de revisão automática já pedidas (no máximo 2). */
   reviewRounds?: number;
+  /** Reprovações que devolveram a tarefa para ajuste (manuais ou automáticas). Ausente = nenhuma. */
+  reworkRounds?: number;
   /** Quando a rede de segurança retomou a conversa que parou no meio do turno (uma vez só; ver TaskService.tick). */
   resumedAt?: string | null;
   /** Tentativa corrente (ver server/taskRuns.ts): aberta ao começar ou retomar, fechada na entrega, na parada ou no cancelamento. */
@@ -645,6 +651,8 @@ export interface Task {
   requestedBy?: string | null;
   /** A conversa do gestor em que ele pediu: a entrega volta para ela. */
   requestedSession?: string | null;
+  /** Aprovada, mas o aviso ao gestor (`requestedBy`) ficou retido: sai junto com o da última tarefa aberta dele (ver TaskService.settleRequester). */
+  outcomeHeld?: boolean;
   /**
    * Na fila do funcionário: começa sozinha quando ele terminar a tarefa atual (uma por vez, na
    * ordem do quadro).
@@ -712,10 +720,18 @@ export interface HeldMessage {
   origin?: string;
 }
 
+/** Progresso do kanban do lote atual: pontos ganhos sobre o máximo (ver shared/kanbanProgress.ts). */
+export interface TaskProgress {
+  points: number;
+  max: number;
+}
+
 /** Tarefas de um projeto para o cabeçalho: abertas (tudo que não é pronto) e em revisão. */
 export interface TaskSummary {
   open: number;
   review: number;
+  /** Progresso do lote (a barra do cabeçalho); ausente num servidor antigo, e nesse caso a barra some. */
+  progress?: TaskProgress | null;
 }
 
 /** Trabalho passado a outro funcionário (revisão, deploy): quem, em qual conversa e quando. */
@@ -727,6 +743,15 @@ export interface TaskHandoff {
   doneAt?: string;
   /** Veredito da revisão (primeira linha da resposta: APROVADO ou REPROVADO); null = a resposta não trouxe um. */
   verdict?: 'approved' | 'rejected' | null;
+}
+
+/** Uma conversa que foi da tarefa: o trabalho, a revisão ou a dúvida ao gestor. `staffId` é quem conversa nela. */
+export interface TaskSession {
+  id: string;
+  role: 'work' | 'review' | 'question';
+  staffId: string | null;
+  engine: Engine;
+  at: string;
 }
 
 export interface TestRun {
@@ -1233,7 +1258,7 @@ export type QuestionAnswers = Record<string, string | string[]>;
 export type QuestionAnnotations = Record<string, { preview?: string; notes?: string }>;
 
 /** O que espera você, de todas as salas (a caixa "precisa de mim"). */
-export type InboxKind = 'plan' | 'permission' | 'secret' | 'waiting' | 'error' | 'routine' | 'orphan' | 'usage';
+export type InboxKind = 'plan' | 'permission' | 'secret' | 'waiting' | 'error' | 'routine' | 'orphan' | 'usage' | 'blocked';
 
 /** Um turno que acabou (trabalhando → parado): vira o aviso "Fulano terminou". */
 export interface TurnNotice {
@@ -1275,6 +1300,8 @@ export interface InboxItem {
   quote?: string;
   /** Segredo no chat: o cliente monta a frase no idioma da página (sem isso, vale `summary`, em pt-BR). Nunca traz o valor. */
   secret?: { kind: SecretKind; detail?: string; source?: SecretSource };
+  /** Tarefa que espera outra empacada (kind 'blocked', ver stuckDependencies em server/tasks.ts): quem espera, a bloqueadora, o estado dela e o motivo. */
+  blocked?: { taskId: string; taskTitle: string; blockerId: string; blockerTitle: string; blockerStatus: TaskStatus; reason: string };
 }
 
 export interface ContextUsage {
@@ -1341,6 +1368,103 @@ export interface RewindPreview {
   insertions: number;
   deletions: number;
   error?: string;
+}
+
+/** Tokens de uma conversa, no mesmo formato para os dois motores. `input` é sem cache; no Codex `cacheWrite` é 0. */
+export interface TaskTokens {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+}
+
+/** complete: todas as conversas têm dado; partial: alguma não tem; none: a tarefa não tem conversas (ou nenhuma tem dado). */
+export type TaskCostCoverage = 'complete' | 'partial' | 'none';
+
+/** Soma de um grupo de conversas (um papel, ou os de um gestor). `usd`/`tokens` null = nenhum nó tem o dado. */
+export interface TaskCostBucket {
+  sessions: number;
+  /** Quantas dessas conversas têm tokens lidos. */
+  withData: number;
+  usd: number | null;
+  tokens: TaskTokens | null;
+}
+
+/** Uma conversa da tarefa, com o custo dela. `tokens` null = sem dado (nunca zero por falta de leitura). */
+export interface TaskCostNode {
+  sessionId: string;
+  role: TaskSession['role'];
+  staffId: string | null;
+  engine: Engine;
+  at: string;
+  usd: number | null;
+  tokens: TaskTokens | null;
+}
+
+/** Custo de uma tarefa: todas as conversas dela (`sessions`, sem repetir id). */
+export interface TaskCost {
+  taskId: string;
+  coverage: TaskCostCoverage;
+  usd: number | null;
+  tokens: TaskTokens | null;
+  byRole: Record<TaskSession['role'], TaskCostBucket>;
+  reworkRounds: number;
+  reviewRounds: number;
+  nodes: TaskCostNode[];
+  /** A leitura dos transcripts ainda está em andamento. */
+  scanning: boolean;
+}
+
+/** Uma tarefa concluída no ranking por tarefa. */
+export interface TaskCostRankRow {
+  projectId: string;
+  taskId: string;
+  title: string;
+  staffId: string | null;
+  requestedBy: string | null;
+  /** Início da última passagem para "pronto" (AAAA-MM-DDTHH:mm… ISO). */
+  completedAt: string;
+  coverage: TaskCostCoverage;
+  sessions: number;
+  usd: number | null;
+  tokens: TaskTokens | null;
+  reworkRounds: number;
+  reviewRounds: number;
+}
+
+/** Executor: média por tarefa concluída (usd e tokens só das tarefas com dado). */
+export interface ExecutorCostRow {
+  staffId: string;
+  tasks: number;
+  usd: number | null;
+  tokens: TaskTokens | null;
+  usdAvg: number | null;
+  /** Média por tarefa de cada componente, arredondada. */
+  tokensAvg: TaskTokens | null;
+  reworkTasks: number;
+  /** Fração (0 a 1) das tarefas concluídas com retrabalho. */
+  reworkShare: number;
+}
+
+/** Gestor (quem pediu a tarefa): as tarefas pedidas e o custo das conversas de revisão e dúvida que ele fez. */
+export interface ManagerCostRow {
+  staffId: string;
+  tasksRequested: number;
+  usd: number | null;
+  tokens: TaskTokens | null;
+  review: TaskCostBucket;
+  question: TaskCostBucket;
+}
+
+/** Ranking de custo por tarefa: tarefas concluídas no período, por custo, e os agregados por funcionário e por gestor. */
+export interface TaskCostRanking {
+  /** Primeiro dia do período (AAAA-MM-DD, hora local); null = desde sempre. */
+  since: string | null;
+  tasks: TaskCostRankRow[];
+  executors: ExecutorCostRow[];
+  managers: ManagerCostRow[];
+  /** A leitura dos transcripts ainda está em andamento. */
+  scanning: boolean;
 }
 
 /** Arquivo anexado a uma mensagem (além das imagens): texto vai como texto; PDF, em base64. */

@@ -1297,6 +1297,8 @@ export class StaffService {
           : worktreeFor(project.path, profile.id),
       listProjectStaff(project.path, project.id),
     ]);
+    // Sem a leitura das skills, a ficha sai sem a marcação de "não existe mais" (como a lista de cargos, ver `roles`).
+    const knownSkills = profile.skills.length ? await this.existingSkills(project, profile.skills) : null;
     return {
       company: config.companyName,
       // O workspace do projeto (aba do quadro) entra na ficha como contexto (cliente, área…).
@@ -1314,6 +1316,8 @@ export class StaffService {
       // As chaves de todas as conexões SSH do projeto: nenhum funcionário precisa ler uma (quem lê é o ssh).
       serverKeys: await keyFilesOf(project.path),
       librarySkills: profile.skills.length ? await librarySkillsOf(profile.skills, this.opts.skillLibraryDir) : [],
+      // As skills da ficha que ainda existem (biblioteca, projeto ou conta): a ficha avisa as que sumiram (ver knownSkills).
+      ...(knownSkills ? { knownSkills } : {}),
       skillLibraryDir: this.opts.skillLibraryDir,
       codex: config.codexReview,
       internetAccess: config.internetAccess,
@@ -1330,6 +1334,23 @@ export class StaffService {
         .map((s) => ({ id: s.id, name: s.name, role: s.role, mission: s.mission, ...(s.temporary && { temporary: true }) })),
       ...(roles && { roles }),
     };
+  }
+
+  /**
+   * Os nomes das skills que existem agora: do projeto, da conta (sincronizadas incluídas) e da biblioteca. Erro na leitura: null
+   * (a ficha sai sem a marcação, em vez de derrubar a abertura da conversa).
+   */
+  private async existingSkills(project: Project, names: string[]): Promise<string[] | null> {
+    try {
+      const [inventory, account, library] = await Promise.all([
+        this.adapter.getProjectInventory(project.id),
+        this.adapter.getUserScope(),
+        librarySkillsOf(names, this.opts.skillLibraryDir),
+      ]);
+      return [...(inventory?.skills ?? []), ...account.skills].map((s) => s.name).concat(library);
+    } catch {
+      return null;
+    }
   }
 
   /**

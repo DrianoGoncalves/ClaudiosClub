@@ -19,10 +19,10 @@ const render = (view: PeopleView) => {
 };
 
 describe('RH e ranking num painel só', () => {
-  it('uma faixa de abas: RH, Gastos e Economia', () => {
+  it('uma faixa de abas: RH, Gastos, Economia e Tarefas', () => {
     const { html } = render('hr');
-    for (const label of [t('hr.button'), t('detail.tabCost'), t('detail.tabSavings')]) expect(html).toContain(`>${label}</button>`);
-    expect((html.match(/role="tab"/g) ?? []).length).toBe(3);
+    for (const label of [t('hr.button'), t('detail.tabCost'), t('detail.tabSavings'), t('detail.tabTasks')]) expect(html).toContain(`>${label}</button>`);
+    expect((html.match(/role="tab"/g) ?? []).length).toBe(4);
     expect(html).toContain(t('hr.people'));
   });
 

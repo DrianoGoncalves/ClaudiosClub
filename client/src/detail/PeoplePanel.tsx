@@ -6,8 +6,8 @@ import type { RankingTab } from './Detail';
 export type PeopleView = 'hr' | 'ranking';
 
 /**
- * RH e ranking num painel só (um botão no topo em vez de dois): cabeçalho, abas RH | Gastos | Economia e, embaixo, a
- * tela da aba. `view` vem da seleção do quadro (o RH ou o ranking); a aba do ranking é daqui.
+ * RH e ranking num painel só (um botão no topo em vez de dois): cabeçalho, abas RH | Gastos | Economia | Tarefas e,
+ * embaixo, a tela da aba. `view` vem da seleção do quadro (o RH ou o ranking); a aba do ranking é daqui.
  */
 export function PeoplePanel({
   view,
@@ -26,6 +26,7 @@ export function PeoplePanel({
     ['hr', t('hr.button'), view === 'hr', () => onView('hr')],
     ['cost', t('detail.tabCost'), view === 'ranking' && rankingTab === 'cost', () => (setRankingTab('cost'), onView('ranking'))],
     ['savings', t('detail.tabSavings'), view === 'ranking' && rankingTab === 'savings', () => (setRankingTab('savings'), onView('ranking'))],
+    ['tasks', t('detail.tabTasks'), view === 'ranking' && rankingTab === 'tasks', () => (setRankingTab('tasks'), onView('ranking'))],
   ];
   return (
     <>

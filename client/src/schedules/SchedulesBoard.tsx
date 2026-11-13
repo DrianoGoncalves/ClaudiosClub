@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { StaffProfile } from '../../../shared/model';
 import { api } from '../api';
+import { pollVisible } from '../usePoll';
 import { t } from '../i18n';
 import { countdown, type Schedule, scheduleKey, whenParts } from './scheduleView';
 
@@ -126,10 +127,10 @@ export function SchedulesBoard({ projectId, projectName, staff, onClose, onOpenC
   // Os agendamentos disparam e somem sozinhos: relê de tempos em tempos; a contagem desce de segundo em segundo.
   useEffect(() => {
     void load();
-    const poll = setInterval(() => void load(), POLL_MS);
+    const stopPoll = pollVisible(() => void load(), POLL_MS);
     const tick = setInterval(() => setNow(Date.now()), 1000);
     return () => {
-      clearInterval(poll);
+      stopPoll();
       clearInterval(tick);
     };
   }, [load]);

@@ -40,6 +40,7 @@ import {
 import { McpAccessHint, McpAccessSelect } from './McpAccessSelect';
 import { PersonMemory } from './PersonMemory';
 import { PERSONALITY_TEXT, personalityToSend } from './personalityField';
+import { goneSkills, skillIsGone, type LibraryState } from './skillGone';
 import { PERSONALITIES, type Personality } from '../../../shared/personality';
 import type { RoleEntry } from '../../../shared/roles';
 import {
@@ -128,13 +129,26 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   );
   // As da biblioteca do Claudio’s Club só carregam para quem tem na ficha (as do projeto e da conta, todos veem).
   const [library, setLibrary] = useState<string[]>([]);
+  // Só com a biblioteca lida dá para dizer que uma skill marcada sumiu (a da biblioteca chega depois das do projeto e da conta).
+  const [libraryState, setLibraryState] = useState<LibraryState>('loading');
   useEffect(() => {
-    api.skillLibrary().then((l) => setLibrary(l.map((s) => s.name)), () => {});
+    api.skillLibrary().then(
+      (l) => {
+        setLibrary(l.map((s) => s.name));
+        setLibraryState('ok');
+      },
+      () => setLibraryState('failed'),
+    );
   }, []);
   const skillNames = useMemo(
     () => [...new Set([...inventory.skills, ...board.user.skills.filter((s) => s.scope !== 'synced')].map((s) => s.name).concat(library))].sort(),
     [inventory, board.user, library],
   );
+  // Skill que a ficha já tinha marcada e a lista não oferece mais (apagada ou renomeada; a sincronizada nunca é oferecida): continua à
+  // vista para dar para desmarcar. Vem da ficha ao abrir, e não do que está marcado agora: desmarcar não faz a linha sumir.
+  const gone = useMemo(() => goneSkills(editing?.skills ?? [], skillNames, libraryState), [editing, skillNames, libraryState]);
+  const syncedSkills = useMemo(() => new Set(board.user.skills.filter((s) => s.scope === 'synced').map((s) => s.name)), [board.user]);
+  const skillGone = (s: string) => skillIsGone(s, libraryState, syncedSkills);
   const colleagues = board.staff.filter((s) => s.projectId === projectId && s.id !== editing?.id);
 
   const [name, setName] = useState(editing?.name ?? (adopting ? employeeName(adopting).slice(0, 60) : ''));
@@ -772,10 +786,10 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           <p className="muted small">{t('staff.codexToolsNote')}</p>
         ) : (
           <>
-        {agentNames.length === 0 && skillNames.length === 0 && (
+        {agentNames.length === 0 && skillNames.length === 0 && gone.length === 0 && (
           <p className="muted small">{t('staff.noAgentsSkills')}</p>
         )}
-        {(agentNames.length > 0 || skillNames.length > 0) && (
+        {(agentNames.length > 0 || skillNames.length > 0 || gone.length > 0) && (
           <fieldset>
             <legend>{t('staff.suggested')}</legend>
             <p className="muted small">{t('staff.suggestedHint')}</p>
@@ -792,7 +806,18 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                   <span className="muted small"> {library.includes(s) ? t('office.libTag') : t('staff.skillTag')}</span>
                 </label>
               ))}
+              {gone.map((s) => (
+                <label key={`gone:${s}`} className="check">
+                  <input type="checkbox" checked={skills.includes(s)} onChange={() => toggle(skills, setSkills, s)} /> {s}
+                  {skillGone(s) ? (
+                    <span className="badge warn">{t('staff.skillGone')}</span>
+                  ) : (
+                    <span className="muted small"> {syncedSkills.has(s) ? t('detail.synced') : t('staff.skillTag')}</span>
+                  )}
+                </label>
+              ))}
             </div>
+            {gone.some((s) => skillGone(s)) && <p className="muted small">{t('staff.skillGoneHint')}</p>}
           </fieldset>
         )}
 

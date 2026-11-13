@@ -1,6 +1,6 @@
 # Funcionários
 
-Fontes: `client/src/staff/HireForm.tsx`, `AgentForm.tsx`, `HrPanel.tsx`, `client/src/office/ProjectOffice.tsx`, `McpServers.tsx`, `SkillLibrary.tsx`, `client/src/toolbar/RolesEditor.tsx`, `shared/roles.ts`, `server/staff/ficha.ts`.
+Fontes: `client/src/staff/HireForm.tsx`, `AgentForm.tsx`, `HrPanel.tsx`, `client/src/office/ProjectOffice.tsx`, `McpServers.tsx`, `SkillLibrary.tsx`, `client/src/detail/SkillManage.tsx`, `client/src/toolbar/RolesEditor.tsx`, `shared/roles.ts`, `server/staff/ficha.ts`.
 
 ## Contratar
 
@@ -130,6 +130,16 @@ Salve com **Salvar ficha** (ou **Contratar**, ao criar). **Cancelar** fecha; no 
 
 - Skill da biblioteca: ative **Mostrar o escopo do usuário** em **Configurações** → **Quadro**. No projeto **~ você**, veja **Biblioteca de skills (restritas)**. **+ skill na biblioteca** cria uma (**Nome**, **Descrição (quando usar)**, **Instruções**). **Tirar da biblioteca** manda para a lixeira da biblioteca (dá para recuperar).
 - Só quem tem a skill marcada na ficha carrega. Ela aparece como `myco:<nome>`.
+- Skill da conta ou do projeto (a pasta `skills` do Claude Code): clique no cartão da skill no quadro (as da conta ficam no projeto **~ você**, com **Mostrar o escopo do usuário** ligado). O painel tem a seção **Editar ou excluir**:
+  - **Editar** abre o `SKILL.md` inteiro, com o cabeçalho no topo. **Salvar** grava só esse arquivo; o nome da pasta não muda e a versão anterior fica em backup no servidor (`~/.myco/backups/skills`).
+  - **Excluir** pede confirmação (**Mover para a lixeira** ou **Manter**). A pasta inteira vai para a lixeira do servidor (`~/.myco/backups/skills/.lixeira`) e pode ser recuperada de lá: o aviso do canto mostra o caminho exato e fica até você fechar no ×.
+  - Se algum hook dos `settings.json` (da conta ou do projeto) chama a skill, nada é apagado e abre o alerta **Hooks vinculados a esta skill**, com cada hook (evento e arquivo). Ele avisa que, ao continuar, esses hooks deixam de rodar (podem ser proteções, como um bloqueio antes de um comando) e que o Claudio’s Club guarda uma cópia de cada `settings.json` em `~/.myco/backups/settings` antes de mexer. A pergunta é **Deseja continuar?**:
+    - **Cancelar** (também Esc ou clicar fora): não apaga nada, nem a skill nem os hooks.
+    - **Sim**: tira esses hooks dos `settings.json` e só depois manda a skill para a lixeira. O aviso do canto lista a pasta da lixeira, os hooks que saíram e os backups dos settings (para voltar um hook, copie o backup sobre o `settings.json` do mesmo nome).
+    - Se os hooks mudaram entre o alerta e o **Sim** (alguém editou o settings), a mensagem do servidor aparece no alerta, a lista é refeita e você decide de novo; nada foi apagado.
+  - Settings que não dá para ler, que não é um JSON válido ou com um hook da skill em formato que não dá para tirar sozinho: o servidor recusa, a mensagem diz o arquivo e o evento (corrija ou tire o hook à mão) e nada é apagado. O mesmo vale para o `SKILL.md` com chave de API escrita no texto, ao salvar.
+  - Sem **Editar** nem **Excluir**: skill que é link (symlink ou junction; o painel mostra o destino, mexa na origem) e skill sincronizada da conta (só leitura). O painel diz o motivo.
+- Skill apagada ou renomeada que uma ficha tinha marcada continua na lista **Agents e skills indicados**, marcada e com o selo **não existe mais**: desmarque e salve para tirá-la da ficha.
 - **Agents** (subagents do Claude Code): crie com **Novo agent** no painel do projeto. Há três prontos: **Executor (Haiku)**, **Pesquisador (Haiku, só leitura)** e **Revisor (Sonnet)**.
 - Skills e agents não existem no Codex.
 

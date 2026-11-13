@@ -214,12 +214,13 @@ export function PencilIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-/** Lupa: analisar (revisão de custo do funcionário). */
-export function SearchIcon({ size = 15 }: { size?: number }) {
+/** Lupa com gráfico de barras: analisar (revisão de custo do funcionário), não buscar. */
+export function AnalyzeIcon({ size = 15 }: { size?: number }) {
   return (
     <svg width={size} height={size} aria-hidden="true" {...base}>
       <circle cx="11" cy="11" r="8" />
       <path d="m21 21-4.3-4.3" />
+      <path d="M7 14v-2M11 14V8M15 14v-4" />
     </svg>
   );
 }

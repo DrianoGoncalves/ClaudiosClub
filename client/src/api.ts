@@ -54,6 +54,8 @@ import type {
   StaffProfile,
   Task,
   TaskCode,
+  TaskCost,
+  TaskCostRanking,
   TestRun,
   TaskSummary,
   UsageStop,
@@ -274,6 +276,38 @@ export interface AgentSource {
   linked: boolean;
 }
 
+/** O SKILL.md de uma skill da conta ou do projeto (GET /api/skills/source, POST /api/skills/save). */
+export interface SkillSource {
+  name: string;
+  content: string;
+  /** Dá para salvar e excluir (sem link, dentro da pasta de skills do escopo e não sincronizada). */
+  editable: boolean;
+  /** Destino do link, quando a pasta ou o SKILL.md é um symlink/junction. */
+  link: string | null;
+}
+
+/** Qual skill: a da conta (`user`) ou a do projeto (`project`, com o id). O servidor monta a pasta; o navegador só manda o nome. */
+export interface SkillRef {
+  scope: 'project' | 'user';
+  projectId: string | null;
+  name: string;
+}
+
+/** Um hook (arquivo de settings e evento) que aponta para a skill. Nunca leva o comando. */
+export interface SkillHook {
+  file: string;
+  event: string;
+}
+
+/** A skill foi para a lixeira (`trash`); com hooks confirmados, vêm também os que saíram e os backups dos settings. */
+export interface SkillDeleted {
+  trash: string;
+  removedHooks?: SkillHook[];
+  settingsBackups?: string[];
+}
+
+export type SkillDeleteResult = { needsConfirm: true; hooks: SkillHook[] } | SkillDeleted;
+
 /** Uma ficha no índice da empresa (GET /api/staff-directory). */
 export interface DirectoryPerson {
   projectId: string;
@@ -337,6 +371,19 @@ export const api = {
     tools: string[] | null;
     prompt: string;
   }) => post<AgentSource>('/api/agents/save', body),
+  /** Erros (400) levam a mensagem do servidor, pronta para mostrar (ex.: link, hook apontando para a skill). */
+  skillSource: (ref: SkillRef) =>
+    getExplained<SkillSource>(
+      `/api/skills/source?scope=${ref.scope}&name=${encodeURIComponent(ref.name)}${ref.projectId ? `&projectId=${encodeURIComponent(ref.projectId)}` : ''}`,
+    ),
+  /** Grava só o SKILL.md (o servidor guarda a versão anterior em backup). Não renomeia. */
+  saveSkill: (ref: SkillRef, content: string) => post<SkillSource>('/api/skills/save', { ...ref, content }),
+  /**
+   * Manda a pasta inteira para a lixeira do servidor. Com hooks apontando para a skill e sem `removeHooks`, não apaga
+   * nada e devolve `needsConfirm` com a lista; reenviar com essa lista tira os hooks (com backup) e depois a skill.
+   */
+  deleteSkill: (ref: SkillRef, removeHooks?: SkillHook[]) =>
+    post<SkillDeleteResult>('/api/skills/delete', removeHooks ? { ...ref, removeHooks } : ref),
   /** `old: true` traz também as conversas antigas (arquivadas pela retenção). Sem o parâmetro, a lista segue como antes. */
   board: (opts: { old?: boolean } = {}) => get<Board>(`/api/board${opts.old ? '?old=1' : ''}`),
   projects: () => get<Project[]>('/api/projects'),
@@ -578,6 +625,10 @@ export const api = {
     post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}`, patch),
   /** Começos e fins das execuções da tarefa (null = projeto ou tarefa que não existem). */
   taskRuns: (projectId: string, taskId: string) => get<TaskRunEvent[] | null>(`/api/projects/${projectId}/tasks/${taskId}/runs`),
+  /** Custo da tarefa: todas as conversas dela, por papel (fazer, revisar, dúvida), com as voltas de retrabalho. */
+  taskCost: (projectId: string, taskId: string) => get<TaskCost>(`/api/projects/${projectId}/tasks/${taskId}/cost`),
+  /** Custo por tarefa concluída nos últimos `days` dias (null = desde sempre), por executor e por gestor. */
+  taskCosts: (days: number | null) => get<TaskCostRanking>(days === null ? '/api/task-costs' : `/api/task-costs?days=${days}`),
   /** Equipe em arquivo: as fichas de `ids` (sem ids = todas as ativas) e as skills da biblioteca que usam. O JSON vira download. */
   exportTeam: (projectId: string, ids?: string[]) =>
     getExplained<unknown>(`/api/projects/${projectId}/staff/export${ids?.length ? `?ids=${ids.map(encodeURIComponent).join(',')}` : ''}`),

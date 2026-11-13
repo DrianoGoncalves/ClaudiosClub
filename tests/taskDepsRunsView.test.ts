@@ -2,10 +2,11 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { TaskRunEvent } from '../client/src/api';
-import { BlockedBadge, BlockedByField, MAX_DEPS, openBlockers, sameDeps } from '../client/src/tasks/TaskDeps';
+import type { TaskStatus } from '../shared/model';
+import { BlockedBadge, BlockedByField, MAX_DEPS, depChoices, openBlockers, sameDeps } from '../client/src/tasks/TaskDeps';
 import { groupRuns, runDuration } from '../client/src/tasks/TaskRuns';
 
-const task = (id: string, status: 'todo' | 'doing' | 'done', extra: { archived?: boolean; title?: string } = {}) => ({
+const task = (id: string, status: TaskStatus, extra: { archived?: boolean; title?: string } = {}) => ({
   id,
   status,
   title: extra.title ?? `Tarefa ${id}`,
@@ -44,21 +45,74 @@ describe('BlockedByField', () => {
   const render = (props: { tasks: ReturnType<typeof task>[]; selfId: string | null; value: string[] }) =>
     renderToStaticMarkup(createElement(BlockedByField, { ...props, labels, onChange: () => {} }));
 
-  it('não oferece a própria tarefa nem as arquivadas (a menos que já marcadas); prontas vão por último', () => {
+  const statuses: TaskStatus[] = ['waiting', 'todo', 'planning', 'doing', 'review'];
+
+  it('oferece só tarefas abertas (qualquer status menos Pronto), sem a própria e sem as arquivadas', () => {
     const html = render({
-      tasks: [task('t-me', 'todo'), task('t-old', 'done', { archived: true }), task('t-kept', 'done', { archived: true }), task('t-ok', 'todo'), task('t-done', 'done')],
+      tasks: [
+        task('t-me', 'todo'),
+        ...statuses.map((s) => task(`t-${s}`, s)),
+        task('t-done', 'done'),
+        task('t-old', 'done', { archived: true }),
+      ],
       selfId: 't-me',
-      value: ['t-kept'],
+      value: [],
     });
     expect(html).not.toContain('Tarefa t-me');
+    expect(html).not.toContain('Tarefa t-done');
     expect(html).not.toContain('Tarefa t-old');
-    expect(html.indexOf('Tarefa t-ok')).toBeLessThan(html.indexOf('Tarefa t-done'));
-    expect(html).toContain('Tarefa t-kept');
+    for (const s of statuses) expect(html).toContain(`Tarefa t-${s}`);
+    expect(html).not.toContain('Vínculos antigos');
   });
 
-  it('sem outras tarefas, avisa em vez de mostrar lista vazia', () => {
-    const html = render({ tasks: [task('t-me', 'todo')], selfId: 't-me', value: [] });
-    expect(html).toContain('Não há outras tarefas');
+  it('na criação (selfId null) também só as abertas', () => {
+    const html = render({ tasks: [task('t-a', 'doing'), task('t-b', 'done')], selfId: null, value: [] });
+    expect(html).toContain('Tarefa t-a');
+    expect(html).not.toContain('Tarefa t-b');
+  });
+
+  it('vínculo antigo com tarefa pronta ou de fora do projeto fica à vista, marcado e removível, fora da lista de opções', () => {
+    const tasks = [task('t-me', 'todo'), task('t-ok', 'todo'), task('t-done', 'done', { archived: true })];
+    const choices = depChoices(tasks, 't-me', ['t-done', 't-other']);
+    expect(choices.open.map((o) => o.id)).toEqual(['t-ok']);
+    expect(choices.old.map((o) => [o.id, o.task?.id ?? null])).toEqual([
+      ['t-done', 't-done'],
+      ['t-other', null],
+    ]);
+
+    const html = render({ tasks, selfId: 't-me', value: ['t-done', 't-other'] });
+    expect(html).toContain('Vínculos antigos');
+    expect(html).toContain('Tarefa t-done');
+    expect(html).toContain('Pronto');
+    expect(html).toContain('t-other');
+    expect(html).toContain('fora deste projeto');
+    expect(html.match(/checked=""/g)).toHaveLength(2);
+    // As antigas vêm numa lista própria, depois das opções.
+    expect(html.indexOf('Tarefa t-ok')).toBeLessThan(html.indexOf('Vínculos antigos'));
+  });
+
+  it('desmarcar o vínculo antigo o tira de `value`', () => {
+    const calls: string[][] = [];
+    const tree = BlockedByField({ tasks: [task('t-done', 'done')], selfId: null, value: ['t-done', 't-keep'], labels, onChange: (ids) => calls.push(ids) });
+    // O componente não tem hooks: a árvore de elementos sai direto. Acha o <input> do vínculo antigo e dispara o onChange como o React faria.
+    type Input = { props: { onChange: (e: { target: { checked: boolean } }) => void } };
+    const inputs: Input[] = [];
+    const walk = (n: unknown): void => {
+      if (Array.isArray(n)) return n.forEach(walk);
+      if (!n || typeof n !== 'object') return;
+      const el = n as { type?: unknown; props?: { children?: unknown } };
+      if (el.type === 'input') inputs.push(el as Input);
+      walk(el.props?.children);
+    };
+    walk(tree);
+    expect(inputs).toHaveLength(2);
+    inputs[0]!.props.onChange({ target: { checked: false } });
+    expect(calls).toEqual([['t-keep']]);
+  });
+
+  it('sem outras tarefas abertas, avisa em vez de mostrar lista vazia', () => {
+    const html = render({ tasks: [task('t-me', 'todo'), task('t-done', 'done')], selfId: 't-me', value: [] });
+    expect(html).toContain('Não há outras tarefas abertas');
     expect(html).not.toContain('<ul');
   });
 

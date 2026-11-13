@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { AppServerInfo, PendingReason } from '../../../shared/model';
 import { api } from '../api';
+import { pollVisible } from '../usePoll';
 import { t, type MsgKey } from '../i18n';
 
 // Parar e Reiniciar o servidor do Claudio’s Club: o config e o aviso de "mudanças pendentes" do topo usam o mesmo
@@ -106,8 +107,7 @@ function useServerInfo(): AppServerInfo | null {
   useEffect(() => {
     const load = () => api.serverInfo().then(setInfo, () => {});
     load();
-    const timer = setInterval(load, 30_000);
-    return () => clearInterval(timer);
+    return pollVisible(load, 30_000);
   }, []);
   return info;
 }

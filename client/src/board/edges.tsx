@@ -24,13 +24,15 @@ function RoughEdge(props: EdgeProps<BoardEdge>) {
   const s = STYLE[kind];
   const geometry = { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition };
   // Gestor de longe: desce por um corredor fora das fileiras do meio, em vez de atravessar os cartões.
+  // As medidas vêm relativas às pontas: a linha acompanha os cartões quando o projeto é arrastado.
   const detour = data?.detour;
   const [d, labelX, labelY] = detour
-    ? [
-        `M ${sourceX} ${sourceY} L ${sourceX} ${detour.y1} L ${detour.x} ${detour.y1} L ${detour.x} ${detour.y2} L ${targetX} ${detour.y2} L ${targetX} ${targetY}`,
-        detour.x,
-        (detour.y1 + detour.y2) / 2,
-      ]
+    ? (() => {
+        const x = sourceX + detour.dx;
+        const y1 = sourceY + detour.dy1;
+        const y2 = targetY - detour.dy2;
+        return [`M ${sourceX} ${sourceY} L ${sourceX} ${y1} L ${x} ${y1} L ${x} ${y2} L ${targetX} ${y2} L ${targetX} ${targetY}`, x, (y1 + y2) / 2] as const;
+      })()
     : kind === 'borrow' || kind === 'delegates'
       ? getBezierPath(geometry)
       : getSmoothStepPath({ ...geometry, borderRadius: 0, offset: kind === 'side' ? 14 : 20 });
