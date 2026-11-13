@@ -48,12 +48,20 @@ const StaffInputObject = z.object({
   skills: list(100),
   mcps: z.array(line(100)).max(100).nullable().default(null),
   // Escrita por MCP (ver StaffProfile.mcpWrite): ausente = livre. O nome é o do MCP na ficha; nomes reservados de objeto são recusados.
+  // Os nomes são checados na entrada crua: o zod 4 descarta `__proto__` ao montar o record e troca a mensagem do refine de chave.
   mcpWrite: z
-    .record(
-      z.string().min(1).max(100).refine((k) => !RESERVED_KEYS.has(k), 'nome de MCP reservado'),
-      z.enum(['ask', 'deny'], { errorMap: () => ({ message: 'escrita do MCP: ask ou deny' }) }),
+    .any()
+    .superRefine((v, ctx) => {
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return;
+      const keys = Object.keys(v);
+      if (keys.some((k) => RESERVED_KEYS.has(k))) ctx.addIssue({ code: 'custom', message: 'nome de MCP reservado' });
+      else if (keys.some((k) => k.length < 1 || k.length > 100)) ctx.addIssue({ code: 'custom', message: 'nome de MCP com tamanho inválido (1 a 100 letras)' });
+    })
+    .pipe(
+      z
+        .record(z.string(), z.enum(['ask', 'deny'], { error: 'escrita do MCP: ask ou deny' }))
+        .refine((r) => Object.keys(r).length <= 100, 'MCPs demais na política de escrita'),
     )
-    .refine((r) => Object.keys(r).length <= 100, 'MCPs demais na política de escrita')
     .optional(),
   knowledge: list(50),
   rules: list(50),

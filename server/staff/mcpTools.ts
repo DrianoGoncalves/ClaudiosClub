@@ -26,7 +26,7 @@ const Tool = z.object({ name: z.string().min(1).max(200), readOnly: z.boolean() 
 export type McpTool = z.infer<typeof Tool>;
 const Entry = z.object({ fingerprint: z.string().max(100), tools: z.array(Tool).max(MAX_TOOLS), testedAt: z.string().max(40) });
 type Entry = z.infer<typeof Entry>;
-const Doc = z.object({ servers: z.record(Entry) });
+const Doc = z.object({ servers: z.record(z.string(), Entry) });
 
 type Source = McpServerInfo['source'];
 

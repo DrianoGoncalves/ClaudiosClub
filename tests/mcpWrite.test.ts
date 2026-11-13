@@ -18,7 +18,7 @@ const home = await vi.hoisted(async () => {
 });
 
 const { testMcpConfig } = await import('../server/staff/mcpTest');
-const { MCP_TOOLS_FILE, cleanMcpWrite, mcpFingerprint, mcpRuleName, mcpWriteRules, saveTestedTools, stricterMcpWrite, testedTools, toolsKey } = await import(
+const { cleanMcpWrite, mcpFingerprint, mcpRuleName, mcpWriteRules, saveTestedTools, stricterMcpWrite, testedTools, toolsKey } = await import(
   '../server/staff/mcpTools'
 );
 const { listMcpServers, mcpWriteRulesFor } = await import('../server/staff/mcp');
@@ -245,10 +245,10 @@ describe('na linha de comando e no --settings', () => {
 
   it('a lista do último teste não é editável pelo funcionário', () => {
     const rules = secretDenyRules(profile());
-    // Fora da home, o caminho absoluto vai como `//caminho` (o formato das regras do Claude Code).
-    const file = `/${MCP_TOOLS_FILE.replace(/\\/g, '/')}`;
-    expect(rules).toContain(`Edit(${file})`);
-    expect(rules).toContain(`Write(${file})`);
+    // A forma da regra depende da plataforma e de onde fica o MYCO_HOME (~/... dentro da home, //c/... no Windows fora dela):
+    // o que importa é que Edit e Write apontem para o arquivo da lista.
+    expect(rules.some((r) => /^Edit\(.+mcp-tools\.json\)$/.test(r))).toBe(true);
+    expect(rules.some((r) => /^Write\(.+mcp-tools\.json\)$/.test(r))).toBe(true);
   });
 });
 
