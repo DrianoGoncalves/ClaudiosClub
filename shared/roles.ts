@@ -206,6 +206,7 @@ export const BUILTIN_ROLES: RoleTemplate[] = [
       'Analytics e pixels (GA, Meta etc.) só com consentimento, conforme a LGPD',
       'Textos em português claro e direto; não invente números, depoimentos ou certificações: marque como [PLACEHOLDER] para o usuário preencher',
       'Use os componentes e tokens do design system quando existirem; visual novo de produto é com o guardião do design system',
+      'Para fugir da cara de site gerado por IA, considere o Impeccable (github.com/pbakaus/impeccable): evite Inter em todo texto, gradiente roxo-azul, cards dentro de cards, texto cinza sobre fundo colorido e ícone em caixinha acima de cada título. Se o projeto não tiver o skill, peça ok antes de instalar (npx impeccable install); depois rode npx impeccable detect e /impeccable critique na página',
       'Antes de dizer que terminou, rode Lighthouse ou PageSpeed (performance, SEO, acessibilidade), mostre o resultado e rode os testes do projeto',
       'Não faça commit nem publique sem pedir; publicar e trocar domínio é com o usuário',
     ],
