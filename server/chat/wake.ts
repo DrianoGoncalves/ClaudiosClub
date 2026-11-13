@@ -21,12 +21,12 @@ export class WakeStreakError extends Error {
 /** O pedido do funcionário: `POST .../chat/:s/wake` com `{ "seconds": 90, "text": "..." }`. */
 export const WakeBody = z.object({
   seconds: z
-    .number({ required_error: 'falta seconds', invalid_type_error: 'seconds tem de ser um número inteiro' })
+    .number({ error: (iss) => (iss.input === undefined ? 'falta seconds' : 'seconds tem de ser um número inteiro') })
     .int('seconds tem de ser um número inteiro')
     .min(WAKE_MIN_SECONDS, `seconds: no mínimo ${WAKE_MIN_SECONDS}`)
     .max(WAKE_MAX_SECONDS, `seconds: no máximo ${WAKE_MAX_SECONDS} (24 h)`),
   text: z
-    .string({ required_error: 'falta text', invalid_type_error: 'text tem de ser um texto' })
+    .string({ error: (iss) => (iss.input === undefined ? 'falta text' : 'text tem de ser um texto') })
     .trim()
     .min(1, 'text não pode ser vazio')
     .max(WAKE_TEXT_MAX, `text: no máximo ${WAKE_TEXT_MAX} caracteres`),

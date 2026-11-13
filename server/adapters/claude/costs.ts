@@ -65,7 +65,7 @@ interface CountedUsage {
   speed: string | null;
 }
 
-const CacheFile = z.object({ version: z.literal(CACHE_VERSION), files: z.record(z.any()) });
+const CacheFile = z.object({ version: z.literal(CACHE_VERSION), files: z.record(z.string(), z.any()) });
 
 export interface CostTarget {
   projectId: string;

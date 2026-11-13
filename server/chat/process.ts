@@ -41,6 +41,7 @@ export function imageBlock(dataUrl: string) {
 }
 
 const UnifiedWindows = z.record(
+  z.string(),
   z.object({ utilization: z.number(), resetsAt: z.number().optional(), status: z.string().optional() }).passthrough(),
 );
 

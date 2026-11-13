@@ -13,7 +13,7 @@ import { writeAtomic } from './staff/store';
 
 const MARKS_FILE = path.join(MYCO_HOME, 'marks.json');
 const MARKS = ['used', 'partial', 'discarded'] as const;
-const MarksFile = z.record(z.record(z.enum(MARKS)));
+const MarksFile = z.record(z.string(), z.record(z.string(), z.enum(MARKS)));
 
 export const MarkBody = z.object({
   runId: z.string().regex(/^agent-[\w-]{1,80}$/, 'execução inválida'),
