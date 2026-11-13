@@ -221,6 +221,8 @@ export interface PreparedCodexRun {
   cleanMcp: CodexMcpServer | null;
   /** MCPs da biblioteca do Club e da ficha (projeto, usuário, local), com o acesso da ficha (ver `codexMcpServers`). Sem valor de env ou cabeçalho. */
   extraMcps: CodexExtraMcp[];
+  /** O arquivo de lançamento desta execução (`codex-mcp.json`, com os valores da ficha expandidos), ou null se não gravou. O CodexProcess o apaga ao fechar a conversa. */
+  mcpSnapshotFile: string | null;
 }
 
 /**
@@ -403,6 +405,7 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
     chromeMcp: chrome.mcp,
     cleanMcp: clean.mcp,
     extraMcps: extra.servers,
+    mcpSnapshotFile: extra.snapshotFile,
   };
 }
 

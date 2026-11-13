@@ -391,6 +391,8 @@ export interface CodexSpawn {
   cleanMcp?: CodexMcpServer | null;
   /** MCPs da biblioteca e da ficha (projeto, usuário, local), já montados em `codexMcpServers`. Ver `codexExtraMcpArgs`. */
   extraMcps?: CodexExtraMcp[];
+  /** Arquivo de lançamento desses MCPs (`codex-mcp.json`), ou null: o CodexProcess o apaga quando a conversa fecha. */
+  mcpSnapshotFile?: string | null;
 }
 
 /**

@@ -38,6 +38,11 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   cleanMcp?: CodexMcpServer | null;
   /** MCPs da biblioteca e da ficha (projeto, usuário, local). Ver `codexExtraMcpArgs` em codexArgs.ts. */
   extraMcps?: CodexExtraMcp[];
+  /**
+   * Arquivo de lançamento dos MCPs da ficha (`codex-mcp.json`, com os valores expandidos). Ele vale enquanto a conversa está aberta: quando
+   * a conversa fecha (stop, ou o servidor desligando), sai do disco. A próxima abertura grava de novo (prepareCodexRun).
+   */
+  mcpSnapshotFile?: string | null;
   /** O que o bloqueio de segredos precisa saber; `mycoHome` é obrigatório (ver `CodexSecrets` em codexArgs.ts). */
   secrets: CodexSecrets;
   /**
@@ -490,6 +495,8 @@ export class CodexProcess extends ChatProcess {
   }
 
   private finishSession(error: string | null) {
+    // O arquivo de lançamento dos MCPs da ficha sai com a conversa. Falhar ao apagar não derruba nada (o `force` ignora o que não existe).
+    if (this.codex.mcpSnapshotFile) void fs.rm(this.codex.mcpSnapshotFile, { force: true }).catch(() => {});
     if (!this.state.running) return;
     this.endTurnBudget();
     this.opts.onExit?.(null, error);

@@ -498,6 +498,7 @@ function cleanBrowserLines(ctx: FichaContext): string[] {
 const CODEX_MCP_MOTIVO: Record<CodexMcpMotivo, string> = {
   nome: 'nome que o Codex não aceita: só letras, números, `_` e `-`, até 64',
   politica: 'sem teste das ferramentas, com acesso só leitura ou pede antes',
+  aprovacao: 'servidor do .mcp.json do projeto sem aprovação no Claude Code (aprove uma vez no Claude Code)',
   sse: 'SSE não existe no Codex; o servidor precisa de HTTP ou stdio',
   transporte: 'tipo de transporte que o Codex não conhece, ou configuração incompleta',
   indisponivel: 'o lançador do Claudio’s Club não está instalado (falta `npm run build`)',

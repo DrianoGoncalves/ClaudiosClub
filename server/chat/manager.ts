@@ -1145,6 +1145,7 @@ export class ChatManager {
           chromeMcp: codex.chromeMcp,
           cleanMcp: codex.cleanMcp,
           extraMcps: codex.extraMcps,
+          mcpSnapshotFile: codex.mcpSnapshotFile,
           secrets: codex.secrets,
           threadId: codex.threadId,
           threadFile: codex.threadFile,

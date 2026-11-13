@@ -8,6 +8,7 @@ import { tryJson } from '../adapters/claude/fsutil';
 import { pathKey } from '../adapters/claude/paths';
 import { findSecret } from '../chat/secrets';
 import { CODEX_EXTRA_MCP_NAME, CODEX_RESERVED_MCP_NAMES, type CodexExtraMcp } from '../chat/codexArgs';
+import { cleanEnv, withoutMycoToken } from '../auth';
 import { DEFAULT_SECRETS_DIR, getSecret, type VaultOptions } from '../secretVault';
 import { mcpLaunchCommand, quotedCommand } from './mcpLaunch';
 import { MCP_TOOLS_FILE, mcpFingerprint, testedToolsMany, toolsKey, type McpTool } from './mcpTools';
@@ -76,7 +77,44 @@ export async function readClub(file: string): Promise<{ doc: Record<string, unkn
   return { doc: parsed.data as Record<string, unknown>, servers: parsed.data.servers ?? {} };
 }
 
+/**
+ * A aprovação dos servidores do .mcp.json deste projeto, como o Claude Code guarda no ~/.claude.json (em `projects[<caminho>]`, pela mesma
+ * chave de `local`): `enableAllProjectMcpServers`, `enabledMcpjsonServers` e `disabledMcpjsonServers`.
+ */
+export interface McpJsonApproval {
+  all: boolean;
+  enabled: Set<string>;
+  disabled: Set<string>;
+}
+
+/** A aprovação do projeto no ~/.claude.json (vazia se o arquivo não entendeu, o que nega tudo: é o lado seguro). */
+function approvalOf(projects: Record<string, Record<string, unknown>> | undefined, projectPath: string): McpJsonApproval {
+  const out: McpJsonApproval = { all: false, enabled: new Set(), disabled: new Set() };
+  const key = pathKey(projectPath);
+  const names = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  for (const [p, entry] of Object.entries(projects ?? {})) {
+    if (pathKey(p) !== key) continue;
+    if (entry.enableAllProjectMcpServers === true) out.all = true;
+    for (const n of names(entry.enabledMcpjsonServers)) out.enabled.add(n);
+    for (const n of names(entry.disabledMcpjsonServers)) out.disabled.add(n);
+  }
+  return out;
+}
+
+/**
+ * Aprovado no Claude Code: `disabledMcpjsonServers` vence; senão, vale `enableAllProjectMcpServers` ou o nome em `enabledMcpjsonServers`.
+ * Sem isso o Claude não carrega o servidor do .mcp.json do projeto: o Codex segue o mesmo critério (ver codexMcpServers).
+ */
+export function mcpJsonApproved(a: McpJsonApproval, name: string): boolean {
+  return !a.disabled.has(name) && (a.all || a.enabled.has(name));
+}
+
 async function collect(projectPath: string, claudeConfigFile: string, clubFile: string): Promise<Map<string, Found>> {
+  return (await collectWithApproval(projectPath, claudeConfigFile, clubFile)).found;
+}
+
+/** Os servidores achados e a aprovação do projeto, num só passe pelo ~/.claude.json (quem precisa da aprovação, o Codex, pede este). */
+async function collectWithApproval(projectPath: string, claudeConfigFile: string, clubFile: string): Promise<{ found: Map<string, Found>; approval: McpJsonApproval }> {
   const found = new Map<string, Found>();
   const put = (source: McpServerInfo['source'], name: string, config: ServerConfig, club?: Found['club']) => {
     found.set(name, { info: { name, source, transport: config.type ?? (config.url ? 'http' : config.command ? 'stdio' : null) }, config, club });
@@ -107,7 +145,7 @@ async function collect(projectPath: string, claudeConfigFile: string, clubFile: 
       if (pathKey(p) === key) add('local', entry.mcpServers);
     }
   }
-  return found;
+  return { found, approval: approvalOf(user.success ? user.data.projects : undefined, projectPath) };
 }
 
 /** As ferramentas do último teste de cada servidor achado (só os que ainda batem com o teste; ver mcpTools.ts). */
@@ -313,7 +351,17 @@ function clubConfig(name: string, config: ServerConfig, keys: { env: string[]; h
 /**
  * Por que um MCP da ficha ficou fora da conversa do Codex (a ficha diz, em pt-br; ver codexMcpSection). Nenhum motivo leva valor.
  */
-export type CodexMcpMotivo = 'nome' | 'politica' | 'sse' | 'transporte' | 'indisponivel' | 'cofre' | 'caminho' | 'variavel' | 'url-segredo';
+export type CodexMcpMotivo =
+  | 'nome'
+  | 'politica'
+  | 'aprovacao'
+  | 'sse'
+  | 'transporte'
+  | 'indisponivel'
+  | 'cofre'
+  | 'caminho'
+  | 'variavel'
+  | 'url-segredo';
 
 export interface CodexMcpResult {
   /** Os MCPs que entram na conversa (ver codexExtraMcpArgs). Nenhum valor de env ou cabeçalho aqui: eles vão no arquivo de lançamento ou ficam no cofre. */
@@ -322,6 +370,8 @@ export interface CodexMcpResult {
   asked: string[];
   /** Os que a ficha pediu e não entraram, com o motivo. Nível `off` explícito não entra aqui: ele só fica de fora. */
   out: Array<{ name: string; motivo: CodexMcpMotivo }>;
+  /** O arquivo de lançamento gravado (com os valores expandidos, modo 0o600), ou null se não há entrada que precise dele. */
+  snapshotFile: string | null;
 }
 
 /** Uma entrada do arquivo de lançamento da conversa (ver mcpLaunch.ts, `snapshotSpec`): o que o lançador sobe, já com as variáveis expandidas. */
@@ -423,9 +473,11 @@ export async function codexMcpServers(
 ): Promise<CodexMcpResult> {
   const clubFile = o.clubFile ?? CLUB_MCP_FILE;
   const vaultDir = o.vault?.dir ?? DEFAULT_SECRETS_DIR;
-  const env = o.env ?? process.env;
+  // O mesmo ambiente que o Claude e o Codex recebem (sem CLAUDE*/ANTHROPIC*, sem MYCO_TOKEN): a variável do processo do Club não entra
+  // no MCP do projeto por acaso.
+  const env = o.env ?? withoutMycoToken(cleanEnv());
   const launcher = o.launcher;
-  const found = await collect(projectPath, claudeConfigFile, clubFile);
+  const { found, approval } = await collectWithApproval(projectPath, claudeConfigFile, clubFile);
   // Sem teste (ou arquivo estragado), a lista de leitura fica vazia: `readonly` e `ask` ficam de fora (ver codexMcpAccess).
   const tools = await toolsOf(found, projectPath, o.toolsFile ?? MCP_TOOLS_FILE).catch(() => new Map<string, McpTool[]>());
   const wanted = names ?? [...found].filter(([, f]) => f.info.source !== 'club').map(([n]) => n);
@@ -443,6 +495,12 @@ export async function codexMcpServers(
     }
     // `off` explícito: fica de fora sem aviso (a ficha não precisa dizer o que ela mesma proibiu).
     if (o.access && Object.prototype.hasOwnProperty.call(o.access, name) && o.access[name] === 'off') continue;
+    // Servidor do .mcp.json do projeto: só entra aprovado no Claude Code (ver approvalOf). Vale com ou sem a lista da ficha: sem isso, um
+    // .mcp.json com o nome de um servidor da biblioteca ou do usuário sombrearia o deles (o do projeto vence na lista de achados).
+    if (f.info.source === 'project' && !mcpJsonApproved(approval, name)) {
+      out.push({ name, motivo: 'aprovacao' });
+      continue;
+    }
     const leitura = tools.get(name)?.filter((t) => t.readOnly).map((t) => t.name) ?? null;
     const acc = codexMcpAccess(o.access, name, [], leitura);
     if (!acc.attached) {
@@ -555,7 +613,12 @@ export async function codexMcpServers(
     snapshot.set(name, { type: 'http', headers: x.headers });
     add({ name, url: x.url, headersHelper: helper, ...access });
   }
-  if (snapshot.size) await writeAtomic(o.snapshotFile, JSON.stringify({ servers: Object.fromEntries(snapshot) }, null, 2));
-  else await fs.rm(o.snapshotFile, { force: true });
-  return { servers, asked, out };
+  let snapshotFile: string | null = null;
+  if (snapshot.size) {
+    await writeAtomic(o.snapshotFile, JSON.stringify({ servers: Object.fromEntries(snapshot) }, null, 2));
+    // Só o dono lê. No Windows o chmod quase não faz nada (só a flag de somente leitura): a proteção real é a sandbox, que nega a pasta ao agente.
+    await fs.chmod(o.snapshotFile, 0o600).catch(() => undefined);
+    snapshotFile = o.snapshotFile;
+  } else await fs.rm(o.snapshotFile, { force: true });
+  return { servers, asked, out, snapshotFile };
 }

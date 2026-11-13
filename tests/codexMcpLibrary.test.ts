@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { StaffProfile } from '../shared/model';
 import { buildCodexArgs, codexExtraMcpArgs, tomlString, type CodexExtraMcp } from '../server/chat/codexArgs';
+import { CodexProcess } from '../server/chat/codexProcess';
 import { prepareCodexRun, type LaunchContext } from '../server/staff/launch';
 import { clubSecretId, codexMcpServers, expandVars } from '../server/staff/mcp';
 import type { McpAccessMap } from '../server/staff/mcpAccess';
@@ -86,6 +87,8 @@ async function setup() {
       },
     }),
   );
+  // O .mcp.json do projeto só entra aprovado no Claude Code (ver approvalOf): aqui, aprovado por inteiro (os casos sem aprovação criam outro arquivo).
+  await fs.writeFile(claude, JSON.stringify({ projects: { [proj]: { enableAllProjectMcpServers: true } } }));
   await setSecret(clubSecretId('lfs', 'env', 'FS_TOKEN'), VALOR_LIB, vault);
   await setSecret(clubSecretId('lweb', 'header', 'Authorization'), HDR_LIB, vault);
   // Testes das ferramentas: a impressão tem de bater com o que a biblioteca e o projeto declaram agora.
@@ -96,9 +99,16 @@ async function setup() {
 }
 type Env = Awaited<ReturnType<typeof setup>>;
 
-/** `codexMcpServers` com o lançador de teste, as variáveis de teste e o acesso dado. */
-function run(env: Env, names: string[] | null, access?: McpAccessMap, launcher: { command: string; args: string[] } | null = LAUNCH) {
-  return codexMcpServers(env.proj, names, env.claude, {
+/** Um ~/.claude.json de teste: `entry` em `projects[<projeto>]` (null = arquivo sem projeto nenhum, nada aprovado). */
+async function claudeFile(env: Env, nome: string, entry: Record<string, unknown> | null): Promise<string> {
+  const f = path.join(env.dir, nome);
+  await fs.writeFile(f, JSON.stringify(entry === null ? {} : { projects: { [env.proj]: entry } }));
+  return f;
+}
+
+/** `codexMcpServers` com o lançador de teste, as variáveis de teste, o acesso dado e o ~/.claude.json (o do cenário, por padrão). */
+function run(env: Env, names: string[] | null, access?: McpAccessMap, launcher: { command: string; args: string[] } | null = LAUNCH, claude: string = env.claude) {
+  return codexMcpServers(env.proj, names, claude, {
     access,
     snapshotFile: env.snapshotFile,
     launcher,
@@ -117,8 +127,9 @@ describe('codexMcpServers: a biblioteca entra pelo lançador, sem valor', () => 
     const r = await run(env, ['lfs']);
     expect(r.servers).toEqual([{ name: 'lfs', command: LAUNCH.command, args: [...LAUNCH.args, '--server', 'lfs', '--club', env.club, '--vault', env.vaultDir] }]);
     expect(r.out).toEqual([]);
-    // A biblioteca não precisa de arquivo de lançamento: nada gravado.
+    // A biblioteca não precisa de arquivo de lançamento: nada gravado, nem caminho devolvido.
     await expect(fs.access(env.snapshotFile)).rejects.toThrow();
+    expect(r.snapshotFile).toBeNull();
   });
 
   it('http da biblioteca com cabeçalho vira headersHelper com --headers; a URL segue como está', async () => {
@@ -243,6 +254,7 @@ describe('codexMcpServers: o projeto e o arquivo de lançamento', () => {
   it('stdio do projeto: comando, argumentos e ambiente só no arquivo; ${VAR} e literal expandidos no arquivo', async () => {
     const env = await setup();
     const r = await run(env, ['pstdio', 'phttp']);
+    expect(r.snapshotFile).toBe(env.snapshotFile);
     const snap = JSON.parse(await fs.readFile(env.snapshotFile, 'utf8')) as { servers: Record<string, unknown> };
     expect(snap.servers.pstdio).toEqual({ type: 'stdio', command: 'node', args: ['p.js', '--flag'], env: { TOKEN_P: VALOR_PROJ, LIT: LITERAL } });
     expect(snap.servers.phttp).toEqual({ type: 'http', headers: { Authorization: `Bearer ${VALOR_PROJ}` } });
@@ -300,7 +312,7 @@ describe('codexMcpServers: o projeto e o arquivo de lançamento', () => {
   it('nomes reservados (internos do Codex) são ignorados em silêncio, como nomes que não existem', async () => {
     const env = await setup();
     const r = await run(env, ['myco-ssh', 'myco-chrome', 'claude-in-chrome', 'myco-gpt', 'myco-ftp', 'nao-existe']);
-    expect(r).toEqual({ servers: [], asked: [], out: [] });
+    expect(r).toEqual({ servers: [], asked: [], out: [], snapshotFile: null });
   });
 
   it('sem lista da ficha (null): entra o do projeto, mas não a biblioteca', async () => {
@@ -502,6 +514,8 @@ describe('prepareCodexRun: os MCPs da ficha entram pelo lançador, e a ficha diz
         },
       }),
     );
+    // Aprovado no Claude Code (ver approvalOf): sem isso o servidor do projeto fica de fora como aprovacao.
+    await fs.writeFile(path.join(dir, 'claude.json'), JSON.stringify({ projects: { [proj]: { enableAllProjectMcpServers: true } } }));
     return {
       dir,
       proj,
@@ -525,6 +539,7 @@ describe('prepareCodexRun: os MCPs da ficha entram pelo lançador, e a ficha diz
     expect(run1.extraMcps).toEqual([{ name: 'psvc', command: LAUNCH.command, args: [...LAUNCH.args, '--snapshot', snapshot, '--server', 'psvc'] }]);
     expect(JSON.parse(await fs.readFile(snapshot, 'utf8'))).toEqual({ servers: { psvc: { type: 'stdio', command: 'node', args: ['x.js'], env: { K: 'valor-literal-ZZ99' } } } });
     expect(run1.readOnlyPaths).toContain(path.join(proj, '.mcp.json'));
+    expect(run1.mcpSnapshotFile).toBe(snapshot);
     const md = await fs.readFile(path.join(proj, '.myco', 'staff', 'ana-1.md'), 'utf8');
     expect(md).toContain('Ficaram fora desta conversa no Codex: `psse` (SSE não existe no Codex');
   });
@@ -533,8 +548,129 @@ describe('prepareCodexRun: os MCPs da ficha entram pelo lançador, e a ficha diz
     const { dir, proj, ctx } = await projeto();
     const r = await prepareCodexRun(profile({ mcps: ['psvc'] }), ctx(null), 'sess-y', proj);
     expect(r.extraMcps).toEqual([]);
+    expect(r.mcpSnapshotFile).toBeNull();
     await expect(fs.access(path.join(dir, 'run', 'sess-y', 'codex-mcp.json'))).rejects.toThrow();
     const md = await fs.readFile(path.join(proj, '.myco', 'staff', 'ana-1.md'), 'utf8');
     expect(md).toContain('`psvc` (o lançador do Claudio’s Club não está instalado');
+  });
+
+  it('.mcp.json sem aprovação no Claude Code: a ficha diz como aprovar', async () => {
+    const { proj, ctx, dir } = await projeto();
+    await fs.writeFile(path.join(dir, 'claude.json'), JSON.stringify({}));
+    const r = await prepareCodexRun(profile({ mcps: ['psvc'] }), ctx(LAUNCH), 'sess-z', proj);
+    expect(r.extraMcps).toEqual([]);
+    const md = await fs.readFile(path.join(proj, '.myco', 'staff', 'ana-1.md'), 'utf8');
+    expect(md).toContain('`psvc` (servidor do .mcp.json do projeto sem aprovação no Claude Code (aprove uma vez no Claude Code))');
+  });
+});
+
+describe('aprovação do .mcp.json do projeto (como o Claude Code)', () => {
+  it('sem aprovação, o servidor do projeto fica fora (aprovacao), listado na ficha ou não', async () => {
+    const env = await setup();
+    const sem = await claudeFile(env, 'sem-aprovacao.json', {});
+    const listado = await run(env, ['pstdio', 'phttp'], undefined, LAUNCH, sem);
+    expect(listado.servers).toEqual([]);
+    expect(listado.out).toEqual([
+      { name: 'pstdio', motivo: 'aprovacao' },
+      { name: 'phttp', motivo: 'aprovacao' },
+    ]);
+    const todos = await run(env, null, undefined, LAUNCH, sem);
+    expect(todos.servers).toEqual([]);
+    expect(todos.out).toEqual(expect.arrayContaining([{ name: 'pstdio', motivo: 'aprovacao' }]));
+  });
+
+  it('enabledMcpjsonServers aprova só os nomes listados; enableAllProjectMcpServers aprova todos', async () => {
+    const env = await setup();
+    const lista = await claudeFile(env, 'lista.json', { enabledMcpjsonServers: ['pstdio'] });
+    const r = await run(env, ['pstdio', 'phttp'], undefined, LAUNCH, lista);
+    expect(r.servers.map((s) => s.name)).toEqual(['pstdio']);
+    expect(r.out).toEqual([{ name: 'phttp', motivo: 'aprovacao' }]);
+    const tudo = await claudeFile(env, 'tudo.json', { enableAllProjectMcpServers: true });
+    const t = await run(env, ['pstdio', 'phttp'], undefined, LAUNCH, tudo);
+    expect(t.servers.map((s) => s.name)).toEqual(['pstdio', 'phttp']);
+    expect(t.out).toEqual([]);
+  });
+
+  it('disabledMcpjsonServers vence o enableAllProjectMcpServers', async () => {
+    const env = await setup();
+    const c = await claudeFile(env, 'desligado.json', { enableAllProjectMcpServers: true, disabledMcpjsonServers: ['pstdio'] });
+    const r = await run(env, ['pstdio', 'phttp'], undefined, LAUNCH, c);
+    expect(r.servers.map((s) => s.name)).toEqual(['phttp']);
+    expect(r.out).toEqual([{ name: 'pstdio', motivo: 'aprovacao' }]);
+  });
+});
+
+describe('expansão de ${VAR}: o ambiente limpo do Club', () => {
+  it('CLAUDE_* e ANTHROPIC_* não expandem (viram variavel); uma variável comum expande', async () => {
+    const env = await setup();
+    const mcp = JSON.parse(await fs.readFile(path.join(env.proj, '.mcp.json'), 'utf8')) as { mcpServers: Record<string, unknown> };
+    mcp.mcpServers.pant = { type: 'stdio', command: 'node', env: { K: '${ANTHROPIC_TESTE_ZZ}' } };
+    mcp.mcpServers.pclaude = { type: 'stdio', command: 'node', args: ['${CLAUDE_TESTE_ZZ}'] };
+    mcp.mcpServers.pok = { type: 'stdio', command: 'node', env: { K: '${MYCO_TESTE_OK_ZZ}' } };
+    await fs.writeFile(path.join(env.proj, '.mcp.json'), JSON.stringify(mcp));
+    process.env.ANTHROPIC_TESTE_ZZ = 'valor-anthropic-ZZ';
+    process.env.CLAUDE_TESTE_ZZ = 'valor-claude-ZZ';
+    process.env.MYCO_TESTE_OK_ZZ = 'valor-ok-ZZ';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // Sem `env` na chamada: vale o ambiente limpo do processo (withoutMycoToken(cleanEnv())).
+      const r = await codexMcpServers(env.proj, ['pant', 'pclaude', 'pok'], env.claude, {
+        snapshotFile: env.snapshotFile,
+        launcher: LAUNCH,
+        clubFile: env.club,
+        toolsFile: env.toolsFile,
+      });
+      expect(r.out).toEqual(
+        expect.arrayContaining([
+          { name: 'pant', motivo: 'variavel' },
+          { name: 'pclaude', motivo: 'variavel' },
+        ]),
+      );
+      expect(r.servers.map((s) => s.name)).toEqual(['pok']);
+      const snap = JSON.parse(await fs.readFile(env.snapshotFile, 'utf8')) as { servers: Record<string, { env: Record<string, string> }> };
+      expect(snap.servers.pok!.env).toEqual({ K: 'valor-ok-ZZ' });
+      expect(JSON.stringify(r)).not.toContain('valor-anthropic-ZZ');
+    } finally {
+      warn.mockRestore();
+      for (const k of ['ANTHROPIC_TESTE_ZZ', 'CLAUDE_TESTE_ZZ', 'MYCO_TESTE_OK_ZZ']) delete process.env[k];
+    }
+  });
+});
+
+describe('o arquivo de lançamento: caminho certo, permissão e remoção', () => {
+  it('sem entrada que precise dele, apaga o que estava lá e devolve null', async () => {
+    const env = await setup();
+    await fs.mkdir(path.dirname(env.snapshotFile), { recursive: true });
+    await fs.writeFile(env.snapshotFile, '{"servers":{}}');
+    const r = await run(env, ['lfs']);
+    expect(r.snapshotFile).toBeNull();
+    expect(existsSync(env.snapshotFile)).toBe(false);
+  });
+
+  it('com entrada: devolve o caminho, e o arquivo sai com 0o600 (no Windows o modo quase não vale)', async () => {
+    const env = await setup();
+    const r = await run(env, ['pstdio']);
+    expect(r.snapshotFile).toBe(env.snapshotFile);
+    if (process.platform !== 'win32') expect((await fs.stat(env.snapshotFile)).mode & 0o777).toBe(0o600);
+  });
+
+  it('a conversa que fecha (stop) apaga o codex-mcp.json, sem abrir o codex', async () => {
+    const env = await setup();
+    await fs.mkdir(path.dirname(env.snapshotFile), { recursive: true });
+    await fs.writeFile(env.snapshotFile, '{"servers":{}}');
+    const chat = new CodexProcess({
+      cwd: env.proj,
+      sessionId: 'sess-mcp',
+      permissionMode: 'default',
+      secrets: { projectPath: env.proj, home: '/nao-existe', mycoHome: '/nao-existe/.myco' },
+      mcpSnapshotFile: env.snapshotFile,
+      // Nenhuma mensagem é enviada: o codex não pode ser aberto por este teste.
+      spawnImpl: () => {
+        throw new Error('o codex não devia abrir');
+      },
+    });
+    chat.start();
+    chat.stop();
+    await vi.waitFor(() => expect(existsSync(env.snapshotFile)).toBe(false));
   });
 });

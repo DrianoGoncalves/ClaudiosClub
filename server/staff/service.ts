@@ -1196,6 +1196,7 @@ export class StaffService {
         chromeMcp: codexRun.chromeMcp,
         cleanMcp: codexRun.cleanMcp,
         extraMcps: codexRun.extraMcps,
+        mcpSnapshotFile: codexRun.mcpSnapshotFile,
         secrets: { projectPath: project.path, home: os.homedir(), mycoHome: MYCO_HOME },
         threadId: resume ? await readCodexThread(codexRun.threadFile) : null,
         threadFile: codexRun.threadFile,
