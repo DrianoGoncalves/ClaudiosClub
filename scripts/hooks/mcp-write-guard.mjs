@@ -1,16 +1,18 @@
-// Hook do Claude Code que o Claudio’s Club põe em toda conversa de funcionário com política de escrita por MCP (campo
-// `mcpWrite` da ficha; ver server/staff/mcpTools.ts). PreToolUse com matcher `mcp__.*` (server/staff/launch.ts). Autocontido:
+// Hook do Claude Code que o Claudio’s Club põe em toda conversa de funcionário com acesso por MCP na ficha (campo `mcpAccess`;
+// ver server/staff/mcpAccess.ts e launch.ts). PreToolUse com matcher `mcp__.*` (server/staff/launch.ts). Autocontido:
 // a cópia dele fica na pasta da conversa (prepareRun), para o agente não editar o hook que o guarda.
 //
-// Lê a política da conversa (caminho no argumento; arquivo `mcp-write.json`) no formato:
-//   { "<servidor>": { "policy": "ask" | "deny", "readOnly": ["<ferramenta>", ...] } }
-// e decide por ferramenta `mcp__<servidor>__<ferramenta>`:
-//   - servidor sem política: não responde (segue o fluxo normal do Claude Code).
+// Lê o acesso da conversa (caminho no argumento; arquivo `mcp-write.json`) no formato:
+//   { "<servidor>": { "policy": "off" | "readonly" | "ask", "readOnly": ["<ferramenta>", ...] } }
+// (só com as entradas que não são livres). E decide por ferramenta `mcp__<servidor>__<ferramenta>`:
+//   - servidor sem entrada: não responde (segue o fluxo normal do Claude Code).
+//   - "off": o servidor inteiro é bloqueado, inclusive as ferramentas de leitura (e a lista vem vazia).
 //   - ferramenta em `readOnly` (leitura, do último teste): não responde. Não é allow: a permissão segue como era.
-//   - qualquer outra, inclusive a que o MCP ganhou depois do teste: "deny" (bloqueada) ou "ask" (pede antes).
+//   - qualquer outra, inclusive a que o MCP ganhou depois do teste: "readonly" = bloqueada; "ask" = pede antes.
 //     Em bypassPermissions, "ask" vira "deny": não se comprova que o pedido aparece nesse modo.
-// Fail-closed: arquivo ausente, ilegível ou fora do formato; nome que não separa servidor de ferramenta; nome que casa com mais
-// de uma política; entrada ilegível; qualquer erro: "deny" (nunca libera por erro). Sem política nenhuma, não responde.
+// Fail-closed: arquivo ausente, ilegível ou fora do formato (inclusive policy desconhecida); nome que não separa servidor de
+// ferramenta; nome que casa com mais de uma entrada; entrada ilegível; qualquer erro: "deny" (nunca libera por erro).
+// Sem entrada nenhuma, não responde.
 // Nome do servidor como o Claude Code o põe no nome da ferramenta: o caractere fora de [A-Za-z0-9_-] vira `_` (igual a
 // claudeName em mcpTools.ts). Não se tem certeza dessa regra para todo caractere (o Club aceita `.`), então o nome da política
 // casa também com as outras formas plausíveis (`-` ou o caractere como está): a chamada que casa com uma delas segue a política,
@@ -47,7 +49,7 @@ function loadPolicy(file) {
   return Object.entries(doc).map(([name, e]) => {
     const ok =
       name !== '' &&
-      e && typeof e === 'object' && (e.policy === 'ask' || e.policy === 'deny') &&
+      e && typeof e === 'object' && (e.policy === 'off' || e.policy === 'readonly' || e.policy === 'ask') &&
       Array.isArray(e.readOnly) && e.readOnly.every((t) => typeof t === 'string' && t !== '');
     if (!ok) throw new Error(`entrada fora do formato: ${name}`);
     return { name, forms: forms(name), policy: e.policy, readOnly: new Set(e.readOnly.map(clean)) };
@@ -75,8 +77,10 @@ function decide(tool, policies, bypass) {
   const { p, suffixes } = hits[0];
   const name = p.name;
   const toolName = suffixes[0];
+  // Desligado: nem a leitura passa (a lista de leitura vem vazia, mas não se conta com isso).
+  if (p.policy === 'off') return out('deny', `a ficha desliga o MCP "${name}": "${toolName}" fica bloqueada. Siga sem esse MCP.`);
   if (suffixes.every((t) => p.readOnly.has(t))) return null;
-  if (p.policy === 'deny') return out('deny', `a ficha bloqueia escrita por MCP: "${toolName}" do MCP "${name}" não é só leitura. Siga sem essa ferramenta.`);
+  if (p.policy === 'readonly') return out('deny', `a ficha deixa o MCP "${name}" só para leitura: "${toolName}" não é só leitura. Siga sem essa ferramenta.`);
   if (bypass) {
     return out('deny', `a ficha pede confirmação antes de "${toolName}" do MCP "${name}", e no modo sem travas não há quem confirme: bloqueado. Siga sem essa ferramenta.`);
   }

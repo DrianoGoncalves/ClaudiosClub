@@ -9,7 +9,8 @@ import { pathKey } from '../adapters/claude/paths';
 import { findSecret } from '../chat/secrets';
 import { DEFAULT_SECRETS_DIR, getSecret, type VaultOptions } from '../secretVault';
 import { mcpLaunchCommand } from './mcpLaunch';
-import { MCP_TOOLS_FILE, mcpFingerprint, mcpWriteFile, testedToolsMany, toolsKey, type McpTool, type McpWriteFile } from './mcpTools';
+import { MCP_TOOLS_FILE, mcpFingerprint, testedToolsMany, toolsKey, type McpTool } from './mcpTools';
+import { mcpAccessFile, type McpAccessFile } from './mcpAccess';
 
 // MCPs que vão para a conversa de um funcionário, de quatro origens (da mais específica para a mais geral):
 //   local   = só este projeto, em ~/.claude.json (projects[<caminho>].mcpServers)
@@ -134,20 +135,20 @@ export async function listMcpServers(projectPath: string, claudeConfigFile: stri
 }
 
 /**
- * A política de escrita da ficha (`mcpWrite`) para esta sessão, no formato que o hook mcp-write-guard lê (ver mcpWriteFile). Só o motor
- * Claude (o Codex não tem MCPs). Um MCP com política que não está no projeto agora segue no arquivo, sem lista de leitura.
+ * O acesso aos MCPs da ficha (`mcpAccess`) para esta sessão, no formato que o hook mcp-write-guard lê (ver mcpAccessFile). Só o motor
+ * Claude (o Codex trata o acesso no próprio lançamento). Um MCP com regra que não está no projeto agora segue no arquivo, sem lista de leitura.
  */
 export async function mcpWriteFileFor(
   projectPath: string,
-  profile: Pick<StaffProfile, 'engine' | 'mcpWrite'>,
+  profile: Pick<StaffProfile, 'engine' | 'mcpAccess'>,
   claudeConfigFile: string,
   o: { clubFile?: string; toolsFile?: string } = {},
-): Promise<McpWriteFile> {
-  if ((profile.engine ?? 'claude') !== 'claude' || !profile.mcpWrite || !Object.keys(profile.mcpWrite).length) return {};
+): Promise<McpAccessFile> {
+  if ((profile.engine ?? 'claude') !== 'claude' || !profile.mcpAccess || !Object.keys(profile.mcpAccess).length) return {};
   const found = await collect(projectPath, claudeConfigFile, o.clubFile ?? CLUB_MCP_FILE);
   // Arquivo ilegível = sem lista de leitura: o hook só deixa passar o que está nela, então errar aqui não libera nada.
   const tools = await toolsOf(found, projectPath, o.toolsFile ?? MCP_TOOLS_FILE).catch(() => new Map<string, McpTool[]>());
-  return mcpWriteFile(profile.mcpWrite, tools);
+  return mcpAccessFile(profile.mcpAccess, tools);
 }
 
 export interface McpSecret {

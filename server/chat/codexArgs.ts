@@ -213,8 +213,8 @@ export interface CodexMcpServer {
   args: string[];
   /** Pasta do processo do MCP (o ROOT do Claudio’s Club, fora do projeto da conversa). Sem ela, o Codex usa a pasta de trabalho. */
   cwd?: string;
-  /** Ferramentas que a conversa não vê (política da ficha, ver server/staff/mcpPolicy.ts): `disabled_tools`. */
-  disabledTools?: string[];
+  /** Ferramentas que a conversa vê (acesso da ficha, ver server/staff/mcpAccess.ts): `enabled_tools`. Ausente = todas as do MCP. */
+  enabledTools?: string[];
 }
 
 /** Nome do MCP de SSH na configuração do Codex (`mcp_servers.<nome>`). É o mesmo do Claude (`SSH_MCP_NAME`, em server/staff/sshMcp.ts). */
@@ -223,8 +223,11 @@ export const CODEX_SSH_MCP_NAME = 'myco-ssh';
 /** Nome do MCP do Chrome do usuário (Playwright MCP em modo extensão) na configuração do Codex. Ver `codexChromeMcpArgs`. */
 export const CODEX_CHROME_MCP_NAME = 'myco-chrome';
 
-/** Os `-c mcp_servers.<nome>.*` de um MCP da conversa (command, args, cwd e aprovação). Igual para o SSH e para o Chrome. */
-function codexMcpArgs(name: string, s: CodexMcpServer | null | undefined): string[] {
+/**
+ * Os `-c mcp_servers.<nome>.*` de um MCP da conversa (command, args, cwd e aprovação). Igual para o SSH e para o Chrome. `enabled`: as
+ * ferramentas que a conversa vê (allowlist, `enabled_tools`); ausente = o Codex não põe filtro.
+ */
+function codexMcpArgs(name: string, s: CodexMcpServer | null | undefined, enabled?: string[]): string[] {
   if (!s) return [];
   const key = `mcp_servers.${name}`;
   return [
@@ -232,8 +235,7 @@ function codexMcpArgs(name: string, s: CodexMcpServer | null | undefined): strin
     '-c', `${key}.args=[${s.args.map((a) => tomlString(a)).join(',')}]`,
     ...(s.cwd ? ['-c', `${key}.cwd=${tomlString(s.cwd.replace(/\\/g, '/'))}`] : []),
     '-c', `${key}.default_tools_approval_mode=${tomlString('approve')}`,
-    // Ferramentas desligadas pela ficha: o Codex não as oferece à conversa (não é a allowlist do Chrome, que segue como está).
-    ...(s.disabledTools?.length ? ['-c', `${key}.disabled_tools=[${s.disabledTools.map((t) => tomlString(t)).join(',')}]`] : []),
+    ...(enabled ? ['-c', `${key}.enabled_tools=[${enabled.map((t) => tomlString(t)).join(',')}]`] : []),
   ];
 }
 
@@ -243,7 +245,7 @@ function codexMcpArgs(name: string, s: CodexMcpServer | null | undefined): strin
  * MCP (conexões da ficha e `sshWrite`) e o texto da ficha, não a aprovação do Codex.
  */
 export function codexSshMcpArgs(s: CodexMcpServer | null | undefined): string[] {
-  return codexMcpArgs(CODEX_SSH_MCP_NAME, s);
+  return codexMcpArgs(CODEX_SSH_MCP_NAME, s, s?.enabledTools);
 }
 
 /**
@@ -274,10 +276,10 @@ export const CHROME_MCP_TOOLS = [
  */
 export function codexChromeMcpArgs(s: CodexMcpServer | null | undefined): string[] {
   if (!s) return [];
-  return [
-    ...codexMcpArgs(CODEX_CHROME_MCP_NAME, s),
-    '-c', `mcp_servers.${CODEX_CHROME_MCP_NAME}.enabled_tools=[${CHROME_MCP_TOOLS.map((t) => tomlString(t)).join(',')}]`,
-  ];
+  // Com lista da ficha, só as que estão na allowlist do Chrome (interseção: a ficha tira, não põe).
+  const only = s.enabledTools;
+  const enabled = only ? CHROME_MCP_TOOLS.filter((t) => only.includes(t)) : CHROME_MCP_TOOLS;
+  return codexMcpArgs(CODEX_CHROME_MCP_NAME, s, enabled);
 }
 
 /** O que o `chatSpawn` entrega para abrir uma conversa no Codex (no lugar dos argumentos do `claude`). */

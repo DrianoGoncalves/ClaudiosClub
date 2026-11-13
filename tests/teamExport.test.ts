@@ -19,7 +19,7 @@ const home = await vi.hoisted(async () => {
 });
 
 // Campos que o arquivo leva por ficha (allowlist de server/staff/teamExport.ts).
-const ALLOWED = ['ref', 'name', 'role', 'mission', 'rules', 'doneWhen', 'autonomy', 'engine', 'model', 'effort', 'personality', 'playbook', 'worktree', 'agents', 'skills', 'mcps', 'mcpPolicy', 'reportsTo', 'routines'];
+const ALLOWED = ['ref', 'name', 'role', 'mission', 'rules', 'doneWhen', 'autonomy', 'engine', 'model', 'effort', 'personality', 'playbook', 'worktree', 'agents', 'skills', 'mcps', 'mcpAccess', 'reportsTo', 'routines'];
 const SKILL_MD = '---\nname: revisar-a11y\ndescription: Use para revisar acessibilidade\n---\n\n1. Contraste\n2. Foco\n';
 const MARCA = 'marca-interna-9x7';
 const KEY = 'sk-ant-api03-q8Zr2LpX9vBn4TkW7mYc5sHd1FgJ';
@@ -79,7 +79,7 @@ beforeAll(async () => {
       agents: ['Explore'],
       skills: ['revisar-a11y'],
       mcps: ['docs', 'sumido'],
-      mcpPolicy: { 'mcp__docs': 'ask', 'mcp__docs__apagar': 'off' },
+      mcpAccess: { docs: 'ask', github: 'off' },
       model: 'opus',
       effort: 'high',
       personality: 'professor',
@@ -125,8 +125,8 @@ describe('equipe em arquivo (exportar e importar)', () => {
     // Sem ids: as ativas (a encerrada fica de fora).
     expect(file!.staff.map((s) => s.name)).toEqual(['Lia Chefe', 'Ana Souza']);
     for (const s of file!.staff) {
-      // `mcpPolicy` só sai quando a ficha tem política.
-      expect(Object.keys(s).sort()).toEqual(ALLOWED.filter((k) => k !== 'mcpPolicy' || 'mcpPolicy' in s).sort());
+      // `mcpAccess` só sai quando a ficha tem acesso aos MCPs.
+      expect(Object.keys(s).sort()).toEqual(ALLOWED.filter((k) => k !== 'mcpAccess' || 'mcpAccess' in s).sort());
       for (const r of s.routines) expect(Object.keys(r).sort()).toEqual(['id', 'message', 'mode', 'name', 'schedule']);
     }
     for (const bad of [...originIds(), 'pessoa-1', 'srv-marca-9x7', 'conhecimento-marca.md', MARCA, '11111111-2222-4333-8444-555555555555', 'sonnet', 'Velho', 'ana.png', 'hiredBy', 'clubSecretId', 'ftpSecretId']) {
@@ -156,7 +156,7 @@ describe('equipe em arquivo (exportar e importar)', () => {
       skills: ['revisar-a11y'],
       mcps: ['docs'],
       // A política de MCP vai e volta igual: sem ela a ficha importada ficaria mais permissiva.
-      mcpPolicy: { 'mcp__docs': 'ask', 'mcp__docs__apagar': 'off' },
+      mcpAccess: { docs: 'ask', github: 'off' },
       model: 'opus',
       effort: 'high',
       personality: 'professor',

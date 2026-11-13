@@ -10,9 +10,9 @@ import { isClaudeRoot, renderFicha, systemPrompt, type CodexChromeInfo, type Cod
 import { FTP_MCP_NAME, GPT_MCP_NAME } from '../../shared/model';
 import { DEFAULT_SECRETS_DIR } from '../secretVault';
 import { ftpMcpServerConfig } from './ftpMcp';
-import { SSH_MCP_BUNDLE, WRITE_AUTONOMY, sshMcpServerConfig } from './sshMcp';
+import { SSH_MCP_BUNDLE, SSH_READ_TOOLS, WRITE_AUTONOMY, sshMcpServerConfig } from './sshMcp';
 import { CODEX_CHROME_MCP_NAME, CODEX_SSH_MCP_NAME, type CodexMcpServer } from '../chat/codexArgs';
-import { CHROME_EXTENSION_KEY, codexMcpPolicy, mcpPolicyRules } from './mcpPolicy';
+import { codexMcpAccess } from './mcpAccess';
 import { gptMcpServerConfig } from './gptMcp';
 import { buildMcpConfig, mcpWriteFileFor } from './mcp';
 import { ensurePlaybookAgents } from './playbookAgents';
@@ -203,19 +203,20 @@ export interface PreparedCodexRun {
  * na mesma conversa (não juntar servidor e logins) e com o pacote instalado. `info` é o que a ficha diz (undefined: a ficha não tem Navegador).
  */
 export function codexChromeOf(
-  profile: Pick<StaffProfile, 'browser' | 'mcpPolicy'>,
+  profile: Pick<StaffProfile, 'browser' | 'mcpAccess'>,
   ctx: Pick<LaunchContext, 'codexBrowser' | 'chromeMcpCli' | 'clubGuard'>,
   sshAttached: boolean,
   chromeDir: string,
 ): { mcp: CodexMcpServer | null; info?: CodexChromeInfo } {
   if (!profile.browser) return { mcp: null };
   const cli = ctx.chromeMcpCli ?? CHROME_MCP_CLI;
-  // A chave do Claude in Chrome vale aqui também: é o mesmo Chrome do usuário (ver mcpPolicy.ts).
-  const policy = codexMcpPolicy(profile.mcpPolicy, CODEX_CHROME_MCP_NAME, [CHROME_EXTENSION_KEY]);
+  // A chave do Claude in Chrome vale aqui também: é o mesmo Chrome do usuário (ver mcpAccess.ts). Sem lista de leitura para o Chrome,
+  // `readonly` e `ask` desligam o Chrome no Codex (não há como perguntar, nem como filtrar).
+  const access = codexMcpAccess(profile.mcpAccess, CODEX_CHROME_MCP_NAME, ['claude-in-chrome'], null);
   const motivos: CodexChromeInfo['motivos'] = [];
   if (ctx.codexBrowser !== true) motivos.push('config');
   if (sshAttached) motivos.push('ssh');
-  if (policy.disabled) motivos.push('politica');
+  if (!access.attached) motivos.push('politica');
   if (!existsSync(cli)) motivos.push('indisponivel');
   if (motivos.length) return { mcp: null, info: { mcp: false, motivos } };
   // A pasta é da conversa (`<mycoHome>/run/<sessionId>/chrome`), fora de qualquer projeto e do repo do Club: o MCP não lê nem grava fora dela.
@@ -226,7 +227,7 @@ export function codexChromeOf(
       command: process.execPath,
       args: [cli, '--extension', '--output-dir', chromeDir, ...(ctx.clubGuard === false ? [] : ['--blocked-origins', clubBlockedOrigins()])],
       cwd: chromeDir,
-      ...(policy.disabledTools.length ? { disabledTools: policy.disabledTools } : {}),
+      ...(access.enabledTools ? { enabledTools: access.enabledTools } : {}),
     },
     info: { mcp: true, motivos: [] },
   };
@@ -252,11 +253,11 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
   const bundle = ctx.sshMcpBundle ?? SSH_MCP_BUNDLE;
   // Escrita do lançamento: a sshWrite da ficha (de conexões do projeto), só com autonomia que altera algo. Vai no `--write`.
   const write = WRITE_AUTONOMY.includes(profile.autonomy) ? (profile.sshWrite ?? []).filter((n) => names.includes(n)) : [];
-  // Política de MCP: servidor `off` ou `ask` (no Codex, ask é off) fica fora da conversa; as ferramentas `off` saem pelo disabled_tools.
-  const ssh = codexMcpPolicy(profile.mcpPolicy, CODEX_SSH_MCP_NAME);
+  // Acesso ao MCP: `off` fica fora da conversa; `readonly` e `ask` entram só com as ferramentas de leitura (`enabled_tools`), porque o Codex não pergunta.
+  const ssh = codexMcpAccess(profile.mcpAccess, CODEX_SSH_MCP_NAME, [], SSH_READ_TOOLS);
   // Sem o pacote do build, o MCP não sobe (nunca pelo tsx a partir do Codex): a ficha diz que o servidor está indisponível.
   const bundleOk = existsSync(bundle);
-  const mcp = names.length > 0 && !root && bundleOk && !ssh.disabled;
+  const mcp = names.length > 0 && !root && bundleOk && ssh.attached;
   const indisponivel = names.length > 0 && !root && !bundleOk;
   const sshInfo: CodexSshInfo | undefined = names.length ? { mcp, names, writable: mcp ? write : [], root, indisponivel } : undefined;
   let sshMcp: CodexMcpServer | null = null;
@@ -270,16 +271,15 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
       autonomy: profile.autonomy,
       bundle,
     });
-    sshMcp = { command, args, cwd: ROOT, ...(ssh.disabledTools.length ? { disabledTools: ssh.disabledTools } : {}) };
+    sshMcp = { command, args, cwd: ROOT, ...(ssh.enabledTools ? { enabledTools: ssh.enabledTools } : {}) };
   }
   // Chrome do usuário: depois do SSH, porque o MCP de SSH na conversa desliga o Chrome (não juntar servidor e logins).
   const chromeDir = path.join(ctx.runDir, sessionId, 'chrome');
   const chrome = codexChromeOf(profile, ctx, sshMcp !== null, chromeDir);
   // A pasta do MCP existe antes do processo (o cwd dele): só quando o MCP entra.
   if (chrome.mcp) await mkdir(chromeDir, { recursive: true });
-  // O que a política desligou para a ficha dizer (só o que se aplica: servidor de SSH com conexão, Chrome com Navegador).
-  const chromeAsk = profile.browser ? codexMcpPolicy(profile.mcpPolicy, CODEX_CHROME_MCP_NAME, [CHROME_EXTENSION_KEY]).askedAsOff : [];
-  const asked = [...(names.length && !root ? ssh.askedAsOff : []), ...chromeAsk];
+  // O que o Codex deixou só leitura por causa de "pede antes" (a ficha diz). O Chrome não entra aqui: sem lista de leitura, ask o desliga.
+  const asked = names.length && !root && ssh.askAsReadonly ? [CODEX_SSH_MCP_NAME] : [];
   const fichaCtx = await writeFicha(profile, ctx, away, sshInfo, chrome.info, asked);
   return {
     instructions: systemPrompt(profile, fichaCtx, renderFicha(profile, fichaCtx)),
@@ -318,7 +318,7 @@ export const MCP_TOOLS_MATCHER = 'mcp__.*';
  * a política de escrita dos MCPs (mcp-write.json); sem ela, não há hook de MCP.
  */
 export function staffSettings(
-  p?: Pick<StaffProfile, 'personality' | 'engine' | 'mcpPolicy'>,
+  p?: Pick<StaffProfile, 'personality' | 'engine'>,
   styleFile?: string,
   o: { clubGuard?: boolean; hooksDir?: string; mcpWriteFile?: string | null } = {},
 ) {
@@ -329,17 +329,15 @@ export function staffSettings(
     // `onFailure: 'block'` (Claude Code 2.1.295+): comando que não inicia, saída de erro, timeout ou saída inválida bloqueiam a
     // chamada em vez de deixá-la passar. Sem helper de versão do Claude no Club, vai sempre (ver doc de hooks).
     ...(stage === 'pre' && o.clubGuard !== false ? [{ matcher: BROWSER_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'club-guard.mjs'), 'pre'], timeout: 10, onFailure: 'block' }] }] : []),
-    // Escrita por MCP: a política da ficha (ver mcpTools.ts). Sem política, a conversa não tem o hook.
+    // Escrita por MCP: o acesso da ficha (ver mcpAccess.ts). Sem regra de MCP, a conversa não tem o hook.
     ...(stage === 'pre' && o.mcpWriteFile ? [{ matcher: MCP_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'mcp-write-guard.mjs'), o.mcpWriteFile], timeout: 10, onFailure: 'block' }] }] : []),
   ];
   const styled = !!p && personalityName(p.personality) !== '' && (p.engine ?? 'claude') === 'claude';
   const style = styled && styleFile ? { UserPromptSubmit: [{ hooks: [{ type: 'command', command: process.execPath, args: [STYLE_HOOK, styleFile], timeout: 10 }] }] } : {};
-  // Ferramentas MCP de Perguntar: o ask do settings vence o allow de local, de sessão e do hook (provado no 2.1.310).
-  const ask = mcpPolicyRules(p?.mcpPolicy).ask;
+  // Sem `permissions.ask` aqui: as ferramentas MCP de "pede antes" são do hook de escrita (mcp-write.json), que decide por ferramenta.
   return {
     hooks: { PreToolUse: hook('pre'), PostToolUse: hook('post'), ...style },
     ...(styled ? { outputStyle: 'default' } : {}),
-    ...(ask.length ? { permissions: { ask } } : {}),
   };
 }
 

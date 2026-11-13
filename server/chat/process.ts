@@ -70,7 +70,7 @@ type Suggestion = Record<string, unknown> & { type?: string; rules?: unknown[] }
 /**
  * As regras do "permitir sempre". Na conversa, as sugestões do próprio Claude Code que liberam ou mudam o modo (como
  * "edita sozinho"). No projeto, só regras de ferramenta: trocar o modo do projeto inteiro seria demais.
- * Só regras de `allow`: uma sugestão que remove, substitui ou põe ask/deny derrubaria a política da ficha (ver mcpPolicy.ts).
+ * Só regras de `allow`: uma sugestão que remove, substitui ou põe ask/deny derrubaria o acesso aos MCPs da ficha (ver mcpAccess.ts).
  */
 export function rememberRules(tool: string, suggestions: Suggestion[], where: Remember): unknown[] {
   const allowRules = (s: Suggestion) => s.type === 'addRules' && s.behavior === 'allow';

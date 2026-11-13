@@ -772,9 +772,13 @@ export interface RoutineRun {
 }
 
 /**
- * Política de uma ferramenta MCP na ficha (`StaffProfile.mcpPolicy`). `allow` segue a autonomia (não libera nada além dela);
- * `ask` pergunta sempre, em qualquer autonomia; `off` tira a ferramenta da sessão. No Codex, `ask` vira `off` (não há pergunta).
+ * Acesso de um MCP na ficha (`StaffProfile.mcpAccess`, chave = nome do MCP). Da mais solta para a mais fechada: `free` (sem regra,
+ * segue a autonomia), `ask` (só as de leitura passam; o resto pede antes), `readonly` (só as de leitura passam; o resto é bloqueado),
+ * `off` (o MCP inteiro fica de fora). No Codex, `ask` vira `readonly` (não há como perguntar). Ver server/staff/mcpAccess.ts.
  */
+export type McpAccess = 'off' | 'readonly' | 'ask' | 'free';
+
+/** legado: só a tela atual e a leitura de fichas antigas usam (`mcp__servidor`, `mcp__servidor__ferramenta`). */
 export type McpPolicy = 'allow' | 'ask' | 'off';
 
 export interface StaffProfile {
@@ -803,14 +807,13 @@ export interface StaffProfile {
   /** MCPs ligados; null = todos os configurados (inclusive os conectores da conta). */
   mcps: string[] | null;
   /**
-   * Política por ferramenta MCP. Chave `mcp__servidor` (todas as ferramentas dele) ou `mcp__servidor__ferramenta`; ausente = sem
-   * política. Entre a regra do servidor e a da ferramenta vale a mais restritiva (off > ask > allow). Ver server/staff/mcpPolicy.ts.
+   * Acesso por MCP (nome na ficha → `McpAccess`). Ausente = tudo `free` (segue a autonomia). Entre o que a ficha pede e o que o
+   * gestor tem, vale o mais restrito (ver server/staff/mcpAccess.ts). Só guarda o que não é `free`.
    */
+  mcpAccess?: Record<string, McpAccess>;
+  /** @deprecated legado, sempre ausente na leitura (a ficha antiga vira `mcpAccess`, ver server/staff/store.ts). */
   mcpPolicy?: Record<string, McpPolicy>;
-  /**
-   * Escrita por MCP (nome → política), só no motor Claude: as ferramentas sem `readOnlyHint` pedem antes (`ask`) ou ficam
-   * bloqueadas (`deny`), em qualquer autonomia (no "sem travas", o pedido vira bloqueio). Ausente (ou o MCP fora do mapa) = livre, como antes.
-   */
+  /** @deprecated legado, sempre ausente na leitura (a ficha antiga vira `mcpAccess`, ver server/staff/store.ts). */
   mcpWrite?: Record<string, McpWritePolicy>;
   /** Arquivos e pastas para ler antes de começar. */
   knowledge: string[];
@@ -970,7 +973,7 @@ export interface McpServerInfo {
   tools?: { total: number; write: number };
 }
 
-/** Política de escrita de um MCP na ficha: `ask` = as ferramentas de escrita pedem antes; `deny` = bloqueadas. Ausente = livre. */
+/** legado: só a tela atual e a leitura de fichas antigas usam (`mcpWrite`: `deny` vira `readonly`, `ask` fica `ask`). */
 export type McpWritePolicy = 'ask' | 'deny';
 
 export type McpScope = 'club' | 'user' | 'project' | 'local';

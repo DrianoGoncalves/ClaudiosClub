@@ -18,7 +18,8 @@ const home = await vi.hoisted(async () => {
 });
 
 const { testMcpConfig } = await import('../server/staff/mcpTest');
-const { claudeName, cleanMcpWrite, mcpFingerprint, mcpWriteFile, saveTestedTools, stricterMcpWrite, testedTools, toolsKey } = await import(
+const { mcpAccessFile, mcpOffDenyRules, mergeMcpAccess, readMcpAccess, withChromeAlias } = await import('../server/staff/mcpAccess');
+const { claudeName, mcpFingerprint, saveTestedTools, testedTools, toolsKey } = await import(
   '../server/staff/mcpTools'
 );
 const { listMcpServers, mcpWriteFileFor } = await import('../server/staff/mcp');
@@ -108,13 +109,25 @@ describe('arquivo da política (o que o hook lê)', () => {
     { name: 'criar issue', readOnly: false },
   ];
 
-  it('política por MCP, com as ferramentas de leitura do teste (só as que o teste marcou)', () => {
-    const got = mcpWriteFile({ 'git.hub': 'deny', notas: 'ask' }, new Map([['git.hub', tools]]));
-    expect(got).toEqual({ 'git.hub': { policy: 'deny', readOnly: ['buscar'] }, notas: { policy: 'ask', readOnly: [] } });
+  it('acesso por MCP, com as ferramentas de leitura do teste (só as que o teste marcou)', () => {
+    const got = mcpAccessFile({ 'git.hub': 'readonly', notas: 'ask' }, new Map([['git.hub', tools]]));
+    expect(got).toEqual({ 'git.hub': { policy: 'readonly', readOnly: ['buscar'] }, notas: { policy: 'ask', readOnly: [] } });
   });
 
-  it('sem lista (nunca testado ou mudou): readOnly vazio, o servidor inteiro cai na política', () => {
-    expect(mcpWriteFile({ db: 'deny' }, new Map())).toEqual({ db: { policy: 'deny', readOnly: [] } });
+  it('sem lista (nunca testado ou mudou): readOnly vazio, o servidor inteiro cai na regra', () => {
+    expect(mcpAccessFile({ db: 'readonly' }, new Map())).toEqual({ db: { policy: 'readonly', readOnly: [] } });
+  });
+
+  it('off: a lista de leitura sai vazia, mesmo que o teste tenha marcado ferramentas', () => {
+    expect(mcpAccessFile({ 'git.hub': 'off' }, new Map([['git.hub', tools]]))).toEqual({ 'git.hub': { policy: 'off', readOnly: [] } });
+  });
+
+  it('livre não entra no arquivo; e o alias do Chrome leva o nível mais restrito às duas chaves', () => {
+    expect(mcpAccessFile({ notas: 'free' }, new Map())).toEqual({});
+    expect(mcpAccessFile({ 'claude-in-chrome': 'free', 'myco-chrome': 'ask' }, new Map())).toEqual({
+      'claude-in-chrome': { policy: 'ask', readOnly: [] },
+      'myco-chrome': { policy: 'ask', readOnly: [] },
+    });
   });
 
   it('leitura que colide, depois de normalizada, com outra ferramenta do MCP sai da lista (o hook não separaria)', () => {
@@ -123,26 +136,32 @@ describe('arquivo da política (o que o hook lê)', () => {
       { name: 'listar_itens', readOnly: false },
       { name: 'ver', readOnly: true },
     ];
-    expect(mcpWriteFile({ x: 'deny' }, new Map([['x', colide]]))).toEqual({ x: { policy: 'deny', readOnly: ['ver'] } });
+    expect(mcpAccessFile({ x: 'readonly' }, new Map([['x', colide]]))).toEqual({ x: { policy: 'readonly', readOnly: ['ver'] } });
   });
 
-  it('nome de MCP reservado vira propriedade de verdade (não o protótipo)', () => {
-    const got = mcpWriteFile(JSON.parse('{"__proto__":"deny"}'), new Map());
-    expect(Object.keys(got)).toEqual(['__proto__']);
-    expect(JSON.stringify(got)).toBe('{"__proto__":{"policy":"deny","readOnly":[]}}');
+  it('nome de MCP reservado não chega ao arquivo: a leitura (readMcpAccess) o tira antes, e o nome que sobra segue', () => {
+    const got = mcpAccessFile(readMcpAccess(JSON.parse('{"mcpAccess":{"__proto__":"readonly","ok":"ask"}}')), new Map());
+    expect(Object.keys(got)).toEqual(['ok']);
+    expect(got).toEqual({ ok: { policy: 'ask', readOnly: [] } });
   });
 
   it('o nome da ferramenta como o Claude Code o põe (o que não é letra, número, _ ou - vira _)', () => {
     expect(claudeName('git.hub')).toBe('git_hub');
     expect(claudeName('criar issue')).toBe('criar_issue');
-    expect(mcpWriteFile(undefined, new Map())).toEqual({});
+    expect(mcpAccessFile(undefined, new Map())).toEqual({});
   });
 
-  it('contratado pela API fica no mínimo tão travado quanto o gestor; vazio vira ausente', () => {
-    expect(stricterMcpWrite({ a: 'ask', b: 'deny' }, { a: 'deny', b: 'ask', c: 'ask' })).toEqual({ a: 'deny', b: 'deny', c: 'ask' });
-    expect(stricterMcpWrite(undefined, undefined)).toBeUndefined();
-    expect(cleanMcpWrite({})).toBeUndefined();
-    expect(cleanMcpWrite({ a: 'ask' })).toEqual({ a: 'ask' });
+  it('juntar acesso (subfuncionário e PATCH antigo) fica com o mais restrito; vazio vira ausente', () => {
+    expect(mergeMcpAccess({ a: 'ask', b: 'off' }, { a: 'readonly', b: 'ask', c: 'ask' })).toEqual({ a: 'readonly', b: 'off', c: 'ask' });
+    expect(mergeMcpAccess(undefined, undefined)).toBeUndefined();
+    expect(mergeMcpAccess({}, { a: 'free' })).toBeUndefined();
+    expect(mergeMcpAccess({ a: 'ask' })).toEqual({ a: 'ask' });
+  });
+
+  it('desligar Chrome por um dos dois nomes vale para o outro (o mesmo Chrome)', () => {
+    expect(withChromeAlias({ 'myco-chrome': 'off' })).toEqual({ 'myco-chrome': 'off', 'claude-in-chrome': 'off' });
+    // `x.y` tem ponto (fora do nome seguro): fica só no hook. `ok` é só leitura: não sai.
+    expect(mcpOffDenyRules({ 'claude-in-chrome': 'off', 'x.y': 'off', ok: 'readonly' })).toEqual(['mcp__claude-in-chrome', 'mcp__myco-chrome']);
   });
 });
 
@@ -170,24 +189,24 @@ describe('lista guardada e regras da sessão', () => {
     expect(infos.find((m) => m.name === 'falso')?.tools).toEqual({ total: 5, write: 4 });
     expect(infos.find((m) => m.name === 'outro')?.tools).toBeUndefined(); // nunca testado
 
-    const file = await mcpWriteFileFor(env.proj, { mcpWrite: { falso: 'deny', outro: 'ask' } }, env.claude, { clubFile: env.club, toolsFile: env.toolsFile });
+    const file = await mcpWriteFileFor(env.proj, { mcpAccess: { falso: 'readonly', outro: 'ask' } }, env.claude, { clubFile: env.club, toolsFile: env.toolsFile });
     // 'texto' (readOnlyHint só "true", em texto) não é de leitura: fica fora da lista.
-    expect(file).toEqual({ falso: { policy: 'deny', readOnly: ['buscar'] }, outro: { policy: 'ask', readOnly: [] } });
+    expect(file).toEqual({ falso: { policy: 'readonly', readOnly: ['buscar'] }, outro: { policy: 'ask', readOnly: [] } });
   });
 
   it('MCP mudado depois do teste (outros argumentos): a lista de leitura fica vazia (a política pega o servidor inteiro)', async () => {
     const env = await setup();
     await env.lib.test({ scope: 'user', name: 'falso' }, true);
     await fs.writeFile(env.claude, JSON.stringify({ mcpServers: { falso: { ...env.stdioCfg, args: [stdioScript, '--outro'] } } }));
-    const file = await mcpWriteFileFor(env.proj, { mcpWrite: { falso: 'deny' } }, env.claude, { clubFile: env.club, toolsFile: env.toolsFile });
-    expect(file).toEqual({ falso: { policy: 'deny', readOnly: [] } });
+    const file = await mcpWriteFileFor(env.proj, { mcpAccess: { falso: 'readonly' } }, env.claude, { clubFile: env.club, toolsFile: env.toolsFile });
+    expect(file).toEqual({ falso: { policy: 'readonly', readOnly: [] } });
     expect((await listMcpServers(env.proj, env.claude, env.club, env.toolsFile))[0]?.tools).toBeUndefined();
   });
 
   it('Codex e ficha sem política: arquivo vazio (sem hook)', async () => {
     const env = await setup();
     const o = { clubFile: env.club, toolsFile: env.toolsFile };
-    expect(await mcpWriteFileFor(env.proj, { engine: 'codex', mcpWrite: { falso: 'deny' } }, env.claude, o)).toEqual({});
+    expect(await mcpWriteFileFor(env.proj, { engine: 'codex', mcpAccess: { falso: 'readonly' } }, env.claude, o)).toEqual({});
     expect(await mcpWriteFileFor(env.proj, {}, env.claude, o)).toEqual({});
   });
 
@@ -204,7 +223,7 @@ describe('lista guardada e regras da sessão', () => {
     const env = await setup();
     await fs.mkdir(path.dirname(env.toolsFile), { recursive: true });
     await fs.writeFile(env.toolsFile, '{ não é json');
-    const file = await mcpWriteFileFor(env.proj, { mcpWrite: { falso: 'ask' } }, env.claude, { clubFile: env.club, toolsFile: env.toolsFile });
+    const file = await mcpWriteFileFor(env.proj, { mcpAccess: { falso: 'ask' } }, env.claude, { clubFile: env.club, toolsFile: env.toolsFile });
     expect(file).toEqual({ falso: { policy: 'ask', readOnly: [] } });
   });
 });
@@ -285,20 +304,21 @@ describe('ficha: o campo mcpWrite', () => {
     expect(r.error?.issues.map((i) => i.message)).toContain('nome de MCP reservado');
   });
 
-  it('ficha com mcpWrite inválido editado à mão: a leitura é fail-closed por entrada (valor errado vira ask, chave inválida sai)', async () => {
+  it('ficha com mcpWrite inválido editado à mão: a leitura é fail-closed por entrada e junta com o mcpAccess pela mais restrita', async () => {
     const { createProfile, profileFile, readProfile } = await import('../server/staff/store');
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-mcpwrite-ficha-'));
     try {
-      const p = await createProfile(dir, 'proj', StaffInputSchema.parse({ ...base, mcpWrite: { github: 'deny' } }));
+      const p = await createProfile(dir, 'proj', StaffInputSchema.parse({ ...base, mcpAccess: { github: 'readonly' } }));
       const file = profileFile(dir, p.id);
       const json = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>;
-      // "denny" (typo) e "allow" não liberam: pedem antes. Chave vazia e reservada saem; a válida segue.
+      // "denny" (typo) e "allow" não liberam: pedem antes. Chave vazia e reservada saem; a válida segue. `github` já era readonly no acesso: fica readonly.
       json.mcpWrite = JSON.parse('{"github":"allow","denny":"denny","":"deny","constructor":"deny","__proto__":"deny","ok.mcp":"deny"}');
       await fs.writeFile(file, JSON.stringify(json));
       const got = await readProfile(dir, p.id);
       expect(got).not.toBeNull();
       expect(got?.name).toBe('Ana');
-      expect(got?.mcpWrite).toEqual({ github: 'ask', denny: 'ask', 'ok.mcp': 'deny' });
+      expect(got?.mcpAccess).toEqual({ github: 'readonly', denny: 'ask', 'ok.mcp': 'readonly' });
+      expect(got).not.toHaveProperty('mcpWrite');
       // A escrita continua recusando os mesmos valores.
       expect(StaffInputSchema.safeParse({ ...base, mcpWrite: { github: 'allow' } }).success).toBe(false);
     } finally {

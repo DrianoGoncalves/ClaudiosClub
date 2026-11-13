@@ -8,7 +8,7 @@ import { GUIDE_PATH } from '../projectGuide';
 import { MYCO_HOME } from '../config';
 import { ROOT } from '../root';
 import { defaultLocations, pathKey } from '../adapters/claude/paths';
-import { mcpPolicyRules } from './mcpPolicy';
+import { mcpOffDenyRules } from './mcpAccess';
 
 // A ficha vira um arquivo Markdown dentro do projeto (.myco/staff/<id>.md), que a sessão lê
 // no começo. Pela linha de comando só vai uma identidade curta apontando para ela: o CLI não
@@ -456,14 +456,14 @@ function codexBrowserSection(ctx: FichaContext): string {
 }
 
 /**
- * Codex: a ferramenta marcada como Perguntar não tem como perguntar antes, então fica desligada (ver codexMcpPolicy). A ficha diz
- * quais, para o funcionário não tentar e para o usuário saber por que não usa.
+ * Codex: o MCP marcado como "pede antes de escrever" não tem como perguntar, então fica só leitura (ver codexMcpAccess). A ficha diz
+ * quais, para o funcionário não tentar escrever e para o usuário saber por que não escreve.
  */
 function codexMcpSection(p: StaffProfile, ctx: FichaContext): string {
   if (!codexOf(p) || !ctx.codexMcpAsked?.length) return '';
   return [
     '## Ferramentas MCP',
-    `No Codex não há como perguntar antes: as ferramentas marcadas como Perguntar ficam desligadas (${ctx.codexMcpAsked.map((k) => `\`${k}\``).join(', ')}). Se precisar de uma delas, avise o usuário.`,
+    `No Codex não há como perguntar antes: os MCPs marcados como "pede antes de escrever" ficam só leitura (${ctx.codexMcpAsked.map((k) => `\`${k}\``).join(', ')}). Se precisar escrever, avise o usuário.`,
   ].join('\n');
 }
 /** A tela do Club é do dono: o navegador do funcionário não vai lá (o hook e o --blocked-origins barram; ver server/clubAddress.ts). */
@@ -764,8 +764,8 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   if (p.browser && AUTONOMY_ORDER.indexOf(p.autonomy) >= AUTONOMY_ORDER.indexOf('acceptEdits')) args.push('--allowedTools', 'mcp__claude-in-chrome');
   // Com a internet desligada (Configurações), a busca na web do Claude também sai: a ferramenta é recusada antes de rodar.
   const web = o.internetAccess === false ? ['WebSearch', 'WebFetch'] : [];
-  // As ferramentas MCP marcadas como Desligar (política da ficha) também saem daqui; as de Perguntar vão ao settings (ver staffSettings).
-  args.push('--disallowedTools', [...secretDenyRules(p, o.keyFiles, o.ftpServers, o.manualEditable === true), ...web, ...mcpPolicyRules(p.mcpPolicy).deny].join(','));
+  // Os MCPs marcados como Desligado (acesso da ficha) também saem daqui; os de leitura e de pedir antes são o hook de escrita (mcp-write.json).
+  args.push('--disallowedTools', [...secretDenyRules(p, o.keyFiles, o.ftpServers, o.manualEditable === true), ...web, ...mcpOffDenyRules(p.mcpAccess)].join(','));
   if (o.mcpConfigPath) args.push('--mcp-config', o.mcpConfigPath, ...(o.strictMcp === false ? [] : ['--strict-mcp-config']));
   return args;
 }

@@ -17,7 +17,7 @@ export const ALLOCATION_FIELDS = [
   'agents',
   'skills',
   'mcps',
-  'mcpWrite',
+  'mcpAccess',
   'knowledge',
   'canHire',
   'worktree',
@@ -26,7 +26,6 @@ export const ALLOCATION_FIELDS = [
   'browser',
   'engine',
   'fallback',
-  'mcpPolicy',
 ] as const satisfies readonly (keyof StaffProfile)[];
 
 /** Só do pedido: não são campos da ficha (abrir conversa, adotar sessão, confirmar consumo). */

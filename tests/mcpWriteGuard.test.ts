@@ -54,9 +54,10 @@ beforeAll(async () => {
   await fs.writeFile(
     policy,
     JSON.stringify({
-      falso: { policy: 'deny', readOnly: ['buscar'] },
+      falso: { policy: 'readonly', readOnly: ['buscar'] },
       pede: { policy: 'ask', readOnly: ['ler'] },
-      'git.hub': { policy: 'deny', readOnly: ['listar issues'] },
+      'git.hub': { policy: 'readonly', readOnly: ['listar issues'] },
+      desligado: { policy: 'off', readOnly: [] },
     }),
   );
 });
@@ -66,6 +67,12 @@ describe('hook de escrita por MCP: a política da ficha', () => {
     expect(run(ev('mcp__falso__buscar'), policy)).toBe('');
     expect(run(ev('mcp__falso__buscar', 'bypassPermissions'), policy)).toBe('');
     expect(run(ev('mcp__pede__ler'), policy)).toBe('');
+  });
+
+  it('off: o servidor inteiro é bloqueado, inclusive a ferramenta de leitura (e a lista vem vazia)', () => {
+    expect(decision(run(ev('mcp__desligado__listar'), policy))).toBe('deny');
+    expect(decision(run(ev('mcp__desligado__listar', 'bypassPermissions'), policy))).toBe('deny');
+    expect(decision(run(ev('mcp__desligado__apagar'), policy))).toBe('deny');
   });
 
   it('ferramenta de escrita de servidor com deny: deny, com motivo em português', () => {
@@ -122,7 +129,7 @@ describe('hook de escrita por MCP: a política da ficha', () => {
 
   it('nome com espaço (o que o ~/.claude.json traz): a forma com "_" e com "-" casam', async () => {
     const sp = path.join(dir, 'espaco.json');
-    await fs.writeFile(sp, JSON.stringify({ 'meu mcp': { policy: 'deny', readOnly: [] } }));
+    await fs.writeFile(sp, JSON.stringify({ 'meu mcp': { policy: 'readonly', readOnly: [] } }));
     expect(decision(run(ev('mcp__meu_mcp__x'), sp))).toBe('deny');
     expect(decision(run(ev('mcp__meu-mcp__x'), sp))).toBe('deny');
     expect(run(ev('mcp__meumcp__x'), sp)).toBe('');
@@ -140,7 +147,7 @@ describe('hook de escrita por MCP: a política da ficha', () => {
 
   it('ambiguidade: um nome que casa com dois MCP da política é deny (servidor "a" e "a__b")', async () => {
     const amb = path.join(dir, 'ambiguo.json');
-    await fs.writeFile(amb, JSON.stringify({ a: { policy: 'ask', readOnly: [] }, 'a__b': { policy: 'deny', readOnly: ['x'] } }));
+    await fs.writeFile(amb, JSON.stringify({ a: { policy: 'ask', readOnly: [] }, 'a__b': { policy: 'readonly', readOnly: ['x'] } }));
     expect(decision(run(ev('mcp__a__b__x'), amb))).toBe('deny');
     expect(decision(run(ev('mcp__a__b__y'), amb))).toBe('deny');
   });
@@ -161,7 +168,7 @@ describe('hook de escrita por MCP: fail-closed (nunca libera por erro)', () => {
     ['JSON corrompido', '{ não é json'],
     ['lista em vez de objeto', '[]'],
     ['política fora do valor (allow)', '{"falso":{"policy":"allow","readOnly":[]}}'],
-    ['lista de leitura que não é lista', '{"falso":{"policy":"deny","readOnly":"buscar"}}'],
+    ['lista de leitura que não é lista', '{"falso":{"policy":"readonly","readOnly":"buscar"}}'],
     ['entrada vazia', ''],
   ])('arquivo %s: deny', async (_, content) => {
     const bad = path.join(dir, `bad-${randomUUID()}.json`);
@@ -239,7 +246,7 @@ describe('a conversa: cópia dos hooks, política no run dir e nada por ferramen
     ]);
 
     const sid = randomUUID();
-    const p = profile({ mcpWrite: { falso: 'deny', outro: 'ask' } });
+    const p = profile({ mcpAccess: { falso: 'readonly', outro: 'ask' } });
     const r = await prepareRun(p, ctx(), sid, project());
     const sessionDir = path.join(home, 'run', sid);
 
@@ -264,7 +271,7 @@ describe('a conversa: cópia dos hooks, política no run dir e nada por ferramen
     });
 
     const file = JSON.parse(await fs.readFile(path.join(sessionDir, 'mcp-write.json'), 'utf8'));
-    expect(file).toEqual({ falso: { policy: 'deny', readOnly: ['buscar'] }, outro: { policy: 'ask', readOnly: [] } });
+    expect(file).toEqual({ falso: { policy: 'readonly', readOnly: ['buscar'] }, outro: { policy: 'ask', readOnly: [] } });
 
     // A linha de comando: nenhum MCP por ferramenta no --disallowedTools (o que bloqueia é o hook).
     const args = buildClaudeArgs(p, { sessionId: sid, resume: false, systemPromptFile: r.systemPromptFile, settingsFile: r.settingsFile, mcpConfigPath: r.mcpConfigPath, firstPrompt: null });
@@ -282,7 +289,7 @@ describe('a conversa: cópia dos hooks, política no run dir e nada por ferramen
     const sid = randomUUID();
     const sessionDir = path.join(home, 'run', sid);
     await fs.mkdir(sessionDir, { recursive: true });
-    await fs.writeFile(path.join(sessionDir, 'mcp-write.json'), '{"velho":{"policy":"deny","readOnly":[]}}');
+    await fs.writeFile(path.join(sessionDir, 'mcp-write.json'), '{"velho":{"policy":"readonly","readOnly":[]}}');
     const r = await prepareRun(profile(), ctx(), sid, project());
     const settings = JSON.parse(await fs.readFile(r.settingsFile, 'utf8')) as { hooks: { PreToolUse: Array<{ matcher: string }> } };
     expect(settings.hooks.PreToolUse.some((h) => h.matcher === MCP_TOOLS_MATCHER)).toBe(false);

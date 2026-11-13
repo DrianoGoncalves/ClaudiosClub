@@ -7,7 +7,8 @@ import { PERSONALITIES } from '../../shared/personality';
 import { codexModelOrNull, codexProfileError } from '../chat/codexArgs';
 import { findSecret } from '../chat/secrets';
 import { LIBRARY_DIR, librarySkillsOf } from '../skillLibrary';
-import { AUTONOMY, McpPolicySchema, StaffError, type StaffInputParsed } from './store';
+import { AUTONOMY, McpAccessSchema, McpPolicySchema, StaffError, type StaffInputParsed } from './store';
+import { mcpAccessOfInput } from './mcpAccess';
 
 // Equipe em arquivo: as fichas escolhidas e as skills da biblioteca que elas usam, num JSON só.
 //
@@ -69,7 +70,9 @@ const StaffFile = z.object({
   skills: list(500, 100),
   // Só os nomes; `null` = todos os MCPs configurados (vale como veio).
   mcps: z.array(text(100).min(1, 'MCP vazio')).max(100).nullable().default(null),
-  // Mesmo schema da ficha (store.ts): a política de MCP não é segredo, e sem ela a ficha importada ficaria mais permissiva.
+  // Mesmo schema da ficha (store.ts): o acesso aos MCPs não é segredo, e sem ele a ficha importada ficaria mais permissiva.
+  // `mcpPolicy` é o formato antigo (arquivos exportados antes): entra pela mesma leitura (mcpAccessOfInput).
+  mcpAccess: McpAccessSchema.optional(),
   mcpPolicy: McpPolicySchema.optional(),
   reportsTo: z.array(z.string().regex(REF, 'gestor inválido')).max(10).default([]),
   routines: z.array(RoutineFile).max(10, 'no máximo 10 rotinas por funcionário').default([]),
@@ -163,7 +166,7 @@ export async function buildTeamExport(staff: StaffProfile[], opts: { libraryDir?
       agents: [...p.agents],
       skills: [...p.skills],
       mcps: p.mcps === null ? null : [...p.mcps],
-      ...(p.mcpPolicy && { mcpPolicy: { ...p.mcpPolicy } }),
+      ...(p.mcpAccess && { mcpAccess: { ...p.mcpAccess } }),
       // Gestor fora do conjunto exportado não tem ref: o vínculo sai.
       reportsTo: p.reportsTo.flatMap((id) => refOf.get(id) ?? []),
       routines,
@@ -298,6 +301,8 @@ export async function planTeamImport(raw: unknown, ctx: { libraryDir?: string; l
     }
     for (const m of s.mcps ?? []) if (!mcpsHere.has(m)) warnings.push(`${s.name}: MCP ${m} não existe neste projeto; ficou de fora`);
     if (s.routines.length) warnings.push(`${s.name}: ${s.routines.length} rotina(s) entraram desligadas; ligue na ficha se quiser`);
+    // Acesso aos MCPs: o do arquivo (ou o legado, de antes) pela mesma leitura da ficha; o que sobrar é o que entra.
+    const access = mcpAccessOfInput(s);
     return {
       ref,
       input: {
@@ -309,7 +314,7 @@ export async function planTeamImport(raw: unknown, ctx: { libraryDir?: string; l
         agents: s.agents,
         skills: s.skills,
         mcps: s.mcps === null ? null : s.mcps.filter((m) => mcpsHere.has(m)),
-        ...(s.mcpPolicy && { mcpPolicy: s.mcpPolicy }),
+        ...(access && { mcpAccess: access }),
         // Sem conhecimento, servidores, navegador nem contratação: o que é deste projeto e da máquina não vem no arquivo.
         knowledge: [],
         rules: s.rules,

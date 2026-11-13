@@ -713,7 +713,9 @@ describe('mesma pessoa entre projetos', () => {
   it('o que é da pessoa e o que é do projeto: cada campo do pedido em exatamente uma lista', () => {
     const listas = [...PERSON_FIELDS, PERSON_PORTRAIT, ...ALLOCATION_FIELDS, ...REQUEST_FIELDS];
     expect(new Set(listas).size).toBe(listas.length);
-    expect([...listas].sort()).toEqual(Object.keys(StaffInputSchema.shape).sort());
+    // `mcpPolicy` e `mcpWrite` são só da entrada da tela antiga: viram `mcpAccess` (ver mcpAccessOfInput) e não são campo da pessoa nem do projeto.
+    const legados = ['mcpPolicy', 'mcpWrite'];
+    expect([...listas].sort()).toEqual(Object.keys(StaffInputSchema.shape).filter((k) => !legados.includes(k)).sort());
   });
 
   it('as rotas novas não entram na lista de funcionário (só navegador)', () => {
