@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pacePerDay, paceLevel, usageLevel } from '../client/src/toolbar/Toolbar';
+import { paceLevel, usageLevel, weekPace } from '../client/src/toolbar/Toolbar';
 
 // Semáforo das barras de consumo do header: verde <70%, amarelo <90%, vermelho dali em diante.
 
@@ -21,42 +21,59 @@ describe('usageLevel', () => {
   });
 });
 
-// Listra da barra de 7d: o que ainda resta da cota por dia que falta para o reset.
+// Listra da barra de 7d: o que ainda resta da cota por dia que falta para o reset (nas últimas 24h, o total até reiniciar).
 
 const DAY = 86_400_000;
+const HOUR = 3_600_000;
 
-describe('pacePerDay', () => {
-  it('divide o que resta pelos dias que faltam', () => {
-    expect(pacePerDay(10, 6 * DAY)).toBeCloseTo(15);
-    expect(pacePerDay(50, 4 * DAY)).toBeCloseTo(12.5);
-    expect(pacePerDay(0, 7 * DAY)).toBeCloseTo(100 / 7);
+describe('weekPace', () => {
+  it('divide o que resta pelos dias que faltam, com uma casa decimal', () => {
+    expect(weekPace(10, 6 * DAY)).toEqual({ value: 15, perDay: true, level: 'slack' });
+    expect(weekPace(50, 4 * DAY)).toEqual({ value: 12.5, perDay: true, level: 'even' });
+    expect(weekPace(0, 7 * DAY)).toEqual({ value: 14.3, perDay: true, level: 'slack' });
   });
 
-  it('no último dia vale o que resta, sem estourar', () => {
-    expect(pacePerDay(76, DAY / 8)).toBeCloseTo(24);
-    expect(pacePerDay(80, DAY / 2)).toBeCloseTo(20);
-    expect(pacePerDay(76, DAY)).toBeCloseTo(24);
+  it('a cor sai do mesmo número da tela: 14,2 e 13,96 não ficam com cores diferentes sob o mesmo "14"', () => {
+    // 3% usado com 6d19h: 14,25 → 14,3 (no ritmo exato, verde)
+    expect(weekPace(3, 6 * DAY + 19 * HOUR)).toMatchObject({ value: 14.3, level: 'slack' });
+    // 4% usado: 14,1 (amarela)
+    expect(weekPace(4, 6 * DAY + 19 * HOUR)).toMatchObject({ value: 14.1, level: 'even' });
+    // 5% usado: 13,96 → 14,0 (amarela)
+    expect(weekPace(5, 6 * DAY + 19 * HOUR)).toMatchObject({ value: 14, level: 'even' });
+  });
+
+  it('nas últimas 24h mostra o total até reiniciar, e a cor vem do ritmo real', () => {
+    // 76% usado e 3h: restam 24% até reiniciar (192%/dia: verde)
+    expect(weekPace(76, 3 * HOUR)).toEqual({ value: 24, perDay: false, level: 'slack' });
+    // 94% usado e 12h: restam 6%, ritmo real 12%/dia (amarela, não vermelha)
+    expect(weekPace(94, 12 * HOUR)).toEqual({ value: 6, perDay: false, level: 'even' });
+    // 99% usado e 12h: 2%/dia (vermelha)
+    expect(weekPace(99, 12 * HOUR)).toEqual({ value: 1, perDay: false, level: 'tight' });
+  });
+
+  it('com exatamente 1 dia ainda é por dia', () => {
+    expect(weekPace(76, DAY)).toEqual({ value: 24, perDay: true, level: 'slack' });
+  });
+
+  it('cota estourada não dá ritmo negativo', () => {
+    expect(weekPace(100, 2 * DAY)).toEqual({ value: 0, perDay: true, level: 'tight' });
   });
 });
 
 describe('paceLevel', () => {
-  it('branca acima de 14%/dia (sobra)', () => {
-    expect(paceLevel(14.1)).toBe('slack');
+  it('verde do ritmo exato (14,3%/dia) para cima', () => {
+    expect(paceLevel(14.3)).toBe('slack');
     expect(paceLevel(40)).toBe('slack');
   });
 
-  it('cinza de 7 a 14%/dia, limites incluídos', () => {
-    expect(paceLevel(14)).toBe('even');
+  it('amarela de 7 até abaixo do ritmo exato', () => {
+    expect(paceLevel(14.2)).toBe('even');
     expect(paceLevel(10)).toBe('even');
     expect(paceLevel(7)).toBe('even');
   });
 
-  it('preta abaixo de 7%/dia (apertado)', () => {
+  it('vermelha abaixo de 7%/dia', () => {
     expect(paceLevel(6.9)).toBe('tight');
     expect(paceLevel(0)).toBe('tight');
-  });
-
-  it('semana nova sem uso já está na faixa branca', () => {
-    expect(paceLevel(pacePerDay(0, 7 * DAY))).toBe('slack');
   });
 });
