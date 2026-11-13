@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import type { StaffProfile } from '../../shared/model';
+import type { McpWritePolicy, StaffProfile } from '../../shared/model';
 import { cronError } from '../../shared/cron';
 import { PERSONALITIES } from '../../shared/personality';
 import { listDir, tryJson } from '../adapters/claude/fsutil';
@@ -156,12 +156,25 @@ export const RoutineSchema = z.object({
 });
 export const RoutinesSchema = z.array(RoutineSchema).max(10, 'no máximo 10 rotinas por funcionário');
 
+/**
+ * A política de escrita como está no arquivo (lida sem recusar, e nunca mais fraca por erro de digitação): valor que não é `deny` vira
+ * `ask` (um `denny` à mão pede antes, não libera); chave inválida (nome reservado ou fora de 1 a 100 letras) sai. A escrita segue
+ * recusando o que não é `ask` nem `deny` (StaffInputObject).
+ */
+function readMcpWrite(v: unknown): Record<string, McpWritePolicy> | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const entries = Object.entries(v)
+    .filter(([k]) => !RESERVED_KEYS.has(k) && k.length >= 1 && k.length <= 100)
+    .map(([k, mode]): [string, McpWritePolicy] => [k, mode === 'deny' ? 'deny' : 'ask']);
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
 const ProfileSchema = StaffInputObject.omit({ portraitDataUrl: true, launch: true, adoptSessionId: true, force: true, roleId: true }).extend({
   id: z.string(),
   projectId: z.string(),
   portrait: z.string().nullable(),
-  // Política de escrita editada à mão e inválida: o campo some na leitura (a ficha segue) em vez de derrubar a ficha. A escrita continua exigindo o formato (StaffInputSchema).
-  mcpWrite: StaffInputObject.shape.mcpWrite.catch(undefined),
+  // `optional()` antes do transform: no zod 4 sem ele a chave vira obrigatória e a ficha sem `mcpWrite` deixa de abrir.
+  mcpWrite: z.unknown().optional().transform(readMcpWrite),
   // Ligação entre cópias da mesma pessoa; valor inválido é ignorado (ficha sem vínculo).
   personId: z.string().regex(/^[A-Za-z0-9-]{1,60}$/).optional().catch(undefined),
   // Valor inválido no arquivo: volta ao padrão (claude) em vez de derrubar a ficha.

@@ -716,8 +716,6 @@ export interface ClaudeArgsOptions {
   strictMcp?: boolean;
   /** Plugin da sessão com as skills da biblioteca que a ficha tem (ver server/skillLibrary.ts). */
   pluginDir?: string | null;
-  /** Ferramentas de MCP bloqueadas pela política de escrita da ficha (`mcpWrite: deny`, ver mcpTools.ts): entram no `--disallowedTools`. */
-  mcpDeny?: string[];
 }
 
 /**
@@ -750,7 +748,7 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   if (p.browser && AUTONOMY_ORDER.indexOf(p.autonomy) >= AUTONOMY_ORDER.indexOf('acceptEdits')) args.push('--allowedTools', 'mcp__claude-in-chrome');
   // Com a internet desligada (Configurações), a busca na web do Claude também sai: a ferramenta é recusada antes de rodar.
   const web = o.internetAccess === false ? ['WebSearch', 'WebFetch'] : [];
-  args.push('--disallowedTools', [...secretDenyRules(p, o.keyFiles, o.ftpServers, o.manualEditable === true), ...web, ...(o.mcpDeny ?? [])].join(','));
+  args.push('--disallowedTools', [...secretDenyRules(p, o.keyFiles, o.ftpServers, o.manualEditable === true), ...web].join(','));
   if (o.mcpConfigPath) args.push('--mcp-config', o.mcpConfigPath, ...(o.strictMcp === false ? [] : ['--strict-mcp-config']));
   return args;
 }

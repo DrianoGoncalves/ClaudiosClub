@@ -759,7 +759,7 @@ export interface StaffProfile {
   mcps: string[] | null;
   /**
    * Escrita por MCP (nome → política), só no motor Claude: as ferramentas sem `readOnlyHint` pedem antes (`ask`) ou ficam
-   * bloqueadas (`deny`), em qualquer autonomia. Ausente (ou o MCP fora do mapa) = livre, como antes.
+   * bloqueadas (`deny`), em qualquer autonomia (no "sem travas", o pedido vira bloqueio). Ausente (ou o MCP fora do mapa) = livre, como antes.
    */
   mcpWrite?: Record<string, McpWritePolicy>;
   /** Arquivos e pastas para ler antes de começar. */
