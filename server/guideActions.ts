@@ -27,7 +27,7 @@ export type GuideAction = (typeof GUIDE_ACTIONS)[number];
  */
 export const GuideRunBody = z
   .object({
-    action: z.enum(GUIDE_ACTIONS, { errorMap: () => ({ message: 'ação inválida (test, drift, draft ou showcase)' }) }),
+    action: z.enum(GUIDE_ACTIONS, { error: 'ação inválida (test, drift, draft ou showcase)' }),
     staffId: z.string().trim().max(40).optional(),
   })
   .superRefine((b, ctx) => {

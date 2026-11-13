@@ -25,11 +25,11 @@ export const CLUB_MCP_FILE = path.join(MYCO_HOME, 'mcps.json');
 
 export class McpError extends Error {}
 
-const Servers = z.record(z.object({ type: z.string().optional(), command: z.string().optional(), url: z.string().optional() }).passthrough());
+const Servers = z.record(z.string(), z.object({ type: z.string().optional(), command: z.string().optional(), url: z.string().optional() }).passthrough());
 const McpJson = z.object({ mcpServers: Servers.optional() });
 const ClaudeJson = z.object({
   mcpServers: Servers.optional(),
-  projects: z.record(z.object({ mcpServers: Servers.optional() }).passthrough()).optional(),
+  projects: z.record(z.string(), z.object({ mcpServers: Servers.optional() }).passthrough()).optional(),
 });
 
 /** Entrada da biblioteca. Env e cabeçalhos guardam só os nomes: os valores estão no cofre (clubSecretId). */
@@ -42,7 +42,7 @@ export const ClubEntry = z.object({
   headers: z.array(z.string()).optional(),
 });
 export type ClubEntry = z.infer<typeof ClubEntry>;
-const ClubJson = z.object({ servers: z.record(ClubEntry).optional() }).passthrough();
+const ClubJson = z.object({ servers: z.record(z.string(), ClubEntry).optional() }).passthrough();
 
 type ServerConfig = z.infer<typeof Servers>[string];
 

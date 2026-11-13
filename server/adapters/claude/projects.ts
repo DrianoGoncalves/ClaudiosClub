@@ -8,7 +8,7 @@ import { encodeProjectDir, isInside, pathKey, worktreeParent, type ClaudeLocatio
 import { readTranscriptCwd } from './sessions';
 
 // De ~/.claude.json só interessa a lista de projetos; o resto (inclusive `oauthAccount`) é descartado aqui.
-const ConfigFile = z.object({ projects: z.record(z.unknown()).optional() });
+const ConfigFile = z.object({ projects: z.record(z.string(), z.unknown()).optional() });
 
 export interface ProjectRef {
   /** Pasta em ~/.claude/projects (pode ainda não existir). */

@@ -130,7 +130,7 @@ function byQuestion<V extends z.ZodTypeAny>(value: V) {
     .unknown()
     .refine((v) => v !== null && typeof v === 'object' && !Array.isArray(v), 'esperado um objeto')
     .transform((v) => Object.entries(v as object))
-    .pipe(z.array(z.tuple([z.string().max(1_000), value])))
+    .pipe(z.array(z.tuple([z.string().max(1_000), value]) as z.ZodType<[string, z.output<V>], [string, z.input<V>]>))
     .transform((pairs) => Object.fromEntries(pairs));
 }
 

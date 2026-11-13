@@ -38,7 +38,7 @@ const Value = z
   .refine((v) => !/[\r\n\0]/.test(v), 'valor com quebra de linha');
 const EnvKey = z.string().regex(ENV_KEY, 'nome de variável inválido (letras, números e _)').refine(notReserved, 'nome reservado');
 const HeaderKey = z.string().regex(HEADER_KEY, 'nome de cabeçalho inválido (letras, números e -)').refine(notReserved, 'nome reservado');
-const Scope = z.enum(['club', 'user', 'project', 'local'], { errorMap: () => ({ message: 'escopo: club, user, project ou local' }) });
+const Scope = z.enum(['club', 'user', 'project', 'local'], { error: 'escopo: club, user, project ou local' });
 const ProjectId = z.string().regex(PROJECT_ID, 'projeto inválido').optional();
 
 const SaveInput = z.object({
@@ -47,7 +47,7 @@ const SaveInput = z.object({
   /** O nome atual, para editar (e renomear); ausente = MCP novo. */
   originalName: Name.optional(),
   name: Name,
-  type: z.enum(['http', 'sse', 'stdio'], { errorMap: () => ({ message: 'tipo: http, sse ou stdio' }) }),
+  type: z.enum(['http', 'sse', 'stdio'], { error: 'tipo: http, sse ou stdio' }),
   url: z.string().trim().max(2048, 'URL grande demais').optional(),
   command: z.string().trim().max(500, 'comando grande demais').optional(),
   args: z.array(z.string().max(2000)).max(100, 'argumentos demais (até 100)').optional(),
@@ -83,9 +83,15 @@ const strRecord = (v: unknown): Record<string, string> =>
 const has = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 const exists = (p: string) => fs.stat(p).then(() => true, () => false);
 
+/** zod 4 embrulha o erro de chave de record em "Invalid key in record": a mensagem da chave fica dentro dele. */
+function firstMessage(issue: z.ZodError['issues'][number] | undefined): string | undefined {
+  if (issue?.code === 'invalid_key' && issue.issues[0]) return issue.issues[0].message;
+  return issue?.message;
+}
+
 function parseInput<S extends z.ZodTypeAny>(schema: S, body: unknown): z.output<S> {
   const r = schema.safeParse(body ?? {});
-  if (!r.success) throw new McpError(r.error.issues[0]?.message ?? 'dados inválidos');
+  if (!r.success) throw new McpError(firstMessage(r.error.issues[0]) ?? 'dados inválidos');
   return r.data;
 }
 

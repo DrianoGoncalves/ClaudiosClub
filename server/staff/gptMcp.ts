@@ -207,11 +207,11 @@ export const spawnCodex: GptRunner = (args, input, o) =>
 // ---- a pergunta ----
 
 const Ask = z.object({
-  pergunta: z.string({ required_error: 'informe a pergunta' }).trim().min(1, 'informe a pergunta').max(MAX_QUESTION, `pergunta grande demais (máx. ${MAX_QUESTION} caracteres)`),
+  pergunta: z.string({ error: (iss) => (iss.input === undefined ? 'informe a pergunta' : undefined) }).trim().min(1, 'informe a pergunta').max(MAX_QUESTION, `pergunta grande demais (máx. ${MAX_QUESTION} caracteres)`),
   /** A preferência ou conclusão do chamador: o GPT a ataca, não a toma como fato. */
   hipotese: z.string().trim().max(MAX_QUESTION, `hipótese grande demais (máx. ${MAX_QUESTION} caracteres)`).optional(),
   contexto: z.string().trim().max(MAX_CONTEXT, `contexto grande demais (máx. ${MAX_CONTEXT} caracteres)`).optional(),
-  esforco: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.enum(EFFORTS, { errorMap: () => ({ message: `esforço: ${EFFORTS.join(', ')}` }) }).optional()),
+  esforco: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.enum(EFFORTS, { error: `esforço: ${EFFORTS.join(', ')}` }).optional()),
 });
 type AskInput = z.infer<typeof Ask>;
 

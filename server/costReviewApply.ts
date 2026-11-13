@@ -24,7 +24,7 @@ export const CostReviewApplyBody = z.object({
     .max(APPLY_MAX_IDS, `no máximo ${APPLY_MAX_IDS} achados`)
     .refine((ids) => new Set(ids).size === ids.length, 'achado repetido'),
   days: z
-    .number({ invalid_type_error: 'days deve ser um número' })
+    .number({ error: (iss) => (iss.input === undefined ? undefined : 'days deve ser um número') })
     .int('days deve ser um inteiro')
     .min(1, 'days deve ser de 1 a 3650')
     .max(COST_REVIEW_MAX_DAYS, 'days deve ser de 1 a 3650'),
