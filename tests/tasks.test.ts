@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { StaffProfile } from '../shared/model';
+import type { StaffProfile, TurnCapHit } from '../shared/model';
 import { ChatClosingError, ChatManager, PLAN_REJECTED_MESSAGE } from '../server/chat/manager';
 import { parseVerdict, TaskConflictError, TaskForbiddenError, TaskService } from '../server/tasks';
 import type { Reservation } from '../server/resourceGate';
@@ -527,7 +527,12 @@ describe('fila por funcionário', () => {
 
 describe('conversa da tarefa que morreu no meio do turno', () => {
   /** Ana com A fazendo (s-1) e B na fila. `working`: o que o ChatManager sabe; tirar dali sem onIdle = o processo morreu. */
-  async function orphaned(dirName: string, awaitingLimit?: () => Promise<boolean>, closing?: { on: boolean }) {
+  async function orphaned(
+    dirName: string,
+    awaitingLimit?: () => Promise<boolean>,
+    closing?: { on: boolean },
+    restartCut?: (projectId: string, sessionId: string) => Promise<TurnCapHit | null>,
+  ) {
     const dir = path.join(root, dirName);
     const sent: string[] = [];
     const delivered: Array<{ sessionId: string; text: string }> = [];
@@ -553,6 +558,7 @@ describe('conversa da tarefa que morreu no meio do turno', () => {
         return sessionId;
       },
       ...(awaitingLimit && { awaitingLimit }),
+      ...(restartCut && { restartCut }),
     });
     const a = (await svc.create('p', { title: 'A', staffId: 'ana-1' }))!;
     const b = (await svc.create('p', { title: 'B', staffId: 'ana-1' }))!;
@@ -562,6 +568,29 @@ describe('conversa da tarefa que morreu no meio do turno', () => {
     const task = async (id: string) => (await svc.list('p'))!.find((t) => t.id === id)!;
     return { svc, sent, delivered, working, a, b, later, task };
   }
+
+  it('cortada numa ação com efeito fora do projeto: não retoma sozinha, vai para Aguardar com o motivo', async () => {
+    const asked: string[] = [];
+    const cut = async (_p: string, sid: string): Promise<TurnCapHit | null> => (asked.push(sid), { kind: 'restart', action: 'git push origin main' });
+    const { svc, delivered, working, a, later, task } = await orphaned('orfa-corte', undefined, undefined, cut);
+    working.delete('s-1');
+    await svc.tick(later(3));
+    expect(asked).toEqual(['s-1']);
+    expect(delivered).toEqual([]);
+    const t = await task(a.id);
+    expect(t).toMatchObject({ status: 'waiting', waitReason: expect.stringContaining('git push origin main') });
+    await svc.tick(later(6)); // já em Aguardar: nada de novo
+    expect(delivered).toEqual([]);
+  });
+
+  it('conferir o corte falhou: retoma como sempre', async () => {
+    const { svc, delivered, working, later } = await orphaned('orfa-corte-erro', undefined, undefined, async () => {
+      throw new Error('sem transcript');
+    });
+    working.delete('s-1');
+    await svc.tick(later(3));
+    expect(delivered).toEqual([{ sessionId: 's-1', text: expect.stringContaining('confira se a última ação terminou') }]);
+  });
 
   it('parada sem onIdle: retoma a conversa uma vez, e segue em fazendo', async () => {
     const { svc, delivered, working, a, later, task } = await orphaned('orfa-1');

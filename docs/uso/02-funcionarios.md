@@ -116,6 +116,7 @@ Salve com **Salvar ficha** (ou **Contratar**, ao criar). **Cancelar** fecha; no 
 - Em **Configurações** → **MCPs** (**Servidores MCP**), há quatro escopos: **Da conta (Club)** (recomendado: segredos no cofre do sistema, e só quem tem o MCP na ficha carrega), **Da conta (Claude Code)** (todas as sessões do Claude Code veem), **Do projeto** (vai para o git: não ponha chave ali) e **Locais do projeto** (só neste computador).
 - Tipos: **HTTP**, **SSE** e **Comando local**. Valores de variáveis e cabeçalhos nunca voltam para a tela; aparece "definido".
 - Botões: **+ MCP**, **Testar**, **Editar**, **Excluir**.
+- Na ficha, cada MCP marcado tem **Escrita**: **livre** (como sempre), **pede antes** (as ferramentas que escrevem pedem sua aprovação, em qualquer autonomia) ou **bloqueada**. Quem só lê é o que o próprio MCP declara no **Testar**; sem teste, ou se o MCP mudou depois dele, a regra vale para todas as ferramentas dele. Só no motor Claude.
 
 ## Skills e agents
 

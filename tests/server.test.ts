@@ -78,6 +78,7 @@ describe('config', () => {
       codexModel: '',
       internetAccess: true,
       codexBrowser: false,
+      clubGuard: true,
       ...colors,
     });
 
@@ -98,6 +99,7 @@ describe('config', () => {
       codexModel: '',
       internetAccess: true,
       codexBrowser: false,
+      clubGuard: true,
       ...colors,
     });
     expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ futuro: 1, companyName: 'Acme Labs' });

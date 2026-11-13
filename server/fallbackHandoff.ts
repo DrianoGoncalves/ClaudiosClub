@@ -3,7 +3,7 @@ import type { ChatItem, Engine } from '../shared/model';
 import { cleanEnv } from './auth';
 import { CONTINUE_TEXT } from './chat/autoContinue';
 import { MAX_ITEMS } from './chat/history';
-import { isInjectedUserText, RESTART_PENDING_TEXT, RESTART_TEXT, RESUME_TEXT, stripCheckpoint } from './chat/items';
+import { isInjectedUserText, RESTART_PENDING_TEXT, RESTART_TEXT, RESUME_TEXT, RESUME_TEXT_V1, stripCheckpoint } from './chat/items';
 import { PLAN_REJECTED_MESSAGE } from './chat/manager';
 import { clockText } from './chat/usageLimit';
 
@@ -257,7 +257,7 @@ export interface OldConversation {
 }
 
 /** Textos que o próprio Claudio’s Club manda como se fossem do dono (o "continue", a retomada, a recusa de plano). */
-const CLUB_TEXTS = new Set<string>([CONTINUE_TEXT, RESUME_TEXT, RESTART_TEXT, RESTART_PENDING_TEXT, PLAN_REJECTED_MESSAGE]);
+const CLUB_TEXTS = new Set<string>([CONTINUE_TEXT, RESUME_TEXT, RESUME_TEXT_V1, RESTART_TEXT, RESTART_PENDING_TEXT, PLAN_REJECTED_MESSAGE]);
 
 /** Tira os avisos do Claudio’s Club (parágrafos que começam com `[MyCo]`, a marca de ponto de corte), os textos dele e o que o Claude Code injeta. */
 function withoutPlatformNotes(text: string): string {

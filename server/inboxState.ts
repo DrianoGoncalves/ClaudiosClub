@@ -41,6 +41,8 @@ export class InboxState {
       for (const [sid, c] of Object.entries(caps)) {
         if (c && (c.kind === 'tools' || c.kind === 'minutes') && typeof c.limit === 'number' && typeof c.at === 'string') {
           this.data.caps[sid] = { kind: c.kind, limit: c.limit, at: c.at };
+        } else if (c && c.kind === 'restart' && typeof c.action === 'string' && typeof c.at === 'string') {
+          this.data.caps[sid] = { kind: 'restart', action: c.action, at: c.at };
         }
       }
     } catch {
@@ -75,7 +77,8 @@ export class InboxState {
   /** O motivo do teto desta conversa (se o turno dela parou no teto e ninguém mandou mensagem depois). */
   turnCapOf(sessionId: string): TurnCapHit | null {
     const c = this.data.caps[sessionId];
-    return c ? { kind: c.kind, limit: c.limit } : null;
+    if (!c) return null;
+    return c.kind === 'restart' ? { kind: 'restart', action: c.action } : { kind: c.kind, limit: c.limit };
   }
 
   isMuted(id: string): boolean {

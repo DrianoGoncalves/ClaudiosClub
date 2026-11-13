@@ -75,12 +75,17 @@ export const STAFF_NOTICE = '[MyCo] Mensagem de outro funcionário.';
 
 /** Mensagem que o Claudio’s Club manda quando a conversa de tarefa parou no meio (o servidor reiniciou). Não é do dono. */
 export const RESUME_TEXT =
+  'A conversa parou no meio (o Claudio’s Club reiniciou). Antes de seguir, confira se a última ação terminou (o arquivo, o comando, o resultado) e não repita o que já aconteceu. ' +
+  'Continue de onde parou e, ao terminar, responda com um resumo curto do que foi feito e do que falta.';
+
+/** O texto de antes da 1.2.0: as conversas antigas ainda o têm (o handoff o reconhece como do Club). */
+export const RESUME_TEXT_V1 =
   'A conversa parou no meio (o Claudio’s Club reiniciou). Continue de onde parou e, ao terminar, responda com um resumo curto do que foi feito e do que falta.';
 
 /** Começo das mensagens que o Claudio’s Club manda na conversa retomada depois do reinício (ver server/chat/resume.ts). Não é do dono. */
 export const RESTART_PREFIX = '[MyCo] O Claudio’s Club reiniciou no meio do seu turno';
 /** Retomada sem pedido pendente. */
-export const RESTART_TEXT = `${RESTART_PREFIX}. Continue de onde parou.`;
+export const RESTART_TEXT = `${RESTART_PREFIX}. Confira se a última ação terminou e não repita o que já aconteceu; depois, continue de onde parou.`;
 /** Retomada com um pedido de permissão ou pergunta sem resposta: refaz o pedido. */
 export const RESTART_PENDING_TEXT = `${RESTART_PREFIX}, quando havia um pedido de permissão ou uma pergunta pendente. Refaça o pedido e espere a resposta antes de seguir.`;
 

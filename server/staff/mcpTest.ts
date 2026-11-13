@@ -10,7 +10,15 @@ import { createInterface } from 'node:readline';
 export interface McpTestResult {
   ok: boolean;
   tools: string[];
+  /** As de `tools` que declaram `annotations.readOnlyHint: true` (o próprio servidor diz que só leem). */
+  readOnly: string[];
   error?: string;
+}
+
+/** Uma ferramenta da lista: o nome e se o servidor a marca como só leitura. */
+interface ListedTool {
+  name: string;
+  readOnly: boolean;
 }
 
 export interface McpTestOptions {
@@ -56,10 +64,10 @@ export async function testMcpConfig(cfg: Obj, o: McpTestOptions = {}): Promise<M
     return ms;
   };
   try {
-    const tools = cfg.type === 'stdio' ? await testStdio(cfg, o, left, budget) : cfg.type === 'http' || cfg.type === 'sse' ? await testHttp(cfg, o, left) : fail('tipo de servidor desconhecido');
-    return { ok: true, tools };
+    const listed = cfg.type === 'stdio' ? await testStdio(cfg, o, left, budget) : cfg.type === 'http' || cfg.type === 'sse' ? await testHttp(cfg, o, left) : fail('tipo de servidor desconhecido');
+    return { ok: true, tools: listed.map((t) => t.name), readOnly: listed.filter((t) => t.readOnly).map((t) => t.name) };
   } catch (err) {
-    return { ok: false, tools: [], error: messageOf(err) };
+    return { ok: false, tools: [], readOnly: [], error: messageOf(err) };
   }
 }
 
@@ -76,8 +84,14 @@ function messageOf(err: unknown): string {
   return 'falha inesperada no teste';
 }
 
-const names = (tools: unknown): string[] =>
-  Array.isArray(tools) ? tools.map((t) => (isObj(t) ? str(t.name) : undefined)).filter((n): n is string => !!n) : [];
+/** Só `readOnlyHint === true` conta como leitura: sem a marcação (ou com outro valor), é escrita. */
+const listed = (tools: unknown): ListedTool[] =>
+  Array.isArray(tools)
+    ? tools.flatMap((t) => {
+        const name = isObj(t) ? str(t.name) : undefined;
+        return name ? [{ name, readOnly: isObj(t) && isObj(t.annotations) && t.annotations.readOnlyHint === true }] : [];
+      })
+    : [];
 
 const rpc = (method: string, id?: number, params?: Obj) => ({ jsonrpc: '2.0', ...(id !== undefined && { id }), method, ...(params && { params }) });
 const initMsg = () => rpc('initialize', 1, { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: 'Claudio’s Club', version: '1.0.0' } });
@@ -102,7 +116,7 @@ async function withRetry<T>(fn: () => Promise<T>, o: McpTestOptions, left: () =>
   }
 }
 
-async function testHttp(cfg: Obj, o: McpTestOptions, left: () => number): Promise<string[]> {
+async function testHttp(cfg: Obj, o: McpTestOptions, left: () => number): Promise<ListedTool[]> {
   const raw = str(cfg.url);
   if (!raw) fail('informe a URL');
   const url = expandVars(raw);
@@ -145,14 +159,14 @@ async function testHttp(cfg: Obj, o: McpTestOptions, left: () => number): Promis
   const protocol = str(initResult.protocolVersion);
   await drain(await call(rpc('notifications/initialized'), session, protocol));
 
-  const tools: string[] = [];
+  const tools: ListedTool[] = [];
   let cursor: string | undefined;
   for (let page = 0; page < MAX_PAGES; page++) {
     const id = 2 + page;
     const res = await call(rpc('tools/list', id, cursor ? { cursor } : {}), session, protocol);
     if (!res.ok) bad(res);
     const result = await rpcResult(res, id);
-    tools.push(...names(result.tools));
+    tools.push(...listed(result.tools));
     cursor = str(result.nextCursor);
     if (!cursor) break;
   }
@@ -224,7 +238,7 @@ async function sseMessage(res: Response, id: number): Promise<Obj> {
 
 // ---- stdio ----
 
-function testStdio(cfg: Obj, o: McpTestOptions, left: () => number, budget: number): Promise<string[]> {
+function testStdio(cfg: Obj, o: McpTestOptions, left: () => number, budget: number): Promise<ListedTool[]> {
   const rawCommand = str(cfg.command);
   if (!rawCommand?.trim()) return Promise.reject(new TestFail('informe o comando'));
   let command: string;
@@ -238,7 +252,7 @@ function testStdio(cfg: Obj, o: McpTestOptions, left: () => number, budget: numb
     return Promise.reject(err);
   }
 
-  return new Promise<string[]>((resolve, reject) => {
+  return new Promise<ListedTool[]>((resolve, reject) => {
     let child: ChildProcess;
     try {
       // No Unix vira líder do próprio grupo: o killTree leva junto o que ele abriu (o npx/uvx sobem um processo filho).
@@ -249,7 +263,7 @@ function testStdio(cfg: Obj, o: McpTestOptions, left: () => number, budget: numb
     let done = false;
     let timer: NodeJS.Timeout | undefined;
     let rl: ReturnType<typeof createInterface> | undefined;
-    const finish = (err: TestFail | null, tools: string[] = []) => {
+    const finish = (err: TestFail | null, tools: ListedTool[] = []) => {
       if (done) return;
       done = true;
       if (timer) clearTimeout(timer);
@@ -279,7 +293,7 @@ function testStdio(cfg: Obj, o: McpTestOptions, left: () => number, budget: numb
     child.on('exit', (code) => finish(new TestFail(`o processo saiu (código ${code ?? '?'}) antes de responder`)));
 
     rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
-    const tools: string[] = [];
+    const tools: ListedTool[] = [];
     let page = 2;
     rl.on('line', (line) => {
       let msg: unknown;
@@ -298,7 +312,7 @@ function testStdio(cfg: Obj, o: McpTestOptions, left: () => number, budget: numb
       if (msg.id !== page) return;
       if (isObj(msg.error)) return finish(new TestFail(`o servidor recusou a lista: ${short(msg.error.message)}`));
       const result = isObj(msg.result) ? msg.result : {};
-      tools.push(...names(result.tools));
+      tools.push(...listed(result.tools));
       const cursor = str(result.nextCursor);
       if (cursor && page < MAX_PAGES + 1) {
         page++;

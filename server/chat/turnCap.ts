@@ -85,7 +85,14 @@ export class TurnBudget {
   }
 }
 
-/** O aviso do teto, no chat e na caixa de entrada. */
+/** O aviso do teto (ou do corte pelo reinício), no chat e na caixa de entrada. */
 export function capText(hit: TurnCapHit): string {
+  if (hit.kind === 'restart') return `Não retomada: a conversa parou no meio de "${hit.action}". Confira se aconteceu e mande mensagem para seguir`;
   return `Turno parado: passou de ${hit.limit} ${hit.kind === 'tools' ? 'ferramentas' : 'minutos'} (limite em Configurações)`;
+}
+
+/** O motivo curto, na tarefa que vai para Aguardar. */
+export function capReason(hit: TurnCapHit): string {
+  if (hit.kind === 'restart') return `a conversa parou no meio de "${hit.action}": confira se aconteceu antes de retomar`;
+  return `turno parado: passou de ${hit.limit} ${hit.kind === 'tools' ? 'ferramentas' : 'minutos'}`;
 }

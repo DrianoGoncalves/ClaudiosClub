@@ -7,6 +7,7 @@ import { pathKey } from '../adapters/claude/paths';
 import { deleteSecret, hasSecret, moveSecret, setSecret, VaultError, type VaultOptions } from '../secretVault';
 import { CLUB_MCP_FILE, clubSecretId, isLiteralSecret, McpError, readClub, resolveClub, type ClubEntry } from './mcp';
 import { testMcpConfig, type McpTestResult } from './mcpTest';
+import { MCP_TOOLS_FILE, mcpFingerprint, saveTestedTools, toolsKey } from './mcpTools';
 import { writeAtomic } from './store';
 
 // Biblioteca de MCPs: cadastro e edição nos quatro escopos, inclusive os que já existem fora do Claudio’s Club.
@@ -69,6 +70,8 @@ export interface McpLibraryOptions {
   resolveProject: (projectId: string) => Promise<string | null>;
   /** Cofre (padrão: o do sistema, DPAPI no Windows). */
   vault?: VaultOptions;
+  /** Onde fica a lista de ferramentas do último teste (padrão ~/.myco/mcp-tools.json; ver mcpTools.ts). */
+  toolsFile?: string;
 }
 
 type Obj = Record<string, unknown>;
@@ -552,7 +555,10 @@ export function createMcpLibrary(o: McpLibraryOptions) {
     return { ok: true };
   }
 
-  /** Testa com o config resolvido (segredos incluídos); o erro não traz valor. */
+  /**
+   * Testa com o config resolvido (segredos incluídos); o erro não traz valor. Deu certo: a lista (com o que é só leitura) fica
+   * guardada para a política de escrita das fichas (mcpTools.ts). Falha ao guardar não derruba o teste.
+   */
   async function test(body: unknown, fromBrowser: boolean): Promise<McpTestResult> {
     requireBrowser(fromBrowser);
     const input = parseInput(RefInput, body);
@@ -577,7 +583,15 @@ export function createMcpLibrary(o: McpLibraryOptions) {
       if (!isObj(e)) throw new McpError('MCP não encontrado neste escopo');
       cfg = e;
     }
-    return testMcpConfig(cfg, { cwd: dir ?? undefined });
+    const result = await testMcpConfig(cfg, { cwd: dir ?? undefined });
+    if (result.ok) {
+      const readOnly = new Set(result.readOnly);
+      const tools = result.tools.map((name) => ({ name, readOnly: readOnly.has(name) }));
+      await saveTestedTools(o.toolsFile ?? MCP_TOOLS_FILE, toolsKey(input.scope, dir, input.name), mcpFingerprint(cfg), tools).catch((err: Error) =>
+        console.warn(`[mcp] ${input.name}: não deu para guardar a lista de ferramentas (${err.message})`),
+      );
+    }
+    return result;
   }
 
   return { list, save, remove, test };
