@@ -45,6 +45,7 @@ import { ServerLog } from '../office/ServerLog';
 import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
 import { SkillManage } from './SkillManage';
+import { askConfirm } from '../lib/dialogStore';
 
 // Painel lateral: o que o nó selecionado no quadro tem por trás.
 
@@ -76,7 +77,7 @@ function ArchiveButton({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const click = async () => {
-    if (confirm && !archived && !window.confirm(t('detail.archiveConfirm', { what }))) return;
+    if (confirm && !archived && !(await askConfirm(t('detail.archiveConfirm', { what })))) return;
     setBusy(true);
     setError(null);
     try {

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { LibrarySkill } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
+import { askConfirm } from '../lib/dialogStore';
 
 // Biblioteca de skills da conta: ficam fora do ~/.claude, então nenhuma sessão vê sozinha; só quem
 // tem a skill marcada na ficha (como `myco:<nome>`). Aqui se cria e se edita o SKILL.md; scripts e
@@ -132,7 +133,7 @@ function SkillForm({ name, onClose, onSaved }: { name: string | null; onClose: (
               type="button"
               className="link small"
               onClick={async () => {
-                if (!window.confirm(t('office.libRemoveConfirm', { name }))) return;
+                if (!(await askConfirm(t('office.libRemoveConfirm', { name })))) return;
                 await api.removeLibrarySkill(name).catch((e: Error) => setError(e.message));
                 onSaved();
               }}

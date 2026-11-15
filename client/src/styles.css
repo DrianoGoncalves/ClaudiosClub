@@ -926,6 +926,7 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .usage-warning { width: min(440px, 100%); min-width: 0; box-sizing: border-box; }
 .usage-warning h2 { padding-right: 28px; }
 .usage-warning p { margin: 0; }
+.usage-warning .dialog-text { white-space: pre-line; overflow-wrap: anywhere; }
 .usage-warning-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 @media (max-width: 640px) { .usage-warning-actions { flex-direction: column-reverse; } .usage-warning-actions :is(.btn-primary, .btn-secondary) { min-height: 36px; } }
 .modal h2 { margin: 0; font-family: var(--hand); font-size: 34px; line-height: 1; }

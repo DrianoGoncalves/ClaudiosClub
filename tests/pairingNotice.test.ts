@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { onDialogRequest } from '../client/src/lib/dialogStore';
 import { alertError, api, ApiError, attachmentsApi, FileApiError, filesApi, isPairingError, NEEDS_PAIRING_EVENT, PAIRED_EVENT } from '../client/src/api';
 
 // O aviso de navegador não pareado: cada POST recusado com `needs-pairing` liga o aviso do App, um POST que passa o
@@ -8,19 +9,25 @@ const REFUSED = { error: 'este navegador não está pareado: clique em "Parear e
 const reply = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 let events: string[];
-let alert: ReturnType<typeof vi.fn>;
+let alert: ReturnType<typeof vi.fn<(text: string) => void>>;
+let offDialog: () => void;
 let next: Response;
 
 beforeEach(() => {
   events = [];
   alert = vi.fn();
-  const win = Object.assign(new EventTarget(), { alert });
+  offDialog = onDialogRequest((r) => {
+    alert(r.text);
+    r.resolve(true);
+  });
+  const win = new EventTarget();
   for (const name of [NEEDS_PAIRING_EVENT, PAIRED_EVENT]) win.addEventListener(name, () => events.push(name));
   vi.stubGlobal('window', win);
   vi.stubGlobal('fetch', vi.fn(async () => next));
 });
 
 afterEach(() => {
+  offDialog();
   vi.unstubAllGlobals();
 });
 
@@ -81,7 +88,7 @@ describe('aviso de navegador não pareado', () => {
     expect(events).toHaveLength(3);
   });
 
-  it('alertError não abre alerta na recusa por pareamento', () => {
+  it('alertError não abre o aviso (modal) na recusa por pareamento', () => {
     alertError(new ApiError('', 'needs-pairing', null));
     expect(alert).not.toHaveBeenCalled();
     alertError(new ApiError('falhou', null, null));

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { AnyConnection, AppConfig, ConnectionProtocol, FtpConnection } from '../../../shared/model';
 import { api, isPairingError } from '../api';
 import { t } from '../i18n';
+import { askConfirm } from '../lib/dialogStore';
 
 // No detalhe do projeto: o workspace dele (a aba onde aparece) e as conexões SSH e FTP, que os
 // funcionários usam conforme a ficha de cada um. O Claudio’s Club só guarda o caminho da chave, nunca o conteúdo;
@@ -187,7 +188,7 @@ function Connections({ projectId }: { projectId: string }) {
                   type="button"
                   className="link small"
                   onClick={async () => {
-                    if (!window.confirm(t('office.connRemoveConfirm', { name: c.name }))) return;
+                    if (!(await askConfirm(t('office.connRemoveConfirm', { name: c.name })))) return;
                     await api.removeConnection(projectId, c.name).catch((e: Error) => setError(e.message));
                     await reload();
                   }}

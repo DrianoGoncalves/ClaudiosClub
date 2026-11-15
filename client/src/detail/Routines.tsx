@@ -5,6 +5,7 @@ import { api } from '../api';
 import { pollVisible } from '../usePoll';
 import { formatAgo } from '../format';
 import { t, locale } from '../i18n';
+import { askConfirm } from '../lib/dialogStore';
 
 // Rotinas do funcionário: no horário, o Claudio’s Club manda a mensagem para ele, como se você tivesse digitado.
 // Só rodam com o Claudio’s Club ligado (npm run daily / autostart).
@@ -188,7 +189,7 @@ export function Routines({ projectId, staff, onChanged }: { projectId: string; s
                 <button
                   className="btn-secondary"
                   disabled={busy}
-                  onClick={() => window.confirm(t('detail.deleteRoutineConfirm', { name: r.name })) && void save(list.filter((x) => x.id !== r.id))}
+                  onClick={() => void askConfirm(t('detail.deleteRoutineConfirm', { name: r.name })).then((ok) => { if (ok) void save(list.filter((x) => x.id !== r.id)); })}
                 >
                   {t('detail.deleteRoutine')}
                 </button>

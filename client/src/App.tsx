@@ -62,7 +62,9 @@ import { FilesBoard } from './files/FilesBoard';
 import { SchedulesBoard } from './schedules/SchedulesBoard';
 import { TasksBoard } from './tasks/TasksBoard';
 import { UsageWarnings } from './chat/usageWarning';
+import { DialogHost } from './lib/DialogHost';
 import { UncommittedPanel } from './board/UncommittedPanel';
+import { askConfirm } from './lib/dialogStore';
 
 const ARCHIVED_KEY = 'myco.showArchived';
 const ANIMATIONS_KEY = 'myco.animations';
@@ -213,8 +215,8 @@ export function App() {
     setSelectedId(manageNodeId(projectId, staffId));
   };
   /** Sai do editor do RH (outro projeto, Conversar, voltar à lista): com ficha mexida e não salva, pergunta antes. */
-  const leaveManage = (go: () => void) => {
-    if (sheetDirty.current && !window.confirm(t('hr.discardAsk'))) return;
+  const leaveManage = async (go: () => void) => {
+    if (sheetDirty.current && !(await askConfirm(t('hr.discardAsk')))) return;
     go();
   };
 
@@ -838,6 +840,7 @@ export function App() {
       )}
       <SystemMonitor />
       <UsageWarnings />
+      <DialogHost />
       {needsPairing ? (
         <div className="notice notice-pair" role="alert">
           <strong>{t('toolbar.pairNotice')}</strong>

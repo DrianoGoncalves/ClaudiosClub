@@ -36,6 +36,7 @@ import { clockHM, secondsLeft } from './wakeCountdown';
 const MAX_IMAGES = 4;
 const CHAT_IMAGE_MAX = 1568;
 import { useChat } from './useChat';
+import { askConfirm, showAlert } from '../lib/dialogStore';
 
 interface Props {
   projectId: string;
@@ -248,23 +249,23 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
       .catch((e: Error) => (isPairingError(e) ? null : { canRewind: false, files: [], insertions: 0, deletions: 0, error: e.message }));
     if (!p) return;
     if (!p.canRewind) {
-      window.alert(p.error ? t('chat.rewindNoError', { error: p.error }) : t('chat.rewindNo'));
+      await showAlert(p.error ? t('chat.rewindNoError', { error: p.error }) : t('chat.rewindNo'));
       return;
     }
     if (!p.files.length) {
-      window.alert(t('chat.rewindNoChanges'));
+      await showAlert(t('chat.rewindNoChanges'));
       return;
     }
     const list = p.files.map((f) => `• ${f}`).join('\n');
     if (
-      !window.confirm(
+      !(await askConfirm(
         t('chat.rewindConfirm', {
           files: p.files.length === 1 ? t('chat.filesOne') : t('chat.filesOther', { n: p.files.length }),
           ins: p.insertions,
           del: p.deletions,
           list,
         }),
-      )
+      ))
     )
       return;
     await api.chatRewind(projectId, sid, staffId, uuid, false).catch(alertError);
@@ -291,7 +292,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
         label: t('chat.denialAutonomy', { mode: t('chat.autoBypass') }),
         disabled: hinting,
         // Tira todas as travas desta conversa: só com o ok de quem clicou (a ficha não muda).
-        run: () => window.confirm(t('chat.denialAutonomyConfirm', { mode: t('chat.autoBypass') })) && void hintRun(() => chat.settings({ autonomy: 'bypassPermissions' })),
+        run: () => void askConfirm(t('chat.denialAutonomyConfirm', { mode: t('chat.autoBypass') })).then((ok) => { if (ok) void hintRun(() => chat.settings({ autonomy: 'bypassPermissions' })); }),
       };
     }
     if (hint === 'servers' && activeTab) {
@@ -467,7 +468,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
               {t('chat.bringToMyco')}
             </button>
             {!chat.elsewhere.orphan && chat.elsewhere.entrypoint !== 'claude-desktop' && (chat.elsewhere.status === 'waiting' || chat.elsewhere.status === 'idle') && (
-              <button className="btn-secondary" onClick={() => window.confirm(t('chat.takeOverConfirm')) && void chat.takeOver()}>
+              <button className="btn-secondary" onClick={() => void askConfirm(t('chat.takeOverConfirm')).then((ok) => { if (ok) void chat.takeOver(); })}>
                 {t('chat.takeOver')}
               </button>
             )}

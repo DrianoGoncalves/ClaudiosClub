@@ -21,6 +21,7 @@ import { installCodex } from './codexSetup';
 import { MAX_CHATS_MAX, RAM_GB_MAX, normalizeMaxChats, normalizeRamGb } from './queueGate';
 import { RETENTION_DAYS_MAX, normalizeRetentionDays, previewFor, previewTotal, retentionOrderBroken, skippedProjects } from './retention';
 import { TURN_MINUTES_MAX, TURN_TOOLS_MAX, normalizeTurnMinutes, normalizeTurnTools } from './turnCap';
+import { askConfirm } from '../lib/dialogStore';
 
 // Configurações do Claudio’s Club, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
 // com título, descrição e o controle logo abaixo. Abre pelo botão "config" ou com Ctrl+,.
@@ -1219,10 +1220,10 @@ function RetentionDelete({ deleteAfterDays, enabledAt, onConfig }: { deleteAfter
       setBusy(null);
     }
   };
-  const enable = () => {
+  const enable = async () => {
     if (!ready) return;
     const sum = (c: { count: number; bytes: number }) => `${c.count} (${formatBytes(c.bytes, locale())})`;
-    if (!window.confirm(t('toolbar.retentionConfirm', { days: ready.deleteAfterDays, claude: sum(ready.claude), codex: sum(ready.codex) }))) return;
+    if (!(await askConfirm(t('toolbar.retentionConfirm', { days: ready.deleteAfterDays, claude: sum(ready.claude), codex: sum(ready.codex) })))) return;
     void run('enable', async () => {
       onConfig(await api.retentionEnable());
       setPreview(null);

@@ -17,6 +17,7 @@ import {
   type McpServer,
   type PairDraft,
 } from './mcpForm';
+import { askConfirm } from '../lib/dialogStore';
 
 // Configurações › MCPs: os da conta (cofre do Club e ~/.claude.json) e os do projeto escolhido (.mcp.json e
 // locais). Cadastra e edita também os que nasceram fora do Club. Valores de env/cabeçalho só vão para o servidor.
@@ -57,7 +58,7 @@ export function McpServers({ projects }: { projects: Project[] }) {
   };
 
   const remove = async (s: McpServer) => {
-    if (!window.confirm(t('mcp.removeConfirm', { name: s.name, scope: t(`mcp.scope.${s.scope}`) }))) return;
+    if (!(await askConfirm(t('mcp.removeConfirm', { name: s.name, scope: t(`mcp.scope.${s.scope}`) })))) return;
     setError(null);
     try {
       await api.deleteMcpServer(refOf(s));

@@ -4,6 +4,7 @@ import { api, deleteStaffConfirm, isPairingError, type DirectoryStaff, type Staf
 import { t } from '../i18n';
 import { Face } from './CopyFromCompany';
 import { fieldsThatDiffer, hrGroups, linkTargets, orphansOf, PERSON_FIELD_LABEL, personGroup, sameNameGroups, type HrGroup } from './directory';
+import { askConfirm } from '../lib/dialogStore';
 
 // RH: uma linha por pessoa, com um chip por projeto em que ela tem ficha (fichas com o mesmo personId são a mesma
 // pessoa). Clicar na linha ou num chip abre a edição (o painel do funcionário, no projeto escolhido); daqui também se
@@ -102,20 +103,20 @@ export function HrPanel({ onEdit, profiles, onConfig, onChanged, onNotice }: Pro
       return t('hr.joinDone', { name: j.name, n: new Set(all.map((p) => p.projectId)).size, projects: projectNames(all) });
     });
 
-  const unlink = (p: DirectoryStaff) => {
-    if (!window.confirm(t('hr.unlinkConfirm', { name: p.name, project: p.projectName }))) return;
+  const unlink = async (p: DirectoryStaff) => {
+    if (!(await askConfirm(t('hr.unlinkConfirm', { name: p.name, project: p.projectName })))) return;
     void act(async () => {
       await api.unlinkStaff(refOf(p));
       return t('hr.unlinkDone', { name: p.name, project: p.projectName });
     });
   };
 
-  const remove = (p: DirectoryStaff) => {
+  const remove = async (p: DirectoryStaff) => {
     const orphans = orphansOf(people ?? [], refOf(p));
     const ask = t('hr.deleteConfirm', { name: p.name, project: p.projectName });
-    if (!window.confirm(orphans.length ? `${ask}\n\n${t('hr.deleteOrphans', { names: names(orphans) })}` : ask)) return;
+    if (!(await askConfirm(orphans.length ? `${ask}\n\n${t('hr.deleteOrphans', { names: names(orphans) })}` : ask))) return;
     void act(async () => {
-      const r = await deleteStaffConfirm(p.projectId, p.staffId, (n) => window.confirm(t('hr.deleteOpenTasks', { name: p.name, n })));
+      const r = await deleteStaffConfirm(p.projectId, p.staffId, (n) => askConfirm(t('hr.deleteOpenTasks', { name: p.name, n })));
       if (!r) return null;
       // Quem ficou sem chefe vem do servidor (pode ter mudado desde a lista).
       const left = (people ?? []).filter((x) => x.projectId === p.projectId && r.orphaned.includes(x.staffId));

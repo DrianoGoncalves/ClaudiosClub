@@ -4,6 +4,7 @@ import type { UpdateStatus } from '../../../shared/model';
 import { api } from '../api';
 import { formatAgo, updateVersions } from '../format';
 import { t } from '../i18n';
+import { askConfirm } from '../lib/dialogStore';
 
 // Versões do Claudio’s Club publicadas no GitHub (tags vX.Y.Z): "Nova versão" no topo do quadro quando há uma mais
 // nova que a daqui, e o item "Atualizações" nas configurações. Atualizar avança o código até ela (só fast-forward,
@@ -45,7 +46,7 @@ function UpdateButton({ status }: { status: UpdateStatus }) {
     const warn = daemon && cut.length ? `\n\n${t('toolbar.warnCut', { cut: cut.join(` ${t('toolbar.and')} `) })}` : '';
     // Com o vigia, o servidor reinicia: quem está no meio do turno volta sozinho (ver server/chat/resume.ts).
     const back = daemon && working?.busy ? `\n\n${t('toolbar.resumeAfterRestart')}` : '';
-    if (!window.confirm((daemon ? t('toolbar.askUpdate') : t('toolbar.askUpdateNoDaemon')) + warn + back)) return;
+    if (!(await askConfirm((daemon ? t('toolbar.askUpdate') : t('toolbar.askUpdateNoDaemon')) + warn + back))) return;
     setError(null);
     setState('updating');
     let result: Awaited<ReturnType<typeof api.applyUpdate>>;
