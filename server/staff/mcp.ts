@@ -13,6 +13,7 @@ import { DEFAULT_SECRETS_DIR, getSecret, type VaultOptions } from '../secretVaul
 import { mcpLaunchCommand, quotedCommand } from './mcpLaunch';
 import { MCP_TOOLS_FILE, mcpFingerprint, testedToolsMany, toolsKey, type McpTool } from './mcpTools';
 import { codexMcpAccess, mcpAccessFile, validMcpName, type McpAccessFile, type McpAccessMap } from './mcpAccess';
+import { SSH_MCP_NAME, TOOLS as SSH_TOOLS } from './sshMcp';
 import { writeAtomic } from './store';
 
 // MCPs que vão para a conversa de um funcionário, de quatro origens (da mais específica para a mais geral):
@@ -188,6 +189,8 @@ export async function mcpWriteFileFor(
   const found = await collect(projectPath, claudeConfigFile, o.clubFile ?? CLUB_MCP_FILE);
   // Arquivo ilegível = sem lista de leitura: o hook só deixa passar o que está nela, então errar aqui não libera nada.
   const tools = await toolsOf(found, projectPath, o.toolsFile ?? MCP_TOOLS_FILE).catch(() => new Map<string, McpTool[]>());
+  // O myco-ssh é do Club: a lista de leitura vem do próprio código (a anotação de cada ferramenta), não de um teste; sobrescreve o que vier de fora.
+  tools.set(SSH_MCP_NAME, SSH_TOOLS.map((t) => ({ name: t.name, readOnly: t.annotations.readOnlyHint })));
   return mcpAccessFile(profile.mcpAccess, tools);
 }
 

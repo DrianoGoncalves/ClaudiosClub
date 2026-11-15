@@ -83,19 +83,23 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 
 **Situação:** um site ficou lento ou precisa de uma versão nova no ar.
 
-**Quem contratar:** **DevOps / SRE** (autonomia **Pede tudo**: pede permissão a cada passo).
+**Quem contratar:** **DevOps / SRE** (autonomia **Pede tudo**: pede permissão a cada passo e só lê o servidor).
 
-1. Contrate **DevOps / SRE**. Na ficha, aba **Projeto**, clique em **+ dar acesso a servidores (SSH e FTP)** e marque a conexão. A chave fica no seu computador; a ficha guarda só o nome.
-2. **Tarefas** → **Nova tarefa** → **O que precisa ser feito**: "só diagnosticar, sem mudar nada" → **Quem cuida**: **DevOps / SRE** → **Criar e começar**.
-3. Em **precisa de mim**, aprove cada cartão de **permissão** com **Aprovar**. Evite **Sempre neste projeto** para comandos no servidor.
-4. Para publicar, abra a tarefa em **Pronto** (ou mesclada) → **Pedir deploy** → **Quem faz o deploy**: **DevOps / SRE**.
-5. Siga o checklist: backup, estado antes e depois, runbook. Confirme os passos que não têm volta.
+1. Antes, na VPS, crie um usuário só para a IA, sem root e com as permissões mínimas. No detalhe do projeto, em **Servidores**, cadastre a conexão com esse usuário e a chave dele, e use **Testar**. Chave com senha precisa estar no `ssh-agent`.
+2. Contrate **DevOps / SRE**. Na ficha, aba **Projeto**, clique em **+ dar acesso a servidores (SSH e FTP)** e marque a conexão. A chave fica no seu computador; a ficha guarda só o nome. Deixe **Permitir comandos de escrita** desmarcado.
+3. **Tarefas** → **Nova tarefa** → **O que precisa ser feito**: "só diagnosticar, sem mudar nada" → **Quem cuida**: **DevOps / SRE** → **Criar e começar**. Ele lê o servidor pelo MCP `myco-ssh` (status, logs, containers, serviços, arquivos de log).
+4. Em **precisa de mim**, aprove cada cartão de **permissão** com **Aprovar**. Evite **Sempre neste projeto** para comandos no servidor.
+5. Para publicar, o servidor precisa deixar de ser só leitura: na ficha, marque **Permitir comandos de escrita** na conexão e troque a autonomia para **Edita sozinho** ou mais (em **Pede tudo** o servidor segue só leitura). Depois abra a tarefa em **Pronto** (ou mesclada) → **Pedir deploy** → **Quem faz o deploy**: **DevOps / SRE**.
+6. Siga o checklist: backup, estado antes e depois, runbook. Confirme os passos que não têm volta.
+
+**Limites:** ele não roda comando interativo (editor, `top`) nem `sudo` com senha, e no terminal dele não há `ssh`, `scp` nem `rsync`: tudo passa pelo MCP. Detalhes em `02-funcionarios.md`, **Servidores (SSH e FTP)**.
 
 **Conferir no fim:**
 
 - o backup foi feito antes do deploy;
 - o runbook diz o que mudou e como desfazer;
-- as imagens e os volumes das versões antigas foram removidos (regra do cargo).
+- as imagens e os volumes das versões antigas foram removidos (regra do cargo);
+- a mesma chave não está cadastrada em outros projetos (ela daria o mesmo acesso a eles).
 
 ### 6. Acompanhar algo que demora (despertador)
 

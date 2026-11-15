@@ -288,8 +288,8 @@ describe('MCP de FTP: lançamento e ficha', () => {
 
     const deny = secretDenyRules(profile(), [], ['site']);
     expect(deny).toEqual(expect.arrayContaining(['Bash(ssh:*)', 'PowerShell(scp:*)', 'Read(**/.env)', 'Read(~/.myco/secrets/**)']));
-    // Com uma SSH na ficha, o ssh fica liberado.
-    expect(secretDenyRules(profile({ servers: ['site', 'prod'] }), [], ['site'])).not.toContain('Bash(ssh:*)');
+    // Com uma SSH na ficha, o ssh continua bloqueado (o acesso a servidor é pelo MCP myco-ssh).
+    expect(secretDenyRules(profile({ servers: ['site', 'prod'] }), [], ['site'])).toEqual(expect.arrayContaining(['Bash(ssh:*)', 'PowerShell(scp:*)']));
     // Sem lista de MCPs na ficha, o de FTP só se soma (sem --strict-mcp-config).
     const args = buildClaudeArgs(profile(), { sessionId: 's', resume: false, systemPromptFile: 'S', mcpConfigPath: 'M', firstPrompt: null, strictMcp: false, ftpServers: ['site'] });
     expect(args.slice(-2)).toEqual(['--mcp-config', 'M']);

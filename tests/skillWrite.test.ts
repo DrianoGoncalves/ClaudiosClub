@@ -389,7 +389,8 @@ describe('ficha: skill que não existe mais', () => {
       { ...p, servers: ['prod'] } as unknown as StaffProfile,
       { ...ctx, servers: [{ name: 'prod', source: 'vps', protocol: 'ssh', host: 'vps-a', remoteRoot: '/var/www/app' }] },
     );
-    expect(withServer).toContain('ssh -F "');
+    expect(withServer).toContain('ssh, scp, sftp e rsync ficam bloqueados');
+    expect(withServer).not.toContain('ssh -F "');
     expect(withServer).not.toContain('Ou a skill');
     expect(withServer).not.toContain('skill `vps`');
 

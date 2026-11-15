@@ -56,7 +56,8 @@ describe('campo "Motor" na ficha', () => {
     expect(canWriteSsh({ name: 'prod', protocol: 'ssh' }, [])).toBe(false);
     expect(canWriteSsh({ name: 'site', protocol: 'ftps' }, ['site'])).toBe(false);
     expect(canWriteSsh({ name: 'site', protocol: 'ftp' }, ['site'])).toBe(false);
-    expect(t('staff.sshWriteHint')).toBe('Comandos livres no servidor, sem pedir aprovação no Codex. Só leitura se desmarcado.');
+    expect(t('staff.sshWriteHintCodex')).toBe('Comandos livres e envio de arquivos do projeto ao servidor, sem pedir aprovação no Codex. Só leitura se desmarcado.');
+    expect(t('staff.sshWriteHint')).toBe('Comandos livres e envio de arquivos do projeto ao servidor; a aprovação segue a autonomia. Só leitura se desmarcado.');
   });
 
   it('o Claude fica sem `engine` na ficha (como sempre foi); o Codex vai explícito, e a volta dele também', () => {

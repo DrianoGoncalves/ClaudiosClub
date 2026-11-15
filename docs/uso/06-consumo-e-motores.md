@@ -28,7 +28,8 @@
 
 - Na ficha do funcionário, campo **Motor**: **Claude** ou **Codex (GPT)**.
 - **Codex (GPT)** roda numa sandbox: só o projeto, sem internet. Precisa de **Usar o Codex (GPT)** ligado. Com ele desligado, a conversa de quem roda no Codex não abre.
-- Quem tem servidor na ficha não pode rodar no Codex. Para escolher o Codex, tire os servidores na aba **Projeto**.
+- **SSH** vale nos dois motores: quem roda no Codex também opera servidores, pelo mesmo MCP `myco-ssh` do Club (ver **Servidores (SSH e FTP)** em `02-funcionarios.md`). Nessa conversa o Codex fica sem busca na web e sem o Chrome.
+- **FTP** só funciona no Claude. Com conexão FTP marcada na ficha, o botão do Codex fica desligado: para escolher o Codex, tire as conexões FTP na aba **Projeto**.
 
 ## Motor secundário (troca ao bater o limite)
 

@@ -3,13 +3,13 @@ import path from 'node:path';
 import { PLAYBOOK_AGENTS } from '../../shared/agentPresets';
 import { personalityName, personalitySection } from '../../shared/personality';
 import { FTP_MCP_NAME, GPT_MCP_NAME, GPT_TOOL_NAME, TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
-import { staffSshConfigFile } from './servers';
 import { GUIDE_PATH } from '../projectGuide';
 import { MYCO_HOME } from '../config';
 import { ROOT } from '../root';
 import { defaultLocations, pathKey } from '../adapters/claude/paths';
 import { mcpOffDenyRules } from './mcpAccess';
 import { CLEAN_BROWSER_DENIED, CLEAN_BROWSER_MCP_NAME } from '../chat/codexArgs';
+import { SSH_MCP_NAME, SSH_READ_TOOLS } from './sshMcp';
 import type { CodexMcpMotivo } from './mcp';
 
 // A ficha vira um arquivo Markdown dentro do projeto (.myco/staff/<id>.md), que a sessão lê
@@ -53,8 +53,8 @@ export interface FichaContext {
   clubGuard?: boolean;
   /** Claude contratado por um gestor no Codex e travado em `manual`: a seção Autonomia conta o porquê. */
   lockedByCodexManager?: boolean;
-  /** Codex com conexões SSH na ficha: o que a seção Servidores diz (ver `serversSection`). Ausente = sem conexão SSH. */
-  codexSsh?: CodexSshInfo;
+  /** Conexões SSH na ficha (nos dois motores): o que a seção Servidores diz (ver `serversSection`). Ausente = sem conexão SSH. */
+  ssh?: SshInfo;
   /** Codex com Navegador na ficha: o que a seção Navegador diz (ver `codexChromeLines`). Ausente = sem Navegador no Codex. */
   codexChrome?: CodexChromeInfo;
   /** Navegador limpo (MCP `myco-navegador`) pedido na ficha: o que a seção Navegador diz (ver `cleanBrowserLines`). Ausente = a ficha não pede. */
@@ -67,18 +67,20 @@ export interface FichaContext {
   manualEditable?: boolean;
 }
 
-/** Estado do MCP de SSH no Codex, para a ficha: as conexões, as com escrita e se o projeto é o do Claudio’s Club (sem MCP). */
-export interface CodexSshInfo {
+/** Estado do MCP de SSH (`myco-ssh`), nos dois motores, para a ficha: as conexões, as com escrita e por que o MCP não entrou (ver `sshLaunchOf` em launch.ts). */
+export interface SshInfo {
   /** O MCP foi anexado à conversa. */
   mcp: boolean;
   /** Conexões SSH da ficha que o MCP alcança. */
   names: string[];
-  /** As que têm escrita liberada (`ssh_executar`). */
+  /** As que têm escrita liberada (`ssh_executar` e `ssh_enviar`). */
   writable: string[];
-  /** O projeto é o do Claudio’s Club: servidor só pelo Claude. */
+  /** O projeto é o do Claudio’s Club: o acesso a servidor fica desligado nos dois motores (o MCP rodaria código que o funcionário edita). */
   root: boolean;
   /** Há conexões SSH, mas o MCP não entrou porque falta o build do Claudio’s Club (dist/ssh-mcp.mjs). */
   indisponivel?: boolean;
+  /** Há conexões SSH, o build existe, mas o acesso ao MCP `myco-ssh` está desligado na ficha (`mcpAccess` = off). */
+  politica?: boolean;
 }
 
 /** Estado do Chrome do usuário no Codex (MCP `myco-chrome`): entrou, ou os motivos de não ter entrado (ver `codexChromeOf` em launch.ts). */
@@ -152,24 +154,23 @@ const CODEX_INTERNET_OFF = 'Sem acesso à internet: se precisar, avise o usuári
 const CODEX_INTERNET_SSH = 'Busca na web desligada nesta conversa porque você tem acesso a servidor.';
 
 function codexInternet(ctx: FichaContext): string {
-  if (ctx.codexSsh?.mcp) return CODEX_INTERNET_SSH;
+  if (ctx.ssh?.mcp) return CODEX_INTERNET_SSH;
   if (ctx.internetAccess !== true) return CODEX_INTERNET_OFF;
   return ctx.codexChrome?.mcp || ctx.cleanBrowser?.mcp ? CODEX_INTERNET_ON_BROWSER : CODEX_INTERNET_ON;
 }
 
-/** Programas de acesso remoto: quem não tem servidor na ficha não roda nenhum deles. */
-const REMOTE_TOOLS = ['ssh', 'ssh.exe', 'scp', 'scp.exe', 'sftp', 'sftp.exe', 'rsync'];
+/** Programas de acesso remoto: ninguém os roda no terminal, com ou sem servidor na ficha (o acesso a servidor é pelo MCP myco-ssh). */
+const REMOTE_TOOLS = ['ssh', 'ssh.exe', 'scp', 'scp.exe', 'sftp', 'sftp.exe', 'rsync', 'rsync.exe', 'plink', 'plink.exe', 'pscp', 'pscp.exe', 'psftp', 'psftp.exe', 'sshpass', 'autossh', 'mosh'];
 
 /**
  * Bloqueios que vão para `--disallowedTools`: o Claude Code recusa a ferramenta antes de rodar.
  * Para todos: chaves SSH, a pasta `.vps` (conexões e ssh_config, que só o Claudio’s Club edita), os .env
- * de verdade (não o .env.example) e *.pem/*.key. Sem servidor na ficha: os programas de acesso remoto, no
- * Bash e no PowerShell. Com servidor: qualquer .env.* e os arquivos das chaves das conexões dele.
+ * de verdade (não o .env.example) e *.pem/*.key. Para todos, com ou sem servidor: os programas de acesso remoto,
+ * no Bash e no PowerShell. Com servidor: qualquer .env.* e os arquivos das chaves das conexões dele.
  * É uma barreira a mais, não a única: quem tem terminal ainda consegue ler um arquivo por outro
  * comando; por isso a chave deve ter senha (ssh-agent) ou um usuário sem root no servidor.
  * O cofre de senhas (~/.myco/secrets, onde também fica a chave do pareamento do navegador, pairing.key) fica
- * bloqueado para todos. `ftpServers`: as conexões da ficha que
- * são FTP (usadas pelo MCP do Claudio’s Club): só elas não liberam o ssh.
+ * bloqueado para todos.
  */
 /**
  * Uma pasta no formato das regras: `~/…` dentro da home (o caso comum, sem espaço); fora dela, o caminho
@@ -269,24 +270,29 @@ export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpSer
   if (!p.servers.length) return [...always, ...local, ...remote, ...keys];
   // Com servidor, qualquer .env.* (backup, cópia do de produção), mesmo o .env.example.
   const secrets = ['Read(**/.env.*)', 'Edit(**/.env.*)'];
-  const ssh = p.servers.some((s) => !ftpServers.includes(s));
-  return [...always, ...local, ...secrets, ...keys, ...(ssh ? [] : remote)];
+  return [...always, ...local, ...secrets, ...keys, ...remote];
 }
 
 const FTP_TOOLS = ['ftp_list', 'ftp_download', 'ftp_upload', 'ftp_delete', 'ftp_rename', 'ftp_mkdir'];
 
+/**
+ * Por que o MCP de SSH não entrou, com conexão SSH na ficha (nos dois motores). Os motivos vêm de `sshLaunchOf` (launch.ts); o projeto
+ * do próprio Claudio’s Club (root) vale antes dos outros.
+ */
+function sshSemMcp(ssh: SshInfo | undefined): string {
+  if (ssh?.root) return 'No projeto do próprio Claudio’s Club o acesso a servidor por SSH fica desligado nos dois motores (o MCP rodaria código que você pode editar). Se a tarefa precisar de um servidor, avise o usuário.';
+  if (ssh?.indisponivel) return 'Servidor indisponível: falta o build do Club (dist/ssh-mcp.mjs). As conexões SSH da sua ficha não estão ao seu alcance agora: avise o usuário.';
+  if (ssh?.politica) return 'O acesso ao MCP `myco-ssh` está desligado na sua ficha: as conexões SSH não estão ao seu alcance nesta conversa. Se a tarefa precisar de um servidor, avise o usuário.';
+  return 'As conexões SSH da sua ficha não estão ao seu alcance nesta conversa: avise o usuário.';
+}
+
+/** Os servidores liberados para escrita, ou "nenhum, só leitura" (a seção Servidores, nos dois motores). */
+const escritaDe = (writable: string[]) => (writable.length ? writable.map((n) => `\`${n}\``).join(', ') : 'nenhum, só leitura');
+
 function serversSection(p: StaffProfile, ctx: FichaContext): string {
-  if (codexOf(p) && ctx.codexSsh?.root) {
-    return [
-      '## Servidores',
-      'Aqui servidor só pelo Claude: as ferramentas `ssh_*` não estão com você, e ssh, scp, sftp, rsync e FTP não funcionam na sandbox. Se a tarefa precisar de um servidor, avise o usuário: ele pode passá-la a um funcionário que rode no Claude.',
-    ].join('\n');
-  }
-  if (codexOf(p) && ctx.codexSsh?.indisponivel) {
-    return ['## Servidores', 'Servidor indisponível: falta o build do Club. As conexões SSH da sua ficha não estão ao seu alcance agora: avise o usuário, sem tentar ssh pelo terminal.'].join('\n');
-  }
-  if (codexOf(p) && ctx.codexSsh?.mcp) {
-    const { names, writable } = ctx.codexSsh;
+  const ssh = ctx.ssh;
+  if (codexOf(p) && ssh?.mcp) {
+    const { names, writable } = ssh;
     return [
       '## Servidores',
       `Você acessa estas conexões do projeto, pelo nome: ${names.map((n) => `\`${n}\``).join(', ')}.`,
@@ -301,9 +307,10 @@ function serversSection(p: StaffProfile, ctx: FichaContext): string {
     ].join('\n');
   }
   if (codexOf(p)) {
+    if (ssh) return ['## Servidores', sshSemMcp(ssh), 'Não tente ssh pelo terminal.'].join('\n');
     return [
       '## Servidores',
-      'Nesta conversa a sandbox não tem internet (só o Claudio’s Club responde, em 127.0.0.2): ssh, scp, sftp, rsync e FTP não funcionam, e `.vps` e `~/.ssh` não são para ler. Se a tarefa precisar de um servidor, avise o usuário: ele pode passá-la a um funcionário que rode no Claude.',
+      'Nesta conversa a sandbox não tem internet (só o Claudio’s Club responde, em 127.0.0.2): ssh, scp, sftp, rsync e FTP não funcionam, e `.vps` e `~/.ssh` não são para ler. Se a tarefa precisar de um servidor, peça ao usuário para marcar a conexão na sua ficha e abrir uma conversa nova.',
     ].join('\n');
   }
   if (!p.servers.length) {
@@ -319,7 +326,6 @@ function serversSection(p: StaffProfile, ctx: FichaContext): string {
       'Para acessar um servidor, peça ao usuário para marcar a conexão na sua ficha (“+ dar acesso a servidores (SSH e FTP)”) e abrir uma conversa nova. Não tente outro caminho.',
     ].join('\n');
   }
-  const config = staffSshConfigFile(ctx.projectPath, p.id).replace(/\\/g, '/');
   const known = new Map((ctx.servers ?? []).map((s) => [s.name, s]));
   const ftpOf = (s: ServerInfo | undefined) => s?.source === 'ftp';
   const lines = p.servers.map((name) => {
@@ -332,18 +338,24 @@ function serversSection(p: StaffProfile, ctx: FichaContext): string {
   // Conexão que sumiu conta como SSH: o texto avisa para não tentar.
   const hasSsh = p.servers.some((n) => !ftpOf(known.get(n)));
   const tools = FTP_TOOLS.map((t) => `\`mcp__${FTP_MCP_NAME}__${t}\``).join(', ');
+  // SSH no Claude: com o MCP, as ferramentas `ssh_*` (e nada de `ssh -F`: o hook barra o ssh no terminal); sem ele, o motivo.
+  const sshAcesso = !hasSsh
+    ? ['- ssh, scp, sftp e rsync ficam bloqueados (Bash e PowerShell) porque as suas conexões são só FTP: não tente, liberar no settings do Claude Code não resolve.']
+    : ssh?.mcp
+      ? [
+          '- Leia e diagnostique com as ferramentas `ssh_*` do MCP `myco-ssh` (status, processos, logs do Docker, serviços, journal, listar e ler arquivos). Não use outro cliente ssh.',
+          `- Escrita: \`ssh_executar\` (comando livre) e \`ssh_enviar\` (um arquivo do projeto para a pasta remota da conexão; trocar um que já existe exige \`sobrescrever\`) só nos servidores liberados: ${escritaDe(ssh.writable)}.`,
+          '- Antes de sobrescrever algo no servidor, faça backup pelo `ssh_executar` (um `cp` com a data no nome).',
+          '- No terminal, ssh, scp, sftp e rsync ficam bloqueados (Bash e PowerShell): o acesso aos servidores é só pelo MCP.',
+        ]
+      : [`- ${sshSemMcp(ssh)}`, '- No terminal, ssh, scp, sftp e rsync ficam bloqueados (Bash e PowerShell): não tente, liberar no settings do Claude Code não resolve.'];
   return [
     '## Servidores',
     'Você pode acessar só estas conexões do projeto, sempre pelo nome:',
     lines.join('\n'),
     [
       '### Acesso seguro',
-      ...(hasSsh
-        ? [
-            `- SSH, comando remoto, um por vez: \`ssh -F "${config}" <conexão> "<comando>"\`. O arquivo é gerado pelo Claudio’s Club só com as suas conexões: não leia, não edite e não use outra configuração.`,
-            `- SSH, arquivos: \`scp -F "${config}" <local> <conexão>:<caminho>\` para enviar (com backup do que for sobrescrito no servidor) e o contrário para baixar.`,
-          ]
-        : ['- ssh, scp, sftp e rsync ficam bloqueados (Bash e PowerShell) porque as suas conexões são só FTP: não tente, liberar no settings do Claude Code não resolve.']),
+      ...sshAcesso,
       ...(hasFtp
         ? [
             `- FTP: só pelas ferramentas ${tools}, sempre com \`connection\` = o nome da conexão. Caminho local relativo ao projeto; o remoto fica preso à pasta da conexão. Antes de substituir ou apagar no servidor, baixe uma cópia (backup). Não use outro cliente FTP (curl, ftp, WinSCP).`,
@@ -812,6 +824,8 @@ export interface ClaudeArgsOptions {
   pluginDir?: string | null;
   /** O navegador limpo (MCP `myco-navegador`) entrou (ver prepareRun): libera as ferramentas com a autonomia do Chrome e nega as de CLEAN_BROWSER_DENIED. */
   cleanBrowser?: boolean;
+  /** O MCP de SSH (`myco-ssh`) entrou (ver prepareRun): as de leitura entram em --allowedTools, com a regra do navegador (`editing`). */
+  sshMcp?: boolean;
 }
 
 /**
@@ -842,7 +856,9 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   args.push(p.browser ? '--chrome' : '--no-chrome');
   // Edita sozinho em diante: o navegador não pede permissão a cada clique; as regras de segredo seguem negadas pelo --disallowedTools.
   const editing = AUTONOMY_ORDER.indexOf(p.autonomy) >= AUTONOMY_ORDER.indexOf('acceptEdits');
-  const allowed = [...(p.browser && editing ? ['mcp__claude-in-chrome'] : []), ...(o.cleanBrowser && editing ? [`mcp__${CLEAN_BROWSER_MCP_NAME}`] : [])];
+  // As de leitura do SSH; as de escrita (ssh_executar, ssh_enviar) seguem a permissão normal e o hook de escrita (mcp-write.json).
+  const sshRead = o.sshMcp && editing ? SSH_READ_TOOLS.map((t) => `mcp__${SSH_MCP_NAME}__${t}`) : [];
+  const allowed = [...(p.browser && editing ? ['mcp__claude-in-chrome'] : []), ...(o.cleanBrowser && editing ? [`mcp__${CLEAN_BROWSER_MCP_NAME}`] : []), ...sshRead];
   if (allowed.length) args.push('--allowedTools', allowed.join(','));
   // Com a internet desligada (Configurações), a busca na web do Claude também sai: a ferramenta é recusada antes de rodar.
   const web = o.internetAccess === false ? ['WebSearch', 'WebFetch'] : [];

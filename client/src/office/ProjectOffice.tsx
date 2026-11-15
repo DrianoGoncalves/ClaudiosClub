@@ -227,6 +227,11 @@ function Connections({ projectId }: { projectId: string }) {
               {t('office.connFtpPlain')}
             </p>
           )}
+          {draft.protocol === 'ssh' && (
+            <p className="muted small" role="note">
+              {t('office.sshLimits')}
+            </p>
+          )}
           <div className="grid2">
             {field('name', t('office.connName'), { required: true, maxLength: 40, placeholder: t('office.connNamePlaceholder') })}
             {field('host', t('office.connHost'), { required: true, maxLength: 253 })}

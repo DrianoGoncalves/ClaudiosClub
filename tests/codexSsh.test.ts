@@ -178,32 +178,87 @@ describe('prepareCodexRun: o MCP só entra com SSH na ficha, fora do projeto do 
 
 describe('ficha do Codex: a seção Servidores conforme o MCP', () => {
   it('com MCP e escrita: lista as conexões e a escrita; sem escrita: "só leitura"', () => {
-    const com = renderFicha(profile(), { ...fichaCtx, codexSsh: { mcp: true, names: ['srv1', 'srv2'], writable: ['srv1'], root: false } });
+    const com = renderFicha(profile(), { ...fichaCtx, ssh: { mcp: true, names: ['srv1', 'srv2'], writable: ['srv1'], root: false } });
     expect(com).toContain('ferramentas `ssh_*` do MCP `myco-ssh`');
     expect(com).toContain('Você acessa estas conexões do projeto, pelo nome: `srv1`, `srv2`.');
     expect(com).toContain('só nos servidores liberados: `srv1`.');
     expect(com).toContain('No terminal não há ssh, scp, sftp nem rsync');
-    const leitura = renderFicha(profile({ sshWrite: [] }), { ...fichaCtx, codexSsh: { mcp: true, names: ['srv1'], writable: [], root: false } });
+    const leitura = renderFicha(profile({ sshWrite: [] }), { ...fichaCtx, ssh: { mcp: true, names: ['srv1'], writable: [], root: false } });
     expect(leitura).toContain('nenhum, só leitura');
   });
 
-  it('no projeto do próprio Club: "aqui servidor só pelo Claude", sem ferramentas ssh_*', () => {
-    const md = renderFicha(profile(), { ...fichaCtx, codexSsh: { mcp: false, names: ['srv1'], writable: [], root: true } });
-    expect(md).toContain('Aqui servidor só pelo Claude');
+  it('no projeto do próprio Club: o acesso a servidor fica desligado nos dois motores, sem ferramentas ssh_*', () => {
+    const md = renderFicha(profile(), { ...fichaCtx, ssh: { mcp: false, names: ['srv1'], writable: [], root: true } });
+    expect(md).toContain('No projeto do próprio Claudio’s Club o acesso a servidor por SSH fica desligado nos dois motores');
+    expect(md).not.toContain('Aqui servidor só pelo Claude');
     expect(md).not.toContain('Você acessa estas conexões');
+    expect(md).toContain('Não tente ssh pelo terminal.');
   });
 
   it('sem o build: "Servidor indisponível: falta o build do Club"', () => {
-    const md = renderFicha(profile(), { ...fichaCtx, codexSsh: { mcp: false, names: ['srv1'], writable: [], root: false, indisponivel: true } });
-    expect(md).toContain('Servidor indisponível: falta o build do Club');
+    const md = renderFicha(profile(), { ...fichaCtx, ssh: { mcp: false, names: ['srv1'], writable: [], root: false, indisponivel: true } });
+    expect(md).toContain('Servidor indisponível: falta o build do Club (dist/ssh-mcp.mjs)');
     expect(md).not.toContain('ssh_*');
   });
 
+  it('acesso ao myco-ssh desligado na ficha: "o acesso ao MCP `myco-ssh` está desligado na sua ficha"', () => {
+    const md = renderFicha(profile(), { ...fichaCtx, ssh: { mcp: false, names: ['srv1'], writable: [], root: false, politica: true } });
+    expect(md).toContain('O acesso ao MCP `myco-ssh` está desligado na sua ficha');
+    expect(md).not.toContain('ssh_*');
+  });
+
+  it('sem conexão SSH no MCP, o Codex não manda a tarefa para o funcionário do Claude', () => {
+    const md = renderFicha(profile({ servers: [], sshWrite: [] }), fichaCtx);
+    expect(md).toContain('peça ao usuário para marcar a conexão na sua ficha');
+    expect(md).not.toContain('funcionário que rode no Claude');
+  });
+
   it('com o MCP anexado, a seção Autonomia diz que a busca na web está desligada por causa do servidor (não a frase de internet)', () => {
-    const com = renderFicha(profile(), { ...fichaCtx, internetAccess: true, codexSsh: { mcp: true, names: ['srv1'], writable: ['srv1'], root: false } });
+    const com = renderFicha(profile(), { ...fichaCtx, internetAccess: true, ssh: { mcp: true, names: ['srv1'], writable: ['srv1'], root: false } });
     expect(com).toContain('Busca na web desligada nesta conversa porque você tem acesso a servidor.');
     expect(com).not.toContain('use a sua ferramenta de busca (web_search)');
     const sem = renderFicha(profile({ servers: [], sshWrite: [] }), { ...fichaCtx, internetAccess: true });
     expect(sem).toContain('use a sua ferramenta de busca (web_search)');
+  });
+});
+
+describe('ficha do Claude: o MCP myco-ssh no lugar do ssh do terminal', () => {
+  const claude = (over: Partial<StaffProfile> = {}) => profile({ engine: 'claude', ...over });
+  const ctxSsh = { ...fichaCtx, servers: [ssh('srv1'), ssh('srv2')] };
+
+  it('com o MCP: ferramentas ssh_*, ssh_enviar e a escrita; nada de ssh -F nem scp -F', () => {
+    const md = renderFicha(claude(), { ...ctxSsh, ssh: { mcp: true, names: ['srv1', 'srv2'], writable: ['srv1'], root: false } });
+    expect(md).toContain('ferramentas `ssh_*` do MCP `myco-ssh`');
+    expect(md).toContain('`ssh_enviar`');
+    expect(md).toContain('só nos servidores liberados: `srv1`.');
+    expect(md).toContain('`srv1`: srv1.example.com, projeto em `/srv/app`');
+    expect(md).toContain('Antes de sobrescrever algo no servidor, faça backup pelo `ssh_executar`');
+    expect(md).toContain('Nunca, sem pedir antes');
+    expect(md).toContain('Como trabalhar');
+    expect(md).not.toMatch(/ssh -F|scp -F/);
+  });
+
+  it('com o MCP e sem escrita: "nenhum, só leitura"', () => {
+    const md = renderFicha(claude({ sshWrite: [] }), { ...ctxSsh, ssh: { mcp: true, names: ['srv1', 'srv2'], writable: [], root: false } });
+    expect(md).toContain('nenhum, só leitura');
+  });
+
+  it('no projeto do próprio Club: o acesso a servidor fica desligado, sem ssh -F nem ferramentas ssh_*', () => {
+    const md = renderFicha(claude(), { ...ctxSsh, ssh: { mcp: false, names: ['srv1'], writable: [], root: true } });
+    expect(md).toContain('No projeto do próprio Claudio’s Club o acesso a servidor por SSH fica desligado nos dois motores');
+    expect(md).toContain('ssh, scp, sftp e rsync ficam bloqueados (Bash e PowerShell)');
+    expect(md).not.toMatch(/ssh -F|scp -F|ssh_enviar|Você acessa estas conexões/);
+  });
+
+  it('acesso ao myco-ssh desligado: a ficha diz e não oferece ssh_*', () => {
+    const md = renderFicha(claude(), { ...ctxSsh, ssh: { mcp: false, names: ['srv1'], writable: [], root: false, politica: true } });
+    expect(md).toContain('O acesso ao MCP `myco-ssh` está desligado na sua ficha');
+    expect(md).not.toMatch(/ssh -F|scp -F|ssh_\*/);
+  });
+
+  it('sem o build: indisponível, sem ssh -F', () => {
+    const md = renderFicha(claude(), { ...ctxSsh, ssh: { mcp: false, names: ['srv1'], writable: [], root: false, indisponivel: true } });
+    expect(md).toContain('Servidor indisponível: falta o build do Club');
+    expect(md).not.toMatch(/ssh -F|scp -F/);
   });
 });

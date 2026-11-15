@@ -8,11 +8,11 @@ import { clubBlockedOrigins } from '../clubAddress';
 import { MYCO_HOME } from '../config';
 import { lazyNavegadorCommand } from '../navegadorMcp';
 import { ROOT } from '../root';
-import { isClaudeRoot, renderFicha, systemPrompt, type CleanBrowserInfo, type CodexChromeInfo, type CodexSshInfo, type FichaContext, type TeamMember } from './ficha';
+import { isClaudeRoot, renderFicha, systemPrompt, type CleanBrowserInfo, type CodexChromeInfo, type FichaContext, type SshInfo, type TeamMember } from './ficha';
 import { FTP_MCP_NAME, GPT_MCP_NAME } from '../../shared/model';
 import { DEFAULT_SECRETS_DIR } from '../secretVault';
 import { ftpMcpServerConfig } from './ftpMcp';
-import { SSH_MCP_BUNDLE, SSH_READ_TOOLS, WRITE_AUTONOMY, sshMcpServerConfig } from './sshMcp';
+import { SSH_MCP_BUNDLE, SSH_MCP_NAME, SSH_READ_TOOLS, WRITE_AUTONOMY, sshMcpServerConfig } from './sshMcp';
 import { CLEAN_BROWSER_MCP_NAME, CODEX_CHROME_MCP_NAME, CODEX_SSH_MCP_NAME, type CodexExtraMcp, type CodexMcpServer } from '../chat/codexArgs';
 import { codexMcpAccess } from './mcpAccess';
 import { gptMcpServerConfig } from './gptMcp';
@@ -116,6 +116,8 @@ export interface PreparedRun {
   manualEditable: boolean;
   /** O navegador limpo (MCP `myco-navegador`) entrou nesta conversa: o buildClaudeArgs nega o que ele não usa (ver ClaudeArgsOptions.cleanBrowser). */
   cleanBrowser: boolean;
+  /** O MCP de SSH (`myco-ssh`) entrou nesta conversa (ver sshLaunchOf): o buildClaudeArgs põe as de leitura em --allowedTools. */
+  sshMcp: boolean;
 }
 
 /**
@@ -126,10 +128,13 @@ export interface PreparedRun {
 export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string): Promise<PreparedRun> {
   const away = path.resolve(cwd) !== path.resolve(ctx.projectPath);
   const dir = path.join(ctx.runDir, sessionId);
-  // Navegador limpo: pela ficha (`browser` efetivo não entra aqui), então vale sem a extensão do Chrome. Sem SSH: o Claude não tem esse canal.
+  // MCP de SSH: o mesmo do Codex (ver sshLaunchOf). O terminal não tem ssh (o hook remote-guard barra), então o acesso é só por ele.
+  const ssh = sshLaunchOf(profile, ctx, cwd);
+  // Navegador limpo: pela ficha (`browser` efetivo não entra aqui), então vale sem a extensão do Chrome. O SSH não entra aqui: no Claude o terminal
+  // tem rede, então tirar o navegador por causa do SSH não fecharia canal nenhum (no Codex, a sandbox fecha a rede e o caso é outro; ver cleanBrowserOf).
   const cleanDir = path.join(dir, 'navegador');
   const clean = cleanBrowserOf(ctx.cleanBrowser ?? profile.browser, ctx, false, cleanDir);
-  const fichaCtx = await writeFicha(profile, ctx, away, { cleanBrowser: clean.info });
+  const fichaCtx = await writeFicha(profile, ctx, away, { ssh: ssh.info, cleanBrowser: clean.info });
   const systemPromptFile = path.join(dir, 'system.md');
   // Memória pessoal: só no system.md desta execução (fora do .md da ficha, que vai para o git do projeto).
   const personal = profile.personId ? await readPersonMemory(profile.personId) : null;
@@ -139,7 +144,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   let mcpConfigPath: string | null = null;
   // O `perguntar_gpt` entra só com o Codex ligado nas configurações e só aqui, no motor Claude (no Codex, os MCPs da ficha entram por prepareCodexRun).
   const gpt = ctx.codex === true && profile.engine !== 'codex';
-  if (profile.mcps !== null || ftpServers.length || gpt || clean.mcp) {
+  if (profile.mcps !== null || ftpServers.length || gpt || clean.mcp || ssh.server) {
     mcpConfigPath = path.join(dir, 'mcp.json');
     // Os da biblioteca do Club entram sem valor: o comando é o lançador, que tira o segredo do cofre ao subir (mcpLaunch.ts).
     const config = profile.mcps !== null ? await buildMcpConfig(ctx.projectPath, profile.mcps, ctx.claudeConfigFile) : { mcpServers: {} };
@@ -153,6 +158,8 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
       await mkdir(cleanDir, { recursive: true });
       config.mcpServers[CLEAN_BROWSER_MCP_NAME] = { type: 'stdio', command: clean.mcp.command, args: clean.mcp.args };
     }
+    // O myco-ssh: só nomes e a escrita do lançamento (nenhuma chave; ver sshMcpServerConfig).
+    if (ssh.server) config.mcpServers[SSH_MCP_NAME] = { type: 'stdio', command: ssh.server.command, args: ssh.server.args };
     await writeAtomic(mcpConfigPath, JSON.stringify(config, null, 2));
   }
   // Lembrete do estilo a cada mensagem (hook UserPromptSubmit): só com estilo no motor Claude; sem ele, nem arquivo nem hook.
@@ -208,6 +215,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     // Só o projeto ROOT sem worktree: a worktree (away) tem o próprio docs/uso, que não é o do ROOT, e continua negada.
     manualEditable: !away && isClaudeRoot(ctx.projectPath),
     cleanBrowser: clean.mcp !== null,
+    sshMcp: ssh.server !== null,
   };
 }
 
@@ -220,7 +228,7 @@ export interface PreparedCodexRun {
   readOnlyPaths: string[];
   /** Onde fica o thread_id da conversa (retomar depois), ao lado dos arquivos de lançamento dela. */
   threadFile: string;
-  /** MCP de SSH (só conexões SSH da ficha; null = sem). Nunca no projeto do próprio Claudio’s Club (ver `codexSshRoot`). */
+  /** MCP de SSH (só conexões SSH da ficha; null = sem). Nunca no projeto do próprio Claudio’s Club (ver `sshLaunchOf`). */
   sshMcp: CodexMcpServer | null;
   /** MCP do Chrome do usuário (null = sem). Só com a opção ligada, Navegador na ficha e sem o MCP de SSH na conversa (ver `codexChromeOf`). */
   chromeMcp: CodexMcpServer | null;
@@ -339,6 +347,56 @@ export function sshServersOf(profile: Pick<StaffProfile, 'servers'>, servers: Se
   return profile.servers.filter((n) => ssh.has(n));
 }
 
+/** O MCP de SSH (`myco-ssh`) de uma conversa, igual nos dois motores (ver `sshLaunchOf`). */
+export interface SshLaunch {
+  /** O que a ficha diz (undefined: a ficha não tem conexão SSH). */
+  info?: SshInfo;
+  /** Comando e argumentos do MCP (null = não entra). O Claude põe em mcp.json; o Codex acrescenta `cwd` e `enabled_tools`. */
+  server: { command: string; args: string[] } | null;
+  /** Ferramentas que o Codex vê (`enabled_tools`): as de leitura, com `readonly` ou `ask`. Ausente = todas (sem regra). */
+  enabledTools?: string[];
+  /** `ask` no Codex (que não pergunta): o SSH fica só de leitura, e a ficha avisa. */
+  askAsReadonly: boolean;
+}
+
+/**
+ * O MCP de SSH da conversa, com a mesma regra nos dois motores: só com conexão SSH na ficha, fora do projeto do próprio Claudio’s Club
+ * (o MCP roda fora da sandbox, e no projeto do Club o funcionário poderia editar o código dele), com o pacote do build e com o acesso
+ * `myco-ssh` ligado na ficha. A escrita (`ssh_executar` e `ssh_enviar`) só nas conexões de `sshWrite`, e só com autonomia que altera algo.
+ */
+export function sshLaunchOf(
+  profile: Pick<StaffProfile, 'id' | 'servers' | 'sshWrite' | 'autonomy' | 'mcpAccess'>,
+  ctx: Pick<LaunchContext, 'projectPath' | 'servers' | 'sshMcpBundle'>,
+  cwd: string,
+): SshLaunch {
+  const names = sshServersOf(profile, ctx.servers);
+  const root = names.length > 0 && isClaudeRoot(ctx.projectPath);
+  const bundle = ctx.sshMcpBundle ?? SSH_MCP_BUNDLE;
+  // Escrita do lançamento: a sshWrite da ficha (de conexões do projeto), só com autonomia que altera algo. Vai no `--write`.
+  const write = WRITE_AUTONOMY.includes(profile.autonomy) ? (profile.sshWrite ?? []).filter((n) => names.includes(n)) : [];
+  // Acesso ao MCP: `off` fica fora da conversa; `readonly` e `ask` entram só com as ferramentas de leitura (o Codex não pergunta; o Claude filtra pelo hook).
+  const access = codexMcpAccess(profile.mcpAccess, CODEX_SSH_MCP_NAME, [], SSH_READ_TOOLS);
+  // Sem o pacote do build, o MCP não sobe (nunca pelo tsx): a ficha diz que o servidor está indisponível.
+  const bundleOk = existsSync(bundle);
+  const attached = names.length > 0 && !root && bundleOk && access.attached;
+  const info: SshInfo | undefined = names.length
+    ? {
+        mcp: attached,
+        names,
+        writable: attached ? write : [],
+        root,
+        indisponivel: names.length > 0 && !root && !bundleOk,
+        politica: names.length > 0 && !root && bundleOk && !access.attached,
+      }
+    : undefined;
+  let server: SshLaunch['server'] = null;
+  if (attached) {
+    const cfg = sshMcpServerConfig({ projectPath: ctx.projectPath, root: cwd, staffId: profile.id, connections: names, write, autonomy: profile.autonomy, bundle });
+    server = { command: cfg.command, args: cfg.args };
+  }
+  return { info, server, enabledTools: access.enabledTools, askAsReadonly: names.length > 0 && !root && access.askAsReadonly };
+}
+
 /**
  * O que o Codex precisa para a conversa: a ficha atualizada (e a memória criada) e o texto de instruções. Os MCPs são o de SSH, o do Chrome,
  * o do navegador limpo e os da biblioteca e da ficha (projeto, usuário e local, pelo lançador; ver `codexMcpServers`). Sem hooks, agents do
@@ -347,33 +405,11 @@ export function sshServersOf(profile: Pick<StaffProfile, 'servers'>, servers: Se
  */
 export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string): Promise<PreparedCodexRun> {
   const away = path.resolve(cwd) !== path.resolve(ctx.projectPath);
-  // MCP de SSH: só com conexão SSH na ficha, e fora do projeto do próprio Claudio’s Club (o MCP roda fora da sandbox: o funcionário
-  // não pode editar o código dele). A escrita (`ssh_executar`) só nas conexões de `sshWrite`.
-  const names = sshServersOf(profile, ctx.servers);
-  const root = names.length > 0 && isClaudeRoot(ctx.projectPath);
-  const bundle = ctx.sshMcpBundle ?? SSH_MCP_BUNDLE;
-  // Escrita do lançamento: a sshWrite da ficha (de conexões do projeto), só com autonomia que altera algo. Vai no `--write`.
-  const write = WRITE_AUTONOMY.includes(profile.autonomy) ? (profile.sshWrite ?? []).filter((n) => names.includes(n)) : [];
-  // Acesso ao MCP: `off` fica fora da conversa; `readonly` e `ask` entram só com as ferramentas de leitura (`enabled_tools`), porque o Codex não pergunta.
-  const ssh = codexMcpAccess(profile.mcpAccess, CODEX_SSH_MCP_NAME, [], SSH_READ_TOOLS);
-  // Sem o pacote do build, o MCP não sobe (nunca pelo tsx a partir do Codex): a ficha diz que o servidor está indisponível.
-  const bundleOk = existsSync(bundle);
-  const mcp = names.length > 0 && !root && bundleOk && ssh.attached;
-  const indisponivel = names.length > 0 && !root && !bundleOk;
-  const sshInfo: CodexSshInfo | undefined = names.length ? { mcp, names, writable: mcp ? write : [], root, indisponivel } : undefined;
+  // MCP de SSH: o mesmo do Claude (ver sshLaunchOf). Aqui roda fora da sandbox, com o cwd na pasta do Club e as ferramentas de leitura
+  // (`enabled_tools`) quando `readonly` ou `ask`, porque o Codex não pergunta.
+  const ssh = sshLaunchOf(profile, ctx, cwd);
   let sshMcp: CodexMcpServer | null = null;
-  if (mcp) {
-    const { command, args } = sshMcpServerConfig({
-      projectPath: ctx.projectPath,
-      root: cwd,
-      staffId: profile.id,
-      connections: names,
-      write,
-      autonomy: profile.autonomy,
-      bundle,
-    });
-    sshMcp = { command, args, cwd: ROOT, ...(ssh.enabledTools ? { enabledTools: ssh.enabledTools } : {}) };
-  }
+  if (ssh.server) sshMcp = { ...ssh.server, cwd: ROOT, ...(ssh.enabledTools ? { enabledTools: ssh.enabledTools } : {}) };
   // Chrome do usuário: depois do SSH, porque o MCP de SSH na conversa desliga o Chrome (não juntar servidor e logins).
   const chromeDir = path.join(ctx.runDir, sessionId, 'chrome');
   const chrome = codexChromeOf(profile, ctx, sshMcp !== null, chromeDir);
@@ -392,9 +428,9 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
     launcher,
   });
   // O que o Codex deixou só leitura por causa de "pede antes" (a ficha diz): o SSH e os MCPs da ficha. O Chrome não entra aqui: sem lista de leitura, ask o desliga.
-  const asked = [...(names.length && !root && ssh.askAsReadonly ? [CODEX_SSH_MCP_NAME] : []), ...extra.asked];
+  const asked = [...(ssh.askAsReadonly ? [CODEX_SSH_MCP_NAME] : []), ...extra.asked];
   const fichaCtx = await writeFicha(profile, ctx, away, {
-    codexSsh: sshInfo,
+    ssh: ssh.info,
     codexChrome: chrome.info,
     codexMcpAsked: asked,
     codexMcpOut: extra.out,
@@ -439,11 +475,13 @@ const HOOKS_DIR = path.join(ROOT, 'scripts', 'hooks');
 const DELIVERY_HOOK = path.join(HOOKS_DIR, 'delivery-check.mjs');
 const STYLE_HOOK = path.join(HOOKS_DIR, 'style-reminder.mjs');
 /** Os hooks de guarda que a conversa leva na própria pasta (cópia, ver prepareRun): o agente não edita o que os aplica. */
-const GUARD_HOOK_FILES = ['club-guard.mjs', 'mcp-write-guard.mjs'] as const;
+const GUARD_HOOK_FILES = ['club-guard.mjs', 'mcp-write-guard.mjs', 'remote-guard.mjs'] as const;
 /** Ferramentas de navegador: o Claude in Chrome e os MCPs no padrão `browser_*` (Playwright e afins da biblioteca). */
 export const BROWSER_TOOLS_MATCHER = 'mcp__claude-in-chrome__.*|mcp__.*__browser_.*';
 /** Toda ferramenta de MCP: o hook de escrita decide pela política da ficha (sem política, não responde). */
 export const MCP_TOOLS_MATCHER = 'mcp__.*';
+/** Terminal (Bash e PowerShell): o hook de acesso remoto barra ssh, scp e afins, com ou sem servidor na ficha. */
+export const REMOTE_GUARD_MATCHER = 'Bash|PowerShell';
 
 /**
  * Hooks do Claudio’s Club em todo funcionário (`--settings`, somados aos do usuário e do projeto): os agents
@@ -469,6 +507,8 @@ export function staffSettings(
     ...(stage === 'pre' && o.clubGuard !== false ? [{ matcher: BROWSER_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'club-guard.mjs'), 'pre'], timeout: 10, onFailure: 'block' }] }] : []),
     // Escrita por MCP: o acesso da ficha (ver mcpAccess.ts). Sem regra de MCP, a conversa não tem o hook.
     ...(stage === 'pre' && o.mcpWriteFile ? [{ matcher: MCP_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'mcp-write-guard.mjs'), o.mcpWriteFile], timeout: 10, onFailure: 'block' }] }] : []),
+    // Acesso remoto no terminal: sempre, com ou sem servidor na ficha (ver scripts/hooks/remote-guard.mjs).
+    ...(stage === 'pre' ? [{ matcher: REMOTE_GUARD_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'remote-guard.mjs')], timeout: 10, onFailure: 'block' }] }] : []),
   ];
   const styled = !!p && personalityName(p.personality) !== '' && (p.engine ?? 'claude') === 'claude';
   const style = styled && styleFile ? { UserPromptSubmit: [{ hooks: [{ type: 'command', command: process.execPath, args: [STYLE_HOOK, styleFile], timeout: 10 }] }] } : {};
@@ -481,7 +521,8 @@ export function staffSettings(
 
 /** O que cada lançamento sabe e a ficha diz além do contexto (ver writeFicha). Ausente = nada a dizer sobre ele. */
 export interface FichaRunInfo {
-  codexSsh?: CodexSshInfo;
+  /** O MCP de SSH da conversa (nos dois motores; ver sshLaunchOf). */
+  ssh?: SshInfo;
   codexChrome?: CodexChromeInfo;
   codexMcpAsked?: string[];
   /** Codex: os MCPs da ficha que ficaram fora da conversa, com o motivo (ver `codexMcpServers`). */
@@ -521,7 +562,7 @@ export async function writeFicha(
     internetAccess: ctx.internetAccess,
     clubGuard: ctx.clubGuard,
     lockedByCodexManager: ctx.lockedByCodexManager,
-    codexSsh: run.codexSsh,
+    ssh: run.ssh,
     codexChrome: run.codexChrome,
     codexMcpAsked: run.codexMcpAsked,
     codexMcpOut: run.codexMcpOut,
