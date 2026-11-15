@@ -1,15 +1,21 @@
-import { spawn } from 'node:child_process';
-import { existsSync, promises as fs, readdirSync, readFileSync } from 'node:fs';
+import { execFile, spawn } from 'node:child_process';
+import { existsSync, promises as fs, readdirSync, readFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { PassThrough } from 'node:stream';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { lazyNavegadorCommand, navegadorProxyCommand, parseProxyArgs, runNavegadorProxy, serverFingerprint, type NavegadorProxyOptions } from '../server/navegadorMcp';
 
 // O proxy preguiçoso do MCP do navegador limpo: `initialize` e `tools/list` saem do cache sem abrir o servidor de verdade; o primeiro pedido que
 // precisa dele o abre (repetindo o `initialize` do cliente) e dali em diante tudo passa sem mudar. O servidor de verdade é um script de mentira
 // que anota em arquivo cada abertura e cada mensagem recebida.
+
+// O taskkill do Windows é o único `execFile` do proxy: os testes o trocam por um espião (que mata de verdade, para o processo não sobrar).
+vi.mock('node:child_process', async (orig) => {
+  const actual = await orig<typeof import('node:child_process')>();
+  return { ...actual, execFile: vi.fn(actual.execFile) };
+});
 
 let root: string;
 let FAKE: string;
@@ -514,6 +520,283 @@ describe('mensagens fora do comum', () => {
     expect(received(s.log)[0]!.method).toBe('initialize');
     await p.end();
   });
+});
+
+/** O caminho do arquivo de cache (o único) em `cacheDir`. */
+const cacheFileIn = (cacheDir: string) => path.join(cacheDir, readdirSync(cacheDir).find((f) => f.endsWith('.json'))!);
+const readJson = (file: string) => JSON.parse(readFileSync(file, 'utf8')) as { key: string; initialize: Record<string, any>; tools: Array<Record<string, any>> };
+
+/** Uma primeira conversa só para gravar o cache (o servidor de mentira abre uma vez). */
+async function primeCache(s: { log: string; cacheDir: string }, o: Parameters<typeof startProxy>[1] = {}) {
+  const p = startProxy(s, o);
+  await handshake(p);
+  await until(() => existsSync(s.cacheDir) && readdirSync(s.cacheDir).some((f) => f.endsWith('.json')));
+  await p.end();
+}
+const listChanged = (p: ReturnType<typeof startProxy>) => p.out.filter((m) => m.method === 'notifications/tools/list_changed');
+/** O `tools/list` que o proxy faz sozinho ao abrir o servidor a partir do cache. */
+const verifications = (log: string) => received(log).filter((m) => m.method === 'tools/list' && String(m.id).startsWith('myco-proxy-'));
+
+describe('o cache se corrige no primeiro uso real', () => {
+  it('tools/list de verdade diferente do cache: o cache é regravado e o cliente recebe notifications/tools/list_changed', async () => {
+    const s = await scratch();
+    await primeCache(s);
+    const file = cacheFileIn(s.cacheDir);
+    const stale = readJson(file);
+    const real = stale.tools;
+    stale.tools = [{ ...real[0], description: 'texto antigo' }]; // sem fake_crash e com outra descrição
+    await fs.writeFile(file, JSON.stringify(stale));
+    const antes = verifications(s.log).length; // a primeira conversa pediu o tools/list ao abrir sem cache
+
+    const p = startProxy(s);
+    const { list } = await handshake(p);
+    expect(list.result.tools).toEqual(stale.tools); // o cliente recebeu o do cache, sem abrir nada
+    expect(spawns(s.log)).toBe(1);
+    expect(listChanged(p)).toHaveLength(0);
+    p.send({ id: 3, method: 'tools/call', params: { name: 'fake_echo', arguments: { text: 'oi' } } });
+    expect((await p.response(3)).result.content[0].text).toBe('oi');
+    await until(() => listChanged(p).length === 1);
+    expect(listChanged(p)[0]).toEqual({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
+    expect(readJson(file).tools).toEqual(real); // regravado com o de verdade
+    expect(verifications(s.log)).toHaveLength(antes + 1);
+    // O tools/list do cliente agora vem do servidor aberto e a próxima conversa já parte do cache novo, sem abrir o servidor.
+    p.send({ id: 4, method: 'tools/list' });
+    expect((await p.response(4)).result.tools).toEqual(real);
+    await p.end();
+    const q = startProxy(s);
+    expect((await handshake(q)).list.result.tools).toEqual(real);
+    expect(spawns(s.log)).toBe(2);
+    await q.end();
+    expect(listChanged(p)).toHaveLength(1);
+  });
+
+  it('tools/list igual ao cache: nada é regravado e nenhuma notificação sai', async () => {
+    const s = await scratch();
+    await primeCache(s);
+    const file = cacheFileIn(s.cacheDir);
+    const before = readFileSync(file, 'utf8');
+    const mtime = statSync(file).mtimeMs;
+    const antes = verifications(s.log).length;
+    const p = startProxy(s);
+    await handshake(p);
+    p.send({ id: 3, method: 'tools/call', params: { name: 'fake_echo', arguments: { text: 'a' } } });
+    await p.response(3);
+    await until(() => verifications(s.log).length === antes + 1);
+    await sleep(200);
+    expect(listChanged(p)).toHaveLength(0);
+    expect(readFileSync(file, 'utf8')).toBe(before);
+    expect(statSync(file).mtimeMs).toBe(mtime);
+    await p.end();
+  });
+
+  it('initialize de verdade diferente do cache: o cache é regravado; sem mudança nas ferramentas, sem notificação', async () => {
+    const s = await scratch();
+    await primeCache(s);
+    const file = cacheFileIn(s.cacheDir);
+    const real = readJson(file);
+    await fs.writeFile(file, JSON.stringify({ ...real, initialize: { ...real.initialize, serverInfo: { name: 'Fake', version: '1.0' } } }));
+    const p = startProxy(s);
+    const { init } = await handshake(p);
+    expect(init.result.serverInfo.version).toBe('1.0'); // o cliente recebeu o do cache
+    p.send({ id: 3, method: 'tools/call', params: { name: 'fake_echo', arguments: { text: 'a' } } });
+    await p.response(3);
+    await until(() => readJson(file).initialize.serverInfo.version === '9.9');
+    expect(readJson(file).tools).toEqual(real.tools);
+    await sleep(150);
+    expect(listChanged(p)).toHaveLength(0);
+    await p.end();
+  });
+
+  it('sem tools.listChanged no que o cliente recebeu: regrava o cache (initialize e ferramentas) e não notifica', async () => {
+    const s = await scratch();
+    await primeCache(s);
+    const file = cacheFileIn(s.cacheDir);
+    const real = readJson(file);
+    await fs.writeFile(file, JSON.stringify({ ...real, initialize: { ...real.initialize, capabilities: {} }, tools: [real.tools[0]] }));
+    const p = startProxy(s);
+    await handshake(p);
+    p.send({ id: 3, method: 'tools/call', params: { name: 'fake_echo', arguments: { text: 'a' } } });
+    await p.response(3);
+    await until(() => readJson(file).tools.length === 2);
+    expect(readJson(file).initialize).toEqual(real.initialize);
+    await sleep(150);
+    expect(listChanged(p)).toHaveLength(0);
+    await p.end();
+  });
+});
+
+describe('o que entra na chave do cache', () => {
+  const base = ['/x/cli.js', '--isolated', '--browser', 'chrome'];
+
+  it('variáveis PLAYWRIGHT_MCP_* mudam a chave; a da pasta de capturas e as de fora não', () => {
+    const a = serverFingerprint('/usr/bin/node', base, {});
+    expect(serverFingerprint('/usr/bin/node', base, { PLAYWRIGHT_MCP_CAPS: 'vision' })).not.toBe(a);
+    expect(serverFingerprint('/usr/bin/node', base, { PLAYWRIGHT_MCP_CAPS: 'vision' })).not.toBe(serverFingerprint('/usr/bin/node', base, { PLAYWRIGHT_MCP_CAPS: 'pdf' }));
+    expect(serverFingerprint('/usr/bin/node', base, { PLAYWRIGHT_MCP_CAPS: 'vision' })).toBe(serverFingerprint('/usr/bin/node', base, { PLAYWRIGHT_MCP_CAPS: 'vision', OUTRA: 'x' }));
+    expect(serverFingerprint('/usr/bin/node', base, { PLAYWRIGHT_MCP_OUTPUT_DIR: '/run/1' })).toBe(a);
+    expect(serverFingerprint('/usr/bin/node', base, { OUTRA: 'x', PLAYWRIGHT_OUTRO: 'y' })).toBe(a);
+  });
+
+  it('o conteúdo do arquivo de --config (e de PLAYWRIGHT_MCP_CONFIG) entra, não só o caminho', async () => {
+    const s = await scratch();
+    const cfg = path.join(s.dir, 'config.json');
+    await fs.writeFile(cfg, '{"capabilities":["vision"]}');
+    const sep = serverFingerprint('/usr/bin/node', [...base, '--config', cfg], {});
+    const junto = serverFingerprint('/usr/bin/node', [...base, `--config=${cfg}`], {});
+    const viaEnv = serverFingerprint('/usr/bin/node', base, { PLAYWRIGHT_MCP_CONFIG: cfg });
+    await fs.writeFile(cfg, '{"capabilities":["pdf"]}');
+    expect(serverFingerprint('/usr/bin/node', [...base, '--config', cfg], {})).not.toBe(sep);
+    expect(serverFingerprint('/usr/bin/node', [...base, `--config=${cfg}`], {})).not.toBe(junto);
+    expect(serverFingerprint('/usr/bin/node', base, { PLAYWRIGHT_MCP_CONFIG: cfg })).not.toBe(viaEnv);
+    expect(serverFingerprint('/usr/bin/node', [...base, '--config', cfg], {})).toBe(serverFingerprint('/usr/bin/node', [...base, '--config', cfg], {}));
+  });
+
+  it('a pasta de capturas não entra nem na busca de versões (um package.json do projeto onde ela fica não muda a chave)', async () => {
+    const s = await scratch();
+    const out = path.join(s.dir, 'capturas');
+    await fs.mkdir(out, { recursive: true });
+    await fs.writeFile(path.join(s.dir, 'package.json'), '{"name":"intruso","version":"1.2.3"}'); // o projeto onde a pasta de capturas fica
+    const a = serverFingerprint('/usr/bin/node', [...base, '--output-dir', out], {});
+    expect(a).not.toContain('intruso');
+    expect(serverFingerprint('/usr/bin/node', [...base, `--output-dir=${out}`], {})).toBe(a);
+    expect(serverFingerprint('/usr/bin/node', [...base, '--output-dir', path.join(s.dir, 'outra')], {})).toBe(a);
+  });
+
+  it('o servidor aberto com outra PLAYWRIGHT_MCP_* no ambiente não reaproveita o cache', async () => {
+    const s = await scratch();
+    const antes = process.env.PLAYWRIGHT_MCP_TESTE_CACHE;
+    try {
+      delete process.env.PLAYWRIGHT_MCP_TESTE_CACHE;
+      await primeCache(s);
+      expect(spawns(s.log)).toBe(1);
+      const igual = startProxy(s);
+      await handshake(igual);
+      await igual.end();
+      expect(spawns(s.log)).toBe(1);
+      process.env.PLAYWRIGHT_MCP_TESTE_CACHE = 'vision';
+      const outro = startProxy(s);
+      await handshake(outro);
+      await outro.end();
+      expect(spawns(s.log)).toBe(2);
+    } finally {
+      if (antes === undefined) delete process.env.PLAYWRIGHT_MCP_TESTE_CACHE;
+      else process.env.PLAYWRIGHT_MCP_TESTE_CACHE = antes;
+    }
+  });
+});
+
+describe('cache: forma e permissões', () => {
+  it('ferramentas que não são uma lista de objetos com name texto: cache perdido (abre o servidor e regrava um bom)', async () => {
+    const s = await scratch();
+    await primeCache(s);
+    const file = cacheFileIn(s.cacheDir);
+    const good = readJson(file);
+    let opens = 1;
+    for (const bad of [[null], [1], [{ description: 'sem nome' }], [{ name: 5 }], [good.tools[0], 'texto'], 'fake_echo', { name: 'fake_echo' }, null]) {
+      await fs.writeFile(file, JSON.stringify({ ...good, tools: bad }));
+      const p = startProxy(s);
+      const { list } = await handshake(p);
+      expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(['fake_echo', 'fake_crash']);
+      expect(spawns(s.log)).toBe(++opens);
+      expect(readJson(file).tools).toEqual(good.tools);
+      await p.end();
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('a pasta do cache é 0700 e o arquivo 0600 (também numa pasta que já existia aberta)', async () => {
+    const s = await scratch();
+    await fs.mkdir(s.cacheDir, { mode: 0o755 });
+    await fs.chmod(s.cacheDir, 0o755);
+    await primeCache(s);
+    expect(statSync(s.cacheDir).mode & 0o777).toBe(0o700);
+    expect(statSync(cacheFileIn(s.cacheDir)).mode & 0o777).toBe(0o600);
+    expect(readdirSync(s.cacheDir).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  });
+});
+
+describe('o cliente desiste de um pedido', () => {
+  it('notifications/cancelled tira o pedido da lista de falhas: quando o servidor cai, só os outros recebem o erro', async () => {
+    const s = await scratch();
+    const p = startProxy(s);
+    await handshake(p);
+    p.send({ id: 100, method: 'tools/call', params: { name: 'fake_hang', arguments: {} } });
+    await until(() => received(s.log).find((m) => m.id === 100));
+    p.send({ method: 'notifications/cancelled', params: { requestId: 100, reason: 'desisti' } });
+    await until(() => received(s.log).find((m) => m.method === 'notifications/cancelled'));
+    p.send({ id: 101, method: 'tools/call', params: { name: 'fake_crash', arguments: {} } });
+    expect((await p.response(101)).error?.code).toBe(-32603);
+    expect(p.out.filter((m) => m.method === undefined && m.id === 100)).toHaveLength(0);
+    await p.end();
+  });
+
+  it('o mesmo com o servidor ainda abrindo (pedido e cancelamento na fila)', async () => {
+    const s = await scratch();
+    await primeCache(s);
+    const p = startProxy(s);
+    await handshake(p);
+    p.send({ id: 100, method: 'tools/call', params: { name: 'fake_hang', arguments: {} } });
+    p.send({ method: 'notifications/cancelled', params: { requestId: 100 } });
+    p.send({ id: 101, method: 'tools/call', params: { name: 'fake_crash', arguments: {} } });
+    expect((await p.response(101)).error?.code).toBe(-32603);
+    expect(p.out.filter((m) => m.method === undefined && m.id === 100)).toHaveLength(0);
+    await p.end();
+  });
+});
+
+describe('Windows: depois que o servidor saiu, o proxy não manda taskkill ao PID dele (que pode ser de outro programa)', () => {
+  it('fim do stdin: um taskkill só (o do encerramento) e nenhum depois do close', async () => {
+    const real = process.platform;
+    const taskkills: number[] = [];
+    vi.mocked(execFile).mockImplementation(((file: string, args: string[]) => {
+      if (file === 'taskkill') {
+        taskkills.push(Number(args[1]));
+        try {
+          process.kill(Number(args[1]), 'SIGKILL'); // o taskkill de mentira mata de verdade
+        } catch {
+          // já saiu
+        }
+      }
+      return {} as never;
+    }) as never);
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      const s = await scratch();
+      const p = startProxy(s);
+      await handshake(p);
+      const pid = events(s.log)[0]!.pid;
+      await p.end();
+      expect(alive(pid)).toBe(false);
+      expect(taskkills).toEqual([pid]); // sem o segundo, depois da saída
+    } finally {
+      Object.defineProperty(process, 'platform', { value: real });
+      vi.mocked(execFile).mockReset();
+    }
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('o proxy recebe SIGTERM', () => {
+  it('mata o servidor de verdade e o que ele abriu (o grupo todo) e sai com 0', async () => {
+    const s = await scratch();
+    const { command, args } = navegadorProxyCommand(false);
+    const proc = spawn(command, [...args, '--cache-dir', s.cacheDir, '--', process.execPath, FAKE, s.log, 'group'], { stdio: ['pipe', 'pipe', 'inherit'] });
+    const out: Msg[] = [];
+    createInterface({ input: proc.stdout }).on('line', (l) => out.push(JSON.parse(l) as Msg));
+    const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => proc.once('close', (code, signal) => resolve({ code, signal })));
+    const send = (m: object) => proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\n');
+    send({ id: 1, method: 'initialize', params: INIT });
+    await until(() => out.find((m) => m.id === 1), 20_000);
+    send({ method: 'notifications/initialized' });
+    send({ id: 2, method: 'tools/list' });
+    await until(() => out.find((m) => m.id === 2), 20_000);
+    const pid = events(s.log)[0]!.pid;
+    const gpid = (await until(() => events(s.log).find((e) => e.ev === 'grandchild')))!.gpid!;
+    expect(alive(pid) && alive(gpid)).toBe(true);
+    proc.kill('SIGTERM');
+    const r = await closed;
+    expect(r).toEqual({ code: 0, signal: null });
+    expect(alive(pid)).toBe(false);
+    await until(() => !alive(gpid), 3_000);
+  }, 40_000);
 });
 
 describe('módulo: leve de verdade', () => {

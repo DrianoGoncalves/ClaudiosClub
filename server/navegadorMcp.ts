@@ -1,5 +1,5 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -10,7 +10,9 @@ import { ROOT } from './root';
 // não, e o Playwright MCP custa ~117 MB parado. Este processo (só built-ins do node: ~54 MB, node 26; o node vazio já pesa ~44) fica no lugar dele e só abre o de verdade
 // quando alguém usa o navegador:
 // - `initialize` e `tools/list` saem de um cache em disco (chave: versões do pacote + argumentos que mudam as ferramentas + protocolo do
-//   cliente), sem abrir o Playwright. Sem cache, abre o de verdade uma vez, grava e segue com ele (ele vai ser usado).
+//   cliente), sem abrir o Playwright. Sem cache, abre o de verdade uma vez, grava e segue com ele (ele vai ser usado). Com cache, o primeiro
+//   uso confere o `initialize` e o `tools/list` de verdade com os servidos: se mudaram, o cache é regravado e o cliente recebe
+//   `notifications/tools/list_changed` (quando o servidor declarou `tools.listChanged`).
 // - `ping` o proxy mesmo responde, em qualquer estado.
 // - Qualquer outro pedido (tools/call, resources/*, prompts/*…) abre o de verdade, repete o `initialize` do cliente (a resposta some) e o
 //   `notifications/initialized`, entrega o pedido e dali em diante repassa as linhas dos dois lados sem mexer (inclusive o que o servidor
@@ -73,18 +75,42 @@ function packageOf(file: string): string | null {
   return null;
 }
 
+/** Hash curto do conteúdo de um arquivo de configuração (ilegível vira um marcador: o servidor de verdade nem abriria com ele). */
+function fileDigest(file: string): string {
+  try {
+    return shortHash(readFileSync(path.resolve(file), 'utf8'));
+  } catch {
+    return 'ilegivel';
+  }
+}
+
 /**
  * O que identifica o servidor de verdade: as versões dos pacotes dos arquivos que ele roda (o @playwright/mcp e o playwright-core, que traz as
- * ferramentas) e os argumentos, menos a pasta de capturas (muda a cada conversa e não muda as ferramentas). O cache vale só com isso igual.
+ * ferramentas), os argumentos (menos a pasta de capturas, que muda a cada conversa e não muda as ferramentas), o conteúdo do arquivo de
+ * `--config` e as variáveis `PLAYWRIGHT_MCP_*` do ambiente (equivalem a argumentos; a da pasta de capturas fica de fora pelo mesmo motivo).
+ * O cache vale só com isso igual.
  */
-export function serverFingerprint(command: string, args: string[]): string {
+export function serverFingerprint(command: string, args: string[], env: NodeJS.ProcessEnv = process.env): string {
   const kept: string[] = [];
+  const configs: string[] = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--output-dir') i++;
-    else if (!args[i]!.startsWith('--output-dir=')) kept.push(args[i]!);
+    const a = args[i]!;
+    if (a === '--output-dir') i++;
+    else if (!a.startsWith('--output-dir=')) {
+      kept.push(a);
+      if (a === '--config' && args[i + 1] !== undefined) configs.push(fileDigest(args[i + 1]!));
+      else if (a.startsWith('--config=')) configs.push(fileDigest(a.slice('--config='.length)));
+    }
+  }
+  const vars: Array<[string, string]> = [];
+  for (const name of Object.keys(env).sort()) {
+    const up = name.toUpperCase();
+    if (!up.startsWith('PLAYWRIGHT_MCP_') || up === 'PLAYWRIGHT_MCP_OUTPUT_DIR' || env[name] === undefined) continue;
+    vars.push([up, env[name]!]);
+    if (up === 'PLAYWRIGHT_MCP_CONFIG') configs.push(fileDigest(env[name]!));
   }
   const versions: string[] = [];
-  for (const a of args) {
+  for (const a of kept) {
     if (!path.isAbsolute(a) || !existsSync(a)) continue;
     const own = packageOf(a);
     if (own) versions.push(own);
@@ -95,7 +121,7 @@ export function serverFingerprint(command: string, args: string[]): string {
       // sem playwright-core ao lado (servidor de teste): só o que já entrou
     }
   }
-  return JSON.stringify({ command: path.basename(command), kept, versions });
+  return JSON.stringify({ command: path.basename(command), kept, versions, env: vars, configs });
 }
 
 interface CacheEntry {
@@ -118,22 +144,37 @@ function shortHash(text: string): string {
 const cacheKeyOf = (fingerprint: string, protocolVersion: string) => `${CACHE_VERSION}\n${fingerprint}\n${protocolVersion}`;
 const cacheFileOf = (dir: string, key: string) => path.join(dir, `navegador-${shortHash(key)}.json`);
 
+/** As ferramentas do cache só valem como lista de objetos com `name` texto: o que for diferente disso vira cache perdido. */
+const validTools = (v: unknown): v is Json[] => Array.isArray(v) && v.every((t) => isObject(t) && typeof t.name === 'string');
+
+/** Igual por conteúdo, sem depender da ordem das chaves. */
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
+  if (isObject(v)) return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}`;
+  return JSON.stringify(v) ?? 'null';
+}
+const sameJson = (a: unknown, b: unknown) => canonical(a) === canonical(b);
+
 function readCache(file: string, key: string): CacheEntry | null {
   try {
     const c = JSON.parse(readFileSync(file, 'utf8')) as { key?: unknown; initialize?: unknown; tools?: unknown };
-    if (c.key !== key || !isObject(c.initialize) || typeof c.initialize.protocolVersion !== 'string' || !Array.isArray(c.tools)) return null;
+    if (c.key !== key || !isObject(c.initialize) || typeof c.initialize.protocolVersion !== 'string' || !validTools(c.tools)) return null;
     return { initialize: c.initialize, tools: c.tools };
   } catch {
     return null;
   }
 }
 
-/** Melhor esforço: uma pasta sem escrita só tira o cache (o servidor de verdade abre a cada conversa que usa o navegador). */
+/** Melhor esforço: uma pasta sem escrita só tira o cache (o servidor de verdade abre a cada conversa que usa o navegador). Pasta 0700 e arquivo 0600 (só o dono; nada disso vale no Windows). */
 function writeCache(file: string, key: string, entry: CacheEntry): void {
   const tmp = `${file}.${process.pid}.tmp`;
+  const unix = process.platform !== 'win32';
   try {
-    mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(tmp, JSON.stringify({ key, ...entry }));
+    const dir = path.dirname(file);
+    mkdirSync(dir, { recursive: true, ...(unix && { mode: 0o700 }) });
+    if (unix) chmodSync(dir, 0o700);
+    writeFileSync(tmp, JSON.stringify({ key, ...entry }), unix ? { mode: 0o600 } : undefined);
+    if (unix) chmodSync(tmp, 0o600);
     renameSync(tmp, file);
   } catch {
     try {
@@ -146,11 +187,19 @@ function writeCache(file: string, key: string, entry: CacheEntry): void {
 
 // ---- processos ----
 
-/** O SIGTERM/SIGKILL no grupo do servidor (no Unix ele é líder de grupo); sem o grupo, no processo. No Windows, taskkill (sempre à força). */
+const exited = (c: ChildProcess) => c.exitCode !== null || c.signalCode !== null;
+
+/**
+ * O SIGTERM/SIGKILL no grupo do servidor (no Unix ele é líder de grupo, e o grupo pode ter sobrado mesmo com o líder morto); sem o grupo, no processo.
+ * No Windows, taskkill (sempre à força), e só enquanto o processo não saiu: depois o PID pode ser de outro programa.
+ */
 function signalTree(child: ChildProcess, sig: NodeJS.Signals): void {
   const pid = child.pid;
   if (!pid) return;
-  if (process.platform === 'win32') return void execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {});
+  if (process.platform === 'win32') {
+    if (exited(child)) return;
+    return void execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {});
+  }
   try {
     process.kill(-pid, sig);
   } catch {
@@ -189,6 +238,8 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
   let initResult: Json | null = null;
   let tools: unknown[] | null = null;
   let cache: { file: string; key: string } | null = null;
+  /** O que o cliente recebeu do cache em disco e ainda não foi conferido com o servidor de verdade (ver `verifyCache`). */
+  let served: { initialize: Json; tools: unknown[]; initChanged: boolean } | null = null;
   let closing = false;
   let state: 'idle' | 'starting' | 'live' = 'idle';
   let child: ChildProcess | null = null;
@@ -206,7 +257,7 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
   /** Respostas esperadas pelo próprio proxy (o `initialize` repetido, o `tools/list` do cache). */
   const proxyWaiters = new Map<string, Waiter>();
   /** O que chegou enquanto o servidor de verdade abria. */
-  const queue: Array<{ line: string; id?: unknown; method: string | null }> = [];
+  const queue: Array<{ line: string; id?: unknown; method: string | null; cancelled?: unknown }> = [];
   /** Pedidos `initialize` do cliente à espera da resposta do servidor de verdade (sem cache): saem assim que ela chega, sem esperar o resto da abertura. */
   const initWaiting: unknown[] = [];
 
@@ -218,6 +269,7 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
     if (hit) {
       initResult = hit.initialize;
       tools = hit.tools;
+      served = { initialize: hit.initialize, tools: hit.tools, initChanged: false };
     }
   }
 
@@ -227,9 +279,11 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
 
   function ask(method: string, params: unknown): Promise<{ result?: unknown; error?: { message?: unknown } }> {
     return new Promise((resolve) => {
+      const c = child;
+      if (!c?.stdin) return resolve({ error: { message: lastError || 'o servidor do navegador não está aberto' } });
       const id = `${PROXY_ID}${++seq}`;
       proxyWaiters.set(idKey(id), resolve);
-      child?.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+      c.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
     });
   }
 
@@ -280,6 +334,40 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
     return c;
   }
 
+  /** O `tools/list` inteiro do servidor de verdade (todas as páginas); null se ele recusou, caiu ou não terminou. */
+  async function fetchTools(): Promise<unknown[] | null> {
+    const all: unknown[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 50; page++) {
+      const r = await ask('tools/list', cursor ? { cursor } : {});
+      if (r.error || !isObject(r.result) || !Array.isArray(r.result.tools)) return null;
+      all.push(...r.result.tools);
+      cursor = typeof r.result.nextCursor === 'string' ? r.result.nextCursor : undefined;
+      if (!cursor) return all;
+    }
+    return null;
+  }
+
+  const declaresListChanged = (init: Json | null) => isObject(init?.capabilities) && isObject(init.capabilities.tools) && init.capabilities.tools.listChanged === true;
+
+  /**
+   * Com o servidor de verdade aberto pela primeira vez a partir do cache: confere o que ele diz com o que o cliente recebeu. Se o `tools/list` ou o
+   * `initialize` mudaram, regrava o cache (a próxima conversa já vê o novo); e se as ferramentas mudaram, avisa o cliente com
+   * `notifications/tools/list_changed`, mas só se o servidor declarou `tools.listChanged` (no que o cliente recebeu e no que o servidor diz agora).
+   * Roda depois de o pedido que abriu o servidor ser entregue, sem atrasá-lo.
+   */
+  async function verifyCache(c: ChildProcess): Promise<void> {
+    const before = served;
+    if (!before || c !== child) return;
+    const real = await fetchTools();
+    if (!real || c !== child || closing) return; // caiu ou não respondeu: fica para a próxima abertura
+    served = null;
+    const toolsChanged = !sameJson(real, before.tools);
+    if (toolsChanged) tools = real;
+    if ((toolsChanged || before.initChanged) && cache && initResult) writeCache(cache.file, cache.key, { initialize: initResult, tools: real });
+    if (toolsChanged && declaresListChanged(before.initialize) && declaresListChanged(initResult)) write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
+  }
+
   /** Abre o servidor de verdade, repete o `initialize` e o `initialized` do cliente e, sem cache, grava o `initialize` e o `tools/list`. */
   async function handshake(): Promise<void> {
     const c = spawnReal();
@@ -292,6 +380,7 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
     try {
       const init = await ask('initialize', clientInit ?? DEFAULT_INIT);
       if (init.error || !isObject(init.result)) throw new Error(`o servidor do navegador recusou o initialize (${String(init.error?.message ?? lastError)})`);
+      if (served && !sameJson(init.result, served.initialize)) served.initChanged = true;
       initResult = init.result;
       answerInitWaiting();
       // Sem cache o cliente pode ainda não ter terminado o dele: o servidor só deve ouvir `initialized` depois (ele pergunta roots/list ao receber).
@@ -304,18 +393,10 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
       if (c !== child) throw new Error(lastError);
       c.stdin!.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
       if (!tools) {
-        const all: unknown[] = [];
-        let cursor: string | undefined;
-        for (let page = 0; page < 50; page++) {
-          const r = await ask('tools/list', cursor ? { cursor } : {});
-          if (r.error || !isObject(r.result) || !Array.isArray(r.result.tools)) break;
-          all.push(...r.result.tools);
-          cursor = typeof r.result.nextCursor === 'string' ? r.result.nextCursor : undefined;
-          if (!cursor) {
-            tools = all;
-            if (cache && initResult) writeCache(cache.file, cache.key, { initialize: initResult, tools: all });
-            break;
-          }
+        const all = await fetchTools();
+        if (all) {
+          tools = all;
+          if (cache && initResult) writeCache(cache.file, cache.key, { initialize: initResult, tools: all });
         }
         if (c !== child) throw new Error(lastError);
       }
@@ -332,16 +413,22 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
         await handshake();
         state = 'live';
         // Os pedidos que esperavam entram na ordem em que chegaram (o tools/list, do que acabou de ser gravado: o servidor já o disse).
+        const opened = child;
         for (const q of queue.splice(0)) {
           if (q.method === 'tools/list' && q.id !== undefined && tools) write(reply(q.id, { tools }));
-          else deliver(q.line, q.id);
+          else {
+            if (q.cancelled !== undefined) inflight.delete(idKey(q.cancelled));
+            deliver(q.line, q.id);
+          }
         }
+        if (opened) void verifyCache(opened).catch(() => {});
       } catch (err) {
         const why = err instanceof Error ? err.message : lastError;
         log(why);
         const dead = child;
         child = null;
         state = 'idle';
+        serverRequests.clear(); // o `onChildGone` do que acabou de cair sai antes de chegar aqui (`c !== child`)
         if (dead) signalTree(dead, 'SIGKILL');
         answerInitWaiting();
         for (const q of queue.splice(0)) if (q.id !== undefined) write(fail(q.id, -32603, `${NAME}: ${why}`));
@@ -394,9 +481,14 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
       if (m.id !== undefined && m.id !== null && child && serverRequests.delete(idKey(m.id))) child.stdin!.write(line + '\n');
       return;
     }
-    if (state === 'live') return deliver(line, isRequest ? m.id : undefined);
+    // O cliente desistiu do pedido: se o servidor cair, ninguém espera o erro dele.
+    const cancelled = method === 'notifications/cancelled' && isObject(m.params) ? m.params.requestId : undefined;
+    if (state === 'live') {
+      if (cancelled !== undefined) inflight.delete(idKey(cancelled));
+      return deliver(line, isRequest ? m.id : undefined);
+    }
     if (!isRequest && state === 'idle') return; // notificação sem servidor aberto (cancelled, roots/list_changed): ninguém a recebe, e a abertura já refaz roots
-    queue.push({ line, method, ...(isRequest && { id: m.id }) });
+    queue.push({ line, method, ...(isRequest && { id: m.id }), ...(cancelled !== undefined && { cancelled }) });
     void start();
   }
 
@@ -430,7 +522,7 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
       });
       signalTree(c, 'SIGTERM');
     });
-    signalTree(c, 'SIGKILL'); // sobrou alguém do grupo (o `close` só espera o líder): sem erro se não sobrou
+    signalTree(c, 'SIGKILL'); // sobrou alguém do grupo (o `close` só espera o líder): sem erro se não sobrou. No Windows, não faz nada com o processo que já saiu
   }
   if (o.handleSignals) for (const sig of STOP) process.off(sig, onSignal);
 }
