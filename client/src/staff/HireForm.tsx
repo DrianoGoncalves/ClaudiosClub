@@ -20,7 +20,7 @@ import { portraitUrl } from '../board/nodes';
 import { effortLabel, employeeName, folderName } from '../format';
 import { t, type MsgKey } from '../i18n';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
-import { ProtocolBadge } from '../office/ProjectOffice';
+import { ProtocolBadge } from '../office/ProtocolBadge';
 import { BrowserCheck } from './BrowserCheck';
 import { CopyFromCompany } from './CopyFromCompany';
 import { differingFields, PERSON_FIELD_LABEL } from './directory';

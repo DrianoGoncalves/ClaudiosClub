@@ -1,5 +1,5 @@
 import { ReactFlowProvider } from '@xyflow/react';
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { lazy, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type {
   Agent,
   AppConfig,
@@ -21,6 +21,7 @@ import { colorCss } from '../../shared/model';
 import { api, isPairingError, NEEDS_PAIRING_EVENT, PAIRED_EVENT, withUsageConfirm } from './api';
 import { BoardView } from './board/Board';
 import { boardStyle, useBoardBackground } from './board/colors';
+import { LazyScreen } from './LazyScreen';
 import { useTheme } from './theme';
 import { pollVisible, pollVisibleLoop } from './usePoll';
 import { archiveKey, ghostNodeId, HR_ID, manageNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
@@ -47,15 +48,17 @@ import { directoryPerson } from './staff/directory';
 import { UsageWarnings } from './chat/usageWarning';
 
 // Telas abertas por ação da pessoa: carregam sob demanda, fora do pacote inicial (o quadro é a única tela do primeiro desenho).
-const AgentPanel = lazy(() => import('./detail/Detail').then((m) => ({ default: m.AgentPanel })));
-const EmployeePanel = lazy(() => import('./detail/Detail').then((m) => ({ default: m.EmployeePanel })));
+const loadDetail = () => import('./detail/Detail');
+const loadChat = () => import('./chat/ChatView');
+const AgentPanel = lazy(() => loadDetail().then((m) => ({ default: m.AgentPanel })));
+const EmployeePanel = lazy(() => loadDetail().then((m) => ({ default: m.EmployeePanel })));
 const PeoplePanel = lazy(() => import('./detail/PeoplePanel').then((m) => ({ default: m.PeoplePanel })));
-const ProjectPanel = lazy(() => import('./detail/Detail').then((m) => ({ default: m.ProjectPanel })));
-const RankingPanel = lazy(() => import('./detail/Detail').then((m) => ({ default: m.RankingPanel })));
-const SkillPanel = lazy(() => import('./detail/Detail').then((m) => ({ default: m.SkillPanel })));
-const SyncedPanel = lazy(() => import('./detail/Detail').then((m) => ({ default: m.SyncedPanel })));
+const ProjectPanel = lazy(() => loadDetail().then((m) => ({ default: m.ProjectPanel })));
+const RankingPanel = lazy(() => loadDetail().then((m) => ({ default: m.RankingPanel })));
+const SkillPanel = lazy(() => loadDetail().then((m) => ({ default: m.SkillPanel })));
+const SyncedPanel = lazy(() => loadDetail().then((m) => ({ default: m.SyncedPanel })));
 const TaskCostPanel = lazy(() => import('./detail/TaskCostPanel').then((m) => ({ default: m.TaskCostPanel })));
-const UserPanel = lazy(() => import('./detail/Detail').then((m) => ({ default: m.UserPanel })));
+const UserPanel = lazy(() => loadDetail().then((m) => ({ default: m.UserPanel })));
 const AgentForm = lazy(() => import('./staff/AgentForm').then((m) => ({ default: m.AgentForm })));
 const FilesBoard = lazy(() => import('./files/FilesBoard').then((m) => ({ default: m.FilesBoard })));
 const HrPanel = lazy(() => import('./staff/HrPanel').then((m) => ({ default: m.HrPanel })));
@@ -156,10 +159,21 @@ export function App() {
     setJumpConversation((j) => (j && j.node !== selectedId ? null : j));
   }, [selectedId]);
   // O painel pode nunca atender o alvo (não montou, a conversa não tem o balão): não fica guardado para depois.
+  // O prazo só conta depois que o painel e o chat carregaram: em rede lenta eles chegam em dois pedidos seguidos, e contar
+  // desde o clique vencia o alvo antes de o chat montar (sem rolar nem piscar). Pedir o chat já aqui também tira um dos pedidos da fila.
   useEffect(() => {
     if (!jumpTarget) return;
-    const timer = setTimeout(() => setJumpTarget(null), JUMP_TARGET_MS);
-    return () => clearTimeout(timer);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancelled = false;
+    void Promise.all([loadDetail(), loadChat()])
+      .catch(() => {}) // falhou: a tela mostra o aviso de recarregar; o alvo some no prazo normal
+      .then(() => {
+        if (!cancelled) timer = setTimeout(() => setJumpTarget(null), JUMP_TARGET_MS);
+      });
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [jumpTarget]);
   /** Tarefas em aberto por projeto, para o cabeçalho das salas. */
   const [taskSummary, setTaskSummary] = useState<Record<string, TaskSummary>>({});
@@ -483,13 +497,13 @@ export function App() {
           <button className="drawer-close" onClick={() => setSelectedId(null)} aria-label={t('app.close')}>
             ×
           </button>
-          <Suspense fallback={null}>
+          <LazyScreen>
             {(selection.kind === 'hr' || selection.kind === 'ranking') && (
               <PeoplePanel
                 view={selection.kind}
                 onView={(view) => setSelectedId(view === 'hr' ? HR_ID : RANKING_ID)}
                 hr={
-                  <Suspense fallback={null}>
+                  <LazyScreen>
                     <HrPanel
                       profiles={board.staff}
                       onEdit={(p) => {
@@ -501,28 +515,33 @@ export function App() {
                       onChanged={load}
                       onNotice={(text) => setNotice(text)}
                     />
-                  </Suspense>
+                  </LazyScreen>
                 }
                 ranking={(tab) => {
                   const openTask = (projectId: string, taskId: string) => {
                     setJumpTask(taskId);
                     setTasksFor(projectId);
                   };
-                  return tab === 'tasks' ? (
-                    <TaskCostPanel staff={staffIndex(board)} onOpenTask={openTask} onOpenPerson={(p) => openManage(p.projectId, p.staffId)} />
-                  ) : (
-                    <RankingPanel
-                      tab={tab}
-                      groups={rankingGroups(board, config)}
-                      agents={Object.entries(costs?.agents ?? {})
-                        .map(([type, c]) => ({ type, usd: c.usd, runs: c.runs }))
-                        .sort((a, b) => b.usd - a.usd)}
-                      system={costs?.system}
-                      scanning={costs?.scanning ?? true}
-                      onSelect={setSelectedId}
-                      onOpenPerson={(p) => openManage(p.projectId, p.staffId)}
-                      onOpenTask={openTask}
-                    />
+                  // Com o próprio Suspense: na primeira troca de aba só o conteúdo espera, o cabeçalho e as abas do PeoplePanel ficam.
+                  return (
+                    <LazyScreen>
+                      {tab === 'tasks' ? (
+                        <TaskCostPanel staff={staffIndex(board)} onOpenTask={openTask} onOpenPerson={(p) => openManage(p.projectId, p.staffId)} />
+                      ) : (
+                        <RankingPanel
+                          tab={tab}
+                          groups={rankingGroups(board, config)}
+                          agents={Object.entries(costs?.agents ?? {})
+                            .map(([type, c]) => ({ type, usd: c.usd, runs: c.runs }))
+                            .sort((a, b) => b.usd - a.usd)}
+                          system={costs?.system}
+                          scanning={costs?.scanning ?? true}
+                          onSelect={setSelectedId}
+                          onOpenPerson={(p) => openManage(p.projectId, p.staffId)}
+                          onOpenTask={openTask}
+                        />
+                      )}
+                    </LazyScreen>
                   );
                 }}
               />
@@ -550,9 +569,9 @@ export function App() {
                 onTeamImported={load}
                 tasks={taskSummary[selection.id] ?? null}
                 office={
-                  <Suspense fallback={null}>
+                  <LazyScreen>
                     <ProjectOffice projectId={selection.id} config={config} onConfig={setConfig} />
-                  </Suspense>
+                  </LazyScreen>
                 }
                 onNewAgent={() => setAgentForm({ scope: 'project', projectId: selection.id })}
                 onEditAgent={(name) => setAgentForm({ scope: 'project', projectId: selection.id, name })}
@@ -626,7 +645,7 @@ export function App() {
                 sheetForm={(tab, onTab) =>
                   selection.staff && (
                     // A chave troca quando a ficha muda (salvar, restaurar, rotinas) ou ao desfazer: o formulário relê.
-                    <Suspense fallback={null}>
+                    <LazyScreen>
                       <StaffForm
                         key={`${selection.staff.id}:${selection.staff.updatedAt}:${sheetReset}`}
                         embedded
@@ -643,7 +662,7 @@ export function App() {
                         onHired={() => {}}
                         onSaved={onSheetSaved}
                       />
-                    </Suspense>
+                    </LazyScreen>
                   )
                 }
                 onRestored={onSheetSaved}
@@ -704,11 +723,11 @@ export function App() {
                 }}
               />
             )}
-          </Suspense>
+          </LazyScreen>
         </aside>
       )}
       {newProject && (
-        <Suspense fallback={null}>
+        <LazyScreen>
           <NewProjectForm
             workspaces={config?.workspaces ?? []}
             workspaceId={newProject.workspaceId}
@@ -718,10 +737,10 @@ export function App() {
               projectCreated(projectId);
             }}
           />
-        </Suspense>
+        </LazyScreen>
       )}
       {agentForm && (
-        <Suspense fallback={null}>
+        <LazyScreen>
           <AgentForm
             target={agentForm}
             onClose={() => setAgentForm(null)}
@@ -734,7 +753,7 @@ export function App() {
               load();
             }}
           />
-        </Suspense>
+        </LazyScreen>
       )}
       {board && (
         <QuickJump
@@ -755,7 +774,7 @@ export function App() {
         />
       )}
       {board && uncFor && (
-        <Suspense fallback={null}>
+        <LazyScreen>
           <UncommittedPanel
             projectId={uncFor}
             projectName={board.projects.find((p) => p.id === uncFor)?.name ?? uncFor}
@@ -765,10 +784,10 @@ export function App() {
             }}
             onClose={() => setUncFor(null)}
           />
-        </Suspense>
+        </LazyScreen>
       )}
       {board && tasksFor && (
-        <Suspense fallback={null}>
+        <LazyScreen>
           <TasksBoard
             key={`${tasksFor}:${jumpTask ?? ''}`}
             initialTaskId={jumpTask}
@@ -795,10 +814,10 @@ export function App() {
               setJumpTask(null);
             }}
           />
-        </Suspense>
+        </LazyScreen>
       )}
       {board && schedulesFor && (
-        <Suspense fallback={null}>
+        <LazyScreen>
           <SchedulesBoard
             key={schedulesFor}
             projectId={schedulesFor}
@@ -814,10 +833,10 @@ export function App() {
               setSchedulesFor(null);
             }}
           />
-        </Suspense>
+        </LazyScreen>
       )}
       {board && filesFor && (
-        <Suspense fallback={null}>
+        <LazyScreen>
           <FilesBoard
             key={filesFor}
             projectId={filesFor}
@@ -825,10 +844,10 @@ export function App() {
             openPath={filesPath}
             onClose={() => setFilesFor(null)}
           />
-        </Suspense>
+        </LazyScreen>
       )}
       {board && form && (
-        <Suspense fallback={null}>
+        <LazyScreen>
           <StaffForm
             key={form.mode.kind === 'edit' ? form.mode.profile.updatedAt : 'novo'}
             board={board}
@@ -860,7 +879,7 @@ export function App() {
               load();
             }}
           />
-        </Suspense>
+        </LazyScreen>
       )}
       <SystemMonitor />
       <UsageWarnings />

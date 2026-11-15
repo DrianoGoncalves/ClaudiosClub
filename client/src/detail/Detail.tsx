@@ -662,7 +662,14 @@ export function EmployeePanel(props: {
     ? { model: chosen?.model ?? staff.model ?? staff.lastModel ?? null, effort: chosen?.effort ?? staff.effort ?? staff.lastEffort ?? null }
     : null;
   return (
-    <Suspense fallback={null}>
+    // Enquanto o chat carrega, o topo (nome e retrato) já aparece, no mesmo lugar em que o ChatView o põe: o painel não abre vazio.
+    <Suspense
+      fallback={
+        <section className="chat">
+          <div className="chat-top">{top}</div>
+        </section>
+      }
+    >
       <ChatView
         key={`${opened ?? `novo${freshN}`}:${staff?.id ?? ''}`}
         projectId={project.id}
