@@ -518,9 +518,11 @@ describe('infra: servidores por SSH', () => {
     const p = profile({ servers: ['prod', 'sumiu'] });
     const md = renderFicha(p, { ...ctx, servers: [{ name: 'prod', source: 'vps', protocol: 'ssh', host: 'vps-a', remoteRoot: '/var/www/app' }] });
     // O ssh_config é o dele (só as conexões da ficha), não um com todas as do projeto.
-    for (const part of ['## Servidores', '- `prod`: vps-a', '/var/www/app', 'ssh -F "', '.vps/ssh_config.ana-1a2b" <conexão>', 'não existe mais no projeto', 'Nunca, sem pedir antes']) {
+    // Sem o MCP (o ssh do terminal está bloqueado): nada de `ssh -F` apontando para o ssh_config.
+    for (const part of ['## Servidores', '- `prod`: vps-a', '/var/www/app', 'ssh, scp, sftp e rsync ficam bloqueados', 'não existe mais no projeto', 'Nunca, sem pedir antes']) {
       expect(md).toContain(part);
     }
+    expect(md).not.toMatch(/ssh -F|scp -F/);
     expect(md).not.toContain('skill `vps`');
     // A skill `vps` entra na lista de skills (sem o texto fixo sobre servidor: o acesso é o do Club).
     expect(renderFicha({ ...p, skills: ['vps'] }, ctx)).toContain('Skills: vps.');
@@ -545,13 +547,16 @@ describe('infra: servidores por SSH', () => {
     const deny = args[args.indexOf('--disallowedTools') + 1]!.split(',');
     expect(deny).toEqual(expect.arrayContaining(['Read(~/.ssh/**)', 'Read(**/.env)', 'Read(**/.vps/**)', 'Read(//c/chaves/ia)']));
     expect(deny.join(',')).not.toContain('espaço');
-    // Com servidor, o ssh fica liberado (só as conexões dele estão no ssh_config).
-    expect(deny).not.toContain('Bash(ssh:*)');
+    // Com servidor, o ssh continua bloqueado no terminal: o acesso é só pelo MCP myco-ssh.
+    expect(deny).toContain('Bash(ssh:*)');
+    expect(deny).toContain('PowerShell(scp:*)');
   });
 
-  it('sem servidor na ficha: nada de ssh, scp, sftp ou rsync, no Bash nem no PowerShell', () => {
+  it('ssh, scp, sftp, rsync e afins bloqueados no Bash e no PowerShell, com ou sem servidor na ficha', () => {
     const deny = secretDenyRules(profile());
     expect(deny).toEqual(expect.arrayContaining(['Bash(ssh:*)', 'PowerShell(ssh:*)', 'Bash(scp:*)', 'PowerShell(scp.exe:*)', 'Bash(rsync:*)', 'Edit(**/.vps/**)']));
+    expect(deny).toEqual(expect.arrayContaining(['Bash(plink:*)', 'PowerShell(psftp.exe:*)', 'Bash(sshpass:*)', 'PowerShell(mosh:*)']));
+    expect(secretDenyRules(profile({ servers: ['prod'] }))).toEqual(expect.arrayContaining(['Bash(ssh:*)', 'PowerShell(ssh:*)', 'Bash(rsync.exe:*)']));
   });
 
   it('.env de verdade e chaves privadas: negados para todos; o .env.example só fica livre sem servidor', () => {

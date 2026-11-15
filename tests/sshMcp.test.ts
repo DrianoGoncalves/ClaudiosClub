@@ -1,10 +1,12 @@
 import type { ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { promises as fs } from 'node:fs';
+import { promises as fs, symlinkSync, unlinkSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  comPrazo,
   cortarSaida,
   createSshMcp,
   isSecretPath,
@@ -14,7 +16,9 @@ import {
   SshBreaker,
   sshMcpServerConfig,
   SSH_MCP_NAME,
+  SSH_READ_TOOLS,
   TOOLS,
+  UPLOAD_MAX,
   type SshSpawn,
 } from '../server/staff/sshMcp';
 
@@ -42,16 +46,22 @@ interface Reply {
 }
 type Script = (args: string[]) => Reply;
 
-/** ssh falso: grava as chamadas (comando, argumentos e cwd) e responde pelo roteiro. */
+/** ssh falso: grava as chamadas (comando, argumentos, cwd e o conteúdo do stdin) e responde pelo roteiro. */
 function fakeSsh(script: Script = () => ({ code: 0, stdout: 'ok\n' })) {
-  const calls: Array<{ cmd: string; args: string[]; cwd?: string }> = [];
+  const calls: Array<{ cmd: string; args: string[]; cwd?: string; input?: Buffer }> = [];
   const kills: string[] = [];
   const spawn = ((cmd: string, args: string[], opts: { cwd?: string }) => {
-    calls.push({ cmd, args, cwd: opts.cwd });
+    const chamada: { cmd: string; args: string[]; cwd?: string; input?: Buffer } = { cmd, args, cwd: opts.cwd };
+    calls.push(chamada);
     const r = script(args);
-    const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; kill: () => boolean };
+    const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; stdin: EventEmitter & { end: (b?: Buffer) => void }; kill: () => boolean };
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
+    child.stdin = Object.assign(new EventEmitter(), {
+      end: (b?: Buffer) => {
+        if (b) chamada.input = b;
+      },
+    });
     child.kill = () => {
       kills.push(args.at(-1)!);
       return true;
@@ -148,6 +158,25 @@ function mk(over: Partial<Parameters<typeof createSshMcp>[0]> = {}, script?: Scr
   return { mcp, ...fake };
 }
 
+/** Roteiro de leitura: o readlink devolve `real` (o caminho resolvido); o resto, uma linha. */
+const lendo = (real: string): Script => (args) => (args.at(-1)!.startsWith('readlink') ? { code: 0, stdout: `${real}\n` } : { code: 0, stdout: 'linha\n' });
+/** Roteiro do ssh_enviar: o readlink devolve a raiz e o pai resolvidos; o script do envio responde `envio`. */
+const enviando =
+  (raiz: string, pai: string, envio: Reply = { code: 0, stdout: 'existia=0\n' }): Script =>
+  (args) =>
+    args.at(-1)!.startsWith('readlink') ? { code: 0, stdout: `${raiz}\n${pai}\n` } : envio;
+/** Link simbólico funciona aqui? No Windows sem privilégio ele é negado: os testes de link pulam sem isso. */
+const symlinkOk = (() => {
+  const alvo = path.join(os.tmpdir(), `myco-sym-${process.pid}`);
+  try {
+    symlinkSync(os.tmpdir(), alvo, 'dir');
+    unlinkSync(alvo);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 describe('MCP de SSH: protocolo', () => {
   it('initialize, ping, tools/list, notificação e método ou ferramenta desconhecidos', async () => {
     const { mcp } = mk();
@@ -169,6 +198,7 @@ describe('MCP de SSH: protocolo', () => {
       'ssh_listar',
       'ssh_ler',
       'ssh_executar',
+      'ssh_enviar',
     ]);
     expect(await mcp.handle({ jsonrpc: '2.0', id: 5, method: 'resources/list' })).toMatchObject({ error: { code: -32601 } });
     expect(await mcp.handle({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'rm_rf' } })).toMatchObject({ error: { code: -32602 } });
@@ -322,6 +352,11 @@ describe('validação dos parâmetros (nada chega ao ssh)', () => {
     ['ssh_executar', { servidor: 'srv1', comando: '   ' }],
     ['ssh_executar', { servidor: 'srv1', comando: 'a'.repeat(4001) }],
     ['ssh_executar', { servidor: 'srv1', comando: 'ls\u0000' }],
+    ['ssh_enviar', { servidor: 'srv1', origem: '', destino: '/srv/app/x' }],
+    ['ssh_enviar', { servidor: 'srv1', origem: 'a\u0000b', destino: '/srv/app/x' }],
+    ['ssh_enviar', { servidor: 'srv1', origem: 'a'.repeat(1001), destino: '/srv/app/x' }],
+    ['ssh_enviar', { servidor: 'srv1', origem: 'a.txt', destino: 'relativo' }],
+    ['ssh_enviar', { servidor: 'srv1', origem: 'a.txt', destino: '/srv/app/x', sobrescrever: 'sim' }],
   ];
   for (const [name, args] of bad) {
     it(`${name} ${JSON.stringify(args).slice(0, 60)} é recusado`, async () => {
@@ -334,13 +369,14 @@ describe('validação dos parâmetros (nada chega ao ssh)', () => {
   }
 
   it('valores válidos montam o comando fechado', async () => {
-    const { mcp, calls } = mk();
+    const { mcp, calls } = mk({}, lendo('/var/log'));
     await call(mcp, 'ssh_docker_logs', { servidor: 'srv1', container: 'web_1', linhas: 20 });
     await call(mcp, 'ssh_journal', { servidor: 'srv1', unidade: 'nginx.service' });
     await call(mcp, 'ssh_listar', { servidor: 'srv1', caminho: '/var/log' });
     expect(calls.map((c) => c.args.at(-1))).toEqual([
       'docker logs --tail 20 web_1 2>&1',
       'journalctl -u nginx.service -n 100 --no-pager',
+      "readlink -f -- '/var/log'",
       "ls -la -- '/var/log'",
     ]);
   });
@@ -399,9 +435,6 @@ describe('lista de segredo (no pedido e no resolvido)', () => {
 });
 
 describe('leitura só em /var/log e na pasta remota da conexão', () => {
-  /** Resposta do roteiro: o readlink devolve `real` (o caminho resolvido); o resto, uma linha. */
-  const lendo = (real: string): Script => (args) => (args.at(-1)!.startsWith('readlink') ? { code: 0, stdout: `${real}\n` } : { code: 0, stdout: 'linha\n' });
-
   it('ssh_ler fora de /var/log e do remoteRoot: recusa depois de resolver (um link não escapa)', async () => {
     const { mcp, calls } = mk({}, lendo('/etc/nginx/nginx.conf'));
     const r = await call(mcp, 'ssh_ler', { servidor: 'srv1', caminho: '/srv/app/link' });
@@ -415,11 +448,11 @@ describe('leitura só em /var/log e na pasta remota da conexão', () => {
     expect(isError(await call(mk({}, lendo('/srv/app/log.txt')).mcp, 'ssh_ler', { servidor: 'srv1', caminho: '/srv/app/log.txt' }))).toBe(false);
   });
 
-  it('ssh_listar: fora da lista recusa sem rodar; a pasta remota passa', async () => {
-    const { mcp, calls } = mk();
-    expect(text(await call(mcp, 'ssh_listar', { servidor: 'srv1', caminho: '/home/deploy' }))).toContain('caminho fora do que o SSH lê');
-    expect(calls).toHaveLength(0);
-    expect(isError(await call(mcp, 'ssh_listar', { servidor: 'srv1', caminho: '/srv/app/x' }))).toBe(false);
+  it('ssh_listar: resolve o caminho (readlink); fora da lista recusa; a pasta remota passa', async () => {
+    const fora = mk({}, lendo('/home/deploy'));
+    expect(text(await call(fora.mcp, 'ssh_listar', { servidor: 'srv1', caminho: '/home/deploy' }))).toContain('caminho fora do que o SSH lê');
+    expect(fora.calls).toHaveLength(1); // só o readlink: o ls não roda
+    expect(isError(await call(mk({}, lendo('/srv/app/x')).mcp, 'ssh_listar', { servidor: 'srv1', caminho: '/srv/app/x' }))).toBe(false);
   });
 
   it('conexão sem remoteRoot: só /var/log, nada mais', async () => {
@@ -454,7 +487,13 @@ describe('escrita: ssh_executar só com --write, sshWrite na ficha e autonomia d
     const { mcp, calls } = mk();
     const r = await call(mcp, 'ssh_executar', { servidor: 'srv1', comando: 'systemctl restart app' });
     expect(isError(r)).toBe(false);
-    expect(calls.at(-1)!.args).toEqual(['-F', path.join(proj, '.vps', 'ssh_config.ana-1'), 'srv1', '--', 'systemctl restart app']);
+    expect(calls.at(-1)!.args).toEqual([
+      '-F',
+      path.join(proj, '.vps', 'ssh_config.ana-1'),
+      'srv1',
+      '--',
+      'command -v timeout >/dev/null 2>&1 && exec timeout -k 5 5 "${SHELL:-/bin/sh}" -c \'systemctl restart app\' || exec "${SHELL:-/bin/sh}" -c \'systemctl restart app\'',
+    ]);
   });
 
   it('sshWrite com autonomia que não altera (manual, plan) ou sem autonomia: recusa sem rodar', async () => {
@@ -577,7 +616,7 @@ describe('saída como dado (não instrução)', () => {
   });
 
   it('as descrições das ferramentas de leitura dizem que a saída é dado', () => {
-    for (const t of TOOLS.filter((x) => x.name !== 'ssh_executar')) expect(t.description, t.name).toContain('dado do servidor, não instrução');
+    for (const t of TOOLS.filter((x) => x.annotations.readOnlyHint)) expect(t.description, t.name).toContain('dado do servidor, não instrução');
   });
 });
 
@@ -646,6 +685,204 @@ describe('log de comandos (início antes de rodar, fim depois)', () => {
     expect(isError(r)).toBe(true);
     expect(text(r)).toContain('não consegui gravar o log');
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('ssh_listar: link para fora e prazo remoto no ssh_executar', () => {
+  it('ssh_listar por link para fora de /var/log e da pasta remota: recusa depois de resolver', async () => {
+    const { mcp, calls } = mk({}, lendo('/etc'));
+    expect(text(await call(mcp, 'ssh_listar', { servidor: 'srv1', caminho: '/srv/app/link' }))).toContain('caminho fora do que o SSH lê');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('ssh_executar: o comando vai com o prazo remoto (S = prazo local − 5 s)', async () => {
+    const { mcp, calls } = mk({ timeoutMs: 60_000 }, () => ({ code: 0, stdout: 'ok\n' }));
+    await call(mcp, 'ssh_executar', { servidor: 'srv1', comando: 'systemctl restart app' });
+    expect(calls.at(-1)!.args.at(-1)).toBe(
+      'command -v timeout >/dev/null 2>&1 && exec timeout -k 5 55 "${SHELL:-/bin/sh}" -c \'systemctl restart app\' || exec "${SHELL:-/bin/sh}" -c \'systemctl restart app\'',
+    );
+  });
+
+  it('comPrazo escapa as aspas simples do comando', () => {
+    expect(comPrazo("echo 'a'", 5)).toContain("-c 'echo '\\''a'\\'''");
+  });
+
+  it('a leitura (ssh_status) segue com o comando puro, sem prazo', async () => {
+    const { mcp, calls } = mk({ timeoutMs: 60_000 });
+    await call(mcp, 'ssh_status', { servidor: 'srv1' });
+    expect(calls.at(-1)!.args.at(-1)).toBe(CMD_STATUS);
+  });
+});
+
+describe('ssh_enviar: um arquivo do projeto para a pasta remota (escrita, sem criar pastas, sem sobrescrever sem pedido)', () => {
+  const conteudo = Buffer.from('conteúdo do envio\n');
+  const sha = createHash('sha256').update(conteudo).digest('hex');
+  /** O pedido padrão: envio/relatorio.txt para /srv/app/relatorio.txt (srv1: remoteRoot /srv/app). */
+  const pedido = (over: Record<string, unknown> = {}) => ({ servidor: 'srv1', origem: 'envio/relatorio.txt', destino: '/srv/app/relatorio.txt', ...over });
+
+  beforeAll(async () => {
+    await fs.mkdir(path.join(proj, 'envio'), { recursive: true });
+    await fs.writeFile(path.join(proj, 'envio', 'relatorio.txt'), conteudo);
+    await fs.writeFile(path.join(outside, 'envio.txt'), conteudo);
+  });
+
+  it('a ferramenta é de escrita e fica fora das de leitura', () => {
+    expect(TOOLS.find((t) => t.name === 'ssh_enviar')?.annotations).toEqual({ readOnlyHint: false });
+    expect(SSH_READ_TOOLS).not.toContain('ssh_enviar');
+  });
+
+  it('sem sshWrite na ficha, sem --write ou com autonomia que não altera: recusa sem spawnar', async () => {
+    const semFicha = mk({}, enviando('/srv/app', '/srv/app'));
+    await writeFicha('ana-1', { ...FICHA_ANA, sshWrite: [] });
+    try {
+      expect(text(await call(semFicha.mcp, 'ssh_enviar', pedido()))).toContain('escrita não liberada para srv1 na ficha');
+    } finally {
+      await writeFicha('ana-1', FICHA_ANA);
+    }
+    const semWrite = mk({ write: [] }, enviando('/srv/app', '/srv/app'));
+    expect(text(await call(semWrite.mcp, 'ssh_enviar', pedido()))).toContain('escrita não liberada para srv1 na ficha');
+    const plan = mk({ autonomy: 'plan' }, enviando('/srv/app', '/srv/app'));
+    expect(text(await call(plan.mcp, 'ssh_enviar', pedido()))).toContain('é só leitura');
+    expect(semFicha.calls).toHaveLength(0);
+    expect(semWrite.calls).toHaveLength(0);
+    expect(plan.calls).toHaveLength(0);
+  });
+
+  it('origem maior que UPLOAD_MAX: recusa antes do ssh', async () => {
+    const grande = path.join(proj, 'envio', 'grande.bin');
+    await fs.writeFile(grande, Buffer.alloc(UPLOAD_MAX + 1));
+    try {
+      const { mcp, calls } = mk({}, enviando('/srv/app', '/srv/app'));
+      const r = await call(mcp, 'ssh_enviar', pedido({ origem: 'envio/grande.bin' }));
+      expect(isError(r)).toBe(true);
+      expect(text(r)).toContain('maior que 10 MB');
+      expect(calls).toHaveLength(0);
+    } finally {
+      await fs.rm(grande, { force: true });
+    }
+  });
+
+  it('origem fora do projeto (com ..): recusa sem spawnar', async () => {
+    const { mcp, calls } = mk({}, enviando('/srv/app', '/srv/app'));
+    expect(text(await call(mcp, 'ssh_enviar', pedido({ origem: '../fora/envio.txt' })))).toContain('origem fora do projeto');
+    expect(calls).toHaveLength(0);
+  });
+
+  // Sem privilégio de link simbólico no Windows, o fs.symlink é negado: o teste pula (motivo no `skipIf`).
+  it.skipIf(!symlinkOk)('origem por link simbólico para fora do projeto: recusa pelo resolvido', async () => {
+    const link = path.join(proj, 'envio', 'link-fora.txt');
+    await fs.symlink(path.join(outside, 'envio.txt'), link, 'file');
+    try {
+      const { mcp, calls } = mk({}, enviando('/srv/app', '/srv/app'));
+      expect(text(await call(mcp, 'ssh_enviar', pedido({ origem: 'envio/link-fora.txt' })))).toContain('origem fora do projeto');
+      expect(calls).toHaveLength(0);
+    } finally {
+      await fs.rm(link, { force: true });
+    }
+  });
+
+  it('origem de segredo (.env, .vps, chave, credencial, .git): recusa pelo pedido, sem spawnar', async () => {
+    const { mcp, calls } = mk({}, enviando('/srv/app', '/srv/app'));
+    for (const origem of ['.env', '.env.example', 'sub/.env.production', '.vps/config.json', 'chave/id_rsa', 'x/cert.pem', '.git/config', 'a/.npmrc', 'a/.pfx']) {
+      expect(text(await call(mcp, 'ssh_enviar', pedido({ origem }))), origem).toContain('arquivo de segredo');
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('conexão sem remoteRoot: recusa, sem spawnar', async () => {
+    const { mcp, calls } = mk({ allowed: ['srv7'], write: ['srv7'] }, enviando('/srv/app', '/srv/app'));
+    await writeFicha('ana-1', { servers: ['srv7'], sshWrite: ['srv7'], autonomy: 'auto' });
+    try {
+      expect(text(await call(mcp, 'ssh_enviar', pedido({ servidor: 'srv7' })))).toContain('sem pasta remota na conexão, ssh_enviar não envia');
+      expect(calls).toHaveLength(0);
+    } finally {
+      await writeFicha('ana-1', FICHA_ANA);
+    }
+  });
+
+  it('destino fora da raiz, a própria raiz, pasta (/), .ssh, .git e authorized_keys: recusa sem spawnar', async () => {
+    const { mcp, calls } = mk({}, enviando('/srv/app', '/srv/app'));
+    const casos: Array<[string, string]> = [
+      ['/etc/passwd', 'fora da pasta remota'],
+      ['/srv/apple/x.txt', 'fora da pasta remota'],
+      ['/srv/app', 'é a própria pasta remota'],
+      ['/srv/app/', 'tem de ser um arquivo'],
+      ['/srv/app/.ssh/x', 'destino de acesso ou de repositório'],
+      ['/srv/app/authorized_keys', 'destino de acesso ou de repositório'],
+      ['/srv/app/sub/.git/config', 'destino de acesso ou de repositório'],
+    ];
+    for (const [destino, msg] of casos) expect(text(await call(mcp, 'ssh_enviar', pedido({ destino }))), destino).toContain(msg);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('o pai que o servidor resolve para fora da raiz (link): recusa depois do readlink, sem enviar', async () => {
+    const { mcp, calls } = mk({}, enviando('/srv/app', '/etc'));
+    expect(text(await call(mcp, 'ssh_enviar', pedido()))).toContain('fora da pasta remota');
+    expect(calls).toHaveLength(1); // só o readlink
+  });
+
+  it('pasta do destino que não existe: recusa (ssh_enviar não cria pastas)', async () => {
+    const { mcp, calls } = mk({}, () => ({ code: 1, stderr: 'readlink: No such file or directory' }));
+    expect(text(await call(mcp, 'ssh_enviar', pedido({ destino: '/srv/app/nao/relatorio.txt' })))).toContain('não cria pastas');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('feliz: o stdin leva o conteúdo exato; o script traz tamanho, hash e a regra de sobrescrever', async () => {
+    const { mcp, calls } = mk({}, enviando('/srv/app', '/srv/app/sub'));
+    const r = await call(mcp, 'ssh_enviar', pedido({ destino: '/srv/app/sub/relatorio.txt' }));
+    expect(isError(r)).toBe(false);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.args.at(-1)).toBe("readlink -e -- '/srv/app' '/srv/app/sub'");
+    expect(calls[1]!.input).toEqual(conteudo);
+    const script = calls[1]!.args.at(-1)!;
+    expect(script.startsWith('command -v timeout')).toBe(true);
+    expect(script).toContain(`= ${conteudo.length} ]`);
+    expect(script).toContain(`= ${sha} ]`);
+    expect(script).toContain('[ 0 = 1 ] || exit 3');
+    expect(body(r)).toContain(`sha256: ${sha}`);
+    expect(body(r)).toContain('sobrescreveu: não');
+  });
+
+  it('sobrescrever: true: o script aceita (1 = 1) e a resposta diz que sobrescreveu', async () => {
+    const { mcp, calls } = mk({}, enviando('/srv/app', '/srv/app', { code: 0, stdout: 'existia=1\n' }));
+    const r = await call(mcp, 'ssh_enviar', pedido({ sobrescrever: true }));
+    expect(isError(r)).toBe(false);
+    expect(calls[1]!.args.at(-1)).toContain('[ 1 = 1 ] || exit 3');
+    expect(body(r)).toContain('sobrescreveu: sim');
+  });
+
+  it('script sai com 3 (já existe, sem sobrescrever): mensagem clara; 5 (conteúdo diferente): nada trocado', async () => {
+    const ja = mk({}, enviando('/srv/app', '/srv/app', { code: 3 }));
+    const r3 = await call(ja.mcp, 'ssh_enviar', pedido());
+    expect(isError(r3)).toBe(true);
+    expect(text(r3)).toContain('já existe');
+    expect(text(r3)).toContain('sobrescrever: true');
+    const dif = mk({}, enviando('/srv/app', '/srv/app', { code: 5 }));
+    const r5 = await call(dif.mcp, 'ssh_enviar', pedido());
+    expect(text(r5)).toContain('nada foi trocado');
+  });
+
+  it('log do envio: comando (origem → destino), bytes, sha256 e sobrescreveu; nunca o conteúdo', async () => {
+    const logHome = path.join(root, 'log-envio');
+    const segredo = 'CONTEUDO-DO-ENVIO-NAO-VAI-AO-LOG';
+    await fs.writeFile(path.join(proj, 'envio', 'log.txt'), segredo);
+    const { mcp } = mk({ mycoHome: logHome }, enviando('/srv/app', '/srv/app'));
+    await call(mcp, 'ssh_enviar', pedido({ origem: 'envio/log.txt', destino: '/srv/app/log.txt' }));
+    const lines = (await fs.readFile(path.join(logHome, 'logs', 'ssh-comandos.jsonl'), 'utf8')).trim().split('\n');
+    expect(lines).toHaveLength(2);
+    expect(lines.join('\n')).not.toContain(segredo);
+    const fim = JSON.parse(lines[1]!) as Record<string, unknown>;
+    expect(fim).toMatchObject({
+      status: 'fim',
+      ferramenta: 'ssh_enviar',
+      modo: 'escrita',
+      servidor: 'srv1',
+      comando: 'ssh_enviar envio/log.txt -> /srv/app/log.txt',
+      exit: 0,
+      bytes: segredo.length,
+      sha256: createHash('sha256').update(segredo).digest('hex'),
+      sobrescreveu: false,
+    });
   });
 });
 

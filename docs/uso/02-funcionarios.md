@@ -67,7 +67,7 @@ Na aba **Projeto**:
 - **Reporta a**: quem pode chamá-lo. Nenhum marcado = só você.
 - **Conhecimento (um caminho por linha)**: arquivos que ele lê antes de começar. **Agents e skills indicados** aparecem se o projeto tiver algum.
 - **MCPs**: marque os que ele usa e, em cada um, escolha o acesso: **Livre**, **Pede antes de escrever**, **Só leitura** ou **Desligado** (ver **MCPs** abaixo).
-- **Servidores (SSH e FTP)**: clique em **+ dar acesso a servidores (SSH e FTP)** e marque as conexões que ele pode usar. A chave fica no seu computador; a ficha guarda só o nome da conexão.
+- **Servidores (SSH e FTP)**: clique em **+ dar acesso a servidores (SSH e FTP)** e marque as conexões que ele pode usar. A chave fica no seu computador; a ficha guarda só o nome da conexão. Em cada conexão SSH há **Permitir comandos de escrita** (ver **Servidores (SSH e FTP)** abaixo).
 - **Usar o navegador (Claude in Chrome)**: usa o seu Chrome, com os seus logins. Envios, compras e formulários pedem o seu ok. Precisa da extensão instalada. Com ele marcado, **Acesso do navegador** limita o que ele faz (ver **MCPs** abaixo).
 
 Salve com **Salvar ficha** (ou **Contratar**, ao criar). **Cancelar** fecha; no painel, o botão é **Desfazer**. Mudanças na ficha e nos MCPs valem a partir da próxima sessão.
@@ -81,6 +81,31 @@ Salve com **Salvar ficha** (ou **Contratar**, ao criar). **Cancelar** fecha; no 
 | Edita sozinho | Edita arquivos sem perguntar; pede antes de rodar comandos. |
 | Autônomo | O Claude Code decide o que é seguro rodar; o que julga arriscado (deploy em produção, apagar em massa) é recusado e ele pede a você. |
 | Sem travas | Não pede nada. Os bloqueios de segredos (.ssh, .env) e os hooks continuam. Só para quem você confia, em projeto com git. |
+
+### Servidores (SSH e FTP)
+
+Com conexões marcadas na ficha, o funcionário trabalha no servidor (por exemplo, uma VPS) sem ver a chave: quem roda o `ssh` é o Club. O cadastro das conexões fica em **Servidores**, no detalhe do projeto.
+
+- **SSH vale nos dois motores (Claude e Codex)**, pelas ferramentas do MCP `myco-ssh`. No terminal do funcionário, `ssh`, `scp`, `sftp`, `rsync` e afins ficam bloqueados, com ou sem servidor na ficha.
+- **Leitura, sempre**: status do servidor, processos, containers e logs do Docker, serviços e journal do systemd, listar pastas e ler arquivos. Pastas e arquivos só dentro de `/var/log` e da **Pasta do projeto no servidor** da conexão. `.env`, chaves e credenciais não são lidos. A saída troca segredos por `[segredo removido]` e é cortada em 64 KB.
+- **Escrita, só com as duas condições juntas**: **Permitir comandos de escrita** marcado na conexão (aba **Projeto**) e uma autonomia que altera algo (**Edita sozinho**, **Autônomo** ou **Sem travas**). Com **Só planeja** ou **Pede tudo**, o servidor fica só leitura, mesmo com a caixa marcada. Escrever é rodar um comando livre (`ssh_executar`) ou enviar um arquivo do projeto para a pasta do servidor (`ssh_enviar`).
+- **Aprovação**: no Claude, a escrita segue a autonomia (em **Edita sozinho** cada comando pede o seu ok; em **Sem travas** não pede). O Codex não pergunta a cada comando: nele, as travas são a caixa de escrita e a autonomia.
+- **Envio de arquivo**: só arquivo do projeto, até 10 MB, para dentro da **Pasta do projeto no servidor** (sem ela, não envia). Não cria pastas e só troca um arquivo que já existe se o funcionário pedir. Não envia `.env`, chaves nem `.git`, e não escreve em `.ssh`, `.git` nem `authorized_keys`.
+- **Limites**: 60 segundos por comando, um comando por vez em cada conexão, e pausa de 30 segundos depois de 3 falhas seguidas de conexão. Todo comando fica no registro `~/.myco/logs/ssh-comandos.jsonl`. O `ssh` precisa estar instalado no seu computador (no Windows, o recurso opcional **Cliente OpenSSH**).
+- **No projeto do próprio Claudio’s Club** o acesso a servidor fica desligado nos dois motores.
+- **FTP só no Claude**, pelas ferramentas `ftp_*`, presas à pasta da conexão (a senha fica no cofre do sistema). Com conexão FTP marcada, não dá para escolher o Codex.
+
+O que não funciona:
+
+- **Comando interativo**: o comando roda sem terminal. Editor (`vim`), `top`, `less` e perguntas de confirmação travam ou falham; use a versão sem tela (`top -b -n 1`, `-y`).
+- **`sudo` com senha**: não há terminal nem como digitar a senha. Só `sudo` sem senha, liberado no servidor para o usuário e para os comandos certos.
+- **Chave com senha (passphrase)**: o Club não pergunta a senha. Carregue a chave no `ssh-agent` (`ssh-add`) antes; sem isso a conexão falha. O botão **Testar** da conexão mostra "a chave tem senha: carregue-a no ssh-agent".
+
+Cuidados:
+
+- **Crie um usuário só para a IA na VPS**, sem root e com as permissões mínimas (só as pastas e os serviços que a tarefa precisa). O comando livre roda como esse usuário e o Club não limita o que ele pode: quem pode tudo no servidor, o funcionário também pode. Uma conexão que entra como `root` aparece com o aviso **entra como root: prefira um usuário só para a IA, sem root**.
+- **Uma chave por projeto.** A chave é um arquivo seu, não do projeto: a mesma chave cadastrada em mais de um projeto dá o mesmo acesso nos dois (mesma conta, mesmas permissões), e trocar ou revogar essa chave afeta os dois.
+- Para só diagnosticar, deixe **Permitir comandos de escrita** desmarcado.
 
 ## Memória
 

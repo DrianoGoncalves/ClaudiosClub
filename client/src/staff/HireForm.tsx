@@ -892,10 +892,15 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             </p>
             {serverList === null && <p className="muted small">{t('staff.loading')}</p>}
             {serverList?.length === 0 && <p className="muted small">{t('office.hireServersEmpty')}</p>}
+            {serverList?.some((s) => canWriteSsh(s, servers)) && (
+              <p className="muted small" role="note">
+                {t('office.sshLimits')}
+              </p>
+            )}
             <div className="checks">
               {serverList?.map((s) => {
-                // A escrita só vale no Codex (no Claude o campo não muda nada hoje), por isso só aparece com ele.
-                const write = codex && canWriteSsh(s, servers);
+                // A escrita (comando livre e envio de arquivo) vale nos dois motores: sem a caixa marcada o servidor é só leitura.
+                const write = canWriteSsh(s, servers);
                 return (
                   <div key={s.name} className={write ? 'check-server has-write' : 'check-server'}>
                     <label className="check">
@@ -913,7 +918,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                           <input type="checkbox" checked={sshWrite.includes(s.name)} onChange={() => toggle(sshWrite, setSshWrite, s.name)} />{' '}
                           {t('staff.sshWrite')}
                         </label>
-                        <p className="muted small">{t('staff.sshWriteHint')}</p>
+                        <p className="muted small">{t(codex ? 'staff.sshWriteHintCodex' : 'staff.sshWriteHint')}</p>
                         {sshWrite.includes(s.name) && !editsCode(autonomy) && (
                           <p className="muted small">{t('staff.sshWriteAutonomy', { mode: t('staff.autonomyEditsLabel') })}</p>
                         )}

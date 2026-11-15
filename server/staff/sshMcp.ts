@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,7 +14,7 @@ import { staffDir } from './store';
 
 // MCP do Claudio’s Club para SSH: um servidor stdio (JSON-RPC por linha) que o Claude Code do funcionário sobe este processo quando a ficha dele autoriza algum servidor SSH. Quem roda o `ssh` é este processo, fora da sandbox do Codex: a chave nunca entra lá. Só roda o servidor que está AO MESMO TEMPO nas concedidas no lançamento e na ficha
 // (relida antes de cada comando). O comando remoto é montado aqui: as ferramentas de leitura são fechadas;
-// só `ssh_executar` aceita comando livre, e só com escrita liberada no lançamento (`--write`, que já exige autonomia de escrita) e na ficha relida agora.
+// só `ssh_executar` aceita comando livre, e `ssh_enviar` envia um arquivo do projeto para a pasta remota da conexão. As duas são escrita: só com ela liberada no lançamento (`--write`, que já exige autonomia de escrita) e na ficha relida agora.
 //
 // Sem o SDK oficial, pelo mesmo motivo do MCP de FTP (protocolo pequeno: initialize, ping, tools/list, tools/call).
 
@@ -26,6 +27,8 @@ const RAW_MAX = 1024 * 1024;
 const OUT_MAX = 64 * 1024;
 const OUT_HEAD = 8 * 1024;
 const REDACTED = '[segredo removido]';
+/** Maior arquivo que o ssh_enviar envia (10 MB). */
+export const UPLOAD_MAX = 10 * 1024 * 1024;
 /** ssh sai com 255 quando é ele que falha (conexão, chave, senha): conta para o disjuntor. */
 const SSH_FAIL = 255;
 /** Primeira linha de todo texto que sai destas ferramentas: a saída do servidor é dado, nunca instrução. */
@@ -121,6 +124,27 @@ const caminhoOk = (p: string) => CAMINHO.test(p) && !p.includes('..') && !p.incl
 /** Entre aspas simples no comando remoto: o padrão acima não deixa aspas nem espaço passar. */
 const q = (p: string) => `'${p}'`;
 
+/** Prazo no servidor (`timeout` do GNU, com `-k 5`): o comando morre em S s. Sem `timeout`, roda como está. Aspas simples escapadas. */
+export function comPrazo(cmd: string, s: number): string {
+  const e = cmd.replace(/'/g, `'\\''`);
+  return `command -v timeout >/dev/null 2>&1 && exec timeout -k 5 ${s} "\${SHELL:-/bin/sh}" -c '${e}' || exec "\${SHELL:-/bin/sh}" -c '${e}'`;
+}
+
+/** Segredo no caminho do computador, por segmento: `.env*` (todos), `.vps`, `.ssh`, `.git` (nome exato), chaves e credenciais. Pedido e resolvido passam por aqui. */
+const SEGREDO_LOCAL_NOMES = ['.vps', '.ssh', '.git', 'id_rsa', 'id_ed25519', 'id_ecdsa', '.git-credentials', '.netrc', '.pgpass', '.npmrc', '.pypirc'];
+const SEGREDO_LOCAL_EXT = ['.pem', '.key', '.p12', '.pfx'];
+const SEGREDO_LOCAL_MSG = 'arquivo de segredo (.env, .vps, chave, credencial ou .git): o ssh_enviar não envia';
+function segredoLocal(p: string): boolean {
+  return p.split(/[\\/]/).some((seg) => {
+    const l = seg.toLowerCase();
+    return l.startsWith('.env') || SEGREDO_LOCAL_NOMES.includes(l) || SEGREDO_LOCAL_EXT.some((e) => l.endsWith(e));
+  });
+}
+/** Destino remoto que não se escreve: segmento `.ssh`, `.git` ou `authorized_keys`. */
+const SEGREDO_REMOTO = ['.ssh', '.git', 'authorized_keys'];
+const SEGREDO_REMOTO_MSG = 'destino de acesso ou de repositório (.ssh, .git, authorized_keys): o ssh_enviar não escreve';
+const segredoRemoto = (p: string) => p.split('/').some((seg) => SEGREDO_REMOTO.includes(seg));
+
 /** Raiz remota da conexão (remoteRoot) como pasta lida: sem barra final; inválida (relativa, com `..`) = null. */
 function raizRemota(r: string | null | undefined): string | null {
   if (!r) return null;
@@ -180,6 +204,11 @@ const comandoLivre = z
   .refine((s) => s.trim().length > 0, 'comando vazio')
   .refine((s) => s.length <= 4000, 'comando grande demais (máx. 4000 caracteres)')
   .refine((s) => !s.includes('\u0000'), 'comando com byte NUL');
+const origem = z
+  .string({ error: (iss) => (iss.input === undefined ? 'informe a origem' : undefined) })
+  .refine((s) => s.trim().length > 0, 'origem: caminho vazio')
+  .refine((s) => s.length <= 1000, 'origem: caminho grande demais (máx. 1000 caracteres)')
+  .refine((s) => !s.includes('\u0000'), 'origem: caminho com byte NUL');
 
 const Schemas = {
   ssh_status: z.object({ servidor: srv }),
@@ -192,6 +221,7 @@ const Schemas = {
   ssh_listar: z.object({ servidor: srv, caminho }),
   ssh_ler: z.object({ servidor: srv, caminho, linhas }),
   ssh_executar: z.object({ servidor: srv, comando: comandoLivre }),
+  ssh_enviar: z.object({ servidor: srv, origem, destino: caminho, sobrescrever: z.boolean().default(false) }),
 };
 type ToolName = keyof typeof Schemas;
 const hasTool = (n: unknown): n is ToolName => typeof n === 'string' && Object.prototype.hasOwnProperty.call(Schemas, n);
@@ -249,6 +279,21 @@ export const TOOLS: Array<{ name: ToolName; description: string; inputSchema: Re
       type: 'object',
       properties: { servidor: SRV, comando: S('Comando a rodar no servidor (shell do usuário da conexão).') },
       required: ['servidor', 'comando'],
+    },
+    annotations: ESCRITA,
+  },
+  {
+    name: 'ssh_enviar',
+    description: 'Envia um arquivo do projeto para a pasta remota da conexão. Só funciona com escrita liberada para ele na sua ficha; não cria pastas; não sobrescreve sem sobrescrever: true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        servidor: SRV,
+        origem: S('Arquivo no projeto: caminho relativo à pasta da sessão, ou absoluto dentro do projeto.'),
+        destino: S('Caminho absoluto no servidor, dentro da pasta remota da conexão (ex.: /srv/app/config.json).'),
+        sobrescrever: { type: 'boolean', description: 'Trocar o arquivo se ele já existir (padrão false).' },
+      },
+      required: ['servidor', 'origem', 'destino'],
     },
     annotations: ESCRITA,
   },
@@ -315,8 +360,8 @@ interface Raw {
   error?: Error;
 }
 
-/** Roda o ssh (pelo caminho absoluto `bin`) e espera; no prazo, mata o processo e devolve o que chegou (sem esperar o fechamento). */
-function execSsh(spawn: SshSpawn, bin: string, args: string[], cwd: string, timeoutMs: number): Promise<Raw> {
+/** Roda o ssh (pelo caminho absoluto `bin`) e espera; no prazo, mata o processo e devolve o que chegou (sem esperar o fechamento). Com `input`, manda esse conteúdo pelo stdin e fecha. */
+function execSsh(spawn: SshSpawn, bin: string, args: string[], cwd: string, timeoutMs: number, input?: Buffer): Promise<Raw> {
   return new Promise((resolve) => {
     const out = new Capture();
     const err = new Capture();
@@ -339,6 +384,11 @@ function execSsh(spawn: SshSpawn, bin: string, args: string[], cwd: string, time
     child.stderr?.on('data', (c: Buffer) => err.push(c));
     child.on('error', (e: Error) => settle({ code: null, timedOut: false, error: e }));
     child.on('close', (code: number | null) => settle({ code, timedOut: false }));
+    if (input) {
+      // Se o ssh fechar antes de ler tudo (EPIPE), o erro cai aqui e o resultado sai pelo 'close' ou 'error'; não derruba o processo.
+      child.stdin?.on('error', () => {});
+      child.stdin?.end(input);
+    }
     timer = setTimeout(() => {
       child.kill();
       settle({ code: null, timedOut: true });
@@ -374,6 +424,9 @@ interface Seen {
   cmd?: string;
   exit?: number | null;
   bytes?: number;
+  /** Só o ssh_enviar: o hash do que foi enviado e se trocou um arquivo que já existia. */
+  sha256?: string;
+  sobrescreveu?: boolean;
 }
 
 export function createSshMcp(opts: SshMcpOptions) {
@@ -381,6 +434,8 @@ export function createSshMcp(opts: SshMcpOptions) {
   const mycoHome = opts.mycoHome ?? MYCO_HOME;
   const spawn = opts.spawn ?? defaultSpawn;
   const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
+  /** Prazo do comando dentro do servidor (`timeout`): 5 s a menos que o local, para o remoto morrer antes do ssh ser encerrado. */
+  const prazoRemoto = Math.max(5, Math.floor(timeoutMs / 1000) - 5);
   const breaker = opts.breaker ?? new SshBreaker();
   const write = opts.write ?? [];
   const autonomy = opts.autonomy ?? null;
@@ -460,21 +515,26 @@ export function createSshMcp(opts: SshMcpOptions) {
     return cfg;
   }
 
-  /** Um comando remoto: fila, ficha, disjuntor, ssh e saída redigida. Não loga (quem chama loga). */
+  /** Um ssh já autorizado (dentro da fila do servidor): disjuntor, ssh e a conta do disjuntor. `comando` já vem pronto (com prazo, se for escrita). */
+  async function rodar(cfg: string, servidor: string, comando: string, input?: Buffer): Promise<Raw> {
+    breaker.check(servidor);
+    // O ssh por caminho absoluto, com o cwd numa pasta fora do projeto (o GPT não planta nada no caminho dele).
+    const raw = await execSsh(spawn, sshBin(), ['-F', cfg, servidor, '--', comando], os.tmpdir(), timeoutMs, input);
+    if (raw.error) {
+      const semSsh = (raw.error as NodeJS.ErrnoException).code === 'ENOENT';
+      throw new SshError(semSsh ? SEM_SSH : redigir(raw.error.message));
+    }
+    if (raw.timedOut || raw.code === SSH_FAIL) breaker.fail(servidor);
+    else breaker.ok(servidor);
+    return raw;
+  }
+
+  /** Um comando remoto: fila, ficha, disjuntor, ssh e saída redigida. Não loga (quem chama loga). Escrita (ssh_executar) roda com prazo no servidor. */
   async function exec(servidor: string, comando: string, modo: Modo, seen: Seen): Promise<Run> {
     seen.cmd = redigir(comando);
     const r = await serial(servidor, async () => {
       const cfg = await authorize(servidor, modo);
-      breaker.check(servidor);
-      // O ssh por caminho absoluto, com o cwd numa pasta fora do projeto (o GPT não planta nada no caminho dele).
-      const raw = await execSsh(spawn, sshBin(), ['-F', cfg, servidor, '--', comando], os.tmpdir(), timeoutMs);
-      if (raw.error) {
-        const semSsh = (raw.error as NodeJS.ErrnoException).code === 'ENOENT';
-        throw new SshError(semSsh ? SEM_SSH : redigir(raw.error.message));
-      }
-      if (raw.timedOut || raw.code === SSH_FAIL) breaker.fail(servidor);
-      else breaker.ok(servidor);
-      return raw;
+      return rodar(cfg, servidor, modo === 'escrita' ? comPrazo(comando, prazoRemoto) : comando);
     });
     const stdout = redigir(r.stdout);
     const stderr = redigir(r.stderr);
@@ -483,6 +543,89 @@ export function createSshMcp(opts: SshMcpOptions) {
     seen.bytes = (seen.bytes ?? 0) + Buffer.byteLength(joined);
     const cut = r.cut ? `\n… (a saída passou de ${RAW_MAX / 1024 / 1024} MB: o resto não foi lido)` : '';
     return { code: r.code, timedOut: r.timedOut, stdout, text: cortarSaida(joined) + cut };
+  }
+
+  /** O arquivo do projeto (ou da pasta da sessão): pedido e resolvido sem segredo, dentro do projeto, arquivo comum e até UPLOAD_MAX. Lê pelo handle aberto (não reabre pelo nome). */
+  async function lerOrigem(origem: string): Promise<{ rel: string; conteudo: Buffer }> {
+    const abs = path.resolve(opts.root, origem);
+    if (segredoLocal(path.relative(opts.root, abs))) throw new SshError(SEGREDO_LOCAL_MSG);
+    const real = await fs.realpath(abs).catch(() => null);
+    if (!real) throw new SshError('origem não encontrada: confira o caminho (relativo à pasta da sessão ou absoluto)');
+    const bases = await Promise.all([opts.root, opts.projectPath].map((d) => fs.realpath(d).catch(() => null)));
+    const base = bases.find((b): b is string => b !== null && dentroDeDir(real, b));
+    if (!base) throw new SshError('origem fora do projeto: o ssh_enviar só envia arquivo do projeto');
+    const rel = path.relative(base, real);
+    if (segredoLocal(rel)) throw new SshError(SEGREDO_LOCAL_MSG);
+    const fh = await fs.open(real, 'r').catch(() => {
+      throw new SshError('origem não pôde ser aberta');
+    });
+    try {
+      const st = await fh.stat();
+      if (!st.isFile()) throw new SshError('origem não é arquivo comum (pasta ou outro tipo): recusado');
+      if (st.size > UPLOAD_MAX) throw new SshError(`origem maior que ${UPLOAD_MAX / 1024 / 1024} MB: não envio`);
+      const conteudo = await fh.readFile();
+      if (conteudo.length > UPLOAD_MAX) throw new SshError(`origem maior que ${UPLOAD_MAX / 1024 / 1024} MB: não envio`);
+      return { rel, conteudo };
+    } finally {
+      await fh.close();
+    }
+  }
+
+  /**
+   * O destino remoto: arquivo dentro da pasta remota (raiz), sem .ssh/.git/authorized_keys. O servidor diz a raiz e o pai resolvidos
+   * (readlink -e: os dois têm de existir). O pai resolvido tem de ficar dentro da raiz resolvida; o final também não pode ser segredo.
+   */
+  async function destinoRemoto(cfg: string, servidor: string, raiz: string, destino: string): Promise<{ pai: string; final: string }> {
+    const nome = path.posix.basename(destino);
+    if (destino.endsWith('/') || nome === '' || nome === '.') throw new SshError('destino: tem de ser um arquivo (caminho com o nome dele)');
+    if (destino === raiz) throw new SshError('destino: é a própria pasta remota; diga o nome do arquivo dentro dela');
+    if (!dentroDeRemoto(destino, raiz)) throw new SshError(`destino fora da pasta remota da conexão (${raiz})`);
+    if (segredoRemoto(destino)) throw new SshError(SEGREDO_REMOTO_MSG);
+    const r = await rodar(cfg, servidor, `readlink -e -- ${q(raiz)} ${q(path.posix.dirname(destino))}`);
+    if (r.timedOut) throw new SshError('tempo esgotado ao conferir a pasta no servidor');
+    if (r.code !== 0) throw new SshError('a pasta remota ou a pasta do destino não existe no servidor: o ssh_enviar não cria pastas');
+    const saida = r.stdout.replace(/\n$/, '').split('\n');
+    if (saida.length !== 2 || !saida.every((p) => caminhoOk(p))) throw new SshError('resposta inesperada do servidor ao conferir a pasta: recusado');
+    const [raizReal, paiReal] = saida as [string, string];
+    if (!dentroDeRemoto(paiReal, raizReal)) throw new SshError(`destino fora da pasta remota da conexão (${raiz}): o caminho resolvido no servidor saiu dela`);
+    const final = paiReal === '/' ? `/${nome}` : `${paiReal}/${nome}`;
+    if (segredoRemoto(final)) throw new SshError(SEGREDO_REMOTO_MSG);
+    return { pai: paiReal, final };
+  }
+
+  /**
+   * O ssh_enviar inteiro: tudo dentro da fila do servidor (`authorize` a cada chamada, arquivo local, destino remoto e o envio).
+   * Não usa `exec`: aninhar a fila travaria. O conteúdo vai pelo stdin; o script confere tamanho e hash antes do `mv` final.
+   */
+  async function enviar(a: { servidor: string; origem: string; destino: string; sobrescrever: boolean }, seen: Seen): Promise<Out> {
+    seen.cmd = redigir(`ssh_enviar ${a.origem} -> ${a.destino}`);
+    return serial(a.servidor, async () => {
+      const cfg = await authorize(a.servidor, 'escrita');
+      const { rel, conteudo } = await lerOrigem(a.origem);
+      const raiz = raizRemota((await readConnections(opts.projectPath)).find((c) => c.name === a.servidor)?.remoteRoot);
+      if (!raiz) throw new SshError('sem pasta remota na conexão, ssh_enviar não envia');
+      const { pai, final } = await destinoRemoto(cfg, a.servidor, raiz, a.destino);
+      const bytes = conteudo.length;
+      const sha256 = createHash('sha256').update(conteudo).digest('hex');
+      seen.cmd = redigir(`ssh_enviar ${rel.replace(/\\/g, '/')} -> ${final}`);
+      seen.bytes = bytes;
+      seen.sha256 = sha256;
+      const flag = a.sobrescrever ? 1 : 0;
+      const script = `set -e; umask 077; d=${q(pai)}; f=${q(final)}; existia=0; if [ -e "$f" ] || [ -L "$f" ]; then existia=1; [ ${flag} = 1 ] || exit 3; [ -f "$f" ] && [ ! -L "$f" ] || exit 4; fi; t=$(mktemp "$d/.myco-envio.XXXXXX"); trap 'rm -f "$t"' EXIT; cat > "$t"; [ "$(wc -c < "$t" | tr -d ' ')" = ${bytes} ] || exit 5; [ "$(sha256sum < "$t" | cut -d' ' -f1)" = ${sha256} ] || exit 5; if [ -f "$f" ]; then chmod --reference="$f" "$t"; else chmod 644 "$t"; fi; mv -fT "$t" "$f"; trap - EXIT; echo "existia=$existia"`;
+      const raw = await rodar(cfg, a.servidor, comPrazo(script, prazoRemoto), conteudo);
+      seen.exit = raw.code;
+      if (raw.timedOut) throw new SshError('tempo esgotado no envio: o ssh foi encerrado e o arquivo pode ter chegado ao destino; confira antes de reenviar');
+      if (raw.code === 3) throw new SshError(`já existe: ${final} (use sobrescrever: true para trocar)`);
+      if (raw.code === 4) throw new SshError('o destino não é arquivo comum (pasta ou link): não troquei nada');
+      if (raw.code === 5) throw new SshError('o conteúdo chegou diferente no servidor: nada foi trocado, tente de novo');
+      if (raw.code !== 0) {
+        const erro = raw.stderr.trim();
+        throw new SshError(`envio falhou no servidor (exit ${raw.code ?? 'sem código'}): o destino não foi trocado${erro ? `: ${erro.slice(0, 300)}` : ''}`);
+      }
+      const existia = /^existia=1$/m.test(raw.stdout);
+      seen.sobrescreveu = existia;
+      return { text: `enviado: ${final}\nbytes: ${bytes}\nsha256: ${sha256}\nsobrescreveu: ${existia ? 'sim' : 'não'}`, isError: false };
+    });
   }
 
   /** Pastas que `ssh_ler` e `ssh_listar` leem: /var/log e a pasta remota da conexão (sem remoteRoot, só /var/log). */
@@ -498,6 +641,21 @@ export function createSshMcp(opts: SshMcpOptions) {
   });
   const ler = (servidor: string, comando: string, seen: Seen) => exec(servidor, comando, 'leitura', seen).then(fromRun);
 
+  /**
+   * O caminho pedido, resolvido no servidor (`readlink -f`), para ler ou listar: o resolvido (um link pode apontar para fora) tem de ser
+   * simples, fora da lista de segredo e estar em /var/log ou na pasta remota. Devolve o resolvido, ou a saída pronta do erro do readlink.
+   */
+  async function resolverLido(servidor: string, caminho: string, s: Seen): Promise<string | Out> {
+    if (isSecretPath(caminho)) throw new SshError(SECRET_MSG);
+    const link = await exec(servidor, `readlink -f -- ${q(caminho)}`, 'leitura', s);
+    if (link.timedOut || link.code !== 0) return fromRun(link);
+    const real = link.stdout.trim();
+    if (!caminhoOk(real) || real.includes('\n')) throw new SshError('o caminho resolvido no servidor não é um caminho simples: pedido recusado');
+    if (isSecretPath(real)) throw new SshError(SECRET_MSG);
+    if (!(await pastasLidas(servidor)).some((d) => dentroDeRemoto(real, d))) throw new SshError(FORA_MSG);
+    return real;
+  }
+
   const handlers: { [K in ToolName]: (a: z.infer<(typeof Schemas)[K]>, seen: Seen) => Promise<Out> } = {
     ssh_status: async (a, s) => ler(a.servidor, 'uptime; df -h; free -m', s),
     ssh_processos: async (a, s) => ler(a.servidor, 'ps aux --sort=-%cpu | head -n 30', s),
@@ -507,22 +665,17 @@ export function createSshMcp(opts: SshMcpOptions) {
     ssh_servico: async (a, s) => ler(a.servidor, `systemctl status --no-pager ${a.unidade}`, s),
     ssh_journal: async (a, s) => ler(a.servidor, `journalctl -u ${a.unidade} -n ${a.linhas} --no-pager`, s),
     ssh_listar: async (a, s) => {
-      if (isSecretPath(a.caminho)) throw new SshError(SECRET_MSG);
-      if (!(await pastasLidas(a.servidor)).some((d) => dentroDeRemoto(a.caminho, d))) throw new SshError(FORA_MSG);
-      return ler(a.servidor, `ls -la -- ${q(a.caminho)}`, s);
+      const real = await resolverLido(a.servidor, a.caminho, s);
+      if (typeof real !== 'string') return real;
+      return ler(a.servidor, `ls -la -- ${q(real)}`, s);
     },
     ssh_ler: async (a, s) => {
-      if (isSecretPath(a.caminho)) throw new SshError(SECRET_MSG);
-      // O caminho pedido pode ser um link: o resolvido tem de estar na lista de lidos e passar pela lista de segredo.
-      const link = await exec(a.servidor, `readlink -f -- ${q(a.caminho)}`, 'leitura', s);
-      if (link.timedOut || link.code !== 0) return fromRun(link);
-      const real = link.stdout.trim();
-      if (!caminhoOk(real) || real.includes('\n')) throw new SshError('o caminho resolvido no servidor não é um caminho simples: pedido recusado');
-      if (isSecretPath(real)) throw new SshError(SECRET_MSG);
-      if (!(await pastasLidas(a.servidor)).some((d) => dentroDeRemoto(real, d))) throw new SshError(FORA_MSG);
+      const real = await resolverLido(a.servidor, a.caminho, s);
+      if (typeof real !== 'string') return real;
       return ler(a.servidor, `tail -n ${a.linhas} -- ${q(real)}`, s);
     },
     ssh_executar: async (a, s) => fromRun(await exec(a.servidor, a.comando, 'escrita', s)),
+    ssh_enviar: async (a, s) => enviar(a, s),
   };
 
   /** Uma linha no log de comandos. Quem chama decide se a falha conta (o início conta; o fim, não). */
@@ -542,7 +695,7 @@ export function createSshMcp(opts: SshMcpOptions) {
       staff: opts.staffId,
       servidor: parsed.data.servidor,
       ferramenta: name,
-      modo: name === 'ssh_executar' ? 'escrita' : 'leitura',
+      modo: name === 'ssh_executar' || name === 'ssh_enviar' ? 'escrita' : 'leitura',
     };
     // O início é gravado ANTES de rodar: sem a linha no log, o comando não roda.
     try {
@@ -568,6 +721,8 @@ export function createSshMcp(opts: SshMcpOptions) {
       exit: seen.exit ?? null,
       bytes: seen.bytes ?? 0,
       ms: Date.now() - t0,
+      // Só o envio: hash e se trocou arquivo. Nunca o conteúdo.
+      ...(seen.sha256 !== undefined && { sha256: seen.sha256, sobrescreveu: seen.sobrescreveu ?? false }),
     }).catch(() => {});
     return texto(out.text, out.isError);
   }
@@ -592,7 +747,7 @@ export function createSshMcp(opts: SshMcpOptions) {
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: SSH_MCP_NAME, version: VERSION },
           instructions:
-            'Acesso SSH do Claudio’s Club aos servidores da sua ficha, por ferramentas fechadas de leitura. Não use outro cliente ssh e nunca peça a chave. ssh_executar só funciona com escrita liberada na ficha.',
+            'Acesso SSH do Claudio’s Club aos servidores da sua ficha, por ferramentas fechadas de leitura. Não use outro cliente ssh e nunca peça a chave. Escrita: ssh_executar (comando livre) e ssh_enviar (um arquivo do projeto para a pasta remota, sem sobrescrever sem pedido); as duas só funcionam com escrita liberada na ficha.',
         });
       }
       case 'ping':

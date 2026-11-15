@@ -2665,15 +2665,17 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       <header class="case-h"><span class="case-n" aria-hidden="true">5</span><h4 id="caso-5-t">Servidor e deploy com DevOps / SRE</h4></header>
       <div class="case-meta">
         <p><span class="lbl">Situação</span>um site ficou lento ou precisa de uma versão nova no ar.</p>
-        <p><span class="lbl"><svg class="i ico"><use href="#i-user-plus"/></svg>Quem contratar</span><b class="ui">DevOps / SRE</b> (autonomia <b class="ui">Pede tudo</b>: pede permissão a cada passo).</p>
+        <p><span class="lbl"><svg class="i ico"><use href="#i-user-plus"/></svg>Quem contratar</span><b class="ui">DevOps / SRE</b> (autonomia <b class="ui">Pede tudo</b>: pede permissão a cada passo e só lê o servidor).</p>
       </div>
       <div class="case-body">
         <ol class="steps">
-          <li><p class="st">Contrate <b class="ui">DevOps / SRE</b>. Na ficha, aba <b class="ui">Projeto</b>, clique em <b class="ui">+ dar acesso a servidores (SSH e FTP)</b> e marque a conexão. A chave fica no seu computador; a ficha guarda só o nome.</p></li>
-          <li><p class="st"><b class="ui">Tarefas</b> → <b class="ui">Nova tarefa</b> → <b class="ui">O que precisa ser feito</b>: “só diagnosticar, sem mudar nada” → <b class="ui">Quem cuida</b>: <b class="ui">DevOps / SRE</b> → <b class="ui">Criar e começar</b>.</p></li>
+          <li><p class="st">Antes, na VPS, crie um usuário só para a IA, sem root e com as permissões mínimas. No detalhe do projeto, em <b class="ui">Servidores</b>, cadastre a conexão com esse usuário e a chave dele, e use <b class="ui">Testar</b>. Chave com senha precisa estar no <code>ssh-agent</code>.</p></li>
+          <li><p class="st">Contrate <b class="ui">DevOps / SRE</b>. Na ficha, aba <b class="ui">Projeto</b>, clique em <b class="ui">+ dar acesso a servidores (SSH e FTP)</b> e marque a conexão. A chave fica no seu computador; a ficha guarda só o nome. Deixe <b class="ui">Permitir comandos de escrita</b> desmarcado.</p></li>
+          <li><p class="st"><b class="ui">Tarefas</b> → <b class="ui">Nova tarefa</b> → <b class="ui">O que precisa ser feito</b>: “só diagnosticar, sem mudar nada” → <b class="ui">Quem cuida</b>: <b class="ui">DevOps / SRE</b> → <b class="ui">Criar e começar</b>. Ele lê o servidor pelo MCP <code>myco-ssh</code> (status, logs, containers, serviços, arquivos de log).</p></li>
           <li><p class="st">Em <b class="ui">precisa de mim</b>, aprove cada cartão de <b>permissão</b> com <b class="ui">Aprovar</b>. Evite <b class="ui">Sempre neste projeto</b> para comandos no servidor.</p></li>
-          <li><p class="st">Para publicar, abra a tarefa em <b class="ui">Pronto</b> (ou mesclada) → <b class="ui">Pedir deploy</b> → <b class="ui">Quem faz o deploy</b>: <b class="ui">DevOps / SRE</b>.</p></li>
+          <li><p class="st">Para publicar, o servidor precisa deixar de ser só leitura: na ficha, marque <b class="ui">Permitir comandos de escrita</b> na conexão e troque a autonomia para <b class="ui">Edita sozinho</b> ou mais (em <b class="ui">Pede tudo</b> o servidor segue só leitura). Depois abra a tarefa em <b class="ui">Pronto</b> (ou mesclada) → <b class="ui">Pedir deploy</b> → <b class="ui">Quem faz o deploy</b>: <b class="ui">DevOps / SRE</b>.</p></li>
           <li><p class="st">Siga o checklist: backup, estado antes e depois, runbook. Confirme os passos que não têm volta.</p></li>
+          <li><p class="st">Lembre dos limites: ele não roda comando interativo (editor, <code>top</code>) nem <code>sudo</code> com senha, e no terminal dele não há <code>ssh</code>, <code>scp</code> nem <code>rsync</code>: tudo passa pelo MCP.</p></li>
         </ol>
         <div class="case-side">
           <figure class="mock" role="img" aria-label="Cartão de permissão em precisa de mim: Aprovar em destaque e Sempre neste projeto esmaecido, com o aviso para evitar em comandos no servidor">
@@ -2690,7 +2692,8 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
             <ul>
               <li>o backup foi feito antes do deploy;</li>
               <li>o runbook diz o que mudou e como desfazer;</li>
-              <li>as imagens e os volumes das versões antigas foram removidos (regra do cargo).</li>
+              <li>as imagens e os volumes das versões antigas foram removidos (regra do cargo);</li>
+              <li>a mesma chave não está cadastrada em outros projetos (ela daria o mesmo acesso a eles).</li>
             </ul>
           </div>
         </div>
