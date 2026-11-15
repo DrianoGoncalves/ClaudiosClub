@@ -669,11 +669,11 @@ describe('limite no meio do turno (onLimit)', () => {
 });
 
 describe('dúvida ao gestor: a instrução DÚVIDA: é a mesma nos dois motores (sem URL na linha)', () => {
-  /** Quem pediu e a instrução `DÚVIDA:`; a linha não leva endereço da API (o gestor responde pela conversa dele, ver doubtText). */
+  /** Quem pediu e a instrução `DÚVIDA:`; a linha não leva a rota de resposta da API (o gestor responde pela conversa dele, ver doubtText). */
   const temInstrucaoDuvida = (texto: string) => {
     expect(texto).toContain('Pedida por Gil');
     expect(texto).toContain('DÚVIDA:');
-    expect(texto).not.toContain('/api/projects/');
+    expect(texto).not.toMatch(/\/tasks\/[^/\s`]+\/answer/);
   };
 
   it('no Claude, a instrução DÚVIDA: vai no texto de partida', async () => {

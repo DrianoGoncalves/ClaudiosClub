@@ -17,6 +17,9 @@ const STAFF_POSTS: RegExp[] = [
   new RegExp(`^/api/projects/${ID}/staff/${ID}/done$`),
   // Responder à dúvida de uma tarefa que ele pediu (a rota confere o gestor e a conversa dele).
   new RegExp(`^/api/projects/${ID}/tasks/${ID}/answer$`),
+  // Cancelar a própria tarefa quando o usuário pede (a rota confere que o token é o da conversa atual da tarefa). Reabrir e as ações de
+  // quem espera uma cancelada ficam de fora: são só da tela. A sandbox do Codex usa esta mesma lista nos POSTs (ver sandboxVerdict).
+  new RegExp(`^/api/projects/${ID}/tasks/${ID}/cancel$`),
 ];
 
 /** O POST em `pathname` pode vir de um funcionário pela API? */
@@ -41,7 +44,7 @@ const PROJECT_OF = new RegExp(`^/api/projects/(${ID})(?:/|$)`);
  */
 export function sandboxVerdict(method: string, pathname: string, projectId: string): { status: 403; error: string } | null {
   const allowed = method === 'GET' ? SANDBOX_GETS.some((r) => r.test(pathname)) : method === 'POST' && staffMayPost(pathname);
-  if (!allowed) return { status: 403, error: 'a sandbox do Codex não pode usar esta rota (só tarefas, contratar, mensagem, despertador e encerrar quem você contratou)' };
+  if (!allowed) return { status: 403, error: 'a sandbox do Codex não pode usar esta rota (só tarefas, cancelar a própria tarefa, contratar, mensagem, despertador e encerrar quem você contratou)' };
   const target = PROJECT_OF.exec(pathname)?.[1];
   if (target && target !== projectId) return { status: 403, error: 'a sandbox do Codex só fala com o projeto da própria conversa' };
   return null;

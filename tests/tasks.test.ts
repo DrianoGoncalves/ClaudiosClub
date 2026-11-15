@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { StaffProfile, TurnCapHit } from '../shared/model';
+import { AUTO_REVIEW_ROUNDS, type StaffProfile, type TurnCapHit } from '../shared/model';
 import { ChatClosingError, ChatManager, PLAN_REJECTED_MESSAGE } from '../server/chat/manager';
 import { parseVerdict, readTasks, stuckDependencies, TaskConflictError, TaskForbiddenError, TaskService } from '../server/tasks';
 import { blockedInboxItem } from '../server/inboxItems';
@@ -1094,22 +1094,22 @@ describe('revisão automática', () => {
     expect(delivered).toEqual([{ sessionId: 's-1', text: expect.stringContaining('falta o teste da paginação') }]);
   });
 
-  it('no máximo 2 rodadas automáticas (a entrega e uma reauditoria): depois, a tarefa fica com você e a entrega não pede mais revisão', async () => {
+  it('no máximo AUTO_REVIEW_ROUNDS (3) rodadas automáticas (a entrega e as reauditorias): depois, a tarefa fica com você e a entrega não pede mais revisão', async () => {
     const { svc, sent, texts, delivered, make, current } = reviewFlow('auto-limit');
     const t = await make('Relatório');
     await svc.start('p', t.id); // s-1
     await svc.onTurnDone('s-1'); // rodada 1 (s-2)
-    for (const round of [1, 2]) {
+    for (const round of [1, 2, 3]) {
       texts.set(`s-${round + 1}`, `REPROVADO\n\najuste ${round}`);
       await svc.onTurnDone(`s-${round + 1}`); // reprovou: volta para fazendo
-      await svc.onTurnDone('s-1'); // ajustou e terminou: vai para revisão (a rodada 2 é a última, s-3)
+      await svc.onTurnDone('s-1'); // ajustou e terminou: vai para revisão (a rodada 3 é a última, s-4)
     }
     const end = await current();
-    expect(sent.filter((m) => m.staffId === 'rev-1')).toHaveLength(2);
-    expect(delivered).toHaveLength(2);
-    expect(end).toMatchObject({ status: 'review', reviewRounds: 2 });
+    expect(sent.filter((m) => m.staffId === 'rev-1')).toHaveLength(AUTO_REVIEW_ROUNDS);
+    expect(delivered).toHaveLength(AUTO_REVIEW_ROUNDS);
+    expect(end).toMatchObject({ status: 'review', reviewRounds: AUTO_REVIEW_ROUNDS });
     expect(end.history.at(-1)?.note).toBe(
-      'limite de 2 revisões automáticas; o que sobrou fica com você: aceitar como trade-off (anotar em "Decisões" no SPEC.md) ou pedir ajuste',
+      `limite de ${AUTO_REVIEW_ROUNDS} revisões automáticas; o que sobrou fica com você: aceitar como trade-off (anotar em "Decisões" no SPEC.md) ou pedir ajuste`,
     );
   });
 
@@ -1704,12 +1704,14 @@ describe('gestor como revisor (tarefa que ele passou)', () => {
     const t = await make('Relatório');
     await svc.start('p', t.id); // s-1
     await svc.onTurnDone('s-1'); // rodada 1 (s-2)
-    for (const s of ['s-2', 's-3']) {
+    for (const s of ['s-2', 's-3', 's-4']) {
       texts.set(s, 'REPROVADO\n\najuste');
       await svc.onTurnDone(s); // reprovou: volta para fazendo
-      await svc.onTurnDone('s-1'); // ajustou e terminou: a rodada 2 (s-3) é a última
+      await svc.onTurnDone('s-1'); // ajustou e terminou: a rodada 3 (s-4) é a última
     }
-    expect(notified).toEqual([{ staffId: 'gio-1', sessionId: 's-gio', text: expect.stringContaining(`(id ${t.id}): o limite de 2 revisões automáticas foi atingido; o que sobrou fica com você.`) }]);
+    expect(notified).toEqual([
+      { staffId: 'gio-1', sessionId: 's-gio', text: expect.stringContaining(`(id ${t.id}): o limite de ${AUTO_REVIEW_ROUNDS} revisões automáticas foi atingido; o que sobrou fica com você.`) },
+    ]);
   });
 
   /** Entrega a tarefa em `work` (conversa da Luana) e aprova na revisão dele (`review`). */
@@ -1755,13 +1757,13 @@ describe('gestor como revisor (tarefa que ele passou)', () => {
       await approveFlow(f, a.id, 's-1', 's-2');
       await f.svc.start('p', b.id); // s-3
       await f.svc.onTurnDone('s-3'); // rodada 1 (s-4)
-      for (const s of ['s-4', 's-5']) {
+      for (const s of ['s-4', 's-5', 's-6']) {
         f.texts.set(s, 'REPROVADO\n\najuste');
         await f.svc.onTurnDone(s);
         await f.svc.onTurnDone('s-3');
       }
       expect(f.notified).toHaveLength(1);
-      expect(f.notified[0]!.text).toContain('o limite de 2 revisões automáticas foi atingido');
+      expect(f.notified[0]!.text).toContain(`o limite de ${AUTO_REVIEW_ROUNDS} revisões automáticas foi atingido`);
       expect(f.notified[0]!.text).not.toContain('Aprovadas antes');
       expect(await byId(f, a.id)).toMatchObject({ outcomeHeld: true });
     });
@@ -2530,16 +2532,16 @@ describe('dependências: aviso ao gestor de quem espera e caixa "blocked"', () =
     await make('Dashboard', { blockedBy: [b.id], by: 'gio-1' });
     await svc.start('p', b.id); // s-1
     await svc.onTurnDone('s-1'); // entregou: o Rui revisa (s-2)
-    for (const round of [1, 2]) {
+    for (const round of [1, 2, 3]) {
       texts.set(`s-${round + 1}`, `REPROVADO\n\najuste ${round}`);
       await svc.onTurnDone(`s-${round + 1}`); // reprovou: volta para fazendo
-      await svc.onTurnDone('s-1'); // ajustou e terminou: a rodada 2 é a última
+      await svc.onTurnDone('s-1'); // ajustou e terminou: a rodada 3 é a última
     }
     await vi.waitFor(() => expect(notified).toHaveLength(1));
     expect(notified[0]).toMatchObject({ staffId: 'gio-1', text: expect.stringContaining('parou: limite de revisões automáticas atingido') });
   });
 
-  it('limite de revisões: com a 2ª revisão em curso não conta como empacada; encerrada sem aprovar, conta', async () => {
+  it('limite de revisões: com a última revisão em curso não conta como empacada; encerrada sem aprovar, conta', async () => {
     const { svc, dir, texts, make, byTitle } = warnFlow('w-limite-curso');
     const b = await make('Parecer', { reviewerId: 'rev-1' });
     await make('Anexo', { blockedBy: [b.id], by: 'gio-1' });
@@ -2547,13 +2549,16 @@ describe('dependências: aviso ao gestor de quem espera e caixa "blocked"', () =
     await svc.onTurnDone('s-1'); // 1ª revisão: o Rui (s-2)
     texts.set('s-2', 'REPROVADO\n\najuste');
     await svc.onTurnDone('s-2'); // reprovou: volta para fazendo
-    await svc.onTurnDone('s-1'); // ajustou: 2ª revisão (s-3) em curso, reviewRounds já é 2
-    expect(await byTitle('Parecer')).toMatchObject({ status: 'review', reviewRounds: 2, review: { sessionId: 's-3' } });
-    expect(stuckDependencies(await readTasks(dir))).toEqual([]);
+    await svc.onTurnDone('s-1'); // ajustou: 2ª revisão (s-3) em curso
     texts.set('s-3', 'REPROVADO\n\nmais um ajuste');
     await svc.onTurnDone('s-3'); // a 2ª revisão respondeu sem aprovar: volta para fazendo
+    await svc.onTurnDone('s-1'); // ajustou: a 3ª revisão (s-4), a última, em curso; reviewRounds já é 3
+    expect(await byTitle('Parecer')).toMatchObject({ status: 'review', reviewRounds: AUTO_REVIEW_ROUNDS, review: { sessionId: 's-4' } });
+    expect(stuckDependencies(await readTasks(dir))).toEqual([]);
+    texts.set('s-4', 'REPROVADO\n\nainda falta');
+    await svc.onTurnDone('s-4'); // a 3ª revisão respondeu sem aprovar: volta para fazendo
     await svc.onTurnDone('s-1'); // ajustou de novo: no limite, a tarefa fica com você
-    expect(await byTitle('Parecer')).toMatchObject({ status: 'review', reviewRounds: 2, review: { verdict: 'rejected' } });
+    expect(await byTitle('Parecer')).toMatchObject({ status: 'review', reviewRounds: AUTO_REVIEW_ROUNDS, review: { verdict: 'rejected' } });
     expect(stuckDependencies(await readTasks(dir)).map((s) => [s.blocker.title, s.reason])).toEqual([['Parecer', 'limite de revisões automáticas atingido']]);
   });
 

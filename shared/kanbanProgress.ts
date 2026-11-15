@@ -1,18 +1,19 @@
 // Progresso do kanban de um projeto: cada coluna vale pontos e a barra mostra quanto do lote atual já andou até
 // Pronto. O servidor calcula (summary de tarefas) e a tela só desenha; a conta mora aqui para ser uma só.
-import type { TaskProgress, TaskStatus } from './model';
+import { isClosed, type TaskProgress, type TaskStatus } from './model';
 
 /** Peso de cada etapa (o que a tarefa ganha ao sair dela): Aguardar 1, A fazer 3, Fazendo 2, Revisão 1. */
 export const STAGE_WEIGHTS = { waiting: 1, todo: 3, doing: 2, review: 1 } as const;
 
 /**
  * Pontos por coluna: a soma dos pesos das etapas já vencidas (Aguardar 0, A fazer 1, Fazendo 4, Revisão 6, Pronto 7).
- * "Planejando" é a coluna Fazendo na tela, então vale o mesmo.
+ * "Planejando" é a coluna Fazendo na tela, então vale o mesmo. Cancelada vale 0 e nunca entra na conta (fechou sem entrega:
+ * não é aberta nem pronta, ver `kanbanProgress`).
  */
 export const STATUS_POINTS: Record<TaskStatus, number> = (() => {
   const w = STAGE_WEIGHTS;
   const doing = w.waiting + w.todo;
-  return { waiting: 0, todo: w.waiting, planning: doing, doing, review: doing + w.doing, done: doing + w.doing + w.review };
+  return { waiting: 0, todo: w.waiting, planning: doing, doing, review: doing + w.doing, done: doing + w.doing + w.review, cancelled: 0 };
 })();
 const MAX_POINTS = STATUS_POINTS.done;
 
@@ -36,7 +37,8 @@ function doneAt(task: ProgressTask): number {
  * 100%). Sem tarefa aberta devolve null: não há o que zerar, não há barra.
  */
 export function kanbanProgress(tasks: readonly ProgressTask[]): TaskProgress | null {
-  const open = tasks.filter((x) => x.status !== 'done');
+  // Cancelada fora: não é trabalho em aberto, e não foi entregue (não entra nem no lote das prontas).
+  const open = tasks.filter((x) => !isClosed(x));
   if (open.length === 0) return null;
   const since = Math.min(...open.map((x) => Date.parse(x.createdAt)));
   // Data ilegível (NaN) nunca passa na comparação: a tarefa fica fora do lote em vez de inflar a barra.

@@ -720,6 +720,33 @@ describe('ChatManager: ficha editada com a conversa aberta', () => {
     expect(m.attention()).toEqual([{ sessionId: 'sx', pending: [], error: 'o claude saiu com código 1' }]);
   });
 
+  it('dismissPending (tarefa cancelada): nega o plano pendente sem acionar os ganchos da tarefa, e aprovar depois não executa nada', async () => {
+    const approved: string[] = [];
+    const rejected: string[] = [];
+    const { m, procs } = manager({ onPlanApproved: (sid) => approved.push(sid), onPlanRejected: (sid) => rejected.push(sid) });
+    await m.send('p', 'sx', 'ana', 'planeje');
+    const f = procs[0]!;
+    f.emit({ type: 'control_request', request_id: 'r1', request: { subtype: 'can_use_tool', tool_name: 'ExitPlanMode', input: { plan: '# Plano' } } });
+    await tick();
+    expect(m.attention()[0]!.pending).toHaveLength(1);
+
+    expect(m.dismissPending('sx', 'A tarefa foi cancelada')).toBe(1);
+    await tick();
+    // O cartão sai da caixa, o funcionário leu "negou" e nenhum gancho de plano (aprovado ou recusado) rodou.
+    expect(m.attention()).toEqual([]);
+    expect(f.written.at(-1)).toMatchObject({ response: { request_id: 'r1', response: { behavior: 'deny', message: 'A tarefa foi cancelada' } } });
+    expect(approved).toEqual([]);
+    expect(rejected).toEqual([]);
+    // Aprovar o cartão que ficou aberto na tela: não há mais pedido, então nada é escrito nem executado.
+    const written = f.written.length;
+    expect(m.answer('sx', 'r1', true, { executeAs: 'acceptEdits' })).toBe(false);
+    expect(f.written).toHaveLength(written);
+    expect(approved).toEqual([]);
+    // Sem pedido (ou conversa que não existe): zero.
+    expect(m.dismissPending('sx', 'x')).toBe(0);
+    expect(m.dismissPending('nao-existe', 'x')).toBe(0);
+  });
+
   it('pergunta com opções: o gestor é avisado; a resposta (sua ou dele) vai como resumo; pular e recusar também; sem pendente, nada', async () => {
     const asked: unknown[] = [];
     const closed: unknown[] = [];

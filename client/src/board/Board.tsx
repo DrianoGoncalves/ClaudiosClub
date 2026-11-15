@@ -401,7 +401,7 @@ export function BoardView(props: BoardViewProps) {
           <UpdateNotice />
           <PendingRestartNotice />
           <span className="toolbar-sep" />
-          <InboxMenu inbox={props.inbox} topicOf={topicOf} onOpen={props.onOpenInbox} />
+          <InboxMenu inbox={props.inbox} topicOf={topicOf} staff={props.board.staff} onOpen={props.onOpenInbox} />
           <button className="toolbar-icon" onClick={() => onSelect(HR_ID)} title={t('hr.people')} aria-label={t('hr.people')}>
             <UsersIcon />
           </button>

@@ -988,6 +988,24 @@ export class ChatManager {
   }
 
   /**
+   * Nega os pedidos que a conversa ainda espera de você (o plano pronto, uma permissão, uma pergunta), sem acionar os ganchos de tarefa
+   * (plano recusado, pergunta respondida): a tarefa foi cancelada e a interrupção do turno não tira o cartão, então aprovar o plano depois
+   * deixaria o funcionário seguir para a execução. Devolve quantos foram negados.
+   */
+  dismissPending(sessionId: string, message: string): number {
+    const chat = this.chats.get(sessionId);
+    let n = 0;
+    for (const p of chat?.pendingPermissions() ?? []) {
+      try {
+        if (chat?.answer(p.id.replace(/^p:/, ''), false, message)) n++;
+      } catch {
+        // o processo já saiu: o pedido caiu junto
+      }
+    }
+    return n;
+  }
+
+  /**
    * Alguma conversa aberta deste funcionário, neste projeto, está trabalhando (fora `exceptSession`). A mesma ficha
    * em outro projeto não conta: cada projeto tem o seu funcionário.
    */
