@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import type {
   Agent,
   CostReport,
@@ -21,7 +21,7 @@ import { alertError, api, ApiError, isPairingError, type SkillDeleted } from '..
 import { RoomColorPicker } from '../board/colors';
 import { portraitUrl } from '../board/nodes';
 import { idleUnseen, showsStatus, useSeeIdle, useSeenIdle } from '../board/unread';
-import { ChatView, type MoreTab } from '../chat/ChatView';
+import type { MoreTab } from '../chat/ChatView';
 import type { ChatFocus } from '../chat/chatFocus';
 import { MoreTabs } from '../chat/MoreTabs';
 import { BrowserCheck } from '../staff/BrowserCheck';
@@ -45,6 +45,9 @@ import { ServerLog } from '../office/ServerLog';
 import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
 import { SkillManage } from './SkillManage';
+
+// A conversa (com o markdown e o remark) carrega ao abrir o painel do funcionário, não no pacote inicial.
+const ChatView = lazy(() => import('../chat/ChatView').then((m) => ({ default: m.ChatView })));
 
 // Painel lateral: o que o nó selecionado no quadro tem por trás.
 
@@ -659,27 +662,29 @@ export function EmployeePanel(props: {
     ? { model: chosen?.model ?? staff.model ?? staff.lastModel ?? null, effort: chosen?.effort ?? staff.effort ?? staff.lastEffort ?? null }
     : null;
   return (
-    <ChatView
-      key={`${opened ?? `novo${freshN}`}:${staff?.id ?? ''}`}
-      projectId={project.id}
-      sessionId={opened}
-      staffId={staff?.id ?? null}
-      name={name}
-      autonomy={staff?.autonomy ?? null}
-      disabled={!project.exists ? t('detail.projectFolderMissing') : null}
-      onSessionStarted={sessionStarted}
-      projectRoot={project.path}
-      onOpenFile={props.onOpenFile}
-      level={props.simple ? 'simple' : 'advanced'}
-      fichaModel={opening?.model ?? null}
-      fichaEffort={opening?.effort ?? null}
-      engine={staff?.engine ?? 'claude'}
-      top={top}
-      moreTabs={tabs}
-      focus={props.focus}
-      onFocusDone={props.onFocusDone}
-      awaiting={!!opened && !!props.inbox?.some((i) => i.sessionId === opened)}
-    />
+    <Suspense fallback={null}>
+      <ChatView
+        key={`${opened ?? `novo${freshN}`}:${staff?.id ?? ''}`}
+        projectId={project.id}
+        sessionId={opened}
+        staffId={staff?.id ?? null}
+        name={name}
+        autonomy={staff?.autonomy ?? null}
+        disabled={!project.exists ? t('detail.projectFolderMissing') : null}
+        onSessionStarted={sessionStarted}
+        projectRoot={project.path}
+        onOpenFile={props.onOpenFile}
+        level={props.simple ? 'simple' : 'advanced'}
+        fichaModel={opening?.model ?? null}
+        fichaEffort={opening?.effort ?? null}
+        engine={staff?.engine ?? 'claude'}
+        top={top}
+        moreTabs={tabs}
+        focus={props.focus}
+        onFocusDone={props.onFocusDone}
+        awaiting={!!opened && !!props.inbox?.some((i) => i.sessionId === opened)}
+      />
+    </Suspense>
   );
 }
 

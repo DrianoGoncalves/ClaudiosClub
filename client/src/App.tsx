@@ -1,5 +1,5 @@
 import { ReactFlowProvider } from '@xyflow/react';
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type {
   Agent,
   AppConfig,
@@ -29,40 +29,42 @@ import { openSettings } from './toolbar/openSettings';
 import { PairControls } from './toolbar/PairControls';
 import { SystemMonitor } from './toolbar/SystemMonitor';
 import { QuickJump } from './toolbar/QuickJump';
-import {
-  AgentPanel,
-  EmployeePanel,
-  ProjectPanel,
-  RankingPanel,
-  SkillPanel,
-  SyncedPanel,
-  UserPanel,
-  type TeamRow,
-} from './detail/Detail';
+import type { TeamRow } from './detail/Detail';
 import type { ChatFocus } from './chat/chatFocus';
 import { type ConversationTitles, conversationTitle } from './detail/conversationTitle';
 import { DrawerResize, useDrawerWidth } from './detail/DrawerResize';
 import { leftOutByRetention } from './detail/oldConversations';
 import { deletedNotice } from './detail/skillAccess';
-import { PeoplePanel } from './detail/PeoplePanel';
-import { TaskCostPanel } from './detail/TaskCostPanel';
 import { companyName, effortLabel, employeeName } from './format';
 import { t } from './i18n';
 import { useInbox } from './inbox/useInbox';
 import { rankingGroups } from './ranking';
 import { staffIndex } from './taskCost';
-import { AgentForm, type AgentFormTarget } from './staff/AgentForm';
-import { NewProjectForm } from './office/NewProjectForm';
+import type { AgentFormTarget } from './staff/AgentForm';
 import { readTab, workspaceByProject, writeTab } from './office/workspaces';
-import { ProjectOffice } from './office/ProjectOffice';
-import { StaffForm, type StaffFormMode } from './staff/HireForm';
+import type { StaffFormMode } from './staff/HireForm';
 import { directoryPerson } from './staff/directory';
-import { HrPanel } from './staff/HrPanel';
-import { FilesBoard } from './files/FilesBoard';
-import { SchedulesBoard } from './schedules/SchedulesBoard';
-import { TasksBoard } from './tasks/TasksBoard';
 import { UsageWarnings } from './chat/usageWarning';
-import { UncommittedPanel } from './board/UncommittedPanel';
+
+// Telas abertas por ação da pessoa: carregam sob demanda, fora do pacote inicial (o quadro é a única tela do primeiro desenho).
+const AgentPanel = lazy(() => import('./detail/Detail').then((m) => ({ default: m.AgentPanel })));
+const EmployeePanel = lazy(() => import('./detail/Detail').then((m) => ({ default: m.EmployeePanel })));
+const PeoplePanel = lazy(() => import('./detail/PeoplePanel').then((m) => ({ default: m.PeoplePanel })));
+const ProjectPanel = lazy(() => import('./detail/Detail').then((m) => ({ default: m.ProjectPanel })));
+const RankingPanel = lazy(() => import('./detail/Detail').then((m) => ({ default: m.RankingPanel })));
+const SkillPanel = lazy(() => import('./detail/Detail').then((m) => ({ default: m.SkillPanel })));
+const SyncedPanel = lazy(() => import('./detail/Detail').then((m) => ({ default: m.SyncedPanel })));
+const TaskCostPanel = lazy(() => import('./detail/TaskCostPanel').then((m) => ({ default: m.TaskCostPanel })));
+const UserPanel = lazy(() => import('./detail/Detail').then((m) => ({ default: m.UserPanel })));
+const AgentForm = lazy(() => import('./staff/AgentForm').then((m) => ({ default: m.AgentForm })));
+const FilesBoard = lazy(() => import('./files/FilesBoard').then((m) => ({ default: m.FilesBoard })));
+const HrPanel = lazy(() => import('./staff/HrPanel').then((m) => ({ default: m.HrPanel })));
+const NewProjectForm = lazy(() => import('./office/NewProjectForm').then((m) => ({ default: m.NewProjectForm })));
+const ProjectOffice = lazy(() => import('./office/ProjectOffice').then((m) => ({ default: m.ProjectOffice })));
+const SchedulesBoard = lazy(() => import('./schedules/SchedulesBoard').then((m) => ({ default: m.SchedulesBoard })));
+const StaffForm = lazy(() => import('./staff/HireForm').then((m) => ({ default: m.StaffForm })));
+const TasksBoard = lazy(() => import('./tasks/TasksBoard').then((m) => ({ default: m.TasksBoard })));
+const UncommittedPanel = lazy(() => import('./board/UncommittedPanel').then((m) => ({ default: m.UncommittedPanel })));
 
 const ARCHIVED_KEY = 'myco.showArchived';
 const ANIMATIONS_KEY = 'myco.animations';
@@ -481,244 +483,258 @@ export function App() {
           <button className="drawer-close" onClick={() => setSelectedId(null)} aria-label={t('app.close')}>
             ×
           </button>
-          {(selection.kind === 'hr' || selection.kind === 'ranking') && (
-            <PeoplePanel
-              view={selection.kind}
-              onView={(view) => setSelectedId(view === 'hr' ? HR_ID : RANKING_ID)}
-              hr={
-                <HrPanel
-                  profiles={board.staff}
-                  onEdit={(p) => {
-                    // Projeto fora do quadro (arquivado): o painel do funcionário não teria onde abrir.
-                    if (board.staff.some((s) => s.projectId === p.projectId && s.id === p.staffId)) openManage(p.projectId, p.staffId);
-                    else setNotice(t('hr.openMissing', { project: p.projectName }), true);
-                  }}
-                  onConfig={setConfig}
-                  onChanged={load}
-                  onNotice={(text) => setNotice(text)}
-                />
-              }
-              ranking={(tab) => {
-                const openTask = (projectId: string, taskId: string) => {
-                  setJumpTask(taskId);
-                  setTasksFor(projectId);
-                };
-                return tab === 'tasks' ? (
-                  <TaskCostPanel staff={staffIndex(board)} onOpenTask={openTask} onOpenPerson={(p) => openManage(p.projectId, p.staffId)} />
-                ) : (
-                  <RankingPanel
-                    tab={tab}
-                    groups={rankingGroups(board, config)}
-                    agents={Object.entries(costs?.agents ?? {})
-                      .map(([type, c]) => ({ type, usd: c.usd, runs: c.runs }))
-                      .sort((a, b) => b.usd - a.usd)}
-                    system={costs?.system}
-                    scanning={costs?.scanning ?? true}
-                    onSelect={setSelectedId}
-                    onOpenPerson={(p) => openManage(p.projectId, p.staffId)}
-                    onOpenTask={openTask}
-                  />
-                );
-              }}
-            />
-          )}
-          {selection.kind === 'user' && (
-            <UserPanel
-              scope={board.user}
-              onNewAgent={() => setAgentForm({ scope: 'user', projectId: null })}
-              onEditAgent={(name) => setAgentForm({ scope: 'user', projectId: null, name })}
-            />
-          )}
-          {selection.kind === 'synced' && <SyncedPanel skills={selection.skills} />}
-          {selection.kind === 'project' && (
-            <ProjectPanel
-              onTasks={() => setTasksFor(selection.id)}
-              onFiles={() => {
-                setFilesPath(null);
-                setFilesFor(selection.id);
-              }}
-              onOpenFile={(path) => {
-                setFilesPath(path);
-                setFilesFor(selection.id);
-              }}
-              onOpenConversation={(staffId, sessionId) => openNewConversation(selection.id, staffId, sessionId)}
-              onTeamImported={load}
-              tasks={taskSummary[selection.id] ?? null}
-              office={<ProjectOffice projectId={selection.id} config={config} onConfig={setConfig} />}
-              onNewAgent={() => setAgentForm({ scope: 'project', projectId: selection.id })}
-              onEditAgent={(name) => setAgentForm({ scope: 'project', projectId: selection.id, name })}
-              id={selection.id}
-              live={board.live}
-              {...projectTeam(board, costs, selection.id, retentionOf(selection.id))}
-              onOpenStaff={(staffId) => setSelectedId(staffNodeId(selection.id, staffId))}
-              onOpenSession={(sessionId) => {
-                // O mesmo painel do cartão fantasma, já nesta conversa (Trazer e Efetivar ficam por lá).
-                const node = ghostNodeId(selection.id);
-                setJumpConversation({ node, sessionId });
-                setSelectedId(node);
-              }}
-              hiddenSessions={showArchived ? undefined : new Set(archivedList ?? [])}
-              conversationTitles={config?.conversationTitles}
-              cost={costs?.projects[selection.id] ?? null}
-              archived={isArchived('project', selection.id)}
-              onArchive={(v) => archive('project', selection.id, v)}
-              onHire={() => setForm({ projectId: selection.id, mode: { kind: 'hire', reportsTo: [] } })}
-              image={board.images[selection.id] ?? null}
-              color={config?.projectColors[selection.id] ?? null}
-              onColor={(color) => saveProjectColor(selection.id, color)}
-              onName={(name) => saveProjectName(selection.id, name)}
-              totalUsd={costs?.total.usd ?? 0}
-              onImage={async (dataUrl) => {
-                await api.saveProjectImage(selection.id, dataUrl);
-                load();
-              }}
-            />
-          )}
-          {selection.kind === 'employee' && (
-            <EmployeePanel
-              key={`${selectedId}:${jumpTo ?? ''}`}
-              initialConversation={jumpTo}
-              focus={jumpTarget}
-              onFocusDone={clearJumpTarget}
-              onOpenFile={(path) => {
-                setFilesPath(path);
-                setFilesFor(selection.projectId);
-              }}
-              inbox={inbox.items}
-              session={
-                selection.session && {
-                  ...selection.session,
-                  live: board.live.find((l) => l.sessionId === selection.session!.id) ?? selection.session.live,
+          <Suspense fallback={null}>
+            {(selection.kind === 'hr' || selection.kind === 'ranking') && (
+              <PeoplePanel
+                view={selection.kind}
+                onView={(view) => setSelectedId(view === 'hr' ? HR_ID : RANKING_ID)}
+                hr={
+                  <Suspense fallback={null}>
+                    <HrPanel
+                      profiles={board.staff}
+                      onEdit={(p) => {
+                        // Projeto fora do quadro (arquivado): o painel do funcionário não teria onde abrir.
+                        if (board.staff.some((s) => s.projectId === p.projectId && s.id === p.staffId)) openManage(p.projectId, p.staffId);
+                        else setNotice(t('hr.openMissing', { project: p.projectName }), true);
+                      }}
+                      onConfig={setConfig}
+                      onChanged={load}
+                      onNotice={(text) => setNotice(text)}
+                    />
+                  </Suspense>
                 }
-              }
-              live={board.live}
-              staff={selection.staff}
-              managers={board.staff.filter((s) => s.projectId === selection.projectId && selection.staff?.reportsTo.includes(s.id))}
-              project={board.projects.find((p) => p.id === selection.projectId) ?? null}
-              costUsd={employeeCost(costs, selection)}
-              totalUsd={costs?.total.usd ?? 0}
-              ghost={!!selection.ghost}
-              manage={manageOf(board, selection, manageTab, setManageTab, leaveManage, setSelectedId)}
-              archived={
-                selection.ghost ? selection.ghost.every((s) => isArchived('session', s.id)) : isArchived('session', archiveKey(selection))
-              }
-              onArchive={async (v) => {
-                // O fantasma arquiva (ou desarquiva) todas as conversas dele.
-                if (selection.ghost) for (const s of selection.ghost) await archive('session', s.id, v);
-                else await archive('session', archiveKey(selection), v);
-              }}
-              onHireSub={() => setForm({ projectId: selection.projectId, mode: { kind: 'hire', reportsTo: selection.staff ? [selection.staff.id] : [] } })}
-              onEdit={(sessionId) => {
-                if (selection.staff) return setForm({ projectId: selection.projectId, mode: { kind: 'edit', profile: selection.staff } });
-                // Sem ficha: a conversa aberta no painel (no fantasma, pode não ser a do cartão).
-                const session = (sessionId && board.sessions[selection.projectId]?.find((s) => s.id === sessionId)) || selection.session;
-                if (session) setForm({ projectId: selection.projectId, mode: { kind: 'adopt', session } });
-              }}
-              sheetForm={(tab, onTab) =>
-                selection.staff && (
-                  // A chave troca quando a ficha muda (salvar, restaurar, rotinas) ou ao desfazer: o formulário relê.
-                  <StaffForm
-                    key={`${selection.staff.id}:${selection.staff.updatedAt}:${sheetReset}`}
-                    embedded
-                    board={board}
-                    projectId={selection.projectId}
-                    mode={{ kind: 'edit', profile: selection.staff }}
-                    simple={simple}
-                    codexReview={config?.codexReview ?? false}
-                    codexBrowser={config?.codexBrowser ?? false}
-                    tab={tab}
-                    onTab={onTab}
-                    onDirty={onSheetDirty}
-                    onClose={() => setSheetReset((n) => n + 1)}
-                    onHired={() => {}}
-                    onSaved={onSheetSaved}
-                  />
-                )
-              }
-              onRestored={onSheetSaved}
-              onSessionStarted={reloadSoon}
-              simple={simple}
-              onShowAdvanced={() => void saveUiLevel('advanced')}
-              conversations={
-                selection.staff
-                  ? staffConversations(board, selection.staff, config?.conversationTitles, retentionOf(selection.projectId))
-                  : (selection.ghost ?? []).map((s) => ({ id: s.id, title: conversationTitle(s, config?.conversationTitles), updatedAt: s.updatedAt }))
-              }
-              oldConversations={
-                selection.staff && (config?.archiveAfterDays ?? 0) > 0
-                  ? {
-                      shown: !!oldSessions[selection.projectId],
-                      hidden: leftOutOf(board, selection.staff, retentionOf(selection.projectId)).size,
-                      onChange: (shown) => showOldConversations(selection.projectId, shown),
-                    }
-                  : undefined
-              }
-              conversationTitles={config?.conversationTitles}
-              onRenameConversation={renameConversation}
-              archivedConversations={config?.archived.conversations}
-              onArchiveConversation={archiveConversation}
-              onChanged={() => {
-                load();
-                // Efetivar desarquiva no servidor: os arquivados do config mudam também.
-                void api.config().then(setConfig, () => {});
-              }}
-            />
-          )}
-          {selection.kind === 'agent' && (
-            <AgentPanel
-              onEdit={() =>
-                setAgentForm({
-                  scope: selection.agent.scope === 'user' ? 'user' : 'project',
-                  projectId: selection.projectId,
-                  name: selection.agent.name,
-                })
-              }
-              agent={selection.agent}
-              cost={costs?.agents[selection.agent.name] ?? null}
-              agentsUsd={Object.values(costs?.agents ?? {}).reduce((s, a) => s + a.usd, 0)}
-            />
-          )}
-          {selection.kind === 'skill' && (
-            <SkillPanel
-              skill={selection.skill}
-              projectId={selection.projectId}
-              onChanged={load}
-              onDeleted={(done) => {
-                const { skill } = selection;
-                const { key, hooks, backups } = deletedNotice(done);
-                setSelectedId(null);
-                // O caminho da lixeira (e os backups dos settings, se saíram hooks) ficam no aviso até o ×: é o que a pessoa precisa para recuperar.
-                setNotice(t(key, { name: skill.name, trash: done.trash, dir: skill.dirPath, hooks, backups }), true);
-                load();
-              }}
-            />
-          )}
+                ranking={(tab) => {
+                  const openTask = (projectId: string, taskId: string) => {
+                    setJumpTask(taskId);
+                    setTasksFor(projectId);
+                  };
+                  return tab === 'tasks' ? (
+                    <TaskCostPanel staff={staffIndex(board)} onOpenTask={openTask} onOpenPerson={(p) => openManage(p.projectId, p.staffId)} />
+                  ) : (
+                    <RankingPanel
+                      tab={tab}
+                      groups={rankingGroups(board, config)}
+                      agents={Object.entries(costs?.agents ?? {})
+                        .map(([type, c]) => ({ type, usd: c.usd, runs: c.runs }))
+                        .sort((a, b) => b.usd - a.usd)}
+                      system={costs?.system}
+                      scanning={costs?.scanning ?? true}
+                      onSelect={setSelectedId}
+                      onOpenPerson={(p) => openManage(p.projectId, p.staffId)}
+                      onOpenTask={openTask}
+                    />
+                  );
+                }}
+              />
+            )}
+            {selection.kind === 'user' && (
+              <UserPanel
+                scope={board.user}
+                onNewAgent={() => setAgentForm({ scope: 'user', projectId: null })}
+                onEditAgent={(name) => setAgentForm({ scope: 'user', projectId: null, name })}
+              />
+            )}
+            {selection.kind === 'synced' && <SyncedPanel skills={selection.skills} />}
+            {selection.kind === 'project' && (
+              <ProjectPanel
+                onTasks={() => setTasksFor(selection.id)}
+                onFiles={() => {
+                  setFilesPath(null);
+                  setFilesFor(selection.id);
+                }}
+                onOpenFile={(path) => {
+                  setFilesPath(path);
+                  setFilesFor(selection.id);
+                }}
+                onOpenConversation={(staffId, sessionId) => openNewConversation(selection.id, staffId, sessionId)}
+                onTeamImported={load}
+                tasks={taskSummary[selection.id] ?? null}
+                office={
+                  <Suspense fallback={null}>
+                    <ProjectOffice projectId={selection.id} config={config} onConfig={setConfig} />
+                  </Suspense>
+                }
+                onNewAgent={() => setAgentForm({ scope: 'project', projectId: selection.id })}
+                onEditAgent={(name) => setAgentForm({ scope: 'project', projectId: selection.id, name })}
+                id={selection.id}
+                live={board.live}
+                {...projectTeam(board, costs, selection.id, retentionOf(selection.id))}
+                onOpenStaff={(staffId) => setSelectedId(staffNodeId(selection.id, staffId))}
+                onOpenSession={(sessionId) => {
+                  // O mesmo painel do cartão fantasma, já nesta conversa (Trazer e Efetivar ficam por lá).
+                  const node = ghostNodeId(selection.id);
+                  setJumpConversation({ node, sessionId });
+                  setSelectedId(node);
+                }}
+                hiddenSessions={showArchived ? undefined : new Set(archivedList ?? [])}
+                conversationTitles={config?.conversationTitles}
+                cost={costs?.projects[selection.id] ?? null}
+                archived={isArchived('project', selection.id)}
+                onArchive={(v) => archive('project', selection.id, v)}
+                onHire={() => setForm({ projectId: selection.id, mode: { kind: 'hire', reportsTo: [] } })}
+                image={board.images[selection.id] ?? null}
+                color={config?.projectColors[selection.id] ?? null}
+                onColor={(color) => saveProjectColor(selection.id, color)}
+                onName={(name) => saveProjectName(selection.id, name)}
+                totalUsd={costs?.total.usd ?? 0}
+                onImage={async (dataUrl) => {
+                  await api.saveProjectImage(selection.id, dataUrl);
+                  load();
+                }}
+              />
+            )}
+            {selection.kind === 'employee' && (
+              <EmployeePanel
+                key={`${selectedId}:${jumpTo ?? ''}`}
+                initialConversation={jumpTo}
+                focus={jumpTarget}
+                onFocusDone={clearJumpTarget}
+                onOpenFile={(path) => {
+                  setFilesPath(path);
+                  setFilesFor(selection.projectId);
+                }}
+                inbox={inbox.items}
+                session={
+                  selection.session && {
+                    ...selection.session,
+                    live: board.live.find((l) => l.sessionId === selection.session!.id) ?? selection.session.live,
+                  }
+                }
+                live={board.live}
+                staff={selection.staff}
+                managers={board.staff.filter((s) => s.projectId === selection.projectId && selection.staff?.reportsTo.includes(s.id))}
+                project={board.projects.find((p) => p.id === selection.projectId) ?? null}
+                costUsd={employeeCost(costs, selection)}
+                totalUsd={costs?.total.usd ?? 0}
+                ghost={!!selection.ghost}
+                manage={manageOf(board, selection, manageTab, setManageTab, leaveManage, setSelectedId)}
+                archived={
+                  selection.ghost ? selection.ghost.every((s) => isArchived('session', s.id)) : isArchived('session', archiveKey(selection))
+                }
+                onArchive={async (v) => {
+                  // O fantasma arquiva (ou desarquiva) todas as conversas dele.
+                  if (selection.ghost) for (const s of selection.ghost) await archive('session', s.id, v);
+                  else await archive('session', archiveKey(selection), v);
+                }}
+                onHireSub={() => setForm({ projectId: selection.projectId, mode: { kind: 'hire', reportsTo: selection.staff ? [selection.staff.id] : [] } })}
+                onEdit={(sessionId) => {
+                  if (selection.staff) return setForm({ projectId: selection.projectId, mode: { kind: 'edit', profile: selection.staff } });
+                  // Sem ficha: a conversa aberta no painel (no fantasma, pode não ser a do cartão).
+                  const session = (sessionId && board.sessions[selection.projectId]?.find((s) => s.id === sessionId)) || selection.session;
+                  if (session) setForm({ projectId: selection.projectId, mode: { kind: 'adopt', session } });
+                }}
+                sheetForm={(tab, onTab) =>
+                  selection.staff && (
+                    // A chave troca quando a ficha muda (salvar, restaurar, rotinas) ou ao desfazer: o formulário relê.
+                    <Suspense fallback={null}>
+                      <StaffForm
+                        key={`${selection.staff.id}:${selection.staff.updatedAt}:${sheetReset}`}
+                        embedded
+                        board={board}
+                        projectId={selection.projectId}
+                        mode={{ kind: 'edit', profile: selection.staff }}
+                        simple={simple}
+                        codexReview={config?.codexReview ?? false}
+                        codexBrowser={config?.codexBrowser ?? false}
+                        tab={tab}
+                        onTab={onTab}
+                        onDirty={onSheetDirty}
+                        onClose={() => setSheetReset((n) => n + 1)}
+                        onHired={() => {}}
+                        onSaved={onSheetSaved}
+                      />
+                    </Suspense>
+                  )
+                }
+                onRestored={onSheetSaved}
+                onSessionStarted={reloadSoon}
+                simple={simple}
+                onShowAdvanced={() => void saveUiLevel('advanced')}
+                conversations={
+                  selection.staff
+                    ? staffConversations(board, selection.staff, config?.conversationTitles, retentionOf(selection.projectId))
+                    : (selection.ghost ?? []).map((s) => ({ id: s.id, title: conversationTitle(s, config?.conversationTitles), updatedAt: s.updatedAt }))
+                }
+                oldConversations={
+                  selection.staff && (config?.archiveAfterDays ?? 0) > 0
+                    ? {
+                        shown: !!oldSessions[selection.projectId],
+                        hidden: leftOutOf(board, selection.staff, retentionOf(selection.projectId)).size,
+                        onChange: (shown) => showOldConversations(selection.projectId, shown),
+                      }
+                    : undefined
+                }
+                conversationTitles={config?.conversationTitles}
+                onRenameConversation={renameConversation}
+                archivedConversations={config?.archived.conversations}
+                onArchiveConversation={archiveConversation}
+                onChanged={() => {
+                  load();
+                  // Efetivar desarquiva no servidor: os arquivados do config mudam também.
+                  void api.config().then(setConfig, () => {});
+                }}
+              />
+            )}
+            {selection.kind === 'agent' && (
+              <AgentPanel
+                onEdit={() =>
+                  setAgentForm({
+                    scope: selection.agent.scope === 'user' ? 'user' : 'project',
+                    projectId: selection.projectId,
+                    name: selection.agent.name,
+                  })
+                }
+                agent={selection.agent}
+                cost={costs?.agents[selection.agent.name] ?? null}
+                agentsUsd={Object.values(costs?.agents ?? {}).reduce((s, a) => s + a.usd, 0)}
+              />
+            )}
+            {selection.kind === 'skill' && (
+              <SkillPanel
+                skill={selection.skill}
+                projectId={selection.projectId}
+                onChanged={load}
+                onDeleted={(done) => {
+                  const { skill } = selection;
+                  const { key, hooks, backups } = deletedNotice(done);
+                  setSelectedId(null);
+                  // O caminho da lixeira (e os backups dos settings, se saíram hooks) ficam no aviso até o ×: é o que a pessoa precisa para recuperar.
+                  setNotice(t(key, { name: skill.name, trash: done.trash, dir: skill.dirPath, hooks, backups }), true);
+                  load();
+                }}
+              />
+            )}
+          </Suspense>
         </aside>
       )}
       {newProject && (
-        <NewProjectForm
-          workspaces={config?.workspaces ?? []}
-          workspaceId={newProject.workspaceId}
-          onClose={() => setNewProject(null)}
-          onCreated={(projectId) => {
-            setNewProject(null);
-            projectCreated(projectId);
-          }}
-        />
+        <Suspense fallback={null}>
+          <NewProjectForm
+            workspaces={config?.workspaces ?? []}
+            workspaceId={newProject.workspaceId}
+            onClose={() => setNewProject(null)}
+            onCreated={(projectId) => {
+              setNewProject(null);
+              projectCreated(projectId);
+            }}
+          />
+        </Suspense>
       )}
       {agentForm && (
-        <AgentForm
-          target={agentForm}
-          onClose={() => setAgentForm(null)}
-          onSaved={(a) => {
-            setAgentForm(null);
-            const how = [a.model && t('app.modelValue', { value: a.model }), a.effort && t('app.effortValue', { value: effortLabel(a.effort) })]
-              .filter(Boolean)
-              .join(', ');
-            setNotice(t('app.agentSaved', { name: a.name, how: how ? ` (${how})` : '' }));
-            load();
-          }}
-        />
+        <Suspense fallback={null}>
+          <AgentForm
+            target={agentForm}
+            onClose={() => setAgentForm(null)}
+            onSaved={(a) => {
+              setAgentForm(null);
+              const how = [a.model && t('app.modelValue', { value: a.model }), a.effort && t('app.effortValue', { value: effortLabel(a.effort) })]
+                .filter(Boolean)
+                .join(', ');
+              setNotice(t('app.agentSaved', { name: a.name, how: how ? ` (${how})` : '' }));
+              load();
+            }}
+          />
+        </Suspense>
       )}
       {board && (
         <QuickJump
@@ -739,102 +755,112 @@ export function App() {
         />
       )}
       {board && uncFor && (
-        <UncommittedPanel
-          projectId={uncFor}
-          projectName={board.projects.find((p) => p.id === uncFor)?.name ?? uncFor}
-          onOpenConversation={(staffId, sessionId) => {
-            setUncFor(null);
-            openNewConversation(uncFor, staffId, sessionId);
-          }}
-          onClose={() => setUncFor(null)}
-        />
+        <Suspense fallback={null}>
+          <UncommittedPanel
+            projectId={uncFor}
+            projectName={board.projects.find((p) => p.id === uncFor)?.name ?? uncFor}
+            onOpenConversation={(staffId, sessionId) => {
+              setUncFor(null);
+              openNewConversation(uncFor, staffId, sessionId);
+            }}
+            onClose={() => setUncFor(null)}
+          />
+        </Suspense>
       )}
       {board && tasksFor && (
-        <TasksBoard
-          key={`${tasksFor}:${jumpTask ?? ''}`}
-          initialTaskId={jumpTask}
-          projectId={tasksFor}
-          projectName={board.projects.find((p) => p.id === tasksFor)?.name ?? tasksFor}
-          staff={board.staff.filter((s) => s.projectId === tasksFor)}
-          costs={costs}
-          onClose={() => {
-            setTasksFor(null);
-            setJumpTask(null);
-          }}
-          onOpenStaff={(staffId) => {
-            setTasksFor(null);
-            setSelectedId(staffNodeId(tasksFor, staffId));
-            reloadSoon();
-          }}
-          onChanged={() => {
-            readTaskSummary();
-            reloadSoon();
-          }}
-          onOpenSchedules={() => {
-            setSchedulesFor(tasksFor);
-            setTasksFor(null);
-            setJumpTask(null);
-          }}
-        />
+        <Suspense fallback={null}>
+          <TasksBoard
+            key={`${tasksFor}:${jumpTask ?? ''}`}
+            initialTaskId={jumpTask}
+            projectId={tasksFor}
+            projectName={board.projects.find((p) => p.id === tasksFor)?.name ?? tasksFor}
+            staff={board.staff.filter((s) => s.projectId === tasksFor)}
+            costs={costs}
+            onClose={() => {
+              setTasksFor(null);
+              setJumpTask(null);
+            }}
+            onOpenStaff={(staffId) => {
+              setTasksFor(null);
+              setSelectedId(staffNodeId(tasksFor, staffId));
+              reloadSoon();
+            }}
+            onChanged={() => {
+              readTaskSummary();
+              reloadSoon();
+            }}
+            onOpenSchedules={() => {
+              setSchedulesFor(tasksFor);
+              setTasksFor(null);
+              setJumpTask(null);
+            }}
+          />
+        </Suspense>
       )}
       {board && schedulesFor && (
-        <SchedulesBoard
-          key={schedulesFor}
-          projectId={schedulesFor}
-          projectName={board.projects.find((p) => p.id === schedulesFor)?.name ?? schedulesFor}
-          staff={board.staff.filter((s) => s.projectId === schedulesFor)}
-          onClose={() => setSchedulesFor(null)}
-          onOpenConversation={(staffId, sessionId) => {
-            setSchedulesFor(null);
-            openNewConversation(schedulesFor, staffId, sessionId);
-          }}
-          onOpenTasks={() => {
-            setTasksFor(schedulesFor);
-            setSchedulesFor(null);
-          }}
-        />
+        <Suspense fallback={null}>
+          <SchedulesBoard
+            key={schedulesFor}
+            projectId={schedulesFor}
+            projectName={board.projects.find((p) => p.id === schedulesFor)?.name ?? schedulesFor}
+            staff={board.staff.filter((s) => s.projectId === schedulesFor)}
+            onClose={() => setSchedulesFor(null)}
+            onOpenConversation={(staffId, sessionId) => {
+              setSchedulesFor(null);
+              openNewConversation(schedulesFor, staffId, sessionId);
+            }}
+            onOpenTasks={() => {
+              setTasksFor(schedulesFor);
+              setSchedulesFor(null);
+            }}
+          />
+        </Suspense>
       )}
       {board && filesFor && (
-        <FilesBoard
-          key={filesFor}
-          projectId={filesFor}
-          projectName={board.projects.find((p) => p.id === filesFor)?.name ?? filesFor}
-          openPath={filesPath}
-          onClose={() => setFilesFor(null)}
-        />
+        <Suspense fallback={null}>
+          <FilesBoard
+            key={filesFor}
+            projectId={filesFor}
+            projectName={board.projects.find((p) => p.id === filesFor)?.name ?? filesFor}
+            openPath={filesPath}
+            onClose={() => setFilesFor(null)}
+          />
+        </Suspense>
       )}
       {board && form && (
-        <StaffForm
-          key={form.mode.kind === 'edit' ? form.mode.profile.updatedAt : 'novo'}
-          board={board}
-          projectId={form.projectId}
-          mode={form.mode}
-          simple={simple}
-          codexReview={config?.codexReview ?? false}
-          codexBrowser={config?.codexBrowser ?? false}
-          onClose={() => setForm(null)}
-          onHired={(profile, launch) => {
-            setForm(null);
-            setNotice(
-              launch === null
-                ? t('app.hiredChat', { name: profile.name })
-                : launch.ok
-                  ? t('app.hiredLaunched', { name: profile.name })
-                  : t('app.hiredNotLaunched', { name: profile.name, error: String(launch.error) }),
-              launch !== null && !launch.ok,
-            );
-            setSelectedId(staffNodeId(profile.projectId, profile.id));
-            load();
-            setTimeout(load, 5000);
-          }}
-          onSaved={(profile) => {
-            setForm(null);
-            setNotice(savedNotice(profile));
-            // Quem ganhou ficha agora muda de nó (sessão solta → funcionário com ficha).
-            setSelectedId(staffNodeId(profile.projectId, profile.id));
-            load();
-          }}
-        />
+        <Suspense fallback={null}>
+          <StaffForm
+            key={form.mode.kind === 'edit' ? form.mode.profile.updatedAt : 'novo'}
+            board={board}
+            projectId={form.projectId}
+            mode={form.mode}
+            simple={simple}
+            codexReview={config?.codexReview ?? false}
+            codexBrowser={config?.codexBrowser ?? false}
+            onClose={() => setForm(null)}
+            onHired={(profile, launch) => {
+              setForm(null);
+              setNotice(
+                launch === null
+                  ? t('app.hiredChat', { name: profile.name })
+                  : launch.ok
+                    ? t('app.hiredLaunched', { name: profile.name })
+                    : t('app.hiredNotLaunched', { name: profile.name, error: String(launch.error) }),
+                launch !== null && !launch.ok,
+              );
+              setSelectedId(staffNodeId(profile.projectId, profile.id));
+              load();
+              setTimeout(load, 5000);
+            }}
+            onSaved={(profile) => {
+              setForm(null);
+              setNotice(savedNotice(profile));
+              // Quem ganhou ficha agora muda de nó (sessão solta → funcionário com ficha).
+              setSelectedId(staffNodeId(profile.projectId, profile.id));
+              load();
+            }}
+          />
+        </Suspense>
       )}
       <SystemMonitor />
       <UsageWarnings />
