@@ -38,10 +38,11 @@ Um cargo é um modelo de ficha: preenche o formulário, e cada campo continua ed
 | Dados (DBA) | Sonnet | High | Edita sozinho |
 | Front-end | Sonnet | Medium | Edita sozinho |
 | Design system | Sonnet | Medium | Edita sozinho |
+| Web designer (sites e LP) | Opus | High | Edita sozinho |
 | Engenharia de IA | Sonnet | High | Edita sozinho |
 | QA (testes) | Sonnet | Medium | Edita sozinho |
 | Revisor(a) de código | Sonnet | High | Autônomo |
-| Segurança (AppSec) | Sonnet | High | Autônomo |
+| Segurança (AppSec) | Opus | Xhigh | Autônomo |
 | DevOps / SRE | Sonnet | High | Pede tudo |
 | Documentação | Sonnet | Medium | Edita sozinho |
 
