@@ -757,10 +757,17 @@ export class ChatProcess {
           const tool = this.items.get(`t:${b.tool_use_id}`);
           const result = resultText(b.content);
           this.scan(result, 'tool-result');
-          if (tool?.kind === 'tool') this.putItem({ ...tool, result, isError: b.is_error === true });
-          if (b.is_error === true && tool?.kind === 'tool') this.denialFromResult(b.tool_use_id, tool.name, result);
-          // A ferramenta já saiu de `items` (ver `evict`): ninguém vai trocar o texto do aviso, e a espera dele não pode ficar para sempre.
-          else this.denialNotices.delete(b.tool_use_id);
+          if (tool?.kind === 'tool') {
+            this.putItem({ ...tool, result, isError: b.is_error === true });
+            // Erro de ferramenta: o texto do resultado pode ser uma negação (troca o aviso do evento, ou abre um) e já tira a espera.
+            if (b.is_error === true) {
+              this.denialFromResult(b.tool_use_id, tool.name, result);
+              continue;
+            }
+          }
+          // Sem negação a tratar: a ferramenta já saiu de `items` (ver `evict`) ou o resultado não é erro. Ninguém vai trocar o
+          // texto de um aviso que ficou esperando por este id, e a espera dele não pode ficar para sempre.
+          this.denialNotices.delete(b.tool_use_id);
         }
         return;
       }

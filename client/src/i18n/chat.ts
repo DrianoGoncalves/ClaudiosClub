@@ -13,6 +13,7 @@ export default defineMessages({
     'chat.stopHelp': 'Interrompe o turno atual',
     'chat.kindShell': 'comando',
     'chat.running': 'rodando…',
+    'chat.reconnecting': 'A conexão com a conversa caiu; tentando reconectar…',
 
     'chat.tasks': 'Tarefas {done}/{total}',
     'chat.autoPlan': 'Só planeja',
@@ -231,6 +232,7 @@ export default defineMessages({
     'chat.stopHelp': 'Interrupts the current turn',
     'chat.kindShell': 'command',
     'chat.running': 'running…',
+    'chat.reconnecting': 'The connection to the conversation dropped; trying to reconnect…',
 
     'chat.tasks': 'Tasks {done}/{total}',
     'chat.autoPlan': 'Plan only',
@@ -449,6 +451,7 @@ export default defineMessages({
     'chat.stopHelp': 'Interrumpe el turno actual',
     'chat.kindShell': 'comando',
     'chat.running': 'ejecutando…',
+    'chat.reconnecting': 'Se cortó la conexión con la conversación; intentando reconectar…',
 
     'chat.tasks': 'Tareas {done}/{total}',
     'chat.autoPlan': 'Solo planifica',

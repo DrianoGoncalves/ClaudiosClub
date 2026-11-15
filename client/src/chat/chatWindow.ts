@@ -40,6 +40,18 @@ export function mergeItems(history: ChatItem[], live: ChatItem[], held: ChatItem
   return [...history.filter((i) => !ids.has(i.id)), ...live, ...held];
 }
 
+/**
+ * O processo se foi (o snapshot veio sem `live`): o transcript já tem as mensagens, as respostas e as ferramentas, então o que
+ * sobrou ao vivo só repetiria. Fica o que só existe ao vivo e não está no histórico: os avisos do servidor (o erro com que a
+ * conversa terminou, a negação de uma ferramenta, "turno interrompido"). Não ficam os avisos que o servidor refaz sozinho sem o
+ * processo (o botão de cancelar o "continue" e o despertador voltam do que está guardado, já no histórico) nem um aviso de texto
+ * igual a um que o histórico já traz (a compactação está nos dois lados, com ids diferentes).
+ */
+export function liveOnlyNotices(live: ChatItem[], history: ChatItem[]): ChatItem[] {
+  const inHistory = new Set(history.flatMap((i) => (i.kind === 'notice' ? [i.text] : [])));
+  return live.filter((i) => i.kind === 'notice' && !i.action && !i.wake && !inHistory.has(i.text));
+}
+
 export interface ChatWindow {
   /** O que pintar, na ordem da conversa. */
   items: ChatItem[];
