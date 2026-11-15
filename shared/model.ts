@@ -1236,6 +1236,8 @@ export type ChatItem =
       denial?: DenialInfo;
       /** O turno parou no teto (ferramentas ou minutos): o aviso diz qual e quanto era. */
       cap?: TurnCapHit;
+      /** Aviso que a tela escreve no idioma dela (o `text` é só o de reserva): `older-in-file` = o que passou do limite da conversa ao vivo só está no arquivo dela. */
+      note?: 'older-in-file';
     };
 
 /**

@@ -13,6 +13,7 @@ import type {
   SendPriority,
 } from '../../../shared/model';
 import { api, ApiError, withUsageConfirm, type PermissionOpts } from '../api';
+import { mergeItems, trimLive } from './chatWindow';
 import { announceSent } from './usageNotice';
 
 // Estado de uma conversa: histórico do transcript + o que chega ao vivo pelo SSE.
@@ -74,9 +75,10 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     seq.current = Math.max(seq.current, e.seq);
     if (e.type === 'state') setState(e.state);
     else if (e.type === 'item') {
+      // Só os últimos LIVE_KEEP ficam (o servidor corta no mesmo ponto): a conversa de horas não cresce sem fim aqui.
       setLive((items) => {
         const i = items.findIndex((x) => x.id === e.item.id);
-        if (i === -1) return [...items, e.item];
+        if (i === -1) return trimLive([...items, e.item]);
         const next = items.slice();
         next[i] = e.item;
         return next;
@@ -294,7 +296,7 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
 
   return {
     sessionId,
-    items: [...history, ...live, ...held],
+    items: mergeItems(history, live, held),
     state,
     context: state?.context ?? baseContext,
     elsewhere,

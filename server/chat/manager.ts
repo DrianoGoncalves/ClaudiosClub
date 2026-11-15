@@ -26,7 +26,7 @@ import type {
 } from '../../shared/model';
 import { writeAtomic } from '../staff/store';
 import { codexHistoryOf } from '../adapters/codex/rollout';
-import { readHistory } from './history';
+import { MAX_ITEMS, readHistory, TAIL_BYTES } from './history';
 import type { CodexSpawn } from './codexArgs';
 import type { CodexEnvStatus } from '../codexEnv';
 import type { CodexModelInfo } from '../codexModels';
@@ -172,6 +172,11 @@ const AUTONOMY_NAME: Record<Autonomy, string> = {
 };
 
 /** Onde a sessão está aberta e como liberar. */
+/** Aviso no topo do histórico: o que passou do limite da conversa ao vivo e do trecho lido do transcript só está no arquivo. A tela o escreve no idioma dela (`note`). */
+function olderInFile(): ChatItem {
+  return { kind: 'notice', id: 'n:older-in-file', text: 'Mensagens mais antigas ficam só no arquivo da conversa.', tone: 'info', at: null, note: 'older-in-file' };
+}
+
 function holdMessage(o: NonNullable<ChatSnapshot['elsewhere']>): string {
   if (o.orphan) return `ficou um processo do Claudio’s Club de antes do reinício do servidor (pid ${o.pid}): clique em Trazer para encerrá-lo`;
   const where = o.entrypoint === 'claude-desktop' ? 'no app do Claude' : o.entrypoint === 'sdk-cli' ? 'em outro programa (sdk-cli)' : 'num terminal';
@@ -304,19 +309,24 @@ export class ChatManager {
     // o histórico é o da original.
     const source = this.forks.get(sessionId);
     if (source && !(await fs.access(file).then(() => true, () => false))) file = await findTranscript(this.opts.transcriptsDir, projectId, source);
-    // Com processo aberto, o histórico vai até o início dele; o resto vem pelo SSE.
-    const before = live && !source ? chat!.startedAt : undefined;
+    // Com processo aberto, o histórico vai até o início dele; o resto vem pelo SSE. Se a conversa já passou do limite de itens
+    // do processo (ver MAX_LIVE_ITEMS), o stream só repete os mais recentes: o histórico vai até onde eles começam.
+    const cut = live && !source ? chat!.cut : null;
+    const before = live && !source ? (cut?.before ?? chat!.startedAt) : undefined;
     // Sem transcript do Claude, a conversa é do Codex: o histórico vem do rollout dele (ver adapters/codex/rollout.ts).
     const claude = await fs.access(file).then(() => true, () => false);
     const codex = claude ? null : await codexHistoryOf(this.runDir, sessionId, { before }).catch(() => null);
     const { items, context } = codex ?? (await readHistory(file, { before }));
+    // O histórico é só o fim do transcript (MAX_ITEMS itens, TAIL_BYTES do arquivo): se não chega ao item mais antigo que saiu
+    // da conversa ao vivo, um aviso no topo diz que o resto está no arquivo.
+    const older = cut && (await this.historyStopsShort(items, cut.oldest, claude ? file : null)) ? [olderInFile()] : [];
     // Sem processo (fechou por inatividade, ou o servidor reiniciou), o aviso de limite de uso não tem onde viver:
     // volta da pendência guardada, com a mesma hora e o mesmo botão.
     const waiting = live ? null : await this.opts.autoContinue?.get(sessionId);
     const wake = live ? null : await this.opts.wakeups?.get(sessionId);
     return {
       sessionId,
-      history: [...items, ...(waiting ? [this.waitingNotice(waiting)] : []), ...(wake?.projectId === projectId ? [this.waitingWake(wake)] : [])],
+      history: [...older, ...items, ...(waiting ? [this.waitingNotice(waiting)] : []), ...(wake?.projectId === projectId ? [this.waitingWake(wake)] : [])],
       live,
       context,
       elsewhere: await this.elsewhere(sessionId),
@@ -324,6 +334,17 @@ export class ChatManager {
       copy: await this.copyOf(sessionId),
       ...(this.overrides.has(sessionId) && { fallback: this.overrides.get(sessionId) }),
     };
+  }
+
+  /**
+   * O histórico lido pode estar cortado no começo (o limite de itens, ou o arquivo passa do trecho lido) e o primeiro item dele
+   * não vai até o mais antigo que saiu da conversa ao vivo (`oldest`)? Então há mensagens que só o arquivo tem.
+   */
+  private async historyStopsShort(items: ChatItem[], oldest: string, file: string | null): Promise<boolean> {
+    const bigFile = file ? ((await fs.stat(file).catch(() => null))?.size ?? 0) > TAIL_BYTES : false;
+    if (items.length < MAX_ITEMS && !bigFile) return false;
+    const first = items[0]?.at ?? null;
+    return !first || first >= oldest;
   }
 
   /** Comandos "/" do projeto vistos na última sessão aberta (o menu funciona antes de abrir outra). */

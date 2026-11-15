@@ -34,6 +34,23 @@ export const STREAM_FLAGS = [
 
 const MAX_LOG = 5_000;
 
+/**
+ * Quantos itens a conversa aberta guarda na memória (os mais recentes). O resto já está no transcript e volta de lá no
+ * snapshot (ver `cut`). A tela guarda o mesmo tanto (client/src/chat/chatWindow.ts, LIVE_KEEP): os dois lados cortam juntos.
+ */
+export const MAX_LIVE_ITEMS = 400;
+
+/** Até onde o stream e a memória deste processo já não cobrem a conversa: o que for mais antigo vem do transcript (ver `cut`). */
+export interface ChatCut {
+  /** Instante (ISO) do primeiro item que o stream ainda devolve: o histórico do transcript vai até aqui. */
+  before: string;
+  /** Instante do item mais antigo que ficou de fora (o histórico alcançou tudo se ele chega a antes disto). */
+  oldest: string;
+}
+
+const laterOf = (a: string | null, b: string | null) => (a && b ? (a > b ? a : b) : (a ?? b));
+const earlierOf = (a: string | null, b: string | null) => (a && b ? (a < b ? a : b) : (a ?? b));
+
 /** `data:image/png;base64,...` → bloco de imagem da mensagem; null se não for uma data URL de imagem. */
 export function imageBlock(dataUrl: string) {
   const m = /^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/.exec(dataUrl);
@@ -113,6 +130,8 @@ export interface ChatProcessOptions {
   onIdle?: (reason: 'turn' | 'background' | 'exit') => void;
   /** Chegou a lista de comandos "/" da sessão. */
   onCommands?: (commands: ChatCommand[]) => void;
+  /** Quantos itens guardar na memória (os mais recentes); padrão `MAX_LIVE_ITEMS`. Os testes baixam. */
+  maxItems?: number;
   /** Teto por turno (ver turnCap.ts), lido a cada turno que começa; sem ele, sem teto. */
   turnCaps?: () => Promise<TurnCaps>;
   /** O turno passou do teto: chamado antes de interromper, para o manager guardar o motivo (a tarefa lê depois). */
@@ -136,7 +155,16 @@ export class ChatProcess {
   private child: ChildProcessWithoutNullStreams | null = null;
   private seq = 0;
   private readonly log: ChatEvent[] = [];
+  /** Só os `maxItems` mais recentes (e o que não pode sair: ver `pinned`); o resto está no transcript. */
   protected readonly items = new Map<string, ChatItem>();
+  /** `at` do primeiro item mantido depois do último que saiu de `items`; null = nada saiu. */
+  private evictBefore: string | null = null;
+  /** `at` do primeiro item que saiu de `items`. */
+  private evictedFrom: string | null = null;
+  /** O log passou de MAX_LOG e perdeu eventos antigos (o stream já não repete tudo; ver `cut`). */
+  private logTrimmed = false;
+  /** Resposta que está chegando em deltas agora (não pode sair de `items` no meio). */
+  private streamingId: string | null = null;
   private readonly listeners = new Set<Listener>();
   /** Pedidos de permissão sem resposta: a entrada original e as sugestões de "permitir sempre". */
   private readonly pending = new Map<string, { input: unknown; tool: string; suggestions: Suggestion[]; questions?: AskedQuestion[] }>();
@@ -242,6 +270,40 @@ export class ChatProcess {
 
   snapshot() {
     return { items: [...this.items.values()], state: { ...this.state }, seq: this.seq };
+  }
+
+  /**
+   * Quando a conversa passou do limite de itens (ou o log do stream perdeu eventos), de onde o histórico do transcript precisa
+   * começar a valer para a tela ver tudo: o stream repete só os itens que ficaram, então o que veio antes de `before` volta do
+   * transcript (ver ChatManager.snapshot). null = nada foi cortado: o histórico vai até a abertura do processo.
+   */
+  get cut(): ChatCut | null {
+    let before = this.evictBefore;
+    let oldest = this.evictedFrom;
+    if (this.logTrimmed) {
+      // O que o stream repete são os itens com algum evento no log. Do último item que ficou sem evento em diante, tudo chega
+      // pelo stream (o primeiro com evento depois dele marca o ponto); do que ficou sem evento para trás, só o transcript tem.
+      const seen = new Set<string>();
+      for (const e of this.log) if (e.type === 'item') seen.add(e.item.id);
+      let firstMissing: string | null = null;
+      let lastMissing: string | null = null;
+      let afterMissing: string | null = null;
+      let wantNext = false;
+      for (const item of this.items.values()) {
+        if (!seen.has(item.id)) {
+          firstMissing ??= item.at;
+          lastMissing = item.at;
+          afterMissing = null;
+          wantNext = true;
+        } else if (wantNext) {
+          afterMissing = item.at;
+          wantNext = false;
+        }
+      }
+      before = laterOf(before, afterMissing ?? lastMissing);
+      oldest = earlierOf(oldest, firstMissing);
+    }
+    return before ? { before, oldest: oldest ?? before } : null;
   }
 
   start() {
@@ -662,9 +724,11 @@ export class ChatProcess {
         const msgId = typeof ev.api_message_id === 'string' ? ev.api_message_id : null;
         if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text && msgId) {
           const id = `a:${msgId}`;
+          // Fixa antes de criar: o item que está chegando em deltas nunca sai de `items` (ver `pinned`).
+          this.streamingId = id;
           if (!this.items.has(id)) this.putItem({ kind: 'assistant', id, text: '', at });
-          const item = this.items.get(id)!;
-          if (item.kind === 'assistant') item.text += event.delta.text;
+          const item = this.items.get(id);
+          if (item?.kind === 'assistant') item.text += event.delta.text;
           this.emit({ type: 'delta', seq: ++this.seq, id, text: event.delta.text });
         }
         return;
@@ -826,6 +890,7 @@ export class ChatProcess {
           if (c) this.setState({ context: { ...c, window: this.window, percent: Math.round((c.used / this.window) * 100) } });
         }
         this.doneText.clear();
+        this.streamingId = null;
         const hit = ev.is_error === true ? limitFromText(ev.result) : null;
         if (hit) this.limitSeen = { ...mergeHits(this.limitSeen, hit), confirmed: true };
         const stopped = this.stopping && ev.subtype === 'error_during_execution';
@@ -886,8 +951,54 @@ export class ChatProcess {
   }
 
   protected putItem(item: ChatItem) {
+    const isNew = !this.items.has(item.id);
     this.items.set(item.id, item);
     this.emit({ type: 'item', seq: ++this.seq, item: { ...item } });
+    // Só item novo faz sair o mais antigo: trocar um que já está aqui (resultado, status) não muda o tamanho.
+    if (isNew) this.evict(item.id);
+  }
+
+  /** Não pode sair de `items` agora: pedido sem resposta, ferramenta rodando (com o turno aberto) ou resposta chegando. */
+  private pinned(item: ChatItem): boolean {
+    if (item.id === this.streamingId) return true;
+    if (item.kind === 'permission') return item.status === 'pending';
+    // Sem turno aberto, uma ferramenta sem resultado é órfã (o resultado não vem mais): pode sair como as outras.
+    if (item.kind === 'tool') return item.result === null && this.busy;
+    return false;
+  }
+
+  /**
+   * Passou do limite: tira os mais antigos, na ordem em que entraram, menos o que `pinned` segura e o item que acabou de entrar.
+   * Quem procura um item que saiu (resultado de ferramenta, resposta a um pedido, aviso trocado) já trata a ausência: o
+   * resultado de uma ferramenta que saiu não cria nada (um item sem nome nem entrada só estragaria o cartão que a tela ainda tem).
+   * Os eventos dos itens que saíram também saem do log: quem abre o stream do começo não os recebe (o histórico os traz do
+   * transcript, ver `cut`) e a tela não mostra o mesmo item de dois lugares.
+   */
+  private evict(justPut: string) {
+    let excess = this.items.size - (this.opts.maxItems ?? MAX_LIVE_ITEMS);
+    if (excess <= 0) return;
+    const gone = new Set<string>();
+    let after: string | null = null; // `at` do primeiro item que ficou depois do último que saiu
+    let lastGone: string | null = null;
+    let wantNext = false;
+    for (const [id, item] of this.items) {
+      if (excess > 0 && id !== justPut && !this.pinned(item)) {
+        gone.add(id);
+        excess--;
+        this.evictedFrom ??= item.at;
+        lastGone = item.at;
+        after = null;
+        wantNext = true;
+      } else if (wantNext) {
+        after = item.at;
+        wantNext = false;
+      }
+    }
+    if (!gone.size) return;
+    for (const id of gone) this.items.delete(id);
+    this.evictBefore = laterOf(this.evictBefore, after ?? lastGone);
+    const kept = this.log.filter((e) => !(e.type === 'item' ? gone.has(e.item.id) : e.type === 'delta' && gone.has(e.id)));
+    this.log.splice(0, this.log.length, ...kept);
   }
 
   /** Erro de ferramenta: se for negação, o texto troca o aviso do evento (ou abre um, se o evento não veio). */
@@ -909,7 +1020,10 @@ export class ChatProcess {
 
   protected emit(e: ChatEvent) {
     this.log.push(e);
-    if (this.log.length > MAX_LOG) this.log.splice(0, this.log.length - MAX_LOG);
+    if (this.log.length > MAX_LOG) {
+      this.log.splice(0, this.log.length - MAX_LOG);
+      this.logTrimmed = true;
+    }
     for (const l of this.listeners) l(e);
   }
 }
