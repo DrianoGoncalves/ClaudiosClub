@@ -1,6 +1,8 @@
 /* Quadro branco no claro, quadro negro (giz) no escuro. As cores das canetas são as mesmas variáveis
    usadas pelos traços do rough.js. */
 :root {
+  /* Camadas acima de tudo: o modal de pergunta/aviso (lib/DialogHost) cobre menus (30), avisos (40) e a tela de espera (100). */
+  --z-dialog: 200;
   /* Papel de fábrica (`-base`): o fundo escolhido (geral/aba) troca só `--board`, `--board-dot` e
      `--card`; o chat do funcionário volta à base quando o workspace dele não tem fundo próprio. */
   --board-base: #fbfaf6;
@@ -154,8 +156,8 @@ body { background: var(--board); }
 .temp-notice-actions { display: inline-flex; gap: 6px; margin-left: auto; }
 .bn-employee.is-busy .sketch path { stroke-dasharray: 14 6; animation: bn-redraw 1.6s linear infinite; }
 .bn-employee.is-busy { animation: bn-glow 2.4s ease-in-out infinite; }
-/* Lápis "✎" de sempre (18px), no canto no lugar da bolinha: a caixa tem os 9px dela e o glifo sobra centrado. */
-.bn-pencil { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 9px; height: 9px; font-size: 18px; line-height: 1; color: var(--busy); transform-origin: 20% 80%; animation: bn-write 0.9s ease-in-out infinite; }
+/* Lápis "✎" (18px), no canto superior direito no lugar da bolinha: a caixa tem os 9px dela e o glifo sobra centrado. Girado 90° (a ponta do glifo aponta para baixo à direita; girada, aponta para baixo à esquerda, para o centro do cartão). */
+.bn-pencil { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 9px; height: 9px; font-size: 18px; line-height: 1; color: var(--busy); margin-right: 5px; transform: rotate(90deg); transform-origin: 80% 80%; animation: bn-write 0.9s ease-in-out infinite; }
 .bn-working::after { content: '…'; display: inline-block; width: 1.2em; text-align: left; animation: bn-dots 1.2s steps(4, end) infinite; overflow: hidden; vertical-align: bottom; }
 .bn-employee.is-waiting { animation: bn-nudge 2.4s ease-in-out infinite; }
 @keyframes bn-redraw { to { stroke-dashoffset: -40; } }
@@ -165,8 +167,8 @@ body { background: var(--board); }
   50% { filter: drop-shadow(0 0 10px color-mix(in srgb, var(--busy) 60%, transparent)); }
 }
 @keyframes bn-write {
-  0%, 100% { transform: translate(0, 0) rotate(-8deg); }
-  50% { transform: translate(-3px, -2px) rotate(6deg); }
+  0%, 100% { transform: translate(0, 0) rotate(82deg); }
+  50% { transform: translate(-3px, 2px) rotate(96deg); }
 }
 @keyframes bn-dots { from { width: 0; } to { width: 1.2em; } }
 @keyframes bn-nudge { 0%, 92%, 100% { transform: rotate(0); } 95% { transform: rotate(-1.2deg); } 98% { transform: rotate(1.2deg); } }
@@ -612,9 +614,12 @@ textarea.q-field { resize: vertical; }
 .task-card:hover { border-color: var(--ink-blue); }
 .task-card.is-waiting, .task-card.is-waiting:hover { border-color: var(--waiting); box-shadow: 0 0 0 1px var(--waiting); }
 .task-card.is-selected { outline: 2px solid var(--ink-blue); }
-.task-card.is-archived { opacity: 0.6; }
-.task-card.is-archived:hover, .task-card.is-archived.is-selected { opacity: 1; }
-.link.tasks-archived-toggle { align-self: flex-start; margin-top: 2px; color: var(--muted); }
+/* Arquivada/cancelada: sem opacity (ela derrubava o contraste do texto para ~2,4:1); o que a distingue é a borda tracejada e o título em cinza (--muted passa de 4,5:1 sobre o cartão nos dois temas). */
+.task-card.is-archived { border-style: dashed; }
+.task-card.is-archived .task-title { color: var(--muted); }
+.task-card.is-archived:hover, .task-card.is-archived.is-selected { border-style: solid; }
+.task-card.is-archived:hover .task-title, .task-card.is-archived.is-selected .task-title { color: var(--ink); }
+.link.tasks-archived-toggle { align-self: flex-start; margin-top: 2px; color: var(--ink); }
 .task-title { font-weight: 600; font-size: 13.5px; line-height: 1.25; }
 /* Id da tarefa (t-1a2b3c): discreto, herda o cinza do texto ao redor; text-transform none por causa do .kicker em caixa alta. */
 .task-id { font-family: ui-monospace, Consolas, monospace; font-size: 0.9em; text-transform: none; letter-spacing: 0; }
@@ -639,6 +644,9 @@ textarea.q-field { resize: vertical; }
 .task-detail { position: absolute; z-index: 3; top: 0; right: 0; bottom: 0; width: min(420px, 100%); overflow-y: auto; background: var(--panel-glass); border-left: 1px solid var(--line); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; box-shadow: -10px 0 30px rgba(0, 0, 0, 0.15); }
 .task-detail-head { display: flex; align-items: center; justify-content: space-between; }
 .task-detail .actions { flex-wrap: wrap; }
+/* Detalhe da cancelada: uma frase por linha; sem a margem de parágrafo, que somada ao gap do painel deixava um vazio antes do Reabrir. */
+.task-detail .task-cancelled { display: grid; gap: 4px; }
+.task-detail .task-cancelled p { margin: 0; overflow-wrap: anywhere; }
 .task-move { font: inherit; font-size: 12.5px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
 .task-plan { max-height: 320px; overflow-y: auto; font-size: 13px; }
 .task-history { margin: 0; padding-left: 16px; display: grid; gap: 3px; }
@@ -669,7 +677,7 @@ textarea.q-field { resize: vertical; }
 /* Dúvida do funcionário: selo de uma linha no cartão (nome longo corta; o title tem o texto inteiro) e bloco no detalhe (amarelo quando é com você, como o .files-conflict). */
 .task-badge.task-doubt { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Espera do gate de recursos: o motivo é o que importa, então quebra linha (raio dos blocos tracejados, não pílula). */
-.task-queue.task-resource, .task-queue.task-blocked { max-width: 100%; border-radius: 10px; padding: 1px 8px; text-align: left; overflow-wrap: anywhere; }
+.task-queue.task-resource, .task-queue.task-blocked { max-width: 100%; border-radius: 10px; padding: 3px 8px; line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
 .task-doubt-box { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
 .task-doubt-box.is-escalated { border: 1px solid var(--waiting); background: color-mix(in srgb, var(--waiting) 12%, transparent); }
 .task-doubt-box p, .task-doubt-box ul { margin: 0; overflow-wrap: anywhere; }
@@ -920,9 +928,11 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 :root[data-theme='dark'] :is(.btn-primary, .workspace-pending, .inbox-count) { color: #10161f; }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 18, 20, 0.45); display: grid; place-items: center; z-index: 20; padding: 16px; }
 .modal { position: relative; width: min(720px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px 18px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25); display: grid; gap: 12px; }
+.modal-backdrop.dialog-host { z-index: var(--z-dialog); }
 .usage-warning { width: min(440px, 100%); min-width: 0; box-sizing: border-box; }
 .usage-warning h2 { padding-right: 28px; }
 .usage-warning p { margin: 0; }
+.usage-warning .dialog-text { white-space: pre-line; overflow-wrap: anywhere; }
 .usage-warning-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 @media (max-width: 640px) { .usage-warning-actions { flex-direction: column-reverse; } .usage-warning-actions :is(.btn-primary, .btn-secondary) { min-height: 36px; } }
 .modal h2 { margin: 0; font-family: var(--hand); font-size: 34px; line-height: 1; }
@@ -1286,18 +1296,18 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 .toolbar .inbox-button { display: inline-flex; align-items: center; gap: 6px; }
 .toolbar .inbox-has { border-color: var(--waiting); color: var(--ink); font-weight: 600; }
 .inbox-count { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--waiting-ink); color: #fff; font-size: 11.5px; font-weight: 700; line-height: 18px; text-align: center; }
-.inbox-menu { position: absolute; top: calc(100% + 8px); left: 0; width: min(440px, calc(100vw - 24px)); max-height: min(70vh, 520px); display: flex; flex-direction: column; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2); overflow: hidden; font-size: 13px; z-index: 30; }
+.inbox-menu { --inbox-kind-w: 76px; position: absolute; top: calc(100% + 8px); left: 0; width: min(440px, calc(100vw - 24px)); max-height: min(70vh, 520px); display: flex; flex-direction: column; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2); overflow: hidden; font-size: 13px; z-index: 30; }
 .inbox-empty { margin: 0; padding: 14px; }
 .inbox-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; display: grid; gap: 2px; }
 .toolbar .inbox-item { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: 'kind who at' 'kind topic at' 'kind summary at'; column-gap: 10px; row-gap: 2px; align-items: center; text-align: left; padding: 7px 10px; border: 1px solid transparent; border-radius: 8px; }
 .toolbar .inbox-item:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); border-color: transparent; }
-.inbox-kind { grid-area: kind; font-family: var(--hand); font-weight: 700; font-size: 16px; line-height: 1; color: var(--waiting-ink); min-width: 64px; }
+.inbox-kind { grid-area: kind; font-family: var(--hand); font-weight: 700; font-size: 16px; line-height: 1; color: var(--waiting-ink); width: var(--inbox-kind-w); }
 .inbox-plan .inbox-kind { color: var(--ink-blue); }
 .inbox-error .inbox-kind, .inbox-orphan .inbox-kind, .inbox-secret .inbox-kind { color: var(--ink-red); }
 /* "já troquei" / "não é segredo": linha própria embaixo do item (fora do botão que abre o painel),
-   alinhada com o texto (10 de padding + 64 do rótulo + 10 de gap). Em tela estreita quebra em vez de invadir o texto. */
+   alinhada com o texto (10 de padding + --inbox-kind-w do rótulo, igual em todos os itens, + 10 de gap). Em tela estreita quebra em vez de invadir o texto. */
 .inbox-list li { position: relative; }
-span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; padding: 0 10px 6px 84px; }
+span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; padding: 0 10px 6px calc(var(--inbox-kind-w) + 20px); }
 .toolbar span.inbox-dismiss button { padding: 0; }
 /* Itens que só se dispensam: X do padrão .drawer-close, centrado à direita; o item reserva o espaço dele. */
 .toolbar .inbox-has-x .inbox-item { padding-right: 36px; }
@@ -1307,7 +1317,8 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 /* Assunto da conversa: 1 linha, corta com reticências. Sem assunto a linha não existe e a área fica vazia (altura 0). */
 .inbox-topic { grid-area: topic; font-size: 12px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inbox-summary { grid-area: summary; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.inbox-blocked .inbox-summary { white-space: normal; overflow-wrap: anywhere; }
+.inbox-blocked .inbox-summary, .inbox-notStarted .inbox-summary { white-space: normal; overflow-wrap: anywhere; }
+.inbox-dismiss .error { flex: 1 1 100%; text-align: right; }
 .inbox-at { grid-area: at; white-space: nowrap; }
 /* No celular o botão não fica na borda esquerda: ancorada nele, a caixa saía pela direita. Ocupa a largura da tela. */
 @media (max-width: 480px) {
@@ -1556,6 +1567,7 @@ body.is-resizing { cursor: ew-resize; user-select: none; }
 a.link { color: var(--ink-blue); text-decoration: underline; text-underline-offset: 2px; }
 .check-link { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
 .check-link a { flex: none; }
+button.link.small { font-size: 10px; }
 button.link { background: none; border: none; padding: 0; color: var(--ink-blue); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 
 /* "Valeu a pena?" */

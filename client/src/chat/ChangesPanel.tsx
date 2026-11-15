@@ -4,6 +4,7 @@ import type { ChatChanges, TestRun } from '../../../shared/model';
 import { api, ApiError } from '../api';
 import { BranchIcon } from '../icons';
 import { t } from '../i18n';
+import { askConfirm } from '../lib/dialogStore';
 
 // "O que mudou" na conversa: na worktree do funcionário, tudo desde a base (com mesclar); no
 // próprio projeto, só os arquivos que ele editou nesta conversa. Testes rodam onde está o código.
@@ -51,13 +52,13 @@ export function ChangesPanel({ projectId, sessionId, staffId, name, onClose }: {
 
   const merge = () =>
     run('merge', async () => {
-      if (!code?.base || !window.confirm(t('chat.mergeConfirm', { branch: code.branch ?? '?', base: code.base }))) return;
+      if (!code?.base || !(await askConfirm(t('chat.mergeConfirm', { branch: code.branch ?? '?', base: code.base })))) return;
       try {
         const r = await api.chatMerge(projectId, sessionId, staffId);
         setMerged(t('chat.mergedIn', { base: r.base, sha: r.sha }));
       } catch (e) {
         if (!(e instanceof ApiError) || e.code !== 'no-tests') throw e;
-        if (!window.confirm(t('chat.mergeNoTests', { message: e.message }))) return;
+        if (!(await askConfirm(t('chat.mergeNoTests', { message: e.message })))) return;
         const r = await api.chatMerge(projectId, sessionId, staffId, true);
         setMerged(t('chat.mergedIn', { base: r.base, sha: r.sha }));
       }

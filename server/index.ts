@@ -55,7 +55,7 @@ import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService } from '.
 import { sweepFreelas } from './freelaSweep';
 import { CLUB_MCP_FILE, McpError, mcpJsonWarnings } from './staff/mcp';
 import { createMcpLibrary } from './staff/mcpLibrary';
-import { blockedInboxItem, permissionInboxItem, questionInboxItem } from './inboxItems';
+import { blockedInboxItem, notStartedInboxItem, permissionInboxItem, questionInboxItem } from './inboxItems';
 import { capText } from './chat/turnCap';
 import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
@@ -112,7 +112,7 @@ import { importableList, importProjects } from './importProjects';
 import { AUTONOMY, dropStaffSessions, listProjectStaff, listProjectStaffStrict, readProfile } from './staff/store';
 import { lastRetentionRun, nextRetentionDelay, retentionPreview, runRetentionSweep, setRetentionDeletion, type RetentionDeps } from './retentionSweep';
 import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
-import { TaskConflictError, TaskError, TaskForbiddenError, TaskService, readTasks, stuckDependencies } from './tasks';
+import { TaskConflictError, TaskError, TaskForbiddenError, TaskService, cancelRequest, deleteRequest, notStartedTasks, readTasks, stuckDependencies } from './tasks';
 import { retainedSessionIds } from './retention';
 import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefaultRole } from './roles';
 import { ROOT } from './root';
@@ -536,6 +536,10 @@ const tasks = new TaskService({
   assertRunnable: (projectId, staffId, override) => staff.assertOverrideRunnable(projectId, staffId, override),
   clearOverride: (sessionId) => chats.clearOverride(sessionId),
   stopSession: (sessionId) => chats.stop(sessionId),
+  // Tarefa cancelada: o turno em andamento para como no botão Parar do chat (a conversa continua aberta, com o histórico).
+  interruptSession: (sessionId) => chats.interrupt(sessionId),
+  // E o plano (ou a permissão) que ficou pendente na conversa é negado: interromper não tira o cartão, e aprovar depois executaria.
+  dismissPending: (sessionId, message) => void chats.dismissPending(sessionId, message),
   snapshot: (projectId, sessionId) => chats.snapshot(projectId, sessionId),
 });
 // Conversa direta no limite de uso (o dono pela tela): a mensagem segue no secundário da ficha, numa conversa nova (ver directFallback.ts).
@@ -1328,6 +1332,38 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       return tasks.start(id!, taskId!, (body as { force?: unknown } | null)?.force === true);
     },
   ],
+  // Cancelar a tarefa (fecha sem entrega e não libera quem depende dela). Da tela, ou do funcionário só com o token da conversa ATUAL
+  // da tarefa (cancelando a própria; ver TaskService.cancelFrom). O gestor não cancela a tarefa de quem reporta a ele por aqui.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/tasks/${ID}/cancel$`),
+    ({ params: [id, taskId], body, fromBrowser, caller }) => {
+      // Corpo: { reason?, dependents?: { [taskId]: 'release' | 'cancel' | 'wait' } }. `dependents` só vale da tela; com o token do funcionário é ignorado.
+      const b = cancelRequest(body, fromBrowser);
+      if (fromBrowser) return tasks.cancel(id!, taskId!, { by: 'user', reason: b.reason, dependents: b.dependents });
+      return tasks.cancelFrom(id!, taskId!, caller, b.reason);
+    },
+  ],
+  // Reabrir a cancelada: volta para "a fazer", sem começar sozinha. Só pela tela.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/tasks/${ID}/reopen$`),
+    ({ params: [id, taskId], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('tarefas só pelo Claudio’s Club');
+      return tasks.reopen(id!, taskId!);
+    },
+  ],
+  // O dono decide o que fazer com quem espera uma tarefa cancelada (item 'blocked' da caixa): liberar, cancelar junto ou seguir esperando.
+  // `:id` é a tarefa que ESPERA; `blockerId`, a cancelada. Só pela tela.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/tasks/${ID}/blocker$`),
+    ({ params: [id, taskId], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('tarefas só pelo Claudio’s Club');
+      const b = parse(z.object({ blockerId: z.string().max(40), action: z.enum(['release', 'cancel', 'wait']) }), body);
+      return tasks.resolveCancelledBlocker(id!, taskId!, b.blockerId, b.action);
+    },
+  ],
   ['GET', new RegExp(`^/api/projects/${ID}/tasks/${ID}/code$`), ({ params: [id, taskId] }) => tasks.code(id!, taskId!)],
   // Execuções da tarefa (começos e fins, do registro task-runs.jsonl). Lê quem lê o código; a sandbox do Codex não (ver apiPolicy.ts).
   ['GET', new RegExp(`^/api/projects/${ID}/tasks/${ID}/runs$`), ({ params: [id, taskId] }) => tasks.runs(id!, taskId!)],
@@ -1388,9 +1424,10 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks/${ID}/delete$`),
-    async ({ params: [id, taskId], fromBrowser }) => {
+    async ({ params: [id, taskId], body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('tarefas só pelo Claudio’s Club');
-      return { ok: await tasks.remove(id!, taskId!) };
+      // Corpo (opcional): { dependents?: { [taskId]: 'release' | 'cancel' | 'wait' } }. Sem ele, ou incompleto, quem depende barra (409).
+      return { ok: await tasks.remove(id!, taskId!, deleteRequest(body)) };
     },
   ],
   // ---- rotinas agendadas ----
@@ -2277,7 +2314,7 @@ async function getBoard(opts: { includeOld?: boolean } = {}): Promise<Board> {
   return { projects: folded, inventories, sessions, staff: staffList, images, user, live };
 }
 
-const INBOX_ORDER: Record<InboxKind, number> = { plan: 0, permission: 1, secret: 2, waiting: 3, blocked: 4, error: 5, routine: 6, usage: 7, orphan: 8 };
+const INBOX_ORDER: Record<InboxKind, number> = { plan: 0, permission: 1, secret: 2, waiting: 3, blocked: 4, notStarted: 5, error: 6, routine: 7, usage: 8, orphan: 9 };
 /** Avisos de consumo (conta e orçamento de projeto) que a caixa mostra; guardados entre leituras da caixa. */
 const usageWarnings = new UsageWarnings();
 
@@ -2308,17 +2345,18 @@ async function getInbox(): Promise<InboxItem[]> {
     const w = where(q.sessionId, liveById.get(q.sessionId));
     if (!hidden(w)) out.push(questionInboxItem(q, w));
   }
-  // Tarefa que espera outra empacada (ver stuckDependencies em server/tasks.ts): calculado na leitura, nada gravado; some ao destravar.
+  // Tarefa que espera outra empacada (ver stuckDependencies em server/tasks.ts) e cartão esquecido em "a fazer" (ver notStartedTasks): calculados
+  // na leitura, nada gravado; somem ao destravar, começar, cancelar, editar ou apagar. Só projetos do quadro e não arquivados (como os outros avisos).
   const boardProjects = projects.filter((x) => x.exists && !x.worktreeOf);
-  const stuck = await Promise.all(boardProjects.map(async (p) => ({ p, rows: stuckDependencies(await readTasks(p.path)) })));
-  if (stuck.some((s) => s.rows.length)) {
+  const boards = await Promise.all(boardProjects.map(async (p) => ({ p, tasks: await readTasks(p.path) })));
+  const stuck = boards.map(({ p, tasks: all }) => ({ p, rows: stuckDependencies(all), forgotten: notStartedTasks(all) }));
+  if (stuck.some((s) => s.rows.length || s.forgotten.length)) {
     const staffNames = new Map((await staff.listAll(boardProjects)).map((s) => [`${s.projectId}:${s.id}`, s.name]));
-    for (const { p, rows } of stuck) {
+    const nameOf = (projectId: string, staffId: string | null) => (staffId ? (staffNames.get(`${projectId}:${staffId}`) ?? '') : '');
+    for (const { p, rows, forgotten } of stuck) {
       if (hidden({ projectId: p.id, staffId: null, sessionId: '' })) continue;
-      for (const s of rows) {
-        const name = s.task.staffId ? (staffNames.get(`${p.id}:${s.task.staffId}`) ?? '') : '';
-        out.push(blockedInboxItem(s, { projectId: p.id, projectName: p.name, sessionId: '', staffId: s.task.staffId, name }));
-      }
+      for (const s of rows) out.push(blockedInboxItem(s, { projectId: p.id, projectName: p.name, sessionId: '', staffId: s.task.staffId, name: nameOf(p.id, s.task.staffId) }));
+      for (const n of forgotten) out.push(notStartedInboxItem(n, { projectId: p.id, projectName: p.name, sessionId: '', name: nameOf(p.id, n.task.staffId) }));
     }
   }
   const orphans = await chats.orphans(live);

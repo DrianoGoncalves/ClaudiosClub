@@ -5,6 +5,7 @@ import { FileApiError, filesApi, type FileEntry } from '../api';
 import { t, type MsgKey } from '../i18n';
 import { FileIcon, FolderIcon, LockIcon, PlusIcon, TrashIcon } from '../icons';
 import { foldersToShow, isWithin, joinPath, nameProblem, parentOf, type NameProblem } from './newEntry';
+import { askConfirm } from '../lib/dialogStore';
 
 const CodeEditor = lazy(() => import('./CodeEditor'));
 
@@ -154,9 +155,9 @@ export function FilesBoard({
   /** Pode sair do arquivo atual? Não salva sozinho: com conflito ou mudança pendente, só se a pessoa aceitar perdê-la. */
   const leave = async (): Promise<boolean> => {
     if (inflight.current) await inflight.current;
-    if (conflictRef.current !== null) return window.confirm(t('files.discardConflict'));
+    if (conflictRef.current !== null) return (await askConfirm(t('files.discardConflict')));
     const d = doc.current;
-    if (d && d.content !== d.saved) return window.confirm(t('files.unsavedLeave'));
+    if (d && d.content !== d.saved) return (await askConfirm(t('files.unsavedLeave')));
     return true;
   };
 
@@ -258,7 +259,7 @@ export function FilesBoard({
     const p = entry.path;
     const losesEdits = doc.current !== null && isWithin(doc.current.path, p) && (dirtyRef.current || conflictRef.current !== null);
     const ask = t(entry.type === 'dir' ? 'files.deleteDirConfirm' : 'files.deleteFileConfirm', { path: p });
-    if (!window.confirm(losesEdits ? `${ask}\n\n${t('files.deleteUnsaved')}` : ask)) return;
+    if (!(await askConfirm(losesEdits ? `${ask}\n\n${t('files.deleteUnsaved')}` : ask))) return;
     setDeleting(true);
     setDeleteError(null);
     // Uma gravação em andamento poderia recriar o arquivo depois de apagado.

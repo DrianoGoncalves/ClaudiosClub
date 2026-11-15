@@ -1,3 +1,4 @@
+import { showAlert } from './lib/dialogStore';
 import type {
   AccountUsage,
   AnyConnection,
@@ -68,6 +69,7 @@ import { locale, t } from './i18n';
 import { askUsageStop } from './chat/usageNotice';
 import type { GuideAction } from './detail/guideActions';
 import type { Schedule } from './schedules/scheduleView';
+import type { DepChoice, DepMap } from './tasks/cancelDeps';
 import type { McpSaveBody, McpScope, McpServer } from './office/mcpForm';
 
 /**
@@ -178,9 +180,9 @@ const errorMessage = (data: { error?: string; code?: string }, fallback: string)
 
 export const isPairingError = (e: unknown): boolean => (e instanceof ApiError || e instanceof FileApiError) && e.code === NEEDS_PAIRING;
 
-/** `window.alert` com o erro de uma ação; na recusa por pareamento, nada (o aviso do App já explica). */
+/** Aviso (modal) com o erro de uma ação; na recusa por pareamento, nada (o aviso do App já explica). */
 export function alertError(e: unknown): void {
-  if (!isPairingError(e)) window.alert((e as Error).message);
+  if (!isPairingError(e)) void showAlert((e as Error).message);
 }
 
 export class ApiError extends Error {
@@ -201,12 +203,12 @@ export class ApiError extends Error {
  * Excluir ficha: se o servidor recusar por tarefas abertas no quadro (409 `open-tasks`), pergunta de novo e,
  * confirmado, repete com `force` (as tarefas ficam sem responsável). Recusado, devolve null; outro erro sobe.
  */
-export async function deleteStaffConfirm(projectId: string, staffId: string, ask: (openTasks: number) => boolean) {
+export async function deleteStaffConfirm(projectId: string, staffId: string, ask: (openTasks: number) => boolean | Promise<boolean>) {
   try {
     return await api.deleteStaff(projectId, staffId);
   } catch (err) {
     if (!(err instanceof ApiError) || err.code !== 'open-tasks') throw err;
-    if (!ask(Number(err.details.openTasks) || 0)) return null;
+    if (!(await ask(Number(err.details.openTasks) || 0))) return null;
     return api.deleteStaff(projectId, staffId, true);
   }
 }
@@ -638,7 +640,17 @@ export const api = {
   /** Efetivar um temporário (contratado por outro funcionário). */
   keepStaff: (projectId: string, staffId: string) => post<StaffProfile>(`/api/projects/${projectId}/staff/${staffId}/keep`),
   startTask: (projectId: string, taskId: string, force = false) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/start`, { force }),
-  deleteTask: (projectId: string, taskId: string) => post<{ ok: boolean }>(`/api/projects/${projectId}/tasks/${taskId}/delete`),
+  /** Apagar. `dependents`: o que fazer com cada tarefa aberta que espera esta (obrigatório para as diretas; sem o mapa completo o servidor recusa com 409). */
+  deleteTask: (projectId: string, taskId: string, dependents?: DepMap) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/tasks/${taskId}/delete`, dependents ? { dependents } : {}),
+  /** Cancelar: fecha sem entrega. `dependents`: o que fazer com quem espera (sem entrada, segue esperando e aparece na caixa). */
+  cancelTask: (projectId: string, taskId: string, body: { reason?: string; dependents?: DepMap } = {}) =>
+    post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/cancel`, body),
+  /** Reabrir a cancelada: volta para "a fazer", fora da fila. */
+  reopenTask: (projectId: string, taskId: string) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/reopen`),
+  /** O que fazer com `taskId` (a que espera) agora que `blockerId` foi cancelada: liberar, cancelar junto ou continuar esperando. */
+  taskBlocker: (projectId: string, taskId: string, blockerId: string, action: DepChoice) =>
+    post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/blocker`, { blockerId, action }),
   saveRoutines: (projectId: string, staffId: string, routines: Routine[]) =>
     post<StaffProfile>(`/api/projects/${projectId}/staff/${staffId}/routines`, { routines }),
   runRoutine: (projectId: string, staffId: string, routineId: string) =>

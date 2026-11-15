@@ -13,6 +13,9 @@ import type {
   SendPriority,
 } from '../../../shared/model';
 import { api, ApiError, withUsageConfirm, type PermissionOpts } from '../api';
+import { t } from '../i18n';
+import { applyLive, liveOnlyNotices, mergeItems } from './chatWindow';
+import { afterSnapshot, planReconnect, streamNeed } from './reconnect';
 import { announceSent } from './usageNotice';
 
 // Estado de uma conversa: histórico do transcript + o que chega ao vivo pelo SSE.
@@ -47,6 +50,9 @@ export interface ChatView {
   takeOver: () => Promise<void>;
 }
 
+/** Sem processo ou sem conexão: o que estava "trabalhando" não fica preso assim na tela. */
+const stopped = (s: ChatState | null): ChatState | null => (s ? { ...s, running: false, busy: false, compacting: false } : s);
+
 export function useChat(projectId: string, initialSessionId: string | null, staffId: string | null, name: string): ChatView {
   const [sessionId, setSessionId] = useState(initialSessionId);
   const [history, setHistory] = useState<ChatItem[]>([]);
@@ -62,77 +68,175 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
   const [error, setError] = useState<string | null>(null);
   /** Servidor fora do ar (erro `offline` numa chamada): o efeito de polling abaixo espera ele voltar. */
   const [offline, setOffline] = useState(false);
+  /** A conexão com a conversa caiu e a tela está tentando de novo (ou esperando a rede voltar). */
+  const [lost, setLost] = useState(false);
   const source = useRef<EventSource | null>(null);
-  const seq = useRef(0);
+  /** De que sessão é o stream aberto, e desde quando está aberto (null: ainda não respondeu). */
+  const streamSid = useRef<string | null>(null);
+  const openedAt = useRef<number | null>(null);
+  /** Falhas seguidas ao reconectar (ver planReconnect): o tempo de espera cresce com elas. */
+  const failures = useRef(0);
+  /** Sobe a cada troca de sessão e na saída da tela: o que ainda estava a caminho (snapshot, timer) não vale mais. */
+  const epoch = useRef(0);
 
-  const fail = (e: unknown) => {
+  const fail = useCallback((e: unknown) => {
     if (e instanceof ApiError && e.code === 'offline') setOffline(true);
     setError((e as Error).message);
-  };
-
-  const apply = useCallback((e: ChatEvent) => {
-    seq.current = Math.max(seq.current, e.seq);
-    if (e.type === 'state') setState(e.state);
-    else if (e.type === 'item') {
-      setLive((items) => {
-        const i = items.findIndex((x) => x.id === e.item.id);
-        if (i === -1) return [...items, e.item];
-        const next = items.slice();
-        next[i] = e.item;
-        return next;
-      });
-    } else if (e.type === 'delta') {
-      setLive((items) =>
-        items.map((x) => (x.id === e.id && x.kind === 'assistant' ? { ...x, text: x.text + e.text } : x)),
-      );
-    }
   }, []);
 
+  const apply = useCallback((e: ChatEvent) => {
+    if (e.type === 'state') setState(e.state);
+    else setLive((items) => applyLive(items, e));
+  }, []);
+
+  /** Relê o snapshot e reabre o stream (preenchido abaixo, depois de `load`): é o que se faz quando a conexão cai. */
+  const resync = useRef<(sid: string) => void>(() => {});
+  const retry = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Sessão cuja reconexão espera o navegador voltar a ter rede (evento `online`). */
+  const paused = useRef<string | null>(null);
+
+  const cancelRetry = useCallback(() => {
+    if (retry.current) clearTimeout(retry.current);
+    retry.current = null;
+    paused.current = null;
+  }, []);
+
+  /** Fecha o stream e cancela o que está agendado ou a caminho: ao trocar de sessão e ao sair da tela. */
+  const stop = useCallback(() => {
+    epoch.current++;
+    source.current?.close();
+    source.current = null;
+    streamSid.current = null;
+    openedAt.current = null;
+    cancelRetry();
+  }, [cancelRetry]);
+
+  /**
+   * A conexão caiu, ou a leitura do snapshot falhou: agenda a releitura com espera crescente (1 s, 2, 4… até 30 s) ou, sem
+   * rede, espera o `online`. Enquanto não volta, o "trabalhando" não fica preso na tela: aparece o aviso de conexão perdida.
+   */
+  const reconnect = useCallback(
+    (sid: string, openedForMs: number | null) => {
+      cancelRetry();
+      const plan = planReconnect(failures.current, typeof navigator === 'undefined' || navigator.onLine !== false, openedForMs);
+      failures.current = plan.failures;
+      if (plan.lost) {
+        setLost(true);
+        setState(stopped);
+      }
+      if (plan.kind === 'wait-online') {
+        paused.current = sid;
+        return;
+      }
+      retry.current = setTimeout(() => {
+        retry.current = null;
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) paused.current = sid;
+        else resync.current(sid);
+      }, plan.delay);
+    },
+    [cancelRetry],
+  );
+
   const openStream = useCallback(
-    (sid: string) => {
+    (sid: string, after: number) => {
       source.current?.close();
-      // Sempre do começo do processo: cada item chega primeiro como "criado" (o que zera o texto) e
-      // depois as deltas, então repetir não duplica. E um processo novo recomeça a numeração.
-      seq.current = 0;
-      const es = new EventSource(`/api/chat/${sid}/stream?after=0`);
+      cancelRetry();
+      // `after`: o `seq` do snapshot que acabou de ser lido (os itens dele já estão em `live`, o stream continua dali). Não há
+      // abertura do zero: sem snapshot a tela não sabe o que o processo já passou do limite de itens da memória do servidor.
+      const es = new EventSource(`/api/chat/${sid}/stream?after=${after}`);
+      streamSid.current = sid;
+      openedAt.current = null;
+      es.onopen = () => {
+        if (source.current === es) openedAt.current = Date.now();
+      };
       es.onmessage = (m) => apply(JSON.parse(m.data) as ChatEvent);
-      // Sem processo (fechou por inatividade, ou o claude saiu), o servidor responde 404 e o navegador desiste.
-      // Aí o "trabalhando" não fica preso na tela; a próxima mensagem abre o processo e o stream de novo.
       es.onerror = () => {
-        if (es.readyState !== EventSource.CLOSED || source.current !== es) return;
+        if (source.current !== es) return;
+        // Sem processo (fechou por inatividade, ou o claude saiu), o servidor responde 404 e o navegador desiste.
+        // Aí o "trabalhando" não fica preso na tela; a próxima mensagem abre o processo e o stream de novo.
+        if (es.readyState === EventSource.CLOSED) {
+          source.current = null;
+          setState(stopped);
+          return;
+        }
+        // A conexão caiu e o navegador reabriria sozinho com o mesmo `after`: as deltas já aplicadas viriam de novo (o texto
+        // dobraria) e o que saiu do log enquanto isso se perderia. Fecha e relê o snapshot, que traz tudo no ponto certo.
+        es.close();
         source.current = null;
-        setState((s) => (s ? { ...s, running: false, busy: false, compacting: false } : s));
+        reconnect(sid, openedAt.current === null ? null : Date.now() - openedAt.current);
       };
       source.current = es;
     },
-    [apply],
+    [apply, cancelRetry, reconnect],
   );
 
+  /** Lê o snapshot e, havendo processo, abre o stream depois dele. null: a tela já passou para outra sessão enquanto lia. */
   const load = useCallback(
     async (sid: string) => {
+      const ep = epoch.current;
       const snap = await api.chat(projectId, sid);
+      if (ep !== epoch.current) return null;
       setHistory(snap.history);
       setHeld(snap.held ?? []);
       setKnownCommands(snap.commands ?? []);
       setBaseContext(snap.context);
       setElsewhere(snap.elsewhere);
       setFallback(snap.fallback ?? null);
-      if (snap.live) {
-        seq.current = 0;
-        setLive([]);
+      const after = afterSnapshot(snap);
+      if (after !== null && snap.live) {
+        // Os itens do snapshot e o `seq` são da mesma foto do histórico: o stream abre depois dele, sem faltar nem repetir nada.
+        setLive(snap.live.items);
         setState(snap.live.state);
-        openStream(sid);
+        openStream(sid, after);
       }
       return snap;
     },
     [projectId, openStream],
   );
 
+  /** Falha ao ler o snapshot: mostra o erro; fora do ar, quem espera é o efeito de `offline`; os demais tentam de novo com espera. */
+  const loadFailed = useCallback(
+    (sid: string, e: unknown) => {
+      fail(e);
+      if (!(e instanceof ApiError && e.code === 'offline')) reconnect(sid, null);
+    },
+    [fail, reconnect],
+  );
+
+  useEffect(() => {
+    resync.current = (sid) => {
+      load(sid)
+        .then((snap) => {
+          if (!snap) return;
+          setLost(false);
+          setError(null);
+          if (snap.live) return;
+          // O processo se foi: o transcript já tem tudo (o histórico veio inteiro), então o que sobrou ao vivo só repetiria.
+          // Ficam só os avisos que existem apenas ao vivo (o erro com que terminou, uma negação): ver liveOnlyNotices.
+          setLive((items) => liveOnlyNotices(items, snap.history));
+          setState(stopped);
+        })
+        .catch((e) => loadFailed(sid, e));
+    };
+  }, [load, loadFailed]);
+
+  // Sem rede, a reconexão espera aqui: quando o navegador avisa que voltou, relê já (sem esperar o tempo da vez).
+  useEffect(() => {
+    const onOnline = () => {
+      const sid = paused.current;
+      if (!sid) return;
+      paused.current = null;
+      resync.current(sid);
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, []);
+
   // Já trazida para cá antes: segue na cópia, com as mensagens que você mandou aqui, em vez da original.
   const loadFollowingCopy = useCallback(
     async (sid: string) => {
       const snap = await load(sid);
-      if (!snap.copy) return;
+      if (!snap?.copy) return;
       setSessionId(snap.copy);
       await load(snap.copy);
     },
@@ -148,20 +252,19 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     setFallback(null);
     setError(null);
     setOffline(false);
-    seq.current = 0;
+    setLost(false);
+    failures.current = 0;
+    // O cleanup vale também para a tela que começou sem sessão (a primeira mensagem abre o stream): ao sair, nada fica agendado.
     if (!initialSessionId) {
       setLoading(false);
-      return;
+      return stop;
     }
     setLoading(true);
     loadFollowingCopy(initialSessionId)
       .catch(fail)
       .finally(() => setLoading(false));
-    return () => {
-      source.current?.close();
-      source.current = null;
-    };
-  }, [initialSessionId, loadFollowingCopy]);
+    return stop;
+  }, [initialSessionId, loadFollowingCopy, stop, fail]);
 
   // Com mensagem guardada, relê de tempos em tempos: quando ele fica livre, ela vai e a conversa
   // volta a andar (às vezes num processo novo, que o stream antigo não acompanha).
@@ -184,13 +287,17 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
       clearInterval(t);
       setOffline(false);
       setError(null);
-      void loadFollowingCopy(sessionId).catch(fail);
+      void loadFollowingCopy(sessionId).catch((e) => loadFailed(sessionId, e));
     }, 2000);
     return () => clearInterval(t);
-  }, [offline, sessionId, loadFollowingCopy]);
+  }, [offline, sessionId, loadFollowingCopy, loadFailed]);
 
+  // Sem stream aberto para esta sessão, passa pelo snapshot (que abre o stream depois do `seq` dele): abrir do zero só traria os
+  // itens que o servidor ainda guarda, e o meio da conversa (que esta tela talvez nem tenha lido) ficaria faltando.
   const ensureStream = (sid: string) => {
-    if (!source.current || source.current.readyState === EventSource.CLOSED) openStream(sid);
+    if (streamNeed(source.current?.readyState ?? null, streamSid.current, sid) === 'keep') return;
+    cancelRetry();
+    resync.current(sid);
   };
 
   const send = async (text: string, priority?: SendPriority, images: string[] = [], files: ChatAttachment[] = []) => {
@@ -204,13 +311,13 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
       if (r.sessionId !== sessionId) {
         // Seguiu numa conversa nova (o assunto da anterior tinha fechado): a tela passa para ela.
         if (sessionId) {
-          source.current?.close();
-          source.current = null;
+          // Fecha o stream e cancela a reconexão agendada (ou a leitura a caminho): ela reabriria a sessão antiga por cima da nova.
+          stop();
           setHistory([]);
           setLive([]);
           setHeld([]);
           setState(null);
-          seq.current = 0;
+          setLost(false);
         }
         setSessionId(r.sessionId);
       }
@@ -294,13 +401,13 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
 
   return {
     sessionId,
-    items: [...history, ...live, ...held],
+    items: mergeItems(history, live, held),
     state,
     context: state?.context ?? baseContext,
     elsewhere,
     fallback,
     loading,
-    error: error ?? state?.error ?? null,
+    error: error ?? state?.error ?? (lost ? t('chat.reconnecting') : null),
     send,
     compact,
     interrupt,

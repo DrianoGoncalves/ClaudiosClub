@@ -76,7 +76,14 @@ describe('kanbanProgress', () => {
 
   it('pesos das etapas: Aguardar 1, A fazer 3, Fazendo 2, Revisão 1 (Pronto = 7)', () => {
     expect(STAGE_WEIGHTS).toEqual({ waiting: 1, todo: 3, doing: 2, review: 1 });
-    expect(STATUS_POINTS).toEqual({ waiting: 0, todo: 1, planning: 4, doing: 4, review: 6, done: 7 });
+    expect(STATUS_POINTS).toEqual({ waiting: 0, todo: 1, planning: 4, doing: 4, review: 6, done: 7, cancelled: 0 });
+  });
+
+  it('cancelada não é aberta nem entregue: fica fora do lote', () => {
+    const t0 = '2026-11-01T10:00:00.000Z';
+    expect(kanbanProgress([task('cancelled', t0)])).toBeNull();
+    // Só a aberta conta (todo = 1 de 7 pontos); a cancelada nem entra no máximo.
+    expect(kanbanProgress([task('todo', t0), task('cancelled', t0)])).toEqual({ points: 1, max: 7 });
   });
 
   it('pontos crescentes até Pronto', () => {

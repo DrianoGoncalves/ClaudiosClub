@@ -23,6 +23,7 @@ const KIND_TITLE: Record<InboxItem['kind'], string> = {
   orphan: t('inbox.titleOrphan'),
   usage: t('inbox.titleUsage'),
   blocked: t('inbox.titleBlocked'),
+  notStarted: t('inbox.titleNotStarted'),
 };
 
 export interface InboxView {
@@ -34,6 +35,8 @@ export interface InboxView {
   setNotify: (on: boolean) => Promise<void>;
   /** Tira um aviso que só informa: segredo ("já troquei") ou rotina que não rodou ("ok, vi"). */
   dismiss: (item: InboxItem, opts?: { notSecret?: boolean }) => Promise<void>;
+  /** Relê a caixa agora (depois de uma ação sobre a tarefa de um item: liberar, cancelar, começar). */
+  refresh: () => Promise<void>;
 }
 
 export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
@@ -47,6 +50,7 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
   notifyRef.current = notify;
   /** Hora da última leitura dos turnos que terminaram (o servidor manda só os de depois). */
   const turnsSince = useRef(new Date().toISOString());
+  const tickRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     let stopped = false;
@@ -66,6 +70,7 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
       }
       seen.current = new Set(next.map((i) => i.id));
     };
+    tickRef.current = tick;
     void tick();
     // Aba escondida: não para (avisos do sistema e contador do título dependem dele), só desacelera.
     const stop = pollVisible(() => void tick(), POLL_MS, POLL_HIDDEN_MS);
@@ -100,7 +105,9 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
     setItems((prev) => prev.filter((i) => i.id !== item.id));
   }, []);
 
-  return { items, notify, canNotify, setNotify, dismiss };
+  const refresh = useCallback(() => tickRef.current(), []);
+
+  return { items, notify, canNotify, setNotify, dismiss, refresh };
 }
 
 /** A pessoa está com o Claudio’s Club na frente (aba visível e janela com foco). */

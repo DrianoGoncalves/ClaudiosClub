@@ -359,9 +359,9 @@ interface TaskStats {
   either: number;
 }
 
-/** Tarefas do funcionário criadas no período. Reaberta = passou de review para doing no histórico. */
+/** Tarefas do funcionário criadas no período, fora as canceladas (não foram entregues). Reaberta = passou de review para doing no histórico. */
 function taskStats(tasks: Task[], staffId: string, sinceMs: number): TaskStats {
-  const mine = tasks.filter((t) => t.staffId === staffId && Date.parse(t.createdAt) >= sinceMs);
+  const mine = tasks.filter((t) => t.staffId === staffId && t.status !== 'cancelled' && Date.parse(t.createdAt) >= sinceMs);
   const stats: TaskStats = { total: mine.length, rework: 0, reopened: 0, either: 0 };
   for (const t of mine) {
     const isRework = t.title.trimStart().startsWith(REWORK_PREFIX);

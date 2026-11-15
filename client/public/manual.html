@@ -1710,7 +1710,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <tr><td data-label="Limite">Mensagens entre funcionários</td><td data-label="Padrão">20 em 30 min, por conversa</td><td data-label="O que acontece ao passar">A 21ª é recusada e o funcionário é orientado a falar com você.</td></tr>
         <tr><td data-label="Limite">Despertadores seguidos</td><td data-label="Padrão">20 sem você falar</td><td data-label="O que acontece ao passar">O próximo é recusado e ele pede o seu ok.</td></tr>
         <tr><td data-label="Limite">Estouros de limite de uso seguidos</td><td data-label="Padrão">5</td><td data-label="O que acontece ao passar">O “continue” automático desiste.</td></tr>
-        <tr><td data-label="Limite">Revisão automática</td><td data-label="Padrão">2 rodadas</td><td data-label="O que acontece ao passar">Depois disso, a revisão fica com você.</td></tr>
+        <tr><td data-label="Limite">Revisão automática</td><td data-label="Padrão">3 rodadas</td><td data-label="O que acontece ao passar">Depois disso, a revisão fica com você.</td></tr>
         <tr><td data-label="Limite">Dúvidas ao gestor</td><td data-label="Padrão">3 por tarefa</td><td data-label="O que acontece ao passar">A próxima dúvida vai para você.</td></tr>
       </tbody>
     </table></div>
@@ -1883,10 +1883,9 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <h4>Revisão automática</h4>
     <ul>
       <li>Com <b class="ui">Revisão automática</b> marcada, ao entregar, o revisor escolhido revisa sozinho, com o mesmo veredito.</li>
-      <li>O Club faz no máximo <b>2</b> revisões automáticas por tarefa. Depois disso, o que sobrar fica com você, anotado no histórico.</li>
+      <li>O Club faz no máximo <b>3</b> revisões automáticas por tarefa (o cartão mostra <code>n/3</code>). Depois disso, o que sobrar fica com você, anotado no histórico.</li>
       <li>Precisa de <b>outro funcionário</b> no projeto. Se quem pediu a tarefa é o revisor, ele recebe só o resultado.</li>
     </ul>
-    <div class="note warn"><svg class="i ico"><use href="#i-alert"/></svg><div><p>O cartão mostra <code>n/3</code> e a opção diz “até 3 rodadas”, mas <b>o limite que vale é 2</b>.</p></div></div>
   </article>
 
   <article class="blk" id="testes-deploy">
@@ -2853,8 +2852,8 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <p class="fx"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>Esse botão não roda testes nem mescla. Use <b class="ui">Mesclar em {base}</b>.</span></p>
       </li>
       <li>
-        <p class="pb"><svg class="i" aria-hidden="true"><use href="#i-alert"/></svg><span>A revisão automática parou antes da última rodada</span></p>
-        <p class="fx"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>O limite são 2 revisões automáticas, mesmo com o cartão mostrando <code>n/3</code>. Use <b class="ui">Delegar revisão</b> para o resto.</span></p>
+        <p class="pb"><svg class="i" aria-hidden="true"><use href="#i-alert"/></svg><span>A revisão automática parou</span></p>
+        <p class="fx"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>O limite são 3 revisões automáticas (o cartão mostra <code>n/3</code>). Use <b class="ui">Delegar revisão</b> para o resto.</span></p>
       </li>
       <li>
         <p class="pb"><svg class="i" aria-hidden="true"><use href="#i-alert"/></svg><span><b class="ui">Atualizar</b> está desligado</span></p>

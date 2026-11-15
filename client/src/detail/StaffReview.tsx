@@ -5,7 +5,7 @@ import { type ApplySummary, findingTitle, fixable, fixChange, formatTokens, grou
 import { effortLabel } from '../format';
 import { locale, t } from '../i18n';
 import { AnalyzeIcon } from '../icons';
-import { modelLabel } from '../staff/HireForm';
+import { modelLabel } from '../staff/templates';
 import { formatBytes } from './attachmentFiles';
 
 /**

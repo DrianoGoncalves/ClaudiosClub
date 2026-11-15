@@ -4,6 +4,7 @@ import { api } from '../api';
 import { useTheme } from '../theme';
 import { t } from '../i18n';
 import { ThemeBackgrounds } from '../toolbar/ThemeBackgrounds';
+import { askConfirm } from '../lib/dialogStore';
 
 /** Configurações → Workspaces: nome e fundo (claro e escuro) de cada aba; remover deixa os projetos dele sem workspace. */
 export function WorkspacesEditor({
@@ -54,7 +55,7 @@ export function WorkspacesEditor({
               <button
                 type="button"
                 className="link small"
-                onClick={() => window.confirm(t('office.workspaceRemoveConfirm', { name: w.name })) && void run(() => api.removeWorkspace(w.id))}
+                onClick={() => void askConfirm(t('office.workspaceRemoveConfirm', { name: w.name })).then((ok) => { if (ok) void run(() => api.removeWorkspace(w.id)); })}
               >
                 {t('office.workspaceRemove')}
               </button>

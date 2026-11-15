@@ -75,8 +75,7 @@ Na seção **Revisão**, escolha **Quem revisa** e clique em **Delegar revisão*
 ### Revisão automática
 
 - Com **Revisão automática** marcada, ao entregar, o revisor escolhido revisa sozinho, com o mesmo veredito.
-- O Club faz no máximo **2** revisões automáticas por tarefa. Depois disso, o que sobrar fica com você, anotado no histórico.
-- Atenção: o cartão mostra `n/3` e a opção diz "até 3 rodadas", mas o limite que vale é 2.
+- O Club faz no máximo **3** revisões automáticas por tarefa (o cartão mostra `n/3`). Depois disso, o que sobrar fica com você, anotado no histórico.
 - Precisa de outro funcionário no projeto. Se quem pediu a tarefa é o revisor, ele recebe só o resultado.
 - Quando um funcionário passa várias tarefas a outros, ele só é avisado das aprovadas quando todas as tarefas que ele pediu fecharem: aí recebe uma única mensagem com a lista. O quadro mostra cada aprovação normalmente.
 - Reprovação, limite de revisões, bloqueio e falha avisam na hora.

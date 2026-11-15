@@ -147,6 +147,34 @@ export function runningDaemon(): number | null {
   return /daemon\.(ts|mjs)/.test(commandLine(pid)) ? pid : null;
 }
 
+/**
+ * Linha de comando do vigia. No Linux, com o systemd do usuário disponível, ele sobe num escopo próprio
+ * (`systemd-run --user --scope`, em app.slice): sem isso, quem o lançou é dono do cgroup. O link myco:// roda pelo
+ * xdg-desktop-portal, e reiniciar ou parar o portal mataria o Claudio’s Club com todas as conversas, que ainda
+ * contariam a memória no portal. `--scope` (e não um serviço) faz o systemd-run dar exec no comando: mesmo PID,
+ * mesma pasta e o mesmo ambiente (PATH do mise etc.). Função pura: quem decide se o systemd serve é `systemdScopeUsable`.
+ */
+export function daemonCommand(
+  cmd: string,
+  args: string[],
+  opts: { platform?: NodeJS.Platform; scope?: boolean; stamp?: number | string } = {},
+): { cmd: string; args: string[] } {
+  if ((opts.platform ?? process.platform) !== 'linux' || !opts.scope) return { cmd, args };
+  const unit = `app-claudios-${opts.stamp ?? Date.now()}`;
+  return {
+    cmd: 'systemd-run',
+    args: ['--user', '--scope', '--quiet', '--collect', '--slice=app.slice', `--unit=${unit}`, "--description=Claudio's Club", '--', cmd, ...args],
+  };
+}
+
+/** O systemd-run existe e o gerenciador do usuário responde? Prova com um escopo descartável; qualquer falha = não. */
+export function systemdScopeUsable(): boolean {
+  if (process.platform !== 'linux') return false;
+  const probe = daemonCommand('true', [], { scope: true, stamp: `teste-${process.pid}-${Date.now()}` });
+  const r = spawnSync(probe.cmd, probe.args, { stdio: 'ignore', timeout: 5_000 });
+  return r.status === 0;
+}
+
 /** Encerra o vigia e tudo o que ele abriu (servidor, build). No Unix, o vigia é líder do próprio grupo. */
 export function stopProcess(pid: number): void {
   if (process.platform === 'win32') {

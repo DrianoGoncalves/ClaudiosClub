@@ -54,4 +54,7 @@ export const MODEL_OPTIONS = [
   { value: 'fable', label: t('staff.modelFable') },
 ];
 
+/** "opus" → "Opus (mais recente)"; '' → "Padrão do Claude Code"; outro id fica como está. */
+export const modelLabel = (m: string) => MODEL_OPTIONS.find((o) => o.value === m)?.label ?? m;
+
 export const EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh', 'max'] as const;

@@ -18,6 +18,7 @@ import {
   TSX,
   appendLog,
   brokenDeps,
+  daemonCommand,
   isAlive,
   modInstalled,
   openUrl,
@@ -25,6 +26,7 @@ import {
   registerLink,
   runningDaemon,
   stopProcess,
+  systemdScopeUsable,
   writeLogSnapshot,
 } from './lib';
 
@@ -164,7 +166,9 @@ async function start(opts: { offerMod: boolean }): Promise<void> {
     () => ['--import', 'tsx', DAEMON],
   );
   const log = fs.openSync(LOG_FILE, 'a');
-  const child = spawn(process.execPath, [...daemon, '--port', String(port)], {
+  // Linux: o vigia sobe no próprio escopo do systemd (ver daemonCommand); sem systemd do usuário, sobe como sempre.
+  const launch = daemonCommand(process.execPath, [...daemon, '--port', String(port)], { scope: systemdScopeUsable() });
+  const child = spawn(launch.cmd, launch.args, {
     cwd: ROOT,
     detached: true,
     stdio: ['ignore', log, log],

@@ -179,7 +179,7 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 | --- | --- |
 | **Mesclar em {base}** não aparece | A tarefa não está numa worktree. Marque **Trabalhar numa worktree própria** na ficha de quem executa (o projeto precisa ser git). |
 | **Aprovar entrega** marcou **Pronto**, mas o código não entrou na branch | Esse botão não roda testes nem mescla. Use **Mesclar em {base}**. |
-| A revisão automática parou antes da última rodada | O limite são 2 revisões automáticas, mesmo com o cartão mostrando `n/3`. Use **Delegar revisão** para o resto. |
+| A revisão automática parou | O limite são 3 revisões automáticas (o cartão mostra `n/3`). Use **Delegar revisão** para o resto. |
 | **Atualizar** está desligado | Há arquivos do Club mudados à mão. Guarde-os com `git stash` e tente de novo. |
 | Ações dizem que o navegador não está pareado | Clique em **Parear este navegador** e rode o `npm run pair CÓDIGO` que aparece, sempre no mesmo endereço (`claudio.localhost`). |
 | A conversa de um funcionário com motor Codex não abre | **Usar o Codex (GPT)** está desligado. Ligue-o em **Geral**. |

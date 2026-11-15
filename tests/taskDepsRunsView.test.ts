@@ -41,7 +41,7 @@ describe('BlockedBadge', () => {
 });
 
 describe('BlockedByField', () => {
-  const labels = { waiting: 'Aguardar', todo: 'A fazer', planning: 'Planejando', doing: 'Fazendo', review: 'Revisão', done: 'Pronto' };
+  const labels = { waiting: 'Aguardar', todo: 'A fazer', planning: 'Planejando', doing: 'Fazendo', review: 'Revisão', done: 'Pronto', cancelled: 'Cancelada' };
   const render = (props: { tasks: ReturnType<typeof task>[]; selfId: string | null; value: string[] }) =>
     renderToStaticMarkup(createElement(BlockedByField, { ...props, labels, onChange: () => {} }));
 
