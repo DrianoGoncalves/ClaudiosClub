@@ -12,8 +12,12 @@ export const DAEMON_BUNDLE = path.join(ROOT, 'dist', 'daemon.mjs');
 export const FTP_MCP_BUNDLE = path.join(ROOT, 'dist', 'ftp-mcp.mjs');
 /** MCP do GPT (`perguntar_gpt`) que as sessões dos funcionários sobem (server/staff/gptMcp.ts acha o pacote aqui). */
 export const GPT_MCP_BUNDLE = path.join(ROOT, 'dist', 'gpt-mcp.mjs');
+/** O MCP do GPT inteiro (server/staff/gptMcp.ts), que a entrada leve (gpt-mcp.mjs) só carrega na primeira pergunta ao GPT. */
+export const GPT_MCP_CORE_BUNDLE = path.join(ROOT, 'dist', 'gpt-mcp-core.mjs');
 /** MCP de SSH que as sessões dos funcionários sobem (server/staff/sshMcp.ts acha o pacote aqui). */
 export const SSH_MCP_BUNDLE = path.join(ROOT, 'dist', 'ssh-mcp.mjs');
+/** Proxy preguiçoso do MCP do navegador limpo (server/navegadorMcp.ts acha o pacote aqui). */
+export const NAVEGADOR_MCP_BUNDLE = path.join(ROOT, 'dist', 'navegador-mcp.mjs');
 /** Lançador dos MCPs da biblioteca (server/staff/mcpLaunch.ts acha o pacote aqui). */
 export const MCP_LAUNCH_BUNDLE = path.join(ROOT, 'dist', 'mcp-launch.mjs');
 
@@ -63,8 +67,10 @@ export async function bundleAll(): Promise<void> {
   await bundle('scripts/daemon.ts', DAEMON_BUNDLE);
   await bundle('server/ftp-mcp.ts', FTP_MCP_BUNDLE);
   await bundle('server/gpt-mcp.ts', GPT_MCP_BUNDLE);
+  await bundle('server/staff/gptMcp.ts', GPT_MCP_CORE_BUNDLE);
   await bundle('server/ssh-mcp.ts', SSH_MCP_BUNDLE);
   await bundle('server/mcp-launch.ts', MCP_LAUNCH_BUNDLE);
+  await bundle('server/navegador-mcp.ts', NAVEGADOR_MCP_BUNDLE);
 }
 
 if (path.basename(process.argv[1] ?? '') === 'bundle.ts') await bundleAll();

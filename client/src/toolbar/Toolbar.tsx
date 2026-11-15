@@ -71,6 +71,7 @@ export function CompanyTitle({ name, onRename }: { name: string; onRename: (name
 }
 
 const USAGE_URL = 'https://claude.ai/settings/usage';
+const CODEX_USAGE_URL = 'https://chatgpt.com/settings/usage?tab=overview';
 const LIMIT_LABEL: Record<string, string> ={ five_hour: '5h', seven_day: '7d', spend_limit: t('toolbar.limitShort') };
 
 /** Consumo da conta, relido a cada 15 s: as barras e a bolinha da folga de cota (no ícone da assinatura) leem daqui. */
@@ -386,11 +387,17 @@ export function CodexUsageLine({ codex }: { codex: CodexUsage }) {
   return (
     <div className="usage-line usage-codex">
       {shown.length > 0 && (
-        <span className="usage" title={updated ? `${name} · ${updated}` : name}>
+        <a
+          className="usage"
+          href={CODEX_USAGE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={updated ? `${t('toolbar.codexUsageLink')} · ${updated}` : t('toolbar.codexUsageLink')}
+        >
           {shown.map((l) => (
             <UsageMeter key={l.kind} limit={l} now={now} service="codex" name={name} />
           ))}
-        </span>
+        </a>
       )}
       {!notInstalled && (
         <span className="auth-conn">

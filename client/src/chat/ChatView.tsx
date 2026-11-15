@@ -19,7 +19,8 @@ import {
 } from './ChatExtras';
 import { ChangesPanel } from './ChangesPanel';
 import { useChatDetail } from './chatDetail';
-import type { ChatFocus } from './chatFocus';
+import { type ChatFocus, findQuoteItem } from './chatFocus';
+import { renderWindow, WINDOW_STEP } from './chatWindow';
 import { type DenialAction, DenialNotice } from './DenialNotice';
 import { actionableDenials, denialHintOf } from './denialHint';
 import { MoreTabs } from './MoreTabs';
@@ -103,6 +104,28 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   // Por padrão a conversa mostra só o que importa entre você e o funcionário: as ferramentas
   // (Read, Grep, comandos…) ficam escondidas; pedidos de permissão e avisos continuam.
   const visible = showTools ? chat.items : chat.items.filter((i) => i.kind !== 'tool');
+  // Só o fim da lista é pintado (ver chatWindow.ts); "mostrar anteriores" traz mais WINDOW_STEP, e o balão que um aviso aponta abre
+  // a janela até ele. O tamanho vale para esta conversa (trocar de conversa volta ao começo).
+  const [win, setWin] = useState<{ sid: string | null; n: number }>({ sid: null, n: WINDOW_STEP });
+  const reveal = useRef<{ height: number; top: number } | null>(null);
+  const asked = win.sid === chat.sessionId ? win.n : WINDOW_STEP;
+  const anchors = focus && focus.sessionId === sessionId ? [focus.itemId, focus.quote ? findQuoteItem(chat.items, focus.quote) : null] : [];
+  const view = renderWindow(visible, asked, anchors);
+  // Abriu por causa do balão em foco: guarda o tamanho, para a janela não encolher (e a lista pular) quando o foco acabar.
+  if (view.shown > asked) setWin({ sid: chat.sessionId, n: view.shown });
+  const showEarlier = () => {
+    const el = list.current;
+    if (el) reveal.current = { height: el.scrollHeight, top: el.scrollTop };
+    setWin({ sid: chat.sessionId, n: view.shown + WINDOW_STEP });
+  };
+  // Os anteriores entram acima do que a pessoa estava lendo (e no topo o navegador não segura a posição sozinho): a rolagem soma a
+  // altura que chegou, e o texto não pula.
+  useLayoutEffect(() => {
+    const keep = reveal.current;
+    const el = list.current;
+    reveal.current = null;
+    if (keep && el) el.scrollTop = keep.top + (el.scrollHeight - keep.height);
+  }, [view.shown]);
   const last = chat.items.at(-1);
   const streaming = busy && last?.kind === 'assistant' && !!last.text;
   // Enquanto trabalha, uma linha discreta diz o que ele está fazendo agora.
@@ -388,7 +411,14 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           {!chat.loading && visible.length === 0 && (
             <p className="muted small chat-empty">{sessionId ? t('chat.noMessages') : t('chat.startChat', { name })}</p>
           )}
-          {visible.map((item) => (
+          {view.hidden > 0 && (
+            <div className="chat-notice">
+              <button type="button" className="link small" onClick={showEarlier}>
+                {t('chat.showEarlier', { n: view.hidden })}
+              </button>
+            </div>
+          )}
+          {view.items.map((item) => (
             <Item
               key={item.id}
               item={item}
@@ -816,7 +846,7 @@ function Item({
       if (item.denial) return <DenialNotice item={item} action={denialAction} />;
       return (
         <div className={`chat-notice chat-notice-${item.tone}`} data-item-id={item.id}>
-          {item.action === 'cancel-auto-continue' && autoCancelled ? t('chat.autoContinueCancelled') : item.text}
+          {item.action === 'cancel-auto-continue' && autoCancelled ? t('chat.autoContinueCancelled') : item.note === 'older-in-file' ? t('chat.olderInFile') : item.text}
           {item.action === 'cancel-auto-continue' && !autoCancelled && onCancelAutoContinue && (
             <>
               {' '}

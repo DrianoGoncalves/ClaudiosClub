@@ -5,6 +5,8 @@ import type { ServerInfo, StaffProfile } from '../../shared/model';
 import { personalityName, personalityReminder } from '../../shared/personality';
 import { defaultLocations } from '../adapters/claude/paths';
 import { clubBlockedOrigins } from '../clubAddress';
+import { MYCO_HOME } from '../config';
+import { lazyNavegadorCommand } from '../navegadorMcp';
 import { ROOT } from '../root';
 import { isClaudeRoot, renderFicha, systemPrompt, type CleanBrowserInfo, type CodexChromeInfo, type CodexSshInfo, type FichaContext, type TeamMember } from './ficha';
 import { FTP_MCP_NAME, GPT_MCP_NAME } from '../../shared/model';
@@ -76,6 +78,9 @@ export interface LaunchContext {
   /** Canal do navegador limpo (os testes trocam). Ausente = detecta (ver cleanBrowserChannel); `null` = nenhum Chrome nem Edge. */
   cleanBrowserChannel?: 'chrome' | 'msedge' | null;
 }
+
+/** Onde o proxy do navegador limpo guarda o `initialize` e o `tools/list` do Playwright (ver navegadorMcp.ts): na pasta do Club, nunca no projeto. */
+export const NAVEGADOR_CACHE_DIR = path.join(MYCO_HOME, 'cache', 'navegador-mcp');
 
 /** CLI do Playwright MCP instalado com o Claudio’s Club (dependência fixa). Roda com o node do Club, nunca com npx. */
 export const CHROME_MCP_CLI = path.join(ROOT, 'node_modules', '@playwright', 'mcp', 'cli.js');
@@ -312,9 +317,16 @@ export function cleanBrowserOf(
     // sem baixar um do Playwright. --no-webmcp: o que a página registra seria ferramenta de terceiros (injeção). --blocked-origins: a tela do Club
     // (ver clubBlockedOrigins). Não é barreira (diz o README do Playwright); no Claude a barreira é o hook club-guard, que também pega
     // `mcp__.*__browser_.*`. Sem trava por isClaudeRoot: o que vale para um motor no projeto do Club vale para o outro.
+    // Esses argumentos são os do Playwright de verdade; quem sobe na conversa é o proxy preguiçoso (navegadorMcp.ts), que responde `initialize` e
+    // `tools/list` do cache e só abre o Playwright (~117 MB) no primeiro uso do navegador, repassando tudo a ele sem mudar nada.
     mcp: {
-      command: process.execPath,
-      args: [cli, '--isolated', '--headless', '--browser', channel, '--no-webmcp', '--output-dir', dir, ...(ctx.clubGuard === false ? [] : ['--blocked-origins', clubBlockedOrigins()])],
+      ...lazyNavegadorCommand(
+        {
+          command: process.execPath,
+          args: [cli, '--isolated', '--headless', '--browser', channel, '--no-webmcp', '--output-dir', dir, ...(ctx.clubGuard === false ? [] : ['--blocked-origins', clubBlockedOrigins()])],
+        },
+        NAVEGADOR_CACHE_DIR,
+      ),
       cwd: dir,
     },
     info: { mcp: true, motivos: [] },

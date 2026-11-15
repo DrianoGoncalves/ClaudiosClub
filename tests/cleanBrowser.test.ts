@@ -14,7 +14,7 @@ import {
   tomlString,
 } from '../server/chat/codexArgs';
 import { buildClaudeArgs, renderFicha } from '../server/staff/ficha';
-import { cleanBrowserChannel, cleanBrowserOf, prepareCodexRun, prepareRun, type LaunchContext } from '../server/staff/launch';
+import { cleanBrowserChannel, cleanBrowserOf, NAVEGADOR_CACHE_DIR, prepareCodexRun, prepareRun, type LaunchContext } from '../server/staff/launch';
 
 // O navegador limpo (MCP `myco-navegador`): um Playwright MCP com perfil em memória, sem logins, para os dois motores. Quando entra,
 // como vai na linha de comando e no mcp.json, e o que a ficha diz (igual nos dois motores).
@@ -106,6 +106,21 @@ const launch = (projectPath: string, over: Partial<LaunchContext> = {}): LaunchC
 
 const fichaDe = (proj: string) => fs.readFile(path.join(proj, '.myco', 'staff', 'ana-1.md'), 'utf8');
 
+/**
+ * O navegador limpo sobe pelo proxy preguiçoso (server/navegadorMcp.ts): o node roda o proxy, com o cache e, depois de `--`, o servidor de
+ * verdade com os argumentos de sempre (os de segurança não mudam). Separa as duas partes.
+ */
+function proxied(mcp: { command: string; args: string[] }) {
+  const sep = mcp.args.indexOf('--');
+  const head = mcp.args.slice(0, sep);
+  return {
+    launcher: mcp.command,
+    entry: head.find((a) => /navegador-mcp\.(ts|mjs)$/.test(a)),
+    cacheDir: head[head.indexOf('--cache-dir') + 1],
+    real: { command: mcp.args[sep + 1], args: mcp.args.slice(sep + 2) },
+  };
+}
+
 type CleanCtx = Parameters<typeof cleanBrowserOf>[1];
 /** Contexto em que o navegador limpo pode entrar: CLI de teste, Chrome instalado, sem motivo. */
 const ok = (over: Partial<CleanCtx> = {}): CleanCtx => ({ chromeMcpCli: CLI, cleanBrowserChannel: 'chrome', ...over });
@@ -114,14 +129,23 @@ describe('cleanBrowserOf: o navegador limpo entra sem motivo, com perfil isolado
   const dir = () => path.join(root, 'navegador-x');
 
   it('entra com --isolated, --headless, o Chrome instalado, --no-webmcp, a pasta da conversa e o bloqueio da tela do Club', () => {
-    expect(cleanBrowserOf(true, ok(), false, dir())).toEqual({
-      mcp: {
+    const r = cleanBrowserOf(true, ok(), false, dir());
+    expect(r.info).toEqual({ mcp: true, motivos: [] });
+    expect(r.mcp?.cwd).toBe(dir());
+    expect(proxied(r.mcp!)).toEqual({
+      launcher: process.execPath,
+      entry: expect.stringMatching(/navegador-mcp\.(ts|mjs)$/),
+      cacheDir: NAVEGADOR_CACHE_DIR,
+      real: {
         command: process.execPath,
         args: [CLI, '--isolated', '--headless', '--browser', 'chrome', '--no-webmcp', '--output-dir', dir(), '--blocked-origins', clubBlockedOrigins()],
-        cwd: dir(),
       },
-      info: { mcp: true, motivos: [] },
     });
+  });
+
+  it('o cache do proxy fica na pasta do Club (MYCO_HOME), nunca na pasta de uma conversa nem do projeto', () => {
+    expect(NAVEGADOR_CACHE_DIR).toBe(path.join(home, 'cache', 'navegador-mcp'));
+    expect(String(proxied(cleanBrowserOf(true, ok(), false, dir()).mcp!).cacheDir).startsWith(dir())).toBe(false);
   });
 
   it('com Edge como canal: --browser msedge', () => {
@@ -232,10 +256,10 @@ describe('prepareCodexRun: o navegador limpo na conversa e na ficha', () => {
     await fs.mkdir(proj, { recursive: true });
     const run = await prepareCodexRun(profile(), launch(proj, { chromeMcpCli: CLI, cleanBrowserChannel: 'chrome' }), 'sess-clean', proj);
     const pasta = CLEAN_DIR('sess-clean');
-    expect(run.cleanMcp).toEqual({
+    expect(run.cleanMcp?.cwd).toBe(pasta);
+    expect(proxied(run.cleanMcp!).real).toEqual({
       command: process.execPath,
       args: [CLI, '--isolated', '--headless', '--browser', 'chrome', '--no-webmcp', '--output-dir', pasta, '--blocked-origins', clubBlockedOrigins()],
-      cwd: pasta,
     });
     expect(run.chromeMcp).toBeNull();
     expect(existsSync(pasta)).toBe(true);
@@ -290,10 +314,14 @@ describe('prepareRun (Claude): o navegador limpo no mcp.json e na ficha', () => 
     expect(r.cleanBrowser).toBe(true);
     expect(r.mcpConfigPath).not.toBeNull();
     const mcp = JSON.parse(await fs.readFile(r.mcpConfigPath!, 'utf8')) as { mcpServers: Record<string, { command: string; args: string[] }> };
-    expect(mcp.mcpServers[CLEAN_BROWSER_MCP_NAME]).toEqual({
-      type: 'stdio',
-      command: process.execPath,
-      args: [CLI, '--isolated', '--headless', '--browser', 'chrome', '--no-webmcp', '--output-dir', CLEAN_DIR(sid), '--blocked-origins', clubBlockedOrigins()],
+    const entry = mcp.mcpServers[CLEAN_BROWSER_MCP_NAME] as { type: string; command: string; args: string[] };
+    expect(entry.type).toBe('stdio');
+    expect(proxied(entry)).toMatchObject({
+      launcher: process.execPath,
+      real: {
+        command: process.execPath,
+        args: [CLI, '--isolated', '--headless', '--browser', 'chrome', '--no-webmcp', '--output-dir', CLEAN_DIR(sid), '--blocked-origins', clubBlockedOrigins()],
+      },
     });
     expect(existsSync(CLEAN_DIR(sid))).toBe(true);
     const md = await fichaDe(proj);
