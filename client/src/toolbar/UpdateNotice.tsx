@@ -4,7 +4,7 @@ import type { UpdateStatus } from '../../../shared/model';
 import { api } from '../api';
 import { formatAgo, updateVersions } from '../format';
 import { t } from '../i18n';
-import { askConfirm } from '../lib/dialogStore';
+import { askConfirm, isInsideDialog } from '../lib/dialogStore';
 
 // Versões do Claudio’s Club publicadas no GitHub (tags vX.Y.Z): "Nova versão" no topo do quadro quando há uma mais
 // nova que a daqui, e o item "Atualizações" nas configurações. Atualizar avança o código até ela (só fast-forward,
@@ -146,7 +146,7 @@ export function UpdateNotice() {
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (!root.current?.contains(e.target as Node)) setOpen(false);
+      if (!root.current?.contains(e.target as Node) && !isInsideDialog(e.target)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
     document.addEventListener('mousedown', onDown);

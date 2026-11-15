@@ -21,7 +21,7 @@ import { installCodex } from './codexSetup';
 import { MAX_CHATS_MAX, RAM_GB_MAX, normalizeMaxChats, normalizeRamGb } from './queueGate';
 import { RETENTION_DAYS_MAX, normalizeRetentionDays, previewFor, previewTotal, retentionOrderBroken, skippedProjects } from './retention';
 import { TURN_MINUTES_MAX, TURN_TOOLS_MAX, normalizeTurnMinutes, normalizeTurnTools } from './turnCap';
-import { askConfirm } from '../lib/dialogStore';
+import { askConfirm, isInsideDialog } from '../lib/dialogStore';
 
 // Configurações do Claudio’s Club, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
 // com título, descrição e o controle logo abaixo. Abre pelo botão "config" ou com Ctrl+,.
@@ -191,7 +191,7 @@ export function SettingsMenu(props: Props) {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
       const t = e.target as Node;
-      if (!root.current?.contains(t) && !panel.current?.contains(t)) setOpen(false);
+      if (!root.current?.contains(t) && !panel.current?.contains(t) && !isInsideDialog(t)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;

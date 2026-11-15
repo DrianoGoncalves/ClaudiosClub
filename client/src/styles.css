@@ -1,6 +1,8 @@
 /* Quadro branco no claro, quadro negro (giz) no escuro. As cores das canetas são as mesmas variáveis
    usadas pelos traços do rough.js. */
 :root {
+  /* Camadas acima de tudo: o modal de pergunta/aviso (lib/DialogHost) cobre menus (30), avisos (40) e a tela de espera (100). */
+  --z-dialog: 200;
   /* Papel de fábrica (`-base`): o fundo escolhido (geral/aba) troca só `--board`, `--board-dot` e
      `--card`; o chat do funcionário volta à base quando o workspace dele não tem fundo próprio. */
   --board-base: #fbfaf6;
@@ -923,6 +925,7 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 :root[data-theme='dark'] :is(.btn-primary, .workspace-pending, .inbox-count) { color: #10161f; }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 18, 20, 0.45); display: grid; place-items: center; z-index: 20; padding: 16px; }
 .modal { position: relative; width: min(720px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px 18px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25); display: grid; gap: 12px; }
+.modal-backdrop.dialog-host { z-index: var(--z-dialog); }
 .usage-warning { width: min(440px, 100%); min-width: 0; box-sizing: border-box; }
 .usage-warning h2 { padding-right: 28px; }
 .usage-warning p { margin: 0; }
