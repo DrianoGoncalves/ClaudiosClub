@@ -45,6 +45,7 @@ import { ServerLog } from '../office/ServerLog';
 import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
 import { SkillManage } from './SkillManage';
+import { askConfirm } from '../lib/dialogStore';
 
 // A conversa (com o markdown e o remark) carrega ao abrir o painel do funcionário, não no pacote inicial.
 const ChatView = lazy(() => import('../chat/ChatView').then((m) => ({ default: m.ChatView })));
@@ -79,7 +80,7 @@ function ArchiveButton({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const click = async () => {
-    if (confirm && !archived && !window.confirm(t('detail.archiveConfirm', { what }))) return;
+    if (confirm && !archived && !(await askConfirm(t('detail.archiveConfirm', { what })))) return;
     setBusy(true);
     setError(null);
     try {

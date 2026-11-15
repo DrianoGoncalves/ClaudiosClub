@@ -4,6 +4,7 @@ import type { AppServerInfo, PendingReason } from '../../../shared/model';
 import { api } from '../api';
 import { pollVisible } from '../usePoll';
 import { t, type MsgKey } from '../i18n';
+import { askConfirm } from '../lib/dialogStore';
 
 // Parar e Reiniciar o servidor do Claudio’s Club: o config e o aviso de "mudanças pendentes" do topo usam o mesmo
 // fluxo (confirmação com quem perde o que faz, tela de espera, recarregar quando o servidor novo responde).
@@ -27,7 +28,7 @@ export function useServerAction(): { state: ServerState; error: string | null; a
     // Reiniciando, quem está no meio do turno volta sozinho (ver server/chat/resume.ts): o aviso diz isso.
     const back = action === 'restart' && working?.busy ? `\n\n${t('toolbar.resumeAfterRestart')}` : '';
     const ask = (action === 'stop' ? t('toolbar.askStop') : t('toolbar.askRestart')) + warn + back;
-    if (!window.confirm(ask)) return;
+    if (!(await askConfirm(ask))) return;
     setError(null);
     setState(action === 'stop' ? 'stopping' : 'restarting');
     try {

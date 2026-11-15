@@ -6,6 +6,7 @@ import { formatAgo } from '../format';
 import { t, locale } from '../i18n';
 import { BranchIcon } from '../icons';
 import { ReviewStatus } from './ReviewDelegate';
+import { askConfirm } from '../lib/dialogStore';
 
 // Código da tarefa, no cartão: o que mudou, testes, mesclar, status da revisão e pedir deploy.
 
@@ -73,12 +74,12 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
 
   const merge = () =>
     run('merge', async () => {
-      if (!code?.base || !window.confirm(t('tasks.confirmMerge', { branch: code.branch ?? '?', base: code.base }))) return;
+      if (!code?.base || !(await askConfirm(t('tasks.confirmMerge', { branch: code.branch ?? '?', base: code.base })))) return;
       try {
         await api.taskMerge(projectId, task.id);
       } catch (e) {
         if (!(e instanceof ApiError) || e.code !== 'no-tests') throw e;
-        if (!window.confirm(t('tasks.confirmNoTests', { message: e.message }))) return;
+        if (!(await askConfirm(t('tasks.confirmNoTests', { message: e.message })))) return;
         await api.taskMerge(projectId, task.id, true);
       }
     });

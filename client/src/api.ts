@@ -1,3 +1,4 @@
+import { showAlert } from './lib/dialogStore';
 import type {
   AccountUsage,
   AnyConnection,
@@ -179,9 +180,9 @@ const errorMessage = (data: { error?: string; code?: string }, fallback: string)
 
 export const isPairingError = (e: unknown): boolean => (e instanceof ApiError || e instanceof FileApiError) && e.code === NEEDS_PAIRING;
 
-/** `window.alert` com o erro de uma ação; na recusa por pareamento, nada (o aviso do App já explica). */
+/** Aviso (modal) com o erro de uma ação; na recusa por pareamento, nada (o aviso do App já explica). */
 export function alertError(e: unknown): void {
-  if (!isPairingError(e)) window.alert((e as Error).message);
+  if (!isPairingError(e)) void showAlert((e as Error).message);
 }
 
 export class ApiError extends Error {
@@ -202,12 +203,12 @@ export class ApiError extends Error {
  * Excluir ficha: se o servidor recusar por tarefas abertas no quadro (409 `open-tasks`), pergunta de novo e,
  * confirmado, repete com `force` (as tarefas ficam sem responsável). Recusado, devolve null; outro erro sobe.
  */
-export async function deleteStaffConfirm(projectId: string, staffId: string, ask: (openTasks: number) => boolean) {
+export async function deleteStaffConfirm(projectId: string, staffId: string, ask: (openTasks: number) => boolean | Promise<boolean>) {
   try {
     return await api.deleteStaff(projectId, staffId);
   } catch (err) {
     if (!(err instanceof ApiError) || err.code !== 'open-tasks') throw err;
-    if (!ask(Number(err.details.openTasks) || 0)) return null;
+    if (!(await ask(Number(err.details.openTasks) || 0))) return null;
     return api.deleteStaff(projectId, staffId, true);
   }
 }

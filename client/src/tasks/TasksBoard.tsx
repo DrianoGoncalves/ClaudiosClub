@@ -16,6 +16,7 @@ import { cancelledByName, dependentRows, type DepMap, type DepMode } from './can
 import { TaskCloseDialog } from './TaskCloseDialog';
 import { TaskCostBlock } from './TaskCostBlock';
 import { TaskRuns } from './TaskRuns';
+import { askConfirm } from '../lib/dialogStore';
 
 // Quadro de tarefas de um projeto: aguardar → a fazer → fazendo → revisão → pronto.
 // Os status são 7 (ver server/tasks.ts); na tela, "planejando" vai em Fazendo, e "cancelada" não é coluna: fica num grupo recolhido no fim de Pronto.
@@ -413,10 +414,10 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             nameOf={nameOf}
             onCancel={() => setClosing({ mode: 'cancel', id: current.id })}
             onReopen={() => void act(() => api.reopenTask(projectId, current.id))}
-            onDelete={() => {
+            onDelete={async () => {
               // Com tarefas esperando por esta, apagar pede decidir o que fazer com elas (o diálogo); sem elas, segue como sempre.
               if (dependentRows(current.id, tasks ?? []).length) return setClosing({ mode: 'delete', id: current.id });
-              if (window.confirm(t('tasks.confirmDelete', { title: current.title })))
+              if (await askConfirm(t('tasks.confirmDelete', { title: current.title })))
                 void act(async () => {
                   await api.deleteTask(projectId, current.id);
                   setSelected(null);

@@ -4,6 +4,7 @@ import { attachmentsApi, isPairingError } from '../api';
 import { locale, t } from '../i18n';
 import { FileIcon } from '../icons';
 import { DEFAULT_MAX_BYTES, formatBytes, pastedName, splitBySize } from './attachmentFiles';
+import { askConfirm } from '../lib/dialogStore';
 
 /**
  * Anexos do projeto (prints, docs): enviar pelo botão, arrastando ou colando (Ctrl+V com a área em foco).
@@ -65,7 +66,7 @@ export function Attachments({ projectId }: { projectId: string }) {
   };
 
   const remove = async (a: ProjectAttachment) => {
-    if (!window.confirm(t('detail.attachDeleteConfirm', { name: a.name }))) return;
+    if (!(await askConfirm(t('detail.attachDeleteConfirm', { name: a.name })))) return;
     setBusy(true);
     try {
       await attachmentsApi.remove(projectId, a.name);

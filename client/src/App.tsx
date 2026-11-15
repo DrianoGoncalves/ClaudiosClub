@@ -46,6 +46,8 @@ import { readTab, workspaceByProject, writeTab } from './office/workspaces';
 import type { StaffFormMode } from './staff/HireForm';
 import { directoryPerson } from './staff/directory';
 import { UsageWarnings } from './chat/usageWarning';
+import { DialogHost } from './lib/DialogHost';
+import { askConfirm } from './lib/dialogStore';
 
 // Telas abertas por ação da pessoa: carregam sob demanda, fora do pacote inicial (o quadro é a única tela do primeiro desenho).
 const loadDetail = () => import('./detail/Detail');
@@ -229,8 +231,8 @@ export function App() {
     setSelectedId(manageNodeId(projectId, staffId));
   };
   /** Sai do editor do RH (outro projeto, Conversar, voltar à lista): com ficha mexida e não salva, pergunta antes. */
-  const leaveManage = (go: () => void) => {
-    if (sheetDirty.current && !window.confirm(t('hr.discardAsk'))) return;
+  const leaveManage = async (go: () => void) => {
+    if (sheetDirty.current && !(await askConfirm(t('hr.discardAsk')))) return;
     go();
   };
 
@@ -883,6 +885,7 @@ export function App() {
       )}
       <SystemMonitor />
       <UsageWarnings />
+      <DialogHost />
       {needsPairing ? (
         <div className="notice notice-pair" role="alert">
           <strong>{t('toolbar.pairNotice')}</strong>

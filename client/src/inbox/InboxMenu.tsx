@@ -4,6 +4,7 @@ import { api, withUsageConfirm } from '../api';
 import { formatAgo } from '../format';
 import { t } from '../i18n';
 import { TaskCloseDialog } from '../tasks/TaskCloseDialog';
+import { isInsideDialog } from '../lib/dialogStore';
 import { inboxText, inboxWho } from './inboxText';
 import type { InboxView } from './useInbox';
 
@@ -88,7 +89,7 @@ export function InboxMenu({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (!root.current?.contains(e.target as Node)) setOpen(false);
+      if (!root.current?.contains(e.target as Node) && !isInsideDialog(e.target)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
     document.addEventListener('mousedown', onDown);

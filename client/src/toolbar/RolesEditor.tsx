@@ -5,6 +5,7 @@ import { api } from '../api';
 import { effortLabel } from '../format';
 import { t } from '../i18n';
 import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, modelLabel } from '../staff/templates';
+import { askConfirm } from '../lib/dialogStore';
 
 // Cargos da empresa (config → Cargos): os prontos e os seus. Cada cargo traz o modelo com que o
 // funcionário começa; trocar o modelo de um funcionário só é na ficha dele. O cargo padrão já vem
@@ -190,13 +191,13 @@ export function RolesEditor() {
                 type="button"
                 className="link small"
                 disabled={busy}
-                onClick={() => {
+                onClick={async () => {
                   const what = r.builtin
                     ? r.edited
                       ? t('toolbar.restoreConfirm', { label: r.label })
                       : t('toolbar.removeConfirm', { label: r.label })
                     : t('toolbar.deleteConfirm', { label: r.label });
-                  if (window.confirm(what)) void run(() => api.deleteRole(r.id));
+                  if (await askConfirm(what)) void run(() => api.deleteRole(r.id));
                 }}
               >
                 {r.builtin ? (r.edited ? t('toolbar.restoreOriginal') : t('toolbar.remove')) : t('toolbar.delete')}
