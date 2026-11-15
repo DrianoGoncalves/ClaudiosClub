@@ -5,7 +5,6 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
-import { GPT_MCP_NAME, GPT_TOOL_NAME } from '../../shared/model';
 import { codexEnv } from '../adapters/codex';
 import { CodexBlockedError, codexSafetyArgs, codexWindowsSandboxArgs, tomlString } from '../chat/codexArgs';
 import { isModelUnavailable } from '../chat/codexEvents';
@@ -15,6 +14,7 @@ import { CodexEnv } from '../codexEnv';
 import { parseCodexModels, pickCodexSubstitute } from '../codexModels';
 import { MYCO_HOME, readConfig } from '../config';
 import { ROOT } from '../root';
+import { argOf, DEFAULT_EFFORT, EFFORTS, GPT_MCP_NAME, GPT_TOOL_NAME, initializeResult, TOOLS } from './gptMcpMeta';
 
 // MCP do Claudio’s Club que leva uma pergunta ao GPT: um servidor stdio (JSON-RPC por linha) que o Claude Code do funcionário sobe
 // quando o Codex está ligado nas configurações (`codexReview`). A única ferramenta, `perguntar_gpt`, abre o `codex exec` por spawn
@@ -29,9 +29,7 @@ import { ROOT } from '../root';
 // (SIGTERM/SIGINT/SIGHUP, fim do stdin) ou cancela a chamada (notifications/cancelled), o `codex exec` em andamento é morto (o grupo todo:
 // SIGTERM e, em 3 s, SIGKILL) e os temporários saem. Na subida, os `myco-gpt-*` com mais de 1 h (de um MCP que levou SIGKILL) são varridos.
 
-export { GPT_MCP_NAME, GPT_TOOL_NAME };
-const VERSION = '1.0.0';
-const PROTOCOLS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
+export { DEFAULT_EFFORT, EFFORTS, GPT_MCP_NAME, GPT_TOOL_NAME, TOOLS };
 
 /** O Codex pensa bastante com esforço alto: uma pergunta de decisão leva de 15 s a alguns minutos. */
 export const ASK_TIMEOUT = 10 * 60_000;
@@ -39,8 +37,6 @@ const MODELS_TIMEOUT = 30_000;
 const MAX_ANSWER = 20_000;
 const MAX_QUESTION = 20_000;
 const MAX_CONTEXT = 60_000;
-export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
-export const DEFAULT_EFFORT = 'high';
 
 /** Erro nosso, já em palavras: vai como está para quem chamou. O resto vira "falha inesperada". */
 export class GptError extends Error {}
@@ -214,26 +210,6 @@ const Ask = z.object({
   esforco: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.enum(EFFORTS, { error: `esforço: ${EFFORTS.join(', ')}` }).optional()),
 });
 type AskInput = z.infer<typeof Ask>;
-
-export const TOOLS = [
-  {
-    name: GPT_TOOL_NAME,
-    description:
-      'Pergunta ao GPT (OpenAI, pelo Codex) uma opinião independente: decisão que pesa (arquitetura, escolher entre caminhos, trade-off) ou revisão de algo arriscado. ' +
-      'O GPT lê o projeto (pasta da sessão) em só leitura e não altera nada; pesquisa na web só se "Permitir acesso à internet" estiver ligado nas Configurações. Ele não vê esta conversa, então ponha a decisão, as opções em termos neutros e o que já se sabe (caminhos de arquivo, restrições); a sua preferência vai em hipotese. ' +
-      'Demora de 15 s a alguns minutos e gasta a cota ChatGPT do usuário: use em decisão que pesa, não em dúvida pequena. A resposta começa com um veredito (CONCORDO, CONCORDO COM RESSALVAS ou DISCORDO): mostre ao usuário o veredito e as divergências em 1-2 linhas, mesmo com ressalvas, e se discordarem mostre as duas posições.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        pergunta: { type: 'string', description: 'A decisão ou o que revisar, com as opções em termos neutros, sem a sua preferência (ela vai em hipotese). O GPT não vê esta conversa.' },
-        hipotese: { type: 'string', description: 'A sua preferência ou conclusão, separada da pergunta: o GPT vai atacá-la, não tomá-la como fato. Opcional.' },
-        contexto: { type: 'string', description: 'O que já se sabe: objetivo, arquivos (caminho), restrições, o que já foi decidido. Opcional.' },
-        esforco: { type: 'string', enum: [...EFFORTS], description: `Quanto o GPT pensa (padrão ${DEFAULT_EFFORT}). Mais alto demora mais.` },
-      },
-      required: ['pergunta'],
-    },
-  },
-];
 
 /** O prompt do GPT: o pedido e as regras (só leitura, sem segredos, veredito na primeira linha, resposta curta). */
 export function buildAskPrompt(a: Pick<AskInput, 'pergunta' | 'contexto' | 'hipotese'>): string {
@@ -443,15 +419,8 @@ export function createGptMcp(opts: GptMcpOptions) {
       return null; // notifications/initialized…
     }
     switch (m.method) {
-      case 'initialize': {
-        const asked = m.params?.protocolVersion;
-        return reply(m.id, {
-          protocolVersion: typeof asked === 'string' && PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
-          capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: GPT_MCP_NAME, version: VERSION },
-          instructions: 'Opinião do GPT (OpenAI, pelo Codex) do Claudio’s Club: só leitura; pesquisa na web se "Permitir acesso à internet" estiver ligado nas Configurações. Use em decisão que pesa e compare a resposta com a sua.',
-        });
-      }
+      case 'initialize':
+        return reply(m.id, initializeResult(m.params?.protocolVersion));
       case 'ping':
         return reply(m.id, {});
       case 'tools/list':
@@ -486,12 +455,6 @@ export function createGptMcp(opts: GptMcpOptions) {
   }
 
   return { handle, callTool, shutdown };
-}
-
-/** Lê `--chave valor` dos argumentos. */
-function argOf(argv: string[], key: string): string | undefined {
-  const i = argv.indexOf(key);
-  return i >= 0 ? argv[i + 1] : undefined;
 }
 
 const STOP_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const;
@@ -565,13 +528,14 @@ export async function runGptMcpStdio(
 
 // ---- como o funcionário sobe este MCP ----
 
-/** Pacote gerado pelo build (scripts/bundle.ts); sem ele (dev), o .ts pelo tsx. */
+/** Pacote gerado pelo build (scripts/bundle.ts); sem ele (dev), o .ts pelo tsx. O pacote é a entrada leve (gptMcpLite.ts); o MCP inteiro é o `gpt-mcp-core.mjs` ao lado, que ela carrega na primeira pergunta. */
 export const GPT_MCP_BUNDLE = path.join(ROOT, 'dist', 'gpt-mcp.mjs');
+export const GPT_MCP_CORE_BUNDLE = path.join(ROOT, 'dist', 'gpt-mcp-core.mjs');
 export const GPT_MCP_ENTRY = path.join(ROOT, 'server', 'gpt-mcp.ts');
 
 /** node + o que rodar: o pacote quando o servidor roda empacotado e ele existe; senão o .ts com o tsx. */
 export function gptMcpCommand(bundled = !import.meta.url.endsWith('.ts')): { command: string; args: string[] } {
-  if (bundled && existsSync(GPT_MCP_BUNDLE)) return { command: process.execPath, args: [GPT_MCP_BUNDLE] };
+  if (bundled && existsSync(GPT_MCP_BUNDLE) && existsSync(GPT_MCP_CORE_BUNDLE)) return { command: process.execPath, args: [GPT_MCP_BUNDLE] };
   const tsx = pathToFileURL(path.join(ROOT, 'node_modules', 'tsx', 'dist', 'loader.mjs')).href;
   return { command: process.execPath, args: ['--import', tsx, GPT_MCP_ENTRY] };
 }

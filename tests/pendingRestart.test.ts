@@ -26,6 +26,7 @@ beforeEach(() => {
   write('client/App.tsx', '', old);
   write('server/ftp-mcp.ts', '', old);
   write('server/gpt-mcp.ts', '', old);
+  write('server/staff/gptMcp.ts', '', old);
   write('server/ssh-mcp.ts', '', old);
   write('package-lock.json', '{}', old);
   write('dist/server.inputs.json', JSON.stringify(['server/index.ts', 'shared/model.ts', 'scripts/lib.ts']), built);
@@ -34,6 +35,8 @@ beforeEach(() => {
   write('dist/ftp-mcp.mjs', '', built);
   write('dist/gpt-mcp.inputs.json', JSON.stringify(['server/gpt-mcp.ts']), built);
   write('dist/gpt-mcp.mjs', '', built);
+  write('dist/gpt-mcp-core.inputs.json', JSON.stringify(['server/staff/gptMcp.ts']), built);
+  write('dist/gpt-mcp-core.mjs', '', built);
   write('dist/ssh-mcp.inputs.json', JSON.stringify(['server/ssh-mcp.ts']), built);
   write('dist/ssh-mcp.mjs', '', built);
   write('dist/client/assets/a.js', '', built);
@@ -77,6 +80,11 @@ describe('pendingRestart', () => {
 
   it('MCP do GPT: pacote velho', () => {
     touch('server/gpt-mcp.ts');
+    expect(check().pendingReasons).toEqual(['gptMcp']);
+  });
+
+  it('MCP do GPT: o pacote do MCP inteiro (carregado na primeira pergunta) velho também conta', () => {
+    touch('server/staff/gptMcp.ts');
     expect(check().pendingReasons).toEqual(['gptMcp']);
   });
 

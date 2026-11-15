@@ -4,6 +4,8 @@ export default defineMessages({
   'pt-BR': {
     'app.name': 'Clube dos Claudios',
     'app.loadingBoard': 'Carregando o quadro…',
+    'app.lazyFailed': 'Esta tela não carregou. Pode ter havido uma atualização ou a conexão caiu.',
+    'app.reload': 'Recarregar',
     'app.close': 'Fechar',
     'app.closeNotice': 'Fechar aviso',
     'app.resizeDrawer': 'Arraste para mudar a largura do painel',
@@ -43,6 +45,8 @@ export default defineMessages({
   en: {
     'app.name': 'Claudio’s Club',
     'app.loadingBoard': 'Loading the board…',
+    'app.lazyFailed': 'This screen failed to load. The app may have been updated, or the connection dropped.',
+    'app.reload': 'Reload',
     'app.close': 'Close',
     'app.closeNotice': 'Close notice',
     'app.resizeDrawer': 'Drag to change the panel width',
@@ -82,6 +86,8 @@ export default defineMessages({
   es: {
     'app.name': 'Club de los Claudios',
     'app.loadingBoard': 'Cargando el tablero…',
+    'app.lazyFailed': 'Esta pantalla no se cargó. Puede que la app se haya actualizado o que la conexión se haya caído.',
+    'app.reload': 'Recargar',
     'app.close': 'Cerrar',
     'app.closeNotice': 'Cerrar aviso',
     'app.resizeDrawer': 'Arrastra para cambiar el ancho del panel',

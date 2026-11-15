@@ -4,8 +4,7 @@ import type { RoleEntry } from '../../../shared/roles';
 import { api } from '../api';
 import { effortLabel } from '../format';
 import { t } from '../i18n';
-import { modelLabel } from '../staff/HireForm';
-import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS } from '../staff/templates';
+import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, modelLabel } from '../staff/templates';
 
 // Cargos da empresa (config → Cargos): os prontos e os seus. Cada cargo traz o modelo com que o
 // funcionário começa; trocar o modelo de um funcionário só é na ficha dele. O cargo padrão já vem

@@ -59,7 +59,9 @@ export function pendingChanges(opts: { root: string; mark: number }): PendingRes
   if (safe(() => fs.existsSync(ftp) && bundleStale(ftp, root))) reasons.push('ftpMcp');
   // O MCP do GPT (`perguntar_gpt`): o mesmo.
   const gpt = path.join(root, 'dist', 'gpt-mcp.mjs');
-  if (safe(() => fs.existsSync(gpt) && bundleStale(gpt, root))) reasons.push('gptMcp');
+  // (a entrada leve e o MCP inteiro, que ela carrega na primeira pergunta: são dois pacotes)
+  const gptCore = path.join(root, 'dist', 'gpt-mcp-core.mjs');
+  if (safe(() => (fs.existsSync(gpt) && bundleStale(gpt, root)) || (fs.existsSync(gptCore) && bundleStale(gptCore, root)))) reasons.push('gptMcp');
   // O MCP de SSH do Codex (`myco-ssh`): o mesmo.
   const ssh = path.join(root, 'dist', 'ssh-mcp.mjs');
   if (safe(() => fs.existsSync(ssh) && bundleStale(ssh, root))) reasons.push('sshMcp');

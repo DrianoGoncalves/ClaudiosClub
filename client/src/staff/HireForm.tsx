@@ -20,7 +20,7 @@ import { portraitUrl } from '../board/nodes';
 import { effortLabel, employeeName, folderName } from '../format';
 import { t, type MsgKey } from '../i18n';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
-import { ProtocolBadge } from '../office/ProjectOffice';
+import { ProtocolBadge } from '../office/ProtocolBadge';
 import { BrowserCheck } from './BrowserCheck';
 import { CopyFromCompany } from './CopyFromCompany';
 import { differingFields, PERSON_FIELD_LABEL } from './directory';
@@ -58,10 +58,7 @@ import {
   switchEngine,
   useCodexCatalog,
 } from './codexEngine';
-import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, PLAYBOOK_OPTIONS } from './templates';
-
-/** "opus" → "Opus (mais recente)"; '' → "Padrão do Claude Code"; outro id fica como está. */
-export const modelLabel = (m: string) => MODEL_OPTIONS.find((o) => o.value === m)?.label ?? m;
+import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, modelLabel, PLAYBOOK_OPTIONS } from './templates';
 
 // Questionário do funcionário: contratar (vira a ficha em <projeto>/.myco/staff/) ou editar
 // (a versão anterior vai para o histórico, de onde dá para restaurar).
