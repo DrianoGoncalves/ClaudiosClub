@@ -8,6 +8,10 @@ import type { ChatEvent, ChatItem } from '../shared/model';
 import { CodexProcess } from '../server/chat/codexProcess';
 import { ChatManager } from '../server/chat/manager';
 import { ChatProcess, MAX_LIVE_ITEMS } from '../server/chat/process';
+import { applyLive, mergeItems } from '../client/src/chat/chatWindow';
+import { codexHistoryOf } from '../server/adapters/codex/rollout';
+import { CHECKPOINT } from '../server/chat/items';
+import { dropSeamEchoes } from '../server/chat/seam';
 
 // Conversa de horas: o processo guarda só os itens mais recentes (e o log do stream acompanha); o que saiu volta do transcript
 // no snapshot, a partir do ponto em que o stream começa (`cut`).
@@ -69,7 +73,8 @@ describe('conversa ao vivo: limite de itens na memória', () => {
     expect(kept).toContain('a:vivo');
     expect(chat.snapshot().items.find((i) => i.id === 'a:vivo')).toMatchObject({ text: 'ab' });
     expect(chat.pendingPermissions().map((p) => p.id)).toEqual(['p:r1']);
-    expect(kept.filter((id) => id.startsWith('a:m'))).toEqual(['a:m12', 'a:m13', 'a:m14'].slice(-1));
+    // Fixados: o pedido, a ferramenta e a resposta em deltas; o 4º lugar do limite (3) já é de quem acabou de chegar: só m14 sobra.
+    expect(kept.filter((id) => id.startsWith('a:m'))).toEqual(['a:m14']);
 
     // O resultado da ferramenta que rodava ainda acha o item; responder o pedido também.
     chat.handle(toolResult('t1', 'feito'));
@@ -126,7 +131,7 @@ describe('conversa ao vivo: limite de itens na memória', () => {
     expect(chat.cut).toEqual({ before: at(5), oldest: at(1) });
   });
 
-  it('`cut`: log do stream que passou do limite também move o ponto (os itens sem evento no log vêm do transcript)', () => {
+  it('`cut`: o log do stream que passou de 5000 eventos não move o ponto (o snapshot traz os itens da memória, não o log)', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const at = (n: number) => new Date(Date.UTC(2026, 10, 14, 10, 0, n)).toISOString();
     vi.setSystemTime(new Date(at(1)));
@@ -138,8 +143,24 @@ describe('conversa ao vivo: limite de itens na memória', () => {
     chat.handle(text('B', 'texto final de B'));
     vi.setSystemTime(new Date(at(3)));
     chat.handle(text('C'));
-    expect(ids(chat)).toEqual(['a:A', 'a:B', 'a:C']); // na memória está tudo (limite 50)
-    expect(chat.cut).toEqual({ before: at(2), oldest: at(1) }); // mas o stream só repete B e C
+    // Na memória está tudo (limite 50) e o snapshot devolve os três: o histórico não precisa cobrir nada, e cobrir repetiria A.
+    expect(ids(chat)).toEqual(['a:A', 'a:B', 'a:C']);
+    expect(chat.cut).toBeNull();
+  });
+
+  it('o snapshot é uma foto: as deltas que chegam depois não mudam os itens dele, e o stream depois do `seq` completa', () => {
+    const chat = new ChatProcess({ sessionId: 's', cwd: '.', args: [], maxItems: 50 });
+    const delta = (t: string) => chat.handle({ type: 'stream_event', api_message_id: 'vivo', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: t } } });
+    delta('a');
+    const snap = chat.snapshot();
+    delta('b');
+    delta('c');
+    expect(snap.items.find((i) => i.id === 'a:vivo')).toMatchObject({ text: 'a' });
+    const events: ChatEvent[] = [];
+    chat.subscribe((e) => events.push(e), snap.seq);
+    expect(events.map((e) => e.type)).toEqual(['delta', 'delta']);
+    const screen = events.reduce(applyLive, snap.items);
+    expect(screen.find((i) => i.id === 'a:vivo')).toMatchObject({ text: 'abc' });
   });
 
   it('Codex: ferramenta rodando fica; a que saiu e termina depois volta inteira (o evento traz tudo)', () => {
@@ -174,7 +195,11 @@ describe('ChatManager.snapshot: o histórico vai até onde o stream começa', ()
   const at = (n: number, plus = 0) => new Date(BASE + n * 1000 + plus).toISOString();
   const userLine = (text: string, timestamp: string) => JSON.stringify({ type: 'user', uuid: `u-${text}`, timestamp, message: { content: text } });
 
-  async function setup(name: string, sent: number, older: number, maxItems: number) {
+  /**
+   * `later`: mensagens que o transcript já tem mas que só chegam ao processo depois (`during`, que roda no meio do snapshot, depois
+   * de os itens e o corte serem tirados). `during` é chamado com a função que manda a próxima delas.
+   */
+  async function setup(name: string, sent: number, older: number, maxItems: number, opts: { later?: number; during?: (sendNext: () => void) => void } = {}) {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date(BASE - 3_600_000));
     const f = fakeClaude();
@@ -183,17 +208,28 @@ describe('ChatManager.snapshot: o histórico vai até onde o stream começa', ()
     const lines: string[] = [];
     // O que veio antes de o processo abrir (já no transcript).
     for (let i = 0; i < older; i++) lines.push(userLine(`antes${i}`, new Date(BASE - 7_200_000 + i * 1000).toISOString()));
-    for (let i = 1; i <= sent; i++) {
-      vi.setSystemTime(new Date(BASE + i * 1000));
-      chat.send(`m${i}`);
+    let n = 0;
+    const sendNext = () => {
+      n++;
+      vi.setSystemTime(new Date(BASE + n * 1000));
+      chat.send(`m${n}`);
       // O Claude grava a mensagem logo depois de recebê-la.
-      lines.push(userLine(`m${i}`, at(i, 5)));
-    }
+    };
+    for (let i = 1; i <= sent + (opts.later ?? 0); i++) lines.push(userLine(`m${i}`, at(i, 5)));
+    for (let i = 1; i <= sent; i++) sendNext();
     await fs.mkdir(path.join(root, 'p'), { recursive: true });
     await fs.writeFile(path.join(root, 'p', `${name}.jsonl`), lines.join('\n') + '\n');
-    const m = new ChatManager({ transcriptsDir: root, usageFile: path.join(root, `${name}-usage.json`), listLive: async () => [], resolve: async () => null });
+    const m = new ChatManager({
+      transcriptsDir: root,
+      usageFile: path.join(root, `${name}-usage.json`),
+      listLive: async () => {
+        opts.during?.(sendNext);
+        return [];
+      },
+      resolve: async () => null,
+    });
     (m as unknown as { chats: Map<string, ChatProcess> }).chats.set(name, chat);
-    return { m, chat };
+    return { m, chat, sendNext };
   }
   const texts = (items: ChatItem[]) => items.map((i) => (i.kind === 'user' ? i.text : i.kind));
 
@@ -230,5 +266,114 @@ describe('ChatManager.snapshot: o histórico vai até onde o stream começa', ()
     const snap = await m.snapshot('p', 'longa');
     expect(snap.history).toHaveLength(200);
     expect(snap.history.some((i) => i.kind === 'notice')).toBe(false);
+  });
+
+  it('itens que chegam durante o snapshot (e fazem outros saírem da memória) não somem: histórico + itens do snapshot + stream depois do `seq` = tudo, uma vez', async () => {
+    // Memória de 5: ficam m4..m8 na hora da foto; durante as leituras chegam m9..m11, que empurram m4..m6 para fora do log.
+    // m9 chega logo na 1ª leitura de arquivo (entre a foto e o resto do snapshot), m10 e m11 já no fim.
+    const { m, chat, sendNext } = await setup('janela', 8, 3, 5, { later: 3, during: (next) => { next(); next(); } });
+    const access = fs.access;
+    const spy = vi.spyOn(fs, 'access').mockImplementationOnce((...args: Parameters<typeof fs.access>) => {
+      sendNext();
+      return access.apply(fs, args);
+    });
+    const snap = await m.snapshot('p', 'janela');
+    spy.mockRestore();
+    expect(texts(snap.history)).toEqual(['antes0', 'antes1', 'antes2', 'm1', 'm2', 'm3']);
+    expect(snap.live!.items.map((i) => (i.kind === 'user' ? i.text : ''))).toEqual(['m4', 'm5', 'm6', 'm7', 'm8']);
+    expect(chat.snapshot().items.map((i) => (i.kind === 'user' ? i.text : ''))).toEqual(['m7', 'm8', 'm9', 'm10', 'm11']);
+
+    // O que a tela faz: os itens do snapshot, e o stream aberto depois do `seq` dele.
+    const events: ChatEvent[] = [];
+    chat.subscribe((e) => events.push(e), snap.live!.seq);
+    const live = events.reduce(applyLive, snap.live!.items);
+    expect(texts(mergeItems(snap.history, live, []))).toEqual(['antes0', 'antes1', 'antes2', ...Array.from({ length: 11 }, (_, i) => `m${i + 1}`)]);
+
+    // O stream do começo (como a tela fazia) já não tem m4..m6: ficariam fora do histórico e fora do stream.
+    const fromZero: ChatEvent[] = [];
+    chat.subscribe((e) => fromZero.push(e), 0);
+    const lost = mergeItems(snap.history, fromZero.reduce(applyLive, [] as ChatItem[]), []);
+    expect(texts(lost)).not.toContain('m4');
+  });
+});
+
+describe('ChatManager.snapshot: a emenda no Codex (ids do rollout e do vivo são outros)', () => {
+  const BASE = Date.UTC(2026, 10, 14, 10, 0, 0);
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const THREAD = '019f0000-0000-7000-8000-0000000000aa';
+  const line = (ordinal: number, ms: number, item: object) => JSON.stringify({ timestamp: iso(ms), ordinal, type: 'event_msg', payload: { type: 'item_completed', item } });
+  const said = (item: ChatItem) => (item.kind === 'assistant' || item.kind === 'user' ? item.text : item.kind);
+  let home: { was: string | undefined } | null = null;
+  afterEach(() => {
+    if (!home) return;
+    if (home.was === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = home.was;
+    home = null;
+  });
+
+  it('a cópia da resposta no rollout (hora de antes da do vivo) não repete a que ficou na memória', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(BASE - 3_600_000));
+    const codexHome = path.join(root, 'codex-home');
+    const runDir = path.join(root, 'codex-run');
+    const day = path.join(codexHome, 'sessions', '2026', '11', '14');
+    await fs.mkdir(day, { recursive: true });
+    await fs.mkdir(path.join(runDir, 'cdx-1'), { recursive: true });
+    await fs.writeFile(path.join(runDir, 'cdx-1', 'codex-thread.json'), JSON.stringify({ threadId: THREAD, savedAt: iso(BASE) }) + '\n');
+
+    const chat = new CodexProcess({ cwd: '/proj', sessionId: 'cdx-1', permissionMode: 'default', secrets: { projectPath: '/proj', home: '/nao-existe', mycoHome: '/nao-existe/.myco' }, maxItems: 3 });
+    chat.start();
+    const lines = [
+      line(1, BASE - 7_200_000, { type: 'UserMessage', id: 'u0', content: [{ type: 'text', text: 'pergunta antiga' }] }),
+      line(2, BASE - 7_199_000, { type: 'AgentMessage', id: 'a0', content: [{ type: 'Text', text: 'resposta antiga' }] }),
+    ];
+    for (let i = 0; i < 6; i++) {
+      vi.setSystemTime(new Date(BASE + i * 1000));
+      chat.handle({ type: 'item.completed', item: { id: `item_${i}`, type: 'agent_message', text: `fala ${i}` } });
+      // O Codex grava a resposta no rollout um instante antes de o servidor processar o evento.
+      lines.push(line(10 + i, BASE + i * 1000 - 30, { type: 'AgentMessage', id: `item_${i}`, content: [{ type: 'Text', text: `fala ${i}` }] }));
+    }
+    await fs.writeFile(path.join(day, `rollout-2026-11-14T10-00-00-${THREAD}.jsonl`), lines.join('\n') + '\n');
+    home = { was: process.env.CODEX_HOME };
+    process.env.CODEX_HOME = codexHome;
+
+    const m = new ChatManager({ transcriptsDir: path.join(root, 'sem-transcript'), usageFile: path.join(root, 'cdx-usage.json'), runDir, listLive: async () => [], resolve: async () => null });
+    (m as unknown as { chats: Map<string, ChatProcess> }).chats.set('cdx-1', chat);
+    expect(chat.cut).toEqual({ before: iso(BASE + 3000), oldest: iso(BASE) });
+
+    // O corte sozinho deixa passar a cópia de "fala 3" (30 ms antes do vivo): é o que se vê sem a correção.
+    const raw = await codexHistoryOf(runDir, 'cdx-1', { before: iso(BASE + 3000) });
+    expect(raw!.items.map(said)).toEqual(['pergunta antiga', 'resposta antiga', 'fala 0', 'fala 1', 'fala 2', 'fala 3']);
+
+    const snap = await m.snapshot('p', 'cdx-1');
+    expect(snap.history.map(said)).toEqual(['pergunta antiga', 'resposta antiga', 'fala 0', 'fala 1', 'fala 2']);
+    expect(snap.live!.items.map(said)).toEqual(['fala 3', 'fala 4', 'fala 5']);
+    expect(mergeItems(snap.history, snap.live!.items, []).map(said)).toEqual(['pergunta antiga', 'resposta antiga', 'fala 0', 'fala 1', 'fala 2', 'fala 3', 'fala 4', 'fala 5']);
+  });
+
+  describe('dropSeamEchoes', () => {
+    const say = (text: string, ms: number): ChatItem => ({ kind: 'assistant', id: `a:${text}:${ms}`, text, at: iso(ms) });
+
+    it('tira só o trecho seguido do fim do histórico que tem cópia no vivo, uma vez por item', () => {
+      const history = [say('x', BASE - 5000), say('ok', BASE - 20), say('ok', BASE - 10)];
+      const live = [say('ok', BASE), say('seguinte', BASE + 1000)];
+      // Duas cópias de "ok" no arquivo, uma só no vivo: a mais nova é a cópia, a outra é uma mensagem de verdade.
+      expect(dropSeamEchoes(history, live).map(said)).toEqual(['x', 'ok']);
+    });
+
+    it('mesmo texto mas hora distante (um "pronto" de uma hora atrás) não é cópia', () => {
+      const history = [say('pronto', BASE - 3_600_000)];
+      expect(dropSeamEchoes(history, [say('pronto', BASE)])).toBe(history);
+    });
+
+    it('o que não é igual ao fim do histórico para a busca (não pula itens no meio)', () => {
+      const history = [say('ok', BASE - 20), say('outra', BASE - 10)];
+      expect(dropSeamEchoes(history, [say('ok', BASE)])).toBe(history);
+    });
+
+    it('o texto vem do rollout com o marcador de ponto de corte: compara sem ele', () => {
+      const history = [say(`feito\n${CHECKPOINT}`, BASE - 20)];
+      expect(dropSeamEchoes(history, [say('feito', BASE)])).toEqual([]);
+    });
   });
 });

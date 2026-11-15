@@ -13,7 +13,7 @@ import type {
   SendPriority,
 } from '../../../shared/model';
 import { api, ApiError, withUsageConfirm, type PermissionOpts } from '../api';
-import { mergeItems, trimLive } from './chatWindow';
+import { applyLive, mergeItems } from './chatWindow';
 import { announceSent } from './usageNotice';
 
 // Estado de uma conversa: histórico do transcript + o que chega ao vivo pelo SSE.
@@ -74,36 +74,38 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
   const apply = useCallback((e: ChatEvent) => {
     seq.current = Math.max(seq.current, e.seq);
     if (e.type === 'state') setState(e.state);
-    else if (e.type === 'item') {
-      // Só os últimos LIVE_KEEP ficam (o servidor corta no mesmo ponto): a conversa de horas não cresce sem fim aqui.
-      setLive((items) => {
-        const i = items.findIndex((x) => x.id === e.item.id);
-        if (i === -1) return trimLive([...items, e.item]);
-        const next = items.slice();
-        next[i] = e.item;
-        return next;
-      });
-    } else if (e.type === 'delta') {
-      setLive((items) =>
-        items.map((x) => (x.id === e.id && x.kind === 'assistant' ? { ...x, text: x.text + e.text } : x)),
-      );
-    }
+    else setLive((items) => applyLive(items, e));
   }, []);
 
+  /** Relê o snapshot e reabre o stream (preenchido abaixo, depois de `load`): é o que se faz quando a conexão cai. */
+  const resync = useRef<(sid: string) => void>(() => {});
+  const retry = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const openStream = useCallback(
-    (sid: string) => {
+    (sid: string, after = 0) => {
       source.current?.close();
-      // Sempre do começo do processo: cada item chega primeiro como "criado" (o que zera o texto) e
-      // depois as deltas, então repetir não duplica. E um processo novo recomeça a numeração.
-      seq.current = 0;
-      const es = new EventSource(`/api/chat/${sid}/stream?after=0`);
+      if (retry.current) clearTimeout(retry.current);
+      retry.current = null;
+      // `after`: o `seq` do snapshot que acabou de ser lido (os itens dele já estão em `live`, o stream continua dali). Sem
+      // snapshot (um processo novo, aberto pela mensagem que você mandou) começa do zero: cada item chega primeiro como "criado"
+      // (o que zera o texto) e depois as deltas, então repetir não duplica.
+      seq.current = after;
+      const es = new EventSource(`/api/chat/${sid}/stream?after=${after}`);
       es.onmessage = (m) => apply(JSON.parse(m.data) as ChatEvent);
-      // Sem processo (fechou por inatividade, ou o claude saiu), o servidor responde 404 e o navegador desiste.
-      // Aí o "trabalhando" não fica preso na tela; a próxima mensagem abre o processo e o stream de novo.
       es.onerror = () => {
-        if (es.readyState !== EventSource.CLOSED || source.current !== es) return;
+        if (source.current !== es) return;
+        // Sem processo (fechou por inatividade, ou o claude saiu), o servidor responde 404 e o navegador desiste.
+        // Aí o "trabalhando" não fica preso na tela; a próxima mensagem abre o processo e o stream de novo.
+        if (es.readyState === EventSource.CLOSED) {
+          source.current = null;
+          setState((s) => (s ? { ...s, running: false, busy: false, compacting: false } : s));
+          return;
+        }
+        // A conexão caiu e o navegador reabriria sozinho com o mesmo `after`: as deltas já aplicadas viriam de novo (o texto
+        // dobraria) e o que saiu do log enquanto isso se perderia. Fecha e relê o snapshot, que traz tudo no ponto certo.
+        es.close();
         source.current = null;
-        setState((s) => (s ? { ...s, running: false, busy: false, compacting: false } : s));
+        retry.current = setTimeout(() => resync.current(sid), 1000);
       };
       source.current = es;
     },
@@ -120,15 +122,28 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
       setElsewhere(snap.elsewhere);
       setFallback(snap.fallback ?? null);
       if (snap.live) {
-        seq.current = 0;
-        setLive([]);
+        // Os itens do snapshot e o `seq` são da mesma foto do histórico: o stream abre depois dele, sem faltar nem repetir nada.
+        setLive(snap.live.items);
         setState(snap.live.state);
-        openStream(sid);
+        openStream(sid, snap.live.seq);
       }
       return snap;
     },
     [projectId, openStream],
   );
+
+  useEffect(() => {
+    resync.current = (sid) => {
+      load(sid)
+        .then((snap) => {
+          if (snap.live) return;
+          // O processo se foi: o transcript já tem tudo (o histórico veio inteiro), então o que sobrou ao vivo só repetiria.
+          setLive([]);
+          setState((s) => (s ? { ...s, running: false, busy: false, compacting: false } : s));
+        })
+        .catch(fail);
+    };
+  }, [load]);
 
   // Já trazida para cá antes: segue na cópia, com as mensagens que você mandou aqui, em vez da original.
   const loadFollowingCopy = useCallback(
@@ -162,6 +177,8 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     return () => {
       source.current?.close();
       source.current = null;
+      if (retry.current) clearTimeout(retry.current);
+      retry.current = null;
     };
   }, [initialSessionId, loadFollowingCopy]);
 

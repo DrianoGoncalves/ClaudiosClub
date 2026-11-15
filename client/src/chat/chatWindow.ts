@@ -1,15 +1,10 @@
-import type { ChatItem } from '../../../shared/model';
+import type { ChatEvent, ChatItem } from '../../../shared/model';
 
-// Conversa comprida pesa na aba (cada mensagem é um bloco de DOM com Markdown): a tela guarda só os itens recentes do que
-// chega ao vivo e pinta só o fim da lista, com um botão para trazer os anteriores. Aqui só a conta (testável, sem DOM); o
-// uso está em useChat.ts (guardar) e ChatView.tsx (pintar).
-
-/**
- * Quantos itens do que chega ao vivo a tela guarda. É o mesmo número do servidor (MAX_LIVE_ITEMS em server/chat/process.ts):
- * o que sai daqui já saiu de lá, e volta do transcript quando a conversa é relida (o snapshot põe o histórico até onde o
- * stream começa).
- */
-export const LIVE_KEEP = 400;
+// Conversa comprida pesa na aba (cada mensagem é um bloco de DOM com Markdown): a tela pinta só o fim da lista, com um botão
+// para trazer os anteriores. O que pesa é o DOM, e ele fica limitado aqui; os itens em si ficam todos (o servidor é que corta
+// a memória dele, e o snapshot completa o resto pelo transcript). A tela NÃO corta o que chega ao vivo: o histórico ficaria no
+// ponto em que foi lido e o que saísse daqui sumiria da conversa, sem aviso. Aqui só a conta (testável, sem DOM); o uso está em
+// useChat.ts (juntar) e ChatView.tsx (pintar).
 
 /** Quantos itens do fim a lista pinta de começo, e quantos mais cada clique em "mostrar anteriores" traz. */
 export const WINDOW_STEP = 200;
@@ -18,19 +13,26 @@ export const WINDOW_STEP = 200;
 const asksYou = (i: ChatItem): boolean => i.kind === 'permission' && i.status === 'pending';
 
 /**
- * Corta o que veio ao vivo para os últimos `keep` itens. Ficam além do limite os pedidos sem resposta e as ferramentas
- * que ainda rodam (sem resultado): o resultado, ao chegar, troca o item pelo id.
+ * Um evento do stream aplicado ao que veio ao vivo. O item que chega com um id que já existe o troca (o texto recomeça); a delta
+ * soma ao texto da resposta que está chegando. O stream da tela começa no `seq` do snapshot (ver ChatSnapshot.live), então os
+ * itens do snapshot e estes eventos se encaixam sem repetir nem faltar.
  */
-export function trimLive(items: ChatItem[], keep = LIVE_KEEP): ChatItem[] {
-  if (items.length <= keep) return items;
-  const first = items.length - keep;
-  return items.filter((it, i) => i >= first || asksYou(it) || (it.kind === 'tool' && it.result === null));
+export function applyLive(items: ChatItem[], e: ChatEvent): ChatItem[] {
+  if (e.type === 'item') {
+    const i = items.findIndex((x) => x.id === e.item.id);
+    if (i === -1) return [...items, e.item];
+    const next = items.slice();
+    next[i] = e.item;
+    return next;
+  }
+  if (e.type === 'delta') return items.map((x) => (x.id === e.id && x.kind === 'assistant' ? { ...x, text: x.text + e.text } : x));
+  return items;
 }
 
 /**
- * O histórico (transcript) e o que veio ao vivo, numa lista só. O servidor corta o histórico no instante em que o stream
- * começa; a folga de milissegundos entre os dois relógios pode repetir o item da emenda (uma ferramenta tem o mesmo id nos
- * dois): fica o ao vivo, que é o mais novo.
+ * O histórico (transcript) e o que veio ao vivo, numa lista só. O servidor corta o histórico no instante em que o primeiro item
+ * ao vivo começa; a folga de milissegundos entre os dois relógios pode repetir o item da emenda (uma ferramenta tem o mesmo id
+ * nos dois): fica o ao vivo, que é o mais novo.
  */
 export function mergeItems(history: ChatItem[], live: ChatItem[], held: ChatItem[]): ChatItem[] {
   if (!live.length) return [...history, ...held];

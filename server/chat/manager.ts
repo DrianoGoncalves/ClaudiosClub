@@ -27,6 +27,7 @@ import type {
 import { writeAtomic } from '../staff/store';
 import { codexHistoryOf } from '../adapters/codex/rollout';
 import { MAX_ITEMS, readHistory, TAIL_BYTES } from './history';
+import { dropSeamEchoes } from './seam';
 import type { CodexSpawn } from './codexArgs';
 import type { CodexEnvStatus } from '../codexEnv';
 import type { CodexModelInfo } from '../codexModels';
@@ -171,12 +172,12 @@ const AUTONOMY_NAME: Record<Autonomy, string> = {
   bypassPermissions: 'sem travas',
 };
 
-/** Onde a sessão está aberta e como liberar. */
 /** Aviso no topo do histórico: o que passou do limite da conversa ao vivo e do trecho lido do transcript só está no arquivo. A tela o escreve no idioma dela (`note`). */
 function olderInFile(): ChatItem {
   return { kind: 'notice', id: 'n:older-in-file', text: 'Mensagens mais antigas ficam só no arquivo da conversa.', tone: 'info', at: null, note: 'older-in-file' };
 }
 
+/** Onde a sessão está aberta e como liberar. */
 function holdMessage(o: NonNullable<ChatSnapshot['elsewhere']>): string {
   if (o.orphan) return `ficou um processo do Claudio’s Club de antes do reinício do servidor (pid ${o.pid}): clique em Trazer para encerrá-lo`;
   const where = o.entrypoint === 'claude-desktop' ? 'no app do Claude' : o.entrypoint === 'sdk-cli' ? 'em outro programa (sdk-cli)' : 'num terminal';
@@ -303,20 +304,26 @@ export class ChatManager {
 
   async snapshot(projectId: string, sessionId: string): Promise<ChatSnapshot> {
     const chat = this.chats.get(sessionId);
+    // Itens, `seq` e corte saem da mesma foto, num passo síncrono (nenhum `await` entre eles): o histórico vai até onde estes
+    // itens começam e a tela abre o stream depois deste `seq`. O que chegar (ou sair da memória) durante as leituras abaixo
+    // não se perde: os itens já estão aqui, e os eventos novos vêm no stream.
     const live = chat?.running ? chat.snapshot() : null;
+    const cut = live && chat && !this.forks.has(sessionId) ? chat.cut : null;
     let file = await findTranscript(this.opts.transcriptsDir, projectId, sessionId);
     // Cópia recém-duplicada: o Claude Code só grava o transcript dela na primeira mensagem; até lá,
     // o histórico é o da original.
     const source = this.forks.get(sessionId);
     if (source && !(await fs.access(file).then(() => true, () => false))) file = await findTranscript(this.opts.transcriptsDir, projectId, source);
-    // Com processo aberto, o histórico vai até o início dele; o resto vem pelo SSE. Se a conversa já passou do limite de itens
-    // do processo (ver MAX_LIVE_ITEMS), o stream só repete os mais recentes: o histórico vai até onde eles começam.
-    const cut = live && !source ? chat!.cut : null;
+    // Com processo aberto, o histórico vai até o início dele; o resto vem em `live`. Se a conversa já passou do limite de itens
+    // do processo (ver MAX_LIVE_ITEMS), `live` só tem os mais recentes: o histórico vai até onde eles começam.
     const before = live && !source ? (cut?.before ?? chat!.startedAt) : undefined;
     // Sem transcript do Claude, a conversa é do Codex: o histórico vem do rollout dele (ver adapters/codex/rollout.ts).
     const claude = await fs.access(file).then(() => true, () => false);
     const codex = claude ? null : await codexHistoryOf(this.runDir, sessionId, { before }).catch(() => null);
-    const { items, context } = codex ?? (await readHistory(file, { before }));
+    const read = codex ?? (await readHistory(file, { before }));
+    const { context } = read;
+    // Os ids do rollout não são os do vivo (`a:<ordinal>` x `a:<execução>:<id>`): a mesma resposta pode estar nos dois lados da emenda.
+    const items = codex && cut && live ? dropSeamEchoes(read.items, live.items) : read.items;
     // O histórico é só o fim do transcript (MAX_ITEMS itens, TAIL_BYTES do arquivo): se não chega ao item mais antigo que saiu
     // da conversa ao vivo, um aviso no topo diz que o resto está no arquivo.
     const older = cut && (await this.historyStopsShort(items, cut.oldest, claude ? file : null)) ? [olderInFile()] : [];

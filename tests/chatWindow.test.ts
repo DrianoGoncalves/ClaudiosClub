@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatItem } from '../shared/model';
-import { LIVE_KEEP, mergeItems, renderWindow, trimLive, WINDOW_STEP } from '../client/src/chat/chatWindow';
+import { applyLive, mergeItems, renderWindow, WINDOW_STEP } from '../client/src/chat/chatWindow';
 
 const msg = (n: number): ChatItem => ({ kind: 'assistant', id: `a:${n}`, text: `resposta ${n}`, at: null });
 const run = (n: number, result: string | null = null): ChatItem => ({ kind: 'tool', id: `t:${n}`, name: 'Bash', summary: 'ls', input: '', result, isError: false, at: null });
@@ -8,27 +8,37 @@ const ask = (n: number, status: 'pending' | 'allowed' = 'pending'): ChatItem => 
 const many = (n: number, from = 0) => Array.from({ length: n }, (_, i) => msg(from + i));
 const idsOf = (items: ChatItem[]) => items.map((i) => i.id);
 
-describe('conversa ao vivo na tela: só os últimos itens ficam', () => {
-  it('é o mesmo limite do servidor e o passo da janela é 200', () => {
-    expect(LIVE_KEEP).toBe(400);
+describe('conversa ao vivo na tela: o stream se aplica ao que veio no snapshot', () => {
+  it('o passo da janela é 200', () => {
     expect(WINDOW_STEP).toBe(200);
   });
 
-  it('até o limite, a lista não muda (nem a referência)', () => {
-    const items = many(LIVE_KEEP);
-    expect(trimLive(items)).toBe(items);
+  it('item novo entra no fim; o mesmo id troca o item (o texto recomeça)', () => {
+    const a = msg(1);
+    const out = applyLive([a], { type: 'item', seq: 5, item: msg(2) });
+    expect(idsOf(out)).toEqual(['a:1', 'a:2']);
+    const swapped = applyLive(out, { type: 'item', seq: 6, item: { kind: 'assistant', id: 'a:1', text: 'de novo', at: null } });
+    expect(swapped.map((i) => (i.kind === 'assistant' ? i.text : ''))).toEqual(['de novo', 'resposta 2']);
   });
 
-  it('passou do limite: ficam os últimos, na ordem', () => {
-    const out = trimLive(many(LIVE_KEEP + 50));
-    expect(out).toHaveLength(LIVE_KEEP);
-    expect(out[0]!.id).toBe('a:50');
-    expect(out.at(-1)!.id).toBe(`a:${LIVE_KEEP + 49}`);
+  it('delta soma ao texto da resposta; para id que não existe ou não é resposta, nada muda', () => {
+    const items = [msg(1), run(1)];
+    const out = applyLive(items, { type: 'delta', seq: 3, id: 'a:1', text: '!' });
+    expect(out[0]).toMatchObject({ text: 'resposta 1!' });
+    expect(applyLive(items, { type: 'delta', seq: 4, id: 'a:9', text: 'x' })).toEqual(items);
+    expect(applyLive(items, { type: 'delta', seq: 5, id: 't:1', text: 'x' })).toEqual(items);
   });
 
-  it('pedido sem resposta e ferramenta rodando ficam, por mais antigos; respondido e terminada saem', () => {
-    const items = [ask(1), ask(2, 'allowed'), run(1), run(2, 'ok'), ...many(10, 100)];
-    expect(idsOf(trimLive(items, 3))).toEqual(['p:1', 't:1', 'a:107', 'a:108', 'a:109']);
+  it('evento de estado não mexe nos itens', () => {
+    const items = [msg(1)];
+    expect(applyLive(items, { type: 'state', seq: 2, state: {} as never })).toBe(items);
+  });
+
+  it('a tela não corta o que chega (o histórico não alcançaria o que saísse do meio)', () => {
+    let items: ChatItem[] = [];
+    for (let i = 0; i < 1_000; i++) items = applyLive(items, { type: 'item', seq: i + 1, item: msg(i) });
+    expect(items).toHaveLength(1_000);
+    expect(items[0]!.id).toBe('a:0');
   });
 });
 
