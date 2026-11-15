@@ -2,7 +2,8 @@ import type { StaffProfile, Task } from '../shared/model';
 
 // Conversas que a retenção NUNCA arquiva, mesmo paradas além do prazo:
 // - a última de cada ficha (o cartão do funcionário precisa de uma sessão para aparecer; ver layout.ts);
-// - as ligadas a tarefa não concluída (a conversa da execução, a da revisão, a do deploy e a do gestor numa dúvida).
+// - as ligadas a tarefa não concluída (a conversa da execução, a da revisão, a do deploy e a do gestor numa dúvida). Cancelada também
+//   protege: ela guarda o histórico e pode ser reaberta; só pronta ('done') solta.
 
 /** Os ids de sessão que não podem sair da lista pela retenção (o conjunto de um projeto). */
 export function retainedSessionIds(staff: ReadonlyArray<Pick<StaffProfile, 'sessions'>>, tasks: ReadonlyArray<Task>): Set<string> {

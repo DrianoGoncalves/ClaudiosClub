@@ -39,7 +39,7 @@ import { listRoles } from '../roles';
 import { readUsage } from '../usage';
 import { atMostAutonomy } from '../taskFallback';
 import { projectBudgetHit, usageStopHit, UsageStopError } from '../usageStop';
-import { TEMP_IDLE_DAYS } from '../../shared/model';
+import { isClosed, TEMP_IDLE_DAYS } from '../../shared/model';
 import { codexModelOrNull, type CodexSpawn } from '../chat/codexArgs';
 import type { CodexEnvStatus } from '../codexEnv';
 import type { CodexModelsResult } from '../codexModels';
@@ -948,7 +948,7 @@ export class StaffService {
     }
     // Tarefa aberta (não pronta) como executora ou revisora: sem `force`, recusa; com ele, a tarefa fica sem responsável.
     const open = ((await this.opts.tasksOf?.(projectId)) ?? []).filter(
-      (t) => (t.staffId === staffId || t.reviewerId === staffId) && t.status !== 'done',
+      (t) => (t.staffId === staffId || t.reviewerId === staffId) && !isClosed(t),
     ).length;
     if (open > 0 && !parsed.data.force) {
       throw new StaffOpenTasksError(

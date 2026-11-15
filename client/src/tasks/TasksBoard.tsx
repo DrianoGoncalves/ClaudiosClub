@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
-import { type CostReport, type StaffProfile, type Task as TaskModel, type TaskHandoff, type TaskStatus } from '../../../shared/model';
+import { AUTO_REVIEW_ROUNDS, isClosed, type CostReport, type StaffProfile, type Task as TaskModel, type TaskHandoff, type TaskStatus } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
 import { pollVisible } from '../usePoll';
 import { Markdown } from '../chat/markdown';
@@ -11,17 +11,19 @@ import { ReviewDelegate } from './ReviewDelegate';
 import { TaskCodePanel } from './TaskCodePanel';
 import { DoubtBadge, DoubtBlock } from './TaskDoubt';
 import { ResourceWaitBadge, resourceWaitText } from './ResourceWait';
-import { BlockedBadge, BlockedByField, openBlockers, sameDeps } from './TaskDeps';
+import { BlockedBadge, BlockedByField, blockerName, openBlockers, sameDeps } from './TaskDeps';
+import { cancelledByName, dependentRows, type DepMap, type DepMode } from './cancelDeps';
+import { TaskCloseDialog } from './TaskCloseDialog';
 import { TaskCostBlock } from './TaskCostBlock';
 import { TaskRuns } from './TaskRuns';
 
 // Quadro de tarefas de um projeto: aguardar → a fazer → fazendo → revisão → pronto.
-// Os status são 6 (ver server/tasks.ts); na tela, "planejando" vai em Fazendo.
+// Os status são 7 (ver server/tasks.ts); na tela, "planejando" vai em Fazendo, e "cancelada" não é coluna: fica num grupo recolhido no fim de Pronto.
 // Arrastar um cartão muda a coluna; o resto anda sozinho com a conversa da tarefa.
 
 /**
  * Revisão automática (contrato com o servidor): `reviewerId` preenchido = ligada; `reviewRounds` = rodadas já
- * feitas (até REVIEW_ROUNDS_MAX); o veredito vem em `review.verdict`.
+ * feitas (até AUTO_REVIEW_ROUNDS); o veredito vem em `review.verdict`.
  */
 type Task = TaskModel & {
   reviewerId?: string | null;
@@ -29,7 +31,6 @@ type Task = TaskModel & {
   review?: (TaskHandoff & { verdict?: 'approved' | 'rejected' | null }) | null;
 };
 type TaskPatch = Parameters<typeof api.updateTask>[2];
-const REVIEW_ROUNDS_MAX = 3;
 /** Limites do servidor (TaskInput em server/tasks.ts). */
 const GOAL_MAX = 300;
 const ACCEPTANCE_MAX = 2000;
@@ -42,8 +43,8 @@ const COLUMNS: { status: TaskStatus; shows: TaskStatus[] }[] = [
   { status: 'review', shows: ['review'] },
   { status: 'done', shows: ['done'] },
 ];
-/** A coluna em que o status aparece. */
-const columnOf = (s: TaskStatus) => COLUMNS.find((c) => c.shows.includes(s))!.status;
+/** A coluna em que o status aparece (a cancelada não tem: fica no grupo recolhido de Pronto, e não se arrasta). */
+export const columnOf = (s: TaskStatus): TaskStatus | null => COLUMNS.find((c) => c.shows.includes(s))?.status ?? null;
 
 /**
  * Ordem dentro da coluna: a última atualização no topo. Plano para aprovar (planejando) vai antes de tudo,
@@ -78,6 +79,7 @@ const LABEL: Record<TaskStatus, string> = {
   doing: t('tasks.statusDoing'),
   review: t('tasks.statusReview'),
   done: t('tasks.statusDone'),
+  cancelled: t('tasks.statusCancelled'),
 };
 
 const HELP: Record<TaskStatus, string> = {
@@ -87,6 +89,7 @@ const HELP: Record<TaskStatus, string> = {
   doing: t('tasks.helpDoing'),
   review: t('tasks.helpReview'),
   done: t('tasks.helpDone'),
+  cancelled: t('tasks.helpCancelled'),
 };
 
 /**
@@ -136,6 +139,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<TaskStatus | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [showCancelled, setShowCancelled] = useState(false);
+  /** Diálogo de cancelar ou apagar aberto, para a tarefa `id`. */
+  const [closing, setClosing] = useState<{ mode: DepMode; id: string } | null>(null);
   const now = Date.now();
 
   const load = useCallback(() => {
@@ -149,13 +155,19 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   }, [load]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && (selected ? setSelected(null) : onClose());
+    // Com o diálogo de cancelar/apagar aberto, o Esc é dele (fecha só o diálogo).
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !closing && (selected ? setSelected(null) : onClose());
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose, selected]);
+  }, [onClose, selected, closing]);
 
   // O erro de uma tarefa não segue para a próxima.
   useEffect(() => setError(null), [selected]);
+
+  // A tarefa do diálogo sumiu (apagada aqui ou em outra aba): o diálogo fecha.
+  useEffect(() => {
+    if (closing && tasks && !tasks.some((x) => x.id === closing.id)) setClosing(null);
+  }, [closing, tasks]);
 
   const act = async (fn: () => Promise<unknown>) => {
     setError(null);
@@ -171,6 +183,17 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const move = (t: Task, status: TaskStatus) => t.status !== status && act(() => api.updateTask(projectId, t.id, { status }));
   const start = (t: Task) => act(() => withUsageConfirm((force) => api.startTask(projectId, t.id, force)));
   const nameOf = (id: string | null) => staff.find((s) => s.id === id)?.name ?? null;
+  /** Cancelar ou apagar, já com a resposta do diálogo (o erro vai para ele, que continua aberto). */
+  const closeTask = async (task: Task, mode: DepMode, input: { reason?: string; dependents: DepMap }) => {
+    const dependents = Object.keys(input.dependents).length ? input.dependents : undefined;
+    if (mode === 'cancel') await api.cancelTask(projectId, task.id, { ...(input.reason && { reason: input.reason }), ...(dependents && { dependents }) });
+    else {
+      await api.deleteTask(projectId, task.id, dependents);
+      setSelected(null);
+    }
+    load();
+    onChanged();
+  };
   const costOf = (t: Task) => {
     const usd = t.sessionId ? costs?.projects[projectId]?.sessions[t.sessionId] : undefined;
     return usd !== undefined && costs?.total.usd ? formatShare(usd, costs.total.usd) : null;
@@ -187,12 +210,15 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const waitingOn = (t: Task) => (!t.sessionId && (t.status === 'todo' || t.status === 'waiting') ? openBlockers(t, tasks ?? []) : []);
   /** Pronto parado há mais de 7 dias (o servidor marca): fora do quadro, atrás do "Ver arquivadas". */
   const archived = (tasks ?? []).filter((t) => t.archived);
+  /** Canceladas: fora das colunas, no grupo recolhido de Pronto. Nunca contam como prontas. */
+  const cancelled = (tasks ?? []).filter((t) => t.status === 'cancelled');
+  const closingTask = closing ? (tasks?.find((t) => t.id === closing.id) ?? null) : null;
 
   const card = (task: Task) => (
     <Fragment key={task.id}>
       <button
-        className={`task-card ${selected === task.id ? 'is-selected' : ''} ${task.archived ? 'is-archived' : ''} ${task.status === 'planning' ? 'is-waiting' : ''}`}
-        draggable
+        className={`task-card ${selected === task.id ? 'is-selected' : ''} ${task.archived || task.status === 'cancelled' ? 'is-archived' : ''} ${task.status === 'planning' ? 'is-waiting' : ''}`}
+        draggable={task.status !== 'cancelled'}
         onDragStart={() => setDragging(task.id)}
         onDragEnd={() => setDragging(null)}
         onClick={() => setSelected(task.id)}
@@ -209,6 +235,12 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
           {task.requestedBy && ` · ${t('tasks.requestedBy', { name: nameOf(task.requestedBy) ?? task.requestedBy })}`}
           {costOf(task) && ` · ${costOf(task)}`} · {formatAgo(now - Date.parse(task.updatedAt))}
         </span>
+        {task.status === 'cancelled' && (
+          <span className="task-run-note muted small" title={task.cancelReason ?? undefined}>
+            {t('tasks.cancelledBy', { name: cancelledByName(task.cancelledBy, nameOf, t('tasks.byYou')) })}
+            {task.cancelReason && ` · ${task.cancelReason}`}
+          </span>
+        )}
         {task.branch && (
           <span className="task-branch small">
             <BranchIcon /> {task.branch}
@@ -217,7 +249,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         {task.reviewerId && (
           <span className="task-reviewer small" title={t('tasks.autoReviewHint', { name: nameOf(task.reviewerId) ?? task.reviewerId })}>
             <ReviewIcon /> {nameOf(task.reviewerId) ?? task.reviewerId}
-            {!!task.reviewRounds && ` · ${t('tasks.reviewRounds', { n: task.reviewRounds, max: REVIEW_ROUNDS_MAX })}`}
+            {!!task.reviewRounds && ` · ${t('tasks.reviewRounds', { n: task.reviewRounds, max: AUTO_REVIEW_ROUNDS })}`}
           </span>
         )}
         {task.fallback && <TaskFallbackBadge fallback={task.fallback} />}
@@ -320,7 +352,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                     setOver(null);
                     const t = tasks.find((x) => x.id === dragging);
                     // Na mesma coluna não muda nada (plano para aprovar continua plano; no ar continua no ar).
-                    if (t && columnOf(t.status) !== status) void move(t, status);
+                    if (t && t.status !== 'cancelled' && columnOf(t.status) !== status) void move(t, status);
                     setDragging(null);
                   }}
                 >
@@ -339,6 +371,15 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                         {showArchived ? t('tasks.hideArchived') : t('tasks.showArchived', { n: archived.length })}
                       </button>
                       {showArchived && byRecent(archived).map(card)}
+                    </>
+                  )}
+                  {/* Canceladas: o mesmo grupo recolhido das arquivadas, no fim de Pronto (fechou sem entrega, então não é "pronta"). */}
+                  {status === 'done' && cancelled.length > 0 && (
+                    <>
+                      <button className="link small tasks-archived-toggle" aria-expanded={showCancelled} title={HELP.cancelled} onClick={() => setShowCancelled((v) => !v)}>
+                        {showCancelled ? t('tasks.hideCancelled') : t('tasks.showCancelled', { n: cancelled.length })}
+                      </button>
+                      {showCancelled && byRecent(cancelled).map(card)}
                     </>
                   )}
                 </section>
@@ -369,13 +410,29 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             queuePos={queuePos(current)}
             onUnqueue={() => void act(() => api.updateTask(projectId, current.id, { queued: false }))}
             onOpen={() => current.staffId && onOpenStaff(current.staffId)}
-            onDelete={() =>
-              window.confirm(t('tasks.confirmDelete', { title: current.title })) &&
-              void act(async () => {
-                await api.deleteTask(projectId, current.id);
-                setSelected(null);
-              })
-            }
+            nameOf={nameOf}
+            onCancel={() => setClosing({ mode: 'cancel', id: current.id })}
+            onReopen={() => void act(() => api.reopenTask(projectId, current.id))}
+            onDelete={() => {
+              // Com tarefas esperando por esta, apagar pede decidir o que fazer com elas (o diálogo); sem elas, segue como sempre.
+              if (dependentRows(current.id, tasks ?? []).length) return setClosing({ mode: 'delete', id: current.id });
+              if (window.confirm(t('tasks.confirmDelete', { title: current.title })))
+                void act(async () => {
+                  await api.deleteTask(projectId, current.id);
+                  setSelected(null);
+                });
+            }}
+          />
+        )}
+        {closing && closingTask && (
+          <TaskCloseDialog
+            key={`${closing.mode}:${closing.id}`}
+            mode={closing.mode}
+            task={closingTask}
+            tasks={tasks ?? []}
+            nameOf={nameOf}
+            onConfirm={(input) => closeTask(closingTask, closing.mode, input)}
+            onClose={() => setClosing(null)}
           />
         )}
       </div>
@@ -389,6 +446,12 @@ function StatusBadge({ task, hasDeploy }: { task: Task; hasDeploy: boolean }) {
     return (
       <span className="task-badge is-waiting" title={HELP.planning}>
         {t('tasks.badgePlan')}
+      </span>
+    );
+  if (task.status === 'cancelled')
+    return (
+      <span className="task-badge small" title={HELP.cancelled}>
+        {LABEL.cancelled}
       </span>
     );
   if (task.status === 'done' && hasDeploy)
@@ -430,7 +493,7 @@ function ReviewerField({
   const options = staff.filter((s) => s.id !== ownerId);
   return (
     <>
-      <label className="check" title={options.length ? t('tasks.autoReviewHelp') : t('tasks.autoReviewNobody')}>
+      <label className="check" title={options.length ? t('tasks.autoReviewHelp', { n: AUTO_REVIEW_ROUNDS }) : t('tasks.autoReviewNobody')}>
         <input
           type="checkbox"
           checked={!!value}
@@ -598,6 +661,9 @@ function TaskDetail({
   onUnqueue,
   onOpen,
   onDelete,
+  onCancel,
+  onReopen,
+  nameOf,
   onChanged,
   onOpenStaff,
 }: {
@@ -615,14 +681,19 @@ function TaskDetail({
   error: string | null;
   /** Todas as tarefas do projeto (as candidatas a dependência). */
   tasks: Task[];
-  /** As dependências que ainda seguram esta tarefa. */
-  waitingOn: { id: string; title: string }[];
+  /** As dependências que ainda seguram esta tarefa (a cancelada continua segurando). */
+  waitingOn: { id: string; title: string; status: TaskStatus }[];
   /** A tarefa em que o responsável está agora (aí "Começar" põe na fila). */
   busyWith: Task | null;
   queuePos: number;
   onUnqueue: () => void;
   onOpen: () => void;
   onDelete: () => void;
+  /** Abre o diálogo de cancelar (toda tarefa não encerrada). */
+  onCancel: () => void;
+  /** Reabre a cancelada. */
+  onReopen: () => void;
+  nameOf: (staffId: string | null) => string | null;
 }) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
@@ -746,9 +817,23 @@ function TaskDetail({
         nameOf={(id) => staff.find((s) => s.id === id)?.name ?? null}
         now={Date.now()}
       />
+      {task.status === 'cancelled' && (
+        // Uma frase por linha (quem e quando; o motivo; o que a coluna significa), no tamanho de parágrafo do painel.
+        <div className="task-cancelled">
+          <p>
+            {t('tasks.cancelledDetail', {
+              name: cancelledByName(task.cancelledBy, nameOf, t('tasks.byYou')),
+              when: new Date(task.cancelledAt ?? task.updatedAt).toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }),
+            })}
+          </p>
+          {task.cancelReason && <p>{t('tasks.cancelledWhy', { reason: task.cancelReason })}</p>}
+          <p className="muted">{HELP.cancelled}</p>
+        </div>
+      )}
       {waitingOn.length > 0 && (
         <p className="muted small">
-          {t('tasks.blockedDetail', { names: waitingOn.map((o) => `“${o.title}”`).join(', ') })}{' '}
+          {t('tasks.blockedDetail', { names: waitingOn.map(blockerName).join(', ') })}
+          {waitingOn.some((o) => o.status === 'cancelled') && ` ${t('tasks.blockedCancelledHint')}`}{' '}
           {queuePos > 0 && (
             <button className="link small" onClick={onUnqueue}>
               {t('tasks.unqueue')}
@@ -778,7 +863,12 @@ function TaskDetail({
         </p>
       )}
       <p className="actions">
-        {!task.sessionId && queuePos === 0 && (
+        {task.status === 'cancelled' && (
+          <button className="btn-primary" onClick={onReopen} title={t('tasks.reopenHint')}>
+            {t('tasks.reopen')}
+          </button>
+        )}
+        {!task.sessionId && queuePos === 0 && task.status !== 'cancelled' && (
           <button
             className="btn-primary"
             disabled={!task.staffId}
@@ -806,13 +896,16 @@ function TaskDetail({
             {t('tasks.approve')}
           </button>
         )}
-        <select className="task-move" value={columnOf(task.status)} onChange={(e) => onMove(e.target.value as TaskStatus)} aria-label={t('tasks.moveTo')}>
-          {COLUMNS.map(({ status: s }) => (
-            <option key={s} value={s}>
-              {t('tasks.moveOption', { status: LABEL[s] })}
-            </option>
-          ))}
-        </select>
+        {/* A cancelada não muda de coluna: o servidor pede reabrir antes. */}
+        {task.status !== 'cancelled' && (
+          <select className="task-move" value={columnOf(task.status) ?? ''} onChange={(e) => onMove(e.target.value as TaskStatus)} aria-label={t('tasks.moveTo')}>
+            {COLUMNS.map(({ status: s }) => (
+              <option key={s} value={s}>
+                {t('tasks.moveOption', { status: LABEL[s] })}
+              </option>
+            ))}
+          </select>
+        )}
       </p>
       {task.status === 'review' && <ReviewDelegate projectId={projectId} task={task} staff={byHierarchy(staff)} onChanged={onChanged} onOpenStaff={onOpenStaff} />}
       {task.sessionId && (
@@ -844,6 +937,11 @@ function TaskDetail({
       </details>
       <TaskRuns projectId={projectId} taskId={task.id} version={`${task.updatedAt}:${task.runId ?? ''}`} />
       <p className="actions">
+        {!isClosed(task) && (
+          <button className="btn-secondary" onClick={onCancel} title={t('tasks.cancelTaskHint')}>
+            {t('tasks.cancelTask')}
+          </button>
+        )}
         <button className="btn-secondary task-delete" onClick={onDelete}>
           {t('tasks.deleteTask')}
         </button>

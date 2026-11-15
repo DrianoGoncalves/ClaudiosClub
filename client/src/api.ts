@@ -68,6 +68,7 @@ import { locale, t } from './i18n';
 import { askUsageStop } from './chat/usageNotice';
 import type { GuideAction } from './detail/guideActions';
 import type { Schedule } from './schedules/scheduleView';
+import type { DepChoice, DepMap } from './tasks/cancelDeps';
 import type { McpSaveBody, McpScope, McpServer } from './office/mcpForm';
 
 /**
@@ -638,7 +639,17 @@ export const api = {
   /** Efetivar um temporário (contratado por outro funcionário). */
   keepStaff: (projectId: string, staffId: string) => post<StaffProfile>(`/api/projects/${projectId}/staff/${staffId}/keep`),
   startTask: (projectId: string, taskId: string, force = false) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/start`, { force }),
-  deleteTask: (projectId: string, taskId: string) => post<{ ok: boolean }>(`/api/projects/${projectId}/tasks/${taskId}/delete`),
+  /** Apagar. `dependents`: o que fazer com cada tarefa aberta que espera esta (obrigatório para as diretas; sem o mapa completo o servidor recusa com 409). */
+  deleteTask: (projectId: string, taskId: string, dependents?: DepMap) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/tasks/${taskId}/delete`, dependents ? { dependents } : {}),
+  /** Cancelar: fecha sem entrega. `dependents`: o que fazer com quem espera (sem entrada, segue esperando e aparece na caixa). */
+  cancelTask: (projectId: string, taskId: string, body: { reason?: string; dependents?: DepMap } = {}) =>
+    post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/cancel`, body),
+  /** Reabrir a cancelada: volta para "a fazer", fora da fila. */
+  reopenTask: (projectId: string, taskId: string) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/reopen`),
+  /** O que fazer com `taskId` (a que espera) agora que `blockerId` foi cancelada: liberar, cancelar junto ou continuar esperando. */
+  taskBlocker: (projectId: string, taskId: string, blockerId: string, action: DepChoice) =>
+    post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/blocker`, { blockerId, action }),
   saveRoutines: (projectId: string, staffId: string, routines: Routine[]) =>
     post<StaffProfile>(`/api/projects/${projectId}/staff/${staffId}/routines`, { routines }),
   runRoutine: (projectId: string, staffId: string, routineId: string) =>

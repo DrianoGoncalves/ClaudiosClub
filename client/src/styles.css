@@ -639,6 +639,9 @@ textarea.q-field { resize: vertical; }
 .task-detail { position: absolute; z-index: 3; top: 0; right: 0; bottom: 0; width: min(420px, 100%); overflow-y: auto; background: var(--panel-glass); border-left: 1px solid var(--line); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; box-shadow: -10px 0 30px rgba(0, 0, 0, 0.15); }
 .task-detail-head { display: flex; align-items: center; justify-content: space-between; }
 .task-detail .actions { flex-wrap: wrap; }
+/* Detalhe da cancelada: uma frase por linha; sem a margem de parágrafo, que somada ao gap do painel deixava um vazio antes do Reabrir. */
+.task-detail .task-cancelled { display: grid; gap: 4px; }
+.task-detail .task-cancelled p { margin: 0; overflow-wrap: anywhere; }
 .task-move { font: inherit; font-size: 12.5px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
 .task-plan { max-height: 320px; overflow-y: auto; font-size: 13px; }
 .task-history { margin: 0; padding-left: 16px; display: grid; gap: 3px; }
@@ -1307,7 +1310,8 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 /* Assunto da conversa: 1 linha, corta com reticências. Sem assunto a linha não existe e a área fica vazia (altura 0). */
 .inbox-topic { grid-area: topic; font-size: 12px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inbox-summary { grid-area: summary; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.inbox-blocked .inbox-summary { white-space: normal; overflow-wrap: anywhere; }
+.inbox-blocked .inbox-summary, .inbox-notStarted .inbox-summary { white-space: normal; overflow-wrap: anywhere; }
+.inbox-dismiss .error { flex: 1 1 100%; text-align: right; }
 .inbox-at { grid-area: at; white-space: nowrap; }
 /* No celular o botão não fica na borda esquerda: ancorada nele, a caixa saía pela direita. Ocupa a largura da tela. */
 @media (max-width: 480px) {

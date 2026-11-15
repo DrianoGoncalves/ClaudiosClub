@@ -46,6 +46,8 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
   const infra = staff.filter((s) => s.servers.length > 0);
   const [deployer, setDeployer] = useState(infra[0]?.id ?? '');
   const now = Date.now();
+  // Cancelada não entrega: mesclar a levaria a pronto, e não há o que publicar (o servidor também recusa).
+  const cancelled = task.status === 'cancelled';
   const nameOf = (id: string) => staff.find((s) => s.id === id)?.name ?? id;
 
   const load = useCallback(() => {
@@ -188,8 +190,8 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
             <div className="task-code-row">
               <button
                 className="btn-primary"
-                disabled={!!busy || !code.canMerge || !!task.merged}
-                title={task.merged ? t('tasks.alreadyMerged') : (code.whyNot ?? t('tasks.mergeHint'))}
+                disabled={!!busy || !code.canMerge || !!task.merged || cancelled}
+                title={cancelled ? t('tasks.cancelledNoCode') : task.merged ? t('tasks.alreadyMerged') : (code.whyNot ?? t('tasks.mergeHint'))}
                 onClick={() => void merge()}
               >
                 {busy === 'merge' ? t('tasks.merging') : t('tasks.mergeInto', { base: code.base ?? '?' })}
@@ -235,8 +237,8 @@ export function TaskCodePanel({ projectId, task, staff, onChanged, onOpenStaff }
               </select>
               <button
                 className="btn-secondary"
-                disabled={!!busy || !deployer}
-                title={t('tasks.deployHint')}
+                disabled={!!busy || !deployer || cancelled}
+                title={cancelled ? t('tasks.cancelledNoCode') : t('tasks.deployHint')}
                 onClick={() => void run('deploy', () => withUsageConfirm((force) => api.taskDeploy(projectId, task.id, deployer, force)))}
               >
                 {t('tasks.askDeploy')}

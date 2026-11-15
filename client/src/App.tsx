@@ -227,10 +227,11 @@ export function App() {
   const openInbox = useCallback((item: InboxItem) => {
     // Aviso de consumo (conta, sem projeto, ou orçamento de um projeto): não há quem abrir; o que se muda é a trava, em Configurações > Consumo.
     if (item.kind === 'usage') return openSettings('usage');
-    // Tarefa esperando outra empacada: não há conversa; abre o quadro de tarefas do projeto já na tarefa que espera.
-    if (item.kind === 'blocked' && item.blocked) {
+    // Tarefa esperando outra empacada, ou cartão esquecido em "a fazer": não há conversa; abre o quadro de tarefas do projeto já na tarefa.
+    const taskId = item.kind === 'blocked' ? item.blocked?.taskId : item.kind === 'notStarted' ? item.notStarted?.taskId : undefined;
+    if (taskId) {
       setSchedulesFor(null);
-      setJumpTask(item.blocked.taskId);
+      setJumpTask(taskId);
       setTasksFor(item.projectId);
       return;
     }

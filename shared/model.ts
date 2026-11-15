@@ -578,12 +578,28 @@ export interface Routine {
   enabled: boolean;
 }
 
-/** Colunas do quadro de tarefas, na ordem. "waiting" (Aguardar) não é ocupado nem entra na fila. */
-export const TASK_STATUSES = ['waiting', 'todo', 'planning', 'doing', 'review', 'done'] as const;
+/**
+ * Colunas do quadro de tarefas, na ordem. "waiting" (Aguardar) não é ocupado nem entra na fila. "cancelled" não é coluna: é a tarefa
+ * fechada sem entrega (ver `isClosed` e `satisfiesDependency`).
+ */
+export const TASK_STATUSES = ['waiting', 'todo', 'planning', 'doing', 'review', 'done', 'cancelled'] as const;
 
 /** Temporário (contratado por outro funcionário) parado há mais que isso sai do quadro. */
 export const TEMP_IDLE_DAYS = 3;
+/** Por quantos dias "Continuar esperando" esconde da caixa o aviso de uma bloqueadora cancelada; passado o prazo, o item volta (ver `stuckDependencies`). */
+export const ACK_CANCELLED_DAYS = 7;
+/** Quantas revisões automáticas uma tarefa pede antes de ficar com o dono (o servidor limita; a tela mostra `n/AUTO_REVIEW_ROUNDS`). */
+export const AUTO_REVIEW_ROUNDS = 3;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+/** Encerrada: pronta ('done') ou cancelada. Não é aberta (não entra em fila, contagem de abertas nem rotina em andamento). */
+export const isClosed = (t: { status: TaskStatus }): boolean => t.status === 'done' || t.status === 'cancelled';
+
+/**
+ * A tarefa cumpre a dependência de quem espera por ela? Só a pronta ('done'): a cancelada fecha sem entrega e CONTINUA bloqueando
+ * (o dono decide: liberar, cancelar junto ou seguir esperando; ver `TaskService.resolveCancelledBlocker`).
+ */
+export const satisfiesDependency = (t: { status: TaskStatus }): boolean => t.status === 'done';
 
 /**
  * Tarefa de um projeto (`<projeto>/.myco/tasks.json`), entregue a um funcionário. Guarda o que se
@@ -597,8 +613,13 @@ export interface Task {
   goal?: string | null;
   /** Critério de aceite: como quem revisa confere que a entrega está pronta. */
   acceptance?: string | null;
-  /** Dependências: tarefas do mesmo projeto que precisam estar prontas ('done') antes de esta começar (ver `blockers` em server/tasks.ts). */
+  /** Dependências: tarefas do mesmo projeto que precisam estar prontas ('done') antes de esta começar (ver `blockers` em server/tasks.ts). Cancelada bloqueia. */
   blockedBy?: string[];
+  /**
+   * Dependências canceladas que o dono já viu e mandou continuar esperando, com o momento em que mandou: o aviso some da caixa por
+   * ACK_CANCELLED_DAYS e depois volta, ou até a bloqueadora ser reaberta (ver `stuckDependencies`).
+   */
+  ackCancelled?: Array<{ id: string; at: string }>;
   /** Último motivo avisado aos gestores de quem espera esta tarefa (ver TaskService.doWarnDependents); limpo quando ela volta a andar ou fica pronta. */
   blockAlert?: string | null;
   status: TaskStatus;
@@ -621,13 +642,17 @@ export interface Task {
   archived?: boolean;
   /** Quando passou a contar como arquivada (updatedAt + 7 dias); só presente se `archived`. */
   archivedAt?: string;
+  /** Cancelamento (status 'cancelled'): quando, o motivo (opcional) e quem cancelou ('user' = você pela tela, ou o id do funcionário). Limpos ao reabrir. */
+  cancelledAt?: string;
+  cancelReason?: string | null;
+  cancelledBy?: string;
   /** Mudanças de coluna, a mais recente por último (no máximo 30). */
   history: Array<{ at: string; status: TaskStatus; by: 'you' | 'auto'; note?: string }>;
   /** Revisão pedida a outro funcionário (a conversa dele). */
   review?: TaskHandoff | null;
   /** Revisor automático: quando a tarefa é entregue, ele revisa sozinho; null/ausente = sem revisão automática. */
   reviewerId?: string | null;
-  /** Rodadas de revisão automática já pedidas (no máximo 2). */
+  /** Rodadas de revisão automática já pedidas (no máximo AUTO_REVIEW_ROUNDS). */
   reviewRounds?: number;
   /** Reprovações que devolveram a tarefa para ajuste (manuais ou automáticas). Ausente = nenhuma. */
   reworkRounds?: number;
@@ -726,7 +751,7 @@ export interface TaskProgress {
   max: number;
 }
 
-/** Tarefas de um projeto para o cabeçalho: abertas (tudo que não é pronto) e em revisão. */
+/** Tarefas de um projeto para o cabeçalho: abertas (tudo que não está encerrado: nem pronto nem cancelado) e em revisão. */
 export interface TaskSummary {
   open: number;
   review: number;
@@ -1258,7 +1283,7 @@ export type QuestionAnswers = Record<string, string | string[]>;
 export type QuestionAnnotations = Record<string, { preview?: string; notes?: string }>;
 
 /** O que espera você, de todas as salas (a caixa "precisa de mim"). */
-export type InboxKind = 'plan' | 'permission' | 'secret' | 'waiting' | 'error' | 'routine' | 'orphan' | 'usage' | 'blocked';
+export type InboxKind = 'plan' | 'permission' | 'secret' | 'waiting' | 'error' | 'routine' | 'orphan' | 'usage' | 'blocked' | 'notStarted';
 
 /** Um turno que acabou (trabalhando → parado): vira o aviso "Fulano terminou". */
 export interface TurnNotice {
@@ -1302,6 +1327,12 @@ export interface InboxItem {
   secret?: { kind: SecretKind; detail?: string; source?: SecretSource };
   /** Tarefa que espera outra empacada (kind 'blocked', ver stuckDependencies em server/tasks.ts): quem espera, a bloqueadora, o estado dela e o motivo. */
   blocked?: { taskId: string; taskTitle: string; blockerId: string; blockerTitle: string; blockerStatus: TaskStatus; reason: string };
+  /**
+   * Cartão esquecido (kind 'notStarted', ver notStartedTasks em server/tasks.ts): tarefa em "a fazer", fora da fila e sem bloqueadora, parada há `days`
+   * dias (inteiros, no mínimo 2). `staffId` é o responsável (null = sem responsável: "Começar" pede escolher um). O item não leva `staffId`
+   * no topo: não é conversa esperando, e o cartão do funcionário não deve ficar amarelo por isso.
+   */
+  notStarted?: { taskId: string; taskTitle: string; days: number; staffId: string | null };
 }
 
 export interface ContextUsage {

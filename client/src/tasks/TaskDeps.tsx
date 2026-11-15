@@ -1,4 +1,4 @@
-import type { Task, TaskStatus } from '../../../shared/model';
+import { isClosed, satisfiesDependency, type Task, type TaskStatus } from '../../../shared/model';
 import { t } from '../i18n';
 
 // Dependências da tarefa ("Bloqueada por"): outras tarefas do mesmo projeto que precisam estar prontas antes.
@@ -9,21 +9,26 @@ export const MAX_DEPS = 20;
 
 type DepTask = Pick<Task, 'id' | 'title' | 'status'>;
 
-/** As dependências de `task` que ainda seguram ela: existem no projeto e não estão prontas (a regra de `blockers`, no servidor). */
+/** As dependências de `task` que ainda seguram ela: existem no projeto e não estão prontas (a regra de `blockers`, no servidor). Cancelada continua segurando. */
 export function openBlockers(task: Pick<Task, 'blockedBy'>, tasks: DepTask[]): DepTask[] {
-  return (task.blockedBy ?? []).flatMap((id) => tasks.find((o) => o.id === id && o.status !== 'done') ?? []);
+  return (task.blockedBy ?? []).flatMap((id) => tasks.find((o) => o.id === id && !satisfiesDependency(o)) ?? []);
 }
+
+const cancelledTag = (o: Pick<DepTask, 'status'>) => (o.status === 'cancelled' ? ` (${t('tasks.cancelledTag')})` : '');
+/** O nome da bloqueadora no selo e no detalhe: “Título”, e "(cancelada)" quando ela fechou sem entrega (não vai ficar pronta). */
+export const blockerName = (o: Pick<DepTask, 'title' | 'status'>) => `“${o.title}”${cancelledTag(o)}`;
 
 /** Mesmas tarefas, em qualquer ordem. */
 export const sameDeps = (a: string[], b: string[]) => a.length === b.length && a.every((id) => b.includes(id));
 
 /**
  * O que a lista de dependências oferece: `open` = tarefas abertas (qualquer status menos Pronto) de `tasks`, que já vêm do
- * projeto, sem a própria; `old` = vínculos já gravados em `value` que não entram aí (tarefa pronta, ou id que não está neste
- * projeto: `task` null), para continuarem à vista e poderem ser tirados.
+ * projeto, sem a própria; a cancelada só entra se já é uma dependência (ela continua segurando, e precisa poder ser tirada;
+ * ninguém escolhe uma cancelada para esperar); `old` = vínculos já gravados em `value` que não entram aí (tarefa pronta, ou id
+ * que não está neste projeto: `task` null), para continuarem à vista e poderem ser tirados.
  */
 export function depChoices(tasks: DepTask[], selfId: string | null, value: string[]) {
-  const open = tasks.filter((o) => o.id !== selfId && o.status !== 'done');
+  const open = tasks.filter((o) => o.id !== selfId && (!isClosed(o) || (o.status === 'cancelled' && value.includes(o.id))));
   const old = value.filter((id) => id !== selfId && !open.some((o) => o.id === id)).map((id) => ({ id, task: tasks.find((o) => o.id === id) ?? null }));
   return { open, old };
 }
@@ -89,13 +94,13 @@ export function BlockedByField({
   );
 }
 
-/** Selo do cartão: "Esperando: A, B". Dois nomes à mostra; o resto vira "+N" (o title traz todos, com o id). */
+/** Selo do cartão: "Esperando: A, B". Dois nomes à mostra (a cancelada leva "(cancelada)"); o resto vira "+N" (o title traz todos, com o id). */
 export function BlockedBadge({ blockers }: { blockers: DepTask[] }) {
   if (!blockers.length) return null;
-  const names = blockers.slice(0, 2).map((o) => `“${o.title}”`);
+  const names = blockers.slice(0, 2).map(blockerName);
   const more = blockers.length - names.length;
   return (
-    <span className="task-queue task-blocked small" title={blockers.map((o) => `${o.title} (${o.id})`).join('\n')}>
+    <span className="task-queue task-blocked small" title={blockers.map((o) => `${o.title}${cancelledTag(o)} (${o.id})`).join('\n')}>
       {t('tasks.blockedOn', { names: names.join(', ') + (more > 0 ? ` +${more}` : '') })}
     </span>
   );

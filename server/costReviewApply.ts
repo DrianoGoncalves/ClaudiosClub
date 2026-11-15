@@ -3,7 +3,7 @@
 // Tarefa: para o próprio funcionário, pelo mesmo serviço do POST …/tasks. Nada vindo do cliente vale além dos ids e do período.
 import { z } from 'zod';
 import type { CodexEffort, CostReviewApplied, CostReviewApplyResult, StaffProfile, Task } from '../shared/model';
-import { COST_REVIEW_FINDING_IDS } from '../shared/model';
+import { COST_REVIEW_FINDING_IDS, isClosed } from '../shared/model';
 import { buildCostReview, COST_REVIEW_MAX_DAYS } from './costReview';
 import { readProfile } from './staff/store';
 import { readTasks } from './tasks';
@@ -99,7 +99,7 @@ export async function runCostReviewApply(input: CostReviewApplyInput): Promise<C
   };
   let fichaChanged = false;
   let rulesChanged = false;
-  const openTitles = new Set((await readTasks(projectPath)).filter((t) => t.staffId === staffId && t.status !== 'done').map((t) => t.title));
+  const openTitles = new Set((await readTasks(projectPath)).filter((t) => t.staffId === staffId && !isClosed(t)).map((t) => t.title));
   const pendingTasks: Array<{ item: CostReviewApplied; title: string; description: string }> = [];
 
   for (const id of ids) {
