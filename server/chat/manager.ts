@@ -100,6 +100,8 @@ export interface ChatManagerOptions {
    * escolha sua; a folga de cota não passa por aqui. Sem ele, nada é gravado.
    */
   rememberChoice?: (projectId: string, staffId: string, sessionId: string, choice: { model?: string; effort?: string }) => Promise<void>;
+  /** O motor recusou o modelo da ficha (não existe mais): grava a marca `modelObsolete` nela. Sem ele, a marca não é gravada. */
+  markModelObsolete?: (projectId: string, staffId: string, model: string, engine: 'claude' | 'codex') => Promise<void>;
   /** Conversa parada há mais que isso fecha o processo (a sessão continua no disco). */
   idleMs?: number;
   spawnImpl?: ChatProcessOptions['spawnImpl'];
@@ -208,7 +210,7 @@ function boostEnd(iso: string): string {
 
 /** O que entra na linha de comando da conversa, fora a autonomia (que troca sem reabrir). */
 function launchFields(p: StaffProfile) {
-  const { autonomy: _a, updatedAt: _u, portrait: _p, sessions: _s, firstTask: _f, lastModel: _lm, lastEffort: _le, ...rest } = p;
+  const { autonomy: _a, updatedAt: _u, portrait: _p, sessions: _s, firstTask: _f, lastModel: _lm, lastEffort: _le, modelObsolete: _mo, ...rest } = p;
   return rest;
 }
 
@@ -1161,6 +1163,10 @@ export class ChatManager {
       effort,
       onUsage: (limits) => void this.saveUsage(spawn.sessionId, limits),
       onUsageLimit: (hit) => this.limitHit(spawn.sessionId, projectId, staffId, hit, codex ? 'codex' : 'claude'),
+      // Conversa no secundário não marca a ficha: o modelo que a conta recusou é o dele, não o da ficha.
+      onModelUnavailable: (model) => {
+        if (!override && staffId) this.modelUnavailable(spawn.sessionId, projectId, staffId, model, codex ? 'codex' : 'claude');
+      },
       onTurnWithoutLimit: () => void this.limitStreak.delete(spawn.sessionId),
       onSecret: (hit, source) => this.noteSecret(spawn.sessionId, hit, source),
       onIdle: (reason) => {
@@ -1325,6 +1331,11 @@ export class ChatManager {
     });
     // Depois de guardar o agendamento: quem ouve pode esperar `settledLimit` e cancelar o "continue" sem corrida.
     for (const cb of this.limitListeners) cb({ sessionId, projectId, staffId, engine, hit });
+  }
+
+  /** O motor recusou o modelo da ficha: a marca vai para a ficha (ver `markModelObsolete`). Falha de gravação só vai para o log. */
+  private modelUnavailable(sessionId: string, projectId: string, staffId: string, model: string, engine: 'claude' | 'codex') {
+    void this.opts.markModelObsolete?.(projectId, staffId, model, engine).catch((err) => this.log(`${sessionId}: modelo obsoleto: ${err instanceof Error ? err.message : String(err)}`));
   }
 
   /** Quem quer saber do limite no meio do turno (ex.: a troca de motor de uma tarefa). Chamado logo depois de agendar o "continue". */

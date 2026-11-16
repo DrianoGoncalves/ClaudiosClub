@@ -67,6 +67,8 @@ import {
   removePortrait,
   replacePortrait,
   saveChatChoice,
+  saveModelObsolete,
+  fitModelObsolete,
   saveProfile,
   staffDir,
   StaffError,
@@ -720,7 +722,8 @@ export class StaffService {
     let portrait = current.portrait;
     if (portraitDataUrl === null) portrait = await removePortrait(project.path, current);
     else if (portraitDataUrl) portrait = await replacePortrait(project.path, current, portraitDataUrl);
-    const saved: StaffProfile = { ...next, portrait, updatedAt: new Date().toISOString() };
+    // A marca de modelo obsoleto some se a edição trocou o modelo ou o motor (ver fitModelObsolete).
+    const saved: StaffProfile = fitModelObsolete({ ...next, portrait, updatedAt: new Date().toISOString() });
     await saveProfile(project.path, saved);
     await writeFicha(saved, await this.context(project, saved));
     this.opts.onChange?.(current, saved);
@@ -797,7 +800,7 @@ export class StaffService {
     // Sessões e retrato são do presente: só os campos da ficha voltam.
     // Rotinas também são do presente: voltar a ficha não desagenda nem reagenda nada.
     // O vínculo com as cópias também é do presente: a versão antiga pode não ter `personId`, e perdê-lo sairia do grupo.
-    const next: StaffProfile = {
+    const next: StaffProfile = fitModelObsolete({
       ...old,
       id: current.id,
       projectId,
@@ -806,6 +809,8 @@ export class StaffService {
       // O último modelo/esforço do chat também é do presente.
       lastModel: current.lastModel,
       lastEffort: current.lastEffort,
+      // A recusa de modelo também é do presente (a versão antiga pode ter outra); some se o modelo voltado não é o recusado.
+      modelObsolete: current.modelObsolete,
       portrait: current.portrait,
       routines: current.routines,
       // Temporário ou efetivado é situação de agora, não da ficha antiga.
@@ -813,7 +818,7 @@ export class StaffService {
       temporary: current.temporary,
       ended: current.ended,
       updatedAt: new Date().toISOString(),
-    };
+    });
     await saveProfile(project.path, next);
     await this.seal(project, next);
     await writeFicha(next, await this.context(project, next));
@@ -1267,6 +1272,12 @@ export class StaffService {
   async rememberChoice(projectId: string, staffId: string, sessionId: string | null, choice: { model?: string; effort?: string }): Promise<void> {
     const project = await this.project(projectId);
     if (project) await saveChatChoice(project.path, staffId, sessionId, choice);
+  }
+
+  /** O motor recusou o modelo da ficha (ver `modelObsolete`): marca a ficha, só o JSON. Quem decide se é da ficha é o manager. */
+  async markModelObsolete(projectId: string, staffId: string, model: string, engine: 'claude' | 'codex'): Promise<void> {
+    const project = await this.project(projectId);
+    if (project) await saveModelObsolete(project.path, staffId, model, engine);
   }
 
   async portrait(projectId: string, staffId: string) {

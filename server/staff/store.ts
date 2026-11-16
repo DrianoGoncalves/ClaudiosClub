@@ -210,6 +210,8 @@ const ProfileSchema = StaffInputObject.omit({ portraitDataUrl: true, launch: tru
   // Último modelo/esforço escolhido no chat (fora do questionário); valor inválido é ignorado.
   lastModel: ModelSchema.optional().catch(undefined),
   lastEffort: CodexEffortSchema.optional().catch(undefined),
+  // Modelo que o motor recusou (ver `modelObsolete` em shared/model.ts); valor inválido é ignorado.
+  modelObsolete: z.object({ model: ModelSchema, engine: z.enum(['claude', 'codex']), at: z.string() }).optional().catch(undefined),
   // Secundário inválido no arquivo: some (a ficha segue sem ele) em vez de derrubar a ficha.
   fallback: FallbackSchema.optional().catch(undefined),
   sessions: z
@@ -370,6 +372,26 @@ export async function saveChatChoice(
     };
     await saveProfile(projectPath, next);
   });
+}
+
+/**
+ * Marca o modelo da ficha como obsoleto (ver `modelObsolete`): o motor recusou esse modelo. Só grava se a ficha ainda usa esse modelo
+ * e esse motor (senão a recusa veio de outra coisa, como a escolha do chat). Marca igual já gravada fica com a data antiga. Só o JSON.
+ */
+export async function saveModelObsolete(projectPath: string, staffId: string, model: string, engine: 'claude' | 'codex'): Promise<void> {
+  await withProfileLock(projectPath, staffId, async () => {
+    const p = await readProfile(projectPath, staffId);
+    if (!p || p.model !== model || (p.engine ?? 'claude') !== engine) return;
+    if (p.modelObsolete?.model === model && p.modelObsolete.engine === engine) return;
+    await saveProfile(projectPath, { ...p, modelObsolete: { model, engine, at: new Date().toISOString() } });
+  });
+}
+
+/** Ajusta a marca de modelo obsoleto ao que a ficha é agora: some se o modelo ou o motor mudaram (ver `modelObsolete`). */
+export function fitModelObsolete(p: StaffProfile): StaffProfile {
+  const { modelObsolete: _old, ...rest } = p;
+  const o = p.modelObsolete;
+  return o && o.model === p.model && o.engine === (p.engine ?? 'claude') ? { ...rest, modelObsolete: o } : rest;
 }
 
 export async function createProfile(

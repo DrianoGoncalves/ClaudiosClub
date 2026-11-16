@@ -433,6 +433,8 @@ export class CodexProcess extends ChatProcess {
   private failTurn(run: Run, text: string) {
     if (run.ended) return;
     if (run.job && !run.job.retried && run.model && isModelUnavailable(text)) {
+      // A conta recusou o modelo: avisa quem guarda a ficha (ver ChatProcessOptions.onModelUnavailable), com ou sem plano B.
+      this.codex.onModelUnavailable?.(run.model);
       // Modelo que o dono escolheu para o secundário: não há plano B, o erro diz qual modelo a conta recusou.
       if (this.codex.noSubstitute) {
         this.endTurn(run, { kind: 'failed', text: `modelo secundário ${run.model} recusado pelo Codex` });

@@ -888,6 +888,11 @@ export interface StaffProfile {
    */
   lastModel?: string;
   lastEffort?: CodexEffort;
+  /**
+   * O modelo `model` não existe mais na conta (o motor recusou). A conversa roda no padrão do motor; a marca some quando a
+   * ficha troca de modelo ou de motor. Só o Claudio’s Club grava, fora do questionário.
+   */
+  modelObsolete?: { model: string; engine: Engine; at: string };
   /** Pode contratar subfuncionários (subsessões) pelo Claudio’s Club. */
   canHire: boolean;
   /** Roteiro de trabalho (orquestração); null = nenhum. */
@@ -922,7 +927,7 @@ export interface StaffProfile {
 }
 
 /** O que o questionário de contratação envia. */
-export type StaffInput = Omit<StaffProfile, 'id' | 'projectId' | 'portrait' | 'sessions' | 'lastModel' | 'lastEffort' | 'createdAt' | 'updatedAt' | 'fallback'> & {
+export type StaffInput = Omit<StaffProfile, 'id' | 'projectId' | 'portrait' | 'sessions' | 'lastModel' | 'lastEffort' | 'modelObsolete' | 'createdAt' | 'updatedAt' | 'fallback'> & {
   /** Motor secundário: ausente = mantém o da ficha; `null` (na edição) tira; objeto = troca. */
   fallback?: StaffProfile['fallback'] | null;
   /** Retrato como data URL (png, jpeg ou webp). */

@@ -12,6 +12,7 @@ import { ASK_TOOL, cleanAnswers, parseQuestions } from './questions';
 import { killTree } from './registry';
 import { findSecret, type SecretFinding, type SecretSource } from './secrets';
 import { capText, TurnBudget, type TurnCaps } from './turnCap';
+import { isClaudeModelNotFound } from './modelNotFound';
 import { limitFromRateLimitEvent, limitFromText, mergeHits, type LimitHit } from './usageLimit';
 
 // Um funcionário conversando pelo Claudio’s Club: o `claude` em modo stream-json (o mesmo protocolo do SDK),
@@ -117,6 +118,8 @@ export interface ChatProcessOptions {
   onUsage?: (limits: UsageLimit[]) => void;
   /** O turno acabou porque o limite de uso da assinatura estourou (uma vez por turno; ver usageLimit.ts). */
   onUsageLimit?: (hit: LimitHit) => void;
+  /** O motor recusou o modelo pedido (não existe mais na conta): a conversa segue no padrão (ver `retryOnDefault`). */
+  onModelUnavailable?: (model: string) => void;
   /** O turno acabou sem estourar o limite (resposta normal, outro erro, ou interrompido por você): zera a conta de estouros seguidos. */
   onTurnWithoutLimit?: () => void;
   /** O processo saiu (`error` com o motivo, se saiu com erro). */
@@ -199,7 +202,15 @@ export class ChatProcess {
   constructor(protected readonly opts: ChatProcessOptions) {
     this.sessionId = opts.sessionId;
     this.state = { ...this.state, model: opts.model ?? null, effort: opts.effort ?? null };
+    this.wantedModel = opts.model ?? null;
   }
+
+  /** Modelo que a conversa pediu (o que se escreveu em `setModel`, ou o da linha de comando): o que a recusa do motor fala. */
+  private wantedModel: string | null = null;
+  /** Mensagens do usuário já escritas e ainda sem resposta (uma resposta por mensagem, na ordem): a que levou a recusa é a primeira. */
+  private readonly unanswered: Array<{ content: unknown[] }> = [];
+  /** O turno já trocou para o padrão por causa de modelo inexistente: uma vez só (ver `retryOnDefault`). */
+  private modelRetried = false;
 
   /** Quem roda esta conversa: o `claude` (aqui) ou o Codex (ver codexProcess.ts). */
   get engine(): 'claude' | 'codex' {
@@ -392,6 +403,7 @@ export class ChatProcess {
     // O id vira o da mensagem no transcript: é por ele que "voltar até aqui" acha o ponto.
     const uuid = randomUUID();
     this.write({ type: 'user', uuid, message: { role: 'user', content }, ...(queued && { priority: queued }) });
+    this.unanswered.push({ content });
     this.putItem({
       kind: 'user',
       id: `u:${uuid}`,
@@ -415,6 +427,7 @@ export class ChatProcess {
 
   /** Troca o modelo desta conversa, na hora (a ficha continua como está). */
   setModel(model: string, label: string) {
+    this.wantedModel = model;
     // A resposta traz o id do modelo novo: a tela mostra já, sem esperar o próximo turno.
     this.control({ subtype: 'set_model', model }, label, {
       onOk: (res) => typeof res.model === 'string' && this.setState({ model: res.model }),
@@ -484,7 +497,9 @@ export class ChatProcess {
   }
 
   compact() {
-    this.write({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '/compact' }] } });
+    const content = [{ type: 'text', text: '/compact' }];
+    this.write({ type: 'user', message: { role: 'user', content } });
+    this.unanswered.push({ content });
     this.waitingReply = true;
     this.setState({ busy: true, compacting: true });
   }
@@ -882,6 +897,14 @@ export class ChatProcess {
         if (hit) this.limitSeen = { ...mergeHits(this.limitSeen, hit), confirmed: true };
         const stopped = this.stopping && ev.subtype === 'error_during_execution';
         this.stopping = false;
+        // Modelo pedido que não existe mais: o turno não termina; o padrão e a mesma mensagem (uma vez, ver `retryOnDefault`).
+        const sent = this.unanswered.shift();
+        if (!stopped && sent && ev.is_error === true && !this.modelRetried && this.wantedModel && this.wantedModel !== 'default' && isClaudeModelNotFound(ev)) {
+          this.limitSeen = null;
+          this.retryOnDefault(this.wantedModel, sent.content);
+          return;
+        }
+        this.modelRetried = false;
         if (stopped) {
           this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text: 'Turno interrompido', tone: 'info', at });
         } else if (ev.is_error === true) {
@@ -900,6 +923,21 @@ export class ChatProcess {
         return;
       }
     }
+  }
+
+  /**
+   * O modelo `model` não existe mais: avisa, põe o padrão e escreve de novo a mensagem que levou a recusa (a mesma, com as imagens,
+   * anexos e avisos que trazia). O turno segue aberto; se a segunda tentativa também for recusada, vale o erro normal (sem laço).
+   */
+  private retryOnDefault(model: string, content: unknown[]) {
+    this.modelRetried = true;
+    this.waitingReply = true;
+    this.opts.onModelUnavailable?.(model);
+    this.addNotice(`O modelo ${model} não existe mais. Esta conversa segue no modelo padrão; troque o modelo na ficha.`, 'warn');
+    // Sem rótulo: a troca dá certo em silêncio (o aviso acima já diz). Se ela falhar, a mensagem sai mesmo assim e a recusa dela cai no erro normal.
+    this.setModel('default', '');
+    this.write({ type: 'user', uuid: randomUUID(), message: { role: 'user', content } });
+    this.unanswered.push({ content });
   }
 
   private readonly doneText = new Map<string, string[]>();
@@ -923,6 +961,8 @@ export class ChatProcess {
     }
     this.pending.clear();
     this.controls.clear();
+    this.unanswered.length = 0;
+    this.modelRetried = false;
     for (const w of this.waiters.values()) w.reject(new Error('a conversa fechou'));
     this.waiters.clear();
     this.waitingReply = false;

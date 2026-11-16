@@ -393,6 +393,7 @@ const chats: ChatManager = new ChatManager({
   listLive: () => adapter.listLiveSessions(),
   resolve: (projectId, sessionId, staffId, forkFrom, engineOverride) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom, engineOverride),
   rememberChoice: (projectId, staffId, sessionId, choice) => staff.rememberChoice(projectId, staffId, sessionId, choice),
+  markModelObsolete: (projectId, staffId, model, engine) => staff.markModelObsolete(projectId, staffId, model, engine),
   registry: new ChatRegistry(path.join(MYCO_HOME, 'run', 'chats.json')),
   copiesFile: path.join(MYCO_HOME, 'run', 'copies.json'),
   onPlanApproved: (sid, plan) => void tasks.onPlanApproved(sid, plan).catch(() => {}),

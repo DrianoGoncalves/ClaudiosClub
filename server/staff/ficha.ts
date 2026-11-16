@@ -848,7 +848,9 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   if (o.pluginDir) args.push('--plugin-dir', o.pluginDir);
   if (o.agentsFile) args.push('--agents', o.agentsFile);
   args.push('--permission-mode', p.autonomy);
-  if (p.model) args.push('--model', p.model);
+  // Modelo que o claude já recusou nesta ficha (ver `modelObsolete`): abre direto no padrão, sem gastar a falha de novo.
+  const gone = p.modelObsolete?.engine === 'claude' && p.modelObsolete.model === p.model;
+  if (p.model && !gone) args.push('--model', p.model);
   if (p.effort) args.push('--effort', p.effort);
   // O manual entra sempre (leitura); as regras que impedem de editá-lo estão em secretDenyRules.
   args.push('--add-dir', ...(o.addDirs ?? []), MANUAL_DIR);
