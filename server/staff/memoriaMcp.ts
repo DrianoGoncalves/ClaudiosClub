@@ -56,7 +56,8 @@ export function memoriaTarget(projectPath: string, staffId: string, arquivo: unk
   const mine = `o seu índice (\`${path.relative(projectPath, index).replace(/\\/g, '/')}\`) ou \`${path.relative(projectPath, dir).replace(/\\/g, '/')}/<assunto>.md\` (minúsculas e hífens)`;
   // O `..` nem entra: um caminho que "volta" para a própria memória também é recusado, para a regra ser uma só e fácil de conferir.
   if (arquivo.split(/[\\/]/).includes('..')) throw new MemoriaError(`caminho com ".." não vale: só ${mine}`);
-  const want = path.resolve(projectPath, arquivo);
+  // A barra invertida só separa pasta no Windows; no Linux `path.resolve` a trataria como parte do nome. O modelo escreve com as barras que quiser.
+  const want = path.resolve(projectPath, arquivo.replace(/\\/g, '/'));
   if (sameFile(want, index)) return { file: index, index: true };
   const name = path.basename(want);
   if (sameFile(path.dirname(want), dir) && TOPIC.test(name) && !DEVICE.test(name)) return { file: path.join(dir, name), index: false };

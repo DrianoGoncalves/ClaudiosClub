@@ -390,23 +390,48 @@ function serversSection(p: StaffProfile, ctx: FichaContext): string {
   ].join('\n\n');
 }
 
+/**
+ * Passo do roteiro. Quando o texto do Claude cita ferramenta ou modelo que o Codex não tem (Agent, subagent_type, model: "sonnet"), o passo
+ * leva um texto por motor: o do Codex delega por spawn_agent e sobe o esforço em vez de trocar de modelo.
+ */
+type PlaybookStep = string | { claude: string; codex: string };
+const stepText = (s: PlaybookStep, codex: boolean) => (typeof s === 'string' ? s : codex ? s.codex : s.claude);
+
 /** Roteiros de orquestração: os passos que vão para a ficha (nomes e explicação em client/src/staff/templates.ts). */
-export const PLAYBOOK_STEPS: Record<Playbook, { title: string; steps: string[] }> = {
+export const PLAYBOOK_STEPS: Record<Playbook, { title: string; steps: PlaybookStep[] }> = {
   'plan-big-execute-small': {
     title: 'Planeja grande, executa pequeno',
     steps: [
       'Entenda o pedido e o que o usuário quer ver no fim. Leia só o necessário para decidir; para achar coisas no código, mande o `pesquisador` em vez de ler você.',
-      [
-        'Escolha quem faz cada parte (ferramenta Agent, sempre com o subagent_type):',
-        '   - achar, mapear ou explicar código: `pesquisador` (Haiku, só lê);',
-        '   - mudança bem definida, com os arquivos e o que mudar já sabidos: `executor` (Haiku);',
-        '   - mudança que pede julgamento (bug de causa desconhecida, funcionalidade que cruza vários arquivos): `executor` com model: "sonnet";',
-        '   - antes de dar por pronto o que é arriscado (segurança, dados, pagamento, muitos arquivos): `revisor`;',
-        '   - uma linha num arquivo que você já leu: faça você, porque explicar custaria mais.',
-      ].join('\n'),
+      {
+        claude: [
+          'Escolha quem faz cada parte (ferramenta Agent, sempre com o subagent_type):',
+          '   - achar, mapear ou explicar código: `pesquisador` (Haiku, só lê);',
+          '   - mudança bem definida, com os arquivos e o que mudar já sabidos: `executor` (Haiku);',
+          '   - mudança que pede julgamento (bug de causa desconhecida, funcionalidade que cruza vários arquivos): `executor` com model: "sonnet";',
+          '   - antes de dar por pronto o que é arriscado (segurança, dados, pagamento, muitos arquivos): `revisor`;',
+          '   - uma linha num arquivo que você já leu: faça você, porque explicar custaria mais.',
+        ].join('\n'),
+        codex: [
+          'Escolha quem faz cada parte (chamando o agent pelo spawn_agent):',
+          '   - achar, mapear ou explicar código: `pesquisador` (só lê);',
+          '   - mudança bem definida, com os arquivos e o que mudar já sabidos: `executor`;',
+          '   - mudança que pede julgamento (bug de causa desconhecida, funcionalidade que cruza vários arquivos): `executor` com reasoning_effort "high";',
+          '   - antes de dar por pronto o que é arriscado (segurança, dados, pagamento, muitos arquivos): `revisor`;',
+          '   - uma linha num arquivo que você já leu: faça você, porque explicar custaria mais.',
+        ].join('\n'),
+      },
       'Cada agent começa do zero: não vê esta conversa, a ficha nem a memória. No pedido vão o objetivo (o porquê), o que já se sabe (arquivos com caminho, o erro, o que já foi decidido), o que não mexer e por quê, como saber que ficou pronto (o teste ou o comando) e a resposta esperada: curta, com arquivo:linha, o que verificou e o que não deu.',
-      'Tarefas independentes vão juntas, em várias chamadas ao Agent na mesma mensagem, mas nunca dois agents no mesmo arquivo; a que depende de outra espera a anterior.',
-      'Confira cada entrega antes da próxima. Falhou: devolva com o que está errado. Falhou de novo: chame com um modelo maior (model: "sonnet", ou "opus" se já era sonnet), divida em partes menores ou pergunte ao usuário.',
+      {
+        claude: 'Tarefas independentes vão juntas, em várias chamadas ao Agent na mesma mensagem, mas nunca dois agents no mesmo arquivo; a que depende de outra espera a anterior.',
+        codex: 'Tarefas independentes vão juntas, em várias chamadas ao spawn_agent na mesma mensagem, mas nunca dois agents no mesmo arquivo; a que depende de outra espera a anterior.',
+      },
+      {
+        claude:
+          'Confira cada entrega antes da próxima. Falhou: devolva com o que está errado. Falhou de novo: chame com um modelo maior (model: "sonnet", ou "opus" se já era sonnet), divida em partes menores ou pergunte ao usuário.',
+        codex:
+          'Confira cada entrega antes da próxima. Falhou: devolva com o que está errado. Falhou de novo: chame com mais esforço (reasoning_effort "high", ou "xhigh" se já era high), divida em partes menores ou pergunte ao usuário.',
+      },
       'Termine com o resumo para o usuário, como pede a definição de pronto.',
     ],
   },
@@ -434,12 +459,12 @@ function playbookSection(p: StaffProfile, ctx?: FichaContext): string {
   if (!p.playbook) return '';
   const pb = PLAYBOOK_STEPS[p.playbook];
   if (codexOf(p) && ctx?.codexAgents?.available.length) {
-    // Os agents do roteiro existem como subagents do Codex: os mesmos passos do Claude, delegando por spawn_agent.
+    // Os agents do roteiro existem como subagents do Codex: os mesmos passos, na versão do Codex quando a do Claude cita ferramenta ou modelo dele.
     return [
       `## Roteiro: ${pb.title}`,
-      pb.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'),
+      pb.steps.map((s, i) => `${i + 1}. ${stepText(s, true)}`).join('\n'),
       ctx.team?.length ? 'Antes de chamar um agent (ou de fazer você mesmo): se a tarefa é da área de alguém da sua equipe, ela vai para essa pessoa (veja "Sua equipe").' : '',
-      'Ao delegar no Codex: chame o agent pela ferramenta spawn_agent, com agent_type igual ao nome do agent do roteiro, fork_turns "none" e um task_name curto; onde o roteiro fala em chamar o Agent, é o spawn_agent. Espere a entrega com wait_agent antes de seguir e confira. Com fork_turns "none" o agent começa do zero (não vê esta conversa nem esta ficha): o pedido leva tudo de que ele precisa. Onde o roteiro manda trocar de modelo (sonnet, opus), aqui aumente o reasoning_effort (high, depois xhigh). No Codex, agent só de leitura (como pesquisador e revisor) é só por instrução: ele roda na mesma sandbox que você e consegue escrever; não peça escrita a ele e confira o que mudou. Evite os agents genéricos (default, worker, explorer) e fork_turns "all": levam esta conversa inteira e custam mais. Quem você chama não chama outros agents: dividir o trabalho é com você. Se um agent do roteiro não estiver disponível, avise o usuário em vez de improvisar.',
+      'Ao delegar no Codex: chame o agent pela ferramenta spawn_agent, com agent_type igual ao nome do agent do roteiro, fork_turns "none" e um task_name curto. Espere a entrega com wait_agent antes de seguir e confira. Com fork_turns "none" o agent começa do zero (não vê esta conversa nem esta ficha): o pedido leva tudo de que ele precisa. Para um passo que pede mais julgamento, aumente o reasoning_effort (high, depois xhigh). No Codex, agent só de leitura (como pesquisador e revisor) é só por instrução: ele roda na mesma sandbox que você e consegue escrever; não peça escrita a ele e confira o que mudou. Evite os agents genéricos (default, worker, explorer) e fork_turns "all": levam esta conversa inteira e custam mais. Quem você chama não chama outros agents: dividir o trabalho é com você. Se um agent do roteiro não estiver disponível, avise o usuário em vez de improvisar.',
     ]
       .filter(Boolean)
       .join('\n\n');
@@ -456,8 +481,8 @@ function playbookSection(p: StaffProfile, ctx?: FichaContext): string {
   }
   return [
     `## Roteiro: ${pb.title}`,
-    pb.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'),
-    ctx?.codex ? `Em decisão que pesa (arquitetura, escolher entre caminhos, trade-off) ou antes de dar por pronto algo arriscado, pergunte também ao GPT pela ferramenta \`mcp__${GPT_MCP_NAME}__${GPT_TOOL_NAME}\`: as opções em termos neutros na pergunta, a sua preferência no campo hipotese (não como fato no contexto). Ao responder ao usuário, mostre em 1-2 linhas o veredito do GPT e no que ele divergiu, mesmo quando concordar com ressalvas; se discordarem, mostre as duas posições em linguagem simples.` : '',
+    pb.steps.map((s, i) => `${i + 1}. ${stepText(s, false)}`).join('\n'),
+    ctx?.codex ?`Em decisão que pesa (arquitetura, escolher entre caminhos, trade-off) ou antes de dar por pronto algo arriscado, pergunte também ao GPT pela ferramenta \`mcp__${GPT_MCP_NAME}__${GPT_TOOL_NAME}\`: as opções em termos neutros na pergunta, a sua preferência no campo hipotese (não como fato no contexto). Ao responder ao usuário, mostre em 1-2 linhas o veredito do GPT e no que ele divergiu, mesmo quando concordar com ressalvas; se discordarem, mostre as duas posições em linguagem simples.` : '',
     ctx?.team?.length ? 'Antes de chamar um agent (ou de fazer você mesmo): se a tarefa é da área de alguém da sua equipe, ela vai para essa pessoa (veja "Sua equipe").' : '',
     'Ao delegar: chame os agents do roteiro sempre com subagent_type e run_in_background: false; em segundo plano a entrega não volta nesta conversa para você conferir, e o agent morre se a conversa fechar. Evite fork, general-purpose e Explore: rodam no seu modelo (o fork ainda leva esta conversa inteira), e os do roteiro custam bem menos. Peça respostas curtas, nunca arquivos inteiros colados. Quem você chama não chama outros agents: dividir o trabalho é com você. Se um agent do roteiro não existir no projeto, avise o usuário em vez de improvisar.',
   ]
