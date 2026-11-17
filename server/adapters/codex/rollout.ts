@@ -10,6 +10,8 @@ import { MAX_ITEMS, TAIL_BYTES, tailLines } from '../../chat/history';
 import { isInjectedUserText, STAFF_NOTICE } from '../../chat/items';
 import { tryJson } from '../claude/fsutil';
 import { getRegisteredSession, REGISTRY_FILE } from '../../sessionsRegistry';
+import type { SubjectEvent, SubjectView } from '../../titles/subject';
+import { subjectTracker } from '../../titles/tracker';
 
 // Adaptador do formato do Codex. A conversa de um funcionário no motor Codex não tem transcript em ~/.claude/projects:
 // o Codex grava um "rollout" em ${CODEX_HOME}/sessions/AAAA/MM/DD/rollout-<data>-<threadId>.jsonl (uma linha JSON por
@@ -227,7 +229,7 @@ async function readHead(file: string, bytes: number): Promise<string[]> {
 }
 
 /** O rollout compactado inteiro, descompactado; null sem zstd no Node, se passa de ZST_MAX_BYTES ou se não lê. */
-async function readZst(file: string): Promise<Buffer | null> {
+export async function readZst(file: string): Promise<Buffer | null> {
   if (!decompressZst) return null;
   const st = await fs.stat(file).catch(() => null);
   if (!st || st.size > ZST_MAX_BYTES) return null;
@@ -365,18 +367,43 @@ export async function codexRolloutMissing(runDir: string, sessionId: string, reg
   return !(await codexRolloutExists(threadId));
 }
 
+/** As mensagens de uma linha do rollout para o assunto (ver titles/subject.ts). Chave = ordinal, que é estável. */
+function codexEvents(raw: string, pos: number): SubjectEvent[] {
+  const c = completedItem(raw);
+  if (!c) return [];
+  const key = c.ordinal !== null ? `o:${c.ordinal}` : `p:${pos}`;
+  if (c.item.type === 'UserMessage') {
+    const u = userOf(c.item);
+    return u ? [{ role: 'user', text: u.text, key }] : [];
+  }
+  if (c.item.type === 'AgentMessage') {
+    const t = textOf(c.item.content);
+    return t.trim() ? [{ role: 'assistant', text: t, key }] : [];
+  }
+  return [];
+}
+
+/**
+ * Assunto atual de um rollout do Club (incremental, ver titles/tracker.ts): a mesma regra do Claude, com a virada de
+ * tarefa e de ponto de corte. Null se o rollout não pode ser lido por inteiro (quem chama usa o começo, como antes).
+ */
+export function codexSubject(file: string): Promise<SubjectView | null> {
+  return subjectTracker.read(file, codexEvents, readZst);
+}
+
 /**
  * A sessão do quadro para uma conversa do Codex (ela não tem transcript do Claude). O título é o nome do funcionário;
- * sem rollout (ainda sem mensagem, por exemplo), vale a hora da ficha.
+ * sem rollout (ainda sem mensagem, por exemplo), vale a hora da ficha. O assunto vem do rastreador (é conversa do Club).
  */
 export async function codexSession(runDir: string, name: string, entry: { id: string; startedAt: string }): Promise<Session> {
   const threadId = await codexThreadOf(runDir, entry.id);
   const file = threadId ? await findRollout(threadId) : null;
   const sum = file ? await rolloutSummary(file) : null;
+  const subject = file ? await codexSubject(file) : null;
   return {
     id: entry.id,
     title: name,
-    topic: sum?.topic ?? null,
+    topic: subject ? subject.topic : (sum?.topic ?? null),
     entrypoint: 'codex',
     gitBranch: null,
     version: null,

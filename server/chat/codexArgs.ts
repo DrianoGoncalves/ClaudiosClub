@@ -1,7 +1,7 @@
 import { statSync, type Stats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { FTP_MCP_NAME, GPT_MCP_NAME, type Autonomy } from '../../shared/model';
+import { FTP_MCP_NAME, GPT_MCP_NAME, MEMORIA_MCP_NAME, type Autonomy } from '../../shared/model';
 import { SANDBOX_HOST } from '../callers';
 
 // Linha de comando do Codex (CLI da OpenAI) para um funcionário com `engine: 'codex'`. Cada mensagem é uma execução
@@ -220,6 +220,16 @@ export interface CodexMcpServer {
 /** Nome do MCP de SSH na configuração do Codex (`mcp_servers.<nome>`). É o mesmo do Claude (`SSH_MCP_NAME`, em server/staff/sshMcp.ts). */
 export const CODEX_SSH_MCP_NAME = 'myco-ssh';
 
+/**
+ * Os `-c mcp_servers.myco-memoria.*` da conversa em `plan`: o único jeito de gravar a própria memória com a sandbox de só leitura (o perfil de
+ * permissões não aceita escrita por arquivo na sandbox de leitura, e liberar a pasta das fichas daria acesso às fichas dos outros). O MCP roda
+ * fora da sandbox e só grava `.myco/staff/<id>.memory.md` e `<id>.memory/*.md` da própria ficha (ver server/staff/memoriaMcp.ts). Mesma regra de
+ * aprovação do SSH (`approve`, ver `codexSshMcpArgs`).
+ */
+export function codexMemoriaMcpArgs(s: CodexMcpServer | null | undefined): string[] {
+  return codexMcpArgs(MEMORIA_MCP_NAME, s, s?.enabledTools);
+}
+
 /** Nome do MCP do Chrome do usuário (Playwright MCP em modo extensão) na configuração do Codex. Ver `codexChromeMcpArgs`. */
 export const CODEX_CHROME_MCP_NAME = 'myco-chrome';
 
@@ -335,6 +345,7 @@ export const CODEX_RESERVED_MCP_NAMES: ReadonlySet<string> = new Set([
   CLEAN_BROWSER_MCP_NAME,
   FTP_MCP_NAME,
   GPT_MCP_NAME,
+  MEMORIA_MCP_NAME,
   'claude-in-chrome',
 ]);
 
@@ -358,6 +369,38 @@ export function codexExtraMcpArgs(list: readonly CodexExtraMcp[] | undefined): s
         ...(m.enabledTools ? ['-c', `${key}.enabled_tools=[${m.enabledTools.map((t) => tomlString(t)).join(',')}]`] : []),
       ];
     });
+}
+
+/** Um agent da ficha exposto ao Codex: o `spawn_agent` ganha `agent_type` com esse nome. */
+export interface CodexAgentRole {
+  name: string;
+  description: string;
+  /** Caminho do TOML com o `developer_instructions` do agent. */
+  configFile: string;
+}
+
+/** Nome de agent aceito na linha de comando (vira parte da chave `agents.<nome>`). */
+export const CODEX_AGENT_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * Os `-c agents.<nome>.*` dos agents da ficha. Fatos provados no Codex 0.167 (Windows):
+ * - `--ignore-user-config` (sempre usado aqui) faz o Codex ignorar `<projeto>/.codex/agents`; já `-c agents.<nome>.description/config_file`
+ *   funciona junto com ele e o filho roda com o `developer_instructions` do TOML.
+ * - O TOML pode ficar numa pasta negada pela sandbox (`run/`): o Codex lê fora dela; o agente não lê nem grava.
+ * - `sandbox_mode` no TOML NÃO restringe (vale o perfil de permissões do pai): "só leitura" é só por instrução.
+ * - TOML inválido ou arquivo inexistente: o Codex só emite um item `error` ("Ignoring malformed agent role definition") e segue.
+ * `agents.max_depth=1`: quem é chamado não chama outros agents (como no Claude).
+ */
+export function codexAgentArgs(roles: CodexAgentRole[] | undefined): string[] {
+  const valid = (roles ?? []).filter((r) => CODEX_AGENT_NAME.test(r.name));
+  if (!valid.length) return [];
+  return [
+    ...valid.flatMap((r) => [
+      '-c', `agents.${r.name}.description=${tomlString(r.description)}`,
+      '-c', `agents.${r.name}.config_file=${tomlString(r.configFile.replace(/\\/g, '/'))}`,
+    ]),
+    '-c', 'agents.max_depth=1',
+  ];
 }
 
 /** O que o `chatSpawn` entrega para abrir uma conversa no Codex (no lugar dos argumentos do `claude`). */
@@ -385,6 +428,8 @@ export interface CodexSpawn {
   internetAccess?: () => Promise<boolean>;
   /** MCP de SSH da ficha (conexões SSH), ou null: sem ele. Ver `codexSshMcpArgs`. */
   sshMcp?: CodexMcpServer | null;
+  /** MCP da memória da própria ficha (só em `plan`), ou null: sem ele. Ver `codexMemoriaMcpArgs`. */
+  memoriaMcp?: CodexMcpServer | null;
   /** MCP do Chrome do usuário (só sem SSH na conversa), ou null: sem ele. Ver `codexChromeMcpArgs`. */
   chromeMcp?: CodexMcpServer | null;
   /** MCP do navegador limpo (sem logins; ver `codexCleanBrowserMcpArgs`), ou null: sem ele. */
@@ -393,6 +438,8 @@ export interface CodexSpawn {
   extraMcps?: CodexExtraMcp[];
   /** Arquivo de lançamento desses MCPs (`codex-mcp.json`), ou null: o CodexProcess o apaga quando a conversa fecha. */
   mcpSnapshotFile?: string | null;
+  /** Agents da ficha (executor, pesquisador, revisor…) como subagents do Codex, com o TOML já gravado. Vazio = sem subagents. Ver `codexAgentArgs`. */
+  agents: CodexAgentRole[];
 }
 
 /**
@@ -428,12 +475,16 @@ export interface CodexRunOptions {
   platform?: NodeJS.Platform;
   /** MCP de SSH da ficha (só conexões SSH; null = sem ele). Ver `codexSshMcpArgs`. */
   sshMcp?: CodexMcpServer | null;
+  /** MCP da memória da própria ficha (só em `plan`; null = sem ele). Ver `codexMemoriaMcpArgs`. */
+  memoriaMcp?: CodexMcpServer | null;
   /** MCP do Chrome do usuário (null = sem ele). Ver `codexChromeMcpArgs`. */
   chromeMcp?: CodexMcpServer | null;
   /** MCP do navegador limpo (null = sem ele). Ver `codexCleanBrowserMcpArgs`. */
   cleanMcp?: CodexMcpServer | null;
   /** MCPs da biblioteca e da ficha (projeto, usuário, local); ausente = nenhum. Ver `codexExtraMcpArgs`. */
   extraMcps?: CodexExtraMcp[];
+  /** Agents da ficha como subagents do Codex (ver `codexAgentArgs`); vale na primeira execução e no resume. */
+  agents?: CodexAgentRole[];
 }
 
 /**
@@ -495,9 +546,11 @@ export function buildCodexArgs(o: CodexRunOptions): string[] {
   );
   args.push(...codexWindowsSandboxArgs(o.platform));
   args.push(...codexSshMcpArgs(o.sshMcp));
+  args.push(...codexMemoriaMcpArgs(o.memoriaMcp));
   args.push(...codexChromeMcpArgs(o.chromeMcp));
   args.push(...codexCleanBrowserMcpArgs(o.cleanMcp));
   args.push(...codexExtraMcpArgs(o.extraMcps));
+  args.push(...codexAgentArgs(o.agents));
   if (o.instructions && instructionsInArgv(o.instructions, o.platform)) args.push('-c', `developer_instructions=${tomlString(o.instructions)}`);
   if (resume) args.push(o.threadId!);
   args.push('-');

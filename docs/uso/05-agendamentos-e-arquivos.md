@@ -43,6 +43,9 @@ Abra pelo botão **Arquivos** no painel do projeto ("Ver e editar os arquivos do
 - À direita, o editor.
 - **Salvar** (ou Ctrl+S) grava o arquivo. Nada é salvo sozinho.
 - O estado aparece ao lado: **Salvando…**, **Salvo**, **Não salvo** ou **Erro ao salvar** (clique em **Tentar de novo**).
+- Arquivo `.md` ou `.markdown` ganha o seletor **Código | Visualizar** abaixo do caminho. **Visualizar** mostra o texto atual (mesmo o que ainda não foi salvo) já formatado: títulos, listas, tabelas, código e links. Voltar para **Código** não perde nada. HTML escrito no arquivo aparece como texto, nunca é executado. Link `http`, `https` ou `mailto` abre em outra aba; link para outro arquivo do projeto (`outro.md`, `../x.md`) abre no próprio editor; imagem não carrega.
+- Arquivo `.json` tem o mesmo seletor. **Visualizar** mostra uma árvore: clique numa chave para abrir ou fechar o objeto/lista; texto vem entre aspas (verde), número (roxo), `true`/`false` (azul-petróleo) e `null` (cinza, itálico). Tudo aparece como texto (HTML e URL dentro do arquivo não viram tag nem link). Se o JSON estiver inválido, a tela mostra o erro, com linha e coluna quando dá, e você volta a **Código** para corrigir. Arquivo pequeno abre inteiro; um grande abre só o primeiro nível e mostra os itens aos poucos (**Mostrar mais**), para não travar a aba. Número inteiro acima de 9 007 199 254 740 991 aparece arredondado (limite do navegador); o arquivo em si não muda.
+- Os demais arquivos não têm o seletor.
 
 ### Criar
 

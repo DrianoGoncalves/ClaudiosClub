@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PLAYBOOK_AGENTS } from '../../shared/agentPresets';
 import { personalityName, personalitySection } from '../../shared/personality';
-import { FTP_MCP_NAME, GPT_MCP_NAME, GPT_TOOL_NAME, TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
+import { FTP_MCP_NAME, GPT_MCP_NAME, GPT_TOOL_NAME, MEMORIA_MCP_NAME, TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
 import { GUIDE_PATH } from '../projectGuide';
 import { MYCO_HOME } from '../config';
 import { ROOT } from '../root';
@@ -11,6 +11,7 @@ import { mcpOffDenyRules } from './mcpAccess';
 import { CLEAN_BROWSER_DENIED, CLEAN_BROWSER_MCP_NAME } from '../chat/codexArgs';
 import { SSH_MCP_NAME, SSH_READ_TOOLS } from './sshMcp';
 import type { CodexMcpMotivo } from './mcp';
+import type { SkillPlan } from '../skillAccess';
 
 // A ficha vira um arquivo Markdown dentro do projeto (.myco/staff/<id>.md), que a sessão lê
 // no começo. Pela linha de comando só vai uma identidade curta apontando para ela: o CLI não
@@ -22,10 +23,8 @@ export interface FichaContext {
   company: string;
   /** Workspace do projeto (como você agrupa os projetos: cliente, área…), se tiver. */
   workspace?: string | null;
-  /** Skills da ficha que são da biblioteca do Claudio’s Club (só esta sessão vê, como `myco:<nome>`). */
-  librarySkills?: string[];
-  /** Skills que existem agora (biblioteca, projeto ou conta). Sem ela, a lista não marca nenhuma como ausente (ver skillList). */
-  knownSkills?: string[];
+  /** As skills marcadas na ficha e o que a conversa faz com cada uma (ver skillAccess.ts). Sem ele, a lista mostra os nomes como estão. */
+  skillPlan?: SkillPlan;
   projectName: string;
   projectPath: string;
   /** Nomes de quem chama este funcionário; vazio = o usuário. */
@@ -55,10 +54,14 @@ export interface FichaContext {
   lockedByCodexManager?: boolean;
   /** Conexões SSH na ficha (nos dois motores): o que a seção Servidores diz (ver `serversSection`). Ausente = sem conexão SSH. */
   ssh?: SshInfo;
+  /** Autonomia `plan`: se a conversa tem o MCP da memória (`myco-memoria`), o que a seção Memória diz (ver `memorySection`). Ausente = fora de plan. */
+  memoria?: MemoriaInfo;
   /** Codex com Navegador na ficha: o que a seção Navegador diz (ver `codexChromeLines`). Ausente = sem Navegador no Codex. */
   codexChrome?: CodexChromeInfo;
   /** Navegador limpo (MCP `myco-navegador`) pedido na ficha: o que a seção Navegador diz (ver `cleanBrowserLines`). Ausente = a ficha não pede. */
   cleanBrowser?: CleanBrowserInfo;
+  /** Codex: os agents da ficha que viraram subagents (`available`) e os que ela pede mas não existem (`missing`). Ausente = sem seção de agents. */
+  codexAgents?: { available: string[]; missing: string[] };
   /** Codex: as ferramentas MCP marcadas como Perguntar que ficaram desligadas (sem pergunta no Codex; ver `codexMcpSection`). */
   codexMcpAsked?: string[];
   /** Codex: os MCPs da biblioteca e da ficha que ficaram fora desta conversa, com o motivo (ver `codexMcpSection`). */
@@ -81,6 +84,12 @@ export interface SshInfo {
   indisponivel?: boolean;
   /** Há conexões SSH, o build existe, mas o acesso ao MCP `myco-ssh` está desligado na ficha (`mcpAccess` = off). */
   politica?: boolean;
+}
+
+/** Estado do MCP da memória (`myco-memoria`) numa conversa em `plan`, para a ficha (ver `memoriaLaunchOf` em launch.ts). */
+export interface MemoriaInfo {
+  /** O MCP foi anexado à conversa. Falso: o acesso a ele está desligado na ficha (`mcpAccess`). */
+  mcp: boolean;
 }
 
 /** Estado do Chrome do usuário no Codex (MCP `myco-chrome`): entrou, ou os motivos de não ter entrado (ver `codexChromeOf` em launch.ts). */
@@ -128,7 +137,8 @@ function teamSection(p: StaffProfile, ctx: FichaContext): string {
 
 /**
  * Funcionário que roda no Codex (CLI da OpenAI) em vez do Claude Code: a ficha não pode mandar usar o que o Codex não tem
- * (ferramenta Agent e roteiro de delegação, skills e agents do Claude, Chrome da extensão do Claude, Monitor, pedido de aprovação).
+ * (ferramenta Agent, skills do Claude, Chrome da extensão do Claude, Monitor, pedido de aprovação). Os agents da ficha existem lá como
+ * subagents (spawn_agent), só quando o Club os gravou (`codexAgents`); sem eles o roteiro vira "trabalhe sozinho".
  * O Chrome do Codex é outro (o MCP `myco-chrome`, ver codexChromeLines).
  */
 const codexOf = (p: Pick<StaffProfile, 'engine'>) => p.engine === 'codex';
@@ -423,8 +433,19 @@ export const PLAYBOOK_STEPS: Record<Playbook, { title: string; steps: string[] }
 function playbookSection(p: StaffProfile, ctx?: FichaContext): string {
   if (!p.playbook) return '';
   const pb = PLAYBOOK_STEPS[p.playbook];
+  if (codexOf(p) && ctx?.codexAgents?.available.length) {
+    // Os agents do roteiro existem como subagents do Codex: os mesmos passos do Claude, delegando por spawn_agent.
+    return [
+      `## Roteiro: ${pb.title}`,
+      pb.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'),
+      ctx.team?.length ? 'Antes de chamar um agent (ou de fazer você mesmo): se a tarefa é da área de alguém da sua equipe, ela vai para essa pessoa (veja "Sua equipe").' : '',
+      'Ao delegar no Codex: chame o agent pela ferramenta spawn_agent, com agent_type igual ao nome do agent do roteiro, fork_turns "none" e um task_name curto; onde o roteiro fala em chamar o Agent, é o spawn_agent. Espere a entrega com wait_agent antes de seguir e confira. Com fork_turns "none" o agent começa do zero (não vê esta conversa nem esta ficha): o pedido leva tudo de que ele precisa. Onde o roteiro manda trocar de modelo (sonnet, opus), aqui aumente o reasoning_effort (high, depois xhigh). No Codex, agent só de leitura (como pesquisador e revisor) é só por instrução: ele roda na mesma sandbox que você e consegue escrever; não peça escrita a ele e confira o que mudou. Evite os agents genéricos (default, worker, explorer) e fork_turns "all": levam esta conversa inteira e custam mais. Quem você chama não chama outros agents: dividir o trabalho é com você. Se um agent do roteiro não estiver disponível, avise o usuário em vez de improvisar.',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+  }
   if (codexOf(p)) {
-    // Os passos do roteiro mandam delegar para agents do Claude; aqui quem faz cada papel é o próprio funcionário.
+    // Sem agents disponíveis, os passos do roteiro (que mandam delegar) não servem; aqui quem faz cada papel é o próprio funcionário.
     return [
       `## Roteiro: ${pb.title}`,
       'Neste motor você trabalha sozinho, sem ajudantes para delegar: faça você mesmo cada papel do roteiro, na ordem. Primeiro entenda o pedido e mapeie o código só lendo; depois planeje; execute em passos pequenos, conferindo cada um; e antes de dar por pronto revise o próprio resultado (rode os testes, releia o diff). Termine com o resumo para o usuário, como pede a definição de pronto.',
@@ -598,9 +619,9 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     `## Missão\n${p.mission}`,
     p.firstTask ? `## Primeira tarefa\n${p.firstTask}` : '',
     `## Autonomia\n${codexOf(p) ? `${CODEX_AUTONOMY_LABEL[p.autonomy]}\n${codexInternet(ctx)}` : AUTONOMY_LABEL[p.autonomy]}${ctx.lockedByCodexManager ? '\nVocê foi contratado por um gestor no Codex e por isso pede aprovação de tudo; só o usuário muda isso.' : ''}`,
-    // Agents e skills são do Claude Code: no Codex a seção some.
+    // No Codex os agents são os subagents gravados pelo Club (só os que existem); as skills são só as marcadas, como lista com o caminho do SKILL.md.
     codexOf(p)
-      ? ''
+      ? [codexAgentsSection(ctx), codexSkillsSection(ctx)].filter(Boolean).join('\n\n')
       : `## Agents e skills indicados\nAgents: ${agentList(p)}.\nSkills: ${skillList(p, ctx)}.\nPrefira estes quando a tarefa pedir; os demais do projeto continuam disponíveis.`,
     guideSection(ctx),
     `## Conhecimento (leia antes de começar)\n${list(p.knowledge, codexOf(p) ? 'Nada específico além do AGENTS.md e do CLAUDE.md do projeto, se existirem.' : 'Nada específico além do CLAUDE.md do projeto.')}`,
@@ -620,7 +641,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     teamSection(p, ctx),
     hiringSection(p, ctx),
     wakeSection(p, ctx),
-    memorySection(ctx),
+    memorySection(p, ctx),
     // Última seção: o estilo vale mais perto do fim, onde o modelo lê por último.
     personalitySection(p.personality),
   ];
@@ -665,19 +686,50 @@ function agentList(p: StaffProfile): string {
   return all.length ? all.join(', ') : 'nenhum em especial';
 }
 
-/** As skills da ficha; as da biblioteca do Claudio’s Club vêm no plugin da sessão, com o prefixo dele. */
+/**
+ * As skills da ficha. Nativas pelo nome; a do projeto que a Global de mesmo nome esconderia vai como `myco:<nome>` (só sua); a que
+ * não existe mais, com aviso. Sem plano (ficha sem o contexto de skills), mostra o nome sem o escopo.
+ */
 function skillList(p: StaffProfile, ctx: FichaContext): string {
   if (!p.skills.length) return 'nenhuma em especial';
-  const library = new Set(ctx.librarySkills ?? []);
-  const known = ctx.knownSkills ? new Set(ctx.knownSkills) : null;
-  return p.skills
-    .map((s) => {
-      if (library.has(s)) return `\`myco:${s}\` (só sua)`;
+  const plan = ctx.skillPlan;
+  const nameOf = (ref: string) => ref.replace(/^(global|project):/, '');
+  if (!plan) return p.skills.map(nameOf).join(', ');
+  const plugin = new Set(plan.plugin.map((s) => s.ref));
+  const missing = new Set(plan.missing);
+  return plan.marked
+    .map((ref) => {
+      const name = nameOf(ref);
       // Skill que sumiu (apagada ou renomeada): a ficha avisa, no padrão da conexão que não existe mais.
-      if (known && !known.has(s)) return `\`${s}\` (não existe mais: avise o usuário)`;
-      return s;
+      if (missing.has(ref)) return `\`${name}\` (não existe mais: avise o usuário)`;
+      if (plugin.has(ref)) return `\`myco:${name}\` (só sua)`;
+      return name;
     })
     .join(', ');
+}
+
+/** Codex: os agents que viraram subagents e os que a ficha pede mas não existem. Sem nenhum dos dois, a seção some. */
+function codexAgentsSection(ctx: FichaContext): string {
+  const a = ctx.codexAgents;
+  if (!a || (!a.available.length && !a.missing.length)) return '';
+  return [
+    '## Agents indicados',
+    `Agents: ${a.available.length ? a.available.join(', ') : 'nenhum em especial'}.`,
+    a.missing.length ? `Não encontrados no projeto: ${a.missing.join(', ')}; se precisar deles, avise o usuário.` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * Codex: as skills marcadas que existem, com a descrição e o caminho do SKILL.md (ele não lê a pasta de skills do Claude Code). Nada
+ * para as não marcadas; sem skill marcada que exista, a seção some.
+ */
+function codexSkillsSection(ctx: FichaContext): string {
+  const present = ctx.skillPlan?.present ?? [];
+  if (!present.length) return '';
+  const lines = present.map((s) => `- ${s.name}: ${s.description || '(sem descrição)'} (arquivo: ${path.join(s.dir, 'SKILL.md')})`);
+  return `## Skills indicadas\nLeia o SKILL.md de uma skill antes de usá-la; use quando a tarefa pedir.\n${lines.join('\n')}`;
 }
 
 /**
@@ -686,12 +738,25 @@ function skillList(p: StaffProfile, ctx: FichaContext): string {
  * relê tudo a cada resposta. O ponto de corte avisa o Claudio’s Club de que o assunto fechou e a memória está
  * em dia: a próxima mensagem pode seguir numa conversa nova (ver server/chat/manager.ts).
  */
-function memorySection(ctx: FichaContext): string {
+function memorySection(p: StaffProfile, ctx: FichaContext): string {
   // Pasta irmã da memória (<id>.memory), com as mesmas barras do memoryPath; sem o sufixo esperado, não há linha da pasta.
   const detailDir = ctx.memoryPath.endsWith('.memory.md') ? ctx.memoryPath.slice(0, -'.md'.length) : null;
+  const own = detailDir ? `\`${ctx.memoryPath}\` e \`${detailDir}/*.md\`` : `\`${ctx.memoryPath}\``;
+  // No Claude a ferramenta aparece como mcp__<servidor>__<ferramenta>; no Codex, pelo nome dela.
+  const tool = (name: string) => (codexOf(p) ? `\`${name}\`` : `\`mcp__${MEMORIA_MCP_NAME}__${name}\``);
   return [
     '## Memória',
     `Sua memória fica em \`${ctx.memoryPath}\`. Leia no início de cada conversa. Ela é o que você leva de uma conversa para a outra: decisões e o porquê, convenções do projeto, pendências e onde parou.`,
+    // Gravar a própria memória vale sempre: a regra da ficha que proíbe editar arquivos (ex.: "nunca edite fora de <pasta>") é sobre o projeto.
+    `- Gravar a sua memória (${own}) é sempre permitido, mesmo que uma regra da ficha proíba editar arquivos: essa regra vale para o resto do projeto, não para ela. A memória e a ficha dos outros não são suas.`,
+    ...(p.autonomy === 'plan'
+      ? [
+          // Só `mcp: false` (acesso desligado na ficha) conta como fora: a ficha gravada sem o contexto da conversa (contratação) não sabe e segue o padrão.
+          ctx.memoria?.mcp === false
+            ? `- Em plan a edição de arquivos fica bloqueada, e a ferramenta que grava a sua memória (MCP \`${MEMORIA_MCP_NAME}\`) está desligada na sua ficha: você não consegue gravá-la nesta conversa. Diga ao usuário o que valeria registrar.`
+            : `- Em plan a edição de arquivos fica bloqueada, e a sua memória é a única exceção: grave com ${tool('memoria_gravar')} (\`arquivo\` e \`conteudo\`: o arquivo inteiro, então leia antes para não perder o que vale) e apague um detalhe velho com ${tool('memoria_apagar')}, do MCP \`${MEMORIA_MCP_NAME}\`. Só elas: não edite a memória por outro caminho (Edit, apply_patch, terminal) nem tente gravar outro arquivo. A ferramenta recusa o que não é da sua memória, \`..\` e links.`,
+        ]
+      : []),
     '- Curta (até umas 60 linhas): ao registrar, substitua o que ficou velho em vez de só acrescentar. Nada que o código ou o git já contam, e nada de segredos (senhas, chaves, tokens).',
     ...(detailDir
       ? [`- Ela é um índice: o que não cabe em uma linha (o porquê de uma decisão longa, como um problema foi resolvido, passos de um procedimento) vai num arquivo curto em \`${detailDir}/<assunto>.md\` (nome em minúsculas com hífens), e na memória fica uma linha com o resumo e o nome do arquivo. Leia o arquivo só quando o assunto aparecer. Quando o assunto fechar ou ficar velho, apague o arquivo e a linha. As mesmas regras valem lá: nada de segredos nem do que o git já conta.`]
@@ -826,6 +891,8 @@ export interface ClaudeArgsOptions {
   cleanBrowser?: boolean;
   /** O MCP de SSH (`myco-ssh`) entrou (ver prepareRun): as de leitura entram em --allowedTools, com a regra do navegador (`editing`). */
   sshMcp?: boolean;
+  /** O MCP da memória (`myco-memoria`, só em `plan`) entrou (ver prepareRun): entra em --allowedTools, senão cada gravação pediria aprovação. */
+  memoriaMcp?: boolean;
 }
 
 /**
@@ -860,7 +927,9 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   const editing = AUTONOMY_ORDER.indexOf(p.autonomy) >= AUTONOMY_ORDER.indexOf('acceptEdits');
   // As de leitura do SSH; as de escrita (ssh_executar, ssh_enviar) seguem a permissão normal e o hook de escrita (mcp-write.json).
   const sshRead = o.sshMcp && editing ? SSH_READ_TOOLS.map((t) => `mcp__${SSH_MCP_NAME}__${t}`) : [];
-  const allowed = [...(p.browser && editing ? ['mcp__claude-in-chrome'] : []), ...(o.cleanBrowser && editing ? [`mcp__${CLEAN_BROWSER_MCP_NAME}`] : []), ...sshRead];
+  // A memória própria em plan: o MCP só grava a memória da ficha dona (memoriaMcp.ts), então é liberado inteiro.
+  const memoria = o.memoriaMcp && p.autonomy === 'plan' ? [`mcp__${MEMORIA_MCP_NAME}`] : [];
+  const allowed = [...(p.browser && editing ? ['mcp__claude-in-chrome'] : []), ...(o.cleanBrowser && editing ? [`mcp__${CLEAN_BROWSER_MCP_NAME}`] : []), ...sshRead, ...memoria];
   if (allowed.length) args.push('--allowedTools', allowed.join(','));
   // Com a internet desligada (Configurações), a busca na web do Claude também sai: a ferramenta é recusada antes de rodar.
   const web = o.internetAccess === false ? ['WebSearch', 'WebFetch'] : [];

@@ -46,6 +46,34 @@ export function projectRelativePath(text: string, projectRoot?: string): string 
   return relativeOk(s);
 }
 
+/** Segmentos de um link relativo sem a âncora (`../a/b.md#titulo`); null se absoluto, com esquema ou `~`, com segmento vazio ou sem extensão no nome. */
+function linkParts(href: string): string[] | null {
+  const s = clean(href.replace(/#.*$/, ''));
+  if (s === null || ABSOLUTE.test(s) || s.startsWith('~')) return null;
+  const parts = s.split('/');
+  if (parts.includes('') || !/\.[a-z0-9]{1,8}$/i.test(parts[parts.length - 1]!)) return null;
+  return parts;
+}
+
+/** Forma de link relativo para arquivo, aceitando `..` e `#âncora` (que `looksLikeFilePath` não aceita). Só para passar pelo `urlTransform`. */
+export const looksLikeFileLink = (href: string): boolean => linkParts(href) !== null;
+
+/**
+ * Link relativo de um arquivo do projeto (`outro.md`, `../x.md#titulo`) resolvido a partir da pasta de quem o cita
+ * (`baseDir`, com "/"; "" = raiz). null se sai do projeto, é absoluto ou não parece arquivo.
+ */
+export function resolveFromDir(href: string, baseDir: string): string | null {
+  const parts = linkParts(href);
+  if (!parts) return null;
+  const out = baseDir ? baseDir.split('/') : [];
+  for (const seg of parts) {
+    if (seg === '.') continue;
+    if (seg !== '..') out.push(seg);
+    else if (out.pop() === undefined) return null;
+  }
+  return out.join('/');
+}
+
 /**
  * Forma de caminho de arquivo, sem olhar o projeto. Só para o link passar pelo `urlTransform` até o componente,
  * que decide de novo com o projeto na mão; nunca vira `<a href>` sozinho.

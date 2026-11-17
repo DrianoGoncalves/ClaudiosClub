@@ -472,6 +472,7 @@ describe('MYCO_TOKEN no ambiente da conversa', () => {
                 instructions: 'Ficha',
                 writableRoots: [],
                 readOnlyPaths: [],
+                agents: [],
                 secrets: { projectPath: dir, home: path.join(dir, 'sem-home'), mycoHome: path.join(dir, 'sem-myco') },
                 threadId: null,
                 threadFile: path.join(dir, 'codex-thread.json'),

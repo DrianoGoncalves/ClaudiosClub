@@ -10,7 +10,7 @@ import { linkInfo, listDir } from './fsutil';
 // pelo Claudio’s Club. Só o SKILL.md é gravado (o resto da pasta fica como está) e nada é renomeado. Excluir manda a
 // pasta inteira para a lixeira (recuperável). O servidor monta a pasta do escopo; o navegador só manda o nome.
 
-const NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+export const NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const MAX_CONTENT = 200_000;
 const TRASH = '.lixeira';
 
@@ -181,7 +181,7 @@ async function locate(t: SkillTarget, mode: 'read' | 'write'): Promise<Found> {
 }
 
 /** Caminho dentro da raiz (estrito: a própria raiz não conta). Compara sem caixa e com `\` e `/` iguais no Windows. */
-function isInside(root: string, p: string): boolean {
+export function isInside(root: string, p: string): boolean {
   const key = (x: string) => {
     const r = path.resolve(x);
     return process.platform === 'win32' ? r.replace(/\//g, '\\').toLowerCase() : r;
@@ -350,7 +350,8 @@ function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-async function moveDir(from: string, to: string): Promise<void> {
+/** Move a pasta (rename; outro volume: copia e só apaga a origem depois da cópia). Usada também pela migração da biblioteca. */
+export async function moveDir(from: string, to: string): Promise<void> {
   try {
     await fs.rename(from, to);
     return;

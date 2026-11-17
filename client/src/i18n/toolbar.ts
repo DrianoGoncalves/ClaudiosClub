@@ -13,9 +13,6 @@ export default defineMessages({
     'toolbar.noResults': 'Nenhuma configuração com “{q}”.',
     'toolbar.clearSearch': 'Limpar a busca',
     'toolbar.about': 'O Clube dos Claudios é um projeto independente, sem afiliação com a Anthropic e sem endosso dela. Claude e Claude Code são marcas da Anthropic.',
-    'toolbar.moreOne': 'Mais {n} configuração no nível avançado (cores, cargos, GPT, orçamentos, limites…).',
-    'toolbar.moreOther': 'Mais {n} configurações no nível avançado (cores, cargos, GPT, orçamentos, limites…).',
-    'toolbar.showAll': 'Mostrar tudo',
     'toolbar.settingsButton': 'Configurações',
     'toolbar.settingsTitle': 'Configurações do Clube dos Claudios (Ctrl+,)',
     'toolbar.groupGeneral': 'Geral',
@@ -55,7 +52,7 @@ export default defineMessages({
     'toolbar.archivedKeywords': 'esconder ocultos',
     'toolbar.animationsTitle': 'Animações',
     'toolbar.animationsDesc':
-      'Anima o quadro: o funcionário trabalhando e as conversas entre funcionários correndo pelas linhas. O padrão segue a opção “reduzir animações” do seu sistema.',
+      'Anima o quadro: o funcionário trabalhando e as conversas entre funcionários correndo pelas linhas. Sem escolha sua, vem ligada no nível Simples e, no Avançado, segue a opção “reduzir animações” do seu sistema.',
     'toolbar.animationsKeywords': 'movimento reduzir',
     'toolbar.serverTitle': 'Servidor do Clube dos Claudios',
     'toolbar.serverDesc':
@@ -101,6 +98,10 @@ export default defineMessages({
     'toolbar.chatDetailDesc':
       'Mostra, além das mensagens, cada passo do funcionário na conversa: arquivos lidos, buscas e comandos executados. Desligado, a conversa fica mais limpa. Vale para todas as conversas, neste navegador.',
     'toolbar.chatDetailKeywords': 'detalhar ferramentas tools comandos leituras buscas mostrar esconder',
+    'toolbar.aiTitlesTitle': 'Títulos de conversa por IA',
+    'toolbar.aiTitlesDesc':
+      'Cria um título curto para cada conversa do Club com assunto livre, usando o Haiku (o modelo mais leve do Claude). Gasta um pouco da cota da sua assinatura. Desligado, nenhuma chamada é feita e a lista mostra o começo do assunto; os títulos que você escreveu em Renomear conversa continuam valendo.',
+    'toolbar.aiTitlesKeywords': 'título titulo conversa ia haiku gerar nome automático renomear lista assunto cota',
     'toolbar.sendBusyTitle': 'Mensagem durante o trabalho',
     'toolbar.sendBusyDesc':
       'O que acontece quando você manda uma mensagem e o funcionário ainda está trabalhando: {how}. Vale para todos os funcionários.',
@@ -383,9 +384,6 @@ export default defineMessages({
     'toolbar.noResults': 'No setting matches “{q}”.',
     'toolbar.clearSearch': 'Clear search',
     'toolbar.about': 'Claudio’s Club is an independent project, not affiliated with or endorsed by Anthropic. Claude and Claude Code are trademarks of Anthropic.',
-    'toolbar.moreOne': '{n} more setting at the advanced level (colors, roles, GPT, budgets, limits…).',
-    'toolbar.moreOther': '{n} more settings at the advanced level (colors, roles, GPT, budgets, limits…).',
-    'toolbar.showAll': 'Show all',
     'toolbar.settingsButton': 'Settings',
     'toolbar.settingsTitle': 'Claudio’s Club settings (Ctrl+,)',
     'toolbar.groupGeneral': 'General',
@@ -424,7 +422,7 @@ export default defineMessages({
     'toolbar.archivedKeywords': 'hide hidden',
     'toolbar.animationsTitle': 'Animations',
     'toolbar.animationsDesc':
-      'Animates the board: the working employee and the chats between employees running along the lines. The default follows the system “reduce motion” setting.',
+      'Animates the board: the working employee and the chats between employees running along the lines. Until you choose, it is on at the Simple level and, at Advanced, follows the system “reduce motion” setting.',
     'toolbar.animationsKeywords': 'motion reduce',
     'toolbar.serverTitle': 'Claudio’s Club server',
     'toolbar.serverDesc':
@@ -470,6 +468,10 @@ export default defineMessages({
     'toolbar.chatDetailDesc':
       'Besides messages, shows each step the employee took in the chat: files read, searches and commands run. Off, the chat is cleaner. Applies to all chats in this browser.',
     'toolbar.chatDetailKeywords': 'detail tools commands reads searches show hide',
+    'toolbar.aiTitlesTitle': 'AI conversation titles',
+    'toolbar.aiTitlesDesc':
+      'Creates a short title for each Club conversation with a free-form topic, using Haiku (Claude’s lightest model). Uses a little of your subscription quota. Off, no model call is made and the list shows the start of the topic; titles you wrote with Rename conversation still apply.',
+    'toolbar.aiTitlesKeywords': 'title conversation chat ai haiku generate name automatic rename list topic quota',
     'toolbar.sendBusyTitle': 'Message while working',
     'toolbar.sendBusyDesc': 'What happens when you send a message while the employee is still working: {how}. Applies to all employees.',
     'toolbar.sendBusyKeywords': 'queue interrupt priority send busy',
@@ -745,9 +747,6 @@ export default defineMessages({
     'toolbar.noResults': 'Ninguna configuración coincide con “{q}”.',
     'toolbar.clearSearch': 'Limpiar la búsqueda',
     'toolbar.about': 'El Club de los Claudios es un proyecto independiente, sin afiliación con Anthropic ni respaldo de ella. Claude y Claude Code son marcas de Anthropic.',
-    'toolbar.moreOne': '{n} configuración más en el nivel avanzado (colores, cargos, GPT, presupuestos, límites…).',
-    'toolbar.moreOther': '{n} configuraciones más en el nivel avanzado (colores, cargos, GPT, presupuestos, límites…).',
-    'toolbar.showAll': 'Mostrar todo',
     'toolbar.settingsButton': 'Configuración',
     'toolbar.settingsTitle': 'Configuración del Club de los Claudios (Ctrl+,)',
     'toolbar.groupGeneral': 'General',
@@ -786,7 +785,7 @@ export default defineMessages({
     'toolbar.archivedKeywords': 'ocultar escondidos',
     'toolbar.animationsTitle': 'Animaciones',
     'toolbar.animationsDesc':
-      'Anima el tablero: el empleado trabajando y las conversaciones entre empleados corriendo por las líneas. El valor predeterminado sigue la opción “reducir animaciones” del sistema.',
+      'Anima el tablero: el empleado trabajando y las conversaciones entre empleados corriendo por las líneas. Hasta que elijas, viene activada en el nivel Simple y, en Avanzado, sigue la opción “reducir animaciones” del sistema.',
     'toolbar.animationsKeywords': 'movimiento reducir',
     'toolbar.serverTitle': 'Servidor del Club de los Claudios',
     'toolbar.serverDesc':
@@ -832,6 +831,10 @@ export default defineMessages({
     'toolbar.chatDetailDesc':
       'Muestra, además de los mensajes, cada paso del empleado en la conversación: archivos leídos, búsquedas y comandos ejecutados. Apagado, la conversación queda más limpia. Vale para todas las conversaciones de este navegador.',
     'toolbar.chatDetailKeywords': 'detallar herramientas tools comandos lecturas búsquedas mostrar ocultar',
+    'toolbar.aiTitlesTitle': 'Títulos de conversación con IA',
+    'toolbar.aiTitlesDesc':
+      'Crea un título corto para cada conversación del Club con tema libre, usando Haiku (el modelo más ligero de Claude). Gasta un poco de la cuota de tu suscripción. Desactivado, no se hace ninguna llamada al modelo y la lista muestra el comienzo del tema; los títulos que escribiste en Renombrar conversación siguen valiendo.',
+    'toolbar.aiTitlesKeywords': 'título conversación chat ia haiku generar nombre automático renombrar lista tema cuota',
     'toolbar.sendBusyTitle': 'Mensaje durante el trabajo',
     'toolbar.sendBusyDesc': 'Qué pasa cuando envías un mensaje y el empleado sigue trabajando: {how}. Vale para todos los empleados.',
     'toolbar.sendBusyKeywords': 'cola interrumpir prioridad enviar ocupado',

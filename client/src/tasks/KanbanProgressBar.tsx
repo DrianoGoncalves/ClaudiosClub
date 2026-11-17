@@ -3,10 +3,11 @@ import type { TaskProgress } from '../../../shared/model';
 import { t } from '../i18n';
 
 /** Barra fina do progresso do kanban (o servidor manda `progress` no summary de tarefas); sem progresso não desenha nada. */
-export function KanbanProgressBar({ progress, open }: { progress: TaskProgress | null | undefined; open: number }) {
+export function KanbanProgressBar({ progress }: { progress: TaskProgress | null | undefined }) {
   if (!progress) return null;
   const percent = progressPercent(progress);
-  const text = t(open === 1 ? 'board.progressOne' : 'board.progressOther', { percent, open, total: progressTotal(progress) });
+  const total = progressTotal(progress);
+  const text = t(total === 1 ? 'board.progressOne' : 'board.progressOther', { percent, total });
   return (
     <div
       className="bn-progress"

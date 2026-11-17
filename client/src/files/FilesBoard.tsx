@@ -5,6 +5,9 @@ import { FileApiError, filesApi, type FileEntry } from '../api';
 import { t, type MsgKey } from '../i18n';
 import { FileIcon, FolderIcon, LockIcon, PlusIcon, TrashIcon } from '../icons';
 import { foldersToShow, isWithin, joinPath, nameProblem, parentOf, type NameProblem } from './newEntry';
+import { previewKind } from './previewKind';
+import { MarkdownPreview } from './MarkdownPreview';
+import { JsonPreview } from './JsonPreview';
 import { askConfirm } from '../lib/dialogStore';
 
 const CodeEditor = lazy(() => import('./CodeEditor'));
@@ -76,6 +79,8 @@ export function FilesBoard({
   const [selected, setSelected] = useState<FileEntry | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  /** Como mostrar um arquivo com visualização (.md/.markdown, .json): o texto (editor) ou formatado. Vale para os próximos também; os outros arquivos ignoram. */
+  const [view, setView] = useState<'code' | 'preview'>('code');
 
   const doc = useRef<Doc | null>(null);
   const conflictRef = useRef<number | null>(null);
@@ -247,6 +252,7 @@ export function FilesBoard({
     } else {
       setTargetDir(parentOf(path));
       setEditing(true);
+      setView('code');
       await load(path);
     }
     return null;
@@ -305,6 +311,9 @@ export function FilesBoard({
     void flush();
   };
 
+  /** Link de um .md aberto no próprio editor: abre o arquivo apontado (pede antes se há mudança não salva). */
+  const openLink = (path: string) => void openFile({ name: path.split('/').at(-1)!, path, type: 'file' });
+
   useEffect(() => {
     // Esc que o editor já usou (fechar a busca) não fecha a tela.
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !e.defaultPrevented && void close();
@@ -323,6 +332,9 @@ export function FilesBoard({
       window.removeEventListener('beforeunload', onUnload);
     };
   }, []);
+
+  const kind = opened?.state === 'ok' ? previewKind(opened.path) : null;
+  const previewing = kind !== null && view === 'preview';
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && void close()}>
@@ -406,6 +418,15 @@ export function FilesBoard({
                     </>
                   )}
                 </div>
+                {kind && (
+                  <div className="segmented files-view" role="group" aria-label={t('files.viewLabel')}>
+                    {(['code', 'preview'] as const).map((mode) => (
+                      <button key={mode} type="button" className="btn-secondary btn-toggle" aria-pressed={view === mode} onClick={() => setView(mode)}>
+                        {t(mode === 'code' ? 'files.viewCode' : 'files.viewPreview')}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {conflict !== null && (
                   <div className="files-conflict" role="alert">
                     <p>{t('files.conflict')}</p>
@@ -438,8 +459,17 @@ export function FilesBoard({
                       label={opened.path}
                       onChange={edit}
                       onSave={() => void flush()}
+                      hidden={previewing}
                     />
                   </Suspense>
+                )}
+                {/* `opened.doc` é o mesmo objeto que o editor atualiza a cada tecla: a visualização mostra o que ainda não foi salvo. */}
+                {/* A key refaz a visualização do zero (árvore recolhida) se o arquivo for relido do disco. */}
+                {opened.state === 'ok' && previewing && kind === 'markdown' && (
+                  <MarkdownPreview key={`${opened.path}:${opened.rev}`} path={opened.path} text={opened.doc.content} onOpen={openLink} onSave={() => void flush()} />
+                )}
+                {opened.state === 'ok' && previewing && kind === 'json' && (
+                  <JsonPreview key={`${opened.path}:${opened.rev}`} path={opened.path} text={opened.doc.content} onSave={() => void flush()} />
                 )}
               </>
             )}

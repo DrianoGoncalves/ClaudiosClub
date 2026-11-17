@@ -14,7 +14,9 @@ import {
 } from '@xyflow/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AppConfig, Board, BoardBackground, CostReport, GitState, InboxItem, SendPriority, UiLevel, UsageStop } from '../../../shared/model';
+import { conversationTitle } from '../detail/conversationTitle';
 import { InboxMenu } from '../inbox/InboxMenu';
+import type { InboxOpen } from '../inbox/taskAlerts';
 import type { InboxView } from '../inbox/useInbox';
 import { EdgeActions, edgeTypes } from './edges';
 import { buildGraph, HANDLE, HR_ID, readingOrder, roomFrame, type BoardNode, type StaffLink } from './layout';
@@ -72,7 +74,8 @@ interface BoardViewProps {
   onSelect: (id: string | null) => void;
   /** A caixa "precisa de mim" (lida no App, que também mostra as notificações). */
   inbox: InboxView;
-  onOpenInbox: (item: InboxItem) => void;
+  onOpenInbox: InboxOpen;
+  onOpenInboxFile?: (item: InboxItem, path: string) => void;
   onRename: (name: string) => Promise<void>;
   onUsageStop: (stop: UsageStop) => Promise<void>;
   onSendWhileBusy: (p: SendPriority) => Promise<void>;
@@ -127,10 +130,18 @@ export function BoardView(props: BoardViewProps) {
         .map((p) => workspaceOf.get(p.id) ?? null),
     );
   }, [props.board.projects, workspaceOf, config?.archived, showArchived]);
-  // Assunto de cada conversa (o mesmo da lista de conversas do funcionário), para a caixa "precisa de mim".
-  const topicOf = useMemo(
-    () => new Map(Object.values(props.board.sessions).flat().flatMap((s) => (s.topic ? [[s.id, s.topic] as const] : []))),
-    [props.board.sessions],
+  // Título de cada conversa (o mesmo da lista de conversas do funcionário: manual, gerado ou assunto), para a caixa "precisa de mim".
+  const titleOf = useMemo(
+    () =>
+      new Map(
+        Object.values(props.board.sessions)
+          .flat()
+          .flatMap((s) => {
+            const title = conversationTitle({ id: s.id, reviewTask: s.reviewTask, aiTitle: s.aiTitle, topic: s.topic }, config?.conversationTitles);
+            return title ? [[s.id, title] as const] : [];
+          }),
+      ),
+    [props.board.sessions, config?.conversationTitles],
   );
   const [shelves, setShelves] = useState(() => loadList(SHELVES_KEY));
   const [collapsed, setCollapsed] = useState(() => loadList(COLLAPSED_KEY));
@@ -401,7 +412,7 @@ export function BoardView(props: BoardViewProps) {
           <UpdateNotice />
           <PendingRestartNotice />
           <span className="toolbar-sep" />
-          <InboxMenu inbox={props.inbox} topicOf={topicOf} staff={props.board.staff} onOpen={props.onOpenInbox} />
+          <InboxMenu inbox={props.inbox} titleOf={titleOf} staff={props.board.staff} onOpen={props.onOpenInbox} onOpenFile={props.onOpenInboxFile} />
           <button className="toolbar-icon" onClick={() => onSelect(HR_ID)} title={t('hr.people')} aria-label={t('hr.people')}>
             <UsersIcon />
           </button>
@@ -426,6 +437,7 @@ export function BoardView(props: BoardViewProps) {
             workspaces={config?.workspaces ?? null}
             projectWorkspaces={config?.projectWorkspaces ?? null}
             contextSwitch={config?.contextSwitch ?? null}
+            aiTitles={typeof config?.aiTitles === 'boolean' ? config.aiTitles : null}
             optimizeQuota={config?.optimizeQuota ?? null}
             autoContinue={config?.autoContinue ?? null}
             showUserScope={config?.showUserScope ?? null}

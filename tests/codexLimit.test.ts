@@ -94,6 +94,7 @@ function setup(over: { codexLimits?: () => Promise<CodexUsage | null>; claudeLim
               instructions: 'Ficha',
               writableRoots: [],
               readOnlyPaths: [],
+              agents: [],
               secrets: { projectPath: root, home: path.join(root, 'sem-home'), mycoHome: path.join(root, 'sem-myco') },
               threadId: null,
               threadFile: path.join(dir, 'codex-thread.json'),

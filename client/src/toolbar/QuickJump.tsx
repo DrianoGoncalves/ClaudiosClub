@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Board, Task } from '../../../shared/model';
+import type { Board, ConversationHit, Task } from '../../../shared/model';
 import { api } from '../api';
+import { type ConversationTitles, conversationTitle } from '../detail/conversationTitle';
 import { t } from '../i18n';
 
 // Ctrl+K: pular para um funcionário, um projeto ou uma tarefa digitando parte do nome. Setas
@@ -30,7 +31,18 @@ const KIND: Record<Item['kind'], string> = {
 /** Sem acento e sem caixa: "joao" acha "João". */
 const fold = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
-export function QuickJump({ board, taskProjects, onJump }: { board: Board; taskProjects: string[]; onJump: (t: JumpTarget) => void }) {
+export function QuickJump({
+  board,
+  taskProjects,
+  titles,
+  onJump,
+}: {
+  board: Board;
+  taskProjects: string[];
+  /** Os títulos que o user deu às conversas (config): valem no resultado da busca como em todas as listas. */
+  titles?: ConversationTitles;
+  onJump: (t: JumpTarget) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
@@ -87,27 +99,19 @@ export function QuickJump({ board, taskProjects, onJump }: { board: Board; taskP
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board, tasks]);
 
-  // A partir de 3 letras, também o que foi dito nas conversas dos funcionários.
-  const [hits, setHits] = useState<Item[]>([]);
+  // A partir de 3 letras, também o que foi dito nas conversas dos funcionários. O título do resultado segue a regra das
+  // listas (manual > gerado > assunto > o do transcript, que o servidor manda); conversa fora do quadro fica com o do servidor.
+  const sessionOf = useMemo(() => new Map(Object.values(board.sessions).flat().map((s) => [s.id, s])), [board.sessions]);
+  const [found, setFound] = useState<ConversationHit[]>([]);
   useEffect(() => {
     const q = query.trim();
-    if (!open || q.length < 3) return setHits([]);
+    if (!open || q.length < 3) return setFound([]);
     let alive = true;
     const t = setTimeout(
       () =>
         void api.search(q).then(
-          (found) =>
-            alive &&
-            setHits(
-              found.map((h) => ({
-                key: `c:${h.sessionId}:${h.at}`,
-                kind: 'conversa',
-                title: `${h.staffName}${h.title ? ` · ${h.title}` : ''}`,
-                detail: h.snippet,
-                target: { kind: 'staff', projectId: h.projectId, staffId: h.staffId, sessionId: h.sessionId },
-              })),
-            ),
-          () => alive && setHits([]),
+          (hits) => alive && setFound(hits),
+          () => alive && setFound([]),
         ),
       250,
     );
@@ -116,6 +120,21 @@ export function QuickJump({ board, taskProjects, onJump }: { board: Board; taskP
       clearTimeout(t);
     };
   }, [open, query]);
+  const hits = useMemo<Item[]>(
+    () =>
+      found.map((h) => {
+        const s = sessionOf.get(h.sessionId);
+        const title = conversationTitle({ id: h.sessionId, reviewTask: s?.reviewTask, aiTitle: s?.aiTitle, topic: s?.topic, title: h.title }, titles);
+        return {
+          key: `c:${h.sessionId}:${h.at}`,
+          kind: 'conversa',
+          title: `${h.staffName}${title ? ` · ${title}` : ''}`,
+          detail: h.snippet,
+          target: { kind: 'staff', projectId: h.projectId, staffId: h.staffId, sessionId: h.sessionId },
+        };
+      }),
+    [found, sessionOf, titles],
+  );
 
   const words = fold(query).split(/\s+/).filter(Boolean);
   const named = words.length ? items.filter((i) => words.every((w) => fold(`${i.title} ${i.detail} ${KIND[i.kind]}`).includes(w))) : items;

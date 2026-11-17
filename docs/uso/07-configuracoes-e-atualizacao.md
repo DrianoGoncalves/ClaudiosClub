@@ -3,19 +3,23 @@
 ## Abrir as configurações
 
 - Engrenagem no topo, ou Ctrl+, (vírgula).
-- O painel tem o campo **Buscar configurações** e os grupos **Geral**, **Quadro**, **Conversa**, **Consumo**, **Fila de tarefas**, **Cargos**, **MCPs** e **Créditos**. Dentro de **Geral** há as seções **Ajuda**, **Internet e GPT** e **Sistema**.
-- **Nível de uso**: **Simples** esconde o que é avançado. Para ver tudo, use **Mostrar tudo** ou escolha **Avançado**.
+- O painel tem o campo **Buscar configurações**. O que aparece depende do **Nível de uso**.
+- No **Simples**, as configurações vêm em cartões por tema, cada um com ícone. Cada item tem título em linguagem comum, uma frase do que muda para você e o controle ao lado (os interruptores mostram **Ligado** ou **Desligado**). Os temas são **Nível de uso**, **Aparência**, **Quadro**, **Conversas**, **Gasto e limites**, **Internet e Chrome**, **Segurança e atualização** e **Ajuda e sobre**. Para ver o resto, use **Passar para o nível Avançado** (no fim da lista) ou escolha **Avançado** em **Nível de uso**.
+- No **Avançado**, a lista é técnica, com os grupos **Geral**, **Quadro**, **Conversa**, **Consumo**, **Fila de tarefas**, **Cargos**, **MCPs** e **Créditos**. Dentro de **Geral** há as seções **Ajuda**, **Internet e GPT**, **Extensão do Chrome** e **Sistema**. Só aparecem no Avançado: **Servidor**, **Monitor de CPU e memória**, **Mostrar o escopo do usuário** e os **MCPs**.
+- Os nomes dos grupos e dos itens nas tabelas abaixo são os do **Avançado**. Os mesmos itens existem no Simples, com o título em linguagem comum (por exemplo, **Idioma** fica em **Aparência**, e **Atualizações** em **Segurança e atualização**).
 
 ## Itens mais usados
 
 | Item | Grupo | O que faz |
 | --- | --- | --- |
 | **Idioma** | Geral | Português (Brasil), English ou Español. Vale neste navegador e recarrega a página. |
+| **Títulos de conversa por IA** | Conversa | Ligado por padrão: o Club pede ao Haiku (o modelo mais leve do Claude) um título curto para cada conversa com assunto livre, e isso gasta um pouco da cota da assinatura. Desmarque para não gastar: a lista passa a mostrar o começo do assunto. Os títulos que você escreveu em **Renomear conversa** continuam valendo. No Simples: **Dar título às conversas com IA**. |
 | **Usar o Codex (GPT)** | Geral, seção Internet e GPT (avançado) | Liga o Codex. Ao ligar, o Club instala o Codex CLI se ele faltar. Gasta a cota do seu ChatGPT. |
 | **Modelo do GPT** | Geral, seção Internet e GPT (avançado) | Modelo do Codex usado nas perguntas ao GPT. **Padrão do Codex** deixa o Codex escolher. Só aparece com o Codex ligado. |
+| **Avisos e tarefa rápida no Chrome** | Geral, seção Extensão do Chrome | Baixa a extensão do Chrome, mostra como instalar, gera o código de pareamento e lista os pareamentos, com **Revogar**. Ver a página 09. |
 | **Atualizações** | Geral, seção Sistema | Mostra a versão e tem **Procurar agora**. Ver "Atualizar o Club" abaixo. |
 | **Bloquear o Claudio’s Club no navegador dos funcionários** | Geral (avançado) | Ligado por padrão: o navegador do funcionário (que é o seu, já pareado) não abre a tela do Club, para ele não aprovar nem mesclar no seu lugar. Desligue só para testar o próprio Club. Para só ver a tela, use `http://localhost:5173` (sem pareamento). Vale para conversas novas. |
-| **Servidor** | Geral, seção Sistema | **Reiniciar** e **Parar o Clube dos Claudios**. Ao parar, as conversas abertas fecham e as rotinas param até o servidor voltar. |
+| **Servidor** | Geral, seção Sistema (avançado) | **Reiniciar** e **Parar o Clube dos Claudios**. Ao parar, as conversas abertas fecham e as rotinas param até o servidor voltar. |
 
 Se você não acha **Usar o Codex (GPT)**, mude **Nível de uso** para **Avançado**.
 

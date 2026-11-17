@@ -4,6 +4,7 @@ import { api } from '../api';
 import { t } from '../i18n';
 import { pollVisible } from '../usePoll';
 import { inboxText, inboxWho } from './inboxText';
+import type { AlertKind } from './taskAlerts';
 
 // A caixa "precisa de mim": o que espera você em todas as salas, lida a cada poucos segundos.
 // Com "avisar no sistema" ligado, cada item novo vira uma notificação do sistema (só o que é novo:
@@ -13,7 +14,7 @@ const NOTIFY_KEY = 'myco.notify';
 const POLL_MS = 5000;
 const POLL_HIDDEN_MS = 30_000;
 
-const KIND_TITLE: Record<InboxItem['kind'], string> = {
+const KIND_TITLE: Record<AlertKind, string> = {
   plan: t('inbox.titlePlan'),
   permission: t('inbox.titlePermission'),
   secret: t('inbox.titleSecret'),
@@ -24,6 +25,8 @@ const KIND_TITLE: Record<InboxItem['kind'], string> = {
   usage: t('inbox.titleUsage'),
   blocked: t('inbox.titleBlocked'),
   notStarted: t('inbox.titleNotStarted'),
+  question: t('inbox.titleQuestion'),
+  stuck: t('inbox.titleStuck'),
 };
 
 export interface InboxView {
@@ -94,7 +97,7 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
   /** Tira da caixa: rotina vista, segredo trocado (ou que não é segredo), pergunta vista sem responder, sessão esperando em outro lugar. */
   const dismiss = useCallback(async (item: InboxItem, opts: { notSecret?: boolean } = {}) => {
     const id = item.id.replace(/^(secret|routine):/, '');
-    const call = item.id.startsWith('question:')
+    const call = item.kind === 'waiting' && item.id.startsWith('question:')
       ? api.dismissQuestion(item.sessionId)
       : item.id.startsWith('waiting:')
         ? api.dismissWaiting(item.sessionId)

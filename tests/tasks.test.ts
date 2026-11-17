@@ -1819,13 +1819,20 @@ describe('gestor como revisor (tarefa que ele passou)', () => {
     });
   });
 
-  it('revisão dele não começou: ele recebe o aviso da entrega, como antes', async () => {
+  it('revisão dele não começou: tenta de novo, e só passado o prazo ele recebe o aviso da entrega (uma vez)', async () => {
     const { svc, notified, make, current } = await selfFlow('self-falha', { failReview: true });
     const t = await make('Cabeçalho');
     await svc.start('p', t.id);
     await svc.onTurnDone('s-1');
-    expect(notified).toEqual([{ staffId: 'gio-1', sessionId: 's-gio', text: expect.stringContaining('Luana entregou a tarefa “Cabeçalho”') }]);
+    // A falha passa sozinha (envio): nota, retry marcado e nenhum aviso ainda.
+    expect(notified).toEqual([]);
     expect((await current()).history.at(-1)?.note).toBe('revisão automática não começou: sem conversa');
+    expect((await current()).reviewRetry).toMatchObject({ attempts: 1, deliveryAt: (await current()).delivery!.at });
+    await svc.tick(new Date(Date.now() + 31 * 60_000));
+    expect(notified).toEqual([{ staffId: 'gio-1', sessionId: 's-gio', text: expect.stringContaining('Luana entregou a tarefa “Cabeçalho”') }]);
+    expect((await current()).history.at(-1)?.note).toBe('revisão automática não começou em 30 min: a tarefa fica com você');
+    await svc.tick(new Date(Date.now() + 40 * 60_000));
+    expect(notified).toHaveLength(1);
   });
 
   it('revisor diferente do gestor: a entrega avisa o gestor como antes, e a revisão vai para o revisor', async () => {
@@ -2053,14 +2060,15 @@ describe('dúvida da tarefa ao gestor', () => {
     expect(await h.task()).toMatchObject({ questionCount: 3, question: { id: 'req-4', status: 'escalated' } });
   });
 
-  it('se o envio ao gestor falha, a dúvida escala para você', async () => {
+  it('se o envio ao gestor falha (motivo que passa), a dúvida segue aberta com retry marcado; a contagem só sobe quando chega', async () => {
     const h = await pedida('d-falha');
     const work = (await h.task()).sessionId!;
     h.gestor.falha = true;
     h.asks.add('req-1');
     expect(await h.svc.onAsk(work, 'req-1', [{ question: 'Qual?', options: ['a'] }])).toBe(false);
     const t = await h.task();
-    expect(t).toMatchObject({ questionCount: 1, question: { id: 'req-1', status: 'escalated' } });
+    expect(t).toMatchObject({ question: { id: 'req-1', status: 'open', pending: { attempts: 1 } } });
+    expect(t.questionCount ?? 0).toBe(0);
     expect(t.question!.managerSession).toBeUndefined();
   });
 
@@ -2175,14 +2183,16 @@ describe('dúvida da tarefa ao gestor', () => {
     expect(t.resumedAt).toBeFalsy();
   });
 
-  it('dúvida sem resposta do gestor em 15 min escala para você; a demora não conta como resposta', async () => {
+  it('dúvida sem resposta do gestor em 30 min escala para você; a demora não conta como resposta', async () => {
     const h = await pedida('d-prazo');
     const work = (await h.task()).sessionId!;
     h.asks.add('req-1');
     await h.svc.onAsk(work, 'req-1', [{ question: 'Qual?', options: ['a'] }]);
     await h.svc.tick(new Date(Date.now() + 16 * 60_000));
+    expect((await h.task()).question).toMatchObject({ status: 'open' }); // 15 min não é mais o prazo
+    await h.svc.tick(new Date(Date.now() + 31 * 60_000));
     const t = await h.task();
-    expect(t.question).toMatchObject({ status: 'escalated' });
+    expect(t.question).toMatchObject({ status: 'escalated', escalatedAt: expect.any(String) });
     expect(t.question!.answeredBy).toBeUndefined();
     expect(t.history.at(-1)?.note).toBe('dúvida sem resposta do gestor no prazo: vai para você');
     expect(h.delivered).toEqual([]);
@@ -2658,7 +2668,7 @@ describe('dependências: aviso ao gestor de quem espera e caixa "blocked"', () =
         kind: 'blocked',
         sessionId: '',
         summary: '“Aceite” espera “Contrato”: em Aguardar: Cliente',
-        blocked: { taskId: d.id, taskTitle: 'Aceite', blockerId: b.id, blockerTitle: 'Contrato', blockerStatus: 'waiting', reason: 'em Aguardar: Cliente' },
+        blocked: { taskId: d.id, taskTitle: 'Aceite', blockerId: b.id, blockerTitle: 'Contrato', blockerStatus: 'waiting', reason: 'em Aguardar: Cliente', selfHeals: false, humanAction: 'decide' },
       }),
     ]);
     await svc.update('p', b.id, { status: 'doing' }); // voltou a andar: some

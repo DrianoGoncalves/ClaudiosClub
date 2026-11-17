@@ -84,6 +84,9 @@ const adapter = () =>
       project({ id: 'quebrado', path: path.join(root, 'nao-existe'), name: 'Quebrado' }),
       project({ id: 'sumido', path: dest, name: 'Sumido', exists: false }),
     ],
+    // Sem skills nem agents: as skills citadas nas fichas viram refs ao salvar (ver skillRefsOf).
+    getUserScope: async () => ({ agents: [], skills: [] }),
+    getProjectInventory: async () => ({ agents: [], skills: [] }),
   }) as unknown as ToolAdapter;
 
 const service = () => new StaffService(adapter(), { runDir: path.join(root, 'run'), claudeConfigFile: path.join(root, '.claude.json'), mycoUrl: 'x' });
@@ -143,7 +146,8 @@ describe('fichas entre projetos', () => {
       'opus',
       'high',
       ['Explore'],
-      ['lint'],
+      // Nome antigo sem skill conhecida no projeto: vira `global:` ao copiar (a ficha avisa que não existe, ver skillAccess.ts).
+      ['global:lint'],
       ['docs'],
       ['docs/arq.md'],
       true,
@@ -305,6 +309,8 @@ async function mundo() {
   for (const dir of Object.values(dirs)) await fs.mkdir(path.join(dir, '.myco', 'staff'), { recursive: true });
   const adapterM = {
     listProjects: async (): Promise<Project[]> => (['a', 'b', 'c', 'd'] as const).map((id) => project({ id, path: dirs[id], name: `Empresa ${id.toUpperCase()}` })),
+    getUserScope: async () => ({ agents: [], skills: [] }),
+    getProjectInventory: async () => ({ agents: [], skills: [] }),
   } as unknown as ToolAdapter;
   return { base, dirs, adapter: adapterM };
 }
@@ -429,7 +435,8 @@ describe('mesma pessoa entre projetos', () => {
     const r = await servico(w).update('a', 'ana-1a2b', corpo({ agents: ['Plan', 'Explore'], skills: ['deploy'] }));
     expect(r!.copiesUpdated).toBe(0);
     expect(r!.agents).toEqual(['Plan', 'Explore']);
-    expect(r!.skills).toEqual(['deploy']);
+    // `deploy` não existe em lugar nenhum: o nome antigo vira `global:` ao salvar.
+    expect(r!.skills).toEqual(['global:deploy']);
     const copia = (await readProfile(w.dirs.b, 'copia-b'))!;
     expect(copia.agents).toEqual(['Explore']);
     expect(copia.skills).toEqual(['lint']);

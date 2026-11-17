@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
-import { AUTO_REVIEW_ROUNDS, isClosed, type CostReport, type StaffProfile, type Task as TaskModel, type TaskHandoff, type TaskStatus } from '../../../shared/model';
+import { AUTO_REVIEW_ROUNDS, isClosed, type BoardConfig, type CostReport, type StaffProfile, type Task as TaskModel, type TaskHandoff, type TaskStatus } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
 import { pollVisible } from '../usePoll';
 import { Markdown } from '../chat/markdown';
@@ -7,11 +7,17 @@ import { formatAgo, formatShare } from '../format';
 import { t, locale } from '../i18n';
 import { BranchIcon, ClockIcon, ReviewIcon } from '../icons';
 import { TaskFallbackBadge } from '../staff/FallbackBadge';
+import { AutoBadge, AutoInfo } from './AutoCard';
+import { BoardReview, useBoardReview } from './BoardReview';
 import { ReviewDelegate } from './ReviewDelegate';
+import { reviewPlan } from './reviewRule';
+import { OwnerBadge, ReviewWho } from './ReviewWho';
 import { TaskCodePanel } from './TaskCodePanel';
 import { DoubtBadge, DoubtBlock } from './TaskDoubt';
+import { PauseNote } from './TaskPause';
 import { ResourceWaitBadge, resourceWaitText } from './ResourceWait';
 import { BlockedBadge, BlockedByField, blockerName, openBlockers, sameDeps } from './TaskDeps';
+import { waitClass, waitWarm } from './waitTone';
 import { cancelledByName, dependentRows, type DepMap, type DepMode } from './cancelDeps';
 import { TaskCloseDialog } from './TaskCloseDialog';
 import { TaskCostBlock } from './TaskCostBlock';
@@ -143,6 +149,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const [showCancelled, setShowCancelled] = useState(false);
   /** Diálogo de cancelar ou apagar aberto, para a tarefa `id`. */
   const [closing, setClosing] = useState<{ mode: DepMode; id: string } | null>(null);
+  const boardReview = useBoardReview(projectId);
   const now = Date.now();
 
   const load = useCallback(() => {
@@ -227,7 +234,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         <span className="task-title">{task.title}</span>
         <StatusBadge task={task} hasDeploy={hasDeploy} />
         <VerdictBadge task={task} nameOf={nameOf} />
-        <DoubtBadge question={task.question} requestedBy={task.requestedBy} nameOf={nameOf} />
+        {task.status === 'review' && <OwnerBadge plan={reviewPlan(task, boardReview.config)} />}
+        <DoubtBadge question={task.question} requestedBy={task.requestedBy} nameOf={nameOf} warm={waitWarm(task.status)} />
+        <PauseNote pause={task.pause} staffName={nameOf(task.staffId)} now={now} />
         <span className="task-meta muted small">
           <span className="task-id" title={t('tasks.idHint')}>
             {task.id}
@@ -253,17 +262,18 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             {!!task.reviewRounds && ` · ${t('tasks.reviewRounds', { n: task.reviewRounds, max: AUTO_REVIEW_ROUNDS })}`}
           </span>
         )}
+        <AutoBadge task={task} />
         {task.fallback && <TaskFallbackBadge fallback={task.fallback} />}
-        {/* Esperando dependência: o selo diz por quais tarefas; na fila ou não, ela só começa quando ficarem prontas. */}
-        <BlockedBadge blockers={waitingOn(task)} />
+        {/* Esperando dependência: o selo diz por quais tarefas; na fila ou não, ela só começa quando ficarem prontas. O laranja de espera é só da coluna A fazer. */}
+        <BlockedBadge blockers={waitingOn(task)} warm={waitWarm(task.status)} />
         {queuePos(task) > 0 && !waitingOn(task).length && (
-          <span className="task-queue small" title={t('tasks.queuedHint')}>
+          <span className={`task-queue${waitClass(waitWarm(task.status))} small`} title={t('tasks.queuedHint')}>
             {t('tasks.queuePos', { pos: queuePos(task) })}
           </span>
         )}
-        <ResourceWaitBadge wait={task.resourceWait} now={now} />
+        <ResourceWaitBadge wait={task.resourceWait} now={now} warm={waitWarm(task.status)} />
         {!!task.held?.length && (
-          <span className="task-queue small" title={t('tasks.heldHint')}>
+          <span className={`task-queue${waitClass(waitWarm(task.status))} small`} title={t('tasks.heldHint')}>
             {t(task.held.length === 1 ? 'tasks.heldOne' : 'tasks.heldOther', { n: task.held.length })}
           </span>
         )}
@@ -310,6 +320,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         </header>
         {/* Com o detalhe aberto o erro aparece nele: no celular o detalhe cobre o quadro inteiro. */}
         {error && !current && <p className="error small" role="alert">{error}</p>}
+        <BoardReview review={boardReview} staff={byHierarchy(staff)} />
         {adding && (
           <TaskForm
             staff={byHierarchy(staff)}
@@ -399,6 +410,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             onOpenStaff={onOpenStaff}
             task={current}
             staff={staff}
+            board={boardReview.config}
             cost={costOf(current)}
             onClose={() => setSelected(null)}
             onSave={(patch) => act(() => api.updateTask(projectId, current.id, patch as TaskPatch))}
@@ -649,6 +661,7 @@ function TaskDetail({
   projectId,
   task,
   staff,
+  board,
   cost,
   onClose,
   onSave,
@@ -671,6 +684,8 @@ function TaskDetail({
   projectId: string;
   task: Task;
   staff: StaffProfile[];
+  /** A revisão automática do quadro (null = ainda não lida ou servidor sem a opção). */
+  board: BoardConfig | null;
   cost: string | null;
   onChanged: () => void;
   onOpenStaff: (staffId: string) => void;
@@ -696,6 +711,8 @@ function TaskDetail({
   onReopen: () => void;
   nameOf: (staffId: string | null) => string | null;
 }) {
+  /** Textos do porquê de a tarefa não andar: laranja só com o cartão em A fazer, como no selo do cartão. */
+  const waitText = `muted${waitWarm(task.status) ? ' task-wait-text' : ''} small`;
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
   const [pr, setPr] = useState(task.pr ?? '');
@@ -812,11 +829,14 @@ function TaskDetail({
           <TaskFallbackBadge fallback={task.fallback} />
         </p>
       )}
+      <AutoInfo task={task} open={task.status === 'review'} />
+      <PauseNote pause={task.pause} staffName={nameOf(task.staffId)} now={Date.now()} />
       <DoubtBlock
         question={task.question}
         requestedBy={task.requestedBy}
         nameOf={(id) => staff.find((s) => s.id === id)?.name ?? null}
         now={Date.now()}
+        answer={{ projectId, taskId: task.id, onAnswered: onChanged }}
       />
       {task.status === 'cancelled' && (
         // Uma frase por linha (quem e quando; o motivo; o que a coluna significa), no tamanho de parágrafo do painel.
@@ -832,7 +852,7 @@ function TaskDetail({
         </div>
       )}
       {waitingOn.length > 0 && (
-        <p className="muted small">
+        <p className={waitText}>
           {t('tasks.blockedDetail', { names: waitingOn.map(blockerName).join(', ') })}
           {waitingOn.some((o) => o.status === 'cancelled') && ` ${t('tasks.blockedCancelledHint')}`}{' '}
           {queuePos > 0 && (
@@ -843,7 +863,7 @@ function TaskDetail({
         </p>
       )}
       {queuePos > 0 && waitingOn.length === 0 && (
-        <p className="muted small">
+        <p className={waitText}>
           {busyWith
             ? t('tasks.queueBusy', { who: who?.name ?? t('tasks.ownerFallback'), pos: queuePos, title: busyWith.title })
             : t('tasks.queueFree', { who: who?.name ?? t('tasks.ownerFallback'), pos: queuePos })}{' '}
@@ -853,12 +873,12 @@ function TaskDetail({
         </p>
       )}
       {task.resourceWait && (
-        <p className="muted small">
+        <p className={waitText}>
           {resourceWaitText(task.resourceWait, Date.now())}. {t('tasks.resourceWaitHint')}
         </p>
       )}
       {!!task.held?.length && (
-        <p className="muted small">
+        <p className={waitText}>
           {task.held.length === 1 ? t('tasks.heldMineOne') : t('tasks.heldMineOther', { n: task.held.length })}: {task.held[0]!.reason}.{' '}
           {t('tasks.heldNext')}
         </p>
@@ -908,6 +928,14 @@ function TaskDetail({
           </select>
         )}
       </p>
+      {task.status === 'review' && (
+        <ReviewWho
+          plan={reviewPlan(task, board)}
+          workerName={who?.name ?? t('tasks.ownerFallback')}
+          reviewerName={(id) => nameOf(id) ?? id}
+          asked={!!task.review}
+        />
+      )}
       {task.status === 'review' && <ReviewDelegate projectId={projectId} task={task} staff={byHierarchy(staff)} onChanged={onChanged} onOpenStaff={onOpenStaff} />}
       {task.sessionId && (
         <details className="collapse" open={task.status === 'review' || task.status === 'done'}>

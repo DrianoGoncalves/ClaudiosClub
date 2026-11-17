@@ -16,6 +16,8 @@ export const GPT_MCP_BUNDLE = path.join(ROOT, 'dist', 'gpt-mcp.mjs');
 export const GPT_MCP_CORE_BUNDLE = path.join(ROOT, 'dist', 'gpt-mcp-core.mjs');
 /** MCP de SSH que as sessões dos funcionários sobem (server/staff/sshMcp.ts acha o pacote aqui). */
 export const SSH_MCP_BUNDLE = path.join(ROOT, 'dist', 'ssh-mcp.mjs');
+/** MCP da memória da própria ficha (server/staff/memoriaMcp.ts acha o pacote aqui). */
+export const MEMORIA_MCP_BUNDLE = path.join(ROOT, 'dist', 'memoria-mcp.mjs');
 /** Proxy preguiçoso do MCP do navegador limpo (server/navegadorMcp.ts acha o pacote aqui). */
 export const NAVEGADOR_MCP_BUNDLE = path.join(ROOT, 'dist', 'navegador-mcp.mjs');
 /** Lançador dos MCPs da biblioteca (server/staff/mcpLaunch.ts acha o pacote aqui). */
@@ -69,6 +71,7 @@ export async function bundleAll(): Promise<void> {
   await bundle('server/gpt-mcp.ts', GPT_MCP_BUNDLE);
   await bundle('server/staff/gptMcp.ts', GPT_MCP_CORE_BUNDLE);
   await bundle('server/ssh-mcp.ts', SSH_MCP_BUNDLE);
+  await bundle('server/memoria-mcp.ts', MEMORIA_MCP_BUNDLE);
   await bundle('server/mcp-launch.ts', MCP_LAUNCH_BUNDLE);
   await bundle('server/navegador-mcp.ts', NAVEGADOR_MCP_BUNDLE);
 }

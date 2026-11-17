@@ -24,16 +24,23 @@
   /* Painéis flutuantes (topo, painel lateral, modais, menus, monitor): o --panel a 80%, com o que está atrás borrado. */
   --panel-glass: color-mix(in srgb, var(--panel) 90%, transparent);
   --glass-blur: blur(3px);
+  /* Véu atrás de todo modal (`.modal-backdrop`): escurece e borra (`--glass-blur`) o quadro, igual nos dois temas. */
+  --scrim: rgba(15, 18, 20, 0.45);
   --muted: #6b7076;
   --line: #e4e1da;
   --accent: #1f4fbf;
   --warn: #f46000;
   --danger: #c0362c;
+  /* Alerta de verdade (modelo obsoleto): fundo vermelho claro com tinta escura, e o vermelho cheio com tinta própria (branca, 5.5:1). */
+  --danger-soft: #f9d3ce;
+  --on-danger: #ffffff;
   --busy: #1f4fbf;
   --idle: #8b9096;
   --waiting: #d08000;
   /* O --waiting serve a borda e a bolinha; texto (e fundo com texto branco) usa este (no claro, ~3:1: o dono preferiu o laranja mais vivo). */
   --waiting-ink: #d08000;
+  /* Texto laranja das mensagens de espera do kanban (o --warn #f46000 dá ~3:1 sobre o claro, só serve de borda): 5,6:1 sobre o cartão, 4,9:1 sobre o fundo do selo. */
+  --wait-ink: #b04400;
   /* Barra de rolagem: grafite discreto; derivada das canetas, vale nos dois temas. */
   --scroll-thumb: color-mix(in srgb, var(--ink-muted) 45%, transparent);
   --scroll-thumb-hover: var(--ink-muted);
@@ -98,10 +105,13 @@
   --accent: #9cc0ff;
   --warn: #ff6605;
   --danger: #ff7b70;
+  --danger-soft: #5c2a2a;
+  --on-danger: #1f2328;
   --busy: #9cc0ff;
   --idle: #79837e;
   --waiting: #f0b43c;
   --waiting-ink: #f0b43c;
+  --wait-ink: #ff9a5c;
   --boost-bg: #15803d;
   --pen-red: #ff9c8f;
   --pen-orange: #ffb877;
@@ -145,6 +155,9 @@ body { background: var(--board); }
 .bn-synced .bn-title, .bn-synced .bn-meta { color: var(--ink-muted); }
 .bn.is-missing { opacity: 0.5; }
 .bn.is-archived { opacity: 0.4; filter: grayscale(1); }
+/* Modelo obsoleto: o cartão todo em vermelho de alerta. O cinza do cartão (`--muted`) não chega a 4,5:1 sobre o vermelho claro: o texto fica na tinta cheia. */
+.bn.is-model-obsolete::before { background: var(--danger-soft); }
+.bn.is-model-obsolete .bn-meta, .bn.is-model-obsolete .bn-temp, .bn.is-model-obsolete .bn-tools { color: var(--ink); }
 /* Funcionário trabalhando: contorno "sendo redesenhado", lápis escrevendo, reticências animadas. */
 .bn-portrait-wrap { position: relative; flex: none; }
 .bn-portrait img { position: absolute; inset: 3px; width: 34px; height: 34px; border-radius: 50%; object-fit: cover; }
@@ -375,6 +388,38 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 .plan-body { max-height: 320px; overflow-y: auto; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 13px; }
 .permission-plan .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 @media (max-width: 640px) { .permission-plan .actions :is(.btn-primary, .btn-secondary) { min-height: 36px; } }
+/* Aviso de segredo da caixa "precisa de mim" como balão no chat: o cartão de permissão (amarelo) com a frase e o "Ignorar". */
+.secret-notice p { margin: 0; overflow-wrap: anywhere; }
+/* O arquivo do segredo: o caminho (letra de código) e, quando a tela não o abre, a nota ao lado. */
+.secret-notice .secret-file { margin-top: 4px; }
+.secret-notice .secret-file code { font-size: 12px; }
+.secret-notice .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Palpite do servidor no aviso de segredo (balão e caixa): selo com o estado (escrito + símbolo + traço da borda: não depende só da cor), dica mascarada e "por quê?".
+   O texto do selo é sempre --ink sobre um fundo claro/escuro do próprio token (AA nos 2 temas); o token só pinta a borda e o fundo. */
+.secret-verdict-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 6px; font-size: 12.5px; }
+.secret-verdict { display: inline-flex; align-items: baseline; gap: 5px; max-width: 100%; padding: 2px 9px; border: 1px solid var(--muted); border-radius: 10px; background: color-mix(in srgb, var(--muted) 12%, var(--panel)); color: var(--ink); font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.secret-verdict-glyph { flex: none; font-size: 10px; }
+.secret-verdict.is-example { border-color: var(--ink-green); background: color-mix(in srgb, var(--ink-green) 14%, var(--panel)); }
+.secret-verdict.is-local { border-color: var(--ink-blue); border-style: dashed; background: color-mix(in srgb, var(--ink-blue) 12%, var(--panel)); }
+.secret-verdict.is-exposed { border: 2px solid var(--danger); padding: 1px 8px; background: var(--danger-soft); }
+.secret-verdict.is-unknown { border-style: dotted; }
+.secret-hint { color: var(--ink); overflow-wrap: anywhere; }
+.secret-hint code { font-size: 12px; }
+/* O --muted dá ~4,2:1 sobre o amarelo do cartão (abaixo de AA): rótulo da dica, nota do motivo e nota do arquivo usam --ink. */
+.secret-notice .secret-file .muted, :is(.secret-hint, .secret-why) .muted { color: var(--ink); }
+.secret-why p.muted { font-size: 12px; }
+.secret-why { flex: none; }
+.secret-why[open] { flex: 1 1 100%; }
+.secret-why summary { display: inline-block; padding: 2px 0; color: var(--ink-blue); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; list-style: none; }
+.secret-why summary::-webkit-details-marker { display: none; }
+.secret-why summary:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; border-radius: 3px; }
+.secret-why p { margin: 4px 0 0; overflow-wrap: anywhere; }
+.inbox-secret-verdict { padding: 0 10px 4px calc(var(--inbox-kind-w) + 20px); }
+.inbox-secret-verdict .secret-verdict-row { margin-top: 0; }
+@media (max-width: 640px) { .secret-why summary { padding: 6px 0; } }
+/* Erro da caixa como balão: o mesmo cartão em vermelho (a borda pelo --danger, o fundo no mesmo tom suave do amarelo). */
+.secret-notice.is-error { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--panel)); }
+@media (max-width: 640px) { .secret-notice .actions .btn-secondary { min-height: 36px; } }
 /* Pergunta com opções do Claude: cada pergunta com suas opções clicáveis, "outra resposta" e a prévia. */
 .msg-question { --ink: var(--ask-ink); --muted: var(--ask-muted); --line: var(--ask-line); --ink-blue: var(--ask-accent); --accent: var(--ask-accent); --panel: var(--ask-field); --board: var(--ask-field); width: 90%; align-self: flex-start; background: var(--ask-bg); color: var(--ink); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .msg-question .btn-primary { color: #fff; }
@@ -457,7 +502,7 @@ textarea.q-field { resize: vertical; }
 /* Parar / reiniciar o servidor (config) e a tela de "parado". */
 .setting-buttons { display: inline-flex; flex-wrap: wrap; gap: 8px; }
 .setting-danger { color: var(--ink-red); }
-.server-overlay { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 16px; background: color-mix(in srgb, var(--bg, #000) 70%, transparent); backdrop-filter: blur(3px); }
+.server-overlay { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 16px; background: color-mix(in srgb, var(--bg, #000) 70%, transparent); backdrop-filter: var(--glass-blur); }
 .server-overlay-card { max-width: 520px; background: var(--panel-glass); color: var(--ink); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3); display: grid; gap: 10px; }
 .server-overlay-card h2 { margin: 0; font-family: var(--hand); font-size: 32px; line-height: 1; }
 .server-overlay-card p { margin: 0; line-height: 1.45; }
@@ -487,7 +532,7 @@ textarea.q-field { resize: vertical; }
 .bn-progress { height: 4px; border-radius: 2px; overflow: hidden; background: color-mix(in srgb, var(--muted) 28%, transparent); }
 .bn-progress-fill { display: block; height: 100%; border-radius: 2px; background: var(--ink-green); }
 /* Quadro de tarefas. */
-.modal.tasks-modal { width: min(1280px, 100%); height: min(820px, calc(100vh - 32px)); display: flex; flex-direction: column; position: relative; overflow: hidden; }
+.modal.tasks-modal { width: min(100%); height: min(820px, calc(100vh - 32px)); display: flex; flex-direction: column; position: relative; overflow: hidden; }
 .tasks-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .tasks-head-actions { display: inline-flex; gap: 8px; }
 /* Agendamentos do projeto: um cartão por despertador ou "continue" pendente. O texto é do funcionário: pre-wrap, nunca HTML. */
@@ -574,6 +619,46 @@ textarea.q-field { resize: vertical; }
 /* Fechar: o X do padrão .drawer-close, no canto. */
 .files-cm .cm-panels .cm-panel.cm-search button[name='close'] { position: absolute; top: 8px; right: 10px; width: 20px; height: 26px; padding: 0; margin: 0; font-size: 22px; line-height: 1; background: none; border: none; color: var(--muted); cursor: pointer; }
 .files-cm .cm-panels .cm-panel.cm-search button[name='close']:hover { color: var(--ink); }
+/* Código | Visualizar do .md. A visualização reusa o .md do chat; aqui só a moldura e a escala de leitura (o chat é de balão). */
+.files-view { align-self: flex-start; }
+.files-preview { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 12px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
+.files-preview:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: -2px; }
+.files-preview .md > :is(p, ul, ol, blockquote) { margin-bottom: 10px; }
+/* font-family/line-height: o `.modal h2` (título da letra de mão) vaza para o h2 do documento. */
+.files-preview .md :is(h1, h2, h3, h4, h5, h6) { margin: 18px 0 8px; font-family: inherit; line-height: 1.3; }
+.files-preview .md h1 { font-size: 1.6em; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+.files-preview .md h2 { font-size: 1.3em; padding-bottom: 3px; border-bottom: 1px solid var(--line); }
+.files-preview .md h3 { font-size: 1.12em; }
+.files-preview .md > :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
+.files-preview .md :is(.md-table, .md-code-wrap) { margin-bottom: 12px; }
+/* Link para outro arquivo do projeto: com cara de link (o `.md-file` de caminho citado no código segue com cara de código). */
+.files-preview .md .md-file.md-link { font-family: inherit; font-size: inherit; padding: 0; background: none; color: var(--ink-blue); text-decoration: underline; text-underline-offset: 2px; }
+/* Visualização do .json: árvore recolhível. Cada tipo tem a sua cor (chave azul, texto verde, número roxo, true/false azul-petróleo,
+   null cinza em itálico); o texto também tem aspas, então a cor não é a única pista. */
+.json-tree, .json-tree ul { list-style: none; margin: 0; padding: 0; }
+.json-tree { font-family: ui-monospace, Consolas, monospace; font-size: 13px; line-height: 1.5; }
+.json-tree ul { margin-left: 6px; padding-left: 14px; border-left: 1px solid var(--line); }
+.json-row { padding: 1px 0; }
+.json-toggle { display: inline; max-width: 100%; margin: 0; padding: 0; border: none; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.json-toggle:hover .json-caret { color: var(--ink); }
+.json-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 2px; border-radius: 3px; }
+/* Seta desenhada em CSS: o glifo ▸ cai numa fonte de emoji em alguns sistemas e sai colorido. */
+.json-caret { display: inline-block; width: 1.3em; color: var(--muted); }
+.json-toggle .json-caret::before { content: ''; display: inline-block; vertical-align: middle; border-style: solid; border-width: 4px 0 4px 6px; border-color: transparent transparent transparent currentColor; }
+.json-toggle[aria-expanded='true'] .json-caret::before { transform: rotate(90deg); }
+.json-key { color: var(--ink-blue); }
+.json-index, .json-punct, .json-count { color: var(--muted); }
+.json-count { margin-left: 6px; font-size: 12px; }
+.json-string { color: var(--ink-green); }
+.json-number { color: var(--pen-purple); }
+.json-bool { color: var(--pen-teal); }
+.json-null { color: var(--muted); font-style: italic; }
+.btn-secondary.json-more { margin: 2px 0 2px 6px; padding: 1px 8px; font-size: 12px; }
+.json-error { padding: 10px 12px; border: 1px solid var(--danger); border-radius: 10px; background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.json-error p { margin: 0 0 6px; }
+.json-error p:last-child { margin-bottom: 0; }
+.json-error-title { font-weight: 700; color: var(--danger); }
+.json-error-msg { font-size: 13px; }
 .files-pick { margin: auto; text-align: center; }
 .files-blocked { margin: 0; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); }
 .files-image { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -597,7 +682,12 @@ textarea.q-field { resize: vertical; }
   .files-body.is-editing .files-tree, .files-body:not(.is-editing) .files-editor { display: none; }
   .files-back { display: inline-block; flex: none; }
   .files-item { padding-top: 8px; padding-bottom: 8px; }
-  .btn-secondary.files-new, .files-create-actions button { min-height: 36px; }
+  .btn-secondary.files-new, .files-create-actions button, .files-view .btn-secondary { min-height: 36px; }
+  .files-preview { padding: 10px 12px; }
+  /* Alvo de toque maior nas linhas da árvore do JSON; recuo menor para caber níveis fundos. */
+  .json-toggle { display: inline-block; padding: 5px 0; }
+  .json-tree ul { margin-left: 4px; padding-left: 10px; }
+  .btn-secondary.json-more { min-height: 32px; }
   /* .files-tools na frente: o .btn-icon (28px) vem depois no CSS. */
   .files-tools .btn-secondary.files-delete { width: 36px; height: auto; }
   /* 16px: o iOS não dá zoom ao focar. */
@@ -634,8 +724,25 @@ textarea.q-field { resize: vertical; }
 .task-badge.is-rejected { color: var(--ink-red); border-color: var(--ink-red); background: color-mix(in srgb, var(--ink-red) 12%, transparent); }
 /* Revisão automática ligada: olho + quem revisa (+ rodadas), discreto como a branch. */
 .task-reviewer { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Revisão automática do quadro: recolhida, com o estado no título; liga/desliga e responsável por dentro. */
+.board-review { flex: none; }
+.board-review > summary svg { vertical-align: -1px; }
+.board-review-body { display: grid; gap: 8px; padding-top: 2px; }
+.board-review-body p { margin: 0; overflow-wrap: anywhere; }
+.board-review-body label { max-width: 420px; }
+.board-review-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.board-review-row > span { font-size: 13px; font-weight: 600; }
+.board-review .btn-toggle { min-width: 96px; }
+@media (max-width: 640px) { .board-review .btn-toggle { min-height: 36px; } }
+/* Cai para o dono aprovar ou reprovar: amarelo do "precisa de mim", como a dúvida escalada. */
+.task-owner-box { display: grid; gap: 4px; border: 1px solid var(--waiting); border-radius: 10px; padding: 8px 12px; background: color-mix(in srgb, var(--waiting) 12%, transparent); min-width: 0; }
+.task-owner-box p { margin: 0; overflow-wrap: anywhere; }
+.task-owner-box p:first-child { font-size: 13px; font-weight: 600; }
 :is(.modal, .hire-inline) .check input[type='checkbox'] { accent-color: var(--ink-blue); }
 .task-queue { justify-self: start; color: var(--muted); border: 1px dashed var(--line); border-radius: 999px; padding: 0 7px; font-size: 11px; }
+/* Card registrado sozinho: o selo é o da fila (tracejado, sem cor de alerta), numa linha só; a lista de arquivos quebra caminho longo. */
+.task-queue.task-auto { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-auto-files li { overflow-wrap: anywhere; }
 /* "No secundário": a tarefa ou a conversa roda no outro motor porque o principal bateu o limite. Discreto, como a fila (tracejado), sem cor de alerta. */
 .fallback-badge { justify-self: start; display: inline-block; max-width: 100%; color: var(--muted); border: 1px dashed var(--line); border-radius: 999px; padding: 0 7px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-fallback { align-self: flex-start; margin: 4px 12px 0; }
@@ -678,12 +785,26 @@ textarea.q-field { resize: vertical; }
 .task-badge.task-doubt { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Espera do gate de recursos: o motivo é o que importa, então quebra linha (raio dos blocos tracejados, não pílula). */
 .task-queue.task-resource, .task-queue.task-blocked { max-width: 100%; border-radius: 10px; padding: 3px 8px; line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
+/* Por que o cartão da fila A fazer não anda (dependência, fila, recursos, ajuste guardado, dúvida com o gestor): laranja, para achar de relance. Só nessa coluna (o `.task-wait` é posto por `waitWarm`, em tasks/waitTone.ts); nas outras, inclusive o motivo do Aguardar, fica neutro. Borda e fundo do --warn, texto do --wait-ink. O amarelo (.is-waiting) segue sendo o "precisa de você". */
+:is(.task-queue, .task-badge).task-wait { color: var(--wait-ink); font-weight: 600; border-style: solid; border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.task-detail .muted.task-wait-text { color: var(--wait-ink); }
+/* Dúvida escalada a você e o que ela faz com a fila do funcionário. Pontilhada = pausada (ele seguiu para outra); contínua com fundo = ocupando (já há edição). A forma diz o estado sem depender de cor; texto sempre --ink (o --muted não dá 4,5:1 no cartão amarelo de Planejando). */
+.task-pause { display: grid; gap: 1px; justify-self: stretch; min-width: 0; box-sizing: border-box; border: 1px dashed var(--muted); border-radius: 10px; padding: 3px 8px; color: var(--ink); font-size: 11px; line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
+.task-pause.is-holding { border-style: solid; border-color: var(--ink); background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.task-pause b { font-weight: 600; }
 .task-doubt-box { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
 .task-doubt-box.is-escalated { border: 1px solid var(--waiting); background: color-mix(in srgb, var(--waiting) 12%, transparent); }
 .task-doubt-box p, .task-doubt-box ul { margin: 0; overflow-wrap: anywhere; }
 .task-doubt-box ul { padding-left: 18px; display: grid; gap: 2px; }
 .task-doubt-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
 .task-doubt-q { display: grid; gap: 4px; }
+.task-doubt-reply { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 8px; min-width: 0; }
+.task-doubt-reply .q-option { overflow-wrap: anywhere; }
+.task-doubt-reply .q-option b { font-weight: 600; }
+.task-doubt-reply .actions { margin: 0; }
+.task-doubt-field { display: grid; gap: 4px; font-size: 13px; }
+.task-doubt-field textarea { width: 100%; box-sizing: border-box; }
+@media (max-width: 640px) { .task-doubt-reply .q-option { min-height: 40px; align-content: center; } .task-doubt-reply .actions .btn-primary { min-height: 40px; } }
 .task-doubt-text { white-space: pre-wrap; max-height: 180px; overflow-y: auto; }
 .task-doubt-answer { display: grid; gap: 4px; border-top: 1px solid var(--line); padding-top: 6px; }
 /* Formulário de criar com os opcionais abertos: rola por dentro; sem teto ele empurra o quadro (altura 0 no celular). */
@@ -765,15 +886,18 @@ textarea.q-field { resize: vertical; }
 .chat-more-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 /* Linha de status, logo abaixo da caixa: ajustes desta conversa (modelo, esforço, autonomia), contexto, compactar, MCPs, segundo plano. */
 .chat-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; color: var(--muted); }
-.chat-status .meter-label { font-size: 14px; }
-.chat-chip, .chat-status .chat-settings select { font: inherit; font-size: 12px; min-height: 28px; padding: 2px 10px; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 999px; cursor: pointer; }
-.chat-status .chat-settings select { padding-right: 4px; }
-.chat-status .chat-settings select option, .chat-status .chat-settings select optgroup { background: var(--panel); color: var(--ink); }
-.chat-chip:hover, .chat-status .chat-settings select:hover { border-color: var(--accent); }
-.chat-chip:disabled, .chat-status .chat-settings select:disabled { cursor: default; opacity: 0.6; border-color: var(--line); }
-.chat-chip.is-warn, .chat-status .chat-settings select.is-warn { color: var(--warn); border-color: var(--warn); }
-.chat-chip.is-danger, .chat-status .chat-settings select.is-danger { color: var(--danger); border-color: var(--danger); }
-.chat-chip.btn-toggle[aria-pressed='true'] { color: var(--ink-blue); border-color: var(--ink-blue); }
+/* Os controles são do DS (btn-secondary, btn-toggle, setting-select); aqui só a altura da linha (28px; 36px no celular), o foco, o tema da lista do select e o aviso de autonomia. */
+.chat-status { color-scheme: light; }
+:root[data-theme='dark'] .chat-status { color-scheme: dark; }
+.chat-status :is(.btn-secondary, .setting-select) { min-height: 28px; font-size: 12px; }
+.chat-status .setting-select:hover:not(:disabled) { border-color: var(--accent); }
+.chat-status .setting-select:disabled { cursor: default; opacity: 0.6; }
+.chat-status .setting-select :is(option, optgroup) { background: var(--panel); color: var(--ink); }
+/* O laranja do --warn dá só ~3:1 sobre o claro: o aviso fica na borda (dupla) e o texto segue em --ink. */
+.chat-status .setting-select.is-warn { border-color: var(--warn); box-shadow: inset 0 0 0 1px var(--warn); }
+.chat-status .setting-select.is-danger { color: var(--danger); border-color: var(--danger); }
+.chat-status .btn-secondary:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 1px; border-color: var(--ink-blue); }
+@media (max-width: 640px) { .chat-status :is(.btn-secondary, .setting-select) { min-height: 36px; } .chat-status .btn-secondary.chat-icon-btn { width: 36px; height: 36px; } }
 /* Rosquinha do contexto: trilho na cor da linha, arco na cor do nível (meter-low/mid/high), começando no topo. */
 .context-ring { display: inline-grid; place-items: center; width: 28px; height: 28px; cursor: help; }
 .context-ring svg { transform: rotate(-90deg); }
@@ -787,17 +911,17 @@ textarea.q-field { resize: vertical; }
 
 /* Rolagem do painel lateral, do chat, dos modais, das caixas de texto, do quadro de tarefas e das configurações: fina, sem trilho, ponta irregular como os traços de caneta.
    A borda transparente (com background-clip) afasta o polegar da beira, qualquer que seja o fundo. */
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar { width: 10px; height: 10px; }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-track,
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-corner { background: transparent; }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb {
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller, .files-preview, .files-preview .md-code, .files-preview .md-table)::-webkit-scrollbar { width: 10px; height: 10px; }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller, .files-preview, .files-preview .md-code, .files-preview .md-table)::-webkit-scrollbar-track,
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller, .files-preview, .files-preview .md-code, .files-preview .md-table)::-webkit-scrollbar-corner { background: transparent; }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller, .files-preview, .files-preview .md-code, .files-preview .md-table)::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb); background-clip: padding-box; border: 3px solid transparent; border-radius: 4px 6px 4px 5px;
 }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-thumb-hover); }
-:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller)::-webkit-scrollbar-thumb:active { background-color: var(--scroll-thumb-active); }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller, .files-preview, .files-preview .md-code, .files-preview .md-table)::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-thumb-hover); }
+:is(.drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller, .files-preview, .files-preview .md-code, .files-preview .md-table)::-webkit-scrollbar-thumb:active { background-color: var(--scroll-thumb-active); }
 /* Firefox (sem ::-webkit-scrollbar): o equivalente padrão. */
 @supports not selector(::-webkit-scrollbar) {
-  .drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
+  .drawer, .chat-list, .chat .tool-io, .chat .md-code, .chat .md-table, textarea, .modal, .tasks-columns, .tasks-col, .task-detail, .task-form, .task-deps-list, .skill-hooks, .team-file-pick, .task-plan, .task-files, .task-diff, .settings-list, .settings-nav, .files-cm .cm-scroller, .files-preview, .files-preview .md-code, .files-preview .md-table { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
 }
 /* Botão liga/desliga: o btn-secondary com estado pressionado em azul de caneta. */
 .segmented { display: inline-flex; gap: 6px; }
@@ -822,7 +946,6 @@ textarea.q-field { resize: vertical; }
 .todo-in_progress { font-weight: 600; }
 .todo-in_progress .todo-mark { color: var(--ink-blue); }
 .chat-settings { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.chat-settings .btn-toggle { font-size: 12px; padding: 2px 8px; }
 /* Tela estreita: os ajustes da conversa ganham a linha toda; contexto e o resto vão para a de baixo. */
 @media (max-width: 480px) {
   .chat-status .chat-settings { flex: 1 1 100%; }
@@ -856,7 +979,6 @@ textarea.q-field { resize: vertical; }
 .simple-hire { display: grid; gap: 12px; }
 .simple-summary { margin: 0; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; }
 .simple-more { margin: 8px 2px; }
-.settings-more { margin-top: 12px; }
 .btn-toggle[aria-pressed='true'], .files-cm .cm-panels .cm-panel.cm-search label:has(input:checked) { color: var(--ink-blue); border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 12%, transparent); }
 .msg-queued { display: block; margin-top: 3px; font-size: 11px; opacity: 0.75; font-style: italic; }
 .chat-doing { display: block; margin-top: 2px; font-size: 10px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -926,7 +1048,7 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
 .btn-primary:disabled { opacity: 0.6; cursor: default; }
 :root[data-theme='dark'] :is(.btn-primary, .workspace-pending, .inbox-count) { color: #10161f; }
-.modal-backdrop { position: fixed; inset: 0; background: rgba(15, 18, 20, 0.45); display: grid; place-items: center; z-index: 20; padding: 16px; }
+.modal-backdrop { position: fixed; inset: 0; background: var(--scrim); backdrop-filter: var(--glass-blur); display: grid; place-items: center; z-index: 20; padding: 16px; }
 .modal { position: relative; width: min(720px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px 18px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25); display: grid; gap: 12px; }
 .modal-backdrop.dialog-host { z-index: var(--z-dialog); }
 .usage-warning { width: min(440px, 100%); min-width: 0; box-sizing: border-box; }
@@ -1093,6 +1215,26 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .notice-pair code { white-space: nowrap; }
 .pair-command { display: flex; flex-direction: column; gap: 4px; }
 .pair-command code { user-select: all; white-space: nowrap; }
+
+/* ---- extensão do Chrome (Configurações → Geral): passos, código de pareamento e pareadas ---- */
+.ext { flex: 1 1 100%; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.ext-block { display: flex; flex-direction: column; gap: 6px; }
+.ext-sub { margin: 0; font-size: 12.5px; font-weight: 600; }
+.ext-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; line-height: 1.45; }
+.ext-steps .btn-secondary { margin-left: 4px; }
+.ext-url { user-select: all; padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px; background: var(--card); white-space: nowrap; }
+.ext-note { margin: 0; font-size: 12px; line-height: 1.4; }
+.ext-pair { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.ext-field { display: flex; flex-direction: column; gap: 3px; flex: 1 1 180px; min-width: 0; font-size: 12px; }
+.ext-code { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; padding: 10px 12px; border: 1px dashed var(--ink-blue); border-radius: 8px; background: var(--card); font-size: 12px; }
+.ext-code-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.ext-code-value { font-family: ui-monospace, Consolas, monospace; font-size: 24px; font-weight: 700; letter-spacing: 0.12em; user-select: all; }
+.ext-ok { margin: 0; font-size: 13px; color: var(--ink-green); }
+.ext-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ext-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.ext-who { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: 12.5px; }
+.ext-who b { overflow-wrap: anywhere; }
+.ext-who .muted { font-size: 12px; }
 .actions { margin-top: 10px !important; display: flex; gap: 8px; align-items: center; }
 .btn-secondary, .files-cm .cm-panels .cm-panel.cm-search :is(button.cm-button, label) { font: inherit; font-size: 12px; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
 .btn-secondary:hover:not(:disabled), .files-cm .cm-panels .cm-panel.cm-search :is(button.cm-button, label):hover { border-color: var(--accent); }
@@ -1107,6 +1249,8 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .row.row-inline { flex-direction: row; justify-content: space-between; align-items: center; }
 /* O véu vai sobre o papel do cartão, não no lugar dele: as linhas do quadro continuam por trás. */
 .bn.is-selected::before { background: linear-gradient(var(--card-selected), var(--card-selected)), var(--card); }
+/* Selecionado e com modelo obsoleto: segue vermelho (o véu branco do `--card-selected` apagava o alerta); só clareia/escurece um tom, com a tinta ainda a 7:1 ou mais. */
+.bn.is-model-obsolete.is-selected::before { background: color-mix(in srgb, var(--ink) 14%, var(--danger-soft)); }
 
 .bn-agent { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .bn-portrait { position: relative; width: 40px; height: 40px; flex: none; display: grid; place-items: center; font-family: var(--hand); font-weight: 700; font-size: 18px; }
@@ -1125,6 +1269,10 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .bn-status { position: absolute; top: 8px; right: 9px; display: flex; align-items: center; gap: 5px; padding: 3px; margin: -3px; z-index: 1; }
 .bn-status-label { font-size: 10px; color: var(--ink); background: var(--card); padding: 1px 5px; border-radius: 3px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity 0.12s; }
 .bn-status:hover .bn-status-label { opacity: 1; }
+/* Selo "Modelo obsoleto": preso à borda de baixo do cartão (não ocupa linha: o cartão já está cheio) e longe do "+" de contratar, no centro. */
+.bn-obsolete { position: absolute; left: 8px; bottom: -8px; z-index: 1; padding: 0 6px; border-radius: 8px; background: var(--danger); color: var(--on-danger); font-size: 9px; font-weight: 700; line-height: 16px; white-space: nowrap; pointer-events: none; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); }
+/* Aviso de modelo obsoleto no painel e na ficha (mesmo tom do cartão). */
+.model-obsolete { margin: 8px 0; padding: 8px 10px; border: 1px solid var(--danger); border-radius: 8px; background: var(--danger-soft); color: var(--ink); line-height: 1.4; overflow-wrap: anywhere; }
 
 .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; background: var(--idle); }
 .dot-busy { background: var(--busy); }
@@ -1255,6 +1403,73 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 .skill-hooks li { display: grid; gap: 2px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .skill-actions .btn-secondary { min-height: 36px; } }
 
+/* ---- skills de um link do GitHub: instalar (prévia) e a origem da skill instalada (verificar, atualizar, voltar) ---- */
+.gh-scroll { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
+.gh-modal { width: min(760px, 100%); grid-template-columns: minmax(0, 1fr); }
+.gh-modal :is(h3, h4, h5, p, ul, dl) , .gh-origin :is(h3, h4, h5, p, ul, dl) { margin: 0; }
+.gh-modal :is(section, form) { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.gh-modal section > h3, .gh-origin :is(h3, h4, h5) { font-size: 13px; }
+.gh-modal :is(p, li) { overflow-wrap: anywhere; }
+.gh-url { gap: 10px !important; }
+/* Os botões do passo ficam à vista ao rolar a prévia (o preenchimento negativo é o do próprio .modal). */
+.gh-actions { display: flex; flex-wrap: wrap; gap: 8px; position: sticky; bottom: -18px; z-index: 1; margin: 0 -22px -18px; padding: 10px 22px 18px; background: var(--panel); box-shadow: inset 0 1px 0 var(--line); }
+.gh-url .gh-actions { position: static; margin: 0; padding: 0; background: none; box-shadow: none; }
+.gh-choose ul { list-style: none; padding: 0; display: grid; gap: 6px; }
+.gh-pick { width: 100%; display: grid; gap: 2px; text-align: left; font: inherit; font-size: 13px; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+.gh-pick:hover:not(:disabled) { border-color: var(--accent); }
+.gh-pick:disabled { opacity: 0.6; cursor: default; }
+.gh-pick .mono { overflow-wrap: anywhere; }
+/* A descrição de uma skill de repositório pode ter milhares de caracteres: três linhas bastam para escolher. */
+.gh-desc { font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.gh-alerts { display: grid; gap: 6px; }
+.gh-alerts ul { list-style: none; padding: 0; display: grid; gap: 6px; }
+.gh-alert { display: grid; gap: 2px; padding: 8px 10px; border: 1px solid var(--line); border-left-width: 4px; border-radius: 8px; font-size: 13px; line-height: 1.35; color: var(--ink); overflow-wrap: anywhere; }
+.gh-alert.is-danger { border-color: var(--danger); background: var(--danger-soft); }
+.gh-alert.is-warn { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.gh-alert.is-info { border-color: var(--ink-muted); }
+.gh-level { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+.gh-alert code { font: 12px ui-monospace, Consolas, monospace; }
+.gh-group-files { display: block; margin-top: 4px; max-height: 140px; overflow: auto; line-height: 1.5; }
+.gh-md { margin: 0; max-height: min(40vh, 360px); overflow: auto; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--ink) 5%, transparent); font: 12px/1.45 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.gh-files { list-style: none; padding: 0; display: grid; gap: 4px; max-height: 220px; overflow-y: auto; }
+.gh-files li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+.gh-files .mono { flex: 1 1 12em; min-width: 0; }
+.gh-flag { color: var(--ink); border-color: var(--warn); }
+.gh-ack { display: flex !important; align-items: flex-start; gap: 8px; font-size: 13px; padding: 8px 10px; border: 1px solid var(--danger); border-radius: 8px; }
+.gh-md:focus-visible, .gh-diff:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 1px; }
+.gh-done p { font-size: 13px; }
+.gh-sha { font: 12px ui-monospace, Consolas, monospace; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; }
+.gh-badge { color: var(--ink); }
+.gh-badge.is-new { color: var(--ink-blue); border-color: var(--ink-blue); font-weight: 700; }
+.gh-badge.is-modified { border-color: var(--warn); }
+.gh-origin { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.gh-origin h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.gh-origin :is(p, dd, li) { overflow-wrap: anywhere; }
+.gh-facts { display: grid; gap: 4px; font-size: 13px; }
+.gh-facts > div { display: grid; grid-template-columns: minmax(0, 9em) minmax(0, 1fr); gap: 8px; }
+.gh-facts dt { color: var(--muted); }
+.gh-facts dd { margin: 0; }
+.gh-note { padding: 8px 10px; border-left: 4px solid var(--ink-blue); border-radius: 6px; background: color-mix(in srgb, var(--ink-blue) 10%, transparent); font-size: 13px; }
+.gh-warn { padding: 8px 10px; border: 1px solid var(--danger); border-left-width: 4px; border-radius: 8px; background: var(--danger-soft); color: var(--ink); font-size: 13px; font-weight: 600; line-height: 1.35; }
+.gh-update { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+.gh-fm { list-style: none; padding: 0; display: grid; gap: 2px; }
+.gh-diffs { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.gh-diffs details { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+.gh-diffs summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; overflow-wrap: anywhere; }
+.gh-diffs details[open] > summary { margin-bottom: 6px; }
+.gh-status.is-added { color: var(--ink-green); border-color: var(--ink-green); }
+.gh-status.is-removed { color: var(--danger); border-color: var(--danger); }
+.gh-status.is-changed { color: var(--ink-blue); border-color: var(--ink-blue); }
+.gh-diff { margin: 0; max-height: 320px; overflow: auto; padding: 6px 0; border-radius: 6px; background: color-mix(in srgb, var(--ink) 5%, transparent); font: 12px/1.4 ui-monospace, Consolas, monospace; }
+.gh-line { display: block; width: max-content; min-width: 100%; box-sizing: border-box; padding: 0 8px; white-space: pre; }
+.gh-line.is-add { background: color-mix(in srgb, var(--ink-green) 18%, transparent); }
+.gh-line.is-del { background: color-mix(in srgb, var(--danger) 18%, transparent); }
+.gh-line.is-hunk { color: var(--muted); background: color-mix(in srgb, var(--ink-blue) 10%, transparent); }
+.gh-confirm:not(.is-local) { border-color: var(--line); }
+.gh-rollback { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+@media (min-width: 641px) { .gh-alert { grid-template-columns: 84px minmax(0, 1fr); gap: 10px; } }
+@media (max-width: 640px) { .gh-actions :is(.btn-primary, .btn-secondary), .gh-origin :is(.btn-primary, .btn-secondary), .gh-pick { min-height: 36px; } }
+
 /* ---- registro de acesso aos servidores (na ficha) ---- */
 .server-log { margin-top: 10px; }
 .server-log summary { cursor: pointer; font-weight: 600; }
@@ -1317,7 +1532,7 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 /* Assunto da conversa: 1 linha, corta com reticências. Sem assunto a linha não existe e a área fica vazia (altura 0). */
 .inbox-topic { grid-area: topic; font-size: 12px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inbox-summary { grid-area: summary; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.inbox-blocked .inbox-summary, .inbox-notStarted .inbox-summary { white-space: normal; overflow-wrap: anywhere; }
+.inbox-blocked .inbox-summary, .inbox-notStarted .inbox-summary, .inbox-question .inbox-summary, .inbox-stuck .inbox-summary { white-space: normal; overflow-wrap: anywhere; }
 .inbox-dismiss .error { flex: 1 1 100%; text-align: right; }
 .inbox-at { grid-area: at; white-space: nowrap; }
 /* No celular o botão não fica na borda esquerda: ancorada nele, a caixa saía pela direita. Ocupa a largura da tela. */
@@ -1412,6 +1627,30 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 .settings-menu button:focus-visible, .settings-menu .swatch-custom:has(input:focus-visible) { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 2px; }
 .settings-empty { padding: 24px 0; }
 .settings-about { margin: 24px 0 0; padding-top: 10px; border-top: 1px solid var(--line); }
+/* Nível Simples (SettingsSimple): um cartão por tema, com ícone, título comum, a frase do efeito e o controle direto.
+   Os controles são os mesmos do avançado (campos e botões do DS, já estilizados por `.settings-menu`). */
+.ss-list { display: grid; gap: 12px; padding-top: 8px; }
+.ss-intro { margin: 0; }
+.ss-card { border: 1px solid var(--line); border-radius: 12px; background: var(--card); padding: 4px 14px 6px; }
+.ss-head { display: flex; align-items: center; gap: 10px; padding: 8px 0 4px; }
+.ss-head h3 { margin: 0; font-family: var(--hand); font-size: 26px; line-height: 1; }
+.ss-icon { flex: none; display: inline-grid; place-content: center; width: 30px; height: 30px; border-radius: 50%; color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 12%, transparent); }
+.ss-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; padding: 10px 0; }
+.ss-item + .ss-item { border-top: 1px solid var(--line); }
+.ss-title { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+.ss-effect { margin: 2px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.ss-control { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+.ss-item.is-wide { grid-template-columns: minmax(0, 1fr); }
+.ss-item.is-wide .ss-control { justify-content: flex-start; }
+.ss-toggle { min-width: 96px; }
+.ss-nav-icon { display: inline-flex; vertical-align: -3px; margin-right: 6px; }
+.ss-more { margin: 4px 0 0; }
+@media (max-width: 640px) {
+  .ss-card { padding: 4px 12px 6px; }
+  .ss-item { grid-template-columns: minmax(0, 1fr); }
+  .ss-control { justify-content: flex-start; }
+  .ss-card :is(.btn-secondary, .setting-select, input[type='number']) { min-height: 36px; }
+}
 .room-colors { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; width: 100%; }
 .room-colors li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .room-colors-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--hand); font-size: 19px; font-weight: 700; }
@@ -1549,6 +1788,8 @@ body.is-resizing { cursor: ew-resize; user-select: none; }
 .row { display: flex; flex-direction: column; gap: 4px; padding: 9px 12px; border-top: 1px solid var(--line); }
 .row:first-child { border-top: none; }
 .row-title { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+/* Título longo (conversa de revisão: "Revisão - …") corta com reticências em vez de empurrar a linha. */
+.row-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; flex-wrap: wrap; }
 /* Linha clicável (a equipe do projeto): o botão ocupa a linha toda; a borda fica entre os itens da lista. */
 .rows > li + li > .row-button { border-top: 1px solid var(--line); }

@@ -1,9 +1,10 @@
 import type { InboxItem } from '../../../shared/model';
 import { t } from '../i18n';
 import { secretText, type Tr } from './secretText';
+import { questionOf, questionText, stuckOf, stuckText, type Kinded } from './taskAlerts';
 
 // Frase de cada item da caixa "precisa de mim" no idioma da página. O servidor manda o `summary` em pt-BR (fallback) e,
-// nos itens que têm estrutura (segredo, tarefa bloqueada, cartão esquecido), os campos de onde a frase sai aqui.
+// nos itens que têm estrutura (segredo, tarefa bloqueada, cartão esquecido, dúvida escalada, tarefa parada), os campos de onde a frase sai aqui.
 
 /** O motivo da bloqueadora vem do servidor em pt-BR (`stuckReason` em server/tasks.ts); os conhecidos saem no idioma da tela, o resto como veio. */
 function reasonText(reason: string, tr: Tr): string {
@@ -40,7 +41,9 @@ export function notStartedText(item: Pick<InboxItem, 'summary' | 'notStarted'>, 
 }
 
 /** O texto do item na lista e na notificação. */
-export function inboxText(item: Pick<InboxItem, 'summary' | 'secret' | 'blocked' | 'notStarted'>, tr: Tr = t): string {
+export function inboxText(item: Pick<InboxItem, 'summary' | 'secret' | 'blocked' | 'notStarted'> & Kinded, tr: Tr = t): string {
+  if (questionOf(item)) return questionText(item, tr);
+  if (stuckOf(item)) return stuckText(item, tr);
   if (item.blocked) return blockedText(item, tr);
   if (item.notStarted) return notStartedText(item, tr);
   return secretText(item, tr);

@@ -37,11 +37,11 @@ import { createDemo, demoPaths } from './demo';
 import { z } from 'zod';
 import { AgentError, AgentInput, readAgentSource, saveAgent } from './adapters/claude/agentWrite';
 import { deleteSkill, hookFilesOf, readSkillSource, SkillDeleteInput, SkillRefInput, saveSkill, SkillSaveInput, type SkillScope } from './adapters/claude/skillWrite';
+import { createSkill } from './skillCreate';
 import { projectClaudeDir } from './adapters/claude/projects';
 import { ChatClosingError, ChatError, ChatManager, findTranscript } from './chat/manager';
 import { ResumeFile, bootResume } from './chat/resume';
 import { AnnotationsField, AnswersField } from './chat/questions';
-import { secretAlert } from './chat/secrets';
 import { touchedFiles } from './chatChanges';
 import { uncommittedByConversation } from './uncommitted';
 import { searchConversations } from './chatSearch';
@@ -55,11 +55,15 @@ import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService } from '.
 import { sweepFreelas } from './freelaSweep';
 import { CLUB_MCP_FILE, McpError, mcpJsonWarnings } from './staff/mcp';
 import { createMcpLibrary } from './staff/mcpLibrary';
-import { blockedInboxItem, notStartedInboxItem, permissionInboxItem, questionInboxItem } from './inboxItems';
+import { blockedInboxItem, notStartedInboxItem, permissionInboxItem, questionInboxItem, secretInboxItem, stuckInboxItem, taskQuestionInboxItem, withoutSecretHint } from './inboxItems';
 import { capText } from './chat/turnCap';
 import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
-import { copyToLibrary, listLibrary, readLibrarySkill, removeLibrarySkill, saveLibrarySkill, SkillError } from './skillLibrary';
+import { LIBRARY_DIR, readLibrarySkill, SkillError } from './skillLibrary';
+import { convertStaffSkills, migrateLibraryToGlobal } from './skillMigration';
+import { skillSourcesOf } from './skillAccess';
+import { applyUpdate, checkUpdate, GitHubInstallInput, GitHubPreviewInput, GitHubSkillInput, GitHubStatusQuery, GitHubUpdateInput, githubSkillsIn, installSkill, previewSkill, rollback, SkillConflictError, UpdateChecker, type InstallTarget } from './skillInstall';
+import { GitHubError, GitHubRateLimited } from './adapters/github/client';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
 import { createGuide, GuideExistsError, guideStatus, readShowcase } from './projectGuide';
 import { checkProjectHealth } from './health/scan';
@@ -81,6 +85,10 @@ import { actingStaff, requesterSessionOf, SANDBOX_HOST, SessionTokens, type Call
 import { isUnverifiedOrigin, staffOrigin, type OriginDeps } from './chat/origin';
 import { RequesterAskLimiter } from './chat/requesterAsk';
 import { gate } from './gate';
+import { EXTENSION_DIR, EXTENSION_ID } from './extension/identity';
+import { ExtensionTokens } from './extension/tokens';
+import { handleExtension, type ExtensionDeps } from './extension/routes';
+import { buildExtensionZip, ExtensionPackError } from './extension/zip';
 import { CodexUsageReader, codexLimitHit, readInstalled } from './codexUsage';
 import { CodexSetup, CodexSetupError } from './codexSetup';
 import { readUsage } from './usage';
@@ -100,8 +108,9 @@ import { systemStats } from './systemStats';
 import { ResourceGate } from './resourceGate';
 import { ShowcaseBusyError, ShowcaseRefusedError, ShowcaseRunner, spawnClaudeProcess } from './showcaseRunner';
 import { pathKey, worktreeParent } from './adapters/claude/paths';
-import { codexSession, rolloutUpdatedAt } from './adapters/codex/rollout';
+import { codexSession, rolloutStat, rolloutUpdatedAt } from './adapters/codex/rollout';
 import { readSessionRegistry, REGISTRY_FILE } from './sessionsRegistry';
+import { TitleService } from './titles/generator';
 import { codexUsageOf } from './adapters/codex/usage';
 import type { TranscriptCost } from './adapters/claude/costs';
 import { claudeFilesBy, taskCostOf, taskCostRanking, type CostSources } from './taskCost';
@@ -109,10 +118,10 @@ import { TtlCache } from './ttlCache';
 import { boardFilter } from './board';
 import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
-import { AUTONOMY, dropStaffSessions, listProjectStaff, listProjectStaffStrict, readProfile } from './staff/store';
+import { AUTONOMY, dropStaffSessions, listProjectStaff, listProjectStaffStrict, readProfile, saveProfile } from './staff/store';
 import { lastRetentionRun, nextRetentionDelay, retentionPreview, runRetentionSweep, setRetentionDeletion, type RetentionDeps } from './retentionSweep';
 import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
-import { TaskConflictError, TaskError, TaskForbiddenError, TaskService, cancelRequest, deleteRequest, notStartedTasks, readTasks, stuckDependencies } from './tasks';
+import { TaskConflictError, TaskError, TaskForbiddenError, TaskService, cancelRequest, deleteRequest, notStartedTasks, ownAlerts, readTasks, stuckDependencies } from './tasks';
 import { retainedSessionIds } from './retention';
 import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefaultRole } from './roles';
 import { ROOT } from './root';
@@ -207,7 +216,7 @@ async function shutdown(stop: boolean, userAgent = '') {
       console.error('[servidor] não consegui gravar as conversas em turno:', err);
     }
   }
-  await Promise.race([Promise.all([chats.stopAll(), showcases.stopAll()]), new Promise((r) => setTimeout(r, 5000))]);
+  await Promise.race([Promise.all([chats.stopAll(), showcases.stopAll(), titles.stopAll()]), new Promise((r) => setTimeout(r, 5000))]);
   process.exit(0);
 }
 // Parado por sinal (npm run daily:stop, o vigia religando, tsx watch): as conversas são líderes do próprio
@@ -215,7 +224,7 @@ async function shutdown(stop: boolean, userAgent = '') {
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
   process.once(signal, () => {
     console.log(`[servidor] ${signal}: fechando as conversas`);
-    void Promise.race([Promise.all([chats.stopAll(), showcases.stopAll()]), new Promise((r) => setTimeout(r, 5000))]).then(() => process.exit(0));
+    void Promise.race([Promise.all([chats.stopAll(), showcases.stopAll(), titles.stopAll()]), new Promise((r) => setTimeout(r, 5000))]).then(() => process.exit(0));
   });
 }
 // Só local: o Claudio’s Club lê transcripts e configurações do usuário.
@@ -242,10 +251,17 @@ const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', 'claudio.loc
 const MAX_BODY = 4 * 1024 * 1024;
 /** Pareamento do navegador: a chave (~/.myco/secrets/pairing.key) é criada aqui, na subida, se ainda não existe. */
 const pairing = new Pairing();
+/** Pareamentos da extensão do Chrome (token Bearer; só o hash vai ao disco). */
+const extensionTokens = new ExtensionTokens();
 
 // No quadro: o demo (e o antigo, se ainda existir), as pastas de `extraProjects` (novas ou importadas) e os
 // projetos com equipe. O resto do que o Claude Code conhece só entra se o usuário importar (`/api/import-projects`).
 const pinnedProjects = async () => [...(await demoPaths()), ...(await readExtraProjects())];
+/** Ids das conversas do Claude que o Club lançou (o registro; sem registro legível, nenhuma). */
+const clubClaudeIds = async (): Promise<Set<string>> => {
+  const reg = await readSessionRegistry().catch((): Map<string, { engine: string }> => new Map());
+  return new Set([...reg].filter(([, e]) => e.engine === 'claude').map(([id]) => id));
+};
 const adapter: ToolAdapter = new ClaudeAdapter({
   extraPaths: pinnedProjects,
   onBoard: boardFilter({ pinned: pinnedProjects }),
@@ -253,6 +269,8 @@ const adapter: ToolAdapter = new ClaudeAdapter({
   // Retenção: conversa sem atividade há mais dias que isso sai da lista (sem ler o arquivo); `?old=1` traz de volta.
   archiveAfterDays: async () => (await readConfig()).archiveAfterDays,
   keepSessions: retainedOf,
+  // Conversas do Club: o assunto vem do rastreador (ver titles/tracker.ts), que acha a virada no meio do transcript.
+  clubSessions: clubClaudeIds,
 });
 /** `?old=1` na rota: lista também as conversas antigas (arquivadas pela retenção). */
 const includeOld = (url: URL) => url.searchParams.get('old') === '1';
@@ -283,6 +301,7 @@ const retentionDeps: RetentionDeps = {
     new Set([...chats.runningSessionIds(), ...(await autoContinue.sessionIdsStrict()), ...(await wakeups.sessionIdsStrict())]),
   codex: { deleteThread: (threadId) => codex.deleteThread(threadId) },
   dropStaffSession: (projectPath, staffId, sessionId) => dropStaffSessions(projectPath, staffId, [sessionId]),
+  forgetTitles: (ids) => titles.forget(ids),
   log: (line) => console.log(line),
 };
 /** ~/.claude/projects: onde ficam os transcripts das conversas. */
@@ -404,6 +423,8 @@ const chats: ChatManager = new ChatManager({
     boardCache.invalidate();
     void tasks.onSent(sid).catch(() => {});
   },
+  // Toda alteração de código de uma conversa sem tarefa vira um card (ver TaskService.onCodeEdit). Registro, não trava: a escrita já foi.
+  onEdit: (edit) => void tasks.onCodeEdit(edit).catch((err) => console.error('[tarefas] card automático:', err)),
   // Ficou livre: os ajustes guardados e a próxima tarefa da fila dele.
   onIdle: (sid, pid, staffId, reason) => {
     boardCache.invalidate();
@@ -480,8 +501,20 @@ const showcases = new ShowcaseRunner({
   reserve: () => resourceGate.reserve(),
   log: (line) => console.log(line),
 });
+// Títulos das conversas do Club com assunto livre (ver titles/generator.ts). Mesma trava de consumo da vitrine (motor Claude).
+const titles = new TitleService({
+  spawnClaude: spawnClaudeProcess,
+  checkUsage: (projectId) => staff.checkUsage(projectId, { engine: 'claude' }),
+  claudeProjectsDir: defaultTranscripts,
+  rolloutOf: async (sessionId) => (await rolloutStat(path.join(MYCO_HOME, 'run'), sessionId))?.file ?? null,
+  clubClaude: clubClaudeIds,
+  enabled: async () => (await readConfig()).aiTitles,
+  log: (line) => console.log(line),
+});
 const tasks = new TaskService({
   projectPath: projectPathOf,
+  // Versão das skills que a ficha marca no registro de execuções (ver tasks.ts, skillsOf).
+  skillSources: (projectId) => skillSourcesOf(adapter, projectId),
   projectIds: async () => (await adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf).map((p) => p.id),
   readProfile: async (projectId, staffId) => {
     const dir = await projectPathOf(projectId);
@@ -492,7 +525,7 @@ const tasks = new TaskService({
   sandboxApiUrl: SANDBOX_URL,
   // A pergunta por opções ainda aberta na conversa de trabalho, e a resposta do gestor (vai à conversa do funcionário).
   hasAsk: (sid, rid) => chats.hasPending(sid, rid),
-  answerAsk: (sid, rid, answers) => chats.answer(sid, rid, true, { answers, by: 'manager' }),
+  answerAsk: (sid, rid, answers, by) => chats.answer(sid, rid, true, { answers, by: by ?? 'manager' }),
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
   isWorking: (projectId, staffId, except) => chats.staffWorking(projectId, staffId, except),
   // Só a partida automática da fila passa pelo gate (o start à mão não): sem RAM, CPU ou vaga, a tarefa espera na fila.
@@ -510,6 +543,8 @@ const tasks = new TaskService({
   },
   requesterSession: (projectId, staffId) => chats.workingSession(projectId, staffId),
   lastText: (sessionId) => chats.lastAssistantText(sessionId),
+  // O título que você deu à conversa: o card automático (ver TaskService.onCodeEdit) nasce com ele.
+  conversationTitle: async (sessionId) => (await readConfig()).conversationTitles?.[sessionId] ?? null,
   // O consumo já foi conferido quando você mandou (a mensagem só esperou a vez).
   // Com carimbo (mensagem guardada de outro funcionário), vai como delegada: a marca vai junto, como no envio direto.
   sendTo: (projectId, sessionId, staffId, text, images, origin) => chats.send(projectId, sessionId, staffId, text, 'next', images, [], !!origin, origin),
@@ -854,7 +889,14 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       return importProjects(adapter, body);
     },
   ],
-  ['GET', new RegExp(`^/api/projects/${ID}$`), ({ params: [id], url }) => adapter.getProject(id!, { includeOld: includeOld(url) })],
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}$`),
+    async ({ params: [id], url }) => {
+      const detail = await adapter.getProject(id!, { includeOld: includeOld(url) });
+      return detail && { ...detail, sessions: await titles.annotate(id!, 'claude', detail.sessions) };
+    },
+  ],
   ['GET', new RegExp(`^/api/projects/${ID}/mcp$`), ({ params: [id] }) => staff.listMcp(id!)],
   // Biblioteca de MCPs: a lista não traz valor (só nome e se está preenchido); cadastrar, editar, apagar e testar só pelo navegador.
   ['GET', /^\/api\/mcp-servers$/, ({ url }) => mcpLibrary.list(url.searchParams.get('projectId'))],
@@ -1276,7 +1318,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     },
   ],
   // ---- caixa "precisa de mim" ----
-  ['GET', /^\/api\/inbox$/, () => getInbox()],
+  // O palpite e a dica mascarada do segredo só vão para a tela (navegador pareado): agente e curl recebem o aviso sem eles.
+  ['GET', /^\/api\/inbox$/, async ({ paired }) => (paired ? await getInbox() : withoutSecretHint(await getInbox()))],
   ['GET', /^\/api\/turns$/, ({ url }) => getTurns(url.searchParams.get('since'))],
   // ---- cargos (modelos de ficha) ----
   ['GET', /^\/api\/roles$/, () => listRoles()],
@@ -1301,6 +1344,17 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   // ---- tarefas por projeto ----
   ['GET', /^\/api\/tasks\/summary$/, () => tasks.summary()],
   ['GET', new RegExp(`^/api/projects/${ID}/tasks$`), ({ params: [id] }) => tasks.list(id!)],
+  // Revisão automática do quadro: `{ autoReview, reviewerId }` (ver server/boardConfig.ts). Ler é livre; gravar só pela tela, como as outras
+  // configurações de projeto (o funcionário nem tem este POST na lista de apiPolicy.ts).
+  ['GET', new RegExp(`^/api/projects/${ID}/board-review$`), ({ params: [id] }) => tasks.boardConfig(id!)],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/board-review$`),
+    ({ params: [id], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('a revisão do quadro só é configurada pelo Claudio’s Club');
+      return tasks.setBoardConfig(id!, body);
+    },
+  ],
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks$`),
@@ -1381,15 +1435,24 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       return taskCostOf(task, await taskCostSources(files), scanning);
     },
   ],
-  // Dúvida da tarefa respondida pelo gestor que pediu (pela API, com o token da conversa dele). Sem quem chama (ex.: o navegador), o serviço recusa (403).
+  // Dúvida da tarefa respondida pelo gestor que pediu (pela API, com o token da conversa dele) ou por você (pela tela, navegador pareado: a
+  // resposta vale como sua e `escalate` é recusado). Quem responde como você é só `fromBrowser`, nunca o corpo do pedido. Sem token de gestor e
+  // fora do navegador (ex.: o Codex pela sandbox, sem token), o serviço recusa (403).
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks/${ID}/answer$`),
-    async ({ params: [id, taskId], body, caller }) => {
+    async ({ params: [id, taskId], body, caller, fromBrowser }) => {
       const b = parse(TaskAnswerBody, body);
       const who = caller?.staffId ? { staffId: caller.staffId, sessionId: caller.sessionId } : null;
-      return { ok: true, task: await tasks.answerQuestion(id!, taskId!, who, b) };
+      return { ok: true, task: await tasks.answerQuestion(id!, taskId!, who, b, fromBrowser) };
     },
+  ],
+  // O ajuste guardado que não chegou (item 'stuck' com `resend`): zera as falhas e tenta já. Sem corpo: só `fromBrowser` (navegador pareado)
+  // autoriza, e o serviço recusa com 403 quem não é (404 sem a tarefa, 409 encerrada ou sem ajuste guardado).
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/tasks/${ID}/resend-held$`),
+    ({ params: [id, taskId], fromBrowser }) => tasks.resendHeld(id!, taskId!, fromBrowser),
   ],
   // Desligada nas configurações: nem procura o `codex` (nenhum processo é aberto).
   [
@@ -1493,6 +1556,16 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
         return { ok: true };
       }
       return { ok: chats.dismissSecret(b.id, b.notSecret) };
+    },
+  ],
+  [
+    'POST',
+    /^\/api\/errors\/dismiss$/,
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      // `error:<sessão>` (parou com erro) ou `cap:<sessão>` (parou no teto): o id do item da caixa.
+      const b = parse(z.object({ id: z.string().regex(/^(error|cap):.+/).max(300) }), body);
+      return { ok: chats.dismissError(b.id) };
     },
   ],
   [
@@ -1783,6 +1856,14 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ],
   [
     'POST',
+    /^\/api\/skills\/create$/,
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('skills só são criadas pelo Claudio’s Club');
+      return createSkill(body, { resolveTarget: (scope, projectId) => skillScopeOf(scope, projectId), globalRoot: path.join(defaultLocations().home, 'skills') });
+    },
+  ],
+  [
+    'POST',
     /^\/api\/skills\/delete$/,
     async ({ body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('skills só são apagadas pelo Claudio’s Club');
@@ -1986,8 +2067,50 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     },
   ],
   ['GET', /^\/api\/config$/, () => readConfig()],
-  // Biblioteca de skills da conta (~/.myco/skills): só quem tem a skill na ficha carrega.
-  ['GET', /^\/api\/skills\/library$/, () => listLibrary()],
+  // ---- a extensão do Chrome (Configurações): o código de pareamento, os pareados e o .zip para instalar (server/extension/) ----
+  // Todas são POST (um GET de navegação não manda Origin, então não seria da tela) e só valem pelo navegador pareado.
+  [
+    'GET',
+    /^\/api\/extension$/,
+    async () => ({
+      id: EXTENSION_ID,
+      available: await fs.access(path.join(EXTENSION_DIR, 'manifest.json')).then(
+        () => true,
+        () => false,
+      ),
+      pairings: extensionTokens.list(),
+    }),
+  ],
+  [
+    'POST',
+    /^\/api\/extension\/pair$/,
+    async ({ fromBrowser, body }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      const req = z.object({ label: z.string().max(40).optional() }).strict().safeParse(body ?? {});
+      if (!req.success) throw new BadRequest(req.error.issues[0]?.message ?? 'pedido inválido');
+      return extensionTokens.startPairing(req.data.label);
+    },
+  ],
+  [
+    'POST',
+    /^\/api\/extension\/pairings\/([A-Za-z0-9-]+)\/revoke$/,
+    async ({ params: [id], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      return extensionTokens.revoke(id ?? '') ? { ok: true } : null;
+    },
+  ],
+  [
+    'POST',
+    /^\/api\/extension\/download$/,
+    async ({ fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      const bytes = await buildExtensionZip(EXTENSION_DIR, PORT);
+      return new Raw(bytes, 'application/zip', { 'content-disposition': 'attachment; filename="claudios-club-extensao.zip"' });
+    },
+  ],
+  // A biblioteca do Club virou Global (~/.claude/skills, ver skillMigration.ts): a lista fica vazia e as escritas recusam.
+  // A leitura de uma pasta que sobrou (conflito da migração) segue igual.
+  ['GET', /^\/api\/skills\/library$/, async () => []],
   [
     'GET',
     /^\/api\/skills\/library\/([a-z0-9][a-z0-9-]{0,63})$/,
@@ -1996,29 +2119,63 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       return s && { name: s.name, description: s.description, body: s.body, files: s.files, updatedAt: s.updatedAt };
     },
   ],
+  ['POST', /^\/api\/skills\/library$/, () => refuseLibrary()],
+  ['POST', /^\/api\/skills\/library\/import$/, () => refuseLibrary()],
+  ['POST', /^\/api\/skills\/library\/([a-z0-9][a-z0-9-]{0,63})\/delete$/, () => refuseLibrary()],
+  // Skills de repositório público do GitHub (ver skillInstall.ts): prévia, instalação, selo, atualizar e voltar. Nada aqui executa código.
   [
     'POST',
-    /^\/api\/skills\/library$/,
+    /^\/api\/skills\/github\/preview$/,
     ({ body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
-      return saveLibrarySkill(body);
+      if (!fromBrowser) throw new BadRequest('skills só são instaladas pelo Claudio’s Club');
+      return previewSkill(parse(GitHubPreviewInput, body));
     },
   ],
   [
     'POST',
-    /^\/api\/skills\/library\/import$/,
-    ({ body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
-      const b = parse(z.object({ name: z.string().max(64) }), body);
-      return copyToLibrary(b.name, path.join(defaultLocations().home, 'skills'));
+    /^\/api\/skills\/github\/install$/,
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('skills só são instaladas pelo Claudio’s Club');
+      const b = parse(GitHubInstallInput, body);
+      const target = await githubTargetOf(b.scope, b.projectId);
+      return installSkill({ target, url: b.url, path: b.path, ref: b.ref, sha: b.sha, digest: b.digest, name: b.name });
+    },
+  ],
+  [
+    'GET',
+    /^\/api\/skills\/github\/status$/,
+    async ({ url }) => {
+      const q = parse(GitHubStatusQuery, { scope: url.searchParams.get('scope'), projectId: url.searchParams.get('projectId') });
+      const target = await githubTargetOf(q.scope, q.projectId);
+      const skills = await githubSkillsIn(target);
+      return Promise.all(skills.map(async (s) => ({ ...s, update: await githubChecker.statusOf(target.scope, target.owner, s.name) })));
     },
   ],
   [
     'POST',
-    /^\/api\/skills\/library\/([a-z0-9][a-z0-9-]{0,63})\/delete$/,
-    async ({ params: [name], fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
-      return { ok: await removeLibrarySkill(name!) };
+    /^\/api\/skills\/github\/check$/,
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('skills só são atualizadas pelo Claudio’s Club');
+      const b = parse(GitHubSkillInput, body);
+      return checkUpdate({ target: await githubTargetOf(b.scope, b.projectId), name: b.name });
+    },
+  ],
+  [
+    'POST',
+    /^\/api\/skills\/github\/update$/,
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('skills só são atualizadas pelo Claudio’s Club');
+      const b = parse(GitHubUpdateInput, body);
+      return applyUpdate({ target: await githubTargetOf(b.scope, b.projectId), name: b.name, sha: b.sha, digest: b.digest, overwriteLocal: b.overwriteLocal });
+    },
+  ],
+  [
+    'POST',
+    /^\/api\/skills\/github\/rollback$/,
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('skills só são voltadas pelo Claudio’s Club');
+      const b = parse(GitHubSkillInput, body);
+      return rollback({ target: await githubTargetOf(b.scope, b.projectId), name: b.name });
     },
   ],
   // Workspaces (abas do quadro): criar ou editar, remover, e o workspace de cada projeto.
@@ -2075,12 +2232,41 @@ const CONTENT_TYPES: Record<string, string> = {
   '.json': 'application/json; charset=utf-8',
 };
 
+/**
+ * O que a extensão do Chrome vê: as mesmas leituras e escritas da tela, só com a projeção dela (ver server/extension/routes.ts). Nada de
+ * conversa, arquivo ou configuração.
+ */
+const extDeps: ExtensionDeps = {
+  tokens: extensionTokens,
+  inbox: () => getInbox(),
+  projects: async () => {
+    const list = (await adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf);
+    const profiles = await staff.listAll(list);
+    return list.map((p) => ({
+      id: p.id,
+      name: p.name,
+      staff: profiles.filter((s) => s.projectId === p.id).map((s) => ({ id: s.id, name: s.name, role: s.role })),
+    }));
+  },
+  createTask: (projectId, body) => tasks.create(projectId, body),
+  startTask: (projectId, taskId) => tasks.start(projectId, taskId),
+  parkTask: (projectId, taskId, reason) => tasks.update(projectId, taskId, { waitReason: reason }),
+};
+
 async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
   // Porta de entrada (server/gate.ts): Host, método, navegador pareado (ver pairing.ts), quem chama (socket e token da conversa) e as listas de rotas.
   // Aqui também ficam GET /api/pair (o link com o código), POST /api/pair/request|claim|approve (o botão "Parear este navegador" + `npm run pair
   // CÓDIGO`) e POST /api/pair/rotate (desparear todos).
-  const admitted = gate(req, res, { pairing, tokens: sessionTokens, localHostnames: LOCAL_HOSTNAMES, isLocalOrigin, openApproval });
+  const admitted = gate(req, res, { pairing, tokens: sessionTokens, extensionTokens, localHostnames: LOCAL_HOSTNAMES, isLocalOrigin, openApproval });
   if (!admitted) return;
+  // A extensão do Chrome tem as próprias rotas (antes do stream e da tabela da tela). O boardCache sai no fim de toda escrita, como abaixo.
+  if (admitted.extension) {
+    try {
+      return await handleExtension(req, res, admitted, extDeps);
+    } finally {
+      if (req.method !== 'GET') boardCache.invalidate();
+    }
+  }
   const { url, sandbox, fromBrowser, caller } = admitted;
 
   const stream = STREAM_ROUTE.exec(url.pathname);
@@ -2112,6 +2298,8 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
       } catch (err) {
         if (method !== 'GET') boardCache.invalidate(); // falha no meio de uma escrita também pode ter mudado algo
         if (err instanceof ProjectFileError) return send(res, err.status, { error: err.message, ...err.extra });
+        // Zip da extensão: pasta ausente (404) ou manifest recusado / pacote grande (409).
+        if (err instanceof ExtensionPackError) return send(res, err.status, { error: err.message });
         if (err instanceof UsageStopError) return send(res, 409, { error: err.message, code: err.code, hit: err.hit });
         // Vitrine: já sendo gerada (409); recusada antes de começar, pelo uso (429) ou pelos recursos (503).
         if (err instanceof ShowcaseBusyError) return send(res, 409, { error: err.message });
@@ -2130,6 +2318,12 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         if (err instanceof ConversationTitlesFullError) return send(res, 409, { error: err.message });
         if (err instanceof Forbidden) return send(res, 403, { error: err.message });
         if (err instanceof RateLimited) return send(res, 429, { error: err.message });
+        // GitHub: limite de consultas (429, com quando volta); prévia que mudou ou skill mexida sem confirmação (409 com code).
+        if (err instanceof GitHubRateLimited) {
+          const wait = Math.max(1, Math.ceil((Date.parse(err.resetAt) - Date.now()) / 1000));
+          return send(res, 429, { error: err.message, resetAt: err.resetAt }, { 'retry-after': String(wait) });
+        }
+        if (err instanceof SkillConflictError) return send(res, 409, { error: err.message, code: err.code });
         if (err instanceof StaffSendLimitError) return send(res, 429, { error: err.message }, { 'retry-after': String(err.retryAfter) });
         // Reiniciando: a entrega é recusada e a conversa não abre (tentar de novo em instantes).
         if (err instanceof ChatClosingError) return send(res, 503, { error: err.message });
@@ -2147,6 +2341,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
           err instanceof RetentionError ||
           err instanceof ConversationTitleError ||
           err instanceof SkillError ||
+          err instanceof GitHubError ||
           err instanceof McpError ||
           err instanceof ProjectError ||
           err instanceof UpdateError ||
@@ -2263,7 +2458,7 @@ async function getBoard(opts: { includeOld?: boolean } = {}): Promise<Board> {
         p.exists ? projectImageUrl(p.id, p.path) : null,
       ]);
       if (inv) inventories[p.id] = inv;
-      if (list) sessions[p.id] = list;
+      if (list) sessions[p.id] = await titles.annotate(p.id, 'claude', list);
       if (image) images[p.id] = image;
     }),
   ]);
@@ -2293,7 +2488,8 @@ async function getBoard(opts: { includeOld?: boolean } = {}): Promise<Board> {
         if (at && at.getTime() < cutoff) continue;
       }
       if (!sessions[f.projectId]) sessions[f.projectId] = [];
-      sessions[f.projectId]!.push(await codexSession(runDir, f.name, entry));
+      const [withTitle] = await titles.annotate(f.projectId, 'codex', [await codexSession(runDir, f.name, entry)]);
+      sessions[f.projectId]!.push(withTitle!);
       shown.add(f.projectId);
     }
   }
@@ -2315,7 +2511,7 @@ async function getBoard(opts: { includeOld?: boolean } = {}): Promise<Board> {
   return { projects: folded, inventories, sessions, staff: staffList, images, user, live };
 }
 
-const INBOX_ORDER: Record<InboxKind, number> = { plan: 0, permission: 1, secret: 2, waiting: 3, blocked: 4, notStarted: 5, error: 6, routine: 7, usage: 8, orphan: 9 };
+const INBOX_ORDER: Record<InboxKind, number> = { plan: 0, permission: 1, secret: 2, waiting: 3, question: 4, stuck: 5, blocked: 6, notStarted: 7, error: 8, routine: 9, usage: 10, orphan: 11 };
 /** Avisos de consumo (conta e orçamento de projeto) que a caixa mostra; guardados entre leituras da caixa. */
 const usageWarnings = new UsageWarnings();
 
@@ -2350,12 +2546,17 @@ async function getInbox(): Promise<InboxItem[]> {
   // na leitura, nada gravado; somem ao destravar, começar, cancelar, editar ou apagar. Só projetos do quadro e não arquivados (como os outros avisos).
   const boardProjects = projects.filter((x) => x.exists && !x.worktreeOf);
   const boards = await Promise.all(boardProjects.map(async (p) => ({ p, tasks: await readTasks(p.path) })));
-  const stuck = boards.map(({ p, tasks: all }) => ({ p, rows: stuckDependencies(all), forgotten: notStartedTasks(all) }));
-  if (stuck.some((s) => s.rows.length || s.forgotten.length)) {
+  // Também as tarefas que só você destrava (ver ownAlerts): dúvida escalada ('question') e revisão ou ajuste parados ('stuck').
+  const stuck = boards.map(({ p, tasks: all }) => ({ p, rows: stuckDependencies(all), forgotten: notStartedTasks(all), own: ownAlerts(all) }));
+  if (stuck.some((s) => s.rows.length || s.forgotten.length || s.own.length)) {
     const staffNames = new Map((await staff.listAll(boardProjects)).map((s) => [`${s.projectId}:${s.id}`, s.name]));
     const nameOf = (projectId: string, staffId: string | null) => (staffId ? (staffNames.get(`${projectId}:${staffId}`) ?? '') : '');
-    for (const { p, rows, forgotten } of stuck) {
+    for (const { p, rows, forgotten, own } of stuck) {
       if (hidden({ projectId: p.id, staffId: null, sessionId: '' })) continue;
+      for (const a of own) {
+        const w = { projectId: p.id, projectName: p.name, sessionId: '', staffId: a.task.staffId, name: nameOf(p.id, a.task.staffId) };
+        out.push(a.state.humanAction === 'answer' ? taskQuestionInboxItem(a, w) : stuckInboxItem(a, w));
+      }
       for (const s of rows) out.push(blockedInboxItem(s, { projectId: p.id, projectName: p.name, sessionId: '', staffId: s.task.staffId, name: nameOf(p.id, s.task.staffId) }));
       for (const n of forgotten) out.push(notStartedInboxItem(n, { projectId: p.id, projectName: p.name, sessionId: '', name: nameOf(p.id, n.task.staffId) }));
     }
@@ -2419,8 +2620,7 @@ async function getInbox(): Promise<InboxItem[]> {
   // Segredos que apareceram nas conversas do Claudio’s Club (senha num comando, token colado…).
   for (const s of chats.secretHits()) {
     const w = where(s.sessionId, liveById.get(s.sessionId));
-    // `summary` é o fallback em pt-BR; o cliente monta a frase no idioma da página a partir de `secret`.
-    if (!hidden(w)) out.push({ id: `secret:${s.id}`, kind: 'secret', ...w, summary: secretAlert(s.label, s.source), secret: { kind: s.kind, ...(s.detail && { detail: s.detail }), ...(s.source && { source: s.source }) }, at: s.at });
+    if (!hidden(w)) out.push(secretInboxItem(s, w, projects.find((p) => p.id === w.projectId)?.path ?? null));
   }
   // Chave escrita no .mcp.json de um projeto: o arquivo vai para o git junto com o código.
   for (const p of projects.filter((x) => x.exists && !x.worktreeOf)) {
@@ -2513,6 +2713,29 @@ async function skillScopeOf(scope: string | null, projectId: string | null): Pro
   return { scope: 'project', owner: p.id, root: path.join(claudeDir, 'skills'), projectPaths: [p.path] };
 }
 
+/** A biblioteca não é mais escopo: o zod ainda aceita o nome, mas a instalação recusa (ver refuseLibrary). */
+function refuseLibrary(): never {
+  throw new BadRequest('a biblioteca virou Global: use as skills da conta');
+}
+
+/** A pasta de skills do GitHub de um escopo: a conta ou um projeto (o servidor monta; o navegador manda só o id). */
+async function githubTargetOf(scope: 'library' | 'user' | 'project', projectId: string | null | undefined): Promise<InstallTarget> {
+  if (scope === 'library') refuseLibrary();
+  const t = await skillScopeOf(scope, projectId ?? null);
+  return { scope: t.scope, owner: t.owner, root: t.root };
+}
+
+/** Onde procurar as skills do GitHub para o selo de atualização: a conta e cada projeto existente. */
+async function githubScopes(): Promise<InstallTarget[]> {
+  const out: InstallTarget[] = [{ scope: 'user', owner: 'user', root: path.join(defaultLocations().home, 'skills') }];
+  for (const p of (await adapter.listProjects()).filter((x) => x.exists)) {
+    const dir = projectClaudeDir(defaultLocations(), p.path);
+    if (dir) out.push({ scope: 'project', owner: p.id, root: path.join(dir, 'skills') });
+  }
+  return out;
+}
+const githubChecker = new UpdateChecker({ targets: githubScopes });
+
 async function projectById(id: string) {
   const p = (await adapter.listProjects()).find((x) => x.id === id);
   return p?.exists ? p : null;
@@ -2548,8 +2771,38 @@ async function isFile(p: string): Promise<boolean> {
   return fs.stat(p).then((s) => s.isFile()).catch(() => false);
 }
 
+/**
+ * Migração das skills (ver skillMigration.ts): a biblioteca do Club vai para a Global (uma vez) e os nomes antigos das fichas viram refs.
+ * O log diz o que mudou e o que ficou (conflitos e fichas de projeto que não deu para ler).
+ */
+async function migrateSkillsAtBoot(): Promise<void> {
+  const lib = await migrateLibraryToGlobal({
+    libraryDir: LIBRARY_DIR,
+    globalDir: path.join(defaultLocations().home, 'skills'),
+    recordFile: path.join(MYCO_HOME, 'skills-migracao.json'),
+  });
+  if (lib) {
+    console.log(`[skills] biblioteca → Global: ${lib.moved.length} movida(s)${lib.moved.length ? ` (${lib.moved.join(', ')})` : ''}`);
+    if (lib.conflicts.length) console.log(`[skills] biblioteca: ${lib.conflicts.length} não movida(s), nada foi sobrescrito: ${lib.conflicts.join('; ')}`);
+  }
+  const projects = (await adapter.listProjects()).filter((p) => p.exists);
+  const conv = await convertStaffSkills({
+    projects,
+    known: async (p) => {
+      const [inventory, scope] = await Promise.all([adapter.getProjectInventory(p.id), adapter.getUserScope()]);
+      return { globalNames: scope.skills.map((s) => s.name), projectNames: (inventory?.skills ?? []).map((s) => s.name) };
+    },
+    list: listProjectStaff,
+    save: saveProfile,
+  });
+  if (conv.changed.length) console.log(`[skills] fichas com skill por nome antigo convertidas: ${conv.changed.length}`);
+  if (conv.skipped.length) console.warn(`[skills] projetos não lidos na conversão das fichas: ${conv.skipped.join(', ')}`);
+}
+
 server.listen(PORT, HOST, () => {
   console.log(`Claudio’s Club em http://claudio.localhost:${PORT} (adaptador: ${adapter.id})`);
+  // Migração das skills (uma vez): depois da porta, sem segurar a subida.
+  void migrateSkillsAtBoot().catch((err: unknown) => console.warn('[skills] migração não concluída:', err));
   // Só depois de ficar com a porta: o segundo endereço é o da sandbox do Codex. Se não abrir (no macOS o 127.0.0.2 pode faltar), quem roda no
   // Codex fica sem rede e a conversa avisa (ver `codexRunEnv`); o resto do app segue igual.
   sandboxServer.once('error', (err: NodeJS.ErrnoException) => {
@@ -2611,6 +2864,10 @@ server.listen(PORT, HOST, () => {
       .catch(() => {});
   setTimeout(sweepFree, 45_000).unref();
   setInterval(sweepFree, 60 * 60_000).unref();
+  // Selo de atualização das skills do GitHub: no máximo uma varredura por dia (ver UpdateChecker). Não baixa nem aplica nada.
+  const checkGithub = () => void githubChecker.runIfDue().catch(() => {});
+  setTimeout(checkGithub, 2 * 60_000).unref();
+  setInterval(checkGithub, 6 * 60 * 60_000).unref();
   // Configs de sessão antigas em ~/.myco/run (podem ter tokens de MCP): na subida e a cada 12 h.
   const cleanRun = () =>
     cleanRunDir(path.join(MYCO_HOME, 'run'))

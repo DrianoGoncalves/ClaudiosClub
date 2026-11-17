@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title data-i18n="extName">Claudio’s Club</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="head">
+      <img src="icons/icon-32.png" width="24" height="24" alt="" />
+      <h1 data-i18n="extName">Claudio’s Club</h1>
+      <span id="conn" class="conn" role="status" hidden></span>
+    </header>
+
+    <main>
+      <p id="view-loading" class="muted" data-i18n="loading">Carregando…</p>
+
+      <section id="view-offline" class="card is-offline" hidden>
+        <h2 data-i18n="offlineTitle">Club offline</h2>
+        <p data-i18n="offlineBody">O Claudio’s Club não respondeu. Abra o Club e tente de novo; a tarefa não fica guardada.</p>
+        <button type="button" id="retry" class="btn-secondary" data-i18n="retry">Tentar de novo</button>
+      </section>
+
+      <section id="view-error" class="card" hidden>
+        <h2 data-i18n="errorTitle">O Club recusou o pedido</h2>
+        <p id="error-text"></p>
+        <button type="button" id="retry-error" class="btn-secondary" data-i18n="retry">Tentar de novo</button>
+      </section>
+
+      <form id="view-pair" class="stack" autocomplete="off" hidden>
+        <h2 data-i18n="pairTitle">Parear com o Club</h2>
+        <p id="pair-notice" class="notice" role="alert" hidden></p>
+        <p class="muted" data-i18n="pairHelp">No Club, abra Configurações → Geral → Extensão do Chrome, gere o código e digite aqui. O código vale 5 minutos.</p>
+        <label class="field">
+          <span data-i18n="pairLabel">Código de pareamento</span>
+          <input id="pair-code" class="control mono" type="text" maxlength="9" autocapitalize="characters" spellcheck="false" required data-i18n-attr="placeholder:pairPlaceholder" />
+        </label>
+        <p id="pair-error" class="error" role="alert" hidden></p>
+        <button type="submit" id="pair-submit" class="btn-primary" data-i18n="pairButton">Parear</button>
+      </form>
+
+      <form id="view-task" class="stack" hidden>
+        <label class="field">
+          <span data-i18n="fieldProject">Projeto</span>
+          <select id="project" class="control"></select>
+        </label>
+        <label class="field">
+          <span data-i18n="fieldStaff">Responsável</span>
+          <select id="staff" class="control"></select>
+        </label>
+        <p id="no-staff" class="muted" hidden data-i18n="noStaff">Este projeto não tem funcionário: contrate um no Club.</p>
+        <label class="field">
+          <span data-i18n="fieldTitle">Título</span>
+          <input id="title" class="control" type="text" maxlength="120" autocomplete="off" required />
+        </label>
+        <label class="field">
+          <span data-i18n="fieldDescription">Descrição (opcional)</span>
+          <textarea id="description" class="control" rows="3" maxlength="3000"></textarea>
+        </label>
+
+        <fieldset id="page" class="page">
+          <legend data-i18n="pageLegend">Da página atual</legend>
+          <p id="page-none" class="muted" hidden data-i18n="attachNone">Esta página não pode ser anexada.</p>
+          <label id="page-pick" class="check" hidden>
+            <input type="checkbox" id="attach-page" />
+            <span data-i18n="attachPage">Anexar URL e título da página</span>
+          </label>
+          <label id="selection-pick" class="check" hidden>
+            <input type="checkbox" id="attach-selection" />
+            <span id="selection-label"></span>
+          </label>
+          <div id="external" class="external" hidden>
+            <p class="external-head" data-i18n="externalNote">Conteúdo externo: vai para a tarefa como dado, não como instrução.</p>
+            <dl id="external-rows"></dl>
+          </div>
+        </fieldset>
+
+        <label class="check">
+          <input type="checkbox" id="start" />
+          <span>
+            <span data-i18n="startNow">Iniciar já</span>
+            <span class="muted hint" data-i18n="startHint">Desmarcado: a tarefa fica em Aguardar até você começar.</span>
+          </span>
+        </label>
+
+        <p id="task-status" class="status" role="status" hidden></p>
+        <div class="actions">
+          <button type="submit" id="create" class="btn-primary" data-i18n="create">Criar tarefa</button>
+          <button type="button" id="open-tasks" class="btn-secondary" data-i18n="openTasks">Ver no quadro</button>
+        </div>
+      </form>
+    </main>
+
+    <footer class="foot">
+      <button type="button" id="open-club" class="link" data-i18n="openClub">Abrir o Club</button>
+      <button type="button" id="unpair" class="link" data-i18n="unpair" data-i18n-attr="title:unpairHint" hidden>Desparear</button>
+    </footer>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

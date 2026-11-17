@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { BUILTIN_ROLES, type RoleEntry, type RoleTemplate } from '../shared/roles';
+import { NAME as SKILL_NAME } from './adapters/claude/skillWrite';
 import { MYCO_HOME } from './config';
 import { writeAtomic } from './staff/store';
 
@@ -34,7 +35,8 @@ export const RoleInput = z.object({
   pickExecutors: z.boolean().optional(),
   playbook: z.enum(['plan-big-execute-small', 'scout-then-build', 'review-gate']).nullable().optional(),
   worktree: z.boolean().optional(),
-  skills: z.array(z.string().max(100)).max(50).optional(),
+  // Nomes de skills Globais (sem escopo): a ficha contratada com o cargo recebe `global:<nome>`.
+  skills: z.array(z.string().regex(SKILL_NAME, 'skill do cargo: letras, números, _ e hífen (até 64), começando por letra ou número')).max(50).optional(),
   servers: z.boolean().optional(),
   canHire: z.boolean().optional(),
 });
@@ -50,7 +52,11 @@ export async function readRolesFile(file = FILE): Promise<RolesFile> {
   try {
     const d = raw ? (JSON.parse(raw.replace(/^﻿/, '')) as Partial<RolesFile>) : {};
     const items = (Array.isArray(d.items) ? d.items : []).flatMap((r) => {
-      const ok = RoleInput.safeParse(r);
+      // Uma skill com nome inválido no arquivo sai dela, sem derrubar o cargo inteiro.
+      const cleaned = r && typeof r === 'object' && Array.isArray((r as { skills?: unknown }).skills)
+        ? { ...r, skills: ((r as { skills: unknown[] }).skills).filter((s): s is string => typeof s === 'string' && SKILL_NAME.test(s)) }
+        : r;
+      const ok = RoleInput.safeParse(cleaned);
       return ok.success && ok.data.id ? [{ ...ok.data, id: ok.data.id } as RoleTemplate] : [];
     });
     const defaultId = typeof d.defaultId === 'string' ? d.defaultId : d.defaultId === null ? null : DEFAULT_ROLE;

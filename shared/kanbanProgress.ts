@@ -1,53 +1,39 @@
-// Progresso do kanban de um projeto: cada coluna vale pontos e a barra mostra quanto do lote atual já andou até
-// Pronto. O servidor calcula (summary de tarefas) e a tela só desenha; a conta mora aqui para ser uma só.
-import { isClosed, type TaskProgress, type TaskStatus } from './model';
+// Progresso do kanban de um projeto: cada tarefa em andamento vale 3 pontos e a barra mostra quanto delas já andou. O servidor
+// calcula (summary de tarefas) e a tela só desenha; a conta mora aqui para ser uma só.
+import type { TaskProgress, TaskStatus } from './model';
 
-/** Peso de cada etapa (o que a tarefa ganha ao sair dela): Aguardar 1, A fazer 3, Fazendo 2, Revisão 1. */
-export const STAGE_WEIGHTS = { waiting: 1, todo: 3, doing: 2, review: 1 } as const;
+/** Quanto cada tarefa na conta vale no total. */
+export const TASK_POINTS = 3;
 
 /**
- * Pontos por coluna: a soma dos pesos das etapas já vencidas (Aguardar 0, A fazer 1, Fazendo 4, Revisão 6, Pronto 7).
- * "Planejando" é a coluna Fazendo na tela, então vale o mesmo. Cancelada vale 0 e nunca entra na conta (fechou sem entrega:
- * não é aberta nem pronta, ver `kanbanProgress`).
+ * Pontos ganhos por coluna: A fazer 0, Fazendo 1, Revisão 2. "Planejando" é a coluna Fazendo na tela, então vale o mesmo.
+ * Status fora daqui (Aguardar, Pronto e Cancelada) não entra na conta: nem os pontos nem o máximo.
  */
-export const STATUS_POINTS: Record<TaskStatus, number> = (() => {
-  const w = STAGE_WEIGHTS;
-  const doing = w.waiting + w.todo;
-  return { waiting: 0, todo: w.waiting, planning: doing, doing, review: doing + w.doing, done: doing + w.doing + w.review, cancelled: 0 };
-})();
-const MAX_POINTS = STATUS_POINTS.done;
+export const STATUS_POINTS: Partial<Record<TaskStatus, number>> = { todo: 0, planning: 1, doing: 1, review: 2 };
 
 /** O que a conta lê de uma tarefa (a `Task` serve). */
 export interface ProgressTask {
   status: TaskStatus;
-  createdAt: string;
-  updatedAt: string;
-  history?: Array<{ at: string; status: TaskStatus }>;
-}
-
-/** Quando a tarefa ficou pronta: a última vez que entrou em Pronto no histórico; sem ela, a última mudança. NaN = data ilegível. */
-function doneAt(task: ProgressTask): number {
-  const entry = [...(task.history ?? [])].reverse().find((h) => h.status === 'done');
-  return Date.parse(entry?.at ?? task.updatedAt);
 }
 
 /**
- * Pontos do lote atual sobre o máximo (7 por tarefa). O lote é o que está aberto mais o que ficou pronto depois da
- * criação da tarefa aberta mais antiga; as prontas de antes ficam de fora (senão a barra ficaria sempre perto de
- * 100%). Sem tarefa aberta devolve null: não há o que zerar, não há barra.
+ * Pontos sobre o máximo (3 por tarefa na conta). Só entram A fazer, Fazendo/Planejando e Revisão; sem nenhuma delas devolve
+ * null (não há barra). Revisão reprovada volta para Fazendo e a barra recua (2 → 1 de 3).
  */
 export function kanbanProgress(tasks: readonly ProgressTask[]): TaskProgress | null {
-  // Cancelada fora: não é trabalho em aberto, e não foi entregue (não entra nem no lote das prontas).
-  const open = tasks.filter((x) => !isClosed(x));
-  if (open.length === 0) return null;
-  const since = Math.min(...open.map((x) => Date.parse(x.createdAt)));
-  // Data ilegível (NaN) nunca passa na comparação: a tarefa fica fora do lote em vez de inflar a barra.
-  const batch = [...open, ...tasks.filter((x) => x.status === 'done' && doneAt(x) >= since)];
-  return { points: batch.reduce((sum, x) => sum + STATUS_POINTS[x.status], 0), max: MAX_POINTS * batch.length };
+  let counted = 0;
+  let points = 0;
+  for (const x of tasks) {
+    const own = STATUS_POINTS[x.status];
+    if (own === undefined) continue;
+    counted += 1;
+    points += own;
+  }
+  return counted === 0 ? null : { points, max: TASK_POINTS * counted };
 }
 
-/** 0–99 (arredonda para baixo: com tarefa aberta nunca chega a 100%). */
+/** 0–100 (arredonda para baixo). */
 export const progressPercent = (p: TaskProgress): number => (p.max > 0 ? Math.floor((p.points * 100) / p.max) : 0);
 
-/** Tarefas do lote, abertas e prontas. */
-export const progressTotal = (p: TaskProgress): number => Math.round(p.max / MAX_POINTS);
+/** Tarefas na conta. */
+export const progressTotal = (p: TaskProgress): number => Math.round(p.max / TASK_POINTS);

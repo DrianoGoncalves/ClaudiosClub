@@ -720,6 +720,79 @@ describe('ChatManager: ficha editada com a conversa aberta', () => {
     expect(m.attention()).toEqual([{ sessionId: 'sx', pending: [], error: 'o claude saiu com código 1' }]);
   });
 
+  it('dismissError: o alerta de erro sai da caixa; mensagem nova e erro novo da conversa voltam a avisar', async () => {
+    const { m, procs } = manager();
+    await m.send('p', 'sx', 'ana', 'rode');
+    procs[0]!.proc.emit('exit', 1);
+    await tick();
+    expect(m.attention()).toEqual([{ sessionId: 'sx', pending: [], error: 'o claude saiu com código 1' }]);
+
+    expect(m.dismissError('error:sx')).toBe(true);
+    expect(m.attention()).toEqual([]);
+
+    // Mensagem nova reabre a conversa (o erro de antes já não vale); o erro que vem depois é outro e avisa de novo.
+    await m.send('p', 'sx', 'ana', 'tente de novo');
+    expect(procs).toHaveLength(2);
+    procs[1]!.proc.emit('exit', 1);
+    await tick();
+    expect(m.attention()).toEqual([{ sessionId: 'sx', pending: [], error: 'o claude saiu com código 1' }]);
+  });
+
+  it('dismissError: só dispensa o que está na caixa (id de erro ou de teto, de uma conversa com o alerta de pé)', async () => {
+    const { m, procs } = manager();
+    await m.send('p', 'sx', 'ana', 'rode');
+    expect(m.dismissError('error:sx')).toBe(false); // conversa sem erro (tela velha)
+    expect(m.dismissError('error:nao-existe')).toBe(false);
+    expect(m.dismissError('cap:sx')).toBe(false); // sem teto
+    expect(m.dismissError('secret:sx:uma senha')).toBe(false); // não é alerta de erro: o segredo tem a rota dele
+    expect(m.dismissError('sx')).toBe(false);
+
+    // O erro dispensado de uma conversa não tira o de outra, nem o teto da mesma.
+    procs[0]!.proc.emit('exit', 1);
+    await tick();
+    expect(m.dismissError('error:outra')).toBe(false);
+    expect(m.attention()).toHaveLength(1);
+  });
+
+  it('dismissError no teto do turno: some da caixa e sobrevive a reabrir o arquivo; outro teto volta, a tarefa segue sabendo do teto', async () => {
+    const file = path.join(root, 'inbox-teto.json');
+    const inbox = new InboxState(file);
+    const { m } = manager({ inbox });
+    inbox.setTurnCap('sx', { kind: 'tools', limit: 50, at: '2026-11-16T10:00:00.000Z' });
+    expect(m.turnCaps()).toEqual([{ sessionId: 'sx', kind: 'tools', limit: 50, at: '2026-11-16T10:00:00.000Z' }]);
+
+    expect(m.dismissError('cap:sx')).toBe(true);
+    expect(m.turnCaps()).toEqual([]);
+    expect(m.turnCapOf('sx')).toEqual({ kind: 'tools', limit: 50 }); // o estado da tarefa não muda
+
+    await inbox.flush();
+    expect(manager({ inbox: new InboxState(file) }).m.turnCaps()).toEqual([]); // depois de reiniciar, segue dispensado
+
+    inbox.setTurnCap('sx', { kind: 'minutes', limit: 30, at: '2026-11-16T11:00:00.000Z' });
+    expect(m.turnCaps()).toEqual([{ sessionId: 'sx', kind: 'minutes', limit: 30, at: '2026-11-16T11:00:00.000Z' }]);
+
+    // Mensagem nova na conversa: o teto sai (regra de sempre) e a dispensa dele junto.
+    await m.send('p', 'sx', 'ana', 'segue');
+    expect(m.turnCaps()).toEqual([]);
+    expect(inbox.isErrorDismissed('cap:sx', '2026-11-16T10:00:00.000Z')).toBe(false);
+  });
+
+  it('a rota /api/errors/dismiss só aceita do navegador e valida o id; a caixa e a extensão leem a mesma lista', async () => {
+    const src = await fs.readFile(path.join(__dirname, '..', 'server', 'index.ts'), 'utf8');
+    const start = src.indexOf('/^\\/api\\/errors\\/dismiss$/');
+    expect(start).toBeGreaterThan(0);
+    const route = src.slice(start, src.indexOf('\n  ],', start));
+    expect(route).toContain('async ({ body, fromBrowser })');
+    expect(route.indexOf('if (!fromBrowser) throw new BadRequest')).toBeGreaterThan(0);
+    expect(route.indexOf('if (!fromBrowser)')).toBeLessThan(route.indexOf('parse('));
+    expect(route).toContain('chats.dismissError(b.id)');
+    expect(route).toMatch(/regex\(\/\^\(error\|cap\):/);
+    // O filtro mora em chats.attention()/turnCaps(), que o getInbox lê; a extensão chama o mesmo getInbox.
+    expect(src).toContain('for (const { sessionId, pending, error } of chats.attention())');
+    expect(src).toContain('for (const c of chats.turnCaps())');
+    expect(src).toContain('inbox: () => getInbox(),');
+  });
+
   it('dismissPending (tarefa cancelada): nega o plano pendente sem acionar os ganchos da tarefa, e aprovar depois não executa nada', async () => {
     const approved: string[] = [];
     const rejected: string[] = [];

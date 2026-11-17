@@ -71,6 +71,19 @@ export interface Session {
    * um funcionário têm o mesmo `title` (o nome dele), então é isto que as diferencia na lista.
    */
   topic: string | null;
+  /**
+   * Título gerado por IA (só conversa do Club com assunto livre; ver server/titles/generator.ts). Contrato: texto puro (nunca
+   * HTML), uma linha, até 60 caracteres. Null ou ausente = sem título gerado (tarefa, assunto vago, falha, ainda gerando,
+   * conversa fora do Club). A tela usa: título manual > aiTitle > topic > title.
+   */
+  aiTitle?: string | null;
+  /**
+   * Título da tarefa em revisão, quando a conversa começou com o pedido de revisão (`[Revisão da tarefa "<título>"]`) e ainda
+   * não mudou de assunto. Texto puro (nunca HTML), uma linha, até 80 caracteres, sem prefixo: a tela monta "<coluna Revisão> -
+   * <título>" no idioma dela. Null ou ausente = não é conversa de revisão (ou já virou outro assunto; ou fora do Club).
+   * A tela usa: título manual > reviewTask > aiTitle > topic > title.
+   */
+  reviewTask?: string | null;
   /** Origem: claude-desktop, cli, sdk-cli… */
   entrypoint: string | null;
   gitBranch: string | null;
@@ -370,6 +383,8 @@ export interface AppConfig {
   maxTurnTools: number;
   /** Teto de minutos por turno (0 = desligado), sem contar o tempo esperando sua permissão ou resposta. Lido a cada turno. */
   maxTurnMinutes: number;
+  /** Títulos de conversa gerados por IA (Haiku) para as conversas do Club com assunto livre. Ligado por padrão; desligado, nenhuma chamada ao modelo e a lista volta ao assunto (o cache não aparece). Títulos manuais seguem valendo. Lido a cada lista. */
+  aiTitles: boolean;
 }
 
 export const CONTEXT_SWITCHES = ['auto', 'suggest', 'off'] as const;
@@ -590,6 +605,19 @@ export const TEMP_IDLE_DAYS = 3;
 export const ACK_CANCELLED_DAYS = 7;
 /** Quantas revisões automáticas uma tarefa pede antes de ficar com o dono (o servidor limita; a tela mostra `n/AUTO_REVIEW_ROUNDS`). */
 export const AUTO_REVIEW_ROUNDS = 3;
+/** Teto da lista de arquivos de um card automático (`Task.changedFiles`); passando disso, os arquivos novos não entram na lista. */
+export const CHANGED_FILES_MAX = 300;
+
+/**
+ * Revisão do quadro de um projeto (`<projeto>/.myco/board.json`): com ela ligada, a tarefa que chega em "revisão" é revisada por
+ * `reviewerId`, a não ser que a tarefa aponte outro revisor ou que ele mesmo a tenha executado (aí fica com o dono). Vale para
+ * tarefas manuais e para os cards automáticos (`Task.autoCreated`). Desligada, nada muda: só revisa quem a tarefa aponta.
+ */
+export interface BoardConfig {
+  autoReview: boolean;
+  /** O funcionário responsável pela revisão; null = ninguém (com `autoReview` ligado não existe: o servidor recusa). */
+  reviewerId: string | null;
+}
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
 /** Encerrada: pronta ('done') ou cancelada. Não é aberta (não entra em fila, contagem de abertas nem rotina em andamento). */
@@ -678,6 +706,12 @@ export interface Task {
   requestedSession?: string | null;
   /** Aprovada, mas o aviso ao gestor (`requestedBy`) ficou retido: sai junto com o da última tarefa aberta dele (ver TaskService.settleRequester). */
   outcomeHeld?: boolean;
+  /** Quando o aviso passou a ficar retido: depois de 2 h o tick o solta, mesmo com tarefa dele ainda aberta. */
+  outcomeHeldAt?: string;
+  /** O aviso ao gestor saiu e falhou (a conversa dele não abriu): o tick reenvia quando `nextAt` chegar. Junto de `outcomeHeld`. */
+  outcomePending?: RetryState;
+  /** A revisão automática não começou (limite de consumo, conversa fechando…): o tick tenta de novo até 30 min, e depois a tarefa é sua (ver `stuckState`). */
+  reviewRetry?: RetryState & { deliveryAt: string | null; expired?: boolean };
   /**
    * Na fila do funcionário: começa sozinha quando ele terminar a tarefa atual (uma por vez, na
    * ordem do quadro).
@@ -702,6 +736,41 @@ export interface Task {
   question?: TaskQuestion;
   /** Quantas dúvidas a tarefa já levou ao gestor (no máximo 3). */
   questionCount?: number;
+  /**
+   * Card criado sozinho pelo Claudio’s Club: uma conversa de funcionário, sem tarefa, editou arquivo do projeto (ver
+   * TaskService.onCodeEdit). Nasce em "fazendo", ligado à conversa (`sessionId`), sem `requestedBy`; vai para "revisão" quando o turno
+   * termina. Ausente = tarefa comum.
+   */
+  autoCreated?: boolean;
+  /**
+   * Os arquivos que a conversa de trabalho alterou, relativos à pasta onde ela trabalha (a worktree dele ou o projeto), com "/", na
+   * ordem em que foram editados: no card automático e na tarefa comum (esta é a prova de "nada editado ainda" da dúvida escalada, ver
+   * `TaskPause`). Fora: o que está em `.myco/` e o que fica fora do projeto. No máximo `CHANGED_FILES_MAX`. Edição só por shell (sed,
+   * node -e, scripts) não entra: o Club só vê as ferramentas de edição.
+   */
+  changedFiles?: string[];
+  /**
+   * Só na listagem (derivado, não gravado): a dúvida da tarefa está escalada a você (`question.status === 'escalated'`) e isso decide se
+   * ela prende o funcionário. Ausente = dúvida com o gestor, respondida ou sem dúvida (a fila não muda).
+   */
+  pause?: TaskPause;
+}
+
+/**
+ * O que a dúvida escalada a você faz com a fila do funcionário (`Task.pause`). `released`: nada foi editado (sem `changedFiles` nem
+ * `checkpoint`), então a tarefa espera a sua resposta sem ocupá-lo e a próxima da fila dele começa; a tela mostra "pausada esperando você;
+ * <nome> seguiu para <tarefa>" (`movedTo`). `holding`: já há edição, ele fica nesta tarefa até você responder. Ter worktree não muda
+ * nada (ela é do funcionário, não da tarefa). Quando a sua resposta chega com ele em outra tarefa, ela fica guardada em `Task.held` e
+ * vai antes da próxima da fila, quando ele ficar livre.
+ */
+export interface TaskPause {
+  state: 'released' | 'holding';
+  /** Em pt-BR, para mostrar como está ("dúvida com edição em andamento"). */
+  reason: string;
+  /** Desde quando a dúvida está com você (`question.escalatedAt`). */
+  since: string;
+  /** Só em `released`: a tarefa em que o funcionário está agora; null = nenhuma (está livre ou a fila dele está vazia). */
+  movedTo: { id: string; title: string } | null;
 }
 
 /**
@@ -718,6 +787,10 @@ export interface TaskQuestion {
   /** open: com o gestor; escalated: com você; answered: resolvida. */
   status: 'open' | 'escalated' | 'answered';
   askedAt: string;
+  /** O envio ao gestor ainda não deu certo (sem `managerSession`): o tick tenta de novo com backoff. Continua depois de escalada. */
+  pending?: RetryState;
+  /** Quando a dúvida foi para você (sem resposta do gestor no prazo, ou ele recusou, ou o envio não tinha como dar certo). */
+  escalatedAt?: string;
   /** Conversa nova do gestor em que a dúvida chegou. */
   managerSession?: string;
   answeredBy?: 'manager' | 'user';
@@ -743,9 +816,30 @@ export interface HeldMessage {
   reason: string;
   /** Carimbo de quem mandou (outro funcionário): vai junto quando a mensagem for enviada (ver server/chat/origin.ts). */
   origin?: string;
+  /** Envios que falharam (limite de consumo, conversa fechada…). Com 5, deixa de ir sozinha e a tarefa fica parada (ver `stuckState`). */
+  attempts?: number;
+  /** Próxima tentativa (backoff com jitter); antes disso a fila não a manda. */
+  nextAt?: string;
+  /**
+   * Resposta sua (ou do gestor) a uma pergunta por opções que ficou pendente na conversa enquanto o funcionário estava em outra tarefa:
+   * quando a mensagem vai, ela responde a pergunta (`requestId`); se a pergunta já não está pendente (a conversa reabriu), `text` segue
+   * como mensagem comum.
+   */
+  ask?: { requestId: string; answers: Record<string, string | string[]>; by: 'manager' | 'user' };
 }
 
-/** Progresso do kanban do lote atual: pontos ganhos sobre o máximo (ver shared/kanbanProgress.ts). */
+/** Pendência de uma tentativa que falhou e vai ser repetida (ver server/retryPolicy.ts): quantas já foram, a próxima, a primeira e o último erro. */
+export interface RetryState {
+  attempts: number;
+  nextAt: string;
+  firstAt: string;
+  lastError?: string;
+}
+
+/** O que só você resolve numa tarefa parada (ver `stuckState` em server/tasks.ts): responder a dúvida, revisar, reenviar o ajuste ou decidir. */
+export type HumanAction = 'answer' | 'review' | 'resend' | 'decide';
+
+/** Progresso do kanban: pontos ganhos sobre o máximo, 3 por tarefa na conta (ver shared/kanbanProgress.ts). */
 export interface TaskProgress {
   points: number;
   max: number;
@@ -755,7 +849,7 @@ export interface TaskProgress {
 export interface TaskSummary {
   open: number;
   review: number;
-  /** Progresso do lote (a barra do cabeçalho); ausente num servidor antigo, e nesse caso a barra some. */
+  /** Progresso do kanban (a barra do cabeçalho); ausente num servidor antigo, e nesse caso a barra some. */
   progress?: TaskProgress | null;
 }
 
@@ -768,6 +862,10 @@ export interface TaskHandoff {
   doneAt?: string;
   /** Veredito da revisão (primeira linha da resposta: APROVADO ou REPROVADO); null = a resposta não trouxe um. */
   verdict?: 'approved' | 'rejected' | null;
+  /** Revisão automática sem veredito (ou revisor que não respondeu): quando re-pedir; depois de `reasked`, quando foi re-pedido. */
+  reaskAt?: string;
+  /** O re-pedido ("responda com APROVADO ou REPROVADO") já foi feito, uma vez só. */
+  reasked?: boolean;
 }
 
 /** Uma conversa que foi da tarefa: o trabalho, a revisão ou a dúvida ao gestor. `staffId` é quem conversa nela. */
@@ -851,8 +949,9 @@ export interface StaffProfile {
   mission: string;
   firstTask: string;
   autonomy: Autonomy;
-  /** Agents e skills indicados na ficha (o Claude Code continua vendo todos os do projeto). */
+  /** Agents indicados na ficha (o Claude Code continua vendo todos os do projeto). */
   agents: string[];
+  /** Skills marcadas: `global:<nome>` ou `project:<nome>` (ver server/skillAccess.ts). Nome sem escopo é o formato antigo, convertido ao salvar. */
   skills: string[];
   /** MCPs ligados; null = todos os configurados (inclusive os conectores da conta). */
   mcps: string[] | null;
@@ -1128,6 +1227,12 @@ export interface FtpConnection {
 /** Nome do MCP de FTP na sessão do funcionário: as ferramentas aparecem como `mcp__myco-ftp__ftp_*`. */
 export const FTP_MCP_NAME = 'myco-ftp';
 
+/**
+ * MCP que grava só a memória da própria ficha (`memoria_gravar`, `memoria_apagar`): entra nas conversas em autonomia `plan`, onde a
+ * edição de arquivos está bloqueada nos dois motores (no Codex a sandbox de só leitura não aceita exceção por caminho).
+ */
+export const MEMORIA_MCP_NAME = 'myco-memoria';
+
 /** MCP que leva uma pergunta ao GPT (Codex): a ferramenta aparece como `mcp__myco-gpt__perguntar_gpt`. */
 export const GPT_MCP_NAME = 'myco-gpt';
 export const GPT_TOOL_NAME = 'perguntar_gpt';
@@ -1290,7 +1395,7 @@ export type QuestionAnswers = Record<string, string | string[]>;
 export type QuestionAnnotations = Record<string, { preview?: string; notes?: string }>;
 
 /** O que espera você, de todas as salas (a caixa "precisa de mim"). */
-export type InboxKind = 'plan' | 'permission' | 'secret' | 'waiting' | 'error' | 'routine' | 'orphan' | 'usage' | 'blocked' | 'notStarted';
+export type InboxKind = 'plan' | 'permission' | 'secret' | 'waiting' | 'error' | 'routine' | 'orphan' | 'usage' | 'blocked' | 'notStarted' | 'question' | 'stuck';
 
 /** Um turno que acabou (trabalhando → parado): vira o aviso "Fulano terminou". */
 export interface TurnNotice {
@@ -1310,6 +1415,44 @@ export type SecretKind = 'private-key' | 'api-key' | 'password-cli' | 'password-
 
 /** De onde veio o texto com o segredo: o aviso diz isso. Sem origem, o aviso diz "no chat". */
 export type SecretSource = 'owner' | 'staff-reply' | 'tool-input' | 'tool-result';
+
+/**
+ * Palpite do servidor, na detecção, sobre o segredo ser de verdade (heurística local; nunca valida a credencial no provedor):
+ * `example` = provável exemplo/teste; `local` = contexto local (loopback/dev), autenticidade desconhecida;
+ * `exposed` = possível credencial exposta; `unknown` = não foi possível determinar.
+ */
+export type SecretVerdict = 'example' | 'local' | 'exposed' | 'unknown';
+
+/** Por que o palpite saiu assim (código estável; a tela monta a frase). */
+export type SecretReason =
+  | 'fake-token' // token com formato de provedor, mas com cara de teste (letra repetida, alfabeto em sequência, "EXAMPLE")
+  | 'placeholder' // valor de enchimento (xxxx, your-password, …)
+  | 'default-password' // senha padrão conhecida (root, changeme, password, …)
+  | 'example-file' // arquivo de modelo (.env.example, *.sample, *.template)
+  | 'test-file' // teste ou fixture (tests/, fixtures/, *.test.ts, …)
+  | 'example-host' // host reservado para exemplo (example.com, *.invalid)
+  | 'local-host' // host loopback ou de desenvolvimento (localhost, 127.0.0.1, *.local, *.test)
+  | 'other-host' // outro host (IP ou domínio): credencial provavelmente de verdade
+  | 'provider-format' // token com o formato válido de um provedor
+  | 'private-key' // chave privada
+  | 'strong-value' // senha longa e variada, sem nada que a denuncie como exemplo
+  | 'no-context'; // contexto insuficiente
+
+/**
+ * Dica mascarada, calculada no servidor na detecção, para o dono reconhecer o segredo sem o Club guardá-lo. Nunca mais de 4 caracteres do valor.
+ * Token de provedor: `prefix` público + `tail` (4) + `length`. Senha com 12+ caracteres: `tail` (2) + `length`; com menos: só `length`.
+ * Senha padrão conhecida: só `isDefault`. Chave privada: sem dica. Só vai para a tela do Club (nunca para a extensão, o log, a notificação nem o agente).
+ */
+export interface SecretHint {
+  /** Prefixo público do provedor ("sk-ant-", "ghp_"…); só em token. */
+  prefix?: string;
+  /** Últimos caracteres do valor (4 em token, 2 em senha com 12+). */
+  tail?: string;
+  /** Tamanho do valor, em caracteres. */
+  length?: number;
+  /** É uma senha padrão conhecida: a dica não mostra nada dela. */
+  isDefault?: true;
+}
 
 export interface InboxItem {
   /** Estável enquanto o item existir (o navegador avisa só o que é novo). */
@@ -1331,9 +1474,36 @@ export interface InboxItem {
   /** Pergunta detectada no texto da resposta: o cliente acha o trecho dentro do balão (ou nos últimos balões, sem `itemId`). */
   quote?: string;
   /** Segredo no chat: o cliente monta a frase no idioma da página (sem isso, vale `summary`, em pt-BR). Nunca traz o valor. */
-  secret?: { kind: SecretKind; detail?: string; source?: SecretSource };
-  /** Tarefa que espera outra empacada (kind 'blocked', ver stuckDependencies em server/tasks.ts): quem espera, a bloqueadora, o estado dela e o motivo. */
-  blocked?: { taskId: string; taskTitle: string; blockerId: string; blockerTitle: string; blockerStatus: TaskStatus; reason: string };
+  secret?: {
+    kind: SecretKind;
+    detail?: string;
+    source?: SecretSource;
+    /**
+     * Palpite sobre ser real ou falso positivo (ver `SecretVerdict`). O servidor sempre o envia; o tipo é opcional só para o cliente aceitar item sem ele
+     * (fixture, servidor antigo): sem `verdict`, a tela não mostra palpite. O aviso sobe de gravidade se aparecer ocorrência mais grave.
+     */
+    verdict?: SecretVerdict;
+    /** Por que o palpite saiu assim. Vem junto com `verdict`. */
+    reason?: SecretReason;
+    /** Início/fim mascarado para reconhecer o segredo (ver `SecretHint`). Ausente em chave privada. Só na tela do Club. */
+    hint?: SecretHint;
+    /** Arquivo do segredo, relativo à raiz do projeto, separado por "/". Ausente quando não há arquivo identificável. */
+    file?: string;
+    /** true quando o files/read recusa esse caminho (mesma checagem): o balão mostra o caminho sem botão, com "abra no seu editor". Só vem junto com `file`. */
+    fileBlocked?: true;
+  };
+  /**
+   * Tarefa que espera outra empacada (kind 'blocked', ver stuckDependencies em server/tasks.ts): quem espera, a bloqueadora, o estado dela e o motivo.
+   * `selfHeals`: a bloqueadora se recupera sozinha; `humanAction`: o que só você resolve nela (null = nada, ou a cancelada, que tem os botões próprios).
+   */
+  blocked?: { taskId: string; taskTitle: string; blockerId: string; blockerTitle: string; blockerStatus: TaskStatus; reason: string; selfHeals?: boolean; humanAction?: HumanAction | null };
+  /**
+   * Dúvida escalada de uma tarefa (kind 'question', ver ownAlerts em server/tasks.ts): a pergunta por opções (`questions`) ou escrita (`text`), como o
+   * funcionário a fez (texto do agente: a tela mostra como texto puro). Responde-se pela rota `answer` da tarefa, que a tela chama como dono.
+   */
+  question?: { taskId: string; taskTitle: string; questionId: string; source: 'ask' | 'text'; text?: string; questions?: Array<{ question: string; options: string[]; multiSelect?: boolean }>; escalatedAt: string };
+  /** Tarefa parada que só você destrava (kind 'stuck'): revisão que não anda ou ajuste que não chega. `reason` em pt-BR; a tela monta a frase por `humanAction`. */
+  stuck?: { taskId: string; taskTitle: string; reason: string; selfHeals: boolean; humanAction: HumanAction | null; since: string };
   /**
    * Cartão esquecido (kind 'notStarted', ver notStartedTasks em server/tasks.ts): tarefa em "a fazer", fora da fila e sem bloqueadora, parada há `days`
    * dias (inteiros, no mínimo 2). `staffId` é o responsável (null = sem responsável: "Começar" pede escolher um). O item não leva `staffId`

@@ -1,5 +1,6 @@
 import { isClosed, satisfiesDependency, type Task, type TaskStatus } from '../../../shared/model';
 import { t } from '../i18n';
+import { waitClass } from './waitTone';
 
 // Dependências da tarefa ("Bloqueada por"): outras tarefas do mesmo projeto que precisam estar prontas antes.
 // O servidor recusa id que não existe e ciclo (a mensagem vem no erro de salvar); aqui só se escolhe numa lista.
@@ -95,12 +96,12 @@ export function BlockedByField({
 }
 
 /** Selo do cartão: "Esperando: A, B". Dois nomes à mostra (a cancelada leva "(cancelada)"); o resto vira "+N" (o title traz todos, com o id). */
-export function BlockedBadge({ blockers }: { blockers: DepTask[] }) {
+export function BlockedBadge({ blockers, warm }: { blockers: DepTask[]; warm?: boolean }) {
   if (!blockers.length) return null;
   const names = blockers.slice(0, 2).map(blockerName);
   const more = blockers.length - names.length;
   return (
-    <span className="task-queue task-blocked small" title={blockers.map((o) => `${o.title}${cancelledTag(o)} (${o.id})`).join('\n')}>
+    <span className={`task-queue task-blocked${waitClass(warm)} small`} title={blockers.map((o) => `${o.title}${cancelledTag(o)} (${o.id})`).join('\n')}>
       {t('tasks.blockedOn', { names: names.join(', ') + (more > 0 ? ` +${more}` : '') })}
     </span>
   );

@@ -62,6 +62,8 @@ const DEFAULTS: AppConfig = {
   // Turno que passa do teto é interrompido (como o Parar) e você é avisado; 0 desliga cada teto.
   maxTurnTools: 500,
   maxTurnMinutes: 180,
+  // Ligado: títulos de conversa gerados por IA (Haiku) para as conversas com assunto livre (ver server/titles/generator.ts).
+  aiTitles: true,
 };
 
 /** Slug de modelo do Codex (`gpt-6-sol`): só letras, números e `. _ : -`; vazio = o padrão do Codex. Vai a `-m` do `codex exec`. */
@@ -151,6 +153,7 @@ const ConfigFile = z
     maxActiveChats: MAX_CHATS.optional().catch(undefined),
     maxTurnTools: MAX_TURN_TOOLS.optional().catch(undefined),
     maxTurnMinutes: MAX_TURN_MINUTES.optional().catch(undefined),
+    aiTitles: z.boolean().optional().catch(undefined),
   })
   .passthrough();
 
@@ -221,6 +224,8 @@ export const ConfigPatch = z.object({
   maxTurnTools: MAX_TURN_TOOLS.optional(),
   /** Teto de minutos por turno (0 = desligado). */
   maxTurnMinutes: MAX_TURN_MINUTES.optional(),
+  /** Títulos de conversa por IA (ver AppConfig). */
+  aiTitles: z.boolean().optional(),
 });
 
 export const ArchiveRequest = z.object({
@@ -287,6 +292,7 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     maxActiveChats: d.maxActiveChats ?? DEFAULTS.maxActiveChats,
     maxTurnTools: d.maxTurnTools ?? DEFAULTS.maxTurnTools,
     maxTurnMinutes: d.maxTurnMinutes ?? DEFAULTS.maxTurnMinutes,
+    aiTitles: d.aiTitles ?? DEFAULTS.aiTitles,
     ...readWorkspaces(d.workspaces, d.projectWorkspaces),
   };
 }
