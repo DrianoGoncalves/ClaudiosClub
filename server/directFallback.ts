@@ -42,8 +42,11 @@ export interface DirectFallbackDeps {
   readLimit(engine: Engine): Promise<LimitHit | null | 'unknown'>;
   /** A linha de parada 5h/7d do motor para este funcionário (null = sem trava). Erro = 'unknown' (ver `usageStopHit`). */
   stopHit(projectId: string, staffId: string, engine: Engine): Promise<UsageStopHit | null>;
-  /** As barreiras do envio no motor `override`, sem gravar nada (ver StaffService.assertOverrideRunnable). Lança o erro que a conversa daria. */
-  assertRunnable(projectId: string, staffId: string, override: EngineOverride): Promise<void>;
+  /**
+   * As barreiras do envio no motor `override`, sem gravar nada (ver StaffService.assertOverrideRunnable). Lança o erro que a conversa daria.
+   * `exceptSession`: a conversa que está sendo trocada (não conta como "outra" conversa do Codex viva).
+   */
+  assertRunnable(projectId: string, staffId: string, override: EngineOverride, exceptSession?: string): Promise<void>;
   snapshot(projectId: string, sessionId: string): Promise<Pick<ChatSnapshot, 'history' | 'live'> | null>;
   git(projectId: string, staffId: string): Promise<GitSnapshot | null>;
   /** Tira o "continue" agendado da conversa antiga (motivo 'fallback', como na tarefa). Só depois que a conversa nova abriu. */
@@ -121,7 +124,7 @@ export class DirectFallback {
     }
     const override = overrideOfFallback(secondary);
     try {
-      await this.deps.assertRunnable(projectId, staffId, override);
+      await this.deps.assertRunnable(projectId, staffId, override, sessionId ?? undefined);
     } catch (err) {
       this.deps.log(`${staffId}: troca para ${ENGINE_LABEL[secondary.engine]} não abre (${(err as Error).message}); envio barrado`);
       throw barred;

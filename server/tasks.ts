@@ -1,8 +1,8 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BoardConfig, type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type HeldMessage, type HumanAction, type StaffProfile, type Task, type TaskCode, type TaskDelivery, type TaskFallback, type TaskHandoff, type TaskPause, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
+import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BoardConfig, type CancelRequest, type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type HeldMessage, type HumanAction, type StaffProfile, type Task, type TaskCode, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskFallback, type TaskHandoff, type TaskPause, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
 import { kanbanProgress } from '../shared/kanbanProgress';
 import { BoardConfigInput, DEFAULT_BOARD_CONFIG, readBoardConfig, writeBoardConfig } from './boardConfig';
 import { codePath, type CodeEdit } from './chat/codeEdits';
@@ -17,6 +17,7 @@ import { capReason } from './chat/turnCap';
 import { ChatClosingError } from './chat/manager';
 import type { Caller } from './callers';
 import type { Reservation } from './resourceGate';
+import { CapabilityError } from './engineCapability';
 import { writeAtomic } from './staff/store';
 import { checkpoint, CodeError, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
 import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf, limitReading, limitOfStop, otherEngine, overrideOfFallback, shouldFallback, type OtherEngineReading } from './taskFallback';
@@ -25,6 +26,7 @@ import { ESCALATE_AFTER_MS, HELD_MAX_FAILS, OUTCOME_HOLD_MAX_MS, PermanentError,
 import { appendRun, newRunId, readRuns, type RunOutcome, type RunTrigger, type TaskRunEvent } from './taskRuns';
 import { hashSkillFolders } from './skillLibrary';
 import { convertSkills, knownNamesOf, planSkills, type SkillSource } from './skillAccess';
+import { StageTimer } from './stageTimer';
 
 // Tarefas por projeto: `<projeto>/.myco/tasks.json`, ao lado das fichas. Cada tarefa vai para um
 // funcionário; ao começar, abre uma conversa nova com a descrição. Ela anda sozinha:
@@ -47,6 +49,20 @@ import { convertSkills, knownNamesOf, planSkills, type SkillSource } from './ski
 // ou uma conversa dele trabalhando) põe na fila dele; quando ele fica livre, o Claudio’s Club manda primeiro
 // os ajustes que você deixou em tarefas anteriores (guardados enquanto ele estava ocupado) e
 // depois a próxima da fila, na ordem do quadro.
+// A ordem da fila é a de entrada (`queuedAt`) até alguém reordenar (`reorder`, posição gravada em `queueRank`): o usuário mexe em qualquer card;
+// o gestor, só nos que ele pediu e só trocando de lugar entre eles; o funcionário não muda a ordem, só sugere (vira aviso a quem pediu).
+// O pedido para começar (`start`) pode ter prazo (`StartOpts.deadlineMs`): se a vez do funcionário ou a abertura da conversa demora mais que
+// isso, quem pediu recebe a tarefa já na fila e o início segue em segundo plano (ver `start`).
+//
+// Nada fica esquecido (o `tick` roda na subida e a cada minuto):
+//   "a fazer"  com responsável, sem dependência pendente, sem dúvida aberta e que você não tirou da fila entra na fila dele sozinho (ver
+//              `enqueueIdle`): ocupado, espera a vez; livre, começa. Em Aguardar nada anda: é a coluna de quem você quer parado.
+//              Com conversa (a que já trabalhou e morreu), a vez dele a retoma na mesma conversa (ver `resumeTodo`), com a checagem de ação cortada da
+//              órfã: efeito incerto vai para Aguardar. O ajuste guardado enviado a ela leva o card para fazendo (ver `takeNext`).
+//   "revisão"  com revisor (ver `reviewerOf`) tem de ter a conversa de revisão: a que não abriu (consumo, reinício, ficha) é refeita com backoff
+//              e jitter e, passado o prazo, vai para a caixa com o motivo (ver `retryReviews`, `resumeReviews` e `stuckState`).
+// A conversa de revisão roda em paralelo: não edita arquivo (abre com `reviewOnly`), então não espera o trabalho do revisor nem entra na fila de
+// trabalho dele (ver `staffBusy`).
 
 export class TaskError extends Error {}
 /** Quem chamou não pode responder esta dúvida (não é o gestor que pediu, ou não é a conversa dele): 403 na rota. */
@@ -84,6 +100,17 @@ export function cancelRequest(body: unknown, fromBrowser: boolean): { reason?: s
   return parseBody(cancelSchema.extend({ dependents: dependentsSchema.optional() }), body);
 }
 
+/**
+ * O corpo de `POST .../tasks/:id/cancel-request` e de `.../cancel-request/refuse`: `{ reason: string }`, obrigatório (uma linha, até CANCEL_REASON_MAX
+ * caracteres). TaskError (400) sem motivo ou com corpo inválido.
+ */
+export function reasonRequest(body: unknown, what: string): string {
+  const { reason } = parseBody(z.object({ reason: z.string({ message: `reason: diga o motivo ${what}` }).max(2000) }), body);
+  const clean = cleanReason(reason);
+  if (!clean) throw new TaskError(`reason: diga o motivo ${what}`);
+  return clean;
+}
+
 /** O corpo de `POST .../tasks/:id/delete`: `{ dependents?: { [taskId]: 'release' | 'cancel' | 'wait' } }` (a rota é só da tela). */
 export function deleteRequest(body: unknown): { dependents?: DependentChoices } {
   return parseBody(z.object({ dependents: dependentsSchema.optional() }), body);
@@ -109,6 +136,12 @@ const MAX_QUESTIONS = 3;
 const AWAITING_FAILS_MAX = 3;
 /** Pedido que o revisor recebe quando respondeu sem o veredito (ver `chaseReviews`). */
 const REASK_TEXT = 'Responda com APROVADO ou REPROVADO na primeira linha, exatamente assim, e depois os achados.';
+/** Pedidos de revisão que o tick faz por rodada e por projeto (ver `retryReviews` e `resumeReviews`): o resto fica para a próxima. */
+const REVIEWS_PER_TICK = 3;
+/** Cards de "a fazer" que a varredura põe na fila por rodada e por projeto (ver `enqueueIdle`). */
+const ENQUEUE_PER_TICK = 5;
+/** A nota do histórico quando o fim do turno leva a tarefa para "revisão" (ver `workDone` e `reviewLost`). */
+const TURN_ENDED = 'turno terminou';
 /** Motivo do cancelamento: o que passa disso é cortado (vai para a caixa, o histórico e o aviso a quem pediu). */
 const CANCEL_REASON_MAX = 300;
 /** Tamanho máximo da dúvida escrita e da resposta por texto. */
@@ -132,6 +165,12 @@ export const TaskInput = z.object({
   blockedBy: BlockedBy.default([]),
   /** false = só criar: a tarefa fica em Aguardar, sem começar. */
   start: z.boolean().default(true),
+  /** Chave de idempotência (ver `TaskService.create`): quem repete o pedido (retry) manda a mesma. */
+  idempotencyKey: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9._:-]{8,100}$/, 'idempotencyKey: de 8 a 100 caracteres (letras, números, . _ : -); uma chave por tarefa, a mesma em cada retry do mesmo pedido')
+    .optional(),
 });
 
 export const TaskPatch = z.object({
@@ -160,14 +199,65 @@ export const TaskPatch = z.object({
   queued: z.literal(false).optional(),
 });
 
+/** O que o funcionário edita pela API, numa tarefa que ainda não começou (ver `TaskService.editFrom`). O resto (status, revisor, PR…) é da tela ou do fluxo. */
+export const STAFF_EDITABLE = ['title', 'description', 'acceptance', 'goal', 'blockedBy', 'staffId'] as const;
+export const TaskStaffEdit = TaskPatch.pick({ title: true, description: true, acceptance: true, goal: true, blockedBy: true }).extend({
+  staffId: z.string({ message: 'staffId: o id de quem vai fazer a tarefa' }).regex(SAFE_ID, 'staffId inválido').optional(),
+});
+
+/** Teto da posição pedida (o quadro não tem fila de funcionário tão grande); a posição acima do tamanho da fila é recusada pelo serviço. */
+const QUEUE_POSITION_MAX = 500;
+/** Motivo da sugestão de ordem: uma linha, até este tamanho. */
+const SUGGEST_REASON_MAX = 300;
+/** Uma sugestão de ordem por tarefa neste intervalo: o aviso vai para a conversa de quem pediu, e quem a faz não pode enchê-la. */
+const SUGGEST_COOLDOWN_MS = 10 * 60_000;
+/** Título parecido do mesmo solicitante ao mesmo responsável dentro desta janela gera o aviso de possível duplicata na criação (só aviso; ver `duplicatesOf`). */
+const DUPLICATE_WINDOW_MS = 10 * 60_000;
+/** No máximo estas tarefas parecidas vão no aviso. */
+const DUPLICATES_SHOWN = 3;
+
+/**
+ * O corpo de `POST .../tasks/:id/order`: exatamente um entre `to` (posição na fila, 1 = a próxima, ou 'top'), `step` (um lugar acima ou abaixo)
+ * e `suggest` (só do responsável pela tarefa; pede `reason`). Campo desconhecido é recusado (400).
+ */
+export const TaskOrderBody = z
+  .object({
+    to: z.union([z.literal('top'), z.number().int().min(1).max(QUEUE_POSITION_MAX)], { message: "to: 'top' ou a posição na fila (1 em diante)" }).optional(),
+    step: z.enum(['up', 'down'], { message: "step: 'up' ou 'down'" }).optional(),
+    suggest: z.enum(['up', 'down', 'top'], { message: "suggest: 'up', 'down' ou 'top'" }).optional(),
+    // Uma linha só: o texto vai para a conversa de quem pediu e para o histórico do card.
+    reason: z
+      .string()
+      .trim()
+      .min(1, 'reason: diga o motivo da sugestão')
+      .max(SUGGEST_REASON_MAX, `reason: no máximo ${SUGGEST_REASON_MAX} caracteres`)
+      .transform((v) => v.replace(/\s+/g, ' '))
+      .optional(),
+  })
+  .strict()
+  .refine((b) => [b.to, b.step, b.suggest].filter((v) => v !== undefined).length === 1, 'mande só um entre to, step e suggest')
+  .refine((b) => (b.suggest === undefined) === (b.reason === undefined), 'reason vai junto de suggest (e só com ele)');
+type TaskOrder = z.infer<typeof TaskOrderBody>;
+
+/** O que `reorder` devolve: o card movido e de onde para onde (posição na fila), ou o aviso da sugestão (nada mudou). */
+export type TaskOrderResult =
+  | { ok: true; moved: { from: number; to: number; of: number }; task: Task }
+  | { ok: true; suggested: true; notified: string };
+
+/** A coluna da tarefa, para a recusa de edição (o mesmo nome que a tela usa). */
+const COLUMN_NAME: Record<TaskStatus, string> = { waiting: 'Aguardar', todo: 'A fazer', planning: 'Planejando', doing: 'Fazendo', review: 'Revisão', done: 'Finalizado', cancelled: 'Cancelada' };
+
 export interface TaskServiceDeps {
   /** Pasta do projeto (null: projeto não encontrado). */
   projectPath: (projectId: string) => Promise<string | null>;
   /** Projetos onde procurar tarefas quando chega um aviso de uma conversa (aprovou, terminou…). */
   projectIds: () => Promise<string[]>;
   readProfile: (projectId: string, staffId: string) => Promise<StaffProfile | null>;
-  /** Abre uma conversa nova com o funcionário e manda a mensagem; devolve a sessão. `override`: o motor secundário (ver `Switch`). */
-  send: (projectId: string, staffId: string, text: string, force: boolean, override?: EngineOverride) => Promise<string>;
+  /**
+   * Abre uma conversa nova com o funcionário e manda a mensagem; devolve a sessão. `override`: o motor secundário (ver `Switch`).
+   * `reviewOnly`: conversa de revisão, que não edita arquivos do projeto (só a memória dele, pelo MCP); ver `requestReview`.
+   */
+  send: (projectId: string, staffId: string, text: string, force: boolean, override?: EngineOverride, reviewOnly?: boolean) => Promise<string>;
   /** Avisa um funcionário (o gestor que pediu a tarefa): na conversa `sessionId`, ou na mais recente dele. */
   notify?: (projectId: string, staffId: string, text: string, sessionId?: string | null) => Promise<void>;
   /** A conversa do funcionário, neste projeto, que está no meio de um turno agora (quem chamou a API), se for uma só. */
@@ -180,6 +270,8 @@ export interface TaskServiceDeps {
   branchFor: (projectPath: string, profile: StaffProfile) => Promise<string | null>;
   /** Alguma conversa dele, neste projeto, no Claudio’s Club está trabalhando (turno ou segundo plano), fora `exceptSession` (uma ou várias). */
   isWorking?: (projectId: string, staffId: string, exceptSession?: string | readonly string[]) => boolean;
+  /** Esta conversa (só ela) está trabalhando agora, turno ou segundo plano? Sem ela, a revisão e o card em "a fazer" olham as conversas todas do funcionário. */
+  isSessionWorking?: (sessionId: string) => boolean;
   /** O servidor está fechando para reiniciar: fim de turno não conclui tarefa (a órfã do boot retoma). */
   closing?: () => boolean;
   /**
@@ -189,6 +281,11 @@ export interface TaskServiceDeps {
   resourceGate?: () => Promise<Reservation>;
   /** Manda na conversa que já existe (os ajustes guardados). */
   sendTo?: (projectId: string, sessionId: string, staffId: string, text: string, images: string[], origin?: string) => Promise<string>;
+  /**
+   * Aviso da plataforma na conversa que já existe (o pedido de cancelamento ao responsável): vai como o "continue" e o despertador, então não
+   * conta como "você respondeu" (a tarefa em revisão não volta para fazendo) nem tira o que estava agendado na conversa.
+   */
+  sendNotice?: (projectId: string, sessionId: string, staffId: string, text: string) => Promise<string>;
   /** Versão de cada skill marcada (pela pasta real; chave = ref), para o registro da tentativa (padrão: hashSkillFolders; os testes trocam). */
   skillHashes?: (entries: Array<{ key: string; dir: string }>) => Promise<Record<string, string>>;
   /** As skills que existem agora (Global e do projeto), para achar a pasta de cada marcada. Sem ela, o registro sai sem versões. */
@@ -200,6 +297,13 @@ export interface TaskServiceDeps {
    * não é entrega: a tarefa fica em "fazendo" até o "continue" rodar e o turno terminar de verdade.
    */
   awaitingLimit?: (sessionId: string) => Promise<boolean>;
+  /**
+   * Espera a decisão de retomada automática desta conversa (turno que falhou por causa passageira, ver ChatManager.turnEnded): só depois dela
+   * `turnCap` (ação cortada ou tentativas esgotadas) e `awaitingLimit` (retomada marcada) dizem o que fazer com o fim do turno.
+   */
+  settleRetry?: (sessionId: string) => Promise<void>;
+  /** A retomada automática marcada para esta conversa (a tentativa e a hora), ou null: vai em `Task.retry` na listagem. */
+  retryOf?: (sessionId: string) => Promise<TaskRetry | null>;
   /**
    * O turno desta conversa parou no teto de ferramentas ou de minutos (ver turnCap.ts) e ninguém mandou mensagem depois? Então
    * não é entrega nem órfã: a tarefa vai para Aguardar, com o motivo.
@@ -233,7 +337,7 @@ export interface TaskServiceDeps {
    */
   dismissPending?: (sessionId: string, message: string) => void;
   /** Pré-checagem da troca: a conversa no motor do override abriria? Lança o erro que ela daria (ver StaffService.assertOverrideRunnable). */
-  assertRunnable?: (projectId: string, staffId: string, override: EngineOverride) => Promise<void>;
+  assertRunnable?: (projectId: string, staffId: string, override: EngineOverride, exceptSession?: string) => Promise<void>;
   /** Tira o motor secundário da conversa no manager (a tarefa fechou). */
   clearOverride?: (sessionId: string) => void;
   /** Para o processo da conversa (o turno que estourou o limite). */
@@ -248,6 +352,10 @@ export interface TaskServiceDeps {
   hasAsk?: (sessionId: string, requestId: string) => boolean;
   /** Responde a pergunta aberta na conversa de trabalho; false se ela já não estava aberta. `by`: quem respondeu (o gestor, se omitido). */
   answerAsk?: (sessionId: string, requestId: string, answers: Record<string, string | string[]>, by?: 'manager' | 'user') => boolean;
+  /** Onde escrever o tempo das etapas do começo de uma tarefa quando ele demora (padrão: console.warn). */
+  log?: (line: string) => void;
+  /** A partir de quanto tempo o começo de uma tarefa escreve o tempo de cada etapa no log (padrão: `START_SLOW_MS`). */
+  slowMs?: number;
 }
 
 /** A conversa da dúvida ao gestor: o que ele responde ali não é da tarefa (ver answerQuestion). */
@@ -261,6 +369,12 @@ const CODEX_LIMIT_TTL_MS = 5 * 60_000;
 
 /** O motor da ficha está no limite e a tarefa não pode começar agora: fica na fila até o limite baixar (ver `startPlan`). */
 class LimitWaitError extends Error {}
+
+/** A partida falhou por motivo que vale para a fila toda dele (consumo da conta ou do motor, servidor reiniciando), não por motivo da tarefa. */
+const isGlobalStart = (err: unknown): err is UsageStopError | LimitWaitError | ChatClosingError => err instanceof UsageStopError || err instanceof LimitWaitError || err instanceof ChatClosingError;
+
+/** Ainda não começou nem saiu de "a fazer"/Aguardar: a tarefa que o começo em segundo plano (ou a fila) ainda pode abrir. */
+const unstarted = (t: Task) => !t.sessionId && (t.status === 'todo' || t.status === 'waiting');
 
 /** Troca de motor combinada para abrir a conversa: começo (o limite da ficha) ou meio do turno (o handoff). */
 interface Switch {
@@ -282,6 +396,18 @@ export interface RunStart {
   trigger?: RunTrigger;
   skills?: Record<string, string>;
 }
+
+/** O pedido de começar. `deadlineMs`: prazo para responder (ver `TaskService.start`); sem ele, espera o começo inteiro. */
+export interface StartOpts extends RunStart {
+  deadlineMs?: number;
+}
+
+/** Prazo das rotas (o POST de tarefa do gestor e o "Começar" da tela): passou, a resposta vem com a tarefa na fila e o começo segue sem elas. */
+export const START_DEADLINE_MS = 5_000;
+/** O começo de uma tarefa que passa disto escreve o tempo de cada etapa no log. */
+const START_SLOW_MS = 2_000;
+/** Marca de quem perdeu a corrida para o prazo (ver `start`). */
+const LATE = Symbol('late');
 
 export class TaskService {
   /**
@@ -305,6 +431,8 @@ export class TaskService {
   private readonly inFlight = new Set<string>();
   /** Falhas seguidas de `awaitingLimit` por conversa (ver `orphan`). */
   private readonly limitFails = new Map<string, number>();
+  /** Quando saiu a última sugestão de ordem de cada tarefa (`projeto:tarefa`), para o intervalo `SUGGEST_COOLDOWN_MS`. Some no reinício, sem custo. */
+  private readonly orderSuggested = new Map<string, number>();
 
   constructor(private readonly deps: TaskServiceDeps) {}
 
@@ -319,7 +447,20 @@ export class TaskService {
       if (t.deploy?.sessionId) this.bySession.set(t.deploy.sessionId, { projectId, taskId: t.id, role: 'deploy' });
       if (t.question?.managerSession) this.bySession.set(t.question.managerSession, { projectId, taskId: t.id, role: 'question' });
     }
-    return tasks.map((t) => withPause(withArchive(t), tasks));
+    const pos = queuePositions(tasks);
+    return Promise.all(
+      tasks.map(async (t) => {
+        const out = withPause(await this.withRetry(withArchive(t)), tasks);
+        return pos.has(t.id) ? { ...out, queuePos: pos.get(t.id)! } : out;
+      }),
+    );
+  }
+
+  /** `Task.retry` na listagem: a retomada automática marcada para a conversa de uma tarefa que está "fazendo" (derivado, não gravado). Erro ao ler: sai sem. */
+  private async withRetry(t: Task): Promise<Task> {
+    if (!this.deps.retryOf || t.status !== 'doing' || !t.sessionId) return t;
+    const retry = await this.deps.retryOf(t.sessionId).catch(() => null);
+    return retry ? { ...t, retry } : t;
   }
 
   /**
@@ -405,13 +546,26 @@ export class TaskService {
   /**
    * `requestedBy`: o gestor (funcionário) que pediu, pela API; recebe o resumo na entrega. `requestedSession`: a conversa dele
    * que pediu (o token dele, pela API); sem ela, a que está no turno agora.
+   *
+   * Idempotência: com `idempotencyKey`, o pedido repetido (retry de quem não recebeu a resposta) não cria outra tarefa. A chave vale por solicitante
+   * (`requestedBy`, ou o usuário pela tela): a mesma chave com o mesmo conteúdo devolve a tarefa de antes (`idempotentReplay`), sem gravar nem
+   * começar nada; com outro conteúdo, 409 (TaskConflictError). A conferência é a primeira (antes de qualquer outra: a ficha pode ter mudado desde o
+   * primeiro pedido) e de novo dentro da gravação, que é uma por vez por projeto (dois pedidos juntos com a mesma chave criam uma tarefa só).
+   * Sem chave, tudo como antes. Título parecido do mesmo solicitante ao mesmo responsável em `DUPLICATE_WINDOW_MS` só gera `warnings`: a tarefa é criada.
    */
-  async create(projectId: string, body: unknown, requestedBy: string | null = null, requestedSession?: string): Promise<Task | null> {
+  async create(projectId: string, body: unknown, requestedBy: string | null = null, requestedSession?: string): Promise<TaskCreateResult | null> {
     const input = parseOr(TaskInput, body);
-    if (input.staffId) await this.staffOrThrow(projectId, input.staffId);
-    const manager = requestedBy ? await this.staffOrThrow(projectId, requestedBy) : null;
     // Pedida por um gestor sem `reviewerId` no pedido: ele mesmo confere a entrega. Um `reviewerId` mandado (null inclusive) vale.
     const sentReviewer = typeof body === 'object' && body !== null && 'reviewerId' in body;
+    const createKey = input.idempotencyKey ? { by: requestedBy ?? 'you', key: input.idempotencyKey, hash: contentHash(input, sentReviewer) } : undefined;
+    if (createKey) {
+      const dir = await this.deps.projectPath(projectId);
+      if (!dir) return null;
+      const prior = replayOf(await readTasks(dir), createKey);
+      if (prior) return { ...prior, idempotentReplay: true };
+    }
+    if (input.staffId) await this.staffOrThrow(projectId, input.staffId);
+    const manager = requestedBy ? await this.staffOrThrow(projectId, requestedBy) : null;
     const reviewerId = manager && input.staffId && manager.id !== input.staffId && !sentReviewer ? manager.id : input.reviewerId;
     await this.checkReviewer(projectId, reviewerId, input.staffId, true);
     const now = new Date().toISOString();
@@ -434,16 +588,55 @@ export class TaskService {
       plan: null,
       branch: null,
       pr: null,
+      ...(createKey && { createKey }),
       createdAt: now,
       updatedAt: now,
       history: [{ at: now, status: initial, by: manager ? 'auto' : 'you', ...(manager && { note: `pedida por ${manager.name}` }) }],
     };
-    return (await this.mutate(projectId, (tasks) => {
+    const seen: { replay?: Task; warnings?: TaskCreateWarning[] } = {};
+    const ok = await this.mutate(projectId, (tasks) => {
+      // Outro pedido com a mesma chave gravou enquanto este esperava a vez: vale a tarefa dele.
+      const prior = createKey ? replayOf(tasks, createKey) : undefined;
+      if (prior) {
+        seen.replay = prior;
+        return tasks;
+      }
       checkBlockedBy(task.id, input.blockedBy, tasks);
+      seen.warnings = duplicatesOf(tasks, task, Date.parse(now));
       return [...tasks, task];
-    }))
-      ? task
-      : null;
+    });
+    if (!ok) return null;
+    if (seen.replay) return { ...seen.replay, idempotentReplay: true };
+    return seen.warnings?.length ? { ...task, warnings: seen.warnings } : task;
+  }
+
+  /**
+   * O POST de tarefa do gestor: `create` e, com `opts.start`, o começo (com prazo, ver `start`). O pedido já gravou quando o começo roda: se o começo
+   * falhar, a resposta é a tarefa gravada (não a falha), com `startError`, porque quem recebe uma falha tenta de novo e cria a tarefa em dobro. A tarefa
+   * fica em "a fazer" e a varredura do tick (`enqueueIdle`) a põe na fila. Retry com a mesma chave (`idempotentReplay`) devolve a tarefa sem começar de novo.
+   * `opts.stage`: avisa em que etapa está (o cronômetro da rota).
+   */
+  async createAndStart(
+    projectId: string,
+    body: unknown,
+    requestedBy: string | null,
+    requestedSession: string | undefined,
+    opts: { start: boolean; deadlineMs?: number; stage?: (name: string) => void },
+  ): Promise<TaskCreateResult | null> {
+    opts.stage?.('criar');
+    const created = await this.create(projectId, body, requestedBy, requestedSession);
+    if (!created || created.idempotentReplay || !opts.start) return created;
+    const { warnings } = created;
+    try {
+      opts.stage?.('começar');
+      const started = await this.start(projectId, created.id, false, { deadlineMs: opts.deadlineMs });
+      return { ...(started ?? created), ...(warnings && { warnings }) };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      (this.deps.log ?? ((line: string) => console.warn(line)))(`[tarefas] criar ${created.id}: gravada, mas o começo falhou: ${msg}`);
+      const stored = ((await this.list(projectId).catch(() => null)) ?? []).find((t) => t.id === created.id) ?? created;
+      return { ...stored, ...(warnings && { warnings }), startError: msg };
+    }
   }
 
   /**
@@ -520,7 +713,11 @@ export class TaskService {
       const next = withPatch(t, patch, 'you');
       // Fora da fila: você tirou, trocou o responsável ou levou o cartão para outra coluna.
       const leaves = patch.queued === false || next.staffId !== t.staffId || next.status !== 'todo';
-      return leaves && next.queuedAt ? { ...next, queuedAt: null, queuedForce: false, resourceWait: null } : next;
+      const out = leaves && next.queuedAt ? { ...next, queuedAt: null, queuedForce: false, resourceWait: null, startRetry: undefined } : next;
+      // "Tirar da fila" é escolha sua: a varredura do tick (ver `enqueueIdle`) não a põe de volta. Mudar de coluna ou de responsável solta a marca.
+      const stays = t.status === 'todo' && out.status === 'todo' && out.staffId === t.staffId;
+      const unqueued = patch.queued === false ? out.status === 'todo' : stays && !!t.unqueued;
+      return unqueued ? { ...out, unqueued: true } : out.unqueued ? { ...out, unqueued: undefined } : out;
     });
     // Saiu de "fazendo" à mão (ou mudou de dono, ou tirou dependência): quem estava com ela pode pegar a próxima.
     for (const s of new Set([before?.staffId, out?.staffId])) if (s) void this.kick(projectId, s);
@@ -623,7 +820,7 @@ export class TaskService {
    * canceladas da cascata não repetem nem travam). Sem entrada no mapa a dependente fica esperando e aparece na caixa; entrada de quem
    * não depende de uma cancelada é ignorada. Dependente que mudou entre a leitura e a ação (409) é pulada.
    */
-  async cancel(projectId: string, taskId: string, opts: { by: string; reason?: string | null; dependents?: DependentChoices }): Promise<Task | null> {
+  async cancel(projectId: string, taskId: string, opts: { by: string; reason?: string | null; dependents?: DependentChoices; guard?: (t: Task) => void }): Promise<Task | null> {
     const dir = await this.deps.projectPath(projectId);
     if (!dir) return null;
     const reason = cleanReason(opts.reason);
@@ -631,6 +828,8 @@ export class TaskService {
       const seen: { before?: Task } = {};
       const out = await this.change(projectId, taskId, (t) => {
         if (isClosed(t)) throw new TaskConflictError(t.status === 'done' ? 'a tarefa já está pronta' : 'a tarefa já foi cancelada');
+        // `guard`: a condição de quem cancela, conferida aqui (no que está gravado agora, na vez do funcionário): ver `cancelByRequester`.
+        opts.guard?.(t);
         seen.before = t;
         return cancelledTask(t, opts.by, reason);
       });
@@ -664,7 +863,8 @@ export class TaskService {
       // O que ficou de quem esperava: o que o dono decidiu (liberar, cancelar junto, continuar esperando) ou "segue esperando" para o que ele não decidiu.
       const line = dependentsLine(direct, (await this.list(projectId)) ?? [], out.id);
       const text = `[MyCo] Tarefa “${out.title}” (id ${out.id}) foi cancelada ${who}${reason ? `: ${reason}` : ''}. Não haverá entrega; o que já foi feito continua na branch e na worktree.${line ? ` ${line}` : ''}`;
-      await this.settleRequester(projectId, out, 'foi cancelada', text, true);
+      // Quem pediu foi quem cancelou: ele já sabe (a resposta do pedido dele diz). Só as aprovadas retidas dele, se esta era a última aberta, ainda saem.
+      await this.settleRequester(projectId, out, 'foi cancelada', opts.by === out.requestedBy ? null : text, true);
     }
     if (out.staffId) void this.kick(projectId, out.staffId);
   }
@@ -691,17 +891,362 @@ export class TaskService {
   }
 
   /**
-   * O próprio funcionário cancela a tarefa dele pela API (o usuário pediu na conversa da tarefa). Só vale com o token da conversa ATUAL
-   * da tarefa (a de trabalho, `sessionId`): outra conversa dele, a de um revisor ou um gestor levam 403 (TaskForbiddenError). Tarefa
-   * que não existe: null.
+   * O funcionário cancela uma tarefa pela API, em dois casos (a identidade é sempre a do token, nunca a declarada no corpo):
+   *   - o responsável cancela a dele (o usuário pediu na conversa da tarefa, ou ele aceita um pedido de cancelamento, ver `requestCancel`). Só vale com o
+   *     token da conversa ATUAL da tarefa (a de trabalho, `sessionId`): outra conversa dele ou a de um revisor levam 403 (TaskForbiddenError);
+   *   - quem pediu a tarefa (`requestedBy`) cancela a que ELE criou e que nunca começou (ver `cancelByRequester`), com motivo obrigatório.
+   * O revisor e qualquer outro levam 403. Tarefa que não existe: null.
    */
   async cancelFrom(projectId: string, taskId: string, caller: Caller | null, reason?: string | null): Promise<Task | null> {
     const dir = await this.deps.projectPath(projectId);
     const task = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
     if (!task) return null;
-    const own = !!caller?.staffId && caller.projectId === projectId && caller.staffId === task.staffId && !!task.sessionId && caller.sessionId === task.sessionId;
-    if (!own || !caller?.staffId) throw new TaskForbiddenError('só o funcionário da tarefa, pela conversa dela, cancela a tarefa por aqui; o usuário cancela pelo Claudio’s Club');
-    return this.cancel(projectId, taskId, { by: caller.staffId, reason });
+    if (isWorkerOf(task, caller, projectId)) return this.cancel(projectId, taskId, { by: caller!.staffId!, reason });
+    if (caller?.staffId && caller.projectId === projectId && task.requestedBy === caller.staffId) return this.cancelByRequester(projectId, task, caller.staffId, reason);
+    throw new TaskForbiddenError('só o funcionário da tarefa, pela conversa dela, ou quem a pediu (se ela nunca começou) cancela a tarefa por aqui; o usuário cancela pelo Claudio’s Club');
+  }
+
+  /**
+   * Quem pediu a tarefa a cancela, com motivo obrigatório, SE ELA NUNCA COMEÇOU (`neverStarted`: a coluna não basta, olha conversa, tentativa, histórico e
+   * entrega). A conferência roda dentro da gravação, na vez do responsável (a mesma de `start` e da fila): uma partida que já está abrindo a conversa termina
+   * antes, e este pedido a encontra começada (409); uma que vem depois encontra a tarefa cancelada e não começa. Tarefa que já começou: 409, o caminho é o pedido de cancelamento
+   * (`requestCancel`). O que já foi feito não é desfeito (nada foi feito, se nunca começou).
+   */
+  private async cancelByRequester(projectId: string, task: Task, me: string, reason: string | null | undefined): Promise<Task | null> {
+    const why = mandatoryReason(reason, 'do cancelamento');
+    return this.cancel(projectId, task.id, {
+      by: me,
+      reason: why,
+      guard: (t) => {
+        if (t.requestedBy !== me) throw new TaskForbiddenError('só quem pediu a tarefa a cancela por aqui');
+        if (!neverStarted(t))
+          throw new TaskConflictError(
+            `a tarefa já começou (ou já teve conversa): quem a faz decide. Mande um pedido de cancelamento com o motivo, POST ${CANCEL_REQUEST_ROUTE(projectId, t.id)}`,
+          );
+      },
+    });
+  }
+
+  /**
+   * Quem pediu a tarefa pede o cancelamento dela ao responsável, com motivo obrigatório, quando ela JÁ COMEÇOU (o que nunca começou ele cancela direto, ver
+   * `cancelByRequester`: 409 aqui). Só o dono do token que a pediu (403 para o responsável, o revisor, outro gestor e quem não tem token). O pedido fica em
+   * `Task.cancelRequest` (com uma nota no histórico) e é ENTREGUE na conversa do responsável (ver `deliverCancelRequest`: o tick o refaz depois de reinício,
+   * troca de conversa ou falha). Um pedido aberto por vez (409 com outro `pending`); depois de decidido ou sem efeito, outro pode ser feito. O responsável
+   * aceita cancelando (`cancelFrom`) ou recusa com o porquê (`refuseCancel`). A tarefa encerrada: 409. Tarefa que não existe: null.
+   */
+  async requestCancel(projectId: string, taskId: string, caller: Caller | null, reason: string | null | undefined): Promise<Task | null> {
+    const me = staffOfCaller(caller, projectId, 'pede o cancelamento de uma tarefa');
+    const dir = await this.deps.projectPath(projectId);
+    const first = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
+    if (!first) return null;
+    if (first.requestedBy !== me) throw new TaskForbiddenError('só quem pediu a tarefa pede o cancelamento dela');
+    const why = mandatoryReason(reason, 'do pedido de cancelamento');
+    const mine = await this.staffOrThrow(projectId, me);
+    const run = () =>
+      this.change(projectId, taskId, (t) => {
+        if (t.requestedBy !== me) throw new TaskForbiddenError('só quem pediu a tarefa pede o cancelamento dela');
+        if (isClosed(t)) throw new TaskConflictError(t.status === 'done' ? 'a tarefa já está pronta' : 'a tarefa já foi cancelada');
+        if (neverStarted(t)) throw new TaskConflictError(`a tarefa nunca começou: cancele direto, POST ${CANCEL_ROUTE(projectId, t.id)} com o motivo (reason)`);
+        if (t.cancelRequest?.status === 'pending') throw new TaskConflictError('já há um pedido de cancelamento desta tarefa esperando a decisão de quem a faz');
+        const cancelRequest: CancelRequest = { by: me, reason: why, at: new Date().toISOString(), status: 'pending' };
+        return noted({ ...t, cancelRequest }, `pedido de cancelamento de ${mine.name}: ${why}`);
+      });
+    // Na vez do responsável (a de `start`): a conferência "já começou" vale contra uma partida em andamento.
+    const out = first.staffId ? await this.locked(projectId, first.staffId, run) : await run();
+    if (!out) return null;
+    await this.deliverCancelRequest(projectId, taskId);
+    return (await this.fresh(projectId, taskId)) ?? out;
+  }
+
+  /**
+   * O responsável RECUSA o pedido de cancelamento (aceitar é cancelar a tarefa, `cancelFrom`), dizendo por quê (obrigatório). Só com o token da conversa
+   * ATUAL da tarefa, como `cancelFrom` (403 para os outros, inclusive quem pediu). A decisão (`refused`, `answer`, quando e quem) fica em `Task.cancelRequest` e
+   * no histórico, e quem pediu é avisado, na conversa em que pediu (se o aviso falhar, o tick o refaz: `notifyRetry`). 409 sem pedido esperando decisão
+   * ou com a tarefa encerrada. Tarefa que não existe: null.
+   */
+  async refuseCancel(projectId: string, taskId: string, caller: Caller | null, reason: string | null | undefined): Promise<Task | null> {
+    const dir = await this.deps.projectPath(projectId);
+    const first = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
+    if (!first) return null;
+    if (!isWorkerOf(first, caller, projectId)) throw new TaskForbiddenError('só o funcionário da tarefa, pela conversa dela, recusa o pedido de cancelamento');
+    const me = caller!.staffId!;
+    const why = mandatoryReason(reason, 'da recusa');
+    const [mine, asker] = await Promise.all([this.staffOrThrow(projectId, me), first.cancelRequest ? this.deps.readProfile(projectId, first.cancelRequest.by) : null]);
+    const run = () =>
+      this.change(projectId, taskId, (t) => {
+        if (isClosed(t)) throw new TaskConflictError(t.status === 'done' ? 'a tarefa já está pronta' : 'a tarefa já foi cancelada');
+        // Na vez dele, de novo: a tarefa pode ter trocado de responsável ou de conversa desde a leitura.
+        if (!isWorkerOf(t, caller, projectId)) throw new TaskForbiddenError('só o funcionário da tarefa, pela conversa dela, recusa o pedido de cancelamento');
+        const cr = t.cancelRequest;
+        if (cr?.status !== 'pending') throw new TaskConflictError('não há pedido de cancelamento esperando decisão nesta tarefa');
+        const at = new Date().toISOString();
+        const decided: CancelRequest = { ...cr, status: 'refused', decidedAt: at, decidedBy: me, answer: why, waiting: undefined, retry: undefined, notifyRetry: { attempts: 0, nextAt: at, firstAt: at } };
+        return noted({ ...t, cancelRequest: decided }, `pedido de cancelamento de ${asker?.name ?? 'quem pediu'} recusado por ${mine.name}: ${why}`);
+      });
+    const out = await this.locked(projectId, first.staffId!, run);
+    if (!out) return null;
+    await this.tellRefusal(projectId, taskId);
+    return (await this.fresh(projectId, taskId)) ?? out;
+  }
+
+  /**
+   * Leva o pedido de cancelamento (`Task.cancelRequest` em `pending`) à conversa ATUAL do responsável (`sessionId`), como aviso da plataforma (`sendNotice`: não
+   * move a tarefa em revisão nem tira o "continue" agendado). Quando entra (ou volta a entrar) na vez dele (a de `start`): sem conversa, nada (o tick tenta
+   * quando ela existir); responsável em outra tarefa ou conversa, o pedido espera a vez (`waiting`), sem contar como falha, porque ele só trabalha numa coisa por
+   * vez; envio que falha vira `retry` com backoff (o tick repete). Grava `deliveredAt` e a conversa (`deliveredSession`). Um por vez por tarefa.
+   */
+  private async deliverCancelRequest(projectId: string, taskId: string): Promise<void> {
+    const key = `cancel-request:${projectId}:${taskId}`;
+    if (this.inFlight.has(key)) return;
+    this.inFlight.add(key);
+    try {
+      const first = await this.fresh(projectId, taskId);
+      if (!first || !cancelDeliveryDue(first, this.bootedAt)) return;
+      const staffId = first.staffId!;
+      await this.locked(projectId, staffId, async () => {
+        const t = await this.fresh(projectId, taskId);
+        // Na vez dele, de novo: decidido, cancelado ou entregue por outro caminho enquanto esperava.
+        if (!t || !cancelDeliveryDue(t, this.bootedAt) || t.staffId !== staffId) return;
+        const sessionId = t.sessionId!;
+        const tasks = (await this.list(projectId)) ?? [];
+        const busyWith = occupant(tasks, staffId, t.id);
+        if (busyWith || this.staffBusy(projectId, tasks, staffId, sessionId)) {
+          const name = (await this.deps.readProfile(projectId, staffId))?.name ?? 'o responsável';
+          const waiting = busyWith ? `${name} está em “${busyWith.title}”` : `${name} está numa conversa`;
+          await this.change(projectId, taskId, (x) => (x.cancelRequest?.status === 'pending' && x.cancelRequest.waiting !== waiting ? { ...x, cancelRequest: { ...x.cancelRequest, waiting } } : x));
+          return;
+        }
+        try {
+          const send = this.deps.sendNotice;
+          if (!send) throw new PermanentError('sem como mandar o aviso à conversa do responsável');
+          await send(projectId, sessionId, staffId, await this.cancelRequestText(projectId, t, t.cancelRequest!));
+          const at = new Date().toISOString();
+          await this.change(projectId, taskId, (x) => (x.cancelRequest?.status === 'pending' ? { ...x, cancelRequest: { ...x.cancelRequest, deliveredAt: at, deliveredSession: sessionId, waiting: undefined, retry: undefined } } : x));
+        } catch (err) {
+          const now = new Date();
+          await this.change(projectId, taskId, (x) => (x.cancelRequest?.status === 'pending' ? { ...x, cancelRequest: { ...x.cancelRequest, retry: failedRetry(x.cancelRequest.retry, err, now) } } : x)).catch(() => {});
+        }
+      });
+    } finally {
+      this.inFlight.delete(key);
+    }
+  }
+
+  /** O pedido de cancelamento como o responsável o lê: quem pede e por quê, e os dois caminhos (cancelar, ou recusar com o porquê), pelo endereço do motor da conversa dele. */
+  private async cancelRequestText(projectId: string, t: Task, cr: CancelRequest): Promise<string> {
+    const [asker, worker] = await Promise.all([this.deps.readProfile(projectId, cr.by), t.staffId ? this.deps.readProfile(projectId, t.staffId) : null]);
+    const engine: Engine = t.sessions?.find((s) => s.id === t.sessionId)?.engine ?? t.fallback?.engine ?? (worker?.engine === 'codex' ? 'codex' : 'claude');
+    const api = engine === 'codex' ? this.deps.sandboxApiUrl : this.deps.apiUrl;
+    if (!api) throw new PermanentError('sem endereço da API: quem faz a tarefa não tem como decidir');
+    const curl = (route: string, hint: string) => `curl -s -X POST -H "x-myco: 1" -H "x-myco-token: $MYCO_TOKEN" -H "content-type: application/json" -d '{"reason": "${hint}"}' ${api}${route}`;
+    const who = asker ? `${asker.name} (${asker.role})` : 'Quem pediu a tarefa';
+    return [
+      `[MyCo] Pedido de cancelamento da tarefa “${t.title}” (id \`${t.id}\`): ${who}, que a pediu, quer cancelá-la. Motivo: “${cr.reason}”.`,
+      'Decida antes de seguir com o trabalho (até decidir, não gaste mais esforço nela):',
+      `- Aceitar: cancele pela API do Claudio’s Club com \`${curl(CANCEL_ROUTE(projectId, t.id), '<o motivo, em uma frase>')}\` (o token da sua conversa já está em $MYCO_TOKEN; escreva o motivo sem aspas simples) e pare por aí, sem mais nada. Cancelar não desfaz o que já foi feito: continua na branch e na worktree.`,
+      `- Recusar (a tarefa deve seguir): diga por quê com \`${curl(`${CANCEL_REQUEST_ROUTE(projectId, t.id)}/refuse`, '<por que a tarefa segue, em uma frase>')}\` e continue. ${asker?.name ?? 'Quem pediu'} é avisado do seu motivo.`,
+      'O pedido e a sua decisão ficam registrados na tarefa. Se não estiver claro o que fazer, pergunte ao usuário antes de decidir.',
+    ].join('\n');
+  }
+
+  /**
+   * Avisa quem pediu a tarefa que o responsável recusou o pedido de cancelamento, e o motivo dele, na conversa em que pediu. A marca `notifyRetry` é gravada junto da recusa
+   * (a decisão e a obrigação de avisar nascem juntas) e sai quando o aviso chega; falhando, o tick refaz com backoff. Um por vez por tarefa.
+   */
+  private async tellRefusal(projectId: string, taskId: string): Promise<void> {
+    const key = `cancel-refusal:${projectId}:${taskId}`;
+    if (this.inFlight.has(key)) return;
+    this.inFlight.add(key);
+    try {
+      const t = await this.fresh(projectId, taskId);
+      const cr = t?.cancelRequest;
+      if (!t || !cr || cr.status !== 'refused' || !cr.notifyRetry || !t.requestedBy) return;
+      try {
+        const notify = this.deps.notify;
+        if (!notify) throw new PermanentError('sem como avisar quem pediu a tarefa');
+        const worker = t.staffId ? await this.deps.readProfile(projectId, t.staffId) : null;
+        await notify(
+          projectId,
+          t.requestedBy,
+          `[MyCo] ${worker?.name ?? 'Quem faz a tarefa'} recusou o seu pedido de cancelar a tarefa “${t.title}” (id ${t.id}). Motivo dele: “${cr.answer}”. A tarefa segue; o pedido e a recusa estão no histórico dela. Se ainda quiser tirá-la, fale com o usuário: só ele cancela à força, pelo Claudio’s Club.`,
+          t.requestedSession ?? null,
+        );
+        await this.change(projectId, taskId, (x) => (x.cancelRequest?.status === 'refused' ? { ...x, cancelRequest: { ...x.cancelRequest, notifyRetry: undefined } } : x));
+      } catch (err) {
+        const now = new Date();
+        await this.change(projectId, taskId, (x) => (x.cancelRequest?.status === 'refused' && x.cancelRequest.notifyRetry ? { ...x, cancelRequest: { ...x.cancelRequest, notifyRetry: failedRetry(x.cancelRequest.notifyRetry, err, now) } } : x)).catch(() => {});
+      }
+    } finally {
+      this.inFlight.delete(key);
+    }
+  }
+
+  /** O tick: pedido de cancelamento que ainda precisa chegar ao responsável (ver `cancelDeliveryDue`) e aviso de recusa que não chegou a quem pediu; o backoff manda. */
+  private async retryCancelRequests(projectId: string, tasks: Task[], now: Date): Promise<void> {
+    const at = now.getTime();
+    for (const t of tasks) {
+      const cr = t.cancelRequest;
+      if (!cr) continue;
+      if (cr.status === 'refused' && cr.notifyRetry && retryDue(cr.notifyRetry, at)) await this.tellRefusal(projectId, t.id);
+      else if (cancelDeliveryDue(t, this.bootedAt) && (!cr.retry || retryDue(cr.retry, at))) await this.deliverCancelRequest(projectId, t.id);
+    }
+  }
+
+  /**
+   * O funcionário edita pela API (`STAFF_EDITABLE`) uma tarefa que ainda não começou: em Aguardar ou A fazer, sem conversa. Só com o token da
+   * conversa dele, e só quem pediu a tarefa (`requestedBy`) ou o gestor de quem a faz; quem a faz não a edita (o critério de pronto não é de quem
+   * entrega). Não muda a coluna nem tira da fila; trocar o responsável (só para quem reporta a quem edita) leva a tarefa de A fazer ao fim da
+   * fila do novo. Os campos mandados substituem os atuais. 403 (TaskForbiddenError) sem permissão, 409 (TaskConflictError) se a tarefa já
+   * começou, TaskError (400) no pedido; tarefa que não existe: null.
+   *
+   * A checagem de coluna é a da própria gravação (`change`, uma por vez por projeto) e a edição espera a vez do funcionário (a mesma de `start`
+   * e da fila): a partida que já está abrindo a conversa termina antes (a tarefa vira "fazendo" e a edição é recusada), e a que vem depois lê o
+   * texto já editado. Sem a vez, o funcionário já chamado com o texto antigo ficaria sem saber da edição gravada.
+   */
+  async editFrom(projectId: string, taskId: string, caller: Caller | null, body: unknown): Promise<Task | null> {
+    const me = caller?.staffId;
+    if (!me || caller.projectId !== projectId) throw new TaskForbiddenError('só um funcionário, com o token da conversa dele (x-myco-token), edita tarefa por aqui; o usuário edita pelo Claudio’s Club');
+    const dir = await this.deps.projectPath(projectId);
+    const first = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
+    if (!dir || !first) return null;
+    const run = async () => {
+      const task = (await readTasks(dir)).find((t) => t.id === taskId);
+      if (!task) return null;
+      // A vez foi pedida pelo responsável de antes: se ele mudou nesse meio tempo, o que vale é a leitura nova (outra vez).
+      if (task.staffId !== first.staffId) throw new TaskConflictError('a tarefa mudou de responsável enquanto você a editava; leia de novo e tente outra vez');
+      const mine = await this.deps.readProfile(projectId, me);
+      if (!mine) throw new TaskForbiddenError('funcionário não encontrado neste projeto');
+      if (task.staffId === me) throw new TaskForbiddenError('quem faz a tarefa não a edita (o critério de pronto não é de quem entrega); peça a quem a passou');
+      const manages = !!task.staffId && !!(await this.deps.readProfile(projectId, task.staffId))?.reportsTo.includes(me);
+      if (task.requestedBy !== me && !manages) throw new TaskForbiddenError('só quem pediu a tarefa ou o gestor de quem a faz a edita por aqui');
+      // `requestedBy` é o hábito de quem passa tarefa: quem edita é o dono do token, então o declarado não conta.
+      const sent = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body).filter((k) => k !== 'requestedBy') : [];
+      const extra = sent.filter((k) => !(STAFF_EDITABLE as readonly string[]).includes(k));
+      if (extra.length) throw new TaskError(`campo que não se edita por aqui: ${extra.join(', ')} (só ${STAFF_EDITABLE.join(', ')})`);
+      const { requestedBy: _, ...fields } = (body ?? {}) as Record<string, unknown>;
+      const patch = parseOr(TaskStaffEdit, fields);
+      if (Object.values(patch).every((v) => v === undefined)) throw new TaskError(`nada para editar: mande ao menos um de ${STAFF_EDITABLE.join(', ')}`);
+      // Quem recebe: só quem reporta a quem edita (como ao passar a tarefa). Quem já é o responsável não conta como troca.
+      const owner = patch.staffId && patch.staffId !== task.staffId ? await this.staffOrThrow(projectId, patch.staffId) : null;
+      if (owner && !owner.reportsTo.includes(me)) throw new TaskForbiddenError('só dá para passar a tarefa a quem reporta a você');
+      const seen: { before?: Task } = {};
+      const out = await this.change(projectId, taskId, (t, all) => {
+        // Daqui para baixo vale o que está gravado agora: a tela ou outro caminho pode ter mexido desde a leitura acima.
+        if (t.status !== 'waiting' && t.status !== 'todo')
+          throw new TaskConflictError(`a tarefa está em “${COLUMN_NAME[t.status]}”: por aqui só se edita em Aguardar e A fazer; o complemento vai pela conversa da tarefa`);
+        if (t.sessionId) throw new TaskConflictError('a tarefa já começou (tem conversa): o complemento vai pela conversa dela, e uma edição aqui não chegaria a quem faz');
+        if (t.staffId !== task.staffId || (t.requestedBy ?? null) !== (task.requestedBy ?? null)) throw new TaskConflictError('a tarefa mudou enquanto você a editava; leia de novo e tente outra vez');
+        if (patch.blockedBy) checkBlockedBy(t.id, patch.blockedBy, all);
+        if (owner && t.reviewerId === owner.id) throw new TaskError(`${owner.name} é o revisor desta tarefa: a revisão precisa ser de outro funcionário`);
+        seen.before = t;
+        const note = `editada por ${mine.name}: ${STAFF_EDITABLE.filter((k) => patch[k] !== undefined).join(', ')}${owner ? ` (agora com ${owner.name})` : ''}`;
+        const next = noted(withPatch(t, patch, 'auto'), note);
+        // Outro responsável: a vaga na fila é do novo, no fim (a posição antiga era na fila do outro); sem o que a partida anterior deixou.
+        return owner && next.queuedAt ? { ...next, queuedAt: new Date().toISOString(), queueRank: undefined, queuedForce: false, resourceWait: null, startRetry: undefined } : next;
+      });
+      return out && seen.before ? { out, before: seen.before } : null;
+    };
+    const done = first.staffId ? await this.locked(projectId, first.staffId, run) : await run();
+    if (!done) return null;
+    // Quem perdeu a tarefa, quem a ganhou e o dono dela (se saiu uma dependência): quem estiver livre pega a vez (o `takeNext` confere fila e ocupação).
+    for (const s of new Set([done.before.staffId, done.out.staffId])) if (s) void this.kick(projectId, s);
+    return done.out;
+  }
+
+  /**
+   * Muda a ordem da fila de um funcionário (`Task.queueRank`) ou, do responsável, sugere a ordem. Corpo: `TaskOrderBody`. Quem pode:
+   *   - o usuário (`fromBrowser`): qualquer card da fila de qualquer funcionário, para uma posição (`to`: número ou 'top') ou um lugar acima ou
+   *     abaixo (`step`);
+   *   - o gestor que pediu o card (`requestedBy`, com o token da conversa dele): só os cards que ele pediu e só `step`. O card troca de lugar com o card
+   *     dele mais próximo na fila, então nenhum card de outro solicitante muda de posição (furar a fila de outro é só do usuário). `to` é 403;
+   *   - o responsável pela tarefa: nunca muda a ordem (403); `suggest` + `reason` vira aviso a quem pediu o card e não altera nada (ver `suggestOrder`);
+   *   - qualquer outro: 403.
+   * Só se reordena card na fila (A fazer, com `queuedAt`): outro, ou movimento que não muda nada, é 409. Tarefa que não existe: null. Cada movimento
+   * deixa uma nota no histórico do card movido (quem moveu, de que posição para qual). A permissão é desta função, não da tela.
+   */
+  async reorder(projectId: string, taskId: string, caller: Caller | null, fromBrowser: boolean, body: unknown): Promise<TaskOrderResult | null> {
+    const me = fromBrowser ? null : (caller?.staffId ?? null);
+    if (!fromBrowser && (!me || caller?.projectId !== projectId)) throw new TaskForbiddenError('só o usuário (pelo Claudio’s Club) ou um funcionário, com o token da conversa dele (x-myco-token), mexe na ordem da fila');
+    const order = parseOr(TaskOrderBody, body ?? {});
+    const dir = await this.deps.projectPath(projectId);
+    const all = dir ? await readTasks(dir) : [];
+    const first = all.find((t) => t.id === taskId);
+    if (!dir || !first) return null;
+    if (fromBrowser) {
+      if (order.suggest !== undefined) throw new TaskError('a sugestão é de quem faz a tarefa; o usuário reordena com to ou step');
+    } else if (first.staffId === me) {
+      // Quem faz a tarefa não escolhe o que vem antes dela: a ordem é de quem pediu (e do usuário), senão o executor se priorizaria.
+      if (order.suggest === undefined) throw new TaskForbiddenError('quem faz a tarefa não muda a ordem da fila: mande uma sugestão (suggest e reason) e quem pediu decide');
+    } else if (first.requestedBy && first.requestedBy === me) {
+      if (order.suggest !== undefined) throw new TaskError('quem pediu a tarefa reordena (step: up ou down), não sugere');
+      if (order.step === undefined) throw new TaskForbiddenError('o gestor só sobe ou desce (step) as tarefas que pediu; furar a fila de outro solicitante é só do usuário');
+    } else {
+      throw new TaskForbiddenError('só quem pediu a tarefa (ou o usuário) muda a ordem; quem faz a tarefa só sugere');
+    }
+    if (order.suggest !== undefined) return this.suggestOrder(projectId, first, me!, queueOf(all, first.staffId!), order.suggest, order.reason!);
+    if (!inQueue(first)) throw new TaskConflictError('a tarefa não está na fila: só se reordena o que está em A fazer esperando a vez do responsável');
+    const [owner, actor] = await Promise.all([this.staffOrThrow(projectId, first.staffId!), me ? this.deps.readProfile(projectId, me) : null]);
+    const who = fromBrowser ? 'você' : (actor?.name ?? me!);
+    const seen: { from?: number; to?: number; of?: number } = {};
+    const ok = await this.mutate(projectId, (tasks) => {
+      const t = tasks.find((x) => x.id === taskId);
+      if (!t) return tasks;
+      // Daqui para baixo vale o que está gravado agora: a vez dele ou a tela pode ter mexido desde a leitura acima.
+      if (t.staffId !== first.staffId || (t.requestedBy ?? null) !== (first.requestedBy ?? null)) throw new TaskConflictError('a tarefa mudou enquanto você a reordenava; leia de novo e tente outra vez');
+      if (!inQueue(t)) throw new TaskConflictError('a tarefa saiu da fila (já começou, ou mudou de coluna): leia de novo');
+      const queue = queueOf(tasks, t.staffId!);
+      const next = reordered(queue, t.id, order, fromBrowser ? () => true : (x) => x.requestedBy === me);
+      const from = queue.findIndex((x) => x.id === t.id);
+      if (!next) throw new TaskConflictError(order.step ? `já é a ${order.step === 'up' ? 'primeira' : 'última'} ${fromBrowser ? 'da fila' : 'das suas na fila'}` : 'a tarefa já está nessa posição');
+      const to = next.findIndex((x) => x.id === t.id);
+      Object.assign(seen, { from: from + 1, to: to + 1, of: queue.length });
+      // A fila inteira ganha posição (1, 2, 3…): quem entrar depois não tem e vai para o fim. Só a movida ganha nota e muda de `updatedAt`.
+      const rank = new Map(next.map((x, i) => [x.id, i + 1]));
+      const at = new Date().toISOString();
+      const note = `fila de ${owner.name} reordenada por ${who}: posição ${from + 1} → ${to + 1} de ${queue.length}`;
+      return tasks.map((x) => {
+        const r = rank.get(x.id);
+        if (r === undefined) return x;
+        if (x.id !== t.id) return x.queueRank === r ? x : { ...x, queueRank: r };
+        return { ...x, queueRank: r, updatedAt: at, history: [...x.history, { at, status: x.status, by: fromBrowser ? ('you' as const) : ('auto' as const), note }].slice(-MAX_HISTORY) };
+      });
+    });
+    if (!ok || seen.from === undefined) return null;
+    // A frente da fila pode ter mudado (a primeira estava bloqueada, ou esperando nova tentativa): quem está livre pega a vez.
+    void this.kick(projectId, first.staffId!);
+    const task = (await this.list(projectId))?.find((t) => t.id === taskId);
+    return task ? { ok: true, moved: { from: seen.from, to: seen.to!, of: seen.of! }, task } : null;
+  }
+
+  /**
+   * O responsável sugere subir, descer ou levar ao topo um card da fila dele: vira aviso a quem pediu o card (`notify`, na conversa em que pediu) e uma nota no
+   * histórico do card; a ordem não muda, quem decide é quem pediu (ou o usuário). Card pedido pelo usuário (sem `requestedBy`): 409, a sugestão vai a ele pela
+   * conversa. Uma por tarefa a cada `SUGGEST_COOLDOWN_MS`. Aviso que não chega: erro (a sugestão não se perde calada).
+   */
+  private async suggestOrder(projectId: string, task: Task, me: string, queue: Task[], move: 'up' | 'down' | 'top', reason: string): Promise<TaskOrderResult> {
+    if (!inQueue(task)) throw new TaskConflictError('a tarefa não está na fila: só se sugere a ordem de card em A fazer esperando a vez');
+    const managerId = task.requestedBy;
+    if (!managerId) throw new TaskConflictError('a tarefa foi pedida pelo usuário, não por um gestor: diga a sugestão a ele na conversa');
+    const [mine, manager] = await Promise.all([this.staffOrThrow(projectId, me), this.deps.readProfile(projectId, managerId)]);
+    if (!manager) throw new TaskConflictError('quem pediu a tarefa não está mais neste projeto: diga a sugestão ao usuário na conversa');
+    const notify = this.deps.notify;
+    if (!notify) throw new TaskError('sem como avisar quem pediu a tarefa agora: diga a sugestão ao usuário na conversa');
+    const key = `${projectId}:${task.id}`;
+    const last = this.orderSuggested.get(key);
+    if (last !== undefined && Date.now() - last < SUGGEST_COOLDOWN_MS) throw new TaskConflictError('você já sugeriu uma ordem para esta tarefa há pouco: espere quem pediu decidir');
+    // Reserva antes de enviar: dois pedidos juntos não mandam dois avisos.
+    this.orderSuggested.set(key, Date.now());
+    const what = move === 'top' ? 'passar para o topo' : move === 'up' ? 'subir' : 'descer';
+    const pos = queue.findIndex((t) => t.id === task.id) + 1;
+    const text = `[MyCo] ${mine.name} sugere mudar a ordem da fila dele: ${what} a tarefa “${task.title}” (id ${task.id}, a ${pos}ª de ${queue.length}), que você pediu. Motivo: “${reason}”. É só uma sugestão: a ordem não mudou. Você decide (pode reordenar as tarefas que pediu; furar a fila de outro solicitante é só do usuário).`;
+    try {
+      await notify(projectId, managerId, text, task.requestedSession ?? null);
+    } catch (err) {
+      this.orderSuggested.delete(key);
+      throw new TaskError(`o aviso não chegou a ${manager.name}: ${(err as Error).message}`);
+    }
+    await this.change(projectId, task.id, (t) => noted(t, `${mine.name} sugeriu ${what} na fila: ${reason}`)).catch(() => {});
+    return { ok: true, suggested: true, notified: managerId };
   }
 
   /**
@@ -799,7 +1344,7 @@ export class TaskService {
         released++;
         lost.push({ id: t.id, reason: asWorker ? 'sem responsável' : 'sem revisor' });
         if (!asWorker) return noted({ ...t, reviewerId: null }, 'revisor excluído');
-        const loose: Task = { ...t, staffId: null, queuedAt: null, queuedForce: false, resourceWait: null, ...(asReviewer && { reviewerId: null }) };
+        const loose: Task = { ...t, staffId: null, queuedAt: null, queuedForce: false, resourceWait: null, startRetry: undefined, ...(asReviewer && { reviewerId: null }) };
         // Em revisão, a conversa de trabalho continua (sessionId fica). Nas outras, a conversa e o plano são da
         // pessoa que saiu e as mensagens guardadas iam para ela: zerados, quem pegar a tarefa começa do zero.
         if (t.status === 'review' || t.status === 'waiting') return noted(loose, 'responsável excluído');
@@ -817,38 +1362,102 @@ export class TaskService {
    * Começa: conversa nova com o funcionário, com o título e a descrição. Com a ficha em "só
    * planeja", a tarefa vai para "planejando"; senão, para "fazendo". Com ele ocupado, entra na
    * fila dele e começa sozinha quando ele ficar livre.
+   * Com `deadlineMs`, quem pediu não espera mais que isso: a vez do funcionário (`locked`) e a abertura da conversa podem demorar muito, e o pedido
+   * ficaria preso. Passado o prazo, a resposta vem com a tarefa já na fila dele (`todo` com `queuedAt`) e o começo segue em segundo plano, na mesma
+   * vez de sempre: quem abre a conversa continua sendo um só (o que entra na vez confere `sessionId` de novo). Se o começo falhar depois disso,
+   * a tarefa fica na fila com o motivo e a fila tenta de novo (ver `startFailedLate`).
    */
-  async start(projectId: string, taskId: string, force = false, opts: RunStart = {}): Promise<Task | null> {
+  async start(projectId: string, taskId: string, force = false, opts: StartOpts = {}): Promise<Task | null> {
+    const { deadlineMs, ...run } = opts;
+    const log = this.deps.log ?? ((line: string) => console.warn(line));
+    const timer = new StageTimer(`começar ${taskId}`, log, this.deps.slowMs ?? START_SLOW_MS);
+    const job = this.startJob(projectId, taskId, force, run, timer).finally(() => timer.finish());
+    if (!deadlineMs) return job;
+    let timeout: NodeJS.Timeout | undefined;
+    const late = new Promise<typeof LATE>((resolve) => {
+      timeout = setTimeout(() => resolve(LATE), deadlineMs);
+    });
+    try {
+      const done = await Promise.race([job, late]);
+      if (done !== LATE) return done;
+    } finally {
+      clearTimeout(timeout);
+    }
+    const at = timer.where();
+    timer.answeredEarly = true;
+    log(`[tarefas] começar ${taskId}: passou do prazo de ${deadlineMs} ms, parado em "${at?.name ?? '?'}" há ${at?.ms ?? 0} ms; responde na fila e o começo segue em segundo plano`);
+    void job.catch((err) => this.startFailedLate(projectId, taskId, err, log));
+    return this.queueLate(projectId, taskId, force);
+  }
+
+  /** Passou do prazo: a tarefa vai para a fila dele (se ainda não começou) e a resposta leva essa versão. O começo de verdade segue sem esta gravação. */
+  private queueLate(projectId: string, taskId: string, force: boolean): Promise<Task | null> {
+    return this.change(projectId, taskId, (t) => {
+      // O começo gravou antes (já tem conversa), ou a tarefa saiu de "a fazer" (cancelada, arrastada): não mexe.
+      if (!unstarted(t)) return t;
+      const from = t.status === 'waiting' ? moved(t, 'todo', 'you', 'saiu de aguardar') : t;
+      const queued: Task = { ...from, queuedAt: from.queuedAt ?? new Date().toISOString(), queuedForce: force, unqueued: undefined };
+      return noted(queued, 'o começo passou do prazo da resposta (a vez dele ou a conversa demora): na fila, começa em segundo plano');
+    });
+  }
+
+  /** O começo que seguia depois do prazo falhou: a tarefa já está na fila; ela guarda o motivo e, se é da tarefa, o backoff (como na `takeNext`). */
+  private async startFailedLate(projectId: string, taskId: string, err: unknown, log: (line: string) => void): Promise<void> {
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`[tarefas] começar ${taskId}: o começo em segundo plano falhou: ${msg}`);
+    const why = `não começou: ${msg}`;
+    await this.change(projectId, taskId, (t) => {
+      if (!unstarted(t)) return t;
+      const marked = isGlobalStart(err) ? t : { ...t, startRetry: failedRetry(t.startRetry, err, new Date()) };
+      return t.history.at(-1)?.note === why ? marked : noted(marked, why);
+    }).catch(() => {});
+  }
+
+  /** O começo inteiro, sem prazo. `timer` marca onde o tempo vai (ver `StageTimer`). */
+  private async startJob(projectId: string, taskId: string, force: boolean, opts: RunStart, timer: StageTimer): Promise<Task | null> {
+    timer.stage('projectPath');
     const dir = await this.deps.projectPath(projectId);
+    timer.stage('leitura');
     const tasks = dir ? await readTasks(dir) : [];
     const task = tasks.find((t) => t.id === taskId);
     if (!dir || !task) return null;
     if (task.status === 'cancelled') throw new TaskConflictError('a tarefa foi cancelada: reabra antes de começar');
     if (!task.staffId) throw new TaskError('escolha quem vai cuidar da tarefa');
     if (task.sessionId) throw new TaskError('a tarefa já começou: continue pela conversa dela');
+    timer.stage('ficha');
     const profile = await this.staffOrThrow(projectId, task.staffId);
     const staffId = task.staffId;
     // Na fila, a tarefa vai para A fazer (de Aguardar, como de A fazer): só a fila anda com "a fazer".
     const enqueue = (t: Task, note?: string) => {
       const from = t.status === 'waiting' ? moved(t, 'todo', 'you', 'saiu de aguardar') : t;
-      const queued: Task = { ...from, queuedAt: from.queuedAt ?? new Date().toISOString(), queuedForce: force };
+      const queued: Task = { ...from, queuedAt: from.queuedAt ?? new Date().toISOString(), queuedForce: force, unqueued: undefined };
       return note ? noted(queued, note) : queued;
     };
     // Na mesma vez do funcionário que a fila: dois "Começar" juntos não abrem duas conversas.
+    timer.stage('lock');
     return this.locked(projectId, staffId, async () => {
+      timer.stage('fila');
       const fresh = await readTasks(dir);
+      // Mudou de responsável entre a leitura e a vez dele (edição): quem começa é o novo, pela fila dele, e não o de antes com a ficha dele.
+      const now = fresh.find((t) => t.id === taskId);
+      if (now && now.staffId !== staffId) return now;
+      // Cancelada enquanto esperava a vez (quem pediu a tarefa a cancelou, ver `cancelByRequester`): não começa nem volta para a fila.
+      if (now?.status === 'cancelled') throw new TaskConflictError('a tarefa foi cancelada: reabra antes de começar');
+      // Outro começo (a fila, ou um "Começar" repetido, ou o que passou do prazo) abriu a conversa enquanto esperava a vez: não começa de novo,
+      // nem volta a pô-la na fila.
+      if (now?.sessionId) return now;
       // Bloqueada: entra na fila com o motivo, sem erro. Começa sozinha quando as dependências ficarem prontas (ver wakeDependents).
-      const open = blockers(fresh.find((t) => t.id === taskId) ?? task, fresh);
+      const open = blockers(now ?? task, fresh);
       // O motivo (quem falta) não fica gravado: a caixa e o quadro o calculam na leitura (ver blockers e stuckDependencies).
       if (open.length) return this.change(projectId, taskId, (t) => enqueue(t));
       const busyWith = occupant(fresh, staffId, taskId);
       if (!busyWith && !this.staffBusy(projectId, fresh, staffId)) {
         try {
-          return await this.startNow(projectId, taskId, profile, force, undefined, { trigger: opts.trigger ?? 'manual', skills: opts.skills });
+          return await this.startNow(projectId, taskId, profile, force, undefined, { trigger: opts.trigger ?? 'manual', skills: opts.skills }, timer);
         } catch (err) {
           // Limite de consumo na hora (da empresa, ou o do motor da ficha sem troca), ou o servidor reiniciando: não começou,
           // mas fica na fila dele (o tick tenta de novo; no reinício, o tick do boot). Outros erros sobem.
-          if (!(err instanceof UsageStopError || err instanceof LimitWaitError || err instanceof ChatClosingError)) throw err;
+          if (!isGlobalStart(err)) throw err;
           const why =
             err instanceof ChatClosingError
               ? `não começou: o Claudio’s Club está reiniciando; na fila de ${profile.name}, começa quando o servidor voltar`
@@ -863,14 +1472,16 @@ export class TaskService {
 
   /**
    * `run`: a partida abre uma tentativa nova no registro (ver taskRuns.ts), com o que a abriu. Sem ele (troca no meio do turno),
-   * a tentativa segue a que estava aberta.
+   * a tentativa segue a que estava aberta. `timer`: o cronômetro do pedido, quando há um (ver `start`).
    */
-  private async startNow(projectId: string, taskId: string, profile: StaffProfile, force: boolean, sw?: Switch, run?: RunStart): Promise<Task | null> {
+  private async startNow(projectId: string, taskId: string, profile: StaffProfile, force: boolean, sw?: Switch, run?: RunStart, timer?: StageTimer): Promise<Task | null> {
+    timer?.stage('leitura');
     const dir = await this.deps.projectPath(projectId);
     const task = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
     // Com troca combinada (no meio do turno), a conversa antiga ainda é a da tarefa até a nova abrir.
     if (!dir || !task || (task.sessionId && !sw) || task.status === 'cancelled') return null;
     // Sem troca combinada: o limite do motor da ficha agora decide (começa, troca para o secundário, ou espera na fila).
+    timer?.stage('plano');
     const plan = sw ? {} : await this.startPlan(projectId, task, profile);
     if (plan.wait) throw new LimitWaitError(plan.wait);
     const s = sw ?? plan.switch;
@@ -889,6 +1500,7 @@ export class TaskService {
         .filter(Boolean)
         .join('\n\n');
     let sessionId: string;
+    timer?.stage('conversa');
     try {
       // Sem override, o envio é o de sempre (4 argumentos): só a troca carrega o motor secundário.
       sessionId = s?.override
@@ -914,21 +1526,23 @@ export class TaskService {
       // No início, a tarefa continua na fila, como estaria sem fallback. A troca não é gravada: a fila tenta de novo com o limite de hoje.
       return this.change(projectId, taskId, (t) => {
         const from = t.status === 'waiting' ? moved(t, 'todo', 'auto', 'saiu de aguardar') : t;
-        const queued = { ...from, queuedAt: from.queuedAt ?? new Date().toISOString(), queuedForce: force };
+        const queued = { ...from, queuedAt: from.queuedAt ?? new Date().toISOString(), queuedForce: force, unqueued: undefined };
         return from.history.at(-1)?.note === why ? queued : noted(queued, why);
       });
     }
     // Tentativa nova só na partida (a troca no meio do turno segue a que estava aberta). A conversa já abriu: o registro vai agora.
+    timer?.stage('registro');
     const runId = run && !sw ? await this.logStart(projectId, task, run.trigger ?? 'manual', run.skills ?? (await this.skillsOf(projectId, profile))) : undefined;
     const branch = await this.deps.branchFor(dir, profile).catch(() => null);
     this.bySession.set(sessionId, { projectId, taskId, role: 'work' });
+    timer?.stage('gravar');
     return this.change(projectId, taskId, (t) => {
       // A troca no meio do turno não muda a fase: a tarefa segue em "fazendo" ou "planejando", como estava.
       const next: TaskStatus = sw ? t.status : profile.autonomy === 'plan' ? 'planning' : 'doing';
       // A conversa que abriu entra no histórico da tarefa (partida e troca de motor, que também passam aqui).
       const engine: Engine = s?.override.engine ?? (profile.engine === 'codex' ? 'codex' : 'claude');
       const started = withSession(
-        { ...t, sessionId, branch: branch ?? t.branch, queuedAt: null, queuedForce: false, resourceWait: null, ...(s && { fallback: s.fallback }), ...(runId && { runId }) },
+        { ...t, sessionId, branch: branch ?? t.branch, queuedAt: null, queuedForce: false, resourceWait: null, fallbackBlocked: undefined, startRetry: undefined, unqueued: undefined, ...(s && { fallback: s.fallback }), ...(runId && { runId }) },
         { id: sessionId, role: 'work', staffId: profile.id, engine, at: new Date().toISOString() },
       );
       const moving = moved(started, next, 'auto', `com ${profile.name}`);
@@ -970,7 +1584,11 @@ export class TaskService {
     // Início da fila: leitura do Codex em cache (ver readLimit). Quem decide no meio do turno lê fresco.
     const provider = await this.readLimit(engine, { cache: true });
     const hit = limitReading(provider, await this.stopLimit(projectId, profile.id, engine));
-    if (hit === null || hit === 'unknown') return {};
+    if (hit === null || hit === 'unknown') {
+      // Sem limite agora, a espera de troca (se havia) já não vale: a partida segue como sempre.
+      if (task.fallbackBlocked) await this.change(projectId, task.id, (t) => ({ ...t, fallbackBlocked: undefined }));
+      return {};
+    }
     // Veio da linha de parada da empresa (o provedor não deu limite): o texto diz isso, e a volta vai entre parênteses.
     const porStop = provider === null || provider === 'unknown';
     const situacao = porStop ? 'passou da linha de parada' : 'está no limite';
@@ -985,6 +1603,9 @@ export class TaskService {
     try {
       await this.deps.assertRunnable?.(projectId, profile.id, override);
     } catch (err) {
+      // Fica na fila com a espera gravada (`fallbackBlocked`); a nota sai do `wait`, pelo caminho da fila (ver `isGlobalStart`).
+      const until = hit.resetsAt === null ? null : new Date(hit.resetsAt).toISOString();
+      await this.change(projectId, task.id, (t) => ({ ...t, fallbackBlocked: blockedOf(err, secondary.engine, engine, until, t.fallbackBlocked) }));
       return { wait: `${ENGINE_LABEL[engine]} ${situacao}${quando}; a troca para ${ENGINE_LABEL[secondary.engine]} não abre (${(err as Error).message})` };
     }
     return {
@@ -1066,10 +1687,12 @@ export class TaskService {
       };
       // Pré-checagem: a conversa nova abriria? (as barreiras do envio, sem gravar nada). Não abre: segue como antes, com o "continue".
       try {
-        await this.deps.assertRunnable?.(projectId, staffId, sw.override);
+        // A própria conversa (`exceptSession`) não conta como "outra" viva: o Codex dela é que está no limite, não um concorrente.
+        await this.deps.assertRunnable?.(projectId, staffId, sw.override, ev.sessionId);
       } catch (err) {
         const why = `troca para ${ENGINE_LABEL[secondary.engine]} não feita: ${(err as Error).message}`;
-        await this.change(projectId, taskId, (t) => noted(t, `limite do ${ENGINE_LABEL[ev.engine]} no meio do turno: ${why}; segue como antes`));
+        const until = ev.hit.resetsAt === null ? null : new Date(ev.hit.resetsAt).toISOString();
+        await this.change(projectId, taskId, (t) => noted({ ...t, fallbackBlocked: blockedOf(err, secondary.engine, ev.engine, until, t.fallbackBlocked) }, `limite do ${ENGINE_LABEL[ev.engine]} no meio do turno: ${why}; segue como antes`));
         return;
       }
       // a) grava a troca antes de matar a antiga; daqui para a frente, o que chegar dela não é da tarefa.
@@ -1133,7 +1756,7 @@ export class TaskService {
    * Sua mensagem para a conversa de uma tarefa enquanto o funcionário está em outra: fica guardada
    * na tarefa e vai quando ele ficar livre. Devolve o motivo, ou null se pode mandar já.
    */
-  async hold(sessionId: string, msg: { text: string; images?: string[]; origin?: string; ask?: HeldMessage['ask'] }): Promise<string | null> {
+  async hold(sessionId: string, msg: { text: string; images?: string[]; origin?: string; ask?: HeldMessage['ask']; doubt?: true }): Promise<string | null> {
     const where = await this.where(sessionId);
     // Card automático: a conversa é direta, a sua mensagem não espera a vez de outra tarefa.
     if (!where || where.role !== 'work' || where.auto) return null;
@@ -1145,7 +1768,7 @@ export class TaskService {
     if (!busyWith && !this.staffBusy(where.projectId, tasks, task.staffId, sessionId)) return null;
     const name = (await this.deps.readProfile(where.projectId, task.staffId))?.name ?? 'ele';
     const reason = busyWith ? `espera ${name} terminar “${busyWith.title}”` : `espera ${name} terminar a conversa em que está`;
-    const held: HeldMessage = { id: randomBytes(4).toString('hex'), at: new Date().toISOString(), text: msg.text, ...(msg.images?.length && { images: msg.images }), ...(msg.origin && { origin: msg.origin }), ...(msg.ask && { ask: msg.ask }), reason };
+    const held: HeldMessage = { id: randomBytes(4).toString('hex'), at: new Date().toISOString(), text: msg.text, ...(msg.images?.length && { images: msg.images }), ...(msg.origin && { origin: msg.origin }), ...(msg.ask && { ask: msg.ask }), ...(msg.doubt && { doubt: true as const }), reason };
     await this.change(where.projectId, task.id, (t) => noted({ ...t, held: [...(t.held ?? []), held] }, `ajuste guardado: ${reason}`));
     return reason;
   }
@@ -1218,7 +1841,7 @@ export class TaskService {
 
   /**
    * Rede de segurança (na subida e de tempos em tempos): dúvida sem resposta do gestor no prazo (vai para você) e a que ainda não chegou a
-   * ele (reenvio com backoff), revisão automática que não começou ou ficou sem veredito, aviso retido ou que falhou, tarefa em "fazendo"
+   * ele (reenvio com backoff), revisão automática que não começou, que se perdeu num reinício ou que ficou sem veredito, aviso retido ou que falhou, tarefa em "fazendo"
    * cuja conversa morreu no meio do turno (ver `orphan`), e quem tem fila ou ajuste esperando e está livre. Cada passo é isolado: o que
    * falha num não segura os outros (a próxima rodada tenta de novo).
    */
@@ -1227,9 +1850,12 @@ export class TaskService {
       const tasks = (await this.list(projectId)) ?? [];
       await this.safely(() => this.escalateDoubts(projectId, tasks, now));
       await this.safely(() => this.retryDoubts(projectId, tasks, now));
+      await this.safely(() => this.retryCancelRequests(projectId, tasks, now));
       await this.safely(() => this.retryReviews(projectId, tasks, now));
       await this.safely(() => this.chaseReviews(projectId, tasks, now));
+      await this.safely(() => this.resumeReviews(projectId, tasks));
       await this.safely(() => this.releaseOutcomes(projectId, tasks, now));
+      await this.safely(() => this.enqueueIdle(projectId, tasks));
       for (const t of tasks) if (t.status === 'doing' && t.sessionId && t.staffId) await this.orphan(projectId, t.id, t.staffId, now);
       // Acorda só quem tem ajuste guardado ou tarefa na fila que já pode começar: fila só de bloqueadas não acorda ninguém.
       const waiting = new Set(tasks.filter((t) => t.staffId && (t.held?.length || (t.queuedAt && !blockers(t, tasks).length))).map((t) => t.staffId!));
@@ -1275,12 +1901,14 @@ export class TaskService {
   }
 
   /**
-   * Revisão automática que não começou (`reviewRetry`): tenta de novo quando chega a hora, até REVIEW_WAIT_MS desde a primeira falha. Passado o
-   * prazo, a tarefa é sua: uma nota, o aviso aos dependentes e, se quem pediu é quem revisa, o aviso da entrega (uma vez). A que já
-   * não está nessa entrega perde a marca.
+   * Revisão automática que não começou (`reviewRetry`): tenta de novo quando chega a hora, com backoff e jitter. Passado REVIEW_WAIT_MS desde a
+   * primeira falha, a tarefa também é sua: uma nota, o aviso aos dependentes, a caixa (`stuckState`) e, se quem pediu é quem revisa, o aviso da
+   * entrega (uma vez) — mas as tentativas não param: a revisão abre quando o motivo passar. A que já não está nessa entrega perde a marca.
+   * No máximo REVIEWS_PER_TICK pedidos por rodada (um reinício com vários cards parados não abre todas as conversas juntas).
    */
   private async retryReviews(projectId: string, tasks: Task[], now: Date): Promise<void> {
     const at = now.getTime();
+    let opened = 0;
     for (const t of tasks) {
       const rr = t.reviewRetry;
       if (!rr) continue;
@@ -1288,8 +1916,7 @@ export class TaskService {
         await this.change(projectId, t.id, (x) => (x.reviewRetry && !onDelivery(x, x.reviewRetry.deliveryAt) ? { ...x, reviewRetry: undefined } : x));
         continue;
       }
-      if (rr.expired) continue;
-      if (at - Date.parse(rr.firstAt) >= REVIEW_WAIT_MS) {
+      if (!rr.expired && at - Date.parse(rr.firstAt) >= REVIEW_WAIT_MS) {
         let expired: Task | null = null;
         await this.change(projectId, t.id, (x) => {
           if (!x.reviewRetry || x.reviewRetry.expired || !onDelivery(x, rr.deliveryAt)) return x;
@@ -1301,17 +1928,75 @@ export class TaskService {
         if (selfReview(stuck) && stuck.sessionId) await this.tellManager(projectId, stuck, stuck.sessionId);
         continue;
       }
-      if (!retryDue(rr, at)) continue;
+      // Vencida (a caixa já avisa) também segue tentando, no passo mais lento: o motivo passa (o consumo volta, o dono troca o revisor) e a revisão abre
+      // sozinha, sem o dono empurrar o card. Abrindo, `requestReview` limpa a marca e o aviso some.
+      if (!retryDue(rr, at) || opened >= REVIEWS_PER_TICK) continue;
       const key = `review:${projectId}:${t.id}`;
       if (this.inFlight.has(key)) continue;
       this.inFlight.add(key);
+      opened++;
       try {
         const fresh = ((await this.list(projectId)) ?? []).find((x) => x.id === t.id);
-        if (fresh && fresh.reviewRetry && !fresh.reviewRetry.expired && onDelivery(fresh, fresh.reviewRetry.deliveryAt)) await this.autoReview(projectId, fresh);
+        if (fresh && fresh.reviewRetry && onDelivery(fresh, fresh.reviewRetry.deliveryAt)) await this.autoReview(projectId, fresh);
       } finally {
         this.inFlight.delete(key);
       }
     }
+  }
+
+  /**
+   * Entrega que ficou sem o pedido de revisão: o servidor reiniciou entre o fim do turno e o `autoReview` (os testes da entrega levam minutos,
+   * ver `workDone`), e nada mais olhava para ela (`retryReviews` só vê `reviewRetry`; `chaseReviews`, `review` aberto). Pede a revisão como se a
+   * entrega tivesse chegado agora (ver `reviewLost`). O pedido que sai deixa `review`, o que falha deixa `reviewRetry` ou uma nota, e os dois
+   * tiram a tarefa daqui: é uma vez por entrega. A chave é a de `workDone` e `retryReviews`: entrega em andamento não é entrega perdida.
+   */
+  private async resumeReviews(projectId: string, tasks: Task[]): Promise<void> {
+    let opened = 0;
+    for (const t of tasks) {
+      if (!reviewLost(t) || opened >= REVIEWS_PER_TICK) continue;
+      const key = `review:${projectId}:${t.id}`;
+      if (this.inFlight.has(key)) continue;
+      this.inFlight.add(key);
+      opened++;
+      try {
+        // Relê com a chave na mão: o estado pode ter mudado desde o começo do tick.
+        const fresh = ((await this.list(projectId)) ?? []).find((x) => x.id === t.id);
+        if (!fresh || !reviewLost(fresh) || !(await this.reviewerOf(projectId, fresh))) continue;
+        // Os testes desta entrega nunca rodaram: os guardados são de uma anterior e diriam ao revisor que não precisa rodar.
+        const stale = fresh.tests && fresh.delivery && fresh.tests.at < fresh.delivery.at;
+        await this.autoReview(projectId, stale ? ((await this.change(projectId, t.id, (x) => ({ ...x, tests: undefined }))) ?? fresh) : fresh);
+      } finally {
+        this.inFlight.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Card em "a fazer" que ninguém pôs na fila (a partida falhou por um erro que não é de consumo, ou você o arrastou de outra coluna com uma conversa já
+   * aberta): com responsável, sem dependência pendente (`blockers`), sem dúvida aberta e fora de Aguardar, não há por que esperar. Entra na fila do responsável, e
+   * o `takeNext` decide: ocupado, espera a vez (não está empacado); livre, começa. Quem você tirou da fila (`unqueued`) fica como está. O card cuja
+   * conversa já está trabalhando (o ajuste guardado foi para ela) só volta para fazendo. No máximo ENQUEUE_PER_TICK por rodada.
+   */
+  private async enqueueIdle(projectId: string, tasks: Task[]): Promise<void> {
+    const woken = new Set<string>();
+    let n = 0;
+    for (const t of tasks) {
+      if (n >= ENQUEUE_PER_TICK) break;
+      if (!idleTodo(t, tasks) || !(await this.deps.readProfile(projectId, t.staffId!))) continue;
+      const sessionId = t.sessionId;
+      const working = !!sessionId && this.deps.isSessionWorking?.(sessionId) === true;
+      let done = false;
+      await this.change(projectId, t.id, (x, all) => {
+        if (!idleTodo(x, all) || x.sessionId !== sessionId) return x;
+        done = true;
+        if (working) return moved(x, 'doing', 'auto', 'a conversa dela está trabalhando: a tarefa volta para fazendo');
+        return noted({ ...x, queuedAt: new Date().toISOString(), queuedForce: false }, sessionId ? 'em a fazer fora da fila: entrou na fila, para retomar a conversa dela' : 'em a fazer fora da fila: entrou na fila');
+      });
+      if (!done) continue;
+      n++;
+      woken.add(t.staffId!);
+    }
+    for (const s of woken) await this.kick(projectId, s);
   }
 
   /**
@@ -1325,8 +2010,10 @@ export class TaskService {
       const r = t.review;
       if (t.status !== 'review' || !r || !t.reviewerId || t.reviewerId !== r.staffId || r.reasked) continue;
       if (!r.reaskAt) {
-        // Sem resposta, o revisor parado e passado o tempo da conversa órfã: a conversa morreu (ou nunca respondeu).
-        if (r.doneAt || at - Date.parse(r.at) <= ORPHAN_MS || !this.deps.isWorking || this.deps.isWorking(projectId, r.staffId)) continue;
+        // Sem resposta, a conversa do revisor parada e passado o tempo da conversa órfã: ela morreu (ou nunca respondeu). Olha só a conversa de revisão:
+        // ele pode estar trabalhando em outra (a revisão roda em paralelo), e isso não a mantém viva.
+        const working = this.deps.isSessionWorking ? this.deps.isSessionWorking(r.sessionId) : this.deps.isWorking?.(projectId, r.staffId);
+        if (r.doneAt || at - Date.parse(r.at) <= ORPHAN_MS || working !== false) continue;
         await this.change(projectId, t.id, (x) => (x.review?.sessionId === r.sessionId && !x.review.reaskAt && !x.review.doneAt ? { ...x, review: { ...x.review, reaskAt: new Date(at + REASK_AFTER_MS).toISOString() } } : x));
         continue;
       }
@@ -1465,7 +2152,9 @@ export class TaskService {
    */
   private staffBusy(projectId: string, tasks: Task[], staffId: string, own?: string): boolean {
     const idle = tasks.filter((t) => t.staffId === staffId && t.sessionId && !t.autoCreated && OCCUPIED.includes(t.status) && parked(t)).map((t) => t.sessionId!);
-    const except = own ? [...idle.filter((s) => s !== own), own] : idle;
+    // A revisão que ele faz roda em paralelo (não edita nada): não conta como trabalho, nem segura a fila dele nem o ajuste de outra tarefa dele.
+    const reviewing = reviewSessionsOf(tasks, staffId);
+    const except = [...idle.filter((s) => s !== own), ...(own ? [own] : []), ...reviewing.filter((s) => s !== own && !idle.includes(s))];
     return this.deps.isWorking?.(projectId, staffId, except.length > 1 ? except : except[0]) ?? false;
   }
 
@@ -1560,14 +2249,16 @@ export class TaskService {
 
   private async takeNext(projectId: string, staffId: string): Promise<void> {
     const tasks = (await this.list(projectId)) ?? [];
-    // A tarefa parada (dúvida escalada sem edição, ou com ajuste guardado esperando a vez dele) não ocupa: a próxima da fila começa, e o ajuste vai antes dela.
-    if (occupant(tasks, staffId) || this.staffBusy(projectId, tasks, staffId)) return;
+    // A tarefa parada (dúvida escalada sem edição, ou com a resposta dela guardada esperando a vez dele) não ocupa: a próxima da fila começa, e o ajuste vai antes dela.
+    // Quem ocupa (planejando ou fazendo) segura a fila; só o ajuste guardado dela própria pode ir, para a conversa que está rodando.
+    const occ = occupant(tasks, staffId);
     // Só o ajuste que pode ir agora: o que já falhou espera a hora da próxima tentativa, e o que falhou HELD_MAX_FAILS vezes espera você (ver `stuckState`).
     const at = Date.now();
     const sendable = (t: Task) => (t.held ?? []).filter((m) => (m.attempts ?? 0) < HELD_MAX_FAILS && (!m.nextAt || Date.parse(m.nextAt) <= at));
     const adjust = tasks
-      .filter((t) => t.staffId === staffId && t.sessionId && t.status !== 'cancelled' && sendable(t).length)
+      .filter((t) => t.staffId === staffId && t.sessionId && t.status !== 'cancelled' && (!occ || t.id === occ.id) && sendable(t).length)
       .sort((a, b) => sendable(a)[0]!.at.localeCompare(sendable(b)[0]!.at))[0];
+    if ((occ && !adjust) || this.staffBusy(projectId, tasks, staffId, adjust?.sessionId ?? undefined)) return;
     if (adjust && this.deps.sendTo) {
       const sid = adjust.sessionId!;
       const held = sendable(adjust);
@@ -1600,30 +2291,101 @@ export class TaskService {
         const sent = new Set(held.map((m) => m.id));
         // O ajuste é a tentativa corrente da tarefa (ou abre uma, se ela não tinha nenhuma aberta).
         const runId = await this.logStart(projectId, adjust, 'adjust');
-        await this.change(projectId, adjust.id, (t) => noted({ ...t, runId, held: (t.held ?? []).filter((m) => !sent.has(m.id)) }, 'ajuste guardado enviado'));
+        await this.change(projectId, adjust.id, (t) => {
+          const next = { ...t, runId, held: (t.held ?? []).filter((m) => !sent.has(m.id)) };
+          // A conversa voltou a trabalhar: o card em "a fazer" ou em Aguardar vai para fazendo, senão ela roda por fora do status (`occupant` não vê o
+          // funcionário ocupado e a retomada de queda, que olha "fazendo", não pega). Sai da fila: a conversa já tem a mensagem.
+          if (t.autoCreated || (t.status !== 'todo' && t.status !== 'waiting')) return noted(next, 'ajuste guardado enviado');
+          return moved({ ...next, queuedAt: null, queuedForce: false, resourceWait: null, startRetry: undefined, unqueued: undefined }, 'doing', 'auto', 'ajuste guardado enviado: a conversa voltou a trabalhar, a tarefa volta para fazendo');
+        });
         return;
       }
     }
-    // Bloqueada pula: a próxima desbloqueada da fila é a que começa (a checagem é aqui, na hora de começar).
-    const next = tasks.find((t) => t.staffId === staffId && t.status === 'todo' && t.queuedAt && !t.sessionId && !blockers(t, tasks).length);
-    if (!next) return;
+    // A que ocupa segue rodando: o ajuste que não foi (ou sem envio) não libera a fila dele.
+    if (occ) return;
+    // A fila dele na ordem de `queueCmp` (a posição de quem reordenou, depois a de entrada, `queuedAt`; empate: a ordem do quadro). Bloqueada pula (a checagem
+    // é aqui, na hora de começar), e a que falhou por motivo dela espera a hora da próxima tentativa (`startRetry`) sem segurar as outras. Com conversa
+    // (`sessionId`) é o card que voltou para "a fazer" depois de ter começado (ver `enqueueIdle`): a vez dele retoma essa conversa em vez de abrir outra.
+    const ready = tasks
+      .filter((t) => t.staffId === staffId && inQueue(t) && !heldFirst(t) && !blockers(t, tasks).length && (!t.startRetry || retryDue(t.startRetry, at)))
+      .sort(queueCmp);
+    if (!ready.length) return;
     const profile = await this.deps.readProfile(projectId, staffId);
     if (!profile) return;
-    // Só a partida automática passa pelo gate: começar à mão (start) ignora. Segurada, a tarefa fica na fila com o motivo.
-    const gate = await this.deps.resourceGate?.();
-    if (gate && !gate.ok) return this.holdForResources(projectId, next.id, gate.reason);
-    try {
-      // Passou: a espera acabou (sai já, para não ficar "aguardando" se o limite de consumo barrar a partida logo depois).
-      if (next.resourceWait) await this.change(projectId, next.id, (t) => ({ ...t, resourceWait: null }));
-      // Tarefa de rotina entra na fila com o gatilho 'routine' (a fila não muda o que a abriu).
-      await this.startNow(projectId, next.id, profile, !!next.queuedForce, undefined, { trigger: next.routineId ? 'routine' : 'queue' });
-    } catch (err) {
-      // Continua na fila (ex.: limite de consumo); "Começar" de novo tenta já. Sem repetir a nota a cada tick.
-      const why = `não começou: ${(err as Error).message}`;
-      await this.change(projectId, next.id, (t) => (t.history.at(-1)?.note === why ? t : noted(t, why)));
-    } finally {
-      gate?.release();
+    let lastWhy: string | null = null;
+    for (const next of ready) {
+      // A anterior pode ter aberto a conversa mesmo falhando (erro depois do envio): não abre outra por cima.
+      if (next !== ready[0] && this.staffBusy(projectId, tasks, staffId)) return;
+      // Só a partida automática passa pelo gate: começar à mão (start) ignora. Segurada, a tarefa fica na fila com o motivo. O gate vale para toda a fila: para aqui.
+      const gate = await this.deps.resourceGate?.();
+      if (gate && !gate.ok) return this.holdForResources(projectId, next.id, gate.reason);
+      try {
+        // Passou: a espera acabou (sai já, para não ficar "aguardando" se o limite de consumo barrar a partida logo depois).
+        if (next.resourceWait) await this.change(projectId, next.id, (t) => ({ ...t, resourceWait: null }));
+        // Tarefa de rotina entra na fila com o gatilho 'routine' (a fila não muda o que a abriu).
+        // Null: a tarefa saiu da fila no meio (cancelada, ou já começou); segue a próxima.
+        if (await (next.sessionId ? this.resumeTodo(projectId, next, profile) : this.startNow(projectId, next.id, profile, !!next.queuedForce, undefined, { trigger: next.routineId ? 'routine' : 'queue' }))) return;
+      } catch (err) {
+        const why = `não começou: ${(err as Error).message}`;
+        // Motivo da fila toda (consumo, reinício): só esta ganha a nota e a fila para, sem repetir a nota a cada tick; "Começar" de novo tenta já.
+        if (isGlobalStart(err)) {
+          await this.change(projectId, next.id, (t) => (t.history.at(-1)?.note === why ? t : noted(t, why)));
+          return;
+        }
+        // Motivo dela: continua na fila com a nota (uma vez) e a próxima tentativa com backoff; a próxima da fila segue neste tick.
+        await this.change(projectId, next.id, (t) => {
+          const marked = { ...t, startRetry: failedRetry(t.startRetry, err, new Date()) };
+          return t.history.at(-1)?.note === why ? marked : noted(marked, why);
+        });
+        // A mesma falha em duas seguidas: a causa não é da tarefa (ex.: a ficha ou o motor dele). Não varre a fila inteira atrás dela.
+        if (why === lastWhy) return;
+        lastWhy = why;
+      } finally {
+        gate?.release();
+      }
     }
+  }
+
+  /**
+   * A vez de um card que voltou para "a fazer" tendo já uma conversa (você o arrastou de volta, ou a conversa seguiu depois de uma parada): em vez de abrir
+   * outra, manda a retomada para a conversa dele, e o card vai para fazendo. Respeita a linha de parada de consumo como o início de uma tarefa (a menos que você
+   * tenha confirmado ao pôr na fila). Devolve null se a tarefa saiu de "a fazer" no meio. Erro: o `takeNext` cuida (backoff da tarefa, ou a fila toda espera).
+   */
+  private async resumeTodo(projectId: string, task: Task, profile: StaffProfile): Promise<Task | null> {
+    const sessionId = task.sessionId;
+    if (!sessionId) return null;
+    if (!this.deps.sendTo) throw new TaskError('sem envio para a conversa de trabalho');
+    const engine: Engine = task.fallback?.engine ?? (profile.engine === 'codex' ? 'codex' : 'claude');
+    const stop = task.queuedForce ? null : await this.deps.stopHit?.(projectId, profile.id, engine).catch(() => null);
+    if (stop) throw new UsageStopError(stop);
+    // A conversa pode ter morrido no meio de uma ação com efeito fora do projeto (push, deploy, comando no servidor): retomar sozinho poderia repeti-la.
+    // Mesma checagem da órfã: o corte já guardado (reinício ou retomada de turno) ou o que o transcript mostra agora. Segura para você (caixa de entrada)
+    // e o card vai para Aguardar; erro ao conferir: retoma como sempre. Teto de ferramentas/minutos e retomadas esgotadas não são efeito incerto.
+    const held = this.deps.turnCap?.(sessionId);
+    const cut = (held && (held.kind === 'restart' || (held.kind === 'retry' && held.why === 'cut')) ? held : null) ?? (await (this.deps.restartCut?.(projectId, sessionId) ?? Promise.resolve(null)).catch(() => null));
+    if (cut) {
+      await this.parkForCap(projectId, task.id, sessionId, cut);
+      return null;
+    }
+    const text = [
+      `[Tarefa "${task.title}"]`,
+      'A tarefa voltou para "A fazer" e chegou a sua vez: retome-a nesta conversa, de onde parou (o que já foi feito vale).',
+      ...(await this.requesterLines(projectId, task)),
+      task.description,
+      task.goal && `Meta: ${task.goal}`,
+      task.acceptance && `Critério de aceite: ${task.acceptance}`,
+      this.cancelLine(projectId, task, engine),
+      CLOSING_LINE,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+    await this.deps.sendTo(projectId, sessionId, profile.id, text, []);
+    const runId = await this.logStart(projectId, task, 'resume');
+    return this.change(projectId, task.id, (t) => {
+      if (t.status !== 'todo' || t.sessionId !== sessionId) return t;
+      const next: TaskStatus = profile.autonomy === 'plan' && !t.plan ? 'planning' : 'doing';
+      return moved({ ...t, queuedAt: null, queuedForce: false, resourceWait: null, startRetry: undefined, unqueued: undefined, runId }, next, 'auto', `retomada na fila, na conversa que ela já tinha, com ${profile.name}`);
+    });
   }
 
   /**
@@ -1736,7 +2498,8 @@ export class TaskService {
     ]
       .filter(Boolean)
       .join('\n\n');
-    const sessionId = await this.deps.send(projectId, reviewer.id, text, force);
+    // Só aprova ou reprova: a conversa abre sem edição de arquivo (ver `reviewOnly`) e não entra na fila de trabalho dele (ver `staffBusy`).
+    const sessionId = await this.deps.send(projectId, reviewer.id, text, force, undefined, true);
     this.bySession.set(sessionId, { projectId, taskId, role: 'review' });
     const at = new Date().toISOString();
     try {
@@ -1889,7 +2652,7 @@ export class TaskService {
         if (!this.deps.hasAsk?.(askSession, q.id)) throw gone();
         // Ele está em outra tarefa: a resposta espera a vez dele, como ajuste guardado, e chega à pergunta antes da fila (ver `takeNext`).
         // A pergunta continua pendente na conversa parada até lá (ela não conta como trabalho, ver `staffBusy`).
-        const held = await this.hold(askSession, { text: `Resposta ${from} à sua dúvida: ${answersText(answers)}`, ask: { requestId: q.id, answers, by } });
+        const held = await this.hold(askSession, { text: `Resposta ${from} à sua dúvida: ${answersText(answers)}`, ask: { requestId: q.id, answers, by }, doubt: true });
         if (!held && !this.deps.answerAsk?.(askSession, q.id, answers, by)) throw gone();
         return this.change(projectId, taskId, (t) => closeQuestion(t, q.id, by, answersText(answers)) ?? t);
       });
@@ -1906,7 +2669,7 @@ export class TaskService {
     return this.locked(projectId, staffId, async () => {
       // Na vez dele, de novo: cancelada ou já respondida por outro enquanto esperava, a resposta não vai para a conversa dela (nem fica guardada).
       this.stillOpen(await this.fresh(projectId, taskId), q.id);
-      if (!(await this.hold(work, { text: msg }))) await sendTo(projectId, work, staffId, msg, []);
+      if (!(await this.hold(work, { text: msg, doubt: true }))) await sendTo(projectId, work, staffId, msg, []);
       return this.change(projectId, taskId, (t) => closeQuestion(t, q.id, by, text) ?? t);
     });
   }
@@ -2312,12 +3075,26 @@ export class TaskService {
         await this.change(projectId, task.id, (t) => {
           if (!onDelivery(t, deliveryAt)) return t;
           const prev = t.reviewRetry?.deliveryAt === deliveryAt ? t.reviewRetry : undefined;
-          const next = { ...t, reviewRetry: { ...failedRetry(prev, err, new Date()), deliveryAt } };
+          // Vencida continua vencida: o aviso (nota, dependentes, gestor) saiu uma vez, e as tentativas seguintes não o repetem.
+          const next = { ...t, reviewRetry: { ...failedRetry(prev, err, new Date()), deliveryAt, ...(prev?.expired && { expired: true }) } };
           return prev ? next : noted(next, `revisão automática não começou: ${(err as Error).message}`);
         });
         return;
       }
-      await this.change(projectId, task.id, (t) => noted(t, `revisão automática não começou: ${(err as Error).message}`));
+      // O que não passa sozinho (ficha, revisor, conflito de estado) vira aviso já, com o motivo na caixa (`stuckState`): a tarefa não fica em "revisão"
+      // sem ninguém saber. O tick ainda confere de vez em quando (`retryReviews`): o dono pode ter trocado o revisor, e a revisão abre sem ele empurrar.
+      let first = false;
+      let flagged: Task | null = null;
+      await this.change(projectId, task.id, (t) => {
+        if (!onDelivery(t, deliveryAt)) return t;
+        const prev = t.reviewRetry?.deliveryAt === deliveryAt ? t.reviewRetry : undefined;
+        first = !prev;
+        const next = { ...t, reviewRetry: { ...failedRetry(prev, err, new Date()), deliveryAt, expired: true } };
+        return (flagged = prev ? next : noted(next, `revisão automática não começou: ${(err as Error).message}`));
+      });
+      const stuck = flagged as Task | null;
+      if (!stuck || !first) return;
+      this.warnDependents(projectId, stuck.id, stuckReason(stuck));
       // Quem pediu ia revisar e a revisão não começou: ele ainda tem de saber da entrega, como antes.
       if (selfReview(task) && task.sessionId) await this.tellManager(projectId, task, task.sessionId);
     }
@@ -2340,6 +3117,8 @@ export class TaskService {
     await this.edits.get(sessionId);
     const where = await this.where(sessionId);
     if (where?.role !== 'work') return;
+    // Turno que falhou por causa passageira: a decisão de retomar (marcar a retomada, ou segurar a conversa para você) sai antes de ler o que vem abaixo.
+    await this.deps.settleRetry?.(sessionId).catch(() => {});
     // Parou no teto de ferramentas ou de minutos: não é entrega (nem revisão). Vai para Aguardar, com o motivo, e a fila anda.
     // Card automático não: o teto só encerrou o turno da conversa direta, e o que ela alterou vai para revisão.
     const cap = where.auto ? null : this.deps.turnCap?.(sessionId);
@@ -2361,52 +3140,92 @@ export class TaskService {
     if (!staffId) return;
     // Dúvida ao gestor (ver doubtHeld): com `DÚVIDA:` ou pergunta por opções aberta, a tarefa não entrega agora.
     if (await this.doubtHeld(where.projectId, current, sessionId)) return;
-    // Na vez dele: a próxima tarefa só começa depois que a entrega desta tem o seu commit.
-    const deliveredTask = await this.locked(where.projectId, staffId, async () => {
-      let delivered: Task | null = null;
-      const seen: { before?: Task } = {};
-      // Confere de novo, lá dentro: o estado pode ter mudado enquanto esperava a vez.
-      await this.change(where.projectId, where.taskId, (t) => {
-        if (t.status !== 'doing' || t.sessionId !== sessionId) return t;
-        seen.before = t;
-        return (delivered = moved({ ...t, runId: null }, 'review', 'auto', 'turno terminou'));
+    // A chave vale da entrega até o pedido de revisão: com a tarefa já em "revisão" e os testes rodando (minutos), o `tick` não a toma por
+    // perdida (ver `resumeReviews`). Quem já a tem (outro aviso do mesmo turno) a solta; este só solta a que pegou.
+    const key = `review:${where.projectId}:${where.taskId}`;
+    const owns = !this.inFlight.has(key);
+    if (owns) this.inFlight.add(key);
+    try {
+      // Na vez dele: a próxima tarefa só começa depois que a entrega desta tem o seu commit.
+      const deliveredTask = await this.locked(where.projectId, staffId, async () => {
+        let delivered: Task | null = null;
+        const seen: { before?: Task } = {};
+        // Confere de novo, lá dentro: o estado pode ter mudado enquanto esperava a vez.
+        await this.change(where.projectId, where.taskId, (t) => {
+          if (t.status !== 'doing' || t.sessionId !== sessionId) return t;
+          seen.before = t;
+          return (delivered = moved({ ...t, runId: null }, 'review', 'auto', TURN_ENDED));
+        });
+        if (delivered) {
+          await this.logEnd(where.projectId, seen.before, 'delivered');
+          await this.markDelivery(where.projectId, delivered);
+          delivered = await this.recordDelivery(where.projectId, delivered, sessionId);
+          // Pedida por um gestor: o Claudio’s Club roda os testes antes de avisar, e o gestor não gasta a conversa
+          // dele (a mais longa e cara) rodando de novo.
+          const tests = (delivered as Task).requestedBy ? await this.deliveryTests(where.projectId, delivered) : null;
+          if (tests) delivered = (await this.change(where.projectId, where.taskId, (t) => ({ ...t, tests }))) ?? delivered;
+          // Quem pediu é quem revisa: o aviso sai no desfecho da revisão automática (ver autoReview), não na entrega.
+          if (!selfReview(delivered)) await this.tellManager(where.projectId, delivered, sessionId);
+        }
+        return delivered as Task | null;
       });
-      if (delivered) {
-        await this.logEnd(where.projectId, seen.before, 'delivered');
-        await this.markDelivery(where.projectId, delivered);
-        delivered = await this.recordDelivery(where.projectId, delivered, sessionId);
-        // Pedida por um gestor: o Claudio’s Club roda os testes antes de avisar, e o gestor não gasta a conversa
-        // dele (a mais longa e cara) rodando de novo.
-        const tests = (delivered as Task).requestedBy ? await this.deliveryTests(where.projectId, delivered) : null;
-        if (tests) delivered = (await this.change(where.projectId, where.taskId, (t) => ({ ...t, tests }))) ?? delivered;
-        // Quem pediu é quem revisa: o aviso sai no desfecho da revisão automática (ver autoReview), não na entrega.
-        if (!selfReview(delivered)) await this.tellManager(where.projectId, delivered, sessionId);
-      }
-      return delivered as Task | null;
-    });
-    void this.kick(where.projectId, staffId);
-    // Fora da vez dele: a revisão automática (com revisor marcado) é pedida depois da entrega.
-    if (deliveredTask) await this.autoReview(where.projectId, deliveredTask);
+      void this.kick(where.projectId, staffId);
+      // Fora da vez dele: a revisão automática (com revisor marcado) é pedida depois da entrega.
+      if (deliveredTask) await this.autoReview(where.projectId, deliveredTask);
+    } finally {
+      if (owns) this.inFlight.delete(key);
+    }
   }
 
   /**
    * Turno da tarefa parou no teto: ela sai de "fazendo" para Aguardar, com o motivo (sem commit, sem revisão, sem aviso ao
-   * gestor). Só se ainda estiver "fazendo" com esta conversa. Devolve a tarefa, se foi para Aguardar agora.
+   * gestor). Só se ainda estiver "fazendo" (ou em "a fazer", o card cuja conversa trabalhou por fora do status, ver `resumeTodo`) com esta
+   * conversa. Devolve a tarefa, se foi para Aguardar agora.
    */
   private async parkForCap(projectId: string, taskId: string, sessionId: string, hit: TurnCapHit): Promise<Task | null> {
-    const why = capReason(hit);
+    return this.parkWaiting(projectId, taskId, sessionId, capReason(hit), 'auto', 'limit', ['doing', 'todo']);
+  }
+
+  /**
+   * Passa a tarefa de `from` (com esta conversa) para Aguardar, com o motivo; fecha a tentativa no registro (`outcome`) e avisa os dependentes.
+   * Vale também quando a órfã cai aqui (dentro de `locked`): o aviso não espera a vez do funcionário. Devolve a tarefa, se foi para Aguardar agora.
+   */
+  private async parkWaiting(
+    projectId: string,
+    taskId: string,
+    sessionId: string,
+    why: string,
+    by: 'you' | 'auto',
+    outcome: RunOutcome,
+    from: readonly TaskStatus[],
+    skip?: (t: Task) => boolean,
+  ): Promise<Task | null> {
     let parked: Task | null = null;
     const seen: { before?: Task } = {};
     await this.change(projectId, taskId, (t) => {
-      if (t.status !== 'doing' || t.sessionId !== sessionId) return t;
+      if (!from.includes(t.status) || t.sessionId !== sessionId || skip?.(t)) return t;
       seen.before = t;
-      parked = moved({ ...t, queuedAt: null, waitReason: why, runId: null }, 'waiting', 'auto', why);
+      parked = moved({ ...t, queuedAt: null, waitReason: why, runId: null }, 'waiting', by, why);
       return parked;
     });
-    // Vale também quando a órfã cai aqui (dentro de `locked`): o aviso não espera a vez do funcionário.
     const back = parked as Task | null;
     if (back) this.warnDependents(projectId, taskId, stuckReason(back));
-    if (parked) await this.logEnd(projectId, seen.before, 'limit', why);
+    if (parked) await this.logEnd(projectId, seen.before, outcome, why);
+    return parked;
+  }
+
+  /**
+   * Você fechou a conversa de trabalho de uma tarefa enquanto ela trabalhava (ver `ChatManager.close`): a tarefa vai para Aguardar, com a nota,
+   * ANTES de o processo sair. Sem isso a saída contaria como fim de turno e entregaria a tarefa para revisão, e a órfã a reabriria sozinha.
+   * Fica como está: card automático (a conversa é direta), conversa de revisão ou deploy, e a tarefa com dúvida aberta (a conversa só espera a
+   * resposta, e a resposta a reabre). A fila do funcionário anda. Devolve a tarefa, se foi para Aguardar.
+   */
+  async parkClosed(sessionId: string): Promise<Task | null> {
+    const where = await this.where(sessionId);
+    if (where?.role !== 'work' || where.auto) return null;
+    const asking = (t: Task) => t.question?.status === 'open' || t.question?.status === 'escalated';
+    const parked = await this.parkWaiting(where.projectId, where.taskId, sessionId, CLOSED_BY_YOU, 'you', 'stopped', ['doing', 'planning', 'todo'], asking);
+    if (parked?.staffId) void this.kick(where.projectId, parked.staffId);
     return parked;
   }
 
@@ -2664,7 +3483,7 @@ export class TaskService {
     const file = tasksFile(dir);
     const prev = this.queues.get(file) ?? Promise.resolve();
     const run = prev.then(async () => {
-      const next = clearBlockAlerts(fn(await readTasks(dir)));
+      const next = clearStaleRanks(clearBlockAlerts(fn(await readTasks(dir))));
       await writeAtomic(file, JSON.stringify(next, null, 2) + '\n');
     });
     this.queues.set(file, run.catch(() => {}));
@@ -2781,6 +3600,21 @@ export interface StuckState {
 }
 
 /**
+ * A tarefa espera o limite do motor da ficha baixar (`fallbackBlocked`, ver `startPlan`): a troca não serve agora. Vale até `until`
+ * passar (ou sem `until`, até a partida ou o cancelamento limpar). Sem humanAction: a fila se destrava sozinha quando o limite baixa.
+ */
+function fallbackWait(t: Task, now: number): StuckState | null {
+  const fb = t.fallbackBlocked;
+  if (!fb || (fb.until !== null && now >= Date.parse(fb.until))) return null;
+  return {
+    reason: `espera o limite do ${ENGINE_LABEL[fb.from]} baixar: a troca para o ${ENGINE_LABEL[fb.engine]} não serve agora (${FALLBACK_MOTIVO[fb.reason]}: ${fb.detail})`,
+    selfHeals: true,
+    humanAction: null,
+    since: fb.since,
+  };
+}
+
+/**
  * Por que a tarefa está parada, e quem a destrava (ou null, se não está). É a regra única: a caixa (kinds 'blocked', 'question' e
  * 'stuck') a lê na leitura, o aviso aos gestores usa o mesmo texto (`stuckReason`) e o aviso retido a quem pediu confere `selfHeals`
  * (ver `settleRequester`). Só o estado gravado e a hora (`now`) contam. Cancelada, Aguardar, dúvida escalada, ajuste que não chega,
@@ -2797,12 +3631,15 @@ export function stuckState(t: Task, now = Date.now()): StuckState | null {
     // Ainda não chegou ao gestor, mas o retry está em andamento (passados ESCALATE_AFTER_MS ela vira escalada).
     if (q.pending && !q.managerSession) return { reason: 'dúvida a caminho do gestor (nova tentativa em andamento)', selfHeals: true, humanAction: null, since: q.pending.firstAt };
   }
+  // Depois da dúvida (ela vence), antes dos outros: a espera do limite do motor da ficha (ver `fallbackWait`).
+  const wait = fallbackWait(t, now);
+  if (wait) return wait;
   const stale = t.held?.find((m) => (m.attempts ?? 0) >= HELD_MAX_FAILS);
   if (stale) return { reason: 'ajuste guardado não chega ao funcionário', selfHeals: false, humanAction: 'resend', since: stale.at };
   if (t.status !== 'review') return null;
   const rr = t.reviewRetry;
   if (rr && (rr.expired || now - Date.parse(rr.firstAt) >= REVIEW_WAIT_MS))
-    return { reason: 'a revisão automática não começou', selfHeals: false, humanAction: 'review', since: rr.firstAt };
+    return { reason: `a revisão automática não começou${rr.lastError ? `: ${rr.lastError}` : ''}`, selfHeals: false, humanAction: 'review', since: rr.firstAt };
   // O revisor foi re-pedido uma vez e segue sem veredito: respondeu de novo sem ele, ou não respondeu em REVIEW_WAIT_MS.
   const r = t.review;
   if (t.reviewerId && r && t.reviewerId === r.staffId && r.reasked && !r.verdict && r.reaskAt && ((r.doneAt && r.doneAt > r.reaskAt) || now - Date.parse(r.reaskAt) >= REVIEW_WAIT_MS))
@@ -2822,20 +3659,24 @@ export const stuckReason = (t: Task): string | null => stuckState(t)?.reason ?? 
 /** Uma tarefa que só você destrava e tem aviso próprio na caixa (ver `ownAlerts`). */
 export interface OwnAlert {
   task: Task;
-  state: StuckState & { humanAction: 'answer' | 'review' | 'resend' };
+  /** `humanAction` null: a espera do limite da ficha (ver `fallbackWait`), sem ação sua; o aviso sai para você ver, e some sozinho. */
+  state: StuckState & { humanAction: 'answer' | 'review' | 'resend' | null };
 }
 
 /**
  * As tarefas do quadro que só você destrava e têm aviso próprio na caixa: dúvida escalada (kind 'question') e revisão ou ajuste parados
- * (kind 'stuck'). Aguardar, limite de revisões e sem responsável aparecem só para quem as espera (kind 'blocked'): o dono as parou, ou já
- * as vê no quadro. Tarefa encerrada não entra.
+ * (kind 'stuck'), e a espera do limite da ficha (kind 'stuck', sem ação sua). Aguardar, limite de revisões e sem responsável aparecem só
+ * para quem as espera (kind 'blocked'): o dono as parou, ou já as vê no quadro. Tarefa encerrada não entra.
  */
 export function ownAlerts(tasks: Task[], now = Date.now()): OwnAlert[] {
   const out: OwnAlert[] = [];
   for (const task of tasks) {
     if (isClosed(task)) continue;
     const state = stuckState(task, now);
-    if (state && (state.humanAction === 'answer' || state.humanAction === 'review' || state.humanAction === 'resend')) out.push({ task, state: { ...state, humanAction: state.humanAction } });
+    if (!state) continue;
+    if (state.humanAction === 'answer' || state.humanAction === 'review' || state.humanAction === 'resend') out.push({ task, state: { ...state, humanAction: state.humanAction } });
+    // A dúvida "a caminho do gestor" também tem humanAction null: só a espera do limite entra (é a mesma razão que `stuckState` deu).
+    else if (state.humanAction === null && fallbackWait(task, now)?.reason === state.reason) out.push({ task, state: { ...state, humanAction: null } });
   }
   return out;
 }
@@ -2864,6 +3705,9 @@ function withReask(t: Task): Task {
 const capNote = (n: number) => `limite de ${n} revisões automáticas; o que sobrou fica com você: aceitar como trade-off (anotar em "Decisões" no SPEC.md) ou pedir ajuste`;
 /** Reconhece a nota do limite de qualquer época (o N muda: 2 no limite antigo, 3 hoje); ver `stuckReason`. */
 const CAP_NOTE = /^limite de \d+ revisões automáticas;/;
+
+/** O motivo (e a nota do histórico) da tarefa que foi para Aguardar porque você fechou a conversa dela no meio do turno (ver `parkClosed`). */
+export const CLOSED_BY_YOU = 'conversa fechada por você';
 
 /**
  * O que ficou de quem esperava a tarefa cancelada (`direct`: as abertas que dependiam dela, de antes da escolha do dono), lido do quadro
@@ -3020,8 +3864,78 @@ export function releasesStaff(t: Task): boolean {
   return t.question?.status === 'escalated' && !t.changedFiles?.length && !t.checkpoint;
 }
 
-/** Parada sem prender o funcionário: espera a sua resposta (`releasesStaff`) ou tem ajuste guardado esperando a vez dele (a resposta que chegou com ele em outra tarefa). */
-const parked = (t: Task): boolean => releasesStaff(t) || !!t.held?.length;
+/**
+ * Parada sem prender o funcionário: espera a sua resposta (`releasesStaff`) ou guarda a resposta da dúvida que chegou com ele em outra tarefa
+ * (`HeldMessage.doubt`; sem isso a própria pausada viraria a ocupante). O ajuste comum não conta: a conversa dela pode estar com o turno rodando.
+ */
+const parked = (t: Task): boolean => releasesStaff(t) || !!t.held?.some((m) => m.doubt);
+
+/**
+ * Card em "a fazer" que nada segura e que está fora da fila (ver `enqueueIdle`): com responsável, sem dependência pendente, sem dúvida aberta e que você não tirou
+ * da fila de propósito. Aguardar nunca entra (a coluna é outra).
+ */
+function idleTodo(t: Task, all: Task[]): boolean {
+  return t.status === 'todo' && !!t.staffId && !t.queuedAt && !t.unqueued && !heldFirst(t) && !blockers(t, all).length && !(t.question && t.question.status !== 'answered');
+}
+
+/** Card com conversa e ajuste guardado: quem retoma a conversa é o ajuste (ver `takeNext`), não a vez da fila, que mandaria a retomada por cima dele. */
+const heldFirst = (t: Task): boolean => !!t.sessionId && !!t.held?.length;
+
+/** As conversas de revisão que `staffId` conduz (de qualquer rodada ou tarefa): rodam em paralelo com o trabalho dele, que não espera por elas (ver `staffBusy`). */
+function reviewSessionsOf(tasks: Task[], staffId: string): string[] {
+  const ids = new Set<string>();
+  for (const t of tasks) {
+    if (t.review?.staffId === staffId && t.review.sessionId) ids.add(t.review.sessionId);
+    for (const s of t.sessions ?? []) if (s.role === 'review' && s.staffId === staffId) ids.add(s.id);
+  }
+  return [...ids];
+}
+
+/** Está na fila do responsável: em "a fazer", com responsável e a hora em que entrou. */
+const inQueue = (t: Task): boolean => t.status === 'todo' && !!t.staffId && !!t.queuedAt;
+
+/**
+ * A ordem em que a fila anda: quem tem posição (`queueRank`, de uma reordenação) vem antes de quem não tem, que entrou depois e segue por `queuedAt`.
+ * Empate: a ordem do quadro (o `sort` é estável). Só para card na fila (`inQueue`). `Infinity - Infinity` é NaN: cai no `queuedAt`, como queremos.
+ */
+const queueCmp = (a: Task, b: Task): number => (a.queueRank ?? Infinity) - (b.queueRank ?? Infinity) || a.queuedAt!.localeCompare(b.queuedAt!);
+
+/** A fila de um funcionário na ordem em que anda. Inclui as bloqueadas e as esperando nova tentativa: o `takeNext` só as pula na hora de começar. */
+const queueOf = (tasks: Task[], staffId: string): Task[] => tasks.filter((t) => t.staffId === staffId && inQueue(t)).sort(queueCmp);
+
+/** `Task.queuePos` de cada card que está em alguma fila (1 = a próxima do funcionário). */
+function queuePositions(tasks: Task[]): Map<string, number> {
+  const pos = new Map<string, number>();
+  for (const staffId of new Set(tasks.filter(inQueue).map((t) => t.staffId!))) queueOf(tasks, staffId).forEach((t, i) => pos.set(t.id, i + 1));
+  return pos;
+}
+
+/**
+ * A fila depois de mover `id`. `scope` diz quais cards entram no movimento: o usuário move entre todos; o gestor, só entre os dele (`step`: o card troca
+ * de lugar com o dele mais próximo, e a posição dos outros cards não muda). null: nada a mudar (já está lá, ou não há outro card dele). TaskError: posição fora da fila.
+ */
+function reordered(queue: Task[], id: string, o: TaskOrder, scope: (t: Task) => boolean): Task[] | null {
+  const from = queue.findIndex((t) => t.id === id);
+  const out = [...queue];
+  if (o.step) {
+    const slots = queue.flatMap((t, i) => (scope(t) ? [i] : []));
+    const other = slots[slots.indexOf(from) + (o.step === 'up' ? -1 : 1)];
+    if (other === undefined) return null;
+    [out[from], out[other]] = [out[other]!, out[from]!];
+    return out;
+  }
+  const to = o.to === 'top' ? 0 : (o.to as number) - 1;
+  if (to >= queue.length) throw new TaskError(`posição de 1 a ${queue.length}: esta fila tem ${queue.length} ${queue.length === 1 ? 'tarefa' : 'tarefas'}`);
+  if (to === from) return null;
+  out.splice(from, 1);
+  out.splice(to, 0, queue[from]!);
+  return out;
+}
+
+/** A posição na fila só existe com o card na fila: ao sair (começou, cancelada, tirada, outra coluna ou responsável), ela sai junto, e a volta é para o fim. */
+function clearStaleRanks(tasks: Task[]): Task[] {
+  return tasks.map((t) => (t.queueRank !== undefined && !inQueue(t) ? { ...t, queueRank: undefined } : t));
+}
 
 /** A tarefa que ocupa o funcionário (planejando ou fazendo, com conversa aberta), fora `except`. O card automático não ocupa: é só o registro de uma conversa direta. A parada (`parked`) também não. */
 function occupant(tasks: Task[], staffId: string, except?: string): Task | undefined {
@@ -3100,6 +4014,21 @@ function outcomeLine(t: Task): string {
 
 /** A tarefa continua em "revisão" e na entrega de `deliveryAt` (`delivery.at`)? Marca do que uma revisão automática em voo pode gravar. */
 const onDelivery = (t: Task, deliveryAt: string | null): boolean => t.status === 'review' && (t.delivery?.at ?? null) === deliveryAt;
+/**
+ * A entrega em "revisão" que ninguém pediu para revisar (ver `resumeReviews`): a tarefa entrou em revisão pelo fim do turno (a que parou pela
+ * metade, `orphan`, e a que você arrastou não pedem revisão sozinhas), tem entrega gravada, e não há revisão pedida a ela (`review` mais
+ * velho que a entrega é de uma rodada anterior), nem retry, nem a nota de que o pedido falhou ou parou no limite, e o limite de rodadas não chegou. Quem revisa
+ * (ou se ninguém) é `reviewerOf`, que o chamador confere.
+ */
+function reviewLost(t: Task): boolean {
+  const d = t.delivery;
+  if (t.status !== 'review' || !d || t.reviewRetry || (t.reviewRounds ?? 0) >= AUTO_REVIEW_ROUNDS) return false;
+  if (t.review && t.review.at >= d.at) return false;
+  // O pedido já foi decidido para esta entrega: falhou de vez ("não começou") ou parou no limite (a nota do limite, de qualquer época, fica com o dono).
+  if (t.history.some((h) => h.at >= d.at && (h.note?.startsWith('revisão automática não começou') || CAP_NOTE.test(h.note ?? '')))) return false;
+  const entered = t.history.filter((h, i) => h.status === 'review' && t.history[i - 1]?.status !== 'review').at(-1);
+  return entered?.by === 'auto' && entered.note === TURN_ENDED;
+}
 const selfReview = (t: Task) =>!!t.reviewerId && t.reviewerId === t.requestedBy;
 
 /** O resultado dos testes da entrega, em linhas para o aviso (vazio sem testes). */
@@ -3116,32 +4045,138 @@ function cleanReason(reason: string | null | undefined): string | null {
   return one || null;
 }
 
+/** O motivo que quem cancela, pede o cancelamento ou recusa precisa dar: vazio é TaskError (400). `what`: "do pedido de cancelamento", "da recusa"… */
+function mandatoryReason(reason: string | null | undefined, what: string): string {
+  const clean = cleanReason(reason);
+  if (!clean) throw new TaskError(`reason: diga o motivo ${what}`);
+  return clean;
+}
+
+/** As rotas do cancelamento, para o 409 e o texto do pedido dizerem onde ir. */
+const CANCEL_ROUTE = (projectId: string, taskId: string) => `/api/projects/${projectId}/tasks/${taskId}/cancel`;
+const CANCEL_REQUEST_ROUTE = (projectId: string, taskId: string) => `/api/projects/${projectId}/tasks/${taskId}/cancel-request`;
+
+/** O funcionário que chama, pelo token da conversa dele e neste projeto; sem isso, 403 (TaskForbiddenError). `what`: o que ele não pode fazer sem token. */
+function staffOfCaller(caller: Caller | null, projectId: string, what: string): string {
+  if (!caller?.staffId || caller.projectId !== projectId) throw new TaskForbiddenError(`só um funcionário, com o token da conversa dele (x-myco-token), ${what}`);
+  return caller.staffId;
+}
+
+/** `caller` é o responsável pela tarefa e fala pela conversa ATUAL dela (a de trabalho, `sessionId`), neste projeto? A regra do `cancelFrom` e da recusa do pedido. */
+function isWorkerOf(t: Task, caller: Caller | null, projectId: string): boolean {
+  return !!caller?.staffId && caller.projectId === projectId && caller.staffId === t.staffId && !!t.sessionId && caller.sessionId === t.sessionId;
+}
+
+/**
+ * A tarefa NUNCA começou: em Aguardar ou A fazer, sem conversa agora e sem nenhum sinal de que alguma vez trabalhou. Só a coluna não diz: Aguardar também é o
+ * trabalho parado no limite ou por você, e A fazer é também a cancelada que foi reaberta ou a que perdeu a conversa. Por isso olha tudo o que a partida e o
+ * trabalho deixam: conversas (`sessions`, `sessionId`), tentativa (`runId`), plano, entrega, revisão, deploy, mesclagem, arquivos alterados, commit da entrega,
+ * dúvida, mensagem guardada e o histórico (alguma vez planejando, fazendo, em revisão ou pronta). O histórico guarda só as 30 últimas mudanças, e por isso é
+ * um sinal a mais, não o único.
+ */
+function neverStarted(t: Task): boolean {
+  if (t.status !== 'waiting' && t.status !== 'todo') return false;
+  if (t.sessionId || t.sessions?.length || t.runId || t.plan || t.delivery || t.review || t.deploy || t.merged || t.checkpoint || t.question || t.held?.length || t.changedFiles?.length) return false;
+  return !t.history.some((h) => h.status === 'planning' || h.status === 'doing' || h.status === 'review' || h.status === 'done');
+}
+
+/** O pedido de cancelamento precisa ser (re)entregue? Esperando decisão, tarefa aberta com responsável e conversa, e ainda não entregue nesta conversa neste processo. */
+function cancelDeliveryDue(t: Task, bootedAt: number): boolean {
+  const cr = t.cancelRequest;
+  if (cr?.status !== 'pending' || isClosed(t) || !t.staffId || !t.sessionId) return false;
+  // Entregue antes de este processo subir (o reinício pode ter perdido a mensagem) ou em outra conversa (a troca de motor abriu uma nova): vale entregar de novo.
+  return !cr.deliveredAt || cr.deliveredSession !== t.sessionId || Date.parse(cr.deliveredAt) < bootedAt;
+}
+
+/** A impressão do conteúdo de um pedido de criar (para a chave de idempotência): o mesmo conteúdo, a mesma impressão; qualquer campo diferente, outra. */
+function contentHash(input: z.output<typeof TaskInput>, sentReviewer: boolean): string {
+  const parts = [input.title, input.description, input.goal ?? null, input.acceptance ?? null, input.staffId, input.reviewerId, sentReviewer, [...input.blockedBy].sort(), input.start];
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 32);
+}
+
+/** A tarefa que um pedido anterior criou com esta chave, ou undefined. Mesma chave com outro conteúdo: 409 (TaskConflictError), nunca uma tarefa nova. */
+function replayOf(tasks: Task[], key: NonNullable<Task['createKey']>): Task | undefined {
+  const same = tasks.find((t) => t.createKey?.by === key.by && t.createKey.key === key.key);
+  if (same && same.createKey!.hash !== key.hash)
+    throw new TaskConflictError(`a idempotencyKey “${key.key}” já criou a tarefa ${same.id} com outro conteúdo: use outra chave para uma tarefa nova, ou repita o pedido igual ao primeiro`);
+  return same;
+}
+
+/** O título sem acento, maiúscula nem pontuação, em palavras. */
+const titleWords = (title: string): string[] =>
+  title
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+
+/** Dois títulos de tarefa quase iguais: as mesmas palavras, ou uma sobreposição de 80% ou mais (com pelo menos 3 palavras no menor), que pega o "complemento" ao título. */
+function similarTitle(a: string, b: string): boolean {
+  const x = titleWords(a);
+  const y = titleWords(b);
+  if (!x.length || !y.length) return false;
+  if (x.join(' ') === y.join(' ')) return true;
+  const small = x.length <= y.length ? x : y;
+  const big = new Set(x.length <= y.length ? y : x);
+  return small.length >= 3 && small.filter((w) => big.has(w)).length / small.length >= 0.8;
+}
+
+/**
+ * As tarefas do mesmo solicitante ao mesmo responsável, criadas há pouco (DUPLICATE_WINDOW_MS) com título parecido, em qualquer coluna (a primeira de um retry pode já ter
+ * ido para qualquer lugar): só um aviso, a tarefa nova é criada. Rotina e card automático não contam (não têm solicitante a repetir). Sem responsável, sem aviso.
+ */
+function duplicatesOf(tasks: Task[], created: Task, at: number): TaskCreateWarning[] {
+  if (!created.staffId) return [];
+  return tasks
+    .filter((t) => t.id !== created.id && t.staffId === created.staffId && (t.requestedBy ?? null) === (created.requestedBy ?? null) && !t.autoCreated && !t.routineId)
+    .filter((t) => at - Date.parse(t.createdAt) <= DUPLICATE_WINDOW_MS && similarTitle(t.title, created.title))
+    .slice(-DUPLICATES_SHOWN)
+    .map((t) => ({
+      code: 'possible-duplicate' as const,
+      message: `possível duplicata de “${t.title}” (id ${t.id}, em ${COLUMN_NAME[t.status]}, criada há ${Math.max(0, Math.round((at - Date.parse(t.createdAt)) / 60_000))} min): se este pedido é um retry, repita a mesma idempotencyKey em vez de criar outra tarefa; se foi engano, cancele a nova (id ${created.id}, POST .../tasks/${created.id}/cancel com o motivo).`,
+      taskId: t.id,
+      title: t.title,
+      status: t.status,
+      createdAt: t.createdAt,
+    }));
+}
+
 /**
  * A tarefa cancelada: fora da fila, sem tentativa aberta nem mensagens guardadas, com a dúvida em aberto (se havia) fechada. Fica como
  * estava o que é histórico (conversa, branch, entrega, revisão), para consultar ou reabrir.
  */
 function cancelledTask(t: Task, by: string, reason: string | null): Task {
-  const base = moved(t, 'cancelled', by === 'user' ? 'you' : 'auto', reason ? `cancelada: ${reason}` : 'cancelada');
+  // Havia um pedido de cancelamento esperando decisão: cancelar (quem faz a tarefa, ou você pela tela) é aceitá-lo.
+  const asked = t.cancelRequest?.status === 'pending' ? t.cancelRequest : null;
+  const note = `${reason ? `cancelada: ${reason}` : 'cancelada'}${asked ? ' (pedido de cancelamento aceito)' : ''}`;
+  const base = moved(t, 'cancelled', by === 'user' ? 'you' : 'auto', note);
   const open = base.question && base.question.status !== 'answered' ? base.question : null;
   return {
     ...base,
+    ...(asked && { cancelRequest: { ...asked, status: 'accepted' as const, decidedAt: base.updatedAt, decidedBy: by, waiting: undefined, retry: undefined } }),
     cancelledAt: base.updatedAt,
     cancelReason: reason,
     cancelledBy: by,
     queuedAt: null,
     queuedForce: false,
     resourceWait: null,
+    fallbackBlocked: undefined,
+    startRetry: undefined,
     runId: null,
     ...(base.held?.length && { held: [] }),
     ...(open && { question: { ...open, status: 'answered' as const, answeredBy: 'user' as const, answeredAt: base.updatedAt, answer: 'tarefa cancelada' } }),
   };
 }
 
-/** A cancelada de volta em "a fazer": sem os campos do cancelamento e sem a conversa antiga (ver `TaskService.reopen`). */
+/**
+ * A cancelada de volta em "a fazer": sem os campos do cancelamento e sem a conversa antiga (ver `TaskService.reopen`). Reabrir não começa sozinha (`unqueued`): você
+ * reabre para olhar, e o "Começar" é seu.
+ */
 function reopenedTask(t: Task): Task {
-  const { cancelledAt: _a, cancelReason: _r, cancelledBy: _b, ...rest } = t;
+  const { cancelledAt: _a, cancelReason: _r, cancelledBy: _b, cancelRequest: _c, ...rest } = t;
   const base = moved(rest, 'todo', 'you', 'reaberta');
-  return { ...base, sessionId: null, runId: null, fallback: undefined, held: [], queuedAt: null, queuedForce: false, resourceWait: null, blockAlert: null };
+  return { ...base, sessionId: null, runId: null, fallback: undefined, held: [], queuedAt: null, queuedForce: false, resourceWait: null, fallbackBlocked: undefined, startRetry: undefined, unqueued: true, blockAlert: null };
 }
 
 /** Tira `blockerId` das dependências canceladas que o dono mandou continuar esperando (a lista some quando fica vazia). */
@@ -3157,6 +4192,24 @@ const ACK_CANCELLED_MS = ACK_CANCELLED_DAYS * 24 * 60 * 60 * 1000;
 function acked(t: Task, blockerId: string, now = Date.now()): boolean {
   return !!t.ackCancelled?.some((a) => a.id === blockerId && now - Date.parse(a.at) < ACK_CANCELLED_MS);
 }
+
+/**
+ * A troca para o secundário não serve agora (`fallbackBlocked`): o motivo sai do erro da pré-checagem (`CapabilityError`), e o resto é
+ * 'other'. `since` fica o da espera anterior, se o motivo e o motor não mudaram (a nota e a hora não se repetem a cada tick).
+ */
+function blockedOf(err: unknown, engine: Engine, from: Engine, until: string | null, prev?: Task['fallbackBlocked']): NonNullable<Task['fallbackBlocked']> {
+  const reason = err instanceof CapabilityError ? err.reason : 'other';
+  const same = prev && prev.reason === reason && prev.engine === engine;
+  return { reason, detail: (err as Error).message, engine, from, since: same ? prev.since : new Date().toISOString(), until };
+}
+
+/** O motivo de `fallbackBlocked` em pt-BR, no texto da parada (ver `fallbackWait`). */
+const FALLBACK_MOTIVO: Record<NonNullable<Task['fallbackBlocked']>['reason'], string> = {
+  sandbox: 'sandbox indisponível',
+  agents: 'agents indisponíveis',
+  model: 'modelo indisponível',
+  other: 'não abre',
+};
 
 /** Uma linha no histórico, sem mudar de coluna. */
 function noted(t: Task, note: string): Task {
@@ -3182,7 +4235,9 @@ function moved(t: Task, status: TaskStatus, by: 'you' | 'auto', note?: string): 
   // Saiu de Aguardar: o motivo era de lá. Saiu de revisão: o retry da revisão automática era da entrega que acabou.
   const leavesWait = t.status === 'waiting' ? { waitReason: null } : {};
   const leavesReview = t.status === 'review' && t.reviewRetry ? { reviewRetry: undefined } : {};
-  return { ...t, ...leavesWait, ...leavesReview, status, updatedAt: at, history };
+  // Ficou pronta sem decisão sobre o pedido de cancelamento: não há mais o que cancelar.
+  const settlesRequest = status === 'done' && t.cancelRequest?.status === 'pending' ? { cancelRequest: { ...t.cancelRequest, status: 'moot' as const, decidedAt: at, waiting: undefined, retry: undefined } } : {};
+  return { ...t, ...leavesWait, ...leavesReview, ...settlesRequest, status, updatedAt: at, history };
 }
 
 function withPatch(t: Task, p: z.infer<typeof TaskPatch>, by: 'you' | 'auto'): Task {

@@ -43,10 +43,10 @@ Um cargo é um modelo de ficha: preenche o formulário, e cada campo continua ed
 | QA (testes) | Sonnet | Medium | Edita sozinho |
 | Revisor(a) de código | Sonnet | High | Autônomo |
 | Segurança (AppSec) | Opus | Xhigh | Autônomo |
-| DevOps / SRE | Sonnet | High | Pede tudo |
+| DevOps / SRE | Sonnet | High | Edita sozinho |
 | Documentação | Sonnet | Medium | Edita sozinho |
 
-O Orquestrador(a) pode contratar subfuncionários e já vem com o roteiro **Planeja grande, executa pequeno**. Revisor(a) e Segurança entregam parecer, não corrigem. DevOps / SRE trabalha em servidores (ver **Servidores (SSH e FTP)** abaixo).
+O Orquestrador(a) pode contratar subfuncionários e já vem com o roteiro **Planeja grande, executa pequeno**. Revisor(a) e Segurança entregam parecer, não corrigem. DevOps / SRE trabalha em servidores e já nasce com autonomia que permite escrever; a escrita só vale nas conexões com **Permitir comandos de escrita** marcado (ver **Servidores (SSH e FTP)** abaixo).
 
 ## A ficha
 
@@ -78,9 +78,9 @@ Salve com **Salvar ficha** (ou **Contratar**, ao criar). **Cancelar** fecha; no 
 | Opção | O que faz |
 | --- | --- |
 | Só planeja | Lê e propõe; não altera arquivos nem roda comandos. |
-| Pede tudo | Pede aprovação antes de cada edição ou comando. |
-| Edita sozinho | Edita arquivos sem perguntar; pede antes de rodar comandos. |
-| Autônomo | O Claude Code decide o que é seguro rodar; o que julga arriscado (deploy em produção, apagar em massa) é recusado e ele pede a você. |
+| Pede tudo | Pede aprovação antes de cada edição ou comando. No Codex, não pede: a sandbox fica só leitura. |
+| Edita sozinho | Edita arquivos sem perguntar; no Claude, pede antes de rodar comandos. No Codex, roda comandos sem perguntar, dentro da sandbox. |
+| Autônomo | O Claude Code decide o que é seguro rodar; o que julga arriscado (deploy em produção, apagar em massa) é recusado e ele pede a você. No Codex, não há classificador: roda na sandbox sem perguntar. |
 | Sem travas | Não pede nada. Os bloqueios de segredos (.ssh, .env) e os hooks continuam. Só para quem você confia, em projeto com git. |
 
 ### Servidores (SSH e FTP)
@@ -135,6 +135,7 @@ Cuidados:
 - Clique na linha ou num chip para editar. Filtre pela busca ou por **Projeto**.
 - Se houver ficha de mesmo nome em outro projeto, aparece **Unificar** ("É a mesma pessoa?"). Ele pede confirmação com **Juntar**.
 - Em **⋯** (ações da pessoa): **Ligar a outra ficha**, **Arquivar** ou **Desarquivar** por projeto, **Separar deste projeto** (se estiver em mais de um) e **Excluir**.
+- Ao arquivar funcionário ou projeto, as conversas paradas fecham seus processos; as que estão trabalhando continuam abertas e a tela avisa.
 - **Excluir** apaga ficha, memória, foto e histórico de vez. Se houver tarefas abertas, o sistema avisa e elas ficam sem responsável.
 
 ## MCPs
@@ -144,13 +145,14 @@ Cuidados:
 - Botões: **+ MCP**, **Testar**, **Editar**, **Excluir**.
 - Na ficha, cada MCP marcado tem um seletor de acesso, na linha do nome:
   - **Livre**: segue a autonomia da ficha (como sempre).
-  - **Pede antes de escrever**: as ferramentas de leitura passam; as que escrevem pedem a sua aprovação, em qualquer autonomia.
+  - **Pede antes de escrever**: as ferramentas de leitura passam; as que escrevem pedem a sua aprovação, em qualquer autonomia. No Codex, que não pergunta, as que escrevem ficam bloqueadas.
   - **Só leitura**: as de leitura passam; as que escrevem ficam bloqueadas.
   - **Desligado**: o MCP não entra na conversa.
 - Quem só lê é o que o próprio MCP declara no **Testar**. Sem teste, ou se o MCP mudou depois dele, nenhuma ferramenta conta como leitura: em **Só leitura** o MCP inteiro fica bloqueado e em **Pede antes de escrever** toda ferramenta pede antes. Com um desses dois escolhidos, a ficha mostra quantas ferramentas contam como escrita, ou avisa que o MCP não foi testado.
 - No modo sem travas, e sempre no GPT, *Pede antes de escrever* vira *Só leitura*, porque não há quem confirme.
 - O **navegador** tem um seletor só, **Acesso do navegador**, que aparece com **Usar o navegador** marcado. Vale para o Claude in Chrome e para o Chrome do GPT, que são o mesmo navegador (vale o mais restritivo dos dois). Ele não tem teste: **Só leitura** bloqueia o navegador inteiro e **Pede antes de escrever** pede a cada ação.
 - No GPT a lista de MCPs não aparece na ficha; só o **Acesso do navegador** vale nos dois motores.
+- Peso aproximado na memória do computador, por conversa aberta, medido no Windows: CLI do Claude 200–290 MB; navegador limpo 80–120 MB, somente enquanto usado; gpt-mcp 20–45 MB; ssh-mcp cerca de 2 MB. MCPs não medidos aparecem sem número.
 
 ## Skills e agents
 

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ChatItem } from '../shared/model';
-import { externalCut, hasExternalEffect } from '../server/chat/cutAction';
+import { externalCut, externalCutWithAgents, hasExternalEffect, subagentsDirOf } from '../server/chat/cutAction';
 import { findSecret } from '../server/chat/secrets';
 import { ResumeFile, resumeAfterRestart, takeResume, type ResumeEntry } from '../server/chat/resume';
 import { capReason, capText } from '../server/chat/turnCap';
@@ -171,6 +171,139 @@ describe('permissão pendente: a ferramenta que espera a permissão não rodou',
   it('com mais de uma sem resultado não dá para saber qual espera: conta como antes', () => {
     const items = [user('vai'), tool('Bash', { command: 'git push' }, null, 'git push'), tool('Read', { file_path: 'a' }, null, 'a')];
     expect(externalCut(items, true)).toBe('git push');
+  });
+});
+
+// Subagent cortado: o transcript dele (`<sessão>/subagents/agent-<id>.jsonl`) e o `.meta.json` ao lado, com o toolUseId da chamada do pai.
+describe('subagent cortado: o transcript dele decide', () => {
+  const DESC = 'Codex agents: geração';
+  /** A chamada Agent do pai, sem resultado (o turno foi cortado nela). */
+  const agent = (toolUseId: string, input: Record<string, unknown> = { subagent_type: 'executor', description: DESC }, name = 'Agent'): ChatItem => ({
+    ...tool(name, input, null, DESC),
+    id: `t:${toolUseId}`,
+  });
+  /** Linhas do transcript do subagent: a chamada de ferramenta e, se `done`, o resultado dela. */
+  const call = (id: string, name: string, input: unknown, done = true): string[] => [
+    JSON.stringify({ type: 'assistant', isSidechain: true, message: { id: `m-${id}`, content: [{ type: 'tool_use', id, name, input }] } }),
+    ...(done ? [JSON.stringify({ type: 'user', isSidechain: true, message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] } })] : []),
+  ];
+
+  let seq = 0;
+  /** `<sessão>/subagents` com um subagent por chamada do pai; `null` = só o `.meta.json`, sem transcript. */
+  async function subagents(byCall: Record<string, string[] | null>): Promise<string> {
+    const dir = path.join(root, `sess-${++seq}`, 'subagents');
+    await fs.mkdir(dir, { recursive: true });
+    let k = 0;
+    for (const [toolUseId, lines] of Object.entries(byCall)) {
+      const name = `agent-a${++k}`;
+      await fs.writeFile(path.join(dir, `${name}.meta.json`), JSON.stringify({ agentType: 'executor', description: 'x', toolUseId, spawnDepth: 1 }));
+      if (lines) await fs.writeFile(path.join(dir, `${name}.jsonl`), `${lines.join('\n')}\n`);
+    }
+    return dir;
+  }
+  const cut = (items: ChatItem[], dir: string | null, awaiting = false) => externalCutWithAgents([user('faz'), ...items], awaiting, dir);
+
+  const localWork = [
+    ...call('r1', 'Read', { file_path: 'server/chat/cutAction.ts' }),
+    ...call('g1', 'Grep', { pattern: 'READ_ONLY_AGENTS' }),
+    ...call('e1', 'Edit', { file_path: 'server/chat/cutAction.ts', old_string: 'a', new_string: 'b' }),
+    ...call('w1', 'Write', { file_path: 'tests/novo.test.ts', content: 'x' }),
+    ...call('p1', 'PowerShell', { command: 'npx tsc --noEmit' }),
+    ...call('p2', 'PowerShell', { command: 'Test-Path server/chat/codexSubagents.ts' }),
+    ...call('b1', 'Bash', { command: 'npx vitest run tests/cutAction.test.ts' }, false), // sem resultado: a retomada pode repetir
+  ];
+
+  it('só Read/Grep/Edit/Write e comandos locais (terminados ou não): o corte é local, a conversa retoma', async () => {
+    const dir = await subagents({ toolu_a: localWork });
+    expect(await cut([agent('toolu_a')], dir)).toBeNull();
+    expect(await cut([agent('toolu_a', { subagent_type: 'general-purpose' }, 'Task')], dir)).toBeNull();
+  });
+
+  it('subagent sem nenhuma ferramenta no transcript: local', async () => {
+    const dir = await subagents({ toolu_a: [JSON.stringify({ type: 'user', message: { content: 'faça X' } })] });
+    expect(await cut([agent('toolu_a')], dir)).toBeNull();
+  });
+
+  const OUTSIDE: Array<[string, string, unknown]> = [
+    ['git push', 'Bash', { command: 'git push origin main' }],
+    ['ssh', 'PowerShell', { command: 'ssh deploy@vps "systemctl restart app"' }],
+    ['curl POST', 'Bash', { command: 'curl -X POST https://api.example.com/orders -d a=b' }],
+    ['MCP de servidor', 'mcp__myco-ssh__ssh_executar', { servidor: 'vps', comando: 'ls' }],
+  ];
+  it.each(OUTSIDE)('%s dentro do subagent, terminado ou não, e entre ferramentas locais: segue travando', async (_n, name, input) => {
+    for (const done of [true, false]) {
+      const dir = await subagents({ toolu_a: [...localWork, ...call('x1', name, input, done), ...localWork] });
+      expect(await cut([agent('toolu_a')], dir)).toBe(DESC);
+    }
+  });
+
+  it('transcript ausente (sem pasta, sem a chamada, só o meta) ou sem pasta informada: segue travando', async () => {
+    expect(await cut([agent('toolu_a')], path.join(root, 'nao-existe', 'subagents'))).toBe(DESC);
+    expect(await cut([agent('toolu_a')], null)).toBe(DESC);
+    expect(await cut([agent('toolu_a')], await subagents({ toolu_outra: localWork }))).toBe(DESC); // o subagent é de outra chamada
+    expect(await cut([agent('toolu_a')], await subagents({ toolu_a: null }))).toBe(DESC); // meta sem transcript
+  });
+
+  it('transcript ilegível (linha de ferramenta cortada, ou não é arquivo) segue travando; lixo sem ferramenta não atrapalha', async () => {
+    const cutLine = '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"x","name":"Bash","input":{"command":"git pu';
+    expect(await cut([agent('toolu_a')], await subagents({ toolu_a: [...localWork, cutLine] }))).toBe(DESC);
+    expect(await cut([agent('toolu_a')], await subagents({ toolu_a: [...localWork, '{"type":"user","message":{"content":"corta'] }))).toBeNull();
+    const dir = await subagents({ toolu_a: null });
+    await fs.mkdir(path.join(dir, 'agent-a1.jsonl')); // existe, mas não dá para ler como arquivo
+    expect(await cut([agent('toolu_a')], dir)).toBe(DESC);
+  });
+
+  it('o .meta.json ilegível não acha o transcript: segue travando', async () => {
+    const dir = await subagents({ toolu_a: localWork });
+    await fs.writeFile(path.join(dir, 'agent-a1.meta.json'), '{"toolUseId":');
+    expect(await cut([agent('toolu_a')], dir)).toBe(DESC);
+  });
+
+  describe('subagent dentro de subagent', () => {
+    const nested = (id: string, input: Record<string, unknown> = { subagent_type: 'executor' }) => call(id, 'Agent', input);
+
+    it('o de dentro também só local: retoma', async () => {
+      const dir = await subagents({ toolu_a: [...localWork, ...nested('toolu_b')], toolu_b: localWork });
+      expect(await cut([agent('toolu_a')], dir)).toBeNull();
+    });
+
+    it('o de dentro faz git push (terminado ou não): segue travando', async () => {
+      for (const done of [true, false]) {
+        const dir = await subagents({ toolu_a: [...localWork, ...nested('toolu_b')], toolu_b: [...localWork, ...call('x1', 'Bash', { command: 'git push' }, done)] });
+        expect(await cut([agent('toolu_a')], dir)).toBe(DESC);
+      }
+    });
+
+    it('o transcript do de dentro some, ou ele chama o de fora de novo: segue travando', async () => {
+      expect(await cut([agent('toolu_a')], await subagents({ toolu_a: nested('toolu_b') }))).toBe(DESC);
+      expect(await cut([agent('toolu_a')], await subagents({ toolu_a: nested('toolu_a') }))).toBe(DESC); // laço
+    });
+
+    it('o de dentro só lê (Explore): não precisa de transcript; o fundo demais segue travando', async () => {
+      expect(await cut([agent('toolu_a')], await subagents({ toolu_a: [...localWork, ...nested('toolu_b', { subagent_type: 'Explore' })] }))).toBeNull();
+      const deep = await subagents({ toolu_a: nested('toolu_b'), toolu_b: nested('toolu_c'), toolu_c: nested('toolu_d'), toolu_d: localWork });
+      expect(await cut([agent('toolu_a')], deep)).toBe(DESC);
+    });
+  });
+
+  it('chamadas em paralelo: o subagent local não esconde o git push solto; o de leitura não consulta transcript', async () => {
+    const dir = await subagents({ toolu_a: localWork });
+    const push = tool('Bash', { command: 'git push' }, null, 'git push');
+    expect(await cut([agent('toolu_a'), push], dir)).toBe('git push');
+    expect(await cut([agent('toolu_a', { subagent_type: 'Explore' })], null)).toBeNull();
+    expect(await cut([agent('toolu_a'), agent('toolu_b')], dir)).toBe(DESC); // a segunda não tem transcript
+  });
+
+  it('o pedido de permissão pendente e a ação sem subagent seguem como em externalCut', async () => {
+    const dir = await subagents({ toolu_a: [...localWork, ...call('x1', 'Bash', { command: 'git push' }, false)] });
+    expect(await cut([agent('toolu_a')], dir, true)).toBeNull(); // única sem resultado e esperando permissão: não rodou
+    const items = [user('x'), tool('Bash', { command: 'git push' }, null, 'git push'), tool('Read', { file_path: 'a' }, null, 'a')];
+    expect(await externalCutWithAgents(items, false, dir)).toBe(externalCut(items));
+    expect(await externalCutWithAgents([user('x'), agent('toolu_a')], false, null)).toBe(externalCut([user('x'), agent('toolu_a')]));
+  });
+
+  it('a pasta dos subagents fica ao lado do transcript, com o nome da sessão', () => {
+    expect(subagentsDirOf(path.join('a', 'proj', 'f1e8.jsonl'))).toBe(path.join('a', 'proj', 'f1e8', 'subagents'));
   });
 });
 

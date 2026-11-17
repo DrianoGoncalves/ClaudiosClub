@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { AskedQuestion, BackgroundTask, ChatAttachment, ChatCommand, ChatEvent, ChatItem, ChatState, SendPriority, TaskQuestion, TurnCapHit, UsageLimit } from '../../shared/model';
+import type { AskedQuestion, BackgroundTask, ChatAttachment, ChatCommand, ChatEvent, ChatItem, ChatState, SendPriority, TaskQuestion, TurnCapHit, TurnRetryNotice, UsageLimit } from '../../shared/model';
 import { cleanEnv, withoutMycoToken } from '../auth';
 import { tryJson } from '../adapters/claude/fsutil';
 import { contextWindowFor } from '../adapters/claude/pricing';
@@ -13,6 +13,7 @@ import { ASK_TOOL, cleanAnswers, parseQuestions } from './questions';
 import { killTree } from './registry';
 import { scanSecrets, type ClassifiedSecret, type SecretSource } from './secrets';
 import { capText, TurnBudget, type TurnCaps } from './turnCap';
+import type { TurnContext, TurnEnd } from './turnRetry';
 import { isClaudeModelNotFound } from './modelNotFound';
 import { limitFromRateLimitEvent, limitFromText, mergeHits, type LimitHit } from './usageLimit';
 
@@ -123,6 +124,12 @@ export interface ChatProcessOptions {
   onModelUnavailable?: (model: string) => void;
   /** O turno acabou sem estourar o limite (resposta normal, outro erro, ou interrompido por você): zera a conta de estouros seguidos. */
   onTurnWithoutLimit?: () => void;
+  /**
+   * Como o turno acabou, antes do aviso de ocioso (`onIdle`): terminou bem, falhou com o erro do motor, ou o processo saiu no meio dele (ver
+   * `TurnEnd`). Turno que você parou (Parar, interrupção, fechamento) e o que estourou o limite de uso não passam por aqui. É por este gancho que o
+   * manager decide retomar sozinho, e ele precisa registrar a espera de forma síncrona antes de a conversa ser dada como parada.
+   */
+  onTurnEnd?: (end: TurnEnd) => void;
   /** O processo saiu (`error` com o motivo, se saiu com erro). */
   onExit?: (pid: number | null, error: string | null) => void;
   /**
@@ -160,6 +167,8 @@ export interface ChatProcessOptions {
   mycoToken?: string;
   /** Troca o `spawn` real nos testes. */
   spawnImpl?: (cmd: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }) => ChildProcessWithoutNullStreams;
+  /** Quanto o `stop()` espera o claude sair sozinho antes de encerrar a árvore dele (padrão 3 s; os testes encurtam). */
+  stopGraceMs?: number;
 }
 
 type Listener = (e: ChatEvent) => void;
@@ -183,6 +192,12 @@ export class ChatProcess {
   /** Pedidos de permissão sem resposta: a entrada original e as sugestões de "permitir sempre". */
   private readonly pending = new Map<string, { input: unknown; tool: string; suggestions: Suggestion[]; questions?: AskedQuestion[] }>();
   protected stderr = '';
+  /** `stop()` já foi chamado: a saída que vem depois é nossa, não falha (no Windows o `taskkill /F` sai com código 1). */
+  private closedByUs = false;
+  /** Último erro que o próprio claude escreveu no stream (mensagem de erro do assistente ou `result` com `is_error`): vale quando ele sai com código e sem stderr. */
+  private streamError: string | null = null;
+  /** O tipo e o status HTTP que o claude pôs na mensagem de erro sintética do assistente (`error`, `apiErrorStatus`): a classificação do erro do turno os lê. */
+  private apiError: { kind: string | null; status: number | null } | null = null;
   private buf = '';
   protected state: ChatState = {
     running: false,
@@ -326,13 +341,22 @@ export class ChatProcess {
     };
     const child = run('claude', [...STREAM_FLAGS, ...this.opts.args], { cwd: this.opts.cwd, env });
     this.child = child;
+    this.closedByUs = false;
+    this.streamError = null;
+    this.apiError = null;
     this.setState({ running: true, error: null });
     child.stdout.on('data', (chunk: Buffer) => this.onData(chunk.toString('utf8')));
     child.stderr.on('data', (chunk: Buffer) => {
       this.stderr = (this.stderr + chunk.toString('utf8')).slice(-2_000);
     });
     child.on('error', (err) => this.finish(`não foi possível iniciar o claude: ${err.message}`));
-    child.on('exit', (code) => this.finish(code && code !== 0 ? this.stderr.trim() || `o claude saiu com código ${code}` : null));
+    child.on('exit', (code, signal) => this.finish(this.exitError(code), { code, signal }));
+  }
+
+  /** O erro da conversa quando o processo sai: nenhum se saiu limpo ou se fomos nós que fechamos; senão o stderr, o último erro do stream, ou o código. */
+  private exitError(code: number | null): string | null {
+    if (this.closedByUs || !code) return null;
+    return this.stderr.trim() || this.streamError || `o claude saiu com código ${code}`;
   }
 
   subscribe(listener: Listener, after = 0): () => void {
@@ -399,6 +423,11 @@ export class ChatProcess {
     });
   }
 
+  /** Aviso da retomada automática: igual a `setNotice`, com o estado em campos (`retry`); o texto é o de reserva. */
+  setRetryNotice(id: string, text: string, tone: 'info' | 'warn', retry: TurnRetryNotice) {
+    this.putItem({ kind: 'notice', id, text, tone, at: new Date().toISOString(), retry });
+  }
+
   send(text: string, priority: SendPriority = 'next', images: string[] = [], notice?: string, files: ChatAttachment[] = [], fromStaff = false) {
     this.checkpointSeen = false;
     const queued = this.state.busy ? priority : undefined;
@@ -429,8 +458,15 @@ export class ChatProcess {
       ...(fromStaff && { fromStaff }),
     });
     this.waitingReply = true;
+    this.streamError = null;
+    this.apiError = null;
     this.startTurnBudget();
     this.setState({ busy: true, error: null });
+  }
+
+  /** O que o manager precisa para decidir a retomada de um turno que acabou (ver `TurnEnd`): lido já, antes de qualquer limpeza do estado. */
+  protected turnContext(): TurnContext {
+    return { items: this.snapshot().items, awaitingAnswer: this.awaitingAnswer, background: [...this.state.background] };
   }
 
   /** Troca o modo de permissão do processo aberto, sem reiniciar (a ficha mudou de autonomia). */
@@ -659,12 +695,13 @@ export class ChatProcess {
   }
 
   stop() {
-    this.child?.stdin.end();
-    // Se não sair sozinho, encerra a árvore (o claude e os comandos que ele abriu).
     const child = this.child;
+    if (child) this.closedByUs = true;
+    child?.stdin.end();
+    // Se não sair sozinho, encerra a árvore (o claude e os comandos que ele abriu).
     setTimeout(() => {
       if (child?.pid && child.exitCode === null && child.signalCode === null) void killTree(child.pid);
-    }, 3_000).unref?.();
+    }, this.opts.stopGraceMs ?? 3_000).unref?.();
   }
 
   // ---- leitura do stream ----
@@ -791,9 +828,11 @@ export class ChatProcess {
         if (!msg) return;
         // O erro de limite chega como uma mensagem "sintética" do assistente (não uma resposta dele).
         if (ev.isApiErrorMessage === true || msg.model === '<synthetic>' || typeof ev.error === 'string') {
+          this.apiError = { kind: typeof ev.error === 'string' ? ev.error : null, status: typeof ev.apiErrorStatus === 'number' ? ev.apiErrorStatus : null };
           for (const b of (Array.isArray(msg.content) ? msg.content : []) as Array<Record<string, unknown>>) {
             const hit = b.type === 'text' ? limitFromText(b.text) : null;
             if (hit) this.limitSeen = { ...mergeHits(this.limitSeen, hit), confirmed: true };
+            if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) this.streamError = b.text.trim().slice(0, 500);
           }
         }
         const msgId = msg.id ?? randomUUID();
@@ -960,8 +999,14 @@ export class ChatProcess {
         this.streamingId = null;
         const hit = ev.is_error === true ? limitFromText(ev.result) : null;
         if (hit) this.limitSeen = { ...mergeHits(this.limitSeen, hit), confirmed: true };
+        // Parar, interromper ou fechar: este turno acabou por vontade nossa e nunca é retomado sozinho, qualquer que seja o erro dele.
+        const intentional = this.stopping || this.closedByUs;
         const stopped = this.stopping && ev.subtype === 'error_during_execution';
         this.stopping = false;
+        const apiError = this.apiError;
+        const priorError = this.streamError;
+        this.apiError = null;
+        this.streamError = !stopped && ev.is_error === true && typeof ev.result === 'string' && ev.result.trim() ? ev.result.trim().slice(0, 500) : null;
         // Modelo pedido que não existe mais: o turno não termina; o padrão e a mesma mensagem (uma vez, ver `retryOnDefault`).
         const sent = this.unanswered.shift();
         if (!stopped && sent && ev.is_error === true && !this.modelRetried && this.wantedModel && this.wantedModel !== 'default' && isClaudeModelNotFound(ev)) {
@@ -981,7 +1026,17 @@ export class ChatProcess {
         const limit = this.limitSeen;
         this.limitSeen = null;
         if (!stopped && limit && (limit.confirmed || ev.is_error === true)) this.opts.onUsageLimit?.({ resetsAt: limit.resetsAt, window: limit.window });
-        else this.opts.onTurnWithoutLimit?.();
+        else {
+          this.opts.onTurnWithoutLimit?.();
+          if (ev.is_error !== true) this.opts.onTurnEnd?.({ kind: 'ok' });
+          // Erro do turno, com o motor sem mais nada na fila (se outra mensagem já espera, o trabalho segue sozinho). O texto é o do resultado
+          // (ou a mensagem de erro sintética que veio antes): nunca a saída de uma ferramenta.
+          else if (!intentional && !stopped && !this.unanswered.length) {
+            const status = typeof ev.api_error_status === 'number' ? ev.api_error_status : (apiError?.status ?? null);
+            const text = typeof ev.result === 'string' && ev.result.trim() ? ev.result.trim() : (priorError ?? '');
+            this.opts.onTurnEnd?.({ kind: 'failed', error: { text: text.slice(0, 500), status, kind: apiError?.kind ?? null }, ...this.turnContext() });
+          }
+        }
         this.endTurnBudget();
         this.setState({ busy: false, compacting: false });
         this.idleCheck('turn');
@@ -1014,8 +1069,24 @@ export class ChatProcess {
   /** Avisos de negação esperando o texto do resultado (chave: id do tool_use, ou `name:<ferramenta>` sem id). */
   private readonly denialNotices = new Map<string, string>();
 
-  private finish(error: string | null) {
+  /**
+   * `exit`: o processo saiu (e como). Saída no meio de um turno ocupado, sem fechamento nosso (`stop`), é um turno perdido: o manager decide
+   * se retoma (ver `TurnEnd`). Ocupação, intenção de parada e ação pendente são lidas antes de o estado ser limpo, aqui embaixo.
+   */
+  private finish(error: string | null, exit?: { code: number | null; signal: NodeJS.Signals | null }) {
     if (!this.state.running) return;
+    const lost: TurnEnd | null =
+      exit && !this.closedByUs && this.busy
+        ? {
+            kind: 'lost',
+            error: {
+              text: (error ?? this.streamError ?? (exit.signal ? `o claude foi encerrado pelo sinal ${exit.signal} no meio do turno` : `o claude saiu no meio do turno (código ${exit.code ?? '?'})`)).slice(0, 500),
+              status: this.apiError?.status ?? null,
+              kind: this.apiError?.kind ?? null,
+            },
+            ...this.turnContext(),
+          }
+        : null;
     const pid = this.child?.pid ?? null;
     this.child = null;
     this.endTurnBudget();
@@ -1033,6 +1104,7 @@ export class ChatProcess {
     this.waitingReply = false;
     this.setState({ running: false, busy: false, compacting: false, error, background: [] });
     for (const done of this.exitWaiters.splice(0)) done();
+    if (lost) this.opts.onTurnEnd?.(lost);
     this.opts.onIdle?.('exit');
   }
 

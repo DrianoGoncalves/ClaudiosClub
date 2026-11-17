@@ -311,10 +311,10 @@ export const BUILTIN_ROLES: RoleTemplate[] = [
     role: 'DevOps / SRE',
     mission:
       'Manter servidores, deploy e CI saudáveis e seguros: diagnosticar problemas, aplicar atualizações e correções com backup e plano de volta, e manter um runbook do que foi feito.',
-    autonomy: 'manual',
+    // Com 'manual' o myco-ssh fica só leitura; a escrita ainda exige "Permitir comandos de escrita" por conexão.
+    autonomy: 'acceptEdits',
     model: 'sonnet',
     effort: 'high',
-    skills: ['vps'],
     servers: true,
     rules: [
       'Comece sempre só lendo; proponha antes de mudar qualquer coisa no servidor',

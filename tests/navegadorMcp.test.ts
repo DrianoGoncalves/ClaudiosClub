@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { PassThrough } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { lazyNavegadorCommand, navegadorProxyCommand, parseProxyArgs, runNavegadorProxy, serverFingerprint, type NavegadorProxyOptions } from '../server/navegadorMcp';
+import { IDLE_MS, lazyNavegadorCommand, navegadorProxyCommand, parseProxyArgs, runNavegadorProxy, serverFingerprint, type NavegadorProxyOptions } from '../server/navegadorMcp';
 
 // O proxy preguiçoso do MCP do navegador limpo: `initialize` e `tools/list` saem do cache sem abrir o servidor de verdade; o primeiro pedido que
 // precisa dele o abre (repetindo o `initialize` do cliente) e dali em diante tudo passa sem mudar. O servidor de verdade é um script de mentira
@@ -494,6 +494,125 @@ describe('o stdin fecha: o servidor de verdade morre e o proxy sai', () => {
     expect(alive(gpid)).toBe(true);
     await p.end();
     await until(() => !alive(gpid), 3_000);
+  });
+});
+
+describe('server/discover: a sonda do Claude Code antes do initialize não abre o servidor de verdade', () => {
+  const PROBE = 'server-discover-probe-1';
+  const probe = { _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28' } };
+
+  it('responde -32601 como o Playwright, com ou sem cache, e o servidor não abre; o initialize que vem depois segue do cache', async () => {
+    const s = await scratch();
+    await fs.writeFile(s.log, ''); // o log é argumento do servidor: existindo desde o começo, a chave do cache não muda entre as conversas
+    const sem = startProxy({ log: s.log }); // sem cache: só o initialize abriria o servidor
+    sem.send({ id: PROBE, method: 'server/discover', params: probe });
+    expect((await sem.response(PROBE)).error).toEqual({ code: -32601, message: 'Method not found' });
+    await sem.end();
+    expect(spawns(s.log)).toBe(0);
+
+    const first = startProxy(s);
+    await handshake(first);
+    await until(() => existsSync(s.cacheDir) && readdirSync(s.cacheDir).some((f) => f.endsWith('.json')));
+    await first.end();
+    expect(spawns(s.log)).toBe(1);
+
+    const p = startProxy(s);
+    p.send({ id: PROBE, method: 'server/discover', params: probe });
+    expect((await p.response(PROBE)).error).toEqual({ code: -32601, message: 'Method not found' });
+    const { list } = await handshake(p);
+    expect(list.result.tools).toHaveLength(2);
+    expect(spawns(s.log)).toBe(1); // continua só a da primeira conversa
+    await p.end();
+  });
+
+  it('com o servidor aberto, o pedido vai a ele (a resposta é a dele)', async () => {
+    const s = await scratch();
+    const p = startProxy(s);
+    await handshake(p);
+    p.send({ id: PROBE, method: 'server/discover', params: probe });
+    expect((await p.response(PROBE)).error).toEqual({ code: -32601, message: 'método não suportado' });
+    await p.end();
+  });
+});
+
+describe('ocioso: o servidor de verdade encerra e o próximo uso o abre de novo', () => {
+  it('padrão de 10 minutos', () => {
+    expect(IDLE_MS).toBe(600_000);
+  });
+
+  it('sem mensagem por idleMs o processo morre; initialize e tools/list seguem sem abrir; o próximo tools/call o abre de novo', async () => {
+    const s = await scratch();
+    const lines: string[] = [];
+    const p = startProxy(s, { idleMs: 400, log: (l) => lines.push(l) });
+    await handshake(p);
+    p.send({ id: 3, method: 'tools/call', params: { name: 'fake_echo', arguments: { text: 'antes' } } });
+    expect((await p.response(3)).result.content[0].text).toBe('antes');
+    const pid = events(s.log)[0]!.pid;
+    await until(() => !alive(pid));
+    expect(lines.some((l) => /ocioso/.test(l))).toBe(true);
+    expect(spawns(s.log)).toBe(1);
+    // Parado: lista e ping vêm do proxy.
+    p.send({ id: 4, method: 'tools/list' });
+    expect((await p.response(4)).result.tools).toHaveLength(2);
+    p.send({ id: 5, method: 'ping' });
+    await p.response(5);
+    expect(spawns(s.log)).toBe(1);
+    // O primeiro uso depois da pausa abre outro, repetindo o initialize do cliente.
+    p.send({ id: 6, method: 'tools/call', params: { name: 'fake_echo', arguments: { text: 'depois' } } });
+    expect((await p.response(6)).result.content[0].text).toBe('depois');
+    expect(spawns(s.log)).toBe(2);
+    expect(received(s.log).filter((m) => m.method === 'initialize').map((m) => m.params)).toEqual([INIT, INIT]);
+    expect(p.out.filter((m) => m.method === undefined && m.error)).toEqual([]); // nenhum pedido falhou
+    await p.end();
+  });
+
+  it('pedido sem resposta mantém o servidor aberto; mensagens passando também', async () => {
+    const s = await scratch();
+    const p = startProxy(s, { idleMs: 300 });
+    await handshake(p);
+    const pid = events(s.log)[0]!.pid;
+    p.send({ id: 7, method: 'tools/call', params: { name: 'fake_hang', arguments: {} } });
+    await sleep(1_000); // mais de 3x o limite
+    expect(alive(pid)).toBe(true);
+    await p.end(); // o fim do stdin ainda o mata
+    expect(alive(pid)).toBe(false);
+  });
+
+  it('mensagens passando renovam o prazo: com uso a cada 150 ms o servidor não encerra', async () => {
+    const s = await scratch();
+    const p = startProxy(s, { idleMs: 500 });
+    await handshake(p);
+    const pid = events(s.log)[0]!.pid;
+    for (let id = 100; id < 110; id++) {
+      p.send({ id, method: 'tools/call', params: { name: 'fake_echo', arguments: { text: String(id) } } });
+      await p.response(id);
+      await sleep(150);
+    }
+    expect(alive(pid)).toBe(true);
+    expect(spawns(s.log)).toBe(1);
+    await until(() => !alive(pid)); // parou de usar: encerra
+    await p.end();
+  });
+
+  it('o grupo todo morre junto (o que o servidor abriu também)', async () => {
+    if (process.platform === 'win32') return; // no Windows o taskkill /T já leva a árvore (coberto acima)
+    const s = await scratch();
+    const p = startProxy(s, { mode: 'group', idleMs: 300 });
+    await handshake(p);
+    const gpid = (await until(() => events(s.log).find((e) => e.ev === 'grandchild')))!.gpid!;
+    await until(() => !alive(gpid), 5_000);
+    await p.end();
+  });
+
+  it('o fim do stdin depois de encerrado por ociosidade sai logo, sem nada a matar', async () => {
+    const s = await scratch();
+    const p = startProxy(s, { idleMs: 300 });
+    await handshake(p);
+    const pid = events(s.log)[0]!.pid;
+    await until(() => !alive(pid));
+    const t0 = Date.now();
+    await p.end();
+    expect(Date.now() - t0).toBeLessThan(1_000);
   });
 });
 

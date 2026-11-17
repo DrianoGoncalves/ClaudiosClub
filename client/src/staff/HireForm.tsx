@@ -38,6 +38,7 @@ import {
   type McpAccessMap,
 } from './mcpAccessField';
 import { McpAccessHint, McpAccessSelect } from './McpAccessSelect';
+import { BROWSER_IDLE_MIN, CLOSE_IDLE_MIN, rangeParams, WEIGHT_MB } from './mcpWeight';
 import { PersonMemory } from './PersonMemory';
 import { PERSONALITY_TEXT, personalityToSend } from './personalityField';
 import { goneSkills, skillIsGone, type LibraryState } from './skillGone';
@@ -565,6 +566,12 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                 })}
               </p>
             )}
+            <p className="muted small">
+              {t('staff.weightIntro', { ...rangeParams(WEIGHT_MB.claude), idle: CLOSE_IDLE_MIN })}
+              {codexReview && engine === 'claude' && <> {t('staff.weightGpt', rangeParams(WEIGHT_MB.gpt))}</>}
+            </p>
+            <p className="muted small">{t('staff.weightSsh', rangeParams(WEIGHT_MB.ssh))}</p>
+            <p className="muted small">{t('staff.weightBrowser', { ...rangeParams(WEIGHT_MB.browser), idle: BROWSER_IDLE_MIN })}</p>
             <p className="small">
               <button type="button" className="link" onClick={() => setFull(true)}>
                 {t('staff.showAll')}
@@ -848,7 +855,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                           />
                           <span>
                             {m.name}
-                            <span className="muted small"> {t(MCP_SOURCE_LABEL[m.source])}</span>
+                            <span className="muted small"> {t(MCP_SOURCE_LABEL[m.source])} · {t('staff.mcpWeightShort')}</span>
                           </span>
                         </label>
                         {on && hasAccessKey(m.name) && (
@@ -869,6 +876,11 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
               {mcps.some((m) => mcpOn.has(m.name)) && <p className="muted small">{t('staff.mcpAccessIntro')}</p>}
             </>
           )}
+          {/* O peso por conversa aberta: o do Claude (a base) e o que o Club mesmo põe; o MCP não medido fica sem número. */}
+          <p className="muted small">
+            {t('staff.weightIntro', { ...rangeParams(WEIGHT_MB.claude), idle: CLOSE_IDLE_MIN })}
+            {codexReview && engine === 'claude' && <> {t('staff.weightGpt', rangeParams(WEIGHT_MB.gpt))}</>}
+          </p>
         </fieldset>
           </>
         )}
@@ -877,6 +889,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
         {showServers ? (
           <fieldset id="staff-servers">
             <legend>{t('staff.sshLegend')}</legend>
+            <p className="muted small">{t('staff.weightSsh', rangeParams(WEIGHT_MB.ssh))}</p>
             <p className="muted small">
               {t('office.hireServersNote')}{' '}
               {codex
@@ -967,6 +980,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             {browser && <BrowserCheck />}
           </>
         )}
+        {/* O navegador limpo só sobe quando a conversa usa (server/navegadorMcp.ts): o peso vale a partir daí. */}
+        <p className="muted small">{t('staff.weightBrowser', { ...rangeParams(WEIGHT_MB.browser), idle: BROWSER_IDLE_MIN })}</p>
         {/* Um seletor só: o Claude in Chrome e o Chrome do GPT são o mesmo navegador (vale o mais restritivo). */}
         {browser && (
           <div className="mcp-browser">

@@ -13,10 +13,13 @@ import { ROOT } from './root';
 //   cliente), sem abrir o Playwright. Sem cache, abre o de verdade uma vez, grava e segue com ele (ele vai ser usado). Com cache, o primeiro
 //   uso confere o `initialize` e o `tools/list` de verdade com os servidos: se mudaram, o cache é regravado e o cliente recebe
 //   `notifications/tools/list_changed` (quando o servidor declarou `tools.listChanged`).
-// - `ping` o proxy mesmo responde, em qualquer estado.
+// - `ping` o proxy mesmo responde, em qualquer estado. `server/discover` (a sonda que o Claude Code manda antes do `initialize`) também, com o
+//   mesmo -32601 que o Playwright dá: o cliente então segue para o `initialize`. Sem isso, a sonda abria o Playwright em toda conversa.
 // - Qualquer outro pedido (tools/call, resources/*, prompts/*…) abre o de verdade, repete o `initialize` do cliente (a resposta some) e o
 //   `notifications/initialized`, entrega o pedido e dali em diante repassa as linhas dos dois lados sem mexer (inclusive o que o servidor
 //   pergunta ao cliente, como roots/list). Os pedidos que chegam enquanto ele sobe ficam numa fila.
+// - Ocioso (nenhuma mensagem nos dois sentidos por `IDLE_MS`, e nenhum pedido esperando resposta), o de verdade é encerrado (o navegador e as
+//   abas dele vão junto); o próximo pedido o abre de novo, como depois de uma queda.
 // - Se o de verdade cai, os pedidos em andamento falham com um erro JSON-RPC e o próximo pedido o abre de novo. Quando o stdin acaba (ou um
 //   sinal chega), ele morre (o grupo todo, SIGTERM e depois SIGKILL; no Windows, taskkill) e o proxy sai.
 // Só built-ins do node (e ./root, que também só usa node:fs e node:path): módulo do servidor com dependências grandes faria o proxy pesar o
@@ -33,6 +36,8 @@ export const KILL_GRACE_MS = 3_000;
 const HANDSHAKE_TIMEOUT_MS = 60_000;
 /** No primeiro uso sem cache, o `notifications/initialized` do cliente tem até aqui para chegar antes de o proxy mandar o dele. */
 const CLIENT_INITIALIZED_WAIT_MS = 5_000;
+/** Sem mensagem nos dois sentidos por esse tempo (e nada esperando resposta), o Playwright é encerrado; o próximo uso o abre de novo. */
+export const IDLE_MS = 10 * 60_000;
 const PROXY_ID = 'myco-proxy-';
 
 export interface NavegadorProxyOptions {
@@ -47,6 +52,8 @@ export interface NavegadorProxyOptions {
   handleSignals?: boolean;
   killGraceMs?: number;
   handshakeTimeoutMs?: number;
+  /** Ociosidade que encerra o servidor de verdade (0 = nunca); o padrão é `IDLE_MS`. */
+  idleMs?: number;
   /** Cada linha de diagnóstico (os testes leem); o padrão é o stderr. */
   log?: (line: string) => void;
 }
@@ -229,6 +236,7 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
   const output = o.output ?? process.stdout;
   const graceMs = o.killGraceMs ?? KILL_GRACE_MS;
   const handshakeMs = o.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
+  const idleLimit = o.idleMs ?? IDLE_MS;
   const log = o.log ?? ((line: string) => void process.stderr.write(`[${NAME}] ${line}\n`));
   output.on('error', () => {}); // o cliente já foi embora (EPIPE): não derruba o encerramento
   const write = (obj: object) => void output.write(JSON.stringify(obj) + '\n');
@@ -246,6 +254,9 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
   let starting: Promise<void> | null = null;
   let lastError = '';
   let seq = 0;
+  /** Quando a última mensagem passou entre o cliente e o servidor de verdade (o que o proxy responde sozinho não conta). */
+  let lastActive = 0;
+  let idleTimer: NodeJS.Timeout | undefined;
 
   let clientReady!: () => void;
   const clientInitialized = new Promise<void>((resolve) => (clientReady = resolve));
@@ -289,6 +300,7 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
 
   function onChildLine(c: ChildProcess, line: string): void {
     if (c !== child) return;
+    lastActive = Date.now();
     let m: unknown;
     try {
       m = JSON.parse(line);
@@ -321,6 +333,43 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
     // Se estava abrindo, quem falha os pedidos é o `start` (a fila); os que já foram entregues falham aqui.
     for (const id of inflight.values()) write(fail(id, -32603, `${NAME}: ${why}. O próximo pedido abre o navegador de novo.`));
     inflight.clear();
+  }
+
+  /**
+   * Com o servidor de verdade aberto: confere de tempos em tempos se passou `idleLimit` sem mensagem e, se nenhum pedido do cliente espera
+   * resposta (uma chamada longa mantém aberto; a pergunta do servidor que o cliente nunca respondeu, como o roots/list, não), encerra o
+   * servidor. `ms` é o que falta para a próxima conferência.
+   */
+  function watchIdle(ms = idleLimit): void {
+    clearTimeout(idleTimer);
+    if (!idleLimit || closing || state !== 'live' || !child) return;
+    idleTimer = setTimeout(() => {
+      const c = child;
+      if (!c || closing || state !== 'live') return;
+      const left = lastActive + idleLimit - Date.now();
+      if (left > 0) return watchIdle(left);
+      if (inflight.size) return watchIdle();
+      retire(c);
+    }, ms);
+    idleTimer.unref();
+  }
+
+  /** Larga o servidor de verdade (o próximo pedido abre outro) e o mata: SIGTERM no grupo e, passada a tolerância, SIGKILL. */
+  function retire(c: ChildProcess): void {
+    child = null;
+    state = 'idle';
+    serverRequests.clear();
+    lastError = 'o servidor do navegador foi encerrado por ociosidade';
+    for (const w of [...proxyWaiters.values()]) w({ error: { message: lastError } });
+    proxyWaiters.clear();
+    log(`ocioso há ${Math.round(idleLimit / 1000)} s: servidor do navegador encerrado (o próximo uso o abre de novo)`);
+    const hard = setTimeout(() => signalTree(c, 'SIGKILL'), graceMs);
+    hard.unref();
+    c.once('close', () => {
+      clearTimeout(hard);
+      signalTree(c, 'SIGKILL'); // sobrou alguém do grupo (o `close` só espera o líder); no Windows, não faz nada com o processo que já saiu
+    });
+    signalTree(c, 'SIGTERM');
   }
 
   function spawnReal(): ChildProcess {
@@ -412,6 +461,8 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
       try {
         await handshake();
         state = 'live';
+        lastActive = Date.now();
+        watchIdle();
         // Os pedidos que esperavam entram na ordem em que chegaram (o tools/list, do que acabou de ser gravado: o servidor já o disse).
         const opened = child;
         for (const q of queue.splice(0)) {
@@ -442,6 +493,7 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
   /** Entrega a linha do cliente ao servidor de verdade (que está aberto). `id` é o do pedido, se for um. */
   function deliver(line: string, id?: unknown): void {
     if (!child) return; // caiu entre a fila e agora: o pedido já falhou ou falha em `onChildGone`
+    lastActive = Date.now();
     if (id !== undefined) inflight.set(idKey(id), id);
     child.stdin!.write(line + '\n');
   }
@@ -474,6 +526,8 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
       return answerInitialize(m.id);
     }
     if (method === 'ping' && isRequest) return write(reply(m.id, {}));
+    // A sonda do Claude Code antes do `initialize`: o Playwright responde -32601 (e o cliente cai para o `initialize`); o proxy responde igual, sem abri-lo.
+    if (method === 'server/discover' && isRequest && state !== 'live') return write(fail(m.id, -32601, 'Method not found'));
     if (method === 'tools/list' && isRequest && tools && state !== 'live') return write(reply(m.id, { tools }));
 
     if (method === null) {
@@ -509,6 +563,7 @@ export async function runNavegadorProxy(o: NavegadorProxyOptions): Promise<void>
   await new Promise<void>((resolve) => rl.once('close', resolve));
   // Fim do stdin ou sinal: ninguém mais espera resposta. O servidor de verdade morre (grupo todo) antes de o proxy sair.
   closing = true;
+  clearTimeout(idleTimer);
   const c = child as ChildProcess | null;
   if (c) {
     await new Promise<void>((resolve) => {

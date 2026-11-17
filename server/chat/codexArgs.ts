@@ -428,8 +428,10 @@ export interface CodexSpawn {
   internetAccess?: () => Promise<boolean>;
   /** MCP de SSH da ficha (conexões SSH), ou null: sem ele. Ver `codexSshMcpArgs`. */
   sshMcp?: CodexMcpServer | null;
-  /** MCP da memória da própria ficha (só em `plan`), ou null: sem ele. Ver `codexMemoriaMcpArgs`. */
+  /** MCP da memória da própria ficha (em `plan` e na revisão), ou null: sem ele. Ver `codexMemoriaMcpArgs`. */
   memoriaMcp?: CodexMcpServer | null;
+  /** Conversa de revisão de tarefa: a sandbox é sempre de só leitura, qualquer que seja a autonomia (e a que a tela mudar depois). */
+  readOnly?: boolean;
   /** MCP do Chrome do usuário (só sem SSH na conversa), ou null: sem ele. Ver `codexChromeMcpArgs`. */
   chromeMcp?: CodexMcpServer | null;
   /** MCP do navegador limpo (sem logins; ver `codexCleanBrowserMcpArgs`), ou null: sem ele. */

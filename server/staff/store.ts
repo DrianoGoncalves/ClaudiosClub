@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -6,6 +6,7 @@ import type { McpAccess, StaffProfile } from '../../shared/model';
 import { cronError } from '../../shared/cron';
 import { PERSONALITIES } from '../../shared/personality';
 import { listDir, tryJson } from '../adapters/claude/fsutil';
+import { writeAtomic } from '../atomicWrite';
 import { ensureMycoGitignore } from '../mycoGitignore';
 import { codexProfileError } from '../chat/codexArgs';
 import { slugify } from './ficha';
@@ -225,6 +226,8 @@ const ProfileSchema = StaffInputObject.omit({ portraitDataUrl: true, launch: tru
         effort: CodexEffortSchema.optional().catch(undefined),
         // Conversa trocada para o secundário (ver server/directFallback.ts): motor, modelo e esforço. O boot confere com a ficha atual.
         fallback: FallbackSchema.optional().catch(undefined),
+        // Conversa de revisão de tarefa (ver chatSpawn): reabrir não devolve as ferramentas de edição.
+        readOnly: z.boolean().optional().catch(undefined),
       }),
     )
     .default([]),
@@ -493,56 +496,8 @@ export async function ensureMemory(projectPath: string, p: StaffProfile): Promis
   });
 }
 
-// Fila por arquivo (no processo): gravações no mesmo caminho rodam uma de cada vez.
-// A entrada sai do mapa quando a fila esvazia.
-const writeQueues = new Map<string, Promise<void>>();
-// No Windows o rename pode falhar um instante (antivírus/indexador segurando o destino).
-const RENAME_RETRY_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
-const RENAME_ATTEMPTS = 6;
-const RENAME_BASE_MS = 20; // esperas: ~20, 40, 80, 160, 320 ms (com jitter de 50–100%): < 650 ms no total
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-async function renameWithRetry(tmp: string, file: string): Promise<void> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await fs.rename(tmp, file);
-      return;
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (attempt >= RENAME_ATTEMPTS || !code || !RENAME_RETRY_CODES.has(code)) throw err;
-      await sleep(RENAME_BASE_MS * 2 ** (attempt - 1) * (0.5 + Math.random() / 2));
-    }
-  }
-}
-
-async function writeOnce(file: string, text: string): Promise<void> {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    await fs.writeFile(tmp, text, 'utf8');
-    await renameWithRetry(tmp, file);
-  } catch (err) {
-    await fs.unlink(tmp).catch(() => undefined); // não deixa o .tmp largado
-    throw err;
-  }
-}
-
-export async function writeAtomic(file: string, text: string): Promise<void> {
-  const resolved = path.resolve(file);
-  const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-  const run = (writeQueues.get(key) ?? Promise.resolve()).then(() => writeOnce(file, text));
-  // A cauda nunca rejeita: a falha de uma gravação não trava as seguintes.
-  const tail = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  writeQueues.set(key, tail);
-  void tail.then(() => {
-    if (writeQueues.get(key) === tail) writeQueues.delete(key);
-  });
-  return run;
-}
+// Gravação atômica com retry de rename e fila por arquivo: vive em ../atomicWrite (config.ts usa o mesmo caminho); re-exportada aqui para quem já importa daqui.
+export { writeAtomic };
 
 /** Erro mostrado ao usuário (400), não falha interna. */
 export class StaffError extends Error {}

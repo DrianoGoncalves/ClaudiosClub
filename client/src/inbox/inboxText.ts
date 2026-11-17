@@ -1,4 +1,5 @@
 import type { InboxItem } from '../../../shared/model';
+import { parseRetryNotice, retryNoticeText } from '../chat/retryNotice';
 import { t } from '../i18n';
 import { secretText, type Tr } from './secretText';
 import { questionOf, questionText, stuckOf, stuckText, type Kinded } from './taskAlerts';
@@ -46,6 +47,9 @@ export function inboxText(item: Pick<InboxItem, 'summary' | 'secret' | 'blocked'
   if (stuckOf(item)) return stuckText(item, tr);
   if (item.blocked) return blockedText(item, tr);
   if (item.notStarted) return notStartedText(item, tr);
+  // A conversa que desistiu de voltar sozinha, ou não voltou por uma ação com efeito fora do projeto: o servidor só manda a frase em pt-BR.
+  const retry = item.kind === 'error' ? parseRetryNotice({ text: item.summary }) : null;
+  if (retry) return retryNoticeText(retry, Date.now(), 'inbox', tr);
   return secretText(item, tr);
 }
 

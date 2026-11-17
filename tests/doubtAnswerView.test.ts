@@ -172,7 +172,7 @@ describe('itens de tarefa parada na caixa', () => {
   it('parada: uma frase e uma ação por humanAction, nos 3 idiomas', () => {
     const cases: Array<[string, string, string, string]> = [
       ['review', 'Revisar', 'Review', '“Tela” está sem revisão: o revisor não começou ou não deu o veredito'],
-      ['resend', 'Ver ajuste', 'See adjustment', 'O ajuste de “Tela” não chegou ao funcionário'],
+      ['resend', 'Reenviar ajuste', 'Resend adjustment', 'O ajuste de “Tela” não chegou ao funcionário'],
       ['decide', 'Decidir', 'Decide', '“Tela” está em Aguardar e espera sua decisão'],
       ['answer', 'Responder', 'Answer', '“Tela” tem uma dúvida esperando você'],
     ];
@@ -183,6 +183,16 @@ describe('itens de tarefa parada na caixa', () => {
       expect(alertAction(item, tr('en'))?.label).toBe(en);
       expect(stuckText(item, tr('es'))).not.toBe(sentence);
     }
+  });
+
+  it('só o reenvio do ajuste roda na caixa (direct); as outras ações abrem o card', () => {
+    expect(alertAction(stuckItem('resend'), tr('pt-BR'))?.direct).toBe(true);
+    for (const action of ['review', 'decide', 'answer']) expect(alertAction(stuckItem(action), tr('pt-BR'))?.direct).toBeUndefined();
+    expect(alertAction(questionItem(), tr('pt-BR'))?.direct).toBeUndefined();
+    // O dependente de quem tem ajuste parado só leva ao card da bloqueadora: o reenvio é no item dela.
+    const dependent = alertAction(blockedItem('doing', 'resend'), tr('pt-BR'));
+    expect(dependent).toMatchObject({ action: 'resend', taskId: 't-1', label: 'Ver ajuste' });
+    expect(dependent?.direct).toBeUndefined();
   });
 
   it('parada que se recupera sozinha (sem humanAction): sem ação, resumo do servidor', () => {

@@ -438,6 +438,7 @@ export function BoardView(props: BoardViewProps) {
             projectWorkspaces={config?.projectWorkspaces ?? null}
             contextSwitch={config?.contextSwitch ?? null}
             aiTitles={typeof config?.aiTitles === 'boolean' ? config.aiTitles : null}
+            autoRetry={typeof config?.autoRetry === 'boolean' ? config.autoRetry : null}
             optimizeQuota={config?.optimizeQuota ?? null}
             autoContinue={config?.autoContinue ?? null}
             showUserScope={config?.showUserScope ?? null}

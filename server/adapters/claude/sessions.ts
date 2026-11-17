@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import type { LiveSession, Session } from '../../../shared/model';
-import { feedSubject, initialSubjectState, type SubjectEvent, type SubjectView } from '../../titles/subject';
+import { feedSubject, initialSubjectState, reviewTaskOf, type SubjectEvent, type SubjectView } from '../../titles/subject';
 import { subjectTracker } from '../../titles/tracker';
 import { listDir, readHeadTail, tryJson } from './fsutil';
 import { encodeProjectDir } from './paths';
@@ -157,7 +157,7 @@ async function readSession(
   const file = path.join(projectDir, `${id}.jsonl`);
   const [stat, { head, tail }] = await Promise.all([fs.stat(file), readHeadTail(file)]);
   // Do Club: o rastreador lê o transcript inteiro (incremental), então acha a virada mesmo no meio. Grande demais: head/tail.
-  const tracked = club ? (await claudeSubject(file))?.topic : undefined;
+  const tracked = club ? await claudeSubject(file) : null;
   const headLines = head.map(parseLine);
   const tailLines = tail.map(parseLine).reverse();
 
@@ -176,7 +176,9 @@ async function readSession(
       liveInfo?.name ??
       null,
     // Arquivo pequeno: head e tail são o mesmo array (não entra duas vezes).
-    topic: tracked !== undefined ? tracked : sessionTopic(headLines, head === tail ? [] : tail.map(parseLine)),
+    topic: tracked ? tracked.topic : sessionTopic(headLines, head === tail ? [] : tail.map(parseLine)),
+    // Conversa de revisão do Club (sem IA, sem texto traduzido: a tela compõe com o rótulo da coluna). Sem o rastreador, fica ausente.
+    ...(tracked && { reviewTask: reviewTaskOf(tracked) }),
     entrypoint: origin?.entrypoint ?? liveInfo?.entrypoint ?? null,
     gitBranch: origin?.gitBranch ?? null,
     version: origin?.version ?? null,

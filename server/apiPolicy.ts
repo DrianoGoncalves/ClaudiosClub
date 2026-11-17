@@ -7,6 +7,8 @@ const ID = '[A-Za-z0-9-]+';
 const STAFF_POSTS: RegExp[] = [
   // Passar tarefa a quem reporta a ele (a rota confere requestedBy).
   new RegExp(`^/api/projects/${ID}/tasks$`),
+  // Editar tarefa que ele pediu (ou de quem reporta a ele) enquanto está em Aguardar ou A fazer (a rota exige o token e confere quem pediu e a coluna).
+  new RegExp(`^/api/projects/${ID}/tasks/${ID}$`),
   // Contratar subfuncionário (o serviço exige gestor que pode contratar e limita a autonomia).
   new RegExp(`^/api/projects/${ID}/staff$`),
   // Mensagem a quem ele contratou.
@@ -20,6 +22,11 @@ const STAFF_POSTS: RegExp[] = [
   // Cancelar a própria tarefa quando o usuário pede (a rota confere que o token é o da conversa atual da tarefa). Reabrir e as ações de
   // quem espera uma cancelada ficam de fora: são só da tela. A sandbox do Codex usa esta mesma lista nos POSTs (ver sandboxVerdict).
   new RegExp(`^/api/projects/${ID}/tasks/${ID}/cancel$`),
+  // Pedido de cancelamento de tarefa que já começou (quem a pediu, com o token) e recusa dele (o responsável, pela conversa atual da tarefa). A rota
+  // `cancel` acima também serve a quem pediu a tarefa que nunca começou. O revisor não cancela nem pede: o serviço confere o token e quem pediu.
+  new RegExp(`^/api/projects/${ID}/tasks/${ID}/cancel-request(?:/refuse)?$`),
+  // Ordem da fila: o gestor sobe ou desce os cards que pediu, e o responsável só sugere (a rota confere o token, quem pediu e quem faz; o resto é 403).
+  new RegExp(`^/api/projects/${ID}/tasks/${ID}/order$`),
 ];
 
 /** O POST em `pathname` pode vir de um funcionário pela API? */
@@ -44,7 +51,7 @@ const PROJECT_OF = new RegExp(`^/api/projects/(${ID})(?:/|$)`);
  */
 export function sandboxVerdict(method: string, pathname: string, projectId: string): { status: 403; error: string } | null {
   const allowed = method === 'GET' ? SANDBOX_GETS.some((r) => r.test(pathname)) : method === 'POST' && staffMayPost(pathname);
-  if (!allowed) return { status: 403, error: 'a sandbox do Codex não pode usar esta rota (só tarefas, cancelar a própria tarefa, contratar, mensagem, despertador e encerrar quem você contratou)' };
+  if (!allowed) return { status: 403, error: 'a sandbox do Codex não pode usar esta rota (só tarefas, editar tarefa que ainda não começou, ordem da fila, cancelar a própria tarefa ou pedir o cancelamento de uma que você pediu, contratar, mensagem, despertador e encerrar quem você contratou)' };
   const target = PROJECT_OF.exec(pathname)?.[1];
   if (target && target !== projectId) return { status: 403, error: 'a sandbox do Codex só fala com o projeto da própria conversa' };
   return null;

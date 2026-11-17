@@ -132,6 +132,13 @@ describe('avisos: regras puras', () => {
     }
   });
 
+  it('com o id da tarefa no aviso, o link leva ao cartão; id fora do formato t-xxxxxx fica de fora', () => {
+    expect(clubLink({ kind: 'question', projectId: 'p-1', staffId: null, taskId: 't-9a8b7c' })).toBe('http://claudio.localhost:4848/#abrir?kind=question&tela=tarefas&projeto=p-1&tarefa=t-9a8b7c');
+    for (const taskId of ['../x', 't-12', 't-9a8b7c1', 'x-9a8b7c', 't-9a8 7c', '', null, undefined]) {
+      expect(clubLink({ kind: 'stuck', projectId: 'p-1', staffId: null, taskId }), String(taskId)).toBe('http://claudio.localhost:4848/#abrir?kind=stuck&tela=tarefas&projeto=p-1');
+    }
+  });
+
   it('os destinos das notificações são limitados às mais recentes', () => {
     let targets: Record<string, unknown> = {};
     for (let i = 0; i < MAX_TARGETS + 10; i++) targets = withTarget(targets, `club:${i}`, { kind: 'waiting', projectId: 'p', staffId: null });

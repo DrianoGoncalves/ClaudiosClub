@@ -51,16 +51,14 @@ export function renderCodexAgentToml(a: AgentSource): string {
 }
 
 /**
- * Grava um TOML por agent em `outDir` (apagado e recriado: nada de arquivo velho) e devolve os roles para o Codex. A fonte é a do Claude Code:
- * pasta do cwd, depois a do projeto (se for outra) e por fim a da conta. Nome inválido ou sem fonte vai em `missing`.
+ * A fonte de cada agent do Claude Code, pela ordem: pasta do cwd, depois a do projeto (se for outra) e por fim a da conta. Nome inválido ou
+ * sem fonte vai em `missing`. Não grava nada: é a busca que `writeCodexAgents` e `resolveCodexAgents` compartilham.
  */
-export async function writeCodexAgents(
+async function findCodexAgents(
   names: string[],
-  dirs: { cwd: string; projectPath: string; userAgentsDir: string; outDir: string },
-): Promise<{ roles: CodexAgentRole[]; missing: string[] }> {
-  await rm(dirs.outDir, { recursive: true, force: true });
-  await mkdir(dirs.outDir, { recursive: true });
-  const roles: CodexAgentRole[] = [];
+  dirs: { cwd: string; projectPath: string; userAgentsDir: string },
+): Promise<{ found: Array<{ name: string; source: AgentSource }>; missing: string[] }> {
+  const found: Array<{ name: string; source: AgentSource }> = [];
   const missing: string[] = [];
   const projectDirs = [path.join(dirs.cwd, '.claude', 'agents')];
   if (pathKey(dirs.projectPath) !== pathKey(dirs.cwd)) projectDirs.push(path.join(dirs.projectPath, '.claude', 'agents'));
@@ -78,6 +76,33 @@ export async function writeCodexAgents(
       missing.push(name);
       continue;
     }
+    found.push({ name, source });
+  }
+  return { found, missing };
+}
+
+/** Os agents que têm fonte (`found`) e os que faltam (`missing`), sem gravar nada. Quem confere antes de rodar usa isto. */
+export async function resolveCodexAgents(
+  names: string[],
+  dirs: { cwd: string; projectPath: string; userAgentsDir: string },
+): Promise<{ found: string[]; missing: string[] }> {
+  const { found, missing } = await findCodexAgents(names, dirs);
+  return { found: found.map((f) => f.name), missing };
+}
+
+/**
+ * Grava um TOML por agent em `outDir` (apagado e recriado: nada de arquivo velho) e devolve os roles para o Codex. A fonte é a do Claude Code
+ * (ver `findCodexAgents`). Nome inválido ou sem fonte vai em `missing`.
+ */
+export async function writeCodexAgents(
+  names: string[],
+  dirs: { cwd: string; projectPath: string; userAgentsDir: string; outDir: string },
+): Promise<{ roles: CodexAgentRole[]; missing: string[] }> {
+  await rm(dirs.outDir, { recursive: true, force: true });
+  await mkdir(dirs.outDir, { recursive: true });
+  const { found, missing } = await findCodexAgents(names, dirs);
+  const roles: CodexAgentRole[] = [];
+  for (const { name, source } of found) {
     const configFile = path.join(dirs.outDir, `${name}.toml`);
     await writeAtomic(configFile, renderCodexAgentToml(source));
     roles.push({ name, description: source.description ?? name, configFile });

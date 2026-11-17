@@ -86,10 +86,12 @@ export interface SshInfo {
   politica?: boolean;
 }
 
-/** Estado do MCP da memória (`myco-memoria`) numa conversa em `plan`, para a ficha (ver `memoriaLaunchOf` em launch.ts). */
+/** Estado do MCP da memória (`myco-memoria`) numa conversa em `plan` ou de revisão, para a ficha (ver `memoriaLaunchOf` em launch.ts). */
 export interface MemoriaInfo {
   /** O MCP foi anexado à conversa. Falso: o acesso a ele está desligado na ficha (`mcpAccess`). */
   mcp: boolean;
+  /** Conversa de revisão de tarefa (só leitura, fora do `plan`): a seção Memória diz isso em vez de "em plan". */
+  review?: boolean;
 }
 
 /** Estado do Chrome do usuário no Codex (MCP `myco-chrome`): entrou, ou os motivos de não ter entrado (ver `codexChromeOf` em launch.ts). */
@@ -129,7 +131,10 @@ function teamSection(p: StaffProfile, ctx: FichaContext): string {
       : 'Estas pessoas reportam a você. O que for da área de alguém daqui vai para essa pessoa, nem para o executor nem para você, mesmo que seja uma correção pequena: ela tem a ficha, as regras e a memória dessa área e trabalha numa conversa curta, enquanto a sua é longa e cada passo seu nela custa mais. O que não tem dono vai para os agents do roteiro.',
     ctx.team.map((m) => `- ${m.name} (${m.role}${m.temporary ? ', temporário' : ''}), id \`${m.id}\`: ${first(m.mission)}`).join('\n'),
     'Repasse sem pesquisar: não leia o código para escrever a tarefa. Mande o pedido do usuário nas palavras dele, o critério de pronto e o que não mexer (com o motivo); cite arquivos só se já souber quais são. Quem é da área acha as linhas. Pedido que é inteiro de uma área vai como está, numa tarefa só para essa pessoa, sem você dividir nem planejar; um pedido com partes de áreas diferentes vira uma tarefa para cada pessoa.',
-    `Para passar uma tarefa: POST ${api}/tasks com os cabeçalhos \`x-myco: 1\` e \`x-myco-token: $MYCO_TOKEN\` (o token da sua conversa, já no seu ambiente) e um JSON com title, description (o pedido e o que não mexer), acceptance (o critério de pronto), goal (opcional: uma frase do porquê), blockedBy (ids das tarefas que precisam terminar antes, quando houver ordem entre elas; a fila espera sozinha), staffId (o id da pessoa), requestedBy: "${p.id}" e start: true. A tarefa entra na fila dela (uma por vez), começa sozinha quando ela ficar livre (tarefa em revisão não segura a fila; no limite de consumo, espera ele baixar) e aparece no quadro de tarefas.`,
+    `Para passar uma tarefa: POST ${api}/tasks com os cabeçalhos \`x-myco: 1\` e \`x-myco-token: $MYCO_TOKEN\` (o token da sua conversa, já no seu ambiente) e um JSON com title, description (o pedido e o que não mexer), acceptance (o critério de pronto), goal (opcional: uma frase do porquê), blockedBy (ids das tarefas que precisam terminar antes, quando houver ordem entre elas; a fila espera sozinha), staffId (o id da pessoa), requestedBy: "${p.id}", start: true e idempotencyKey (uma chave única por tarefa, de 8 a 100 caracteres: letras, números e . _ : -, ex.: "exportar-csv-17nov-a1"). Se a resposta não chegar ou vier com erro, REPITA o mesmo pedido com a MESMA chave: a tarefa não duplica nem recomeça (a mesma chave com outro conteúdo é 409; tarefa nova, chave nova). A tarefa entra na fila dela (uma por vez), começa sozinha quando ela ficar livre (tarefa em revisão não segura a fila; no limite de consumo, espera ele baixar) e aparece no quadro de tarefas. A resposta é a tarefa gravada: "idempotentReplay": true é a tarefa de antes (o retry não criou nada); "startError" é o começo que falhou depois de gravar (a fila retoma sozinha: NÃO crie outra); "warnings" é só aviso de possível duplicata (título parecido que você passou à mesma pessoa há pouco: confira se não é a mesma tarefa).`,
+    `Tirar da fila uma tarefa que VOCÊ pediu, sempre com o motivo ("reason"; mesmos cabeçalhos): se a pessoa ainda NÃO começou (nunca teve conversa), POST ${api}/tasks/<id da tarefa>/cancel com {"reason": "<por quê, em uma frase>"} cancela na hora. Se ela JÁ começou (ou parou, mas já teve conversa), o cancelamento direto é 409: mande um pedido, POST ${api}/tasks/<id da tarefa>/cancel-request com {"reason": "<por quê>"}. Ele chega na conversa dela, que decide: se aceitar, cancela e você é avisado do cancelamento; se recusar, diz por quê e o motivo chega como aviso na conversa em que você pediu (a tarefa segue). O pedido e a decisão ficam no histórico do card, e só há um pedido aberto por vez. Só vale para tarefa que você pediu (403 nas outras); quem só revisa não cancela. Cancelar não desfaz arquivos nem libera quem depende dela.`,
+    `Se o pedido mudar antes de a pessoa começar, edite a tarefa em vez de criar outra com blockedBy (duplica o quadro): POST ${api}/tasks/<id da tarefa> com os mesmos cabeçalhos (\`x-myco: 1\` e \`x-myco-token: $MYCO_TOKEN\`) e um JSON só com o que muda: title, description, acceptance, goal, blockedBy ou staffId (o que você manda substitui o valor atual, então mande o texto inteiro do campo). Só vale em Aguardar e A fazer, antes de a conversa da tarefa existir; em Fazendo, Revisão ou Finalizado a resposta é 409 e o complemento vai para a pessoa na conversa da tarefa. Só edita quem pediu a tarefa ou o gestor de quem a faz (senão 403), e staffId só para quem reporta a você: em A fazer, a tarefa vai para o fim da fila do novo. A coluna não muda por aqui.`,
+    `Ordem da fila: cada pessoa faz as tarefas na ordem em que entraram na fila dela (a bloqueada por blockedBy é pulada). Para subir ou descer uma tarefa que VOCÊ pediu: POST ${api}/tasks/<id da tarefa>/order com os mesmos cabeçalhos e {"step": "up"} ou {"step": "down"}; ela troca de lugar com a sua tarefa mais próxima na fila da pessoa e nenhuma tarefa de outro solicitante muda de posição (a resposta traz de que posição para qual). Tarefa que você não pediu, ou furar a fila de outro, é 403: isso é só do usuário. Quem faz a tarefa não muda a ordem: ele só te manda uma sugestão com o motivo, que chega como aviso na conversa em que você pediu e não altera nada; quem decide é você.`,
     'Quem confere a tarefa que você passa é você. Quando a pessoa entregar, o Claudio’s Club abre uma conversa nova sua com o pedido de revisão (o diff e, se o projeto tiver testes, o resultado deles, já rodados: não rode de novo) e você responde APROVADO ou REPROVADO na primeira linha. Reprovada, os ajustes voltam sozinhos para a pessoa, sem passar por você; aprovada, ou ao atingir o limite de revisões, o desfecho chega na conversa em que você pediu. Confira na medida do risco: para mudança pequena, `git diff --stat` e o resumo bastam; abra o diff inteiro só no que for arriscado (segurança, dados, servidor) ou se o --stat não bater com o resumo. Não procure prints nem arquivos dela: se faltar prova, peça. Se faltar algo, peça a ela na conversa da tarefa, não refaça você.',
     `Para ver como estão: GET ${api}/tasks (com o cabeçalho \`x-myco-token: $MYCO_TOKEN\`).`,
   ].join('\n');
@@ -658,6 +663,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     ctx.managerNames.length
       ? '## Entrega\nAo terminar uma tarefa que o seu gestor passou, a sua última mensagem é a entrega: o Claudio’s Club manda para quem pediu. Seja curto e traga as provas: o que mudou (arquivos), os testes que rodou e o resultado, onde estão os prints (caminho) e o que não verificou. Na lista de arquivos, uma linha por arquivo mudado, no formato: - `caminho/relativo`: por que mudou (uma frase ligada ao pedido).'
       : '',
+    queueSection(p, ctx),
     playbookSection(p, ctx),
     serversSection(p, ctx),
     browserSection(p, ctx),
@@ -671,6 +677,19 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     personalitySection(p.personality),
   ];
   return sections.filter(Boolean).join('\n\n') + '\n';
+}
+
+/**
+ * Quem recebe tarefa de um gestor (tem `managerNames`): a ordem da fila dele não é dele. Quem pediu a tarefa (ou o usuário) muda; ele só sugere, com o motivo, e
+ * a sugestão vira aviso a quem pediu sem alterar nada (ver `TaskService.reorder`). Mesma linha nos dois motores (o `mycoUrl` já é o do motor).
+ */
+function queueSection(p: StaffProfile, ctx: FichaContext): string {
+  if (!ctx.managerNames.length || !ctx.mycoUrl) return '';
+  const api = `${ctx.mycoUrl}/api/projects/${p.projectId}`;
+  return [
+    '## Ordem da fila',
+    `A ordem das tarefas na sua fila não é sua: só quem pediu cada tarefa (nas dele) ou o usuário a muda, e tentar mudar por conta própria dá 403. Se achar que uma tarefa deveria passar à frente ou ficar para depois, mande uma sugestão com o motivo: POST ${api}/tasks/<id da tarefa>/order com \`x-myco: 1\` e \`x-myco-token: $MYCO_TOKEN\` e {"suggest": "up" | "down" | "top", "reason": "<o motivo, em uma frase>"}. Ela vira um aviso para quem pediu a tarefa e não muda nada até ele decidir (uma por tarefa a cada 10 minutos; tarefa pedida pelo usuário: conte a sugestão a ele na conversa).`,
+  ].join('\n');
 }
 
 /** Só com SPEC.md na raiz do projeto (ctx.guide); sem ele, a ficha fica como antes. */
@@ -769,17 +788,19 @@ function memorySection(p: StaffProfile, ctx: FichaContext): string {
   const own = detailDir ? `\`${ctx.memoryPath}\` e \`${detailDir}/*.md\`` : `\`${ctx.memoryPath}\``;
   // No Claude a ferramenta aparece como mcp__<servidor>__<ferramenta>; no Codex, pelo nome dela.
   const tool = (name: string) => (codexOf(p) ? `\`${name}\`` : `\`mcp__${MEMORIA_MCP_NAME}__${name}\``);
+  const where = ctx.memoria?.review ? 'Nesta conversa de revisão' : 'Em plan';
   return [
     '## Memória',
     `Sua memória fica em \`${ctx.memoryPath}\`. Leia no início de cada conversa. Ela é o que você leva de uma conversa para a outra: decisões e o porquê, convenções do projeto, pendências e onde parou.`,
     // Gravar a própria memória vale sempre: a regra da ficha que proíbe editar arquivos (ex.: "nunca edite fora de <pasta>") é sobre o projeto.
     `- Gravar a sua memória (${own}) é sempre permitido, mesmo que uma regra da ficha proíba editar arquivos: essa regra vale para o resto do projeto, não para ela. A memória e a ficha dos outros não são suas.`,
-    ...(p.autonomy === 'plan'
+    ...(p.autonomy === 'plan' || ctx.memoria?.review
       ? [
+          // Em plan, ou na conversa de revisão (a edição de arquivos também está bloqueada ali, qualquer que seja a autonomia da ficha).
           // Só `mcp: false` (acesso desligado na ficha) conta como fora: a ficha gravada sem o contexto da conversa (contratação) não sabe e segue o padrão.
           ctx.memoria?.mcp === false
-            ? `- Em plan a edição de arquivos fica bloqueada, e a ferramenta que grava a sua memória (MCP \`${MEMORIA_MCP_NAME}\`) está desligada na sua ficha: você não consegue gravá-la nesta conversa. Diga ao usuário o que valeria registrar.`
-            : `- Em plan a edição de arquivos fica bloqueada, e a sua memória é a única exceção: grave com ${tool('memoria_gravar')} (\`arquivo\` e \`conteudo\`: o arquivo inteiro, então leia antes para não perder o que vale) e apague um detalhe velho com ${tool('memoria_apagar')}, do MCP \`${MEMORIA_MCP_NAME}\`. Só elas: não edite a memória por outro caminho (Edit, apply_patch, terminal) nem tente gravar outro arquivo. A ferramenta recusa o que não é da sua memória, \`..\` e links.`,
+            ? `- ${where} a edição de arquivos fica bloqueada, e a ferramenta que grava a sua memória (MCP \`${MEMORIA_MCP_NAME}\`) está desligada na sua ficha: você não consegue gravá-la nesta conversa. Diga ao usuário o que valeria registrar.`
+            : `- ${where} a edição de arquivos fica bloqueada, e a sua memória é a única exceção: grave com ${tool('memoria_gravar')} (\`arquivo\` e \`conteudo\`: o arquivo inteiro, então leia antes para não perder o que vale) e apague um detalhe velho com ${tool('memoria_apagar')}, do MCP \`${MEMORIA_MCP_NAME}\`. Só elas: não edite a memória por outro caminho (Edit, apply_patch, terminal) nem tente gravar outro arquivo. A ferramenta recusa o que não é da sua memória, \`..\` e links.`,
         ]
       : []),
     '- Curta (até umas 60 linhas): ao registrar, substitua o que ficou velho em vez de só acrescentar. Nada que o código ou o git já contam, e nada de segredos (senhas, chaves, tokens).',
@@ -916,9 +937,14 @@ export interface ClaudeArgsOptions {
   cleanBrowser?: boolean;
   /** O MCP de SSH (`myco-ssh`) entrou (ver prepareRun): as de leitura entram em --allowedTools, com a regra do navegador (`editing`). */
   sshMcp?: boolean;
-  /** O MCP da memória (`myco-memoria`, só em `plan`) entrou (ver prepareRun): entra em --allowedTools, senão cada gravação pediria aprovação. */
+  /** O MCP da memória (`myco-memoria`, em `plan` ou na revisão) entrou (ver prepareRun): entra em --allowedTools, senão cada gravação pediria aprovação. */
   memoriaMcp?: boolean;
+  /** Conversa de revisão de tarefa: as ferramentas de edição saem (REVIEW_DENIED), qualquer que seja a autonomia da ficha. A memória própria fica pelo MCP. */
+  readOnly?: boolean;
 }
+
+/** O que a conversa de revisão não usa: o revisor só aprova ou reprova, e não edita o projeto (a memória dele vai pelo MCP `myco-memoria`). */
+export const REVIEW_DENIED = ['Edit', 'MultiEdit', 'Write', 'NotebookEdit'];
 
 /**
  * Argumentos do `claude`. O prompt inicial vai primeiro: `--mcp-config`, `--allowedTools` e
@@ -952,8 +978,8 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   const editing = AUTONOMY_ORDER.indexOf(p.autonomy) >= AUTONOMY_ORDER.indexOf('acceptEdits');
   // As de leitura do SSH; as de escrita (ssh_executar, ssh_enviar) seguem a permissão normal e o hook de escrita (mcp-write.json).
   const sshRead = o.sshMcp && editing ? SSH_READ_TOOLS.map((t) => `mcp__${SSH_MCP_NAME}__${t}`) : [];
-  // A memória própria em plan: o MCP só grava a memória da ficha dona (memoriaMcp.ts), então é liberado inteiro.
-  const memoria = o.memoriaMcp && p.autonomy === 'plan' ? [`mcp__${MEMORIA_MCP_NAME}`] : [];
+  // A memória própria em plan e na revisão: o MCP só grava a memória da ficha dona (memoriaMcp.ts), então é liberado inteiro.
+  const memoria = o.memoriaMcp && (p.autonomy === 'plan' || o.readOnly) ? [`mcp__${MEMORIA_MCP_NAME}`] : [];
   const allowed = [...(p.browser && editing ? ['mcp__claude-in-chrome'] : []), ...(o.cleanBrowser && editing ? [`mcp__${CLEAN_BROWSER_MCP_NAME}`] : []), ...sshRead, ...memoria];
   if (allowed.length) args.push('--allowedTools', allowed.join(','));
   // Com a internet desligada (Configurações), a busca na web do Claude também sai: a ferramenta é recusada antes de rodar.
@@ -961,7 +987,9 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   // No Claude não há allowlist de ferramenta de MCP: o navegador limpo nega o que roda código ou mexe em arquivo (ver CLEAN_BROWSER_DENIED).
   const clean = o.cleanBrowser ? CLEAN_BROWSER_DENIED.map((t) => `mcp__${CLEAN_BROWSER_MCP_NAME}__${t}`) : [];
   // Os MCPs marcados como Desligado (acesso da ficha) também saem daqui; os de leitura e de pedir antes são o hook de escrita (mcp-write.json).
-  args.push('--disallowedTools', [...secretDenyRules(p, o.keyFiles, o.ftpServers, o.manualEditable === true), ...web, ...clean, ...mcpOffDenyRules(p.mcpAccess)].join(','));
+  // Revisão: nada de editar arquivo (o revisor só lê e responde APROVADO ou REPROVADO). Vale a cada abertura, também ao reabrir a conversa.
+  const review = o.readOnly ? REVIEW_DENIED : [];
+  args.push('--disallowedTools', [...secretDenyRules(p, o.keyFiles, o.ftpServers, o.manualEditable === true), ...web, ...clean, ...mcpOffDenyRules(p.mcpAccess), ...review].join(','));
   if (o.mcpConfigPath) args.push('--mcp-config', o.mcpConfigPath, ...(o.strictMcp === false ? [] : ['--strict-mcp-config']));
   return args;
 }

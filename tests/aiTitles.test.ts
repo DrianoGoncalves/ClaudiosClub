@@ -4,10 +4,11 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '../shared/model';
 import { readHeadTail } from '../server/adapters/claude/fsutil';
-import { claudeSubject } from '../server/adapters/claude/sessions';
+import { claudeSubject, readProjectSessions } from '../server/adapters/claude/sessions';
 import { codexSubject } from '../server/adapters/codex/rollout';
 import { AiTitleCache } from '../server/titles/cache';
 import { cleanTitle, TitleService, titleArgs, titleInput, type TitleServiceDeps } from '../server/titles/generator';
+import { reviewTaskOf } from '../server/titles/subject';
 import { SubjectTracker } from '../server/titles/tracker';
 import type { ClaudeOutput, ClaudeRun, SpawnClaude } from '../server/showcaseRunner';
 
@@ -475,7 +476,7 @@ describe('opção aiTitles', () => {
   });
 });
 
-describe('conversa de revisão: "Review - <título da tarefa>"', () => {
+describe('conversa de revisão: Session.reviewTask (a tela compõe "<coluna Revisão> - <tarefa>")', () => {
   const REVIEW_MSG = '[Revisão da tarefa "Exportar CSV"]\n\nBeakman terminou a tarefa e ela precisa de revisão.\n\nResponda com APROVADO ou REPROVADO.';
   const VERDICT = 'APROVADO\n\nTudo certo com a exportação, conferi os testes.';
   const codexEv = (ordinal: number, item: unknown) =>
@@ -488,42 +489,49 @@ describe('conversa de revisão: "Review - <título da tarefa>"', () => {
     return file;
   };
 
-  it('Claude: o assunto é "Review - <tarefa>", sem título de IA', async () => {
+  /** A sessão como o payload a monta (adaptador do Claude, conversa do Club), passada depois pelo `annotate`. */
+  const claudeSession = async (id: string): Promise<Session> =>
+    (await readProjectSessions(path.join(projects, 'proj-1'), new Map(), { club: new Set([id]) })).find((s) => s.id === id)!;
+
+  it('Claude: o assunto é o título da tarefa (sem prefixo) e o payload traz reviewTask, sem IA', async () => {
     await fs.writeFile(transcript('sess-1'), userLine('u1', REVIEW_MSG) + asstLine('a1', VERDICT));
     const view = await claudeSubject(transcript('sess-1'));
-    expect(view?.topic).toBe('Review - Exportar CSV');
-    expect(view?.subject).toEqual({ kind: 'task', title: 'Review - Exportar CSV' });
+    expect(view?.topic).toBe('Exportar CSV');
+    expect(view?.subject).toEqual({ kind: 'review', task: 'Exportar CSV' });
+    expect(reviewTaskOf(view!)).toBe('Exportar CSV');
     const m = makeService();
-    const s = await m.annotate('sess-1');
+    const [s] = await m.svc.annotate('proj-1', 'claude', [await claudeSession('sess-1')]);
     await m.svc.drain();
-    expect(s.aiTitle).toBeNull();
+    expect(s).toMatchObject({ topic: 'Exportar CSV', reviewTask: 'Exportar CSV', aiTitle: null });
     expect(m.spawn).not.toHaveBeenCalled();
   });
 
-  it('Codex: o mesmo assunto, sem chamar o modelo', async () => {
+  it('Codex: o mesmo, sem chamar o modelo', async () => {
     const rollout = await codexRollout(
       'rollout-review.jsonl',
       codexUser(1, 'Olá, Tupac. Leia sua memória e diga como pretende começar.') + codexUser(2, REVIEW_MSG) + codexAsst(3, VERDICT),
     );
     const view = await codexSubject(rollout);
-    expect(view?.topic).toBe('Review - Exportar CSV');
-    expect(view?.subject).toEqual({ kind: 'task', title: 'Review - Exportar CSV' });
+    expect(view?.topic).toBe('Exportar CSV');
+    expect(view?.subject).toEqual({ kind: 'review', task: 'Exportar CSV' });
+    expect(reviewTaskOf(view!)).toBe('Exportar CSV');
     const m = makeService({ rolloutOf: async () => rollout });
-    const [s] = await m.svc.annotate('proj-1', 'codex', [session('cdx-1')]);
+    const [s] = await m.svc.annotate('proj-1', 'codex', [{ ...session('cdx-1'), reviewTask: reviewTaskOf(view!) }]);
     await m.svc.drain();
-    expect(s!.aiTitle).toBeNull();
+    expect(s).toMatchObject({ reviewTask: 'Exportar CSV', aiTitle: null });
     expect(m.spawn).not.toHaveBeenCalled();
   });
 
-  it('título longo é cortado em 80 caracteres, com o prefixo dentro do limite', async () => {
+  it('título longo é cortado em 80 caracteres (o campo é o título cortado, sem prefixo)', async () => {
     await fs.writeFile(transcript('sess-1'), userLine('u1', `[Revisão da tarefa "${'palavra '.repeat(20).trim()}"]\n\nrevise`));
-    const topic = (await claudeSubject(transcript('sess-1')))!.topic!;
-    expect(topic.startsWith('Review - palavra')).toBe(true);
-    expect(topic.length).toBe(80);
-    expect(topic.endsWith('…')).toBe(true);
+    const task = (await claudeSession('sess-1')).reviewTask!;
+    expect(task.startsWith('palavra palavra')).toBe(true);
+    expect(task.length).toBe(80);
+    expect(task.endsWith('…')).toBe(true);
+    expect((await claudeSubject(transcript('sess-1')))?.topic).toBe(task);
   });
 
-  it('virada de assunto (ponto de corte + pergunta) sai do "Review" e volta ao fluxo normal, nos dois motores', async () => {
+  it('virada de assunto (ponto de corte + pergunta) zera reviewTask e volta ao fluxo normal, nos dois motores', async () => {
     await fs.writeFile(
       transcript('sess-1'),
       userLine('u1', REVIEW_MSG) + asstLine('a1', `${VERDICT}\n${CP}`) + userLine('u2', 'Agora, como exporto o CSV pelo terminal?') + asstLine('a2', 'Use o botão Exportar na tela.'),
@@ -532,10 +540,12 @@ describe('conversa de revisão: "Review - <título da tarefa>"', () => {
     expect(view?.topic).toBe('Agora, como exporto o CSV pelo terminal?');
     expect(view?.subject).toMatchObject({ kind: 'free', key: 'u2' });
     const m = makeService();
-    await m.annotate('sess-1');
+    const [first] = await m.svc.annotate('proj-1', 'claude', [await claudeSession('sess-1')]);
+    expect(first!.reviewTask).toBeNull();
     await m.svc.drain();
     expect(m.spawn).toHaveBeenCalledTimes(1);
-    expect((await m.annotate('sess-1')).aiTitle).toBe('Título 1');
+    const [second] = await m.svc.annotate('proj-1', 'claude', [await claudeSession('sess-1')]);
+    expect(second).toMatchObject({ reviewTask: null, aiTitle: 'Título 1' });
 
     const rollout = await codexRollout(
       'rollout-virada.jsonl',
@@ -544,14 +554,21 @@ describe('conversa de revisão: "Review - <título da tarefa>"', () => {
     const c = await codexSubject(rollout);
     expect(c?.topic).toBe('Agora, como exporto o CSV pelo terminal?');
     expect(c?.subject).toMatchObject({ kind: 'free', key: 'o:3' });
+    expect(reviewTaskOf(c!)).toBeNull();
   });
 
-  it('tarefa nova na conversa de revisão passa a valer (título da tarefa, sem "Review")', async () => {
+  it('ponto de corte + "ok": a conversa segue de revisão', async () => {
+    await fs.writeFile(transcript('sess-1'), userLine('u1', REVIEW_MSG) + asstLine('a1', `${VERDICT}\n${CP}`) + userLine('u2', 'ok, valeu'));
+    expect((await claudeSession('sess-1')).reviewTask).toBe('Exportar CSV');
+  });
+
+  it('tarefa nova na conversa de revisão passa a valer (reviewTask zera; o assunto é o título da tarefa)', async () => {
     await fs.writeFile(transcript('sess-1'), userLine('u1', REVIEW_MSG) + asstLine('a1', `${VERDICT}\n${CP}`) + userLine('u2', '[Tarefa "Ajustar o login"] veja'));
     expect((await claudeSubject(transcript('sess-1')))?.subject).toEqual({ kind: 'task', title: 'Ajustar o login' });
+    expect(await claudeSession('sess-1')).toMatchObject({ topic: 'Ajustar o login', reviewTask: null });
   });
 
-  it('o ajuste de uma revisão reprovada, que chega na conversa de trabalho, não troca o assunto dela', async () => {
+  it('o ajuste de uma revisão reprovada, que chega na conversa de trabalho, não a torna conversa de revisão', async () => {
     await fs.writeFile(
       transcript('sess-1'),
       userLine('u1', '[Tarefa "Exportar CSV"] faça') + asstLine('a1', 'Feito, entreguei.') + userLine('u2', '[Revisão da tarefa "Exportar CSV"]\n\nTupac reprovou a entrega.'),
@@ -559,18 +576,26 @@ describe('conversa de revisão: "Review - <título da tarefa>"', () => {
     const view = await claudeSubject(transcript('sess-1'));
     expect(view?.topic).toBe('Exportar CSV');
     expect(view?.subject).toEqual({ kind: 'task', title: 'Exportar CSV' });
+    expect((await claudeSession('sess-1')).reviewTask).toBeNull();
   });
 
-  it('com títulos por IA desligados o "Review - ..." continua (é o assunto, sem IA); só o assunto livre volta ao topic', async () => {
+  it('conversa fora do Club não ganha o campo (ausente, não null)', async () => {
+    await fs.writeFile(transcript('sess-1'), userLine('u1', REVIEW_MSG) + asstLine('a1', VERDICT));
+    const [s] = await readProjectSessions(path.join(projects, 'proj-1'), new Map(), { club: new Set() });
+    expect('reviewTask' in s!).toBe(false);
+    expect(s!.topic).toBe('Exportar CSV');
+  });
+
+  it('com títulos por IA desligados o reviewTask continua; só o aiTitle sai', async () => {
     await fs.writeFile(transcript('sess-1'), userLine('u1', REVIEW_MSG) + asstLine('a1', VERDICT));
     await fs.writeFile(transcript('sess-2'), userLine('u2', 'Como configuro o deploy?') + asstLine('a2', 'Use o script de deploy.'));
     const m = makeService({ enabled: async () => false });
-    const [review, free] = await m.svc.annotate('proj-1', 'claude', [session('sess-1'), session('sess-2')]);
+    const [review, free] = await m.svc.annotate('proj-1', 'claude', [await claudeSession('sess-1'), await claudeSession('sess-2')]);
     await m.svc.drain();
     expect(m.spawn).not.toHaveBeenCalled();
+    expect(review).toMatchObject({ topic: 'Exportar CSV', reviewTask: 'Exportar CSV' });
     expect('aiTitle' in review!).toBe(false);
     expect('aiTitle' in free!).toBe(false);
-    expect((await claudeSubject(transcript('sess-1')))?.topic).toBe('Review - Exportar CSV');
-    expect((await claudeSubject(transcript('sess-2')))?.topic).toBe('Como configuro o deploy?');
+    expect(free!.reviewTask).toBeNull();
   });
 });

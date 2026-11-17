@@ -2477,6 +2477,7 @@ describe('dependências entre tarefas (bloqueada por)', () => {
   it('tick não acorda quem tem na fila só tarefas bloqueadas', async () => {
     const { svc, sent, make, gate } = depsService('dep-tick');
     const d = await make('Pré-requisito');
+    await svc.update('p', d.id, { queued: false }); // fora da fila de propósito: a varredura do tick não a começa
     const x = await make('Depende', [d.id]);
     await svc.start('p', x.id); // na fila, bloqueada: sem conversa
     const before = gate();

@@ -9,18 +9,22 @@ import { BranchIcon, ClockIcon, ReviewIcon } from '../icons';
 import { TaskFallbackBadge } from '../staff/FallbackBadge';
 import { AutoBadge, AutoInfo } from './AutoCard';
 import { BoardReview, useBoardReview } from './BoardReview';
+import { FallbackWaitBadge, fallbackWaitText } from './FallbackWait';
 import { ReviewDelegate } from './ReviewDelegate';
 import { reviewPlan } from './reviewRule';
 import { OwnerBadge, ReviewWho } from './ReviewWho';
 import { TaskCodePanel } from './TaskCodePanel';
 import { DoubtBadge, DoubtBlock } from './TaskDoubt';
 import { PauseNote } from './TaskPause';
+import { RetryBadge } from './TaskRetry';
 import { ResourceWaitBadge, resourceWaitText } from './ResourceWait';
 import { BlockedBadge, BlockedByField, blockerName, openBlockers, sameDeps } from './TaskDeps';
 import { waitClass, waitWarm } from './waitTone';
 import { cancelledByName, dependentRows, type DepMap, type DepMode } from './cancelDeps';
 import { TaskCloseDialog } from './TaskCloseDialog';
 import { TaskCostBlock } from './TaskCostBlock';
+import { OrderButtons } from './OrderButtons';
+import { dropPosition, orderMoves, orderNoteText, queuePosOf, queueSize, type OrderBody, type OrderMoves } from './queueOrder';
 import { TaskRuns } from './TaskRuns';
 import { askConfirm } from '../lib/dialogStore';
 
@@ -63,20 +67,12 @@ export function byRecent<T extends Pick<TaskModel, 'status' | 'updatedAt'>>(task
 }
 
 /**
- * Ordem de A fazer: a fila primeiro, na ordem em que o servidor começa (a 1ª de cada funcionário antes das 2ªs, em
- * empate a mais antiga), então a próxima a ser feita fica no topo; as fora da fila vêm depois, pela última atualização.
+ * Ordem de A fazer: a fila primeiro, na ordem em que o servidor começa (`queuePos`: a 1ª de cada funcionário antes das 2ªs, em
+ * empate a que veio antes do servidor), então a próxima a ser feita fica no topo; as fora da fila vêm depois, pela última atualização.
  */
-export function byQueue<T extends Pick<TaskModel, 'status' | 'updatedAt' | 'staffId' | 'queuedAt' | 'sessionId'>>(tasks: T[]): T[] {
-  const taken = new Map<string | null, number>();
-  const rank = new Map<T, number>();
-  for (const t of tasks) {
-    if (!t.queuedAt || t.sessionId) continue;
-    const n = taken.get(t.staffId) ?? 0;
-    rank.set(t, n);
-    taken.set(t.staffId, n + 1);
-  }
-  const queued = tasks.filter((t) => rank.has(t)).sort((a, b) => rank.get(a)! - rank.get(b)!);
-  return [...queued, ...byRecent(tasks.filter((t) => !rank.has(t)))];
+export function byQueue<T extends Pick<TaskModel, 'status' | 'updatedAt' | 'queuePos'>>(tasks: T[]): T[] {
+  const queued = tasks.filter((t) => queuePosOf(t) > 0).sort((a, b) => queuePosOf(a) - queuePosOf(b));
+  return [...queued, ...byRecent(tasks.filter((t) => queuePosOf(t) === 0))];
 }
 
 const LABEL: Record<TaskStatus, string> = {
@@ -145,6 +141,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<TaskStatus | null>(null);
+  /** O cartão da fila sobre o qual se arrasta outro da mesma fila (vai tomar o lugar dele). */
+  const [overCard, setOverCard] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [showCancelled, setShowCancelled] = useState(false);
   /** Diálogo de cancelar ou apagar aberto, para a tarefa `id`. */
@@ -189,6 +187,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   };
 
   const move = (t: Task, status: TaskStatus) => t.status !== status && act(() => api.updateTask(projectId, t.id, { status }));
+  /** Muda o lugar do cartão na fila do responsável (o servidor confere quem pode e recusa o que não muda nada). */
+  const reorder = (t: Task, body: OrderBody) => act(() => api.reorderTask(projectId, t.id, body));
   const start = (t: Task) => act(() => withUsageConfirm((force) => api.startTask(projectId, t.id, force)));
   const nameOf = (id: string | null) => staff.find((s) => s.id === id)?.name ?? null;
   /** Cancelar ou apagar, já com a resposta do diálogo (o erro vai para ele, que continua aberto). */
@@ -212,8 +212,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   /** A tarefa que ocupa o funcionário agora (planejando ou fazendo). */
   const busyWith = (t: Task) =>
     tasks?.find((o) => o.id !== t.id && o.staffId === t.staffId && o.sessionId && (o.status === 'doing' || o.status === 'planning')) ?? null;
-  /** Posição na fila dele (1 = a próxima), na ordem do quadro. */
-  const queuePos = (t: Task) => (t.queuedAt ? (tasks ?? []).filter((o) => o.staffId === t.staffId && o.queuedAt && !o.sessionId).indexOf(t) + 1 : 0);
+  /** Os botões de ordem do cartão (null: fora da fila ou sozinho nela). */
+  const movesOf = (t: Task) => orderMoves(t, tasks ?? []);
   /** As dependências que seguram a tarefa (só a que ainda não começou espera por elas). */
   const waitingOn = (t: Task) => (!t.sessionId && (t.status === 'todo' || t.status === 'waiting') ? openBlockers(t, tasks ?? []) : []);
   /** Pronto parado há mais de 7 dias (o servidor marca): fora do quadro, atrás do "Ver arquivadas". */
@@ -222,13 +222,47 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const cancelled = (tasks ?? []).filter((t) => t.status === 'cancelled');
   const closingTask = closing ? (tasks?.find((t) => t.id === closing.id) ?? null) : null;
 
+  /** Arrastar outro cartão da mesma fila sobre este: ele toma o lugar daqui (o soltar na coluna, que muda de coluna, não entra). */
+  const dropOn = (task: Task) => dropPosition(tasks?.find((x) => x.id === dragging), task);
+  const orderRow = (task: Task) => {
+    const moves = movesOf(task);
+    return moves && (
+      <div className="task-order-row">
+        <OrderButtons moves={moves} onOrder={(body) => void reorder(task, body)} />
+      </div>
+    );
+  };
+
   const card = (task: Task) => (
     <Fragment key={task.id}>
       <button
-        className={`task-card ${selected === task.id ? 'is-selected' : ''} ${task.archived || task.status === 'cancelled' ? 'is-archived' : ''} ${task.status === 'planning' ? 'is-waiting' : ''}`}
+        className={`task-card ${selected === task.id ? 'is-selected' : ''} ${task.archived || task.status === 'cancelled' ? 'is-archived' : ''} ${task.status === 'planning' ? 'is-waiting' : ''} ${overCard === task.id ? 'is-drop' : ''}`}
         draggable={task.status !== 'cancelled'}
         onDragStart={() => setDragging(task.id)}
-        onDragEnd={() => setDragging(null)}
+        onDragEnd={() => {
+          setDragging(null);
+          setOverCard(null);
+        }}
+        onDragOver={(e) => {
+          if (dropOn(task) === null) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setOver(null);
+          setOverCard(task.id);
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOverCard((o) => (o === task.id ? null : o));
+        }}
+        onDrop={(e) => {
+          const to = dropOn(task);
+          if (to === null) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const dragged = tasks?.find((x) => x.id === dragging);
+          setOverCard(null);
+          setDragging(null);
+          if (dragged) void reorder(dragged, { to });
+        }}
         onClick={() => setSelected(task.id)}
       >
         <span className="task-title">{task.title}</span>
@@ -264,20 +298,24 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         )}
         <AutoBadge task={task} />
         {task.fallback && <TaskFallbackBadge fallback={task.fallback} />}
+        <FallbackWaitBadge wait={task.fallbackBlocked} now={now} warm={waitWarm(task.status)} />
         {/* Esperando dependência: o selo diz por quais tarefas; na fila ou não, ela só começa quando ficarem prontas. O laranja de espera é só da coluna A fazer. */}
         <BlockedBadge blockers={waitingOn(task)} warm={waitWarm(task.status)} />
-        {queuePos(task) > 0 && !waitingOn(task).length && (
+        {queuePosOf(task) > 0 && !waitingOn(task).length && (
           <span className={`task-queue${waitClass(waitWarm(task.status))} small`} title={t('tasks.queuedHint')}>
-            {t('tasks.queuePos', { pos: queuePos(task) })}
+            {t('tasks.queuePos', { pos: queuePosOf(task), who: nameOf(task.staffId) ?? t('tasks.ownerFallback') })}
           </span>
         )}
         <ResourceWaitBadge wait={task.resourceWait} now={now} warm={waitWarm(task.status)} />
+        <RetryBadge retry={task.retry} now={now} />
         {!!task.held?.length && (
           <span className={`task-queue${waitClass(waitWarm(task.status))} small`} title={t('tasks.heldHint')}>
             {t(task.held.length === 1 ? 'tasks.heldOne' : 'tasks.heldOther', { n: task.held.length })}
           </span>
         )}
       </button>
+      {/* Ordem da fila: fora do botão (o cartão é um botão, e botão não cabe dentro de botão); é o caminho do celular, onde arrastar não basta. */}
+      {orderRow(task)}
       {/* Motivo de Aguardar: fica fora do botão (o cartão é um botão, e campo não cabe dentro). Salva ao sair do campo. */}
       {task.status === 'waiting' && (
         <input
@@ -420,7 +458,10 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             tasks={tasks ?? []}
             waitingOn={waitingOn(current)}
             busyWith={busyWith(current)}
-            queuePos={queuePos(current)}
+            queuePos={queuePosOf(current)}
+            queueTotal={queueSize(tasks ?? [], current.staffId)}
+            moves={movesOf(current)}
+            onOrder={(body) => void reorder(current, body)}
             onUnqueue={() => void act(() => api.updateTask(projectId, current.id, { queued: false }))}
             onOpen={() => current.staffId && onOpenStaff(current.staffId)}
             nameOf={nameOf}
@@ -672,6 +713,9 @@ function TaskDetail({
   waitingOn,
   busyWith,
   queuePos,
+  queueTotal,
+  moves,
+  onOrder,
   onUnqueue,
   onOpen,
   onDelete,
@@ -702,6 +746,11 @@ function TaskDetail({
   /** A tarefa em que o responsável está agora (aí "Começar" põe na fila). */
   busyWith: Task | null;
   queuePos: number;
+  /** Quantos cartões a fila do responsável tem. */
+  queueTotal: number;
+  /** Os movimentos de ordem que o cartão aceita (null: fora da fila ou sozinho nela). */
+  moves: OrderMoves | null;
+  onOrder: (body: OrderBody) => void;
   onUnqueue: () => void;
   onOpen: () => void;
   onDelete: () => void;
@@ -713,6 +762,7 @@ function TaskDetail({
 }) {
   /** Textos do porquê de a tarefa não andar: laranja só com o cartão em A fazer, como no selo do cartão. */
   const waitText = `muted${waitWarm(task.status) ? ' task-wait-text' : ''} small`;
+  const fbWait = fallbackWaitText(task.fallbackBlocked, Date.now());
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
   const [pr, setPr] = useState(task.pr ?? '');
@@ -829,8 +879,10 @@ function TaskDetail({
           <TaskFallbackBadge fallback={task.fallback} />
         </p>
       )}
+      {fbWait && <p className={waitText}>{fbWait.hint}</p>}
       <AutoInfo task={task} open={task.status === 'review'} />
       <PauseNote pause={task.pause} staffName={nameOf(task.staffId)} now={Date.now()} />
+      <RetryBadge retry={task.retry} now={Date.now()} withHint />
       <DoubtBlock
         question={task.question}
         requestedBy={task.requestedBy}
@@ -871,6 +923,14 @@ function TaskDetail({
             {t('tasks.unqueue')}
           </button>
         </p>
+      )}
+      {/* Só você muda a ordem da fila de um funcionário pela tela; ele sugere, e o gestor que pediu o cartão reordena os dele (ver o Histórico). */}
+      {moves && (
+        <div className="task-order-box">
+          <p className="small">{t('tasks.orderLabel', { who: who?.name ?? t('tasks.ownerFallback'), pos: queuePos, total: queueTotal })}</p>
+          <OrderButtons moves={moves} onOrder={onOrder} withText />
+          <p className="muted small">{t('tasks.orderHint', { who: who?.name ?? t('tasks.ownerFallback') })}</p>
+        </div>
       )}
       {task.resourceWait && (
         <p className={waitText}>
@@ -954,14 +1014,16 @@ function TaskDetail({
       <details className="collapse">
         <summary>{t('tasks.history')}</summary>
         <ul className="task-history small">
-          {[...task.history].reverse().map((h, i) => (
-            <li key={i}>
-              {new Date(h.at).toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {LABEL[h.status]}
-              {' ('}
-              {h.by === 'auto' ? t('tasks.byAuto') : t('tasks.byYou')}
-              {h.note ? `: ${h.note})` : ')'}
-            </li>
-          ))}
+          {[...task.history].reverse().map((h, i) => {
+            // Nota de ordem da fila: a frase já diz quem mexeu (você, ou o gestor que pediu o cartão) ou quem sugeriu; "automático" enganaria.
+            const order = orderNoteText(h.note, h.by);
+            return (
+              <li key={i}>
+                {new Date(h.at).toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {LABEL[h.status]}
+                {order ? ` (${order})` : ` (${h.by === 'auto' ? t('tasks.byAuto') : t('tasks.byYou')}${h.note ? `: ${h.note})` : ')'}`}
+              </li>
+            );
+          })}
         </ul>
       </details>
       <TaskRuns projectId={projectId} taskId={task.id} version={`${task.updatedAt}:${task.runId ?? ''}`} />

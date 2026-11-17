@@ -1098,7 +1098,7 @@ describe('ficha de quem roda no Codex', () => {
 describe('Codex: endurecimento (revisão)', () => {
   const profile = { cwd: '/proj', sessionId: 'sess-r', permissionMode: 'acceptEdits', secrets: { projectPath: '/proj', home: '/nao-existe', mycoHome: '/nao-existe/.myco' } };
   const base = { cwd: '/proj', sandbox: 'workspace' as const, network: 'loopback' as const, secrets: profile.secrets };
-  const okEnv = (over: Partial<CodexEnvStatus> = {}) => async (): Promise<CodexEnvStatus> => ({ error: null, version: '0.167.0', networkProxy: true, notice: null, ...over });
+  const okEnv = (over: Partial<CodexEnvStatus> = {}) => async (): Promise<CodexEnvStatus> => ({ error: null, version: '0.167.0', networkProxy: true, multiAgent: true, notice: null, ...over });
   const noticesOf = (chat: CodexProcess) => chat.snapshot().items.filter((i): i is Extract<ChatItem, { kind: 'notice' }> => i.kind === 'notice');
 
   // ---- web_search ----
@@ -1348,7 +1348,7 @@ describe('Codex: endurecimento (revisão)', () => {
     const f = fakeCodex();
     let calls = 0;
     const msg = 'O Codex 0.150.0 é antigo demais para rodar funcionários no Claudio’s Club (o mínimo é 0.156.1). Atualize com: mise upgrade codex';
-    const chat = new CodexProcess({ ...profile, env: async () => (calls++ === 0 ? { error: msg, version: '0.150.0', networkProxy: false, notice: null } : { error: null, version: '0.167.0', networkProxy: true, notice: null }), spawnImpl: f.spawnImpl });
+    const chat = new CodexProcess({ ...profile, env: async () => (calls++ === 0 ? { error: msg, version: '0.150.0', networkProxy: false, multiAgent: false, notice: null } : { error: null, version: '0.167.0', networkProxy: true, multiAgent: true, notice: null }), spawnImpl: f.spawnImpl });
     chat.start();
     chat.send('oi');
     chat.send('na fila');
@@ -1382,7 +1382,7 @@ describe('Codex: endurecimento (revisão)', () => {
     chat.start();
     chat.send('oi');
     chat.stop();
-    release({ error: null, version: '0.167.0', networkProxy: true, notice: null });
+    release({ error: null, version: '0.167.0', networkProxy: true, multiAgent: true, notice: null });
     await tick();
     expect(f.runs).toHaveLength(0);
     expect(chat.snapshot().state.running).toBe(false);

@@ -42,6 +42,27 @@ export function ArrowDownIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+/** Seta para cima: subir um lugar na fila de tarefas. */
+export function ArrowUpIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M12 19V5" />
+      <path d="m5 12 7-7 7 7" />
+    </svg>
+  );
+}
+
+/** Seta para cima sob um traço: levar ao topo da fila de tarefas. */
+export function ArrowTopIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M5 3h14" />
+      <path d="m18 13-6-6-6 6" />
+      <path d="M12 7v14" />
+    </svg>
+  );
+}
+
 /** Folha com + e −: os arquivos que o funcionário mudou (diff). */
 export function FileDiffIcon({ size = 16 }: { size?: number }) {
   return (
@@ -200,6 +221,16 @@ export function ArchiveRestoreIcon({ size = 16 }: { size?: number }) {
       <path d="M20 8v11a2 2 0 0 1-2 2h-2" />
       <path d="m9 15 3-3 3 3" />
       <path d="M12 12v9" />
+    </svg>
+  );
+}
+
+/** Botão de ligar (círculo aberto em cima com um traço): fechar a conversa (desliga o processo dela). */
+export function PowerIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M12 2v10" />
+      <path d="M18.4 6.6a9 9 0 1 1-12.8 0" />
     </svg>
   );
 }

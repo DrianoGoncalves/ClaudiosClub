@@ -10,7 +10,7 @@ import { MAX_ITEMS, TAIL_BYTES, tailLines } from '../../chat/history';
 import { isInjectedUserText, STAFF_NOTICE } from '../../chat/items';
 import { tryJson } from '../claude/fsutil';
 import { getRegisteredSession, REGISTRY_FILE } from '../../sessionsRegistry';
-import type { SubjectEvent, SubjectView } from '../../titles/subject';
+import { reviewTaskOf, type SubjectEvent, type SubjectView } from '../../titles/subject';
 import { subjectTracker } from '../../titles/tracker';
 
 // Adaptador do formato do Codex. A conversa de um funcionário no motor Codex não tem transcript em ~/.claude/projects:
@@ -404,6 +404,8 @@ export async function codexSession(runDir: string, name: string, entry: { id: st
     id: entry.id,
     title: name,
     topic: subject ? subject.topic : (sum?.topic ?? null),
+    // Conversa de revisão (paridade com o Claude): sem IA e sem texto traduzido. Sem rollout legível, fica ausente.
+    ...(subject && { reviewTask: reviewTaskOf(subject) }),
     entrypoint: 'codex',
     gitBranch: null,
     version: null,

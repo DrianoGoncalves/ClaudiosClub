@@ -18,16 +18,19 @@ import {
   useFileSuggestions,
 } from './ChatExtras';
 import { ChangesPanel } from './ChangesPanel';
+import { closeConversation, isWorking } from './closeConversation';
 import { useChatDetail } from './chatDetail';
 import { type ChatFocus, findQuoteItem } from './chatFocus';
 import { renderWindow, WINDOW_STEP } from './chatWindow';
 import { type DenialAction, DenialNotice } from './DenialNotice';
-import { errorNoticesFor, secretNoticesFor } from './secretAlerts';
+import { errorLineShown, errorNoticesFor, errorSeenAsNotice, secretNoticesFor } from './secretAlerts';
 import { SecretNotice } from './SecretNotice';
 import { actionableDenials, denialHintOf } from './denialHint';
 import { MoreTabs } from './MoreTabs';
 import { MsgTime } from './MsgTime';
 import { QuestionCard } from './QuestionCard';
+import { parseRetryNotice } from './retryNotice';
+import { RetryNoticeBox } from './RetryNoticeBox';
 import { useChatFocus } from './useChatFocus';
 import { useOpenAt } from './useOpenAt';
 import { Markdown, OpenFileContext, type OpenFileApi, looksLikeMarkdown, useCopy } from './markdown';
@@ -73,10 +76,10 @@ interface Props {
   projectRoot?: string;
   /** Abre um arquivo do projeto (relativo) no editor de arquivos; sem ele, os caminhos da resposta são só texto. */
   onOpenFile?: (path: string) => void;
-  /** A caixa "precisa de mim": os avisos de segredo desta conversa viram balão aqui (só na tela, fora da conversa do modelo). */
+  /** A caixa "precisa de mim": os avisos de segredo e de erro desta conversa viram balão aqui (só na tela, fora da conversa do modelo). */
   inbox?: InboxItem[];
-  /** "Ignorar" do balão: o mesmo da caixa, então o aviso some dos dois lados. */
-  onDismissSecret?: (item: InboxItem) => Promise<void>;
+  /** "Ignorar" do balão (segredo ou erro): o mesmo da caixa, então o aviso some dos dois lados. */
+  onDismissAlert?: (item: InboxItem) => Promise<void>;
 }
 
 /**
@@ -90,14 +93,19 @@ export interface MoreTab {
 }
 
 /** Conversa com o funcionário dentro do Claudio’s Club, sem terminal. */
-export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, engine = 'claude', top, moreTabs = [], focus = null, onFocusDone, awaiting = false, projectRoot, onOpenFile, inbox, onDismissSecret }: Props) {
+export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, engine = 'claude', top, moreTabs = [], focus = null, onFocusDone, awaiting = false, projectRoot, onOpenFile, inbox, onDismissAlert }: Props) {
   const chat = useChat(projectId, sessionId, staffId, name);
-  const secrets = useMemo(() => (onDismissSecret ? secretNoticesFor(inbox, chat.sessionId ?? sessionId) : []), [inbox, onDismissSecret, chat.sessionId, sessionId]);
-  // Erro da caixa como balão (sem "ignorar": o servidor não dispensa erro, ele some quando você manda mensagem). O aviso que a conversa já tem no fluxo não se repete.
+  const secrets = useMemo(() => (onDismissAlert ? secretNoticesFor(inbox, chat.sessionId ?? sessionId) : []), [inbox, onDismissAlert, chat.sessionId, sessionId]);
+  // Erro da caixa como balão, com o mesmo "ignorar" do segredo. O aviso que a conversa já tem no fluxo não se repete.
   const errors = useMemo(
     () => errorNoticesFor(inbox, chat.sessionId ?? sessionId, chat.items.flatMap((i) => (i.kind === 'notice' ? [i.text] : []))),
     [inbox, chat.items, chat.sessionId, sessionId],
   );
+  // O erro que já virou balão: dispensado o balão, a faixa vermelha do mesmo erro não volta no lugar dele (ver `errorLineShown`).
+  const [seenError, setSeenError] = useState<string | null>(null);
+  useEffect(() => {
+    setSeenError((prev) => errorSeenAsNotice(chat.error, errors, prev));
+  }, [chat.error, errors]);
   const todos = useMemo(() => todosFrom(chat.items), [chat.items]);
   useEffect(() => {
     if (chat.sessionId && chat.sessionId !== sessionId) onSessionStarted?.(chat.sessionId);
@@ -359,6 +367,28 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   const showDiff = !!staffId && !!chat.sessionId;
   const background = chat.state?.running && chat.sessionId ? (chat.state.background ?? []) : [];
 
+  // Fechar a conversa: libera o processo e os MCPs dela. Trabalhando pede confirmação; o servidor recusa (e a tela mostra o motivo) se cortar agora deixaria uma ação pela metade.
+  const [closing, setClosing] = useState(false);
+  const [closed, setClosed] = useState<'closed' | 'interrupted' | 'already' | null>(null);
+  const running = chat.state?.running ?? false;
+  // O aviso vale até a conversa reabrir (ou trocar de conversa).
+  useEffect(() => setClosed(null), [chat.sessionId]);
+  useEffect(() => {
+    if (running) setClosed(null);
+  }, [running]);
+  const closeChat = async () => {
+    if (!chat.sessionId || closing) return;
+    setClosing(true);
+    try {
+      const r = await closeConversation(chat.sessionId, isWorking(chat.state, pending));
+      if (r) setClosed(r.done.closed ? (r.done.interrupted ? 'interrupted' : 'closed') : 'already');
+    } catch (e) {
+      alertError(e);
+    } finally {
+      setClosing(false);
+    }
+  };
+
   // O callback do pai muda a cada render; o context recebe um `open` fixo (lê o atual por ref) para não re-renderizar as mensagens à toa.
   const openRef = useRef(onOpenFile);
   useLayoutEffect(() => {
@@ -461,8 +491,8 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
               }
             />
           ))}
-          {onDismissSecret && secrets.map((item) => <SecretNotice key={item.id} item={item} onIgnore={onDismissSecret} onOpenFile={onOpenFile} />)}
-          {errors.map((item) => <SecretNotice key={item.id} item={item} />)}
+          {onDismissAlert && secrets.map((item) => <SecretNotice key={item.id} item={item} onIgnore={onDismissAlert} onOpenFile={onOpenFile} />)}
+          {errors.map((item) => <SecretNotice key={item.id} item={item} onIgnore={onDismissAlert} />)}
           {busy && !streaming && !pending && (
             <div className="chat-typing" aria-live="polite">
               {chat.state?.compacting ? t('chat.compactingChat') : t('chat.working', { name })}
@@ -519,7 +549,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           </div>
         )}
 
-        {chat.error && !errors.some((e) => e.summary === chat.error) && <p className="error small">{chat.error}</p>}
+        {errorLineShown(chat.error, errors, seenError) && <p className="error small">{chat.error}</p>}
 
         <TodoPanel todos={todos} />
 
@@ -657,6 +687,17 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
               {chat.state?.compacting ? t('chat.compacting') : t('chat.compact')}
             </button>
           )}
+          {chat.sessionId && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => void closeChat()}
+              disabled={closing || !running}
+              title={running ? t('chat.closeHelp') : t('chat.closeAlready')}
+            >
+              {t('chat.closeButton')}
+            </button>
+          )}
           {background.length > 0 && (
             <button
               type="button"
@@ -691,6 +732,11 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
             </span>
           )}
         </div>
+        {closed && (
+          <p className="muted small chat-closed" role="status">
+            {t(closed === 'closed' ? 'chat.closedDone' : closed === 'interrupted' ? 'chat.closedInterrupted' : 'chat.closedAlready')}
+          </p>
+        )}
         {showChanges && chat.sessionId && <ChangesPanel projectId={projectId} sessionId={chat.sessionId} staffId={staffId} name={name} onClose={() => setShowChanges(false)} />}
       </section>
     </OpenFileContext.Provider>
@@ -858,6 +904,7 @@ function Item({
     case 'notice':
       if (item.wake) return <WakeNotice item={item} cancelled={!!autoCancelled} onCancel={onCancelWake} />;
       if (item.denial) return <DenialNotice item={item} action={denialAction} />;
+      if (parseRetryNotice(item)) return <RetryNoticeBox item={item} />;
       return (
         <div className={`chat-notice chat-notice-${item.tone}`} data-item-id={item.id}>
           {item.action === 'cancel-auto-continue' && autoCancelled ? t('chat.autoContinueCancelled') : item.note === 'older-in-file' ? t('chat.olderInFile') : item.text}

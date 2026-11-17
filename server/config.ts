@@ -4,6 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { CONTEXT_SWITCHES, HEX_COLOR, PROJECT_COLORS, type AppConfig, type ProjectColor, type Workspace } from '../shared/model';
 import { pathKey } from './adapters/claude/paths';
+import { writeAtomic } from './atomicWrite';
 
 // Configuração do próprio Claudio’s Club, fora do ~/.claude: ~/.myco/config.json.
 
@@ -30,6 +31,8 @@ const DEFAULTS: AppConfig = {
   optimizeQuota: false,
   // Ligado: a conversa que bateu no limite de uso segue sozinha quando o limite volta.
   autoContinue: true,
+  // Ligado: a conversa que caiu por falha passageira (ou cujo processo morreu no meio do turno) segue sozinha, com teto de tentativas.
+  autoRetry: true,
   // Escondida: o quadro começa só com os projetos; a sala de ~/.claude se liga no config.
   showUserScope: false,
   // Desligada: mandar o diff para outra empresa é escolha sua.
@@ -134,6 +137,7 @@ const ConfigFile = z
     contextSwitch: z.enum(CONTEXT_SWITCHES).optional().catch(undefined),
     optimizeQuota: z.boolean().optional().catch(undefined),
     autoContinue: z.boolean().optional().catch(undefined),
+    autoRetry: z.boolean().optional().catch(undefined),
     showUserScope: z.boolean().optional().catch(undefined),
     codexReview: z.boolean().optional().catch(undefined),
     codexModel: CODEX_MODEL.optional().catch(undefined),
@@ -189,6 +193,7 @@ export const ConfigPatch = z.object({
   contextSwitch: z.enum(CONTEXT_SWITCHES).optional(),
   optimizeQuota: z.boolean().optional(),
   autoContinue: z.boolean().optional(),
+  autoRetry: z.boolean().optional(),
   showUserScope: z.boolean().optional(),
   codexReview: z.boolean().optional(),
   /** Modelo do Codex para o `perguntar_gpt`; vazio volta ao padrão do Codex. */
@@ -276,6 +281,7 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     contextSwitch: d.contextSwitch ?? DEFAULTS.contextSwitch,
     optimizeQuota: d.optimizeQuota ?? DEFAULTS.optimizeQuota,
     autoContinue: d.autoContinue ?? DEFAULTS.autoContinue,
+    autoRetry: d.autoRetry ?? DEFAULTS.autoRetry,
     showUserScope: d.showUserScope ?? DEFAULTS.showUserScope,
     codexReview: d.codexReview ?? DEFAULTS.codexReview,
     codexModel: d.codexModel ?? DEFAULTS.codexModel,
@@ -588,12 +594,7 @@ async function mutateNow(file: string, fn: (current: Record<string, unknown>) =>
   const raw = await readRaw(file);
   const current = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const next = fn(current);
-  if (next !== current) {
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(next, null, 2) + '\n', 'utf8');
-    await fs.rename(tmp, file);
-  }
+  if (next !== current) await writeAtomic(file, JSON.stringify(next, null, 2) + '\n');
   return readConfig(file);
 }
 

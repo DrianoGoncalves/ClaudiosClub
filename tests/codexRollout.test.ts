@@ -202,6 +202,25 @@ describe('codexHistoryOf e codexSession', () => {
     expect(s).toMatchObject({ id: 'sess-1', title: 'Bia', topic: 'Olá, primeira mensagem', entrypoint: 'codex', gitBranch: null, version: null, subagentCount: 0, live: null, startedAt: '2026-11-09T10:00:00.000Z' });
   });
 
+  it('conversa de revisão: reviewTask é o título da tarefa; a virada de assunto zera', async () => {
+    const runDir = path.join(dir, 'run');
+    const home = path.join(dir, 'codex');
+    const agent = (ordinal: number, text: string) =>
+      JSON.stringify({ timestamp: `2026-11-09T10:00:${String(ordinal).padStart(2, '0')}.000Z`, ordinal, type: 'event_msg', payload: { type: 'item_completed', item: { type: 'AgentMessage', id: `m${ordinal}`, content: [{ type: 'Text', text }] } } });
+    const review = '[Revisão da tarefa "Exportar CSV"]\n\nBia terminou a tarefa e ela precisa de revisão.';
+    await placeThread(runDir, 'rev-1', THREAD);
+    await placeRollout(home, THREAD, [userLine(1, review), agent(2, 'APROVADO\n\nTudo certo.')]);
+    const open = await withCodexHome(home, () => codexSession(runDir, 'Tupac', { id: 'rev-1', startedAt: '2026-11-09T09:00:00.000Z' }));
+    expect(open).toMatchObject({ topic: 'Exportar CSV', reviewTask: 'Exportar CSV' });
+
+    // Outro thread: o rastreador lê o rollout de forma incremental, então reescrever o mesmo arquivo não vale.
+    const other = '019f0000-0000-7000-8000-000000000002';
+    await placeThread(runDir, 'rev-2', other);
+    await placeRollout(home, other, [userLine(1, review), agent(2, 'APROVADO\n[MyCo:ponto-de-corte]'), userLine(3, 'Agora, como exporto o CSV?')]);
+    const turned = await withCodexHome(home, () => codexSession(runDir, 'Tupac', { id: 'rev-2', startedAt: '2026-11-09T09:00:00.000Z' }));
+    expect(turned).toMatchObject({ topic: 'Agora, como exporto o CSV?', reviewTask: null });
+  });
+
   it('sem rollout, a sessão vale pela hora da ficha', async () => {
     const runDir = path.join(dir, 'run');
     const s = await withCodexHome(path.join(dir, 'vazio'), () => codexSession(runDir, 'Bia', { id: 'sess-2', startedAt: '2026-11-08T09:00:00.000Z' }));

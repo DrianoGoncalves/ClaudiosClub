@@ -368,6 +368,54 @@ describe('(4) a resposta que chega com ele em outra tarefa vira ajuste guardado'
   });
 });
 
+describe('(6) ajuste guardado comum não solta a fila (só a resposta da dúvida solta)', () => {
+  /** A tarefa em fazendo, sem dúvida, com o turno rodando; o dono manda uma mensagem enquanto uma conversa direta da Ana trabalha: vira ajuste guardado. */
+  async function guardado(b: Club) {
+    const f = await fila(b);
+    b.h.working.add('direta-1');
+    expect(await b.svc.hold(f.work, { text: 'use o banco novo' })).toBe('espera Ana terminar a conversa em que está');
+    const t = await b.get(f.p);
+    expect(t.question).toBeUndefined();
+    expect(t.held).toEqual([expect.objectContaining({ text: 'use o banco novo' })]);
+    expect(t.held![0]!.doubt).toBeUndefined();
+    return f;
+  }
+
+  it('o envio falha quando a conversa direta termina: conta a falha e a próxima da fila NÃO começa', async () => {
+    const b = await club('seis-falha');
+    const { p, next } = await guardado(b);
+    const deps =(b.svc as unknown as { deps: { sendTo: (...a: unknown[]) => Promise<string> } }).deps;
+    deps.sendTo = async () => {
+      throw new Error('conversa ocupada');
+    };
+    b.h.working.delete('direta-1');
+    await b.settle();
+    expect((await b.get(p)).held).toEqual([expect.objectContaining({ attempts: 1, nextAt: expect.any(String) })]);
+    expect(started(await b.get(next[0]!))).toMatchObject({ status: 'todo', queued: true });
+    expect(b.h.sent.filter((s) => s.staffId === 'ana-1')).toHaveLength(1);
+  });
+
+  it('o envio dá certo: o ajuste vai para a conversa dela e a fila segue esperando', async () => {
+    const b = await club('seis-certo');
+    const { p, work, next } = await guardado(b);
+    b.h.working.delete('direta-1');
+    await b.settle();
+    expect(b.h.delivered).toEqual([{ sessionId: work, text: 'use o banco novo' }]);
+    expect((await b.get(p)).held).toEqual([]);
+    expect(started(await b.get(next[0]!))).toMatchObject({ status: 'todo', queued: true });
+  });
+
+  it('a resposta da dúvida guardada leva a marca `doubt` (é ela que solta; o caso de falha está no (4))', async () => {
+    const b = await club('seis-duvida');
+    const f = await fila(b);
+    await textDoubt(b, f.work);
+    const nova = (await b.get(f.next[0]!)).sessionId!;
+    b.h.working.add(nova);
+    await b.svc.answerQuestion('p', f.p, null, { questionId: (await b.get(f.p)).question!.id, text: 'Pode apagar.' }, true);
+    expect((await b.get(f.p)).held).toEqual([expect.objectContaining({ doubt: true })]);
+  });
+});
+
 describe('(5) worktree não muda nada', () => {
   it('com worktree: sem edição solta, com edição segura (a worktree é do funcionário, não da tarefa)', async () => {
     const livre = await club('cinco-livre', { worktree: true });

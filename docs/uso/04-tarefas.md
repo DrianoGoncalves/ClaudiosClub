@@ -38,7 +38,7 @@ Tarefa é um pedido de trabalho para um funcionário. Cada tarefa tem uma conver
 
 - Cartão sem conversa: botão **Começar**. Com o funcionário ocupado, o botão vira **Pôr na fila**.
 - Arrastar ou mover um cartão com responsável para **A fazer** faz o mesmo que **Começar**: começa na hora, ou entra na fila dele.
-- Cada funcionário faz uma tarefa por vez. A posição aparece no cartão ("na fila · 1ª") e no detalhe.
+- Cada funcionário faz uma tarefa por vez. A posição aparece no cartão ("2º na fila de Beakman") e no detalhe. Para mudar a ordem, veja **Ordem da fila** abaixo.
 - Quando ele fica livre, o Club manda primeiro os ajustes guardados e depois a próxima da fila.
 - **tirar da fila** desfaz a entrada na fila.
 - Mensagem enviada à conversa de uma tarefa enquanto ele está ocupado fica guardada ("{n} ajuste esperando") e vai quando ele termina.
@@ -46,7 +46,26 @@ Tarefa é um pedido de trabalho para um funcionário. Cada tarefa tem uma conver
 - Na coluna **A fazer**, todo aviso de espera do cartão (na fila, "Esperando: …", "Aguardando recursos", ajuste guardado e dúvida com o gestor) aparece em laranja: é o motivo de a tarefa não andar. Nas outras colunas, inclusive **Aguardar** (selos e o campo do motivo), os avisos ficam neutros. O amarelo segue sendo o que depende de você.
 - Se a conversa parar no meio do trabalho (por exemplo, o servidor reiniciou), o Club retoma uma vez. Se parar de novo, a tarefa vai para **Revisão** com "conversa parou sem terminar" no histórico.
 - Exceção: se ela parou no meio de uma ação que mexe fora do projeto (push, deploy, comando no servidor, MCP que escreve), o Club não retoma sozinho, porque não dá para saber se a ação aconteceu. A tarefa vai para **Aguardar** com o motivo, e a conversa aparece em **precisa de mim**. Confira e mande uma mensagem para seguir.
+- Fora o reinício do servidor (acima), se a conversa cair por falha passageira (API sobrecarregada, erro 5xx, limite de taxa, queda de conexão) ou o processo cair no meio do turno, o Club retoma sozinho, com espera crescente (30 s, 2 min e 8 min, com uma variação de até 20%) e até 3 tentativas (1, quando o processo caiu sem causa conhecida). Se o próprio erro pede uma espera maior, vale a maior, até 15 min; acima disso não é falha passageira e não retoma. Enquanto a retomada está marcada, a tarefa fica em **Fazendo** e o cartão ganha o selo **Retomando em 42s · 2/3** (a tentativa 2 de 3). Passou da hora e ainda aparece: **Retomando agora**, o envio está em curso. O selo não é laranja: o laranja é só da coluna **A fazer**. Passando o mouse, o selo traz o motivo e a hora; no detalhe da tarefa, a frase inteira.
+- O selo some quando a retomada sai, quando você manda uma mensagem na conversa (isso cancela a retomada) ou quando as tentativas acabam. Acabando as tentativas, ou se a conversa parou no meio de uma ação que mexe fora do projeto, a tarefa vai para **Aguardar** como na exceção acima, e a conversa aparece em **precisa de mim**. O que é e o que não é retomado sozinho, e o aviso no chat, estão no capítulo 03 (**Retomada automática**). Para desligar: **Configurações** → **Conversa** → **Retomar sozinho quando a conversa cair por falha passageira** (nível **Avançado**; padrão ligado).
 - O responsável só pode ser trocado antes de começar. Depois, aparece "A tarefa já começou com este funcionário".
+
+## Ordem da fila
+
+A fila de cada funcionário anda na ordem em que os cartões entraram, até alguém reordenar. Quem entra depois vai para o fim. Em **A fazer**, cada cartão da fila mostra a posição ("1º na fila de Beakman"). A posição conta também os cartões bloqueados e os esperando nova tentativa: eles são pulados na hora de começar, mas não perdem o lugar.
+
+| Quem | O que pode na ordem da fila |
+| --- | --- |
+| **Você** | Qualquer cartão da fila de qualquer funcionário: levar ao topo, subir ou descer um lugar, ou pôr no lugar de outro cartão. |
+| **O gestor** (o funcionário que pediu o cartão) | Só os cartões que ele pediu, e só subir ou descer um lugar entre eles. Passar na frente de um cartão que outra pessoa pediu é só seu. |
+| **O funcionário que faz a tarefa** | Não muda a ordem: só sugere (subir, descer ou ir ao topo, com o motivo). A sugestão vira aviso na conversa de quem pediu o cartão e nota no histórico dele, e a ordem não muda. Cartão pedido por você: ele diz a sugestão a você na conversa. |
+
+- **Botões**: sob cada cartão da fila, três botões: **Subir para o topo da fila**, **Subir um lugar na fila** e **Descer um lugar na fila**. No detalhe do cartão eles aparecem com texto, ao lado de "Posição na fila de Beakman: 2 de 4". É o caminho do celular, onde arrastar não basta. O que já está no limite fica desligado (o primeiro não sobe, o último não desce).
+- **Arrastar** (no computador): arraste um cartão para cima de outro cartão da **mesma** fila, e ele toma a posição do outro (o alvo ganha uma borda tracejada azul). Cartão de outro funcionário não aceita: a fila de cada um é separada. Soltar na coluna, fora de um cartão, continua só mudando de coluna.
+- Só cartão que está na fila tem ordem: em **A fazer**, com responsável, esperando a vez dele. Cartão em **Aguardar**, fora da fila ("tirar da fila"), sem responsável ou já em andamento não tem botões. Sozinho na fila, também não.
+- **Histórico**: cada movimento deixa uma nota no histórico do cartão movido, com quem mexeu e de onde para onde ("fila de Beakman reordenada por você: posição 3 → 1 de 4"; no caso do gestor, o nome dele). A sugestão do funcionário também aparece lá ("Beakman sugeriu passar para o topo da fila: …").
+- Se a ordem mudou enquanto você olhava (o quadro relê a cada 5 segundos), o Club recusa o que já não vale ("já é o primeiro da fila", "a tarefa saiu da fila") e a mensagem aparece no quadro; nada é movido pela metade.
+- Ao tirar o cartão da fila, mudar de coluna ou trocar o responsável, ele perde a posição e, ao voltar, entra no fim.
 
 ## Plano para aprovar
 
@@ -147,7 +166,7 @@ A fila não precisa de você para andar. Quando uma entrega falha por um motivo 
 | **Dúvida que não chegou ao gestor** | Tenta de novo no ritmo acima, sem contar como uma dúvida nova. | Em 30 minutos sem chegar, ou na hora se a falha não passa sozinha (por exemplo, a tarefa já teve 3 dúvidas): vira **aguardando você**. O Club segue tentando o gestor; quem responder primeiro fecha. |
 | **Dúvida sem resposta do gestor** | Espera. | Passados 30 minutos: vira **aguardando você**. |
 | **Revisão automática que não começou** | Tenta começar de novo no ritmo acima. | Em 30 minutos sem começar: item **parada**. |
-| **Revisão sem veredito**, ou revisor que parou | Pede o veredito de novo uma vez, depois de uns 10 minutos. | Se continua sem veredito: item **parada**. |
+| **Revisão sem veredito**, ou revisor que parou | Pede o veredito de novo uma vez, depois de uns 10 minutos. | Se o revisor responde de novo sem veredito, ou 30 minutos depois do novo pedido: item **parada**. |
 | **Ajuste guardado que não chega** | Não trava a fila: o funcionário segue com a próxima tarefa, e o ajuste é tentado de novo (a falha repetida entra uma vez só no histórico). | Depois de 5 falhas: item **parada**. |
 | **Aviso ao gestor** (quando ele passou várias tarefas e espera todas fecharem) | Tarefa parada não segura o aviso. Ele sai no máximo 2 horas depois, e o que falhar no envio é reenviado. | Nunca. |
 | **Conversa esperando o limite de consumo, e a leitura do limite falha** | Depois de 3 falhas seguidas, deixa de esperar e retoma. | Nunca. |
@@ -161,9 +180,9 @@ Cada item abre o cartão da tarefa e traz a ação. Sem **×**: o item some sozi
 | Rótulo | O que quer dizer | Ação |
 | --- | --- | --- |
 | **dúvida** | A dúvida de uma tarefa está **aguardando você**. Mostra a tarefa e a primeira pergunta. | **Responder**: abre o cartão, onde se responde. |
-| **parada** | A revisão não começou ou ficou sem veredito, o ajuste não chegou ao funcionário, ou a tarefa está em **Aguardar**. | **Revisar** (aprove com **Aprovar entrega**, ou mande o ajuste na conversa para reprovar), **Ver ajuste** (abre o cartão; mande a mensagem de novo na conversa da tarefa) ou **Decidir** (tire de **Aguardar** ou cancele). |
-| **bloqueada** | Uma tarefa espera outra que não anda. | Se a outra se recupera sozinha, nada a fazer. Se só você resolve, o link abre o cartão da tarefa que segura. Se ela foi cancelada: **Liberar**, **Cancelar junto** ou **Continuar esperando** (some por 7 dias). |
-| **não começou** | Cartão em **A fazer** há 2 dias ou mais, fora da fila e sem bloqueio. | **Começar** ou **Cancelar**. |
+| **parada** | A revisão não começou ou ficou sem veredito, ou o ajuste não chegou ao funcionário. | **Revisar** (abre o cartão: aprove com **Aprovar entrega**, ou mande o ajuste na conversa para reprovar) ou **Reenviar ajuste** (age na hora, sem abrir o cartão: zera as falhas e tenta de novo; o item some se o ajuste chegou). |
+| **bloqueada** | Uma tarefa espera outra que não anda. | Se a outra se recupera sozinha, nada a fazer. Se só você resolve, o link abre o cartão da tarefa que segura: **Responder** (dúvida com você), **Revisar**, **Ver ajuste** (o reenvio é no item **parada** dela) ou **Decidir** (a que segura está em **Aguardar**, no limite de revisões automáticas ou sem responsável). Se ela foi cancelada: **Liberar**, **Cancelar junto** ou **Continuar esperando** (some por 7 dias). |
+| **não começou** | Cartão em **A fazer** parado há mais de 2 dias, fora da fila e sem bloqueio. | **Começar** ou **Cancelar**. |
 
 Clicar no item abre o quadro de tarefas do projeto já no cartão. Com **avisar no sistema** ligado, cada item novo também vira uma notificação.
 

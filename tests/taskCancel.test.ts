@@ -492,9 +492,12 @@ describe('cancelar pela API: o token tem de ser o da conversa atual da tarefa', 
     const outroProjeto = tokens.issue({ staffId: 'ana-1', projectId: 'q', sessionId: 's-q', engine: 'claude' });
     const semFicha = tokens.issue({ staffId: null, projectId: 'p', sessionId: 's-nf', engine: 'claude' });
 
-    for (const token of [undefined, 'inventado', outra, gestor, outroProjeto, semFicha]) {
+    for (const token of [undefined, 'inventado', outra, outroProjeto, semFicha]) {
       await expect(b.svc.cancelFrom('p', t.id, callerOf(tokens, token), 'x')).rejects.toBeInstanceOf(TaskForbiddenError);
     }
+    // Quem pediu a tarefa (o gestor) cancela direto só a que nunca começou: esta já começou, então 409 que aponta o pedido de cancelamento
+    // (tests/cancelRequest.test.ts). Antes da regra do solicitante era 403, como o dos outros.
+    await expect(b.svc.cancelFrom('p', t.id, callerOf(tokens, gestor), 'x')).rejects.toBeInstanceOf(TaskConflictError);
     expect((await b.get(t.id)).status).toBe('doing');
     expect(b.calls).toEqual([]);
 

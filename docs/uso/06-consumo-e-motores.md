@@ -21,7 +21,7 @@
 | --- | --- |
 | **Trava de consumo: 5 horas** e **Trava de consumo: 7 dias** | Passando da porcentagem definida, o Club pergunta antes de conversar ou abrir sessão. Vazio = sem trava. Cada ficha pode ter a sua. |
 | **Continuar sozinho quando o limite de uso voltar** | Se o limite acabar no meio de uma conversa, ela manda "continue" assim que o limite voltar. |
-| **Otimizar assinatura** | Nas 48 h antes do reset da cota de 7 dias, se no seu ritmo ia sobrar 30% ou mais, as conversas vão para o Opus em esforço máximo e os agents pensam mais, até a folga acabar. Espera se o limite de 5 h passar de 50%. As respostas ficam mais lentas. |
+| **Otimizar assinatura** | Nas 72 h antes do reset da cota de 7 dias, se no seu ritmo ia sobrar cota (30% faltando 3 dias, caindo até 10% no último dia), as conversas vão para o Opus em esforço máximo e os agents pensam mais, até a folga acabar. Espera se o limite de 5 h passar de 50%. As respostas ficam mais lentas. |
 | **Orçamento por projeto** | Porcentagem da cota de 7 dias que cada projeto pode usar. Passando dela, o Club pergunta antes de conversar nesse projeto. Vazio = sem orçamento. |
 
 ## Motor por ficha
@@ -30,6 +30,17 @@
 - **Codex (GPT)** roda numa sandbox: só o projeto, sem internet. Precisa de **Usar o Codex (GPT)** ligado. Com ele desligado, a conversa de quem roda no Codex não abre.
 - **SSH** vale nos dois motores: quem roda no Codex também opera servidores, pelo mesmo MCP `myco-ssh` do Club (ver **Servidores (SSH e FTP)** em `02-funcionarios.md`). Nessa conversa o Codex fica sem busca na web e sem o Chrome.
 - **FTP** só funciona no Claude. Com conexão FTP marcada na ficha, o botão do Codex fica desligado: para escolher o Codex, tire as conexões FTP na aba **Projeto**.
+
+## Agents da ficha no Codex
+
+Os agents da ficha (os do projeto e os da conta, em `.claude/agents`) rodam no Codex como **subagents**.
+
+- O Club grava a definição de cada agent numa pasta da conversa. A sandbox nega o acesso a essa pasta: o agent não lê nem troca a própria definição.
+- O **modelo** do agent não vale no Codex (o apelido do Claude não existe lá): o subagent usa o modelo da conversa. O **esforço** vem do agent, se ele diz; senão do modelo dele (Haiku: baixo, Sonnet: médio, Opus: alto). Com modelo desconhecido, o subagent segue o esforço da conversa.
+- **Somente leitura é só instrução.** O agent sem ferramenta de escrita nem de terminal (como o **Pesquisador**) recebe a ordem de só ler. Mas no Codex ele roda na mesma sandbox de quem o chamou e **consegue escrever**: não conte com isso como trava de proteção.
+- Os agents do roteiro da ficha (**Executor**, **Pesquisador**, **Revisor**) são criados na hora, se faltarem.
+- Agent que a ficha pede e não existe em `.claude/agents` fica de fora: a ficha da conversa lista os que faltam e manda o funcionário avisar você.
+- Precisa de subagents no Codex instalado (recurso `multi_agent`). Sem ele, os agents não rodam.
 
 ## Motor secundário (troca ao bater o limite)
 
@@ -42,21 +53,38 @@ Quando o principal estoura o limite:
 
 | Momento | O que acontece |
 | --- | --- |
-| A tarefa começa com o principal no limite | Começa direto no secundário ("Começou direto no motor secundário..."), se o secundário estiver disponível. Senão, fica na fila até o limite baixar. |
-| O limite estoura no meio do trabalho | Passa para o secundário numa conversa nova, com o resumo da anterior ("Trocou no meio..."). |
+| A tarefa começa com o principal no limite | Começa direto no secundário ("Começou direto no motor secundário..."), se o secundário estiver disponível e a pré-checagem passar. Senão, fica na fila até o limite baixar. |
+| O limite estoura no meio do trabalho | Passa para o secundário numa conversa nova, com o resumo da anterior ("Trocou no meio..."), se a pré-checagem passar. Senão, segue como antes e espera o limite voltar. |
+| Você manda uma mensagem no chat | Passa para o secundário numa conversa nova, se a pré-checagem passar. Senão, a mensagem fica barrada com o aviso de limite de sempre. |
 
 A troca **não acontece** (a tarefa espera) quando:
 
 - o limite do principal volta em menos de 15 minutos;
 - o secundário também está no limite;
 - não dá para ler o limite do secundário (sem leitura, não troca às cegas);
-- a tarefa já trocou de motor uma vez (não troca de novo).
+- a tarefa já trocou de motor uma vez (não troca de novo);
+- a **pré-checagem** do secundário não passa (ver abaixo).
+
+### Pré-checagem do secundário
+
+Antes de trocar, o Club confere, sem abrir nada, se a conversa nova abriria no secundário. Só troca se tudo passar:
+
+- a ficha está íntegra e passa nas regras dela, e o secundário não passou da trava de consumo dele;
+- se o secundário é o Codex: ele está ligado e instalado, o modelo está no catálogo da sua conta, tem subagents e todos os agents da ficha existem para ele (ver **Agents da ficha no Codex**);
+- se o secundário é o Codex: a sandbox abre. No Windows, não troca com **outra conversa do Codex rodando** (duas ao mesmo tempo derrubam a sandbox uma da outra). Depois de uma falha real da sandbox, o Club segura novas conferências por 5 minutos.
+
+Se a pré-checagem não passa, a tarefa **não cai no secundário**: espera o limite do principal baixar e avisa.
+
+- A fila confere de novo a cada rodada. Se passar (por exemplo, a outra conversa do Codex terminou), a tarefa troca e começa no secundário. Se o limite baixar antes, ela começa no principal.
+- No meio do trabalho, a conversa fica no principal e continua quando o limite voltar. O histórico da tarefa anota "troca para {motor} não feita: {motivo}; segue como antes".
 
 Sinais na tela:
 
 - No chat: o aviso **Conversa no motor secundário** (com **Não avisar nesta sessão**) e o selo **No motor secundário: {motor} · {modelo}**.
 - No cartão da tarefa: o selo **no secundário: {motor} · {modelo}**. O tooltip mostra o motivo e a data da troca.
 - Se a ficha trocar o secundário depois, a conversa volta ao motor principal.
+- Tarefa que espera sem trocar: no cartão, o selo **Sem troca: espera o limite do {motor} voltar** (laranja em **A fazer**, neutro nas outras colunas). O tooltip e o detalhe da tarefa dizem o motor que não serve, o motivo (**sandbox indisponível**, **agents indisponíveis**, **modelo indisponível** ou **a troca não abre**, com a mensagem do servidor) e a hora em que o limite volta. O selo some quando o limite passa ou a tarefa começa.
+- Na caixa de avisos, a tarefa aparece como parada, sem botão: é só informação (**Volta sozinha, sem ação sua**) e some sozinha quando o limite baixa.
 
 ## Segunda opinião do Codex (tarefas)
 

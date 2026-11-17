@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { isClosed, type InboxItem, type StaffProfile, type Task } from '../../../shared/model';
+import { isClosed, type InboxItem, type InboxKind, type StaffProfile, type Task } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
 import { secretFileOf } from '../chat/secretAlerts';
 import { SecretVerdictRow } from '../chat/SecretVerdictRow';
@@ -9,13 +9,13 @@ import { TaskCloseDialog } from '../tasks/TaskCloseDialog';
 import { isInsideDialog } from '../lib/dialogStore';
 import { inboxText, inboxWho } from './inboxText';
 import { secretVerdictOf } from './secretVerdict';
-import { alertAction, isTaskAlert, type AlertKind, type InboxOpen } from './taskAlerts';
+import { alertAction, isTaskAlert, type InboxOpen } from './taskAlerts';
 import type { InboxView } from './useInbox';
 
 // Botão "precisa de mim" no topo do quadro, com o contador, e a lista que abre embaixo dele.
 // Clicar num item abre o painel de quem está esperando (ou o card da tarefa, nos itens de tarefa).
 
-const KIND_LABEL: Record<AlertKind, string> = {
+const KIND_LABEL: Record<InboxKind, string> = {
   plan: t('inbox.kindPlan'),
   permission: t('inbox.kindPermission'),
   secret: t('inbox.kindSecret'),
@@ -43,6 +43,8 @@ function dismissTitleOf(item: InboxItem): string | null {
   if (item.kind === 'waiting' && item.id.startsWith('question:')) return t('office.questionSeenTitle');
   if (item.id.startsWith('waiting:')) return t('inbox.dismissWaitingTitle');
   if (item.kind === 'routine') return t('inbox.dismissTitle');
+  // Erro (`error:`/`cap:`): o servidor guarda o carimbo, então outro erro da mesma conversa volta a avisar.
+  if (item.kind === 'error') return t('inbox.dismissTitle');
   return null;
 }
 
@@ -224,13 +226,17 @@ export function InboxMenu({
                       <button
                         className="link small"
                         title={action.title}
+                        disabled={busy === item.id}
                         onClick={() => {
+                          // Reenviar o ajuste roda aqui mesmo (a caixa relê e o item some se foi); as outras ações abrem o card.
+                          if (action.direct) return void run(item, () => api.resendHeld(item.projectId, action.taskId));
                           setOpen(false);
                           onOpen(item, { taskId: action.taskId });
                         }}
                       >
                         {action.label}
                       </button>
+                      {action.direct && failed?.id === item.id && <span className="error small" role="alert">{failed.message}</span>}
                     </span>
                   )}
                   {dismissTitle && (

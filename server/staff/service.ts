@@ -41,8 +41,10 @@ import { readUsage } from '../usage';
 import { atMostAutonomy } from '../taskFallback';
 import { projectBudgetHit, usageStopHit, UsageStopError } from '../usageStop';
 import { isClosed, TEMP_IDLE_DAYS } from '../../shared/model';
-import { codexModelOrNull, type CodexSpawn } from '../chat/codexArgs';
+import { codexModelOrNull, codexProfileArgs, sandboxOfAutonomy, type CodexSpawn } from '../chat/codexArgs';
 import type { CodexEnvStatus } from '../codexEnv';
+import { CapabilityError, type CodexCapability } from '../engineCapability';
+import { AGENT_PRESETS, PLAYBOOK_AGENTS } from '../../shared/agentPresets';
 import type { CodexModelsResult } from '../codexModels';
 import { readCodexThread } from '../chat/codexProcess';
 import { buildClaudeArgs, capAutonomy } from './ficha';
@@ -241,6 +243,10 @@ export interface StaffServiceOptions {
    * não abre e a mensagem diz como atualizar. Sem esta função, não confere.
    */
   codexEnv?: () => Promise<CodexEnvStatus>;
+  /**
+   * Confere a sandbox e os agents do Codex antes de uma troca de motor (ver `assertOverrideRunnable`). Sem ela, a troca só confere o que já conferia.
+   */
+  codexCapability?: CodexCapability;
   /** Aviso no log do servidor (padrão console.warn). */
   log?: (line: string) => void;
 }
@@ -1125,6 +1131,8 @@ export class StaffService {
     staffId: string | null,
     forkFrom?: string,
     engineOverride?: EngineOverride,
+    /** Conversa de revisão de tarefa: sem ferramentas de edição (Claude) nem sandbox de escrita (Codex); só a memória da ficha, pelo MCP. Gravada na conversa: reabrir mantém. */
+    reviewOnly = false,
   ): Promise<{ sessionId: string; cwd: string; args: string[]; chosen?: boolean; engine?: 'claude' | 'codex'; codex?: CodexSpawn } | null> {
     const project = await this.project(projectId);
     if (!project) return null;
@@ -1145,9 +1153,14 @@ export class StaffService {
     profile = { ...profile, projectId };
     const resume = !!sessionId && !forkFrom;
     const id = resume ? sessionId! : randomUUID();
+    const origin = profile.sessions.find((x) => x.id === (forkFrom ?? sessionId));
+    // A revisão vale desde a abertura e ao reabrir (a entrada da conversa guarda): a cópia de uma conversa de revisão também não edita.
+    const readOnly = reviewOnly || origin?.readOnly === true;
     // Motor da conversa: o da ficha, ou o secundário (`engineOverride`), montado como se a ficha fosse dele. Só a montagem muda:
     // o que grava a ficha (selo, JSON) segue o `profile` de verdade.
-    const runProfile = engineOverride ? asEngine(profile, engineOverride) : profile;
+    const asRun = engineOverride ? asEngine(profile, engineOverride) : profile;
+    // Revisão no Codex: modo "manual" (sandbox de só leitura), para o modo mostrado e a ficha dizerem o que a conversa faz; o CodexProcess garante a sandbox.
+    const runProfile = readOnly && engineOf(asRun) === 'codex' ? { ...asRun, autonomy: atMostAutonomy('manual', asRun.autonomy) } : asRun;
     const codex = runProfile.engine === 'codex';
     // Antes de qualquer coisa que grave (worktree, ssh_config, ficha .md): uma ficha do Codex mexida por fora (motor ou autonomia
     // diferentes dos que o Claudio’s Club gravou) não abre, nem como Claude. Ver seal.ts.
@@ -1161,11 +1174,10 @@ export class StaffService {
     // Chrome só com a extensão instalada (vale só para esta conversa: a ficha salva segue como o dono escolheu). No Codex o Chrome é outro:
     // o MCP `myco-chrome`, montado em prepareCodexRun (ver codexChromeOf), e não usa esta extensão.
     const browser = codex ? false : await effectiveBrowser(runProfile.browser, this.opts.browserStatus);
-    const codexRun = codex ? await prepareCodexRun(runProfile, ctx, id, cwd) : null;
+    const codexRun = codex ? await prepareCodexRun(runProfile, ctx, id, cwd, readOnly) : null;
     // O navegador limpo segue o que a ficha pede (`runProfile.browser`), não a extensão do Chrome (`browser` efetivo).
-    const run = codexRun ? null : await prepareRun({ ...runProfile, browser }, { ...ctx, cleanBrowser: runProfile.browser }, id, cwd);
+    const run = codexRun ? null : await prepareRun({ ...runProfile, browser }, { ...ctx, cleanBrowser: runProfile.browser }, id, cwd, readOnly);
     // Modelo e esforço: o da conversa (reabrir, ou a de origem ao duplicar) > o da ficha > o último escolhido no chat.
-    const origin = profile.sessions.find((x) => x.id === (forkFrom ?? sessionId));
     if (!resume) {
       const now = new Date().toISOString();
       // A cópia nasce com a escolha da origem gravada: ao reabrir depois, sai igual.
@@ -1177,6 +1189,7 @@ export class StaffService {
         ...(forkFrom && origin?.model && { model: origin.model }),
         ...(forkFrom && origin?.effort && { effort: origin.effort }),
         ...(engineOverride && { fallback: { engine: engineOverride.engine, model: engineOverride.model, ...(engineOverride.effort && { effort: engineOverride.effort }) } }),
+        ...(readOnly && { readOnly: true }),
       };
       // Ficha fresca, na fila das trocas do chat: uma troca de modelo pode ter gravado algo desde a leitura lá em cima.
       await withProfileLock(project.path, staffId, async () => {
@@ -1206,6 +1219,7 @@ export class StaffService {
         readOnlyPaths: codexRun.readOnlyPaths,
         sshMcp: codexRun.sshMcp,
         memoriaMcp: codexRun.memoriaMcp,
+        ...(readOnly && { readOnly: true }),
         chromeMcp: codexRun.chromeMcp,
         cleanMcp: codexRun.cleanMcp,
         extraMcps: codexRun.extraMcps,
@@ -1225,7 +1239,7 @@ export class StaffService {
       };
       return { sessionId: id, cwd, args: [], engine: 'codex', codex: spawn, ...chosen };
     }
-    const args = buildClaudeArgs(effective, { ...run!, sessionId: id, resume, firstPrompt: null, ...(forkFrom && { forkFrom }) });
+    const args = buildClaudeArgs(effective, { ...run!, sessionId: id, resume, firstPrompt: null, ...(forkFrom && { forkFrom }), ...(readOnly && { readOnly: true }) });
     return { sessionId: id, cwd, args, ...chosen };
   }
 
@@ -1234,7 +1248,7 @@ export class StaffService {
    * a uma conversa no motor `override` (selo, Codex usável, regras da ficha, consumo do motor do override, modelo), sem gravar
    * nada: sem selo novo, sem contexto, sem processo. Lança o erro que a conversa daria.
    */
-  async assertOverrideRunnable(projectId: string, staffId: string, override: EngineOverride): Promise<void> {
+  async assertOverrideRunnable(projectId: string, staffId: string, override: EngineOverride, exceptSession?: string): Promise<void> {
     const project = await this.project(projectId);
     if (!project) throw new StaffError('projeto não encontrado');
     const profile = await readProfile(project.path, staffId);
@@ -1245,7 +1259,57 @@ export class StaffService {
     if (runProfile.engine === 'codex') await this.assertCodexUsable();
     assertProfileRules(runProfile);
     await this.checkUsage(projectId, { staffId, engine: runProfile.engine });
-    await this.checkCodexModel(runProfile.engine, runProfile.model);
+    if (runProfile.engine === 'codex' && this.opts.codexCapability) {
+      await this.assertCodexCapable(project, profile.id, runProfile, this.opts.codexCapability, exceptSession);
+    } else {
+      await this.checkCodexModel(runProfile.engine, runProfile.model);
+    }
+  }
+
+  /**
+   * As conferências do Codex que a conversa faria antes de abrir (ver engineCapability.ts): o modelo, os agents da ficha e a sandbox.
+   * Lança `CapabilityError` com o motivo. Não cria worktree: se ela ainda não existe, a sandbox confere na pasta do projeto.
+   */
+  private async assertCodexCapable(project: Project, staffId: string, runProfile: StaffProfile, capability: CodexCapability, exceptSession?: string): Promise<void> {
+    try {
+      await this.checkCodexModel(runProfile.engine, runProfile.model);
+    } catch (err) {
+      throw new CapabilityError('model', (err as Error).message);
+    }
+    const env = await this.opts.codexEnv?.();
+    const cwd = await this.effectiveCwd(project, runProfile, staffId);
+    // Sem `codexEnv` não dá para saber se o Codex tem subagents: os agents não são conferidos (a sandbox também depende da versão dele).
+    if (env) {
+      const playbook = runProfile.playbook ? PLAYBOOK_AGENTS[runProfile.playbook] : [];
+      await capability.agents({
+        wanted: [...new Set([...playbook, ...runProfile.agents])],
+        // O roteiro cria estes presets na hora (ver ensurePlaybookAgents): não estão no disco ainda, então não se conferem.
+        presets: playbook.filter((n) => AGENT_PRESETS.some((p) => p.name === n)),
+        multiAgent: env.multiAgent,
+        dirs: { cwd, projectPath: project.path, userAgentsDir: path.join(defaultLocations().home, 'agents') },
+      });
+    }
+    if (!env?.version) return;
+    await capability.sandbox({
+      cwd,
+      version: env.version,
+      exceptSession,
+      profileArgs: codexProfileArgs({
+        cwd,
+        projectPath: project.path,
+        home: os.homedir(),
+        mycoHome: MYCO_HOME,
+        mode: sandboxOfAutonomy(runProfile.autonomy),
+        network: env.networkProxy ? 'loopback' : 'off',
+      }),
+    });
+  }
+
+  /** A pasta onde a conversa roda: a worktree da ficha, se ela pede uma e já existe; senão a do projeto. Não cria nada. */
+  private async effectiveCwd(project: Project, profile: Pick<StaffProfile, 'worktree'>, staffId: string): Promise<string> {
+    if (!profile.worktree) return project.path;
+    const wt = worktreeFor(project.path, staffId);
+    return (await fs.stat(wt.path).then((s) => s.isDirectory(), () => false)) ? wt.path : project.path;
   }
 
   /** Grava (Codex ou Claude travado) ou apaga (outro motor) o selo da ficha. Só onde o Claudio’s Club decide motor e autonomia (ver seal.ts). */

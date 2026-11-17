@@ -129,13 +129,13 @@ export interface PreparedRun {
  * hooks do Claudio’s Club e os agents do roteiro, para a conversa no Claudio’s Club. Rodando fora
  * da pasta do projeto (worktree), a pasta das fichas entra em `--add-dir`.
  */
-export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string): Promise<PreparedRun> {
+export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string, readOnly = false): Promise<PreparedRun> {
   const away = path.resolve(cwd) !== path.resolve(ctx.projectPath);
   const dir = path.join(ctx.runDir, sessionId);
   // MCP de SSH: o mesmo do Codex (ver sshLaunchOf). O terminal não tem ssh (o hook remote-guard barra), então o acesso é só por ele.
   const ssh = sshLaunchOf(profile, ctx, cwd);
-  // Em plan, o MCP que grava só a memória da própria ficha (ver memoriaLaunchOf): a edição de arquivos está bloqueada.
-  const memoria = memoriaLaunchOf(profile, ctx);
+  // Em plan e na conversa de revisão, o MCP que grava só a memória da própria ficha (ver memoriaLaunchOf): a edição de arquivos está bloqueada.
+  const memoria = memoriaLaunchOf(profile, ctx, readOnly);
   // Navegador limpo: pela ficha (`browser` efetivo não entra aqui), então vale sem a extensão do Chrome. O SSH não entra aqui: no Claude o terminal
   // tem rede, então tirar o navegador por causa do SSH não fecharia canal nenhum (no Codex, a sandbox fecha a rede e o caso é outro; ver cleanBrowserOf).
   const cleanDir = path.join(dir, 'navegador');
@@ -371,10 +371,13 @@ export function sshServersOf(profile: Pick<StaffProfile, 'servers'>, servers: Se
 export function memoriaLaunchOf(
   profile: Pick<StaffProfile, 'id' | 'autonomy' | 'mcpAccess'>,
   ctx: Pick<LaunchContext, 'projectPath'>,
+  readOnly = false,
 ): { info?: MemoriaInfo; server: { command: string; args: string[] } | null } {
-  if (profile.autonomy !== 'plan') return { server: null };
-  if (!codexMcpAccess(profile.mcpAccess, MEMORIA_MCP_NAME, [], null).attached) return { info: { mcp: false }, server: null };
-  return { info: { mcp: true }, server: memoriaMcpServer({ projectPath: ctx.projectPath, staffId: profile.id }) };
+  // A conversa de revisão (`readOnly`) também não edita arquivo: a memória dela segue o mesmo caminho do plan, mesmo com a ficha em outra autonomia.
+  if (profile.autonomy !== 'plan' && !readOnly) return { server: null };
+  const review = readOnly && profile.autonomy !== 'plan';
+  if (!codexMcpAccess(profile.mcpAccess, MEMORIA_MCP_NAME, [], null).attached) return { info: { mcp: false, ...(review && { review }) }, server: null };
+  return { info: { mcp: true, ...(review && { review }) }, server: memoriaMcpServer({ projectPath: ctx.projectPath, staffId: profile.id }) };
 }
 
 /** O MCP de SSH (`myco-ssh`) de uma conversa, igual nos dois motores (ver `sshLaunchOf`). */
@@ -434,15 +437,15 @@ export function sshLaunchOf(
  * SKILL.md, sem copiar nada; ver ficha.ts). O texto vai em `developer_instructions` na linha de comando; passando de ~24 KB (ou
  * no Windows) o CodexProcess o manda no começo do prompt da primeira mensagem (o Codex não tem arquivo para isso sem trocar as instruções base).
  */
-export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string): Promise<PreparedCodexRun> {
+export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string, readOnly = false): Promise<PreparedCodexRun> {
   const away = path.resolve(cwd) !== path.resolve(ctx.projectPath);
   // MCP de SSH: o mesmo do Claude (ver sshLaunchOf). Aqui roda fora da sandbox, com o cwd na pasta do Club e as ferramentas de leitura
   // (`enabled_tools`) quando `readonly` ou `ask`, porque o Codex não pergunta.
   const ssh = sshLaunchOf(profile, ctx, cwd);
   let sshMcp: CodexMcpServer | null = null;
   if (ssh.server) sshMcp = { ...ssh.server, cwd: ROOT, ...(ssh.enabledTools ? { enabledTools: ssh.enabledTools } : {}) };
-  // Memória da própria ficha: em plan a sandbox é de só leitura e não aceita exceção por caminho, então o MCP (fora dela) é a porta de escrita.
-  const memoria = memoriaLaunchOf(profile, ctx);
+  // Memória da própria ficha: em plan (e na revisão) a sandbox é de só leitura e não aceita exceção por caminho, então o MCP (fora dela) é a porta de escrita.
+  const memoria = memoriaLaunchOf(profile, ctx, readOnly);
   const memoriaMcp: CodexMcpServer | null = memoria.server ? { ...memoria.server, cwd: ROOT } : null;
   // Chrome do usuário: depois do SSH, porque o MCP de SSH na conversa desliga o Chrome (não juntar servidor e logins).
   const chromeDir = path.join(ctx.runDir, sessionId, 'chrome');

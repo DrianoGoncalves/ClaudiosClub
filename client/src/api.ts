@@ -201,6 +201,19 @@ export class ApiError extends Error {
   }
 }
 
+/** O que fechar uma conversa fez: `closed` = havia processo e ele saiu; `interrupted` = estava trabalhando (turno cortado, com a confirmação). */
+export interface ChatCloseResult {
+  ok: boolean;
+  closed: boolean;
+  interrupted: boolean;
+}
+
+/** O que arquivar fechou: quantas conversas saíram e quantas ficaram abertas por estarem trabalhando (só funcionário e projeto deixam). */
+export interface ArchiveClosing {
+  closed: number;
+  working: number;
+}
+
 /**
  * Excluir ficha: se o servidor recusar por tarefas abertas no quadro (409 `open-tasks`), pergunta de novo e,
  * confirmado, repete com `force` (as tarefas ficam sem responsável). Recusado, devolve null; outro erro sobe.
@@ -558,6 +571,8 @@ export const api = {
     contextSwitch?: ContextSwitch;
     optimizeQuota?: boolean;
     autoContinue?: boolean;
+    /** Retomar sozinho a conversa que caiu por falha passageira (padrão ligado); desligado, ela fica parada até você mandar mensagem. */
+    autoRetry?: boolean;
     /** Títulos de conversa gerados por IA (Haiku); desligado, a lista mostra o começo do assunto. */
     aiTitles?: boolean;
     showUserScope?: boolean;
@@ -593,8 +608,12 @@ export const api = {
     /** Só os projetos enviados mudam; null tira o orçamento. */
     projectBudgets?: Record<string, number | null>;
   }) => post<AppConfig>('/api/config', patch),
-  archive: (kind: 'project' | 'session' | 'conversation', id: string, archived: boolean) =>
-    post<AppConfig>('/api/archive', { kind, id, archived }),
+  /**
+   * Arquivar também fecha o processo (`closing`, só ao arquivar): uma conversa que trabalha recusa (409 `working`/`uncertain`) sem `confirm`, e nada é arquivado;
+   * funcionário e projeto fecham só as conversas paradas e dizem quantas deixaram trabalhando.
+   */
+  archive: (kind: 'project' | 'session' | 'conversation', id: string, archived: boolean, confirm = false) =>
+    post<AppConfig & { closing?: ArchiveClosing }>('/api/archive', { kind, id, archived, ...(confirm && { confirm: true }) }),
   /** Título da conversa dado pelo user; null (ou vazio) apaga e a lista volta ao último assunto. 409 = teto de títulos cheio. */
   setConversationTitle: (id: string, title: string | null) => post<AppConfig>('/api/conversation-title', { id, title }),
   costs: () => get<CostReport>('/api/costs'),
@@ -723,6 +742,8 @@ export const api = {
   inbox: () => get<InboxItem[]>('/api/inbox'),
   turns: (since: string) => get<TurnNotice[]>(`/api/turns?since=${encodeURIComponent(since)}`),
   dismissSecret: (id: string, notSecret = false) => post<{ ok: boolean }>('/api/secrets/dismiss', { id, notSecret }),
+  /** `id` = o do item da caixa: `error:<sessão>` (parou com erro) ou `cap:<sessão>` (parou no teto). */
+  dismissError: (id: string) => post<{ ok: boolean }>('/api/errors/dismiss', { id }),
   dismissQuestion: (sessionId: string) => post<{ ok: boolean }>('/api/questions/dismiss', { sessionId }),
   dismissWaiting: (sessionId: string) => post<{ ok: boolean }>('/api/waiting/dismiss', { sessionId }),
   dismissRoutineAlert: (id: string) => post<{ ok: boolean }>('/api/routines/alerts/dismiss', { id }),
@@ -768,6 +789,12 @@ export const api = {
     post<{ created: string[]; warnings: string[] } | null>(`/api/projects/${projectId}/staff/import`, file),
   /** Efetivar um temporário (contratado por outro funcionário). */
   keepStaff: (projectId: string, staffId: string) => post<StaffProfile>(`/api/projects/${projectId}/staff/${staffId}/keep`),
+  /**
+   * Muda o lugar do cartão na fila do responsável (só A fazer, na fila). `to`: 'top' ou a posição final (1 = a próxima); `step`: um lugar acima ou
+   * abaixo. Do navegador pareado o dono mexe em qualquer cartão; 409 fora da fila ou quando nada muda (já é o primeiro/último).
+   */
+  reorderTask: (projectId: string, taskId: string, body: { to: 'top' | number } | { step: 'up' | 'down' }) =>
+    post<{ ok: true; moved: { from: number; to: number; of: number }; task: Task } | null>(`/api/projects/${projectId}/tasks/${taskId}/order`, body),
   startTask: (projectId: string, taskId: string, force = false) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/start`, { force }),
   /** Apagar. `dependents`: o que fazer com cada tarefa aberta que espera esta (obrigatório para as diretas; sem o mapa completo o servidor recusa com 409). */
   deleteTask: (projectId: string, taskId: string, dependents?: DepMap) =>
@@ -783,11 +810,18 @@ export const api = {
   /** Responder a dúvida escalada da tarefa. A mesma rota do gestor; do navegador pareado a resposta vale como sua e chega ao funcionário. */
   answerTaskQuestion: (projectId: string, taskId: string, body: AnswerBody) =>
     post<{ ok: boolean; task: Task | null }>(`/api/projects/${projectId}/tasks/${taskId}/answer`, body),
+  /** Reenviar o ajuste guardado que não chegou (item `stuck` com `resend`): zera as falhas e tenta já. Só do navegador pareado (403); 409 se encerrada ou sem ajuste guardado. */
+  resendHeld: (projectId: string, taskId: string) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/resend-held`),
   saveRoutines: (projectId: string, staffId: string, routines: Routine[]) =>
     post<StaffProfile>(`/api/projects/${projectId}/staff/${staffId}/routines`, { routines }),
   runRoutine: (projectId: string, staffId: string, routineId: string) =>
     post<{ ok: boolean; text: string } | null>(`/api/projects/${projectId}/staff/${staffId}/routines/${routineId}/run`),
   chatInterrupt: (sessionId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/interrupt`),
+  /**
+   * Fecha o processo da conversa (a sessão fica no disco). Parada fecha; trabalhando recusa (409 `working`) sem `confirm`; efeito incerto recusa mesmo
+   * confirmado (409 `uncertain`, com `action` em `ApiError.details`). `closed: false` = não havia processo aberto.
+   */
+  chatClose: (sessionId: string, confirm = false) => post<ChatCloseResult>(`/api/chat/${sessionId}/close`, confirm ? { confirm: true } : {}),
   /** O que é da pessoa (nome, cargo, missão…) vai sempre às cópias ligadas; `copiesUpdated` = quantas mudaram. */
   updateStaff: (projectId: string, staffId: string, input: StaffInput) =>
     post<StaffProfile & { copiesUpdated?: number }>(`/api/projects/${projectId}/staff/${staffId}`, input),

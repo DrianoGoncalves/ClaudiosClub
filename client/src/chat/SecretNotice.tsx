@@ -11,7 +11,7 @@ import { SecretVerdictRow } from './SecretVerdictRow';
  * em "possível credencial exposta" o botão se chama "Já troquei", não "Ignorar". Quando o servidor diz em que arquivo o segredo está (`secret.file`), o balão mostra o caminho e, se o editor do Club abre esse arquivo,
  * o botão que o abre; arquivo que a tela recusa (.env, chave) fica só com o caminho e o "abra no seu editor".
  * Só existe na tela: não é mensagem da conversa, o modelo nunca vê. O valor do segredo não chega aqui (o item só traz tipo, contexto, origem, caminho, o palpite e a dica mascarada: no máximo 4 caracteres do valor).
- * O aviso de erro da caixa (`kind: 'error'`) usa o mesmo balão, em vermelho e com a frase do servidor; sem `onIgnore`, não há botão.
+ * O aviso de erro da caixa (`kind: 'error'`) usa o mesmo balão, em vermelho e com a frase do servidor, e o mesmo "Ignorar" (o servidor guarda o carimbo do erro dispensado); sem `onIgnore`, não há botão.
  */
 export function SecretNotice({ item, onIgnore, onOpenFile }: { item: InboxItem; onIgnore?: (item: InboxItem) => Promise<void>; onOpenFile?: (path: string) => void }) {
   const [busy, setBusy] = useState(false);
@@ -50,7 +50,7 @@ export function SecretNoticeView({ item, busy, onIgnore, onOpenFile }: { item: I
             </button>
           )}
           {onIgnore && (
-            <button type="button" className="btn-secondary" disabled={busy} title={t(exposed ? 'chat.secretIgnoreExposedTitle' : 'chat.secretIgnoreTitle')} onClick={onIgnore}>
+            <button type="button" className="btn-secondary" disabled={busy} title={t(isError ? 'chat.errorIgnoreTitle' : exposed ? 'chat.secretIgnoreExposedTitle' : 'chat.secretIgnoreTitle')} onClick={onIgnore}>
               {t(exposed ? 'chat.secretIgnoreExposed' : 'chat.secretIgnore')}
             </button>
           )}

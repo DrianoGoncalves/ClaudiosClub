@@ -8,6 +8,7 @@ import { AutoContinue, type Pending } from '../server/chat/autoContinue';
 import { ChatClosingError, ChatManager, type ChatManagerOptions } from '../server/chat/manager';
 import { bootResume, RESUME_MAX_AGE_MS, ResumeFile, resumeAfterRestart, resumeText, takeResume, type ResumeEntry } from '../server/chat/resume';
 import { isInjectedUserText, RESTART_PENDING_TEXT, RESTART_TEXT } from '../server/chat/items';
+import { InboxState } from '../server/inboxState';
 
 // Reinício pelo navegador: o que vai para o disco ao sair, o que o boot reabre e o que recusa entrega enquanto fecha.
 // Processos falsos (sem `claude` de verdade) e relógio injetado, como em wake.test.ts.
@@ -72,14 +73,14 @@ describe('ChatManager: o que vai para o disco ao reiniciar', () => {
     await ctx.m.send('p', 'sy', 'bia', 'faça Y');
     ctx.spawns[1]!.emit({ type: 'result', subtype: 'success', is_error: false, result: 'ok' });
     await settle();
-    expect(ctx.m.busySessions()).toEqual([entry({ sessionId: 'sx', staffId: 'ana', hadPending: false })]);
+    expect(await ctx.m.busySessions()).toEqual([entry({ sessionId: 'sx', staffId: 'ana', hadPending: false })]);
   });
 
   it('com pedido de permissão pendente, a entrada marca hadPending', async () => {
     await ctx.m.send('p', 'sx', 'ana', 'rode o teste');
     ctx.spawns[0]!.emit({ type: 'control_request', request_id: 'r1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'npm test' } } });
     await settle();
-    expect(ctx.m.busySessions()).toEqual([entry({ sessionId: 'sx', staffId: 'ana', hadPending: true })]);
+    expect(await ctx.m.busySessions()).toEqual([entry({ sessionId: 'sx', staffId: 'ana', hadPending: true })]);
   });
 
   it('o pedido grava e o boot lê o mesmo, e apaga o arquivo ao ler', async () => {
@@ -88,6 +89,59 @@ describe('ChatManager: o que vai para o disco ao reiniciar', () => {
     expect(await rf.save([entry()], NOW)).toBe(true);
     expect(await takeResume(file, NOW + MIN, () => {})).toEqual([entry()]);
     expect(await exists(file)).toBe(false);
+  });
+});
+
+describe('ChatManager: subagent cortado que só mexeu no projeto não trava a conversa', () => {
+  const DESC = 'Codex agents: geração';
+  const agentUse = (id: string) => ({ type: 'tool_use', id, name: 'Agent', input: { subagent_type: 'executor', description: DESC } });
+  const subCall = (name: string, input: unknown) => JSON.stringify({ type: 'assistant', isSidechain: true, message: { id: 'ms', content: [{ type: 'tool_use', id: 'tsub', name, input }] } });
+  /** O transcript do subagent da chamada `toolUseId`, onde o Claude Code o grava: ao lado do transcript da sessão. */
+  async function subagent(sessionId: string, toolUseId: string, lines: string[]) {
+    const dir = path.join(root, 'p', sessionId, 'subagents');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'agent-a1.meta.json'), JSON.stringify({ agentType: 'executor', toolUseId, spawnDepth: 1 }));
+    await fs.writeFile(path.join(dir, 'agent-a1.jsonl'), `${lines.join('\n')}\n`);
+  }
+
+  it('busySessions: o subagent só local não leva `cut`; o que dá push, ou sem transcript, leva', async () => {
+    const ctx = manager();
+    await subagent('sa', 'toolu_a', [subCall('Edit', { file_path: 'a.ts' }), subCall('PowerShell', { command: 'npx tsc --noEmit' })]);
+    await subagent('sb', 'toolu_b', [subCall('Edit', { file_path: 'a.ts' }), subCall('Bash', { command: 'git push' })]);
+    for (const [i, id] of ['sa', 'sb', 'sc'].entries()) {
+      await ctx.m.send('p', id, 'ana', 'delegue');
+      ctx.spawns[i]!.emit({ type: 'assistant', message: { id: `m-${id}`, content: [agentUse(`toolu_${id.slice(1)}`)] } });
+    }
+    await settle();
+    const got = await ctx.m.busySessions();
+    const cutOf = (id: string) => got.find((e) => e.sessionId === id)?.cut;
+    expect(got.map((e) => e.sessionId)).toEqual(['sa', 'sb', 'sc']);
+    expect(cutOf('sa')).toBeUndefined();
+    expect(cutOf('sb')).toBe(DESC);
+    expect(cutOf('sc')).toBe(DESC); // sem transcript do subagent
+  });
+
+  it('restartCut (queda sem fechamento): lê o transcript da conversa e o do subagent', async () => {
+    const inbox = new InboxState(path.join(root, `inbox-${++n}.json`));
+    const ctx = manager({ inbox });
+    const transcript = (toolUseId: string) =>
+      [
+        { type: 'user', timestamp: '2026-11-11T11:00:00.000Z', message: { content: 'delegue' } },
+        { type: 'assistant', timestamp: '2026-11-11T11:00:01.000Z', message: { id: 'm1', content: [agentUse(toolUseId)] } },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join('\n');
+    await fs.mkdir(path.join(root, 'p'), { recursive: true });
+    await fs.writeFile(path.join(root, 'p', 'sl.jsonl'), transcript('toolu_l'));
+    await fs.writeFile(path.join(root, 'p', 'sp.jsonl'), transcript('toolu_p'));
+    await fs.writeFile(path.join(root, 'p', 'sm.jsonl'), transcript('toolu_m'));
+    await subagent('sl', 'toolu_l', [subCall('Write', { file_path: 'a.ts' })]);
+    await subagent('sp', 'toolu_p', [subCall('Bash', { command: 'curl -X POST https://api.example.com/x' })]);
+    expect(await ctx.m.restartCut('p', 'sl')).toBeNull();
+    expect(await ctx.m.restartCut('p', 'sp')).toEqual({ kind: 'restart', action: DESC });
+    expect(await ctx.m.restartCut('p', 'sm')).toEqual({ kind: 'restart', action: DESC }); // sem transcript do subagent
+    expect(ctx.m.turnCapOf('sl')).toBeNull();
+    expect(ctx.m.turnCapOf('sp')).toEqual({ kind: 'restart', action: DESC });
   });
 });
 

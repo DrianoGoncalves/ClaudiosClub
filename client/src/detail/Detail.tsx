@@ -43,7 +43,8 @@ import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatPercent,
 import { isLoss, RANKING_PERIODS, type RankingGroup, type RankingRow, rankingRows, savingsList, teamSavings } from '../ranking';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
-import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, TasksIcon, UserPlusIcon } from '../icons';
+import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, PowerIcon, TasksIcon, UserPlusIcon } from '../icons';
+import { closeConversation, runClose } from '../chat/closeConversation';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
 import { GithubInstall } from '../skills/GithubInstall';
 import { GithubBadges, GithubOrigin } from '../skills/GithubOrigin';
@@ -147,7 +148,8 @@ export function EmployeePanel(props: {
   conversations?: Array<{ id: string; title: string | null; updatedAt: string | null }>;
   /** Conversas arquivadas (id → quando): saem do seletor, até terem atividade depois. */
   archivedConversations?: ArchivedConversations;
-  onArchiveConversation?: (id: string, archived: boolean) => Promise<void>;
+  /** `confirm`: arquivar uma conversa que trabalha, que o servidor fecha também (ver `runClose`). */
+  onArchiveConversation?: (id: string, archived: boolean, confirm?: boolean) => Promise<void>;
   /**
    * Conversas antigas (a retenção as tirou da lista): `hidden` = quantas ficam de fora, `shown` = já listadas. O item "Mostrar antigas"
    * do seletor chama `onChange`. Sem isto (ou sem antigas), o item não aparece.
@@ -164,8 +166,8 @@ export function EmployeePanel(props: {
   onFocusDone?: () => void;
   /** A caixa "precisa de mim": conversa com aviso nela abre no fim, como antes. */
   inbox?: InboxItem[];
-  /** "Ignorar" no balão de segredo da conversa: o mesmo da caixa (some dos dois lados). */
-  onDismissSecret?: (item: InboxItem) => Promise<void>;
+  /** "Ignorar" no balão de segredo ou de erro da conversa: o mesmo da caixa (some dos dois lados). */
+  onDismissAlert?: (item: InboxItem) => Promise<void>;
   /**
    * Editando pelo RH: as mesmas abas do "Mais", mas no lugar da conversa, com o seletor de projeto (a mesma pessoa em
    * outros projetos) e o "Conversar", que abre o painel dela no chat do projeto escolhido.
@@ -275,16 +277,44 @@ export function EmployeePanel(props: {
     if (next) pick(next);
     else startFresh();
   };
+  // O processo da conversa: aberto (vivo) e trabalhando (turno ou pedido esperando) pelo que o quadro leu; o servidor confere de novo ao fechar.
+  const liveOf = (id: string) => props.live?.find((l) => l.sessionId === id) ?? (id === s?.id ? s.live : null);
   const archiveCurrent = async () => {
     if (!current || !props.onArchiveConversation) return;
     const id = current;
     const restoring = inArchive;
+    const lv = liveOf(id);
     setConvBusy(true);
     try {
-      await props.onArchiveConversation(id, !restoring);
-      if (restoring) return; // fica nela: com o carimbo apagado, ela volta para a lista das ativas
+      // Arquivar também fecha o processo: com ele aberto, avisa antes (trabalhando, com o risco); o servidor não arquiva se a conversa trabalha sem confirmação.
+      const archive = props.onArchiveConversation;
+      const r = restoring
+        ? { done: await archive(id, false) }
+        : await runClose(!!lv?.alive && !!lv.status && lv.status !== 'idle', { working: 'chat.archiveConfirmWorking', ...(lv?.alive && { idle: 'detail.archiveConversationConfirm' as const }) }, (confirm) => archive(id, true, confirm));
+      if (!r || restoring) return; // fica nela: com o carimbo apagado, ela volta para a lista das ativas
       setShown((prev) => prev.filter((x) => x !== id));
       openLatestActive(id);
+    } catch (e) {
+      alertError(e);
+    } finally {
+      setConvBusy(false);
+    }
+  };
+  // Fechar a conversa aberta (libera memória; o histórico fica). O que ela tem de pendente é a confirmação de `closeConversation`.
+  const [closedNote, setClosedNote] = useState<'closed' | 'interrupted' | 'already' | null>(null);
+  useEffect(() => setClosedNote(null), [current]);
+  // O aviso de "fechada" sai quando a conversa reabre (o processo volta a aparecer vivo).
+  const aliveNow = !!(current && liveOf(current)?.alive);
+  useEffect(() => {
+    if (aliveNow) setClosedNote(null);
+  }, [aliveNow]);
+  const closeCurrent = async () => {
+    if (!current) return;
+    const lv = liveOf(current);
+    setConvBusy(true);
+    try {
+      const r = await closeConversation(current, !!lv?.alive && !!lv.status && lv.status !== 'idle');
+      if (r) setClosedNote(r.done.closed ? (r.done.interrupted ? 'interrupted' : 'closed') : 'already');
     } catch (e) {
       alertError(e);
     } finally {
@@ -491,7 +521,20 @@ export function EmployeePanel(props: {
               <PencilIcon />
             </button>
           )}
-          {/* Arquivar a conversa aberta (reversível, sem confirmação); com uma arquivada aberta, devolve à lista. */}
+          {/* Fechar a conversa aberta: encerra o processo dela (libera memória) sem tirá-la da lista. */}
+          {current && !inArchive && (
+            <button
+              type="button"
+              className="btn-secondary chat-icon-btn"
+              disabled={convBusy}
+              onClick={() => void closeCurrent()}
+              aria-label={t('chat.closeConversation')}
+              title={t('chat.closeHelp')}
+            >
+              <PowerIcon />
+            </button>
+          )}
+          {/* Arquivar a conversa aberta (reversível; fecha o processo dela, e avisa antes se ele está aberto); com uma arquivada aberta, devolve à lista. */}
           {props.onArchiveConversation && (
             <button
               type="button"
@@ -505,6 +548,11 @@ export function EmployeePanel(props: {
             </button>
           )}
         </div>
+      )}
+      {showConvos && !props.manage && closedNote && (
+        <p className="muted small chat-closed" role="status">
+          {t(closedNote === 'closed' ? 'chat.closedDone' : closedNote === 'interrupted' ? 'chat.closedInterrupted' : 'chat.closedAlready')}
+        </p>
       )}
       {staff?.temporary && project && (
         <TempNotice staff={staff} managers={props.managers} projectId={project.id} archived={props.archived} onArchive={props.onArchive} onChanged={props.onChanged} />
@@ -568,6 +616,7 @@ export function EmployeePanel(props: {
           restoreLabel={staff?.temporary ? t('detail.restore') : t('detail.unarchive')}
         />
       </p>
+      {!props.archived && <p className="muted small">{t('detail.archiveClosesNote')}</p>}
       {staff && project && (
         <StaffHistory key={staff.updatedAt} projectId={project.id} staffId={staff.id} onRestored={(profile) => props.onRestored?.(profile)} />
       )}
@@ -699,7 +748,7 @@ export function EmployeePanel(props: {
         onFocusDone={props.onFocusDone}
         awaiting={!!opened && !!props.inbox?.some((i) => i.sessionId === opened)}
         inbox={props.inbox}
-        onDismissSecret={props.onDismissSecret}
+        onDismissAlert={props.onDismissAlert}
       />
     </Suspense>
   );

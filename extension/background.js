@@ -89,7 +89,7 @@ async function readInbox() {
   let next = targets;
   for (const item of plan.fresh.length > MAX_SINGLE ? [] : plan.fresh) {
     const id = `club:${item.id}`;
-    next = withTarget(next, id, { kind: item.kind, projectId: item.projectId, staffId: item.staffId });
+    next = withTarget(next, id, { kind: item.kind, projectId: item.projectId, staffId: item.staffId, taskId: item.taskId ?? null });
     await notify(id, `${whoOf(item)} ${msg(KIND_MESSAGE[item.kind] ?? 'kindWaiting')}`, item.summary || msg(KIND_MESSAGE[item.kind] ?? 'kindWaiting'));
   }
   if (plan.fresh.length > MAX_SINGLE) {

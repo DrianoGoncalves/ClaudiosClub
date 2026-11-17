@@ -130,12 +130,16 @@ export default defineMessages({
     'toolbar.userScopeKeywords': 'usuário conta global ~/.claude agents skills sala escopo',
     'toolbar.optimizeTitle': 'Otimizar assinatura',
     'toolbar.optimizeDesc':
-      'Aproveita a cota que ia sobrar. Nas últimas 48 h antes de a cota de 7 dias renovar, se no seu ritmo ia sobrar 30% ou mais, as conversas passam para o Opus em esforço máximo e os agents pensam mais, até a folga acabar. Espera se o limite de 5 h passar de 50%. As respostas ficam mais lentas.',
+      'Aproveita a cota que ia sobrar. Nas últimas 72 h antes de a cota de 7 dias renovar, se no seu ritmo ia sobrar cota (30% faltando 3 dias, caindo até 10% no último dia), as conversas passam para o Opus em esforço máximo e os agents pensam mais, até a folga acabar. Espera se o limite de 5 h passar de 50%. As respostas ficam mais lentas.',
     'toolbar.optimizeKeywords': 'folga cota sobra opus esforço máximo boost consumo otimizado',
     'toolbar.autoContinueTitle': 'Continuar sozinho quando o limite de uso voltar',
     'toolbar.autoContinueDesc':
       'Se o limite da assinatura acabar no meio de uma conversa, ela retoma sozinha: manda “continue” assim que o limite voltar.',
     'toolbar.autoContinueKeywords': 'continuar sozinho limite de uso acabou voltar retomar continue conversa assinatura reset 5h 7d',
+    'toolbar.autoRetryTitle': 'Retomar sozinho quando a conversa cair por falha passageira',
+    'toolbar.autoRetryDesc':
+      'Se a conversa de um funcionário parar por falha passageira (API sobrecarregada, erro 5xx, limite de taxa, queda de conexão) ou o processo cair no meio do turno, ela segue sozinha: espera 30 s, 2 min e 8 min e manda uma mensagem pedindo para conferir o que já foi feito e seguir (até 3 tentativas por turno; 1 se a causa é desconhecida). Não retoma erro de login, cobrança, pedido recusado nem limite de uso (esse tem a opção própria, em Consumo), e não repete uma ação que mexia fora do projeto (deploy, push, comando em servidor): nesse caso avisa na caixa “precisa de mim”. Desligada, a conversa fica parada até você mandar mensagem.',
+    'toolbar.autoRetryKeywords': 'retomar sozinho falha passageira erro conversa caiu tentar de novo retry 529 503 sobrecarregada backoff continue automático queda processo',
     'toolbar.codexTitle': 'Usar o Codex (GPT)',
     'toolbar.codexDesc':
       'Liga o GPT (da OpenAI, pelo Codex) como segundo motor: os funcionários podem perguntar ao GPT nas decisões, ele dá uma segunda opinião nas tarefas (o diff, o trecho de código alterado, vai para a OpenAI) e você pode ter funcionários que rodam no GPT, com os limites de uso dele no topo. Gasta a cota do seu ChatGPT. Ao ligar, o Clube dos Claudios instala o Codex CLI se faltar; você entra na conta pelo botão do topo (abre o navegador).',
@@ -498,12 +502,16 @@ export default defineMessages({
     'toolbar.userScopeKeywords': 'user account global ~/.claude agents skills room scope',
     'toolbar.optimizeTitle': 'Optimize subscription',
     'toolbar.optimizeDesc':
-      'Makes use of quota that would go unused. In the last 48 h before the 7-day quota resets, if at your pace 30% or more would be left over, chats move to Opus at maximum effort and agents think harder until the slack runs out. It waits while the 5 h limit is above 50%. Answers get slower.',
+      'Makes use of quota that would go unused. In the last 72 h before the 7-day quota resets, if at your pace quota would be left over (30% with 3 days to go, falling to 10% in the last day), chats move to Opus at maximum effort and agents think harder until the slack runs out. It waits while the 5 h limit is above 50%. Answers get slower.',
     'toolbar.optimizeKeywords': 'slack quota leftover opus maximum effort boost optimized usage',
     'toolbar.autoContinueTitle': 'Continue on its own when the usage limit is back',
     'toolbar.autoContinueDesc':
       'If the subscription limit runs out in the middle of a chat, it resumes on its own: it sends “continue” as soon as the limit is back.',
     'toolbar.autoContinueKeywords': 'continue on its own usage limit ran out back resume chat subscription reset 5h 7d',
+    'toolbar.autoRetryTitle': 'Resume on its own when a chat drops on a temporary failure',
+    'toolbar.autoRetryDesc':
+      'If an employee’s chat stops on a temporary failure (API overloaded, 5xx error, rate limit, dropped connection) or the process dies in the middle of a turn, it goes on by itself: it waits 30 s, 2 min and 8 min and sends a message asking it to check what is already done and go on (up to 3 attempts per turn; 1 if the cause is unknown). It does not resume on login, billing or refused-request errors or on a usage limit (that one has its own option, in Usage), and it does not repeat an action that touched something outside the project (deploy, push, server command): then it flags it in the “needs me” box. Off, the chat stays stopped until you send a message.',
+    'toolbar.autoRetryKeywords': 'resume on its own temporary failure error chat dropped try again retry 529 503 overloaded backoff continue automatic crash process',
     'toolbar.codexTitle': 'Use Codex (GPT)',
     'toolbar.codexDesc':
       'Turns on GPT (from OpenAI, through Codex) as a second engine: employees can ask GPT on decisions, it gives a second opinion on tasks (the diff, the changed code, goes to OpenAI), and you can have employees that run on GPT, with its usage limits shown at the top. Uses your ChatGPT quota. When you turn it on, Claudio’s Club installs the Codex CLI if it is missing; you sign in with the button at the top (opens the browser).',
@@ -861,12 +869,16 @@ export default defineMessages({
     'toolbar.userScopeKeywords': 'usuario cuenta global ~/.claude agents skills sala ámbito',
     'toolbar.optimizeTitle': 'Optimizar suscripción',
     'toolbar.optimizeDesc':
-      'Aprovecha la cuota que iba a sobrar. En las últimas 48 h antes del reinicio de la cuota de 7 días, si a tu ritmo sobraría un 30% o más, las conversaciones pasan a Opus con esfuerzo máximo y los agents piensan más, hasta que se acabe la holgura. Espera si el límite de 5 h supera el 50%. Las respuestas son más lentas.',
+      'Aprovecha la cuota que iba a sobrar. En las últimas 72 h antes del reinicio de la cuota de 7 días, si a tu ritmo sobraría cuota (30% faltando 3 días, bajando hasta 10% en el último día), las conversaciones pasan a Opus con esfuerzo máximo y los agents piensan más, hasta que se acabe la holgura. Espera si el límite de 5 h supera el 50%. Las respuestas son más lentas.',
     'toolbar.optimizeKeywords': 'holgura cuota sobra opus esfuerzo máximo boost consumo optimizado',
     'toolbar.autoContinueTitle': 'Continuar solo cuando vuelva el límite de uso',
     'toolbar.autoContinueDesc':
       'Si el límite de la suscripción se acaba en medio de una conversación, esta se retoma sola: manda “continue” en cuanto el límite vuelva.',
     'toolbar.autoContinueKeywords': 'continuar solo límite de uso se acabó volver retomar continue conversación suscripción reinicio 5h 7d',
+    'toolbar.autoRetryTitle': 'Reanudar solo cuando la conversación se cae por un fallo pasajero',
+    'toolbar.autoRetryDesc':
+      'Si la conversación de un empleado se detiene por un fallo pasajero (API sobrecargada, error 5xx, límite de tasa, caída de conexión) o el proceso se cae en medio del turno, sigue sola: espera 30 s, 2 min y 8 min y manda un mensaje pidiendo que compruebe lo que ya se hizo y siga (hasta 3 intentos por turno; 1 si la causa es desconocida). No reanuda errores de acceso, de cobro, pedidos rechazados ni el límite de uso (ese tiene su propia opción, en Consumo), y no repite una acción que tocaba algo fuera del proyecto (deploy, push, comando en un servidor): en ese caso avisa en la caja “me necesita”. Desactivada, la conversación queda detenida hasta que mandes un mensaje.',
+    'toolbar.autoRetryKeywords': 'reanudar solo fallo pasajero error conversación se cayó intentar de nuevo retry 529 503 sobrecargada backoff continue automático caída proceso',
     'toolbar.codexTitle': 'Usar Codex (GPT)',
     'toolbar.codexDesc':
       'Activa GPT (de OpenAI, por Codex) como segundo motor: los empleados pueden preguntar a GPT en las decisiones, él da una segunda opinión en las tareas (el diff, el código cambiado, va a OpenAI) y puedes tener empleados que corren en GPT, con sus límites de uso arriba. Gasta la cuota de tu ChatGPT. Al activarlo, el Club de los Claudios instala el Codex CLI si falta; entras a tu cuenta con el botón de arriba (abre el navegador).',

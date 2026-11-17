@@ -9,10 +9,13 @@ import { pickCodexSubstitute, type CodexModelInfo } from '../codexModels';
 import { cleanEnv, withoutMycoToken } from '../auth';
 import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexAgentRole, type CodexExtraMcp, type CodexMcpServer, type CodexSecrets } from './codexArgs';
 import { codexEditedFiles, codexToolFile } from './codeEdits';
-import { contextUsed, isModelUnavailable, isToolCall, itemFromCodex, parseCodexFailure, type CodexPhase } from './codexEvents';
+import { contextUsed, isModelUnavailable, isToolCall, itemFromCodex, parseCodexFailure, type CodexItem, type CodexPhase } from './codexEvents';
+import { isSandboxFailure } from '../engineCapability';
 import { hasCheckpoint, stripCheckpoint } from './items';
 import { ChatProcess, type ChatProcessOptions } from './process';
+import { CodexSubagentWatch, firstLineOf } from './codexSubagents';
 import { killTree } from './registry';
+import { findRollout } from '../adapters/codex/rollout';
 import { tryJson } from '../adapters/claude/fsutil';
 
 // Um funcionário conversando pelo Claudio’s Club no Codex (CLI da OpenAI), com a mesma cara do ChatProcess: o manager,
@@ -33,8 +36,10 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   readOnlyPaths?: string[];
   /** MCP de SSH da ficha (conexões SSH; null = sem ele). Ver `codexSshMcpArgs` em codexArgs.ts. */
   sshMcp?: CodexMcpServer | null;
-  /** MCP da memória da própria ficha (só em `plan`; null = sem ele). Ver `codexMemoriaMcpArgs` em codexArgs.ts. */
+  /** MCP da memória da própria ficha (em `plan` e na revisão; null = sem ele). Ver `codexMemoriaMcpArgs` em codexArgs.ts. */
   memoriaMcp?: CodexMcpServer | null;
+  /** Conversa de revisão de tarefa: sandbox só de leitura a cada execução, mesmo que o modo de permissão mude (ver `CodexSpawn.readOnly`). */
+  readOnly?: boolean;
   /** MCP do Chrome do usuário (null = sem ele). Ver `codexChromeMcpArgs` em codexArgs.ts. */
   chromeMcp?: CodexMcpServer | null;
   /** MCP do navegador limpo (null = sem ele). Ver `codexCleanBrowserMcpArgs` em codexArgs.ts. */
@@ -70,6 +75,11 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   threadFile?: string;
   /** Chamado quando o Codex dá o thread_id desta conversa (ver CodexSpawn.onThread). */
   onThread?: (threadId: string) => void;
+  /**
+   * A sandbox quebrou (um comando que falhou com ela, ou o turno que deu erro com essa mensagem; ver `isSandboxFailure`). Quem chama
+   * decide o que fazer (ver CodexCapability.reportFailure); a conversa não muda por causa disso.
+   */
+  onSandboxFailure?: (text: string) => void;
   /**
    * Catálogo de modelos da conta (GET /api/codex/models), para o plano B: se a conta recusar o modelo da ficha, o turno é refeito uma vez
    * com o mais parecido daqui (ver `pickCodexSubstitute`). Sem ele, o plano B roda sem `-m` (o padrão do Codex).
@@ -129,6 +139,12 @@ interface Run {
   retry: boolean;
 }
 
+/**
+ * De onde veio a falha do turno: `turn` (o motor devolveu `turn.failed`), `lost` (a execução fechou sem terminar o turno: queda sem causa) ou
+ * `config` (não abriu, ou não deu para preparar: nunca retomada sozinha). Ver `TurnEnd`.
+ */
+type FailOrigin = 'turn' | 'lost' | 'config';
+
 const newRun = (): Run => ({ key: randomUUID().slice(0, 8), ended: false, tools: new Set(), lastError: null, stderr: '', buf: '', closed: false, job: null, model: null, fresh: false, retry: false });
 
 export class CodexProcess extends ChatProcess {
@@ -141,6 +157,12 @@ export class CodexProcess extends ChatProcess {
   private holding = false;
   /** O aviso de que a rede local ficou desligada (falta o `network_proxy`) já foi dado: uma vez por conversa. */
   private networkWarned = false;
+  /** Os subagents ativos (o `--json` não os anuncia; vêm do rollout) aparecem em "segundo plano", como no Claude. */
+  private readonly subagents = new CodexSubagentWatch({
+    find: (id) => findRollout(id),
+    readFirstLine: firstLineOf,
+    onChange: (tasks) => this.setState({ background: tasks }),
+  });
 
   constructor(private readonly codex: CodexProcessOptions) {
     super({ ...codex, args: [] });
@@ -284,7 +306,7 @@ export class CodexProcess extends ChatProcess {
   private launch(job: Job, override?: { model: string | null }) {
     const check = this.codex.env;
     const internet = this.codex.internetAccess;
-    const none: CodexEnvStatus = { error: null, version: null, networkProxy: false, notice: null };
+    const none: CodexEnvStatus = { error: null, version: null, networkProxy: false, multiAgent: false, notice: null };
     if (!check && !internet) {
       this.exec(job, override, none, false);
       return;
@@ -293,7 +315,7 @@ export class CodexProcess extends ChatProcess {
     // A opção de internet é lida nesta execução (não na criação da conversa); erro ao ler = desligada.
     const access = internet ? internet().catch(() => false) : Promise.resolve(false);
     const status = check
-      ? check().catch((err): CodexEnvStatus => ({ error: `não consegui conferir o Codex: ${err instanceof Error ? err.message : String(err)}`, version: null, networkProxy: false, notice: null }))
+      ? check().catch((err): CodexEnvStatus => ({ error: `não consegui conferir o Codex: ${err instanceof Error ? err.message : String(err)}`, version: null, networkProxy: false, multiAgent: false, notice: null }))
       : Promise.resolve(none);
     void Promise.all([status, access]).then(([st, internetAccess]) => {
       this.holding = false;
@@ -329,7 +351,7 @@ export class CodexProcess extends ChatProcess {
         cwd: o.cwd,
         model,
         effort: this.state.effort,
-        sandbox: sandboxFor(this.state.permissionMode),
+        sandbox: o.readOnly ? 'read-only' : sandboxFor(this.state.permissionMode),
         instructions: o.instructions,
         writableRoots: o.writableRoots,
         readOnlyPaths: o.readOnlyPaths,
@@ -376,6 +398,8 @@ export class CodexProcess extends ChatProcess {
       return;
     }
     this.current = child;
+    // Retomada: o rollout já existe (começa do fim dele). Conversa nova: o vigia começa no `thread.started`.
+    if (this.thread) this.subagents.start(this.thread);
     child.stdin.on('error', () => {}); // o codex pode sair antes de ler o prompt inteiro
     child.stdin.end(prompt);
     child.stdout.on('data', (chunk: Buffer) => this.feed(run, chunk.toString('utf8')));
@@ -390,6 +414,7 @@ export class CodexProcess extends ChatProcess {
     const child = this.current;
     if (!child) return;
     this.stopping = true;
+    this.subagents.stop();
     if (this.codex.kill) this.codex.kill(child);
     else if (child.pid) void killTree(child.pid);
   }
@@ -409,6 +434,7 @@ export class CodexProcess extends ChatProcess {
   private closeRun(run: Run, code: number | null, spawnError?: string) {
     if (run.closed) return;
     run.closed = true;
+    this.subagents.stop();
     this.endTurnBudget();
     if (run.buf.trim()) this.handle(tryJson(run.buf.trim()) as Record<string, unknown> | null);
     run.buf = '';
@@ -424,7 +450,9 @@ export class CodexProcess extends ChatProcess {
       if (stopped) this.endTurn(run, { kind: 'stopped' });
       else {
         const failed = spawnError ?? (code && code !== 0 ? (run.lastError ?? (run.stderr.trim() || `o codex saiu com código ${code}`)) : run.lastError);
-        this.failTurn(run, failed ?? 'O Codex terminou sem responder.');
+        // Execução que fechou sem `turn.completed` nem `turn.failed` (e que abriu): o processo caiu no meio, sem causa conhecida. Um `error` solto não vale
+        // como erro do turno. Falha ao abrir ou preparar o codex (`spawnError`) é configuração: nunca é retomada sozinha.
+        this.failTurn(run, failed ?? 'O Codex terminou sem responder.', spawnError ? 'config' : 'lost');
       }
     }
     if (this.run === run) this.run = null;
@@ -433,25 +461,31 @@ export class CodexProcess extends ChatProcess {
     else this.pump();
   }
 
+  /** Texto com cara de sandbox quebrada (ver `isSandboxFailure`): avisa quem guarda a capacidade do Codex. */
+  private noteSandboxFailure(text: string) {
+    if (isSandboxFailure(text)) this.codex.onSandboxFailure?.(text);
+  }
+
   /**
    * O turno falhou. Se foi porque a conta não aceita o modelo (o caso do `gpt-6.1-sol` configurado mas recusado), o turno não termina:
    * o plano B o refaz uma vez com outro modelo (ver `retryWithSubstitute`). Qualquer outra falha, ou a segunda, vira o erro da conversa.
    */
-  private failTurn(run: Run, text: string) {
+  private failTurn(run: Run, text: string, origin: FailOrigin = 'turn') {
     if (run.ended) return;
+    this.noteSandboxFailure(text);
     if (run.job && !run.job.retried && run.model && isModelUnavailable(text)) {
       // A conta recusou o modelo: avisa quem guarda a ficha (ver ChatProcessOptions.onModelUnavailable), com ou sem plano B.
       this.codex.onModelUnavailable?.(run.model);
       // Modelo que o dono escolheu para o secundário: não há plano B, o erro diz qual modelo a conta recusou.
       if (this.codex.noSubstitute) {
-        this.endTurn(run, { kind: 'failed', text: `modelo secundário ${run.model} recusado pelo Codex` });
+        this.endTurn(run, { kind: 'failed', text: `modelo secundário ${run.model} recusado pelo Codex`, origin: 'config' });
         return;
       }
       run.ended = true;
       run.retry = true;
       return;
     }
-    this.endTurn(run, { kind: 'failed', text });
+    this.endTurn(run, { kind: 'failed', text, origin });
   }
 
   /**
@@ -480,9 +514,10 @@ export class CodexProcess extends ChatProcess {
     this.launch(job, { model: substitute });
   }
 
-  private endTurn(run: Run, outcome: { kind: 'ok' } | { kind: 'stopped' } | { kind: 'failed'; text: string }) {
+  private endTurn(run: Run, outcome: { kind: 'ok' } | { kind: 'stopped' } | { kind: 'failed'; text: string; origin?: FailOrigin }) {
     if (run.ended) return;
     run.ended = true;
+    this.subagents.stop();
     this.endTurnBudget();
     const at = new Date().toISOString();
     let limit: { resetsIn?: number } | null = null;
@@ -497,9 +532,15 @@ export class CodexProcess extends ChatProcess {
     // Uma vez por turno, como o ChatProcess: o limite (com a hora que o próprio erro deu, se deu), ou o fim sem limite.
     if (limit) this.codex.onUsageLimit?.({ resetsAt: limit.resetsIn === undefined ? null : Date.now() + limit.resetsIn * 1000, window: null });
     else this.codex.onTurnWithoutLimit?.();
+    if (outcome.kind === 'ok') this.codex.onTurnEnd?.({ kind: 'ok' });
     if (this.queue.length && !this.closing) return; // a próxima mensagem já espera: segue ocupado
     this.waitingReply = false;
     this.setState({ busy: false, compacting: false });
+    // Erro do turno (`turn.failed`) ou execução que caiu no meio, com o limite de uso fora: o manager decide a retomada antes de a conversa ser dada como
+    // parada. Configuração (falha ao abrir ou preparar o codex, modelo do secundário recusado) nunca é retomada sozinha.
+    if (outcome.kind === 'failed' && outcome.origin !== 'config' && !limit && !this.closing) {
+      this.codex.onTurnEnd?.({ kind: outcome.origin === 'lost' ? 'lost' : 'failed', error: { text: outcome.text.slice(0, 500) }, ...this.turnContext() });
+    }
     this.idleCheck('turn');
   }
 
@@ -507,6 +548,7 @@ export class CodexProcess extends ChatProcess {
     // O arquivo de lançamento dos MCPs da ficha sai com a conversa. Falhar ao apagar não derruba nada (o `force` ignora o que não existe).
     if (this.codex.mcpSnapshotFile) void fs.rm(this.codex.mcpSnapshotFile, { force: true }).catch(() => {});
     if (!this.state.running) return;
+    this.subagents.stop();
     this.endTurnBudget();
     this.opts.onExit?.(null, error);
     this.waitingReply = false;
@@ -528,6 +570,7 @@ export class CodexProcess extends ChatProcess {
         const id = typeof ev.thread_id === 'string' && THREAD_ID.test(ev.thread_id) ? ev.thread_id : null;
         if (id && id !== this.thread) {
           this.thread = id;
+          if (this.current) this.subagents.start(id, true); // conversa nova: o rollout acabou de nascer, lê desde o início
           if (this.codex.threadFile) void writeCodexThread(this.codex.threadFile, id).catch(() => {});
           this.codex.onThread?.(id);
         }
@@ -560,7 +603,12 @@ export class CodexProcess extends ChatProcess {
     }
   }
 
+  /** Comando concluído com falha: se a saída diz que a sandbox quebrou, avisa (ver `onSandboxFailure`). A conversa mostra o comando como sempre. */
   private onItem(run: Run, phase: CodexPhase, raw: unknown) {
+    const cmd = (raw ?? {}) as CodexItem;
+    if (phase === 'completed' && cmd.type === 'command_execution' && cmd.status === 'failed' && typeof cmd.aggregated_output === 'string') {
+      this.noteSandboxFailure(cmd.aggregated_output);
+    }
     // Sem os ganchos do Claude, o Codex só mostra a alteração no `file_change` concluído (o card automático nasce daqui, como no Claude).
     const edited = this.opts.onEdit ? codexEditedFiles(phase, raw) : [];
     if (edited.length) {

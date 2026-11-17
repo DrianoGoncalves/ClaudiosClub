@@ -451,6 +451,11 @@ textarea.q-field { resize: vertical; }
 .chat-notice { align-self: center; font-size: 12px; color: var(--muted); }
 .chat-notice-warn { color: var(--warn); }
 .chat-notice-error { color: var(--danger); }
+/* Retomada automática (chat/retryNotice.ts): a espera é pontilhada (ainda vai acontecer), o desfecho bom volta ao aviso comum e o que parou para você ganha borda contínua. Texto sempre --ink: o --warn do aviso comum dá ~3:1 no claro. */
+.chat-notice.chat-retry { box-sizing: border-box; max-width: 100%; padding: 4px 10px; border: 1px dashed var(--muted); border-radius: 10px; color: var(--ink); line-height: 1.4; text-align: center; overflow-wrap: anywhere; }
+.chat-retry .chat-retry-hint { display: block; color: var(--muted); }
+.chat-notice.chat-retry:is([data-retry='sent'], [data-retry='cancelled']) { border-color: transparent; color: var(--muted); }
+.chat-notice.chat-retry:is([data-retry='failed'], [data-retry='dropped'], [data-retry='exhausted'], [data-retry='cut'], [data-retry='restart']) { border-style: solid; border-color: var(--warn); }
 /* Aviso de negação com botão (dica do servidor): o texto e, embaixo, o botão com alvo de toque de 36px. */
 .chat-notice.has-action { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
 .chat-notice.has-action .chat-notice-btn { min-height: 36px; padding-inline: 14px; }
@@ -743,6 +748,19 @@ textarea.q-field { resize: vertical; }
 /* Card registrado sozinho: o selo é o da fila (tracejado, sem cor de alerta), numa linha só; a lista de arquivos quebra caminho longo. */
 .task-queue.task-auto { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-auto-files li { overflow-wrap: anywhere; }
+/* Ordem da fila (A fazer): três botões colados sob o cartão (fora do botão dele); no detalhe, com texto. Arrastar um cartão sobre outro da mesma fila marca o alvo (.is-drop). */
+.task-order-row { margin-top: -4px; }
+.task-order { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.task-order .btn-secondary.btn-icon { width: 32px; height: 28px; }
+.task-order .btn-secondary:disabled { opacity: 0.45; }
+.task-card.is-drop, .task-card.is-drop:hover { border-color: var(--ink-blue); outline: 2px dashed var(--ink-blue); outline-offset: 1px; }
+.task-order-box { display: grid; gap: 6px; justify-items: start; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
+.task-order-box p { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  /* Dedo, não ponteiro: 36px de altura, como os outros botões do quadro no celular. */
+  .task-order .btn-secondary.btn-icon { width: 44px; height: 36px; }
+  .task-order.is-text .btn-secondary { min-height: 36px; }
+}
 /* "No secundário": a tarefa ou a conversa roda no outro motor porque o principal bateu o limite. Discreto, como a fila (tracejado), sem cor de alerta. */
 .fallback-badge { justify-self: start; display: inline-block; max-width: 100%; color: var(--muted); border: 1px dashed var(--line); border-radius: 999px; padding: 0 7px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-fallback { align-self: flex-start; margin: 4px 12px 0; }
@@ -784,7 +802,9 @@ textarea.q-field { resize: vertical; }
 /* Dúvida do funcionário: selo de uma linha no cartão (nome longo corta; o title tem o texto inteiro) e bloco no detalhe (amarelo quando é com você, como o .files-conflict). */
 .task-badge.task-doubt { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Espera do gate de recursos: o motivo é o que importa, então quebra linha (raio dos blocos tracejados, não pílula). */
-.task-queue.task-resource, .task-queue.task-blocked { max-width: 100%; border-radius: 10px; padding: 3px 8px; line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
+.task-queue.task-resource, .task-queue.task-blocked, .task-queue.task-fbwait { max-width: 100%; border-radius: 10px; padding: 3px 8px; line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
+/* Sem troca para o secundário (pré-checagem falhou): a tarefa espera o limite do motor da ficha. Texto --ink fora de A fazer (o --muted não dá 4,5:1 sobre o cartão colorido de Fazendo); em A fazer o .task-wait, logo abaixo, põe o laranja. */
+.task-queue.task-fbwait { color: var(--ink); }
 /* Por que o cartão da fila A fazer não anda (dependência, fila, recursos, ajuste guardado, dúvida com o gestor): laranja, para achar de relance. Só nessa coluna (o `.task-wait` é posto por `waitWarm`, em tasks/waitTone.ts); nas outras, inclusive o motivo do Aguardar, fica neutro. Borda e fundo do --warn, texto do --wait-ink. O amarelo (.is-waiting) segue sendo o "precisa de você". */
 :is(.task-queue, .task-badge).task-wait { color: var(--wait-ink); font-weight: 600; border-style: solid; border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .task-detail .muted.task-wait-text { color: var(--wait-ink); }
@@ -792,6 +812,8 @@ textarea.q-field { resize: vertical; }
 .task-pause { display: grid; gap: 1px; justify-self: stretch; min-width: 0; box-sizing: border-box; border: 1px dashed var(--muted); border-radius: 10px; padding: 3px 8px; color: var(--ink); font-size: 11px; line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
 .task-pause.is-holding { border-style: solid; border-color: var(--ink); background: color-mix(in srgb, var(--ink) 7%, transparent); }
 .task-pause b { font-weight: 600; }
+/* "Retomando em X": a conversa de uma tarefa em Fazendo caiu por falha passageira e volta sozinha. Selo da fila (pontilhado), mas com texto --ink: é o que está acontecendo agora; sem laranja (o laranja é só de A fazer). */
+.task-queue.task-retry { width: fit-content; max-width: 100%; border-radius: 10px; border-color: var(--muted); padding: 3px 8px; color: var(--ink); line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
 .task-doubt-box { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
 .task-doubt-box.is-escalated { border: 1px solid var(--waiting); background: color-mix(in srgb, var(--waiting) 12%, transparent); }
 .task-doubt-box p, .task-doubt-box ul { margin: 0; overflow-wrap: anywhere; }

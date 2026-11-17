@@ -89,6 +89,10 @@ export const RESTART_TEXT = `${RESTART_PREFIX}. Confira se a última ação term
 /** Retomada com um pedido de permissão ou pergunta sem resposta: refaz o pedido. */
 export const RESTART_PENDING_TEXT = `${RESTART_PREFIX}, quando havia um pedido de permissão ou uma pergunta pendente. Refaça o pedido e espere a resposta antes de seguir.`;
 
+/** A mensagem da retomada automática de um turno que caiu por falha passageira (ver server/chat/turnRetry.ts). Não é do dono. */
+export const RETRY_TEXT =
+  'O turno foi interrompido. Confira arquivos e resultados já produzidos antes de continuar. Se uma ação externa puder ter ocorrido e não houver confirmação, pare e peça orientação.';
+
 /** Fim de tarefa: o que a conversa deve responder ao terminar (igual no texto de início e no handoff). */
 export const CLOSING_LINE = 'Quando terminar, responda com um resumo curto do que foi feito e do que falta.';
 

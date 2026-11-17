@@ -2,6 +2,7 @@
 import { clockHM, secondsLeft } from '../chat/wakeCountdown';
 import { formatDuration } from '../format';
 import { locale, t } from '../i18n';
+import type { Tr } from '../inbox/secretText';
 
 /** `wake` = despertador pedido pelo funcionário; `continue` = "continue" automático para quando o limite de uso voltar. */
 export interface Schedule {
@@ -29,10 +30,10 @@ export function whenParts(at: string, now: number): { date: string | null; time:
 }
 
 /** "agora", "em 42s", "em 4min 05s", "em 3h05", "em 2d4h". */
-export function countdown(at: string, now: number): string {
+export function countdown(at: string, now: number, tr: Tr = t): string {
   const secs = secondsLeft(Date.parse(at), now);
-  if (secs <= 0) return t('schedules.now');
+  if (secs <= 0) return tr('schedules.now');
   const dur =
     secs < 60 ? `${secs}s` : secs < 3600 ? `${Math.floor(secs / 60)}min ${String(secs % 60).padStart(2, '0')}s` : formatDuration(secs * 1000);
-  return t('schedules.in', { dur });
+  return tr('schedules.in', { dur });
 }

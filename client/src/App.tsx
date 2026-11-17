@@ -33,6 +33,7 @@ import { SystemMonitor } from './toolbar/SystemMonitor';
 import { QuickJump } from './toolbar/QuickJump';
 import type { TeamRow } from './detail/Detail';
 import type { ChatFocus } from './chat/chatFocus';
+import { noteStillWorking, runClose } from './chat/closeConversation';
 import { type ConversationTitles, conversationTitle } from './detail/conversationTitle';
 import { DrawerResize, useDrawerWidth } from './detail/DrawerResize';
 import { leftOutByRetention } from './detail/oldConversations';
@@ -275,7 +276,7 @@ export function App() {
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
       if (!link.tasks) return openInbox(linkItem(link));
       setSchedulesFor(null);
-      setJumpTask(null);
+      setJumpTask(link.taskId ?? null);
       setTasksFor(link.projectId);
     };
     go();
@@ -387,13 +388,19 @@ export function App() {
     setSelectedId(projectNodeId(projectId));
   };
 
+  // Arquivar fecha o processo: uma sessão solta que trabalha pede a confirmação (`runClose`, que mostra o risco ou o motivo da recusa e devolve null
+  // se nada foi arquivado); funcionário e projeto fecham só as paradas, e as que seguem trabalhando são avisadas depois.
   const archive = async (kind: 'project' | 'session', id: string, archived: boolean) => {
-    setConfig(await api.archive(kind, id, archived));
+    const r = await runClose(false, { working: 'chat.archiveConfirmWorking' }, (confirm) => api.archive(kind, id, archived, confirm));
+    if (!r) return;
+    setConfig(r.done);
     if (archived && !showArchived) setSelectedId(null);
+    await noteStillWorking(r.done.closing);
   };
 
   // Conversa arquivada só some do seletor do chat: não fecha o painel nem mexe na seleção (por isso não passa pelo `archive`).
-  const archiveConversation = async (id: string, archived: boolean) => setConfig(await api.archive('conversation', id, archived));
+  // Quem chama (o seletor) já tratou a confirmação de uma que trabalha: o servidor recusa (409) sem `confirm`, e nada é arquivado.
+  const archiveConversation = async (id: string, archived: boolean, confirm = false) => setConfig(await api.archive('conversation', id, archived, confirm));
   // Renomear grava só no config (não no transcript: a data da conversa não muda, então ela não desarquiva).
   const renameConversation = async (id: string, title: string | null) => setConfig(await api.setConversationTitle(id, title));
   // "Mostrar antigas" do seletor: as conversas que a retenção tirou da lista, por projeto (a chave existe = estão sendo mostradas).
@@ -635,7 +642,7 @@ export function App() {
                   setFilesFor(selection.projectId);
                 }}
                 inbox={inbox.items}
-                onDismissSecret={(item) => inbox.dismiss(item)}
+                onDismissAlert={(item) => inbox.dismiss(item)}
                 session={
                   selection.session && {
                     ...selection.session,

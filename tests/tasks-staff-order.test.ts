@@ -42,27 +42,26 @@ describe('byRecent (ordem do cartão na coluna)', () => {
 });
 
 describe('byQueue (A fazer: a próxima no topo)', () => {
-  const q = (id: string, staffId: string | null, queuedAt: string | null, updatedAt = '2026-11-01T10:00:00Z', sessionId: string | null = null) => ({
+  // `queuePos` é do servidor (1 = a próxima do funcionário); sem ele o cartão está fora da fila.
+  const q = (id: string, queuePos?: number, updatedAt = '2026-11-01T10:00:00Z') => ({
     id,
     status: 'todo' as const,
-    staffId,
-    queuedAt,
-    sessionId,
+    queuePos,
     updatedAt,
   });
 
   it('fila antes das soltas; soltas por última atualização', () => {
-    const col = [q('s1', null, null, '2026-11-02T10:00:00Z'), q('f1', 'a', '2026-11-01T10:00:00Z'), q('s2', null, null, '2026-11-05T10:00:00Z')];
+    const col = [q('s1', undefined, '2026-11-02T10:00:00Z'), q('f1', 1), q('s2', undefined, '2026-11-05T10:00:00Z')];
     expect(byQueue(col).map((x) => x.id)).toEqual(['f1', 's2', 's1']);
   });
 
   it('a 1ª de cada funcionário antes das 2ªs, na ordem do servidor', () => {
-    const col = [q('a1', 'a', '2026-11-01T10:00:00Z'), q('a2', 'a', '2026-11-01T11:00:00Z'), q('b1', 'b', '2026-11-01T12:00:00Z')];
+    const col = [q('a1', 1), q('a2', 2), q('b1', 1)];
     expect(byQueue(col).map((x) => x.id)).toEqual(['a1', 'b1', 'a2']);
   });
 
-  it('tarefa já com conversa não conta como fila', () => {
-    const col = [q('x', 'a', '2026-11-01T10:00:00Z', '2026-11-01T10:00:00Z', 's-1'), q('y', 'a', '2026-11-01T11:00:00Z')];
-    expect(byQueue(col).map((x) => x.id)).toEqual(['y', 'x']);
+  it('a posição do servidor manda, não a ordem em que a lista chegou (fila reordenada)', () => {
+    const col = [q('a1', 2), q('a2', 3), q('a3', 1)];
+    expect(byQueue(col).map((x) => x.id)).toEqual(['a3', 'a1', 'a2']);
   });
 });

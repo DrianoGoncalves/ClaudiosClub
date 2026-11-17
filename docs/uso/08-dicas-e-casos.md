@@ -83,13 +83,13 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 
 **Situação:** um site ficou lento ou precisa de uma versão nova no ar.
 
-**Quem contratar:** **DevOps / SRE** (autonomia **Pede tudo**: pede permissão a cada passo e só lê o servidor).
+**Quem contratar:** **DevOps / SRE** (autonomia **Edita sozinho**; no servidor ele só lê, a menos que a conexão tenha **Permitir comandos de escrita** marcado).
 
 1. Antes, na VPS, crie um usuário só para a IA, sem root e com as permissões mínimas. No detalhe do projeto, em **Servidores**, cadastre a conexão com esse usuário e a chave dele, e use **Testar**. Chave com senha precisa estar no `ssh-agent`.
 2. Contrate **DevOps / SRE**. Na ficha, aba **Projeto**, clique em **+ dar acesso a servidores (SSH e FTP)** e marque a conexão. A chave fica no seu computador; a ficha guarda só o nome. Deixe **Permitir comandos de escrita** desmarcado.
 3. **Tarefas** → **Nova tarefa** → **O que precisa ser feito**: "só diagnosticar, sem mudar nada" → **Quem cuida**: **DevOps / SRE** → **Criar e começar**. Ele lê o servidor pelo MCP `myco-ssh` (status, logs, containers, serviços, arquivos de log).
-4. Em **precisa de mim**, aprove cada cartão de **permissão** com **Aprovar**. Evite **Sempre neste projeto** para comandos no servidor.
-5. Para publicar, o servidor precisa deixar de ser só leitura: na ficha, marque **Permitir comandos de escrita** na conexão e troque a autonomia para **Edita sozinho** ou mais (em **Pede tudo** o servidor segue só leitura). Depois abra a tarefa em **Finalizado** (ou mesclada) → **Pedir deploy** → **Quem faz o deploy**: **DevOps / SRE**.
+4. No Claude, em **precisa de mim**, aprove cada cartão de **permissão** com **Aprovar**. No Codex não aparece cartão: o comando de escrita roda direto, se a caixa estiver marcada. Evite **Sempre neste projeto** para comandos no servidor.
+5. Para publicar, o servidor precisa deixar de ser só leitura: na ficha, marque **Permitir comandos de escrita** na conexão. A autonomia **Edita sozinho**, que o cargo já traz, basta; se você a trocou por **Só planeja** ou **Pede tudo**, o servidor segue só leitura mesmo com a caixa marcada. No Claude, em **Edita sozinho** cada comando de escrita ainda pede o seu ok; no Codex, ele roda sem perguntar, e a caixa marcada é o que vale. Depois abra a tarefa em **Finalizado** (ou mesclada) → **Pedir deploy** → **Quem faz o deploy**: **DevOps / SRE**.
 6. Siga o checklist: backup, estado antes e depois, runbook. Confirme os passos que não têm volta.
 
 **Limites:** ele não roda comando interativo (editor, `top`) nem `sudo` com senha, e no terminal dele não há `ssh`, `scp` nem `rsync`: tudo passa pelo MCP. Detalhes em `02-funcionarios.md`, **Servidores (SSH e FTP)**.

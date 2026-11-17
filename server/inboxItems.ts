@@ -100,11 +100,12 @@ export function taskQuestionInboxItem({ task, state }: OwnAlert, w: Place): Inbo
 
 /**
  * Tarefa parada que só você destrava (kind 'stuck', ver ownAlerts): revisão que não começou ou ficou sem veredito, ajuste que não chega.
+ * Com `humanAction` null é só o aviso da espera do limite da ficha (id `stuck:<id>:fallback`): some sozinho quando o limite baixa.
  * Nada é gravado: some quando a tarefa anda (revisão começa, veredito, ajuste enviado ou reenviado) ou é encerrada. O alvo é a tarefa.
  */
 export function stuckInboxItem({ task, state }: OwnAlert, w: Place): InboxItem {
   return {
-    id: `stuck:${task.id}:${state.humanAction}`,
+    id: `stuck:${task.id}:${state.humanAction ?? 'fallback'}`,
     kind: 'stuck',
     ...w,
     summary: `“${task.title}” está parada: ${state.reason}`,

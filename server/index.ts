@@ -5,8 +5,9 @@ import http from 'node:http';
 import path from 'node:path';
 import { clientChanged, DAILY, TSX, VITE } from '../scripts/lib';
 import { openTerminal } from './terminal';
-import { CodexAdapter, CodexError } from './adapters/codex';
+import { CodexAdapter, CodexError, defaultRunner } from './adapters/codex';
 import { CodexEnv, withAppAddress, type CodexEnvStatus } from './codexEnv';
+import { CodexCapability } from './engineCapability';
 import { CodexModels } from './codexModels';
 import { ClaudeAdapter } from './adapters/claude';
 import { defaultLocations } from './adapters/claude/paths';
@@ -39,7 +40,7 @@ import { AgentError, AgentInput, readAgentSource, saveAgent } from './adapters/c
 import { deleteSkill, hookFilesOf, readSkillSource, SkillDeleteInput, SkillRefInput, saveSkill, SkillSaveInput, type SkillScope } from './adapters/claude/skillWrite';
 import { createSkill } from './skillCreate';
 import { projectClaudeDir } from './adapters/claude/projects';
-import { ChatClosingError, ChatError, ChatManager, findTranscript } from './chat/manager';
+import { ChatClosingError, ChatError, ChatManager, CloseRefusedError, findTranscript } from './chat/manager';
 import { ResumeFile, bootResume } from './chat/resume';
 import { AnnotationsField, AnswersField } from './chat/questions';
 import { touchedFiles } from './chatChanges';
@@ -57,6 +58,7 @@ import { CLUB_MCP_FILE, McpError, mcpJsonWarnings } from './staff/mcp';
 import { createMcpLibrary } from './staff/mcpLibrary';
 import { blockedInboxItem, notStartedInboxItem, permissionInboxItem, questionInboxItem, secretInboxItem, stuckInboxItem, taskQuestionInboxItem, withoutSecretHint } from './inboxItems';
 import { capText } from './chat/turnCap';
+import { TurnRetryLedger } from './chat/turnRetry';
 import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
 import { LIBRARY_DIR, readLibrarySkill, SkillError } from './skillLibrary';
@@ -115,13 +117,14 @@ import { codexUsageOf } from './adapters/codex/usage';
 import type { TranscriptCost } from './adapters/claude/costs';
 import { claudeFilesBy, taskCostOf, taskCostRanking, type CostSources } from './taskCost';
 import { TtlCache } from './ttlCache';
+import { StageTimer } from './stageTimer';
 import { boardFilter } from './board';
 import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
 import { AUTONOMY, dropStaffSessions, listProjectStaff, listProjectStaffStrict, readProfile, saveProfile } from './staff/store';
 import { lastRetentionRun, nextRetentionDelay, retentionPreview, runRetentionSweep, setRetentionDeletion, type RetentionDeps } from './retentionSweep';
 import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
-import { TaskConflictError, TaskError, TaskForbiddenError, TaskService, cancelRequest, deleteRequest, notStartedTasks, ownAlerts, readTasks, stuckDependencies } from './tasks';
+import { START_DEADLINE_MS, TaskConflictError, TaskError, TaskForbiddenError, TaskService, cancelRequest, deleteRequest, notStartedTasks, ownAlerts, readTasks, reasonRequest, stuckDependencies } from './tasks';
 import { retainedSessionIds } from './retention';
 import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefaultRole } from './roles';
 import { ROOT } from './root';
@@ -199,9 +202,10 @@ async function shutdown(stop: boolean, userAgent = '') {
   // Nada novo entra daqui em diante: o build abaixo leva até 2 min com o servidor no ar.
   if (!stop) {
     chats.closing();
-    // As pendências do "continue" e do despertador ficam no disco e disparam no boot (o `start` delas).
+    // As pendências do "continue", do despertador e da retomada por falha passageira ficam no disco e disparam no boot (o `start` delas).
     autoContinue.stop();
     wakeups.stop();
+    turnRetries.stop();
   }
   if (!stop && UNDER_DAEMON) {
     await fs.writeFile(path.join(MYCO_HOME, 'run', 'daemon.restart'), '').catch(() => {});
@@ -210,7 +214,7 @@ async function shutdown(stop: boolean, userAgent = '') {
   // Depois do build: quem está em turno agora é o que volta sozinho (o turno que acabou no build não precisa).
   if (!stop) {
     try {
-      const sessions = chats.busySessions();
+      const sessions = await chats.busySessions();
       if (await resumeFile.save(sessions, Date.now())) console.log(`[servidor] ${sessions.length} conversa(s) em turno: voltam sozinhas quando o servidor subir`);
     } catch (err) {
       console.error('[servidor] não consegui gravar as conversas em turno:', err);
@@ -263,6 +267,9 @@ const clubClaudeIds = async (): Promise<Set<string>> => {
   return new Set([...reg].filter(([, e]) => e.engine === 'claude').map(([id]) => id));
 };
 const adapter: ToolAdapter = new ClaudeAdapter({
+  // O resumo dos projetos lê todo transcript (segundos com centenas de conversas) e quase toda rota passa por ele (`projectPathOf`): guardado por 5 s.
+  // Novo projeto e importação chamam `forgetProjects`; o apelido nem entra no que fica guardado.
+  projectsTtlMs: 5_000,
   extraPaths: pinnedProjects,
   onBoard: boardFilter({ pinned: pinnedProjects }),
   projectNames: async () => (await readConfig()).projectNames,
@@ -298,7 +305,7 @@ const retentionDeps: RetentionDeps = {
   // Protegidas: abertas (em turno, na fila ou ociosas), e com despertador ou auto-continue pendente. Ler a pendência não quarentena:
   // arquivo estragado LANÇA e a varredura aborta.
   busy: async () =>
-    new Set([...chats.runningSessionIds(), ...(await autoContinue.sessionIdsStrict()), ...(await wakeups.sessionIdsStrict())]),
+    new Set([...chats.runningSessionIds(), ...(await autoContinue.sessionIdsStrict()), ...(await wakeups.sessionIdsStrict()), ...(await turnRetries.sessionIdsStrict())]),
   codex: { deleteThread: (threadId) => codex.deleteThread(threadId) },
   dropStaffSession: (projectPath, staffId, sessionId) => dropStaffSessions(projectPath, staffId, [sessionId]),
   forgetTitles: (ids) => titles.forget(ids),
@@ -316,8 +323,11 @@ async function chatPlace(projectId: string, staffId: string | null) {
   if (!place) throw new BadRequest('o projeto não é um repositório git');
   return { dir, place, profile };
 }
+// Sandbox e agents do Codex antes de uma troca de motor (ver engineCapability.ts). O runner é o do CodexEnv; `chats` é lido só na chamada.
+const codexCapability = new CodexCapability(defaultRunner(), { liveCodex: () => chats.codexRunning() });
 const staff: StaffService = new StaffService(adapter, {
   runDir: path.join(MYCO_HOME, 'run'),
+  codexCapability,
   // Conversas lançadas pelo Club (fora de run/, que a limpeza apaga): base da exclusão futura (ver sessionsRegistry.ts).
   sessionsFile: REGISTRY_FILE,
   claudeConfigFile: defaultLocations().configFile,
@@ -385,15 +395,33 @@ const wakeups = new AutoContinue({
   spacingMs: 2_000,
   log: (line) => console.log(`[despertador] ${line}`),
 });
+/**
+ * Retomada do turno que falhou por causa passageira (API sobrecarregada, 5xx, limite de taxa, falha de conexão) ou cujo processo morreu no meio
+ * (ver chat/turnRetry.ts). Terceira instância do agendador, com arquivo próprio e a opção `autoRetry`: só espera o horário e manda o texto; quem
+ * decide retomar (ação externa cortada, despertador, parada) é o ChatManager. O orçamento de tentativas por turno também fica em disco.
+ */
+const turnRetries = new AutoContinue({
+  file: path.join(MYCO_HOME, 'turn-retries.json'),
+  enabled: async () => (await readConfig()).autoRetry,
+  stopHit: usageStopHit,
+  knownResets: async () => (await readUsage()).limits,
+  send: (p) => chats.retryChat(p),
+  log: (line) => console.log(`[retomada] ${line}`),
+});
+const turnLedger = new TurnRetryLedger(path.join(MYCO_HOME, 'turn-retry.json'));
 
 const chats: ChatManager = new ChatManager({
   // Plano B de quem roda no Codex: a conta recusou o modelo da ficha, o turno é refeito com o mais parecido do catálogo.
   codexModels: async () => (await codexModels.list()).models,
   // Antes de cada execução do Codex: o recurso `network_proxy` presente e o 127.0.0.2 de pé (senão roda sem rede e avisa) e a versão mínima.
   codexEnv: () => codexRunEnv(),
+  // A sandbox do Codex quebrou numa conversa: as próximas conferências de troca esperam (ver CodexCapability.reportFailure).
+  onCodexSandboxFailure: (text) => codexCapability.reportFailure(text),
   tokens: sessionTokens,
   autoContinue,
   wakeups,
+  retries: turnRetries,
+  retryLedger: turnLedger,
   inbox: inboxState,
   contextSwitch: async () => (await readConfig()).contextSwitch,
   // Teto por turno (ferramentas e minutos): lido a cada turno, mudança vale sem reiniciar (0 = desligado).
@@ -410,7 +438,7 @@ const chats: ChatManager = new ChatManager({
   // Limite do Codex estourado: a hora de voltar vem da leitura fresca dos limites do Codex (só com `codexReview` ligado).
   codexLimits: async () => codexUsage.read((await readConfig()).codexReview, { fresh: true, waitMs: 8_000 }),
   listLive: () => adapter.listLiveSessions(),
-  resolve: (projectId, sessionId, staffId, forkFrom, engineOverride) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom, engineOverride),
+  resolve: (projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly),
   rememberChoice: (projectId, staffId, sessionId, choice) => staff.rememberChoice(projectId, staffId, sessionId, choice),
   markModelObsolete: (projectId, staffId, model, engine) => staff.markModelObsolete(projectId, staffId, model, engine),
   registry: new ChatRegistry(path.join(MYCO_HOME, 'run', 'chats.json')),
@@ -425,6 +453,11 @@ const chats: ChatManager = new ChatManager({
   },
   // Toda alteração de código de uma conversa sem tarefa vira um card (ver TaskService.onCodeEdit). Registro, não trava: a escrita já foi.
   onEdit: (edit) => void tasks.onCodeEdit(edit).catch((err) => console.error('[tarefas] card automático:', err)),
+  // Você fechou a conversa de uma tarefa no meio do turno: a tarefa vai para Aguardar antes de o processo sair (senão a saída a entregaria para revisão).
+  beforeClose: async (sid) => {
+    await tasks.parkClosed(sid);
+    boardCache.invalidate();
+  },
   // Ficou livre: os ajustes guardados e a próxima tarefa da fila dele.
   onIdle: (sid, pid, staffId, reason) => {
     boardCache.invalidate();
@@ -485,11 +518,19 @@ const readLimitOf = async (engine: 'claude' | 'codex'): Promise<LimitHit | null 
 };
 
 /** Abre uma conversa nova com o funcionário e manda o texto. Sem `force`, confere o consumo antes. Usado pelas tarefas e pelas ações do guia. */
-const sendNewConversation = async (projectId: string, staffId: string, text: string, force: boolean, override?: EngineOverride) => {
-  // A trava confere o motor que a conversa vai usar: o do override (Claude→Codex não cai na trava do Claude; Codex→Claude
-  // respeita a do Claude). Sem override, é a do motor da ficha, como sempre.
-  if (!force) await staff.checkUsage(projectId, { staffId, ...(override && { engine: override.engine }) });
-  return chats.send(projectId, null, staffId, text, undefined, [], [], false, undefined, override);
+const sendNewConversation = async (projectId: string, staffId: string, text: string, force: boolean, override?: EngineOverride, reviewOnly = false) => {
+  // Lenta (2 s ou mais), escreve no log quanto levou a trava de consumo e quanto levou abrir a conversa (ver stageTimer.ts).
+  const timer = new StageTimer(`abrir conversa de ${staffId}`);
+  try {
+    // A trava confere o motor que a conversa vai usar: o do override (Claude→Codex não cai na trava do Claude; Codex→Claude
+    // respeita a do Claude). Sem override, é a do motor da ficha, como sempre.
+    timer.stage('consumo');
+    if (!force) await staff.checkUsage(projectId, { staffId, ...(override && { engine: override.engine }) });
+    timer.stage('abrir');
+    return await chats.send(projectId, null, staffId, text, undefined, [], [], false, undefined, override, reviewOnly);
+  } finally {
+    timer.finish();
+  }
 };
 
 // Gate de recursos da fila (RAM, CPU e teto de conversas; ver resourceGate.ts). A config é lida a cada partida.
@@ -528,6 +569,7 @@ const tasks = new TaskService({
   answerAsk: (sid, rid, answers, by) => chats.answer(sid, rid, true, { answers, by: by ?? 'manager' }),
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
   isWorking: (projectId, staffId, except) => chats.staffWorking(projectId, staffId, except),
+  isSessionWorking: (sessionId) => chats.isWorking(sessionId),
   // Só a partida automática da fila passa pelo gate (o start à mão não): sem RAM, CPU ou vaga, a tarefa espera na fila.
   resourceGate: () => resourceGate.reserve(),
   // Reiniciando: fim de turno não conclui tarefa (ver tasks.ts `closing`).
@@ -548,10 +590,15 @@ const tasks = new TaskService({
   // O consumo já foi conferido quando você mandou (a mensagem só esperou a vez).
   // Com carimbo (mensagem guardada de outro funcionário), vai como delegada: a marca vai junto, como no envio direto.
   sendTo: (projectId, sessionId, staffId, text, images, origin) => chats.send(projectId, sessionId, staffId, text, 'next', images, [], !!origin, origin),
+  // Aviso da plataforma (pedido de cancelamento ao responsável): não conta como resposta sua nem tira o "continue" agendado.
+  sendNotice: (projectId, sessionId, staffId, text) => chats.sendNotice(projectId, sessionId, staffId, text),
   secondOpinion: (input) => codex.review(input),
   // Turno que parou no limite de uso, com o "continue" agendado, não é entrega.
   // Também com despertador marcado: o funcionário ainda está acompanhando algo, não entregou.
   awaitingLimit: async (sessionId) => (await chats.awaitingLimit(sessionId)) || !!(await wakeups.get(sessionId)),
+  // Turno que falhou por causa passageira: a decisão de retomar sai antes do fim do turno ser lido; a retomada marcada aparece em `Task.retry`.
+  settleRetry: (sessionId) => chats.settledRetry(sessionId),
+  retryOf: (sessionId) => chats.retryOf(sessionId),
   // Turno que parou no teto de ferramentas ou de minutos: vai para Aguardar, não para revisão (o motivo fica guardado antes da interrupção).
   turnCap: (sessionId) => chats.turnCapOf(sessionId),
   restartCut: (projectId, sessionId) => chats.restartCut(projectId, sessionId),
@@ -566,10 +613,11 @@ const tasks = new TaskService({
     const wake = await wakeups.get(sessionId);
     await autoContinue.cancel(sessionId, 'fallback');
     await wakeups.cancel(sessionId, 'fallback');
+    await turnRetries.cancel(sessionId, 'fallback');
     return wake ? wake.at : null;
   },
   // Pré-checagem da troca: a conversa no motor do override abriria? (as barreiras do envio, sem gravar nada).
-  assertRunnable: (projectId, staffId, override) => staff.assertOverrideRunnable(projectId, staffId, override),
+  assertRunnable: (projectId, staffId, override, exceptSession) => staff.assertOverrideRunnable(projectId, staffId, override, exceptSession),
   clearOverride: (sessionId) => chats.clearOverride(sessionId),
   stopSession: (sessionId) => chats.stop(sessionId),
   // Tarefa cancelada: o turno em andamento para como no botão Parar do chat (a conversa continua aberta, com o histórico).
@@ -586,7 +634,7 @@ const directFallback = new DirectFallback({
   },
   readLimit: readLimitOf,
   stopHit: usageStopHit,
-  assertRunnable: (projectId, staffId, override) => staff.assertOverrideRunnable(projectId, staffId, override),
+  assertRunnable: (projectId, staffId, override, exceptSession) => staff.assertOverrideRunnable(projectId, staffId, override, exceptSession),
   snapshot: (projectId, sessionId) => chats.snapshot(projectId, sessionId),
   git: async (projectId, staffId) => {
     const dir = await projectPathOf(projectId);
@@ -598,6 +646,7 @@ const directFallback = new DirectFallback({
   // Como na tarefa (cancelContinue): o "continue" da antiga sai com o motivo 'fallback'.
   cancelContinue: async (sessionId) => {
     await autoContinue.cancel(sessionId, 'fallback');
+    await turnRetries.cancel(sessionId, 'fallback');
   },
   send: (projectId, sessionId, staffId, text, priority, images, files, override) =>
     chats.send(projectId, sessionId, staffId, text, priority, images, files, false, undefined, override),
@@ -627,6 +676,13 @@ autoContinue.subscribe((e) => {
 // a conversa parada (trabalhando, o fim do turno entrega); cancelado pelo próprio funcionário não entrega nada.
 watchWakeups(
   wakeups,
+  (sessionId) => chats.isWorking(sessionId),
+  (sessionId) => void tasks.onTurnDone(sessionId).catch(() => {}),
+);
+// Retomada de turno que falhou que não vai sair (cancelada por Parar, opção desligada, envio que falhou): a tarefa é entregue como antes (o
+// turno que falhou vale como fim), só com a conversa parada. As outras saídas (mensagem sua, teto, reinício) têm quem trate o fim do turno.
+watchWakeups(
+  turnRetries,
   (sessionId) => chats.isWorking(sessionId),
   (sessionId) => void tasks.onTurnDone(sessionId).catch(() => {}),
 );
@@ -742,6 +798,10 @@ function parse<S extends z.ZodTypeAny>(schema: S, body: unknown): z.output<S> {
   if (!r.success) throw new BadRequest(r.error.issues[0]?.message ?? 'pedido inválido');
   return r.data;
 }
+
+/** `confirm`: você sabe que a conversa está trabalhando e quer fechá-la mesmo assim (ver `ChatManager.close`). */
+const CloseBody = z.object({ confirm: z.boolean().optional() }).strict();
+const ArchiveBody = ArchiveRequest.extend({ confirm: z.boolean().optional() });
 
 interface Request {
   params: string[];
@@ -1365,18 +1425,27 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       const b = parse(z.object({ staffId: z.string().max(40), requestedBy: z.string().max(40).optional(), start: z.boolean().default(true) }).passthrough(), body);
       const requestedBy = actorOf(caller, b.requestedBy);
       if (!requestedBy) throw new BadRequest('pela API, diga quem pede (requestedBy: o seu id)');
-      if (!(await staff.isManagerOf(id!, requestedBy, b.staffId))) throw new BadRequest('pela API, só para quem reporta a você (requestedBy)');
-      // A entrega volta para a conversa dele que pediu (a do token), e não para a que está no turno agora.
-      const task = await tasks.create(id!, body, requestedBy, requesterSessionOf(caller, requestedBy));
-      return task && b.start ? ((await tasks.start(id!, task.id)) ?? task) : task;
+      // Lento (2 s ou mais), escreve no log o tempo de cada etapa do pedido (o começo da tarefa escreve o dele, ver TaskService.start).
+      const timer = new StageTimer(`POST tarefa de ${requestedBy}`);
+      try {
+        timer.stage('gestor');
+        if (!(await staff.isManagerOf(id!, requestedBy, b.staffId))) throw new BadRequest('pela API, só para quem reporta a você (requestedBy)');
+        // A entrega volta para a conversa dele que pediu (a do token), e não para a que está no turno agora. Grava e começa; a tarefa gravada é sempre
+        // devolvida, mesmo se o começo falhar (`startError`), e o retry com a mesma `idempotencyKey` devolve a mesma tarefa (ver TaskService.createAndStart).
+        // Com prazo: o funcionário ocupado (a vez dele demora) não prende o pedido, a resposta vem com a tarefa na fila.
+        return await tasks.createAndStart(id!, body, requestedBy, requesterSessionOf(caller, requestedBy), { start: b.start, deadlineMs: START_DEADLINE_MS, stage: (s) => timer.stage(s) });
+      } finally {
+        timer.finish();
+      }
     },
   ],
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks/${ID}$`),
-    ({ params: [id, taskId], body, fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('tarefas só pelo Claudio’s Club');
-      return tasks.update(id!, taskId!, body);
+    ({ params: [id, taskId], body, fromBrowser, caller }) => {
+      // A tela edita como sempre. O funcionário, só com o token da conversa e só tarefa em Aguardar ou A fazer (ver TaskService.editFrom).
+      if (fromBrowser) return tasks.update(id!, taskId!, body);
+      return tasks.editFrom(id!, taskId!, caller, body);
     },
   ],
   [
@@ -1384,7 +1453,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     new RegExp(`^/api/projects/${ID}/tasks/${ID}/start$`),
     ({ params: [id, taskId], body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('tarefas só pelo Claudio’s Club');
-      return tasks.start(id!, taskId!, (body as { force?: unknown } | null)?.force === true);
+      return tasks.start(id!, taskId!, (body as { force?: unknown } | null)?.force === true, { deadlineMs: START_DEADLINE_MS });
     },
   ],
   // Cancelar a tarefa (fecha sem entrega e não libera quem depende dela). Da tela, ou do funcionário só com o token da conversa ATUAL
@@ -1397,6 +1466,26 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       const b = cancelRequest(body, fromBrowser);
       if (fromBrowser) return tasks.cancel(id!, taskId!, { by: 'user', reason: b.reason, dependents: b.dependents });
       return tasks.cancelFrom(id!, taskId!, caller, b.reason);
+    },
+  ],
+  // Pedido de cancelamento de tarefa que JÁ COMEÇOU: quem a pediu (só com o token da conversa dele) manda o pedido com o motivo (`{ reason }`, obrigatório), que chega
+  // na conversa do responsável; ele aceita cancelando (a rota acima) ou recusa dizendo por quê (a de baixo). Quem pediu cancela direto, pela rota acima, a que nunca
+  // começou. Só funcionários pela API (a tela cancela direto, com a rota acima); a permissão é do serviço (403 sem token ou sem ser quem pediu).
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/tasks/${ID}/cancel-request$`),
+    ({ params: [id, taskId], body, fromBrowser, caller }) => {
+      if (fromBrowser) throw new BadRequest('a tela cancela a tarefa direto (cancel); o pedido de cancelamento é do funcionário que pediu a tarefa');
+      return tasks.requestCancel(id!, taskId!, caller, reasonRequest(body, 'do pedido de cancelamento'));
+    },
+  ],
+  // O responsável RECUSA o pedido de cancelamento, com o porquê (`{ reason }`, obrigatório): só com o token da conversa atual da tarefa; quem pediu é avisado.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/tasks/${ID}/cancel-request/refuse$`),
+    ({ params: [id, taskId], body, fromBrowser, caller }) => {
+      if (fromBrowser) throw new BadRequest('a recusa é de quem faz a tarefa, pela conversa dela');
+      return tasks.refuseCancel(id!, taskId!, caller, reasonRequest(body, 'da recusa'));
     },
   ],
   // Reabrir a cancelada: volta para "a fazer", sem começar sozinha. Só pela tela.
@@ -1453,6 +1542,15 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks/${ID}/resend-held$`),
     ({ params: [id, taskId], fromBrowser }) => tasks.resendHeld(id!, taskId!, fromBrowser),
+  ],
+  // Ordem da fila do responsável pela tarefa (`:id` é o card). Corpo (um só): `{ to: 'top' | n }` ou `{ step: 'up' | 'down' }` (reordenar) ou
+  // `{ suggest: 'up' | 'down' | 'top', reason }` (sugestão do responsável, vira aviso a quem pediu e não muda nada). Quem pode, no serviço (403 sem
+  // permissão, 409 fora da fila ou sem mudança, 404 sem a tarefa): o usuário (`fromBrowser`) em qualquer card; o gestor que pediu, só `step` nos que pediu
+  // (com o token da conversa dele); o responsável, só `suggest`. A permissão não depende da tela.
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/tasks/${ID}/order$`),
+    ({ params: [id, taskId], body, fromBrowser, caller }) => tasks.reorder(id!, taskId!, caller, fromBrowser, body),
   ],
   // Desligada nas configurações: nem procura o `codex` (nenhum processo é aberto).
   [
@@ -2047,12 +2145,28 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     /^\/api\/archive$/,
     async ({ body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
-      const req = ArchiveRequest.safeParse(body);
-      if (!req.success) throw new BadRequest('pedido de arquivamento inválido');
-      const config = await setArchived(req.data);
+      const parsed = ArchiveBody.safeParse(body);
+      if (!parsed.success) throw new BadRequest('pedido de arquivamento inválido');
+      const { confirm, ...req } = parsed.data;
+      // Arquivar também fecha o processo (libera memória). Uma conversa que trabalha sem confirmação, ou com efeito incerto, recusa (409) e NADA é arquivado.
+      const closing = req.archived ? await chats.closeForArchive(req, confirm) : null;
+      const config = await setArchived(req);
+      boardCache.invalidate();
       // Temporário de volta ao quadro: os dias parado recomeçam a contar.
-      if (!req.data.archived && req.data.id.startsWith('staff:')) await staff.restored(req.data.id.slice('staff:'.length));
-      return config;
+      if (!req.archived && req.id.startsWith('staff:')) await staff.restored(req.id.slice('staff:'.length));
+      return closing ? { ...config, closing } : config;
+    },
+  ],
+  // Fechar a conversa (libera o processo e os MCPs dela; a sessão continua no disco). Parada fecha; trabalhando pede `confirm`; efeito incerto recusa.
+  [
+    'POST',
+    new RegExp(`^/api/chat/${ID}/close$`),
+    async ({ params: [sid], body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      const b = parse(CloseBody, body ?? {});
+      const result = await chats.close(sid!, { confirm: b.confirm });
+      boardCache.invalidate();
+      return { ok: true, ...result };
     },
   ],
   // Título manual da conversa (null ou vazio apaga: volta ao último assunto). Só pelo Claudio’s Club.
@@ -2327,6 +2441,8 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         if (err instanceof StaffSendLimitError) return send(res, 429, { error: err.message }, { 'retry-after': String(err.retryAfter) });
         // Reiniciando: a entrega é recusada e a conversa não abre (tentar de novo em instantes).
         if (err instanceof ChatClosingError) return send(res, 503, { error: err.message });
+        // Fechar (ou arquivar) uma conversa que trabalha: 409 com `code` (`working`: falta `confirm`; `uncertain`: efeito fora do projeto, com a `action`). Nada foi fechado.
+        if (err instanceof CloseRefusedError) return send(res, 409, { error: err.message, code: err.code, ...(err.action && { action: err.action }) });
         if (
           err instanceof BadRequest ||
           err instanceof CostReviewApplyError ||
@@ -2839,6 +2955,7 @@ server.listen(PORT, HOST, () => {
       void bootResume({ file: resumeFile.file, stopHit: usageStopHit, send: (entry) => chats.resumeChat(entry), hold: (entry) => void chats.holdCut(entry.sessionId, entry.cut) }, () => {
         autoContinue.start();
         wakeups.start();
+        turnRetries.start();
         // Fila de tarefas: quem ficou com tarefa ou ajuste esperando. Reiniciando, a fila espera o boot (ver tasks.ts).
         // A coleta de CPU do gate começa aqui (a média vale depois de ~2 min).
       resourceGate.start();
