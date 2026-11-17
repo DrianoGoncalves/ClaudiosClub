@@ -1,17 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import { isClosed, type InboxItem, type StaffProfile, type Task } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
+import { secretFileOf } from '../chat/secretAlerts';
+import { SecretVerdictRow } from '../chat/SecretVerdictRow';
 import { formatAgo } from '../format';
 import { t } from '../i18n';
 import { TaskCloseDialog } from '../tasks/TaskCloseDialog';
 import { isInsideDialog } from '../lib/dialogStore';
 import { inboxText, inboxWho } from './inboxText';
+import { secretVerdictOf } from './secretVerdict';
+import { alertAction, isTaskAlert, type AlertKind, type InboxOpen } from './taskAlerts';
 import type { InboxView } from './useInbox';
 
 // Botão "precisa de mim" no topo do quadro, com o contador, e a lista que abre embaixo dele.
-// Clicar num item abre o painel de quem está esperando.
+// Clicar num item abre o painel de quem está esperando (ou o card da tarefa, nos itens de tarefa).
 
-const KIND_LABEL: Record<InboxItem['kind'], string> = {
+const KIND_LABEL: Record<AlertKind, string> = {
   plan: t('inbox.kindPlan'),
   permission: t('inbox.kindPermission'),
   secret: t('inbox.kindSecret'),
@@ -22,6 +26,8 @@ const KIND_LABEL: Record<InboxItem['kind'], string> = {
   usage: t('inbox.kindUsage'),
   blocked: t('inbox.kindBlocked'),
   notStarted: t('inbox.kindNotStarted'),
+  question: t('inbox.kindQuestion'),
+  stuck: t('inbox.kindStuck'),
 };
 
 /** O que fazer com quem espera uma tarefa cancelada (item 'blocked'), na ordem dos botões. */
@@ -33,7 +39,8 @@ const BLOCKER_ACTIONS = [
 
 /** Itens que só se dispensam ganham um X no canto; o title explica o que o X faz. Segredo tem duas ações, com texto. */
 function dismissTitleOf(item: InboxItem): string | null {
-  if (item.id.startsWith('question:')) return t('office.questionSeenTitle');
+  // Só a pergunta achada no texto do chat (kind 'waiting'): a dúvida de tarefa (kind 'question') não se dispensa, some quando é respondida.
+  if (item.kind === 'waiting' && item.id.startsWith('question:')) return t('office.questionSeenTitle');
   if (item.id.startsWith('waiting:')) return t('inbox.dismissWaitingTitle');
   if (item.kind === 'routine') return t('inbox.dismissTitle');
   return null;
@@ -41,16 +48,19 @@ function dismissTitleOf(item: InboxItem): string | null {
 
 export function InboxMenu({
   inbox,
-  topicOf,
+  titleOf,
   staff = [],
   onOpen,
+  onOpenFile,
 }: {
   inbox: InboxView;
-  /** Assunto da conversa por sessionId; sem assunto conhecido, o item não mostra a linha. */
-  topicOf: ReadonlyMap<string, string>;
+  /** Título da conversa por sessionId (manual, gerado ou assunto); sem título conhecido, o item não mostra a linha. */
+  titleOf: ReadonlyMap<string, string>;
   /** As fichas (de todos os projetos): o diálogo de cancelar mostra o nome de quem cuida de cada tarefa que espera. */
   staff?: ReadonlyArray<Pick<StaffProfile, 'id' | 'name' | 'projectId'>>;
-  onOpen: (item: InboxItem) => void;
+  onOpen: InboxOpen;
+  /** Abre o arquivo do aviso de segredo no editor do projeto do item; sem ele o link não aparece. */
+  onOpenFile?: (item: InboxItem, path: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -122,7 +132,10 @@ export function InboxMenu({
             <ul className="inbox-list">
               {inbox.items.map((item) => {
                 const dismissTitle = dismissTitleOf(item);
-                const topic = topicOf.get(item.sessionId);
+                const topic = titleOf.get(item.sessionId);
+                const secretFile = item.kind === 'secret' ? secretFileOf(item) : null;
+                const secretVerdict = item.kind === 'secret' ? secretVerdictOf(item) : null;
+                const action = alertAction(item);
                 return (
                 <li key={item.id} className={dismissTitle ? 'inbox-has-x' : undefined}>
                   <button
@@ -139,15 +152,32 @@ export function InboxMenu({
                       {item.name && item.projectName && <span className="muted"> · {item.projectName}</span>}
                     </span>
                     {topic && <span className="inbox-topic" title={topic}>{topic}</span>}
-                    <span className="inbox-summary" title={item.kind === 'blocked' || item.kind === 'notStarted' ? inboxText(item) : undefined}>{inboxText(item)}</span>
+                    <span className="inbox-summary" title={isTaskAlert(item) || item.kind === 'notStarted' ? inboxText(item) : undefined}>{inboxText(item)}</span>
                     {item.at && <span className="muted small inbox-at">{formatAgo(now - Date.parse(item.at))}</span>}
                   </button>
+                  {item.kind === 'secret' && secretVerdict && (
+                    <div className="inbox-secret-verdict">
+                      <SecretVerdictRow item={item} />
+                    </div>
+                  )}
                   {item.kind === 'secret' && (
                     <span className="inbox-dismiss">
+                      {secretFile && !secretFile.blocked && onOpenFile && (
+                        <button
+                          className="link small"
+                          title={t('chat.secretOpenFileTitle', { path: secretFile.path })}
+                          onClick={() => {
+                            setOpen(false);
+                            onOpenFile(item, secretFile.path);
+                          }}
+                        >
+                          {t('inbox.secretOpenFile')}
+                        </button>
+                      )}
                       <button className="link small" title={t('inbox.secretTitle')} onClick={() => void inbox.dismiss(item)}>
                         {t('inbox.secretDone')}
                       </button>
-                      <button className="link small" title={t('office.notSecretTitle')} onClick={() => void inbox.dismiss(item, { notSecret: true })}>
+                      <button className="link small" title={t(secretVerdict?.verdict === 'exposed' ? 'office.notSecretExposedTitle' : 'office.notSecretTitle')} onClick={() => void inbox.dismiss(item, { notSecret: true })}>
                         {t('office.notSecret')}
                       </button>
                     </span>
@@ -187,6 +217,20 @@ export function InboxMenu({
                         {t('inbox.notStartedCancel')}
                       </button>
                       {failed?.id === item.id && <span className="error small" role="alert">{failed.message}</span>}
+                    </span>
+                  )}
+                  {action && (
+                    <span className="inbox-dismiss">
+                      <button
+                        className="link small"
+                        title={action.title}
+                        onClick={() => {
+                          setOpen(false);
+                          onOpen(item, { taskId: action.taskId });
+                        }}
+                      >
+                        {action.label}
+                      </button>
                     </span>
                   )}
                   {dismissTitle && (

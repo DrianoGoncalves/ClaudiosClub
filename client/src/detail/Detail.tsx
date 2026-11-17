@@ -17,7 +17,7 @@ import type {
   UserScope,
 } from '../../../shared/model';
 import { TEMP_IDLE_DAYS } from '../../../shared/model';
-import { alertError, api, ApiError, isPairingError, type SkillDeleted } from '../api';
+import { alertError, api, ApiError, isPairingError, type GithubSkillStatus, type GithubTarget, type SkillDeleted } from '../api';
 import { RoomColorPicker } from '../board/colors';
 import { portraitUrl } from '../board/nodes';
 import { idleUnseen, showsStatus, useSeeIdle, useSeenIdle } from '../board/unread';
@@ -26,6 +26,7 @@ import type { ChatFocus } from '../chat/chatFocus';
 import { MoreTabs } from '../chat/MoreTabs';
 import { BrowserCheck } from '../staff/BrowserCheck';
 import type { StaffFormTab } from '../staff/HireForm';
+import { ModelObsoleteNote } from '../staff/ModelObsoleteNote';
 import { StaffHistory } from '../staff/StaffHistory';
 import { TeamFile } from '../staff/TeamFile';
 import { MAX_INPUT_BYTES, PROJECT_IMAGE_MAX, shrinkImage } from '../lib/shrinkImage';
@@ -44,7 +45,10 @@ import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
 import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
+import { GithubInstall } from '../skills/GithubInstall';
+import { GithubBadges, GithubOrigin } from '../skills/GithubOrigin';
 import { SkillManage } from './SkillManage';
+import { skillRef } from './skillAccess';
 import { askConfirm } from '../lib/dialogStore';
 
 // A conversa (com o markdown e o remark) carrega ao abrir o painel do funcionário, não no pacote inicial.
@@ -160,6 +164,8 @@ export function EmployeePanel(props: {
   onFocusDone?: () => void;
   /** A caixa "precisa de mim": conversa com aviso nela abre no fim, como antes. */
   inbox?: InboxItem[];
+  /** "Ignorar" no balão de segredo da conversa: o mesmo da caixa (some dos dois lados). */
+  onDismissSecret?: (item: InboxItem) => Promise<void>;
   /**
    * Editando pelo RH: as mesmas abas do "Mais", mas no lugar da conversa, com o seletor de projeto (a mesma pessoa em
    * outros projetos) e o "Conversar", que abre o painel dela no chat do projeto escolhido.
@@ -503,6 +509,7 @@ export function EmployeePanel(props: {
       {staff?.temporary && project && (
         <TempNotice staff={staff} managers={props.managers} projectId={project.id} archived={props.archived} onArchive={props.onArchive} onChanged={props.onChanged} />
       )}
+      {staff?.modelObsolete && <ModelObsoleteNote obsolete={staff.modelObsolete} />}
       {staff?.browser && !props.manage && <BrowserCheck />}
     </>
   );
@@ -691,6 +698,8 @@ export function EmployeePanel(props: {
         focus={props.focus}
         onFocusDone={props.onFocusDone}
         awaiting={!!opened && !!props.inbox?.some((i) => i.sessionId === opened)}
+        inbox={props.inbox}
+        onDismissSecret={props.onDismissSecret}
       />
     </Suspense>
   );
@@ -709,7 +718,8 @@ function latestConversation(list: Array<{ id: string; updatedAt: string | null }
 
 /** "14:05 — Ajustar o header da sala" (o dia vem do grupo). */
 function conversationLabel(c: { title: string | null; updatedAt: string | null }): string {
-  const title = (c.title ?? t('detail.untitledConversation')).replace(/\s+/g, ' ').slice(0, 48);
+  const full = (c.title ?? t('detail.untitledConversation')).replace(/\s+/g, ' ');
+  const title = full.length > 48 ? `${full.slice(0, 47)}…` : full;
   const when = c.updatedAt ? new Date(c.updatedAt).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' }) : '';
   return when ? `${when} — ${title}` : title;
 }
@@ -823,6 +833,7 @@ export function ProjectPanel({
   totalUsd,
   onNewAgent,
   onEditAgent,
+  onSkillsChanged,
   onTasks,
   onFiles,
   onOpenFile,
@@ -831,6 +842,8 @@ export function ProjectPanel({
   tasks,
   office,
 }: {
+  /** Instalou uma skill do GitHub: o quadro relê. */
+  onSkillsChanged?: () => void;
   /** Abre um arquivo do projeto direto no editor de Arquivos (ex.: o guia SPEC.md). */
   onOpenFile?: (path: string) => void;
   /** Fichas novas vieram de um arquivo de equipe: o quadro relê. */
@@ -990,7 +1003,14 @@ export function ProjectPanel({
               onNew={project.exists ? onNewAgent : undefined}
               onEdit={project.exists ? onEditAgent : undefined}
             />
-            <SkillList skills={detail.skills} />
+            <SkillList
+              skills={detail.skills}
+              {...(project.exists && { github: { scope: 'project', projectId: project.id } satisfies GithubTarget })}
+              onInstalled={() => {
+                api.project(id).then(setDetail, (e: Error) => setError(e.message));
+                onSkillsChanged?.();
+              }}
+            />
           </>
         )}
         {tab === 'look' && (
@@ -1126,10 +1146,13 @@ export function UserPanel({
   scope,
   onNewAgent,
   onEditAgent,
+  onSkillsChanged,
 }: {
   scope: UserScope;
   onNewAgent?: () => void;
   onEditAgent?: (name: string) => void;
+  /** Instalou uma skill do GitHub: o quadro relê. */
+  onSkillsChanged?: () => void;
 }) {
   return (
     <>
@@ -1140,7 +1163,7 @@ export function UserPanel({
       </header>
       <AccountRules />
       <AgentList agents={scope.agents} empty={t('detail.noAgentsUser')} onNew={onNewAgent} onEdit={onEditAgent} />
-      <SkillList skills={scope.skills} />
+      <SkillList skills={scope.skills} github={{ scope: 'user', projectId: null }} onInstalled={onSkillsChanged} />
       <SkillLibrary />
     </>
   );
@@ -1531,6 +1554,9 @@ export function SkillPanel({
   onChanged: () => void;
   onDeleted: (done: SkillDeleted) => void;
 }) {
+  // Atualizar ou voltar pelo GitHub troca o SKILL.md no disco: o editor (SkillManage) recomeça, para não salvar por cima com o texto velho.
+  const [rev, setRev] = useState(0);
+  const ref = skillRef(skill, projectId);
   return (
     <>
       <header className="header">
@@ -1550,7 +1576,17 @@ export function SkillPanel({
       {skill.error && <p className="error">{skill.error}</p>}
       {skill.link.target && <Field label={t('detail.origin')} mono value={skill.link.target} />}
       {skill.description && <Field label={t('detail.description')} value={skill.description} />}
-      <SkillManage skill={skill} projectId={projectId} onChanged={onChanged} onDeleted={onDeleted} />
+      {ref && !skill.link.target && (
+        <GithubOrigin
+          target={{ scope: ref.scope, projectId: ref.projectId }}
+          name={skill.name}
+          onChanged={() => {
+            setRev((r) => r + 1);
+            onChanged();
+          }}
+        />
+      )}
+      <SkillManage key={rev} skill={skill} projectId={projectId} onChanged={onChanged} onDeleted={onDeleted} />
       {/* Skill da conta aparece em todas as sessões: dá para copiar para a biblioteca (só quem tem na ficha). */}
       {skill.scope === 'user' && !skill.readOnly && !skill.link.target && <CopyToLibrary name={skill.name} />}
     </>
@@ -1611,24 +1647,57 @@ function AgentList({
   );
 }
 
-function SkillList({ skills }: { skills: Skill[] }) {
+/**
+ * As skills do escopo. Com `github`, o cabeçalho ganha "Instalar do GitHub" (o servidor monta a pasta pelo escopo) e os
+ * cartões das skills que vieram de um link levam o selo e "há versão nova"; sem como ler a origem, os cartões ficam como eram.
+ */
+function SkillList({ skills, github, onInstalled }: { skills: Skill[]; github?: GithubTarget; onInstalled?: (() => void) | undefined }) {
+  const [installing, setInstalling] = useState(false);
+  const [origins, setOrigins] = useState<Map<string, GithubSkillStatus>>(new Map());
+  const scopeKey = github ? `${github.scope}:${github.projectId ?? ''}` : '';
+  // Relê a origem só quando a lista de skills muda de verdade (o quadro se renova sozinho e a leitura percorre as pastas).
+  const listKey = skills.map((s) => s.id).join('|');
+  useEffect(() => {
+    setOrigins(new Map());
+    if (!github) return;
+    let alive = true;
+    api.githubStatus(github).then(
+      (list) => alive && setOrigins(new Map(list.map((s) => [s.name, s]))),
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+  }, [scopeKey, listKey]);
   return (
     <section className="section">
-      <h3>{t('detail.skillsCount', { n: skills.length })}</h3>
+      <h3 className="section-head">
+        {t('detail.skillsCount', { n: skills.length })}
+        {github && (
+          <button type="button" className="btn-secondary" onClick={() => setInstalling(true)}>
+            {t('gh.install')}
+          </button>
+        )}
+      </h3>
       {skills.length === 0 && <p className="muted">{t('detail.noSkills')}</p>}
       <ul className="cards">
-        {skills.map((s) => (
-          <li key={s.id} className={`card ${s.error ? 'card-error' : ''}`}>
-            <div className="card-title">
-              {s.name}
-              <LinkBadge link={s.link} />
-              {s.readOnly && <span className="badge dim">{t('detail.synced')}</span>}
-            </div>
-            {s.description && <p className="card-desc">{s.description}</p>}
-            {s.error && <p className="error">{s.error}</p>}
-          </li>
-        ))}
+        {skills.map((s) => {
+          const origin = origins.get(s.name);
+          return (
+            <li key={s.id} className={`card ${s.error ? 'card-error' : ''}`}>
+              <div className="card-title">
+                {s.name}
+                <LinkBadge link={s.link} />
+                {s.readOnly && <span className="badge dim">{t('detail.synced')}</span>}
+                {origin && <GithubBadges status={origin} />}
+              </div>
+              {s.description && <p className="card-desc">{s.description}</p>}
+              {s.error && <p className="error">{s.error}</p>}
+            </li>
+          );
+        })}
       </ul>
+      {github && installing && <GithubInstall target={github} onClose={() => setInstalling(false)} onInstalled={() => onInstalled?.()} />}
     </section>
   );
 }
@@ -1692,7 +1761,7 @@ function SessionList({
           {s.live?.alive && showsStatus(seen, s.live) && (
             <span className={`dot dot-${s.live.status ?? 'unknown'}`} title={STATUS_LABEL[s.live.status ?? ''] ?? ''} />
           )}
-          {conversationTitle(s, titles) ?? <span className="muted mono">{s.id.slice(0, 8)}</span>}
+          <span className="row-title-text">{conversationTitle(s, titles) ?? <span className="muted mono">{s.id.slice(0, 8)}</span>}</span>
         </span>
         <span className="row-meta">
           {s.entrypoint && <span className="badge">{ENTRYPOINT_LABEL[s.entrypoint] ?? s.entrypoint}</span>}

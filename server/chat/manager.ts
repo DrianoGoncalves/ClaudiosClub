@@ -32,6 +32,7 @@ import type { CodexSpawn } from './codexArgs';
 import type { CodexEnvStatus } from '../codexEnv';
 import type { CodexModelInfo } from '../codexModels';
 import { CodexProcess } from './codexProcess';
+import type { CodeEdit } from './codeEdits';
 import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
 import { cleanAnswers } from './questions';
 import { finalQuestion } from './question';
@@ -47,7 +48,7 @@ import { readUsage } from '../usage';
 import type { SessionTokens } from '../callers';
 import { resumeText, type ResumeEntry } from './resume';
 import { externalCut } from './cutAction';
-import { legacyLabel, type SecretFinding, type SecretSource } from './secrets';
+import { legacyLabel, worseVerdict, type ClassifiedSecret, type SecretHint, type SecretKind, type SecretReason, type SecretSource, type SecretVerdict } from './secrets';
 import type { TurnCaps } from './turnCap';
 import type { TurnCapHit } from '../../shared/model';
 
@@ -100,6 +101,8 @@ export interface ChatManagerOptions {
    * escolha sua; a folga de cota não passa por aqui. Sem ele, nada é gravado.
    */
   rememberChoice?: (projectId: string, staffId: string, sessionId: string, choice: { model?: string; effort?: string }) => Promise<void>;
+  /** O motor recusou o modelo da ficha (não existe mais): grava a marca `modelObsolete` nela. Sem ele, a marca não é gravada. */
+  markModelObsolete?: (projectId: string, staffId: string, model: string, engine: 'claude' | 'codex') => Promise<void>;
   /** Conversa parada há mais que isso fecha o processo (a sessão continua no disco). */
   idleMs?: number;
   spawnImpl?: ChatProcessOptions['spawnImpl'];
@@ -125,6 +128,8 @@ export interface ChatManagerOptions {
   onAskAnswered?: (sessionId: string, requestId: string, by: 'manager' | 'user', summary: string) => void;
   /** Uma mensagem sua foi para a conversa (a tarefa dela volta para "fazendo"). */
   onSent?: (sessionId: string) => void;
+  /** Um funcionário alterou arquivo(s) com as ferramentas de edição (Claude e Codex; ver chat/codeEdits.ts): o quadro abre o card automático. */
+  onEdit?: (edit: CodeEdit) => void;
   /** Uma conversa parou de trabalhar (a fila de tarefas do funcionário anda). */
   onIdle?: (sessionId: string, projectId: string, staffId: string | null, reason: 'turn' | 'background' | 'exit') => void;
   /** O que a caixa lembra entre reinícios; sem ele, fica só na memória. */
@@ -208,7 +213,7 @@ function boostEnd(iso: string): string {
 
 /** O que entra na linha de comando da conversa, fora a autonomia (que troca sem reabrir). */
 function launchFields(p: StaffProfile) {
-  const { autonomy: _a, updatedAt: _u, portrait: _p, sessions: _s, firstTask: _f, lastModel: _lm, lastEffort: _le, ...rest } = p;
+  const { autonomy: _a, updatedAt: _u, portrait: _p, sessions: _s, firstTask: _f, lastModel: _lm, lastEffort: _le, modelObsolete: _mo, ...rest } = p;
   return rest;
 }
 
@@ -239,9 +244,27 @@ export class ChatManager {
   private readonly forks = new Map<string, string>();
   private copies: Record<string, string> | null = null;
   /** Segredos vistos nas conversas (um aviso por tipo por sessão, até você dispensar). */
-  private readonly secrets: Array<{ id: string; sessionId: string; label: string; kind: SecretFinding['kind']; detail?: string; source?: SecretSource; at: string }> = [];
+  // `file` e `cwd` ficam só no servidor (o caminho como o motor o deu, que pode ser absoluto): o inbox os troca pelo caminho relativo do projeto.
+  // `occurrence` também (identidade da ocorrência para o "não é segredo"): o inbox não a leva. `hint` é o que a tela do Club mostra.
+  private readonly secrets: Array<{
+    id: string;
+    sessionId: string;
+    label: string;
+    kind: SecretKind;
+    detail?: string;
+    verdict: SecretVerdict;
+    reason: SecretReason;
+    hint?: SecretHint;
+    occurrence: string;
+    source?: SecretSource;
+    file?: string;
+    cwd?: string;
+    at: string;
+  }> = [];
   /** Conversas cuja última mensagem veio de outro funcionário (delegação), e não de você. */
   private readonly delegated = new Set<string>();
+  /** Quando cada conversa parou com erro (`onExit`): o carimbo que a dispensa do alerta guarda, para um erro novo voltar. Só na memória, como o erro. */
+  private readonly errorAt = new Map<string, string>();
   /**
    * Conversas no motor/modelo secundário (sessão → override). Vale para a conversa inteira: continue, respawn e reabrir usam o mesmo.
    * Só na memória do processo: depois de reiniciar o Claudio’s Club, a conversa volta ao motor da ficha.
@@ -600,6 +623,7 @@ export class ChatManager {
     else this.delegated.delete(chat.sessionId);
     this.inbox.setQuestion(chat.sessionId, null); // respondeu (ou mandou outra coisa): a pergunta sai da caixa
     this.inbox.setTurnCap(chat.sessionId, null); // turno novo: o aviso do teto (caixa e tarefa) já não vale
+    this.inbox.forgetErrors(chat.sessionId); // e a dispensa do erro e do teto de antes junto
     // A ficha mudou depois que esta conversa começou: o aviso vai junto, uma vez só. Conversa grande:
     // o funcionário fica sabendo do tamanho e do custo (ele não vê isso sozinho).
     const ficha = this.fichaNotices.get(chat.sessionId);
@@ -851,16 +875,31 @@ export class ChatManager {
 
   /**
    * O que espera você nas conversas abertas no Claudio’s Club: pedidos de permissão sem resposta (o plano
-   * pronto entre eles) e conversas que pararam com erro.
+   * pronto entre eles) e conversas que pararam com erro (fora o que você já dispensou, ver `dismissError`).
    */
   attention(): Array<{ sessionId: string; pending: Array<Extract<ChatItem, { kind: 'permission' }>>; error: string | null }> {
     const out: Array<{ sessionId: string; pending: Array<Extract<ChatItem, { kind: 'permission' }>>; error: string | null }> = [];
     for (const [sessionId, chat] of this.chats) {
       const pending = chat.running ? chat.pendingPermissions() : [];
-      const error = chat.error;
+      const error = chat.error && !this.inbox.isErrorDismissed(`error:${sessionId}`, this.errorAt.get(sessionId) ?? '') ? chat.error : null;
       if (pending.length || error) out.push({ sessionId, pending, error });
     }
     return out;
+  }
+
+  /**
+   * "Ignorar" num alerta de erro da caixa: `error:<sessão>` (a conversa parou com erro) ou `cap:<sessão>` (o turno parou no teto).
+   * O carimbo guardado é o da ocorrência de agora, lido aqui (não o que a tela diz): outro erro ou outro teto da conversa volta a avisar.
+   * Sem alerta ali (a tela está velha), não há o que dispensar.
+   */
+  dismissError(id: string): boolean {
+    const m = /^(error|cap):(.+)$/.exec(id);
+    if (!m) return false;
+    const sessionId = m[2]!;
+    const at = m[1] === 'cap' ? this.inbox.turnCaps().find((c) => c.sessionId === sessionId)?.at : this.chats.get(sessionId)?.error ? (this.errorAt.get(sessionId) ?? '') : undefined;
+    if (at === undefined) return false;
+    this.inbox.dismissError(id, at);
+    return true;
   }
 
   /** A conversa está aberta no Claudio’s Club e no meio de um turno (ou esperando uma aprovação). */
@@ -930,25 +969,47 @@ export class ChatManager {
 
   /**
    * "Já troquei" tira o aviso (se o segredo aparecer de novo, volta). "Não é segredo" (`notSecret`)
-   * tira e não avisa mais desse tipo nesta conversa: era um exemplo, um teste, um valor público.
+   * tira e não avisa mais daquela ocorrência (aquele valor, nesta conversa): era um exemplo, um teste, um valor público.
+   * Outra ocorrência do mesmo tipo (outro valor) avisa de novo. Sem o aviso na lista (a tela está velha), não há ocorrência a dispensar.
    */
   dismissSecret(id: string, notSecret = false): boolean {
-    if (notSecret) this.inbox.mute(id);
     const i = this.secrets.findIndex((s) => s.id === id);
     if (i === -1) return notSecret;
+    if (notSecret) this.inbox.mute(`${id}#${this.secrets[i]!.occurrence}`);
     this.secrets.splice(i, 1);
     return true;
   }
 
-  private noteSecret(sessionId: string, hit: SecretFinding, source?: SecretSource) {
+  private noteSecret(sessionId: string, hit: ClassifiedSecret, source?: SecretSource, file?: { path: string; cwd: string }) {
     const { label } = hit;
     const id = `${sessionId}:${label}`;
-    // "Não é segredo" gravado com o rótulo da versão anterior ainda vale (ver legacyLabel).
+    // "Não é segredo" de antes valia para o rótulo todo (`id`, ou o rótulo da versão anterior: ver legacyLabel) e continua valendo; o de agora é por ocorrência.
     const old = legacyLabel(label);
-    const muted = this.inbox.isMuted(id) || (old !== null && this.inbox.isMuted(`${sessionId}:${old}`));
-    if (this.secrets.some((s) => s.id === id) || muted) return;
-    this.secrets.push({ id, sessionId, label, kind: hit.kind, ...(hit.detail && { detail: hit.detail }), ...(source && { source }), at: new Date().toISOString() });
-    this.log(`${sessionId}: ${label} apareceu na conversa (aviso na caixa)`);
+    const muted = this.inbox.isMuted(id) || (old !== null && this.inbox.isMuted(`${sessionId}:${old}`)) || this.inbox.isMuted(`${id}#${hit.occurrence}`);
+    if (muted) return;
+    const entry = {
+      id,
+      sessionId,
+      label,
+      kind: hit.kind,
+      ...(hit.detail && { detail: hit.detail }),
+      verdict: hit.verdict,
+      reason: hit.reason,
+      ...(hit.hint && { hint: hit.hint }),
+      occurrence: hit.occurrence,
+      ...(source && { source }),
+      ...(file && { file: file.path, cwd: file.cwd }),
+      at: new Date().toISOString(),
+    };
+    const i = this.secrets.findIndex((s) => s.id === id);
+    if (i === -1) {
+      this.secrets.push(entry);
+      this.log(`${sessionId}: ${label} apareceu na conversa (aviso na caixa)`);
+    } else if (worseVerdict(hit.verdict, this.secrets[i]!.verdict)) {
+      // Um aviso por conversa e tipo (id acima): fica o da primeira ocorrência (com o arquivo dela), mas sobe de gravidade se vier uma mais grave.
+      this.secrets[i] = entry;
+      this.log(`${sessionId}: ${label} voltou mais grave (${hit.verdict})`);
+    }
   }
 
   /** Última resposta da conversa aberta no Claudio’s Club (para o aviso "terminou"); null se não for daqui. */
@@ -1006,9 +1067,9 @@ export class ChatManager {
     return this.inbox.turnCapOf(sessionId);
   }
 
-  /** As conversas que pararam no teto (a caixa de entrada lê daqui). */
+  /** As conversas que pararam no teto (a caixa de entrada lê daqui), fora as que você dispensou (`turnCapOf` segue contando, é o estado da tarefa). */
   turnCaps(): Array<TurnCapHit & { sessionId: string; at: string }> {
-    return this.inbox.turnCaps();
+    return this.inbox.turnCaps().filter((c) => !this.inbox.isErrorDismissed(`cap:${c.sessionId}`, c.at));
   }
 
   interrupt(sessionId: string) {
@@ -1037,9 +1098,10 @@ export class ChatManager {
    * Alguma conversa aberta deste funcionário, neste projeto, está trabalhando (fora `exceptSession`). A mesma ficha
    * em outro projeto não conta: cada projeto tem o seu funcionário.
    */
-  staffWorking(projectId: string, staffId: string, exceptSession?: string): boolean {
+  staffWorking(projectId: string, staffId: string, exceptSession?: string | readonly string[]): boolean {
+    const except = typeof exceptSession === 'string' ? [exceptSession] : (exceptSession ?? []);
     for (const c of this.chats.values()) {
-      if (c.running && c.projectId === projectId && c.staffId === staffId && c.sessionId !== exceptSession && c.working) return true;
+      if (c.running && c.projectId === projectId && c.staffId === staffId && !except.includes(c.sessionId) && c.working) return true;
     }
     return false;
   }
@@ -1161,8 +1223,18 @@ export class ChatManager {
       effort,
       onUsage: (limits) => void this.saveUsage(spawn.sessionId, limits),
       onUsageLimit: (hit) => this.limitHit(spawn.sessionId, projectId, staffId, hit, codex ? 'codex' : 'claude'),
+      secretPepper: this.inbox.pepper(),
+      // Conversa no secundário não marca a ficha: o modelo que a conta recusou é o dele, não o da ficha.
+      onModelUnavailable: (model) => {
+        if (!override && staffId) this.modelUnavailable(spawn.sessionId, projectId, staffId, model, codex ? 'codex' : 'claude');
+      },
       onTurnWithoutLimit: () => void this.limitStreak.delete(spawn.sessionId),
-      onSecret: (hit, source) => this.noteSecret(spawn.sessionId, hit, source),
+      onSecret: (hit, source, file) => this.noteSecret(spawn.sessionId, hit, source, file ? { path: file, cwd: spawn.cwd } : undefined),
+      // Só conversa de funcionário (com ficha): a sem ficha pede antes de agir e não é do quadro.
+      onEdit: (files) => {
+        if (!staffId) return;
+        this.opts.onEdit?.({ sessionId: spawn.sessionId, projectId, staffId, engine: codex ? 'codex' : 'claude', cwd: spawn.cwd, files, request: this.chats.get(spawn.sessionId)?.lastUserText() ?? null });
+      },
       onIdle: (reason) => {
         if (reason !== 'exit') this.noteQuestion(spawn.sessionId);
         if (reason === 'turn') void this.noteTurn(spawn.sessionId).catch(() => {});
@@ -1176,6 +1248,7 @@ export class ChatManager {
       mycoToken: this.opts.tokens?.issue({ staffId, projectId, sessionId: spawn.sessionId, engine: codex ? 'codex' : 'claude' }),
       onExit: (pid, error) => {
         this.log(`${spawn.sessionId} saiu (pid ${pid})${error ? `: ${error.slice(0, 200)}` : ''}`);
+        if (error) this.errorAt.set(spawn.sessionId, new Date().toISOString());
         if (pid !== null) void this.opts.registry?.remove(spawn.sessionId, pid).catch(() => {});
       },
       spawnImpl: this.opts.spawnImpl,
@@ -1188,10 +1261,12 @@ export class ChatManager {
           writableRoots: codex.writableRoots,
           readOnlyPaths: codex.readOnlyPaths,
           sshMcp: codex.sshMcp,
+          memoriaMcp: codex.memoriaMcp,
           chromeMcp: codex.chromeMcp,
           cleanMcp: codex.cleanMcp,
           extraMcps: codex.extraMcps,
           mcpSnapshotFile: codex.mcpSnapshotFile,
+          agents: codex.agents,
           secrets: codex.secrets,
           threadId: codex.threadId,
           threadFile: codex.threadFile,
@@ -1325,6 +1400,11 @@ export class ChatManager {
     });
     // Depois de guardar o agendamento: quem ouve pode esperar `settledLimit` e cancelar o "continue" sem corrida.
     for (const cb of this.limitListeners) cb({ sessionId, projectId, staffId, engine, hit });
+  }
+
+  /** O motor recusou o modelo da ficha: a marca vai para a ficha (ver `markModelObsolete`). Falha de gravação só vai para o log. */
+  private modelUnavailable(sessionId: string, projectId: string, staffId: string, model: string, engine: 'claude' | 'codex') {
+    void this.opts.markModelObsolete?.(projectId, staffId, model, engine).catch((err) => this.log(`${sessionId}: modelo obsoleto: ${err instanceof Error ? err.message : String(err)}`));
   }
 
   /** Quem quer saber do limite no meio do turno (ex.: a troca de motor de uma tarefa). Chamado logo depois de agendar o "continue". */
@@ -1472,6 +1552,7 @@ export class ChatManager {
     for (const [id, chat] of this.chats) {
       if (!chat.running) {
         this.chats.delete(id);
+        this.errorAt.delete(id);
         this.opts.tokens?.revoke(id);
       } else if (!chat.working && Date.now() - chat.lastActivity > idle) chat.stop();
     }

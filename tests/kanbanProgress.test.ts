@@ -4,105 +4,54 @@ import path from 'node:path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, describe, expect, it } from 'vitest';
-import { kanbanProgress, progressPercent, progressTotal, STAGE_WEIGHTS, STATUS_POINTS, type ProgressTask } from '../shared/kanbanProgress';
+import { kanbanProgress, progressPercent, progressTotal, STATUS_POINTS, TASK_POINTS, type ProgressTask } from '../shared/kanbanProgress';
 import { KanbanProgressBar } from '../client/src/tasks/KanbanProgressBar';
 import { TaskService } from '../server/tasks';
 import type { StaffProfile, TaskStatus } from '../shared/model';
 
-// Dados simulados. Pesos das etapas: Aguardar 1, A fazer 3, Fazendo 2, Revisão 1; a coluna vale a soma das etapas vencidas
-// (Aguardar 0, A fazer 1, Fazendo 4, Revisão 6, Pronto 7); progresso = pontos / (7 × lote);
-// lote = abertas + as que ficaram prontas depois da criação da aberta mais antiga.
+// Dados simulados. Cada tarefa na conta vale 3 pontos; A fazer 0, Fazendo/Planejando 1, Revisão 2. Aguardar, Pronto e
+// Cancelada ficam fora da conta (nem pontos nem máximo).
 
-const day = (n: number) => `2026-11-${String(n).padStart(2, '0')}T12:00:00.000Z`;
-const task = (status: TaskStatus, createdAt: string, over: Partial<ProgressTask> = {}): ProgressTask => ({ status, createdAt, updatedAt: createdAt, ...over });
-/** Pronta: criada em `created`, entrou em Pronto em `at`. */
-const done = (created: string, at: string): ProgressTask => task('done', created, { updatedAt: at, history: [{ at, status: 'done' }] });
+const task = (status: TaskStatus): ProgressTask => ({ status });
 
 describe('kanbanProgress', () => {
-  it('lote vazio: sem tarefas não há barra', () => {
+  it('sem tarefas não há barra', () => {
     expect(kanbanProgress([])).toBeNull();
   });
 
-  it('só prontas: nada a zerar, sem barra', () => {
-    expect(kanbanProgress([done(day(1), day(2)), done(day(3), day(4))])).toBeNull();
+  it('só Aguardar, Pronto e Cancelada: nada na conta, sem barra', () => {
+    expect(kanbanProgress([task('waiting'), task('done'), task('cancelled')])).toBeNull();
   });
 
-  it('mistura de status: soma os pontos de cada coluna sobre 7 × o lote', () => {
-    const tasks = [
-      task('waiting', day(1)), // 0
-      task('todo', day(2)), // 1
-      task('doing', day(3)), // 4
-      task('review', day(4)), // 6
-      done(day(5), day(6)), // 7, pronta depois da aberta mais antiga: entra
-    ];
-    const p = kanbanProgress(tasks)!;
-    expect(p).toEqual({ points: 18, max: 35 });
-    expect([progressPercent(p), progressTotal(p)]).toEqual([51, 5]);
+  it('cada coluna vale seus pontos de 3', () => {
+    expect(TASK_POINTS).toBe(3);
+    expect(STATUS_POINTS).toEqual({ todo: 0, planning: 1, doing: 1, review: 2 });
+    expect(kanbanProgress([task('todo')])).toEqual({ points: 0, max: 3 });
+    expect(kanbanProgress([task('doing')])).toEqual({ points: 1, max: 3 });
+    expect(kanbanProgress([task('review')])).toEqual({ points: 2, max: 3 });
   });
 
-  it('pronta antiga (antes da aberta mais antiga) fica fora do lote', () => {
-    const tasks = [
-      done(day(1), day(2)), // fora: ficou pronta antes de a aberta mais antiga existir
-      done(day(1), day(9)), // dentro
-      task('todo', day(5)),
-    ];
-    // lote = aberta (1 ponto) + pronta de dia 9 (7 pontos) = 8 / 14
-    const p = kanbanProgress(tasks)!;
-    expect(p).toEqual({ points: 8, max: 14 });
-    expect([progressPercent(p), progressTotal(p)]).toEqual([57, 2]);
+  it('mistura: soma os pontos sobre 3 × tarefas na conta, ignorando Aguardar e Pronto', () => {
+    const p = kanbanProgress([task('waiting'), task('todo'), task('doing'), task('review'), task('done'), task('cancelled')])!;
+    expect(p).toEqual({ points: 3, max: 9 });
+    expect([progressPercent(p), progressTotal(p)]).toEqual([33, 3]);
   });
 
-  it('a data de pronto vem da última entrada em Pronto no histórico, não do updatedAt', () => {
-    const reopened = task('done', day(1), {
-      updatedAt: day(20), // mexida depois (ex.: nota), mas ficou pronta antes do lote
-      history: [
-        { at: day(2), status: 'done' },
-        { at: day(3), status: 'doing' },
-        { at: day(4), status: 'done' },
-      ],
-    });
-    expect(kanbanProgress([reopened, task('todo', day(10))])).toEqual({ points: 1, max: 7 });
-  });
-
-  it('sem histórico usa o updatedAt; pronta no mesmo instante da criação da aberta entra', () => {
-    const noHistory: ProgressTask = { status: 'done', createdAt: day(1), updatedAt: day(5) };
-    expect(kanbanProgress([noHistory, task('doing', day(5))])).toEqual({ points: 11, max: 14 });
+  it('revisão reprovada volta para Fazendo: de 2/3 para 1/3', () => {
+    const before = kanbanProgress([task('review')])!;
+    const after = kanbanProgress([task('doing')])!;
+    expect([before.points, after.points, after.max]).toEqual([2, 1, 3]);
+    expect(progressPercent(after)).toBe(33);
   });
 
   it('planejando vale o mesmo que Fazendo', () => {
     expect(STATUS_POINTS.planning).toBe(STATUS_POINTS.doing);
-    expect(progressPercent(kanbanProgress([task('planning', day(1))])!)).toBe(57);
+    expect(kanbanProgress([task('planning')])).toEqual({ points: 1, max: 3 });
   });
 
-  it('pesos das etapas: Aguardar 1, A fazer 3, Fazendo 2, Revisão 1 (Pronto = 7)', () => {
-    expect(STAGE_WEIGHTS).toEqual({ waiting: 1, todo: 3, doing: 2, review: 1 });
-    expect(STATUS_POINTS).toEqual({ waiting: 0, todo: 1, planning: 4, doing: 4, review: 6, done: 7, cancelled: 0 });
-  });
-
-  it('cancelada não é aberta nem entregue: fica fora do lote', () => {
-    const t0 = '2026-11-01T10:00:00.000Z';
-    expect(kanbanProgress([task('cancelled', t0)])).toBeNull();
-    // Só a aberta conta (todo = 1 de 7 pontos); a cancelada nem entra no máximo.
-    expect(kanbanProgress([task('todo', t0), task('cancelled', t0)])).toEqual({ points: 1, max: 7 });
-  });
-
-  it('pontos crescentes até Pronto', () => {
-    const order: TaskStatus[] = ['waiting', 'todo', 'doing', 'review', 'done'];
-    const points = order.map((s) => STATUS_POINTS[s]);
-    expect(points).toEqual([...points].sort((a, b) => a - b));
-    expect(new Set(points).size).toBe(points.length);
-  });
-
-  it('arredonda para baixo: nunca 100% com tarefa aberta', () => {
-    const tasks = [task('review', day(1)), ...Array.from({ length: 99 }, (_, i) => done(day(1), day(2 + (i % 20))))];
-    const p = kanbanProgress(tasks)!;
-    expect(p).toEqual({ points: 699, max: 700 });
-    expect(progressPercent(p)).toBe(99);
-  });
-
-  it('data ilegível não infla a barra: a pronta fica fora do lote', () => {
-    const broken: ProgressTask = { status: 'done', createdAt: 'x', updatedAt: 'x' };
-    expect(kanbanProgress([broken, task('todo', day(1))])).toEqual({ points: 1, max: 7 });
+  it('arredonda para baixo; tudo em Revisão = 66%, nunca 100%', () => {
+    expect(progressPercent({ points: 2, max: 3 })).toBe(66);
+    expect(progressPercent(kanbanProgress([task('review'), task('review')])!)).toBe(66);
   });
 
   it('máximo 0 vindo de um servidor estranho não divide por zero', () => {
@@ -111,27 +60,27 @@ describe('kanbanProgress', () => {
 });
 
 describe('KanbanProgressBar', () => {
-  const render = (progress: { points: number; max: number } | null | undefined, open: number) =>
-    renderToStaticMarkup(createElement(KanbanProgressBar, { progress, open }));
+  const render = (progress: { points: number; max: number } | null | undefined) =>
+    renderToStaticMarkup(createElement(KanbanProgressBar, { progress }));
 
-  it('sem progresso (servidor antigo ou nada aberto) não desenha nada', () => {
-    expect(render(null, 0)).toBe('');
-    expect(render(undefined, 3)).toBe('');
+  it('sem progresso (servidor antigo ou nada na conta) não desenha nada', () => {
+    expect(render(null)).toBe('');
+    expect(render(undefined)).toBe('');
   });
 
   it('progressbar com aria e title com a contagem', () => {
-    const html = render({ points: 35, max: 56 }, 3); // 62%, lote de 8
+    const html = render({ points: 5, max: 9 }); // 55%, 3 tarefas
     expect(html).toContain('role="progressbar"');
     expect(html).toContain('aria-valuemin="0"');
     expect(html).toContain('aria-valuemax="100"');
-    expect(html).toContain('aria-valuenow="62"');
+    expect(html).toContain('aria-valuenow="55"');
     expect(html).toContain('aria-label="');
-    expect(html).toContain('title="62% · 3 abertas de 8"');
-    expect(html).toContain('width:62%');
+    expect(html).toContain('title="55% · 3 tarefas no cálculo"');
+    expect(html).toContain('width:55%');
   });
 
-  it('uma aberta fica no singular', () => {
-    expect(render({ points: 7, max: 28 }, 1)).toContain('title="25% · 1 aberta de 4"');
+  it('uma tarefa fica no singular', () => {
+    expect(render({ points: 1, max: 3 })).toContain('title="33% · 1 tarefa no cálculo"');
   });
 });
 
@@ -141,7 +90,7 @@ describe('TaskService.summary: progress', () => {
     await Promise.all(dirs.map((d) => fs.rm(d, { recursive: true, force: true })));
   });
 
-  /** Serviço sobre um tasks.json de dados fixos (datas fixas: a regra do lote depende delas). */
+  /** Serviço sobre um tasks.json de dados fixos. */
   async function summaryOf(raw: unknown[]) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-progress-'));
     dirs.push(dir);
@@ -158,22 +107,22 @@ describe('TaskService.summary: progress', () => {
     return svc.summary();
   }
 
-  const raw = (id: string, status: TaskStatus, created: string, at = created) => ({
+  const at = '2026-11-01T12:00:00.000Z';
+  const raw = (id: string, status: TaskStatus) => ({
     id, title: id, description: '', status, staffId: null, sessionId: null, plan: null, branch: null, pr: null,
-    createdAt: created, updatedAt: at, history: [{ at, status, by: 'you' }],
+    createdAt: at, updatedAt: at, history: [{ at, status, by: 'you' }],
   });
 
-  it('open/review seguem como antes e o progresso soma só o lote (pronta antiga fica fora)', async () => {
-    const out = await summaryOf([
-      raw('antiga', 'done', day(1), day(2)), // fora do lote
-      raw('nova', 'done', day(1), day(9)), // 7
-      raw('a-fazer', 'todo', day(5)), // 1
-      raw('revisao', 'review', day(6)), // 6
-    ]);
-    expect(out).toEqual({ p: { open: 2, review: 1, progress: { points: 14, max: 21 } } });
+  it('open/review seguem como antes e o progresso soma só A fazer, Fazendo e Revisão', async () => {
+    const out = await summaryOf([raw('pronta', 'done'), raw('espera', 'waiting'), raw('a-fazer', 'todo'), raw('fazendo', 'doing'), raw('revisao', 'review')]);
+    expect(out).toEqual({ p: { open: 4, review: 1, progress: { points: 3, max: 9 } } });
   });
 
-  it('só prontas: o projeto fica de fora, sem barra', async () => {
-    expect(await summaryOf([raw('a', 'done', day(1), day(2))])).toEqual({});
+  it('só Aguardar em aberto: o projeto aparece, mas sem barra', async () => {
+    expect(await summaryOf([raw('espera', 'waiting')])).toEqual({ p: { open: 1, review: 0, progress: null } });
+  });
+
+  it('só prontas: o projeto fica de fora', async () => {
+    expect(await summaryOf([raw('a', 'done')])).toEqual({});
   });
 });

@@ -71,6 +71,8 @@ export interface RetentionDeps {
   codex: { deleteThread: (threadId: string) => Promise<boolean> };
   /** Tira a conversa da ficha (store.dropStaffSessions). */
   dropStaffSession: (projectPath: string, staffId: string, sessionId: string) => Promise<boolean>;
+  /** Tira o título gerado das conversas apagadas ou podadas (ver titles/generator.ts). Falha aqui não para a varredura. */
+  forgetTitles?: (sessionIds: string[]) => Promise<void>;
   log?: (line: string) => void;
 }
 
@@ -270,7 +272,16 @@ async function dropRefs(deps: RetentionDeps, id: string, staffId: string | null,
   }
   await forgetSessions([id], deps.configFile);
   await removeFromRegistry([id], registryFile);
+  await forgetTitles(deps, [id]);
   return true;
+}
+
+async function forgetTitles(deps: RetentionDeps, ids: string[]): Promise<void> {
+  try {
+    await deps.forgetTitles?.(ids);
+  } catch (err) {
+    deps.log?.(`[retencao] não consegui tirar os títulos gerados (${msg(err)}); ficam no cache até a próxima poda`);
+  }
 }
 
 /**
@@ -355,6 +366,7 @@ export async function runRetentionSweep(deps: RetentionDeps): Promise<SweepResul
         registryFile,
       );
       result.pruned += rest.length;
+      if (rest.length) await forgetTitles(deps, rest);
     }
 
     const n = result.deleted.claude.length + result.deleted.codex.length;

@@ -104,6 +104,7 @@ const theme = EditorView.theme({
 /**
  * Editor de um arquivo. O texto inicial só vale na montagem: para outro arquivo (ou recarregar do disco),
  * o pai troca a `key`. `onChange` recebe o texto inteiro a cada mudança; `onSave` = Ctrl/Cmd+S.
+ * `hidden` só esconde (a visualização do .md ocupa o lugar): o texto, o desfazer e o cursor ficam.
  */
 export default function CodeEditor({
   path,
@@ -111,12 +112,14 @@ export default function CodeEditor({
   onChange,
   onSave,
   label,
+  hidden,
 }: {
   path: string;
   initial: string;
   onChange: (text: string) => void;
   onSave: () => void;
   label: string;
+  hidden?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // As funções mudam a cada render do pai; o editor chama sempre a mais nova.
@@ -159,5 +162,5 @@ export default function CodeEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return <div className="files-cm" ref={host} />;
+  return <div className="files-cm" ref={host} hidden={hidden} />;
 }

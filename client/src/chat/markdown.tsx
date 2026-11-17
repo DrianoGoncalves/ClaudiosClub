@@ -4,12 +4,12 @@ import remarkGfm from 'remark-gfm';
 import type { Element, ElementContent } from 'hast';
 import { ImageIcon } from '../icons';
 import { t } from '../i18n';
-import { looksLikeFilePath, projectRelativePath } from './filePath';
+import { looksLikeFileLink, looksLikeFilePath, projectRelativePath, resolveFromDir } from './filePath';
 
 // Markdown das respostas da IA no padrão GFM (tabelas, listas aninhadas, tarefas, riscado, código),
 // montado como elementos React pelo react-markdown: nada vira HTML cru. HTML escrito na resposta
 // aparece como texto; links só http, https e mailto; imagens remotas viram link (não carregam).
-// Com OpenFileContext (o chat), caminho de arquivo do projeto vira botão que abre no editor do Club.
+// Com OpenFileContext (o chat e a visualização do editor), caminho de arquivo do projeto vira botão que abre no editor do Club.
 // Markdown incompleto durante o streaming (bloco de código ou tabela abertos) segue o CommonMark:
 // o bloco aberto vai até o fim do texto e fecha sozinho quando o resto chega.
 
@@ -19,9 +19,13 @@ export function safeUrl(url: string): string {
   return /^(https?:\/\/|mailto:)/i.test(u) ? u : '';
 }
 
-/** Abrir um arquivo do projeto no editor (`relPath`, com "/"). Sem context, o caminho sai como texto. */
+/**
+ * Abrir um arquivo do projeto no editor (`relPath`, com "/"). Sem context, o caminho sai como texto.
+ * `baseDir` (pasta do .md aberto, "" = raiz): os links relativos partem dela; sem ele, partem da raiz do projeto (o chat).
+ */
 export interface OpenFileApi {
   projectRoot?: string;
+  baseDir?: string;
   open: (relPath: string) => void;
 }
 export const OpenFileContext = createContext<OpenFileApi | null>(null);
@@ -30,7 +34,8 @@ export const OpenFileContext = createContext<OpenFileApi | null>(null);
 const InCodeBlock = createContext(false);
 
 /** urlTransform: caminho de arquivo passa até o componente `a` (que decide com o projeto); o resto segue `safeUrl`. */
-const transformUrl = (url: string): string => safeUrl(url) || (looksLikeFilePath(url) ? url.trim() : '');
+const transformUrl = (url: string): string =>
+  safeUrl(url) || (looksLikeFilePath(url) || looksLikeFileLink(url) ? url.trim() : '');
 
 type MdNode = { type: string; children?: MdNode[] };
 
@@ -117,7 +122,7 @@ const COMPONENTS: Components = {
   a: ({ href, children }) => {
     const api = useContext(OpenFileContext);
     const url = safeUrl(href ?? '');
-    const rel = !url && api && href ? projectRelativePath(href, api.projectRoot) : null;
+    const rel = !url && api && href ? (api.baseDir === undefined ? projectRelativePath(href, api.projectRoot) : resolveFromDir(href, api.baseDir)) : null;
     const inner = <InCodeBlock.Provider value={true}>{children}</InCodeBlock.Provider>;
     if (url)
       return (
@@ -125,7 +130,8 @@ const COMPONENTS: Components = {
           {inner}
         </a>
       );
-    if (api && rel) return <FileButton api={api} path={rel} className="md-file">{inner}</FileButton>;
+    // Com baseDir (editor) o link é de navegação entre documentos: `md-link` o desenha como link, não como código.
+    if (api && rel) return <FileButton api={api} path={rel} className={api.baseDir === undefined ? 'md-file' : 'md-file md-link'}>{inner}</FileButton>;
     return <span className="md-link-off">{children}</span>;
   },
   code: ({ node, className, children }) => {

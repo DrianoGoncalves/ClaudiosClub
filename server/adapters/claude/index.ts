@@ -44,6 +44,8 @@ export interface ClaudeAdapterOptions extends DiscoverOptions {
   archiveAfterDays?: () => Promise<number>;
   /** Conversas que a retenção nunca arquiva, por projeto (a última de cada ficha e as de tarefa não concluída; ver server/retention.ts). */
   keepSessions?: (projectId: string, projectPath: string) => Promise<ReadonlySet<string>>;
+  /** Conversas que o Club lançou (o assunto delas vem do rastreador, ver titles/tracker.ts). */
+  clubSessions?: () => Promise<ReadonlySet<string>>;
 }
 
 /** Leitura (somente) do que o Claude Code grava em ~/.claude e nas pastas `.claude/` dos projetos. */
@@ -112,7 +114,8 @@ export class ClaudeAdapter implements ToolAdapter {
     const includeOld = query.includeOld === true;
     const cut = !includeOld && archiveAfterDays > 0;
     const keep = cut && this.opts.keepSessions ? await this.opts.keepSessions(ref.id, ref.path) : undefined;
-    return { archiveAfterDays, includeOld, keep };
+    const club = this.opts.clubSessions ? await this.opts.clubSessions() : undefined;
+    return { archiveAfterDays, includeOld, keep, club };
   }
 
   async getProjectInventory(id: string): Promise<ProjectInventory | null> {

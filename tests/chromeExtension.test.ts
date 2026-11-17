@@ -126,8 +126,8 @@ describe('avisos: regras puras', () => {
     expect(clubLink({ view: 'tasks', projectId: 'p-1' })).toContain('tela=tarefas&projeto=p-1');
   });
 
-  it('aviso de tarefa (esquecida ou esperando outra) abre o quadro de tarefas do projeto', () => {
-    for (const kind of ['notStarted', 'blocked']) {
+  it('aviso de tarefa (esquecida, esperando outra, com dúvida ou parada) abre o quadro de tarefas do projeto', () => {
+    for (const kind of ['notStarted', 'blocked', 'question', 'stuck']) {
       expect(clubLink({ kind, projectId: 'p-1', staffId: null })).toBe(`http://claudio.localhost:4848/#abrir?kind=${kind}&tela=tarefas&projeto=p-1`);
     }
   });

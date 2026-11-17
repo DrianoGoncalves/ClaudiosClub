@@ -34,9 +34,9 @@ Os funcionários não conseguem aprovar o pareamento: quem aprova é o terminal 
 
 ## Escolher o nível de uso
 
-**Configurações** → **Geral** → **Nível de uso**:
+**Configurações** → **Nível de uso** (no Avançado: **Configurações** → **Geral** → **Nível de uso**):
 
-- **Simples**: contratar só com nome e cargo (o resto vem do cargo); o essencial na tela.
+- **Simples**: contratar só com nome e cargo (o resto vem do cargo); o essencial na tela, com as configurações em cartões por tema e em linguagem comum.
 - **Avançado**: todos os campos da ficha, do painel e das configurações.
 
 Dá para trocar a qualquer hora; nada se perde.
@@ -45,7 +45,7 @@ Dá para trocar a qualquer hora; nada se perde.
 
 Para ver uma equipe pronta:
 
-1. **Configurações** → **Geral** → **Projeto demo**.
+1. **Configurações** → **Geral** → **Projeto demo** (no Simples: **Ajuda e sobre** → **Projeto de exemplo**).
 2. Clique em **Criar projeto demo**. Ele cria uma vez e abre a sala.
 
 Ver o quadro e as fichas não gasta nada; abrir um funcionário usa a sua cota.

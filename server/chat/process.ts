@@ -6,12 +6,14 @@ import { cleanEnv, withoutMycoToken } from '../auth';
 import { tryJson } from '../adapters/claude/fsutil';
 import { contextWindowFor } from '../adapters/claude/pricing';
 import { cacheTtlOf } from './contextPolicy';
+import { claudeEditedFile, claudeToolFile } from './codeEdits';
 import { classifyDenial, denialNotice } from './denial';
 import { hasCheckpoint, inputText, resultText, stripCheckpoint, toolSummary } from './items';
 import { ASK_TOOL, cleanAnswers, parseQuestions } from './questions';
 import { killTree } from './registry';
-import { findSecret, type SecretFinding, type SecretSource } from './secrets';
+import { scanSecrets, type ClassifiedSecret, type SecretSource } from './secrets';
 import { capText, TurnBudget, type TurnCaps } from './turnCap';
+import { isClaudeModelNotFound } from './modelNotFound';
 import { limitFromRateLimitEvent, limitFromText, mergeHits, type LimitHit } from './usageLimit';
 
 // Um funcionário conversando pelo Claudio’s Club: o `claude` em modo stream-json (o mesmo protocolo do SDK),
@@ -117,12 +119,26 @@ export interface ChatProcessOptions {
   onUsage?: (limits: UsageLimit[]) => void;
   /** O turno acabou porque o limite de uso da assinatura estourou (uma vez por turno; ver usageLimit.ts). */
   onUsageLimit?: (hit: LimitHit) => void;
+  /** O motor recusou o modelo pedido (não existe mais na conta): a conversa segue no padrão (ver `retryOnDefault`). */
+  onModelUnavailable?: (model: string) => void;
   /** O turno acabou sem estourar o limite (resposta normal, outro erro, ou interrompido por você): zera a conta de estouros seguidos. */
   onTurnWithoutLimit?: () => void;
   /** O processo saiu (`error` com o motivo, se saiu com erro). */
   onExit?: (pid: number | null, error: string | null) => void;
-  /** Algo com cara de segredo passou pela conversa (só o tipo; o valor nunca sai daqui). */
-  onSecret?: (hit: SecretFinding, source?: SecretSource) => void;
+  /**
+   * Algo com cara de segredo passou pela conversa (o tipo, o palpite de ser real e a dica mascarada; o valor nunca sai daqui). Chamado uma vez por
+   * rótulo achado no texto, do mais grave ao menos grave. `file`: o arquivo da ferramenta onde ele apareceu, como o motor o deu (absoluto ou
+   * relativo à pasta da conversa); sem ele, o aviso não aponta arquivo (ver `claudeToolFile` e `codexToolFile`).
+   */
+  onSecret?: (hit: ClassifiedSecret, source?: SecretSource, file?: string) => void;
+  /** Sal da instalação para a identidade da ocorrência do segredo (ver `ClassifiedSecret.occurrence`); sem ele, o hash não tem sal. */
+  secretPepper?: string;
+  /**
+   * Arquivo(s) alterado(s) com sucesso pelas ferramentas de edição (Claude: Edit, MultiEdit, Write, NotebookEdit, também as dos subagents;
+   * Codex: `file_change` concluído). Os caminhos vêm como o motor os deu. Edição que falhou (ou foi negada) não chega aqui; edição por
+   * shell também não (ver chat/codeEdits.ts). O manager repassa para o quadro (card automático).
+   */
+  onEdit?: (files: string[]) => void;
   /**
    * Parou de trabalhar: o turno acabou (`turn`), o que estava em segundo plano terminou
    * (`background`) ou o processo saiu (`exit`).
@@ -199,7 +215,15 @@ export class ChatProcess {
   constructor(protected readonly opts: ChatProcessOptions) {
     this.sessionId = opts.sessionId;
     this.state = { ...this.state, model: opts.model ?? null, effort: opts.effort ?? null };
+    this.wantedModel = opts.model ?? null;
   }
+
+  /** Modelo que a conversa pediu (o que se escreveu em `setModel`, ou o da linha de comando): o que a recusa do motor fala. */
+  private wantedModel: string | null = null;
+  /** Mensagens do usuário já escritas e ainda sem resposta (uma resposta por mensagem, na ordem): a que levou a recusa é a primeira. */
+  private readonly unanswered: Array<{ content: unknown[] }> = [];
+  /** O turno já trocou para o padrão por causa de modelo inexistente: uma vez só (ver `retryOnDefault`). */
+  private modelRetried = false;
 
   /** Quem roda esta conversa: o `claude` (aqui) ou o Codex (ver codexProcess.ts). */
   get engine(): 'claude' | 'codex' {
@@ -392,6 +416,7 @@ export class ChatProcess {
     // O id vira o da mensagem no transcript: é por ele que "voltar até aqui" acha o ponto.
     const uuid = randomUUID();
     this.write({ type: 'user', uuid, message: { role: 'user', content }, ...(queued && { priority: queued }) });
+    this.unanswered.push({ content });
     this.putItem({
       kind: 'user',
       id: `u:${uuid}`,
@@ -415,6 +440,7 @@ export class ChatProcess {
 
   /** Troca o modelo desta conversa, na hora (a ficha continua como está). */
   setModel(model: string, label: string) {
+    this.wantedModel = model;
     // A resposta traz o id do modelo novo: a tela mostra já, sem esperar o próximo turno.
     this.control({ subtype: 'set_model', model }, label, {
       onOk: (res) => typeof res.model === 'string' && this.setState({ model: res.model }),
@@ -484,7 +510,9 @@ export class ChatProcess {
   }
 
   compact() {
-    this.write({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '/compact' }] } });
+    const content = [{ type: 'text', text: '/compact' }];
+    this.write({ type: 'user', message: { role: 'user', content } });
+    this.unanswered.push({ content });
     this.waitingReply = true;
     this.setState({ busy: true, compacting: true });
   }
@@ -584,15 +612,24 @@ export class ChatProcess {
     return true;
   }
 
-  /** Guarda de segredos: avisa o tipo do que apareceu (ver secrets.ts). */
-  protected scan(text: string, source?: SecretSource) {
+  /** Guarda de segredos: avisa o tipo, o palpite e a dica do que apareceu (ver secrets.ts). Vale para o Claude e para o Codex (este herda daqui). */
+  protected scan(text: string, source?: SecretSource, file?: string | null) {
     if (!this.opts.onSecret) return;
-    const hit = findSecret(text);
-    if (hit) this.opts.onSecret(hit, source);
+    for (const hit of scanSecrets(text, { file, cwd: this.opts.cwd, pepper: this.opts.secretPepper })) this.opts.onSecret(hit, source, file ?? undefined);
   }
 
   lastAssistantText(): string | null {
     return this.lastAssistant()?.text ?? null;
+  }
+
+  /** A última mensagem com texto de quem fala com o funcionário (você ou um colega): o pedido que o card automático guarda. */
+  lastUserText(): string | null {
+    const items = [...this.items.values()];
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i]!;
+      if (it.kind === 'user' && it.text.trim()) return it.text;
+    }
+    return null;
   }
 
   /** A última resposta com texto (o balão onde uma pergunta no fim da conversa aparece). */
@@ -642,6 +679,42 @@ export class ChatProcess {
     this.checkTurnCap();
   }
 
+  /** Chamadas de edição (id da ferramenta → arquivo) que ainda esperam o resultado: só quem deu certo vai para `onEdit`. */
+  private readonly editCalls = new Map<string, string>();
+
+  /** Chamadas com arquivo-alvo (Read e as de edição; id da ferramenta → arquivo) que ainda esperam o resultado: o aviso de segredo no resultado aponta esse arquivo. */
+  private readonly toolFiles = new Map<string, string>();
+
+  /**
+   * Edição que deu certo, vista nas ferramentas do Claude (a conversa e os subagents): a chamada (`tool_use`) guarda o arquivo e o resultado
+   * (`tool_result`) sem `is_error` o libera. Negada, falha ou sem resultado não conta.
+   */
+  private trackEdits(ev: Record<string, unknown>): void {
+    if (!this.opts.onEdit) return;
+    const content = (ev.message as { content?: unknown } | undefined)?.content;
+    if (!Array.isArray(content)) return;
+    const done: string[] = [];
+    for (const b of content as Array<Record<string, unknown>>) {
+      if (ev.type === 'assistant' && b.type === 'tool_use' && typeof b.id === 'string' && typeof b.name === 'string') {
+        const file = claudeEditedFile(b.name, b.input);
+        // O teto só protege a memória de um processo longo cujas chamadas nunca voltam.
+        if (file && this.editCalls.size < 1_000) this.editCalls.set(b.id, file);
+      } else if (ev.type === 'user' && b.type === 'tool_result' && typeof b.tool_use_id === 'string') {
+        const file = this.editCalls.get(b.tool_use_id);
+        if (file === undefined) continue;
+        this.editCalls.delete(b.tool_use_id);
+        if (b.is_error !== true) done.push(file);
+      }
+    }
+    if (!done.length) return;
+    // Registro, não trava: quem recebe nunca derruba a leitura do stream.
+    try {
+      this.opts.onEdit(done);
+    } catch {
+      // o quadro registra o que puder
+    }
+  }
+
   protected onData(text: string) {
     this.lastActivity = Date.now();
     this.buf += text;
@@ -659,6 +732,8 @@ export class ChatProcess {
     // Teto do turno: as ferramentas contam antes do filtro abaixo (as dos subagents também gastam), e o tempo é conferido a cada evento.
     if (ev.type === 'assistant') this.countToolUses(ev);
     if (ev.type !== 'result') this.checkTurnCap();
+    // As edições dos subagents também valem (o card automático registra toda alteração de código), então contam antes do filtro abaixo.
+    if (ev.type === 'assistant' || ev.type === 'user') this.trackEdits(ev);
     // Eventos de subagents (parent_tool_use_id preenchido) ficam fora da conversa principal.
     if (ev.parent_tool_use_id) return;
     const at = new Date().toISOString();
@@ -736,7 +811,10 @@ export class ChatProcess {
           } else if (b.type === 'tool_use' && typeof b.id === 'string') {
             const name = typeof b.name === 'string' ? b.name : 'ferramenta';
             const input = inputText(b.input, name);
-            this.scan(input, 'tool-input');
+            const file = claudeToolFile(name, b.input);
+            // O resultado (a leitura de um arquivo) chega depois: guarda o arquivo da chamada até lá.
+            if (file && this.opts.onSecret && this.toolFiles.size < 1_000) this.toolFiles.set(b.id, file);
+            this.scan(input, 'tool-input', file);
             this.putItem({ kind: 'tool', id: `t:${b.id}`, name, summary: toolSummary(name, b.input), input, result: null, isError: false, at });
           }
         }
@@ -756,7 +834,9 @@ export class ChatProcess {
           if (b.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue;
           const tool = this.items.get(`t:${b.tool_use_id}`);
           const result = resultText(b.content);
-          this.scan(result, 'tool-result');
+          const file = this.toolFiles.get(b.tool_use_id);
+          this.toolFiles.delete(b.tool_use_id);
+          this.scan(result, 'tool-result', file);
           if (tool?.kind === 'tool') {
             this.putItem({ ...tool, result, isError: b.is_error === true });
             // Erro de ferramenta: o texto do resultado pode ser uma negação (troca o aviso do evento, ou abre um) e já tira a espera.
@@ -882,6 +962,14 @@ export class ChatProcess {
         if (hit) this.limitSeen = { ...mergeHits(this.limitSeen, hit), confirmed: true };
         const stopped = this.stopping && ev.subtype === 'error_during_execution';
         this.stopping = false;
+        // Modelo pedido que não existe mais: o turno não termina; o padrão e a mesma mensagem (uma vez, ver `retryOnDefault`).
+        const sent = this.unanswered.shift();
+        if (!stopped && sent && ev.is_error === true && !this.modelRetried && this.wantedModel && this.wantedModel !== 'default' && isClaudeModelNotFound(ev)) {
+          this.limitSeen = null;
+          this.retryOnDefault(this.wantedModel, sent.content);
+          return;
+        }
+        this.modelRetried = false;
         if (stopped) {
           this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text: 'Turno interrompido', tone: 'info', at });
         } else if (ev.is_error === true) {
@@ -900,6 +988,21 @@ export class ChatProcess {
         return;
       }
     }
+  }
+
+  /**
+   * O modelo `model` não existe mais: avisa, põe o padrão e escreve de novo a mensagem que levou a recusa (a mesma, com as imagens,
+   * anexos e avisos que trazia). O turno segue aberto; se a segunda tentativa também for recusada, vale o erro normal (sem laço).
+   */
+  private retryOnDefault(model: string, content: unknown[]) {
+    this.modelRetried = true;
+    this.waitingReply = true;
+    this.opts.onModelUnavailable?.(model);
+    this.addNotice(`O modelo ${model} não existe mais. Esta conversa segue no modelo padrão; troque o modelo na ficha.`, 'warn');
+    // Sem rótulo: a troca dá certo em silêncio (o aviso acima já diz). Se ela falhar, a mensagem sai mesmo assim e a recusa dela cai no erro normal.
+    this.setModel('default', '');
+    this.write({ type: 'user', uuid: randomUUID(), message: { role: 'user', content } });
+    this.unanswered.push({ content });
   }
 
   private readonly doneText = new Map<string, string[]>();
@@ -923,6 +1026,8 @@ export class ChatProcess {
     }
     this.pending.clear();
     this.controls.clear();
+    this.unanswered.length = 0;
+    this.modelRetried = false;
     for (const w of this.waiters.values()) w.reject(new Error('a conversa fechou'));
     this.waiters.clear();
     this.waitingReply = false;

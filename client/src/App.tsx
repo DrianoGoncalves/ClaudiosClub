@@ -19,6 +19,7 @@ import type {
 } from '../../shared/model';
 import { colorCss } from '../../shared/model';
 import { api, isPairingError, NEEDS_PAIRING_EVENT, PAIRED_EVENT, withUsageConfirm } from './api';
+import { ANIMATIONS_KEY, animationsOn, readAnimationsChoice, systemReducesMotion } from './animations';
 import { BoardView } from './board/Board';
 import { boardStyle, useBoardBackground } from './board/colors';
 import { LazyScreen } from './LazyScreen';
@@ -39,6 +40,7 @@ import { deletedNotice } from './detail/skillAccess';
 import { companyName, effortLabel, employeeName } from './format';
 import { t } from './i18n';
 import { linkItem, parseOpenLink } from './inbox/deepLink';
+import { taskIdOf, type InboxOpen } from './inbox/taskAlerts';
 import { useInbox } from './inbox/useInbox';
 import { rankingGroups } from './ranking';
 import { staffIndex } from './taskCost';
@@ -73,22 +75,10 @@ const TasksBoard = lazy(() => import('./tasks/TasksBoard').then((m) => ({ defaul
 const UncommittedPanel = lazy(() => import('./board/UncommittedPanel').then((m) => ({ default: m.UncommittedPanel })));
 
 const ARCHIVED_KEY = 'myco.showArchived';
-const ANIMATIONS_KEY = 'myco.animations';
 /** Quanto tempo o aviso de sucesso fica no canto antes de fechar sozinho. */
 const NOTICE_MS = 7000;
 /** Quanto tempo o alvo de um clique no aviso da caixa fica guardado se o chat não o atender. */
 const JUMP_TARGET_MS = 3000;
-
-/** Escolha salva; sem escolha, segue o "reduzir animações" do sistema. */
-function readAnimations(): boolean {
-  try {
-    const saved = localStorage.getItem(ANIMATIONS_KEY);
-    if (saved !== null) return saved === '1';
-  } catch {
-    // sem armazenamento: segue o sistema
-  }
-  return !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-}
 
 type Selection =
   | { kind: 'ranking' }
@@ -108,7 +98,10 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(() => readFlag(ARCHIVED_KEY));
-  const [animations, setAnimations] = useState(readAnimations);
+  // Escolha salva (null = nunca escolheu): o padrão depende do nível de uso, que só chega com a config.
+  const [animationsChoice, setAnimationsChoice] = useState(readAnimationsChoice);
+  const [reduceMotion] = useState(systemReducesMotion);
+  const animations = animationsOn(animationsChoice, config?.uiLevel ?? null, reduceMotion);
   const [form, setForm] = useState<{ projectId: string; mode: StaffFormMode } | null>(null);
   // A ficha embutida no "Mais" do funcionário: "Desfazer" relê.
   const [sheetReset, setSheetReset] = useState(0);
@@ -243,11 +236,12 @@ export function App() {
   }, [load]);
 
   // Clicar num item da caixa (ou na notificação) abre o painel de quem espera.
-  const openInbox = useCallback((item: InboxItem) => {
+  const openInbox = useCallback<InboxOpen>((item, opts) => {
     // Aviso de consumo (conta, sem projeto, ou orçamento de um projeto): não há quem abrir; o que se muda é a trava, em Configurações > Consumo.
     if (item.kind === 'usage') return openSettings('usage');
-    // Tarefa esperando outra empacada, ou cartão esquecido em "a fazer": não há conversa; abre o quadro de tarefas do projeto já na tarefa.
-    const taskId = item.kind === 'blocked' ? item.blocked?.taskId : item.kind === 'notStarted' ? item.notStarted?.taskId : undefined;
+    // Tarefa de que depende outra empacada, cartão esquecido em "a fazer", dúvida escalada ou tarefa parada: não há conversa; abre o quadro
+    // de tarefas do projeto já no card (o da ação, quando o link manda para a tarefa que segura esta).
+    const taskId = opts?.taskId ?? taskIdOf(item);
     if (taskId) {
       setSchedulesFor(null);
       setJumpTask(taskId);
@@ -450,11 +444,15 @@ export function App() {
             showArchived={showArchived}
             onToggleArchived={toggle(ARCHIVED_KEY, setShowArchived)}
             animations={animations}
-            onToggleAnimations={toggle(ANIMATIONS_KEY, setAnimations)}
+            onToggleAnimations={toggle(ANIMATIONS_KEY, setAnimationsChoice)}
             selectedId={selectedId}
             onSelect={setSelectedId}
             inbox={inbox}
             onOpenInbox={openInbox}
+            onOpenInboxFile={(item, path) => {
+              setFilesPath(path);
+              setFilesFor(item.projectId);
+            }}
             onRename={rename}
             onUsageStop={saveUsageStop}
             onSendWhileBusy={saveSendWhileBusy}
@@ -573,6 +571,7 @@ export function App() {
                 scope={board.user}
                 onNewAgent={() => setAgentForm({ scope: 'user', projectId: null })}
                 onEditAgent={(name) => setAgentForm({ scope: 'user', projectId: null, name })}
+                onSkillsChanged={load}
               />
             )}
             {selection.kind === 'synced' && <SyncedPanel skills={selection.skills} />}
@@ -597,6 +596,7 @@ export function App() {
                 }
                 onNewAgent={() => setAgentForm({ scope: 'project', projectId: selection.id })}
                 onEditAgent={(name) => setAgentForm({ scope: 'project', projectId: selection.id, name })}
+                onSkillsChanged={load}
                 id={selection.id}
                 live={board.live}
                 {...projectTeam(board, costs, selection.id, retentionOf(selection.id))}
@@ -635,6 +635,7 @@ export function App() {
                   setFilesFor(selection.projectId);
                 }}
                 inbox={inbox.items}
+                onDismissSecret={(item) => inbox.dismiss(item)}
                 session={
                   selection.session && {
                     ...selection.session,
@@ -781,6 +782,7 @@ export function App() {
         <QuickJump
           board={board}
           taskProjects={Object.keys(taskSummary)}
+          titles={config?.conversationTitles}
           onJump={(t) => {
             setSchedulesFor(null);
             if (t.kind === 'task') {
@@ -932,10 +934,10 @@ export function App() {
 }
 
 /**
- * Conversas de um funcionário, da mais recente à mais antiga, cada uma pelo assunto (a tarefa ou a
- * 1ª mensagem): o título do Claude Code é o nome dele em todas. As da worktree dele ficam noutra
- * pasta do Claude Code; as que ainda não gravaram nada entram pela data de início. O título que o
- * user deu à conversa (`titles`) vale mais que o assunto. Retenção (`retention`): as que o quadro não lista por estarem paradas além
+ * Conversas de um funcionário, da mais recente à mais antiga, cada uma pelo título gerado ou, enquanto ele não vem,
+ * pelo assunto (a tarefa ou a 1ª mensagem): o título do Claude Code é o nome dele em todas. As da worktree dele ficam
+ * noutra pasta do Claude Code; as que ainda não gravaram nada entram pela data de início. O título que o user deu à
+ * conversa (`titles`) vale mais que os dois. Retenção (`retention`): as que o quadro não lista por estarem paradas além
  * do prazo ficam de fora, até pedirem "Mostrar antigas" (`old` = as do projeto que o servidor devolveu com `?old=1`).
  */
 function staffConversations(board: Board, staff: StaffProfile, titles?: ConversationTitles, retention?: Retention) {
@@ -946,7 +948,7 @@ function staffConversations(board: Board, staff: StaffProfile, titles?: Conversa
     .filter((x) => !out.has(x.id))
     .map((x) => {
       const s = known.get(x.id);
-      return { id: x.id, title: conversationTitle({ id: x.id, topic: s?.topic }, titles), updatedAt: s?.updatedAt ?? x.startedAt };
+      return { id: x.id, title: conversationTitle({ id: x.id, reviewTask: s?.reviewTask, aiTitle: s?.aiTitle, topic: s?.topic }, titles), updatedAt: s?.updatedAt ?? x.startedAt };
     })
     .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
 }

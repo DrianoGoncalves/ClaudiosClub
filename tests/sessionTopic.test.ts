@@ -14,6 +14,11 @@ describe('assunto da conversa', () => {
     expect(sessionTopic([user([{ type: 'text', text: 'Corrija o total do pedido\ncom teste' }])])).toBe('Corrija o total do pedido');
   });
 
+  it('a conversa de revisão vira "Review - <tarefa>"; a mesma linha numa conversa que já tem assunto não troca', () => {
+    expect(sessionTopic([user('[Revisão da tarefa "Exportar CSV"]\n\nprecisa de revisão')])).toBe('Review - Exportar CSV');
+    expect(sessionTopic([user('[Tarefa "Exportar CSV"] faça')], [user('[Revisão da tarefa "Exportar CSV"]\n\nreprovada')])).toBe('Exportar CSV');
+  });
+
   it('pula o que é injetado, os avisos do Claudio’s Club e a saudação de sessão nova', () => {
     const lines = [
       { type: 'summary' },

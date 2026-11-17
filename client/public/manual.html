@@ -842,7 +842,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
 
   <article class="blk" id="nivel">
     <h3>Escolher o nível de uso</h3>
-    <p><span class="path"><b>Configurações</b><i>›</i><b>Geral</b><i>›</i><b>Nível de uso</b></span></p>
+    <p><span class="path"><b>Configurações</b><i>›</i><b>Nível de uso</b></span> (no Avançado: <span class="path"><b>Configurações</b><i>›</i><b>Geral</b><i>›</i><b>Nível de uso</b></span>)</p>
     <div class="cards c2">
       <div class="card">
         <h4>Simples</h4>
@@ -1536,7 +1536,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       <tbody>
         <tr><td data-label="Rótulo">plano</td><td data-label="Quando aparece">Tem um plano para você aprovar.</td></tr>
         <tr><td data-label="Rótulo">permissão</td><td data-label="Quando aparece">Pede permissão para uma ação.</td></tr>
-        <tr><td data-label="Rótulo">segredo</td><td data-label="Quando aparece">Recebeu um segredo no chat. Botões: <b class="ui">já troquei</b> e <b class="ui">não é segredo</b>.</td></tr>
+        <tr><td data-label="Rótulo">segredo</td><td data-label="Quando aparece">Recebeu um segredo no chat, com um selo que diz se parece de verdade ou falso positivo (ver abaixo). Botões: <b class="ui">já troquei</b> e <b class="ui">não é segredo</b>.</td></tr>
         <tr><td data-label="Rótulo">esperando</td><td data-label="Quando aparece">Espera sua resposta.</td></tr>
         <tr><td data-label="Rótulo">erro</td><td data-label="Quando aparece">Parou com erro.</td></tr>
         <tr><td data-label="Rótulo">rotina</td><td data-label="Quando aparece">Uma rotina não rodou.</td></tr>
@@ -1545,6 +1545,11 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     </table></div>
     <ul>
       <li><b>Pergunta, espera e rotina</b> têm um <b>×</b> para tirar o item da caixa. Ao tirar uma pergunta, ela sai <b>sem resposta</b> (“Tira da caixa sem responder agora”). Ao tirar uma espera, ela só sai da caixa até a sessão mudar de status.</li>
+      <li>O aviso de <b>segredo</b> também aparece como balão na própria conversa, com a mesma frase da caixa, o selo, a dica e o botão <b class="ui">Ignorar</b> (igual a <b class="ui">já troquei</b>: tira o aviso do balão e da caixa; se o segredo aparecer de novo, ele volta; em <b class="ui">possível credencial exposta</b> o botão se chama <b class="ui">Já troquei</b>, para não sugerir deixar pra lá). Quando o aviso sabe em que arquivo o segredo está, o balão mostra o caminho e o botão <b class="ui">Abrir arquivo</b>, que abre o arquivo no editor do Claudio’s Club (o mesmo link <b class="ui">abrir arquivo</b> aparece no item da caixa); arquivo que o editor não abre, como <code>.env</code> ou chave, mostra só o caminho, com a nota para abrir no seu editor. O balão só existe na tela: não vai para o modelo. <b class="ui">não é segredo</b> continua só na caixa, e o aviso de chave no <code>.mcp.json</code> do projeto, que não nasce numa conversa, também.</li>
+      <li>O aviso de <b>segredo</b> diz, no balão e na caixa, se o valor parece de verdade. O <b>selo</b> é um palpite que o Claudio’s Club faz na hora em que o segredo aparece, pelo formato e pelo contexto (ele não confere a credencial no provedor, então pode errar). O estado vem escrito, não só na cor: <b class="ui">possível credencial exposta</b> (parece de verdade: troque), <b class="ui">contexto local, autenticidade desconhecida</b> (host local ou de desenvolvimento, como <code>localhost</code>: não dá para saber), <b class="ui">provável exemplo/teste</b> (arquivo de modelo, teste, valor de enchimento, token com cara de exemplo ou senha padrão conhecida) e <b class="ui">não foi possível determinar</b> (contexto insuficiente: trate como de verdade até conferir). Token com formato válido de provedor nunca aparece como exemplo. Aviso antigo, sem palpite, aparece como antes, sem selo.</li>
+      <li>Ao lado do selo, a <b>dica</b> mostra só um pedaço do valor para você reconhecer qual é: token de provedor mostra o prefixo público e os 4 últimos caracteres (<code>sk-ant-…a9F2, 108 car.</code>); senha de 12 caracteres ou mais, só os 2 últimos e o tamanho; senha menor, só o tamanho; senha padrão conhecida, só “senha padrão conhecida”; chave privada, nada. O Claudio’s Club nunca guarda o valor inteiro, e a dica só aparece na tela do Claudio’s Club: não vai para a extensão do Chrome, para a notificação nem para o modelo. <b class="ui">por quê?</b> abre o motivo do palpite, que já estava calculado: abrir não faz consulta nenhuma.</li>
+      <li><b class="ui">não é segredo</b> vale só para aquela ocorrência: aquele valor, naquela conversa. Se o mesmo tipo de segredo aparecer com outro valor, o aviso volta. Antes valia para o tipo todo na conversa; as dispensas feitas antes continuam como eram. Em <b class="ui">possível credencial exposta</b>, use só se tiver certeza de que o valor não é uma credencial de verdade; se for, troque e clique em <b class="ui">já troquei</b>.</li>
+      <li>O aviso de <b>erro</b> (a conversa parou com erro, ou o turno parou no teto de ferramentas ou de minutos) também aparece como balão vermelho na própria conversa, com a mesma frase da caixa. Não tem botão: erro não se dispensa, e o balão some da conversa e da caixa quando você manda mensagem nova. Quando a conversa já mostra o aviso no próprio fluxo (o teto), ele não se repete em balão. O balão só existe na tela: não vai para o modelo.</li>
       <li>Se nada espera você, a lista diz: “Nada espera você agora.”</li>
       <li>A caixa tem a opção <b class="ui">avisar no sistema (inclusive quando alguém termina)</b>.</li>
     </ul>
@@ -1659,6 +1664,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <li>No painel do funcionário, o botão <b class="ui">+</b> (título “Nova conversa”) começa do zero. A ficha e a memória continuam.</li>
         <li><b class="ui">Duplicar</b>: uma cópia da conversa, com todo o histórico, para tentar outro caminho sem perder a original.</li>
         <li>O seletor <b class="ui">Conversa</b> lista as conversas agrupadas por dia.</li>
+        <li>Título da conversa (no seletor, em <b class="ui">precisa de mim</b> e na busca <kbd>Ctrl</kbd>+<kbd>K</kbd>): vale o que você escreveu com o lápis <b class="ui">Renomear conversa</b>; senão, o título gerado por IA a partir do assunto; enquanto ele não vem, o começo do assunto (a tarefa ou a sua 1ª mensagem). Conversa de tarefa, de assunto vago ou aberta fora do Club fica com o começo do assunto. A conversa de revisão de uma tarefa se chama <b class="ui">Revisão - título da tarefa</b> (o mesmo nome da coluna <b class="ui">Revisão</b> do quadro, no idioma da tela) e vale mais que o título gerado, mas menos que o seu. Para voltar ao automático, deixe o campo vazio e salve. Para não ter título gerado por IA, desmarque <b class="ui">Títulos de conversa por IA</b> nas Configurações (no Simples, <b class="ui">Dar título às conversas com IA</b>): a lista passa a mostrar o começo do assunto e a cota da assinatura não é gasta com isso.</li>
       </ul>
       <figure class="mock panel" role="img" aria-label="Botão mais (Nova conversa), Duplicar e seletor Conversa">
         <div class="mock-b m-row">
@@ -1751,7 +1757,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
 
   <article class="blk" id="colunas">
     <h3>Colunas</h3>
-    <figure class="mock panel" role="img" aria-label="Quadro com cinco colunas: Aguardar, A fazer, Fazendo, Revisão e Pronto, com cartões de exemplo">
+    <figure class="mock panel" role="img" aria-label="Quadro com cinco colunas: Aguardar, A fazer, Fazendo, Revisão e Finalizado, com cartões de exemplo">
       <div class="kan">
         <div class="kcol"><h4>Aguardar</h4>
           <div class="tcard"><b>Título da tarefa</b><span class="tid">t-3fa91c</span><span class="mf" style="min-height:22px;font-size:11.5px"><span class="ph">Motivo (opcional)</span></span></div>
@@ -1766,7 +1772,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <div class="kcol"><h4>Revisão</h4>
           <div class="tcard"><b>Título da tarefa</b><span class="tid">t-92b6e3</span></div>
         </div>
-        <div class="kcol"><h4>Pronto</h4>
+        <div class="kcol"><h4>Finalizado</h4>
           <div class="tcard"><b>Título da tarefa</b><span class="tid">t-e4417a</span><span class="tg"><span class="tag">Não publicado</span></span></div>
           <span class="arch">Ver arquivadas (n)</span>
         </div>
@@ -1779,13 +1785,13 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <tr><td data-label="Coluna">A fazer</td><td data-label="O que quer dizer">Na fila. Começa sozinha quando o funcionário entrega a atual.</td></tr>
         <tr><td data-label="Coluna">Fazendo</td><td data-label="O que quer dizer">Trabalhando. Inclui as tarefas com plano para aprovar (selo <b class="ui">Plano para aprovar</b>).</td></tr>
         <tr><td data-label="Coluna">Revisão</td><td data-label="O que quer dizer">Ele terminou um turno. Confira a entrega.</td></tr>
-        <tr><td data-label="Coluna">Pronto</td><td data-label="O que quer dizer">Entregue e conferido.</td></tr>
+        <tr><td data-label="Coluna">Finalizado</td><td data-label="O que quer dizer">Revisão concluída.</td></tr>
       </tbody>
     </table></div>
     <ul>
       <li>Para mudar de coluna, <b>arraste o cartão</b>, ou no detalhe use <b class="ui">Mover para a coluna</b> (opções “mover: …”).</li>
-      <li>Em <b>Pronto</b>, tarefa sem mudança há mais de 7 dias vai para <b class="ui">Ver arquivadas (n)</b>. Mudar de coluna tira do arquivo.</li>
-      <li>O selo <b class="ui">Não publicado</b> aparece em <b>Pronto</b> nos projetos com funcionário que tem servidor. Ele não some quando o deploy é pedido.</li>
+      <li>Em <b>Finalizado</b>, tarefa sem mudança há mais de 7 dias vai para <b class="ui">Ver arquivadas (n)</b>. Mudar de coluna tira do arquivo.</li>
+      <li>O selo <b class="ui">Não publicado</b> aparece em <b>Finalizado</b> nos projetos com funcionário que tem servidor. Ele não some quando o deploy é pedido.</li>
     </ul>
   </article>
 
@@ -1857,7 +1863,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <ol class="flow">
       <li><b>O turno dele termina</b><p>Se o código está numa worktree, o Club faz um commit com o título da tarefa.</p></li>
       <li><b>Vai para Revisão</b><p>Sozinha. Você confere o que mudou.</p></li>
-      <li><b>Aprovar entrega</b><p>Manda a tarefa direto para <b>Pronto</b>.</p></li>
+      <li><b>Aprovar entrega</b><p>Manda a tarefa direto para <b>Finalizado</b>.</p></li>
     </ol>
     <ul>
       <li>Mensagem sua na conversa da tarefa, com ela em <b>Revisão</b>, volta a tarefa para <b>Fazendo</b>.</li>
@@ -1875,7 +1881,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       </div>
       <div class="cards">
         <div class="card"><h4><span class="tag good">APROVADO</span></h4>
-          <p>Vai para <b>Pronto</b>. Se o código ainda está numa worktree sem mesclar, fica em <b>Revisão</b> (“aprovada; falta mesclar a worktree”).</p></div>
+          <p>Vai para <b>Finalizado</b>. Se o código ainda está numa worktree sem mesclar, fica em <b>Revisão</b> (“aprovada; falta mesclar a worktree”).</p></div>
         <div class="card"><h4><span class="tag bad">REPROVADO</span></h4>
           <p>Os ajustes voltam para quem fez, e a tarefa volta para <b>Fazendo</b>. Se ele estiver ocupado, o ajuste fica guardado e a tarefa segue em <b>Revisão</b>.</p></div>
       </div>
@@ -1893,8 +1899,8 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <h3>Testes, mesclar e deploy</h3>
     <ol class="flow">
       <li><b>Rodar testes</b><p>Aparece se o projeto tem comando de teste (<code>npm test</code>, <code>composer test</code> ou <code>phpunit</code>). O cartão mostra <b class="ui">Testes</b>: “passaram” ou “falharam”. Se falhou, <b class="ui">Saída dos testes</b> mostra o fim do log.</p></li>
-      <li><b>Mesclar em {base}</b><p>Só com código em worktree. Pede confirmação, roda os testes e mescla. <b>Teste vermelho desfaz a mescla.</b> Sem teste para rodar, o Club pergunta se mescla mesmo assim. Depois, a tarefa vai para <b>Pronto</b> e mostra “mesclada em … (commit)”.</p></li>
-      <li><b>Pedir deploy</b><p>Em tarefa <b>Pronto</b> ou mesclada: escolha <b class="ui">Quem faz o deploy</b> (só quem tem servidor na ficha). O checklist pede backup, estado antes e depois, e runbook. Pede confirmação antes de qualquer passo que não tem volta.</p></li>
+      <li><b>Mesclar em {base}</b><p>Só com código em worktree. Pede confirmação, roda os testes e mescla. <b>Teste vermelho desfaz a mescla.</b> Sem teste para rodar, o Club pergunta se mescla mesmo assim. Depois, a tarefa vai para <b>Finalizado</b> e mostra “mesclada em … (commit)”.</p></li>
+      <li><b>Pedir deploy</b><p>Em tarefa <b>Finalizado</b> ou mesclada: escolha <b class="ui">Quem faz o deploy</b> (só quem tem servidor na ficha). O checklist pede backup, estado antes e depois, e runbook. Pede confirmação antes de qualquer passo que não tem volta.</p></li>
     </ol>
     <p><b class="ui">Pedir ao Codex</b> (segunda opinião) aparece só com <b class="ui">Usar o Codex (GPT)</b> ligado: <a href="#codex-opiniao">ver cap. 6</a>.</p>
   </article>
@@ -2360,7 +2366,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       <ul>
         <li><b>Engrenagem</b> no topo, ou <kbd>Ctrl</kbd>+<kbd>,</kbd> (vírgula).</li>
         <li>O painel tem o campo <b class="ui">Buscar configurações</b> e os grupos <b class="ui">Geral</b>, <b class="ui">Quadro</b>, <b class="ui">Conversa</b>, <b class="ui">Consumo</b>, <b class="ui">Fila de tarefas</b>, <b class="ui">Cargos</b>, <b class="ui">MCPs</b> e <b class="ui">Créditos</b>.</li>
-        <li><b class="ui">Nível de uso</b>: <b>Simples</b> esconde o que é avançado. Para ver tudo, use <b class="ui">Mostrar tudo</b> ou escolha <b>Avançado</b>.</li>
+        <li><b>No nível Simples</b>, as configurações vêm em cartões por tema (<b class="ui">Nível de uso</b>, <b class="ui">Aparência</b>, <b class="ui">Quadro</b>, <b class="ui">Conversas</b>, <b class="ui">Gasto e limites</b>, <b class="ui">Internet e Chrome</b>, <b class="ui">Segurança e atualização</b> e <b class="ui">Ajuda e sobre</b>), cada item com uma frase do que muda para você. Para ver o resto, use <b class="ui">Passar para o nível Avançado</b>. Os grupos acima são os do <b>Avançado</b>.</li>
       </ul>
       <figure class="mock panel" role="img" aria-label="Painel de configurações: campo Buscar configurações e os grupos Geral, Quadro, Conversa, Cargos, MCPs, Consumo e Créditos">
         <div class="mock-t"><svg class="i"><use href="#i-gear"/></svg>Configurações<span class="x"><svg class="i"><use href="#i-x"/></svg></span></div>
@@ -2592,19 +2598,19 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
           <li><p class="st">Clique em <b class="ui">Mesclar em {base}</b> e confirme.</p></li>
         </ol>
         <div class="case-side">
-          <ol class="flow v nonum" aria-label="Caminho da tarefa: Fazendo, Revisão, Pronto">
+          <ol class="flow v nonum" aria-label="Caminho da tarefa: Fazendo, Revisão, Finalizado">
             <li><b>Fazendo</b><p><span class="tag wait">Plano para aprovar</span></p>
               <div class="m-row" style="margin-top:6px"><span class="mb sm p">Aprovar e executar</span><span class="mb sm">Pedir mudanças</span><span class="mb sm d">Recusar plano</span></div></li>
             <li><b>Revisão</b><p>O que mudou: Resumo da entrega e diff.</p>
               <div class="m-row" style="margin-top:6px"><span class="mb sm">Rodar testes</span><span class="mb sm p">Mesclar em {base}</span></div></li>
-            <li><b>Pronto</b><p>“mesclada em ... (commit)”</p></li>
+            <li><b>Finalizado</b><p>“mesclada em ... (commit)”</p></li>
           </ol>
           <div class="chk">
             <p class="chk-t"><svg class="i ico"><use href="#i-check"/></svg>Conferir no fim</p>
             <ul>
               <li>o diff mexe só no que foi pedido;</li>
               <li>os testes passaram (teste vermelho desfaz a mesclagem);</li>
-              <li>a tarefa está em <b class="ui">Pronto</b>, com “mesclada em ... (commit)”.</li>
+              <li>a tarefa está em <b class="ui">Finalizado</b>, com “mesclada em ... (commit)”.</li>
             </ul>
           </div>
         </div>
@@ -2625,7 +2631,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
           <li><p class="st"><b class="ui">Quem cuida</b>: o responsável → marque <b class="ui">Revisão automática</b> e <b class="ui">Quem revisa</b> → <b class="ui">Criar e começar</b>.</p></li>
           <li><p class="st">Em <b class="ui">Revisão</b>, clique em <b class="ui">Rodar testes</b> e veja se passaram. Leia o diff.</p></li>
           <li><p class="st">Se faltar algo, escreva na conversa da tarefa: ela volta para <b class="ui">Fazendo</b>.</p></li>
-          <li><p class="st">Aceite com <b class="ui">Mesclar em {base}</b>. <b class="ui">Aprovar entrega</b> só move para <b>Pronto</b>; não roda testes nem mescla.</p></li>
+          <li><p class="st">Aceite com <b class="ui">Mesclar em {base}</b>. <b class="ui">Aprovar entrega</b> só move para <b>Finalizado</b>; não roda testes nem mescla.</p></li>
         </ol>
         <div class="case-side">
           <figure class="mock panel" role="img" aria-label="Formulário Nova tarefa com Título Bug: ... e, em O que precisa ser feito, os passos para reproduzir, o resultado esperado, o que acontece hoje e o pedido de um teste que reproduza o bug">
@@ -2636,7 +2642,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
             </div>
           </figure>
           <div class="cmp">
-            <div class="card"><span class="mb sm">Aprovar entrega</span><p>Só move para <b>Pronto</b>. Não roda testes nem mescla.</p></div>
+            <div class="card"><span class="mb sm">Aprovar entrega</span><p>Só move para <b>Finalizado</b>. Não roda testes nem mescla.</p></div>
             <div class="card"><span class="mb sm p">Mesclar em {base}</span><p>É com ele que você aceita.</p></div>
           </div>
           <div class="chk">
@@ -2698,7 +2704,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
           <li><p class="st">Contrate <b class="ui">DevOps / SRE</b>. Na ficha, aba <b class="ui">Projeto</b>, clique em <b class="ui">+ dar acesso a servidores (SSH e FTP)</b> e marque a conexão. A chave fica no seu computador; a ficha guarda só o nome. Deixe <b class="ui">Permitir comandos de escrita</b> desmarcado.</p></li>
           <li><p class="st"><b class="ui">Tarefas</b> → <b class="ui">Nova tarefa</b> → <b class="ui">O que precisa ser feito</b>: “só diagnosticar, sem mudar nada” → <b class="ui">Quem cuida</b>: <b class="ui">DevOps / SRE</b> → <b class="ui">Criar e começar</b>. Ele lê o servidor pelo MCP <code>myco-ssh</code> (status, logs, containers, serviços, arquivos de log).</p></li>
           <li><p class="st">Em <b class="ui">precisa de mim</b>, aprove cada cartão de <b>permissão</b> com <b class="ui">Aprovar</b>. Evite <b class="ui">Sempre neste projeto</b> para comandos no servidor.</p></li>
-          <li><p class="st">Para publicar, o servidor precisa deixar de ser só leitura: na ficha, marque <b class="ui">Permitir comandos de escrita</b> na conexão e troque a autonomia para <b class="ui">Edita sozinho</b> ou mais (em <b class="ui">Pede tudo</b> o servidor segue só leitura). Depois abra a tarefa em <b class="ui">Pronto</b> (ou mesclada) → <b class="ui">Pedir deploy</b> → <b class="ui">Quem faz o deploy</b>: <b class="ui">DevOps / SRE</b>.</p></li>
+          <li><p class="st">Para publicar, o servidor precisa deixar de ser só leitura: na ficha, marque <b class="ui">Permitir comandos de escrita</b> na conexão e troque a autonomia para <b class="ui">Edita sozinho</b> ou mais (em <b class="ui">Pede tudo</b> o servidor segue só leitura). Depois abra a tarefa em <b class="ui">Finalizado</b> (ou mesclada) → <b class="ui">Pedir deploy</b> → <b class="ui">Quem faz o deploy</b>: <b class="ui">DevOps / SRE</b>.</p></li>
           <li><p class="st">Siga o checklist: backup, estado antes e depois, runbook. Confirme os passos que não têm volta.</p></li>
           <li><p class="st">Lembre dos limites: ele não roda comando interativo (editor, <code>top</code>) nem <code>sudo</code> com senha, e no terminal dele não há <code>ssh</code>, <code>scp</code> nem <code>rsync</code>: tudo passa pelo MCP.</p></li>
         </ol>
@@ -2874,7 +2880,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <p class="fx"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>A tarefa não está numa worktree. Marque <b class="ui">Trabalhar numa worktree própria</b> na ficha de quem executa (o projeto precisa ser git).</span></p>
       </li>
       <li>
-        <p class="pb"><svg class="i" aria-hidden="true"><use href="#i-alert"/></svg><span><b class="ui">Aprovar entrega</b> marcou <b class="ui">Pronto</b>, mas o código não entrou na branch</span></p>
+        <p class="pb"><svg class="i" aria-hidden="true"><use href="#i-alert"/></svg><span><b class="ui">Aprovar entrega</b> marcou <b class="ui">Finalizado</b>, mas o código não entrou na branch</span></p>
         <p class="fx"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>Esse botão não roda testes nem mescla. Use <b class="ui">Mesclar em {base}</b>.</span></p>
       </li>
       <li>

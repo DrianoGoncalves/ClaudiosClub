@@ -15,6 +15,8 @@ export const KIND_MESSAGE = {
   usage: 'kindUsage',
   blocked: 'kindBlocked',
   notStarted: 'kindNotStarted',
+  question: 'kindQuestion',
+  stuck: 'kindStuck',
 };
 
 /** Mais que isso de uma vez vira um aviso só (uma fila de notificações empilhadas esconde o que importa). */
@@ -54,8 +56,8 @@ const SAFE = /^[A-Za-z0-9_-]{1,120}$/;
 export function clubLink(target) {
   const q = new URLSearchParams();
   if (target.kind) q.set('kind', target.kind);
-  // Tarefa esperando outra, ou esquecida em "a fazer": o aviso é do quadro de tarefas (o id da tarefa o Club não manda à extensão).
-  if (target.view === 'tasks' || target.kind === 'blocked' || target.kind === 'notStarted') q.set('tela', 'tarefas');
+  // Tarefa esperando outra, esquecida em "a fazer", com dúvida para você ou parada: o aviso é do quadro de tarefas (o id da tarefa o Club não manda à extensão).
+  if (target.view === 'tasks' || ['blocked', 'notStarted', 'question', 'stuck'].includes(target.kind ?? '')) q.set('tela', 'tarefas');
   if (target.projectId && SAFE.test(target.projectId)) q.set('projeto', target.projectId);
   if (target.staffId && SAFE.test(target.staffId)) q.set('funcionario', target.staffId);
   return `${CLUB}/#abrir?${q}`;

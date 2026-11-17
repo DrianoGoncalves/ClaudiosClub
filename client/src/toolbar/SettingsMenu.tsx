@@ -8,7 +8,7 @@ import { api, type CodexModelsState } from '../api';
 import { bareVersion } from '../format';
 import { useTheme, useThemePref, type ThemePref } from '../theme';
 import { useChatDetail } from '../chat/chatDetail';
-import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
+import { LOCALES, locale, setLocale, t, type Locale } from '../i18n';
 import { OPEN_SETTINGS_EVENT } from './openSettings';
 import { ExtensionControls } from './ExtensionControls';
 import { PairControls } from './PairControls';
@@ -23,6 +23,7 @@ import { MAX_CHATS_MAX, RAM_GB_MAX, normalizeMaxChats, normalizeRamGb } from './
 import { RETENTION_DAYS_MAX, normalizeRetentionDays, previewFor, previewTotal, retentionOrderBroken, skippedProjects } from './retention';
 import { TURN_MINUTES_MAX, TURN_TOOLS_MAX, normalizeTurnMinutes, normalizeTurnTools } from './turnCap';
 import { askConfirm, isInsideDialog } from '../lib/dialogStore';
+import { SIMPLE_GROUPS, SimpleList, simpleInfo, type SimpleInfo } from './SettingsSimple';
 
 // Configurações do Claudio’s Club, no jeito das do VS Code: busca no topo, grupos à esquerda e cada item
 // com título, descrição e o controle logo abaixo. Abre pelo botão "config" ou com Ctrl+,.
@@ -56,6 +57,8 @@ interface Props {
   onOpenProject: (projectId: string) => void;
   /** Conversa nova quando o assunto fecha. */
   contextSwitch: ContextSwitch | null;
+  /** Títulos de conversa gerados por IA; null = config ainda não chegou (ou o servidor é anterior à opção: o item nem aparece). */
+  aiTitles: boolean | null;
   /** Otimizar assinatura (folga de cota); null = config ainda não chegou. */
   optimizeQuota: boolean | null;
   /** Continuar sozinho quando o limite de uso volta; null = config ainda não chegou. */
@@ -118,10 +121,7 @@ const SECTIONS: Array<{ id: SectionId; group: GroupId; label: string }> = [
   { id: 'retention', group: 'chat', label: t('toolbar.sectionRetention') },
 ];
 
-/** Singular ou plural da chave conforme n. */
-const plural = (n: number, one: MsgKey, other: MsgKey) => t(n === 1 ? one : other, { n });
-
-interface Setting {
+interface SettingBase {
   id: string;
   group: GroupId;
   section?: SectionId;
@@ -134,9 +134,13 @@ interface Setting {
   /** Liga/desliga: a descrição vira o rótulo da caixinha, como no VS Code. */
   toggle?: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean };
   control?: ReactNode;
-  /** Só aparece no nível avançado. */
-  advanced?: boolean;
 }
+
+/**
+ * Uma definição, duas vistas: o item avançado (`advanced`) só aparece na lista técnica; os demais aparecem nas duas e
+ * levam o `simple` (tema, título e frase em linguagem comum) que o nível Simples mostra em vez de título e descrição.
+ */
+type Setting = SettingBase & ({ advanced: true; simple?: undefined } | { advanced?: false; simple: SimpleInfo });
 
 /** Sem acento e sem caixa: "animacoes" acha "Animações". */
 const fold = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
@@ -148,7 +152,7 @@ const matches = (text: string, words: string[]) => {
 export function SettingsMenu(props: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const [active, setActive] = useState<GroupId>('general');
+  const [active, setActive] = useState<string>('general');
   const [top, setTop] = useState(64);
   const root = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -231,17 +235,33 @@ export function SettingsMenu(props: Props) {
   const chatDetail = useChatDetail();
   const systemMonitor = useSystemMonitor();
   const all = buildSettings(props, theme, () => setOpen(false), words, chatDetail, systemMonitor);
-  // No simples, só o essencial; o resto continua lá, no avançado.
-  const settings = props.uiLevel === 'simple' ? all.filter((s) => !s.advanced) : all;
+  // No simples, só o essencial, por tema e em linguagem comum (SettingsSimple); o resto continua lá, no avançado.
+  const simple = props.uiLevel === 'simple';
+  const settings = simple ? all.filter((s) => !s.advanced) : all;
   const hidden = all.length - settings.length;
   const groupLabel = (id: GroupId) => GROUPS.find((g) => g.id === id)!.label;
   const sectionLabel = (id?: SectionId) => SECTIONS.find((x) => x.id === id)?.label ?? '';
+  const simpleText = (s: Setting) => (s.simple ? `${SIMPLE_GROUPS.find((g) => g.id === s.simple!.group)?.label ?? ''} ${s.simple.title} ${s.simple.effect}` : '');
   const visible = settings.filter(
-    (s) => !words.length || matches(`${groupLabel(s.group)} ${sectionLabel(s.section)} ${s.title} ${s.description} ${s.keywords ?? ''}`, words),
+    (s) =>
+      !words.length ||
+      matches(`${groupLabel(s.group)} ${sectionLabel(s.section)} ${s.title} ${s.description} ${s.keywords ?? ''} ${simple ? simpleText(s) : ''}`, words),
   );
-  const count = (g: GroupId) => visible.filter((s) => s.group === g).length;
+  const navGroups: Array<{ id: string; label: string; icon?: ReactNode }> = simple ? SIMPLE_GROUPS : GROUPS;
+  const count = (g: string) => visible.filter((s) => (simple && s.simple ? s.simple.group : s.group) === g).length;
+  // O grupo marcado à esquerda. No simples, se o da rolagem não existe (o nível acabou de mudar), vale o primeiro que tem item.
+  const activeId = simple && !navGroups.some((g) => g.id === active && count(g.id)) ? navGroups.find((g) => count(g.id))?.id : active;
+  const hasSimple = (s: Setting): s is Setting & { simple: SimpleInfo } => !!s.simple;
+  const noResults = (
+    <p className="muted settings-empty">
+      {t('toolbar.noResults', { q: query.trim() })}{' '}
+      <button type="button" className="link" onClick={() => setQuery('')}>
+        {t('toolbar.clearSearch')}
+      </button>
+    </p>
+  );
 
-  const goTo = (g: GroupId) => {
+  const goTo = (g: string) => {
     setActive(g);
     list.current?.querySelector(`[data-group="${g}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
   };
@@ -250,9 +270,9 @@ export function SettingsMenu(props: Props) {
     const el = list.current;
     if (!el) return;
     const sections = [...el.querySelectorAll<HTMLElement>('[data-group]')];
-    let current = sections[0]?.dataset.group as GroupId | undefined;
-    for (const s of sections) if (s.offsetTop <= el.scrollTop + 16) current = s.dataset.group as GroupId;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 2) current = sections.at(-1)?.dataset.group as GroupId | undefined;
+    let current = sections[0]?.dataset.group;
+    for (const s of sections) if (s.offsetTop <= el.scrollTop + 16) current = s.dataset.group;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 2) current = sections.at(-1)?.dataset.group;
     if (current && current !== active) setActive(current);
   };
 
@@ -284,60 +304,54 @@ export function SettingsMenu(props: Props) {
       <div className="settings-body">
         <nav className="settings-nav" aria-label={t('toolbar.groupsNav')}>
           {/* No simples, grupos sem nada essencial nem aparecem. */}
-          {GROUPS.filter((g) => props.uiLevel !== 'simple' || words.length || count(g.id)).map((g) => (
-            <button
-              key={g.id}
-              type="button"
-              className={`settings-nav-item ${active === g.id && count(g.id) ? 'is-active' : ''}`}
-              disabled={!count(g.id)}
-              onClick={() => goTo(g.id)}
-            >
-              {g.label}
-              {words.length > 0 && <span className="muted small">{count(g.id)}</span>}
-            </button>
-          ))}
+          {navGroups
+            .filter((g) => !simple || words.length || count(g.id))
+            .map((g) => (
+              <button
+                key={g.id}
+                type="button"
+                className={`settings-nav-item ${activeId === g.id && count(g.id) ? 'is-active' : ''}`}
+                disabled={!count(g.id)}
+                onClick={() => goTo(g.id)}
+              >
+                {g.icon && <span className="ss-nav-icon">{g.icon}</span>}
+                {g.label}
+                {words.length > 0 && <span className="muted small">{count(g.id)}</span>}
+              </button>
+            ))}
         </nav>
         <div className="settings-list" ref={list} onScroll={onScroll}>
-          {GROUPS.filter((g) => count(g.id)).map((g) => (
-            <section key={g.id} data-group={g.id} className="settings-group">
-              <h3 className="settings-group-title">{g.label}</h3>
-              <p className="muted small settings-group-intro">{g.intro}</p>
-              {visible
-                .filter((s) => s.group === g.id && !s.section)
-                .map((s) => (
-                  <SettingRow key={s.id} setting={s} />
-                ))}
-              {SECTIONS.filter((x) => x.group === g.id).map((x) => {
-                const items = visible.filter((s) => s.section === x.id);
-                return (
-                  items.length > 0 && (
-                    <div key={x.id} className="settings-section">
-                      <h4 className="settings-section-title">{x.label}</h4>
-                      {items.map((s) => (
-                        <SettingRow key={s.id} setting={s} />
-                      ))}
-                    </div>
-                  )
-                );
-              })}
-            </section>
-          ))}
-          {!visible.length && (
-            <p className="muted settings-empty">
-              {t('toolbar.noResults', { q: query.trim() })}{' '}
-              <button type="button" className="link" onClick={() => setQuery('')}>
-                {t('toolbar.clearSearch')}
-              </button>
-            </p>
-          )}
-          <p className="muted small settings-about">{t('toolbar.about')}</p>
-          {hidden > 0 && (
-            <p className="muted small settings-more">
-              {plural(hidden, 'toolbar.moreOne', 'toolbar.moreOther')}{' '}
-              <button type="button" className="link" onClick={() => void props.onUiLevel('advanced')}>
-                {t('toolbar.showAll')}
-              </button>
-            </p>
+          {simple ? (
+            <SimpleList items={visible.filter(hasSimple)} hidden={hidden} empty={visible.length ? null : noResults} onAdvanced={() => void props.onUiLevel('advanced')} />
+          ) : (
+            <>
+              {GROUPS.filter((g) => count(g.id)).map((g) => (
+                <section key={g.id} data-group={g.id} className="settings-group">
+                  <h3 className="settings-group-title">{g.label}</h3>
+                  <p className="muted small settings-group-intro">{g.intro}</p>
+                  {visible
+                    .filter((s) => s.group === g.id && !s.section)
+                    .map((s) => (
+                      <SettingRow key={s.id} setting={s} />
+                    ))}
+                  {SECTIONS.filter((x) => x.group === g.id).map((x) => {
+                    const items = visible.filter((s) => s.section === x.id);
+                    return (
+                      items.length > 0 && (
+                        <div key={x.id} className="settings-section">
+                          <h4 className="settings-section-title">{x.label}</h4>
+                          {items.map((s) => (
+                            <SettingRow key={s.id} setting={s} />
+                          ))}
+                        </div>
+                      )
+                    );
+                  })}
+                </section>
+              ))}
+              {!visible.length && noResults}
+              <p className="muted small settings-about">{t('toolbar.about')}</p>
+            </>
           )}
         </div>
       </div>
@@ -407,6 +421,7 @@ function buildSettings(
             description: t('toolbar.uiLevelDesc'),
             keywords: t('toolbar.uiLevelKeywords'),
             control: <UiLevelPicker value={p.uiLevel} onChange={p.onUiLevel} />,
+            simple: simpleInfo('level', 'uiLevel'),
           },
         ]
       : []),
@@ -417,6 +432,7 @@ function buildSettings(
       title: t('toolbar.languageTitle'),
       description: t('toolbar.languageDesc'),
       keywords: t('toolbar.languageKeywords'),
+      simple: simpleInfo('look', 'language'),
       control: (
         <select className="setting-select" value={locale()} aria-label={t('toolbar.languageTitle')} onChange={(e) => setLocale(e.target.value as Locale)}>
           {LOCALES.map((l) => (
@@ -434,6 +450,7 @@ function buildSettings(
       description: t('toolbar.themeDesc'),
       keywords: t('toolbar.themeKeywords'),
       control: <ThemePicker />,
+      simple: simpleInfo('look', 'theme'),
     },
     ...(p.workspaces && p.projectWorkspaces
       ? [
@@ -447,6 +464,7 @@ function buildSettings(
             control: (
               <WorkspacesEditor workspaces={p.workspaces} projectWorkspaces={p.projectWorkspaces} background={p.boardBackground} onConfig={p.onConfig} />
             ),
+            simple: simpleInfo('board', 'workspaces', true),
           },
         ]
       : []),
@@ -463,6 +481,7 @@ function buildSettings(
           {t('toolbar.manualOpen')}
         </a>
       ),
+      simple: simpleInfo('help', 'manual'),
     },
     {
       id: 'demo',
@@ -493,6 +512,7 @@ function buildSettings(
           />
         );
       })(),
+      simple: simpleInfo('help', 'demo'),
     },
     {
       id: 'archived',
@@ -502,6 +522,7 @@ function buildSettings(
       description: t('toolbar.archivedDesc'),
       keywords: t('toolbar.archivedKeywords'),
       toggle: { checked: p.showArchived, onChange: p.onToggleArchived },
+      simple: simpleInfo('board', 'archived'),
     },
     {
       id: 'animations',
@@ -511,8 +532,9 @@ function buildSettings(
       description: t('toolbar.animationsDesc'),
       keywords: t('toolbar.animationsKeywords'),
       toggle: { checked: p.animations, onChange: p.onToggleAnimations },
+      simple: simpleInfo('look', 'animations'),
     },
-    // O escopo do usuário é o item mais técnico do bloco: por último.
+    // O escopo do usuário é o item mais técnico do bloco: por último, e só no avançado (fala em agents, skills e ~/.claude).
     ...(p.showUserScope !== null
       ? [
           {
@@ -523,6 +545,7 @@ function buildSettings(
             description: t('toolbar.userScopeDesc'),
             keywords: t('toolbar.userScopeKeywords'),
             toggle: { checked: p.showUserScope, onChange: (v: boolean) => void api.saveConfig({ showUserScope: v }).then(p.onConfig, () => {}) },
+            advanced: true as const,
           },
         ]
       : []),
@@ -534,6 +557,7 @@ function buildSettings(
       description: t('ext.desc'),
       keywords: t('ext.keywords'),
       control: <ExtensionControls />,
+      simple: simpleInfo('web', 'extension', true),
     },
     // Sistema: o pareamento primeiro (sem ele nenhuma ação vale), parar/reiniciar por último.
     {
@@ -544,6 +568,7 @@ function buildSettings(
       description: t('toolbar.pairDesc'),
       keywords: t('toolbar.pairKeywords'),
       control: <PairControls />,
+      simple: simpleInfo('care', 'pair', true),
     },
     {
       id: 'update',
@@ -553,6 +578,7 @@ function buildSettings(
       description: t('toolbar.updateDesc'),
       keywords: t('toolbar.updateKeywords'),
       control: <UpdateControls />,
+      simple: simpleInfo('care', 'update', true),
     },
     {
       id: 'sysmon',
@@ -562,6 +588,7 @@ function buildSettings(
       description: t('toolbar.sysmonDesc'),
       keywords: t('toolbar.sysmonKeywords'),
       toggle: { checked: systemMonitor, onChange: setSystemMonitor },
+      advanced: true,
     },
     {
       id: 'server',
@@ -571,6 +598,7 @@ function buildSettings(
       description: t('toolbar.serverDesc'),
       keywords: t('toolbar.serverKeywords'),
       control: <ServerControls />,
+      advanced: true,
     },
     {
       id: 'mcp-servers',
@@ -579,6 +607,7 @@ function buildSettings(
       description: t('mcp.desc'),
       keywords: t('mcp.keywords'),
       control: <McpServers projects={p.projects} />,
+      advanced: true,
     },
   ];
 
@@ -617,6 +646,7 @@ function buildSettings(
         ))}
       </ul>
     ),
+    simple: simpleInfo('help', 'credits', true),
   });
 
   out.push({
@@ -626,6 +656,7 @@ function buildSettings(
     description: t('toolbar.chatDetailDesc'),
     keywords: t('toolbar.chatDetailKeywords'),
     toggle: { checked: chatDetail, onChange: setChatDetail },
+    simple: simpleInfo('chat', 'chatDetail'),
   });
 
   if (p.sendWhileBusy) {
@@ -648,6 +679,20 @@ function buildSettings(
       description: t('office.ctxDesc'),
       keywords: t('office.ctxKeywords'),
       control: <ContextSwitchPicker value={p.contextSwitch} onConfig={p.onConfig} />,
+      simple: simpleInfo('chat', 'contextSwitch', true),
+    });
+  }
+
+  // Gera um título curto por conversa (Haiku): gasta um pouco da cota, por isso dá para desligar.
+  if (p.aiTitles !== null) {
+    out.push({
+      id: 'ai-titles',
+      group: 'chat',
+      title: t('toolbar.aiTitlesTitle'),
+      description: t('toolbar.aiTitlesDesc'),
+      keywords: t('toolbar.aiTitlesKeywords'),
+      toggle: { checked: p.aiTitles, onChange: (v) => void api.saveConfig({ aiTitles: v }).then(p.onConfig, () => {}) },
+      simple: simpleInfo('chat', 'aiTitles'),
     });
   }
 
@@ -749,6 +794,7 @@ function buildSettings(
         description: t('toolbar.stop5hDesc'),
         keywords: t('toolbar.stop5hKeywords'),
         control: <UsageStopInput field="fiveHour" value={stop} onSave={p.onUsageStop} />,
+        simple: simpleInfo('usage', 'usageStop5h'),
       },
       {
         id: 'usage-stop-7d',
@@ -757,6 +803,7 @@ function buildSettings(
         description: t('toolbar.stop7dDesc'),
         keywords: t('toolbar.stop7dKeywords'),
         control: <UsageStopInput field="sevenDay" value={stop} onSave={p.onUsageStop} />,
+        simple: simpleInfo('usage', 'usageStop7d'),
       },
     );
   }
@@ -800,6 +847,7 @@ function buildSettings(
       description: t('toolbar.internetDesc'),
       keywords: t('toolbar.internetKeywords'),
       toggle: { checked: p.internetAccess, onChange: (v) => void api.saveConfig({ internetAccess: v }).then(p.onConfig, () => {}) },
+      simple: simpleInfo('web', 'internet'),
     });
   }
 
@@ -876,6 +924,7 @@ function buildSettings(
       description: t('toolbar.optimizeDesc'),
       keywords: t('toolbar.optimizeKeywords'),
       toggle: { checked: p.optimizeQuota, onChange: (v) => void api.saveConfig({ optimizeQuota: v }).then(p.onConfig, () => {}) },
+      simple: simpleInfo('usage', 'optimizeQuota'),
     });
   }
 
@@ -887,6 +936,7 @@ function buildSettings(
       description: t('toolbar.autoContinueDesc'),
       keywords: t('toolbar.autoContinueKeywords'),
       toggle: { checked: p.autoContinue, onChange: (v) => void api.saveConfig({ autoContinue: v }).then(p.onConfig, () => {}) },
+      simple: simpleInfo('usage', 'autoContinue'),
     });
   }
 
@@ -953,6 +1003,7 @@ function buildSettings(
         description: t('toolbar.queueGateDesc'),
         keywords: t('toolbar.queueGateKeywords'),
         toggle: { checked: on, onChange: (v) => void api.saveConfig({ resourceGate: v }).then(p.onConfig, () => {}) },
+        simple: simpleInfo('usage', 'queueGate'),
       },
       {
         id: 'queue-ram',

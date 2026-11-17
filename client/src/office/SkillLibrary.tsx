@@ -1,20 +1,33 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { LibrarySkill } from '../../../shared/model';
-import { api } from '../api';
+import { api, type GithubSkillStatus, type GithubTarget } from '../api';
 import { t } from '../i18n';
 import { askConfirm } from '../lib/dialogStore';
+import { GithubInstall } from '../skills/GithubInstall';
+import { GithubBadges, GithubOrigin } from '../skills/GithubOrigin';
 
 // Biblioteca de skills da conta: ficam fora do ~/.claude, então nenhuma sessão vê sozinha; só quem
 // tem a skill marcada na ficha (como `myco:<nome>`). Aqui se cria e se edita o SKILL.md; scripts e
 // outros arquivos da pasta ficam como estão.
 
 /** No painel da conta: a lista, com criar, editar e tirar (vai para a lixeira). */
+const LIBRARY: GithubTarget = { scope: 'library', projectId: null };
+
 export function SkillLibrary() {
   const [list, setList] = useState<LibrarySkill[] | null>(null);
   const [editing, setEditing] = useState<string | null | 'new'>(null);
+  const [installing, setInstalling] = useState(false);
+  // Quais skills da biblioteca vieram de um link do GitHub (selo, "há versão nova", "modificada aqui").
+  const [origins, setOrigins] = useState<Map<string, GithubSkillStatus>>(new Map());
   const [error, setError] = useState<string | null>(null);
-  const reload = () => api.skillLibrary().then(setList, (e: Error) => setError(e.message));
+  const reload = () => {
+    void api.githubStatus(LIBRARY).then(
+      (l) => setOrigins(new Map(l.map((s) => [s.name, s]))),
+      () => {},
+    );
+    return api.skillLibrary().then(setList, (e: Error) => setError(e.message));
+  };
   useEffect(() => void reload(), []);
 
   return (
@@ -28,6 +41,7 @@ export function SkillLibrary() {
             <button type="button" className="link" onClick={() => setEditing(s.name)}>
               myco:{s.name}
             </button>
+            {origins.has(s.name) && <GithubBadges status={origins.get(s.name)!} />}
             <span className="muted small"> {s.description}</span>
           </li>
         ))}
@@ -36,8 +50,12 @@ export function SkillLibrary() {
         <button type="button" className="btn-secondary" onClick={() => setEditing('new')}>
           {t('office.libNew')}
         </button>
+        <button type="button" className="btn-secondary" onClick={() => setInstalling(true)}>
+          {t('gh.install')}
+        </button>
       </p>
       {error && <p className="error small">{error}</p>}
+      {installing && <GithubInstall target={LIBRARY} onClose={() => setInstalling(false)} onInstalled={() => void reload()} />}
       {editing && (
         <SkillForm
           name={editing === 'new' ? null : editing}
@@ -46,6 +64,7 @@ export function SkillLibrary() {
             setEditing(null);
             void reload();
           }}
+          onChanged={() => void reload()}
         />
       )}
     </section>
@@ -53,12 +72,14 @@ export function SkillLibrary() {
 }
 
 /** Criar ou editar o SKILL.md de uma skill da biblioteca. */
-function SkillForm({ name, onClose, onSaved }: { name: string | null; onClose: () => void; onSaved: () => void }) {
+function SkillForm({ name, onClose, onSaved, onChanged }: { name: string | null; onClose: () => void; onSaved: () => void; onChanged: () => void }) {
   const [loaded, setLoaded] = useState(!name);
   const [draft, setDraft] = useState({ name: name ?? '', description: '', body: '' });
   const [files, setFiles] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Atualizar ou voltar pelo GitHub troca o SKILL.md no disco: o formulário relê, para não salvar por cima com o texto velho.
+  const [rev, setRev] = useState(0);
 
   useEffect(() => {
     if (!name) return;
@@ -70,7 +91,7 @@ function SkillForm({ name, onClose, onSaved }: { name: string | null; onClose: (
       },
       (e: Error) => setError(e.message),
     );
-  }, [name]);
+  }, [name, rev]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -118,6 +139,16 @@ function SkillForm({ name, onClose, onSaved }: { name: string | null; onClose: (
               <textarea value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} rows={14} className="mono" />
             </label>
             {files.length > 0 && <p className="muted small">{t('office.libFiles', { files: files.join(', ') })}</p>}
+            {name && (
+              <GithubOrigin
+                target={LIBRARY}
+                name={name}
+                onChanged={() => {
+                  setRev((r) => r + 1);
+                  onChanged();
+                }}
+              />
+            )}
           </>
         )}
         {error && <p className="error">{error}</p>}

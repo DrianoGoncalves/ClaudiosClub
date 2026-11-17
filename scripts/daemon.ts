@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DAEMON_BUNDLE, FTP_MCP_BUNDLE, GPT_MCP_BUNDLE, GPT_MCP_CORE_BUNDLE, NAVEGADOR_MCP_BUNDLE, SERVER_BUNDLE, SSH_MCP_BUNDLE, bundle, bundleStale } from './bundle';
+import { DAEMON_BUNDLE, FTP_MCP_BUNDLE, GPT_MCP_BUNDLE, GPT_MCP_CORE_BUNDLE, MEMORIA_MCP_BUNDLE, NAVEGADOR_MCP_BUNDLE, SERVER_BUNDLE, SSH_MCP_BUNDLE, bundle, bundleStale } from './bundle';
 import {
   LOG_FILE,
   PID_FILE,
@@ -78,6 +78,12 @@ async function serverArgs(): Promise<string[]> {
   if (bundleStale(SSH_MCP_BUNDLE)) {
     await bundle('server/ssh-mcp.ts', SSH_MCP_BUNDLE).catch((err: unknown) =>
       log(`o pacote do MCP de SSH falhou; ele roda pelo tsx: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  }
+  // O MCP da memória da própria ficha (`myco-memoria`, conversas em plan): o mesmo.
+  if (bundleStale(MEMORIA_MCP_BUNDLE)) {
+    await bundle('server/memoria-mcp.ts', MEMORIA_MCP_BUNDLE).catch((err: unknown) =>
+      log(`o pacote do MCP da memória falhou; ele roda pelo tsx: ${err instanceof Error ? err.message : String(err)}`),
     );
   }
   // O proxy do navegador limpo (`myco-navegador`): o mesmo.

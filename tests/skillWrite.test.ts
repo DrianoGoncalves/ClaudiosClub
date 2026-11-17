@@ -13,6 +13,7 @@ import {
   type SkillTarget,
 } from '../server/adapters/claude/skillWrite';
 import { renderFicha, type FichaContext } from '../server/staff/ficha';
+import { planSkills } from '../server/skillAccess';
 import type { StaffProfile } from '../shared/model';
 
 // Tudo em pastas temporárias, com a conta e o projeto de mentira: nada aqui toca o ~/.claude de quem roda os testes.
@@ -376,8 +377,10 @@ describe('ficha: skill que não existe mais', () => {
       agents: [], mcps: null, knowledge: [], rules: [], doneWhen: '', canHire: false, worktree: false, browser: false, playbook: null, sessions: [],
       model: null, effort: null, createdAt: '2026-11-13T00:00:00.000Z', updatedAt: '2026-11-13T00:00:00.000Z',
     };
-    const p = { ...base, skills: ['vps', 'sumiu'], servers: [] } as unknown as StaffProfile;
-    const ctx: FichaContext = { company: 'X', projectName: 'p', projectPath: '/p', managerNames: [], fichaPath: 'f', memoryPath: 'm', mycoUrl: 'u', knownSkills: ['vps'] };
+    const p = { ...base, skills: ['global:vps', 'project:sumiu'], servers: [] } as unknown as StaffProfile;
+    // `vps` existe na Global; `sumiu` não existe em lugar nenhum.
+    const plan = planSkills(['global:vps', 'project:sumiu'], [{ name: 'vps', dir: '/conta/skills/vps' }], []);
+    const ctx: FichaContext = { company: 'X', projectName: 'p', projectPath: '/p', managerNames: [], fichaPath: 'f', memoryPath: 'm', mycoUrl: 'u', skillPlan: plan };
 
     const md = renderFicha(p, ctx);
     expect(md).toContain('Skills: vps, `sumiu` (não existe mais: avise o usuário).');
@@ -394,7 +397,7 @@ describe('ficha: skill que não existe mais', () => {
     expect(withServer).not.toContain('Ou a skill');
     expect(withServer).not.toContain('skill `vps`');
 
-    // Sem a lista de existentes (ctx sem knownSkills), nada é marcado como ausente.
-    expect(renderFicha(p, { ...ctx, knownSkills: undefined })).not.toContain('não existe mais: avise o usuário).');
+    // Sem o plano de skills (ctx sem skillPlan), nada é marcado como ausente.
+    expect(renderFicha(p, { ...ctx, skillPlan: undefined })).not.toContain('não existe mais: avise o usuário).');
   });
 });

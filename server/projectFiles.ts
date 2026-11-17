@@ -130,9 +130,21 @@ function decodeText(bytes: Buffer): string {
   }
 }
 
+/**
+ * O caminho que a leitura recusa por ser de segredo (ou por ser inválido): é o que a rota `files/read` e o aviso de segredo do chat
+ * (`secret.fileBlocked`) usam, para a lista não existir em dois lugares. A conferência do realpath fica só na rota.
+ */
+export function isBlockedRel(raw: string): boolean {
+  try {
+    return isSecretRel(cleanRel(raw));
+  } catch {
+    return true;
+  }
+}
+
 export async function readProjectFile(root: string, rawPath: string): Promise<ProjectFile> {
   const rel = cleanRel(rawPath);
-  if (isSecretRel(rel)) throw secretError();
+  if (isBlockedRel(rel)) throw secretError();
   const { abs, realRel } = await resolveInside(root, rel);
   if (isSecretRel(realRel)) throw secretError();
   const st = await fs.stat(abs);
@@ -147,7 +159,7 @@ export async function readProjectFile(root: string, rawPath: string): Promise<Pr
 /** Os bytes de uma imagem do projeto, para visualizar. Mesmas regras de caminho e de segredo da leitura de texto. */
 export async function readProjectImageFile(root: string, rawPath: string): Promise<{ bytes: Buffer; type: string }> {
   const rel = cleanRel(rawPath);
-  if (isSecretRel(rel)) throw secretError();
+  if (isBlockedRel(rel)) throw secretError();
   if (!IMAGE_TYPES[path.extname(rel).slice(1).toLowerCase()]) throw new ProjectFileError(415, 'não é uma imagem que dá para mostrar');
   const { abs, realRel } = await resolveInside(root, rel);
   if (isSecretRel(realRel)) throw secretError();

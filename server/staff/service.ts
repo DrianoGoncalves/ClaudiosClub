@@ -34,7 +34,8 @@ async function ftpNames(projectPath: string, vault?: VaultOptions): Promise<stri
 import type { ToolAdapter } from '../adapters/types';
 import { effectiveBrowser } from '../browser';
 import { MYCO_HOME, readConfig, setArchived, workspaceOf } from '../config';
-import { LIBRARY_DIR, librarySkillsOf } from '../skillLibrary';
+import { defaultLocations } from '../adapters/claude/paths';
+import { convertSkills, isSkillRef, knownNamesOf, listSkillDirs, skillSourcesOf, type SkillSource } from '../skillAccess';
 import { listRoles } from '../roles';
 import { readUsage } from '../usage';
 import { atMostAutonomy } from '../taskFallback';
@@ -67,6 +68,8 @@ import {
   removePortrait,
   replacePortrait,
   saveChatChoice,
+  saveModelObsolete,
+  fitModelObsolete,
   saveProfile,
   staffDir,
   StaffError,
@@ -102,7 +105,7 @@ export interface StaffDirectoryPerson {
 export class StaffBusyError extends StaffError {}
 
 /** O que um cargo preenche na ficha quando o pedido não traz a chave. canHire, servidores e navegador seguem as regras do hire. */
-const ROLE_FIELDS = ['role', 'mission', 'rules', 'doneWhen', 'model', 'effort', 'autonomy', 'playbook', 'worktree'] as const;
+const ROLE_FIELDS = ['role', 'mission', 'rules', 'doneWhen', 'model', 'effort', 'autonomy', 'playbook', 'worktree', 'skills'] as const;
 
 /**
  * Com `roleId`, o cargo entra antes da validação: o que o pedido trouxe (inclusive null ou vazio) ganha do cargo.
@@ -125,6 +128,8 @@ async function withRole(body: unknown): Promise<unknown> {
     autonomy: role.autonomy,
     playbook: role.playbook,
     worktree: role.worktree,
+    // Skills Globais do cargo (nome sem escopo) entram marcadas como Globais; o pedido que traz `skills` ganha.
+    skills: role.skills?.map((n) => `global:${n}`),
   };
   const filled = Object.fromEntries(ROLE_FIELDS.filter((k) => !(k in raw) && fromRole[k] !== undefined).map((k) => [k, fromRole[k]]));
   return { ...filled, ...raw };
@@ -202,8 +207,6 @@ export interface StaffServiceOptions {
   readUsage?: () => Promise<AccountUsage>;
   /** Cria a worktree da ficha (testes trocam o git). */
   ensureWorktree?: (projectPath: string, staffId: string) => Promise<Worktree>;
-  /** Biblioteca de skills da conta (padrão ~/.myco/skills; os testes trocam). */
-  skillLibraryDir?: string;
   /** A ficha foi editada ou restaurada (as conversas abertas dela precisam saber). */
   onChange?: (prev: StaffProfile, next: StaffProfile) => void;
   /** Custo dos últimos 7 dias do projeto e da conta toda, para o orçamento por projeto. */
@@ -218,6 +221,8 @@ export interface StaffServiceOptions {
   releaseTasks?: (projectId: string, staffId: string) => Promise<number>;
   /** Arquivados (config → `staff:<id>`); os testes trocam para não mexer no config de verdade. */
   archive?: { has: (key: string) => Promise<boolean>; set: (key: string, archived: boolean) => Promise<void> };
+  /** Pasta das skills Globais (padrão `~/.claude/skills`): a importação de equipe grava aqui (os testes trocam). */
+  globalSkillsDir?: string;
   /** Extensão do Chrome instalada? (padrão server/browser.ts; os testes trocam). */
   browserStatus?: () => Promise<BrowserStatus | null>;
   /** Cofre das senhas de FTP (padrão ~/.myco/secrets; os testes trocam). */
@@ -350,6 +355,7 @@ export class StaffService {
     const parsed = StaffInputSchema.safeParse(await withRole(body));
     if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'ficha inválida');
     const input = parsed.data;
+    input.skills = await this.skillRefsOf(project, input.skills);
     if (!bodyHasMcps) input.mcps = [];
     // Ficha nova sem `engine` é do Claude: o secundário não pode ser o mesmo motor, e servidor não vai ao secundário Codex.
     // FTP não vai ao Codex (o projeto diz quais são as conexões FTP).
@@ -511,7 +517,7 @@ export class StaffService {
       firstTask: '',
       autonomy: src.autonomy,
       agents: src.agents,
-      skills: src.skills,
+      skills: await this.skillRefsOf(target, src.skills),
       mcps: src.mcps ?? [], // "todos" da origem não são os MCPs deste projeto; a lista explícita segue
       // O acesso aos MCPs segue junto (pelo nome): copiar não afrouxa.
       ...(src.mcpAccess && { mcpAccess: src.mcpAccess }),
@@ -574,7 +580,7 @@ export class StaffService {
       }
     }
     if (!picked.length) throw new StaffError('nenhuma ficha ativa para exportar');
-    return buildTeamExport(picked, { libraryDir: LIBRARY_DIR });
+    return buildTeamExport(picked, { globalSkills: (await skillSourcesOf(this.adapter, projectId)).globalSkills });
   }
 
   /**
@@ -587,7 +593,9 @@ export class StaffService {
     const project = await this.project(projectId);
     if (!project) return null;
     const localMcps = ((await this.listMcp(projectId)) ?? []).map((m) => m.name);
-    const plan = await planTeamImport(body, { localMcps });
+    const globalDir = this.opts.globalSkillsDir ?? path.join(defaultLocations().home, 'skills');
+    // Conflito com a Global (outro conteúdo) recusa aqui, antes de gravar qualquer coisa.
+    const plan = await planTeamImport(body, { globalDir, localMcps });
 
     const created: string[] = [];
     const skillDirs: string[] = [];
@@ -595,7 +603,7 @@ export class StaffService {
     const now = new Date();
     try {
       for (const s of plan.skills) {
-        const dir = path.join(LIBRARY_DIR, s.name);
+        const dir = path.join(globalDir, s.name);
         skillDirs.push(dir);
         for (const f of s.files) await writeAtomic(path.join(dir, ...f.path.split('/')), f.content);
       }
@@ -689,6 +697,7 @@ export class StaffService {
     fields.mcpAccess = mcpAccessOfInput(fields, current.mcpAccess);
     delete fields.mcpPolicy;
     delete fields.mcpWrite;
+    fields.skills = await this.skillRefsOf(project, fields.skills);
     if (fields.reportsTo.includes(staffId)) throw new StaffError('um funcionário não pode reportar a si mesmo');
     await this.managers(project.path, fields.reportsTo);
     if (await this.wouldCycle(project.path, staffId, fields.reportsTo)) {
@@ -720,7 +729,8 @@ export class StaffService {
     let portrait = current.portrait;
     if (portraitDataUrl === null) portrait = await removePortrait(project.path, current);
     else if (portraitDataUrl) portrait = await replacePortrait(project.path, current, portraitDataUrl);
-    const saved: StaffProfile = { ...next, portrait, updatedAt: new Date().toISOString() };
+    // A marca de modelo obsoleto some se a edição trocou o modelo ou o motor (ver fitModelObsolete).
+    const saved: StaffProfile = fitModelObsolete({ ...next, portrait, updatedAt: new Date().toISOString() });
     await saveProfile(project.path, saved);
     await writeFicha(saved, await this.context(project, saved));
     this.opts.onChange?.(current, saved);
@@ -797,7 +807,7 @@ export class StaffService {
     // Sessões e retrato são do presente: só os campos da ficha voltam.
     // Rotinas também são do presente: voltar a ficha não desagenda nem reagenda nada.
     // O vínculo com as cópias também é do presente: a versão antiga pode não ter `personId`, e perdê-lo sairia do grupo.
-    const next: StaffProfile = {
+    const next: StaffProfile = fitModelObsolete({
       ...old,
       id: current.id,
       projectId,
@@ -806,6 +816,8 @@ export class StaffService {
       // O último modelo/esforço do chat também é do presente.
       lastModel: current.lastModel,
       lastEffort: current.lastEffort,
+      // A recusa de modelo também é do presente (a versão antiga pode ter outra); some se o modelo voltado não é o recusado.
+      modelObsolete: current.modelObsolete,
       portrait: current.portrait,
       routines: current.routines,
       // Temporário ou efetivado é situação de agora, não da ficha antiga.
@@ -813,7 +825,7 @@ export class StaffService {
       temporary: current.temporary,
       ended: current.ended,
       updatedAt: new Date().toISOString(),
-    };
+    });
     await saveProfile(project.path, next);
     await this.seal(project, next);
     await writeFicha(next, await this.context(project, next));
@@ -1193,10 +1205,12 @@ export class StaffService {
         writableRoots: codexRun.writableRoots,
         readOnlyPaths: codexRun.readOnlyPaths,
         sshMcp: codexRun.sshMcp,
+        memoriaMcp: codexRun.memoriaMcp,
         chromeMcp: codexRun.chromeMcp,
         cleanMcp: codexRun.cleanMcp,
         extraMcps: codexRun.extraMcps,
         mcpSnapshotFile: codexRun.mcpSnapshotFile,
+        agents: codexRun.agents,
         secrets: { projectPath: project.path, home: os.homedir(), mycoHome: MYCO_HOME },
         threadId: resume ? await readCodexThread(codexRun.threadFile) : null,
         threadFile: codexRun.threadFile,
@@ -1269,6 +1283,12 @@ export class StaffService {
     if (project) await saveChatChoice(project.path, staffId, sessionId, choice);
   }
 
+  /** O motor recusou o modelo da ficha (ver `modelObsolete`): marca a ficha, só o JSON. Quem decide se é da ficha é o manager. */
+  async markModelObsolete(projectId: string, staffId: string, model: string, engine: 'claude' | 'codex'): Promise<void> {
+    const project = await this.project(projectId);
+    if (project) await saveModelObsolete(project.path, staffId, model, engine);
+  }
+
   async portrait(projectId: string, staffId: string) {
     const project = await this.project(projectId);
     const profile = project ? await readProfile(project.path, staffId) : null;
@@ -1298,7 +1318,12 @@ export class StaffService {
       listProjectStaff(project.path, project.id),
     ]);
     // Sem a leitura das skills, a ficha sai sem a marcação de "não existe mais" (como a lista de cargos, ver `roles`).
-    const knownSkills = profile.skills.length ? await this.existingSkills(project, profile.skills) : null;
+    // Nome antigo convertido com as skills do projeto e as da worktree (a conversa abre nela, como no lançamento; ver prepareRun).
+    const sources = await this.skillSources(project).catch(() => null);
+    if (sources) {
+      const inWorktree = worktree ? await listSkillDirs(path.join(worktree.path, '.claude', 'skills')) : [];
+      await this.convertOpenedSkills(project, profile, { ...sources, projectSkills: [...sources.projectSkills, ...inWorktree] });
+    }
     return {
       company: config.companyName,
       // O workspace do projeto (aba do quadro) entra na ficha como contexto (cliente, área…).
@@ -1315,10 +1340,8 @@ export class StaffService {
       servers,
       // As chaves de todas as conexões SSH do projeto: nenhum funcionário precisa ler uma (quem lê é o ssh).
       serverKeys: await keyFilesOf(project.path),
-      librarySkills: profile.skills.length ? await librarySkillsOf(profile.skills, this.opts.skillLibraryDir) : [],
-      // As skills da ficha que ainda existem (biblioteca, projeto ou conta): a ficha avisa as que sumiram (ver knownSkills).
-      ...(knownSkills ? { knownSkills } : {}),
-      skillLibraryDir: this.opts.skillLibraryDir,
+      // As skills que existem agora (Global e do projeto): a conversa marca, esconde e avisa as que sumiram (ver skillAccess.ts).
+      ...(sources ?? {}),
       codex: config.codexReview,
       internetAccess: config.internetAccess,
       // "Permitir que o GPT use meu Chrome": lida ao abrir a conversa (o MCP do Chrome entra só se ligada, ver prepareCodexRun).
@@ -1337,20 +1360,35 @@ export class StaffService {
   }
 
   /**
-   * Os nomes das skills que existem agora: do projeto, da conta (sincronizadas incluídas) e da biblioteca. Erro na leitura: null
-   * (a ficha sai sem a marcação, em vez de derrubar a abertura da conversa).
+   * As skills que existem agora: a Global (conta e sincronizadas) e a do projeto. Erro na leitura: a quem chama decide (ver `context`
+   * e `skillRefsOf`).
    */
-  private async existingSkills(project: Project, names: string[]): Promise<string[] | null> {
-    try {
-      const [inventory, account, library] = await Promise.all([
-        this.adapter.getProjectInventory(project.id),
-        this.adapter.getUserScope(),
-        librarySkillsOf(names, this.opts.skillLibraryDir),
-      ]);
-      return [...(inventory?.skills ?? []), ...account.skills].map((s) => s.name).concat(library);
-    } catch {
-      return null;
-    }
+  private async skillSources(project: Project): Promise<{ globalSkills: SkillSource[]; projectSkills: SkillSource[] }> {
+    return skillSourcesOf(this.adapter, project.id);
+  }
+
+  /**
+   * Nomes antigos (sem escopo) da ficha viram refs ao salvar (contratar, editar, copiar). Sem nome antigo, não lê nada. Se não der para
+   * ler as skills, recusa: convertir no escuro mandaria um nome do projeto para a Global.
+   */
+  private async skillRefsOf(project: Project, skills: string[]): Promise<string[]> {
+    if (!skills.some((s) => !isSkillRef(s))) return skills;
+    const sources = await this.skillSources(project).catch(() => {
+      throw new StaffError('não consegui ler as skills agora: tente de novo');
+    });
+    return convertSkills(skills, knownNamesOf(sources)).skills;
+  }
+
+  /**
+   * A ficha aberta numa conversa, com nome antigo (ainda não migrada): converte e grava só o que mudou. Lê a ficha do disco de novo
+   * para não regravar por cima de uma edição mais nova; o `profile` de quem chama também recebe as refs.
+   */
+  private async convertOpenedSkills(project: Project, profile: StaffProfile, sources: { globalSkills: SkillSource[]; projectSkills: SkillSource[] }): Promise<void> {
+    if (!profile.skills.some((s) => !isSkillRef(s))) return;
+    const converted = convertSkills(profile.skills, knownNamesOf(sources)).skills;
+    const fresh = await readProfile(project.path, profile.id);
+    if (fresh && fresh.skills.some((s) => !isSkillRef(s))) await saveProfile(project.path, { ...fresh, skills: convertSkills(fresh.skills, knownNamesOf(sources)).skills });
+    profile.skills = converted;
   }
 
   /**

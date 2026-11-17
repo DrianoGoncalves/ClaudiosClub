@@ -195,13 +195,13 @@ export function readResult(out: ClaudeOutput): ReadResult {
 }
 
 /** O custo que o `claude` informou nesta tentativa (`total_cost_usd`), ou null se não veio. Não estima nada. */
-function costOf(out: ClaudeOutput): number | null {
+export function costOf(out: ClaudeOutput): number | null {
   const v = parseJsonObject(out.stdout)?.total_cost_usd;
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
 }
 
 /** Gasto de uma geração num modelo (uma linha do ledger, sem o que identifica a geração). */
-type SpendRow = Omit<SystemCostRow, 'at' | 'projectId' | 'source'>;
+export type SpendRow = Omit<SystemCostRow, 'at' | 'projectId' | 'source'>;
 const SPEND_FIELDS = ['costUsd', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreationTokens'] as const;
 
 /** O que a geração gastou: `usd` (o total, para o status) e as linhas por modelo (para o ledger). */
@@ -214,7 +214,7 @@ interface Spend {
  * O gasto que o `claude` informou nesta tentativa. Um modelo só: o `usage` do total. Mais de um: o `modelUsage` de cada um.
  * Só números válidos. É o que o CLI informou; o ledger recalcula o custo pelos tokens.
  */
-function spendOf(out: ClaudeOutput): SpendRow[] {
+export function spendOf(out: ClaudeOutput): SpendRow[] {
   const obj = parseJsonObject(out.stdout);
   if (!obj) return [];
   const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);

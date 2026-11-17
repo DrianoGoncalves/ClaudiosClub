@@ -8,18 +8,22 @@ import { clubBlockedOrigins } from '../clubAddress';
 import { MYCO_HOME } from '../config';
 import { lazyNavegadorCommand } from '../navegadorMcp';
 import { ROOT } from '../root';
-import { isClaudeRoot, renderFicha, systemPrompt, type CleanBrowserInfo, type CodexChromeInfo, type FichaContext, type SshInfo, type TeamMember } from './ficha';
-import { FTP_MCP_NAME, GPT_MCP_NAME } from '../../shared/model';
+import { isClaudeRoot, renderFicha, systemPrompt, type CleanBrowserInfo, type CodexChromeInfo, type FichaContext, type MemoriaInfo, type SshInfo, type TeamMember } from './ficha';
+import { FTP_MCP_NAME, GPT_MCP_NAME, MEMORIA_MCP_NAME } from '../../shared/model';
 import { DEFAULT_SECRETS_DIR } from '../secretVault';
 import { ftpMcpServerConfig } from './ftpMcp';
+import { memoriaMcpServer } from './memoriaMcp';
 import { SSH_MCP_BUNDLE, SSH_MCP_NAME, SSH_READ_TOOLS, WRITE_AUTONOMY, sshMcpServerConfig } from './sshMcp';
-import { CLEAN_BROWSER_MCP_NAME, CODEX_CHROME_MCP_NAME, CODEX_SSH_MCP_NAME, type CodexExtraMcp, type CodexMcpServer } from '../chat/codexArgs';
+import { CLEAN_BROWSER_MCP_NAME, CODEX_CHROME_MCP_NAME, CODEX_SSH_MCP_NAME, type CodexAgentRole, type CodexExtraMcp, type CodexMcpServer } from '../chat/codexArgs';
 import { codexMcpAccess } from './mcpAccess';
 import { gptMcpServerConfig } from './gptMcp';
 import { buildMcpConfig, codexMcpServers, mcpWriteFileFor, type CodexMcpMotivo } from './mcp';
 import { MCP_LAUNCH_BUNDLE, mcpLaunchBundle } from './mcpLaunch';
 import { ensurePlaybookAgents } from './playbookAgents';
+import { writeCodexAgents } from './codexAgents';
+import { PLAYBOOK_AGENTS } from '../../shared/agentPresets';
 import { buildSkillPlugin } from '../skillLibrary';
+import { listSkillDirs, skillPlanOf, type SkillSource } from '../skillAccess';
 import { hasGuide } from '../projectGuide';
 import { ensureMemory, fichaFile, historyDir, memoryFile, profileFile, staffDir, writeAtomic } from './store';
 import { readPersonMemory } from './personalMemory';
@@ -42,12 +46,10 @@ export interface LaunchContext {
   servers?: ServerInfo[];
   /** Arquivos das chaves das conexões SSH do projeto (a sessão não pode ler). */
   serverKeys?: string[];
-  /** Skills da ficha que estão na biblioteca do Claudio’s Club (vão no plugin da sessão). */
-  librarySkills?: string[];
-  /** Skills que existem agora (biblioteca, projeto ou conta): a ficha avisa as da lista que sumiram (ver FichaContext.knownSkills). */
-  knownSkills?: string[];
-  /** Pasta da biblioteca (os testes trocam). */
-  skillLibraryDir?: string;
+  /** Skills Globais que existem agora (`~/.claude/skills`, com as da conta e as sincronizadas). Ausente = nenhuma (ver skillAccess.ts). */
+  globalSkills?: SkillSource[];
+  /** Skills do projeto que existem agora (`<projeto>/.claude/skills`). Numa worktree, prepareRun soma a pasta dela. */
+  projectSkills?: SkillSource[];
   /** Quem reporta a este funcionário (a seção "Sua equipe" da ficha). */
   team?: TeamMember[];
   /** Cargos prontos para contratar por roleId (só quem pode contratar; ver FichaContext.roles). */
@@ -118,6 +120,8 @@ export interface PreparedRun {
   cleanBrowser: boolean;
   /** O MCP de SSH (`myco-ssh`) entrou nesta conversa (ver sshLaunchOf): o buildClaudeArgs põe as de leitura em --allowedTools. */
   sshMcp: boolean;
+  /** O MCP da memória (`myco-memoria`) entrou nesta conversa em `plan` (ver memoriaLaunchOf): o buildClaudeArgs o põe em --allowedTools. */
+  memoriaMcp: boolean;
 }
 
 /**
@@ -130,11 +134,13 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   const dir = path.join(ctx.runDir, sessionId);
   // MCP de SSH: o mesmo do Codex (ver sshLaunchOf). O terminal não tem ssh (o hook remote-guard barra), então o acesso é só por ele.
   const ssh = sshLaunchOf(profile, ctx, cwd);
+  // Em plan, o MCP que grava só a memória da própria ficha (ver memoriaLaunchOf): a edição de arquivos está bloqueada.
+  const memoria = memoriaLaunchOf(profile, ctx);
   // Navegador limpo: pela ficha (`browser` efetivo não entra aqui), então vale sem a extensão do Chrome. O SSH não entra aqui: no Claude o terminal
   // tem rede, então tirar o navegador por causa do SSH não fecharia canal nenhum (no Codex, a sandbox fecha a rede e o caso é outro; ver cleanBrowserOf).
   const cleanDir = path.join(dir, 'navegador');
   const clean = cleanBrowserOf(ctx.cleanBrowser ?? profile.browser, ctx, false, cleanDir);
-  const fichaCtx = await writeFicha(profile, ctx, away, { ssh: ssh.info, cleanBrowser: clean.info });
+  const fichaCtx = await writeFicha(profile, await withCwdSkills(ctx, cwd, away), away, { ssh: ssh.info, cleanBrowser: clean.info, memoria: memoria.info });
   const systemPromptFile = path.join(dir, 'system.md');
   // Memória pessoal: só no system.md desta execução (fora do .md da ficha, que vai para o git do projeto).
   const personal = profile.personId ? await readPersonMemory(profile.personId) : null;
@@ -144,7 +150,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   let mcpConfigPath: string | null = null;
   // O `perguntar_gpt` entra só com o Codex ligado nas configurações e só aqui, no motor Claude (no Codex, os MCPs da ficha entram por prepareCodexRun).
   const gpt = ctx.codex === true && profile.engine !== 'codex';
-  if (profile.mcps !== null || ftpServers.length || gpt || clean.mcp || ssh.server) {
+  if (profile.mcps !== null || ftpServers.length || gpt || clean.mcp || ssh.server || memoria.server) {
     mcpConfigPath = path.join(dir, 'mcp.json');
     // Os da biblioteca do Club entram sem valor: o comando é o lançador, que tira o segredo do cofre ao subir (mcpLaunch.ts).
     const config = profile.mcps !== null ? await buildMcpConfig(ctx.projectPath, profile.mcps, ctx.claudeConfigFile) : { mcpServers: {} };
@@ -160,6 +166,8 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     }
     // O myco-ssh: só nomes e a escrita do lançamento (nenhuma chave; ver sshMcpServerConfig).
     if (ssh.server) config.mcpServers[SSH_MCP_NAME] = { type: 'stdio', command: ssh.server.command, args: ssh.server.args };
+    // O myco-memoria: só o projeto e a ficha dona (nada de segredo; ver memoriaMcpServer).
+    if (memoria.server) config.mcpServers[MEMORIA_MCP_NAME] = { type: 'stdio', command: memoria.server.command, args: memoria.server.args };
     await writeAtomic(mcpConfigPath, JSON.stringify(config, null, 2));
   }
   // Lembrete do estilo a cada mensagem (hook UserPromptSubmit): só com estilo no motor Claude; sem ele, nem arquivo nem hook.
@@ -182,6 +190,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     clubGuard: ctx.clubGuard,
     hooksDir,
     mcpWriteFile: hasPolicy ? mcpWriteFilePath : null,
+    skillOverrides: skillOverridesOf(fichaCtx.skillPlan?.off ?? []),
   });
   await writeAtomic(settingsFile, JSON.stringify(settings, null, 2));
   const agents = await ensurePlaybookAgents(profile, {
@@ -198,8 +207,9 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     agentsFile = path.join(dir, 'agents.json');
     await writeAtomic(agentsFile, JSON.stringify(agents.inline, null, 2));
   }
-  // As skills da biblioteca que a ficha tem: um plugin só desta sessão (as outras não veem).
-  const plugin = ctx.librarySkills?.length ? await buildSkillPlugin(ctx.librarySkills, path.join(dir, 'myco-plugin'), ctx.skillLibraryDir) : null;
+  // As skills do projeto que a Global de mesmo nome esconderia (ver skillAccess.planSkills): um plugin só desta sessão. Sempre roda,
+  // para apagar o plugin de um lançamento anterior mesmo quando a ficha não marca nada.
+  const plugin = await buildSkillPlugin(fichaCtx.skillPlan?.plugin ?? [], path.join(dir, 'myco-plugin'));
   return {
     systemPromptFile,
     mcpConfigPath,
@@ -216,6 +226,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     manualEditable: !away && isClaudeRoot(ctx.projectPath),
     cleanBrowser: clean.mcp !== null,
     sshMcp: ssh.server !== null,
+    memoriaMcp: memoria.server !== null,
   };
 }
 
@@ -230,6 +241,8 @@ export interface PreparedCodexRun {
   threadFile: string;
   /** MCP de SSH (só conexões SSH da ficha; null = sem). Nunca no projeto do próprio Claudio’s Club (ver `sshLaunchOf`). */
   sshMcp: CodexMcpServer | null;
+  /** MCP da memória da própria ficha (null = sem). Só em `plan`, onde a sandbox é de só leitura (ver `memoriaLaunchOf`). */
+  memoriaMcp: CodexMcpServer | null;
   /** MCP do Chrome do usuário (null = sem). Só com a opção ligada, Navegador na ficha e sem o MCP de SSH na conversa (ver `codexChromeOf`). */
   chromeMcp: CodexMcpServer | null;
   /** MCP do navegador limpo (null = sem). Pedido na ficha (Navegador), com ou sem a extensão do Chrome; ver `cleanBrowserOf`. */
@@ -238,6 +251,8 @@ export interface PreparedCodexRun {
   extraMcps: CodexExtraMcp[];
   /** O arquivo de lançamento desta execução (`codex-mcp.json`, com os valores da ficha expandidos), ou null se não gravou. O CodexProcess o apaga ao fechar a conversa. */
   mcpSnapshotFile: string | null;
+  /** Agents da ficha e do roteiro como subagents do Codex (TOML já gravado na pasta da conversa; ver `writeCodexAgents`). */
+  agents: CodexAgentRole[];
 }
 
 /**
@@ -347,6 +362,21 @@ export function sshServersOf(profile: Pick<StaffProfile, 'servers'>, servers: Se
   return profile.servers.filter((n) => ssh.has(n));
 }
 
+/**
+ * O MCP da memória da própria ficha (`myco-memoria`), igual nos dois motores: só com autonomia `plan` (nas outras a edição de arquivos funciona,
+ * e o comportamento delas não muda) e com o acesso a ele ligado na ficha (`mcpAccess`: `off`, e também `readonly` e `ask`, que não têm lista de
+ * leitura para esta ferramenta, deixam o MCP de fora). Sem pacote do build ele roda pelo tsx, como o de FTP. `info` é o que a ficha diz
+ * (undefined: não é plan). O MCP só leva o projeto e a ficha dona; o que ele grava está limitado em memoriaMcp.ts.
+ */
+export function memoriaLaunchOf(
+  profile: Pick<StaffProfile, 'id' | 'autonomy' | 'mcpAccess'>,
+  ctx: Pick<LaunchContext, 'projectPath'>,
+): { info?: MemoriaInfo; server: { command: string; args: string[] } | null } {
+  if (profile.autonomy !== 'plan') return { server: null };
+  if (!codexMcpAccess(profile.mcpAccess, MEMORIA_MCP_NAME, [], null).attached) return { info: { mcp: false }, server: null };
+  return { info: { mcp: true }, server: memoriaMcpServer({ projectPath: ctx.projectPath, staffId: profile.id }) };
+}
+
 /** O MCP de SSH (`myco-ssh`) de uma conversa, igual nos dois motores (ver `sshLaunchOf`). */
 export interface SshLaunch {
   /** O que a ficha diz (undefined: a ficha não tem conexão SSH). */
@@ -399,8 +429,9 @@ export function sshLaunchOf(
 
 /**
  * O que o Codex precisa para a conversa: a ficha atualizada (e a memória criada) e o texto de instruções. Os MCPs são o de SSH, o do Chrome,
- * o do navegador limpo e os da biblioteca e da ficha (projeto, usuário e local, pelo lançador; ver `codexMcpServers`). Sem hooks, agents do
- * roteiro nem skills da biblioteca: não existem no Codex. O texto vai em `developer_instructions` na linha de comando; passando de ~24 KB (ou
+ * o do navegador limpo e os da biblioteca e da ficha (projeto, usuário e local, pelo lançador; ver `codexMcpServers`). Os agents da ficha e do
+ * roteiro viram subagents do Codex (um TOML por agent, ver codexAgents.ts). Sem hooks nem plugin de skills: não existem no Codex. As skills marcadas que existem entram na ficha como lista (nome, descrição e o caminho do
+ * SKILL.md, sem copiar nada; ver ficha.ts). O texto vai em `developer_instructions` na linha de comando; passando de ~24 KB (ou
  * no Windows) o CodexProcess o manda no começo do prompt da primeira mensagem (o Codex não tem arquivo para isso sem trocar as instruções base).
  */
 export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string): Promise<PreparedCodexRun> {
@@ -410,6 +441,9 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
   const ssh = sshLaunchOf(profile, ctx, cwd);
   let sshMcp: CodexMcpServer | null = null;
   if (ssh.server) sshMcp = { ...ssh.server, cwd: ROOT, ...(ssh.enabledTools ? { enabledTools: ssh.enabledTools } : {}) };
+  // Memória da própria ficha: em plan a sandbox é de só leitura e não aceita exceção por caminho, então o MCP (fora dela) é a porta de escrita.
+  const memoria = memoriaLaunchOf(profile, ctx);
+  const memoriaMcp: CodexMcpServer | null = memoria.server ? { ...memoria.server, cwd: ROOT } : null;
   // Chrome do usuário: depois do SSH, porque o MCP de SSH na conversa desliga o Chrome (não juntar servidor e logins).
   const chromeDir = path.join(ctx.runDir, sessionId, 'chrome');
   const chrome = codexChromeOf(profile, ctx, sshMcp !== null, chromeDir);
@@ -429,8 +463,30 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
   });
   // O que o Codex deixou só leitura por causa de "pede antes" (a ficha diz): o SSH e os MCPs da ficha. O Chrome não entra aqui: sem lista de leitura, ask o desliga.
   const asked = [...(ssh.askAsReadonly ? [CODEX_SSH_MCP_NAME] : []), ...extra.asked];
-  const fichaCtx = await writeFicha(profile, ctx, away, {
+  // Agents da ficha e do roteiro como subagents do Codex. Cria os presets que faltam (igual ao Claude, ver prepareRun) e grava um TOML por agent
+  // na pasta da conversa em run/: a sandbox a nega (o agente não lê nem troca o TOML), uma por conversa (fichas concorrentes não se
+  // sobrescrevem) e fora do git.
+  const userAgentsDir = ctx.userAgentsDir ?? path.join(defaultLocations().home, 'agents');
+  const agentNames = [...new Set([...(profile.playbook ? PLAYBOOK_AGENTS[profile.playbook] : []), ...profile.agents])];
+  const created = await ensurePlaybookAgents(profile, {
+    projectPath: ctx.projectPath,
+    cwd,
+    userAgentsDir,
+    backupDir: path.join(ctx.runDir, 'agent-backups'),
+  });
+  if (created.created.length) {
+    console.log(`[staff] ${profile.name}: criado ${created.created.join(', ')} em ${path.join(ctx.projectPath, '.claude', 'agents')} (roteiro da ficha)`);
+  }
+  const { roles: agentRoles, missing: agentsMissing } = await writeCodexAgents(agentNames, {
+    cwd,
+    projectPath: ctx.projectPath,
+    userAgentsDir,
+    outDir: path.join(ctx.runDir, sessionId, 'codex-agents'),
+  });
+  const fichaCtx = await writeFicha(profile, await withCwdSkills(ctx, cwd, away), away, {
+    codexAgents: { available: agentRoles.map((r) => r.name), missing: agentsMissing },
     ssh: ssh.info,
+    memoria: memoria.info,
     codexChrome: chrome.info,
     codexMcpAsked: asked,
     codexMcpOut: extra.out,
@@ -452,10 +508,12 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
     ],
     threadFile: path.join(ctx.runDir, sessionId, 'codex-thread.json'),
     sshMcp,
+    memoriaMcp,
     chromeMcp: chrome.mcp,
     cleanMcp: clean.mcp,
     extraMcps: extra.servers,
     mcpSnapshotFile: extra.snapshotFile,
+    agents: agentRoles,
   };
 }
 
@@ -496,7 +554,7 @@ export const REMOTE_GUARD_MATCHER = 'Bash|PowerShell';
 export function staffSettings(
   p?: Pick<StaffProfile, 'personality' | 'engine'>,
   styleFile?: string,
-  o: { clubGuard?: boolean; hooksDir?: string; mcpWriteFile?: string | null } = {},
+  o: { clubGuard?: boolean; hooksDir?: string; mcpWriteFile?: string | null; skillOverrides?: Record<string, 'off'> } = {},
 ) {
   const guards = o.hooksDir ?? HOOKS_DIR;
   const hook = (stage: 'pre' | 'post') => [
@@ -516,18 +574,40 @@ export function staffSettings(
   return {
     hooks: { PreToolUse: hook('pre'), PostToolUse: hook('post'), ...style },
     ...(styled ? { outputStyle: 'default' } : {}),
+    // Skills da Global (e as de projeto que ela esconde) que a ficha não marca: `off` some com o nome da pasta nesta conversa.
+    // O `myco:<nome>` do plugin da sessão não é afetado (ver skillAccess.planSkills). Sem nenhuma, a chave não vai.
+    ...(o.skillOverrides && Object.keys(o.skillOverrides).length ? { skillOverrides: o.skillOverrides } : {}),
   };
+}
+
+/** `skillOverrides` do settings: cada nome que não deve chegar nativo vira `off`. */
+export function skillOverridesOf(off: string[]): Record<string, 'off'> {
+  return Object.fromEntries(off.map((n) => [n, 'off' as const]));
+}
+
+/**
+ * O contexto com as skills que a conversa vê: numa worktree (`away`), as do projeto da worktree entram junto com as do projeto
+ * (a Claude Code carrega as duas pastas). Fora dela, o contexto fica como está.
+ */
+export async function withCwdSkills(ctx: LaunchContext, cwd: string, away: boolean): Promise<LaunchContext> {
+  if (!away) return ctx;
+  const here = await listSkillDirs(path.join(cwd, '.claude', 'skills'));
+  return { ...ctx, projectSkills: [...(ctx.projectSkills ?? []), ...here] };
 }
 
 /** O que cada lançamento sabe e a ficha diz além do contexto (ver writeFicha). Ausente = nada a dizer sobre ele. */
 export interface FichaRunInfo {
   /** O MCP de SSH da conversa (nos dois motores; ver sshLaunchOf). */
   ssh?: SshInfo;
+  /** O MCP da memória da própria ficha, em `plan` (nos dois motores; ver memoriaLaunchOf). */
+  memoria?: MemoriaInfo;
   codexChrome?: CodexChromeInfo;
   codexMcpAsked?: string[];
   /** Codex: os MCPs da ficha que ficaram fora da conversa, com o motivo (ver `codexMcpServers`). */
   codexMcpOut?: Array<{ name: string; motivo: CodexMcpMotivo }>;
   cleanBrowser?: CleanBrowserInfo;
+  /** Codex: os agents que viraram subagents e os que a ficha pede mas não existem (ver `writeCodexAgents`). */
+  codexAgents?: { available: string[]; missing: string[] };
 }
 
 /**
@@ -536,7 +616,7 @@ export interface FichaRunInfo {
  */
 export async function writeFicha(
   profile: StaffProfile,
-  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'roles' | 'librarySkills' | 'knownSkills' | 'codex' | 'internetAccess' | 'clubGuard' | 'lockedByCodexManager'>,
+  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'roles' | 'globalSkills' | 'projectSkills' | 'codex' | 'internetAccess' | 'clubGuard' | 'lockedByCodexManager'>,
   absolute = false,
   run: FichaRunInfo = {},
 ): Promise<FichaContext> {
@@ -554,8 +634,8 @@ export async function writeFicha(
     servers: ctx.servers,
     team: ctx.team,
     roles: ctx.roles,
-    librarySkills: ctx.librarySkills,
-    knownSkills: ctx.knownSkills,
+    // Lido a cada sessão (writeFicha roda em prepareRun): o plano (marcadas, o que some, o plugin e o que falta) sai da ficha e do disco agora.
+    skillPlan: await skillPlanOf(profile.skills, { globalSkills: ctx.globalSkills ?? [], projectSkills: ctx.projectSkills ?? [] }),
     // Lido a cada sessão (writeFicha roda em prepareRun): criar ou apagar o SPEC.md vale na próxima conversa.
     guide: await hasGuide(ctx.projectPath),
     codex: ctx.codex,
@@ -563,10 +643,12 @@ export async function writeFicha(
     clubGuard: ctx.clubGuard,
     lockedByCodexManager: ctx.lockedByCodexManager,
     ssh: run.ssh,
+    memoria: run.memoria,
     codexChrome: run.codexChrome,
     codexMcpAsked: run.codexMcpAsked,
     codexMcpOut: run.codexMcpOut,
     cleanBrowser: run.cleanBrowser,
+    codexAgents: run.codexAgents,
     // Mesma regra de prepareRun (manualEditable): só o projeto do Claudio’s Club, fora de worktree.
     manualEditable: !absolute && isClaudeRoot(ctx.projectPath),
   };

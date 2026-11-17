@@ -58,6 +58,7 @@ import {
   switchEngine,
   useCodexCatalog,
 } from './codexEngine';
+import { ModelObsoleteNote, obsoleteFor } from './ModelObsoleteNote';
 import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, modelLabel, PLAYBOOK_OPTIONS } from './templates';
 
 // Questionário do funcionário: contratar (vira a ficha em <projeto>/.myco/staff/) ou editar
@@ -220,6 +221,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     [],
   );
   const codex = engine === 'codex';
+  // O motor recusou o modelo salvo na ficha: o aviso vale enquanto o formulário ainda o mantém (trocar o modelo ou o motor tira).
+  const obsolete = obsoleteFor(editing, model || null, engine);
   // Conexão FTP marcada na ficha: o Codex não roda (SSH roda).
   const ftpBlocked = codexBlockedByServers(servers, serverList);
   // Quem adota uma sessão do Claude não escolhe motor; nos outros, só com o Codex ligado ou quando a ficha já é do Codex.
@@ -721,6 +724,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           </label>
         </div>
         )}
+        {obsolete && <ModelObsoleteNote obsolete={obsolete} />}
 
         {showFallback && <FallbackField main={engine} servers={servers} serverList={serverList} draft={fallback} onChange={setFallback} />}
 

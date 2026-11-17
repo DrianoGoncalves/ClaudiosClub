@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Autonomy, ChatAttachment, ChatItem, CodexEffort, Engine, EngineOverride, SendPriority, UiLevel } from '../../../shared/model';
+import type { Autonomy, ChatAttachment, ChatItem, CodexEffort, Engine, EngineOverride, InboxItem, SendPriority, UiLevel } from '../../../shared/model';
 import { alertError, api, isPairingError, type PermissionOpts } from '../api';
 import { ArrowDownIcon, FileDiffIcon, ImageIcon, McpIcon, SendIcon, StopIcon } from '../icons';
 import { t, locale } from '../i18n';
@@ -22,6 +22,8 @@ import { useChatDetail } from './chatDetail';
 import { type ChatFocus, findQuoteItem } from './chatFocus';
 import { renderWindow, WINDOW_STEP } from './chatWindow';
 import { type DenialAction, DenialNotice } from './DenialNotice';
+import { errorNoticesFor, secretNoticesFor } from './secretAlerts';
+import { SecretNotice } from './SecretNotice';
 import { actionableDenials, denialHintOf } from './denialHint';
 import { MoreTabs } from './MoreTabs';
 import { MsgTime } from './MsgTime';
@@ -71,6 +73,10 @@ interface Props {
   projectRoot?: string;
   /** Abre um arquivo do projeto (relativo) no editor de arquivos; sem ele, os caminhos da resposta são só texto. */
   onOpenFile?: (path: string) => void;
+  /** A caixa "precisa de mim": os avisos de segredo desta conversa viram balão aqui (só na tela, fora da conversa do modelo). */
+  inbox?: InboxItem[];
+  /** "Ignorar" do balão: o mesmo da caixa, então o aviso some dos dois lados. */
+  onDismissSecret?: (item: InboxItem) => Promise<void>;
 }
 
 /**
@@ -84,8 +90,14 @@ export interface MoreTab {
 }
 
 /** Conversa com o funcionário dentro do Claudio’s Club, sem terminal. */
-export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, engine = 'claude', top, moreTabs = [], focus = null, onFocusDone, awaiting = false, projectRoot, onOpenFile }: Props) {
+export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, engine = 'claude', top, moreTabs = [], focus = null, onFocusDone, awaiting = false, projectRoot, onOpenFile, inbox, onDismissSecret }: Props) {
   const chat = useChat(projectId, sessionId, staffId, name);
+  const secrets = useMemo(() => (onDismissSecret ? secretNoticesFor(inbox, chat.sessionId ?? sessionId) : []), [inbox, onDismissSecret, chat.sessionId, sessionId]);
+  // Erro da caixa como balão (sem "ignorar": o servidor não dispensa erro, ele some quando você manda mensagem). O aviso que a conversa já tem no fluxo não se repete.
+  const errors = useMemo(
+    () => errorNoticesFor(inbox, chat.sessionId ?? sessionId, chat.items.flatMap((i) => (i.kind === 'notice' ? [i.text] : []))),
+    [inbox, chat.items, chat.sessionId, sessionId],
+  );
   const todos = useMemo(() => todosFrom(chat.items), [chat.items]);
   useEffect(() => {
     if (chat.sessionId && chat.sessionId !== sessionId) onSessionStarted?.(chat.sessionId);
@@ -146,7 +158,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   useLayoutEffect(() => {
     const el = list.current;
     if (el && stick.current && !opening.holding()) el.scrollTop = el.scrollHeight;
-  }, [chat.items, busy, showTools]);
+  }, [chat.items, busy, showTools, secrets.length, errors.length]);
   // Vindo de um aviso, rola até o balão dele (depois de abrir no fim) e não deixa o fim puxar de volta.
   const focusing = useChatFocus({ list, stick, items: chat.items, loading: chat.loading, sessionId, focus, onDone: onFocusDone, onAway: setAway });
 
@@ -449,6 +461,8 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
               }
             />
           ))}
+          {onDismissSecret && secrets.map((item) => <SecretNotice key={item.id} item={item} onIgnore={onDismissSecret} onOpenFile={onOpenFile} />)}
+          {errors.map((item) => <SecretNotice key={item.id} item={item} />)}
           {busy && !streaming && !pending && (
             <div className="chat-typing" aria-live="polite">
               {chat.state?.compacting ? t('chat.compactingChat') : t('chat.working', { name })}
@@ -505,7 +519,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           </div>
         )}
 
-        {chat.error && <p className="error small">{chat.error}</p>}
+        {chat.error && !errors.some((e) => e.summary === chat.error) && <p className="error small">{chat.error}</p>}
 
         <TodoPanel todos={todos} />
 
@@ -639,14 +653,14 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           )}
           <ContextMeter context={chat.context} />
           {chat.sessionId && (
-            <button type="button" className="chat-chip" onClick={() => void chat.compact()} disabled={busy || !!blocked} title={t('chat.compactHelp')}>
+            <button type="button" className="btn-secondary" onClick={() => void chat.compact()} disabled={busy || !!blocked} title={t('chat.compactHelp')}>
               {chat.state?.compacting ? t('chat.compacting') : t('chat.compact')}
             </button>
           )}
           {background.length > 0 && (
             <button
               type="button"
-              className="chat-chip btn-toggle"
+              className="btn-secondary btn-toggle"
               aria-pressed={bgOpen}
               title={`${background.map((task) => task.label).join('\n')}\n\n${t('chat.clickToStop')}`}
               onClick={() => setBgOpen(!bgOpen)}

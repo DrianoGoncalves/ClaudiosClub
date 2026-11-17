@@ -924,7 +924,7 @@ describe('ChatManager: Claude ou Codex', () => {
               cwd: root,
               args: [],
               engine: 'codex',
-              codex: { autonomy: 'acceptEdits', model: 'gpt-6-sol', effort: 'high', instructions: 'Ficha', writableRoots: [], readOnlyPaths: [], secrets: { projectPath: root, home: path.join(root, 'sem-home'), mycoHome: path.join(root, 'sem-myco') }, threadId: null, threadFile: path.join(root, 'codex-1', 'codex-thread.json'), mycoUrl: 'http://127.0.0.2:4848' },
+              codex: { autonomy: 'acceptEdits', model: 'gpt-6-sol', effort: 'high', instructions: 'Ficha', writableRoots: [], readOnlyPaths: [], agents: [], secrets: { projectPath: root, home: path.join(root, 'sem-home'), mycoHome: path.join(root, 'sem-myco') }, threadId: null, threadFile: path.join(root, 'codex-1', 'codex-thread.json'), mycoUrl: 'http://127.0.0.2:4848' },
             }
           : { sessionId: sessionId ?? 'claude-1', cwd: root, args: ['--session-id', 'claude-1', '--model', 'sonnet'] },
       spawnImpl,
@@ -984,7 +984,7 @@ describe('ChatManager: Claude ou Codex', () => {
               cwd: root,
               args: [],
               engine: 'codex',
-              codex: { autonomy: 'manual', model: 'gpt-6-sol', effort: 'high', instructions: 'Ficha', writableRoots: [], readOnlyPaths: [], secrets: { projectPath: root, home: path.join(root, 'sem-home'), mycoHome: path.join(root, 'sem-myco') }, threadId: null, threadFile: path.join(root, 'codex-u', 'codex-thread.json'), mycoUrl: 'http://127.0.0.2:4848' },
+              codex: { autonomy: 'manual', model: 'gpt-6-sol', effort: 'high', instructions: 'Ficha', writableRoots: [], readOnlyPaths: [], agents: [], secrets: { projectPath: root, home: path.join(root, 'sem-home'), mycoHome: path.join(root, 'sem-myco') }, threadId: null, threadFile: path.join(root, 'codex-u', 'codex-thread.json'), mycoUrl: 'http://127.0.0.2:4848' },
             }
           : { sessionId: sessionId ?? 'claude-u', cwd: root, args: ['--session-id', 'claude-u', '--model', 'sonnet'] },
       spawnImpl: f.spawnImpl,

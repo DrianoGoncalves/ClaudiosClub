@@ -155,19 +155,19 @@ export function ChatSettingsBar({
         {!codex && (
           <span className="segmented">
             {PACES.map((p) => (
-              <button key={p.id} type="button" className="btn-toggle" aria-pressed={pace === p.id} disabled={off} title={p.help} onClick={() => void run({ model: p.model, effort: p.effort })}>
+              <button key={p.id} type="button" className="btn-secondary btn-toggle" aria-pressed={pace === p.id} disabled={off} title={p.help} onClick={() => void run({ model: p.model, effort: p.effort })}>
                 {p.label}
               </button>
             ))}
           </span>
         )}
         <span className="segmented">
-          <button type="button" className="btn-toggle" aria-pressed={asks} disabled={off} title={codex ? codexAutonomyHelp('manual') : t('chat.askBeforeHelp')} onClick={() => void run({ autonomy: 'manual' })}>
+          <button type="button" className="btn-secondary btn-toggle" aria-pressed={asks} disabled={off} title={codex ? codexAutonomyHelp('manual') : t('chat.askBeforeHelp')} onClick={() => void run({ autonomy: 'manual' })}>
             {t('chat.askBefore')}
           </button>
           <button
             type="button"
-            className="btn-toggle"
+            className="btn-secondary btn-toggle"
             aria-pressed={!asks}
             disabled={off}
             title={codex ? codexAutonomyHelp('auto') : t('chat.autoHelp')}
@@ -182,7 +182,7 @@ export function ChatSettingsBar({
   const autonomySelect = (
     <select
       aria-label={t('chat.autonomyAria')}
-      className={alert}
+      className={`setting-select ${alert}`.trim()}
       title={codex && autonomy ? codexAutonomyHelp(autonomy) : undefined}
       value={autonomy ?? ''}
       disabled={off}
@@ -204,6 +204,7 @@ export function ChatSettingsBar({
     return (
       <span className="chat-settings" title={catalog?.reason ?? hint}>
         <select
+          className="setting-select"
           aria-label={t('chat.modelAria')}
           value={codexModel}
           disabled={off}
@@ -217,7 +218,7 @@ export function ChatSettingsBar({
             </option>
           ))}
         </select>
-        <select aria-label={t('chat.effortAria')} value={codexEffort} disabled={off || !efforts.length} onChange={(e) => void run({ effort: e.target.value as CodexEffort })}>
+        <select className="setting-select" aria-label={t('chat.effortAria')} value={codexEffort} disabled={off || !efforts.length} onChange={(e) => void run({ effort: e.target.value as CodexEffort })}>
           {!codexEffort && <option value="">{t('chat.effortPlaceholder')}</option>}
           {efforts.map((e) => (
             <option key={e} value={e}>
@@ -231,7 +232,7 @@ export function ChatSettingsBar({
   }
   return (
     <span className="chat-settings" title={hint}>
-      <select aria-label={t('chat.modelAria')} value={model} disabled={off} onChange={(e) => void run({ model: e.target.value })}>
+      <select className="setting-select" aria-label={t('chat.modelAria')} value={model} disabled={off} onChange={(e) => void run({ model: e.target.value })}>
         {!model && <option value="">{t('chat.modelPlaceholder')}</option>}
         {MODELS.map((m) => (
           <option key={m.value} value={m.value}>
@@ -239,7 +240,7 @@ export function ChatSettingsBar({
           </option>
         ))}
       </select>
-      <select aria-label={t('chat.effortAria')} value={effort} disabled={off} onChange={(e) => void run({ effort: e.target.value as Effort })}>
+      <select className="setting-select" aria-label={t('chat.effortAria')} value={effort} disabled={off} onChange={(e) => void run({ effort: e.target.value as Effort })}>
         {!effort && <option value="">{t('chat.effortPlaceholder')}</option>}
         {EFFORTS.map((e) => (
           <option key={e} value={e}>

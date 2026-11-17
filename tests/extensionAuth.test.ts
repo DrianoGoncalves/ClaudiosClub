@@ -8,6 +8,7 @@ import zlib from 'node:zlib';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { SANDBOX_HOST, SessionTokens } from '../server/callers';
 import { extensionMay } from '../server/apiPolicy';
+import { secretInboxItem } from '../server/inboxItems';
 import { gate, type GateDeps } from '../server/gate';
 import { EXTENSION_ID, EXTENSION_KEY, EXTENSION_ORIGIN } from '../server/extension/identity';
 import { ExtensionTokens, MAX_EXTENSION_PAIRINGS } from '../server/extension/tokens';
@@ -733,6 +734,30 @@ describe('rotas da extensão', () => {
     for (let i = 0; i < 11; i++) pairs.push((await call(base, 'POST', '/api/ext/v1/pair', EXT, JSON.stringify({ code: 'AAAA-AAAA' }))).status);
     expect(pairs.slice(0, 10).every((s) => s === 403)).toBe(true);
     expect(pairs[10]).toBe(429);
+  });
+
+  it('inbox: aviso de segredo sai só com o resumo; palpite, motivo e dica mascarada ficam na tela do Club', async () => {
+    const hit = { id: 'sx:token do GitHub', sessionId: 'sx', label: 'token do GitHub', kind: 'api-key' as const, detail: 'github', verdict: 'exposed' as const, reason: 'provider-format' as const, hint: { prefix: 'ghp_', tail: 'ZyX9', length: 40 }, source: 'tool-result' as const, file: 'src/.env', cwd: '/proj', at: TODAY };
+    const item = secretInboxItem(hit, { projectId: 'p1', projectName: 'Site', sessionId: 'sx', staffId: 'ana', name: 'Ana' }, '/proj');
+    // A tela do Club recebe tudo isso (é o contrato do item)…
+    expect(item.secret).toMatchObject({ verdict: 'exposed', reason: 'provider-format', hint: { prefix: 'ghp_', tail: 'ZyX9', length: 40 } });
+    // …a extensão, nada além do resumo.
+    const own: ExtensionDeps = { ...deps, inbox: async () => [item] };
+    const srv = http.createServer(async (req, res) => {
+      const g = gate(req, res, gateDeps());
+      if (g?.extension) return handleExtension(req, res, g, own);
+      res.end();
+    });
+    servers.push(srv);
+    const base = (await listen(srv, '127.0.0.1'))!;
+    const r = await call(base, 'GET', '/api/ext/v1/inbox', EXT_AUTH(tokenFor().token));
+    expect(r.status).toBe(200);
+    const [got] = r.body.items as Array<Record<string, unknown>>;
+    expect(Object.keys(got!).sort()).toEqual(['at', 'id', 'kind', 'name', 'projectId', 'projectName', 'staffId', 'summary']);
+    const text = JSON.stringify(r.body);
+    expect(got).toMatchObject({ kind: 'secret', summary: 'Token do GitHub apareceu na saída de um comando: troque e não cole segredos na conversa' });
+    expect(got).not.toHaveProperty('secret');
+    for (const proibido of ['ZyX9', 'ghp_', 'hint', 'verdict', 'reason', 'exposed', 'provider-format', 'src/.env']) expect(text, proibido).not.toContain(proibido);
   });
 
   it('erro inesperado vira 500 "erro interno" (sem vazar detalhe)', async () => {

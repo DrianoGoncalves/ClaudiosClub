@@ -26,6 +26,7 @@ import { buildMcpConfig, listMcpServers } from '../server/staff/mcp';
 import { StaffError, StaffService } from '../server/staff/service';
 import { readProfile, saveChatChoice, StaffInputSchema, writeAtomic } from '../server/staff/store';
 import { BUILTIN_ROLES } from '../shared/roles';
+import { listRoles, saveRole } from '../server/roles';
 import { PERSONALITIES, PERSONALITY_PROMPTS, personalityName, personalityReminder, personalitySection } from '../shared/personality';
 import { staffSettings } from '../server/staff/launch';
 import { CLEAN_BROWSER_MCP_NAME } from '../server/chat/codexArgs';
@@ -817,6 +818,29 @@ describe('StaffService', () => {
       const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestor Mcp Sem', autonomy: 'acceptEdits', canHire: true, mcps: ['a'], launch: false }, true))!;
       const r = (await apiHire(svc, boss.id, { roleId: dev.id }))!;
       expect(r.profile.mcps).toEqual([]);
+    });
+
+    it('skills do cargo (nome sem escopo) entram como Global; o pedido com `skills` ganha; salvar o cargo não mexe nas fichas', async () => {
+      const role = await saveRole({ label: 'Cargo com skill', role: 'Deploy', mission: 'Publicar a versão', autonomy: 'manual', skills: ['deploy'] });
+      const id = role.find((r) => r.label === 'Cargo com skill')!.id;
+      const svc = service();
+      const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestor Skill Cargo', autonomy: 'acceptEdits', canHire: true, launch: false }, true))!;
+      const r = (await apiHire(svc, boss.id, { roleId: id }))!;
+      expect(r.profile.skills).toEqual(['global:deploy']);
+      const outro = (await apiHire(svc, boss.id, { roleId: id, skills: ['project:x'] }))!;
+      expect(outro.profile.skills).toEqual(['project:x']);
+
+      // Mudar o cargo depois não mexe na ficha que já foi contratada.
+      await saveRole({ id, label: 'Cargo com skill', role: 'Deploy', mission: 'Publicar a versão', autonomy: 'manual', skills: ['outra'] });
+      expect((await readProfile(projectPath, r.profile.id))!.skills).toEqual(['global:deploy']);
+    });
+
+    it('cargo com skill de nome inválido recusa ao salvar; no arquivo, a skill inválida sai sem derrubar o cargo', async () => {
+      await expect(saveRole({ label: 'Ruim', role: 'x', mission: 'x', autonomy: 'manual', skills: ['Com Espaço'] })).rejects.toThrow('skill do cargo');
+      const file = path.join(process.env.MYCO_HOME!, 'roles.json');
+      await fs.writeFile(file, JSON.stringify({ items: [{ id: 'com-lixo', label: 'Com lixo', role: 'x', mission: 'x', autonomy: 'manual', skills: ['bom', '../ruim'] }] }));
+      const cargos = await listRoles(file);
+      expect(cargos.find((c) => c.id === 'com-lixo')!.skills).toEqual(['bom']);
     });
   });
 

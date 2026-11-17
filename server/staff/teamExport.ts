@@ -6,11 +6,14 @@ import { cronError } from '../../shared/cron';
 import { PERSONALITIES } from '../../shared/personality';
 import { codexModelOrNull, codexProfileError } from '../chat/codexArgs';
 import { findSecret } from '../chat/secrets';
-import { LIBRARY_DIR, librarySkillsOf } from '../skillLibrary';
+import { defaultLocations } from '../adapters/claude/paths';
+import { NAME as SKILL_NAME } from '../adapters/claude/skillWrite';
+import { convertSkills, isSkillRef, parseSkillRef, type SkillSource } from '../skillAccess';
 import { AUTONOMY, McpAccessSchema, McpPolicySchema, StaffError, type StaffInputParsed } from './store';
 import { mcpAccessOfInput } from './mcpAccess';
 
-// Equipe em arquivo: as fichas escolhidas e as skills da biblioteca que elas usam, num JSON só.
+// Equipe em arquivo: as fichas escolhidas e as skills Globais que elas usam (com o conteúdo), num JSON só. Skill de projeto
+// vai só como ref (`project:<nome>`): quem importa confere se ela existe no projeto dele.
 //
 // Exportar usa allowlist: só os campos que definem o funcionário (cargo, missão, regras, motor, roteiro, rotinas…).
 // Id, conversas, servidores, conhecimento, memória, retrato, situação de temporário, ids de cofre e config MCP bruta
@@ -29,7 +32,6 @@ const MAX_STAFF = 50;
 const MAX_SKILLS = 100;
 const MAX_FILES_PER_SKILL = 50;
 
-const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/; // a mesma regra de skillLibrary.ts
 const REF = /^[A-Za-z0-9]{1,12}$/;
 // A mesma regra do ModelSchema do store (o modelo vai para a linha de comando).
 const MODEL = /^[\w.[\]-]{1,60}$/;
@@ -140,10 +142,11 @@ async function readSkillDir(root: string, skill: string, rel: string, out: Skill
 }
 
 /**
- * O arquivo de equipe das fichas dadas (já escolhidas por quem chama) e das skills da biblioteca que elas usam.
+ * O arquivo de equipe das fichas dadas (já escolhidas por quem chama) e das skills Globais que elas usam (`global:`, e o nome
+ * antigo, que é Global por padrão). `globalSkills`: as Globais que existem agora (nome e pasta). A skill que não existe sai só como ref.
  * Recusa a exportação inteira se alguma ficha ou skill tiver segredo, link, binário ou for grande demais.
  */
-export async function buildTeamExport(staff: StaffProfile[], opts: { libraryDir?: string; now?: Date } = {}): Promise<TeamFile> {
+export async function buildTeamExport(staff: StaffProfile[], opts: { globalSkills?: SkillSource[]; now?: Date } = {}): Promise<TeamFile> {
   // A referência é local do arquivo (`p0`, `p1`…): o id da ficha não sai.
   const refOf = new Map(staff.map((p, i) => [p.id, `p${i}`]));
   const out: TeamFile['staff'] = staff.map((p) => {
@@ -173,13 +176,20 @@ export async function buildTeamExport(staff: StaffProfile[], opts: { libraryDir?
     };
   });
 
-  const libraryDir = opts.libraryDir ?? LIBRARY_DIR;
-  const names = [...new Set(staff.flatMap((p) => p.skills))];
+  const globalDir = new Map<string, string>();
+  for (const s of opts.globalSkills ?? []) if (!globalDir.has(s.name)) globalDir.set(s.name, s.dir);
+  const names = new Set<string>();
+  for (const s of staff.flatMap((p) => p.skills)) {
+    if (!isSkillRef(s)) names.add(s);
+    else if (parseSkillRef(s)?.scope === 'global') names.add(parseSkillRef(s)!.name);
+  }
   const skills: SkillText[] = [];
   let total = 0;
-  for (const name of (await librarySkillsOf(names, libraryDir)).sort()) {
+  for (const name of [...names].sort()) {
+    const dir = globalDir.get(name);
+    if (!dir) continue;
     const files: SkillText['files'] = [];
-    await readSkillDir(path.join(libraryDir, name), name, '', files);
+    await readSkillDir(dir, name, '', files);
     files.sort((a, b) => a.path.localeCompare(b.path));
     for (const f of files) {
       secretIn(f.content, `skill ${name} (${f.path})`);
@@ -210,16 +220,18 @@ export interface PlannedStaff {
 export interface TeamImportPlan {
   /** Na ordem de criação: gestor antes do subordinado. */
   staff: PlannedStaff[];
-  /** Skills novas da biblioteca (as que já existem não entram). */
+  /** Skills novas, para gravar na Global (as iguais às que já estão lá não entram). */
   skills: SkillText[];
   warnings: string[];
 }
 
 /**
  * Confere o arquivo inteiro e devolve o que vai ser criado. Não grava nada: quem chama só grava se isto não lançar.
- * Lança `StaffError` com o primeiro problema (formato, schema, caminho, tamanho, segredo, ciclo, regra do motor).
+ * Lança `StaffError` com o primeiro problema (formato, schema, caminho, tamanho, segredo, ciclo, regra do motor, skill que já existe
+ * na Global com outro conteúdo). `globalDir`: a pasta das skills Globais (padrão `~/.claude/skills`; os testes trocam).
  */
-export async function planTeamImport(raw: unknown, ctx: { libraryDir?: string; localMcps: readonly string[] }): Promise<TeamImportPlan> {
+export async function planTeamImport(raw: unknown, ctx: { globalDir?: string; localMcps: readonly string[] }): Promise<TeamImportPlan> {
+  const globalDir = ctx.globalDir ?? path.join(defaultLocations().home, 'skills');
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new StaffError('arquivo inválido: o conteúdo não é um objeto');
   if (JSON.stringify(raw).length > MAX_TEAM_BYTES) throw new StaffError('arquivo grande demais (máx. 3 MB)');
   const head = raw as { format?: unknown; version?: unknown };
@@ -285,9 +297,19 @@ export async function planTeamImport(raw: unknown, ctx: { libraryDir?: string; l
   };
   for (const s of file.staff) visit(s.ref);
 
-  // Conflito de skill: a da biblioteca fica como está; a do arquivo não entra e o aviso diz isso.
-  const local = new Set(await librarySkillsOf(skills.map((k) => k.name), ctx.libraryDir));
-  for (const k of skills) if (local.has(k.name)) warnings.push(`skill ${k.name} já existe na biblioteca: a sua foi mantida (a do arquivo não entrou)`);
+  // Conflito com a Global: a igual à que já está lá não é gravada de novo; a diferente recusa o arquivo inteiro (nada é gravado).
+  const newSkills: SkillText[] = [];
+  for (const k of skills) {
+    const dest = path.join(globalDir, k.name);
+    if (!(await lexists(dest))) {
+      newSkills.push(k);
+      continue;
+    }
+    if (await sameSkill(dest, k.files)) warnings.push(`skill ${k.name} já está na Global com o mesmo conteúdo: não foi gravada de novo`);
+    else throw new StaffError(`skill ${k.name} já existe na Global com outro conteúdo: nada foi importado (renomeie ou tire a sua antes)`);
+  }
+  // Nome antigo (sem escopo) vira ref: Global, porque a skill vem no arquivo ou já existe lá; senão fica Global mesmo (a ficha avisa).
+  const known = { globalNames: [...skills.map((k) => k.name), ...(await listNames(globalDir))], projectNames: [] };
 
   // MCPs: só os que existem neste projeto; o resto sai com aviso.
   const mcpsHere = new Set(ctx.localMcps);
@@ -312,7 +334,7 @@ export async function planTeamImport(raw: unknown, ctx: { libraryDir?: string; l
         firstTask: '',
         autonomy,
         agents: s.agents,
-        skills: s.skills,
+        skills: convertSkills(s.skills, known).skills,
         mcps: s.mcps === null ? null : s.mcps.filter((m) => mcpsHere.has(m)),
         ...(access && { mcpAccess: access }),
         // Sem conhecimento, servidores, navegador nem contratação: o que é deste projeto e da máquina não vem no arquivo.
@@ -336,5 +358,32 @@ export async function planTeamImport(raw: unknown, ctx: { libraryDir?: string; l
     };
   });
 
-  return { staff, skills: skills.filter((k) => !local.has(k.name)), warnings };
+  return { staff, skills: newSkills, warnings };
+}
+
+const lexists = (p: string) => fs.lstat(p).then(() => true, () => false);
+
+/** Os nomes das pastas de skill que já estão numa pasta (ignora arquivos soltos e pastas ocultas). */
+async function listNames(dir: string): Promise<string[]> {
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  return entries.filter((e) => (e.isDirectory() || e.isSymbolicLink()) && !e.name.startsWith('.')).map((e) => e.name);
+}
+
+/** A skill que já está na pasta tem exatamente os arquivos do arquivo de equipe, com o mesmo texto (nem a mais, nem a menos). */
+async function sameSkill(dir: string, files: SkillText['files']): Promise<boolean> {
+  const local = await treeText(dir);
+  if (local.size !== files.length) return false;
+  return files.every((f) => local.get(f.path) === f.content);
+}
+
+/** Texto de cada arquivo da pasta (caminho relativo com `/`). Link ou arquivo que não lê vira um valor que não bate com nada. */
+async function treeText(root: string, rel = '', out = new Map<string, string>()): Promise<Map<string, string>> {
+  const entries = await fs.readdir(path.join(root, rel), { withFileTypes: true }).catch(() => []);
+  for (const e of entries) {
+    const p = rel ? `${rel}/${e.name}` : e.name;
+    if (e.isDirectory()) await treeText(root, p, out);
+    else if (e.isFile()) out.set(p, await fs.readFile(path.join(root, p), 'utf8').catch(() => '\u0000'));
+    else out.set(p, '\u0000link');
+  }
+  return out;
 }

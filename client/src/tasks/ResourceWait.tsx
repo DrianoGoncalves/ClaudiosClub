@@ -1,6 +1,7 @@
 import type { Task } from '../../../shared/model';
 import { formatAgo } from '../format';
 import { t } from '../i18n';
+import { waitClass } from './waitTone';
 
 // Tarefa na fila segurada pelo gate de recursos (RAM, CPU ou teto de conversas): motivo e há quanto tempo espera.
 // O `reason` vem do servidor em pt-BR e não é traduzido; o resto da frase segue o idioma.
@@ -13,10 +14,10 @@ export function resourceWaitText(wait: NonNullable<Task['resourceWait']>, now: n
 }
 
 /** Selo discreto do cartão (mesma família do "na fila"): quebra linha em vez de cortar, o motivo é o que importa. */
-export function ResourceWaitBadge({ wait, now }: { wait?: Task['resourceWait']; now: number }) {
+export function ResourceWaitBadge({ wait, now, warm }: { wait?: Task['resourceWait']; now: number; warm?: boolean }) {
   if (!wait) return null;
   return (
-    <span className="task-queue task-resource small" title={t('tasks.resourceWaitHint')}>
+    <span className={`task-queue task-resource${waitClass(warm)} small`} title={t('tasks.resourceWaitHint')}>
       {resourceWaitText(wait, now)}
     </span>
   );

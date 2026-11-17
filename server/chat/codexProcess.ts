@@ -7,7 +7,8 @@ import { CODEX_CONTEXT_WINDOW } from '../adapters/claude/pricing';
 import { resolveCodexCommand, type CodexEnvStatus } from '../codexEnv';
 import { pickCodexSubstitute, type CodexModelInfo } from '../codexModels';
 import { cleanEnv, withoutMycoToken } from '../auth';
-import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexExtraMcp, type CodexMcpServer, type CodexSecrets } from './codexArgs';
+import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexAgentRole, type CodexExtraMcp, type CodexMcpServer, type CodexSecrets } from './codexArgs';
+import { codexEditedFiles, codexToolFile } from './codeEdits';
 import { contextUsed, isModelUnavailable, isToolCall, itemFromCodex, parseCodexFailure, type CodexPhase } from './codexEvents';
 import { hasCheckpoint, stripCheckpoint } from './items';
 import { ChatProcess, type ChatProcessOptions } from './process';
@@ -32,12 +33,16 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   readOnlyPaths?: string[];
   /** MCP de SSH da ficha (conexões SSH; null = sem ele). Ver `codexSshMcpArgs` em codexArgs.ts. */
   sshMcp?: CodexMcpServer | null;
+  /** MCP da memória da própria ficha (só em `plan`; null = sem ele). Ver `codexMemoriaMcpArgs` em codexArgs.ts. */
+  memoriaMcp?: CodexMcpServer | null;
   /** MCP do Chrome do usuário (null = sem ele). Ver `codexChromeMcpArgs` em codexArgs.ts. */
   chromeMcp?: CodexMcpServer | null;
   /** MCP do navegador limpo (null = sem ele). Ver `codexCleanBrowserMcpArgs` em codexArgs.ts. */
   cleanMcp?: CodexMcpServer | null;
   /** MCPs da biblioteca e da ficha (projeto, usuário, local). Ver `codexExtraMcpArgs` em codexArgs.ts. */
   extraMcps?: CodexExtraMcp[];
+  /** Agents da ficha como subagents do Codex (TOML já gravado). Ver `codexAgentArgs` em codexArgs.ts. */
+  agents?: CodexAgentRole[];
   /**
    * Arquivo de lançamento dos MCPs da ficha (`codex-mcp.json`, com os valores expandidos). Ele vale enquanto a conversa está aberta: quando
    * a conversa fecha (stop, ou o servidor desligando), sai do disco. A próxima abertura grava de novo (prepareCodexRun).
@@ -329,9 +334,11 @@ export class CodexProcess extends ChatProcess {
         writableRoots: o.writableRoots,
         readOnlyPaths: o.readOnlyPaths,
         sshMcp: o.sshMcp,
+        memoriaMcp: o.memoriaMcp,
         chromeMcp: o.chromeMcp,
         cleanMcp: o.cleanMcp,
         extraMcps: o.extraMcps,
+        agents: o.agents,
         secrets: o.secrets,
         network: status.networkProxy ? 'loopback' : 'off',
         internetAccess,
@@ -433,6 +440,8 @@ export class CodexProcess extends ChatProcess {
   private failTurn(run: Run, text: string) {
     if (run.ended) return;
     if (run.job && !run.job.retried && run.model && isModelUnavailable(text)) {
+      // A conta recusou o modelo: avisa quem guarda a ficha (ver ChatProcessOptions.onModelUnavailable), com ou sem plano B.
+      this.codex.onModelUnavailable?.(run.model);
       // Modelo que o dono escolheu para o secundário: não há plano B, o erro diz qual modelo a conta recusou.
       if (this.codex.noSubstitute) {
         this.endTurn(run, { kind: 'failed', text: `modelo secundário ${run.model} recusado pelo Codex` });
@@ -552,6 +561,16 @@ export class CodexProcess extends ChatProcess {
   }
 
   private onItem(run: Run, phase: CodexPhase, raw: unknown) {
+    // Sem os ganchos do Claude, o Codex só mostra a alteração no `file_change` concluído (o card automático nasce daqui, como no Claude).
+    const edited = this.opts.onEdit ? codexEditedFiles(phase, raw) : [];
+    if (edited.length) {
+      // Registro, não trava: quem recebe nunca derruba a leitura do stream.
+      try {
+        this.opts.onEdit?.(edited);
+      } catch {
+        // o quadro registra o que puder
+      }
+    }
     const next = itemFromCodex(raw, run.key, new Date().toISOString(), phase);
     if (!next) return;
     const prev = this.items.get(next.id);
@@ -566,8 +585,10 @@ export class CodexProcess extends ChatProcess {
       if (hasCheckpoint(next.text)) this.checkpointSeen = true;
       this.putItem({ ...next, text: stripCheckpoint(next.text), at: (prev?.kind === 'assistant' ? prev.at : null) ?? next.at });
     } else if (next.kind === 'tool') {
-      this.scan(next.input, 'tool-input');
-      if (next.result) this.scan(next.result, 'tool-result');
+      // O arquivo só vale para o aviso: leitura simples de um arquivo ou `file_change` de um (ver codexToolFile).
+      const file = this.opts.onSecret ? codexToolFile(raw) : null;
+      this.scan(next.input, 'tool-input', file);
+      if (next.result) this.scan(next.result, 'tool-result', file);
       this.putItem({ ...next, at: (prev?.kind === 'tool' ? prev.at : null) ?? next.at });
     } else {
       this.putItem(next);

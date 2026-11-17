@@ -449,8 +449,8 @@ describe('cancelada: veredito tardio, reabrir e travas', () => {
     await b.svc.cancel('p', a.id, { by: 'user' });
     expect(await b.svc.summary()).toEqual({}); // só cancelada: nada em aberto
     const open = await b.make('Aberta');
-    expect(await b.svc.summary()).toMatchObject({ p: { open: 1, review: 0, progress: { points: 1, max: 7 } } });
-    expect(kanbanProgress(await b.list())).toEqual({ points: 1, max: 7 });
+    expect(await b.svc.summary()).toMatchObject({ p: { open: 1, review: 0, progress: { points: 0, max: 3 } } });
+    expect(kanbanProgress(await b.list())).toEqual({ points: 0, max: 3 });
     // Rotina: a tarefa anterior da mesma rotina está cancelada, então a do próximo minuto é criada (não "ainda aberta").
     const first = await b.svc.createFromRoutine('p', 'ana-1', { id: 'r1', name: 'Faxina', message: 'limpar' }, '2026-11-14T10:00');
     expect(first.kind).toBe('created');
@@ -1365,10 +1365,10 @@ describe('revisão automática: o que muda no meio do caminho não recebe revis�
     expect(b.notified.slice(noticed).some((n) => n.text.includes('entregou'))).toBe(false);
   });
 
-  it('a revisão falha de verdade (sem vaga no revisor): anota o motivo e quem pediu fica sabendo da entrega, como antes', async () => {
+  it('a revisão falha de verdade (erro que não passa sozinho): anota o motivo e quem pediu fica sabendo da entrega, como antes', async () => {
     const { b, t } = await delivered('auto-falha-real', 'gio-1');
     b.hooks.beforeSend = async () => {
-      throw new Error('sem vaga no revisor');
+      throw new TaskError('sem vaga no revisor');
     };
     const noticed = b.notified.length;
     await privately(b).autoReview('p', await b.get(t.id));

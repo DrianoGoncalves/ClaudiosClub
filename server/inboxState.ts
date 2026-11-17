@@ -1,25 +1,36 @@
+import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { TurnCapHit } from '../shared/model';
 import { writeAtomic } from './staff/store';
 
 // O que a caixa "precisa de mim" lembra entre reinícios do Claudio’s Club: as perguntas que esperam você
 // (um funcionário terminou o turno perguntando algo), os avisos que você marcou como "não é
-// segredo" (não voltam a aparecer) e os turnos que pararam no teto (ver turnCap.ts). Sem arquivo (testes), fica só na memória.
+// segredo" (não voltam a aparecer), os turnos que pararam no teto (ver turnCap.ts) e os alertas de erro que você dispensou.
+// Sem arquivo (testes), fica só na memória.
 
 interface Data {
   questions: Record<string, { text: string; at: string; itemId?: string }>;
+  /**
+   * Avisos que você dispensou como "não é segredo": `sessão:rótulo` (formato antigo: vale para o rótulo todo, na conversa) ou
+   * `sessão:rótulo#ocorrência` (vale só para aquela ocorrência do segredo, ver `ChatManager.dismissSecret`).
+   */
   muted: string[];
+  /** Sal da instalação para a identidade da ocorrência de um segredo (HMAC do valor): sem ele, o hash de uma senha fraca se adivinha. */
+  pepper?: string;
   /** Sessões esperando você em outro lugar que você dispensou: sessionId → statusUpdatedAt visto ('' = sem data). */
   waitingDismissed: Record<string, string>;
   /** Turnos que pararam no teto e ainda não receberam mensagem nova (sai com a próxima mensagem). */
   caps: Record<string, TurnCapHit & { at: string }>;
+  /** Alertas de erro que você dispensou: `error:<sessão>` ou `cap:<sessão>` → carimbo da ocorrência dispensada (outra ocorrência tem outro carimbo e volta). */
+  errorDismissed: Record<string, string>;
 }
 
 const MAX_MUTED = 500;
 const MAX_WAITING = 500;
+const MAX_ERRORS = 500;
 
 export class InboxState {
-  private data: Data = { questions: {}, muted: [], waitingDismissed: {}, caps: {} };
+  private data: Data = { questions: {}, muted: [], waitingDismissed: {}, caps: {}, errorDismissed: {} };
   private saving: Promise<void> = Promise.resolve();
 
   constructor(private readonly file: string | null = null) {
@@ -33,6 +44,7 @@ export class InboxState {
         }
       }
       this.data.muted = Array.isArray(raw.muted) ? raw.muted.filter((m): m is string => typeof m === 'string').slice(-MAX_MUTED) : [];
+      if (typeof raw.pepper === 'string' && /^[0-9a-f]{32}$/.test(raw.pepper)) this.data.pepper = raw.pepper;
       const waiting = raw.waitingDismissed && typeof raw.waitingDismissed === 'object' ? raw.waitingDismissed : {};
       for (const [sid, at] of Object.entries(waiting)) {
         if (typeof at === 'string') this.data.waitingDismissed[sid] = at;
@@ -44,6 +56,10 @@ export class InboxState {
         } else if (c && c.kind === 'restart' && typeof c.action === 'string' && typeof c.at === 'string') {
           this.data.caps[sid] = { kind: 'restart', action: c.action, at: c.at };
         }
+      }
+      const errors = raw.errorDismissed && typeof raw.errorDismissed === 'object' ? raw.errorDismissed : {};
+      for (const [id, at] of Object.entries(errors)) {
+        if (typeof at === 'string') this.data.errorDismissed[id] = at;
       }
     } catch {
       // sem arquivo (ou corrompido): começa vazio
@@ -81,6 +97,15 @@ export class InboxState {
     return c.kind === 'restart' ? { kind: 'restart', action: c.action } : { kind: c.kind, limit: c.limit };
   }
 
+  /** O sal da instalação (criado na primeira chamada e gravado): o mesmo entre reinícios, para o "não é segredo" por ocorrência continuar valendo. */
+  pepper(): string {
+    if (!this.data.pepper) {
+      this.data.pepper = randomBytes(16).toString('hex');
+      this.save();
+    }
+    return this.data.pepper;
+  }
+
   isMuted(id: string): boolean {
     return this.data.muted.includes(id);
   }
@@ -100,6 +125,24 @@ export class InboxState {
 
   isWaitingDismissed(sessionId: string, statusUpdatedAt: string | null): boolean {
     return this.data.waitingDismissed[sessionId] === (statusUpdatedAt ?? '');
+  }
+
+  /** "Ignorar" num alerta de erro (`error:<sessão>` ou `cap:<sessão>`): some até vir outra ocorrência, que traz outro `at`. */
+  dismissError(id: string, at: string) {
+    const rest = Object.entries(this.data.errorDismissed).filter(([k]) => k !== id);
+    this.data.errorDismissed = Object.fromEntries([...rest, [id, at]].slice(-MAX_ERRORS));
+    this.save();
+  }
+
+  isErrorDismissed(id: string, at: string): boolean {
+    return this.data.errorDismissed[id] === at;
+  }
+
+  /** Mensagem nova na conversa: o erro e o teto de antes já não valem, e a dispensa deles junto. */
+  forgetErrors(sessionId: string) {
+    const ids = [`error:${sessionId}`, `cap:${sessionId}`].filter((id) => id in this.data.errorDismissed);
+    for (const id of ids) delete this.data.errorDismissed[id];
+    if (ids.length) this.save();
   }
 
   /** Grava em fila: duas mudanças juntas não se atropelam. */

@@ -17,6 +17,8 @@
   "kindUsage": { "message": "está cerca del límite de consumo" },
   "kindBlocked": { "message": "tiene una tarea esperando otra que se atascó" },
   "kindNotStarted": { "message": "tiene una tarea olvidada en Por hacer" },
+  "kindQuestion": { "message": "tiene una duda de tarea esperándote" },
+  "kindStuck": { "message": "tiene una tarea detenida que te necesita" },
   "notifMany": { "message": "$N$ avisos nuevos en Claudio’s Club", "placeholders": { "n": { "content": "$1" } } },
   "notifManyBody": { "message": "Abre el Club para ver quién te espera." },
   "loading": { "message": "Cargando…" },

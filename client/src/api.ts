@@ -9,6 +9,7 @@ import type {
   Autonomy,
   Board,
   BoardBackground,
+  BoardConfig,
   BrowserStatus,
   ChatAttachment,
   ChatChanges,
@@ -70,6 +71,7 @@ import { askUsageStop } from './chat/usageNotice';
 import type { GuideAction } from './detail/guideActions';
 import type { Schedule } from './schedules/scheduleView';
 import type { DepChoice, DepMap } from './tasks/cancelDeps';
+import type { AnswerBody } from './tasks/doubtAnswer';
 import type { McpSaveBody, McpScope, McpServer } from './office/mcpForm';
 
 /**
@@ -310,6 +312,81 @@ export interface SkillDeleted {
 
 export type SkillDeleteResult = { needsConfirm: true; hooks: SkillHook[] } | SkillDeleted;
 
+/** Skill de um link do GitHub (/api/skills/github/*): onde ela mora é a biblioteca do Club, a conta ou um projeto (o servidor monta a pasta). */
+export interface GithubTarget {
+  scope: 'library' | 'user' | 'project';
+  projectId: string | null;
+}
+
+export interface GithubAlert {
+  level: 'info' | 'warn' | 'danger';
+  code: string;
+  message: string;
+  file?: string;
+}
+
+export interface GithubFile {
+  path: string;
+  size: number;
+  sha256: string;
+  binary: boolean;
+  executable: boolean;
+}
+
+/** A prévia de uma pasta com SKILL.md: nada foi gravado. `source.sha`, `digest` e `source.ref` voltam no Instalar. */
+export interface GithubPreview {
+  kind: 'preview';
+  source: { owner: string; repo: string; ref: string; sha: string; path: string; treeSha: string; url: string };
+  name: string;
+  skillMd: string;
+  frontmatter: Record<string, unknown>;
+  files: GithubFile[];
+  alerts: GithubAlert[];
+  totalBytes: number;
+  digest: string;
+}
+
+/** O link tem várias skills: escolher uma (o `path` volta na prévia). */
+export interface GithubChoose {
+  kind: 'choose';
+  source: { owner: string; repo: string; ref: string; sha: string };
+  skills: Array<{ path: string; name: string; description: string }>;
+}
+
+export interface GithubDiffItem {
+  path: string;
+  status: 'added' | 'removed' | 'changed';
+  binary: boolean;
+  patch?: string | null;
+  tooLarge?: boolean;
+  before?: { size: number; sha256: string };
+  after?: { size: number; sha256: string };
+}
+
+export type GithubCheck =
+  | { upToDate: true; sha?: string }
+  | {
+      upToDate: false;
+      name: string;
+      source: { url: string; owner: string; repo: string; ref: string; path: string };
+      ref: string;
+      fromSha: string;
+      toSha: string;
+      digest: string;
+      localModified: boolean;
+      diff: GithubDiffItem[];
+      frontmatter: Array<{ key: string; before: unknown; after: unknown }>;
+      alerts: GithubAlert[];
+    };
+
+/** Uma skill com origem no GitHub num escopo: de onde veio, se foi mexida aqui e o que a checagem diária achou (null = ainda não checou). */
+export interface GithubSkillStatus {
+  name: string;
+  origin: { url: string; ref: string; sha: string; installedAt: string };
+  modified: boolean;
+  update: { available: boolean; latestSha: string; checkedAt: string } | null;
+}
+
 /** Uma ficha no índice da empresa (GET /api/staff-directory). */
 export interface DirectoryPerson {
   projectId: string;
@@ -416,6 +493,17 @@ export const api = {
    */
   deleteSkill: (ref: SkillRef, removeHooks?: SkillHook[]) =>
     post<SkillDeleteResult>('/api/skills/delete', removeHooks ? { ...ref, removeHooks } : ref),
+  // Skills de um link do GitHub. Erros: 429 leva `details.resetAt` (quando o limite do GitHub volta); 409 leva `code` `changed`
+  // (a prévia ficou velha) ou `modified` (a skill foi mexida aqui: confirmar com `overwriteLocal`).
+  githubPreview: (url: string, path?: string) => post<GithubPreview | GithubChoose>('/api/skills/github/preview', path === undefined ? { url } : { url, path }),
+  githubInstall: (to: GithubTarget, p: { url: string; path: string; ref: string; sha: string; digest: string; name: string }) =>
+    post<{ name: string; sha: string; digest: string }>('/api/skills/github/install', { ...to, ...p }),
+  githubStatus: (to: GithubTarget) =>
+    get<GithubSkillStatus[]>(`/api/skills/github/status?scope=${to.scope}${to.projectId ? `&projectId=${encodeURIComponent(to.projectId)}` : ''}`),
+  githubCheck: (to: GithubTarget, name: string) => post<GithubCheck>('/api/skills/github/check', { ...to, name }),
+  githubUpdate: (to: GithubTarget, p: { name: string; sha: string; digest: string; overwriteLocal?: boolean }) =>
+    post<{ name: string; sha: string; digest: string; backup: string }>('/api/skills/github/update', { ...to, ...p }),
+  githubRollback: (to: GithubTarget, name: string) => post<{ name: string; sha: string }>('/api/skills/github/rollback', { ...to, name }),
   /** `old: true` traz também as conversas antigas (arquivadas pela retenção). Sem o parâmetro, a lista segue como antes. */
   board: (opts: { old?: boolean } = {}) => get<Board>(`/api/board${opts.old ? '?old=1' : ''}`),
   projects: () => get<Project[]>('/api/projects'),
@@ -470,6 +558,8 @@ export const api = {
     contextSwitch?: ContextSwitch;
     optimizeQuota?: boolean;
     autoContinue?: boolean;
+    /** Títulos de conversa gerados por IA (Haiku); desligado, a lista mostra o começo do assunto. */
+    aiTitles?: boolean;
     showUserScope?: boolean;
     codexReview?: boolean;
     /** Modelo do Codex para perguntar ao GPT; vazio = o padrão do Codex. */
@@ -650,6 +740,10 @@ export const api = {
   taskDeploy: (projectId: string, taskId: string, staffId: string, force = false) =>
     post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/deploy`, { staffId, force }),
   tasks: (projectId: string) => get<Task[] | null>(`/api/projects/${projectId}/tasks`),
+  /** Revisão automática do quadro do projeto (`.myco/board.json`). Servidor sem a rota = 404. */
+  boardReview: (projectId: string) => get<BoardConfig>(`/api/projects/${projectId}/board-review`),
+  /** Grava o estado inteiro: o servidor recusa ligada sem responsável (`reviewerId`). */
+  saveBoardReview: (projectId: string, config: BoardConfig) => post<BoardConfig>(`/api/projects/${projectId}/board-review`, config),
   createTask: (
     projectId: string,
     input: { title: string; description: string; staffId: string | null; start?: boolean; goal?: string | null; acceptance?: string | null; blockedBy?: string[] },
@@ -686,6 +780,9 @@ export const api = {
   /** O que fazer com `taskId` (a que espera) agora que `blockerId` foi cancelada: liberar, cancelar junto ou continuar esperando. */
   taskBlocker: (projectId: string, taskId: string, blockerId: string, action: DepChoice) =>
     post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/blocker`, { blockerId, action }),
+  /** Responder a dúvida escalada da tarefa. A mesma rota do gestor; do navegador pareado a resposta vale como sua e chega ao funcionário. */
+  answerTaskQuestion: (projectId: string, taskId: string, body: AnswerBody) =>
+    post<{ ok: boolean; task: Task | null }>(`/api/projects/${projectId}/tasks/${taskId}/answer`, body),
   saveRoutines: (projectId: string, staffId: string, routines: Routine[]) =>
     post<StaffProfile>(`/api/projects/${projectId}/staff/${staffId}/routines`, { routines }),
   runRoutine: (projectId: string, staffId: string, routineId: string) =>

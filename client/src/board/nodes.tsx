@@ -6,6 +6,7 @@ import { employeeName, ENTRYPOINT_LABEL, formatAgo, initials, STATUS_LABEL } fro
 import { AgentIcon, BranchIcon, ChromeIcon, FallbackModelIcon, GhostIcon, McpIcon, ServerIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { t } from '../i18n';
 import { engineName } from '../staff/fallbackEngine';
+import { modelObsoleteText } from '../staff/ModelObsoleteNote';
 import { KanbanProgressBar } from '../tasks/KanbanProgressBar';
 import {
   HANDLE,
@@ -185,7 +186,7 @@ function ProjectNode({ id, data, selected, width }: NodeProps<Node<ProjectNodeDa
         <div className="bn-header-side">
           <div className="bn-tasks-wrap">
             <TasksChip tasks={data.tasks} />
-            <KanbanProgressBar progress={data.tasks?.progress} open={data.tasks?.open ?? 0} />
+            <KanbanProgressBar progress={data.tasks?.progress} />
           </div>
           {(data.git || data.live.length > 0) && (
             <div className="bn-header-status">
@@ -249,13 +250,15 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
   const state = data.archived ? 'is-archived' : waiting ? 'is-waiting' : busy ? 'is-busy' : live ? '' : 'is-away';
   const tools = staff ? staffTools(staff) : [];
   const seen = useSeenIdle();
+  // O motor recusou o modelo da ficha: ela segue no padrão, mas o cartão fica vermelho até alguém trocar o modelo.
+  const obsolete = staff?.modelObsolete ?? null;
   return (
     <Frame
       id={id}
       type="employee"
-      variant={waiting ? 'waiting' : busy ? 'busy' : 'agent'}
+      variant={waiting ? 'waiting' : busy ? 'busy' : obsolete ? 'warn' : 'agent'}
       selected={selected}
-      className={state}
+      className={`${state}${obsolete ? ' is-model-obsolete' : ''}`}
       title={staff ? `${staff.name} — ${staff.role}` : ghost ? t('board.ghostTitle', { n: ghost.length }) : name}
       canHire={!!staff && !data.archived}
     >
@@ -315,6 +318,11 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
           )}
         </div>
       </div>
+      {obsolete && (
+        <span className="bn-obsolete" title={modelObsoleteText(obsolete)}>
+          {t('board.modelObsolete')}
+        </span>
+      )}
       {/* Só a bolinha no canto (trabalhando = lápis escrevendo no lugar dela); o texto do status aparece ao passar o mouse. Ocioso, só até você ver a conversa. */}
       {live && showsStatus(seen, live) && (
         <span className="bn-status">

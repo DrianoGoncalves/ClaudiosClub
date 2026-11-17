@@ -23,7 +23,7 @@ export interface RoleTemplate {
   pickExecutors?: boolean;
   playbook?: Playbook | null;
   worktree?: boolean;
-  /** Skills indicadas, se existirem no projeto ou na conta. */
+  /** Skills Globais indicadas (nome sem escopo; ao contratar, a ficha recebe `global:<nome>`). Se não existirem, a ficha avisa. */
   skills?: string[];
   /** Mostra o campo de servidores (cargos de infra). */
   servers?: boolean;

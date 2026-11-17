@@ -18,11 +18,11 @@ Tarefa é um pedido de trabalho para um funcionário. Cada tarefa tem uma conver
 | **A fazer** | Deve ser iniciada. Com responsável, começa sozinha (ou entra na fila dele). Sem responsável, espera. Para não começar, deixe em **Aguardar**. |
 | **Fazendo** | Trabalhando. Inclui as tarefas com plano para aprovar (selo **Plano para aprovar**). |
 | **Revisão** | Ele terminou um turno. Confira a entrega. |
-| **Pronto** | Entregue e conferido. |
+| **Finalizado** | Revisão concluída. |
 
 - Para mudar de coluna, arraste o cartão, ou no detalhe use **Mover para a coluna** (opções "mover: ...").
-- Em **Pronto**, tarefa sem mudança há mais de 7 dias vai para **Ver arquivadas (n)**. Mudar de coluna tira do arquivo.
-- O selo **Não publicado** aparece em **Pronto** nos projetos com funcionário que tem servidor. Ele não some quando o deploy é pedido.
+- Em **Finalizado**, tarefa sem mudança há mais de 7 dias vai para **Ver arquivadas (n)**. Mudar de coluna tira do arquivo.
+- O selo **Não publicado** aparece em **Finalizado** nos projetos com funcionário que tem servidor. Ele não some quando o deploy é pedido.
 
 ## Criar tarefa
 
@@ -43,6 +43,7 @@ Tarefa é um pedido de trabalho para um funcionário. Cada tarefa tem uma conver
 - **tirar da fila** desfaz a entrada na fila.
 - Mensagem enviada à conversa de uma tarefa enquanto ele está ocupado fica guardada ("{n} ajuste esperando") e vai quando ele termina.
 - Se o consumo estiver no limite na hora de começar, a tarefa fica na fila e tenta de novo.
+- Na coluna **A fazer**, todo aviso de espera do cartão (na fila, "Esperando: …", "Aguardando recursos", ajuste guardado e dúvida com o gestor) aparece em laranja: é o motivo de a tarefa não andar. Nas outras colunas, inclusive **Aguardar** (selos e o campo do motivo), os avisos ficam neutros. O amarelo segue sendo o que depende de você.
 - Se a conversa parar no meio do trabalho (por exemplo, o servidor reiniciou), o Club retoma uma vez. Se parar de novo, a tarefa vai para **Revisão** com "conversa parou sem terminar" no histórico.
 - Exceção: se ela parou no meio de uma ação que mexe fora do projeto (push, deploy, comando no servidor, MCP que escreve), o Club não retoma sozinho, porque não dá para saber se a ação aconteceu. A tarefa vai para **Aguardar** com o motivo, e a conversa aparece em **precisa de mim**. Confira e mande uma mensagem para seguir.
 - O responsável só pode ser trocado antes de começar. Depois, aparece "A tarefa já começou com este funcionário".
@@ -62,29 +63,115 @@ Se a ficha do funcionário está em **Só planeja**, ao começar a tarefa vai pa
 - Quando o turno dele termina, a tarefa vai para **Revisão** sozinha. Se o código está numa worktree, o Club faz um commit com o título da tarefa.
 - Mensagem sua na conversa da tarefa, com ela em **Revisão**, volta a tarefa para **Fazendo**.
 - A seção **Código, revisão e deploy** mostra o que mudou, o **Resumo da entrega** e o diff.
-- **Aprovar entrega** (em **Revisão**) manda a tarefa direto para **Pronto**. Esse botão não roda testes nem mescla.
+- **Aprovar entrega** (em **Revisão**) manda a tarefa direto para **Finalizado**. Esse botão não roda testes nem mescla.
 
 ### Delegar revisão (manual)
 
 Na seção **Revisão**, escolha **Quem revisa** e clique em **Delegar revisão** (ou **Delegar nova revisão**). O revisor responde com APROVADO ou REPROVADO na primeira linha.
 
-- Aprovada: vai para **Pronto**. Se o código ainda está numa worktree sem mesclar, fica em **Revisão** ("aprovada; falta mesclar a worktree").
+- Aprovada: vai para **Finalizado**. Se o código ainda está numa worktree sem mesclar, fica em **Revisão** ("aprovada; falta mesclar a worktree").
 - Reprovada: os ajustes voltam para quem fez, e a tarefa volta para **Fazendo**. Se ele estiver ocupado, o ajuste fica guardado e a tarefa segue em **Revisão**.
 - O revisor não muda o código: só revisa.
 
 ### Revisão automática
 
-- Com **Revisão automática** marcada, ao entregar, o revisor escolhido revisa sozinho, com o mesmo veredito.
+- Com **Revisão automática** marcada na tarefa, ao entregar, o revisor escolhido revisa sozinho, com o mesmo veredito. Para todas as tarefas do projeto de uma vez, use o revisor padrão do quadro (abaixo).
 - O Club faz no máximo **3** revisões automáticas por tarefa (o cartão mostra `n/3`). Depois disso, o que sobrar fica com você, anotado no histórico.
 - Precisa de outro funcionário no projeto. Se quem pediu a tarefa é o revisor, ele recebe só o resultado.
 - Quando um funcionário passa várias tarefas a outros, ele só é avisado das aprovadas quando todas as tarefas que ele pediu fecharem: aí recebe uma única mensagem com a lista. O quadro mostra cada aprovação normalmente.
 - Reprovação, limite de revisões, bloqueio e falha avisam na hora.
 
+### Revisor padrão do quadro
+
+Cada projeto tem, no topo do quadro de tarefas, **Revisão automática do quadro** (recolhida; o título já diz se está ligada e quem revisa). Dentro: o botão **Ligada/Desligada** e **Responsável pela revisão**, um funcionário do projeto. Ao ligar, vale o último responsável gravado (ou o primeiro da lista, se ele saiu do projeto). A escolha fica no próprio projeto e vale para as tarefas que chegarem em **Revisão** depois.
+
+Quem revisa cada tarefa em **Revisão**:
+
+1. O revisor apontado na tarefa (**Revisão automática** + **Quem revisa** no formulário ou no detalhe). Esse tem prioridade sobre o quadro.
+2. Senão, com o quadro ligado, o responsável do quadro revisa o que **outro** funcionário fez.
+3. Se o responsável do quadro foi quem fez a tarefa, ela fica com você: o cartão ganha o selo amarelo **Você aprova ou reprova** e o detalhe explica o porquê. Aprove com **Aprovar entrega**; para reprovar, mande o ajuste na conversa da tarefa (ela volta para **Fazendo**).
+4. Com o quadro desligado e sem revisor na tarefa, nada muda: ninguém revisa sozinho, e você decide (ou usa **Delegar revisão**).
+
+O limite de **3** revisões automáticas por tarefa vale também aqui; passando dele, o que sobrar fica com você (mesmo selo).
+
+### Card registrado automaticamente
+
+Quando um funcionário altera código do projeto numa conversa que não é de nenhuma tarefa, o Club cria sozinho um card para registrar o trabalho:
+
+- Nasce em **Fazendo**, ligado à conversa, e vai para **Revisão** quando o turno termina. O cartão leva o selo discreto **Registrado automaticamente**.
+- O detalhe mostra **Arquivos alterados nesta conversa (n)**, na ordem em que foram editados, sem o que fica em `.myco/` nem o que está fora do projeto. A lista para em 300 arquivos.
+- A revisão segue a regra acima (revisor do quadro, ou você).
+- **Só alteração de código é detectada**: o Club vê as edições feitas pelas ferramentas de edição do funcionário. O que mudou só pelo terminal (`sed`, `node -e`, scripts) não gera card nem entra na lista.
+
+## Dúvida do funcionário
+
+Em tarefa pedida por um gestor, o funcionário que não consegue decidir sozinho escreve uma linha `DÚVIDA:` ou faz uma pergunta com opções. A tarefa não entrega enquanto a dúvida está aberta, e o cartão ganha o selo **Dúvida**:
+
+| Selo | Com quem está |
+| --- | --- |
+| **Dúvida · aguardando {gestor}** (neutro) | Com quem pediu a tarefa. Ele responde pela própria conversa; você não precisa fazer nada. |
+| **Dúvida · aguardando você** (amarelo) | É sua: o gestor passou a decisão para você, ou não respondeu a tempo (ver abaixo). |
+
+### Responder pelo cartão
+
+Abra o cartão da tarefa. O bloco **Dúvida do funcionário** (com borda amarela quando é com você) mostra a pergunta e como responder:
+
+- **Dúvida escrita**: escreva no campo **Sua resposta** (até 2000 caracteres) e clique em **Responder**.
+- **Dúvida por opções**: marque uma opção em cada pergunta (nas que dizem "Dá para marcar mais de uma opção", quantas quiser) e clique em **Responder**. O botão só liga com todas as perguntas respondidas. Se nenhuma opção serve, responda na conversa do funcionário.
+- A resposta fecha a dúvida (o bloco passa a "Respondida por você") e chega ao funcionário na conversa da tarefa. Se ele estiver ocupado com outra tarefa, ela espera a vez dele, como um ajuste guardado.
+- Se o gestor respondeu primeiro, o bloco mostra a resposta dele e o Club avisa que já foi respondida: ninguém responde duas vezes.
+- Sem o navegador pareado, o botão não funciona e aparece o aviso de pareamento (ver 01).
+- Só o bloco com o selo **aguardando você** tem o campo. Com o gestor, ele é só leitura.
+
+### O funcionário não fica parado esperando você
+
+Enquanto a dúvida está com você (**aguardando você**), o cartão mostra o que isso faz com a fila do funcionário:
+
+| Aviso no cartão | O que significa |
+| --- | --- |
+| **Pausada, espera a sua resposta** (caixa pontilhada), com "{funcionário} seguiu para “{tarefa}”" | Nada foi editado ainda. A tarefa espera você sem prender o funcionário, e a próxima de **A fazer** dele começa. Se não há outra, o aviso diz que ele está sem outra tarefa. |
+| **Ocupando {funcionário} até você responder** (caixa contínua), com "Já há edição nesta tarefa" | Ele já editou arquivo nesta tarefa e fica nela até você responder, para não largar no meio. |
+
+- A regra vale só para dúvida **com você**. Dúvida com o gestor (selo neutro) segue ocupando o funcionário como antes.
+- **Ter worktree não libera**: a worktree é do funcionário, não da tarefa. O que decide é ter ou não edição.
+- **Só edição vista pelo Club conta**: o Club enxerga as ferramentas de edição do funcionário. Quem mudou arquivo só pelo terminal (`sed`, `node -e`, scripts) não aparece como edição, e a tarefa é tratada como "nada editado" e pausa.
+- Se a sua resposta chega com o funcionário já em outra tarefa, ela fica guardada (selo de ajuste guardado) e vai antes da próxima da fila dele, quando ele ficar livre.
+- O mesmo aviso aparece no topo do detalhe da tarefa, com o texto da regra ao passar o mouse.
+
+## A fila se recupera sozinha
+
+A fila não precisa de você para andar. Quando uma entrega falha por um motivo passageiro (limite de consumo, envio que não chegou, conversa fechada), o Club tenta de novo sozinho, com espera crescente (1, 2, 4, 8 e depois 15 minutos, com uma pequena variação). Só chama você quando o motivo não passa sozinho ou quando o prazo abaixo estoura.
+
+| O que travou | O que o Club faz sozinho | Quando chama você |
+| --- | --- | --- |
+| **Dúvida que não chegou ao gestor** | Tenta de novo no ritmo acima, sem contar como uma dúvida nova. | Em 30 minutos sem chegar, ou na hora se a falha não passa sozinha (por exemplo, a tarefa já teve 3 dúvidas): vira **aguardando você**. O Club segue tentando o gestor; quem responder primeiro fecha. |
+| **Dúvida sem resposta do gestor** | Espera. | Passados 30 minutos: vira **aguardando você**. |
+| **Revisão automática que não começou** | Tenta começar de novo no ritmo acima. | Em 30 minutos sem começar: item **parada**. |
+| **Revisão sem veredito**, ou revisor que parou | Pede o veredito de novo uma vez, depois de uns 10 minutos. | Se continua sem veredito: item **parada**. |
+| **Ajuste guardado que não chega** | Não trava a fila: o funcionário segue com a próxima tarefa, e o ajuste é tentado de novo (a falha repetida entra uma vez só no histórico). | Depois de 5 falhas: item **parada**. |
+| **Aviso ao gestor** (quando ele passou várias tarefas e espera todas fecharem) | Tarefa parada não segura o aviso. Ele sai no máximo 2 horas depois, e o que falhar no envio é reenviado. | Nunca. |
+| **Conversa esperando o limite de consumo, e a leitura do limite falha** | Depois de 3 falhas seguidas, deixa de esperar e retoma. | Nunca. |
+
+Tarefa **em Aguardar** nunca anda sozinha: se outra depende dela, o item pede que você decida.
+
+### O que aparece em "precisa de mim"
+
+Cada item abre o cartão da tarefa e traz a ação. Sem **×**: o item some sozinho quando o problema acaba.
+
+| Rótulo | O que quer dizer | Ação |
+| --- | --- | --- |
+| **dúvida** | A dúvida de uma tarefa está **aguardando você**. Mostra a tarefa e a primeira pergunta. | **Responder**: abre o cartão, onde se responde. |
+| **parada** | A revisão não começou ou ficou sem veredito, o ajuste não chegou ao funcionário, ou a tarefa está em **Aguardar**. | **Revisar** (aprove com **Aprovar entrega**, ou mande o ajuste na conversa para reprovar), **Ver ajuste** (abre o cartão; mande a mensagem de novo na conversa da tarefa) ou **Decidir** (tire de **Aguardar** ou cancele). |
+| **bloqueada** | Uma tarefa espera outra que não anda. | Se a outra se recupera sozinha, nada a fazer. Se só você resolve, o link abre o cartão da tarefa que segura. Se ela foi cancelada: **Liberar**, **Cancelar junto** ou **Continuar esperando** (some por 7 dias). |
+| **não começou** | Cartão em **A fazer** há 2 dias ou mais, fora da fila e sem bloqueio. | **Começar** ou **Cancelar**. |
+
+Clicar no item abre o quadro de tarefas do projeto já no cartão. Com **avisar no sistema** ligado, cada item novo também vira uma notificação.
+
 ## Testes, mesclar e deploy
 
 - **Rodar testes**: aparece se o projeto tem comando de teste (`npm test`, `composer test` ou `phpunit`). O cartão mostra **Testes** com "passaram" ou "falharam". Se falhou, **Saída dos testes** mostra o fim do log.
-- **Mesclar em {base}** (só com código em worktree): pede confirmação, roda os testes e mescla. Teste vermelho desfaz a mescla. Se não há teste para rodar, o Club pergunta se mescla mesmo assim. Depois de mesclada, a tarefa vai para **Pronto** e mostra "mesclada em ... (commit)".
-- **Pedir deploy** (em tarefa **Pronto** ou mesclada): escolha **Quem faz o deploy**. Só aparecem funcionários com servidor na ficha. O checklist pede backup, estado antes e depois, e runbook. Ele pede confirmação antes de qualquer passo que não tem volta.
+- **Mesclar em {base}** (só com código em worktree): pede confirmação, roda os testes e mescla. Teste vermelho desfaz a mescla. Se não há teste para rodar, o Club pergunta se mescla mesmo assim. Depois de mesclada, a tarefa vai para **Finalizado** e mostra "mesclada em ... (commit)".
+- **Pedir deploy** (em tarefa **Finalizado** ou mesclada): escolha **Quem faz o deploy**. Só aparecem funcionários com servidor na ficha. O checklist pede backup, estado antes e depois, e runbook. Ele pede confirmação antes de qualquer passo que não tem volta.
 - **Pedir ao Codex** (segunda opinião): aparece só com **Usar o Codex (GPT)** ligado. Ver 06.
 
 ## Editar, apagar e id

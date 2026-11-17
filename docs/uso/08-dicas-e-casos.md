@@ -39,7 +39,7 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 
 - o diff mexe só no que foi pedido;
 - os testes passaram (teste vermelho desfaz a mesclagem);
-- a tarefa está em **Pronto**, com "mesclada em ... (commit)".
+- a tarefa está em **Finalizado**, com "mesclada em ... (commit)".
 
 ### 3. Corrigir um bug, com revisão antes de aceitar
 
@@ -52,7 +52,7 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 3. **Quem cuida**: o responsável → marque **Revisão automática** e **Quem revisa** → **Criar e começar**.
 4. Em **Revisão**, clique em **Rodar testes** e veja se passaram. Leia o diff.
 5. Se faltar algo, escreva na conversa da tarefa: ela volta para **Fazendo**.
-6. Aceite com **Mesclar em {base}**. **Aprovar entrega** só move para **Pronto**; não roda testes nem mescla.
+6. Aceite com **Mesclar em {base}**. **Aprovar entrega** só move para **Finalizado**; não roda testes nem mescla.
 
 **Conferir no fim:**
 
@@ -89,7 +89,7 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 2. Contrate **DevOps / SRE**. Na ficha, aba **Projeto**, clique em **+ dar acesso a servidores (SSH e FTP)** e marque a conexão. A chave fica no seu computador; a ficha guarda só o nome. Deixe **Permitir comandos de escrita** desmarcado.
 3. **Tarefas** → **Nova tarefa** → **O que precisa ser feito**: "só diagnosticar, sem mudar nada" → **Quem cuida**: **DevOps / SRE** → **Criar e começar**. Ele lê o servidor pelo MCP `myco-ssh` (status, logs, containers, serviços, arquivos de log).
 4. Em **precisa de mim**, aprove cada cartão de **permissão** com **Aprovar**. Evite **Sempre neste projeto** para comandos no servidor.
-5. Para publicar, o servidor precisa deixar de ser só leitura: na ficha, marque **Permitir comandos de escrita** na conexão e troque a autonomia para **Edita sozinho** ou mais (em **Pede tudo** o servidor segue só leitura). Depois abra a tarefa em **Pronto** (ou mesclada) → **Pedir deploy** → **Quem faz o deploy**: **DevOps / SRE**.
+5. Para publicar, o servidor precisa deixar de ser só leitura: na ficha, marque **Permitir comandos de escrita** na conexão e troque a autonomia para **Edita sozinho** ou mais (em **Pede tudo** o servidor segue só leitura). Depois abra a tarefa em **Finalizado** (ou mesclada) → **Pedir deploy** → **Quem faz o deploy**: **DevOps / SRE**.
 6. Siga o checklist: backup, estado antes e depois, runbook. Confirme os passos que não têm volta.
 
 **Limites:** ele não roda comando interativo (editor, `top`) nem `sudo` com senha, e no terminal dele não há `ssh`, `scp` nem `rsync`: tudo passa pelo MCP. Detalhes em `02-funcionarios.md`, **Servidores (SSH e FTP)**.
@@ -178,7 +178,7 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 | Problema | O que fazer |
 | --- | --- |
 | **Mesclar em {base}** não aparece | A tarefa não está numa worktree. Marque **Trabalhar numa worktree própria** na ficha de quem executa (o projeto precisa ser git). |
-| **Aprovar entrega** marcou **Pronto**, mas o código não entrou na branch | Esse botão não roda testes nem mescla. Use **Mesclar em {base}**. |
+| **Aprovar entrega** marcou **Finalizado**, mas o código não entrou na branch | Esse botão não roda testes nem mescla. Use **Mesclar em {base}**. |
 | A revisão automática parou | O limite são 3 revisões automáticas (o cartão mostra `n/3`). Use **Delegar revisão** para o resto. |
 | **Atualizar** está desligado | Há arquivos do Club mudados à mão. Guarde-os com `git stash` e tente de novo. |
 | Ações dizem que o navegador não está pareado | Clique em **Parear este navegador** e rode o `npm run pair CÓDIGO` que aparece, sempre no mesmo endereço (`claudio.localhost`). |

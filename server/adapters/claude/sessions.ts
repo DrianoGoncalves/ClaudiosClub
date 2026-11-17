@@ -2,7 +2,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import type { LiveSession, Session } from '../../../shared/model';
-import { hasCheckpoint, isInjectedUserText } from '../../chat/items';
+import { feedSubject, initialSubjectState, type SubjectEvent, type SubjectView } from '../../titles/subject';
+import { subjectTracker } from '../../titles/tracker';
 import { listDir, readHeadTail, tryJson } from './fsutil';
 import { encodeProjectDir } from './paths';
 
@@ -21,6 +22,8 @@ const LiveFile = z.object({
 
 const TranscriptLine = z.object({
   type: z.string().optional(),
+  // Id da mensagem: o gerador de título o usa para ver se o assunto ainda é o mesmo (ver titles/generator.ts).
+  uuid: z.string().optional(),
   timestamp: z.string().optional(),
   entrypoint: z.string().optional(),
   version: z.string().optional(),
@@ -92,6 +95,8 @@ export interface SessionListOptions {
   includeOld?: boolean;
   /** Sessões que a retenção nunca arquiva (ver server/retention.ts): ficam mesmo paradas além do prazo. */
   keep?: ReadonlySet<string>;
+  /** Conversas que o Club lançou: o assunto delas vem do rastreador incremental (titles/tracker.ts), não de head/tail. */
+  club?: ReadonlySet<string>;
   /** Relógio (só os testes trocam). */
   now?: number;
 }
@@ -115,7 +120,7 @@ export async function readProjectSessions(
       const id = path.basename(e.name, '.jsonl');
       // Ao vivo = processo vivo agora (a entrada de um processo morto não protege). Protegida pela retenção: fica sempre.
       if (cutoff !== null && live.get(id)?.alive !== true && !opts.keep?.has(id) && !(await recentlyActive(projectDir, id, cutoff))) return null;
-      return readSession(projectDir, id, live).catch(() => null);
+      return readSession(projectDir, id, live, opts.club?.has(id) === true).catch(() => null);
     }),
   );
   return sessions
@@ -147,9 +152,12 @@ async function readSession(
   projectDir: string,
   id: string,
   live: ReadonlyMap<string, LiveSession>,
+  club: boolean,
 ): Promise<Session> {
   const file = path.join(projectDir, `${id}.jsonl`);
   const [stat, { head, tail }] = await Promise.all([fs.stat(file), readHeadTail(file)]);
+  // Do Club: o rastreador lê o transcript inteiro (incremental), então acha a virada mesmo no meio. Grande demais: head/tail.
+  const tracked = club ? (await claudeSubject(file))?.topic : undefined;
   const headLines = head.map(parseLine);
   const tailLines = tail.map(parseLine).reverse();
 
@@ -168,7 +176,7 @@ async function readSession(
       liveInfo?.name ??
       null,
     // Arquivo pequeno: head e tail são o mesmo array (não entra duas vezes).
-    topic: sessionTopic(headLines, head === tail ? [] : tail.map(parseLine)),
+    topic: tracked !== undefined ? tracked : sessionTopic(headLines, head === tail ? [] : tail.map(parseLine)),
     entrypoint: origin?.entrypoint ?? liveInfo?.entrypoint ?? null,
     gitBranch: origin?.gitBranch ?? null,
     version: origin?.version ?? null,
@@ -191,48 +199,32 @@ export async function readTranscriptCwd(projectDir: string): Promise<string | nu
   return null;
 }
 
-const TOPIC_MAX = 80;
-
 /**
- * Assunto da conversa: o da última virada de assunto. Virada = a tarefa do quadro que a puxou (`[Tarefa "…"]`)
- * ou a próxima mensagem sua substantiva depois de um ponto de corte (`hasCheckpoint`). Sem virada, é a 1ª
- * mensagem sua. Pula o que o Claude Code ou o Claudio’s Club injetam, a saudação de sessão nova ("Olá, X. Leia
- * sua memória…") e, depois do ponto de corte, a confirmação curta ("ok", "pode seguir").
- * `head` e `tail` em ordem cronológica e sem sobreposição (o tail vazio quando o arquivo é pequeno).
+ * Assunto da conversa (regra em titles/subject.ts). `head` e `tail` em ordem cronológica e sem sobreposição (o tail
+ * vazio quando o arquivo é pequeno).
  */
 export function sessionTopic(head: TranscriptLine[], tail: TranscriptLine[] = []): string | null {
-  let topic: string | null = null;
-  // Depois de um ponto de corte, o próximo assunto é a próxima mensagem substantiva.
-  let waiting = false;
-  for (const l of [...head, ...tail]) {
-    if (l.type === 'assistant') {
-      if (textsOf(l).some((t) => hasCheckpoint(t))) waiting = true;
-      continue;
-    }
-    if (l.type !== 'user') continue;
-    for (const raw of textsOf(l)) {
-      const text = raw.trim();
-      const task = /^\[Tarefa "(.+?)"\]/.exec(text);
-      if (task) {
-        topic = clipTopic(task[1]!);
-        waiting = false;
-        break;
-      }
-      if (!text || isInjectedUserText(text) || text.startsWith('[MyCo]') || /^Olá, [^.]+\. Leia sua (memória|ficha)/.test(text)) continue;
-      if (waiting) {
-        if (isShortConfirmation(text)) continue;
-        topic = clipTopic(text.split(/\r?\n/)[0]!);
-        waiting = false;
-        break;
-      }
-      // Sem virada: a 1ª mensagem sua (só a primeira define).
-      if (topic === null) {
-        topic = clipTopic(text.split(/\r?\n/)[0]!);
-        break;
-      }
-    }
-  }
-  return topic;
+  const st = initialSubjectState();
+  [...head, ...tail].forEach((l, i) => {
+    for (const ev of claudeEvents(l, i)) feedSubject(st, ev);
+  });
+  return st.topic;
+}
+
+/** As mensagens de texto de uma linha do transcript, na ordem. `pos` (posição da linha) só serve de chave se não houver uuid. */
+function claudeEvents(l: TranscriptLine, pos: number): SubjectEvent[] {
+  if (l.type !== 'user' && l.type !== 'assistant') return [];
+  const key = l.uuid ?? `p:${pos}`;
+  const role = l.type === 'assistant' ? 'assistant' : 'user';
+  return textsOf(l).map((text) => ({ role, text, key }));
+}
+
+/** Assunto atual de um transcript do Club (incremental, ver titles/tracker.ts). Null se não dá para ler por inteiro. */
+export function claudeSubject(file: string): Promise<SubjectView | null> {
+  return subjectTracker.read(file, (line, pos) => {
+    const parsed = parseLine(line);
+    return claudeEvents(parsed, pos);
+  });
 }
 
 /** Os textos de uma mensagem (string ou blocos de texto). */
@@ -244,28 +236,6 @@ function textsOf(l: TranscriptLine): string[] {
   return content.flatMap((b) =>
     b && typeof b === 'object' && (b as { type?: unknown }).type === 'text' && typeof (b as { text?: unknown }).text === 'string' ? [(b as { text: string }).text] : [],
   );
-}
-
-/** Palavras de confirmação (pt/en/es), sem acento. Lista fechada: "Corrige o bug" é assunto, "ok, valeu" não. */
-const CONFIRMATION_WORDS = new Set(
-  'ok okay oks blz beleza certo certinho perfeito otimo show top valeu vlw obrigado obrigada brigado grato sim nao pode seguir segue siga continua continue manda bora aprovado aprovada entendi combinado feito isso fechado thanks thank you yes no go ahead great nice gracias si vale perfecto listo de acordo'.split(' '),
-);
-
-/** "ok", "obrigado", "pode seguir": só palavras de confirmação, sem pergunta. Não é um assunto novo. */
-function isShortConfirmation(text: string): boolean {
-  if (text.includes('?')) return false;
-  const words = text
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .split(/[^a-z]+/)
-    .filter(Boolean);
-  return words.length <= 4 && words.every((w) => CONFIRMATION_WORDS.has(w));
-}
-
-function clipTopic(s: string): string {
-  const one = s.replace(/\s+/g, ' ').trim();
-  return one.length > TOPIC_MAX ? `${one.slice(0, TOPIC_MAX - 1)}…` : one;
 }
 
 function parseLine(line: string): TranscriptLine {

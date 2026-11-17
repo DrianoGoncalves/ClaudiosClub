@@ -17,6 +17,8 @@
   "kindUsage": { "message": "is close to the usage limit" },
   "kindBlocked": { "message": "has a task waiting on one that got stuck" },
   "kindNotStarted": { "message": "has a task forgotten in To do" },
+  "kindQuestion": { "message": "has a task question waiting for you" },
+  "kindStuck": { "message": "has a stalled task that needs you" },
   "notifMany": { "message": "$N$ new alerts in Claudio’s Club", "placeholders": { "n": { "content": "$1" } } },
   "notifManyBody": { "message": "Open the Club to see who is waiting for you." },
   "loading": { "message": "Loading…" },
