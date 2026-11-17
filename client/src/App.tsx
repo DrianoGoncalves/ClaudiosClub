@@ -38,6 +38,7 @@ import { leftOutByRetention } from './detail/oldConversations';
 import { deletedNotice } from './detail/skillAccess';
 import { companyName, effortLabel, employeeName } from './format';
 import { t } from './i18n';
+import { linkItem, parseOpenLink } from './inbox/deepLink';
 import { useInbox } from './inbox/useInbox';
 import { rankingGroups } from './ranking';
 import { staffIndex } from './taskCost';
@@ -268,6 +269,25 @@ export function App() {
     setSelectedId(node);
   }, []);
   const inbox = useInbox(openInbox);
+
+  // A extensão do Chrome abre o Club com `#abrir?…` ao clicar numa notificação (ver inbox/deepLink.ts): com o quadro carregado, vai à tela do
+  // aviso e tira o link do endereço (recarregar a página não abre de novo).
+  const boardReady = board !== null;
+  useEffect(() => {
+    if (!boardReady) return;
+    const go = () => {
+      const link = parseOpenLink(window.location.hash);
+      if (!link) return;
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      if (!link.tasks) return openInbox(linkItem(link));
+      setSchedulesFor(null);
+      setJumpTask(null);
+      setTasksFor(link.projectId);
+    };
+    go();
+    window.addEventListener('hashchange', go);
+    return () => window.removeEventListener('hashchange', go);
+  }, [boardReady, openInbox]);
 
   // Conversa que acabou de nascer (pedido do guia do projeto): o painel do funcionário abre nela, mesmo antes de o quadro relê-la.
   const openNewConversation = useCallback(

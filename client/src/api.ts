@@ -357,6 +357,36 @@ export interface PermissionOpts {
   annotations?: QuestionAnnotations;
 }
 
+/** Um pareamento da extensão do Chrome (server/extension/tokens.ts): só os metadados, nunca o token. */
+export interface ExtensionPairing {
+  id: string;
+  label: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+/** GET /api/extension: `available` é falso quando a pasta `extension/` não está nesta versão. */
+export interface ExtensionInfo {
+  id: string;
+  available: boolean;
+  pairings: ExtensionPairing[];
+}
+
+/** O .zip da extensão: POST com resposta em arquivo (o `post` comum espera JSON). A recusa vem em JSON, como nas outras rotas. */
+async function postFile(url: string): Promise<Blob> {
+  let res: Response;
+  try {
+    res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-myco': '1' }, body: '{}' });
+  } catch (err) {
+    if (err instanceof TypeError) throw offlineError();
+    throw err;
+  }
+  if (res.ok) return res.blob();
+  const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
+  pairingSignal(url, false, data);
+  throw new ApiError(errorMessage(data, `${url}: ${res.status}`), data.code ?? null, null, data, res.status);
+}
+
 export const api = {
   agentSource: (scope: 'project' | 'user', projectId: string | null, name: string) =>
     get<AgentSource>(
@@ -409,6 +439,11 @@ export const api = {
   pairRequest: () => post<{ paired: true } | { paired: false; id: string; code: string; terminal: boolean }>('/api/pair/request'),
   /** Aprovado no terminal: a resposta grava o cookie. Expirado: ApiError com code `pair-gone`. */
   pairClaim: (id: string) => post<{ paired: boolean }>('/api/pair/claim', {}, { 'x-pair-request': id }),
+  /** Extensão do Chrome (Configurações): os pareamentos, o código de pareamento (vale 5 min), revogar e baixar o .zip. */
+  extension: () => get<ExtensionInfo>('/api/extension'),
+  extensionPair: (label?: string) => post<{ code: string; expiresAt: string }>('/api/extension/pair', label ? { label } : {}),
+  extensionRevoke: (id: string) => post<{ ok: true }>(`/api/extension/pairings/${encodeURIComponent(id)}/revoke`),
+  extensionDownload: () => postFile('/api/extension/download'),
   updateStatus: (fresh = false) => get<UpdateStatus>(fresh ? '/api/update?fresh=1' : '/api/update'),
   applyUpdate: () => post<{ from: string; to: string; installed: boolean; restarting: boolean }>('/api/update'),
   /** `fresh`: relê o login do Codex na hora (a tela pede enquanto espera o login). */

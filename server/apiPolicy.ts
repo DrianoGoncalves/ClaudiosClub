@@ -49,3 +49,22 @@ export function sandboxVerdict(method: string, pathname: string, projectId: stri
   if (target && target !== projectId) return { status: 403, error: 'a sandbox do Codex só fala com o projeto da própria conversa' };
   return null;
 }
+
+// ---- a extensão do Chrome (server/extension/, ver gate.ts) ----
+//
+// Só estas rotas, com o método exato. O Origin `chrome-extension://…` é o da extensão; o token dela (pareado) é conferido no gate. Nenhuma
+// rota da tela ou dos funcionários entra aqui: a extensão não vê o resto da API.
+
+export const EXT_PREFIX = '/api/ext/';
+
+const EXTENSION_ROUTES: ReadonlyArray<{ method: 'GET' | 'POST'; path: string }> = [
+  { method: 'POST', path: '/api/ext/v1/pair' },
+  { method: 'GET', path: '/api/ext/v1/inbox' },
+  { method: 'GET', path: '/api/ext/v1/projects' },
+  { method: 'POST', path: '/api/ext/v1/tasks' },
+];
+
+/** A extensão pode pedir `method pathname`? Lista fechada, sem prefixo nem barra final. */
+export function extensionMay(method: string, pathname: string): boolean {
+  return EXTENSION_ROUTES.some((r) => r.method === method && r.path === pathname);
+}
