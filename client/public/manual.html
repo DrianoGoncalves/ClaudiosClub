@@ -626,6 +626,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <li><a href="#itens-config">Itens mais usados</a></li>
         <li><a href="#codex">Codex</a></li>
         <li><a href="#claude">Claude</a></li>
+        <li><a href="#extensao-chrome">Extensão do Chrome</a></li>
         <li><a href="#atualizar">Atualizar o Club</a></li>
         <li><a href="#problemas-config">Problemas comuns</a></li>
       </ul>
@@ -2432,6 +2433,31 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       <div class="card"><h4><span class="mb p">Entrar no Claude</span></h4><p>Aparece quando o CLI está <b>deslogado</b>.</p></div>
       <div class="card"><h4><span class="mb p">Entrar pela assinatura</span></h4><p>Aparece quando o CLI está logado pela <b>API</b>, e não pela assinatura.</p></div>
     </div>
+  </article>
+
+  <article class="blk" id="extensao-chrome">
+    <h3>Extensão do Chrome</h3>
+    <p>Mostra no Chrome o que espera você (mesmo com a aba do Club fechada) e cria tarefas rápidas. Fica em <b>Configurações → Geral → Extensão do Chrome</b>.</p>
+    <ol class="steps">
+      <li>
+        <p class="st">Clique em <b class="ui">Baixar extensão</b>, descompacte o <code>.zip</code> numa pasta que você não vai apagar.</p>
+      </li>
+      <li>
+        <p class="st">No Chrome, abra <code>chrome://extensions</code>, ligue <b class="ui">Modo do desenvolvedor</b> e clique em <b class="ui">Carregar sem compactação</b>. Escolha a pasta descompactada (a que tem o <code>manifest.json</code>, não o <code>.zip</code>).</p>
+      </li>
+      <li>
+        <p class="st"><b>Parear:</b> clique em <b class="ui">Gerar código de pareamento</b> e digite o código no ícone da extensão. O código vale 5 minutos e serve uma vez.</p>
+      </li>
+      <li>
+        <p class="st"><b>Revogar:</b> em <b class="ui">Pareadas</b>, clique em <b class="ui">Revogar</b>. A extensão perde o acesso na hora.</p>
+      </li>
+    </ol>
+    <div class="cards c3">
+      <div class="card"><h4><span class="mb p">Avisos</span></h4><p>A extensão confere a caixa <b class="ui">Precisa de mim</b> a cada minuto. Com a aba do Club fechada, o aviso chega em até 1 minuto; clicar nele abre o Club na tela de quem espera.</p></div>
+      <div class="card"><h4><span class="mb p">Tarefa rápida</span></h4><p>No ícone da extensão, escolha o projeto, o responsável e o título. A tarefa entra em <b>Aguardar</b>; marque <b class="ui">Iniciar já</b> para ela começar (se o consumo estiver travado, pode ficar em <b>A fazer</b>).</p></div>
+      <div class="card"><h4><span class="mb p">Limites</span></h4><p>O Club e o Chrome precisam estar abertos. Com o Club fora do ar, o ícone mostra <code>off</code> e a tarefa não fica guardada.</p></div>
+    </div>
+    <div class="note warn"><svg class="i ico"><use href="#i-alert"/></svg><div><p>Sem o Club e o Chrome abertos ao mesmo tempo, nada chega: não existe fila.</p></div></div>
   </article>
 
   <article class="blk" id="atualizar">
