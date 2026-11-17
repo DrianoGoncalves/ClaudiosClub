@@ -347,7 +347,8 @@ export function admit(req: http.IncomingMessage, res: http.ServerResponse, url: 
       return { done: true };
     }
   }
-  const fromBrowser = !!origin && pairing.isPaired(req.headers.cookie);
+  // Só Origin local: um GET de outra origem (a extensão, uma página) com o cookie não vira tela.
+  const fromBrowser = !!origin && o.isLocalOrigin(origin) && pairing.isPaired(req.headers.cookie);
 
   if (url.pathname === PAIR_PATH && req.method === 'GET') {
     const result = pairing.checkCode(url.searchParams.get('code'));

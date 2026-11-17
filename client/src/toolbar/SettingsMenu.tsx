@@ -10,6 +10,7 @@ import { useTheme, useThemePref, type ThemePref } from '../theme';
 import { useChatDetail } from '../chat/chatDetail';
 import { LOCALES, locale, setLocale, t, type Locale, type MsgKey } from '../i18n';
 import { OPEN_SETTINGS_EVENT } from './openSettings';
+import { ExtensionControls } from './ExtensionControls';
 import { PairControls } from './PairControls';
 import { useSystemMonitor } from './SystemMonitor';
 import { RolesEditor } from './RolesEditor';
@@ -103,12 +104,13 @@ const CREDITS = [
   { name: 'Caveat', license: 'SIL OFL 1.1', url: 'https://fonts.google.com/specimen/Caveat' },
 ];
 
-type SectionId = 'workspaces' | 'colors' | 'display' | 'help' | 'ai' | 'system' | 'retention';
+type SectionId = 'workspaces' | 'colors' | 'display' | 'help' | 'ai' | 'extension' | 'system' | 'retention';
 
 /** Blocos com título dentro de um grupo, nesta ordem. Itens sem bloco vêm antes. */
 const SECTIONS: Array<{ id: SectionId; group: GroupId; label: string }> = [
   { id: 'help', group: 'general', label: t('toolbar.sectionHelp') },
   { id: 'ai', group: 'general', label: t('toolbar.sectionAi') },
+  { id: 'extension', group: 'general', label: t('ext.section') },
   { id: 'system', group: 'general', label: t('toolbar.sectionSystem') },
   { id: 'workspaces', group: 'board', label: t('toolbar.sectionWorkspaces') },
   { id: 'display', group: 'board', label: t('toolbar.sectionDisplay') },
@@ -524,6 +526,15 @@ function buildSettings(
           },
         ]
       : []),
+    {
+      id: 'extension',
+      group: 'general',
+      section: 'extension',
+      title: t('ext.title'),
+      description: t('ext.desc'),
+      keywords: t('ext.keywords'),
+      control: <ExtensionControls />,
+    },
     // Sistema: o pareamento primeiro (sem ele nenhuma ação vale), parar/reiniciar por último.
     {
       id: 'pair',

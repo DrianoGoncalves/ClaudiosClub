@@ -12,3 +12,4 @@ Para o funcionário: responda a dúvida de uso com base nestas páginas; se não
 | [06-consumo-e-motores.md](06-consumo-e-motores.md) | Consumo de 5 h e 7 dias, ranking, motor Claude ou Codex, troca para o secundário, revisão de custo e segunda opinião do Codex. |
 | [07-configuracoes-e-atualizacao.md](07-configuracoes-e-atualizacao.md) | Idioma, ligar e entrar no Codex, atualizar pelo botão e problemas comuns. |
 | [08-dicas-e-casos.md](08-dicas-e-casos.md) | Casos práticos, dicas e erros comuns para pôr um projeto em prática. |
+| [09-extensao-do-chrome.md](09-extensao-do-chrome.md) | Extensão do Chrome: instalar, parear, revogar, avisos com o Club fechado no navegador, tarefa rápida e limites. |

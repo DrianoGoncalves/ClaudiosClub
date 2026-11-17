@@ -81,6 +81,10 @@ import { actingStaff, requesterSessionOf, SANDBOX_HOST, SessionTokens, type Call
 import { isUnverifiedOrigin, staffOrigin, type OriginDeps } from './chat/origin';
 import { RequesterAskLimiter } from './chat/requesterAsk';
 import { gate } from './gate';
+import { EXTENSION_DIR, EXTENSION_ID } from './extension/identity';
+import { ExtensionTokens } from './extension/tokens';
+import { handleExtension, type ExtensionDeps } from './extension/routes';
+import { buildExtensionZip, ExtensionPackError } from './extension/zip';
 import { CodexUsageReader, codexLimitHit, readInstalled } from './codexUsage';
 import { CodexSetup, CodexSetupError } from './codexSetup';
 import { readUsage } from './usage';
@@ -242,6 +246,8 @@ const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', 'claudio.loc
 const MAX_BODY = 4 * 1024 * 1024;
 /** Pareamento do navegador: a chave (~/.myco/secrets/pairing.key) é criada aqui, na subida, se ainda não existe. */
 const pairing = new Pairing();
+/** Pareamentos da extensão do Chrome (token Bearer; só o hash vai ao disco). */
+const extensionTokens = new ExtensionTokens();
 
 // No quadro: o demo (e o antigo, se ainda existir), as pastas de `extraProjects` (novas ou importadas) e os
 // projetos com equipe. O resto do que o Claude Code conhece só entra se o usuário importar (`/api/import-projects`).
@@ -1985,6 +1991,47 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     },
   ],
   ['GET', /^\/api\/config$/, () => readConfig()],
+  // ---- a extensão do Chrome (Configurações): o código de pareamento, os pareados e o .zip para instalar (server/extension/) ----
+  // Todas são POST (um GET de navegação não manda Origin, então não seria da tela) e só valem pelo navegador pareado.
+  [
+    'GET',
+    /^\/api\/extension$/,
+    async () => ({
+      id: EXTENSION_ID,
+      available: await fs.access(path.join(EXTENSION_DIR, 'manifest.json')).then(
+        () => true,
+        () => false,
+      ),
+      pairings: extensionTokens.list(),
+    }),
+  ],
+  [
+    'POST',
+    /^\/api\/extension\/pair$/,
+    async ({ fromBrowser, body }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      const req = z.object({ label: z.string().max(40).optional() }).strict().safeParse(body ?? {});
+      if (!req.success) throw new BadRequest(req.error.issues[0]?.message ?? 'pedido inválido');
+      return extensionTokens.startPairing(req.data.label);
+    },
+  ],
+  [
+    'POST',
+    /^\/api\/extension\/pairings\/([A-Za-z0-9-]+)\/revoke$/,
+    async ({ params: [id], fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      return extensionTokens.revoke(id ?? '') ? { ok: true } : null;
+    },
+  ],
+  [
+    'POST',
+    /^\/api\/extension\/download$/,
+    async ({ fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      const bytes = await buildExtensionZip(EXTENSION_DIR, PORT);
+      return new Raw(bytes, 'application/zip', { 'content-disposition': 'attachment; filename="claudios-club-extensao.zip"' });
+    },
+  ],
   // Biblioteca de skills da conta (~/.myco/skills): só quem tem a skill na ficha carrega.
   ['GET', /^\/api\/skills\/library$/, () => listLibrary()],
   [
@@ -2074,12 +2121,41 @@ const CONTENT_TYPES: Record<string, string> = {
   '.json': 'application/json; charset=utf-8',
 };
 
+/**
+ * O que a extensão do Chrome vê: as mesmas leituras e escritas da tela, só com a projeção dela (ver server/extension/routes.ts). Nada de
+ * conversa, arquivo ou configuração.
+ */
+const extDeps: ExtensionDeps = {
+  tokens: extensionTokens,
+  inbox: () => getInbox(),
+  projects: async () => {
+    const list = (await adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf);
+    const profiles = await staff.listAll(list);
+    return list.map((p) => ({
+      id: p.id,
+      name: p.name,
+      staff: profiles.filter((s) => s.projectId === p.id).map((s) => ({ id: s.id, name: s.name, role: s.role })),
+    }));
+  },
+  createTask: (projectId, body) => tasks.create(projectId, body),
+  startTask: (projectId, taskId) => tasks.start(projectId, taskId),
+  parkTask: (projectId, taskId, reason) => tasks.update(projectId, taskId, { waitReason: reason }),
+};
+
 async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
   // Porta de entrada (server/gate.ts): Host, método, navegador pareado (ver pairing.ts), quem chama (socket e token da conversa) e as listas de rotas.
   // Aqui também ficam GET /api/pair (o link com o código), POST /api/pair/request|claim|approve (o botão "Parear este navegador" + `npm run pair
   // CÓDIGO`) e POST /api/pair/rotate (desparear todos).
-  const admitted = gate(req, res, { pairing, tokens: sessionTokens, localHostnames: LOCAL_HOSTNAMES, isLocalOrigin, openApproval });
+  const admitted = gate(req, res, { pairing, tokens: sessionTokens, extensionTokens, localHostnames: LOCAL_HOSTNAMES, isLocalOrigin, openApproval });
   if (!admitted) return;
+  // A extensão do Chrome tem as próprias rotas (antes do stream e da tabela da tela). O boardCache sai no fim de toda escrita, como abaixo.
+  if (admitted.extension) {
+    try {
+      return await handleExtension(req, res, admitted, extDeps);
+    } finally {
+      if (req.method !== 'GET') boardCache.invalidate();
+    }
+  }
   const { url, sandbox, fromBrowser, caller } = admitted;
 
   const stream = STREAM_ROUTE.exec(url.pathname);
@@ -2111,6 +2187,8 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
       } catch (err) {
         if (method !== 'GET') boardCache.invalidate(); // falha no meio de uma escrita também pode ter mudado algo
         if (err instanceof ProjectFileError) return send(res, err.status, { error: err.message, ...err.extra });
+        // Zip da extensão: pasta ausente (404) ou manifest recusado / pacote grande (409).
+        if (err instanceof ExtensionPackError) return send(res, err.status, { error: err.message });
         if (err instanceof UsageStopError) return send(res, 409, { error: err.message, code: err.code, hit: err.hit });
         // Vitrine: já sendo gerada (409); recusada antes de começar, pelo uso (429) ou pelos recursos (503).
         if (err instanceof ShowcaseBusyError) return send(res, 409, { error: err.message });

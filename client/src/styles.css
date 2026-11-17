@@ -1093,6 +1093,26 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .notice-pair code { white-space: nowrap; }
 .pair-command { display: flex; flex-direction: column; gap: 4px; }
 .pair-command code { user-select: all; white-space: nowrap; }
+
+/* ---- extensão do Chrome (Configurações → Geral): passos, código de pareamento e pareadas ---- */
+.ext { flex: 1 1 100%; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.ext-block { display: flex; flex-direction: column; gap: 6px; }
+.ext-sub { margin: 0; font-size: 12.5px; font-weight: 600; }
+.ext-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; line-height: 1.45; }
+.ext-steps .btn-secondary { margin-left: 4px; }
+.ext-url { user-select: all; padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px; background: var(--card); white-space: nowrap; }
+.ext-note { margin: 0; font-size: 12px; line-height: 1.4; }
+.ext-pair { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.ext-field { display: flex; flex-direction: column; gap: 3px; flex: 1 1 180px; min-width: 0; font-size: 12px; }
+.ext-code { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; padding: 10px 12px; border: 1px dashed var(--ink-blue); border-radius: 8px; background: var(--card); font-size: 12px; }
+.ext-code-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.ext-code-value { font-family: ui-monospace, Consolas, monospace; font-size: 24px; font-weight: 700; letter-spacing: 0.12em; user-select: all; }
+.ext-ok { margin: 0; font-size: 13px; color: var(--ink-green); }
+.ext-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ext-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.ext-who { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: 12.5px; }
+.ext-who b { overflow-wrap: anywhere; }
+.ext-who .muted { font-size: 12px; }
 .actions { margin-top: 10px !important; display: flex; gap: 8px; align-items: center; }
 .btn-secondary, .files-cm .cm-panels .cm-panel.cm-search :is(button.cm-button, label) { font: inherit; font-size: 12px; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
 .btn-secondary:hover:not(:disabled), .files-cm .cm-panels .cm-panel.cm-search :is(button.cm-button, label):hover { border-color: var(--accent); }

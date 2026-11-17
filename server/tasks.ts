@@ -49,7 +49,7 @@ export class TaskForbiddenError extends TaskError {}
 /** A dúvida já foi respondida (ou a pergunta não está mais aberta): 409 na rota. */
 export class TaskConflictError extends TaskError {}
 
-const SAFE_ID = /^[a-z0-9-]{1,40}$/;
+export const SAFE_ID = /^[a-z0-9-]{1,40}$/;
 
 /** O que fazer com uma tarefa que espera por outra que foi cancelada (ou apagada): ver `resolveCancelledBlocker` e `cancel`. */
 export type DependentAction = 'release' | 'cancel' | 'wait';
