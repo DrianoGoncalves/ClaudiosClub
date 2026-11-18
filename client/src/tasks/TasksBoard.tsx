@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
-import { AUTO_REVIEW_ROUNDS, isClosed, type BoardConfig, type CostReport, type StaffProfile, type Task as TaskModel, type TaskHandoff, type TaskStatus } from '../../../shared/model';
+import { AUTO_REVIEW_ROUNDS, isClosed, type BoardConfig, type CostReport, type StaffProfile, type Task as TaskModel, type TaskCreateResult, type TaskCreateWarning, type TaskHandoff, type TaskStatus } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
 import { pollVisible } from '../usePoll';
 import { Markdown } from '../chat/markdown';
@@ -17,10 +17,13 @@ import { TaskCodePanel } from './TaskCodePanel';
 import { DoubtBadge, DoubtBlock } from './TaskDoubt';
 import { PauseNote } from './TaskPause';
 import { RetryBadge } from './TaskRetry';
+import { SubtaskBadges, SubtaskBlock, SubtaskRow } from './TaskSubtasks';
 import { ResourceWaitBadge, resourceWaitText } from './ResourceWait';
-import { BlockedBadge, BlockedByField, blockerName, openBlockers, sameDeps } from './TaskDeps';
+import { BlockedBadge, BlockedByField, blockerName, openBlockers, sameDeps, shownBlockers } from './TaskDeps';
 import { waitClass, waitWarm } from './waitTone';
-import { cancelledByName, dependentRows, type DepMap, type DepMode } from './cancelDeps';
+import { dependentRows, type DepMap, type DepMode } from './cancelDeps';
+import { cancelledWho, duplicateWarnings } from './cancelRequest';
+import { CancelRequestBadge, CancelRequestBlock, DuplicateNote } from './TaskCancelRequest';
 import { TaskCloseDialog } from './TaskCloseDialog';
 import { TaskCostBlock } from './TaskCostBlock';
 import { OrderButtons } from './OrderButtons';
@@ -74,6 +77,16 @@ export function byQueue<T extends Pick<TaskModel, 'status' | 'updatedAt' | 'queu
   const queued = tasks.filter((t) => queuePosOf(t) > 0).sort((a, b) => queuePosOf(a) - queuePosOf(b));
   return [...queued, ...byRecent(tasks.filter((t) => queuePosOf(t) === 0))];
 }
+
+/**
+ * Os textos da fila (chip do cartão e linha do detalhe). Com bloqueadora segurando a tarefa (`pending`: aprovada mas ainda sem
+ * mesclar também conta, só a mesclagem a libera), a fila não promete início: só mostra a posição. Sem ela, diz quando começa.
+ */
+export const queueKeys = (pending: boolean, busy: boolean) =>
+  ({
+    chip: pending ? 'tasks.queuedOrderHint' : 'tasks.queuedHint',
+    detail: pending ? 'tasks.queueOnly' : busy ? 'tasks.queueBusy' : 'tasks.queueFree',
+  }) as const;
 
 const LABEL: Record<TaskStatus, string> = {
   waiting: t('tasks.statusWaiting'),
@@ -147,6 +160,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const [showCancelled, setShowCancelled] = useState(false);
   /** Diálogo de cancelar ou apagar aberto, para a tarefa `id`. */
   const [closing, setClosing] = useState<{ mode: DepMode; id: string } | null>(null);
+  /** Aviso de possível duplicata da última tarefa criada aqui (a nova, e as parecidas); some ao fechar o aviso ou ao abrir o formulário de novo. */
+  const [dup, setDup] = useState<{ createdId: string; warnings: TaskCreateWarning[] } | null>(null);
   const boardReview = useBoardReview(projectId);
   const now = Date.now();
 
@@ -216,6 +231,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const movesOf = (t: Task) => orderMoves(t, tasks ?? []);
   /** As dependências que seguram a tarefa (só a que ainda não começou espera por elas). */
   const waitingOn = (t: Task) => (!t.sessionId && (t.status === 'todo' || t.status === 'waiting') ? openBlockers(t, tasks ?? []) : []);
+  /** As que o selo "Esperando" ainda mostra: a bloqueadora já aprovada sai (ver `shownBlockers`); sobra só a posição na fila. */
+  const waitingShown = (t: Task) => shownBlockers(waitingOn(t));
   /** Pronto parado há mais de 7 dias (o servidor marca): fora do quadro, atrás do "Ver arquivadas". */
   const archived = (tasks ?? []).filter((t) => t.archived);
   /** Canceladas: fora das colunas, no grupo recolhido de Pronto. Nunca contam como prontas. */
@@ -270,7 +287,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         <VerdictBadge task={task} nameOf={nameOf} />
         {task.status === 'review' && <OwnerBadge plan={reviewPlan(task, boardReview.config)} />}
         <DoubtBadge question={task.question} requestedBy={task.requestedBy} nameOf={nameOf} warm={waitWarm(task.status)} />
+        <CancelRequestBadge request={task.cancelRequest} nameOf={nameOf} />
         <PauseNote pause={task.pause} staffName={nameOf(task.staffId)} now={now} />
+        <SubtaskBadges task={task} tasks={tasks ?? []} nameOf={nameOf} />
         <span className="task-meta muted small">
           <span className="task-id" title={t('tasks.idHint')}>
             {task.id}
@@ -281,7 +300,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         </span>
         {task.status === 'cancelled' && (
           <span className="task-run-note muted small" title={task.cancelReason ?? undefined}>
-            {t('tasks.cancelledBy', { name: cancelledByName(task.cancelledBy, nameOf, t('tasks.byYou')) })}
+            {t('tasks.cancelledBy', { name: cancelledWho(task, nameOf) })}
             {task.cancelReason && ` · ${task.cancelReason}`}
           </span>
         )}
@@ -300,9 +319,10 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         {task.fallback && <TaskFallbackBadge fallback={task.fallback} />}
         <FallbackWaitBadge wait={task.fallbackBlocked} now={now} warm={waitWarm(task.status)} />
         {/* Esperando dependência: o selo diz por quais tarefas; na fila ou não, ela só começa quando ficarem prontas. O laranja de espera é só da coluna A fazer. */}
-        <BlockedBadge blockers={waitingOn(task)} warm={waitWarm(task.status)} />
-        {queuePosOf(task) > 0 && !waitingOn(task).length && (
-          <span className={`task-queue${waitClass(waitWarm(task.status))} small`} title={t('tasks.queuedHint')}>
+        <BlockedBadge blockers={waitingShown(task)} warm={waitWarm(task.status)} />
+        {/* A ordem na fila não é aviso: fica no visual padrão, sem o laranja da espera. */}
+        {queuePosOf(task) > 0 && !waitingShown(task).length && (
+          <span className="task-queue small" title={t(queueKeys(waitingOn(task).length > 0, false).chip)}>
             {t('tasks.queuePos', { pos: queuePosOf(task), who: nameOf(task.staffId) ?? t('tasks.ownerFallback') })}
           </span>
         )}
@@ -316,6 +336,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
       </button>
       {/* Ordem da fila: fora do botão (o cartão é um botão, e botão não cabe dentro de botão); é o caminho do celular, onde arrastar não basta. */}
       {orderRow(task)}
+      {/* Subtarefas (card que aguarda) ou card de origem (subtarefa): links fora do botão, pelo mesmo motivo. */}
+      <SubtaskRow task={task} tasks={tasks ?? []} labels={LABEL} onOpen={setSelected} />
       {/* Motivo de Aguardar: fica fora do botão (o cartão é um botão, e campo não cabe dentro). Salva ao sair do campo. */}
       {task.status === 'waiting' && (
         <input
@@ -348,7 +370,13 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                 <ClockIcon /> {t('schedules.open')}
               </button>
             )}
-            <button className="btn-primary" onClick={() => setAdding(true)}>
+            <button
+              className="btn-primary"
+              onClick={() => {
+                setDup(null);
+                setAdding(true);
+              }}
+            >
               {t('tasks.newTask')}
             </button>
             <button className="drawer-close in-head" onClick={onClose} aria-label={t('tasks.close')}>
@@ -358,6 +386,16 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         </header>
         {/* Com o detalhe aberto o erro aparece nele: no celular o detalhe cobre o quadro inteiro. */}
         {error && !current && <p className="error small" role="alert">{error}</p>}
+        {dup && (
+          <DuplicateNote
+            warnings={dup.warnings}
+            createdId={dup.createdId}
+            now={now}
+            statusLabel={(s) => LABEL[s]}
+            onOpen={setSelected}
+            onClose={() => setDup(null)}
+          />
+        )}
         <BoardReview review={boardReview} staff={byHierarchy(staff)} />
         {adding && (
           <TaskForm
@@ -366,7 +404,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             onCancel={() => setAdding(false)}
             onSave={async (input, andStart) => {
               setError(null);
-              let made: TaskModel | null;
+              let made: TaskCreateResult | null;
               try {
                 // Só criar (start false): a tarefa fica em Aguardar.
                 made = await api.createTask(projectId, { ...input, start: andStart });
@@ -376,6 +414,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                 return;
               }
               setAdding(false);
+              // Criada, mas parecida com uma de há pouco: só aviso (a tarefa existe); você decide qual cancelar.
+              const similar = duplicateWarnings(made);
+              setDup(made && similar.length ? { createdId: made.id, warnings: similar } : null);
               await act(async () => {
                 if (andStart && made?.staffId) await withUsageConfirm((force) => api.startTask(projectId, made!.id, force));
               });
@@ -457,6 +498,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             error={error}
             tasks={tasks ?? []}
             waitingOn={waitingOn(current)}
+            waitingShown={waitingShown(current)}
             busyWith={busyWith(current)}
             queuePos={queuePosOf(current)}
             queueTotal={queueSize(tasks ?? [], current.staffId)}
@@ -464,6 +506,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             onOrder={(body) => void reorder(current, body)}
             onUnqueue={() => void act(() => api.updateTask(projectId, current.id, { queued: false }))}
             onOpen={() => current.staffId && onOpenStaff(current.staffId)}
+            onOpenTask={setSelected}
             nameOf={nameOf}
             onCancel={() => setClosing({ mode: 'cancel', id: current.id })}
             onReopen={() => void act(() => api.reopenTask(projectId, current.id))}
@@ -711,6 +754,7 @@ function TaskDetail({
   error,
   tasks,
   waitingOn,
+  waitingShown,
   busyWith,
   queuePos,
   queueTotal,
@@ -718,6 +762,7 @@ function TaskDetail({
   onOrder,
   onUnqueue,
   onOpen,
+  onOpenTask,
   onDelete,
   onCancel,
   onReopen,
@@ -743,6 +788,8 @@ function TaskDetail({
   tasks: Task[];
   /** As dependências que ainda seguram esta tarefa (a cancelada continua segurando). */
   waitingOn: { id: string; title: string; status: TaskStatus }[];
+  /** As de `waitingOn` que o texto "Esperando" ainda mostra (sem a bloqueadora já aprovada). */
+  waitingShown: { id: string; title: string; status: TaskStatus }[];
   /** A tarefa em que o responsável está agora (aí "Começar" põe na fila). */
   busyWith: Task | null;
   queuePos: number;
@@ -753,6 +800,8 @@ function TaskDetail({
   onOrder: (body: OrderBody) => void;
   onUnqueue: () => void;
   onOpen: () => void;
+  /** Abre o detalhe de outra tarefa do quadro (a subtarefa ou o card de origem). */
+  onOpenTask: (id: string) => void;
   onDelete: () => void;
   /** Abre o diálogo de cancelar (toda tarefa não encerrada). */
   onCancel: () => void;
@@ -882,6 +931,7 @@ function TaskDetail({
       {fbWait && <p className={waitText}>{fbWait.hint}</p>}
       <AutoInfo task={task} open={task.status === 'review'} />
       <PauseNote pause={task.pause} staffName={nameOf(task.staffId)} now={Date.now()} />
+      <SubtaskBlock task={task} tasks={tasks} labels={LABEL} staffName={who?.name ?? null} onOpen={onOpenTask} />
       <RetryBadge retry={task.retry} now={Date.now()} withHint />
       <DoubtBlock
         question={task.question}
@@ -890,12 +940,13 @@ function TaskDetail({
         now={Date.now()}
         answer={{ projectId, taskId: task.id, onAnswered: onChanged }}
       />
+      <CancelRequestBlock request={task.cancelRequest} staffName={who?.name ?? null} nameOf={nameOf} now={Date.now()} open={!isClosed(task)} />
       {task.status === 'cancelled' && (
         // Uma frase por linha (quem e quando; o motivo; o que a coluna significa), no tamanho de parágrafo do painel.
         <div className="task-cancelled">
           <p>
             {t('tasks.cancelledDetail', {
-              name: cancelledByName(task.cancelledBy, nameOf, t('tasks.byYou')),
+              name: cancelledWho(task, nameOf),
               when: new Date(task.cancelledAt ?? task.updatedAt).toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }),
             })}
           </p>
@@ -903,10 +954,10 @@ function TaskDetail({
           <p className="muted">{HELP.cancelled}</p>
         </div>
       )}
-      {waitingOn.length > 0 && (
+      {waitingShown.length > 0 && (
         <p className={waitText}>
-          {t('tasks.blockedDetail', { names: waitingOn.map(blockerName).join(', ') })}
-          {waitingOn.some((o) => o.status === 'cancelled') && ` ${t('tasks.blockedCancelledHint')}`}{' '}
+          {t('tasks.blockedDetail', { names: waitingShown.map(blockerName).join(', ') })}
+          {waitingShown.some((o) => o.status === 'cancelled') && ` ${t('tasks.blockedCancelledHint')}`}{' '}
           {queuePos > 0 && (
             <button className="link small" onClick={onUnqueue}>
               {t('tasks.unqueue')}
@@ -914,11 +965,14 @@ function TaskDetail({
           )}
         </p>
       )}
-      {queuePos > 0 && waitingOn.length === 0 && (
-        <p className={waitText}>
-          {busyWith
-            ? t('tasks.queueBusy', { who: who?.name ?? t('tasks.ownerFallback'), pos: queuePos, title: busyWith.title })
-            : t('tasks.queueFree', { who: who?.name ?? t('tasks.ownerFallback'), pos: queuePos })}{' '}
+      {/* A ordem na fila não é aviso: texto padrão, sem o laranja da espera. */}
+      {queuePos > 0 && waitingShown.length === 0 && (
+        <p className="muted small">
+          {t(queueKeys(waitingOn.length > 0, !!busyWith).detail, {
+            who: who?.name ?? t('tasks.ownerFallback'),
+            pos: queuePos,
+            title: busyWith?.title ?? '',
+          })}{' '}
           <button className="link small" onClick={onUnqueue}>
             {t('tasks.unqueue')}
           </button>

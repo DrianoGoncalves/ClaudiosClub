@@ -7,7 +7,7 @@ import { CODEX_CONTEXT_WINDOW } from '../adapters/claude/pricing';
 import { resolveCodexCommand, type CodexEnvStatus } from '../codexEnv';
 import { pickCodexSubstitute, type CodexModelInfo } from '../codexModels';
 import { cleanEnv, withoutMycoToken } from '../auth';
-import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexAgentRole, type CodexExtraMcp, type CodexMcpServer, type CodexSecrets } from './codexArgs';
+import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexAgentRole, type CodexExtraMcp, type CodexHeavyGuard, type CodexMcpServer, type CodexSecrets } from './codexArgs';
 import { codexEditedFiles, codexToolFile } from './codeEdits';
 import { contextUsed, isModelUnavailable, isToolCall, itemFromCodex, parseCodexFailure, type CodexItem, type CodexPhase } from './codexEvents';
 import { isSandboxFailure } from '../engineCapability';
@@ -48,6 +48,8 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   extraMcps?: CodexExtraMcp[];
   /** Agents da ficha como subagents do Codex (TOML já gravado). Ver `codexAgentArgs` em codexArgs.ts. */
   agents?: CodexAgentRole[];
+  /** A fila de validação pesada no terminal (hook heavy-guard; null = sem ela). Ver `codexHeavyArgs` em codexArgs.ts. */
+  heavyGuard?: CodexHeavyGuard | null;
   /**
    * Arquivo de lançamento dos MCPs da ficha (`codex-mcp.json`, com os valores expandidos). Ele vale enquanto a conversa está aberta: quando
    * a conversa fecha (stop, ou o servidor desligando), sai do disco. A próxima abertura grava de novo (prepareCodexRun).
@@ -361,6 +363,7 @@ export class CodexProcess extends ChatProcess {
         cleanMcp: o.cleanMcp,
         extraMcps: o.extraMcps,
         agents: o.agents,
+        heavyGuard: o.heavyGuard,
         secrets: o.secrets,
         network: status.networkProxy ? 'loopback' : 'off',
         internetAccess,

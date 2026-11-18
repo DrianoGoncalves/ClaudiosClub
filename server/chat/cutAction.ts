@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { ChatItem } from '../../shared/model';
+import type { BackgroundTask, ChatItem } from '../../shared/model';
+import { isClipped } from './items';
 import { findSecrets } from './secrets';
 
 // Ação cortada pelo reinício: a ferramenta que estava rodando quando o processo da conversa caiu (sem resultado no fim da
@@ -11,6 +12,7 @@ import { findSecrets } from './secrets';
 // Comando: olha o programa e os argumentos de cada trecho (`&&`, `;`, `|`), não o texto inteiro: `grep deploy`, `cat
 // docs/release.md` e `git commit -m "fix deploy"` não contam. O `description` da entrada não entra.
 // Chamada Agent/Task: o tipo do subagent não diz o que ele fez. `externalCutWithAgents` lê o transcript dele (ver `agentStaysLocal`).
+// Agent ou comando ainda em segundo plano quando o processo caiu (`BackgroundTask`): `externalBackground`, pelo mesmo transcript e pela mesma regra de comando.
 
 type Tok = { t: string; q: boolean };
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
@@ -272,17 +274,28 @@ const AGENT_META = /^(agent-[\w-]+)\.meta\.json$/;
 /** Quantos níveis de subagent dentro de subagent a leitura acompanha; além disso, conta como externo. */
 const MAX_AGENT_DEPTH = 3;
 
-/** `toolUseId` da chamada Agent/Task do pai (no `.meta.json`) → transcript do subagent, de toda a pasta. */
-async function subagentFiles(dir: string): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
+interface Subagents {
+  dir: string;
+  /** `toolUseId` da chamada Agent/Task do pai (no `.meta.json`) → transcript do subagent. */
+  calls: Map<string, string>;
+  /** O que cada `.meta.json` conta do subagent: o rótulo como o de `BackgroundTask` (`tipo: descrição`) e se ele já terminou. */
+  metas: Array<{ file: string; label: string; finished: boolean }>;
+}
+
+/** Os subagents da pasta `<sessão>/subagents` (vazia ou ausente: nenhum). */
+async function readSubagents(dir: string): Promise<Subagents> {
+  const out: Subagents = { dir, calls: new Map(), metas: [] };
   const names = await fs.readdir(dir).catch(() => [] as string[]);
   await Promise.all(
     names.map(async (name) => {
       const m = AGENT_META.exec(name);
       if (!m) return;
       try {
-        const id = (JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) as { toolUseId?: unknown } | null)?.toolUseId;
-        if (typeof id === 'string') out.set(id, path.join(dir, `${m[1]}.jsonl`));
+        const meta = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) as { toolUseId?: unknown; agentType?: unknown; description?: unknown; finished?: unknown } | null;
+        const file = path.join(dir, `${m[1]}.jsonl`);
+        if (typeof meta?.toolUseId === 'string') out.calls.set(meta.toolUseId, file);
+        const label = [meta?.agentType, meta?.description].filter((s): s is string => typeof s === 'string' && s !== '').join(': ');
+        out.metas.push({ file, label, finished: meta?.finished === true });
       } catch {
         // `.meta.json` ilegível: a chamada que dependia dele não acha o transcript e segue como externa
       }
@@ -299,7 +312,12 @@ type AgentLine = { type?: unknown; message?: { content?: unknown } } | null;
  */
 async function agentStaysLocal(files: Map<string, string>, toolUseId: string, depth = 0, seen = new Set<string>()): Promise<boolean> {
   const file = files.get(toolUseId);
-  if (!file || depth >= MAX_AGENT_DEPTH || seen.has(file)) return false;
+  return !!file && fileStaysLocal(files, file, depth, seen);
+}
+
+/** O mesmo de `agentStaysLocal`, a partir do transcript (`files`: os que ele pode chamar, por `toolUseId`). */
+async function fileStaysLocal(files: Map<string, string>, file: string, depth: number, seen: Set<string>): Promise<boolean> {
+  if (depth >= MAX_AGENT_DEPTH || seen.has(file)) return false;
   seen.add(file);
   let raw: string;
   try {
@@ -333,14 +351,63 @@ async function agentStaysLocal(files: Map<string, string>, toolUseId: string, de
  * Sem a pasta (null), é `externalCut`. Codex: os subagents ainda não aparecem nos eventos, então não há transcript e segue conservador.
  */
 export async function externalCutWithAgents(items: readonly ChatItem[], awaitingAnswer: boolean, subagentsDir: string | null): Promise<string | null> {
-  let files: Map<string, string> | null = null;
+  let subs: Subagents | null = null;
   for (const it of openTools(items, awaitingAnswer)) {
     if (!hasExternalEffect(it.name, it.input)) continue;
     if (subagentsDir && isAgentCall(it.name) && it.id.startsWith('t:')) {
-      if (!files) files = await subagentFiles(subagentsDir);
-      if (await agentStaysLocal(files, it.id.slice(2))) continue;
+      subs ??= await readSubagents(subagentsDir);
+      if (await agentStaysLocal(subs.calls, it.id.slice(2))) continue;
     }
     return actionOf(it);
+  }
+  return null;
+}
+
+/** Id de tarefa em segundo plano que cabe num nome de arquivo e num padrão de texto sem escape. */
+const TASK_ID = /^[\w-]+$/;
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
+
+/**
+ * O transcript do agent em segundo plano: `agent-<id da tarefa>.jsonl` (o id da tarefa é o `agentId` do subagent); sem esse arquivo, o único
+ * subagent ainda aberto com o mesmo rótulo (`tipo: descrição`). Mais de um com o rótulo, ou nenhum: null.
+ */
+async function backgroundAgentFile(subs: Subagents, task: BackgroundTask): Promise<string | null> {
+  if (TASK_ID.test(task.id)) {
+    const byId = path.join(subs.dir, `agent-${task.id}.jsonl`);
+    if (await fs.access(byId).then(() => true, () => false)) return byId;
+  }
+  const same = subs.metas.filter((m) => !m.finished && m.label === task.label);
+  return same.length === 1 ? same[0]!.file : null;
+}
+
+/**
+ * O comando em segundo plano só mexe no projeto? A chamada que o abriu se acha pelo id no resultado dela ("Command running in background
+ * with ID: b37k91xg5" ou "moved to the background (ID: b37k91xg5)"); a regra é a de `hasExternalEffect`. Chamada que não está mais nos
+ * itens, de entrada cortada ou sem o id no resultado: false.
+ */
+function shellStaysLocal(items: readonly ChatItem[], task: BackgroundTask): boolean {
+  if (!TASK_ID.test(task.id)) return false;
+  const opened = new RegExp(`\\bID: ${task.id}(?![\\w-])`);
+  const call = items.find((it): it is ToolItem => it.kind === 'tool' && SHELL_TOOLS.has(it.name) && it.result !== null && opened.test(it.result));
+  return !!call && !isClipped(call.input) && !hasExternalEffect(call.name, call.input);
+}
+
+/**
+ * O que ainda rodava em segundo plano quando o processo da conversa caiu (`BackgroundTask`): a primeira tarefa que pode ter mexido fora do
+ * projeto, senão null. Comando: ver `shellStaysLocal`. Agent: o transcript dele em `subagentsDir` (ver `backgroundAgentFile`), com a mesma
+ * conferência dos subagents cortados. Qualquer outro tipo, e agent sem pasta, sem transcript ou ilegível: conta como incerto (devolvido).
+ * Codex não passa por aqui: sem transcript de subagent nem resultado de comando no formato do Claude.
+ */
+export async function externalBackground(background: readonly BackgroundTask[], items: readonly ChatItem[], subagentsDir: string | null): Promise<BackgroundTask | null> {
+  let subs: Subagents | null = null;
+  for (const task of background) {
+    if (task.kind === 'shell' && shellStaysLocal(items, task)) continue;
+    if (task.kind === 'agent' && subagentsDir) {
+      subs ??= await readSubagents(subagentsDir);
+      const file = await backgroundAgentFile(subs, task);
+      if (file && (await fileStaysLocal(subs.calls, file, 0, new Set<string>()))) continue;
+    }
+    return task;
   }
   return null;
 }

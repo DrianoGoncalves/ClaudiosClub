@@ -105,8 +105,10 @@ describe('ficha', () => {
     const solo = renderFicha(profile({ playbook: 'plan-big-execute-small' }), ctx);
     expect(solo).not.toContain('Sua equipe');
     // Contratado sozinho, os agents do roteiro já aparecem como indicados, com os da ficha.
-    expect(solo).toContain('Agents: pesquisador, executor, revisor, Explore.');
-    expect(solo).toMatch(/pede julgamento[^\n]*`executor` com model: "sonnet"/);
+    expect(solo).toContain('Agents: pesquisador, executor, executor-rapido, revisor, Explore.');
+    expect(solo).toContain('`executor-rapido` (Haiku)');
+    expect(solo).toMatch(/implementar o que já está decidido[^\n]*`executor` \(Sonnet\)/);
+    expect(solo).toMatch(/pede julgamento[^\n]*`executor` com model: "opus"/);
     expect(solo).toContain('run_in_background: false');
     // Quem reporta a alguém entrega com as provas; quem não reporta, não tem a seção.
     expect(renderFicha(profile(), { ...ctx, managerNames: ['Daniel'] })).toContain('## Entrega');
@@ -144,7 +146,7 @@ describe('ficha', () => {
     expect(on).toContain('mostre em 1-2 linhas o veredito do GPT');
     expect(on).toContain('se discordarem, mostre as duas posições em linguagem simples');
     // Os agents do roteiro não mudam: o GPT é uma ferramenta, não um agent.
-    expect(on).toContain('Agents: pesquisador, executor, revisor, Explore.');
+    expect(on).toContain('Agents: pesquisador, executor, executor-rapido, revisor, Explore.');
     for (const md of [renderFicha(roteiro, ctx), renderFicha(roteiro, { ...ctx, codex: false })]) {
       expect(md).not.toContain('myco-gpt');
       expect(md).not.toContain('perguntar_gpt');

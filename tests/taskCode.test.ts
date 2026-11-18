@@ -7,10 +7,15 @@ import { checkpoint, CodeError, locateCode, mergeCode, readCode } from '../serve
 import { ensureWorktree } from '../server/staff/worktree';
 
 let root: string;
+const homeBefore = process.env.MYCO_HOME;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-code-'));
+  // A mescla roda `npm test` pelo runTests, que entra na fila de validação pesada da máquina (server/heavyQueue.ts): aqui, uma fila só deste arquivo.
+  process.env.MYCO_HOME = path.join(root, 'myco-home');
 });
 afterAll(async () => {
+  if (homeBefore === undefined) delete process.env.MYCO_HOME;
+  else process.env.MYCO_HOME = homeBefore;
   await fs.rm(root, { recursive: true, force: true });
 });
 

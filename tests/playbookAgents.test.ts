@@ -31,7 +31,7 @@ describe('agents do roteiro', () => {
     const r = await ensurePlaybookAgents({ playbook: 'review-gate' }, d);
     expect(r).toEqual({ created: ['executor', 'revisor'], inline: {} });
     const executor = await readAgentSource(path.join(d.projectPath, '.claude', 'agents'), 'executor');
-    expect(executor).toMatchObject({ model: 'haiku', tools: expect.arrayContaining(['Edit', 'Bash']) });
+    expect(executor).toMatchObject({ model: 'sonnet', effort: 'medium', tools: expect.arrayContaining(['Edit', 'Bash']) });
     expect((await readAgentSource(path.join(d.projectPath, '.claude', 'agents'), 'revisor'))?.model).toBe('sonnet');
     // Na segunda vez não cria nada.
     expect((await ensurePlaybookAgents({ playbook: 'review-gate' }, d)).created).toEqual([]);
@@ -56,8 +56,9 @@ describe('agents do roteiro', () => {
     const wt = path.join(root, 'c-wt');
     await fs.mkdir(wt, { recursive: true });
     const r = await ensurePlaybookAgents({ playbook: 'plan-big-execute-small' }, { ...d, cwd: wt });
-    expect(r.created).toEqual(['pesquisador', 'executor', 'revisor']);
-    expect(r.inline.executor).toMatchObject({ model: 'haiku', prompt: expect.stringMatching(/^Você é um executor/), tools: expect.any(Array) });
+    expect(r.created).toEqual(['pesquisador', 'executor', 'executor-rapido', 'revisor']);
+    expect(r.inline.executor).toMatchObject({ model: 'sonnet', effort: 'medium', prompt: expect.stringMatching(/^Você é um executor/), tools: expect.any(Array) });
+    expect(r.inline['executor-rapido']).toMatchObject({ model: 'haiku', effort: 'low', prompt: expect.stringMatching(/^Você é um executor rápido/) });
   });
 });
 

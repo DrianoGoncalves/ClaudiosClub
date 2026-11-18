@@ -6,6 +6,7 @@ import { personalityName, personalityReminder } from '../../shared/personality';
 import { defaultLocations } from '../adapters/claude/paths';
 import { clubBlockedOrigins } from '../clubAddress';
 import { MYCO_HOME } from '../config';
+import { heavyLockDir } from '../heavyQueue';
 import { lazyNavegadorCommand } from '../navegadorMcp';
 import { ROOT } from '../root';
 import { isClaudeRoot, renderFicha, systemPrompt, type CleanBrowserInfo, type CodexChromeInfo, type FichaContext, type MemoriaInfo, type SshInfo, type TeamMember } from './ficha';
@@ -14,7 +15,7 @@ import { DEFAULT_SECRETS_DIR } from '../secretVault';
 import { ftpMcpServerConfig } from './ftpMcp';
 import { memoriaMcpServer } from './memoriaMcp';
 import { SSH_MCP_BUNDLE, SSH_MCP_NAME, SSH_READ_TOOLS, WRITE_AUTONOMY, sshMcpServerConfig } from './sshMcp';
-import { CLEAN_BROWSER_MCP_NAME, CODEX_CHROME_MCP_NAME, CODEX_SSH_MCP_NAME, type CodexAgentRole, type CodexExtraMcp, type CodexMcpServer } from '../chat/codexArgs';
+import { CLEAN_BROWSER_MCP_NAME, CODEX_CHROME_MCP_NAME, CODEX_SSH_MCP_NAME, type CodexAgentRole, type CodexExtraMcp, type CodexHeavyGuard, type CodexMcpServer } from '../chat/codexArgs';
 import { codexMcpAccess } from './mcpAccess';
 import { gptMcpServerConfig } from './gptMcp';
 import { buildMcpConfig, codexMcpServers, mcpWriteFileFor, type CodexMcpMotivo } from './mcp';
@@ -253,6 +254,8 @@ export interface PreparedCodexRun {
   mcpSnapshotFile: string | null;
   /** Agents da ficha e do roteiro como subagents do Codex (TOML já gravado na pasta da conversa; ver `writeCodexAgents`). */
   agents: CodexAgentRole[];
+  /** A fila de validação pesada no terminal: o hook (cópia na pasta da conversa) e a trava; null se a cópia falhou (ver `codexHeavyArgs`). */
+  heavyGuard: CodexHeavyGuard | null;
 }
 
 /**
@@ -499,6 +502,16 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
   // no meio do caminho (o Codex lê a ficha a cada mensagem), e o lançador, que roda fora da sandbox, não é reescrito por ele (quando o projeto é o do Club).
   const mcpJson = [...new Set([path.join(cwd, '.mcp.json'), path.join(ctx.projectPath, '.mcp.json')])];
   const bundleInCwd = isInside(cwd, MCP_LAUNCH_BUNDLE) ? [MCP_LAUNCH_BUNDLE] : [];
+  // Fila de validação pesada (hook do terminal). O hook roda FORA da sandbox: a cópia fica na pasta da conversa (a sandbox a nega), não no
+  // projeto, que o agente pode editar. Se não deu para copiar, a conversa roda sem a fila e sem a flag de confiança (nunca flag sem o hook).
+  const hooksDir = path.join(ctx.runDir, sessionId, 'hooks');
+  const heavyGuard = await mkdir(hooksDir, { recursive: true })
+    .then(() => Promise.all(HEAVY_HOOK_FILES.map((f) => copyFile(path.join(HOOKS_DIR, f), path.join(hooksDir, f)))))
+    .then((): CodexHeavyGuard => ({ hook: path.join(hooksDir, 'heavy-guard.mjs'), lockDir: heavyLockDir(), ownerPid: process.pid }))
+    .catch((err) => {
+      console.warn(`[staff] ${profile.name}: sem a fila de validação pesada no Codex (${err instanceof Error ? err.message : String(err)})`);
+      return null;
+    });
   return {
     instructions: systemPrompt(profile, fichaCtx, renderFicha(profile, fichaCtx)),
     writableRoots: away ? [staffDir(ctx.projectPath)] : [],
@@ -517,6 +530,7 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
     extraMcps: extra.servers,
     mcpSnapshotFile: extra.snapshotFile,
     agents: agentRoles,
+    heavyGuard,
   };
 }
 
@@ -536,13 +550,19 @@ const HOOKS_DIR = path.join(ROOT, 'scripts', 'hooks');
 const DELIVERY_HOOK = path.join(HOOKS_DIR, 'delivery-check.mjs');
 const STYLE_HOOK = path.join(HOOKS_DIR, 'style-reminder.mjs');
 /** Os hooks de guarda que a conversa leva na própria pasta (cópia, ver prepareRun): o agente não edita o que os aplica. */
-const GUARD_HOOK_FILES = ['club-guard.mjs', 'mcp-write-guard.mjs', 'remote-guard.mjs'] as const;
+const GUARD_HOOK_FILES = ['club-guard.mjs', 'mcp-write-guard.mjs', 'remote-guard.mjs', 'heavy-guard.mjs', 'heavy-lock.mjs'] as const;
+/** O hook da fila de validação pesada e a lib dele (o heavy-guard importa o heavy-lock da mesma pasta). Vão para a pasta do Claude e a do Codex. */
+const HEAVY_HOOK_FILES = ['heavy-guard.mjs', 'heavy-lock.mjs'] as const;
 /** Ferramentas de navegador: o Claude in Chrome e os MCPs no padrão `browser_*` (Playwright e afins da biblioteca). */
 export const BROWSER_TOOLS_MATCHER = 'mcp__claude-in-chrome__.*|mcp__.*__browser_.*';
 /** Toda ferramenta de MCP: o hook de escrita decide pela política da ficha (sem política, não responde). */
 export const MCP_TOOLS_MATCHER = 'mcp__.*';
 /** Terminal (Bash e PowerShell): o hook de acesso remoto barra ssh, scp e afins, com ou sem servidor na ficha. */
 export const REMOTE_GUARD_MATCHER = 'Bash|PowerShell';
+/** Terminal também para a fila de validação pesada (suíte completa, tsc do projeto): uma por vez na máquina (scripts/hooks/heavy-guard.mjs). */
+export const HEAVY_GUARD_MATCHER = 'Bash|PowerShell';
+/** O hook da fila espera a vez aqui dentro, então o prazo dele passa dos 10 s dos outros: abaixo dele, a espera máxima do próprio hook (13 min). */
+const HEAVY_GUARD_TIMEOUT_S = 15 * 60;
 
 /**
  * Hooks do Claudio’s Club em todo funcionário (`--settings`, somados aos do usuário e do projeto): os agents
@@ -552,14 +572,22 @@ export const REMOTE_GUARD_MATCHER = 'Bash|PowerShell';
  * Com estilo de comunicação (motor Claude), `outputStyle: 'default'`: o output style global do usuário (ex.: "Concise") brigaria com o estilo.
  * E, com o `styleFile` (style.txt da conversa), um hook UserPromptSubmit põe o lembrete do estilo em cada mensagem (scripts/hooks/style-reminder.mjs).
  * `hooksDir`: a pasta com a cópia dos hooks de guarda da conversa (prepareRun); sem ela, a do programa (só os testes usam). `mcpWriteFile`:
- * a política de escrita dos MCPs (mcp-write.json); sem ela, não há hook de MCP.
+ * a política de escrita dos MCPs (mcp-write.json); sem ela, não há hook de MCP. `heavyLockDir`: a pasta da trava da fila de validação
+ * pesada (uma por máquina; o padrão é a do servidor, ver heavyQueue.ts).
  */
 export function staffSettings(
   p?: Pick<StaffProfile, 'personality' | 'engine'>,
   styleFile?: string,
-  o: { clubGuard?: boolean; hooksDir?: string; mcpWriteFile?: string | null; skillOverrides?: Record<string, 'off'> } = {},
+  o: { clubGuard?: boolean; hooksDir?: string; mcpWriteFile?: string | null; skillOverrides?: Record<string, 'off'>; heavyLockDir?: string } = {},
 ) {
   const guards = o.hooksDir ?? HOOKS_DIR;
+  const lockDir = o.heavyLockDir ?? heavyLockDir();
+  // Fila de validação pesada: pega a vez antes (pre) e solta depois (post). PostToolUse só dispara com o comando que deu certo; teste vermelho
+  // é falha da ferramenta e dispara só o PostToolUseFailure, então o mesmo hook vai nos dois.
+  const heavy = (stage: 'pre' | 'post') => ({
+    matcher: HEAVY_GUARD_MATCHER,
+    hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'heavy-guard.mjs'), lockDir, stage], timeout: stage === 'pre' ? HEAVY_GUARD_TIMEOUT_S : 10 }],
+  });
   const hook = (stage: 'pre' | 'post') => [
     { matcher: 'Agent|Task', hooks: [{ type: 'command', command: process.execPath, args: [DELIVERY_HOOK, stage], timeout: 10 }] },
     // O navegador do funcionário não abre a tela do Club (ver scripts/hooks/club-guard.mjs e server/clubAddress.ts).
@@ -570,12 +598,13 @@ export function staffSettings(
     ...(stage === 'pre' && o.mcpWriteFile ? [{ matcher: MCP_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'mcp-write-guard.mjs'), o.mcpWriteFile], timeout: 10, onFailure: 'block' }] }] : []),
     // Acesso remoto no terminal: sempre, com ou sem servidor na ficha (ver scripts/hooks/remote-guard.mjs).
     ...(stage === 'pre' ? [{ matcher: REMOTE_GUARD_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'remote-guard.mjs')], timeout: 10, onFailure: 'block' }] }] : []),
+    heavy(stage),
   ];
   const styled = !!p && personalityName(p.personality) !== '' && (p.engine ?? 'claude') === 'claude';
   const style = styled && styleFile ? { UserPromptSubmit: [{ hooks: [{ type: 'command', command: process.execPath, args: [STYLE_HOOK, styleFile], timeout: 10 }] }] } : {};
   // Sem `permissions.ask` aqui: as ferramentas MCP de "pede antes" são do hook de escrita (mcp-write.json), que decide por ferramenta.
   return {
-    hooks: { PreToolUse: hook('pre'), PostToolUse: hook('post'), ...style },
+    hooks: { PreToolUse: hook('pre'), PostToolUse: hook('post'), PostToolUseFailure: [heavy('post')], ...style },
     ...(styled ? { outputStyle: 'default' } : {}),
     // Skills da Global (e as de projeto que ela esconde) que a ficha não marca: `off` some com o nome da pasta nesta conversa.
     // O `myco:<nome>` do plugin da sessão não é afetado (ver skillAccess.planSkills). Sem nenhuma, a chave não vai.

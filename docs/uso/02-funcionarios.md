@@ -152,7 +152,36 @@ Cuidados:
 - No modo sem travas, e sempre no GPT, *Pede antes de escrever* vira *Só leitura*, porque não há quem confirme.
 - O **navegador** tem um seletor só, **Acesso do navegador**, que aparece com **Usar o navegador** marcado. Vale para o Claude in Chrome e para o Chrome do GPT, que são o mesmo navegador (vale o mais restritivo dos dois). Ele não tem teste: **Só leitura** bloqueia o navegador inteiro e **Pede antes de escrever** pede a cada ação.
 - No GPT a lista de MCPs não aparece na ficha; só o **Acesso do navegador** vale nos dois motores.
-- Peso aproximado na memória do computador, por conversa aberta, medido no Windows: CLI do Claude 200–290 MB; navegador limpo 80–120 MB, somente enquanto usado; gpt-mcp 20–45 MB; ssh-mcp cerca de 2 MB. MCPs não medidos aparecem sem número.
+- Cada MCP ligado que roda no seu computador ocupa memória, mas o peso de cada um não foi medido (a ficha diz "peso não medido"). O que foi medido, e o que gasta o limite de uso, está em **O que pesa e quando vale ligar**, abaixo.
+
+## O que pesa e quando vale ligar
+
+A ficha avisa o que pesa mais com um **selo** e uma dica. São dois pesos diferentes:
+
+- **Usa memória**: um programa a mais no seu computador. Só tem número onde foi medido (no Windows, por conversa aberta).
+- **Gasta limite**: gasta o limite de uso da assinatura mais rápido. É só comparação: não há número, porque depende do pedido.
+
+Os selos aparecem onde você decide: **Modelo** e **Esforço** (aba **Ficha**), **MCPs** e **Usar o navegador** (aba **Projeto**) e, no nível Simples, na própria tela de contratar. Toque no selo para abrir o porquê e quando vale ligar. Só ganham selo as opções com base no código; sem base, a ficha não marca.
+
+| Recurso | Selo | O que pesa | Quando vale ligar |
+|---|---|---|---|
+| Cada conversa aberta do Claude | Usa memória | 200–290 MB por conversa aberta. O Club fecha sozinho a que fica 15 minutos parada. | Não é uma opção, é o custo de manter conversas abertas: feche as que não usa. |
+| **Usar o navegador** (Claude) | Usa memória | Um aviso leve, cerca de 54 MB, fica aberto em toda conversa com a caixa marcada. Ao abrir uma página, o navegador sem os seus logins soma 80–120 MB e fecha sozinho depois de 10 minutos sem uso. O seu Chrome real (Claude in Chrome) não foi medido. | Para quem testa telas, confere sites ou lê páginas. Para quem só mexe em código, desmarque. |
+| **Perguntar ao GPT** (**Usar o Codex (GPT)** nas Configurações) | Usa memória e Gasta limite | 20–45 MB em cada conversa do Claude. Cada pergunta abre outra chamada no Codex e gasta a cota do seu ChatGPT (não a do Claude). | Para quem decide coisas que pesam e ganha com uma segunda opinião. Desligar tira também o GPT como motor. |
+| **Modelo** Opus ou Fable | Gasta limite | Custam mais por token que Sonnet e Haiku na tabela de preços do Club, e tendem a gastar o limite mais rápido. | Para planejar, decidir e revisar. Em trabalho mecânico, Sonnet ou Haiku gastam menos. |
+| **Esforço** alto, xhigh ou max | Gasta limite | O modelo pensa mais antes de responder: demora mais e gasta o limite mais rápido. | Em tarefa difícil ou arriscada. No dia a dia, esforço baixo ou médio gasta menos. |
+
+Sem selo (leve, ou sem medida: o que não foi medido fica sem número):
+
+| Recurso | O que se sabe |
+|---|---|
+| **MCPs** marcados | Cada MCP que roda no seu computador sobe junto com a conversa, usado ou não. Peso não medido: desmarque os que o funcionário não usa. |
+| **Servidores** SSH | Leve, cerca de 2 MB por conversa (só sobe com servidor SSH marcado). FTP: peso não medido. |
+| Motor **Codex (GPT)** | Cada mensagem abre um processo que termina junto com a resposta; não fica programa parado. Peso não medido, e o navegador do GPT também não. |
+| **Motor secundário** | Não sobe nada extra: só quando o principal bate o limite a tarefa segue em conversa nova no outro motor. |
+| Skills, agents, regras, conhecimento, estilo de comunicação, memória pessoal e roteiro | São texto que entra no prompt da conversa. Sem medida de quanto pesa. |
+| **Trabalhar numa worktree própria** | Uma cópia git no disco; pesa disco, não memória. |
+| Autonomia e **Pode contratar subfuncionários** | Não sobem nada. |
 
 ## Skills e agents
 

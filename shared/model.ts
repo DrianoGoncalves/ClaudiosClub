@@ -726,6 +726,19 @@ export interface Task {
   requestedBy?: string | null;
   /** A conversa do gestor em que ele pediu: a entrega volta para ela. */
   requestedSession?: string | null;
+  /**
+   * O card de que esta tarefa é subtarefa: gravado na criação, sozinho, quando a tarefa é pedida pela API com o token da conversa de trabalho de um card (o
+   * `requestedBy` é o responsável dele). Tarefa pedida de outra conversa (ou pela tela) não tem. Só o servidor grava: nenhuma edição (tela ou API) aceita este campo.
+   */
+  parentTaskId?: string;
+  /**
+   * O fim de turno do card (em "fazendo") achou subtarefa aberta (ver `parentTaskId`): ele não vai para revisão, fica em "fazendo" aguardando, e não ocupa o
+   * funcionário (a fila dele anda, como a tarefa parada por dúvida). `since`: desde quando. Só existe enquanto alguma subtarefa está aberta (a listagem tira a marca
+   * quando todas fecham); mensagem sua na conversa a desfaz (ele volta a trabalhar), e o próximo fim de turno decide de novo. Só o servidor grava.
+   */
+  awaitingSubtasks?: { since: string };
+  /** Só na listagem (derivado, não gravado): as subtarefas do card (as de `parentTaskId` igual a este id), na ordem do quadro, as encerradas também. Ausente = sem subtarefa. */
+  subtasks?: TaskSubtaskRef[];
   /** Aprovada, mas o aviso ao gestor (`requestedBy`) ficou retido: sai junto com o da última tarefa aberta dele (ver TaskService.settleRequester). */
   outcomeHeld?: boolean;
   /** Quando o aviso passou a ficar retido: depois de 2 h o tick o solta, mesmo com tarefa dele ainda aberta. */
@@ -755,6 +768,12 @@ export interface Task {
   startRetry?: RetryState;
   /** Você tirou a tarefa da fila de propósito ("tirar da fila"): a varredura do tick não a põe de volta (ver `enqueueIdle`). Sai ao entrar na fila, mudar de coluna ou de responsável. */
   unqueued?: boolean;
+  /**
+   * Você levou o card (que já tinha conversa) para "A fazer" pela tela: vale como ciência do corte guardado (reinício, retomada de turno ou transcript), e a vez dele
+   * retoma a conversa sem a checagem de ação cortada (ver `TaskService.resumeTodo`). Só o servidor grava, e só a partir da tela; não muda o limite de consumo
+   * (`queuedForce`). Sai ao usar ou quando o card muda de coluna.
+   */
+  cutAck?: boolean;
   /** Motivo de estar em Aguardar (opcional, texto puro, até 200 caracteres). Limpo ao sair da coluna. */
   waitReason?: string | null;
   /** Mensagens suas nesta conversa esperando o funcionário terminar outra tarefa. */
@@ -794,6 +813,15 @@ export interface Task {
    * (aí a tarefa vai para Aguardar e a caixa de entrada avisa). Ver server/chat/turnRetry.ts.
    */
   retry?: TaskRetry;
+}
+
+/** Uma subtarefa de um card (`Task.subtasks`): o que a tela precisa para mostrar "aguardando subtarefas" (aberta = `status` fora de 'done' e 'cancelled', ver `isClosed`). */
+export interface TaskSubtaskRef {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  /** Quem faz; null = sem responsável. */
+  staffId: string | null;
 }
 
 /**

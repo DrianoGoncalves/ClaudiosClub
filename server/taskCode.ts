@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { TaskCode, TaskCodeFile, TestRun } from '../shared/model';
 import { cleanEnv } from './auth';
 import { killTree } from './chat/registry';
+import { HEAVY_HELD_ENV, withHeavyLock } from './heavyQueue';
 import { worktreeFor } from './staff/worktree';
 
 // O código de uma tarefa: onde está (worktree do funcionário ou o próprio projeto), o que mudou,
@@ -176,15 +177,24 @@ export async function detectTest(dir: string): Promise<string | null> {
 /** O tempo que os testes têm (ver `runTests`). */
 export const TEST_TIMEOUT_MS = 10 * 60_000;
 
-/** Roda os testes (até 10 min); guarda só o fim da saída. O comando vem de detectTest, nunca do pedido. */
+/**
+ * Roda os testes (até 10 min); guarda só o fim da saída. O comando vem de detectTest, nunca do pedido. A suíte completa entra na fila
+ * da máquina (uma validação pesada por vez, a mesma do terminal dos funcionários; ver `withHeavyLock`): o tempo de espera não conta
+ * nos 10 min nem no `ms` do resultado.
+ */
 export function runTests(dir: string, command: string, timeoutMs = TEST_TIMEOUT_MS): Promise<TestRun> {
+  return withHeavyLock(command, (held) => spawnTests(dir, command, timeoutMs, held), { label: `testes de ${path.basename(dir)}`, leaseMs: timeoutMs + 60_000 });
+}
+
+/** `held`: a chave da trava da fila que esta execução segura; vai no ambiente dela (ver `HEAVY_HELD_ENV`). */
+function spawnTests(dir: string, command: string, timeoutMs: number, held: string | null): Promise<TestRun> {
   const started = Date.now();
   return new Promise((resolve) => {
     let out = '';
     // No Unix o `sh -c` vira líder do próprio grupo; no Windows o `cmd /c` é só o pai do npm/vitest. No tempo esgotado a árvore inteira sai
     // (`killTree`: grupo, ou `taskkill /T /F`): `child.kill()` mataria só o shell, o vitest seguiria e o `close` esperaria o fim dele nos pipes.
     const unix = process.platform !== 'win32';
-    const child = spawn(command, { cwd: dir, shell: true, env: { ...cleanEnv(), CI: '1' }, windowsHide: true, detached: unix });
+    const child = spawn(command, { cwd: dir, shell: true, env: { ...cleanEnv(), CI: '1', ...(held && { [HEAVY_HELD_ENV]: held }) }, windowsHide: true, detached: unix });
     const keep = (d: Buffer) => (out = (out + d.toString('utf8')).slice(-6000));
     child.stdout.on('data', keep);
     child.stderr.on('data', keep);

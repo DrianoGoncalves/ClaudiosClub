@@ -58,6 +58,7 @@ import type {
   TaskCode,
   TaskCost,
   TaskCostRanking,
+  TaskCreateResult,
   TestRun,
   TaskSummary,
   UsageStop,
@@ -765,10 +766,11 @@ export const api = {
   boardReview: (projectId: string) => get<BoardConfig>(`/api/projects/${projectId}/board-review`),
   /** Grava o estado inteiro: o servidor recusa ligada sem responsável (`reviewerId`). */
   saveBoardReview: (projectId: string, config: BoardConfig) => post<BoardConfig>(`/api/projects/${projectId}/board-review`, config),
+  /** Criar. A resposta é a tarefa gravada, com `warnings` quando há possível duplicata (só aviso: a tarefa foi criada). */
   createTask: (
     projectId: string,
     input: { title: string; description: string; staffId: string | null; start?: boolean; goal?: string | null; acceptance?: string | null; blockedBy?: string[] },
-  ) => post<Task | null>(`/api/projects/${projectId}/tasks`, input),
+  ) => post<TaskCreateResult | null>(`/api/projects/${projectId}/tasks`, input),
   updateTask: (
     projectId: string,
     taskId: string,

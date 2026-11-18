@@ -144,21 +144,29 @@ describe('idempotência na criação', () => {
 
   it('mesma chave com conteúdo diferente = 409 e nada é criado', async () => {
     const b = board('idem-409');
-    const t = await b.make('Exportar CSV', { key: 'exportar-csv-a1b2' });
+    const dep = await b.make('Antes');
+    const base = { title: 'Exportar CSV', description: 'o pedido', acceptance: 'abre no Excel', goal: 'o financeiro pediu', staffId: 'ana-1', reviewerId: null, blockedBy: [] as string[], start: false, idempotencyKey: 'exportar-csv-a1b2' };
+    const t = (await b.svc.create('p', base, 'gio-1'))!;
     const before = b.raw();
-    for (const body of [
-      { title: 'Exportar XLSX', staffId: 'ana-1', start: false, idempotencyKey: 'exportar-csv-a1b2' },
-      { title: 'Exportar CSV', description: 'outro texto', staffId: 'ana-1', start: false, idempotencyKey: 'exportar-csv-a1b2' },
-      { title: 'Exportar CSV', staffId: 'bia-1', start: false, idempotencyKey: 'exportar-csv-a1b2' },
-    ]) {
-      const err = await b.attempt(b.svc.create('p', body, 'gio-1'));
-      expect(err).toBeInstanceOf(TaskConflictError);
+    // Cada campo do conteúdo, sozinho, já é outro pedido (rascunho também não é o mesmo pedido que "começar").
+    const variants: Array<Partial<typeof base>> = [
+      { title: 'Exportar XLSX' },
+      { description: 'outro texto' },
+      { acceptance: 'abre no Numbers' },
+      { goal: 'outro porquê' },
+      { staffId: 'bia-1' },
+      { reviewerId: 'rev-1' as unknown as null },
+      { blockedBy: [dep.id] },
+      { start: true },
+    ];
+    for (const v of variants) {
+      const err = await b.attempt(b.svc.create('p', { ...base, ...v }, 'gio-1'));
+      expect(err, JSON.stringify(v)).toBeInstanceOf(TaskConflictError);
       expect((err as Error).message).toContain(t.id);
     }
-    // A mudança de `start` também é outro conteúdo (rascunho não é o mesmo pedido que "começar").
-    const sameButStart = await b.attempt(b.svc.create('p', { title: 'Exportar CSV', description: 'desc de Exportar CSV', acceptance: 'critério de Exportar CSV', staffId: 'ana-1', start: true, reviewerId: null, idempotencyKey: 'exportar-csv-a1b2' }, 'gio-1'));
-    expect(sameButStart).toBeInstanceOf(TaskConflictError);
     expect(b.raw()).toBe(before);
+    // O mesmo pedido com espaço a mais no título segue sendo o mesmo (a impressão é do conteúdo já normalizado).
+    expect(await b.svc.create('p', { ...base, title: ' Exportar CSV ' }, 'gio-1')).toMatchObject({ id: t.id, idempotentReplay: true });
   });
 
   it('a chave vale por solicitante: outro gestor (ou a tela) com a mesma chave cria a sua', async () => {
@@ -446,6 +454,24 @@ describe('pedido de cancelamento da tarefa que já começou', () => {
     expect(await b.get(t.id)).toMatchObject({ status: 'doing', cancelRequest: { status: 'pending' } });
   });
 
+  it('o pedido feito enquanto a partida abre a conversa espera a vez dela: vê a tarefa já começada e vira pedido (não "nunca começou")', async () => {
+    const b = board('pedido-corrida');
+    const t = await b.make('Exportar CSV');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    b.hooks.beforeSend = () => gate;
+    const starting = b.svc.start('p', t.id); // a conversa está abrindo
+    await b.settle();
+    const asking = b.attempt(b.svc.requestCancel('p', t.id, b.as('gio-1'), 'não precisa mais'));
+    await b.settle();
+    expect(b.notices).toHaveLength(0);
+    release();
+    await starting;
+    const out = (await asking) as Task;
+    expect(out.cancelRequest).toMatchObject({ status: 'pending', deliveredSession: 's-1' });
+    expect(b.notices).toHaveLength(1);
+  });
+
   it('o Codex recebe as rotas pelo endereço da sandbox', async () => {
     const b = board('pedido-codex', { workerEngine: 'codex' });
     const t = await b.started('Exportar CSV');
@@ -623,11 +649,19 @@ describe('a decisão do responsável', () => {
     expect(await b.get(t.id)).toMatchObject({ status: 'doing' });
   });
 
-  it('quem pediu pode pedir de novo depois da recusa (um novo pedido substitui o decidido)', async () => {
+  it('depois da recusa não dá para insistir logo (409); passados 10 min, um novo pedido substitui o decidido', async () => {
     const b = board('recusa-de-novo');
     const t = await b.started('Exportar CSV');
     await b.svc.requestCancel('p', t.id, b.as('gio-1'), 'primeiro motivo');
     await b.svc.refuseCancel('p', t.id, b.worker(t), 'segue');
+    const logo = await b.attempt(b.svc.requestCancel('p', t.id, b.as('gio-1'), 'insisto'));
+    expect(logo).toBeInstanceOf(TaskConflictError);
+    expect((logo as Error).message).toContain('recusou o pedido de cancelamento há pouco');
+    expect((await b.get(t.id)).cancelRequest).toMatchObject({ status: 'refused', reason: 'primeiro motivo' });
+    expect(b.notices).toHaveLength(1); // a conversa dele não foi incomodada de novo
+    b.edit((all) => {
+      all.find((x) => x.id === t.id)!.cancelRequest.decidedAt = new Date(Date.now() - 11 * 60_000).toISOString();
+    });
     const again = (await b.svc.requestCancel('p', t.id, b.as('gio-1'), 'o usuário confirmou agora')) as Task;
     expect(again.cancelRequest).toMatchObject({ status: 'pending', reason: 'o usuário confirmou agora' });
     expect(again.cancelRequest!.answer).toBeUndefined();
@@ -656,6 +690,9 @@ describe('a decisão do responsável', () => {
 
     await b.svc.refuseCancel('p', t.id, b.worker(t), 'segue');
     expect(await b.attempt(b.svc.refuseCancel('p', t.id, b.worker(t), 'de novo'))).toBeInstanceOf(TaskConflictError); // já decidido
+    b.edit((all) => {
+      all.find((x) => x.id === t.id)!.cancelRequest.decidedAt = new Date(Date.now() - 11 * 60_000).toISOString(); // passou o tempo de não insistir
+    });
     await b.svc.requestCancel('p', t.id, b.as('gio-1'), 'outro pedido');
     await b.svc.cancelFrom('p', t.id, b.worker(t), 'aceito');
     expect(await b.attempt(b.svc.refuseCancel('p', t.id, b.worker(t), 'tarde demais'))).toBeInstanceOf(TaskConflictError); // encerrada: nada a recusar

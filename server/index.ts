@@ -63,6 +63,7 @@ import { InboxState } from './inboxState';
 import { readServerLog } from './staff/serverLog';
 import { LIBRARY_DIR, readLibrarySkill, SkillError } from './skillLibrary';
 import { convertStaffSkills, migrateLibraryToGlobal } from './skillMigration';
+import { migrateProjectAgents } from './staff/presetMigration';
 import { skillSourcesOf } from './skillAccess';
 import { applyUpdate, checkUpdate, GitHubInstallInput, GitHubPreviewInput, GitHubSkillInput, GitHubStatusQuery, GitHubUpdateInput, githubSkillsIn, installSkill, previewSkill, rollback, SkillConflictError, UpdateChecker, type InstallTarget } from './skillInstall';
 import { GitHubError, GitHubRateLimited } from './adapters/github/client';
@@ -1443,8 +1444,9 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks/${ID}$`),
     ({ params: [id, taskId], body, fromBrowser, caller }) => {
-      // A tela edita como sempre. O funcionário, só com o token da conversa e só tarefa em Aguardar ou A fazer (ver TaskService.editFrom).
-      if (fromBrowser) return tasks.update(id!, taskId!, body);
+      // A tela edita como sempre (o `true` é o dono: levar para "A fazer" um card com conversa é a ciência do corte, ver `Task.cutAck`). O funcionário, só com o token da conversa
+      // e só tarefa em Aguardar ou A fazer (ver TaskService.editFrom), que não muda de coluna.
+      if (fromBrowser) return tasks.update(id!, taskId!, body, true);
       return tasks.editFrom(id!, taskId!, caller, body);
     },
   ],
@@ -2915,10 +2917,28 @@ async function migrateSkillsAtBoot(): Promise<void> {
   if (conv.skipped.length) console.warn(`[skills] projetos não lidos na conversão das fichas: ${conv.skipped.join(', ')}`);
 }
 
+/**
+ * Migração dos agents prontos (ver staff/presetMigration.ts): o executor do projeto que ainda é o Haiku antigo passa para o Sonnet; o que
+ * alguém editou fica e vai no log, com o que difere.
+ */
+async function migrateAgentPresetsAtBoot(): Promise<void> {
+  const projects = (await adapter.listProjects()).filter((p) => p.exists);
+  const done = await migrateProjectAgents({
+    projects,
+    recordFile: path.join(MYCO_HOME, 'agents-migracao.json'),
+    backupDir: path.join(MYCO_HOME, 'agent-backups'),
+  });
+  for (const [id, r] of Object.entries(done)) {
+    if (r.updated.length) console.log(`[agents] ${id}: atualizado para o pronto novo: ${r.updated.join(', ')} (o arquivo anterior ficou em ${path.join(MYCO_HOME, 'agent-backups', id)})`);
+    if (r.kept.length) console.log(`[agents] ${id}: não atualizado, nada foi sobrescrito: ${r.kept.join('; ')}`);
+  }
+}
+
 server.listen(PORT, HOST, () => {
   console.log(`Claudio’s Club em http://claudio.localhost:${PORT} (adaptador: ${adapter.id})`);
   // Migração das skills (uma vez): depois da porta, sem segurar a subida.
   void migrateSkillsAtBoot().catch((err: unknown) => console.warn('[skills] migração não concluída:', err));
+  void migrateAgentPresetsAtBoot().catch((err: unknown) => console.warn('[agents] migração dos prontos não concluída:', err));
   // Só depois de ficar com a porta: o segundo endereço é o da sandbox do Codex. Se não abrir (no macOS o 127.0.0.2 pode faltar), quem roda no
   // Codex fica sem rede e a conversa avisa (ver `codexRunEnv`); o resto do app segue igual.
   sandboxServer.once('error', (err: NodeJS.ErrnoException) => {

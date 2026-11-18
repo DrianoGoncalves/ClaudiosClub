@@ -1225,6 +1225,7 @@ export class StaffService {
         extraMcps: codexRun.extraMcps,
         mcpSnapshotFile: codexRun.mcpSnapshotFile,
         agents: codexRun.agents,
+        heavyGuard: codexRun.heavyGuard,
         secrets: { projectPath: project.path, home: os.homedir(), mycoHome: MYCO_HOME },
         threadId: resume ? await readCodexThread(codexRun.threadFile) : null,
         threadFile: codexRun.threadFile,

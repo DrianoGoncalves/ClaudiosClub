@@ -132,7 +132,7 @@ function teamSection(p: StaffProfile, ctx: FichaContext): string {
     ctx.team.map((m) => `- ${m.name} (${m.role}${m.temporary ? ', temporário' : ''}), id \`${m.id}\`: ${first(m.mission)}`).join('\n'),
     'Repasse sem pesquisar: não leia o código para escrever a tarefa. Mande o pedido do usuário nas palavras dele, o critério de pronto e o que não mexer (com o motivo); cite arquivos só se já souber quais são. Quem é da área acha as linhas. Pedido que é inteiro de uma área vai como está, numa tarefa só para essa pessoa, sem você dividir nem planejar; um pedido com partes de áreas diferentes vira uma tarefa para cada pessoa.',
     `Para passar uma tarefa: POST ${api}/tasks com os cabeçalhos \`x-myco: 1\` e \`x-myco-token: $MYCO_TOKEN\` (o token da sua conversa, já no seu ambiente) e um JSON com title, description (o pedido e o que não mexer), acceptance (o critério de pronto), goal (opcional: uma frase do porquê), blockedBy (ids das tarefas que precisam terminar antes, quando houver ordem entre elas; a fila espera sozinha), staffId (o id da pessoa), requestedBy: "${p.id}", start: true e idempotencyKey (uma chave única por tarefa, de 8 a 100 caracteres: letras, números e . _ : -, ex.: "exportar-csv-17nov-a1"). Se a resposta não chegar ou vier com erro, REPITA o mesmo pedido com a MESMA chave: a tarefa não duplica nem recomeça (a mesma chave com outro conteúdo é 409; tarefa nova, chave nova). A tarefa entra na fila dela (uma por vez), começa sozinha quando ela ficar livre (tarefa em revisão não segura a fila; no limite de consumo, espera ele baixar) e aparece no quadro de tarefas. A resposta é a tarefa gravada: "idempotentReplay": true é a tarefa de antes (o retry não criou nada); "startError" é o começo que falhou depois de gravar (a fila retoma sozinha: NÃO crie outra); "warnings" é só aviso de possível duplicata (título parecido que você passou à mesma pessoa há pouco: confira se não é a mesma tarefa).`,
-    `Tirar da fila uma tarefa que VOCÊ pediu, sempre com o motivo ("reason"; mesmos cabeçalhos): se a pessoa ainda NÃO começou (nunca teve conversa), POST ${api}/tasks/<id da tarefa>/cancel com {"reason": "<por quê, em uma frase>"} cancela na hora. Se ela JÁ começou (ou parou, mas já teve conversa), o cancelamento direto é 409: mande um pedido, POST ${api}/tasks/<id da tarefa>/cancel-request com {"reason": "<por quê>"}. Ele chega na conversa dela, que decide: se aceitar, cancela e você é avisado do cancelamento; se recusar, diz por quê e o motivo chega como aviso na conversa em que você pediu (a tarefa segue). O pedido e a decisão ficam no histórico do card, e só há um pedido aberto por vez. Só vale para tarefa que você pediu (403 nas outras); quem só revisa não cancela. Cancelar não desfaz arquivos nem libera quem depende dela.`,
+    `Tirar da fila uma tarefa que VOCÊ pediu, sempre com o motivo ("reason"; mesmos cabeçalhos): se a pessoa ainda NÃO começou (nunca teve conversa), POST ${api}/tasks/<id da tarefa>/cancel com {"reason": "<por quê, em uma frase>"} cancela na hora. Se ela JÁ começou (ou parou, mas já teve conversa), o cancelamento direto é 409: mande um pedido, POST ${api}/tasks/<id da tarefa>/cancel-request com {"reason": "<por quê>"}. Ele chega na conversa dela, que decide: se aceitar, cancela e você é avisado do cancelamento; se recusar, diz por quê e o motivo chega como aviso na conversa em que você pediu (a tarefa segue). O pedido e a decisão ficam no histórico do card, e só há um pedido aberto por vez; recusado, não insista (outro pedido só depois de 10 min, senão 409): com fato novo, fale com o usuário. Só vale para tarefa que você pediu (403 nas outras); quem só revisa não cancela. Cancelar não desfaz arquivos nem libera quem depende dela.`,
     `Se o pedido mudar antes de a pessoa começar, edite a tarefa em vez de criar outra com blockedBy (duplica o quadro): POST ${api}/tasks/<id da tarefa> com os mesmos cabeçalhos (\`x-myco: 1\` e \`x-myco-token: $MYCO_TOKEN\`) e um JSON só com o que muda: title, description, acceptance, goal, blockedBy ou staffId (o que você manda substitui o valor atual, então mande o texto inteiro do campo). Só vale em Aguardar e A fazer, antes de a conversa da tarefa existir; em Fazendo, Revisão ou Finalizado a resposta é 409 e o complemento vai para a pessoa na conversa da tarefa. Só edita quem pediu a tarefa ou o gestor de quem a faz (senão 403), e staffId só para quem reporta a você: em A fazer, a tarefa vai para o fim da fila do novo. A coluna não muda por aqui.`,
     `Ordem da fila: cada pessoa faz as tarefas na ordem em que entraram na fila dela (a bloqueada por blockedBy é pulada). Para subir ou descer uma tarefa que VOCÊ pediu: POST ${api}/tasks/<id da tarefa>/order com os mesmos cabeçalhos e {"step": "up"} ou {"step": "down"}; ela troca de lugar com a sua tarefa mais próxima na fila da pessoa e nenhuma tarefa de outro solicitante muda de posição (a resposta traz de que posição para qual). Tarefa que você não pediu, ou furar a fila de outro, é 403: isso é só do usuário. Quem faz a tarefa não muda a ordem: ele só te manda uma sugestão com o motivo, que chega como aviso na conversa em que você pediu e não altera nada; quem decide é você.`,
     'Quem confere a tarefa que você passa é você. Quando a pessoa entregar, o Claudio’s Club abre uma conversa nova sua com o pedido de revisão (o diff e, se o projeto tiver testes, o resultado deles, já rodados: não rode de novo) e você responde APROVADO ou REPROVADO na primeira linha. Reprovada, os ajustes voltam sozinhos para a pessoa, sem passar por você; aprovada, ou ao atingir o limite de revisões, o desfecho chega na conversa em que você pediu. Confira na medida do risco: para mudança pequena, `git diff --stat` e o resumo bastam; abra o diff inteiro só no que for arriscado (segurança, dados, servidor) ou se o --stat não bater com o resumo. Não procure prints nem arquivos dela: se faltar prova, peça. Se faltar algo, peça a ela na conversa da tarefa, não refaça você.',
@@ -412,15 +412,17 @@ export const PLAYBOOK_STEPS: Record<Playbook, { title: string; steps: PlaybookSt
         claude: [
           'Escolha quem faz cada parte (ferramenta Agent, sempre com o subagent_type):',
           '   - achar, mapear ou explicar código: `pesquisador` (Haiku, só lê);',
-          '   - mudança bem definida, com os arquivos e o que mudar já sabidos: `executor` (Haiku);',
-          '   - mudança que pede julgamento (bug de causa desconhecida, funcionalidade que cruza vários arquivos): `executor` com model: "sonnet";',
+          '   - trabalho mecânico, sem julgamento (busca e troca, transformação determinística, rodar um comando): `executor-rapido` (Haiku);',
+          '   - implementar o que já está decidido, com os arquivos e o que mudar sabidos: `executor` (Sonnet);',
+          '   - mudança que pede julgamento (bug de causa desconhecida, funcionalidade que cruza vários arquivos): `executor` com model: "opus";',
           '   - antes de dar por pronto o que é arriscado (segurança, dados, pagamento, muitos arquivos): `revisor`;',
           '   - uma linha num arquivo que você já leu: faça você, porque explicar custaria mais.',
         ].join('\n'),
         codex: [
           'Escolha quem faz cada parte (chamando o agent pelo spawn_agent):',
           '   - achar, mapear ou explicar código: `pesquisador` (só lê);',
-          '   - mudança bem definida, com os arquivos e o que mudar já sabidos: `executor`;',
+          '   - trabalho mecânico, sem julgamento (busca e troca, transformação determinística, rodar um comando): `executor-rapido` (esforço baixo);',
+          '   - implementar o que já está decidido, com os arquivos e o que mudar sabidos: `executor` (esforço médio);',
           '   - mudança que pede julgamento (bug de causa desconhecida, funcionalidade que cruza vários arquivos): `executor` com reasoning_effort "high";',
           '   - antes de dar por pronto o que é arriscado (segurança, dados, pagamento, muitos arquivos): `revisor`;',
           '   - uma linha num arquivo que você já leu: faça você, porque explicar custaria mais.',
@@ -433,9 +435,9 @@ export const PLAYBOOK_STEPS: Record<Playbook, { title: string; steps: PlaybookSt
       },
       {
         claude:
-          'Confira cada entrega antes da próxima. Falhou: devolva com o que está errado. Falhou de novo: chame com um modelo maior (model: "sonnet", ou "opus" se já era sonnet), divida em partes menores ou pergunte ao usuário.',
+          'Confira cada entrega antes da próxima. Falhou: devolva com o que está errado. Falhou de novo: chame um mais forte (o `executor` no lugar do `executor-rapido`; no `executor`, model: "opus"), divida em partes menores ou pergunte ao usuário.',
         codex:
-          'Confira cada entrega antes da próxima. Falhou: devolva com o que está errado. Falhou de novo: chame com mais esforço (reasoning_effort "high", ou "xhigh" se já era high), divida em partes menores ou pergunte ao usuário.',
+          'Confira cada entrega antes da próxima. Falhou: devolva com o que está errado. Falhou de novo: chame com mais esforço (o `executor` no lugar do `executor-rapido`; no `executor`, reasoning_effort "high", ou "xhigh" se já era high), divida em partes menores ou pergunte ao usuário.',
       },
       'Termine com o resumo para o usuário, como pede a definição de pronto.',
     ],
@@ -759,6 +761,8 @@ function codexAgentsSection(ctx: FichaContext): string {
   return [
     '## Agents indicados',
     `Agents: ${a.available.length ? a.available.join(', ') : 'nenhum em especial'}.`,
+    // O Codex não tem os apelidos de modelo do Claude (haiku, sonnet): o filho usa o modelo de quem o chama, e só o esforço sai da definição do agent.
+    a.available.length ? 'No Codex o agent roda no seu modelo (o de quem o chama); só o esforço de raciocínio vem da definição de cada um (por exemplo `executor-rapido` em baixo e `executor` em médio), e você o aumenta com reasoning_effort.' : '',
     a.missing.length ? `Não encontrados no projeto: ${a.missing.join(', ')}; se precisar deles, avise o usuário.` : '',
   ]
     .filter(Boolean)

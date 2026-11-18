@@ -325,6 +325,14 @@ describe('ficha do Codex com agents', () => {
     expect(text).not.toContain('trabalha sozinho');
   });
 
+  it('a seção diz que o agent herda o modelo e que só o esforço vem da definição dele', () => {
+    const text = renderFicha(person, { ...ctx, codexAgents: { available: ['executor-rapido', 'executor'], missing: [] } });
+    expect(text).toContain('No Codex o agent roda no seu modelo (o de quem o chama); só o esforço de raciocínio vem da definição de cada um');
+    expect(text).not.toMatch(/model: "(sonnet|opus)"|\(Haiku\)|\(Sonnet\)/); // apelido de modelo do Claude não vai para a ficha do Codex
+    // Sem agent disponível, não há o que explicar.
+    expect(renderFicha(person, { ...ctx, codexAgents: { available: [], missing: ['executor'] } })).not.toContain('roda no seu modelo');
+  });
+
   it('sem `codexAgents`, o roteiro vira "trabalha sozinho" e não há spawn_agent nem seção de agents', () => {
     const text = renderFicha(person, ctx);
     expect(text).toContain('trabalha sozinho');

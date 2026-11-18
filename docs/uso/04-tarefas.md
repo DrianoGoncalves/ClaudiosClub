@@ -17,7 +17,7 @@ Tarefa é um pedido de trabalho para um funcionário. Cada tarefa tem uma conver
 | **Aguardar** | Parada. Não começa sozinha nem entra na fila. O campo **Motivo (opcional)** fica no cartão. |
 | **A fazer** | Deve ser iniciada. Com responsável, começa sozinha (ou entra na fila dele). Sem responsável, espera. Para não começar, deixe em **Aguardar**. |
 | **Fazendo** | Trabalhando. Inclui as tarefas com plano para aprovar (selo **Plano para aprovar**). |
-| **Revisão** | Ele terminou um turno. Confira a entrega. |
+| **Revisão** | Ele terminou um turno. Confira a entrega. Cartão com subtarefa aberta não vem para cá (veja **Subtarefas**). |
 | **Finalizado** | Revisão concluída. |
 
 - Para mudar de coluna, arraste o cartão, ou no detalhe use **Mover para a coluna** (opções "mover: ...").
@@ -43,7 +43,9 @@ Tarefa é um pedido de trabalho para um funcionário. Cada tarefa tem uma conver
 - **tirar da fila** desfaz a entrada na fila.
 - Mensagem enviada à conversa de uma tarefa enquanto ele está ocupado fica guardada ("{n} ajuste esperando") e vai quando ele termina.
 - Se o consumo estiver no limite na hora de começar, a tarefa fica na fila e tenta de novo.
-- Na coluna **A fazer**, todo aviso de espera do cartão (na fila, "Esperando: …", "Aguardando recursos", ajuste guardado e dúvida com o gestor) aparece em laranja: é o motivo de a tarefa não andar. Nas outras colunas, inclusive **Aguardar** (selos e o campo do motivo), os avisos ficam neutros. O amarelo segue sendo o que depende de você.
+- Na coluna **A fazer**, todo aviso de espera do cartão ("Esperando: …", "Aguardando recursos", ajuste guardado e dúvida com o gestor) aparece em laranja: é o motivo de a tarefa não andar. Nas outras colunas, inclusive **Aguardar** (selos e o campo do motivo), os avisos ficam neutros. O amarelo segue sendo o que depende de você.
+- A **posição na fila** ("2º na fila de Beakman") não é aviso: fica no visual padrão, sem laranja, em qualquer coluna.
+- O "Esperando: …" some quando a tarefa de que ela depende é aprovada pelo revisor (mesmo que ainda falte mesclar a worktree): sobra só a posição na fila. A tarefa só começa quando a dependência fica **Finalizada**.
 - Se a conversa parar no meio do trabalho (por exemplo, o servidor reiniciou), o Club retoma uma vez. Se parar de novo, a tarefa vai para **Revisão** com "conversa parou sem terminar" no histórico.
 - Exceção: se ela parou no meio de uma ação que mexe fora do projeto (push, deploy, comando no servidor, MCP que escreve), o Club não retoma sozinho, porque não dá para saber se a ação aconteceu. A tarefa vai para **Aguardar** com o motivo, e a conversa aparece em **precisa de mim**. Confira e mande uma mensagem para seguir.
 - Fora o reinício do servidor (acima), se a conversa cair por falha passageira (API sobrecarregada, erro 5xx, limite de taxa, queda de conexão) ou o processo cair no meio do turno, o Club retoma sozinho, com espera crescente (30 s, 2 min e 8 min, com uma variação de até 20%) e até 3 tentativas (1, quando o processo caiu sem causa conhecida). Se o próprio erro pede uma espera maior, vale a maior, até 15 min; acima disso não é falha passageira e não retoma. Enquanto a retomada está marcada, a tarefa fica em **Fazendo** e o cartão ganha o selo **Retomando em 42s · 2/3** (a tentativa 2 de 3). Passou da hora e ainda aparece: **Retomando agora**, o envio está em curso. O selo não é laranja: o laranja é só da coluna **A fazer**. Passando o mouse, o selo traz o motivo e a hora; no detalhe da tarefa, a frase inteira.
@@ -79,7 +81,7 @@ Se a ficha do funcionário está em **Só planeja**, ao começar a tarefa vai pa
 
 ## Entrega e revisão
 
-- Quando o turno dele termina, a tarefa vai para **Revisão** sozinha. Se o código está numa worktree, o Club faz um commit com o título da tarefa.
+- Quando o turno dele termina, a tarefa vai para **Revisão** sozinha, exceto se ainda houver subtarefa aberta (veja **Subtarefas**). Se o código está numa worktree, o Club faz um commit com o título da tarefa.
 - Mensagem sua na conversa da tarefa, com ela em **Revisão**, volta a tarefa para **Fazendo**.
 - A seção **Código, revisão e deploy** mostra o que mudou, o **Resumo da entrega** e o diff.
 - **Aprovar entrega** (em **Revisão**) manda a tarefa direto para **Finalizado**. Esse botão não roda testes nem mescla.
@@ -157,6 +159,24 @@ Enquanto a dúvida está com você (**aguardando você**), o cartão mostra o qu
 - Se a sua resposta chega com o funcionário já em outra tarefa, ela fica guardada (selo de ajuste guardado) e vai antes da próxima da fila dele, quando ele ficar livre.
 - O mesmo aviso aparece no topo do detalhe da tarefa, com o texto da regra ao passar o mouse.
 
+## Subtarefas
+
+Um funcionário que delega pela própria conversa (por exemplo, o orquestrador pedindo trabalho a outros) cria **subtarefas** do cartão em que está trabalhando.
+
+- **Subtarefa** é a tarefa pedida pela conversa de trabalho de um cartão. Tarefa pedida de outra conversa, ou criada por você na tela, não é subtarefa. O Club grava o vínculo sozinho na criação, e ele não se edita.
+- Enquanto houver subtarefa **aberta** (fora de **Finalizado** e **Cancelada**), o cartão **não vai para Revisão**: o fim de turno dele o deixa em **Fazendo**, aguardando, e ele **não ocupa a fila** do funcionário (a próxima de **A fazer** começa, como na dúvida com você). Subtarefa cancelada conta como fechada.
+- Quando a última fecha, o resultado chega à conversa do cartão e, no fim de turno seguinte, ele vai para **Revisão**. Mensagem sua na conversa do cartão desfaz a espera: ele volta a trabalhar.
+
+| Onde | O que aparece |
+| --- | --- |
+| **Cartão que aguarda** | Selo **Aguardando N subtarefas** (pontilhado, sem laranja) e, logo abaixo, um link por subtarefa aberta, com título e status. |
+| **Subtarefa** | Selo **Subtarefa de “Cartão”** e, logo abaixo, o link para o cartão de origem, com título e status. |
+| **Detalhe** | Bloco com todas as subtarefas (as fechadas também), "2 de 3 abertas" e, se o cartão aguarda, a regra acima. Na subtarefa, o bloco **Subtarefa do card** com o link de origem. |
+
+- Clicar num link abre o detalhe daquela tarefa, no mesmo painel (no celular, no lugar do detalhe atual).
+- O selo **Aguardando** só aparece depois que o funcionário termina o turno com subtarefa aberta. Antes disso, o cartão segue em **Fazendo** e o detalhe só lista as subtarefas.
+- Se o cartão de origem foi apagado, a subtarefa mostra só o código dele e "fora do quadro".
+
 ## A fila se recupera sozinha
 
 A fila não precisa de você para andar. Quando uma entrega falha por um motivo passageiro (limite de consumo, envio que não chegou, conversa fechada), o Club tenta de novo sozinho, com espera crescente (1, 2, 4, 8 e depois 15 minutos, com uma pequena variação). Só chama você quando o motivo não passa sozinho ou quando o prazo abaixo estoura.
@@ -192,6 +212,55 @@ Clicar no item abre o quadro de tarefas do projeto já no cartão. Com **avisar 
 - **Mesclar em {base}** (só com código em worktree): pede confirmação, roda os testes e mescla. Teste vermelho desfaz a mescla. Se não há teste para rodar, o Club pergunta se mescla mesmo assim. Depois de mesclada, a tarefa vai para **Finalizado** e mostra "mesclada em ... (commit)".
 - **Pedir deploy** (em tarefa **Finalizado** ou mesclada): escolha **Quem faz o deploy**. Só aparecem funcionários com servidor na ficha. O checklist pede backup, estado antes e depois, e runbook. Ele pede confirmação antes de qualquer passo que não tem volta.
 - **Pedir ao Codex** (segunda opinião): aparece só com **Usar o Codex (GPT)** ligado. Ver 06.
+
+## Cancelar tarefa
+
+Cancelar fecha a tarefa sem entrega: ela não conta como pronta, o histórico e a conversa ficam guardados, e dá para **Reabrir** (volta para **A fazer**, sem começar sozinha). Quem depende dela continua esperando: cancelada bloqueia.
+
+**Cancelar não desfaz nada.** Arquivos já alterados, branch, worktree, mescla e deploy já publicado continuam como estão. Se a tarefa estava em andamento, o turno em andamento é interrompido (e o da revisão ou do deploy, se houver).
+
+### Quem pode cancelar o quê
+
+| Quem | O que pode |
+| --- | --- |
+| **Você** | Qualquer tarefa que não esteja pronta nem cancelada, pelo botão **Cancelar tarefa** no detalhe. O motivo é opcional, e para cada tarefa que espera por ela você escolhe **Liberar**, **Cancelar junto** ou **Continuar esperando**. |
+| **O funcionário que faz a tarefa** | A própria, e só pela conversa da tarefa (por exemplo, quando você pede lá). Também aceita o pedido de cancelamento (abaixo), cancelando, ou o recusa dizendo por quê. |
+| **Quem pediu a tarefa** (o gestor) | A que **nunca começou** (sem conversa, plano, entrega nem ajuste guardado: em **Aguardar** ou **A fazer** sem ter andado), direto e com motivo obrigatório. A que **já começou** ele não cancela: pede o cancelamento a quem a faz. |
+| **O revisor e qualquer outro funcionário** | Nada. Não há botão de cancelar para eles. |
+
+O botão **Cancelar tarefa** e o diálogo dele não mudaram: é o único caminho da tela, e fica disponível em toda tarefa aberta, mesmo com um pedido de cancelamento esperando.
+
+### Pedido de cancelamento
+
+Quando o gestor quer cancelar uma tarefa que já começou, ele manda um pedido com o motivo (obrigatório). O pedido chega na conversa de quem faz a tarefa, que decide:
+
+- **Aceita**: cancela a tarefa. O pedido passa a **aceito**.
+- **Recusa**: diz por quê. O pedido passa a **recusado**, a tarefa segue e o gestor é avisado. Ele só pede de novo depois de uns 10 minutos.
+- A tarefa fica pronta antes de alguém decidir: o pedido fica **sem efeito**.
+- Você cancelando pela tela também aceita o pedido que estiver esperando ("Aceito por você").
+- Cada tarefa tem no máximo um pedido esperando decisão. Se quem faz a tarefa está em outra, o pedido espera a vez dele; se a entrega falhar, o Club tenta de novo sozinho. Reabrir a tarefa limpa o pedido.
+
+O que aparece no quadro:
+
+| Onde | O que mostra |
+| --- | --- |
+| Selo **Pedido de cancelamento de {gestor}** (neutro) no cartão | Há um pedido esperando a decisão de quem faz a tarefa. Passando o mouse, o motivo. Você não precisa fazer nada. |
+| Selo **Cancelamento recusado** (neutro) no cartão | Quem faz a tarefa recusou. Passando o mouse, o porquê. |
+| Bloco **Pedido de cancelamento** no detalhe (tracejado enquanto espera, contínuo depois de decidido) | Quem pediu e há quanto tempo (a data e a hora ao passar o mouse), o **motivo**, onde o pedido está (já na conversa de quem faz, esperando a vez dele, ou entrega falhou), e a decisão: **aceito**, **recusado** (com o **porquê**) ou **sem efeito**. Esperando ou recusado, lembra que você pode cancelar já. |
+
+Os selos não ficam laranja nem amarelo: a decisão é de quem faz a tarefa. O amarelo continua sendo o que depende de você.
+
+### Cancelada por quem pediu
+
+Tarefa cancelada vai para o grupo recolhido **Canceladas (n)**, no fim de **Finalizado**. O cartão mostra **Cancelada por {nome}** e o motivo; o detalhe, o nome, a data e o motivo. Quando quem cancelou foi um funcionário, o nome vem com o papel: **(quem pediu a tarefa)** ou **(quem fazia a tarefa)**. Se foi você, aparece "você".
+
+### Possível duplicata
+
+Ao criar uma tarefa pela tela com título parecido (as mesmas palavras, ou 80% delas em comum, com pelo menos 3 palavras) ao mesmo responsável nos últimos 10 minutos, o quadro mostra o aviso amarelo **Possível duplicata**, com a tarefa parecida, a coluna dela e quando foi criada.
+
+- **A tarefa nova foi criada mesmo assim.** O aviso não impede nada: com **Criar e começar**, a nova já começou.
+- **Ver** abre a parecida; **Ver a nova** abre a que você acabou de criar. Se foi engano, cancele uma das duas em **Cancelar tarefa**.
+- **Entendi** fecha o aviso. Ele também sai ao clicar em **Nova tarefa** de novo. Tarefa de rotina e card registrado automaticamente não entram na comparação.
 
 ## Editar, apagar e id
 

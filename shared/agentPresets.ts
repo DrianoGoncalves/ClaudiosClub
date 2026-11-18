@@ -17,7 +17,9 @@ export interface AgentPreset {
 }
 
 // Executores respondem curto para o planejador (cada linha da resposta volta para o contexto
-// do modelo grande) e não delegam: dividir o trabalho é do orquestrador.
+// do modelo grande) e não delegam: dividir o trabalho é do orquestrador. Quem chama entrega a decisão
+// pronta (objetivo, arquivos permitidos, decisões, restrições, critério de aceite); o executor aplica,
+// verifica e devolve alterações, verificações e pendências.
 const EXECUTOR_RULES = [
   'Você é um executor. Faça exatamente a tarefa recebida, sem ampliar o escopo.',
   '- Leia só o necessário para a tarefa.',
@@ -25,19 +27,35 @@ const EXECUTOR_RULES = [
   '- Não chame outros agents nem divida a tarefa: se ela for grande demais, devolva dizendo isso.',
   '- Commit, push, instalar dependências, apagar arquivos ou mexer fora dos arquivos combinados só se a tarefa pedir.',
   '- Antes de responder, rode a verificação que a tarefa pedir (ou a mais simples que prove que funciona).',
-  '- Responda curto: o que mudou, com arquivo:linha, e o que você verificou (comando e resultado). Não cole arquivos inteiros nem diffs longos.',
+  '- Responda curto: o que mudou, com arquivo:linha; o que você verificou (comando e resultado); e o que ficou pendente. Não cole arquivos inteiros nem diffs longos.',
   '- Se não conseguiu, diga o motivo e onde parou, em uma ou duas linhas.',
+].join('\n');
+
+// O rápido é o mesmo executor em modelo pequeno: só serve quando a tarefa dispensa julgamento.
+const FAST_EXECUTOR_RULES = [
+  'Você é um executor rápido, para trabalho mecânico: transformação determinística, busca e troca, rodar um comando e relatar o resultado.',
+  '- Se a tarefa pede julgamento ou desenho (escolher entre caminhos, achar a causa de um bug, mudar o comportamento do código), pare e devolva dizendo isso: ela é do `executor`.',
+  EXECUTOR_RULES.split('\n').slice(1).join('\n'),
 ].join('\n');
 
 export const AGENT_PRESETS: AgentPreset[] = [
   {
-    label: 'Executor (Haiku)',
+    label: 'Executor (Sonnet)',
     name: 'executor',
-    description: 'Executa tarefas bem especificadas que o orquestrador delegar: editar os arquivos indicados, aplicar mudanças repetitivas, rodar comandos de verificação.',
+    description: 'Implementa o que o orquestrador decidiu e delegou: editar os arquivos indicados, escrever e ajustar código e testes, rodar as verificações e devolver alterações, verificações e pendências.',
+    model: 'sonnet',
+    effort: 'medium',
+    tools: 'Read, Grep, Glob, Edit, Write, Bash, PowerShell',
+    prompt: EXECUTOR_RULES,
+  },
+  {
+    label: 'Executor rápido (Haiku)',
+    name: 'executor-rapido',
+    description: 'Executa trabalho mecânico já definido, sem julgamento: transformação determinística, busca e troca em vários arquivos, rodar um comando e relatar o resultado.',
     model: 'haiku',
     effort: 'low',
     tools: 'Read, Grep, Glob, Edit, Write, Bash, PowerShell',
-    prompt: EXECUTOR_RULES,
+    prompt: FAST_EXECUTOR_RULES,
   },
   {
     label: 'Pesquisador (Haiku, só leitura)',
@@ -63,10 +81,10 @@ export const AGENT_PRESETS: AgentPreset[] = [
 
 /**
  * Agents que cada roteiro chama pelo nome (os passos estão em server/staff/ficha.ts). O padrão do
- * orquestrador escolhe entre os três conforme a tarefa: quem é contratado sozinho tem todos à mão.
+ * orquestrador escolhe entre eles conforme a tarefa: quem é contratado sozinho tem todos à mão.
  */
 export const PLAYBOOK_AGENTS: Record<Playbook, string[]> = {
-  'plan-big-execute-small': ['pesquisador', 'executor', 'revisor'],
+  'plan-big-execute-small': ['pesquisador', 'executor', 'executor-rapido', 'revisor'],
   'scout-then-build': ['pesquisador', 'executor'],
   'review-gate': ['executor', 'revisor'],
 };

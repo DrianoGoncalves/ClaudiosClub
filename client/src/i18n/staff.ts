@@ -149,11 +149,31 @@ export default defineMessages({
     'staff.mcpSomeOff': 'Com algum desligado, a sessão usa só os marcados (os conectores da conta ficam de fora).',
     'staff.mcpAccessIntro': 'Livre segue a autonomia da ficha. Pede antes de escrever e Só leitura valem só para o que escreve; Desligado tira o MCP da conversa.',
     'staff.mcpWeightShort': 'peso não medido',
-    'staff.weightIntro':
-      'Cada conversa aberta ocupa memória do computador. Nas conversas do Claude, ele sozinho usa de {min} a {max} MB, e cada MCP ligado soma o dele (“peso não medido” = ocupa, mas não sabemos quanto). Fechar a conversa devolve a memória, e o Claudio’s Club fecha sozinho a que fica {idle} minutos parada.',
-    'staff.weightGpt': 'Perguntar ao GPT (ligado nas Configurações) soma de {min} a {max} MB em cada conversa do Claude.',
-    'staff.weightBrowser':
-      'Navegador limpo (sem os seus logins): de {min} a {max} MB por conversa, mas só enquanto ela usa o navegador. Ele abre na primeira vez que é preciso e fecha sozinho depois de {idle} minutos sem uso; sem usar, não pesa.',
+    // Selos de peso da ficha (WeightFlag.tsx): memória do computador e consumo do limite de uso, cada um com o porquê e quando vale ligar.
+    'staff.w.memory': 'Usa memória',
+    'staff.w.limit': 'Gasta limite',
+    'staff.w.hint': 'Toque para ver o porquê e quando vale ligar',
+    'staff.w.claude': 'Cada conversa aberta do Claude: de {min} a {max} MB',
+    'staff.w.claudeTip':
+      'Memória do computador: o Claude de cada conversa aberta ocupa de {min} a {max} MB (medido no Windows). Fechar a conversa devolve a memória, e o Claudio’s Club fecha sozinho a que fica {idle} minutos parada. Se o computador ficar lento, feche as conversas que não está usando.',
+    'staff.w.codexRun': 'Conversa no GPT: peso não medido',
+    'staff.w.codexRunTip':
+      'No GPT, cada mensagem abre um processo que termina junto com a resposta: não fica um programa parado entre uma mensagem e outra. Não medimos quanto ele ocupa enquanto responde.',
+    'staff.w.gpt': 'Perguntar ao GPT (ligado nas Configurações)',
+    'staff.w.gptTip':
+      'Memória do computador: soma de {min} a {max} MB em cada conversa do Claude. Limite de uso: cada pergunta abre outra chamada no Codex e gasta a cota do seu ChatGPT (não a do Claude). Vale deixar ligado se os funcionários decidem coisas que pesam e uma segunda opinião ajuda. Para tirar, desligue “{setting}” em Configurações → Geral (isso tira também o GPT como motor).',
+    'staff.w.browser': 'Navegador: cerca de {proxy} MB aberto, mais {min} a {max} MB ao usar',
+    'staff.w.browserTip':
+      'Memória do computador: com “Usar o navegador” marcado, um aviso leve fica aberto em toda conversa (cerca de {proxy} MB). Quando o funcionário abre uma página, o navegador sem os seus logins soma de {min} a {max} MB e fecha sozinho depois de {idle} minutos sem uso. O seu Chrome real (Claude in Chrome) não foi medido. Vale deixar marcado para quem testa telas, confere sites ou lê páginas; para quem só mexe em código, desmarque.',
+    'staff.w.mcps': 'MCPs ligados: peso não medido',
+    'staff.w.mcpsTip':
+      'Memória do computador: cada MCP ligado que roda no seu computador sobe junto com a conversa, usado ou não, e ocupa memória. Não medimos quanto cada um ocupa. Desmarque os que este funcionário não usa.',
+    'staff.w.model': 'Modelo grande: gasta o limite mais rápido',
+    'staff.w.modelTip':
+      'Limite de uso: na tabela de preços do Claudio’s Club, Opus e Fable custam mais por token que Sonnet e Haiku, e tendem a gastar o limite da assinatura mais rápido. Vale para planejar, decidir e revisar; em trabalho mecânico (buscar, editar o que já está definido), Sonnet ou Haiku gastam menos.',
+    'staff.w.effort': 'Esforço alto: pensa mais, gasta mais limite',
+    'staff.w.effortTip':
+      'Limite de uso: com esforço alto o modelo pensa mais antes de responder, o que gasta o limite mais rápido e deixa a resposta mais lenta (não dá para dar número: depende do pedido). Vale em tarefa difícil ou arriscada; no dia a dia, esforço baixo ou médio gasta menos.',
     'staff.weightSsh': 'Acesso a servidores (SSH): bem leve, cerca de {mb} MB por conversa aberta. FTP: peso não medido.',
     'staff.mcpAccessFree': 'Livre',
     'staff.mcpAccessAsk': 'Pede antes de escrever',
@@ -572,11 +592,30 @@ export default defineMessages({
     'staff.mcpSomeOff': 'With some turned off, the session uses only the checked ones (account connectors are left out).',
     'staff.mcpAccessIntro': 'Free follows the profile’s autonomy. Asks before writing and Read-only apply only to what writes; Off removes the MCP from the conversation.',
     'staff.mcpWeightShort': 'weight not measured',
-    'staff.weightIntro':
-      'Each open conversation uses memory on your computer. In Claude conversations, Claude alone uses {min} to {max} MB, and every MCP you turn on adds its own (“weight not measured” = it uses memory, but we don’t know how much). Closing the conversation gives the memory back, and Claudio’s Club closes one on its own after {idle} idle minutes.',
-    'staff.weightGpt': 'Asking GPT (turned on in Settings) adds {min} to {max} MB to each Claude conversation.',
-    'staff.weightBrowser':
-      'Clean browser (without your logins): {min} to {max} MB per conversation, but only while it uses the browser. It opens the first time it is needed and closes on its own after {idle} minutes unused; unused, it weighs nothing.',
+    'staff.w.memory': 'Uses memory',
+    'staff.w.limit': 'Uses your limit',
+    'staff.w.hint': 'Tap to see why and when it is worth turning on',
+    'staff.w.claude': 'Each open Claude conversation: {min} to {max} MB',
+    'staff.w.claudeTip':
+      'Computer memory: the Claude behind each open conversation takes {min} to {max} MB (measured on Windows). Closing the conversation gives the memory back, and Claudio’s Club closes one on its own after {idle} idle minutes. If the computer slows down, close the conversations you are not using.',
+    'staff.w.codexRun': 'GPT conversation: weight not measured',
+    'staff.w.codexRunTip':
+      'With GPT, each message starts a process that ends together with the answer: nothing stays running between one message and the next. We did not measure how much it takes while answering.',
+    'staff.w.gpt': 'Asking GPT (turned on in Settings)',
+    'staff.w.gptTip':
+      'Computer memory: adds {min} to {max} MB to each Claude conversation. Usage limit: each question makes another Codex call and spends your ChatGPT quota (not the Claude one). Worth keeping on if your employees make decisions that matter and a second opinion helps. To remove it, turn off “{setting}” in Settings → General (this also removes GPT as an engine).',
+    'staff.w.browser': 'Browser: about {proxy} MB kept open, plus {min} to {max} MB when used',
+    'staff.w.browserTip':
+      'Computer memory: with “Use the browser” checked, a light placeholder stays open in every conversation (about {proxy} MB). When the employee actually opens a page, the browser without your logins adds {min} to {max} MB and closes on its own after {idle} minutes unused. Your real Chrome (Claude in Chrome) was not measured. Worth keeping checked for people who test screens, check sites or read pages; for people who only touch code, uncheck it.',
+    'staff.w.mcps': 'MCPs on: weight not measured',
+    'staff.w.mcpsTip':
+      'Computer memory: each MCP you turn on that runs on your computer starts with the conversation, used or not, and takes memory. We did not measure how much each one takes. Uncheck the ones this employee does not use.',
+    'staff.w.model': 'Large model: uses your limit faster',
+    'staff.w.modelTip':
+      'Usage limit: in Claudio’s Club’s price table, Opus and Fable cost more per token than Sonnet and Haiku, and tend to use up the subscription limit faster. Worth it for planning, deciding and reviewing; for mechanical work (searching, editing what is already defined), Sonnet or Haiku use less.',
+    'staff.w.effort': 'High effort: thinks more, uses more limit',
+    'staff.w.effortTip':
+      'Usage limit: with high effort the model thinks more before answering, which uses the limit faster and makes the answer slower (no number possible: it depends on the request). Worth it for hard or risky tasks; day to day, low or medium effort uses less.',
     'staff.weightSsh': 'Server access (SSH): very light, about {mb} MB per open conversation. FTP: weight not measured.',
     'staff.mcpAccessFree': 'Free',
     'staff.mcpAccessAsk': 'Asks before writing',
@@ -990,11 +1029,30 @@ export default defineMessages({
     'staff.mcpSomeOff': 'Con alguno desactivado, la sesión usa solo los marcados (los conectores de la cuenta quedan fuera).',
     'staff.mcpAccessIntro': 'Libre sigue la autonomía de la ficha. Pide antes de escribir y Solo lectura valen solo para lo que escribe; Desactivado quita el MCP de la conversación.',
     'staff.mcpWeightShort': 'peso sin medir',
-    'staff.weightIntro':
-      'Cada conversación abierta ocupa memoria del ordenador. En las conversaciones de Claude, él solo usa de {min} a {max} MB, y cada MCP activado suma el suyo (“peso sin medir” = ocupa, pero no sabemos cuánto). Cerrar la conversación devuelve la memoria, y Claudio’s Club cierra solo la que pasa {idle} minutos parada.',
-    'staff.weightGpt': 'Preguntar a GPT (activado en Configuración) suma de {min} a {max} MB en cada conversación de Claude.',
-    'staff.weightBrowser':
-      'Navegador limpio (sin tus sesiones): de {min} a {max} MB por conversación, pero solo mientras ella usa el navegador. Se abre la primera vez que hace falta y se cierra solo tras {idle} minutos sin uso; sin usar, no pesa.',
+    'staff.w.memory': 'Usa memoria',
+    'staff.w.limit': 'Gasta límite',
+    'staff.w.hint': 'Toca para ver el porqué y cuándo conviene activarlo',
+    'staff.w.claude': 'Cada conversación abierta de Claude: de {min} a {max} MB',
+    'staff.w.claudeTip':
+      'Memoria del ordenador: el Claude de cada conversación abierta ocupa de {min} a {max} MB (medido en Windows). Cerrar la conversación devuelve la memoria, y Claudio’s Club cierra solo la que pasa {idle} minutos parada. Si el ordenador va lento, cierra las conversaciones que no uses.',
+    'staff.w.codexRun': 'Conversación en GPT: peso sin medir',
+    'staff.w.codexRunTip':
+      'En GPT, cada mensaje abre un proceso que termina junto con la respuesta: no queda un programa parado entre un mensaje y otro. No medimos cuánto ocupa mientras responde.',
+    'staff.w.gpt': 'Preguntar a GPT (activado en Configuración)',
+    'staff.w.gptTip':
+      'Memoria del ordenador: suma de {min} a {max} MB en cada conversación de Claude. Límite de uso: cada pregunta abre otra llamada en Codex y gasta la cuota de tu ChatGPT (no la de Claude). Conviene dejarlo activado si los funcionarios deciden cosas importantes y una segunda opinión ayuda. Para quitarlo, desactiva “{setting}” en Configuración → General (esto quita también GPT como motor).',
+    'staff.w.browser': 'Navegador: unos {proxy} MB abierto, más {min} a {max} MB al usarlo',
+    'staff.w.browserTip':
+      'Memoria del ordenador: con “Usar el navegador” marcado, un aviso ligero queda abierto en cada conversación (unos {proxy} MB). Cuando el funcionario abre una página, el navegador sin tus sesiones suma de {min} a {max} MB y se cierra solo tras {idle} minutos sin uso. Tu Chrome real (Claude in Chrome) no se midió. Conviene dejarlo marcado para quien prueba pantallas, revisa sitios o lee páginas; para quien solo toca código, desmárcalo.',
+    'staff.w.mcps': 'MCP activados: peso sin medir',
+    'staff.w.mcpsTip':
+      'Memoria del ordenador: cada MCP activado que corre en tu ordenador arranca con la conversación, se use o no, y ocupa memoria. No medimos cuánto ocupa cada uno. Desmarca los que este funcionario no usa.',
+    'staff.w.model': 'Modelo grande: gasta el límite más rápido',
+    'staff.w.modelTip':
+      'Límite de uso: en la tabla de precios de Claudio’s Club, Opus y Fable cuestan más por token que Sonnet y Haiku, y tienden a gastar el límite de la suscripción más rápido. Conviene para planificar, decidir y revisar; en trabajo mecánico (buscar, editar lo ya definido), Sonnet o Haiku gastan menos.',
+    'staff.w.effort': 'Esfuerzo alto: piensa más, gasta más límite',
+    'staff.w.effortTip':
+      'Límite de uso: con esfuerzo alto el modelo piensa más antes de responder, lo que gasta el límite más rápido y hace la respuesta más lenta (no se puede dar un número: depende del pedido). Conviene en tarea difícil o arriesgada; en el día a día, esfuerzo bajo o medio gasta menos.',
     'staff.weightSsh': 'Acceso a servidores (SSH): muy ligero, unos {mb} MB por conversación abierta. FTP: peso sin medir.',
     'staff.mcpAccessFree': 'Libre',
     'staff.mcpAccessAsk': 'Pide antes de escribir',

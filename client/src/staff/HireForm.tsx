@@ -38,7 +38,8 @@ import {
   type McpAccessMap,
 } from './mcpAccessField';
 import { McpAccessHint, McpAccessSelect } from './McpAccessSelect';
-import { BROWSER_IDLE_MIN, CLOSE_IDLE_MIN, rangeParams, WEIGHT_MB } from './mcpWeight';
+import { rangeParams, WEIGHT_MB } from './mcpWeight';
+import { WeightFlags, type WeightCtx } from './WeightFlag';
 import { PersonMemory } from './PersonMemory';
 import { PERSONALITY_TEXT, personalityToSend } from './personalityField';
 import { goneSkills, skillIsGone, type LibraryState } from './skillGone';
@@ -222,6 +223,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     [],
   );
   const codex = engine === 'codex';
+  // O que a ficha liga agora, para os selos de peso (memória do computador e limite de uso).
+  const weightCtx: WeightCtx = { engine, gpt: !!codexReview, browser, mcps: mcpOn.size, model, effort };
   // O motor recusou o modelo salvo na ficha: o aviso vale enquanto o formulário ainda o mantém (trocar o modelo ou o motor tira).
   const obsolete = obsoleteFor(editing, model || null, engine);
   // Conexão FTP marcada na ficha: o Codex não roda (SSH roda).
@@ -566,12 +569,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                 })}
               </p>
             )}
-            <p className="muted small">
-              {t('staff.weightIntro', { ...rangeParams(WEIGHT_MB.claude), idle: CLOSE_IDLE_MIN })}
-              {codexReview && engine === 'claude' && <> {t('staff.weightGpt', rangeParams(WEIGHT_MB.gpt))}</>}
-            </p>
-            <p className="muted small">{t('staff.weightSsh', rangeParams(WEIGHT_MB.ssh))}</p>
-            <p className="muted small">{t('staff.weightBrowser', { ...rangeParams(WEIGHT_MB.browser), idle: BROWSER_IDLE_MIN })}</p>
+            <WeightFlags ctx={weightCtx} ids={['claude', 'gpt', 'browser', 'model', 'effort']} />
             <p className="small">
               <button type="button" className="link" onClick={() => setFull(true)}>
                 {t('staff.showAll')}
@@ -684,6 +682,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             <p className="muted small">
               {ftpBlocked ? t('staff.engineCodexServers', { tools: t('detail.tabProject') }) : codex ? t('staff.engineCodexHint') : t('staff.engineClaudeHint')}
             </p>
+            <WeightFlags ctx={weightCtx} ids={['codexRun']} />
           </fieldset>
         )}
 
@@ -731,6 +730,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           </label>
         </div>
         )}
+        <WeightFlags ctx={weightCtx} ids={['model', 'effort']} />
         {obsolete && <ModelObsoleteNote obsolete={obsolete} />}
 
         {showFallback && <FallbackField main={engine} servers={servers} serverList={serverList} draft={fallback} onChange={setFallback} />}
@@ -877,10 +877,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             </>
           )}
           {/* O peso por conversa aberta: o do Claude (a base) e o que o Club mesmo põe; o MCP não medido fica sem número. */}
-          <p className="muted small">
-            {t('staff.weightIntro', { ...rangeParams(WEIGHT_MB.claude), idle: CLOSE_IDLE_MIN })}
-            {codexReview && engine === 'claude' && <> {t('staff.weightGpt', rangeParams(WEIGHT_MB.gpt))}</>}
-          </p>
+          <WeightFlags ctx={weightCtx} ids={['claude', 'gpt', 'mcps']} />
         </fieldset>
           </>
         )}
@@ -980,8 +977,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             {browser && <BrowserCheck />}
           </>
         )}
-        {/* O navegador limpo só sobe quando a conversa usa (server/navegadorMcp.ts): o peso vale a partir daí. */}
-        <p className="muted small">{t('staff.weightBrowser', { ...rangeParams(WEIGHT_MB.browser), idle: BROWSER_IDLE_MIN })}</p>
+        {/* Só o proxy do navegador limpo fica aberto na conversa; o navegador de verdade só sobe quando é usado (server/navegadorMcp.ts). */}
+        <WeightFlags ctx={weightCtx} ids={['browser']} />
         {/* Um seletor só: o Claude in Chrome e o Chrome do GPT são o mesmo navegador (vale o mais restritivo). */}
         {browser && (
           <div className="mcp-browser">

@@ -7,8 +7,10 @@ export type MbRange = readonly [min: number, max: number];
 export const WEIGHT_MB = {
   /** O programa do próprio Claude, um por conversa aberta (não é MCP: é a base de toda conversa). */
   claude: [200, 290],
-  /** O navegador limpo (`myco-navegador` + Playwright). Só pesa enquanto a conversa usa o navegador (sobe na 1ª chamada e cai ao ficar ocioso). */
+  /** O navegador de verdade (Playwright), só enquanto a conversa usa o navegador (sobe na 1ª chamada e cai ao ficar ocioso). */
   browser: [80, 120],
+  /** O proxy preguiçoso do navegador limpo (`myco-navegador`): fica aberto em toda conversa com "Usar o navegador" marcado (`server/navegadorMcp.ts:10`). */
+  browserProxy: [54, 54],
   /** O recurso de perguntar ao GPT (`myco-gpt`), nas conversas do Claude com o GPT ligado nas Configurações. */
   gpt: [20, 45],
   /** O acesso aos servidores (`myco-ssh`). FTP não foi medido. */

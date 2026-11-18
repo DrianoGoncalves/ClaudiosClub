@@ -561,6 +561,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <li><a href="#organograma">Organograma</a></li>
         <li><a href="#rh">RH</a></li>
         <li><a href="#mcps">MCPs</a></li>
+        <li><a href="#peso">O que pesa</a></li>
         <li><a href="#skills-agents">Skills e agents</a></li>
       </ul>
     </li>
@@ -1331,7 +1332,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
 
   <article class="blk" id="mcps">
     <h3>MCPs</h3>
-    <p>Peso aproximado na memória do computador por conversa aberta, medido no Windows: CLI do Claude 200–290 MB; navegador limpo 80–120 MB, somente enquanto usado; gpt-mcp 20–45 MB; ssh-mcp cerca de 2 MB. MCPs não medidos aparecem sem número.</p>
+    <p>Cada MCP ligado que roda no seu computador ocupa memória, mas o peso de cada um não foi medido (a ficha diz “peso não medido”). O que foi medido, e o que gasta o limite de uso, está em <a href="#peso">O que pesa e quando vale ligar</a>.</p>
     <p><span class="path"><b>Configurações</b><i>›</i><b>MCPs</b></span> (<b class="ui">Servidores MCP</b>). Há quatro escopos:</p>
     <div class="cards c2">
       <div class="card"><h4>Da conta (Club) <span class="chip ok">recomendado</span></h4><p>Segredos no cofre do sistema, e só quem tem o MCP na ficha carrega.</p></div>
@@ -1357,6 +1358,40 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         </div>
       </figure>
     </div>
+  </article>
+
+  <article class="blk" id="peso">
+    <h3>O que pesa e quando vale ligar</h3>
+    <p>A ficha avisa o que pesa mais com um <b>selo</b> e uma dica. São dois pesos diferentes:</p>
+    <ul>
+      <li><span class="tag">Usa memória</span> um programa a mais no seu computador. Só tem número onde foi medido (no Windows, por conversa aberta).</li>
+      <li><span class="tag">Gasta limite</span> gasta o limite de uso da assinatura mais rápido. É só comparação: não há número, porque depende do pedido.</li>
+    </ul>
+    <p>Os selos aparecem onde você decide: <b class="ui">Modelo</b> e <b class="ui">Esforço</b> (aba <b class="ui">Ficha</b>), <b class="ui">MCPs</b> e <b class="ui">Usar o navegador</b> (aba <b class="ui">Projeto</b>) e, no nível Simples, na própria tela de contratar. Toque no selo para abrir o porquê e quando vale ligar. Só ganham selo as opções com base no código; sem base, a ficha não marca.</p>
+    <div class="tw"><table class="tbl stack">
+      <thead><tr><th>Recurso</th><th>Selo</th><th>O que pesa</th><th>Quando vale ligar</th></tr></thead>
+      <tbody>
+        <tr><td data-label="Recurso">Cada conversa aberta do Claude</td><td data-label="Selo">Usa memória</td><td data-label="O que pesa">200–290 MB por conversa aberta. O Club fecha sozinho a que fica 15 minutos parada.</td><td data-label="Quando vale ligar">Não é uma opção, é o custo de manter conversas abertas: feche as que não usa.</td></tr>
+        <tr><td data-label="Recurso"><b class="ui">Usar o navegador</b> (Claude)</td><td data-label="Selo">Usa memória</td><td data-label="O que pesa">Um aviso leve, cerca de 54 MB, fica aberto em toda conversa com a caixa marcada. Ao abrir uma página, o navegador sem os seus logins soma 80–120 MB e fecha sozinho depois de 10 minutos sem uso. O seu Chrome real (Claude in Chrome) não foi medido.</td><td data-label="Quando vale ligar">Para quem testa telas, confere sites ou lê páginas. Para quem só mexe em código, desmarque.</td></tr>
+        <tr><td data-label="Recurso"><b class="ui">Perguntar ao GPT</b> (<b class="ui">Usar o Codex (GPT)</b> nas Configurações)</td><td data-label="Selo">Usa memória e Gasta limite</td><td data-label="O que pesa">20–45 MB em cada conversa do Claude. Cada pergunta abre outra chamada no Codex e gasta a cota do seu ChatGPT (não a do Claude).</td><td data-label="Quando vale ligar">Para quem decide coisas que pesam e ganha com uma segunda opinião. Desligar tira também o GPT como motor.</td></tr>
+        <tr><td data-label="Recurso"><b class="ui">Modelo</b> Opus ou Fable</td><td data-label="Selo">Gasta limite</td><td data-label="O que pesa">Custam mais por token que Sonnet e Haiku na tabela de preços do Club, e tendem a gastar o limite mais rápido.</td><td data-label="Quando vale ligar">Para planejar, decidir e revisar. Em trabalho mecânico, Sonnet ou Haiku gastam menos.</td></tr>
+        <tr><td data-label="Recurso"><b class="ui">Esforço</b> alto, xhigh ou max</td><td data-label="Selo">Gasta limite</td><td data-label="O que pesa">O modelo pensa mais antes de responder: demora mais e gasta o limite mais rápido.</td><td data-label="Quando vale ligar">Em tarefa difícil ou arriscada. No dia a dia, esforço baixo ou médio gasta menos.</td></tr>
+      </tbody>
+    </table></div>
+    <h4>Sem selo</h4>
+    <p>Leve, ou sem medida (o que não foi medido fica sem número):</p>
+    <div class="tw"><table class="tbl stack plain">
+      <thead><tr><th>Recurso</th><th>O que se sabe</th></tr></thead>
+      <tbody>
+        <tr><td data-label="Recurso"><b class="ui">MCPs</b> marcados</td><td data-label="O que se sabe">Cada MCP que roda no seu computador sobe junto com a conversa, usado ou não. Peso não medido: desmarque os que o funcionário não usa.</td></tr>
+        <tr><td data-label="Recurso"><b class="ui">Servidores</b> SSH</td><td data-label="O que se sabe">Leve, cerca de 2 MB por conversa (só sobe com servidor SSH marcado). FTP: peso não medido.</td></tr>
+        <tr><td data-label="Recurso">Motor <b class="ui">Codex (GPT)</b></td><td data-label="O que se sabe">Cada mensagem abre um processo que termina junto com a resposta; não fica programa parado. Peso não medido, e o navegador do GPT também não.</td></tr>
+        <tr><td data-label="Recurso"><b class="ui">Motor secundário</b></td><td data-label="O que se sabe">Não sobe nada extra: só quando o principal bate o limite a tarefa segue em conversa nova no outro motor.</td></tr>
+        <tr><td data-label="Recurso">Skills, agents, regras, conhecimento, estilo de comunicação, memória pessoal e roteiro</td><td data-label="O que se sabe">São texto que entra no prompt da conversa. Sem medida de quanto pesa.</td></tr>
+        <tr><td data-label="Recurso"><b class="ui">Trabalhar numa worktree própria</b></td><td data-label="O que se sabe">Uma cópia git no disco; pesa disco, não memória.</td></tr>
+        <tr><td data-label="Recurso">Autonomia e <b class="ui">Pode contratar subfuncionários</b></td><td data-label="O que se sabe">Não sobem nada.</td></tr>
+      </tbody>
+    </table></div>
   </article>
 
   <article class="blk" id="skills-agents">

@@ -127,6 +127,8 @@ export function itemFromCodex(raw: unknown, key: string, at: string, phase: Code
     }
     case 'error': {
       const message = asString(it.message).trim();
+      // O aviso que o Codex dá, a cada execução, da flag da fila de validação pesada (codexHeavyArgs): é nossa e conhecida, não é da conversa.
+      if (/^`?--dangerously-bypass-hook-trust`? is enabled/i.test(message)) return null;
       return message ? { kind: 'notice', id: itemId('n', key, it), text: message, tone: 'warn', at } : null;
     }
     default:

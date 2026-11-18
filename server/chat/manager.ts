@@ -5,6 +5,7 @@ import path from 'node:path';
 import type {
   AskedQuestion,
   Autonomy,
+  BackgroundTask,
   ChatAttachment,
   ChatCommand,
   ChatEvent,
@@ -48,7 +49,7 @@ import { WAKE_MAX_STREAK, WakeStreakError, wakeNotice, type WakeInput } from './
 import { readUsage } from '../usage';
 import type { SessionTokens } from '../callers';
 import { resumeText, type ResumeEntry } from './resume';
-import { externalCutWithAgents, subagentsDirOf } from './cutAction';
+import { externalBackground, externalCutWithAgents, subagentsDirOf } from './cutAction';
 import { legacyLabel, worseVerdict, type ClassifiedSecret, type SecretHint, type SecretKind, type SecretReason, type SecretSource, type SecretVerdict } from './secrets';
 import { capReason, capText, type TurnCaps } from './turnCap';
 import type { TurnCapHit } from '../../shared/model';
@@ -1183,10 +1184,14 @@ export class ChatManager {
   /**
    * A ação com efeito fora do projeto que o corte deixou pela metade nestes itens (ver `externalCutWithAgents`): o subagent cortado que
    * só mexeu no projeto não conta. Os subagents do Claude ficam ao lado do transcript; o Codex não tem essa pasta (conservador).
+   * `background`: o que ainda rodava em segundo plano quando o processo caiu (só o Claude confere, ver `externalBackground`; no Codex, qualquer
+   * tarefa dessas é incerta). O que sobrar incerto sai como "em segundo plano: <rótulo>", antes das ferramentas sem resultado.
    */
-  private async cutOf(projectId: string | null, sessionId: string, items: readonly ChatItem[], awaitingAnswer: boolean): Promise<string | null> {
+  private async cutOf(projectId: string | null, sessionId: string, items: readonly ChatItem[], awaitingAnswer: boolean, background: readonly BackgroundTask[] = [], engine: 'claude' | 'codex' = 'claude'): Promise<string | null> {
     // Sem projeto (conversa sem ficha) não há onde achar o transcript: os subagents ficam sem conferência (conservador).
     const dir = projectId ? subagentsDirOf(await findTranscript(this.opts.transcriptsDir, projectId, sessionId)) : null;
+    const open = engine === 'claude' ? await externalBackground(background, items, dir) : (background[0] ?? null);
+    if (open) return `em segundo plano: ${open.label}`;
     return externalCutWithAgents(items, awaitingAnswer, dir);
   }
 
@@ -1478,6 +1483,7 @@ export class ChatManager {
           extraMcps: codex.extraMcps,
           mcpSnapshotFile: codex.mcpSnapshotFile,
           agents: codex.agents,
+          heavyGuard: codex.heavyGuard,
           secrets: codex.secrets,
           threadId: codex.threadId,
           threadFile: codex.threadFile,
@@ -1713,11 +1719,9 @@ export class ChatManager {
     }
     const kind: RetryInfo['kind'] = transient ? 'transient' : 'unknown';
     const label = transient?.label ?? 'o processo caiu sem aviso';
-    // Efeito externo incerto: uma ação que mexe fora do projeto ficou pela metade (ou algo em segundo plano morreu junto). Retomar poderia repeti-la.
-    const cut =
-      end.kind === 'lost' && end.background.length
-        ? `em segundo plano: ${end.background[0]!.label}`
-        : await this.cutOf(projectId, sessionId, end.items, end.awaitingAnswer).catch(() => 'uma ação que não deu para conferir');
+    // Efeito externo incerto: uma ação que mexe fora do projeto ficou pela metade, ou algo em segundo plano morreu junto e o transcript não o
+    // mostra só no projeto (agent ou comando que só edita/testa não conta). Retomar poderia repetir a ação.
+    const cut = await this.cutOf(projectId, sessionId, end.items, end.awaitingAnswer, end.background, engine).catch(() => 'uma ação que não deu para conferir');
     if (voided()) return;
     if (cut) return this.holdRetry(sessionId, { kind: 'retry', why: 'cut', action: cut, error: label });
     const used = this.retryLedger.get(sessionId)?.attempts ?? 0;

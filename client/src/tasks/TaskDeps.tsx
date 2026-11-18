@@ -8,12 +8,18 @@ import { waitClass } from './waitTone';
 /** O mesmo teto do servidor (`BlockedBy` em server/tasks.ts). */
 export const MAX_DEPS = 20;
 
-type DepTask = Pick<Task, 'id' | 'title' | 'status'>;
+type DepTask = Pick<Task, 'id' | 'title' | 'status'> & { review?: { verdict?: 'approved' | 'rejected' | null } | null };
 
 /** As dependências de `task` que ainda seguram ela: existem no projeto e não estão prontas (a regra de `blockers`, no servidor). Cancelada continua segurando. */
 export function openBlockers(task: Pick<Task, 'blockedBy'>, tasks: DepTask[]): DepTask[] {
   return (task.blockedBy ?? []).flatMap((id) => tasks.find((o) => o.id === id && !satisfiesDependency(o)) ?? []);
 }
+
+/**
+ * As bloqueadoras que o cartão ainda mostra como "Esperando": sem a que o revisor já aprovou (ela segue em Revisão só até mesclar; o servidor
+ * ainda segura a dependente, mas não há mais nada a esperar da revisão, então fica só a posição na fila).
+ */
+export const shownBlockers = (blockers: DepTask[]): DepTask[] => blockers.filter((o) => !(o.status === 'review' && o.review?.verdict === 'approved'));
 
 const cancelledTag = (o: Pick<DepTask, 'status'>) => (o.status === 'cancelled' ? ` (${t('tasks.cancelledTag')})` : '');
 /** O nome da bloqueadora no selo e no detalhe: “Título”, e "(cancelada)" quando ela fechou sem entrega (não vai ficar pronta). */

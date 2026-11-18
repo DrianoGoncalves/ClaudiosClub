@@ -144,7 +144,8 @@ export interface CodexSafetyOptions extends CodexSecretContext {
  *   ferramenta. Os valores aceitos são `disabled`, `cached`, `indexed` e `live`.
  * - o perfil de permissões (`codexProfileArgs`): sandbox, negações de segredos e rede. O perfil substitui o `-s`: nunca passe `-s` junto.
  *
- * Nunca `danger-full-access` nem `--dangerously-*`. Quem chama monta o resto (`-C`, `-m`, `--json`, o prompt).
+ * Nunca `danger-full-access` nem `--dangerously-*`. A única exceção, `--dangerously-bypass-hook-trust` do hook da fila de validação pesada, é só
+ * do motor dos funcionários (`codexHeavyArgs`, no `buildCodexArgs`) e não passa por aqui. Quem chama monta o resto (`-C`, `-m`, `--json`, o prompt).
  */
 export function codexSafetyArgs(o: CodexSafetyOptions): string[] {
   const webSearch = o.webSearch === true ? 'web_search="live"' : 'web_search="disabled"';
@@ -228,6 +229,48 @@ export const CODEX_SSH_MCP_NAME = 'myco-ssh';
  */
 export function codexMemoriaMcpArgs(s: CodexMcpServer | null | undefined): string[] {
   return codexMcpArgs(MEMORIA_MCP_NAME, s, s?.enabledTools);
+}
+
+/**
+ * A fila de validação pesada no terminal do Codex: o mesmo hook do Claude (scripts/hooks/heavy-guard.mjs; a lógica está em heavy-lock.mjs).
+ * O Codex só roda hook inline (`-c hooks.*`) com confiança gravada ou com `--dangerously-bypass-hook-trust` (provado no 0.169.0: sem a flag o hook
+ * não dispara). O Claudio’s Club usa a flag aqui, só neste `codex exec` e só com o hook dele (decisão do Denzel na t-aafb19), e isso deixa de ser
+ * verdade para qualquer outro hook: com `--ignore-user-config` não entram os hooks do usuário (config.toml), e os do projeto só valem em projeto
+ * confiado (a confiança também mora no config do usuário). Hook de sistema (gerenciado) já valia sem a flag. Quem NÃO usa a flag: o `perguntar_gpt`
+ * (codexSafetyArgs), que só lê.
+ */
+export interface CodexHeavyGuard {
+  /** O heavy-guard.mjs, a cópia na pasta da conversa: o hook roda FORA da sandbox, então o agente não pode editá-lo. */
+  hook: string;
+  /** A pasta da trava, uma por máquina (ver heavyQueue.ts). */
+  lockDir: string;
+  /** Quem segura a trava enquanto a conversa vive: o servidor do Claudio’s Club. O shell que abre o hook morre a cada chamada (provado: o ppid muda). */
+  ownerPid: number;
+}
+
+/** A trava do Codex vale tanto quanto o limite dos testes do servidor (10 min) mais uma folga: a chamada do Codex não traz timeout. */
+export const CODEX_HEAVY_LEASE_S = 12 * 60;
+/** A espera máxima do hook (13 min, no heavy-guard.mjs) cabe aqui. */
+const CODEX_HEAVY_PRE_TIMEOUT_S = 15 * 60;
+const CODEX_HEAVY_POST_TIMEOUT_S = 30;
+
+/**
+ * Os `-c hooks.PreToolUse/PostToolUse` e a flag de confiança da fila de validação pesada. `command` é uma linha de shell (o Codex roda a de hook
+ * pelo shell, cmd ou PowerShell): `node` do PATH e os caminhos entre aspas, que valem nos dois. Caminho com aspas não cabe: sem fila. O Codex
+ * entrega o PostToolUse de um comando longo quando ele acaba (também o que sai com erro), então a trava solta no fim da suíte.
+ */
+export function codexHeavyArgs(g: CodexHeavyGuard | null | undefined): string[] {
+  if (!g) return [];
+  const paths = [g.hook, g.lockDir].map((p) => p.replace(/\\/g, '/'));
+  if (paths.some((p) => /["`$%\r\n]/.test(p))) return [];
+  const run = (stage: 'pre' | 'post') => `node "${paths[0]}" "${paths[1]}" ${stage} ${g.ownerPid} ${CODEX_HEAVY_LEASE_S}`;
+  const group = (stage: 'pre' | 'post', timeout: number) =>
+    `[{matcher=${tomlString('Bash')},hooks=[{type=${tomlString('command')},command=${tomlString(run(stage))},timeout=${timeout}}]}]`;
+  return [
+    '--dangerously-bypass-hook-trust',
+    '-c', `hooks.PreToolUse=${group('pre', CODEX_HEAVY_PRE_TIMEOUT_S)}`,
+    '-c', `hooks.PostToolUse=${group('post', CODEX_HEAVY_POST_TIMEOUT_S)}`,
+  ];
 }
 
 /** Nome do MCP do Chrome do usuário (Playwright MCP em modo extensão) na configuração do Codex. Ver `codexChromeMcpArgs`. */
@@ -442,6 +485,8 @@ export interface CodexSpawn {
   mcpSnapshotFile?: string | null;
   /** Agents da ficha (executor, pesquisador, revisor…) como subagents do Codex, com o TOML já gravado. Vazio = sem subagents. Ver `codexAgentArgs`. */
   agents: CodexAgentRole[];
+  /** A fila de validação pesada no terminal (hook heavy-guard), ou null: sem ela. Ver `codexHeavyArgs`. */
+  heavyGuard?: CodexHeavyGuard | null;
 }
 
 /**
@@ -487,6 +532,8 @@ export interface CodexRunOptions {
   extraMcps?: CodexExtraMcp[];
   /** Agents da ficha como subagents do Codex (ver `codexAgentArgs`); vale na primeira execução e no resume. */
   agents?: CodexAgentRole[];
+  /** A fila de validação pesada no terminal (ver `codexHeavyArgs`); ausente = sem ela. */
+  heavyGuard?: CodexHeavyGuard | null;
 }
 
 /**
@@ -553,6 +600,7 @@ export function buildCodexArgs(o: CodexRunOptions): string[] {
   args.push(...codexCleanBrowserMcpArgs(o.cleanMcp));
   args.push(...codexExtraMcpArgs(o.extraMcps));
   args.push(...codexAgentArgs(o.agents));
+  args.push(...codexHeavyArgs(o.heavyGuard));
   if (o.instructions && instructionsInArgv(o.instructions, o.platform)) args.push('-c', `developer_instructions=${tomlString(o.instructions)}`);
   if (resume) args.push(o.threadId!);
   args.push('-');

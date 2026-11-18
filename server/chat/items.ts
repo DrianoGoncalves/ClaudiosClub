@@ -10,6 +10,9 @@ export function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}\n… (${text.length - max} caracteres a mais)` : text;
 }
 
+/** O texto saiu de `clip` com um pedaço a menos? */
+export const isClipped = (text: string): boolean => /\n… \(\d+ caracteres a mais\)$/.test(text);
+
 /** AskUserQuestion não tem argumento simples: o resumo é o texto da primeira pergunta. */
 function firstQuestion(i: Record<string, unknown>): string {
   const q = Array.isArray(i.questions) ? (i.questions[0] as { question?: unknown } | undefined)?.question : undefined;

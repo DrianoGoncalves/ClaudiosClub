@@ -243,6 +243,8 @@ const toolUse = (id: string, name: string, input: object) => ({ type: 'assistant
 interface Opts {
   enabled?: boolean;
   files?: { retries: string; ledger: string; wake: string; limit: string };
+  /** Ligação extra com o aviso de ociosidade (o servidor liga o `TaskService` aqui). */
+  onIdle?: (sessionId: string, projectId: string, staffId: string | null, reason: 'turn' | 'background' | 'exit') => void;
 }
 
 /** O gerente com as quatro instâncias do servidor (limite, despertador, retomada) e o orçamento, cada um com o seu arquivo. */
@@ -277,8 +279,9 @@ function build(opts: Opts = {}, dirIn?: string) {
     random: () => 0.5, // sem variação: 30 s, 2 min, 8 min
     now: () => clock.t,
     // O fim do turno: o que a tarefa pergunta já no instante da ociosidade.
-    onIdle: (sid, _p, _s, reason) => {
+    onIdle: (sid, pid, staffId, reason) => {
       if (reason === 'turn') idle.push(m.awaitingLimit(sid));
+      opts.onIdle?.(sid, pid, staffId, reason);
     },
     log: () => {},
   });
@@ -561,6 +564,228 @@ describe('Claude: o processo morreu no meio do turno', () => {
     await settle();
     expect(await h.retries.get('s1')).toBeNull();
     expect(capOf(h)).toBeNull();
+  });
+});
+
+// A queda com agent ou comando em segundo plano: o transcript do agent (`<sessão>/subagents`, ao lado do `.jsonl` da conversa) e o comando
+// decidem. Só no projeto: retoma e o card segue em "fazendo"; ação externa, ilegível ou sem como conferir: Aguardar + caixa, como antes.
+describe('Claude: queda com agent ou comando em segundo plano', () => {
+  const bg = (...tasks: object[]) => ({ type: 'system', subtype: 'background_tasks_changed', tasks });
+  const agent = (id: string, description: string) => ({ task_id: id, task_type: 'local_agent', subagent_type: 'executor', description });
+  const shell = (id: string) => ({ task_id: id, task_type: 'local_bash', description: 'Full test suite' });
+  const result = (id: string, content: string) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content }] } });
+  /** O Agent do pai, ainda sem resultado: o executor em primeiro plano que o turno estava esperando (a f1e83e2e às 04:19Z). */
+  const delegate = (id: string, description: string) => toolUse(id, 'Agent', { subagent_type: 'executor', description, prompt: 'faça', run_in_background: false });
+  const call = (agentId: string, name: string, input: object) =>
+    JSON.stringify({ isSidechain: true, agentId, type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: `tu-${Math.random()}`, name, input, caller: { type: 'direct' } }] } });
+  const LOCAL = (agentId: string) => [
+    call(agentId, 'Read', { file_path: 'server/chat/manager.ts' }),
+    call(agentId, 'Edit', { file_path: 'tests/x.test.ts', old_string: 'a', new_string: 'b' }),
+    call(agentId, 'PowerShell', { command: 'npx tsc --noEmit' }),
+    call(agentId, 'PowerShell', { command: 'npx vitest run tests/x.test.ts' }),
+  ];
+  /** Os subagents da conversa `s1` do projeto `p`, onde o gerente os procura. */
+  async function subagents(h: H, agents: Record<string, { description: string; lines: string[]; toolUseId?: string }>) {
+    const dir = path.join(h.dir, 'p', 's1', 'subagents');
+    await fs.mkdir(dir, { recursive: true });
+    for (const [id, a] of Object.entries(agents)) {
+      await fs.writeFile(path.join(dir, `agent-${id}.meta.json`), JSON.stringify({ agentType: 'executor', isBuiltIn: false, description: a.description, toolUseId: a.toolUseId ?? `tu-${id}`, spawnDepth: 1, requestShape: 'foreground' }));
+      await fs.writeFile(path.join(dir, `agent-${id}.jsonl`), `${a.lines.join('\n')}\n`);
+    }
+  }
+  const dies = async (h: H, p: Fake) => {
+    p.proc.emit('exit', null, 'SIGKILL');
+    await settle();
+    await h.m.settledRetry('s1');
+  };
+
+  it('dois executores só no projeto (a f1e83e2e): retoma sozinho, sem caixa; o texto fixo chega na conversa', async () => {
+    const h = build();
+    const p = await h.start();
+    p.emit(delegate('tu-a1', 'Testes: agents Codex e ficha'));
+    p.emit(delegate('tu-a2', 'Observabilidade subagents Codex'));
+    p.emit(bg(agent('a1dc631202b197a06', 'Testes: agents Codex e ficha'), agent('a32a98b6b5b4d1d74', 'Observabilidade subagents Codex')));
+    await subagents(h, {
+      a1dc631202b197a06: { description: 'Testes: agents Codex e ficha', lines: LOCAL('a1dc631202b197a06'), toolUseId: 'tu-a1' },
+      a32a98b6b5b4d1d74: { description: 'Observabilidade subagents Codex', lines: LOCAL('a32a98b6b5b4d1d74'), toolUseId: 'tu-a2' },
+    });
+    await settle();
+    await dies(h, p);
+    expect((await h.retries.get('s1'))!.retry).toMatchObject({ attempt: 1, max: 1, kind: 'unknown', error: 'o processo caiu sem aviso' });
+    expect(capOf(h)).toBeNull();
+    expect(await h.m.awaitingLimit('s1')).toBe(true);
+    await h.fire();
+    expect(h.procs.at(-1)!.texts()).toEqual([RETRY_TEXT]);
+  });
+
+  it('agent em segundo plano (já lançado, sem Agent aberto) só no projeto: retoma', async () => {
+    const h = build();
+    const p = await h.start();
+    p.emit(bg(agent('abg1', 'Servidor: cor da sala')));
+    await subagents(h, { abg1: { description: 'Servidor: cor da sala', lines: LOCAL('abg1') } });
+    await settle();
+    await dies(h, p);
+    expect(await h.retries.get('s1')).not.toBeNull();
+    expect(capOf(h)).toBeNull();
+  });
+
+  it('um dos agents fez git push: não retoma, vai para a caixa com o rótulo do agent', async () => {
+    const h = build();
+    const p = await h.start();
+    p.emit(bg(agent('abg1', 'Servidor: cor da sala'), agent('abg2', 'Deploy da sala')));
+    await subagents(h, {
+      abg1: { description: 'Servidor: cor da sala', lines: LOCAL('abg1') },
+      abg2: { description: 'Deploy da sala', lines: [...LOCAL('abg2'), call('abg2', 'PowerShell', { command: 'git push origin main' })] },
+    });
+    await settle();
+    await dies(h, p);
+    expect(await h.retries.get('s1')).toBeNull();
+    expect(capOf(h)).toEqual({ kind: 'retry', why: 'cut', action: 'em segundo plano: executor: Deploy da sala', error: 'o processo caiu sem aviso' });
+    expect(h.m.turnCaps()).toHaveLength(1);
+    h.clock.t += 3_600_000;
+    await h.retries.tick();
+    expect(h.procs).toHaveLength(1);
+  });
+
+  it('agent sem transcript, ilegível ou cortado no meio: como antes (caixa)', async () => {
+    const withoutFile = build();
+    const a = await withoutFile.start();
+    a.emit(bg(agent('abg1', 'Servidor')));
+    await settle();
+    await dies(withoutFile, a);
+    expect(capOf(withoutFile)).toMatchObject({ kind: 'retry', why: 'cut', action: 'em segundo plano: executor: Servidor' });
+
+    const cutLine = build();
+    const b = await cutLine.start();
+    b.emit(bg(agent('abg1', 'Servidor')));
+    await subagents(cutLine, { abg1: { description: 'Servidor', lines: [...LOCAL('abg1'), '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"x","name":"Bash","input":{"command":"git pu'] } });
+    await settle();
+    await dies(cutLine, b);
+    expect(await cutLine.retries.get('s1')).toBeNull();
+    expect(capOf(cutLine)).toMatchObject({ kind: 'retry', why: 'cut' });
+  });
+
+  it('comando em segundo plano só de teste: retoma; com push/ssh, ou sem a chamada que o abriu, não', async () => {
+    const ok = build();
+    const a = await ok.start();
+    a.emit(toolUse('t1', 'PowerShell', { command: 'npx vitest run 2>&1 | Select-String FAIL', run_in_background: true }));
+    a.emit(result('t1', 'Command running in background with ID: brl07nnit. Output is being written to: C:\\tmp\\tasks\\brl07nnit.output. You will be notified when it completes.'));
+    a.emit(bg(shell('brl07nnit')));
+    await settle();
+    await dies(ok, a);
+    expect(await ok.retries.get('s1')).not.toBeNull();
+    expect(capOf(ok)).toBeNull();
+
+    const push = build();
+    const b = await push.start();
+    b.emit(toolUse('t1', 'Bash', { command: 'npx vitest run && git push origin main', run_in_background: true }));
+    b.emit(result('t1', 'Command running in background with ID: bpush0001. Output is being written to: C:\\tmp\\tasks\\bpush0001.output.'));
+    b.emit(bg(shell('bpush0001')));
+    await settle();
+    await dies(push, b);
+    expect(await push.retries.get('s1')).toBeNull();
+    expect(capOf(push)).toEqual({ kind: 'retry', why: 'cut', action: 'em segundo plano: Full test suite', error: 'o processo caiu sem aviso' });
+
+    const stray = build();
+    const c = await stray.start();
+    c.emit(bg(shell('bdesconhecido')));
+    await settle();
+    await dies(stray, c);
+    expect(capOf(stray)).toMatchObject({ kind: 'retry', why: 'cut', action: 'em segundo plano: Full test suite' });
+  });
+
+  it('o que sobrou em segundo plano é local, mas uma ferramenta externa ficou sem resultado: segura pela ferramenta', async () => {
+    const h = build();
+    const p = await h.start();
+    p.emit(bg(agent('abg1', 'Servidor')));
+    await subagents(h, { abg1: { description: 'Servidor', lines: LOCAL('abg1') } });
+    p.emit(toolUse('t9', 'Bash', { command: 'git push origin main' })); // sem resultado
+    await settle();
+    await dies(h, p);
+    expect(capOf(h)).toEqual({ kind: 'retry', why: 'cut', action: 'git push origin main', error: 'o processo caiu sem aviso' });
+  });
+
+  it('Codex: sem transcript de subagent nem formato de comando para conferir, qualquer tarefa em segundo plano segue incerta', async () => {
+    const h = build();
+    await h.start();
+    // Codex não mostra o agent em disco: mesmo com um transcript que pareceria local ao lado da conversa, não é lido.
+    await subagents(h, { abg1: { description: 'Servidor', lines: LOCAL('abg1') } });
+    const cutOf = (h.m as unknown as { cutOf: (p: string, s: string, items: ChatItem[], awaiting: boolean, bg: object[], engine: 'claude' | 'codex') => Promise<string | null> }).cutOf.bind(h.m);
+    const task = { id: 'abg1', kind: 'agent', label: 'executor: Servidor' };
+    expect(await cutOf('p', 's1', [], false, [task], 'codex')).toBe('em segundo plano: executor: Servidor');
+    expect(await cutOf('p', 's1', [], false, [task], 'claude')).toBeNull(); // o mesmo transcript, pelo Claude, passa
+    expect(await cutOf('p', 's1', [], false, [], 'codex')).toBeNull(); // nada em segundo plano: como sempre
+  });
+});
+
+describe('o card quando a conversa cai com agent ou comando em segundo plano', () => {
+  const agent = (id: string, description: string) => ({ task_id: id, task_type: 'local_agent', subagent_type: 'executor', description });
+  const line = (name: string, input: object) => JSON.stringify({ isSidechain: true, type: 'assistant', message: { content: [{ type: 'tool_use', id: `tu-${Math.random()}`, name, input }] } });
+
+  /** O gerente de verdade ligado a um `TaskService` como o servidor liga (fim de turno, decisão assentada, motivo, retomada marcada). */
+  function wired() {
+    const ref: { svc?: TaskService; done: Array<Promise<void>> } = { done: [] };
+    const h = build({ onIdle: (sid, pid, staffId) => void ref.done.push(ref.svc!.onIdle(sid, pid, staffId)) });
+    const dir = path.join(root, `card-${++n}`);
+    const svc = new TaskService({
+      projectPath: async () => dir,
+      projectIds: async () => ['p'],
+      readProfile: async (_p, id) => (id === 'ana' ? staff('ana', 'Ana') : null),
+      send: async () => 's1',
+      branchFor: async () => null,
+      isWorking: () => false,
+      sendTo: async (_p, sessionId) => sessionId,
+      lastText: () => 'feito',
+      awaitingLimit: (sid) => h.m.awaitingLimit(sid),
+      settleRetry: (sid) => h.m.settledRetry(sid),
+      turnCap: (sid) => h.m.turnCapOf(sid),
+      retryOf: (sid) => h.m.retryOf(sid),
+    });
+    ref.svc = svc;
+    const make = async () => {
+      const t = (await svc.create('p', { title: 'Codex agents', staffId: 'ana', reviewerId: null }))!;
+      await svc.start('p', t.id);
+      return t.id;
+    };
+    const get = async (id: string) => (await svc.list('p'))!.find((x) => x.id === id)!;
+    return { h, make, get, done: () => Promise.all(ref.done) };
+  }
+
+  it('executor só no projeto: a tarefa segue em "fazendo" com a retomada marcada, sem Aguardar', async () => {
+    const w = wired();
+    const id = await w.make();
+    const p = await w.h.start();
+    p.emit(toolUse('tu-1', 'Agent', { subagent_type: 'executor', description: 'Testes', prompt: 'x', run_in_background: false }));
+    p.emit({ type: 'system', subtype: 'background_tasks_changed', tasks: [agent('a1dc631202b197a06', 'Testes')] });
+    const dir = path.join(w.h.dir, 'p', 's1', 'subagents');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'agent-a1dc631202b197a06.meta.json'), JSON.stringify({ agentType: 'executor', description: 'Testes', toolUseId: 'tu-1', spawnDepth: 1 }));
+    await fs.writeFile(path.join(dir, 'agent-a1dc631202b197a06.jsonl'), `${[line('Read', { file_path: 'a.ts' }), line('Edit', { file_path: 'a.ts', old_string: 'a', new_string: 'b' }), line('PowerShell', { command: 'npx vitest run tests/a.test.ts' })].join('\n')}\n`);
+    await settle();
+    p.proc.emit('exit', null, 'SIGKILL');
+    await settle();
+    await w.done();
+    expect(await w.get(id)).toMatchObject({ status: 'doing', retry: expect.objectContaining({ attempt: 1, kind: 'unknown' }) });
+    await w.h.fire();
+    expect(w.h.procs.at(-1)!.texts()).toEqual([RETRY_TEXT]);
+    expect((await w.get(id)).status).toBe('doing');
+  });
+
+  it('executor com ação externa (ou sem como conferir): Aguardar com o motivo, como antes', async () => {
+    const w = wired();
+    const id = await w.make();
+    const p = await w.h.start();
+    p.emit({ type: 'system', subtype: 'background_tasks_changed', tasks: [agent('abg1', 'Deploy')] });
+    const dir = path.join(w.h.dir, 'p', 's1', 'subagents');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'agent-abg1.meta.json'), JSON.stringify({ agentType: 'executor', description: 'Deploy', toolUseId: 'tu-9', spawnDepth: 1 }));
+    await fs.writeFile(path.join(dir, 'agent-abg1.jsonl'), `${[line('Edit', { file_path: 'a.ts', old_string: 'a', new_string: 'b' }), line('Bash', { command: 'ssh deploy@vps "systemctl restart app"' })].join('\n')}\n`);
+    await settle();
+    p.proc.emit('exit', null, 'SIGKILL');
+    await settle();
+    await w.done();
+    expect(await w.get(id)).toMatchObject({ status: 'waiting', waitReason: expect.stringContaining('em segundo plano: executor: Deploy') });
+    expect(await w.h.retries.get('s1')).toBeNull();
   });
 });
 

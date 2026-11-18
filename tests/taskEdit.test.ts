@@ -425,7 +425,7 @@ describe('a rota e a ficha', () => {
     const src = await fs.readFile(path.join(__dirname, '..', 'server', 'index.ts'), 'utf8');
     const route = /\/tasks\/\$\{ID\}\$`\),([\s\S]*?)\n  \],/.exec(src)![1]!;
     expect(route).toContain('({ params: [id, taskId], body, fromBrowser, caller })');
-    expect(route).toContain('if (fromBrowser) return tasks.update(id!, taskId!, body);');
+    expect(route).toContain('if (fromBrowser) return tasks.update(id!, taskId!, body, true);'); // `true`: o dono (ciência do corte, ver cutAck.test.ts)
     expect(route).toContain('return tasks.editFrom(id!, taskId!, caller, body);');
     expect(src).toMatch(/err instanceof TaskConflictError\) return send\(res, 409/);
     expect(src).toMatch(/err instanceof TaskForbiddenError\) return send\(res, 403/);

@@ -701,11 +701,11 @@ textarea.q-field { resize: vertical; }
   .files-cm .cm-panels .cm-panel.cm-search :is(button.cm-button, label) { min-height: 34px; }
 }
 .tasks-columns { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(200px, 1fr)); gap: 10px; overflow-x: auto; }
-.tasks-col { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--board-dot) 90%, transparent); }
+.tasks-col { display: flex; flex-direction: column; gap: 4px; min-height: 0; overflow-y: auto; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--board-dot) 90%, transparent); }
 .tasks-col.is-over { border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 10%, transparent); }
 .tasks-col h3 { margin: 0 0 2px; font-family: var(--hand); font-size: 21px; line-height: 1; cursor: help; }
 .tasks-col-review h3 { color: var(--waiting-ink); }
-.task-card { display: grid; gap: 3px; text-align: left; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; cursor: grab; }
+.task-card { display: grid; gap: 3px; text-align: left; margin: 4px 0 0 0 ; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; cursor: grab; }
 .task-card:hover { border-color: var(--ink-blue); }
 .task-card.is-waiting, .task-card.is-waiting:hover { border-color: var(--waiting); box-shadow: 0 0 0 1px var(--waiting); }
 .task-card.is-selected { outline: 2px solid var(--ink-blue); }
@@ -740,9 +740,15 @@ textarea.q-field { resize: vertical; }
 .board-review .btn-toggle { min-width: 96px; }
 @media (max-width: 640px) { .board-review .btn-toggle { min-height: 36px; } }
 /* Cai para o dono aprovar ou reprovar: amarelo do "precisa de mim", como a dúvida escalada. */
-.task-owner-box { display: grid; gap: 4px; border: 1px solid var(--waiting); border-radius: 10px; padding: 8px 12px; background: color-mix(in srgb, var(--waiting) 12%, transparent); min-width: 0; }
-.task-owner-box p { margin: 0; overflow-wrap: anywhere; }
-.task-owner-box p:first-child { font-size: 13px; font-weight: 600; }
+.task-owner-box, .task-dup { display: grid; gap: 4px; border: 1px solid var(--waiting); border-radius: 10px; padding: 8px 12px; background: color-mix(in srgb, var(--waiting) 12%, transparent); min-width: 0; }
+.task-owner-box p, .task-dup p, .task-dup ul { margin: 0; overflow-wrap: anywhere; }
+.task-owner-box p:first-child, .task-dup p:first-child { font-size: 13px; font-weight: 600; }
+/* Possível duplicata ao criar a tarefa: amarelo (é você quem decide qual cancelar). Texto sempre --ink, e o link também (o azul padrão perde contraste sobre o amarelo e some no escuro). */
+.task-dup { flex: none; }
+.task-dup ul { padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
+.task-dup .link { color: var(--ink); }
+.task-dup .actions { margin: 2px 0 0; flex-wrap: wrap; }
+@media (max-width: 640px) { .task-dup .actions .btn-secondary { min-height: 36px; } .task-dup li .link { min-height: 32px; padding: 0 6px; } }
 :is(.modal, .hire-inline) .check input[type='checkbox'] { accent-color: var(--ink-blue); }
 .task-queue { justify-self: start; color: var(--muted); border: 1px dashed var(--line); border-radius: 999px; padding: 0 7px; font-size: 11px; }
 /* Card registrado sozinho: o selo é o da fila (tracejado, sem cor de alerta), numa linha só; a lista de arquivos quebra caminho longo. */
@@ -800,7 +806,9 @@ textarea.q-field { resize: vertical; }
 .task-review { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; }
 .task-review p { margin: 0; }
 /* Dúvida do funcionário: selo de uma linha no cartão (nome longo corta; o title tem o texto inteiro) e bloco no detalhe (amarelo quando é com você, como o .files-conflict). */
-.task-badge.task-doubt { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-badge:is(.task-doubt, .task-cancelreq) { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Pedido de cancelamento (de quem pediu a tarefa, quando ela já começou): selo neutro no cartão, e no detalhe a caixa da dúvida (tracejada = esperando o responsável; contínua = decidido). */
+.task-cancelreq-box.is-decided { border-style: solid; }
 /* Espera do gate de recursos: o motivo é o que importa, então quebra linha (raio dos blocos tracejados, não pílula). */
 .task-queue.task-resource, .task-queue.task-blocked, .task-queue.task-fbwait { max-width: 100%; border-radius: 10px; padding: 3px 8px; line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
 /* Sem troca para o secundário (pré-checagem falhou): a tarefa espera o limite do motor da ficha. Texto --ink fora de A fazer (o --muted não dá 4,5:1 sobre o cartão colorido de Fazendo); em A fazer o .task-wait, logo abaixo, põe o laranja. */
@@ -812,11 +820,18 @@ textarea.q-field { resize: vertical; }
 .task-pause { display: grid; gap: 1px; justify-self: stretch; min-width: 0; box-sizing: border-box; border: 1px dashed var(--muted); border-radius: 10px; padding: 3px 8px; color: var(--ink); font-size: 11px; line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
 .task-pause.is-holding { border-style: solid; border-color: var(--ink); background: color-mix(in srgb, var(--ink) 7%, transparent); }
 .task-pause b { font-weight: 600; }
+/* Subtarefas: card que aguarda (em Fazendo) e subtarefa mostram o vínculo. Selo no cartão = pontilhado da fila, texto --ink (o --muted não dá 4,5:1 sobre o cartão colorido de Fazendo), sem laranja (laranja é só de A fazer). Os links ficam fora do botão do cartão (botão não cabe dentro de botão) e no detalhe. */
+.task-queue.task-subs { width: fit-content; max-width: 100%; border-radius: 10px; border-color: var(--muted); padding: 3px 8px; color: var(--ink); line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
+.task-subs-row { list-style: none; margin: -4px 0 0; padding: 0 2px; display: grid; gap: 2px; min-width: 0; }
+.task-subs-row li { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; min-width: 0; }
+.task-subs-row .link { text-align: left; overflow-wrap: anywhere; }
+.task-subs-box .task-subs-row { margin: 0; padding: 0; }
+@media (max-width: 640px) { .task-subs-row .link { min-height: 32px; } }
 /* "Retomando em X": a conversa de uma tarefa em Fazendo caiu por falha passageira e volta sozinha. Selo da fila (pontilhado), mas com texto --ink: é o que está acontecendo agora; sem laranja (o laranja é só de A fazer). */
 .task-queue.task-retry { width: fit-content; max-width: 100%; border-radius: 10px; border-color: var(--muted); padding: 3px 8px; color: var(--ink); line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
-.task-doubt-box { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
+:is(.task-doubt-box, .task-cancelreq-box, .task-subs-box) { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
 .task-doubt-box.is-escalated { border: 1px solid var(--waiting); background: color-mix(in srgb, var(--waiting) 12%, transparent); }
-.task-doubt-box p, .task-doubt-box ul { margin: 0; overflow-wrap: anywhere; }
+:is(.task-doubt-box, .task-cancelreq-box, .task-subs-box) :is(p, ul) { margin: 0; overflow-wrap: anywhere; }
 .task-doubt-box ul { padding-left: 18px; display: grid; gap: 2px; }
 .task-doubt-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
 .task-doubt-q { display: grid; gap: 4px; }
@@ -1130,6 +1145,18 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .mcp-browser { display: grid; gap: 4px; }
 .mcp-browser .mcp-hint { margin-left: 0; }
 @media (max-width: 640px) { .mcp-row select.mcp-access { min-height: 36px; } }
+/* Selos de peso na ficha (WeightFlag.tsx): neutros (o laranja é só do A fazer); memória = borda contínua, limite = tracejada, além do texto. A dica abre ao tocar. */
+.weight-flags { display: grid; gap: 2px; }
+.weight-flag { font-size: 12.5px; }
+.weight-flag > summary { position: relative; display: block; box-sizing: border-box; min-height: 28px; padding: 4px 0 4px 14px; color: var(--ink); line-height: 1.5; cursor: pointer; list-style: none; overflow-wrap: anywhere; }
+.weight-flag > summary::-webkit-details-marker { display: none; }
+.weight-flag > summary::before { content: ''; position: absolute; left: 0; top: 11px; border-style: solid; border-width: 4px 0 4px 6px; border-color: transparent transparent transparent currentColor; }
+.weight-flag[open] > summary::before { transform: rotate(90deg); }
+.weight-flag > summary:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; border-radius: 3px; }
+.weight-badge { display: inline-block; margin-right: 6px; border: 1px solid var(--muted); border-radius: 999px; padding: 0 8px; background: color-mix(in srgb, var(--muted) 12%, var(--panel)); color: var(--ink); font-size: 11px; font-weight: 600; line-height: 1.6; white-space: nowrap; }
+.weight-badge.is-limit { border-style: dashed; }
+.weight-flag .weight-tip { margin: 2px 0 4px 14px; color: var(--ink); overflow-wrap: anywhere; }
+@media (max-width: 640px) { .weight-flag > summary { min-height: 36px; padding-top: 8px; padding-bottom: 8px; } .weight-flag > summary::before { top: 15px; } }
 :is(.modal, .hire-inline) .check { display: flex; flex-direction: row; align-items: center; gap: 6px; font-weight: 400; }
 .import-list { display: grid; gap: 6px; max-height: 340px; overflow-y: auto; }
 .import-list .choice b { overflow-wrap: anywhere; }
