@@ -1517,6 +1517,13 @@ export class StaffService {
     profile.skills = converted;
   }
 
+  /** A conversa está na ficha de alguém deste projeto? Vale também a de worktree do mesmo projeto, cujo transcript fica em outra pasta. */
+  async ownsSession(projectId: string, sessionId: string): Promise<boolean> {
+    const project = await this.project(projectId);
+    if (!project) return false;
+    return (await listProjectStaff(project.path, project.id)).some((s) => s.sessions.some((x) => x.id === sessionId));
+  }
+
   /**
    * A sandbox do Codex (quem chama, pelo token) pode falar com este alvo? Só com a própria conversa e com as de quem reporta a ele (`reportsTo`
    * inclui quem chama). Com conversa e funcionário juntos, os dois têm que ser da mesma pessoa. Conversa sem ficha nunca chama nem é alvo.

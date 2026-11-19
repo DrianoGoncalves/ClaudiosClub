@@ -2453,6 +2453,11 @@ export class TaskService {
     return (await this.fresh(projectId, taskId)) ?? out;
   }
 
+  /** O projeto da tarefa cuja conversa (trabalho, revisão, deploy) é `sessionId`; null se a conversa não é de tarefa. */
+  async projectOfSession(sessionId: string): Promise<string | null> {
+    return (await this.where(sessionId))?.projectId ?? null;
+  }
+
   /** A tarefa cuja conversa de trabalho é `sessionId`, neste projeto (null se não é de tarefa). */
   async taskOfWork(projectId: string, sessionId: string): Promise<Task | null> {
     const where = await this.where(sessionId);
