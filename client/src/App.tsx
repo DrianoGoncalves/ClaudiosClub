@@ -622,6 +622,7 @@ export function App() {
             {selection.kind === 'project' && (
               <ProjectPanel
                 onTasks={() => setTasksFor(selection.id)}
+                onSchedules={() => setSchedulesFor(selection.id)}
                 onFiles={() => {
                   setFilesPath(null);
                   setFilesLine(null);
