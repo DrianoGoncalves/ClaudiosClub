@@ -5,7 +5,7 @@ import { pollVisible } from '../usePoll';
 import { Markdown } from '../chat/markdown';
 import { formatAgo, formatShare } from '../format';
 import { t, locale } from '../i18n';
-import { BranchIcon, ClockIcon, ReviewIcon } from '../icons';
+import { BranchIcon, ClockIcon, ReviewIcon, UserIcon } from '../icons';
 import { PrimaryReturnBadge, PrimaryReturnLine, TaskFallbackBadge } from '../staff/FallbackBadge';
 import { AutoBadge, AutoInfo } from './AutoCard';
 import { BoardReview, useBoardCommit, useBoardReview } from './BoardReview';
@@ -172,6 +172,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const [selected, setSelected] = useState<string | null>(initialTaskId);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** O que acabou de ser salvo ("detail:<id>" no detalhe, "wait:<id>" no motivo do cartão em Aguardar): mostra "Salvo" por 2,5 s. */
+  const [saved, setSaved] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<TaskStatus | null>(null);
   /** O cartão da fila sobre o qual se arrasta outro da mesma fila, e de que lado dele o arrastado entra (`after`: abaixo). */
@@ -216,15 +218,27 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     if (closing && tasks && !tasks.some((x) => x.id === closing.id)) setClosing(null);
   }, [closing, tasks]);
 
+  useEffect(() => {
+    if (!saved) return;
+    const timer = setTimeout(() => setSaved(null), 2500);
+    return () => clearTimeout(timer);
+  }, [saved]);
+
+  /** Roda a ação e relê o quadro; devolve se deu certo (o erro vai para `error`). */
   const act = async (fn: () => Promise<unknown>) => {
     setError(null);
     try {
       await fn();
       load();
       onChanged();
+      return true;
     } catch (e) {
       setError((e as Error).message);
+      return false;
     }
+  };
+  const saveAs = async (key: string, fn: () => Promise<unknown>) => {
+    if (await act(fn)) setSaved(key);
   };
 
   const move = (t: Task, status: TaskStatus) => t.status !== status && act(() => api.updateTask(projectId, t.id, { status }));
@@ -361,23 +375,19 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         }}
         onClick={() => setSelected(task.id)}
       >
+        <span className="task-id muted small" title={t('tasks.idHint')}>
+          {task.id}
+        </span>
         <span className="task-title">{task.title}</span>
-        <StatusBadge task={task} hasDeploy={hasDeploy} planWaiting={awaitingPlan(task)} />
         <PermissionWaitBadge text={permissionOf(task)} />
-        <NoCodeBadge task={task} />
-        <VerdictBadge task={task} nameOf={nameOf} />
-        {task.status === 'review' && <OwnerBadge plan={reviewPlan(task, boardReview.config)} />}
         <DoubtBadge question={task.question} requestedBy={task.requestedBy} nameOf={nameOf} warm={waitWarm(task.status)} />
         <CancelRequestBadge request={task.cancelRequest} nameOf={nameOf} />
-        <FollowUpBadge task={task} />
-        <CommitBadge task={task} />
         <PauseNote pause={task.pause} staffName={nameOf(task.staffId)} now={now} />
         <SubtaskBadges task={task} nameOf={nameOf} />
         <span className="task-meta muted small">
-          <span className="task-id" title={t('tasks.idHint')}>
-            {task.id}
-          </span>{' '}
-          · {nameOf(task.staffId) ?? t('tasks.noOwner')}
+          <span className="task-owner" title={t('tasks.ownerHint')}>
+            <UserIcon /> {nameOf(task.staffId) ?? t('tasks.noOwner')}
+          </span>
           {task.requestedBy && ` · ${t('tasks.requestedBy', { name: nameOf(task.requestedBy) ?? task.requestedBy })}`}
           {costOf(task) && ` · ${costOf(task)}`} · {formatAgo(now - Date.parse(task.updatedAt))}
         </span>
@@ -417,6 +427,13 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             {t(task.held.length === 1 ? 'tasks.heldOne' : 'tasks.heldOther', { n: task.held.length })}
           </span>
         )}
+        {/* Selos de situação (plano, sem código, veredito, revisor, follow-up, commit): no fim do cartão, depois de quem revisa. */}
+        <StatusBadge task={task} hasDeploy={hasDeploy} planWaiting={awaitingPlan(task)} />
+        <NoCodeBadge task={task} />
+        <VerdictBadge task={task} nameOf={nameOf} />
+        {task.status === 'review' && <OwnerBadge plan={reviewPlan(task, boardReview.config)} />}
+        <FollowUpBadge task={task} />
+        <CommitBadge task={task} />
       </button>
       </SubtaskStack>
       {/* Atalho do pedido de permissão: fora do botão do cartão (botão não cabe dentro de botão). */}
@@ -432,12 +449,17 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
           aria-label={t('tasks.waitReasonPlaceholder')}
           onBlur={(e) => {
             const next = e.currentTarget.value.trim() || null;
-            if (next !== (task.waitReason ?? null)) void act(() => api.updateTask(projectId, task.id, { waitReason: next }));
+            if (next !== (task.waitReason ?? null)) void saveAs(`wait:${task.id}`, () => api.updateTask(projectId, task.id, { waitReason: next }));
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.currentTarget.blur();
           }}
         />
+      )}
+      {task.status === 'waiting' && saved === `wait:${task.id}` && (
+        <span className="save-ok" role="status">
+          ✓ {t('tasks.saved')}
+        </span>
       )}
     </Fragment>
   );
@@ -581,7 +603,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             board={boardReview.config}
             cost={costOf(current)}
             onClose={() => setSelected(null)}
-            onSave={(patch) => act(() => api.updateTask(projectId, current.id, patch as TaskPatch))}
+            onSave={(patch) => saveAs(`detail:${current.id}`, () => api.updateTask(projectId, current.id, patch as TaskPatch))}
+            saved={saved === `detail:${current.id}`}
             onMove={(s) => void move(current, s)}
             onStart={() => void start(current)}
             error={error}
@@ -854,6 +877,7 @@ function TaskDetail({
   cost,
   onClose,
   onSave,
+  saved,
   onMove,
   onStart,
   error,
@@ -891,6 +915,8 @@ function TaskDetail({
   onOpenStaff: (staffId: string) => void;
   onClose: () => void;
   onSave: (patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'pr' | 'branch' | 'reviewerId' | 'goal' | 'acceptance' | 'blockedBy'>>) => Promise<void>;
+  /** Acabou de salvar com sucesso: mostra "Salvo" no lugar do botão (que some quando não há mais nada a salvar). */
+  saved: boolean;
   onMove: (s: TaskStatus) => void;
   onStart: () => void;
   /** O erro da última ação (ex.: dependência em ciclo, apagar tarefa de que outra depende): aparece aqui, onde o dedo está. */
@@ -1027,6 +1053,11 @@ function TaskDetail({
           >
             {t('tasks.save')}
           </button>
+        </p>
+      )}
+      {!dirty && saved && (
+        <p className="save-ok" role="status">
+          ✓ {t('tasks.saved')}
         </p>
       )}
       <p className="muted small">
