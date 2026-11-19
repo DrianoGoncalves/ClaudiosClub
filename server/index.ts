@@ -130,7 +130,7 @@ import { AUTONOMY, dropStaffSessions, listProjectStaff, listProjectStaffStrict, 
 import { lastRetentionRun, nextRetentionDelay, retentionPreview, runRetentionSweep, setRetentionDeletion, type RetentionDeps } from './retentionSweep';
 import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
 import { writeOwnerFile } from './ownerEdits';
-import { START_DEADLINE_MS, TaskConflictError, TaskError, TaskForbiddenError, TaskService, cancelRequest, commitAlerts, deleteRequest, followUpAlerts, notStartedTasks, ownAlerts, readTasks, reasonRequest, stuckDependencies } from './tasks';
+import { START_DEADLINE_MS, TaskBusyError, TaskConflictError, TaskError, TaskForbiddenError, TaskService, cancelRequest, commitAlerts, deleteRequest, followUpAlerts, notStartedTasks, ownAlerts, readTasks, reasonRequest, stuckDependencies } from './tasks';
 import { retainedSessionIds } from './retention';
 import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefaultRole } from './roles';
 import { ROOT } from './root';
@@ -2640,6 +2640,8 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         // Dúvida já respondida, ou pergunta que não está mais aberta na conversa: 409; quem não é o gestor: 403 (antes do TaskError, 400).
         if (err instanceof TaskConflictError) return send(res, 409, { error: err.message });
         if (err instanceof TaskForbiddenError) return send(res, 403, { error: err.message });
+        // A vez do funcionário não chegou no prazo da edição: 503, nada gravado (tentar de novo em instantes é seguro).
+        if (err instanceof TaskBusyError) return send(res, 503, { error: err.message }, { 'retry-after': '5' });
         // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
         if (err instanceof GuideExistsError) return send(res, 409, { error: 'exists' });
         // Teto de títulos manuais: só criar outro recusa (409); editar ou apagar um que existe segue.

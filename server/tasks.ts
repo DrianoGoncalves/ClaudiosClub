@@ -77,6 +77,8 @@ export class TaskError extends Error {}
 export class TaskForbiddenError extends TaskError {}
 /** A dúvida já foi respondida (ou a pergunta não está mais aberta): 409 na rota. */
 export class TaskConflictError extends TaskError {}
+/** A vez do funcionário não chegou no prazo da resposta (ver `EDIT_DEADLINE_MS`): nada foi gravado, e tentar de novo é seguro. 503 na rota. */
+export class TaskBusyError extends TaskError {}
 
 export const SAFE_ID = /^[a-z0-9-]{1,40}$/;
 
@@ -484,6 +486,8 @@ export interface TaskServiceDeps {
   log?: (line: string) => void;
   /** A partir de quanto tempo o começo de uma tarefa escreve o tempo de cada etapa no log (padrão: `START_SLOW_MS`). */
   slowMs?: number;
+  /** O prazo da resposta da edição pela API (padrão: `EDIT_DEADLINE_MS`). */
+  editDeadlineMs?: number;
   /**
    * Onde está quais projetos estão pausados (ver projectPause.ts). Pausado, nada começa sozinho: a fila, a revisão automática, a retomada das órfãs e a troca de motor
    * esperam (ver `TaskService.paused`). Sem ele, nenhum projeto é pausável (os testes de antes).
@@ -541,6 +545,8 @@ export interface StartOpts extends RunStart {
 
 /** Prazo das rotas (o POST de tarefa do gestor e o "Começar" da tela): passou, a resposta vem com a tarefa na fila e o começo segue sem elas. */
 export const START_DEADLINE_MS = 5_000;
+/** Prazo da edição pela API (`editFrom`): a vez do funcionário não chegou nele, a edição é recusada (503) sem gravar. */
+export const EDIT_DEADLINE_MS = 8_000;
 /** O começo de uma tarefa que passa disto escreve o tempo de cada etapa no log. */
 const START_SLOW_MS = 2_000;
 /** Marca de quem perdeu a corrida para o prazo (ver `start`). */
@@ -1578,6 +1584,11 @@ export class TaskService {
    * A checagem de coluna é a da própria gravação (`change`, uma por vez por projeto) e a edição espera a vez do funcionário (a mesma de `start`
    * e da fila): a partida que já está abrindo a conversa termina antes (a tarefa vira "fazendo" e a edição é recusada), e a que vem depois lê o
    * texto já editado. Sem a vez, o funcionário já chamado com o texto antigo ficaria sem saber da edição gravada.
+   *
+   * A vez pode demorar muito (a dele abre uma conversa, entrega, retoma outra tarefa: quem está com a vez segura todas as edições, começos e entregas dele), e uma
+   * edição que esperava sem prazo ficava sem resposta e gravava depois, às cegas. Agora a resposta vem em `EDIT_DEADLINE_MS`, sempre verdadeira: ou a edição gravou
+   * (200), ou foi recusada (TaskBusyError, 503) e NÃO grava, nem se a vez chegar depois. A decisão é uma só e síncrona (`gate`): a gravação já decidida
+   * (dentro de `change`) não se desfaz, então passado o prazo a resposta espera por ela, que é só um arquivo.
    */
   async editFrom(projectId: string, taskId: string, caller: Caller | null, body: unknown): Promise<Task | null> {
     const me = caller?.staffId;
@@ -1585,7 +1596,12 @@ export class TaskService {
     const dir = await this.deps.projectPath(projectId);
     const first = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
     if (!dir || !first) return null;
+    const deadlineMs = this.deps.editDeadlineMs ?? EDIT_DEADLINE_MS;
+    const gate = { abandoned: false, committed: false };
+    const refused = () =>
+      new TaskBusyError(`a vez de quem faz a tarefa não chegou em ${Math.max(1, Math.round(deadlineMs / 1000))} s (ele está começando, entregando ou retomando outra tarefa): a edição NÃO foi gravada; tente de novo em instantes`);
     const run = async () => {
+      if (gate.abandoned) throw refused();
       const task = (await readTasks(dir)).find((t) => t.id === taskId);
       if (!task) return null;
       // A vez foi pedida pelo responsável de antes: se ele mudou nesse meio tempo, o que vale é a leitura nova (outra vez).
@@ -1607,6 +1623,8 @@ export class TaskService {
       if (owner && !owner.reportsTo.includes(me)) throw new TaskForbiddenError('só dá para passar a tarefa a quem reporta a você');
       const seen: { before?: Task } = {};
       const out = await this.change(projectId, taskId, (t, all) => {
+        // O prazo passou enquanto esperava (a fila do arquivo, ou a ficha): quem pediu já recebeu a recusa, então nada se grava.
+        if (gate.abandoned) throw refused();
         // Daqui para baixo vale o que está gravado agora: a tela ou outro caminho pode ter mexido desde a leitura acima.
         if (t.status !== 'waiting' && t.status !== 'todo')
           throw new TaskConflictError(`a tarefa está em “${COLUMN_NAME[t.status]}”: por aqui só se edita em Aguardar e A fazer; o complemento vai pela conversa da tarefa`);
@@ -1618,11 +1636,30 @@ export class TaskService {
         const note = `editada por ${mine.name}: ${STAFF_EDITABLE.filter((k) => patch[k] !== undefined).join(', ')}${owner ? ` (agora com ${owner.name})` : ''}`;
         const next = noted(withPatch(t, patch, 'auto'), note);
         // Outro responsável: a vaga na fila é do novo, no fim (a posição antiga era na fila do outro); sem o que a partida anterior deixou.
-        return owner && next.queuedAt ? { ...next, queuedAt: new Date().toISOString(), queueRank: undefined, queuedForce: false, resourceWait: null, startRetry: undefined } : next;
+        const edited = owner && next.queuedAt ? { ...next, queuedAt: new Date().toISOString(), queueRank: undefined, queuedForce: false, resourceWait: null, startRetry: undefined } : next;
+        gate.committed = true; // daqui a gravação acontece: passado o prazo, a resposta espera por ela
+        return edited;
       });
       return out && seen.before ? { out, before: seen.before } : null;
     };
-    const done = first.staffId ? await this.locked(projectId, first.staffId, run) : await run();
+    const job = first.staffId ? this.locked(projectId, first.staffId, run) : run();
+    let timeout: NodeJS.Timeout | undefined;
+    const late = new Promise<typeof LATE>((resolve) => {
+      timeout = setTimeout(() => resolve(LATE), deadlineMs);
+    });
+    let done: Awaited<typeof job>;
+    try {
+      const got = await Promise.race([job, late]);
+      if (got === LATE && !gate.committed) {
+        gate.abandoned = true;
+        void job.catch(() => {}); // a vez que chegar depois só confere `gate` e desiste: o erro dela não tem a quem responder
+        (this.deps.log ?? ((line: string) => console.warn(line)))(`[tarefas] editar ${taskId}: a vez de ${first.staffId ?? 'ninguém'} não chegou em ${deadlineMs} ms; recusada sem gravar`);
+        throw refused();
+      }
+      done = got === LATE ? await job : got;
+    } finally {
+      clearTimeout(timeout);
+    }
     if (!done) return null;
     // Quem perdeu a tarefa, quem a ganhou e o dono dela (se saiu uma dependência): quem estiver livre pega a vez (o `takeNext` confere fila e ocupação).
     for (const s of new Set([done.before.staffId, done.out.staffId])) if (s) void this.kick(projectId, s);
