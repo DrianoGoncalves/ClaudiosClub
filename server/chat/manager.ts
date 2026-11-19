@@ -34,6 +34,8 @@ import type { CodexEnvStatus } from '../codexEnv';
 import type { CodexModelInfo } from '../codexModels';
 import { CodexProcess } from './codexProcess';
 import type { CodeEdit } from './codeEdits';
+import { locateSecretFile } from './secretOrigin';
+import { denialWeight, type DeniedInfo } from './denied';
 import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
 import { cleanAnswers } from './questions';
 import { finalQuestion } from './question';
@@ -42,7 +44,7 @@ import { BOOST_NOTICE, CONTEXT_NOTICE, RETRY_TEXT, STAFF_NOTICE } from './items'
 import { InboxState } from '../inboxState';
 import { isAlive, killTree, type ChatRegistry } from './registry';
 import { CONTINUE_TEXT, type AutoContinue, type AutoContinueEvent, type CancelBy, type Pending, type RetryInfo } from './autoContinue';
-import { attemptsAllowed, backoffMs, classifyTurnError, retryField, retryNotice, TurnRetryLedger, type Transient, type TurnEnd } from './turnRetry';
+import { attemptsAllowed, backoffMs, classifyTurnError, errorLine, isAuthFailure, retryField, retryNotice, TurnRetryLedger, type Transient, type TurnEnd, type TurnError } from './turnRetry';
 import { limitNotice, MAX_LIMIT_HITS, resumePlan, type LimitHit, type ResumePlan } from './usageLimit';
 import { codexLimitHit } from '../codexUsage';
 import { WAKE_MAX_STREAK, WakeStreakError, wakeNotice, type WakeInput } from './wake';
@@ -123,8 +125,14 @@ export interface ChatManagerOptions {
   codexEnv?: () => Promise<CodexEnvStatus>;
   /** A sandbox do Codex quebrou numa conversa (ver CodexProcess.onSandboxFailure); o index.ts liga na CodexCapability. */
   onCodexSandboxFailure?: (text: string) => void;
+  /** A saída de uma ferramenta do Codex trouxe a falha do usuário local do sandbox no Windows, a política de senha (ver CodexProcess.onPasswordPolicyFailure); o index.ts leva o aviso à caixa. */
+  onCodexPasswordPolicyFailure?: () => void;
+  /** Uma conversa do Codex vai abrir: o index.ts faz a checagem prévia da política de senha do Windows (ver CodexPasswordPolicy.check). Não espera: a conversa não atrasa por causa dela. */
+  onCodexOpen?: () => void;
   /** Tokens das conversas (`MYCO_TOKEN` no ambiente de cada uma, ver server/callers.ts). Sem ele, as conversas abrem sem token. */
   tokens?: SessionTokens;
+  /** A pasta do projeto (a raiz que o `files/read` abre), para o aviso de segredo achar o arquivo que um comando leu (ver `locateSecretFile`). Sem ele, o aviso fica sem arquivo nesse caso. */
+  projectDirOf?: (projectId: string) => Promise<string | null>;
   /** Processos abertos, gravados em disco para achar os órfãos depois de um reinício. */
   registry?: ChatRegistry;
   /** Testes trocam (pid vivo? / encerrar processo). */
@@ -143,14 +151,24 @@ export interface ChatManagerOptions {
   onSent?: (sessionId: string) => void;
   /** Um funcionário alterou arquivo(s) com as ferramentas de edição (Claude e Codex; ver chat/codeEdits.ts): o quadro abre o card automático. */
   onEdit?: (edit: CodeEdit) => void;
-  /** Uma conversa parou de trabalhar (a fila de tarefas do funcionário anda). */
-  onIdle?: (sessionId: string, projectId: string, staffId: string | null, reason: 'turn' | 'background' | 'exit') => void;
+  /** Uma conversa parou de trabalhar (a fila de tarefas do funcionário anda). `engine` é o do processo que parou (o do Codex não passa pelo vigia de turnos, ver `TaskService.onIdle`). */
+  onIdle?: (sessionId: string, projectId: string, staffId: string | null, reason: 'turn' | 'background' | 'exit', engine: 'claude' | 'codex') => void;
   /** O que a caixa lembra entre reinícios; sem ele, fica só na memória. */
   inbox?: InboxState;
   /** Conversa nova quando o assunto fecha (o config); sem ele, `auto`. */
   contextSwitch?: () => Promise<ContextSwitch>;
   /** Conversas que nunca trocam sozinhas (a de uma tarefa: o quadro segue por ela). */
   keepSession?: (sessionId: string) => Promise<boolean>;
+  /**
+   * A tarefa de uma conversa de trabalho ou deploy, para o alerta "ação barrada" da caixa (ver `deniedHits`); null = conversa livre, de card automático, de revisão
+   * ou de dúvida (não gera alerta). Sem ele, nenhuma conversa gera.
+   */
+  denialTask?: (sessionId: string) => Promise<{ taskId: string; title: string } | null>;
+  /**
+   * A conversa de tarefa (a mesma de `denialTask`) roda sem a fila de validação pesada porque a conta do Codex tem `hooks.json` (ver `noteGuardOff`): grava a nota na tarefa, uma vez por
+   * conversa, e devolve a tarefa para o item da caixa; null = não é conversa de tarefa (fica só o aviso do chat). Sem ele, nenhuma conversa gera.
+   */
+  heavyGuardOff?: (sessionId: string) => Promise<{ taskId: string; title: string } | null>;
   /** Folga de cota agora (com "otimizar assinatura" ligado); sem ele, nunca. */
   quotaBoost?: () => Promise<QuotaBoost | null>;
   /** Limite de uso estourado: agenda o "continue" para quando ele voltar (ver autoContinue.ts); sem ele, só avisa. */
@@ -203,6 +221,8 @@ export interface CloseResult {
 
 /** Até quando `close` espera o processo sair (o `stop()` do claude já encerra a árvore à força aos 3 s). */
 const CLOSE_WAIT_MS = 10_000;
+/** Quantas ferramentas distintas o alerta de ação barrada lista (o resto só entra na contagem). */
+const DENIED_TOOLS_MAX = 5;
 
 type Listener = (e: ChatEvent) => void;
 
@@ -303,9 +323,23 @@ export class ChatManager {
     occurrence: string;
     source?: SecretSource;
     file?: string;
+    /** A linha do segredo em `file`, quando `locateSecret` a achou (ver `SecretHit.line`). */
+    line?: number;
     cwd?: string;
     at: string;
   }> = [];
+  /**
+   * Ação barrada (kind 'denied'): no máximo uma por conversa, a do turno mais recente. Só na memória, como os segredos. `shown` é a negação que o item mostra (ver `denialWeight`).
+   * `ignored`: o turno que você dispensou em cada conversa, para uma negação seguinte do mesmo turno não trazer o alerta de volta.
+   */
+  private readonly denied = new Map<string, { id: string; turn: string; taskId: string; taskTitle: string; shown: DeniedInfo; count: number; tools: string[]; at: string }>();
+  private readonly deniedIgnored = new Map<string, string>();
+  /**
+   * Fila de validação pesada desligada por `hooks.json` na conta do Codex (kind 'error', id `guardoff:<sessão>`): um item por conversa de tarefa, só na memória. `guardOffNow` são as
+   * conversas que estão sem a fila agora (síncrono: o item só entra se ainda estiver ali quando a tarefa for lida).
+   */
+  private readonly guardOff = new Map<string, { id: string; taskId: string; taskTitle: string; file: string; at: string }>();
+  private readonly guardOffNow = new Set<string>();
   /** Conversas cuja última mensagem veio de outro funcionário (delegação), e não de você. */
   private readonly delegated = new Set<string>();
   /** Quando cada conversa parou com erro (`onExit`): o carimbo que a dispensa do alerta guarda, para um erro novo voltar. Só na memória, como o erro. */
@@ -351,6 +385,11 @@ export class ChatManager {
   private readonly retryGen = new Map<string, number>();
   /** O aviso da retomada de cada conversa aberta (para trocar o texto no mesmo aviso). */
   private readonly retryNotices = new Map<string, string>();
+  /**
+   * O último turno de cada conversa de funcionário que terminou em erro do motor sem retomada (login recusado, ou erro que não passa sozinho): a tarefa de trabalho lê daqui, no fim do
+   * turno, para ir a Aguardar em vez de revisão (ver `engineStopOf`). Em memória: sai no turno bem-sucedido seguinte e em qualquer mensagem não automática.
+   */
+  private readonly engineStops = new Map<string, Extract<TurnCapHit, { kind: 'engine' }>>();
   /** O orçamento de tentativas por turno original (o "continue" automático não abre orçamento novo). */
   private readonly retryLedger: TurnRetryLedger;
   /** O servidor está reiniciando: nenhuma entrega nova entra (ver `closing`). */
@@ -725,6 +764,7 @@ export class ChatManager {
     else this.delegated.delete(chat.sessionId);
     this.inbox.setQuestion(chat.sessionId, null); // respondeu (ou mandou outra coisa): a pergunta sai da caixa
     this.inbox.setTurnCap(chat.sessionId, null); // turno novo: o aviso do teto (caixa e tarefa) já não vale
+    if (!auto) this.engineStops.delete(chat.sessionId); // e o erro do motor do turno de antes (o "continue" da plataforma não o apaga: a conversa segue parada)
     this.inbox.forgetErrors(chat.sessionId); // e a dispensa do erro e do teto de antes junto
     // A ficha mudou depois que esta conversa começou: o aviso vai junto, uma vez só. Conversa grande:
     // o funcionário fica sabendo do tamanho e do custo (ele não vê isso sozinho).
@@ -992,6 +1032,17 @@ export class ChatManager {
   }
 
   /**
+   * O pedido de permissão mais antigo que a conversa espera de você (ferramenta e desde quando), ou null. Só leitura do processo, nada gravado.
+   * Pergunta com opções não entra: o gestor a responde (ver `onAsk`). O Codex não tem esse cartão (a sandbox decide), então nunca devolve nada.
+   */
+  permissionWaitOf(sessionId: string): { tool: string; since: string } | null {
+    const chat = this.chats.get(sessionId);
+    if (!chat?.running) return null;
+    const first = chat.pendingPermissions().find((p) => !p.questions && p.at);
+    return first ? { tool: first.tool, since: first.at! } : null;
+  }
+
+  /**
    * "Ignorar" num alerta de erro da caixa: `error:<sessão>` (a conversa parou com erro) ou `cap:<sessão>` (o turno parou no teto).
    * O carimbo guardado é o da ocorrência de agora, lido aqui (não o que a tela diz): outro erro ou outro teto da conversa volta a avisar.
    * Sem alerta ali (a tela está velha), não há o que dispensar.
@@ -1016,6 +1067,15 @@ export class ChatManager {
   isWorking(sessionId: string): boolean {
     const chat = this.chats.get(sessionId);
     return !!chat?.running && chat.working;
+  }
+
+  /**
+   * O que a conversa tem em andamento agora: o turno (`busy`) e o que roda em segundo plano, com o que o Claude Code listou (`background_tasks_changed`; o `background` do Codex é a lista dos
+   * subagents e já sai vazia no fim do turno). null = conversa fechada. A tarefa lê no fim do turno para não entregar trabalho que continua (ver `TaskService.holdBackground`).
+   */
+  liveWork(sessionId: string): { busy: boolean; background: BackgroundTask[] } | null {
+    const chat = this.chats.get(sessionId);
+    return chat?.running ? { busy: chat.busy, background: [...chat.background] } : null;
   }
 
   /** Conversas do Codex com uma execução em andamento (o processo da mensagem; entre as mensagens não há). Ver a CodexCapability. */
@@ -1089,7 +1149,97 @@ export class ChatManager {
     return true;
   }
 
-  private noteSecret(sessionId: string, hit: ClassifiedSecret, source?: SecretSource, file?: { path: string; cwd: string }) {
+  /** As ações barradas nas conversas de tarefa, para a caixa "precisa de mim" (ver `noteDenied`). */
+  deniedHits() {
+    return [...this.denied].map(([sessionId, d]) => ({ sessionId, ...d }));
+  }
+
+  /** "Ignorar" no alerta de ação barrada (`denied:<sessão>:<turno>`): o alerta sai e o resto daquele turno não o traz de volta. Sem o alerta ali (a tela está velha), não há o que dispensar. */
+  dismissDenied(id: string): boolean {
+    for (const [sessionId, d] of this.denied) {
+      if (d.id !== id) continue;
+      this.denied.delete(sessionId);
+      this.deniedIgnored.set(sessionId, d.turn);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Uma ferramenta de uma conversa foi barrada por uma regra de permissão. Conversa de tarefa gera um alerta por turno: as negações seguintes do mesmo turno só entram na
+   * conta (e trocam o que o alerta mostra se forem de mais peso); um turno novo com negação troca o alerta inteiro (o mais recente é o que vale, sem enxurrada).
+   * A tarefa é lida antes e a gravação não espera nada depois (duas negações juntas não abrem dois alertas).
+   */
+  private async noteDenied(sessionId: string, turn: string, d: DeniedInfo) {
+    if (this.deniedIgnored.get(sessionId) === turn) return;
+    const task = await this.opts.denialTask?.(sessionId);
+    if (!task || this.deniedIgnored.get(sessionId) === turn) return;
+    const prev = this.denied.get(sessionId);
+    if (prev?.turn === turn) {
+      prev.count += 1;
+      if (!prev.tools.includes(d.tool) && prev.tools.length < DENIED_TOOLS_MAX) prev.tools.push(d.tool);
+      if (denialWeight(d.layer) > denialWeight(prev.shown.layer)) prev.shown = d;
+      return;
+    }
+    this.denied.set(sessionId, { id: `denied:${sessionId}:${turn}`, turn, taskId: task.taskId, taskTitle: task.title, shown: d, count: 1, tools: [d.tool], at: new Date().toISOString() });
+    this.log(`${sessionId}: ${d.tool} barrado (${d.layer}) na tarefa ${task.taskId} (aviso na caixa)`);
+  }
+
+  /** As conversas de tarefa que rodam sem a fila de validação pesada por causa do `hooks.json` da conta, para a caixa "precisa de mim" (ver `noteGuardOff`). */
+  guardOffHits() {
+    return [...this.guardOff].map(([sessionId, g]) => ({ sessionId, ...g }));
+  }
+
+  /** "Ignorar" no alerta da fila desligada (`guardoff:<sessão>`): o alerta sai e a conversa não o traz de volta (só um arquivo que some e volta, ou um reinício). Sem o alerta ali (a tela está velha), não há o que dispensar. */
+  dismissGuardOff(id: string): boolean {
+    for (const [sessionId, g] of this.guardOff) {
+      if (g.id !== id) continue;
+      this.guardOff.delete(sessionId);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * O Codex de uma conversa passou a rodar sem a fila de validação pesada (`file` = o `hooks.json` da conta) ou voltou a ter a fila (null). Conversa de tarefa leva o aviso ao lugar
+   * onde alguém o vê: a nota da tarefa (uma vez por conversa, mesmo depois de reinício) e a caixa; o aviso do chat o processo já deu. O processo chama uma vez por mudança, não por
+   * execução. A tarefa é lida depois (o item só entra se a conversa ainda está sem a fila) e falha de leitura não derruba nada.
+   */
+  private async noteGuardOff(sessionId: string, file: string | null) {
+    if (!file) {
+      this.guardOffNow.delete(sessionId);
+      this.guardOff.delete(sessionId);
+      return;
+    }
+    this.guardOffNow.add(sessionId);
+    const task = await this.opts.heavyGuardOff?.(sessionId);
+    if (!task || !this.guardOffNow.has(sessionId)) return;
+    this.guardOff.set(sessionId, { id: `guardoff:${sessionId}`, taskId: task.taskId, taskTitle: task.title, file, at: new Date().toISOString() });
+    this.log(`${sessionId}: fila de validação pesada desligada (hooks.json na conta) na tarefa ${task.taskId} (aviso na caixa e na tarefa)`);
+  }
+
+  /**
+   * O segredo veio da saída de um comando que leu arquivos sem apontar um só (`origin.command`): descobre qual arquivo do projeto o tem e o põe no aviso
+   * (`file` relativo ao projeto, `cwd` a raiz do projeto, e a `line`). Roda depois de o aviso entrar, sem atrasar o stream; só preenche aviso que ainda existe,
+   * é da mesma ocorrência e continua sem arquivo. Nunca lança nem registra o valor: o log leva só o caminho.
+   */
+  private async locateSecret(sessionId: string, id: string, hit: ClassifiedSecret, origin: { command: string; cwd: string; projectId: string }) {
+    try {
+      const projectDir = await this.opts.projectDirOf?.(origin.projectId);
+      if (!projectDir) return;
+      const found = await locateSecretFile({ command: origin.command, cwd: origin.cwd, projectDir, occurrence: hit.occurrence, kind: hit.kind, pepper: this.inbox.pepper() });
+      const entry = this.secrets.find((s) => s.id === id && s.occurrence === hit.occurrence);
+      if (!found || !entry || entry.file) return;
+      entry.file = found.file;
+      entry.cwd = projectDir;
+      if (found.line) entry.line = found.line;
+      this.log(`${sessionId}: ${hit.label}: arquivo ${JSON.stringify(found.file)}${found.line ? ` (linha ${found.line})` : ''}`);
+    } catch {
+      // achar o arquivo é um extra: o aviso já está na caixa sem ele
+    }
+  }
+
+  private noteSecret(sessionId: string, hit: ClassifiedSecret, source?: SecretSource, file?: { path: string; cwd: string }, origin?: { command: string; cwd: string; projectId: string }) {
     const { label } = hit;
     const id = `${sessionId}:${label}`;
     // "Não é segredo" de antes valia para o rótulo todo (`id`, ou o rótulo da versão anterior: ver legacyLabel) e continua valendo; o de agora é por ocorrência.
@@ -1118,7 +1268,10 @@ export class ChatManager {
       // Um aviso por conversa e tipo (id acima): fica o da primeira ocorrência (com o arquivo dela), mas sobe de gravidade se vier uma mais grave.
       this.secrets[i] = entry;
       this.log(`${sessionId}: ${label} voltou mais grave (${hit.verdict})`);
+    } else {
+      return;
     }
+    if (origin && !file) void this.locateSecret(sessionId, id, hit, origin);
   }
 
   /** Última resposta da conversa aberta no Claudio’s Club (para o aviso "terminou"); null se não for daqui. */
@@ -1150,7 +1303,7 @@ export class ChatManager {
       `${sessionId}: ${
         hit.kind === 'restart'
           ? `não retomada: o reinício cortou "${hit.action}"`
-          : hit.kind === 'retry'
+          : hit.kind === 'retry' || hit.kind === 'engine'
             ? `não retomada sozinha: ${capReason(hit)}`
             : `turno parado pelo teto (${hit.kind === 'tools' ? 'ferramentas' : 'minutos'}, limite ${hit.limit})`
       }`,
@@ -1425,6 +1578,13 @@ export class ChatManager {
     // Claude ou Codex: o resto do manager fala com os dois do mesmo jeito (ver codexProcess.ts).
     const codex = spawn.engine === 'codex' ? spawn.codex : undefined;
     if (spawn.engine === 'codex' && !codex) throw new ChatError('a conversa do Codex veio sem os dados para abrir');
+    if (codex) {
+      try {
+        this.opts.onCodexOpen?.();
+      } catch {
+        // a checagem prévia é aviso: nunca impede a conversa de abrir
+      }
+    }
     const model = codex ? codex.model : argOf(spawn.args, '--model');
     const effort = codex ? codex.effort : argOf(spawn.args, '--effort');
     const base: Omit<ChatProcessOptions, 'args'> = {
@@ -1443,7 +1603,9 @@ export class ChatManager {
       },
       onTurnWithoutLimit: () => void this.limitStreak.delete(spawn.sessionId),
       onTurnEnd: (end) => this.turnEnded(spawn.sessionId, projectId, staffId, codex ? 'codex' : 'claude', end),
-      onSecret: (hit, source, file) => this.noteSecret(spawn.sessionId, hit, source, file ? { path: file, cwd: spawn.cwd } : undefined),
+      onSecret: (hit, source, file, command) =>
+        this.noteSecret(spawn.sessionId, hit, source, file ? { path: file, cwd: spawn.cwd } : undefined, command ? { command, cwd: spawn.cwd, projectId } : undefined),
+      onDenied: (denied, turn) => void this.noteDenied(spawn.sessionId, turn, denied).catch(() => {}),
       // Só conversa de funcionário (com ficha): a sem ficha pede antes de agir e não é do quadro.
       onEdit: (files) => {
         if (!staffId) return;
@@ -1452,7 +1614,7 @@ export class ChatManager {
       onIdle: (reason) => {
         if (reason !== 'exit') this.noteQuestion(spawn.sessionId);
         if (reason === 'turn') void this.noteTurn(spawn.sessionId).catch(() => {});
-        this.opts.onIdle?.(spawn.sessionId, projectId, staffId, reason);
+        this.opts.onIdle?.(spawn.sessionId, projectId, staffId, reason, codex ? 'codex' : 'claude');
       },
       onCommands: (commands) => this.commands.set(projectId, commands),
       turnCaps: this.opts.turnCaps,
@@ -1484,11 +1646,14 @@ export class ChatManager {
           mcpSnapshotFile: codex.mcpSnapshotFile,
           agents: codex.agents,
           heavyGuard: codex.heavyGuard,
+          onHeavyGuard: (off) => void this.noteGuardOff(spawn.sessionId, off).catch(() => {}),
+          onLog: (line) => this.log(`${spawn.sessionId}: ${line}`),
           secrets: codex.secrets,
           threadId: codex.threadId,
           threadFile: codex.threadFile,
           onThread: codex.onThread,
           onSandboxFailure: this.opts.onCodexSandboxFailure,
+          onPasswordPolicyFailure: this.opts.onCodexPasswordPolicyFailure,
           mycoUrl: codex.mycoUrl,
           models: this.opts.codexModels,
           env: this.opts.codexEnv,
@@ -1683,8 +1848,9 @@ export class ChatManager {
    */
   private turnEnded(sessionId: string, projectId: string, staffId: string | null, engine: 'claude' | 'codex', end: TurnEnd): void {
     const retries = this.opts.retries;
-    if (!retries) return;
     if (end.kind === 'ok') {
+      this.engineStops.delete(sessionId);
+      if (!retries) return;
       // Sucesso real: o turno original acabou. Uma retomada que ainda estivesse marcada mandaria um "continue" a mais.
       this.retryLedger.clear(sessionId);
       void retries.cancel(sessionId, 'resume').catch(() => {});
@@ -1692,6 +1858,16 @@ export class ChatManager {
     }
     // Só conversa de funcionário: a sem ficha é sua, e é você quem decide continuar.
     if (!staffId) return;
+    // Login recusado ou expirado (o sinal estruturado do motor, ver `isAuthFailure`): tentar de novo não adianta e não gasta o orçamento da retomada (`retryLedger.take` nem é chamado).
+    // A retomada já marcada de um turno anterior também sai: ela mandaria um "continue" que falharia do mesmo jeito.
+    if (isAuthFailure(end.error)) {
+      this.noteEngineStop(sessionId, engine, 'auth', end.error);
+      this.voidRetry(sessionId);
+      void retries?.cancel(sessionId, 'cap').catch(() => {});
+      return;
+    }
+    // Sem o agendador (testes), só o erro do turno segue adiante: a queda sem causa não tinha como ser retomada.
+    if (!retries && end.kind !== 'failed') return;
     const gen = this.retryGen.get(sessionId) ?? 0;
     const run = this.planRetry(sessionId, projectId, staffId, engine, end, gen).catch((err) => this.log(`${sessionId}: retomada: ${err instanceof Error ? err.message : String(err)}`));
     this.retryRuns.set(sessionId, run);
@@ -1703,17 +1879,23 @@ export class ChatManager {
   /**
    * A decisão de retomar. Só retoma: opção ligada; erro passageiro (ou processo que caiu sem causa: no máximo 1 tentativa); nenhuma ação com efeito
    * fora do projeto cortada pela metade; orçamento do turno original com tentativas; nada marcado que já volte à conversa (limite de uso,
-   * despertador que vence antes); e nada invalidou no caminho (`gen`). Sem isso: erro que não é passageiro e opção desligada seguem como antes
-   * (o turno terminou); ação cortada e tentativas esgotadas seguram a conversa para você (caixa de entrada, e a tarefa vai para Aguardar).
+   * despertador que vence antes); e nada invalidou no caminho (`gen`). Sem isso: o erro do turno que não é passageiro (ou com a opção desligada) vira
+   * `engineStops` (a tarefa vai para Aguardar, não para revisão), e a queda sem causa com a opção desligada segue como antes (o turno terminou);
+   * ação cortada e tentativas esgotadas seguram a conversa para você (caixa de entrada, e a tarefa vai para Aguardar).
    */
   private async planRetry(sessionId: string, projectId: string, staffId: string, engine: 'claude' | 'codex', end: Exclude<TurnEnd, { kind: 'ok' }>, gen: number): Promise<void> {
-    const retries = this.opts.retries!;
-    if (!(await retries.enabled().catch(() => false))) return;
+    const retries = this.opts.retries;
     const voided = () => (this.retryGen.get(sessionId) ?? 0) !== gen || this.shuttingDown;
+    // O erro do turno que não vai ser retomado: o turno não entregou nada (a menos que algo em segundo plano ainda o acorde).
+    const noRetry = (e: TurnError, background: readonly unknown[]) => {
+      if (!background.length && !voided()) this.noteEngineStop(sessionId, engine, 'error', e);
+    };
+    if (!(await retries?.enabled().catch(() => false))) return end.kind === 'failed' ? noRetry(end.error, end.background) : undefined;
+    const retriesOn = retries!;
     let transient: Transient | null = null;
     if (end.kind === 'failed') {
       transient = classifyTurnError(end.error);
-      if (!transient) return;
+      if (!transient) return noRetry(end.error, end.background);
       // Ainda há agent ou comando em segundo plano: a conversa não parou, e o que terminar volta a acordá-la sozinho.
       if (end.background.length) return;
     }
@@ -1738,14 +1920,36 @@ export class ChatManager {
     const budget = this.retryLedger.take(sessionId, this.now());
     const info: RetryInfo = { turnId: budget.turnId, attempt: budget.attempts, max: attemptsAllowed(kind), kind, error: label };
     const pending: Pending = { projectId, sessionId, staffId, at, resetsAt: at, text: RETRY_TEXT, retry: info, ...(engine === 'codex' && { engine }) };
-    if (!(await retries.schedule(pending))) return;
+    if (!(await retriesOn.schedule(pending))) return;
     if (voided()) {
       // Parou no meio do agendamento: a pendência que acabou de entrar não vale.
-      await retries.cancel(sessionId, 'message').catch(() => false);
+      await retriesOn.cancel(sessionId, 'message').catch(() => false);
       return;
     }
     this.log(`${sessionId}: ${label}; retomo às ${new Date(at).toISOString()} (tentativa ${info.attempt} de ${info.max})`);
     this.showRetry(pending);
+  }
+
+  /** Guarda o erro do motor que terminou o turno sem retomada (ver `engineStops`). A tarefa de trabalho o lê no fim do turno (`engineStopOf`). */
+  private noteEngineStop(sessionId: string, engine: 'claude' | 'codex', why: 'auth' | 'error', e: TurnError): void {
+    this.engineStops.set(sessionId, { kind: 'engine', why, engine, error: errorLine(e) });
+  }
+
+  /** O turno de trabalho desta conversa terminou em erro do motor, sem retomada, e ninguém mandou mensagem depois? Só leitura (ver `holdEngineStop`). */
+  engineStopOf(sessionId: string): Extract<TurnCapHit, { kind: 'engine' }> | null {
+    return this.engineStops.get(sessionId) ?? null;
+  }
+
+  /**
+   * A tarefa de trabalho foi a Aguardar por causa do erro do motor (`engineStopOf`): guarda o motivo na caixa do dono (`cap:`, como o teto: some na próxima mensagem) e o diz na
+   * conversa, e tira o "continue" e o despertador (um login recusado os faria falhar de novo). Só a tarefa chama: conversa solta com o mesmo erro só mostra o aviso do turno.
+   */
+  holdEngineStop(sessionId: string): void {
+    const hit = this.engineStops.get(sessionId);
+    if (!hit) return;
+    this.turnCapped(sessionId, hit);
+    const chat = this.chats.get(sessionId);
+    if (chat?.running) chat.addNotice(capText(hit), 'warn');
   }
 
   /** A retomada não vai acontecer e a conversa precisa de você: guarda o motivo (caixa de entrada e tarefa em Aguardar) e avisa na conversa. */
