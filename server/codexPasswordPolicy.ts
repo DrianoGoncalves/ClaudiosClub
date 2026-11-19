@@ -122,7 +122,10 @@ export class CodexPasswordPolicy {
     this.log(`o sandbox do Codex pode falhar: duração mínima da senha ${days ?? 'desconhecida'} (aviso na caixa)`);
   }
 
-  /** A duração mínima da senha, com cache (10 min; 2 min se a leitura falhou) e uma leitura por vez. Fora do Windows: nada roda (null). Passou (0) depois de falhar: limpa o aviso. */
+  /**
+   * A duração mínima da senha, com cache (10 min; 2 min se a leitura falhou) e uma leitura por vez. Fora do Windows: nada roda (null). Passou (0) depois de falhar: limpa o aviso, também o que nasceu de
+   * uma leitura que falhou (null): a duração não é mais a causa suspeita e, se o erro seguir, o próximo do turno levanta o aviso de novo, já com o valor lido. O que nasceu de uma leitura em 0 fica (outra regra).
+   */
   private async read(fresh: boolean): Promise<number | null> {
     if (!this.windows) return null;
     if (!fresh && this.last && this.now() - this.last.at < (this.last.days === null ? POLICY_FAIL_TTL_MS : POLICY_OK_TTL_MS)) return this.last.days;
@@ -136,7 +139,7 @@ export class CodexPasswordPolicy {
         this.bad = false;
         this.dismissed = false;
         this.alert = null;
-      } else if (this.alert) this.alert.minPasswordAgeDays = 0;
+      } else if (this.alert?.minPasswordAgeDays === null) this.alert = null;
     } else if (days !== null) {
       this.bad = true;
     }

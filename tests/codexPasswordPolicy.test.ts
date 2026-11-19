@@ -235,6 +235,47 @@ describe('CodexPasswordPolicy: o erro visto no turno', () => {
     expect(t.p.current()).toMatchObject({ minPasswordAgeDays: null, source: 'turn' });
   });
 
+  it('aviso que nasceu de leitura que falhou (null) some quando a checagem seguinte lê 0; leitura que falha de novo não o apaga', async () => {
+    const t = policy({ net: fakeNet({ stdout: 'lixo' }) });
+    await t.p.noteFailure();
+    expect(t.p.current()).toMatchObject({ minPasswordAgeDays: null });
+    t.clock.t += POLICY_FAIL_TTL_MS + 1;
+    await t.p.check(); // segue ilegível: sem informação nova, o aviso fica
+    expect(t.p.current()).toMatchObject({ minPasswordAgeDays: null });
+    t.net.set(rows('0'));
+    t.clock.t += POLICY_FAIL_TTL_MS + 1;
+    await t.p.check();
+    expect(t.p.current()).toBeNull();
+    expect(t.net.calls).toHaveLength(3);
+  });
+
+  it('aviso nascido de leitura null: leitura >0 o atualiza (com o comando) e o 0 depois o apaga', async () => {
+    const t = policy({ net: fakeNet({ stdout: 'lixo' }) });
+    await t.p.noteFailure();
+    t.net.set(rows('2'));
+    t.clock.t += POLICY_FAIL_TTL_MS + 1;
+    await t.p.check();
+    expect(t.p.current()).toMatchObject({ minPasswordAgeDays: 2, source: 'turn' });
+    t.net.set(rows('0'));
+    t.clock.t += POLICY_OK_TTL_MS + 1;
+    await t.p.check();
+    expect(t.p.current()).toBeNull();
+  });
+
+  it('apagado pelo 0 e o erro seguiu: o próximo erro do turno levanta o aviso de novo, agora com 0 (outra regra), e esse a checagem em 0 não apaga', async () => {
+    const t = policy({ net: fakeNet({ stdout: 'lixo' }) });
+    await t.p.noteFailure();
+    t.net.set(rows('0'));
+    t.clock.t += POLICY_FAIL_TTL_MS + 1;
+    await t.p.check();
+    expect(t.p.current()).toBeNull();
+    await t.p.noteFailure();
+    expect(t.p.current()).toMatchObject({ minPasswordAgeDays: 0, source: 'turn' });
+    t.clock.t += POLICY_OK_TTL_MS + 1;
+    await t.p.check();
+    expect(t.p.current()).toMatchObject({ minPasswordAgeDays: 0 });
+  });
+
   it('erro do turno com a política já corrigida: aviso levantado com >0 some quando a checagem passar', async () => {
     const t = policy();
     await t.p.noteFailure();
