@@ -146,7 +146,7 @@ describe('balão de erro no chat', () => {
     expect(errorLineShown(null, [], null)).toBe(false);
   });
 
-  it('erro não leva botão de arquivo, mesmo com onOpenFile', () => {
+  it('erro não leva botão de arquivo, mesmo com onFix', () => {
     const els: unknown[] = [];
     const collect = (node: unknown) => {
       if (Array.isArray(node)) node.forEach(collect);
@@ -156,7 +156,7 @@ describe('balão de erro no chat', () => {
         collect(el.props.children);
       }
     };
-    collect(SecretNoticeView({ item: item(), busy: false, onOpenFile: () => {} }));
+    collect(SecretNoticeView({ item: item(), busy: false, onFix: () => {} }));
     expect(els).toEqual([]);
   });
 });

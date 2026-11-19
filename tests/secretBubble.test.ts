@@ -73,66 +73,83 @@ function buttons(node: unknown, out: ReactElement<{ onClick?: () => void; childr
   }
   return out;
 }
-const view = (a: InboxItem, onOpenFile?: (path: string) => void, onIgnore = () => {}) => SecretNoticeView({ item: a, busy: false, onIgnore, onOpenFile });
+const view = (a: InboxItem, onFix?: () => void, onIgnore = () => {}) => SecretNoticeView({ item: a, busy: false, onIgnore, onFix });
 const withFile = (secret: Partial<NonNullable<InboxItem['secret']>>) => item({ secret: { kind: 'password-env', detail: 'DB_PASSWORD', source: 'tool-input', ...secret } });
 
-describe('botão que abre o arquivo do segredo', () => {
-  it('com o caminho, o botão aparece com o caminho no balão e abre esse arquivo ao clicar', () => {
-    const a = withFile({ file: 'config/app.ini' });
-    const opened: string[] = [];
-    const html = renderToStaticMarkup(createElement(SecretNotice, { item: a, onIgnore: async () => {}, onOpenFile: (p) => opened.push(p) }));
-    expect(html).toContain('>Abrir arquivo<');
-    expect(html).toContain('<code>config/app.ini</code>');
-    expect(html).toContain('Abre config/app.ini no editor');
-    const open = buttons(view(a, (p) => opened.push(p))).find((b) => b.props.children === 'Abrir arquivo');
+describe('botão "Corrigir" do arquivo do segredo', () => {
+  it('arquivo comum com a aba Arquivos disponível: o botão aparece com o caminho no balão (o clique é coberto em fixSecret.test.ts)', () => {
+    const a = withFile({ file: 'DEPLOY.md', line: 12 });
+    const html = renderToStaticMarkup(createElement(SecretNotice, { item: a, onIgnore: async () => {}, onOpenFile: () => {} }));
+    expect(html).toContain('>Corrigir<');
+    expect(html).toContain('<code>DEPLOY.md</code>');
+    expect(html).toContain('Abre DEPLOY.md na aba Arquivos do projeto');
+    let clicked = 0;
+    const open = buttons(view(a, () => void clicked++)).find((b) => b.props.children === 'Corrigir');
     open!.props.onClick!();
-    expect(opened).toEqual(['config/app.ini']);
+    expect(clicked).toBe(1);
   });
 
-  it('o Ignorar segue igual e vem depois do botão do arquivo', () => {
+  it('o Ignorar segue igual e vem depois do Corrigir', () => {
     const a = withFile({ file: 'a/b.env.example' });
     let ignored = 0;
     const list = buttons(view(a, () => {}, () => (ignored += 1)));
-    expect(list.map((b) => b.props.children)).toEqual(['Abrir arquivo', 'Ignorar']);
+    expect(list.map((b) => b.props.children)).toEqual(['Corrigir', 'Ignorar']);
     list[1]!.props.onClick!();
     expect(ignored).toBe(1);
   });
 
   it('sem o caminho (servidor antigo, aviso sem arquivo) o balão é o de antes: sem botão e sem linha de arquivo', () => {
     const html = renderToStaticMarkup(createElement(SecretNotice, { item: item(), onIgnore: async () => {}, onOpenFile: () => {} }));
-    expect(html).not.toContain('Abrir arquivo');
+    expect(html).not.toContain('Corrigir');
     expect(html).not.toContain('secret-file');
-    expect(buttons(view(item(), () => {})).map((b) => b.props.children)).toEqual(['Ignorar']);
+    expect(buttons(view(item())).map((b) => b.props.children)).toEqual(['Ignorar']);
   });
 
-  it('sem como abrir arquivo (nenhum editor ligado), mostra o caminho e não o botão', () => {
+  it('arquivo comum sem como abrir a aba Arquivos: mostra o caminho e não o botão', () => {
     const html = renderToStaticMarkup(createElement(SecretNotice, { item: withFile({ file: 'a/b.ini' }), onIgnore: async () => {} }));
     expect(html).toContain('<code>a/b.ini</code>');
-    expect(html).not.toContain('Abrir arquivo');
+    expect(html).not.toContain('Corrigir');
   });
 
-  it('arquivo que a tela recusa (.env, chave): caminho e "abra no seu editor", sem botão', () => {
+  it('arquivo de segredo (.env, chave): o Corrigir existe mesmo sem a aba Arquivos, abre fora do Club e o balão diz que não mostra o conteúdo', () => {
     const a = withFile({ file: '.env', fileBlocked: true });
-    const html = renderToStaticMarkup(createElement(SecretNotice, { item: a, onIgnore: async () => {}, onOpenFile: () => {} }));
-    expect(html).toContain('<code>.env</code>');
-    expect(html).toContain('abra no seu editor');
-    expect(html).not.toContain('Abrir arquivo');
+    for (const props of [{}, { onOpenFile: () => {} }]) {
+      const html = renderToStaticMarkup(createElement(SecretNotice, { item: a, onIgnore: async () => {}, ...props }));
+      expect(html).toContain('<code>.env</code>');
+      expect(html).toContain('>Corrigir<');
+      expect(html).toContain('Abre .env no editor de texto do seu computador');
+      expect(html).toContain('o Club não mostra o conteúdo');
+      expect(html).not.toContain('Abrir arquivo');
+    }
   });
 
   it('caminho fora do projeto (absoluto, "..", unidade, barra invertida) não vira botão nem texto', () => {
     for (const file of ['/etc/passwd', 'C:/Users/x/.env', '../fora.txt', 'a/../../b.txt', 'a\\b.txt', '~/x', 'a//b', './a.txt', '']) {
-      const a = withFile({ file });
-      expect(secretFileOf(a), file).toBeNull();
-      const html = renderToStaticMarkup(createElement(SecretNotice, { item: a, onIgnore: async () => {}, onOpenFile: () => {} }));
-      expect(html, file).not.toContain('Abrir arquivo');
-      expect(html, file).not.toContain('secret-file');
+      for (const fileBlocked of [undefined, true as const]) {
+        const a = withFile({ file, fileBlocked });
+        expect(secretFileOf(a), file).toBeNull();
+        const html = renderToStaticMarkup(createElement(SecretNotice, { item: a, onIgnore: async () => {}, onOpenFile: () => {} }));
+        expect(html, file).not.toContain('Corrigir');
+        expect(html, file).not.toContain('secret-file');
+      }
     }
     expect(secretFileOf(withFile({ file: 'src/app/config.ts' }))).toEqual({ path: 'src/app/config.ts', blocked: false });
     expect(secretFileOf(withFile({ file: 'k.pem', fileBlocked: true }))).toEqual({ path: 'k.pem', blocked: true });
   });
 
   it('o título do botão leva só o caminho: nada do tipo nem do detalhe do segredo', () => {
-    const open = buttons(view(withFile({ file: 'config/app.ini' }), () => {})).find((b) => b.props.children === 'Abrir arquivo');
+    const open = buttons(view(withFile({ file: 'config/app.ini' }), () => {})).find((b) => b.props.children === 'Corrigir');
     expect(JSON.stringify(open)).not.toMatch(/DB_PASSWORD|password-env/);
+  });
+
+  it('depois do clique, a frase do resultado aparece sob os botões (ok = status, recusa = alerta) e o botão fica travado enquanto abre', () => {
+    const a = withFile({ file: '.env', fileBlocked: true });
+    const ok = renderToStaticMarkup(createElement('div', null, SecretNoticeView({ item: a, busy: false, onFix: () => {}, fixNote: { ok: true, text: 'Aberto lá.' } })));
+    expect(ok).toContain('role="status"');
+    expect(ok).toContain('Aberto lá.');
+    const bad = renderToStaticMarkup(createElement('div', null, SecretNoticeView({ item: a, busy: false, onFix: () => {}, fixNote: { ok: false, text: 'Sem tela.' } })));
+    expect(bad).toMatch(/class="small secret-fix-note error" role="alert"/);
+    const wait = buttons(SecretNoticeView({ item: a, busy: false, onFix: () => {}, fixBusy: true })).find((b) => b.props.children === 'Corrigir');
+    expect(wait!.props.disabled).toBe(true);
   });
 });
