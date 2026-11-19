@@ -11,7 +11,7 @@ import { RoutineHistory, RoutineItem } from '../client/src/schedules/RoutineList
 import { buildRecurrence, checkDraft, draftFromRoutine, newDraft, previewRuns, toRoutine, type RoutineDraft } from '../client/src/schedules/routineDraft';
 import { ScheduleCalendar } from '../client/src/schedules/ScheduleCalendar';
 import { normalizeSchedules } from '../client/src/schedules/scheduleFlows';
-import { SchedulesBoardSeeded } from '../client/src/schedules/SchedulesBoard';
+import { SchedulesBoardSeeded } from './support/seededBoard';
 import { describeWhen, sortRoutines, stateLabel } from '../client/src/schedules/scheduleView';
 
 // Tela de Agendamentos (rotinas + calendário): rascunho ↔ rotina, erros do formulário, grade do mês, texto do "quando roda" nos 3 idiomas e o

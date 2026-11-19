@@ -56,7 +56,7 @@ O símbolo e o texto dizem o estado; a cor só reforça. Valem para o histórico
 
 Antes de salvar, a prévia mostra "Roda … Próximas: …". Se não houver execução futura, avisa para conferir as datas.
 
-**A cada N minutos** aceita 5, 10, 15, 20 ou 30 (os que dividem a hora certinho) e roda sempre nos mesmos minutos de cada hora: de 30 em 30 é :00 e :30, e não "30 minutos depois de salvar". **A cada N horas** aceita de 1 a 12 e roda no minuto 0, contando da meia-noite (de 2 em 2 horas: 00:00, 02:00, 04:00…; de 5 em 5: 00:00, 05:00, 10:00, 15:00, 20:00 e de novo 00:00). Por dentro as duas são um cron (`*/N * * * *` e `0 */N * * *`), então rotinas antigas com esse cron abrem direto nessas opções ao **Editar**.
+**A cada N minutos** aceita 5, 6, 10, 12, 15, 20 ou 30 (os que dividem a hora certinho) e roda sempre nos mesmos minutos de cada hora: de 30 em 30 é :00 e :30, e não "30 minutos depois de salvar". **A cada N horas** aceita de 1 a 12 e roda no minuto 0, contando da meia-noite (de 2 em 2 horas: 00:00, 02:00, 04:00…; de 5 em 5: 00:00, 05:00, 10:00, 15:00, 20:00 e de novo 00:00). Por dentro as duas são um cron (`*/N * * * *` e `0 */N * * *`), então rotinas antigas com esse cron abrem direto nessas opções ao **Editar**.
 
 Cron tem 5 campos: minuto, hora, dia do mês, mês e dia da semana. Ex.: `*/30 * * * *` = a cada 30 minutos; `0 8 * * 1-5` = dias úteis às 08:00. Um cron de passo que não repete de N em N (por exemplo `*/45 * * * *`, que roda no minuto 0 e no 45 de cada hora, ou `0 */13 * * *`) abre no Cron (avançado), com o texto que estava, e um aviso curto; confira as "Próximas" antes de salvar.
 

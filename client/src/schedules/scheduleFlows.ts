@@ -140,3 +140,6 @@ export function escapeStep(s: { confirming: boolean; form: { dirty: boolean; ask
   if (s.form.asking) return 'keep-editing';
   return s.form.dirty ? 'ask-discard' : 'close-form';
 }
+
+/** O que o botão Cancelar do formulário faz: a mesma regra do Esc com o formulário aberto (rascunho mudado pergunta antes de descartar). */
+export const cancelFormStep = (dirty: boolean): 'ask-discard' | 'close-form' => (dirty ? 'ask-discard' : 'close-form');

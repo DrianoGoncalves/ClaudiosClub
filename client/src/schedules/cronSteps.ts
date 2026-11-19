@@ -4,7 +4,7 @@
 export type CronStep = { unit: 'minutes' | 'hours'; n: number };
 
 /** Os N que o formulário oferece em minutos: os que dividem a hora certinho. */
-export const MINUTE_STEPS: readonly number[] = [5, 10, 15, 20, 30];
+export const MINUTE_STEPS: readonly number[] = [5, 6, 10, 12, 15, 20, 30];
 /** Em horas, de 1 a 12 (o passo conta da meia-noite: 5 h roda às 00, 05, 10, 15 e 20). */
 export const HOUR_STEPS: readonly number[] = Array.from({ length: 12 }, (_, i) => i + 1);
 
@@ -27,7 +27,7 @@ export function parseCronStep(expr: string): CronStep | null {
 }
 
 // O passo que NÃO repete de N em N como a palavra "a cada" promete: minutos que não dividem 60 (o passo 45 roda no minuto 0 e no 45 de cada hora) e
-// horas acima de 12. Os que dividem 60 e ficam fora das opções (2, 6…) são crons certos, só não vão no formulário: devolvem null.
+// horas acima de 12. Os que dividem 60 e ficam fora das opções (2, 3, 4…) são crons certos, só não vão no formulário: devolvem null.
 export function oddStep(expr: string): CronStep | null {
   const s = parseCronStep(expr);
   if (!s || s.n < 1 || stepFits(s)) return null;
