@@ -133,8 +133,9 @@ Abra pelo botão **Arquivos** no painel do projeto ("Ver e editar os arquivos do
 
 ### Limites e casos especiais
 
-- Arquivo de segredo aparece com cadeado e fica oculto: "Arquivo de segredo: Por padrão, esses dados estão ocultos. Para visualizar clique aqui."
-- **clique aqui** mostra o texto do segredo, só para leitura: não tem **Salvar** e nada é gravado. **Ocultar** ou abrir outro arquivo esconde de novo (o texto não fica guardado na tela). Só vale na tela do Claudio’s Club, num navegador pareado: funcionário (agente) pela API não consegue ler segredo. `.git`, `node_modules` e as outras pastas escondidas continuam fechadas. Os limites de 1 MB e de binário valem também aqui.
+- Arquivo de segredo (`.env`, chaves) aparece com cadeado, e o Club nunca mostra o conteúdo: "Arquivo de segredo: o Club não mostra o conteúdo. Para abrir no editor de texto do seu computador, clique aqui."
+- **clique aqui** abre o arquivo **fora do Club**, no editor de texto do computador onde o Claudio’s Club roda (Bloco de Notas no Windows, TextEdit no Mac, o editor gráfico de `VISUAL` ou `EDITOR` no Linux). O texto não passa pela tela do Club e não há como mostrá-lo nem ocultá-lo aqui; troque o valor e salve no seu editor. Só vale na tela do Claudio’s Club, num navegador pareado: funcionário (agente) pela API não abre segredo. O mesmo acontece com o botão **Corrigir** do aviso de segredo no chat (ver `03-chat.md`). `.git`, `node_modules` e as outras pastas escondidas continuam fechadas.
+- Se o arquivo não abrir, a tela diz por quê, em linguagem simples: o Club não está neste computador (a página foi aberta de outra máquina: abra o arquivo no seu editor), roda sem tela, o computador não tem editor de texto com janela configurado (Linux: defina `VISUAL` ou `EDITOR` com um editor gráfico, como `gedit`, e reinicie o Club), o arquivo mudou enquanto abria, não existe mais ou o sistema não conseguiu abrir o editor.
 - Para editar, o limite é 1 MB. Acima disso: "Arquivo grande demais para editar aqui (mais de 1 MB)."
 - Arquivo binário não edita como texto. Imagem só aparece para ver, até 10 MB.
 - Conflito: se o arquivo mudou no disco (por exemplo, um funcionário editou), nada é sobrescrito. Escolha **Recarregar do disco** ou **Manter o meu e salvar por cima**.
@@ -158,7 +159,7 @@ No quadro, o selo do projeto mostra **{n} sem commit** (ou **limpo**). Clique no
 
 | Sintoma | O que fazer |
 | --- | --- |
-| Arquivo não abre | Segredo fica oculto até você clicar em **clique aqui**. Passou de 1 MB ou é binário: ver os limites acima. |
+| Arquivo não abre | Segredo nunca aparece no Club: **clique aqui** o abre no editor de texto do seu computador. Passou de 1 MB ou é binário: ver os limites acima. |
 | "Erro ao salvar" | Clique em **Tentar de novo**. |
 | Aparece o aviso de conflito | Escolha **Recarregar do disco** para ver a versão do disco, ou **Manter o meu e salvar por cima**. |
 | "Não deu para cancelar" | Tente de novo. Se a linha sumir da lista, o agendamento já aconteceu ou foi cancelado. |

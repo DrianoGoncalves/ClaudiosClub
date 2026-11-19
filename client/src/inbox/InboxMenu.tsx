@@ -72,7 +72,12 @@ export function InboxMenu({
   onOpen,
   onOpenFile,
   onOpenSheet,
+  initialOpen = false,
+  initialTasks,
 }: {
+  /** Só teste: a renderização sem efeitos não clica no botão nem lê o quadro, então o menu já nasce aberto e com as tarefas lidas. */
+  initialOpen?: boolean;
+  initialTasks?: ReadonlyMap<string, Task[]>;
   inbox: InboxView;
   /** Título da conversa por sessionId (manual, gerado ou assunto); sem título conhecido, o item não mostra a linha. */
   titleOf: ReadonlyMap<string, string>;
@@ -84,7 +89,7 @@ export function InboxMenu({
   /** Abre a ficha de quem foi barrado (atalho do aviso de ação barrada); sem ele, o atalho que leva à ficha não aparece. */
   onOpenSheet?: (item: InboxItem) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initialOpen);
   const [now, setNow] = useState(() => Date.now());
   const root = useRef<HTMLDivElement>(null);
   const count = inbox.items.length;
@@ -97,6 +102,8 @@ export function InboxMenu({
   const [followUpDone, setFollowUpDone] = useState<string | null>(null);
   /** O item de segredo cujo "corrigir" está abrindo o arquivo, e o que o último clique deu (a frase fica no item até fechar o menu). */
   const [fixing, setFixing] = useState<string | null>(null);
+  /** O card sem código cujo "Devolver" deixou a mensagem guardada (nada falhou): aviso neutro no item, até fechar o menu ou novo clique. */
+  const [heldNote, setHeldNote] = useState<{ id: string; text: string } | null>(null);
   const [fixNote, setFixNote] = useState<({ id: string } & FixNote) | null>(null);
   /** Cancelar um cartão esquecido ou sem código: o mesmo diálogo do quadro (motivo e o que fazer com quem espera), nunca um clique solto. */
   const [closing, setClosing] = useState<{ item: InboxItem; task: Task; tasks: Task[] } | null>(null);
@@ -107,7 +114,7 @@ export function InboxMenu({
   // O follow-up pede a tarefa de origem (Finalizado?, o responsável dela, o texto inteiro) e o atalho "Delegar revisão" o estado da revisão (status, quem revisou):
   // lê o quadro dos projetos que têm um desses itens, só com o menu aberto.
   const fuProjects = inbox.items.filter((i) => (i.kind === 'followUp' && i.followUp) || stuckOf(i)?.humanAction === 'review').map((i) => i.projectId);
-  const fuTasks = useProjectTasks(fuProjects, open && fuProjects.length > 0);
+  const fuTasks = useProjectTasks(fuProjects, open && fuProjects.length > 0, initialTasks);
 
   /** Lê o quadro do projeto (para achar quem espera a tarefa) e abre o diálogo de cancelar a tarefa `taskId` do item. */
   const askCancel = (item: InboxItem, taskId: string) =>
@@ -121,11 +128,12 @@ export function InboxMenu({
   /** Devolve o card sem código ao responsável: uma mensagem na conversa de trabalho dele, que tira a marca; sem a conversa, o erro diz para cancelar. */
   const giveBack = (item: InboxItem, taskId: string) =>
     run(item, async () => {
+      setHeldNote(null);
       const task = ((await api.tasks(item.projectId)) ?? []).find((x) => x.id === taskId);
       const body = giveBackBody(task);
       if (!body) throw new Error(t('tasks.noCodeNoSession'));
       const held = giveBackHeldNote(await withUsageConfirm((force) => api.chatSend(item.projectId, { ...body, force })));
-      if (held) throw new Error(held);
+      if (held) setHeldNote({ id: item.id, text: held });
     });
 
   /** "Corrigir" do aviso de segredo: arquivo comum abre a aba Arquivos (e o menu fecha); arquivo de segredo abre no editor do computador e a frase fica no item. */
@@ -168,6 +176,7 @@ export function InboxMenu({
       setDelegating(null);
       setReviewAsked(null);
       setFixNote(null);
+      setHeldNote(null);
       return;
     }
     const onDown = (e: MouseEvent) => {
@@ -345,7 +354,7 @@ export function InboxMenu({
                         taskId={fu.taskId}
                         followUp={{ id: fu.followUpId, title: fu.title, text: fullText(fuTask, fu.followUpId, fu.text), staffId: fu.staffId }}
                         task={fuTask}
-                        loading={!fuTasks.settled.has(item.projectId)}
+                        loading={!fuTasks.byProject.has(item.projectId)}
                         team={staff.filter((s) => s.projectId === item.projectId)}
                         onDone={async () => {
                           await inbox.refresh();
@@ -376,6 +385,7 @@ export function InboxMenu({
                         <button className="link small" title={t('tasks.noCodeGiveBackTitle')} disabled={busy === item.id} onClick={() => void giveBack(item, noCode.taskId)}>
                           {t('tasks.noCodeGiveBack')}
                         </button>
+                        {heldNote?.id === item.id && <span className="small inbox-fix-ok" role="status">{heldNote.text}</span>}
                         {failed?.id === item.id && <span className="error small" role="alert">{failed.message}</span>}
                       </span>
                     </>

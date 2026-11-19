@@ -535,7 +535,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
               task={taskIn(fuTasks.byProject, item.projectId, item.followUp!.taskId)}
               team={team}
               now={Date.now()}
-              loading={!fuTasks.settled.has(item.projectId)}
+              loading={!fuTasks.byProject.has(item.projectId)}
               onChanged={async () => {
                 await onInboxChanged!();
                 await fuTasks.reload();
