@@ -33,7 +33,7 @@ export interface PlanImpasseCtx {
 export interface PlanImpasse {
   /** Os agents que editam e a ficha em plan marca (na lista ou pelo roteiro). */
   agents: string[];
-  /** Os de `agents` que o roteiro chama: desmarcar na lista não os tira do aviso (o roteiro segue chamando, mesmo o que o projeto nem tem), só trocar o roteiro. */
+  /** Os de `agents` que o roteiro chama: desmarcar na lista não os tira do aviso (o roteiro segue chamando, mesmo o que o projeto nem tem): só trocar o roteiro ou a autonomia (uma que edite também tira o aviso). */
   playbookAgents: string[];
   /** Os MCPs marcados em "Livre" que podem escrever. */
   mcps: string[];
