@@ -182,6 +182,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const [closing, setClosing] = useState<{ mode: DepMode; id: string } | null>(null);
   /** O card sem código que está sendo devolvido ao responsável (o botão espera o envio). */
   const [givingBack, setGivingBack] = useState<string | null>(null);
+  /** O que o último "Devolver" deixou quando não falhou: a mensagem ficou guardada (aviso neutro, não erro). Vale só para o card dele. */
+  const [giveBackNote, setGiveBackNote] = useState<{ id: string; text: string } | null>(null);
   /** Aviso de possível duplicata da última tarefa criada aqui (a nova, e as parecidas); some ao fechar o aviso ou ao abrir o formulário de novo. */
   const [dup, setDup] = useState<{ createdId: string; warnings: TaskCreateWarning[] } | null>(null);
   const boardReview = useBoardReview(projectId);
@@ -266,12 +268,13 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     // Um envio por vez: o clique repetido mandaria a mensagem duas vezes ao funcionário (a marca só sai no primeiro envio).
     if (givingBack) return;
     setGivingBack(task.id);
+    setGiveBackNote(null);
     try {
       await act(async () => {
         const body = giveBackBody(task);
         if (!body) throw new Error(t('tasks.noCodeNoSession'));
         const held = giveBackHeldNote(await withUsageConfirm((force) => api.chatSend(projectId, { ...body, force })));
-        if (held) throw new Error(held);
+        if (held) setGiveBackNote({ id: task.id, text: held });
       });
     } finally {
       setGivingBack(null);
@@ -596,6 +599,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             chatFollowUps={chatFollowUpIds(current.id, inboxItems, projectId)}
             onOpenChat={openFollowUpChat(current)}
             givingBack={givingBack === current.id}
+            giveBackNote={giveBackNote?.id === current.id ? giveBackNote.text : null}
             onGiveBack={() => void giveBack(current)}
             onOpenTask={setSelected}
             nameOf={nameOf}
@@ -867,6 +871,7 @@ function TaskDetail({
   chatFollowUps,
   onOpenChat,
   givingBack,
+  giveBackNote,
   onGiveBack,
   onOpenTask,
   onDelete,
@@ -915,6 +920,8 @@ function TaskDetail({
   onOpenChat?: () => void;
   /** Card sem código: o envio ao responsável está em andamento (o botão fica desligado). */
   givingBack: boolean;
+  /** Card sem código: a mensagem do "Devolver" ficou guardada (aviso neutro; null: nada a dizer). */
+  giveBackNote: string | null;
   /** Card sem código: devolve ao responsável (uma mensagem na conversa dele). */
   onGiveBack: () => void;
   /** Abre o detalhe de outra tarefa do quadro (a subtarefa ou o card de origem). */
@@ -966,7 +973,7 @@ function TaskDetail({
       {/* No topo: explica por que o card está parado em Fazendo e leva à subtarefa (ou ao card de origem); no celular o detalhe cobre o quadro. */}
       <SubtaskBlock task={task} tasks={tasks} labels={LABEL} staffName={who?.name ?? null} onOpen={onOpenTask} />
       {/* Card = código: o card que terminou sem editar nada não foi para revisão; quem pediu decide (cancelar com motivo ou devolver ao responsável). */}
-      <NoCodeBlock task={task} nameOf={nameOf} busy={givingBack} onCancel={onCancel} onGiveBack={onGiveBack} />
+      <NoCodeBlock task={task} nameOf={nameOf} busy={givingBack} note={giveBackNote} onCancel={onCancel} onGiveBack={onGiveBack} />
       {/* Também no topo: o resumo dos follow-ups e o caminho para a conversa onde eles esperam (o card costuma estar Finalizado: nada mais pede a sua atenção nele). */}
       <FollowUpBlock task={task} tasks={tasks} team={staff} nameOf={nameOf} now={Date.now()} projectId={projectId} chatIds={chatFollowUps} onOpenChat={onOpenChat} onOpenTask={onOpenTask} onChanged={onChanged} />
       <label>

@@ -532,7 +532,7 @@ describe('textos nos 3 idiomas', () => {
     }
   };
 
-  it('en e es têm todas as chaves do follow-up do quadro', () => parity(tasksMsgs, /^tasks\.fu[A-Z]/, 69));
+  it('en e es têm todas as chaves do follow-up do quadro', () => parity(tasksMsgs, /^tasks\.fu[A-Z]/, 70));
 
   it('a dica do selo nos 3 idiomas diz a frase inteira: quem pediu a tarefa OU o dono decide, e o que a decisão pode ser', () => {
     expect(tasksMsgs['pt-BR']['tasks.fuBadgeHint']).toContain('Quem pediu a tarefa, ou você, decide: vira card ou é descartada.');

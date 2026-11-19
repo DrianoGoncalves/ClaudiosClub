@@ -20,8 +20,23 @@ export function NoCodeBadge({ task }: { task: Pick<Task, 'noCode' | 'status'> })
 /**
  * Bloco do detalhe: por que o card está parado em "fazendo", com quem está a decisão e o que o responsável disse ao terminar (a análise ou a resposta pode estar aí; texto puro). Com a decisão
  * sua (`to: 'owner'`): "Cancelar" (abre o diálogo de cancelar, com o motivo) e "Devolver ao responsável" (uma mensagem na conversa dele). Com o gestor, só o aviso: ele decide pela conversa dele.
+ * `note`: o que o último "Devolver" deixou quando não deu erro (a mensagem ficou guardada): um aviso neutro, não um erro.
  */
-export function NoCodeBlock({ task, nameOf, busy = false, onCancel, onGiveBack }: { task: Task; nameOf: NameOf; busy?: boolean; onCancel: () => void; onGiveBack: () => void }) {
+export function NoCodeBlock({
+  task,
+  nameOf,
+  busy = false,
+  note = null,
+  onCancel,
+  onGiveBack,
+}: {
+  task: Task;
+  nameOf: NameOf;
+  busy?: boolean;
+  note?: string | null;
+  onCancel: () => void;
+  onGiveBack: () => void;
+}) {
   const n = noCodeOf(task);
   if (!n) return null;
   const manager = n.to === 'manager' ? ((task.requestedBy && nameOf(task.requestedBy)) || t('tasks.fuManagerFallback')) : null;
@@ -46,6 +61,11 @@ export function NoCodeBlock({ task, nameOf, busy = false, onCancel, onGiveBack }
           <button type="button" className="btn-primary" title={t('tasks.noCodeGiveBackTitle')} disabled={busy} onClick={onGiveBack}>
             {t('tasks.noCodeGiveBack')}
           </button>
+        </p>
+      )}
+      {note && (
+        <p className="small task-nocode-note" role="status">
+          {note}
         </p>
       )}
     </section>

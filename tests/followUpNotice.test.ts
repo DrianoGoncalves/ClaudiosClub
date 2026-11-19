@@ -270,11 +270,65 @@ describe('no quadro', () => {
     expect(render(t, { inboxItems }).detail).not.toContain('Abrir conversa');
   });
 
-  it('follow-up com o gestor (campos do revisor, sem conversa): o detalhe diz quem decide, sem botões de decisão', () => {
-    const { detail } = render(approved([fu({ to: 'manager', recommendation: 'optional', title: 'Renomear variável', text: 'x' })], { requestedBy: 'ana' }));
-    expect(detail).toContain('Decide quem pediu a tarefa.');
-    expect(detail).not.toContain('Concluir');
-    expect(detail).not.toContain('Criar card');
+  // Regra única: o servidor deixa decidir quem pediu a tarefa OU o dono (pela tela), então o dono vê as saídas no follow-up antigo e no novo, esteja ele com o gestor ou com você.
+  describe('quem decide pela tela (a mesma regra para o antigo e o novo)', () => {
+    const open = (over: Partial<FollowUp>, taskOver: Partial<Task> = {}) => render(approved([fu(over)], { requestedBy: 'ana', ...taskOver })).detail;
+    const NEW = { recommendation: 'optional', title: 'Renomear variável', text: 'x' } as const;
+    const OLD = { text: 'texto cru do achado' } as const;
+
+    for (const [kind, shape] of [['novo', NEW], ['antigo', OLD]] as const) {
+      for (const to of ['manager', 'owner'] as const) {
+        it(`follow-up ${kind} com ${to === 'manager' ? 'o gestor' : 'você'}, sem conversa, tarefa Finalizada: o dono vê Revisar e Concluir`, () => {
+          const detail = open({ ...shape, to });
+          expect(detail).toContain('Revisar');
+          expect(detail).toContain('Concluir');
+        });
+        it(`follow-up ${kind} com ${to === 'manager' ? 'o gestor' : 'você'}, sem conversa, tarefa em andamento: o dono vê Criar card e Descartar`, () => {
+          const detail = open({ ...shape, to }, { status: 'doing', review: undefined });
+          expect(detail).toContain('Criar card');
+          expect(detail).toContain('Descartar');
+        });
+      }
+    }
+
+    it('com o gestor, a nota diz que quem pediu a tarefa também pode decidir; com você, não há essa nota', () => {
+      expect(open({ ...NEW, to: 'manager' })).toContain('Quem pediu a tarefa também pode decidir');
+      expect(open({ ...OLD, to: 'manager' })).toContain('Quem pediu a tarefa também pode decidir');
+      expect(open({ ...NEW, to: 'owner' })).not.toContain('Quem pediu a tarefa também pode decidir');
+      // A nota de quem pediu a tarefa segue ali (o quadro do teste não tem a ficha dele, então é "o gestor").
+      expect(open({ ...NEW, to: 'manager' })).toContain('Espera o gestor, que pediu a tarefa.');
+    });
+
+    it('com a conversa na caixa, nenhum dos dois decide no detalhe: aponta para a conversa', () => {
+      for (const shape of [NEW, OLD]) {
+        const t = approved([fu({ ...shape, to: 'owner' })]);
+        const detail = render(t, { inboxItems: [item(fields())], onOpenInbox: noop }).detail;
+        expect(detail).toContain('Decida na conversa de trabalho da tarefa');
+        expect(detail).not.toContain('Concluir');
+      }
+    });
+
+    it('decidido, nenhum oferece saída', () => {
+      const detail = open({ ...NEW, status: 'resolved', resolution: 'discarded', resolvedBy: 'you', to: 'owner' });
+      expect(detail).not.toContain('Concluir');
+      expect(detail).not.toContain('Criar card');
+    });
+  });
+
+  it('follow-up já decidido, com os campos do revisor: mostra o título e o selo, não o texto cru', () => {
+    const decided = { status: 'resolved', resolution: 'discarded', resolvedBy: 'you', resolvedAt: AT, recommendation: 'worth', title: 'Juntar helper', impact: 'Quem muda esquece uma tela.', text: 'texto cru do achado' } as const;
+    const { detail } = render(approved([fu(decided)]));
+    expect(detail).toContain('Juntar helper');
+    expect(detail).toContain('Vale fazer');
+    expect(detail).toContain('Se não fizer:');
+    expect(detail).toContain('<details class="fu-details">');
+    expect(detail).not.toMatch(/<p class="task-doubt-text">texto cru do achado/);
+    expect(detail).toContain('Descartado');
+  });
+
+  it('follow-up decidido sem os campos (antigo) segue com o texto', () => {
+    const { detail } = render(approved([fu({ status: 'resolved', resolution: 'discarded', resolvedBy: 'you', text: 'texto cru do achado' })]));
+    expect(detail).toContain('<p class="task-doubt-text">texto cru do achado</p>');
   });
 });
 

@@ -27,7 +27,7 @@ export function FollowUpNotice({
   task: Task | null;
   team: readonly TeamMember[];
   now: number;
-  /** A primeira leitura da tarefa de origem ainda não terminou: as saídas esperam (ver `FollowUpDecide`). */
+  /** A tarefa de origem ainda não foi lida (ou a leitura falhou): as saídas esperam (ver `FollowUpDecide`). */
   loading?: boolean;
   onChanged: () => void | Promise<void>;
   onGone: (message: string | null) => void;
