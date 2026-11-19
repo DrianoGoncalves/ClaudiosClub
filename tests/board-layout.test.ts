@@ -679,11 +679,17 @@ describe('escopo do usuário', () => {
 });
 
 describe('linha abaixo do nome da sala', () => {
-  const base = { employees: 4, resources: 0, collapsed: false, exists: true };
+  const base = { employees: 4, active: 0, resources: 0, collapsed: false, exists: true };
   it('conta funcionários com singular/plural; sem ficha, a parte some (nada de "0 funcionários")', () => {
     expect(projectMeta(base)).toBe('4 funcionários');
     expect(projectMeta({ ...base, employees: 1 })).toBe('1 funcionário');
     expect(projectMeta({ ...base, employees: 0 })).toBe('');
+  });
+  it('as conversas ativas vêm logo depois dos funcionários (singular/plural) e somem quando não há nenhuma', () => {
+    expect(projectMeta({ ...base, active: 3 })).toBe('4 funcionários · 3 conversas ativas');
+    expect(projectMeta({ ...base, employees: 1, active: 1 })).toBe('1 funcionário · 1 conversa ativa');
+    expect(projectMeta({ ...base, employees: 0, active: 2 })).toBe('2 conversas ativas');
+    expect(projectMeta({ ...base, active: 2, resources: 3, collapsed: true })).toBe('4 funcionários · 2 conversas ativas · 3 agents/skills');
   });
   it('junta recursos (só dobrada) e pasta sumida com " · ", sem separador solto quando falta a contagem', () => {
     expect(projectMeta({ ...base, resources: 3 })).toBe('4 funcionários');

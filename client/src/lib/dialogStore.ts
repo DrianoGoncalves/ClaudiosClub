@@ -7,6 +7,8 @@ export interface DialogRequest {
   id: number;
   kind: 'confirm' | 'alert';
   text: string;
+  /** Rótulo do botão que confirma (só no confirm). Sem ele, "OK". */
+  okLabel?: string;
   /** Quem chamou espera isto: o confirm responde true/false, o alert só termina. */
   resolve: (ok: boolean) => void;
 }
@@ -23,16 +25,19 @@ export function onDialogRequest(fn: (req: DialogRequest) => void): () => void {
 
 let nextId = 1;
 
-function open(kind: DialogRequest['kind'], text: string): Promise<boolean> {
+function open(kind: DialogRequest['kind'], text: string, okLabel?: string): Promise<boolean> {
   return new Promise((resolve) => {
     // Sem o modal montado (antes do App subir): recusa o confirm em vez de seguir sem o dono ter visto a pergunta.
     if (!sink) return resolve(false);
-    sink({ id: nextId++, kind, text, resolve });
+    sink({ id: nextId++, kind, text, ...(okLabel && { okLabel }), resolve });
   });
 }
 
-/** "OK / Cancelar" no modal. Fechar (Esc, clique fora, Cancelar) é false. Quebras de linha do texto são mantidas. */
-export const askConfirm = (text: string): Promise<boolean> => open('confirm', text);
+/**
+ * "OK / Cancelar" no modal. Fechar (Esc, clique fora, Cancelar) é false. Quebras de linha do texto são mantidas.
+ * `okLabel` troca o "OK" pelo nome da ação (ex.: "Excluir"): em pergunta destrutiva o botão diz o que vai acontecer.
+ */
+export const askConfirm = (text: string, okLabel?: string): Promise<boolean> => open('confirm', text, okLabel);
 
 /** Aviso com um "OK" só. Termina quando o dono fecha. */
 export const showAlert = (text: string): Promise<void> => open('alert', text).then(() => undefined);

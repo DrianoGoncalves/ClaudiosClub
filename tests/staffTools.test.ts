@@ -33,4 +33,10 @@ describe('ícones de ferramentas no cartão do funcionário', () => {
     expect(staffTools(all).map((x) => x.tool)).toEqual(['worktree', 'browser', 'servers', 'canHire', 'agents', 'skills', 'mcps']);
     expect(staffTools(all).find((x) => x.tool === 'skills')?.label).toBe('Skills indicadas: vps');
   });
+
+  it('skills por ref: o tooltip mostra o nome; o mesmo nome nos dois escopos leva o escopo; nome antigo segue como está', () => {
+    const label = (skills: string[]) => staffTools(profile({ skills })).find((x) => x.tool === 'skills')?.label;
+    expect(label(['global:motion-design', 'project:relatorio', 'antiga'])).toBe('Skills indicadas: motion-design, relatorio, antiga');
+    expect(label(['global:deploy', 'project:deploy'])).toBe('Skills indicadas: deploy (Global), deploy (Projeto)');
+  });
 });

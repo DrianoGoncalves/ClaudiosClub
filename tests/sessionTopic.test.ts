@@ -14,8 +14,8 @@ describe('assunto da conversa', () => {
     expect(sessionTopic([user([{ type: 'text', text: 'Corrija o total do pedido\ncom teste' }])])).toBe('Corrija o total do pedido');
   });
 
-  it('a conversa de revisão vira "Review - <tarefa>"; a mesma linha numa conversa que já tem assunto não troca', () => {
-    expect(sessionTopic([user('[Revisão da tarefa "Exportar CSV"]\n\nprecisa de revisão')])).toBe('Review - Exportar CSV');
+  it('a conversa de revisão tem o título da tarefa como assunto (sem prefixo); a mesma linha numa conversa que já tem assunto não troca', () => {
+    expect(sessionTopic([user('[Revisão da tarefa "Exportar CSV"]\n\nprecisa de revisão')])).toBe('Exportar CSV');
     expect(sessionTopic([user('[Tarefa "Exportar CSV"] faça')], [user('[Revisão da tarefa "Exportar CSV"]\n\nreprovada')])).toBe('Exportar CSV');
   });
 

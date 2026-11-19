@@ -1,65 +1,41 @@
-import type { InboxItem, InboxKind } from '../../../shared/model';
+import type { HumanAction, InboxItem, InboxKind } from '../../../shared/model';
 import { t } from '../i18n';
 import type { Tr } from './secretText';
 
 // Itens da caixa "precisa de mim" que vêm de tarefa parada na linha de produção: dúvida escalada (`question`), revisão ou ajuste que
-// não anda (`stuck`) e dependente de tarefa parada (`blocked`, que agora diz se há o que fazer). O servidor manda estrutura e o
-// `summary` em pt-BR; a frase e a ação saem daqui, no idioma da página.
-//
-// CONTRATO: plano da t-5daa14 (implementação na t-76d427). Os tipos ainda não estão em shared/model.ts, por isso moram aqui; quando
-// entrarem lá, trocar por eles. A tela lê os campos só por este arquivo: um nome diferente no servidor se corrige aqui.
+// não anda (`stuck`) e dependente de tarefa parada (`blocked`, que diz se há o que fazer). O servidor manda estrutura e o `summary`
+// em pt-BR (server/inboxItems.ts); a frase e a ação saem daqui, no idioma da página. Os tipos são os de shared/model.ts.
 
-/** O que só você resolve numa tarefa parada. `null` = a fila se recupera sozinha (não vira ação). */
-export type HumanAction = 'answer' | 'review' | 'resend' | 'decide';
-
-/** Os tipos de item que a caixa conhece, os novos (`question`, `stuck`) já incluídos. */
-export type AlertKind = InboxKind | 'question' | 'stuck';
-
-/** Dúvida escalada (kind 'question'): a pergunta por opções (`questions`) ou escrita (`text`). */
-export interface QuestionAlert {
-  taskId: string;
-  taskTitle?: string;
-  questionId: string;
-  source: 'ask' | 'text';
-  text?: string;
-  questions?: Array<{ question: string; options: string[]; multiSelect?: boolean }>;
-  escalatedAt: string;
-}
-
-/** Tarefa parada (kind 'stuck'): revisão sem veredito ou não iniciada, ajuste que não chega, Aguardar. */
-export interface StuckAlert {
-  taskId: string;
-  taskTitle?: string;
-  /** Em pt-BR, vem do servidor (a frase da tela sai de `humanAction`). */
-  reason: string;
-  selfHeals: boolean;
-  humanAction: HumanAction | null;
-  since: string;
-}
+type QuestionAlert = NonNullable<InboxItem['question']>;
+type StuckAlert = NonNullable<InboxItem['stuck']>;
 
 /** Abrir o aviso: o item e, quando a ação é em outro card (a tarefa que segura esta), o id dele. */
 export type InboxOpen = (item: InboxItem, opts?: { taskId?: string }) => void;
 
-/** O item só precisa dizer o kind (nos testes, nem isso): sem ele, não é nenhum dos novos. */
+/** O item só precisa dizer o kind (nos testes, nem isso): sem ele, não é nenhum dos de tarefa. */
 export type Kinded = { kind?: InboxKind };
 
-export const alertKind = (item: Kinded): AlertKind | undefined => item.kind;
-
 export function questionOf(item: Kinded): QuestionAlert | null {
-  const q = (item as { question?: QuestionAlert }).question;
-  return alertKind(item) === 'question' && q ? q : null;
+  const q = (item as Pick<InboxItem, 'question'>).question;
+  return item.kind === 'question' && q ? q : null;
 }
 
 export function stuckOf(item: Kinded): StuckAlert | null {
-  const s = (item as { stuck?: StuckAlert }).stuck;
-  return alertKind(item) === 'stuck' && s ? s : null;
+  const s = (item as Pick<InboxItem, 'stuck'>).stuck;
+  return item.kind === 'stuck' && s ? s : null;
 }
 
-/** Item de tarefa que não é conversa esperando: o cartão do funcionário não pode ficar amarelo por ele. */
-export const isTaskAlert = (item: Kinded): boolean => {
-  const k = alertKind(item);
-  return k === 'blocked' || k === 'question' || k === 'stuck';
-};
+/** O item `stuck` do card que terminou sem editar código (card = código): quem pediu decide, e as saídas são cancelar com motivo ou devolver ao responsável (não abrir o card). */
+export function stuckNoCodeOf(item: Kinded): StuckAlert | null {
+  const s = stuckOf(item);
+  return s?.noCode ? s : null;
+}
+
+/**
+ * Item de tarefa que não é conversa esperando: o cartão do funcionário não pode ficar amarelo por ele (o servidor leva o `staffId` do responsável). O follow-up entra aqui: o `sessionId`
+ * dele é a conversa de trabalho da tarefa (onde o achado vira balão), mas decidir um follow-up não é a conversa esperando você.
+ */
+export const isTaskAlert = (item: Kinded): boolean => item.kind === 'blocked' || item.kind === 'question' || item.kind === 'stuck' || item.kind === 'followUp';
 
 /** O que fazer com o item e o card onde se faz. `taskId` é o que o link abre. */
 export interface AlertAction {
@@ -67,6 +43,8 @@ export interface AlertAction {
   taskId: string;
   label: string;
   title: string;
+  /** A ação roda na própria caixa (reenviar o ajuste guardado), sem abrir o card. */
+  direct?: true;
 }
 
 const LABEL = {
@@ -86,42 +64,58 @@ const TITLE = {
 /**
  * A ação do item: dúvida escalada = responder; parada = a `humanAction` dela; dependente = a `humanAction` da que segura (o link abre o
  * card dela, é lá que se age). Dependente de tarefa cancelada tem os seus botões e fica de fora; o que se recupera sozinho, também.
+ * Ajuste guardado que não chegou (`resend`, item `stuck`): não abre card, o botão reenvia pela rota da tarefa (`direct`); no dependente
+ * (item `blocked`) o reenvio é no item da bloqueadora, e o link só leva ao card dela.
  */
 export function alertAction(item: InboxItem, tr: Tr = t): AlertAction | null {
   const q = questionOf(item);
   if (q) return { action: 'answer', taskId: q.taskId, label: tr(LABEL.answer), title: tr(TITLE.answer) };
   const s = stuckOf(item);
-  if (s?.humanAction) return { action: s.humanAction, taskId: s.taskId, label: tr(LABEL[s.humanAction]), title: tr(TITLE[s.humanAction]) };
-  const b = item.blocked as (NonNullable<InboxItem['blocked']> & { humanAction?: HumanAction | null }) | undefined;
-  if (alertKind(item) === 'blocked' && b?.humanAction && b.blockerStatus !== 'cancelled') {
-    return { action: b.humanAction, taskId: b.blockerId, label: tr(LABEL[b.humanAction]), title: tr('inbox.act.blockerTitle', { blocker: b.blockerTitle }) };
+  // Card sem código: não há "Decidir" que abra o card; a caixa mostra os dois botões (cancelar com motivo, devolver ao responsável).
+  if (s?.noCode) return null;
+  if (s?.humanAction) return { action: s.humanAction, taskId: s.taskId, label: tr(LABEL[s.humanAction]), title: tr(TITLE[s.humanAction]), ...(s.humanAction === 'resend' && { direct: true as const }) };
+  const b = item.blocked;
+  if (item.kind === 'blocked' && b?.humanAction && b.blockerStatus !== 'cancelled') {
+    return { action: b.humanAction, taskId: b.blockerId, label: tr(b.humanAction === 'resend' ? 'inbox.act.resendView' : LABEL[b.humanAction]), title: tr('inbox.act.blockerTitle', { blocker: b.blockerTitle }) };
   }
   return null;
 }
 
 /** O card que o item abre ao clicar: o da tarefa do aviso. */
-export function taskIdOf(item: Kinded & Pick<InboxItem, 'blocked' | 'notStarted'>): string | undefined {
-  return questionOf(item)?.taskId ?? stuckOf(item)?.taskId ?? item.blocked?.taskId ?? item.notStarted?.taskId;
+export function taskIdOf(item: Kinded & Pick<InboxItem, 'blocked' | 'notStarted' | 'followUp' | 'autoCommit'>): string | undefined {
+  return questionOf(item)?.taskId ?? stuckOf(item)?.taskId ?? item.blocked?.taskId ?? item.notStarted?.taskId ?? item.followUp?.taskId ?? item.autoCommit?.taskId;
 }
 
-/** Primeira linha do que foi perguntado, cortada: o que cabe numa linha da caixa. */
+/** O que foi perguntado em um trecho só (as quebras de linha viram espaço: a ressalva da 2ª linha também ajuda a ver se é urgente), cortado em `ASKED_MAX`; a caixa mostra até 4 linhas dele. */
+const ASKED_MAX = 240;
 function askedLine(q: QuestionAlert, tr: Tr): string {
-  const first = (q.questions?.[0]?.question ?? q.text ?? '').trim().split(/\r?\n/)[0]!.trim();
-  const line = first.length > 140 ? `${first.slice(0, 139)}…` : first;
+  const first = (q.questions?.[0]?.question ?? q.text ?? '').replace(/\s+/g, ' ').trim();
+  const line = first.length > ASKED_MAX ? `${first.slice(0, ASKED_MAX - 1)}…` : first;
   const more = (q.questions?.length ?? 0) - 1;
   return more > 0 ? tr('inbox.question.more', { question: line, n: more }) : line;
 }
 
-/** “Tarefa”: a pergunta, no idioma atual; sem o `question` (ou o título), o `summary`. */
+/** “Tarefa”: a pergunta, no idioma atual; sem o `question`, o `summary`. */
 export function questionText(item: Kinded & Pick<InboxItem, 'summary'>, tr: Tr = t): string {
   const q = questionOf(item);
-  if (!q?.taskTitle) return item.summary;
+  if (!q) return item.summary;
   return tr('inbox.question.sentence', { task: q.taskTitle, question: askedLine(q, tr) });
 }
 
-/** O que está parado e o que falta de você, pela `humanAction`; sem ela (ou sem título), o `summary`. */
-export function stuckText(item: Kinded & Pick<InboxItem, 'summary'>, tr: Tr = t): string {
+/**
+ * Item `stuck` sem `humanAction` = a tarefa espera o limite do motor da ficha voltar, porque a troca para o secundário não serve agora
+ * (`Task.fallbackBlocked`; id `stuck:<tarefa>:fallback`). Some sozinho quando o limite baixa: não há o que fazer.
+ */
+export function isFallbackWait(item: Kinded & { id?: string }): boolean {
   const s = stuckOf(item);
-  if (!s?.taskTitle || !s.humanAction) return item.summary;
+  return !!s && s.humanAction === null && item.id?.endsWith(':fallback') === true;
+}
+
+/** O que está parado e o que falta de você, pela `humanAction`; sem ela, a espera da troca de motor ou o `summary`. */
+export function stuckText(item: Kinded & Pick<InboxItem, 'summary'> & { id?: string }, tr: Tr = t): string {
+  const s = stuckOf(item);
+  if (s && isFallbackWait(item)) return tr('inbox.stuck.fallback', { task: s.taskTitle });
+  if (s?.noCode) return tr('inbox.stuck.noCode', { task: s.taskTitle });
+  if (!s?.humanAction) return item.summary;
   return tr(`inbox.stuck.${s.humanAction}`, { task: s.taskTitle });
 }

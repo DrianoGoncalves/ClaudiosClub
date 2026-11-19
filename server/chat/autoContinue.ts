@@ -6,10 +6,23 @@ import { resumePlan } from './usageLimit';
 // Conversa que bateu no limite de uso da assinatura: espera o limite voltar e manda "continue".
 // As pendências ficam em disco (sobrevivem a reiniciar o servidor); um temporizador confere as vencidas.
 // O despertador (ver wake.ts) é uma segunda instância desta classe, com arquivo próprio: cada pendência leva o
-// `text` a mandar, e as duas instâncias nunca se apagam uma à outra.
+// `text` a mandar, e as instâncias nunca se apagam uma à outra. A terceira é a retomada do turno que falhou por causa
+// passageira (ver turnRetry.ts): só espera o horário e manda o texto; quem decide retomar é o ChatManager.
 
 /** A mensagem que o Claudio’s Club manda sozinho. Sempre esta. */
 export const CONTINUE_TEXT = 'continue';
+
+/** O que a retomada de um turno que falhou guarda na pendência (ver turnRetry.ts): a tela mostra a tentativa e o horário. */
+export interface RetryInfo {
+  /** O turno original: o "continue" automático segue nele, não abre orçamento novo. */
+  turnId: string;
+  attempt: number;
+  max: number;
+  /** `transient`: erro passageiro do modelo (até 3 tentativas); `unknown`: o processo caiu sem causa (1 tentativa). */
+  kind: 'transient' | 'unknown';
+  /** O erro que levou à tentativa (curto, sem segredo). */
+  error: string;
+}
 
 /** Uma conversa esperando o limite voltar. */
 export interface Pending {
@@ -25,10 +38,15 @@ export interface Pending {
   text?: string;
   /** Motor da conversa (ausente = claude): a trava de consumo confere o uso desse motor, não o do outro. */
   engine?: 'claude' | 'codex';
+  /** Só na retomada de turno que falhou (3ª instância): qual tentativa é esta. */
+  retry?: RetryInfo;
 }
 
+/** Quem tirou a pendência: `resume` = o turno voltou por outro caminho (reinício, ou terminou bem). */
+export type CancelBy = 'user' | 'message' | 'staff' | 'fallback' | 'cap' | 'resume';
+
 export type AutoContinueEvent =
-  | { type: 'cancelled'; by: 'user' | 'message' | 'staff' | 'fallback' | 'cap'; pending: Pending }
+  | { type: 'cancelled'; by: CancelBy; pending: Pending }
   /** A opção foi desligada: a pendência saiu sem mandar (todas, de uma vez). */
   | { type: 'dropped'; pending: Pending }
   /** A linha de parada do usuário ainda barra: nova hora. */
@@ -51,6 +69,11 @@ export interface AutoContinueOptions {
   knownResets: () => Promise<ReadonlyArray<{ kind: string; resetsAt: string | null }>>;
   /** Manda o "continue" (ou o `text` da pendência) na conversa, acordando-a se estiver fechada. */
   send: (p: Pending) => Promise<void>;
+  /**
+   * O projeto da pendência está pausado (ver server/projectPause.ts)? Então ela não sai: fica como está no disco e sai quando o projeto for retomado (o horário já
+   * terá passado). Sem a opção, nenhum projeto é pausado. Erro ao perguntar conta como pausado: espera a próxima conferência.
+   */
+  paused?: (projectId: string) => Promise<boolean>;
   now?: () => number;
   /** Entre um "continue" e o seguinte, quando várias vencem juntas. */
   spacingMs?: number;
@@ -67,6 +90,10 @@ const PendingEntry = z.object({
   resetsAt: z.string(),
   text: z.string().optional(),
   engine: z.enum(['claude', 'codex']).optional().catch(undefined),
+  retry: z
+    .object({ turnId: z.string().min(1), attempt: z.number().int().min(1), max: z.number().int().min(1), kind: z.enum(['transient', 'unknown']), error: z.string().max(300) })
+    .optional()
+    .catch(undefined),
 });
 
 export class AutoContinue {
@@ -117,6 +144,19 @@ export class AutoContinue {
     return p ? { ...p } : null;
   }
 
+  /** A opção deste agendador está ligada agora (a mesma conferida ao agendar e ao mandar). */
+  enabled(): Promise<boolean> {
+    return this.opts.enabled();
+  }
+
+  /**
+   * Esta pendência (o objeto que o `send` recebeu) ainda vale? Falso se foi cancelada, trocada ou solta no meio do envio:
+   * quem manda confere de novo logo antes de escrever na conversa.
+   */
+  current(p: Pending): boolean {
+    return !this.halted && this.items.get(p.sessionId) === p;
+  }
+
   /**
    * Agenda o "continue" desta conversa (uma pendência por conversa: a nova substitui a antiga).
    * Com a opção desligada não guarda nada e devolve false.
@@ -133,7 +173,7 @@ export class AutoContinue {
   }
 
   /** Tira a pendência da conversa (botão Cancelar, ou você mandou mensagem). Devolve se havia. */
-  async cancel(sessionId: string, by: 'user' | 'message' | 'staff' | 'fallback' | 'cap'): Promise<boolean> {
+  async cancel(sessionId: string, by: CancelBy): Promise<boolean> {
     await this.load();
     const p = this.items.get(sessionId);
     if (!p) return false;
@@ -159,7 +199,7 @@ export class AutoContinue {
   /**
    * Confere as vencidas e manda no máximo um "continue" por vez (com `spacingMs` entre eles). Opção
    * desligada: solta todas as pendências na hora (`dropped`), vencidas ou não. Linha de parada ainda
-   * barrando: reagenda, sem mandar.
+   * barrando: reagenda, sem mandar. Projeto pausado (`paused`): a pendência espera, sem mudar.
    */
   async tick(): Promise<void> {
     if (this.ticking) return;
@@ -179,6 +219,9 @@ export class AutoContinue {
       const due = [...this.items.values()].filter((p) => p.at <= now()).sort((a, b) => a.at - b.at);
       for (const p of due) {
         // Cancelada enquanto conferia: não manda.
+        if (this.items.get(p.sessionId) !== p) continue;
+        // Projeto pausado: nada sai, e nada é solto nem reagendado (as outras pendências, de outros projetos, seguem).
+        if (await this.opts.paused?.(p.projectId).catch(() => true)) continue;
         if (this.items.get(p.sessionId) !== p) continue;
         // Sem conseguir conferir a linha de parada, não arrisca: espera mais um pouco.
         const stop = await this.opts.stopHit(p.projectId, p.staffId, p.engine ?? 'claude').catch((err) => {
@@ -208,6 +251,8 @@ export class AutoContinue {
         }
         // Durante o envio, mensagem sua (ou outro estouro) já tirou ou trocou a pendência, e quem fez isso já
         // avisou: não apaga de novo nem repete o aviso.
+        // Reiniciando (`stop`): o envio que falhou porque o servidor está saindo não perde a pendência; ela volta no boot.
+        if (error !== null && this.halted) return;
         if (this.items.get(p.sessionId) === p) {
           this.items.delete(p.sessionId);
           await this.save();
@@ -261,6 +306,7 @@ export class AutoContinue {
           resetsAt,
           ...(e.data.text !== undefined && { text: e.data.text }),
           ...(e.data.engine !== undefined && { engine: e.data.engine }),
+          ...(e.data.retry !== undefined && { retry: e.data.retry }),
         });
       }
     }
@@ -311,6 +357,7 @@ export class AutoContinue {
         resetsAt: new Date(p.resetsAt).toISOString(),
         ...(p.text !== undefined && { text: p.text }),
         ...(p.engine !== undefined && { engine: p.engine }),
+        ...(p.retry !== undefined && { retry: p.retry }),
       })),
     };
     this.saving = this.saving.then(() => writeAtomic(this.opts.file, JSON.stringify(body, null, 2) + '\n')).catch((err) => this.log(`não consegui gravar as pendências: ${err instanceof Error ? err.message : String(err)}`));

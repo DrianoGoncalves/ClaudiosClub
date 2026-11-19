@@ -5,6 +5,7 @@ import path from 'node:path';
 import type {
   AskedQuestion,
   Autonomy,
+  BackgroundTask,
   ChatAttachment,
   ChatCommand,
   ChatEvent,
@@ -33,23 +34,26 @@ import type { CodexEnvStatus } from '../codexEnv';
 import type { CodexModelInfo } from '../codexModels';
 import { CodexProcess } from './codexProcess';
 import type { CodeEdit } from './codeEdits';
+import { locateSecretFile } from './secretOrigin';
+import { denialWeight, type DeniedInfo } from './denied';
 import { ChatProcess, type ChatProcessOptions, type Remember } from './process';
 import { cleanAnswers } from './questions';
 import { finalQuestion } from './question';
 import { CEILING_AT, contextNotice, kTokens, NOTICE_AT, rereadUsd, switchDecision, usd, type TurnInfo } from './contextPolicy';
-import { BOOST_NOTICE, CONTEXT_NOTICE, STAFF_NOTICE } from './items';
+import { BOOST_NOTICE, CONTEXT_NOTICE, RETRY_TEXT, STAFF_NOTICE } from './items';
 import { InboxState } from '../inboxState';
 import { isAlive, killTree, type ChatRegistry } from './registry';
-import { CONTINUE_TEXT, type AutoContinue, type AutoContinueEvent, type Pending } from './autoContinue';
+import { CONTINUE_TEXT, type AutoContinue, type AutoContinueEvent, type CancelBy, type Pending, type RetryInfo } from './autoContinue';
+import { attemptsAllowed, backoffMs, classifyTurnError, errorLine, isAuthFailure, retryField, retryNotice, TurnRetryLedger, type Transient, type TurnEnd, type TurnError } from './turnRetry';
 import { limitNotice, MAX_LIMIT_HITS, resumePlan, type LimitHit, type ResumePlan } from './usageLimit';
 import { codexLimitHit } from '../codexUsage';
 import { WAKE_MAX_STREAK, WakeStreakError, wakeNotice, type WakeInput } from './wake';
 import { readUsage } from '../usage';
 import type { SessionTokens } from '../callers';
 import { resumeText, type ResumeEntry } from './resume';
-import { externalCut } from './cutAction';
+import { externalBackground, externalCutWithAgents, subagentsDirOf } from './cutAction';
 import { legacyLabel, worseVerdict, type ClassifiedSecret, type SecretHint, type SecretKind, type SecretReason, type SecretSource, type SecretVerdict } from './secrets';
-import type { TurnCaps } from './turnCap';
+import { capReason, capText, type TurnCaps } from './turnCap';
 import type { TurnCapHit } from '../../shared/model';
 
 export interface ChatSpawn {
@@ -94,7 +98,7 @@ export interface ChatManagerOptions {
   listLive: () => Promise<LiveSession[]>;
   /** Monta a linha de comando (ficha, autonomia, MCPs) de quem vai conversar. */
   /** `forkFrom`: sessão nova que começa como cópia desta (duplicar a conversa). */
-  resolve: (projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride) => Promise<ChatSpawn | null>;
+  resolve: (projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly?: boolean) => Promise<ChatSpawn | null>;
   /**
    * Você escolheu modelo/esforço no seletor do chat: guarda na ficha, na conversa e como "último" do
    * funcionário (a conversa reabre assim; conversa nova sem modelo na ficha herda o último). Só grava
@@ -106,12 +110,29 @@ export interface ChatManagerOptions {
   /** Conversa parada há mais que isso fecha o processo (a sessão continua no disco). */
   idleMs?: number;
   spawnImpl?: ChatProcessOptions['spawnImpl'];
+  /** Quanto cada conversa do Claude espera o processo sair sozinho ao fechar, antes de encerrar a árvore dele (testes encurtam). */
+  stopGraceMs?: number;
+  /** Até quando `close` espera o processo sair (testes encurtam). */
+  closeWaitMs?: number;
+  /**
+   * Você vai fechar uma conversa que está trabalhando (confirmou): a tarefa de trabalho dela sai de "fazendo" para Aguardar ANTES de o processo
+   * sair (a saída conta como fim de turno e entregaria a tarefa para revisão). Erro aqui não impede o fechamento.
+   */
+  beforeClose?: (sessionId: string) => Promise<unknown>;
   /** Modelos do Codex da conta, para o plano B de quem roda no Codex (ver CodexProcess); sem ele, o plano B roda no padrão do Codex. */
   codexModels?: () => Promise<ReadonlyArray<Pick<CodexModelInfo, 'slug'>>>;
   /** Confere o `codex` instalado antes de cada execução (versão mínima e `network_proxy`, ver server/codexEnv.ts); sem ele, a rede do Codex fica desligada. */
   codexEnv?: () => Promise<CodexEnvStatus>;
+  /** A sandbox do Codex quebrou numa conversa (ver CodexProcess.onSandboxFailure); o index.ts liga na CodexCapability. */
+  onCodexSandboxFailure?: (text: string) => void;
+  /** A saída de uma ferramenta do Codex trouxe a falha do usuário local do sandbox no Windows, a política de senha (ver CodexProcess.onPasswordPolicyFailure); o index.ts leva o aviso à caixa. */
+  onCodexPasswordPolicyFailure?: () => void;
+  /** Uma conversa do Codex vai abrir: o index.ts faz a checagem prévia da política de senha do Windows (ver CodexPasswordPolicy.check). Não espera: a conversa não atrasa por causa dela. */
+  onCodexOpen?: () => void;
   /** Tokens das conversas (`MYCO_TOKEN` no ambiente de cada uma, ver server/callers.ts). Sem ele, as conversas abrem sem token. */
   tokens?: SessionTokens;
+  /** A pasta do projeto (a raiz que o `files/read` abre), para o aviso de segredo achar o arquivo que um comando leu (ver `locateSecretFile`). Sem ele, o aviso fica sem arquivo nesse caso. */
+  projectDirOf?: (projectId: string) => Promise<string | null>;
   /** Processos abertos, gravados em disco para achar os órfãos depois de um reinício. */
   registry?: ChatRegistry;
   /** Testes trocam (pid vivo? / encerrar processo). */
@@ -130,20 +151,39 @@ export interface ChatManagerOptions {
   onSent?: (sessionId: string) => void;
   /** Um funcionário alterou arquivo(s) com as ferramentas de edição (Claude e Codex; ver chat/codeEdits.ts): o quadro abre o card automático. */
   onEdit?: (edit: CodeEdit) => void;
-  /** Uma conversa parou de trabalhar (a fila de tarefas do funcionário anda). */
-  onIdle?: (sessionId: string, projectId: string, staffId: string | null, reason: 'turn' | 'background' | 'exit') => void;
+  /** Uma conversa parou de trabalhar (a fila de tarefas do funcionário anda). `engine` é o do processo que parou (o do Codex não passa pelo vigia de turnos, ver `TaskService.onIdle`). */
+  onIdle?: (sessionId: string, projectId: string, staffId: string | null, reason: 'turn' | 'background' | 'exit', engine: 'claude' | 'codex') => void;
   /** O que a caixa lembra entre reinícios; sem ele, fica só na memória. */
   inbox?: InboxState;
   /** Conversa nova quando o assunto fecha (o config); sem ele, `auto`. */
   contextSwitch?: () => Promise<ContextSwitch>;
   /** Conversas que nunca trocam sozinhas (a de uma tarefa: o quadro segue por ela). */
   keepSession?: (sessionId: string) => Promise<boolean>;
+  /**
+   * A tarefa de uma conversa de trabalho ou deploy, para o alerta "ação barrada" da caixa (ver `deniedHits`); null = conversa livre, de card automático, de revisão
+   * ou de dúvida (não gera alerta). Sem ele, nenhuma conversa gera.
+   */
+  denialTask?: (sessionId: string) => Promise<{ taskId: string; title: string } | null>;
+  /**
+   * A conversa de tarefa (a mesma de `denialTask`) roda sem a fila de validação pesada porque a conta do Codex tem `hooks.json` (ver `noteGuardOff`): grava a nota na tarefa, uma vez por
+   * conversa, e devolve a tarefa para o item da caixa; null = não é conversa de tarefa (fica só o aviso do chat). Sem ele, nenhuma conversa gera.
+   */
+  heavyGuardOff?: (sessionId: string) => Promise<{ taskId: string; title: string } | null>;
   /** Folga de cota agora (com "otimizar assinatura" ligado); sem ele, nunca. */
   quotaBoost?: () => Promise<QuotaBoost | null>;
   /** Limite de uso estourado: agenda o "continue" para quando ele voltar (ver autoContinue.ts); sem ele, só avisa. */
   autoContinue?: AutoContinue;
   /** Despertador (ver wake.ts): outra instância do agendador, com arquivo e pendências próprios; sem ele, a rota responde 404. */
   wakeups?: AutoContinue;
+  /**
+   * Retomada automática do turno que falhou por causa passageira (ver turnRetry.ts): a terceira instância do agendador, só para esperar o
+   * horário e mandar a mensagem. Quem decide retomar é este manager (opção, ação externa cortada, despertador, parada). Sem ela, nada retoma.
+   */
+  retries?: AutoContinue;
+  /** O orçamento de tentativas por turno original, guardado em disco; sem ele, só na memória. */
+  retryLedger?: TurnRetryLedger;
+  /** Sorteio do jitter do backoff (testes trocam). */
+  random?: () => number;
   /** Relógio do despertador (testes trocam). */
   now?: () => number;
   /** Teto por turno (ferramentas e minutos), lido a cada turno que começa (ver turnCap.ts); sem ele, sem teto. */
@@ -158,6 +198,31 @@ export class ChatClosingError extends ChatError {
     super('o Claudio’s Club está reiniciando; tente de novo em instantes');
   }
 }
+
+/**
+ * Fechar a conversa foi recusado e nada foi fechado (a rota responde 409 com `code`): `working` = está trabalhando e faltou a confirmação;
+ * `uncertain` = mesmo confirmado, matar agora poderia cortar uma ação que mexe fora do projeto (`action` diz qual, ver cutAction.ts).
+ */
+export class CloseRefusedError extends ChatError {
+  constructor(
+    readonly code: 'working' | 'uncertain',
+    message: string,
+    readonly action?: string,
+  ) {
+    super(message);
+  }
+}
+
+/** O que `close` fez: `closed` = havia processo e ele saiu; `interrupted` = estava trabalhando (turno cortado, com a sua confirmação). */
+export interface CloseResult {
+  closed: boolean;
+  interrupted: boolean;
+}
+
+/** Até quando `close` espera o processo sair (o `stop()` do claude já encerra a árvore à força aos 3 s). */
+const CLOSE_WAIT_MS = 10_000;
+/** Quantas ferramentas distintas o alerta de ação barrada lista (o resto só entra na contagem). */
+const DENIED_TOOLS_MAX = 5;
 
 type Listener = (e: ChatEvent) => void;
 
@@ -258,9 +323,23 @@ export class ChatManager {
     occurrence: string;
     source?: SecretSource;
     file?: string;
+    /** A linha do segredo em `file`, quando `locateSecret` a achou (ver `SecretHit.line`). */
+    line?: number;
     cwd?: string;
     at: string;
   }> = [];
+  /**
+   * Ação barrada (kind 'denied'): no máximo uma por conversa, a do turno mais recente. Só na memória, como os segredos. `shown` é a negação que o item mostra (ver `denialWeight`).
+   * `ignored`: o turno que você dispensou em cada conversa, para uma negação seguinte do mesmo turno não trazer o alerta de volta.
+   */
+  private readonly denied = new Map<string, { id: string; turn: string; taskId: string; taskTitle: string; shown: DeniedInfo; count: number; tools: string[]; at: string }>();
+  private readonly deniedIgnored = new Map<string, string>();
+  /**
+   * Fila de validação pesada desligada por `hooks.json` na conta do Codex (kind 'error', id `guardoff:<sessão>`): um item por conversa de tarefa, só na memória. `guardOffNow` são as
+   * conversas que estão sem a fila agora (síncrono: o item só entra se ainda estiver ali quando a tarefa for lida).
+   */
+  private readonly guardOff = new Map<string, { id: string; taskId: string; taskTitle: string; file: string; at: string }>();
+  private readonly guardOffNow = new Set<string>();
   /** Conversas cuja última mensagem veio de outro funcionário (delegação), e não de você. */
   private readonly delegated = new Set<string>();
   /** Quando cada conversa parou com erro (`onExit`): o carimbo que a dispensa do alerta guarda, para um erro novo voltar. Só na memória, como o erro. */
@@ -297,6 +376,22 @@ export class ChatManager {
   private readonly wakeStreak = new Map<string, number>();
   /** Estouros de limite ainda sendo agendados, por conversa (ver `awaitingLimit`). */
   private readonly limitRuns = new Map<string, Promise<unknown>>();
+  /** Decisões de retomada ainda em andamento, por conversa: registradas de forma síncrona no fim do turno, antes da ociosidade (ver `turnEnded`). */
+  private readonly retryRuns = new Map<string, Promise<unknown>>();
+  /**
+   * Parar, interromper, mandar mensagem, teto: cada um soma 1 aqui, de forma síncrona. A retomada que começou antes (decidindo, ou no meio do
+   * envio assíncrono) confere o número que viu e desiste se mudou, mesmo que o cancelamento da pendência ainda não tenha terminado.
+   */
+  private readonly retryGen = new Map<string, number>();
+  /** O aviso da retomada de cada conversa aberta (para trocar o texto no mesmo aviso). */
+  private readonly retryNotices = new Map<string, string>();
+  /**
+   * O último turno de cada conversa de funcionário que terminou em erro do motor sem retomada (login recusado, ou erro que não passa sozinho): a tarefa de trabalho lê daqui, no fim do
+   * turno, para ir a Aguardar em vez de revisão (ver `engineStopOf`). Em memória: sai no turno bem-sucedido seguinte e em qualquer mensagem não automática.
+   */
+  private readonly engineStops = new Map<string, Extract<TurnCapHit, { kind: 'engine' }>>();
+  /** O orçamento de tentativas por turno original (o "continue" automático não abre orçamento novo). */
+  private readonly retryLedger: TurnRetryLedger;
   /** O servidor está reiniciando: nenhuma entrega nova entra (ver `closing`). */
   private shuttingDown = false;
   private readonly timer: NodeJS.Timeout;
@@ -305,8 +400,10 @@ export class ChatManager {
   constructor(private readonly opts: ChatManagerOptions) {
     this.runDir = opts.runDir ?? path.join(os.homedir(), '.myco', 'run');
     this.inbox = opts.inbox ?? new InboxState();
+    this.retryLedger = opts.retryLedger ?? new TurnRetryLedger();
     opts.autoContinue?.subscribe((e) => this.autoContinueEvent(e));
     opts.wakeups?.subscribe((e) => this.wakeEvent(e));
+    opts.retries?.subscribe((e) => this.retryEvent(e));
     this.timer = setInterval(() => this.reap(), 60_000);
     this.timer.unref();
   }
@@ -354,9 +451,16 @@ export class ChatManager {
     // volta da pendência guardada, com a mesma hora e o mesmo botão.
     const waiting = live ? null : await this.opts.autoContinue?.get(sessionId);
     const wake = live ? null : await this.opts.wakeups?.get(sessionId);
+    const retry = live ? null : await this.opts.retries?.get(sessionId);
     return {
       sessionId,
-      history: [...older, ...items, ...(waiting ? [this.waitingNotice(waiting)] : []), ...(wake?.projectId === projectId ? [this.waitingWake(wake)] : [])],
+      history: [
+        ...older,
+        ...items,
+        ...(waiting ? [this.waitingNotice(waiting)] : []),
+        ...(wake?.projectId === projectId ? [this.waitingWake(wake)] : []),
+        ...(retry?.retry && retry.projectId === projectId ? [this.waitingRetry(retry, retry.retry)] : []),
+      ],
       live,
       context,
       elsewhere: await this.elsewhere(sessionId),
@@ -485,6 +589,8 @@ export class ChatManager {
    * mandou (ver server/chat/origin.ts); sem ele, a marca genérica.
    * `engineOverride`: conversa nova no motor/modelo secundário (vale para a conversa inteira). Numa sessão já aberta, vale o que
    * ela guardou; o que vier aqui é ignorado.
+   * `reviewOnly`: conversa nova de revisão de tarefa, que não edita arquivos do projeto (ver `StaffService.chatSpawn`); a ficha guarda e
+   * reabrir mantém, então só a abertura precisa dizer.
    */
   async send(
     projectId: string,
@@ -497,8 +603,9 @@ export class ChatManager {
     delegated = false,
     origin?: string,
     engineOverride?: EngineOverride,
+    reviewOnly = false,
   ): Promise<string> {
-    return this.deliver(projectId, sessionId, staffId, text, priority, images, files, delegated, false, origin, engineOverride);
+    return this.deliver(projectId, sessionId, staffId, text, priority, images, files, delegated, false, origin, engineOverride, undefined, reviewOnly);
   }
 
   /**
@@ -510,6 +617,29 @@ export class ChatManager {
   }
 
   /**
+   * Aviso da plataforma numa conversa que já existe (o pedido de cancelamento ao responsável de uma tarefa). Vai pelo caminho de `send` (acorda a
+   * conversa se estiver fechada e entra no meio do turno, se houver), mas como o "continue": não é "você respondeu" (a tarefa em revisão não volta
+   * para fazendo) e não tira o que estava agendado na conversa (o "continue" do limite, a retomada automática).
+   */
+  async sendNotice(projectId: string, sessionId: string, staffId: string | null, text: string): Promise<string> {
+    return this.deliver(projectId, sessionId, staffId, text, 'next', [], [], this.delegated.has(sessionId), true);
+  }
+
+  /**
+   * Na hora marcada, a retomada de um turno que falhou (ver `turnEnded`): manda o texto fixo pelo mesmo caminho do envio normal, acordando a
+   * conversa se estiver fechada. Não cancela o "continue" do limite nem o despertador, e não abre orçamento novo (é uma mensagem da plataforma).
+   * Antes de escrever na conversa confere de novo, de forma síncrona, que nada a invalidou no meio do envio (Parar, interrupção, mensagem,
+   * teto, reinício): se invalidou, desiste sem escrever. Conversa que já voltou a trabalhar por outro caminho não recebe segunda mensagem.
+   */
+  async retryChat(p: Pending): Promise<void> {
+    const gen = this.retryGen.get(p.sessionId) ?? 0;
+    const still = () => !!this.opts.retries?.current(p) && (this.retryGen.get(p.sessionId) ?? 0) === gen;
+    if (!still()) throw new ChatError('a retomada foi cancelada');
+    if (this.isBusy(p.sessionId)) return;
+    await this.deliver(p.projectId, p.sessionId, p.staffId, p.text ?? RETRY_TEXT, undefined, [], [], this.delegated.has(p.sessionId), true, undefined, undefined, still);
+  }
+
+  /**
    * Retoma depois do reinício: a conversa estava no meio de um turno quando o servidor saiu. Reabre com a ficha e
    * manda o aviso (ver resume.ts). Não mexe no "continue" nem no despertador agendados: são de outra fila.
    */
@@ -517,6 +647,8 @@ export class ChatManager {
     try {
       const sid = await this.deliver(entry.projectId, entry.sessionId, entry.staffId, resumeText(entry.hadPending), undefined, [], [], false, true);
       this.chats.get(sid)?.addNotice('Retomada após o reinício do Claudio’s Club.');
+      // O turno já voltou por aqui: a retomada por falha passageira que ainda estivesse marcada mandaria um segundo "continue".
+      await this.opts.retries?.cancel(sid, 'resume');
     } catch (err) {
       // Se a conversa chegou a abrir, o aviso fica nela; senão, só o log de quem chamou.
       this.chats.get(entry.sessionId)?.addNotice(`Não retomada após o reinício: ${err instanceof Error ? err.message : String(err)}`, 'warn');
@@ -611,18 +743,28 @@ export class ChatManager {
     auto: boolean,
     origin?: string,
     engineOverride?: EngineOverride,
+    /** A retomada automática passa aqui: devolve falso se algo a invalidou (ver `retryChat`); conferido antes de abrir a conversa e antes de escrever nela. */
+    guard?: () => boolean,
+    reviewOnly = false,
   ): Promise<string> {
     this.assertOpen();
-    const chat = await this.ensure(projectId, sessionId, staffId, undefined, engineOverride);
+    // Mensagem que não é da plataforma abre turno original novo: a retomada em voo (decidindo, ou no meio do envio) deixa de valer já, de forma
+    // síncrona. A pendência e o orçamento só saem quando a mensagem entra (abaixo): se a conversa não abrir, a retomada marcada segue valendo.
+    if (!auto && sessionId) this.voidRetry(sessionId);
+    if (guard && !guard()) throw new ChatError('a retomada foi cancelada');
+    const chat = await this.ensure(projectId, sessionId, staffId, undefined, engineOverride, reviewOnly);
     // Qualquer mensagem sua (ou de outro funcionário) na conversa vale mais que o "continue" agendado.
     if (!auto) {
+      this.dropRetry(chat.sessionId, 'message'); // conversa nova: o id só existe agora
       await this.opts.autoContinue?.cancel(chat.sessionId, 'message');
+      await this.opts.retries?.cancel(chat.sessionId, 'message');
       this.wakeStreak.delete(chat.sessionId); // alguém falou: a conta dos despertadores seguidos recomeça
     }
     if (delegated) this.delegated.add(chat.sessionId);
     else this.delegated.delete(chat.sessionId);
     this.inbox.setQuestion(chat.sessionId, null); // respondeu (ou mandou outra coisa): a pergunta sai da caixa
     this.inbox.setTurnCap(chat.sessionId, null); // turno novo: o aviso do teto (caixa e tarefa) já não vale
+    if (!auto) this.engineStops.delete(chat.sessionId); // e o erro do motor do turno de antes (o "continue" da plataforma não o apaga: a conversa segue parada)
     this.inbox.forgetErrors(chat.sessionId); // e a dispensa do erro e do teto de antes junto
     // A ficha mudou depois que esta conversa começou: o aviso vai junto, uma vez só. Conversa grande:
     // o funcionário fica sabendo do tamanho e do custo (ele não vê isso sozinho).
@@ -631,6 +773,8 @@ export class ChatManager {
     const used = chat.contextUsed;
     const big = used !== null && used >= NOTICE_AT ? contextNotice(used, chat.model, CONTEXT_NOTICE, chat.fast) : null;
     const boost = await this.applyBoost(chat);
+    // Último passo assíncrono: daqui até o `send` nada espera, então a conferência vale para a escrita.
+    if (guard && !guard()) throw new ChatError('a retomada foi cancelada');
     // "continue" e despertador são da plataforma, mesmo na conversa delegada: só a mensagem do colega leva a marca.
     const fromStaff = delegated && !auto;
     const notice = [fromStaff ? (origin ?? STAFF_NOTICE) : null, ficha, big, boost].filter(Boolean).join('\n\n') || undefined;
@@ -888,6 +1032,17 @@ export class ChatManager {
   }
 
   /**
+   * O pedido de permissão mais antigo que a conversa espera de você (ferramenta e desde quando), ou null. Só leitura do processo, nada gravado.
+   * Pergunta com opções não entra: o gestor a responde (ver `onAsk`). O Codex não tem esse cartão (a sandbox decide), então nunca devolve nada.
+   */
+  permissionWaitOf(sessionId: string): { tool: string; since: string } | null {
+    const chat = this.chats.get(sessionId);
+    if (!chat?.running) return null;
+    const first = chat.pendingPermissions().find((p) => !p.questions && p.at);
+    return first ? { tool: first.tool, since: first.at! } : null;
+  }
+
+  /**
    * "Ignorar" num alerta de erro da caixa: `error:<sessão>` (a conversa parou com erro) ou `cap:<sessão>` (o turno parou no teto).
    * O carimbo guardado é o da ocorrência de agora, lido aqui (não o que a tela diz): outro erro ou outro teto da conversa volta a avisar.
    * Sem alerta ali (a tela está velha), não há o que dispensar.
@@ -912,6 +1067,20 @@ export class ChatManager {
   isWorking(sessionId: string): boolean {
     const chat = this.chats.get(sessionId);
     return !!chat?.running && chat.working;
+  }
+
+  /**
+   * O que a conversa tem em andamento agora: o turno (`busy`) e o que roda em segundo plano, com o que o Claude Code listou (`background_tasks_changed`; o `background` do Codex é a lista dos
+   * subagents e já sai vazia no fim do turno). null = conversa fechada. A tarefa lê no fim do turno para não entregar trabalho que continua (ver `TaskService.holdBackground`).
+   */
+  liveWork(sessionId: string): { busy: boolean; background: BackgroundTask[] } | null {
+    const chat = this.chats.get(sessionId);
+    return chat?.running ? { busy: chat.busy, background: [...chat.background] } : null;
+  }
+
+  /** Conversas do Codex com uma execução em andamento (o processo da mensagem; entre as mensagens não há). Ver a CodexCapability. */
+  codexRunning(): string[] {
+    return [...this.chats.values()].filter((c) => c.running && c.engine === 'codex' && c.pid !== null).map((c) => c.sessionId);
   }
 
   /**
@@ -980,7 +1149,97 @@ export class ChatManager {
     return true;
   }
 
-  private noteSecret(sessionId: string, hit: ClassifiedSecret, source?: SecretSource, file?: { path: string; cwd: string }) {
+  /** As ações barradas nas conversas de tarefa, para a caixa "precisa de mim" (ver `noteDenied`). */
+  deniedHits() {
+    return [...this.denied].map(([sessionId, d]) => ({ sessionId, ...d }));
+  }
+
+  /** "Ignorar" no alerta de ação barrada (`denied:<sessão>:<turno>`): o alerta sai e o resto daquele turno não o traz de volta. Sem o alerta ali (a tela está velha), não há o que dispensar. */
+  dismissDenied(id: string): boolean {
+    for (const [sessionId, d] of this.denied) {
+      if (d.id !== id) continue;
+      this.denied.delete(sessionId);
+      this.deniedIgnored.set(sessionId, d.turn);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Uma ferramenta de uma conversa foi barrada por uma regra de permissão. Conversa de tarefa gera um alerta por turno: as negações seguintes do mesmo turno só entram na
+   * conta (e trocam o que o alerta mostra se forem de mais peso); um turno novo com negação troca o alerta inteiro (o mais recente é o que vale, sem enxurrada).
+   * A tarefa é lida antes e a gravação não espera nada depois (duas negações juntas não abrem dois alertas).
+   */
+  private async noteDenied(sessionId: string, turn: string, d: DeniedInfo) {
+    if (this.deniedIgnored.get(sessionId) === turn) return;
+    const task = await this.opts.denialTask?.(sessionId);
+    if (!task || this.deniedIgnored.get(sessionId) === turn) return;
+    const prev = this.denied.get(sessionId);
+    if (prev?.turn === turn) {
+      prev.count += 1;
+      if (!prev.tools.includes(d.tool) && prev.tools.length < DENIED_TOOLS_MAX) prev.tools.push(d.tool);
+      if (denialWeight(d.layer) > denialWeight(prev.shown.layer)) prev.shown = d;
+      return;
+    }
+    this.denied.set(sessionId, { id: `denied:${sessionId}:${turn}`, turn, taskId: task.taskId, taskTitle: task.title, shown: d, count: 1, tools: [d.tool], at: new Date().toISOString() });
+    this.log(`${sessionId}: ${d.tool} barrado (${d.layer}) na tarefa ${task.taskId} (aviso na caixa)`);
+  }
+
+  /** As conversas de tarefa que rodam sem a fila de validação pesada por causa do `hooks.json` da conta, para a caixa "precisa de mim" (ver `noteGuardOff`). */
+  guardOffHits() {
+    return [...this.guardOff].map(([sessionId, g]) => ({ sessionId, ...g }));
+  }
+
+  /** "Ignorar" no alerta da fila desligada (`guardoff:<sessão>`): o alerta sai e a conversa não o traz de volta (só um arquivo que some e volta, ou um reinício). Sem o alerta ali (a tela está velha), não há o que dispensar. */
+  dismissGuardOff(id: string): boolean {
+    for (const [sessionId, g] of this.guardOff) {
+      if (g.id !== id) continue;
+      this.guardOff.delete(sessionId);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * O Codex de uma conversa passou a rodar sem a fila de validação pesada (`file` = o `hooks.json` da conta) ou voltou a ter a fila (null). Conversa de tarefa leva o aviso ao lugar
+   * onde alguém o vê: a nota da tarefa (uma vez por conversa, mesmo depois de reinício) e a caixa; o aviso do chat o processo já deu. O processo chama uma vez por mudança, não por
+   * execução. A tarefa é lida depois (o item só entra se a conversa ainda está sem a fila) e falha de leitura não derruba nada.
+   */
+  private async noteGuardOff(sessionId: string, file: string | null) {
+    if (!file) {
+      this.guardOffNow.delete(sessionId);
+      this.guardOff.delete(sessionId);
+      return;
+    }
+    this.guardOffNow.add(sessionId);
+    const task = await this.opts.heavyGuardOff?.(sessionId);
+    if (!task || !this.guardOffNow.has(sessionId)) return;
+    this.guardOff.set(sessionId, { id: `guardoff:${sessionId}`, taskId: task.taskId, taskTitle: task.title, file, at: new Date().toISOString() });
+    this.log(`${sessionId}: fila de validação pesada desligada (hooks.json na conta) na tarefa ${task.taskId} (aviso na caixa e na tarefa)`);
+  }
+
+  /**
+   * O segredo veio da saída de um comando que leu arquivos sem apontar um só (`origin.command`): descobre qual arquivo do projeto o tem e o põe no aviso
+   * (`file` relativo ao projeto, `cwd` a raiz do projeto, e a `line`). Roda depois de o aviso entrar, sem atrasar o stream; só preenche aviso que ainda existe,
+   * é da mesma ocorrência e continua sem arquivo. Nunca lança nem registra o valor: o log leva só o caminho.
+   */
+  private async locateSecret(sessionId: string, id: string, hit: ClassifiedSecret, origin: { command: string; cwd: string; projectId: string }) {
+    try {
+      const projectDir = await this.opts.projectDirOf?.(origin.projectId);
+      if (!projectDir) return;
+      const found = await locateSecretFile({ command: origin.command, cwd: origin.cwd, projectDir, occurrence: hit.occurrence, kind: hit.kind, pepper: this.inbox.pepper() });
+      const entry = this.secrets.find((s) => s.id === id && s.occurrence === hit.occurrence);
+      if (!found || !entry || entry.file) return;
+      entry.file = found.file;
+      entry.cwd = projectDir;
+      if (found.line) entry.line = found.line;
+      this.log(`${sessionId}: ${hit.label}: arquivo ${JSON.stringify(found.file)}${found.line ? ` (linha ${found.line})` : ''}`);
+    } catch {
+      // achar o arquivo é um extra: o aviso já está na caixa sem ele
+    }
+  }
+
+  private noteSecret(sessionId: string, hit: ClassifiedSecret, source?: SecretSource, file?: { path: string; cwd: string }, origin?: { command: string; cwd: string; projectId: string }) {
     const { label } = hit;
     const id = `${sessionId}:${label}`;
     // "Não é segredo" de antes valia para o rótulo todo (`id`, ou o rótulo da versão anterior: ver legacyLabel) e continua valendo; o de agora é por ocorrência.
@@ -1009,7 +1268,10 @@ export class ChatManager {
       // Um aviso por conversa e tipo (id acima): fica o da primeira ocorrência (com o arquivo dela), mas sobe de gravidade se vier uma mais grave.
       this.secrets[i] = entry;
       this.log(`${sessionId}: ${label} voltou mais grave (${hit.verdict})`);
+    } else {
+      return;
     }
+    if (origin && !file) void this.locateSecret(sessionId, id, hit, origin);
   }
 
   /** Última resposta da conversa aberta no Claudio’s Club (para o aviso "terminou"); null se não for daqui. */
@@ -1037,9 +1299,19 @@ export class ChatManager {
    */
   private turnCapped(sessionId: string, hit: TurnCapHit): void {
     this.inbox.setTurnCap(sessionId, { ...hit, at: new Date().toISOString() });
-    this.log(`${sessionId}: ${hit.kind === 'restart' ? `não retomada: o reinício cortou "${hit.action}"` : `turno parado pelo teto (${hit.kind === 'tools' ? 'ferramentas' : 'minutos'}, limite ${hit.limit})`}`);
+    this.log(
+      `${sessionId}: ${
+        hit.kind === 'restart'
+          ? `não retomada: o reinício cortou "${hit.action}"`
+          : hit.kind === 'retry' || hit.kind === 'engine'
+            ? `não retomada sozinha: ${capReason(hit)}`
+            : `turno parado pelo teto (${hit.kind === 'tools' ? 'ferramentas' : 'minutos'}, limite ${hit.limit})`
+      }`,
+    );
+    this.voidRetry(sessionId);
     void this.opts.autoContinue?.cancel(sessionId, 'cap').catch(() => {});
     void this.opts.wakeups?.cancel(sessionId, 'cap').catch(() => {});
+    void this.opts.retries?.cancel(sessionId, 'cap').catch(() => {});
   }
 
   /**
@@ -1058,8 +1330,22 @@ export class ChatManager {
    */
   async restartCut(projectId: string, sessionId: string): Promise<TurnCapHit | null> {
     const { history } = await this.snapshot(projectId, sessionId);
-    const action = externalCut(history);
+    const action = await this.cutOf(projectId, sessionId, history, false);
     return action ? this.holdCut(sessionId, action) : null;
+  }
+
+  /**
+   * A ação com efeito fora do projeto que o corte deixou pela metade nestes itens (ver `externalCutWithAgents`): o subagent cortado que
+   * só mexeu no projeto não conta. Os subagents do Claude ficam ao lado do transcript; o Codex não tem essa pasta (conservador).
+   * `background`: o que ainda rodava em segundo plano quando o processo caiu (só o Claude confere, ver `externalBackground`; no Codex, qualquer
+   * tarefa dessas é incerta). O que sobrar incerto sai como "em segundo plano: <rótulo>", antes das ferramentas sem resultado.
+   */
+  private async cutOf(projectId: string | null, sessionId: string, items: readonly ChatItem[], awaitingAnswer: boolean, background: readonly BackgroundTask[] = [], engine: 'claude' | 'codex' = 'claude'): Promise<string | null> {
+    // Sem projeto (conversa sem ficha) não há onde achar o transcript: os subagents ficam sem conferência (conservador).
+    const dir = projectId ? subagentsDirOf(await findTranscript(this.opts.transcriptsDir, projectId, sessionId)) : null;
+    const open = engine === 'claude' ? await externalBackground(background, items, dir) : (background[0] ?? null);
+    if (open) return `em segundo plano: ${open.label}`;
+    return externalCutWithAgents(items, awaitingAnswer, dir);
   }
 
   /** O motivo do teto desta conversa, se o turno dela parou nele e ninguém mandou mensagem depois. */
@@ -1073,6 +1359,8 @@ export class ChatManager {
   }
 
   interrupt(sessionId: string) {
+    // Primeiro a retomada (a conversa pode estar fechada à espera dela, e o `interrupt` do processo lança sem processo aberto).
+    this.dropRetry(sessionId, 'user');
     this.chats.get(sessionId)?.interrupt();
   }
 
@@ -1145,16 +1433,18 @@ export class ChatManager {
   }
 
   /** Conversas abertas no meio de um turno (ou com pedido pendente), com o que o reinício precisa para reabri-las. */
-  busySessions(): ResumeEntry[] {
-    const out: ResumeEntry[] = [];
+  async busySessions(): Promise<ResumeEntry[]> {
+    const out: Array<Promise<ResumeEntry>> = [];
     for (const c of this.chats.values()) {
       if (!c.running || !c.busy || !c.projectId) continue;
+      // O estado de cada conversa é lido já, antes de qualquer espera (a conferência do subagent lê arquivo).
+      const { projectId, sessionId, staffId, engine, cwd, awaitingAnswer: hadPending } = c;
+      const items = c.snapshot().items;
       // `cut`: a ação com efeito fora do projeto que o fechamento vai cortar no meio (ver cutAction.ts); com ela, a conversa não volta sozinha.
       // Com pedido de permissão pendente, a ferramenta que espera a permissão não rodou: não conta (ver externalCut).
-      const cut = externalCut(c.snapshot().items, c.awaitingAnswer);
-      out.push({ projectId: c.projectId, sessionId: c.sessionId, staffId: c.staffId, engine: c.engine, cwd: c.cwd, hadPending: c.awaitingAnswer, ...(cut && { cut }) });
+      out.push(this.cutOf(projectId, sessionId, items, hadPending).then((cut) => ({ projectId, sessionId, staffId, engine, cwd, hadPending, ...(cut && { cut }) })));
     }
-    return out;
+    return Promise.all(out);
   }
 
   /** Conversas com processo aberto, em turno ou ociosas (a exclusão da retenção não mexe nelas). */
@@ -1168,7 +1458,83 @@ export class ChatManager {
   }
 
   stop(sessionId: string) {
+    this.dropRetry(sessionId, 'user');
     this.chats.get(sessionId)?.stop();
+  }
+
+  /**
+   * Você fecha uma conversa para liberar memória: encerra o processo e os filhos dele (MCPs), pelo mesmo `stop` do `reap`, e a sessão continua
+   * no disco. Não mexe em despertador, "continue" nem ajuste guardado: o que estava agendado reabre a conversa quando chegar a hora.
+   * Parada: fecha. Trabalhando (turno, pedido sem resposta ou algo em segundo plano): sem `confirm` recusa (`working`); com ele, confere a ação
+   * cortada como o reinício (ver `cutOf`, `closeBlock`): efeito incerto também recusa (`uncertain`, com a ação). Conferido, a tarefa de trabalho
+   * dela vai para Aguardar antes de o processo sair (`beforeClose`) e o processo sai como fechamento nosso (sem erro "saiu com código 1").
+   * Sem processo aberto, não há o que fechar (`closed: false`, sem erro).
+   */
+  async close(sessionId: string, opts: { confirm?: boolean } = {}): Promise<CloseResult> {
+    const chat = this.chats.get(sessionId);
+    if (!chat?.running) return { closed: false, interrupted: false };
+    if (chat.working) {
+      if (!opts.confirm) throw new CloseRefusedError('working', 'a conversa está trabalhando: fechar corta o turno em andamento; confirme para fechar');
+      const action = await this.closeBlock(chat);
+      if (action) throw new CloseRefusedError('uncertain', `não fechei: matar agora poderia cortar uma ação que mexe fora do projeto (${action}); espere terminar ou confira antes`, action);
+    }
+    // Lido depois da conferência (que espera disco): o turno pode ter acabado nesse meio-tempo, e aí nada é cortado.
+    if (!chat.running) return { closed: false, interrupted: false };
+    const interrupted = chat.working;
+    if (interrupted) await Promise.resolve(this.opts.beforeClose?.(sessionId)).catch(() => {});
+    await this.closeProcess(chat);
+    this.log(`${sessionId}: fechada por você${interrupted ? ' (estava trabalhando)' : ''}`);
+    return { closed: true, interrupted };
+  }
+
+  /**
+   * O que arquivar fecha (rota /api/archive; `kind` e `id` como no `ArchiveRequest`): uma conversa, ou uma sessão sem ficha, fecha o processo dela com a regra de
+   * `close` (trabalhando sem `confirm` ou com efeito incerto recusa, e quem chama não arquiva); `staff:<id>` (funcionário) e projeto fecham só as conversas
+   * paradas deles, e as que trabalham seguem abertas. Devolve quantas fechou e quantas deixou trabalhando.
+   */
+  async closeForArchive(req: { kind: 'project' | 'session' | 'conversation'; id: string }, confirm?: boolean): Promise<{ closed: number; working: number }> {
+    if (req.kind === 'project') return this.closeIdle((c) => c.projectId === req.id);
+    if (req.kind === 'session' && req.id.startsWith('staff:')) {
+      const staffId = req.id.slice('staff:'.length);
+      return this.closeIdle((c) => c.staffId === staffId);
+    }
+    const result = await this.close(req.id, { confirm });
+    return { closed: result.closed ? 1 : 0, working: 0 };
+  }
+
+  /**
+   * Fecha as conversas paradas que `match` escolhe: as que trabalham seguem abertas, sem recusa. Devolve quantas fechou e quantas deixou trabalhando.
+   */
+  async closeIdle(match: (c: { sessionId: string; projectId: string | null; staffId: string | null }) => boolean): Promise<{ closed: number; working: number }> {
+    const mine = [...this.chats.values()].filter((c) => c.running && match({ sessionId: c.sessionId, projectId: c.projectId, staffId: c.staffId }));
+    const idle = mine.filter((c) => !c.working);
+    const results = await Promise.all(idle.map((c) => this.closeProcess(c).then(() => true, () => false)));
+    return { closed: results.filter(Boolean).length, working: mine.length - idle.length };
+  }
+
+  /** `stopAndWait` com teto: o processo que não sai a tempo vira erro (a conversa não fechou), em vez de a rota esperar para sempre. */
+  private async closeProcess(chat: ChatProcess): Promise<void> {
+    const wait = this.opts.closeWaitMs ?? CLOSE_WAIT_MS;
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new ChatError('a conversa não fechou a tempo; tente de novo')), wait);
+    });
+    try {
+      await Promise.race([chat.stopAndWait(), late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * O que impede fechar já uma conversa que trabalha, mesmo confirmado: algo em segundo plano (agent ou comando que morreria junto, e do qual
+   * não se sabe o efeito) ou a ação com efeito fora do projeto que o turno deixaria pela metade (a mesma conferência do reinício, inclusive os
+   * subagents). Erro ao conferir conta como incerto. Devolve o resumo da ação, ou null se pode fechar.
+   */
+  private async closeBlock(chat: ChatProcess): Promise<string | null> {
+    const bg = chat.background[0];
+    if (bg) return `em segundo plano: ${bg.label}`;
+    return this.cutOf(chat.projectId, chat.sessionId, chat.snapshot().items, chat.awaitingAnswer).catch(() => 'uma ação que não deu para conferir');
   }
 
   /**
@@ -1188,7 +1554,7 @@ export class ChatManager {
     };
   }
 
-  private async ensure(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride): Promise<ChatProcess> {
+  private async ensure(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly = false): Promise<ChatProcess> {
     const existing = sessionId ? this.chats.get(sessionId) : undefined;
     // Ficha nova só reabre com tudo parado: agents em segundo plano morreriam com o processo.
     if (existing?.running && !(existing.stale && !existing.working)) return existing;
@@ -1206,12 +1572,19 @@ export class ChatManager {
     }
     // Conversa já aberta no secundário segue nele (continue, respawn, reabrir); o pedido de uma conversa nova vale só para ela.
     const override = sessionId ? this.overrides.get(sessionId) : engineOverride;
-    const spawn = await this.opts.resolve(projectId, sessionId, staffId, forkFrom, override);
+    const spawn = await this.opts.resolve(projectId, sessionId, staffId, forkFrom, override, reviewOnly);
     if (!spawn) throw new ChatError('funcionário ou projeto não encontrado');
     if (override) this.overrides.set(spawn.sessionId, override);
     // Claude ou Codex: o resto do manager fala com os dois do mesmo jeito (ver codexProcess.ts).
     const codex = spawn.engine === 'codex' ? spawn.codex : undefined;
     if (spawn.engine === 'codex' && !codex) throw new ChatError('a conversa do Codex veio sem os dados para abrir');
+    if (codex) {
+      try {
+        this.opts.onCodexOpen?.();
+      } catch {
+        // a checagem prévia é aviso: nunca impede a conversa de abrir
+      }
+    }
     const model = codex ? codex.model : argOf(spawn.args, '--model');
     const effort = codex ? codex.effort : argOf(spawn.args, '--effort');
     const base: Omit<ChatProcessOptions, 'args'> = {
@@ -1229,7 +1602,10 @@ export class ChatManager {
         if (!override && staffId) this.modelUnavailable(spawn.sessionId, projectId, staffId, model, codex ? 'codex' : 'claude');
       },
       onTurnWithoutLimit: () => void this.limitStreak.delete(spawn.sessionId),
-      onSecret: (hit, source, file) => this.noteSecret(spawn.sessionId, hit, source, file ? { path: file, cwd: spawn.cwd } : undefined),
+      onTurnEnd: (end) => this.turnEnded(spawn.sessionId, projectId, staffId, codex ? 'codex' : 'claude', end),
+      onSecret: (hit, source, file, command) =>
+        this.noteSecret(spawn.sessionId, hit, source, file ? { path: file, cwd: spawn.cwd } : undefined, command ? { command, cwd: spawn.cwd, projectId } : undefined),
+      onDenied: (denied, turn) => void this.noteDenied(spawn.sessionId, turn, denied).catch(() => {}),
       // Só conversa de funcionário (com ficha): a sem ficha pede antes de agir e não é do quadro.
       onEdit: (files) => {
         if (!staffId) return;
@@ -1238,7 +1614,7 @@ export class ChatManager {
       onIdle: (reason) => {
         if (reason !== 'exit') this.noteQuestion(spawn.sessionId);
         if (reason === 'turn') void this.noteTurn(spawn.sessionId).catch(() => {});
-        this.opts.onIdle?.(spawn.sessionId, projectId, staffId, reason);
+        this.opts.onIdle?.(spawn.sessionId, projectId, staffId, reason, codex ? 'codex' : 'claude');
       },
       onCommands: (commands) => this.commands.set(projectId, commands),
       turnCaps: this.opts.turnCaps,
@@ -1252,6 +1628,7 @@ export class ChatManager {
         if (pid !== null) void this.opts.registry?.remove(spawn.sessionId, pid).catch(() => {});
       },
       spawnImpl: this.opts.spawnImpl,
+      stopGraceMs: this.opts.stopGraceMs,
     };
     const chat = codex
       ? new CodexProcess({
@@ -1262,15 +1639,21 @@ export class ChatManager {
           readOnlyPaths: codex.readOnlyPaths,
           sshMcp: codex.sshMcp,
           memoriaMcp: codex.memoriaMcp,
+          readOnly: codex.readOnly,
           chromeMcp: codex.chromeMcp,
           cleanMcp: codex.cleanMcp,
           extraMcps: codex.extraMcps,
           mcpSnapshotFile: codex.mcpSnapshotFile,
           agents: codex.agents,
+          heavyGuard: codex.heavyGuard,
+          onHeavyGuard: (off) => void this.noteGuardOff(spawn.sessionId, off).catch(() => {}),
+          onLog: (line) => this.log(`${spawn.sessionId}: ${line}`),
           secrets: codex.secrets,
           threadId: codex.threadId,
           threadFile: codex.threadFile,
           onThread: codex.onThread,
+          onSandboxFailure: this.opts.onCodexSandboxFailure,
+          onPasswordPolicyFailure: this.opts.onCodexPasswordPolicyFailure,
           mycoUrl: codex.mycoUrl,
           models: this.opts.codexModels,
           env: this.opts.codexEnv,
@@ -1306,6 +1689,9 @@ export class ChatManager {
     // O mesmo vale para o despertador: o aviso volta com a hora guardada (a contagem continua de onde estava).
     const waitingWake = await this.opts.wakeups?.get(spawn.sessionId);
     if (waitingWake) this.showWake(waitingWake);
+    // E a retomada de um turno que falhou, ainda marcada (a conversa fechou ou o servidor reiniciou enquanto esperava).
+    const waitingRetry = await this.opts.retries?.get(spawn.sessionId);
+    if (waitingRetry) this.showRetry(waitingRetry);
     return chat;
   }
 
@@ -1424,7 +1810,185 @@ export class ChatManager {
    */
   async awaitingLimit(sessionId: string): Promise<boolean> {
     await this.limitRuns.get(sessionId);
-    return !!(await this.opts.autoContinue?.get(sessionId));
+    await this.retryRuns.get(sessionId);
+    // Também a retomada de um turno que falhou: enquanto ela está marcada, o turno não terminou (a tarefa segue em "fazendo").
+    return !!(await this.opts.autoContinue?.get(sessionId)) || !!(await this.opts.retries?.get(sessionId));
+  }
+
+  /** Espera a decisão de retomada desta conversa terminar (se houve uma): só então o motivo da parada (`turnCapOf`) e a pendência existem. */
+  async settledRetry(sessionId: string): Promise<void> {
+    await this.retryRuns.get(sessionId);
+  }
+
+  /**
+   * A retomada marcada para esta conversa (a tentativa e a hora), para a tela: o card segue em "fazendo" enquanto ela existe. Null se não
+   * há. Pendência de outro projeto não é desta conversa.
+   */
+  async retryOf(sessionId: string): Promise<{ attempt: number; max: number; at: string; kind: 'transient' | 'unknown'; error: string } | null> {
+    const p = await this.opts.retries?.get(sessionId);
+    return p?.retry ? { attempt: p.retry.attempt, max: p.retry.max, at: new Date(p.at).toISOString(), kind: p.retry.kind, error: p.retry.error } : null;
+  }
+
+  /** Soma 1 à geração da retomada: a que está decidindo ou no meio do envio vê que mudou e desiste (ver `retryGen`). Síncrono. */
+  private voidRetry(sessionId: string): void {
+    this.retryGen.set(sessionId, (this.retryGen.get(sessionId) ?? 0) + 1);
+  }
+
+  /** Alguém assumiu a conversa (Parar, interrupção, mensagem): a retomada não vale mais e o orçamento do turno recomeça no próximo. */
+  private dropRetry(sessionId: string, by: CancelBy): void {
+    this.voidRetry(sessionId);
+    this.retryLedger.clear(sessionId);
+    void this.opts.retries?.cancel(sessionId, by).catch(() => {});
+  }
+
+  /**
+   * Um turno de funcionário acabou (gancho `onTurnEnd` do processo, ainda antes de a conversa ser dada como parada). Terminou bem: fecha o
+   * orçamento do turno original. Falhou, ou o processo caiu no meio: decide se retoma sozinho. A decisão é assíncrona; a promessa é guardada aqui,
+   * de forma síncrona, para `awaitingLimit` e `settledRetry` a esperarem (o fim do turno não pode mandar a tarefa para revisão antes disso).
+   */
+  private turnEnded(sessionId: string, projectId: string, staffId: string | null, engine: 'claude' | 'codex', end: TurnEnd): void {
+    const retries = this.opts.retries;
+    if (end.kind === 'ok') {
+      this.engineStops.delete(sessionId);
+      if (!retries) return;
+      // Sucesso real: o turno original acabou. Uma retomada que ainda estivesse marcada mandaria um "continue" a mais.
+      this.retryLedger.clear(sessionId);
+      void retries.cancel(sessionId, 'resume').catch(() => {});
+      return;
+    }
+    // Só conversa de funcionário: a sem ficha é sua, e é você quem decide continuar.
+    if (!staffId) return;
+    // Login recusado ou expirado (o sinal estruturado do motor, ver `isAuthFailure`): tentar de novo não adianta e não gasta o orçamento da retomada (`retryLedger.take` nem é chamado).
+    // A retomada já marcada de um turno anterior também sai: ela mandaria um "continue" que falharia do mesmo jeito.
+    if (isAuthFailure(end.error)) {
+      this.noteEngineStop(sessionId, engine, 'auth', end.error);
+      this.voidRetry(sessionId);
+      void retries?.cancel(sessionId, 'cap').catch(() => {});
+      return;
+    }
+    // Sem o agendador (testes), só o erro do turno segue adiante: a queda sem causa não tinha como ser retomada.
+    if (!retries && end.kind !== 'failed') return;
+    const gen = this.retryGen.get(sessionId) ?? 0;
+    const run = this.planRetry(sessionId, projectId, staffId, engine, end, gen).catch((err) => this.log(`${sessionId}: retomada: ${err instanceof Error ? err.message : String(err)}`));
+    this.retryRuns.set(sessionId, run);
+    void run.then(() => {
+      if (this.retryRuns.get(sessionId) === run) this.retryRuns.delete(sessionId);
+    });
+  }
+
+  /**
+   * A decisão de retomar. Só retoma: opção ligada; erro passageiro (ou processo que caiu sem causa: no máximo 1 tentativa); nenhuma ação com efeito
+   * fora do projeto cortada pela metade; orçamento do turno original com tentativas; nada marcado que já volte à conversa (limite de uso,
+   * despertador que vence antes); e nada invalidou no caminho (`gen`). Sem isso: o erro do turno que não é passageiro (ou com a opção desligada) vira
+   * `engineStops` (a tarefa vai para Aguardar, não para revisão), e a queda sem causa com a opção desligada segue como antes (o turno terminou);
+   * ação cortada e tentativas esgotadas seguram a conversa para você (caixa de entrada, e a tarefa vai para Aguardar).
+   */
+  private async planRetry(sessionId: string, projectId: string, staffId: string, engine: 'claude' | 'codex', end: Exclude<TurnEnd, { kind: 'ok' }>, gen: number): Promise<void> {
+    const retries = this.opts.retries;
+    const voided = () => (this.retryGen.get(sessionId) ?? 0) !== gen || this.shuttingDown;
+    // O erro do turno que não vai ser retomado: o turno não entregou nada (a menos que algo em segundo plano ainda o acorde).
+    const noRetry = (e: TurnError, background: readonly unknown[]) => {
+      if (!background.length && !voided()) this.noteEngineStop(sessionId, engine, 'error', e);
+    };
+    if (!(await retries?.enabled().catch(() => false))) return end.kind === 'failed' ? noRetry(end.error, end.background) : undefined;
+    const retriesOn = retries!;
+    let transient: Transient | null = null;
+    if (end.kind === 'failed') {
+      transient = classifyTurnError(end.error);
+      if (!transient) return noRetry(end.error, end.background);
+      // Ainda há agent ou comando em segundo plano: a conversa não parou, e o que terminar volta a acordá-la sozinho.
+      if (end.background.length) return;
+    }
+    const kind: RetryInfo['kind'] = transient ? 'transient' : 'unknown';
+    const label = transient?.label ?? 'o processo caiu sem aviso';
+    // Efeito externo incerto: uma ação que mexe fora do projeto ficou pela metade, ou algo em segundo plano morreu junto e o transcript não o
+    // mostra só no projeto (agent ou comando que só edita/testa não conta). Retomar poderia repetir a ação.
+    const cut = await this.cutOf(projectId, sessionId, end.items, end.awaitingAnswer, end.background, engine).catch(() => 'uma ação que não deu para conferir');
+    if (voided()) return;
+    if (cut) return this.holdRetry(sessionId, { kind: 'retry', why: 'cut', action: cut, error: label });
+    const used = this.retryLedger.get(sessionId)?.attempts ?? 0;
+    if (used >= attemptsAllowed(kind)) return this.holdRetry(sessionId, { kind: 'retry', why: 'exhausted', attempts: used, error: label });
+    // Quem já volta à conversa não precisa de outra mensagem: o "continue" do limite de uso, e o despertador que vence antes da retomada.
+    const wait = Math.max(backoffMs(used + 1, this.opts.random), transient?.retryAfterMs ?? 0);
+    const at = this.now() + wait;
+    const [limit, wake] = await Promise.all([this.opts.autoContinue?.get(sessionId), this.opts.wakeups?.get(sessionId)]);
+    if (voided()) return;
+    if (limit || (wake && wake.at <= at)) {
+      this.log(`${sessionId}: ${label}; sem retomada própria (${limit ? 'o "continue" do limite de uso' : 'o despertador'} já volta à conversa)`);
+      return;
+    }
+    const budget = this.retryLedger.take(sessionId, this.now());
+    const info: RetryInfo = { turnId: budget.turnId, attempt: budget.attempts, max: attemptsAllowed(kind), kind, error: label };
+    const pending: Pending = { projectId, sessionId, staffId, at, resetsAt: at, text: RETRY_TEXT, retry: info, ...(engine === 'codex' && { engine }) };
+    if (!(await retriesOn.schedule(pending))) return;
+    if (voided()) {
+      // Parou no meio do agendamento: a pendência que acabou de entrar não vale.
+      await retriesOn.cancel(sessionId, 'message').catch(() => false);
+      return;
+    }
+    this.log(`${sessionId}: ${label}; retomo às ${new Date(at).toISOString()} (tentativa ${info.attempt} de ${info.max})`);
+    this.showRetry(pending);
+  }
+
+  /** Guarda o erro do motor que terminou o turno sem retomada (ver `engineStops`). A tarefa de trabalho o lê no fim do turno (`engineStopOf`). */
+  private noteEngineStop(sessionId: string, engine: 'claude' | 'codex', why: 'auth' | 'error', e: TurnError): void {
+    this.engineStops.set(sessionId, { kind: 'engine', why, engine, error: errorLine(e) });
+  }
+
+  /** O turno de trabalho desta conversa terminou em erro do motor, sem retomada, e ninguém mandou mensagem depois? Só leitura (ver `holdEngineStop`). */
+  engineStopOf(sessionId: string): Extract<TurnCapHit, { kind: 'engine' }> | null {
+    return this.engineStops.get(sessionId) ?? null;
+  }
+
+  /**
+   * A tarefa de trabalho foi a Aguardar por causa do erro do motor (`engineStopOf`): guarda o motivo na caixa do dono (`cap:`, como o teto: some na próxima mensagem) e o diz na
+   * conversa, e tira o "continue" e o despertador (um login recusado os faria falhar de novo). Só a tarefa chama: conversa solta com o mesmo erro só mostra o aviso do turno.
+   */
+  holdEngineStop(sessionId: string): void {
+    const hit = this.engineStops.get(sessionId);
+    if (!hit) return;
+    this.turnCapped(sessionId, hit);
+    const chat = this.chats.get(sessionId);
+    if (chat?.running) chat.addNotice(capText(hit), 'warn');
+  }
+
+  /** A retomada não vai acontecer e a conversa precisa de você: guarda o motivo (caixa de entrada e tarefa em Aguardar) e avisa na conversa. */
+  private holdRetry(sessionId: string, hit: Extract<TurnCapHit, { kind: 'retry' }>): void {
+    this.turnCapped(sessionId, hit);
+    const chat = this.chats.get(sessionId);
+    if (chat?.running) chat.addNotice(capText(hit), 'warn');
+  }
+
+  /** O aviso da retomada que a conversa fechada mostra, vindo da pendência guardada (igual ao do processo aberto). */
+  private waitingRetry(p: Pending, r: RetryInfo): ChatItem {
+    return { kind: 'notice', id: `n:retry:${p.sessionId}`, text: retryNotice.waiting(p.at, r, r.error), tone: 'warn', at: null, retry: retryField('waiting', r, { at: p.at, error: r.error }) };
+  }
+
+  /** O aviso da retomada na conversa aberta: troca o texto do que já está lá, ou põe um novo. */
+  private showRetry(p: Pending): void {
+    const chat = this.chats.get(p.sessionId);
+    if (!chat?.running || !p.retry) return;
+    const id = this.retryNotices.get(p.sessionId) ?? `n:retry:${randomUUID()}`;
+    this.retryNotices.set(p.sessionId, id);
+    chat.setRetryNotice(id, retryNotice.waiting(p.at, p.retry, p.retry.error), 'warn', retryField('waiting', p.retry, { at: p.at, error: p.retry.error }));
+  }
+
+  /** O que o agendador fez com a retomada de uma conversa: reflete no aviso dela. */
+  private retryEvent(e: AutoContinueEvent): void {
+    const p = e.pending;
+    if (e.type === 'deferred') return this.showRetry(p);
+    const old = this.retryNotices.get(p.sessionId);
+    this.retryNotices.delete(p.sessionId);
+    const chat = this.chats.get(p.sessionId);
+    if (!chat?.running) return;
+    const id = old ?? `n:retry:${randomUUID()}`;
+    const r = p.retry;
+    if (e.type === 'sent') {
+      if (r) chat.setRetryNotice(id, retryNotice.sent(r), 'info', retryField('sent', r));
+      else chat.setRetryNotice(id, retryNotice.cancelled, 'info', retryField('cancelled'));
+    } else if (e.type === 'failed') chat.setRetryNotice(id, retryNotice.failed(e.error), 'warn', retryField('failed', r, { error: e.error }));
+    else if (e.type === 'dropped') chat.setRetryNotice(id, retryNotice.dropped, 'warn', retryField('dropped', r));
+    else if (old) chat.setRetryNotice(old, retryNotice.cancelled, 'info', retryField('cancelled', r));
   }
 
   /**

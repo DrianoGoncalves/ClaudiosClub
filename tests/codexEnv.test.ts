@@ -11,6 +11,7 @@ import { CODEX_ENV_TTL, CODEX_MIN_VERSION, CodexEnv, codexUpgradeHint, compareVe
 const FEATURES = `apps                                     stable             true
 code_mode                                under development  false
 network_proxy                            experimental       false
+multi_agent                              stable             true
 search_tool                              removed            false
 `;
 
@@ -79,11 +80,22 @@ describe('codexEnv: versão e recurso network_proxy', () => {
 
   it('Codex serve e tem o network_proxy (experimental ou stable): rede local liberada, sem aviso', async () => {
     const { env } = fake('codex-cli 0.167.0\n', FEATURES);
-    expect(await env.status()).toEqual({ error: null, version: '0.167.0', networkProxy: true, notice: null });
+    expect(await env.status()).toEqual({ error: null, version: '0.167.0', networkProxy: true, multiAgent: true, notice: null });
     const stable = fake('codex-cli 0.200.0', FEATURES.replace('network_proxy                            experimental', 'network_proxy                            stable      '));
     expect((await stable.env.status()).networkProxy).toBe(true);
     // No mínimo exato também serve.
     expect((await fake('codex-cli 0.156.1', FEATURES).env.status()).error).toBeNull();
+  });
+
+  it('multi_agent (subagents dos agents da ficha): usável só em experimental ou stable; removido, sumido ou o features list falhou, não', async () => {
+    const usable = await fake('codex-cli 0.167.0', FEATURES.replace(/multi_agent.*\n/, 'multi_agent                              experimental       false\n')).env.status();
+    expect(usable.multiAgent).toBe(true);
+    const removido = await fake('codex-cli 0.167.0', FEATURES.replace(/multi_agent.*\n/, 'multi_agent                              removed            false\n')).env.status();
+    expect(removido.multiAgent).toBe(false);
+    const sumido = await fake('codex-cli 0.167.0', FEATURES.replace(/multi_agent.*\n/, '')).env.status();
+    expect(sumido).toMatchObject({ error: null, networkProxy: true, multiAgent: false });
+    const falhou = await fake('codex-cli 0.167.0', FEATURES, { features: { code: 1 } }).env.status();
+    expect(falhou).toMatchObject({ networkProxy: false, multiAgent: false });
   });
 
   it('sem o network_proxy (sumiu, saiu — "removed" —, em desenvolvimento ou o features list falhou): roda sem rede e avisa; nunca libera a rede toda', async () => {
@@ -151,7 +163,7 @@ describe('codexEnv: versão e recurso network_proxy', () => {
 });
 
 describe('codexEnv: o endereço do Claudio’s Club para o Codex (127.0.0.2)', () => {
-  const ok: CodexEnvStatus = { error: null, version: '0.167.0', networkProxy: true, notice: null };
+  const ok: CodexEnvStatus = { error: null, version: '0.167.0', networkProxy: true, multiAgent: true, notice: null };
 
   it('com o 127.0.0.2 de pé, a conferência passa como veio', () => {
     expect(withAppAddress(ok, { up: true, error: null }, '127.0.0.2:4848')).toBe(ok);
@@ -167,8 +179,8 @@ describe('codexEnv: o endereço do Claudio’s Club para o Codex (127.0.0.2)', (
   });
 
   it('Codex que não serve (erro) ou sem network_proxy já diz tudo: passa como veio', () => {
-    const erro: CodexEnvStatus = { error: 'antigo demais', version: '0.150.0', networkProxy: false, notice: null };
-    const semProxy: CodexEnvStatus = { error: null, version: '0.167.0', networkProxy: false, notice: 'sem network_proxy' };
+    const erro: CodexEnvStatus = { error: 'antigo demais', version: '0.150.0', networkProxy: false, multiAgent: false, notice: null };
+    const semProxy: CodexEnvStatus = { error: null, version: '0.167.0', networkProxy: false, multiAgent: true, notice: 'sem network_proxy' };
     expect(withAppAddress(erro, { up: false, error: null }, '127.0.0.2:1')).toBe(erro);
     expect(withAppAddress(semProxy, { up: false, error: null }, '127.0.0.2:1')).toBe(semProxy);
   });

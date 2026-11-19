@@ -1,15 +1,14 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import type { Routine, StaffProfile } from '../../shared/model';
-import { cronError } from '../../shared/cron';
+import { CATCH_UP_MAX_HOURS, type Routine, type StaffProfile } from '../../shared/model';
 import { PERSONALITIES } from '../../shared/personality';
 import { codexModelOrNull, codexProfileError } from '../chat/codexArgs';
 import { findSecret } from '../chat/secrets';
 import { defaultLocations } from '../adapters/claude/paths';
 import { NAME as SKILL_NAME } from '../adapters/claude/skillWrite';
 import { convertSkills, isSkillRef, parseSkillRef, type SkillSource } from '../skillAccess';
-import { AUTONOMY, McpAccessSchema, McpPolicySchema, StaffError, type StaffInputParsed } from './store';
+import { AUTONOMY, McpAccessSchema, McpPolicySchema, routineWhen, routineWhenError, StaffError, type StaffInputParsed } from './store';
 import { mcpAccessOfInput } from './mcpAccess';
 
 // Equipe em arquivo: as fichas escolhidas e as skills Globais que elas usam (com o conteúdo), num JSON só. Skill de projeto
@@ -43,16 +42,22 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 const text = (max: number) => z.string().trim().max(max);
 const list = (item: number, max: number) => z.array(text(item)).max(max).default([]);
 
-const RoutineFile = z.object({
-  id: z.string().regex(/^[a-z0-9-]{1,40}$/, 'id de rotina inválido'),
-  name: text(60).min(1, 'dê um nome à rotina'),
-  schedule: text(100).superRefine((v, ctx) => {
-    const err = cronError(v);
-    if (err) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `horário: ${err}` });
-  }),
-  message: text(4000).min(1, 'escreva a mensagem da rotina'),
-  mode: z.enum(['continue', 'new', 'task']).default('continue'),
-});
+// Mesmo "quando roda" da ficha (store.ts): `schedule` cron (arquivo antigo) ou `recurrence`; `catchUpHours` junto.
+const RoutineFile = z
+  .object({
+    id: z.string().regex(/^[a-z0-9-]{1,40}$/, 'id de rotina inválido'),
+    name: text(60).min(1, 'dê um nome à rotina'),
+    schedule: text(100).optional(),
+    recurrence: z.unknown().optional(),
+    catchUpHours: z.number().int('execução atrasada: use horas inteiras').min(0).max(CATCH_UP_MAX_HOURS, `execução atrasada: use de 0 a ${CATCH_UP_MAX_HOURS} horas`).optional(),
+    message: text(4000).min(1, 'escreva a mensagem da rotina'),
+    mode: z.enum(['continue', 'new', 'task']).default('continue'),
+  })
+  .superRefine((r, ctx) => {
+    const err = routineWhenError(r);
+    if (err) ctx.addIssue({ code: 'custom', message: err });
+  })
+  .transform(({ schedule, recurrence, catchUpHours, ...r }) => ({ ...r, ...routineWhen({ schedule, recurrence }), ...(catchUpHours ? { catchUpHours } : {}) }));
 
 const StaffFile = z.object({
   ref: z.string().regex(REF, 'referência de ficha inválida'),
@@ -150,7 +155,15 @@ export async function buildTeamExport(staff: StaffProfile[], opts: { globalSkill
   // A referência é local do arquivo (`p0`, `p1`…): o id da ficha não sai.
   const refOf = new Map(staff.map((p, i) => [p.id, `p${i}`]));
   const out: TeamFile['staff'] = staff.map((p) => {
-    const routines = (p.routines ?? []).map((r) => ({ id: r.id, name: r.name, schedule: r.schedule, message: r.message, mode: r.mode }));
+    const routines = (p.routines ?? []).map((r) => ({
+      id: r.id,
+      name: r.name,
+      schedule: r.schedule,
+      ...(r.recurrence && { recurrence: r.recurrence }),
+      ...(r.catchUpHours && { catchUpHours: r.catchUpHours }),
+      message: r.message,
+      mode: r.mode,
+    }));
     secretIn([p.name, p.role, p.mission, p.doneWhen, ...p.rules, ...routines.map((r) => r.message)].join('\n'), `ficha ${p.name}`);
     return {
       ref: refOf.get(p.id)!,
@@ -354,7 +367,7 @@ export async function planTeamImport(raw: unknown, ctx: { globalDir?: string; lo
         portraitDataUrl: null,
       },
       reportsTo: links.get(ref) ?? [],
-      routines: s.routines.map((r) => ({ id: r.id, name: r.name, schedule: r.schedule, message: r.message, mode: r.mode, enabled: false })),
+      routines: s.routines.map((r) => ({ ...r, enabled: false })),
     };
   });
 

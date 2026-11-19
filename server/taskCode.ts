@@ -4,7 +4,9 @@ import path from 'node:path';
 import type { TaskCode, TaskCodeFile, TestRun } from '../shared/model';
 import { cleanEnv } from './auth';
 import { killTree } from './chat/registry';
+import { HEAVY_HELD_ENV, withHeavyLock } from './heavyQueue';
 import { worktreeFor } from './staff/worktree';
+import { TestScan } from './testFailures';
 
 // O código de uma tarefa: onde está (worktree do funcionário ou o próprio projeto), o que mudou,
 // os testes e a mescla. A pasta `.myco/` (fichas, imagens) fica fora de tudo: não é código.
@@ -173,21 +175,43 @@ export async function detectTest(dir: string): Promise<string | null> {
   return null;
 }
 
-/** Roda os testes (até 10 min); guarda só o fim da saída. O comando vem de detectTest, nunca do pedido. */
-export function runTests(dir: string, command: string): Promise<TestRun> {
+/** O tempo que os testes têm (ver `runTests`). */
+export const TEST_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * Roda os testes (até 10 min); guarda só o fim da saída. O comando vem de detectTest, nunca do pedido. A suíte completa entra na fila
+ * da máquina (uma validação pesada por vez, a mesma do terminal dos funcionários; ver `withHeavyLock`): o tempo de espera não conta
+ * nos 10 min nem no `ms` do resultado. `queueAs`: o comando que decide a fila (padrão: o próprio); a nova rodada só dos arquivos que falharam (ver `isolateFailures`) é leve
+ * por si, mas espera a vez como a suíte, para não rodar por cima de outra validação pesada e piorar a carga que causou a falha.
+ */
+export function runTests(dir: string, command: string, timeoutMs = TEST_TIMEOUT_MS, queueAs = command): Promise<TestRun> {
+  return withHeavyLock(queueAs, (held) => spawnTests(dir, command, timeoutMs, held), { label: `testes de ${path.basename(dir)}`, leaseMs: timeoutMs + 60_000 });
+}
+
+/** `held`: a chave da trava da fila que esta execução segura; vai no ambiente dela (ver `HEAVY_HELD_ENV`). */
+function spawnTests(dir: string, command: string, timeoutMs: number, held: string | null): Promise<TestRun> {
   const started = Date.now();
   return new Promise((resolve) => {
     let out = '';
-    // No Unix o `sh -c` vira líder do próprio grupo: no tempo esgotado, o grupo inteiro sai (não só o sh, deixando o npm test rodando).
+    // No Unix o `sh -c` vira líder do próprio grupo; no Windows o `cmd /c` é só o pai do npm/vitest. No tempo esgotado a árvore inteira sai
+    // (`killTree`: grupo, ou `taskkill /T /F`): `child.kill()` mataria só o shell, o vitest seguiria e o `close` esperaria o fim dele nos pipes.
     const unix = process.platform !== 'win32';
-    const child = spawn(command, { cwd: dir, shell: true, env: { ...cleanEnv(), CI: '1' }, windowsHide: true, detached: unix });
-    const keep = (d: Buffer) => (out = (out + d.toString('utf8')).slice(-6000));
-    child.stdout.on('data', keep);
-    child.stderr.on('data', keep);
-    const timer = setTimeout(() => (unix && child.pid ? void killTree(child.pid) : child.kill()), 10 * 60_000);
+    const child = spawn(command, { cwd: dir, shell: true, env: { ...cleanEnv(), CI: '1', ...(held && { [HEAVY_HELD_ENV]: held }) }, windowsHide: true, detached: unix });
+    // O fim da saída (6 mil caracteres) perde o começo: a lista dos arquivos com falha vem da leitura da saída inteira, à medida que chega.
+    const scan = new TestScan();
+    const keep = (stream: 0 | 1) => (d: Buffer) => {
+      const text = d.toString('utf8');
+      out = (out + text).slice(-6000);
+      scan.feed(text, stream);
+    };
+    child.stdout.on('data', keep(0));
+    child.stderr.on('data', keep(1));
+    const timer = setTimeout(() => (child.pid ? void killTree(child.pid) : child.kill()), timeoutMs);
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({ command, ok: code === 0, output: out.trim(), ms: Date.now() - started, at: new Date().toISOString() });
+      scan.end();
+      const read = scan.result();
+      resolve({ command, ok: code === 0, output: out.trim(), ms: Date.now() - started, at: new Date().toISOString(), ...(read.files !== undefined && { files: read.files }), ...(code !== 0 && read.failedFiles && { failedFiles: read.failedFiles }) });
     });
     child.on('error', (err) => {
       clearTimeout(timer);
@@ -227,6 +251,36 @@ export async function changedFiles(dir: string, from: string, to?: string | null
 async function dirtyCount(dir: string): Promise<number> {
   const out = await git(dir, ['status', '--porcelain', '--', '.', ...NOT_MYCO]).catch(() => '');
   return out.split(/\r?\n/).filter(Boolean).length;
+}
+
+/** Arquivos que o `git status` pode listar para `codeTouchedSince` conferir um a um: acima disso não há como provar nada e vale "mexeu". */
+const TOUCHED_FILES_MAX = 2000;
+
+/**
+ * Algo do código foi mexido desde `sinceMs` (epoch ms)? É a prova de "nenhuma edição" do card sem código (ver `TaskService.holdNoCode`), e só `false` prova: vale `true` se algum arquivo
+ * que o `git status` lista (alterado, apagado ou novo, fora `.myco/`) foi modificado depois de `sinceMs` (apagado não tem data: conta), se o commit do HEAD é de depois (alguém commitou) ou
+ * se não deu para saber (git falhou, lista grande demais). No projeto compartilhado a mexida de outra tarefa também conta: é conservador, nunca acusa quem editou. Sem acesso ao
+ * repositório (`place` já veio dele), o chamador não chega aqui.
+ */
+export async function codeTouchedSince(place: CodePlace, sinceMs: number): Promise<boolean> {
+  try {
+    // `%ct` é em segundos: o commit do mesmo segundo do início conta como depois.
+    const committed = Number((await git(place.path, ['log', '-1', '--format=%ct']).catch(() => '')).trim()) * 1000;
+    if (committed + 999 >= sinceMs) return true;
+    const root = (await git(place.path, ['rev-parse', '--show-toplevel'])).trim();
+    const fields = (await git(place.path, ['status', '--porcelain', '-z', '--untracked-files=all', '--', '.', ...NOT_MYCO])).split('\0').filter(Boolean);
+    if (fields.length > TOUCHED_FILES_MAX) return true;
+    for (let i = 0; i < fields.length; i++) {
+      const entry = fields[i]!;
+      // Renomeado ou copiado: o nome de origem vem no campo seguinte, sem o código de duas letras.
+      if (/[RC]/.test(entry.slice(0, 2))) i++;
+      const stat = await fs.lstat(path.join(root, entry.slice(3))).catch(() => null);
+      if (!stat || stat.mtimeMs >= sinceMs) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 async function isRepo(dir: string): Promise<boolean> {

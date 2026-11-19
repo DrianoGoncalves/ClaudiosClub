@@ -487,12 +487,12 @@ describe('o Codex só vale ligado, na versão mínima e instalado', () => {
 
   it('Codex antigo ou ausente: a conversa não abre e a mensagem diz como atualizar; Codex que serve segue', async () => {
     const msg = 'O Codex 0.150.0 é antigo demais para rodar funcionários no Claudio’s Club (o mínimo é 0.156.1). Atualize com: codex update';
-    const velho = service({ codexEnv: async () => ({ error: msg, version: '0.150.0', networkProxy: false, notice: null }) });
+    const velho = service({ codexEnv: async () => ({ error: msg, version: '0.150.0', networkProxy: false, multiAgent: false, notice: null }) });
     const p = (await service().hire('proj-id', { ...base, name: 'Codex Velho', engine: 'codex' }, true))!.profile;
     await expect(velho.chatSpawn('proj-id', null, p.id)).rejects.toThrow(msg);
     await expect(velho.chatSpawn('proj-id', null, p.id)).rejects.toBeInstanceOf(StaffError);
     expect((await readProfile(projectPath, p.id))?.sessions).toEqual([]);
-    const bom = service({ codexEnv: async () => ({ error: null, version: '0.167.0', networkProxy: true, notice: null }) });
+    const bom = service({ codexEnv: async () => ({ error: null, version: '0.167.0', networkProxy: true, multiAgent: true, notice: null }) });
     expect((await bom.chatSpawn('proj-id', null, p.id))!.engine).toBe('codex');
     // O Claude não passa por essa conferência.
     const claude = (await velho.hire('proj-id', { ...base, name: 'Claude Sem Conferir' }, true))!.profile;

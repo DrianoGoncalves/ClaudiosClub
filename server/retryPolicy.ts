@@ -13,8 +13,12 @@ export const REVIEW_WAIT_MS = 30 * 60_000;
 export const REASK_AFTER_MS = 10 * 60_000;
 /** Ajuste guardado que falhou tantas vezes deixa de ir sozinho e fica parado, para você. */
 export const HELD_MAX_FAILS = 5;
+/** Conversa de tarefa que espera a sua resposta a um pedido de permissão há mais que isso conta como parada, e o gestor que pediu é avisado (uma vez). Sem opção na Config. */
+export const PERMISSION_STUCK_MS = 15 * 60_000;
 /** Aviso retido ao gestor (tarefa dele ainda aberta) é solto depois disso. */
 export const OUTCOME_HOLD_MAX_MS = 2 * 3_600_000;
+/** Fim de turno com agent ou comando em segundo plano pendente não é entrega (`Task.backgroundWait`); se ele não terminar nesse prazo, a entrega segue como está, com uma nota no card. */
+export const BACKGROUND_WAIT_MS = 60 * 60_000;
 
 /** A falha não passa sozinha (ficha sumiu, sem endereço da API): repetir não adianta. Quem lança escolhe; o resto é transitório. */
 export class PermanentError extends Error {}

@@ -86,7 +86,7 @@ export function DialogHost() {
             </button>
           )}
           <button type="button" className="btn-primary" autoFocus={!confirm} onClick={() => answer(true)}>
-            {t('app.dialogOk')}
+            {req.okLabel ?? t('app.dialogOk')}
           </button>
         </div>
       </div>

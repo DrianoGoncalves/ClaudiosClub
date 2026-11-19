@@ -1,4 +1,7 @@
-import type { ChatItem } from '../../shared/model';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import type { BackgroundTask, ChatItem } from '../../shared/model';
+import { isClipped } from './items';
 import { findSecrets } from './secrets';
 
 // Ação cortada pelo reinício: a ferramenta que estava rodando quando o processo da conversa caiu (sem resultado no fim da
@@ -8,6 +11,8 @@ import { findSecrets } from './secrets';
 // Na dúvida, conta como efeito fora: o custo do engano é um clique seu para seguir.
 // Comando: olha o programa e os argumentos de cada trecho (`&&`, `;`, `|`), não o texto inteiro: `grep deploy`, `cat
 // docs/release.md` e `git commit -m "fix deploy"` não contam. O `description` da entrada não entra.
+// Chamada Agent/Task: o tipo do subagent não diz o que ele fez. `externalCutWithAgents` lê o transcript dele (ver `agentStaysLocal`).
+// Agent ou comando ainda em segundo plano quando o processo caiu (`BackgroundTask`): `externalBackground`, pelo mesmo transcript e pela mesma regra de comando.
 
 type Tok = { t: string; q: boolean };
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
@@ -194,6 +199,8 @@ function fieldOf(input: string, key: string, raw = false): string | null {
 /** Subagentes que só leem (não mudam nada fora do projeto). O resto, incluindo o padrão (sem tipo), conta como externo. */
 const READ_ONLY_AGENTS = new Set(['explore', 'plan', 'pesquisador', 'revisor', 'statusline-setup']);
 
+const isAgentCall = (name: string) => name === 'Agent' || name === 'Task';
+
 /**
  * Ferramenta de MCP que só lê (pelo nome, sem o prefixo do serviço: `ssh_ler` → `ler`, `browser_snapshot` → `snapshot`).
  * O resto conta como efeito fora: clicar, digitar, enviar, executar, subir arquivo, consultar SQL (`query` sai daqui: pode apagar).
@@ -208,7 +215,7 @@ export function hasExternalEffect(name: string, input: string): boolean {
     const cmd = fieldOf(input, 'command', true);
     return cmd !== null && externalCommand(cmd);
   }
-  if (name === 'Agent' || name === 'Task') return !READ_ONLY_AGENTS.has((fieldOf(input, 'subagent_type') ?? '').toLowerCase());
+  if (isAgentCall(name)) return !READ_ONLY_AGENTS.has((fieldOf(input, 'subagent_type') ?? '').toLowerCase());
   if (name.startsWith('mcp__')) {
     const tool = name.slice(name.lastIndexOf('__') + 2).replace(/^(?:ssh|ftp|gpt|browser)_/i, '');
     return !READ_ONLY_MCP.test(tool);
@@ -239,19 +246,168 @@ function actionOf(it: ToolItem): string {
 }
 
 /**
- * A ação com efeito fora do projeto que ficou sem resultado no fim da conversa (o turno foi cortado nela), em resumo curto;
- * senão, null. Só olha depois da última mensagem do usuário: o que veio antes já terminou.
+ * As ferramentas sem resultado no fim da conversa (o turno foi cortado nelas), da mais nova para a mais antiga. Só olha depois da
+ * última mensagem do usuário: o que veio antes já terminou.
  * `awaitingAnswer`: há pedido de permissão sem resposta. Se a única ferramenta sem resultado é a que espera a permissão, ela
  * não rodou (não conta como corte). Com mais de uma sem resultado, não dá para saber qual é: conta como antes.
  */
-export function externalCut(items: readonly ChatItem[], awaitingAnswer = false): string | null {
+function openTools(items: readonly ChatItem[], awaitingAnswer: boolean): ToolItem[] {
   const open: ToolItem[] = [];
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i]!;
     if (it.kind === 'user') break;
     if (it.kind === 'tool' && it.result === null) open.push(it);
   }
-  if (awaitingAnswer && open.length === 1) return null;
-  const hit = open.find((it) => hasExternalEffect(it.name, it.input));
+  return awaitingAnswer && open.length === 1 ? [] : open;
+}
+
+/** A ação com efeito fora do projeto que ficou sem resultado no fim da conversa (ver `openTools`), em resumo curto; senão, null. */
+export function externalCut(items: readonly ChatItem[], awaitingAnswer = false): string | null {
+  const hit = openTools(items, awaitingAnswer).find((it) => hasExternalEffect(it.name, it.input));
   return hit ? actionOf(hit) : null;
+}
+
+/** Pasta dos transcripts dos subagents de uma conversa do Claude: `<sessão>/subagents`, ao lado do `<sessão>.jsonl`. */
+export const subagentsDirOf = (transcript: string): string => path.join(path.dirname(transcript), path.basename(transcript, '.jsonl'), 'subagents');
+
+const AGENT_META = /^(agent-[\w-]+)\.meta\.json$/;
+/** Quantos níveis de subagent dentro de subagent a leitura acompanha; além disso, conta como externo. */
+const MAX_AGENT_DEPTH = 3;
+
+interface Subagents {
+  dir: string;
+  /** `toolUseId` da chamada Agent/Task do pai (no `.meta.json`) → transcript do subagent. */
+  calls: Map<string, string>;
+  /** O que cada `.meta.json` conta do subagent: o rótulo como o de `BackgroundTask` (`tipo: descrição`) e se ele já terminou. */
+  metas: Array<{ file: string; label: string; finished: boolean }>;
+}
+
+/** Os subagents da pasta `<sessão>/subagents` (vazia ou ausente: nenhum). */
+async function readSubagents(dir: string): Promise<Subagents> {
+  const out: Subagents = { dir, calls: new Map(), metas: [] };
+  const names = await fs.readdir(dir).catch(() => [] as string[]);
+  await Promise.all(
+    names.map(async (name) => {
+      const m = AGENT_META.exec(name);
+      if (!m) return;
+      try {
+        const meta = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) as { toolUseId?: unknown; agentType?: unknown; description?: unknown; finished?: unknown } | null;
+        const file = path.join(dir, `${m[1]}.jsonl`);
+        if (typeof meta?.toolUseId === 'string') out.calls.set(meta.toolUseId, file);
+        const label = [meta?.agentType, meta?.description].filter((s): s is string => typeof s === 'string' && s !== '').join(': ');
+        out.metas.push({ file, label, finished: meta?.finished === true });
+      } catch {
+        // `.meta.json` ilegível: a chamada que dependia dele não acha o transcript e segue como externa
+      }
+    }),
+  );
+  return out;
+}
+
+type AgentLine = { type?: unknown; message?: { content?: unknown } } | null;
+
+/**
+ * O subagent chamado por `toolUseId` só mexeu no projeto? Vale toda `tool_use` do transcript dele, terminada ou não (a retomada pode
+ * repetir a delegação inteira), e as dos subagents que ele chamou. Sem transcript, transcript ilegível ou fundo demais: false.
+ */
+async function agentStaysLocal(files: Map<string, string>, toolUseId: string, depth = 0, seen = new Set<string>()): Promise<boolean> {
+  const file = files.get(toolUseId);
+  return !!file && fileStaysLocal(files, file, depth, seen);
+}
+
+/** O mesmo de `agentStaysLocal`, a partir do transcript (`files`: os que ele pode chamar, por `toolUseId`). */
+async function fileStaysLocal(files: Map<string, string>, file: string, depth: number, seen: Set<string>): Promise<boolean> {
+  if (depth >= MAX_AGENT_DEPTH || seen.has(file)) return false;
+  seen.add(file);
+  let raw: string;
+  try {
+    raw = await fs.readFile(file, 'utf8');
+  } catch {
+    return false;
+  }
+  for (const line of raw.split('\n')) {
+    // Só as linhas que podem ter chamada de ferramenta são lidas; uma delas cortada no meio (JSON inválido) deixa a dúvida.
+    if (!line.includes('"tool_use"')) continue;
+    let ev: AgentLine;
+    try {
+      ev = JSON.parse(line) as AgentLine;
+    } catch {
+      return false;
+    }
+    if (ev?.type !== 'assistant' || !Array.isArray(ev.message?.content)) continue;
+    for (const b of ev.message.content as Array<Record<string, unknown> | null>) {
+      if (b?.type !== 'tool_use') continue;
+      if (typeof b.name !== 'string') return false;
+      if (!hasExternalEffect(b.name, JSON.stringify(b.input ?? {}))) continue;
+      if (!isAgentCall(b.name) || typeof b.id !== 'string' || !(await agentStaysLocal(files, b.id, depth + 1, seen))) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Como `externalCut`, mas uma chamada Agent/Task que `hasExternalEffect` marca como externa (tipo que não é só leitura) é conferida no
+ * transcript do subagent (`subagentsDir`, ver `subagentsDirOf`): se nenhuma ferramenta dele mexe fora do projeto, o corte é local.
+ * Sem a pasta (null), é `externalCut`. Codex: os subagents ainda não aparecem nos eventos, então não há transcript e segue conservador.
+ */
+export async function externalCutWithAgents(items: readonly ChatItem[], awaitingAnswer: boolean, subagentsDir: string | null): Promise<string | null> {
+  let subs: Subagents | null = null;
+  for (const it of openTools(items, awaitingAnswer)) {
+    if (!hasExternalEffect(it.name, it.input)) continue;
+    if (subagentsDir && isAgentCall(it.name) && it.id.startsWith('t:')) {
+      subs ??= await readSubagents(subagentsDir);
+      if (await agentStaysLocal(subs.calls, it.id.slice(2))) continue;
+    }
+    return actionOf(it);
+  }
+  return null;
+}
+
+/** Id de tarefa em segundo plano que cabe num nome de arquivo e num padrão de texto sem escape. */
+const TASK_ID = /^[\w-]+$/;
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
+
+/**
+ * O transcript do agent em segundo plano: `agent-<id da tarefa>.jsonl` (o id da tarefa é o `agentId` do subagent); sem esse arquivo, o único
+ * subagent ainda aberto com o mesmo rótulo (`tipo: descrição`). Mais de um com o rótulo, ou nenhum: null.
+ */
+async function backgroundAgentFile(subs: Subagents, task: BackgroundTask): Promise<string | null> {
+  if (TASK_ID.test(task.id)) {
+    const byId = path.join(subs.dir, `agent-${task.id}.jsonl`);
+    if (await fs.access(byId).then(() => true, () => false)) return byId;
+  }
+  const same = subs.metas.filter((m) => !m.finished && m.label === task.label);
+  return same.length === 1 ? same[0]!.file : null;
+}
+
+/**
+ * O comando em segundo plano só mexe no projeto? A chamada que o abriu se acha pelo id no resultado dela ("Command running in background
+ * with ID: b37k91xg5" ou "moved to the background (ID: b37k91xg5)"); a regra é a de `hasExternalEffect`. Chamada que não está mais nos
+ * itens, de entrada cortada ou sem o id no resultado: false.
+ */
+function shellStaysLocal(items: readonly ChatItem[], task: BackgroundTask): boolean {
+  if (!TASK_ID.test(task.id)) return false;
+  const opened = new RegExp(`\\bID: ${task.id}(?![\\w-])`);
+  const call = items.find((it): it is ToolItem => it.kind === 'tool' && SHELL_TOOLS.has(it.name) && it.result !== null && opened.test(it.result));
+  return !!call && !isClipped(call.input) && !hasExternalEffect(call.name, call.input);
+}
+
+/**
+ * O que ainda rodava em segundo plano quando o processo da conversa caiu (`BackgroundTask`): a primeira tarefa que pode ter mexido fora do
+ * projeto, senão null. Comando: ver `shellStaysLocal`. Agent: o transcript dele em `subagentsDir` (ver `backgroundAgentFile`), com a mesma
+ * conferência dos subagents cortados. Qualquer outro tipo, e agent sem pasta, sem transcript ou ilegível: conta como incerto (devolvido).
+ * Codex não passa por aqui: sem transcript de subagent nem resultado de comando no formato do Claude.
+ */
+export async function externalBackground(background: readonly BackgroundTask[], items: readonly ChatItem[], subagentsDir: string | null): Promise<BackgroundTask | null> {
+  let subs: Subagents | null = null;
+  for (const task of background) {
+    if (task.kind === 'shell' && shellStaysLocal(items, task)) continue;
+    if (task.kind === 'agent' && subagentsDir) {
+      subs ??= await readSubagents(subagentsDir);
+      const file = await backgroundAgentFile(subs, task);
+      if (file && (await fileStaysLocal(subs.calls, file, 0, new Set<string>()))) continue;
+    }
+    return task;
+  }
+  return null;
 }

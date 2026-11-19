@@ -164,6 +164,21 @@ describe('extensão do Chrome: o link que a notificação abre', () => {
     expect(parseOpenLink(hashOf({ view: 'tasks', projectId: 'p-1' }))).toEqual({ tasks: true, projectId: 'p-1' });
   });
 
+  it('aviso de tarefa (dúvida, parada, bloqueada, esquecida) abre o quadro do projeto, já no card quando traz a tarefa', () => {
+    for (const kind of ['question', 'stuck', 'blocked', 'notStarted']) {
+      expect(parseOpenLink(hashOf({ kind, projectId: 'p-1', staffId: 'ana' })), kind).toEqual({ tasks: true, projectId: 'p-1' });
+      expect(parseOpenLink(hashOf({ kind, projectId: 'p-1', staffId: 'ana', taskId: 't-9a8b7c' })), kind).toEqual({ tasks: true, projectId: 'p-1', taskId: 't-9a8b7c' });
+    }
+    // Sem a extensão no meio: o kind sozinho, sem `tela`, vale do mesmo jeito; sem projeto, não abre nada.
+    expect(parseOpenLink('#abrir?kind=question&projeto=p-1')).toEqual({ tasks: true, projectId: 'p-1' });
+    expect(parseOpenLink('#abrir?kind=stuck')).toBeNull();
+  });
+
+  it('id de tarefa com forma estranha não vira alvo (abre só o quadro)', () => {
+    expect(parseOpenLink('#abrir?kind=question&projeto=p-1&tarefa=t%2F1')).toEqual({ tasks: true, projectId: 'p-1' });
+    expect(parseOpenLink('#abrir?tela=tarefas&projeto=p-1&tarefa=a%20b')).toEqual({ tasks: true, projectId: 'p-1' });
+  });
+
   it('o que vem de fora e não tem a forma esperada não abre nada', () => {
     for (const hash of [
       '',

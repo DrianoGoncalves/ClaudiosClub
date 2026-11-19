@@ -25,6 +25,7 @@ import { ROOT } from '../server/root';
 import { buildMcpConfig, listMcpServers } from '../server/staff/mcp';
 import { StaffError, StaffService } from '../server/staff/service';
 import { readProfile, saveChatChoice, StaffInputSchema, writeAtomic } from '../server/staff/store';
+import { AGENT_PRESETS } from '../shared/agentPresets';
 import { BUILTIN_ROLES } from '../shared/roles';
 import { listRoles, saveRole } from '../server/roles';
 import { PERSONALITIES, PERSONALITY_PROMPTS, personalityName, personalityReminder, personalitySection } from '../shared/personality';
@@ -105,12 +106,33 @@ describe('ficha', () => {
     const solo = renderFicha(profile({ playbook: 'plan-big-execute-small' }), ctx);
     expect(solo).not.toContain('Sua equipe');
     // Contratado sozinho, os agents do roteiro já aparecem como indicados, com os da ficha.
-    expect(solo).toContain('Agents: pesquisador, executor, revisor, Explore.');
-    expect(solo).toMatch(/pede julgamento[^\n]*`executor` com model: "sonnet"/);
+    expect(solo).toContain('Agents: pesquisador, executor, executor-rapido, revisor, Explore.');
+    expect(solo).toContain('`executor-rapido` (Haiku)');
+    expect(solo).toMatch(/implementar o que já está decidido[^\n]*`executor` \(Sonnet\)/);
+    expect(solo).toMatch(/pede julgamento[^\n]*`executor` com model: "opus"/);
     expect(solo).toContain('run_in_background: false');
     // Quem reporta a alguém entrega com as provas; quem não reporta, não tem a seção.
     expect(renderFicha(profile(), { ...ctx, managerNames: ['Daniel'] })).toContain('## Entrega');
     expect(solo).not.toContain('## Entrega');
+  });
+
+  it('roteiro de quem implementa: planeja, passa a decisão pronta, confere o diff e só faz sozinho o que é de baixo risco', () => {
+    const md = renderFicha(profile({ playbook: 'plan-big-execute-small' }), ctx);
+    expect(md).toContain('Planeje primeiro: entenda o pedido');
+    expect(md).toContain('Entregue a decisão pronta: o objetivo (o porquê), os arquivos que ele pode mexer (com caminho), o que já foi decidido, o que não mexer e por quê');
+    expect(md).toContain('as alterações (arquivo:linha), o que verificou (comando e resultado) e o que ficou pendente');
+    expect(md).toContain('Confira o diff de cada entrega antes da próxima (`git diff --stat`');
+    // A exceção é por risco, não por número de linhas.
+    expect(md).toContain('mudança local, conhecida e de baixo risco');
+    expect(md).toContain('O critério é o risco, não o número de linhas');
+    expect(md).not.toContain('uma linha num arquivo que você já leu');
+    // O modelo que a ficha cita é o do pronto (nada do executor antigo em Haiku).
+    const label = (name: string) => {
+      const m = AGENT_PRESETS.find((p) => p.name === name)!.model;
+      return m[0]!.toUpperCase() + m.slice(1);
+    };
+    for (const name of ['executor', 'executor-rapido', 'pesquisador']) expect(md).toContain(`\`${name}\` (${label(name)}`);
+    expect(md).not.toMatch(/`executor` \(Haiku/);
   });
 
   it('com SPEC.md na raiz, a ficha manda consultar o guia antes do Conhecimento; sem ele, nada disso', () => {
@@ -144,7 +166,7 @@ describe('ficha', () => {
     expect(on).toContain('mostre em 1-2 linhas o veredito do GPT');
     expect(on).toContain('se discordarem, mostre as duas posições em linguagem simples');
     // Os agents do roteiro não mudam: o GPT é uma ferramenta, não um agent.
-    expect(on).toContain('Agents: pesquisador, executor, revisor, Explore.');
+    expect(on).toContain('Agents: pesquisador, executor, executor-rapido, revisor, Explore.');
     for (const md of [renderFicha(roteiro, ctx), renderFicha(roteiro, { ...ctx, codex: false })]) {
       expect(md).not.toContain('myco-gpt');
       expect(md).not.toContain('perguntar_gpt');
@@ -775,6 +797,21 @@ describe('StaffService', () => {
       // O id do cargo não vai para o perfil.
       expect(r.profile).not.toHaveProperty('roleId');
       expect(await readProfile(projectPath, r.profile.id)).not.toHaveProperty('roleId');
+    });
+
+    it('cargo que implementa já contrata com o roteiro e os 4 agents na ficha; o que só audita, sem roteiro', async () => {
+      const svc = service();
+      const { profile: boss } = (await svc.hire('proj-id', { ...input, name: 'Gestor Roteiro', autonomy: 'acceptEdits', canHire: true, launch: false }, true))!;
+      const r = (await apiHire(svc, boss.id, { name: 'Pensa', roleId: dev.id }))!;
+      expect(r.profile.playbook).toBe('plan-big-execute-small');
+      const ficha = await fs.readFile(path.join(projectPath, '.myco', 'staff', `${r.profile.id}.md`), 'utf8');
+      expect(ficha).toContain('Agents: pesquisador, executor, executor-rapido, revisor.');
+      expect(ficha).toContain('## Roteiro: Planeja grande, executa pequeno');
+      expect(ficha).toContain('mudança local, conhecida e de baixo risco');
+      // Quem só audita não implementa: sem roteiro, sem agents de execução.
+      const sec = (await apiHire(svc, boss.id, { name: 'Audita', roleId: 'seguranca' }))!;
+      expect(sec.profile.playbook).toBeNull();
+      expect(await fs.readFile(path.join(projectPath, '.myco', 'staff', `${sec.profile.id}.md`), 'utf8')).not.toContain('## Roteiro');
     });
 
     it('o que vier no pedido ganha do cargo (a missão escrita substitui a do cargo)', async () => {

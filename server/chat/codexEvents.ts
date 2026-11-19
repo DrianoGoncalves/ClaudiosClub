@@ -11,7 +11,8 @@ import { clip, inputText, toolSummary } from './items';
 //   {"type":"turn.failed","error":{"message":…}}  e  {"type":"error","message":…}
 // Tipos de item: agent_message {text}, reasoning {text}, command_execution {command, aggregated_output, exit_code, status},
 // file_change {changes:[{path, kind: add|delete|update}], status}, mcp_tool_call {server, tool, arguments, result|error, status},
-// web_search {query}, todo_list {items:[{text, completed}]}, error {message}. Os ids (`item_0`…) recomeçam a cada execução.
+// web_search {query}, todo_list {items:[{text, completed}]}, collab_tool_call {tool: wait|spawn_agent…, receiver_thread_ids, status} (subagents;
+// o spawn em si não sai no --json, ver codexSubagents.ts), error {message}. Os ids (`item_0`…) recomeçam a cada execução.
 
 export type CodexPhase = 'started' | 'updated' | 'completed';
 
@@ -115,8 +116,19 @@ export function itemFromCodex(raw: unknown, key: string, at: string, phase: Code
       // Atualizada no mesmo id (item.updated): o cartão troca; sem resultado ela "está andando" até o item.completed.
       return tool(key, it, at, 'TodoWrite', { todos }, `${finished}/${todos.length} concluídos`, done ? '' : null, false);
     }
+    case 'collab_tool_call': {
+      const name = asString(it.tool);
+      const status = asString(it.status);
+      const finished = done || (status !== '' && status !== 'in_progress');
+      const failed = status === 'failed';
+      const summary = name === 'wait' ? 'esperando os agents' : name === 'spawn_agent' ? 'chamou um agent' : name || 'agent';
+      const receivers = Array.isArray(it.receiver_thread_ids) ? it.receiver_thread_ids : [];
+      return tool(key, it, at, 'Agent', { tool: name, receivers }, summary, finished ? (failed ? 'falhou' : '') : null, finished && failed);
+    }
     case 'error': {
       const message = asString(it.message).trim();
+      // O aviso que o Codex dá, a cada execução, da flag da fila de validação pesada (codexHeavyArgs): é nossa e conhecida, não é da conversa.
+      if (/^`?--dangerously-bypass-hook-trust`? is enabled/i.test(message)) return null;
       return message ? { kind: 'notice', id: itemId('n', key, it), text: message, tone: 'warn', at } : null;
     }
     default:
@@ -127,7 +139,7 @@ export function itemFromCodex(raw: unknown, key: string, at: string, phase: Code
 /** Tipos que contam como uma ida e volta ao modelo no turno (cada ferramenta usada pede outra chamada). */
 export function isToolCall(raw: unknown): boolean {
   const type = asRecord(raw).type;
-  return type === 'command_execution' || type === 'file_change' || type === 'mcp_tool_call' || type === 'web_search';
+  return type === 'command_execution' || type === 'file_change' || type === 'mcp_tool_call' || type === 'web_search' || type === 'collab_tool_call';
 }
 
 /**

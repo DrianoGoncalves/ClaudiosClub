@@ -10,6 +10,9 @@ export function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}\n… (${text.length - max} caracteres a mais)` : text;
 }
 
+/** O texto saiu de `clip` com um pedaço a menos? */
+export const isClipped = (text: string): boolean => /\n… \(\d+ caracteres a mais\)$/.test(text);
+
 /** AskUserQuestion não tem argumento simples: o resumo é o texto da primeira pergunta. */
 function firstQuestion(i: Record<string, unknown>): string {
   const q = Array.isArray(i.questions) ? (i.questions[0] as { question?: unknown } | undefined)?.question : undefined;
@@ -89,8 +92,9 @@ export const RESTART_TEXT = `${RESTART_PREFIX}. Confira se a última ação term
 /** Retomada com um pedido de permissão ou pergunta sem resposta: refaz o pedido. */
 export const RESTART_PENDING_TEXT = `${RESTART_PREFIX}, quando havia um pedido de permissão ou uma pergunta pendente. Refaça o pedido e espere a resposta antes de seguir.`;
 
-/** Fim de tarefa: o que a conversa deve responder ao terminar (igual no texto de início e no handoff). */
-export const CLOSING_LINE = 'Quando terminar, responda com um resumo curto do que foi feito e do que falta.';
+/** A mensagem da retomada automática de um turno que caiu por falha passageira (ver server/chat/turnRetry.ts). Não é do dono. */
+export const RETRY_TEXT =
+  'O turno foi interrompido. Confira arquivos e resultados já produzidos antes de continuar. Se uma ação externa puder ter ocorrido e não houver confirmação, pare e peça orientação.';
 
 /** A mensagem veio com a marca de outro funcionário (blocos do transcript)? */
 export function hasStaffNotice(blocks: Array<Record<string, unknown>>): boolean {

@@ -1,0 +1,271 @@
+import { execFile } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { CHANGED_FILES_MAX, COMMIT_LIST_MAX, type TaskCommit, type TaskCommitLeft } from '../shared/model';
+import { cleanEnv } from './auth';
+import { pathKey, type OwnerWrite } from './ownerEdits';
+import { cleanRel, isBlockedRel } from './projectFiles';
+
+// Commit automático de uma tarefa pronta (TaskService.autoCommit chama; o projeto liga em `.myco/board.json`, ver boardConfig.ts). Um commit LOCAL, nunca push, só com os
+// arquivos que a tarefa alterou (`Task.changedFiles`) e que ainda têm mudança no git. O projeto é de todos: o que é de outra tarefa aberta, do índice do usuário ou dele mesmo fica de fora.
+//
+// O commit sai de um índice temporário (`GIT_INDEX_FILE`, montado do HEAD só com os caminhos da tarefa), pelo `git commit` de verdade: os hooks do repositório rodam e uma falha deles é
+// só aviso. O índice do usuário não é lido para montar o commit, então o que ele deixou staged não entra; depois do commit, só as linhas dos caminhos commitados são refeitas nele
+// (`git reset -q HEAD -- <caminhos>`), senão o `git status` mostraria o inverso da mudança. Os caminhos são literais (`GIT_LITERAL_PATHSPECS`, `update-index` por stdin com NUL):
+// `*`, `[`, `:` e espaço no nome valem como são. Renome e exclusão não precisam de tratamento à parte: sem `--find-renames`, o renome são dois caminhos (um novo e um que sumiu), e
+// `update-index --add --remove` grava o que está no disco ou tira o que sumiu, caminho por caminho.
+//
+// Limites conhecidos: edição só por shell não está em `changedFiles`; editor externo não é visto (o do Club sim, ver ownerEdits.ts); o HEAD pode mudar entre a leitura e o `git commit` (a
+// janela é de milissegundos: conferimos antes e depois, e a diferença vira aviso). Quem decide se roda e grava o resultado na tarefa é o TaskService; aqui só há git.
+
+/** O commit lê o HEAD uma vez, mas hooks lentos (lint, testes) rodam depois dele: cinco minutos. */
+const COMMIT_TIMEOUT_MS = 5 * 60_000;
+/** Caminhos por chamada ao git: 100 caminhos de 300 caracteres cabem folgados na linha de comando do Windows. */
+const PATH_CHUNK = 100;
+/** Tolerância na comparação do mtime com o da sua gravação (o disco pode arredondar). */
+const OWNER_SLACK_MS = 2;
+const LITERAL = { GIT_LITERAL_PATHSPECS: '1' };
+
+/** Estados do repositório em que um commit comum faria outra coisa (merge, rebase…) ou nem começaria (`index.lock`). */
+const BUSY: Array<[string, string]> = [
+  ['MERGE_HEAD', 'o repositório está no meio de um merge'],
+  ['CHERRY_PICK_HEAD', 'o repositório está no meio de um cherry-pick'],
+  ['REVERT_HEAD', 'o repositório está no meio de um revert'],
+  ['rebase-merge', 'o repositório está no meio de um rebase'],
+  ['rebase-apply', 'o repositório está no meio de um rebase'],
+  ['index.lock', 'outro comando do git está rodando (index.lock)'],
+];
+
+/** O motivo em pt-BR (o histórico da tarefa e a caixa usam; a tela monta o dela pelo código, no idioma da página). */
+export function whyText(l: TaskCommitLeft): string {
+  switch (l.why) {
+    case 'blocked':
+      return 'barrado: segredo, dependência ou caminho inválido';
+    case 'conflict':
+      return 'em conflito';
+    case 'staged':
+      return 'staged por você, com mudança nova depois';
+    case 'owner':
+      return 'editado por você';
+    case 'shared':
+      return `também alterado por ${l.by}, que ainda não terminou`;
+  }
+}
+
+/** Os arquivos de fora em uma linha: "a.ts (motivo), b.ts (motivo) e mais N". */
+export function leftText(left: TaskCommitLeft[], shown = 3): string {
+  const more = left.length > shown ? ` e mais ${left.length - shown}` : '';
+  return `${left.slice(0, shown).map((l) => `${l.path} (${whyText(l)})`).join(', ')}${more}`;
+}
+
+export interface CommitRequest {
+  /** A raiz do projeto (o checkout principal; worktree não passa por aqui). */
+  dir: string;
+  taskId: string;
+  title: string;
+  /** `Task.changedFiles` (ausente = a tarefa não tem lista). */
+  files: string[] | undefined;
+  /** O que outra tarefa não encerrada também alterou: `pathKey(caminho)` → id dela. */
+  shared: ReadonlyMap<string, string>;
+  /** O que você gravou pelo editor do Club (ver ownerEdits.ts). */
+  ownerWrites: Record<string, OwnerWrite>;
+}
+
+/** O que `Task.commit` guarda, menos a entrega (`for`) e a hora (`at`), que são do TaskService. */
+export type CommitResult = Omit<TaskCommit, 'for' | 'at'>;
+
+/** `<título> (<id>)`: sem IA, uma linha, comprida o bastante para o título inteiro e curta o bastante para o `git log`. */
+export function commitMessage(title: string, taskId: string): string {
+  const line = title.replace(/\s+/g, ' ').trim();
+  const head = line.length > 200 ? `${line.slice(0, 199)}…` : line;
+  return head ? `${head} (${taskId})` : `Tarefa (${taskId})`;
+}
+
+/** Faz o commit dos arquivos da tarefa, ou diz por que não fez. Nunca lança: o motivo vai em `note`. */
+export async function commitTaskFiles(req: CommitRequest): Promise<CommitResult> {
+  const none = (note: string, alert = false, left: TaskCommitLeft[] = []): CommitResult => ({ status: 'none', sha: null, files: [], left: cap(left), note, alert });
+  const files = [...new Set(req.files ?? [])];
+  if (!files.length) return none('a tarefa não tem lista de arquivos (edição só por shell não é detectada): nada foi commitado');
+  // No teto a lista foi cortada (ver CHANGED_FILES_MAX): o que sobrou fora dela não seria commitado e a tarefa pareceria inteira.
+  if (files.length >= CHANGED_FILES_MAX) return none(`a lista de arquivos chegou ao limite de ${CHANGED_FILES_MAX} e pode estar cortada: nada foi commitado`, true);
+
+  const repo = await inspectRepo(req.dir);
+  if (!repo.ok) return none(repo.note, repo.alert);
+
+  const left: TaskCommitLeft[] = [];
+  const seen = new Set<string>();
+  const rels: string[] = [];
+  for (const f of files) {
+    const rel = safeRel(f);
+    if (rel === null) left.push({ path: f.slice(0, 200), why: 'blocked' });
+    else if (!seen.has(pathKey(rel))) {
+      seen.add(pathKey(rel));
+      rels.push(rel);
+    }
+  }
+
+  try {
+    const status = await statusOf(req.dir, repo.prefix, rels);
+    const take: string[] = [];
+    for (const rel of rels) {
+      const key = pathKey(rel);
+      const entry = status.get(key);
+      if (!entry) continue; // sem mudança no git: já commitado ou desfeito
+      const why = await leftOutWhy(req, entry, key, rel);
+      if (why) left.push({ path: entry.path, ...why });
+      else take.push(entry.path);
+    }
+    if (!take.length) {
+      return none(left.length ? 'nenhum arquivo da tarefa podia entrar no commit: nada foi commitado' : 'os arquivos da tarefa não têm mudança no git (já commitados ou desfeitos)', left.length > 0, left);
+    }
+    const made = await commitPaths(req.dir, repo.head, take, commitMessage(req.title, req.taskId));
+    if (!made) return none('os arquivos da tarefa já estão no HEAD: nada a commitar', left.length > 0, left);
+    const notes: string[] = [];
+    if (take.length > COMMIT_LIST_MAX) notes.push(`${take.length} arquivos no commit (a lista guarda ${COMMIT_LIST_MAX})`);
+    if (made.problem) notes.push(made.problem);
+    return {
+      status: left.length ? 'partial' : 'committed',
+      sha: made.sha,
+      files: take.slice(0, COMMIT_LIST_MAX),
+      left: cap(left),
+      note: notes.length ? notes.join('; ') : null,
+      alert: left.length > 0 || !!made.problem,
+    };
+  } catch (err) {
+    return { status: 'failed', sha: null, files: [], left: cap(left), note: summarize(err), alert: true };
+  }
+}
+
+/** O caminho como o git o vê (normalizado, com "/"), ou null quando não é um caminho do projeto (absoluto, com `..`, com NUL). */
+function safeRel(f: string): string | null {
+  try {
+    return cleanRel(f) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Por que o arquivo fica de fora do commit, ou null se pode entrar. */
+async function leftOutWhy(req: CommitRequest, e: StatusEntry, key: string, rel: string): Promise<Pick<TaskCommitLeft, 'why' | 'by'> | null> {
+  if (isBlockedRel(rel)) return { why: 'blocked' };
+  if (isConflict(e)) return { why: 'conflict' };
+  const other = req.shared.get(key);
+  if (other) return { why: 'shared', by: other };
+  // Staged e com mudança nova por cima (MM, AM…): o índice guarda uma escolha sua que o commit passaria por cima.
+  if (e.x !== ' ' && e.x !== '?' && e.y !== ' ') return { why: 'staged' };
+  const w = req.ownerWrites[key];
+  if (w) {
+    const st = await fs.stat(path.join(req.dir, e.path)).catch(() => null);
+    // O mtime ainda é o da sua gravação: a última mão no arquivo foi a sua (a edição da tarefa, se houve, veio antes).
+    if (st && st.mtimeMs <= w.mtimeMs + OWNER_SLACK_MS) return { why: 'owner' };
+  }
+  return null;
+}
+
+type Repo = { ok: true; head: string; prefix: string } | { ok: false; note: string; alert: boolean };
+
+/** O repositório está em condição de receber o commit? `alert` falso: não há o que você fazer (não é um repositório). */
+async function inspectRepo(dir: string): Promise<Repo> {
+  if ((await git(dir, ['rev-parse', '--is-inside-work-tree']).catch(() => '')).trim() !== 'true') return { ok: false, note: 'o projeto não é um repositório git', alert: false };
+  const head = (await git(dir, ['rev-parse', '--verify', '-q', 'HEAD']).catch(() => '')).trim();
+  if (!head) return { ok: false, note: 'o repositório ainda não tem nenhum commit: nada foi commitado', alert: true };
+  if (!(await git(dir, ['symbolic-ref', '-q', 'HEAD']).then(() => true, () => false))) return { ok: false, note: 'o HEAD está destacado (fora de um branch): nada foi commitado', alert: true };
+  for (const [name, why] of BUSY) {
+    const p = (await git(dir, ['rev-parse', '--git-path', name]).catch(() => '')).trim();
+    if (p && (await fs.stat(path.resolve(dir, p)).then(() => true, () => false))) return { ok: false, note: `${why}: nada foi commitado`, alert: true };
+  }
+  // Projeto numa subpasta do repositório: o `status` devolve caminhos a partir da raiz do repositório, e a tarefa guarda a partir do projeto.
+  return { ok: true, head, prefix: (await git(dir, ['rev-parse', '--show-prefix']).catch(() => '')).trim() };
+}
+
+interface StatusEntry {
+  /** O caminho como o git o escreve (a partir do projeto). */
+  path: string;
+  x: string;
+  y: string;
+}
+
+/** `git status` dos caminhos pedidos, por `pathKey`; arquivo sem mudança não aparece. Sem renome: um renome são dois caminhos. */
+async function statusOf(dir: string, prefix: string, rels: string[]): Promise<Map<string, StatusEntry>> {
+  const out = new Map<string, StatusEntry>();
+  for (let i = 0; i < rels.length; i += PATH_CHUNK) {
+    const raw = await git(dir, ['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all', '--', ...rels.slice(i, i + PATH_CHUNK)], { env: LITERAL });
+    for (const rec of raw.split('\0')) {
+      if (rec.length < 4) continue;
+      const rel = rec.slice(3);
+      const p = prefix && rel.startsWith(prefix) ? rel.slice(prefix.length) : rel;
+      out.set(pathKey(p), { path: p, x: rec[0]!, y: rec[1]! });
+    }
+  }
+  return out;
+}
+
+/** Os estados "não mesclado" do `git status`: UU, AA, DD, AU, UA, DU, UD. */
+const isConflict = (e: StatusEntry): boolean => e.x === 'U' || e.y === 'U' || (e.x === 'A' && e.y === 'A') || (e.x === 'D' && e.y === 'D');
+
+/**
+ * Monta o índice temporário (HEAD + só estes caminhos, como estão no disco) e commita. Null: com esses caminhos a árvore é a do HEAD (nada a commitar). `problem` é o que deu
+ * errado DEPOIS de o commit existir (o HEAD já era outro, ou o índice não foi refeito): o commit vale, e o aviso diz o que conferir. Lança se o git recusou (hook, identidade…).
+ */
+async function commitPaths(dir: string, head: string, paths: string[], message: string): Promise<{ sha: string; problem: string | null } | null> {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-index-'));
+  try {
+    const env = { GIT_INDEX_FILE: path.join(tmp, 'index') };
+    await git(dir, ['read-tree', head], { env });
+    await git(dir, ['update-index', '--add', '--remove', '-z', '--stdin'], { env, input: `${paths.join('\0')}\0` });
+    const tree = (await git(dir, ['write-tree'], { env })).trim();
+    if (tree === (await git(dir, ['rev-parse', `${head}^{tree}`])).trim()) return null;
+    // O commit nasce do HEAD de agora: se um commit seu entrou no meio, a árvore do índice temporário (do HEAD velho) desfaria o seu.
+    if ((await git(dir, ['rev-parse', 'HEAD'])).trim() !== head) throw new Error('o HEAD mudou enquanto o commit era preparado: nada foi commitado');
+    await git(dir, ['commit', '-q', '-m', message], { env, timeoutMs: COMMIT_TIMEOUT_MS });
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
+  }
+  const sha = (await git(dir, ['rev-parse', '--short', 'HEAD'])).trim();
+  if ((await git(dir, ['rev-parse', 'HEAD^']).catch(() => '')).trim() !== head) return { sha, problem: 'o HEAD mudou durante o commit: confira o histórico (git log) e o git status' };
+  // O índice de verdade ainda tem a versão velha destes caminhos: sem refazer, o git status mostraria a mudança ao contrário.
+  try {
+    for (let i = 0; i < paths.length; i += PATH_CHUNK) await git(dir, ['reset', '-q', 'HEAD', '--', ...paths.slice(i, i + PATH_CHUNK)], { env: LITERAL });
+  } catch (err) {
+    return { sha, problem: `o índice do git não foi atualizado (${summarize(err)}): rode git reset -q para os arquivos do commit` };
+  }
+  return { sha, problem: null };
+}
+
+const cap = (left: TaskCommitLeft[]): TaskCommitLeft[] => left.slice(0, COMMIT_LIST_MAX).map((l) => ({ ...l, path: l.path.slice(0, 300) }));
+
+/** O erro do git em uma linha: as primeiras linhas da saída dele (um hook que falha escreve o motivo ali), cortadas. */
+function summarize(err: unknown): string {
+  const lines = ((err as Error)?.message ?? String(err))
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(' / ');
+  return lines.length > 300 ? `${lines.slice(0, 299)}…` : lines || 'erro desconhecido do git';
+}
+
+interface GitOpts {
+  env?: NodeJS.ProcessEnv;
+  input?: string;
+  timeoutMs?: number;
+}
+
+function git(cwd: string, args: string[], opts: GitOpts = {}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      'git',
+      ['-C', cwd, ...args],
+      { env: { ...cleanEnv(), GIT_TERMINAL_PROMPT: '0', GIT_EDITOR: 'true', ...opts.env }, windowsHide: true, timeout: opts.timeoutMs ?? 60_000, maxBuffer: 16 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) reject(new Error([stderr, stdout].map((s) => s.trim()).filter(Boolean).join('\n') || err.message));
+        else resolve(stdout);
+      },
+    );
+    if (opts.input !== undefined) {
+      child.stdin?.on('error', () => {}); // o git saiu sem ler tudo (erro de caminho): o motivo vem no callback acima, não aqui
+      child.stdin?.end(opts.input);
+    }
+  });
+}

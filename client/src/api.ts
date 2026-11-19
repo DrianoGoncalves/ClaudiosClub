@@ -9,6 +9,7 @@ import type {
   Autonomy,
   Board,
   BoardBackground,
+  BoardCommitConfig,
   BoardConfig,
   BrowserStatus,
   ChatAttachment,
@@ -25,6 +26,8 @@ import type {
   Engine,
   FtpConnection,
   FtpConnectionInput,
+  FollowUpCardResult,
+  FollowUpResult,
   RewindPreview,
   GitState,
   UncommittedReport,
@@ -40,10 +43,13 @@ import type {
   ProjectColor,
   ProjectConnection,
   ProjectDetail,
+  ProjectPause,
   Routine,
   RoutineRun,
+  RoutineSchedule,
   RunMark,
   SavingsReport,
+  SchedulesResponse,
   SendPriority,
   UiLevel,
   QuestionAnnotations,
@@ -58,6 +64,7 @@ import type {
   TaskCode,
   TaskCost,
   TaskCostRanking,
+  TaskCreateResult,
   TestRun,
   TaskSummary,
   UsageStop,
@@ -69,9 +76,12 @@ import type { RoleEntry, RoleTemplate } from '../../shared/roles';
 import { locale, t } from './i18n';
 import { askUsageStop } from './chat/usageNotice';
 import type { GuideAction } from './detail/guideActions';
+import type { RoutineInput } from './schedules/routineDraft';
 import type { Schedule } from './schedules/scheduleView';
 import type { DepChoice, DepMap } from './tasks/cancelDeps';
 import type { AnswerBody } from './tasks/doubtAnswer';
+import type { FollowUpDecision } from './tasks/followUp';
+import type { CardBody } from './tasks/followUpNotice';
 import type { McpSaveBody, McpScope, McpServer } from './office/mcpForm';
 
 /**
@@ -201,6 +211,19 @@ export class ApiError extends Error {
   }
 }
 
+/** O que fechar uma conversa fez: `closed` = havia processo e ele saiu; `interrupted` = estava trabalhando (turno cortado, com a confirmação). */
+export interface ChatCloseResult {
+  ok: boolean;
+  closed: boolean;
+  interrupted: boolean;
+}
+
+/** O que arquivar fechou: quantas conversas saíram e quantas ficaram abertas por estarem trabalhando (só funcionário e projeto deixam). */
+export interface ArchiveClosing {
+  closed: number;
+  working: number;
+}
+
 /**
  * Excluir ficha: se o servidor recusar por tarefas abertas no quadro (409 `open-tasks`), pergunta de novo e,
  * confirmado, repete com `force` (as tarefas ficam sem responsável). Recusado, devolve null; outro erro sobe.
@@ -245,6 +268,9 @@ export async function withUsageConfirm<T>(run: (force: boolean) => Promise<T>): 
     return (await askUsageStop(`${why}${reset}`)) ? run(true) : null;
   }
 }
+
+/** O que a janela de escolher pasta devolve: o caminho escolhido, fechada sem escolher (ou o prazo), ou este computador não abre a janela. */
+export type PickFolderResult = { path: string } | { cancelled: true } | { unsupported: true };
 
 /** Um projeto do Claude Code ou do Codex que ainda está fora do quadro. */
 export interface ImportableProject {
@@ -352,6 +378,20 @@ export interface GithubChoose {
   source: { owner: string; repo: string; ref: string; sha: string };
   skills: Array<{ path: string; name: string; description: string }>;
 }
+
+/** Um item do lote (POST /api/skills/github/install-batch): o ref, o sha e o digest da prévia daquela skill. O link é um só, de todas. */
+export interface GithubBatchItem {
+  path: string;
+  ref: string;
+  sha: string;
+  digest: string;
+  name: string;
+}
+
+/** O resultado de um item do lote: a falha de um não derruba os outros. `code` só quando a tela age diferente (refazer a prévia, esperar o limite). */
+export type GithubBatchResult =
+  | { path: string; status: 'installed'; name: string; sha: string; digest: string }
+  | { path: string; status: 'error'; error: string; code?: 'changed' | 'modified' | 'rate-limited'; resetAt?: string };
 
 export interface GithubDiffItem {
   path: string;
@@ -498,6 +538,8 @@ export const api = {
   githubPreview: (url: string, path?: string) => post<GithubPreview | GithubChoose>('/api/skills/github/preview', path === undefined ? { url } : { url, path }),
   githubInstall: (to: GithubTarget, p: { url: string; path: string; ref: string; sha: string; digest: string; name: string }) =>
     post<{ name: string; sha: string; digest: string }>('/api/skills/github/install', { ...to, ...p }),
+  githubInstallBatch: (to: GithubTarget, url: string, items: GithubBatchItem[]) =>
+    post<{ results: GithubBatchResult[] }>('/api/skills/github/install-batch', { ...to, url, items }),
   githubStatus: (to: GithubTarget) =>
     get<GithubSkillStatus[]>(`/api/skills/github/status?scope=${to.scope}${to.projectId ? `&projectId=${encodeURIComponent(to.projectId)}` : ''}`),
   githubCheck: (to: GithubTarget, name: string) => post<GithubCheck>('/api/skills/github/check', { ...to, name }),
@@ -558,6 +600,8 @@ export const api = {
     contextSwitch?: ContextSwitch;
     optimizeQuota?: boolean;
     autoContinue?: boolean;
+    /** Retomar sozinho a conversa que caiu por falha passageira (padrão ligado); desligado, ela fica parada até você mandar mensagem. */
+    autoRetry?: boolean;
     /** Títulos de conversa gerados por IA (Haiku); desligado, a lista mostra o começo do assunto. */
     aiTitles?: boolean;
     showUserScope?: boolean;
@@ -593,8 +637,12 @@ export const api = {
     /** Só os projetos enviados mudam; null tira o orçamento. */
     projectBudgets?: Record<string, number | null>;
   }) => post<AppConfig>('/api/config', patch),
-  archive: (kind: 'project' | 'session' | 'conversation', id: string, archived: boolean) =>
-    post<AppConfig>('/api/archive', { kind, id, archived }),
+  /**
+   * Arquivar também fecha o processo (`closing`, só ao arquivar): uma conversa que trabalha recusa (409 `working`/`uncertain`) sem `confirm`, e nada é arquivado;
+   * funcionário e projeto fecham só as conversas paradas e dizem quantas deixaram trabalhando.
+   */
+  archive: (kind: 'project' | 'session' | 'conversation', id: string, archived: boolean, confirm = false) =>
+    post<AppConfig & { closing?: ArchiveClosing }>('/api/archive', { kind, id, archived, ...(confirm && { confirm: true }) }),
   /** Título da conversa dado pelo user; null (ou vazio) apaga e a lista volta ao último assunto. 409 = teto de títulos cheio. */
   setConversationTitle: (id: string, title: string | null) => post<AppConfig>('/api/conversation-title', { id, title }),
   costs: () => get<CostReport>('/api/costs'),
@@ -645,6 +693,8 @@ export const api = {
       | { mode: 'create'; parent: string; name: string; git: boolean; workspaceId: string | null }
       | { mode: 'existing'; path: string; workspaceId: string | null },
   ) => post<{ created: boolean; projectId: string }>('/api/new-project', body),
+  /** Abre a janela de escolher pasta NO COMPUTADOR DO SERVIDOR (sem corpo). Só volta quando a janela fecha; um por vez (409 `busy`). */
+  pickFolder: () => post<PickFolderResult>('/api/new-project/pick-folder'),
   /** Projetos do Claude Code que ainda não estão no quadro. */
   importableProjects: () => get<ImportableProject[]>('/api/import-projects'),
   importProjects: (paths: string[], workspaceId: string | null) =>
@@ -693,8 +743,14 @@ export const api = {
   /** Cancela o despertador da conversa (o botão do aviso "Volta a olhar em…"). */
   chatCancelWake: (projectId: string, sessionId: string) =>
     post<{ ok: boolean }>(`/api/projects/${projectId}/chat/${sessionId}/wake/user-cancel`),
-  /** Agendamentos pendentes do projeto (despertadores e "continue" do limite de uso), do que vence primeiro ao último. */
-  schedules: (projectId: string) => get<{ items: Schedule[] }>(`/api/projects/${projectId}/schedules`),
+  /**
+   * Agendamentos do projeto: despertadores e "continue" do limite de uso (`items`), as rotinas das fichas (`routines`) e as ocorrências delas na
+   * janela `[from, to)` (`occurrences`; sem janela, de hoje a 31 dias). Só do navegador pareado (400 com o motivo); servidor velho manda só `items`.
+   */
+  schedules: (projectId: string, window?: { from: Date; to: Date }) =>
+    getExplained<Partial<SchedulesResponse> & { items: Schedule[] }>(
+      `/api/projects/${projectId}/schedules${window ? `?from=${encodeURIComponent(window.from.toISOString())}&to=${encodeURIComponent(window.to.toISOString())}` : ''}`,
+    ),
   chatStopTask: (sessionId: string, taskId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/stop-task`, { taskId }),
   /** Busca nas conversas dos funcionários (a partir de 3 letras). */
   search: (q: string) => get<ConversationHit[]>(`/api/search?q=${encodeURIComponent(q)}`),
@@ -723,11 +779,18 @@ export const api = {
   inbox: () => get<InboxItem[]>('/api/inbox'),
   turns: (since: string) => get<TurnNotice[]>(`/api/turns?since=${encodeURIComponent(since)}`),
   dismissSecret: (id: string, notSecret = false) => post<{ ok: boolean }>('/api/secrets/dismiss', { id, notSecret }),
+  /** `id` = o do item da caixa: `error:<sessão>` (parou com erro) ou `cap:<sessão>` (parou no teto). */
+  dismissError: (id: string) => post<{ ok: boolean }>('/api/errors/dismiss', { id }),
+  /** Ignora a ação barrada (`denied:<sessão>:<turno>`, id inteiro): o alerta sai e o resto daquele turno não o traz de volta. */
+  dismissDenied: (id: string) => post<{ ok: boolean }>('/api/denied/dismiss', { id }),
   dismissQuestion: (sessionId: string) => post<{ ok: boolean }>('/api/questions/dismiss', { sessionId }),
   dismissWaiting: (sessionId: string) => post<{ ok: boolean }>('/api/waiting/dismiss', { sessionId }),
   dismissRoutineAlert: (id: string) => post<{ ok: boolean }>('/api/routines/alerts/dismiss', { id }),
   routineState: () => get<Record<string, RoutineRun>>('/api/routines/state'),
   taskSummary: () => get<Record<string, TaskSummary>>('/api/tasks/summary'),
+  /** Pausa do projeto: `paused` null = rodando. Pausar e retomar são idempotentes e só valem pelo navegador pareado (403 fora dele). */
+  projectPause: (projectId: string) => get<{ paused: ProjectPause | null }>(`/api/projects/${projectId}/pause`),
+  setProjectPause: (projectId: string, paused: boolean) => post<{ paused: ProjectPause | null }>(`/api/projects/${projectId}/${paused ? 'pause' : 'resume'}`),
   taskCode: (projectId: string, taskId: string) => get<TaskCode>(`/api/projects/${projectId}/tasks/${taskId}/code`),
   taskTest: (projectId: string, taskId: string) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/test`),
   /** Segunda opinião do Codex sobre o diff da tarefa (o diff vai para a OpenAI). */
@@ -744,10 +807,14 @@ export const api = {
   boardReview: (projectId: string) => get<BoardConfig>(`/api/projects/${projectId}/board-review`),
   /** Grava o estado inteiro: o servidor recusa ligada sem responsável (`reviewerId`). */
   saveBoardReview: (projectId: string, config: BoardConfig) => post<BoardConfig>(`/api/projects/${projectId}/board-review`, config),
+  /** Commit automático do projeto (a chave `autoCommit` do mesmo `.myco/board.json`): um commit local por tarefa pronta, nunca push. Servidor sem a rota = 404. */
+  boardCommit: (projectId: string) => get<BoardCommitConfig>(`/api/projects/${projectId}/board-commit`),
+  saveBoardCommit: (projectId: string, config: BoardCommitConfig) => post<BoardCommitConfig>(`/api/projects/${projectId}/board-commit`, config),
+  /** Criar. A resposta é a tarefa gravada, com `warnings` quando há possível duplicata (só aviso: a tarefa foi criada). */
   createTask: (
     projectId: string,
     input: { title: string; description: string; staffId: string | null; start?: boolean; goal?: string | null; acceptance?: string | null; blockedBy?: string[] },
-  ) => post<Task | null>(`/api/projects/${projectId}/tasks`, input),
+  ) => post<TaskCreateResult | null>(`/api/projects/${projectId}/tasks`, input),
   updateTask: (
     projectId: string,
     taskId: string,
@@ -768,6 +835,12 @@ export const api = {
     post<{ created: string[]; warnings: string[] } | null>(`/api/projects/${projectId}/staff/import`, file),
   /** Efetivar um temporário (contratado por outro funcionário). */
   keepStaff: (projectId: string, staffId: string) => post<StaffProfile>(`/api/projects/${projectId}/staff/${staffId}/keep`),
+  /**
+   * Muda o lugar do cartão na fila do responsável (só A fazer, na fila). `to`: 'top' ou a posição final (1 = a próxima); `step`: um lugar acima ou
+   * abaixo. Do navegador pareado o dono mexe em qualquer cartão; 409 fora da fila ou quando nada muda (já é o primeiro/último).
+   */
+  reorderTask: (projectId: string, taskId: string, body: { to: 'top' | number } | { step: 'up' | 'down' }) =>
+    post<{ ok: true; moved: { from: number; to: number; of: number }; task: Task } | null>(`/api/projects/${projectId}/tasks/${taskId}/order`, body),
   startTask: (projectId: string, taskId: string, force = false) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/start`, { force }),
   /** Apagar. `dependents`: o que fazer com cada tarefa aberta que espera esta (obrigatório para as diretas; sem o mapa completo o servidor recusa com 409). */
   deleteTask: (projectId: string, taskId: string, dependents?: DepMap) =>
@@ -783,11 +856,37 @@ export const api = {
   /** Responder a dúvida escalada da tarefa. A mesma rota do gestor; do navegador pareado a resposta vale como sua e chega ao funcionário. */
   answerTaskQuestion: (projectId: string, taskId: string, body: AnswerBody) =>
     post<{ ok: boolean; task: Task | null }>(`/api/projects/${projectId}/tasks/${taskId}/answer`, body),
+  /** Reenviar o ajuste guardado que não chegou (item `stuck` com `resend`): zera as falhas e tenta já. Só do navegador pareado (403); 409 se encerrada ou sem ajuste guardado. */
+  resendHeld: (projectId: string, taskId: string) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/resend-held`),
+  /** Excluir a mensagem guardada `heldId` (o id do item `h:<heldId>` do chat). Só do navegador pareado (403); 409 se já foi enviada, já foi excluída ou é resposta a uma dúvida. */
+  discardHeld: (projectId: string, taskId: string, heldId: string) =>
+    post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/held/${heldId}/discard`),
+  /** Decidir o follow-up de uma tarefa: virou card (`cardId` opcional) ou descartado (`reason` opcional). Só você pela tela; decidido uma vez, 409 (ver `TaskService.resolveFollowUp`). */
+  resolveFollowUp: (projectId: string, taskId: string, followUpId: string, body: FollowUpDecision) =>
+    post<FollowUpResult | null>(`/api/projects/${projectId}/tasks/${taskId}/followup/${followUpId}/resolve`, body),
+  /**
+   * Criar o card do follow-up em um passo: a tarefa nova (em Aguardar, com o responsável, o título e a descrição do corpo) e o follow-up já resolvido, gravados juntos. Só você pela tela;
+   * sem `title`/`description` o servidor usa os do follow-up; 409 se já foi decidido por outro caminho (ver `TaskService.createFollowUpCard`).
+   */
+  createFollowUpCard: (projectId: string, taskId: string, followUpId: string, body: CardBody) =>
+    post<FollowUpCardResult | null>(`/api/projects/${projectId}/tasks/${taskId}/followup/${followUpId}/card`, body),
   saveRoutines: (projectId: string, staffId: string, routines: Routine[]) =>
     post<StaffProfile>(`/api/projects/${projectId}/staff/${staffId}/routines`, { routines }),
   runRoutine: (projectId: string, staffId: string, routineId: string) =>
     post<{ ok: boolean; text: string } | null>(`/api/projects/${projectId}/staff/${staffId}/routines/${routineId}/run`),
+  /** Cria (sem `id`) ou troca (com o `id`) UMA rotina do funcionário; devolve como a tela de agendamentos a vê. Só pelo navegador pareado. */
+  saveRoutine: (projectId: string, staffId: string, routine: RoutineInput) =>
+    post<{ routine: RoutineSchedule }>(`/api/projects/${projectId}/staff/${staffId}/routines/save`, { routine }),
+  setRoutineEnabled: (projectId: string, staffId: string, routineId: string, enabled: boolean) =>
+    post<{ routine: RoutineSchedule }>(`/api/projects/${projectId}/staff/${staffId}/routines/${routineId}/enabled`, { enabled }),
+  deleteRoutine: (projectId: string, staffId: string, routineId: string) =>
+    post<{ ok: boolean }>(`/api/projects/${projectId}/staff/${staffId}/routines/${routineId}/delete`),
   chatInterrupt: (sessionId: string) => post<{ ok: boolean }>(`/api/chat/${sessionId}/interrupt`),
+  /**
+   * Fecha o processo da conversa (a sessão fica no disco). Parada fecha; trabalhando recusa (409 `working`) sem `confirm`; efeito incerto recusa mesmo
+   * confirmado (409 `uncertain`, com `action` em `ApiError.details`). `closed: false` = não havia processo aberto.
+   */
+  chatClose: (sessionId: string, confirm = false) => post<ChatCloseResult>(`/api/chat/${sessionId}/close`, confirm ? { confirm: true } : {}),
   /** O que é da pessoa (nome, cargo, missão…) vai sempre às cópias ligadas; `copiesUpdated` = quantas mudaram. */
   updateStaff: (projectId: string, staffId: string, input: StaffInput) =>
     post<StaffProfile & { copiesUpdated?: number }>(`/api/projects/${projectId}/staff/${staffId}`, input),
@@ -858,7 +957,7 @@ export interface ShowcaseStatus {
   costUsd?: number;
 }
 
-/** Item da árvore de arquivos do projeto; `path` relativo à raiz, com "/". `locked` = segredo: listado, mas não abre. */
+/** Item da árvore de arquivos do projeto; `path` relativo à raiz, com "/". `locked` = segredo: listado, mas o Club não mostra o conteúdo; abre fora dele (`filesApi.openEditor`). */
 export interface FileEntry {
   name: string;
   path: string;
@@ -910,6 +1009,12 @@ export const filesApi = {
   tree: (projectId: string, path: string) =>
     filesFetch<{ entries: FileEntry[] }>(`/api/projects/${projectId}/files/tree?path=${encodeURIComponent(path)}`),
   read: (projectId: string, path: string) => filesFetch<FileContent>(`/api/projects/${projectId}/files/read?path=${encodeURIComponent(path)}`),
+  /**
+   * Abre um arquivo de SEGREDO no editor de texto do computador onde o Club roda (o conteúdo não passa pelo Club nem por aqui; a resposta traz só o caminho e
+   * qual editor abriu). Só o navegador pareado; arquivo comum é 403 `not-secret`. Recusas: 409 `no-display`/`no-editor`/`changed`, 404, 502 `open-failed`.
+   */
+  openEditor: (projectId: string, path: string) =>
+    filesFetch<{ opened: true; path: string; editor: 'notepad' | 'textedit' | 'custom' }>(`/api/projects/${projectId}/files/open-editor`, { path }),
   /** Extensões de imagem que a aba mostra no lugar do editor (as mesmas do servidor). */
   isImage: (path: string) => /\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i.test(path),
   imageUrl: (projectId: string, path: string, v: number) => `/api/projects/${projectId}/files/image?path=${encodeURIComponent(path)}&v=${v}`,

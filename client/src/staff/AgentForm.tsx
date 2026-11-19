@@ -3,6 +3,7 @@ import { AGENT_PRESETS } from '../../../shared/agentPresets';
 import type { Effort } from '../../../shared/model';
 import { api, type AgentSource } from '../api';
 import { t } from '../i18n';
+import { agentBrief, presetDrift, roleText } from './agentRoles';
 
 // Criar ou editar um agent (subagent) do Claude Code. O modelo do agent é o que permite o padrão
 // orquestrador → executores: o funcionário roda num modelo grande e delega a execução a agents
@@ -39,12 +40,13 @@ const TOOL_SETS = [
   { label: t('staff.toolSetAll'), tools: '' },
 ];
 
-// Os prontos (executor, pesquisador, revisor) são os mesmos que o Claudio’s Club cria sozinho quando um
-// roteiro precisa deles e o projeto não tem.
+// Os prontos (executor, executor rápido, pesquisador, revisor) são os mesmos que o Claudio’s Club cria sozinho
+// quando um roteiro precisa deles e o projeto não tem.
 const PRESETS = AGENT_PRESETS;
 // Rótulo traduzido de cada pronto (pelo nome); o do shared/agentPresets.ts serve de reserva.
 const PRESET_LABEL: Record<string, string> = {
   executor: t('staff.presetExecutor'),
+  'executor-rapido': t('staff.presetExecutorFast'),
   pesquisador: t('staff.presetResearcher'),
   revisor: t('staff.presetReviewer'),
 };
@@ -122,6 +124,9 @@ export function AgentForm({ target, onClose, onSaved }: Props) {
   };
 
   const where = target.scope === 'user' ? t('staff.agentWhereUser') : t('staff.agentWhereProject');
+  // Nome de um pronto: mostra o papel dele e, se o arquivo difere do pronto atual, o que difere (o arquivo é seu: não muda sozinho).
+  const role = roleText(name);
+  const drift = editing && loaded ? presetDrift(name, model, effort) : null;
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -177,6 +182,28 @@ export function AgentForm({ target, onClose, onSaved }: Props) {
                 </select>
               </label>
             </div>
+            {role && <p className="muted small">{role}</p>}
+            {drift && (
+              <p className="agent-drift small" role="note">
+                <span>
+                  {t('staff.presetDrift', {
+                    name,
+                    preset: agentBrief(drift.preset.model, drift.preset.effort),
+                    current: agentBrief(model, effort),
+                  })}
+                </span>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setModel(drift.preset.model);
+                    setEffort(drift.preset.effort);
+                  }}
+                >
+                  {t('staff.presetDriftApply', { preset: agentBrief(drift.preset.model, drift.preset.effort) })}
+                </button>
+              </p>
+            )}
             <label>
               {t('staff.whenToUse')}
               <textarea

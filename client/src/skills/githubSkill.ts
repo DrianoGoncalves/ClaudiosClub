@@ -132,7 +132,7 @@ export function errorText(e: GithubErrorKind): string {
   }
 }
 
-function resetClock(resetAt: unknown): string | null {
+export function resetClock(resetAt: unknown): string | null {
   const ms = typeof resetAt === 'string' ? Date.parse(resetAt) : NaN;
   return Number.isNaN(ms) ? null : new Date(ms).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' });
 }

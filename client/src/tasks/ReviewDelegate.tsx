@@ -3,6 +3,8 @@ import type { StaffProfile, Task } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
 import { t } from '../i18n';
 import { ReviewIcon } from '../icons';
+import { reviewLine } from './codeSummary';
+import { reviewerChoice, reviewersOf, reviewInProgress } from './reviewPick';
 
 // Revisão da entrega pedida a outro funcionário: quem revisa e em que pé está (ReviewStatus) e, em tarefa em
 // revisão, o seletor + "Delegar revisão" (ReviewDelegate). Veredito: aprovada vai para Pronto, reprovada volta para quem fez.
@@ -17,11 +19,9 @@ interface StatusProps {
 export function ReviewStatus({ task, staff, onOpenStaff }: StatusProps) {
   const review = task.review;
   if (!review) return null;
-  const name = staff.find((s) => s.id === review.staffId)?.name ?? review.staffId;
-  const verdict = review.doneAt ? review.verdict : null;
   return (
     <span className="small">
-      {verdict ? t(verdict === 'approved' ? 'tasks.verdictApproved' : 'tasks.verdictRejected', { name }) : `${name} · ${review.doneAt ? t('tasks.replied') : t('tasks.reviewing')}`}
+      {reviewLine(review, (id) => staff.find((s) => s.id === id)?.name ?? id)}
       {' · '}
       <button className="link" onClick={() => onOpenStaff(review.staffId)}>
         {t('tasks.openConversation')}
@@ -37,14 +37,13 @@ interface Props extends StatusProps {
 }
 
 export function ReviewDelegate({ projectId, task, staff, onChanged, onOpenStaff }: Props) {
-  const reviewers = staff.filter((s) => s.id !== task.staffId);
+  const reviewers = reviewersOf(staff, task);
   const [picked, setPicked] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const reviewing = !!task.review && !task.review.doneAt;
+  const reviewing = reviewInProgress(task);
   // Depois de uma resposta o padrão é outro revisor (pode escolher o mesmo).
-  const previous = task.review?.staffId;
-  const reviewer = reviewers.some((s) => s.id === picked) ? picked : (reviewers.find((s) => s.id !== previous) ?? reviewers[0])?.id ?? '';
+  const reviewer = reviewerChoice(reviewers, picked, task.review?.staffId);
 
   const ask = async () => {
     setBusy(true);

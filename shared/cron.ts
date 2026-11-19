@@ -50,14 +50,19 @@ function field(text: string, f: (typeof FIELDS)[number]): Set<number> {
   return out;
 }
 
-export function cronMatches(spec: CronSpec, d: Date): boolean {
-  if (!spec.minute.has(d.getMinutes()) || !spec.hour.has(d.getHours()) || !spec.month.has(d.getMonth() + 1)) return false;
+/** O dia (mês, dia do mês e dia da semana) bate, qualquer que seja a hora. */
+export function cronDayMatches(spec: CronSpec, d: Date): boolean {
+  if (!spec.month.has(d.getMonth() + 1)) return false;
   const domOk = spec.dom.has(d.getDate());
   const dowOk = spec.dow.has(d.getDay());
   if (spec.domAny && spec.dowAny) return true;
   if (spec.domAny) return dowOk;
   if (spec.dowAny) return domOk;
   return domOk || dowOk;
+}
+
+export function cronMatches(spec: CronSpec, d: Date): boolean {
+  return spec.minute.has(d.getMinutes()) && spec.hour.has(d.getHours()) && cronDayMatches(spec, d);
 }
 
 /** Próxima vez que a rotina roda depois de `from` (até um ano à frente); null se nunca. */

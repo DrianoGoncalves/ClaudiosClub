@@ -131,6 +131,7 @@ describe('rotas da sandbox do Codex', () => {
       ['POST', '/api/projects/p1/chat/abc-123/wake'],
       ['POST', '/api/projects/p1/chat/abc-123/wake/cancel'],
       ['POST', '/api/projects/p1/staff/ana-1a2b/done'],
+      ['POST', '/api/projects/p1/tasks/t1'],
     ] as const) {
       expect(ask(m, p), `${m} ${p}`).toBeNull();
     }
@@ -151,6 +152,7 @@ describe('rotas da sandbox do Codex', () => {
       ['POST', '/api/projects/p1/tasks/t1/merge'],
       ['POST', '/api/projects/p1/files/write'],
       ['POST', '/api/projects/p1/files/delete'],
+      ['POST', '/api/projects/p1/files/open-editor'],
       ['POST', '/api/projects/p1/attachments'],
       ['POST', '/api/projects/p1/connections'],
       ['POST', '/api/projects/p1/connections/list'],
@@ -200,6 +202,7 @@ describe('rotas da sandbox do Codex', () => {
     for (const [m, p] of [
       ['GET', '/api/projects/outro/tasks'],
       ['POST', '/api/projects/outro/tasks'],
+      ['POST', '/api/projects/outro/tasks/t1'],
       ['POST', '/api/projects/outro/staff'],
       ['POST', '/api/projects/outro/chat/send'],
       ['POST', '/api/projects/outro/chat/s1/wake'],
@@ -210,7 +213,7 @@ describe('rotas da sandbox do Codex', () => {
   });
 
   it('os POSTs liberados são os mesmos da lista dos funcionários (a sandbox não ganha rota que eles não têm)', () => {
-    for (const p of ['/api/projects/p1/tasks', '/api/projects/p1/staff', '/api/projects/p1/chat/send', '/api/projects/p1/chat/s/wake', '/api/projects/p1/chat/s/wake/cancel', '/api/projects/p1/staff/x/done']) {
+    for (const p of ['/api/projects/p1/tasks', '/api/projects/p1/tasks/t1', '/api/projects/p1/staff', '/api/projects/p1/chat/send', '/api/projects/p1/chat/s/wake', '/api/projects/p1/chat/s/wake/cancel', '/api/projects/p1/staff/x/done']) {
       expect(staffMayPost(p)).toBe(true);
       expect(ask('POST', p)).toBeNull();
     }
@@ -356,6 +359,7 @@ describe('porta de entrada: classificação pelo socket', () => {
       ['POST', '/api/config'],
       ['POST', '/api/projects/p1/staff/ana/routines'],
       ['POST', '/api/projects/p1/files/write'],
+      ['POST', '/api/projects/p1/files/open-editor'],
       ['POST', '/api/server/stop'],
       ['POST', '/api/pair/rotate'],
       ['POST', '/api/pair/approve'],

@@ -2,6 +2,7 @@ import { createReadStream, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import type { CostReport, CostSummary } from '../../../shared/model';
+import { writeAtomic } from '../../atomicWrite';
 import { listDir, tryJson } from './fsutil';
 import { costOf, isBillable, normalizeModel, PRICING_AS_OF, type Usage } from './pricing';
 
@@ -289,10 +290,7 @@ export class CostIndex {
   }
 
   private async saveCache() {
-    await fs.mkdir(path.dirname(this.cacheFile), { recursive: true });
-    const tmp = `${this.cacheFile}.${process.pid}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify({ version: CACHE_VERSION, files: Object.fromEntries(this.files) }));
-    await fs.rename(tmp, this.cacheFile);
+    await writeAtomic(this.cacheFile, JSON.stringify({ version: CACHE_VERSION, files: Object.fromEntries(this.files) }));
   }
 }
 

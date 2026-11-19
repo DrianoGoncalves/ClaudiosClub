@@ -111,13 +111,23 @@ export interface ResumeDeps {
   send: (entry: ResumeEntry) => Promise<void>;
   /** Conversa cortada numa ação com efeito fora do projeto (`cut`): não envia; segura para você (ChatManager.holdCut). */
   hold?: (entry: ResumeEntry & { cut: string }) => void;
+  /**
+   * Conversa de tarefa que estava no motor secundário, com o principal já liberado: devolve a tarefa a ele numa conversa nova, que leva o aviso do reinício
+   * (TaskService.resumeOnPrimary). True = devolvida: a antiga não é retomada. Erro ou false: retoma como sempre.
+   */
+  redirect?: (entry: ResumeEntry) => Promise<boolean>;
+  /**
+   * O projeto da conversa está pausado (ver server/projectPause.ts)? Então ela não é retomada (o pedido do reinício é de uma tentativa só e já foi lido: a conversa de tarefa
+   * volta pela retomada das órfãs quando o projeto for retomado; as outras, quando você mandar mensagem). Erro ao perguntar: não retoma.
+   */
+  paused?: (projectId: string) => Promise<boolean>;
   now?: () => number;
   log?: (line: string) => void;
 }
 
 /**
  * Boot, com o servidor ouvindo e os motores prontos: retoma cada conversa que estava em turno. Antes, o corte (ação com efeito
- * fora do projeto pela metade: segura para você) e o limite (barrado: não envia). Uma tentativa por conversa; se o envio falhar,
+ * fora do projeto pela metade: segura para você), o projeto pausado e o limite (barrado: não envia). Uma tentativa por conversa; se o envio falhar,
  * segue sem repetir.
  */
 export async function resumeAfterRestart(d: ResumeDeps): Promise<void> {
@@ -133,6 +143,20 @@ export async function resumeAfterRestart(d: ResumeDeps): Promise<void> {
       }
       log(`${e.sessionId}: não retomada: o reinício cortou "${e.cut}" no meio (vai para você)`);
       continue;
+    }
+    // Projeto pausado: nada começa sozinho, nem a devolução ao motor principal (conversa nova) nem a retomada da antiga.
+    if (await d.paused?.(e.projectId).catch(() => true)) {
+      log(`${e.sessionId}: não retomada: o projeto está pausado`);
+      continue;
+    }
+    // Antes do limite: o que barra é o do motor da conversa antiga, e a devolvida abre no principal (que já foi conferido como livre).
+    try {
+      if (await d.redirect?.(e)) {
+        log(`${e.sessionId}: o motor principal da ficha já está liberado: a tarefa voltou a ele, em conversa nova`);
+        continue;
+      }
+    } catch (err) {
+      log(`${e.sessionId}: não consegui devolver ao motor principal (${errorText(err)}); retoma como estava`);
     }
     let stop: { resetsAt: string | null } | null;
     try {

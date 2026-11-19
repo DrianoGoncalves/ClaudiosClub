@@ -1,18 +1,20 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { AskedQuestion, BackgroundTask, ChatAttachment, ChatCommand, ChatEvent, ChatItem, ChatState, SendPriority, TaskQuestion, TurnCapHit, UsageLimit } from '../../shared/model';
+import type { AskedQuestion, BackgroundTask, ChatAttachment, ChatCommand, ChatEvent, ChatItem, ChatState, SendPriority, TaskQuestion, TurnCapHit, TurnRetryNotice, UsageLimit } from '../../shared/model';
 import { cleanEnv, withoutMycoToken } from '../auth';
 import { tryJson } from '../adapters/claude/fsutil';
 import { contextWindowFor } from '../adapters/claude/pricing';
 import { cacheTtlOf } from './contextPolicy';
-import { claudeEditedFile, claudeToolFile } from './codeEdits';
+import { claudeEditedFile, claudeToolCommand, claudeToolFile } from './codeEdits';
 import { classifyDenial, denialNotice } from './denial';
+import { claudeDenied, type DeniedInfo } from './denied';
 import { hasCheckpoint, inputText, resultText, stripCheckpoint, toolSummary } from './items';
 import { ASK_TOOL, cleanAnswers, parseQuestions } from './questions';
 import { killTree } from './registry';
 import { scanSecrets, type ClassifiedSecret, type SecretSource } from './secrets';
 import { capText, TurnBudget, type TurnCaps } from './turnCap';
+import type { TurnContext, TurnEnd } from './turnRetry';
 import { isClaudeModelNotFound } from './modelNotFound';
 import { limitFromRateLimitEvent, limitFromText, mergeHits, type LimitHit } from './usageLimit';
 
@@ -123,14 +125,21 @@ export interface ChatProcessOptions {
   onModelUnavailable?: (model: string) => void;
   /** O turno acabou sem estourar o limite (resposta normal, outro erro, ou interrompido por você): zera a conta de estouros seguidos. */
   onTurnWithoutLimit?: () => void;
+  /**
+   * Como o turno acabou, antes do aviso de ocioso (`onIdle`): terminou bem, falhou com o erro do motor, ou o processo saiu no meio dele (ver
+   * `TurnEnd`). Turno que você parou (Parar, interrupção, fechamento) e o que estourou o limite de uso não passam por aqui. É por este gancho que o
+   * manager decide retomar sozinho, e ele precisa registrar a espera de forma síncrona antes de a conversa ser dada como parada.
+   */
+  onTurnEnd?: (end: TurnEnd) => void;
   /** O processo saiu (`error` com o motivo, se saiu com erro). */
   onExit?: (pid: number | null, error: string | null) => void;
   /**
    * Algo com cara de segredo passou pela conversa (o tipo, o palpite de ser real e a dica mascarada; o valor nunca sai daqui). Chamado uma vez por
    * rótulo achado no texto, do mais grave ao menos grave. `file`: o arquivo da ferramenta onde ele apareceu, como o motor o deu (absoluto ou
-   * relativo à pasta da conversa); sem ele, o aviso não aponta arquivo (ver `claudeToolFile` e `codexToolFile`).
+   * relativo à pasta da conversa); sem ele, o aviso não aponta arquivo (ver `claudeToolFile` e `codexToolFile`). `command`: o segredo veio da SAÍDA de um comando
+   * de shell que não aponta um arquivo só (vários arquivos, `;`, pipe): o manager descobre depois qual arquivo do projeto o tem (ver `locateSecretFile`).
    */
-  onSecret?: (hit: ClassifiedSecret, source?: SecretSource, file?: string) => void;
+  onSecret?: (hit: ClassifiedSecret, source?: SecretSource, file?: string, command?: string) => void;
   /** Sal da instalação para a identidade da ocorrência do segredo (ver `ClassifiedSecret.occurrence`); sem ele, o hash não tem sal. */
   secretPepper?: string;
   /**
@@ -139,6 +148,11 @@ export interface ChatProcessOptions {
    * shell também não (ver chat/codeEdits.ts). O manager repassa para o quadro (card automático).
    */
   onEdit?: (files: string[]) => void;
+  /**
+   * Uma ferramenta foi barrada por uma regra de permissão (Claude: o aviso de negação do chat, também o dos subagents; Codex: item recusado pela sandbox, ver
+   * denied.ts). `turn` identifica o turno (o manager agrupa por ele). Registro, não trava: erro de quem recebe nunca derruba a leitura do stream.
+   */
+  onDenied?: (denied: DeniedInfo, turn: string) => void;
   /**
    * Parou de trabalhar: o turno acabou (`turn`), o que estava em segundo plano terminou
    * (`background`) ou o processo saiu (`exit`).
@@ -160,6 +174,8 @@ export interface ChatProcessOptions {
   mycoToken?: string;
   /** Troca o `spawn` real nos testes. */
   spawnImpl?: (cmd: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }) => ChildProcessWithoutNullStreams;
+  /** Quanto o `stop()` espera o claude sair sozinho antes de encerrar a árvore dele (padrão 3 s; os testes encurtam). */
+  stopGraceMs?: number;
 }
 
 type Listener = (e: ChatEvent) => void;
@@ -183,6 +199,12 @@ export class ChatProcess {
   /** Pedidos de permissão sem resposta: a entrada original e as sugestões de "permitir sempre". */
   private readonly pending = new Map<string, { input: unknown; tool: string; suggestions: Suggestion[]; questions?: AskedQuestion[] }>();
   protected stderr = '';
+  /** `stop()` já foi chamado: a saída que vem depois é nossa, não falha (no Windows o `taskkill /F` sai com código 1). */
+  private closedByUs = false;
+  /** Último erro que o próprio claude escreveu no stream (mensagem de erro do assistente ou `result` com `is_error`): vale quando ele sai com código e sem stderr. */
+  private streamError: string | null = null;
+  /** O tipo e o status HTTP que o claude pôs na mensagem de erro sintética do assistente (`error`, `apiErrorStatus`): a classificação do erro do turno os lê. */
+  private apiError: { kind: string | null; status: number | null } | null = null;
   private buf = '';
   protected state: ChatState = {
     running: false,
@@ -326,13 +348,22 @@ export class ChatProcess {
     };
     const child = run('claude', [...STREAM_FLAGS, ...this.opts.args], { cwd: this.opts.cwd, env });
     this.child = child;
+    this.closedByUs = false;
+    this.streamError = null;
+    this.apiError = null;
     this.setState({ running: true, error: null });
     child.stdout.on('data', (chunk: Buffer) => this.onData(chunk.toString('utf8')));
     child.stderr.on('data', (chunk: Buffer) => {
       this.stderr = (this.stderr + chunk.toString('utf8')).slice(-2_000);
     });
     child.on('error', (err) => this.finish(`não foi possível iniciar o claude: ${err.message}`));
-    child.on('exit', (code) => this.finish(code && code !== 0 ? this.stderr.trim() || `o claude saiu com código ${code}` : null));
+    child.on('exit', (code, signal) => this.finish(this.exitError(code), { code, signal }));
+  }
+
+  /** O erro da conversa quando o processo sai: nenhum se saiu limpo ou se fomos nós que fechamos; senão o stderr, o último erro do stream, ou o código. */
+  private exitError(code: number | null): string | null {
+    if (this.closedByUs || !code) return null;
+    return this.stderr.trim() || this.streamError || `o claude saiu com código ${code}`;
   }
 
   subscribe(listener: Listener, after = 0): () => void {
@@ -399,6 +430,11 @@ export class ChatProcess {
     });
   }
 
+  /** Aviso da retomada automática: igual a `setNotice`, com o estado em campos (`retry`); o texto é o de reserva. */
+  setRetryNotice(id: string, text: string, tone: 'info' | 'warn', retry: TurnRetryNotice) {
+    this.putItem({ kind: 'notice', id, text, tone, at: new Date().toISOString(), retry });
+  }
+
   send(text: string, priority: SendPriority = 'next', images: string[] = [], notice?: string, files: ChatAttachment[] = [], fromStaff = false) {
     this.checkpointSeen = false;
     const queued = this.state.busy ? priority : undefined;
@@ -429,8 +465,15 @@ export class ChatProcess {
       ...(fromStaff && { fromStaff }),
     });
     this.waitingReply = true;
+    this.streamError = null;
+    this.apiError = null;
     this.startTurnBudget();
     this.setState({ busy: true, error: null });
+  }
+
+  /** O que o manager precisa para decidir a retomada de um turno que acabou (ver `TurnEnd`): lido já, antes de qualquer limpeza do estado. */
+  protected turnContext(): TurnContext {
+    return { items: this.snapshot().items, awaitingAnswer: this.awaitingAnswer, background: [...this.state.background] };
   }
 
   /** Troca o modo de permissão do processo aberto, sem reiniciar (a ficha mudou de autonomia). */
@@ -532,6 +575,7 @@ export class ChatProcess {
    */
   protected startTurnBudget(): void {
     if (this.budget.active) return;
+    this.turnKey = randomUUID().slice(0, 8);
     this.budget.begin(this.clock());
     const caps = this.opts.turnCaps?.();
     if (caps) void caps.then((c) => { this.budget.setCaps(c); this.checkTurnCap(); }, () => {});
@@ -613,9 +657,11 @@ export class ChatProcess {
   }
 
   /** Guarda de segredos: avisa o tipo, o palpite e a dica do que apareceu (ver secrets.ts). Vale para o Claude e para o Codex (este herda daqui). */
-  protected scan(text: string, source?: SecretSource, file?: string | null) {
+  protected scan(text: string, source?: SecretSource, file?: string | null, command?: string | null) {
     if (!this.opts.onSecret) return;
-    for (const hit of scanSecrets(text, { file, cwd: this.opts.cwd, pepper: this.opts.secretPepper })) this.opts.onSecret(hit, source, file ?? undefined);
+    // O comando só serve à saída dele (`tool-result`) e quando o arquivo não está dado: no que o próprio comando escreveu (`tool-input`) não há de onde ler.
+    const from = source === 'tool-result' && !file && command ? command : undefined;
+    for (const hit of scanSecrets(text, { file, cwd: this.opts.cwd, pepper: this.opts.secretPepper })) this.opts.onSecret(hit, source, file ?? undefined, from);
   }
 
   lastAssistantText(): string | null {
@@ -659,12 +705,13 @@ export class ChatProcess {
   }
 
   stop() {
-    this.child?.stdin.end();
-    // Se não sair sozinho, encerra a árvore (o claude e os comandos que ele abriu).
     const child = this.child;
+    if (child) this.closedByUs = true;
+    child?.stdin.end();
+    // Se não sair sozinho, encerra a árvore (o claude e os comandos que ele abriu).
     setTimeout(() => {
       if (child?.pid && child.exitCode === null && child.signalCode === null) void killTree(child.pid);
-    }, 3_000).unref?.();
+    }, this.opts.stopGraceMs ?? 3_000).unref?.();
   }
 
   // ---- leitura do stream ----
@@ -684,6 +731,9 @@ export class ChatProcess {
 
   /** Chamadas com arquivo-alvo (Read e as de edição; id da ferramenta → arquivo) que ainda esperam o resultado: o aviso de segredo no resultado aponta esse arquivo. */
   private readonly toolFiles = new Map<string, string>();
+
+  /** Comandos de shell (Bash e PowerShell; id da ferramenta → comando) que ainda esperam o resultado: se a saída traz segredo, o manager descobre qual arquivo que o comando leu o tem. */
+  private readonly toolCommands = new Map<string, string>();
 
   /**
    * Edição que deu certo, vista nas ferramentas do Claude (a conversa e os subagents): a chamada (`tool_use`) guarda o arquivo e o resultado
@@ -734,8 +784,11 @@ export class ChatProcess {
     if (ev.type !== 'result') this.checkTurnCap();
     // As edições dos subagents também valem (o card automático registra toda alteração de código), então contam antes do filtro abaixo.
     if (ev.type === 'assistant' || ev.type === 'user') this.trackEdits(ev);
-    // Eventos de subagents (parent_tool_use_id preenchido) ficam fora da conversa principal.
-    if (ev.parent_tool_use_id) return;
+    // Eventos de subagents (parent_tool_use_id preenchido) ficam fora da conversa principal; só a negação deles vai para o alerta (ver `trackSubDenials`).
+    if (ev.parent_tool_use_id) {
+      if (this.opts.onDenied && (ev.type === 'assistant' || ev.type === 'user')) this.trackSubDenials(ev);
+      return;
+    }
     const at = new Date().toISOString();
 
     switch (ev.type) {
@@ -791,9 +844,11 @@ export class ChatProcess {
         if (!msg) return;
         // O erro de limite chega como uma mensagem "sintética" do assistente (não uma resposta dele).
         if (ev.isApiErrorMessage === true || msg.model === '<synthetic>' || typeof ev.error === 'string') {
+          this.apiError = { kind: typeof ev.error === 'string' ? ev.error : null, status: typeof ev.apiErrorStatus === 'number' ? ev.apiErrorStatus : null };
           for (const b of (Array.isArray(msg.content) ? msg.content : []) as Array<Record<string, unknown>>) {
             const hit = b.type === 'text' ? limitFromText(b.text) : null;
             if (hit) this.limitSeen = { ...mergeHits(this.limitSeen, hit), confirmed: true };
+            if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) this.streamError = b.text.trim().slice(0, 500);
           }
         }
         const msgId = msg.id ?? randomUUID();
@@ -814,6 +869,8 @@ export class ChatProcess {
             const file = claudeToolFile(name, b.input);
             // O resultado (a leitura de um arquivo) chega depois: guarda o arquivo da chamada até lá.
             if (file && this.opts.onSecret && this.toolFiles.size < 1_000) this.toolFiles.set(b.id, file);
+            const command = this.opts.onSecret ? claudeToolCommand(name, b.input) : null;
+            if (command && this.toolCommands.size < 1_000) this.toolCommands.set(b.id, command);
             this.scan(input, 'tool-input', file);
             this.putItem({ kind: 'tool', id: `t:${b.id}`, name, summary: toolSummary(name, b.input), input, result: null, isError: false, at });
           }
@@ -835,8 +892,10 @@ export class ChatProcess {
           const tool = this.items.get(`t:${b.tool_use_id}`);
           const result = resultText(b.content);
           const file = this.toolFiles.get(b.tool_use_id);
+          const command = this.toolCommands.get(b.tool_use_id);
           this.toolFiles.delete(b.tool_use_id);
-          this.scan(result, 'tool-result', file);
+          this.toolCommands.delete(b.tool_use_id);
+          this.scan(result, 'tool-result', file, command);
           if (tool?.kind === 'tool') {
             this.putItem({ ...tool, result, isError: b.is_error === true });
             // Erro de ferramenta: o texto do resultado pode ser uma negação (troca o aviso do evento, ou abre um) e já tira a espera.
@@ -960,8 +1019,14 @@ export class ChatProcess {
         this.streamingId = null;
         const hit = ev.is_error === true ? limitFromText(ev.result) : null;
         if (hit) this.limitSeen = { ...mergeHits(this.limitSeen, hit), confirmed: true };
+        // Parar, interromper ou fechar: este turno acabou por vontade nossa e nunca é retomado sozinho, qualquer que seja o erro dele.
+        const intentional = this.stopping || this.closedByUs;
         const stopped = this.stopping && ev.subtype === 'error_during_execution';
         this.stopping = false;
+        const apiError = this.apiError;
+        const priorError = this.streamError;
+        this.apiError = null;
+        this.streamError = !stopped && ev.is_error === true && typeof ev.result === 'string' && ev.result.trim() ? ev.result.trim().slice(0, 500) : null;
         // Modelo pedido que não existe mais: o turno não termina; o padrão e a mesma mensagem (uma vez, ver `retryOnDefault`).
         const sent = this.unanswered.shift();
         if (!stopped && sent && ev.is_error === true && !this.modelRetried && this.wantedModel && this.wantedModel !== 'default' && isClaudeModelNotFound(ev)) {
@@ -981,7 +1046,17 @@ export class ChatProcess {
         const limit = this.limitSeen;
         this.limitSeen = null;
         if (!stopped && limit && (limit.confirmed || ev.is_error === true)) this.opts.onUsageLimit?.({ resetsAt: limit.resetsAt, window: limit.window });
-        else this.opts.onTurnWithoutLimit?.();
+        else {
+          this.opts.onTurnWithoutLimit?.();
+          if (ev.is_error !== true) this.opts.onTurnEnd?.({ kind: 'ok' });
+          // Erro do turno, com o motor sem mais nada na fila (se outra mensagem já espera, o trabalho segue sozinho). O texto é o do resultado
+          // (ou a mensagem de erro sintética que veio antes): nunca a saída de uma ferramenta.
+          else if (!intentional && !stopped && !this.unanswered.length) {
+            const status = typeof ev.api_error_status === 'number' ? ev.api_error_status : (apiError?.status ?? null);
+            const text = typeof ev.result === 'string' && ev.result.trim() ? ev.result.trim() : (priorError ?? '');
+            this.opts.onTurnEnd?.({ kind: 'failed', error: { text: text.slice(0, 500), status, kind: apiError?.kind ?? null }, ...this.turnContext() });
+          }
+        }
         this.endTurnBudget();
         this.setState({ busy: false, compacting: false });
         this.idleCheck('turn');
@@ -1013,9 +1088,38 @@ export class ChatProcess {
   private fastMode = false;
   /** Avisos de negação esperando o texto do resultado (chave: id do tool_use, ou `name:<ferramenta>` sem id). */
   private readonly denialNotices = new Map<string, string>();
+  /** Chamadas dos subagents (id da ferramenta → nome) que ainda esperam o resultado: se vier negada, o alerta diz qual ferramenta foi. */
+  private readonly subCalls = new Map<string, string>();
+  /** O turno de agora (muda quando um começa): o que o alerta "ação barrada" usa para agrupar as negações. */
+  protected turnKey = randomUUID().slice(0, 8);
 
-  private finish(error: string | null) {
+  /** Registro da negação para o manager: nunca derruba a leitura do stream. */
+  protected noteDenied(denied: DeniedInfo): void {
+    try {
+      this.opts.onDenied?.(denied, this.turnKey);
+    } catch {
+      // o alerta registra o que puder
+    }
+  }
+
+  /**
+   * `exit`: o processo saiu (e como). Saída no meio de um turno ocupado, sem fechamento nosso (`stop`), é um turno perdido: o manager decide
+   * se retoma (ver `TurnEnd`). Ocupação, intenção de parada e ação pendente são lidas antes de o estado ser limpo, aqui embaixo.
+   */
+  private finish(error: string | null, exit?: { code: number | null; signal: NodeJS.Signals | null }) {
     if (!this.state.running) return;
+    const lost: TurnEnd | null =
+      exit && !this.closedByUs && this.busy
+        ? {
+            kind: 'lost',
+            error: {
+              text: (error ?? this.streamError ?? (exit.signal ? `o claude foi encerrado pelo sinal ${exit.signal} no meio do turno` : `o claude saiu no meio do turno (código ${exit.code ?? '?'})`)).slice(0, 500),
+              status: this.apiError?.status ?? null,
+              kind: this.apiError?.kind ?? null,
+            },
+            ...this.turnContext(),
+          }
+        : null;
     const pid = this.child?.pid ?? null;
     this.child = null;
     this.endTurnBudget();
@@ -1033,6 +1137,7 @@ export class ChatProcess {
     this.waitingReply = false;
     this.setState({ running: false, busy: false, compacting: false, error, background: [] });
     for (const done of this.exitWaiters.splice(0)) done();
+    if (lost) this.opts.onTurnEnd?.(lost);
     this.opts.onIdle?.('exit');
   }
 
@@ -1103,6 +1208,27 @@ export class ChatProcess {
     const prev = this.items.get(id);
     const at = prev?.kind === 'notice' ? prev.at : new Date().toISOString();
     this.putItem({ kind: 'notice', id, text: denialNotice(tool, denial), tone: 'warn', at, tool, denial });
+    this.noteDenied(claudeDenied(tool, denial));
+  }
+
+  /**
+   * Negação dentro de um subagent (o executor do roteiro "planeje primeiro"): os eventos dele não entram na conversa, mas a regra que barrou vale para o turno inteiro.
+   * Sem o evento `permission_denied` (que aqui não é lido), só o texto do resultado que se reconhece como negação conta; erro comum não.
+   */
+  private trackSubDenials(ev: Record<string, unknown>): void {
+    const content = (ev.message as { content?: unknown } | undefined)?.content;
+    if (!Array.isArray(content)) return;
+    for (const b of content as Array<Record<string, unknown>>) {
+      if (ev.type === 'assistant' && b.type === 'tool_use' && typeof b.id === 'string' && typeof b.name === 'string') {
+        if (this.subCalls.size < 1_000) this.subCalls.set(b.id, b.name);
+      } else if (ev.type === 'user' && b.type === 'tool_result' && typeof b.tool_use_id === 'string') {
+        const tool = this.subCalls.get(b.tool_use_id);
+        this.subCalls.delete(b.tool_use_id);
+        if (!tool || b.is_error !== true) continue;
+        const denial = classifyDenial(resultText(b.content));
+        if (denial.layer !== 'other') this.noteDenied(claudeDenied(tool, denial));
+      }
+    }
   }
 
   protected setState(patch: Partial<ChatState>) {

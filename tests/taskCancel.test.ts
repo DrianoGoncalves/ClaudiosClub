@@ -152,7 +152,7 @@ describe('cancelar: tarefa em andamento', () => {
     expect(runs.map((r) => (r.ev === 'end' ? r.outcome : r.ev))).toEqual(['start', 'cancelled']);
     // Quem pediu fica sabendo do cancelamento, e não de uma entrega.
     expect(b.notified).toHaveLength(1);
-    expect(b.notified[0]).toMatchObject({ staffId: 'gio-1', text: expect.stringContaining('foi cancelada pelo usuário: o cliente desistiu') });
+    expect(b.notified[0]).toMatchObject({ staffId: 'gio-1', text: expect.stringContaining('foi cancelada pelo usuário: “o cliente desistiu”') });
     expect(b.notified[0]!.text).not.toContain('entregou');
   });
 
@@ -248,7 +248,7 @@ describe('cancelada bloqueia: dependentes', () => {
       blocked: { taskId: x.id, blockerId: base.id, blockerStatus: 'cancelled', reason: 'cancelada: mudou o escopo' },
     });
     await vi.waitFor(() => expect(b.notified.filter((n) => n.staffId === 'gio-1')).toHaveLength(1));
-    expect(b.notified[0]!.text).toContain('parou: cancelada: mudou o escopo');
+    expect(b.notified[0]!.text).toContain('parou: “cancelada: mudou o escopo”');
     // Sem motivo: só "cancelada".
     const sem = await b.make('Sem motivo');
     await b.svc.cancel('p', sem.id, { by: 'user' });
@@ -492,9 +492,12 @@ describe('cancelar pela API: o token tem de ser o da conversa atual da tarefa', 
     const outroProjeto = tokens.issue({ staffId: 'ana-1', projectId: 'q', sessionId: 's-q', engine: 'claude' });
     const semFicha = tokens.issue({ staffId: null, projectId: 'p', sessionId: 's-nf', engine: 'claude' });
 
-    for (const token of [undefined, 'inventado', outra, gestor, outroProjeto, semFicha]) {
+    for (const token of [undefined, 'inventado', outra, outroProjeto, semFicha]) {
       await expect(b.svc.cancelFrom('p', t.id, callerOf(tokens, token), 'x')).rejects.toBeInstanceOf(TaskForbiddenError);
     }
+    // Quem pediu a tarefa (o gestor) cancela direto só a que nunca começou: esta já começou, então 409 que aponta o pedido de cancelamento
+    // (tests/cancelRequest.test.ts). Antes da regra do solicitante era 403, como o dos outros.
+    await expect(b.svc.cancelFrom('p', t.id, callerOf(tokens, gestor), 'x')).rejects.toBeInstanceOf(TaskConflictError);
     expect((await b.get(t.id)).status).toBe('doing');
     expect(b.calls).toEqual([]);
 
@@ -502,7 +505,7 @@ describe('cancelar pela API: o token tem de ser o da conversa atual da tarefa', 
     expect(out).toMatchObject({ status: 'cancelled', cancelledBy: 'ana-1', cancelReason: 'o usuário pediu no chat' });
     expect(out.history.at(-1)).toMatchObject({ status: 'cancelled', by: 'auto' });
     expect(b.calls).toEqual(['interrupt:s-1', 'settle:s-1', 'continue:s-1']);
-    expect(b.notified.at(-1)).toMatchObject({ staffId: 'gio-1', text: expect.stringContaining('foi cancelada por Ana: o usuário pediu no chat') });
+    expect(b.notified.at(-1)).toMatchObject({ staffId: 'gio-1', text: expect.stringContaining('foi cancelada por Ana: “o usuário pediu no chat”') });
     // Tarefa que não existe: null (404).
     expect(await b.svc.cancelFrom('p', 't-nao-existe', callerOf(tokens, own))).toBeNull();
   });
@@ -546,7 +549,7 @@ describe('instrução ao funcionário: como cancelar a própria tarefa', () => {
     expect(text).toContain('sem dúvida');
     expect(text).toContain('pergunte antes');
     expect(text).toContain('Nunca marque a tarefa como pronta nem a apague');
-    expect(text.indexOf('Cancelar esta tarefa')).toBeLessThan(text.indexOf('Quando terminar, responda'));
+    expect(text.indexOf('Cancelar esta tarefa')).toBeLessThan(text.indexOf('Quando terminar, a sua última mensagem é a entrega'));
   });
 
   it('no Codex o endereço é o da sandbox (127.0.0.2)', async () => {

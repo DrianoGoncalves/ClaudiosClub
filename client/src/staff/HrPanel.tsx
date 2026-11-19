@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AppConfig, StaffProfile } from '../../../shared/model';
 import { api, deleteStaffConfirm, isPairingError, type DirectoryStaff, type StaffRef } from '../api';
+import { noteStillWorking } from '../chat/closeConversation';
 import { t } from '../i18n';
 import { Face } from './CopyFromCompany';
 import { fieldsThatDiffer, hrGroups, linkTargets, orphansOf, PERSON_FIELD_LABEL, personGroup, sameNameGroups, type HrGroup } from './directory';
@@ -90,7 +91,10 @@ export function HrPanel({ onEdit, profiles, onConfig, onChanged, onNotice }: Pro
   const archive = (p: DirectoryStaff) =>
     act(async () => {
       // A mesma chave do arquivar do painel do funcionário (archiveKey).
-      onConfig(await api.archive('session', `staff:${p.staffId}`, !p.archived));
+      const config = await api.archive('session', `staff:${p.staffId}`, !p.archived);
+      onConfig(config);
+      // Arquivar fecha as conversas paradas dele; as que trabalham seguem abertas.
+      await noteStillWorking(config.closing);
       return null;
     });
 

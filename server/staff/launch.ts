@@ -1,20 +1,22 @@
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, rm } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerInfo, StaffProfile } from '../../shared/model';
 import { personalityName, personalityReminder } from '../../shared/personality';
 import { defaultLocations } from '../adapters/claude/paths';
 import { clubBlockedOrigins } from '../clubAddress';
 import { MYCO_HOME } from '../config';
+import { heavyLockDir } from '../heavyQueue';
 import { lazyNavegadorCommand } from '../navegadorMcp';
 import { ROOT } from '../root';
+import { memoryMeasure, memoryOver } from '../../scripts/hooks/memory-cap.mjs';
 import { isClaudeRoot, renderFicha, systemPrompt, type CleanBrowserInfo, type CodexChromeInfo, type FichaContext, type MemoriaInfo, type SshInfo, type TeamMember } from './ficha';
 import { FTP_MCP_NAME, GPT_MCP_NAME, MEMORIA_MCP_NAME } from '../../shared/model';
 import { DEFAULT_SECRETS_DIR } from '../secretVault';
 import { ftpMcpServerConfig } from './ftpMcp';
 import { memoriaMcpServer } from './memoriaMcp';
 import { SSH_MCP_BUNDLE, SSH_MCP_NAME, SSH_READ_TOOLS, WRITE_AUTONOMY, sshMcpServerConfig } from './sshMcp';
-import { CLEAN_BROWSER_MCP_NAME, CODEX_CHROME_MCP_NAME, CODEX_SSH_MCP_NAME, type CodexAgentRole, type CodexExtraMcp, type CodexMcpServer } from '../chat/codexArgs';
+import { CLEAN_BROWSER_MCP_NAME, CODEX_CHROME_MCP_NAME, CODEX_SSH_MCP_NAME, type CodexAgentRole, type CodexExtraMcp, type CodexHeavyGuard, type CodexMcpServer } from '../chat/codexArgs';
 import { codexMcpAccess } from './mcpAccess';
 import { gptMcpServerConfig } from './gptMcp';
 import { buildMcpConfig, codexMcpServers, mcpWriteFileFor, type CodexMcpMotivo } from './mcp';
@@ -129,13 +131,13 @@ export interface PreparedRun {
  * hooks do Claudio’s Club e os agents do roteiro, para a conversa no Claudio’s Club. Rodando fora
  * da pasta do projeto (worktree), a pasta das fichas entra em `--add-dir`.
  */
-export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string): Promise<PreparedRun> {
+export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string, readOnly = false): Promise<PreparedRun> {
   const away = path.resolve(cwd) !== path.resolve(ctx.projectPath);
   const dir = path.join(ctx.runDir, sessionId);
   // MCP de SSH: o mesmo do Codex (ver sshLaunchOf). O terminal não tem ssh (o hook remote-guard barra), então o acesso é só por ele.
   const ssh = sshLaunchOf(profile, ctx, cwd);
-  // Em plan, o MCP que grava só a memória da própria ficha (ver memoriaLaunchOf): a edição de arquivos está bloqueada.
-  const memoria = memoriaLaunchOf(profile, ctx);
+  // Em plan e na conversa de revisão, o MCP que grava só a memória da própria ficha (ver memoriaLaunchOf): a edição de arquivos está bloqueada.
+  const memoria = memoriaLaunchOf(profile, ctx, readOnly);
   // Navegador limpo: pela ficha (`browser` efetivo não entra aqui), então vale sem a extensão do Chrome. O SSH não entra aqui: no Claude o terminal
   // tem rede, então tirar o navegador por causa do SSH não fecharia canal nenhum (no Codex, a sandbox fecha a rede e o caso é outro; ver cleanBrowserOf).
   const cleanDir = path.join(dir, 'navegador');
@@ -253,6 +255,8 @@ export interface PreparedCodexRun {
   mcpSnapshotFile: string | null;
   /** Agents da ficha e do roteiro como subagents do Codex (TOML já gravado na pasta da conversa; ver `writeCodexAgents`). */
   agents: CodexAgentRole[];
+  /** A fila de validação pesada no terminal: o hook (cópia na pasta da conversa) e a trava; null se a cópia falhou (ver `codexHeavyArgs`). */
+  heavyGuard: CodexHeavyGuard | null;
 }
 
 /**
@@ -371,10 +375,13 @@ export function sshServersOf(profile: Pick<StaffProfile, 'servers'>, servers: Se
 export function memoriaLaunchOf(
   profile: Pick<StaffProfile, 'id' | 'autonomy' | 'mcpAccess'>,
   ctx: Pick<LaunchContext, 'projectPath'>,
+  readOnly = false,
 ): { info?: MemoriaInfo; server: { command: string; args: string[] } | null } {
-  if (profile.autonomy !== 'plan') return { server: null };
-  if (!codexMcpAccess(profile.mcpAccess, MEMORIA_MCP_NAME, [], null).attached) return { info: { mcp: false }, server: null };
-  return { info: { mcp: true }, server: memoriaMcpServer({ projectPath: ctx.projectPath, staffId: profile.id }) };
+  // A conversa de revisão (`readOnly`) também não edita arquivo: a memória dela segue o mesmo caminho do plan, mesmo com a ficha em outra autonomia.
+  if (profile.autonomy !== 'plan' && !readOnly) return { server: null };
+  const review = readOnly && profile.autonomy !== 'plan';
+  if (!codexMcpAccess(profile.mcpAccess, MEMORIA_MCP_NAME, [], null).attached) return { info: { mcp: false, ...(review && { review }) }, server: null };
+  return { info: { mcp: true, ...(review && { review }) }, server: memoriaMcpServer({ projectPath: ctx.projectPath, staffId: profile.id }) };
 }
 
 /** O MCP de SSH (`myco-ssh`) de uma conversa, igual nos dois motores (ver `sshLaunchOf`). */
@@ -434,15 +441,15 @@ export function sshLaunchOf(
  * SKILL.md, sem copiar nada; ver ficha.ts). O texto vai em `developer_instructions` na linha de comando; passando de ~24 KB (ou
  * no Windows) o CodexProcess o manda no começo do prompt da primeira mensagem (o Codex não tem arquivo para isso sem trocar as instruções base).
  */
-export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string): Promise<PreparedCodexRun> {
+export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext, sessionId: string, cwd: string, readOnly = false): Promise<PreparedCodexRun> {
   const away = path.resolve(cwd) !== path.resolve(ctx.projectPath);
   // MCP de SSH: o mesmo do Claude (ver sshLaunchOf). Aqui roda fora da sandbox, com o cwd na pasta do Club e as ferramentas de leitura
   // (`enabled_tools`) quando `readonly` ou `ask`, porque o Codex não pergunta.
   const ssh = sshLaunchOf(profile, ctx, cwd);
   let sshMcp: CodexMcpServer | null = null;
   if (ssh.server) sshMcp = { ...ssh.server, cwd: ROOT, ...(ssh.enabledTools ? { enabledTools: ssh.enabledTools } : {}) };
-  // Memória da própria ficha: em plan a sandbox é de só leitura e não aceita exceção por caminho, então o MCP (fora dela) é a porta de escrita.
-  const memoria = memoriaLaunchOf(profile, ctx);
+  // Memória da própria ficha: em plan (e na revisão) a sandbox é de só leitura e não aceita exceção por caminho, então o MCP (fora dela) é a porta de escrita.
+  const memoria = memoriaLaunchOf(profile, ctx, readOnly);
   const memoriaMcp: CodexMcpServer | null = memoria.server ? { ...memoria.server, cwd: ROOT } : null;
   // Chrome do usuário: depois do SSH, porque o MCP de SSH na conversa desliga o Chrome (não juntar servidor e logins).
   const chromeDir = path.join(ctx.runDir, sessionId, 'chrome');
@@ -496,6 +503,16 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
   // no meio do caminho (o Codex lê a ficha a cada mensagem), e o lançador, que roda fora da sandbox, não é reescrito por ele (quando o projeto é o do Club).
   const mcpJson = [...new Set([path.join(cwd, '.mcp.json'), path.join(ctx.projectPath, '.mcp.json')])];
   const bundleInCwd = isInside(cwd, MCP_LAUNCH_BUNDLE) ? [MCP_LAUNCH_BUNDLE] : [];
+  // Fila de validação pesada (hook do terminal). O hook roda FORA da sandbox: a cópia fica na pasta da conversa (a sandbox a nega), não no
+  // projeto, que o agente pode editar. Se não deu para copiar, a conversa roda sem a fila e sem a flag de confiança (nunca flag sem o hook).
+  const hooksDir = path.join(ctx.runDir, sessionId, 'hooks');
+  const heavyGuard = await mkdir(hooksDir, { recursive: true })
+    .then(() => Promise.all(HEAVY_HOOK_FILES.map((f) => copyFile(path.join(HOOKS_DIR, f), path.join(hooksDir, f)))))
+    .then((): CodexHeavyGuard => ({ hook: path.join(hooksDir, 'heavy-guard.mjs'), lockDir: heavyLockDir(), ownerPid: process.pid }))
+    .catch((err) => {
+      console.warn(`[staff] ${profile.name}: sem a fila de validação pesada no Codex (${err instanceof Error ? err.message : String(err)})`);
+      return null;
+    });
   return {
     instructions: systemPrompt(profile, fichaCtx, renderFicha(profile, fichaCtx)),
     writableRoots: away ? [staffDir(ctx.projectPath)] : [],
@@ -514,6 +531,7 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
     extraMcps: extra.servers,
     mcpSnapshotFile: extra.snapshotFile,
     agents: agentRoles,
+    heavyGuard,
   };
 }
 
@@ -533,13 +551,21 @@ const HOOKS_DIR = path.join(ROOT, 'scripts', 'hooks');
 const DELIVERY_HOOK = path.join(HOOKS_DIR, 'delivery-check.mjs');
 const STYLE_HOOK = path.join(HOOKS_DIR, 'style-reminder.mjs');
 /** Os hooks de guarda que a conversa leva na própria pasta (cópia, ver prepareRun): o agente não edita o que os aplica. */
-const GUARD_HOOK_FILES = ['club-guard.mjs', 'mcp-write-guard.mjs', 'remote-guard.mjs'] as const;
+const GUARD_HOOK_FILES = ['club-guard.mjs', 'mcp-write-guard.mjs', 'remote-guard.mjs', 'memory-guard.mjs', 'memory-cap.mjs', 'heavy-guard.mjs', 'heavy-lock.mjs'] as const;
+/** O hook da fila de validação pesada e a lib dele (o heavy-guard importa o heavy-lock da mesma pasta). Vão para a pasta do Claude e a do Codex. */
+const HEAVY_HOOK_FILES = ['heavy-guard.mjs', 'heavy-lock.mjs'] as const;
 /** Ferramentas de navegador: o Claude in Chrome e os MCPs no padrão `browser_*` (Playwright e afins da biblioteca). */
 export const BROWSER_TOOLS_MATCHER = 'mcp__claude-in-chrome__.*|mcp__.*__browser_.*';
 /** Toda ferramenta de MCP: o hook de escrita decide pela política da ficha (sem política, não responde). */
 export const MCP_TOOLS_MATCHER = 'mcp__.*';
 /** Terminal (Bash e PowerShell): o hook de acesso remoto barra ssh, scp e afins, com ou sem servidor na ficha. */
 export const REMOTE_GUARD_MATCHER = 'Bash|PowerShell';
+/** Escrita de arquivo: o hook do teto da memória (scripts/hooks/memory-guard.mjs) confere o que vai para `.myco/staff/<id>.memory*`. */
+export const MEMORY_GUARD_MATCHER = 'Write|Edit|MultiEdit';
+/** Terminal também para a fila de validação pesada (suíte completa, tsc do projeto): uma por vez na máquina (scripts/hooks/heavy-guard.mjs). */
+export const HEAVY_GUARD_MATCHER = 'Bash|PowerShell';
+/** O hook da fila espera a vez aqui dentro, então o prazo dele passa dos 10 s dos outros: abaixo dele, a espera máxima do próprio hook (13 min). */
+const HEAVY_GUARD_TIMEOUT_S = 15 * 60;
 
 /**
  * Hooks do Claudio’s Club em todo funcionário (`--settings`, somados aos do usuário e do projeto): os agents
@@ -549,14 +575,22 @@ export const REMOTE_GUARD_MATCHER = 'Bash|PowerShell';
  * Com estilo de comunicação (motor Claude), `outputStyle: 'default'`: o output style global do usuário (ex.: "Concise") brigaria com o estilo.
  * E, com o `styleFile` (style.txt da conversa), um hook UserPromptSubmit põe o lembrete do estilo em cada mensagem (scripts/hooks/style-reminder.mjs).
  * `hooksDir`: a pasta com a cópia dos hooks de guarda da conversa (prepareRun); sem ela, a do programa (só os testes usam). `mcpWriteFile`:
- * a política de escrita dos MCPs (mcp-write.json); sem ela, não há hook de MCP.
+ * a política de escrita dos MCPs (mcp-write.json); sem ela, não há hook de MCP. `heavyLockDir`: a pasta da trava da fila de validação
+ * pesada (uma por máquina; o padrão é a do servidor, ver heavyQueue.ts).
  */
 export function staffSettings(
   p?: Pick<StaffProfile, 'personality' | 'engine'>,
   styleFile?: string,
-  o: { clubGuard?: boolean; hooksDir?: string; mcpWriteFile?: string | null; skillOverrides?: Record<string, 'off'> } = {},
+  o: { clubGuard?: boolean; hooksDir?: string; mcpWriteFile?: string | null; skillOverrides?: Record<string, 'off'>; heavyLockDir?: string } = {},
 ) {
   const guards = o.hooksDir ?? HOOKS_DIR;
+  const lockDir = o.heavyLockDir ?? heavyLockDir();
+  // Fila de validação pesada: pega a vez antes (pre) e solta depois (post). PostToolUse só dispara com o comando que deu certo; teste vermelho
+  // é falha da ferramenta e dispara só o PostToolUseFailure, então o mesmo hook vai nos dois.
+  const heavy = (stage: 'pre' | 'post') => ({
+    matcher: HEAVY_GUARD_MATCHER,
+    hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'heavy-guard.mjs'), lockDir, stage], timeout: stage === 'pre' ? HEAVY_GUARD_TIMEOUT_S : 10 }],
+  });
   const hook = (stage: 'pre' | 'post') => [
     { matcher: 'Agent|Task', hooks: [{ type: 'command', command: process.execPath, args: [DELIVERY_HOOK, stage], timeout: 10 }] },
     // O navegador do funcionário não abre a tela do Club (ver scripts/hooks/club-guard.mjs e server/clubAddress.ts).
@@ -567,12 +601,15 @@ export function staffSettings(
     ...(stage === 'pre' && o.mcpWriteFile ? [{ matcher: MCP_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'mcp-write-guard.mjs'), o.mcpWriteFile], timeout: 10, onFailure: 'block' }] }] : []),
     // Acesso remoto no terminal: sempre, com ou sem servidor na ficha (ver scripts/hooks/remote-guard.mjs).
     ...(stage === 'pre' ? [{ matcher: REMOTE_GUARD_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'remote-guard.mjs')], timeout: 10, onFailure: 'block' }] }] : []),
+    // Teto da memória no Write/Edit (fora do plan, onde o MCP myco-memoria tem o dele): sempre, sem `onFailure`, porque um erro do hook não deve travar a edição (ver o topo do script).
+    ...(stage === 'pre' ? [{ matcher: MEMORY_GUARD_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'memory-guard.mjs')], timeout: 10 }] }] : []),
+    heavy(stage),
   ];
   const styled = !!p && personalityName(p.personality) !== '' && (p.engine ?? 'claude') === 'claude';
   const style = styled && styleFile ? { UserPromptSubmit: [{ hooks: [{ type: 'command', command: process.execPath, args: [STYLE_HOOK, styleFile], timeout: 10 }] }] } : {};
   // Sem `permissions.ask` aqui: as ferramentas MCP de "pede antes" são do hook de escrita (mcp-write.json), que decide por ferramenta.
   return {
-    hooks: { PreToolUse: hook('pre'), PostToolUse: hook('post'), ...style },
+    hooks: { PreToolUse: hook('pre'), PostToolUse: hook('post'), PostToolUseFailure: [heavy('post')], ...style },
     ...(styled ? { outputStyle: 'default' } : {}),
     // Skills da Global (e as de projeto que ela esconde) que a ficha não marca: `off` some com o nome da pasta nesta conversa.
     // O `myco:<nome>` do plugin da sessão não é afetado (ver skillAccess.planSkills). Sem nenhuma, a chave não vai.
@@ -654,6 +691,8 @@ export async function writeFicha(
   };
   await writeAtomic(fichaFile(ctx.projectPath, profile.id), renderFicha(profile, fichaCtx));
   await ensureMemory(ctx.projectPath, profile);
-  return fichaCtx;
+  // Só no prompt da conversa (systemPrompt), não no .md da ficha: o tamanho da memória muda sozinho e não deve sujar o git.
+  const size = memoryMeasure(await readFile(memoryFile(ctx.projectPath, profile.id), 'utf8').catch(() => ''));
+  return memoryOver('index', size) ? { ...fichaCtx, memoryOver: size } : fichaCtx;
 }
 

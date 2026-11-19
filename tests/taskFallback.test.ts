@@ -7,6 +7,7 @@ import { CONTINUE_TEXT } from '../server/chat/autoContinue';
 import { RESUME_TEXT } from '../server/chat/items';
 import { PLAN_REJECTED_MESSAGE } from '../server/chat/manager';
 import type { LimitHit } from '../server/chat/usageLimit';
+import { DELIVERY_FORMAT } from '../server/deliveryRules';
 import { oldConversationExtract } from '../server/fallbackHandoff';
 import { limitOfStop, limitReading, shouldFallback } from '../server/taskFallback';
 import { TaskService } from '../server/tasks';
@@ -521,7 +522,7 @@ describe('limite no meio do turno (onLimit)', () => {
     const handoff = String(sent[0]![2]);
     expect(handoff).toContain('Botão de exportar');
     expect(handoff).toContain('use CSV, não XLSX');
-    expect(handoff).toContain('Quando terminar, responda com um resumo curto do que foi feito e do que falta.');
+    expect(handoff).toContain(DELIVERY_FORMAT); // a conversa nova é a que entrega: o mesmo formato fixo do texto de início
     expect(handoff).toContain('.myco/staff/ana-1.memory.md'); // com `/`, também no Windows
     expect(handoff).not.toContain('\\');
     const [t] = (await svc.list('p'))!;

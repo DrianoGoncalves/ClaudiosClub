@@ -85,14 +85,38 @@ export class TurnBudget {
   }
 }
 
-/** O aviso do teto (ou do corte pelo reinício), no chat e na caixa de entrada. */
+const ENGINE_NAME = { claude: 'Claude', codex: 'Codex' } as const;
+/** Como o dono entra de novo no motor: o comando do CLI dele. */
+const LOGIN_HINT = { claude: 'rode `claude` no terminal e use /login', codex: 'rode `codex login` no terminal' } as const;
+
+/** O aviso do teto (ou do corte pelo reinício, ou do erro do motor), no chat e na caixa de entrada. */
 export function capText(hit: TurnCapHit): string {
+  if (hit.kind === 'engine') {
+    return hit.why === 'auth'
+      ? `Erro de autenticação do ${ENGINE_NAME[hit.engine]} (${hit.error}): o turno não foi entregue. Entre de novo (${LOGIN_HINT[hit.engine]}) e mande mensagem para seguir`
+      : `O ${ENGINE_NAME[hit.engine]} terminou o turno com erro (${hit.error}): o turno não foi entregue. Mande mensagem para seguir`;
+  }
   if (hit.kind === 'restart') return `Não retomada: a conversa parou no meio de "${hit.action}". Confira se aconteceu e mande mensagem para seguir`;
+  if (hit.kind === 'retry') {
+    return hit.why === 'cut'
+      ? `Não retomada sozinha (${hit.error}): a conversa parou no meio de "${hit.action}". Confira se aconteceu e mande mensagem para seguir`
+      : `A conversa caiu (${hit.error}) e não voltou depois de ${hit.attempts} ${hit.attempts === 1 ? 'tentativa' : 'tentativas'} automáticas. Mande mensagem para seguir`;
+  }
   return `Turno parado: passou de ${hit.limit} ${hit.kind === 'tools' ? 'ferramentas' : 'minutos'} (limite em Configurações)`;
 }
 
 /** O motivo curto, na tarefa que vai para Aguardar. */
 export function capReason(hit: TurnCapHit): string {
+  if (hit.kind === 'engine') {
+    return hit.why === 'auth'
+      ? `erro de autenticação do ${ENGINE_NAME[hit.engine]} (${hit.error}): sem entrega; o dono precisa entrar de novo no ${ENGINE_NAME[hit.engine]}`
+      : `o ${ENGINE_NAME[hit.engine]} terminou o turno com erro (${hit.error}): sem entrega`;
+  }
   if (hit.kind === 'restart') return `a conversa parou no meio de "${hit.action}": confira se aconteceu antes de retomar`;
+  if (hit.kind === 'retry') {
+    return hit.why === 'cut'
+      ? `a conversa caiu (${hit.error}) no meio de "${hit.action}": confira se aconteceu antes de retomar`
+      : `a conversa caiu (${hit.error}) e não voltou depois de ${hit.attempts} ${hit.attempts === 1 ? 'tentativa' : 'tentativas'} automáticas`;
+  }
   return `turno parado: passou de ${hit.limit} ${hit.kind === 'tools' ? 'ferramentas' : 'minutos'}`;
 }

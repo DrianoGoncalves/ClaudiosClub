@@ -9,6 +9,7 @@ import type {
   Session,
   UserScope,
 } from '../../../shared/model';
+import { TtlCache } from '../../ttlCache';
 import type { SessionQuery, ToolAdapter } from '../types';
 import { markDuplicates, readAgentsDir } from './agents';
 import { CostIndex, systemCostsPath } from './costs';
@@ -27,6 +28,11 @@ export interface ClaudeAdapterOptions extends DiscoverOptions {
   locations?: ClaudeLocations;
   /** Por quanto tempo a lista de projetos descobertos é reaproveitada. */
   discoveryTtlMs?: number;
+  /**
+   * Por quanto tempo o resumo dos projetos (`listProjects`: contagem de conversas e última atividade, lidas de todo transcript) é reaproveitado.
+   * Sem ele, cada chamada relê tudo. O apelido não entra no resumo guardado (renomear vale na hora) e `forgetProjects` esquece o resumo.
+   */
+  projectsTtlMs?: number;
   /** Onde guardar o cache dos custos lidos dos transcripts. */
   costCacheFile?: string;
   /** Ledger do gasto do Sistema (padrão: logs/system-costs.jsonl em MYCO_HOME). */
@@ -56,10 +62,13 @@ export class ClaudeAdapter implements ToolAdapter {
   private discovery: { at: number; all: Promise<ProjectRef[]>; board: Promise<ProjectRef[]> } | null = null;
 
   private readonly costs: CostIndex;
+  /** O resumo dos projetos, sem apelido (ver `projectsTtlMs`); null = sem cache. */
+  private readonly summaries: TtlCache<Project[]> | null;
 
   constructor(opts: ClaudeAdapterOptions = {}) {
     this.opts = opts;
     this.loc = opts.locations ?? defaultLocations();
+    this.summaries = opts.projectsTtlMs ? new TtlCache<Project[]>(opts.projectsTtlMs) : null;
     const mycoHome = process.env.MYCO_HOME ?? path.join(os.homedir(), '.myco');
     this.costs = new CostIndex(
       path.join(this.loc.home, 'projects'),
@@ -69,8 +78,14 @@ export class ClaudeAdapter implements ToolAdapter {
   }
 
   async listProjects(): Promise<Project[]> {
-    const [refs, names] = await Promise.all([this.refs(), this.displayNames()]);
-    const projects = await Promise.all(refs.map((r) => summarizeProject(this.loc, r, names[r.id])));
+    const [summaries, names] = await Promise.all([this.summaries ? this.summaries.get('all', () => this.summarizeAll()) : this.summarizeAll(), this.displayNames()]);
+    // Objeto novo a cada chamada: quem recebe pode mexer sem estragar o que está guardado.
+    return summaries.map((p) => ({ ...p, name: names[p.id] || p.name }));
+  }
+
+  /** Lê todo transcript dos projetos do quadro (caro: segundos com centenas de conversas); o nome é o da pasta, o apelido entra em `listProjects`. */
+  private async summarizeAll(): Promise<Project[]> {
+    const projects = await Promise.all((await this.refs()).map((r) => summarizeProject(this.loc, r)));
     return projects.sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? ''));
   }
 
@@ -193,6 +208,7 @@ export class ClaudeAdapter implements ToolAdapter {
 
   forgetProjects(): void {
     this.discovery = null;
+    this.summaries?.invalidate();
   }
 
   private displayNames(): Promise<Record<string, string>> {

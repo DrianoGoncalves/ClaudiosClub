@@ -19,6 +19,8 @@
   "kindNotStarted": { "message": "has a task forgotten in To do" },
   "kindQuestion": { "message": "has a task question waiting for you" },
   "kindStuck": { "message": "has a stalled task that needs you" },
+  "kindFollowUp": { "message": "has a review follow-up waiting for you" },
+  "kindDenied": { "message": "had an action blocked by a permission rule" },
   "notifMany": { "message": "$N$ new alerts in Claudio’s Club", "placeholders": { "n": { "content": "$1" } } },
   "notifManyBody": { "message": "Open the Club to see who is waiting for you." },
   "loading": { "message": "Loading…" },

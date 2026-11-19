@@ -174,10 +174,22 @@ const cost = (over: Partial<TaskCost> = {}): TaskCost => ({
 const detail = (c: TaskCost | null, error: string | null = null) =>
   renderToStaticMarkup(createElement(DetailView, { cost: c, error, nameOf: (id: string | null) => (id ? `@${id}` : 'ninguém') }));
 
+/** O resumo de uma linha do cabeçalho recolhido: o texto logo abaixo de "Custo da tarefa" no <summary>. */
+const summaryOf = (html: string) => html.match(/<summary[^>]*>Custo da tarefa<span[^>]*>([^<]*)<\/span><\/summary>/)?.[1];
+
 describe('custo no detalhe da tarefa', () => {
+  it('abre recolhido, com o total no cabeçalho (qualquer coluna: não há mais `open`)', () => {
+    const html = detail(cost());
+    expect(html).toMatch(/^<details class="collapse task-cost"><summary/);
+    expect(html).not.toMatch(/<details[^>]*\sopen/);
+    expect(summaryOf(html)).toBe('US$ 4,50');
+    // Enquanto carrega, o cabeçalho já existe (e fechado).
+    expect(summaryOf(detail(null))).toBe('calculando…');
+  });
+
   it('total, fazer, revisar e dúvida, com as voltas de retrabalho', () => {
     const html = detail(cost());
-    expect(html).toContain('Custo da tarefa · US$ 4,50');
+    expect(summaryOf(html)).toBe('US$ 4,50');
     for (const label of ['Total', 'Fazer', 'Revisar', 'Dúvida']) expect(html).toContain(`<dt>${label}</dt>`);
     expect(html).toContain('US$ 3,90');
     expect(html).toContain('2 voltas de retrabalho');
@@ -203,7 +215,7 @@ describe('custo no detalhe da tarefa', () => {
   it('tarefa só do Codex: tokens e US$ indisponível no total', () => {
     const html = detail(cost({ usd: null, tokens: tok(80000, 12000), byRole: { work: bucket({ sessions: 1, withData: 1, usd: null, tokens: tok(80000, 12000) }), review: bucket(), question: bucket() }, nodes: [] }));
     expect(html).toContain('US$ indisponível');
-    expect(html).toMatch(/Custo da tarefa · [^<]*tokens/);
+    expect(summaryOf(html)).toMatch(/tokens/);
     expect(html).not.toContain('US$ 0');
   });
 
@@ -211,7 +223,7 @@ describe('custo no detalhe da tarefa', () => {
     expect(detail(cost({ coverage: 'partial' }))).toContain('Total parcial');
     const none = detail(cost({ coverage: 'none', usd: null, tokens: null, nodes: [], byRole: { work: bucket(), review: bucket(), question: bucket() } }));
     expect(none).toContain('anterior ao registro');
-    expect(none).toContain('Custo da tarefa · indisponível');
+    expect(summaryOf(none)).toBe('indisponível');
     expect(none).not.toContain('US$ 0');
   });
 

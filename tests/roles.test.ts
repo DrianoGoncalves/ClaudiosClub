@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AGENT_PRESETS, PLAYBOOK_AGENTS } from '../shared/agentPresets';
 import { BUILTIN_ROLES } from '../shared/roles';
 import { listRoles, removeRole, restoreBuiltins, saveRole, setDefaultRole } from '../server/roles';
 
@@ -14,6 +15,48 @@ afterAll(async () => {
 });
 
 const custom = { label: 'Copywriter', role: 'Redator(a)', mission: 'Escrever os textos do site.', autonomy: 'acceptEdits', rules: ['Tom simples'], doneWhen: '', model: 'haiku', effort: 'low' };
+
+// Quem edita código nasce pensador (planeja, delega o braçal, confere o diff); quem só decide ou audita não implementa e não muda.
+const IMPLEMENTERS = ['desenvolvedor', 'dados', 'frontend', 'design-system', 'web-designer', 'trafego', 'ia', 'testador', 'infra', 'documentacao'];
+const NOT_IMPLEMENTERS = ['produto', 'planejador', 'revisor', 'seguranca'];
+
+describe('cargos que implementam: pensam e delegam', () => {
+  it('todo cargo pronto está numa das listas (cargo novo obriga a decidir se implementa)', () => {
+    expect(BUILTIN_ROLES.map((r) => r.id).sort()).toEqual([...IMPLEMENTERS, ...NOT_IMPLEMENTERS, 'orquestrador'].sort());
+  });
+
+  it('pré-marcam os agents executor, executor-rapido, pesquisador e revisor e o roteiro planejar → delegar → conferir', () => {
+    for (const id of IMPLEMENTERS) {
+      const role = BUILTIN_ROLES.find((r) => r.id === id)!;
+      expect(role, id).toMatchObject({ pickExecutors: true, playbook: 'plan-big-execute-small' });
+    }
+    // O roteiro é quem chama estes quatro, e todos têm pronto (o Club cria o que faltar no projeto).
+    expect([...PLAYBOOK_AGENTS['plan-big-execute-small']].sort()).toEqual(['executor', 'executor-rapido', 'pesquisador', 'revisor']);
+    for (const name of PLAYBOOK_AGENTS['plan-big-execute-small']) expect(AGENT_PRESETS.some((p) => p.name === name), name).toBe(true);
+  });
+
+  it('produto, arquiteto, revisor e segurança não mudam: sem roteiro de delegação nem agents marcados', () => {
+    for (const id of NOT_IMPLEMENTERS) {
+      const role = BUILTIN_ROLES.find((r) => r.id === id)!;
+      expect(role.playbook ?? null, id).toBeNull();
+      expect(role.pickExecutors, id).toBeUndefined();
+    }
+    // O orquestrador segue como era.
+    expect(BUILTIN_ROLES.find((r) => r.id === 'orquestrador')).toMatchObject({ pickExecutors: true, playbook: 'plan-big-execute-small' });
+  });
+
+  it('a versão que o dono já gravou de um pronto não é tocada (só o pronto novo muda)', async () => {
+    const file = path.join(root, 'versao-antiga.json');
+    const dev = BUILTIN_ROLES.find((r) => r.id === 'desenvolvedor')!;
+    const { pickExecutors: _p, playbook: _b, ...old } = dev;
+    await saveRole(old, file);
+    const kept = (await listRoles(file)).find((r) => r.id === 'desenvolvedor')!;
+    expect(kept.edited).toBe(true);
+    expect(kept.playbook).toBeUndefined();
+    // Voltando ao original, o cargo pronto traz o roteiro.
+    expect((await removeRole('desenvolvedor', file)).find((r) => r.id === 'desenvolvedor')).toMatchObject({ edited: false, playbook: 'plan-big-execute-small', pickExecutors: true });
+  });
+});
 
 describe('cargos', () => {
   it('sem arquivo: os prontos, cada um com modelo', async () => {

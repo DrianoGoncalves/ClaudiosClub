@@ -59,6 +59,8 @@ interface Props {
   contextSwitch: ContextSwitch | null;
   /** Títulos de conversa gerados por IA; null = config ainda não chegou (ou o servidor é anterior à opção: o item nem aparece). */
   aiTitles: boolean | null;
+  /** Retomar sozinho a conversa que cai por falha passageira; null = config ainda não chegou (ou o servidor é anterior à opção: o item nem aparece). */
+  autoRetry: boolean | null;
   /** Otimizar assinatura (folga de cota); null = config ainda não chegou. */
   optimizeQuota: boolean | null;
   /** Continuar sozinho quando o limite de uso volta; null = config ainda não chegou. */
@@ -693,6 +695,19 @@ function buildSettings(
       keywords: t('toolbar.aiTitlesKeywords'),
       toggle: { checked: p.aiTitles, onChange: (v) => void api.saveConfig({ aiTitles: v }).then(p.onConfig, () => {}) },
       simple: simpleInfo('chat', 'aiTitles'),
+    });
+  }
+
+  // Conversa que cai por falha passageira volta sozinha (server/chat/turnRetry.ts). Só técnico: no Simples a regra fica ligada.
+  if (p.autoRetry !== null) {
+    out.push({
+      id: 'auto-retry',
+      group: 'chat',
+      title: t('toolbar.autoRetryTitle'),
+      description: t('toolbar.autoRetryDesc'),
+      keywords: t('toolbar.autoRetryKeywords'),
+      toggle: { checked: p.autoRetry, onChange: (v) => void api.saveConfig({ autoRetry: v }).then(p.onConfig, () => {}) },
+      advanced: true,
     });
   }
 

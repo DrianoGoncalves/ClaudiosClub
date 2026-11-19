@@ -786,7 +786,11 @@ describe('ChatManager: ficha editada com a conversa aberta', () => {
     expect(route.indexOf('if (!fromBrowser) throw new BadRequest')).toBeGreaterThan(0);
     expect(route.indexOf('if (!fromBrowser)')).toBeLessThan(route.indexOf('parse('));
     expect(route).toContain('chats.dismissError(b.id)');
-    expect(route).toMatch(/regex\(\/\^\(error\|cap\):/);
+    // `commit:<projeto>:<tarefa>` (o commit automático que falhou ou foi parcial) também chega aqui, e vai para a tarefa, não para uma conversa.
+    expect(route).toMatch(/regex\(\/\^\(error\|cap\|commit\|guardoff\|codexsandbox\):/);
+    expect(route).toContain("b.id.startsWith('commit:') ? await tasks.ackCommit(b.id)");
+    // `guardoff:<sessão>` (a fila de validação pesada desligada por hooks.json na conta do Codex) vai para o manager (tests/heavyGuardOffAlert.test.ts).
+    expect(route).toContain("b.id.startsWith('guardoff:') ? chats.dismissGuardOff(b.id)");
     // O filtro mora em chats.attention()/turnCaps(), que o getInbox lê; a extensão chama o mesmo getInbox.
     expect(src).toContain('for (const { sessionId, pending, error } of chats.attention())');
     expect(src).toContain('for (const c of chats.turnCaps())');

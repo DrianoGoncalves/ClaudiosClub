@@ -21,6 +21,8 @@ export interface CodexEnvStatus {
   version: string | null;
   /** `network_proxy` presente e utilizável: só então a rede local (`loopback`) pode ser usada. */
   networkProxy: boolean;
+  /** `multi_agent` (subagents) usável: os agents da ficha só rodam com ele. Sem conferir, false. */
+  multiAgent: boolean;
   /** Aviso para a conversa (ex.: segue sem rede porque falta o `network_proxy`). */
   notice: string | null;
 }
@@ -124,7 +126,7 @@ export class CodexEnv {
   }
 
   private async inspect(): Promise<CodexEnvStatus> {
-    const fail = (error: string): CodexEnvStatus => ({ error, version: null, networkProxy: false, notice: null });
+    const fail = (error: string): CodexEnvStatus => ({ error, version: null, networkProxy: false, multiAgent: false, notice: null });
     const v = await this.run(['--version'], '', 15_000);
     if (v.spawnError) return fail(v.spawnError.code === 'ENOENT' ? 'o Codex CLI não está instalado: ligue o Codex nas Configurações do Claudio’s Club' : `não consegui rodar o codex: ${v.spawnError.message}`);
     if (v.timedOut || v.code !== 0) return fail(`não consegui conferir a versão do Codex (${v.timedOut ? 'demorou demais' : `saída ${v.code}`})`);
@@ -138,12 +140,16 @@ export class CodexEnv {
     }
     // Rede local: só com o `network_proxy` no Codex instalado. Sem ele (ou sem conseguir conferir), a conversa segue com a rede desligada.
     const f = await this.run(['features', 'list'], '', 20_000);
-    const stage = f.spawnError || f.timedOut || f.code !== 0 ? undefined : parseCodexFeatures(f.stdout).get('network_proxy');
+    const features = f.spawnError || f.timedOut || f.code !== 0 ? null : parseCodexFeatures(f.stdout);
+    const stage = features?.get('network_proxy');
     const networkProxy = !!stage && USABLE_STAGES.has(stage);
+    // Subagents: os agents da ficha dependem dele (ver engineCapability.ts). Sem conferir, falso.
+    const multiAgent = USABLE_STAGES.has(features?.get('multi_agent') ?? '');
     return {
       error: null,
       version: shown,
       networkProxy,
+      multiAgent,
       notice: networkProxy
         ? null
         : `Este Codex (${shown}) ${stage ? `tem o recurso network_proxy como "${stage}", que não uso` : 'não tem o recurso network_proxy (ou não consegui conferir)'}: a conversa roda sem rede nenhuma, nem a local. O curl para a API do Claudio’s Club (tarefas e despertador) não vai funcionar nesta conversa.`,

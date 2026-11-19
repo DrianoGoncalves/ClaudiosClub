@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import type { Workspace } from '../../../shared/model';
 import { api, type ImportableProject } from '../api';
 import { t } from '../i18n';
+import { FolderField, useFolderPicker } from './FolderField';
+import { isLocalPage } from './folderPick';
 
 // Novo projeto: cria uma pasta (com git, se quiser), abre uma que já existe ou importa projetos do
 // Claude Code ou do Codex que ainda estão fora do quadro, já no workspace da aba.
@@ -30,6 +32,9 @@ export function NewProjectForm({ workspaces, workspaceId, onClose, onCreated }: 
   const [found, setFound] = useState<ImportableProject[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  // "Procurar…": a janela abre no computador do servidor; escolher preenche o campo.
+  const folderPick = useFolderPicker(setFolder);
+  const canPick = isLocalPage(window.location.hostname);
 
   // Onde está a maioria dos projetos: é lá que um novo costuma ir.
   useEffect(() => {
@@ -135,10 +140,7 @@ export function NewProjectForm({ workspaces, workspaceId, onClose, onCreated }: 
             </label>
           </>
         ) : mode === 'existing' ? (
-          <label>
-            {t('office.npPath')}
-            <input value={folder} onChange={(e) => setFolder(e.target.value)} maxLength={400} required autoFocus className="mono" placeholder={t('office.npPathPlaceholder')} />
-          </label>
+          <FolderField value={folder} onChange={setFolder} pick={folderPick} canPick={canPick} />
         ) : loadError !== null ? (
           <>
             <p className="error">{loadError}</p>

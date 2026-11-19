@@ -126,8 +126,18 @@ const TaskBody = z
 
 const firstIssue = (err: z.ZodError) => err.issues[0]?.message ?? 'pedido inválido';
 
+/** O id que TaskService.create gera: `t-` e 6 hex. */
+const TASK_ID = /^t-[0-9a-f]{6}$/;
+
+/** O id da tarefa de um aviso de tarefa (blocked, question, stuck, notStarted, followUp, denied, o commit automático); undefined nos outros ou se o valor não tem o formato de id. */
+function taskIdOf(i: InboxItem): string | undefined {
+  const id = (i.kind === 'blocked' ? i.blocked : i.kind === 'question' ? i.question : i.kind === 'stuck' ? i.stuck : i.kind === 'notStarted' ? i.notStarted : i.kind === 'followUp' ? i.followUp : i.kind === 'denied' ? i.denied : (i.autoCommit ?? i.heavyGuardOff))?.taskId;
+  return typeof id === 'string' && TASK_ID.test(id) ? id : undefined;
+}
+
 /** Só o necessário para a extensão mostrar o aviso (sem sessionId, itemId, a citação nem o comando de uma permissão). */
 function projectItem(i: InboxItem) {
+  const taskId = taskIdOf(i);
   return {
     // O id de alguns avisos leva o sessionId: a extensão recebe um resumo estável dele.
     id: createHash('sha256').update(i.id).digest('hex').slice(0, 24),
@@ -136,8 +146,12 @@ function projectItem(i: InboxItem) {
     projectName: i.projectName,
     staffId: i.staffId,
     name: i.name,
-    summary: i.kind === 'permission' ? 'pedido de permissão esperando você' : i.summary.slice(0, SUMMARY_MAX),
+    // Permissão e ação barrada levam texto do agente/motor (o comando, o motivo do erro): a extensão recebe só uma frase fixa, que nem o nome da ferramenta traz. O commit automático leva
+    // caminhos de arquivo e a saída do git (um hook que falhou): também só a frase fixa. A fila desligada por hooks.json leva o título da tarefa e a conta do Codex: o mesmo.
+    summary: i.kind === 'permission' ? 'pedido de permissão esperando você' : i.kind === 'denied' ? 'uma regra de permissão barrou uma ação' : i.autoCommit ? 'o commit automático de uma tarefa pronta precisa de você' : i.heavyGuardOff ? 'uma conversa de tarefa roda sem a fila de validação pesada' : i.summary.slice(0, SUMMARY_MAX),
     at: i.at,
+    // Só nos avisos de tarefa: a extensão abre o card ao clicar. Sem tarefa, o campo nem existe.
+    ...(taskId ? { taskId } : {}),
   };
 }
 

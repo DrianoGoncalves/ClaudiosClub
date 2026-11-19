@@ -204,6 +204,16 @@ export function ArchiveRestoreIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+/** Botão de ligar (círculo aberto em cima com um traço): fechar a conversa (desliga o processo dela). */
+export function PowerIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M12 2v10" />
+      <path d="M18.4 6.6a9 9 0 1 1-12.8 0" />
+    </svg>
+  );
+}
+
 /** Lápis: renomear (o título da conversa). */
 export function PencilIcon({ size = 16 }: { size?: number }) {
   return (
@@ -235,6 +245,25 @@ export function TasksIcon({ size = 12 }: { size?: number }) {
       <path d="M4 6l1 1 2-2" />
       <path d="M4 12l1 1 2-2" />
       <path d="M4 18h2" />
+    </svg>
+  );
+}
+
+/** Pausar (duas barras): pausa o projeto (nada novo começa sozinho). */
+export function PauseIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M8 5v14" />
+      <path d="M16 5v14" />
+    </svg>
+  );
+}
+
+/** Retomar (triângulo): tira o projeto da pausa. */
+export function PlayIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M7 4.5v15l12-7.5z" />
     </svg>
   );
 }

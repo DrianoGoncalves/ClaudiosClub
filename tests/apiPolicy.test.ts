@@ -11,6 +11,11 @@ describe('POST de funcionário pela API (lista fechada)', () => {
       '/api/projects/p1/chat/s-1/wake/cancel',
       '/api/projects/p1/staff/ana-1a2b/done',
       '/api/projects/p1/tasks/t-1a2b3c/cancel',
+      // Pedido de cancelamento (quem pediu a tarefa) e a recusa dele (o responsável): a rota exige o token e confere quem é.
+      '/api/projects/p1/tasks/t-1a2b3c/cancel-request',
+      '/api/projects/p1/tasks/t-1a2b3c/cancel-request/refuse',
+      // Editar tarefa que ainda não começou (a rota exige o token e confere quem pediu e a coluna).
+      '/api/projects/p1/tasks/t-1a2b3c',
     ]) {
       expect(staffMayPost(p), p).toBe(true);
     }
@@ -32,6 +37,7 @@ describe('POST de funcionário pela API (lista fechada)', () => {
       '/api/projects/p1/chat/s-1/wake/user-cancel',
       '/api/projects/p1/files/delete',
       '/api/projects/p1/files/write',
+      '/api/projects/p1/files/open-editor',
       '/api/projects/p1/staff/ana-1a2b/keep',
       '/api/projects/p1/staff/ana-1a2b',
       '/api/projects/p1/tasks/t1/start',
@@ -39,7 +45,11 @@ describe('POST de funcionário pela API (lista fechada)', () => {
       '/api/projects/p1/tasks/t1/reopen',
       '/api/projects/p1/tasks/t1/blocker',
       '/api/projects/p1/tasks/t1/cancel/extra',
-      '/api/projects/p1/tasks/cancel',
+      '/api/projects/p1/tasks/t1/cancel-request/extra',
+      '/api/projects/p1/tasks/t1/cancel-request/accept',
+      '/api/projects/p1/tasks/t1/edit',
+      '/api/projects/p1/tasks/t1/delete',
+      '/api/projects/p1/tasks/t1/answer/extra',
       '/api/server/restart',
       '/api/rota-nova',
       // Sem truque de prefixo ou sufixo.
@@ -52,6 +62,14 @@ describe('POST de funcionário pela API (lista fechada)', () => {
   });
 });
 
+describe('sandbox do Codex: editar tarefa que ainda não começou', () => {
+  it('passa no projeto da própria conversa; em outro projeto, 403', () => {
+    expect(sandboxVerdict('POST', '/api/projects/p1/tasks/t-1', 'p1')).toBeNull();
+    expect(sandboxVerdict('POST', '/api/projects/p2/tasks/t-1', 'p1')).toMatchObject({ status: 403 });
+    expect(sandboxVerdict('GET', '/api/projects/p1/tasks/t-1', 'p1')).toMatchObject({ status: 403 });
+  });
+});
+
 describe('sandbox do Codex: cancelar a própria tarefa', () => {
   it('só a rota de cancelar passa, no projeto da própria conversa; reabrir e as ações de dependentes não', () => {
     expect(sandboxVerdict('POST', '/api/projects/p1/tasks/t-1/cancel', 'p1')).toBeNull();
@@ -60,5 +78,13 @@ describe('sandbox do Codex: cancelar a própria tarefa', () => {
     expect(sandboxVerdict('POST', '/api/projects/p1/tasks/t-1/blocker', 'p1')).toMatchObject({ status: 403 });
     expect(sandboxVerdict('POST', '/api/projects/p1/tasks/t-1/delete', 'p1')).toMatchObject({ status: 403 });
     expect(sandboxVerdict('GET', '/api/projects/p1/tasks/t-1/cancel', 'p1')).toMatchObject({ status: 403 });
+  });
+
+  it('o pedido de cancelamento e a recusa passam no projeto da própria conversa; em outro projeto ou por GET, 403', () => {
+    for (const route of ['cancel-request', 'cancel-request/refuse']) {
+      expect(sandboxVerdict('POST', `/api/projects/p1/tasks/t-1/${route}`, 'p1'), route).toBeNull();
+      expect(sandboxVerdict('POST', `/api/projects/p2/tasks/t-1/${route}`, 'p1'), route).toMatchObject({ status: 403 });
+      expect(sandboxVerdict('GET', `/api/projects/p1/tasks/t-1/${route}`, 'p1'), route).toMatchObject({ status: 403 });
+    }
   });
 });

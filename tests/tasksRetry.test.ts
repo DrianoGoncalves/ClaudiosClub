@@ -523,21 +523,37 @@ describe('revisão automática: retry e veredito', () => {
     expect(work).toBeTruthy();
   });
 
-  it('13c. passados 30 min a tarefa é sua: nota uma vez, para de tentar, vira "parada" para você (review)', async () => {
+  it('13c. passados 30 min a tarefa é sua: nota uma vez, vira "parada" para você (review) com o motivo, e segue tentando devagar', async () => {
     const b = await board('r-rev-prazo');
     b.h.failSend = limit;
     const { id } = await entregue(b);
-    const before = b.h.calls.length;
     await b.svc.tick(later(31));
+    const calls = b.h.calls.length;
     await b.svc.tick(later(40));
+    await b.svc.tick(later(60));
     const t = await b.get(id);
-    expect(b.h.calls.length).toBe(before); // vencido, não tenta mais
+    expect(b.h.calls.length).toBeGreaterThan(calls); // vencido, mas o motivo pode passar: continua tentando
     expect(t.reviewRetry).toMatchObject({ expired: true });
     expect(t.history.filter((h) => h.note === 'revisão automática não começou em 30 min: a tarefa fica com você')).toHaveLength(1);
-    expect(stuckState(t)).toMatchObject({ humanAction: 'review', selfHeals: false, reason: 'a revisão automática não começou' });
+    expect(stuckState(t)).toMatchObject({ humanAction: 'review', selfHeals: false, reason: expect.stringMatching(/^a revisão automática não começou: ./) });
     const [alert] = ownAlerts([t]);
     const item = stuckInboxItem(alert!, { projectId: 'p', projectName: 'P', sessionId: '', staffId: 'ana-1', name: 'Ana' });
     expect(item).toMatchObject({ kind: 'stuck', stuck: { taskId: id, humanAction: 'review', selfHeals: false } });
+  });
+
+  it('13d. vencida, a revisão abre sozinha quando o motivo passa: sem o dono empurrar, e o aviso da caixa some', async () => {
+    const b = await board('r-rev-volta');
+    b.h.failSend = limit;
+    const { id } = await entregue(b);
+    await b.svc.tick(later(31));
+    expect(stuckState(await b.get(id))).toMatchObject({ humanAction: 'review' });
+    b.h.failSend = null; // o consumo baixou
+    await b.svc.tick(later(60));
+    const t = await b.get(id);
+    expect(b.h.sent.filter((s) => s.staffId === 'rev-1')).toHaveLength(1);
+    expect(t.review).toMatchObject({ staffId: 'rev-1' });
+    expect(t.reviewRetry).toBeUndefined();
+    expect(stuckState(t)).toBeNull();
   });
 
   it('8. revisão sem veredito: um único re-pedido depois do reaskAt; na 2ª vez vira parada (review) e aparece na caixa', async () => {

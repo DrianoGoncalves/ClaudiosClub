@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { InboxItem, TurnNotice } from '../../../shared/model';
+import type { InboxItem, InboxKind, TurnNotice } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
 import { pollVisible } from '../usePoll';
 import { inboxText, inboxWho } from './inboxText';
-import type { AlertKind } from './taskAlerts';
 
 // A caixa "precisa de mim": o que espera você em todas as salas, lida a cada poucos segundos.
 // Com "avisar no sistema" ligado, cada item novo vira uma notificação do sistema (só o que é novo:
@@ -14,7 +13,7 @@ const NOTIFY_KEY = 'myco.notify';
 const POLL_MS = 5000;
 const POLL_HIDDEN_MS = 30_000;
 
-const KIND_TITLE: Record<AlertKind, string> = {
+const KIND_TITLE: Record<InboxKind, string> = {
   plan: t('inbox.titlePlan'),
   permission: t('inbox.titlePermission'),
   secret: t('inbox.titleSecret'),
@@ -27,6 +26,8 @@ const KIND_TITLE: Record<AlertKind, string> = {
   notStarted: t('inbox.titleNotStarted'),
   question: t('inbox.titleQuestion'),
   stuck: t('inbox.titleStuck'),
+  followUp: t('inbox.titleFollowUp'),
+  denied: t('inbox.titleDenied'),
 };
 
 export interface InboxView {
@@ -36,7 +37,7 @@ export interface InboxView {
   /** null = o navegador não oferece notificações. */
   canNotify: boolean;
   setNotify: (on: boolean) => Promise<void>;
-  /** Tira um aviso que só informa: segredo ("já troquei") ou rotina que não rodou ("ok, vi"). */
+  /** Tira um aviso que só informa: segredo ("já troquei"), rotina que não rodou ("ok, vi") ou erro ("ignorar"). */
   dismiss: (item: InboxItem, opts?: { notSecret?: boolean }) => Promise<void>;
   /** Relê a caixa agora (depois de uma ação sobre a tarefa de um item: liberar, cancelar, começar). */
   refresh: () => Promise<void>;
@@ -94,23 +95,26 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
     [canNotify],
   );
 
-  /** Tira da caixa: rotina vista, segredo trocado (ou que não é segredo), pergunta vista sem responder, sessão esperando em outro lugar. */
+  /** Tira da caixa: rotina vista, segredo trocado (ou que não é segredo), pergunta vista sem responder, sessão esperando em outro lugar, erro ignorado. */
   const dismiss = useCallback(async (item: InboxItem, opts: { notSecret?: boolean } = {}) => {
-    const id = item.id.replace(/^(secret|routine):/, '');
-    const call = item.kind === 'waiting' && item.id.startsWith('question:')
-      ? api.dismissQuestion(item.sessionId)
-      : item.id.startsWith('waiting:')
-        ? api.dismissWaiting(item.sessionId)
-        : item.kind === 'routine'
-          ? api.dismissRoutineAlert(id)
-          : api.dismissSecret(id, opts.notSecret);
-    await call.catch(() => {});
+    await dismissCall(item, opts).catch(() => {});
     setItems((prev) => prev.filter((i) => i.id !== item.id));
   }, []);
 
   const refresh = useCallback(() => tickRef.current(), []);
 
   return { items, notify, canNotify, setNotify, dismiss, refresh };
+}
+
+/** A rota de dispensar de cada tipo de item (o erro, `error:`/`cap:`, e a ação barrada, `denied:`, vão pelo id inteiro; o segredo e a rotina, sem o prefixo). */
+export function dismissCall(item: InboxItem, opts: { notSecret?: boolean } = {}): Promise<{ ok: boolean }> {
+  const id = item.id.replace(/^(secret|routine):/, '');
+  if (item.kind === 'waiting' && item.id.startsWith('question:')) return api.dismissQuestion(item.sessionId);
+  if (item.id.startsWith('waiting:')) return api.dismissWaiting(item.sessionId);
+  if (item.kind === 'routine') return api.dismissRoutineAlert(id);
+  if (item.kind === 'error') return api.dismissError(item.id);
+  if (item.kind === 'denied') return api.dismissDenied(item.id);
+  return api.dismissSecret(id, opts.notSecret);
 }
 
 /** A pessoa está com o Claudio’s Club na frente (aba visível e janela com foco). */

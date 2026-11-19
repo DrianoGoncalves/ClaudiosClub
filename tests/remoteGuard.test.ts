@@ -98,6 +98,7 @@ describe('a conversa: o hook entra em todo funcionário, com ou sem servidor e s
   });
 
   it('não entra no PostToolUse', () => {
-    expect(staffSettings().hooks.PostToolUse.some((h) => h.matcher === REMOTE_GUARD_MATCHER)).toBe(false);
+    // Pelo hook, não pelo matcher: a fila de validação pesada (heavy-guard) também solta a trava no PostToolUse de Bash e PowerShell.
+    expect(staffSettings().hooks.PostToolUse.some((h) => h.hooks.some((x) => x.args.includes(hook)))).toBe(false);
   });
 });

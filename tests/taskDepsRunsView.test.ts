@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { TaskRunEvent } from '../client/src/api';
 import type { TaskStatus } from '../shared/model';
-import { BlockedBadge, BlockedByField, MAX_DEPS, depChoices, openBlockers, sameDeps } from '../client/src/tasks/TaskDeps';
+import { BlockedBadge, BlockedByField, MAX_DEPS, depChoices, openBlockers, sameDeps, shownBlockers } from '../client/src/tasks/TaskDeps';
 import { groupRuns, runDuration } from '../client/src/tasks/TaskRuns';
 
 const task = (id: string, status: TaskStatus, extra: { archived?: boolean; title?: string } = {}) => ({
@@ -18,6 +18,21 @@ describe('openBlockers', () => {
     const all = [task('t-a', 'doing'), task('t-b', 'done'), task('t-c', 'todo')];
     expect(openBlockers({ blockedBy: ['t-a', 't-b', 't-x', 't-c'] }, all).map((o) => o.id)).toEqual(['t-a', 't-c']);
     expect(openBlockers({}, all)).toEqual([]);
+  });
+});
+
+describe('shownBlockers', () => {
+  const inReview = (id: string, verdict: 'approved' | 'rejected' | null | undefined) => ({ ...task(id, 'review'), review: verdict === undefined ? null : { verdict } });
+  it('a bloqueadora que o revisor já aprovou (falta só mesclar) sai do "Esperando"', () => {
+    const open = [task('t-a', 'doing'), inReview('t-b', 'approved'), inReview('t-c', 'rejected'), inReview('t-d', null), inReview('t-e', undefined), task('t-f', 'cancelled')];
+    expect(shownBlockers(open).map((o) => o.id)).toEqual(['t-a', 't-c', 't-d', 't-e', 't-f']);
+  });
+  it('sem nenhuma por esperar, não sobra selo', () => {
+    expect(shownBlockers([inReview('t-b', 'approved')])).toEqual([]);
+    expect(renderToStaticMarkup(createElement(BlockedBadge, { blockers: shownBlockers([inReview('t-b', 'approved')]) }))).toBe('');
+  });
+  it('o veredito só vale em Revisão (reaberta para Fazendo, a aprovação antiga não conta)', () => {
+    expect(shownBlockers([{ ...task('t-a', 'doing'), review: { verdict: 'approved' as const } }]).map((o) => o.id)).toEqual(['t-a']);
   });
 });
 

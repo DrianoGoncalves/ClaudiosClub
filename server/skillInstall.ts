@@ -73,6 +73,13 @@ export const GitHubInstallInput = z.object({
   digest: DIGEST,
   name: z.string().max(64).optional(),
 });
+/** Várias skills do MESMO repositório (`url` é de todas): cada item leva o ref, o sha e o digest da própria prévia. */
+export const GitHubInstallBatchInput = GitHubInstallInput.pick({ scope: true, projectId: true, url: true }).extend({
+  items: z
+    .array(GitHubInstallInput.pick({ path: true, ref: true, sha: true, digest: true, name: true }))
+    .min(1, 'escolha ao menos uma skill')
+    .max(LIMITS.chooseSkills, `até ${LIMITS.chooseSkills} skills por vez`),
+});
 export const GitHubStatusQuery = z.object({ scope: SCOPE, projectId: PROJECT_ID });
 export const GitHubSkillInput = z.object({ scope: SCOPE, projectId: PROJECT_ID, name: z.string().min(1).max(64) });
 export const GitHubUpdateInput = GitHubSkillInput.extend({ sha: SHA, digest: DIGEST, overwriteLocal: z.boolean().optional() });
@@ -518,6 +525,45 @@ export async function installSkill(i: InstallInput, deps: SkillDeps = {}): Promi
     throw err;
   }
   return { name, sha: i.sha, digest: pkg.digest };
+}
+
+export interface InstallBatchInput {
+  target: InstallTarget;
+  /** O link do repositório: o mesmo para todos os itens. */
+  url: string;
+  items: Array<Omit<InstallInput, 'target' | 'url'>>;
+}
+/** Uma skill do lote: instalada, ou o motivo. `code` só quando a tela age diferente: `changed`/`modified` = refazer a prévia, `rate-limited` = esperar até `resetAt`. */
+export type BatchItemResult =
+  | { path: string; status: 'installed'; name: string; sha: string; digest: string }
+  | { path: string; status: 'error'; error: string; code?: 'changed' | 'modified' | 'rate-limited'; resetAt?: string };
+
+/**
+ * Instala as skills uma depois da outra pelo `installSkill` (mesmo sha, digest, staging e recusas da instalação individual):
+ * o que falha vira o resultado daquele item e os outros seguem. O cache e o disjuntor do adaptador valem para todos
+ * (limite de consultas atingido: os itens seguintes são recusados na hora, sem ir à rede).
+ */
+export async function installBatch(i: InstallBatchInput, deps: SkillDeps = {}): Promise<BatchItemResult[]> {
+  if (i.items.length > LIMITS.chooseSkills) throw new SkillError(`até ${LIMITS.chooseSkills} skills por vez`);
+  const out: BatchItemResult[] = [];
+  for (const item of i.items) {
+    try {
+      out.push({ path: item.path, status: 'installed', ...(await installSkill({ target: i.target, url: i.url, ...item }, deps)) });
+    } catch (err) {
+      out.push(batchError(item.path, err));
+    }
+  }
+  return out;
+}
+
+/** O que a rota individual responderia ao mesmo erro, como resultado do item (o que não se espera: `erro interno`, sem detalhe). */
+function batchError(path: string, err: unknown): BatchItemResult {
+  if (err instanceof SkillConflictError) return { path, status: 'error', error: err.message, code: err.code };
+  if (err instanceof GitHubRateLimited) return { path, status: 'error', error: err.message, code: 'rate-limited', resetAt: err.resetAt };
+  if (err instanceof SkillError || err instanceof GitHubError) return { path, status: 'error', error: err.message };
+  if ((err as NodeJS.ErrnoException | null)?.code === 'EEXIST') return { path, status: 'error', error: 'já existe um arquivo com esse nome' };
+  console.error(err);
+  return { path, status: 'error', error: 'erro interno' };
 }
 
 const hashesOf = (pkg: Package): Record<string, string> => Object.fromEntries(pkg.files.map((f) => [f.path, f.sha256]));

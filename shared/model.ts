@@ -319,6 +319,12 @@ export interface AppConfig {
    * nela (ver server/chat/autoContinue.ts). Ligado por padrão.
    */
   autoContinue: boolean;
+  /**
+   * A conversa que caiu por falha passageira (API sobrecarregada, 5xx, limite de taxa, falha de conexão) ou cujo processo morreu no meio do
+   * turno segue sozinha, com espera crescente e no máximo 3 tentativas por turno (1 se a causa é desconhecida). Não retoma se a ação cortada
+   * mexia fora do projeto. Ver server/chat/turnRetry.ts. Ligado por padrão.
+   */
+  autoRetry: boolean;
   /** Mostrar no quadro a sala do escopo do usuário (agents e skills de ~/.claude); desligado por padrão. */
   showUserScope: boolean;
   /**
@@ -578,16 +584,57 @@ export interface TaskFallback extends EngineOverride {
   reason: 'limit-start' | 'limit-mid';
 }
 
+/**
+ * Quando uma rotina roda, no horário desta máquina. É uma união: `cron` (5 campos, o formato antigo) ou calendário
+ * (`once` | `daily` | `weekly` | `monthly`). Quinzenal = `weekly` com `interval: 2`. Regras (shared/recurrence.ts):
+ * - `time` 'HH:MM' e `start` 'YYYY-MM-DD' (hora e dia locais); `until` 'YYYY-MM-DD' é inclusivo (o dia dele ainda roda).
+ * - `interval` ≥ 1: de quantos em quantos dias/semanas/meses, contando de `start`. `once` não tem intervalo nem `until`.
+ * - `weekly`: `weekdays` 0 (domingo) a 6 (sábado), padrão o dia de `start`. A semana vai de domingo a sábado e a de `start` é a primeira
+ *   (com `interval: 2`, ela roda, a seguinte não, a outra roda).
+ * - `monthly`: `monthDay` 1 a 31, padrão o dia de `start`; mês sem esse dia roda no último (31 em abril = 30).
+ */
+export interface CronRecurrence {
+  kind: 'cron';
+  expr: string;
+}
+export interface CalendarRecurrence {
+  kind: 'once' | 'daily' | 'weekly' | 'monthly';
+  interval: number;
+  weekdays?: number[];
+  monthDay?: number;
+  time: string;
+  start: string;
+  until?: string;
+}
+export type Recurrence = CronRecurrence | CalendarRecurrence;
+
+/** Teto de `Routine.catchUpHours` (7 dias). */
+export const CATCH_UP_MAX_HOURS = 168;
+/** Quantas execuções o histórico de cada rotina guarda (as mais recentes). */
+export const ROUTINE_HISTORY_MAX = 50;
+/** Maior janela de ocorrências que `GET /schedules?from&to` devolve. */
+export const SCHEDULE_WINDOW_MAX_DAYS = 62;
+
 /** Ficha do funcionário: `<projeto>/.myco/staff/<id>.json`. */
 /**
- * Rotina de um funcionário: no horário (cron de 5 campos, hora desta máquina), o Claudio’s Club manda a
+ * Rotina de um funcionário: no horário (hora desta máquina), o Claudio’s Club manda a
  * mensagem para ele, como se você tivesse digitado. `continue`: na última conversa; `new`: numa nova; `task`: cria uma
  * tarefa no quadro, na ficha, com a mensagem como descrição (ver `TaskService.createFromRoutine`).
+ *
+ * Quando roda: `recurrence` (calendário) ou, nas fichas antigas e quando é cron, `schedule` (cron de 5 campos). O servidor grava uma só:
+ * cron → só `schedule`; calendário → `recurrence` e `schedule: ''`. Para ler, use `recurrenceOf(routine)` (shared/recurrence.ts) ou o campo
+ * `recurrence` já resolvido de `RoutineSchedule`.
+ *
+ * `catchUpHours`: execução atrasada. Com o Claudio’s Club fechado (ou parado) na hora, ao voltar roda UMA vez a ocorrência mais recente
+ * perdida se ela passou há no máximo isso (inclusive); as outras e as fora do limite são descartadas, com registro. 0 ou ausente = desligada
+ * (só roda no minuto marcado); máximo `CATCH_UP_MAX_HOURS`.
  */
 export interface Routine {
   id: string;
   name: string;
   schedule: string;
+  recurrence?: Recurrence;
+  catchUpHours?: number;
   message: string;
   mode: 'continue' | 'new' | 'task';
   enabled: boolean;
@@ -608,6 +655,26 @@ export const AUTO_REVIEW_ROUNDS = 3;
 /** Teto da lista de arquivos de um card automático (`Task.changedFiles`); passando disso, os arquivos novos não entram na lista. */
 export const CHANGED_FILES_MAX = 300;
 
+/** Teto de `Task.fileOverlaps` por tarefa; passando disso, o par novo não é registrado (nem avisado). */
+export const FILE_OVERLAPS_MAX = 50;
+
+/**
+ * Um arquivo que esta tarefa e OUTRA tarefa aberta, de outra pessoa, alteraram no mesmo projeto (`Task.fileOverlaps`). Gravado nas duas tarefas, uma entrada por (arquivo, outra
+ * tarefa), na hora em que a segunda delas registra a edição (ver `TaskService.onCodeEdit`). O registro fica mesmo depois de a outra tarefa fechar: o diff deste arquivo pode ter
+ * mudança dela, e o pedido de revisão cita isso.
+ */
+export interface FileOverlap {
+  /** O arquivo, como esta tarefa o tem em `changedFiles` (relativo, com "/"). */
+  file: string;
+  /** A outra tarefa e o responsável por ela. */
+  taskId: string;
+  staffId: string;
+  /** Quando o Claudio’s Club viu os dois com o arquivo em `changedFiles`. */
+  at: string;
+  /** Quando o aviso chegou à conversa de trabalho DESTA tarefa. Ausente = ainda não (espera a tarefa estar em "fazendo" ou "planejando", ou a próxima tentativa). */
+  toldAt?: string;
+}
+
 /**
  * Revisão do quadro de um projeto (`<projeto>/.myco/board.json`): com ela ligada, a tarefa que chega em "revisão" é revisada por
  * `reviewerId`, a não ser que a tarefa aponte outro revisor ou que ele mesmo a tenha executado (aí fica com o dono). Vale para
@@ -617,6 +684,53 @@ export interface BoardConfig {
   autoReview: boolean;
   /** O funcionário responsável pela revisão; null = ninguém (com `autoReview` ligado não existe: o servidor recusa). */
   reviewerId: string | null;
+}
+
+/**
+ * Commit automático do projeto (também em `<projeto>/.myco/board.json`, na chave `autoCommit`; desligado por padrão): quando uma tarefa fica pronta, o Club faz
+ * UM commit local só com os arquivos que ela alterou (ver `Task.commit` e server/autoCommit.ts). Nunca faz push. Só liga e desliga pela tela.
+ */
+export interface BoardCommitConfig {
+  autoCommit: boolean;
+}
+
+/** Quantos arquivos do commit e quantos deixados de fora uma tarefa guarda (`TaskCommit.files` e `left`); o resto só entra na contagem da nota. */
+export const COMMIT_LIST_MAX = 100;
+
+/**
+ * Por que o commit automático deixou um arquivo da tarefa de fora (código estável; a tela monta a frase no idioma dela e o servidor, a dele em pt-BR para o histórico e a caixa):
+ * `blocked` segredo, dependência ou caminho inválido; `conflict` em conflito no git; `staged` staged por você e com mudança nova por cima; `owner` você gravou depois no editor do Club;
+ * `shared` outra tarefa que ainda não terminou também o alterou (`by` = o id dela).
+ */
+export type CommitWhy = 'blocked' | 'conflict' | 'staged' | 'owner' | 'shared';
+
+/** Um arquivo da tarefa que o commit automático deixou de fora (ver `TaskCommit.left`) e o motivo. */
+export interface TaskCommitLeft {
+  path: string;
+  why: CommitWhy;
+  /** Com `shared`: o id da outra tarefa. */
+  by?: string;
+}
+
+/**
+ * O resultado do commit automático de uma tarefa (ver `Task.commit`). `committed`: tudo o que a tarefa alterou e ainda estava no git entrou. `partial`: um
+ * commit saiu, mas ficou arquivo de fora (`left`). `none`: nada foi commitado e não houve erro (`note` diz por quê). `failed`: o git recusou (hook, identidade,
+ * repositório no meio de merge…); `note` leva a primeira linha do erro.
+ */
+export interface TaskCommit {
+  /** O `at` da entrada "pronto" do histórico que motivou este commit: a mesma entrega nunca é commitada duas vezes. */
+  for: string;
+  at: string;
+  status: 'committed' | 'partial' | 'none' | 'failed';
+  /** O commit (SHA curto); null quando nada foi commitado. */
+  sha: string | null;
+  files: string[];
+  left: TaskCommitLeft[];
+  note: string | null;
+  /** Precisa de você (falhou, ficou arquivo de fora ou a lista passou do limite): vira item na caixa até você ver. */
+  alert: boolean;
+  /** Você viu o aviso da caixa (o item some; o cartão segue mostrando o resultado). */
+  ack?: boolean;
 }
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
@@ -659,6 +773,12 @@ export interface Task {
   sessions?: TaskSession[];
   /** Troca de motor da tarefa (ausente = ainda no motor da ficha). Ver `TaskFallback`. */
   fallback?: TaskFallback;
+  /**
+   * O motor da ficha está no limite e a troca para o secundário não serve agora (a pré-checagem falhou): a tarefa espera o limite baixar,
+   * em vez de cair no secundário. `engine` é o secundário que não serve; `from`, o motor no limite; `detail`, a mensagem do erro; `until`,
+   * o fim do limite (ISO) ou null. `since`: desde quando. Limpo ao começar ou quando o limite passa (ver `startPlan`, `stuckState`).
+   */
+  fallbackBlocked?: { reason: 'sandbox' | 'agents' | 'model' | 'other'; detail: string; engine: Engine; from: Engine; since: string; until: string | null };
   /** O plano aprovado no cartão de plano, em Markdown. */
   plan: string | null;
   branch: string | null;
@@ -674,6 +794,21 @@ export interface Task {
   cancelledAt?: string;
   cancelReason?: string | null;
   cancelledBy?: string;
+  /**
+   * Pedido de cancelamento de quem pediu a tarefa (`requestedBy`), quando ela já começou e por isso ele não a cancela sozinho: o responsável decide
+   * (ver `CancelRequest` e `TaskService.requestCancel`). Só o último pedido; cada passo também fica no histórico. Limpo ao reabrir.
+   */
+  cancelRequest?: CancelRequest;
+  /**
+   * Follow-ups: melhorias que quem revisou (ou fez) a tarefa registrou depois de aprovar, sem poder criar card (ver `FollowUp` e `TaskService.createFollowUp`). Os
+   * mais antigos primeiro. Só o servidor grava, pelas rotas `.../followup` e `.../followup/:id/resolve`; nenhuma edição (tela ou API) aceita este campo.
+   */
+  followUps?: FollowUp[];
+  /**
+   * Chave de idempotência do POST que criou a tarefa (ver `TaskService.create`): quem pediu, a chave que mandou e a impressão do conteúdo. O mesmo
+   * `by` + `key` com o mesmo `hash` devolve esta tarefa em vez de criar outra; com outro `hash`, 409. Só o servidor grava.
+   */
+  createKey?: { by: string; key: string; hash: string };
   /** Mudanças de coluna, a mais recente por último (no máximo 30). */
   history: Array<{ at: string; status: TaskStatus; by: 'you' | 'auto'; note?: string }>;
   /** Revisão pedida a outro funcionário (a conversa dele). */
@@ -684,6 +819,8 @@ export interface Task {
   reviewRounds?: number;
   /** Reprovações que devolveram a tarefa para ajuste (manuais ou automáticas). Ausente = nenhuma. */
   reworkRounds?: number;
+  /** As últimas reprovações com os 🔴 e a resposta do executor (ver `Rejection`); o pedido de revisão da rodada seguinte as leva. Só o servidor grava. */
+  rejections?: Rejection[];
   /** Quando a rede de segurança retomou a conversa que parou no meio do turno (uma vez só; ver TaskService.tick). */
   resumedAt?: string | null;
   /** Tentativa corrente (ver server/taskRuns.ts): aberta ao começar ou retomar, fechada na entrega, na parada ou no cancelamento. */
@@ -704,6 +841,38 @@ export interface Task {
   requestedBy?: string | null;
   /** A conversa do gestor em que ele pediu: a entrega volta para ela. */
   requestedSession?: string | null;
+  /**
+   * O card de que esta tarefa é subtarefa: gravado na criação, sozinho, quando a tarefa é pedida pela API com o token da conversa de trabalho de um card (o
+   * `requestedBy` é o responsável dele). Tarefa pedida de outra conversa (ou pela tela) não tem. Só o servidor grava: nenhuma edição (tela ou API) aceita este campo.
+   */
+  parentTaskId?: string;
+  /**
+   * O fim de turno do card (em "fazendo") achou subtarefa aberta (ver `parentTaskId`): ele não vai para revisão, fica em "fazendo" aguardando, e não ocupa o
+   * funcionário (a fila dele anda, como a tarefa parada por dúvida). `since`: desde quando. Só existe enquanto alguma subtarefa está aberta (a listagem tira a marca
+   * quando todas fecham); mensagem sua na conversa a desfaz (ele volta a trabalhar), e o próximo fim de turno decide de novo. Só o servidor grava.
+   */
+  awaitingSubtasks?: { since: string };
+  /**
+   * Card = código: o fim de turno do card (em "fazendo") não achou nenhuma edição (`changedFiles` vazio e nada alterado no projeto desde que ele começou) e ele não delegou
+   * subtarefa: não vai para revisão como entrega normal. Fica em "fazendo", marcado "sem código", e não ocupa o funcionário (a fila dele anda). Quem pediu a tarefa decide:
+   * cancelar com motivo (`POST .../tasks/:id/cancel`, que aqui vale também para o gestor que pediu) ou devolver ao responsável (uma mensagem na conversa de trabalho, `sessionId`,
+   * que desfaz a marca: o próximo fim de turno confere de novo). Mover o card de coluna também a desfaz. Só o servidor grava.
+   */
+  noCode?: TaskNoCode;
+  /**
+   * O fim de turno do card (em "fazendo") achou agent ou comando ainda rodando em segundo plano: não é entrega. Sem revisão, sem resumo gravado e sem aviso a quem pediu; o card
+   * segue em "fazendo" (e ocupando o funcionário) até o turno que vem depois do término. Vencido o prazo (`BACKGROUND_WAIT_MS`) sem o segundo plano terminar, a entrega segue como
+   * sempre, com uma nota no histórico (`expiredAt`). Sai quando o card sai de "fazendo" ou quando o fim de turno acha o segundo plano vazio. Só o servidor grava.
+   */
+  backgroundWait?: TaskBackgroundWait;
+  /**
+   * O turno de trabalho terminou em erro do motor (autenticação, ou o erro do turno que não é passageiro nem foi retomado: ver `TurnCapHit` `engine`) e o card foi para Aguardar em vez de
+   * revisão: não há entrega. Quem pediu o card é avisado (gestor, na conversa em que pediu; o usuário, pela caixa, que também recebe o item do erro). Some quando o card sai de Aguardar.
+   * Só o servidor grava.
+   */
+  engineStop?: TaskEngineStop;
+  /** Só na listagem (derivado, não gravado): as subtarefas do card (as de `parentTaskId` igual a este id), na ordem do quadro, as encerradas também. Ausente = sem subtarefa. */
+  subtasks?: TaskSubtaskRef[];
   /** Aprovada, mas o aviso ao gestor (`requestedBy`) ficou retido: sai junto com o da última tarefa aberta dele (ver TaskService.settleRequester). */
   outcomeHeld?: boolean;
   /** Quando o aviso passou a ficar retido: depois de 2 h o tick o solta, mesmo com tarefa dele ainda aberta. */
@@ -717,10 +886,28 @@ export interface Task {
    * ordem do quadro).
    */
   queuedAt?: string | null;
+  /**
+   * Posição explícita na fila do responsável, de quem reordenou (o usuário, ou o gestor que pediu o card; ver `TaskService.reorder`): menor = antes.
+   * Depois de uma reordenação todo card da fila tem uma (1, 2, 3…); o que entra depois não tem e vai para o fim, por `queuedAt`. Sai junto com a fila.
+   * Só o servidor grava: nenhuma edição (tela ou API) aceita este campo.
+   */
+  queueRank?: number;
+  /** Só na listagem (derivado, não gravado): a posição do card na fila do responsável (1 = a próxima), contando também as bloqueadas e as em espera. Ausente fora da fila. */
+  queuePos?: number;
   /** Começar mesmo com o limite de consumo batido (você confirmou ao pôr na fila). */
   queuedForce?: boolean;
   /** Na fila, a partida foi segurada pelo gate de recursos (ver server/resourceGate.ts): o motivo e desde quando. Limpo ao começar. */
   resourceWait?: { reason: string; since: string } | null;
+  /** Na fila, a partida falhou por motivo da própria tarefa (ficha, worktree, branch…): a fila segue sem ela e ela espera `nextAt` (ver `takeNext`). Limpo ao começar ou sair da fila. */
+  startRetry?: RetryState;
+  /** Você tirou a tarefa da fila de propósito ("tirar da fila"): a varredura do tick não a põe de volta (ver `enqueueIdle`). Sai ao entrar na fila, mudar de coluna ou de responsável. */
+  unqueued?: boolean;
+  /**
+   * Você levou o card (que já tinha conversa) para "A fazer" pela tela: vale como ciência do corte guardado (reinício, retomada de turno ou transcript), e a vez dele
+   * retoma a conversa sem a checagem de ação cortada (ver `TaskService.resumeTodo`). Só o servidor grava, e só a partir da tela; não muda o limite de consumo
+   * (`queuedForce`). Sai ao usar ou quando o card muda de coluna.
+   */
+  cutAck?: boolean;
   /** Motivo de estar em Aguardar (opcional, texto puro, até 200 caracteres). Limpo ao sair da coluna. */
   waitReason?: string | null;
   /** Mensagens suas nesta conversa esperando o funcionário terminar outra tarefa. */
@@ -750,10 +937,250 @@ export interface Task {
    */
   changedFiles?: string[];
   /**
+   * Os arquivos de `changedFiles` que outra tarefa aberta, de OUTRA pessoa, também alterou (no mesmo momento ou depois): o diff deles pode trazer mudança da outra tarefa, e as duas
+   * conversas são avisadas ("releia antes de editar e não desfaça mudança alheia"), uma vez por par de tarefas e arquivo. Mesma pessoa não conta (a fila dela já serializa), nem tarefa
+   * fechada, nem quem trabalha numa worktree (a cópia dela é outra). No máximo `FILE_OVERLAPS_MAX`. Só o servidor grava.
+   */
+  fileOverlaps?: FileOverlap[];
+  /** O aviso de `fileOverlaps` que ainda não chegou falhou ao enviar: tentativas e a próxima hora (o tick refaz). Some quando chega. Só o servidor grava. */
+  overlapRetry?: RetryState;
+  /**
+   * O commit local que o Club fez quando a tarefa ficou pronta, com o commit automático do projeto ligado (ver `BoardCommitConfig` e server/autoCommit.ts). Ausente: ligado
+   * depois, desligado, ou a tarefa ainda não ficou pronta. Só o servidor grava; nenhuma edição (tela ou API) aceita este campo.
+   */
+  commit?: TaskCommit;
+  /**
    * Só na listagem (derivado, não gravado): a dúvida da tarefa está escalada a você (`question.status === 'escalated'`) e isso decide se
    * ela prende o funcionário. Ausente = dúvida com o gestor, respondida ou sem dúvida (a fila não muda).
    */
   pause?: TaskPause;
+  /**
+   * Só na listagem (derivado, não gravado): a conversa que está "fazendo" caiu por falha passageira (ou o processo morreu no meio) e a retomada
+   * automática está marcada. A tarefa segue em "fazendo" até lá. Some quando a retomada sai, é cancelada (Parar, mensagem sua, teto) ou esgota
+   * (aí a tarefa vai para Aguardar e a caixa de entrada avisa). Ver server/chat/turnRetry.ts.
+   */
+  retry?: TaskRetry;
+  /**
+   * Só na listagem (derivado do processo da conversa de trabalho, não gravado): a tarefa está em "fazendo" ou "planejando" e a conversa espera você
+   * responder um pedido de permissão (cartão `permission` pendente na conversa). Some quando você permite ou nega, ou a conversa fecha. Ausente = nada
+   * pendente. Pergunta com opções não entra (o gestor a responde). Passados 15 min a tarefa conta como parada (`stuck`) e o gestor que pediu recebe um aviso.
+   */
+  permissionWait?: PermissionWait;
+  /**
+   * Só na listagem (derivado, não gravado; não confundir com `pause`, a dúvida escalada): o projeto está pausado (ver `ProjectPause`) e esta tarefa, ainda aberta, não
+   * começa nem segue sozinha até ele ser retomado. Ausente = projeto rodando (ou tarefa encerrada).
+   */
+  projectPaused?: ProjectPause;
+}
+
+/** A permissão que a conversa de uma tarefa espera de você (`Task.permissionWait`). Só o nome da ferramenta: o comando e os arquivos ficam no cartão da conversa. */
+export interface PermissionWait {
+  /** A ferramenta que pediu (a mais antiga, se houver mais de uma pendente). */
+  tool: string;
+  /** Desde quando o pedido espera (ISO). */
+  since: string;
+  /** Passou o prazo (15 min): a tarefa conta como parada. Calculado na leitura; o motivo em pt-BR sai em `stuckState` (server/tasks.ts). */
+  stuck: boolean;
+}
+
+/**
+ * A marca "sem código" de um card (`Task.noCode`). O aviso vai a quem pediu o card (`to`): o gestor, na conversa em que pediu, ou o usuário, pelo item 'stuck' da caixa
+ * (`InboxItem.stuck.noCode`), quando o card foi pedido por ele, o gestor saiu do projeto ou o aviso a ele não chegou em 30 min (`escalatedAt`).
+ */
+export interface TaskBackgroundWait {
+  /** Quando o primeiro fim de turno achou o segundo plano pendente (ISO): o prazo conta daqui. */
+  since: string;
+  /** Os ids do que rodava em segundo plano (`BackgroundTask.id`): o que sobrar de outro conjunto é segundo plano novo, e o prazo recomeça. */
+  ids: string[];
+  /** O que rodava, em uma linha (rótulo do primeiro item, até 120 caracteres): texto da conversa, a tela o mostra como texto puro. */
+  label: string;
+  /** Quando o prazo venceu e o card deixou de esperar (ISO). Enquanto o mesmo segundo plano seguir pendente, não espera de novo. */
+  expiredAt?: string;
+}
+
+export interface TaskNoCode {
+  /** Quando o turno terminou sem edição (ISO). */
+  since: string;
+  /** O que o responsável disse ao terminar (até 1500 caracteres): é dele, e a tela o mostra como texto puro. A análise ou a resposta pode estar aqui. */
+  summary?: string;
+  /** Quem recebe o aviso: o gestor que pediu o card (`Task.requestedBy`) ou o usuário (caixa). */
+  to: 'manager' | 'owner';
+  /** Quando o aviso chegou à conversa do gestor (ISO). Ausente com `to: 'owner'` e enquanto não chegou. */
+  deliveredAt?: string;
+  /** O aviso ao gestor ainda não chegou (conversa fechando, limite de consumo…): tentativas e a próxima (backoff); o tick refaz. Some ao entregar ou ao ir para o usuário. */
+  notifyRetry?: RetryState;
+  /** Quando o aviso ao gestor foi dado como perdido e o card passou a `to: 'owner'` (ISO). */
+  escalatedAt?: string;
+}
+
+/** A parada do card por erro do motor (`Task.engineStop`). `why`/`engine`/`error` são os do `TurnCapHit` `engine` que o originou. */
+export interface TaskEngineStop {
+  /** Quando o turno terminou em erro (ISO). */
+  since: string;
+  why: 'auth' | 'error';
+  engine: 'claude' | 'codex';
+  /** O erro como o motor o deu (até 200 caracteres): texto do motor, não do funcionário. */
+  error: string;
+  /** Quando o aviso chegou à conversa de quem pediu (ISO). Ausente enquanto não chegou, e quando o card foi pedido pelo usuário (a caixa dele já mostra o erro). */
+  deliveredAt?: string;
+  /** O aviso a quem pediu ainda não chegou: tentativas e a próxima (backoff); o tick refaz até chegar ou passar 30 min. Some ao entregar ou ao desistir. */
+  notifyRetry?: RetryState;
+}
+
+/** Uma subtarefa de um card (`Task.subtasks`): o que a tela precisa para mostrar "aguardando subtarefas" (aberta = `status` fora de 'done' e 'cancelled', ver `isClosed`). */
+export interface TaskSubtaskRef {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  /** Quem faz; null = sem responsável. */
+  staffId: string | null;
+}
+
+/**
+ * O pedido de cancelamento de uma tarefa que já começou (`Task.cancelRequest`). Quem pediu a tarefa (`by`, sempre o dono do token) manda o pedido com
+ * o motivo; ele chega na conversa do responsável, que decide: aceita cancelando a tarefa (`POST .../cancel`, `status` vira 'accepted') ou recusa dizendo
+ * por quê (`POST .../cancel-request/refuse`, `status` vira 'refused', `answer` guarda o porquê e o solicitante é avisado). Cancelar a tarefa pela tela
+ * também fecha o pedido como 'accepted' (`decidedBy: 'user'`).
+ */
+export interface CancelRequest {
+  /** Quem pediu: o id do funcionário (= `Task.requestedBy`). */
+  by: string;
+  /** Por quê (uma linha, até 300 caracteres). */
+  reason: string;
+  /** Quando pediu (ISO). */
+  at: string;
+  /**
+   * pending: esperando a decisão do responsável; accepted: a tarefa foi cancelada; refused: o responsável recusou (veja `answer`); moot: a tarefa ficou
+   * pronta sem decisão (não há mais o que cancelar).
+   */
+  status: 'pending' | 'accepted' | 'refused' | 'moot';
+  /** Quando chegou à conversa do responsável (ISO). Ausente = ainda não chegou: o tick tenta de novo (ver `retry` e `waiting`). */
+  deliveredAt?: string;
+  /** A conversa em que chegou. Se a tarefa trocar de conversa (troca de motor) ou o servidor reiniciar com o pedido ainda aberto, ele é entregue de novo. */
+  deliveredSession?: string;
+  /** Ainda não entregue porque o responsável está em outra tarefa (o pedido espera a vez dele; em pt-BR, ex.: "Ana está em “Exportar CSV”"). Limpo ao entregar. */
+  waiting?: string;
+  /** A entrega falhou (limite de consumo, conversa fechando…): tentativas e a próxima (backoff). Limpo ao entregar. */
+  retry?: RetryState;
+  /** Quando foi decidido (ISO). */
+  decidedAt?: string;
+  /** Quem decidiu: o id do responsável, ou 'user' (a tarefa foi cancelada pela tela). */
+  decidedBy?: string;
+  /** Só em 'refused': o porquê da recusa (uma linha, até 300 caracteres). */
+  answer?: string;
+  /** Só em 'refused': o aviso da recusa ao solicitante não chegou; o tick reenvia com backoff. Ausente = avisado. */
+  notifyRetry?: RetryState;
+}
+
+/**
+ * O ajuste de acompanhamento de uma tarefa (`Task.followUps`): o achado e o plano que o revisor (ou o responsável) deixou DEPOIS de aprovar, sem poder criar card
+ * (só gestor passa trabalho). É gravado na tarefa ANTES de qualquer aviso, e o aviso vai a quem decide (`to`): o gestor que pediu a tarefa, na conversa em que pediu, ou o
+ * usuário (item 'followUp' da caixa) quando ela foi pedida por ele ou o gestor não pode receber. Quem decide cria o card em um passo (`POST .../followup/:fid/card`, que também
+ * marca `resolution: 'card'` e `cardId`), ou pelo fluxo de sempre e marca o `resolve`, ou descarta; nada vira card sozinho. Quem decide é quem pediu a tarefa (`Task.requestedBy`) ou o usuário: o autor que não pediu não decide, mas o gestor que pediu
+ * e também revisou a tarefa (`by` igual a `requestedBy`) decide o próprio follow-up (e não recebe aviso: ver `deliveredAt`). O `text` é de outro funcionário e vai à conversa de
+ * quem decide como dado, não como instrução (ver `untrustedBlock` em server/tasks.ts).
+ */
+export interface FollowUp {
+  /** `f-` + 6 hex, único na tarefa. */
+  id: string;
+  /** Quem registrou: o id do funcionário, sempre o dono do token (nunca o corpo do pedido). */
+  by: string;
+  /** Quando registrou (ISO). */
+  at: string;
+  /** O achado e o plano, texto puro (até 4000 caracteres): o detalhe técnico. */
+  text: string;
+  /**
+   * Os campos estruturados que o revisor preenche ao registrar (todos opcionais: follow-up antigo, e o de quem não os mandou, não os tem e segue válido; a tela cai no
+   * `text`). `recommendation`: `worth` (vale fazer) ou `optional`. `title`: o assunto em linguagem leiga, uma linha (até 120 caracteres). `impact`: o que acontece se não for
+   * feito, em linguagem de usuário (até 400). `size`: `small`, `medium` ou `large`. `staffId`: quem faria (funcionário do projeto; vira o responsável sugerido do card).
+   */
+  recommendation?: 'worth' | 'optional';
+  title?: string;
+  impact?: string;
+  size?: 'small' | 'medium' | 'large';
+  staffId?: string;
+  /** open: esperando a decisão; resolved: virou card ou foi descartado (ver `resolution`). */
+  status: 'open' | 'resolved';
+  /**
+   * Quem recebe o aviso. manager: o gestor que pediu a tarefa (`Task.requestedBy`), na conversa em que pediu; owner: o usuário, pelo item 'followUp' da caixa
+   * (a tarefa foi pedida por ele, ou o gestor saiu do projeto, ou o aviso a ele não chegou em 30 min: `escalatedAt`).
+   */
+  to: 'manager' | 'owner';
+  /** Quando o aviso chegou à conversa do gestor (ISO). Quem registra o que ele mesmo pediu não recebe aviso: vale `at`. Ausente com `to: 'owner'` e se ainda não chegou. */
+  deliveredAt?: string;
+  /** O aviso ao gestor ainda não chegou (conversa fechando, limite de consumo…): tentativas e a próxima (backoff); o tick refaz. Some ao entregar ou ao ir para o usuário. */
+  notifyRetry?: RetryState;
+  /** Quando o aviso ao gestor foi dado como perdido e o follow-up passou a `to: 'owner'` (ISO). */
+  escalatedAt?: string;
+  /** Só em `resolved`: virou um card (`cardId` é a tarefa nova) ou foi descartado. */
+  resolution?: 'card' | 'discarded';
+  /** Quando foi decidido (ISO). */
+  resolvedAt?: string;
+  /** Quem decidiu: o id do gestor, ou 'you' (o usuário, pela tela). */
+  resolvedBy?: string;
+  /** O card criado a partir dele (`resolution: 'card'`; opcional se o decisor não disse qual). */
+  cardId?: string;
+  /** O porquê do descarte (uma linha, até 300 caracteres; opcional). */
+  note?: string;
+  /** Chave de idempotência do POST que o registrou e a impressão do texto (por autor, dentro da tarefa): a mesma chave com o mesmo texto devolve este registro; com outro, 409. */
+  key?: string;
+  hash?: string;
+}
+
+/** O que `POST .../followup` devolve: o registro, e `idempotentReplay` quando o pedido repetiu uma chave já usada com o mesmo texto (nada foi gravado nem avisado de novo). */
+export interface FollowUpResult extends FollowUp {
+  taskId: string;
+  idempotentReplay?: true;
+}
+
+/**
+ * O que `POST .../tasks/:id/followup/:fid/card` devolve: o card criado e o follow-up já resolvido (`resolution: 'card'`, `cardId`). `idempotentReplay`: o follow-up já tinha virado
+ * card e esta é a resposta de antes (nada foi criado nem gravado de novo). `task.startError` (só com `start: true`): o começo falhou depois de o card ser gravado; a fila o retoma
+ * sozinha e o card não deve ser criado de novo.
+ */
+export interface FollowUpCardResult {
+  task: Task & { startError?: string };
+  followUp: FollowUpResult;
+  idempotentReplay?: true;
+}
+
+/** Aviso na resposta de criar a tarefa (ver `TaskCreateResult`). */
+export interface TaskCreateWarning {
+  /** `possible-duplicate`: o mesmo solicitante passou há pouco uma tarefa de título parecido ao mesmo responsável. A tarefa foi criada mesmo assim. */
+  code: 'possible-duplicate';
+  /** O aviso em pt-BR, com o que fazer. */
+  message: string;
+  /** A tarefa parecida. */
+  taskId: string;
+  title: string;
+  status: TaskStatus;
+  createdAt: string;
+}
+
+/**
+ * O que `POST .../tasks` devolve: a tarefa, com campos que só existem nesta resposta (derivados, nunca gravados). Responde 200 mesmo quando o começo
+ * falhou, desde que a tarefa tenha sido gravada: quem recebe nunca deve criar de novo.
+ */
+export interface TaskCreateResult extends Task {
+  /** `true`: o pedido repetiu uma `idempotencyKey` já usada com o mesmo conteúdo; esta é a tarefa de antes (nada foi criado nem começado de novo). */
+  idempotentReplay?: true;
+  /** Possíveis duplicatas (só aviso). Ausente = nenhuma. Nunca presente em `idempotentReplay`. */
+  warnings?: TaskCreateWarning[];
+  /** O começo falhou depois de a tarefa ser gravada (esta resposta é a tarefa gravada): o motivo. A fila a retoma sozinha; não crie outra. */
+  startError?: string;
+}
+
+/** A retomada automática marcada para a conversa da tarefa (`Task.retry`). */
+export interface TaskRetry {
+  /** A tentativa que vai sair (1 a `max`) e o teto do turno (3 para erro passageiro, 1 para processo que caiu sem causa). */
+  attempt: number;
+  max: number;
+  /** Quando a mensagem de retomada sai (ISO). Passou da hora e ainda aparece: o envio está em curso, ou a linha de parada de consumo adiou. */
+  at: string;
+  /** `transient`: erro passageiro do modelo; `unknown`: o processo caiu sem causa conhecida. */
+  kind: 'transient' | 'unknown';
+  /** O motivo em poucas palavras, em português ("API sobrecarregada", "o processo caiu sem aviso"). */
+  error: string;
 }
 
 /**
@@ -797,6 +1224,44 @@ export interface TaskQuestion {
   answeredAt?: string;
   /** Resumo curto da resposta. */
   answer?: string;
+  /**
+   * `reviewer`: a dúvida é sobre um 🔴 da última reprovação e vai ao revisor que reprovou (`reviewerId`), não a quem pediu a tarefa (ver `Rejection` e `doubtHeld`).
+   * Ausente = vai a quem pediu (`requestedBy`). Só o servidor grava.
+   */
+  to?: 'reviewer';
+  reviewerId?: string;
+}
+
+/** Um 🔴 da reprovação, de uma linha do bloco `[BLOQUEADORES]` do revisor (ver server/reviewBlockers.ts). `id` (R1, R2…) é o mesmo de uma rodada à outra enquanto o item segue aberto. */
+export interface ReviewBlocker {
+  id: string;
+  /** arquivo:linha */
+  where: string;
+  problem: string;
+  /** Como provar que foi corrigido. */
+  proof: string;
+}
+
+/**
+ * Uma reprovação da revisão (ver `TaskService.reject`): os 🔴, a resposta do executor e a quem a dúvida sobre eles vai. Fica no card (sobrevive a reinício) para o pedido
+ * da rodada seguinte levar o que o revisor pediu e o que o executor respondeu. Mais antigas primeiro, no máximo 10. Só o servidor grava.
+ */
+export interface Rejection {
+  /** 1 = a primeira reprovação do card (`reworkRounds` + 1 na hora). */
+  round: number;
+  at: string;
+  /** `delivery.at` da entrega que foi reprovada: a resposta do executor é a da entrega seguinte a ela. */
+  deliveryAt: string | null;
+  reviewer: { staffId: string; name: string; sessionId: string };
+  /** Como veio o bloco de bloqueadores: `ok` (os `blockers`); `absent` ou `malformed` (o texto do revisor segue cru, em `raw`). */
+  block: 'ok' | 'absent' | 'malformed';
+  blockers: ReviewBlocker[];
+  /** Por que o bloco veio malformado, ou o que não bateu (id reaproveitado). */
+  warnings?: string[];
+  /** Só sem bloco válido: o texto do revisor que foi ao executor (a parte sem 🔴 pode ter sido cortada). */
+  raw?: string;
+  /** A resposta do executor, ao fim do turno que seguiu a reprovação (a entrega seguinte). `cited`: os ids Rn que ela cita, lidos antes do corte. */
+  reply?: { at: string; text: string; cut?: true; cited: string[] };
 }
 
 export interface TaskDelivery {
@@ -826,6 +1291,10 @@ export interface HeldMessage {
    * como mensagem comum.
    */
   ask?: { requestId: string; answers: Record<string, string | string[]>; by: 'manager' | 'user' };
+  /** É a resposta à dúvida escalada (texto ou opções): só ela deixa a tarefa parada sem ocupar o funcionário (ver `parked` em server/tasks.ts). */
+  doubt?: true;
+  /** Veio de um funcionário ou de uma decisão automática (reprovação da revisão, resposta do gestor, mensagem de outro funcionário), não de você: com o projeto pausado ela espera (ver `ProjectPause`); a sua segue. */
+  auto?: true;
 }
 
 /** Pendência de uma tentativa que falhou e vai ser repetida (ver server/retryPolicy.ts): quantas já foram, a próxima, a primeira e o último erro. */
@@ -845,12 +1314,23 @@ export interface TaskProgress {
   max: number;
 }
 
+/**
+ * Projeto pausado (ver server/projectPause.ts): nada começa sozinho nele (fila, revisão automática, rotinas, despertador, "continue", retomada do reinício, troca de
+ * motor). O que já roda termina o turno e para; as suas ações manuais (chat, mover cartão, "Começar") seguem. Só você pausa e despausa, pelo navegador.
+ */
+export interface ProjectPause {
+  /** Quando pausou (ISO). */
+  at: string;
+}
+
 /** Tarefas de um projeto para o cabeçalho: abertas (tudo que não está encerrado: nem pronto nem cancelado) e em revisão. */
 export interface TaskSummary {
   open: number;
   review: number;
   /** Progresso do kanban (a barra do cabeçalho); ausente num servidor antigo, e nesse caso a barra some. */
   progress?: TaskProgress | null;
+  /** O projeto está pausado (ver `ProjectPause`): presente só então, também com `open` em 0. Ausente = rodando. */
+  paused?: ProjectPause;
 }
 
 /** Trabalho passado a outro funcionário (revisão, deploy): quem, em qual conversa e quando. */
@@ -866,6 +1346,8 @@ export interface TaskHandoff {
   reaskAt?: string;
   /** O re-pedido ("responda com APROVADO ou REPROVADO") já foi feito, uma vez só. */
   reasked?: boolean;
+  /** A tarefa foi entregue de novo depois deste pedido: é de uma rodada anterior e não decide mais nada (fica só no histórico). */
+  superseded?: boolean;
 }
 
 /** Uma conversa que foi da tarefa: o trabalho, a revisão ou a dúvida ao gestor. `staffId` é quem conversa nela. */
@@ -884,6 +1366,39 @@ export interface TestRun {
   output: string;
   ms: number;
   at: string;
+  /** Quantos arquivos de teste rodaram (a linha "Test Files" do vitest); ausente se a saída não é a do vitest. */
+  files?: number;
+  /** Os arquivos de teste com falha e quantas falhas cada um teve, lidos da saída inteira (não só do fim); ausente se não deu para ler. */
+  failedFiles?: TestFailedFile[];
+  /** A nova rodada só dos arquivos que falharam (ver `isolateFailures`); só na validação da entrega. */
+  isolated?: TestIsolation;
+}
+
+export interface TestFailedFile {
+  file: string;
+  failed: number;
+}
+
+/** O resultado de rodar de novo, uma vez, só os arquivos que falharam na suíte. */
+export interface TestIsolation {
+  /** O comando da nova rodada; ausente se ela não rodou (`skipped`). */
+  command?: string;
+  ms?: number;
+  /** Por que não rodou. */
+  skipped?: string;
+  files: TestIsolatedFile[];
+}
+
+export interface TestIsolatedFile {
+  file: string;
+  /** Falhas na suíte inteira. */
+  failed: number;
+  /** `pass`: passou isolado; `fail`: falhou de novo; `unknown`: sem resultado (não rodou ou a rodada não terminou). */
+  status: 'pass' | 'fail' | 'unknown';
+  /** Falhas isoladas (só em `fail`). */
+  isolatedFailed?: number;
+  /** Em `fail`: o arquivo da entrega que ele é ou importa (direta ou indiretamente); ausente = não toca a entrega (ou a tarefa não tem lista de arquivos). */
+  touches?: string;
 }
 
 export interface TaskCodeFile {
@@ -912,11 +1427,101 @@ export interface TaskCode {
   whyNot: string | null;
 }
 
-/** Última vez que uma rotina rodou (ou foi pulada), por `<projeto>:<ficha>:<rotina>`. */
+/** Última vez que uma rotina rodou (ou foi pulada), por `<projeto>:<ficha>:<rotina>`. Inclui o "Rodar agora". */
 export interface RoutineRun {
   at: string;
   ok: boolean;
   text: string;
+}
+
+/**
+ * O que aconteceu com uma ocorrência prevista: `ran` (começou), `failed` (pulada ou erro: `text` diz o porquê), `discarded` (perdida e
+ * fora do limite de atraso, ou superada por uma mais recente), `uncertain` (o Claudio’s Club caiu depois de reservar o horário e antes
+ * de terminar: não se sabe se começou, e ele não tenta de novo sozinho).
+ */
+export type RoutineOutcomeState = 'ran' | 'failed' | 'discarded' | 'uncertain';
+
+/** Uma linha do histórico da rotina (as `ROUTINE_HISTORY_MAX` mais recentes). */
+export interface RoutineHistoryEntry {
+  state: RoutineOutcomeState;
+  /** Horário previsto (ISO). Em descarte em lote, o da mais recente descartada. No "Rodar agora": a hora em que rodou. */
+  due: string;
+  /** Descarte em lote: o horário previsto da mais antiga descartada. */
+  from?: string;
+  /** Quantas ocorrências a linha cobre (descarte em lote); ausente = 1. Com `more`, são pelo menos tantas. */
+  count?: number;
+  more?: true;
+  /** Quando o servidor tratou (ISO). */
+  at: string;
+  text: string;
+  /** Execução atrasada: minutos entre o horário previsto e a partida. */
+  lateMin?: number;
+  /** "Rodar agora": não é ocorrência prevista e não mexe no que já foi tratado. */
+  manual?: true;
+}
+
+/** Uma rotina de um funcionário do projeto, como a tela central a vê (`GET /api/projects/:pid/schedules`). */
+export interface RoutineSchedule {
+  projectId: string;
+  staffId: string;
+  staffName: string;
+  routineId: string;
+  name: string;
+  message: string;
+  mode: Routine['mode'];
+  enabled: boolean;
+  /** Já resolvida: ficha antiga com `schedule` cron vem como `{ kind: 'cron', expr }`. */
+  recurrence: Recurrence;
+  /** Texto curto em português ("a cada 2 semanas (seg, qua) às 09:00"). */
+  description: string;
+  /** Recorrência que não dá para ler (ficha editada à mão): o motivo; a rotina não roda e não tem ocorrências. */
+  invalid: string | null;
+  /** 0 = execução atrasada desligada. */
+  catchUpHours: number;
+  /** Próxima ocorrência (ISO); null se desligada, inválida ou sem mais nenhuma. */
+  next: string | null;
+  /** Desde quando vale (ISO): ocorrências anteriores não existem para esta rotina (criação, edição da recorrência ou ativação). */
+  armedAt: string | null;
+  /** Reservou um horário e ainda não terminou de rodar (horário previsto, ISO). */
+  inFlight: string | null;
+  /** Última execução, inclusive "Rodar agora". */
+  last: RoutineRun | null;
+  /** Mais recente primeiro. */
+  history: RoutineHistoryEntry[];
+}
+
+/** Uma ocorrência no calendário. `upcoming` = ainda por vir; `unknown` = passada que o histórico (limitado) já não lembra. */
+export interface RoutineOccurrence {
+  staffId: string;
+  routineId: string;
+  /** ISO. */
+  at: string;
+  state: RoutineOutcomeState | 'upcoming' | 'unknown';
+}
+
+/** Despertador ou "continue" do limite de uso pendente (só listados; este fluxo é de `ChatManager`, ver `listSchedules`). */
+export interface ScheduleItem {
+  kind: 'wake' | 'continue';
+  sessionId: string;
+  /** null = conversa sem ficha (Freela). */
+  staffId: string | null;
+  at: string;
+  text: string;
+}
+
+/**
+ * Resposta de `GET /api/projects/:pid/schedules?from=<ISO>&to=<ISO>` (só pelo Claudio’s Club). `items` é o que sempre veio;
+ * `routines` são TODAS as rotinas das fichas do projeto (ligadas ou não); `occurrences`, as das rotinas ligadas dentro da janela
+ * [from, to) (sem `from`/`to`: do começo de hoje até 31 dias depois; máximo `SCHEDULE_WINDOW_MAX_DAYS`, senão 400).
+ * `window.truncated`: passou do teto de ocorrências (500 por rotina, 5000 no total) e a lista ficou incompleta.
+ * `stateWarning`: o arquivo de estado das rotinas estava corrompido e recomeçou (nada foi repetido, mas atrasos antigos não voltam).
+ */
+export interface SchedulesResponse {
+  items: ScheduleItem[];
+  routines: RoutineSchedule[];
+  occurrences: RoutineOccurrence[];
+  window: { from: string; to: string; truncated: boolean };
+  stateWarning: string | null;
 }
 
 /**
@@ -1018,9 +1623,10 @@ export interface StaffProfile {
   /**
    * Sessões abertas para este funcionário, a mais recente por último. `cwd` é a pasta onde a
    * sessão roda (a worktree, se a ficha pede uma): retomar exige a mesma pasta. `model`/`effort`: o
-   * que foi escolhido no chat desta conversa (vale ao reabrir); ausente = o da ficha.
+   * que foi escolhido no chat desta conversa (vale ao reabrir); ausente = o da ficha. `readOnly`: conversa de revisão de tarefa, que não
+   * edita arquivos do projeto (ver `chatSpawn`); vale também ao reabrir.
    */
-  sessions: { id: string; startedAt: string; cwd?: string; model?: string; effort?: CodexEffort; fallback?: { engine: Engine; model: string; effort?: CodexEffort } }[];
+  sessions: { id: string; startedAt: string; cwd?: string; model?: string; effort?: CodexEffort; fallback?: { engine: Engine; model: string; effort?: CodexEffort }; readOnly?: boolean }[];
   createdAt: string;
   updatedAt: string;
 }
@@ -1293,6 +1899,10 @@ export type ChatItem =
       uuid?: string;
       /** Guardada pelo Claudio’s Club até o funcionário terminar a outra tarefa (o motivo). */
       held?: string;
+      /** Só nas guardadas (`held`): a tarefa que guarda a mensagem, para `POST …/tasks/<id>/held/<hid>/discard` (o `<hid>` é o id do item sem o `h:`). */
+      heldTaskId?: string;
+      /** Só nas guardadas: dá para excluir? false na resposta a uma dúvida (a tarefa espera por ela; o servidor recusa com 409). */
+      heldDiscardable?: boolean;
       /** Quem mandou foi outro funcionário (pela API), não você. */
       fromStaff?: boolean;
     }
@@ -1341,6 +1951,8 @@ export type ChatItem =
       wake?: 'waiting' | 'sent' | 'cancelled' | 'failed';
       /** Despertador: o instante (ms) da volta (`waiting`) ou em que voltou/foi desfeito (os demais). */
       wakeAt?: number;
+      /** Aviso da retomada automática de um turno que caiu: o estado em campos, para a tela escrever a frase no idioma dela e fazer a contagem (o `text` é só o de reserva). */
+      retry?: TurnRetryNotice;
       /** Ferramenta negada: a ferramenta, e quem barrou (`denial`, a dica que a tela mostra). */
       tool?: string;
       denial?: DenialInfo;
@@ -1351,11 +1963,35 @@ export type ChatItem =
     };
 
 /**
- * Turno parado que não volta sozinho: pelo teto (ver server/chat/turnCap.ts: o que passou do limite e quanto era) ou pelo
- * reinício, que cortou no meio uma ação com efeito fora do projeto (ver server/chat/cutAction.ts: `action`, o resumo dela).
+ * O estado de um aviso da retomada automática (`retry` do item `notice`; ver server/chat/turnRetry.ts). `state` é qual mensagem saiu:
+ * `waiting` (marcada), `sent` (retomou), `cancelled` (desfeita), `failed` (o envio falhou: `error`) ou `dropped` (a opção desligou).
+ * `attempt`/`max` são os da tentativa, quando o servidor os sabe; `at` é o instante da próxima tentativa (epoch ms, UTC), só em `waiting`;
+ * `error` é o motivo em pt-BR (`waiting`: a queda, `failed`: o que impediu o envio), até 300 caracteres.
+ */
+export interface TurnRetryNotice {
+  state: 'waiting' | 'sent' | 'cancelled' | 'failed' | 'dropped';
+  attempt?: number;
+  max?: number;
+  at?: number;
+  error?: string;
+}
+
+/**
+ * Turno parado que não volta sozinho: pelo teto (ver server/chat/turnCap.ts: o que passou do limite e quanto era), pelo
+ * reinício, que cortou no meio uma ação com efeito fora do projeto (ver server/chat/cutAction.ts: `action`, o resumo dela), ou pela
+ * retomada automática que não aconteceu (ver server/chat/turnRetry.ts): `retry`/`exhausted` gastou as tentativas (`attempts`) e `retry`/`cut`
+ * não tentou porque a ação cortada mexia fora do projeto (`action`); `error` é o erro que derrubou o turno, curto.
+ * Também pelo erro do motor no turno de trabalho de uma tarefa (`engine`): `auth` = login do Claude/Codex expirado ou recusado (o sinal estruturado do motor: o `error`
+ * `authentication_failed` da mensagem do Claude, ou o status 401), que só o dono resolve entrando de novo e que nunca é retomado sozinho; `error` = o turno falhou por outra causa
+ * que não vai passar sozinha (ou a retomada está desligada). `error` é o erro do motor, curto.
  * Fica na caixa (e põe a tarefa em Aguardar) até você mandar mensagem nova.
  */
-export type TurnCapHit = { kind: 'tools' | 'minutes'; limit: number } | { kind: 'restart'; action: string };
+export type TurnCapHit =
+  | { kind: 'tools' | 'minutes'; limit: number }
+  | { kind: 'restart'; action: string }
+  | { kind: 'retry'; why: 'exhausted'; attempts: number; error: string }
+  | { kind: 'retry'; why: 'cut'; action: string; error: string }
+  | { kind: 'engine'; why: 'auth' | 'error'; engine: 'claude' | 'codex'; error: string };
 
 /** Quem barrou uma ferramenta: `layer`; `reason` é o motivo dado (sem ele, ausente). `safety` = checagem embutida
  *  do Claude Code (ex.: Remove-Item em caminho do sistema); `settings` = arquivo ou pasta negado nas regras de permissão. */
@@ -1365,6 +2001,9 @@ export interface DenialInfo {
   /** `servers`: dar acesso a servidores; `autonomy`: o classificador do Autônomo barrou; `retry`: tentar de novo. */
   hint: 'servers' | 'autonomy' | 'retry' | null;
 }
+
+/** Quem barrou, no alerta "ação barrada" da caixa: as camadas do Claude (`DenialInfo.layer`) mais a sandbox do Codex (`sandbox`, ver server/chat/denied.ts). */
+export type DeniedLayer = DenialInfo['layer'] | 'sandbox';
 
 /** Uma opção de uma pergunta do Claude (`preview`: HTML de exemplo que o cartão mostra ao marcar). */
 export interface AskedOption {
@@ -1395,7 +2034,7 @@ export type QuestionAnswers = Record<string, string | string[]>;
 export type QuestionAnnotations = Record<string, { preview?: string; notes?: string }>;
 
 /** O que espera você, de todas as salas (a caixa "precisa de mim"). */
-export type InboxKind = 'plan' | 'permission' | 'secret' | 'waiting' | 'error' | 'routine' | 'orphan' | 'usage' | 'blocked' | 'notStarted' | 'question' | 'stuck';
+export type InboxKind = 'plan' | 'permission' | 'secret' | 'waiting' | 'error' | 'routine' | 'orphan' | 'usage' | 'blocked' | 'notStarted' | 'question' | 'stuck' | 'followUp' | 'denied';
 
 /** Um turno que acabou (trabalhando → parado): vira o aviso "Fulano terminou". */
 export interface TurnNotice {
@@ -1489,7 +2128,12 @@ export interface InboxItem {
     hint?: SecretHint;
     /** Arquivo do segredo, relativo à raiz do projeto, separado por "/". Ausente quando não há arquivo identificável. */
     file?: string;
-    /** true quando o files/read recusa esse caminho (mesma checagem): o balão mostra o caminho sem botão, com "abra no seu editor". Só vem junto com `file`. */
+    /** A linha do segredo em `file` (1 = primeira), quando o servidor a achou lendo o arquivo; ausente se não deu (chave privada, arquivo comprido). Só vem junto com `file`. */
+    line?: number;
+    /**
+     * true quando o files/read recusa esse caminho (mesma checagem): o balão mostra o caminho sem abri-lo na aba Arquivos, e o "Corrigir" abre o arquivo no editor
+     * do computador (`POST /api/projects/:id/files/open-editor`). Só vem junto com `file`.
+     */
     fileBlocked?: true;
   };
   /**
@@ -1503,13 +2147,83 @@ export interface InboxItem {
    */
   question?: { taskId: string; taskTitle: string; questionId: string; source: 'ask' | 'text'; text?: string; questions?: Array<{ question: string; options: string[]; multiSelect?: boolean }>; escalatedAt: string };
   /** Tarefa parada que só você destrava (kind 'stuck'): revisão que não anda ou ajuste que não chega. `reason` em pt-BR; a tela monta a frase por `humanAction`. */
-  stuck?: { taskId: string; taskTitle: string; reason: string; selfHeals: boolean; humanAction: HumanAction | null; since: string };
+  stuck?: {
+    taskId: string;
+    taskTitle: string;
+    reason: string;
+    selfHeals: boolean;
+    humanAction: HumanAction | null;
+    since: string;
+    /**
+     * Card = código: o card terminou o turno sem editar código (`Task.noCode`) e quem pediu é o usuário (ou o aviso ao gestor se perdeu): `humanAction` é 'decide'. As saídas
+     * são a rota `cancel` da tarefa (com o motivo) e uma mensagem na conversa de trabalho dela (`Task.sessionId`, devolver ao responsável). `summary`: o que o responsável disse
+     * ao terminar (até 1500 caracteres, texto dele, puro).
+     */
+    noCode?: true;
+    summary?: string;
+  };
   /**
    * Cartão esquecido (kind 'notStarted', ver notStartedTasks em server/tasks.ts): tarefa em "a fazer", fora da fila e sem bloqueadora, parada há `days`
    * dias (inteiros, no mínimo 2). `staffId` é o responsável (null = sem responsável: "Começar" pede escolher um). O item não leva `staffId`
    * no topo: não é conversa esperando, e o cartão do funcionário não deve ficar amarelo por isso.
    */
   notStarted?: { taskId: string; taskTitle: string; days: number; staffId: string | null };
+  /**
+   * Follow-up esperando a decisão do usuário (kind 'followUp', ver followUpAlerts em server/tasks.ts): pedido por ele, ou o gestor não pôde receber. `text` é o do autor,
+   * cortado em 600 caracteres (o inteiro está em `Task.followUps[].text`); texto puro. Decide-se pela rota `POST .../tasks/:taskId/followup/:followUpId/resolve` da tarefa,
+   * que a tela chama como dono (descartar ou "virou o card X"), ou `.../followup/:followUpId/card` (cria o card em um passo). Nada é gravado para o item: some quando o follow-up é resolvido.
+   * O item não leva `staffId` (não é conversa esperando). `sessionId` do item: a conversa de trabalho da tarefa quando o usuário a pediu e ela tem conversa (a tela mostra o achado como
+   * balão nela); vazio quando a tarefa foi pedida por um gestor (o aviso a ele se perdeu) ou ainda não tem conversa (o alvo é o card).
+   */
+  followUp?: {
+    taskId: string;
+    taskTitle: string;
+    followUpId: string;
+    by: string;
+    byName: string;
+    text: string;
+    at: string;
+    /** Os campos estruturados do follow-up (ver `FollowUp`), só os que o revisor mandou. `staffName`: o nome de quem faria (vazio se a ficha saiu do projeto). */
+    recommendation?: 'worth' | 'optional';
+    title?: string;
+    impact?: string;
+    size?: 'small' | 'medium' | 'large';
+    staffId?: string;
+    staffName?: string;
+  };
+  /**
+   * Ação barrada numa conversa de tarefa (kind 'denied', ver `deniedInboxItem` em server/inboxItems.ts): uma regra de permissão negou uma ferramenta (plano, regra do Club,
+   * settings, classificador do Autônomo, sandbox do Codex). Um item por conversa e por turno, agrupado: o id é `denied:<sessão>:<turno>`, `tool`/`layer`/`reason`/`hint`/`text`
+   * são os da negação que mais provavelmente trava o trabalho (a checagem `safety`, que o agente costuma contornar, só aparece se for a única), `count` conta as negações
+   * do turno e `tools` as ferramentas distintas (até 5). `text` é o mesmo texto do aviso no chat (`denialNotice`; no Codex, o da sandbox) e `hint` a dica de destrave
+   * (`DenialInfo.hint`: `servers`, `autonomy`, `retry`; nulo = sem dica). Texto de origem do agente/motor: a tela mostra como texto puro. Ignorar: `POST /api/denied/dismiss`
+   * `{ id }` (só pela tela). Uma conversa tem no máximo um item vivo (o do turno mais recente); só na memória do servidor (some num reinício). A tarefa pode ser a de trabalho
+   * ou a de deploy; conversa livre, de card automático ou de revisão não geram. Codex: só a recusa explícita da sandbox (`layer: 'sandbox'`, ver o limite em server/chat/denied.ts). É um item de conversa (leva `sessionId` e `staffId`, como o de permissão): o alvo é a conversa.
+   */
+  denied?: { taskId: string; taskTitle: string; tool: string; layer: DeniedLayer; reason?: string; hint: DenialInfo['hint']; text: string; count: number; tools: string[] };
+  /**
+   * O commit automático de uma tarefa pronta falhou, foi parcial ou não coube (kind 'error', id `commit:<tarefa>`; ver `commitInboxItem` em server/inboxItems.ts). `summary` (pt-BR)
+   * traz o motivo e os arquivos que ficaram de fora. O alvo é a tarefa no quadro (sem conversa, sem `staffId`). Ignorar: `POST /api/errors/dismiss` `{ id }` (só pela tela).
+   */
+  autoCommit?: { taskId: string; taskTitle: string; status: TaskCommit['status'] };
+  /**
+   * A conta do Codex tem um `hooks.json` e a conversa de tarefa roda SEM a fila de validação pesada (kind 'error', id `guardoff:<sessão>`; ver `heavyGuardOffInboxItem` em
+   * server/inboxItems.ts e `codexHeavyArgs` em server/chat/codexArgs.ts): suíte completa e `tsc` correm sem esperar a vez. Um item por conversa, uma vez (não a cada execução); some quando
+   * o arquivo some (na próxima mensagem) ou ao ignorar (`POST /api/errors/dismiss` `{ id }`, só pela tela). `file` é o caminho do arquivo na máquina do servidor (só na tela do Club). Só
+   * na memória do servidor; a nota da tarefa (histórico) é a que fica. É um item de conversa (leva `sessionId` e `staffId`): o alvo é a conversa.
+   */
+  heavyGuardOff?: { taskId: string; taskTitle: string; file: string };
+  /**
+   * O sandbox do Codex no Windows não consegue criar/atualizar os usuários locais dele (CodexSandboxOffline/Online), porque a política local de senha tem "duração mínima" acima de 0:
+   * todo comando de terminal do Codex falha com `helper_user_create_or_update_failed` (kind 'error', id `codexsandbox:password-policy`; ver `codexSandboxInboxItem` em server/inboxItems.ts e
+   * server/codexPasswordPolicy.ts). Um item por máquina, só no Windows e só quando há ficha ou conversa do Codex. Nasce da checagem prévia (ao abrir conversa Codex e ao salvar ficha do Codex;
+   * `source: 'check'`) ou do erro visto na saída de uma ferramenta do Codex (`source: 'turn'`); some quando a política passa a 0 (a próxima checagem, no máximo 10 min depois) ou ao ignorar
+   * (`POST /api/errors/dismiss` `{ id }`, só pela tela; volta só se a política passar a 0 e falhar de novo). `minPasswordAgeDays`: a duração lida, em dias; maior que 0 = a causa conhecida; 0 = o
+   * erro veio mesmo assim, a causa é outra regra de senha (tamanho mínimo, histórico): o comando não resolve; null = a leitura não deu. `command` é o texto a copiar: o Club NUNCA o executa (exige
+   * administrador e muda a política de segurança da máquina); `domainNote` é sempre true, porque em computador de domínio a política de grupo pode desfazer a mudança. Não é item de projeto nem
+   * de conversa (`projectId`, `projectName` e `sessionId` vêm vazios, `staffId` null, como o aviso de consumo da conta): o alvo é a própria caixa. Só na memória do servidor.
+   */
+  codexSandbox?: { cause: 'password-policy'; source: 'check' | 'turn'; minPasswordAgeDays: number | null; command: string; domainNote: true };
 }
 
 export interface ContextUsage {

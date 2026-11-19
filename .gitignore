@@ -29,3 +29,6 @@ PLANO.md
 scripts/status.js
 # Fim do log que a página de início mostra: copiado de ~/.myco/logs/server.log pelos scripts.
 scripts/log.js
+
+# Sondas temporárias de tela (prints)
+_probe.*

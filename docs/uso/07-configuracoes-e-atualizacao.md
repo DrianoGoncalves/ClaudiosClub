@@ -14,6 +14,7 @@
 | --- | --- | --- |
 | **Idioma** | Geral | Português (Brasil), English ou Español. Vale neste navegador e recarrega a página. |
 | **Títulos de conversa por IA** | Conversa | Ligado por padrão: o Club pede ao Haiku (o modelo mais leve do Claude) um título curto para cada conversa com assunto livre, e isso gasta um pouco da cota da assinatura. Desmarque para não gastar: a lista passa a mostrar o começo do assunto. Os títulos que você escreveu em **Renomear conversa** continuam valendo. No Simples: **Dar título às conversas com IA**. |
+| **Retomar sozinho quando a conversa cair por falha passageira** | Conversa (avançado) | Ligado por padrão: se a conversa de um funcionário parar por falha passageira (API sobrecarregada, erro 5xx, limite de taxa, queda de conexão) ou o processo cair no meio do turno, ela segue sozinha, com espera de 30 s, 2 min e 8 min e até 3 tentativas por turno. Não retoma erro de login, cobrança nem limite de uso, e não repete uma ação que mexia fora do projeto: nesses casos avisa em **precisa de mim**. Desligado, a conversa fica parada até você mandar mensagem. Detalhes na página 03. Só no Avançado; no Simples a retomada fica ligada. |
 | **Usar o Codex (GPT)** | Geral, seção Internet e GPT (avançado) | Liga o Codex. Ao ligar, o Club instala o Codex CLI se ele faltar. Gasta a cota do seu ChatGPT. |
 | **Modelo do GPT** | Geral, seção Internet e GPT (avançado) | Modelo do Codex usado nas perguntas ao GPT. **Padrão do Codex** deixa o Codex escolher. Só aparece com o Codex ligado. |
 | **Avisos e tarefa rápida no Chrome** | Geral, seção Extensão do Chrome | Baixa a extensão do Chrome, mostra como instalar, gera o código de pareamento e lista os pareamentos, com **Revogar**. Ver a página 09. |
@@ -72,4 +73,5 @@ O botão **Atualizar** fica desligado nestes casos, com o motivo escrito na tela
 | **Codex sem login** | Clique em **Entrar no Codex**. |
 | "Codex: sem leitura" ou "Não deu para ler os limites do Codex" | Tente de novo. Se continuar, confira o login do Codex. |
 | "atualize: {comando}" (Codex) | Rode o comando mostrado. Há uma versão nova do Codex CLI. |
+| "O terminal dos funcionários no Codex não funciona nesta máquina" (Windows) | A política de senha do Windows trava a sandbox do Codex. Abra o PowerShell como administrador e rode `net accounts /minpwage:0` (o aviso tem o botão **Copiar**). Ver `06-consumo-e-motores.md`, "Codex no Windows". |
 | Dúvida sobre o que falta para rodar | Rode `npm run doctor`. Ele só lê e mostra o que falta. |

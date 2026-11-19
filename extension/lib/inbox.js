@@ -17,6 +17,8 @@ export const KIND_MESSAGE = {
   notStarted: 'kindNotStarted',
   question: 'kindQuestion',
   stuck: 'kindStuck',
+  followUp: 'kindFollowUp',
+  denied: 'kindDenied',
 };
 
 /** Mais que isso de uma vez vira um aviso só (uma fila de notificações empilhadas esconde o que importa). */
@@ -47,19 +49,22 @@ export const badgeText = (count) => (count <= 0 ? '' : count > 99 ? '99+' : Stri
 export const whoOf = (item) => item.name || item.projectName;
 
 const SAFE = /^[A-Za-z0-9_-]{1,120}$/;
+/** O id de tarefa (`t-` e 6 caracteres): o que o Club manda em `taskId` nos avisos de tarefa. */
+const TASK_ID = /^t-[A-Za-z0-9]{6}$/;
 
 /**
  * O link que abre o Club na tela do aviso: `#abrir?kind=…&projeto=…&funcionario=…`, ou `#abrir?tela=tarefas&projeto=…` (o quadro de
  * tarefas do projeto). O Club lê (client/src/inbox/deepLink.ts) e confere o que vem; o que não for um id simples fica de fora.
- * @param {{ kind?: string, view?: 'tasks', projectId?: string, staffId?: string | null }} target
+ * @param {{ kind?: string, view?: 'tasks', projectId?: string, staffId?: string | null, taskId?: string | null }} target
  */
 export function clubLink(target) {
   const q = new URLSearchParams();
   if (target.kind) q.set('kind', target.kind);
-  // Tarefa esperando outra, esquecida em "a fazer", com dúvida para você ou parada: o aviso é do quadro de tarefas (o id da tarefa o Club não manda à extensão).
+  // Tarefa esperando outra, esquecida em "a fazer", com dúvida para você ou parada: o aviso é do quadro de tarefas, já no card quando o aviso traz o id da tarefa.
   if (target.view === 'tasks' || ['blocked', 'notStarted', 'question', 'stuck'].includes(target.kind ?? '')) q.set('tela', 'tarefas');
   if (target.projectId && SAFE.test(target.projectId)) q.set('projeto', target.projectId);
   if (target.staffId && SAFE.test(target.staffId)) q.set('funcionario', target.staffId);
+  if (target.taskId && TASK_ID.test(target.taskId)) q.set('tarefa', target.taskId);
   return `${CLUB}/#abrir?${q}`;
 }
 
@@ -67,7 +72,7 @@ export function clubLink(target) {
  * Guarda o destino de uma notificação e solta as mais antigas.
  * @param {Record<string, any>} targets
  * @param {string} id
- * @param {{ kind: string, projectId: string, staffId: string | null }} target
+ * @param {{ kind: string, projectId: string, staffId: string | null, taskId?: string | null }} target
  */
 export function withTarget(targets, id, target) {
   const next = { ...targets };

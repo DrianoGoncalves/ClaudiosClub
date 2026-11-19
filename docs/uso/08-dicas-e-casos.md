@@ -83,13 +83,13 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 
 **Situação:** um site ficou lento ou precisa de uma versão nova no ar.
 
-**Quem contratar:** **DevOps / SRE** (autonomia **Pede tudo**: pede permissão a cada passo e só lê o servidor).
+**Quem contratar:** **DevOps / SRE** (autonomia **Edita sozinho**; no servidor ele só lê, a menos que a conexão tenha **Permitir comandos de escrita** marcado).
 
 1. Antes, na VPS, crie um usuário só para a IA, sem root e com as permissões mínimas. No detalhe do projeto, em **Servidores**, cadastre a conexão com esse usuário e a chave dele, e use **Testar**. Chave com senha precisa estar no `ssh-agent`.
 2. Contrate **DevOps / SRE**. Na ficha, aba **Projeto**, clique em **+ dar acesso a servidores (SSH e FTP)** e marque a conexão. A chave fica no seu computador; a ficha guarda só o nome. Deixe **Permitir comandos de escrita** desmarcado.
 3. **Tarefas** → **Nova tarefa** → **O que precisa ser feito**: "só diagnosticar, sem mudar nada" → **Quem cuida**: **DevOps / SRE** → **Criar e começar**. Ele lê o servidor pelo MCP `myco-ssh` (status, logs, containers, serviços, arquivos de log).
-4. Em **precisa de mim**, aprove cada cartão de **permissão** com **Aprovar**. Evite **Sempre neste projeto** para comandos no servidor.
-5. Para publicar, o servidor precisa deixar de ser só leitura: na ficha, marque **Permitir comandos de escrita** na conexão e troque a autonomia para **Edita sozinho** ou mais (em **Pede tudo** o servidor segue só leitura). Depois abra a tarefa em **Finalizado** (ou mesclada) → **Pedir deploy** → **Quem faz o deploy**: **DevOps / SRE**.
+4. No Claude, em **precisa de mim**, aprove cada cartão de **permissão** com **Aprovar**. No Codex não aparece cartão: o comando de escrita roda direto, se a caixa estiver marcada. Evite **Sempre neste projeto** para comandos no servidor.
+5. Para publicar, o servidor precisa deixar de ser só leitura: na ficha, marque **Permitir comandos de escrita** na conexão. A autonomia **Edita sozinho**, que o cargo já traz, basta; se você a trocou por **Só planeja** ou **Pede tudo**, o servidor segue só leitura mesmo com a caixa marcada. No Claude, em **Edita sozinho** cada comando de escrita ainda pede o seu ok; no Codex, ele roda sem perguntar, e a caixa marcada é o que vale. Depois abra a tarefa em **Finalizado** (ou mesclada) → **Pedir deploy** → **Quem faz o deploy**: **DevOps / SRE**.
 6. Siga o checklist: backup, estado antes e depois, runbook. Confirme os passos que não têm volta.
 
 **Limites:** ele não roda comando interativo (editor, `top`) nem `sudo` com senha, e no terminal dele não há `ssh`, `scp` nem `rsync`: tudo passa pelo MCP. Detalhes em `02-funcionarios.md`, **Servidores (SSH e FTP)**.
@@ -145,6 +145,7 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 1. **RH e ranking** (topo do quadro) → aba **Gastos** → escolha o **Período** → lupa **Analisar o custo de {nome}**.
 2. Veja os achados por prioridade. Revise as caixas marcadas e clique em **Aplicar sugestões (n)** → **Confirmar e aplicar**.
 3. Na ficha, aba **Ficha**, ajuste **Modelo** e **Esforço** (valem a partir da próxima sessão). Tarefa simples não precisa de Opus.
+   - Quem edita código deve ser **pensador**: confira que o **Roteiro** da ficha é **Planeja grande, executa pequeno**. A lista **Quem ajuda neste roteiro** mostra o modelo do executor (Sonnet) e do executor rápido (Haiku). Ficha contratada antes não ganha o roteiro sozinha: escolha-o e salve.
 4. **Configurações** → **Consumo** → **Orçamento por projeto** e **Trava de consumo: 5 horas** / **7 dias**. Passando da porcentagem, o Club pergunta antes de conversar.
 5. **Configurações** → **Conversa** → **Conversa nova quando o assunto fecha** → **Seguir sozinho numa nova (recomendado)**.
 6. Dentro de uma conversa grande, clique em **Compactar** para liberar contexto. Para começar do zero, use **+** (Nova conversa) no painel do funcionário; a ficha e a memória continuam.
@@ -172,6 +173,9 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 - **Voltar até aqui** desfaz arquivos, não comandos (instalar, banco, git).
 - **Revisor(a)** e **Segurança (AppSec)** dão parecer; a correção vira tarefa nova para quem é da área.
 - Para mapear um projeto já existente, crie o agent **Pesquisador (Haiku, só leitura)** com **Novo agent** no painel do projeto e peça o mapa a ele.
+- Pensador × executor: o funcionário planeja e confere; o **Executor (Sonnet)** implementa o que ele decidiu e o **Executor rápido (Haiku)** só faz tarefa mecânica, sem julgamento. Mudança local, conhecida e de baixo risco o funcionário faz sozinho: não é falha dele.
+- Cartão de agent com "O pronto atual de “executor” é Sonnet · Medium; este usa …": o arquivo é seu e o Club não o troca. Para seguir o pronto, **Editar** → **Usar Sonnet · Medium** → **Salvar agent**.
+- **Rodar testes** demorando a começar: outra suíte completa pode estar rodando no computador (uma por vez). Ver `04-tarefas.md`, **Uma suíte pesada por vez**.
 
 ## Erros comuns
 

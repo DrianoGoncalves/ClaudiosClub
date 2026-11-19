@@ -55,6 +55,11 @@ export class InboxState {
           this.data.caps[sid] = { kind: c.kind, limit: c.limit, at: c.at };
         } else if (c && c.kind === 'restart' && typeof c.action === 'string' && typeof c.at === 'string') {
           this.data.caps[sid] = { kind: 'restart', action: c.action, at: c.at };
+        } else if (c && c.kind === 'retry' && typeof c.error === 'string' && typeof c.at === 'string') {
+          if (c.why === 'exhausted' && typeof c.attempts === 'number') this.data.caps[sid] = { kind: 'retry', why: 'exhausted', attempts: c.attempts, error: c.error, at: c.at };
+          else if (c.why === 'cut' && typeof c.action === 'string') this.data.caps[sid] = { kind: 'retry', why: 'cut', action: c.action, error: c.error, at: c.at };
+        } else if (c && c.kind === 'engine' && (c.why === 'auth' || c.why === 'error') && (c.engine === 'claude' || c.engine === 'codex') && typeof c.error === 'string' && typeof c.at === 'string') {
+          this.data.caps[sid] = { kind: 'engine', why: c.why, engine: c.engine, error: c.error, at: c.at };
         }
       }
       const errors = raw.errorDismissed && typeof raw.errorDismissed === 'object' ? raw.errorDismissed : {};
@@ -94,7 +99,8 @@ export class InboxState {
   turnCapOf(sessionId: string): TurnCapHit | null {
     const c = this.data.caps[sessionId];
     if (!c) return null;
-    return c.kind === 'restart' ? { kind: 'restart', action: c.action } : { kind: c.kind, limit: c.limit };
+    const { at: _at, ...hit } = c;
+    return hit;
   }
 
   /** O sal da instalação (criado na primeira chamada e gravado): o mesmo entre reinícios, para o "não é segredo" por ocorrência continuar valendo. */

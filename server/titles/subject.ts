@@ -11,10 +11,15 @@ export interface SubjectEvent {
 }
 
 /**
- * Tarefa: o título é o assunto (não gera título); a conversa de revisão também é `task`, com o título "Review - <tarefa>".
+ * Tarefa: o título é o assunto (não gera título).
+ * Revisão: a conversa abriu com o pedido de revisão de `task` (o título da tarefa, sem prefixo); não gera título, e a tela
+ * monta "<coluna Revisão> - <tarefa>" (`Session.reviewTask`).
  * Livre: começou numa mensagem sua; `reply` é a 1ª resposta do assistente.
  */
-export type Subject = { kind: 'task'; title: string } | { kind: 'free'; key: string; text: string; reply?: string };
+export type Subject =
+  | { kind: 'task'; title: string }
+  | { kind: 'review'; task: string }
+  | { kind: 'free'; key: string; text: string; reply?: string };
 
 export interface SubjectState {
   topic: string | null;
@@ -36,8 +41,6 @@ const TOPIC_MAX = 80;
 const TASK = /^\[Tarefa "(.+?)"\]/;
 /** O pedido de revisão que o Club manda ao revisor (ver TaskService.requestReview). */
 const REVIEW = /^\[Revisão da tarefa "(.+?)"\]/;
-/** Literal, o mesmo nos 3 idiomas (não é texto de interface). */
-const REVIEW_PREFIX = 'Review - ';
 /** A saudação de sessão nova ("Olá, X. Leia sua memória…") não é assunto. */
 const GREETING = /^Olá, [^.]+\. Leia sua (memória|ficha)/;
 
@@ -52,6 +55,11 @@ export function initialSubjectState(): SubjectState {
 
 export function subjectView(st: SubjectState): SubjectView {
   return { topic: st.topic, subject: st.subject };
+}
+
+/** O título da tarefa em revisão (`Session.reviewTask`) se a conversa é de revisão e não virou de assunto; senão null. */
+export function reviewTaskOf(view: SubjectView): string | null {
+  return view.subject?.kind === 'review' ? view.subject.task : null;
 }
 
 /** Aplica uma mensagem ao estado. A ordem das chamadas é a ordem da conversa. */
@@ -76,9 +84,9 @@ export function feedSubject(st: SubjectState, ev: SubjectEvent): void {
   // Só como abertura da conversa: a mesma linha volta à conversa de trabalho quando a revisão reprova, e ali não troca o assunto.
   const review = st.topic === null ? REVIEW.exec(text) : null;
   if (review) {
-    st.topic = clipTopic(`${REVIEW_PREFIX}${review[1]}`);
+    st.topic = clipTopic(review[1]!);
     st.waiting = false;
-    st.subject = { kind: 'task', title: st.topic };
+    st.subject = { kind: 'review', task: st.topic };
     return;
   }
   // Pula o que o Claude Code ou o Claudio’s Club injetam, e a saudação.
