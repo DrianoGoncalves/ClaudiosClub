@@ -1,6 +1,9 @@
 import type { InboxItem } from '../../../shared/model';
 import { parseRetryNotice, retryNoticeText } from '../chat/retryNotice';
 import { t } from '../i18n';
+import { followUpText } from '../tasks/followUp';
+import { sandboxOf, sandboxText } from './codexSandbox';
+import { deniedOf, deniedText } from './deniedAlert';
 import { secretText, type Tr } from './secretText';
 import { questionOf, questionText, stuckOf, stuckText, type Kinded } from './taskAlerts';
 
@@ -42,16 +45,20 @@ export function notStartedText(item: Pick<InboxItem, 'summary' | 'notStarted'>, 
 }
 
 /** O texto do item na lista e na notificação. */
-export function inboxText(item: Pick<InboxItem, 'summary' | 'secret' | 'blocked' | 'notStarted'> & Kinded, tr: Tr = t): string {
+export function inboxText(item: Pick<InboxItem, 'summary' | 'secret' | 'blocked' | 'notStarted' | 'followUp' | 'codexSandbox'> & Kinded, tr: Tr = t): string {
+  const sandbox = sandboxOf(item);
+  if (sandbox) return sandboxText(sandbox, tr);
+  if (deniedOf(item)) return deniedText(item, tr);
   if (questionOf(item)) return questionText(item, tr);
   if (stuckOf(item)) return stuckText(item, tr);
   if (item.blocked) return blockedText(item, tr);
   if (item.notStarted) return notStartedText(item, tr);
+  if (item.followUp) return followUpText(item, tr);
   // A conversa que desistiu de voltar sozinha, ou não voltou por uma ação com efeito fora do projeto: o servidor só manda a frase em pt-BR.
   const retry = item.kind === 'error' ? parseRetryNotice({ text: item.summary }) : null;
   if (retry) return retryNoticeText(retry, Date.now(), 'inbox', tr);
   return secretText(item, tr);
 }
 
-/** Quem é o item na lista: o funcionário e, sem ficha (tarefa sem responsável), o próprio projeto. */
-export const inboxWho = (item: Pick<InboxItem, 'name' | 'projectName'>): string => item.name || item.projectName;
+/** Quem é o item na lista: o funcionário e, sem ficha (tarefa sem responsável), o próprio projeto. O aviso do sandbox do Codex é da máquina: o nome vem do idioma da tela, não do servidor (pt-BR). */
+export const inboxWho = (item: Pick<InboxItem, 'name' | 'projectName' | 'codexSandbox'>, tr: Tr = t): string => (sandboxOf(item) ? tr('inbox.sandbox.who') : item.name || item.projectName);

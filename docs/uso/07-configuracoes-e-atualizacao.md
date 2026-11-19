@@ -73,4 +73,5 @@ O botão **Atualizar** fica desligado nestes casos, com o motivo escrito na tela
 | **Codex sem login** | Clique em **Entrar no Codex**. |
 | "Codex: sem leitura" ou "Não deu para ler os limites do Codex" | Tente de novo. Se continuar, confira o login do Codex. |
 | "atualize: {comando}" (Codex) | Rode o comando mostrado. Há uma versão nova do Codex CLI. |
+| "O terminal dos funcionários no Codex não funciona nesta máquina" (Windows) | A política de senha do Windows trava a sandbox do Codex. Abra o PowerShell como administrador e rode `net accounts /minpwage:0` (o aviso tem o botão **Copiar**). Ver `06-consumo-e-motores.md`, "Codex no Windows". |
 | Dúvida sobre o que falta para rodar | Rode `npm run doctor`. Ele só lê e mostra o que falta. |

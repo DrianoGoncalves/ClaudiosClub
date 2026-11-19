@@ -22,6 +22,7 @@ Você pode mandar mensagem no meio do trabalho. O que acontece depende de **Conf
 - **Parar** interrompe o turno atual.
 - Uma linha discreta acima da caixa mostra o que ele está fazendo agora.
 - O chip "N em segundo plano" lista os agents e comandos que estão rodando. Clique para ver e **parar** cada um.
+- Mensagem para a conversa de uma tarefa, com o funcionário ocupado em outra, fica "guardada pelo Clube dos Claudios" até ele ficar livre. Para desistir dela, use o botão **Excluir** no balão: o app pergunta antes e a mensagem some de vez (com as imagens). Se ela já tinha sido enviada, o app avisa e atualiza a conversa. A resposta a uma dúvida do funcionário não tem o botão: a tarefa parada espera por ela.
 
 ## Anexos
 
@@ -51,9 +52,11 @@ O botão **precisa de mim** fica no topo do quadro, com um contador. Clique para
 | erro | Parou com erro. |
 | rotina | Uma rotina não rodou. |
 | sem dono | Ficou sem dono num reinício. |
+| ação barrada | Uma regra de permissão barrou uma ferramenta numa conversa de tarefa. Mostra a tarefa, a ferramenta, quem barrou e o motivo, com um atalho para destravar e o **×** para ignorar (ver abaixo). |
 | dúvida, parada, bloqueada, não começou | Itens de tarefa: dúvida que espera você, revisão ou ajuste que não anda, tarefa que espera outra parada, cartão esquecido. Cada um traz a ação e abre o cartão da tarefa (ver 04, "A fila se recupera sozinha"). |
 
 - Pergunta, espera e rotina têm um **×** para tirar o item da caixa. Ao tirar uma pergunta, ela sai sem resposta ("Tira da caixa sem responder agora"). Ao tirar uma espera, ela só sai da caixa até a sessão mudar de status.
+- No Windows, o item **erro** "O terminal dos funcionários no Codex não funciona nesta máquina" (e o mesmo balão vermelho em toda conversa do Codex) é da máquina, sem projeto nem conversa: clicar na linha não abre nada. Traz o comando `net accounts /minpwage:0` com o botão **Copiar**, para rodar como administrador; o **×** (ou **Ignorar** no balão) o tira. Ver `06-consumo-e-motores.md`, "Codex no Windows".
 - O aviso de **segredo** também aparece como balão na própria conversa, com a mesma frase da caixa, o selo, a dica e o botão **Ignorar** (igual a **já troquei**: tira o aviso do balão e da caixa; se o segredo aparecer de novo, ele volta; em **possível credencial exposta** o botão se chama **Já troquei**, para não sugerir deixar pra lá). Quando o aviso sabe em que arquivo o segredo está, o balão mostra o caminho e o botão **Abrir arquivo**, que abre o arquivo no editor do Claudio’s Club (o mesmo link **abrir arquivo** aparece no item da caixa); arquivo que o editor não abre, como `.env` ou chave, mostra só o caminho, com a nota para abrir no seu editor. O balão só existe na tela: não vai para o modelo. **Não é segredo** continua só na caixa, e o aviso de chave no `.mcp.json` do projeto, que não nasce numa conversa, também.
 - O aviso de **segredo** diz, no balão e na caixa, se o valor parece de verdade. O **selo** é um palpite que o Claudio’s Club faz na hora em que o segredo aparece, pelo formato e pelo contexto (ele não confere a credencial no provedor, então pode errar). O estado vem escrito, não só na cor:
 
@@ -69,6 +72,15 @@ O botão **precisa de mim** fica no topo do quadro, com um contador. Clique para
 - **por quê?** abre o motivo do palpite (por exemplo, "O host é local ou de desenvolvimento"). O motivo já estava calculado: abrir não faz consulta nenhuma.
 - **Não é segredo** vale só para aquela ocorrência: aquele valor, naquela conversa. Se o mesmo tipo de segredo aparecer com outro valor, o aviso volta. Antes valia para o tipo todo na conversa; as dispensas feitas antes continuam como eram. Em **possível credencial exposta**, use só se tiver certeza de que o valor não é uma credencial de verdade; se for, troque e clique em **já troquei**.
 - O aviso de **erro** (a conversa parou com erro, ou o turno parou no teto de ferramentas ou de minutos) também aparece como balão vermelho na própria conversa, com a mesma frase da caixa. **Ignorar** no balão, ou o **×** do item na caixa, tira o aviso dos dois lados, e ele continua fora depois de recarregar a página (o Claudio’s Club guarda o que você dispensou). Se a conversa parar de novo com outro erro, ou outro turno parar no teto, o aviso volta. Mandar mensagem nova também o tira. Quando a conversa já mostra o aviso no próprio fluxo (o teto), ele não se repete em balão; nesse caso só o **×** da caixa o dispensa, e a linha do teto continua no histórico. O balão só existe na tela: não vai para o modelo.
+- O aviso de **ação barrada** vem de uma ferramenta negada numa conversa de tarefa (a de trabalho ou a de deploy): plano, regra do Club, regras de arquivo, classificador do **Autônomo** ou sandbox do Codex. Conversa livre, de card automático ou de revisão não geram. Há um item por conversa e por turno: as negações do mesmo turno se juntam ("+2 neste turno") e vale a que mais provavelmente trava o trabalho (a checagem de segurança embutida do Claude Code, que o agente costuma contornar, só aparece se for a única). O texto diz a tarefa, a ferramenta, quem barrou e o motivo, no idioma da tela. O atalho depende do que destrava:
+
+  | Atalho | Quando | Leva a |
+  | --- | --- | --- |
+  | **Ajustar autonomia** | O classificador do **Autônomo** barrou, ou a sandbox do Codex só de leitura (plano ou aprovação manual) recusou. | A ficha de quem foi barrado, aba **Projeto** (no nível Simples, a **Ficha**, com o projeto embaixo). A mudança só desta conversa fica no botão do aviso, dentro do chat. |
+  | **Dar acesso a servidores** | O Club bloqueou um `ssh`, `scp`, `sftp` ou `rsync` porque a ficha não tem conexão. | A ficha, aba **Projeto**, onde se marca a conexão. |
+  | **Abrir a conversa** | O classificador não respondeu (vale tentar de novo). | A conversa, no aviso, onde está o botão **Pedir para tentar de novo**. |
+
+  Sem dica (arquivo protegido, regra de arquivo ou outra negação) não há atalho: clique no item para abrir a conversa. O **×** ignora o aviso e ele não volta pelo resto daquele turno; uma negação de um turno novo traz o aviso de novo. O item só vive na memória do servidor: some num reinício. No Codex só entra a recusa explícita da sandbox.
 - Se nada espera você, a lista diz: "Nada espera você agora."
 - A caixa tem a opção **avisar no sistema (inclusive quando alguém termina)**.
 
@@ -157,7 +169,7 @@ Quando a conversa de um funcionário cai por um erro passageiro, ela segue sozin
 - **Fechar conversa** encerra o processo e os MCPs da conversa para liberar memória; o histórico fica. Se estiver parada, fecha direto; se estiver trabalhando, pede confirmação. Se o servidor recusar, a tela mostra o motivo. Depois de 15 minutos parada, o processo fecha sozinho.
 - **Arquivar** uma conversa também fecha seu processo: se estiver trabalhando, pede confirmação; se o servidor recusar, mostra o motivo e não arquiva. Ao arquivar funcionário ou projeto, só as conversas paradas fecham; as que trabalham continuam abertas e a tela avisa.
 - **Duplicar**: uma cópia da conversa, com todo o histórico, para tentar outro caminho sem perder a original.
-- O seletor **Conversa** lista as conversas agrupadas por dia.
+- O seletor **Conversa** lista as conversas agrupadas por dia. As **ativas** (com o processo aberto) levam **· ativa** no fim; as demais aparecem em cinza (onde o navegador permite; no celular a cor não muda, vale o texto). Mandar mensagem numa conversa que não está ativa a reabre: confira antes de escolher.
 - Título da conversa (no seletor, em **precisa de mim** e na busca **Ctrl+K**): vale o que você escreveu com o lápis **Renomear conversa**; se não escreveu, o título gerado por IA a partir do assunto; enquanto ele não vem, o começo do assunto (a tarefa ou a sua 1ª mensagem). A conversa que o Club abre para o revisor conferir uma tarefa se chama **Revisão - título da tarefa**: o mesmo nome da coluna **Revisão** do quadro de tarefas, no idioma da tela (*Review - …* em inglês, *Revisión - …* em espanhol), sem IA, mesmo com os títulos por IA desligados; o título que você escreveu no lápis vale mais que ele, e se você mudar de assunto nela, o título passa a seguir o assunto novo. Título longo é cortado com reticências. O título gerado só existe em conversa do Club com assunto livre: a de tarefa, a de assunto vago, a aberta fora do Club e a que a geração falhou ficam com o começo do assunto. Para voltar ao automático, abra **Renomear conversa**, deixe o campo vazio e salve: volta ao título gerado, ou ao assunto se não houver. Para não ter título gerado por IA, desmarque **Títulos de conversa por IA** nas Configurações (grupo **Conversa**; no Simples, **Dar título às conversas com IA**, em **Conversas**): o Club para de chamar o modelo (que gasta um pouco da cota da assinatura) e a lista mostra o começo do assunto; os títulos que você escreveu seguem valendo. Vem ligada.
 
 ## Voltar até aqui

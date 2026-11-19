@@ -1,4 +1,5 @@
-import type { InboxItem } from '../../../shared/model';
+import type { Engine, InboxItem } from '../../../shared/model';
+import { sandboxOf } from '../inbox/codexSandbox';
 
 /** Os itens de um tipo da caixa que são desta conversa, sem repetir id. Item sem conversa (`sessionId` vazio) não tem onde virar balão. */
 function noticesOf(kind: InboxItem['kind'], inbox: readonly InboxItem[] | undefined, sessionId: string | null): InboxItem[] {
@@ -24,6 +25,16 @@ export function secretNoticesFor(inbox: readonly InboxItem[] | undefined, sessio
  */
 export function errorNoticesFor(inbox: readonly InboxItem[] | undefined, sessionId: string | null, chatTexts: readonly string[] = []): InboxItem[] {
   return noticesOf('error', inbox, sessionId).filter((item) => !chatTexts.includes(item.summary));
+}
+
+/**
+ * O aviso do sandbox do Codex (política de senha do Windows) como balão na conversa de quem roda no Codex: o terminal dele não funciona enquanto o item da caixa estiver vivo,
+ * então vale para toda conversa do Codex, não só a que o disparou (o item é da máquina, sem conversa). Conversa do Claude não vê (o terminal dela não depende disso).
+ * O balão é o mesmo item da caixa (mesmo id, mesmo "ignorar"): some dos dois lados juntos.
+ */
+export function sandboxNoticesFor(inbox: readonly InboxItem[] | undefined, engine: Engine): InboxItem[] {
+  if (!inbox || engine !== 'codex') return [];
+  return inbox.filter((item) => item.kind === 'error' && sandboxOf(item) !== null);
 }
 
 /**

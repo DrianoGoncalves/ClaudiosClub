@@ -51,19 +51,31 @@ function htmlAsText() {
 const hastText = (n: ElementContent): string =>
   n.type === 'text' ? n.value : n.type === 'element' ? n.children.map(hastText).join('') : '';
 
-/** Copia para a área de transferência; `copied` fica true por 1,5s para o botão confirmar. */
-export function useCopy(): [boolean, (text: string) => void] {
+/** Põe o texto na área de transferência; false quando o navegador recusa ou não a oferece (página sem HTTPS, sem permissão). */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Copia para a área de transferência; `copied` fica true por 1,5s para o botão confirmar. `failed` (3º item, opcional) fica true por 4s quando a cópia não deu. */
+export function useCopy(): [boolean, (text: string) => void, boolean] {
   const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => () => clearTimeout(timer.current), []);
   const copy = (text: string) => {
-    void navigator.clipboard?.writeText(text).then(() => {
-      setCopied(true);
+    void copyText(text).then((ok) => {
+      setCopied(ok);
+      setFailed(!ok);
       clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 1500);
+      timer.current = setTimeout(() => (ok ? setCopied(false) : setFailed(false)), ok ? 1500 : 4000);
     });
   };
-  return [copied, copy];
+  return [copied, copy, failed];
 }
 
 function CodeBlock({ node, children }: { node?: Element; children?: ReactNode }) {
