@@ -1,5 +1,6 @@
 import { isClosed, satisfiesDependency, type Task, type TaskStatus } from '../../../shared/model';
 import { t } from '../i18n';
+import { SectionSummary } from './SectionSummary';
 import { waitClass } from './waitTone';
 
 // Dependências da tarefa ("Bloqueada por"): outras tarefas do mesmo projeto que precisam estar prontas antes.
@@ -40,13 +41,25 @@ export function depChoices(tasks: DepTask[], selfId: string | null, value: strin
   return { open, old };
 }
 
-/** Lista para marcar as dependências: só tarefas abertas do projeto; vínculos antigos (pronta ou de fora) ficam numa lista à parte, só para tirar. */
+/** O resumo do cabeçalho recolhido: quantas dependências a tarefa tem e se alguma ainda está em aberto (a que ainda segura: cancelada conta). */
+export function depsSummary(value: string[], tasks: DepTask[]): string {
+  if (!value.length) return t('tasks.depsSumNone');
+  const open = openBlockers({ blockedBy: value }, tasks).length;
+  return `${t(value.length === 1 ? 'tasks.depsSumOne' : 'tasks.depsSumOther', { n: value.length })} · ${open ? t('tasks.depsSumOpen', { n: open }) : t('tasks.depsSumDone')}`;
+}
+
+/**
+ * Lista para marcar as dependências: só tarefas abertas do projeto; vínculos antigos (pronta ou de fora) ficam numa lista à parte, só para tirar.
+ * `collapsible` (o detalhe da tarefa) põe a lista numa seção recolhida, com o resumo no cabeçalho; sem ele (o formulário de criar, que já está
+ * dentro de uma seção recolhida) é o fieldset de sempre.
+ */
 export function BlockedByField({
   tasks,
   selfId,
   value,
   labels,
   onChange,
+  collapsible,
 }: {
   /** As tarefas do projeto (a lista já é dele). */
   tasks: DepTask[];
@@ -56,6 +69,7 @@ export function BlockedByField({
   /** Nome de cada status (o quadro já os tem). */
   labels: Record<TaskStatus, string>;
   onChange: (ids: string[]) => void;
+  collapsible?: boolean;
 }) {
   const { open, old } = depChoices(tasks, selfId, value);
   const full = value.length >= MAX_DEPS;
@@ -80,9 +94,8 @@ export function BlockedByField({
       </li>
     );
   };
-  return (
-    <fieldset className="task-deps">
-      <legend>{t('tasks.blockedBy')}</legend>
+  const body = (
+    <>
       {open.length === 0 ? (
         <p className="muted small">{t('tasks.blockedByNone')}</p>
       ) : (
@@ -97,6 +110,19 @@ export function BlockedByField({
           <ul className="task-deps-list">{old.map(({ id, task }) => row(id, task?.title ?? null, task ? labels[task.status] : t('tasks.blockedByGone'), false))}</ul>
         </>
       )}
+    </>
+  );
+  if (collapsible)
+    return (
+      <details className="collapse task-deps">
+        <SectionSummary label={t('tasks.blockedBy')} sum={depsSummary(value, tasks)} />
+        {body}
+      </details>
+    );
+  return (
+    <fieldset className="task-deps">
+      <legend>{t('tasks.blockedBy')}</legend>
+      {body}
     </fieldset>
   );
 }

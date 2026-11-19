@@ -1,14 +1,15 @@
-import { Fragment, useCallback, useEffect, useState } from 'react';
-import { AUTO_REVIEW_ROUNDS, isClosed, type BoardConfig, type CostReport, type StaffProfile, type Task as TaskModel, type TaskCreateResult, type TaskCreateWarning, type TaskHandoff, type TaskStatus } from '../../../shared/model';
+import { Fragment, useCallback, useEffect, useState, type DragEvent } from 'react';
+import { AUTO_REVIEW_ROUNDS, isClosed, type BoardConfig, type CostReport, type InboxItem, type ProjectPause, type StaffProfile, type Task as TaskModel, type TaskCreateResult, type TaskCreateWarning, type TaskHandoff, type TaskStatus } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
 import { pollVisible } from '../usePoll';
 import { Markdown } from '../chat/markdown';
 import { formatAgo, formatShare } from '../format';
 import { t, locale } from '../i18n';
 import { BranchIcon, ClockIcon, ReviewIcon } from '../icons';
-import { TaskFallbackBadge } from '../staff/FallbackBadge';
+import { PrimaryReturnBadge, PrimaryReturnLine, TaskFallbackBadge } from '../staff/FallbackBadge';
 import { AutoBadge, AutoInfo } from './AutoCard';
-import { BoardReview, useBoardReview } from './BoardReview';
+import { BoardReview, useBoardCommit, useBoardReview } from './BoardReview';
+import { CommitBadge, CommitBlock } from './TaskCommit';
 import { FallbackWaitBadge, fallbackWaitText } from './FallbackWait';
 import { ReviewDelegate } from './ReviewDelegate';
 import { reviewPlan } from './reviewRule';
@@ -16,18 +17,27 @@ import { OwnerBadge, ReviewWho } from './ReviewWho';
 import { TaskCodePanel } from './TaskCodePanel';
 import { DoubtBadge, DoubtBlock } from './TaskDoubt';
 import { PauseNote } from './TaskPause';
+import { PausedBanner, PauseButton, useProjectPause } from './ProjectPauseBar';
 import { RetryBadge } from './TaskRetry';
-import { SubtaskBadges, SubtaskBlock, SubtaskRow } from './TaskSubtasks';
+import { SubtaskBadges, SubtaskBlock, SubtaskStack } from './TaskSubtasks';
 import { ResourceWaitBadge, resourceWaitText } from './ResourceWait';
 import { BlockedBadge, BlockedByField, blockerName, openBlockers, sameDeps, shownBlockers } from './TaskDeps';
 import { waitClass, waitWarm } from './waitTone';
 import { dependentRows, type DepMap, type DepMode } from './cancelDeps';
 import { cancelledWho, duplicateWarnings } from './cancelRequest';
 import { CancelRequestBadge, CancelRequestBlock, DuplicateNote } from './TaskCancelRequest';
+import { planPending, planSessions } from './planPending';
+import { PermissionGo, PermissionWaitBadge, PermissionWaitBlock, permissionTarget, permissionText, type PermissionText } from './PermissionWait';
+import { FollowUpBadge, FollowUpBlock } from './TaskFollowUps';
+import { chatFollowUpIds, conversationItemFor, verdictShown } from './followUpNotice';
+import { giveBackBody, giveBackHeldNote } from './noCode';
+import { NoCodeBadge, NoCodeBlock } from './TaskNoCode';
 import { TaskCloseDialog } from './TaskCloseDialog';
 import { TaskCostBlock } from './TaskCostBlock';
-import { OrderButtons } from './OrderButtons';
-import { dropPosition, orderMoves, orderNoteText, queuePosOf, queueSize, type OrderBody, type OrderMoves } from './queueOrder';
+import { SectionSummary } from './SectionSummary';
+import { codeSummary } from './codeSummary';
+import { primaryNoteText } from './primaryReturn';
+import { dropAfter, dropPosition, orderMoves, orderNoteText, queuePosOf, queueSize, stepOfKey, type OrderBody, type OrderMoves } from './queueOrder';
 import { TaskRuns } from './TaskRuns';
 import { askConfirm } from '../lib/dialogStore';
 
@@ -61,12 +71,12 @@ const COLUMNS: { status: TaskStatus; shows: TaskStatus[] }[] = [
 export const columnOf = (s: TaskStatus): TaskStatus | null => COLUMNS.find((c) => c.shows.includes(s))?.status ?? null;
 
 /**
- * Ordem dentro da coluna: a última atualização no topo. Plano para aprovar (planejando) vai antes de tudo,
- * porque é o que espera por você; empate de data mantém a ordem que veio do servidor.
+ * Ordem dentro da coluna: a última atualização no topo. Os que esperam por você (`first`: plano para aprovar de verdade, ver
+ * `planPending`) vão antes de tudo; planejando sem plano esperando é trabalho normal. Empate de data mantém a ordem que veio do servidor.
  */
-export function byRecent<T extends Pick<TaskModel, 'status' | 'updatedAt'>>(tasks: T[]): T[] {
+export function byRecent<T extends Pick<TaskModel, 'status' | 'updatedAt'>>(tasks: T[], first: (t: T) => boolean = () => false): T[] {
   const at = (t: T) => Date.parse(t.updatedAt) || 0;
-  return [...tasks].sort((a, b) => Number(b.status === 'planning') - Number(a.status === 'planning') || at(b) - at(a));
+  return [...tasks].sort((a, b) => Number(first(b)) - Number(first(a)) || at(b) - at(a));
 }
 
 /**
@@ -145,24 +155,38 @@ interface Props {
   initialTaskId?: string | null;
   /** Abre os agendamentos (despertadores) do projeto. */
   onOpenSchedules?: () => void;
+  /** Só para teste: o render no servidor não roda o efeito que lê as tarefas, então o quadro começa com estas em vez de "carregando". */
+  initialTasks?: Task[];
+  /** Só para teste, como `initialTasks`: a pausa do projeto de partida (null = rodando); sem ela o quadro a lê do servidor. */
+  initialPause?: ProjectPause | null;
+  /** A caixa "precisa de mim" (useInbox): o selo "Plano para aprovar" só vale com um item `plan` da conversa da tarefa. Sem ela, nenhuma tarefa tem plano esperando. */
+  inboxItems?: InboxItem[];
+  /** Abre a conversa de um aviso da caixa, já no cartão dele (o atalho "Responder no chat" do pedido de permissão). Sem ela, o quadro só mostra o selo. */
+  onOpenInbox?: (item: InboxItem) => void;
 }
 
-export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOpenStaff, onChanged, initialTaskId = null, onOpenSchedules }: Props) {
-  const [tasks, setTasks] = useState<Task[] | null>(null);
+const NO_ITEMS: InboxItem[] = [];
+
+export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOpenStaff, onChanged, initialTaskId = null, onOpenSchedules, initialTasks, initialPause, inboxItems = NO_ITEMS, onOpenInbox }: Props) {
+  const [tasks, setTasks] = useState<Task[] | null>(initialTasks ?? null);
   const [selected, setSelected] = useState<string | null>(initialTaskId);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<TaskStatus | null>(null);
-  /** O cartão da fila sobre o qual se arrasta outro da mesma fila (vai tomar o lugar dele). */
-  const [overCard, setOverCard] = useState<string | null>(null);
+  /** O cartão da fila sobre o qual se arrasta outro da mesma fila, e de que lado dele o arrastado entra (`after`: abaixo). */
+  const [overCard, setOverCard] = useState<{ id: string; after: boolean } | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [showCancelled, setShowCancelled] = useState(false);
   /** Diálogo de cancelar ou apagar aberto, para a tarefa `id`. */
   const [closing, setClosing] = useState<{ mode: DepMode; id: string } | null>(null);
+  /** O card sem código que está sendo devolvido ao responsável (o botão espera o envio). */
+  const [givingBack, setGivingBack] = useState<string | null>(null);
   /** Aviso de possível duplicata da última tarefa criada aqui (a nova, e as parecidas); some ao fechar o aviso ou ao abrir o formulário de novo. */
   const [dup, setDup] = useState<{ createdId: string; warnings: TaskCreateWarning[] } | null>(null);
   const boardReview = useBoardReview(projectId);
+  const boardCommit = useBoardCommit(projectId);
+  const projectPause = useProjectPause(projectId, projectName, onChanged, initialPause);
   const now = Date.now();
 
   const load = useCallback(() => {
@@ -222,12 +246,43 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     return usd !== undefined && costs?.total.usd ? formatShare(usd, costs.total.usd) : null;
   };
   const current = tasks?.find((t) => t.id === selected) ?? null;
+  /** Plano esperando você nesta tarefa: planejando e com item `plan` na caixa para a conversa dela (o status sozinho não prova). */
+  const planSess = planSessions(inboxItems);
+  const awaitingPlan = (t: Task) => planPending(t, planSess);
+  /** O pedido de permissão que a conversa da tarefa espera de você (`Task.permissionWait`): o texto do selo, ou null. */
+  const permissionOf = (t: Task): PermissionText | null => permissionText(t.permissionWait, nameOf(t.staffId), now, awaitingPlan(t));
+  /** O atalho para o cartão do pedido no chat (undefined sem a prop do App, sem aviso na tela ou sem conversa). */
+  const openPermission = (t: Task) => {
+    const target = onOpenInbox && permissionOf(t) ? permissionTarget(t, inboxItems, { id: projectId, name: projectName }) : null;
+    return target ? () => onOpenInbox!(target) : undefined;
+  };
+  /** O atalho para a conversa de trabalho onde o follow-up da tarefa espera a sua decisão (undefined sem a prop do App ou sem follow-up lá). */
+  const openFollowUpChat = (task: Task) => {
+    const item = onOpenInbox ? conversationItemFor(task.id, inboxItems, projectId) : null;
+    return item ? () => onOpenInbox!(item) : undefined;
+  };
+  /** Card sem código: devolve ao responsável com uma mensagem na conversa de trabalho dele (que tira a marca); sem a conversa, o erro diz para cancelar. */
+  const giveBack = async (task: Task) => {
+    // Um envio por vez: o clique repetido mandaria a mensagem duas vezes ao funcionário (a marca só sai no primeiro envio).
+    if (givingBack) return;
+    setGivingBack(task.id);
+    try {
+      await act(async () => {
+        const body = giveBackBody(task);
+        if (!body) throw new Error(t('tasks.noCodeNoSession'));
+        const held = giveBackHeldNote(await withUsageConfirm((force) => api.chatSend(projectId, { ...body, force })));
+        if (held) throw new Error(held);
+      });
+    } finally {
+      setGivingBack(null);
+    }
+  };
   /** O projeto publica? (tem funcionário com servidor ou já teve pedido de deploy): só aí "não publicado" faz sentido. */
   const hasDeploy = staff.some((s) => s.servers.length > 0) || !!tasks?.some((t) => t.deploy);
   /** A tarefa que ocupa o funcionário agora (planejando ou fazendo). */
   const busyWith = (t: Task) =>
     tasks?.find((o) => o.id !== t.id && o.staffId === t.staffId && o.sessionId && (o.status === 'doing' || o.status === 'planning')) ?? null;
-  /** Os botões de ordem do cartão (null: fora da fila ou sozinho nela). */
+  /** Os passos de ordem do cartão (null: fora da fila ou sozinho nela). */
   const movesOf = (t: Task) => orderMoves(t, tasks ?? []);
   /** As dependências que seguram a tarefa (só a que ainda não começou espera por elas). */
   const waitingOn = (t: Task) => (!t.sessionId && (t.status === 'todo' || t.status === 'waiting') ? openBlockers(t, tasks ?? []) : []);
@@ -239,39 +294,39 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const cancelled = (tasks ?? []).filter((t) => t.status === 'cancelled');
   const closingTask = closing ? (tasks?.find((t) => t.id === closing.id) ?? null) : null;
 
-  /** Arrastar outro cartão da mesma fila sobre este: ele toma o lugar daqui (o soltar na coluna, que muda de coluna, não entra). */
-  const dropOn = (task: Task) => dropPosition(tasks?.find((x) => x.id === dragging), task);
-  const orderRow = (task: Task) => {
-    const moves = movesOf(task);
-    return moves && (
-      <div className="task-order-row">
-        <OrderButtons moves={moves} onOrder={(body) => void reorder(task, body)} />
-      </div>
-    );
+  /**
+   * Arrastar outro cartão da mesma fila sobre este: ele entra antes (metade de cima) ou depois (metade de baixo) daqui, e o traço azul mostra onde.
+   * O alvo é a pilha toda (`currentTarget`: o cartão e a bandeja de subtarefas); a metade vale para o cartão, e sobre a bandeja é sempre "depois".
+   * O soltar na coluna, que muda de coluna, não entra. null: não vale aqui (outra fila, ou já está ali).
+   */
+  const dropOn = (task: Task, e: DragEvent<HTMLElement>) => {
+    const box = (e.currentTarget.querySelector('.task-card') ?? e.currentTarget).getBoundingClientRect();
+    const after = dropAfter(e.clientY, box, !!(e.target as Element).closest('.task-subs-tray'));
+    return { after, to: dropPosition(tasks?.find((x) => x.id === dragging), task, after) };
   };
 
   const card = (task: Task) => (
     <Fragment key={task.id}>
-      <button
-        className={`task-card ${selected === task.id ? 'is-selected' : ''} ${task.archived || task.status === 'cancelled' ? 'is-archived' : ''} ${task.status === 'planning' ? 'is-waiting' : ''} ${overCard === task.id ? 'is-drop' : ''}`}
-        draggable={task.status !== 'cancelled'}
-        onDragStart={() => setDragging(task.id)}
-        onDragEnd={() => {
-          setDragging(null);
-          setOverCard(null);
-        }}
+      {/* Subtarefas (card que aguarda) ou card de origem (subtarefa): a bandeja fica colada no cartão, fora do botão (botão não cabe dentro de botão). O alvo do arrasto é a pilha: a bandeja conta como parte do cartão. */}
+      <SubtaskStack
+        task={task}
+        tasks={tasks ?? []}
+        labels={LABEL}
+        onOpen={setSelected}
         onDragOver={(e) => {
-          if (dropOn(task) === null) return;
+          const { after, to } = dropOn(task, e);
+          // Sem lugar válido aqui: apaga o traço de antes e deixa o evento subir (a coluna segue valendo para mudar de coluna).
+          if (to === null) return setOverCard((o) => (o?.id === task.id ? null : o));
           e.preventDefault();
           e.stopPropagation();
           setOver(null);
-          setOverCard(task.id);
+          setOverCard((o) => (o?.id === task.id && o.after === after ? o : { id: task.id, after }));
         }}
         onDragLeave={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOverCard((o) => (o === task.id ? null : o));
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOverCard((o) => (o?.id === task.id ? null : o));
         }}
         onDrop={(e) => {
-          const to = dropOn(task);
+          const { to } = dropOn(task, e);
           if (to === null) return;
           e.preventDefault();
           e.stopPropagation();
@@ -280,16 +335,41 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
           setDragging(null);
           if (dragged) void reorder(dragged, { to });
         }}
+      >
+      <button
+        className={`task-card ${selected === task.id ? 'is-selected' : ''} ${task.archived || task.status === 'cancelled' ? 'is-archived' : ''} ${awaitingPlan(task) ? 'is-waiting' : ''} ${dragging === task.id ? 'is-dragging' : ''} ${overCard?.id === task.id ? (overCard.after ? 'is-drop-after' : 'is-drop-before') : ''}`}
+        draggable={task.status !== 'cancelled'}
+        onDragStart={(e) => {
+          // O Firefox só começa o arrasto com algum dado no pacote; o resto do quadro lê o cartão pelo estado.
+          e.dataTransfer.setData('text/plain', task.id);
+          e.dataTransfer.effectAllowed = 'move';
+          setDragging(task.id);
+        }}
+        onDragEnd={() => {
+          setDragging(null);
+          setOverCard(null);
+        }}
+        onKeyDown={(e) => {
+          // Sem botão de ordem no cartão: com ele em foco, Alt + ↑/↓ sobe ou desce um lugar na fila.
+          const step = stepOfKey(e.key, e.altKey);
+          if (!step || !movesOf(task)?.[step]) return;
+          e.preventDefault();
+          void reorder(task, { step });
+        }}
         onClick={() => setSelected(task.id)}
       >
         <span className="task-title">{task.title}</span>
-        <StatusBadge task={task} hasDeploy={hasDeploy} />
+        <StatusBadge task={task} hasDeploy={hasDeploy} planWaiting={awaitingPlan(task)} />
+        <PermissionWaitBadge text={permissionOf(task)} />
+        <NoCodeBadge task={task} />
         <VerdictBadge task={task} nameOf={nameOf} />
         {task.status === 'review' && <OwnerBadge plan={reviewPlan(task, boardReview.config)} />}
         <DoubtBadge question={task.question} requestedBy={task.requestedBy} nameOf={nameOf} warm={waitWarm(task.status)} />
         <CancelRequestBadge request={task.cancelRequest} nameOf={nameOf} />
+        <FollowUpBadge task={task} />
+        <CommitBadge task={task} />
         <PauseNote pause={task.pause} staffName={nameOf(task.staffId)} now={now} />
-        <SubtaskBadges task={task} tasks={tasks ?? []} nameOf={nameOf} />
+        <SubtaskBadges task={task} nameOf={nameOf} />
         <span className="task-meta muted small">
           <span className="task-id" title={t('tasks.idHint')}>
             {task.id}
@@ -317,6 +397,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         )}
         <AutoBadge task={task} />
         {task.fallback && <TaskFallbackBadge fallback={task.fallback} />}
+        <PrimaryReturnBadge task={task} />
         <FallbackWaitBadge wait={task.fallbackBlocked} now={now} warm={waitWarm(task.status)} />
         {/* Esperando dependência: o selo diz por quais tarefas; na fila ou não, ela só começa quando ficarem prontas. O laranja de espera é só da coluna A fazer. */}
         <BlockedBadge blockers={waitingShown(task)} warm={waitWarm(task.status)} />
@@ -334,10 +415,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
           </span>
         )}
       </button>
-      {/* Ordem da fila: fora do botão (o cartão é um botão, e botão não cabe dentro de botão); é o caminho do celular, onde arrastar não basta. */}
-      {orderRow(task)}
-      {/* Subtarefas (card que aguarda) ou card de origem (subtarefa): links fora do botão, pelo mesmo motivo. */}
-      <SubtaskRow task={task} tasks={tasks ?? []} labels={LABEL} onOpen={setSelected} />
+      </SubtaskStack>
+      {/* Atalho do pedido de permissão: fora do botão do cartão (botão não cabe dentro de botão). */}
+      <PermissionGo onOpen={openPermission(task)} />
       {/* Motivo de Aguardar: fica fora do botão (o cartão é um botão, e campo não cabe dentro). Salva ao sair do campo. */}
       {task.status === 'waiting' && (
         <input
@@ -363,7 +443,10 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal tasks-modal" role="dialog" aria-label={t('tasks.dialogLabel', { name: projectName })}>
         <header className="tasks-head">
-          <h2>{t('tasks.title', { name: projectName })}</h2>
+          <div className="tasks-head-title">
+            <h2>{t('tasks.title', { name: projectName })}</h2>
+            {projectPause.pause !== undefined && <PauseButton paused={projectPause.pause !== null} busy={projectPause.busy} onClick={projectPause.toggle} />}
+          </div>
           <span className="tasks-head-actions">
             {onOpenSchedules && (
               <button className="btn-secondary btn-with-icon" onClick={onOpenSchedules} title={t('schedules.openTitle')}>
@@ -384,6 +467,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             </button>
           </span>
         </header>
+        {projectPause.pause && <PausedBanner pause={projectPause.pause} now={now} />}
+        {projectPause.error && <p className="error small" role="alert">{projectPause.error}</p>}
         {/* Com o detalhe aberto o erro aparece nele: no celular o detalhe cobre o quadro inteiro. */}
         {error && !current && <p className="error small" role="alert">{error}</p>}
         {dup && (
@@ -396,7 +481,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             onClose={() => setDup(null)}
           />
         )}
-        <BoardReview review={boardReview} staff={byHierarchy(staff)} />
+        <BoardReview review={boardReview} commit={boardCommit} staff={byHierarchy(staff)} />
         {adding && (
           <TaskForm
             staff={byHierarchy(staff)}
@@ -428,7 +513,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         ) : (
           <div className="tasks-columns">
             {COLUMNS.map(({ status, shows }) => {
-              const col = (status === 'todo' ? byQueue : byRecent)(tasks.filter((t) => !t.archived && shows.includes(t.status)));
+              const shown = tasks.filter((t) => !t.archived && shows.includes(t.status));
+              const col = status === 'todo' ? byQueue(shown) : byRecent(shown, awaitingPlan);
               return (
                 <section
                   key={status}
@@ -503,9 +589,14 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             queuePos={queuePosOf(current)}
             queueTotal={queueSize(tasks ?? [], current.staffId)}
             moves={movesOf(current)}
-            onOrder={(body) => void reorder(current, body)}
             onUnqueue={() => void act(() => api.updateTask(projectId, current.id, { queued: false }))}
             onOpen={() => current.staffId && onOpenStaff(current.staffId)}
+            permission={permissionOf(current)}
+            onOpenPermission={openPermission(current)}
+            chatFollowUps={chatFollowUpIds(current.id, inboxItems, projectId)}
+            onOpenChat={openFollowUpChat(current)}
+            givingBack={givingBack === current.id}
+            onGiveBack={() => void giveBack(current)}
             onOpenTask={setSelected}
             nameOf={nameOf}
             onCancel={() => setClosing({ mode: 'cancel', id: current.id })}
@@ -537,12 +628,19 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   );
 }
 
-/** Selo do cartão: plano esperando você (Fazendo) e, em Pronto, se ainda falta o deploy (projeto que publica). */
-function StatusBadge({ task, hasDeploy }: { task: Task; hasDeploy: boolean }) {
+/**
+ * Selo do cartão: plano esperando você (Fazendo, amarelo) e, em Pronto, se ainda falta o deploy (projeto que publica).
+ * Planejando sem plano esperando é trabalho normal: selo neutro, sem chamar a atenção.
+ */
+function StatusBadge({ task, hasDeploy, planWaiting }: { task: Task; hasDeploy: boolean; planWaiting: boolean }) {
   if (task.status === 'planning')
-    return (
+    return planWaiting ? (
       <span className="task-badge is-waiting" title={HELP.planning}>
         {t('tasks.badgePlan')}
+      </span>
+    ) : (
+      <span className="task-badge small" title={t('tasks.helpPlanningWorking')}>
+        {LABEL.planning}
       </span>
     );
   if (task.status === 'cancelled')
@@ -560,10 +658,13 @@ function StatusBadge({ task, hasDeploy }: { task: Task; hasDeploy: boolean }) {
   return null;
 }
 
-/** Veredito da revisão (aprovada/reprovada por quem revisou), quando houver. */
+/**
+ * Veredito da revisão (aprovada/reprovada por quem revisou), quando houver. "Aprovada" não aparece com follow-up aberto: a tarefa não está toda resolvida, e o selo de follow-ups
+ * pendentes ocupa o lugar dele (ver `verdictShown`); decididos todos, volta.
+ */
 function VerdictBadge({ task, nameOf }: { task: Task; nameOf: (id: string | null) => string | null }) {
   const verdict = task.review?.verdict;
-  if (!verdict) return null;
+  if (!verdict || !verdictShown(task)) return null;
   const name = nameOf(task.review!.staffId) ?? task.review!.staffId;
   return (
     <span className={`task-badge small ${verdict === 'approved' ? 'is-approved' : 'is-rejected'}`}>
@@ -759,9 +860,14 @@ function TaskDetail({
   queuePos,
   queueTotal,
   moves,
-  onOrder,
   onUnqueue,
   onOpen,
+  permission,
+  onOpenPermission,
+  chatFollowUps,
+  onOpenChat,
+  givingBack,
+  onGiveBack,
   onOpenTask,
   onDelete,
   onCancel,
@@ -795,11 +901,22 @@ function TaskDetail({
   queuePos: number;
   /** Quantos cartões a fila do responsável tem. */
   queueTotal: number;
-  /** Os movimentos de ordem que o cartão aceita (null: fora da fila ou sozinho nela). */
+  /** Os passos de ordem que o cartão aceita (null: fora da fila ou sozinho nela; aí o detalhe não fala de ordem). */
   moves: OrderMoves | null;
-  onOrder: (body: OrderBody) => void;
   onUnqueue: () => void;
   onOpen: () => void;
+  /** O pedido de permissão que a conversa da tarefa espera de você (null: nenhum, ou o plano já avisa). */
+  permission: PermissionText | null;
+  /** Abre o chat no cartão do pedido (undefined: sem como abrir daqui). */
+  onOpenPermission?: () => void;
+  /** Os follow-ups abertos desta tarefa que esperam na conversa de trabalho (item da caixa com a conversa): aqui o detalhe só aponta para lá. */
+  chatFollowUps: ReadonlySet<string>;
+  /** Abre a conversa de trabalho onde eles esperam (undefined: sem como abrir daqui). */
+  onOpenChat?: () => void;
+  /** Card sem código: o envio ao responsável está em andamento (o botão fica desligado). */
+  givingBack: boolean;
+  /** Card sem código: devolve ao responsável (uma mensagem na conversa dele). */
+  onGiveBack: () => void;
   /** Abre o detalhe de outra tarefa do quadro (a subtarefa ou o card de origem). */
   onOpenTask: (id: string) => void;
   onDelete: () => void;
@@ -844,6 +961,14 @@ function TaskDetail({
           {error}
         </p>
       )}
+      {/* No topo, antes de tudo: é o que trava o card e só você destrava (a conversa espera a sua permissão). */}
+      <PermissionWaitBlock text={permission} onOpen={onOpenPermission} />
+      {/* No topo: explica por que o card está parado em Fazendo e leva à subtarefa (ou ao card de origem); no celular o detalhe cobre o quadro. */}
+      <SubtaskBlock task={task} tasks={tasks} labels={LABEL} staffName={who?.name ?? null} onOpen={onOpenTask} />
+      {/* Card = código: o card que terminou sem editar nada não foi para revisão; quem pediu decide (cancelar com motivo ou devolver ao responsável). */}
+      <NoCodeBlock task={task} nameOf={nameOf} busy={givingBack} onCancel={onCancel} onGiveBack={onGiveBack} />
+      {/* Também no topo: o resumo dos follow-ups e o caminho para a conversa onde eles esperam (o card costuma estar Finalizado: nada mais pede a sua atenção nele). */}
+      <FollowUpBlock task={task} tasks={tasks} team={staff} nameOf={nameOf} now={Date.now()} projectId={projectId} chatIds={chatFollowUps} onOpenChat={onOpenChat} onOpenTask={onOpenTask} onChanged={onChanged} />
       <label>
         {t('tasks.fieldTitle')}
         <input value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} />
@@ -853,7 +978,7 @@ function TaskDetail({
         <textarea rows={4} value={description} maxLength={8000} onChange={(e) => setDescription(e.target.value)} />
       </label>
       <GoalFields goal={goal} acceptance={acceptance} onGoal={setGoal} onAcceptance={setAcceptance} />
-      <BlockedByField tasks={tasks} selfId={task.id} value={blockedBy} labels={LABEL} onChange={setBlockedBy} />
+      <BlockedByField tasks={tasks} selfId={task.id} value={blockedBy} labels={LABEL} onChange={setBlockedBy} collapsible />
       <label>
         {t('tasks.fieldOwner')}
         <select
@@ -920,7 +1045,6 @@ function TaskDetail({
           taskId={task.id}
           version={`${task.updatedAt}:${task.runId ?? ''}`}
           nameOf={(id) => (id ? (staff.find((s) => s.id === id)?.name ?? id) : t('tasks.noOwner'))}
-          open={task.status === 'review' || task.status === 'done'}
         />
       )}
       {task.fallback && (
@@ -928,10 +1052,11 @@ function TaskDetail({
           <TaskFallbackBadge fallback={task.fallback} />
         </p>
       )}
+      <PrimaryReturnLine task={task} />
       {fbWait && <p className={waitText}>{fbWait.hint}</p>}
       <AutoInfo task={task} open={task.status === 'review'} />
+      <CommitBlock task={task} />
       <PauseNote pause={task.pause} staffName={nameOf(task.staffId)} now={Date.now()} />
-      <SubtaskBlock task={task} tasks={tasks} labels={LABEL} staffName={who?.name ?? null} onOpen={onOpenTask} />
       <RetryBadge retry={task.retry} now={Date.now()} withHint />
       <DoubtBlock
         question={task.question}
@@ -978,11 +1103,10 @@ function TaskDetail({
           </button>
         </p>
       )}
-      {/* Só você muda a ordem da fila de um funcionário pela tela; ele sugere, e o gestor que pediu o cartão reordena os dele (ver o Histórico). */}
+      {/* Só você muda a ordem da fila de um funcionário pela tela (arrastando o cartão no quadro); ele sugere, e o gestor que pediu o cartão reordena os dele (ver o Histórico). */}
       {moves && (
         <div className="task-order-box">
           <p className="small">{t('tasks.orderLabel', { who: who?.name ?? t('tasks.ownerFallback'), pos: queuePos, total: queueTotal })}</p>
-          <OrderButtons moves={moves} onOrder={onOrder} withText />
           <p className="muted small">{t('tasks.orderHint', { who: who?.name ?? t('tasks.ownerFallback') })}</p>
         </div>
       )}
@@ -1052,8 +1176,8 @@ function TaskDetail({
       )}
       {task.status === 'review' && <ReviewDelegate projectId={projectId} task={task} staff={byHierarchy(staff)} onChanged={onChanged} onOpenStaff={onOpenStaff} />}
       {task.sessionId && (
-        <details className="collapse" open={task.status === 'review' || task.status === 'done'}>
-          <summary>{t('tasks.sectionCode')}</summary>
+        <details className="collapse">
+          <SectionSummary label={t('tasks.sectionCode')} sum={codeSummary(task, (id) => nameOf(id) ?? id)} />
           <TaskCodePanel projectId={projectId} task={task} staff={staff} onChanged={onChanged} onOpenStaff={onOpenStaff} />
         </details>
       )}
@@ -1071,10 +1195,12 @@ function TaskDetail({
           {[...task.history].reverse().map((h, i) => {
             // Nota de ordem da fila: a frase já diz quem mexeu (você, ou o gestor que pediu o cartão) ou quem sugeriu; "automático" enganaria.
             const order = orderNoteText(h.note, h.by);
+            // A volta ao motor principal também vem em pt do servidor: escrita no idioma da tela, com quem a fez (o sistema) na frente.
+            const primary = primaryNoteText(h.note);
             return (
               <li key={i}>
                 {new Date(h.at).toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {LABEL[h.status]}
-                {order ? ` (${order})` : ` (${h.by === 'auto' ? t('tasks.byAuto') : t('tasks.byYou')}${h.note ? `: ${h.note})` : ')'}`}
+                {order ? ` (${order})` : ` (${h.by === 'auto' ? t('tasks.byAuto') : t('tasks.byYou')}${h.note ? `: ${primary ?? h.note})` : ')'}`}
               </li>
             );
           })}

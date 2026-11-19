@@ -3,6 +3,7 @@ import { api } from '../api';
 import { locale, t } from '../i18n';
 import { bucketMeta, costText, coverageNote, reviewsText, reworkText } from '../taskCost';
 import { useScanPoll } from '../useScanPoll';
+import { SectionSummary } from './SectionSummary';
 
 // Custo da tarefa no detalhe: o total e a divisão em fazer, revisar e dúvida, com as voltas de retrabalho e a lista das
 // conversas. Os números vêm de GET /api/projects/:id/tasks/:taskId/cost; as regras de exibição (US$ só do Claude,
@@ -26,24 +27,17 @@ export function TaskCostView({
   cost,
   error,
   nameOf,
-  open,
 }: {
   cost: TaskCost | null;
   error: string | null;
   nameOf: (staffId: string | null) => string;
-  /** Já abre expandido (tarefa em revisão ou pronta). */
-  open?: boolean;
 }) {
   if (error) return <p className="error small">{error}</p>;
   const total = cost ? costText(cost) : null;
   const note = cost ? coverageNote(cost.coverage) : null;
   return (
-    <details className="collapse task-cost" open={open}>
-      <summary>
-        {t('taskCost.heading')}
-        {' · '}
-        {total ? total.main : t('taskCost.loading')}
-      </summary>
+    <details className="collapse task-cost">
+      <SectionSummary label={t('taskCost.heading')} sum={total ? total.main : t('taskCost.loading')} />
       {cost && total && (
         <>
           {cost.scanning && <p className="muted small">{t('taskCost.scanning')}</p>}
@@ -113,14 +107,12 @@ export function TaskCostBlock({
   taskId,
   version,
   nameOf,
-  open,
 }: {
   projectId: string;
   taskId: string;
   version: string;
   nameOf: (staffId: string | null) => string;
-  open?: boolean;
 }) {
   const { data, error } = useScanPoll(() => api.taskCost(projectId, taskId), `${projectId}:${taskId}`, null, version);
-  return <TaskCostView cost={data} error={error} nameOf={nameOf} open={open} />;
+  return <TaskCostView cost={data} error={error} nameOf={nameOf} />;
 }
