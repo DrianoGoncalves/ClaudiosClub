@@ -8,9 +8,9 @@ import type { InboxItem, InboxKind } from '../../../shared/model';
 
 export type OpenLink = { tasks: true; projectId: string; taskId?: string } | { tasks: false; kind: InboxKind; projectId: string; staffId: string | null };
 
-const KINDS: readonly InboxKind[] = ['plan', 'permission', 'secret', 'waiting', 'error', 'routine', 'orphan', 'usage', 'blocked', 'notStarted', 'question', 'stuck'];
+const KINDS: readonly InboxKind[] = ['plan', 'permission', 'secret', 'waiting', 'error', 'routine', 'orphan', 'usage', 'blocked', 'notStarted', 'question', 'stuck', 'followUp', 'denied'];
 /** Os avisos que são de uma tarefa: o destino é o quadro do projeto. */
-const TASK_KINDS: readonly InboxKind[] = ['blocked', 'notStarted', 'question', 'stuck'];
+const TASK_KINDS: readonly InboxKind[] = ['blocked', 'notStarted', 'question', 'stuck', 'followUp'];
 const ID = /^[A-Za-z0-9_-]{1,120}$/;
 
 /** O destino do `location.hash`, ou null se não é um link da extensão (ou não diz para onde ir). */

@@ -4,8 +4,8 @@ import type { BoardEdge, BoardEdgeData, StaffLink } from './layout';
 import { generator, seedOf } from './sketch';
 import { t } from '../i18n';
 
-/** Ações das linhas, fornecidas pelo quadro (Board.tsx). */
-export const EdgeActions = createContext<{ onUnlink?: (link: StaffLink) => void }>({});
+/** Ações das linhas e a opção "Animações", fornecidas pelo quadro (Board.tsx). */
+export const EdgeActions = createContext<{ onUnlink?: (link: StaffLink) => void; animations: boolean }>({ animations: true });
 
 const STYLE: Record<BoardEdgeData['kind'], { stroke: string; width: number; dash?: string; roughness: number; label?: string }> = {
   // Hierarquia: linhas retas de caneta, de cima para baixo.
@@ -54,7 +54,7 @@ function RoughEdge(props: EdgeProps<BoardEdge>) {
 
   // Vínculo entre funcionários: no hover, aparece o botão de desfazer. Um pequeno atraso ao sair
   // deixa o mouse ir da linha até o botão (que fica fora do SVG) sem ele sumir.
-  const { onUnlink } = useContext(EdgeActions);
+  const { onUnlink, animations } = useContext(EdgeActions);
   const link = onUnlink ? data?.link : undefined;
   const [hover, setHover] = useState(false);
   const leave = useRef<ReturnType<typeof setTimeout>>();
@@ -71,7 +71,7 @@ function RoughEdge(props: EdgeProps<BoardEdge>) {
           <path key={i} d={p.d} style={{ stroke: p.stroke, strokeWidth: p.strokeWidth, fill: 'none', strokeDasharray: s.dash }} />
         ))}
       </g>
-      {data?.active && <ConversationDots path={d} />}
+      {data?.active && animations && <ConversationDots path={d} />}
       {(s.label || (link && hover)) && (
         <EdgeLabelRenderer>
           {s.label && (
@@ -105,7 +105,7 @@ function RoughEdge(props: EdgeProps<BoardEdge>) {
 /**
  * Conversa passando pela linha: as bolinhas correm de quem manda para quem recebe.
  * É animação SVG nativa (animateMotion): o navegador move as bolinhas sem redesenhar o React,
- * e só existe nas linhas de quem está trabalhando. Some com "animações" desligado no topo.
+ * e só existe nas linhas de quem está trabalhando. Com "animações" desligado no topo nem entra no DOM (quem chama).
  */
 function ConversationDots({ path }: { path: string }) {
   return (

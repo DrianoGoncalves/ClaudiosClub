@@ -6,12 +6,11 @@ import { t } from '../i18n';
 
 type Q = Pick<Task, 'id' | 'staffId' | 'queuePos'>;
 
-/** O corpo do pedido: ao topo, a uma posição (arrastar para o lugar de outro cartão), ou um lugar acima/abaixo. */
-export type OrderBody = { to: 'top' | number } | { step: 'up' | 'down' };
+/** O corpo do pedido: a uma posição (soltar o cartão arrastado) ou um lugar acima/abaixo (teclado). */
+export type OrderBody = { to: number } | { step: 'up' | 'down' };
 
-/** Quais movimentos o cartão ainda aceita (o servidor recusa o que não muda nada). */
+/** Quais passos o cartão ainda aceita pelo teclado (o servidor recusa o que não muda nada). */
 export interface OrderMoves {
-  top: boolean;
   up: boolean;
   down: boolean;
 }
@@ -24,19 +23,33 @@ export function queueSize(tasks: Q[], staffId: string | null): number {
   return staffId ? tasks.filter((o) => o.staffId === staffId && queuePosOf(o) > 0).length : 0;
 }
 
-/** Os movimentos do cartão; null = nada para mover (fora da fila, ou sozinho nela). */
+/** Os passos do cartão; null = nada para mover (fora da fila, ou sozinho nela). */
 export function orderMoves(task: Q, tasks: Q[]): OrderMoves | null {
   const pos = queuePosOf(task);
   if (pos === 0 || queueSize(tasks, task.staffId) < 2) return null;
-  const last = pos === queueSize(tasks, task.staffId);
-  return { top: pos > 1, up: pos > 1, down: !last };
+  return { up: pos > 1, down: pos < queueSize(tasks, task.staffId) };
 }
 
-/** Soltar `dragged` sobre `target`: a posição que o cartão passa a ter (a do alvo), ou null quando não vale (outra fila, o mesmo cartão, fora da fila). */
-export function dropPosition(dragged: Q | undefined, target: Q): number | null {
+/** Alt + seta com o cartão em foco: o passo que ela pede (o caminho do teclado, já que o cartão não tem botão de ordem). */
+export const stepOfKey = (key: string, alt: boolean): 'up' | 'down' | null => (!alt ? null : key === 'ArrowUp' ? 'up' : key === 'ArrowDown' ? 'down' : null);
+
+/**
+ * Soltar `dragged` antes de `target`, ou depois dele (`after`: a metade de baixo do alvo): a posição que o cartão passa a ter na fila, ou null quando
+ * não vale (outra fila, o mesmo cartão, fora da fila) ou não muda nada (já está ali).
+ */
+export function dropPosition(dragged: Q | undefined, target: Q, after = false): number | null {
   if (!dragged || dragged.id === target.id || !dragged.staffId || dragged.staffId !== target.staffId) return null;
-  return queuePosOf(dragged) > 0 && queuePosOf(target) > 0 ? queuePosOf(target) : null;
+  const from = queuePosOf(dragged);
+  const at = queuePosOf(target);
+  if (from === 0 || at === 0) return null;
+  // O lugar em que o cartão entra, na numeração de agora; tirá-lo de cima do alvo puxa o alvo uma posição para cima.
+  const slot = after ? at + 1 : at;
+  const to = slot > from ? slot - 1 : slot;
+  return to === from ? null : to;
 }
+
+/** O lado do alvo em que o arrasto cai: a metade de baixo do cartão vale "depois"; a bandeja de subtarefas, colada embaixo dele, é parte do cartão e vale "depois" inteira. */
+export const dropAfter = (clientY: number, card: { top: number; height: number }, onTray: boolean): boolean => onTray || clientY > card.top + card.height / 2;
 
 // O histórico guarda a frase pronta em português (server/tasks.ts `reorder` e `suggestOrder`); a tela a lê de volta para escrever no idioma dela.
 // Frase que não bate (servidor mudou o texto) volta como veio.

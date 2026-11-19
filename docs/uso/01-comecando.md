@@ -55,11 +55,19 @@ Ver o quadro e as fichas não gasta nada; abrir um funcionário usa a sua cota.
 1. No canto de baixo do quadro, clique em **+ projeto** (ele cria ou abre um projeto já na aba em que você está).
 2. Escolha:
    - **Criar pasta nova**: preencha **Nome da pasta** e **Onde criar**; ou
-   - **Pasta que já existe**: preencha **Caminho da pasta**.
+   - **Pasta que já existe**: clique em **Procurar…** e escolha a pasta na janela que abre, ou digite o caminho em **Caminho da pasta**.
 3. Marque **Iniciar um repositório git (o painel de código e a revisão usam o diff)** se quiser.
 4. Clique em **Criar projeto** (pasta nova) ou **Abrir projeto** (pasta existente).
 
 A pasta entra no quadro na hora. O Claude Code passa a conhecê-la na primeira conversa.
+
+Sobre o **Procurar…**:
+
+- A janela abre no computador onde o Claudio's Club roda (o seu, se você o usa localmente). Se ela não aparecer, procure atrás do navegador. Enquanto ela está aberta, o botão mostra **Janela aberta…**.
+- Escolher uma pasta preenche **Caminho da pasta**, e você ainda pode editar o texto. Fechar a janela sem escolher não muda o campo.
+- Se o computador não consegue abrir a janela, o botão fica desligado e um aviso pede para digitar o caminho no campo. O mesmo vale se já houver uma janela de escolher pasta aberta: escolha nela ou feche-a.
+- Com a tela aberta por um endereço que não é `localhost`, o botão não aparece (a janela abriria no computador do servidor, não no seu): digite o caminho.
+- O botão está só em **Pasta que já existe**. Em **Criar pasta nova**, **Onde criar** continua sendo digitado.
 
 Para trazer um projeto que você já usou com o Claude Code: **+ projeto** → **Importar do Claude Code**. Marque os que quer trazer e clique em **Importar (n)**. Nada muda nas pastas deles.
 

@@ -26,6 +26,8 @@ const KIND_TITLE: Record<InboxKind, string> = {
   notStarted: t('inbox.titleNotStarted'),
   question: t('inbox.titleQuestion'),
   stuck: t('inbox.titleStuck'),
+  followUp: t('inbox.titleFollowUp'),
+  denied: t('inbox.titleDenied'),
 };
 
 export interface InboxView {
@@ -104,13 +106,14 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
   return { items, notify, canNotify, setNotify, dismiss, refresh };
 }
 
-/** A rota de dispensar de cada tipo de item (o erro, `error:`/`cap:`, vai pelo id inteiro; o segredo e a rotina, sem o prefixo). */
+/** A rota de dispensar de cada tipo de item (o erro, `error:`/`cap:`, e a ação barrada, `denied:`, vão pelo id inteiro; o segredo e a rotina, sem o prefixo). */
 export function dismissCall(item: InboxItem, opts: { notSecret?: boolean } = {}): Promise<{ ok: boolean }> {
   const id = item.id.replace(/^(secret|routine):/, '');
   if (item.kind === 'waiting' && item.id.startsWith('question:')) return api.dismissQuestion(item.sessionId);
   if (item.id.startsWith('waiting:')) return api.dismissWaiting(item.sessionId);
   if (item.kind === 'routine') return api.dismissRoutineAlert(id);
   if (item.kind === 'error') return api.dismissError(item.id);
+  if (item.kind === 'denied') return api.dismissDenied(item.id);
   return api.dismissSecret(id, opts.notSecret);
 }
 

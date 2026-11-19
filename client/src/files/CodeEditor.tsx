@@ -105,6 +105,7 @@ const theme = EditorView.theme({
  * Editor de um arquivo. O texto inicial só vale na montagem: para outro arquivo (ou recarregar do disco),
  * o pai troca a `key`. `onChange` recebe o texto inteiro a cada mudança; `onSave` = Ctrl/Cmd+S.
  * `hidden` só esconde (a visualização do .md ocupa o lugar): o texto, o desfazer e o cursor ficam.
+ * `line` (1 = a primeira): já abre com o cursor nessa linha e ela à vista (o "Corrigir" do aviso de segredo); linha que o arquivo não tem é ignorada.
  */
 export default function CodeEditor({
   path,
@@ -113,6 +114,7 @@ export default function CodeEditor({
   onSave,
   label,
   hidden,
+  line,
 }: {
   path: string;
   initial: string;
@@ -120,6 +122,7 @@ export default function CodeEditor({
   onSave: () => void;
   label: string;
   hidden?: boolean;
+  line?: number;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // As funções mudam a cada render do pai; o editor chama sempre a mais nova.
@@ -149,6 +152,10 @@ export default function CodeEditor({
         ],
       }),
     });
+    if (line && Number.isInteger(line) && line >= 1 && line <= view.state.doc.lines) {
+      const at = view.state.doc.line(line).from;
+      view.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: 'center' }) });
+    }
     let alive = true;
     languageFor(path).then(
       (lang) => alive && lang && view.dispatch({ effects: language.reconfigure(lang) }),

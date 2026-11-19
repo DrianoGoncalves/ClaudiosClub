@@ -43,6 +43,7 @@ import { t } from './i18n';
 import { linkItem, parseOpenLink } from './inbox/deepLink';
 import { taskIdOf, type InboxOpen } from './inbox/taskAlerts';
 import { useInbox } from './inbox/useInbox';
+import { withTaskStaff } from './tasks/followUpNotice';
 import { rankingGroups } from './ranking';
 import { staffIndex } from './taskCost';
 import type { AgentFormTarget } from './staff/AgentForm';
@@ -51,7 +52,8 @@ import type { StaffFormMode } from './staff/HireForm';
 import { directoryPerson } from './staff/directory';
 import { UsageWarnings } from './chat/usageWarning';
 import { DialogHost } from './lib/DialogHost';
-import { askConfirm } from './lib/dialogStore';
+import { askConfirm, showAlert } from './lib/dialogStore';
+import { changePause } from './tasks/pauseState';
 
 // Telas abertas por ação da pessoa: carregam sob demanda, fora do pacote inicial (o quadro é a única tela do primeiro desenho).
 const loadDetail = () => import('./detail/Detail');
@@ -139,6 +141,8 @@ export function App() {
   const [filesFor, setFilesFor] = useState<string | null>(null);
   /** Arquivo que os Arquivos abrem já no editor (ex.: o guia SPEC.md). */
   const [filesPath, setFilesPath] = useState<string | null>(null);
+  /** A linha desse arquivo onde o editor já abre (o "Corrigir" do aviso de segredo); sem ela, no começo. */
+  const [filesLine, setFilesLine] = useState<number | null>(null);
   /** Tarefa escolhida no Ctrl+K: o quadro de tarefas abre com ela selecionada. */
   const [jumpTask, setJumpTask] = useState<string | null>(null);
   /** Conversa achada na busca do Ctrl+K (ou a do aviso): o painel do funcionário abre nela. Vale só para a seleção que a pediu. */
@@ -181,6 +185,19 @@ export function App() {
     readTaskSummary();
     return pollVisible(readTaskSummary, 15_000);
   }, [readTaskSummary]);
+  /** Pausa o projeto (pergunta antes) ou o retoma; o resumo das salas relê na hora para o selo aparecer sem esperar o ciclo de 15 s. O erro (403, 404) vai num aviso. */
+  const togglePause = useCallback(
+    async (projectId: string, paused: boolean) => {
+      try {
+        const name = board?.projects.find((p) => p.id === projectId)?.name ?? projectId;
+        if ((await changePause(projectId, name, paused)) !== undefined) readTaskSummary();
+      } catch (e) {
+        // Mensagem vazia = recusa por pareamento: o aviso do App já explica.
+        if ((e as Error).message) void showAlert((e as Error).message);
+      }
+    },
+    [board, readTaskSummary],
+  );
 
   const load = useCallback(() => {
     api.board().then(
@@ -221,8 +238,8 @@ export function App() {
   const onSheetDirty = useCallback((dirty: boolean) => {
     sheetDirty.current = dirty;
   }, []);
-  const openManage = (projectId: string, staffId: string) => {
-    setManageTab('ficha');
+  const openManage = (projectId: string, staffId: string, tab = 'ficha') => {
+    setManageTab(tab);
     setSelectedId(manageNodeId(projectId, staffId));
   };
   /** Sai do editor do RH (outro projeto, Conversar, voltar à lista): com ficha mexida e não salva, pergunta antes. */
@@ -240,28 +257,42 @@ export function App() {
   const openInbox = useCallback<InboxOpen>((item, opts) => {
     // Aviso de consumo (conta, sem projeto, ou orçamento de um projeto): não há quem abrir; o que se muda é a trava, em Configurações > Consumo.
     if (item.kind === 'usage') return openSettings('usage');
-    // Tarefa de que depende outra empacada, cartão esquecido em "a fazer", dúvida escalada ou tarefa parada: não há conversa; abre o quadro
-    // de tarefas do projeto já no card (o da ação, quando o link manda para a tarefa que segura esta).
-    const taskId = opts?.taskId ?? taskIdOf(item);
-    if (taskId) {
+    // Aviso da máquina (sandbox do Codex): sem projeto nem conversa, não há o que abrir; o comando está no próprio aviso (caixa ou balão da conversa do Codex).
+    if (item.codexSandbox) return;
+    const openCard = (taskId: string) => {
       setSchedulesFor(null);
       setJumpTask(taskId);
       setTasksFor(item.projectId);
-      return;
-    }
+    };
     // Sem funcionário nem conversa (aviso do projeto, como chave no .mcp.json): a sala do projeto.
     // Conversa sem ficha: o funcionário fantasma do projeto, já nela.
     // Com conversa: a do aviso (não a mais recente do funcionário), rolada até o que o causou; o contador
     // faz um segundo clique no mesmo aviso rolar de novo.
-    const node = item.staffId ? staffNodeId(item.projectId, item.staffId) : item.sessionId ? ghostNodeId(item.projectId) : projectNodeId(item.projectId);
-    jumpSelection.current = node;
-    setJumpConversation(item.sessionId ? { node, sessionId: item.sessionId } : null);
-    setJumpTarget(
-      item.sessionId
-        ? { projectId: item.projectId, staffId: item.staffId, sessionId: item.sessionId, itemId: item.itemId, quote: item.quote, nonce: ++jumpNonce.current }
-        : null,
-    );
-    setSelectedId(node);
+    const openConversation = (it: InboxItem) => {
+      const node = it.staffId ? staffNodeId(it.projectId, it.staffId) : it.sessionId ? ghostNodeId(it.projectId) : projectNodeId(it.projectId);
+      jumpSelection.current = node;
+      setJumpConversation(it.sessionId ? { node, sessionId: it.sessionId } : null);
+      setJumpTarget(
+        it.sessionId ? { projectId: it.projectId, staffId: it.staffId, sessionId: it.sessionId, itemId: it.itemId, quote: it.quote, nonce: ++jumpNonce.current } : null,
+      );
+      setSelectedId(node);
+    };
+    // Follow-up de tarefa que você pediu: o achado é um balão na conversa de trabalho da tarefa (o `sessionId` do item). O item não leva o funcionário dela (o `staffId` do follow-up é o de
+    // quem faria o ajuste), então lê a tarefa; sem ela, ou se a conversa mudou, abre o card, como o follow-up de tarefa sem conversa. "Abrir card" da caixa manda o `taskId` e vai direto ao card.
+    if (item.kind === 'followUp' && item.followUp && item.sessionId && !opts?.taskId) {
+      const taskId = item.followUp.taskId;
+      void api
+        .tasks(item.projectId)
+        .then((tasks) => withTaskStaff(item, tasks?.find((x) => x.id === taskId)))
+        .catch(() => null)
+        .then((target) => (target ? openConversation(target) : openCard(taskId)));
+      return;
+    }
+    // Tarefa de que depende outra empacada, cartão esquecido em "a fazer", dúvida escalada ou tarefa parada: não há conversa; abre o quadro
+    // de tarefas do projeto já no card (o da ação, quando o link manda para a tarefa que segura esta).
+    const taskId = opts?.taskId ?? taskIdOf(item);
+    if (taskId) return openCard(taskId);
+    openConversation(item);
   }, []);
   const inbox = useInbox(openInbox);
 
@@ -447,6 +478,7 @@ export function App() {
             git={git}
             tasks={taskSummary}
             onOpenTasks={setTasksFor}
+            onTogglePause={(projectId, paused) => void togglePause(projectId, paused)}
             onOpenUncommitted={setUncFor}
             showArchived={showArchived}
             onToggleArchived={toggle(ARCHIVED_KEY, setShowArchived)}
@@ -456,9 +488,14 @@ export function App() {
             onSelect={setSelectedId}
             inbox={inbox}
             onOpenInbox={openInbox}
-            onOpenInboxFile={(item, path) => {
+            onOpenInboxFile={(item, path, line) => {
               setFilesPath(path);
+              setFilesLine(line ?? null);
               setFilesFor(item.projectId);
+            }}
+            // Ação barrada: o atalho leva à ficha de quem foi barrado, na aba Projeto (autonomia e servidores); no nível simples essa aba não existe, o projeto vem embaixo da Ficha.
+            onOpenInboxSheet={(item) => {
+              if (item.staffId) void leaveManage(() => openManage(item.projectId, item.staffId!, simple ? 'ficha' : 'projeto'));
             }}
             onRename={rename}
             onUsageStop={saveUsageStop}
@@ -587,15 +624,18 @@ export function App() {
                 onTasks={() => setTasksFor(selection.id)}
                 onFiles={() => {
                   setFilesPath(null);
+                  setFilesLine(null);
                   setFilesFor(selection.id);
                 }}
                 onOpenFile={(path) => {
                   setFilesPath(path);
+                  setFilesLine(null);
                   setFilesFor(selection.id);
                 }}
                 onOpenConversation={(staffId, sessionId) => openNewConversation(selection.id, staffId, sessionId)}
                 onTeamImported={load}
                 tasks={taskSummary[selection.id] ?? null}
+                onTogglePause={() => void togglePause(selection.id, !!taskSummary[selection.id]?.paused)}
                 office={
                   <LazyScreen>
                     <ProjectOffice projectId={selection.id} config={config} onConfig={setConfig} />
@@ -637,12 +677,15 @@ export function App() {
                 initialConversation={jumpTo}
                 focus={jumpTarget}
                 onFocusDone={clearJumpTarget}
-                onOpenFile={(path) => {
+                onOpenFile={(path, line) => {
                   setFilesPath(path);
+                  setFilesLine(line ?? null);
                   setFilesFor(selection.projectId);
                 }}
                 inbox={inbox.items}
                 onDismissAlert={(item) => inbox.dismiss(item)}
+                onInboxChanged={inbox.refresh}
+                team={board.staff.filter((s) => s.projectId === selection.projectId)}
                 session={
                   selection.session && {
                     ...selection.session,
@@ -826,6 +869,13 @@ export function App() {
             projectName={board.projects.find((p) => p.id === tasksFor)?.name ?? tasksFor}
             staff={board.staff.filter((s) => s.projectId === tasksFor)}
             costs={costs}
+            inboxItems={inbox.items}
+            onOpenInbox={(item) => {
+              // O atalho do pedido de permissão: fecha o quadro e abre a conversa no cartão (como clicar no item da caixa).
+              setTasksFor(null);
+              setJumpTask(null);
+              openInbox(item);
+            }}
             onClose={() => {
               setTasksFor(null);
               setJumpTask(null);
@@ -863,6 +913,7 @@ export function App() {
               setTasksFor(schedulesFor);
               setSchedulesFor(null);
             }}
+            onChanged={reloadSoon}
           />
         </LazyScreen>
       )}
@@ -873,6 +924,7 @@ export function App() {
             projectId={filesFor}
             projectName={board.projects.find((p) => p.id === filesFor)?.name ?? filesFor}
             openPath={filesPath}
+            openLine={filesLine}
             onClose={() => setFilesFor(null)}
           />
         </LazyScreen>

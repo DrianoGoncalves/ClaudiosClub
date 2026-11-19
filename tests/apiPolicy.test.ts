@@ -37,6 +37,7 @@ describe('POST de funcionário pela API (lista fechada)', () => {
       '/api/projects/p1/chat/s-1/wake/user-cancel',
       '/api/projects/p1/files/delete',
       '/api/projects/p1/files/write',
+      '/api/projects/p1/files/open-editor',
       '/api/projects/p1/staff/ana-1a2b/keep',
       '/api/projects/p1/staff/ana-1a2b',
       '/api/projects/p1/tasks/t1/start',

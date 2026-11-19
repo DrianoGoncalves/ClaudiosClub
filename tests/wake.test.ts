@@ -662,11 +662,12 @@ describe('ChatManager: despertador', () => {
     });
   });
 
-  it('a rota GET /schedules só responde ao navegador; fora da sandbox e da lista de funcionário, nada a libera', async () => {
+  it('a rota GET /schedules só responde ao navegador pareado (cookie, não Origin); fora da sandbox e da lista de funcionário, nada a libera', async () => {
     const index = await fs.readFile(path.join(process.cwd(), 'server', 'index.ts'), 'utf8');
     const at = index.indexOf('new RegExp(`^/api/projects/${ID}/schedules$`)');
     expect(at).toBeGreaterThan(0);
-    expect(index.slice(at, at + 260)).toContain("if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');");
+    // `fromBrowser` pede `Origin`, que o navegador não manda no GET da própria página: com ele a tela recebia 400 sempre.
+    expect(index.slice(at, at + 260)).toContain("if (!paired) throw new BadRequest('só pelo Claudio’s Club');");
     expect(staffMayPost('/api/projects/p1/schedules')).toBe(false);
     expect(sandboxVerdict('GET', '/api/projects/p1/schedules', 'p1')).not.toBeNull();
   });

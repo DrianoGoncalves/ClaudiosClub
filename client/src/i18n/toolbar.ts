@@ -52,7 +52,7 @@ export default defineMessages({
     'toolbar.archivedKeywords': 'esconder ocultos',
     'toolbar.animationsTitle': 'Animações',
     'toolbar.animationsDesc':
-      'Anima o quadro: o funcionário trabalhando e as conversas entre funcionários correndo pelas linhas. Sem escolha sua, vem ligada no nível Simples e, no Avançado, segue a opção “reduzir animações” do seu sistema.',
+      'Anima o quadro: o funcionário trabalhando e as conversas entre funcionários correndo pelas linhas. Desligada, também tira os efeitos pesados de vídeo (brilho animado e desfoque da barra de ferramentas), o que alivia placas de vídeo fracas. Sem escolha sua, vem ligada no nível Simples e, no Avançado, segue a opção “reduzir animações” do seu sistema.',
     'toolbar.animationsKeywords': 'movimento reduzir',
     'toolbar.serverTitle': 'Servidor do Clube dos Claudios',
     'toolbar.serverDesc':
@@ -426,7 +426,7 @@ export default defineMessages({
     'toolbar.archivedKeywords': 'hide hidden',
     'toolbar.animationsTitle': 'Animations',
     'toolbar.animationsDesc':
-      'Animates the board: the working employee and the chats between employees running along the lines. Until you choose, it is on at the Simple level and, at Advanced, follows the system “reduce motion” setting.',
+      'Animates the board: the working employee and the chats between employees running along the lines. When off, it also drops the heavy video effects (animated glow and the toolbar blur), which eases weak graphics cards. Until you choose, it is on at the Simple level and, at Advanced, follows the system “reduce motion” setting.',
     'toolbar.animationsKeywords': 'motion reduce',
     'toolbar.serverTitle': 'Claudio’s Club server',
     'toolbar.serverDesc':
@@ -793,7 +793,7 @@ export default defineMessages({
     'toolbar.archivedKeywords': 'ocultar escondidos',
     'toolbar.animationsTitle': 'Animaciones',
     'toolbar.animationsDesc':
-      'Anima el tablero: el empleado trabajando y las conversaciones entre empleados corriendo por las líneas. Hasta que elijas, viene activada en el nivel Simple y, en Avanzado, sigue la opción “reducir animaciones” del sistema.',
+      'Anima el tablero: el empleado trabajando y las conversaciones entre empleados corriendo por las líneas. Desactivada, también quita los efectos pesados de vídeo (brillo animado y desenfoque de la barra de herramientas), lo que alivia las tarjetas gráficas débiles. Hasta que elijas, viene activada en el nivel Simple y, en Avanzado, sigue la opción “reducir animaciones” del sistema.',
     'toolbar.animationsKeywords': 'movimiento reducir',
     'toolbar.serverTitle': 'Servidor del Club de los Claudios',
     'toolbar.serverDesc':

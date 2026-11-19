@@ -1,6 +1,6 @@
 # Funcionários
 
-Fontes: `client/src/staff/HireForm.tsx`, `AgentForm.tsx`, `HrPanel.tsx`, `client/src/office/ProjectOffice.tsx`, `McpServers.tsx`, `SkillLibrary.tsx`, `client/src/detail/SkillManage.tsx`, `client/src/toolbar/RolesEditor.tsx`, `shared/roles.ts`, `server/staff/ficha.ts`.
+Fontes: `client/src/staff/HireForm.tsx`, `AgentForm.tsx`, `agentRoles.ts`, `PlaybookRoster.tsx`, `HrPanel.tsx`, `client/src/office/ProjectOffice.tsx`, `McpServers.tsx`, `SkillLibrary.tsx`, `client/src/detail/SkillManage.tsx`, `client/src/toolbar/RolesEditor.tsx`, `shared/roles.ts`, `server/staff/ficha.ts`.
 
 ## Contratar
 
@@ -39,6 +39,7 @@ Um cargo é um modelo de ficha: preenche o formulário, e cada campo continua ed
 | Front-end | Sonnet | Medium | Edita sozinho |
 | Design system | Sonnet | Medium | Edita sozinho |
 | Web designer (sites e LP) | Opus | High | Edita sozinho |
+| Tráfego (SEO e mídia paga) | Sonnet | High | Edita sozinho |
 | Engenharia de IA | Sonnet | High | Edita sozinho |
 | QA (testes) | Sonnet | Medium | Edita sozinho |
 | Revisor(a) de código | Sonnet | High | Autônomo |
@@ -46,7 +47,26 @@ Um cargo é um modelo de ficha: preenche o formulário, e cada campo continua ed
 | DevOps / SRE | Sonnet | High | Edita sozinho |
 | Documentação | Sonnet | Medium | Edita sozinho |
 
-O Orquestrador(a) pode contratar subfuncionários e já vem com o roteiro **Planeja grande, executa pequeno**. Revisor(a) e Segurança entregam parecer, não corrigem. DevOps / SRE trabalha em servidores e já nasce com autonomia que permite escrever; a escrita só vale nas conexões com **Permitir comandos de escrita** marcado (ver **Servidores (SSH e FTP)** abaixo).
+O Orquestrador(a) pode contratar subfuncionários. Ao dividir o trabalho, ele segue a ordem que você pedir; sem ela, só passa na frente o bug que perde dados, abre falha de segurança ou trava um fluxo essencial (bug cosmético e melhoria viram pendência para você decidir), e só liga uma tarefa a outra quando ela realmente precisa da outra pronta. Ele e os cargos que editam código (Back-end, Dados (DBA), Front-end, Design system, Web designer, Tráfego (SEO e mídia paga), Engenharia de IA, QA, DevOps / SRE e Documentação) já vêm com o roteiro **Planeja grande, executa pequeno** (ver **Pensador × executor** abaixo). Produto (PO) e Arquiteto(a) decidem e planejam, sem roteiro. O Tráfego cuida de SEO (palavras-chave, auditoria técnica, conteúdo, Search Console) e de mídia paga (Google Ads, Meta Ads) com medição de conversão. A ficha manda não criar, ativar nem pausar campanha, não mudar orçamento, lance nem público e não publicar anúncio sem o seu ok com valor e período, mas isso é instrução escrita, não uma trava: nada no sistema impede o funcionário de agir se ele descumprir. Se ele usa um MCP de anúncios (Google Ads, Meta Ads), marque o acesso desse MCP como **Pede antes de escrever** (ou **Só leitura**): aí quem segura é o sistema (ver **MCPs** abaixo). O navegador nasce ligado e usa o seu Chrome com os seus logins, que chega ao Google Ads e ao Meta Ads sem passar pelo MCP e, nele, só a instrução da ficha segura. Se ele usa o navegador para anúncio, ponha também o **Acesso do navegador** em **Pede antes de escrever** (ou **Só leitura**, que bloqueia o navegador inteiro). Construir as páginas é do Web designer. Revisor(a) e Segurança entregam parecer, não corrigem. DevOps / SRE trabalha em servidores e já nasce com autonomia que permite escrever; a escrita só vale nas conexões com **Permitir comandos de escrita** marcado (ver **Servidores (SSH e FTP)** abaixo).
+
+### Pensador × executor
+
+Quem tem o roteiro **Planeja grande, executa pequeno** é o **pensador**: planeja, decide o que muda e em quais arquivos, e confere o resultado, no modelo dele. O trabalho braçal vai para **agents** mais baratos, os **executores**.
+
+| Agent | Modelo e esforço | Papel |
+| --- | --- | --- |
+| **Executor** | Sonnet, Medium | Implementa o que o funcionário já decidiu: edita os arquivos combinados, escreve código e testes, roda a verificação e devolve o que mudou. |
+| **Executor rápido** | Haiku, Low | Tarefa mecânica, sem julgamento: busca e troca em vários arquivos, rodar um comando e relatar o resultado. Se a tarefa pede decisão, devolve para o executor. |
+| **Pesquisador** | Haiku, Low, só leitura | Acha no código onde algo está e responde com arquivo:linha. |
+| **Revisor** | Sonnet, High, só leitura | Confere a mudança antes de ela ser aceita: bugs, regressões e desvios do pedido. |
+
+- **Quando o funcionário faz sozinho**: mudança local, conhecida e de baixo risco (ele já leu o arquivo, sabe o que mudar e um erro apareceria no diff), porque explicar custaria mais. O critério é o risco, não o número de linhas: o que toca segurança, dados, pagamento ou vários arquivos vai para o executor, mesmo curto.
+- **Quem confere**: o funcionário olha o diff de cada entrega antes de pedir a próxima. O resumo do executor é só pista.
+- **Os agents do roteiro nascem sozinhos**: se o projeto (e a conta) não tem algum, o Club cria o pronto em `.claude/agents` quando a conversa abre. O que já existe não é trocado.
+- **Fichas que já existem não mudam sozinhas.** Quem foi contratado antes de o cargo ter roteiro continua sem ele: abra a ficha, em **Roteiro** escolha **Planeja grande, executa pequeno** e salve (vale a partir da próxima sessão). O mesmo vale para um cargo que você editou em **Configurações** → **Cargos**: a sua versão não ganha o roteiro sozinha; escolha o **Roteiro** nela ou use **voltar ao original**.
+- **Executor que já existia**: se o `executor` do projeto era o pronto antigo (Haiku, Low) e ninguém o editou, o Club o atualizou uma vez para o novo (Sonnet, Medium), e o arquivo anterior ficou em `~/.myco/agent-backups`. O que alguém editou fica como está: o cartão do agent mostra "O pronto atual de “executor” é Sonnet · Medium; este usa …", e na edição aparece o botão **Usar Sonnet · Medium**, que só preenche o formulário (vale ao salvar).
+- **Codex**: os agents rodam como subagents e **herdam o modelo da conversa** do funcionário; o modelo escrito no agent não vale lá. Só o esforço vem do agent. Ver `06-consumo-e-motores.md`.
+- **Gastar menos**: o executor e o executor rápido só poupam se o modelo deles for menor que o do funcionário. Se o funcionário já roda em Sonnet, o ganho está no executor rápido (Haiku) e no esforço.
 
 ## A ficha
 
@@ -57,7 +77,7 @@ Na aba **Ficha**:
 - **Nome\*** e **Cargo\***: nome e cargo na ficha. **Retrato**: foto pequena, mostrada no quadro.
 - **Missão\***: o que ele faz. A primeira frase é o que o gestor vê dele. **Definição de pronto** e **Regras (uma por linha)**.
 - **Modelo** e **Esforço**: começam do cargo. Se o motor recusar o modelo da ficha (ele deixou de existir), a conversa segue no modelo padrão, o cartão no quadro ganha o selo **Modelo obsoleto** e o painel e a ficha mostram o aviso; trocar o modelo e salvar tira a marca.
-- **Roteiro**: **Nenhum (trabalha do jeito dele)**, **Planeja grande, executa pequeno**, **Reconhece, depois constrói** ou **Portão de revisão**.
+- **Roteiro**: **Nenhum (trabalha do jeito dele)**, **Planeja grande, executa pequeno**, **Reconhece, depois constrói** ou **Portão de revisão**. Com um roteiro escolhido, a lista **Quem ajuda neste roteiro** mostra cada agent dele com o papel e o modelo (o que falta no projeto aparece como "criado ao abrir a conversa"). No Codex a lista mostra "modelo da conversa" e o esforço. No nível simples, a explicação do roteiro aparece embaixo do resumo do cargo.
 - **Autonomia** (tabela abaixo).
 - **Trabalhar numa worktree própria**: cópia git só dele, num branch próprio. O projeto precisa ser repositório git.
 - **Pode contratar subfuncionários**: os contratados entram como temporários, com no máximo a autonomia dele.
@@ -66,7 +86,7 @@ Na aba **Ficha**:
 Na aba **Projeto**:
 
 - **Reporta a**: quem pode chamá-lo. Nenhum marcado = só você.
-- **Conhecimento (um caminho por linha)**: arquivos que ele lê antes de começar. **Agents e skills indicados** aparecem se o projeto tiver algum.
+- **Conhecimento (um caminho por linha)**: arquivos que ele lê antes de começar. **Agents e skills indicados** aparecem se o projeto tiver algum: marque os agents extras que ele deve usar. Os do roteiro valem sem marcar.
 - **MCPs**: marque os que ele usa e, em cada um, escolha o acesso: **Livre**, **Pede antes de escrever**, **Só leitura** ou **Desligado** (ver **MCPs** abaixo).
 - **Servidores (SSH e FTP)**: clique em **+ dar acesso a servidores (SSH e FTP)** e marque as conexões que ele pode usar. A chave fica no seu computador; a ficha guarda só o nome da conexão. Em cada conexão SSH há **Permitir comandos de escrita** (ver **Servidores (SSH e FTP)** abaixo).
 - **Usar o navegador (Claude in Chrome)**: usa o seu Chrome, com os seus logins. Envios, compras e formulários pedem o seu ok. Precisa da extensão instalada. Com ele marcado, **Acesso do navegador** limita o que ele faz (ver **MCPs** abaixo).
@@ -82,6 +102,8 @@ Salve com **Salvar ficha** (ou **Contratar**, ao criar). **Cancelar** fecha; no 
 | Edita sozinho | Edita arquivos sem perguntar; no Claude, pede antes de rodar comandos. No Codex, roda comandos sem perguntar, dentro da sandbox. |
 | Autônomo | O Claude Code decide o que é seguro rodar; o que julga arriscado (deploy em produção, apagar em massa) é recusado e ele pede a você. No Codex, não há classificador: roda na sandbox sem perguntar. |
 | Sem travas | Não pede nada. Os bloqueios de segredos (.ssh, .env) e os hooks continuam. Só para quem você confia, em projeto com git. |
+
+**Só planeja não combina com agent que edita nem com MCP Livre.** Em **Só planeja** o agent herda o modo e não grava (no Codex, ele roda na mesma sandbox, só de leitura): marcar o `executor`, o `executor-rapido` ou qualquer agent com Edit, Write, Bash ou PowerShell nas ferramentas (ou escolher um roteiro que os chama) só gasta consumo. Se o mesmo nome existe no projeto e na conta, vale o agent do projeto. E um MCP em **Livre**, o navegador incluso, não tem trava de escrita: em **Só planeja** quem segura é o próprio modelo; para garantir, use **Só leitura**. Quando a ficha tem **Só planeja** e uma dessas marcas, o campo **Autonomia** mostra o aviso **Impasse: “Só planeja” não grava**, com os nomes, ao contratar e ao editar, no Claude e no Codex. É só um aviso: dá para salvar. Para sair do impasse, tire da ficha o agent que você marcou (ou use o `pesquisador`, que só lê); se o agent vem do **Roteiro**, desmarcá-lo não adianta, porque o roteiro continua chamando (mesmo o que o projeto nem tem): troque o roteiro. Ponha o MCP ou o **Acesso do navegador** em **Só leitura** ou escolha uma autonomia que edite. O MCP que o **Testar** achou sem nenhuma ferramenta de escrita não entra no aviso. O **navegador** vem ligado e **Livre** por padrão, então ele já entra no aviso; no Codex ele só conta com **Permitir que o GPT use meu Chrome** ligado nas Configurações. No Codex a ficha não tem a lista de agents nem a de MCPs: lá o aviso vale para o roteiro e para o navegador.
 
 ### Servidores (SSH e FTP)
 
@@ -144,7 +166,7 @@ Cuidados:
 - Tipos: **HTTP**, **SSE** e **Comando local**. Valores de variáveis e cabeçalhos nunca voltam para a tela; aparece "definido".
 - Botões: **+ MCP**, **Testar**, **Editar**, **Excluir**.
 - Na ficha, cada MCP marcado tem um seletor de acesso, na linha do nome:
-  - **Livre**: segue a autonomia da ficha (como sempre).
+  - **Livre**: segue a autonomia da ficha (como sempre). Não tem trava de escrita: em **Só planeja** quem segura é o próprio modelo, e a ficha avisa (ver **Autonomia**).
   - **Pede antes de escrever**: as ferramentas de leitura passam; as que escrevem pedem a sua aprovação, em qualquer autonomia. No Codex, que não pergunta, as que escrevem ficam bloqueadas.
   - **Só leitura**: as de leitura passam; as que escrevem ficam bloqueadas.
   - **Desligado**: o MCP não entra na conversa.
@@ -198,10 +220,17 @@ Sem selo (leve, ou sem medida: o que não foi medido fica sem número):
   - Sem **Editar** nem **Excluir**: skill que é link (symlink ou junction; o painel mostra o destino, mexa na origem) e skill sincronizada da conta (só leitura). O painel diz o motivo.
 - Skill de um link do GitHub (a mesma tela nos três lugares):
   - Onde fica o botão **Instalar do GitHub**: ao lado de **Skills (n)** no painel da conta (**~ você**, com **Mostrar o escopo do usuário** ligado), ao lado de **Skills (n)** na aba **Ferramentas** do projeto, e junto de **+ skill na biblioteca** na **Biblioteca de skills**. Conta e projeto não têm outro botão de skill nova: é por aqui que uma skill chega a eles.
-  - **Instalar:** cole o link no campo **URL do GitHub** e clique **Ver prévia** (Enter também vale). Só repositório **público**. Vale o link do repositório, de uma pasta (`/tree/<branch>/<pasta>`) ou do `SKILL.md` (`/blob/...`). Se o link tiver várias skills, aparece **Este link tem N skills. Escolha uma:** (nome, pasta e descrição de cada); clicar numa abre a prévia dela, e **Voltar** volta à lista.
+  - **Instalar:** cole o link no campo **URL do GitHub** e clique **Ver prévia** (Enter também vale). Só repositório **público**. Vale o link do repositório, de uma pasta (`/tree/<branch>/<pasta>`) ou do `SKILL.md` (`/blob/...`). Se o link tiver várias skills, aparece **Este link tem N skills. Marque as que quer instalar:** (nome, pasta e descrição de cada, cada uma com uma caixa) e a caixa **Selecionar todas** (com todas marcadas, desmarca). O passo a passo de várias de uma vez está em **Instalar várias skills de uma vez**, mais abaixo. Com **uma só** marcada, **Ver prévia (1)** abre a prévia dela, como descrito a seguir, e **Voltar** volta à lista.
   - A **prévia** não grava nada e mostra, nesta ordem: a origem (repositório, branch e commit), os **Alertas**, o `SKILL.md` como texto, a lista completa de arquivos (com a etiqueta **script** ou **binário**) e o **Nome da pasta** em que a skill vai ficar (começa com o nome da pasta do repositório; mude se quiser). Os alertas ficam no alto, do mais grave ao menos (**Perigo**, **Atenção**, **Aviso**, escritos além da cor): script ou programa na pasta (vários viram uma linha só, com a lista), arquivo binário, `hooks`, `allowed-tools`, `shell` ou `model` no cabeçalho e comando `` !`...` `` no texto, que roda ao chamar a skill. Sem alerta, a tela diz que isso só pega o que o Club sabe reconhecer: leia o `SKILL.md` mesmo assim.
   - **Instalar** é um botão separado de **Voltar** e **Cancelar**, sempre à vista no pé da janela. Com um alerta de **Perigo** (`hooks` ou comando que roda ao chamar a skill), ele só libera depois de marcar **Li os alertas de perigo e quero instalar mesmo assim**. Instala exatamente o commit mostrado na prévia; se o GitHub mudou no meio, a tela diz que o repositório mudou e oferece **Ver prévia de novo** (nada é gravado). Se já existe uma skill com esse nome, o Club recusa e não sobrescreve: troque o **Nome da pasta**.
   - **Instalar não ativa a skill.** A tela repete isso na prévia e no fim: só grava a pasta. Depois, marque a skill na ficha de quem deve usar (na biblioteca, como `myco:<nome>`).
+  - **Instalar várias skills de uma vez** (link de repositório ou pasta com mais de uma skill, como `https://github.com/greensock/gsap-skills`, que tem 8):
+    - Marque as skills na lista (ou **Selecionar todas**) e clique **Ver prévia (N)**. Com **uma** marcada vale o fluxo de uma skill (inclusive trocar o **Nome da pasta**); com **duas ou mais** o Club busca a prévia de cada uma (**Buscando 3 de 8…**) e abre a tela **Prévia de N skills**.
+    - No alto: o repositório e a branch, e os **Alertas** de todas somados por nível (**Perigo**, **Atenção**, **Aviso**, escritos além da cor). Abaixo, uma linha por skill, com a caixa de incluir, o nome, o nível mais grave dela e o total de arquivos; clicar no nome abre o acordeão com a origem (commit e pasta), os alertas, o `SKILL.md` como texto e a lista de arquivos, como na prévia de uma só.
+    - **Skill com alerta de Perigo vem desmarcada** (e já abre, com um aviso na linha) e só entra se você marcar de novo; marcar vale como a ciência do **Li os alertas de perigo e quero instalar mesmo assim** da prévia de uma só. A caixa também fica travada, com o motivo, se o nome de pasta da skill não vale no escopo (na biblioteca, só minúsculas): instale só essa para poder trocar o nome.
+    - **Instalar N** grava de uma vez as marcadas, cada uma no commit da própria prévia. Não sobrescreve skill que já existe.
+    - O resultado vem **por skill**: **Instalada** (com o commit) ou **Falhou** (com o motivo, como **já existe a skill x** ou **o repositório mudou desde a prévia**). A falha de uma não desfaz nem impede as outras. **Voltar à lista** (só quando algo falhou) volta com as que falharam marcadas.
+    - Até 50 skills por vez. A prévia busca uma skill depois da outra; se o GitHub bater o limite de consultas no meio, as que faltam aparecem com **sem prévia** e o aviso do limite (as já vistas continuam valendo).
   - Recusado, sem gravar nada (a tela mostra o motivo): caminho com `..` ou caractere proibido, nome reservado do Windows, dois arquivos que viram o mesmo no Windows (só caixa diferente), link simbólico, submódulo, mais de 300 arquivos, arquivo acima de 1 MB (`SKILL.md` acima de 128 KB), mais de 5 MB no total, redirecionamento para fora do GitHub, arquivo que não bate com o que o GitHub registrou e chave de API escrita em qualquer arquivo. Nenhum script é executado na instalação.
   - Destino: a biblioteca do Club, a conta (`~/.claude/skills`) ou o projeto (`.claude/skills`). Junto da skill fica o arquivo `.myco-origin.json`, com o link, a pasta, a branch acompanhada, o commit, a data e o hash de cada arquivo.
   - **Depois de instalada**, o cartão da skill (e a linha dela na biblioteca) leva o selo **GitHub**. No painel da skill (na biblioteca, dentro da janela da skill), a seção **Origem no GitHub** mostra o link do repositório, o commit (curto), a branch que ela acompanha e a data. O selo **há versão nova** aparece quando a checagem diária achou novidade; **modificada aqui** aparece quando você editou a skill depois de instalar.
@@ -211,8 +240,9 @@ Sem selo (leve, ou sem medida: o que não foi medido fica sem número):
   - **Voltar à versão anterior** (também com confirmação) só funciona depois de uma atualização aplicada; antes disso o Club responde que não há versão anterior. A versão de que você saiu também fica guardada, então dá para voltar de novo.
   - Depois de aplicar ou voltar, o painel relê a skill: **Editar** abre o texto novo.
   - Sem login no GitHub o limite é de 60 consultas por hora; ao bater nele, a tela diz a hora em que libera.
-- Skill apagada ou renomeada que uma ficha tinha marcada continua na lista **Agents e skills indicados**, marcada e com o selo **não existe mais**: desmarque e salve para tirá-la da ficha.
-- **Agents** (subagents do Claude Code): crie com **Novo agent** no painel do projeto. Há três prontos: **Executor (Haiku)**, **Pesquisador (Haiku, só leitura)** e **Revisor (Sonnet)**.
-- Skills e agents não existem no Codex: o GPT não recebe as skills da biblioteca marcadas na ficha (o Codex não tem como carregar uma skill só numa conversa).
+- Na lista **Agents e skills indicados**, cada skill mostra o escopo ao lado: **Global** (a pasta `skills` da conta) ou **Projeto** (a pasta `.claude/skills` do projeto). O mesmo nome nos dois escopos aparece em duas linhas, e a ficha guarda qual delas você marcou.
+- Skill apagada ou renomeada que uma ficha tinha marcada continua na lista, marcada e com o selo **não existe mais**: desmarque e salve para tirá-la da ficha. O selo só aparece quando a skill não existe no escopo marcado (marcou a **Global** e só existe a do **Projeto**, por exemplo). Skill sincronizada da conta que já estava na ficha aparece com a etiqueta **sincronizada**, sem selo.
+- **Agents** (subagents do Claude Code): crie com **Novo agent** no painel do projeto. Há quatro prontos: **Executor (Sonnet)**, **Executor rápido (Haiku)**, **Pesquisador (Haiku, só leitura)** e **Revisor (Sonnet)**. Cada cartão de agent mostra o modelo, o esforço e uma etiqueta do papel (**implementa**, **mecânico**, **só lê**, **confere**). Ao editar um pronto, o papel dele aparece embaixo de **Modelo** e **Esforço**.
+- Skills não existem no Codex: o GPT não recebe as skills marcadas na ficha (o Codex não tem como carregar uma skill só numa conversa). Os agents do roteiro existem lá como subagents (ver `06-consumo-e-motores.md`).
 
 Conversas e permissões: `03-chat.md`. Consumo e motores: `06-consumo-e-motores.md`. Se a dúvida não estiver aqui, diga que não sabe.

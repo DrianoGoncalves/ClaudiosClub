@@ -11,7 +11,7 @@ function withCode(text: string): ReactNode[] {
   return text.split(/(`[^`\n]+`)/).map((part, i) => (i % 2 === 1 ? <code key={i}>{part.slice(1, -1)}</code> : part));
 }
 
-const LEVEL_LABEL: Record<GithubAlert['level'], MsgKey> = { danger: 'gh.levelDanger', warn: 'gh.levelWarn', info: 'gh.levelInfo' };
+export const LEVEL_LABEL: Record<GithubAlert['level'], MsgKey> = { danger: 'gh.levelDanger', warn: 'gh.levelWarn', info: 'gh.levelInfo' };
 
 /** Os alertas, do mais grave ao menos; o nível vai escrito (não só em cor). Sem nenhum: diz que a leitura continua sendo sua. */
 export function AlertList({ alerts }: { alerts: GithubAlert[] }) {

@@ -9,7 +9,8 @@ import { buildCodexArgs, codexExtraMcpArgs, CODEX_RESERVED_MCP_NAMES } from '../
 import { ROOT } from '../server/root';
 import { buildClaudeArgs, renderFicha } from '../server/staff/ficha';
 import { memoriaLaunchOf, prepareCodexRun, prepareRun, type LaunchContext } from '../server/staff/launch';
-import { createMemoriaMcp, MEMORIA_MAX_BYTES, MEMORIA_MAX_FILES, memoriaMcpCommand, memoriaMcpServer, memoriaTarget, runMemoriaMcpStdio, TOOLS } from '../server/staff/memoriaMcp';
+import { MEMORY_DETAIL_MAX_BYTES, MEMORY_INDEX_MAX_BYTES, MEMORY_INDEX_MAX_LINES } from '../scripts/hooks/memory-cap.mjs';
+import { createMemoriaMcp, MEMORIA_MAX_FILES, memoriaMcpCommand, memoriaMcpServer, memoriaTarget, runMemoriaMcpStdio, TOOLS } from '../server/staff/memoriaMcp';
 
 // Funcionário em autonomia `plan` grava a PRÓPRIA memória (índice e pasta <id>.memory/) pelo MCP `myco-memoria`, nos dois motores, e nada mais:
 // nem a memória ou a ficha de outra pessoa, nem `..`, nem link, nem arquivo fora de `.myco/staff`.
@@ -203,12 +204,12 @@ describe('conteúdo e limites', () => {
   it('recusa vazio, não-texto, caractere de controle e arquivo grande; o arquivo que existe fica como estava', async () => {
     await seed();
     await mcp().callTool('memoria_gravar', { arquivo, conteudo: 'bom' });
-    for (const conteudo of ['', '   \n', undefined, 5, 'a\u0000b', 'x'.repeat(MEMORIA_MAX_BYTES + 1)]) {
+    for (const conteudo of ['', '   \n', undefined, 5, 'a\u0000b', 'x'.repeat(MEMORY_INDEX_MAX_BYTES + 1)]) {
       expect((await mcp().callTool('memoria_gravar', { arquivo, conteudo })).isError).toBe(true);
     }
     expect(await fs.readFile(staff(`${ID}.memory.md`), 'utf8')).toBe('bom\n');
-    // No limite passa.
-    expect((await mcp().callTool('memoria_gravar', { arquivo, conteudo: 'x'.repeat(MEMORIA_MAX_BYTES - 1) })).isError).toBeUndefined();
+    // No limite passa (o texto normalizado ganha uma quebra no fim).
+    expect((await mcp().callTool('memoria_gravar', { arquivo, conteudo: 'x'.repeat(MEMORY_INDEX_MAX_BYTES - 1) })).isError).toBeUndefined();
   });
 
   it(`a pasta aceita até ${MEMORIA_MAX_FILES} detalhes: o próximo novo é recusado, mas substituir um existente passa`, async () => {
@@ -221,6 +222,113 @@ describe('conteúdo e limites', () => {
     expect((await mcp().callTool('memoria_gravar', { arquivo: `.myco/staff/${ID}.memory/n0.md`, conteudo: 'y' })).isError).toBeUndefined();
     expect((await mcp().callTool('memoria_apagar', { arquivo: `.myco/staff/${ID}.memory/n1.md` })).isError).toBeUndefined();
     expect((await mcp().callTool('memoria_gravar', { arquivo: `.myco/staff/${ID}.memory/novo.md`, conteudo: 'x' })).isError).toBeUndefined();
+  });
+});
+
+describe('teto de tamanho da memória', () => {
+  const indice = `.myco/staff/${ID}.memory.md`;
+  const detalhe = `.myco/staff/${ID}.memory/assunto.md`;
+  /** `n` linhas curtas (cabe no teto de bytes; passa do de linhas se n > 60). */
+  const linhas = (n: number) => Array.from({ length: n }, (_, i) => `- linha ${i}`).join('\n');
+  const grava = (arquivo: string, conteudo: string) => mcp().callTool('memoria_gravar', { arquivo, conteudo });
+  const naoMudou = async (arquivo: string, esperado: string) => expect(await fs.readFile(path.join(proj, arquivo), 'utf8')).toBe(esperado);
+
+  it('índice acima do teto de bytes: recusado com a orientação de resumir e de mandar o detalhe para <id>.memory/; abaixo, grava como antes', async () => {
+    await seed();
+    await grava(indice, 'bom');
+    const r = await grava(indice, 'x'.repeat(MEMORY_INDEX_MAX_BYTES + 1));
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain('passa do teto');
+    expect(text(r)).toContain('resuma');
+    expect(text(r)).toContain(`.myco/staff/${ID}.memory/<assunto>.md`);
+    expect(text(r)).toContain('60 linhas e 8 KB');
+    expect(text(r)).not.toContain('já passa do teto'); // a memória atual é pequena: nada de "já passa"
+    await naoMudou(indice, 'bom\n');
+    expect((await grava(indice, 'x'.repeat(MEMORY_INDEX_MAX_BYTES - 1))).isError).toBeUndefined();
+  });
+
+  it(`índice acima de ${MEMORY_INDEX_MAX_LINES} linhas: recusado (mesmo curto em bytes); com ${MEMORY_INDEX_MAX_LINES} passa`, async () => {
+    await seed();
+    expect((await grava(indice, linhas(MEMORY_INDEX_MAX_LINES))).isError).toBeUndefined();
+    const r = await grava(indice, linhas(MEMORY_INDEX_MAX_LINES + 1));
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain(`${MEMORY_INDEX_MAX_LINES + 1} linhas`);
+    await naoMudou(indice, `${linhas(MEMORY_INDEX_MAX_LINES)}\n`);
+  });
+
+  it('o teto conta bytes (UTF-8), não caracteres', async () => {
+    await seed();
+    // `é` tem 2 bytes: 4097 deles passam de 8 KB, mesmo com menos caracteres que o teto.
+    expect((await grava(indice, 'é'.repeat(MEMORY_INDEX_MAX_BYTES / 2 + 1))).isError).toBe(true);
+    expect((await grava(indice, 'é'.repeat(MEMORY_INDEX_MAX_BYTES / 2 - 1))).isError).toBeUndefined();
+  });
+
+  it(`detalhe: teto próprio de ${MEMORY_DETAIL_MAX_BYTES / 1024} KB (maior que o do índice) e sem teto de linhas`, async () => {
+    await seed();
+    expect((await grava(detalhe, 'y'.repeat(MEMORY_INDEX_MAX_BYTES + 1))).isError).toBeUndefined(); // passaria como índice
+    expect((await grava(detalhe, linhas(300))).isError).toBeUndefined();
+    const r = await grava(detalhe, 'y'.repeat(MEMORY_DETAIL_MAX_BYTES + 1));
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain('o detalhe da memória passa do teto');
+    expect(text(r)).toContain('16 KB');
+    await naoMudou(detalhe, `${linhas(300)}\n`);
+  });
+
+  it('arquivo novo acima do teto também é recusado (nada é criado)', async () => {
+    await seed();
+    expect((await grava(indice, linhas(MEMORY_INDEX_MAX_LINES + 5))).isError).toBe(true);
+    expect((await grava(detalhe, 'y'.repeat(MEMORY_DETAIL_MAX_BYTES + 1))).isError).toBe(true);
+    await expect(fs.stat(staff(`${ID}.memory.md`))).rejects.toThrow();
+    await expect(fs.stat(staff(`${ID}.memory`, 'assunto.md'))).rejects.toThrow();
+  });
+
+  it('memória que já passa do teto não trava: grava versão menor (mesmo ainda acima, com aviso), recusa igual ou maior e aceita a que cabe', async () => {
+    await seed();
+    const gorda = linhas(200); // 200 linhas, acima do teto de linhas
+    await fs.writeFile(staff(`${ID}.memory.md`), `${gorda}\n`);
+    // Maior, ou igual: recusado, e a mensagem diz que o arquivo atual já passa do teto.
+    const maior = await grava(indice, linhas(201));
+    expect(maior.isError).toBe(true);
+    expect(text(maior)).toContain('já passa do teto');
+    expect(text(maior)).toContain('versão menor');
+    expect((await grava(indice, gorda)).isError).toBe(true);
+    // Menos linhas e menos bytes, mas ainda acima do teto: aceito, com aviso de que falta reduzir.
+    const menor = await grava(indice, linhas(100));
+    expect(menor.isError).toBeUndefined();
+    expect(text(menor)).toContain('ainda passa do teto (60 linhas e 8 KB)');
+    await naoMudou(indice, `${linhas(100)}\n`);
+    // Menos bytes, porém MAIS linhas (linhas curtas): é crescer em linhas, recusado.
+    expect((await grava(indice, Array.from({ length: 150 }, () => '-').join('\n'))).isError).toBe(true);
+    // Cabe no teto: aceito, sem aviso. Depois disso a regra volta ao normal (crescer acima do teto é recusado).
+    const cabe = await grava(indice, linhas(40));
+    expect(cabe.isError).toBeUndefined();
+    expect(text(cabe)).not.toContain('ainda passa');
+    expect((await grava(indice, linhas(61))).isError).toBe(true);
+  });
+
+  it('memória gorda só em bytes (poucas linhas longas) também reduz aos poucos', async () => {
+    await seed();
+    await fs.writeFile(staff(`${ID}.memory.md`), `${'z'.repeat(60_000)}\n`);
+    expect((await grava(indice, 'z'.repeat(60_001))).isError).toBe(true);
+    expect((await grava(indice, 'z'.repeat(30_000))).isError).toBeUndefined();
+    expect((await grava(indice, 'z'.repeat(1_000))).isError).toBeUndefined();
+  });
+
+  it('detalhe que já passa do teto: o mesmo caminho (menor passa, maior não)', async () => {
+    await seed();
+    await fs.mkdir(staff(`${ID}.memory`), { recursive: true });
+    await fs.writeFile(staff(`${ID}.memory`, 'assunto.md'), `${'d'.repeat(40_000)}\n`);
+    expect((await grava(detalhe, 'd'.repeat(40_001))).isError).toBe(true);
+    const menor = await grava(detalhe, 'd'.repeat(20_000));
+    expect(menor.isError).toBeUndefined();
+    expect(text(menor)).toContain('ainda passa do teto (16 KB)');
+    expect((await grava(detalhe, 'd'.repeat(2_000))).isError).toBeUndefined();
+  });
+
+  it('a descrição da ferramenta diz o teto', () => {
+    const gravar = TOOLS.find((t) => t.name === 'memoria_gravar')!;
+    expect(gravar.description).toContain('60 linhas e 8 KB');
+    expect(gravar.description).toContain('16 KB');
   });
 });
 
@@ -455,6 +563,58 @@ describe('Codex em plan: o MCP na linha de comando e na ficha (a sandbox segue s
   it('um MCP da biblioteca com o nome myco-memoria não sobrescreve o interno (nome reservado)', () => {
     expect(CODEX_RESERVED_MCP_NAMES.has(MEMORIA_MCP_NAME)).toBe(true);
     expect(codexExtraMcpArgs([{ name: MEMORIA_MCP_NAME, command: 'node', args: ['x.js'] }])).toEqual([]);
+  });
+});
+
+describe('aviso na abertura quando o índice da memória passa do teto', () => {
+  const AVISO = 'ATENÇÃO: a sua memória passa do teto';
+  const gorda = `${Array.from({ length: 90 }, (_, i) => `- linha ${i}`).join('\n')}\n`;
+
+  it('Claude: o prompt da conversa avisa (com o tamanho, o teto e o que fazer); o .md da ficha não leva o aviso', async () => {
+    await seed();
+    await fs.writeFile(staff(`${ID}.memory.md`), gorda);
+    const run = await prepareRun(profile({ autonomy: 'acceptEdits' }), launch(proj), 'sess-gorda', proj);
+    const prompt = await fs.readFile(run.systemPromptFile, 'utf8');
+    expect(prompt).toContain(AVISO);
+    expect(prompt).toContain('90 linhas');
+    expect(prompt).toContain('o teto é 60 linhas e 8 KB');
+    expect(prompt).toContain('resuma antes de seguir');
+    expect(prompt).toContain(`${path.join('.myco', 'staff', `${ID}.memory`)}/<assunto>.md`); // as barras do sistema, como o memoryPath da ficha
+    // O aviso fica ao lado de "leia a memória", antes da ficha.
+    expect(prompt.indexOf(AVISO)).toBeLessThan(prompt.indexOf('## Memória'));
+    // O .md da ficha vai para o git: o tamanho da memória não entra nele.
+    expect(await fichaDe(proj)).not.toContain(AVISO);
+  });
+
+  it('Codex: as instruções avisam do mesmo jeito', async () => {
+    await seed();
+    await fs.writeFile(staff(`${ID}.memory.md`), gorda);
+    const run = await prepareCodexRun(profile({ engine: 'codex', autonomy: 'acceptEdits' }), launch(proj), 'sess-gorda-cx', proj);
+    expect(run.instructions).toContain(AVISO);
+    expect(run.instructions).toContain('90 linhas');
+  });
+
+  it('também avisa quando só os bytes passam (poucas linhas longas), em plan', async () => {
+    await seed();
+    await fs.writeFile(staff(`${ID}.memory.md`), `${'z'.repeat(9_000)}\n`);
+    const run = await prepareRun(profile(), launch(proj), 'sess-gorda-bytes', proj);
+    expect(await fs.readFile(run.systemPromptFile, 'utf8')).toContain(AVISO);
+  });
+
+  it('memória dentro do teto (e a recém-criada): sem aviso, nos dois motores', async () => {
+    await seed();
+    const claude = await prepareRun(profile(), launch(proj), 'sess-ok', proj);
+    expect(await fs.readFile(claude.systemPromptFile, 'utf8')).not.toContain(AVISO);
+    await fs.writeFile(staff(`${ID}.memory.md`), `${Array.from({ length: 60 }, (_, i) => `- linha ${i}`).join('\n')}\n`); // no limite
+    expect(await fs.readFile((await prepareRun(profile(), launch(proj), 'sess-ok2', proj)).systemPromptFile, 'utf8')).not.toContain(AVISO);
+    expect((await prepareCodexRun(profile({ engine: 'codex' }), launch(proj), 'sess-ok-cx', proj)).instructions).not.toContain(AVISO);
+  });
+
+  it('a seção Memória diz o teto do índice e do detalhe, nos dois motores', () => {
+    const ctx = { company: 'Co', projectName: 'proj', projectPath: '/proj', managerNames: [], fichaPath: `.myco/staff/${ID}.md`, memoryPath: `.myco/staff/${ID}.memory.md`, mycoUrl: 'http://127.0.0.2:1' };
+    for (const engine of ['claude', 'codex'] as const) {
+      expect(memoriaEm(renderFicha(profile({ engine }), ctx))).toContain('o índice tem teto de 60 linhas e 8 KB (cada detalhe, 16 KB)');
+    }
   });
 });
 

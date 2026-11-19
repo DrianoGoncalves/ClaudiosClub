@@ -2,7 +2,9 @@
 // No celular, uma coisa por vez: a árvore, e ao abrir um arquivo o editor ocupa a tela (volta pelo "‹ Arquivos").
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { FileApiError, filesApi, type FileEntry } from '../api';
+import { fixNoteOf, runFix, type FixNote } from '../chat/fixSecret';
 import { t, type MsgKey } from '../i18n';
+import { isLocalPage } from '../office/folderPick';
 import { FileIcon, FolderIcon, LockIcon, PlusIcon, TrashIcon } from '../icons';
 import { foldersToShow, isWithin, joinPath, nameProblem, parentOf, type NameProblem } from './newEntry';
 import { previewKind } from './previewKind';
@@ -23,7 +25,11 @@ interface Doc {
 type Opened =
   | { path: string; state: 'loading' }
   | { path: string; state: 'image'; src: string }
-  | { path: string; state: 'blocked'; reason: string } | { path: string; state: 'ok'; doc: Doc; rev: number };
+  | { path: string; state: 'blocked'; reason: string }
+  /** Segredo: o Club nunca mostra o texto; o "clique aqui" abre o arquivo no editor do computador. `busy` = abrindo; `note` = o que o último clique deu. */
+  | { path: string; state: 'locked'; busy?: true; note?: FixNote }
+  /** `line` = a linha onde o editor abre (o "Corrigir" do aviso de segredo). */
+  | { path: string; state: 'ok'; doc: Doc; rev: number; line?: number };
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'conflict';
 
 const byKind = (a: FileEntry, b: FileEntry) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1);
@@ -49,16 +55,18 @@ function deleteProblem(err: unknown, isDir: boolean): string {
   return (err as Error).message;
 }
 
-/** `openPath`: arquivo que já abre no editor (ex.: o guia SPEC.md, pelo painel do projeto). */
+/** `openPath`: arquivo que já abre no editor (ex.: o guia SPEC.md, pelo painel do projeto); `openLine`: a linha dele onde o editor já abre (o "Corrigir" do aviso de segredo). */
 export function FilesBoard({
   projectId,
   projectName,
   openPath,
+  openLine,
   onClose,
 }: {
   projectId: string;
   projectName: string;
   openPath?: string | null;
+  openLine?: number | null;
   onClose: () => void;
 }) {
   const [dirs, setDirs] = useState<Record<string, Dir>>({});
@@ -166,7 +174,7 @@ export function FilesBoard({
     return true;
   };
 
-  const load = async (path: string) => {
+  const load = async (path: string, line?: number) => {
     doc.current = null;
     markConflict(null);
     markDirty(false);
@@ -182,7 +190,7 @@ export function FilesBoard({
       const r = await filesApi.read(projectId, path);
       const d: Doc = { path, content: r.content, saved: r.content, mtimeMs: r.mtimeMs };
       doc.current = d;
-      setOpened({ path, state: 'ok', doc: d, rev: ++rev.current });
+      setOpened({ path, state: 'ok', doc: d, rev: ++rev.current, ...(line && { line }) });
     } catch (e) {
       setOpened({ path, state: 'blocked', reason: blockedReason(e) });
     }
@@ -193,7 +201,7 @@ export function FilesBoard({
     setDeleteError(null);
   };
 
-  const openFile = async (entry: FileEntry) => {
+  const openFile = async (entry: FileEntry, line?: number) => {
     select(entry);
     setTargetDir(parentOf(entry.path));
     setEditing(true);
@@ -204,16 +212,28 @@ export function FilesBoard({
       markConflict(null);
       markDirty(false);
       setStatus('idle');
-      setOpened({ path: entry.path, state: 'blocked', reason: t('files.locked') });
+      setOpened({ path: entry.path, state: 'locked' });
       return;
     }
-    await load(entry.path);
+    await load(entry.path, line);
   };
 
-  // Só na abertura: o arquivo pedido de fora já entra no editor.
+  /**
+   * "Clique aqui" do segredo: o servidor abre o arquivo no editor de texto do computador; o conteúdo não vem para a tela (esta função nunca lê o arquivo).
+   * A resposta só vale se o arquivo ainda é o aberto: quem trocou de arquivo no meio do pedido não vê a frase do anterior.
+   */
+  const openOutside = async (path: string) => {
+    const same = (o: Opened | null) => o?.path === path && o.state === 'locked';
+    setOpened((o) => (same(o) ? { path, state: 'locked', busy: true } : o));
+    const outcome = await runFix({ how: 'editor', path }, { projectId, local: isLocalPage(window.location.hostname), openEditor: filesApi.openEditor });
+    const note = fixNoteOf(outcome);
+    setOpened((o) => (same(o) ? { path, state: 'locked', ...(note && { note }) } : o));
+  };
+
+  // Só na abertura: o arquivo pedido de fora já entra no editor (na linha pedida, se veio).
   useEffect(() => {
     if (!openPath) return;
-    void openFile({ name: openPath.split('/').at(-1)!, path: openPath, type: 'file' });
+    void openFile({ name: openPath.split('/').at(-1)!, path: openPath, type: 'file' }, openLine ?? undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -450,6 +470,22 @@ export function FilesBoard({
                   </div>
                 )}
                 {opened.state === 'blocked' && <p className="files-blocked">{opened.reason}</p>}
+                {opened.state === 'locked' && (
+                  <div className="files-blocked files-locked">
+                    <p>
+                      {t('files.locked')}{' '}
+                      <button type="button" className="link" disabled={opened.busy} onClick={() => void openOutside(opened.path)}>
+                        {t('files.lockedOpen')}
+                      </button>
+                      .
+                    </p>
+                    {opened.note && (
+                      <p className={`small${opened.note.ok ? '' : ' error'}`} role={opened.note.ok ? 'status' : 'alert'}>
+                        {opened.note.text}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {opened.state === 'ok' && (
                   <Suspense fallback={<p className="muted files-pick">{t('files.loadingEditor')}</p>}>
                     <CodeEditor
@@ -460,6 +496,7 @@ export function FilesBoard({
                       onChange={edit}
                       onSave={() => void flush()}
                       hidden={previewing}
+                      line={opened.line}
                     />
                   </Suspense>
                 )}

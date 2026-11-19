@@ -69,6 +69,11 @@ export interface AutoContinueOptions {
   knownResets: () => Promise<ReadonlyArray<{ kind: string; resetsAt: string | null }>>;
   /** Manda o "continue" (ou o `text` da pendência) na conversa, acordando-a se estiver fechada. */
   send: (p: Pending) => Promise<void>;
+  /**
+   * O projeto da pendência está pausado (ver server/projectPause.ts)? Então ela não sai: fica como está no disco e sai quando o projeto for retomado (o horário já
+   * terá passado). Sem a opção, nenhum projeto é pausado. Erro ao perguntar conta como pausado: espera a próxima conferência.
+   */
+  paused?: (projectId: string) => Promise<boolean>;
   now?: () => number;
   /** Entre um "continue" e o seguinte, quando várias vencem juntas. */
   spacingMs?: number;
@@ -194,7 +199,7 @@ export class AutoContinue {
   /**
    * Confere as vencidas e manda no máximo um "continue" por vez (com `spacingMs` entre eles). Opção
    * desligada: solta todas as pendências na hora (`dropped`), vencidas ou não. Linha de parada ainda
-   * barrando: reagenda, sem mandar.
+   * barrando: reagenda, sem mandar. Projeto pausado (`paused`): a pendência espera, sem mudar.
    */
   async tick(): Promise<void> {
     if (this.ticking) return;
@@ -214,6 +219,9 @@ export class AutoContinue {
       const due = [...this.items.values()].filter((p) => p.at <= now()).sort((a, b) => a.at - b.at);
       for (const p of due) {
         // Cancelada enquanto conferia: não manda.
+        if (this.items.get(p.sessionId) !== p) continue;
+        // Projeto pausado: nada sai, e nada é solto nem reagendado (as outras pendências, de outros projetos, seguem).
+        if (await this.opts.paused?.(p.projectId).catch(() => true)) continue;
         if (this.items.get(p.sessionId) !== p) continue;
         // Sem conseguir conferir a linha de parada, não arrisca: espera mais um pouco.
         const stop = await this.opts.stopHit(p.projectId, p.staffId, p.engine ?? 'claude').catch((err) => {

@@ -17,6 +17,8 @@ export const KIND_MESSAGE = {
   notStarted: 'kindNotStarted',
   question: 'kindQuestion',
   stuck: 'kindStuck',
+  followUp: 'kindFollowUp',
+  denied: 'kindDenied',
 };
 
 /** Mais que isso de uma vez vira um aviso só (uma fila de notificações empilhadas esconde o que importa). */

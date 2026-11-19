@@ -4,6 +4,7 @@ import type { BackgroundTask } from '../../shared/model';
 // O `codex exec --json` não avisa quando um subagent nasce ou acaba; quem registra isso é o rollout da conversa (JSONL em ~/.codex/sessions):
 //   {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"SubAgentActivity","kind":"started"|"completed","agent_thread_id":"<filho>","agent_path":"/root/nome"}}}
 // O papel (agent_type do spawn) está na 1ª linha do rollout do filho (`session_meta`). Daqui sai a lista de "em segundo plano", como no Claude.
+// O mesmo vigia entrega cada linha completa nova do rollout do pai a `onLine` (a recusa do `apply_patch` só aparece ali, ver `codexRolloutDenial`).
 
 type Rec = Record<string, unknown>;
 const rec = (v: unknown): Rec => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Rec) : {});
@@ -78,6 +79,11 @@ export interface CodexSubagentWatchOptions {
   find: (threadId: string) => Promise<string | null>;
   readFirstLine: (file: string) => Promise<string | null>;
   onChange: (tasks: BackgroundTask[]) => void;
+  /**
+   * Cada linha completa nova do rollout do pai (sem o que já estava lá numa retomada). `stop()` ainda lê o que sobrou até o fim do arquivo, sem esperar a próxima volta, e
+   * entrega por aqui (a linha dos últimos instantes do turno não se perde). Erro de quem recebe não derruba o vigia.
+   */
+  onLine?: (line: string) => void;
   intervalMs?: number;
 }
 
@@ -91,6 +97,14 @@ interface Tracked {
 const MAX_ROLE_TRIES = 20;
 /** Bytes lidos por volta: um rollout grande (ou um backlog) é consumido aos poucos, sem prender o processo. */
 const MAX_READ = 2 * 1024 * 1024;
+
+/** As linhas completas não vazias do buffer; o que vem depois do último \n é uma linha pela metade (`rest`): espera o resto. */
+function completeLines(all: Buffer): { lines: string[]; rest: Buffer } {
+  const lastNl = all.lastIndexOf(0x0a);
+  if (lastNl === -1) return { lines: [], rest: all };
+  const lines = all.subarray(0, lastNl).toString('utf8').split('\n').filter((l) => l.trim());
+  return { lines, rest: all.subarray(lastNl + 1) };
+}
 
 /**
  * Vigia o rollout do pai durante a execução e mantém a lista dos subagents ativos. Lê só os bytes novos; erro de leitura é ignorado
@@ -123,7 +137,36 @@ export class CodexSubagentWatch {
   }
 
   stop() {
+    const rest = this.opts.onLine && this.parent && this.file && this.offset !== null ? { file: this.file, from: this.offset, partial: this.partial } : null;
     this.reset();
+    if (rest) void this.drain(rest.file, rest.from, rest.partial);
+  }
+
+  /** Última leitura do que ficou entre a última volta e o fim do arquivo (só `onLine`; a lista de subagents já foi zerada). Erro de leitura é ignorado. */
+  private async drain(file: string, from: number, partial: Buffer) {
+    try {
+      const fh = await fs.open(file, 'r');
+      let buf: Buffer;
+      try {
+        const length = Math.min((await fh.stat()).size - from, MAX_READ);
+        if (length <= 0) return;
+        buf = Buffer.alloc(length);
+        buf = buf.subarray(0, (await fh.read(buf, 0, length, from)).bytesRead);
+      } finally {
+        await fh.close();
+      }
+      for (const line of completeLines(Buffer.concat([partial, buf])).lines) this.deliver(line);
+    } catch {
+      // arquivo sumiu ou está preso: o que passou pela última volta já foi entregue
+    }
+  }
+
+  private deliver(line: string) {
+    try {
+      this.opts.onLine?.(line);
+    } catch {
+      // quem escuta não derruba o vigia
+    }
   }
 
   private reset() {
@@ -191,13 +234,11 @@ export class CodexSubagentWatch {
     } finally {
       await fh.close();
     }
-    const all = Buffer.concat([this.partial, buf]);
-    const lastNl = all.lastIndexOf(0x0a);
-    // O que vem depois do último \n é uma linha pela metade: espera o resto.
-    this.partial = lastNl === -1 ? all : all.subarray(lastNl + 1);
-    if (lastNl === -1) return;
-    for (const line of all.subarray(0, lastNl).toString('utf8').split('\n')) {
-      const ev = line.trim() ? parseSubAgentActivity(line) : null;
+    const { lines, rest } = completeLines(Buffer.concat([this.partial, buf]));
+    this.partial = rest;
+    for (const line of lines) {
+      this.deliver(line);
+      const ev = parseSubAgentActivity(line);
       if (!ev) continue;
       if (ev.kind === 'completed') this.tracked.delete(ev.threadId);
       else this.tracked.set(ev.threadId, { task: ev.task, role: this.tracked.get(ev.threadId)?.role, tries: 0 });

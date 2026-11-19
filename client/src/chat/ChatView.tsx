@@ -5,6 +5,9 @@ import { ArrowDownIcon, FileDiffIcon, ImageIcon, McpIcon, SendIcon, StopIcon } f
 import { t, locale } from '../i18n';
 import { shrinkImage } from '../lib/shrinkImage';
 import { ChatFallbackBadge } from '../staff/FallbackBadge';
+import { followUpNoticesFor, type TeamMember } from '../tasks/followUpNotice';
+import { FollowUpDoneNote, FollowUpGoneNote } from '../tasks/TaskFollowUps';
+import { taskIn, useProjectTasks } from '../tasks/useProjectTasks';
 import {
   applySuggestion,
   ChatSettingsBar,
@@ -23,7 +26,10 @@ import { useChatDetail } from './chatDetail';
 import { type ChatFocus, findQuoteItem } from './chatFocus';
 import { renderWindow, WINDOW_STEP } from './chatWindow';
 import { type DenialAction, DenialNotice } from './DenialNotice';
-import { errorLineShown, errorNoticesFor, errorSeenAsNotice, secretNoticesFor } from './secretAlerts';
+import { createHeldDiscarder } from './heldDiscard';
+import { HeldDiscardButton } from './HeldDiscardButton';
+import { FollowUpNotice } from './FollowUpNotice';
+import { errorLineShown, errorNoticesFor, errorSeenAsNotice, sandboxNoticesFor, secretNoticesFor } from './secretAlerts';
 import { SecretNotice } from './SecretNotice';
 import { actionableDenials, denialHintOf } from './denialHint';
 import { MoreTabs } from './MoreTabs';
@@ -74,12 +80,16 @@ interface Props {
   awaiting?: boolean;
   /** Caminho absoluto do projeto: arquivo citado dentro dele abre no editor. */
   projectRoot?: string;
-  /** Abre um arquivo do projeto (relativo) no editor de arquivos; sem ele, os caminhos da resposta são só texto. */
-  onOpenFile?: (path: string) => void;
+  /** Abre um arquivo do projeto (relativo) no editor de arquivos, na linha `line` se vier (o "Corrigir" do aviso de segredo); sem ele, os caminhos da resposta são só texto. */
+  onOpenFile?: (path: string, line?: number) => void;
   /** A caixa "precisa de mim": os avisos de segredo e de erro desta conversa viram balão aqui (só na tela, fora da conversa do modelo). */
   inbox?: InboxItem[];
   /** "Ignorar" do balão (segredo ou erro): o mesmo da caixa, então o aviso some dos dois lados. */
   onDismissAlert?: (item: InboxItem) => Promise<void>;
+  /** Relê a caixa depois de uma decisão do balão de follow-up (criar card, descartar…); sem ele, o follow-up não vira balão (só a caixa o mostra). */
+  onInboxChanged?: () => void | Promise<void>;
+  /** A equipe do projeto: quem pode receber o card criado pelo balão de follow-up. */
+  team?: readonly TeamMember[];
 }
 
 /**
@@ -93,14 +103,28 @@ export interface MoreTab {
 }
 
 /** Conversa com o funcionário dentro do Claudio’s Club, sem terminal. */
-export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, engine = 'claude', top, moreTabs = [], focus = null, onFocusDone, awaiting = false, projectRoot, onOpenFile, inbox, onDismissAlert }: Props) {
+export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabled, onSessionStarted, level = 'advanced', fichaModel = null, fichaEffort = null, engine = 'claude', top, moreTabs = [], focus = null, onFocusDone, awaiting = false, projectRoot, onOpenFile, inbox, onDismissAlert, onInboxChanged, team = [] }: Props) {
   const chat = useChat(projectId, sessionId, staffId, name);
+  // Follow-ups que esperam a sua decisão nesta conversa (a conversa de trabalho da tarefa): viram balão, o "vale fazer" primeiro. O status da tarefa de origem (Finalizado) e o texto
+  // inteiro vêm da tarefa; o aviso de "já decidido" e a frase do que se fez ficam aqui, porque o balão decidido some da lista.
+  const followUps = useMemo(() => (onInboxChanged ? followUpNoticesFor(inbox, chat.sessionId ?? sessionId) : []), [inbox, onInboxChanged, chat.sessionId, sessionId]);
+  const fuTasks = useProjectTasks(followUps.map((i) => i.projectId), followUps.length > 0);
+  const [fuGone, setFuGone] = useState<string | null>(null);
+  const [fuDone, setFuDone] = useState<string | null>(null);
+  // A frase do que a decisão fez é um recibo, não um aviso: some depois de uns segundos (o erro de "já decidido" fica até a próxima tentativa).
+  useEffect(() => {
+    if (!fuDone) return;
+    const timer = setTimeout(() => setFuDone(null), 12_000);
+    return () => clearTimeout(timer);
+  }, [fuDone]);
   const secrets = useMemo(() => (onDismissAlert ? secretNoticesFor(inbox, chat.sessionId ?? sessionId) : []), [inbox, onDismissAlert, chat.sessionId, sessionId]);
   // Erro da caixa como balão, com o mesmo "ignorar" do segredo. O aviso que a conversa já tem no fluxo não se repete.
   const errors = useMemo(
     () => errorNoticesFor(inbox, chat.sessionId ?? sessionId, chat.items.flatMap((i) => (i.kind === 'notice' ? [i.text] : []))),
     [inbox, chat.items, chat.sessionId, sessionId],
   );
+  // O terminal do Codex quebrado pela política de senha do Windows (aviso da máquina na caixa): balão em toda conversa que roda no Codex (a ficha ou o motor secundário), com o comando para copiar.
+  const sandboxNotices = useMemo(() => (onDismissAlert ? sandboxNoticesFor(inbox, chat.fallback?.engine ?? engine) : []), [inbox, onDismissAlert, chat.fallback, engine]);
   // O erro que já virou balão: dispensado o balão, a faixa vermelha do mesmo erro não volta no lugar dele (ver `errorLineShown`).
   const [seenError, setSeenError] = useState<string | null>(null);
   useEffect(() => {
@@ -314,6 +338,14 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
     await api.chatRewind(projectId, sid, staffId, uuid, false).catch(alertError);
   };
 
+  // "Excluir" a mensagem guardada pelo Clube (fluxo em heldDiscard.ts): um pedido por vez, trava na hora do clique (por isso o `busy` vive no controlador, não no estado).
+  const [discarding, setDiscarding] = useState<string | null>(null);
+  const discardNow = useRef(chat.discardHeld);
+  discardNow.current = chat.discardHeld;
+  const discarder = useRef<ReturnType<typeof createHeldDiscarder> | null>(null);
+  if (!discarder.current) discarder.current = createHeldDiscarder({ discard: (item) => discardNow.current(item), onBusy: setDiscarding });
+  const discardHeld = discarder.current;
+
   const activeTab = moreTabs.find((tab) => tab.id === moreTab) ?? moreTabs[0];
 
   // Aviso de ferramenta negada: o botão da dica. Só os avisos sem mensagem sua depois; o de "Sem travas" some se já está assim.
@@ -470,6 +502,8 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
               onChangesRequested={() => input.current?.focus()}
               denialAction={denialAction(item)}
               onRewind={staffId && chat.sessionId && !blocked ? (uuid) => void rewind(uuid) : undefined}
+              onDiscardHeld={(held) => void discardHeld(held)}
+              discarding={discarding === item.id}
               autoCancelled={autoCancelled.has(item.id)}
               onCancelAutoContinue={
                 chat.sessionId
@@ -493,6 +527,25 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
           ))}
           {onDismissAlert && secrets.map((item) => <SecretNotice key={item.id} item={item} onIgnore={onDismissAlert} onOpenFile={onOpenFile} />)}
           {errors.map((item) => <SecretNotice key={item.id} item={item} onIgnore={onDismissAlert} />)}
+          {sandboxNotices.map((item) => <SecretNotice key={item.id} item={item} onIgnore={onDismissAlert} />)}
+          {followUps.map((item) => (
+            <FollowUpNotice
+              key={item.id}
+              item={item}
+              task={taskIn(fuTasks.byProject, item.projectId, item.followUp!.taskId)}
+              team={team}
+              now={Date.now()}
+              loading={!fuTasks.settled.has(item.projectId)}
+              onChanged={async () => {
+                await onInboxChanged!();
+                await fuTasks.reload();
+              }}
+              onGone={setFuGone}
+              onDecided={setFuDone}
+            />
+          ))}
+          <FollowUpGoneNote message={fuGone} className="followup-note" />
+          <FollowUpDoneNote message={fuDone} className="followup-note muted" />
           {busy && !streaming && !pending && (
             <div className="chat-typing" aria-live="polite">
               {chat.state?.compacting ? t('chat.compactingChat') : t('chat.working', { name })}
@@ -829,6 +882,8 @@ function Item({
   onChangesRequested,
   denialAction,
   onRewind,
+  onDiscardHeld,
+  discarding,
   onCancelAutoContinue,
   onCancelWake,
   autoCancelled,
@@ -842,6 +897,10 @@ function Item({
   denialAction: DenialAction | null;
   /** "Voltar até aqui" nas suas mensagens (as que têm o id do transcript). */
   onRewind?: (uuid: string) => void;
+  /** "Excluir" na mensagem guardada pelo Clube (só nas que o servidor diz que dá para excluir). */
+  onDiscardHeld?: (item: ChatItem) => void;
+  /** Esta mensagem está sendo excluída agora. */
+  discarding?: boolean;
   /** "Cancelar" no aviso de limite de uso: desfaz o "continue" agendado. */
   onCancelAutoContinue?: () => void;
   /** "Cancelar" no aviso do despertador. */
@@ -876,6 +935,7 @@ function Item({
           {system !== null ? <Markdown text={system} /> : looksLikeMarkdown(item.text) ? <Markdown text={item.text} /> : item.text}
           {item.queued && <span className="msg-queued">{QUEUED_TEXT[item.queued]}</span>}
           {item.held && <span className="msg-queued">{t('chat.heldByMyco', { why: item.held })}</span>}
+          <HeldDiscardButton item={item} busy={!!discarding} onDiscard={onDiscardHeld} />
           <MsgTime at={item.at} />
         </div>
       );

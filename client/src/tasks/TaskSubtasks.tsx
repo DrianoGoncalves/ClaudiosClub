@@ -1,9 +1,11 @@
+import type { HTMLAttributes, ReactNode } from 'react';
 import { isClosed, type Task, type TaskStatus, type TaskSubtaskRef } from '../../../shared/model';
 import { t } from '../i18n';
 
 // Subtarefas: o card que delegou pela conversa dele (`Task.subtasks`, derivado no servidor) e o vínculo de volta (`Task.parentTaskId`).
 // Enquanto alguma está aberta, o card não vai para revisão e não prende o funcionário (`Task.awaitingSubtasks`, só existe nesse caso).
-// O cartão do quadro é um botão: o selo de dentro é só texto; os links ficam numa linha fora dele (como a ordem da fila) e no detalhe.
+// O cartão do quadro é um botão: o selo de dentro é só texto; os links ficam numa bandeja colada embaixo dele (fora do botão, mas na mesma pilha, ligada
+// ao cartão por uma linha em árvore) e no detalhe.
 
 type Labels = Record<TaskStatus, string>;
 type ParentTask = Pick<Task, 'id' | 'title' | 'status'>;
@@ -28,54 +30,68 @@ export const awaitText = (open: number): string => t(open === 1 ? 'tasks.subsAwa
 export const parentText = (parent: { id: string; task: ParentTask | null }): string =>
   parent.task ? t('tasks.subOf', { title: parent.task.title }) : t('tasks.subOfGone', { id: parent.id });
 
-/** Selo dentro do cartão (texto, sem link): aguardando subtarefas ou subtarefa de um card. Os dois podem valer juntos (subtarefa que também delegou). */
-export function SubtaskBadges({ task, tasks, nameOf }: { task: Task; tasks: ParentTask[]; nameOf: (id: string | null) => string | null }) {
+/** Selo dentro do cartão (texto, sem link): aguardando subtarefas. O vínculo de volta (subtarefa de um card) fica na bandeja, não aqui, para não repetir o título. */
+export function SubtaskBadges({ task, nameOf }: { task: Task; nameOf: (id: string | null) => string | null }) {
   const open = awaitsSubtasks(task) ? openSubtasks(task).length : 0;
-  const parent = parentOf(task, tasks);
-  if (!open && !parent) return null;
+  if (!open) return null;
   return (
-    <>
-      {open > 0 && (
-        <span className="task-queue task-subs small" title={t('tasks.subsAwaitHint', { name: nameOf(task.staffId) ?? t('tasks.pauseStaffFallback') })}>
-          {awaitText(open)}
-        </span>
-      )}
-      {parent && (
-        <span className="task-queue task-subs small" title={parent.task ? t('tasks.subOfHint', { title: parent.task.title }) : undefined}>
-          {parentText(parent)}
-        </span>
-      )}
-    </>
+    <span className="task-queue task-subs small" title={t('tasks.subsAwaitHint', { name: nameOf(task.staffId) ?? t('tasks.pauseStaffFallback') })}>
+      {awaitText(open)}
+    </span>
   );
 }
 
-/** Um link para a tarefa: título e status entre parênteses curtos. */
-function Link({ id, title, status, labels, onOpen }: { id: string; title: string | null; status: TaskStatus | null; labels: Labels; onOpen: (id: string) => void }) {
+/** Um link para a tarefa e o status dela num selo (o texto do link é o título, ou o que o chamador passar). */
+function Link({ id, text, status, labels, onOpen }: { id: string; text: string; status: TaskStatus | null; labels: Labels; onOpen: (id: string) => void }) {
   return (
     <li>
       <button type="button" className="link small" onClick={() => onOpen(id)}>
-        {title ?? id}
+        {text}
       </button>
-      <span className="muted small task-subs-status">{status ? labels[status] : t('tasks.subOfGoneStatus')}</span>
+      <span className="task-badge task-subs-status">{status ? labels[status] : t('tasks.subOfGoneStatus')}</span>
     </li>
   );
 }
 
 /**
- * Os links do cartão, fora do botão dele: cada subtarefa aberta (título e status) no card que aguarda, e o card de origem na subtarefa. Só aparece
- * quando o selo de dentro aparece (`awaitsSubtasks` / `parentTaskId`).
+ * A bandeja do cartão, colada embaixo dele e fora do botão: o card de origem na subtarefa e cada subtarefa aberta no card que aguarda (título e status),
+ * ligados ao cartão por uma linha em árvore. Só existe quando há o que mostrar (`awaitsSubtasks` / `parentTaskId`).
  */
 export function SubtaskRow({ task, tasks, labels, onOpen }: { task: Task; tasks: ParentTask[]; labels: Labels; onOpen: (id: string) => void }) {
   const open = awaitsSubtasks(task) ? openSubtasks(task) : [];
   const parent = parentOf(task, tasks);
   if (!open.length && !parent) return null;
   return (
-    <ul className="task-subs-row">
+    <ul className="task-subs-row task-subs-tray">
+      {parent && <Link id={parent.id} text={parentText(parent)} status={parent.task?.status ?? null} labels={labels} onOpen={onOpen} />}
       {open.map((s) => (
-        <Link key={s.id} id={s.id} title={s.title} status={s.status} labels={labels} onOpen={onOpen} />
+        <Link key={s.id} id={s.id} text={s.title} status={s.status} labels={labels} onOpen={onOpen} />
       ))}
-      {parent && <Link id={parent.id} title={parent.task?.title ?? null} status={parent.task?.status ?? null} labels={labels} onOpen={onOpen} />}
     </ul>
+  );
+}
+
+type StackDrag = Pick<HTMLAttributes<HTMLDivElement>, 'onDragOver' | 'onDragLeave' | 'onDrop'>;
+
+/**
+ * O cartão e a bandeja dele numa pilha só: é a pilha que carrega o contorno de selecionado e de destino do arrasto, e que recebe o arrasto (a bandeja conta
+ * como parte do cartão). O elemento em volta do cartão é SEMPRE o mesmo `div` (só a classe muda: `task-stack` com bandeja): se ele sumisse ou trocasse de
+ * tipo quando a bandeja aparece ou some (o quadro relê a cada 5 s), o React desmontaria o cartão e o foco do teclado se perderia.
+ */
+export function SubtaskStack({
+  task,
+  tasks,
+  labels,
+  onOpen,
+  children,
+  ...drag
+}: { task: Task; tasks: ParentTask[]; labels: Labels; onOpen: (id: string) => void; children: ReactNode } & StackDrag) {
+  const tray = awaitsSubtasks(task) || !!parentOf(task, tasks);
+  return (
+    <div className={tray ? 'task-stack' : 'task-slot'} {...drag}>
+      {children}
+      <SubtaskRow task={task} tasks={tasks} labels={labels} onOpen={onOpen} />
+    </div>
   );
 }
 
@@ -112,7 +128,7 @@ export function SubtaskBlock({
           {awaitsSubtasks(task) && <p className="muted small">{t('tasks.subsAwaitHint', { name: staffName ?? t('tasks.pauseStaffFallback') })}</p>}
           <ul className="task-subs-row">
             {subs.map((s) => (
-              <Link key={s.id} id={s.id} title={s.title} status={s.status} labels={labels} onOpen={onOpen} />
+              <Link key={s.id} id={s.id} text={s.title} status={s.status} labels={labels} onOpen={onOpen} />
             ))}
           </ul>
         </>
@@ -123,7 +139,7 @@ export function SubtaskBlock({
             <b>{t('tasks.subOfTitle')}</b>
           </p>
           <ul className="task-subs-row">
-            <Link id={parent.id} title={parent.task?.title ?? null} status={parent.task?.status ?? null} labels={labels} onOpen={onOpen} />
+            <Link id={parent.id} text={parent.task?.title ?? parent.id} status={parent.task?.status ?? null} labels={labels} onOpen={onOpen} />
           </ul>
           {parent.task && <p className="muted small">{t('tasks.subOfHint', { title: parent.task.title })}</p>}
         </>

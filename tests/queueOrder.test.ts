@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { StaffProfile } from '../shared/model';
+import { BUILTIN_ROLES } from '../shared/roles';
 import { sandboxVerdict, staffMayPost } from '../server/apiPolicy';
 import type { Caller } from '../server/callers';
 import { renderFicha, type FichaContext } from '../server/staff/ficha';
@@ -509,6 +510,25 @@ describe('ordem da fila: rota, política e ficha', () => {
       expect(md, engine).toContain('Quem faz a tarefa não muda a ordem: ele só te manda uma sugestão');
     }
     expect(renderFicha(profile(), ctx('http://127.0.0.1:4848', { team: [] }))).not.toContain('/order');
+  });
+
+  it('a ficha do gestor diz que a fila é da pessoa: entre pessoas só blockedBy ordena e os mesmos arquivos vão para a mesma pessoa (Claude e Codex)', () => {
+    const orquestrador = BUILTIN_ROLES.find((r) => r.id === 'orquestrador')!;
+    for (const engine of ['claude', 'codex'] as const) {
+      const md = renderFicha(profile({ engine, rules: orquestrador.rules }), ctx('http://127.0.0.1:4848'));
+      // Texto da API (a linha de `blockedBy` ao passar a tarefa) e a regra do cargo, ambos na ficha gerada.
+      expect(md, engine).toContain('a fila é da pessoa, então entre pessoas diferentes só o blockedBy garante a ordem');
+      expect(md, engine).toContain('dependência real entre pessoas leva blockedBy');
+      expect(md, engine).toContain('tarefas que vão mexer nos mesmos arquivos vão para a mesma pessoa, cuja fila as serializa sem blockedBy');
+      expect(md, engine).toContain('A fila é da pessoa: as tarefas de uma mesma pessoa andam uma por vez');
+      expect(md, engine).toContain('as de pessoas diferentes rodam juntas, e entre elas só blockedBy garante a ordem');
+      expect(md, engine).toContain('Tarefas que vão mexer nos mesmos arquivos vão para a mesma pessoa, e a fila dela as serializa sem blockedBy');
+      // O texto antigo prometia ordem que a fila não dá entre pessoas e negava o "mesmo arquivo".
+      expect(md, engine).not.toContain('a fila já anda em ordem');
+      expect(md, engine).not.toContain('a fila espera sozinha');
+      expect(md, engine).not.toContain('mexer no mesmo arquivo ou assunto não basta');
+      expect(md, engine).not.toContain('mesmo arquivo ou assunto não basta');
+    }
   });
 
   it('a ficha de quem recebe tarefa diz que a ordem não é dele e como sugerir (mesma linha nos dois motores); sem gestor, sem a seção', () => {

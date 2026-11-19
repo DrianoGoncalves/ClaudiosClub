@@ -25,8 +25,17 @@ export function stuckOf(item: Kinded): StuckAlert | null {
   return item.kind === 'stuck' && s ? s : null;
 }
 
-/** Item de tarefa que não é conversa esperando: o cartão do funcionário não pode ficar amarelo por ele (o servidor leva o `staffId` do responsável). */
-export const isTaskAlert = (item: Kinded): boolean => item.kind === 'blocked' || item.kind === 'question' || item.kind === 'stuck';
+/** O item `stuck` do card que terminou sem editar código (card = código): quem pediu decide, e as saídas são cancelar com motivo ou devolver ao responsável (não abrir o card). */
+export function stuckNoCodeOf(item: Kinded): StuckAlert | null {
+  const s = stuckOf(item);
+  return s?.noCode ? s : null;
+}
+
+/**
+ * Item de tarefa que não é conversa esperando: o cartão do funcionário não pode ficar amarelo por ele (o servidor leva o `staffId` do responsável). O follow-up entra aqui: o `sessionId`
+ * dele é a conversa de trabalho da tarefa (onde o achado vira balão), mas decidir um follow-up não é a conversa esperando você.
+ */
+export const isTaskAlert = (item: Kinded): boolean => item.kind === 'blocked' || item.kind === 'question' || item.kind === 'stuck' || item.kind === 'followUp';
 
 /** O que fazer com o item e o card onde se faz. `taskId` é o que o link abre. */
 export interface AlertAction {
@@ -62,6 +71,8 @@ export function alertAction(item: InboxItem, tr: Tr = t): AlertAction | null {
   const q = questionOf(item);
   if (q) return { action: 'answer', taskId: q.taskId, label: tr(LABEL.answer), title: tr(TITLE.answer) };
   const s = stuckOf(item);
+  // Card sem código: não há "Decidir" que abra o card; a caixa mostra os dois botões (cancelar com motivo, devolver ao responsável).
+  if (s?.noCode) return null;
   if (s?.humanAction) return { action: s.humanAction, taskId: s.taskId, label: tr(LABEL[s.humanAction]), title: tr(TITLE[s.humanAction]), ...(s.humanAction === 'resend' && { direct: true as const }) };
   const b = item.blocked;
   if (item.kind === 'blocked' && b?.humanAction && b.blockerStatus !== 'cancelled') {
@@ -71,14 +82,15 @@ export function alertAction(item: InboxItem, tr: Tr = t): AlertAction | null {
 }
 
 /** O card que o item abre ao clicar: o da tarefa do aviso. */
-export function taskIdOf(item: Kinded & Pick<InboxItem, 'blocked' | 'notStarted'>): string | undefined {
-  return questionOf(item)?.taskId ?? stuckOf(item)?.taskId ?? item.blocked?.taskId ?? item.notStarted?.taskId;
+export function taskIdOf(item: Kinded & Pick<InboxItem, 'blocked' | 'notStarted' | 'followUp' | 'autoCommit'>): string | undefined {
+  return questionOf(item)?.taskId ?? stuckOf(item)?.taskId ?? item.blocked?.taskId ?? item.notStarted?.taskId ?? item.followUp?.taskId ?? item.autoCommit?.taskId;
 }
 
-/** Primeira linha do que foi perguntado, cortada: o que cabe numa linha da caixa. */
+/** O que foi perguntado em um trecho só (as quebras de linha viram espaço: a ressalva da 2ª linha também ajuda a ver se é urgente), cortado em `ASKED_MAX`; a caixa mostra até 4 linhas dele. */
+const ASKED_MAX = 240;
 function askedLine(q: QuestionAlert, tr: Tr): string {
-  const first = (q.questions?.[0]?.question ?? q.text ?? '').trim().split(/\r?\n/)[0]!.trim();
-  const line = first.length > 140 ? `${first.slice(0, 139)}…` : first;
+  const first = (q.questions?.[0]?.question ?? q.text ?? '').replace(/\s+/g, ' ').trim();
+  const line = first.length > ASKED_MAX ? `${first.slice(0, ASKED_MAX - 1)}…` : first;
   const more = (q.questions?.length ?? 0) - 1;
   return more > 0 ? tr('inbox.question.more', { question: line, n: more }) : line;
 }
@@ -103,6 +115,7 @@ export function isFallbackWait(item: Kinded & { id?: string }): boolean {
 export function stuckText(item: Kinded & Pick<InboxItem, 'summary'> & { id?: string }, tr: Tr = t): string {
   const s = stuckOf(item);
   if (s && isFallbackWait(item)) return tr('inbox.stuck.fallback', { task: s.taskTitle });
+  if (s?.noCode) return tr('inbox.stuck.noCode', { task: s.taskTitle });
   if (!s?.humanAction) return item.summary;
   return tr(`inbox.stuck.${s.humanAction}`, { task: s.taskTitle });
 }

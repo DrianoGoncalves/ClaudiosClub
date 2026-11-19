@@ -282,7 +282,7 @@ describe('skills do GitHub: prévia de instalação', () => {
         { path: 'b/dois', name: 'dois', description: '' },
       ],
     };
-    const out = html(createElement(ChooseView, { choose, busy: false, onPick: () => {} }));
+    const out = html(createElement(ChooseView, { choose, picks: [], busy: false, progress: null, error: null, onToggle: () => {}, onToggleAll: () => {}, onPreview: () => {}, onBack: () => {} }));
     expect(out).toContain('Este link tem 2 skills');
     expect(out).toContain('faz o primeiro');
     expect(out).toContain('sem descrição');

@@ -32,6 +32,34 @@ describe('dialogStore (modal no lugar de window.confirm/alert)', () => {
   });
 });
 
+describe('rótulo do botão que confirma (askConfirm com okLabel)', () => {
+  it('chega ao modal só quando pedido; as outras confirmações seguem sem rótulo (o "OK" de sempre)', async () => {
+    const seen: DialogRequest[] = [];
+    const off = onDialogRequest((r) => {
+      seen.push(r);
+      r.resolve(true);
+    });
+    await askConfirm('Excluir esta mensagem?', 'Excluir');
+    await askConfirm('Atualizar agora?');
+    await showAlert('erro');
+    off();
+    expect(seen[0]!.okLabel).toBe('Excluir');
+    expect(seen[1]).not.toHaveProperty('okLabel');
+    expect(seen[2]).not.toHaveProperty('okLabel');
+  });
+
+  it('rótulo vazio vale como ausente ("OK")', async () => {
+    let seen: DialogRequest | null = null;
+    const off = onDialogRequest((r) => {
+      seen = r;
+      r.resolve(false);
+    });
+    expect(await askConfirm('x', '')).toBe(false);
+    off();
+    expect(seen).not.toHaveProperty('okLabel');
+  });
+});
+
 describe('fila do modal (answerHead)', () => {
   const mk = (id: number, log: string[]): DialogRequest => ({
     id,

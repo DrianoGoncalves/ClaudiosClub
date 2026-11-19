@@ -42,27 +42,6 @@ export function ArrowDownIcon({ size = 16 }: { size?: number }) {
   );
 }
 
-/** Seta para cima: subir um lugar na fila de tarefas. */
-export function ArrowUpIcon({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} aria-hidden="true" {...base}>
-      <path d="M12 19V5" />
-      <path d="m5 12 7-7 7 7" />
-    </svg>
-  );
-}
-
-/** Seta para cima sob um traço: levar ao topo da fila de tarefas. */
-export function ArrowTopIcon({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} aria-hidden="true" {...base}>
-      <path d="M5 3h14" />
-      <path d="m18 13-6-6-6 6" />
-      <path d="M12 7v14" />
-    </svg>
-  );
-}
-
 /** Folha com + e −: os arquivos que o funcionário mudou (diff). */
 export function FileDiffIcon({ size = 16 }: { size?: number }) {
   return (
@@ -266,6 +245,25 @@ export function TasksIcon({ size = 12 }: { size?: number }) {
       <path d="M4 6l1 1 2-2" />
       <path d="M4 12l1 1 2-2" />
       <path d="M4 18h2" />
+    </svg>
+  );
+}
+
+/** Pausar (duas barras): pausa o projeto (nada novo começa sozinho). */
+export function PauseIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M8 5v14" />
+      <path d="M16 5v14" />
+    </svg>
+  );
+}
+
+/** Retomar (triângulo): tira o projeto da pausa. */
+export function PlayIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M7 4.5v15l12-7.5z" />
     </svg>
   );
 }

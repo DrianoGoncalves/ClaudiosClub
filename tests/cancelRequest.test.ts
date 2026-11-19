@@ -732,7 +732,7 @@ describe('a decisão do responsável', () => {
     expect(out.cancelRequest!.decidedAt).toBeTruthy();
     expect(out.history.at(-1)!.note).toBe('cancelada: aceito o pedido do Gio (pedido de cancelamento aceito)');
     expect(b.notified.at(-1)).toMatchObject({ staffId: 'gio-1', session: 'c-gio-1' });
-    expect(b.notified.at(-1)!.text).toContain('foi cancelada por Ana: aceito o pedido do Gio');
+    expect(b.notified.at(-1)!.text).toContain('foi cancelada por Ana: “aceito o pedido do Gio”');
     // Cancelar não desfaz arquivos: a conversa e a branch ficam como estavam.
     expect(out.sessionId).toBe(t.sessionId);
   });

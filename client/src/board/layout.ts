@@ -36,7 +36,7 @@ export type UserNodeData = { agentCount: number; skillCount: number; header: Hea
 export type ProjectNodeData = {
   project: Project;
   live: LiveSession[];
-  /** Quem está ao vivo, uma linha por funcionário (o hover do "N ao vivo"); `live` segue com uma entrada por conversa. */
+  /** Quem está ao vivo, uma linha por funcionário (o hover de "N conversas ativas"); `live` segue com uma entrada por conversa. */
   liveWho: LiveLine[];
   cost: CostSummary | null;
   archived: boolean;

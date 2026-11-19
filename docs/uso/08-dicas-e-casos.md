@@ -145,6 +145,7 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 1. **RH e ranking** (topo do quadro) → aba **Gastos** → escolha o **Período** → lupa **Analisar o custo de {nome}**.
 2. Veja os achados por prioridade. Revise as caixas marcadas e clique em **Aplicar sugestões (n)** → **Confirmar e aplicar**.
 3. Na ficha, aba **Ficha**, ajuste **Modelo** e **Esforço** (valem a partir da próxima sessão). Tarefa simples não precisa de Opus.
+   - Quem edita código deve ser **pensador**: confira que o **Roteiro** da ficha é **Planeja grande, executa pequeno**. A lista **Quem ajuda neste roteiro** mostra o modelo do executor (Sonnet) e do executor rápido (Haiku). Ficha contratada antes não ganha o roteiro sozinha: escolha-o e salve.
 4. **Configurações** → **Consumo** → **Orçamento por projeto** e **Trava de consumo: 5 horas** / **7 dias**. Passando da porcentagem, o Club pergunta antes de conversar.
 5. **Configurações** → **Conversa** → **Conversa nova quando o assunto fecha** → **Seguir sozinho numa nova (recomendado)**.
 6. Dentro de uma conversa grande, clique em **Compactar** para liberar contexto. Para começar do zero, use **+** (Nova conversa) no painel do funcionário; a ficha e a memória continuam.
@@ -172,6 +173,9 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 - **Voltar até aqui** desfaz arquivos, não comandos (instalar, banco, git).
 - **Revisor(a)** e **Segurança (AppSec)** dão parecer; a correção vira tarefa nova para quem é da área.
 - Para mapear um projeto já existente, crie o agent **Pesquisador (Haiku, só leitura)** com **Novo agent** no painel do projeto e peça o mapa a ele.
+- Pensador × executor: o funcionário planeja e confere; o **Executor (Sonnet)** implementa o que ele decidiu e o **Executor rápido (Haiku)** só faz tarefa mecânica, sem julgamento. Mudança local, conhecida e de baixo risco o funcionário faz sozinho: não é falha dele.
+- Cartão de agent com "O pronto atual de “executor” é Sonnet · Medium; este usa …": o arquivo é seu e o Club não o troca. Para seguir o pronto, **Editar** → **Usar Sonnet · Medium** → **Salvar agent**.
+- **Rodar testes** demorando a começar: outra suíte completa pode estar rodando no computador (uma por vez). Ver `04-tarefas.md`, **Uma suíte pesada por vez**.
 
 ## Erros comuns
 

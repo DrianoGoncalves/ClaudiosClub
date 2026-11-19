@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Autonomy, Effort } from '../../../shared/model';
+import type { Autonomy, Effort, Playbook } from '../../../shared/model';
 import type { RoleEntry } from '../../../shared/roles';
 import { api } from '../api';
 import { effortLabel } from '../format';
 import { t } from '../i18n';
-import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, modelLabel } from '../staff/templates';
+import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, modelLabel, PLAYBOOK_OPTIONS } from '../staff/templates';
 import { askConfirm } from '../lib/dialogStore';
 
 // Cargos da empresa (config → Cargos): os prontos e os seus. Cada cargo traz o modelo com que o
@@ -22,15 +22,17 @@ interface Draft {
   model: string;
   effort: '' | Effort;
   canHire: boolean;
-  /** Campos dos prontos que o editor não mostra (roteiro, worktree, skills…): voltam como estavam. */
+  /** O roteiro com que o funcionário contratado começa ('' = nenhum): o cargo que implementa já vem com o Planeja grande, executa pequeno. */
+  playbook: '' | Playbook;
+  /** Campos dos prontos que o editor não mostra (worktree, skills…): voltam como estavam. */
   rest: Partial<RoleEntry>;
 }
 
-const blank: Draft = { label: '', role: '', mission: '', autonomy: 'acceptEdits', rules: '', doneWhen: '', model: 'sonnet', effort: 'medium', canHire: false, rest: {} };
+const blank: Draft = { label: '', role: '', mission: '', autonomy: 'acceptEdits', rules: '', doneWhen: '', model: 'sonnet', effort: 'medium', canHire: false, playbook: '', rest: {} };
 
 function toDraft(r: RoleEntry): Draft {
-  const { id, label, role, mission, autonomy, rules, doneWhen, model, effort, canHire, builtin: _b, edited: _e, isDefault: _d, ...rest } = r;
-  return { id, label, role, mission, autonomy, rules: rules.join('\n'), doneWhen, model, effort: effort ?? '', canHire: !!canHire, rest };
+  const { id, label, role, mission, autonomy, rules, doneWhen, model, effort, canHire, playbook, builtin: _b, edited: _e, isDefault: _d, ...rest } = r;
+  return { id, label, role, mission, autonomy, rules: rules.join('\n'), doneWhen, model, effort: effort ?? '', canHire: !!canHire, playbook: playbook ?? '', rest };
 }
 
 export function RolesEditor() {
@@ -72,6 +74,7 @@ export function RolesEditor() {
         model: editing.model,
         effort: editing.effort || null,
         canHire: editing.canHire,
+        playbook: editing.playbook || null,
       }),
     );
     if (ok) setEditing(null);
@@ -136,6 +139,18 @@ export function RolesEditor() {
           ))}
         </select>
       </label>
+      <label>
+        {t('staff.playbookLabel')}
+        <select value={editing.playbook} onChange={(e) => setEditing({ ...editing, playbook: e.target.value as '' | Playbook })}>
+          <option value="">{t('staff.playbookNone')}</option>
+          {PLAYBOOK_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {editing.playbook && <p className="muted small">{PLAYBOOK_OPTIONS.find((o) => o.value === editing.playbook)?.help}</p>}
       <label>
         {t('toolbar.fieldMission')}
         <textarea rows={3} value={editing.mission} maxLength={4000} required onChange={(e) => setEditing({ ...editing, mission: e.target.value })} />

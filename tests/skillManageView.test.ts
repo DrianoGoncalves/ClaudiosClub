@@ -5,7 +5,6 @@ import type { Skill } from '../shared/model';
 import type { SkillSource } from '../client/src/api';
 import { SkillHooksWarning, SkillManage, SkillManageView } from '../client/src/detail/SkillManage';
 import { deletedNotice, hookLabel, hooksChanged, needsHooksConfirm, skillLock, skillRef } from '../client/src/detail/skillAccess';
-import { goneSkills, skillIsGone } from '../client/src/staff/skillGone';
 
 const skill = (over: Partial<Skill> = {}): Skill => ({
   id: 'x',
@@ -204,25 +203,5 @@ describe('skill sincronizada no painel', () => {
       expect(html).toContain('Carregando…');
       expect(html).not.toContain('<button');
     }
-  });
-});
-
-describe('ficha: skill marcada que não existe mais', () => {
-  it('só as marcadas ao abrir que a lista não oferece; lendo a biblioteca, nenhuma', () => {
-    expect(goneSkills(['vps', 'deploy'], ['deploy', 'docs'], 'ok')).toEqual(['vps']);
-    expect(goneSkills(['vps'], [], 'loading')).toEqual([]);
-    expect(goneSkills([], ['docs'], 'ok')).toEqual([]);
-    expect(goneSkills(['vps'], ['vps'], 'ok')).toEqual([]);
-  });
-
-  it('biblioteca que não leu: a linha fica (dá para desmarcar), mas sem acusar que sumiu', () => {
-    expect(goneSkills(['vps'], [], 'failed')).toEqual(['vps']);
-    expect(skillIsGone('vps', 'failed', new Set())).toBe(false);
-    expect(skillIsGone('vps', 'loading', new Set())).toBe(false);
-  });
-
-  it('sincronizada marcada existe: só não é oferecida', () => {
-    expect(skillIsGone('vps', 'ok', new Set())).toBe(true);
-    expect(skillIsGone('vps', 'ok', new Set(['vps']))).toBe(false);
   });
 });

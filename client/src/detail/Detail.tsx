@@ -24,6 +24,7 @@ import { idleUnseen, showsStatus, useSeeIdle, useSeenIdle } from '../board/unrea
 import type { MoreTab } from '../chat/ChatView';
 import type { ChatFocus } from '../chat/chatFocus';
 import { MoreTabs } from '../chat/MoreTabs';
+import { agentBrief, presetDrift, roleTag } from '../staff/agentRoles';
 import { BrowserCheck } from '../staff/BrowserCheck';
 import type { StaffFormTab } from '../staff/HireForm';
 import { ModelObsoleteNote } from '../staff/ModelObsoleteNote';
@@ -44,6 +45,7 @@ import { isLoss, RANKING_PERIODS, type RankingGroup, type RankingRow, rankingRow
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
 import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, PowerIcon, TasksIcon, UserPlusIcon } from '../icons';
+import { PausedTag, PauseButton } from '../tasks/ProjectPauseBar';
 import { closeConversation, runClose } from '../chat/closeConversation';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
 import { GithubInstall } from '../skills/GithubInstall';
@@ -137,8 +139,8 @@ export function EmployeePanel(props: {
   /** Funcionário fantasma: as conversas sem ficha do projeto, num nó só. */
   ghost?: boolean;
   onSessionStarted?: (sessionId: string) => void;
-  /** Arquivo citado numa resposta do chat: abre no editor de arquivos do projeto (relativo à raiz). */
-  onOpenFile?: (path: string) => void;
+  /** Arquivo citado numa resposta do chat (ou o "Corrigir" do aviso de segredo, com a linha): abre no editor de arquivos do projeto (relativo à raiz). */
+  onOpenFile?: (path: string, line?: number) => void;
   /** A ficha mudou por aqui (rotinas): o quadro relê. */
   onChanged?: () => void;
   /** Nível simples: o painel fica só com a conversa. */
@@ -168,6 +170,10 @@ export function EmployeePanel(props: {
   inbox?: InboxItem[];
   /** "Ignorar" no balão de segredo ou de erro da conversa: o mesmo da caixa (some dos dois lados). */
   onDismissAlert?: (item: InboxItem) => Promise<void>;
+  /** Relê a caixa depois de decidir um follow-up no balão da conversa; sem isto o follow-up não vira balão. */
+  onInboxChanged?: () => void | Promise<void>;
+  /** A equipe do projeto: quem pode receber o card criado pelo balão de follow-up. */
+  team?: ReadonlyArray<Pick<StaffProfile, 'id' | 'name'>>;
   /**
    * Editando pelo RH: as mesmas abas do "Mais", mas no lugar da conversa, com o seletor de projeto (a mesma pessoa em
    * outros projetos) e o "Conversar", que abre o painel dela no chat do projeto escolhido.
@@ -469,11 +475,14 @@ export function EmployeePanel(props: {
             {!current && <option value="">{t('detail.newConversation')}</option>}
             {byDay(inArchive ? archivedList : active).map((g) => (
               <optgroup key={g.label} label={g.label}>
-                {g.items.map(({ c }) => (
-                  <option key={c.id} value={c.id}>
-                    {(unread(c.id) ? '● ' : '') + conversationLabel(c)}
-                  </option>
-                ))}
+                {g.items.map(({ c }) => {
+                  const o = conversationOption(c, !!liveOf(c.id)?.alive, unread(c.id));
+                  return (
+                    <option key={c.id} value={c.id} className={o.className}>
+                      {o.label}
+                    </option>
+                  );
+                })}
               </optgroup>
             ))}
             {inArchive ? (
@@ -749,6 +758,8 @@ export function EmployeePanel(props: {
         awaiting={!!opened && !!props.inbox?.some((i) => i.sessionId === opened)}
         inbox={props.inbox}
         onDismissAlert={props.onDismissAlert}
+        onInboxChanged={props.onInboxChanged}
+        team={props.team}
       />
     </Suspense>
   );
@@ -771,6 +782,18 @@ function conversationLabel(c: { title: string | null; updatedAt: string | null }
   const title = full.length > 48 ? `${full.slice(0, 47)}…` : full;
   const when = c.updatedAt ? new Date(c.updatedAt).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' }) : '';
   return when ? `${when} — ${title}` : title;
+}
+
+/**
+ * A linha da conversa no seletor. Ativa (processo aberto): "· ativa" no fim, que vale em todo navegador (o celular
+ * ignora a cor da opção). Inativa: classe `is-idle`, que o CSS põe em `--muted`; escolher uma inativa a reabre quando você manda mensagem.
+ * "● " = ativa e parada que você ainda não viu.
+ */
+export function conversationOption(c: { title: string | null; updatedAt: string | null }, alive: boolean, unread: boolean): { label: string; className: string } {
+  return {
+    label: `${unread ? '● ' : ''}${conversationLabel(c)}${alive ? ` · ${t('detail.convActive')}` : ''}`,
+    className: alive ? 'is-active' : 'is-idle',
+  };
 }
 
 /** As conversas por dia (Hoje, Ontem, depois a data), na ordem da lista; `i` é a posição na lista toda. */
@@ -884,6 +907,7 @@ export function ProjectPanel({
   onEditAgent,
   onSkillsChanged,
   onTasks,
+  onTogglePause,
   onFiles,
   onOpenFile,
   onOpenConversation,
@@ -905,6 +929,8 @@ export function ProjectPanel({
   onEditAgent?: (name: string) => void;
   /** Abre o quadro de tarefas do projeto. */
   onTasks?: () => void;
+  /** Pausa o projeto (ou o retoma, se `tasks.paused`): o App pergunta ao pausar e relê o resumo. */
+  onTogglePause?: () => void;
   /** Abre os arquivos do projeto (árvore + editor). */
   onFiles?: () => void;
   /** Tarefas abertas, em revisão e o último deploy. */
@@ -973,6 +999,7 @@ export function ProjectPanel({
           {project.worktreeOf && <span className="badge">{t('detail.worktreeOf', { name: basename(project.worktreeOf) })}</span>}
           {!project.exists && <span className="badge warn">{t('detail.folderMissing')}</span>}
           {archived && <span className="badge dim">{t('detail.archived')}</span>}
+          {tasks?.paused && <PausedTag pause={tasks.paused} now={Date.now()} className="badge is-paused" />}
         </p>
         <p className="actions">
           {project.exists && (
@@ -991,6 +1018,7 @@ export function ProjectPanel({
               <FolderIcon size={16} />
             </button>
           )}
+          {project.exists && onTogglePause && <PauseButton paused={!!tasks?.paused} iconOnly onClick={onTogglePause} />}
           <ArchiveButton archived={archived} onArchive={onArchive} what={t('detail.whatProjectAndStaff')} iconOnly confirm />
         </p>
         {tasks && (
@@ -1651,7 +1679,7 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
   );
 }
 
-function AgentList({
+export function AgentList({
   agents,
   empty,
   onNew,
@@ -1674,23 +1702,38 @@ function AgentList({
       </h3>
       {agents.length === 0 && <p className="muted">{empty}</p>}
       <ul className="cards">
-        {agents.map((a) => (
-          <li key={a.id} className={`card ${a.error ? 'card-error' : ''}`}>
-            <div className="card-title">
-              {a.name}
-              {(a.model || a.effort) && <span className="badge">{[a.model, a.effort && effortLabel(a.effort)].filter(Boolean).join(' / ')}</span>}
-              <LinkBadge link={a.link} />
-              {a.duplicate && <span className="badge warn">{t('detail.duplicateName')}</span>}
-              {onEdit && !a.error && (
-                <button className="btn-secondary card-action" onClick={() => onEdit(a.name)}>
-                  {t('detail.edit')}
-                </button>
+        {agents.map((a) => {
+          // Pronto cujo arquivo ficou noutro modelo (o executor no Haiku antigo, por exemplo): o arquivo é de quem o editou, não muda sozinho.
+          const drift = a.error ? null : presetDrift(a.name, a.model, a.effort);
+          const tag = roleTag(a.name);
+          return (
+            <li key={a.id} className={`card ${a.error ? 'card-error' : ''}`}>
+              <div className="card-title">
+                {a.name}
+                {tag && <span className="badge dim">{tag}</span>}
+                {(a.model || a.effort) && <span className="badge">{[a.model, a.effort && effortLabel(a.effort)].filter(Boolean).join(' / ')}</span>}
+                <LinkBadge link={a.link} />
+                {a.duplicate && <span className="badge warn">{t('detail.duplicateName')}</span>}
+                {onEdit && !a.error && (
+                  <button className="btn-secondary card-action" onClick={() => onEdit(a.name)}>
+                    {t('detail.edit')}
+                  </button>
+                )}
+              </div>
+              {a.description && <p className="card-desc">{a.description}</p>}
+              {drift?.model && (
+                <p className="muted small">
+                  {t('staff.presetDriftList', {
+                    name: a.name,
+                    preset: agentBrief(drift.preset.model, drift.preset.effort),
+                    current: agentBrief(a.model, a.effort),
+                  })}
+                </p>
               )}
-            </div>
-            {a.description && <p className="card-desc">{a.description}</p>}
-            {a.error && <p className="error">{a.error}</p>}
-          </li>
-        ))}
+              {a.error && <p className="error">{a.error}</p>}
+            </li>
+          );
+        })}
       </ul>
     </section>
   );

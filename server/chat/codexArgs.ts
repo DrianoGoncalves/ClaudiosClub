@@ -1,4 +1,4 @@
-import { statSync, type Stats } from 'node:fs';
+import { lstatSync, statSync, type Stats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { FTP_MCP_NAME, GPT_MCP_NAME, MEMORIA_MCP_NAME, type Autonomy } from '../../shared/model';
@@ -134,7 +134,8 @@ export interface CodexSafetyOptions extends CodexSecretContext {
  * Argumentos de segurança de TODA execução do Codex dentro do Claudio’s Club: os do motor dos funcionários e os de qualquer ferramenta que
  * abra o `codex exec` (ex.: "perguntar ao GPT", só leitura). Não dependem de ficha. Devolve, para pôr depois de `exec`:
  *
- * - `--ignore-user-config`: não lê o ~/.codex/config.toml (MCPs, plugins e modelo padrão do usuário ficam de fora; o login continua).
+ * - `--ignore-user-config`: não lê o ~/.codex/config.toml (MCPs, plugins e modelo padrão do usuário ficam de fora; o login continua). Não vale
+ *   para o `hooks.json` da conta (`accountHooksFile`): ele é lido assim mesmo e, com a flag de confiança, rodaria sem confirmação.
  * - `-c features.apps=false`: sem os conectores da conta do ChatGPT (GitHub, e-mail, Notion, deploy…), que rodam FORA da sandbox.
  * - `-c approval_policy="never"`: o exec não tem quem responda; a sandbox decide.
  * - `-c web_search="live"` ou `"disabled"` (opção `webSearch`, a "Permitir acesso à internet" das Configurações): a busca na web é uma
@@ -145,7 +146,8 @@ export interface CodexSafetyOptions extends CodexSecretContext {
  * - o perfil de permissões (`codexProfileArgs`): sandbox, negações de segredos e rede. O perfil substitui o `-s`: nunca passe `-s` junto.
  *
  * Nunca `danger-full-access` nem `--dangerously-*`. A única exceção, `--dangerously-bypass-hook-trust` do hook da fila de validação pesada, é só
- * do motor dos funcionários (`codexHeavyArgs`, no `buildCodexArgs`) e não passa por aqui. Quem chama monta o resto (`-C`, `-m`, `--json`, o prompt).
+ * do motor dos funcionários (`codexHeavyArgs`, no `buildCodexArgs`, e só se a conta não tem `hooks.json`) e não passa por aqui. Quem chama monta o
+ * resto (`-C`, `-m`, `--json`, o prompt).
  */
 export function codexSafetyArgs(o: CodexSafetyOptions): string[] {
   const webSearch = o.webSearch === true ? 'web_search="live"' : 'web_search="disabled"';
@@ -234,10 +236,17 @@ export function codexMemoriaMcpArgs(s: CodexMcpServer | null | undefined): strin
 /**
  * A fila de validação pesada no terminal do Codex: o mesmo hook do Claude (scripts/hooks/heavy-guard.mjs; a lógica está em heavy-lock.mjs).
  * O Codex só roda hook inline (`-c hooks.*`) com confiança gravada ou com `--dangerously-bypass-hook-trust` (provado no 0.169.0: sem a flag o hook
- * não dispara). O Claudio’s Club usa a flag aqui, só neste `codex exec` e só com o hook dele (decisão do Denzel na t-aafb19), e isso deixa de ser
- * verdade para qualquer outro hook: com `--ignore-user-config` não entram os hooks do usuário (config.toml), e os do projeto só valem em projeto
- * confiado (a confiança também mora no config do usuário). Hook de sistema (gerenciado) já valia sem a flag. Quem NÃO usa a flag: o `perguntar_gpt`
- * (codexSafetyArgs), que só lê.
+ * não dispara). O Claudio’s Club usa a flag aqui, só neste `codex exec` e só com o hook dele (decisão do Denzel na t-aafb19). A flag vale para
+ * TODO hook que o Codex carrega, não só para o nosso. Auditoria t-3bea79 (Codex 0.169.0):
+ * - hooks do projeto (`<projeto>/.codex/`): não rodam com `--ignore-user-config` (a confiança do projeto mora no config do usuário);
+ * - `$CODEX_HOME/hooks.json` (padrão ~/.codex/hooks.json): RODA, apesar do `--ignore-user-config` (que só tira o config.toml). Com a flag, sai
+ *   fora da sandbox, sem confirmação e com o ambiente da conversa (inclusive o MYCO_TOKEN), em toda conversa Codex do Club;
+ * - hook de sistema (gerenciado) já valia sem a flag.
+ * Por isso a flag só sai quando a conta NÃO tem `hooks.json` (`accountHooksFile`, conferido a cada execução): com ele, a conversa roda sem a
+ * flag e sem o hook, ou seja, sem a fila, e quem chama avisa (`onHeavyGuardOff`). Resíduos: a corrida entre a checagem e o `exec` (um
+ * `hooks.json` criado nesse intervalo roda nesta execução; a próxima já o vê) e a lista de lugares de hook do Codex, que muda de versão para
+ * versão (plugins, outro nome de arquivo): revisar a cada Codex novo (tests/codexHooksE2e.test.ts, com MYCO_CODEX_E2E=1, refaz a matriz).
+ * Quem NÃO usa a flag: o `perguntar_gpt` (codexSafetyArgs), que só lê.
  */
 export interface CodexHeavyGuard {
   /** O heavy-guard.mjs, a cópia na pasta da conversa: o hook roda FORA da sandbox, então o agente não pode editá-lo. */
@@ -254,16 +263,43 @@ export const CODEX_HEAVY_LEASE_S = 12 * 60;
 const CODEX_HEAVY_PRE_TIMEOUT_S = 15 * 60;
 const CODEX_HEAVY_POST_TIMEOUT_S = 30;
 
+/** A pasta de dados do Codex como ele a acha: `CODEX_HOME` (vazia vale como ausente; relativa, a partir da pasta onde o `codex` roda) ou `~/.codex`. */
+function codexHomeDir(cwd: string, env: NodeJS.ProcessEnv, home: string): string {
+  return env.CODEX_HOME ? path.resolve(cwd, env.CODEX_HOME) : path.join(home, '.codex');
+}
+
 /**
- * Os `-c hooks.PreToolUse/PostToolUse` e a flag de confiança da fila de validação pesada. `command` é uma linha de shell (o Codex roda a de hook
- * pelo shell, cmd ou PowerShell): `node` do PATH e os caminhos entre aspas, que valem nos dois. Caminho com aspas não cabe: sem fila. O Codex
- * entrega o PostToolUse de um comando longo quando ele acaba (também o que sai com erro), então a trava solta no fim da suíte.
+ * O `hooks.json` da conta do Codex (`$CODEX_HOME/hooks.json`, ou ~/.codex/hooks.json), ou null se não existe. Conta como existente qualquer
+ * coisa no caminho (arquivo, pasta, link, mesmo que quebrado) e qualquer erro que não seja "não existe": sem provar que não há, é que há (falha
+ * fechada, a flag de confiança não sai). `env` é o ambiente que o `codex` recebe (CODEX_HOME vem dele); `cwd`, a pasta onde ele roda. Ver `codexHeavyArgs`.
  */
-export function codexHeavyArgs(g: CodexHeavyGuard | null | undefined): string[] {
-  if (!g) return [];
-  const paths = [g.hook, g.lockDir].map((p) => p.replace(/\\/g, '/'));
-  if (paths.some((p) => /["`$%\r\n]/.test(p))) return [];
-  const run = (stage: 'pre' | 'post') => `node "${paths[0]}" "${paths[1]}" ${stage} ${g.ownerPid} ${CODEX_HEAVY_LEASE_S}`;
+export function accountHooksFile(cwd: string, env: NodeJS.ProcessEnv = process.env, home: string = os.homedir()): string | null {
+  const file = path.join(codexHomeDir(cwd, env, home), 'hooks.json');
+  try {
+    lstatSync(file);
+    return file;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? null : file;
+  }
+}
+
+/**
+ * Os `-c hooks.PreToolUse/PostToolUse` e a flag de confiança da fila de validação pesada. `command` é uma linha de shell que o Codex roda pelo
+ * shell dele: no Windows o PowerShell (provado no 0.169.0: `powershell -NoProfile -Command`), no resto o sh. O `node` é o que roda o Claudio’s Club
+ * (`process.execPath`, caminho absoluto), não o que o PATH achar: o hook roda FORA da sandbox, então não depende de qual `node` vem primeiro no
+ * PATH da conversa. O PowerShell não executa uma string entre aspas sozinha (`"C:/Program Files/nodejs/node.exe" ...` dá erro de sintaxe,
+ * provado no 0.169.0): precisa do `&` na frente; o sh não tem `&` assim.
+ * Os caminhos vão entre aspas. Caminho com aspas, `$`, `%`, crase ou quebra de linha não cabe: sem fila (e sem a flag).
+ * `accountHooks` (o que `accountHooksFile` achou): com ele, nada, nem a flag nem o hook (ver `CodexHeavyGuard`).
+ * O Codex entrega o PostToolUse de um comando longo quando ele acaba (também o que sai com erro), então a trava solta no fim da suíte.
+ */
+export function codexHeavyArgs(g: CodexHeavyGuard | null | undefined, o: { accountHooks?: string | null; platform?: NodeJS.Platform } = {}): string[] {
+  if (!g || o.accountHooks) return [];
+  const [node, ...paths] = [process.execPath, g.hook, g.lockDir].map((p) => p.replace(/\\/g, '/'));
+  if ([node, ...paths].some((p) => /["`$%\r\n]/.test(p!))) return [];
+  const exe = `${(o.platform ?? process.platform) === 'win32' ? '& ' : ''}"${node}"`;
+  const run = (stage: 'pre' | 'post') => `${exe} "${paths[0]}" "${paths[1]}" ${stage} ${g.ownerPid} ${CODEX_HEAVY_LEASE_S}`;
   const group = (stage: 'pre' | 'post', timeout: number) =>
     `[{matcher=${tomlString('Bash')},hooks=[{type=${tomlString('command')},command=${tomlString(run(stage))},timeout=${timeout}}]}]`;
   return [
@@ -534,6 +570,10 @@ export interface CodexRunOptions {
   agents?: CodexAgentRole[];
   /** A fila de validação pesada no terminal (ver `codexHeavyArgs`); ausente = sem ela. */
   heavyGuard?: CodexHeavyGuard | null;
+  /** O ambiente que o `codex` vai receber (de onde sai o CODEX_HOME para achar o hooks.json da conta); ausente = o do servidor. */
+  env?: NodeJS.ProcessEnv;
+  /** A conta tem `hooks.json` e a fila ficou de fora desta execução (sem a flag de confiança e sem o hook): quem chama avisa. Ver `accountHooksFile`. */
+  onHeavyGuardOff?: (hooksFile: string) => void;
 }
 
 /**
@@ -600,7 +640,10 @@ export function buildCodexArgs(o: CodexRunOptions): string[] {
   args.push(...codexCleanBrowserMcpArgs(o.cleanMcp));
   args.push(...codexExtraMcpArgs(o.extraMcps));
   args.push(...codexAgentArgs(o.agents));
-  args.push(...codexHeavyArgs(o.heavyGuard));
+  // A cada execução (o hooks.json pode surgir no meio da conversa): com ele na conta, nem a flag de confiança nem o hook.
+  const accountHooks = o.heavyGuard ? accountHooksFile(o.cwd, o.env) : null;
+  if (accountHooks) o.onHeavyGuardOff?.(accountHooks);
+  args.push(...codexHeavyArgs(o.heavyGuard, { accountHooks, platform: o.platform }));
   if (o.instructions && instructionsInArgv(o.instructions, o.platform)) args.push('-c', `developer_instructions=${tomlString(o.instructions)}`);
   if (resume) args.push(o.threadId!);
   args.push('-');

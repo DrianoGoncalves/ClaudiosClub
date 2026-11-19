@@ -21,6 +21,7 @@ import { effortLabel, employeeName, folderName } from '../format';
 import { t, type MsgKey } from '../i18n';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
 import { ProtocolBadge } from '../office/ProtocolBadge';
+import { rosterRows } from './agentRoles';
 import { BrowserCheck } from './BrowserCheck';
 import { CopyFromCompany } from './CopyFromCompany';
 import { differingFields, PERSON_FIELD_LABEL } from './directory';
@@ -42,7 +43,8 @@ import { rangeParams, WEIGHT_MB } from './mcpWeight';
 import { WeightFlags, type WeightCtx } from './WeightFlag';
 import { PersonMemory } from './PersonMemory';
 import { PERSONALITY_TEXT, personalityToSend } from './personalityField';
-import { goneSkills, skillIsGone, type LibraryState } from './skillGone';
+import { goneSkills, skillIsGone } from './skillGone';
+import { normalizeSkills, parseSkillRef, skillCatalog, SKILL_SCOPE_LABEL, templateSkills } from './skillRefs';
 import { PERSONALITIES, type Personality } from '../../../shared/personality';
 import type { RoleEntry } from '../../../shared/roles';
 import {
@@ -61,6 +63,9 @@ import {
   useCodexCatalog,
 } from './codexEngine';
 import { ModelObsoleteNote, obsoleteFor } from './ModelObsoleteNote';
+import { PlaybookRoster } from './PlaybookRoster';
+import { planImpasse } from './planImpasse';
+import { PlanImpasseNote } from './PlanImpasseNote';
 import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, modelLabel, PLAYBOOK_OPTIONS } from './templates';
 
 // Questionário do funcionário: contratar (vira a ficha em <projeto>/.myco/staff/) ou editar
@@ -91,6 +96,8 @@ interface Props {
   codexReview?: boolean | null;
   /** "Permitir que o GPT use meu Chrome" nas configurações: desligado, a caixa do Chrome da ficha Codex não vale (a ficha avisa). */
   codexBrowser?: boolean | null;
+  /** Só para teste: o que o cargo preenche ao contratar (a renderização no servidor não roda os efeitos que o aplicam). */
+  initial?: { autonomy?: Autonomy; agents?: string[] };
   onClose: () => void;
   onHired: (profile: StaffProfile, launch: LaunchResult | null) => void;
   onSaved: (profile: StaffProfile) => void;
@@ -112,7 +119,7 @@ const TABS: Array<{ id: Tab; label: string; intro: string }> = [
 /** De onde vem o MCP, na lista da ficha. */
 const MCP_SOURCE_LABEL = { club: 'staff.sourceClub', user: 'staff.sourceUser', local: 'staff.sourceLocal', project: 'staff.sourceProject' } as const satisfies Record<McpServerInfo['source'], MsgKey>;
 
-export function StaffForm({ board, projectId, mode, simple = false, embedded = false, tab: tabProp, onTab, onDirty, codexReview = false, codexBrowser = false, onClose, onHired, onSaved }: Props) {
+export function StaffForm({ board, projectId, mode, simple = false, embedded = false, tab: tabProp, onTab, onDirty, codexReview = false, codexBrowser = false, initial, onClose, onHired, onSaved }: Props) {
   const editing = mode.kind === 'edit' ? mode.profile : null;
   const adopting = mode.kind === 'adopt' ? mode.session : null;
   // No simples, a ficha inteira fica a um clique ("Mostrar todos os campos").
@@ -127,28 +134,12 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     () => [...new Set([...inventory.agents, ...board.user.agents].map((a) => a.name))].sort(),
     [inventory, board.user],
   );
-  // As da biblioteca do Claudio’s Club só carregam para quem tem na ficha (as do projeto e da conta, todos veem).
-  const [library, setLibrary] = useState<string[]>([]);
-  // Só com a biblioteca lida dá para dizer que uma skill marcada sumiu (a da biblioteca chega depois das do projeto e da conta).
-  const [libraryState, setLibraryState] = useState<LibraryState>('loading');
-  useEffect(() => {
-    api.skillLibrary().then(
-      (l) => {
-        setLibrary(l.map((s) => s.name));
-        setLibraryState('ok');
-      },
-      () => setLibraryState('failed'),
-    );
-  }, []);
-  const skillNames = useMemo(
-    () => [...new Set([...inventory.skills, ...board.user.skills.filter((s) => s.scope !== 'synced')].map((s) => s.name).concat(library))].sort(),
-    [inventory, board.user, library],
-  );
-  // Skill que a ficha já tinha marcada e a lista não oferece mais (apagada ou renomeada; a sincronizada nunca é oferecida): continua à
+  // As skills são por escopo, como a ficha as grava: `global:<nome>` (conta e sincronizadas) e `project:<nome>` (pasta do projeto).
+  // O mesmo nome nos dois escopos são duas linhas. Projeto sem inventário lido: não dá para dizer que uma skill dele sumiu.
+  const skillSet = useMemo(() => skillCatalog(board.inventories[projectId]?.skills, board.user.skills), [board.inventories, projectId, board.user]);
+  // Skill que a ficha já tinha marcada e a lista não oferece (apagada ou renomeada; a sincronizada nunca é oferecida): continua à
   // vista para dar para desmarcar. Vem da ficha ao abrir, e não do que está marcado agora: desmarcar não faz a linha sumir.
-  const gone = useMemo(() => goneSkills(editing?.skills ?? [], skillNames, libraryState), [editing, skillNames, libraryState]);
-  const syncedSkills = useMemo(() => new Set(board.user.skills.filter((s) => s.scope === 'synced').map((s) => s.name)), [board.user]);
-  const skillGone = (s: string) => skillIsGone(s, libraryState, syncedSkills);
+  const gone = useMemo(() => goneSkills(normalizeSkills(editing?.skills ?? [], skillSet), skillSet), [editing, skillSet]);
   const colleagues = board.staff.filter((s) => s.projectId === projectId && s.id !== editing?.id);
 
   const [name, setName] = useState(editing?.name ?? (adopting ? employeeName(adopting).slice(0, 60) : ''));
@@ -157,9 +148,10 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     editing?.mission ?? (adopting ? `Dar continuidade ao trabalho desta sessão${adopting.title ? `: ${adopting.title}` : ''}.` : ''),
   );
   const [managers, setManagers] = useState<string[]>(editing?.reportsTo ?? (mode.kind === 'hire' ? mode.reportsTo : []));
-  const [autonomy, setAutonomy] = useState<Autonomy>(editing?.autonomy ?? 'manual');
-  const [agents, setAgents] = useState<string[]>(editing?.agents ?? []);
-  const [skills, setSkills] = useState<string[]>(editing?.skills ?? []);
+  const [autonomy, setAutonomy] = useState<Autonomy>(editing?.autonomy ?? initial?.autonomy ?? 'manual');
+  const [agents, setAgents] = useState<string[]>(editing?.agents ?? initial?.agents ?? []);
+  // Nome antigo (ficha que o servidor ainda não migrou) entra já como ref; ao salvar, a ficha passa a guardar a ref.
+  const [skills, setSkills] = useState<string[]>(() => normalizeSkills(editing?.skills ?? [], skillSet));
   const [mcps, setMcps] = useState<McpServerInfo[] | null>(null);
   const [mcpOn, setMcpOn] = useState<Set<string>>(new Set());
   // Acesso por MCP (Livre / Pede antes de escrever / Só leitura / Desligado), nos dois motores. Guarda também as chaves que a tela não
@@ -285,7 +277,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     setPlaybook(tpl.playbook ?? '');
     setCanHire(!!tpl.canHire);
     if (tpl.worktree !== undefined) setWorktree(tpl.worktree);
-    if (tpl.skills) setSkills([...new Set([...skills, ...tpl.skills.filter((s) => skillNames.includes(s))])]);
+    // O cargo guarda só o nome: vale a mesma regra do nome antigo (Global, senão Projeto), e só as que a lista oferece.
+    if (tpl.skills) setSkills(templateSkills(tpl.skills, skills, skillSet));
     setShowServers(!!tpl.servers || servers.length > 0);
     if (tpl.pickExecutors && !codex) {
       // Agents com modelo menor que o do orquestrador são os executores naturais.
@@ -293,17 +286,22 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
         .filter((a) => a.model && /haiku|sonnet/i.test(a.model))
         .map((a) => a.name);
       setAgents([...new Set(executors)]);
+      // Com roteiro, o executor e os outros são criados quando a conversa abre: sem agent no projeto não há o que avisar.
       setTip(
-        executors.length
+        executors.length || tpl.playbook
           ? null
           : t('staff.tipNoExecutors', { preset: t('staff.presetExecutor'), newAgent: t('staff.newAgent') }),
       );
     }
   };
   const [tip, setTip] = useState<string | null>(null);
-  const modelOf = useMemo(
-    () => new Map([...inventory.agents, ...board.user.agents].map((a) => [a.name, a.model])),
-    [inventory, board.user],
+  const agentFiles = useMemo(() => [...inventory.agents, ...board.user.agents], [inventory, board.user]);
+  const modelOf = useMemo(() => new Map(agentFiles.map((a) => [a.name, a.model])), [agentFiles]);
+  // "Só planeja" com agent que edita ou MCP (navegador incluso) "Livre" marcado: avisa o impasse (não impede salvar).
+  const impasse = planImpasse({ autonomy, engine, agents, agentFiles, playbook, mcps, mcpOn, mcpAccess, browser, codexBrowser: !!codexBrowser });
+  const roster = useMemo(
+    () => (playbook ? rosterRows(playbook, new Map(agentFiles.map((a) => [a.name, { model: a.model, effort: a.effort }])), codex) : []),
+    [playbook, agentFiles, codex],
   );
 
   const pickPortrait = (file: File | undefined) => {
@@ -325,24 +323,14 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   // Lista vazia ou que não carregou não conta como "todos marcados" (senão gravaria null).
   const allMcps = mcps !== null && mcps.length > 0 && mcps.every((m) => mcpOn.has(m.name));
 
-  /** Escolher um roteiro marca os agents que ele usa, se o projeto tiver. */
+  /** Escolher um roteiro marca os agents que ele usa e o projeto já tem; os que faltam o Claudio’s Club cria ao abrir a conversa (a lista "Quem ajuda"). */
   const pickPlaybook = (value: '' | Playbook) => {
     setPlaybook(value);
+    setTip(null);
     const option = PLAYBOOK_OPTIONS.find((o) => o.value === value);
-    // No Codex não há agents para marcar: ele faz cada papel do roteiro sozinho.
-    if (!option || codex) return setTip(null);
-    const found = option.agents.filter((a) => agentNames.includes(a));
-    const missing = option.agents.filter((a) => !agentNames.includes(a));
-    setAgents([...new Set([...agents, ...found])]);
-    setTip(
-      missing.length
-        ? t('staff.tipPlaybookMissing', {
-            playbook: option.label,
-            agents: missing.map((a) => `“${a}”`).join(', '),
-            newAgent: t('staff.newAgent'),
-          })
-        : null,
-    );
+    // No Codex os agents do roteiro vão sozinhos como subagents: a lista de marcar nem aparece.
+    if (!option || codex) return;
+    setAgents([...new Set([...agents, ...option.agents.filter((a) => agentNames.includes(a))])]);
   };
 
   /** Trocar de motor limpa o modelo (e o esforço) que não servem ao outro. */
@@ -569,6 +557,9 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                 })}
               </p>
             )}
+            {!editing && template?.playbook && !codex && (
+              <p className="muted small">{PLAYBOOK_OPTIONS.find((o) => o.value === template.playbook)?.help}</p>
+            )}
             <WeightFlags ctx={weightCtx} ids={['claude', 'gpt', 'browser', 'model', 'effort']} />
             <p className="small">
               <button type="button" className="link" onClick={() => setFull(true)}>
@@ -747,6 +738,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           </select>
         </label>
         {playbook && <p className="muted small">{codex ? t('staff.codexPlaybookNote') : PLAYBOOK_OPTIONS.find((o) => o.value === playbook)?.help}</p>}
+        {playbook && <PlaybookRoster rows={roster} />}
         {tip && (
           <p className="badge warn" role="note">
             {tip}
@@ -794,10 +786,10 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           <p className="muted small">{t('staff.codexToolsNote')}</p>
         ) : (
           <>
-        {agentNames.length === 0 && skillNames.length === 0 && gone.length === 0 && (
+        {agentNames.length === 0 && skillSet.offered.length === 0 && gone.length === 0 && (
           <p className="muted small">{t('staff.noAgentsSkills')}</p>
         )}
-        {(agentNames.length > 0 || skillNames.length > 0 || gone.length > 0) && (
+        {(agentNames.length > 0 || skillSet.offered.length > 0 || gone.length > 0) && (
           <fieldset>
             <legend>{t('staff.suggested')}</legend>
             <p className="muted small">{t('staff.suggestedHint')}</p>
@@ -808,24 +800,25 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                   <span className="muted small"> {t('staff.agentTag')} · {modelOf.get(a) ?? t('staff.callerModel')}</span>
                 </label>
               ))}
-              {skillNames.map((s) => (
-                <label key={`s:${s}`} className="check">
-                  <input type="checkbox" checked={skills.includes(s)} onChange={() => toggle(skills, setSkills, s)} /> {s}
-                  <span className="muted small"> {library.includes(s) ? t('office.libTag') : t('staff.skillTag')}</span>
+              {skillSet.offered.map((s) => (
+                <label key={`s:${s.ref}`} className="check">
+                  <input type="checkbox" checked={skills.includes(s.ref)} onChange={() => toggle(skills, setSkills, s.ref)} /> {s.name}
+                  <span className="muted small"> {t('staff.skillTag')} · {t(SKILL_SCOPE_LABEL[s.scope])}</span>
                 </label>
               ))}
-              {gone.map((s) => (
-                <label key={`gone:${s}`} className="check">
-                  <input type="checkbox" checked={skills.includes(s)} onChange={() => toggle(skills, setSkills, s)} /> {s}
-                  {skillGone(s) ? (
-                    <span className="badge warn">{t('staff.skillGone')}</span>
-                  ) : (
-                    <span className="muted small"> {syncedSkills.has(s) ? t('detail.synced') : t('staff.skillTag')}</span>
-                  )}
-                </label>
-              ))}
+              {gone.map((ref) => {
+                // Sem escopo = nome antigo que não deu para converter (inventário do projeto não lido): o escopo não aparece.
+                const parsed = parseSkillRef(ref);
+                return (
+                  <label key={`gone:${ref}`} className="check">
+                    <input type="checkbox" checked={skills.includes(ref)} onChange={() => toggle(skills, setSkills, ref)} /> {parsed?.name ?? ref}
+                    <span className="muted small"> {skillSet.all.get(ref)?.synced ? t('detail.synced') : t('staff.skillTag')}{parsed && ` · ${t(SKILL_SCOPE_LABEL[parsed.scope])}`}</span>
+                    {skillIsGone(ref, skillSet) && <span className="badge warn">{t('staff.skillGone')}</span>}
+                  </label>
+                );
+              })}
             </div>
-            {gone.some((s) => skillGone(s)) && <p className="muted small">{t('staff.skillGoneHint')}</p>}
+            {gone.some((ref) => skillIsGone(ref, skillSet)) && <p className="muted small">{t('staff.skillGoneHint')}</p>}
           </fieldset>
         )}
 
@@ -1011,6 +1004,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             })}
           </div>
           {codex && <p className="muted small">{t('staff.codexSandboxNote')}</p>}
+          {impasse && <PlanImpasseNote impasse={impasse} engine={engine} />}
         </fieldset>
 
         <label className="check">

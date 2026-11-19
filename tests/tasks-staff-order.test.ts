@@ -29,9 +29,11 @@ describe('byRecent (ordem do cartão na coluna)', () => {
     expect(byRecent(col).map((x) => x.id)).toEqual(['b', 'c', 'a']);
   });
 
-  it('plano para aprovar fica antes, mesmo mais antigo; o resto por data', () => {
+  it('quem espera você (plano para aprovar de verdade) fica antes, mesmo mais antigo; o resto por data', () => {
     const col = [k('a', 'doing', '2026-11-05T10:00:00Z'), k('p', 'planning', '2026-11-01T10:00:00Z'), k('b', 'doing', '2026-11-04T10:00:00Z')];
-    expect(byRecent(col).map((x) => x.id)).toEqual(['p', 'a', 'b']);
+    expect(byRecent(col, (x) => x.id === 'p').map((x) => x.id)).toEqual(['p', 'a', 'b']);
+    // Planejando sem plano esperando é trabalho normal (tests/planPending.test.ts): sem prioridade.
+    expect(byRecent(col).map((x) => x.id)).toEqual(['a', 'b', 'p']);
   });
 
   it('Pronto por data; empate mantém a ordem e a lista original não muda', () => {

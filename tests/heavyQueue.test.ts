@@ -16,6 +16,8 @@ const home = await vi.hoisted(async () => {
   const nodePath = await import('node:path');
   const dir = nodePath.join(os.tmpdir(), `myco-heavy-home-${process.pid}-${Date.now()}`);
   process.env.MYCO_HOME = dir;
+  // Sem hooks.json na conta do Codex de quem roda os testes (com ele a flag de confiança não sai, ver codexHeavyArgs).
+  process.env.CODEX_HOME = nodePath.join(dir, 'codex-home');
   delete process.env.MYCO_SESSION_ID;
   return dir;
 });
@@ -482,17 +484,29 @@ describe('Codex: a fila no terminal (o mesmo hook, ligado por -c hooks.*)', () =
   const secrets = { projectPath: '/proj', home: '/home/x', mycoHome: '/home/x/.myco' };
   const configOf = (args: string[], key: string) => args.find((a) => a.startsWith(`${key}=`))?.slice(key.length + 1);
 
+  // O node que roda o servidor, por caminho absoluto (nunca o do PATH), com barras normais como os outros caminhos.
+  const node = process.execPath.replace(/\\/g, '/');
+
   it('flag de confiança e os hooks Pre e Post só no Bash, com o pid do servidor e o prazo, e os caminhos entre aspas', () => {
-    const args = codexHeavyArgs(guardOf);
+    const args = codexHeavyArgs(guardOf, { platform: 'linux' });
     expect(args[0]).toBe('--dangerously-bypass-hook-trust');
     const pre = configOf(args, 'hooks.PreToolUse')!;
     const post = configOf(args, 'hooks.PostToolUse')!;
     expect(pre).toContain('matcher="Bash"');
-    expect(pre).toContain(`command="node \\"C:/Users/x/.myco/run/c1/hooks/heavy-guard.mjs\\" \\"C:/Users/x/.myco/run/heavy\\" pre 4242 ${CODEX_HEAVY_LEASE_S}"`);
+    expect(pre).toContain(`command="\\"${node}\\" \\"C:/Users/x/.myco/run/c1/hooks/heavy-guard.mjs\\" \\"C:/Users/x/.myco/run/heavy\\" pre 4242 ${CODEX_HEAVY_LEASE_S}"`);
     expect(pre).toContain('timeout=900'); // acima da espera máxima do hook (13 min)
     expect(post).toContain(`\\" post 4242 ${CODEX_HEAVY_LEASE_S}"`);
     expect(post).toContain('timeout=30');
     expect(CODEX_HEAVY_LEASE_S).toBe(12 * 60);
+  });
+
+  it('o node vai por caminho absoluto (nunca `node` do PATH); no Windows com `&`, porque o PowerShell não executa uma string entre aspas sozinha', () => {
+    const win = configOf(codexHeavyArgs(guardOf, { platform: 'win32' }), 'hooks.PreToolUse')!;
+    expect(win).toContain(`command="& \\"${node}\\" \\"C:/Users/x/`);
+    const unix = configOf(codexHeavyArgs(guardOf, { platform: 'linux' }), 'hooks.PreToolUse')!;
+    expect(unix).toContain(`command="\\"${node}\\" \\"C:/Users/x/`);
+    expect(unix).not.toContain('& ');
+    for (const cmd of [win, unix]) expect(cmd).not.toMatch(/command="(& )?node /);
   });
 
   it('sem a fila: nem hook nem a flag de confiança', () => {
@@ -501,6 +515,15 @@ describe('Codex: a fila no terminal (o mesmo hook, ligado por -c hooks.*)', () =
     // Caminho que não cabe entre aspas no shell: sem fila, e a flag não fica sozinha.
     expect(codexHeavyArgs({ ...guardOf, hook: 'C:\\a"b\\heavy-guard.mjs' })).toEqual([]);
     expect(codexHeavyArgs({ ...guardOf, lockDir: 'C:\\a$b' })).toEqual([]);
+    // O node também entra entre aspas no shell: o caminho dele com `$` (ou aspas, `%`, crase) não cabe.
+    const saved = process.execPath;
+    try {
+      process.execPath = 'C:\\a$b\\node.exe';
+      expect(codexHeavyArgs(guardOf)).toEqual([]);
+    } finally {
+      process.execPath = saved;
+    }
+    expect(process.execPath).toBe(saved);
   });
 
   it('buildCodexArgs: com a opção, entra (na primeira execução e no resume); sem ela, nunca há --dangerously', () => {

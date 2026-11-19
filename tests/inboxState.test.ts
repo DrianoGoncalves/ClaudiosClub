@@ -63,6 +63,21 @@ describe('o que a caixa lembra entre reinícios', () => {
     expect(b.isWaitingDismissed('w2', '2026-10-29T10:00:00Z')).toBe(false);
   });
 
+  it('a parada por erro do motor (login recusado) volta depois de reabrir; tipo ou campo fora do conhecido é ignorado', async () => {
+    const file = path.join(root, 'inbox-motor.json');
+    const a = new InboxState(file);
+    a.setTurnCap('s1', { kind: 'engine', why: 'auth', engine: 'claude', error: 'Failed to authenticate', at: '2026-11-19T10:00:00.000Z' });
+    a.setTurnCap('s2', { kind: 'engine', why: 'error', engine: 'codex', error: 'boom', at: '2026-11-19T10:01:00.000Z' });
+    await a.flush();
+    const b = new InboxState(file);
+    expect(b.turnCapOf('s1')).toMatchObject({ kind: 'engine', why: 'auth', engine: 'claude', error: 'Failed to authenticate' });
+    expect(b.turnCaps()).toEqual([expect.objectContaining({ sessionId: 's1', kind: 'engine' }), expect.objectContaining({ sessionId: 's2', kind: 'engine', why: 'error', engine: 'codex' })]);
+
+    const ruim = path.join(root, 'inbox-motor-ruim.json');
+    await fs.writeFile(ruim, JSON.stringify({ caps: { s1: { kind: 'engine', why: 'x', engine: 'claude', error: 'e', at: 'a' }, s2: { kind: 'engine', why: 'auth', engine: 'gpt', error: 'e', at: 'a' }, s3: { kind: 'engine', why: 'auth', engine: 'claude', at: 'a' } } }));
+    expect(new InboxState(ruim).turnCaps()).toEqual([]);
+  });
+
   it('"ignorar" um alerta de erro: vale só para aquela ocorrência (outro carimbo volta), sobrevive a reabrir, e mensagem nova esquece', async () => {
     const file = path.join(root, 'inbox-erro.json');
     const a = new InboxState(file);

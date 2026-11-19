@@ -1745,7 +1745,7 @@ describe('gestor como revisor (tarefa que ele passou)', () => {
       const msg = f.notified[0]!;
       expect(msg).toMatchObject({ staffId: 'gio-1', sessionId: 's-gio' });
       expect(msg.text).toContain(`Tarefa “B” (id ${b.id}): aprovada na sua revisão, foi para pronto.`);
-      expect(msg.text).toContain(`- “A” (id ${a.id}): aprovada por Giovana; Fiz o A.`);
+      expect(msg.text).toContain(`- “A” (id ${a.id}): “aprovada por Giovana; Fiz o A.”`);
       expect(msg.text).not.toContain(`“B” (id ${b.id}): aprovada por`);
       expect((await f.svc.list('p').then((l) => l!)).some((t) => t.outcomeHeld)).toBe(false);
     });
@@ -2533,7 +2533,7 @@ describe('dependências: aviso ao gestor de quem espera e caixa "blocked"', () =
     await make('Tela', { blockedBy: [b.id], by: 'gio-1' });
     expect(await svc.releaseStaff('p', 'ana-1')).toBe(2);
     await vi.waitFor(() => expect(notified).toHaveLength(1));
-    expect(notified[0]).toMatchObject({ staffId: 'gio-1', sessionId: null, text: expect.stringContaining('parou: sem responsável') });
+    expect(notified[0]).toMatchObject({ staffId: 'gio-1', sessionId: null, text: expect.stringContaining('parou: “sem responsável') });
     expect(notified[0]!.text).toContain('“Tela” (id');
   });
 
@@ -2549,7 +2549,7 @@ describe('dependências: aviso ao gestor de quem espera e caixa "blocked"', () =
       await svc.onTurnDone('s-1'); // ajustou e terminou: a rodada 3 é a última
     }
     await vi.waitFor(() => expect(notified).toHaveLength(1));
-    expect(notified[0]).toMatchObject({ staffId: 'gio-1', text: expect.stringContaining('parou: limite de revisões automáticas atingido') });
+    expect(notified[0]).toMatchObject({ staffId: 'gio-1', text: expect.stringContaining('parou: “limite de revisões automáticas atingido') });
   });
 
   it('limite de revisões: com a última revisão em curso não conta como empacada; encerrada sem aprovar, conta', async () => {
@@ -2580,7 +2580,7 @@ describe('dependências: aviso ao gestor de quem espera e caixa "blocked"', () =
     await svc.start('p', b.id); // s-1
     await svc.onTurnDone('s-1'); // parou no teto: vai para Aguardar, não para revisão
     await vi.waitFor(() => expect(notified).toHaveLength(1));
-    expect(notified[0]!.text).toMatch(/parou: em Aguardar: /);
+    expect(notified[0]!.text).toMatch(/parou: “em Aguardar: /);
   });
 
   it('caso 2: plano recusado → Aguardar, e o gestor de quem espera é avisado', async () => {
@@ -2591,7 +2591,7 @@ describe('dependências: aviso ao gestor de quem espera e caixa "blocked"', () =
     expect((await svc.list('p'))!.find((t) => t.id === b.id)).toMatchObject({ status: 'planning' });
     await svc.onPlanRejected('s-1');
     await vi.waitFor(() => expect(notified).toHaveLength(1));
-    expect(notified[0]!.text).toContain('parou: em Aguardar');
+    expect(notified[0]!.text).toContain('parou: “em Aguardar');
   });
 
   it('caso 4: conversa órfã que vira revisão → o gestor de quem espera é avisado', async () => {
@@ -2603,7 +2603,7 @@ describe('dependências: aviso ao gestor de quem espera e caixa "blocked"', () =
     await svc.tick(later(3)); // retoma sozinha (a retomada conta como tentativa)
     await svc.tick(later(6)); // parou sem terminar de novo: vai para revisão
     await vi.waitFor(() => expect(notified).toHaveLength(1));
-    expect(notified[0]!.text).toContain('parou: conversa parou sem terminar; está em revisão');
+    expect(notified[0]!.text).toContain('parou: “conversa parou sem terminar; está em revisão”');
   });
 
   it('agrupa: dois dependentes do mesmo gestor = uma mensagem só', async () => {

@@ -19,6 +19,8 @@
   "kindNotStarted": { "message": "tem uma tarefa esquecida em A fazer" },
   "kindQuestion": { "message": "tem uma dúvida de tarefa esperando você" },
   "kindStuck": { "message": "tem uma tarefa parada que precisa de você" },
+  "kindFollowUp": { "message": "tem um follow-up de revisão esperando você" },
+  "kindDenied": { "message": "teve uma ação barrada por uma regra de permissão" },
   "notifMany": { "message": "$N$ avisos novos no Claudio’s Club", "placeholders": { "n": { "content": "$1" } } },
   "notifManyBody": { "message": "Abra o Club para ver quem espera você." },
   "loading": { "message": "Carregando…" },

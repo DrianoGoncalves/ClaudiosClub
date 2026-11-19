@@ -4,10 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createGitHubClient, gitBlobSha, type GitHubClient, type TreeEntry } from '../server/adapters/github/client';
+import { sandboxVerdict, staffMayPost } from '../server/apiPolicy';
 import {
   applyUpdate,
   checkUpdate,
+  GitHubInstallBatchInput,
+  installBatch,
   installSkill,
+  LIMITS,
   parseGitHubUrl,
   previewSkill,
   readOrigin,
@@ -545,5 +549,154 @@ describe('diff e selo', () => {
     f.setLimited(false);
     clock.now += 25 * 60 * 60_000;
     expect(await checker.runIfDue()).toBe(true);
+  });
+});
+
+describe('instalação em lote', () => {
+  const REPO_URL = 'https://github.com/o/r/tree/main/skills';
+  const THREE = { 'skills/a/SKILL.md': SKILL('Faz A'), 'skills/b/SKILL.md': SKILL('Faz B'), 'skills/c/SKILL.md': SKILL('Faz C') };
+  const apiCalls = (f: Fake) => f.calls.filter((c) => c.startsWith('https://api.github.com')).length;
+
+  /** O que a tela faz: a prévia (a atual, uma por skill escolhida) vira o item do lote. */
+  async function itemsOf(gh: GitHubClient, names: string[]) {
+    return Promise.all(
+      names.map(async (n) => {
+        const p = (await previewSkill({ url: REPO_URL, path: `skills/${n}` }, { gh })) as PreviewOk;
+        return { path: p.source.path, ref: p.source.ref, sha: p.source.sha, digest: p.digest };
+      }),
+    );
+  }
+
+  it('1 ok + 1 falha: a falha de um item não aborta os outros, e a resposta vem na ordem do pedido', async () => {
+    const f = fakeGitHub(() => 0);
+    f.commit(THREE);
+    const gh = ghFor(f, clockNow());
+    const target = targetOf('batch-mix');
+    const [a, b, c] = await itemsOf(gh, ['a', 'b', 'c']);
+    await installSkill({ target, url: REPO_URL, ...b! }, { gh }); // b já está instalada
+    const results = await installBatch({ target, url: REPO_URL, items: [a!, b!, c!] }, { gh });
+    expect(results).toEqual([
+      { path: 'skills/a', status: 'installed', name: 'a', sha: a!.sha, digest: a!.digest },
+      { path: 'skills/b', status: 'error', error: 'já existe a skill b' },
+      { path: 'skills/c', status: 'installed', name: 'c', sha: c!.sha, digest: c!.digest },
+    ]);
+    expect((await fs.readdir(target.root)).sort()).toEqual(['a', 'b', 'c']);
+    expect(await readOrigin(path.join(target.root, 'c'))).toMatchObject({ owner: 'o', repo: 'r', path: 'skills/c', ref: 'main', sha: c!.sha });
+  });
+
+  it('digest errado recusa só aquele item (`changed`) e não grava nada dele', async () => {
+    const f = fakeGitHub(() => 0);
+    f.commit(THREE);
+    const gh = ghFor(f, clockNow());
+    const target = targetOf('batch-digest');
+    const [a, b, c] = await itemsOf(gh, ['a', 'b', 'c']);
+    const results = await installBatch({ target, url: REPO_URL, items: [a!, { ...b!, digest: 'f'.repeat(64) }, c!] }, { gh });
+    expect(results.map((r) => r.status)).toEqual(['installed', 'error', 'installed']);
+    expect(results[1]).toEqual({ path: 'skills/b', status: 'error', error: 'a skill mudou desde a prévia: confira de novo', code: 'changed' });
+    expect((await fs.readdir(target.root)).sort()).toEqual(['a', 'c']);
+    expect(await fs.readdir(path.join(path.dirname(target.root), '.myco-staging'))).toEqual([]);
+  });
+
+  it('cada item instala no próprio sha (a prévia dele), mesmo que o branch já tenha andado', async () => {
+    const f = fakeGitHub(() => 0);
+    const clock = clockNow();
+    const v1 = f.commit({ 'skills/a/SKILL.md': SKILL('Faz A') });
+    const gh = ghFor(f, clock);
+    const [a] = await itemsOf(gh, ['a']);
+    clock.now += 11 * 60_000; // o ref guardado vence
+    const v2 = f.commit({ 'skills/a/SKILL.md': SKILL('Faz A'), 'skills/b/SKILL.md': SKILL('Faz B') });
+    const [b] = await itemsOf(gh, ['b']);
+    expect(a!.sha).toBe(v1);
+    expect(b!.sha).toBe(v2);
+    const target = targetOf('batch-shas');
+    const results = await installBatch({ target, url: REPO_URL, items: [a!, b!] }, { gh });
+    expect(results.map((r) => r.status)).toEqual(['installed', 'installed']);
+    expect((await readOrigin(path.join(target.root, 'a')))?.sha).toBe(v1);
+    expect((await readOrigin(path.join(target.root, 'b')))?.sha).toBe(v2);
+  });
+
+  it('duas pastas com o mesmo nome (a/foo e b/foo): a segunda é recusada como a individual', async () => {
+    const f = fakeGitHub(() => 0);
+    f.commit({ 'skills/x/foo/SKILL.md': SKILL('Foo X'), 'skills/y/foo/SKILL.md': SKILL('Foo Y') });
+    const gh = ghFor(f, clockNow());
+    const items = await Promise.all(
+      ['x', 'y'].map(async (d) => {
+        const p = (await previewSkill({ url: REPO_URL, path: `skills/${d}/foo` }, { gh })) as PreviewOk;
+        return { path: p.source.path, ref: p.source.ref, sha: p.source.sha, digest: p.digest };
+      }),
+    );
+    const results = await installBatch({ target: targetOf('batch-same-name'), url: REPO_URL, items }, { gh });
+    expect(results).toMatchObject([{ status: 'installed', name: 'foo' }, { status: 'error', error: 'já existe a skill foo' }]);
+  });
+
+  it('limite de consultas do GitHub: o 1º item toca a API, os outros são recusados na hora pelo disjuntor (`rate-limited`, com `resetAt`)', async () => {
+    const clock = clockNow();
+    const f = fakeGitHub(() => clock.now);
+    f.commit(THREE);
+    const items = await itemsOf(ghFor(f, clock), ['a', 'b', 'c']);
+    const target = targetOf('batch-rate');
+    const fresh = ghFor(f, clock); // cache vazio: a árvore só vem da API
+    f.setLimited(true);
+    const before = apiCalls(f);
+    const results = await installBatch({ target, url: REPO_URL, items }, { gh: fresh });
+    expect(apiCalls(f) - before).toBe(1);
+    expect(results).toHaveLength(3);
+    for (const r of results) expect(r).toMatchObject({ status: 'error', code: 'rate-limited', resetAt: new Date(clock.now + 3_600_000).toISOString() });
+    await expect(fs.readdir(target.root)).resolves.toEqual([]);
+  });
+
+  it('a prévia segue por skill: N prévias gastam 2 consultas à API (ref + árvore), em paralelo ou em sequência', async () => {
+    const f = fakeGitHub(() => 0);
+    f.commit(THREE);
+    await itemsOf(ghFor(f, clockNow()), ['a', 'b', 'c']);
+    expect(apiCalls(f)).toBe(2);
+    const g = fakeGitHub(() => 0);
+    g.commit(THREE);
+    const gh = ghFor(g, clockNow());
+    for (const n of ['a', 'b', 'c']) await previewSkill({ url: REPO_URL, path: `skills/${n}` }, { gh });
+    expect(apiCalls(g)).toBe(2);
+  });
+
+  it(`acima de ${LIMITS.chooseSkills} itens é recusado (corpo e função), sem ir ao GitHub nem gravar`, async () => {
+    const item = { path: 'skills/a', ref: 'main', sha: 'a'.repeat(40), digest: 'b'.repeat(64) };
+    const body = (n: number) => ({ scope: 'user', url: REPO_URL, items: Array.from({ length: n }, () => item) });
+    expect(GitHubInstallBatchInput.safeParse(body(LIMITS.chooseSkills)).success).toBe(true);
+    const over = GitHubInstallBatchInput.safeParse(body(LIMITS.chooseSkills + 1));
+    expect(over.success ? null : over.error.issues[0]?.message).toBe(`até ${LIMITS.chooseSkills} skills por vez`);
+    const none = GitHubInstallBatchInput.safeParse(body(0));
+    expect(none.success ? null : none.error.issues[0]?.message).toBe('escolha ao menos uma skill');
+
+    const f = fakeGitHub(() => 0);
+    f.commit(THREE);
+    const target = targetOf('batch-over');
+    await expect(installBatch({ target, url: REPO_URL, items: body(LIMITS.chooseSkills + 1).items }, { gh: ghFor(f, clockNow()) })).rejects.toThrow(`até ${LIMITS.chooseSkills} skills por vez`);
+    expect(f.calls).toEqual([]);
+    expect(await fs.stat(target.root).catch(() => null)).toBeNull();
+  });
+
+  it('o corpo é conferido como o da instalação individual: sha, digest, caminho e o `url` de item não conta', () => {
+    const ok = { path: 'skills/a', ref: 'main', sha: 'a'.repeat(40), digest: 'b'.repeat(64) };
+    const parse = (item: Record<string, unknown>) => GitHubInstallBatchInput.safeParse({ scope: 'user', url: REPO_URL, items: [item] });
+    expect(parse(ok).success).toBe(true);
+    for (const bad of [{ ...ok, sha: 'abc' }, { ...ok, digest: 'B'.repeat(64) }, { ...ok, path: 'x'.repeat(301) }, { ...ok, ref: '' }, { ...ok, name: 'n'.repeat(65) }]) {
+      expect(parse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+    const sneaky = parse({ ...ok, url: 'https://github.com/outro/repo' });
+    expect(sneaky.success && sneaky.data.items[0]).toEqual(ok); // o repositório é um só, o do corpo
+    expect(GitHubInstallBatchInput.safeParse({ scope: 'user', items: [ok] }).success).toBe(false);
+  });
+
+  it('só pela tela: a rota recusa sem `fromBrowser` antes de ler o corpo, usa o alvo da individual (refuseLibrary) e o gate/sandbox não a liberam', async () => {
+    const src = await fs.readFile(path.join(__dirname, '..', 'server', 'index.ts'), 'utf8');
+    const at = src.indexOf('/^\\/api\\/skills\\/github\\/install-batch$/');
+    expect(at).toBeGreaterThan(0);
+    const route = src.slice(at, src.indexOf('\n  ],', at));
+    const order = ['if (!fromBrowser) throw new BadRequest(', 'parse(GitHubInstallBatchInput, body)', 'githubTargetOf(b.scope, b.projectId)', 'installBatch({ target'].map((s) => route.indexOf(s));
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((x, y) => x - y));
+    expect(/async function githubTargetOf[^{]*\{\s*if \(scope === 'library'\) refuseLibrary\(\);/.test(src)).toBe(true);
+    // POST que não é da tela (ferramenta, funcionário) é 400 no gate; pela sandbox do Codex é 403.
+    expect(staffMayPost('/api/skills/github/install-batch')).toBe(false);
+    expect(sandboxVerdict('POST', '/api/skills/github/install-batch', 'p1')).toMatchObject({ status: 403 });
   });
 });

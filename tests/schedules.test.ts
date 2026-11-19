@@ -103,6 +103,35 @@ describe('chamadas da API', () => {
     expect(r.items).toHaveLength(1);
   });
 
+  it('lê as rotinas e as ocorrências da janela do mês (from/to em ISO)', async () => {
+    mock({ items: [], routines: [], occurrences: [], window: { from: '', to: '', truncated: false }, stateWarning: null });
+    await api.schedules('proj', { from: new Date(Date.UTC(2026, 10, 1)), to: new Date(Date.UTC(2026, 11, 6)) });
+    expect(calls[0]?.url).toBe('/api/projects/proj/schedules?from=2026-11-01T00%3A00%3A00.000Z&to=2026-12-06T00%3A00%3A00.000Z');
+  });
+
+  it('a recusa da leitura leva o motivo do servidor (não só o código)', async () => {
+    calls.length = 0;
+    vi.stubGlobal('window', { dispatchEvent: () => true });
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ error: 'só pelo Claudio’s Club' }), { status: 400, headers: { 'content-type': 'application/json' } }));
+    await expect(api.schedules('proj')).rejects.toThrow('só pelo Claudio’s Club');
+  });
+
+  it('criar/editar, ligar e apagar rotina vão às rotas da tela, em POST', async () => {
+    mock({ ok: true });
+    const routine = { name: 'x', recurrence: { kind: 'cron' as const, expr: '0 8 * * *' }, catchUpHours: 0, message: 'm', mode: 'continue' as const, enabled: true };
+    await api.saveRoutine('proj', 'ana', routine);
+    await api.setRoutineEnabled('proj', 'ana', 'r1', false);
+    await api.deleteRoutine('proj', 'ana', 'r1');
+    expect(calls.map((c) => c.url)).toEqual([
+      '/api/projects/proj/staff/ana/routines/save',
+      '/api/projects/proj/staff/ana/routines/r1/enabled',
+      '/api/projects/proj/staff/ana/routines/r1/delete',
+    ]);
+    expect(calls.every((c) => c.init?.method === 'POST')).toBe(true);
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ routine });
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({ enabled: false });
+  });
+
   it('cancela o despertador e o "continue" nas rotas certas', async () => {
     mock({ ok: true });
     await api.chatCancelWake('proj', 's1');

@@ -139,11 +139,11 @@ const blockedItem = (blockerStatus: string, humanAction?: string): InboxItem =>
   }) as unknown as InboxItem;
 
 describe('itens de tarefa parada na caixa', () => {
-  it('dúvida escalada: a frase leva a primeira linha da pergunta, nos 3 idiomas, e a ação é responder no card da tarefa', () => {
+  it('dúvida escalada: a frase leva a pergunta inteira (linhas juntas), nos 3 idiomas, e a ação é responder no card da tarefa', () => {
     const item = questionItem();
-    expect(questionText(item, tr('pt-BR'))).toBe('“Migrar”: Posso apagar a tabela antiga?');
-    expect(questionText(item, tr('en'))).toBe('“Migrar”: Posso apagar a tabela antiga?');
-    expect(inboxText(item, tr('pt-BR'))).toBe('“Migrar”: Posso apagar a tabela antiga?');
+    expect(questionText(item, tr('pt-BR'))).toBe('“Migrar”: Posso apagar a tabela antiga? Depois do backup.');
+    expect(questionText(item, tr('en'))).toBe('“Migrar”: Posso apagar a tabela antiga? Depois do backup.');
+    expect(inboxText(item, tr('pt-BR'))).toBe('“Migrar”: Posso apagar a tabela antiga? Depois do backup.');
     expect(alertAction(item, tr('pt-BR'))).toMatchObject({ action: 'answer', taskId: 't-1', label: 'Responder' });
     expect(alertAction(item, tr('en'))?.label).toBe('Answer');
     expect(taskIdOf(item)).toBe('t-1');
@@ -157,10 +157,11 @@ describe('itens de tarefa parada na caixa', () => {
     expect(questionText(item, tr('es'))).toBe('“Migrar”: Qual banco? (y 1 más)');
   });
 
-  it('pergunta longa é cortada em uma linha', () => {
-    const item = questionItem({ question: { taskId: 't-1', taskTitle: 'Migrar', questionId: 'q', source: 'text', text: 'x'.repeat(400), escalatedAt: 'a' } });
-    expect(questionText(item, tr('pt-BR')).length).toBeLessThan(160);
-    expect(questionText(item, tr('pt-BR'))).toMatch(/…$/);
+  it('pergunta longa é cortada em 240 caracteres, com reticências; a de 200 passa inteira', () => {
+    const long = questionItem({ question: { taskId: 't-1', taskTitle: 'Migrar', questionId: 'q', source: 'text', text: 'x'.repeat(400), escalatedAt: 'a' } });
+    expect(questionText(long, tr('pt-BR'))).toBe(`“Migrar”: ${'x'.repeat(239)}…`);
+    const mid = questionItem({ question: { taskId: 't-1', taskTitle: 'Migrar', questionId: 'q', source: 'text', text: 'x'.repeat(200), escalatedAt: 'a' } });
+    expect(questionText(mid, tr('pt-BR'))).toBe(`“Migrar”: ${'x'.repeat(200)}`);
   });
 
   it('sem a estrutura (servidor sem o campo), vale o resumo do servidor', () => {

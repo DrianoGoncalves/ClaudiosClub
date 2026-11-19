@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, rm } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerInfo, StaffProfile } from '../../shared/model';
 import { personalityName, personalityReminder } from '../../shared/personality';
@@ -9,6 +9,7 @@ import { MYCO_HOME } from '../config';
 import { heavyLockDir } from '../heavyQueue';
 import { lazyNavegadorCommand } from '../navegadorMcp';
 import { ROOT } from '../root';
+import { memoryMeasure, memoryOver } from '../../scripts/hooks/memory-cap.mjs';
 import { isClaudeRoot, renderFicha, systemPrompt, type CleanBrowserInfo, type CodexChromeInfo, type FichaContext, type MemoriaInfo, type SshInfo, type TeamMember } from './ficha';
 import { FTP_MCP_NAME, GPT_MCP_NAME, MEMORIA_MCP_NAME } from '../../shared/model';
 import { DEFAULT_SECRETS_DIR } from '../secretVault';
@@ -550,7 +551,7 @@ const HOOKS_DIR = path.join(ROOT, 'scripts', 'hooks');
 const DELIVERY_HOOK = path.join(HOOKS_DIR, 'delivery-check.mjs');
 const STYLE_HOOK = path.join(HOOKS_DIR, 'style-reminder.mjs');
 /** Os hooks de guarda que a conversa leva na própria pasta (cópia, ver prepareRun): o agente não edita o que os aplica. */
-const GUARD_HOOK_FILES = ['club-guard.mjs', 'mcp-write-guard.mjs', 'remote-guard.mjs', 'heavy-guard.mjs', 'heavy-lock.mjs'] as const;
+const GUARD_HOOK_FILES = ['club-guard.mjs', 'mcp-write-guard.mjs', 'remote-guard.mjs', 'memory-guard.mjs', 'memory-cap.mjs', 'heavy-guard.mjs', 'heavy-lock.mjs'] as const;
 /** O hook da fila de validação pesada e a lib dele (o heavy-guard importa o heavy-lock da mesma pasta). Vão para a pasta do Claude e a do Codex. */
 const HEAVY_HOOK_FILES = ['heavy-guard.mjs', 'heavy-lock.mjs'] as const;
 /** Ferramentas de navegador: o Claude in Chrome e os MCPs no padrão `browser_*` (Playwright e afins da biblioteca). */
@@ -559,6 +560,8 @@ export const BROWSER_TOOLS_MATCHER = 'mcp__claude-in-chrome__.*|mcp__.*__browser
 export const MCP_TOOLS_MATCHER = 'mcp__.*';
 /** Terminal (Bash e PowerShell): o hook de acesso remoto barra ssh, scp e afins, com ou sem servidor na ficha. */
 export const REMOTE_GUARD_MATCHER = 'Bash|PowerShell';
+/** Escrita de arquivo: o hook do teto da memória (scripts/hooks/memory-guard.mjs) confere o que vai para `.myco/staff/<id>.memory*`. */
+export const MEMORY_GUARD_MATCHER = 'Write|Edit|MultiEdit';
 /** Terminal também para a fila de validação pesada (suíte completa, tsc do projeto): uma por vez na máquina (scripts/hooks/heavy-guard.mjs). */
 export const HEAVY_GUARD_MATCHER = 'Bash|PowerShell';
 /** O hook da fila espera a vez aqui dentro, então o prazo dele passa dos 10 s dos outros: abaixo dele, a espera máxima do próprio hook (13 min). */
@@ -598,6 +601,8 @@ export function staffSettings(
     ...(stage === 'pre' && o.mcpWriteFile ? [{ matcher: MCP_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'mcp-write-guard.mjs'), o.mcpWriteFile], timeout: 10, onFailure: 'block' }] }] : []),
     // Acesso remoto no terminal: sempre, com ou sem servidor na ficha (ver scripts/hooks/remote-guard.mjs).
     ...(stage === 'pre' ? [{ matcher: REMOTE_GUARD_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'remote-guard.mjs')], timeout: 10, onFailure: 'block' }] }] : []),
+    // Teto da memória no Write/Edit (fora do plan, onde o MCP myco-memoria tem o dele): sempre, sem `onFailure`, porque um erro do hook não deve travar a edição (ver o topo do script).
+    ...(stage === 'pre' ? [{ matcher: MEMORY_GUARD_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'memory-guard.mjs')], timeout: 10 }] }] : []),
     heavy(stage),
   ];
   const styled = !!p && personalityName(p.personality) !== '' && (p.engine ?? 'claude') === 'claude';
@@ -686,6 +691,8 @@ export async function writeFicha(
   };
   await writeAtomic(fichaFile(ctx.projectPath, profile.id), renderFicha(profile, fichaCtx));
   await ensureMemory(ctx.projectPath, profile);
-  return fichaCtx;
+  // Só no prompt da conversa (systemPrompt), não no .md da ficha: o tamanho da memória muda sozinho e não deve sujar o git.
+  const size = memoryMeasure(await readFile(memoryFile(ctx.projectPath, profile.id), 'utf8').catch(() => ''));
+  return memoryOver('index', size) ? { ...fichaCtx, memoryOver: size } : fichaCtx;
 }
 

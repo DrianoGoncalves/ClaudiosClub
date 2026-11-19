@@ -4,7 +4,8 @@ import path from 'node:path';
 
 // Arquivos do projeto na aba de arquivos: listar, ler, gravar um arquivo que já existe e criar arquivo vazio
 // ou pasta (sem sobrescrever) e apagar (sem seguir links). Tudo fica preso à pasta do projeto: o caminho é resolvido e o realpath
-// conferido (link simbólico que sai do projeto é recusado). Arquivo de segredo aparece na lista (locked), mas não abre nem grava.
+// conferido (link simbólico que sai do projeto é recusado). Arquivo de segredo aparece na lista (locked), mas não abre nem grava pela tela:
+// o texto dele nunca passa pelo navegador (para corrigir, o dono o abre fora do Club: ver `server/openInEditor.ts`).
 
 export const MAX_FILE_BYTES = 1024 * 1024;
 const BINARY_PROBE_BYTES = 8 * 1024;
@@ -142,9 +143,26 @@ export function isBlockedRel(raw: string): boolean {
   }
 }
 
+/**
+ * Um arquivo regular do projeto, sem ler o conteúdo: o caminho (relativo à raiz, já limpo por `cleanRel`) é resolvido com os links seguidos e
+ * tem de ficar dentro do projeto (link ou junção para fora: 403); pasta, dispositivo e inexistente: 404. Não olha se é de segredo: quem usa decide.
+ * `abs` é o caminho real (o que de fato abre) e `realRel` o relativo à raiz real, com "/".
+ */
+export async function resolveProjectFile(root: string, rel: string): Promise<{ abs: string; realRel: string; size: number }> {
+  if (!rel) throw new ProjectFileError(400, 'informe o arquivo');
+  const { abs, realRel } = await resolveInside(root, rel);
+  const st = await fs.stat(abs).catch((err) => {
+    if (isErr(err, 'ENOENT', 'ENOTDIR', 'ELOOP')) throw notFound('não encontrado');
+    throw err;
+  });
+  if (!st.isFile()) throw notFound('não é um arquivo');
+  return { abs, realRel, size: st.size };
+}
+
+/** O texto de um arquivo do projeto. Segredo (pelo caminho pedido ou pelo real) é recusado, e fora do projeto, mais de 1 MB e binário também. */
 export async function readProjectFile(root: string, rawPath: string): Promise<ProjectFile> {
   const rel = cleanRel(rawPath);
-  if (isBlockedRel(rel)) throw secretError();
+  if (isSecretRel(rel)) throw secretError();
   const { abs, realRel } = await resolveInside(root, rel);
   if (isSecretRel(realRel)) throw secretError();
   const st = await fs.stat(abs);
@@ -209,6 +227,14 @@ export async function listProjectTree(root: string, rawPath: string): Promise<{ 
       a.name.localeCompare(b.name),
   );
   return { entries };
+}
+
+/** Valida o corpo do POST de "abrir no editor" (só `path`); tipo errado vira 400. */
+export function parseOpenBody(body: unknown): { path: string } {
+  if (!body || typeof body !== 'object') throw new ProjectFileError(400, 'corpo inválido');
+  const p = (body as Record<string, unknown>).path;
+  if (typeof p !== 'string') throw new ProjectFileError(400, 'path precisa ser texto');
+  return { path: p };
 }
 
 /** Valida o corpo do POST de gravação; tipo errado vira 400. */

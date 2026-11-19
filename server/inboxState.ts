@@ -58,6 +58,8 @@ export class InboxState {
         } else if (c && c.kind === 'retry' && typeof c.error === 'string' && typeof c.at === 'string') {
           if (c.why === 'exhausted' && typeof c.attempts === 'number') this.data.caps[sid] = { kind: 'retry', why: 'exhausted', attempts: c.attempts, error: c.error, at: c.at };
           else if (c.why === 'cut' && typeof c.action === 'string') this.data.caps[sid] = { kind: 'retry', why: 'cut', action: c.action, error: c.error, at: c.at };
+        } else if (c && c.kind === 'engine' && (c.why === 'auth' || c.why === 'error') && (c.engine === 'claude' || c.engine === 'codex') && typeof c.error === 'string' && typeof c.at === 'string') {
+          this.data.caps[sid] = { kind: 'engine', why: c.why, engine: c.engine, error: c.error, at: c.at };
         }
       }
       const errors = raw.errorDismissed && typeof raw.errorDismissed === 'object' ? raw.errorDismissed : {};

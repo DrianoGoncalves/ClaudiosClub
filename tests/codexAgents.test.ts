@@ -325,6 +325,31 @@ describe('ficha do Codex com agents', () => {
     expect(text).not.toContain('trabalha sozinho');
   });
 
+  it('roteiro de quem implementa no Codex: decisão pronta, confere o diff, exceção por risco e o aviso de que as edições dos agents não entram no registro', () => {
+    const impl = { ...person, playbook: 'plan-big-execute-small' as const, agents: [] };
+    const text = renderFicha(impl, { ...ctx, codexAgents: { available: ['pesquisador', 'executor', 'executor-rapido', 'revisor'], missing: [] } });
+    expect(text).toContain('Planeje primeiro: entenda o pedido');
+    expect(text).toContain('Entregue a decisão pronta: o objetivo (o porquê)');
+    expect(text).toContain('Confira o diff de cada entrega antes da próxima');
+    expect(text).toContain('mudança local, conhecida e de baixo risco');
+    expect(text).toContain('O critério é o risco, não o número de linhas');
+    expect(text).toContain('esforço baixo');
+    expect(text).toContain('spawn_agent');
+    // Não promete o que não funciona: edição de agent não entra no registro automático, e a ficha manda listá-la na entrega.
+    expect(text).toContain('só vê as edições que você mesmo faz, não as dos agents: ao entregar, liste na entrega os arquivos que eles alteraram');
+    expect(text).not.toMatch(/model: "(sonnet|opus)"|\(Haiku\)|\(Sonnet\)|subagent_type|run_in_background/);
+  });
+
+  it('sem os agents no Codex, o roteiro de quem implementa diz o que fazer sozinho e não promete delegar', () => {
+    const impl = { ...person, playbook: 'plan-big-execute-small' as const, agents: [] };
+    const text = renderFicha(impl, { ...ctx, codexAgents: { available: [], missing: ['executor'] } });
+    expect(text).toContain('sem ajudantes para delegar nesta conversa (não prometa nem tente chamá-los)');
+    expect(text).toContain('planeje (o que muda, em quais arquivos, o que fica de fora)');
+    expect(text).toContain('releia o diff');
+    expect(text).not.toContain('spawn_agent');
+    expect(text).not.toContain('Entregue a decisão pronta');
+  });
+
   it('a seção diz que o agent herda o modelo e que só o esforço vem da definição dele', () => {
     const text = renderFicha(person, { ...ctx, codexAgents: { available: ['executor-rapido', 'executor'], missing: [] } });
     expect(text).toContain('No Codex o agent roda no seu modelo (o de quem o chama); só o esforço de raciocínio vem da definição de cada um');

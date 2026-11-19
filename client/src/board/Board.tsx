@@ -13,7 +13,7 @@ import {
   type NodeChange,
 } from '@xyflow/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AppConfig, Board, BoardBackground, CostReport, GitState, InboxItem, SendPriority, UiLevel, UsageStop } from '../../../shared/model';
+import type { AppConfig, Board, BoardBackground, CostReport, GitState, InboxItem, SendPriority, TaskSummary, UiLevel, UsageStop } from '../../../shared/model';
 import { conversationTitle } from '../detail/conversationTitle';
 import { InboxMenu } from '../inbox/InboxMenu';
 import type { InboxOpen } from '../inbox/taskAlerts';
@@ -62,8 +62,10 @@ interface BoardViewProps {
   /** Estado do código por projeto, para o cabeçalho das salas. */
   git: Record<string, GitState>;
   /** Tarefas em aberto por projeto (chip no cabeçalho, que abre o quadro de tarefas). */
-  tasks: Record<string, { open: number; review: number }>;
+  tasks: Record<string, Pick<TaskSummary, 'open' | 'review' | 'paused'>>;
   onOpenTasks: (projectId: string) => void;
+  /** Botão pausar/retomar do cabeçalho: `paused` é o estado de agora; o App pergunta (ao pausar), grava e relê o resumo. */
+  onTogglePause: (projectId: string, paused: boolean) => void;
   /** Selo do git com arquivos sem commit (abre a lista por conversa). */
   onOpenUncommitted: (projectId: string) => void;
   showArchived: boolean;
@@ -75,7 +77,8 @@ interface BoardViewProps {
   /** A caixa "precisa de mim" (lida no App, que também mostra as notificações). */
   inbox: InboxView;
   onOpenInbox: InboxOpen;
-  onOpenInboxFile?: (item: InboxItem, path: string) => void;
+  onOpenInboxFile?: (item: InboxItem, path: string, line?: number) => void;
+  onOpenInboxSheet?: (item: InboxItem) => void;
   onRename: (name: string) => Promise<void>;
   onUsageStop: (stop: UsageStop) => Promise<void>;
   onSendWhileBusy: (p: SendPriority) => Promise<void>;
@@ -329,6 +332,8 @@ export function BoardView(props: BoardViewProps) {
     if ((event.target as Element).closest('.bn-collapse')) return toggleRoom(n.id);
     // Chip de tarefas do cabeçalho: abre o quadro de tarefas do projeto.
     if ((event.target as Element).closest('.bn-tasks') && n.id.startsWith('p:')) return props.onOpenTasks(n.id.slice(2));
+    // Botão "Retomar projeto" do cabeçalho (só aparece com o projeto pausado): retoma, sem abrir nada.
+    if ((event.target as Element).closest('.bn-pause') && n.id.startsWith('p:')) return props.onTogglePause(n.id.slice(2), !!props.tasks[n.id.slice(2)]?.paused);
     // Selo do git com sujeira: abre os arquivos sem commit, por conversa.
     if ((event.target as Element).closest('.bn-git-btn') && n.id.startsWith('p:')) return props.onOpenUncommitted(n.id.slice(2));
     if (n.type === 'shelf') toggleShelf(n.id);
@@ -359,7 +364,7 @@ export function BoardView(props: BoardViewProps) {
     [nodes, selectedId],
   );
 
-  const edgeActions = useMemo(() => ({ onUnlink: props.onUnlink }), [props.onUnlink]);
+  const edgeActions = useMemo(() => ({ onUnlink: props.onUnlink, animations: props.animations }), [props.onUnlink, props.animations]);
 
   return (
     <EdgeActions.Provider value={edgeActions}>
@@ -412,7 +417,7 @@ export function BoardView(props: BoardViewProps) {
           <UpdateNotice />
           <PendingRestartNotice />
           <span className="toolbar-sep" />
-          <InboxMenu inbox={props.inbox} titleOf={titleOf} staff={props.board.staff} onOpen={props.onOpenInbox} onOpenFile={props.onOpenInboxFile} />
+          <InboxMenu inbox={props.inbox} titleOf={titleOf} staff={props.board.staff} onOpen={props.onOpenInbox} onOpenFile={props.onOpenInboxFile} onOpenSheet={props.onOpenInboxSheet} />
           <button className="toolbar-icon" onClick={() => onSelect(HR_ID)} title={t('hr.people')} aria-label={t('hr.people')}>
             <UsersIcon />
           </button>

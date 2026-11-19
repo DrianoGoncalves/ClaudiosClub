@@ -34,6 +34,8 @@
   /* Alerta de verdade (modelo obsoleto): fundo vermelho claro com tinta escura, e o vermelho cheio com tinta própria (branca, 5.5:1). */
   --danger-soft: #f9d3ce;
   --on-danger: #ffffff;
+  /* Texto sobre um fundo cheio de --ink-blue (azul escuro no claro, azul claro no escuro): 7,2:1 no claro, 9,9:1 no escuro. */
+  --on-ink-blue: #ffffff;
   --busy: #1f4fbf;
   --idle: #8b9096;
   --waiting: #d08000;
@@ -107,6 +109,7 @@
   --danger: #ff7b70;
   --danger-soft: #5c2a2a;
   --on-danger: #1f2328;
+  --on-ink-blue: #10161f;
   --busy: #9cc0ff;
   --idle: #79837e;
   --waiting: #f0b43c;
@@ -174,7 +177,8 @@ body { background: var(--board); }
 .bn-working::after { content: '…'; display: inline-block; width: 1.2em; text-align: left; animation: bn-dots 1.2s steps(4, end) infinite; overflow: hidden; vertical-align: bottom; }
 .bn-employee.is-waiting { animation: bn-nudge 2.4s ease-in-out infinite; }
 @keyframes bn-redraw { to { stroke-dashoffset: -40; } }
-/* Só muda o brilho (sem movimento): fica ligado mesmo com "reduzir animações". */
+/* Só muda o brilho (sem movimento): fica ligado mesmo com "reduzir animações". É um `filter` animado, que a placa
+   de vídeo refaz a cada quadro: com "animações" desligado vira um halo fixo (box-shadow, sem filtro) logo abaixo. */
 @keyframes bn-glow {
   0%, 100% { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--busy) 25%, transparent)); }
   50% { filter: drop-shadow(0 0 10px color-mix(in srgb, var(--busy) 60%, transparent)); }
@@ -190,7 +194,11 @@ body { background: var(--board); }
 .anim-off .bn-pencil,
 .anim-off .bn-working::after,
 .anim-off .bn-employee.is-waiting { animation: none; }
-.anim-off .edge-dots { display: none; }
+/* Sem o brilho pulsante, o ocupado segue marcado: contorno azul tracejado (acima), lápis, reticências e este halo fixo. */
+.anim-off .bn-employee.is-busy { animation: none; }
+.anim-off .bn-employee.is-busy::before { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 0 6px 1px color-mix(in srgb, var(--busy) 45%, transparent); }
+/* Sem "animações", a barra de ferramentas perde o desfoque do fundo (pesa na placa de vídeo): fundo quase opaco no lugar. */
+.anim-off .toolbar::before { backdrop-filter: none; background: color-mix(in srgb, var(--panel) 97%, transparent); }
 
 /* Bolinhas da conversa nas linhas de quem está trabalhando. */
 .edge-dot { stroke: var(--card); stroke-width: 1.5; }
@@ -237,7 +245,7 @@ body { background: var(--board); }
 /* Imagem do projeto (logo ou print) no cartão. */
 /* Cabeçalho da sala (projeto ou "você"): nome e resumo numa linha só, quem está ao vivo encostado à direita. */
 .bn-header { display: flex; align-items: center; gap: 12px; min-width: 0; height: 100%; }
-.bn-header-img { width: 48px; height: 40px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); flex: none; }
+.bn-header-img { width: 48px; height: 40px; object-fit: cover; flex: none; }
 /* Nome em cima, com a largura toda para identificar o projeto; contagem e resumo na linha de baixo. */
 .bn-header-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
 .bn-header-text .bn-title, .bn-header-text .bn-meta { min-width: 0; max-width: 100%; }
@@ -293,6 +301,9 @@ body { background: var(--board); }
 details.collapse { border: 1px solid var(--line); border-radius: 10px; padding: 6px 12px; margin-top: 10px; }
 details.collapse > summary { cursor: pointer; font-size: 13px; font-weight: 600; padding: 4px 0; }
 details.collapse[open] > summary { margin-bottom: 6px; }
+/* Seção recolhida com resumo (detalhe da tarefa): o rótulo e, abaixo, o resumo numa linha só, com reticências; o `title` traz o texto inteiro. */
+details.collapse > summary.has-sum { padding: 6px 0; }
+.collapse-sum { display: block; margin-top: 2px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Acordeão que agrupa outros: as seções de dentro viram divisórias, sem caixa dentro de caixa. */
 .collapse-group > details.collapse { border: none; border-top: 1px solid var(--line); border-radius: 0; padding: 4px 0; margin-top: 0; }
 .collapse-group > details.collapse > summary { font-weight: 500; }
@@ -420,6 +431,16 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 /* Erro da caixa como balão: o mesmo cartão em vermelho (a borda pelo --danger, o fundo no mesmo tom suave do amarelo). */
 .secret-notice.is-error { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--panel)); }
 @media (max-width: 640px) { .secret-notice .actions .btn-secondary { min-height: 36px; } }
+/* Terminal do Codex quebrado pela política de senha do Windows (inbox/SandboxFix.tsx), na caixa e no balão: o comando (um clique seleciona tudo, para o caso de copiar falhar) com o botão ao lado
+   e as duas notas. As notas são --ink no balão (o --muted dá ~4,2:1 sobre o vermelho suave do cartão). */
+.sandbox-fix { display: grid; gap: 4px; margin-top: 6px; min-width: 0; }
+.sandbox-fix p { margin: 0; overflow-wrap: anywhere; }
+.sandbox-cmd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.sandbox-cmd code { min-width: 0; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); user-select: all; }
+.sandbox-note { color: var(--muted); }
+.sandbox-error { color: var(--danger); font-weight: 600; }
+.secret-notice .sandbox-note { color: var(--ink); }
+@media (max-width: 640px) { .sandbox-cmd .btn-secondary { min-height: 40px; } }
 /* Pergunta com opções do Claude: cada pergunta com suas opções clicáveis, "outra resposta" e a prévia. */
 .msg-question { --ink: var(--ask-ink); --muted: var(--ask-muted); --line: var(--ask-line); --ink-blue: var(--ask-accent); --accent: var(--ask-accent); --panel: var(--ask-field); --board: var(--ask-field); width: 90%; align-self: flex-start; background: var(--ask-bg); color: var(--ink); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .msg-question .btn-primary { color: #fff; }
@@ -486,15 +507,17 @@ textarea.q-field { resize: vertical; }
 .chat-actions .chat-attach:focus-within { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); }
 .chat-actions :is(.chat-attach, .chat-stop, .chat-send) { width: 24px; height: 24px; padding: 0; display: inline-grid; place-items: center; }
 /* Cargos (config → Cargos). */
-.roles { display: grid; gap: 8px; width: 100%; }
-.roles-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.roles { display: grid; gap: 8px; width: 100%; container-type: inline-size; }
+.roles-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
 .roles-list li { display: grid; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
-/* Editando: o formulário abre dentro do próprio item, como um collapsible. */
-.roles-list li.is-open { border-color: var(--ink-blue); padding-bottom: 10px; }
+/* Duas colunas quando o painel tem largura (medida no próprio painel, não na janela); no celular, uma. */
+@container (min-width: 480px) { .roles-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* Editando: o formulário abre dentro do próprio item, como um collapsible, e ocupa a linha toda. */
+.roles-list li.is-open { grid-column: 1 / -1; border-color: var(--ink-blue); padding-bottom: 10px; }
 .roles-list li.is-open .role-form { padding: 10px 0 0; border: none; border-top: 1px dashed var(--line); border-radius: 0; }
 .roles-list li.is-open:not(:has(.roles-row)) .role-form { border-top: none; padding-top: 4px; }
-/* Texto do cargo na largura toda; Padrão / Editar / Tirar numa linha logo abaixo. */
-.roles-row { display: grid; gap: 4px; }
+/* Texto do cargo na largura toda; Padrão / Editar / Tirar numa linha logo abaixo (no pé do cartão, para alinhar com o vizinho de coluna). */
+.roles-row { display: grid; gap: 4px; align-content: space-between; }
 .roles-main { display: grid; gap: 1px; min-width: 0; }
 .roles-actions { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .roles-actions .check { display: inline-flex; align-items: center; gap: 4px; }
@@ -532,6 +555,11 @@ textarea.q-field { resize: vertical; }
 .bn-tasks:hover { border-color: var(--room-wall); background: color-mix(in srgb, var(--room-wall) 14%, transparent); }
 .bn-tasks.is-empty { color: var(--muted); }
 .bn-tasks-review { color: var(--waiting-ink); font-weight: 600; }
+/* Projeto pausado no cabeçalho: selo na linha do resumo (abaixo do nome) e o botão de retomar ao lado do chip. Azul (estado seu, não pedido de ação); texto sempre --ink. */
+.bn-tag.is-paused { display: inline-flex; align-items: center; gap: 3px; padding: 0 6px; border: 1px solid var(--ink-blue); border-radius: 999px; background: color-mix(in srgb, var(--ink-blue) 14%, transparent); color: var(--ink); font-weight: 600; }
+.bn-tasks-row { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.bn-pause { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 22px; padding: 0; border: 1px solid var(--ink-blue); border-radius: 10px; background: color-mix(in srgb, var(--ink-blue) 18%, transparent); color: var(--ink); cursor: pointer; }
+.bn-pause:hover { background: color-mix(in srgb, var(--ink-blue) 32%, transparent); }
 /* Barra fina do progresso do kanban, colada embaixo do chip (a largura é a do chip). */
 .bn-tasks-wrap { display: flex; flex-direction: column; align-items: stretch; gap: 3px; min-width: 0; }
 .bn-progress { height: 4px; border-radius: 2px; overflow: hidden; background: color-mix(in srgb, var(--muted) 28%, transparent); }
@@ -540,6 +568,20 @@ textarea.q-field { resize: vertical; }
 .modal.tasks-modal { width: min(100%); height: min(820px, calc(100vh - 32px)); display: flex; flex-direction: column; position: relative; overflow: hidden; }
 .tasks-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .tasks-head-actions { display: inline-flex; gap: 8px; }
+/* Título + Pausar/Retomar projeto: o controle do projeto fica junto do nome dele, e as ações do quadro (Agendamentos, Nova tarefa, ×) não perdem espaço no celular. */
+.tasks-head-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.tasks-head-title h2 { min-width: 0; overflow-wrap: anywhere; }
+.tasks-head-title .project-pause-btn { flex: none; min-height: 29px; }
+@media (max-width: 640px) { .tasks-head-title .project-pause-btn { min-height: 36px; min-width: 36px; } }
+/* Faixa do projeto pausado (abaixo do cabeçalho do quadro): azul, borda grossa à esquerda; texto --ink. Mesma cor do selo do cabeçalho da sala e do painel do projeto. */
+.project-paused { flex: none; display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 8px 12px; border: 1px solid var(--ink-blue); border-left-width: 4px; border-radius: 10px; background: color-mix(in srgb, var(--ink-blue) 12%, transparent); color: var(--ink); }
+.project-paused > svg { flex: none; margin-top: 2px; color: var(--ink-blue); }
+.project-paused-text { display: grid; gap: 2px; min-width: 0; }
+.project-paused-text p { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+/* Celular: só o ícone ao lado do título (o texto empurraria o título para outra linha); o nome fica no aria-label e no title, e a faixa abaixo diz o estado. */
+@media (max-width: 480px) { .tasks-head .project-pause-label { display: none; } }
+.badge.is-paused { color: var(--ink); border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 14%, transparent); font-weight: 600; }
+.badge.is-paused svg { vertical-align: -1px; }
 /* Agendamentos do projeto: um cartão por despertador ou "continue" pendente. O texto é do funcionário: pre-wrap, nunca HTML. */
 .sched-intro, .sched-notice { margin: 0; font-size: 13px; }
 .sched-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
@@ -555,6 +597,94 @@ textarea.q-field { resize: vertical; }
 .sched-confirm p, .sched-error { margin: 0; font-size: 13px; }
 .sched-empty { display: grid; gap: 4px; padding: 18px 0 8px; text-align: center; }
 .sched-empty p { margin: 0; }
+/* Agendamentos em tela cheia (mobile first): rotinas | calendário viram duas abas até 860px. */
+.modal-backdrop.sched-backdrop { padding: 0; place-items: stretch; }
+.modal.sched-modal { width: 100%; max-height: none; height: 100%; height: 100dvh; box-sizing: border-box; border: 0; border-radius: 0; padding: 12px 12px 0; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+.sched-tabs { align-self: start; }
+.sched-tabs .btn-toggle { min-height: 36px; }
+.sched-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.sched-col { min-width: 0; min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: 10px; padding-bottom: 14px; scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
+.sched-body[data-pane='list'] > .sched-cal-col, .sched-body[data-pane='calendar'] > .sched-list-col { display: none; }
+.sched-col-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.sched-col-head { margin: 0; font-size: 14px; font-weight: 700; }
+.sched-warning { margin: 0; padding: 6px 10px; border: 1px solid var(--warn); border-radius: 8px; color: var(--ink); background: color-mix(in srgb, var(--warn) 10%, transparent); overflow-wrap: anywhere; }
+/* Estado de cada execução: o símbolo e o texto dizem o estado; a cor só reforça. */
+.st-upcoming { --st: var(--ink-blue); }
+.st-ran { --st: var(--ink-green); }
+.st-failed { --st: var(--danger); }
+.st-discarded, .st-unknown { --st: var(--muted); }
+.st-uncertain { --st: var(--wait-ink); }
+.sched-glyph { display: inline-block; min-width: 1em; text-align: center; font-weight: 700; color: var(--st, var(--muted)); }
+.sched-st { font-weight: 600; white-space: nowrap; }
+.sched-tag { padding: 0 6px; border: 1px solid var(--line); border-radius: 10px; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+/* Rotina na lista. */
+.sched-routine.is-off :is(.sched-when, .sched-text, .sched-who) { color: var(--muted); }
+.sched-switch { flex: none; margin-left: auto; min-height: 28px; }
+.sched-routine p { margin: 0; }
+.sched-last.is-fail { color: var(--danger); }
+.sched-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.sched-history summary { cursor: pointer; display: flex; align-items: center; min-height: 28px; font-size: 13px; font-weight: 600; }
+.sched-hist { list-style: none; margin: 2px 0 0; padding: 0; display: grid; gap: 6px; }
+.sched-hist-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding-left: 8px; border-left: 3px solid var(--st, var(--line)); font-size: 12.5px; }
+.sched-hist-text { flex-basis: 100%; overflow-wrap: anywhere; }
+/* Formulário de rotina (tela de Agendamentos e ficha). */
+.sched-modal .routine-form { border: 0; padding: 0; }
+.sched-form :is(input[type='text'], input:not([type]), input[type='date'], input[type='time'], input[type='number'], textarea, select) { font: inherit; font-size: 14px; font-weight: 400; color: var(--ink); background: var(--board); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; min-width: 0; }
+:root[data-theme='dark'] .sched-form { color-scheme: dark; }
+.sched-form fieldset { display: grid; gap: 8px; min-width: 0; }
+.sched-form fieldset legend { font-size: 12.5px; font-weight: 700; }
+.sched-dates, .sched-every { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+.sched-days { display: flex; flex-wrap: wrap; gap: 6px; }
+.sched-days .btn-toggle { min-width: 44px; min-height: 36px; text-transform: capitalize; }
+.sched-label { font-size: 13px; font-weight: 600; }
+.sched-form label.check { display: flex; align-items: flex-start; gap: 8px; font-weight: 400; }
+.sched-form label.check input { flex: none; margin-top: 2px; }
+.sched-preview { margin: 0; overflow-wrap: anywhere; }
+.sched-modal .sched-form-foot { position: sticky; bottom: 0; z-index: 1; display: grid; gap: 4px; padding: 8px 0; background: var(--panel); }
+.sched-form-foot p { margin: 0; }
+/* Calendário do mês: sem lib; a grade é uma tabela de botões. Em coluna larga cada dia lista as execuções, em estreita só os símbolos. */
+.sched-cal { display: grid; gap: 10px; min-width: 0; container-type: inline-size; }
+.sched-cal-nav { display: flex; align-items: center; gap: 8px; }
+.sched-cal-nav .btn-icon { flex: none; width: 36px; height: 36px; font-size: 20px; line-height: 1; }
+.sched-cal-title { flex: 1; margin: 0; font-size: 16px; text-align: center; }
+.sched-cal-title::first-letter, .sched-dayview h3::first-letter { text-transform: uppercase; }
+.sched-cal-table { width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 3px; }
+.sched-cal-table th { padding: 2px 0; font-size: 11.5px; font-weight: 600; color: var(--muted); text-align: center; text-transform: capitalize; }
+.sched-cal-table td { padding: 0; }
+.sched-day { width: 100%; height: 56px; box-sizing: border-box; display: grid; grid-template-rows: auto 1fr; align-content: start; justify-items: start; gap: 2px; padding: 3px 4px; overflow: hidden; font: inherit; text-align: left; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.sched-day:hover { border-color: var(--accent); }
+.sched-day:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 50%, transparent); outline-offset: 1px; }
+.sched-day.is-out { color: var(--muted); background: transparent; }
+.sched-day[aria-pressed='true'] { border-color: var(--ink-blue); box-shadow: inset 0 0 0 1px var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 10%, var(--card)); }
+.sched-num { font-size: 12.5px; font-weight: 600; line-height: 1.3; }
+.sched-day.is-today .sched-num { padding: 0 6px; border-radius: 999px; color: var(--on-ink-blue); background: var(--ink-blue); }
+.sched-dots { display: flex; flex-wrap: wrap; gap: 0 2px; font-size: 12px; line-height: 1.1; }
+.sched-lines { display: none; }
+.sched-dot { font-weight: 700; color: var(--st); }
+.sched-more { font-size: 11px; color: var(--muted); }
+@container (min-width: 560px) {
+  .sched-day { height: 92px; }
+  .sched-dots { display: none; }
+  .sched-lines { display: grid; gap: 1px; width: 100%; min-width: 0; }
+  .sched-line { overflow: hidden; font-size: 11px; line-height: 1.3; white-space: nowrap; text-overflow: ellipsis; }
+}
+.sched-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; }
+.sched-dayview { display: grid; gap: 8px; }
+.sched-dayview h3 { margin: 0; font-size: 14px; }
+.sched-occ-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.sched-occ { display: grid; gap: 4px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-left: 4px solid var(--st, var(--line)); border-radius: 8px; background: var(--card); }
+.sched-occ-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; overflow-wrap: anywhere; }
+.sched-occ-time { font-weight: 700; font-variant-numeric: tabular-nums; }
+.sched-occ-state { margin: 0; }
+@media (max-width: 640px) { .sched-actions .btn-secondary, .sched-switch, .sched-history summary { min-height: 36px; } }
+@media (min-width: 860px) {
+  .modal.sched-modal { padding: 16px 20px 0; }
+  .segmented.sched-tabs { display: none; }
+  .sched-body { grid-template-columns: minmax(320px, 400px) minmax(0, 1fr); gap: 20px; }
+  .sched-body[data-pane] > .sched-col { display: grid; }
+  .sched-list-col { padding-right: 16px; border-right: 1px solid var(--line); }
+}
+@media (min-width: 1280px) { .sched-body { grid-template-columns: minmax(360px, 440px) minmax(0, 1fr); } }
 /* ---- arquivos do projeto: árvore | editor; no celular, um de cada vez ---- */
 .modal.files-modal { width: min(1280px, 100%); height: min(820px, calc(100vh - 32px)); display: flex; flex-direction: column; overflow: hidden; }
 .files-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); gap: 10px; }
@@ -666,6 +796,11 @@ textarea.q-field { resize: vertical; }
 .json-error-msg { font-size: 13px; }
 .files-pick { margin: auto; text-align: center; }
 .files-blocked { margin: 0; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); }
+/* Arquivo de segredo: o "clique aqui" (abre no editor do computador) no meio da frase (alvo de toque maior no celular) e a frase do resultado logo abaixo. */
+.files-locked p { margin: 0; }
+.files-locked p + p { margin-top: 6px; }
+.files-locked .link { min-height: 32px; padding: 0 2px; }
+.files-locked .link:disabled { opacity: .6; cursor: progress; }
 .files-image { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .files-image-view { flex: 1; min-height: 0; display: grid; place-items: center; overflow: auto; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
 .files-image-view img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
@@ -701,11 +836,11 @@ textarea.q-field { resize: vertical; }
   .files-cm .cm-panels .cm-panel.cm-search :is(button.cm-button, label) { min-height: 34px; }
 }
 .tasks-columns { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(200px, 1fr)); gap: 10px; overflow-x: auto; }
-.tasks-col { display: flex; flex-direction: column; gap: 4px; min-height: 0; overflow-y: auto; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--board-dot) 90%, transparent); }
+.tasks-col { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow-y: auto; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--board-dot) 90%, transparent); }
 .tasks-col.is-over { border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 10%, transparent); }
 .tasks-col h3 { margin: 0 0 2px; font-family: var(--hand); font-size: 21px; line-height: 1; cursor: help; }
 .tasks-col-review h3 { color: var(--waiting-ink); }
-.task-card { display: grid; gap: 3px; text-align: left; margin: 4px 0 0 0 ; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; cursor: grab; }
+.task-card { display: grid; gap: 3px; text-align: left; margin: 6px 0 0 0 ; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; cursor: grab; }
 .task-card:hover { border-color: var(--ink-blue); }
 .task-card.is-waiting, .task-card.is-waiting:hover { border-color: var(--waiting); box-shadow: 0 0 0 1px var(--waiting); }
 .task-card.is-selected { outline: 2px solid var(--ink-blue); }
@@ -754,21 +889,16 @@ textarea.q-field { resize: vertical; }
 /* Card registrado sozinho: o selo é o da fila (tracejado, sem cor de alerta), numa linha só; a lista de arquivos quebra caminho longo. */
 .task-queue.task-auto { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-auto-files li { overflow-wrap: anywhere; }
-/* Ordem da fila (A fazer): três botões colados sob o cartão (fora do botão dele); no detalhe, com texto. Arrastar um cartão sobre outro da mesma fila marca o alvo (.is-drop). */
-.task-order-row { margin-top: -4px; }
-.task-order { display: inline-flex; flex-wrap: wrap; gap: 6px; }
-.task-order .btn-secondary.btn-icon { width: 32px; height: 28px; }
-.task-order .btn-secondary:disabled { opacity: 0.45; }
-.task-card.is-drop, .task-card.is-drop:hover { border-color: var(--ink-blue); outline: 2px dashed var(--ink-blue); outline-offset: 1px; }
+/* Ordem da fila (A fazer): arrastar o cartão até o lugar. O arrastado fica fraco; o alvo da mesma fila ganha um traço azul na borda de cima (entra antes) ou de baixo (entra depois). */
+.task-card.is-dragging { opacity: 0.5; }
+.task-card.is-drop-before, .task-card.is-drop-before:hover { border-color: var(--ink-blue); box-shadow: 0 -3px 0 0 var(--ink-blue); }
+.task-card.is-drop-after, .task-card.is-drop-after:hover { border-color: var(--ink-blue); box-shadow: 0 3px 0 0 var(--ink-blue); }
 .task-order-box { display: grid; gap: 6px; justify-items: start; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
 .task-order-box p { margin: 0; overflow-wrap: anywhere; }
-@media (max-width: 640px) {
-  /* Dedo, não ponteiro: 36px de altura, como os outros botões do quadro no celular. */
-  .task-order .btn-secondary.btn-icon { width: 44px; height: 36px; }
-  .task-order.is-text .btn-secondary { min-height: 36px; }
-}
 /* "No secundário": a tarefa ou a conversa roda no outro motor porque o principal bateu o limite. Discreto, como a fila (tracejado), sem cor de alerta. */
 .fallback-badge { justify-self: start; display: inline-block; max-width: 100%; color: var(--muted); border: 1px dashed var(--line); border-radius: 999px; padding: 0 7px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* "Voltou ao principal": a mesma família, com a borda contínua (o secundário é tracejado): se distingue sem depender de cor. */
+.fallback-badge.is-back { border-style: solid; }
 .chat-fallback { align-self: flex-start; margin: 4px 12px 0; }
 .task-form { display: grid; gap: 8px; border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; }
 /* z-index 3: o X do cabeçalho do quadro é item de flex com z-index 2 (vale mesmo static) e furava o painel. */
@@ -806,7 +936,14 @@ textarea.q-field { resize: vertical; }
 .task-review { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; }
 .task-review p { margin: 0; }
 /* Dúvida do funcionário: selo de uma linha no cartão (nome longo corta; o title tem o texto inteiro) e bloco no detalhe (amarelo quando é com você, como o .files-conflict). */
-.task-badge:is(.task-doubt, .task-cancelreq) { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-badge:is(.task-doubt, .task-cancelreq, .task-followup, .task-commit, .task-nocode) { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Commit automático da tarefa pronta: neutro com o SHA; amarelo (.is-waiting) em "commit parcial" e "sem commit" até você ignorar o aviso da caixa. Texto --ink, como o follow-up. */
+.task-badge.task-commit { color: var(--ink); }
+.task-commit-box { display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+.task-commit-box ul { margin: 0; padding-left: 18px; }
+.task-commit-box li { overflow-wrap: anywhere; }
+/* Follow-up aberto no cartão: neutro, ou amarelo (.is-waiting, o "precisa de você") quando espera você. Texto --ink sobre o amarelo e sobre o cartão colorido (o --muted não dá 4,5:1 ali). */
+.task-badge.task-followup { color: var(--ink); }
 /* Pedido de cancelamento (de quem pediu a tarefa, quando ela já começou): selo neutro no cartão, e no detalhe a caixa da dúvida (tracejada = esperando o responsável; contínua = decidido). */
 .task-cancelreq-box.is-decided { border-style: solid; }
 /* Espera do gate de recursos: o motivo é o que importa, então quebra linha (raio dos blocos tracejados, não pílula). */
@@ -816,22 +953,53 @@ textarea.q-field { resize: vertical; }
 /* Por que o cartão da fila A fazer não anda (dependência, fila, recursos, ajuste guardado, dúvida com o gestor): laranja, para achar de relance. Só nessa coluna (o `.task-wait` é posto por `waitWarm`, em tasks/waitTone.ts); nas outras, inclusive o motivo do Aguardar, fica neutro. Borda e fundo do --warn, texto do --wait-ink. O amarelo (.is-waiting) segue sendo o "precisa de você". */
 :is(.task-queue, .task-badge).task-wait { color: var(--wait-ink); font-weight: 600; border-style: solid; border-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .task-detail .muted.task-wait-text { color: var(--wait-ink); }
+/* A conversa da tarefa espera VOCÊ responder uma permissão (`Task.permissionWait`, tasks/PermissionWait.tsx). Aqui o laranja vale em Fazendo também: não é fila, é "precisa de você", e é a única espera dessa coluna. Parada (passou de 15 min): borda grossa e fundo um pouco mais forte (16%: com 24% o --wait-ink no claro cai para ~4,3:1), além da palavra "Parada" no texto. O atalho fica fora do botão do cartão. */
+.task-queue.task-permission { max-width: 100%; border-radius: 10px; padding: 3px 8px; line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
+.task-queue.task-permission.is-stuck { border-width: 2px; padding: 2px 7px; background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.btn-secondary.task-perm-go { width: 100%; box-sizing: border-box; margin: 2px 0 0; min-height: 28px; padding: 2px 8px; font-weight: 600; color: var(--wait-ink); border-color: var(--warn); }
+@media (max-width: 640px) { .btn-secondary.task-perm-go { min-height: 36px; } }
+.task-detail .task-perm { display: grid; gap: 6px; border: 1px solid var(--warn); border-radius: 10px; padding: 8px 10px; background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.task-detail .task-perm.is-stuck { border-width: 2px; padding: 7px 9px; background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.task-detail .task-perm b { color: var(--wait-ink); font-weight: 600; }
+.task-detail .task-perm p { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.task-detail .task-perm .btn-primary { justify-self: start; }
 /* Dúvida escalada a você e o que ela faz com a fila do funcionário. Pontilhada = pausada (ele seguiu para outra); contínua com fundo = ocupando (já há edição). A forma diz o estado sem depender de cor; texto sempre --ink (o --muted não dá 4,5:1 no cartão amarelo de Planejando). */
 .task-pause { display: grid; gap: 1px; justify-self: stretch; min-width: 0; box-sizing: border-box; border: 1px dashed var(--muted); border-radius: 10px; padding: 3px 8px; color: var(--ink); font-size: 11px; line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
 .task-pause.is-holding { border-style: solid; border-color: var(--ink); background: color-mix(in srgb, var(--ink) 7%, transparent); }
 .task-pause b { font-weight: 600; }
 /* Subtarefas: card que aguarda (em Fazendo) e subtarefa mostram o vínculo. Selo no cartão = pontilhado da fila, texto --ink (o --muted não dá 4,5:1 sobre o cartão colorido de Fazendo), sem laranja (laranja é só de A fazer). Os links ficam fora do botão do cartão (botão não cabe dentro de botão) e no detalhe. */
 .task-queue.task-subs { width: fit-content; max-width: 100%; border-radius: 10px; border-color: var(--muted); padding: 3px 8px; color: var(--ink); line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
-.task-subs-row { list-style: none; margin: -4px 0 0; padding: 0 2px; display: grid; gap: 2px; min-width: 0; }
-.task-subs-row li { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; min-width: 0; }
-.task-subs-row .link { text-align: left; overflow-wrap: anywhere; }
-.task-subs-box .task-subs-row { margin: 0; padding: 0; }
+.task-subs-row { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; min-width: 0; }
+.task-subs-row li { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; min-width: 0; }
+.task-subs-row .link { flex: 1 1 auto; min-width: 0; text-align: left; overflow-wrap: anywhere; }
+/* Status da subtarefa: pílula neutra (a do cartão), texto --ink (o --muted não dá 4,5:1 sobre o fundo da bandeja). */
+.task-subs-status { flex: none; color: var(--ink); font-weight: 400; white-space: nowrap; }
 @media (max-width: 640px) { .task-subs-row .link { min-height: 32px; } }
+/* Pilha do cartão: todo cartão do quadro vem num `div` (`task-slot`, só para o cartão continuar esticando como grid item); com bandeja o mesmo `div` vira `task-stack`, para o foco não se perder quando ela aparece ou some. O cartão e a bandeja das subtarefas viram um bloco só. O cartão perde os cantos de baixo (a borda dele é a divisória), a bandeja leva o mesmo contorno e uma linha em árvore, na altura do texto do cartão, desce até cada subtarefa. O contorno de selecionado, o traço do arrasto e o tracejado de arquivada passam para a pilha (`:has`), para valer o bloco inteiro. */
+.task-slot { display: grid; }
+.task-stack { display: grid; margin: 4px 0 0; border-radius: 8px; }
+.task-stack > .task-card { margin: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.task-subs-tray { --elbow: 9px; position: relative; padding: 7px 10px 7px 24px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 8px 8px; background: color-mix(in srgb, var(--board-base) 15%, var(--card)); }
+.task-subs-tray li { position: relative; }
+.task-subs-tray li::before { content: ''; position: absolute; left: -14px; top: 0; width: 11px; height: var(--elbow); border-left: 1px solid var(--muted); border-bottom: 1px solid var(--muted); border-bottom-left-radius: 5px; }
+.task-subs-tray li:first-child::before { top: -8px; height: calc(var(--elbow) + 8px); }
+.task-subs-tray li:not(:last-child)::after { content: ''; position: absolute; left: -14px; top: var(--elbow); bottom: -2px; border-left: 1px solid var(--muted); }
+@media (max-width: 640px) { .task-subs-tray { --elbow: 16px; } }
+.task-stack:has(> .task-card.is-selected) { outline: 2px solid var(--ink-blue); }
+.task-stack > .task-card.is-selected { outline: 0; }
+.task-stack:has(> .task-card.is-dragging) { opacity: 0.5; }
+.task-stack > .task-card.is-dragging { opacity: 1; }
+.task-stack:has(> .task-card.is-drop-after) { box-shadow: 0 3px 0 0 var(--ink-blue); }
+.task-stack > .task-card.is-drop-after, .task-stack > .task-card.is-drop-after:hover { box-shadow: none; }
+.task-stack:has(> .task-card:hover) > .task-subs-tray { border-color: var(--ink-blue); }
+.task-stack:has(> .task-card.is-waiting) > .task-subs-tray { border-color: var(--waiting); box-shadow: 0 0 0 1px var(--waiting); }
+.task-stack:has(> .task-card.is-archived) > .task-subs-tray { border-style: dashed; border-top: 0; }
+.task-stack:has(> .task-card.is-archived:hover, > .task-card.is-archived.is-selected) > .task-subs-tray { border-style: solid; border-top: 0; }
 /* "Retomando em X": a conversa de uma tarefa em Fazendo caiu por falha passageira e volta sozinha. Selo da fila (pontilhado), mas com texto --ink: é o que está acontecendo agora; sem laranja (o laranja é só de A fazer). */
 .task-queue.task-retry { width: fit-content; max-width: 100%; border-radius: 10px; border-color: var(--muted); padding: 3px 8px; color: var(--ink); line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
-:is(.task-doubt-box, .task-cancelreq-box, .task-subs-box) { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
+:is(.task-doubt-box, .task-cancelreq-box, .task-subs-box, .task-fu-box) { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
 .task-doubt-box.is-escalated { border: 1px solid var(--waiting); background: color-mix(in srgb, var(--waiting) 12%, transparent); }
-:is(.task-doubt-box, .task-cancelreq-box, .task-subs-box) :is(p, ul) { margin: 0; overflow-wrap: anywhere; }
+:is(.task-doubt-box, .task-cancelreq-box, .task-subs-box, .task-fu-box) :is(p, ul) { margin: 0; overflow-wrap: anywhere; }
 .task-doubt-box ul { padding-left: 18px; display: grid; gap: 2px; }
 .task-doubt-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
 .task-doubt-q { display: grid; gap: 4px; }
@@ -844,6 +1012,72 @@ textarea.q-field { resize: vertical; }
 @media (max-width: 640px) { .task-doubt-reply .q-option { min-height: 40px; align-content: center; } .task-doubt-reply .actions .btn-primary { min-height: 40px; } }
 .task-doubt-text { white-space: pre-wrap; max-height: 180px; overflow-y: auto; }
 .task-doubt-answer { display: grid; gap: 4px; border-top: 1px solid var(--line); padding-top: 6px; }
+/* Follow-up de revisão: um item por achado, separados por linha (o primeiro sem). O estado vem do selo e das frases embaixo, não de cor. */
+.task-fu-list { list-style: none; padding: 0; display: grid; gap: 10px; min-width: 0; }
+.task-fu { display: grid; gap: 6px; min-width: 0; }
+.task-fu + .task-fu { border-top: 1px solid var(--line); padding-top: 10px; }
+/* O achado pode ter até 4000 caracteres: tamanho de leitura (não o de título da dúvida) e mais altura antes de rolar. */
+.task-fu .task-doubt-text { font-size: 14px; max-height: 260px; }
+/* "Virou card" / "Descartar" (detalhe e caixa): botões em linha, o formulário embaixo com a confirmação (decidido uma vez, não se desfaz). */
+.task-fu-decide { display: grid; gap: 8px; min-width: 0; }
+.task-fu-decide p { margin: 0; }
+.task-fu-actions { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.task-fu-form { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 8px; min-width: 0; }
+/* Campos: o desenho do Configurações (fora de .modal, como na caixa, o campo nativo ficaria branco no escuro); dentro do modal do quadro vale o dele (mais específico). */
+.task-fu-form { color-scheme: light; scroll-margin-bottom: 12px; }
+:root[data-theme='dark'] .task-fu-form { color-scheme: dark; }
+.task-fu-form :is(select, input:not([type='radio']), textarea) { width: 100%; box-sizing: border-box; min-width: 0; font: inherit; font-size: 13px; font-weight: 400; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+.task-fu-form textarea { resize: vertical; line-height: 1.4; }
+.task-fu-form :is(select, input:not([type='radio']), textarea):focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); border-color: var(--ink-blue); }
+.task-fu-form :is(select, input, textarea):disabled { opacity: 0.6; cursor: default; }
+@media (max-width: 640px) { .task-fu-form :is(select, input:not([type='radio'])) { min-height: 40px; font-size: 16px; } .task-fu-form textarea { font-size: 16px; } }
+/* Motivos prontos do descarte: rádios em coluna, cada um com a área de toque do celular; o rádio nativo, sem o estilo de campo acima. */
+.task-fu-why { border: 0; margin: 0; padding: 0; display: grid; gap: 2px; min-width: 0; }
+.task-fu-why legend { padding: 0 0 4px; font-size: 13px; }
+.task-fu-why .check { display: flex; align-items: center; gap: 8px; min-height: 32px; font-size: 13px; }
+.task-fu-why .check input { flex: none; width: auto; margin: 0; accent-color: var(--ink-blue); }
+@media (max-width: 640px) { .task-fu-why .check { min-height: 40px; } }
+.task-fu-form .actions { margin: 0; }
+@media (max-width: 640px) { .task-fu-decide .task-fu-actions :is(.btn-primary, .btn-secondary), .task-fu-form .actions button, .task-fu-box .task-fu-actions button, .task-nocode-box .task-fu-actions button { min-height: 40px; } }
+/* Na caixa: os botões alinham com o texto do item (como "já troquei"), e o formulário usa a largura toda do menu (a coluna do texto é estreita no celular). */
+.task-fu-decide.is-compact { padding: 0 10px 8px; }
+.task-fu-decide.is-compact .task-fu-actions { justify-content: flex-end; padding-left: calc(var(--inbox-kind-w) + 10px); }
+.toolbar .task-fu-decide.is-compact .task-fu-actions button { padding: 0; }
+@media (max-width: 640px) { .task-fu-decide.is-compact .task-fu-actions .link { min-height: 40px; } }
+.task-fu-decide.is-compact .task-fu-form { border-top: 1px solid var(--line); }
+.inbox-fu-text { padding: 0 10px 6px calc(var(--inbox-kind-w) + 20px); font-size: 12px; }
+.inbox-fu-text summary { cursor: pointer; color: var(--muted); width: fit-content; min-height: 24px; }
+/* Depois da regra base (mesma especificidade: a que vem por último vale). Sem `display: flex` para não perder a seta do <details>; o respiro em cima e embaixo centra o texto nos 40px. */
+@media (max-width: 640px) { .inbox-fu-text summary { min-height: 40px; padding: 12px 0; box-sizing: border-box; } }
+.inbox-fu-text p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; color: var(--ink); }
+/* Follow-up com os campos do revisor (tasks/FollowUpFields.tsx), no balão da conversa, no detalhe do card e na caixa. O selo traz a recomendação por TEXTO; a borda (sólida = vale fazer, tracejada = opcional) só reforça. Texto sempre --ink, como os outros selos sobre fundo colorido. */
+.fu-fields { display: grid; gap: 4px; min-width: 0; }
+.fu-fields p { margin: 0; overflow-wrap: anywhere; }
+.fu-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.fu-title { font-size: 14px; line-height: 1.35; }
+.task-badge.fu-rec { color: var(--ink); border-width: 1.5px; }
+.task-badge.fu-rec.is-worth { border-style: solid; border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 12%, transparent); font-weight: 600; }
+.task-badge.fu-rec.is-optional { border-style: dashed; border-color: var(--muted); }
+.task-badge.fu-done { color: var(--ink); border-color: var(--ink-green); background: color-mix(in srgb, var(--ink-green) 12%, transparent); }
+.fu-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; }
+.fu-details summary { cursor: pointer; color: var(--muted); width: fit-content; min-height: 24px; font-size: 12px; }
+.fu-details .fu-text { margin: 4px 0 0; white-space: pre-wrap; max-height: 220px; overflow-y: auto; font-size: 13px; color: var(--ink); }
+@media (max-width: 640px) { .fu-details summary { min-height: 36px; padding: 8px 0; box-sizing: border-box; } }
+/* Balão do follow-up na conversa de trabalho (chat/FollowUpNotice.tsx): o padrão do balão de segredo (.permission), em azul (decisão, não alerta); "Finalizado" e a dica quando a tarefa de origem já fechou. */
+.followup-notice { display: grid; gap: 8px; border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 6%, var(--panel)); }
+.followup-notice p { margin: 0; overflow-wrap: anywhere; }
+.followup-notice .task-fu-actions { margin-top: 0; }
+.fu-finished { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.followup-note { align-self: stretch; margin: 0; padding: 0 4px; overflow-wrap: anywhere; }
+.task-fu-done { color: var(--ink); }
+.inbox-fu-done { margin: 0; padding: 10px 14px 0; flex: none; overflow-wrap: anywhere; color: var(--ink); }
+.inbox-fu-meta { display: flex; flex-wrap: wrap; gap: 4px 6px; padding: 0 10px 4px calc(var(--inbox-kind-w) + 20px); }
+.inbox-fu-meta:empty { display: none; }
+.inbox-fu-impact { margin: 0; padding: 0 10px 6px calc(var(--inbox-kind-w) + 20px); overflow-wrap: anywhere; }
+/* Card sem código (tasks/NoCode.tsx): selo no cartão como o do follow-up, e o bloco do detalhe no padrão da dúvida (tracejado = esperando; o amarelo vem do selo quando é com você). */
+.task-badge.task-nocode { color: var(--ink); }
+.task-nocode-box { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
+.task-nocode-box :is(p, details) { margin: 0; overflow-wrap: anywhere; }
 /* Formulário de criar com os opcionais abertos: rola por dentro; sem teto ele empurra o quadro (altura 0 no celular). */
 .tasks-modal .task-form { max-height: 60%; overflow-y: auto; }
 .tasks-modal .task-form > .actions { position: sticky; bottom: -10px; z-index: 1; margin-bottom: -10px; padding: 6px 0 10px; background: var(--panel); }
@@ -964,6 +1198,8 @@ textarea.q-field { resize: vertical; }
 .segmented { display: inline-flex; gap: 6px; }
 /* Conversa: qual delas, lista de tarefas do funcionário, ajustes, menu de "/" e "@", anexos. */
 .chat-convos { display: flex; gap: 6px; align-items: center; margin: 0px 0; }
+/* Conversa sem processo aberto: apagada na lista (ainda dá para abrir; mandar mensagem nela a reativa). Em celular a cor da opção é ignorada: lá vale o "· ativa" do texto. */
+.chat-convos option.is-idle { color: var(--muted); }
 .chat-convos select { flex: 1; min-width: 0; font: inherit; font-size: 12.5px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
 /* Celular: a linha das conversas (seletor e botões) sobe para 36px de alvo de toque. */
 @media (max-width: 640px) { .chat-convos select { min-height: 36px; } .chat-convos .btn-secondary.chat-icon-btn { width: 36px; height: 36px; } }
@@ -1016,8 +1252,22 @@ textarea.q-field { resize: vertical; }
 .simple-hire { display: grid; gap: 12px; }
 .simple-summary { margin: 0; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; }
 .simple-more { margin: 8px 2px; }
+/* Quem ajuda no roteiro (pensador × executor): uma linha por agent, o papel embaixo; quebra no 360 px. */
+.roster { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.roster-title { margin: 0; font-weight: 600; }
+.roster ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.roster li { display: grid; gap: 2px; }
+.roster-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.roster p { margin: 0; }
+.agent-role { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.agent-drift { margin: 0; padding: 6px 8px; border: 1px dashed var(--line); border-radius: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .btn-toggle[aria-pressed='true'], .files-cm .cm-panels .cm-panel.cm-search label:has(input:checked) { color: var(--ink-blue); border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 12%, transparent); }
 .msg-queued { display: block; margin-top: 3px; font-size: 11px; opacity: 0.75; font-style: italic; }
+/* "Excluir" na mensagem guardada pelo Clube: sempre à vista (no toque não há hover). Herda a cor do balão (--card sobre o azul), como o horário. Base = celular (alvo de 36px); o desktop compacta. */
+.msg .btn-secondary.msg-held-discard { display: block; margin-top: 6px; min-height: 36px; padding: 2px 14px; color: inherit; border-color: color-mix(in srgb, currentColor 60%, transparent); }
+.msg .btn-secondary.msg-held-discard:hover:not(:disabled) { border-color: currentColor; background: color-mix(in srgb, currentColor 14%, transparent); }
+.msg .btn-secondary.msg-held-discard:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+@media (min-width: 641px) { .msg .btn-secondary.msg-held-discard { min-height: 28px; padding: 3px 10px; } }
 .chat-doing { display: block; margin-top: 2px; font-size: 10px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- ranking de custo ---- */
@@ -1106,6 +1356,14 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 :is(.modal, .conn-form, .hire-inline) :is(input, textarea, select):focus { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); border-color: var(--ink-blue); }
 :is(.modal, .hire-inline) fieldset { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px 10px; margin: 0; }
 :is(.modal, .hire-inline) legend { font-size: 10px; font-weight: 600; padding: 0 4px; }
+/* Caminho da pasta + "Procurar…": o campo cede espaço, o botão não encolhe e acompanha a altura do campo. */
+.path-field { display: grid; gap: 4px; }
+.path-field > label { font-size: 13px; font-weight: 600; }
+.path-field > p { margin: 0; }
+.path-row { display: flex; align-items: stretch; gap: 8px; }
+.path-row input { flex: 1 1 0; min-width: 0; }
+.path-row .btn-secondary { flex: none; min-height: 36px; }
+.path-row .btn-secondary:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); outline-offset: 1px; border-color: var(--ink-blue); }
 
 /* ---- ficha do funcionário: abas, painel e rodapé fixo ---- */
 /* Altura fixa: trocar de aba não faz o modal pular de tamanho. */
@@ -1182,6 +1440,9 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .person-scope { margin: 0; color: var(--muted); }
 .person-note { margin: 0; padding: 8px 10px; border: 1px solid var(--warn); border-radius: 8px; color: var(--ink); line-height: 1.4; overflow-wrap: anywhere; }
 .modal-footer .person-note { max-height: 6.5em; overflow-y: auto; }
+/* Impasse "Só planeja" × agent que edita / MCP Livre (ficha): o aviso da borda `--warn`, com os parágrafos juntos e o texto em `--ink`. */
+.plan-impasse { margin: 8px 0 0; display: grid; gap: 6px; }
+.plan-impasse p { margin: 0; }
 /* Memória pessoal (aba Ficha): campo próprio, gravado à parte da ficha. */
 .person-memory { display: grid; gap: 8px; }
 .person-memory textarea { font: inherit; font-size: 13px; width: 100%; box-sizing: border-box; resize: vertical; }
@@ -1464,10 +1725,40 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 .gh-actions { display: flex; flex-wrap: wrap; gap: 8px; position: sticky; bottom: -18px; z-index: 1; margin: 0 -22px -18px; padding: 10px 22px 18px; background: var(--panel); box-shadow: inset 0 1px 0 var(--line); }
 .gh-url .gh-actions { position: static; margin: 0; padding: 0; background: none; box-shadow: none; }
 .gh-choose ul { list-style: none; padding: 0; display: grid; gap: 6px; }
-.gh-pick { width: 100%; display: grid; gap: 2px; text-align: left; font: inherit; font-size: 13px; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
-.gh-pick:hover:not(:disabled) { border-color: var(--accent); }
-.gh-pick:disabled { opacity: 0.6; cursor: default; }
+/* Várias skills: caixa por skill (a linha toda é o alvo de toque), "Selecionar todas", prévia em acordeão e o resultado por skill. */
+.gh-pickbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; }
+/* `.gh-modal label.…`: o `label` do modal (`:is(.modal, …) label`, em grade e negrito) tem de ceder. */
+.gh-modal label.gh-pickall { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; cursor: pointer; }
+.gh-modal label.gh-pick { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 10px; font-weight: 400; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+.gh-modal label.gh-pick:not(:has(input:disabled)):hover { border-color: var(--ink-blue); }
+.gh-modal label.gh-pick:has(input:disabled) { opacity: 0.6; cursor: default; }
+.gh-pick-text { display: grid; gap: 2px; min-width: 0; text-align: left; }
 .gh-pick .mono { overflow-wrap: anywhere; }
+:is(.gh-pickall, .gh-pick, .gh-item-check) input { flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--ink-blue); cursor: inherit; }
+:is(.gh-pickall, .gh-pick, .gh-item-check) input:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; }
+.gh-modal :is(label.gh-pick, .gh-item).is-on { border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 8%, transparent); }
+.gh-batch { list-style: none; padding: 0; display: grid; gap: 8px; }
+.gh-item { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+.gh-item.is-error { border-color: var(--danger); }
+.gh-modal label.gh-item-check { display: grid; place-items: center; min-width: 28px; min-height: 28px; margin: 0 0 0 -6px; gap: 0; cursor: pointer; }
+.gh-modal label.gh-item-check:has(input:disabled) { cursor: default; opacity: 0.6; }
+.gh-item-body { display: grid; gap: 6px; min-width: 0; }
+.gh-item summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-height: 28px; overflow-wrap: anywhere; }
+.gh-item details[open] > summary { margin-bottom: 8px; }
+.gh-item-more { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.gh-item-flag { padding-left: 8px; border-left: 3px solid var(--line); font-size: 12px; color: var(--ink); }
+.gh-item-flag.is-danger { border-left-color: var(--danger); }
+.gh-totals { display: flex; flex-wrap: wrap; gap: 6px; }
+.gh-lv { color: var(--ink); font-weight: 600; }
+.gh-lv.is-danger { border-color: var(--danger); background: var(--danger-soft); }
+.gh-lv.is-warn { border-color: var(--warn); }
+.gh-lv.is-info { border-color: var(--ink-muted); }
+.gh-results { list-style: none; padding: 0; display: grid; gap: 6px; }
+.gh-result { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 6px 10px; border: 1px solid var(--line); border-left-width: 4px; border-radius: 8px; font-size: 13px; overflow-wrap: anywhere; }
+.gh-result.is-ok { border-left-color: var(--ink-green); }
+.gh-result.is-fail { border-left-color: var(--danger); }
+.gh-result-state { font-size: 12px; font-weight: 600; }
+.gh-result .error { flex: 1 1 100%; margin: 0; }
 /* A descrição de uma skill de repositório pode ter milhares de caracteres: três linhas bastam para escolher. */
 .gh-desc { font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .gh-alerts { display: grid; gap: 6px; }
@@ -1517,7 +1808,7 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 .gh-confirm:not(.is-local) { border-color: var(--line); }
 .gh-rollback { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
 @media (min-width: 641px) { .gh-alert { grid-template-columns: 84px minmax(0, 1fr); gap: 10px; } }
-@media (max-width: 640px) { .gh-actions :is(.btn-primary, .btn-secondary), .gh-origin :is(.btn-primary, .btn-secondary), .gh-pick { min-height: 36px; } }
+@media (max-width: 640px) { .gh-actions :is(.btn-primary, .btn-secondary), .gh-origin :is(.btn-primary, .btn-secondary), .gh-pick { min-height: 36px; } .gh-modal label.gh-item-check { min-width: 36px; min-height: 36px; margin: 0 0 0 -10px; } .gh-item summary { min-height: 36px; } }
 
 /* ---- registro de acesso aos servidores (na ficha) ---- */
 .server-log { margin-top: 10px; }
@@ -1562,6 +1853,7 @@ a.usage:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40
 .inbox-count { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--waiting-ink); color: #fff; font-size: 11.5px; font-weight: 700; line-height: 18px; text-align: center; }
 .inbox-menu { --inbox-kind-w: 76px; position: absolute; top: calc(100% + 8px); left: 0; width: min(440px, calc(100vw - 24px)); max-height: min(70vh, 520px); display: flex; flex-direction: column; background: var(--panel-glass); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.2); overflow: hidden; font-size: 13px; z-index: 30; }
 .inbox-empty { margin: 0; padding: 14px; }
+.inbox-fu-gone { margin: 0; padding: 10px 14px 0; flex: none; overflow-wrap: anywhere; }
 .inbox-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; display: grid; gap: 2px; }
 .toolbar .inbox-item { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: 'kind who at' 'kind topic at' 'kind summary at'; column-gap: 10px; row-gap: 2px; align-items: center; text-align: left; padding: 7px 10px; border: 1px solid transparent; border-radius: 8px; }
 .toolbar .inbox-item:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); border-color: transparent; }
@@ -1580,9 +1872,27 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 .inbox-who { grid-area: who; }
 /* Assunto da conversa: 1 linha, corta com reticências. Sem assunto a linha não existe e a área fica vazia (altura 0). */
 .inbox-topic { grid-area: topic; font-size: 12px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.inbox-summary { grid-area: summary; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.inbox-blocked .inbox-summary, .inbox-notStarted .inbox-summary, .inbox-question .inbox-summary, .inbox-stuck .inbox-summary { white-space: normal; overflow-wrap: anywhere; }
-.inbox-dismiss .error { flex: 1 1 100%; text-align: right; }
+/* Texto do aviso (pergunta, erro, permissão): até 2 linhas, para dar para ver se é urgente sem abrir; o resto fica no title. */
+.inbox-summary { grid-area: summary; color: var(--muted); font-size: 12px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.inbox-blocked .inbox-summary, .inbox-notStarted .inbox-summary, .inbox-stuck .inbox-summary, .inbox-followUp .inbox-summary, .inbox-denied .inbox-summary, .inbox-sandbox .inbox-summary { display: block; -webkit-line-clamp: unset; line-clamp: unset; overflow: visible; }
+/* Aviso da máquina (terminal do Codex, política de senha): a linha não é botão (não há para onde ir), então sem o realce de passar o mouse; o comando para copiar fica embaixo, alinhado
+   com o texto, e o × fica no alto (o centro do item cairia sobre o comando). Em tela estreita o comando usa a largura toda. */
+.toolbar .inbox-sandbox:hover { background: transparent; }
+.toolbar .inbox-list li:has(> .inbox-sandbox) .inbox-x { top: 8px; transform: none; }
+.inbox-sandbox-fix { margin: 0; padding: 0 10px 8px calc(var(--inbox-kind-w) + 20px); }
+@media (max-width: 480px) { .inbox-sandbox-fix { padding-left: 10px; } }
+/* Dúvida de tarefa: o texto vai até 240 caracteres (askedLine), então cabe mais linhas que nos outros avisos. */
+.inbox-question .inbox-summary { -webkit-line-clamp: 4; line-clamp: 4; }
+.inbox-dismiss :is(.error, .inbox-fix-ok) { flex: 1 1 100%; text-align: right; }
+/* "Delegar revisão" na revisão parada (inbox/ReviewShortcut.tsx): o seletor do painel do card embaixo do item, na largura toda do menu (a coluna do texto é estreita no celular). */
+.inbox-review-pick { display: grid; gap: 4px; margin: 0; padding: 0 10px 8px; }
+.inbox-review-pick p { margin: 0; overflow-wrap: anywhere; }
+.inbox-review-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.inbox-review-row select { flex: 1 1 200px; min-width: 0; font: inherit; font-size: 13px; font-weight: 400; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+.inbox-review-row select:focus-visible { outline: 2px solid color-mix(in srgb, var(--ink-blue) 40%, transparent); border-color: var(--ink-blue); }
+.inbox-review-row select option { background: var(--panel); color: var(--ink); }
+.inbox-review-row button { flex: none; }
+@media (max-width: 640px) { .inbox-review-row :is(select, button), .inbox-dismiss:has(.inbox-delegate) button { min-height: 40px; } .inbox-review-row select { font-size: 16px; } }
 .inbox-at { grid-area: at; white-space: nowrap; }
 /* No celular o botão não fica na borda esquerda: ancorada nele, a caixa saía pela direita. Ocupa a largura da tela. */
 @media (max-width: 480px) {

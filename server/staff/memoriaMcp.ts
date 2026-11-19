@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { MEMORIA_MCP_NAME } from '../../shared/model';
+import { memoryJudge, memoryLimitText, memoryMeasure, memoryRefusal } from '../../scripts/hooks/memory-cap.mjs';
 import { ROOT } from '../root';
 import { memoryDir, memoryFile, writeAtomic } from './store';
 
@@ -19,8 +20,8 @@ type ToolName = (typeof MEMORIA_TOOLS)[number];
 
 const VERSION = '1.0.0';
 const PROTOCOLS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
-/** Cada arquivo da memória (a ficha pede uma memória curta: isto só impede um laço de encher o disco). */
-export const MEMORIA_MAX_BYTES = 32 * 1024;
+// O teto de cada arquivo (índice: 60 linhas e 8 KB; detalhe: 16 KB) e a regra para memória que já passa dele estão em scripts/hooks/memory-cap.mjs,
+// a mesma do aviso da ficha e do hook que cobre o Write/Edit do Claude.
 /** Arquivos de detalhe na pasta `<id>.memory`. */
 export const MEMORIA_MAX_FILES = 100;
 
@@ -97,7 +98,6 @@ export function createMemoriaMcp(opts: MemoriaMcpOptions) {
     if (typeof args.conteudo !== 'string' || !args.conteudo.trim()) throw new MemoriaError('informe o conteúdo (texto, não vazio)');
     if (CONTROL.test(args.conteudo)) throw new MemoriaError('a memória aceita só texto (sem caracteres de controle)');
     const text = normalize(args.conteudo);
-    if (Buffer.byteLength(text, 'utf8') > MEMORIA_MAX_BYTES) throw new MemoriaError(`o arquivo passa de ${MEMORIA_MAX_BYTES / 1024} KB: resuma (a memória é curta)`);
     const dir = path.dirname(target.file);
     // O índice mora em `.myco/staff`; o detalhe, na pasta da memória (que pode ainda não existir). Link num dos dois: recusado.
     const dirExists = target.index || (await assertPlain(dir, 'dir'));
@@ -105,8 +105,15 @@ export function createMemoriaMcp(opts: MemoriaMcpOptions) {
     if (!target.index && dirExists && !exists && (await fs.readdir(dir)).length >= MEMORIA_MAX_FILES) {
       throw new MemoriaError(`a pasta da memória já tem ${MEMORIA_MAX_FILES} arquivos: apague os que ficaram velhos`);
     }
+    // Teto: acima dele a gravação é recusada (o arquivo vai e volta por inteiro, então cada gravação gorda custa saída e pode apagar o que não foi lido).
+    // Memória que já passa do teto aceita uma versão menor que a atual, para o funcionário reduzir em vez de ficar preso.
+    const kind = target.index ? 'index' : 'detail';
+    const size = memoryMeasure(text);
+    const verdict = memoryJudge(kind, size, exists ? memoryMeasure(await fs.readFile(target.file, 'utf8')) : null);
+    if (!verdict.ok) throw new MemoriaError(memoryRefusal(kind, size, { currentOver: verdict.currentOver, detailDir: rel(memoryDir(opts.projectPath, opts.staffId)) }));
     await writeAtomic(target.file, text);
-    return `gravado: ${rel(target.file)} (${text.split('\n').length - 1} linhas, ${Buffer.byteLength(text, 'utf8')} bytes)`;
+    const still = verdict.over ? `; ainda passa do teto (${memoryLimitText(kind)}): resuma mais na próxima gravação` : '';
+    return `gravado: ${rel(target.file)} (${size.lines} linhas, ${size.bytes} bytes${still})`;
   }
 
   async function apagar(args: { arquivo?: unknown }): Promise<string> {
@@ -174,7 +181,7 @@ export const TOOLS = [
   {
     name: 'memoria_gravar',
     description:
-      'Grava (cria ou substitui por inteiro) um arquivo da SUA memória: o índice `.myco/staff/<id>.memory.md` ou um detalhe `.myco/staff/<id>.memory/<assunto>.md` (minúsculas e hífens), com os caminhos que a seção Memória da sua ficha mostra. É a única escrita permitida em plan; qualquer outro arquivo é recusado. Mande o arquivo inteiro (leia antes, para não perder o que vale). Curto, sem segredos.',
+      `Grava (cria ou substitui por inteiro) um arquivo da SUA memória: o índice \`.myco/staff/<id>.memory.md\` ou um detalhe \`.myco/staff/<id>.memory/<assunto>.md\` (minúsculas e hífens), com os caminhos que a seção Memória da sua ficha mostra. É a única escrita permitida em plan; qualquer outro arquivo é recusado. Mande o arquivo inteiro (leia antes, para não perder o que vale). Curto, sem segredos. Teto: índice de ${memoryLimitText('index')}, detalhe de ${memoryLimitText('detail')}; acima disso a gravação é recusada (resuma), exceto uma versão menor que a atual quando ela já passa do teto.`,
     inputSchema: {
       type: 'object',
       properties: {

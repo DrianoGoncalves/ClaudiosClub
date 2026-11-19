@@ -1,15 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
 import { isClosed, type InboxItem, type InboxKind, type StaffProfile, type Task } from '../../../shared/model';
-import { api, withUsageConfirm } from '../api';
+import { api, filesApi, withUsageConfirm } from '../api';
+import { fixNoteOf, fixTargetOf, runFix, type FixNote, type FixTarget } from '../chat/fixSecret';
 import { secretFileOf } from '../chat/secretAlerts';
 import { SecretVerdictRow } from '../chat/SecretVerdictRow';
 import { formatAgo } from '../format';
 import { t } from '../i18n';
+import { RecommendationBadge } from '../tasks/FollowUpFields';
+import { followUpHasMore } from '../tasks/followUp';
+import { fullText, hasFields, taskFinished } from '../tasks/followUpNotice';
+import { giveBackBody, giveBackHeldNote } from '../tasks/noCode';
+import { FollowUpDecide, FollowUpDoneNote, FollowUpGoneNote } from '../tasks/TaskFollowUps';
 import { TaskCloseDialog } from '../tasks/TaskCloseDialog';
+import { taskIn, useProjectTasks } from '../tasks/useProjectTasks';
 import { isInsideDialog } from '../lib/dialogStore';
+import { isLocalPage } from '../office/folderPick';
+import { sandboxOf } from './codexSandbox';
+import { deniedAction } from './deniedAlert';
 import { inboxText, inboxWho } from './inboxText';
+import { ReviewShortcutForm } from './ReviewShortcut';
+import { reviewShortcutOf } from './delegateReview';
+import { SandboxFix } from './SandboxFix';
 import { secretVerdictOf } from './secretVerdict';
-import { alertAction, isTaskAlert, type InboxOpen } from './taskAlerts';
+import { alertAction, stuckNoCodeOf, stuckOf, type InboxOpen } from './taskAlerts';
 import type { InboxView } from './useInbox';
 
 // Botão "precisa de mim" no topo do quadro, com o contador, e a lista que abre embaixo dele.
@@ -28,6 +41,8 @@ const KIND_LABEL: Record<InboxKind, string> = {
   notStarted: t('inbox.kindNotStarted'),
   question: t('inbox.kindQuestion'),
   stuck: t('inbox.kindStuck'),
+  followUp: t('inbox.kindFollowUp'),
+  denied: t('inbox.kindDenied'),
 };
 
 /** O que fazer com quem espera uma tarefa cancelada (item 'blocked'), na ordem dos botões. */
@@ -43,8 +58,10 @@ function dismissTitleOf(item: InboxItem): string | null {
   if (item.kind === 'waiting' && item.id.startsWith('question:')) return t('office.questionSeenTitle');
   if (item.id.startsWith('waiting:')) return t('inbox.dismissWaitingTitle');
   if (item.kind === 'routine') return t('inbox.dismissTitle');
-  // Erro (`error:`/`cap:`): o servidor guarda o carimbo, então outro erro da mesma conversa volta a avisar.
-  if (item.kind === 'error') return t('inbox.dismissTitle');
+  // Erro (`error:`/`cap:`): o servidor guarda o carimbo, então outro erro da mesma conversa volta a avisar. O aviso do sandbox do Codex só volta se a política passar a 0 e falhar de novo.
+  if (item.kind === 'error') return t(item.codexSandbox ? 'inbox.sandbox.dismissTitle' : 'inbox.dismissTitle');
+  // Ação barrada: o servidor guarda o turno ignorado, então só uma negação de turno novo volta a avisar.
+  if (item.kind === 'denied') return t('inbox.denied.dismissTitle');
   return null;
 }
 
@@ -54,15 +71,18 @@ export function InboxMenu({
   staff = [],
   onOpen,
   onOpenFile,
+  onOpenSheet,
 }: {
   inbox: InboxView;
   /** Título da conversa por sessionId (manual, gerado ou assunto); sem título conhecido, o item não mostra a linha. */
   titleOf: ReadonlyMap<string, string>;
-  /** As fichas (de todos os projetos): o diálogo de cancelar mostra o nome de quem cuida de cada tarefa que espera. */
-  staff?: ReadonlyArray<Pick<StaffProfile, 'id' | 'name' | 'projectId'>>;
+  /** As fichas (de todos os projetos): o diálogo de cancelar mostra o nome de quem cuida de cada tarefa que espera, e o atalho "Delegar revisão" oferece as do projeto. */
+  staff?: ReadonlyArray<StaffProfile>;
   onOpen: InboxOpen;
-  /** Abre o arquivo do aviso de segredo no editor do projeto do item; sem ele o link não aparece. */
-  onOpenFile?: (item: InboxItem, path: string) => void;
+  /** Abre o arquivo comum do aviso de segredo na aba Arquivos do projeto do item (na linha, se vier); sem ele, só o arquivo de segredo tem "corrigir" (abre fora do Club). */
+  onOpenFile?: (item: InboxItem, path: string, line?: number) => void;
+  /** Abre a ficha de quem foi barrado (atalho do aviso de ação barrada); sem ele, o atalho que leva à ficha não aparece. */
+  onOpenSheet?: (item: InboxItem) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -71,17 +91,60 @@ export function InboxMenu({
   /** O item com uma ação de tarefa em andamento e o último erro dela (a tarefa pode ter mudado entre a leitura e o clique). */
   const [busy, setBusy] = useState<string | null>(null);
   const [failed, setFailed] = useState<{ id: string; message: string } | null>(null);
-  /** Cancelar um cartão esquecido: o mesmo diálogo do quadro (motivo e o que fazer com quem espera), nunca um clique solto. */
+  /** "Já decidido por outro caminho" (409 do follow-up): a releitura tira o item da lista, então o aviso fica aqui, no menu, até fechar ou nova tentativa. */
+  const [followUpGone, setFollowUpGone] = useState<string | null>(null);
+  /** O que a última decisão de follow-up fez ("Card t-… criado…"): o item decidido some da lista, então a frase fica aqui, no menu, até fechar ou nova decisão. */
+  const [followUpDone, setFollowUpDone] = useState<string | null>(null);
+  /** O item de segredo cujo "corrigir" está abrindo o arquivo, e o que o último clique deu (a frase fica no item até fechar o menu). */
+  const [fixing, setFixing] = useState<string | null>(null);
+  const [fixNote, setFixNote] = useState<({ id: string } & FixNote) | null>(null);
+  /** Cancelar um cartão esquecido ou sem código: o mesmo diálogo do quadro (motivo e o que fazer com quem espera), nunca um clique solto. */
   const [closing, setClosing] = useState<{ item: InboxItem; task: Task; tasks: Task[] } | null>(null);
+  /** O item da revisão parada com o seletor de "Delegar revisão" aberto. */
+  const [delegating, setDelegating] = useState<string | null>(null);
+  /** Quem recebeu a revisão pedida pelo atalho: o item some da lista, então a frase fica aqui, no menu, até fechar ou novo pedido. */
+  const [reviewAsked, setReviewAsked] = useState<string | null>(null);
+  // O follow-up pede a tarefa de origem (Finalizado?, o responsável dela, o texto inteiro) e o atalho "Delegar revisão" o estado da revisão (status, quem revisou):
+  // lê o quadro dos projetos que têm um desses itens, só com o menu aberto.
+  const fuProjects = inbox.items.filter((i) => (i.kind === 'followUp' && i.followUp) || stuckOf(i)?.humanAction === 'review').map((i) => i.projectId);
+  const fuTasks = useProjectTasks(fuProjects, open && fuProjects.length > 0);
 
-  /** Lê o quadro do projeto (para achar quem espera a tarefa) e abre o diálogo de cancelar. */
-  const askCancel = (item: InboxItem) =>
+  /** Lê o quadro do projeto (para achar quem espera a tarefa) e abre o diálogo de cancelar a tarefa `taskId` do item. */
+  const askCancel = (item: InboxItem, taskId: string) =>
     run(item, async () => {
       const tasks = (await api.tasks(item.projectId)) ?? [];
-      const task = tasks.find((x) => x.id === item.notStarted!.taskId);
+      const task = tasks.find((x) => x.id === taskId);
       // Sumiu ou já fechou entre a leitura da caixa e o clique: `run` relê a caixa e o item se vai.
       if (task && !isClosed(task)) setClosing({ item, task, tasks });
     });
+
+  /** Devolve o card sem código ao responsável: uma mensagem na conversa de trabalho dele, que tira a marca; sem a conversa, o erro diz para cancelar. */
+  const giveBack = (item: InboxItem, taskId: string) =>
+    run(item, async () => {
+      const task = ((await api.tasks(item.projectId)) ?? []).find((x) => x.id === taskId);
+      const body = giveBackBody(task);
+      if (!body) throw new Error(t('tasks.noCodeNoSession'));
+      const held = giveBackHeldNote(await withUsageConfirm((force) => api.chatSend(item.projectId, { ...body, force })));
+      if (held) throw new Error(held);
+    });
+
+  /** "Corrigir" do aviso de segredo: arquivo comum abre a aba Arquivos (e o menu fecha); arquivo de segredo abre no editor do computador e a frase fica no item. */
+  const fix = async (item: InboxItem, target: FixTarget) => {
+    if (fixing) return;
+    setFixing(item.id);
+    setFixNote(null);
+    try {
+      const openFiles = onOpenFile && ((path: string, line?: number) => {
+        setOpen(false);
+        onOpenFile(item, path, line);
+      });
+      const outcome = await runFix(target, { projectId: item.projectId, local: isLocalPage(window.location.hostname), openEditor: filesApi.openEditor, openFiles });
+      const note = fixNoteOf(outcome);
+      setFixNote(note && { id: item.id, ...note });
+    } finally {
+      setFixing(null);
+    }
+  };
 
   /** Roda a ação de tarefa do item e relê a caixa; o erro aparece no próprio item. */
   const run = async (item: InboxItem, call: () => Promise<unknown>) => {
@@ -99,7 +162,14 @@ export function InboxMenu({
 
   // Fecha ao clicar fora ou apertar Esc; o "há X min" acompanha o relógio.
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setFollowUpGone(null);
+      setFollowUpDone(null);
+      setDelegating(null);
+      setReviewAsked(null);
+      setFixNote(null);
+      return;
+    }
     const onDown = (e: MouseEvent) => {
       if (!root.current?.contains(e.target as Node) && !isInsideDialog(e.target)) setOpen(false);
     };
@@ -128,6 +198,9 @@ export function InboxMenu({
       </button>
       {open && (
         <div className="inbox-menu" role="menu">
+          <FollowUpGoneNote message={followUpGone} className="inbox-fu-gone" />
+          <FollowUpDoneNote message={followUpDone} className="inbox-fu-done" />
+          <FollowUpDoneNote message={reviewAsked} className="inbox-fu-done" />
           {count === 0 ? (
             <p className="muted small inbox-empty">{t('inbox.nothingBody')}</p>
           ) : (
@@ -136,27 +209,47 @@ export function InboxMenu({
                 const dismissTitle = dismissTitleOf(item);
                 const topic = titleOf.get(item.sessionId);
                 const secretFile = item.kind === 'secret' ? secretFileOf(item) : null;
+                const fixTarget = item.kind === 'secret' ? fixTargetOf(item, !!onOpenFile) : null;
                 const secretVerdict = item.kind === 'secret' ? secretVerdictOf(item) : null;
                 const action = alertAction(item);
-                return (
-                <li key={item.id} className={dismissTitle ? 'inbox-has-x' : undefined}>
-                  <button
-                    role="menuitem"
-                    className={`inbox-item inbox-${item.kind}`}
-                    onClick={() => {
-                      setOpen(false);
-                      onOpen(item);
-                    }}
-                  >
+                const denied = deniedAction(item);
+                const noCode = stuckNoCodeOf(item);
+                const fu = item.kind === 'followUp' ? item.followUp : undefined;
+                const fuTask = fu ? taskIn(fuTasks.byProject, item.projectId, fu.taskId) : null;
+                const stuck = stuckOf(item);
+                const stuckTask = stuck ? taskIn(fuTasks.byProject, item.projectId, stuck.taskId) : null;
+                const delegate = stuckTask ? reviewShortcutOf(item, stuckTask, staff) : null;
+                const sandbox = sandboxOf(item);
+                const row = (
+                  <>
                     <span className="inbox-kind">{KIND_LABEL[item.kind]}</span>
                     <span className="inbox-who">
                       <b>{inboxWho(item)}</b>
                       {item.name && item.projectName && <span className="muted"> · {item.projectName}</span>}
                     </span>
                     {topic && <span className="inbox-topic" title={topic}>{topic}</span>}
-                    <span className="inbox-summary" title={isTaskAlert(item) || item.kind === 'notStarted' ? inboxText(item) : undefined}>{inboxText(item)}</span>
+                    <span className="inbox-summary" title={inboxText(item)}>{inboxText(item)}</span>
                     {item.at && <span className="muted small inbox-at">{formatAgo(now - Date.parse(item.at))}</span>}
-                  </button>
+                  </>
+                );
+                return (
+                <li key={item.id} className={dismissTitle ? 'inbox-has-x' : undefined}>
+                  {item.codexSandbox ? (
+                    // Aviso da máquina (sem projeto nem conversa): não há para onde ir, então a linha não é botão; o que se faz está logo abaixo (copiar o comando) e o × ignora.
+                    <div className={`inbox-item inbox-${item.kind} inbox-sandbox`}>{row}</div>
+                  ) : (
+                    <button
+                      role="menuitem"
+                      className={`inbox-item inbox-${item.kind}`}
+                      onClick={() => {
+                        setOpen(false);
+                        onOpen(item);
+                      }}
+                    >
+                      {row}
+                    </button>
+                  )}
+                  {sandbox && <SandboxFix alert={sandbox} className="inbox-sandbox-fix" />}
                   {item.kind === 'secret' && secretVerdict && (
                     <div className="inbox-secret-verdict">
                       <SecretVerdictRow item={item} />
@@ -164,14 +257,12 @@ export function InboxMenu({
                   )}
                   {item.kind === 'secret' && (
                     <span className="inbox-dismiss">
-                      {secretFile && !secretFile.blocked && onOpenFile && (
+                      {secretFile && fixTarget && (
                         <button
                           className="link small"
-                          title={t('chat.secretOpenFileTitle', { path: secretFile.path })}
-                          onClick={() => {
-                            setOpen(false);
-                            onOpenFile(item, secretFile.path);
-                          }}
+                          disabled={fixing === item.id}
+                          title={t(secretFile.blocked ? 'chat.secretOpenEditorTitle' : 'chat.secretOpenFileTitle', { path: secretFile.path })}
+                          onClick={() => void fix(item, fixTarget)}
                         >
                           {t('inbox.secretOpenFile')}
                         </button>
@@ -182,6 +273,11 @@ export function InboxMenu({
                       <button className="link small" title={t(secretVerdict?.verdict === 'exposed' ? 'office.notSecretExposedTitle' : 'office.notSecretTitle')} onClick={() => void inbox.dismiss(item, { notSecret: true })}>
                         {t('office.notSecret')}
                       </button>
+                      {fixNote?.id === item.id && (
+                        <span className={fixNote.ok ? 'small inbox-fix-ok' : 'error small'} role={fixNote.ok ? 'status' : 'alert'}>
+                          {fixNote.text}
+                        </span>
+                      )}
                     </span>
                   )}
                   {item.kind === 'blocked' && item.blocked?.blockerStatus === 'cancelled' && (
@@ -214,12 +310,75 @@ export function InboxMenu({
                         className="link small"
                         title={t('inbox.notStartedCancelTitle')}
                         disabled={busy === item.id}
-                        onClick={() => void askCancel(item)}
+                        onClick={() => void askCancel(item, item.notStarted!.taskId)}
                       >
                         {t('inbox.notStartedCancel')}
                       </button>
                       {failed?.id === item.id && <span className="error small" role="alert">{failed.message}</span>}
                     </span>
+                  )}
+                  {fu && (
+                    <>
+                      {/* O que importa para decidir, à vista: a recomendação e, com a tarefa já Finalizada, o selo. */}
+                      <div className="inbox-fu-meta">
+                        <RecommendationBadge recommendation={fu.recommendation} />
+                        {taskFinished(fuTask) && <span className="task-badge small fu-done">{t('tasks.statusDone')}</span>}
+                      </div>
+                      {hasFields(fu) ? (
+                        fu.impact && (
+                          <p className="small inbox-fu-impact">
+                            <b>{t('tasks.fuImpact')}</b> {fu.impact}
+                          </p>
+                        )
+                      ) : (
+                        /* Follow-up antigo, sem os campos do revisor: o achado inteiro (até 600 caracteres) só quando a linha do item não o mostra por completo. */
+                        followUpHasMore(fu.text) && (
+                          <details className="inbox-fu-text">
+                            <summary>{t('inbox.followUp.seeText')}</summary>
+                            <p>{fu.text}</p>
+                          </details>
+                        )
+                      )}
+                      <FollowUpDecide
+                        compact
+                        projectId={item.projectId}
+                        taskId={fu.taskId}
+                        followUp={{ id: fu.followUpId, title: fu.title, text: fullText(fuTask, fu.followUpId, fu.text), staffId: fu.staffId }}
+                        task={fuTask}
+                        loading={!fuTasks.settled.has(item.projectId)}
+                        team={staff.filter((s) => s.projectId === item.projectId)}
+                        onDone={async () => {
+                          await inbox.refresh();
+                          await fuTasks.reload();
+                        }}
+                        onGone={setFollowUpGone}
+                        onDecided={setFollowUpDone}
+                        onOpenCard={() => {
+                          setOpen(false);
+                          onOpen(item, { taskId: fu.taskId });
+                        }}
+                      />
+                    </>
+                  )}
+                  {noCode && (
+                    <>
+                      {/* A análise ou a resposta que o responsável deu ao terminar costuma estar aqui: é o que se lê para decidir. */}
+                      {noCode.summary && (
+                        <details className="inbox-fu-text">
+                          <summary>{t('inbox.noCode.seeSaid')}</summary>
+                          <p>{noCode.summary}</p>
+                        </details>
+                      )}
+                      <span className="inbox-dismiss">
+                        <button className="link small" title={t('tasks.noCodeCancelTitle')} disabled={busy === item.id} onClick={() => void askCancel(item, noCode.taskId)}>
+                          {t('tasks.noCodeCancel')}
+                        </button>
+                        <button className="link small" title={t('tasks.noCodeGiveBackTitle')} disabled={busy === item.id} onClick={() => void giveBack(item, noCode.taskId)}>
+                          {t('tasks.noCodeGiveBack')}
+                        </button>
+                        {failed?.id === item.id && <span className="error small" role="alert">{failed.message}</span>}
+                      </span>
+                    </>
                   )}
                   {action && (
                     <span className="inbox-dismiss">
@@ -236,7 +395,41 @@ export function InboxMenu({
                       >
                         {action.label}
                       </button>
+                      {delegate && (
+                        <button className="link small inbox-delegate" title={t('inbox.act.delegateTitle')} aria-expanded={delegating === item.id} onClick={() => setDelegating(delegating === item.id ? null : item.id)}>
+                          {t('tasks.reviewDelegate')}
+                        </button>
+                      )}
                       {action.direct && failed?.id === item.id && <span className="error small" role="alert">{failed.message}</span>}
+                    </span>
+                  )}
+                  {delegate && stuckTask && delegating === item.id && (
+                    <ReviewShortcutForm
+                      projectId={item.projectId}
+                      task={stuckTask}
+                      reviewers={delegate.reviewers}
+                      onAsked={async (name) => {
+                        setReviewAsked(t('inbox.act.delegated', { name }));
+                        setDelegating(null);
+                        await inbox.refresh();
+                        await fuTasks.reload();
+                      }}
+                    />
+                  )}
+                  {denied && (denied.to === 'chat' || onOpenSheet) && (
+                    <span className="inbox-dismiss">
+                      <button
+                        className="link small"
+                        title={denied.title}
+                        onClick={() => {
+                          setOpen(false);
+                          // A conversa é o alvo do próprio item; a ficha, a de quem foi barrado.
+                          if (denied.to === 'sheet') onOpenSheet?.(item);
+                          else onOpen(item);
+                        }}
+                      >
+                        {denied.label}
+                      </button>
                     </span>
                   )}
                   {dismissTitle && (

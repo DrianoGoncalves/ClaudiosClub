@@ -8,8 +8,10 @@ import { resolveCodexCommand, type CodexEnvStatus } from '../codexEnv';
 import { pickCodexSubstitute, type CodexModelInfo } from '../codexModels';
 import { cleanEnv, withoutMycoToken } from '../auth';
 import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexAgentRole, type CodexExtraMcp, type CodexHeavyGuard, type CodexMcpServer, type CodexSecrets } from './codexArgs';
-import { codexEditedFiles, codexToolFile } from './codeEdits';
+import { codexEditedFiles, codexToolCommand, codexToolFile } from './codeEdits';
+import { codexDeclinedTool, codexRolloutDenial, sandboxDenied } from './denied';
 import { contextUsed, isModelUnavailable, isToolCall, itemFromCodex, parseCodexFailure, type CodexItem, type CodexPhase } from './codexEvents';
+import { isPasswordPolicyFailure } from '../codexPasswordPolicy';
 import { isSandboxFailure } from '../engineCapability';
 import { hasCheckpoint, stripCheckpoint } from './items';
 import { ChatProcess, type ChatProcessOptions } from './process';
@@ -51,6 +53,13 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   /** A fila de validação pesada no terminal (hook heavy-guard; null = sem ela). Ver `codexHeavyArgs` em codexArgs.ts. */
   heavyGuard?: CodexHeavyGuard | null;
   /**
+   * A fila de validação pesada ficou de fora porque a conta tem `hooks.json` (o caminho dele), ou voltou (null: o arquivo sumiu). Uma chamada por mudança, não por execução:
+   * é o que leva o aviso à caixa e à tarefa, onde o aviso do chat (`addNotice`) ninguém lê numa conversa autônoma. Registro: erro de quem recebe não derruba a execução.
+   */
+  onHeavyGuard?: (off: string | null) => void;
+  /** Linha de log do servidor (o manager põe o id da sessão na frente). Hoje: o rollout trouxe uma recusa em formato que não se reconhece. */
+  onLog?: (line: string) => void;
+  /**
    * Arquivo de lançamento dos MCPs da ficha (`codex-mcp.json`, com os valores expandidos). Ele vale enquanto a conversa está aberta: quando
    * a conversa fecha (stop, ou o servidor desligando), sai do disco. A próxima abertura grava de novo (prepareCodexRun).
    */
@@ -82,6 +91,11 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
    * decide o que fazer (ver CodexCapability.reportFailure); a conversa não muda por causa disso.
    */
   onSandboxFailure?: (text: string) => void;
+  /**
+   * A saída de uma ferramenta (comando que falhou, aviso do Codex) ou o erro do turno traz a falha do usuário local do sandbox no Windows (`helper_user_create_or_update_failed`, ver
+   * `isPasswordPolicyFailure`): a política de senha do Windows. Quem chama leva o aviso à caixa (ver CodexPasswordPolicy); a conversa não muda por causa disso. Pode vir várias vezes (todo comando falha igual).
+   */
+  onPasswordPolicyFailure?: () => void;
   /**
    * Catálogo de modelos da conta (GET /api/codex/models), para o plano B: se a conta recusar o modelo da ficha, o turno é refeito uma vez
    * com o mais parecido daqui (ver `pickCodexSubstitute`). Sem ele, o plano B roda sem `-m` (o padrão do Codex).
@@ -159,11 +173,16 @@ export class CodexProcess extends ChatProcess {
   private holding = false;
   /** O aviso de que a rede local ficou desligada (falta o `network_proxy`) já foi dado: uma vez por conversa. */
   private networkWarned = false;
-  /** Os subagents ativos (o `--json` não os anuncia; vêm do rollout) aparecem em "segundo plano", como no Claude. */
+  /** O aviso de que a fila de validação pesada ficou de fora (hooks.json na conta) já foi dado: zera quando o arquivo some, para avisar de novo se voltar. */
+  private guardOffWarned = false;
+  /** O formato do rollout que parecia recusa mas não era o conhecido já foi registrado no log: uma vez por conversa. */
+  private rolloutFormatLogged = false;
+  /** Os subagents ativos (o `--json` não os anuncia; vêm do rollout) aparecem em "segundo plano", como no Claude. As linhas do rollout também alimentam o alerta de `apply_patch` recusado. */
   private readonly subagents = new CodexSubagentWatch({
     find: (id) => findRollout(id),
     readFirstLine: firstLineOf,
     onChange: (tasks) => this.setState({ background: tasks }),
+    onLine: (line) => this.rolloutLine(line),
   });
 
   constructor(private readonly codex: CodexProcessOptions) {
@@ -347,7 +366,16 @@ export class CodexProcess extends ChatProcess {
       this.networkWarned = true;
       this.addNotice(status.notice, 'warn');
     }
+    // O mesmo ambiente do Claude (MYCO_SESSION_ID e MYCO_TOKEN para o despertador e as tarefas por curl), sem as variáveis CLAUDE*/ANTHROPIC*, e
+    // MYCO_URL: o endereço do Claudio’s Club que a sandbox alcança. O token é o mesmo em todas as execuções da conversa (uma por mensagem).
+    const env = {
+      ...withoutMycoToken(cleanEnv()),
+      MYCO_SESSION_ID: o.sessionId,
+      ...(o.mycoToken && { MYCO_TOKEN: o.mycoToken }),
+      ...(o.mycoUrl && { MYCO_URL: o.mycoUrl }),
+    };
     let args: string[];
+    const guardOff: { file?: string } = {};
     try {
       args = buildCodexArgs({
         cwd: o.cwd,
@@ -364,6 +392,8 @@ export class CodexProcess extends ChatProcess {
         extraMcps: o.extraMcps,
         agents: o.agents,
         heavyGuard: o.heavyGuard,
+        env,
+        onHeavyGuardOff: (file) => (guardOff.file = file),
         secrets: o.secrets,
         network: status.networkProxy ? 'loopback' : 'off',
         internetAccess,
@@ -374,16 +404,20 @@ export class CodexProcess extends ChatProcess {
       this.closeRun(run, null, err instanceof CodexBlockedError ? err.message : `não foi possível preparar o codex: ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
+    // Conta com hooks.json: a conversa roda sem a fila de validação pesada (ver `codexHeavyArgs`). Avisa uma vez por vez que ele aparece.
+    if (guardOff.file && !this.guardOffWarned) {
+      this.guardOffWarned = true;
+      this.addNotice(
+        `A fila de validação pesada ficou de fora desta conversa: a conta do Codex tem um hooks.json (${guardOff.file}). Para o hook da fila rodar, o Codex exigiria uma flag de confiança que também liberaria esse arquivo, sem confirmação e fora da sandbox. Apague ou renomeie o arquivo e a fila volta na próxima mensagem; até lá, esta conversa roda suíte completa sem esperar a vez.`,
+        'warn',
+      );
+      this.heavyGuardChanged(guardOff.file);
+    } else if (!guardOff.file && this.guardOffWarned) {
+      this.guardOffWarned = false;
+      this.heavyGuardChanged(null);
+    }
     // Ficha grande demais para a linha de comando: vai no começo do prompt da primeira mensagem (as seguintes continuam a mesma thread).
     const prompt = o.instructions && !instructionsInArgv(o.instructions, o.platform) && this.thread === null ? promptWithInstructions(o.instructions, job.prompt) : job.prompt;
-    // O mesmo ambiente do Claude (MYCO_SESSION_ID e MYCO_TOKEN para o despertador e as tarefas por curl), sem as variáveis CLAUDE*/ANTHROPIC*, e
-    // MYCO_URL: o endereço do Claudio’s Club que a sandbox alcança. O token é o mesmo em todas as execuções da conversa (uma por mensagem).
-    const env = {
-      ...withoutMycoToken(cleanEnv()),
-      MYCO_SESSION_ID: o.sessionId,
-      ...(o.mycoToken && { MYCO_TOKEN: o.mycoToken }),
-      ...(o.mycoUrl && { MYCO_URL: o.mycoUrl }),
-    };
     // No Unix o processo vira líder do próprio grupo: encerrar o grupo leva também os comandos que ele abriu. No Windows o `codex` é um
     // `.cmd` do npm: `resolveCodexCommand` acha o JS dele, sem shell (ver codexEnv.ts). Só o spawn padrão passa por aí.
     const make =
@@ -411,6 +445,14 @@ export class CodexProcess extends ChatProcess {
     });
     child.on('error', (err) => this.closeRun(run, null, `não foi possível iniciar o codex: ${err.message}`));
     child.on('close', (code) => this.closeRun(run, code));
+  }
+
+  private heavyGuardChanged(off: string | null) {
+    try {
+      this.codex.onHeavyGuard?.(off);
+    } catch {
+      // registro: quem recebe não derruba a execução
+    }
   }
 
   private stopCurrent() {
@@ -467,6 +509,17 @@ export class CodexProcess extends ChatProcess {
   /** Texto com cara de sandbox quebrada (ver `isSandboxFailure`): avisa quem guarda a capacidade do Codex. */
   private noteSandboxFailure(text: string) {
     if (isSandboxFailure(text)) this.codex.onSandboxFailure?.(text);
+    this.notePasswordPolicy(text);
+  }
+
+  /** Texto com a falha do usuário local do sandbox (política de senha do Windows): avisa quem leva o aviso à caixa. Registro: quem recebe nunca derruba a leitura do stream. */
+  private notePasswordPolicy(text: string) {
+    if (!isPasswordPolicyFailure(text)) return;
+    try {
+      this.codex.onPasswordPolicyFailure?.();
+    } catch {
+      // o aviso da caixa é registro
+    }
   }
 
   /**
@@ -606,12 +659,37 @@ export class CodexProcess extends ChatProcess {
     }
   }
 
+  /**
+   * Linha nova do rollout: o `apply_patch` que o Codex recusou (sandbox ou política de aprovação) só aparece aqui, não no `--json` (ver `codexRolloutDenial`), e vira o mesmo alerta
+   * do `declined`. Formato que parece recusa mas não é o conhecido: sem alerta, uma linha no log por conversa (o Codex mudou a mensagem ou o formato).
+   */
+  private rolloutLine(line: string) {
+    if (!this.opts.onDenied) return;
+    const d = codexRolloutDenial(line);
+    if (!d) return;
+    if (d.kind === 'denied') {
+      this.noteDenied(sandboxDenied(d.tool, d.readOnly || !!this.codex.readOnly || sandboxFor(this.state.permissionMode) === 'read-only'));
+      return;
+    }
+    if (this.rolloutFormatLogged) return;
+    this.rolloutFormatLogged = true;
+    this.codex.onLog?.(`rollout do Codex: ${d.why}; sem alerta de ação barrada`);
+  }
+
   /** Comando concluído com falha: se a saída diz que a sandbox quebrou, avisa (ver `onSandboxFailure`). A conversa mostra o comando como sempre. */
   private onItem(run: Run, phase: CodexPhase, raw: unknown) {
     const cmd = (raw ?? {}) as CodexItem;
     if (phase === 'completed' && cmd.type === 'command_execution' && cmd.status === 'failed' && typeof cmd.aggregated_output === 'string') {
       this.noteSandboxFailure(cmd.aggregated_output);
+    } else if (phase === 'completed' && cmd.type === 'command_execution' && typeof cmd.exit_code === 'number' && cmd.exit_code !== 0 && typeof cmd.aggregated_output === 'string') {
+      // Falhou pelo código de saída, sem `status: failed`: só a política de senha olha (o resto da sandbox segue como era).
+      this.notePasswordPolicy(cmd.aggregated_output);
+    } else if (phase === 'completed' && cmd.type === 'error' && typeof cmd.message === 'string') {
+      this.notePasswordPolicy(cmd.message);
     }
+    // Recusa explícita da sandbox (status `declined`). Limite (ver denied.ts): a escrita barrada pela sandbox só de leitura NÃO chega assim; o `apply_patch` recusado vem do rollout (`rolloutLine`).
+    const declined = codexDeclinedTool(phase, raw);
+    if (declined) this.noteDenied(sandboxDenied(declined, !!this.codex.readOnly || sandboxFor(this.state.permissionMode) === 'read-only'));
     // Sem os ganchos do Claude, o Codex só mostra a alteração no `file_change` concluído (o card automático nasce daqui, como no Claude).
     const edited = this.opts.onEdit ? codexEditedFiles(phase, raw) : [];
     if (edited.length) {
@@ -638,8 +716,10 @@ export class CodexProcess extends ChatProcess {
     } else if (next.kind === 'tool') {
       // O arquivo só vale para o aviso: leitura simples de um arquivo ou `file_change` de um (ver codexToolFile).
       const file = this.opts.onSecret ? codexToolFile(raw) : null;
+      // Sem arquivo único (vários no mesmo comando, `;`, pipe): o comando segue junto, e o manager descobre qual arquivo do projeto tem o segredo da saída.
+      const command = this.opts.onSecret && !file ? codexToolCommand(raw) : null;
       this.scan(next.input, 'tool-input', file);
-      if (next.result) this.scan(next.result, 'tool-result', file);
+      if (next.result) this.scan(next.result, 'tool-result', file, command);
       this.putItem({ ...next, at: (prev?.kind === 'tool' ? prev.at : null) ?? next.at });
     } else {
       this.putItem(next);

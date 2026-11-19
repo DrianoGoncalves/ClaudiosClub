@@ -2,8 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import type { McpAccess, StaffProfile } from '../../shared/model';
+import { CATCH_UP_MAX_HOURS, type McpAccess, type Recurrence, type Routine, type StaffProfile } from '../../shared/model';
 import { cronError } from '../../shared/cron';
+import { normalizeRecurrence, recurrenceError } from '../../shared/recurrence';
 import { PERSONALITIES } from '../../shared/personality';
 import { listDir, tryJson } from '../adapters/claude/fsutil';
 import { writeAtomic } from '../atomicWrite';
@@ -174,22 +175,42 @@ export function assertFallbackRules(p: Parameters<typeof fallbackError>[0]): voi
   if (error) throw new StaffError(error);
 }
 
+/** O "quando roda" de uma entrada: erro (em português), ou null se vale. `recurrence` ganha de `schedule`; sem ela, `schedule` tem que ser cron. */
+export function routineWhenError(r: { schedule?: string; recurrence?: unknown }): string | null {
+  if (r.recurrence !== undefined && r.recurrence !== null) return recurrenceError(r.recurrence);
+  const err = cronError((r.schedule ?? '').trim());
+  return err ? `horário: ${err}` : null;
+}
+
+/** A forma gravada (já conferida por `routineWhenError`): cron fica só em `schedule` (como nas fichas antigas); calendário vai em `recurrence` e `schedule` fica vazio. */
+export function routineWhen(r: { schedule?: string; recurrence?: unknown }): { schedule: string; recurrence?: Recurrence } {
+  const parsed = r.recurrence !== undefined && r.recurrence !== null ? normalizeRecurrence(r.recurrence) : null;
+  if (!parsed?.ok) return { schedule: (r.schedule ?? '').trim() };
+  return parsed.value.kind === 'cron' ? { schedule: parsed.value.expr } : { schedule: '', recurrence: parsed.value };
+}
+
 /** Rotina agendada: fica fora do questionário (editar a ficha não apaga as rotinas; pela API não se agenda). */
-export const RoutineSchema = z.object({
-  id: z.string().regex(/^[a-z0-9-]{1,40}$/, 'id de rotina inválido'),
-  name: line(60).min(1, 'dê um nome à rotina'),
-  schedule: z
-    .string()
-    .trim()
-    .max(100)
-    .superRefine((v, ctx) => {
-      const err = cronError(v);
-      if (err) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `horário: ${err}` });
-    }),
-  message: line(4000).min(1, 'escreva a mensagem da rotina'),
-  mode: z.enum(['continue', 'new', 'task']).default('continue'),
-  enabled: z.boolean().default(true),
-});
+export const RoutineSchema = z
+  .object({
+    id: z.string().regex(/^[a-z0-9-]{1,40}$/, 'id de rotina inválido'),
+    name: line(60).min(1, 'dê um nome à rotina'),
+    schedule: z.string().trim().max(100).optional(),
+    recurrence: z.unknown().optional(),
+    catchUpHours: z
+      .number()
+      .int('execução atrasada: use horas inteiras')
+      .min(0, 'execução atrasada: use de 0 a 168 horas')
+      .max(CATCH_UP_MAX_HOURS, `execução atrasada: use de 0 a ${CATCH_UP_MAX_HOURS} horas`)
+      .optional(),
+    message: line(4000).min(1, 'escreva a mensagem da rotina'),
+    mode: z.enum(['continue', 'new', 'task']).default('continue'),
+    enabled: z.boolean().default(true),
+  })
+  .superRefine((r, ctx) => {
+    const err = routineWhenError(r);
+    if (err) ctx.addIssue({ code: 'custom', message: err });
+  })
+  .transform(({ schedule, recurrence, catchUpHours, ...r }): Routine => ({ ...r, ...routineWhen({ schedule, recurrence }), ...(catchUpHours ? { catchUpHours } : {}) }));
 export const RoutinesSchema = z.array(RoutineSchema).max(10, 'no máximo 10 rotinas por funcionário');
 
 const ProfileSchema = StaffInputObject.omit({ portraitDataUrl: true, launch: true, adoptSessionId: true, force: true, roleId: true }).extend({

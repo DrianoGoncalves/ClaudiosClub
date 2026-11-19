@@ -15,6 +15,7 @@ import type {
 import { api, ApiError, withUsageConfirm, type PermissionOpts } from '../api';
 import { t } from '../i18n';
 import { applyLive, liveOnlyNotices, mergeItems } from './chatWindow';
+import { discardHeldItem, type HeldDiscardResult } from './heldDiscard';
 import { afterSnapshot, planReconnect, streamNeed } from './reconnect';
 import { announceSent } from './usageNotice';
 
@@ -48,6 +49,12 @@ export interface ChatView {
   recheck: () => Promise<void>;
   /** Assumir aqui: encerra a sessão aberta em outro lugar (que não está trabalhando) e retoma a conversa aqui. */
   takeOver: () => Promise<void>;
+  /**
+   * Excluir uma mensagem guardada (a tela já perguntou). `discarded`: saiu da conversa. Recusada pelo servidor (409), a conversa é
+   * relida e o resultado diz o que se viu: `gone` (já não está entre as guardadas), `kept` (continua guardada) ou `unknown` (a leitura
+   * falhou). Outro erro (rede, 403) sobe, para quem chamou mostrar. Ver `HeldDiscardResult`.
+   */
+  discardHeld: (item: ChatItem) => Promise<HeldDiscardResult>;
 }
 
 /** Sem processo ou sem conexão: o que estava "trabalhando" não fica preso assim na tela. */
@@ -278,6 +285,19 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     return () => clearInterval(t);
   }, [waiting, sessionId, projectId, load]);
 
+  // Guardada agora, nesta tela: o item local ainda não traz o que o servidor sabe (a tarefa que a guarda e se dá para excluir). Troca pelos do servidor.
+  const heldUnknown = held.filter((i) => i.kind === 'user' && !i.heldTaskId).length;
+  useEffect(() => {
+    if (!heldUnknown || !sessionId) return;
+    const ep = epoch.current;
+    api
+      .chat(projectId, sessionId)
+      .then((snap) => {
+        if (ep === epoch.current) setHeld(snap.held ?? []);
+      })
+      .catch(() => {});
+  }, [heldUnknown, sessionId, projectId]);
+
   // Servidor fora do ar: confere /api/health a cada 2 s; ao responder, relê a conversa (o load reabre o stream).
   useEffect(() => {
     if (!offline || !sessionId) return;
@@ -399,6 +419,9 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     }
   };
 
+  const discardHeld = (item: ChatItem) =>
+    discardHeldItem(item, { projectId, sessionId, reload: load, drop: (id) => setHeld((h) => h.filter((i) => i.id !== id)) });
+
   return {
     sessionId,
     items: mergeItems(history, live, held),
@@ -416,5 +439,6 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
     commands: state?.commands?.length ? state.commands : knownCommands,
     recheck,
     takeOver,
+    discardHeld,
   };
 }

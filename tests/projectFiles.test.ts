@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { cleanRel, createProjectEntry, deleteProjectEntry, parseDeleteBody, isSecretRel, listProjectTree, MAX_FILE_BYTES, parseCreateBody, parseWriteBody, ProjectFileError, readProjectFile, readProjectImageFile, writeProjectFile } from '../server/projectFiles';
+import { cleanRel, createProjectEntry, deleteProjectEntry, parseDeleteBody, isSecretRel, listProjectTree, MAX_FILE_BYTES, parseCreateBody, parseOpenBody, parseWriteBody, ProjectFileError, readProjectFile, readProjectImageFile, resolveProjectFile, writeProjectFile } from '../server/projectFiles';
 
 let base: string;
 let root: string;
@@ -143,6 +143,61 @@ describe('segredos', () => {
     const st = await fs.stat(path.join(root, '.env'));
     expect(await statusOf(writeProjectFile(root, { path: '.env', content: 'X=1', baseMtimeMs: st.mtimeMs }))).toBe(403);
     expect(await fs.readFile(path.join(root, '.env'), 'utf8')).toBe('TOKEN=abc');
+  });
+});
+
+describe('segredo não passa pelo navegador (a rota `files/reveal` saiu)', () => {
+  it('a leitura segue recusando o segredo, as pastas escondidas e o arquivo real por trás de um link; o módulo não oferece mais como ler o texto dele', async () => {
+    for (const p of ['.env', '.ENV.local', 'keys/server.pem', '.vps/notes.txt', '.git/config', 'node_modules/pkg/index.js']) {
+      expect(await statusOf(readProjectFile(root, p)), p).toBe(403);
+      // Um 3º argumento (a antiga opção `reveal`) não muda nada.
+      expect(await statusOf((readProjectFile as (...a: unknown[]) => Promise<unknown>)(root, p, { reveal: true })), p).toBe(403);
+    }
+    expect(await import('../server/projectFiles')).not.toHaveProperty('parseRevealBody');
+  });
+
+  it.runIf(canLink)('link dentro do projeto que aponta para segredo segue recusado na leitura', async () => {
+    await fs.symlink(path.join(root, '.env'), path.join(root, 'atalho-env.txt'), 'file');
+    expect(await statusOf(readProjectFile(root, 'atalho-env.txt'))).toBe(403);
+  });
+});
+
+describe('resolveProjectFile: arquivo regular dentro do projeto, sem ler o conteúdo', () => {
+  it('devolve o caminho real e o relativo (com "/") de arquivo comum, de segredo e de pasta escondida: quem usa é que decide', async () => {
+    for (const p of ['README.md', 'src/app.ts', '.env', 'keys/server.pem', '.git/config']) {
+      const r = await resolveProjectFile(root, p);
+      expect(r.realRel, p).toBe(p);
+      expect(path.relative(await fs.realpath(root), r.abs).split(path.sep).join('/')).toBe(p);
+    }
+    expect((await resolveProjectFile(root, '.env')).size).toBe('TOKEN=abc'.length);
+  });
+
+  it('fora do projeto: 403; inexistente e pasta: 404; vazio: 400', async () => {
+    for (const p of ['../fora/segredo.txt', 'src/../../fora/segredo.txt']) expect(await statusOf(resolveProjectFile(root, p)), p).toBe(403);
+    // O chamador limpa o caminho antes (`cleanRel`): absoluto e NUL já caem lá.
+    for (const p of [path.join(outside, 'segredo.txt'), 'C:\\Windows\\win.ini', '/etc/passwd', 'a\0b']) expect(() => cleanRel(p), p).toThrow(ProjectFileError);
+    expect(await statusOf(resolveProjectFile(root, '.env.nao-existe'))).toBe(404);
+    expect(await statusOf(resolveProjectFile(root, 'keys'))).toBe(404);
+    expect(await statusOf(resolveProjectFile(root, 'src'))).toBe(404);
+    expect(await statusOf(resolveProjectFile(root, 'src/app.ts/dentro'))).toBe(404);
+    expect(await statusOf(resolveProjectFile(root, ''))).toBe(400);
+  });
+
+  it.runIf(canLink)('link para fora (arquivo ou pasta/junção) é 403; link para dentro devolve o alvo real', async () => {
+    await fs.symlink(path.join(outside, 'segredo.txt'), path.join(root, 'atalho-fora.pem'), 'file');
+    await fs.symlink(outside, path.join(root, 'junction-fora'), 'junction');
+    expect(await statusOf(resolveProjectFile(root, 'atalho-fora.pem'))).toBe(403);
+    expect(await statusOf(resolveProjectFile(root, 'junction-fora/segredo.txt'))).toBe(403);
+    await fs.symlink(path.join(root, '.env'), path.join(root, 'atalho-dentro.txt'), 'file');
+    expect(await resolveProjectFile(root, 'atalho-dentro.txt')).toMatchObject({ realRel: '.env' });
+  });
+
+  it('o corpo do pedido de abrir: só { path: texto }', () => {
+    expect(parseOpenBody({ path: '.env' })).toEqual({ path: '.env' });
+    expect(parseOpenBody({ path: 'a.txt', extra: 'x' })).toEqual({ path: 'a.txt' });
+    for (const body of [null, undefined, 'x', 1, {}, { path: 1 }, { path: null }]) {
+      expect(() => parseOpenBody(body), JSON.stringify(body)).toThrow(ProjectFileError);
+    }
   });
 });
 

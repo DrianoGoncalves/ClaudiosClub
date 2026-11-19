@@ -73,9 +73,28 @@ function readCommandFile(command: string): string | null {
 }
 
 /**
+ * O comando de shell de uma chamada de ferramenta do Claude (Bash e PowerShell), para o aviso de segredo descobrir qual arquivo o comando leu
+ * (ver `locateSecretFile`). Ausente (null) nas outras ferramentas.
+ */
+export function claudeToolCommand(tool: string, input: unknown): string | null {
+  if (tool !== 'Bash' && tool !== 'PowerShell') return null;
+  const command = asRecord(input).command;
+  return typeof command === 'string' && command.trim() ? command : null;
+}
+
+/** O comando de um item `command_execution` do Codex, sem o invólucro `bash -lc` (ver `unwrapShell`); null nos outros itens. */
+export function codexToolCommand(raw: unknown): string | null {
+  const item = asRecord(raw);
+  if (item.type !== 'command_execution' || typeof item.command !== 'string') return null;
+  const command = unwrapShell(item.command);
+  return command.trim() ? command : null;
+}
+
+/**
  * O arquivo de um item do Codex, para o aviso de segredo. Sem ferramenta de leitura, o Codex lê por shell: só vale o comando de leitura
  * simples de um arquivo. O `file_change` só vale com exatamente uma mudança (e ele não traz o conteúdo, então o segredo gravado por ele
- * não é visto; ver `server/chat/codexEvents.ts`). Fora disso, null: o Club não adivinha caminho.
+ * não é visto; ver `server/chat/codexEvents.ts`). Fora disso, null: o Club não adivinha caminho. O comando que lê vários arquivos (ou tem `;`, pipe)
+ * não passa por aqui: o servidor confere no disco qual deles tem o segredo (`codexToolCommand` + `locateSecretFile`).
  */
 export function codexToolFile(raw: unknown): string | null {
   const item = asRecord(raw);

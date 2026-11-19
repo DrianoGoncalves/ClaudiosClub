@@ -96,9 +96,6 @@ export const RESTART_PENDING_TEXT = `${RESTART_PREFIX}, quando havia um pedido d
 export const RETRY_TEXT =
   'O turno foi interrompido. Confira arquivos e resultados já produzidos antes de continuar. Se uma ação externa puder ter ocorrido e não houver confirmação, pare e peça orientação.';
 
-/** Fim de tarefa: o que a conversa deve responder ao terminar (igual no texto de início e no handoff). */
-export const CLOSING_LINE = 'Quando terminar, responda com um resumo curto do que foi feito e do que falta.';
-
 /** A mensagem veio com a marca de outro funcionário (blocos do transcript)? */
 export function hasStaffNotice(blocks: Array<Record<string, unknown>>): boolean {
   return blocks.some((b) => b.type === 'text' && typeof b.text === 'string' && b.text.trimStart().startsWith(STAFF_NOTICE));

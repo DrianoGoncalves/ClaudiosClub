@@ -128,6 +128,32 @@ export function classifyTurnError(e: TurnError): Transient | null {
   return { retryAfterMs, label: labelOf(status, hay) };
 }
 
+const ERROR_LINE_MAX = 160;
+
+/** O erro numa linha só, para o aviso e o motivo da tarefa (o JSON do Codex vira a mensagem dele). Vazio: "sem detalhe". */
+export function errorLine(e: TurnError): string {
+  const line = unpack(e).text.replace(/\s+/g, ' ').trim();
+  return line ? line.slice(0, ERROR_LINE_MAX) : 'sem detalhe';
+}
+
+/** Os tipos de erro que o motor dá para login recusado ou expirado (campo `error` da mensagem do Claude; `type`/`code` do erro do Codex/OpenAI). */
+const AUTH_KINDS = /\b(?:authentication_failed|authentication_error|invalid_api_key|unauthorized)\b/i;
+
+/**
+ * O turno falhou por autenticação (login expirado, recusado)? Só os campos estruturados do motor contam: o tipo (`kind`), o status HTTP 401 e, no Codex, o JSON do erro (`status`, `error.type`,
+ * `error.code`). O texto da mensagem nunca é lido: nenhuma frase solta ("authenticate", "401") vale. Auth não é retomada sozinha e não gasta o orçamento da retomada (ver `ChatManager.turnEnded`).
+ */
+export function isAuthFailure(e: TurnError): boolean {
+  if (e.status === 401 || AUTH_KINDS.test(e.kind ?? '')) return true;
+  try {
+    const outer = asRecord(JSON.parse(e.text));
+    const inner = asRecord(outer.error);
+    return outer.status === 401 || AUTH_KINDS.test([asString(inner.type), asString(inner.code), asString(outer.type)].join(' '));
+  } catch {
+    return false;
+  }
+}
+
 /** Tentativas que o tipo de falha permite no mesmo turno original. */
 export const attemptsAllowed = (kind: RetryInfo['kind']): number => (kind === 'unknown' ? MAX_ATTEMPTS_UNKNOWN : MAX_ATTEMPTS);
 

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,6 +13,7 @@ import type {
   McpServerInfo,
   Project,
   ProjectConnection,
+  Routine,
   ServerInfo,
   StaffProfile,
   Task,
@@ -247,6 +248,11 @@ export interface StaffServiceOptions {
    * Confere a sandbox e os agents do Codex antes de uma troca de motor (ver `assertOverrideRunnable`). Sem ela, a troca só confere o que já conferia.
    */
   codexCapability?: CodexCapability;
+  /**
+   * Uma ficha do Codex foi contratada ou salva: o index.ts faz a checagem prévia da política de senha do Windows (ver CodexPasswordPolicy.check) para o aviso chegar antes da primeira conversa.
+   * Não espera e não derruba o salvar. Sem ele, nada é conferido.
+   */
+  onCodexProfile?: () => void;
   /** Aviso no log do servidor (padrão console.warn). */
   log?: (line: string) => void;
 }
@@ -431,6 +437,7 @@ export class StaffService {
       const profile = await createProfile(project.path, project.id, input, new Date(), sessions);
       await this.seal(project, profile, lockedClaude);
       await writeFicha(profile, await this.context(project, profile));
+      this.noteCodexProfile(profile);
       return { profile, launch: null };
     }
 
@@ -438,6 +445,7 @@ export class StaffService {
     if (input.launch && !(fromBrowser && input.force)) await this.checkUsage(project.id, { engine: input.engine });
     let profile = await createProfile(project.path, project.id, input);
     await this.seal(project, profile, lockedClaude);
+    this.noteCodexProfile(profile);
     if (hirer) {
       // Contratado por outro funcionário: temporário, com quem contratou (ver end/sweepTemporaries).
       profile = { ...profile, hiredBy: hirer.id, temporary: true };
@@ -740,7 +748,18 @@ export class StaffService {
     await saveProfile(project.path, saved);
     await writeFicha(saved, await this.context(project, saved));
     this.opts.onChange?.(current, saved);
+    this.noteCodexProfile(saved);
     return saved;
+  }
+
+  /** Ficha do Codex gravada (contratar, editar, cópia): pede a checagem prévia da política de senha do Windows. Aviso: nunca derruba quem gravou. */
+  private noteCodexProfile(profile: Pick<StaffProfile, 'engine'>): void {
+    if (profile.engine !== 'codex') return;
+    try {
+      this.opts.onCodexProfile?.();
+    } catch {
+      // a checagem é aviso
+    }
   }
 
   /**
@@ -782,16 +801,58 @@ export class StaffService {
 
   /** Troca as rotinas agendadas (só pelo Claudio’s Club). A ficha anterior vai para o histórico. */
   async setRoutines(projectId: string, staffId: string, body: unknown): Promise<StaffProfile | null> {
+    return this.editRoutines(projectId, staffId, () => body);
+  }
+
+  /**
+   * Cria (sem `id`: o servidor dá um) ou troca (com o `id` de uma rotina da ficha) UMA rotina, pelo mesmo caminho de `setRoutines`.
+   * Devolve a ficha e o id da rotina; null se o projeto ou a ficha não existe.
+   */
+  async saveRoutine(projectId: string, staffId: string, input: unknown): Promise<{ profile: StaffProfile; routineId: string } | null> {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new StaffError('rotina inválida');
+    let routineId = '';
+    const profile = await this.editRoutines(projectId, staffId, (list) => {
+      const given = (input as { id?: unknown }).id;
+      const taken = new Set(list.map((r) => r.id));
+      routineId = typeof given === 'string' && given ? given : `r-${randomBytes(3).toString('hex')}`;
+      // Id do servidor que bateu com outro (1 em 16 milhões): sorteia de novo.
+      while (!(typeof given === 'string' && given) && taken.has(routineId)) routineId = `r-${randomBytes(3).toString('hex')}`;
+      const next = { ...input, id: routineId };
+      return taken.has(routineId) ? list.map((r) => (r.id === routineId ? next : r)) : [...list, next];
+    });
+    return profile && { profile, routineId };
+  }
+
+  /** Liga ou desliga uma rotina; null se o projeto, a ficha ou a rotina não existe. */
+  async setRoutineEnabled(projectId: string, staffId: string, routineId: string, enabled: boolean): Promise<StaffProfile | null> {
+    return this.editRoutines(projectId, staffId, (list) => (list.some((r) => r.id === routineId) ? list.map((r) => (r.id === routineId ? { ...r, enabled } : r)) : null));
+  }
+
+  /** Apaga uma rotina; null se o projeto, a ficha ou a rotina não existe. */
+  async deleteRoutine(projectId: string, staffId: string, routineId: string): Promise<StaffProfile | null> {
+    return this.editRoutines(projectId, staffId, (list) => (list.some((r) => r.id === routineId) ? list.filter((r) => r.id !== routineId) : null));
+  }
+
+  /**
+   * Lê a ficha fresca, aplica `edit` à lista de rotinas (null = nada a fazer) e grava, na vez da ficha (duas edições seguidas não perdem uma à
+   * outra). A lista nova passa pelo schema (cron ou recorrência, limite de 10, ids sem repetir); a ficha anterior vai para o histórico.
+   */
+  private async editRoutines(projectId: string, staffId: string, edit: (current: Routine[]) => unknown): Promise<StaffProfile | null> {
     const project = await this.project(projectId);
-    const current = project ? await readProfile(project.path, staffId) : null;
-    if (!project || !current) return null;
-    const parsed = RoutinesSchema.safeParse(body);
-    if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'rotina inválida');
-    if (new Set(parsed.data.map((r) => r.id)).size !== parsed.data.length) throw new StaffError('rotinas com o mesmo id');
-    await archiveVersion(project.path, current);
-    const next: StaffProfile = { ...current, projectId, routines: parsed.data, updatedAt: new Date().toISOString() };
-    await saveProfile(project.path, next);
-    return next;
+    if (!project) return null;
+    return withProfileLock(project.path, staffId, async () => {
+      const current = await readProfile(project.path, staffId);
+      if (!current) return null;
+      const body = edit(current.routines ?? []);
+      if (body === null) return null;
+      const parsed = RoutinesSchema.safeParse(body);
+      if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'rotina inválida');
+      if (new Set(parsed.data.map((r) => r.id)).size !== parsed.data.length) throw new StaffError('rotinas com o mesmo id');
+      await archiveVersion(project.path, current);
+      const next: StaffProfile = { ...current, projectId, routines: parsed.data, updatedAt: new Date().toISOString() };
+      await saveProfile(project.path, next);
+      return next;
+    });
   }
 
   async versions(projectId: string, staffId: string) {
