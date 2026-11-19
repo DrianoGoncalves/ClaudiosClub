@@ -27,6 +27,7 @@ import type {
 } from '../../shared/model';
 import { writeAtomic } from '../staff/store';
 import { codexHistoryOf } from '../adapters/codex/rollout';
+import { isProjectDir } from '../adapters/claude/paths';
 import { MAX_ITEMS, readHistory, TAIL_BYTES } from './history';
 import { dropSeamEchoes } from './seam';
 import type { CodexSpawn } from './codexArgs';
@@ -84,6 +85,11 @@ export interface UsageLimitEvent {
 export interface ChatManagerOptions {
   /** ~/.claude/projects */
   transcriptsDir: string;
+  /**
+   * A conversa é do projeto? (ver server/sessionScope.ts `sessionInProject`). O histórico do Codex vem do rollout, que não diz o projeto: sem esta
+   * prova, `snapshot` o leria pelo id da conversa, de qualquer projeto. Sem ele, o histórico do Codex não é escopado (só nos testes).
+   */
+  sessionInProject?: (projectId: string, sessionId: string) => Promise<boolean>;
   /** Onde o Codex guarda o id de cada conversa (`<runDir>/<sessão>/codex-thread.json`). Padrão: ~/.myco/run. */
   runDir?: string;
   /** Cópias trazidas ("Trazer" de uma conversa aberta em outro lugar): original → cópia. Sem ele, só em memória. */
@@ -283,13 +289,14 @@ function launchFields(p: StaffProfile) {
 }
 
 /**
- * Transcript de uma sessão: na pasta do projeto, ou em outra (a sessão de um funcionário com
- * worktree própria fica na pasta da worktree). O id é um UUID, então não há ambiguidade.
+ * Transcript de uma sessão: na pasta do projeto, ou na de uma worktree dele (a sessão de um funcionário com worktree própria fica na pasta
+ * da worktree). Só as pastas do próprio projeto (`isProjectDir`): o id da conversa vem do pedido e não acha o transcript de outro projeto.
  */
 export async function findTranscript(transcriptsDir: string, projectId: string, sessionId: string): Promise<string> {
   const direct = path.join(transcriptsDir, projectId, `${sessionId}.jsonl`);
   if (await fs.access(direct).then(() => true, () => false)) return direct;
   for (const dir of await fs.readdir(transcriptsDir).catch(() => [] as string[])) {
+    if (!isProjectDir(projectId, dir)) continue;
     const file = path.join(transcriptsDir, dir, `${sessionId}.jsonl`);
     if (await fs.access(file).then(() => true, () => false)) return file;
   }
@@ -412,6 +419,31 @@ export class ChatManager {
     return this.chats.has(sessionId);
   }
 
+  /** O projeto da conversa aberta agora (null: não está aberta aqui). */
+  liveProject(sessionId: string): string | null {
+    return this.chats.get(sessionId)?.projectId ?? null;
+  }
+
+  /** A conversa aberta de outro projeto não recebe nada daqui: a mensagem não cruza projetos, nem com o id certo da conversa. */
+  private assertSameProject(projectId: string, sessionId: string | null): void {
+    const open = sessionId ? this.chats.get(sessionId) : undefined;
+    if (open?.projectId && open.projectId !== projectId) throw new ChatError('essa conversa é de outro projeto');
+  }
+
+  /** A conversa tem transcript na pasta do próprio projeto (não vale a de outra pasta, como a de worktree: essa a ficha do projeto é que prova). */
+  async hasOwnTranscript(projectId: string, sessionId: string): Promise<boolean> {
+    // Os dois viram nome de arquivo e de pasta: só id, nunca caminho (nem `..`).
+    if (![projectId, sessionId].every((s) => /^[\w.-]+$/.test(s) && !/^\.+$/.test(s))) return false;
+    return fs.access(path.join(this.opts.transcriptsDir, projectId, `${sessionId}.jsonl`)).then(() => true, () => false);
+  }
+
+  /** O histórico do Codex da conversa pode ser lido pelo projeto? Aberta aqui, vale o projeto com que abriu; fechada, a prova é `sessionInProject`. */
+  private async codexSessionOf(projectId: string, sessionId: string): Promise<boolean> {
+    const open = this.chats.get(sessionId);
+    if (open?.projectId) return open.projectId === projectId;
+    return this.opts.sessionInProject ? this.opts.sessionInProject(projectId, sessionId) : true;
+  }
+
   /** O trabalho atual desta conversa foi pedido por outro funcionário (ver `send`)? */
   isDelegated(sessionId: string): boolean {
     return this.delegated.has(sessionId);
@@ -439,7 +471,7 @@ export class ChatManager {
     const before = live && !source ? (cut?.before ?? chat!.startedAt) : undefined;
     // Sem transcript do Claude, a conversa é do Codex: o histórico vem do rollout dele (ver adapters/codex/rollout.ts).
     const claude = await fs.access(file).then(() => true, () => false);
-    const codex = claude ? null : await codexHistoryOf(this.runDir, sessionId, { before }).catch(() => null);
+    const codex = claude || !(await this.codexSessionOf(projectId, sessionId)) ? null : await codexHistoryOf(this.runDir, sessionId, { before }).catch(() => null);
     const read = codex ?? (await readHistory(file, { before }));
     const { context } = read;
     // Os ids do rollout não são os do vivo (`a:<ordinal>` x `a:<execução>:<id>`): a mesma resposta pode estar nos dois lados da emenda.
@@ -748,6 +780,8 @@ export class ChatManager {
     reviewOnly = false,
   ): Promise<string> {
     this.assertOpen();
+    // Antes de qualquer mudança de estado (a retomada abaixo, o que `ensure` abre): a conversa aberta de outro projeto não é desta chamada.
+    this.assertSameProject(projectId, sessionId);
     // Mensagem que não é da plataforma abre turno original novo: a retomada em voo (decidindo, ou no meio do envio) deixa de valer já, de forma
     // síncrona. A pendência e o orçamento só saem quando a mensagem entra (abaixo): se a conversa não abrir, a retomada marcada segue valendo.
     if (!auto && sessionId) this.voidRetry(sessionId);
@@ -1555,6 +1589,7 @@ export class ChatManager {
   }
 
   private async ensure(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly = false): Promise<ChatProcess> {
+    this.assertSameProject(projectId, sessionId);
     const existing = sessionId ? this.chats.get(sessionId) : undefined;
     // Ficha nova só reabre com tudo parado: agents em segundo plano morreriam com o processo.
     if (existing?.running && !(existing.stale && !existing.working)) return existing;

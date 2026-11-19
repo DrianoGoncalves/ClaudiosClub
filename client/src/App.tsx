@@ -974,6 +974,9 @@ export function App() {
             onPaired={() => {
               setNeedsPairing(false);
               setNotice(t('toolbar.pairPaired'));
+              // Aberta sem parear, a tela não leu nada (o GET sem o cookie é 401): relê o quadro e a config.
+              load();
+              api.config().then(setConfig, () => {});
             }}
           />
           <button className="drawer-close" onClick={() => setNeedsPairing(false)} aria-label={t('app.closeNotice')}>

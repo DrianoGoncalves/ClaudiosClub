@@ -89,7 +89,8 @@ import { openEditorRoute } from './openInEditor';
 import { actingStaff, requesterSessionOf, SANDBOX_HOST, SessionTokens, type Caller } from './callers';
 import { isUnverifiedOrigin, staffOrigin, type OriginDeps } from './chat/origin';
 import { RequesterAskLimiter } from './chat/requesterAsk';
-import { gate } from './gate';
+import { gate, refusalLine } from './gate';
+import { sessionAllowed, sessionInProject, type SessionScopeDeps } from './sessionScope';
 import { EXTENSION_DIR, EXTENSION_ID } from './extension/identity';
 import { ExtensionTokens } from './extension/tokens';
 import { handleExtension, type ExtensionDeps } from './extension/routes';
@@ -459,6 +460,8 @@ const chats: ChatManager = new ChatManager({
   denialTask: (sessionId) => tasks.denialTask(sessionId),
   heavyGuardOff: (sessionId) => tasks.noteHeavyGuardOff(sessionId),
   transcriptsDir: defaultTranscripts,
+  // O histórico do Codex não diz o projeto: o snapshot só o lê da conversa que o servidor prova ser do projeto (ver sessionScope).
+  sessionInProject: (projectId, sessionId) => sessionInProject(sessionScope, projectId, sessionId),
   runDir: path.join(MYCO_HOME, 'run'),
   usageFile: path.join(MYCO_HOME, 'usage.json'),
   // Limite do Codex estourado: a hora de voltar vem da leitura fresca dos limites do Codex (só com `codexReview` ligado).
@@ -707,6 +710,14 @@ const originDeps: OriginDeps = {
   codexUrl: SANDBOX_URL,
 };
 
+/** De quem é cada conversa, para o que um funcionário (com token) lê ou escreve pelo id dela (ver server/sessionScope.ts). */
+const sessionScope: SessionScopeDeps = {
+  live: (sessionId) => chats.liveProject(sessionId),
+  transcriptIn: (projectId, sessionId) => chats.hasOwnTranscript(projectId, sessionId),
+  taskProject: (sessionId) => tasks.projectOfSession(sessionId),
+  staffOwns: (projectId, sessionId) => staff.ownsSession(projectId, sessionId),
+};
+
 // "Continue" que não vai sair (cancelado na conversa, opção desligada, falhou): o turno que parou no limite
 // vale como fim, e a tarefa daquela conversa é entregue como antes, sem prender a fila do funcionário.
 autoContinue.subscribe((e) => {
@@ -910,6 +921,19 @@ async function checkReach(caller: Caller | null, projectId: string, target: { se
   if (caller?.sandbox && !(await staff.mayReach(projectId, caller, target))) {
     throw new Forbidden('a sandbox do Codex só fala com a própria conversa e com as de quem reporta a você');
   }
+}
+
+/**
+ * A conversa do URL é do projeto do URL? Confere antes de ler ou escrever qualquer coisa pelo id dela (histórico, mensagem guardada, envio): o token
+ * só alcança o projeto dele, mas o id da conversa vem do pedido. Funcionário (com token): a prova completa, também para conversa fechada (ver
+ * server/sessionScope.ts). Sem token (a tela, que sempre manda o projeto certo): só a conversa aberta de outro projeto é recusada.
+ */
+async function assertSessionOf(caller: Caller | null, method: string, url: URL, projectId: string, sessionId: string): Promise<void> {
+  if (await sessionAllowed(sessionScope, !!caller, projectId, sessionId)) return;
+  console.log(refusalLine({ status: 403, reason: 'conversa-de-outro-projeto', method, pathname: url.pathname, projectId, caller }));
+  throw new Forbidden(
+    'essa conversa não é deste projeto (ou não existe nele): o token da sua conversa só alcança as conversas do projeto dela. Se precisa de algo de outro projeto, peça ao usuário',
+  );
 }
 
 const ID = '([A-Za-z0-9-]+)';
@@ -1163,13 +1187,23 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   [
     'GET',
     new RegExp(`^/api/projects/${ID}/chat/${ID}$`),
-    async ({ params: [pid, sid] }) => ({ ...(await chats.snapshot(pid!, sid!)), held: await tasks.heldItems(sid!) }),
+    async ({ params: [pid, sid], url, caller }) => {
+      await assertSessionOf(caller, 'GET', url, pid!, sid!);
+      return { ...(await chats.snapshot(pid!, sid!)), held: await tasks.heldItems(sid!) };
+    },
   ],
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/chat/send$`),
-    async ({ params: [pid], body, fromBrowser, caller }) => {
+    async ({ params: [pid], url, body, fromBrowser, caller }) => {
       const b = parse(SendBody, body);
+      // Primeiro a prova de que a conversa (e o funcionário) são deste projeto, antes de qualquer contagem, guarda ou envio: o token só chega ao
+      // projeto dele (gate), mas o id da conversa vem do corpo (ver assertSessionOf).
+      if (b.sessionId) await assertSessionOf(caller, 'POST', url, pid!, b.sessionId);
+      if (!fromBrowser && b.staffId) {
+        const dir = await projectPathOf(pid!);
+        if (!dir || !(await readProfile(dir, b.staffId))) throw new BadRequest('esse funcionário não é deste projeto');
+      }
       const target = { sessionId: b.sessionId, staffId: b.staffId };
       const requesterAsk = await tasks.mayAskRequester(pid!, caller, target);
       // Um limite por par: quem pergunta (sessão do remetente) e a conversa que responde.
@@ -1322,7 +1356,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   [
     'GET',
     new RegExp(`^/api/projects/${ID}/chat/${ID}/changes$`),
-    async ({ params: [pid, sid], url }) => {
+    async ({ params: [pid, sid], url, caller }) => {
+      await assertSessionOf(caller, 'GET', url, pid!, sid!);
       const { dir, place } = await chatPlace(pid!, url.searchParams.get('staffId'));
       if (place.where === 'worktree') return { ...(await readCode(dir, place)), scope: 'worktree', touched: [] };
       const touched = await touchedFiles(await findTranscript(defaultTranscripts, pid!, sid!), place.path);
@@ -1390,7 +1425,10 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   [
     'GET',
     new RegExp(`^/api/projects/${ID}/chat/${ID}/mcp$`),
-    async ({ params: [pid, sid], url }) => chats.mcp(pid!, sid!, url.searchParams.get('staffId')),
+    async ({ params: [pid, sid], url, caller }) => {
+      await assertSessionOf(caller, 'GET', url, pid!, sid!);
+      return chats.mcp(pid!, sid!, url.searchParams.get('staffId'));
+    },
   ],
   [
     'POST',

@@ -53,6 +53,11 @@ const SANDBOX_GETS: RegExp[] = [/^\/api\/health$/, new RegExp(`^/api/projects/${
 
 const PROJECT_OF = new RegExp(`^/api/projects/(${ID})(?:/|$)`);
 
+/** O projeto de uma rota `/api/projects/<id>/…` (null nas outras). */
+export function projectOfPath(pathname: string): string | null {
+  return PROJECT_OF.exec(pathname)?.[1] ?? null;
+}
+
 /**
  * A sandbox do Codex (conversa do projeto `projectId`) pode pedir `method pathname`? `null` = pode. Os POSTs são os mesmos da lista dos
  * funcionários (`staffMayPost`); a rota ainda confere o resto (quem é o gestor, de quem é a conversa).
@@ -63,6 +68,54 @@ export function sandboxVerdict(method: string, pathname: string, projectId: stri
   const target = PROJECT_OF.exec(pathname)?.[1];
   if (target && target !== projectId) return { status: 403, error: 'a sandbox do Codex só fala com o projeto da própria conversa' };
   return null;
+}
+
+// ---- quem chega por 127.0.0.1 com o token de uma conversa (o funcionário do Claude, ou o do Codex fora da sandbox) ----
+//
+// Só o próprio projeto: o token diz de qual projeto é a conversa, e o resto da API (outros projetos, quadro, busca, caixa, custos, o stream de
+// conversas) não é dele. A sandbox do Codex continua mais estreita (`sandboxVerdict`, conferido antes): esta regra nunca amplia o que ela barra.
+
+/** GETs fora de projeto que quem tem token alcança: só o `health`. */
+const TOKEN_GETS: RegExp[] = [/^\/api\/health$/];
+
+export interface ScopeVerdict {
+  status: 403;
+  /** O motivo curto, para o log da recusa. */
+  reason: 'outro-projeto' | 'rota-fora-do-projeto';
+  error: string;
+}
+
+/** Quem tem o token do projeto `projectId` pode pedir `method pathname`? `null` = pode (a própria árvore `/api/projects/<projectId>/` e o `health`). */
+export function projectScopeVerdict(method: string, pathname: string, projectId: string): ScopeVerdict | null {
+  const target = projectOfPath(pathname);
+  if (target) {
+    if (target === projectId) return null;
+    return {
+      status: 403,
+      reason: 'outro-projeto',
+      error: `o token da sua conversa é do projeto ${projectId} e só fala com ele: esta rota é de outro projeto. Se precisa de algo de lá, peça ao usuário`,
+    };
+  }
+  if (method === 'GET' && TOKEN_GETS.some((r) => r.test(pathname))) return null;
+  return {
+    status: 403,
+    reason: 'rota-fora-do-projeto',
+    error: `com o token da sua conversa você alcança só /api/projects/${projectId}/… e /api/health; esta rota é de fora do seu projeto. Se precisa dela, peça ao usuário`,
+  };
+}
+
+// ---- GET sem token (a tela e o curl à mão) ----
+//
+// O GET da tela não manda `Origin`: o que a distingue de um curl é o cookie do pareamento (ver gate.ts). Sem ele e sem token de projeto, a leitura
+// de /api/* é recusada, fora estes: o servidor está de pé (`health`: o vigia, o `daily` e a página de reinício perguntam sem cookie). O resto do
+// pareamento (GET /api/pair com o código, POST request/claim) é resolvido antes, em pairing.ts `admit`.
+
+/** GETs de /api/* que passam sem cookie e sem token. */
+const OPEN_GETS: RegExp[] = [/^\/api\/health$/];
+
+/** O GET em `pathname` passa sem o cookie do pareamento e sem token? */
+export function anonymousGetMay(pathname: string): boolean {
+  return OPEN_GETS.some((r) => r.test(pathname));
 }
 
 // ---- a extensão do Chrome (server/extension/, ver gate.ts) ----

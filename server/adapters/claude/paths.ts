@@ -27,6 +27,14 @@ export function worktreeParent(projectPath: string): string | null {
   return m ? projectPath.slice(0, m.index) : null;
 }
 
+/**
+ * A pasta `dir` de ~/.claude/projects é do projeto `projectId` (o nome da pasta dele) ou de uma worktree dele? A worktree fica em
+ * `<projeto>/.claude/worktrees/…`, e o nome da pasta é o do caminho (`encodeProjectDir`): `<projectId>--claude-worktrees-…`.
+ */
+export function isProjectDir(projectId: string, dir: string): boolean {
+  return dir === projectId || dir.startsWith(`${projectId}--claude-worktrees-`);
+}
+
 /** Compara caminhos como o sistema compara (sem distinção de caixa no Windows). */
 export function pathKey(p: string): string {
   const resolved = path.resolve(p);

@@ -125,9 +125,21 @@ async function get<T>(url: string): Promise<T> {
       await sleep(500 * 2 ** (attempt - 1) + Math.random() * 250);
       continue;
     }
+    if (res.status === 401) {
+      const refused = await refusedForPairing(res);
+      if (refused) throw refused;
+    }
     if (!res.ok) throw new Error(`${url}: ${res.status}`);
     return (await res.json()) as T;
   }
+}
+
+/** GET de navegador não pareado (server/gate.ts): 401 `needs-pairing`. Sobe o aviso de parear; o erro sai sem texto, como o do POST. */
+async function refusedForPairing(res: Response): Promise<ApiError | null> {
+  const data = (await res.json().catch(() => ({}))) as { code?: string };
+  if (data.code !== NEEDS_PAIRING) return null;
+  window.dispatchEvent(new Event(NEEDS_PAIRING_EVENT));
+  return new ApiError('', NEEDS_PAIRING, null, data, 401);
 }
 
 /** Leitura que pode ser recusada com motivo (ex.: exportar equipe com segredo no texto): o erro leva a mensagem do servidor. */
@@ -140,6 +152,7 @@ async function getExplained<T>(url: string): Promise<T> {
     throw err;
   }
   const data = (await res.json().catch(() => ({}))) as T & { error?: string; code?: string };
+  if (res.status === 401 && data.code === NEEDS_PAIRING) window.dispatchEvent(new Event(NEEDS_PAIRING_EVENT));
   if (!res.ok) throw new ApiError(errorMessage(data, `${url}: ${res.status}`), data.code ?? null, null, data, res.status);
   return data;
 }

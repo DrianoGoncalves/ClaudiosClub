@@ -560,10 +560,12 @@ describe('gate: a extensão', () => {
     expect(r.body).toMatchObject({ sandbox: false, fromBrowser: false, caller: null, extension: { pairingId: null } });
   });
 
-  it('um GET de outra origem com o cookie do navegador pareado não vira tela (endurecimento de pairing.ts)', async () => {
+  it('um GET de outra origem com o cookie do navegador pareado não vira tela (endurecimento de pairing.ts): lê só o health, o resto é 401', async () => {
     const r = await call(gateBase, 'GET', '/api/qualquer', { origin: 'chrome-extension://outroid', cookie: cookie() });
-    expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ fromBrowser: false, extension: null });
+    expect(r.status).toBe(401);
+    expect(r.body).toMatchObject({ code: 'needs-pairing' });
+    const health = await call(gateBase, 'GET', '/api/health', { origin: 'chrome-extension://outroid', cookie: cookie() });
+    expect(health.body).toMatchObject({ fromBrowser: false, extension: null });
     // E o navegador de verdade (Origin local, com o cookie) segue sendo tela.
     const tela = await call(gateBase, 'GET', '/api/qualquer', { origin: 'http://localhost:4848', cookie: cookie() });
     expect(tela.body).toMatchObject({ fromBrowser: true });
