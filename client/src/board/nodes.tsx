@@ -1,9 +1,11 @@
+import { mcpName } from '../staff/mcpRefs';
 import { Handle, Position, type Node, type NodeProps, type NodeTypes } from '@xyflow/react';
 import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { PLAYBOOK_AGENTS } from '../../../shared/agentPresets';
 import { colorCss, type GitState, type LiveSession, type StaffProfile } from '../../../shared/model';
 import { employeeName, ENTRYPOINT_LABEL, formatAgo, initials, STATUS_LABEL } from '../format';
 import { AgentIcon, BranchIcon, ChromeIcon, FallbackModelIcon, GhostIcon, McpIcon, PlayIcon, ServerIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
+import { NeedsYouBadge } from '../inbox/NeedsYouBadge';
 import { PausedTag } from '../tasks/ProjectPauseBar';
 import { t } from '../i18n';
 import { engineName } from '../staff/fallbackEngine';
@@ -195,9 +197,10 @@ export function ProjectNode({ id, data, selected, width }: NodeProps<Node<Projec
             {p.name}
           </div>
           {/* O selo "Pausado" fica na linha de baixo, antes do resumo: no título ele tomava o lugar do nome nas salas estreitas (1 funcionário). */}
-          {(metaParts.length > 0 || paused || dots) && (
+          {(metaParts.length > 0 || paused || dots || data.needs) && (
             <div className="bn-meta" title={active > 0 ? liveTitle(data.liveWho) : undefined}>
-              {paused && <PausedTag pause={paused} now={Date.now()} className="bn-tag is-paused" />}
+              <NeedsYouBadge needs={data.needs} />
+              {paused &&<PausedTag pause={paused} now={Date.now()} className="bn-tag is-paused" />}
               {metaParts.map((m, i) => (
                 <Fragment key={m.key}>
                   {i > 0 && ' · '}
@@ -258,7 +261,7 @@ export function staffTools(staff: StaffProfile): Array<{ tool: StaffTool; label:
     staff.skills.length > 0 && { tool: 'skills', label: t('board.toolSkills', { list: skillLabels(staff.skills, (scope) => t(SKILL_SCOPE_LABEL[scope])).join(', ') }) },
     staff.mcps === null
       ? { tool: 'mcps', label: t('board.toolMcpsAll') }
-      : staff.mcps.length > 0 && { tool: 'mcps', label: t('board.toolMcps', { list: staff.mcps.join(', ') }) },
+      : staff.mcps.length > 0 && { tool: 'mcps', label: t('board.toolMcps', { list: staff.mcps.map(mcpName).join(', ') }) },
   ];
   return tools.filter((x) => x !== false);
 }
@@ -300,6 +303,7 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
           <div className="bn-title bn-title-sm">{name}</div>
           <div className="bn-meta">
             {[
+              data.needs && <NeedsYouBadge key="needs" needs={data.needs} compact />,
               staff && <span key="role" className="bn-role">{staff.role}</span>,
               ghost && ghost.length > 1 && (
                 <span key="ghost" className="bn-role">

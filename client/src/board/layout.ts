@@ -15,6 +15,7 @@ import type {
   StaffProfile,
   TaskSummary,
 } from '../../../shared/model';
+import { projectNeeds, staffNeeds, type NeedsYou } from '../inbox/needsYou';
 import { pendingOf } from '../inbox/resolved';
 import { isTaskAlert } from '../inbox/taskAlerts';
 import { liveLines, type LiveLine } from './liveWho';
@@ -50,6 +51,8 @@ export type ProjectNodeData = {
   tasks: TaskSummary | null;
   /** Funcionários da sala esperando você (ver EmployeeNodeData.needsYou): o contador do cabeçalho. */
   awaiting: number;
+  /** O que na sala espera uma decisão sua, pela caixa (selo "precisa de você"); null: nada. */
+  needs?: NeedsYou | null;
   /** Funcionários com ficha que o quadro mostra na sala (sem encerrados nem arquivados, a menos que "arquivados" esteja ligado). */
   employees: number;
 };
@@ -69,6 +72,8 @@ export type EmployeeNodeData = {
    * ou a sessão viva está esperando resposta em outro lugar.
    */
   needsYou: boolean;
+  /** O que deste funcionário espera uma decisão sua, pela caixa (selo "precisa de você", inclui os itens das tarefas dele); null: nada. */
+  needs?: NeedsYou | null;
 };
 export type AgentNodeData = { agent: Agent; cost: { usd: number; runs: number } | null };
 export type SkillNodeData = { skill: Skill };
@@ -316,6 +321,7 @@ export function buildGraph(
         ghost: null,
         archived: archivedSessions.has(`staff:${st.id}`),
         needsYou: needsYou(session?.live, mine, st.id),
+        needs: staffNeeds(opts.inbox ?? [], p.id, st.id, mine),
       };
       if (!staffShown(st)) continue;
       const tree: Tree = { node: node(staffNodeId(p.id, st.id), 'employee', data), side: [], children: [] };
@@ -339,6 +345,7 @@ export function buildGraph(
           ghost: loose,
           archived: ids.every((id) => archivedSessions.has(id)),
           needsYou: needsYou(session.live, ids, null),
+          needs: staffNeeds(opts.inbox ?? [], p.id, null, ids),
         }),
         side: [],
         children: [],
@@ -394,6 +401,7 @@ export function buildGraph(
         tasks: opts.tasks?.[p.id] ?? null,
         // Só as sessões vivas da sala (as que o cabeçalho mostra as bolinhas).
         awaiting: liveFor(board.live, p.path).filter((s) => awaitingSessions.has(s.sessionId)).length,
+        needs: projectNeeds(opts.inbox ?? [], p.id),
         employees: staffOf(p).filter(staffShown).length,
       }),
       // Dobrada: só o cabeçalho, com o resumo; nada de equipe nem recursos.
