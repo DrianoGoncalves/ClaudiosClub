@@ -5,6 +5,8 @@ import { api } from '../api';
 import { effortLabel } from '../format';
 import { t } from '../i18n';
 import { AUTONOMY_OPTIONS, EFFORT_OPTIONS, MODEL_OPTIONS, modelLabel, PLAYBOOK_OPTIONS } from '../staff/templates';
+import { PlaybookRoster } from '../staff/PlaybookRoster';
+import { rosterRows } from '../staff/agentRoles';
 import { askConfirm } from '../lib/dialogStore';
 
 // Cargos da empresa (config → Cargos): os prontos e os seus. Cada cargo traz o modelo com que o
@@ -28,7 +30,7 @@ interface Draft {
   rest: Partial<RoleEntry>;
 }
 
-const blank: Draft = { label: '', role: '', mission: '', autonomy: 'acceptEdits', rules: '', doneWhen: '', model: 'sonnet', effort: 'medium', canHire: false, playbook: '', rest: {} };
+export const blank: Draft = { label: '', role: '', mission: '', autonomy: 'acceptEdits', rules: '', doneWhen: '', model: 'sonnet', effort: 'medium', canHire: false, playbook: '', rest: {} };
 
 function toDraft(r: RoleEntry): Draft {
   const { id, label, role, mission, autonomy, rules, doneWhen, model, effort, canHire, playbook, builtin: _b, edited: _e, isDefault: _d, ...rest } = r;
@@ -90,94 +92,7 @@ export function RolesEditor() {
   if (!roles) return <span className="muted small">{error ?? t('toolbar.loading')}</span>;
   const hiddenBuiltins = 7 - roles.filter((r) => r.builtin).length;
 
-  const form = editing && (
-    <form
-      className="role-form"
-      onSubmit={(e) => {
-        e.preventDefault();
-        void save();
-      }}
-    >
-      <div className="grid2">
-        <label>
-          {t('toolbar.fieldLabel')}
-          <input value={editing.label} maxLength={60} required autoFocus onChange={(e) => setEditing({ ...editing, label: e.target.value })} />
-        </label>
-        <label>
-          {t('toolbar.fieldRole')}
-          <input value={editing.role} maxLength={60} required onChange={(e) => setEditing({ ...editing, role: e.target.value })} />
-        </label>
-        <label>
-          {t('toolbar.fieldModel')}
-          <select value={editing.model} onChange={(e) => setEditing({ ...editing, model: e.target.value })}>
-            {MODEL_OPTIONS.map((m) => (
-              <option key={m.value} value={m.value}>
-                {m.label}
-              </option>
-            ))}
-            {!MODEL_OPTIONS.some((m) => m.value === editing.model) && <option value={editing.model}>{editing.model}</option>}
-          </select>
-        </label>
-        <label>
-          {t('toolbar.effort')}
-          <select value={editing.effort} onChange={(e) => setEditing({ ...editing, effort: e.target.value as '' | Effort })}>
-            {EFFORT_OPTIONS.map((x) => (
-              <option key={x} value={x}>
-                {x ? effortLabel(x) : t('toolbar.defaultLabel')}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      <label>
-        {t('toolbar.fieldAutonomy')}
-        <select value={editing.autonomy} onChange={(e) => setEditing({ ...editing, autonomy: e.target.value as Autonomy })}>
-          {AUTONOMY_OPTIONS.map((a) => (
-            <option key={a.value} value={a.value}>
-              {a.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        {t('staff.playbookLabel')}
-        <select value={editing.playbook} onChange={(e) => setEditing({ ...editing, playbook: e.target.value as '' | Playbook })}>
-          <option value="">{t('staff.playbookNone')}</option>
-          {PLAYBOOK_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      {editing.playbook && <p className="muted small">{PLAYBOOK_OPTIONS.find((o) => o.value === editing.playbook)?.help}</p>}
-      <label>
-        {t('toolbar.fieldMission')}
-        <textarea rows={3} value={editing.mission} maxLength={4000} required onChange={(e) => setEditing({ ...editing, mission: e.target.value })} />
-      </label>
-      <label>
-        {t('toolbar.fieldRules')}
-        <textarea rows={4} value={editing.rules} onChange={(e) => setEditing({ ...editing, rules: e.target.value })} />
-      </label>
-      <label>
-        {t('toolbar.fieldDoneWhen')}
-        <input value={editing.doneWhen} maxLength={2000} onChange={(e) => setEditing({ ...editing, doneWhen: e.target.value })} />
-      </label>
-      <label className="check">
-        <input type="checkbox" checked={editing.canHire} onChange={(e) => setEditing({ ...editing, canHire: e.target.checked })} /> {t('toolbar.canHire')}{' '}
-        <span className="muted small">{t('toolbar.canHireNote')}</span>
-      </label>
-      <p className="muted small">{t('toolbar.formNote')}</p>
-      <p className="roles-footer">
-        <button type="submit" className="btn-primary" disabled={busy}>
-          {t('toolbar.saveRole')}
-        </button>
-        <button type="button" className="btn-secondary" disabled={busy} onClick={() => setEditing(null)}>
-          {t('toolbar.cancel')}
-        </button>
-      </p>
-    </form>
-  );
+  const form = editing && <RoleForm editing={editing} setEditing={setEditing} busy={busy} onSave={() => void save()} onCancel={() => setEditing(null)} />;
 
   return (
     <div className="roles">
@@ -246,5 +161,98 @@ export function RolesEditor() {
       </p>
       {error && <p className="error small">{error}</p>}
     </div>
+  );
+}
+
+/** O formulário de um cargo (exportado para o teste renderizar sem a lista). */
+export function RoleForm({ editing, setEditing, busy, onSave, onCancel }: { editing: Draft; setEditing: (d: Draft) => void; busy: boolean; onSave: () => void; onCancel: () => void }) {
+  return (
+    <form
+      className="role-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSave();
+      }}
+    >
+      <div className="grid2">
+        <label>
+          {t('toolbar.fieldLabel')}
+          <input value={editing.label} maxLength={60} required autoFocus onChange={(e) => setEditing({ ...editing, label: e.target.value })} />
+        </label>
+        <label>
+          {t('toolbar.fieldRole')}
+          <input value={editing.role} maxLength={60} required onChange={(e) => setEditing({ ...editing, role: e.target.value })} />
+        </label>
+        <label>
+          {t('toolbar.fieldModel')}
+          <select value={editing.model} onChange={(e) => setEditing({ ...editing, model: e.target.value })}>
+            {MODEL_OPTIONS.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+            {!MODEL_OPTIONS.some((m) => m.value === editing.model) && <option value={editing.model}>{editing.model}</option>}
+          </select>
+        </label>
+        <label>
+          {t('toolbar.effort')}
+          <select value={editing.effort} onChange={(e) => setEditing({ ...editing, effort: e.target.value as '' | Effort })}>
+            {EFFORT_OPTIONS.map((x) => (
+              <option key={x} value={x}>
+                {x ? effortLabel(x) : t('toolbar.defaultLabel')}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <label>
+        {t('toolbar.fieldAutonomy')}
+        <select value={editing.autonomy} onChange={(e) => setEditing({ ...editing, autonomy: e.target.value as Autonomy })}>
+          {AUTONOMY_OPTIONS.map((a) => (
+            <option key={a.value} value={a.value}>
+              {a.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        {t('staff.playbookLabel')}
+        <select value={editing.playbook} onChange={(e) => setEditing({ ...editing, playbook: e.target.value as '' | Playbook })}>
+          <option value="">{t('staff.playbookNone')}</option>
+          {PLAYBOOK_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {editing.playbook && <p className="muted small">{PLAYBOOK_OPTIONS.find((o) => o.value === editing.playbook)?.help}</p>}
+      {editing.playbook && <PlaybookRoster rows={rosterRows(editing.playbook, new Map(), false)} forRole />}
+      <label>
+        {t('toolbar.fieldMission')}
+        <textarea rows={3} value={editing.mission} maxLength={4000} required onChange={(e) => setEditing({ ...editing, mission: e.target.value })} />
+      </label>
+      <label>
+        {t('toolbar.fieldRules')}
+        <textarea rows={4} value={editing.rules} onChange={(e) => setEditing({ ...editing, rules: e.target.value })} />
+      </label>
+      <label>
+        {t('toolbar.fieldDoneWhen')}
+        <input value={editing.doneWhen} maxLength={2000} onChange={(e) => setEditing({ ...editing, doneWhen: e.target.value })} />
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={editing.canHire} onChange={(e) => setEditing({ ...editing, canHire: e.target.checked })} /> {t('toolbar.canHire')}{' '}
+        <span className="muted small">{t('toolbar.canHireNote')}</span>
+      </label>
+      <p className="muted small">{t('toolbar.formNote')}</p>
+      <p className="roles-footer">
+        <button type="submit" className="btn-primary" disabled={busy}>
+          {t('toolbar.saveRole')}
+        </button>
+        <button type="button" className="btn-secondary" disabled={busy} onClick={onCancel}>
+          {t('toolbar.cancel')}
+        </button>
+      </p>
+    </form>
   );
 }

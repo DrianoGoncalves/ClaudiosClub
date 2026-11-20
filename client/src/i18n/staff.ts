@@ -1,6 +1,6 @@
 import { defineMessages } from './define';
 
-// Textos das áreas staff (contratação, ficha, agents, navegador) e inbox ("precisa de mim").
+// Textos das áreas staff (contratação, ficha, agents, navegador) e inbox ("Inbox").
 export default defineMessages({
   'pt-BR': {
     // HireForm: cabeçalho, abas e campos
@@ -245,6 +245,7 @@ export default defineMessages({
     'staff.errPortraitRead': 'Retrato: não foi possível ler a imagem.',
     'staff.tipNoExecutors': 'Ainda não há agents em modelos menores para executar. Crie um (ex.: “{preset}”) em “{newAgent}”, no painel do projeto, e edite esta ficha depois.',
     'staff.rosterTitle': 'Quem ajuda neste roteiro',
+    'staff.rosterRoleNote': 'Modelos dos agents prontos. Em cada projeto, o que já existe com esse nome vale no lugar do pronto; o que falta é criado ao abrir a conversa.',
     'staff.rosterCreated': 'criado ao abrir a conversa',
     'staff.rosterHave': 'já está no projeto',
     'staff.rosterInherit': 'modelo da conversa',
@@ -378,7 +379,7 @@ export default defineMessages({
     'staff.checking': 'conferindo…',
     'staff.recheck': 'conferir de novo',
     // Inbox
-    'inbox.button': 'precisa de mim',
+    'inbox.button': 'Inbox',
     'inbox.countOne': '{count} coisa espera você',
     'inbox.countOther': '{count} coisas esperam você',
     'inbox.nothingTitle': 'Nada espera você agora',
@@ -496,6 +497,7 @@ export default defineMessages({
     'inbox.notifyTitle': 'Uma notificação do sistema a cada item novo, e quando alguém termina o trabalho, mesmo com o Clube dos Claudios em segundo plano',
     'inbox.notifyLabel': 'avisar no sistema (inclusive quando alguém termina)',
     'inbox.dismiss': 'Dispensar',
+    'inbox.resolved': 'Resolvido',
     'inbox.dismissWaitingTitle': 'Tira da caixa até a sessão mudar de status',
     // Aviso de segredo: a frase sai de `secretText` (client/src/inbox/secretText.ts), com tipo e contexto, nunca o valor.
     'inbox.secret.sentence': '{label} apareceu {where}: troque e não cole segredos na conversa',
@@ -759,6 +761,7 @@ export default defineMessages({
     'staff.errPortraitRead': 'Portrait: could not read the image.',
     'staff.tipNoExecutors': 'There are no agents on smaller models to run yet. Create one (e.g. “{preset}”) in “{newAgent}”, in the project panel, and edit this profile later.',
     'staff.rosterTitle': 'Who helps in this playbook',
+    'staff.rosterRoleNote': 'Models of the ready-made agents. In each project, an existing agent with that name is used instead; whatever is missing is created when the conversation opens.',
     'staff.rosterCreated': 'created when the conversation opens',
     'staff.rosterHave': 'already in the project',
     'staff.rosterInherit': 'conversation model',
@@ -1006,6 +1009,7 @@ export default defineMessages({
     'inbox.notifyTitle': 'A system notification for each new item, and when someone finishes their work, even with Claudio’s Club in the background',
     'inbox.notifyLabel': 'notify on the system (including when someone finishes)',
     'inbox.dismiss': 'Dismiss',
+    'inbox.resolved': 'Resolved',
     'inbox.dismissWaitingTitle': 'Removes it from the inbox until the session changes status',
     'inbox.secret.sentence': '{label} appeared {where}: change it and don’t paste secrets into the conversation',
     'inbox.secret.where.owner': 'in your message',
@@ -1268,6 +1272,7 @@ export default defineMessages({
     'staff.errPortraitRead': 'Retrato: no se pudo leer la imagen.',
     'staff.tipNoExecutors': 'Todavía no hay agentes en modelos menores para ejecutar. Crea uno (ej.: “{preset}”) en “{newAgent}”, en el panel del proyecto, y edita esta ficha después.',
     'staff.rosterTitle': 'Quién ayuda en este guion',
+    'staff.rosterRoleNote': 'Modelos de los agentes listos. En cada proyecto, el que ya existe con ese nombre vale en lugar del listo; lo que falta se crea al abrir la conversación.',
     'staff.rosterCreated': 'se crea al abrir la conversación',
     'staff.rosterHave': 'ya está en el proyecto',
     'staff.rosterInherit': 'modelo de la conversación',
@@ -1515,6 +1520,7 @@ export default defineMessages({
     'inbox.notifyTitle': 'Una notificación del sistema por cada elemento nuevo, y cuando alguien termina su trabajo, incluso con el Club de los Claudios en segundo plano',
     'inbox.notifyLabel': 'avisar en el sistema (incluso cuando alguien termina)',
     'inbox.dismiss': 'Descartar',
+    'inbox.resolved': 'Resuelto',
     'inbox.dismissWaitingTitle': 'Lo quita de la bandeja hasta que la sesión cambie de estado',
     'inbox.secret.sentence': '{label} apareció {where}: cámbialo y no pegues secretos en la conversación',
     'inbox.secret.where.owner': 'en tu mensaje',
