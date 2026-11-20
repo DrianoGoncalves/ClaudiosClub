@@ -59,6 +59,7 @@ import { CLUB_MCP_FILE, McpError, mcpJsonWarnings } from './staff/mcp';
 import { createMcpLibrary } from './staff/mcpLibrary';
 import { CodexPasswordPolicy } from './codexPasswordPolicy';
 import { blockedInboxItem, codexSandboxInboxItem, commitInboxItem, deniedInboxItem, followUpInboxItem, heavyGuardOffInboxItem, notStartedInboxItem, permissionInboxItem, questionInboxItem, secretInboxItem, stuckInboxItem, taskQuestionInboxItem, withoutSecretHint } from './inboxItems';
+import { InboxResolver, resolvedLast, settleWithin } from './inboxResolved';
 import { capText } from './chat/turnCap';
 import { TurnRetryLedger } from './chat/turnRetry';
 import { InboxState } from './inboxState';
@@ -86,6 +87,7 @@ import {
   readProjectImageFile,
 } from './projectFiles';
 import { openEditorRoute } from './openInEditor';
+import { openProjectTerminalRoute } from './openProjectTerminal';
 import { actingStaff, requesterSessionOf, SANDBOX_HOST, SessionTokens, type Caller } from './callers';
 import { isUnverifiedOrigin, staffOrigin, type OriginDeps } from './chat/origin';
 import { RequesterAskLimiter } from './chat/requesterAsk';
@@ -2065,6 +2067,12 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     async ({ params: [id], body, fromBrowser }) => openEditorRoute({ fromBrowser, body, projectDir: await projectPathOf(id!) }, { log: (line) => console.log(line) }),
   ],
   [
+    // Abrir um terminal do computador na pasta do projeto (botão do painel): só a tela (navegador pareado); a pasta vem do cadastro, o corpo não leva nada.
+    'POST',
+    new RegExp(`^/api/projects/${ID}/open-terminal$`),
+    async ({ params: [id], fromBrowser }) => openProjectTerminalRoute({ fromBrowser, projectDir: await projectPathOf(id!) }, { log: (line) => console.log(line) }),
+  ],
+  [
     'GET',
     new RegExp(`^/api/projects/${ID}/files/image$`),
     async ({ params: [id], url }) => {
@@ -2884,13 +2892,17 @@ async function getBoard(opts: { includeOld?: boolean } = {}): Promise<Board> {
 const INBOX_ORDER: Record<InboxKind, number> = { plan: 0, permission: 1, secret: 2, waiting: 3, question: 4, denied: 5, stuck: 6, followUp: 7, blocked: 8, notStarted: 9, error: 10, routine: 11, usage: 12, orphan: 13 };
 /** Avisos de consumo (conta e orçamento de projeto) que a caixa mostra; guardados entre leituras da caixa. */
 const usageWarnings = new UsageWarnings();
+/** Quais avisos de erro da caixa já passaram (`InboxItem.resolvedAt`, ver inboxResolved.ts) e há quanto tempo; só na memória. */
+const resolver = new InboxResolver();
 
 /**
  * Tudo que espera você, de todas as salas: planos prontos e permissões pendentes das conversas
  * no Claudio’s Club, sessões esperando resposta em outro lugar (app, terminal), conversas que pararam com
- * erro e processos órfãos de um reinício. Arquivados ficam de fora.
+ * erro e processos órfãos de um reinício. Arquivados ficam de fora. Aviso de erro cujo problema já passou
+ * segue na lista com `resolvedAt` (depois dos pendentes, não conta como pendência) até ser ignorado ou vencer o prazo.
  */
 async function getInbox(): Promise<InboxItem[]> {
+  const readAt = resolver.begin();
   const [projects, live] = await Promise.all([adapter.listProjects(), adapter.listLiveSessions()]);
   const { where, hidden } = await sessionPlacesNow(projects);
 
@@ -2902,11 +2914,6 @@ async function getInbox(): Promise<InboxItem[]> {
     for (const p of pending) out.push(permissionInboxItem(p, w));
     if (error) out.push({ id: `error:${sessionId}`, kind: 'error', ...w, summary: error, at: null });
   }
-  // Turno que parou no teto (ferramentas ou minutos): some quando você manda mensagem nova na conversa.
-  for (const c of chats.turnCaps()) {
-    const w = where(c.sessionId, liveById.get(c.sessionId));
-    if (!hidden(w)) out.push({ id: `cap:${c.sessionId}`, kind: 'error', ...w, summary: capText(c), at: c.at });
-  }
   // Terminou o turno perguntando algo no texto (sem pedido de permissão): espera até você responder.
   for (const q of chats.pendingQuestions()) {
     const w = where(q.sessionId, liveById.get(q.sessionId));
@@ -2917,6 +2924,14 @@ async function getInbox(): Promise<InboxItem[]> {
   const boardProjects = projects.filter((x) => x.exists && !x.worktreeOf);
   // Com a permissão que a conversa espera de você (`withPermission`): a tarefa parada nela segura os dependentes na caixa, como as outras paradas.
   const boards = await Promise.all(boardProjects.map(async (p) => ({ p, tasks: (await readTasks(p.path)).map((t) => tasks.withPermission(t)) })));
+  // Turno que parou no teto (ferramentas ou minutos): some quando você manda mensagem nova na conversa; com a tarefa da conversa já encerrada, segue na lista como resolvido.
+  for (const c of chats.turnCaps()) {
+    const w = where(c.sessionId, liveById.get(c.sessionId));
+    if (hidden(w)) continue;
+    const owner = boards.find((b) => b.p.id === w.projectId)?.tasks.find((t) => t.sessionId === c.sessionId);
+    const item = resolver.cap({ id: `cap:${c.sessionId}`, kind: 'error', ...w, summary: capText(c), at: c.at }, owner);
+    if (item) out.push(item);
+  }
   // Também as tarefas que só você destrava (ver ownAlerts): dúvida escalada ('question') e revisão ou ajuste parados ('stuck').
   // E os follow-ups de revisão que esperam você (ver followUpAlerts): tarefa que você pediu, ou o gestor não pôde receber ('followUp').
   // E o commit automático de tarefa pronta que falhou ou foi parcial (ver commitAlerts): kind 'error', some ao ignorar.
@@ -2931,7 +2946,9 @@ async function getInbox(): Promise<InboxItem[]> {
         out.push(a.state.humanAction === 'answer' ? taskQuestionInboxItem(a, w) : stuckInboxItem(a, w));
       }
       for (const a of followUps) out.push(followUpInboxItem(a, { projectId: p.id, projectName: p.name, sessionId: '', name: nameOf(p.id, a.task.staffId) }, nameOf(p.id, a.followUp.by), nameOf(p.id, a.followUp.staffId ?? null)));
-      for (const a of commits) out.push(commitInboxItem(a, { projectId: p.id, projectName: p.name, sessionId: '', name: nameOf(p.id, a.task.staffId) }));
+      // Commit automático: os arquivos da tarefa já sem mudança no git = resolvido (consulta ao git em paralelo, com cache e prazo, ver InboxResolver.commit).
+      const commitItems = await Promise.all(commits.map((a) => resolver.commit(commitInboxItem(a, { projectId: p.id, projectName: p.name, sessionId: '', name: nameOf(p.id, a.task.staffId) }), p.path, a.task)));
+      for (const item of commitItems) if (item) out.push(item);
       for (const s of rows) out.push(blockedInboxItem(s, { projectId: p.id, projectName: p.name, sessionId: '', staffId: s.task.staffId, name: nameOf(p.id, s.task.staffId) }));
       for (const n of forgotten) out.push(notStartedInboxItem(n, { projectId: p.id, projectName: p.name, sessionId: '', name: nameOf(p.id, n.task.staffId) }));
     }
@@ -3000,11 +3017,17 @@ async function getInbox(): Promise<InboxItem[]> {
   // Conversa de tarefa do Codex sem a fila de validação pesada por causa do hooks.json da conta (kind 'error', ver ChatManager.noteGuardOff): o aviso do chat ninguém lê numa conversa autônoma.
   for (const g of chats.guardOffHits()) {
     const w = where(g.sessionId, liveById.get(g.sessionId));
-    if (!hidden(w)) out.push(heavyGuardOffInboxItem(g, w));
+    if (hidden(w)) continue;
+    // O hooks.json que sumiu deixa o aviso como resolvido (a conversa só o larga na próxima mensagem).
+    const item = await resolver.guardOff(heavyGuardOffInboxItem(g, w));
+    if (item) out.push(item);
   }
   // O sandbox do Codex no Windows não abre por causa da política de senha (kind 'error', um por máquina, ver CodexPasswordPolicy): sem projeto, como o aviso de consumo da conta.
+  // Aviso de pé: relê a política (com o cache dela) para quem a corrigiu sem abrir conversa do Codex; passou = resolvido.
+  if (codexPolicy.current() && !codexPolicy.current()!.resolvedAt) await settleWithin(codexPolicy.check(), 3_000, undefined);
   const sandbox = codexPolicy.current();
-  if (sandbox) out.push(codexSandboxInboxItem(sandbox));
+  const sandboxItem = sandbox ? resolver.codexSandbox(codexSandboxInboxItem(sandbox)) : null;
+  if (sandboxItem) out.push(sandboxItem);
   // Segredos que apareceram nas conversas do Claudio’s Club (senha num comando, token colado…).
   for (const s of chats.secretHits()) {
     const w = where(s.sessionId, liveById.get(s.sessionId));
@@ -3028,7 +3051,8 @@ async function getInbox(): Promise<InboxItem[]> {
       });
     }
   }
-  return out.sort((a, b) => INBOX_ORDER[a.kind] - INBOX_ORDER[b.kind] || (b.at ?? '').localeCompare(a.at ?? ''));
+  resolver.sweep(readAt);
+  return out.sort((a, b) => resolvedLast(a, b) || INBOX_ORDER[a.kind] - INBOX_ORDER[b.kind] || (b.at ?? '').localeCompare(a.at ?? ''));
 }
 
 /** Turnos que terminaram desde `since`, com quem e onde (para o aviso "terminou"). */

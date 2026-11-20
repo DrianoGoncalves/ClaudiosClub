@@ -174,18 +174,25 @@ describe('CodexPasswordPolicy: a checagem prévia', () => {
     expect(t.net.calls).toHaveLength(1);
   });
 
-  it('o aviso some sozinho quando a checagem seguinte passa (0); mudou de valor, atualiza o mesmo aviso', async () => {
+  it('o aviso fica como resolvido quando a checagem seguinte passa (0); mudou de valor, atualiza o mesmo aviso', async () => {
     const t = policy();
     await t.p.check();
     const at = t.p.current()!.at;
+    expect(t.p.current()).not.toHaveProperty('resolvedAt');
     t.net.set(rows('3'));
     t.clock.t += POLICY_OK_TTL_MS + 1;
     await t.p.check();
     expect(t.p.current()).toMatchObject({ minPasswordAgeDays: 3, at });
+    expect(t.p.current()).not.toHaveProperty('resolvedAt');
     t.net.set(rows('0'));
     t.clock.t += POLICY_OK_TTL_MS + 1;
     await t.p.check();
-    expect(t.p.current()).toBeNull();
+    expect(t.p.current()).toMatchObject({ minPasswordAgeDays: 3, at, resolvedAt: new Date(t.clock.t).toISOString() });
+    // Leitura em 0 de novo não muda a hora em que o aviso passou.
+    const resolvedAt = t.p.current()!.resolvedAt;
+    t.clock.t += POLICY_OK_TTL_MS + 1;
+    await t.p.check();
+    expect(t.p.current()!.resolvedAt).toBe(resolvedAt);
   });
 });
 
@@ -235,21 +242,22 @@ describe('CodexPasswordPolicy: o erro visto no turno', () => {
     expect(t.p.current()).toMatchObject({ minPasswordAgeDays: null, source: 'turn' });
   });
 
-  it('aviso que nasceu de leitura que falhou (null) some quando a checagem seguinte lê 0; leitura que falha de novo não o apaga', async () => {
+  it('aviso que nasceu de leitura que falhou (null) fica resolvido quando a checagem seguinte lê 0; leitura que falha de novo não o marca', async () => {
     const t = policy({ net: fakeNet({ stdout: 'lixo' }) });
     await t.p.noteFailure();
     expect(t.p.current()).toMatchObject({ minPasswordAgeDays: null });
     t.clock.t += POLICY_FAIL_TTL_MS + 1;
     await t.p.check(); // segue ilegível: sem informação nova, o aviso fica
     expect(t.p.current()).toMatchObject({ minPasswordAgeDays: null });
+    expect(t.p.current()).not.toHaveProperty('resolvedAt');
     t.net.set(rows('0'));
     t.clock.t += POLICY_FAIL_TTL_MS + 1;
     await t.p.check();
-    expect(t.p.current()).toBeNull();
+    expect(t.p.current()).toMatchObject({ minPasswordAgeDays: null, resolvedAt: expect.any(String) });
     expect(t.net.calls).toHaveLength(3);
   });
 
-  it('aviso nascido de leitura null: leitura >0 o atualiza (com o comando) e o 0 depois o apaga', async () => {
+  it('aviso nascido de leitura null: leitura >0 o atualiza (com o comando) e o 0 depois o marca como resolvido', async () => {
     const t = policy({ net: fakeNet({ stdout: 'lixo' }) });
     await t.p.noteFailure();
     t.net.set(rows('2'));
@@ -259,31 +267,34 @@ describe('CodexPasswordPolicy: o erro visto no turno', () => {
     t.net.set(rows('0'));
     t.clock.t += POLICY_OK_TTL_MS + 1;
     await t.p.check();
-    expect(t.p.current()).toBeNull();
+    expect(t.p.current()).toMatchObject({ minPasswordAgeDays: 2, resolvedAt: expect.any(String) });
   });
 
-  it('apagado pelo 0 e o erro seguiu: o próximo erro do turno levanta o aviso de novo, agora com 0 (outra regra), e esse a checagem em 0 não apaga', async () => {
+  it('resolvido pelo 0 e o erro seguiu: o próximo erro do turno levanta um aviso novo, agora com 0 (outra regra) e sem a marca, e esse a checagem em 0 não marca', async () => {
     const t = policy({ net: fakeNet({ stdout: 'lixo' }) });
     await t.p.noteFailure();
     t.net.set(rows('0'));
     t.clock.t += POLICY_FAIL_TTL_MS + 1;
     await t.p.check();
-    expect(t.p.current()).toBeNull();
+    expect(t.p.current()).toMatchObject({ resolvedAt: expect.any(String) });
     await t.p.noteFailure();
     expect(t.p.current()).toMatchObject({ minPasswordAgeDays: 0, source: 'turn' });
+    expect(t.p.current()).not.toHaveProperty('resolvedAt');
     t.clock.t += POLICY_OK_TTL_MS + 1;
     await t.p.check();
     expect(t.p.current()).toMatchObject({ minPasswordAgeDays: 0 });
+    expect(t.p.current()).not.toHaveProperty('resolvedAt');
   });
 
-  it('erro do turno com a política já corrigida: aviso levantado com >0 some quando a checagem passar', async () => {
+  it('erro do turno com a política já corrigida: aviso levantado com >0 fica resolvido quando a checagem passar', async () => {
     const t = policy();
     await t.p.noteFailure();
     expect(t.p.current()).not.toBeNull();
+    expect(t.p.current()).not.toHaveProperty('resolvedAt');
     t.net.set(rows('0'));
     t.clock.t += POLICY_OK_TTL_MS + 1;
     await t.p.check();
-    expect(t.p.current()).toBeNull();
+    expect(t.p.current()).toMatchObject({ resolvedAt: expect.any(String) });
   });
 });
 
@@ -581,7 +592,7 @@ describe('a fiação do servidor (index.ts)', () => {
     expect(src).toContain('onCodexProfile: () => void codexPolicy.check(),');
     expect(src).toContain('onCodexOpen: () => void codexPolicy.check(),');
     expect(src).toContain('onCodexPasswordPolicyFailure: () => void codexPolicy.noteFailure(),');
-    expect(src).toContain('out.push(codexSandboxInboxItem(sandbox))');
+    expect(src).toContain('resolver.codexSandbox(codexSandboxInboxItem(sandbox))');
     expect(src).toContain('codexPolicy.dismiss(b.id)');
     expect(src).toMatch(/regex\(\/\^\(error\|cap\|commit\|guardoff\|codexsandbox\):/);
     // O Club nunca muda a política: nenhum arquivo do servidor roda o comando que ele sugere.

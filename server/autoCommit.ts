@@ -82,6 +82,27 @@ export function commitMessage(title: string, taskId: string): string {
   return head ? `${head} (${taskId})` : `Tarefa (${taskId})`;
 }
 
+/**
+ * Quantos dos arquivos da tarefa ainda têm mudança no git (só leitura: é como a caixa sabe que o aviso do commit já passou, ver `server/inboxResolved.ts`). null = não dá para dizer: sem lista,
+ * lista no teto (pode estar cortada), caminho que não é do projeto, repositório fora de condição de commit (ver `inspectRepo`) ou git que falhou. Nunca lança.
+ */
+export async function pendingChanges(dir: string, files: string[] | undefined): Promise<number | null> {
+  const list = [...new Set(files ?? [])];
+  if (!list.length || list.length >= CHANGED_FILES_MAX) return null;
+  const rels: string[] = [];
+  for (const f of list) {
+    const rel = safeRel(f);
+    if (rel === null) return null;
+    rels.push(rel);
+  }
+  try {
+    const repo = await inspectRepo(dir);
+    return repo.ok ? (await statusOf(dir, repo.prefix, rels)).size : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Faz o commit dos arquivos da tarefa, ou diz por que não fez. Nunca lança: o motivo vai em `note`. */
 export async function commitTaskFiles(req: CommitRequest): Promise<CommitResult> {
   const none = (note: string, alert = false, left: TaskCommitLeft[] = []): CommitResult => ({ status: 'none', sha: null, files: [], left: cap(left), note, alert });
@@ -163,10 +184,10 @@ async function leftOutWhy(req: CommitRequest, e: StatusEntry, key: string, rel: 
   return null;
 }
 
-type Repo = { ok: true; head: string; prefix: string } | { ok: false; note: string; alert: boolean };
+export type Repo = { ok: true; head: string; prefix: string } | { ok: false; note: string; alert: boolean };
 
 /** O repositório está em condição de receber o commit? `alert` falso: não há o que você fazer (não é um repositório). */
-async function inspectRepo(dir: string): Promise<Repo> {
+export async function inspectRepo(dir: string, git: GitRun = gitDefault): Promise<Repo> {
   if ((await git(dir, ['rev-parse', '--is-inside-work-tree']).catch(() => '')).trim() !== 'true') return { ok: false, note: 'o projeto não é um repositório git', alert: false };
   const head = (await git(dir, ['rev-parse', '--verify', '-q', 'HEAD']).catch(() => '')).trim();
   if (!head) return { ok: false, note: 'o repositório ainda não tem nenhum commit: nada foi commitado', alert: true };
@@ -179,7 +200,7 @@ async function inspectRepo(dir: string): Promise<Repo> {
   return { ok: true, head, prefix: (await git(dir, ['rev-parse', '--show-prefix']).catch(() => '')).trim() };
 }
 
-interface StatusEntry {
+export interface StatusEntry {
   /** O caminho como o git o escreve (a partir do projeto). */
   path: string;
   x: string;
@@ -187,7 +208,7 @@ interface StatusEntry {
 }
 
 /** `git status` dos caminhos pedidos, por `pathKey`; arquivo sem mudança não aparece. Sem renome: um renome são dois caminhos. */
-async function statusOf(dir: string, prefix: string, rels: string[]): Promise<Map<string, StatusEntry>> {
+export async function statusOf(dir: string, prefix: string, rels: string[], git: GitRun = gitDefault): Promise<Map<string, StatusEntry>> {
   const out = new Map<string, StatusEntry>();
   for (let i = 0; i < rels.length; i += PATH_CHUNK) {
     const raw = await git(dir, ['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all', '--', ...rels.slice(i, i + PATH_CHUNK)], { env: LITERAL });
@@ -202,13 +223,13 @@ async function statusOf(dir: string, prefix: string, rels: string[]): Promise<Ma
 }
 
 /** Os estados "não mesclado" do `git status`: UU, AA, DD, AU, UA, DU, UD. */
-const isConflict = (e: StatusEntry): boolean => e.x === 'U' || e.y === 'U' || (e.x === 'A' && e.y === 'A') || (e.x === 'D' && e.y === 'D');
+export const isConflict = (e: StatusEntry): boolean => e.x === 'U' || e.y === 'U' || (e.x === 'A' && e.y === 'A') || (e.x === 'D' && e.y === 'D');
 
 /**
  * Monta o índice temporário (HEAD + só estes caminhos, como estão no disco) e commita. Null: com esses caminhos a árvore é a do HEAD (nada a commitar). `problem` é o que deu
  * errado DEPOIS de o commit existir (o HEAD já era outro, ou o índice não foi refeito): o commit vale, e o aviso diz o que conferir. Lança se o git recusou (hook, identidade…).
  */
-async function commitPaths(dir: string, head: string, paths: string[], message: string): Promise<{ sha: string; problem: string | null } | null> {
+export async function commitPaths(dir: string, head: string, paths: string[], message: string, git: GitRun = gitDefault): Promise<{ sha: string; problem: string | null } | null> {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-index-'));
   try {
     const env = { GIT_INDEX_FILE: path.join(tmp, 'index') };
@@ -236,7 +257,7 @@ async function commitPaths(dir: string, head: string, paths: string[], message: 
 const cap = (left: TaskCommitLeft[]): TaskCommitLeft[] => left.slice(0, COMMIT_LIST_MAX).map((l) => ({ ...l, path: l.path.slice(0, 300) }));
 
 /** O erro do git em uma linha: as primeiras linhas da saída dele (um hook que falha escreve o motivo ali), cortadas. */
-function summarize(err: unknown): string {
+export function summarize(err: unknown): string {
   const lines = ((err as Error)?.message ?? String(err))
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -246,11 +267,16 @@ function summarize(err: unknown): string {
   return lines.length > 300 ? `${lines.slice(0, 299)}…` : lines || 'erro desconhecido do git';
 }
 
-interface GitOpts {
+export interface GitOpts {
   env?: NodeJS.ProcessEnv;
   input?: string;
   timeoutMs?: number;
 }
+
+/** O executor do git: os pontos de entrada exportados aceitam outro (o MCP de git passa o dele, sem hooks e com ambiente controlado). */
+export type GitRun = (cwd: string, args: string[], opts?: GitOpts) => Promise<string>;
+
+const gitDefault: GitRun = (cwd, args, opts) => git(cwd, args, opts);
 
 function git(cwd: string, args: string[], opts: GitOpts = {}): Promise<string> {
   return new Promise((resolve, reject) => {

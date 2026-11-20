@@ -297,6 +297,8 @@ export function codexSandboxInboxItem(a: PasswordPolicyAlert): InboxItem {
     summary: age === 0 ? what : `${what} Em computador de domínio, a política de grupo pode desfazer a mudança.`,
     at: a.at,
     codexSandbox: { cause: 'password-policy', source: a.source, minPasswordAgeDays: age, command: PASSWORD_POLICY_FIX, domainNote: true },
+    // A política passou a 0 depois de falhar (ver `CodexPasswordPolicy.resolve`): o item segue na caixa como resolvido, sem contar como pendência.
+    ...(a.resolvedAt && { resolvedAt: a.resolvedAt }),
   };
 }
 

@@ -1839,6 +1839,15 @@ export const FTP_MCP_NAME = 'myco-ftp';
  */
 export const MEMORIA_MCP_NAME = 'myco-memoria';
 
+/**
+ * MCP de git do Club (`git_status`, `git_diff`, `git_log`, `git_commit`, `git_push`, `git_pr_criar`), nos dois motores: roda fora da sandbox do Codex
+ * (onde o `.git` é só leitura e não há rede). A chave do acesso da ficha (`mcpAccess`) é este nome.
+ */
+export const GIT_MCP_NAME = 'myco-git';
+/** Ferramentas do `myco-git` só de leitura (a ficha com acesso `readonly` e a conversa de revisão veem só estas) e as de escrita. */
+export const GIT_READ_TOOLS: string[] = ['git_status', 'git_diff', 'git_log'];
+export const GIT_WRITE_TOOLS: string[] = ['git_commit', 'git_push', 'git_pr_criar'];
+
 /** MCP que leva uma pergunta ao GPT (Codex): a ferramenta aparece como `mcp__myco-gpt__perguntar_gpt`. */
 export const GPT_MCP_NAME = 'myco-gpt';
 export const GPT_TOOL_NAME = 'perguntar_gpt';
@@ -2224,6 +2233,14 @@ export interface InboxItem {
    * de conversa (`projectId`, `projectName` e `sessionId` vêm vazios, `staffId` null, como o aviso de consumo da conta): o alvo é a própria caixa. Só na memória do servidor.
    */
   codexSandbox?: { cause: 'password-policy'; source: 'check' | 'turn'; minPasswordAgeDays: number | null; command: string; domainNote: true };
+  /**
+   * O problema deste aviso de erro já passou (ver `server/inboxResolved.ts`): ISO da primeira vez que o servidor o viu resolvido. Ausente = pendente, ou tipo sem detecção; nunca vem `null` nem `false`.
+   * Só aparece no kind 'error' de: commit automático (os arquivos da tarefa já não têm mudança no git, depois de visto fica), fila desligada (o `hooks.json` sumiu), sandbox do Codex (a duração mínima
+   * da senha passou a 0, vale só quando a causa era a política acima de 0) e teto do turno (a tarefa da conversa foi encerrada). `error:<sessão>` nunca leva: o item some sozinho quando a conversa volta.
+   * Com `resolvedAt` o item NÃO é pendência: a tela não o conta (sino, título, abas, cartão amarelo) e o mostra com a marca de finalizado, até ser ignorado (`POST /api/errors/dismiss`, a mesma rota) ou
+   * passar 24 h (o servidor o tira; o relógio fica na memória, um reinício o reinicia). Vai depois dos pendentes na lista e não vai à extensão do Chrome.
+   */
+  resolvedAt?: string;
 }
 
 export interface ContextUsage {

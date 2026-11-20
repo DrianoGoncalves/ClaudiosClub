@@ -49,6 +49,8 @@ export interface PasswordPolicyAlert {
   /** Quem levantou: a checagem prévia (política > 0) ou o erro visto na saída do Codex. */
   source: 'check' | 'turn';
   at: string;
+  /** A política passou a 0 depois de falhar: o aviso fica na caixa, marcado como resolvido (ISO de quando foi visto), até ser ignorado ou vencer o prazo (ver `server/inboxResolved.ts`). */
+  resolvedAt?: string;
 }
 
 export interface PasswordPolicyOptions {
@@ -72,13 +74,14 @@ export class CodexPasswordPolicy {
 
   constructor(private readonly opts: PasswordPolicyOptions = {}) {}
 
-  /** O aviso para a caixa (null = nada a mostrar). */
+  /** O aviso para a caixa (null = nada a mostrar); com `resolvedAt`, o problema já passou. */
   current(): PasswordPolicyAlert | null {
     return this.alert;
   }
 
   /**
    * Checagem prévia (ao abrir conversa Codex e ao salvar ficha do Codex): lê a política, com cache, e levanta o aviso se a duração mínima passa de 0.
+   * Aviso de pé e ainda pendente: a caixa também chama, para o dono que corrigiu a política sem abrir conversa Codex ver o aviso passar (a leitura é a mesma, com o mesmo cache).
    * Nunca lança: falha na leitura = sem aviso, só log.
    */
   async check(): Promise<void> {
@@ -95,7 +98,7 @@ export class CodexPasswordPolicy {
    * ignorado não lê de novo (todo comando do turno falha igual). A leitura é fresca, para dizer se a causa é a duração mínima (>0) ou outra regra (0). Nunca lança.
    */
   async noteFailure(): Promise<void> {
-    if (!this.windows || this.alert || this.dismissed) return;
+    if (!this.windows || (this.alert && !this.alert.resolvedAt) || this.dismissed) return;
     try {
       this.raise(await this.read(true), 'turn');
     } catch (err) {
@@ -104,16 +107,18 @@ export class CodexPasswordPolicy {
     }
   }
 
-  /** "Ignorar" no item da caixa: sai e não volta até a política passar depois de falhar. Falso = não há esse item (a tela está velha). */
+  /** "Ignorar" no item da caixa: sai e não volta até a política passar depois de falhar (aviso já resolvido: sai e pronto, a política já passou). Falso = não há esse item (a tela está velha). */
   dismiss(id: string): boolean {
     if (id !== PASSWORD_POLICY_ID || !this.alert) return false;
+    this.dismissed = !this.alert.resolvedAt;
     this.alert = null;
-    this.dismissed = true;
     return true;
   }
 
   private raise(days: number | null, source: PasswordPolicyAlert['source']) {
     if (this.dismissed) return;
+    // O aviso resolvido não se reabre: falha de novo é problema novo, com a hora e a origem de agora.
+    if (this.alert?.resolvedAt) this.alert = null;
     if (this.alert) {
       if (days !== null) this.alert.minPasswordAgeDays = days;
       return;
@@ -123,8 +128,9 @@ export class CodexPasswordPolicy {
   }
 
   /**
-   * A duração mínima da senha, com cache (10 min; 2 min se a leitura falhou) e uma leitura por vez. Fora do Windows: nada roda (null). Passou (0) depois de falhar: limpa o aviso, também o que nasceu de
-   * uma leitura que falhou (null): a duração não é mais a causa suspeita e, se o erro seguir, o próximo do turno levanta o aviso de novo, já com o valor lido. O que nasceu de uma leitura em 0 fica (outra regra).
+   * A duração mínima da senha, com cache (10 min; 2 min se a leitura falhou) e uma leitura por vez. Fora do Windows: nada roda (null). Passou (0) depois de falhar: marca o aviso como resolvido (`resolvedAt`;
+   * a caixa o mostra assim até o dono ignorar ou vencer o prazo), também o que nasceu de uma leitura que falhou (null): a duração não é mais a causa suspeita e, se o erro seguir, o próximo do turno levanta
+   * o aviso de novo, já com o valor lido. O que nasceu de uma leitura em 0 fica como está (outra regra: nada diz que passou).
    */
   private async read(fresh: boolean): Promise<number | null> {
     if (!this.windows) return null;
@@ -138,12 +144,20 @@ export class CodexPasswordPolicy {
       if (this.bad) {
         this.bad = false;
         this.dismissed = false;
-        this.alert = null;
-      } else if (this.alert?.minPasswordAgeDays === null) this.alert = null;
+        this.resolve();
+      } else if (this.alert?.minPasswordAgeDays === null) this.resolve();
     } else if (days !== null) {
       this.bad = true;
     }
     return days;
+  }
+
+  /** A política passou: o aviso de pé vira resolvido (a hora é a da primeira leitura em 0; leitura seguinte não a muda). */
+  private resolve() {
+    if (this.alert && !this.alert.resolvedAt) {
+      this.alert.resolvedAt = new Date(this.now()).toISOString();
+      this.log('a política de senha passou (duração mínima 0): o aviso do sandbox do Codex ficou como resolvido');
+    }
   }
 
   private async readNow(): Promise<number | null> {
