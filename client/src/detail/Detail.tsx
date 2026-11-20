@@ -44,9 +44,11 @@ import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatPercent,
 import { isLoss, RANKING_PERIODS, type RankingGroup, type RankingRow, rankingRows, savingsList, teamSavings } from '../ranking';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
-import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, PowerIcon, TasksIcon, UserPlusIcon } from '../icons';
+import { ArchiveIcon, ArchiveRestoreIcon, ClockIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, PowerIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { PausedTag, PauseButton } from '../tasks/ProjectPauseBar';
+import { OpenTerminalButton } from './OpenTerminalButton';
 import { closeConversation, runClose } from '../chat/closeConversation';
+import { clearFreshDraft } from '../chat/draftStore';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
 import { GithubInstall } from '../skills/GithubInstall';
 import { GithubBadges, GithubOrigin } from '../skills/GithubOrigin';
@@ -273,6 +275,7 @@ export function EmployeePanel(props: {
   const [convBusy, setConvBusy] = useState(false);
   // Uma conversa nova, sem sessão ainda: o chat abre vazio.
   const startFresh = () => {
+    if (project) clearFreshDraft(project.id, staff?.id ?? null); // o texto da nova conversa abandonada não passa para esta
     setFresh(true);
     setFreshId(null);
     setFreshN((n) => n + 1);
@@ -907,6 +910,7 @@ export function ProjectPanel({
   onEditAgent,
   onSkillsChanged,
   onTasks,
+  onSchedules,
   onTogglePause,
   onFiles,
   onOpenFile,
@@ -929,6 +933,8 @@ export function ProjectPanel({
   onEditAgent?: (name: string) => void;
   /** Abre o quadro de tarefas do projeto. */
   onTasks?: () => void;
+  /** Abre os agendamentos (despertadores e rotinas) do projeto. */
+  onSchedules?: () => void;
   /** Pausa o projeto (ou o retoma, se `tasks.paused`): o App pergunta ao pausar e relê o resumo. */
   onTogglePause?: () => void;
   /** Abre os arquivos do projeto (árvore + editor). */
@@ -1013,11 +1019,17 @@ export function ProjectPanel({
               <TasksIcon size={16} />
             </button>
           )}
+          {project.exists && onSchedules && (
+            <button className="btn-secondary btn-icon" onClick={onSchedules} aria-label={t('schedules.open')} title={t('schedules.openTitle')}>
+              <ClockIcon size={16} />
+            </button>
+          )}
           {project.exists && onFiles && (
             <button className="btn-secondary btn-icon" onClick={onFiles} aria-label={t('files.open')} title={t('files.openTitle')}>
               <FolderIcon size={16} />
             </button>
           )}
+          {project.exists && <OpenTerminalButton projectId={project.id} />}
           {project.exists && onTogglePause && <PauseButton paused={!!tasks?.paused} iconOnly onClick={onTogglePause} />}
           <ArchiveButton archived={archived} onArchive={onArchive} what={t('detail.whatProjectAndStaff')} iconOnly confirm />
         </p>

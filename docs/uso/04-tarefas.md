@@ -125,11 +125,20 @@ Quando a conversa de uma tarefa em **Fazendo** pede uma permissão e espera voc�
 
 Na seção **Revisão**, escolha **Quem revisa** e clique em **Delegar revisão** (ou **Delegar nova revisão**). O revisor responde com APROVADO ou REPROVADO na primeira linha.
 
-Quando a revisão automática para (o item **parada** em **precisa de mim**), o mesmo pedido sai da caixa, sem abrir o cartão: **Delegar revisão** no item abre o seletor com os mesmos funcionários do cartão (o responsável da tarefa não entra), e o botão **Delegar revisão** faz o mesmo pedido. Se já há uma revisão pedida e sem resposta, o cartão não deixa escolher outro revisor, e a caixa também não mostra o atalho.
+Quando a revisão automática para (o item **parada** em **precisa de mim**), o mesmo pedido sai da caixa, sem abrir o cartão: o link **Delegar revisão** no item abre o seletor com os mesmos funcionários do cartão (o responsável da tarefa não entra), e o botão **Delegar revisão** dentro do seletor faz o pedido. Cada caso tem o seu botão: revisão parada → **Revisar** (abre o cartão) e **Delegar revisão** (pede ali mesmo); ajuste que não chegou ao funcionário → **Reenviar ajuste**, sem atalho de revisão. Se já há uma revisão pedida e sem resposta, o cartão não deixa escolher outro revisor, e a caixa também não mostra o atalho; uma revisão substituída por uma entrega nova não conta como pedida.
 
 - Aprovada: vai para **Finalizado**. Se o código ainda está numa worktree sem mesclar, fica em **Revisão** ("aprovada; falta mesclar a worktree").
 - Reprovada: os ajustes voltam para quem fez, e a tarefa volta para **Fazendo**. Se ele estiver ocupado, o ajuste fica guardado e a tarefa segue em **Revisão**.
 - O revisor não muda o código: só revisa.
+
+#### Como a reprovação chega (itens numerados)
+
+- **Itens numerados**: o revisor que reprova lista cada bloqueador (🔴) numa linha própria, com id fixo (**R1**, **R2**…), o `arquivo:linha`, o problema e **como provar** que foi corrigido. Quem fez a tarefa recebe esses itens no topo do ajuste, como lista para conferir, e o texto do revisor vem depois. Nenhum 🔴 é cortado do texto do revisor; só trecho sem 🔴 sai se o texto for grande, e o aviso diz quanto. Na lista guardada no card, cada campo do item é resumido (arquivo até 200 caracteres; problema e prova até 600), sem aviso.
+- **Resposta item a item**: o Club pede que, ao terminar, o funcionário responda uma linha por item (`R1: feito — onde e a prova` ou `R1: não feito — por quê`), sem pular nenhum. O Club guarda essa resposta na tarefa para a próxima revisão e avisa o revisor de qual item ficou sem citação. Sem a lista (veja **Sem o bloco**), a linha começa pelo `arquivo:linha` do 🔴 em vez do id.
+- **Dúvida sobre um item**: se um item é ambíguo ou contradiz o pedido, o funcionário não o implementa; faz o que não depende dele e termina com `DÚVIDA: R2 — …`. Essa dúvida vai ao **revisor que reprovou**, e só ele responde (mantém o item ou o reformula; se a decisão é sua, ele pode passá-la a você); ela não vai a quem pediu a tarefa. Só vai ao revisor se a dúvida **começa** pelo id do item (sem a lista, pelo 🔴) e acontece no turno de ajuste, antes da resposta; se o revisor é quem pediu a tarefa, a dúvida já ia a ele.
+- **Rodada seguinte**: na nova revisão, o Club entrega ao revisor os itens anteriores e a resposta do funcionário, e **pede que ele confira esses primeiro** (`R1: RESOLVIDO` ou `NÃO RESOLVIDO`). O Club pede também que item não resolvido volte com o **mesmo id** e que os novos sigam a numeração (se um id já usado e fechado reaparecer, o Club só anota um aviso). A regra de item **novo** é um **pedido ao revisor**, não um filtro do Club: ele deve reprovar por item novo só se for bug, regressão, falha de segurança ou critério de aceite descumprido, e tratar preferência nova (estilo, outro jeito de fazer) como follow-up. O Club não recusa nem separa os 🔴 por tipo.
+- **Sem o bloco**: se o revisor não trouxer a lista, ou ela vier fora do formato, o texto dele segue como escreveu, com o motivo, e os 🔴 são os que aparecem nele. A reprovação vale do mesmo jeito.
+- O card guarda as últimas **10** reprovações.
 
 ### Revisão automática
 
@@ -166,7 +175,7 @@ Quando um funcionário altera código do projeto numa conversa que não é de ne
 Quando o revisor aprova e ainda vê uma melhoria (uma limpeza, um risco menor, uma ideia que merece outra tarefa), ele registra um **follow-up** na tarefa. É só um registro: **nada vira card sozinho**.
 
 - **Quando o revisor usa**: só para melhoria **posterior**, que não invalida a aprovação. Falha que invalida a aprovação (bug, regressão, critério não cumprido) continua sendo **reprovar**, não follow-up.
-- **Quem decide**: o gestor que pediu a tarefa, pela conversa dele, ou você, pela tela. O follow-up vai para você quando foi você quem pediu a tarefa, quando o gestor saiu do projeto ou quando o aviso a ele não chegou em 30 minutos. O autor não decide o próprio follow-up.
+- **Quem decide**: o gestor que pediu a tarefa, pela conversa dele, ou você, pela tela. O follow-up vai para você quando foi você quem pediu a tarefa, quando o gestor saiu do projeto ou quando o aviso a ele não chegou em 30 minutos. O autor não decide o próprio follow-up. Pela tela você decide também o que está com o gestor (o servidor aceita os dois); vale quem decidir primeiro, e o outro recebe o aviso de que já foi decidido.
 - **Na conversa**: quando foi você quem pediu a tarefa e ela tem conversa, o follow-up aparece como **balão na conversa de trabalho da tarefa**, depois da última mensagem. Só você o vê: não é mensagem da conversa e o funcionário nunca o lê. O balão traz o que importa para decidir:
   - o selo **Vale fazer** ou **Opcional** (o "vale fazer" vem antes);
   - o título em linguagem simples e **Se não fizer:** (o que acontece sem o ajuste);
@@ -174,12 +183,12 @@ Quando o revisor aprova e ainda vê uma melhoria (uma limpeza, um risco menor, u
   - **Detalhes técnicos**, fechado: o achado e o plano do revisor.
 - **Na caixa**: o item **follow-up** mostra a recomendação e **abre essa conversa** ao clicar. Follow-up de tarefa que um gestor pediu, ou de tarefa sem conversa, abre o card.
 - **No quadro**: o cartão não mostra o texto do follow-up, só um selo: **N follow-ups, M vale fazer** (sem nenhum "vale fazer", **N follow-ups abertos**; amarelo quando algum espera você). Enquanto houver follow-up aberto, o selo **Aprovada** do cartão não aparece, porque a tarefa não está toda resolvida; quando todos forem decididos, ele volta. O detalhe da tarefa traz o resumo no topo e o botão **Abrir conversa**, que leva ao balão (sem conversa, o detalhe mostra o follow-up e as saídas ali mesmo).
-- **Follow-up antigo**, sem os campos acima (título, recomendação, "se não fizer", tamanho), aparece com o texto, como antes.
-- **No detalhe da tarefa**, cada follow-up traz quem achou (ou **revisão**, se a ficha dele saiu do projeto; a caixa chama do mesmo jeito), quando, com quem está (ou quem decidiu e quando) e o selo **Aberto**, **Virou card** ou **Descartado**. Cada decisão também entra no **Histórico** da tarefa.
+- **Follow-up antigo**, sem os campos acima (título, recomendação, "se não fizer", tamanho), aparece com o texto, como antes. Um e outro seguem a mesma regra para as saídas: no detalhe, enquanto estiver aberto e não esperar na conversa, você vê **Criar card** e **Descartar** (ou **Revisar** e **Concluir**), mesmo que esteja com o gestor (a nota diz quem pediu a tarefa).
+- **No detalhe da tarefa**, cada follow-up traz quem achou (ou **revisão**, se a ficha dele saiu do projeto; a caixa chama do mesmo jeito), quando, com quem está (ou quem decidiu e quando) e o selo **Aberto**, **Virou card** ou **Descartado**. Depois de decidido, o follow-up que tem os campos acima continua mostrando o selo da recomendação, o título e o **Se não fizer:**, e não só o texto. Cada decisão também entra no **Histórico** da tarefa.
 
 Em cada follow-up aberto (no balão, na caixa ou no detalhe) há duas saídas:
 
-- **Criar card**: um clique para confirmar, com **Responsável**, **Título** e **Descrição** já preenchidos e editáveis (o responsável é o que o revisor sugeriu; a descrição é o achado inteiro). O card nasce em **Aguardar**: você manda começar depois, no quadro. O follow-up passa a mostrar um link para ele.
+- **Criar card**: são dois toques. O primeiro abre o formulário, com **Responsável**, **Título** e **Descrição** já preenchidos e editáveis (o responsável é o que o revisor sugeriu; a descrição é o achado inteiro); o segundo, em **Criar card** dentro dele, confirma. O card nasce em **Aguardar**: você manda começar depois, no quadro. O follow-up passa a mostrar um link para ele.
 - **Descartar**: não vira card. Escolha o motivo: **Não vale o custo**, **Já resolvido**, **Fora do escopo** ou **Outro motivo** (texto livre, uma linha). O motivo aparece no follow-up.
 
 Quando a tarefa de origem já está **Finalizado** (a aprovação costuma fechá-la), o balão e o item da caixa mostram o selo **Finalizado**, e as saídas passam a ser:
@@ -189,6 +198,8 @@ Quando a tarefa de origem já está **Finalizado** (a aprovação costuma fechá
 
 **Criar card**, **Revisar** e **Descartar** pedem confirmação; **Concluir** age na hora. **Decidido não se reabre**: quem tentar decidir de novo (você pela tela e o gestor pela conversa, por exemplo) recebe o aviso de que já foi decidido. Depois de decidir, a tela diz o que foi feito (por exemplo, "Card t-… criado em Aguardar"), porque o balão e o item da caixa somem.
 
+As saídas só ligam depois que a tarefa de origem é lida (ela diz se está **Finalizado** e traz o achado inteiro): até lá a tela mostra **Lendo a tarefa de origem**. Se a leitura falha, as saídas continuam desligadas e a tela tenta de novo a cada 20 segundos.
+
 ### Card sem código
 
 Card é para trabalho de código. Se o funcionário **termina o turno sem editar nenhum arquivo** (e sem ter pedido subtarefa), o card **não vai para revisão**: fica em **Fazendo**, com o selo **Sem código**, e deixa de ocupar o funcionário (a fila dele anda).
@@ -196,7 +207,8 @@ Card é para trabalho de código. Se o funcionário **termina o turno sem editar
 - **Quem decide**: quem pediu o card. O gestor, pela conversa dele; ou você, quando foi você quem pediu (também quando o gestor saiu do projeto ou o aviso a ele não chegou em 30 minutos). Com você, o selo fica amarelo.
 - **No detalhe**: o bloco **Terminou sem editar código** mostra o que o funcionário disse ao terminar (a análise ou a resposta costuma estar aí) e, quando é com você, **Cancelar** (abre o diálogo de cancelar, com o motivo) e **Devolver ao responsável**.
 - **Na caixa** (rótulo **parada**): a frase diz que o card terminou sem editar código, **ver o que ele disse** abre o resumo, e os botões são **Cancelar** (pede o motivo) e **Devolver ao responsável**.
-- **Devolver ao responsável** manda uma mensagem na conversa de trabalho dele: o card sai de "sem código" e ele volta a trabalhar. Se a conversa não existe mais, o aviso diz para cancelar o card.
+- **Devolver ao responsável** manda uma mensagem na conversa de trabalho dele: o card sai de "sem código" e ele volta a trabalhar. Se a conversa não existe mais, o aviso diz para cancelar o card. Se a mensagem ficou guardada (o funcionário está ocupado em outra tarefa e a recebe quando terminar), a tela avisa em texto comum, sem ser erro: não mande de novo.
+- No diálogo de **Cancelar**, o card sem código diz que o turno já terminou (não há o que interromper), em vez do aviso de tarefa em andamento.
 - Mover o card de coluna também desfaz a marca.
 - Para perguntar ou pedir uma análise, converse com o funcionário em vez de criar um card.
 
