@@ -101,6 +101,9 @@ export function taskQuestionInboxItem({ task, state }: OwnAlert, w: Place): Inbo
   };
 }
 
+/** Quanto do plano pendente (`Task.planWait`) vai no item da caixa: o começo basta, o plano inteiro está no card. */
+const PLAN_SUMMARY_MAX = 1500;
+
 /**
  * Tarefa parada que só você destrava (kind 'stuck', ver ownAlerts): revisão que não começou ou ficou sem veredito, ajuste que não chega, card que terminou sem editar código
  * (`Task.noCode`, `humanAction` 'decide': cancelar com motivo ou devolver ao responsável; `stuck.noCode` e `stuck.summary` levam a marca e o que o responsável disse).
@@ -109,6 +112,7 @@ export function taskQuestionInboxItem({ task, state }: OwnAlert, w: Place): Inbo
  */
 export function stuckInboxItem({ task, state }: OwnAlert, w: Place): InboxItem {
   const noCode = !!task.noCode && state.humanAction === 'decide';
+  const planWait = !!task.planWait && task.status === 'planning' && state.humanAction === 'decide';
   return {
     id: `stuck:${task.id}:${state.humanAction ?? 'fallback'}`,
     kind: 'stuck',
@@ -123,6 +127,7 @@ export function stuckInboxItem({ task, state }: OwnAlert, w: Place): InboxItem {
       humanAction: state.humanAction,
       since: state.since,
       ...(noCode && { noCode: true as const, ...(task.noCode!.summary && { summary: task.noCode!.summary }) }),
+      ...(planWait && { planWait: true as const, summary: task.planWait!.text.slice(0, PLAN_SUMMARY_MAX) }),
     },
   };
 }

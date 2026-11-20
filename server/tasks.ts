@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type CancelRequest, type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
+import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type CancelRequest, type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, type TaskPlanWait, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
 import { kanbanProgress } from '../shared/kanbanProgress';
 import { commitTaskFiles, leftText, type SharedHold } from './autoCommit';
 import { BoardCommitInput, BoardConfigInput, DEFAULT_BOARD_CONFIG, readBoardCommit, readBoardConfig, writeBoardCommit, writeBoardConfig } from './boardConfig';
@@ -172,6 +172,13 @@ const NOCODE_SUMMARY_MAX = 1500;
  * no Claude nem no Codex, e no projeto compartilhado a mexida de outra tarefa esconde a ausência: ver `holdNoCode`). Entra no pedido de revisão e no aviso a quem pediu.
  */
 export const NO_EDIT_MARK = 'Nenhuma alteração detectada nesta tarefa: nenhuma edição vista nas ferramentas de edição da conversa (a edição por shell não é detectada, no Claude nem no Codex). Se não houver mudança dela, diga que não há entrega.';
+/** O plano que o responsável entregou num card de plano primeiro, guardado em `Task.planWait.text`; o que passa disso é cortado. */
+const PLAN_TEXT_MAX = 8000;
+/** O que fica no lugar do plano quando o turno terminou sem texto nenhum: quem decide vê que não veio plano e recusa. */
+const NO_PLAN_TEXT = '(o responsável terminou o turno sem escrever o plano)';
+/** O que o responsável lê, na abertura de um card de plano primeiro (ver `Task.planFirst`): o plano é o fim do turno, e quem pediu decide antes de ele editar. */
+const PLAN_FIRST_LINE =
+  'Esta tarefa pede o plano primeiro: nesta rodada NÃO edite arquivos. Termine o turno com o plano escrito (o que vai mudar, os arquivos, os riscos e os testes que vai rodar). O Claudio’s Club o leva a quem pediu, que aprova ou recusa: aprovado, você segue neste mesmo card e implementa; recusado, você recebe o motivo e ajusta o plano.';
 
 /** Dependências: ids de tarefas do projeto, sem repetir. Existência e ciclo são conferidos ao gravar (ver checkBlockedBy). */
 const BlockedBy = z
@@ -187,6 +194,8 @@ export const TaskInput = z.object({
   staffId: z.string().regex(SAFE_ID).nullable().default(null),
   reviewerId: z.string().regex(SAFE_ID).nullable().default(null),
   blockedBy: BlockedBy.default([]),
+  /** true = pede o plano primeiro (ver `Task.planFirst`); false = nunca espera plano; ausente = vale o que a descrição pede (`wantsPlan`). */
+  planFirst: z.boolean({ message: 'planFirst: true (pede o plano primeiro) ou false' }).optional(),
   /** false = só criar: a tarefa fica em Aguardar, sem começar. */
   start: z.boolean().default(true),
   /** Chave de idempotência (ver `TaskService.create`): quem repete o pedido (retry) manda a mesma. */
@@ -203,6 +212,7 @@ export const TaskPatch = z.object({
   goal: z.string().trim().max(300, 'meta longa demais (máx. 300)').transform((v) => v || null).nullable().optional(),
   acceptance: z.string().trim().max(2000, 'critério de aceite longo demais (máx. 2000)').transform((v) => v || null).nullable().optional(),
   blockedBy: BlockedBy.optional(),
+  planFirst: TaskInput.shape.planFirst,
   staffId: z.string().regex(SAFE_ID).nullable().optional(),
   reviewerId: z.string().regex(SAFE_ID).nullable().optional(),
   status: z
@@ -303,8 +313,8 @@ export const FollowUpResolveBody = z
   .refine((b) => b.resolution === 'card' || b.cardId === undefined, 'cardId só vai com resolution "card"');
 
 /** O que o funcionário edita pela API, numa tarefa que ainda não começou (ver `TaskService.editFrom`). O resto (status, revisor, PR…) é da tela ou do fluxo. */
-export const STAFF_EDITABLE = ['title', 'description', 'acceptance', 'goal', 'blockedBy', 'staffId'] as const;
-export const TaskStaffEdit = TaskPatch.pick({ title: true, description: true, acceptance: true, goal: true, blockedBy: true }).extend({
+export const STAFF_EDITABLE = ['title', 'description', 'acceptance', 'goal', 'blockedBy', 'staffId', 'planFirst'] as const;
+export const TaskStaffEdit = TaskPatch.pick({ title: true, description: true, acceptance: true, goal: true, blockedBy: true, planFirst: true }).extend({
   staffId: z.string({ message: 'staffId: o id de quem vai fazer a tarefa' }).regex(SAFE_ID, 'staffId inválido').optional(),
 });
 
@@ -343,6 +353,23 @@ export const TaskOrderBody = z
   .refine((b) => [b.to, b.step, b.suggest].filter((v) => v !== undefined).length === 1, 'mande só um entre to, step e suggest')
   .refine((b) => (b.suggest === undefined) === (b.reason === undefined), 'reason vai junto de suggest (e só com ele)');
 type TaskOrder = z.infer<typeof TaskOrderBody>;
+
+/** O texto que acompanha a decisão do plano (a observação da aprovação, o motivo da recusa). */
+const PLAN_NOTE_MAX = 2000;
+/**
+ * O corpo de `POST .../tasks/:id/plan`: `{ decision: 'approve' | 'reject', reason?, note? }`. A recusa exige `reason` (o que ajustar: ele chega ao responsável); a aprovação aceita
+ * `note` (uma observação para a implementação). Campo desconhecido é recusado (400).
+ */
+export const PlanDecisionBody = z
+  .object({
+    decision: z.enum(['approve', 'reject'], { message: "decision: 'approve' (aprovar) ou 'reject' (recusar)" }),
+    reason: z.string().trim().max(PLAN_NOTE_MAX, `reason: no máximo ${PLAN_NOTE_MAX} caracteres`).optional(),
+    note: z.string().trim().max(PLAN_NOTE_MAX, `note: no máximo ${PLAN_NOTE_MAX} caracteres`).optional(),
+  })
+  .strict()
+  .refine((b) => b.decision !== 'reject' || !!b.reason, 'reason: diga o que ajustar no plano (a recusa leva o motivo ao responsável)')
+  .refine((b) => b.decision === 'reject' || b.reason === undefined, 'reason é da recusa; na aprovação use note')
+  .refine((b) => b.decision === 'approve' || b.note === undefined, 'note é da aprovação; na recusa use reason');
 
 /** O que `reorder` devolve: o card movido e de onde para onde (posição na fila), ou o aviso da sugestão (nada mudou). */
 export type TaskOrderResult =
@@ -818,6 +845,7 @@ export class TaskService {
       goal: input.goal ?? null,
       acceptance: input.acceptance ?? null,
       ...(input.blockedBy.length && { blockedBy: input.blockedBy }),
+      ...(input.planFirst !== undefined && { planFirst: input.planFirst }),
       status: initial,
       staffId: input.staffId,
       reviewerId,
@@ -2058,6 +2086,7 @@ export class TaskService {
         task.description,
         task.goal && `Meta: ${task.goal}`,
         task.acceptance && `Critério de aceite: ${task.acceptance}`,
+        planLineOf(task, profile),
         this.cancelLine(projectId, task, s?.override.engine ?? profile.engine ?? 'claude'),
         ...BRIEF_RULES,
       ]
@@ -2320,7 +2349,7 @@ export class TaskService {
       git,
       // Com `/` também no Windows: a instrução vai para o modelo, que lê o caminho como texto.
       memoryPath: path.posix.join('.myco', 'staff', `${profile.id}.memory.md`),
-      closing: [...(await this.requesterLines(projectId, task)), this.cancelLine(projectId, task, to.engine), ...BRIEF_RULES].filter(Boolean),
+      closing: [...(await this.requesterLines(projectId, task)), planLineOf(task, profile), this.cancelLine(projectId, task, to.engine), ...BRIEF_RULES].filter(Boolean),
       notes: wakeAt ? [`havia um despertador agendado para ${atHour(wakeAt)}: reagende se ainda fizer sentido.`] : [],
     });
   }
@@ -2598,6 +2627,7 @@ export class TaskService {
       await this.safely(() => this.retryCancelRequests(projectId, tasks, now));
       await this.safely(() => this.retryFollowUps(projectId, tasks, now));
       await this.safely(() => this.retryNoCode(projectId, tasks, now));
+      await this.safely(() => this.retryPlanWait(projectId, tasks, now));
       await this.safely(() => this.retryEngineStops(projectId, tasks, now));
       await this.safely(() => this.warnPermissions(projectId, tasks, now));
       await this.safely(() => this.retryOverlaps(projectId, tasks, now));
@@ -2881,6 +2911,8 @@ export class TaskService {
       if (waitsOnSubtasks(t, all)) return false;
       // Sem código: o turno acabou de propósito (ver `holdNoCode`); quem pediu decide, e a mensagem dele na conversa a reabre.
       if (markedNoCode(t)) return false;
+      // Plano entregue, esperando quem pediu decidir (ver `holdPlan`): o turno acabou de propósito. No Codex "planejando" entrega no fim do turno, então sem isto a órfã o levaria à revisão.
+      if (waitsPlan(t)) return false;
       // Parou no teto (o motivo ficou guardado antes da interrupção): não é órfã nem vai para revisão. Vai para Aguardar.
       // Card automático não: a conversa é direta, o teto só encerrou o turno, e o card segue para revisão como qualquer entrega.
       const cap = t.autoCreated ? null : this.deps.turnCap?.(t.sessionId);
@@ -3402,6 +3434,7 @@ export class TaskService {
         task.description,
         task.goal && `Meta: ${task.goal}`,
         task.acceptance && `Critério de aceite: ${task.acceptance}`,
+        planLineOf(task, profile),
         this.cancelLine(projectId, task, engine),
         ...BRIEF_RULES,
       ]
@@ -3923,6 +3956,9 @@ export class TaskService {
     await this.onSession(sessionId, 'work', (t) => {
       if (t.status === 'review' && !t.autoCreated) return moved(t, 'doing', 'auto', 'você respondeu');
       if (markedNoCode(t)) return noted({ ...t, noCode: undefined }, 'devolvida ao responsável: a marca "sem código" saiu');
+      // Mensagem na conversa do card que espera decisão de plano (a de quem pediu, ou a sua): o card volta a "fazendo" e o plano não fica gravado (só a aprovação, em `decidePlan`, o grava); se
+      // o responsável entregar o plano de novo, ele volta a esperar. Sem isto, em "planejando" o Claude nunca entregaria (ver `endsInDelivery`).
+      if (waitsPlan(t)) return moved(t, 'doing', 'auto', 'mensagem na conversa: o plano deixou de esperar a decisão');
       return t.awaitingSubtasks ? { ...t, awaitingSubtasks: undefined } : null;
     });
   }
@@ -4548,6 +4584,9 @@ export class TaskService {
     if (await this.awaitSubtasks(where.projectId, current, sessionId)) return;
     // Agent ou comando ainda rodando em segundo plano: o turno terminou, mas o trabalho não (ver holdBackground). Antes do "sem código": a edição pode estar vindo do que roda lá.
     if (await this.holdBackground(where.projectId, current, sessionId, reason, now)) return;
+    // Plano primeiro: o card pediu o plano antes da edição e o turno entregou só ele (nenhuma edição). Plano não é entrega: espera a decisão de quem pediu em "planejando" (ver holdPlan).
+    // Antes do "sem código": o plano tem decisão própria (aprovar, recusar), e no projeto compartilhado a mexida de outra tarefa esconde o "sem código" e levaria o plano à revisão.
+    if (await this.holdPlan(where.projectId, current, sessionId)) return;
     // Card = código: o turno não editou nada, e então não há o que revisar (ver holdNoCode).
     if (await this.holdNoCode(where.projectId, current, sessionId)) return;
     // Planejando no Codex (ficha `plan`, sandbox só leitura): sem cartão de plano, o fim do turno é a entrega (ver `endsInDelivery`). Só lê a ficha com "planejando".
@@ -4867,6 +4906,176 @@ export class TaskService {
     ]
       .filter(Boolean)
       .join('\n\n');
+  }
+
+  /**
+   * Plano primeiro: o card pede o plano antes da edição (`Task.planFirst`, ou a descrição o pede: ver `wantsPlan`) e o turno terminou sem nenhuma edição (`changedFiles` vazio). O que o responsável
+   * entregou é o plano, e plano não é entrega: o card NÃO vai para revisão (sem pedido de revisão, sem rodada, sem reprovação, sem commit). Vai para "planejando" com o plano pendente de quem
+   * pediu (`Task.planWait`) e segue ocupando o funcionário, como o cartão de plano. Quem pediu decide: aprovar (o card segue em "fazendo", no mesmo card) ou recusar com o motivo (volta ao
+   * responsável); ver `decidePlan`. O aviso vai ao gestor, na conversa em que pediu (`deliverPlanWait`: o tick refaz; perdido em 30 min, ou sem gestor, vai ao usuário), ou direto ao usuário (item
+   * 'stuck' da caixa, ver `ownAlerts`).
+   *
+   * Só a ficha que edita (autonomia diferente de "só planeja"): a ficha `plan` tem o plano pelo cartão de plano da conversa (Claude) ou, no Codex, o fim do turno que entrega (ver `endsInDelivery`).
+   * Só "fazendo", sem plano já aprovado (`plan`): depois da aprovação o fim de turno volta ao fluxo de sempre (entrega, ou "sem código"). Devolve true se o card ficou esperando (agora ou já estava).
+   */
+  private async holdPlan(projectId: string, task: Task, sessionId: string): Promise<boolean> {
+    const staffId = task.staffId;
+    if (!staffId || task.autoCreated || task.plan || task.changedFiles?.length) return false;
+    // O segundo aviso do mesmo fim de turno (o vigia e o processo): o plano já está esperando.
+    if (waitsPlan(task)) return true;
+    if (task.status !== 'doing' || !wantsPlan(task)) return false;
+    const profile = await this.deps.readProfile(projectId, staffId);
+    if (!profile || profile.autonomy === 'plan') return false;
+    const manager = task.requestedBy ? await this.deps.readProfile(projectId, task.requestedBy) : null;
+    const text = (this.deps.lastText?.(sessionId) ?? '').trim().slice(0, PLAN_TEXT_MAX) || NO_PLAN_TEXT;
+    const at = new Date().toISOString();
+    let waiting: Task | null = null;
+    let already = false;
+    // Na vez dele, como a entrega: confere de novo o que pode ter mudado enquanto esperava (cancelada, com edição, turno novo). O outro aviso do mesmo fim de turno, que marcou enquanto este
+    // esperava a vez, deixa a marca como está.
+    await this.locked(projectId, staffId, `plano ${task.id}`, async () => {
+      await this.change(projectId, task.id, (t) => {
+        if (t.sessionId !== sessionId || t.changedFiles?.length || t.plan || this.turnRunning(sessionId)) return t;
+        if (waitsPlan(t)) {
+          already = true;
+          return t;
+        }
+        if (t.status !== 'doing') return t;
+        const planWait: TaskPlanWait = { since: at, text, to: manager ? 'manager' : 'owner', ...(manager && { notifyRetry: { attempts: 0, nextAt: at, firstAt: at } }) };
+        return (waiting = moved({ ...t, planWait }, 'planning', 'auto', 'entregou o plano: não é entrega (não vai para revisão); espera quem pediu aprovar ou recusar'));
+      });
+    });
+    const marked = waiting as Task | null;
+    if (!marked) return already;
+    // Quem esperava por ele fica sabendo; a fila dele não anda (o card segue ocupando, como no cartão de plano).
+    this.warnDependents(projectId, task.id, stuckReason(marked));
+    if (manager) await this.deliverPlanWait(projectId, task.id);
+    return true;
+  }
+
+  /**
+   * Leva o plano pendente (`Task.planWait`, `to: 'manager'`, com `notifyRetry`) ao gestor que pediu, na conversa em que pediu (`notify`: a dele, ou a mais recente se aquela não existe mais).
+   * Como o aviso do card sem código (`deliverNoCode`): antes confere que o gestor ainda existe; chegou, grava `deliveredAt`; falhou, nova tentativa com backoff, e passados `ESCALATE_AFTER_MS`
+   * desde a primeira vai para a caixa do usuário. Um por vez por card.
+   */
+  private async deliverPlanWait(projectId: string, taskId: string): Promise<void> {
+    const key = `planwait:${projectId}:${taskId}`;
+    if (this.inFlight.has(key)) return;
+    this.inFlight.add(key);
+    try {
+      const t = await this.fresh(projectId, taskId);
+      const n = t?.planWait;
+      if (!t || !n || !waitsPlan(t) || n.to !== 'manager' || !n.notifyRetry) return;
+      const [manager, worker] = await Promise.all([t.requestedBy ? this.deps.readProfile(projectId, t.requestedBy) : null, t.staffId ? this.deps.readProfile(projectId, t.staffId) : null]);
+      const notify = this.deps.notify;
+      if (!manager || !notify) {
+        await this.escalatePlanWait(projectId, taskId, n.since, manager ? 'sem como avisar o gestor agora' : 'o gestor não está mais no projeto');
+        return;
+      }
+      try {
+        await notify(projectId, manager.id, this.planWaitText(projectId, t, n.text, worker, manager), t.requestedSession ?? null);
+        const at = new Date().toISOString();
+        await this.change(projectId, taskId, (x) => (x.planWait?.since === n.since ? { ...x, planWait: { ...x.planWait, deliveredAt: at, notifyRetry: undefined } } : x));
+      } catch (err) {
+        const now = new Date();
+        if (now.getTime() - Date.parse(n.notifyRetry.firstAt) >= ESCALATE_AFTER_MS) await this.escalatePlanWait(projectId, taskId, n.since, `o aviso ao gestor não chegou: ${err instanceof Error ? err.message : String(err)}`.slice(0, 200)).catch(() => {});
+        else await this.change(projectId, taskId, (x) => (x.planWait?.since === n.since && x.planWait.notifyRetry ? { ...x, planWait: { ...x.planWait, notifyRetry: failedRetry(x.planWait.notifyRetry, err, now) } } : x)).catch(() => {});
+      }
+    } finally {
+      this.inFlight.delete(key);
+    }
+  }
+
+  /** O aviso do plano ao gestor se perdeu (ou ele saiu do projeto): passa a `to: 'owner'` e aparece na caixa do usuário (`ownAlerts`); fica uma nota com o motivo. */
+  private async escalatePlanWait(projectId: string, taskId: string, since: string, why: string): Promise<void> {
+    const at = new Date().toISOString();
+    await this.change(projectId, taskId, (t) => {
+      const n = t.planWait;
+      if (!n || n.since !== since || n.to !== 'manager') return t;
+      return noted({ ...t, planWait: { ...n, to: 'owner', escalatedAt: at, notifyRetry: undefined } }, `plano: o aviso a quem pediu foi para você (${why})`);
+    });
+  }
+
+  /** O tick: plano pendente cujo aviso ao gestor ainda não chegou e já passou da hora marcada (o backoff manda). Um que falha não segura os outros. */
+  private async retryPlanWait(projectId: string, tasks: Task[], now: Date): Promise<void> {
+    const at = now.getTime();
+    for (const t of tasks) if (waitsPlan(t) && t.planWait!.to === 'manager' && retryDue(t.planWait!.notifyRetry, at)) await this.deliverPlanWait(projectId, t.id).catch(() => {});
+  }
+
+  /**
+   * O que o gestor lê sobre o plano pendente: o que aconteceu, o plano (como dado do funcionário, não instrução) e os dois caminhos (aprovar, recusar com o motivo). O endereço da API é o do motor
+   * da ficha dele (a sandbox do Codex alcança outro).
+   */
+  private planWaitText(projectId: string, t: Task, plan: string, worker: StaffProfile | null, manager: StaffProfile): string {
+    const api = `${(manager.engine === 'codex' ? this.deps.sandboxApiUrl : this.deps.apiUrl) ?? ''}/api/projects/${projectId}`;
+    const post = (to: string, hint: string) => `curl -s -X POST -H "x-myco: 1" -H "x-myco-token: $MYCO_TOKEN" -H "content-type: application/json" -d '${hint}' ${api}/${to}`;
+    const name = worker?.name ?? 'O responsável';
+    return [
+      `[MyCo] ${name} entregou o PLANO da tarefa “${titleOf(t)}” (id \`${t.id}\`), que pedia plano primeiro. Plano não é entrega: o card ficou em Planejando, esperando a sua decisão (não foi para revisão, não conta rodada nem reprovação) e ${name} segue com ele, sem editar nada até você decidir.`,
+      untrustedMarked(`O plano de ${name}`, 'DO PLANO', plan),
+      'Você decide:',
+      `- Aprovar (ele segue neste mesmo card e implementa; o plano fica gravado no card): \`${post(`tasks/${t.id}/plan`, '{"decision": "approve"}')}\`. Para acrescentar uma observação à implementação, mande também "note": "<texto>".`,
+      `- Recusar (volta a ele, com o motivo, para ajustar o plano): \`${post(`tasks/${t.id}/plan`, '{"decision": "reject", "reason": "<o que ajustar no plano>"}')}\`.`,
+      'Uma mensagem sua na conversa da tarefa também o devolve a ele, mas só a aprovação acima grava o plano no card.',
+    ].join('\n\n');
+  }
+
+  /**
+   * A decisão de quem pediu sobre o plano que o card entregou (`Task.planWait`, ver `holdPlan`). `approve`: o plano passa a `plan` e o card segue a "fazendo", no mesmo card e na mesma conversa,
+   * com a mensagem "plano aprovado, implemente". `reject` (com `reason`): o card volta a "fazendo" e o motivo vai ao responsável, que ajusta o plano e termina o turno de novo. Nenhum dos dois abre
+   * revisão, conta rodada ou registra reprovação. Só o usuário (`fromBrowser`) ou o gestor que pediu o card, com o token da conversa dele (403 para o responsável e os outros). Card que não espera
+   * plano (já decidido, cancelado, devolvido por mensagem na conversa): 409. Tarefa que não existe: null.
+   *
+   * A gravação roda na vez do funcionário e responde em `LOCK_DEADLINE_MS` (503 e nada gravado, ver `lockedWithDeadline`); a mensagem ao responsável sai depois da vez (conversa de terceiro não
+   * espera dentro dela), e a que não vai (limite de consumo, conversa fechada, projeto pausado) fica guardada (`held`) para a fila enviar.
+   */
+  async decidePlan(projectId: string, taskId: string, caller: Caller | null, fromBrowser: boolean, body: unknown): Promise<Task | null> {
+    const me = fromBrowser ? null : (caller?.staffId ?? null);
+    if (!fromBrowser && (!me || caller?.projectId !== projectId)) throw new TaskForbiddenError('só o usuário (pelo Claudio’s Club) ou quem pediu a tarefa, com o token da conversa dele (x-myco-token), decide o plano');
+    const input = parseOr(PlanDecisionBody, body ?? {});
+    const first = await this.fresh(projectId, taskId);
+    if (!first) return null;
+    if (!fromBrowser && first.requestedBy !== me) throw new TaskForbiddenError('só quem pediu a tarefa (ou o usuário) decide o plano dela');
+    if (!waitsPlan(first) || !first.staffId) throw new TaskConflictError('a tarefa não está esperando decisão de plano (em Planejando, com o plano entregue): leia de novo');
+    const who = fromBrowser ? 'o usuário' : ((await this.deps.readProfile(projectId, me!).catch(() => null))?.name ?? me!);
+    const approve = input.decision === 'approve';
+    const since = first.planWait!.since;
+    const out = await this.lockedWithDeadline(
+      projectId,
+      first.staffId,
+      (gate) =>
+        this.changeGated(gate, projectId, taskId, (t) => {
+          // Na vez dele, de novo: decidido por outro caminho, cancelado ou devolvido por mensagem enquanto esperava.
+          if (!waitsPlan(t) || t.planWait!.since !== since) throw new TaskConflictError('o plano já foi decidido ou o card mudou: leia de novo');
+          return approve
+            ? moved({ ...t, plan: t.planWait!.text, planWait: undefined }, 'doing', 'auto', `plano aprovado por ${who}`)
+            : moved({ ...t, planWait: undefined }, 'doing', 'auto', `plano recusado por ${who}: ${untrustedLine(input.reason, 200)}`);
+        }),
+      { op: `plano ${taskId}`, refused: 'a decisão do plano NÃO foi gravada', deadlineMs: this.lockDeadline() },
+    );
+    if (!out) return null;
+    const text = approve
+      ? [`[Tarefa "${out.title}"]`, `O plano foi aprovado por ${who}. Implemente-o agora, neste mesmo card: não peça outra aprovação. Os arquivos, os testes e a entrega seguem como sempre.`, input.note && `Observação de quem aprovou: ${input.note}`].filter(Boolean).join('\n\n')
+      : [`[Tarefa "${out.title}"]`, `O plano foi recusado por ${who}. Motivo: ${input.reason}`, 'Ajuste o plano e termine o turno com ele, ainda sem editar arquivos: quem pediu decide de novo.'].join('\n\n');
+    if (out.sessionId) await this.giveWorker(projectId, out, out.sessionId, text, approve ? 'a aprovação do plano' : 'a recusa do plano');
+    return (await this.fresh(projectId, taskId)) ?? out;
+  }
+
+  /**
+   * Manda a mensagem à conversa de trabalho (a decisão do plano), como a reprovação: com o projeto pausado ou o funcionário em outra conversa ela fica guardada (`hold`); se o envio falha
+   * (limite de consumo, conversa fechada…) também, com o motivo, e a fila a envia depois. No secundário com o principal liberado, vai numa conversa nova no principal (`backToPrimary`).
+   */
+  private async giveWorker(projectId: string, t: Task, sessionId: string, text: string, what: string): Promise<void> {
+    const staffId = t.staffId;
+    if (!staffId || (await this.hold(sessionId, { text, auto: true }))) return;
+    try {
+      if (!this.deps.sendTo) throw new TaskError('sem envio para a conversa de trabalho');
+      if (!(await this.backToPrimary(projectId, t, text))) await this.deps.sendTo(projectId, sessionId, staffId, text, []);
+    } catch (err) {
+      const error = (err as Error).message;
+      const held: HeldMessage = { id: randomBytes(4).toString('hex'), at: new Date().toISOString(), text, reason: `não foi enviado: ${error}` };
+      await this.change(projectId, t.id, (x) => noted({ ...x, held: [...(x.held ?? []), held] }, `${what} não foi enviada: ${error}`));
+    }
   }
 
   /**
@@ -5457,6 +5666,8 @@ export function stuckState(t: Task, now = Date.now()): StuckState | null {
   if (stale) return { reason: 'ajuste guardado não chega ao funcionário', selfHeals: false, humanAction: 'resend', since: stale.at };
   // Card = código: o turno terminou sem editar nada (ver `holdNoCode`) e quem pediu decide, cancelando com motivo ou devolvendo ao responsável: só ele destrava.
   if (markedNoCode(t)) return { reason: 'terminou o turno sem editar código (card = código): espera quem pediu cancelar ou devolver ao responsável', selfHeals: false, humanAction: 'decide', since: t.noCode!.since };
+  // Plano primeiro: o card entregou o plano (ver `holdPlan`) e quem pediu decide, aprovando ou recusando com o motivo: só ele destrava.
+  if (waitsPlan(t)) return { reason: 'entregou o plano e espera quem pediu aprovar ou recusar', selfHeals: false, humanAction: 'decide', since: t.planWait!.since };
   if (t.status !== 'review') return null;
   const rr = t.reviewRetry;
   if (rr && (rr.expired || now - Date.parse(rr.firstAt) >= REVIEW_WAIT_MS))
@@ -5506,6 +5717,8 @@ export function ownAlerts(tasks: Task[], now = Date.now()): OwnAlert[] {
     if (state.humanAction === 'answer' || state.humanAction === 'review' || state.humanAction === 'resend') out.push({ task, state: { ...state, humanAction: state.humanAction } });
     // Card sem código: o gestor que pediu recebe o aviso na conversa dele; é do usuário quando foi ele que pediu ou o aviso ao gestor se perdeu (`TaskNoCode.to`).
     else if (state.humanAction === 'decide' && markedNoCode(task) && task.noCode!.to === 'owner') out.push({ task, state: { ...state, humanAction: 'decide' } });
+    // Plano pendente: o gestor que pediu o recebe na conversa dele; é do usuário quando foi ele que pediu ou o aviso ao gestor se perdeu (`TaskPlanWait.to`).
+    else if (state.humanAction === 'decide' && waitsPlan(task) && task.planWait!.to === 'owner') out.push({ task, state: { ...state, humanAction: 'decide' } });
     // A dúvida "a caminho do gestor" também tem humanAction null: só a espera do limite entra (é a mesma razão que `stuckState` deu).
     else if (state.humanAction === null && fallbackWait(task, now)?.reason === state.reason) out.push({ task, state: { ...state, humanAction: null } });
   }
@@ -5740,6 +5953,30 @@ const parked = (t: Task, all: Task[]): boolean => releasesStaff(t) || !!t.held?.
 
 /** O fim de turno de `t` o deixou marcado "sem código" (ver `holdNoCode`)? Só vale em "fazendo": em outra coluna a marca já saiu (`moved`). */
 const markedNoCode = (t: Task): boolean => !!t.noCode && t.status === 'doing';
+
+/** O plano de `t` espera a decisão de quem pediu (ver `holdPlan`)? Só vale em "planejando": em outra coluna a marca já saiu (`moved`). */
+const waitsPlan = (t: Task): boolean => !!t.planWait && t.status === 'planning';
+
+/** Sem acento nem maiúscula, para casar as frases do pedido de plano. */
+const flat = (text: string): string => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+/** As frases com que quem pede o card manda planejar antes de editar ("PLANO PRIMEIRO", "comece pelo plano", "espere aprovação antes de editar"). */
+const PLAN_ASKED = [/\bplano primeiro\b/, /\bplan(?:o)?[- ]first\b/, /\bcomece (?:pelo|por um|com o|com um) plano\b/, /\bplaneje (?:primeiro|antes)\b/, /\b(?:espere|aguarde) (?:a )?aprovacao\b/];
+/** E as que dispensam o plano ("planeje e implemente direto, sem parar para aprovação de plano"): vencem as de cima. */
+const PLAN_WAIVED = [/\bimplemente direto\b/, /\bsem (?:parar|esperar|aguardar|precisar d[eo]s?)\b[^.\n]{0,40}\b(?:plano|aprovacao)\b/, /\bsem (?:o )?plano\b/, /\bnao (?:precisa|espere|aguarde)\b[^.\n]{0,40}\b(?:plano|aprovacao)\b/];
+
+/**
+ * O card pede o plano primeiro (ver `Task.planFirst`)? O campo manda quando existe (`false` dispensa mesmo que a descrição peça); sem ele, a descrição e a meta pedem por uma das frases
+ * de `PLAN_ASKED` e nenhuma de `PLAN_WAIVED` as desfaz. Conservador de propósito: a frase que não casa deixa o card no fluxo de sempre (entrega ou "sem código"); quem quer certeza manda
+ * `planFirst: true` ao criar.
+ */
+export function wantsPlan(t: Pick<Task, 'planFirst' | 'description' | 'goal'>): boolean {
+  if (t.planFirst !== undefined) return t.planFirst;
+  const text = flat(`${t.description}\n${t.goal ?? ''}`);
+  return PLAN_ASKED.some((re) => re.test(text)) && !PLAN_WAIVED.some((re) => re.test(text));
+}
+
+/** A linha que abre o card de plano primeiro para quem o faz (ver `PLAN_FIRST_LINE`); vazia se não vale: a ficha "só planeja" já tem o plano pelo cartão da conversa, e com o plano aprovado não há mais o que planejar. */
+const planLineOf = (t: Task, profile: Pick<StaffProfile, 'autonomy'>): string => (!t.plan && profile.autonomy !== 'plan' && wantsPlan(t) ? PLAN_FIRST_LINE : '');
 
 /** As subtarefas de `t` (as de `parentTaskId` igual ao id dele) que seguem abertas, isto é, nem prontas nem canceladas: a cancelada conta como fechada. */
 const openSubtasks = (t: Task, all: Task[]): Task[] => all.filter((s) => s.parentTaskId === t.id && !isClosed(s));
@@ -6208,7 +6445,8 @@ export function commitAlerts(tasks: Task[]): CommitAlert[] {
 
 /** A impressão do conteúdo de um pedido de criar (para a chave de idempotência): o mesmo conteúdo, a mesma impressão; qualquer campo diferente, outra. */
 function contentHash(input: z.output<typeof TaskInput>, sentReviewer: boolean): string {
-  const parts = [input.title, input.description, input.goal ?? null, input.acceptance ?? null, input.staffId, input.reviewerId, sentReviewer, [...input.blockedBy].sort(), input.start];
+  // `planFirst` só entra quando vem: a impressão de quem criou antes do campo existir não muda (o retry com a mesma chave não vira 409).
+  const parts = [input.title, input.description, input.goal ?? null, input.acceptance ?? null, input.staffId, input.reviewerId, sentReviewer, [...input.blockedBy].sort(), input.start, ...(input.planFirst !== undefined ? [input.planFirst] : [])];
   return createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 32);
 }
 
@@ -6495,9 +6733,11 @@ function moved(t: Task, status: TaskStatus, by: 'you' | 'auto', note?: string): 
   const leavesTodo = status !== 'todo' && t.cutAck ? { cutAck: undefined } : {};
   // A espera das subtarefas e a do segundo plano eram do "fazendo": em outra coluna (entrega, Aguardar, cancelada) já não valem.
   const leavesDoing = status !== 'doing' && (t.awaitingSubtasks || t.noCode || t.backgroundWait) ? { awaitingSubtasks: undefined, noCode: undefined, backgroundWait: undefined } : {};
+  // O plano pendente era do "planejando": em outra coluna (decisão, entrega, Aguardar, cancelada) já não vale.
+  const leavesPlanning = status !== 'planning' && t.planWait ? { planWait: undefined } : {};
   // Ficou pronta sem decisão sobre o pedido de cancelamento: não há mais o que cancelar.
   const settlesRequest = status === 'done' && t.cancelRequest?.status === 'pending' ? { cancelRequest: { ...t.cancelRequest, status: 'moot' as const, decidedAt: at, waiting: undefined, retry: undefined } } : {};
-  return { ...t, ...leavesWait, ...leavesReview, ...leavesTodo, ...leavesDoing, ...settlesRequest, status, updatedAt: at, history };
+  return { ...t, ...leavesWait, ...leavesReview, ...leavesTodo, ...leavesDoing, ...leavesPlanning, ...settlesRequest, status, updatedAt: at, history };
 }
 
 function withPatch(t: Task, p: z.infer<typeof TaskPatch>, by: 'you' | 'auto', note?: string): Task {

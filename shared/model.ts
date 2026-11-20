@@ -862,6 +862,18 @@ export interface Task {
    */
   noCode?: TaskNoCode;
   /**
+   * O card pede o plano primeiro (planejar antes de editar). `true`: o fim de turno em que o responsável entrega só o plano (nenhuma edição) não é entrega: o card vai para
+   * "planejando" com o plano pendente de quem pediu (`planWait`), sem revisão, sem rodada e sem reprovação. `false`: nunca espera plano, mesmo que a descrição peça. Ausente: o
+   * servidor lê a descrição e a meta (frases como "comece pelo plano" ou "plano primeiro"; ver `wantsPlan` em server/tasks.ts). Aceito na criação e na edição da tarefa.
+   */
+  planFirst?: boolean;
+  /**
+   * O plano que o responsável entregou num card que pedia plano primeiro (`planFirst`), esperando a decisão de quem pediu: aprovar (o card segue em "fazendo", no mesmo card,
+   * com o plano gravado em `plan`) ou recusar com o motivo (volta ao responsável, em "fazendo"). Só existe com o card em "planejando"; sair de lá (decisão, mensagem na conversa do
+   * card, cancelamento) a desfaz. Só o servidor grava.
+   */
+  planWait?: TaskPlanWait;
+  /**
    * O fim de turno do card (em "fazendo") achou agent ou comando ainda rodando em segundo plano: não é entrega. Sem revisão, sem resumo gravado e sem aviso a quem pediu; o card
    * segue em "fazendo" (e ocupando o funcionário) até o turno que vem depois do término. Vencido o prazo (`BACKGROUND_WAIT_MS`) sem o segundo plano terminar, a entrega segue como
    * sempre, com uma nota no histórico (`expiredAt`). Sai quando o card sai de "fazendo" ou quando o fim de turno acha o segundo plano vazio. Só o servidor grava.
@@ -1044,6 +1056,22 @@ export interface TaskNoCode {
   /** O aviso ao gestor ainda não chegou (conversa fechando, limite de consumo…): tentativas e a próxima (backoff); o tick refaz. Some ao entregar ou ao ir para o usuário. */
   notifyRetry?: RetryState;
   /** Quando o aviso ao gestor foi dado como perdido e o card passou a `to: 'owner'` (ISO). */
+  escalatedAt?: string;
+}
+
+/** O plano que espera decisão (`Task.planWait`). */
+export interface TaskPlanWait {
+  /** Quando o plano foi entregue (ISO); também identifica esta espera (a decisão só vale para ela). */
+  since: string;
+  /** O plano, como o responsável o escreveu ao terminar o turno (Markdown, até 8000 caracteres): é dele, e a tela o mostra como texto. */
+  text: string;
+  /** Quem decide: o gestor que pediu o card (`Task.requestedBy`) ou o usuário (caixa). */
+  to: 'manager' | 'owner';
+  /** Quando o aviso chegou à conversa do gestor (ISO). Ausente com `to: 'owner'` e enquanto não chegou. */
+  deliveredAt?: string;
+  /** O aviso ao gestor ainda não chegou (conversa fechando, limite de consumo…): tentativas e a próxima (backoff); o tick refaz. Some ao entregar ou ao ir para o usuário. */
+  notifyRetry?: RetryState;
+  /** Quando o aviso ao gestor foi dado como perdido e o plano passou a `to: 'owner'` (ISO). */
   escalatedAt?: string;
 }
 
@@ -2275,6 +2303,11 @@ export interface InboxItem {
      * ao terminar (até 1500 caracteres, texto dele, puro).
      */
     noCode?: true;
+    /**
+     * O card pedia plano primeiro e entregou o plano (`Task.planWait`), e quem pediu é o usuário (ou o aviso ao gestor se perdeu): `humanAction` é 'decide'. A decisão é a rota
+     * `POST .../tasks/<id>/plan` (`{"decision": "approve"}` ou `{"decision": "reject", "reason": "…"}`). `summary`: o começo do plano (texto do funcionário, puro).
+     */
+    planWait?: true;
     summary?: string;
   };
   /**

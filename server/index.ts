@@ -1857,6 +1857,12 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     new RegExp(`^/api/projects/${ID}/tasks/${ID}/review-anyway$`),
     ({ params: [id, taskId], fromBrowser, caller }) => tasks.reviewAnyway(id!, taskId!, caller, fromBrowser),
   ],
+  // Plano primeiro (`Task.planWait`): quem pediu o card aprova ou recusa o plano que o responsável entregou (o usuário pelo Claudio’s Club, o gestor com o token da conversa dele).
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/tasks/${ID}/plan$`),
+    ({ params: [id, taskId], body, fromBrowser, caller }) => tasks.decidePlan(id!, taskId!, caller, fromBrowser, body),
+  ],
   // Desligada nas configurações: nem procura o `codex` (nenhum processo é aberto).
   [
     'GET',
