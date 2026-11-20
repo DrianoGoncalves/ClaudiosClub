@@ -41,6 +41,7 @@ import { RetryNoticeBox } from './RetryNoticeBox';
 import { useChatFocus } from './useChatFocus';
 import { useOpenAt } from './useOpenAt';
 import { Markdown, OpenFileContext, type OpenFileApi, looksLikeMarkdown, useCopy } from './markdown';
+import { consultMessageOf } from '../consult/consultView';
 import { systemMessageText } from './systemMessage';
 import { ToolInput } from './ToolInput';
 import { clockHM, secondsLeft } from './wakeCountdown';
@@ -916,13 +917,23 @@ function Item({
     case 'user': {
       // Aviso automático da plataforma (entrega de tarefa, contexto…): à esquerda, neutro, com badge.
       const system = systemMessageText(item.text);
+      // Consulta de outro projeto (pergunta, resposta ou aviso): o selo diz quem e de qual projeto, e que não é ordem do dono.
+      const consult = system !== null ? consultMessageOf(system) : null;
       // Colega que delegou: no tom do funcionário (escuro), mas à direita, como quem fala com ele.
       const kind = system !== null ? 'msg-system' : item.fromStaff ? 'msg-staff' : 'msg-user';
       return (
         <div className={`msg ${kind}`} data-item-id={item.id}>
-          {system !== null && (
+          {system !== null && !consult && (
             <span className="badge dim msg-system-badge" title={t('chat.systemMessageHelp')}>
               {t('chat.systemMessage')}
+            </span>
+          )}
+          {consult && (
+            <span className="badge msg-system-badge msg-consult-badge" title={t('consult.badgeHelp')}>
+              {t(consult.kind === 'answer' ? 'consult.badgeAnswer' : consult.kind === 'question' ? 'consult.badgeQuestion' : 'consult.badgeNotice', {
+                name: consult.name,
+                project: consult.project,
+              })}
             </span>
           )}
           {onRewind && item.uuid && !item.held && (

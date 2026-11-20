@@ -21,12 +21,14 @@ import { alertError, api, ApiError, isPairingError, type GithubSkillStatus, type
 import { RoomColorPicker } from '../board/colors';
 import { portraitUrl } from '../board/nodes';
 import { idleUnseen, showsStatus, useSeeIdle, useSeenIdle } from '../board/unread';
+import { pendingOf } from '../inbox/resolved';
 import type { MoreTab } from '../chat/ChatView';
 import type { ChatFocus } from '../chat/chatFocus';
 import { MoreTabs } from '../chat/MoreTabs';
 import { agentBrief, presetDrift, roleTag } from '../staff/agentRoles';
 import { BrowserCheck } from '../staff/BrowserCheck';
 import type { StaffFormTab } from '../staff/HireForm';
+import { TeamTemplateApply } from '../staff/TeamTemplatePicker';
 import { ModelObsoleteNote } from '../staff/ModelObsoleteNote';
 import { StaffHistory } from '../staff/StaffHistory';
 import { TeamFile } from '../staff/TeamFile';
@@ -34,6 +36,7 @@ import { MAX_INPUT_BYTES, PROJECT_IMAGE_MAX, shrinkImage } from '../lib/shrinkIm
 import { Attachments } from './Attachments';
 import { type ArchivedConversations, isConversationArchived, splitArchived } from './conversationArchive';
 import { type ConversationTitles, conversationTitle, manualTitle, titleToSave } from './conversationTitle';
+import { ConsultSection } from '../consult/ConsultSection';
 import { ProjectGuide } from './ProjectGuide';
 import { ProjectName } from './ProjectName';
 import { Routines } from './Routines';
@@ -758,7 +761,7 @@ export function EmployeePanel(props: {
         moreTabs={tabs}
         focus={props.focus}
         onFocusDone={props.onFocusDone}
-        awaiting={!!opened && !!props.inbox?.some((i) => i.sessionId === opened)}
+        awaiting={!!opened && !!props.inbox && pendingOf(props.inbox).some((i) => i.sessionId === opened)}
         inbox={props.inbox}
         onDismissAlert={props.onDismissAlert}
         onInboxChanged={props.onInboxChanged}
@@ -971,10 +974,13 @@ export function ProjectPanel({
   const [error, setError] = useState<string | null>(null);
   // A aba fica ao trocar de projeto (o painel não remonta), como a do ⋯ do funcionário.
   const [tab, setTab] = useState<ProjectTab>('project');
+  // Aviso do modelo de equipe (409: já havia equipe): vive aqui porque a chamada some quando a equipe é relida.
+  const [teamNotice, setTeamNotice] = useState<string | null>(null);
 
   useEffect(() => {
     setDetail(null);
     setError(null);
+    setTeamNotice(null);
     api.project(id).then(setDetail, (e: Error) => setError(e.message));
   }, [id]);
 
@@ -1068,12 +1074,27 @@ export function ProjectPanel({
               />
             )}
             {project.exists && !project.worktreeOf && office}
+            {project.exists && !project.worktreeOf && <ConsultSection projectId={project.id} projectName={project.name} team={team.map((r) => ({ id: r.staff.id, name: r.staff.name }))} />}
             {project.exists && <Attachments projectId={project.id} />}
           </>
         )}
         {tab === 'team' && (
           <>
             <TeamList rows={team} totalUsd={totalUsd} onOpen={onOpenStaff} />
+            {project.exists && !project.worktreeOf && team.length === 0 && (
+              <TeamTemplateApply
+                projectId={project.id}
+                onApplied={(notice) => {
+                  setTeamNotice(notice ?? null);
+                  onTeamImported?.();
+                }}
+              />
+            )}
+            {team.length > 0 && teamNotice && (
+              <p className="error small" role="alert">
+                {teamNotice}
+              </p>
+            )}
             <SessionList
               sessions={sessions.filter((s) => !owned.has(s.id) && !hiddenSessions?.has(s.id))}
               costs={cost?.sessions ?? {}}
