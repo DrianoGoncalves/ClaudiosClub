@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from 'react-dom';
 import { CONTEXT_SWITCHES, type AppConfig, type BoardBackground, type ContextSwitch, type Project, type RetentionPreview, type SendPriority, type UiLevel, type UsageStop, type Workspace } from '../../../shared/model';
 import { formatBytes } from '../detail/attachmentFiles';
-import { DemoButton, WorkspacesEditor } from '../office/WorkspacesSettings';
+import { WorkspacesEditor } from '../office/WorkspacesSettings';
 import { McpServers } from '../office/McpServers';
 import { api, type CodexModelsState } from '../api';
 import { bareVersion } from '../format';
@@ -484,37 +484,6 @@ function buildSettings(
         </a>
       ),
       simple: simpleInfo('help', 'manual'),
-    },
-    {
-      id: 'demo',
-      group: 'general',
-      section: 'help',
-      title: t('office.demoTitle'),
-      description: t('office.demoDesc'),
-      keywords: t('office.demoKeywords'),
-      control: (() => {
-        const demo = p.projects.find((x) => /[\\/]\.myco[\\/]demo[\\/]my-co$/i.test(x.path));
-        return demo ? (
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => {
-              close();
-              p.onOpenProject(demo.id);
-            }}
-          >
-            {t('office.demoOpen')}
-          </button>
-        ) : (
-          <DemoButton
-            onOpen={(id) => {
-              close();
-              p.onOpenProject(id);
-            }}
-          />
-        );
-      })(),
-      simple: simpleInfo('help', 'demo'),
     },
     {
       id: 'archived',

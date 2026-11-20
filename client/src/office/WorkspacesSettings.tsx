@@ -89,33 +89,3 @@ export function WorkspacesEditor({
     </div>
   );
 }
-
-/** Configurações → Projeto demo: cria (uma vez) e abre a sala dele. */
-export function DemoButton({ onOpen }: { onOpen: (projectId: string) => void }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  return (
-    <>
-      <button
-        type="button"
-        className="btn-secondary"
-        disabled={busy}
-        onClick={async () => {
-          setBusy(true);
-          setError(null);
-          try {
-            const r = await api.createDemo();
-            onOpen(r.projectId);
-          } catch (e) {
-            setError((e as Error).message);
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        {busy ? t('office.demoWorking') : t('office.demoCreate')}
-      </button>
-      {error && <p className="error small">{error}</p>}
-    </>
-  );
-}

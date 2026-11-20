@@ -1,6 +1,6 @@
 import { defineMessages } from './define';
 
-// Escritório: workspaces (abas do quadro), novo projeto, projeto demo e conexões SSH do projeto.
+// Escritório: workspaces (abas do quadro), novo projeto e conexões SSH do projeto.
 export default defineMessages({
   'pt-BR': {
     'office.tabsLabel': 'Workspaces',
@@ -12,6 +12,22 @@ export default defineMessages({
     'office.newProject': '+ projeto',
     'office.newProjectTitle': 'Criar ou abrir um projeto nesta aba',
     'office.emptyTab': 'Nenhum projeto nesta aba. Ponha um pelo detalhe do projeto ou crie um novo.',
+    'tpl.title': 'Modelo de equipe',
+    'tpl.none': 'Sem equipe',
+    'tpl.site.label': 'Site / landing page',
+    'tpl.site.desc': 'Uma equipe para criar e publicar um site ou uma landing page: identidade e layout, código da página e anúncios.',
+    'tpl.saas.label': 'Manutenção de SaaS',
+    'tpl.saas.desc': 'Uma equipe para manter um SaaS no ar: correções e melhorias, testes, segurança e infraestrutura.',
+    'tpl.whoJoins': 'Quem entra ({n}):',
+    'tpl.nothingStarts': 'Só as fichas são criadas. Nenhuma tarefa nem conversa começa sozinha: você decide o que pedir a cada um.',
+    'tpl.emptyTitle': 'Comece com uma equipe pronta',
+    'tpl.emptyHint': 'Este projeto ainda não tem ninguém. Escolha um modelo para criar a equipe de uma vez, ou contrate pessoas uma a uma.',
+    'tpl.apply': 'Criar equipe',
+    'tpl.applying': 'Criando…',
+    'tpl.errExists': 'Este projeto já tem funcionários: o modelo só vale para um projeto sem equipe.',
+    'tpl.errGone': 'Projeto não encontrado. Recarregue a página.',
+    'tpl.errOther': 'Não deu para criar a equipe. Tente de novo.',
+    'tpl.npLabel': 'Equipe pronta (opcional)',
 
     'office.npKicker': 'Novo projeto',
     'office.npTitle': 'Criar ou abrir um projeto',
@@ -59,13 +75,6 @@ export default defineMessages({
     'office.workspaceProjects': '{n} projeto(s)',
     'office.workspaceBg': 'Fundo do quadro nesta aba',
 
-    'office.demoTitle': 'Projeto demo',
-    'office.demoDesc':
-      'Um projeto de exemplo, a My.Co Pizzaria (landing, cardápio online e pedidos), já com equipe, hierarquia e tarefas prontas, para você explorar sem montar nada. Ver o quadro e as fichas não gasta nada; abrir uma conversa com um funcionário usa a cota da sua assinatura.',
-    'office.demoKeywords': 'exemplo tutorial pizzaria my.co cardápio equipe',
-    'office.demoCreate': 'Criar projeto demo',
-    'office.demoOpen': 'Abrir o demo',
-    'office.demoWorking': 'Criando…',
 
     'office.projectWorkspace': 'Workspace',
     'office.serversTitle': 'Servidores (SSH e FTP)',
@@ -216,6 +225,22 @@ export default defineMessages({
     'office.newProject': '+ project',
     'office.newProjectTitle': 'Create or open a project in this tab',
     'office.emptyTab': 'No projects in this tab. Assign one from the project details or create a new one.',
+    'tpl.title': 'Team template',
+    'tpl.none': 'No team',
+    'tpl.site.label': 'Website / landing page',
+    'tpl.site.desc': 'A team to build and publish a website or landing page: identity and layout, page code and ads.',
+    'tpl.saas.label': 'SaaS maintenance',
+    'tpl.saas.desc': 'A team to keep a SaaS running: fixes and improvements, tests, security and infrastructure.',
+    'tpl.whoJoins': 'Who joins ({n}):',
+    'tpl.nothingStarts': 'Only the profiles are created. No task or conversation starts on its own: you decide what to ask each one.',
+    'tpl.emptyTitle': 'Start with a ready-made team',
+    'tpl.emptyHint': 'This project has nobody yet. Pick a template to create the team at once, or hire people one by one.',
+    'tpl.apply': 'Create team',
+    'tpl.applying': 'Creating…',
+    'tpl.errExists': 'This project already has employees: the template only applies to a project without a team.',
+    'tpl.errGone': 'Project not found. Reload the page.',
+    'tpl.errOther': 'Could not create the team. Try again.',
+    'tpl.npLabel': 'Ready-made team (optional)',
 
     'office.npKicker': 'New project',
     'office.npTitle': 'Create or open a project',
@@ -263,13 +288,6 @@ export default defineMessages({
     'office.workspaceProjects': '{n} project(s)',
     'office.workspaceBg': 'Board background in this tab',
 
-    'office.demoTitle': 'Demo project',
-    'office.demoDesc':
-      'A sample project, the My.Co Pizzeria (landing page, online menu and orders), with a team, hierarchy and tasks already in place, so you can explore without building anything. Viewing the board and profiles costs nothing; opening a chat with an employee uses your subscription quota.',
-    'office.demoKeywords': 'example tutorial pizzeria my.co menu team',
-    'office.demoCreate': 'Create demo project',
-    'office.demoOpen': 'Open the demo',
-    'office.demoWorking': 'Creating…',
 
     'office.projectWorkspace': 'Workspace',
     'office.serversTitle': 'Servers (SSH and FTP)',
@@ -420,6 +438,22 @@ export default defineMessages({
     'office.newProject': '+ proyecto',
     'office.newProjectTitle': 'Crear o abrir un proyecto en esta pestaña',
     'office.emptyTab': 'No hay proyectos en esta pestaña. Asigna uno desde el detalle del proyecto o crea uno nuevo.',
+    'tpl.title': 'Plantilla de equipo',
+    'tpl.none': 'Sin equipo',
+    'tpl.site.label': 'Sitio web / landing page',
+    'tpl.site.desc': 'Un equipo para crear y publicar un sitio o una landing page: identidad y diseño, código de la página y anuncios.',
+    'tpl.saas.label': 'Mantenimiento de SaaS',
+    'tpl.saas.desc': 'Un equipo para mantener un SaaS en línea: correcciones y mejoras, pruebas, seguridad e infraestructura.',
+    'tpl.whoJoins': 'Quién entra ({n}):',
+    'tpl.nothingStarts': 'Solo se crean las fichas. Ninguna tarea ni conversación empieza sola: tú decides qué pedirle a cada uno.',
+    'tpl.emptyTitle': 'Empieza con un equipo listo',
+    'tpl.emptyHint': 'Este proyecto aún no tiene a nadie. Elige una plantilla para crear el equipo de una vez, o contrata personas una a una.',
+    'tpl.apply': 'Crear equipo',
+    'tpl.applying': 'Creando…',
+    'tpl.errExists': 'Este proyecto ya tiene empleados: la plantilla solo vale para un proyecto sin equipo.',
+    'tpl.errGone': 'Proyecto no encontrado. Recarga la página.',
+    'tpl.errOther': 'No se pudo crear el equipo. Inténtalo de nuevo.',
+    'tpl.npLabel': 'Equipo listo (opcional)',
 
     'office.npKicker': 'Nuevo proyecto',
     'office.npTitle': 'Crear o abrir un proyecto',
@@ -467,13 +501,6 @@ export default defineMessages({
     'office.workspaceProjects': '{n} proyecto(s)',
     'office.workspaceBg': 'Fondo del tablero en esta pestaña',
 
-    'office.demoTitle': 'Proyecto demo',
-    'office.demoDesc':
-      'Un proyecto de ejemplo, la pizzería My.Co (landing, menú en línea y pedidos), con equipo, jerarquía y tareas ya listos, para que explores sin armar nada. Ver el tablero y las fichas no cuesta nada; abrir una conversación con un empleado usa la cuota de tu suscripción.',
-    'office.demoKeywords': 'ejemplo tutorial pizzería my.co menú equipo',
-    'office.demoCreate': 'Crear proyecto demo',
-    'office.demoOpen': 'Abrir el demo',
-    'office.demoWorking': 'Creando…',
 
     'office.projectWorkspace': 'Workspace',
     'office.serversTitle': 'Servidores (SSH y FTP)',
