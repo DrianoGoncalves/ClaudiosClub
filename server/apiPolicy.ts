@@ -35,6 +35,9 @@ const STAFF_POSTS: RegExp[] = [
   new RegExp(`^/api/projects/${ID}/tasks/${ID}/followup/${ID}/card$`),
   // Mandar revisar mesmo assim o card marcado "sem código" (quem pediu a tarefa, com o token; a rota confere que é ele e que o card espera a decisão; o resto leva 403).
   new RegExp(`^/api/projects/${ID}/tasks/${ID}/review-anyway$`),
+  // Consultar um funcionário de outro projeto vinculado pelo dono (server/consult/). A rota é do projeto de ORIGEM (o do token: o gate recusa o resto) e a origem e o remetente vêm do token; o vínculo
+  // (só a tela grava: `/api/consult/links*` fica FORA desta lista) e os limites são conferidos pelo serviço. A conversa de consulta não tem token, então nunca chega aqui.
+  new RegExp(`^/api/projects/${ID}/consult$`),
 ];
 
 /** O POST em `pathname` pode vir de um funcionário pela API? */
@@ -48,8 +51,8 @@ export function staffMayPost(pathname: string): boolean {
 // projetos, arquivos, git, terminal, importar, anexos, conversas dos outros, quadro, busca ou fichas de outros projetos. Quem chama sem estar nela
 // recebe 403 (os GETs que sobram expõem segredos, conversas ou fichas de outros projetos, e os POSTs mudam coisas).
 
-/** GETs liberados à sandbox do Codex: o `health` e a lista de tarefas do próprio projeto (a ficha manda conferir como estão). */
-const SANDBOX_GETS: RegExp[] = [/^\/api\/health$/, new RegExp(`^/api/projects/${ID}/tasks$`)];
+/** GETs liberados à sandbox do Codex: o `health`, a lista de tarefas do próprio projeto (a ficha manda conferir como estão) e o diretório de consulta (só id, nome e cargo; ver server/consult/). */
+const SANDBOX_GETS: RegExp[] = [/^\/api\/health$/, new RegExp(`^/api/projects/${ID}/tasks$`), new RegExp(`^/api/projects/${ID}/consult/directory$`)];
 
 const PROJECT_OF = new RegExp(`^/api/projects/(${ID})(?:/|$)`);
 
@@ -64,7 +67,7 @@ export function projectOfPath(pathname: string): string | null {
  */
 export function sandboxVerdict(method: string, pathname: string, projectId: string): { status: 403; error: string } | null {
   const allowed = method === 'GET' ? SANDBOX_GETS.some((r) => r.test(pathname)) : method === 'POST' && staffMayPost(pathname);
-  if (!allowed) return { status: 403, error: 'a sandbox do Codex não pode usar esta rota (só tarefas, editar tarefa que ainda não começou, ordem da fila, cancelar a própria tarefa ou pedir o cancelamento de uma que você pediu, revisar mesmo assim o card sem código que você pediu, follow-up de revisão, contratar, mensagem, despertador e encerrar quem você contratou)' };
+  if (!allowed) return { status: 403, error: 'a sandbox do Codex não pode usar esta rota (só tarefas, editar tarefa que ainda não começou, ordem da fila, cancelar a própria tarefa ou pedir o cancelamento de uma que você pediu, revisar mesmo assim o card sem código que você pediu, follow-up de revisão, consulta a outro projeto vinculado e o diretório dela, contratar, mensagem, despertador e encerrar quem você contratou)' };
   const target = PROJECT_OF.exec(pathname)?.[1];
   if (target && target !== projectId) return { status: 403, error: 'a sandbox do Codex só fala com o projeto da própria conversa' };
   return null;

@@ -7,6 +7,7 @@ import type {
   AccountUsage,
   AnyConnection,
   BrowserStatus,
+  ConsultStamp,
   EngineOverride,
   FtpConnection,
   LaunchResult,
@@ -49,9 +50,9 @@ import { CapabilityError, type CodexCapability } from '../engineCapability';
 import { AGENT_PRESETS, PLAYBOOK_AGENTS } from '../../shared/agentPresets';
 import type { CodexModelsResult } from '../codexModels';
 import { readCodexThread } from '../chat/codexProcess';
-import { buildClaudeArgs, capAutonomy } from './ficha';
+import { buildClaudeArgs, buildClaudeConsultArgs, capAutonomy } from './ficha';
 import { mcpAccessOfInput, mergeMcpAccess } from './mcpAccess';
-import { greeting, prepareCodexRun, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
+import { greeting, prepareCodexRun, prepareConsultRun, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
 import { attachThreadId, recordSession, type NewRegisteredSession } from '../sessionsRegistry';
 import { ensureWorktree, worktreeFor, type Worktree } from './worktree';
 import { listMcpServers } from './mcp';
@@ -280,6 +281,8 @@ export interface StaffServiceOptions {
    * Não espera e não derruba o salvar. Sem ele, nada é conferido.
    */
   onCodexProfile?: () => void;
+  /** Os projetos que o dono liberou este funcionário a consultar (server/consult/), para a seção Consulta da ficha. Sem ele (ou vazio), a ficha não tem a seção. */
+  consultTargets?: (projectId: string, staffId: string) => Promise<Array<{ projectId: string; projectName: string }>>;
   /** Aviso no log do servidor (padrão console.warn). */
   log?: (line: string) => void;
 }
@@ -1272,9 +1275,17 @@ export class StaffService {
     engineOverride?: EngineOverride,
     /** Conversa de revisão de tarefa: sem ferramentas de edição (Claude) nem sandbox de escrita (Codex); só a memória da ficha, pelo MCP. Gravada na conversa: reabrir mantém. */
     reviewOnly = false,
-  ): Promise<{ sessionId: string; cwd: string; args: string[]; chosen?: boolean; engine?: 'claude' | 'codex'; codex?: CodexSpawn } | null> {
+    /** Conversa de consulta de outro projeto (server/consult/): perfil só leitura próprio, sem token, sem MCP (ver `consultSpawn`). Gravada na conversa: reabrir mantém. */
+    consultOpen?: ConsultStamp,
+  ): Promise<{ sessionId: string; cwd: string; args: string[]; chosen?: boolean; engine?: 'claude' | 'codex'; codex?: CodexSpawn; consult?: ConsultStamp } | null> {
     const project = await this.project(projectId);
     if (!project) return null;
+    // Consulta: o perfil vem do pedido na abertura e da entrada da sessão ao reabrir (um carimbo estragado vira vazio, nunca "sessão comum"; ver `readConsultStamp`).
+    // Duplicar (`forkFrom`) também olha a conversa de origem: a cópia de uma consulta não pode virar uma conversa comum.
+    const ref = forkFrom ?? sessionId;
+    const known = ref && staffId ? (await readProfile(project.path, staffId).catch(() => null))?.sessions.find((x) => x.id === ref) : undefined;
+    const consult = consultOpen ?? known?.consult;
+    if (consult && staffId) return this.consultSpawn(project, projectId, staffId, sessionId, consult, !!forkFrom);
     if (!staffId) {
       if (forkFrom) {
         const id = randomUUID();
@@ -1382,6 +1393,89 @@ export class StaffService {
     }
     const args = buildClaudeArgs(effective, { ...run!, sessionId: id, resume, firstPrompt: null, ...(forkFrom && { forkFrom }), ...(readOnly && { readOnly: true }) });
     return { sessionId: id, cwd, args, ...chosen };
+  }
+
+  /**
+   * A conversa de CONSULTA de outro projeto (server/consult/), nos dois motores. Só lê a pasta DO PROJETO (nunca a worktree da ficha, e sem pasta extra): o Claude abre com `--tools Read,Grep,Glob`,
+   * modo `default` (a leitura fora da pasta vira pedido de permissão, que o Club nega na hora), sem MCP, sem agents e sem hook; o Codex, com `read-only`, sem rede (nem a API do Club), sem MCP, sem agents e
+   * com as negações da consulta (ver `CodexConsultPolicy`). Nos dois, a ficha é a compacta (`consultSystemPrompt`, sem `writeFicha`: o `.md` real e a memória não são tocados) e a conversa não recebe
+   * token (ver `ChatManager.ensure`). A entrada da sessão guarda o carimbo (`consult`) e `readOnly`: reabrir e retomar mantêm o perfil.
+   */
+  private async consultSpawn(
+    project: Project,
+    projectId: string,
+    staffId: string,
+    sessionId: string | null,
+    stamp: ConsultStamp,
+    fork: boolean,
+  ): Promise<{ sessionId: string; cwd: string; args: string[]; engine?: 'claude' | 'codex'; codex?: CodexSpawn; consult: ConsultStamp } | null> {
+    if (fork) throw new StaffError('uma conversa de consulta não se duplica');
+    const found = await readProfile(project.path, staffId);
+    if (!found) return null;
+    const profile: StaffProfile = { ...found, projectId };
+    const resume = !!sessionId;
+    const id = resume ? sessionId! : randomUUID();
+    const codex = engineOf(profile) === 'codex';
+    await this.guardSeal(project, profile);
+    if (codex) await this.assertCodexUsable();
+    assertProfileRules(profile, await ftpNames(project.path, this.opts.vault));
+    const ctx = await this.context(project, profile, false);
+    const cwd = project.path;
+    const inside = (dir: string, file: string) => {
+      const rel = path.relative(dir, file);
+      return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    };
+    // As pastas dos OUTROS projetos (as que contêm o projeto, ou estão dentro dele, ficam de fora: negar a pasta-mãe negaria o próprio projeto).
+    const otherProjects = (await this.adapter.listProjects())
+      .filter((p) => p.exists && !p.worktreeOf && p.id !== project.id && !inside(project.path, p.path) && !inside(p.path, project.path))
+      .map((p) => p.path);
+    const run = await prepareConsultRun(profile, ctx, id, { otherProjects, engine: codex ? 'codex' : 'claude' });
+    if (!resume) {
+      const now = new Date().toISOString();
+      await withProfileLock(project.path, staffId, async () => {
+        const fresh = (await readProfile(project.path, staffId)) ?? profile;
+        await saveProfile(project.path, { ...fresh, projectId, sessions: [...fresh.sessions, { id, startedAt: now, cwd, readOnly: true, consult: stamp }], updatedAt: now });
+      });
+      await this.registerLaunch({ sessionId: id, engine: codex ? 'codex' : 'claude', projectPath: project.path, cwd, staffId });
+    }
+    const model = profile.model ?? profile.lastModel ?? null;
+    const effective: StaffProfile = { ...profile, model, effort: profile.effort ?? profile.lastEffort ?? null };
+    if (codex) {
+      const threadFile = path.join(ctx.runDir, id, 'codex-thread.json');
+      const spawn: CodexSpawn = {
+        // `manual` (leitura): o modo mostrado e a sandbox dizem a mesma coisa; o que garante é `consult` (buildCodexArgs não olha a autonomia).
+        autonomy: 'manual',
+        model: codexModelOrNull(effective.model),
+        effort: effective.effort,
+        instructions: run.instructions,
+        writableRoots: [],
+        readOnlyPaths: [],
+        sshMcp: null,
+        memoriaMcp: null,
+        gitMcp: null,
+        readOnly: true,
+        consult: { otherProjects },
+        chromeMcp: null,
+        cleanMcp: null,
+        extraMcps: [],
+        mcpSnapshotFile: null,
+        agents: [],
+        heavyGuard: null,
+        secrets: { projectPath: project.path, home: os.homedir(), mycoHome: MYCO_HOME },
+        threadId: resume ? await readCodexThread(threadFile) : null,
+        threadFile,
+        onThread: (threadId) => {
+          const file = this.opts.sessionsFile;
+          if (file) void attachThreadId(id, threadId, file).catch((err) => this.warnRegistry(id, err));
+        },
+        mycoUrl: ctx.mycoUrl,
+        // Consulta não pesquisa na web, qualquer que seja a configuração.
+        internetAccess: async () => false,
+      };
+      return { sessionId: id, cwd, args: [], engine: 'codex', codex: spawn, consult: stamp };
+    }
+    const args = buildClaudeConsultArgs(effective, { sessionId: id, resume, systemPromptFile: run.systemPromptFile, mcpConfigPath: run.mcpConfigPath, deny: run.deny });
+    return { sessionId: id, cwd, args, consult: stamp };
   }
 
   /**
@@ -1561,7 +1655,15 @@ export class StaffService {
         .filter((s) => s.id !== profile.id && s.reportsTo.includes(profile.id) && !s.ended)
         .map((s) => ({ id: s.id, name: s.name, role: s.role, mission: s.mission, ...(s.temporary && { temporary: true }) })),
       ...(roles && { roles }),
+      // A seção Consulta da ficha: só com vínculo liberado a ele (o dono ligou, pela tela); sem vínculo ou sem a leitura, a ficha sai como antes.
+      ...(await this.consultFicha(project, profile)),
     };
+  }
+
+  /** Os projetos que o dono liberou a `profile` consultar, para a ficha (ver `FichaContext.consult`). Falha na leitura: sem a seção. */
+  private async consultFicha(project: Project, profile: StaffProfile): Promise<Pick<LaunchContext, 'consult'>> {
+    const targets = await this.opts.consultTargets?.(project.id, profile.id).catch(() => []);
+    return targets?.length ? { consult: { targets } } : {};
   }
 
   /**

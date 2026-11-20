@@ -7,7 +7,7 @@ import { CODEX_CONTEXT_WINDOW } from '../adapters/claude/pricing';
 import { resolveCodexCommand, type CodexEnvStatus } from '../codexEnv';
 import { pickCodexSubstitute, type CodexModelInfo } from '../codexModels';
 import { cleanEnv, withoutMycoToken } from '../auth';
-import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexAgentRole, type CodexExtraMcp, type CodexHeavyGuard, type CodexMcpServer, type CodexSecrets } from './codexArgs';
+import { buildCodexArgs, CodexBlockedError, codexModelOrNull, instructionsInArgv, promptWithInstructions, sandboxFor, type CodexAgentRole, type CodexConsultPolicy, type CodexExtraMcp, type CodexHeavyGuard, type CodexMcpServer, type CodexSecrets } from './codexArgs';
 import { codexEditedFiles, codexToolCommand, codexToolFile } from './codeEdits';
 import { codexDeclinedTool, codexRolloutDenial, sandboxDenied } from './denied';
 import { contextUsed, isModelUnavailable, isToolCall, itemFromCodex, parseCodexFailure, type CodexItem, type CodexPhase } from './codexEvents';
@@ -44,6 +44,8 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   gitMcp?: CodexMcpServer | null;
   /** Conversa de revisão de tarefa: sandbox só de leitura a cada execução, mesmo que o modo de permissão mude (ver `CodexSpawn.readOnly`). */
   readOnly?: boolean;
+  /** Conversa de consulta de outro projeto: só leitura, sem rede nem MCP, com as negações da consulta (ver `CodexConsultPolicy` em codexArgs.ts). */
+  consult?: CodexConsultPolicy;
   /** MCP do Chrome do usuário (null = sem ele). Ver `codexChromeMcpArgs` em codexArgs.ts. */
   chromeMcp?: CodexMcpServer | null;
   /** MCP do navegador limpo (null = sem ele). Ver `codexCleanBrowserMcpArgs` em codexArgs.ts. */
@@ -383,7 +385,7 @@ export class CodexProcess extends ChatProcess {
         cwd: o.cwd,
         model,
         effort: this.state.effort,
-        sandbox: o.readOnly ? 'read-only' : sandboxFor(this.state.permissionMode),
+        sandbox: o.readOnly || o.consult ? 'read-only' : sandboxFor(this.state.permissionMode),
         instructions: o.instructions,
         writableRoots: o.writableRoots,
         readOnlyPaths: o.readOnlyPaths,
@@ -398,8 +400,10 @@ export class CodexProcess extends ChatProcess {
         env,
         onHeavyGuardOff: (file) => (guardOff.file = file),
         secrets: o.secrets,
-        network: status.networkProxy ? 'loopback' : 'off',
+        // Consulta nunca tem rede, nem a API do Club (buildCodexArgs também a ignora: dupla trava).
+        network: status.networkProxy && !o.consult ? 'loopback' : 'off',
         internetAccess,
+        consult: o.consult,
         threadId: this.thread,
         platform: o.platform,
       });

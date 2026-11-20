@@ -10,7 +10,7 @@ import { heavyLockDir } from '../heavyQueue';
 import { lazyNavegadorCommand } from '../navegadorMcp';
 import { ROOT } from '../root';
 import { memoryMeasure, memoryOver } from '../../scripts/hooks/memory-cap.mjs';
-import { isClaudeRoot, renderFicha, systemPrompt, type CleanBrowserInfo, type CodexChromeInfo, type FichaContext, type GitInfo, type MemoriaInfo, type SshInfo, type TeamMember } from './ficha';
+import { consultDenyRules, consultSystemPrompt, isClaudeRoot, renderFicha, systemPrompt, type CleanBrowserInfo, type CodexChromeInfo, type FichaContext, type GitInfo, type MemoriaInfo, type SshInfo, type TeamMember } from './ficha';
 import { FTP_MCP_NAME, GIT_MCP_NAME, GIT_READ_TOOLS, GPT_MCP_NAME, MEMORIA_MCP_NAME } from '../../shared/model';
 import { GIT_MCP_BUNDLE, gitBundleExists, gitGrant, gitMcpServer, writeGitPolicy } from './gitMcp';
 import { DEFAULT_SECRETS_DIR } from '../secretVault';
@@ -57,6 +57,8 @@ export interface LaunchContext {
   team?: TeamMember[];
   /** Cargos prontos para contratar por roleId (só quem pode contratar; ver FichaContext.roles). */
   roles?: { id: string; label: string }[];
+  /** Projetos que o dono liberou a este funcionário consultar (ver FichaContext.consult): ausente ou vazio = a ficha não tem a seção Consulta. */
+  consult?: FichaContext['consult'];
   /**
    * Lançador dos MCPs da biblioteca e da ficha no Codex (os testes trocam; ausente = `mcpLaunchBundle()`, o pacote do build). null = sem lançador:
    * os MCPs que precisam dele ficam de fora e a ficha diz que estão indisponíveis.
@@ -240,6 +242,30 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     memoriaMcp: memoria.server !== null,
     gitMcp: git.server !== null,
   };
+}
+
+/**
+ * O que a conversa de CONSULTA (server/consult/) precisa nos dois motores: a ficha compacta, sem `writeFicha` (que reescreve o `.md` real e cria a memória) e sem memória, e no Claude o
+ * mcp.json vazio e as regras de negação. Nada de worktree, MCP, agents, plugin nem hook. `otherProjects`: as pastas dos OUTROS projetos (negadas nos dois motores).
+ */
+export async function prepareConsultRun(
+  profile: StaffProfile,
+  ctx: Pick<LaunchContext, 'company' | 'projectName' | 'projectPath' | 'runDir' | 'serverKeys' | 'servers'>,
+  sessionId: string,
+  o: { otherProjects: string[]; engine: 'claude' | 'codex' },
+): Promise<{ instructions: string; systemPromptFile: string; mcpConfigPath: string; deny: string[] }> {
+  const dir = path.join(ctx.runDir, sessionId);
+  const fichaCtx: FichaContext = { company: ctx.company, projectName: ctx.projectName, projectPath: ctx.projectPath, managerNames: [], fichaPath: '', memoryPath: '', mycoUrl: '' };
+  const instructions = consultSystemPrompt(profile, fichaCtx);
+  const systemPromptFile = path.join(dir, 'system.md');
+  const mcpConfigPath = path.join(dir, 'mcp.json');
+  if (o.engine === 'claude') {
+    await mkdir(dir, { recursive: true });
+    await writeAtomic(systemPromptFile, instructions);
+    // Sem MCP nenhum: o arquivo existe e é vazio (nunca JSON na linha de comando).
+    await writeAtomic(mcpConfigPath, JSON.stringify({ mcpServers: {} }));
+  }
+  return { instructions, systemPromptFile, mcpConfigPath, deny: consultDenyRules(profile, { otherProjects: o.otherProjects, keyFiles: ctx.serverKeys, ftpServers: ftpServersOf(profile, ctx.servers) }) };
 }
 
 export interface PreparedCodexRun {
@@ -723,7 +749,7 @@ export interface FichaRunInfo {
  */
 export async function writeFicha(
   profile: StaffProfile,
-  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'roles' | 'globalSkills' | 'projectSkills' | 'codex' | 'internetAccess' | 'clubGuard' | 'lockedByCodexManager'>,
+  ctx: Pick<LaunchContext, 'company' | 'workspace' | 'projectName' | 'projectPath' | 'managerNames' | 'mycoUrl' | 'worktree' | 'servers' | 'team' | 'roles' | 'globalSkills' | 'projectSkills' | 'codex' | 'internetAccess' | 'clubGuard' | 'lockedByCodexManager' | 'consult'>,
   absolute = false,
   run: FichaRunInfo = {},
 ): Promise<FichaContext> {
@@ -741,6 +767,7 @@ export async function writeFicha(
     servers: ctx.servers,
     team: ctx.team,
     roles: ctx.roles,
+    ...(ctx.consult?.targets.length && { consult: ctx.consult }),
     // Lido a cada sessão (writeFicha roda em prepareRun): o plano (marcadas, o que some, o plugin e o que falta) sai da ficha e do disco agora.
     skillPlan: await skillPlanOf(profile.skills, { globalSkills: ctx.globalSkills ?? [], projectSkills: ctx.projectSkills ?? [] }),
     // Lido a cada sessão (writeFicha roda em prepareRun): criar ou apagar o SPEC.md vale na próxima conversa.

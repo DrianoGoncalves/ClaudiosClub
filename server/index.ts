@@ -111,6 +111,10 @@ import { CostReviewApplyError, runCostReviewApply } from './costReviewApply';
 import type { Board, CostReport, InboxItem, InboxKind, LiveSession, Project, TurnNotice } from '../shared/model';
 import { TurnWatcher } from './turns';
 import { ProjectPauses } from './projectPause';
+import { deliverToAsker } from './consult/deliver';
+import { ConsultLinks } from './consult/links';
+import { ConsultError, ConsultService } from './consult/service';
+import { ConsultStore } from './consult/store';
 import { RoutineScheduler, routineKey, type RoutineOutcome } from './routines';
 import { buildSchedules, routineSchedule, ScheduleWindowError, scheduleWindow } from './scheduleView';
 import type { AppServerInfo, EngineOverride, Routine, SchedulesResponse, StaffProfile, SystemStats } from '../shared/model';
@@ -337,8 +341,21 @@ async function chatPlace(projectId: string, staffId: string | null) {
 const codexCapability = new CodexCapability(defaultRunner(), { liveCodex: () => chats.codexRunning() });
 // Política de senha do Windows que quebra o sandbox do Codex (só avisa a caixa; nunca altera a política, ver codexPasswordPolicy.ts). Fora do Windows não faz nada.
 const codexPolicy = new CodexPasswordPolicy();
+/** Vínculos de consulta entre projetos (só a tela grava) e o registro das consultas, que sobrevive a reinício (ver server/consult/). */
+const consultLinks = new ConsultLinks(path.join(MYCO_HOME, 'consult', 'links.json'));
+const consultStore = new ConsultStore(path.join(MYCO_HOME, 'consult', 'records.json'));
 const staff: StaffService = new StaffService(adapter, {
   runDir: path.join(MYCO_HOME, 'run'),
+  // A seção Consulta da ficha: só os projetos que o dono liberou a este funcionário (sem vínculo, a ficha fica como antes).
+  consultTargets: async (projectId, staffId) => {
+    const ids = await consultLinks.targetsOf(projectId, staffId);
+    if (!ids.length) return [];
+    const known = await adapter.listProjects();
+    return ids.flatMap((id) => {
+      const p = known.find((x) => x.id === id && x.exists);
+      return p ? [{ projectId: p.id, projectName: p.name }] : [];
+    });
+  },
   codexCapability,
   // Ficha do Codex contratada ou salva: a checagem prévia da política de senha (com cache; sem esperar).
   onCodexProfile: () => void codexPolicy.check(),
@@ -470,7 +487,9 @@ const chats: ChatManager = new ChatManager({
   // Limite do Codex estourado: a hora de voltar vem da leitura fresca dos limites do Codex (só com `codexReview` ligado).
   codexLimits: async () => codexUsage.read((await readConfig()).codexReview, { fresh: true, waitMs: 8_000 }),
   listLive: () => adapter.listLiveSessions(),
-  resolve: (projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly),
+  resolve: (projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult),
+  // A conversa de consulta de outro projeto terminou o turno: o serviço lê a resposta e a entrega (`consults` é declarado mais abaixo: só é lido na chamada).
+  onConsultIdle: (consultId, sessionId, reason) => void consults.onIdle(consultId, sessionId, reason).catch((err) => console.warn('[consulta] fim de turno:', err)),
   rememberChoice: (projectId, staffId, sessionId, choice) => staff.rememberChoice(projectId, staffId, sessionId, choice),
   markModelObsolete: (projectId, staffId, model, engine) => staff.markModelObsolete(projectId, staffId, model, engine),
   registry: new ChatRegistry(path.join(MYCO_HOME, 'run', 'chats.json')),
@@ -700,6 +719,50 @@ const directFallback = new DirectFallback({
     chats.send(projectId, sessionId, staffId, text, priority, images, files, false, undefined, override),
   log: (line) => console.log(`[chat] ${line}`),
 });
+/**
+ * A consulta de funcionário a funcionário entre projetos (ver server/consult/service.ts): o vínculo é do dono (só a tela grava), a conversa de consulta abre no projeto de destino só para ler
+ * (sem token, sem aprovação, sem MCP; ver StaffService.consultSpawn) e a resposta final volta à conversa de quem perguntou, como informação de outro projeto.
+ */
+const consults = new ConsultService({
+  links: consultLinks,
+  store: consultStore,
+  project: async (projectId) => {
+    const p = (await adapter.listProjects()).find((x) => x.id === projectId && x.exists && !x.worktreeOf);
+    return p ? { id: p.id, name: p.name } : null;
+  },
+  staff: async (projectId, staffId) => {
+    const dir = await projectPathOf(projectId);
+    const p = dir ? await readProfile(dir, staffId) : null;
+    return p ? { id: p.id, name: p.name, role: p.role, ended: !!p.ended } : null;
+  },
+  listStaff: async (projectId) => {
+    const dir = await projectPathOf(projectId);
+    return dir ? (await listProjectStaff(dir, projectId)).filter((s) => !s.ended && !s.temporary).map((s) => ({ id: s.id, name: s.name, role: s.role })) : [];
+  },
+  paused: (projectId) => projectPauses.isPaused(projectId),
+  // A trava de uso do projeto de destino (a conversa de consulta gasta o orçamento dele).
+  checkUsage: (projectId, staffId) => staff.checkUsage(projectId, { staffId }),
+  openConsult: (projectId, staffId, text, stamp) => chats.send(projectId, null, staffId, text, undefined, [], [], false, undefined, undefined, false, stamp),
+  isConsultSession: (sessionId) => chats.isConsultSession(sessionId),
+  lastText: (sessionId) => chats.lastAssistantText(sessionId),
+  turn: (sessionId) => chats.consultTurn(sessionId),
+  closeSession: async (sessionId) => void (await chats.closeIdle((c) => c.sessionId === sessionId)),
+  stopSession: (sessionId) => chats.stop(sessionId),
+  // A resposta (ou o aviso) na conversa de quem perguntou: a trava de uso dele confere; em outra tarefa, espera a vez (guardada, como a resposta a uma dúvida); conversa fechada, reabre.
+  // `sendNotice` é mensagem da plataforma: não "responde" a tarefa em revisão nem tira o "continue" agendado.
+  deliver: deliverToAsker({
+    checkUsage: (projectId, staffId) => staff.checkUsage(projectId, { staffId }),
+    hold: (sessionId, msg) => tasks.hold(sessionId, msg),
+    sendNotice: (projectId, sessionId, staffId, text) => chats.sendNotice(projectId, sessionId, staffId, text),
+  }),
+  isClosing: () => chats.isClosing(),
+});
+// O relógio da consulta: vence o prazo e entrega o que ficou esperando (resposta ou aviso). Também no boot: o registro sobrevive ao reinício.
+const consultTick = () => {
+  if (!chats.isClosing()) void consults.tick().catch((err) => console.warn('[consulta] relógio:', err));
+};
+consultTick();
+setInterval(consultTick, 15_000).unref();
 // Limite no meio do turno: a tarefa pode trocar de motor (ver TaskService.onLimit). Depois de agendado o "continue".
 chats.onUsageLimit((ev) => {
   void tasks.onLimit(ev).catch((err) => console.error('[tarefas] limite no meio do turno:', err));
@@ -907,6 +970,11 @@ class Raw {
   ) {}
 }
 
+/** Resposta 202 (aceito): a consulta nova foi aberta e a resposta vem depois, na conversa de quem perguntou. */
+class Accepted {
+  constructor(readonly body: unknown) {}
+}
+
 class BadRequest extends Error {}
 /** O pedido é de quem não pode (403). */
 class Forbidden extends Error {}
@@ -956,6 +1024,36 @@ const mcpLibrary = createMcpLibrary({
 
 const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ['GET', /^\/api\/health$/, async () => ({ ok: true, adapter: adapter.id })],
+  // ---- consulta entre projetos (server/consult/) ----
+  // Vínculo, revogação e leitura: só a tela (as rotas `/api/consult/*` não estão em apiPolicy.ts `STAFF_POSTS`: o gate já recusa o POST de funcionário e a sandbox). O serviço confere `fromBrowser` de novo.
+  [
+    'GET',
+    /^\/api\/consult\/links$/,
+    async ({ paired }) => {
+      if (!paired) throw new BadRequest('só pelo Claudio’s Club');
+      return { links: await consults.listLinks() };
+    },
+  ],
+  ['POST', /^\/api\/consult\/links$/, async ({ body, fromBrowser }) => ({ link: await consults.setLink(fromBrowser, body) })],
+  ['POST', /^\/api\/consult\/links\/revoke$/, async ({ body, fromBrowser }) => consults.revokeLink(fromBrowser, body)],
+  [
+    'GET',
+    /^\/api\/consult\/records$/,
+    async ({ url, paired }) => {
+      if (!paired) throw new BadRequest('só pelo Claudio’s Club');
+      return { consults: await consults.listRecords(url.searchParams.get('project') ?? undefined) };
+    },
+  ],
+  // Do funcionário (token do projeto de origem; a origem e o remetente vêm do token, nunca do corpo): o diretório (só id, nome e cargo) e a consulta.
+  ['GET', new RegExp(`^/api/projects/${ID}/consult/directory$`), async ({ params: [pid], caller }) => ({ projects: await consults.directory(caller, pid!) })],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/consult$`),
+    async ({ params: [pid], body, caller }) => {
+      const out = await consults.start(caller, pid!, body);
+      return out.replay ? out : new Accepted(out);
+    },
+  ],
   // CPU e RAM da máquina, para o monitor do canto (só números; ver systemStats.ts).
   ['GET', /^\/api\/system$/, async (): Promise<SystemStats> => systemStats()],
   // ---- o próprio servidor: parar e (com o vigia) reiniciar pelo config ----
@@ -2650,6 +2748,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         const out = await handler({ params: m.slice(1), url, body, fromBrowser, paired: !sandbox && pairing.isPaired(req.headers.cookie), userAgent, caller });
         if (method !== 'GET') boardCache.invalidate();
         if (out === null) return send(res, 404, { error: 'não encontrado' });
+        if (out instanceof Accepted) return send(res, 202, out.body);
         if (out instanceof Raw) {
           // no-cache + ETag: o navegador confere a cada vez, mas só baixa de novo se a imagem mudou.
           const etag = `"${createHash('sha1').update(out.bytes).digest('base64url')}"`;
@@ -2667,6 +2766,8 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         // Zip da extensão: pasta ausente (404) ou manifest recusado / pacote grande (409).
         if (err instanceof ExtensionPackError) return send(res, err.status, { error: err.message });
         if (err instanceof UsageStopError) return send(res, 409, { error: err.message, code: err.code, hit: err.hit });
+        // Consulta entre projetos: o status vem do próprio erro (400, 403, 404, 409, 429 ou 503), sem token nem conteúdo na mensagem.
+        if (err instanceof ConsultError) return send(res, err.status, { error: err.message, ...err.extra });
         // Vitrine: já sendo gerada (409); recusada antes de começar, pelo uso (429) ou pelos recursos (503).
         if (err instanceof ShowcaseBusyError) return send(res, 409, { error: err.message });
         // Já há uma janela de escolher pasta aberta: 409 com `code: 'busy'`.

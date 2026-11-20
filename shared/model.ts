@@ -1534,6 +1534,16 @@ export type McpAccess = 'off' | 'readonly' | 'ask' | 'free';
 /** legado: só a tela atual e a leitura de fichas antigas usam (`mcp__servidor`, `mcp__servidor__ferramenta`). */
 export type McpPolicy = 'allow' | 'ask' | 'off';
 
+/** Quem perguntou numa conversa de consulta (gravado na entrada da sessão do funcionário consultado; a tela só lê). */
+export interface ConsultStamp {
+  /** O id da consulta (`c-<6 hex>`, ver server/consult/store.ts). */
+  id: string;
+  fromProjectId: string;
+  fromProjectName: string;
+  fromStaffId: string;
+  fromStaffName: string;
+}
+
 export interface StaffProfile {
   id: string;
   projectId: string;
@@ -1624,9 +1634,10 @@ export interface StaffProfile {
    * Sessões abertas para este funcionário, a mais recente por último. `cwd` é a pasta onde a
    * sessão roda (a worktree, se a ficha pede uma): retomar exige a mesma pasta. `model`/`effort`: o
    * que foi escolhido no chat desta conversa (vale ao reabrir); ausente = o da ficha. `readOnly`: conversa de revisão de tarefa, que não
-   * edita arquivos do projeto (ver `chatSpawn`); vale também ao reabrir.
+   * edita arquivos do projeto (ver `chatSpawn`); vale também ao reabrir. `consult`: conversa aberta pela consulta de um funcionário de outro projeto
+   * (ver server/consult/): só leitura da pasta do projeto, sem token, sem MCP; o carimbo diz quem perguntou e de qual projeto.
    */
-  sessions: { id: string; startedAt: string; cwd?: string; model?: string; effort?: CodexEffort; fallback?: { engine: Engine; model: string; effort?: CodexEffort }; readOnly?: boolean }[];
+  sessions: { id: string; startedAt: string; cwd?: string; model?: string; effort?: CodexEffort; fallback?: { engine: Engine; model: string; effort?: CodexEffort }; readOnly?: boolean; consult?: ConsultStamp }[];
   createdAt: string;
   updatedAt: string;
 }
