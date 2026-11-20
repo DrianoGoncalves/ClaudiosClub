@@ -49,7 +49,7 @@ export function whyText(l: TaskCommitLeft): string {
     case 'owner':
       return 'editado por você';
     case 'shared':
-      return `também alterado por ${l.by}, que ainda não terminou`;
+      return `também alterado por ${l.by}, ${l.by?.includes(',') ? 'que ainda não terminaram' : 'que ainda não terminou'}`;
   }
 }
 
@@ -59,6 +59,15 @@ export function leftText(left: TaskCommitLeft[], shown = 3): string {
   return `${left.slice(0, shown).map((l) => `${l.path} (${whyText(l)})`).join(', ')}${more}`;
 }
 
+/**
+ * Outra tarefa não encerrada que também alterou o arquivo. `stoppedAt` (ms): quando ela saiu de "fazendo" ou "planejando" pela última vez; null = ela ainda pode estar editando
+ * (a fazer, fazendo, planejando) ou não dá para saber (histórico sem a saída). O git não diz de quem é cada trecho da mudança pendente: o critério é conservador (ver `sharedBlockers`).
+ */
+export interface SharedHold {
+  id: string;
+  stoppedAt: number | null;
+}
+
 export interface CommitRequest {
   /** A raiz do projeto (o checkout principal; worktree não passa por aqui). */
   dir: string;
@@ -66,8 +75,8 @@ export interface CommitRequest {
   title: string;
   /** `Task.changedFiles` (ausente = a tarefa não tem lista). */
   files: string[] | undefined;
-  /** O que outra tarefa não encerrada também alterou: `pathKey(caminho)` → id dela. */
-  shared: ReadonlyMap<string, string>;
+  /** O que outra tarefa não encerrada também alterou: `pathKey(caminho)` → quem. */
+  shared: ReadonlyMap<string, SharedHold[]>;
   /** O que você gravou pelo editor do Club (ver ownerEdits.ts). */
   ownerWrites: Record<string, OwnerWrite>;
 }
@@ -171,8 +180,8 @@ function safeRel(f: string): string | null {
 async function leftOutWhy(req: CommitRequest, e: StatusEntry, key: string, rel: string): Promise<Pick<TaskCommitLeft, 'why' | 'by'> | null> {
   if (isBlockedRel(rel)) return { why: 'blocked' };
   if (isConflict(e)) return { why: 'conflict' };
-  const other = req.shared.get(key);
-  if (other) return { why: 'shared', by: other };
+  const holding = await sharedBlockers(req.dir, rel, req.shared.get(key) ?? []);
+  if (holding.length) return { why: 'shared', by: holding.join(', ') };
   // Staged e com mudança nova por cima (MM, AM…): o índice guarda uma escolha sua que o commit passaria por cima.
   if (e.x !== ' ' && e.x !== '?' && e.y !== ' ') return { why: 'staged' };
   const w = req.ownerWrites[key];
@@ -182,6 +191,31 @@ async function leftOutWhy(req: CommitRequest, e: StatusEntry, key: string, rel: 
     if (st && st.mtimeMs <= w.mtimeMs + OWNER_SLACK_MS) return { why: 'owner' };
   }
   return null;
+}
+
+/**
+ * Quando o HEAD levou `rel` pela última vez (ms; o git guarda em segundos), ou null: arquivo sem commit, caminho que o git não conhece ou git que falhou. Nunca lança.
+ * `rel` é o caminho do projeto (o `-C` do git já está na raiz dele), literal.
+ */
+export async function lastCommitMs(dir: string, rel: string, git: GitRun = gitDefault): Promise<number | null> {
+  try {
+    const secs = Number((await git(dir, ['log', '-1', '--format=%ct', '--', rel], { env: LITERAL })).trim());
+    return Number.isFinite(secs) && secs > 0 ? secs * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Das outras tarefas abertas que alteraram `rel`, as que ainda podem ter mudança pendente nele (os ids, na ordem de `holds`). O git não atribui a mudança pendente a uma tarefa, então vale o
+ * critério conservador: quem ainda pode editar (`stoppedAt` null) sempre barra; quem já parou (revisão, Aguardar) só barra se o arquivo NÃO teve commit depois da parada, porque um commit leva
+ * o arquivo inteiro e o que ela editou antes dele já está dentro. Empate (o git conta em segundos), arquivo sem commit ou erro do git: barra. Limite aceito: um commit parcial por trecho
+ * (`git add -p`) de um arquivo dela deixaria um trecho pendente e este critério o liberaria.
+ */
+async function sharedBlockers(dir: string, rel: string, holds: readonly SharedHold[]): Promise<string[]> {
+  if (!holds.some((h) => h.stoppedAt !== null)) return holds.map((h) => h.id);
+  const committed = await lastCommitMs(dir, rel);
+  return holds.filter((h) => h.stoppedAt === null || committed === null || committed <= h.stoppedAt).map((h) => h.id);
 }
 
 export type Repo = { ok: true; head: string; prefix: string } | { ok: false; note: string; alert: boolean };

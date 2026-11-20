@@ -4,7 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type CancelRequest, type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
 import { kanbanProgress } from '../shared/kanbanProgress';
-import { commitTaskFiles, leftText } from './autoCommit';
+import { commitTaskFiles, leftText, type SharedHold } from './autoCommit';
 import { BoardCommitInput, BoardConfigInput, DEFAULT_BOARD_CONFIG, readBoardCommit, readBoardConfig, writeBoardCommit, writeBoardConfig } from './boardConfig';
 import { pathKey, readOwnerWrites } from './ownerEdits';
 import { codePath, type CodeEdit } from './chat/codeEdits';
@@ -157,6 +157,8 @@ const SAFE_NAME = /^[^"`$\\\r\n\0]+$/;
 const ENQUEUE_PER_TICK = 5;
 /** A nota do histórico quando o fim do turno leva a tarefa para "revisão" (ver `workDone` e `reviewLost`). */
 const TURN_ENDED = 'turno terminou';
+/** O motivo de Aguardar quando a conversa parou sem terminar e não há o que revisar (ver `orphan`). */
+const NOTHING_TO_REVIEW = 'a conversa parou sem terminar e nada foi alterado: não há o que revisar';
 /** Motivo do cancelamento: o que passa disso é cortado (vai para a caixa, o histórico e o aviso a quem pediu). */
 const CANCEL_REASON_MAX = 300;
 /** Tamanho máximo da dúvida escrita e da resposta por texto. */
@@ -2867,6 +2869,8 @@ export class TaskService {
   private async orphan(projectId: string, taskId: string, staffId: string, now: Date): Promise<void> {
     const isWorking = this.deps.isWorking;
     if (!isWorking) return; // sem saber quem trabalha, não dá para dizer que parou
+    // O que espera conversa de terceiro (revisão automática, aviso a quem pediu) roda depois da vez dele: com a vez presa, a fila inteira do funcionário esperava junto (ver `deliver`).
+    const after: { run?: () => Promise<void> } = {};
     const freed = await this.locked(projectId, staffId, `orfa ${taskId}`, async () => {
       const all = (await this.list(projectId)) ?? [];
       const t = all.find((x) => x.id === taskId);
@@ -2901,6 +2905,12 @@ export class TaskService {
       if (waitingLimit) return false;
       // Card automático: ninguém mandou a conversa fazer isto, então o Club não manda "continue" nela; o que ela já alterou vai para revisão.
       if (resumed || t.autoCreated) {
+        // Sem o que revisar (nada alterado, provado como em `holdNoCode`), o card não vai para uma revisão que só reprovaria o vazio: vai para Aguardar, com o motivo, e quem pediu é avisado.
+        if (!(await this.reviewable(projectId, t))) {
+          const parked = await this.parkWaiting(projectId, taskId, t.sessionId, NOTHING_TO_REVIEW, 'auto', 'stopped', [t.status]);
+          if (parked) after.run = () => this.tellNothingToReview(projectId, parked);
+          return true;
+        }
         let stopped: Task | null = null;
         const seen: { before?: Task } = {};
         await this.change(projectId, taskId, (x) => {
@@ -2908,13 +2918,14 @@ export class TaskService {
           seen.before = x;
           return (stopped = moved(supersedeReview({ ...x, runId: null }), 'review', 'auto', 'conversa parou sem terminar'));
         });
-        // Como numa entrega (commit e aviso ao gestor), mas sem testes nem revisão automática: está pela metade.
+        // Como numa entrega (commit e aviso ao gestor), sem os testes (estão pela metade): a revisão automática abre depois da vez dele (ver `deliver`).
         if (stopped) {
           await this.logEnd(projectId, seen.before, 'stopped');
           await this.markDelivery(projectId, stopped);
-          await this.recordDelivery(projectId, stopped, t.sessionId);
+          const delivered = await this.recordDelivery(projectId, stopped, t.sessionId);
           await this.tellManager(projectId, stopped, t.sessionId, true);
           this.warnDependents(projectId, taskId, 'conversa parou sem terminar; está em revisão');
+          after.run = () => this.reviewStopped(projectId, delivered);
         }
         return true;
       }
@@ -2939,6 +2950,46 @@ export class TaskService {
       return false;
     });
     if (freed) await this.kick(projectId, staffId);
+    await after.run?.();
+  }
+
+  /**
+   * Há o que revisar no card cuja conversa parou sem terminar (ver `orphan`)? Sim: `changedFiles`, subtarefa, card automático (nasce da edição), código mexido desde que ele começou
+   * (`codeTouchedSince`, a prova de `holdNoCode`) ou o que não dá para provar (sem repositório, git que falha): o conservador é revisar. Só a prova de que nada mudou manda o card a Aguardar.
+   */
+  private async reviewable(projectId: string, t: Task): Promise<boolean> {
+    if (t.changedFiles?.length || t.subtasks?.length || t.autoCreated || !t.staffId) return true;
+    const dir = await this.deps.projectPath(projectId);
+    const profile = dir ? await this.deps.readProfile(projectId, t.staffId) : null;
+    const place = dir ? await locateCode(dir, t.staffId, !!profile?.worktree).catch(() => null) : null;
+    return !place || (await codeTouchedSince(place, startedAt(t)));
+  }
+
+  /** O card cuja conversa parou sem terminar não tem o que revisar (foi para Aguardar): quem pediu recebe o aviso na conversa em que pediu. Sem gestor, a caixa do dono já mostra o Aguardar. Nunca lança. */
+  private async tellNothingToReview(projectId: string, task: Task): Promise<void> {
+    const who = task.staffId ? await this.deps.readProfile(projectId, task.staffId).catch(() => null) : null;
+    await this.tellRequester(
+      projectId,
+      task,
+      `[MyCo] A conversa de ${who?.name ?? 'o responsável'} na tarefa “${titleOf(task)}” (id ${task.id}) parou sem terminar e nada foi alterado: não há o que revisar. A tarefa NÃO foi para revisão: está em Aguardar, com o motivo, e a fila dele andou. Você decide: retome com uma mensagem na conversa da tarefa, ou peça o cancelamento, com o motivo.`,
+    );
+  }
+
+  /**
+   * A conversa parou sem terminar e o card foi para revisão com algo a revisar (ver `orphan`): abre a revisão automática como numa entrega, depois da vez do funcionário. Mesma chave
+   * de `deliver` e `retryReviews`: quem já a tem (o tick refazendo, ou outro aviso) não é atropelado. Projeto pausado, sem revisor ou falha seguem as regras de `autoReview`.
+   */
+  private async reviewStopped(projectId: string, task: Task): Promise<void> {
+    const key = `review:${projectId}:${task.id}`;
+    if (this.inFlight.has(key)) return;
+    this.inFlight.add(key);
+    try {
+      await this.autoReview(projectId, task);
+    } catch {
+      // `autoReview` já grava o que falhou (`reviewRetry` ou a nota); o que sobrar de erro aqui não derruba o tick.
+    } finally {
+      this.inFlight.delete(key);
+    }
   }
 
   /**
@@ -3944,11 +3995,13 @@ export class TaskService {
     const dir = await this.deps.projectPath(projectId);
     if (!dir) return;
     const run = (this.commitQueues.get(dir) ?? Promise.resolve()).then(() => this.commitDone(projectId, dir, taskId));
-    this.commitQueues.set(dir, run.catch(() => {}));
-    await run;
+    this.commitQueues.set(dir, run.then(() => {}, () => {}));
+    // O aviso a quem pediu espera conversa de terceiro: sai depois da fila do projeto, para não atrasar o commit da tarefa seguinte.
+    await (await run)?.();
   }
 
-  private async commitDone(projectId: string, dir: string, taskId: string): Promise<void> {
+  /** Faz o commit da tarefa pronta (na fila do projeto). Devolve o aviso a quem pediu, para sair fora da fila (ver `tellCommitBlocked`), ou nada. */
+  private async commitDone(projectId: string, dir: string, taskId: string): Promise<(() => Promise<void>) | void> {
     if (this.deps.closing?.() || !(await readBoardCommit(dir)).autoCommit) return;
     const all = await readTasks(dir);
     const task = all.find((t) => t.id === taskId);
@@ -3957,13 +4010,53 @@ export class TaskService {
     if (task.commit?.for === doneAt) return;
     const profile = task.staffId ? await this.deps.readProfile(projectId, task.staffId) : null;
     if ((await locateCode(dir, task.staffId, !!profile?.worktree).catch(() => null))?.where === 'worktree') return;
-    // O que outra tarefa não encerrada também alterou fica de fora: o diff da revisão dela (`git diff HEAD`) esvaziaria, e o commit levaria o trabalho dela.
-    const shared = new Map<string, string>();
-    for (const o of all) if (o.id !== task.id && !isClosed(o)) for (const f of o.changedFiles ?? []) if (!shared.has(pathKey(f))) shared.set(pathKey(f), o.id);
+    // O que outra tarefa não encerrada também alterou fica de fora enquanto ela ainda pode ter mudança pendente no arquivo (ver `sharedBlockers`): o diff da revisão dela (`git diff HEAD`)
+    // esvaziaria, e o commit levaria o trabalho dela. A que já parou e teve o arquivo commitado depois da parada não barra.
+    const shared = new Map<string, SharedHold[]>();
+    for (const o of all) {
+      if (o.id === task.id || isClosed(o)) continue;
+      const hold: SharedHold = { id: o.id, stoppedAt: stoppedWorkingAt(o) };
+      for (const key of new Set((o.changedFiles ?? []).map(pathKey))) shared.set(key, [...(shared.get(key) ?? []), hold]);
+    }
     const out = await commitTaskFiles({ dir, taskId, title: task.title, files: task.changedFiles, shared, ownerWrites: await readOwnerWrites(dir) });
     const commit: TaskCommit = { ...out, for: doneAt, at: new Date().toISOString() };
     const line = commitNote(commit);
     await this.change(projectId, taskId, (t) => (line ? noted({ ...t, commit }, line) : { ...t, commit }));
+    return () => this.tellCommitBlocked(projectId, task, all, commit);
+  }
+
+  /**
+   * O commit automático deixou arquivo de fora por outra tarefa (`why: 'shared'`): quem pediu a tarefa recebe o aviso na conversa em que pediu (`notify`), uma vez por motivo. A chave
+   * (`Task.commitNotice`) é o conjunto de arquivo, motivo e tarefa que barrou, tirado do mesmo `left` que a nota do histórico: a mesma lista não repete, e uma lista nova avisa de novo. Sem
+   * gestor (o usuário pediu) ou com o aviso que não chegou (a chave só é gravada quando chegou), vale o item do commit na caixa do dono (`commitAlerts`, `alert` já vem ligado). Sem retry próprio:
+   * o commit roda uma vez por entrega e a caixa é o plano B. Nunca lança (o commit já está gravado).
+   */
+  private async tellCommitBlocked(projectId: string, task: Task, all: Task[], commit: TaskCommit): Promise<void> {
+    const shared = commit.left.filter((l) => l.why === 'shared');
+    if (!shared.length || !task.requestedBy || !this.deps.notify) return;
+    const key = createHash('sha256').update(commit.left.map((l) => `${l.path}|${l.why}|${l.by ?? ''}`).sort().join('\n')).digest('hex').slice(0, 32);
+    if (task.commitNotice?.key === key) return;
+    const names: Record<string, string> = { waiting: 'em Aguardar', todo: 'a fazer', planning: 'planejando', doing: 'fazendo', review: 'em revisão' };
+    const who = (id: string): string => {
+      const o = all.find((x) => x.id === id);
+      return o ? `${id} (“${titleOf(o)}”, ${names[o.status] ?? o.status})` : id;
+    };
+    const rest = commit.left.length - shared.length;
+    const text = [
+      `[MyCo] A tarefa “${titleOf(task)}” (id ${task.id}) ficou pronta, mas o commit automático ${commit.status === 'partial' ? `só levou parte dos arquivos (${commit.sha})` : 'NÃO foi feito'}. Ficaram de fora, porque outra tarefa ainda pode ter mudança pendente neles:`,
+      shared.map((l) => `- \`${untrustedLine(l.path, 200)}\`: também alterado por ${(l.by ?? '').split(', ').filter(Boolean).map(who).join(', ')}`).join('\n'),
+      rest > 0 ? `Há ${rest === 1 ? 'mais 1 arquivo' : `mais ${rest} arquivos`} de fora por outros motivos: a nota do cartão tem a lista.` : '',
+      'Esses arquivos seguem sem commit, e o commit automático não se refaz sozinho quando essas tarefas terminarem: commite-os à mão depois que elas fecharem, ou peça ao usuário.',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+    try {
+      await this.deps.notify(projectId, task.requestedBy, text, task.requestedSession ?? null);
+    } catch {
+      return;
+    }
+    const at = new Date().toISOString();
+    await this.change(projectId, task.id, (t) => ({ ...t, commitNotice: { key, at } })).catch(() => {});
   }
 
   /**
@@ -5338,8 +5431,8 @@ function fallbackWait(t: Task, now: number): StuckState | null {
  * Por que a tarefa está parada, e quem a destrava (ou null, se não está). É a regra única: a caixa (kinds 'blocked', 'question' e
  * 'stuck') a lê na leitura, o aviso aos gestores usa o mesmo texto (`stuckReason`) e o aviso retido a quem pediu confere `selfHeals`
  * (ver `settleRequester`). Só o estado gravado e a hora (`now`) contam, mais `Task.permissionWait` quando a tarefa vem da listagem. Cancelada, Aguardar,
- * dúvida escalada, permissão esperando você há 15 min, ajuste que não chega, revisão automática que não começou ou sem veredito, limite de revisões
- * automáticas e revisão sem responsável.
+ * dúvida escalada, permissão esperando você há 15 min, ajuste que não chega, revisão automática que não começou ou sem veredito, revisão que nunca foi pedida (revisor marcado, nada
+ * aberto há REVIEW_WAIT_MS), limite de revisões automáticas e revisão sem responsável.
  */
 export function stuckState(t: Task, now = Date.now()): StuckState | null {
   const since = t.updatedAt;
@@ -5378,6 +5471,14 @@ export function stuckState(t: Task, now = Date.now()): StuckState | null {
   if (t.reviewerId && t.review?.doneAt && t.review.verdict !== 'approved' && ((t.reviewRounds ?? 0) >= AUTO_REVIEW_ROUNDS || CAP_NOTE.test(t.history.at(-1)?.note ?? '')))
     return { reason: 'limite de revisões automáticas atingido', selfHeals: false, humanAction: 'decide', since };
   if (!t.staffId) return { reason: 'sem responsável', selfHeals: false, humanAction: 'decide', since };
+  // Revisor marcado e nenhuma revisão desta entrega (`liveReview`: ausente, de entrega anterior ou `superseded`) nem retry: a revisão nunca começou (o fim "conversa parou sem terminar" perdido entre
+  // gravar e pedir, a entrega que o reinício deixou sem pedido, o card que você arrastou). Passado REVIEW_WAIT_MS desde a entrada em revisão, a tarefa é sua, com o atalho "Delegar revisão".
+  // Sem revisor marcado o card fica com você por desenho (`reviewerOf`), e revisão com veredito espera você: nenhum dos dois é parada.
+  if (t.reviewerId && !rr && !liveReview(t)) {
+    const entered = enteredReview(t)?.at ?? since;
+    if (now - Date.parse(entered) >= REVIEW_WAIT_MS)
+      return { reason: `em revisão há mais de ${Math.round(REVIEW_WAIT_MS / 60_000)} min sem revisão aberta: ninguém revisou`, selfHeals: false, humanAction: 'review', since: entered };
+  }
   return null;
 }
 
@@ -5862,9 +5963,12 @@ function reviewLost(t: Task): boolean {
   if (liveReview(t)) return false;
   // O pedido já foi decidido para esta entrega: falhou de vez ("não começou") ou parou no limite (a nota do limite, de qualquer época, fica com o dono).
   if (t.history.some((h) => h.at >= d.at && (h.note?.startsWith('revisão automática não começou') || CAP_NOTE.test(h.note ?? '')))) return false;
-  const entered = t.history.filter((h, i) => h.status === 'review' && t.history[i - 1]?.status !== 'review').at(-1);
+  const entered = enteredReview(t);
   return entered?.by === 'auto' && entered.note === TURN_ENDED;
 }
+
+/** A última entrada da tarefa em "revisão" no histórico (a primeira da sequência final de entradas "revisão"), ou undefined. */
+const enteredReview = (t: Task) => t.history.filter((h, i) => h.status === 'review' && t.history[i - 1]?.status !== 'review').at(-1);
 const selfReview = (t: Task) =>!!t.reviewerId && t.reviewerId === t.requestedBy;
 
 /**
@@ -6069,6 +6173,18 @@ export function doneAtOf(t: Task): string {
   let i = t.history.length;
   while (i > 0 && t.history[i - 1]!.status === 'done') i--;
   return t.history[i]?.status === 'done' ? t.history[i]!.at : t.updatedAt;
+}
+
+/**
+ * Quando a tarefa saiu de "fazendo" ou "planejando" pela última vez (ms): a entrada de histórico logo depois da última nessas colunas. Null: ela ainda pode editar (a fazer, fazendo,
+ * planejando) ou o histórico não mostra a saída (cortado, tarefa sem essas entradas): o commit automático então a trata como quem ainda pode ter mudança pendente (ver `sharedBlockers`).
+ */
+function stoppedWorkingAt(t: Task): number | null {
+  if (t.status === 'todo' || t.status === 'doing' || t.status === 'planning') return null;
+  let i = t.history.length - 1;
+  while (i >= 0 && t.history[i]!.status !== 'doing' && t.history[i]!.status !== 'planning') i--;
+  const ms = i >= 0 ? Date.parse(t.history[i + 1]?.at ?? '') : NaN;
+  return Number.isFinite(ms) ? ms : null;
 }
 
 /** A linha do histórico para o resultado do commit automático; null quando nada aconteceu que valha uma linha (sem lista de arquivos, nada a commitar). */
