@@ -111,6 +111,8 @@ Quando uma tarefa troca de motor (ver 06), o despertador e o "continue" da conve
 
 Abra pelo botão **Arquivos** no painel do projeto ("Ver e editar os arquivos do projeto"). O título é "Arquivos de {projeto}".
 
+Para o terminal, o painel do projeto tem o botão **Abrir terminal** (ícone de janela com `>_`, "Abrir um terminal na pasta do projeto"): abre um terminal do computador onde o Claudio’s Club roda, já dentro da pasta do projeto. Só funciona pela tela do Club e em computador com tela (Windows e Linux; no Mac, abra o terminal à mão). Sem tela, sem terminal instalado ou com a pasta apagada, aparece um aviso ao lado do botão.
+
 - À esquerda, a árvore. Clique numa pasta para abrir; clique num arquivo para editar.
 - À direita, o editor.
 - **Salvar** (ou Ctrl+S) grava o arquivo. Nada é salvo sozinho.

@@ -1028,6 +1028,11 @@ export const filesApi = {
    */
   openEditor: (projectId: string, path: string) =>
     filesFetch<{ opened: true; path: string; editor: 'notepad' | 'textedit' | 'custom' }>(`/api/projects/${projectId}/files/open-editor`, { path }),
+  /**
+   * Abre um terminal do computador onde o Club roda, na pasta do projeto (a pasta vem do cadastro; o pedido não leva nada). Só o navegador pareado.
+   * Recusas: 409 `no-display`/`no-terminal`/`folder-missing`, 403, 404.
+   */
+  openTerminal: (projectId: string) => filesFetch<{ opened: true }>(`/api/projects/${projectId}/open-terminal`, {}),
   /** Extensões de imagem que a aba mostra no lugar do editor (as mesmas do servidor). */
   isImage: (path: string) => /\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i.test(path),
   imageUrl: (projectId: string, path: string, v: number) => `/api/projects/${projectId}/files/image?path=${encodeURIComponent(path)}&v=${v}`,
