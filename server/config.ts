@@ -67,6 +67,8 @@ const DEFAULTS: AppConfig = {
   maxTurnMinutes: 180,
   // Ligado: títulos de conversa gerados por IA (Haiku) para as conversas com assunto livre (ver server/titles/generator.ts).
   aiTitles: true,
+  // Desligado: o servidor segue em segundo plano ao fechar a aba; só o botão Parar o encerra (ver server/tabPresence.ts).
+  stopOnTabClose: false,
 };
 
 /** Slug de modelo do Codex (`gpt-6-sol`): só letras, números e `. _ : -`; vazio = o padrão do Codex. Vai a `-m` do `codex exec`. */
@@ -158,6 +160,7 @@ const ConfigFile = z
     maxTurnTools: MAX_TURN_TOOLS.optional().catch(undefined),
     maxTurnMinutes: MAX_TURN_MINUTES.optional().catch(undefined),
     aiTitles: z.boolean().optional().catch(undefined),
+    stopOnTabClose: z.boolean().optional().catch(undefined),
   })
   .passthrough();
 
@@ -231,6 +234,8 @@ export const ConfigPatch = z.object({
   maxTurnMinutes: MAX_TURN_MINUTES.optional(),
   /** Títulos de conversa por IA (ver AppConfig). */
   aiTitles: z.boolean().optional(),
+  /** "Parar o Claudio’s Club ao fechar a aba" (ver AppConfig). */
+  stopOnTabClose: z.boolean().optional(),
 });
 
 export const ArchiveRequest = z.object({
@@ -299,6 +304,7 @@ export async function readConfig(file = CONFIG_FILE): Promise<AppConfig> {
     maxTurnTools: d.maxTurnTools ?? DEFAULTS.maxTurnTools,
     maxTurnMinutes: d.maxTurnMinutes ?? DEFAULTS.maxTurnMinutes,
     aiTitles: d.aiTitles ?? DEFAULTS.aiTitles,
+    stopOnTabClose: d.stopOnTabClose ?? DEFAULTS.stopOnTabClose,
     ...readWorkspaces(d.workspaces, d.projectWorkspaces),
   };
 }
