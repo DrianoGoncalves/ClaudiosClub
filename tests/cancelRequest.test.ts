@@ -772,7 +772,7 @@ describe('as rotas e a ficha', () => {
     expect(refuse).toContain("return tasks.refuseCancel(id!, taskId!, caller, reasonRequest(body, 'da recusa'));");
     // O cancelar de sempre: a tela como antes, o funcionário pelo cancelFrom (que agora também serve a quem pediu a tarefa que nunca começou).
     const cancel = /\/tasks\/\$\{ID\}\/cancel\$`\),([\s\S]*?)\n  \],/.exec(src)![1]!;
-    expect(cancel).toContain("if (fromBrowser) return tasks.cancel(id!, taskId!, { by: 'user', reason: b.reason, dependents: b.dependents });");
+    expect(cancel).toContain("if (fromBrowser) return tasks.cancel(id!, taskId!, { by: 'user', reason: b.reason, dependents: b.dependents, deadline: true });");
     expect(cancel).toContain('return tasks.cancelFrom(id!, taskId!, caller, b.reason);');
     // O POST do gestor: grava e começa pelo serviço, que devolve a tarefa gravada mesmo se o começo falhar.
     const post = /\/tasks\$`\),\n    async \(\{ params: \[id\], body, fromBrowser, caller \}\) => \{([\s\S]*?)\n    \},\n  \],/.exec(src)![1]!;

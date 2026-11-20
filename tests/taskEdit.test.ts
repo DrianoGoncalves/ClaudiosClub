@@ -20,7 +20,7 @@ afterAll(async () => {
 const person = (id: string, name: string, reportsTo: string[] = []) => ({ id, name, autonomy: 'acceptEdits', worktree: false, servers: [], reportsTo }) as unknown as StaffProfile;
 
 /** Gio é o gestor; Ana e Bia reportam a ele; Dev é de fora (não reporta a ninguém) e Rui é revisor. */
-function board(dirName: string, opts: { editDeadlineMs?: number } = {}) {
+function board(dirName: string, opts: { lockDeadlineMs?: number } = {}) {
   const dir = path.join(root, dirName);
   const file = path.join(dir, '.myco', 'tasks.json');
   const people: Record<string, StaffProfile> = {
@@ -106,7 +106,7 @@ function board(dirName: string, opts: { editDeadlineMs?: number } = {}) {
 
 describe('editar tarefa pela API: sempre responde no prazo', () => {
   /** Ana com a vez presa (abrindo a conversa de outra tarefa) e o card de Gio em A fazer, na fila dela e bloqueado por outra tarefa: o caso da t-6e58a1. */
-  async function busyAna(dirName: string, opts: { editDeadlineMs: number }) {
+  async function busyAna(dirName: string, opts: { lockDeadlineMs: number }) {
     const b = board(dirName, opts);
     const blocker = await b.make('Bloqueadora', { by: null, staff: 'bia-1' });
     const t = await b.make('Edição presa', { blockedBy: [blocker.id], description: 'texto original' });
@@ -127,7 +127,7 @@ describe('editar tarefa pela API: sempre responde no prazo', () => {
   }
 
   it('a vez do responsável presa: a edição (só description, em A fazer com blockedBy) responde 503 no prazo, sem gravar', async () => {
-    const { b, t, release, starting } = await busyAna('prazo-vez', { editDeadlineMs: 80 });
+    const { b, t, release, starting } = await busyAna('prazo-vez', { lockDeadlineMs: 80 });
     const at = Date.now();
     const err = await b.tryEdit(t.id, b.as('gio-1'), { description: 'texto novo' });
     expect(err).toBeInstanceOf(TaskBusyError);
@@ -148,7 +148,7 @@ describe('editar tarefa pela API: sempre responde no prazo', () => {
   });
 
   it('a vez chega dentro do prazo: a edição grava e responde normalmente', async () => {
-    const { b, t, release, starting } = await busyAna('prazo-cabe', { editDeadlineMs: 3000 });
+    const { b, t, release, starting } = await busyAna('prazo-cabe', { lockDeadlineMs: 3000 });
     const editing = b.tryEdit(t.id, b.as('gio-1'), { description: 'texto novo' });
     await b.settle();
     release();
@@ -158,7 +158,7 @@ describe('editar tarefa pela API: sempre responde no prazo', () => {
   });
 
   it('o prazo passa antes da gravação (a ficha demora), com a vez livre: recusa e não grava', async () => {
-    const b = board('prazo-ficha', { editDeadlineMs: 60 });
+    const b = board('prazo-ficha', { lockDeadlineMs: 60 });
     const t = await b.make('Relatório', { description: 'texto original' });
     b.hooks.onProfile = async (id) => {
       if (id !== 'gio-1') return;
@@ -171,7 +171,7 @@ describe('editar tarefa pela API: sempre responde no prazo', () => {
   });
 
   it('o prazo passa com a gravação já decidida: a resposta espera por ela, grava e devolve 200 (a edição que grava sempre responde)', async () => {
-    const b = board('prazo-gravando', { editDeadlineMs: 60 });
+    const b = board('prazo-gravando', { lockDeadlineMs: 60 });
     const t = await b.make('Relatório', { description: 'texto original' });
     const rename = fs.rename.bind(fs);
     const slow = vi.spyOn(fs, 'rename').mockImplementation(async (...args: Parameters<typeof fs.rename>) => {

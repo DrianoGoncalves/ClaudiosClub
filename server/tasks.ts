@@ -77,7 +77,7 @@ export class TaskError extends Error {}
 export class TaskForbiddenError extends TaskError {}
 /** A dúvida já foi respondida (ou a pergunta não está mais aberta): 409 na rota. */
 export class TaskConflictError extends TaskError {}
-/** A vez do funcionário não chegou no prazo da resposta (ver `EDIT_DEADLINE_MS`): nada foi gravado, e tentar de novo é seguro. 503 na rota. */
+/** A vez do funcionário não chegou no prazo da resposta (ver `LOCK_DEADLINE_MS`): nada foi gravado, e tentar de novo é seguro. 503 na rota. */
 export class TaskBusyError extends TaskError {}
 
 export const SAFE_ID = /^[a-z0-9-]{1,40}$/;
@@ -486,8 +486,8 @@ export interface TaskServiceDeps {
   log?: (line: string) => void;
   /** A partir de quanto tempo o começo de uma tarefa escreve o tempo de cada etapa no log (padrão: `START_SLOW_MS`). */
   slowMs?: number;
-  /** O prazo da resposta da edição pela API (padrão: `EDIT_DEADLINE_MS`). */
-  editDeadlineMs?: number;
+  /** O prazo da resposta das rotas que esperam a vez do funcionário (padrão: `LOCK_DEADLINE_MS`). */
+  lockDeadlineMs?: number;
   /**
    * Onde está quais projetos estão pausados (ver projectPause.ts). Pausado, nada começa sozinho: a fila, a revisão automática, a retomada das órfãs e a troca de motor
    * esperam (ver `TaskService.paused`). Sem ele, nenhum projeto é pausável (os testes de antes).
@@ -545,12 +545,56 @@ export interface StartOpts extends RunStart {
 
 /** Prazo das rotas (o POST de tarefa do gestor e o "Começar" da tela): passou, a resposta vem com a tarefa na fila e o começo segue sem elas. */
 export const START_DEADLINE_MS = 5_000;
-/** Prazo da edição pela API (`editFrom`): a vez do funcionário não chegou nele, a edição é recusada (503) sem gravar. */
-export const EDIT_DEADLINE_MS = 8_000;
+/** Prazo das rotas que esperam a vez do funcionário (a edição, o cancelamento, a resposta à dúvida…, ver `lockedWithDeadline`): a vez não chegou nele, a operação é recusada (503) sem gravar. */
+export const LOCK_DEADLINE_MS = 8_000;
 /** O começo de uma tarefa que passa disto escreve o tempo de cada etapa no log. */
 const START_SLOW_MS = 2_000;
 /** Marca de quem perdeu a corrida para o prazo (ver `start`). */
 const LATE = Symbol('late');
+
+/**
+ * A decisão única de uma operação com prazo (ver `TaskService.lockedWithDeadline`), síncrona: ou o prazo passou antes de ela passar do ponto sem volta (`abandoned`: quem pediu
+ * já recebeu a recusa, e a vez que chegar depois desiste sem gravar nem mandar nada), ou ela passou (`committed`: a resposta espera por ela). Os dois nunca valem juntos.
+ */
+class DeadlineGate {
+  abandoned = false;
+  committed = false;
+  constructor(private readonly refusal: () => TaskBusyError) {}
+
+  /** Lança a recusa se o prazo já passou. */
+  check(): void {
+    if (this.abandoned) throw this.refusal();
+  }
+
+  /** O ponto sem volta, para a operação que tem efeito antes de gravar (mandar à conversa): chamar logo antes do primeiro efeito, depois de conferir tudo o que ainda pode recusar. */
+  commit(): void {
+    this.check();
+    this.committed = true;
+  }
+
+  /** O callback de `change` com o ponto sem volta: confere o prazo, roda `fn` (que pode lançar a sua recusa) e, se `fn` decidiu, a gravação que vem logo depois já não se desfaz. */
+  mutating(fn: (t: Task, all: Task[]) => Task): (t: Task, all: Task[]) => Task {
+    return (t, all) => {
+      this.check();
+      const out = fn(t, all);
+      this.committed = true;
+      return out;
+    };
+  }
+}
+
+/** Espera `job` por até `ms`; passado o prazo, segue sem ele (ele termina em segundo plano, e quem responde já tem o que gravou). */
+async function settleWithin(job: Promise<unknown>, ms: number): Promise<void> {
+  let timeout: NodeJS.Timeout | undefined;
+  const late = new Promise<void>((resolve) => {
+    timeout = setTimeout(resolve, Math.max(0, ms));
+  });
+  try {
+    await Promise.race([job.catch(() => {}), late]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 export class TaskService {
   /**
@@ -572,6 +616,8 @@ export class TaskService {
   private readonly queues = new Map<string, Promise<unknown>>();
   /** Uma "vez de quem é" por funcionário: dois avisos juntos não começam duas tarefas. */
   private readonly kicks = new Map<string, Promise<void>>();
+  /** Quem tem a vez de cada funcionário agora (a operação e desde quando) e quantos esperam por ela; só para o log da vez presa (ver `lockedWithDeadline`). */
+  private readonly lockState = new Map<string, { holder: { op: string; since: number } | null; waiting: number }>();
   /** Envios que o tick e a partida têm em voo (dúvida ao gestor, revisão automática, re-pedido): dois `tick` juntos não mandam duas vezes. */
   private readonly inFlight = new Set<string>();
   /** Falhas seguidas de `awaitingLimit` por conversa (ver `orphan`). */
@@ -1004,14 +1050,17 @@ export class TaskService {
    * continuar nas que esperavam por essa, com o mesmo mapa (cada tarefa é cancelada uma vez só, então ciclo e dependente de duas
    * canceladas da cascata não repetem nem travam). Sem entrada no mapa a dependente fica esperando e aparece na caixa; entrada de quem
    * não depende de uma cancelada é ignorada. Dependente que mudou entre a leitura e a ação (409) é pulada.
+   *
+   * `deadline` (quem responde a uma chamada HTTP: a tela e `cancelFrom`): a vez do funcionário só é esperada até `LOCK_DEADLINE_MS`; passado o prazo, 503 (TaskBusyError)
+   * e nada é gravado (ver `lockedWithDeadline`). Sem ele (a cascata de `afterCancel`, que roda depois de o cancelamento de quem pediu estar gravado) espera a vez de sempre.
    */
-  async cancel(projectId: string, taskId: string, opts: { by: string; reason?: string | null; dependents?: DependentChoices; guard?: (t: Task) => void }): Promise<Task | null> {
+  async cancel(projectId: string, taskId: string, opts: { by: string; reason?: string | null; dependents?: DependentChoices; guard?: (t: Task) => void; deadline?: boolean }): Promise<Task | null> {
     const dir = await this.deps.projectPath(projectId);
     if (!dir) return null;
     const reason = cleanReason(opts.reason);
-    const run = async () => {
+    const run = async (gate: DeadlineGate) => {
       const seen: { before?: Task } = {};
-      const out = await this.change(projectId, taskId, (t) => {
+      const out = await this.changeGated(gate, projectId, taskId, (t) => {
         if (isClosed(t)) throw new TaskConflictError(t.status === 'done' ? 'a tarefa já está pronta' : 'a tarefa já foi cancelada');
         // `guard`: a condição de quem cancela, conferida aqui (no que está gravado agora, na vez do funcionário): ver `cancelByRequester`.
         opts.guard?.(t);
@@ -1021,7 +1070,11 @@ export class TaskService {
       return { out, before: seen.before };
     };
     const staffId = (await readTasks(dir)).find((t) => t.id === taskId)?.staffId;
-    const { out, before } = staffId ? await this.locked(projectId, staffId, run) : await run();
+    const { out, before } = await this.lockedWithDeadline(projectId, staffId, run, {
+      op: `cancelar ${taskId}`,
+      refused: 'o cancelamento NÃO foi gravado',
+      deadlineMs: opts.deadline ? this.lockDeadline() : undefined,
+    });
     if (!out || !before) return null;
     await this.afterCancel(projectId, before, out, { by: opts.by, reason, dependents: opts.dependents });
     return out;
@@ -1086,7 +1139,7 @@ export class TaskService {
     const dir = await this.deps.projectPath(projectId);
     const task = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
     if (!task) return null;
-    if (isWorkerOf(task, caller, projectId)) return this.cancel(projectId, taskId, { by: caller!.staffId!, reason });
+    if (isWorkerOf(task, caller, projectId)) return this.cancel(projectId, taskId, { by: caller!.staffId!, reason, deadline: true });
     if (caller?.staffId && caller.projectId === projectId && task.requestedBy === caller.staffId) return this.cancelByRequester(projectId, task, caller.staffId, reason);
     throw new TaskForbiddenError('só o funcionário da tarefa, pela conversa dela, ou quem a pediu (se ela nunca começou) cancela a tarefa por aqui; o usuário cancela pelo Claudio’s Club');
   }
@@ -1102,6 +1155,7 @@ export class TaskService {
     return this.cancel(projectId, task.id, {
       by: me,
       reason: why,
+      deadline: true,
       guard: (t) => {
         if (t.requestedBy !== me) throw new TaskForbiddenError('só quem pediu a tarefa a cancela por aqui');
         // Marcada "sem código" também vale: ela terminou o turno sem editar nada e quem pediu decide (cancelar, com motivo, ou devolver; ver `holdNoCode`).
@@ -1127,9 +1181,10 @@ export class TaskService {
     if (!first) return null;
     if (first.requestedBy !== me) throw new TaskForbiddenError('só quem pediu a tarefa pede o cancelamento dela');
     const why = mandatoryReason(reason, 'do pedido de cancelamento');
+    const startedAt = Date.now();
     const mine = await this.staffOrThrow(projectId, me);
-    const run = () =>
-      this.change(projectId, taskId, (t) => {
+    const run = (gate: DeadlineGate) =>
+      this.changeGated(gate, projectId, taskId, (t) => {
         if (t.requestedBy !== me) throw new TaskForbiddenError('só quem pediu a tarefa pede o cancelamento dela');
         if (isClosed(t)) throw new TaskConflictError(t.status === 'done' ? 'a tarefa já está pronta' : 'a tarefa já foi cancelada');
         if (neverStarted(t)) throw new TaskConflictError(`a tarefa nunca começou: cancele direto, POST ${CANCEL_ROUTE(projectId, t.id)} com o motivo (reason)`);
@@ -1142,10 +1197,12 @@ export class TaskService {
         return noted({ ...t, cancelRequest }, `pedido de cancelamento de ${mine.name}: ${why}`);
       });
     // Na vez do responsável (a de `start`): a conferência "já começou" vale contra uma partida em andamento.
-    const out = first.staffId ? await this.locked(projectId, first.staffId, run) : await run();
+    const deadlineMs = this.lockDeadline();
+    const out = await this.lockedWithDeadline(projectId, first.staffId, run, { op: `pedir-cancelamento ${taskId}`, refused: 'o pedido de cancelamento NÃO foi gravado', deadlineMs });
     if (!out) return null;
     // O pedido já está gravado: se a entrega agora falhar por qualquer motivo, a resposta continua sendo o pedido e o tick entrega (`retryCancelRequests`).
-    await this.deliverCancelRequest(projectId, taskId).catch(() => {});
+    // A entrega também espera a vez do responsável: passado o prazo, a resposta sai com o pedido gravado e a entrega segue em segundo plano.
+    await settleWithin(this.deliverCancelRequest(projectId, taskId), deadlineMs - (Date.now() - startedAt));
     return (await this.fresh(projectId, taskId)) ?? out;
   }
 
@@ -1163,8 +1220,8 @@ export class TaskService {
     const me = caller!.staffId!;
     const why = mandatoryReason(reason, 'da recusa');
     const [mine, asker] = await Promise.all([this.staffOrThrow(projectId, me), first.cancelRequest ? this.deps.readProfile(projectId, first.cancelRequest.by) : null]);
-    const run = () =>
-      this.change(projectId, taskId, (t) => {
+    const run = (gate: DeadlineGate) =>
+      this.changeGated(gate, projectId, taskId, (t) => {
         if (isClosed(t)) throw new TaskConflictError(t.status === 'done' ? 'a tarefa já está pronta' : 'a tarefa já foi cancelada');
         // Na vez dele, de novo: a tarefa pode ter trocado de responsável ou de conversa desde a leitura.
         if (!isWorkerOf(t, caller, projectId)) throw new TaskForbiddenError('só o funcionário da tarefa, pela conversa dela, recusa o pedido de cancelamento');
@@ -1174,7 +1231,7 @@ export class TaskService {
         const decided: CancelRequest = { ...cr, status: 'refused', decidedAt: at, decidedBy: me, answer: why, waiting: undefined, retry: undefined, notifyRetry: { attempts: 0, nextAt: at, firstAt: at } };
         return noted({ ...t, cancelRequest: decided }, `pedido de cancelamento de ${asker?.name ?? 'quem pediu'} recusado por ${mine.name}: ${why}`);
       });
-    const out = await this.locked(projectId, first.staffId!, run);
+    const out = await this.lockedWithDeadline(projectId, first.staffId, run, { op: `recusar-cancelamento ${taskId}`, refused: 'a recusa NÃO foi gravada', deadlineMs: this.lockDeadline() });
     if (!out) return null;
     // A decisão já está gravada com a marca do aviso (`notifyRetry`): se o aviso agora falhar por qualquer motivo, o tick o refaz.
     await this.tellRefusal(projectId, taskId).catch(() => {});
@@ -1195,7 +1252,7 @@ export class TaskService {
       const first = await this.fresh(projectId, taskId);
       if (!first || !cancelDeliveryDue(first, this.bootedAt)) return;
       const staffId = first.staffId!;
-      await this.locked(projectId, staffId, async () => {
+      await this.locked(projectId, staffId, `entregar-pedido-cancelamento ${taskId}`, async () => {
         const t = await this.fresh(projectId, taskId);
         // Na vez dele, de novo: decidido, cancelado ou entregue por outro caminho enquanto esperava.
         if (!t || !cancelDeliveryDue(t, this.bootedAt) || t.staffId !== staffId) return;
@@ -1585,10 +1642,9 @@ export class TaskService {
    * e da fila): a partida que já está abrindo a conversa termina antes (a tarefa vira "fazendo" e a edição é recusada), e a que vem depois lê o
    * texto já editado. Sem a vez, o funcionário já chamado com o texto antigo ficaria sem saber da edição gravada.
    *
-   * A vez pode demorar muito (a dele abre uma conversa, entrega, retoma outra tarefa: quem está com a vez segura todas as edições, começos e entregas dele), e uma
-   * edição que esperava sem prazo ficava sem resposta e gravava depois, às cegas. Agora a resposta vem em `EDIT_DEADLINE_MS`, sempre verdadeira: ou a edição gravou
-   * (200), ou foi recusada (TaskBusyError, 503) e NÃO grava, nem se a vez chegar depois. A decisão é uma só e síncrona (`gate`): a gravação já decidida
-   * (dentro de `change`) não se desfaz, então passado o prazo a resposta espera por ela, que é só um arquivo.
+   * A vez pode demorar muito (a dele abre uma conversa, entrega, retoma outra tarefa: quem está com a vez segura todas as edições, começos e entregas dele), então a
+   * resposta vem em `LOCK_DEADLINE_MS`, sempre verdadeira: ou a edição gravou (200), ou foi recusada (TaskBusyError, 503) e NÃO grava, nem se a vez chegar depois
+   * (ver `lockedWithDeadline`).
    */
   async editFrom(projectId: string, taskId: string, caller: Caller | null, body: unknown): Promise<Task | null> {
     const me = caller?.staffId;
@@ -1596,12 +1652,7 @@ export class TaskService {
     const dir = await this.deps.projectPath(projectId);
     const first = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
     if (!dir || !first) return null;
-    const deadlineMs = this.deps.editDeadlineMs ?? EDIT_DEADLINE_MS;
-    const gate = { abandoned: false, committed: false };
-    const refused = () =>
-      new TaskBusyError(`a vez de quem faz a tarefa não chegou em ${Math.max(1, Math.round(deadlineMs / 1000))} s (ele está começando, entregando ou retomando outra tarefa): a edição NÃO foi gravada; tente de novo em instantes`);
-    const run = async () => {
-      if (gate.abandoned) throw refused();
+    const run = async (gate: DeadlineGate) => {
       const task = (await readTasks(dir)).find((t) => t.id === taskId);
       if (!task) return null;
       // A vez foi pedida pelo responsável de antes: se ele mudou nesse meio tempo, o que vale é a leitura nova (outra vez).
@@ -1622,9 +1673,8 @@ export class TaskService {
       const owner = patch.staffId && patch.staffId !== task.staffId ? await this.staffOrThrow(projectId, patch.staffId) : null;
       if (owner && !owner.reportsTo.includes(me)) throw new TaskForbiddenError('só dá para passar a tarefa a quem reporta a você');
       const seen: { before?: Task } = {};
-      const out = await this.change(projectId, taskId, (t, all) => {
-        // O prazo passou enquanto esperava (a fila do arquivo, ou a ficha): quem pediu já recebeu a recusa, então nada se grava.
-        if (gate.abandoned) throw refused();
+      // `changeGated`: o prazo passou enquanto esperava (a fila do arquivo, ou a ficha)? Quem pediu já recebeu a recusa, então nada se grava.
+      const out = await this.changeGated(gate, projectId, taskId, (t, all) => {
         // Daqui para baixo vale o que está gravado agora: a tela ou outro caminho pode ter mexido desde a leitura acima.
         if (t.status !== 'waiting' && t.status !== 'todo')
           throw new TaskConflictError(`a tarefa está em “${COLUMN_NAME[t.status]}”: por aqui só se edita em Aguardar e A fazer; o complemento vai pela conversa da tarefa`);
@@ -1637,29 +1687,11 @@ export class TaskService {
         const next = noted(withPatch(t, patch, 'auto'), note);
         // Outro responsável: a vaga na fila é do novo, no fim (a posição antiga era na fila do outro); sem o que a partida anterior deixou.
         const edited = owner && next.queuedAt ? { ...next, queuedAt: new Date().toISOString(), queueRank: undefined, queuedForce: false, resourceWait: null, startRetry: undefined } : next;
-        gate.committed = true; // daqui a gravação acontece: passado o prazo, a resposta espera por ela
         return edited;
       });
       return out && seen.before ? { out, before: seen.before } : null;
     };
-    const job = first.staffId ? this.locked(projectId, first.staffId, run) : run();
-    let timeout: NodeJS.Timeout | undefined;
-    const late = new Promise<typeof LATE>((resolve) => {
-      timeout = setTimeout(() => resolve(LATE), deadlineMs);
-    });
-    let done: Awaited<typeof job>;
-    try {
-      const got = await Promise.race([job, late]);
-      if (got === LATE && !gate.committed) {
-        gate.abandoned = true;
-        void job.catch(() => {}); // a vez que chegar depois só confere `gate` e desiste: o erro dela não tem a quem responder
-        (this.deps.log ?? ((line: string) => console.warn(line)))(`[tarefas] editar ${taskId}: a vez de ${first.staffId ?? 'ninguém'} não chegou em ${deadlineMs} ms; recusada sem gravar`);
-        throw refused();
-      }
-      done = got === LATE ? await job : got;
-    } finally {
-      clearTimeout(timeout);
-    }
+    const done = await this.lockedWithDeadline(projectId, first.staffId, run, { op: `editar ${taskId}`, refused: 'a edição NÃO foi gravada', deadlineMs: this.lockDeadline() });
     if (!done) return null;
     // Quem perdeu a tarefa, quem a ganhou e o dono dela (se saiu uma dependência): quem estiver livre pega a vez (o `takeNext` confere fila e ocupação).
     for (const s of new Set([done.before.staffId, done.out.staffId])) if (s) void this.kick(projectId, s);
@@ -1794,9 +1826,9 @@ export class TaskService {
    *   - 'wait': continua esperando, e o par some da caixa por ACK_CANCELLED_DAYS dias (`ackCancelled`, ver `stuckDependencies`), ou até a
    *     bloqueadora ser reaberta; passado o prazo, o item volta à caixa para o dono decidir de novo.
    * TaskConflictError se a dependente está encerrada, não depende mais dela ou ela não está cancelada.
-   * `dependents` (só no 'cancel'): segue a cascata nas que esperavam pela dependente (ver `cancel`).
+   * `dependents` (só no 'cancel'): segue a cascata nas que esperavam pela dependente (ver `cancel`). `deadline` (só no 'cancel', da rota da tela): ver `cancel`.
    */
-  async resolveCancelledBlocker(projectId: string, taskId: string, blockerId: string, action: DependentAction, dependents?: DependentChoices): Promise<Task | null> {
+  async resolveCancelledBlocker(projectId: string, taskId: string, blockerId: string, action: DependentAction, dependents?: DependentChoices, opts: { deadline?: boolean } = {}): Promise<Task | null> {
     const dir = await this.deps.projectPath(projectId);
     const all = dir ? await readTasks(dir) : [];
     const dep = all.find((t) => t.id === taskId);
@@ -1804,7 +1836,7 @@ export class TaskService {
     const blocker = all.find((t) => t.id === blockerId);
     if (!blocker || blocker.status !== 'cancelled' || !dep.blockedBy?.includes(blockerId) || isClosed(dep))
       throw new TaskConflictError('esta tarefa não espera mais por uma tarefa cancelada (a situação mudou)');
-    if (action === 'cancel') return this.cancel(projectId, taskId, { by: 'user', reason: `a tarefa “${blocker.title}” foi cancelada`, dependents });
+    if (action === 'cancel') return this.cancel(projectId, taskId, { by: 'user', reason: `a tarefa “${blocker.title}” foi cancelada`, dependents, deadline: opts.deadline });
     const out = await this.change(projectId, taskId, (d) => {
       if (isClosed(d) || !d.blockedBy?.includes(blockerId)) throw new TaskConflictError('esta tarefa não espera mais por uma tarefa cancelada (a situação mudou)');
       if (action === 'wait') {
@@ -1948,7 +1980,7 @@ export class TaskService {
     };
     // Na mesma vez do funcionário que a fila: dois "Começar" juntos não abrem duas conversas.
     timer.stage('lock');
-    return this.locked(projectId, staffId, async () => {
+    return this.locked(projectId, staffId, `comecar ${taskId}`, async () => {
       timer.stage('fila');
       const fresh = await readTasks(dir);
       // Mudou de responsável entre a leitura e a vez dele (edição): quem começa é o novo, pela fila dele, e não o de antes com a ficha dele.
@@ -2172,7 +2204,7 @@ export class TaskService {
     const { projectId, taskId } = where;
     const staffId = ((await this.list(projectId)) ?? []).find((t) => t.id === taskId)?.staffId;
     if (!staffId) return;
-    await this.locked(projectId, staffId, async () => {
+    await this.locked(projectId, staffId, `limite ${taskId}`, async () => {
       // Antes de tudo: se o limite agendou o "continue", a pendência já existe quando for cancelada.
       await this.deps.settleLimit?.(ev.sessionId);
       const dir = await this.deps.projectPath(projectId);
@@ -2366,7 +2398,7 @@ export class TaskService {
     if (where?.role !== 'work' || where.auto || where.projectId !== projectId) return false;
     const task = await this.fresh(projectId, where.taskId);
     if (!task?.staffId || task.sessionId !== sessionId || !task.fallback) return false;
-    return this.locked(projectId, task.staffId, async () => {
+    return this.locked(projectId, task.staffId, `voltar-ao-principal ${task.id}`, async () => {
       const now = await this.fresh(projectId, task.id);
       if (now?.sessionId !== sessionId) return false;
       return !!(await this.backToPrimary(projectId, now, text));
@@ -2408,9 +2440,10 @@ export class TaskService {
    */
   async discardHeld(projectId: string, taskId: string, heldId: string, fromBrowser: boolean): Promise<Task | null> {
     if (!fromBrowser) throw new TaskForbiddenError('só você, pelo Claudio’s Club, exclui o ajuste guardado');
+    const startedAt = Date.now();
     const task = await this.fresh(projectId, taskId);
     if (!task) return null;
-    const run = async (): Promise<Task | null> => {
+    const run = async (gate: DeadlineGate): Promise<Task | null> => {
       // Na vez dele, de novo: a entrega pode ter mandado (ou o dono ter trocado de responsável) enquanto esperava.
       const now = await this.fresh(projectId, taskId);
       if (!now) return null;
@@ -2421,7 +2454,7 @@ export class TaskService {
       if (what.ask || what.doubt) throw new TaskConflictError('essa é a resposta a uma dúvida: a tarefa espera por ela, então não dá para excluir');
       // A conferência também vai dentro da mudança, que é atômica no arquivo (nada que tire o ajuste fora da vez dele passa por cima).
       let found = false;
-      const out = await this.change(projectId, taskId, (t) => {
+      const out = await this.changeGated(gate, projectId, taskId, (t) => {
         if (!t.held?.some((m) => m.id === heldId && !m.ask && !m.doubt)) return t;
         found = true;
         return noted({ ...t, held: t.held.filter((m) => m.id !== heldId) }, 'ajuste guardado excluído por você');
@@ -2429,9 +2462,10 @@ export class TaskService {
       if (!found) throw gone();
       return out;
     };
-    const out = task.staffId ? await this.locked(projectId, task.staffId, run) : await run();
-    // Sem o ajuste, o card que só esperava por ele (`heldFirst`) pode andar.
-    if (out && task.staffId) await this.kick(projectId, task.staffId);
+    const deadlineMs = this.lockDeadline();
+    const out = await this.lockedWithDeadline(projectId, task.staffId, run, { op: `excluir-ajuste ${taskId}`, refused: 'a exclusão do ajuste NÃO foi feita', deadlineMs });
+    // Sem o ajuste, o card que só esperava por ele (`heldFirst`) pode andar. A resposta não espera mais que o prazo por isso (o `kick` espera a vez dele, que pode estar presa).
+    if (out && task.staffId) await settleWithin(this.kick(projectId, task.staffId), deadlineMs - (Date.now() - startedAt));
     return out;
   }
 
@@ -2442,6 +2476,7 @@ export class TaskService {
    */
   async resendHeld(projectId: string, taskId: string, fromBrowser: boolean): Promise<Task | null> {
     if (!fromBrowser) throw new TaskForbiddenError('só você, pelo Claudio’s Club, reenvia o ajuste guardado');
+    const startedAt = Date.now();
     const task = await this.fresh(projectId, taskId);
     if (!task) return null;
     if (isClosed(task)) throw new TaskConflictError('a tarefa está encerrada: não há ajuste a reenviar');
@@ -2449,7 +2484,8 @@ export class TaskService {
     const out = await this.change(projectId, taskId, (t) =>
       noted({ ...t, held: (t.held ?? []).map(({ attempts: _attempts, nextAt: _nextAt, ...m }) => m) }, 'ajuste guardado: nova tentativa pedida por você'),
     );
-    if (task.staffId) await this.kick(projectId, task.staffId);
+    // O ajuste já está liberado para tentar de novo; a resposta não espera mais que o prazo pela vez dele (o `kick` a espera, e ela pode estar presa).
+    if (task.staffId) await settleWithin(this.kick(projectId, task.staffId), this.lockDeadline() - (Date.now() - startedAt));
     return (await this.fresh(projectId, taskId)) ?? out;
   }
 
@@ -2816,7 +2852,7 @@ export class TaskService {
   private async orphan(projectId: string, taskId: string, staffId: string, now: Date): Promise<void> {
     const isWorking = this.deps.isWorking;
     if (!isWorking) return; // sem saber quem trabalha, não dá para dizer que parou
-    const freed = await this.locked(projectId, staffId, async () => {
+    const freed = await this.locked(projectId, staffId, `orfa ${taskId}`, async () => {
       const all = (await this.list(projectId)) ?? [];
       const t = all.find((x) => x.id === taskId);
       if (!t?.sessionId || t.staffId !== staffId || !endsInDelivery(t, await this.workEngine(projectId, t, t.sessionId)) || isWorking(projectId, staffId)) return false;
@@ -2903,10 +2939,25 @@ export class TaskService {
     return this.deps.isWorking?.(projectId, staffId, except.length > 1 ? except : except[0]) ?? false;
   }
 
-  /** Um por vez por funcionário (começar, pegar a próxima, mandar ajustes). */
-  private locked<T>(projectId: string, staffId: string, fn: () => Promise<T>): Promise<T> {
+  /**
+   * Um por vez por funcionário (começar, pegar a próxima, mandar ajustes). `op`: o que pede a vez, sem acento e com o id da tarefa quando há (`entrega t-1a2b3c`); só ids e
+   * nomes de operação, nunca conteúdo: é o que o log da vez presa mostra (ver `lockedWithDeadline`).
+   */
+  private locked<T>(projectId: string, staffId: string, op: string, fn: () => Promise<T>): Promise<T> {
     const key = `${projectId}:${staffId}`;
-    const run = (this.kicks.get(key) ?? Promise.resolve()).then(fn);
+    const state = this.lockState.get(key) ?? { holder: null, waiting: 0 };
+    this.lockState.set(key, state);
+    state.waiting++;
+    const run = (this.kicks.get(key) ?? Promise.resolve()).then(async () => {
+      state.waiting--;
+      state.holder = { op, since: Date.now() };
+      try {
+        return await fn();
+      } finally {
+        state.holder = null;
+        if (!state.waiting && this.lockState.get(key) === state) this.lockState.delete(key);
+      }
+    });
     this.kicks.set(
       key,
       run.then(
@@ -2915,6 +2966,69 @@ export class TaskService {
       ),
     );
     return run;
+  }
+
+  /** O prazo das rotas que esperam a vez do funcionário. */
+  private lockDeadline(): number {
+    return this.deps.lockDeadlineMs ?? LOCK_DEADLINE_MS;
+  }
+
+  /** `change` de uma operação com prazo (ver `lockedWithDeadline`): `fn` só roda se o prazo não passou, e o que ela decide gravar já não se desfaz (`DeadlineGate.mutating`). */
+  private changeGated(gate: DeadlineGate, projectId: string, taskId: string, fn: (t: Task, all: Task[]) => Task): Promise<Task | null> {
+    return this.change(projectId, taskId, gate.mutating(fn));
+  }
+
+  /**
+   * `locked` para quem responde a uma chamada HTTP. A vez de um funcionário pode demorar muito (quem a segura abre uma conversa, entrega, retoma outra tarefa), e quem pediu
+   * ficava sem resposta, com a operação gravando depois, às cegas. Com `deadlineMs`, a resposta vem em até ele e é sempre verdadeira: ou a operação gravou (devolve o que `fn`
+   * devolveu), ou é recusada (`TaskBusyError`, 503) e NÃO grava, nem se a vez chegar depois. A decisão é uma só e síncrona (`DeadlineGate`): a vez que chega depois do prazo
+   * desiste antes de `fn`, e `fn` marca o ponto sem volta (`gate.mutating` no callback do `change`, ou `gate.commit()` antes do primeiro efeito que não é gravar) depois de
+   * conferir o que ainda pode recusar; a operação já decidida não se desfaz, então passado o prazo a resposta espera por ela (que é um arquivo, ou o envio já começado).
+   * Sem `deadlineMs` (quem chama por dentro: a fila, a cascata do cancelamento, o fim de turno) é o `locked` de sempre, com o `gate` inerte. Sem `staffId` não há vez a esperar:
+   * `fn` roda direto, ainda com o prazo (a fila do arquivo e a ficha também demoram). `op`: ver `locked`; `refused`: o que não aconteceu, para a mensagem da recusa.
+   * Estourado o prazo, o log diz quem segura a vez, em que operação e há quanto tempo (ver `logStuckTurn`).
+   */
+  private async lockedWithDeadline<T>(
+    projectId: string,
+    staffId: string | null | undefined,
+    fn: (gate: DeadlineGate) => Promise<T>,
+    opts: { op: string; refused: string; deadlineMs?: number },
+  ): Promise<T> {
+    const { op, deadlineMs } = opts;
+    const refusal = () => new TaskBusyError(`a vez de quem faz a tarefa não chegou em ${Math.max(1, Math.round((deadlineMs ?? 0) / 1000))} s (ele está começando, entregando ou retomando outra tarefa): ${opts.refused}; tente de novo em instantes`);
+    const gate = new DeadlineGate(refusal);
+    const start = async () => {
+      gate.check();
+      return fn(gate);
+    };
+    const job = staffId ? this.locked(projectId, staffId, op, start) : start();
+    if (!deadlineMs) return job;
+    // Em caixa: `Promise.race` desembrulha o `T`, e a resposta tem de ser o `T` mesmo.
+    const boxed = job.then((value) => ({ value }));
+    let timeout: NodeJS.Timeout | undefined;
+    const late = new Promise<typeof LATE>((resolve) => {
+      timeout = setTimeout(() => resolve(LATE), deadlineMs);
+    });
+    try {
+      const got = await Promise.race([boxed, late]);
+      if (got !== LATE) return got.value;
+      if (gate.committed) return (await boxed).value;
+      gate.abandoned = true;
+      void boxed.catch(() => {}); // a vez que chegar depois só confere `gate` e desiste: o erro dela não tem a quem responder
+      this.logStuckTurn(projectId, staffId, op, deadlineMs);
+      throw refusal();
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  /** A vez presa: quem a segura, em que operação e há quanto tempo, e quantos esperam (o próprio pedido incluso). Só ids e nomes de operação. */
+  private logStuckTurn(projectId: string, staffId: string | null | undefined, op: string, deadlineMs: number): void {
+    const state = staffId ? this.lockState.get(`${projectId}:${staffId}`) : undefined;
+    const holder = state?.holder;
+    const who = holder ? `quem segura: ${holder.op} há ${Date.now() - holder.since} ms` : 'ninguém a segura: a demora foi dentro da própria operação';
+    const queue = state?.waiting ? `, ${state.waiting} na fila` : '';
+    (this.deps.log ?? ((line: string) => console.warn(line)))(`[tarefas] ${op}: a vez de ${staffId ?? 'ninguém'} (projeto ${projectId}) não chegou em ${deadlineMs} ms; ${who}${queue}; recusada sem gravar`);
   }
 
   /** Para quem chama de fora (rotina de tarefa, que já gravou a tarefa na fila): o mesmo `kick`, esperando a vez dele. */
@@ -2962,7 +3076,7 @@ export class TaskService {
 
   /** Se ele está livre: primeiro os ajustes guardados (o mais antigo antes), depois a próxima da fila. */
   private kick(projectId: string, staffId: string): Promise<void> {
-    return this.locked(projectId, staffId, () => this.takeNext(projectId, staffId)).catch(() => {});
+    return this.locked(projectId, staffId, 'fila', () => this.takeNext(projectId, staffId)).catch(() => {});
   }
 
   /**
@@ -3475,7 +3589,8 @@ export class TaskService {
    * quando a rota vem do navegador pareado: nunca do corpo do pedido). Pergunta por opções: a resposta vai para a conversa do funcionário
    * (deps.answerAsk). Dúvida escrita: vai a ele como mensagem (guardada, se ele está ocupado). `escalate` (só do gestor): a decisão é do
    * usuário, a dúvida passa para você; você não tem para quem escalar. Quem responde primeiro fecha: a outra resposta leva 409, e o
-   * funcionário recebe uma só. A conferência e o fechamento acontecem na vez do funcionário (`locked`), no mesmo passo do envio.
+   * funcionário recebe uma só. A conferência e o fechamento acontecem na vez do funcionário (`locked`), no mesmo passo do envio. A vez presa não deixa o gestor sem resposta:
+   * passado `LOCK_DEADLINE_MS` sem a resposta ter começado a ser guardada ou enviada, 503 (TaskBusyError) e nada é enviado (ver `lockedWithDeadline`).
    */
   async answerQuestion(
     projectId: string,
@@ -3514,16 +3629,23 @@ export class TaskService {
       const askStaff = task.staffId;
       const askSession = task.sessionId;
       if (!askStaff || !askSession) throw gone();
-      return this.locked(projectId, askStaff, async () => {
-        // Na vez dele, de novo: cancelada ou já respondida por outro enquanto esperava, a resposta não chega à pergunta.
-        this.stillOpen(await this.fresh(projectId, taskId), q.id);
-        if (!this.deps.hasAsk?.(askSession, q.id)) throw gone();
-        // Ele está em outra tarefa: a resposta espera a vez dele, como ajuste guardado, e chega à pergunta antes da fila (ver `takeNext`).
-        // A pergunta continua pendente na conversa parada até lá (ela não conta como trabalho, ver `staffBusy`).
-        const held = await this.hold(askSession, { text: `Resposta ${from} à sua dúvida: ${answersText(answers)}`, ask: { requestId: q.id, answers, by }, doubt: true, ...(!asUser && { auto: true as const }) });
-        if (!held && !this.deps.answerAsk?.(askSession, q.id, answers, by)) throw gone();
-        return this.change(projectId, taskId, (t) => closeQuestion(t, q.id, by, answersText(answers)) ?? t);
-      });
+      return this.lockedWithDeadline(
+        projectId,
+        askStaff,
+        async (gate) => {
+          // Na vez dele, de novo: cancelada ou já respondida por outro enquanto esperava, a resposta não chega à pergunta.
+          this.stillOpen(await this.fresh(projectId, taskId), q.id);
+          if (!this.deps.hasAsk?.(askSession, q.id)) throw gone();
+          // O ponto sem volta: daqui a resposta é guardada ou entregue à conversa, e o prazo que passar já não a desfaz (ver `lockedWithDeadline`).
+          gate.commit();
+          // Ele está em outra tarefa: a resposta espera a vez dele, como ajuste guardado, e chega à pergunta antes da fila (ver `takeNext`).
+          // A pergunta continua pendente na conversa parada até lá (ela não conta como trabalho, ver `staffBusy`).
+          const held = await this.hold(askSession, { text: `Resposta ${from} à sua dúvida: ${answersText(answers)}`, ask: { requestId: q.id, answers, by }, doubt: true, ...(!asUser && { auto: true as const }) });
+          if (!held && !this.deps.answerAsk?.(askSession, q.id, answers, by)) throw gone();
+          return this.change(projectId, taskId, (t) => closeQuestion(t, q.id, by, answersText(answers)) ?? t);
+        },
+        { op: `responder-duvida ${taskId}`, refused: 'a resposta NÃO foi enviada', deadlineMs: this.lockDeadline() },
+      );
     }
     const text = (body.text ?? (answers ? answersText(answers) : '')).trim();
     if (!text) throw new TaskError('escreva a resposta (text)');
@@ -3534,17 +3656,24 @@ export class TaskService {
     const work = task.sessionId;
     const msg = `Resposta ${from} à sua dúvida: ${text}`;
     // Ocupado com outra tarefa, a resposta espera a vez dele (como um ajuste guardado); se o envio falhar, nada é marcado.
-    return this.locked(projectId, staffId, async () => {
-      // Na vez dele, de novo: cancelada ou já respondida por outro enquanto esperava, a resposta não vai para a conversa dela (nem fica guardada).
-      const now = await this.fresh(projectId, taskId);
-      this.stillOpen(now, q.id);
-      // A conversa de trabalho pode ter voltado ao motor principal enquanto esperava a vez (ver `backToPrimary`): vale a de agora.
-      const target = now?.sessionId ?? work;
-      if (!(await this.hold(target, { text: msg, doubt: true, ...(!asUser && { auto: true as const }) }))) {
-        if (!now || !(await this.backToPrimary(projectId, now, msg))) await sendTo(projectId, target, staffId, msg, []);
-      }
-      return this.change(projectId, taskId, (t) => closeQuestion(t, q.id, by, text) ?? t);
-    });
+    return this.lockedWithDeadline(
+      projectId,
+      staffId,
+      async (gate) => {
+        // Na vez dele, de novo: cancelada ou já respondida por outro enquanto esperava, a resposta não vai para a conversa dela (nem fica guardada).
+        const now = await this.fresh(projectId, taskId);
+        this.stillOpen(now, q.id);
+        // O ponto sem volta: daqui a resposta é guardada ou enviada à conversa, e o prazo que passar já não a desfaz (ver `lockedWithDeadline`).
+        gate.commit();
+        // A conversa de trabalho pode ter voltado ao motor principal enquanto esperava a vez (ver `backToPrimary`): vale a de agora.
+        const target = now?.sessionId ?? work;
+        if (!(await this.hold(target, { text: msg, doubt: true, ...(!asUser && { auto: true as const }) }))) {
+          if (!now || !(await this.backToPrimary(projectId, now, msg))) await sendTo(projectId, target, staffId, msg, []);
+        }
+        return this.change(projectId, taskId, (t) => closeQuestion(t, q.id, by, text) ?? t);
+      },
+      { op: `responder-duvida ${taskId}`, refused: 'a resposta NÃO foi enviada', deadlineMs: this.lockDeadline() },
+    );
   }
 
   /** A tarefa como está agora no arquivo (a conferência na vez do funcionário). */
@@ -4105,7 +4234,7 @@ export class TaskService {
     const lesson = (await hasGuide(dir))
       ? 'Se algum 🔴 mostra uma regra do projeto que pode se repetir (não um erro pontual), registre-a em uma linha, com a data, na seção "Lições da revisão" do `SPEC.md` (crie a seção no fim se não existir). Antes, confira se já não está lá ou em outra seção; no máximo 15 lições: ao passar disso, junte ou tire as velhas. Erro pontual não vira lição.'
       : 'Se algum 🔴 mostra uma regra do projeto que pode se repetir (não um erro pontual), registre-a em uma linha na sua memória, substituindo o que ficou velho. Erro pontual não vira lição.';
-    await this.locked(projectId, staffId, async () => {
+    await this.locked(projectId, staffId, `reprovar ${taskId}`, async () => {
       // Na vez dele, de novo: cancelada (ou fora de revisão, ou de outra rodada) enquanto esperava, nada é guardado nem mandado à conversa dela.
       const now = ((await this.list(projectId)) ?? []).find((t) => t.id === taskId);
       // A conversa de trabalho pode ter voltado ao motor principal enquanto esperava a vez (ver `backToPrimary`): vale a de agora.
@@ -4275,9 +4404,10 @@ export class TaskService {
   /**
    * A entrega: o card vai para revisão (se `accept` ainda vale, conferido na gravação), com o commit, o resumo, os testes e o aviso a quem pediu, e a revisão automática é pedida.
    * Vem do fim do turno (`workDone`) e de quem pediu mandar revisar o card sem código mesmo assim (`reviewAnyway`, que explica o porquê em `why`). Devolve o card entregue, ou null se
-   * ele mudou no caminho e nada foi entregue.
+   * ele mudou no caminho e nada foi entregue. `deadlineMs` (só de `reviewAnyway`, que responde a uma chamada HTTP): a vez dele é esperada só até aí, e passado o prazo
+   * (TaskBusyError, 503) nada é entregue (ver `lockedWithDeadline`); o fim de turno espera a vez de sempre.
    */
-  private async deliver(projectId: string, taskId: string, staffId: string, sessionId: string, accept: (t: Task) => boolean, entered: string, why?: string): Promise<Task | null> {
+  private async deliver(projectId: string, taskId: string, staffId: string, sessionId: string, accept: (t: Task) => boolean, entered: string, why?: string, deadlineMs?: number): Promise<Task | null> {
     // A chave vale da entrega até o pedido de revisão: com a tarefa já em "revisão" e os testes rodando (minutos), o `tick` não a toma por
     // perdida (ver `resumeReviews`). Quem já a tem (outro aviso do mesmo turno) a solta; este só solta a que pegou.
     const key = `review:${projectId}:${taskId}`;
@@ -4285,29 +4415,34 @@ export class TaskService {
     if (owns) this.inFlight.add(key);
     try {
       // Na vez dele: a próxima tarefa só começa depois que a entrega desta tem o seu commit.
-      const deliveredTask = await this.locked(projectId, staffId, async () => {
-        let delivered: Task | null = null;
-        const seen: { before?: Task } = {};
-        // Confere de novo, lá dentro: o estado pode ter mudado enquanto esperava a vez.
-        await this.change(projectId, taskId, (t) => {
-          if (!accept(t) || t.sessionId !== sessionId) return t;
-          seen.before = t;
-          const next = supersedeReview({ ...t, runId: null });
-          return (delivered = moved(why ? noted(next, why) : next, 'review', 'auto', entered));
-        });
-        if (delivered) {
-          await this.logEnd(projectId, seen.before, 'delivered');
-          await this.markDelivery(projectId, delivered);
-          delivered = await this.recordDelivery(projectId, delivered, sessionId, seen.before?.noCode?.summary);
-          // Pedida por um gestor: o Claudio’s Club roda os testes antes de avisar, e o gestor não gasta a conversa
-          // dele (a mais longa e cara) rodando de novo.
-          const tests = (delivered as Task).requestedBy ? await this.deliveryTests(projectId, delivered) : null;
-          if (tests) delivered = (await this.change(projectId, taskId, (t) => ({ ...t, tests }))) ?? delivered;
-          // Quem pediu é quem revisa: o aviso sai no desfecho da revisão automática (ver autoReview), não na entrega.
-          if (!selfReview(delivered)) await this.tellManager(projectId, delivered, sessionId);
-        }
-        return delivered as Task | null;
-      });
+      const deliveredTask = await this.lockedWithDeadline(
+        projectId,
+        staffId,
+        async (gate) => {
+          let delivered: Task | null = null;
+          const seen: { before?: Task } = {};
+          // Confere de novo, lá dentro: o estado pode ter mudado enquanto esperava a vez.
+          await this.changeGated(gate, projectId, taskId, (t) => {
+            if (!accept(t) || t.sessionId !== sessionId) return t;
+            seen.before = t;
+            const next = supersedeReview({ ...t, runId: null });
+            return (delivered = moved(why ? noted(next, why) : next, 'review', 'auto', entered));
+          });
+          if (delivered) {
+            await this.logEnd(projectId, seen.before, 'delivered');
+            await this.markDelivery(projectId, delivered);
+            delivered = await this.recordDelivery(projectId, delivered, sessionId, seen.before?.noCode?.summary);
+            // Pedida por um gestor: o Claudio’s Club roda os testes antes de avisar, e o gestor não gasta a conversa
+            // dele (a mais longa e cara) rodando de novo.
+            const tests = (delivered as Task).requestedBy ? await this.deliveryTests(projectId, delivered) : null;
+            if (tests) delivered = (await this.change(projectId, taskId, (t) => ({ ...t, tests }))) ?? delivered;
+            // Quem pediu é quem revisa: o aviso sai no desfecho da revisão automática (ver autoReview), não na entrega.
+            if (!selfReview(delivered)) await this.tellManager(projectId, delivered, sessionId);
+          }
+          return delivered as Task | null;
+        },
+        { op: `entrega ${taskId}`, refused: 'a revisão NÃO foi pedida', deadlineMs },
+      );
       void this.kick(projectId, staffId);
       // Fora da vez dele: a revisão automática (com revisor marcado) é pedida depois da entrega.
       if (deliveredTask) await this.autoReview(projectId, deliveredTask);
@@ -4330,7 +4465,7 @@ export class TaskService {
     if (!fromBrowser && first.requestedBy !== me) throw new TaskForbiddenError('só quem pediu a tarefa (ou o usuário) manda revisá-la mesmo sem código');
     if (!markedNoCode(first) || !first.staffId || !first.sessionId) throw new TaskConflictError('a tarefa não está esperando esta decisão (marcada “sem código” em Fazendo): leia de novo');
     const who = fromBrowser ? 'o usuário' : ((await this.deps.readProfile(projectId, me!).catch(() => null))?.name ?? me!);
-    const delivered = await this.deliver(projectId, taskId, first.staffId, first.sessionId, markedNoCode, TURN_ENDED, `${who} mandou revisar mesmo sem código (nenhuma alteração detectada)`);
+    const delivered = await this.deliver(projectId, taskId, first.staffId, first.sessionId, markedNoCode, TURN_ENDED, `${who} mandou revisar mesmo sem código (nenhuma alteração detectada)`, this.lockDeadline());
     if (!delivered) throw new TaskConflictError('a tarefa mudou enquanto isso (cancelada, devolvida ao responsável ou já decidida): leia de novo');
     return (await this.fresh(projectId, taskId)) ?? delivered;
   }
@@ -4344,7 +4479,7 @@ export class TaskService {
   private async awaitSubtasks(projectId: string, task: Task, sessionId: string): Promise<boolean> {
     const staffId = task.staffId;
     if (!staffId || task.status !== 'doing' || task.autoCreated || !task.subtasks?.some((s) => !isClosed(s))) return false;
-    const waiting = await this.locked(projectId, staffId, async () => {
+    const waiting = await this.locked(projectId, staffId, `aguardar-subtarefas ${task.id}`, async () => {
       let marked = false;
       await this.change(projectId, task.id, (t, all) => {
         const open = openSubtasks(t, all);
@@ -4440,7 +4575,7 @@ export class TaskService {
     let already = false;
     // Na vez dele, como a entrega: confere de novo o que pode ter mudado enquanto esperava (cancelada, devolvida, com edição). O outro aviso do mesmo fim de turno, que marcou
     // enquanto este esperava a vez, deixa a marca como está (e este não segue para a entrega).
-    await this.locked(projectId, staffId, async () => {
+    await this.locked(projectId, staffId, `sem-codigo ${task.id}`, async () => {
       await this.change(projectId, task.id, (t) => {
         if (t.status !== 'doing' || t.sessionId !== sessionId || t.changedFiles?.length) return t;
         if (t.noCode) {

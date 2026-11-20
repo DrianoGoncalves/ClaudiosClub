@@ -1610,7 +1610,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     ({ params: [id, taskId], body, fromBrowser, caller }) => {
       // Corpo: { reason?, dependents?: { [taskId]: 'release' | 'cancel' | 'wait' } }. `dependents` só vale da tela; com o token do funcionário é ignorado.
       const b = cancelRequest(body, fromBrowser);
-      if (fromBrowser) return tasks.cancel(id!, taskId!, { by: 'user', reason: b.reason, dependents: b.dependents });
+      // `deadline`: a vez do funcionário presa não deixa a tela sem resposta (503, nada gravado; ver `TaskService.lockedWithDeadline`).
+      if (fromBrowser) return tasks.cancel(id!, taskId!, { by: 'user', reason: b.reason, dependents: b.dependents, deadline: true });
       return tasks.cancelFrom(id!, taskId!, caller, b.reason);
     },
   ],
@@ -1674,7 +1675,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     ({ params: [id, taskId], body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('tarefas só pelo Claudio’s Club');
       const b = parse(z.object({ blockerId: z.string().max(40), action: z.enum(['release', 'cancel', 'wait']) }), body);
-      return tasks.resolveCancelledBlocker(id!, taskId!, b.blockerId, b.action);
+      return tasks.resolveCancelledBlocker(id!, taskId!, b.blockerId, b.action, undefined, { deadline: true });
     },
   ],
   ['GET', new RegExp(`^/api/projects/${ID}/tasks/${ID}/code$`), ({ params: [id, taskId] }) => tasks.code(id!, taskId!)],
@@ -2686,7 +2687,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         // Dúvida já respondida, ou pergunta que não está mais aberta na conversa: 409; quem não é o gestor: 403 (antes do TaskError, 400).
         if (err instanceof TaskConflictError) return send(res, 409, { error: err.message });
         if (err instanceof TaskForbiddenError) return send(res, 403, { error: err.message });
-        // A vez do funcionário não chegou no prazo da edição: 503, nada gravado (tentar de novo em instantes é seguro).
+        // A vez do funcionário não chegou no prazo da resposta (edição, cancelamento, resposta à dúvida, ajuste guardado, revisão): 503, nada gravado (tentar de novo em instantes é seguro).
         if (err instanceof TaskBusyError) return send(res, 503, { error: err.message }, { 'retry-after': '5' });
         // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
         if (err instanceof GuideExistsError) return send(res, 409, { error: 'exists' });
