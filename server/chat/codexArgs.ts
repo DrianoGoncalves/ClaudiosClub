@@ -1,7 +1,7 @@
 import { lstatSync, statSync, type Stats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { FTP_MCP_NAME, GPT_MCP_NAME, MEMORIA_MCP_NAME, type Autonomy } from '../../shared/model';
+import { FTP_MCP_NAME, GIT_MCP_NAME, GPT_MCP_NAME, MEMORIA_MCP_NAME, type Autonomy } from '../../shared/model';
 import { SANDBOX_HOST } from '../callers';
 
 // Linha de comando do Codex (CLI da OpenAI) para um funcionário com `engine: 'codex'`. Cada mensagem é uma execução
@@ -234,6 +234,16 @@ export function codexMemoriaMcpArgs(s: CodexMcpServer | null | undefined): strin
 }
 
 /**
+ * Os `-c mcp_servers.myco-git.*` da conversa: o MCP de git (server/staff/gitMcp.ts), a única porta de commit, push e PR do Codex (na sandbox o `.git` é
+ * só leitura e não há rede nem as credenciais do dono). Roda fora da sandbox, como o de SSH, com a mesma regra de aprovação (`approve`). `enabledTools`:
+ * só as de leitura quando a ficha limita o acesso (`readonly`/`ask`) ou na revisão; o que a conversa pode escrever agora o MCP confere sozinho a cada
+ * chamada (git-policy.json).
+ */
+export function codexGitMcpArgs(s: CodexMcpServer | null | undefined): string[] {
+  return codexMcpArgs(GIT_MCP_NAME, s, s?.enabledTools);
+}
+
+/**
  * A fila de validação pesada no terminal do Codex: o mesmo hook do Claude (scripts/hooks/heavy-guard.mjs; a lógica está em heavy-lock.mjs).
  * O Codex só roda hook inline (`-c hooks.*`) com confiança gravada ou com `--dangerously-bypass-hook-trust` (provado no 0.169.0: sem a flag o hook
  * não dispara). O Claudio’s Club usa a flag aqui, só neste `codex exec` e só com o hook dele (decisão do Denzel na t-aafb19). A flag vale para
@@ -425,6 +435,7 @@ export const CODEX_RESERVED_MCP_NAMES: ReadonlySet<string> = new Set([
   FTP_MCP_NAME,
   GPT_MCP_NAME,
   MEMORIA_MCP_NAME,
+  GIT_MCP_NAME,
   'claude-in-chrome',
 ]);
 
@@ -509,6 +520,8 @@ export interface CodexSpawn {
   sshMcp?: CodexMcpServer | null;
   /** MCP da memória da própria ficha (em `plan` e na revisão), ou null: sem ele. Ver `codexMemoriaMcpArgs`. */
   memoriaMcp?: CodexMcpServer | null;
+  /** MCP de git (commit, push e PR fora da sandbox), ou null: sem ele. Ver `codexGitMcpArgs`. */
+  gitMcp?: CodexMcpServer | null;
   /** Conversa de revisão de tarefa: a sandbox é sempre de só leitura, qualquer que seja a autonomia (e a que a tela mudar depois). */
   readOnly?: boolean;
   /** MCP do Chrome do usuário (só sem SSH na conversa), ou null: sem ele. Ver `codexChromeMcpArgs`. */
@@ -560,6 +573,8 @@ export interface CodexRunOptions {
   sshMcp?: CodexMcpServer | null;
   /** MCP da memória da própria ficha (só em `plan`; null = sem ele). Ver `codexMemoriaMcpArgs`. */
   memoriaMcp?: CodexMcpServer | null;
+  /** MCP de git (null = sem ele). Ver `codexGitMcpArgs`. */
+  gitMcp?: CodexMcpServer | null;
   /** MCP do Chrome do usuário (null = sem ele). Ver `codexChromeMcpArgs`. */
   chromeMcp?: CodexMcpServer | null;
   /** MCP do navegador limpo (null = sem ele). Ver `codexCleanBrowserMcpArgs`. */
@@ -636,6 +651,7 @@ export function buildCodexArgs(o: CodexRunOptions): string[] {
   args.push(...codexWindowsSandboxArgs(o.platform));
   args.push(...codexSshMcpArgs(o.sshMcp));
   args.push(...codexMemoriaMcpArgs(o.memoriaMcp));
+  args.push(...codexGitMcpArgs(o.gitMcp));
   args.push(...codexChromeMcpArgs(o.chromeMcp));
   args.push(...codexCleanBrowserMcpArgs(o.cleanMcp));
   args.push(...codexExtraMcpArgs(o.extraMcps));

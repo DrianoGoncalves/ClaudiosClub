@@ -40,6 +40,8 @@ export interface CodexProcessOptions extends Omit<ChatProcessOptions, 'args'> {
   sshMcp?: CodexMcpServer | null;
   /** MCP da memória da própria ficha (em `plan` e na revisão; null = sem ele). Ver `codexMemoriaMcpArgs` em codexArgs.ts. */
   memoriaMcp?: CodexMcpServer | null;
+  /** MCP de git (commit, push e PR fora da sandbox; null = sem ele). Ver `codexGitMcpArgs` em codexArgs.ts. */
+  gitMcp?: CodexMcpServer | null;
   /** Conversa de revisão de tarefa: sandbox só de leitura a cada execução, mesmo que o modo de permissão mude (ver `CodexSpawn.readOnly`). */
   readOnly?: boolean;
   /** MCP do Chrome do usuário (null = sem ele). Ver `codexChromeMcpArgs` em codexArgs.ts. */
@@ -387,6 +389,7 @@ export class CodexProcess extends ChatProcess {
         readOnlyPaths: o.readOnlyPaths,
         sshMcp: o.sshMcp,
         memoriaMcp: o.memoriaMcp,
+        gitMcp: o.gitMcp,
         chromeMcp: o.chromeMcp,
         cleanMcp: o.cleanMcp,
         extraMcps: o.extraMcps,

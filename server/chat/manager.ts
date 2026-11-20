@@ -26,6 +26,7 @@ import type {
   UsageLimit,
 } from '../../shared/model';
 import { writeAtomic } from '../staff/store';
+import { updateGitPolicyAutonomy } from '../staff/gitMcp';
 import { codexHistoryOf } from '../adapters/codex/rollout';
 import { isProjectDir } from '../adapters/claude/paths';
 import { MAX_ITEMS, readHistory, TAIL_BYTES } from './history';
@@ -949,6 +950,12 @@ export class ChatManager {
     }
   }
 
+  /** O modo de permissão da conversa mudou: o MCP de git (se a conversa tem) confere o novo na próxima chamada (ver gitMcp.ts, `git-policy.json`). */
+  private gitMode(sessionId: string, mode: string): void {
+    const autonomy = (Object.keys(CLI_MODE) as Autonomy[]).find((a) => CLI_MODE[a] === mode);
+    if (autonomy) void updateGitPolicyAutonomy(path.join(this.runDir, sessionId), autonomy).catch(() => {});
+  }
+
   /**
    * A ficha mudou: a autonomia vale já nas conversas abertas dela; o resto (modelo, MCPs,
    * ferramentas) só com o processo reaberto, o que acontece na próxima mensagem com o funcionário
@@ -968,6 +975,7 @@ export class ChatManager {
       if (restart) chat.stale = true;
       const mode = CLI_MODE[next.autonomy];
       if (prev.autonomy !== next.autonomy || (chat.permissionMode && chat.permissionMode !== mode)) {
+        this.gitMode(id, mode);
         chat.setPermissionMode(mode, `Autonomia agora: ${AUTONOMY_NAME[next.autonomy]}`);
       }
     }
@@ -1012,7 +1020,10 @@ export class ChatManager {
     if (s.model || s.effort) this.boosts.set(chat, 'manual');
     if (s.model) chat.setModel(s.model, `Modelo desta conversa: ${s.model}`);
     if (s.effort) chat.setEffort(s.effort, `Esforço desta conversa: ${s.effort}`);
-    if (s.autonomy) chat.setPermissionMode(CLI_MODE[s.autonomy], `Autonomia desta conversa: ${AUTONOMY_NAME[s.autonomy]}`);
+    if (s.autonomy) {
+      this.gitMode(chat.sessionId, CLI_MODE[s.autonomy]);
+      chat.setPermissionMode(CLI_MODE[s.autonomy], `Autonomia desta conversa: ${AUTONOMY_NAME[s.autonomy]}`);
+    }
     // Fica na ficha para a conversa reabrir assim; falha ao gravar não desfaz a troca já feita.
     if (staffId && (s.model || s.effort)) {
       try {
@@ -1044,7 +1055,10 @@ export class ChatManager {
     const rejectPlan = !allow && !!opts.reject && plan !== undefined;
     const message = rejectPlan ? PLAN_REJECTED_MESSAGE : opts.message;
     if (!chat?.answer(requestId, allow, message, opts.remember, { answers: opts.answers, annotations: opts.annotations })) return false;
-    if (allow && opts.executeAs) chat.setPermissionMode(CLI_MODE[opts.executeAs], `Executando como: ${AUTONOMY_NAME[opts.executeAs]}`);
+    if (allow && opts.executeAs) {
+      this.gitMode(sessionId, CLI_MODE[opts.executeAs]);
+      chat.setPermissionMode(CLI_MODE[opts.executeAs], `Executando como: ${AUTONOMY_NAME[opts.executeAs]}`);
+    }
     if (allow && plan !== undefined) this.opts.onPlanApproved?.(sessionId, plan);
     if (rejectPlan) this.opts.onPlanRejected?.(sessionId);
     if (asked) this.opts.onAskAnswered?.(sessionId, requestId, opts.by ?? 'user', askSummary(asked, allow, opts.answers));
@@ -1674,6 +1688,7 @@ export class ChatManager {
           readOnlyPaths: codex.readOnlyPaths,
           sshMcp: codex.sshMcp,
           memoriaMcp: codex.memoriaMcp,
+          gitMcp: codex.gitMcp,
           readOnly: codex.readOnly,
           chromeMcp: codex.chromeMcp,
           cleanMcp: codex.cleanMcp,

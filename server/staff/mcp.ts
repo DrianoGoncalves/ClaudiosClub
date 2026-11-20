@@ -14,6 +14,7 @@ import { mcpLaunchCommand, quotedCommand } from './mcpLaunch';
 import { MCP_TOOLS_FILE, mcpFingerprint, testedToolsMany, toolsKey, type McpTool } from './mcpTools';
 import { codexMcpAccess, mcpAccessFile, validMcpName, type McpAccessFile, type McpAccessMap } from './mcpAccess';
 import { SSH_MCP_NAME, TOOLS as SSH_TOOLS } from './sshMcp';
+import { GIT_MCP_NAME, TOOLS as GIT_TOOLS } from './gitMcp';
 import { writeAtomic } from './store';
 
 // MCPs que vão para a conversa de um funcionário, de quatro origens (da mais específica para a mais geral):
@@ -191,6 +192,8 @@ export async function mcpWriteFileFor(
   const tools = await toolsOf(found, projectPath, o.toolsFile ?? MCP_TOOLS_FILE).catch(() => new Map<string, McpTool[]>());
   // O myco-ssh é do Club: a lista de leitura vem do próprio código (a anotação de cada ferramenta), não de um teste; sobrescreve o que vier de fora.
   tools.set(SSH_MCP_NAME, SSH_TOOLS.map((t) => ({ name: t.name, readOnly: t.annotations.readOnlyHint })));
+  // O myco-git também: leitura (status, diff, log) é o que `readonly` e `ask` deixam passar.
+  tools.set(GIT_MCP_NAME, GIT_TOOLS.map((t) => ({ name: t.name, readOnly: t.annotations.readOnlyHint })));
   return mcpAccessFile(profile.mcpAccess, tools);
 }
 

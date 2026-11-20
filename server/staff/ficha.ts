@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PLAYBOOK_AGENTS } from '../../shared/agentPresets';
 import { personalityName, personalitySection } from '../../shared/personality';
-import { FTP_MCP_NAME, GPT_MCP_NAME, GPT_TOOL_NAME, MEMORIA_MCP_NAME, TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
+import { FTP_MCP_NAME, GIT_MCP_NAME, GIT_READ_TOOLS, GIT_WRITE_TOOLS, GPT_MCP_NAME, GPT_TOOL_NAME, MEMORIA_MCP_NAME, TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
 import { GUIDE_PATH } from '../projectGuide';
 import { REQUIRED_PROOFS_LINE, REVIEW_RUBRIC } from '../deliveryRules';
 import { MYCO_HOME } from '../config';
@@ -58,6 +58,8 @@ export interface FichaContext {
   ssh?: SshInfo;
   /** Autonomia `plan`: se a conversa tem o MCP da memória (`myco-memoria`), o que a seção Memória diz (ver `memorySection`). Ausente = fora de plan. */
   memoria?: MemoriaInfo;
+  /** O MCP de git da conversa, se a pasta é um repositório (ver `gitSection`). Ausente = não é um repositório git. */
+  git?: GitInfo;
   /** O índice da memória passa do teto (ver memory-cap.mjs): o tamanho que ele tem. O aviso vai só no prompt (`systemPrompt`), não no .md da ficha. Ausente = dentro do teto. */
   memoryOver?: { bytes: number; lines: number };
   /** Codex com Navegador na ficha: o que a seção Navegador diz (ver `codexChromeLines`). Ausente = sem Navegador no Codex. */
@@ -96,6 +98,18 @@ export interface MemoriaInfo {
   mcp: boolean;
   /** Conversa de revisão de tarefa (só leitura, fora do `plan`): a seção Memória diz isso em vez de "em plan". */
   review?: boolean;
+}
+
+/** O MCP de git (`myco-git`) da conversa (ver `gitLaunchOf` em launch.ts). Ausente na `FichaContext` = a pasta não é um repositório git. */
+export interface GitInfo {
+  /** O MCP foi anexado à conversa. */
+  mcp: boolean;
+  /** Por que não entrou: o acesso está desligado na ficha (`mcpAccess` = off) ou falta o build do Club (dist/git-mcp.mjs). */
+  motivos: ('politica' | 'indisponivel')[];
+  /** O que a conversa pode fazer na autonomia de agora (ver `gitGrant`): só leitura, leitura e commit local, ou também push e PR. */
+  level?: 'read' | 'commit' | 'all';
+  /** Por que não é `all`, em palavras (só com `level` abaixo de `all`). */
+  why?: string;
 }
 
 /** Estado do Chrome do usuário no Codex (MCP `myco-chrome`): entrou, ou os motivos de não ter entrado (ver `codexChromeOf` em launch.ts). */
@@ -612,6 +626,45 @@ function codexMcpSection(p: StaffProfile, ctx: FichaContext): string {
   }
   return lines.length ? ['## Ferramentas MCP', ...lines].join('\n') : '';
 }
+
+/**
+ * Commit, push e PR pelo MCP `myco-git`. No Codex é o único caminho (a sandbox deixa o `.git` só leitura e não tem rede nem as credenciais do usuário),
+ * então a seção explica as ferramentas e as regras. No Claude o terminal segue valendo; uma linha avisa que a ferramenta existe e que ela não roda os
+ * hooks do projeto. Sem repositório git (`ctx.git` ausente), nada.
+ */
+function gitSection(p: StaffProfile, ctx: FichaContext): string {
+  const git = ctx.git;
+  if (!git) return '';
+  const codex = codexOf(p);
+  const tool = (name: string) => (codex ? `\`${name}\`` : `\`mcp__${GIT_MCP_NAME}__${name}\``);
+  if (!git.mcp) {
+    if (!codex) return '';
+    return [
+      '## Git (commit, push e PR)',
+      git.motivos.includes('indisponivel')
+        ? 'Falta o build do Club (dist/git-mcp.mjs): commit, push e PR não estão ao seu alcance agora (o terminal da sandbox não commita). Se a tarefa precisar, avise o usuário.'
+        : 'O acesso ao MCP `myco-git` está desligado na sua ficha: commit, push e PR não estão ao seu alcance (o terminal da sandbox não commita). Se a tarefa precisar, avise o usuário.',
+    ].join('\n');
+  }
+  if (!codex) {
+    return `## Git\nAlém do terminal, o MCP \`${GIT_MCP_NAME}\` tem ${tool('git_commit')} (só os caminhos informados, sem os hooks do projeto), ${tool('git_push')} e ${tool('git_pr_criar')} (origin no GitHub, nunca main/master nem force; a PR fica aberta e o merge é do usuário). Prefira o terminal quando os hooks do projeto importam.`;
+  }
+  const agora =
+    git.level === 'all'
+      ? 'Agora: commit, push e PR liberados.'
+      : git.level === 'commit'
+        ? 'Agora: só leitura e commit local; push e PR exigem autonomia auto ou sem travas (o dono muda na ficha).'
+        : `Agora: só leitura${git.why ? ` (${git.why})` : ''}.`;
+  return [
+    '## Git (commit, push e PR)',
+    'Na sua sandbox o `.git` é só leitura e não há rede nem as credenciais do usuário: `git add`, `git commit` e `git push` falham no terminal (até `git status` pode falhar por causa do lock do índice). Faça pelo MCP `myco-git`, que roda fora da sandbox, pelo Claudio’s Club:',
+    `- Leitura: ${tool('git_status')}, ${tool('git_diff')} e ${tool('git_log')}.`,
+    `- ${tool('git_commit')} (\`mensagem\` e \`caminhos\`): commit local só dos caminhos que você informar; o que outra conversa ou o usuário deixou staged não entra. Sai sem os hooks do projeto: o Club recusa se achar segredo nas linhas novas, e deixa de fora .env, chaves e arquivos em conflito.`,
+    `- ${tool('git_push')} e ${tool('git_pr_criar')}: só em autonomia auto ou sem travas. O push vai para o \`origin\` no GitHub, num branch que não seja main/master (se o atual for um deles, informe \`branch\` com um nome novo), nunca com force e sem apagar branch. A PR fica aberta: o merge é só do usuário.`,
+    '- Não existe reset, rebase, checkout, merge nem comando git livre.',
+    agora,
+  ].join('\n');
+}
 /** A tela do Club é do dono: o navegador do funcionário não vai lá (o hook e o --blocked-origins barram; ver server/clubAddress.ts). */
 const CLUB_OFF_LIMITS =
   '- Nunca abra o Claudio’s Club no navegador (claudio.localhost, ou localhost na porta dele): a tela é do dono, com as aprovações dele, e o acesso é barrado.';
@@ -691,6 +744,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     serversSection(p, ctx),
     browserSection(p, ctx),
     codexMcpSection(p, ctx),
+    gitSection(p, ctx),
     worktreeSection(ctx),
     teamSection(p, ctx),
     hiringSection(p, ctx),
@@ -989,6 +1043,8 @@ export interface ClaudeArgsOptions {
   sshMcp?: boolean;
   /** O MCP da memória (`myco-memoria`, em `plan` ou na revisão) entrou (ver prepareRun): entra em --allowedTools, senão cada gravação pediria aprovação. */
   memoriaMcp?: boolean;
+  /** O MCP de git (`myco-git`) entrou (ver prepareRun): as de leitura entram em --allowedTools (com `editing`) e, na revisão, as de escrita saem. */
+  gitMcp?: boolean;
   /** Conversa de revisão de tarefa: as ferramentas de edição saem (REVIEW_DENIED), qualquer que seja a autonomia da ficha. A memória própria fica pelo MCP. */
   readOnly?: boolean;
 }
@@ -1030,7 +1086,9 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   const sshRead = o.sshMcp && editing ? SSH_READ_TOOLS.map((t) => `mcp__${SSH_MCP_NAME}__${t}`) : [];
   // A memória própria em plan e na revisão: o MCP só grava a memória da ficha dona (memoriaMcp.ts), então é liberado inteiro.
   const memoria = o.memoriaMcp && (p.autonomy === 'plan' || o.readOnly) ? [`mcp__${MEMORIA_MCP_NAME}`] : [];
-  const allowed = [...(p.browser && editing ? ['mcp__claude-in-chrome'] : []), ...(o.cleanBrowser && editing ? [`mcp__${CLEAN_BROWSER_MCP_NAME}`] : []), ...sshRead, ...memoria];
+  // As de leitura do git; commit, push e PR seguem a permissão normal (pede em aceitar edições) e o hook de escrita, e saem de vez na revisão.
+  const gitRead = o.gitMcp && editing ? GIT_READ_TOOLS.map((t) => `mcp__${GIT_MCP_NAME}__${t}`) : [];
+  const allowed = [...(p.browser && editing ? ['mcp__claude-in-chrome'] : []), ...(o.cleanBrowser && editing ? [`mcp__${CLEAN_BROWSER_MCP_NAME}`] : []), ...sshRead, ...gitRead, ...memoria];
   if (allowed.length) args.push('--allowedTools', allowed.join(','));
   // Com a internet desligada (Configurações), a busca na web do Claude também sai: a ferramenta é recusada antes de rodar.
   const web = o.internetAccess === false ? ['WebSearch', 'WebFetch'] : [];
@@ -1038,7 +1096,7 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   const clean = o.cleanBrowser ? CLEAN_BROWSER_DENIED.map((t) => `mcp__${CLEAN_BROWSER_MCP_NAME}__${t}`) : [];
   // Os MCPs marcados como Desligado (acesso da ficha) também saem daqui; os de leitura e de pedir antes são o hook de escrita (mcp-write.json).
   // Revisão: nada de editar arquivo (o revisor só lê e responde APROVADO ou REPROVADO). Vale a cada abertura, também ao reabrir a conversa.
-  const review = o.readOnly ? REVIEW_DENIED : [];
+  const review = o.readOnly ? [...REVIEW_DENIED, ...(o.gitMcp ? GIT_WRITE_TOOLS.map((t) => `mcp__${GIT_MCP_NAME}__${t}`) : [])] : [];
   args.push('--disallowedTools', [...secretDenyRules(p, o.keyFiles, o.ftpServers, o.manualEditable === true), ...web, ...clean, ...mcpOffDenyRules(p.mcpAccess), ...review].join(','));
   if (o.mcpConfigPath) args.push('--mcp-config', o.mcpConfigPath, ...(o.strictMcp === false ? [] : ['--strict-mcp-config']));
   return args;

@@ -10,8 +10,9 @@ import { heavyLockDir } from '../heavyQueue';
 import { lazyNavegadorCommand } from '../navegadorMcp';
 import { ROOT } from '../root';
 import { memoryMeasure, memoryOver } from '../../scripts/hooks/memory-cap.mjs';
-import { isClaudeRoot, renderFicha, systemPrompt, type CleanBrowserInfo, type CodexChromeInfo, type FichaContext, type MemoriaInfo, type SshInfo, type TeamMember } from './ficha';
-import { FTP_MCP_NAME, GPT_MCP_NAME, MEMORIA_MCP_NAME } from '../../shared/model';
+import { isClaudeRoot, renderFicha, systemPrompt, type CleanBrowserInfo, type CodexChromeInfo, type FichaContext, type GitInfo, type MemoriaInfo, type SshInfo, type TeamMember } from './ficha';
+import { FTP_MCP_NAME, GIT_MCP_NAME, GIT_READ_TOOLS, GPT_MCP_NAME, MEMORIA_MCP_NAME } from '../../shared/model';
+import { GIT_MCP_BUNDLE, gitBundleExists, gitGrant, gitMcpServer, writeGitPolicy } from './gitMcp';
 import { DEFAULT_SECRETS_DIR } from '../secretVault';
 import { ftpMcpServerConfig } from './ftpMcp';
 import { memoriaMcpServer } from './memoriaMcp';
@@ -71,6 +72,8 @@ export interface LaunchContext {
   lockedByCodexManager?: boolean;
   /** Pacote do MCP de SSH para o Codex (os testes trocam; padrão dist/ssh-mcp.mjs). Sem ele, o MCP não entra e a ficha diz "indisponível". */
   sshMcpBundle?: string;
+  /** Pacote do MCP de git (os testes trocam; padrão dist/git-mcp.mjs). Sem ele, o MCP não entra e a ficha diz "indisponível". Ver `gitLaunchOf`. */
+  gitMcpBundle?: string;
   /** "Permitir que o GPT use meu Chrome" (`codexBrowser`), lida ao abrir a conversa. Sem ela, o Chrome não entra no Codex. */
   codexBrowser?: boolean;
   /** "Bloquear a tela do Claudio’s Club no navegador dos funcionários" (`clubGuard`). Só `false` desliga: ausente, bloqueia. */
@@ -124,6 +127,8 @@ export interface PreparedRun {
   sshMcp: boolean;
   /** O MCP da memória (`myco-memoria`) entrou nesta conversa em `plan` (ver memoriaLaunchOf): o buildClaudeArgs o põe em --allowedTools. */
   memoriaMcp: boolean;
+  /** O MCP de git (`myco-git`) entrou nesta conversa (ver gitLaunchOf): o buildClaudeArgs põe as de leitura em --allowedTools e, na revisão, nega as de escrita. */
+  gitMcp: boolean;
 }
 
 /**
@@ -138,11 +143,13 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   const ssh = sshLaunchOf(profile, ctx, cwd);
   // Em plan e na conversa de revisão, o MCP que grava só a memória da própria ficha (ver memoriaLaunchOf): a edição de arquivos está bloqueada.
   const memoria = memoriaLaunchOf(profile, ctx, readOnly);
+  // MCP de git (commit, push e PR): o mesmo nos dois motores (ver gitLaunchOf).
+  const git = await gitLaunchOf(profile, ctx, cwd, dir, readOnly);
   // Navegador limpo: pela ficha (`browser` efetivo não entra aqui), então vale sem a extensão do Chrome. O SSH não entra aqui: no Claude o terminal
   // tem rede, então tirar o navegador por causa do SSH não fecharia canal nenhum (no Codex, a sandbox fecha a rede e o caso é outro; ver cleanBrowserOf).
   const cleanDir = path.join(dir, 'navegador');
   const clean = cleanBrowserOf(ctx.cleanBrowser ?? profile.browser, ctx, false, cleanDir);
-  const fichaCtx = await writeFicha(profile, await withCwdSkills(ctx, cwd, away), away, { ssh: ssh.info, cleanBrowser: clean.info, memoria: memoria.info });
+  const fichaCtx = await writeFicha(profile, await withCwdSkills(ctx, cwd, away), away, { ssh: ssh.info, cleanBrowser: clean.info, memoria: memoria.info, git: git.info });
   const systemPromptFile = path.join(dir, 'system.md');
   // Memória pessoal: só no system.md desta execução (fora do .md da ficha, que vai para o git do projeto).
   const personal = profile.personId ? await readPersonMemory(profile.personId) : null;
@@ -152,7 +159,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   let mcpConfigPath: string | null = null;
   // O `perguntar_gpt` entra só com o Codex ligado nas configurações e só aqui, no motor Claude (no Codex, os MCPs da ficha entram por prepareCodexRun).
   const gpt = ctx.codex === true && profile.engine !== 'codex';
-  if (profile.mcps !== null || ftpServers.length || gpt || clean.mcp || ssh.server || memoria.server) {
+  if (profile.mcps !== null || ftpServers.length || gpt || clean.mcp || ssh.server || memoria.server || git.server) {
     mcpConfigPath = path.join(dir, 'mcp.json');
     // Os da biblioteca do Club entram sem valor: o comando é o lançador, que tira o segredo do cofre ao subir (mcpLaunch.ts).
     const config = profile.mcps !== null ? await buildMcpConfig(ctx.projectPath, profile.mcps, ctx.claudeConfigFile) : { mcpServers: {} };
@@ -170,6 +177,8 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     if (ssh.server) config.mcpServers[SSH_MCP_NAME] = { type: 'stdio', command: ssh.server.command, args: ssh.server.args };
     // O myco-memoria: só o projeto e a ficha dona (nada de segredo; ver memoriaMcpServer).
     if (memoria.server) config.mcpServers[MEMORIA_MCP_NAME] = { type: 'stdio', command: memoria.server.command, args: memoria.server.args };
+    // O myco-git: a cópia do pacote na pasta da conversa, a pasta de trabalho e a pasta da conversa (nada de segredo; ver gitMcpServer).
+    if (git.server) config.mcpServers[GIT_MCP_NAME] = { type: 'stdio', command: git.server.command, args: git.server.args };
     await writeAtomic(mcpConfigPath, JSON.stringify(config, null, 2));
   }
   // Lembrete do estilo a cada mensagem (hook UserPromptSubmit): só com estilo no motor Claude; sem ele, nem arquivo nem hook.
@@ -229,6 +238,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     cleanBrowser: clean.mcp !== null,
     sshMcp: ssh.server !== null,
     memoriaMcp: memoria.server !== null,
+    gitMcp: git.server !== null,
   };
 }
 
@@ -245,6 +255,8 @@ export interface PreparedCodexRun {
   sshMcp: CodexMcpServer | null;
   /** MCP da memória da própria ficha (null = sem). Só em `plan`, onde a sandbox é de só leitura (ver `memoriaLaunchOf`). */
   memoriaMcp: CodexMcpServer | null;
+  /** MCP de git (commit, push e PR fora da sandbox; null = sem). Ver `gitLaunchOf`. */
+  gitMcp: CodexMcpServer | null;
   /** MCP do Chrome do usuário (null = sem). Só com a opção ligada, Navegador na ficha e sem o MCP de SSH na conversa (ver `codexChromeOf`). */
   chromeMcp: CodexMcpServer | null;
   /** MCP do navegador limpo (null = sem). Pedido na ficha (Navegador), com ou sem a extensão do Chrome; ver `cleanBrowserOf`. */
@@ -384,6 +396,57 @@ export function memoriaLaunchOf(
   return { info: { mcp: true, ...(review && { review }) }, server: memoriaMcpServer({ projectPath: ctx.projectPath, staffId: profile.id }) };
 }
 
+/** A pasta (ou alguma acima dela) tem `.git`? Vale o arquivo da worktree também. */
+function inGitRepo(dir: string): boolean {
+  for (let d = path.resolve(dir); ; ) {
+    if (existsSync(path.join(d, '.git'))) return true;
+    const up = path.dirname(d);
+    if (up === d) return false;
+    d = up;
+  }
+}
+
+/** O MCP de git (`myco-git`) de uma conversa, igual nos dois motores (ver `gitLaunchOf`). */
+export interface GitLaunch {
+  /** O que a ficha diz (undefined: a pasta não é um repositório git). */
+  info?: GitInfo;
+  /** Comando e argumentos do MCP (null = não entra). O Claude põe em mcp.json; o Codex acrescenta `cwd` e `enabled_tools`. */
+  server: { command: string; args: string[] } | null;
+  /** Ferramentas que o Codex vê (`enabled_tools`): só as de leitura com `readonly`, `ask` ou na revisão. Ausente = todas (a política confere a cada chamada). */
+  enabledTools?: string[];
+}
+
+/**
+ * O MCP de git (`myco-git`), igual nos dois motores: commit, push e PR fora da sandbox do Codex (onde o `.git` é só leitura e não há rede nem as credenciais
+ * do dono). Entra em pasta de repositório git, com o pacote do build e com o acesso `myco-git` ligado na ficha (`off` fica fora; `readonly` e `ask` no Codex
+ * só veem a leitura). O pacote é COPIADO para `<sessão>/git-mcp.mjs` (a sandbox nega `run/`): o código que usa as credenciais do dono nunca é o que o
+ * agente edita, nem no projeto do próprio Club. A política da conversa (`git-policy.json`, a mesma pasta) é gravada aqui e o MCP a relê a cada chamada.
+ */
+export async function gitLaunchOf(
+  profile: Pick<StaffProfile, 'autonomy' | 'mcpAccess' | 'engine'>,
+  ctx: Pick<LaunchContext, 'projectPath' | 'gitMcpBundle'>,
+  cwd: string,
+  sessionDir: string,
+  readOnly = false,
+): Promise<GitLaunch> {
+  if (!inGitRepo(cwd)) return { server: null };
+  const access = codexMcpAccess(profile.mcpAccess, GIT_MCP_NAME, [], GIT_READ_TOOLS);
+  if (!access.attached) return { info: { mcp: false, motivos: ['politica'] }, server: null };
+  const bundle = ctx.gitMcpBundle ?? GIT_MCP_BUNDLE;
+  const copy = path.join(sessionDir, 'git-mcp.mjs');
+  const copied = gitBundleExists(bundle) && (await mkdir(sessionDir, { recursive: true }).then(() => copyFile(bundle, copy)).then(() => true, () => false));
+  if (!copied) return { info: { mcp: false, motivos: ['indisponivel'] }, server: null };
+  const level = profile.mcpAccess?.[GIT_MCP_NAME];
+  const policy = { engine: profile.engine === 'codex' ? ('codex' as const) : ('claude' as const), access: level === 'ask' || level === 'readonly' ? level : ('free' as const), autonomy: profile.autonomy, review: readOnly };
+  await writeGitPolicy(sessionDir, policy);
+  const grant = gitGrant(policy);
+  return {
+    info: { mcp: true, motivos: [], level: grant.level, ...(grant.level !== 'all' ? { why: grant.why } : {}) },
+    server: gitMcpServer({ bundle: copy, projectPath: ctx.projectPath, root: cwd, runDir: sessionDir }),
+    ...(access.enabledTools || readOnly ? { enabledTools: [...GIT_READ_TOOLS] } : {}),
+  };
+}
+
 /** O MCP de SSH (`myco-ssh`) de uma conversa, igual nos dois motores (ver `sshLaunchOf`). */
 export interface SshLaunch {
   /** O que a ficha diz (undefined: a ficha não tem conexão SSH). */
@@ -451,6 +514,9 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
   // Memória da própria ficha: em plan (e na revisão) a sandbox é de só leitura e não aceita exceção por caminho, então o MCP (fora dela) é a porta de escrita.
   const memoria = memoriaLaunchOf(profile, ctx, readOnly);
   const memoriaMcp: CodexMcpServer | null = memoria.server ? { ...memoria.server, cwd: ROOT } : null;
+  // Git: na sandbox o `.git` é só leitura e não há rede, então commit, push e PR vão por este MCP, fora dela (ver gitLaunchOf). A cópia do pacote e a política ficam em run/<sessão>.
+  const git = await gitLaunchOf(profile, ctx, cwd, path.join(ctx.runDir, sessionId), readOnly);
+  const gitMcp: CodexMcpServer | null = git.server ? { ...git.server, cwd: ROOT, ...(git.enabledTools ? { enabledTools: git.enabledTools } : {}) } : null;
   // Chrome do usuário: depois do SSH, porque o MCP de SSH na conversa desliga o Chrome (não juntar servidor e logins).
   const chromeDir = path.join(ctx.runDir, sessionId, 'chrome');
   const chrome = codexChromeOf(profile, ctx, sshMcp !== null, chromeDir);
@@ -494,6 +560,7 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
     codexAgents: { available: agentRoles.map((r) => r.name), missing: agentsMissing },
     ssh: ssh.info,
     memoria: memoria.info,
+    git: git.info,
     codexChrome: chrome.info,
     codexMcpAsked: asked,
     codexMcpOut: extra.out,
@@ -526,6 +593,7 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
     threadFile: path.join(ctx.runDir, sessionId, 'codex-thread.json'),
     sshMcp,
     memoriaMcp,
+    gitMcp,
     chromeMcp: chrome.mcp,
     cleanMcp: clean.mcp,
     extraMcps: extra.servers,
@@ -638,6 +706,8 @@ export interface FichaRunInfo {
   ssh?: SshInfo;
   /** O MCP da memória da própria ficha, em `plan` (nos dois motores; ver memoriaLaunchOf). */
   memoria?: MemoriaInfo;
+  /** O MCP de git da conversa (nos dois motores; ver gitLaunchOf). Ausente = a pasta não é um repositório git. */
+  git?: GitInfo;
   codexChrome?: CodexChromeInfo;
   codexMcpAsked?: string[];
   /** Codex: os MCPs da ficha que ficaram fora da conversa, com o motivo (ver `codexMcpServers`). */
@@ -681,6 +751,7 @@ export async function writeFicha(
     lockedByCodexManager: ctx.lockedByCodexManager,
     ssh: run.ssh,
     memoria: run.memoria,
+    git: run.git,
     codexChrome: run.codexChrome,
     codexMcpAsked: run.codexMcpAsked,
     codexMcpOut: run.codexMcpOut,

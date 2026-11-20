@@ -1280,6 +1280,7 @@ export class StaffService {
         readOnlyPaths: codexRun.readOnlyPaths,
         sshMcp: codexRun.sshMcp,
         memoriaMcp: codexRun.memoriaMcp,
+        gitMcp: codexRun.gitMcp,
         ...(readOnly && { readOnly: true }),
         chromeMcp: codexRun.chromeMcp,
         cleanMcp: codexRun.cleanMcp,
