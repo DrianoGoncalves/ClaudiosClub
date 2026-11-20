@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AppConfig, InboxItem } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
+import { pendingOf } from '../inbox/resolved';
 import { inTab, TAB_ALL, TAB_NONE } from './workspaces';
 
 interface Props {
@@ -35,7 +36,7 @@ export function WorkspaceTabs({ config, workspaceOf, inUse, inbox, value, onChan
     ...shown.map((w) => ({ id: w.id, label: w.name })),
     ...(shown.length && hasLoose ? [{ id: TAB_NONE, label: t('office.tabNone') }] : []),
   ];
-  const pending = (tab: string) => inbox.filter((i) => inTab(tab, workspaceOf.get(i.projectId), config)).length;
+  const pending = (tab: string) => pendingOf(inbox).filter((i) => inTab(tab, workspaceOf.get(i.projectId), config)).length;
 
   // Enter e o blur que vem depois chamariam duas vezes.
   const busy = useRef(false);

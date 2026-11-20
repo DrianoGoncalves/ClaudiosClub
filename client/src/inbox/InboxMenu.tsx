@@ -23,6 +23,7 @@ import { reviewShortcutOf } from './delegateReview';
 import { SandboxFix } from './SandboxFix';
 import { secretVerdictOf } from './secretVerdict';
 import { alertAction, stuckNoCodeOf, stuckOf, type InboxOpen } from './taskAlerts';
+import { isResolved, pendingOf } from './resolved';
 import type { InboxView } from './useInbox';
 
 // Botão "precisa de mim" no topo do quadro, com o contador, e a lista que abre embaixo dele.
@@ -92,7 +93,8 @@ export function InboxMenu({
   const [open, setOpen] = useState(initialOpen);
   const [now, setNow] = useState(() => Date.now());
   const root = useRef<HTMLDivElement>(null);
-  const count = inbox.items.length;
+  // Só o que espera o dono entra no número; o erro já resolvido fica na lista, com selo, até ser ignorado.
+  const count = pendingOf(inbox.items).length;
   /** O item com uma ação de tarefa em andamento e o último erro dela (a tarefa pode ter mudado entre a leitura e o clique). */
   const [busy, setBusy] = useState<string | null>(null);
   const [failed, setFailed] = useState<{ id: string; message: string } | null>(null);
@@ -217,7 +219,7 @@ export function InboxMenu({
               {reviewReadError}
             </p>
           )}
-          {count === 0 ? (
+          {inbox.items.length === 0 ? (
             <p className="muted small inbox-empty">{t('inbox.nothingBody')}</p>
           ) : (
             <ul className="inbox-list">
@@ -238,10 +240,10 @@ export function InboxMenu({
                 const sandbox = sandboxOf(item);
                 const row = (
                   <>
-                    <span className="inbox-kind">{KIND_LABEL[item.kind]}</span>
-                    <span className="inbox-who">
+                    <span className="inbox-kind">{KIND_LABEL[item.kind]}</span>                    <span className="inbox-who">
                       <b>{inboxWho(item)}</b>
                       {item.name && item.projectName && <span className="muted"> · {item.projectName}</span>}
+                      {isResolved(item) && <span className="task-badge small inbox-resolved">{t('inbox.resolved')}</span>}
                     </span>
                     {topic && <span className="inbox-topic" title={topic}>{topic}</span>}
                     <span className="inbox-summary" title={inboxText(item)}>{inboxText(item)}</span>
@@ -249,7 +251,7 @@ export function InboxMenu({
                   </>
                 );
                 return (
-                <li key={item.id} className={dismissTitle ? 'inbox-has-x' : undefined}>
+                <li key={item.id} className={[dismissTitle && 'inbox-has-x', isResolved(item) && 'is-resolved'].filter(Boolean).join(' ') || undefined}>
                   {item.codexSandbox ? (
                     // Aviso da máquina (sem projeto nem conversa): não há para onde ir, então a linha não é botão; o que se faz está logo abaixo (copiar o comando) e o × ignora.
                     <div className={`inbox-item inbox-${item.kind} inbox-sandbox`}>{row}</div>

@@ -15,6 +15,7 @@ import type {
   StaffProfile,
   TaskSummary,
 } from '../../../shared/model';
+import { pendingOf } from '../inbox/resolved';
 import { isTaskAlert } from '../inbox/taskAlerts';
 import { liveLines, type LiveLine } from './liveWho';
 
@@ -237,7 +238,8 @@ export function buildGraph(
   const extraManagers: Array<{ projectId: string; staff: StaffProfile; managerId: string }> = [];
   // A caixa é a fonte única de "precisa de mim": cartão e contador da sala leem o mesmo conjunto.
   // Item de tarefa (bloqueada, dúvida escalada, tarefa parada) não é conversa esperando: o item leva o staffId de quem é dono da tarefa, mas pintar o cartão dele de amarelo diria que a conversa dele espera você.
-  const inbox = (opts.inbox ?? []).filter((i) => !isTaskAlert(i));
+  // Aviso de erro já resolvido também não: não espera ninguém.
+  const inbox = pendingOf(opts.inbox ?? []).filter((i) => !isTaskAlert(i));
   const awaitingSessions = new Set(inbox.map((i) => i.sessionId).filter((id) => id !== ''));
   const awaitingStaff = new Set(inbox.map((i) => i.staffId).filter((id): id is string => id !== null));
   /**

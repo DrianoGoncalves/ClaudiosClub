@@ -42,6 +42,7 @@ import { companyName, effortLabel, employeeName } from './format';
 import { t } from './i18n';
 import { linkItem, parseOpenLink } from './inbox/deepLink';
 import { taskIdOf, type InboxOpen } from './inbox/taskAlerts';
+import { pendingOf } from './inbox/resolved';
 import { useInbox } from './inbox/useInbox';
 import { withTaskStaff } from './tasks/followUpNotice';
 import { rankingGroups } from './ranking';
@@ -332,8 +333,9 @@ export function App() {
   // O título da aba traz quantas coisas esperam você: dá para ver sem trazer o Claudio’s Club para a frente.
   useEffect(() => {
     const name = companyName(config?.companyName);
-    document.title = inbox.items.length ? `(${inbox.items.length}) ${name}` : name;
-  }, [config?.companyName, inbox.items.length]);
+    const pending = pendingOf(inbox.items).length;
+    document.title = pending ? `(${pending}) ${name}` : name;
+  }, [config?.companyName, inbox.items]);
 
   // Estado ao vivo por polling (SSE na Fase 3). Só troca o board se algo mudou, para não redesenhar à toa.
   // Sessão viva que o quadro ainda não conhece (conversa nova, que grava o transcript só depois da primeira

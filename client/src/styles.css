@@ -1074,6 +1074,9 @@ textarea.q-field { resize: vertical; }
 .task-badge.fu-rec { color: var(--ink); border-width: 1.5px; }
 .task-badge.fu-rec.is-worth { border-style: solid; border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 12%, transparent); font-weight: 600; }
 .task-badge.fu-rec.is-optional { border-style: dashed; border-color: var(--muted); }
+.inbox-resolved { margin-left: 6px; color: var(--ink); border-color: var(--ink-green); background: color-mix(in srgb, var(--ink-green) 12%, transparent); }
+.inbox-list li.is-resolved > .inbox-item :is(.inbox-kind, .inbox-topic, .inbox-summary, .inbox-at) { opacity: 0.6; }
+.inbox-list li.is-resolved > .inbox-item .inbox-who b { font-weight: 500; }
 .task-badge.fu-done { color: var(--ink); border-color: var(--ink-green); background: color-mix(in srgb, var(--ink-green) 12%, transparent); }
 .fu-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; }
 .fu-details summary { cursor: pointer; color: var(--muted); width: fit-content; min-height: 24px; font-size: 12px; }
