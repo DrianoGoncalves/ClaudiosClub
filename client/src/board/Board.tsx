@@ -444,6 +444,7 @@ export function BoardView(props: BoardViewProps) {
             contextSwitch={config?.contextSwitch ?? null}
             aiTitles={typeof config?.aiTitles === 'boolean' ? config.aiTitles : null}
             autoRetry={typeof config?.autoRetry === 'boolean' ? config.autoRetry : null}
+            stopOnTabClose={typeof config?.stopOnTabClose === 'boolean' ? config.stopOnTabClose : null}
             optimizeQuota={config?.optimizeQuota ?? null}
             autoContinue={config?.autoContinue ?? null}
             showUserScope={config?.showUserScope ?? null}

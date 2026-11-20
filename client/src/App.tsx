@@ -23,6 +23,7 @@ import { ANIMATIONS_KEY, animationsOn, readAnimationsChoice, systemReducesMotion
 import { BoardView } from './board/Board';
 import { boardStyle, useBoardBackground } from './board/colors';
 import { LazyScreen } from './LazyScreen';
+import { startPresence } from './presence';
 import { useTheme } from './theme';
 import { pollVisible, pollVisibleLoop } from './usePoll';
 import { archiveKey, ghostNodeId, HR_ID, manageNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
@@ -216,6 +217,9 @@ export function App() {
     load();
     api.config().then(setConfig, () => {});
   }, [load]);
+
+  // Sinal de que há uma aba aberta: com "parar ao fechar a aba" ligado, o servidor só para quando nenhuma dá sinal (server/tabPresence.ts).
+  useEffect(() => startPresence(), []);
 
   // Voltando para a aba, relê projetos e fichas do disco: o que mudou fora (terminal, editor) aparece
   // sem botão de atualizar.

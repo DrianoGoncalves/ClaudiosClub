@@ -61,6 +61,8 @@ interface Props {
   aiTitles: boolean | null;
   /** Retomar sozinho a conversa que cai por falha passageira; null = config ainda não chegou (ou o servidor é anterior à opção: o item nem aparece). */
   autoRetry: boolean | null;
+  /** Parar o servidor quando a última aba fechar; null = config ainda não chegou (ou o servidor é anterior à opção: o item nem aparece). */
+  stopOnTabClose: boolean | null;
   /** Otimizar assinatura (folga de cota); null = config ainda não chegou. */
   optimizeQuota: boolean | null;
   /** Continuar sozinho quando o limite de uso volta; null = config ainda não chegou. */
@@ -571,16 +573,31 @@ function buildSettings(
       control: <ServerControls />,
       advanced: true,
     },
-    {
-      id: 'mcp-servers',
-      group: 'mcp',
-      title: t('mcp.title'),
-      description: t('mcp.desc'),
-      keywords: t('mcp.keywords'),
-      control: <McpServers projects={p.projects} />,
-      advanced: true,
-    },
   ];
+
+  // Logo abaixo do botão Parar: o servidor para sozinho depois que a última aba fechar (server/tabPresence.ts). Desligado por padrão.
+  if (p.stopOnTabClose !== null) {
+    out.push({
+      id: 'stop-on-tab-close',
+      group: 'general',
+      section: 'system',
+      title: t('toolbar.stopOnTabCloseTitle'),
+      description: t('toolbar.stopOnTabCloseDesc'),
+      keywords: t('toolbar.stopOnTabCloseKeywords'),
+      toggle: { checked: p.stopOnTabClose, onChange: (v) => void api.saveConfig({ stopOnTabClose: v }).then(p.onConfig, () => {}) },
+      advanced: true,
+    });
+  }
+
+  out.push({
+    id: 'mcp-servers',
+    group: 'mcp',
+    title: t('mcp.title'),
+    description: t('mcp.desc'),
+    keywords: t('mcp.keywords'),
+    control: <McpServers projects={p.projects} />,
+    advanced: true,
+  });
 
   // Fundo geral: claro e escuro lado a lado, cada um com o padrão de fábrica.
   if (p.boardBackground) {
