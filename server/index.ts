@@ -1674,6 +1674,9 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   // o turno, e as suas ações manuais seguem. Ler é livre (`{ paused: { at } | null }`). Pausar e retomar só pelo navegador pareado: o serviço responde 403 a quem não é a tela (o gate já
   // barra o POST do funcionário antes, como nas outras rotas só da tela), e as rotas nem estão na lista de apiPolicy.ts. Idempotentes: pausar de novo mantém o horário, retomar o que roda é um nada.
   ['GET', new RegExp(`^/api/projects/${ID}/pause$`), ({ params: [id] }) => tasks.pauseOf(id!)],
+  // O estado da fila de cada funcionário (ver `TaskService.queueStates`): livre, ocupado com o card X, esperando recurso, no limite de consumo, projeto pausado, entrega em processamento ou a suíte
+  // esperando a vez. Só leitura (lista de `StaffQueue`); 404 se o projeto não existe.
+  ['GET', new RegExp(`^/api/projects/${ID}/queues$`), ({ params: [id] }) => tasks.queueStates(id!)],
   ['POST', new RegExp(`^/api/projects/${ID}/pause$`), ({ params: [id], fromBrowser }) => tasks.setPaused(id!, true, fromBrowser)],
   ['POST', new RegExp(`^/api/projects/${ID}/resume$`), ({ params: [id], fromBrowser }) => tasks.setPaused(id!, false, fromBrowser)],
   [

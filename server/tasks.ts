@@ -29,7 +29,8 @@ import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf
 import { UsageStopError } from './usageStop';
 import { BACKGROUND_WAIT_MS, ESCALATE_AFTER_MS, HELD_MAX_FAILS, OUTCOME_HOLD_MAX_MS, PERMISSION_STUCK_MS, PermanentError, REASK_AFTER_MS, REVIEW_WAIT_MS, failedRetry, isTransient, nextRetry, retryDue } from './retryPolicy';
 import { BLOCKERS_FORMAT, REJECTIONS_MAX, REPLY_MAX, citedIds, doubtIsAboutRejection, fitReviewText, nextBlockerId, parseBlockers, priorBlockers, type ParsedBlock } from './reviewBlockers';
-import type { Rejection, ReviewBlocker } from '../shared/model';
+import type { DeliveryPhase, QueueDelivery, Rejection, ReviewBlocker, StaffQueue } from '../shared/model';
+import type { HeavyWaitFn } from './heavyQueue';
 import { appendRun, newRunId, readRuns, type RunOutcome, type RunTrigger, type TaskRunEvent } from './taskRuns';
 import { hashSkillFolders } from './skillLibrary';
 import { convertSkills, knownNamesOf, planSkills, type SkillSource } from './skillAccess';
@@ -366,9 +367,9 @@ export interface TaskServiceDeps {
   requesterSession?: (projectId: string, staffId: string) => string | null;
   /**
    * Roda os testes do projeto (os testes trocam); o comando da suíte vem de detectTest, nunca do pedido. A nova rodada só dos arquivos que falharam (ver `isolateFailures`)
-   * passa o prazo e `queueAs` (o comando que decide a fila de validação pesada).
+   * passa o prazo e `queueAs` (o comando que decide a fila de validação pesada); `onWait` avisa quando a suíte espera a vez da fila (ver `HeavyWaitFn`).
    */
-  runTests?: (cwd: string, command: string, timeoutMs?: number, queueAs?: string) => Promise<TestRun>;
+  runTests?: (cwd: string, command: string, timeoutMs?: number, queueAs?: string, onWait?: HeavyWaitFn) => Promise<TestRun>;
   /** A última resposta de uma conversa (o resumo da entrega). */
   lastText?: (sessionId: string) => string | null;
   /** Branch em que ele vai trabalhar (a da worktree dele, ou a atual do projeto). */
@@ -596,6 +597,15 @@ async function settleWithin(job: Promise<unknown>, ms: number): Promise<void> {
   }
 }
 
+/** A entrega em processamento de um funcionário (ver `TaskService.deliveries`): a fase de agora e desde quando, e desde quando a entrega começou. */
+interface DeliveryActivity {
+  staffId: string;
+  phase: DeliveryPhase;
+  since: string;
+  startedAt: string;
+  holder?: string;
+}
+
 export class TaskService {
   /**
    * sessionId → onde está a tarefa daquela conversa (e se é o trabalho, a revisão ou o deploy). `auto`: o card é automático
@@ -618,6 +628,11 @@ export class TaskService {
   private readonly kicks = new Map<string, Promise<void>>();
   /** Quem tem a vez de cada funcionário agora (a operação e desde quando) e quantos esperam por ela; só para o log da vez presa (ver `lockedWithDeadline`). */
   private readonly lockState = new Map<string, { holder: { op: string; since: number } | null; waiting: number }>();
+  /**
+   * As entregas em processamento (`projeto:tarefa`): do card ir para revisão até o pedido da revisão sair. Só para mostrar o que ela faz e desde quando (ver `queueStates`); nada decide
+   * por isto. Some no reinício, sem custo (a entrega perdida volta pelo `tick`, ver `resumeReviews`).
+   */
+  private readonly deliveries = new Map<string, DeliveryActivity>();
   /** Envios que o tick e a partida têm em voo (dúvida ao gestor, revisão automática, re-pedido): dois `tick` juntos não mandam duas vezes. */
   private readonly inFlight = new Set<string>();
   /** Falhas seguidas de `awaitingLimit` por conversa (ver `orphan`). */
@@ -3069,6 +3084,49 @@ export class TaskService {
     return { paused: null };
   }
 
+  /**
+   * O estado da fila de cada funcionário que tem card aberto ou entrega em processamento, ou null se o projeto não existe (404): para o dono ver por que ela não anda (ver `StaffQueue`).
+   * Só leitura, derivado do que já existe (a pausa, o card em andamento, a espera do gate de recursos, a trava de consumo, as entregas em processamento e a espera da suíte): nada é gravado.
+   * Quem não tem card aberto nem entrega não aparece (não há fila a explicar).
+   */
+  async queueStates(projectId: string): Promise<StaffQueue[] | null> {
+    if (!(await this.deps.projectPath(projectId))) return null;
+    const tasks = (await this.list(projectId)) ?? [];
+    const pause = (await this.deps.pauses?.get(projectId)) ?? null;
+    const prefix = `${projectId}:`;
+    const deliveries = [...this.deliveries].filter(([key]) => key.startsWith(prefix)).map(([key, d]) => ({ taskId: key.slice(prefix.length), ...d }));
+    const ids = new Set([...tasks.filter((t) => t.staffId && !isClosed(t)).map((t) => t.staffId!), ...deliveries.map((d) => d.staffId)]);
+    const out: StaffQueue[] = [];
+    for (const staffId of ids) out.push(await this.queueState(projectId, tasks, staffId, pause, deliveries));
+    return out;
+  }
+
+  /** A fila de um funcionário (ver `queueStates`): o primeiro estado que vale, na ordem de `QueueState`. */
+  private async queueState(projectId: string, tasks: Task[], staffId: string, pause: ProjectPause | null, all: Array<DeliveryActivity & { taskId: string }>): Promise<StaffQueue> {
+    const queue = queueOf(tasks, staffId);
+    const own = all.filter((d) => d.staffId === staffId).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    const base: StaffQueue = { staffId, state: 'free', queued: queue.length, deliveries: own.map(({ staffId: _s, ...d }) => d) };
+    const occ = occupant(tasks, staffId);
+    if (pause) return { ...base, state: 'paused', since: pause.at, ...(occ && { taskId: occ.id }) };
+    if (occ) return { ...base, state: 'busy', taskId: occ.id, since: [...occ.history].reverse().find((h) => h.status === occ.status)?.at };
+    if (this.staffBusy(projectId, tasks, staffId)) return { ...base, state: 'busy', detail: 'uma conversa dele está trabalhando' };
+    const gated = queue.find((t) => t.resourceWait);
+    if (gated?.resourceWait) return { ...base, state: 'resource-wait', taskId: gated.id, since: gated.resourceWait.since, detail: gated.resourceWait.reason };
+    // O card que o `takeNext` começaria agora: o limite de consumo só barra a partida dele (o que você pôs na fila com "forçar" passa por cima).
+    const now = Date.now();
+    const next = queue.find((t) => !heldFirst(t) && !blockers(t, tasks).length && (!t.startRetry || retryDue(t.startRetry, now)));
+    if (next && !next.queuedForce) {
+      const profile = await this.deps.readProfile(projectId, staffId).catch(() => null);
+      const hit = profile ? await this.deps.stopHit?.(projectId, staffId, next.fallback?.engine ?? primaryEngine(profile)).catch(() => null) : null;
+      if (hit) return { ...base, state: 'usage-limit', taskId: next.id, since: next.queuedAt ?? undefined, detail: new UsageStopError(hit).message };
+    }
+    // Quem segura a fila é o `saving` (na vez dele); a suíte esperando é o que o dono quer ver; o resto segue em paralelo.
+    const d = own.find((x) => x.phase === 'saving') ?? own.find((x) => x.phase === 'heavy-wait') ?? own[0];
+    if (!d) return base;
+    const heavy = d.phase === 'heavy-wait';
+    return { ...base, state: heavy ? 'heavy-wait' : 'delivering', taskId: d.taskId, since: heavy ? d.since : d.startedAt, phase: d.phase, ...(d.holder && { detail: `outra validação pesada roda: ${d.holder}` }) };
+  }
+
   /** `Task.projectPaused` na listagem: a tarefa aberta de um projeto pausado (derivado, não gravado). */
   private withProjectPause(t: Task, pause: ProjectPause | null): Task {
     return pause && !isClosed(t) ? { ...t, projectPaused: pause } : t;
@@ -4365,6 +4423,9 @@ export class TaskService {
     if (where?.role !== 'work') return;
     // Turno que falhou por causa passageira: a decisão de retomar (marcar a retomada, ou segurar a conversa para você) sai antes de ler o que vem abaixo.
     await this.deps.settleRetry?.(sessionId).catch(() => {});
+    // A conversa já está num turno novo (o ajuste guardado acabou de ir, ou a retomada do turno que falhou): este aviso é do turno que terminou antes (o vigia e o processo avisam o mesmo
+    // fim, um deles pode chegar depois do envio) e não decide nada, nem entrega nem segura o card. O fim do turno novo chama `workDone` de novo (ver `turnRunning`).
+    if (this.turnRunning(sessionId)) return;
     // Parou no teto de ferramentas ou de minutos: não é entrega (nem revisão). Vai para Aguardar, com o motivo, e a fila anda.
     // Card automático não: o teto só encerrou o turno da conversa direta, e o que ela alterou vai para revisão.
     // Erro do motor (login recusado, erro do turno que não passa sozinho): também não é entrega, e a revisão só gastaria um turno para dizer que não há nada. Mesmo caminho do teto,
@@ -4398,14 +4459,27 @@ export class TaskService {
     if (await this.holdNoCode(where.projectId, current, sessionId)) return;
     // Planejando no Codex (ficha `plan`, sandbox só leitura): sem cartão de plano, o fim do turno é a entrega (ver `endsInDelivery`). Só lê a ficha com "planejando".
     const engine = current.status === 'planning' ? await this.workEngine(where.projectId, current, sessionId) : 'claude';
-    await this.deliver(where.projectId, where.taskId, staffId, sessionId, (t) => endsInDelivery(t, engine), TURN_ENDED);
+    // `!turnRunning` de novo, dentro da vez dele: o envio do ajuste (`takeNext`) tem a mesma vez, então ou ele já foi (conversa em turno novo: não entrega) ou ainda não foi (e depois dele este fim
+    // de turno já entregou, com o resumo do turno que de fato terminou). As conferências de antes (dúvida, subtarefa, segundo plano, sem código) rodam sem a vez dele e podem ter perdido o envio.
+    await this.deliver(where.projectId, where.taskId, staffId, sessionId, (t) => endsInDelivery(t, engine) && !this.turnRunning(sessionId), TURN_ENDED);
   }
 
   /**
-   * A entrega: o card vai para revisão (se `accept` ainda vale, conferido na gravação), com o commit, o resumo, os testes e o aviso a quem pediu, e a revisão automática é pedida.
+   * A conversa está no meio de um turno agora (ou esperando a sua resposta a um pedido)? Quem decide pelo fim de um turno confere aqui antes: se ela já voltou a trabalhar, o fim que chegou é
+   * de um turno anterior (o aviso atrasado do vigia ou do processo, depois de o ajuste guardado ir). Sem `liveWork`, ou com a conversa fechada, nunca. Vale para os dois motores
+   * (`ChatManager.liveWork`: o `busy` do Claude e o do Codex acendem no envio, não na resposta do processo).
+   */
+  private turnRunning(sessionId: string): boolean {
+    return !!this.deps.liveWork?.(sessionId)?.busy;
+  }
+
+  /**
+   * A entrega: o card vai para revisão (se `accept` ainda vale, conferido na gravação), com o commit e o resumo; depois os testes e o aviso a quem pediu, e a revisão automática é pedida.
+   * Só o primeiro trecho (card, commit e resumo) é na vez do funcionário: a próxima tarefa dele só começa depois que esta tem o seu commit. O resto (`afterDelivery`) roda fora da vez,
+   * porque os testes esperam a fila de validação pesada da máquina (minutos) e o aviso espera a conversa do gestor: com eles dentro da vez, a fila inteira do funcionário esperava junto.
    * Vem do fim do turno (`workDone`) e de quem pediu mandar revisar o card sem código mesmo assim (`reviewAnyway`, que explica o porquê em `why`). Devolve o card entregue, ou null se
-   * ele mudou no caminho e nada foi entregue. `deadlineMs` (só de `reviewAnyway`, que responde a uma chamada HTTP): a vez dele é esperada só até aí, e passado o prazo
-   * (TaskBusyError, 503) nada é entregue (ver `lockedWithDeadline`); o fim de turno espera a vez de sempre.
+   * ele mudou no caminho (nada foi entregue, ou foi cancelado ou entregue de novo durante os testes: então não há aviso nem revisão desta entrega). `deadlineMs` (só de `reviewAnyway`, que
+   * responde a uma chamada HTTP): a vez dele é esperada só até aí, e passado o prazo (TaskBusyError, 503) nada é entregue (ver `lockedWithDeadline`); o fim de turno espera a vez de sempre.
    */
   private async deliver(projectId: string, taskId: string, staffId: string, sessionId: string, accept: (t: Task) => boolean, entered: string, why?: string, deadlineMs?: number): Promise<Task | null> {
     // A chave vale da entrega até o pedido de revisão: com a tarefa já em "revisão" e os testes rodando (minutos), o `tick` não a toma por
@@ -4429,27 +4503,68 @@ export class TaskService {
             return (delivered = moved(why ? noted(next, why) : next, 'review', 'auto', entered));
           });
           if (delivered) {
+            if (owns) this.deliveryPhase(projectId, taskId, staffId, 'saving');
             await this.logEnd(projectId, seen.before, 'delivered');
             await this.markDelivery(projectId, delivered);
-            delivered = await this.recordDelivery(projectId, delivered, sessionId, seen.before?.noCode?.summary);
-            // Pedida por um gestor: o Claudio’s Club roda os testes antes de avisar, e o gestor não gasta a conversa
-            // dele (a mais longa e cara) rodando de novo.
-            const tests = (delivered as Task).requestedBy ? await this.deliveryTests(projectId, delivered) : null;
-            if (tests) delivered = (await this.change(projectId, taskId, (t) => ({ ...t, tests }))) ?? delivered;
-            // Quem pediu é quem revisa: o aviso sai no desfecho da revisão automática (ver autoReview), não na entrega.
-            if (!selfReview(delivered)) await this.tellManager(projectId, delivered, sessionId);
-          }
+            delivered = await this.recordDelivery(projectId, delivered, sessionId, seen.before?.noCode?.summary);          }
           return delivered as Task | null;
         },
         { op: `entrega ${taskId}`, refused: 'a revisão NÃO foi pedida', deadlineMs },
       );
+      // A vez dele já passou para a fila: a próxima tarefa começa sem esperar testes nem aviso.
       void this.kick(projectId, staffId);
+      if (!deliveredTask) return null;
+      const after = await this.afterDelivery(projectId, staffId, sessionId, deliveredTask);
       // Fora da vez dele: a revisão automática (com revisor marcado) é pedida depois da entrega.
-      if (deliveredTask) await this.autoReview(projectId, deliveredTask);
-      return deliveredTask;
+      if (after) {
+        if (owns) this.deliveryPhase(projectId, taskId, staffId, 'review');
+        await this.autoReview(projectId, after);
+      }
+      return after;
     } finally {
-      if (owns) this.inFlight.delete(key);
+      if (owns) {
+        this.inFlight.delete(key);
+        this.deliveries.delete(`${projectId}:${taskId}`);
+      }
     }
+  }
+
+  /**
+   * O que vem depois da entrega gravada, fora da vez do funcionário: os testes (pedida por um gestor: o Claudio’s Club os roda antes de avisar, e o gestor não gasta a conversa dele, a mais
+   * longa e cara, rodando de novo) e o aviso a quem pediu. Quem pediu é quem revisa: o aviso sai no desfecho da revisão automática (ver autoReview), não na entrega.
+   *
+   * Os testes levam minutos e o card pode mudar nesse meio tempo (cancelado, devolvido, entregue de novo). Por isso a gravação dos testes confere, dentro do `change`, que o card ainda está
+   * nesta entrega (`onDelivery`, pela hora dela): senão nada mais sai daqui (nem o aviso nem a revisão são desta entrega) e devolve null. O aviso leva o resumo gravado na entrega
+   * (`delivery.summary`), não o `lastText` da conversa: com a fila andando, ele já pode ser o do turno seguinte. Falha dos testes ou do aviso não segura a entrega: sem os testes a revisão
+   * segue (e mostra só a lista), e o aviso que não foi é do gestor perder, não da fila. Devolve o card como ficou.
+   */
+  private async afterDelivery(projectId: string, staffId: string, sessionId: string, delivered: Task): Promise<Task | null> {
+    const at = delivered.delivery?.at ?? null;
+    let current = delivered;
+    if (delivered.requestedBy) {
+      this.deliveryPhase(projectId, delivered.id, staffId, 'tests');
+      const tests = await this.deliveryTests(projectId, delivered, (wait) => this.deliveryPhase(projectId, delivered.id, staffId, wait ? 'heavy-wait' : 'tests', wait?.holder)).catch(() => null);
+      let live = false;
+      const written = await this.change(projectId, delivered.id, (t) => {
+        if (!onDelivery(t, at)) return t;
+        live = true;
+        return tests ? { ...t, tests } : t;
+      });
+      if (!live || !written) return null;
+      current = written;
+      if (!selfReview(current)) {
+        this.deliveryPhase(projectId, delivered.id, staffId, 'notice');
+        await this.tellManager(projectId, current, sessionId, false, current.delivery?.summary ?? '').catch(() => {});
+      }
+    }
+    return current;
+  }
+
+  /** A fase em que a entrega está agora (ver `DeliveryPhase`), só para o estado da fila (`queueStates`). `holder`: em `heavy-wait`, quem segura a fila da suíte. */
+  private deliveryPhase(projectId: string, taskId: string, staffId: string, phase: DeliveryPhase, holder?: string): void {
+    const key = `${projectId}:${taskId}`;
+    const since = new Date().toISOString();
+    this.deliveries.set(key, { staffId, phase, since, startedAt: this.deliveries.get(key)?.startedAt ?? since, ...(holder && { holder }) });
   }
 
   /**
@@ -4577,7 +4692,8 @@ export class TaskService {
     // enquanto este esperava a vez, deixa a marca como está (e este não segue para a entrega).
     await this.locked(projectId, staffId, `sem-codigo ${task.id}`, async () => {
       await this.change(projectId, task.id, (t) => {
-        if (t.status !== 'doing' || t.sessionId !== sessionId || t.changedFiles?.length) return t;
+        // Turno novo enquanto esperava a vez (o ajuste guardado foi): este fim é do turno anterior, e marcar "sem código" agora seria falso (ver `turnRunning`).
+        if (t.status !== 'doing' || t.sessionId !== sessionId || t.changedFiles?.length || this.turnRunning(sessionId)) return t;
         if (t.noCode) {
           already = true;
           return t;
@@ -4802,11 +4918,12 @@ export class TaskService {
    * Tarefa pedida por um gestor foi entregue: ele recebe, na conversa dele, quem entregou, o quê e
    * o resumo, para conferir.
    */
-  private async tellManager(projectId: string, task: Task, sessionId: string, interrupted = false): Promise<void> {
+  private async tellManager(projectId: string, task: Task, sessionId: string, interrupted = false, summary?: string): Promise<void> {
     if (!task.requestedBy || !this.deps.notify) return;
     const who = task.staffId ? await this.deps.readProfile(projectId, task.staffId) : null;
     const name = who?.name ?? 'O funcionário';
-    const said = untrustedMarked(`O que ${name} disse`, 'DA ENTREGA', (this.deps.lastText?.(sessionId) || task.delivery?.summary || '').trim().slice(0, 1500));
+    // `summary`: o resumo já gravado na entrega (a entrega que o aviso só leva depois dos testes, com a fila dele andando: a conversa já pode ter outro turno, e `lastText` seria o dele).
+    const said = untrustedMarked(`O que ${name} disse`, 'DA ENTREGA', (summary ?? (this.deps.lastText?.(sessionId) || task.delivery?.summary || '')).trim().slice(0, 1500));
     // Interrompida: testes guardados seriam de uma entrega anterior, não desta.
     const t = interrupted ? undefined : task.tests;
     const tests = testsLine(t, !!task.changedFiles?.length);
@@ -4896,8 +5013,8 @@ export class TaskService {
     }
   }
 
-  /** Os testes do projeto onde está o código da entrega (a worktree dele ou o próprio projeto). */
-  private async deliveryTests(projectId: string, task: Task): Promise<TestRun | null> {
+  /** Os testes do projeto onde está o código da entrega (a worktree dele ou o próprio projeto). `onWait`: a suíte espera a vez da fila de validação pesada (ver `HeavyWaitFn`). */
+  private async deliveryTests(projectId: string, task: Task, onWait?: HeavyWaitFn): Promise<TestRun | null> {
     const dir = await this.deps.projectPath(projectId);
     if (!dir || !task.staffId) return null;
     const command = await detectTest(dir);
@@ -4905,7 +5022,8 @@ export class TaskService {
     const profile = await this.deps.readProfile(projectId, task.staffId);
     const place = await locateCode(dir, task.staffId, !!profile?.worktree).catch(() => null);
     const cwd = place?.path ?? dir;
-    const run = this.deps.runTests ?? runTests;
+    const base = this.deps.runTests ?? runTests;
+    const run: typeof base = (c, cmd, timeoutMs, queueAs) => base(c, cmd, timeoutMs, queueAs, onWait);
     const tests = await run(cwd, command);
     // Suíte que falhou: roda de novo, uma vez, só os arquivos que falharam (sem a suíte inteira), para o pedido de revisão separar falha desta entrega de falha antiga.
     // Erro aqui nunca derruba a entrega: sem a nova rodada o pedido mostra só a lista.

@@ -1325,6 +1325,50 @@ export interface ProjectPause {
   at: string;
 }
 
+/**
+ * O que a fila de um funcionário faz agora (`GET /api/projects/:id/queues`, ver `TaskService.queueStates`). Na ordem em que vale quando mais de um é verdade: `paused` (o projeto
+ * está pausado), `busy` (ele trabalha num card ou numa conversa), `resource-wait` (o gate de recursos segurou a partida), `usage-limit` (a trava de consumo barra o motor dele),
+ * `delivering` (uma entrega dele ainda está sendo processada), `heavy-wait` (essa entrega espera a vez da suíte de testes: outra validação pesada roda na máquina) e `free`.
+ * `delivering` e `heavy-wait` só aparecem com ele sem card em andamento: se ele já pegou o próximo, o estado é `busy` e a entrega segue em `deliveries`.
+ */
+export type QueueState = 'free' | 'busy' | 'delivering' | 'heavy-wait' | 'resource-wait' | 'usage-limit' | 'paused';
+
+/**
+ * O que a entrega de uma tarefa faz agora, depois de o card ir para revisão: `saving` (resumo e commit, ainda na vez do funcionário: a fila dele espera), `tests` (rodando a suíte), `heavy-wait`
+ * (a suíte espera a vez: outra validação pesada roda na máquina), `notice` (o aviso a quem pediu) e `review` (o pedido da revisão). Só `saving` segura a fila; as outras seguem em paralelo.
+ */
+export type DeliveryPhase = 'saving' | 'tests' | 'heavy-wait' | 'notice' | 'review';
+
+/** Uma entrega em processamento de um funcionário (ver `DeliveryPhase`). */
+export interface QueueDelivery {
+  taskId: string;
+  phase: DeliveryPhase;
+  /** Desde quando a entrega está nesta fase (ISO). */
+  since: string;
+  /** Desde quando a entrega está em processamento (ISO): o card foi para revisão. */
+  startedAt: string;
+  /** Em `heavy-wait`: o nome de quem segura a fila da suíte agora. */
+  holder?: string;
+}
+
+/** A fila de um funcionário: o estado (ver `QueueState`), o card que o explica, desde quando e o que mais importa dele. */
+export interface StaffQueue {
+  staffId: string;
+  state: QueueState;
+  /** O card que explica o estado: o que ele faz (`busy`), a que espera (`resource-wait`, `usage-limit`) ou o que entrega (`delivering`, `heavy-wait`). */
+  taskId?: string;
+  /** Desde quando está assim (ISO), quando o estado tem começo conhecido: o card entrou em andamento, a espera começou, a entrega começou (`delivering`) ou a suíte começou a esperar (`heavy-wait`). */
+  since?: string;
+  /** Em `delivering` e `heavy-wait`: a fase da entrega que explica o estado. */
+  phase?: DeliveryPhase;
+  /** O motivo em palavras: o do gate de recursos, a linha de parada de consumo, quem segura a suíte. */
+  detail?: string;
+  /** Quantos cards ele tem na fila ("a fazer"), de qualquer ordem. */
+  queued: number;
+  /** As entregas dele em processamento agora (a mais antiga primeiro), também quando o estado é outro (ele já pegou o próximo card). */
+  deliveries: QueueDelivery[];
+}
+
 /** Tarefas de um projeto para o cabeçalho: abertas (tudo que não está encerrado: nem pronto nem cancelado) e em revisão. */
 export interface TaskSummary {
   open: number;
