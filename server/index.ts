@@ -35,7 +35,7 @@ import {
 } from './config';
 import { PickerBusyError, pickFolder } from './folderPicker';
 import { openProject, parseNewProject, ProjectError, usualParent } from './newProject';
-import { createDemo, demoPaths } from './demo';
+import { legacyDemoPaths } from './legacyDemo';
 import { z } from 'zod';
 import { AgentError, AgentInput, readAgentSource, saveAgent } from './adapters/claude/agentWrite';
 import { deleteSkill, hookFilesOf, readSkillSource, SkillDeleteInput, SkillRefInput, saveSkill, SkillSaveInput, type SkillScope } from './adapters/claude/skillWrite';
@@ -53,7 +53,7 @@ import { ChatRegistry } from './chat/registry';
 import { AutoContinue } from './chat/autoContinue';
 import { WakeBody, WakeStreakError, watchWakeups } from './chat/wake';
 import { StaffSendLimitError, StaffSendRate, sendTargetKey } from './chat/sendRate';
-import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService } from './staff/service';
+import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService, StaffTeamExistsError } from './staff/service';
 import { sweepFreelas } from './freelaSweep';
 import { CLUB_MCP_FILE, McpError, mcpJsonWarnings } from './staff/mcp';
 import { createMcpLibrary } from './staff/mcpLibrary';
@@ -129,7 +129,7 @@ import { StageTimer } from './stageTimer';
 import { boardFilter } from './board';
 import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
-import { AUTONOMY, dropStaffSessions, listProjectStaff, listProjectStaffStrict, readProfile, saveProfile } from './staff/store';
+import { AUTONOMY, dropStaffSessions, hasStaffFiles, listProjectStaff, listProjectStaffStrict, readProfile, saveProfile } from './staff/store';
 import { lastRetentionRun, nextRetentionDelay, retentionPreview, runRetentionSweep, setRetentionDeletion, type RetentionDeps } from './retentionSweep';
 import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
 import { writeOwnerFile } from './ownerEdits';
@@ -267,9 +267,10 @@ const pairing = new Pairing();
 /** Pareamentos da extensão do Chrome (token Bearer; só o hash vai ao disco). */
 const extensionTokens = new ExtensionTokens();
 
-// No quadro: o demo (e o antigo, se ainda existir), as pastas de `extraProjects` (novas ou importadas) e os
-// projetos com equipe. O resto do que o Claude Code conhece só entra se o usuário importar (`/api/import-projects`).
-const pinnedProjects = async () => [...(await demoPaths()), ...(await readExtraProjects())];
+// No quadro: o demo que já existe na máquina (o projeto demo saiu do produto, mas a pasta é do usuário: ver legacyDemo.ts), as pastas de
+// `extraProjects` (novas ou importadas) e os projetos com equipe. O resto do que o Claude Code conhece só entra se o usuário importar
+// (`/api/import-projects`).
+const pinnedProjects = async () => [...(await legacyDemoPaths()), ...(await readExtraProjects())];
 /** Ids das conversas do Claude que o Club lançou (o registro; sem registro legível, nenhuma). */
 const clubClaudeIds = async (): Promise<Set<string>> => {
   const reg = await readSessionRegistry().catch((): Map<string, { engine: string }> => new Map());
@@ -1002,7 +1003,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   // Fichas de todos os projetos, para copiar uma para outro (só os campos da lista; ver StaffService.directory).
   ['GET', /^\/api\/staff-directory$/, () => staff.directory()],
   // "Novo projeto": a pasta sugerida (onde está a maioria) e criar ou abrir, já na empresa da aba.
-  // Conta também os projetos do Claude Code que ficaram fora do quadro: quem só tem o demo ainda recebe a pasta onde trabalha.
+  // Conta também os projetos do Claude Code que ficaram fora do quadro: quem só tem o demo antigo ainda recebe a pasta onde trabalha.
   ['GET', /^\/api\/new-project$/, async () => ({ parent: usualParent([...(await adapter.listProjects()), ...(await offBoardFolders())]) })],
   [
     'POST',
@@ -1012,6 +1013,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       const input = parseNewProject(body);
       // O workspace antes da pasta: um id errado não deixa pasta criada para trás.
       if (input.workspaceId && !(await readConfig()).workspaces.some((w) => w.id === input.workspaceId)) throw new BadRequest('workspace não encontrado');
+      // Modelo de equipe (`templateId`, já conferido contra a lista): pasta existente que já tem equipe recusa (409) antes de abrir qualquer coisa.
+      if (input.templateId && input.mode === 'existing' && (await hasStaffFiles(path.resolve(input.path)))) throw new StaffTeamExistsError();
       const opened = await openProject(input);
       await addExtraProject(opened.path);
       adapter.forgetProjects();
@@ -1020,7 +1023,9 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       if (input.workspaceId) await setProjectWorkspace(project.id, input.workspaceId);
       // Estava arquivado: abrir de novo traz de volta ao quadro.
       if ((await readConfig()).archived.projects.includes(project.id)) await setArchived({ kind: 'project', id: project.id, archived: false });
-      return { created: opened.created, projectId: project.id };
+      // Só as fichas e a hierarquia, na mesma chamada (ver `applyTeamTemplate`). Se falhar aqui, o projeto já está aberto, sem equipe: a tela pode aplicar o modelo de novo.
+      const team = input.templateId ? await staff.applyTeamTemplate(project.id, { templateId: input.templateId }, true) : null;
+      return { created: opened.created, projectId: project.id, ...(team && { team }) };
     },
   ],
   // "Novo projeto → pasta que já existe": abre a janela nativa de escolher pasta nesta máquina (o navegador não entrega o caminho absoluto) e devolve
@@ -1103,6 +1108,9 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   // Equipe em arquivo (server/staff/teamExport.ts): exportar lê, sem segredo; importar só pela tela, tudo ou nada. Antes da rota de edição: "import" casaria como id.
   ['GET', new RegExp(`^/api/projects/${ID}/staff/export$`), ({ params: [id], url }) => staff.exportTeam(id!, url.searchParams.get('ids'))],
   ['POST', new RegExp(`^/api/projects/${ID}/staff/import$`), ({ params: [id], body, fromBrowser }) => staff.importTeam(id!, body, fromBrowser)],
+  // Modelo de equipe (shared/teamTemplates.ts): `{ templateId }` cria só as fichas e a hierarquia (nenhuma tarefa, nada começa). Só pela tela; 400 modelo
+  // desconhecido, 404 projeto fora do quadro, 409 (`code: 'team-exists'`) se o projeto já tem funcionário. Antes da rota de edição: "template" casaria como id.
+  ['POST', new RegExp(`^/api/projects/${ID}/staff/template$`), ({ params: [id], body, fromBrowser }) => staff.applyTeamTemplate(id!, body, fromBrowser)],
   // Fichas da mesma pessoa (cópias): ligar, desligar e apagar de vez. Só pelo Claudio’s Club (o serviço confere).
   ['POST', /^\/api\/staff-link$/, ({ body, fromBrowser }) => staff.link(body, fromBrowser)],
   ['POST', /^\/api\/staff-unlink$/, ({ body, fromBrowser }) => staff.unlink(body, fromBrowser)],
@@ -2289,21 +2297,6 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ],
   ['GET', /^\/api\/browser$/, ({ url }) => browserStatus(url.searchParams.has('fresh'))],
   ['GET', /^\/api\/costs$/, () => getCosts()],
-  // Projeto demo (equipe e tarefas de exemplo em ~/.myco/demo). Criar de novo não sobrescreve:
-  // só traz de volta ao quadro, se estava arquivado.
-  [
-    'POST',
-    /^\/api\/demo$/,
-    async ({ fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
-      const demo = await createDemo();
-      if ((await readConfig()).archived.projects.includes(demo.projectId)) {
-        await setArchived({ kind: 'project', id: demo.projectId, archived: false });
-      }
-      adapter.forgetProjects();
-      return { created: demo.created, projectId: demo.projectId };
-    },
-  ],
   // ---- "valeu a pena?" de uma sessão ----
   [
     'GET',
@@ -2683,6 +2676,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         if (err instanceof CodeError) return send(res, 409, { error: err.message, code: err.code });
         // Ficha em uso (conversa trabalhando): 409, antes do StaffError genérico (400).
         if (err instanceof StaffOpenTasksError) return send(res, 409, { error: err.message, code: err.code, openTasks: err.openTasks });
+        if (err instanceof StaffTeamExistsError) return send(res, 409, { error: err.message, code: err.code });
         if (err instanceof StaffBusyError) return send(res, 409, { error: err.message });
         // Dúvida já respondida, ou pergunta que não está mais aberta na conversa: 409; quem não é o gestor: 403 (antes do TaskError, 400).
         if (err instanceof TaskConflictError) return send(res, 409, { error: err.message });

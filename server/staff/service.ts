@@ -42,6 +42,7 @@ import { readUsage } from '../usage';
 import { atMostAutonomy } from '../taskFallback';
 import { projectBudgetHit, usageStopHit, UsageStopError } from '../usageStop';
 import { isClosed, TEMP_IDLE_DAYS } from '../../shared/model';
+import { BUILTIN_ROLES, type RoleTemplate } from '../../shared/roles';
 import { codexModelOrNull, codexProfileArgs, sandboxOfAutonomy, type CodexSpawn } from '../chat/codexArgs';
 import type { CodexEnvStatus } from '../codexEnv';
 import { CapabilityError, type CodexCapability } from '../engineCapability';
@@ -60,6 +61,7 @@ import {
   createProfile,
   ensureMemory,
   fichaFile,
+  hasStaffFiles,
   listProjectStaff,
   listVersions,
   memoryDir,
@@ -85,6 +87,7 @@ import {
   writeAtomic,
 } from './store';
 import { buildTeamExport, planTeamImport, type TeamFile } from './teamExport';
+import { parseTemplateBody } from './teamTemplate';
 
 /** Uma ficha na lista de todas as empresas (para copiar). Só estes campos: nada de memória, regras ou servidores. */
 export interface StaffDirectoryPerson {
@@ -107,21 +110,31 @@ export interface StaffDirectoryPerson {
 /** Conflito com o estado atual (ex.: a conversa do funcionário está trabalhando): 409 na rota. */
 export class StaffBusyError extends StaffError {}
 
+/** O projeto já tem funcionário: o modelo de equipe nunca soma a uma equipe que existe (dois orquestradores). 409 com `code` na rota. */
+export class StaffTeamExistsError extends StaffBusyError {
+  readonly code = 'team-exists';
+  constructor() {
+    super('este projeto já tem funcionários: o modelo de equipe só vale para um projeto sem equipe');
+  }
+}
+
+/** A vez de aplicar modelo de equipe num projeto (a fila de `withProfileLock`, que só usa o caminho: nenhum arquivo com este nome é criado). */
+const TEAM_TEMPLATE_LOCK = '_modelo-de-equipe';
+
+/** Uma pessoa criada por um modelo de equipe, como a rota devolve. */
+export interface TeamTemplateStaff {
+  id: string;
+  name: string;
+  role: string;
+  reportsTo: string[];
+}
+
 /** O que um cargo preenche na ficha quando o pedido não traz a chave. canHire, servidores e navegador seguem as regras do hire. */
 const ROLE_FIELDS = ['role', 'mission', 'rules', 'doneWhen', 'model', 'effort', 'autonomy', 'playbook', 'worktree', 'skills'] as const;
 
-/**
- * Com `roleId`, o cargo entra antes da validação: o que o pedido trouxe (inclusive null ou vazio) ganha do cargo.
- * Cargo que não existe é erro (não se contrata um cargo adivinhado).
- */
-async function withRole(body: unknown): Promise<unknown> {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
-  const raw = body as Record<string, unknown>;
-  if (raw.roleId === undefined || raw.roleId === null) return body;
-  const id = String(raw.roleId);
-  const role = (await listRoles()).find((r) => r.id === id);
-  if (!role) throw new StaffError(`cargo não encontrado: ${id}`);
-  const fromRole: Record<(typeof ROLE_FIELDS)[number], unknown> = {
+/** Os campos da ficha que o cargo preenche (ROLE_FIELDS), no formato do pedido de contratação. */
+function roleFieldsOf(role: RoleTemplate): Record<(typeof ROLE_FIELDS)[number], unknown> {
+  return {
     role: role.role,
     mission: role.mission,
     rules: role.rules,
@@ -134,6 +147,20 @@ async function withRole(body: unknown): Promise<unknown> {
     // Skills Globais do cargo (nome sem escopo) entram marcadas como Globais; o pedido que traz `skills` ganha.
     skills: role.skills?.map((n) => `global:${n}`),
   };
+}
+
+/**
+ * Com `roleId`, o cargo entra antes da validação: o que o pedido trouxe (inclusive null ou vazio) ganha do cargo.
+ * Cargo que não existe é erro (não se contrata um cargo adivinhado).
+ */
+async function withRole(body: unknown): Promise<unknown> {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+  const raw = body as Record<string, unknown>;
+  if (raw.roleId === undefined || raw.roleId === null) return body;
+  const id = String(raw.roleId);
+  const role = (await listRoles()).find((r) => r.id === id);
+  if (!role) throw new StaffError(`cargo não encontrado: ${id}`);
+  const fromRole = roleFieldsOf(role);
   const filled = Object.fromEntries(ROLE_FIELDS.filter((k) => !(k in raw) && fromRole[k] !== undefined).map((k) => [k, fromRole[k]]));
   return { ...filled, ...raw };
 }
@@ -643,6 +670,57 @@ export class StaffService {
       throw err;
     }
     return { created, warnings: plan.warnings };
+  }
+
+  /**
+   * Aplica um modelo de equipe (shared/teamTemplates.ts) a um projeto sem nenhum funcionário (só pelo Claudio’s Club): cria as fichas, de cargos
+   * prontos de shared/roles.ts, e a hierarquia (`reportsTo`), nada mais. Nenhuma tarefa, nenhuma conversa e nenhum gasto de cota: as fichas
+   * nascem como na contratação sem `launch`, sem servidores nem Chrome e sem MCPs. Qualquer ficha no projeto (até de quem foi encerrado ou
+   * arquivado) recusa com 409 (`StaffTeamExistsError`): o modelo nunca soma a uma equipe que existe. Tudo ou nada: se algo falhar no meio,
+   * o que já foi criado sai de volta. Duas chamadas juntas esperam a vez: a segunda encontra a equipe da primeira e leva 409.
+   */
+  async applyTeamTemplate(projectId: string, body: unknown, fromBrowser: boolean): Promise<{ templateId: string; staff: TeamTemplateStaff[] } | null> {
+    if (!fromBrowser) throw new StaffError('só pelo Claudio’s Club');
+    const template = parseTemplateBody(body);
+    const project = await this.project(projectId);
+    if (!project) return null;
+    return withProfileLock(project.path, TEAM_TEMPLATE_LOCK, async () => {
+      if (await hasStaffFiles(project.path)) throw new StaffTeamExistsError();
+      const created: StaffProfile[] = [];
+      const ids = new Map<string, string>();
+      // Um milissegundo entre cada uma: a lista ordena pela data, então a equipe sai na ordem do modelo (o orquestrador primeiro).
+      const base = Date.now();
+      try {
+        for (const [i, m] of template.members.entries()) {
+          const role = BUILTIN_ROLES.find((r) => r.id === m.roleId);
+          if (!role) throw new Error(`cargo pronto ${m.roleId} não existe (modelo ${template.id})`);
+          const input = StaffInputSchema.parse({
+            ...roleFieldsOf(role),
+            name: m.name,
+            reportsTo: m.reportsTo.map((key) => ids.get(key)!),
+            canHire: !!role.canHire,
+            mcps: [],
+            servers: [],
+            browser: false,
+          });
+          input.mcpAccess = mcpAccessOfInput(input);
+          assertProfileRules({ ...input, sshWrite: [] }, []);
+          const profile = await createProfile(project.path, project.id, input, new Date(base + i));
+          created.push(profile);
+          ids.set(m.key, profile.id);
+          await this.seal(project, profile);
+          await ensureMemory(project.path, profile);
+        }
+        // As fichas depois de todas criadas: a do orquestrador já lista a equipe dele.
+        for (const profile of created) await writeFicha(profile, await this.context(project, profile));
+      } catch (err) {
+        for (const p of created) {
+          for (const file of [profileFile(project.path, p.id), fichaFile(project.path, p.id), memoryFile(project.path, p.id)]) await fs.rm(file, { force: true }).catch(() => undefined);
+        }
+        throw err;
+      }
+      return { templateId: template.id, staff: created.map((p) => ({ id: p.id, name: p.name, role: p.role, reportsTo: p.reportsTo })) };
+    });
   }
 
   /**

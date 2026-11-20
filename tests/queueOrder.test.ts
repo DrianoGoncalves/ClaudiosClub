@@ -520,9 +520,9 @@ describe('ordem da fila: rota, política e ficha', () => {
       expect(md, engine).toContain('a fila é da pessoa, então entre pessoas diferentes só o blockedBy garante a ordem');
       expect(md, engine).toContain('dependência real entre pessoas leva blockedBy');
       expect(md, engine).toContain('tarefas que vão mexer nos mesmos arquivos vão para a mesma pessoa, cuja fila as serializa sem blockedBy');
-      expect(md, engine).toContain('A fila é da pessoa: as tarefas de uma mesma pessoa andam uma por vez');
-      expect(md, engine).toContain('as de pessoas diferentes rodam juntas, e entre elas só blockedBy garante a ordem');
-      expect(md, engine).toContain('Tarefas que vão mexer nos mesmos arquivos vão para a mesma pessoa, e a fila dela as serializa sem blockedBy');
+      expect(md, engine).toContain('A fila é da pessoa: as tarefas de uma pessoa andam uma por vez');
+      expect(md, engine).toContain('as de pessoas diferentes rodam juntas, e só blockedBy ordena entre elas');
+      expect(md, engine).toContain('Tarefas nos mesmos arquivos vão para a mesma pessoa, cuja fila as serializa');
       // O texto antigo prometia ordem que a fila não dá entre pessoas e negava o "mesmo arquivo".
       expect(md, engine).not.toContain('a fila já anda em ordem');
       expect(md, engine).not.toContain('a fila espera sozinha');
