@@ -4,7 +4,7 @@ import { api, withUsageConfirm } from '../api';
 import { t } from '../i18n';
 import { ReviewIcon } from '../icons';
 import { reviewLine } from './codeSummary';
-import { reviewerChoice, reviewersOf, reviewInProgress } from './reviewPick';
+import { canPickReviewer, reviewerChoice, reviewersOf } from './reviewPick';
 
 // Revisão da entrega pedida a outro funcionário: quem revisa e em que pé está (ReviewStatus) e, em tarefa em
 // revisão, o seletor + "Delegar revisão" (ReviewDelegate). Veredito: aprovada vai para Pronto, reprovada volta para quem fez.
@@ -41,7 +41,7 @@ export function ReviewDelegate({ projectId, task, staff, onChanged, onOpenStaff 
   const [picked, setPicked] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const reviewing = reviewInProgress(task);
+  const canPick = canPickReviewer(task);
   // Depois de uma resposta o padrão é outro revisor (pode escolher o mesmo).
   const reviewer = reviewerChoice(reviewers, picked, task.review?.staffId);
 
@@ -64,7 +64,7 @@ export function ReviewDelegate({ projectId, task, staff, onChanged, onOpenStaff 
         <b className="small">{t('tasks.reviewLabel')}</b>
         <ReviewStatus task={task} staff={staff} onOpenStaff={onOpenStaff} />
       </div>
-      {!reviewing &&
+      {canPick &&
         (reviewers.length ? (
           <>
             <div className="task-code-row">

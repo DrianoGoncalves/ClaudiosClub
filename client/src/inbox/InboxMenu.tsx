@@ -111,6 +111,7 @@ export function InboxMenu({
   const [delegating, setDelegating] = useState<string | null>(null);
   /** Quem recebeu a revisão pedida pelo atalho: o item some da lista, então a frase fica aqui, no menu, até fechar ou novo pedido. */
   const [reviewAsked, setReviewAsked] = useState<string | null>(null);
+  const [reviewReadError, setReviewReadError] = useState<string | null>(null);
   // O follow-up pede a tarefa de origem (Finalizado?, o responsável dela, o texto inteiro) e o atalho "Delegar revisão" o estado da revisão (status, quem revisou):
   // lê o quadro dos projetos que têm um desses itens, só com o menu aberto.
   const fuProjects = inbox.items.filter((i) => (i.kind === 'followUp' && i.followUp) || stuckOf(i)?.humanAction === 'review').map((i) => i.projectId);
@@ -175,6 +176,7 @@ export function InboxMenu({
       setFollowUpDone(null);
       setDelegating(null);
       setReviewAsked(null);
+      setReviewReadError(null);
       setFixNote(null);
       setHeldNote(null);
       return;
@@ -210,6 +212,11 @@ export function InboxMenu({
           <FollowUpGoneNote message={followUpGone} className="inbox-fu-gone" />
           <FollowUpDoneNote message={followUpDone} className="inbox-fu-done" />
           <FollowUpDoneNote message={reviewAsked} className="inbox-fu-done" />
+          {reviewReadError && (
+            <p className="error small inbox-fu-done" role="alert">
+              {reviewReadError}
+            </p>
+          )}
           {count === 0 ? (
             <p className="muted small inbox-empty">{t('inbox.nothingBody')}</p>
           ) : (
@@ -406,7 +413,7 @@ export function InboxMenu({
                         {action.label}
                       </button>
                       {delegate && (
-                        <button className="link small inbox-delegate" title={t('inbox.act.delegateTitle')} aria-expanded={delegating === item.id} onClick={() => setDelegating(delegating === item.id ? null : item.id)}>
+                        <button className="link small inbox-delegate" title={t('inbox.act.delegateTitle')} aria-expanded={delegating === item.id} aria-controls={`inbox-review-${item.id}`} onClick={() => setDelegating(delegating === item.id ? null : item.id)}>
                           {t('tasks.reviewDelegate')}
                         </button>
                       )}
@@ -415,14 +422,21 @@ export function InboxMenu({
                   )}
                   {delegate && stuckTask && delegating === item.id && (
                     <ReviewShortcutForm
+                      id={`inbox-review-${item.id}`}
                       projectId={item.projectId}
                       task={stuckTask}
                       reviewers={delegate.reviewers}
                       onAsked={async (name) => {
                         setReviewAsked(t('inbox.act.delegated', { name }));
+                        setReviewReadError(null);
                         setDelegating(null);
-                        await inbox.refresh();
-                        await fuTasks.reload();
+                        // O seletor já saiu da tela: um erro da releitura não tem onde aparecer ali, vai para o topo do menu.
+                        try {
+                          await inbox.refresh();
+                          await fuTasks.reload();
+                        } catch (e) {
+                          setReviewReadError((e as Error).message);
+                        }
                       }}
                     />
                   )}

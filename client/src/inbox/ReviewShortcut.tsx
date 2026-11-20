@@ -8,6 +8,8 @@ import { askReview } from './delegateReview';
 // O seletor do atalho "Delegar revisão" da caixa: o do painel do card (tasks/ReviewDelegate), no espaço do item.
 
 interface Props {
+  /** Id do seletor, para o `aria-controls` do botão que o abre. */
+  id?: string;
   projectId: string;
   task: Task;
   /** Quem pode ser escolhido (ver `reviewShortcutOf`). */
@@ -16,15 +18,15 @@ interface Props {
   onAsked: (name: string) => void | Promise<void>;
 }
 
-export function ReviewShortcutForm({ projectId, task, reviewers, onAsked }: Props) {
+export function ReviewShortcutForm({ id, projectId, task, reviewers, onAsked }: Props) {
   const [picked, setPicked] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reviewer = reviewerChoice(reviewers, picked, task.review?.staffId);
 
-  if (!reviewers.length) return <p className="muted small inbox-review-pick">{t('tasks.hireReviewer')}</p>;
+  if (!reviewers.length) return <p className="muted small inbox-review-pick" id={id}>{t('tasks.hireReviewer')}</p>;
   return (
-    <div className="inbox-review-pick">
+    <div className="inbox-review-pick" id={id}>
       <div className="inbox-review-row">
         <select value={reviewer} onChange={(e) => setPicked(e.target.value)} aria-label={t('tasks.whoReviews')}>
           {reviewers.map((s) => (
