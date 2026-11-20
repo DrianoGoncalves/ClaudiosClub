@@ -26,6 +26,7 @@ import { useChatDetail } from './chatDetail';
 import { type ChatFocus, findQuoteItem } from './chatFocus';
 import { renderWindow, WINDOW_STEP } from './chatWindow';
 import { type DenialAction, DenialNotice } from './DenialNotice';
+import { draftKey, loadDraft, saveDraft } from './draftStore';
 import { createHeldDiscarder } from './heldDiscard';
 import { HeldDiscardButton } from './HeldDiscardButton';
 import { FollowUpNotice } from './FollowUpNotice';
@@ -134,7 +135,10 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   useEffect(() => {
     if (chat.sessionId && chat.sessionId !== sessionId) onSessionStarted?.(chat.sessionId);
   }, [chat.sessionId, sessionId, onSessionStarted]);
-  const [draft, setDraft] = useState('');
+  // O que ficou digitado sem enviar volta ao reabrir a conversa (some ao enviar e ao fechar a aba; ver draftStore.ts).
+  const draftId = draftKey(projectId, staffId, chat.sessionId ?? sessionId);
+  const [draft, setDraft] = useState(() => loadDraft(draftKey(projectId, staffId, sessionId)));
+  useEffect(() => saveDraft(draftId, draft), [draftId, draft]);
   const [showTools] = useChatDetail();
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
