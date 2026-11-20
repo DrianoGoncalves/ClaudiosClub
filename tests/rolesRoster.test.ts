@@ -69,4 +69,25 @@ describe('contratação no nível Simples', () => {
     expect(out).not.toContain('class="roster"');
     expect(out).toContain('simple-hire');
   });
+
+  // O cargo (e o roteiro dele) só chega por efeito, que o SSR não roda: a ficha editada com roteiro monta o cenário.
+  const withPlaybook = { ...board, staff: [{ id: 's1', projectId: 'p1', name: 'Ana', role: 'Dev', mission: 'x', reportsTo: [], agents: [], skills: [], servers: [], rules: [], playbook: 'plan-big-execute-small' }] } as unknown as Board;
+  const edit = (simple: boolean) =>
+    renderToStaticMarkup(
+      createElement(StaffForm, { board: withPlaybook, projectId: 'p1', mode: { kind: 'edit', profile: withPlaybook.staff[0]! }, simple, onClose: () => {}, onHired: () => {}, onSaved: () => {} }),
+    );
+
+  it('com roteiro na ficha: o Simples não lista os agents', () => {
+    const out = edit(true);
+    expect(out).toContain('simple-hire');
+    expect(out).not.toContain('Quem ajuda neste roteiro');
+    expect(out).not.toContain('class="roster"');
+  });
+
+  it('com roteiro na ficha: o completo lista os agents', () => {
+    const out = edit(false);
+    expect(out).not.toContain('simple-hire');
+    expect(out).toContain('Quem ajuda neste roteiro');
+    expect(out).toContain('class="roster"');
+  });
 });
