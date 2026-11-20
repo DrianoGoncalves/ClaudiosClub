@@ -55,7 +55,8 @@ import { mcpAccessOfInput, mergeMcpAccess } from './mcpAccess';
 import { greeting, prepareCodexRun, prepareConsultRun, prepareRun, sessionCwd, writeFicha, type LaunchContext } from './launch';
 import { attachThreadId, recordSession, type NewRegisteredSession } from '../sessionsRegistry';
 import { ensureWorktree, worktreeFor, type Worktree } from './worktree';
-import { listMcpServers } from './mcp';
+import { convertMcps, duplicateMcpNames, isMcpRef } from '../mcpAccessRefs';
+import { knownMcpNames, listMcpServers } from './mcp';
 import { readSeal, sealViolation, writeSeal } from './seal';
 import {
   archiveVersion,
@@ -398,6 +399,7 @@ export class StaffService {
     if (!parsed.success) throw new StaffError(parsed.error.issues[0]?.message ?? 'ficha inválida');
     const input = parsed.data;
     input.skills = await this.skillRefsOf(project, input.skills);
+    input.mcps = await this.mcpRefsOf(project, input.mcps);
     if (!bodyHasMcps) input.mcps = [];
     // Ficha nova sem `engine` é do Claude: o secundário não pode ser o mesmo motor, e servidor não vai ao secundário Codex.
     // FTP não vai ao Codex (o projeto diz quais são as conexões FTP).
@@ -422,7 +424,7 @@ export class StaffService {
       input.browser = input.browser && hirer.browser; // nem usa o navegador se o gestor não usa
       if (hirer.mcps !== null) {
         // Nem MCP que o gestor não usa (se o gestor tem todos, `null`, o pedido vale como veio).
-        const allowed = hirer.mcps;
+        const allowed = (await this.mcpRefsOf(project, hirer.mcps)) ?? [];
         input.mcps = (input.mcps ?? allowed).filter((n) => allowed.includes(n));
       }
       // Quem tem gestor no Codex nasce no Codex (o padrão), com a autonomia dele no máximo e sem servidores nem Chrome. Pedindo
@@ -562,7 +564,7 @@ export class StaffService {
       autonomy: src.autonomy,
       agents: src.agents,
       skills: await this.skillRefsOf(target, src.skills),
-      mcps: src.mcps ?? [], // "todos" da origem não são os MCPs deste projeto; a lista explícita segue
+      mcps: (await this.mcpRefsOf(target, src.mcps)) ?? [], // "todos" da origem não são os MCPs deste projeto; a lista explícita segue
       // O acesso aos MCPs segue junto (pelo nome): copiar não afrouxa.
       ...(src.mcpAccess && { mcpAccess: src.mcpAccess }),
       knowledge: src.knowledge,
@@ -636,7 +638,7 @@ export class StaffService {
     if (!fromBrowser) throw new StaffError('só pelo Claudio’s Club');
     const project = await this.project(projectId);
     if (!project) return null;
-    const localMcps = ((await this.listMcp(projectId)) ?? []).map((m) => m.name);
+    const localMcps = ((await this.listMcp(projectId)) ?? []).map((m) => m.ref);
     const globalDir = this.opts.globalSkillsDir ?? path.join(defaultLocations().home, 'skills');
     // Conflito com a Global (outro conteúdo) recusa aqui, antes de gravar qualquer coisa.
     const plan = await planTeamImport(body, { globalDir, localMcps });
@@ -793,6 +795,7 @@ export class StaffService {
     delete fields.mcpPolicy;
     delete fields.mcpWrite;
     fields.skills = await this.skillRefsOf(project, fields.skills);
+    fields.mcps = await this.mcpRefsOf(project, fields.mcps);
     if (fields.reportsTo.includes(staffId)) throw new StaffError('um funcionário não pode reportar a si mesmo');
     await this.managers(project.path, fields.reportsTo);
     if (await this.wouldCycle(project.path, staffId, fields.reportsTo)) {
@@ -1623,6 +1626,7 @@ export class StaffService {
       const inWorktree = worktree ? await listSkillDirs(path.join(worktree.path, '.claude', 'skills')) : [];
       await this.convertOpenedSkills(project, profile, { ...sources, projectSkills: [...sources.projectSkills, ...inWorktree] });
     }
+    await this.convertOpenedMcps(project, profile);
     return {
       company: config.companyName,
       // O workspace do projeto (aba do quadro) entra na ficha como contexto (cliente, área…).
@@ -1658,6 +1662,39 @@ export class StaffService {
       // A seção Consulta da ficha: só com vínculo liberado a ele (o dono ligou, pela tela); sem vínculo ou sem a leitura, a ficha sai como antes.
       ...(await this.consultFicha(project, profile)),
     };
+  }
+
+  /**
+   * Nomes antigos (sem escopo) de MCP viram refs ao salvar (contratar, editar, copiar): Projeto se existe lá, senão Global (ver resolveLegacyMcp).
+   * `null` (todos) não muda. Se não der para ler os MCPs, recusa: converter no escuro mandaria um nome do projeto para a Global. O mesmo nome
+   * na Global e no Projeto também recusa: a conversa sobe um servidor por nome.
+   */
+  private async mcpRefsOf(project: Project, mcps: string[] | null): Promise<string[] | null> {
+    if (mcps === null) return null;
+    let out = mcps;
+    if (mcps.some((m) => !isMcpRef(m))) {
+      const known = await knownMcpNames(project.path, this.opts.claudeConfigFile).catch(() => {
+        throw new StaffError('não consegui ler os MCPs agora: tente de novo');
+      });
+      out = convertMcps(mcps, known).mcps ?? [];
+    }
+    const dup = duplicateMcpNames(out);
+    if (dup.length) throw new StaffError(`MCP ${dup.join(', ')}: marcado na Global e no Projeto; marque só um (a conversa sobe um servidor por nome)`);
+    return out;
+  }
+
+  /**
+   * A ficha aberta numa conversa, com nome antigo de MCP (ainda não migrada): converte e grava só o que mudou. Sem conseguir ler os MCPs, deixa
+   * como está (o lançamento entende o nome antigo do mesmo jeito, ver loadedOf). Lê a ficha do disco de novo para não regravar por cima de uma
+   * edição mais nova; o `profile` de quem chama também recebe as refs.
+   */
+  private async convertOpenedMcps(project: Project, profile: StaffProfile): Promise<void> {
+    if (!profile.mcps?.some((m) => !isMcpRef(m))) return;
+    const known = await knownMcpNames(project.path, this.opts.claudeConfigFile).catch(() => null);
+    if (!known) return;
+    const fresh = await readProfile(project.path, profile.id);
+    if (fresh?.mcps?.some((m) => !isMcpRef(m))) await saveProfile(project.path, { ...fresh, mcps: convertMcps(fresh.mcps, known).mcps });
+    profile.mcps = convertMcps(profile.mcps, known).mcps;
   }
 
   /** Os projetos que o dono liberou a `profile` consultar, para a ficha (ver `FichaContext.consult`). Falha na leitura: sem a seção. */

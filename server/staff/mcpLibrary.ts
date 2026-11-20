@@ -4,25 +4,27 @@ import { z } from 'zod';
 import type { McpScope, McpServerView, McpType } from '../../shared/model';
 import { tryJson } from '../adapters/claude/fsutil';
 import { pathKey } from '../adapters/claude/paths';
-import { deleteSecret, hasSecret, moveSecret, setSecret, VaultError, type VaultOptions } from '../secretVault';
-import { CLUB_MCP_FILE, clubSecretId, isLiteralSecret, McpError, readClub, resolveClub, type ClubEntry } from './mcp';
+import { DEFAULT_SECRETS_DIR, deleteSecret, hasSecret, moveSecret, setSecret, VaultError, type VaultOptions } from '../secretVault';
+import { clubDefOf, CLUB_MCP_FILE, clubEntry, clubSecretId, isLiteralSecret, McpError, readClub, resolveClub, type ClubEntry } from './mcp';
 import { testMcpConfig, type McpTestResult } from './mcpTest';
 import { MCP_TOOLS_FILE, mcpFingerprint, saveTestedTools, toolsKey } from './mcpTools';
 import { writeAtomic } from './store';
 
-// Biblioteca de MCPs: cadastro e edição nos quatro escopos, inclusive os que já existem fora do Claudio’s Club.
-//   club    -> ~/.myco/mcps.json (sem segredo) + valores no cofre (secretVault), por `mcp:club:<nome>:…`
-//   user    -> ~/.claude.json, mcpServers
-//   local   -> ~/.claude.json, projects[<projeto>].mcpServers
-//   project -> <projeto>/.mcp.json (vai para o git: segredo literal é recusado; use ${VARIAVEL})
-// Os valores de ~/.claude.json e do .mcp.json ficam no próprio arquivo (é lá que o Claude Code os lê).
+// Biblioteca de MCPs: cadastro e edição nos dois escopos, como as skills (Global e Projeto), inclusive os que já existem fora do Claudio’s Club.
+//   global  -> ~/.claude.json, mcpServers (o Claude Code do usuário também enxerga). O que a tela cadastra vai para lá como uma entrada
+//              que chama o lançador (mcpLaunch.ts) com o nome do servidor ("do Club", `managed`): nenhum valor literal no ~/.claude.json.
+//              env e cabeçalhos ficam no cofre (secretVault, por `mcp:club:<nome>:…`), e comando, URL e nomes de chave no registro
+//              ~/.myco/mcps.json (sem valor), que o lançador lê. A entrada que o usuário escreveu (valores no próprio arquivo) aparece igual;
+//              salvar pela tela a converte para "do Club" (os valores têm de ser digitados de novo). http/sse sem cabeçalho fica `{type, url}`.
+//   project -> <projeto>/.mcp.json (vai para o git: segredo literal é recusado; use ${VARIAVEL}) e, para o que já está lá, o escopo local
+//              (~/.claude.json, projects[<projeto>].mcpServers: fora do git, `outOfGit`). MCP novo de projeto vai para o .mcp.json.
 // A tela nunca recebe valor de env/cabeçalho: só o nome e se está preenchido. Argumentos e URL com segredo
 // saem mascarados (`••••`). Quem manda de volta um campo mascarado mantém o valor atual.
 
 /** O marcador que substitui um segredo na lista (argumento ou pedaço da URL). */
 export const MASK = '••••';
 const KEEP_BACKUPS = 10;
-const SCOPE_ORDER: McpScope[] = ['club', 'user', 'project', 'local'];
+const SCOPE_ORDER: McpScope[] = ['global', 'project'];
 const NAME = /^[A-Za-z0-9_.-]{1,64}$/;
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,99}$/;
 const HEADER_KEY = /^[A-Za-z0-9][A-Za-z0-9-]{0,99}$/;
@@ -38,7 +40,7 @@ const Value = z
   .refine((v) => !/[\r\n\0]/.test(v), 'valor com quebra de linha');
 const EnvKey = z.string().regex(ENV_KEY, 'nome de variável inválido (letras, números e _)').refine(notReserved, 'nome reservado');
 const HeaderKey = z.string().regex(HEADER_KEY, 'nome de cabeçalho inválido (letras, números e -)').refine(notReserved, 'nome reservado');
-const Scope = z.enum(['club', 'user', 'project', 'local'], { error: 'escopo: club, user, project ou local' });
+const Scope = z.enum(['global', 'project'], { error: 'escopo: global ou project' });
 const ProjectId = z.string().regex(PROJECT_ID, 'projeto inválido').optional();
 
 const SaveInput = z.object({
@@ -210,8 +212,11 @@ function valuesOf(m: { keys: string[]; set: Record<string, string> }, cur: Recor
   return out;
 }
 
-/** Segredo literal onde não pode: no .mcp.json (vai para o git); na biblioteca, URL e argumentos (o cofre só guarda env e cabeçalho). */
-function checkLiteral(input: SaveBody, where: 'club' | 'project'): void {
+/**
+ * Segredo literal onde não pode: no Projeto (o .mcp.json vai para o git, e o escopo local não ganha valor novo); na Global, URL e argumentos
+ * (o cofre só guarda env e cabeçalho, e o ~/.claude.json e o registro não levam valor).
+ */
+function checkLiteral(input: Pick<SaveBody, 'name' | 'env' | 'headers' | 'url' | 'command' | 'args'>, where: 'global' | 'project'): void {
   const bad = (label: string, what: string): never => {
     throw new McpError(
       where === 'project'
@@ -251,6 +256,8 @@ interface Row {
   name: string;
   scope: McpScope;
   projectId?: string;
+  outOfGit?: boolean;
+  managed?: boolean;
   type: McpType;
   url?: string;
   command?: string;
@@ -269,6 +276,8 @@ export function toView(r: Row): McpServerView {
     headers: r.type === 'stdio' ? [] : r.headers,
   };
   if (r.projectId) view.projectId = r.projectId;
+  if (r.outOfGit) view.outOfGit = true;
+  if (r.managed) view.managed = true;
   if (r.url) view.url = maskUrl(r.url).url;
   if (r.command) {
     const c = maskArgs(r.command.split(' '));
@@ -327,15 +336,15 @@ function parseStrict(file: string, raw: string): Obj {
   return v;
 }
 
-async function readDoc(file: string): Promise<Obj | null> {
+export async function readDoc(file: string): Promise<Obj | null> {
   const raw = await readText(file);
   if (raw === null) return null;
   const v = tryJson(raw.replace(/^﻿/, ''));
   return isObj(v) ? v : null;
 }
 
-/** Cópia do ~/.claude.json antes de gravar (só os 10 mais recentes). Tem tokens: fica 0600. */
-async function backupClaude(dir: string, raw: string): Promise<void> {
+/** Cópia do ~/.claude.json antes de gravar (só os 10 mais recentes). Tem tokens: fica 0600. Devolve o caminho da cópia. */
+async function backupClaude(dir: string, raw: string): Promise<string> {
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   let name = `claude.json.${stamp}`;
@@ -343,14 +352,16 @@ async function backupClaude(dir: string, raw: string): Promise<void> {
   await fs.writeFile(path.join(dir, name), raw, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
   const all = (await fs.readdir(dir)).filter((f) => f.startsWith('claude.json.')).sort();
   for (const f of all.slice(0, Math.max(0, all.length - KEEP_BACKUPS))) await fs.rm(path.join(dir, f), { force: true });
+  return path.join(dir, name);
 }
 
 /**
  * Lê, muda e grava um arquivo de MCP. Relê o arquivo logo antes de gravar (o Claude Code grava o
- * ~/.claude.json o tempo todo): se mudou, refaz a mudança sobre o conteúdo novo. Grava atomicamente e
- * mantém a permissão do arquivo. Só mexe em mcpServers (ou projects[<caminho>].mcpServers).
+ * ~/.claude.json o tempo todo): se mudou, refaz a mudança sobre o conteúdo novo (`change` pode rodar mais de uma vez: tem de refazer tudo do
+ * zero sobre o que recebe). Grava atomicamente e mantém a permissão do arquivo. Só mexe em mcpServers (ou projects[<caminho>].mcpServers).
+ * Devolve o caminho do backup do ~/.claude.json (null: arquivo novo, ou .mcp.json, que não tem backup).
  */
-async function editFile(o: McpLibraryOptions, scope: FileScope, dir: string | null, change: (servers: Obj) => void): Promise<void> {
+export async function editFile(o: Pick<McpLibraryOptions, 'claudeConfigFile' | 'backupDir'>, scope: FileScope, dir: string | null, change: (servers: Obj) => void): Promise<string | null> {
   const file = fileOf(o.claudeConfigFile, scope, dir);
   const section = sectionOf(scope, dir);
   for (let attempt = 1; ; attempt++) {
@@ -362,17 +373,19 @@ async function editFile(o: McpLibraryOptions, scope: FileScope, dir: string | nu
       continue;
     }
     const mode = raw !== null && process.platform !== 'win32' ? (await fs.stat(file)).mode & 0o777 : null;
-    if (raw !== null && scope !== 'project') await backupClaude(o.backupDir, raw);
+    const backup = raw !== null && scope !== 'project' ? await backupClaude(o.backupDir, raw) : null;
     await writeAtomic(file, JSON.stringify(doc, null, 2) + '\n');
     if (mode !== null) await fs.chmod(file, mode);
-    return;
+    return backup;
   }
 }
 
+/** Campos da entrada que a tela gerencia; o resto (oauth, timeout, o que vier) fica como estava ao salvar. */
+const MANAGED_FIELDS = new Set(['type', 'url', 'command', 'args', 'env', 'headers', 'headersHelper']);
+export const extraOf = (old: Obj | null | undefined): Obj => Object.fromEntries(Object.entries(old ?? {}).filter(([k]) => !MANAGED_FIELDS.has(k)));
+
 function fileEntry(input: SaveBody, old: Obj | null): Obj {
-  const MANAGED = new Set(['type', 'url', 'command', 'args', 'env', 'headers']);
-  // Campos que a tela não edita (oauth, timeout, o que vier) ficam como estavam.
-  const extra = Object.fromEntries(Object.entries(old ?? {}).filter(([k]) => !MANAGED.has(k)));
+  const extra = extraOf(old);
   if (input.type === 'stdio') {
     const command = keepCommand(input.command ?? '', str(old?.command));
     const args = keepArgs(input.args, strs(old?.args));
@@ -387,30 +400,23 @@ function fileEntry(input: SaveBody, old: Obj | null): Obj {
   return { ...extra, type: input.type, url, ...(Object.keys(headers).length > 0 ? { headers } : {}) };
 }
 
+/** A entrada de um arquivo como linha da tela, com o que o arquivo traz (valor de env e cabeçalho nunca sai: só se está preenchido). */
+function fileRow(name: string, raw: Obj, base: Pick<Row, 'scope' | 'projectId' | 'outOfGit'>): Row | null {
+  const type = typeOf(raw);
+  if (!type) return null;
+  const keys = (rec: Record<string, string>) => Object.keys(rec).map((key) => ({ key, set: rec[key] !== '' }));
+  return { ...base, name, type, url: str(raw.url), command: str(raw.command), args: strs(raw.args), env: keys(strRecord(raw.env)), headers: keys(strRecord(raw.headers)) };
+}
+
 /** Os MCP de um arquivo, para a tela (sem valores). */
-async function fileViews(file: string, section: (doc: Obj, create: boolean) => Obj | null, scope: McpScope, projectId?: string): Promise<McpServerView[]> {
+async function fileRows(file: string, section: (doc: Obj, create: boolean) => Obj | null, base: Pick<Row, 'scope' | 'projectId' | 'outOfGit'>): Promise<Row[]> {
   const doc = await readDoc(file);
   const servers = doc ? section(doc, false) : null;
   if (!servers) return [];
-  const out: McpServerView[] = [];
+  const out: Row[] = [];
   for (const [name, raw] of Object.entries(servers)) {
-    if (!isObj(raw)) continue;
-    const type = typeOf(raw);
-    if (!type) continue;
-    const keys = (rec: Record<string, string>) => Object.keys(rec).map((key) => ({ key, set: rec[key] !== '' }));
-    out.push(
-      toView({
-        name,
-        scope,
-        projectId,
-        type,
-        url: str(raw.url),
-        command: str(raw.command),
-        args: strs(raw.args),
-        env: keys(strRecord(raw.env)),
-        headers: keys(strRecord(raw.headers)),
-      }),
-    );
+    const row = isObj(raw) ? fileRow(name, raw, base) : null;
+    if (row) out.push(row);
   }
   return out;
 }
@@ -428,85 +434,65 @@ export function createMcpLibrary(o: McpLibraryOptions) {
     return dir;
   }
 
-  async function clubViews(): Promise<McpServerView[]> {
-    const cur = await readClub(clubFile).catch(() => null);
-    if (!cur) return [];
+  /** As entradas do ~/.claude.json como linhas da Global. A do Club vem da definição do registro (os valores estão no cofre). */
+  async function globalViews(): Promise<McpServerView[]> {
+    const doc = await readDoc(o.claudeConfigFile);
+    const servers = doc ? sectionOf('user', null)(doc, false) : null;
+    if (!servers) return [];
+    const club = await readClub(clubFile).catch(() => null);
     const out: McpServerView[] = [];
-    for (const [name, e] of Object.entries(cur.servers)) {
-      const env = await Promise.all((e.env ?? []).map(async (key) => ({ key, set: await hasSecret(clubSecretId(name, 'env', key), vault) })));
-      const headers = await Promise.all((e.headers ?? []).map(async (key) => ({ key, set: await hasSecret(clubSecretId(name, 'header', key), vault) })));
-      out.push(toView({ name, scope: 'club', type: e.type, url: e.url, command: e.command, args: e.args, env, headers }));
+    for (const [name, raw] of Object.entries(servers)) {
+      if (!isObj(raw)) continue;
+      const c = clubDefOf(raw, club, clubFile);
+      if (!c) {
+        const row = fileRow(name, raw, { scope: 'global' });
+        if (row) out.push(toView(row));
+        continue;
+      }
+      const e = c.def;
+      const env = await Promise.all((e.env ?? []).map(async (key) => ({ key, set: await hasSecret(clubSecretId(c.name, 'env', key), vault) })));
+      const headers = await Promise.all((e.headers ?? []).map(async (key) => ({ key, set: await hasSecret(clubSecretId(c.name, 'header', key), vault) })));
+      out.push(toView({ name, scope: 'global', managed: true, type: e.type, url: e.url, command: e.command, args: e.args, env, headers }));
     }
     return out;
+  }
+
+  /** `.mcp.json` e o escopo local do projeto, numa lista só. Mesmo nome nos dois: vale o local (a precedência do Claude Code). */
+  async function projectViews(projectId: string, dir: string): Promise<McpServerView[]> {
+    const rows = new Map<string, Row>();
+    for (const r of await fileRows(path.join(dir, '.mcp.json'), sectionOf('project', dir), { scope: 'project', projectId })) rows.set(r.name, r);
+    for (const r of await fileRows(o.claudeConfigFile, sectionOf('local', dir), { scope: 'project', projectId, outOfGit: true })) rows.set(r.name, r);
+    return [...rows.values()].map(toView);
   }
 
   async function list(projectIdRaw: unknown): Promise<{ servers: McpServerView[] }> {
     const projectId = typeof projectIdRaw === 'string' && projectIdRaw ? projectIdRaw : undefined;
     if (projectId && !PROJECT_ID.test(projectId)) throw new McpError('projeto inválido');
-    const servers: McpServerView[] = [...(await clubViews())];
-    servers.push(...(await fileViews(o.claudeConfigFile, sectionOf('user', null), 'user')));
-    if (projectId) {
-      const dir = await projectDir(projectId);
-      servers.push(...(await fileViews(path.join(dir, '.mcp.json'), sectionOf('project', dir), 'project', projectId)));
-      servers.push(...(await fileViews(o.claudeConfigFile, sectionOf('local', dir), 'local', projectId)));
-    }
+    const servers: McpServerView[] = [...(await globalViews())];
+    if (projectId) servers.push(...(await projectViews(projectId, await projectDir(projectId))));
     servers.sort((a, b) => SCOPE_ORDER.indexOf(a.scope) - SCOPE_ORDER.indexOf(b.scope) || a.name.localeCompare(b.name));
     return { servers };
   }
 
-  async function saveClub(input: SaveBody): Promise<void> {
-    const cur = (await readClub(clubFile)) ?? { doc: {} as Obj, servers: {} as Record<string, ClubEntry> };
-    const oldName = input.originalName;
-    const old = oldName !== undefined && has(cur.servers, oldName) ? cur.servers[oldName] : undefined;
-    if (oldName !== undefined && !old) throw new McpError('MCP não encontrado na biblioteca');
-    if (input.name !== oldName && has(cur.servers, input.name)) throw new McpError(`já existe um MCP ${input.name} na biblioteca`);
-    checkLiteral(input, 'club');
-
-    const isStdio = input.type === 'stdio';
-    const command = isStdio ? keepCommand(input.command ?? '', old?.command) : undefined;
-    const args = isStdio ? keepArgs(input.args, old?.args) : undefined;
-    const url = isStdio ? undefined : keepUrl(input.url ?? '', old?.url);
-    if (url !== undefined) validateUrl(url);
-    const envM = mergeKeys(isStdio ? (old?.env ?? []) : [], input.env, input.removeKeys?.env ?? []);
-    const hdrM = mergeKeys(isStdio ? [] : (old?.headers ?? []), input.headers, input.removeKeys?.headers ?? []);
-    const entry: ClubEntry = isStdio
-      ? { type: 'stdio', command, ...(args && args.length > 0 ? { args } : {}), env: envM.keys, headers: [] }
-      : { type: input.type, url, env: [], headers: hdrM.keys };
-
-    const renamed = oldName !== undefined && oldName !== input.name;
-    const oldEnv = old?.env ?? [];
-    const oldHdr = old?.headers ?? [];
-    try {
-      // O que sobrou do nome antigo vai para o novo; depois, os valores trocados.
-      if (renamed) {
-        for (const k of envM.keys) if (!has(envM.set, k) && oldEnv.includes(k)) await moveSecret(clubSecretId(oldName!, 'env', k), clubSecretId(input.name, 'env', k), vault);
-        for (const k of hdrM.keys) if (!has(hdrM.set, k) && oldHdr.includes(k)) await moveSecret(clubSecretId(oldName!, 'header', k), clubSecretId(input.name, 'header', k), vault);
-      }
-      for (const [k, v] of Object.entries(envM.set)) await setSecret(clubSecretId(input.name, 'env', k), v, vault);
-      for (const [k, v] of Object.entries(hdrM.set)) await setSecret(clubSecretId(input.name, 'header', k), v, vault);
-    } catch (err) {
-      throw new McpError(`não deu para guardar o valor no cofre: ${err instanceof VaultError ? err.message : 'erro ao gravar'}`);
+  /** Onde está um MCP do Projeto: o escopo local vale primeiro (a precedência do Claude Code), depois o .mcp.json. */
+  async function findProject(dir: string, name: string): Promise<{ scope: 'local' | 'project'; entry: Obj } | null> {
+    for (const scope of ['local', 'project'] as const) {
+      const doc = await readDoc(fileOf(o.claudeConfigFile, scope, dir));
+      const servers = doc ? sectionOf(scope, dir)(doc, false) : null;
+      const e = servers && has(servers, name) ? servers[name] : undefined;
+      if (isObj(e)) return { scope, entry: e };
     }
-
-    const servers = { ...cur.servers };
-    if (renamed) delete servers[oldName!];
-    servers[input.name] = entry;
-    await writeClub(cur.doc, servers);
-
-    // Valores que não pertencem mais ao nome antigo saem do cofre.
-    if (oldName !== undefined) {
-      for (const k of oldEnv) if (renamed || !envM.keys.includes(k)) await deleteSecret(clubSecretId(oldName, 'env', k), vault);
-      for (const k of oldHdr) if (renamed || !hdrM.keys.includes(k)) await deleteSecret(clubSecretId(oldName, 'header', k), vault);
-    }
+    return null;
   }
 
   async function writeClub(doc: Obj, servers: Record<string, ClubEntry>): Promise<void> {
     await writeAtomic(clubFile, JSON.stringify({ ...doc, servers }, null, 2) + '\n');
   }
 
-  async function removeClub(name: string): Promise<void> {
+  /** Tira a definição do registro e os valores dela do cofre. Sem a definição, nada. */
+  async function dropDef(name: string): Promise<void> {
     const cur = await readClub(clubFile);
-    if (!cur || !has(cur.servers, name)) throw new McpError('MCP não encontrado na biblioteca');
+    if (!cur || !has(cur.servers, name)) return;
     const e = cur.servers[name]!;
     const servers = { ...cur.servers };
     delete servers[name];
@@ -515,26 +501,108 @@ export function createMcpLibrary(o: McpLibraryOptions) {
     for (const k of e.headers ?? []) await deleteSecret(clubSecretId(name, 'header', k), vault);
   }
 
+  /**
+   * Global: a entrada vai para o ~/.claude.json chamando o lançador (stdio, ou http/sse com cabeçalho), com os valores no cofre e a definição
+   * no registro; http/sse sem cabeçalho vai como `{type, url}`. Entrada que o usuário escreveu (valores no próprio arquivo) vira "do Club" ao
+   * salvar: o que o pedido manda manter (`null`) só vale para valores que já estão no cofre, os do arquivo têm de ser digitados de novo.
+   */
+  async function saveGlobal(input: SaveBody): Promise<void> {
+    const oldName = input.originalName;
+    // ~/.claude.json estragado: recusa antes de gravar qualquer valor no cofre ou no registro (editFile também recusaria, mas só no fim).
+    const rawDoc = await readText(o.claudeConfigFile);
+    const doc = rawDoc === null ? null : parseStrict(o.claudeConfigFile, rawDoc);
+    const servers = doc ? sectionOf('user', null)(doc, false) : null;
+    const oldRaw = oldName !== undefined && servers && has(servers, oldName) ? servers[oldName] : undefined;
+    if (oldName !== undefined && !isObj(oldRaw)) throw new McpError('MCP não encontrado neste escopo');
+    if (input.name !== oldName && servers && has(servers, input.name)) throw new McpError(`já existe um MCP ${input.name} neste escopo`);
+    checkLiteral(input, 'global');
+
+    const cur = (await readClub(clubFile)) ?? { doc: {} as Obj, servers: {} as Record<string, ClubEntry> };
+    const oldClub = isObj(oldRaw) ? clubDefOf(oldRaw, cur, clubFile) : null;
+    const oldDefName = oldClub?.name;
+    const old = oldClub?.def;
+    // Entrada que o Club não gerencia: comando, argumentos e URL mantidos vêm do próprio arquivo.
+    const oldFile = isObj(oldRaw) && !oldClub ? oldRaw : null;
+
+    const isStdio = input.type === 'stdio';
+    const command = isStdio ? keepCommand(input.command ?? '', old?.command ?? str(oldFile?.command)) : undefined;
+    const args = isStdio ? keepArgs(input.args, old?.args ?? (oldFile ? strs(oldFile.args) : undefined)) : undefined;
+    const url = isStdio ? undefined : keepUrl(input.url ?? '', old?.url ?? str(oldFile?.url));
+    if (url !== undefined) validateUrl(url);
+    // O que foi mantido do arquivo antigo também não pode levar segredo literal: iria para o registro e para o ~/.claude.json.
+    checkLiteral({ name: input.name, env: {}, headers: {}, url, command, args }, 'global');
+    const envM = mergeKeys(isStdio ? (old?.env ?? []) : [], input.env, input.removeKeys?.env ?? []);
+    const hdrM = mergeKeys(isStdio ? [] : (old?.headers ?? []), input.headers, input.removeKeys?.headers ?? []);
+    const def: ClubEntry = isStdio
+      ? { type: 'stdio', command, ...(args && args.length > 0 ? { args } : {}), env: envM.keys, headers: [] }
+      : { type: input.type, url, env: [], headers: hdrM.keys };
+    const needsDef = isStdio || hdrM.keys.length > 0;
+    // Antes de gravar qualquer valor: se a entrada não dá para montar, nada é mexido.
+    const entry = clubEntry(input.name, def, { clubFile, vaultDir: vault?.dir ?? DEFAULT_SECRETS_DIR });
+    if (!entry) throw new McpError('o caminho do lançador tem aspas, % ou $: não dá para gravar a entrada');
+
+    const renamed = oldDefName !== undefined && oldDefName !== input.name;
+    const oldEnv = old?.env ?? [];
+    const oldHdr = old?.headers ?? [];
+    if (needsDef) {
+      try {
+        // O que sobrou do nome antigo vai para o novo; depois, os valores trocados.
+        if (renamed) {
+          for (const k of envM.keys) if (!has(envM.set, k) && oldEnv.includes(k)) await moveSecret(clubSecretId(oldDefName!, 'env', k), clubSecretId(input.name, 'env', k), vault);
+          for (const k of hdrM.keys) if (!has(hdrM.set, k) && oldHdr.includes(k)) await moveSecret(clubSecretId(oldDefName!, 'header', k), clubSecretId(input.name, 'header', k), vault);
+        }
+        for (const [k, v] of Object.entries(envM.set)) await setSecret(clubSecretId(input.name, 'env', k), v, vault);
+        for (const [k, v] of Object.entries(hdrM.set)) await setSecret(clubSecretId(input.name, 'header', k), v, vault);
+      } catch (err) {
+        throw new McpError(`não deu para guardar o valor no cofre: ${err instanceof VaultError ? err.message : 'erro ao gravar'}`);
+      }
+      const next = { ...cur.servers };
+      if (renamed) delete next[oldDefName!];
+      next[input.name] = def;
+      await writeClub(cur.doc, next);
+    }
+
+    await editFile(o, 'user', null, (srv) => {
+      const prev = oldName !== undefined && has(srv, oldName) ? srv[oldName] : undefined;
+      if (oldName !== undefined && !isObj(prev)) throw new McpError('MCP não encontrado neste escopo');
+      if (input.name !== oldName && has(srv, input.name)) throw new McpError(`já existe um MCP ${input.name} neste escopo`);
+      if (oldName !== undefined && oldName !== input.name) delete srv[oldName];
+      srv[input.name] = { ...extraOf(isObj(prev) ? prev : null), ...entry };
+    });
+
+    if (oldDefName !== undefined) {
+      // Virou http/sse sem cabeçalho: a definição e os valores saem. Senão, saem só os valores que não pertencem mais ao nome antigo.
+      if (!needsDef) await dropDef(oldDefName);
+      else {
+        for (const k of oldEnv) if (renamed || !envM.keys.includes(k)) await deleteSecret(clubSecretId(oldDefName, 'env', k), vault);
+        for (const k of oldHdr) if (renamed || !hdrM.keys.includes(k)) await deleteSecret(clubSecretId(oldDefName, 'header', k), vault);
+      }
+    }
+  }
+
+  /** Projeto: onde o MCP já está (local ou .mcp.json); MCP novo vai para o .mcp.json. Valor novo com segredo literal é recusado nos dois. */
+  async function saveProject(input: SaveBody, dir: string): Promise<void> {
+    const oldName = input.originalName;
+    const here = oldName !== undefined ? await findProject(dir, oldName) : null;
+    if (oldName !== undefined && !here) throw new McpError('MCP não encontrado neste escopo');
+    if (input.name !== oldName && (await findProject(dir, input.name))) throw new McpError(`já existe um MCP ${input.name} neste escopo`);
+    checkLiteral(input, 'project');
+    await editFile(o, here?.scope ?? 'project', dir, (servers) => {
+      const prev = oldName !== undefined && has(servers, oldName) ? servers[oldName] : undefined;
+      if (oldName !== undefined && !isObj(prev)) throw new McpError('MCP não encontrado neste escopo');
+      const entry = fileEntry(input, isObj(prev) ? prev : null);
+      if (oldName !== undefined && oldName !== input.name) delete servers[oldName];
+      servers[input.name] = entry;
+    });
+  }
+
   async function save(body: unknown, fromBrowser: boolean): Promise<{ server: McpServerView }> {
     requireBrowser(fromBrowser);
     const input = parseInput(SaveInput, body);
     checkShape(input);
-    if (input.scope === 'club') {
-      await saveClub(input);
-    } else {
-      const dir = input.scope === 'user' ? null : await projectDir(input.projectId);
-      if (input.scope === 'project') checkLiteral(input, 'project');
-      await editFile(o, input.scope, dir, (servers) => {
-        const oldName = input.originalName;
-        const prev = oldName !== undefined && has(servers, oldName) ? servers[oldName] : undefined;
-        if (oldName !== undefined && !isObj(prev)) throw new McpError('MCP não encontrado neste escopo');
-        if (input.name !== oldName && has(servers, input.name)) throw new McpError(`já existe um MCP ${input.name} neste escopo`);
-        const entry = fileEntry(input, isObj(prev) ? prev : null);
-        if (oldName !== undefined && oldName !== input.name) delete servers[oldName];
-        servers[input.name] = entry;
-      });
-    }
-    const { servers } = await list(input.scope === 'user' || input.scope === 'club' ? undefined : input.projectId);
+    if (input.scope === 'global') await saveGlobal(input);
+    else await saveProject(input, await projectDir(input.projectId));
+    const { servers } = await list(input.scope === 'project' ? input.projectId : undefined);
     const saved = servers.find((s) => s.scope === input.scope && s.name === input.name);
     if (!saved) throw new McpError('gravado, mas não consegui ler de volta');
     return { server: saved };
@@ -543,11 +611,22 @@ export function createMcpLibrary(o: McpLibraryOptions) {
   async function remove(body: unknown, fromBrowser: boolean): Promise<{ ok: true }> {
     requireBrowser(fromBrowser);
     const input = parseInput(RefInput, body);
-    if (input.scope === 'club') {
-      await removeClub(input.name);
+    if (input.scope === 'global') {
+      const club = await readClub(clubFile).catch(() => null);
+      const dropped: { name?: string } = {};
+      await editFile(o, 'user', null, (servers) => {
+        const e = has(servers, input.name) ? servers[input.name] : undefined;
+        if (!isObj(e)) throw new McpError('MCP não encontrado neste escopo');
+        dropped.name = clubDefOf(e, club, clubFile)?.name;
+        delete servers[input.name];
+      });
+      // Só a entrada do Club leva a definição e os valores junto; outra com o mesmo nome no registro é de outra coisa e fica.
+      if (dropped.name !== undefined) await dropDef(dropped.name);
     } else {
-      const dir = input.scope === 'user' ? null : await projectDir(input.projectId);
-      await editFile(o, input.scope, dir, (servers) => {
+      const dir = await projectDir(input.projectId);
+      const here = await findProject(dir, input.name);
+      if (!here) throw new McpError('MCP não encontrado neste escopo');
+      await editFile(o, here.scope, dir, (servers) => {
         if (!has(servers, input.name) || !isObj(servers[input.name])) throw new McpError('MCP não encontrado neste escopo');
         delete servers[input.name];
       });
@@ -562,26 +641,28 @@ export function createMcpLibrary(o: McpLibraryOptions) {
   async function test(body: unknown, fromBrowser: boolean): Promise<McpTestResult> {
     requireBrowser(fromBrowser);
     const input = parseInput(RefInput, body);
-    const dir = input.projectId ? await projectDir(input.projectId) : null;
+    const dir = input.scope === 'project' || input.projectId ? await projectDir(input.projectId) : null;
     let cfg: Obj;
-    if (input.scope === 'club') {
-      const cur = await readClub(clubFile);
-      const e = cur && has(cur.servers, input.name) ? cur.servers[input.name] : undefined;
-      if (!e) throw new McpError('MCP não encontrado na biblioteca');
-      const base: Obj = { type: e.type };
-      if (e.url) base.url = e.url;
-      if (e.command) base.command = e.command;
-      if (e.args) base.args = e.args;
-      const r = await resolveClub(input.name, base, { env: e.env ?? [], headers: e.headers ?? [] }, vault);
-      if ('missing' in r) throw new McpError(`o valor de ${r.missing} não está no cofre: cadastre de novo`);
-      cfg = r.config;
-    } else {
-      if ((input.scope === 'local' || input.scope === 'project') && !dir) throw new McpError('escolha o projeto');
-      const doc = await readDoc(fileOf(o.claudeConfigFile, input.scope, dir));
-      const servers = doc ? sectionOf(input.scope, dir)(doc, false) : null;
+    if (input.scope === 'global') {
+      const doc = await readDoc(o.claudeConfigFile);
+      const servers = doc ? sectionOf('user', null)(doc, false) : null;
       const e = servers && has(servers, input.name) ? servers[input.name] : undefined;
       if (!isObj(e)) throw new McpError('MCP não encontrado neste escopo');
-      cfg = e;
+      const c = clubDefOf(e, await readClub(clubFile).catch(() => null), clubFile);
+      if (!c) cfg = e;
+      else {
+        const base: Obj = { type: c.def.type };
+        if (c.def.url) base.url = c.def.url;
+        if (c.def.command) base.command = c.def.command;
+        if (c.def.args) base.args = c.def.args;
+        const r = await resolveClub(c.name, base, { env: c.def.env ?? [], headers: c.def.headers ?? [] }, vault);
+        if ('missing' in r) throw new McpError(`o valor de ${r.missing} não está no cofre: cadastre de novo`);
+        cfg = r.config;
+      }
+    } else {
+      const here = await findProject(dir!, input.name);
+      if (!here) throw new McpError('MCP não encontrado neste escopo');
+      cfg = here.entry;
     }
     const result = await testMcpConfig(cfg, { cwd: dir ?? undefined });
     if (result.ok) {

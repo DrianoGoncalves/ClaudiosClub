@@ -391,6 +391,8 @@ export interface AppConfig {
   maxTurnMinutes: number;
   /** Títulos de conversa gerados por IA (Haiku) para as conversas do Club com assunto livre. Ligado por padrão; desligado, nenhuma chamada ao modelo e a lista volta ao assunto (o cache não aparece). Títulos manuais seguem valendo. Lido a cada lista. */
   aiTitles: boolean;
+  /** Parar o Claudio’s Club sozinho quando a última aba dele fechar (mesmo caminho do botão Parar), depois de uma carência sem nenhuma aba. Desligado por padrão: fechar o navegador deixa o servidor em segundo plano. Lido a cada checagem (server/tabPresence.ts). */
+  stopOnTabClose: boolean;
 }
 
 export const CONTEXT_SWITCHES = ['auto', 'suggest', 'off'] as const;
@@ -1737,7 +1739,16 @@ export interface CostReview {
 /** Servidor MCP disponível num projeto (só nome e origem: a configuração pode ter segredos). */
 export interface McpServerInfo {
   name: string;
-  /** `club` = biblioteca do Claudio’s Club; `project` = .mcp.json; `local` = só este projeto; `user` = todos os projetos. */
+  /** O que a ficha guarda em `mcps`: `global:<nome>` ou `project:<nome>` (ver server/mcpAccessRefs.ts). */
+  ref: string;
+  /** Global = `~/.claude.json` (vale também no Claude Code fora do Claudio’s Club); Projeto = `.mcp.json` e o escopo local do projeto. */
+  scope: 'global' | 'project';
+  /** Projeto: o servidor está no escopo local do `~/.claude.json` (não vai para o git). */
+  outOfGit?: boolean;
+  /**
+   * @deprecated Use `scope`. Fica no tipo só até a tela trocar; o servidor só emite `user` (Global) e `project`.
+   * `club` = biblioteca do Claudio’s Club; `project` = .mcp.json; `local` = só este projeto; `user` = todos os projetos.
+   */
   source: 'club' | 'project' | 'local' | 'user';
   transport: string | null;
   /** Do último teste na biblioteca (ver server/staff/mcpTools.ts): total e quantas são de escrita. Ausente = nunca testado ou mudou desde o teste. */
@@ -1747,7 +1758,11 @@ export interface McpServerInfo {
 /** legado: só a tela atual e a leitura de fichas antigas usam (`mcpWrite`: `deny` vira `readonly`, `ask` fica `ask`). */
 export type McpWritePolicy = 'ask' | 'deny';
 
-export type McpScope = 'club' | 'user' | 'project' | 'local';
+/**
+ * Escopo de um MCP. O servidor só emite e aceita `global` e `project`; `club`, `user` e `local` são os antigos e ficam no tipo só até a
+ * tela trocar (a Global é o escopo `user` do ~/.claude.json, e `local` aparece como Projeto, com `outOfGit`).
+ */
+export type McpScope = 'global' | 'project' | /** @deprecated */ 'club' | /** @deprecated */ 'user' | /** @deprecated */ 'local';
 export type McpType = 'http' | 'sse' | 'stdio';
 
 /** MCP para a tela de biblioteca. Nunca traz valor de env/cabeçalho: só o nome e se está preenchido. */
@@ -1755,6 +1770,10 @@ export interface McpServerView {
   name: string;
   scope: McpScope;
   projectId?: string;
+  /** Projeto: vem do escopo local do ~/.claude.json (não vai para o git). */
+  outOfGit?: boolean;
+  /** Global: entrada do Claudio’s Club, com os valores no cofre (o ~/.claude.json só leva o lançador e o nome do servidor). */
+  managed?: boolean;
   type: McpType;
   url?: string;
   command?: string;

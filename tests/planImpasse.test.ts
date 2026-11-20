@@ -9,7 +9,7 @@ import { agentNotes, PlanImpasseNote } from '../client/src/staff/PlanImpasseNote
 
 const READ = ['Read', 'Grep', 'Glob'];
 const EDIT = ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash', 'PowerShell'];
-const mcp = (name: string, tools?: McpServerInfo['tools']): McpServerInfo => ({ name, source: 'club', transport: 'stdio', ...(tools && { tools }) });
+const mcp = (name: string, tools?: McpServerInfo['tools']): McpServerInfo => ({ name, ref: `global:${name}`, scope: 'global', source: 'user', transport: 'stdio', ...(tools && { tools }) });
 
 const ctx = (over: Partial<PlanImpasseCtx> = {}): PlanImpasseCtx => ({
   autonomy: 'plan',

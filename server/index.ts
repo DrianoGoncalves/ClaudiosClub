@@ -55,8 +55,10 @@ import { WakeBody, WakeStreakError, watchWakeups } from './chat/wake';
 import { StaffSendLimitError, StaffSendRate, sendTargetKey } from './chat/sendRate';
 import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService, StaffTeamExistsError } from './staff/service';
 import { sweepFreelas } from './freelaSweep';
-import { CLUB_MCP_FILE, McpError, mcpJsonWarnings } from './staff/mcp';
+import { CLUB_MCP_FILE, knownMcpNames, McpError, mcpJsonWarnings } from './staff/mcp';
 import { createMcpLibrary } from './staff/mcpLibrary';
+import { migrateMcpsAtBoot as runMcpMigration } from './staff/mcpMigration';
+import { MCP_TOOLS_FILE } from './staff/mcpTools';
 import { CodexPasswordPolicy } from './codexPasswordPolicy';
 import { blockedInboxItem, codexSandboxInboxItem, commitInboxItem, deniedInboxItem, followUpInboxItem, heavyGuardOffInboxItem, notStartedInboxItem, permissionInboxItem, questionInboxItem, secretInboxItem, stuckInboxItem, taskQuestionInboxItem, withoutSecretHint } from './inboxItems';
 import { InboxResolver, resolvedLast, settleWithin } from './inboxResolved';
@@ -119,6 +121,7 @@ import { RoutineScheduler, routineKey, type RoutineOutcome } from './routines';
 import { buildSchedules, routineSchedule, ScheduleWindowError, scheduleWindow } from './scheduleView';
 import type { AppServerInfo, EngineOverride, Routine, SchedulesResponse, StaffProfile, SystemStats } from '../shared/model';
 import { systemStats } from './systemStats';
+import { PresenceBody, TabPresence } from './tabPresence';
 import { ResourceGate } from './resourceGate';
 import { ShowcaseBusyError, ShowcaseRefusedError, ShowcaseRunner, spawnClaudeProcess } from './showcaseRunner';
 import { pathKey, worktreeParent } from './adapters/claude/paths';
@@ -270,6 +273,14 @@ const MAX_BODY = 4 * 1024 * 1024;
 const pairing = new Pairing();
 /** Pareamentos da extensão do Chrome (token Bearer; só o hash vai ao disco). */
 const extensionTokens = new ExtensionTokens();
+/** Abas do Claudio’s Club abertas (sinal da tela): com `stopOnTabClose`, a última a fechar para o servidor pelo mesmo caminho do botão Parar. */
+const tabs = new TabPresence({
+  enabled: async () => (await readConfig()).stopOnTabClose,
+  stop: () => {
+    console.log('[servidor] nenhuma aba do Claudio’s Club aberta: parando (opção "parar ao fechar a aba")');
+    void shutdown(true, 'nenhuma aba aberta');
+  },
+});
 
 // No quadro: o demo que já existe na máquina (o projeto demo saiu do produto, mas a pasta é do usuário: ver legacyDemo.ts), as pastas de
 // `extraProjects` (novas ou importadas) e os projetos com equipe. O resto do que o Claude Code conhece só entra se o usuário importar
@@ -2519,6 +2530,18 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     },
   ],
   ['GET', /^\/api\/config$/, () => readConfig()],
+  // Sinal de presença da aba (a tela manda a cada ~15 s e, ao sair, com `leaving`; ver tabPresence.ts). Só o navegador pareado: a extensão, o funcionário
+  // e a sandbox do Codex não são aba (gate.ts: POST fora de `staffMayPost` é 400 sem a tela, e a extensão só alcança a lista dela).
+  [
+    'POST',
+    /^\/api\/presence$/,
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      const b = parse(PresenceBody, body);
+      tabs.signal(b.tab, b.leaving);
+      return { ok: true };
+    },
+  ],
   // ---- a extensão do Chrome (Configurações): o código de pareamento, os pareados e o .zip para instalar (server/extension/) ----
   // Todas são POST (um GET de navegação não manda Origin, então não seria da tela) e só valem pelo navegador pareado.
   [
@@ -3308,6 +3331,36 @@ async function migrateSkillsAtBoot(): Promise<void> {
 }
 
 /**
+ * Migração dos MCPs (ver staff/mcpMigration.ts): o registro do Club vai para a Global (`mcpServers` do ~/.claude.json, uma vez, com backup), as
+ * ferramentas testadas ganham a chave nova e as fichas com nome antigo viram refs `global:`/`project:`. O log diz o que mudou, o caminho do
+ * backup e o que ficou (conflitos de nome e valores que faltam no cofre).
+ */
+async function migrateMcpsAtBoot(): Promise<void> {
+  const projects = (await adapter.listProjects()).filter((p) => p.exists);
+  const r = await runMcpMigration({
+    clubFile: CLUB_MCP_FILE,
+    claudeConfigFile: defaultLocations().configFile,
+    backupDir: path.join(MYCO_HOME, 'backups'),
+    recordFile: path.join(MYCO_HOME, 'mcps-migracao.json'),
+    toolsFile: MCP_TOOLS_FILE,
+    projects,
+    known: (p) => knownMcpNames(p.path, defaultLocations().configFile),
+    list: listProjectStaff,
+    save: saveProfile,
+  });
+  if (r.clubError) console.warn(`[mcp] migração do registro não concluída (tenta de novo no próximo boot): ${r.clubError}`);
+  if (r.club) {
+    console.log(`[mcp] registro do Club → Global: ${r.club.moved.length} MCP(s)${r.club.moved.length ? ` (${r.club.moved.join(', ')})` : ''}; backup do ~/.claude.json: ${r.club.backup ?? 'não precisou (o arquivo não existia ou nada foi gravado)'}`);
+    if (r.club.conflicts.length) console.log(`[mcp] ${r.club.conflicts.length} não movido(s), nada foi sobrescrito: ${r.club.conflicts.join('; ')}`);
+    if (r.club.semValor.length) console.warn(`[mcp] sem valor no cofre (cadastre de novo na Global): ${r.club.semValor.join(', ')}`);
+  }
+  if (r.repaired.length) console.log(`[mcp] entradas do Club com o lançador refeito: ${r.repaired.join(', ')}`);
+  if (r.toolsKeys) console.log(`[mcp] ferramentas testadas com a chave nova: ${r.toolsKeys}`);
+  if (r.fichas.changed.length) console.log(`[mcp] fichas com MCP por nome antigo convertidas: ${r.fichas.changed.length}`);
+  if (r.fichas.skipped.length) console.warn(`[mcp] projetos não lidos na conversão das fichas: ${r.fichas.skipped.join(', ')}`);
+}
+
+/**
  * Migração dos agents prontos (ver staff/presetMigration.ts): o executor do projeto que ainda é o Haiku antigo passa para o Sonnet; o que
  * alguém editou fica e vai no log, com o que difere.
  */
@@ -3326,8 +3379,11 @@ async function migrateAgentPresetsAtBoot(): Promise<void> {
 
 server.listen(PORT, HOST, () => {
   console.log(`Claudio’s Club em http://claudio.localhost:${PORT} (adaptador: ${adapter.id})`);
+  // Só quem ficou com a porta confere as abas (um segundo servidor que falhou não pode parar o do outro).
+  tabs.start();
   // Migração das skills (uma vez): depois da porta, sem segurar a subida.
   void migrateSkillsAtBoot().catch((err: unknown) => console.warn('[skills] migração não concluída:', err));
+  void migrateMcpsAtBoot().catch((err: unknown) => console.warn('[mcp] migração não concluída:', err));
   void migrateAgentPresetsAtBoot().catch((err: unknown) => console.warn('[agents] migração dos prontos não concluída:', err));
   // Só depois de ficar com a porta: o segundo endereço é o da sandbox do Codex. Se não abrir (no macOS o 127.0.0.2 pode faltar), quem roda no
   // Codex fica sem rede e a conversa avisa (ver `codexRunEnv`); o resto do app segue igual.

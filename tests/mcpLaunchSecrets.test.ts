@@ -47,13 +47,30 @@ async function setup(extra: Record<string, unknown> = {}) {
   );
   await setSecret(clubSecretId('fs', 'env', 'FS_TOKEN'), VALOR, vault);
   await setSecret(clubSecretId('web', 'header', 'Authorization'), HDR, vault);
+  // A Global: o que a biblioteca grava no ~/.claude.json (a entrada que chama o lançador; ver clubEntry).
+  await fs.writeFile(claude, JSON.stringify({ mcpServers: pointers(club, vault.dir) }));
   return { dir, proj, claude, club, vault };
 }
 
-describe('buildMcpConfig: a biblioteca sai sem valor', () => {
+/** As entradas do ~/.claude.json dos três servidores de `setup`, à mão (aceita `%` no caminho, que clubEntry recusa para o headersHelper). */
+function pointers(clubFile: string, vaultDir: string) {
+  const launch = mcpLaunchCommand();
+  const tail = (name: string) => ['--server', name, '--club', clubFile, '--vault', vaultDir];
+  return {
+    fs: { type: 'stdio', command: launch.command, args: [...launch.args, ...tail('fs')] },
+    web: {
+      type: 'http',
+      url: 'https://mcp.exemplo.com/mcp',
+      headersHelper: [launch.command, ...launch.args, '--headers', ...tail('web')].map((p) => `"${p}"`).join(' '),
+    },
+    aberto: { type: 'http', url: 'https://aberto.exemplo.com/mcp' },
+  };
+}
+
+describe('buildMcpConfig: a Global do Club sai sem valor', () => {
   it('nenhum valor do cofre vai para a configuração', async () => {
     const env = await setup();
-    const cfg = await buildMcpConfig(env.proj, ['fs', 'web', 'aberto'], env.claude, { clubFile: env.club, vault: env.vault });
+    const cfg = await buildMcpConfig(env.proj, ['global:fs', 'global:web', 'global:aberto'], env.claude, { clubFile: env.club, vault: env.vault });
     const dump = JSON.stringify(cfg);
     expect(dump).not.toContain(VALOR);
     expect(dump).not.toContain('tok-do-cofre-987zyx');
@@ -61,7 +78,7 @@ describe('buildMcpConfig: a biblioteca sai sem valor', () => {
 
   it('stdio aponta para o lançador, com o nome, a biblioteca e o cofre; sem env', async () => {
     const env = await setup();
-    const cfg = await buildMcpConfig(env.proj, ['fs'], env.claude, { clubFile: env.club, vault: env.vault });
+    const cfg = await buildMcpConfig(env.proj, ['global:fs'], env.claude, { clubFile: env.club, vault: env.vault });
     const launch = mcpLaunchCommand();
     expect(cfg.mcpServers.fs).toEqual({
       type: 'stdio',
@@ -73,7 +90,7 @@ describe('buildMcpConfig: a biblioteca sai sem valor', () => {
 
   it('http com cabeçalho usa headersHelper com --headers; http sem cabeçalho fica como estava', async () => {
     const env = await setup();
-    const cfg = await buildMcpConfig(env.proj, ['web', 'aberto'], env.claude, { clubFile: env.club, vault: env.vault });
+    const cfg = await buildMcpConfig(env.proj, ['global:web', 'global:aberto'], env.claude, { clubFile: env.club, vault: env.vault });
     const web = cfg.mcpServers.web as { type: string; url: string; headers?: unknown; headersHelper?: string };
     expect(web.type).toBe('http');
     expect(web.url).toBe('https://mcp.exemplo.com/mcp');
@@ -87,7 +104,7 @@ describe('buildMcpConfig: a biblioteca sai sem valor', () => {
     const env = await setup();
     await fs.rm(env.vault.dir, { recursive: true, force: true });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const cfg = await buildMcpConfig(env.proj, ['fs', 'web'], env.claude, { clubFile: env.club, vault: env.vault });
+    const cfg = await buildMcpConfig(env.proj, ['global:fs', 'global:web'], env.claude, { clubFile: env.club, vault: env.vault });
     expect(cfg.mcpServers).toEqual({});
     const log = warn.mock.calls.flat().join(' ');
     expect(log).toContain('FS_TOKEN');
@@ -102,8 +119,10 @@ describe('buildMcpConfig: a biblioteca sai sem valor', () => {
     await fs.mkdir(pct, { recursive: true });
     const club = path.join(pct, 'mcps.json');
     await fs.copyFile(env.club, club);
+    // As entradas do ~/.claude.json apontam para a biblioteca nesse caminho (o Club mudou de pasta depois de gravá-las).
+    await fs.writeFile(env.claude, JSON.stringify({ mcpServers: pointers(club, env.vault.dir) }));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const cfg = await buildMcpConfig(env.proj, ['fs', 'web'], env.claude, { clubFile: club, vault: env.vault });
+    const cfg = await buildMcpConfig(env.proj, ['global:fs', 'global:web'], env.claude, { clubFile: club, vault: env.vault });
     expect(Object.keys(cfg.mcpServers)).toEqual(['fs']);
     expect(warn.mock.calls.flat().join(' ')).toContain('web');
     warn.mockRestore();

@@ -7,6 +7,7 @@ import { codexModelOrNull, codexProfileError } from '../chat/codexArgs';
 import { findSecret } from '../chat/secrets';
 import { defaultLocations } from '../adapters/claude/paths';
 import { NAME as SKILL_NAME } from '../adapters/claude/skillWrite';
+import { convertMcps, knownFromRefs } from '../mcpAccessRefs';
 import { convertSkills, isSkillRef, parseSkillRef, type SkillSource } from '../skillAccess';
 import { AUTONOMY, McpAccessSchema, McpPolicySchema, routineWhen, routineWhenError, StaffError, type StaffInputParsed } from './store';
 import { mcpAccessOfInput } from './mcpAccess';
@@ -241,7 +242,8 @@ export interface TeamImportPlan {
 /**
  * Confere o arquivo inteiro e devolve o que vai ser criado. Não grava nada: quem chama só grava se isto não lançar.
  * Lança `StaffError` com o primeiro problema (formato, schema, caminho, tamanho, segredo, ciclo, regra do motor, skill que já existe
- * na Global com outro conteúdo). `globalDir`: a pasta das skills Globais (padrão `~/.claude/skills`; os testes trocam).
+ * na Global com outro conteúdo). `globalDir`: a pasta das skills Globais (padrão `~/.claude/skills`; os testes trocam). `localMcps`: as refs
+ * (`global:<nome>`, `project:<nome>`) dos MCPs que existem neste projeto.
  */
 export async function planTeamImport(raw: unknown, ctx: { globalDir?: string; localMcps: readonly string[] }): Promise<TeamImportPlan> {
   const globalDir = ctx.globalDir ?? path.join(defaultLocations().home, 'skills');
@@ -324,8 +326,9 @@ export async function planTeamImport(raw: unknown, ctx: { globalDir?: string; lo
   // Nome antigo (sem escopo) vira ref: Global, porque a skill vem no arquivo ou já existe lá; senão fica Global mesmo (a ficha avisa).
   const known = { globalNames: [...skills.map((k) => k.name), ...(await listNames(globalDir))], projectNames: [] };
 
-  // MCPs: só os que existem neste projeto; o resto sai com aviso.
+  // MCPs: só os que existem neste projeto (por ref: `global:<n>` ou `project:<n>`; nome antigo do arquivo vira ref pelo que existe aqui); o resto sai com aviso.
   const mcpsHere = new Set(ctx.localMcps);
+  const knownMcps = knownFromRefs(ctx.localMcps);
   const staff: PlannedStaff[] = order.map((ref) => {
     const s = byRef.get(ref)!;
     // Autonomia mais permissiva que acceptEdits não entra da importação: vira manual, com aviso do valor que veio.
@@ -334,7 +337,8 @@ export async function planTeamImport(raw: unknown, ctx: { globalDir?: string; lo
       warnings.push(`${s.name}: autonomia ${s.autonomy} no arquivo; entrou como manual (suba na ficha, se quiser)`);
       autonomy = 'manual';
     }
-    for (const m of s.mcps ?? []) if (!mcpsHere.has(m)) warnings.push(`${s.name}: MCP ${m} não existe neste projeto; ficou de fora`);
+    const mcps = convertMcps(s.mcps, knownMcps).mcps;
+    for (const m of mcps ?? []) if (!mcpsHere.has(m)) warnings.push(`${s.name}: MCP ${m} não existe neste projeto; ficou de fora`);
     if (s.routines.length) warnings.push(`${s.name}: ${s.routines.length} rotina(s) entraram desligadas; ligue na ficha se quiser`);
     // Acesso aos MCPs: o do arquivo (ou o legado, de antes) pela mesma leitura da ficha; o que sobrar é o que entra.
     const access = mcpAccessOfInput(s);
@@ -348,7 +352,7 @@ export async function planTeamImport(raw: unknown, ctx: { globalDir?: string; lo
         autonomy,
         agents: s.agents,
         skills: convertSkills(s.skills, known).skills,
-        mcps: s.mcps === null ? null : s.mcps.filter((m) => mcpsHere.has(m)),
+        mcps: mcps === null ? null : mcps.filter((m) => mcpsHere.has(m)),
         ...(access && { mcpAccess: access }),
         // Sem conhecimento, servidores, navegador nem contratação: o que é deste projeto e da máquina não vem no arquivo.
         knowledge: [],

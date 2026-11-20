@@ -163,7 +163,9 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
   const gpt = ctx.codex === true && profile.engine !== 'codex';
   if (profile.mcps !== null || ftpServers.length || gpt || clean.mcp || ssh.server || memoria.server || git.server) {
     mcpConfigPath = path.join(dir, 'mcp.json');
-    // Os da biblioteca do Club entram sem valor: o comando é o lançador, que tira o segredo do cofre ao subir (mcpLaunch.ts).
+    // Só com lista na ficha (refs `global:`/`project:`): com `mcps` null a conversa não leva `--strict-mcp-config` e o Claude Code carrega sozinho os do
+    // ~/.claude.json, então copiá-los aqui subiria o mesmo servidor duas vezes. Os do Club entram sem valor: o comando é o lançador, que tira o segredo
+    // do cofre ao subir (mcpLaunch.ts).
     const config = profile.mcps !== null ? await buildMcpConfig(ctx.projectPath, profile.mcps, ctx.claudeConfigFile) : { mcpServers: {} };
     if (ftpServers.length) {
       // Só nomes e caminhos: o MCP tira a senha do cofre sozinho.
