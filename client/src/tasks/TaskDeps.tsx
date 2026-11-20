@@ -116,7 +116,9 @@ export function BlockedByField({
     return (
       <details className="collapse task-deps">
         <SectionSummary label={t('tasks.blockedBy')} sum={depsSummary(value, tasks)} />
-        {body}
+        <div role="group" aria-label={t('tasks.blockedBy')}>
+          {body}
+        </div>
       </details>
     );
   return (
