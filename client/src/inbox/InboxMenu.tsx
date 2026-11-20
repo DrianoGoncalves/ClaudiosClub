@@ -16,6 +16,7 @@ import { taskIn, useProjectTasks } from '../tasks/useProjectTasks';
 import { isInsideDialog } from '../lib/dialogStore';
 import { isLocalPage } from '../office/folderPick';
 import { sandboxOf } from './codexSandbox';
+import { CARD_TONE, INBOX_TONE, cardTone, toneClass } from './alertTone';
 import { deniedAction } from './deniedAlert';
 import { inboxText, inboxWho } from './inboxText';
 import { ReviewShortcutForm } from './ReviewShortcut';
@@ -238,12 +239,14 @@ export function InboxMenu({
                 const stuckTask = stuck ? taskIn(fuTasks.byProject, item.projectId, stuck.taskId) : null;
                 const delegate = stuckTask ? reviewShortcutOf(item, stuckTask, staff) : null;
                 const sandbox = sandboxOf(item);
+                const tone = toneClass(isResolved(item) ? CARD_TONE.resolved : INBOX_TONE[item.kind]);
                 const row = (
                   <>
-                    <span className="inbox-kind">{KIND_LABEL[item.kind]}</span>                    <span className="inbox-who">
+                    <span className="inbox-kind">{KIND_LABEL[item.kind]}</span>
+                    <span className="inbox-who">
                       <b>{inboxWho(item)}</b>
                       {item.name && item.projectName && <span className="muted"> · {item.projectName}</span>}
-                      {isResolved(item) && <span className="task-badge small inbox-resolved">{t('inbox.resolved')}</span>}
+                      {isResolved(item) && <span className={`task-badge small inbox-resolved ${cardTone('resolved')}`}>{t('inbox.resolved')}</span>}
                     </span>
                     {topic && <span className="inbox-topic" title={topic}>{topic}</span>}
                     <span className="inbox-summary" title={inboxText(item)}>{inboxText(item)}</span>
@@ -254,11 +257,11 @@ export function InboxMenu({
                 <li key={item.id} className={[dismissTitle && 'inbox-has-x', isResolved(item) && 'is-resolved'].filter(Boolean).join(' ') || undefined}>
                   {item.codexSandbox ? (
                     // Aviso da máquina (sem projeto nem conversa): não há para onde ir, então a linha não é botão; o que se faz está logo abaixo (copiar o comando) e o × ignora.
-                    <div className={`inbox-item inbox-${item.kind} inbox-sandbox`}>{row}</div>
+                    <div className={`inbox-item inbox-${item.kind} inbox-sandbox ${tone}`}>{row}</div>
                   ) : (
                     <button
                       role="menuitem"
-                      className={`inbox-item inbox-${item.kind}`}
+                      className={`inbox-item inbox-${item.kind} ${tone}`}
                       onClick={() => {
                         setOpen(false);
                         onOpen(item);
@@ -340,7 +343,7 @@ export function InboxMenu({
                       {/* O que importa para decidir, à vista: a recomendação e, com a tarefa já Finalizada, o selo. */}
                       <div className="inbox-fu-meta">
                         <RecommendationBadge recommendation={fu.recommendation} />
-                        {taskFinished(fuTask) && <span className="task-badge small fu-done">{t('tasks.statusDone')}</span>}
+                        {taskFinished(fuTask) && <span className={`task-badge small fu-done ${cardTone('resolved')}`}>{t('tasks.statusDone')}</span>}
                       </div>
                       {hasFields(fu) ? (
                         fu.impact && (

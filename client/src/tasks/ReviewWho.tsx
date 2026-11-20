@@ -1,6 +1,7 @@
 import { AUTO_REVIEW_ROUNDS } from '../../../shared/model';
 import { t } from '../i18n';
 import { fellToOwner, type ReviewPlan } from './reviewRule';
+import { cardTone } from '../inbox/alertTone';
 
 // Quem revisa a tarefa em "revisão", dito na tela. O dono aparece em amarelo ("precisa de mim"): é ele quem aprova ou reprova.
 
@@ -8,7 +9,7 @@ import { fellToOwner, type ReviewPlan } from './reviewRule';
 export function OwnerBadge({ plan }: { plan: ReviewPlan }) {
   if (!fellToOwner(plan)) return null;
   return (
-    <span className="task-badge is-waiting small" title={t(plan.why === 'self' ? 'tasks.ownerReviewHintSelf' : 'tasks.ownerReviewHintCap', { n: AUTO_REVIEW_ROUNDS })}>
+    <span className={`task-badge ${cardTone('owner')} small`} title={t(plan.why === 'self' ? 'tasks.ownerReviewHintSelf' : 'tasks.ownerReviewHintCap', { n: AUTO_REVIEW_ROUNDS })}>
       {t('tasks.ownerReviewBadge')}
     </span>
   );

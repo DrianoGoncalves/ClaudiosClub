@@ -3,6 +3,7 @@ import type { FollowUp, FollowUpCardResult, Task } from '../../../shared/model';
 import { ApiError, api } from '../api';
 import { formatAgo } from '../format';
 import { locale, t } from '../i18n';
+import { cardTone } from '../inbox/alertTone';
 import { FollowUpFieldsView } from './FollowUpFields';
 import { decisionErrorText, followUpAuthor, followUpState, followUpsOf, openFollowUps, type FollowUpDecision } from './followUp';
 import {
@@ -37,7 +38,7 @@ export function FollowUpBadge({ task }: { task: Pick<Task, 'followUps'> }) {
   if (!open.length) return null;
   const mine = open.some((f) => f.to === 'owner');
   return (
-    <span className={`task-badge task-followup small${mine ? ' is-waiting' : ''}`} title={t(mine ? 'tasks.fuBadgeMineHint' : 'tasks.fuBadgeHint')}>
+    <span className={`task-badge task-followup small${mine ? ` ${cardTone('owner')}` : ''}`} title={t(mine ? 'tasks.fuBadgeMineHint' : 'tasks.fuBadgeHint')}>
       {followUpSummary(open)}
     </span>
   );
@@ -341,7 +342,7 @@ function FollowUpItem({ task, followUp: f, tasks, team, nameOf, now, projectId, 
             {formatAgo(now - Date.parse(f.at))}
           </span>
         </span>
-        <span className={`task-badge small${open && f.to === 'owner' ? ' is-waiting' : ''}`}>{state.badge}</span>
+        <span className={`task-badge small${open && f.to === 'owner' ? ` ${cardTone('owner')}` : ''}`}>{state.badge}</span>
       </div>
       {structured ? (
         <FollowUpFieldsView

@@ -1,6 +1,7 @@
 import type { FollowUp } from '../../../shared/model';
 import { t } from '../i18n';
 import { sizeText } from './followUpNotice';
+import { cardTone } from '../inbox/alertTone';
 
 // O follow-up com os campos que o revisor preenche, para quem decide: selo da recomendação (vale fazer / opcional), título leigo, "Se não fizer: …", tamanho, quem faria e o
 // achado técnico recolhido. Serve ao balão da conversa (chat/FollowUpNotice.tsx) e ao detalhe do card. Tudo texto puro: o conteúdo é de outro funcionário.
@@ -8,7 +9,7 @@ import { sizeText } from './followUpNotice';
 /** "Vale fazer" ou "Opcional": o texto basta para ler sem cor; a borda sólida ou tracejada o reforça. */
 export function RecommendationBadge({ recommendation }: { recommendation?: FollowUp['recommendation'] }) {
   if (recommendation !== 'worth' && recommendation !== 'optional') return null;
-  return <span className={`task-badge small fu-rec is-${recommendation}`}>{t(recommendation === 'worth' ? 'tasks.fuRecWorth' : 'tasks.fuRecOptional')}</span>;
+  return <span className={`task-badge small fu-rec is-${recommendation}${recommendation === 'worth' ? ` ${cardTone('recommended')}` : ''}`}>{t(recommendation === 'worth' ? 'tasks.fuRecWorth' : 'tasks.fuRecOptional')}</span>;
 }
 
 export interface FieldsProps {
