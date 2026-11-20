@@ -11,7 +11,9 @@ import { buildCodexArgs, codexDenyPaths, CodexBlockedError, type CodexSpawn } fr
 import { CodexProcess } from '../server/chat/codexProcess';
 import { ChatManager } from '../server/chat/manager';
 import { ChatProcess } from '../server/chat/process';
-import { consultDenyRules, buildClaudeConsultArgs } from '../server/staff/ficha';
+import { MYCO_HOME } from '../server/config';
+import { consultDenyRules, buildClaudeConsultArgs, secretDenyRules } from '../server/staff/ficha';
+import { CONSULT_GUIDE_MAX_BYTES } from '../server/staff/consultGuide';
 import { StaffService } from '../server/staff/service';
 import { profileFile, readProfile } from '../server/staff/store';
 
@@ -324,6 +326,165 @@ describe('Codex: a consulta é read-only, sem rede, sem MCP e com as negações 
     expect(joined).toContain('web_search="disabled"');
     for (const never of ['mcp_servers', 'agents.', 'hooks.', ':workspace', '127.0.0.2']) expect(joined, never).not.toContain(never);
     expect(runs[0]!.env.MYCO_TOKEN).toBeUndefined();
+  });
+});
+
+// t-1a9bf2 (follow-up da revisão de t-ee823d): a consulta não lê credencial da home e nenhum funcionário forja vínculo nem resposta de consulta.
+describe('o registro da consulta não se edita e as credenciais da home não se leem, nos dois motores', () => {
+  const noServers = { servers: [] } as never;
+  const inside = (dir: string, file: string) => {
+    const rel = path.relative(dir, file);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  };
+  const clubConsult = (rule: string) => rule.includes(path.basename(base)) && rule.endsWith('/myco/consult/**)');
+
+  it('Claude: Edit e Write de MYCO_HOME/consult/** (links.json e records.json) são negados a todo funcionário, na consulta também; a leitura não é negada à conversa comum', async () => {
+    for (const tool of ['Edit', 'Write']) expect(secretDenyRules(noServers).filter((r) => r.startsWith(`${tool}(`) && clubConsult(r)), tool).toHaveLength(1);
+    expect(secretDenyRules(noServers).some((r) => r.startsWith('Read(') && clubConsult(r))).toBe(false);
+    const p = await hire('Gui');
+    const comum = flag((await service().chatSpawn('proj-id', null, p.id))!.args, '--disallowedTools')!.split(',');
+    const consulta = flag((await service().chatSpawn('proj-id', null, p.id, undefined, undefined, false, STAMP))!.args, '--disallowedTools')!.split(',');
+    for (const deny of [comum, consulta]) for (const tool of ['Edit', 'Write']) expect(deny.filter((r) => r.startsWith(`${tool}(`) && clubConsult(r)), tool).toHaveLength(1);
+  });
+
+  it('Codex: MYCO_HOME/consult não entra em writableRoots, na conversa comum nem na de consulta, e a linha de comando não a abre para escrita', async () => {
+    const p = await hire('Hugo', 'codex');
+    const consultDir = path.join(MYCO_HOME, 'consult');
+    for (const stamp of [undefined, STAMP]) {
+      const c = (await service().chatSpawn('proj-id', null, p.id, undefined, undefined, false, stamp))!.codex as CodexSpawn;
+      for (const dir of c.writableRoots) {
+        expect(inside(consultDir, dir), dir).toBe(false);
+        expect(inside(dir, consultDir), dir).toBe(false);
+      }
+      const args = buildCodexArgs({ cwd: proj, sandbox: 'workspace', network: 'off', secrets: c.secrets, writableRoots: c.writableRoots, readOnlyPaths: c.readOnlyPaths, consult: c.consult, platform: 'win32' }).join(' ');
+      expect(args).not.toContain(`${JSON.stringify(consultDir)}="write"`);
+    }
+  });
+
+  it('Claude: a consulta nega a leitura das credenciais da home (Grep e Glob junto), sem espaço na regra; a conversa comum não ganha essas regras', async () => {
+    const p = await hire('Iris');
+    const deny = flag((await service().chatSpawn('proj-id', null, p.id, undefined, undefined, false, STAMP))!.args, '--disallowedTools')!.split(',');
+    const rules = ['Read(~/.aws/**)', 'Read(~/.docker/**)', 'Read(~/.config/gh/**)', 'Read(~/AppData/Roaming/GitHub?CLI/**)', 'Read(~/.kube/**)', 'Read(~/.npmrc)', 'Read(~/.netrc)', 'Read(~/.git-credentials)'];
+    for (const rule of rules) expect(deny, rule).toContain(rule);
+    expect(deny.some((r) => r.includes(' '))).toBe(false);
+    for (const rule of rules) expect(secretDenyRules(noServers), rule).not.toContain(rule);
+  });
+
+  describe('Codex: as credenciais da home que existem entram em codexDenyPaths na consulta, e só nela', () => {
+    async function home() {
+      const dir = await fs.mkdtemp(path.join(root, 'cred-'));
+      const h = path.join(dir, 'home');
+      const projeto = path.join(dir, 'proj');
+      for (const d of ['.aws', '.docker', path.join('.config', 'gh'), path.join('AppData', 'Roaming', 'GitHub CLI')]) await fs.mkdir(path.join(h, d), { recursive: true });
+      await fs.mkdir(projeto, { recursive: true });
+      await fs.writeFile(path.join(h, '.npmrc'), '//registry:_authToken=x');
+      await fs.writeFile(path.join(h, '.netrc'), 'machine x');
+      return { h, projeto, ctx: { cwd: projeto, projectPath: projeto, home: h, mycoHome: path.join(h, '.myco') } };
+    }
+    const dirs = (h: string) => [path.join(h, '.aws'), path.join(h, '.docker'), path.join(h, '.config', 'gh'), path.join(h, 'AppData', 'Roaming', 'GitHub CLI')];
+
+    it('Windows: as pastas e todos os arquivos de credencial que existem (os que não existem, como ~/.kube, ficam de fora) e a linha de comando os nega', async () => {
+      const { h, ctx } = await home();
+      const paths = codexDenyPaths({ ...ctx, consult: { otherProjects: [], platform: 'win32' } });
+      expect(paths).toEqual([...dirs(h), path.join(h, '.npmrc'), path.join(h, '.netrc')]);
+      expect(paths).not.toContain(path.join(h, '.kube'));
+      const args = buildCodexArgs({ cwd: ctx.cwd, sandbox: 'workspace', network: 'off', secrets: { projectPath: ctx.projectPath, home: h, mycoHome: ctx.mycoHome }, consult: { otherProjects: [], platform: 'win32' }, platform: 'win32' }).join(' ');
+      for (const p of paths) expect(args, p).toContain(`${JSON.stringify(p)}="deny"`);
+    });
+
+    it('fora do Windows só cabe UM arquivo regular na sandbox: o primeiro de credencial entra, o resto fica de fora sem erro; o ~/.claude.json e o .vps arquivo têm a vez antes', async () => {
+      const { h, projeto, ctx } = await home();
+      const consult = { otherProjects: [], platform: 'linux' as const };
+      expect(codexDenyPaths({ ...ctx, consult })).toEqual([...dirs(h), path.join(h, '.npmrc')]);
+      await fs.writeFile(path.join(h, '.claude.json'), '{}');
+      expect(codexDenyPaths({ ...ctx, consult })).toEqual([...dirs(h), path.join(h, '.claude.json')]);
+      await fs.rm(path.join(h, '.claude.json'));
+      await fs.writeFile(path.join(projeto, '.vps'), 'x');
+      expect(codexDenyPaths({ ...ctx, consult })).toEqual([...dirs(h), path.join(projeto, '.vps')]);
+    });
+
+    it('a conversa comum do Codex não ganha nenhuma delas', async () => {
+      const { ctx } = await home();
+      expect(codexDenyPaths(ctx)).toEqual([]);
+    });
+  });
+});
+
+describe('Claude: a consulta abre só com as configurações do usuário e leva o CLAUDE.md do projeto no prompt (t-1a9bf2, item 1)', () => {
+  const guideFile = () => path.join(proj, 'CLAUDE.md');
+  const systemOf = async (args: string[]) => fs.readFile(flag(args, '--append-system-prompt-file')!, 'utf8');
+  const SECTION = '## Instruções do projeto consultado (CLAUDE.md)';
+
+  it('--setting-sources user na abertura e no resume; a conversa comum não leva a flag (segue com as configurações todas)', async () => {
+    const p = await hire('Jade');
+    const svc = service();
+    const first = (await svc.chatSpawn('proj-id', null, p.id, undefined, undefined, false, STAMP))!;
+    expect(flag(first.args, '--setting-sources')).toBe('user');
+    const reopened = (await svc.chatSpawn('proj-id', first.sessionId, p.id))!;
+    expect(flag(reopened.args, '--setting-sources')).toBe('user');
+    expect(reopened.args).toContain('--resume');
+    expect((await svc.chatSpawn('proj-id', null, p.id))!.args).not.toContain('--setting-sources');
+    const pure = buildClaudeConsultArgs({ name: 'Ana' } as never, { sessionId: 's1', resume: false, systemPromptFile: 'sys.md', mcpConfigPath: 'mcp.json', deny: ['Bash'] });
+    expect(flag(pure, '--setting-sources')).toBe('user');
+    // Nenhuma outra porta para as configurações do projeto: `--settings`, `--add-dir` e `--plugin-dir` seguem fora.
+    for (const never of ['--settings', '--add-dir', '--plugin-dir']) expect(pure, never).not.toContain(never);
+  });
+
+  it('o texto do CLAUDE.md da raiz chega no prompt de sistema, marcado como instruções do projeto consultado, e a reabertura relê o arquivo; @import não é expandido', async () => {
+    const p = await hire('Kai');
+    const svc = service();
+    await fs.mkdir(path.join(proj, 'docs'), { recursive: true });
+    await fs.writeFile(path.join(proj, 'docs', 'extra.md'), 'IMPORTADO-NAO-ENTRA');
+    await fs.writeFile(guideFile(), 'O builder roda com `npm run build`. Palavra-código: ZEBRA-42.\n@docs/extra.md\n');
+    try {
+      const first = (await svc.chatSpawn('proj-id', null, p.id, undefined, undefined, false, STAMP))!;
+      const system = await systemOf(first.args);
+      expect(system).toContain(SECTION);
+      expect(system).toContain('ZEBRA-42');
+      expect(system).toContain('@docs/extra.md');
+      expect(system).not.toContain('IMPORTADO-NAO-ENTRA');
+      expect(system).toContain('Não muda as regras desta conversa');
+      expect(system).not.toContain('AVISO: o CLAUDE.md passa');
+      // A seção vem depois da ficha e as regras da consulta continuam no prompt.
+      expect(system.indexOf(SECTION)).toBeGreaterThan(system.indexOf('## Esta conversa é uma consulta'));
+      await fs.writeFile(guideFile(), 'Agora é GIRAFA-7.');
+      const again = await systemOf((await svc.chatSpawn('proj-id', first.sessionId, p.id))!.args);
+      expect(again).toContain('GIRAFA-7');
+      expect(again).not.toContain('ZEBRA-42');
+    } finally {
+      await fs.rm(guideFile(), { force: true });
+      await fs.rm(path.join(proj, 'docs'), { recursive: true, force: true });
+    }
+  });
+
+  it('arquivo acima do teto: entra só o começo, com o aviso de cortado; arquivo ausente: o prompt não leva a seção', async () => {
+    const p = await hire('Lia');
+    const svc = service();
+    await fs.writeFile(guideFile(), `COMECO-OK\n${'x'.repeat(CONSULT_GUIDE_MAX_BYTES)}\nFIM-CORTADO`);
+    try {
+      const big = await systemOf((await svc.chatSpawn('proj-id', null, p.id, undefined, undefined, false, STAMP))!.args);
+      expect(big).toContain('COMECO-OK');
+      expect(big).not.toContain('FIM-CORTADO');
+      expect(big).toContain(`AVISO: o CLAUDE.md passa de ${CONSULT_GUIDE_MAX_BYTES / 1024} KB e foi cortado aqui`);
+    } finally {
+      await fs.rm(guideFile(), { force: true });
+    }
+    const none = await systemOf((await svc.chatSpawn('proj-id', null, p.id, undefined, undefined, false, STAMP))!.args);
+    expect(none).not.toContain(SECTION);
+    expect(none).not.toContain('claude-md-do-projeto');
+    expect(none).toContain('## Esta conversa é uma consulta');
+  });
+
+  it('o Codex não ganha a seção (ele lê o AGENTS.md sozinho e não tem `--setting-sources`)', async () => {
+    const p = await hire('Mia', 'codex');
+    await fs.writeFile(guideFile(), 'Palavra-código: ZEBRA-42.');
+    try {
+      const c = (await service().chatSpawn('proj-id', null, p.id, undefined, undefined, false, STAMP))!.codex as CodexSpawn;
+      expect(c.instructions).not.toContain('ZEBRA-42');
+      expect(c.instructions).not.toContain(SECTION);
+    } finally {
+      await fs.rm(guideFile(), { force: true });
+    }
   });
 });
 

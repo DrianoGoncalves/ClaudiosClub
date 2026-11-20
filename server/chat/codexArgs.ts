@@ -85,6 +85,11 @@ const CONSULT_DIRS = ['.myco', '.git', '.claude', '.codex', '.vps'];
 const CONSULT_GLOBS = ['**/.env*', '**/.mcp.json', '**/*.pem', '**/*.key', '**/*.p12', '**/id_rsa*', '**/id_ed25519*'];
 const CONSULT_ROOT_FILE = /^(\.env.*|\.mcp\.json|id_rsa.*|id_ed25519.*|.*\.(pem|key|p12))$/;
 
+/** Pastas de credencial de outras ferramentas, relativas à home (com `/`), que a consulta nunca lê nos dois motores (o Claude usa as mesmas em `consultDenyRules`, ficha.ts). */
+export const CONSULT_CREDENTIAL_DIRS = ['.aws', '.docker', '.kube', '.azure', '.gnupg', '.config/gh', '.config/gcloud', 'AppData/Roaming/GitHub CLI', 'AppData/Roaming/gcloud'];
+/** Arquivos de credencial da home (token de registro, login de servidor, senha do git). */
+export const CONSULT_CREDENTIAL_FILES = ['.npmrc', '.netrc', '_netrc', '.git-credentials', '.pypirc'];
+
 /** Recusa de rodar o Codex (falha fechada): a mensagem é para o usuário, em português, e acaba como erro da conversa. */
 export class CodexBlockedError extends Error {}
 
@@ -124,6 +129,8 @@ function rootFiles(dir: string): string[] {
  * Também as pastas de lançamento (`<mycoHome>/run`, com o mcp.json das sessões) e os backups do ~/.claude.json (`<mycoHome>/backups`
  * e `~/.claude/backups`). O `~/.claude.json` só entra se, depois de tudo, não sobrou arquivo: é o único arquivo da home que cabe.
  * Limite da sandbox: os `.claude.json.backup*` e `.tmp.*` da home ficam legíveis no Codex.
+ *
+ * Na consulta, as pastas de credencial da home (`CONSULT_CREDENTIAL_DIRS`: ~/.aws, ~/.docker, ~/.config/gh, AppData/Roaming/GitHub CLI…) e os arquivos (`CONSULT_CREDENTIAL_FILES`: ~/.npmrc…) que existem.
  */
 export function codexDenyPaths(ctx: CodexSecretContext): string[] {
   const dirs: string[] = [];
@@ -146,6 +153,7 @@ export function codexDenyPaths(ctx: CodexSecretContext): string[] {
     add(path.join(ctx.home, '.codex'));
     add(path.join(ctx.home, '.claude'));
     for (const other of ctx.consult.otherProjects) add(other);
+    for (const d of CONSULT_CREDENTIAL_DIRS) add(path.join(ctx.home, ...d.split('/')));
     // Fora do Windows não há glob provado: as pastas do projeto e os arquivos sensíveis da raiz entram pelo caminho (o limite de um arquivo vale).
     if ((ctx.consult.platform ?? process.platform) !== 'win32') {
       for (const d of CONSULT_DIRS) add(path.join(ctx.projectPath, d));
@@ -159,6 +167,12 @@ export function codexDenyPaths(ctx: CodexSecretContext): string[] {
   }
   // Depois dos `.vps` (que têm prioridade): só entra se sobrou o lugar do arquivo.
   if (files.length === 0) add(path.join(ctx.home, '.claude.json'));
+  if (ctx.consult) {
+    // Arquivos de credencial da home: no Windows a sandbox nega quantos forem (provado no Codex 0.169.0 com dois arquivos e pastas juntos). No bwrap só cabe um arquivo regular por execução, então
+    // entram só enquanto sobra o lugar e o resto fica legível; não é falha fechada, porque quase toda home tem um `.npmrc` e a consulta não rodaria nunca.
+    const win = (ctx.consult.platform ?? process.platform) === 'win32';
+    for (const f of CONSULT_CREDENTIAL_FILES) if (win || files.length === 0) add(path.join(ctx.home, f));
+  }
   return [...dirs, ...files];
 }
 

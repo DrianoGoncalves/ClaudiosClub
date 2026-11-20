@@ -28,6 +28,7 @@ import { PLAYBOOK_AGENTS } from '../../shared/agentPresets';
 import { buildSkillPlugin } from '../skillLibrary';
 import { listSkillDirs, skillPlanOf, type SkillSource } from '../skillAccess';
 import { hasGuide } from '../projectGuide';
+import { readConsultGuide } from './consultGuide';
 import { ensureMemory, fichaFile, historyDir, memoryFile, profileFile, staffDir, writeAtomic } from './store';
 import { readPersonMemory } from './personalMemory';
 import type { Worktree } from './worktree';
@@ -258,7 +259,8 @@ export async function prepareConsultRun(
 ): Promise<{ instructions: string; systemPromptFile: string; mcpConfigPath: string; deny: string[] }> {
   const dir = path.join(ctx.runDir, sessionId);
   const fichaCtx: FichaContext = { company: ctx.company, projectName: ctx.projectName, projectPath: ctx.projectPath, managerNames: [], fichaPath: '', memoryPath: '', mycoUrl: '' };
-  const instructions = consultSystemPrompt(profile, fichaCtx);
+  // O CLAUDE.md do projeto entra no prompt só no Claude (que abre com `--setting-sources user`, sem o CLAUDE.md do projeto); o Codex lê o AGENTS.md dele sozinho.
+  const instructions = consultSystemPrompt(profile, fichaCtx, o.engine === 'claude' ? await readConsultGuide(ctx.projectPath) : null);
   const systemPromptFile = path.join(dir, 'system.md');
   const mcpConfigPath = path.join(dir, 'mcp.json');
   if (o.engine === 'claude') {
