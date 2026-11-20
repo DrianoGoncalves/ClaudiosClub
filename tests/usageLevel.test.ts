@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { paceLevel, usageLevel, weekPace } from '../client/src/toolbar/Toolbar';
 
@@ -76,5 +78,15 @@ describe('paceLevel', () => {
   it('vermelha abaixo de 7%/dia', () => {
     expect(paceLevel(6.9)).toBe('tight');
     expect(paceLevel(0)).toBe('tight');
+  });
+
+  it('a classe da listra vira a cor do semáforo no CSS', () => {
+    const css = readFileSync(join(__dirname, '../client/src/styles.css'), 'utf8');
+    expect(css).toContain('--pace-slack: var(--ink-green)');
+    expect(css).toContain('--pace-even: var(--waiting)');
+    expect(css).toContain('--pace-tight: var(--ink-red)');
+    for (const level of ['slack', 'even', 'tight']) {
+      expect(css).toContain(`.meter-track.pace-${level} { --stripe: var(--pace-${level}); }`);
+    }
   });
 });
