@@ -12,6 +12,7 @@ import { BoardReview, useBoardCommit, useBoardReview } from './BoardReview';
 import { CommitBadge, CommitBlock } from './TaskCommit';
 import { FallbackWaitBadge, fallbackWaitText } from './FallbackWait';
 import { ReviewDelegate } from './ReviewDelegate';
+import { byHierarchy } from './reviewPick';
 import { reviewPlan } from './reviewRule';
 import { OwnerBadge, ReviewWho } from './ReviewWho';
 import { TaskCodePanel } from './TaskCodePanel';
@@ -118,27 +119,7 @@ const HELP: Record<TaskStatus, string> = {
   cancelled: t('tasks.helpCancelled'),
 };
 
-/**
- * Funcionários na ordem da hierarquia: quem reporta a você primeiro, depois os subordinados
- * (pelo primeiro gestor, como no organograma). No mesmo nível, orquestrador antes; depois por nome.
- */
-export function byHierarchy(staff: StaffProfile[]): StaffProfile[] {
-  const byId = new Map(staff.map((s) => [s.id, s]));
-  const depth = (s: StaffProfile) => {
-    const seen = new Set([s.id]);
-    let d = 0;
-    for (let m = byId.get(s.reportsTo[0] ?? ''); m && !seen.has(m.id); m = byId.get(m.reportsTo[0] ?? '')) {
-      seen.add(m.id);
-      d++;
-    }
-    return d;
-  };
-  const orch = (s: StaffProfile) => (/orquestr/i.test(s.role) ? 0 : 1);
-  return staff
-    .map((s) => ({ s, d: depth(s) }))
-    .sort((a, b) => a.d - b.d || orch(a.s) - orch(b.s) || a.s.name.localeCompare(b.s.name, 'pt-BR'))
-    .map((x) => x.s);
-}
+export { byHierarchy };
 
 interface Props {
   projectId: string;
@@ -178,6 +159,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const [over, setOver] = useState<TaskStatus | null>(null);
   /** O cartão da fila sobre o qual se arrasta outro da mesma fila, e de que lado dele o arrastado entra (`after`: abaixo). */
   const [overCard, setOverCard] = useState<{ id: string; after: boolean } | null>(null);
+  /** Funcionário cuja fila A fazer está à mostra ('' = todos). Só filtra a vista: a ordem e os passos da fila seguem os do servidor. */
+  const [queueStaff, setQueueStaff] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [showCancelled, setShowCancelled] = useState(false);
   /** Diálogo de cancelar ou apagar aberto, para a tarefa `id`. */
@@ -539,7 +522,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
           <div className="tasks-columns">
             {COLUMNS.map(({ status, shows }) => {
               const shown = tasks.filter((t) => !t.archived && shows.includes(t.status));
-              const col = status === 'todo' ? byQueue(shown) : byRecent(shown, awaitingPlan);
+              // Quem aparece no seletor: quem tem tarefa em A fazer (mais o escolhido, que pode ter esvaziado a fila).
+              const queueOwners = status === 'todo' ? staff.filter((s) => s.id === queueStaff || shown.some((t) => t.staffId === s.id)) : [];
+              const col = status === 'todo' ? byQueue(queueStaff ? shown.filter((t) => t.staffId === queueStaff) : shown) : byRecent(shown, awaitingPlan);
               return (
                 <section
                   key={status}
@@ -558,9 +543,21 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                     setDragging(null);
                   }}
                 >
-                  <h3 title={HELP[status]}>
-                    {LABEL[status]} <span className="muted">{col.length || ''}</span>
-                  </h3>
+                  <div className="tasks-col-head">
+                    <h3 title={HELP[status]}>
+                      {LABEL[status]} <span className="muted">{col.length || ''}</span>
+                    </h3>
+                    {queueOwners.length > 0 && (
+                      <select className="tasks-col-filter" value={queueStaff} onChange={(e) => setQueueStaff(e.target.value)} aria-label={t('tasks.queueFilter')} title={t('tasks.queueFilter')}>
+                        <option value="">{t('tasks.queueFilterAll')}</option>
+                        {byHierarchy(queueOwners).map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
                   {col.map(card)}
                   {status === 'done' && archived.length > 0 && (
                     <>
@@ -973,6 +970,18 @@ function TaskDetail({
   const depsChanged = !sameDeps(blockedBy, task.blockedBy ?? []);
   const dirty = title !== task.title || description !== task.description || pr !== (task.pr ?? '') || goalChanged || acceptanceChanged || depsChanged;
   const who = staff.find((s) => s.id === task.staffId);
+  /** Em Aguardar o Salvar fica junto do Começar (o editado não vai com o Começar), sempre à vista; nas outras colunas só aparece com algo a salvar, acima. */
+  const saveInActions = task.status === 'waiting';
+  const saveEdits = () =>
+    void onSave({
+      title,
+      description,
+      pr: pr || null,
+      // Só o que mudou: o servidor confere dependência (existe? faz ciclo?) a cada envio.
+      ...(goalChanged && { goal: goal.trim() || null }),
+      ...(acceptanceChanged && { acceptance: acceptance.trim() || null }),
+      ...(depsChanged && { blockedBy }),
+    });
   return (
     <aside className="task-detail">
       <header className="task-detail-head">
@@ -1035,27 +1044,14 @@ function TaskDetail({
         PR
         <input value={pr} placeholder="https://github.com/…/pull/123" onChange={(e) => setPr(e.target.value)} />
       </label>
-      {dirty && (
+      {dirty && !saveInActions && (
         <p className="actions">
-          <button
-            className="btn-primary"
-            onClick={() =>
-              void onSave({
-                title,
-                description,
-                pr: pr || null,
-                // Só o que mudou: o servidor confere dependência (existe? faz ciclo?) a cada envio.
-                ...(goalChanged && { goal: goal.trim() || null }),
-                ...(acceptanceChanged && { acceptance: acceptance.trim() || null }),
-                ...(depsChanged && { blockedBy }),
-              })
-            }
-          >
+          <button className="btn-primary" onClick={saveEdits}>
             {t('tasks.save')}
           </button>
         </p>
       )}
-      {!dirty && saved && (
+      {!dirty && saved && !saveInActions && (
         <p className="save-ok" role="status">
           ✓ {t('tasks.saved')}
         </p>
@@ -1160,6 +1156,16 @@ function TaskDetail({
         </p>
       )}
       <p className="actions">
+        {saveInActions && (
+          <button className={dirty ? 'btn-primary' : 'btn-secondary'} disabled={!dirty} onClick={saveEdits}>
+            {t('tasks.save')}
+          </button>
+        )}
+        {saveInActions && !dirty && saved && (
+          <span className="save-ok" role="status">
+            ✓ {t('tasks.saved')}
+          </span>
+        )}
         {task.status === 'cancelled' && (
           <button className="btn-primary" onClick={onReopen} title={t('tasks.reopenHint')}>
             {t('tasks.reopen')}
