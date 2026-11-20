@@ -10,7 +10,7 @@ import type { CommitAlert, FollowUpAlert, NotStartedTask, OwnAlert, StuckDepende
 // Avisos da caixa "precisa de mim" que vêm de uma conversa do Claudio’s Club e levam ao ponto dela que
 // os causou (`itemId`, `quote`): ao clicar, a conversa rola até lá.
 
-type Place = Pick<InboxItem, 'projectId' | 'projectName' | 'sessionId' | 'staffId' | 'name'>;
+export type Place = Pick<InboxItem, 'projectId' | 'projectName' | 'sessionId' | 'staffId' | 'name'>;
 
 /** Pedido de permissão (ou plano, ou pergunta com opções) sem resposta: o alvo é o cartão dele na lista. */
 export function permissionInboxItem(p: Extract<ChatItem, { kind: 'permission' }>, w: Place): InboxItem {

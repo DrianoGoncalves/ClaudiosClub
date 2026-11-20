@@ -952,6 +952,11 @@ export interface Task {
    */
   commit?: TaskCommit;
   /**
+   * O aviso de que o commit automático deixou arquivo de fora por outra tarefa (`why: 'shared'`) chegou a quem pediu (`requestedBy`): `key` é o conjunto de arquivo, motivo e tarefa que barrou,
+   * e o mesmo motivo não avisa de novo. Só é gravado quando o aviso chegou. Só o servidor grava.
+   */
+  commitNotice?: { key: string; at: string };
+  /**
    * Só na listagem (derivado, não gravado): a dúvida da tarefa está escalada a você (`question.status === 'escalated'`) e isso decide se
    * ela prende o funcionário. Ausente = dúvida com o gestor, respondida ou sem dúvida (a fila não muda).
    */
@@ -973,6 +978,33 @@ export interface Task {
    * começa nem segue sozinha até ele ser retomado. Ausente = projeto rodando (ou tarefa encerrada).
    */
   projectPaused?: ProjectPause;
+  /**
+   * Só na listagem (derivado dos itens da caixa de entrada, não gravado): o card está parado esperando alguém agir num item da caixa que se refere a ele (ver `InboxWait`). Some sozinho
+   * quando o item é resolvido, dispensado ou deixa de valer. Ausente = nada o prende (um aviso na caixa que não trava o card não conta). Com mais de um item, vale o de maior prioridade.
+   */
+  inboxWait?: InboxWait;
+}
+
+/**
+ * O tipo do item da caixa que prende um card (`InboxWait.kind`): `plan` plano pronto para aprovar; `permission` pedido de permissão de ferramenta; `question` dúvida por opções (ou escrita, depois
+ * de escalada) sem resposta; `review` revisão automática que não começou ou ficou sem veredito; `resend` ajuste guardado que não chega ao funcionário; `noCode` card que terminou sem editar
+ * código, esperando decisão; `blocked` o card espera outra tarefa empacada (`blockerId`). Não prendem (só avisam): cartão esquecido em "a fazer" (`notStarted`), follow-up de revisão, ação barrada (`denied`),
+ * erro (commit automático, fila desligada, teto do turno, sandbox), segredo, sessão esperando em outro lugar (`waiting`), processo órfão, rotina, consumo, e as paradas que se resolvem sozinhas
+ * (espera do limite do motor, dúvida a caminho do gestor).
+ */
+export type InboxWaitKind = 'plan' | 'permission' | 'question' | 'review' | 'resend' | 'noCode' | 'blocked';
+
+/** Por que um card está parado esperando a caixa de entrada (`Task.inboxWait`). Sem texto livre: a tela monta a frase no idioma da página a partir de `kind`. */
+export interface InboxWait {
+  kind: InboxWaitKind;
+  /** De quem é a ação: `owner` o dono (você), pela caixa; `manager` o gestor (ou o revisor que reprovou), que responde a dúvida por opções antes de ela escalar a você. */
+  by: 'owner' | 'manager';
+  /** O `InboxItem.id` do item que o prende, para a tela abri-lo na caixa. */
+  itemId: string;
+  /** Desde quando o item espera (ISO; o `at` do item, ou a última mudança do card se o item não tem hora). */
+  since: string;
+  /** Só em `blocked`: a tarefa empacada que ele espera. */
+  blockerId?: string;
 }
 
 /** A permissão que a conversa de uma tarefa espera de você (`Task.permissionWait`). Só o nome da ferramenta: o comando e os arquivos ficam no cartão da conversa. */

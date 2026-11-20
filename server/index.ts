@@ -60,6 +60,7 @@ import { createMcpLibrary } from './staff/mcpLibrary';
 import { migrateMcpsAtBoot as runMcpMigration } from './staff/mcpMigration';
 import { MCP_TOOLS_FILE } from './staff/mcpTools';
 import { CodexPasswordPolicy } from './codexPasswordPolicy';
+import { withInboxWait } from './inboxWait';
 import { blockedInboxItem, codexSandboxInboxItem, commitInboxItem, deniedInboxItem, followUpInboxItem, heavyGuardOffInboxItem, notStartedInboxItem, permissionInboxItem, questionInboxItem, secretInboxItem, stuckInboxItem, taskQuestionInboxItem, withoutSecretHint } from './inboxItems';
 import { InboxResolver, resolvedLast, settleWithin } from './inboxResolved';
 import { capText } from './chat/turnCap';
@@ -1650,7 +1651,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ],
   // ---- tarefas por projeto ----
   ['GET', /^\/api\/tasks\/summary$/, () => tasks.summary()],
-  ['GET', new RegExp(`^/api/projects/${ID}/tasks$`), ({ params: [id] }) => tasks.list(id!)],
+  // Com `inboxWait`: o card parado esperando um item da caixa (derivado, ver server/inboxWait.ts).
+  ['GET', new RegExp(`^/api/projects/${ID}/tasks$`), async ({ params: [id] }) => withInboxWait(await tasks.list(id!), id!, chats.attention())],
   // Revisão automática do quadro: `{ autoReview, reviewerId }` (ver server/boardConfig.ts). Ler é livre; gravar só pela tela, como as outras
   // configurações de projeto (o funcionário nem tem este POST na lista de apiPolicy.ts).
   ['GET', new RegExp(`^/api/projects/${ID}/board-review$`), ({ params: [id] }) => tasks.boardConfig(id!)],
