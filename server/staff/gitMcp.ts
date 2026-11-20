@@ -9,6 +9,7 @@ import { cleanRel, isBlockedRel } from '../projectFiles';
 import { ROOT } from '../root';
 import {
   GitMcpError,
+  assertProjectRepo,
   assertSafeConfig,
   createSafeTools,
   githubRepoOf,
@@ -144,6 +145,7 @@ export function createGitMcp(opts: GitMcpOptions) {
     const refusal = gitRefusal(await readGitPolicy(opts.runDir), want, action);
     if (refusal) throw new GitMcpError(refusal);
     await fs.mkdir(hooksDir, { recursive: true });
+    await assertProjectRepo(git, root, opts.projectPath);
     await assertSafeConfig(git, root);
   }
 
@@ -273,13 +275,17 @@ export function createGitMcp(opts: GitMcpOptions) {
     return name;
   }
 
-  /** `owner/repo` do `origin` (a URL de push, já com `insteadOf`): só github.com, e só o remote `origin` que o repositório já tem. */
+  /**
+   * `owner/repo` do `origin` (as URLs de push, já com `insteadOf`): só github.com, e só o remote `origin` que o repositório já tem. O `git push origin` envia
+   * a TODAS as `pushurl`, então todas são conferidas; o `owner/repo` devolvido é o da primeira (o da PR).
+   */
   async function originRepo(): Promise<{ owner: string; repo: string }> {
-    const url = (await git(root, ['remote', 'get-url', '--push', 'origin']).catch(() => '')).trim();
-    if (!url) throw new GitMcpError('o repositório não tem o remote "origin"');
-    const repo = githubRepoOf(url);
-    if (!repo) throw new GitMcpError(`o origin (${maskUrl(url)}) não é um repositório do github.com (https, git@github.com: ou ssh://git@github.com/, sem usuário e senha na URL): só esse é aceito`);
-    return repo;
+    const urls = (await git(root, ['remote', 'get-url', '--push', '--all', 'origin']).catch(() => '')).split(/\r?\n/).map((u) => u.trim()).filter(Boolean);
+    if (!urls.length) throw new GitMcpError('o repositório não tem o remote "origin"');
+    const repos = urls.map((url) => ({ url, repo: githubRepoOf(url) }));
+    const bad = repos.find((r) => !r.repo);
+    if (bad) throw new GitMcpError(`o origin (${maskUrl(bad.url)}) não é um repositório do github.com (https, git@github.com: ou ssh://git@github.com/, sem usuário e senha na URL): só esse é aceito`);
+    return repos[0]!.repo!;
   }
 
   async function push(args: { branch?: unknown }): Promise<string> {

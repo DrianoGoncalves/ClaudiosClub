@@ -55,8 +55,9 @@ async function bare() {
 /**
  * O MCP com o git seguro de verdade (hooks desligados, ambiente controlado), registrando cada chamada ao git. `remote`: o push do `origin` do GitHub é
  * redirecionado a esse remoto local (o `pushInsteadOf` vai só na linha de comando do push, não na config do repositório); o gh é falso e guarda os argumentos.
+ * `dir` é o projeto; `workDir`, a pasta da conversa (a worktree; padrão: o próprio projeto).
  */
-async function server(dir: string, policy: GitPolicy | null = CODEX_AUTO, remote?: string) {
+async function server(dir: string, policy: GitPolicy | null = CODEX_AUTO, remote?: string, workDir: string = dir) {
   const runDir = path.join(root, `run${++seq}`);
   await fs.mkdir(path.join(runDir, 'nohooks'), { recursive: true });
   if (policy) await writeGitPolicy(runDir, policy);
@@ -65,7 +66,7 @@ async function server(dir: string, policy: GitPolicy | null = CODEX_AUTO, remote
   const ghCalls: Array<{ args: string[]; input?: string }> = [];
   const mcp = createGitMcp({
     projectPath: dir,
-    root: dir,
+    root: workDir,
     runDir,
     sleep: async () => {},
     tools: {
@@ -157,7 +158,7 @@ describe('git_commit: só os caminhos pedidos', () => {
     const wt = path.join(root, `wt${++seq}`);
     git(dir, 'worktree', 'add', '-q', '-b', 'myco/ana', wt);
     await write(wt, 'a.ts', 'export const v = 9;\n');
-    const s = await server(wt);
+    const s = await server(dir, CODEX_AUTO, undefined, wt);
     const r = await s.call('git_commit', { mensagem: 'na worktree', caminhos: ['a.ts'] });
     expect(r.error).toBe(false);
     expect(git(wt, 'log', '-1', '--format=%s').trim()).toBe('na worktree');
@@ -185,6 +186,91 @@ describe('hooks do git não rodam', () => {
     git(dir, 'checkout', '-q', '-b', 'myco/ana');
     expect((await s.call('git_push', {})).error).toBe(false);
     for (const m of markers) expect(existsSync(m), m).toBe(false);
+  });
+});
+
+describe('o repositório da pasta de trabalho é o do projeto', () => {
+  /** Uma "worktree" cujo arquivo .git foi reescrito para o gitdir de OUTRO repositório (o ataque: um repo falso com só chaves permitidas na config). */
+  async function forged() {
+    const dir = await repo();
+    const fake = await repo(); // um repositório válido e com origin do GitHub: nenhuma outra conferência o acusa
+    const wt = path.join(root, `wt${++seq}`);
+    await fs.mkdir(wt);
+    await fs.writeFile(path.join(wt, '.git'), `gitdir: ${fwd(path.join(fake, '.git'))}\n`);
+    return { dir, fake, wt, fakeHead: git(fake, 'rev-parse', 'HEAD').trim() };
+  }
+
+  it('.git da pasta aponta para fora do projeto: toda ferramenta recusa, sem commitar, sem push e sem gh', async () => {
+    const { dir, fake, wt, fakeHead } = await forged();
+    const remote = await bare();
+    await write(wt, 'a.ts', 'export const v = 2;\n');
+    const s = await server(dir, CODEX_AUTO, remote, wt);
+    for (const [name, args] of [
+      ['git_status', {}],
+      ['git_diff', {}],
+      ['git_log', {}],
+      ['git_commit', { mensagem: 'm', caminhos: ['a.ts'] }],
+      ['git_push', { branch: 'myco/ana' }],
+      ['git_pr_criar', { titulo: 't', branch: 'myco/ana' }],
+    ] as const) {
+      const r = await s.call(name, args);
+      expect(r.error, name).toBe(true);
+      expect(r.text, name).toContain('não é o do projeto');
+    }
+    expect(s.pushes()).toEqual([]);
+    expect(s.ghCalls).toEqual([]);
+    expect(git(fake, 'rev-parse', 'HEAD').trim()).toBe(fakeHead);
+    expect(git(remote, 'for-each-ref').trim()).toBe('');
+  });
+
+  it('a recusa vem antes da config: a do repositório falso nem é lida', async () => {
+    const { dir, fake, wt } = await forged();
+    git(fake, 'config', '--local', 'core.sshCommand', 'evil'); // se a config fosse lida primeiro, a recusa citaria esta chave
+    const r = await (await server(dir, CODEX_AUTO, undefined, wt)).call('git_status');
+    expect(r.error).toBe(true);
+    expect(r.text).toContain('não é o do projeto');
+    expect(r.text).not.toContain('sshcommand');
+  });
+
+  it('projeto cujo .git é arquivo (ele mesmo uma worktree): a referência vem do git; o próprio projeto vale e o repositório falso segue recusado', async () => {
+    const main = await repo();
+    const proj = path.join(root, `proj${++seq}`);
+    git(main, 'worktree', 'add', '-q', '-b', 'myco/proj', proj);
+    expect((await (await server(proj)).call('git_status')).error).toBe(false);
+    const fake = await repo();
+    const wt = path.join(root, `wt${++seq}`);
+    await fs.mkdir(wt);
+    await fs.writeFile(path.join(wt, '.git'), `gitdir: ${fwd(path.join(fake, '.git'))}\n`);
+    const r = await (await server(proj, CODEX_AUTO, undefined, wt)).call('git_status');
+    expect(r.error).toBe(true);
+    expect(r.text).toContain('não é o do projeto');
+  });
+
+  it('um repositório que não é o do projeto, mesmo clonado dele (outro .git): recusa', async () => {
+    const dir = await repo();
+    const clone = path.join(root, `clone${++seq}`);
+    execFileSync('git', ['clone', '-q', dir, clone]);
+    const s = await server(dir, CODEX_AUTO, undefined, clone);
+    const r = await s.call('git_status');
+    expect(r.error).toBe(true);
+    expect(r.text).toContain('não é o do projeto');
+  });
+
+  it('pasta que não é repositório: recusa com a mensagem clara', async () => {
+    const dir = await repo();
+    const plain = path.join(root, `plain${++seq}`);
+    await fs.mkdir(plain);
+    const r = await (await server(dir, CODEX_AUTO, undefined, plain)).call('git_status');
+    expect(r.error).toBe(true);
+    expect(r.text).toContain('não é um repositório git');
+  });
+
+  it('controle: a worktree de verdade do projeto e o próprio projeto seguem valendo', async () => {
+    const dir = await repo();
+    const wt = path.join(root, `wt${++seq}`);
+    git(dir, 'worktree', 'add', '-q', '-b', 'myco/bia', wt);
+    expect((await (await server(dir, CODEX_AUTO, undefined, wt)).call('git_status')).error).toBe(false);
+    expect((await (await server(dir)).call('git_status')).error).toBe(false);
   });
 });
 
@@ -414,6 +500,43 @@ describe('git_push: origin no GitHub, branch que não é main/master, nunca forc
       expect(s.pushes(), url).toEqual([]);
       expect(s.ghCalls, url).toEqual([]);
     }
+  });
+
+  describe('origin com mais de uma pushurl (o push vai para todas)', () => {
+    const twoPush = async (...urls: string[]) => {
+      const dir = await repo();
+      for (const u of urls) git(dir, 'config', '--add', 'remote.origin.pushurl', u);
+      expect(git(dir, 'remote', 'get-url', '--push', '--all', 'origin').split(/\r?\n/).filter(Boolean)).toEqual(urls); // o controle: o git as lista todas
+      return dir;
+    };
+
+    it.each([
+      ['a 2ª fora do GitHub', [ORIGIN, 'https://gitlab.com/acme/demo.git']],
+      ['a 1ª fora do GitHub', ['https://gitlab.com/acme/demo.git', ORIGIN]],
+      ['a 2ª com usuário e senha na URL', [ORIGIN, 'https://user:segredo123@github.com/acme/demo.git']],
+      ['a 3ª em outro esquema', [ORIGIN, 'https://github.com/acme/espelho.git', 'ext::sh -c evil']],
+    ])('%s: push e PR recusados antes de qualquer chamada de rede, sem repetir a senha', async (_label, urls) => {
+      const dir = await twoPush(...urls);
+      const remote = await bare();
+      const s = await server(dir, CODEX_AUTO, remote);
+      const push = await s.call('git_push', { branch: 'myco/ana' });
+      expect(push.error).toBe(true);
+      expect(push.text).toContain('não é um repositório do github.com');
+      expect(push.text).not.toContain('segredo123');
+      const pr = await s.call('git_pr_criar', { titulo: 't', branch: 'myco/ana' });
+      expect(pr.error).toBe(true);
+      expect(s.pushes()).toEqual([]);
+      expect(s.ghCalls).toEqual([]);
+      expect(git(remote, 'for-each-ref').trim()).toBe('');
+    });
+
+    it('todas no GitHub: vale, e a PR vai para o repositório da primeira', async () => {
+      const dir = await twoPush(ORIGIN, 'https://github.com/acme/espelho.git');
+      const s = await server(dir);
+      const pr = await s.call('git_pr_criar', { titulo: 't', branch: 'myco/ana' });
+      expect(pr.error, pr.text).toBe(false);
+      expect(s.ghCalls[0]!.args).toContain('github.com/acme/demo');
+    });
   });
 
   it('sem o remote origin: recusa', async () => {

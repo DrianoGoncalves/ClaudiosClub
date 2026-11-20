@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { GitOpts, GitRun } from '../autoCommit';
@@ -87,6 +88,31 @@ export async function assertSafeConfig(run: GitRun, cwd: string): Promise<void> 
     if (!LOCAL_OK.some((re) => re.test(key))) {
       throw new GitMcpError(`a config do repositório tem "${key.slice(0, 80)}" (escopo ${scope}), que pode rodar código com as suas credenciais: recuso. O dono precisa tirá-la do .git/config.`);
     }
+  }
+}
+
+const realPath = (p: string): Promise<string> => fs.realpath(p).catch(() => path.resolve(p));
+const sameDir = (a: string, b: string): boolean => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+
+/** O `--git-common-dir` de uma pasta, absoluto e real (o git resolve o gitdir de uma worktree até o `.git` do repositório principal). */
+async function commonDirOf(run: GitRun, cwd: string): Promise<string | null> {
+  const out = (await run(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']).catch(() => '')).trim();
+  return out ? realPath(path.resolve(cwd, out)) : null;
+}
+
+/**
+ * Recusa a pasta de trabalho cujo repositório não é o do projeto. Numa worktree o `.git` é um ARQUIVO (`gitdir: …`) dentro do checkout, que o agente pode
+ * reescrever para um repositório falso (config com `remote.origin.url` de outro repo do dono, só com chaves de `LOCAL_OK`): sem esta conferência, o push
+ * sairia com as credenciais do dono para lá. O `.git` do projeto é a referência (a pasta `.git` do projeto, ou, se o projeto não a tem como pasta, o que o git
+ * resolve a partir dele). Vem ANTES de `assertSafeConfig`: a config conferida tem de ser a do repositório certo.
+ */
+export async function assertProjectRepo(run: GitRun, root: string, projectPath: string): Promise<void> {
+  const own = path.join(projectPath, '.git');
+  const expected = (await fs.stat(own).then((s) => s.isDirectory(), () => false)) ? await realPath(own) : await commonDirOf(run, projectPath);
+  const actual = await commonDirOf(run, root);
+  if (!actual) throw new GitMcpError('a pasta de trabalho não é um repositório git: recuso.');
+  if (!expected || !sameDir(actual, expected)) {
+    throw new GitMcpError('o repositório desta pasta de trabalho não é o do projeto (o arquivo .git aponta para outro lugar): recuso. O dono precisa corrigir o .git da pasta.');
   }
 }
 
