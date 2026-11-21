@@ -6,6 +6,7 @@ import messages from '../client/src/i18n/schedules';
 import { dayAfterMonthChange, monthGrid, monthStart, shiftMonth } from '../client/src/schedules/calendar';
 import { draftChanged, newDraft, type RoutineDraft } from '../client/src/schedules/routineDraft';
 import {
+  cancelFormStep,
   cancelSchedule,
   enableRoutine,
   escapeStep,
@@ -252,6 +253,20 @@ describe('o Esc', () => {
     expect(escapeStep(state)).toBe(step);
   });
 
+  it.each<[boolean, ReturnType<typeof cancelFormStep>]>([
+    [false, 'close-form'],
+    [true, 'ask-discard'],
+  ])('o botão Cancelar (rascunho mudado: %s) faz o mesmo que o Esc: %s', (dirty, step) => {
+    expect(cancelFormStep(dirty)).toBe(step);
+    expect(escapeStep({ confirming: false, form: { dirty, asking: false } })).toBe(step);
+  });
+
+  it('o Cancelar do quadro passa pela mesma pergunta (draftChanged) antes de descartar', () => {
+    const src = readFileSync('client/src/schedules/SchedulesBoard.tsx', 'utf8');
+    expect(src).toMatch(/onCancel=\{\(\) => \(cancelFormStep\(draftChanged\(form\.draft, form\.opened\)\) === 'ask-discard'/);
+    expect(src).not.toMatch(/onCancel=\{\(\) => setForm\(null\)\}/);
+  });
+
   it('o rascunho "mudou" só se algum campo mudou (dias da semana pelo conteúdo)', () => {
     const opened = draft({ weekdays: [1, 3] });
     expect(draftChanged({ ...opened, weekdays: [1, 3] }, opened)).toBe(false);
@@ -263,11 +278,12 @@ describe('o Esc', () => {
 });
 
 describe('a tela de produção não carrega props de teste', () => {
-  it('SchedulesBoard não aceita initialData nem initialNow (só o wrapper de teste leva `seed`)', () => {
+  it('SchedulesBoard não aceita initialData nem initialNow (só o wrapper de teste leva `seed`) e o wrapper vive em tests/support', () => {
     const src = readFileSync('client/src/schedules/SchedulesBoard.tsx', 'utf8');
     expect(src).not.toMatch(/initialData|initialNow/);
     const props = /interface Props \{[\s\S]*?\n\}/.exec(src)?.[0] ?? '';
     expect(props).not.toMatch(/seed|initial/);
-    expect(src).toMatch(/export function SchedulesBoardSeeded/);
+    expect(src).not.toMatch(/SchedulesBoardSeeded/);
+    expect(readFileSync('tests/support/seededBoard.ts', 'utf8')).toMatch(/export const SchedulesBoardSeeded/);
   });
 });

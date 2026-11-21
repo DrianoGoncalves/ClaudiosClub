@@ -800,7 +800,7 @@ describe('conversa da tarefa que morreu no meio do turno', () => {
     expect(delivered).toEqual([{ sessionId: 's-1', text: expect.stringContaining('Continue de onde parou') }]);
   });
 
-  it('morreu de novo, pedida por um gestor: ele é avisado da interrupção, sem testes nem revisão automática', async () => {
+  it('morreu de novo, pedida por um gestor: ele é avisado da interrupção e a revisão automática abre, sem testes (t-2a8ee8)', async () => {
     const dir = path.join(root, 'orfa-gestor');
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
@@ -844,7 +844,9 @@ describe('conversa da tarefa que morreu no meio do turno', () => {
     expect(notified[0]!.text).toContain(`(id ${a.id})`);
     expect(notified[0]!.text).toContain('Fiz metade do formulário.');
     expect(ran).toEqual([]); // sem testes
-    expect(sent.map((s) => s.staffId)).toEqual(['ana-1']); // o revisor não foi chamado
+    // Não dá para provar que nada mudou (a pasta não é um repositório): o conservador é revisar, e a revisão abre como numa entrega (antes ficava em revisão sem ninguém olhar).
+    expect(sent.map((s) => s.staffId)).toEqual(['ana-1', 'rev-1']);
+    expect((await svc.list('p'))![0]!.review).toMatchObject({ staffId: 'rev-1' });
   });
 
   it('conversa trabalhando não é tocada', async () => {

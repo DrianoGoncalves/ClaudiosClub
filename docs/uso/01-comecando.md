@@ -41,14 +41,21 @@ Os funcionários não conseguem aprovar o pareamento: quem aprova é o terminal 
 
 Dá para trocar a qualquer hora; nada se perde.
 
-## Ver o projeto demo (opcional)
+## Começar com uma equipe pronta (opcional)
 
-Para ver uma equipe pronta:
+Um modelo de equipe cria de uma vez as fichas de uma equipe, com a hierarquia (todos respondem ao orquestrador). Há dois:
 
-1. **Configurações** → **Geral** → **Projeto demo** (no Simples: **Ajuda e sobre** → **Projeto de exemplo**).
-2. Clique em **Criar projeto demo**. Ele cria uma vez e abre a sala.
+| Modelo | Quem entra |
+|---|---|
+| **Site / landing page** | Marina (Orquestrador(a)), Caio (Web designer), Bia (Desenvolvedor(a) front-end), Rafael (Especialista em tráfego) |
+| **Manutenção de SaaS** | Helena (Orquestrador(a)), Tiago (Desenvolvedor(a) back-end), Laura (Desenvolvedor(a) front-end), Otávio (Analista de QA), Renata (Analista de segurança), Davi (DevOps / SRE) |
 
-Ver o quadro e as fichas não gasta nada; abrir um funcionário usa a sua cota.
+Onde escolher:
+
+- **No Novo projeto**: o campo **Equipe pronta (opcional)** vem em **Sem equipe**. Escolha um modelo para o projeto já abrir com a equipe.
+- **Num projeto sem nenhum funcionário**: na aba **Equipe** do projeto aparece **Comece com uma equipe pronta**. Escolha o modelo e clique em **Criar equipe**.
+
+Antes de aplicar, a tela lista quem entra (nome e cargo). Só as fichas são criadas: **nenhuma tarefa nem conversa começa sozinha**, e você pode editar ou apagar cada ficha depois. Projeto que já tem funcionário não mostra a opção, e o Club recusa (409) aplicar um modelo nele. Criar a equipe não gasta cota; só conversar com alguém gasta.
 
 ## Primeiro projeto
 
@@ -57,7 +64,8 @@ Ver o quadro e as fichas não gasta nada; abrir um funcionário usa a sua cota.
    - **Criar pasta nova**: preencha **Nome da pasta** e **Onde criar**; ou
    - **Pasta que já existe**: clique em **Procurar…** e escolha a pasta na janela que abre, ou digite o caminho em **Caminho da pasta**.
 3. Marque **Iniciar um repositório git (o painel de código e a revisão usam o diff)** se quiser.
-4. Clique em **Criar projeto** (pasta nova) ou **Abrir projeto** (pasta existente).
+4. Se quiser, escolha uma **Equipe pronta** (ver acima); o padrão é **Sem equipe**.
+5. Clique em **Criar projeto** (pasta nova) ou **Abrir projeto** (pasta existente).
 
 A pasta entra no quadro na hora. O Claude Code passa a conhecê-la na primeira conversa.
 

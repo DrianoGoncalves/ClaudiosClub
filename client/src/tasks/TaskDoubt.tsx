@@ -5,6 +5,7 @@ import { formatAgo } from '../format';
 import { t } from '../i18n';
 import { ANSWER_MAX, answerBody, canAnswer, emptyPicks, togglePick } from './doubtAnswer';
 import { waitClass } from './waitTone';
+import { cardTone } from '../inbox/alertTone';
 
 // Dúvida do funcionário numa tarefa pedida por gestor: selo no cartão e bloco no detalhe.
 // `open` = com o gestor; `escalated` = com você (o bloco traz como responder); `answered` = resolvida (sem selo).
@@ -29,7 +30,7 @@ export function DoubtBadge({
   const mine = question.status === 'escalated';
   const text = mine ? t('tasks.doubtBadgeUser') : t('tasks.doubtBadgeManager', { name: managerName(requestedBy, nameOf) });
   return (
-    <span className={`task-badge task-doubt small${mine ? ' is-waiting' : waitClass(warm)}`} title={text} role={mine ? 'status' : undefined}>
+    <span className={`task-badge task-doubt small${mine ? ` ${cardTone('owner')}` : waitClass(warm)}`} title={text} role={mine ? 'status' : undefined}>
       {text}
     </span>
   );
@@ -71,7 +72,7 @@ export function DoubtBlock({
     <section className={`task-doubt-box ${mine ? 'is-escalated' : ''}`} aria-label={t('tasks.doubtTitle')}>
       <header className="task-doubt-head">
         <b>{t('tasks.doubtTitle')}</b>
-        <span className={`task-badge small ${mine ? 'is-waiting' : question.status === 'answered' ? 'is-approved' : ''}`}>{status}</span>
+        <span className={`task-badge small ${mine ? cardTone('owner') : question.status === 'answered' ? cardTone('approved') : ''}`}>{status}</span>
       </header>
       <p className="muted small">{t('tasks.doubtAsked', { ago: ago(question.askedAt) })}</p>
       {/* Pergunta por opções com você: as opções viram escolha (no DoubtAnswer); fora disso, só a lista. */}

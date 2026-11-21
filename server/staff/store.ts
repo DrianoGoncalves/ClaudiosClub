@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { CATCH_UP_MAX_HOURS, type McpAccess, type Recurrence, type Routine, type StaffProfile } from '../../shared/model';
+import { CATCH_UP_MAX_HOURS, type ConsultStamp, type McpAccess, type Recurrence, type Routine, type StaffProfile } from '../../shared/model';
 import { cronError } from '../../shared/cron';
 import { normalizeRecurrence, recurrenceError } from '../../shared/recurrence';
 import { PERSONALITIES } from '../../shared/personality';
@@ -31,6 +31,19 @@ const FallbackSchema = z.object({
   // Esforço do Codex (inclui `ultra`); no Claude o `ultra` é recusado em `fallbackError`.
   effort: CodexEffortSchema.optional(),
 });
+const ConsultStampSchema = z.object({
+  id: z.string().max(40),
+  fromProjectId: z.string().max(300),
+  fromProjectName: z.string().max(200),
+  fromStaffId: z.string().max(100),
+  fromStaffName: z.string().max(200),
+});
+/** O carimbo de consulta de uma sessão (ver `ConsultStamp`): ausente = sessão comum; estragado = carimbo vazio, nunca "sessão comum" (falha fechada). */
+export function readConsultStamp(raw: unknown): ConsultStamp | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const parsed = ConsultStampSchema.safeParse(raw);
+  return parsed.success ? parsed.data : { id: 'c-invalido', fromProjectId: '', fromProjectName: '', fromStaffId: '', fromStaffName: '' };
+}
 const line = (max: number) => z.string().trim().max(max);
 const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const list = (max: number) => z.array(line(500)).max(max).default([]);
@@ -249,6 +262,9 @@ const ProfileSchema = StaffInputObject.omit({ portraitDataUrl: true, launch: tru
         fallback: FallbackSchema.optional().catch(undefined),
         // Conversa de revisão de tarefa (ver chatSpawn): reabrir não devolve as ferramentas de edição.
         readOnly: z.boolean().optional().catch(undefined),
+        // Conversa de consulta de outro projeto (ver server/consult/): reabrir mantém o perfil só leitura. Carimbo estragado NUNCA some (a conversa abriria
+        // como uma revisão comum, com Bash e MCP): vira um carimbo vazio e o perfil de consulta segue valendo.
+        consult: z.unknown().optional().transform(readConsultStamp),
       }),
     )
     .default([]),

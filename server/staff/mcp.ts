@@ -10,22 +10,25 @@ import { findSecret } from '../chat/secrets';
 import { CODEX_EXTRA_MCP_NAME, CODEX_RESERVED_MCP_NAMES, type CodexExtraMcp } from '../chat/codexArgs';
 import { cleanEnv, withoutMycoToken } from '../auth';
 import { DEFAULT_SECRETS_DIR, getSecret, type VaultOptions } from '../secretVault';
-import { mcpLaunchCommand, quotedCommand } from './mcpLaunch';
+import { isMcpRef, knownFromRefs, MCP_NAME, resolveLegacyMcp, type KnownMcpNames, type McpScopeName } from '../mcpAccessRefs';
+import { mcpLaunchCommand, parseLauncherEntry, quotedCommand } from './mcpLaunch';
 import { MCP_TOOLS_FILE, mcpFingerprint, testedToolsMany, toolsKey, type McpTool } from './mcpTools';
 import { codexMcpAccess, mcpAccessFile, validMcpName, type McpAccessFile, type McpAccessMap } from './mcpAccess';
 import { SSH_MCP_NAME, TOOLS as SSH_TOOLS } from './sshMcp';
+import { GIT_MCP_NAME, TOOLS as GIT_TOOLS } from './gitMcp';
 import { writeAtomic } from './store';
 
-// MCPs que vão para a conversa de um funcionário, de quatro origens (da mais específica para a mais geral):
-//   local   = só este projeto, em ~/.claude.json (projects[<caminho>].mcpServers)
-//   project = .mcp.json do projeto (vai para o git: sem segredo literal)
-//   club    = biblioteca do Claudio’s Club (~/.myco/mcps.json, sem segredo: os valores ficam no cofre)
-//   user    = todos os projetos, em ~/.claude.json (mcpServers)
-// Quando o mesmo nome aparece em mais de uma, vence a mais específica (local > project > club > user).
+// MCPs que vão para a conversa de um funcionário, de dois escopos (como as skills; a ficha guarda `global:<nome>` ou `project:<nome>`, ver mcpAccessRefs.ts):
+//   global  = ~/.claude.json (mcpServers): vale também no Claude Code fora do Claudio’s Club. Os MCPs que o Club cadastra ficam aqui como
+//             uma entrada que chama o lançador (mcpLaunch.ts) com o nome do servidor: os valores ficam no cofre, e comando, URL e nomes
+//             de chave no registro da biblioteca (~/.myco/mcps.json, sem valor).
+//   project = .mcp.json do projeto (vai para o git: sem segredo literal) e o escopo local do projeto em ~/.claude.json
+//             (projects[<caminho>].mcpServers; fora do git, `outOfGit`). Mesmo nome nos dois: vale o local, como no Claude Code.
+// Cada ref é um servidor; a conversa só sobe um por nome (se a ficha marcar os dois, o do Projeto).
 // Para o navegador vão só nomes e origem: a configuração de um servidor costuma ter chaves de API.
-// A edição e o cadastro estão em mcpLibrary.ts.
+// A edição e o cadastro estão em mcpLibrary.ts; a migração do modelo antigo, em mcpMigration.ts.
 
-/** A biblioteca do Claudio’s Club: fica fora de qualquer projeto, como as skills. */
+/** O registro das definições dos MCPs do Claudio’s Club (comando, URL, nomes de chave; sem valor): fica fora de qualquer projeto, como as skills. */
 export const CLUB_MCP_FILE = path.join(MYCO_HOME, 'mcps.json');
 
 export class McpError extends Error {}
@@ -52,11 +55,22 @@ const ClubJson = z.object({ servers: z.record(z.string(), ClubEntry).optional() 
 type ServerConfig = z.infer<typeof Servers>[string];
 
 interface Found {
+  /** `global:<nome>` ou `project:<nome>`. */
+  ref: string;
+  name: string;
+  scope: McpScopeName;
+  /** Onde está: ~/.claude.json (`user`), .mcp.json (`mcpjson`) ou o escopo local do projeto (`local`). */
+  from: 'user' | 'mcpjson' | 'local';
   info: McpServerInfo;
+  /** O que o Codex e a impressão do teste leem: a entrada como está, ou a definição do registro quando é do Club. */
   config: ServerConfig;
-  /** Só na biblioteca: os nomes de env e cabeçalho que buildMcpConfig tira do cofre. */
-  club?: { env: string[]; headers: string[] };
+  /** A entrada como está no arquivo: é o que o Claude recebe (a do Club é refeita com o lançador de agora, ver buildMcpConfig). */
+  entry: ServerConfig;
+  /** Entrada do Club (chama o lançador): o nome do servidor no registro e a definição, de onde buildMcpConfig tira os nomes de env e cabeçalho do cofre. */
+  club?: { name: string; def: ClubEntry };
 }
+
+const keysOf = (def: ClubEntry) => ({ env: def.env ?? [], headers: def.headers ?? [] });
 
 /** O id do valor no cofre: `mcp:club:<nome>:env|header:<chave>`. */
 export const clubSecretId = (name: string, kind: 'env' | 'header', key: string) => `mcp:club:${name}:${kind}:${key}`;
@@ -114,32 +128,48 @@ async function collect(projectPath: string, claudeConfigFile: string, clubFile: 
   return (await collectWithApproval(projectPath, claudeConfigFile, clubFile)).found;
 }
 
+/** A definição do registro como configuração de servidor (o que a impressão do teste e o Codex leem). */
+function defConfig(def: ClubEntry): ServerConfig {
+  const config: ServerConfig = { type: def.type };
+  if (def.url) config.url = def.url;
+  if (def.command) config.command = def.command;
+  if (def.args) config.args = def.args;
+  return config;
+}
+
+/**
+ * A entrada do Club (que chama o lançador) deste mcpServers, ou null: o `--server` está no registro e o `--club` é o nosso. Só então os valores
+ * estão no cofre; qualquer outra entrada (o usuário a escreveu, ou aponta para outro registro) vale como está, com o que o arquivo traz.
+ */
+export function clubDefOf(entry: Record<string, unknown>, club: { servers: Record<string, ClubEntry> } | null, clubFile: string): { name: string; def: ClubEntry } | null {
+  const ref = parseLauncherEntry(entry);
+  if (!ref || ref.club === undefined || pathKey(ref.club) !== pathKey(clubFile) || !club) return null;
+  return Object.prototype.hasOwnProperty.call(club.servers, ref.server) ? { name: ref.server, def: club.servers[ref.server]! } : null;
+}
+
 /** Os servidores achados e a aprovação do projeto, num só passe pelo ~/.claude.json (quem precisa da aprovação, o Codex, pede este). */
 async function collectWithApproval(projectPath: string, claudeConfigFile: string, clubFile: string): Promise<{ found: Map<string, Found>; approval: McpJsonApproval }> {
   const found = new Map<string, Found>();
-  const put = (source: McpServerInfo['source'], name: string, config: ServerConfig, club?: Found['club']) => {
-    found.set(name, { info: { name, source, transport: config.type ?? (config.url ? 'http' : config.command ? 'stdio' : null) }, config, club });
+  const put = (from: Found['from'], name: string, entry: ServerConfig, club?: Found['club']) => {
+    // Nome que a ficha não consegue marcar (ver parseMcpRef) não entra.
+    if (!MCP_NAME.test(name) || name === '__proto__') return;
+    const scope: McpScopeName = from === 'user' ? 'global' : 'project';
+    const config = club ? defConfig(club.def) : entry;
+    const transport = config.type ?? (config.url ? 'http' : config.command ? 'stdio' : null);
+    const info: McpServerInfo = { name, ref: `${scope}:${name}`, scope, source: scope === 'global' ? 'user' : 'project', transport, ...(from === 'local' && { outOfGit: true }) };
+    found.set(info.ref, { ref: info.ref, name, scope, from, info, config, entry, club });
   };
-  const add = (source: McpServerInfo['source'], servers: Record<string, ServerConfig> | undefined) => {
-    for (const [name, config] of Object.entries(servers ?? {})) put(source, name, config);
+  const add = (from: Found['from'], servers: Record<string, ServerConfig> | undefined, club?: { servers: Record<string, ClubEntry> } | null) => {
+    for (const [name, entry] of Object.entries(servers ?? {})) put(from, name, entry, club ? (clubDefOf(entry, club, clubFile) ?? undefined) : undefined);
   };
 
   const user = ClaudeJson.safeParse(await readJson(claudeConfigFile));
   const project = McpJson.safeParse(await readJson(path.join(projectPath, '.mcp.json')));
-  // Biblioteca ilegível = nenhum MCP dela (a tela avisa ao salvar; aqui não derruba a conversa).
+  // Registro ilegível = nenhuma entrada do Club vale como tal (a tela avisa ao salvar; aqui não derruba a conversa).
   const club = await readClub(clubFile).catch(() => null);
-  if (user.success) add('user', user.data.mcpServers);
-  for (const [name, c] of Object.entries(club?.servers ?? {})) {
-    const config: ServerConfig = { type: c.type };
-    if (c.url) config.url = c.url;
-    if (c.command) config.command = c.command;
-    if (c.args) config.args = c.args;
-    put('club', name, config, {
-      env: c.env ?? [],
-      headers: c.headers ?? [],
-    });
-  }
-  if (project.success) add('project', project.data.mcpServers);
+  if (user.success) add('user', user.data.mcpServers, club);
+  if (project.success) add('mcpjson', project.data.mcpServers);
+  // O local vem depois: mesmo nome no .mcp.json e no escopo local vale o local (a precedência do Claude Code).
   if (user.success) {
     const key = pathKey(projectPath);
     for (const [p, entry] of Object.entries(user.data.projects ?? {})) {
@@ -149,17 +179,62 @@ async function collectWithApproval(projectPath: string, claudeConfigFile: string
   return { found, approval: approvalOf(user.success ? user.data.projects : undefined, projectPath) };
 }
 
-/** As ferramentas do último teste de cada servidor achado (só os que ainda batem com o teste; ver mcpTools.ts). */
+/**
+ * Os nomes de MCP que existem agora (Global e Projeto), para converter nome antigo da ficha (ver resolveLegacyMcp). Arquivo que existe e não
+ * é JSON lança McpError: converter no escuro mandaria um nome do projeto para a Global. Arquivo que não existe = nenhum nome.
+ */
+export async function knownMcpNames(projectPath: string, claudeConfigFile: string): Promise<KnownMcpNames> {
+  const read = async (file: string): Promise<Record<string, unknown> | null> => {
+    const raw = await fs.readFile(file, 'utf8').catch((err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT') return null;
+      throw new McpError(`não consegui ler ${path.basename(file)}`);
+    });
+    if (raw === null) return null;
+    const v = tryJson(raw.replace(/^﻿/, ''));
+    if (!isObj(v)) throw new McpError(`${path.basename(file)} não é um JSON válido`);
+    return v;
+  };
+  const names = (servers: unknown): string[] => (isObj(servers) ? Object.keys(servers).filter((n) => MCP_NAME.test(n)) : []);
+  const user = await read(claudeConfigFile);
+  const mcpjson = await read(path.join(projectPath, '.mcp.json'));
+  const key = pathKey(projectPath);
+  const local = isObj(user?.projects) ? Object.entries(user.projects).filter(([p]) => pathKey(p) === key).flatMap(([, e]) => names(isObj(e) ? e.mcpServers : null)) : [];
+  return { globalNames: names(user?.mcpServers), projectNames: [...new Set([...names(mcpjson?.mcpServers), ...local])] };
+}
+
+/**
+ * Os servidores que a ficha leva, um por nome. `mcps` null = todos os achados. Nome antigo (sem escopo) vale como na conversão da ficha
+ * (Projeto se existe lá, senão Global). Ref que não existe agora fica de fora. O mesmo nome em Global e Projeto: um só sobe, o do Projeto.
+ */
+function loadedOf(found: Map<string, Found>, mcps: string[] | null): Found[] {
+  const known = knownFromRefs([...found.keys()]);
+  const refs = mcps === null ? [...found.keys()] : mcps.map((m) => (isMcpRef(m) ? m : resolveLegacyMcp(m, known)));
+  const byName = new Map<string, Found>();
+  for (const ref of new Set(refs)) {
+    const f = found.get(ref);
+    if (!f) continue;
+    const prev = byName.get(f.name);
+    if (prev) {
+      if (mcps !== null) console.warn(`[staff] MCP ${f.name}: marcado na Global e no Projeto; só o do Projeto sobe nesta conversa`);
+      if (f.scope === 'project') byName.set(f.name, f);
+      continue;
+    }
+    byName.set(f.name, f);
+  }
+  return [...byName.values()];
+}
+
+/** As ferramentas do último teste de cada servidor achado, por ref (só os que ainda batem com o teste; ver mcpTools.ts). */
 async function toolsOf(found: Map<string, Found>, projectPath: string, toolsFile: string): Promise<Map<string, McpTool[]>> {
-  const keyOf = (name: string, f: Found) => toolsKey(f.info.source, projectPath, name);
+  const keyOf = (f: Found) => toolsKey(f.scope, projectPath, f.name);
   const tested = await testedToolsMany(
     toolsFile,
-    [...found].map(([name, f]) => ({ key: keyOf(name, f), fingerprint: mcpFingerprint(f.config) })),
+    [...found.values()].map((f) => ({ key: keyOf(f), fingerprint: mcpFingerprint(f.config) })),
   );
   const out = new Map<string, McpTool[]>();
-  for (const [name, f] of found) {
-    const tools = tested.get(keyOf(name, f));
-    if (tools) out.set(name, tools);
+  for (const [ref, f] of found) {
+    const tools = tested.get(keyOf(f));
+    if (tools) out.set(ref, tools);
   }
   return out;
 }
@@ -169,10 +244,10 @@ export async function listMcpServers(projectPath: string, claudeConfigFile: stri
   const tools = await toolsOf(found, projectPath, toolsFile).catch(() => new Map<string, McpTool[]>());
   return [...found.values()]
     .map((f) => {
-      const list = tools.get(f.info.name);
+      const list = tools.get(f.ref);
       return list ? { ...f.info, tools: { total: list.length, write: list.filter((t) => !t.readOnly).length } } : f.info;
     })
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => a.name.localeCompare(b.name) || (a.scope === b.scope ? 0 : a.scope === 'global' ? -1 : 1));
 }
 
 /**
@@ -181,16 +256,24 @@ export async function listMcpServers(projectPath: string, claudeConfigFile: stri
  */
 export async function mcpWriteFileFor(
   projectPath: string,
-  profile: Pick<StaffProfile, 'engine' | 'mcpAccess'>,
+  profile: Pick<StaffProfile, 'engine' | 'mcpAccess'> & { mcps?: string[] | null },
   claudeConfigFile: string,
   o: { clubFile?: string; toolsFile?: string } = {},
 ): Promise<McpAccessFile> {
   if ((profile.engine ?? 'claude') !== 'claude' || !profile.mcpAccess || !Object.keys(profile.mcpAccess).length) return {};
   const found = await collect(projectPath, claudeConfigFile, o.clubFile ?? CLUB_MCP_FILE);
   // Arquivo ilegível = sem lista de leitura: o hook só deixa passar o que está nela, então errar aqui não libera nada.
-  const tools = await toolsOf(found, projectPath, o.toolsFile ?? MCP_TOOLS_FILE).catch(() => new Map<string, McpTool[]>());
+  const byRef = await toolsOf(found, projectPath, o.toolsFile ?? MCP_TOOLS_FILE).catch(() => new Map<string, McpTool[]>());
+  // O acesso é por nome e a conversa só sobe um servidor por nome: a lista de leitura é a do que a ficha leva (sem lista, o que o Claude carrega).
+  const tools = new Map<string, McpTool[]>();
+  for (const f of loadedOf(found, profile.mcps ?? null)) {
+    const list = byRef.get(f.ref);
+    if (list) tools.set(f.name, list);
+  }
   // O myco-ssh é do Club: a lista de leitura vem do próprio código (a anotação de cada ferramenta), não de um teste; sobrescreve o que vier de fora.
   tools.set(SSH_MCP_NAME, SSH_TOOLS.map((t) => ({ name: t.name, readOnly: t.annotations.readOnlyHint })));
+  // O myco-git também: leitura (status, diff, log) é o que `readonly` e `ask` deixam passar.
+  tools.set(GIT_MCP_NAME, GIT_TOOLS.map((t) => ({ name: t.name, readOnly: t.annotations.readOnlyHint })));
   return mcpAccessFile(profile.mcpAccess, tools);
 }
 
@@ -299,12 +382,15 @@ export async function resolveClub(
 }
 
 /**
- * Configuração para `--mcp-config` só com os servidores escolhidos na ficha. Os da biblioteca não levam valor: o comando é o
- * lançador (mcpLaunch.ts), que tira env e cabeçalhos do cofre ao subir. Aqui só se confere que os valores existem.
+ * Configuração para `--mcp-config` só com os servidores escolhidos na ficha (`mcps`: refs; nome antigo vale como na conversão). Só entra no
+ * `--mcp-config` quando a ficha tem lista (`--strict-mcp-config`): com `mcps` null a conversa não usa este arquivo e o Claude Code carrega
+ * sozinho os do ~/.claude.json, então copiá-los subiria o mesmo servidor duas vezes (ver launch.ts). Os do Club não levam valor: o comando é
+ * o lançador (mcpLaunch.ts), que tira env e cabeçalhos do cofre ao subir; aqui só se confere que os valores existem e se refaz a entrada
+ * com o lançador de agora.
  */
 export async function buildMcpConfig(
   projectPath: string,
-  names: string[],
+  mcps: string[],
   claudeConfigFile: string,
   o: { clubFile?: string; vault?: VaultOptions } = {},
 ): Promise<{ mcpServers: Record<string, ServerConfig> }> {
@@ -312,43 +398,43 @@ export async function buildMcpConfig(
   const vaultDir = o.vault?.dir ?? DEFAULT_SECRETS_DIR;
   const found = await collect(projectPath, claudeConfigFile, clubFile);
   const mcpServers: Record<string, ServerConfig> = {};
-  for (const name of names) {
-    const f = found.get(name);
-    if (!f) continue;
+  for (const f of loadedOf(found, mcps)) {
     if (!f.club) {
-      mcpServers[name] = f.config;
+      mcpServers[f.name] = f.entry;
       continue;
     }
-    const r = await resolveClub(name, {}, f.club, o.vault);
+    const r = await resolveClub(f.club.name, {}, keysOf(f.club.def), o.vault);
     if ('missing' in r) {
       // Sem o valor, o servidor sobe quebrado e a conversa só erra depois: deixa de fora e avisa no log (sem valor).
-      console.warn(`[staff] MCP ${name}: não achei o valor de ${r.missing} no cofre; fora desta conversa (cadastre de novo)`);
+      console.warn(`[staff] MCP ${f.name}: não achei o valor de ${r.missing} no cofre; fora desta conversa (cadastre de novo)`);
       continue;
     }
-    const cfg = clubConfig(name, f.config, f.club, { clubFile, vaultDir });
+    const cfg = clubEntry(f.club.name, f.club.def, { clubFile, vaultDir });
     if (!cfg) {
-      console.warn(`[staff] MCP ${name}: caminho com aspas, % ou $ (ou caractere de controle); fora desta conversa`);
+      console.warn(`[staff] MCP ${f.name}: caminho com aspas, % ou $ (ou caractere de controle), ou sem URL; fora desta conversa`);
       continue;
     }
-    mcpServers[name] = cfg;
+    mcpServers[f.name] = cfg;
   }
   return { mcpServers };
 }
 
 /**
- * A entrada do mcp.json de um servidor da biblioteca, sem valor. stdio: o lançador com `--server`. http/sse com cabeçalho:
- * `headersHelper`, o comando que o Claude Code roda antes de conectar (sai o JSON dos cabeçalhos). Sem cabeçalho, como estava.
- * null se a linha de comando não pode ser citada com segurança (aspas duplas, `%`, `$`, crase ou controle no caminho).
+ * A entrada de mcpServers de um MCP do Club, sem valor (a do ~/.claude.json e a do mcp.json da conversa). stdio: o lançador com `--server`.
+ * http/sse com cabeçalho: `headersHelper`, o comando que o Claude Code roda antes de conectar (sai o JSON dos cabeçalhos). Sem cabeçalho,
+ * `{type, url}`. null se a linha de comando não pode ser citada com segurança (aspas duplas, `%`, `$`, crase ou controle no caminho) ou se
+ * http/sse não tem URL. `o.launcher` troca o lançador (testes e a migração); o padrão é o de agora (mcpLaunchCommand).
  */
-function clubConfig(name: string, config: ServerConfig, keys: { env: string[]; headers: string[] }, o: { clubFile: string; vaultDir: string }): ServerConfig | null {
-  const launch = mcpLaunchCommand();
-  if (config.type === 'stdio') {
+export function clubEntry(name: string, def: ClubEntry, o: { clubFile: string; vaultDir: string; launcher?: { command: string; args: string[] } }): ServerConfig | null {
+  const launch = o.launcher ?? mcpLaunchCommand();
+  if (def.type === 'stdio') {
     return { type: 'stdio', command: launch.command, args: [...launch.args, '--server', name, '--club', o.clubFile, '--vault', o.vaultDir] };
   }
-  if (keys.headers.length === 0) return config;
+  if (!def.url) return null;
+  if ((def.headers ?? []).length === 0) return { type: def.type, url: def.url };
   const helper = quotedCommand([launch.command, ...launch.args, '--headers', '--server', name, '--club', o.clubFile, '--vault', o.vaultDir]);
   if (helper === null) return null;
-  return { type: config.type, url: config.url, headersHelper: helper };
+  return { type: def.type, url: def.url, headersHelper: helper };
 }
 
 /**
@@ -454,9 +540,10 @@ function urlSecret(url: string): string | null {
 }
 
 /**
- * Os MCPs da ficha que entram na conversa do Codex, no mesmo critério do Claude (`buildMcpConfig` e `mcpWriteFileFor`): a biblioteca do Club
- * pelo lançador, e o do usuário, do projeto e deste projeto pelo arquivo de lançamento (`o.snapshotFile`, gravado aqui só se houver entrada;
- * senão é apagado). `names` null = sem lista na ficha: entram os do usuário, do projeto e deste projeto (a biblioteca só com nome, como no Claude).
+ * Os MCPs da ficha que entram na conversa do Codex, no mesmo critério do Claude (`buildMcpConfig` e `mcpWriteFileFor`, pelas mesmas refs): a
+ * entrada do Club (Global) pelo lançador do pacote, e a Global comum e a do Projeto pelo arquivo de lançamento (`o.snapshotFile`, gravado aqui
+ * só se houver entrada; senão é apagado). `names` null = sem lista na ficha: entram todos os da Global e do Projeto (o Codex não carrega nada
+ * sozinho, ao contrário do Claude Code).
  * `o.launcher` é o `node` + pacote do lançador (ver mcpLaunchBundle); null = nenhum MCP que precise dele, e a ficha diz que está indisponível.
  * Nenhum valor de env ou cabeçalho sai em `servers`: a biblioteca fica no cofre, e o resto no arquivo de lançamento (que a sandbox nega).
  */
@@ -483,14 +570,12 @@ export async function codexMcpServers(
   const { found, approval } = await collectWithApproval(projectPath, claudeConfigFile, clubFile);
   // Sem teste (ou arquivo estragado), a lista de leitura fica vazia: `readonly` e `ask` ficam de fora (ver codexMcpAccess).
   const tools = await toolsOf(found, projectPath, o.toolsFile ?? MCP_TOOLS_FILE).catch(() => new Map<string, McpTool[]>());
-  const wanted = names ?? [...found].filter(([, f]) => f.info.source !== 'club').map(([n]) => n);
   const servers: CodexExtraMcp[] = [];
   const asked: string[] = [];
   const out: CodexMcpResult['out'] = [];
   const snapshot = new Map<string, SnapshotEntry>();
-  for (const name of new Set(wanted)) {
-    const f = found.get(name);
-    if (!f) continue;
+  for (const f of loadedOf(found, names)) {
+    const name = f.name;
     if (CODEX_RESERVED_MCP_NAMES.has(name)) continue;
     if (!CODEX_EXTRA_MCP_NAME.test(name) || !validMcpName(name)) {
       out.push({ name, motivo: 'nome' });
@@ -498,13 +583,13 @@ export async function codexMcpServers(
     }
     // `off` explícito: fica de fora sem aviso (a ficha não precisa dizer o que ela mesma proibiu).
     if (o.access && Object.prototype.hasOwnProperty.call(o.access, name) && o.access[name] === 'off') continue;
-    // Servidor do .mcp.json do projeto: só entra aprovado no Claude Code (ver approvalOf). Vale com ou sem a lista da ficha: sem isso, um
-    // .mcp.json com o nome de um servidor da biblioteca ou do usuário sombrearia o deles (o do projeto vence na lista de achados).
-    if (f.info.source === 'project' && !mcpJsonApproved(approval, name)) {
+    // Servidor do .mcp.json do projeto: só entra aprovado no Claude Code (ver approvalOf). Vale com ou sem a lista da ficha. O do escopo local
+    // (fora do git) não precisa: é do usuário, não vem do repositório.
+    if (f.from === 'mcpjson' && !mcpJsonApproved(approval, name)) {
       out.push({ name, motivo: 'aprovacao' });
       continue;
     }
-    const leitura = tools.get(name)?.filter((t) => t.readOnly).map((t) => t.name) ?? null;
+    const leitura = tools.get(f.ref)?.filter((t) => t.readOnly).map((t) => t.name) ?? null;
     const acc = codexMcpAccess(o.access, name, [], leitura);
     if (!acc.attached) {
       out.push({ name, motivo: 'politica' });
@@ -527,8 +612,10 @@ export async function codexMcpServers(
       continue;
     }
     if (f.club) {
-      // A biblioteca: confere o cofre como o Claude (buildMcpConfig), sem sair valor no log.
-      const r = await resolveClub(name, {}, f.club, o.vault);
+      // Entrada do Club: confere o cofre como o Claude (buildMcpConfig), sem sair valor no log. `--server` é o nome no registro (a chave no
+      // ~/.claude.json pode ser outra).
+      const server = f.club.name;
+      const r = await resolveClub(server, {}, keysOf(f.club.def), o.vault);
       if ('missing' in r) {
         console.warn(`[staff] MCP ${name}: não achei o valor de ${r.missing} no cofre; fora desta conversa do Codex (cadastre de novo)`);
         out.push({ name, motivo: 'cofre' });
@@ -543,14 +630,14 @@ export async function codexMcpServers(
           out.push({ name, motivo: 'indisponivel' });
           continue;
         }
-        add({ name, command: launcher.command, args: [...launcher.args, '--server', name, '--club', clubFile, '--vault', vaultDir], ...access });
+        add({ name, command: launcher.command, args: [...launcher.args, '--server', server, '--club', clubFile, '--vault', vaultDir], ...access });
         continue;
       }
       if (!cfg.url) {
         out.push({ name, motivo: 'transporte' });
         continue;
       }
-      if (f.club.headers.length === 0) {
+      if (keysOf(f.club.def).headers.length === 0) {
         add({ name, url: cfg.url, ...access });
         continue;
       }
@@ -558,7 +645,7 @@ export async function codexMcpServers(
         out.push({ name, motivo: 'indisponivel' });
         continue;
       }
-      const helper = quotedCommand([launcher.command, ...launcher.args, '--headers', '--server', name, '--club', clubFile, '--vault', vaultDir]);
+      const helper = quotedCommand([launcher.command, ...launcher.args, '--headers', '--server', server, '--club', clubFile, '--vault', vaultDir]);
       if (helper === null) {
         out.push({ name, motivo: 'caminho' });
         continue;
@@ -566,7 +653,7 @@ export async function codexMcpServers(
       add({ name, url: cfg.url, headersHelper: helper, ...access });
       continue;
     }
-    // Usuário, projeto ou local: os valores estão no próprio arquivo (com `${VAR}`), então expande agora, do ambiente do Club.
+    // Global comum ou Projeto: os valores estão no próprio arquivo (com `${VAR}`), então expande agora, do ambiente do Club.
     const vars = expandConfig(cfg, env);
     if ('invalid' in vars) {
       out.push({ name, motivo: 'transporte' });

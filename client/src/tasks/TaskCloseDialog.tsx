@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import type { Task } from '../../../shared/model';
 import { useEscape } from '../chat/usageWarning';
 import { t } from '../i18n';
-import { applyToAll, choiceOf, deleteReady, dependentRows, dependentsMap, leavesWorkBehind, optionsOf, visibleRows, type DepChoice, type DepMap, type DepMode, type DepPicks, type DepTask } from './cancelDeps';
+import { noCodeOf } from './noCode';
+import { applyToAll, choiceOf, deleteReady, dependentRows, dependentsMap, interruptsTurn, leavesWorkBehind, optionsOf, visibleRows, type DepChoice, type DepMap, type DepMode, type DepPicks, type DepTask } from './cancelDeps';
 
 // Cancelar (ou apagar) uma tarefa, no modal do design system (como o aviso da trava de consumo e o dos hooks da skill): o motivo (só no
 // cancelar) e, se há tarefas esperando por esta, uma árvore para escolher o destino de cada uma. A conta mora em `cancelDeps.ts`.
@@ -17,7 +18,7 @@ const HELP: Record<DepChoice, string> = { wait: t('tasks.depHelpWait'), release:
 
 interface Props {
   mode: DepMode;
-  task: Pick<Task, 'id' | 'title' | 'status' | 'sessionId' | 'merged' | 'deploy'>;
+  task: Pick<Task, 'id' | 'title' | 'status' | 'sessionId' | 'merged' | 'deploy' | 'noCode'>;
   /** Todas as tarefas do projeto (a árvore sai de `blockedBy`). */
   tasks: DepTask[];
   nameOf: (staffId: string | null) => string | null;
@@ -34,7 +35,9 @@ export function TaskCloseDialog({ mode, task, tasks, nameOf, onConfirm, onClose 
   const rows = useMemo(() => dependentRows(task.id, tasks), [task.id, tasks]);
   const shown = visibleRows(rows, picks, mode);
   const ready = mode === 'cancel' || deleteReady(rows, picks);
-  const running = mode === 'cancel' && !!task.sessionId && (task.status === 'doing' || task.status === 'planning');
+  const running = mode === 'cancel' && interruptsTurn(task);
+  // Card sem código: segue em "fazendo", mas o turno já terminou (é por isso que quem pediu decide): não há o que interromper.
+  const noCode = mode === 'cancel' && !!noCodeOf(task);
   // Já houve trabalho no mundo (em andamento, mescla ou deploy): cancelar não o desfaz.
   const notUndone = mode === 'cancel' && leavesWorkBehind(task);
   const offered = new Set(shown.flatMap((r) => optionsOf(r, mode)));
@@ -58,6 +61,7 @@ export function TaskCloseDialog({ mode, task, tasks, nameOf, onConfirm, onClose 
         <h2 id="task-close-title">{mode === 'cancel' ? t('tasks.cancelTask') : t('tasks.deleteTask')}</h2>
         <p id="task-close-text">{t(mode === 'cancel' ? 'tasks.cancelDialogText' : 'tasks.deleteDialogText', { title: task.title })}</p>
         {running && <p className="muted small">{t('tasks.cancelRunning')}</p>}
+        {noCode && <p className="muted small">{t('tasks.cancelNoCode')}</p>}
         {notUndone && <p className="muted small">{t('tasks.cancelNotUndone')}</p>}
         {mode === 'cancel' && (
           <label>

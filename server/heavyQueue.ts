@@ -19,6 +19,20 @@ export const HEAVY_WAIT_MAX_MS = 30 * 60_000;
 export const HEAVY_HELD_ENV = 'MYCO_HEAVY_HELD';
 
 /**
+ * Quem pediu a validação sabe que ela está esperando a vez: `{ since, holder }` ao começar a esperar (`holder`: o nome de quem segura a fila agora) e `null` quando a espera acaba
+ * (a vez chegou, o prazo passou ou a fila falhou). Só informa: erro aqui não derruba a validação (ver `safely`).
+ */
+export type HeavyWaitFn = (wait: { since: string; holder: string } | null) => void;
+
+const safely = (fn: () => void): void => {
+  try {
+    fn();
+  } catch {
+    /* quem observa a espera não derruba a validação */
+  }
+};
+
+/**
  * Roda `run` na fila quando `command` é validação pesada (suíte completa, tsc do projeto); senão, direto. `run` recebe a chave da trava que
  * este servidor segura (o que ele abrir deve levá-la em `HEAVY_HELD_ENV`) ou null, sem trava. `leaseMs`: o prazo da trava (o tempo que `run`
  * pode levar): passou dele, a trava vale como órfã. Sem a fila (disco, tempo de espera esgotado) roda do mesmo jeito.
@@ -26,7 +40,11 @@ export const HEAVY_HELD_ENV = 'MYCO_HEAVY_HELD';
  * chamam o runTests de verdade. Reconhece pela chave em `HEAVY_HELD_ENV` (a suíte que o servidor abriu) ou pela conversa dona da trava, que o
  * hook do terminal registra pelo MYCO_SESSION_ID (a suíte que um funcionário abriu).
  */
-export async function withHeavyLock<T>(command: string, run: (held: string | null) => Promise<T>, o: { label: string; leaseMs: number; dir?: string; maxWaitMs?: number }): Promise<T> {
+export async function withHeavyLock<T>(
+  command: string,
+  run: (held: string | null) => Promise<T>,
+  o: { label: string; leaseMs: number; dir?: string; maxWaitMs?: number; onWait?: HeavyWaitFn },
+): Promise<T> {
   if (!isHeavyCommand(command)) return run(null);
   const dir = o.dir ?? heavyLockDir();
   const key = `server:${process.pid}:${randomUUID()}`;
@@ -44,7 +62,10 @@ export async function withHeavyLock<T>(command: string, run: (held: string | nul
         label: o.label,
         leaseMs: o.leaseMs,
         maxWaitMs: o.maxWaitMs ?? HEAVY_WAIT_MAX_MS,
-        onWait: (holder) => console.log(`[fila] ${o.label}: esperando a vez (outra validação pesada roda: ${holder.label || 'sem nome'})`),
+        onWait: (holder) => {
+          console.log(`[fila] ${o.label}: esperando a vez (outra validação pesada roda: ${holder.label || 'sem nome'})`);
+          safely(() => o.onWait?.({ since: new Date().toISOString(), holder: holder.label || 'sem nome' }));
+        },
       });
       held = got.acquired;
       if (!got.acquired) console.warn(`[fila] ${o.label}: esperou ${Math.round(got.waitedMs / 1000)} s e a fila não andou; roda sem trava`);
@@ -52,6 +73,8 @@ export async function withHeavyLock<T>(command: string, run: (held: string | nul
   } catch (err) {
     console.warn(`[fila] ${o.label}: sem a fila (${err instanceof Error ? err.message : String(err)}); roda sem trava`);
   }
+  // Acabou a espera (pegou a vez, esgotou o prazo ou a fila falhou): a suíte vai rodar.
+  safely(() => o.onWait?.(null));
   try {
     return await run(held ? key : null);
   } finally {

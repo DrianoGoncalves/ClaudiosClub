@@ -168,6 +168,16 @@ export function MessageIcon({ size = 15 }: { size?: number }) {
   );
 }
 
+/** Uma pessoa: o responsável pela tarefa. */
+export function UserIcon({ size = 12 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} aria-hidden="true" {...base}>
+      <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </svg>
+  );
+}
+
 /** Duas pessoas: o RH (todos os funcionários de todos os projetos). */
 export function UsersIcon({ size = 15 }: { size?: number }) {
   return (

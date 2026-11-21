@@ -84,11 +84,11 @@ describe('o quadro: selo, destaque e topo da coluna Fazendo', () => {
     renderToStaticMarkup(
       createElement(TasksBoard, { projectId: 'p', projectName: 'Projeto', staff: [], costs: null, onClose: () => {}, onOpenStaff: () => {}, onChanged: () => {}, initialTasks: tasks, inboxItems }),
     );
-  /** O cartão da tarefa `id`: do `<button class="task-card` dela até o próximo cartão. */
+  /** O cartão da tarefa `id`: do `<button class="task-card` dela até o `</button>` que o fecha (o id é o primeiro filho; os selos vêm depois). */
   const cardOf = (html: string, id: string) => {
     const at = html.indexOf(`>${id}</span>`);
     expect(at).toBeGreaterThan(0);
-    return html.slice(html.lastIndexOf('<button class="task-card', at), at);
+    return html.slice(html.lastIndexOf('<button class="task-card', at), html.indexOf('</button>', at));
   };
 
   it('sem plano esperando: "Planejando" neutro, sem selo amarelo nem is-waiting', () => {

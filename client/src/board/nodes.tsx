@@ -1,9 +1,11 @@
+import { mcpName } from '../staff/mcpRefs';
 import { Handle, Position, type Node, type NodeProps, type NodeTypes } from '@xyflow/react';
 import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { PLAYBOOK_AGENTS } from '../../../shared/agentPresets';
 import { colorCss, type GitState, type LiveSession, type StaffProfile } from '../../../shared/model';
 import { employeeName, ENTRYPOINT_LABEL, formatAgo, initials, STATUS_LABEL } from '../format';
 import { AgentIcon, BranchIcon, ChromeIcon, FallbackModelIcon, GhostIcon, McpIcon, PlayIcon, ServerIcon, SkillIcon, TasksIcon, UserPlusIcon } from '../icons';
+import { NeedsYouBadge } from '../inbox/NeedsYouBadge';
 import { PausedTag } from '../tasks/ProjectPauseBar';
 import { t } from '../i18n';
 import { engineName } from '../staff/fallbackEngine';
@@ -132,15 +134,19 @@ const resourcesText = (n: number) => t(n === 1 ? 'board.resourceOne' : 'board.re
  * as conversas ativas (processo aberto) logo depois, recursos quando a sala está dobrada e o aviso de pasta sumida.
  * Vazia: o cabeçalho fica só com o nome.
  */
-export function projectMeta({ employees, active, resources, collapsed, exists }: { employees: number; active: number; resources: number; collapsed: boolean; exists: boolean }): string {
-  return [
-    employees > 0 && `${employees} ${t(employees === 1 ? 'board.employeeOne' : 'board.employeeOther')}`,
-    active > 0 && t(active === 1 ? 'board.liveActiveOne' : 'board.liveActiveOther', { n: active }),
-    collapsed && resources > 0 && resourcesText(resources),
-    !exists && t('board.folderMissing'),
-  ]
-    .filter(Boolean)
-    .join(' · ');
+export function projectMeta(args: Parameters<typeof projectMetaParts>[0]): string {
+  return projectMetaParts(args).map((p) => p.text).join(' · ');
+}
+
+/** Os pedaços de `projectMeta`, com a chave de cada um: o cabeçalho encaixa as bolinhas das conversas logo depois de funcionários/ativas. */
+export function projectMetaParts({ employees, active, resources, collapsed, exists }: { employees: number; active: number; resources: number; collapsed: boolean; exists: boolean }): Array<{ key: 'employees' | 'active' | 'resources' | 'missing'; text: string }> {
+  const parts: Array<{ key: 'employees' | 'active' | 'resources' | 'missing'; text: string } | false> = [
+    employees > 0 && { key: 'employees', text: `${employees} ${t(employees === 1 ? 'board.employeeOne' : 'board.employeeOther')}` },
+    active > 0 && { key: 'active', text: t(active === 1 ? 'board.liveActiveOne' : 'board.liveActiveOther', { n: active }) },
+    collapsed && resources > 0 && { key: 'resources', text: resourcesText(resources) },
+    !exists && { key: 'missing', text: t('board.folderMissing') },
+  ];
+  return parts.filter((p) => p !== false);
 }
 
 /** Cabeçalho da sala "você", colado nas bordas, como o do projeto. */
@@ -163,7 +169,10 @@ export function ProjectNode({ id, data, selected, width }: NodeProps<Node<Projec
   const p = data.project;
   // Conversas ativas = as do hover (uma por conversa; o mesmo sessionId com dois processos vivos conta uma vez).
   const active = data.liveWho.reduce((n, l) => n + l.conversations, 0);
-  const meta = projectMeta({ employees: data.employees, active, resources: data.header.resources, collapsed: data.header.collapsed, exists: p.exists });
+  const metaParts = projectMetaParts({ employees: data.employees, active, resources: data.header.resources, collapsed: data.header.collapsed, exists: p.exists });
+  // As bolinhas ficam coladas na contagem de conversas ativas (ou, sem ela, no fim de funcionários).
+  const dotsAfter = metaParts.some((m) => m.key === 'active') ? 'active' : 'employees';
+  const dots = data.live.length > 0 ? <LiveDots live={data.live} who={data.liveWho} awaiting={data.awaiting} /> : null;
   const paused = data.tasks?.paused;
   return (
     <Frame
@@ -188,14 +197,23 @@ export function ProjectNode({ id, data, selected, width }: NodeProps<Node<Projec
             {p.name}
           </div>
           {/* O selo "Pausado" fica na linha de baixo, antes do resumo: no título ele tomava o lugar do nome nas salas estreitas (1 funcionário). */}
-          {(meta || paused) && (
+          {(metaParts.length > 0 || paused || dots || data.needs) && (
             <div className="bn-meta" title={active > 0 ? liveTitle(data.liveWho) : undefined}>
-              {paused && <PausedTag pause={paused} now={Date.now()} className="bn-tag is-paused" />}
-              {meta}
+              <NeedsYouBadge needs={data.needs} />
+              {paused &&<PausedTag pause={paused} now={Date.now()} className="bn-tag is-paused" />}
+              {metaParts.map((m, i) => (
+                <Fragment key={m.key}>
+                  {i > 0 && ' · '}
+                  {m.text}
+                  {m.key === dotsAfter && dots}
+                </Fragment>
+              ))}
+              {/* Sem funcionários nem conversas contadas (ex.: só alguém esperando você), as bolinhas ficam sozinhas. */}
+              {!metaParts.some((m) => m.key === dotsAfter) && dots}
             </div>
           )}
         </div>
-        {/* À direita, em duas linhas: tarefas em cima (com a barra de progresso embaixo do botão); branch e as bolinhas das conversas embaixo. */}
+        {/* À direita, em duas linhas: tarefas em cima (com a barra de progresso embaixo do botão); a branch embaixo. As bolinhas das conversas ficam no resumo, ao lado da contagem. */}
         <div className="bn-header-side">
           <div className="bn-tasks-wrap">
             <div className="bn-tasks-row">
@@ -204,10 +222,9 @@ export function ProjectNode({ id, data, selected, width }: NodeProps<Node<Projec
             </div>
             <KanbanProgressBar progress={data.tasks?.progress} />
           </div>
-          {(data.git || data.live.length > 0) && (
+          {data.git && (
             <div className="bn-header-status">
-              {data.git && <GitBadge git={data.git} />}
-              {data.live.length > 0 && <LiveDots live={data.live} who={data.liveWho} awaiting={data.awaiting} />}
+              <GitBadge git={data.git} />
             </div>
           )}
         </div>
@@ -244,7 +261,7 @@ export function staffTools(staff: StaffProfile): Array<{ tool: StaffTool; label:
     staff.skills.length > 0 && { tool: 'skills', label: t('board.toolSkills', { list: skillLabels(staff.skills, (scope) => t(SKILL_SCOPE_LABEL[scope])).join(', ') }) },
     staff.mcps === null
       ? { tool: 'mcps', label: t('board.toolMcpsAll') }
-      : staff.mcps.length > 0 && { tool: 'mcps', label: t('board.toolMcps', { list: staff.mcps.join(', ') }) },
+      : staff.mcps.length > 0 && { tool: 'mcps', label: t('board.toolMcps', { list: staff.mcps.map(mcpName).join(', ') }) },
   ];
   return tools.filter((x) => x !== false);
 }
@@ -286,6 +303,7 @@ function EmployeeNode({ id, data, selected }: NodeProps<Node<EmployeeNodeData, '
           <div className="bn-title bn-title-sm">{name}</div>
           <div className="bn-meta">
             {[
+              data.needs && <NeedsYouBadge key="needs" needs={data.needs} compact />,
               staff && <span key="role" className="bn-role">{staff.role}</span>,
               ghost && ghost.length > 1 && (
                 <span key="ghost" className="bn-role">
@@ -505,7 +523,7 @@ function LiveDots({ live, who, awaiting }: { live: LiveSession[]; who: LiveLine[
       {shown.map((s) => (
         <span key={s.sessionId} className={`dot dot-${s.status ?? 'unknown'}`} />
       ))}
-      {/* A contagem das conversas ativas fica na linha do nome da sala; aqui só o aviso de quem espera você. */}
+      {/* A contagem das conversas ativas fica logo antes, na mesma linha; aqui só as bolinhas e o aviso de quem espera você. */}
       {awaiting > 0 && <span>{t('board.awaitingYou', { n: awaiting })}</span>}
     </div>
   );

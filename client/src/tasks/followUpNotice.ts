@@ -74,13 +74,20 @@ export function followUpSummary(open: readonly Pick<FollowUp, 'recommendation'>[
 
 /**
  * O selo "Aprovada" do cartão vale só sem follow-up aberto: com ele, a tarefa não está toda resolvida e o selo de follow-ups pendentes ocupa o lugar. Decididos todos, volta.
- * A reprovação sempre aparece.
+ * A reprovação aparece enquanto o ajuste está pendente; entregue de novo, ela é de uma rodada superada (`reviewSuperseded`) e some até uma nova reprovar.
  */
-export function verdictShown(task: Pick<Task, 'review' | 'followUps'>): boolean {
+export function verdictShown(task: Pick<Task, 'review' | 'followUps' | 'delivery'>): boolean {
   const verdict = task.review?.verdict;
   if (!verdict) return false;
-  return verdict !== 'approved' || openFollowUps(task).length === 0;
+  if (verdict === 'rejected') return !reviewSuperseded(task);
+  return openFollowUps(task).length === 0;
 }
+
+/** Espelha `liveReview` do servidor: a tarefa foi entregue de novo depois do pedido de revisão (marca `superseded`, ou entrega gravada depois do pedido, em tarefa de antes da marca). */
+export const reviewSuperseded = (task: Pick<Task, 'review' | 'delivery'>): boolean => {
+  const r = task.review;
+  return !!r && (!!r.superseded || (!!task.delivery && !!r.at && r.at < task.delivery.at));
+};
 
 const SIZE_KEY = { small: 'tasks.fuSizeSmall', medium: 'tasks.fuSizeMedium', large: 'tasks.fuSizeLarge' } as const;
 

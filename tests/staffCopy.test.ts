@@ -148,7 +148,8 @@ describe('fichas entre projetos', () => {
       ['Explore'],
       // Nome antigo sem skill conhecida no projeto: vira `global:` ao copiar (a ficha avisa que não existe, ver skillAccess.ts).
       ['global:lint'],
-      ['docs'],
+      // Idem o MCP: nome antigo sem MCP conhecido no destino vira `global:` ao copiar (ver mcpAccessRefs.ts).
+      ['global:docs'],
       ['docs/arq.md'],
       true,
     ]);

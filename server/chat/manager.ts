@@ -26,7 +26,9 @@ import type {
   UsageLimit,
 } from '../../shared/model';
 import { writeAtomic } from '../staff/store';
+import { updateGitPolicyAutonomy } from '../staff/gitMcp';
 import { codexHistoryOf } from '../adapters/codex/rollout';
+import { isProjectDir } from '../adapters/claude/paths';
 import { MAX_ITEMS, readHistory, TAIL_BYTES } from './history';
 import { dropSeamEchoes } from './seam';
 import type { CodexSpawn } from './codexArgs';
@@ -54,11 +56,13 @@ import { resumeText, type ResumeEntry } from './resume';
 import { externalBackground, externalCutWithAgents, subagentsDirOf } from './cutAction';
 import { legacyLabel, worseVerdict, type ClassifiedSecret, type SecretHint, type SecretKind, type SecretReason, type SecretSource, type SecretVerdict } from './secrets';
 import { capReason, capText, type TurnCaps } from './turnCap';
-import type { TurnCapHit } from '../../shared/model';
+import type { ConsultStamp, TurnCapHit } from '../../shared/model';
 
 export interface ChatSpawn {
   sessionId: string;
   cwd: string;
+  /** Conversa de consulta de outro projeto (server/consult/): o carimbo de quem perguntou. Ela abre sem token, nega todo pedido de permissão e não conta como trabalho do funcionário. */
+  consult?: ConsultStamp;
   /** Argumentos do `claude`. Com `engine: 'codex'` ficam vazios: valem os de `codex`. */
   args: string[];
   /** Quem roda a conversa; ausente = `claude`. */
@@ -84,6 +88,11 @@ export interface UsageLimitEvent {
 export interface ChatManagerOptions {
   /** ~/.claude/projects */
   transcriptsDir: string;
+  /**
+   * A conversa é do projeto? (ver server/sessionScope.ts `sessionInProject`). O histórico do Codex vem do rollout, que não diz o projeto: sem esta
+   * prova, `snapshot` o leria pelo id da conversa, de qualquer projeto. Sem ele, o histórico do Codex não é escopado (só nos testes).
+   */
+  sessionInProject?: (projectId: string, sessionId: string) => Promise<boolean>;
   /** Onde o Codex guarda o id de cada conversa (`<runDir>/<sessão>/codex-thread.json`). Padrão: ~/.myco/run. */
   runDir?: string;
   /** Cópias trazidas ("Trazer" de uma conversa aberta em outro lugar): original → cópia. Sem ele, só em memória. */
@@ -98,7 +107,9 @@ export interface ChatManagerOptions {
   listLive: () => Promise<LiveSession[]>;
   /** Monta a linha de comando (ficha, autonomia, MCPs) de quem vai conversar. */
   /** `forkFrom`: sessão nova que começa como cópia desta (duplicar a conversa). */
-  resolve: (projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly?: boolean) => Promise<ChatSpawn | null>;
+  resolve: (projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly?: boolean, consult?: ConsultStamp) => Promise<ChatSpawn | null>;
+  /** Uma conversa de consulta (server/consult/) terminou um turno, ou saiu: o serviço de consulta lê a resposta e a entrega. */
+  onConsultIdle?: (consultId: string, sessionId: string, reason: 'turn' | 'background' | 'exit') => void;
   /**
    * Você escolheu modelo/esforço no seletor do chat: guarda na ficha, na conversa e como "último" do
    * funcionário (a conversa reabre assim; conversa nova sem modelo na ficha herda o último). Só grava
@@ -283,13 +294,14 @@ function launchFields(p: StaffProfile) {
 }
 
 /**
- * Transcript de uma sessão: na pasta do projeto, ou em outra (a sessão de um funcionário com
- * worktree própria fica na pasta da worktree). O id é um UUID, então não há ambiguidade.
+ * Transcript de uma sessão: na pasta do projeto, ou na de uma worktree dele (a sessão de um funcionário com worktree própria fica na pasta
+ * da worktree). Só as pastas do próprio projeto (`isProjectDir`): o id da conversa vem do pedido e não acha o transcript de outro projeto.
  */
 export async function findTranscript(transcriptsDir: string, projectId: string, sessionId: string): Promise<string> {
   const direct = path.join(transcriptsDir, projectId, `${sessionId}.jsonl`);
   if (await fs.access(direct).then(() => true, () => false)) return direct;
   for (const dir of await fs.readdir(transcriptsDir).catch(() => [] as string[])) {
+    if (!isProjectDir(projectId, dir)) continue;
     const file = path.join(transcriptsDir, dir, `${sessionId}.jsonl`);
     if (await fs.access(file).then(() => true, () => false)) return file;
   }
@@ -342,6 +354,8 @@ export class ChatManager {
   private readonly guardOffNow = new Set<string>();
   /** Conversas cuja última mensagem veio de outro funcionário (delegação), e não de você. */
   private readonly delegated = new Set<string>();
+  /** As conversas de consulta de outro projeto abertas aqui (sessão → id da consulta; ver `isConsultSession`). Só em memória: o carimbo na ficha e o registro das consultas guardam o resto. */
+  private readonly consultSessions = new Map<string, string>();
   /** Quando cada conversa parou com erro (`onExit`): o carimbo que a dispensa do alerta guarda, para um erro novo voltar. Só na memória, como o erro. */
   private readonly errorAt = new Map<string, string>();
   /**
@@ -412,6 +426,31 @@ export class ChatManager {
     return this.chats.has(sessionId);
   }
 
+  /** O projeto da conversa aberta agora (null: não está aberta aqui). */
+  liveProject(sessionId: string): string | null {
+    return this.chats.get(sessionId)?.projectId ?? null;
+  }
+
+  /** A conversa aberta de outro projeto não recebe nada daqui: a mensagem não cruza projetos, nem com o id certo da conversa. */
+  private assertSameProject(projectId: string, sessionId: string | null): void {
+    const open = sessionId ? this.chats.get(sessionId) : undefined;
+    if (open?.projectId && open.projectId !== projectId) throw new ChatError('essa conversa é de outro projeto');
+  }
+
+  /** A conversa tem transcript na pasta do próprio projeto (não vale a de outra pasta, como a de worktree: essa a ficha do projeto é que prova). */
+  async hasOwnTranscript(projectId: string, sessionId: string): Promise<boolean> {
+    // Os dois viram nome de arquivo e de pasta: só id, nunca caminho (nem `..`).
+    if (![projectId, sessionId].every((s) => /^[\w.-]+$/.test(s) && !/^\.+$/.test(s))) return false;
+    return fs.access(path.join(this.opts.transcriptsDir, projectId, `${sessionId}.jsonl`)).then(() => true, () => false);
+  }
+
+  /** O histórico do Codex da conversa pode ser lido pelo projeto? Aberta aqui, vale o projeto com que abriu; fechada, a prova é `sessionInProject`. */
+  private async codexSessionOf(projectId: string, sessionId: string): Promise<boolean> {
+    const open = this.chats.get(sessionId);
+    if (open?.projectId) return open.projectId === projectId;
+    return this.opts.sessionInProject ? this.opts.sessionInProject(projectId, sessionId) : true;
+  }
+
   /** O trabalho atual desta conversa foi pedido por outro funcionário (ver `send`)? */
   isDelegated(sessionId: string): boolean {
     return this.delegated.has(sessionId);
@@ -439,7 +478,7 @@ export class ChatManager {
     const before = live && !source ? (cut?.before ?? chat!.startedAt) : undefined;
     // Sem transcript do Claude, a conversa é do Codex: o histórico vem do rollout dele (ver adapters/codex/rollout.ts).
     const claude = await fs.access(file).then(() => true, () => false);
-    const codex = claude ? null : await codexHistoryOf(this.runDir, sessionId, { before }).catch(() => null);
+    const codex = claude || !(await this.codexSessionOf(projectId, sessionId)) ? null : await codexHistoryOf(this.runDir, sessionId, { before }).catch(() => null);
     const read = codex ?? (await readHistory(file, { before }));
     const { context } = read;
     // Os ids do rollout não são os do vivo (`a:<ordinal>` x `a:<execução>:<id>`): a mesma resposta pode estar nos dois lados da emenda.
@@ -604,8 +643,9 @@ export class ChatManager {
     origin?: string,
     engineOverride?: EngineOverride,
     reviewOnly = false,
+    consult?: ConsultStamp,
   ): Promise<string> {
-    return this.deliver(projectId, sessionId, staffId, text, priority, images, files, delegated, false, origin, engineOverride, undefined, reviewOnly);
+    return this.deliver(projectId, sessionId, staffId, text, priority, images, files, delegated, false, origin, engineOverride, undefined, reviewOnly, consult);
   }
 
   /**
@@ -746,13 +786,16 @@ export class ChatManager {
     /** A retomada automática passa aqui: devolve falso se algo a invalidou (ver `retryChat`); conferido antes de abrir a conversa e antes de escrever nela. */
     guard?: () => boolean,
     reviewOnly = false,
+    consult?: ConsultStamp,
   ): Promise<string> {
     this.assertOpen();
+    // Antes de qualquer mudança de estado (a retomada abaixo, o que `ensure` abre): a conversa aberta de outro projeto não é desta chamada.
+    this.assertSameProject(projectId, sessionId);
     // Mensagem que não é da plataforma abre turno original novo: a retomada em voo (decidindo, ou no meio do envio) deixa de valer já, de forma
     // síncrona. A pendência e o orçamento só saem quando a mensagem entra (abaixo): se a conversa não abrir, a retomada marcada segue valendo.
     if (!auto && sessionId) this.voidRetry(sessionId);
     if (guard && !guard()) throw new ChatError('a retomada foi cancelada');
-    const chat = await this.ensure(projectId, sessionId, staffId, undefined, engineOverride, reviewOnly);
+    const chat = await this.ensure(projectId, sessionId, staffId, undefined, engineOverride, reviewOnly, consult);
     // Qualquer mensagem sua (ou de outro funcionário) na conversa vale mais que o "continue" agendado.
     if (!auto) {
       this.dropRetry(chat.sessionId, 'message'); // conversa nova: o id só existe agora
@@ -915,6 +958,12 @@ export class ChatManager {
     }
   }
 
+  /** O modo de permissão da conversa mudou: o MCP de git (se a conversa tem) confere o novo na próxima chamada (ver gitMcp.ts, `git-policy.json`). */
+  private gitMode(sessionId: string, mode: string): void {
+    const autonomy = (Object.keys(CLI_MODE) as Autonomy[]).find((a) => CLI_MODE[a] === mode);
+    if (autonomy) void updateGitPolicyAutonomy(path.join(this.runDir, sessionId), autonomy).catch(() => {});
+  }
+
   /**
    * A ficha mudou: a autonomia vale já nas conversas abertas dela; o resto (modelo, MCPs,
    * ferramentas) só com o processo reaberto, o que acontece na próxima mensagem com o funcionário
@@ -934,6 +983,7 @@ export class ChatManager {
       if (restart) chat.stale = true;
       const mode = CLI_MODE[next.autonomy];
       if (prev.autonomy !== next.autonomy || (chat.permissionMode && chat.permissionMode !== mode)) {
+        this.gitMode(id, mode);
         chat.setPermissionMode(mode, `Autonomia agora: ${AUTONOMY_NAME[next.autonomy]}`);
       }
     }
@@ -978,7 +1028,10 @@ export class ChatManager {
     if (s.model || s.effort) this.boosts.set(chat, 'manual');
     if (s.model) chat.setModel(s.model, `Modelo desta conversa: ${s.model}`);
     if (s.effort) chat.setEffort(s.effort, `Esforço desta conversa: ${s.effort}`);
-    if (s.autonomy) chat.setPermissionMode(CLI_MODE[s.autonomy], `Autonomia desta conversa: ${AUTONOMY_NAME[s.autonomy]}`);
+    if (s.autonomy) {
+      this.gitMode(chat.sessionId, CLI_MODE[s.autonomy]);
+      chat.setPermissionMode(CLI_MODE[s.autonomy], `Autonomia desta conversa: ${AUTONOMY_NAME[s.autonomy]}`);
+    }
     // Fica na ficha para a conversa reabrir assim; falha ao gravar não desfaz a troca já feita.
     if (staffId && (s.model || s.effort)) {
       try {
@@ -1010,7 +1063,10 @@ export class ChatManager {
     const rejectPlan = !allow && !!opts.reject && plan !== undefined;
     const message = rejectPlan ? PLAN_REJECTED_MESSAGE : opts.message;
     if (!chat?.answer(requestId, allow, message, opts.remember, { answers: opts.answers, annotations: opts.annotations })) return false;
-    if (allow && opts.executeAs) chat.setPermissionMode(CLI_MODE[opts.executeAs], `Executando como: ${AUTONOMY_NAME[opts.executeAs]}`);
+    if (allow && opts.executeAs) {
+      this.gitMode(sessionId, CLI_MODE[opts.executeAs]);
+      chat.setPermissionMode(CLI_MODE[opts.executeAs], `Executando como: ${AUTONOMY_NAME[opts.executeAs]}`);
+    }
     if (allow && plan !== undefined) this.opts.onPlanApproved?.(sessionId, plan);
     if (rejectPlan) this.opts.onPlanRejected?.(sessionId);
     if (asked) this.opts.onAskAnswered?.(sessionId, requestId, opts.by ?? 'user', askSummary(asked, allow, opts.answers));
@@ -1389,9 +1445,26 @@ export class ChatManager {
   staffWorking(projectId: string, staffId: string, exceptSession?: string | readonly string[]): boolean {
     const except = typeof exceptSession === 'string' ? [exceptSession] : (exceptSession ?? []);
     for (const c of this.chats.values()) {
-      if (c.running && c.projectId === projectId && c.staffId === staffId && !except.includes(c.sessionId) && c.working) return true;
+      // A conversa de consulta de outro projeto roda em paralelo (só lê): não segura a fila do funcionário.
+      if (c.running && c.projectId === projectId && c.staffId === staffId && !except.includes(c.sessionId) && !this.consultSessions.has(c.sessionId) && c.working) return true;
     }
     return false;
+  }
+
+  /** A conversa é de consulta de outro projeto (server/consult/)? Só vale para as abertas neste servidor; o registro das consultas guarda o resto. */
+  isConsultSession(sessionId: string): boolean {
+    return this.consultSessions.has(sessionId);
+  }
+
+  /** O id da consulta de uma conversa aberta aqui (ou undefined). */
+  consultIdOf(sessionId: string): string | undefined {
+    return this.consultSessions.get(sessionId);
+  }
+
+  /** Esta conversa de consulta terminou o turno com erro do motor (login recusado, erro que não passa sozinho)? Ou parada no limite de uso, esperando o "continue"? */
+  async consultTurn(sessionId: string): Promise<{ failed: boolean; waiting: boolean }> {
+    const waiting = await this.awaitingLimit(sessionId);
+    return { failed: !!this.engineStopOf(sessionId), waiting };
   }
 
   /** Quantas conversas, em todos os projetos, estão trabalhando agora (o teto do gate de recursos conta isto). */
@@ -1403,7 +1476,7 @@ export class ChatManager {
 
   /** A conversa deste funcionário, neste projeto, que está no meio de um turno agora, se for uma só (senão, null). */
   workingSession(projectId: string, staffId: string): string | null {
-    const busy = [...this.chats.values()].filter((c) => c.running && c.projectId === projectId && c.staffId === staffId && c.busy);
+    const busy = [...this.chats.values()].filter((c) => c.running && c.projectId === projectId && c.staffId === staffId && c.busy && !this.consultSessions.has(c.sessionId));
     return busy.length === 1 ? busy[0]!.sessionId : null;
   }
 
@@ -1554,7 +1627,8 @@ export class ChatManager {
     };
   }
 
-  private async ensure(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly = false): Promise<ChatProcess> {
+  private async ensure(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly = false, consult?: ConsultStamp): Promise<ChatProcess> {
+    this.assertSameProject(projectId, sessionId);
     const existing = sessionId ? this.chats.get(sessionId) : undefined;
     // Ficha nova só reabre com tudo parado: agents em segundo plano morreriam com o processo.
     if (existing?.running && !(existing.stale && !existing.working)) return existing;
@@ -1572,9 +1646,11 @@ export class ChatManager {
     }
     // Conversa já aberta no secundário segue nele (continue, respawn, reabrir); o pedido de uma conversa nova vale só para ela.
     const override = sessionId ? this.overrides.get(sessionId) : engineOverride;
-    const spawn = await this.opts.resolve(projectId, sessionId, staffId, forkFrom, override, reviewOnly);
+    const spawn = await this.opts.resolve(projectId, sessionId, staffId, forkFrom, override, reviewOnly, consult);
     if (!spawn) throw new ChatError('funcionário ou projeto não encontrado');
     if (override) this.overrides.set(spawn.sessionId, override);
+    // Consulta de outro projeto: marcada já, antes de o processo abrir (sem token, sem aprovação, fora da conta de trabalho do funcionário; ver `isConsultSession`).
+    if (spawn.consult) this.consultSessions.set(spawn.sessionId, spawn.consult.id);
     // Claude ou Codex: o resto do manager fala com os dois do mesmo jeito (ver codexProcess.ts).
     const codex = spawn.engine === 'codex' ? spawn.codex : undefined;
     if (spawn.engine === 'codex' && !codex) throw new ChatError('a conversa do Codex veio sem os dados para abrir');
@@ -1615,13 +1691,16 @@ export class ChatManager {
         if (reason !== 'exit') this.noteQuestion(spawn.sessionId);
         if (reason === 'turn') void this.noteTurn(spawn.sessionId).catch(() => {});
         this.opts.onIdle?.(spawn.sessionId, projectId, staffId, reason, codex ? 'codex' : 'claude');
+        if (spawn.consult) this.opts.onConsultIdle?.(spawn.consult.id, spawn.sessionId, reason);
       },
       onCommands: (commands) => this.commands.set(projectId, commands),
       turnCaps: this.opts.turnCaps,
       onTurnCap: (hit) => this.turnCapped(spawn.sessionId, hit),
       onAsk: (requestId, questions) => this.opts.onAsk?.(spawn.sessionId, requestId, questions),
       // Quem ela é para a API: o mesmo token em toda execução da conversa (o Codex abre uma por mensagem), regerado se o servidor reiniciou.
-      mycoToken: this.opts.tokens?.issue({ staffId, projectId, sessionId: spawn.sessionId, engine: codex ? 'codex' : 'claude' }),
+      // Consulta de outro projeto não recebe token: sem ele a conversa não alcança nenhuma rota (chat/send, tarefa, contratação, nova consulta). Um salto só.
+      mycoToken: spawn.consult ? undefined : this.opts.tokens?.issue({ staffId, projectId, sessionId: spawn.sessionId, engine: codex ? 'codex' : 'claude' }),
+      ...(spawn.consult && { denyPermissions: 'Conversa de consulta de outro projeto: só leitura da pasta do projeto, e nenhum pedido de permissão é aprovado.' }),
       onExit: (pid, error) => {
         this.log(`${spawn.sessionId} saiu (pid ${pid})${error ? `: ${error.slice(0, 200)}` : ''}`);
         if (error) this.errorAt.set(spawn.sessionId, new Date().toISOString());
@@ -1639,7 +1718,9 @@ export class ChatManager {
           readOnlyPaths: codex.readOnlyPaths,
           sshMcp: codex.sshMcp,
           memoriaMcp: codex.memoriaMcp,
+          gitMcp: codex.gitMcp,
           readOnly: codex.readOnly,
+          consult: codex.consult,
           chromeMcp: codex.chromeMcp,
           cleanMcp: codex.cleanMcp,
           extraMcps: codex.extraMcps,

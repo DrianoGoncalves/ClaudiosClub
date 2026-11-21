@@ -1,11 +1,12 @@
 import type { Engine, InboxItem } from '../../../shared/model';
 import { sandboxOf } from '../inbox/codexSandbox';
+import { pendingOf } from '../inbox/resolved';
 
 /** Os itens de um tipo da caixa que são desta conversa, sem repetir id. Item sem conversa (`sessionId` vazio) não tem onde virar balão. */
 function noticesOf(kind: InboxItem['kind'], inbox: readonly InboxItem[] | undefined, sessionId: string | null): InboxItem[] {
   if (!inbox || !sessionId) return [];
   const byId = new Map<string, InboxItem>();
-  for (const item of inbox) if (item.kind === kind && item.sessionId === sessionId && !byId.has(item.id)) byId.set(item.id, item);
+  for (const item of pendingOf(inbox)) if (item.kind === kind && item.sessionId === sessionId && !byId.has(item.id)) byId.set(item.id, item);
   return [...byId.values()];
 }
 
@@ -34,7 +35,7 @@ export function errorNoticesFor(inbox: readonly InboxItem[] | undefined, session
  */
 export function sandboxNoticesFor(inbox: readonly InboxItem[] | undefined, engine: Engine): InboxItem[] {
   if (!inbox || engine !== 'codex') return [];
-  return inbox.filter((item) => item.kind === 'error' && sandboxOf(item) !== null);
+  return pendingOf(inbox).filter((item) => item.kind === 'error' && sandboxOf(item) !== null);
 }
 
 /**

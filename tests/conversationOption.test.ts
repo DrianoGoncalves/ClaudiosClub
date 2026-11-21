@@ -17,6 +17,13 @@ describe('seletor de conversas: ativa x inativa', () => {
     expect(conversationOption(c, true, true).label).toBe(`● Ajustar o header · ${t('detail.convActive')}`);
   });
 
+  it('pergunta/ação da caixa: "⚠ " e classe is-needs, no lugar do "● "', () => {
+    const o = conversationOption(c, false, true, true);
+    expect(o.label).toBe('⚠ Ajustar o header');
+    expect(o.className).toBe('is-idle is-needs');
+    expect(conversationOption(c, true, false, false).className).toBe('is-active');
+  });
+
   it('sem título usa o nome de conversa sem título', () => {
     expect(conversationOption({ title: null, updatedAt: null }, false, false).label).toBe(t('detail.untitledConversation'));
   });

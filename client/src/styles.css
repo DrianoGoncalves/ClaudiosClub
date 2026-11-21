@@ -249,10 +249,11 @@ body { background: var(--board); }
 /* Nome em cima, com a largura toda para identificar o projeto; contagem e resumo na linha de baixo. */
 .bn-header-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
 .bn-header-text .bn-title, .bn-header-text .bn-meta { min-width: 0; max-width: 100%; }
-/* Lado direito do cabeçalho: tarefas em cima; branch e "ao vivo" na linha de baixo, alinhados à direita. */
+/* Lado direito do cabeçalho: tarefas em cima; branch na linha de baixo, alinhada à direita. */
 .bn-header-side { flex: none; margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .bn-header-status { display: flex; align-items: center; gap: 10px; }
-.bn-header .bn-live { margin-top: 0; flex: none; }
+/* As bolinhas vão dentro do resumo (`.bn-meta`), coladas na contagem de conversas ativas, no tamanho do texto dele. */
+.bn-header .bn-meta .bn-live { display: inline-flex; vertical-align: middle; margin: 0 0 0 5px; font-size: inherit; color: inherit; }
 /* Colado na moldura: a parede da sala vira a borda do cabeçalho, e o fundo leva um tanto da cor dela. */
 .bn-project, .bn-user { --room-wall: var(--ink-muted); }
 .bn-project::before, .bn-user::before { background: color-mix(in srgb, var(--room-wall) 14%, var(--card)); }
@@ -304,6 +305,8 @@ details.collapse[open] > summary { margin-bottom: 6px; }
 /* Seção recolhida com resumo (detalhe da tarefa): o rótulo e, abaixo, o resumo numa linha só, com reticências; o `title` traz o texto inteiro. */
 details.collapse > summary.has-sum { padding: 6px 0; }
 .collapse-sum { display: block; margin-top: 2px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Celular: o toque não mostra o `title`, então o resumo quebra linha e aparece inteiro. */
+@media (max-width: 639px) { .collapse-sum { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; } }
 /* Acordeão que agrupa outros: as seções de dentro viram divisórias, sem caixa dentro de caixa. */
 .collapse-group > details.collapse { border: none; border-top: 1px solid var(--line); border-radius: 0; padding: 4px 0; margin-top: 0; }
 .collapse-group > details.collapse > summary { font-weight: 500; }
@@ -403,6 +406,10 @@ details.collapse > summary.has-sum { padding: 6px 0; }
 .secret-notice p { margin: 0; overflow-wrap: anywhere; }
 /* O arquivo do segredo: o caminho (letra de código) e, quando a tela não o abre, a nota ao lado. */
 .secret-notice .secret-file { margin-top: 4px; }
+/* Resultado do "Corrigir" (abriu no editor, ou por que não abriu): `.error` vem depois de `.small` e subiria para 14px. */
+.secret-notice .secret-fix-note { margin-top: 6px; font-size: 12px; color: var(--ink); }
+/* Recusa: texto em `--ink` (o vermelho sobre o amarelo do cartão fica no limite de 4,5:1); a borda marca que é problema. */
+.secret-notice .secret-fix-note.error { border-left: 3px solid var(--danger); padding-left: 8px; }
 .secret-notice .secret-file code { font-size: 12px; }
 .secret-notice .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* Palpite do servidor no aviso de segredo (balão e caixa): selo com o estado (escrito + símbolo + traço da borda: não depende só da cor), dica mascarada e "por quê?".
@@ -801,6 +808,7 @@ textarea.q-field { resize: vertical; }
 .files-locked p + p { margin-top: 6px; }
 .files-locked .link { min-height: 32px; padding: 0 2px; }
 .files-locked .link:disabled { opacity: .6; cursor: progress; }
+.files-locked p.small { font-size: 12px; }
 .files-image { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .files-image-view { flex: 1; min-height: 0; display: grid; place-items: center; overflow: auto; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
 .files-image-view img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
@@ -838,7 +846,10 @@ textarea.q-field { resize: vertical; }
 .tasks-columns { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(200px, 1fr)); gap: 10px; overflow-x: auto; }
 .tasks-col { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow-y: auto; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--board-dot) 90%, transparent); }
 .tasks-col.is-over { border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 10%, transparent); }
-.tasks-col h3 { margin: 0 0 2px; font-family: var(--hand); font-size: 21px; line-height: 1; cursor: help; }
+.tasks-col-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 2px; }
+.tasks-col h3 { margin: 0; font-family: var(--hand); font-size: 21px; line-height: 1; cursor: help; }
+.tasks-col-filter { font: inherit; font-size: 12px; max-width: 55%; min-width: 0; padding: 1px 4px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; text-overflow: ellipsis; }
+.tasks-col-filter:hover, .tasks-col-filter:focus-visible { border-color: var(--line); background: var(--card); color: var(--ink); }
 .tasks-col-review h3 { color: var(--waiting-ink); }
 .task-card { display: grid; gap: 3px; text-align: left; margin: 6px 0 0 0 ; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; cursor: grab; }
 .task-card:hover { border-color: var(--ink-blue); }
@@ -854,6 +865,11 @@ textarea.q-field { resize: vertical; }
 /* Id da tarefa (t-1a2b3c): discreto, herda o cinza do texto ao redor; text-transform none por causa do .kicker em caixa alta. */
 .task-id { font-family: ui-monospace, Consolas, monospace; font-size: 0.9em; text-transform: none; letter-spacing: 0; }
 .task-detail .task-id { user-select: all; }
+/* Responsável no cartão: ícone de pessoa + nome, no lugar onde ficava o id. */
+.task-owner { display: inline-flex; align-items: center; gap: 4px; vertical-align: bottom; }
+.task-owner svg { flex: none; }
+/* Confirmação de "Salvo" (cartão em Aguardar e detalhe): some sozinha, anunciada por role=status. */
+.save-ok { color: var(--ink-green); font-weight: 600; font-size: 12px; }
 .task-branch { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Selo de status no cartão: plano para aprovar (amarelo do "precisa de mim"), no ar (verde), não publicado (neutro). */
 .task-badge { justify-self: start; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; font-size: 11px; font-weight: 600; }
@@ -1058,18 +1074,25 @@ textarea.q-field { resize: vertical; }
 .task-badge.fu-rec { color: var(--ink); border-width: 1.5px; }
 .task-badge.fu-rec.is-worth { border-style: solid; border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 12%, transparent); font-weight: 600; }
 .task-badge.fu-rec.is-optional { border-style: dashed; border-color: var(--muted); }
+.inbox-resolved { margin-left: 6px; color: var(--ink); border-color: var(--ink-green); background: color-mix(in srgb, var(--ink-green) 12%, transparent); }
+.inbox-list li.is-resolved > .inbox-item :is(.inbox-kind, .inbox-topic, .inbox-summary, .inbox-at) { opacity: 0.6; }
+.inbox-list li.is-resolved > .inbox-item .inbox-who b { font-weight: 500; }
 .task-badge.fu-done { color: var(--ink); border-color: var(--ink-green); background: color-mix(in srgb, var(--ink-green) 12%, transparent); }
 .fu-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; }
 .fu-details summary { cursor: pointer; color: var(--muted); width: fit-content; min-height: 24px; font-size: 12px; }
 .fu-details .fu-text { margin: 4px 0 0; white-space: pre-wrap; max-height: 220px; overflow-y: auto; font-size: 13px; color: var(--ink); }
 @media (max-width: 640px) { .fu-details summary { min-height: 36px; padding: 8px 0; box-sizing: border-box; } }
 /* Balão do follow-up na conversa de trabalho (chat/FollowUpNotice.tsx): o padrão do balão de segredo (.permission), em azul (decisão, não alerta); "Finalizado" e a dica quando a tarefa de origem já fechou. */
-.followup-notice { display: grid; gap: 8px; border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 6%, var(--panel)); }
+/* O --muted do tema dá 4,1:1 sobre este fundo (AA pede 4,5:1): no balão o cinza é 70% de --ink sobre --panel (5,1:1 no claro, 6,6:1 no escuro; sobre o verde de "Finalizado", 5,2 e 6,5). */
+.followup-notice { --muted: color-mix(in srgb, var(--ink) 70%, var(--panel)); display: grid; gap: 8px; border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 6%, var(--panel)); }
+.followup-notice.is-finished { border-color: var(--ink-green); background: color-mix(in srgb, var(--ink-green) 6%, var(--panel)); }
 .followup-notice p { margin: 0; overflow-wrap: anywhere; }
 .followup-notice .task-fu-actions { margin-top: 0; }
 .fu-finished { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .followup-note { align-self: stretch; margin: 0; padding: 0 4px; overflow-wrap: anywhere; }
 .task-fu-done { color: var(--ink); }
+/* O erro sob o formulário e o aviso de "já decidido" no bloco do detalhe: `.error` (14px) vem depois de `.small` e vence, então o tamanho é fixado aqui, com 2 classes. */
+:is(.task-fu-box, .task-fu-decide) .task-fu-error { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
 .inbox-fu-done { margin: 0; padding: 10px 14px 0; flex: none; overflow-wrap: anywhere; color: var(--ink); }
 .inbox-fu-meta { display: flex; flex-wrap: wrap; gap: 4px 6px; padding: 0 10px 4px calc(var(--inbox-kind-w) + 20px); }
 .inbox-fu-meta:empty { display: none; }
@@ -1078,6 +1101,8 @@ textarea.q-field { resize: vertical; }
 .task-badge.task-nocode { color: var(--ink); }
 .task-nocode-box { display: grid; gap: 6px; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
 .task-nocode-box :is(p, details) { margin: 0; overflow-wrap: anywhere; }
+/* Aviso neutro do "Devolver" (mensagem guardada, nada falhou): texto --ink, sem o vermelho do erro. */
+.task-nocode-box .task-nocode-note { font-size: 12px; color: var(--ink); }
 /* Formulário de criar com os opcionais abertos: rola por dentro; sem teto ele empurra o quadro (altura 0 no celular). */
 .tasks-modal .task-form { max-height: 60%; overflow-y: auto; }
 .tasks-modal .task-form > .actions { position: sticky; bottom: -10px; z-index: 1; margin-bottom: -10px; padding: 6px 0 10px; background: var(--panel); }

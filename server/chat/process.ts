@@ -172,6 +172,11 @@ export interface ChatProcessOptions {
   onAsk?: (requestId: string, questions: NonNullable<TaskQuestion['questions']>) => void;
   /** `MYCO_TOKEN` da conversa (ver server/callers.ts): vai no ambiente, ao lado do `MYCO_SESSION_ID`, para as chamadas à API do Claudio’s Club. */
   mycoToken?: string;
+  /**
+   * Conversa de consulta de outro projeto (server/consult/): TODO pedido de permissão (`can_use_tool`) é negado na hora, com esta mensagem, sem virar cartão de aprovação nem aviso para o dono
+   * (um clique distraído liberaria a leitura fora do projeto). Também não aceita troca do modo de permissão. Ausente = conversa comum.
+   */
+  denyPermissions?: string;
   /** Troca o `spawn` real nos testes. */
   spawnImpl?: (cmd: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }) => ChildProcessWithoutNullStreams;
   /** Quanto o `stop()` espera o claude sair sozinho antes de encerrar a árvore dele (padrão 3 s; os testes encurtam). */
@@ -478,6 +483,8 @@ export class ChatProcess {
 
   /** Troca o modo de permissão do processo aberto, sem reiniciar (a ficha mudou de autonomia). */
   setPermissionMode(mode: string, label: string) {
+    // Consulta: o modo `default` é o que mantém a leitura dentro da pasta do projeto (ver buildClaudeConsultArgs); nenhuma troca vale.
+    if (this.opts.denyPermissions) return;
     this.control({ subtype: 'set_permission_mode', mode }, label, { mode: true });
   }
 
@@ -952,6 +959,12 @@ export class ChatProcess {
         const requestId = typeof ev.request_id === 'string' ? ev.request_id : null;
         if (req?.subtype !== 'can_use_tool' || !requestId) return;
         const tool = req.display_name ?? req.tool_name ?? 'ferramenta';
+        // Consulta: nada de cartão nem de pendência (não entra na caixa "precisa de mim" nem espera o dono). A negação sai antes de qualquer outra coisa.
+        if (this.opts.denyPermissions) {
+          this.write({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response: { behavior: 'deny', message: this.opts.denyPermissions } } });
+          this.putItem({ kind: 'notice', id: `n:${randomUUID()}`, text: `Pedido de permissão negado na hora (${tool}): conversa de consulta, só leitura da pasta do projeto.`, tone: 'info', at });
+          return;
+        }
         const suggestions = (Array.isArray(req.permission_suggestions) ? req.permission_suggestions : []).filter(
           (s): s is Suggestion => !!s && typeof s === 'object',
         );

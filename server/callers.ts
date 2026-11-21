@@ -86,17 +86,24 @@ const MISSING_TOKEN =
   'a sandbox do Codex precisa do cabeçalho x-myco-token com o MYCO_TOKEN da sua conversa (já está no seu ambiente: -H "x-myco-token: $MYCO_TOKEN")';
 const BAD_TOKEN = 'x-myco-token inválido: use o MYCO_TOKEN da sua conversa do Codex (ele muda quando a conversa reabre num servidor novo)';
 
+/** Token apresentado em 127.0.0.1 que o servidor não conhece: de antes de um reinício, de conversa já fechada ou inventado. */
+const STALE_TOKEN =
+  'x-myco-token inválido ou vencido: o MYCO_TOKEN muda quando o Claudio’s Club reinicia ou a conversa é reaberta. Reabra a conversa (uma mensagem nela, pela tela, a reabre) e use o $MYCO_TOKEN novo; se você não é um funcionário, não mande este cabeçalho';
+
 /**
  * Quem chama, pelo socket e pelo token.
  * - Socket da sandbox do Codex: o token é obrigatório e tem de ser de uma conversa do Codex; sem ele (ou outro), 401. O dono do token é quem chama.
- * - Socket normal (127.0.0.1): o token é opcional (compatibilidade com quem ainda não o manda: um processo fora da sandbox já tem acesso total
- *   à máquina, então não é segurança). Válido, o dono do token é quem chama e vale no lugar do que o pedido declara; ausente ou inválido
- *   (ex.: uma conversa de antes de um reinício), o pedido segue como antes, sem dono.
+ * - Socket normal (127.0.0.1): sem token, o pedido segue sem dono (a tela, as ferramentas do dono; o gate exige o token nas rotas POST de
+ *   funcionário). Com token, ele é conferido sempre: válido, o dono dele é quem chama e vale no lugar do que o pedido declara; inválido
+ *   (de antes de um reinício, de conversa fechada, inventado), 401 e nunca leitura anônima.
  */
 export function resolveCaller(sandbox: boolean, tokenHeader: string | string[] | undefined, tokens: SessionTokens): Resolution {
   const raw = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
   const owner = tokens.lookup(raw);
-  if (!sandbox) return { ok: true, caller: owner && { ...owner, sandbox: false } };
+  if (!sandbox) {
+    if (!raw) return { ok: true, caller: null };
+    return owner ? { ok: true, caller: { ...owner, sandbox: false } } : { ok: false, status: 401, error: STALE_TOKEN };
+  }
   if (!raw) return { ok: false, status: 401, error: MISSING_TOKEN };
   if (!owner || owner.engine !== 'codex') return { ok: false, status: 401, error: BAD_TOKEN };
   return { ok: true, caller: { ...owner, sandbox: true } };

@@ -305,9 +305,9 @@ describe('a rota: só a tela chega', () => {
         req.end('{}');
       });
 
-    it('funcionário pela API (x-myco, sem Origin) leva 400 "só pelo Claudio’s Club", com ou sem token inventado; só a tela pareada passa', async () => {
+    it('funcionário pela API (x-myco, sem Origin) leva 400 "só pelo Claudio’s Club" (token inventado é 401, conferido antes); só a tela pareada passa', async () => {
       expect(await post({ 'x-myco': '1' })).toEqual({ status: 400, body: { error: 'só pelo Claudio’s Club' } });
-      expect((await post({ 'x-myco': '1', 'x-myco-token': 'f'.repeat(64) })).status).toBe(400);
+      expect((await post({ 'x-myco': '1', 'x-myco-token': 'f'.repeat(64) })).status).toBe(401);
       // Origin forjado sem o cookie do pareamento: recusado antes de chegar à rota.
       expect((await post({ 'x-myco': '1', origin: 'http://localhost:4848' })).status).toBe(403);
       // Sem x-myco: 403.

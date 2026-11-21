@@ -496,9 +496,9 @@ describe('enviar a decisão', () => {
     });
 
     it('a caixa usa a mesma nota, fora da lista: com a lista vazia ainda mostra o aviso', () => {
-      expect(html(createElement(FollowUpGoneNote, { message: tasksMsgs['pt-BR']['tasks.fuErrDecided'], className: 'inbox-fu-gone' }))).toBe(
-        `<p class="error small inbox-fu-gone" role="alert">${tasksMsgs['pt-BR']['tasks.fuErrDecided']}</p>`,
-      );
+      const out = html(createElement(FollowUpGoneNote, { message: tasksMsgs['pt-BR']['tasks.fuErrDecided'], className: 'inbox-fu-gone' }));
+      expect(out).toContain('role="alert"');
+      expect(out).toContain(tasksMsgs['pt-BR']['tasks.fuErrDecided']);
       expect(html(createElement(FollowUpGoneNote, { message: null, className: 'inbox-fu-gone' }))).toBe('');
     });
   });
@@ -532,7 +532,7 @@ describe('textos nos 3 idiomas', () => {
     }
   };
 
-  it('en e es têm todas as chaves do follow-up do quadro', () => parity(tasksMsgs, /^tasks\.fu[A-Z]/, 69));
+  it('en e es têm todas as chaves do follow-up do quadro', () => parity(tasksMsgs, /^tasks\.fu[A-Z]/, 70));
 
   it('a dica do selo nos 3 idiomas diz a frase inteira: quem pediu a tarefa OU o dono decide, e o que a decisão pode ser', () => {
     expect(tasksMsgs['pt-BR']['tasks.fuBadgeHint']).toContain('Quem pediu a tarefa, ou você, decide: vira card ou é descartada.');

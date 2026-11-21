@@ -214,6 +214,23 @@ describe('selo do cartão com os follow-ups', () => {
     expect(verdictShown({ ...review('rejected'), followUps: [fu()] })).toBe(true);
     expect(verdictShown({ followUps: [fu()] })).toBe(false);
   });
+
+  it('o "Reprovada" some quando o ajuste é entregue e a nova rodada ainda não tem veredito; nova reprovação traz de volta', () => {
+    const rejected = (over: Partial<NonNullable<Task['review']>> = {}) => ({ staffId: 'rev', sessionId: 's-r', at: '2026-11-20T10:00:00Z', verdict: 'rejected' as const, ...over });
+    const delivery = (at: string) => ({ at, summary: 'ok' });
+    // 1) reprovada e de volta ao responsável (sem nova entrega): selo visível
+    expect(verdictShown({ review: rejected(), delivery: delivery('2026-11-20T09:00:00Z') })).toBe(true);
+    // 2) ajuste entregue: a revisão antiga fica `superseded` (ou a entrega é posterior ao pedido, tarefa de antes da marca): selo some
+    expect(verdictShown({ review: rejected({ superseded: true }), delivery: delivery('2026-11-20T11:00:00Z') })).toBe(false);
+    expect(verdictShown({ review: rejected(), delivery: delivery('2026-11-20T11:00:00Z') })).toBe(false);
+    // nova rodada pedida: a revisão nova ainda não tem veredito (e a velha foi trocada): sem selo
+    expect(verdictShown({ review: { staffId: 'rev', sessionId: 's-r2', at: '2026-11-20T11:05:00Z' }, delivery: delivery('2026-11-20T11:00:00Z') })).toBe(false);
+    // 3) nova reprovação (revisão nova, pedida depois da entrega): selo volta
+    expect(verdictShown({ review: rejected({ sessionId: 's-r2', at: '2026-11-20T11:05:00Z' }), delivery: delivery('2026-11-20T11:00:00Z') })).toBe(true);
+    // 4) aprovado: como antes, mesmo com a marca de rodada
+    expect(verdictShown({ review: rejected({ verdict: 'approved', superseded: true }), followUps: [] })).toBe(true);
+    expect(verdictShown({ review: rejected({ verdict: 'approved' }), delivery: delivery('2026-11-20T11:00:00Z'), followUps: [fu()] })).toBe(false);
+  });
 });
 
 // O quadro de verdade, com a tarefa carregada: separa o que é do cartão do que é do detalhe.
@@ -270,11 +287,65 @@ describe('no quadro', () => {
     expect(render(t, { inboxItems }).detail).not.toContain('Abrir conversa');
   });
 
-  it('follow-up com o gestor (campos do revisor, sem conversa): o detalhe diz quem decide, sem botões de decisão', () => {
-    const { detail } = render(approved([fu({ to: 'manager', recommendation: 'optional', title: 'Renomear variável', text: 'x' })], { requestedBy: 'ana' }));
-    expect(detail).toContain('Decide quem pediu a tarefa.');
-    expect(detail).not.toContain('Concluir');
-    expect(detail).not.toContain('Criar card');
+  // Regra única: o servidor deixa decidir quem pediu a tarefa OU o dono (pela tela), então o dono vê as saídas no follow-up antigo e no novo, esteja ele com o gestor ou com você.
+  describe('quem decide pela tela (a mesma regra para o antigo e o novo)', () => {
+    const open = (over: Partial<FollowUp>, taskOver: Partial<Task> = {}) => render(approved([fu(over)], { requestedBy: 'ana', ...taskOver })).detail;
+    const NEW = { recommendation: 'optional', title: 'Renomear variável', text: 'x' } as const;
+    const OLD = { text: 'texto cru do achado' } as const;
+
+    for (const [kind, shape] of [['novo', NEW], ['antigo', OLD]] as const) {
+      for (const to of ['manager', 'owner'] as const) {
+        it(`follow-up ${kind} com ${to === 'manager' ? 'o gestor' : 'você'}, sem conversa, tarefa Finalizada: o dono vê Revisar e Concluir`, () => {
+          const detail = open({ ...shape, to });
+          expect(detail).toContain('Revisar');
+          expect(detail).toContain('Concluir');
+        });
+        it(`follow-up ${kind} com ${to === 'manager' ? 'o gestor' : 'você'}, sem conversa, tarefa em andamento: o dono vê Criar card e Descartar`, () => {
+          const detail = open({ ...shape, to }, { status: 'doing', review: undefined });
+          expect(detail).toContain('Criar card');
+          expect(detail).toContain('Descartar');
+        });
+      }
+    }
+
+    it('com o gestor, a nota diz que quem pediu a tarefa também pode decidir; com você, não há essa nota', () => {
+      expect(open({ ...NEW, to: 'manager' })).toContain('Quem pediu a tarefa também pode decidir');
+      expect(open({ ...OLD, to: 'manager' })).toContain('Quem pediu a tarefa também pode decidir');
+      expect(open({ ...NEW, to: 'owner' })).not.toContain('Quem pediu a tarefa também pode decidir');
+      // A nota de quem pediu a tarefa segue ali (o quadro do teste não tem a ficha dele, então é "o gestor").
+      expect(open({ ...NEW, to: 'manager' })).toContain('Espera o gestor, que pediu a tarefa.');
+    });
+
+    it('com a conversa na caixa, nenhum dos dois decide no detalhe: aponta para a conversa', () => {
+      for (const shape of [NEW, OLD]) {
+        const t = approved([fu({ ...shape, to: 'owner' })]);
+        const detail = render(t, { inboxItems: [item(fields())], onOpenInbox: noop }).detail;
+        expect(detail).toContain('Decida na conversa de trabalho da tarefa');
+        expect(detail).not.toContain('Concluir');
+      }
+    });
+
+    it('decidido, nenhum oferece saída', () => {
+      const detail = open({ ...NEW, status: 'resolved', resolution: 'discarded', resolvedBy: 'you', to: 'owner' });
+      expect(detail).not.toContain('Concluir');
+      expect(detail).not.toContain('Criar card');
+    });
+  });
+
+  it('follow-up já decidido, com os campos do revisor: mostra o título e o selo, não o texto cru', () => {
+    const decided = { status: 'resolved', resolution: 'discarded', resolvedBy: 'you', resolvedAt: AT, recommendation: 'worth', title: 'Juntar helper', impact: 'Quem muda esquece uma tela.', text: 'texto cru do achado' } as const;
+    const { detail } = render(approved([fu(decided)]));
+    expect(detail).toContain('Juntar helper');
+    expect(detail).toContain('Vale fazer');
+    expect(detail).toContain('Se não fizer:');
+    expect(detail).toContain('<details class="fu-details">');
+    expect(detail).not.toMatch(/<p class="task-doubt-text">texto cru do achado/);
+    expect(detail).toContain('Descartado');
+  });
+
+  it('follow-up decidido sem os campos (antigo) segue com o texto', () => {
+    const { detail } = render(approved([fu({ status: 'resolved', resolution: 'discarded', resolvedBy: 'you', text: 'texto cru do achado' })]));
+    expect(detail).toContain('<p class="task-doubt-text">texto cru do achado</p>');
   });
 });
 

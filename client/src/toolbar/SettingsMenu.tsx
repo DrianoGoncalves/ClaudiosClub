@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from 'react-dom';
 import { CONTEXT_SWITCHES, type AppConfig, type BoardBackground, type ContextSwitch, type Project, type RetentionPreview, type SendPriority, type UiLevel, type UsageStop, type Workspace } from '../../../shared/model';
 import { formatBytes } from '../detail/attachmentFiles';
-import { DemoButton, WorkspacesEditor } from '../office/WorkspacesSettings';
+import { WorkspacesEditor } from '../office/WorkspacesSettings';
 import { McpServers } from '../office/McpServers';
 import { api, type CodexModelsState } from '../api';
 import { bareVersion } from '../format';
@@ -61,6 +61,8 @@ interface Props {
   aiTitles: boolean | null;
   /** Retomar sozinho a conversa que cai por falha passageira; null = config ainda não chegou (ou o servidor é anterior à opção: o item nem aparece). */
   autoRetry: boolean | null;
+  /** Parar o servidor quando a última aba fechar; null = config ainda não chegou (ou o servidor é anterior à opção: o item nem aparece). */
+  stopOnTabClose: boolean | null;
   /** Otimizar assinatura (folga de cota); null = config ainda não chegou. */
   optimizeQuota: boolean | null;
   /** Continuar sozinho quando o limite de uso volta; null = config ainda não chegou. */
@@ -486,37 +488,6 @@ function buildSettings(
       simple: simpleInfo('help', 'manual'),
     },
     {
-      id: 'demo',
-      group: 'general',
-      section: 'help',
-      title: t('office.demoTitle'),
-      description: t('office.demoDesc'),
-      keywords: t('office.demoKeywords'),
-      control: (() => {
-        const demo = p.projects.find((x) => /[\\/]\.myco[\\/]demo[\\/]my-co$/i.test(x.path));
-        return demo ? (
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => {
-              close();
-              p.onOpenProject(demo.id);
-            }}
-          >
-            {t('office.demoOpen')}
-          </button>
-        ) : (
-          <DemoButton
-            onOpen={(id) => {
-              close();
-              p.onOpenProject(id);
-            }}
-          />
-        );
-      })(),
-      simple: simpleInfo('help', 'demo'),
-    },
-    {
       id: 'archived',
       group: 'board',
       section: 'display',
@@ -602,16 +573,31 @@ function buildSettings(
       control: <ServerControls />,
       advanced: true,
     },
-    {
-      id: 'mcp-servers',
-      group: 'mcp',
-      title: t('mcp.title'),
-      description: t('mcp.desc'),
-      keywords: t('mcp.keywords'),
-      control: <McpServers projects={p.projects} />,
-      advanced: true,
-    },
   ];
+
+  // Logo abaixo do botão Parar: o servidor para sozinho depois que a última aba fechar (server/tabPresence.ts). Desligado por padrão.
+  if (p.stopOnTabClose !== null) {
+    out.push({
+      id: 'stop-on-tab-close',
+      group: 'general',
+      section: 'system',
+      title: t('toolbar.stopOnTabCloseTitle'),
+      description: t('toolbar.stopOnTabCloseDesc'),
+      keywords: t('toolbar.stopOnTabCloseKeywords'),
+      toggle: { checked: p.stopOnTabClose, onChange: (v) => void api.saveConfig({ stopOnTabClose: v }).then(p.onConfig, () => {}) },
+      advanced: true,
+    });
+  }
+
+  out.push({
+    id: 'mcp-servers',
+    group: 'mcp',
+    title: t('mcp.title'),
+    description: t('mcp.desc'),
+    keywords: t('mcp.keywords'),
+    control: <McpServers projects={p.projects} />,
+    advanced: true,
+  });
 
   // Fundo geral: claro e escuro lado a lado, cada um com o padrão de fábrica.
   if (p.boardBackground) {

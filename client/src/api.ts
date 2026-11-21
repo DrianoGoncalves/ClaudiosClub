@@ -44,6 +44,7 @@ import type {
   ProjectConnection,
   ProjectDetail,
   ProjectPause,
+  StaffQueue,
   Routine,
   RoutineRun,
   RoutineSchedule,
@@ -125,9 +126,21 @@ async function get<T>(url: string): Promise<T> {
       await sleep(500 * 2 ** (attempt - 1) + Math.random() * 250);
       continue;
     }
+    if (res.status === 401) {
+      const refused = await refusedForPairing(res);
+      if (refused) throw refused;
+    }
     if (!res.ok) throw new Error(`${url}: ${res.status}`);
     return (await res.json()) as T;
   }
+}
+
+/** GET de navegador não pareado (server/gate.ts): 401 `needs-pairing`. Sobe o aviso de parear; o erro sai sem texto, como o do POST. */
+async function refusedForPairing(res: Response): Promise<ApiError | null> {
+  const data = (await res.json().catch(() => ({}))) as { code?: string };
+  if (data.code !== NEEDS_PAIRING) return null;
+  window.dispatchEvent(new Event(NEEDS_PAIRING_EVENT));
+  return new ApiError('', NEEDS_PAIRING, null, data, 401);
 }
 
 /** Leitura que pode ser recusada com motivo (ex.: exportar equipe com segredo no texto): o erro leva a mensagem do servidor. */
@@ -140,6 +153,7 @@ async function getExplained<T>(url: string): Promise<T> {
     throw err;
   }
   const data = (await res.json().catch(() => ({}))) as T & { error?: string; code?: string };
+  if (res.status === 401 && data.code === NEEDS_PAIRING) window.dispatchEvent(new Event(NEEDS_PAIRING_EVENT));
   if (!res.ok) throw new ApiError(errorMessage(data, `${url}: ${res.status}`), data.code ?? null, null, data, res.status);
   return data;
 }
@@ -427,6 +441,25 @@ export interface GithubSkillStatus {
   update: { available: boolean; latestSha: string; checkedAt: string } | null;
 }
 
+/** Vínculo de consulta (GET /api/consult/links): `staffIds` null = todos os funcionários da origem. */
+export interface ConsultLinkView {
+  from: string;
+  to: string;
+  staffIds: string[] | null;
+  createdAt: string;
+}
+
+/** Uma consulta do registro (GET /api/consult/records), sem a pergunta nem a resposta. */
+export interface ConsultRecordView {
+  id: string;
+  state: 'running' | 'answered' | 'delivered' | 'failed' | 'expired' | 'cancelled' | 'undeliverable';
+  deadlineAt: string;
+  from: { projectId: string; staffId: string };
+  to: { projectId: string; staffId: string };
+  createdAt: string;
+  reason?: string;
+}
+
 /** Uma ficha no índice da empresa (GET /api/staff-directory). */
 export interface DirectoryPerson {
   projectId: string;
@@ -604,6 +637,8 @@ export const api = {
     autoRetry?: boolean;
     /** Títulos de conversa gerados por IA (Haiku); desligado, a lista mostra o começo do assunto. */
     aiTitles?: boolean;
+    /** Parar o servidor sozinho quando a última aba do Club fechar (padrão desligado; ver AppConfig). */
+    stopOnTabClose?: boolean;
     showUserScope?: boolean;
     codexReview?: boolean;
     /** Modelo do Codex para perguntar ao GPT; vazio = o padrão do Codex. */
@@ -690,8 +725,8 @@ export const api = {
   newProjectDefaults: () => get<{ parent: string }>('/api/new-project'),
   newProject: (
     body:
-      | { mode: 'create'; parent: string; name: string; git: boolean; workspaceId: string | null }
-      | { mode: 'existing'; path: string; workspaceId: string | null },
+      | { mode: 'create'; parent: string; name: string; git: boolean; workspaceId: string | null; templateId?: string }
+      | { mode: 'existing'; path: string; workspaceId: string | null; templateId?: string },
   ) => post<{ created: boolean; projectId: string }>('/api/new-project', body),
   /** Abre a janela de escolher pasta NO COMPUTADOR DO SERVIDOR (sem corpo). Só volta quando a janela fecha; um por vez (409 `busy`). */
   pickFolder: () => post<PickFolderResult>('/api/new-project/pick-folder'),
@@ -699,11 +734,20 @@ export const api = {
   importableProjects: () => get<ImportableProject[]>('/api/import-projects'),
   importProjects: (paths: string[], workspaceId: string | null) =>
     post<{ projectIds: string[]; imported: number }>('/api/import-projects', { paths, workspaceId }),
-  createDemo: () => post<{ created: boolean; projectId: string }>('/api/demo'),
+  /** Modelo de equipe num projeto sem funcionário: só as fichas. 409 (`team-exists`) se já houver equipe. */
+  applyTeamTemplate: (projectId: string, templateId: string) =>
+    post<{ templateId: string; staff: Array<{ id: string; name: string }> }>(`/api/projects/${projectId}/staff/template`, { templateId }),
   hire: (projectId: string, input: StaffInput) =>
     post<{ profile: StaffProfile; launch: LaunchResult | null }>(`/api/projects/${projectId}/staff`, input),
   /** Todas as fichas de todos os projetos (contratar "da empresa"). */
   staffDirectory: () => get<{ people: DirectoryStaff[] }>('/api/staff-directory'),
+  /** Consulta entre projetos (server/consult/): vínculos (só a tela grava; `staff: 'all'` ou a lista de ids da origem) e o registro das consultas (sem texto). */
+  consultLinks: () => get<{ links: ConsultLinkView[] }>('/api/consult/links'),
+  setConsultLink: (fromProjectId: string, toProjectId: string, staff: 'all' | string[]) =>
+    post<{ link: ConsultLinkView }>('/api/consult/links', { fromProjectId, toProjectId, staff }),
+  revokeConsultLink: (fromProjectId: string, toProjectId: string) =>
+    post<{ revoked: boolean; cancelled: number }>('/api/consult/links/revoke', { fromProjectId, toProjectId }),
+  consultRecords: (projectId: string) => get<{ consults: ConsultRecordView[] }>(`/api/consult/records?project=${encodeURIComponent(projectId)}`),
   /** Liga duas fichas como cópias da mesma pessoa (as cópias antigas, sem vínculo). */
   linkStaff: (from: StaffRef, to: StaffRef) => post<{ personId: string }>('/api/staff-link', { from, to }),
   unlinkStaff: (ref: StaffRef) => post<{ ok: true }>('/api/staff-unlink', ref),
@@ -791,6 +835,8 @@ export const api = {
   /** Pausa do projeto: `paused` null = rodando. Pausar e retomar são idempotentes e só valem pelo navegador pareado (403 fora dele). */
   projectPause: (projectId: string) => get<{ paused: ProjectPause | null }>(`/api/projects/${projectId}/pause`),
   setProjectPause: (projectId: string, paused: boolean) => post<{ paused: ProjectPause | null }>(`/api/projects/${projectId}/${paused ? 'pause' : 'resume'}`),
+  /** O estado da fila de cada funcionário com card aberto ou entrega em processamento (só leitura). */
+  projectQueues: (projectId: string) => get<StaffQueue[]>(`/api/projects/${projectId}/queues`),
   taskCode: (projectId: string, taskId: string) => get<TaskCode>(`/api/projects/${projectId}/tasks/${taskId}/code`),
   taskTest: (projectId: string, taskId: string) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/test`),
   /** Segunda opinião do Codex sobre o diff da tarefa (o diff vai para a OpenAI). */
@@ -1015,6 +1061,11 @@ export const filesApi = {
    */
   openEditor: (projectId: string, path: string) =>
     filesFetch<{ opened: true; path: string; editor: 'notepad' | 'textedit' | 'custom' }>(`/api/projects/${projectId}/files/open-editor`, { path }),
+  /**
+   * Abre um terminal do computador onde o Club roda, na pasta do projeto (a pasta vem do cadastro; o pedido não leva nada). Só o navegador pareado.
+   * Recusas: 409 `no-display`/`no-terminal`/`folder-missing`, 403, 404.
+   */
+  openTerminal: (projectId: string) => filesFetch<{ opened: true }>(`/api/projects/${projectId}/open-terminal`, {}),
   /** Extensões de imagem que a aba mostra no lugar do editor (as mesmas do servidor). */
   isImage: (path: string) => /\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i.test(path),
   imageUrl: (projectId: string, path: string, v: number) => `/api/projects/${projectId}/files/image?path=${encodeURIComponent(path)}&v=${v}`,

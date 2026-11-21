@@ -1,4 +1,5 @@
 import { isClosed, type Task } from '../../../shared/model';
+import { noCodeOf } from './noCode';
 
 // Cancelar ou apagar uma tarefa de que outras dependem: a conta pura por trás do diálogo (árvore de dependentes, o que aparece, o mapa
 // `dependents` que vai ao servidor, e quando o apagar pode confirmar). Sem React: o diálogo (TaskCloseDialog) só desenha.
@@ -129,6 +130,11 @@ export function applyToAll(rows: readonly DepRow[], choice: DepChoice): DepPicks
 /** Cancelar não desfaz o que já foi feito: a tarefa em andamento (arquivos alterados), mesclada ou com deploy pedido deixa isso como está (o diálogo avisa). */
 export function leavesWorkBehind(task: Pick<Task, 'status' | 'merged' | 'deploy'>): boolean {
   return task.status === 'doing' || task.status === 'planning' || !!task.merged || !!task.deploy;
+}
+
+/** Cancelar interrompe um turno em andamento? Só a tarefa com conversa em planejando ou fazendo; o card "sem código" segue em fazendo, mas o turno dele já terminou (nada a interromper). */
+export function interruptsTurn(task: Pick<Task, 'status' | 'sessionId' | 'noCode'>): boolean {
+  return !noCodeOf(task) && !!task.sessionId && (task.status === 'doing' || task.status === 'planning');
 }
 
 /** Quem cancelou, para o cartão e o detalhe: 'user' (a tela) é "você"; o resto é o id do funcionário (o nome, se a ficha ainda existe). */

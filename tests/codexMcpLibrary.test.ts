@@ -41,6 +41,20 @@ afterAll(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
+/** As entradas do ~/.claude.json da biblioteca, à mão (aceita `%` no caminho, que quotedCommand recusa): chamam o lançador com o nome do servidor. */
+function libraryPointers(clubFile: string, vaultDir: string) {
+  const tail = (name: string) => ['--server', name, '--club', clubFile, '--vault', vaultDir];
+  return {
+    lfs: { type: 'stdio', command: LAUNCH.command, args: [...LAUNCH.args, ...tail('lfs')] },
+    lweb: {
+      type: 'http',
+      url: 'https://mcp.exemplo.com/mcp',
+      headersHelper: [LAUNCH.command, ...LAUNCH.args, '--headers', ...tail('lweb')].map((p) => `"${p}"`).join(' '),
+    },
+    lsse: { type: 'sse', url: 'https://sse.exemplo.com/sse' },
+  };
+}
+
 /**
  * Uma biblioteca (stdio com env no cofre, http com cabeçalho no cofre, sse) e um projeto (.mcp.json com stdio e http, com `${VAR}` e literal,
  * sse, e casos de erro). As ferramentas testadas ficam em mcp-tools.json; `psem` não tem teste.
@@ -88,11 +102,12 @@ async function setup() {
     }),
   );
   // O .mcp.json do projeto só entra aprovado no Claude Code (ver approvalOf): aqui, aprovado por inteiro (os casos sem aprovação criam outro arquivo).
-  await fs.writeFile(claude, JSON.stringify({ projects: { [proj]: { enableAllProjectMcpServers: true } } }));
+  // A Global: o que o Club grava no ~/.claude.json para os MCPs da biblioteca (a entrada que chama o lançador com o nome do servidor).
+  await fs.writeFile(claude, JSON.stringify({ mcpServers: libraryPointers(club, vaultDir), projects: { [proj]: { enableAllProjectMcpServers: true } } }));
   await setSecret(clubSecretId('lfs', 'env', 'FS_TOKEN'), VALOR_LIB, vault);
   await setSecret(clubSecretId('lweb', 'header', 'Authorization'), HDR_LIB, vault);
   // Testes das ferramentas: a impressão tem de bater com o que a biblioteca e o projeto declaram agora.
-  await saveTestedTools(toolsFile, toolsKey('club', proj, 'lweb'), mcpFingerprint({ type: 'http', url: 'https://mcp.exemplo.com/mcp' }), ALL_READ);
+  await saveTestedTools(toolsFile, toolsKey('global', proj, 'lweb'), mcpFingerprint({ type: 'http', url: 'https://mcp.exemplo.com/mcp' }), ALL_READ);
   await saveTestedTools(toolsFile, toolsKey('project', proj, 'pstdio'), mcpFingerprint(PSTDIO_CFG), ALL_READ);
   await saveTestedTools(toolsFile, toolsKey('project', proj, 'phttp'), mcpFingerprint(PHTTP_CFG), ALL_READ);
   return { dir, proj, club, claude, vault, vaultDir, toolsFile, snapshotFile, script, out };
@@ -179,7 +194,10 @@ describe('codexMcpServers: a biblioteca entra pelo lançador, sem valor', () => 
     await fs.mkdir(pct, { recursive: true });
     const club = path.join(pct, 'mcps.json');
     await fs.copyFile(env.club, club);
-    const r = await codexMcpServers(env.proj, ['lfs', 'lweb'], env.claude, {
+    // As entradas do ~/.claude.json apontam para a biblioteca nesse caminho (o Club mudou de pasta depois de gravá-las).
+    const claude = path.join(env.dir, 'pct.json');
+    await fs.writeFile(claude, JSON.stringify({ mcpServers: libraryPointers(club, env.vaultDir) }));
+    const r = await codexMcpServers(env.proj, ['lfs', 'lweb'], claude, {
       snapshotFile: env.snapshotFile,
       launcher: LAUNCH,
       clubFile: club,
@@ -315,15 +333,35 @@ describe('codexMcpServers: o projeto e o arquivo de lançamento', () => {
     expect(r).toEqual({ servers: [], asked: [], out: [], snapshotFile: null });
   });
 
-  it('sem lista da ficha (null): entra o do projeto, mas não a biblioteca', async () => {
+  it('sem lista da ficha (null): entram todos, os da Global (inclusive os do Club, pelo lançador) e os do Projeto', async () => {
     const env = await setup();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const r = await run(env, null);
     warn.mockRestore();
     const names = r.servers.map((s) => s.name);
-    expect(names).toEqual(expect.arrayContaining(['pstdio', 'phttp']));
-    expect(names).not.toContain('lfs');
-    expect(names).not.toContain('lweb');
+    expect(names).toEqual(expect.arrayContaining(['lfs', 'lweb', 'pstdio', 'phttp']));
+    expect(r.servers.find((s) => s.name === 'lfs')).toEqual({ name: 'lfs', command: LAUNCH.command, args: [...LAUNCH.args, '--server', 'lfs', '--club', env.club, '--vault', env.vaultDir] });
+    expect(r.out).toEqual(expect.arrayContaining([{ name: 'lsse', motivo: 'sse' }]));
+  });
+
+  it('por ref: global:<n> e project:<n> chegam ao Codex; o mesmo nome nos dois, só o do Projeto; ref que não existe, em silêncio', async () => {
+    const env = await setup();
+    // `dup` na Global (comum, valores no arquivo) e no Projeto: duas refs, um servidor por nome.
+    const claude = path.join(env.dir, 'dup.json');
+    await fs.writeFile(claude, JSON.stringify({ mcpServers: { ...libraryPointers(env.club, env.vaultDir), dup: { type: 'stdio', command: 'node', args: ['g.js'] } }, projects: { [env.proj]: { enableAllProjectMcpServers: true } } }));
+    const mcp = JSON.parse(await fs.readFile(path.join(env.proj, '.mcp.json'), 'utf8')) as { mcpServers: Record<string, unknown> };
+    mcp.mcpServers.dup = { type: 'stdio', command: 'node', args: ['p.js'] };
+    await fs.writeFile(path.join(env.proj, '.mcp.json'), JSON.stringify(mcp));
+
+    const r = await run(env, ['global:lfs', 'project:pstdio', 'global:dup', 'project:nao-existe', 'global:nao-existe'], undefined, LAUNCH, claude);
+    expect(r.servers.map((s) => s.name)).toEqual(['lfs', 'pstdio', 'dup']);
+    expect(r.out).toEqual([]);
+    const snap = JSON.parse(await fs.readFile(env.snapshotFile, 'utf8')) as { servers: Record<string, { args: string[] }> };
+    expect(snap.servers.dup!.args).toEqual(['g.js']);
+    const ambas = await run(env, ['global:dup', 'project:dup'], undefined, LAUNCH, claude);
+    const snap2 = JSON.parse(await fs.readFile(env.snapshotFile, 'utf8')) as { servers: Record<string, { args: string[] }> };
+    expect(ambas.servers.map((s) => s.name)).toEqual(['dup']);
+    expect(snap2.servers.dup!.args).toEqual(['p.js']);
   });
 
   it('o MCP do projeto que pede ${VAR} sem o valor no ambiente: fora como variavel', async () => {

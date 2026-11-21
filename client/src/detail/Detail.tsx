@@ -21,12 +21,14 @@ import { alertError, api, ApiError, isPairingError, type GithubSkillStatus, type
 import { RoomColorPicker } from '../board/colors';
 import { portraitUrl } from '../board/nodes';
 import { idleUnseen, showsStatus, useSeeIdle, useSeenIdle } from '../board/unread';
+import { pendingOf } from '../inbox/resolved';
 import type { MoreTab } from '../chat/ChatView';
 import type { ChatFocus } from '../chat/chatFocus';
 import { MoreTabs } from '../chat/MoreTabs';
 import { agentBrief, presetDrift, roleTag } from '../staff/agentRoles';
 import { BrowserCheck } from '../staff/BrowserCheck';
 import type { StaffFormTab } from '../staff/HireForm';
+import { TeamTemplateApply } from '../staff/TeamTemplatePicker';
 import { ModelObsoleteNote } from '../staff/ModelObsoleteNote';
 import { StaffHistory } from '../staff/StaffHistory';
 import { TeamFile } from '../staff/TeamFile';
@@ -34,6 +36,7 @@ import { MAX_INPUT_BYTES, PROJECT_IMAGE_MAX, shrinkImage } from '../lib/shrinkIm
 import { Attachments } from './Attachments';
 import { type ArchivedConversations, isConversationArchived, splitArchived } from './conversationArchive';
 import { type ConversationTitles, conversationTitle, manualTitle, titleToSave } from './conversationTitle';
+import { ConsultSection } from '../consult/ConsultSection';
 import { ProjectGuide } from './ProjectGuide';
 import { ProjectName } from './ProjectName';
 import { Routines } from './Routines';
@@ -44,9 +47,11 @@ import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatPercent,
 import { isLoss, RANKING_PERIODS, type RankingGroup, type RankingRow, rankingRows, savingsList, teamSavings } from '../ranking';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
-import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, PowerIcon, TasksIcon, UserPlusIcon } from '../icons';
+import { ArchiveIcon, ArchiveRestoreIcon, ClockIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, PowerIcon, TasksIcon, UserPlusIcon } from '../icons';
 import { PausedTag, PauseButton } from '../tasks/ProjectPauseBar';
+import { OpenTerminalButton } from './OpenTerminalButton';
 import { closeConversation, runClose } from '../chat/closeConversation';
+import { clearFreshDraft } from '../chat/draftStore';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
 import { GithubInstall } from '../skills/GithubInstall';
 import { GithubBadges, GithubOrigin } from '../skills/GithubOrigin';
@@ -239,6 +244,8 @@ export function EmployeePanel(props: {
     const l = id !== current ? props.live?.find((x) => x.sessionId === id) : undefined;
     return !!l && idleUnseen(seen, l);
   };
+  // Conversas com pergunta ou ação da caixa esperando: o select as destaca (a aberta também, para o "⚠" não sumir ao escolher).
+  const needsYou = new Set(pendingOf(props.inbox ?? []).map((i) => i.sessionId).filter(Boolean));
   // Sem ficha, a lista é a própria conversa: dá para abrir uma nova (a pesada fica no quadro) e voltar a ela.
   const listed = props.conversations?.length
     ? props.conversations
@@ -273,6 +280,7 @@ export function EmployeePanel(props: {
   const [convBusy, setConvBusy] = useState(false);
   // Uma conversa nova, sem sessão ainda: o chat abre vazio.
   const startFresh = () => {
+    if (project) clearFreshDraft(project.id, staff?.id ?? null); // o texto da nova conversa abandonada não passa para esta
     setFresh(true);
     setFreshId(null);
     setFreshN((n) => n + 1);
@@ -476,7 +484,7 @@ export function EmployeePanel(props: {
             {byDay(inArchive ? archivedList : active).map((g) => (
               <optgroup key={g.label} label={g.label}>
                 {g.items.map(({ c }) => {
-                  const o = conversationOption(c, !!liveOf(c.id)?.alive, unread(c.id));
+                  const o = conversationOption(c, !!liveOf(c.id)?.alive, unread(c.id), needsYou.has(c.id));
                   return (
                     <option key={c.id} value={c.id} className={o.className}>
                       {o.label}
@@ -755,7 +763,7 @@ export function EmployeePanel(props: {
         moreTabs={tabs}
         focus={props.focus}
         onFocusDone={props.onFocusDone}
-        awaiting={!!opened && !!props.inbox?.some((i) => i.sessionId === opened)}
+        awaiting={!!opened && !!props.inbox && pendingOf(props.inbox).some((i) => i.sessionId === opened)}
         inbox={props.inbox}
         onDismissAlert={props.onDismissAlert}
         onInboxChanged={props.onInboxChanged}
@@ -787,12 +795,12 @@ function conversationLabel(c: { title: string | null; updatedAt: string | null }
 /**
  * A linha da conversa no seletor. Ativa (processo aberto): "· ativa" no fim, que vale em todo navegador (o celular
  * ignora a cor da opção). Inativa: classe `is-idle`, que o CSS põe em `--muted`; escolher uma inativa a reabre quando você manda mensagem.
- * "● " = ativa e parada que você ainda não viu.
+ * "● " = ativa e parada que você ainda não viu. "⚠ " + `is-needs` (amarelo) = pergunta ou ação da caixa esperando você.
  */
-export function conversationOption(c: { title: string | null; updatedAt: string | null }, alive: boolean, unread: boolean): { label: string; className: string } {
+export function conversationOption(c: { title: string | null; updatedAt: string | null }, alive: boolean, unread: boolean, needs = false): { label: string; className: string } {
   return {
-    label: `${unread ? '● ' : ''}${conversationLabel(c)}${alive ? ` · ${t('detail.convActive')}` : ''}`,
-    className: alive ? 'is-active' : 'is-idle',
+    label: `${needs ? '⚠ ' : unread ? '● ' : ''}${conversationLabel(c)}${alive ? ` · ${t('detail.convActive')}` : ''}`,
+    className: `${alive ? 'is-active' : 'is-idle'}${needs ? ' is-needs' : ''}`,
   };
 }
 
@@ -907,6 +915,7 @@ export function ProjectPanel({
   onEditAgent,
   onSkillsChanged,
   onTasks,
+  onSchedules,
   onTogglePause,
   onFiles,
   onOpenFile,
@@ -929,6 +938,8 @@ export function ProjectPanel({
   onEditAgent?: (name: string) => void;
   /** Abre o quadro de tarefas do projeto. */
   onTasks?: () => void;
+  /** Abre os agendamentos (despertadores e rotinas) do projeto. */
+  onSchedules?: () => void;
   /** Pausa o projeto (ou o retoma, se `tasks.paused`): o App pergunta ao pausar e relê o resumo. */
   onTogglePause?: () => void;
   /** Abre os arquivos do projeto (árvore + editor). */
@@ -965,10 +976,13 @@ export function ProjectPanel({
   const [error, setError] = useState<string | null>(null);
   // A aba fica ao trocar de projeto (o painel não remonta), como a do ⋯ do funcionário.
   const [tab, setTab] = useState<ProjectTab>('project');
+  // Aviso do modelo de equipe (409: já havia equipe): vive aqui porque a chamada some quando a equipe é relida.
+  const [teamNotice, setTeamNotice] = useState<string | null>(null);
 
   useEffect(() => {
     setDetail(null);
     setError(null);
+    setTeamNotice(null);
     api.project(id).then(setDetail, (e: Error) => setError(e.message));
   }, [id]);
 
@@ -1013,11 +1027,17 @@ export function ProjectPanel({
               <TasksIcon size={16} />
             </button>
           )}
+          {project.exists && onSchedules && (
+            <button className="btn-secondary btn-icon" onClick={onSchedules} aria-label={t('schedules.open')} title={t('schedules.openTitle')}>
+              <ClockIcon size={16} />
+            </button>
+          )}
           {project.exists && onFiles && (
             <button className="btn-secondary btn-icon" onClick={onFiles} aria-label={t('files.open')} title={t('files.openTitle')}>
               <FolderIcon size={16} />
             </button>
           )}
+          {project.exists && <OpenTerminalButton projectId={project.id} />}
           {project.exists && onTogglePause && <PauseButton paused={!!tasks?.paused} iconOnly onClick={onTogglePause} />}
           <ArchiveButton archived={archived} onArchive={onArchive} what={t('detail.whatProjectAndStaff')} iconOnly confirm />
         </p>
@@ -1056,12 +1076,27 @@ export function ProjectPanel({
               />
             )}
             {project.exists && !project.worktreeOf && office}
+            {project.exists && !project.worktreeOf && <ConsultSection projectId={project.id} projectName={project.name} team={team.map((r) => ({ id: r.staff.id, name: r.staff.name }))} />}
             {project.exists && <Attachments projectId={project.id} />}
           </>
         )}
         {tab === 'team' && (
           <>
             <TeamList rows={team} totalUsd={totalUsd} onOpen={onOpenStaff} />
+            {project.exists && !project.worktreeOf && team.length === 0 && (
+              <TeamTemplateApply
+                projectId={project.id}
+                onApplied={(notice) => {
+                  setTeamNotice(notice ?? null);
+                  onTeamImported?.();
+                }}
+              />
+            )}
+            {team.length > 0 && teamNotice && (
+              <p className="error small" role="alert">
+                {teamNotice}
+              </p>
+            )}
             <SessionList
               sessions={sessions.filter((s) => !owned.has(s.id) && !hiddenSessions?.has(s.id))}
               costs={cost?.sessions ?? {}}

@@ -297,7 +297,8 @@ export async function handleExtension(req: http.IncomingMessage, res: http.Serve
     if (req.method === 'GET') {
       const wait = limits.get.take(key);
       if (wait) return limited(res, wait);
-      if (pathname === '/api/ext/v1/inbox') return json(res, 200, { items: (await deps.inbox()).map(projectItem) });
+      // Aviso resolvido (`resolvedAt`) não é pendência: fica fora, senão o número no ícone da extensão o contaria.
+      if (pathname === '/api/ext/v1/inbox') return json(res, 200, { items: (await deps.inbox()).filter((i) => !i.resolvedAt).map(projectItem) });
       if (pathname === '/api/ext/v1/projects') return json(res, 200, { projects: await deps.projects() });
     }
     if (req.method === 'POST' && pathname === '/api/ext/v1/tasks') return await createFromExtension(req, res, deps, limits, key);

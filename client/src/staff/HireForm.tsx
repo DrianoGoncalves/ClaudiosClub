@@ -18,7 +18,7 @@ import {
 import { api, withUsageConfirm, type DirectoryPerson } from '../api';
 import { portraitUrl } from '../board/nodes';
 import { effortLabel, employeeName, folderName } from '../format';
-import { t, type MsgKey } from '../i18n';
+import { t } from '../i18n';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
 import { ProtocolBadge } from '../office/ProtocolBadge';
 import { rosterRows } from './agentRoles';
@@ -44,6 +44,7 @@ import { WeightFlags, type WeightCtx } from './WeightFlag';
 import { PersonMemory } from './PersonMemory';
 import { PERSONALITY_TEXT, personalityToSend } from './personalityField';
 import { goneSkills, skillIsGone } from './skillGone';
+import { MCP_SCOPE_LABEL, mcpsToSave, normalizeMcps, toggleMcp } from './mcpRefs';
 import { normalizeSkills, parseSkillRef, skillCatalog, SKILL_SCOPE_LABEL, templateSkills } from './skillRefs';
 import { PERSONALITIES, type Personality } from '../../../shared/personality';
 import type { RoleEntry } from '../../../shared/roles';
@@ -116,8 +117,6 @@ const TABS: Array<{ id: Tab; label: string; intro: string }> = [
   { id: 'project', label: t('detail.tabProject'), intro: t('staff.tabProjectIntro') },
 ];
 
-/** De onde vem o MCP, na lista da ficha. */
-const MCP_SOURCE_LABEL = { club: 'staff.sourceClub', user: 'staff.sourceUser', local: 'staff.sourceLocal', project: 'staff.sourceProject' } as const satisfies Record<McpServerInfo['source'], MsgKey>;
 
 export function StaffForm({ board, projectId, mode, simple = false, embedded = false, tab: tabProp, onTab, onDirty, codexReview = false, codexBrowser = false, initial, onClose, onHired, onSaved }: Props) {
   const editing = mode.kind === 'edit' ? mode.profile : null;
@@ -238,7 +237,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       (list) => {
         setMcps(list);
         // Editando: ficha sem restrição (null) = todos marcados. Contratando (ou adotando): nenhum marcado.
-        setMcpOn(new Set(editing ? (editing.mcps ?? list.map((m) => m.name)) : []));
+        setMcpOn(new Set(editing ? (editing.mcps ? normalizeMcps(editing.mcps, list) : list.map((m) => m.ref)) : []));
       },
       () => setMcps([]),
     );
@@ -321,7 +320,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   };
 
   // Lista vazia ou que não carregou não conta como "todos marcados" (senão gravaria null).
-  const allMcps = mcps !== null && mcps.length > 0 && mcps.every((m) => mcpOn.has(m.name));
+  const allMcps = mcps !== null && mcps.length > 0 && mcps.every((m) => mcpOn.has(m.ref));
 
   /** Escolher um roteiro marca os agents que ele usa e o projeto já tem; os que faltam o Claudio’s Club cria ao abrir a conversa (a lista "Quem ajuda"). */
   const pickPlaybook = (value: '' | Playbook) => {
@@ -346,7 +345,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     // Ficha que estava salva no Codex (sai sem navegador e sem MCPs) voltando ao Claude: recomeça com o padrão dele, tudo ligado.
     if (next === 'claude' && editing?.engine === 'codex') {
       setBrowser(true);
-      setMcpOn(new Set((mcps ?? []).map((m) => m.name)));
+      setMcpOn(new Set((mcps ?? []).map((m) => m.ref)));
     }
   };
 
@@ -381,13 +380,13 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       firstTask: editing?.firstTask ?? '',
       reportsTo: managers,
       autonomy,
-      // O Codex não usa agents, skills nem MCPs: a ficha dele sai sem isso (o quadro não mostra o que ele não tem). O Chrome vale, se ligado nas configurações.
+      // O Codex não usa agents nem skills: a ficha dele sai sem isso (o quadro não mostra o que ele não tem). MCPs valem nos dois motores, pelo arquivo de lançamento da conversa (abaixo). O Chrome vale, se ligado nas configurações.
       agents: codex ? [] : agents,
       skills: codex ? [] : skills,
       // Todos marcados = não restringir (a sessão também recebe os conectores da conta). No simples,
       // nenhum: a sessão abre mais leve e rápida; quem precisa liga no avançado. Sem lista (vazia ou
       // falhou), editando mantém o que a ficha tinha; contratando, nenhum.
-      mcps: codex || simpleHire ? [] : !mcps?.length ? (editing ? editing.mcps : []) : allMcps ? null : [...mcpOn],
+      mcps: simpleHire ? [] : !mcps?.length ? (editing ? editing.mcps : []) : mcpsToSave(mcps, mcpOn),
       // Só vai se mudou (ausente mantém o salvo; `{}` limpa).
       ...accessToSend(mcpAccess, editing?.mcpAccess),
       knowledge: lines(knowledge),
@@ -821,7 +820,10 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             {gone.some((ref) => skillIsGone(ref, skillSet)) && <p className="muted small">{t('staff.skillGoneHint')}</p>}
           </fieldset>
         )}
+          </>
+        )}
 
+        {/* Os MCPs valem nos dois motores (o Codex recebe os da ficha pelo arquivo de lançamento da conversa). */}
         <fieldset>
           <legend>MCPs</legend>
           {mcps === null && <p className="muted small">{t('staff.loading')}</p>}
@@ -830,25 +832,22 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             <>
               <div className="checks">
                 {mcps.map((m) => {
-                  const on = mcpOn.has(m.name);
+                  const on = mcpOn.has(m.ref);
                   const level = accessOf(mcpAccess, m.name);
                   return (
-                    <div key={m.name} className={on ? 'check-server has-write' : 'check-server'}>
+                    <div key={m.ref} className={on ? 'check-server has-write' : 'check-server'}>
                       <div className="mcp-row">
                         <label className="check">
                           <input
                             type="checkbox"
                             checked={on}
                             onChange={() => {
-                              const next = new Set(mcpOn);
-                              if (next.has(m.name)) next.delete(m.name);
-                              else next.add(m.name);
-                              setMcpOn(next);
+                              setMcpOn(toggleMcp(mcpOn, m.ref));
                             }}
                           />
                           <span>
                             {m.name}
-                            <span className="muted small"> {t(MCP_SOURCE_LABEL[m.source])} · {t('staff.mcpWeightShort')}</span>
+                            <span className="muted small"> {t(MCP_SCOPE_LABEL[m.scope])}{m.outOfGit && ` · ${t('mcp.outOfGit')}`} ·{t('staff.mcpWeightShort')}</span>
                           </span>
                         </label>
                         {on && hasAccessKey(m.name) && (
@@ -866,14 +865,12 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                 })}
               </div>
               <p className="muted small">{allMcps ? t('staff.mcpAllOn') : t('staff.mcpSomeOff')}</p>
-              {mcps.some((m) => mcpOn.has(m.name)) && <p className="muted small">{t('staff.mcpAccessIntro')}</p>}
+              {mcps.some((m) => mcpOn.has(m.ref)) && <p className="muted small">{t('staff.mcpAccessIntro')}</p>}
             </>
           )}
           {/* O peso por conversa aberta: o do Claude (a base) e o que o Club mesmo põe; o MCP não medido fica sem número. */}
           <WeightFlags ctx={weightCtx} ids={['claude', 'gpt', 'mcps']} />
         </fieldset>
-          </>
-        )}
 
         {/* Servidores valem nos dois motores: o Codex usa só as conexões SSH (pelo MCP myco-ssh); FTP não funciona nele. */}
         {showServers ? (

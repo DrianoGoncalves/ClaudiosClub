@@ -21,7 +21,7 @@ const home = await vi.hoisted(async () => {
 const ALLOWED = ['ref', 'name', 'role', 'mission', 'rules', 'doneWhen', 'autonomy', 'engine', 'model', 'effort', 'personality', 'playbook', 'worktree', 'agents', 'skills', 'mcps', 'mcpAccess', 'reportsTo', 'routines'];
 const SKILL_MD = '---\nname: revisar-a11y\ndescription: Use para revisar acessibilidade\n---\n\n1. Contraste\n2. Foco\n';
 const MARCA = 'marca-interna-9x7';
-const KEY = 'sk-ant-api03-q8Zr2LpX9vBn4TkW7mYc5sHd1FgJ';
+const KEY = 'sk-ant-api03-q8Zr2LpX9vBn4TkW7mYc5sHd1FgJ'; //teste
 
 let root: string;
 let origin: string;
@@ -160,7 +160,8 @@ describe('equipe em arquivo (exportar e importar)', () => {
       agents: ['Explore'],
       // Nome antigo no arquivo: vira ref Global ao importar (a skill vem no arquivo).
       skills: ['global:revisar-a11y'],
-      mcps: ['docs'],
+      // Nome antigo do MCP no arquivo: vira ref pelo que existe no destino (`docs` está no .mcp.json dele); o que não existe sai.
+      mcps: ['project:docs'],
       // A política de MCP vai e volta igual: sem ela a ficha importada ficaria mais permissiva.
       mcpAccess: { docs: 'ask', github: 'off' },
       model: 'opus',
@@ -181,7 +182,7 @@ describe('equipe em arquivo (exportar e importar)', () => {
     expect(ana2.routines).toEqual([{ id: 'diaria', name: 'Diária', schedule: '0 9 * * *', message: 'Bom dia', mode: 'continue', enabled: false }]);
     expect(await fs.readFile(path.join(GLOBAL, 'revisar-a11y', 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
     expect(await fs.readFile(path.join(GLOBAL, 'revisar-a11y', 'scripts', 'checar.sh'), 'utf8')).toBe('echo ok\n');
-    expect(res!.warnings.some((w) => w.includes('MCP sumido'))).toBe(true);
+    expect(res!.warnings.some((w) => w.includes('MCP global:sumido'))).toBe(true);
     expect(res!.warnings.some((w) => w.includes('desligadas'))).toBe(true);
   });
 
@@ -191,9 +192,21 @@ describe('equipe em arquivo (exportar e importar)', () => {
 
     const handmade = structuredClone(onlyAna) as TeamFile;
     handmade.staff[0]!.reportsTo = ['p9'];
-    const plan = await planTeamImport(handmade, { localMcps: ['docs'], globalDir: GLOBAL });
+    const plan = await planTeamImport(handmade, { localMcps: ['project:docs'], globalDir: GLOBAL });
     expect(plan.staff[0]!.reportsTo).toEqual([]);
     expect(plan.warnings.some((w) => w.includes('gestor que não veio'))).toBe(true);
+  });
+
+  it('MCPs na importação: a ref vale pelo que existe aqui, o nome antigo vira ref (Projeto se existe lá, senão Global) e null (todos) segue', async () => {
+    const onlyAna = await service().exportTeam('orig', anaId);
+    const h = structuredClone(onlyAna) as TeamFile;
+    h.staff[0]!.mcps = ['docs', 'global:n8n', 'project:docs', 'project:fora', 'fora2'];
+    const plan = await planTeamImport(h, { localMcps: ['project:docs', 'global:n8n'], globalDir: GLOBAL });
+    // `docs` (antigo) e `project:docs` são o mesmo: um só. O que não existe aqui sai, com aviso por ref.
+    expect(plan.staff[0]!.input.mcps).toEqual(['project:docs', 'global:n8n']);
+    expect(plan.warnings.filter((w) => w.includes('não existe neste projeto')).map((w) => w.replace(/^.*MCP (\S+) .*$/, '$1'))).toEqual(['project:fora', 'global:fora2']);
+    h.staff[0]!.mcps = null;
+    expect((await planTeamImport(h, { localMcps: [], globalDir: GLOBAL })).staff[0]!.input.mcps).toBeNull();
   });
 
   it('tudo ou nada: um arquivo com problema não cria ficha nem skill', async () => {

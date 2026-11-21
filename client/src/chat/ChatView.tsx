@@ -26,6 +26,7 @@ import { useChatDetail } from './chatDetail';
 import { type ChatFocus, findQuoteItem } from './chatFocus';
 import { renderWindow, WINDOW_STEP } from './chatWindow';
 import { type DenialAction, DenialNotice } from './DenialNotice';
+import { draftKey, loadDraft, saveDraft } from './draftStore';
 import { createHeldDiscarder } from './heldDiscard';
 import { HeldDiscardButton } from './HeldDiscardButton';
 import { FollowUpNotice } from './FollowUpNotice';
@@ -40,6 +41,7 @@ import { RetryNoticeBox } from './RetryNoticeBox';
 import { useChatFocus } from './useChatFocus';
 import { useOpenAt } from './useOpenAt';
 import { Markdown, OpenFileContext, type OpenFileApi, looksLikeMarkdown, useCopy } from './markdown';
+import { consultMessageOf } from '../consult/consultView';
 import { systemMessageText } from './systemMessage';
 import { ToolInput } from './ToolInput';
 import { clockHM, secondsLeft } from './wakeCountdown';
@@ -134,7 +136,10 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
   useEffect(() => {
     if (chat.sessionId && chat.sessionId !== sessionId) onSessionStarted?.(chat.sessionId);
   }, [chat.sessionId, sessionId, onSessionStarted]);
-  const [draft, setDraft] = useState('');
+  // O que ficou digitado sem enviar volta ao reabrir a conversa (some ao enviar e ao fechar a aba; ver draftStore.ts).
+  const draftId = draftKey(projectId, staffId, chat.sessionId ?? sessionId);
+  const [draft, setDraft] = useState(() => loadDraft(draftKey(projectId, staffId, sessionId)));
+  useEffect(() => saveDraft(draftId, draft), [draftId, draft]);
   const [showTools] = useChatDetail();
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -535,7 +540,7 @@ export function ChatView({ projectId, sessionId, staffId, name, autonomy, disabl
               task={taskIn(fuTasks.byProject, item.projectId, item.followUp!.taskId)}
               team={team}
               now={Date.now()}
-              loading={!fuTasks.settled.has(item.projectId)}
+              loading={!fuTasks.byProject.has(item.projectId)}
               onChanged={async () => {
                 await onInboxChanged!();
                 await fuTasks.reload();
@@ -912,13 +917,23 @@ function Item({
     case 'user': {
       // Aviso automático da plataforma (entrega de tarefa, contexto…): à esquerda, neutro, com badge.
       const system = systemMessageText(item.text);
+      // Consulta de outro projeto (pergunta, resposta ou aviso): o selo diz quem e de qual projeto, e que não é ordem do dono.
+      const consult = system !== null ? consultMessageOf(system) : null;
       // Colega que delegou: no tom do funcionário (escuro), mas à direita, como quem fala com ele.
       const kind = system !== null ? 'msg-system' : item.fromStaff ? 'msg-staff' : 'msg-user';
       return (
         <div className={`msg ${kind}`} data-item-id={item.id}>
-          {system !== null && (
+          {system !== null && !consult && (
             <span className="badge dim msg-system-badge" title={t('chat.systemMessageHelp')}>
               {t('chat.systemMessage')}
+            </span>
+          )}
+          {consult && (
+            <span className="badge msg-system-badge msg-consult-badge" title={t('consult.badgeHelp')}>
+              {t(consult.kind === 'answer' ? 'consult.badgeAnswer' : consult.kind === 'question' ? 'consult.badgeQuestion' : 'consult.badgeNotice', {
+                name: consult.name,
+                project: consult.project,
+              })}
             </span>
           )}
           {onRewind && item.uuid && !item.held && (

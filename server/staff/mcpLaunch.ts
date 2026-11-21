@@ -91,6 +91,39 @@ export function quotedCommand(parts: string[]): string | null {
   return parts.map((p) => `"${p}"`).join(' ');
 }
 
+/** Uma entrada de MCP que chama o lançador (o que o Claudio’s Club grava no ~/.claude.json): o servidor e onde o lançador acha o resto. */
+export interface LauncherRef {
+  /** O `--server`: o nome do MCP na biblioteca. */
+  server: string;
+  club?: string;
+  vault?: string;
+  /** `headersHelper` (http e sse com cabeçalho); falso = stdio. */
+  headers: boolean;
+  /** O arquivo do lançador que a entrada roda (para saber se ele ainda existe). */
+  launcher: string;
+}
+
+const LAUNCH_FILE = /(?:^|[\\/])mcp-launch\.(?:mjs|ts)$/;
+
+/**
+ * Reconhece uma entrada do mcpServers que sobe pelo lançador da biblioteca (`mcp-launch.mjs` ou `.ts`, com `--server <nome>`): stdio pelo
+ * `args`, http e sse pelo `headersHelper` (as partes vêm entre aspas, ver `quotedCommand`). Entrada do Codex (`--snapshot`) e qualquer outra
+ * não é reconhecida (null). Única fonte do que é "entrada do Club" na migração, no rollback, na lista e na impressão do teste.
+ */
+export function parseLauncherEntry(entry: Record<string, unknown>): LauncherRef | null {
+  const helper = typeof entry.headersHelper === 'string' ? entry.headersHelper : null;
+  let argv: string[] | null = null;
+  if (helper !== null) argv = [...helper.matchAll(/"([^"]*)"/g)].map((m) => m[1]!);
+  else if (typeof entry.command === 'string' && Array.isArray(entry.args) && entry.args.every((a) => typeof a === 'string')) argv = entry.args as string[];
+  if (!argv) return null;
+  const i = argv.findIndex((a) => LAUNCH_FILE.test(a));
+  if (i < 0) return null;
+  const rest = argv.slice(i + 1);
+  const server = argOf(rest, '--server');
+  if (!server || !NAME.test(server) || rest.includes('--snapshot')) return null;
+  return { server, club: argOf(rest, '--club'), vault: argOf(rest, '--vault'), headers: rest.includes('--headers'), launcher: argv[i]! };
+}
+
 export interface LaunchArgs {
   headers: boolean;
   server?: string;

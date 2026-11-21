@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import type { Project } from '../shared/model';
+import { teamTemplateById } from '../shared/teamTemplates';
 import { isInside } from './adapters/claude/paths';
 
 // "Novo projeto": cria uma pasta (com git, se quiser) ou abre uma que já existe. O Claudio’s Club só lista o
@@ -16,6 +17,12 @@ export class ProjectError extends Error {}
 const FOLDER = /^[A-Za-z0-9][\w .-]{0,79}$/;
 const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 const workspace = z.string().max(40).nullable().default(null);
+// Modelo de equipe aplicado junto (shared/teamTemplates.ts); id fora da lista recusa antes de criar a pasta.
+const templateId = z
+  .string()
+  .max(40)
+  .refine((id) => teamTemplateById(id) !== undefined, 'modelo de equipe desconhecido')
+  .optional();
 const absolute = (what: string) => z.string().trim().min(1, `informe ${what}`).max(400).refine((p) => path.isAbsolute(p), `${what}: use o caminho completo`);
 
 export const NewProjectInput = z.discriminatedUnion('mode', [
@@ -29,8 +36,9 @@ export const NewProjectInput = z.discriminatedUnion('mode', [
       .refine((n) => !RESERVED.test(n) && !/[. ]$/.test(n), 'esse nome de pasta não funciona no Windows'),
     git: z.boolean().default(true),
     workspaceId: workspace,
+    templateId,
   }),
-  z.object({ mode: z.literal('existing'), path: absolute('a pasta do projeto'), workspaceId: workspace }),
+  z.object({ mode: z.literal('existing'), path: absolute('a pasta do projeto'), workspaceId: workspace, templateId }),
 ]);
 export type NewProject = z.infer<typeof NewProjectInput>;
 

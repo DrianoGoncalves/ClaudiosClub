@@ -97,6 +97,16 @@ describe('bloco do detalhe', () => {
     expect(sending.match(/disabled=""/g)).toHaveLength(2);
   });
 
+  it('mensagem guardada: aviso neutro (role status, sem a classe de erro), não um alerta; sem a nota, nada', () => {
+    const held = giveBackHeldNote({ held: 'Beto está em “Exportar CSV”' })!;
+    const out = html(createElement(NoCodeBlock, { task: marked(), nameOf, note: held, onCancel: noop, onGiveBack: noop }));
+    expect(out).toContain('role="status"');
+    expect(out).toContain('A mensagem ficou guardada');
+    expect(out).not.toContain('role="alert"');
+    expect(out).not.toContain('class="error');
+    expect(block(marked())).not.toContain('task-nocode-note');
+  });
+
   it('com o gestor: diz quem decide e não oferece as saídas (ele decide pela conversa dele)', () => {
     const out = block(marked({ to: 'manager' }));
     expect(out).toContain('Espera Ana, que pediu o card');

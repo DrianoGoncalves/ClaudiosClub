@@ -16,6 +16,7 @@ import { taskIn, useProjectTasks } from '../tasks/useProjectTasks';
 import { isInsideDialog } from '../lib/dialogStore';
 import { isLocalPage } from '../office/folderPick';
 import { sandboxOf } from './codexSandbox';
+import { CARD_TONE, INBOX_TONE, cardTone, toneClass } from './alertTone';
 import { deniedAction } from './deniedAlert';
 import { inboxText, inboxWho } from './inboxText';
 import { ReviewShortcutForm } from './ReviewShortcut';
@@ -23,6 +24,7 @@ import { reviewShortcutOf } from './delegateReview';
 import { SandboxFix } from './SandboxFix';
 import { secretVerdictOf } from './secretVerdict';
 import { alertAction, stuckNoCodeOf, stuckOf, type InboxOpen } from './taskAlerts';
+import { isResolved, pendingOf } from './resolved';
 import type { InboxView } from './useInbox';
 
 // Botão "precisa de mim" no topo do quadro, com o contador, e a lista que abre embaixo dele.
@@ -72,7 +74,12 @@ export function InboxMenu({
   onOpen,
   onOpenFile,
   onOpenSheet,
+  initialOpen = false,
+  initialTasks,
 }: {
+  /** Só teste: a renderização sem efeitos não clica no botão nem lê o quadro, então o menu já nasce aberto e com as tarefas lidas. */
+  initialOpen?: boolean;
+  initialTasks?: ReadonlyMap<string, Task[]>;
   inbox: InboxView;
   /** Título da conversa por sessionId (manual, gerado ou assunto); sem título conhecido, o item não mostra a linha. */
   titleOf: ReadonlyMap<string, string>;
@@ -84,10 +91,11 @@ export function InboxMenu({
   /** Abre a ficha de quem foi barrado (atalho do aviso de ação barrada); sem ele, o atalho que leva à ficha não aparece. */
   onOpenSheet?: (item: InboxItem) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initialOpen);
   const [now, setNow] = useState(() => Date.now());
   const root = useRef<HTMLDivElement>(null);
-  const count = inbox.items.length;
+  // Só o que espera o dono entra no número; o erro já resolvido fica na lista, com selo, até ser ignorado.
+  const count = pendingOf(inbox.items).length;
   /** O item com uma ação de tarefa em andamento e o último erro dela (a tarefa pode ter mudado entre a leitura e o clique). */
   const [busy, setBusy] = useState<string | null>(null);
   const [failed, setFailed] = useState<{ id: string; message: string } | null>(null);
@@ -97,6 +105,8 @@ export function InboxMenu({
   const [followUpDone, setFollowUpDone] = useState<string | null>(null);
   /** O item de segredo cujo "corrigir" está abrindo o arquivo, e o que o último clique deu (a frase fica no item até fechar o menu). */
   const [fixing, setFixing] = useState<string | null>(null);
+  /** O card sem código cujo "Devolver" deixou a mensagem guardada (nada falhou): aviso neutro no item, até fechar o menu ou novo clique. */
+  const [heldNote, setHeldNote] = useState<{ id: string; text: string } | null>(null);
   const [fixNote, setFixNote] = useState<({ id: string } & FixNote) | null>(null);
   /** Cancelar um cartão esquecido ou sem código: o mesmo diálogo do quadro (motivo e o que fazer com quem espera), nunca um clique solto. */
   const [closing, setClosing] = useState<{ item: InboxItem; task: Task; tasks: Task[] } | null>(null);
@@ -104,10 +114,11 @@ export function InboxMenu({
   const [delegating, setDelegating] = useState<string | null>(null);
   /** Quem recebeu a revisão pedida pelo atalho: o item some da lista, então a frase fica aqui, no menu, até fechar ou novo pedido. */
   const [reviewAsked, setReviewAsked] = useState<string | null>(null);
+  const [reviewReadError, setReviewReadError] = useState<string | null>(null);
   // O follow-up pede a tarefa de origem (Finalizado?, o responsável dela, o texto inteiro) e o atalho "Delegar revisão" o estado da revisão (status, quem revisou):
   // lê o quadro dos projetos que têm um desses itens, só com o menu aberto.
   const fuProjects = inbox.items.filter((i) => (i.kind === 'followUp' && i.followUp) || stuckOf(i)?.humanAction === 'review').map((i) => i.projectId);
-  const fuTasks = useProjectTasks(fuProjects, open && fuProjects.length > 0);
+  const fuTasks = useProjectTasks(fuProjects, open && fuProjects.length > 0, initialTasks);
 
   /** Lê o quadro do projeto (para achar quem espera a tarefa) e abre o diálogo de cancelar a tarefa `taskId` do item. */
   const askCancel = (item: InboxItem, taskId: string) =>
@@ -121,11 +132,12 @@ export function InboxMenu({
   /** Devolve o card sem código ao responsável: uma mensagem na conversa de trabalho dele, que tira a marca; sem a conversa, o erro diz para cancelar. */
   const giveBack = (item: InboxItem, taskId: string) =>
     run(item, async () => {
+      setHeldNote(null);
       const task = ((await api.tasks(item.projectId)) ?? []).find((x) => x.id === taskId);
       const body = giveBackBody(task);
       if (!body) throw new Error(t('tasks.noCodeNoSession'));
       const held = giveBackHeldNote(await withUsageConfirm((force) => api.chatSend(item.projectId, { ...body, force })));
-      if (held) throw new Error(held);
+      if (held) setHeldNote({ id: item.id, text: held });
     });
 
   /** "Corrigir" do aviso de segredo: arquivo comum abre a aba Arquivos (e o menu fecha); arquivo de segredo abre no editor do computador e a frase fica no item. */
@@ -167,7 +179,9 @@ export function InboxMenu({
       setFollowUpDone(null);
       setDelegating(null);
       setReviewAsked(null);
+      setReviewReadError(null);
       setFixNote(null);
+      setHeldNote(null);
       return;
     }
     const onDown = (e: MouseEvent) => {
@@ -201,7 +215,12 @@ export function InboxMenu({
           <FollowUpGoneNote message={followUpGone} className="inbox-fu-gone" />
           <FollowUpDoneNote message={followUpDone} className="inbox-fu-done" />
           <FollowUpDoneNote message={reviewAsked} className="inbox-fu-done" />
-          {count === 0 ? (
+          {reviewReadError && (
+            <p className="error small inbox-fu-done" role="alert">
+              {reviewReadError}
+            </p>
+          )}
+          {inbox.items.length === 0 ? (
             <p className="muted small inbox-empty">{t('inbox.nothingBody')}</p>
           ) : (
             <ul className="inbox-list">
@@ -220,12 +239,14 @@ export function InboxMenu({
                 const stuckTask = stuck ? taskIn(fuTasks.byProject, item.projectId, stuck.taskId) : null;
                 const delegate = stuckTask ? reviewShortcutOf(item, stuckTask, staff) : null;
                 const sandbox = sandboxOf(item);
+                const tone = toneClass(isResolved(item) ? CARD_TONE.resolved : INBOX_TONE[item.kind]);
                 const row = (
                   <>
                     <span className="inbox-kind">{KIND_LABEL[item.kind]}</span>
                     <span className="inbox-who">
                       <b>{inboxWho(item)}</b>
                       {item.name && item.projectName && <span className="muted"> · {item.projectName}</span>}
+                      {isResolved(item) && <span className={`task-badge small inbox-resolved ${cardTone('resolved')}`}>{t('inbox.resolved')}</span>}
                     </span>
                     {topic && <span className="inbox-topic" title={topic}>{topic}</span>}
                     <span className="inbox-summary" title={inboxText(item)}>{inboxText(item)}</span>
@@ -233,14 +254,14 @@ export function InboxMenu({
                   </>
                 );
                 return (
-                <li key={item.id} className={dismissTitle ? 'inbox-has-x' : undefined}>
+                <li key={item.id} className={[dismissTitle && 'inbox-has-x', isResolved(item) && 'is-resolved'].filter(Boolean).join(' ') || undefined}>
                   {item.codexSandbox ? (
                     // Aviso da máquina (sem projeto nem conversa): não há para onde ir, então a linha não é botão; o que se faz está logo abaixo (copiar o comando) e o × ignora.
-                    <div className={`inbox-item inbox-${item.kind} inbox-sandbox`}>{row}</div>
+                    <div className={`inbox-item inbox-${item.kind} inbox-sandbox ${tone}`}>{row}</div>
                   ) : (
                     <button
                       role="menuitem"
-                      className={`inbox-item inbox-${item.kind}`}
+                      className={`inbox-item inbox-${item.kind} ${tone}`}
                       onClick={() => {
                         setOpen(false);
                         onOpen(item);
@@ -322,7 +343,7 @@ export function InboxMenu({
                       {/* O que importa para decidir, à vista: a recomendação e, com a tarefa já Finalizada, o selo. */}
                       <div className="inbox-fu-meta">
                         <RecommendationBadge recommendation={fu.recommendation} />
-                        {taskFinished(fuTask) && <span className="task-badge small fu-done">{t('tasks.statusDone')}</span>}
+                        {taskFinished(fuTask) && <span className={`task-badge small fu-done ${cardTone('resolved')}`}>{t('tasks.statusDone')}</span>}
                       </div>
                       {hasFields(fu) ? (
                         fu.impact && (
@@ -345,7 +366,7 @@ export function InboxMenu({
                         taskId={fu.taskId}
                         followUp={{ id: fu.followUpId, title: fu.title, text: fullText(fuTask, fu.followUpId, fu.text), staffId: fu.staffId }}
                         task={fuTask}
-                        loading={!fuTasks.settled.has(item.projectId)}
+                        loading={!fuTasks.byProject.has(item.projectId)}
                         team={staff.filter((s) => s.projectId === item.projectId)}
                         onDone={async () => {
                           await inbox.refresh();
@@ -376,6 +397,7 @@ export function InboxMenu({
                         <button className="link small" title={t('tasks.noCodeGiveBackTitle')} disabled={busy === item.id} onClick={() => void giveBack(item, noCode.taskId)}>
                           {t('tasks.noCodeGiveBack')}
                         </button>
+                        {heldNote?.id === item.id && <span className="small inbox-fix-ok" role="status">{heldNote.text}</span>}
                         {failed?.id === item.id && <span className="error small" role="alert">{failed.message}</span>}
                       </span>
                     </>
@@ -396,7 +418,7 @@ export function InboxMenu({
                         {action.label}
                       </button>
                       {delegate && (
-                        <button className="link small inbox-delegate" title={t('inbox.act.delegateTitle')} aria-expanded={delegating === item.id} onClick={() => setDelegating(delegating === item.id ? null : item.id)}>
+                        <button className="link small inbox-delegate" title={t('inbox.act.delegateTitle')} aria-expanded={delegating === item.id} aria-controls={`inbox-review-${item.id}`} onClick={() => setDelegating(delegating === item.id ? null : item.id)}>
                           {t('tasks.reviewDelegate')}
                         </button>
                       )}
@@ -405,14 +427,21 @@ export function InboxMenu({
                   )}
                   {delegate && stuckTask && delegating === item.id && (
                     <ReviewShortcutForm
+                      id={`inbox-review-${item.id}`}
                       projectId={item.projectId}
                       task={stuckTask}
                       reviewers={delegate.reviewers}
                       onAsked={async (name) => {
                         setReviewAsked(t('inbox.act.delegated', { name }));
+                        setReviewReadError(null);
                         setDelegating(null);
-                        await inbox.refresh();
-                        await fuTasks.reload();
+                        // O seletor já saiu da tela: um erro da releitura não tem onde aparecer ali, vai para o topo do menu.
+                        try {
+                          await inbox.refresh();
+                          await fuTasks.reload();
+                        } catch (e) {
+                          setReviewReadError((e as Error).message);
+                        }
                       }}
                     />
                   )}

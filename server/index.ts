@@ -35,7 +35,7 @@ import {
 } from './config';
 import { PickerBusyError, pickFolder } from './folderPicker';
 import { openProject, parseNewProject, ProjectError, usualParent } from './newProject';
-import { createDemo, demoPaths } from './demo';
+import { legacyDemoPaths } from './legacyDemo';
 import { z } from 'zod';
 import { AgentError, AgentInput, readAgentSource, saveAgent } from './adapters/claude/agentWrite';
 import { deleteSkill, hookFilesOf, readSkillSource, SkillDeleteInput, SkillRefInput, saveSkill, SkillSaveInput, type SkillScope } from './adapters/claude/skillWrite';
@@ -53,12 +53,16 @@ import { ChatRegistry } from './chat/registry';
 import { AutoContinue } from './chat/autoContinue';
 import { WakeBody, WakeStreakError, watchWakeups } from './chat/wake';
 import { StaffSendLimitError, StaffSendRate, sendTargetKey } from './chat/sendRate';
-import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService } from './staff/service';
+import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService, StaffTeamExistsError } from './staff/service';
 import { sweepFreelas } from './freelaSweep';
-import { CLUB_MCP_FILE, McpError, mcpJsonWarnings } from './staff/mcp';
+import { CLUB_MCP_FILE, knownMcpNames, McpError, mcpJsonWarnings } from './staff/mcp';
 import { createMcpLibrary } from './staff/mcpLibrary';
+import { migrateMcpsAtBoot as runMcpMigration } from './staff/mcpMigration';
+import { MCP_TOOLS_FILE } from './staff/mcpTools';
 import { CodexPasswordPolicy } from './codexPasswordPolicy';
+import { withInboxWait } from './inboxWait';
 import { blockedInboxItem, codexSandboxInboxItem, commitInboxItem, deniedInboxItem, followUpInboxItem, heavyGuardOffInboxItem, notStartedInboxItem, permissionInboxItem, questionInboxItem, secretInboxItem, stuckInboxItem, taskQuestionInboxItem, withoutSecretHint } from './inboxItems';
+import { InboxResolver, resolvedLast, settleWithin } from './inboxResolved';
 import { capText } from './chat/turnCap';
 import { TurnRetryLedger } from './chat/turnRetry';
 import { InboxState } from './inboxState';
@@ -86,10 +90,12 @@ import {
   readProjectImageFile,
 } from './projectFiles';
 import { openEditorRoute } from './openInEditor';
+import { openProjectTerminalRoute } from './openProjectTerminal';
 import { actingStaff, requesterSessionOf, SANDBOX_HOST, SessionTokens, type Caller } from './callers';
 import { isUnverifiedOrigin, staffOrigin, type OriginDeps } from './chat/origin';
 import { RequesterAskLimiter } from './chat/requesterAsk';
-import { gate } from './gate';
+import { gate, refusalLine } from './gate';
+import { sessionAllowed, sessionInProject, type SessionScopeDeps } from './sessionScope';
 import { EXTENSION_DIR, EXTENSION_ID } from './extension/identity';
 import { ExtensionTokens } from './extension/tokens';
 import { handleExtension, type ExtensionDeps } from './extension/routes';
@@ -108,10 +114,15 @@ import { CostReviewApplyError, runCostReviewApply } from './costReviewApply';
 import type { Board, CostReport, InboxItem, InboxKind, LiveSession, Project, TurnNotice } from '../shared/model';
 import { TurnWatcher } from './turns';
 import { ProjectPauses } from './projectPause';
+import { deliverToAsker } from './consult/deliver';
+import { ConsultLinks } from './consult/links';
+import { ConsultError, ConsultService } from './consult/service';
+import { ConsultStore } from './consult/store';
 import { RoutineScheduler, routineKey, type RoutineOutcome } from './routines';
 import { buildSchedules, routineSchedule, ScheduleWindowError, scheduleWindow } from './scheduleView';
 import type { AppServerInfo, EngineOverride, Routine, SchedulesResponse, StaffProfile, SystemStats } from '../shared/model';
 import { systemStats } from './systemStats';
+import { PresenceBody, TabPresence } from './tabPresence';
 import { ResourceGate } from './resourceGate';
 import { ShowcaseBusyError, ShowcaseRefusedError, ShowcaseRunner, spawnClaudeProcess } from './showcaseRunner';
 import { pathKey, worktreeParent } from './adapters/claude/paths';
@@ -126,11 +137,11 @@ import { StageTimer } from './stageTimer';
 import { boardFilter } from './board';
 import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
-import { AUTONOMY, dropStaffSessions, listProjectStaff, listProjectStaffStrict, readProfile, saveProfile } from './staff/store';
+import { AUTONOMY, dropStaffSessions, hasStaffFiles, listProjectStaff, listProjectStaffStrict, readProfile, saveProfile } from './staff/store';
 import { lastRetentionRun, nextRetentionDelay, retentionPreview, runRetentionSweep, setRetentionDeletion, type RetentionDeps } from './retentionSweep';
 import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
 import { writeOwnerFile } from './ownerEdits';
-import { START_DEADLINE_MS, TaskConflictError, TaskError, TaskForbiddenError, TaskService, cancelRequest, commitAlerts, deleteRequest, followUpAlerts, notStartedTasks, ownAlerts, readTasks, reasonRequest, stuckDependencies } from './tasks';
+import { START_DEADLINE_MS, TaskBusyError, TaskConflictError, TaskError, TaskForbiddenError, TaskService, cancelRequest, commitAlerts, deleteRequest, followUpAlerts, notStartedTasks, ownAlerts, readTasks, reasonRequest, stuckDependencies } from './tasks';
 import { retainedSessionIds } from './retention';
 import { listRoles, removeRole, restoreBuiltins, RoleError, saveRole, setDefaultRole } from './roles';
 import { ROOT } from './root';
@@ -263,10 +274,19 @@ const MAX_BODY = 4 * 1024 * 1024;
 const pairing = new Pairing();
 /** Pareamentos da extensão do Chrome (token Bearer; só o hash vai ao disco). */
 const extensionTokens = new ExtensionTokens();
+/** Abas do Claudio’s Club abertas (sinal da tela): com `stopOnTabClose`, a última a fechar para o servidor pelo mesmo caminho do botão Parar. */
+const tabs = new TabPresence({
+  enabled: async () => (await readConfig()).stopOnTabClose,
+  stop: () => {
+    console.log('[servidor] nenhuma aba do Claudio’s Club aberta: parando (opção "parar ao fechar a aba")');
+    void shutdown(true, 'nenhuma aba aberta');
+  },
+});
 
-// No quadro: o demo (e o antigo, se ainda existir), as pastas de `extraProjects` (novas ou importadas) e os
-// projetos com equipe. O resto do que o Claude Code conhece só entra se o usuário importar (`/api/import-projects`).
-const pinnedProjects = async () => [...(await demoPaths()), ...(await readExtraProjects())];
+// No quadro: o demo que já existe na máquina (o projeto demo saiu do produto, mas a pasta é do usuário: ver legacyDemo.ts), as pastas de
+// `extraProjects` (novas ou importadas) e os projetos com equipe. O resto do que o Claude Code conhece só entra se o usuário importar
+// (`/api/import-projects`).
+const pinnedProjects = async () => [...(await legacyDemoPaths()), ...(await readExtraProjects())];
 /** Ids das conversas do Claude que o Club lançou (o registro; sem registro legível, nenhuma). */
 const clubClaudeIds = async (): Promise<Set<string>> => {
   const reg = await readSessionRegistry().catch((): Map<string, { engine: string }> => new Map());
@@ -333,8 +353,21 @@ async function chatPlace(projectId: string, staffId: string | null) {
 const codexCapability = new CodexCapability(defaultRunner(), { liveCodex: () => chats.codexRunning() });
 // Política de senha do Windows que quebra o sandbox do Codex (só avisa a caixa; nunca altera a política, ver codexPasswordPolicy.ts). Fora do Windows não faz nada.
 const codexPolicy = new CodexPasswordPolicy();
+/** Vínculos de consulta entre projetos (só a tela grava) e o registro das consultas, que sobrevive a reinício (ver server/consult/). */
+const consultLinks = new ConsultLinks(path.join(MYCO_HOME, 'consult', 'links.json'));
+const consultStore = new ConsultStore(path.join(MYCO_HOME, 'consult', 'records.json'));
 const staff: StaffService = new StaffService(adapter, {
   runDir: path.join(MYCO_HOME, 'run'),
+  // A seção Consulta da ficha: só os projetos que o dono liberou a este funcionário (sem vínculo, a ficha fica como antes).
+  consultTargets: async (projectId, staffId) => {
+    const ids = await consultLinks.targetsOf(projectId, staffId);
+    if (!ids.length) return [];
+    const known = await adapter.listProjects();
+    return ids.flatMap((id) => {
+      const p = known.find((x) => x.id === id && x.exists);
+      return p ? [{ projectId: p.id, projectName: p.name }] : [];
+    });
+  },
   codexCapability,
   // Ficha do Codex contratada ou salva: a checagem prévia da política de senha (com cache; sem esperar).
   onCodexProfile: () => void codexPolicy.check(),
@@ -384,8 +417,8 @@ const usageStopHit = async (projectId: string, staffId: string | null, engine: '
   }
 };
 /**
- * Projetos pausados (ver server/projectPause.ts): uma só fonte, perguntada por todo ponto de partida automática (a fila e a revisão em TaskService, as rotinas, o "continue", o
- * despertador, a retomada de turno e a do reinício). Pausado, nada começa sozinho; o que já roda termina o turno, e as suas ações manuais seguem.
+ * Projetos pausados (ver server/projectPause.ts): uma só fonte, perguntada por todo ponto de partida automática (a fila em TaskService, as rotinas, o "continue", o
+ * despertador, a retomada de turno e a do reinício). Pausado, nada de execução começa sozinho (a revisão da entrega já feita roda); o que já roda termina o turno, e as suas ações manuais seguem.
  */
 const projectPauses = new ProjectPauses(path.join(MYCO_HOME, 'paused-projects.json'));
 const projectPaused = (projectId: string) => projectPauses.isPaused(projectId);
@@ -459,12 +492,16 @@ const chats: ChatManager = new ChatManager({
   denialTask: (sessionId) => tasks.denialTask(sessionId),
   heavyGuardOff: (sessionId) => tasks.noteHeavyGuardOff(sessionId),
   transcriptsDir: defaultTranscripts,
+  // O histórico do Codex não diz o projeto: o snapshot só o lê da conversa que o servidor prova ser do projeto (ver sessionScope).
+  sessionInProject: (projectId, sessionId) => sessionInProject(sessionScope, projectId, sessionId),
   runDir: path.join(MYCO_HOME, 'run'),
   usageFile: path.join(MYCO_HOME, 'usage.json'),
   // Limite do Codex estourado: a hora de voltar vem da leitura fresca dos limites do Codex (só com `codexReview` ligado).
   codexLimits: async () => codexUsage.read((await readConfig()).codexReview, { fresh: true, waitMs: 8_000 }),
   listLive: () => adapter.listLiveSessions(),
-  resolve: (projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly),
+  resolve: (projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult),
+  // A conversa de consulta de outro projeto terminou o turno: o serviço lê a resposta e a entrega (`consults` é declarado mais abaixo: só é lido na chamada).
+  onConsultIdle: (consultId, sessionId, reason) => void consults.onIdle(consultId, sessionId, reason).catch((err) => console.warn('[consulta] fim de turno:', err)),
   rememberChoice: (projectId, staffId, sessionId, choice) => staff.rememberChoice(projectId, staffId, sessionId, choice),
   markModelObsolete: (projectId, staffId, model, engine) => staff.markModelObsolete(projectId, staffId, model, engine),
   registry: new ChatRegistry(path.join(MYCO_HOME, 'run', 'chats.json')),
@@ -665,7 +702,7 @@ const tasks = new TaskService({
   // E o plano (ou a permissão) que ficou pendente na conversa é negado: interromper não tira o cartão, e aprovar depois executaria.
   dismissPending: (sessionId, message) => void chats.dismissPending(sessionId, message),
   snapshot: (projectId, sessionId) => chats.snapshot(projectId, sessionId),
-  // Projeto pausado: a fila, a revisão automática, a retomada das órfãs e a troca de motor esperam (ver TaskService.paused).
+  // Projeto pausado: a fila, o ajuste da reprovação, a retomada das órfãs e a troca de motor esperam; a revisão da entrega já feita roda (ver TaskService.paused).
   pauses: projectPauses,
 });
 // Conversa direta no limite de uso (o dono pela tela): a mensagem segue no secundário da ficha, numa conversa nova (ver directFallback.ts).
@@ -694,6 +731,50 @@ const directFallback = new DirectFallback({
     chats.send(projectId, sessionId, staffId, text, priority, images, files, false, undefined, override),
   log: (line) => console.log(`[chat] ${line}`),
 });
+/**
+ * A consulta de funcionário a funcionário entre projetos (ver server/consult/service.ts): o vínculo é do dono (só a tela grava), a conversa de consulta abre no projeto de destino só para ler
+ * (sem token, sem aprovação, sem MCP; ver StaffService.consultSpawn) e a resposta final volta à conversa de quem perguntou, como informação de outro projeto.
+ */
+const consults = new ConsultService({
+  links: consultLinks,
+  store: consultStore,
+  project: async (projectId) => {
+    const p = (await adapter.listProjects()).find((x) => x.id === projectId && x.exists && !x.worktreeOf);
+    return p ? { id: p.id, name: p.name } : null;
+  },
+  staff: async (projectId, staffId) => {
+    const dir = await projectPathOf(projectId);
+    const p = dir ? await readProfile(dir, staffId) : null;
+    return p ? { id: p.id, name: p.name, role: p.role, ended: !!p.ended } : null;
+  },
+  listStaff: async (projectId) => {
+    const dir = await projectPathOf(projectId);
+    return dir ? (await listProjectStaff(dir, projectId)).filter((s) => !s.ended && !s.temporary).map((s) => ({ id: s.id, name: s.name, role: s.role })) : [];
+  },
+  paused: (projectId) => projectPauses.isPaused(projectId),
+  // A trava de uso do projeto de destino (a conversa de consulta gasta o orçamento dele).
+  checkUsage: (projectId, staffId) => staff.checkUsage(projectId, { staffId }),
+  openConsult: (projectId, staffId, text, stamp) => chats.send(projectId, null, staffId, text, undefined, [], [], false, undefined, undefined, false, stamp),
+  isConsultSession: (sessionId) => chats.isConsultSession(sessionId),
+  lastText: (sessionId) => chats.lastAssistantText(sessionId),
+  turn: (sessionId) => chats.consultTurn(sessionId),
+  closeSession: async (sessionId) => void (await chats.closeIdle((c) => c.sessionId === sessionId)),
+  stopSession: (sessionId) => chats.stop(sessionId),
+  // A resposta (ou o aviso) na conversa de quem perguntou: a trava de uso dele confere; em outra tarefa, espera a vez (guardada, como a resposta a uma dúvida); conversa fechada, reabre.
+  // `sendNotice` é mensagem da plataforma: não "responde" a tarefa em revisão nem tira o "continue" agendado.
+  deliver: deliverToAsker({
+    checkUsage: (projectId, staffId) => staff.checkUsage(projectId, { staffId }),
+    hold: (sessionId, msg) => tasks.hold(sessionId, msg),
+    sendNotice: (projectId, sessionId, staffId, text) => chats.sendNotice(projectId, sessionId, staffId, text),
+  }),
+  isClosing: () => chats.isClosing(),
+});
+// O relógio da consulta: vence o prazo e entrega o que ficou esperando (resposta ou aviso). Também no boot: o registro sobrevive ao reinício.
+const consultTick = () => {
+  if (!chats.isClosing()) void consults.tick().catch((err) => console.warn('[consulta] relógio:', err));
+};
+consultTick();
+setInterval(consultTick, 15_000).unref();
 // Limite no meio do turno: a tarefa pode trocar de motor (ver TaskService.onLimit). Depois de agendado o "continue".
 chats.onUsageLimit((ev) => {
   void tasks.onLimit(ev).catch((err) => console.error('[tarefas] limite no meio do turno:', err));
@@ -705,6 +786,14 @@ const originDeps: OriginDeps = {
   taskOfWork: (projectId, sessionId) => tasks.taskOfWork(projectId, sessionId),
   mycoUrl: `http://127.0.0.1:${PORT}`,
   codexUrl: SANDBOX_URL,
+};
+
+/** De quem é cada conversa, para o que um funcionário (com token) lê ou escreve pelo id dela (ver server/sessionScope.ts). */
+const sessionScope: SessionScopeDeps = {
+  live: (sessionId) => chats.liveProject(sessionId),
+  transcriptIn: (projectId, sessionId) => chats.hasOwnTranscript(projectId, sessionId),
+  taskProject: (sessionId) => tasks.projectOfSession(sessionId),
+  staffOwns: (projectId, sessionId) => staff.ownsSession(projectId, sessionId),
 };
 
 // "Continue" que não vai sair (cancelado na conversa, opção desligada, falhou): o turno que parou no limite
@@ -893,6 +982,11 @@ class Raw {
   ) {}
 }
 
+/** Resposta 202 (aceito): a consulta nova foi aberta e a resposta vem depois, na conversa de quem perguntou. */
+class Accepted {
+  constructor(readonly body: unknown) {}
+}
+
 class BadRequest extends Error {}
 /** O pedido é de quem não pode (403). */
 class Forbidden extends Error {}
@@ -912,6 +1006,19 @@ async function checkReach(caller: Caller | null, projectId: string, target: { se
   }
 }
 
+/**
+ * A conversa do URL é do projeto do URL? Confere antes de ler ou escrever qualquer coisa pelo id dela (histórico, mensagem guardada, envio): o token
+ * só alcança o projeto dele, mas o id da conversa vem do pedido. Funcionário (com token): a prova completa, também para conversa fechada (ver
+ * server/sessionScope.ts). Sem token (a tela, que sempre manda o projeto certo): só a conversa aberta de outro projeto é recusada.
+ */
+async function assertSessionOf(caller: Caller | null, method: string, url: URL, projectId: string, sessionId: string): Promise<void> {
+  if (await sessionAllowed(sessionScope, !!caller, projectId, sessionId)) return;
+  console.log(refusalLine({ status: 403, reason: 'conversa-de-outro-projeto', method, pathname: url.pathname, projectId, caller }));
+  throw new Forbidden(
+    'essa conversa não é deste projeto (ou não existe nele): o token da sua conversa só alcança as conversas do projeto dela. Se precisa de algo de outro projeto, peça ao usuário',
+  );
+}
+
 const ID = '([A-Za-z0-9-]+)';
 /** Nome de conexão SSH ou FTP (o mesmo formato de server/staff/servers.ts). */
 const CONN = '([A-Za-z0-9][\\w.-]{0,39})';
@@ -929,6 +1036,36 @@ const mcpLibrary = createMcpLibrary({
 
 const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ['GET', /^\/api\/health$/, async () => ({ ok: true, adapter: adapter.id })],
+  // ---- consulta entre projetos (server/consult/) ----
+  // Vínculo, revogação e leitura: só a tela (as rotas `/api/consult/*` não estão em apiPolicy.ts `STAFF_POSTS`: o gate já recusa o POST de funcionário e a sandbox). O serviço confere `fromBrowser` de novo.
+  [
+    'GET',
+    /^\/api\/consult\/links$/,
+    async ({ paired }) => {
+      if (!paired) throw new BadRequest('só pelo Claudio’s Club');
+      return { links: await consults.listLinks() };
+    },
+  ],
+  ['POST', /^\/api\/consult\/links$/, async ({ body, fromBrowser }) => ({ link: await consults.setLink(fromBrowser, body) })],
+  ['POST', /^\/api\/consult\/links\/revoke$/, async ({ body, fromBrowser }) => consults.revokeLink(fromBrowser, body)],
+  [
+    'GET',
+    /^\/api\/consult\/records$/,
+    async ({ url, paired }) => {
+      if (!paired) throw new BadRequest('só pelo Claudio’s Club');
+      return { consults: await consults.listRecords(url.searchParams.get('project') ?? undefined) };
+    },
+  ],
+  // Do funcionário (token do projeto de origem; a origem e o remetente vêm do token, nunca do corpo): o diretório (só id, nome e cargo) e a consulta.
+  ['GET', new RegExp(`^/api/projects/${ID}/consult/directory$`), async ({ params: [pid], caller }) => ({ projects: await consults.directory(caller, pid!) })],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/consult$`),
+    async ({ params: [pid], body, caller }) => {
+      const out = await consults.start(caller, pid!, body);
+      return out.replay ? out : new Accepted(out);
+    },
+  ],
   // CPU e RAM da máquina, para o monitor do canto (só números; ver systemStats.ts).
   ['GET', /^\/api\/system$/, async (): Promise<SystemStats> => systemStats()],
   // ---- o próprio servidor: parar e (com o vigia) reiniciar pelo config ----
@@ -976,7 +1113,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   // Fichas de todos os projetos, para copiar uma para outro (só os campos da lista; ver StaffService.directory).
   ['GET', /^\/api\/staff-directory$/, () => staff.directory()],
   // "Novo projeto": a pasta sugerida (onde está a maioria) e criar ou abrir, já na empresa da aba.
-  // Conta também os projetos do Claude Code que ficaram fora do quadro: quem só tem o demo ainda recebe a pasta onde trabalha.
+  // Conta também os projetos do Claude Code que ficaram fora do quadro: quem só tem o demo antigo ainda recebe a pasta onde trabalha.
   ['GET', /^\/api\/new-project$/, async () => ({ parent: usualParent([...(await adapter.listProjects()), ...(await offBoardFolders())]) })],
   [
     'POST',
@@ -986,6 +1123,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       const input = parseNewProject(body);
       // O workspace antes da pasta: um id errado não deixa pasta criada para trás.
       if (input.workspaceId && !(await readConfig()).workspaces.some((w) => w.id === input.workspaceId)) throw new BadRequest('workspace não encontrado');
+      // Modelo de equipe (`templateId`, já conferido contra a lista): pasta existente que já tem equipe recusa (409) antes de abrir qualquer coisa.
+      if (input.templateId && input.mode === 'existing' && (await hasStaffFiles(path.resolve(input.path)))) throw new StaffTeamExistsError();
       const opened = await openProject(input);
       await addExtraProject(opened.path);
       adapter.forgetProjects();
@@ -994,7 +1133,9 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       if (input.workspaceId) await setProjectWorkspace(project.id, input.workspaceId);
       // Estava arquivado: abrir de novo traz de volta ao quadro.
       if ((await readConfig()).archived.projects.includes(project.id)) await setArchived({ kind: 'project', id: project.id, archived: false });
-      return { created: opened.created, projectId: project.id };
+      // Só as fichas e a hierarquia, na mesma chamada (ver `applyTeamTemplate`). Se falhar aqui, o projeto já está aberto, sem equipe: a tela pode aplicar o modelo de novo.
+      const team = input.templateId ? await staff.applyTeamTemplate(project.id, { templateId: input.templateId }, true) : null;
+      return { created: opened.created, projectId: project.id, ...(team && { team }) };
     },
   ],
   // "Novo projeto → pasta que já existe": abre a janela nativa de escolher pasta nesta máquina (o navegador não entrega o caminho absoluto) e devolve
@@ -1077,6 +1218,9 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   // Equipe em arquivo (server/staff/teamExport.ts): exportar lê, sem segredo; importar só pela tela, tudo ou nada. Antes da rota de edição: "import" casaria como id.
   ['GET', new RegExp(`^/api/projects/${ID}/staff/export$`), ({ params: [id], url }) => staff.exportTeam(id!, url.searchParams.get('ids'))],
   ['POST', new RegExp(`^/api/projects/${ID}/staff/import$`), ({ params: [id], body, fromBrowser }) => staff.importTeam(id!, body, fromBrowser)],
+  // Modelo de equipe (shared/teamTemplates.ts): `{ templateId }` cria só as fichas e a hierarquia (nenhuma tarefa, nada começa). Só pela tela; 400 modelo
+  // desconhecido, 404 projeto fora do quadro, 409 (`code: 'team-exists'`) se o projeto já tem funcionário. Antes da rota de edição: "template" casaria como id.
+  ['POST', new RegExp(`^/api/projects/${ID}/staff/template$`), ({ params: [id], body, fromBrowser }) => staff.applyTeamTemplate(id!, body, fromBrowser)],
   // Fichas da mesma pessoa (cópias): ligar, desligar e apagar de vez. Só pelo Claudio’s Club (o serviço confere).
   ['POST', /^\/api\/staff-link$/, ({ body, fromBrowser }) => staff.link(body, fromBrowser)],
   ['POST', /^\/api\/staff-unlink$/, ({ body, fromBrowser }) => staff.unlink(body, fromBrowser)],
@@ -1163,13 +1307,23 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   [
     'GET',
     new RegExp(`^/api/projects/${ID}/chat/${ID}$`),
-    async ({ params: [pid, sid] }) => ({ ...(await chats.snapshot(pid!, sid!)), held: await tasks.heldItems(sid!) }),
+    async ({ params: [pid, sid], url, caller }) => {
+      await assertSessionOf(caller, 'GET', url, pid!, sid!);
+      return { ...(await chats.snapshot(pid!, sid!)), held: await tasks.heldItems(sid!) };
+    },
   ],
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/chat/send$`),
-    async ({ params: [pid], body, fromBrowser, caller }) => {
+    async ({ params: [pid], url, body, fromBrowser, caller }) => {
       const b = parse(SendBody, body);
+      // Primeiro a prova de que a conversa (e o funcionário) são deste projeto, antes de qualquer contagem, guarda ou envio: o token só chega ao
+      // projeto dele (gate), mas o id da conversa vem do corpo (ver assertSessionOf).
+      if (b.sessionId) await assertSessionOf(caller, 'POST', url, pid!, b.sessionId);
+      if (!fromBrowser && b.staffId) {
+        const dir = await projectPathOf(pid!);
+        if (!dir || !(await readProfile(dir, b.staffId))) throw new BadRequest('esse funcionário não é deste projeto');
+      }
       const target = { sessionId: b.sessionId, staffId: b.staffId };
       const requesterAsk = await tasks.mayAskRequester(pid!, caller, target);
       // Um limite por par: quem pergunta (sessão do remetente) e a conversa que responde.
@@ -1322,7 +1476,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   [
     'GET',
     new RegExp(`^/api/projects/${ID}/chat/${ID}/changes$`),
-    async ({ params: [pid, sid], url }) => {
+    async ({ params: [pid, sid], url, caller }) => {
+      await assertSessionOf(caller, 'GET', url, pid!, sid!);
       const { dir, place } = await chatPlace(pid!, url.searchParams.get('staffId'));
       if (place.where === 'worktree') return { ...(await readCode(dir, place)), scope: 'worktree', touched: [] };
       const touched = await touchedFiles(await findTranscript(defaultTranscripts, pid!, sid!), place.path);
@@ -1390,7 +1545,10 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   [
     'GET',
     new RegExp(`^/api/projects/${ID}/chat/${ID}/mcp$`),
-    async ({ params: [pid, sid], url }) => chats.mcp(pid!, sid!, url.searchParams.get('staffId')),
+    async ({ params: [pid, sid], url, caller }) => {
+      await assertSessionOf(caller, 'GET', url, pid!, sid!);
+      return chats.mcp(pid!, sid!, url.searchParams.get('staffId'));
+    },
   ],
   [
     'POST',
@@ -1493,7 +1651,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ],
   // ---- tarefas por projeto ----
   ['GET', /^\/api\/tasks\/summary$/, () => tasks.summary()],
-  ['GET', new RegExp(`^/api/projects/${ID}/tasks$`), ({ params: [id] }) => tasks.list(id!)],
+  // Com `inboxWait`: o card parado esperando um item da caixa (derivado, ver server/inboxWait.ts).
+  ['GET', new RegExp(`^/api/projects/${ID}/tasks$`), async ({ params: [id] }) => withInboxWait(await tasks.list(id!), id!, chats.attention())],
   // Revisão automática do quadro: `{ autoReview, reviewerId }` (ver server/boardConfig.ts). Ler é livre; gravar só pela tela, como as outras
   // configurações de projeto (o funcionário nem tem este POST na lista de apiPolicy.ts).
   ['GET', new RegExp(`^/api/projects/${ID}/board-review$`), ({ params: [id] }) => tasks.boardConfig(id!)],
@@ -1513,10 +1672,13 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     new RegExp(`^/api/projects/${ID}/board-commit$`),
     ({ params: [id], body, fromBrowser }) => tasks.setBoardCommit(id!, body, fromBrowser),
   ],
-  // Pausar o projeto (ver server/projectPause.ts): pausado, nada começa sozinho (fila, revisão automática, rotinas, despertador, "continue", retomada, troca de motor); o que já roda termina
+  // Pausar o projeto (ver server/projectPause.ts): pausado, nada de execução começa sozinho (fila, ajuste da reprovação, rotinas, despertador, "continue", retomada, troca de motor; a revisão da entrega já feita roda); o que já roda termina
   // o turno, e as suas ações manuais seguem. Ler é livre (`{ paused: { at } | null }`). Pausar e retomar só pelo navegador pareado: o serviço responde 403 a quem não é a tela (o gate já
   // barra o POST do funcionário antes, como nas outras rotas só da tela), e as rotas nem estão na lista de apiPolicy.ts. Idempotentes: pausar de novo mantém o horário, retomar o que roda é um nada.
   ['GET', new RegExp(`^/api/projects/${ID}/pause$`), ({ params: [id] }) => tasks.pauseOf(id!)],
+  // O estado da fila de cada funcionário (ver `TaskService.queueStates`): livre, ocupado com o card X, esperando recurso, no limite de consumo, projeto pausado, entrega em processamento ou a suíte
+  // esperando a vez. Só leitura (lista de `StaffQueue`); 404 se o projeto não existe.
+  ['GET', new RegExp(`^/api/projects/${ID}/queues$`), ({ params: [id] }) => tasks.queueStates(id!)],
   ['POST', new RegExp(`^/api/projects/${ID}/pause$`), ({ params: [id], fromBrowser }) => tasks.setPaused(id!, true, fromBrowser)],
   ['POST', new RegExp(`^/api/projects/${ID}/resume$`), ({ params: [id], fromBrowser }) => tasks.setPaused(id!, false, fromBrowser)],
   [
@@ -1570,7 +1732,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     ({ params: [id, taskId], body, fromBrowser, caller }) => {
       // Corpo: { reason?, dependents?: { [taskId]: 'release' | 'cancel' | 'wait' } }. `dependents` só vale da tela; com o token do funcionário é ignorado.
       const b = cancelRequest(body, fromBrowser);
-      if (fromBrowser) return tasks.cancel(id!, taskId!, { by: 'user', reason: b.reason, dependents: b.dependents });
+      // `deadline`: a vez do funcionário presa não deixa a tela sem resposta (503, nada gravado; ver `TaskService.lockedWithDeadline`).
+      if (fromBrowser) return tasks.cancel(id!, taskId!, { by: 'user', reason: b.reason, dependents: b.dependents, deadline: true });
       return tasks.cancelFrom(id!, taskId!, caller, b.reason);
     },
   ],
@@ -1634,7 +1797,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     ({ params: [id, taskId], body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('tarefas só pelo Claudio’s Club');
       const b = parse(z.object({ blockerId: z.string().max(40), action: z.enum(['release', 'cancel', 'wait']) }), body);
-      return tasks.resolveCancelledBlocker(id!, taskId!, b.blockerId, b.action);
+      return tasks.resolveCancelledBlocker(id!, taskId!, b.blockerId, b.action, undefined, { deadline: true });
     },
   ],
   ['GET', new RegExp(`^/api/projects/${ID}/tasks/${ID}/code$`), ({ params: [id, taskId] }) => tasks.code(id!, taskId!)],
@@ -1693,6 +1856,12 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks/${ID}/review-anyway$`),
     ({ params: [id, taskId], fromBrowser, caller }) => tasks.reviewAnyway(id!, taskId!, caller, fromBrowser),
+  ],
+  // Plano primeiro (`Task.planWait`): quem pediu o card aprova ou recusa o plano que o responsável entregou (o usuário pelo Claudio’s Club, o gestor com o token da conversa dele).
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/tasks/${ID}/plan$`),
+    ({ params: [id, taskId], body, fromBrowser, caller }) => tasks.decidePlan(id!, taskId!, caller, fromBrowser, body),
   ],
   // Desligada nas configurações: nem procura o `codex` (nenhum processo é aberto).
   [
@@ -2027,6 +2196,12 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     async ({ params: [id], body, fromBrowser }) => openEditorRoute({ fromBrowser, body, projectDir: await projectPathOf(id!) }, { log: (line) => console.log(line) }),
   ],
   [
+    // Abrir um terminal do computador na pasta do projeto (botão do painel): só a tela (navegador pareado); a pasta vem do cadastro, o corpo não leva nada.
+    'POST',
+    new RegExp(`^/api/projects/${ID}/open-terminal$`),
+    async ({ params: [id], fromBrowser }) => openProjectTerminalRoute({ fromBrowser, projectDir: await projectPathOf(id!) }, { log: (line) => console.log(line) }),
+  ],
+  [
     'GET',
     new RegExp(`^/api/projects/${ID}/files/image$`),
     async ({ params: [id], url }) => {
@@ -2242,21 +2417,6 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ],
   ['GET', /^\/api\/browser$/, ({ url }) => browserStatus(url.searchParams.has('fresh'))],
   ['GET', /^\/api\/costs$/, () => getCosts()],
-  // Projeto demo (equipe e tarefas de exemplo em ~/.myco/demo). Criar de novo não sobrescreve:
-  // só traz de volta ao quadro, se estava arquivado.
-  [
-    'POST',
-    /^\/api\/demo$/,
-    async ({ fromBrowser }) => {
-      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
-      const demo = await createDemo();
-      if ((await readConfig()).archived.projects.includes(demo.projectId)) {
-        await setArchived({ kind: 'project', id: demo.projectId, archived: false });
-      }
-      adapter.forgetProjects();
-      return { created: demo.created, projectId: demo.projectId };
-    },
-  ],
   // ---- "valeu a pena?" de uma sessão ----
   [
     'GET',
@@ -2381,6 +2541,18 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     },
   ],
   ['GET', /^\/api\/config$/, () => readConfig()],
+  // Sinal de presença da aba (a tela manda a cada ~15 s e, ao sair, com `leaving`; ver tabPresence.ts). Só o navegador pareado: a extensão, o funcionário
+  // e a sandbox do Codex não são aba (gate.ts: POST fora de `staffMayPost` é 400 sem a tela, e a extensão só alcança a lista dela).
+  [
+    'POST',
+    /^\/api\/presence$/,
+    async ({ body, fromBrowser }) => {
+      if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
+      const b = parse(PresenceBody, body);
+      tabs.signal(b.tab, b.leaving);
+      return { ok: true };
+    },
+  ],
   // ---- a extensão do Chrome (Configurações): o código de pareamento, os pareados e o .zip para instalar (server/extension/) ----
   // Todas são POST (um GET de navegação não manda Origin, então não seria da tela) e só valem pelo navegador pareado.
   [
@@ -2610,6 +2782,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         const out = await handler({ params: m.slice(1), url, body, fromBrowser, paired: !sandbox && pairing.isPaired(req.headers.cookie), userAgent, caller });
         if (method !== 'GET') boardCache.invalidate();
         if (out === null) return send(res, 404, { error: 'não encontrado' });
+        if (out instanceof Accepted) return send(res, 202, out.body);
         if (out instanceof Raw) {
           // no-cache + ETag: o navegador confere a cada vez, mas só baixa de novo se a imagem mudou.
           const etag = `"${createHash('sha1').update(out.bytes).digest('base64url')}"`;
@@ -2627,6 +2800,8 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         // Zip da extensão: pasta ausente (404) ou manifest recusado / pacote grande (409).
         if (err instanceof ExtensionPackError) return send(res, err.status, { error: err.message });
         if (err instanceof UsageStopError) return send(res, 409, { error: err.message, code: err.code, hit: err.hit });
+        // Consulta entre projetos: o status vem do próprio erro (400, 403, 404, 409, 429 ou 503), sem token nem conteúdo na mensagem.
+        if (err instanceof ConsultError) return send(res, err.status, { error: err.message, ...err.extra });
         // Vitrine: já sendo gerada (409); recusada antes de começar, pelo uso (429) ou pelos recursos (503).
         if (err instanceof ShowcaseBusyError) return send(res, 409, { error: err.message });
         // Já há uma janela de escolher pasta aberta: 409 com `code: 'busy'`.
@@ -2636,10 +2811,13 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         if (err instanceof CodeError) return send(res, 409, { error: err.message, code: err.code });
         // Ficha em uso (conversa trabalhando): 409, antes do StaffError genérico (400).
         if (err instanceof StaffOpenTasksError) return send(res, 409, { error: err.message, code: err.code, openTasks: err.openTasks });
+        if (err instanceof StaffTeamExistsError) return send(res, 409, { error: err.message, code: err.code });
         if (err instanceof StaffBusyError) return send(res, 409, { error: err.message });
         // Dúvida já respondida, ou pergunta que não está mais aberta na conversa: 409; quem não é o gestor: 403 (antes do TaskError, 400).
         if (err instanceof TaskConflictError) return send(res, 409, { error: err.message });
         if (err instanceof TaskForbiddenError) return send(res, 403, { error: err.message });
+        // A vez do funcionário não chegou no prazo da resposta (edição, cancelamento, resposta à dúvida, ajuste guardado, revisão): 503, nada gravado (tentar de novo em instantes é seguro).
+        if (err instanceof TaskBusyError) return send(res, 503, { error: err.message }, { 'retry-after': '5' });
         // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
         if (err instanceof GuideExistsError) return send(res, 409, { error: 'exists' });
         // Teto de títulos manuais: só criar outro recusa (409); editar ou apagar um que existe segue.
@@ -2844,13 +3022,17 @@ async function getBoard(opts: { includeOld?: boolean } = {}): Promise<Board> {
 const INBOX_ORDER: Record<InboxKind, number> = { plan: 0, permission: 1, secret: 2, waiting: 3, question: 4, denied: 5, stuck: 6, followUp: 7, blocked: 8, notStarted: 9, error: 10, routine: 11, usage: 12, orphan: 13 };
 /** Avisos de consumo (conta e orçamento de projeto) que a caixa mostra; guardados entre leituras da caixa. */
 const usageWarnings = new UsageWarnings();
+/** Quais avisos de erro da caixa já passaram (`InboxItem.resolvedAt`, ver inboxResolved.ts) e há quanto tempo; só na memória. */
+const resolver = new InboxResolver();
 
 /**
  * Tudo que espera você, de todas as salas: planos prontos e permissões pendentes das conversas
  * no Claudio’s Club, sessões esperando resposta em outro lugar (app, terminal), conversas que pararam com
- * erro e processos órfãos de um reinício. Arquivados ficam de fora.
+ * erro e processos órfãos de um reinício. Arquivados ficam de fora. Aviso de erro cujo problema já passou
+ * segue na lista com `resolvedAt` (depois dos pendentes, não conta como pendência) até ser ignorado ou vencer o prazo.
  */
 async function getInbox(): Promise<InboxItem[]> {
+  const readAt = resolver.begin();
   const [projects, live] = await Promise.all([adapter.listProjects(), adapter.listLiveSessions()]);
   const { where, hidden } = await sessionPlacesNow(projects);
 
@@ -2862,11 +3044,6 @@ async function getInbox(): Promise<InboxItem[]> {
     for (const p of pending) out.push(permissionInboxItem(p, w));
     if (error) out.push({ id: `error:${sessionId}`, kind: 'error', ...w, summary: error, at: null });
   }
-  // Turno que parou no teto (ferramentas ou minutos): some quando você manda mensagem nova na conversa.
-  for (const c of chats.turnCaps()) {
-    const w = where(c.sessionId, liveById.get(c.sessionId));
-    if (!hidden(w)) out.push({ id: `cap:${c.sessionId}`, kind: 'error', ...w, summary: capText(c), at: c.at });
-  }
   // Terminou o turno perguntando algo no texto (sem pedido de permissão): espera até você responder.
   for (const q of chats.pendingQuestions()) {
     const w = where(q.sessionId, liveById.get(q.sessionId));
@@ -2877,6 +3054,14 @@ async function getInbox(): Promise<InboxItem[]> {
   const boardProjects = projects.filter((x) => x.exists && !x.worktreeOf);
   // Com a permissão que a conversa espera de você (`withPermission`): a tarefa parada nela segura os dependentes na caixa, como as outras paradas.
   const boards = await Promise.all(boardProjects.map(async (p) => ({ p, tasks: (await readTasks(p.path)).map((t) => tasks.withPermission(t)) })));
+  // Turno que parou no teto (ferramentas ou minutos): some quando você manda mensagem nova na conversa; com a tarefa da conversa já encerrada, segue na lista como resolvido.
+  for (const c of chats.turnCaps()) {
+    const w = where(c.sessionId, liveById.get(c.sessionId));
+    if (hidden(w)) continue;
+    const owner = boards.find((b) => b.p.id === w.projectId)?.tasks.find((t) => t.sessionId === c.sessionId);
+    const item = resolver.cap({ id: `cap:${c.sessionId}`, kind: 'error', ...w, summary: capText(c), at: c.at }, owner);
+    if (item) out.push(item);
+  }
   // Também as tarefas que só você destrava (ver ownAlerts): dúvida escalada ('question') e revisão ou ajuste parados ('stuck').
   // E os follow-ups de revisão que esperam você (ver followUpAlerts): tarefa que você pediu, ou o gestor não pôde receber ('followUp').
   // E o commit automático de tarefa pronta que falhou ou foi parcial (ver commitAlerts): kind 'error', some ao ignorar.
@@ -2891,7 +3076,9 @@ async function getInbox(): Promise<InboxItem[]> {
         out.push(a.state.humanAction === 'answer' ? taskQuestionInboxItem(a, w) : stuckInboxItem(a, w));
       }
       for (const a of followUps) out.push(followUpInboxItem(a, { projectId: p.id, projectName: p.name, sessionId: '', name: nameOf(p.id, a.task.staffId) }, nameOf(p.id, a.followUp.by), nameOf(p.id, a.followUp.staffId ?? null)));
-      for (const a of commits) out.push(commitInboxItem(a, { projectId: p.id, projectName: p.name, sessionId: '', name: nameOf(p.id, a.task.staffId) }));
+      // Commit automático: os arquivos da tarefa já sem mudança no git = resolvido (consulta ao git em paralelo, com cache e prazo, ver InboxResolver.commit).
+      const commitItems = await Promise.all(commits.map((a) => resolver.commit(commitInboxItem(a, { projectId: p.id, projectName: p.name, sessionId: '', name: nameOf(p.id, a.task.staffId) }), p.path, a.task)));
+      for (const item of commitItems) if (item) out.push(item);
       for (const s of rows) out.push(blockedInboxItem(s, { projectId: p.id, projectName: p.name, sessionId: '', staffId: s.task.staffId, name: nameOf(p.id, s.task.staffId) }));
       for (const n of forgotten) out.push(notStartedInboxItem(n, { projectId: p.id, projectName: p.name, sessionId: '', name: nameOf(p.id, n.task.staffId) }));
     }
@@ -2960,11 +3147,17 @@ async function getInbox(): Promise<InboxItem[]> {
   // Conversa de tarefa do Codex sem a fila de validação pesada por causa do hooks.json da conta (kind 'error', ver ChatManager.noteGuardOff): o aviso do chat ninguém lê numa conversa autônoma.
   for (const g of chats.guardOffHits()) {
     const w = where(g.sessionId, liveById.get(g.sessionId));
-    if (!hidden(w)) out.push(heavyGuardOffInboxItem(g, w));
+    if (hidden(w)) continue;
+    // O hooks.json que sumiu deixa o aviso como resolvido (a conversa só o larga na próxima mensagem).
+    const item = await resolver.guardOff(heavyGuardOffInboxItem(g, w));
+    if (item) out.push(item);
   }
   // O sandbox do Codex no Windows não abre por causa da política de senha (kind 'error', um por máquina, ver CodexPasswordPolicy): sem projeto, como o aviso de consumo da conta.
+  // Aviso de pé: relê a política (com o cache dela) para quem a corrigiu sem abrir conversa do Codex; passou = resolvido.
+  if (codexPolicy.current() && !codexPolicy.current()!.resolvedAt) await settleWithin(codexPolicy.check(), 3_000, undefined);
   const sandbox = codexPolicy.current();
-  if (sandbox) out.push(codexSandboxInboxItem(sandbox));
+  const sandboxItem = sandbox ? resolver.codexSandbox(codexSandboxInboxItem(sandbox)) : null;
+  if (sandboxItem) out.push(sandboxItem);
   // Segredos que apareceram nas conversas do Claudio’s Club (senha num comando, token colado…).
   for (const s of chats.secretHits()) {
     const w = where(s.sessionId, liveById.get(s.sessionId));
@@ -2988,7 +3181,8 @@ async function getInbox(): Promise<InboxItem[]> {
       });
     }
   }
-  return out.sort((a, b) => INBOX_ORDER[a.kind] - INBOX_ORDER[b.kind] || (b.at ?? '').localeCompare(a.at ?? ''));
+  resolver.sweep(readAt);
+  return out.sort((a, b) => resolvedLast(a, b) || INBOX_ORDER[a.kind] - INBOX_ORDER[b.kind] || (b.at ?? '').localeCompare(a.at ?? ''));
 }
 
 /** Turnos que terminaram desde `since`, com quem e onde (para o aviso "terminou"). */
@@ -3148,6 +3342,36 @@ async function migrateSkillsAtBoot(): Promise<void> {
 }
 
 /**
+ * Migração dos MCPs (ver staff/mcpMigration.ts): o registro do Club vai para a Global (`mcpServers` do ~/.claude.json, uma vez, com backup), as
+ * ferramentas testadas ganham a chave nova e as fichas com nome antigo viram refs `global:`/`project:`. O log diz o que mudou, o caminho do
+ * backup e o que ficou (conflitos de nome e valores que faltam no cofre).
+ */
+async function migrateMcpsAtBoot(): Promise<void> {
+  const projects = (await adapter.listProjects()).filter((p) => p.exists);
+  const r = await runMcpMigration({
+    clubFile: CLUB_MCP_FILE,
+    claudeConfigFile: defaultLocations().configFile,
+    backupDir: path.join(MYCO_HOME, 'backups'),
+    recordFile: path.join(MYCO_HOME, 'mcps-migracao.json'),
+    toolsFile: MCP_TOOLS_FILE,
+    projects,
+    known: (p) => knownMcpNames(p.path, defaultLocations().configFile),
+    list: listProjectStaff,
+    save: saveProfile,
+  });
+  if (r.clubError) console.warn(`[mcp] migração do registro não concluída (tenta de novo no próximo boot): ${r.clubError}`);
+  if (r.club) {
+    console.log(`[mcp] registro do Club → Global: ${r.club.moved.length} MCP(s)${r.club.moved.length ? ` (${r.club.moved.join(', ')})` : ''}; backup do ~/.claude.json: ${r.club.backup ?? 'não precisou (o arquivo não existia ou nada foi gravado)'}`);
+    if (r.club.conflicts.length) console.log(`[mcp] ${r.club.conflicts.length} não movido(s), nada foi sobrescrito: ${r.club.conflicts.join('; ')}`);
+    if (r.club.semValor.length) console.warn(`[mcp] sem valor no cofre (cadastre de novo na Global): ${r.club.semValor.join(', ')}`);
+  }
+  if (r.repaired.length) console.log(`[mcp] entradas do Club com o lançador refeito: ${r.repaired.join(', ')}`);
+  if (r.toolsKeys) console.log(`[mcp] ferramentas testadas com a chave nova: ${r.toolsKeys}`);
+  if (r.fichas.changed.length) console.log(`[mcp] fichas com MCP por nome antigo convertidas: ${r.fichas.changed.length}`);
+  if (r.fichas.skipped.length) console.warn(`[mcp] projetos não lidos na conversão das fichas: ${r.fichas.skipped.join(', ')}`);
+}
+
+/**
  * Migração dos agents prontos (ver staff/presetMigration.ts): o executor do projeto que ainda é o Haiku antigo passa para o Sonnet; o que
  * alguém editou fica e vai no log, com o que difere.
  */
@@ -3166,8 +3390,11 @@ async function migrateAgentPresetsAtBoot(): Promise<void> {
 
 server.listen(PORT, HOST, () => {
   console.log(`Claudio’s Club em http://claudio.localhost:${PORT} (adaptador: ${adapter.id})`);
+  // Só quem ficou com a porta confere as abas (um segundo servidor que falhou não pode parar o do outro).
+  tabs.start();
   // Migração das skills (uma vez): depois da porta, sem segurar a subida.
   void migrateSkillsAtBoot().catch((err: unknown) => console.warn('[skills] migração não concluída:', err));
+  void migrateMcpsAtBoot().catch((err: unknown) => console.warn('[mcp] migração não concluída:', err));
   void migrateAgentPresetsAtBoot().catch((err: unknown) => console.warn('[agents] migração dos prontos não concluída:', err));
   // Só depois de ficar com a porta: o segundo endereço é o da sandbox do Codex. Se não abrir (no macOS o 127.0.0.2 pode faltar), quem roda no
   // Codex fica sem rede e a conversa avisa (ver `codexRunEnv`); o resto do app segue igual.

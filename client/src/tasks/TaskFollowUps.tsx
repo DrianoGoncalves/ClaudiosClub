@@ -3,6 +3,7 @@ import type { FollowUp, FollowUpCardResult, Task } from '../../../shared/model';
 import { ApiError, api } from '../api';
 import { formatAgo } from '../format';
 import { locale, t } from '../i18n';
+import { cardTone } from '../inbox/alertTone';
 import { FollowUpFieldsView } from './FollowUpFields';
 import { decisionErrorText, followUpAuthor, followUpState, followUpsOf, openFollowUps, type FollowUpDecision } from './followUp';
 import {
@@ -37,7 +38,7 @@ export function FollowUpBadge({ task }: { task: Pick<Task, 'followUps'> }) {
   if (!open.length) return null;
   const mine = open.some((f) => f.to === 'owner');
   return (
-    <span className={`task-badge task-followup small${mine ? ' is-waiting' : ''}`} title={t(mine ? 'tasks.fuBadgeMineHint' : 'tasks.fuBadgeHint')}>
+    <span className={`task-badge task-followup small${mine ? ` ${cardTone('owner')}` : ''}`} title={t(mine ? 'tasks.fuBadgeMineHint' : 'tasks.fuBadgeHint')}>
       {followUpSummary(open)}
     </span>
   );
@@ -154,7 +155,7 @@ interface DecideProps {
   onOpenCard?: () => void;
   /** Na caixa: botões de texto (`link`) no lugar de botões cheios. */
   compact?: boolean;
-  /** A tarefa de origem ainda está sendo lida: sem ela não se sabe se está Finalizada (as saídas mudam) nem o achado inteiro. As saídas esperam a primeira leitura (dê certo ou não). */
+  /** A tarefa de origem ainda não foi lida (ou a leitura falhou): sem ela não se sabe se está Finalizada (as saídas mudam) nem o achado inteiro. As saídas esperam uma leitura que dê certo. */
   loading?: boolean;
 }
 
@@ -238,6 +239,7 @@ export function FollowUpDecide({ projectId, taskId, followUp, task = null, team 
           </button>
         )}
       </p>
+      {loading && <p className="muted small">{t('tasks.fuLoading')}</p>}
       {mode === 'card' && (
         <form ref={form} className="task-fu-form" onSubmit={(e) => void createCard(e)}>
           <label className="task-doubt-field">
@@ -318,14 +320,15 @@ interface ItemProps {
 }
 
 /**
- * Um follow-up da lista. Antigo (sem os campos do revisor): como sempre, com o texto e as saídas. Com os campos: o selo, o título e o "se não fizer" (o texto técnico fica recolhido);
- * se espera na conversa de trabalho, o detalhe só aponta para lá; se o aviso está com o gestor, diz com quem está; se espera você e não há conversa, decide-se aqui, com as mesmas saídas do balão.
+ * Um follow-up da lista. Antigo (sem os campos do revisor): o texto. Com os campos (aberto ou já decidido): o selo, o título e o "se não fizer" (o texto técnico fica recolhido).
+ * Aberto, a regra é uma só para os dois: o servidor deixa decidir quem pediu a tarefa OU você, pela tela, então se espera na conversa de trabalho o detalhe só aponta para lá; senão
+ * decide-se aqui, com as mesmas saídas do balão, e se o aviso está com o gestor a nota diz que ele também pode decidir.
  */
 function FollowUpItem({ task, followUp: f, tasks, team, nameOf, now, projectId, inChat, onOpenTask, onChanged, onGone, onDecided }: ItemProps) {
   const state = followUpState(f, { requestedBy: task.requestedBy, nameOf, now });
   const card = f.cardId ? tasks.find((x) => x.id === f.cardId) : undefined;
   const open = state.kind === 'open';
-  const structured = open && hasFields(f);
+  const structured = hasFields(f);
   const decide = (
     <FollowUpDecide projectId={projectId} taskId={task.id} followUp={f} task={task} team={team} onDone={onChanged} onGone={onGone} onDecided={onDecided} />
   );
@@ -339,7 +342,7 @@ function FollowUpItem({ task, followUp: f, tasks, team, nameOf, now, projectId, 
             {formatAgo(now - Date.parse(f.at))}
           </span>
         </span>
-        <span className={`task-badge small${open && f.to === 'owner' ? ' is-waiting' : ''}`}>{state.badge}</span>
+        <span className={`task-badge small${open && f.to === 'owner' ? ` ${cardTone('owner')}` : ''}`}>{state.badge}</span>
       </div>
       {structured ? (
         <FollowUpFieldsView
@@ -370,9 +373,9 @@ function FollowUpItem({ task, followUp: f, tasks, team, nameOf, now, projectId, 
         ) : (
           <p className="muted small">{t('tasks.fuCardNoId')}</p>
         ))}
-      {open && structured && inChat && <p className="muted small">{t('tasks.fuInChat')}</p>}
-      {open && structured && !inChat && f.to === 'manager' && <p className="muted small">{t('tasks.fuAtManager')}</p>}
-      {open && (!structured || (!inChat && f.to === 'owner')) && decide}
+      {open && inChat && <p className="muted small">{t('tasks.fuInChat')}</p>}
+      {open && !inChat && f.to === 'manager' && <p className="muted small">{t('tasks.fuAtManager')}</p>}
+      {open && !inChat && decide}
     </li>
   );
 }

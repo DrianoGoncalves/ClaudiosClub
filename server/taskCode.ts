@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { TaskCode, TaskCodeFile, TestRun } from '../shared/model';
 import { cleanEnv } from './auth';
 import { killTree } from './chat/registry';
-import { HEAVY_HELD_ENV, withHeavyLock } from './heavyQueue';
+import { HEAVY_HELD_ENV, withHeavyLock, type HeavyWaitFn } from './heavyQueue';
 import { worktreeFor } from './staff/worktree';
 import { TestScan } from './testFailures';
 
@@ -182,10 +182,11 @@ export const TEST_TIMEOUT_MS = 10 * 60_000;
  * Roda os testes (até 10 min); guarda só o fim da saída. O comando vem de detectTest, nunca do pedido. A suíte completa entra na fila
  * da máquina (uma validação pesada por vez, a mesma do terminal dos funcionários; ver `withHeavyLock`): o tempo de espera não conta
  * nos 10 min nem no `ms` do resultado. `queueAs`: o comando que decide a fila (padrão: o próprio); a nova rodada só dos arquivos que falharam (ver `isolateFailures`) é leve
- * por si, mas espera a vez como a suíte, para não rodar por cima de outra validação pesada e piorar a carga que causou a falha.
+ * por si, mas espera a vez como a suíte, para não rodar por cima de outra validação pesada e piorar a carga que causou a falha. `onWait`: avisa quando a suíte começa e quando deixa
+ * de esperar a vez (ver `HeavyWaitFn`), para o estado da fila do funcionário mostrar a espera.
  */
-export function runTests(dir: string, command: string, timeoutMs = TEST_TIMEOUT_MS, queueAs = command): Promise<TestRun> {
-  return withHeavyLock(queueAs, (held) => spawnTests(dir, command, timeoutMs, held), { label: `testes de ${path.basename(dir)}`, leaseMs: timeoutMs + 60_000 });
+export function runTests(dir: string, command: string, timeoutMs = TEST_TIMEOUT_MS, queueAs = command, onWait?: HeavyWaitFn): Promise<TestRun> {
+  return withHeavyLock(queueAs, (held) => spawnTests(dir, command, timeoutMs, held), { label: `testes de ${path.basename(dir)}`, leaseMs: timeoutMs + 60_000, onWait });
 }
 
 /** `held`: a chave da trava da fila que esta execução segura; vai no ambiente dela (ver `HEAVY_HELD_ENV`). */

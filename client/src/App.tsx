@@ -23,6 +23,7 @@ import { ANIMATIONS_KEY, animationsOn, readAnimationsChoice, systemReducesMotion
 import { BoardView } from './board/Board';
 import { boardStyle, useBoardBackground } from './board/colors';
 import { LazyScreen } from './LazyScreen';
+import { startPresence } from './presence';
 import { useTheme } from './theme';
 import { pollVisible, pollVisibleLoop } from './usePoll';
 import { archiveKey, ghostNodeId, HR_ID, manageNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
@@ -42,6 +43,7 @@ import { companyName, effortLabel, employeeName } from './format';
 import { t } from './i18n';
 import { linkItem, parseOpenLink } from './inbox/deepLink';
 import { taskIdOf, type InboxOpen } from './inbox/taskAlerts';
+import { pendingOf } from './inbox/resolved';
 import { useInbox } from './inbox/useInbox';
 import { withTaskStaff } from './tasks/followUpNotice';
 import { rankingGroups } from './ranking';
@@ -216,6 +218,9 @@ export function App() {
     api.config().then(setConfig, () => {});
   }, [load]);
 
+  // Sinal de que há uma aba aberta: com "parar ao fechar a aba" ligado, o servidor só para quando nenhuma dá sinal (server/tabPresence.ts).
+  useEffect(() => startPresence(), []);
+
   // Voltando para a aba, relê projetos e fichas do disco: o que mudou fora (terminal, editor) aparece
   // sem botão de atualizar.
   useEffect(() => {
@@ -332,8 +337,9 @@ export function App() {
   // O título da aba traz quantas coisas esperam você: dá para ver sem trazer o Claudio’s Club para a frente.
   useEffect(() => {
     const name = companyName(config?.companyName);
-    document.title = inbox.items.length ? `(${inbox.items.length}) ${name}` : name;
-  }, [config?.companyName, inbox.items.length]);
+    const pending = pendingOf(inbox.items).length;
+    document.title = pending ? `(${pending}) ${name}` : name;
+  }, [config?.companyName, inbox.items]);
 
   // Estado ao vivo por polling (SSE na Fase 3). Só troca o board se algo mudou, para não redesenhar à toa.
   // Sessão viva que o quadro ainda não conhece (conversa nova, que grava o transcript só depois da primeira
@@ -622,6 +628,7 @@ export function App() {
             {selection.kind === 'project' && (
               <ProjectPanel
                 onTasks={() => setTasksFor(selection.id)}
+                onSchedules={() => setSchedulesFor(selection.id)}
                 onFiles={() => {
                   setFilesPath(null);
                   setFilesLine(null);
@@ -974,6 +981,9 @@ export function App() {
             onPaired={() => {
               setNeedsPairing(false);
               setNotice(t('toolbar.pairPaired'));
+              // Aberta sem parear, a tela não leu nada (o GET sem o cookie é 401): relê o quadro e a config.
+              load();
+              api.config().then(setConfig, () => {});
             }}
           />
           <button className="drawer-close" onClick={() => setNeedsPairing(false)} aria-label={t('app.closeNotice')}>

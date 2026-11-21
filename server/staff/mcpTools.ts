@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import type { McpServerInfo } from '../../shared/model';
 import { MYCO_HOME } from '../config';
+import type { McpScopeName } from '../mcpAccessRefs';
 import { tryJson } from '../adapters/claude/fsutil';
 import { pathKey } from '../adapters/claude/paths';
 import { writeAtomic } from './store';
@@ -28,12 +28,40 @@ const Entry = z.object({ fingerprint: z.string().max(100), tools: z.array(Tool).
 type Entry = z.infer<typeof Entry>;
 const Doc = z.object({ servers: z.record(z.string(), Entry) });
 
-type Source = McpServerInfo['source'];
+type Source = McpScopeName;
 
-/** A chave de um MCP no arquivo: origem + projeto (só local e project, que dependem dele) + nome. */
+/** A chave de um MCP no arquivo: escopo + projeto (só o Projeto depende dele) + nome. */
 export function toolsKey(source: Source, projectPath: string | null, name: string): string {
-  const where = source === 'local' || source === 'project' ? (projectPath ? pathKey(projectPath) : '') : '';
+  const where = source === 'project' ? (projectPath ? pathKey(projectPath) : '') : '';
   return `${source}|${where}|${name}`;
+}
+
+/** A chave do modelo antigo (`club||n`, `user||n`, `local|p|n`) na do novo (`global||n`, `project|p|n`); a nova e o que não entende ficam. */
+export function newToolsKey(key: string): string {
+  const [source, where, ...rest] = key.split('|');
+  const name = rest.join('|');
+  if (source === 'club' || source === 'user') return `global||${name}`;
+  if (source === 'local') return `project|${where}|${name}`;
+  return key;
+}
+
+/**
+ * Passa as chaves do arquivo de ferramentas para o modelo Global/Projeto (uma vez, e de novo sem efeito). Duas chaves antigas que viram a
+ * mesma ficam com a testada por último. Devolve quantas chaves mudaram; sem mudança, nem regrava.
+ */
+export async function migrateToolsKeys(file: string): Promise<number> {
+  const servers = await readDoc(file);
+  const out: Record<string, Entry> = {};
+  let changed = 0;
+  for (const [key, entry] of Object.entries(servers)) {
+    const next = newToolsKey(key);
+    if (next !== key) changed++;
+    const prev = out[next];
+    if (!prev || entry.testedAt.localeCompare(prev.testedAt) > 0) out[next] = entry;
+  }
+  if (changed === 0) return 0;
+  await writeAtomic(file, JSON.stringify({ servers: out }, null, 2) + '\n');
+  return changed;
 }
 
 /**

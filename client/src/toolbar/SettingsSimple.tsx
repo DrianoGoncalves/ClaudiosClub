@@ -49,7 +49,6 @@ export const SIMPLE_ORDER: readonly SimpleKey[] = [
   'pair',
   'update',
   'manual',
-  'demo',
   'credits',
 ];
 

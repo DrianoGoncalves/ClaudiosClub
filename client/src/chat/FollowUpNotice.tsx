@@ -6,6 +6,7 @@ import { FollowUpFieldsView } from '../tasks/FollowUpFields';
 import { authorName } from '../tasks/followUp';
 import { followUpTitle, fullText, taskFinished, whoWouldDo, type TeamMember } from '../tasks/followUpNotice';
 import { FollowUpDecide } from '../tasks/TaskFollowUps';
+import { cardTone } from '../inbox/alertTone';
 
 /**
  * O follow-up da caixa como balão na conversa de trabalho da tarefa (o mesmo padrão do balão de segredo): o selo da recomendação (vale fazer / opcional), o título em linguagem leiga, "Se não
@@ -27,7 +28,7 @@ export function FollowUpNotice({
   task: Task | null;
   team: readonly TeamMember[];
   now: number;
-  /** A primeira leitura da tarefa de origem ainda não terminou: as saídas esperam (ver `FollowUpDecide`). */
+  /** A tarefa de origem ainda não foi lida (ou a leitura falhou): as saídas esperam (ver `FollowUpDecide`). */
   loading?: boolean;
   onChanged: () => void | Promise<void>;
   onGone: (message: string | null) => void;
@@ -42,7 +43,7 @@ export function FollowUpNotice({
     <div className={`permission followup-notice${finished ? ' is-finished' : ''}`} role="group" aria-label={t('inbox.kindFollowUp')} data-item-id={item.id}>
       {finished && (
         <p className="fu-finished small">
-          <span className="task-badge small fu-done">{t('tasks.statusDone')}</span> <span className="muted">{t('tasks.fuFinishedHint')}</span>
+          <span className={`task-badge small fu-done ${cardTone('resolved')}`}>{t('tasks.statusDone')}</span> <span className="muted">{t('tasks.fuFinishedHint')}</span>
         </p>
       )}
       <FollowUpFieldsView

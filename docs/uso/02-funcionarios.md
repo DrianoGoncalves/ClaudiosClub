@@ -103,7 +103,7 @@ Salve com **Salvar ficha** (ou **Contratar**, ao criar). **Cancelar** fecha; no 
 | Autônomo | O Claude Code decide o que é seguro rodar; o que julga arriscado (deploy em produção, apagar em massa) é recusado e ele pede a você. No Codex, não há classificador: roda na sandbox sem perguntar. |
 | Sem travas | Não pede nada. Os bloqueios de segredos (.ssh, .env) e os hooks continuam. Só para quem você confia, em projeto com git. |
 
-**Só planeja não combina com agent que edita nem com MCP Livre.** Em **Só planeja** o agent herda o modo e não grava (no Codex, ele roda na mesma sandbox, só de leitura): marcar o `executor`, o `executor-rapido` ou qualquer agent com Edit, Write, Bash ou PowerShell nas ferramentas (ou escolher um roteiro que os chama) só gasta consumo. Se o mesmo nome existe no projeto e na conta, vale o agent do projeto. E um MCP em **Livre**, o navegador incluso, não tem trava de escrita: em **Só planeja** quem segura é o próprio modelo; para garantir, use **Só leitura**. Quando a ficha tem **Só planeja** e uma dessas marcas, o campo **Autonomia** mostra o aviso **Impasse: “Só planeja” não grava**, com os nomes, ao contratar e ao editar, no Claude e no Codex. É só um aviso: dá para salvar. Para sair do impasse, tire da ficha o agent que você marcou (ou use o `pesquisador`, que só lê); se o agent vem do **Roteiro**, desmarcá-lo não adianta, porque o roteiro continua chamando (mesmo o que o projeto nem tem): troque o roteiro. Ponha o MCP ou o **Acesso do navegador** em **Só leitura** ou escolha uma autonomia que edite. O MCP que o **Testar** achou sem nenhuma ferramenta de escrita não entra no aviso. O **navegador** vem ligado e **Livre** por padrão, então ele já entra no aviso; no Codex ele só conta com **Permitir que o GPT use meu Chrome** ligado nas Configurações. No Codex a ficha não tem a lista de agents nem a de MCPs: lá o aviso vale para o roteiro e para o navegador.
+**Só planeja não combina com agent que edita nem com MCP Livre.** Em **Só planeja** o agent herda o modo e não grava (no Codex, ele roda na mesma sandbox, só de leitura): marcar o `executor`, o `executor-rapido` ou qualquer agent com Edit, Write, Bash ou PowerShell nas ferramentas (ou escolher um roteiro que os chama) só gasta consumo. Se o mesmo nome existe no projeto e na conta, vale o agent do projeto. E um MCP em **Livre**, o navegador incluso, não tem trava de escrita: em **Só planeja** quem segura é o próprio modelo; para garantir, use **Só leitura**. Quando a ficha tem **Só planeja** e uma dessas marcas, o campo **Autonomia** mostra o aviso **Impasse: “Só planeja” não grava**, com os nomes, ao contratar e ao editar, no Claude e no Codex. É só um aviso: dá para salvar. Para sair do impasse, tire da ficha o agent que você marcou, ou use o `pesquisador`, que só lê, ou escolha uma autonomia que edite; se o agent vem do **Roteiro**, desmarcá-lo não adianta, porque o roteiro continua chamando (mesmo o que o projeto nem tem): troque o roteiro ou escolha uma autonomia que edite. Ponha o MCP ou o **Acesso do navegador** em **Só leitura** ou escolha uma autonomia que edite. O MCP que o **Testar** achou sem nenhuma ferramenta de escrita não entra no aviso. O **navegador** vem ligado e **Livre** por padrão, então ele já entra no aviso; no Codex ele só conta com **Permitir que o GPT use meu Chrome** ligado nas Configurações. No Codex a ficha não tem a lista de agents nem a de MCPs: lá o aviso vale para o roteiro e para o navegador.
 
 ### Servidores (SSH e FTP)
 
@@ -143,6 +143,36 @@ Cuidados:
 - Um gestor repassa o que é da área de cada subordinado como tarefa (aparece no quadro de tarefas). O que não tem dono ele faz ou passa aos agents.
 - Temporários saem do quadro quando terminam. Nada é apagado.
 
+## Consulta entre projetos
+
+Deixa um funcionário de um projeto fazer uma pergunta a um funcionário de outro (ex.: o Roberto, do Slingshot, pergunta ao Alphonse, do Learnote, como funciona o builder). **Vem desligado**: só você liga, limita e revoga, pela tela.
+
+**Ligar:** no detalhe do projeto, aba **Projeto**, seção **Consulta entre projetos**.
+
+1. Em **Ligar a outro projeto**, escolha o **projeto consultado**.
+2. Em **Quem daqui pode consultar**, deixe **Todos** ou escolha **Só alguns** e marque os funcionários.
+3. Clique em **Ligar**. O vínculo vale na hora.
+
+**Limitar depois:** em **Editar** na linha do vínculo, troque a lista e clique em **Salvar lista**. Quem saiu da lista tem as consultas abertas canceladas.
+
+**Revogar:** **Revogar** na linha do vínculo (e confirme). As consultas abertas entre os dois projetos são canceladas na hora e nenhuma resposta delas chega. A seção mostra também os vínculos que chegam a este projeto (quem pode consultá-lo), e dá para revogá-los daqui.
+
+**O vínculo tem direção:** ligar o Slingshot ao Learnote não deixa o Learnote perguntar ao Slingshot.
+
+**O que o funcionário consultado pode e não pode:**
+
+- Pode: ler os arquivos do projeto dele e escrever uma resposta curta (até 4 KB).
+- Não pode: editar, rodar comando, usar API ou MCP, ler a memória pessoal, criar tarefa, delegar nem consultar outro projeto. Qualquer pedido de permissão é negado.
+- A resposta passa por um filtro que tira trechos com cara de segredo (chaves, tokens, `senha=…`). É um filtro, não uma garantia: não ligue o vínculo entre projetos cujos arquivos tenham segredos soltos.
+
+**Custo:** a consulta gasta a **cota de uso do projeto consultado**, não a de quem perguntou. Projeto consultado pausado recusa a consulta.
+
+**Limites:** prazo de 10 minutos por consulta, uma aberta por par de funcionários, no máximo 3 abertas por projeto consultado e poucas por hora.
+
+**Como aparece:** a resposta chega à conversa de quem perguntou com o selo **Resposta de outro projeto · nome (projeto)**, e a conversa de consulta, no projeto consultado, abre com **Consulta de outro projeto · nome (projeto)**. É informação de outro funcionário, não ordem sua: o funcionário não segue instruções que estejam nela. Consulta sem resposta (prazo, erro ou revogação) vira um aviso curto, sem conteúdo.
+
+**Consultas recentes:** a seção lista as últimas cinco que saem ou chegam ao projeto, com o estado (em andamento, respondida, falhou, sem resposta no prazo, cancelada, não entregue) e o prazo das que estão em andamento.
+
 ## Organograma (quadro)
 
 - Cada projeto é uma sala; os funcionários ficam dentro dela. As linhas entre eles mostram **empresta** e **delegando**.
@@ -162,7 +192,7 @@ Cuidados:
 
 ## MCPs
 
-- Em **Configurações** → **MCPs** (**Servidores MCP**), há quatro escopos: **Da conta (Club)** (recomendado: segredos no cofre do sistema, e só quem tem o MCP na ficha carrega), **Da conta (Claude Code)** (todas as sessões do Claude Code veem), **Do projeto** (vai para o git: não ponha chave ali) e **Locais do projeto** (só neste computador).
+- Em **Configurações** → **MCPs** (**Servidores MCP**), há só dois escopos, os mesmos das skills: **Global** (`~/.claude.json`: vale em todos os projetos e também no Claude Code fora do Claudio’s Club; os cadastrados pela tela guardam os segredos no cofre do sistema) e **Projeto** (`.mcp.json` do projeto escolhido: vai para o git, não ponha chave ali; o que estava no escopo local do Claude Code aparece aqui, com a marca **fora do git**, só deste computador). Na ficha, cada MCP marcado é guardado com o escopo (Global ou Projeto); com o mesmo nome nos dois, só um pode ser marcado (o do Projeto vale na conversa). MCP que já estava salvo só pelo nome é convertido: Projeto se existe lá, senão Global.
 - Tipos: **HTTP**, **SSE** e **Comando local**. Valores de variáveis e cabeçalhos nunca voltam para a tela; aparece "definido".
 - Botões: **+ MCP**, **Testar**, **Editar**, **Excluir**.
 - Na ficha, cada MCP marcado tem um seletor de acesso, na linha do nome:
@@ -173,7 +203,7 @@ Cuidados:
 - Quem só lê é o que o próprio MCP declara no **Testar**. Sem teste, ou se o MCP mudou depois dele, nenhuma ferramenta conta como leitura: em **Só leitura** o MCP inteiro fica bloqueado e em **Pede antes de escrever** toda ferramenta pede antes. Com um desses dois escolhidos, a ficha mostra quantas ferramentas contam como escrita, ou avisa que o MCP não foi testado.
 - No modo sem travas, e sempre no GPT, *Pede antes de escrever* vira *Só leitura*, porque não há quem confirme.
 - O **navegador** tem um seletor só, **Acesso do navegador**, que aparece com **Usar o navegador** marcado. Vale para o Claude in Chrome e para o Chrome do GPT, que são o mesmo navegador (vale o mais restritivo dos dois). Ele não tem teste: **Só leitura** bloqueia o navegador inteiro e **Pede antes de escrever** pede a cada ação.
-- No GPT a lista de MCPs não aparece na ficha; só o **Acesso do navegador** vale nos dois motores.
+- A lista de MCPs (Global e Projeto) e o acesso de cada um valem nos dois motores, Claude e GPT (Codex); o GPT recebe os marcados na ficha pelo arquivo de lançamento da conversa. O **Acesso do navegador** também vale nos dois.
 - Cada MCP ligado que roda no seu computador ocupa memória, mas o peso de cada um não foi medido (a ficha diz "peso não medido"). O que foi medido, e o que gasta o limite de uso, está em **O que pesa e quando vale ligar**, abaixo.
 
 ## O que pesa e quando vale ligar

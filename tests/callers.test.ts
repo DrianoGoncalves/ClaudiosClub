@@ -86,10 +86,14 @@ describe('resolveCaller', () => {
     expect(resolveCaller(true, [codex], tokens)).toMatchObject({ ok: true }); // cabeçalho repetido: vale o primeiro
   });
 
-  it('em 127.0.0.1 o token é opcional: ausente ou inválido segue sem dono; válido, o dono do token chama (Claude e Codex)', () => {
+  it('em 127.0.0.1, sem token segue sem dono; token inválido é 401 com o que fazer (nunca leitura anônima); válido, o dono do token chama (Claude e Codex)', () => {
     expect(resolveCaller(false, undefined, tokens)).toEqual({ ok: true, caller: null });
-    expect(resolveCaller(false, 'lixo', tokens)).toEqual({ ok: true, caller: null });
-    expect(resolveCaller(false, 'a'.repeat(64), tokens)).toEqual({ ok: true, caller: null });
+    expect(resolveCaller(false, '', tokens)).toEqual({ ok: true, caller: null });
+    for (const bad of ['lixo', 'a'.repeat(64), claude.toUpperCase()]) {
+      const r = resolveCaller(false, bad, tokens);
+      expect(r, bad).toMatchObject({ ok: false, status: 401 });
+      expect((r as { error: string }).error).toContain('Reabra a conversa');
+    }
     expect(resolveCaller(false, claude, tokens)).toEqual({ ok: true, caller: { ...owner({ sessionId: 's-claude', staffId: 'ana', engine: 'claude' }), sandbox: false } });
     expect(resolveCaller(false, codex, tokens)).toEqual({ ok: true, caller: { ...owner(), sandbox: false } });
   });
@@ -285,28 +289,34 @@ const claudeToken = () => tokens.issue(owner({ sessionId: 's-claude', staffId: '
 const cookie = () => pairing.setCookieHeader().split(';')[0]!;
 
 describe('porta de entrada: classificação pelo socket', () => {
-  it('pelo 127.0.0.1 tudo segue como antes: tela com cookie, Origin forjado sem cookie recusado, ferramenta sem token passa', async () => {
+  it('pelo 127.0.0.1: tela com cookie passa, Origin forjado sem cookie é recusado, ferramenta sem token é 401 na rota de funcionário e o GET sem cookie nem token também (só o health é aberto)', async () => {
     expect(PAIR_COOKIE.length).toBeGreaterThan(0);
     const tela = await call(local, 'POST', '/api/projects/p1/tasks', { ...FORGED, cookie: cookie() });
     expect(tela).toMatchObject({ status: 200, body: { sandbox: false, fromBrowser: true, caller: null } });
     const forjado = await call(local, 'POST', '/api/projects/p1/tasks', FORGED);
     expect(forjado.status).toBe(403);
     expect(forjado.body.code).toBe('needs-pairing');
+    // Sem token, o funcionário não diz de que projeto é: 401 (antes passava sem dono).
     const ferramenta = await call(local, 'POST', '/api/projects/p1/tasks', STAFF);
-    expect(ferramenta).toMatchObject({ status: 200, body: { sandbox: false, fromBrowser: false, caller: null } });
+    expect(ferramenta.status).toBe(401);
+    expect(ferramenta.body.error).toContain('x-myco-token');
+    // GET sem token e sem cookie do pareamento: 401 (a leitura é da tela pareada ou do token do projeto; ver projectIsolation.test.ts).
+    expect(await call(local, 'GET', '/api/projects/p1/tasks')).toMatchObject({ status: 401, body: { code: 'needs-pairing' } });
+    expect((await call(local, 'GET', '/api/health')).status).toBe(200);
     // POST de funcionário fora da lista segue 400 (só pela tela), como antes.
     expect((await call(local, 'POST', '/api/config', STAFF)).status).toBe(400);
     // Sem x-myco: 403.
     expect((await call(local, 'POST', '/api/projects/p1/tasks', {})).status).toBe(403);
   });
 
-  it('pelo 127.0.0.1, o token válido diz quem chama (Claude ou Codex); inválido segue sem dono; a tela não ganha dono', async () => {
+  it('pelo 127.0.0.1, o token válido diz quem chama (Claude ou Codex); inválido é 401; a tela não ganha dono', async () => {
     const claude = await call(local, 'POST', '/api/projects/p1/tasks', { ...STAFF, 'x-myco-token': claudeToken() });
     expect(claude.body).toMatchObject({ sandbox: false, fromBrowser: false, caller: { staffId: 'ana', engine: 'claude', sandbox: false } });
     const codex = await call(local, 'POST', '/api/projects/p1/tasks', { ...STAFF, 'x-myco-token': codexToken() });
     expect(codex.body).toMatchObject({ caller: { staffId: 'cris', engine: 'codex', sandbox: false } });
     const velho = await call(local, 'POST', '/api/projects/p1/tasks', { ...STAFF, 'x-myco-token': 'f'.repeat(64) });
-    expect(velho).toMatchObject({ status: 200, body: { caller: null } });
+    expect(velho.status).toBe(401);
+    expect(velho.body.error).toContain('Reabra a conversa');
     const tela = await call(local, 'POST', '/api/projects/p1/tasks', { ...FORGED, cookie: cookie(), 'x-myco-token': claudeToken() });
     expect(tela.body).toMatchObject({ fromBrowser: true, caller: null });
   });

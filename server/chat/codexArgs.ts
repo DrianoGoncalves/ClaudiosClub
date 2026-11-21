@@ -1,7 +1,7 @@
-import { lstatSync, statSync, type Stats } from 'node:fs';
+import { lstatSync, readdirSync, statSync, type Stats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { FTP_MCP_NAME, GPT_MCP_NAME, MEMORIA_MCP_NAME, type Autonomy } from '../../shared/model';
+import { FTP_MCP_NAME, GIT_MCP_NAME, GPT_MCP_NAME, MEMORIA_MCP_NAME, type Autonomy } from '../../shared/model';
 import { SANDBOX_HOST } from '../callers';
 
 // Linha de comando do Codex (CLI da OpenAI) para um funcionário com `engine: 'codex'`. Cada mensagem é uma execução
@@ -59,7 +59,36 @@ export interface CodexSecretContext {
   home: string;
   /** Pasta de dados do Claudio’s Club (`~/.myco`): o cofre de senhas, que guarda também a chave do pareamento, fica em `secrets`. */
   mycoHome: string;
+  /** Conversa de consulta de outro projeto: nega também o resto (ver `CodexConsultPolicy`). Ausente = conversa comum. */
+  consult?: CodexConsultPolicy;
 }
+
+/**
+ * O que a conversa de consulta (server/consult/) acrescenta ao bloqueio: a leitura é só da pasta do projeto, então saem também os dados do Claudio’s Club (`mycoHome` inteiro), `~/.codex`,
+ * `~/.claude`, as pastas dos OUTROS projetos (`otherProjects`), as pastas `.myco`, `.git`, `.claude`, `.codex` e `.vps` do projeto e os `.env*`, `.mcp.json` e chaves.
+ *
+ * Provado no Codex 0.169.0 no Windows (sandbox elevada, `codex sandbox` com o perfil montado aqui): `:root` precisa continuar legível (sem ele a elevada nem abre: "requires effective `:root` read
+ * access"), então não há allowlist: é `read-only` + negações. `:project_roots` com glob (`**\/.env*`, `**\/.mcp.json`) e pasta (`.myco`, `.git`) nega a leitura e a escrita, inclusive de junction
+ * para fora; pasta absoluta fora do projeto também. NÃO provado no Linux/macOS (bwrap): lá o glob de arquivo pode quebrar com mais de um arquivo, então a lista usa só caminhos absolutos que existem
+ * e o limite de UM arquivo regular negado por execução vale (acima disso, `CodexBlockedError`: falha fechada).
+ */
+export interface CodexConsultPolicy {
+  /** As pastas dos outros projetos cadastrados (as que existem são negadas). */
+  otherProjects: string[];
+  /** Sistema (os testes trocam): o Windows usa os globs de `:project_roots`; os outros, só caminhos absolutos. */
+  platform?: NodeJS.Platform;
+}
+
+/** Pastas do projeto que a consulta nunca lê (as mesmas do Claude, ver `CONSULT_PROJECT_DIRS` em ficha.ts). */
+const CONSULT_DIRS = ['.myco', '.git', '.claude', '.codex', '.vps'];
+/** Arquivos que a consulta nunca lê, em qualquer pasta do projeto (glob no Windows; no resto, só os da raiz do projeto). */
+const CONSULT_GLOBS = ['**/.env*', '**/.mcp.json', '**/*.pem', '**/*.key', '**/*.p12', '**/id_rsa*', '**/id_ed25519*'];
+const CONSULT_ROOT_FILE = /^(\.env.*|\.mcp\.json|id_rsa.*|id_ed25519.*|.*\.(pem|key|p12))$/;
+
+/** Pastas de credencial de outras ferramentas, relativas à home (com `/`), que a consulta nunca lê nos dois motores (o Claude usa as mesmas em `consultDenyRules`, ficha.ts). */
+export const CONSULT_CREDENTIAL_DIRS = ['.aws', '.docker', '.kube', '.azure', '.gnupg', '.config/gh', '.config/gcloud', 'AppData/Roaming/GitHub CLI', 'AppData/Roaming/gcloud'];
+/** Arquivos de credencial da home (token de registro, login de servidor, senha do git). */
+export const CONSULT_CREDENTIAL_FILES = ['.npmrc', '.netrc', '_netrc', '.git-credentials', '.pypirc'];
 
 /** Recusa de rodar o Codex (falha fechada): a mensagem é para o usuário, em português, e acaba como erro da conversa. */
 export class CodexBlockedError extends Error {}
@@ -77,6 +106,15 @@ function statOf(p: string): Stats | null {
   }
 }
 
+/** Os arquivos sensíveis na raiz da pasta (`.env*`, `.mcp.json`, chaves): só os nomes; pasta que não se lê não tem nenhum. */
+function rootFiles(dir: string): string[] {
+  try {
+    return readdirSync(dir).filter((n) => CONSULT_ROOT_FILE.test(n));
+  } catch {
+    return [];
+  }
+}
+
 /**
  * O que o funcionário não pode ler: `~/.ssh`, o cofre `<mycoHome>/secrets` e `.vps` (conexões e ssh_config; o da pasta da conversa e o
  * do projeto, que numa worktree são pastas diferentes). Só entra o que existe: negar um caminho que não existe faz o Codex criar no lugar
@@ -91,6 +129,8 @@ function statOf(p: string): Stats | null {
  * Também as pastas de lançamento (`<mycoHome>/run`, com o mcp.json das sessões) e os backups do ~/.claude.json (`<mycoHome>/backups`
  * e `~/.claude/backups`). O `~/.claude.json` só entra se, depois de tudo, não sobrou arquivo: é o único arquivo da home que cabe.
  * Limite da sandbox: os `.claude.json.backup*` e `.tmp.*` da home ficam legíveis no Codex.
+ *
+ * Na consulta, as pastas de credencial da home (`CONSULT_CREDENTIAL_DIRS`: ~/.aws, ~/.docker, ~/.config/gh, AppData/Roaming/GitHub CLI…) e os arquivos (`CONSULT_CREDENTIAL_FILES`: ~/.npmrc…) que existem.
  */
 export function codexDenyPaths(ctx: CodexSecretContext): string[] {
   const dirs: string[] = [];
@@ -107,6 +147,19 @@ export function codexDenyPaths(ctx: CodexSecretContext): string[] {
   add(path.join(ctx.mycoHome, 'backups'));
   add(path.join(ctx.home, '.claude', 'backups'));
   for (const root of new Set([ctx.cwd, ctx.projectPath])) add(path.join(root, '.vps'));
+  if (ctx.consult) {
+    // Consulta: os dados do Club inteiros, as pastas de ferramentas da home e as dos outros projetos (as que existem; ver `CodexConsultPolicy`).
+    add(ctx.mycoHome);
+    add(path.join(ctx.home, '.codex'));
+    add(path.join(ctx.home, '.claude'));
+    for (const other of ctx.consult.otherProjects) add(other);
+    for (const d of CONSULT_CREDENTIAL_DIRS) add(path.join(ctx.home, ...d.split('/')));
+    // Fora do Windows não há glob provado: as pastas do projeto e os arquivos sensíveis da raiz entram pelo caminho (o limite de um arquivo vale).
+    if ((ctx.consult.platform ?? process.platform) !== 'win32') {
+      for (const d of CONSULT_DIRS) add(path.join(ctx.projectPath, d));
+      for (const f of rootFiles(ctx.projectPath)) add(path.join(ctx.projectPath, f));
+    }
+  }
   if (files.length > 1) {
     throw new CodexBlockedError(
       `Há mais de um arquivo para proteger (${files.join(', ')}) e a sandbox do Codex só consegue negar um arquivo regular por execução: os outros ficariam legíveis. Não rodo o Codex assim. Troque esses arquivos por pastas (ou apague os que não usa) e tente de novo.`,
@@ -114,6 +167,12 @@ export function codexDenyPaths(ctx: CodexSecretContext): string[] {
   }
   // Depois dos `.vps` (que têm prioridade): só entra se sobrou o lugar do arquivo.
   if (files.length === 0) add(path.join(ctx.home, '.claude.json'));
+  if (ctx.consult) {
+    // Arquivos de credencial da home: no Windows a sandbox nega quantos forem (provado no Codex 0.169.0 com dois arquivos e pastas juntos). No bwrap só cabe um arquivo regular por execução, então
+    // entram só enquanto sobra o lugar e o resto fica legível; não é falha fechada, porque quase toda home tem um `.npmrc` e a consulta não rodaria nunca.
+    const win = (ctx.consult.platform ?? process.platform) === 'win32';
+    for (const f of CONSULT_CREDENTIAL_FILES) if (win || files.length === 0) add(path.join(ctx.home, f));
+  }
   return [...dirs, ...files];
 }
 
@@ -177,8 +236,14 @@ export function codexSafetyArgs(o: CodexSafetyOptions): string[] {
 export function codexProfileArgs(o: CodexSafetyOptions): string[] {
   /** Só o que existe: `read` num caminho que não existe faz o Codex criar um arquivo vazio no lugar (o mesmo cuidado do `deny`). */
   const existing = (paths: string[]) => paths.filter((p) => statOf(p));
+  // Consulta no Windows: pastas e globs do projeto pela raiz do projeto (`:project_roots`, provado; ver `CodexConsultPolicy`). Nos outros sistemas já foram pelo caminho, em `codexDenyPaths`.
+  const projectRoots =
+    o.consult && (o.consult.platform ?? process.platform) === 'win32'
+      ? [`":project_roots"={${[...CONSULT_DIRS, ...CONSULT_GLOBS].map((g) => `${tomlString(g)}="deny"`).join(',')}}`]
+      : [];
   const entries = [
     ...codexDenyPaths(o).map((p) => `${tomlString(p)}="deny"`),
+    ...projectRoots,
     // A escrita extra e o "só leitura" dentro da pasta de trabalho só fazem sentido no modo de escrita (o de leitura nunca escreve).
     ...(o.mode === 'workspace' ? (o.writableRoots ?? []).map((p) => `${tomlString(p)}="write"`) : []),
     ...(o.mode === 'workspace' ? existing(o.readOnlyPaths ?? []).map((p) => `${tomlString(p)}="read"`) : []),
@@ -231,6 +296,16 @@ export const CODEX_SSH_MCP_NAME = 'myco-ssh';
  */
 export function codexMemoriaMcpArgs(s: CodexMcpServer | null | undefined): string[] {
   return codexMcpArgs(MEMORIA_MCP_NAME, s, s?.enabledTools);
+}
+
+/**
+ * Os `-c mcp_servers.myco-git.*` da conversa: o MCP de git (server/staff/gitMcp.ts), a única porta de commit, push e PR do Codex (na sandbox o `.git` é
+ * só leitura e não há rede nem as credenciais do dono). Roda fora da sandbox, como o de SSH, com a mesma regra de aprovação (`approve`). `enabledTools`:
+ * só as de leitura quando a ficha limita o acesso (`readonly`/`ask`) ou na revisão; o que a conversa pode escrever agora o MCP confere sozinho a cada
+ * chamada (git-policy.json).
+ */
+export function codexGitMcpArgs(s: CodexMcpServer | null | undefined): string[] {
+  return codexMcpArgs(GIT_MCP_NAME, s, s?.enabledTools);
 }
 
 /**
@@ -425,6 +500,7 @@ export const CODEX_RESERVED_MCP_NAMES: ReadonlySet<string> = new Set([
   FTP_MCP_NAME,
   GPT_MCP_NAME,
   MEMORIA_MCP_NAME,
+  GIT_MCP_NAME,
   'claude-in-chrome',
 ]);
 
@@ -509,8 +585,15 @@ export interface CodexSpawn {
   sshMcp?: CodexMcpServer | null;
   /** MCP da memória da própria ficha (em `plan` e na revisão), ou null: sem ele. Ver `codexMemoriaMcpArgs`. */
   memoriaMcp?: CodexMcpServer | null;
+  /** MCP de git (commit, push e PR fora da sandbox), ou null: sem ele. Ver `codexGitMcpArgs`. */
+  gitMcp?: CodexMcpServer | null;
   /** Conversa de revisão de tarefa: a sandbox é sempre de só leitura, qualquer que seja a autonomia (e a que a tela mudar depois). */
   readOnly?: boolean;
+  /**
+   * Conversa de consulta de outro projeto (server/consult/): `read-only` fixa, SEM rede (nem a API do Club), sem MCP, sem agents, sem fila pesada, sem busca na web e com as negações de
+   * `CodexConsultPolicy`. Vale a cada execução, e `buildCodexArgs` ignora o que os outros campos disserem (não depende de quem monta o spawn).
+   */
+  consult?: CodexConsultPolicy;
   /** MCP do Chrome do usuário (só sem SSH na conversa), ou null: sem ele. Ver `codexChromeMcpArgs`. */
   chromeMcp?: CodexMcpServer | null;
   /** MCP do navegador limpo (sem logins; ver `codexCleanBrowserMcpArgs`), ou null: sem ele. */
@@ -560,6 +643,8 @@ export interface CodexRunOptions {
   sshMcp?: CodexMcpServer | null;
   /** MCP da memória da própria ficha (só em `plan`; null = sem ele). Ver `codexMemoriaMcpArgs`. */
   memoriaMcp?: CodexMcpServer | null;
+  /** MCP de git (null = sem ele). Ver `codexGitMcpArgs`. */
+  gitMcp?: CodexMcpServer | null;
   /** MCP do Chrome do usuário (null = sem ele). Ver `codexChromeMcpArgs`. */
   chromeMcp?: CodexMcpServer | null;
   /** MCP do navegador limpo (null = sem ele). Ver `codexCleanBrowserMcpArgs`. */
@@ -570,6 +655,8 @@ export interface CodexRunOptions {
   agents?: CodexAgentRole[];
   /** A fila de validação pesada no terminal (ver `codexHeavyArgs`); ausente = sem ela. */
   heavyGuard?: CodexHeavyGuard | null;
+  /** Conversa de consulta: ver `CodexSpawn.consult`. Com ela, `sandbox` e `network` são ignorados (sempre `read-only` e `off`) e nada de MCP, agents nem fila pesada entra. */
+  consult?: CodexConsultPolicy;
   /** O ambiente que o `codex` vai receber (de onde sai o CODEX_HOME para achar o hooks.json da conta); ausente = o do servidor. */
   env?: NodeJS.ProcessEnv;
   /** A conta tem `hooks.json` e a fila ficou de fora desta execução (sem a flag de confiança e sem o hook): quem chama avisa. Ver `accountHooksFile`. */
@@ -620,30 +707,36 @@ export function buildCodexArgs(o: CodexRunOptions): string[] {
   if (!resume) args.push('-C', o.cwd);
   if (o.model) args.push('-m', o.model);
   if (o.effort) args.push('-c', `model_reasoning_effort=${tomlString(o.effort)}`);
+  // Consulta: a sandbox, a rede e as ferramentas são as da consulta, e não as que o chamador montou (sempre só leitura, sem rede, sem MCP, sem agents, sem fila pesada, sem busca na web).
+  const bare = !!o.consult;
   args.push(
     ...codexSafetyArgs({
-      mode: o.sandbox,
+      mode: bare ? 'read-only' : o.sandbox,
       cwd: o.cwd,
       projectPath: o.secrets.projectPath ?? o.cwd,
       home: o.secrets.home ?? os.homedir(),
       mycoHome: o.secrets.mycoHome,
-      network: o.network,
-      webSearch: o.internetAccess === true && !o.sshMcp,
-      writableRoots: o.writableRoots,
-      readOnlyPaths: o.readOnlyPaths,
+      network: bare ? 'off' : o.network,
+      webSearch: !bare && o.internetAccess === true && !o.sshMcp,
+      writableRoots: bare ? [] : o.writableRoots,
+      readOnlyPaths: bare ? [] : o.readOnlyPaths,
+      consult: o.consult,
     }),
   );
   args.push(...codexWindowsSandboxArgs(o.platform));
-  args.push(...codexSshMcpArgs(o.sshMcp));
-  args.push(...codexMemoriaMcpArgs(o.memoriaMcp));
-  args.push(...codexChromeMcpArgs(o.chromeMcp));
-  args.push(...codexCleanBrowserMcpArgs(o.cleanMcp));
-  args.push(...codexExtraMcpArgs(o.extraMcps));
-  args.push(...codexAgentArgs(o.agents));
-  // A cada execução (o hooks.json pode surgir no meio da conversa): com ele na conta, nem a flag de confiança nem o hook.
-  const accountHooks = o.heavyGuard ? accountHooksFile(o.cwd, o.env) : null;
-  if (accountHooks) o.onHeavyGuardOff?.(accountHooks);
-  args.push(...codexHeavyArgs(o.heavyGuard, { accountHooks, platform: o.platform }));
+  if (!bare) {
+    args.push(...codexSshMcpArgs(o.sshMcp));
+    args.push(...codexMemoriaMcpArgs(o.memoriaMcp));
+    args.push(...codexGitMcpArgs(o.gitMcp));
+    args.push(...codexChromeMcpArgs(o.chromeMcp));
+    args.push(...codexCleanBrowserMcpArgs(o.cleanMcp));
+    args.push(...codexExtraMcpArgs(o.extraMcps));
+    args.push(...codexAgentArgs(o.agents));
+    // A cada execução (o hooks.json pode surgir no meio da conversa): com ele na conta, nem a flag de confiança nem o hook.
+    const accountHooks = o.heavyGuard ? accountHooksFile(o.cwd, o.env) : null;
+    if (accountHooks) o.onHeavyGuardOff?.(accountHooks);
+    args.push(...codexHeavyArgs(o.heavyGuard, { accountHooks, platform: o.platform }));
+  }
   if (o.instructions && instructionsInArgv(o.instructions, o.platform)) args.push('-c', `developer_instructions=${tomlString(o.instructions)}`);
   if (resume) args.push(o.threadId!);
   args.push('-');

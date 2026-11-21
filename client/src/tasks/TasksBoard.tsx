@@ -1,24 +1,31 @@
-import { Fragment, useCallback, useEffect, useState, type DragEvent } from 'react';
-import { AUTO_REVIEW_ROUNDS, isClosed, type BoardConfig, type CostReport, type InboxItem, type ProjectPause, type StaffProfile, type Task as TaskModel, type TaskCreateResult, type TaskCreateWarning, type TaskHandoff, type TaskStatus } from '../../../shared/model';
+import { Fragment, useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { AUTO_REVIEW_ROUNDS, isClosed, type BoardConfig, type CostReport, type InboxItem, type ProjectPause, type StaffProfile, type StaffQueue, type Task as TaskModel, type TaskCreateResult, type TaskCreateWarning, type TaskHandoff, type TaskStatus } from '../../../shared/model';
 import { api, withUsageConfirm } from '../api';
 import { pollVisible } from '../usePoll';
 import { Markdown } from '../chat/markdown';
 import { formatAgo, formatShare } from '../format';
 import { t, locale } from '../i18n';
-import { BranchIcon, ClockIcon, ReviewIcon } from '../icons';
+import { BranchIcon, ClockIcon, ReviewIcon, UserIcon } from '../icons';
 import { PrimaryReturnBadge, PrimaryReturnLine, TaskFallbackBadge } from '../staff/FallbackBadge';
 import { AutoBadge, AutoInfo } from './AutoCard';
 import { BoardReview, useBoardCommit, useBoardReview } from './BoardReview';
 import { CommitBadge, CommitBlock } from './TaskCommit';
 import { FallbackWaitBadge, fallbackWaitText } from './FallbackWait';
-import { ReviewDelegate } from './ReviewDelegate';
-import { reviewPlan } from './reviewRule';
+import { ReviewDelegate, ReviewStatus } from './ReviewDelegate';
+import { byHierarchy } from './reviewPick';
+import { fellToOwner, reviewPlan } from './reviewRule';
 import { OwnerBadge, ReviewWho } from './ReviewWho';
+import { ownerAsks, footerPlan, type AskCard } from './detailActions';
+import { NeedsYouStrip, TaskDetailFooter } from './TaskDetailParts';
+import { GrowTextarea } from './GrowTextarea';
+import { useKeyboardInset } from './useKeyboardInset';
 import { TaskCodePanel } from './TaskCodePanel';
 import { DoubtBadge, DoubtBlock } from './TaskDoubt';
-import { PauseNote } from './TaskPause';
+import { PauseNote, pauseText } from './TaskPause';
 import { PausedBanner, PauseButton, useProjectPause } from './ProjectPauseBar';
-import { RetryBadge } from './TaskRetry';
+import { QueueDots, useQueues } from './QueueStrip';
+import { queueDots } from './queueState';
+import { RetryBadge, retryText } from './TaskRetry';
 import { SubtaskBadges, SubtaskBlock, SubtaskStack } from './TaskSubtasks';
 import { ResourceWaitBadge, resourceWaitText } from './ResourceWait';
 import { BlockedBadge, BlockedByField, blockerName, openBlockers, sameDeps, shownBlockers } from './TaskDeps';
@@ -29,8 +36,9 @@ import { CancelRequestBadge, CancelRequestBlock, DuplicateNote } from './TaskCan
 import { planPending, planSessions } from './planPending';
 import { PermissionGo, PermissionWaitBadge, PermissionWaitBlock, permissionTarget, permissionText, type PermissionText } from './PermissionWait';
 import { FollowUpBadge, FollowUpBlock } from './TaskFollowUps';
+import { followUpsOf } from './followUp';
 import { chatFollowUpIds, conversationItemFor, verdictShown } from './followUpNotice';
-import { giveBackBody, giveBackHeldNote } from './noCode';
+import { giveBackBody, giveBackHeldNote, noCodeOf } from './noCode';
 import { NoCodeBadge, NoCodeBlock } from './TaskNoCode';
 import { TaskCloseDialog } from './TaskCloseDialog';
 import { TaskCostBlock } from './TaskCostBlock';
@@ -40,6 +48,9 @@ import { primaryNoteText } from './primaryReturn';
 import { dropAfter, dropPosition, orderMoves, orderNoteText, queuePosOf, queueSize, stepOfKey, type OrderBody, type OrderMoves } from './queueOrder';
 import { TaskRuns } from './TaskRuns';
 import { askConfirm } from '../lib/dialogStore';
+import { cardTone } from '../inbox/alertTone';
+import { NeedsYouBadge } from '../inbox/NeedsYouBadge';
+import { taskWaitNeeds } from '../inbox/needsYou';
 
 // Quadro de tarefas de um projeto: aguardar → a fazer → fazendo → revisão → pronto.
 // Os status são 7 (ver server/tasks.ts); na tela, "planejando" vai em Fazendo, e "cancelada" não é coluna: fica num grupo recolhido no fim de Pronto.
@@ -118,27 +129,7 @@ const HELP: Record<TaskStatus, string> = {
   cancelled: t('tasks.helpCancelled'),
 };
 
-/**
- * Funcionários na ordem da hierarquia: quem reporta a você primeiro, depois os subordinados
- * (pelo primeiro gestor, como no organograma). No mesmo nível, orquestrador antes; depois por nome.
- */
-export function byHierarchy(staff: StaffProfile[]): StaffProfile[] {
-  const byId = new Map(staff.map((s) => [s.id, s]));
-  const depth = (s: StaffProfile) => {
-    const seen = new Set([s.id]);
-    let d = 0;
-    for (let m = byId.get(s.reportsTo[0] ?? ''); m && !seen.has(m.id); m = byId.get(m.reportsTo[0] ?? '')) {
-      seen.add(m.id);
-      d++;
-    }
-    return d;
-  };
-  const orch = (s: StaffProfile) => (/orquestr/i.test(s.role) ? 0 : 1);
-  return staff
-    .map((s) => ({ s, d: depth(s) }))
-    .sort((a, b) => a.d - b.d || orch(a.s) - orch(b.s) || a.s.name.localeCompare(b.s.name, 'pt-BR'))
-    .map((x) => x.s);
-}
+export { byHierarchy };
 
 interface Props {
   projectId: string;
@@ -159,6 +150,8 @@ interface Props {
   initialTasks?: Task[];
   /** Só para teste, como `initialTasks`: a pausa do projeto de partida (null = rodando); sem ela o quadro a lê do servidor. */
   initialPause?: ProjectPause | null;
+  /** Só para teste, como `initialPause`: o estado das filas de partida; sem ele o quadro o lê do servidor. */
+  initialQueues?: StaffQueue[] | null;
   /** A caixa "precisa de mim" (useInbox): o selo "Plano para aprovar" só vale com um item `plan` da conversa da tarefa. Sem ela, nenhuma tarefa tem plano esperando. */
   inboxItems?: InboxItem[];
   /** Abre a conversa de um aviso da caixa, já no cartão dele (o atalho "Responder no chat" do pedido de permissão). Sem ela, o quadro só mostra o selo. */
@@ -167,26 +160,33 @@ interface Props {
 
 const NO_ITEMS: InboxItem[] = [];
 
-export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOpenStaff, onChanged, initialTaskId = null, onOpenSchedules, initialTasks, initialPause, inboxItems = NO_ITEMS, onOpenInbox }: Props) {
+export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOpenStaff, onChanged, initialTaskId = null, onOpenSchedules, initialTasks, initialPause, initialQueues, inboxItems = NO_ITEMS, onOpenInbox }: Props) {
   const [tasks, setTasks] = useState<Task[] | null>(initialTasks ?? null);
   const [selected, setSelected] = useState<string | null>(initialTaskId);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** O que acabou de ser salvo ("detail:<id>" no detalhe, "wait:<id>" no motivo do cartão em Aguardar): mostra "Salvo" por 2,5 s. */
+  const [saved, setSaved] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<TaskStatus | null>(null);
   /** O cartão da fila sobre o qual se arrasta outro da mesma fila, e de que lado dele o arrastado entra (`after`: abaixo). */
   const [overCard, setOverCard] = useState<{ id: string; after: boolean } | null>(null);
+  /** Funcionário cujas tarefas estão à mostra em todas as colunas ('' = todos). Só filtra a vista: a ordem e os passos da fila seguem os do servidor. */
+  const [staffFilter, setStaffFilter] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [showCancelled, setShowCancelled] = useState(false);
   /** Diálogo de cancelar ou apagar aberto, para a tarefa `id`. */
   const [closing, setClosing] = useState<{ mode: DepMode; id: string } | null>(null);
   /** O card sem código que está sendo devolvido ao responsável (o botão espera o envio). */
   const [givingBack, setGivingBack] = useState<string | null>(null);
+  /** O que o último "Devolver" deixou quando não falhou: a mensagem ficou guardada (aviso neutro, não erro). Vale só para o card dele. */
+  const [giveBackNote, setGiveBackNote] = useState<{ id: string; text: string } | null>(null);
   /** Aviso de possível duplicata da última tarefa criada aqui (a nova, e as parecidas); some ao fechar o aviso ou ao abrir o formulário de novo. */
   const [dup, setDup] = useState<{ createdId: string; warnings: TaskCreateWarning[] } | null>(null);
   const boardReview = useBoardReview(projectId);
   const boardCommit = useBoardCommit(projectId);
   const projectPause = useProjectPause(projectId, projectName, onChanged, initialPause);
+  const queues = useQueues(projectId, initialQueues);
   const now = Date.now();
 
   const load = useCallback(() => {
@@ -214,15 +214,27 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     if (closing && tasks && !tasks.some((x) => x.id === closing.id)) setClosing(null);
   }, [closing, tasks]);
 
+  useEffect(() => {
+    if (!saved) return;
+    const timer = setTimeout(() => setSaved(null), 2500);
+    return () => clearTimeout(timer);
+  }, [saved]);
+
+  /** Roda a ação e relê o quadro; devolve se deu certo (o erro vai para `error`). */
   const act = async (fn: () => Promise<unknown>) => {
     setError(null);
     try {
       await fn();
       load();
       onChanged();
+      return true;
     } catch (e) {
       setError((e as Error).message);
+      return false;
     }
+  };
+  const saveAs = async (key: string, fn: () => Promise<unknown>) => {
+    if (await act(fn)) setSaved(key);
   };
 
   const move = (t: Task, status: TaskStatus) => t.status !== status && act(() => api.updateTask(projectId, t.id, { status }));
@@ -266,12 +278,13 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     // Um envio por vez: o clique repetido mandaria a mensagem duas vezes ao funcionário (a marca só sai no primeiro envio).
     if (givingBack) return;
     setGivingBack(task.id);
+    setGiveBackNote(null);
     try {
       await act(async () => {
         const body = giveBackBody(task);
         if (!body) throw new Error(t('tasks.noCodeNoSession'));
         const held = giveBackHeldNote(await withUsageConfirm((force) => api.chatSend(projectId, { ...body, force })));
-        if (held) throw new Error(held);
+        if (held) setGiveBackNote({ id: task.id, text: held });
       });
     } finally {
       setGivingBack(null);
@@ -289,9 +302,14 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   /** As que o selo "Esperando" ainda mostra: a bloqueadora já aprovada sai (ver `shownBlockers`); sobra só a posição na fila. */
   const waitingShown = (t: Task) => shownBlockers(waitingOn(t));
   /** Pronto parado há mais de 7 dias (o servidor marca): fora do quadro, atrás do "Ver arquivadas". */
-  const archived = (tasks ?? []).filter((t) => t.archived);
+  const inView = (t: Task) => !staffFilter || t.staffId === staffFilter;
+  const archived = (tasks ?? []).filter((t) => t.archived && inView(t));
   /** Canceladas: fora das colunas, no grupo recolhido de Pronto. Nunca contam como prontas. */
-  const cancelled = (tasks ?? []).filter((t) => t.status === 'cancelled');
+  const cancelled = (tasks ?? []).filter((t) => t.status === 'cancelled' && inView(t));
+  /** Quem aparece no seletor: quem tem tarefa no quadro (mais o escolhido, que pode ter esvaziado). */
+  const filterOwners = staff.filter((s) => s.id === staffFilter || !!tasks?.some((t) => t.staffId === s.id));
+  /** As bolinhas de quem está ocupado em Fazendo e Revisão (o filtro por funcionário vale para elas). */
+  const dots = queueDots(queues, tasks, (id) => nameOf(id), (id) => tasks?.find((x) => x.id === id)?.title ?? id, now, staffFilter);
   const closingTask = closing ? (tasks?.find((t) => t.id === closing.id) ?? null) : null;
 
   /**
@@ -358,23 +376,20 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         }}
         onClick={() => setSelected(task.id)}
       >
+        <span className="task-id muted small" title={t('tasks.idHint')}>
+          {task.id}
+        </span>
         <span className="task-title">{task.title}</span>
-        <StatusBadge task={task} hasDeploy={hasDeploy} planWaiting={awaitingPlan(task)} />
+        <NeedsYouBadge needs={taskWaitNeeds(task)} />
         <PermissionWaitBadge text={permissionOf(task)} />
-        <NoCodeBadge task={task} />
-        <VerdictBadge task={task} nameOf={nameOf} />
-        {task.status === 'review' && <OwnerBadge plan={reviewPlan(task, boardReview.config)} />}
         <DoubtBadge question={task.question} requestedBy={task.requestedBy} nameOf={nameOf} warm={waitWarm(task.status)} />
         <CancelRequestBadge request={task.cancelRequest} nameOf={nameOf} />
-        <FollowUpBadge task={task} />
-        <CommitBadge task={task} />
         <PauseNote pause={task.pause} staffName={nameOf(task.staffId)} now={now} />
         <SubtaskBadges task={task} nameOf={nameOf} />
         <span className="task-meta muted small">
-          <span className="task-id" title={t('tasks.idHint')}>
-            {task.id}
-          </span>{' '}
-          · {nameOf(task.staffId) ?? t('tasks.noOwner')}
+          <span className="task-owner" title={t('tasks.ownerHint')}>
+            <UserIcon /> {nameOf(task.staffId) ?? t('tasks.noOwner')}
+          </span>
           {task.requestedBy && ` · ${t('tasks.requestedBy', { name: nameOf(task.requestedBy) ?? task.requestedBy })}`}
           {costOf(task) && ` · ${costOf(task)}`} · {formatAgo(now - Date.parse(task.updatedAt))}
         </span>
@@ -414,6 +429,13 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             {t(task.held.length === 1 ? 'tasks.heldOne' : 'tasks.heldOther', { n: task.held.length })}
           </span>
         )}
+        {/* Selos de situação (plano, sem código, veredito, revisor, follow-up, commit): no fim do cartão, depois de quem revisa. */}
+        <StatusBadge task={task} hasDeploy={hasDeploy} planWaiting={awaitingPlan(task)} />
+        <NoCodeBadge task={task} />
+        <VerdictBadge task={task} nameOf={nameOf} />
+        {task.status === 'review' && <OwnerBadge plan={reviewPlan(task, boardReview.config)} />}
+        <FollowUpBadge task={task} />
+        <CommitBadge task={task} />
       </button>
       </SubtaskStack>
       {/* Atalho do pedido de permissão: fora do botão do cartão (botão não cabe dentro de botão). */}
@@ -429,12 +451,17 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
           aria-label={t('tasks.waitReasonPlaceholder')}
           onBlur={(e) => {
             const next = e.currentTarget.value.trim() || null;
-            if (next !== (task.waitReason ?? null)) void act(() => api.updateTask(projectId, task.id, { waitReason: next }));
+            if (next !== (task.waitReason ?? null)) void saveAs(`wait:${task.id}`, () => api.updateTask(projectId, task.id, { waitReason: next }));
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.currentTarget.blur();
           }}
         />
+      )}
+      {task.status === 'waiting' && saved === `wait:${task.id}` && (
+        <span className="save-ok" role="status">
+          ✓ {t('tasks.saved')}
+        </span>
       )}
     </Fragment>
   );
@@ -511,9 +538,22 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         {!tasks ? (
           <p className="muted">{t('tasks.loading')}</p>
         ) : (
+          <>
+          {filterOwners.length > 0 && (
+            <div className="tasks-filter">
+              <select className="tasks-staff-filter" value={staffFilter} onChange={(e) => setStaffFilter(e.target.value)} aria-label={t('tasks.queueFilter')} title={t('tasks.queueFilter')}>
+                <option value="">{t('tasks.queueFilterAll')}</option>
+                {byHierarchy(filterOwners).map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="tasks-columns">
             {COLUMNS.map(({ status, shows }) => {
-              const shown = tasks.filter((t) => !t.archived && shows.includes(t.status));
+              const shown = tasks.filter((t) => !t.archived && shows.includes(t.status) && inView(t));
               const col = status === 'todo' ? byQueue(shown) : byRecent(shown, awaitingPlan);
               return (
                 <section
@@ -533,9 +573,13 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                     setDragging(null);
                   }}
                 >
-                  <h3 title={HELP[status]}>
-                    {LABEL[status]} <span className="muted">{col.length || ''}</span>
-                  </h3>
+                  <div className="tasks-col-head">
+                    <h3 title={HELP[status]}>
+                      {LABEL[status]} <span className="muted">{col.length || ''}</span>
+                    </h3>
+                    {/* Quem está ocupado agora (Fazendo: executando ou fila travada; Revisão: revisando); o texto de cada um só no hover. */}
+                    {(status === 'doing' || status === 'review') && <QueueDots dots={dots.filter((d) => d.column === status)} />}
+                  </div>
                   {col.map(card)}
                   {status === 'done' && archived.length > 0 && (
                     <>
@@ -563,6 +607,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
               );
             })}
           </div>
+          </>
         )}
         {current && (
           <TaskDetail
@@ -578,7 +623,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             board={boardReview.config}
             cost={costOf(current)}
             onClose={() => setSelected(null)}
-            onSave={(patch) => act(() => api.updateTask(projectId, current.id, patch as TaskPatch))}
+            onSave={(patch) => saveAs(`detail:${current.id}`, () => api.updateTask(projectId, current.id, patch as TaskPatch))}
+            saved={saved === `detail:${current.id}`}
             onMove={(s) => void move(current, s)}
             onStart={() => void start(current)}
             error={error}
@@ -592,10 +638,12 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             onUnqueue={() => void act(() => api.updateTask(projectId, current.id, { queued: false }))}
             onOpen={() => current.staffId && onOpenStaff(current.staffId)}
             permission={permissionOf(current)}
+            planWaiting={awaitingPlan(current)}
             onOpenPermission={openPermission(current)}
             chatFollowUps={chatFollowUpIds(current.id, inboxItems, projectId)}
             onOpenChat={openFollowUpChat(current)}
             givingBack={givingBack === current.id}
+            giveBackNote={giveBackNote?.id === current.id ? giveBackNote.text : null}
             onGiveBack={() => void giveBack(current)}
             onOpenTask={setSelected}
             nameOf={nameOf}
@@ -635,7 +683,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
 function StatusBadge({ task, hasDeploy, planWaiting }: { task: Task; hasDeploy: boolean; planWaiting: boolean }) {
   if (task.status === 'planning')
     return planWaiting ? (
-      <span className="task-badge is-waiting" title={HELP.planning}>
+      <span className={`task-badge ${cardTone('owner')}`} title={HELP.planning}>
         {t('tasks.badgePlan')}
       </span>
     ) : (
@@ -667,7 +715,7 @@ function VerdictBadge({ task, nameOf }: { task: Task; nameOf: (id: string | null
   if (!verdict || !verdictShown(task)) return null;
   const name = nameOf(task.review!.staffId) ?? task.review!.staffId;
   return (
-    <span className={`task-badge small ${verdict === 'approved' ? 'is-approved' : 'is-rejected'}`}>
+    <span className={`task-badge small ${cardTone(verdict === 'approved' ? 'approved' : 'rejected')}`}>
       {t(verdict === 'approved' ? 'tasks.verdictApproved' : 'tasks.verdictRejected', { name })}
     </span>
   );
@@ -738,7 +786,7 @@ function GoalFields({
       </label>
       <label title={t('tasks.acceptanceHint')}>
         {t('tasks.fieldAcceptance')}
-        <textarea rows={3} value={acceptance} maxLength={ACCEPTANCE_MAX} placeholder={t('tasks.acceptancePlaceholder')} onChange={(e) => onAcceptance(e.target.value)} />
+        <GrowTextarea rows={3} value={acceptance} maxLength={ACCEPTANCE_MAX} placeholder={t('tasks.acceptancePlaceholder')} onChange={(e) => onAcceptance(e.target.value)} />
       </label>
     </>
   );
@@ -850,6 +898,7 @@ function TaskDetail({
   cost,
   onClose,
   onSave,
+  saved,
   onMove,
   onStart,
   error,
@@ -863,10 +912,12 @@ function TaskDetail({
   onUnqueue,
   onOpen,
   permission,
+  planWaiting,
   onOpenPermission,
   chatFollowUps,
   onOpenChat,
   givingBack,
+  giveBackNote,
   onGiveBack,
   onOpenTask,
   onDelete,
@@ -886,6 +937,8 @@ function TaskDetail({
   onOpenStaff: (staffId: string) => void;
   onClose: () => void;
   onSave: (patch: Partial<Pick<Task, 'title' | 'description' | 'staffId' | 'pr' | 'branch' | 'reviewerId' | 'goal' | 'acceptance' | 'blockedBy'>>) => Promise<void>;
+  /** Acabou de salvar com sucesso: mostra "Salvo" no lugar do botão (que some quando não há mais nada a salvar). */
+  saved: boolean;
   onMove: (s: TaskStatus) => void;
   onStart: () => void;
   /** O erro da última ação (ex.: dependência em ciclo, apagar tarefa de que outra depende): aparece aqui, onde o dedo está. */
@@ -907,6 +960,8 @@ function TaskDetail({
   onOpen: () => void;
   /** O pedido de permissão que a conversa da tarefa espera de você (null: nenhum, ou o plano já avisa). */
   permission: PermissionText | null;
+  /** Há plano esperando a sua aprovação na conversa da tarefa (item `plan` da caixa): a ação principal do rodapé leva a ela. */
+  planWaiting: boolean;
   /** Abre o chat no cartão do pedido (undefined: sem como abrir daqui). */
   onOpenPermission?: () => void;
   /** Os follow-ups abertos desta tarefa que esperam na conversa de trabalho (item da caixa com a conversa): aqui o detalhe só aponta para lá. */
@@ -915,6 +970,8 @@ function TaskDetail({
   onOpenChat?: () => void;
   /** Card sem código: o envio ao responsável está em andamento (o botão fica desligado). */
   givingBack: boolean;
+  /** Card sem código: a mensagem do "Devolver" ficou guardada (aviso neutro; null: nada a dizer). */
+  giveBackNote: string | null;
   /** Card sem código: devolve ao responsável (uma mensagem na conversa dele). */
   onGiveBack: () => void;
   /** Abre o detalhe de outra tarefa do quadro (a subtarefa ou o card de origem). */
@@ -927,296 +984,355 @@ function TaskDetail({
   nameOf: (staffId: string | null) => string | null;
 }) {
   /** Textos do porquê de a tarefa não andar: laranja só com o cartão em A fazer, como no selo do cartão. */
-  const waitText = `muted${waitWarm(task.status) ? ' task-wait-text' : ''} small`;
-  const fbWait = fallbackWaitText(task.fallbackBlocked, Date.now());
+  const waitText = `task-note${waitWarm(task.status) ? ' tone-wait' : ''}`;
+  const now = Date.now();
+  const fbWait = fallbackWaitText(task.fallbackBlocked, now);
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
   const [pr, setPr] = useState(task.pr ?? '');
   const [goal, setGoal] = useState(task.goal ?? '');
   const [acceptance, setAcceptance] = useState(task.acceptance ?? '');
   const [blockedBy, setBlockedBy] = useState(task.blockedBy ?? []);
+  /** Modo leitura é o padrão: os campos abrem com "Editar" (o corpo do painel é para ler e decidir). */
+  const [editing, setEditing] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  /** Teclado virtual aberto: o painel sobe o tanto que ele cobre, para o rodapé não ficar atrás dele. */
+  const keyboard = useKeyboardInset();
   const goalChanged = goal.trim() !== (task.goal ?? '');
   const acceptanceChanged = acceptance.trim() !== (task.acceptance ?? '');
   const depsChanged = !sameDeps(blockedBy, task.blockedBy ?? []);
   const dirty = title !== task.title || description !== task.description || pr !== (task.pr ?? '') || goalChanged || acceptanceChanged || depsChanged;
   const who = staff.find((s) => s.id === task.staffId);
+  const saveEdits = () =>
+    void onSave({
+      title,
+      description,
+      pr: pr || null,
+      // Só o que mudou: o servidor confere dependência (existe? faz ciclo?) a cada envio.
+      ...(goalChanged && { goal: goal.trim() || null }),
+      ...(acceptanceChanged && { acceptance: acceptance.trim() || null }),
+      ...(depsChanged && { blockedBy }),
+    });
+  /** Fecha a edição jogando fora o que não foi salvo (o que ficou escondido em campo fechado enganaria). */
+  const closeEdit = () => {
+    setTitle(task.title);
+    setDescription(task.description);
+    setPr(task.pr ?? '');
+    setGoal(task.goal ?? '');
+    setAcceptance(task.acceptance ?? '');
+    setBlockedBy(task.blockedBy ?? []);
+    setEditing(false);
+  };
+
+  const plan = reviewPlan(task, board);
+  const asks = ownerAsks({ task, hasPermission: !!permission, plan });
+  const foot = footerPlan({ task, asks, queuePos, canOpenPermission: !!onOpenPermission, hasChat: !!(task.sessionId && who), planWaiting });
+  /** Rola o corpo até o cartão do pedido e põe o foco nele (o leitor de tela anuncia onde chegou). */
+  const goTo = (card: AskCard) => {
+    const el = bodyRef.current?.querySelector<HTMLElement>(`[data-card="${card}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: 'start', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    el.focus({ preventScroll: true });
+  };
+  const reviewerName = plan.kind === 'staff' ? (nameOf(plan.id) ?? plan.id) : t('tasks.headReviewerYou');
+  const showReview = task.status === 'review' && (!!task.review || plan.kind === 'staff' || fellToOwner(plan));
+  const pause = pauseText(task.pause, nameOf(task.staffId), now);
+  const retry = retryText(task.retry, now);
+  const ownerName = who?.name ?? t('tasks.ownerFallback');
+  /** Os avisos de espera e fila (um por texto): o corpo da seção recolhida e a linha de resumo dela. */
+  const blockedLine =
+    waitingShown.length > 0 ? `${t('tasks.blockedDetail', { names: waitingShown.map(blockerName).join(', ') })}${waitingShown.some((o) => o.status === 'cancelled') ? ` ${t('tasks.blockedCancelledHint')}` : ''}` : null;
+  const queueLine = queuePos > 0 && waitingShown.length === 0 ? t(queueKeys(waitingOn.length > 0, !!busyWith).detail, { who: ownerName, pos: queuePos, title: busyWith?.title ?? '' }) : null;
+  const orderLine = moves ? t('tasks.orderLabel', { who: ownerName, pos: queuePos, total: queueTotal }) : null;
+  const resourceLine = task.resourceWait ? `${resourceWaitText(task.resourceWait, now)}. ${t('tasks.resourceWaitHint')}` : null;
+  const heldLine = task.held?.length
+    ? `${task.held.length === 1 ? t('tasks.heldMineOne') : t('tasks.heldMineOther', { n: task.held.length })}: ${task.held[0]!.reason}. ${t('tasks.heldNext')}`
+    : null;
+  const waitHeads = [pause?.head, retry?.head, blockedLine, queueLine, orderLine, resourceLine, heldLine, fbWait?.hint].filter((x): x is string => !!x);
+  const waitSum = waitHeads.length > 1 ? `${waitHeads[0]} (+${waitHeads.length - 1})` : (waitHeads[0] ?? '');
+  const startLabel = busyWith || waitingOn.length ? t('tasks.enqueue') : t('tasks.start');
+  const startTitle = !task.staffId
+    ? t('tasks.pickOwner')
+    : waitingOn.length
+      ? t('tasks.startBlockedHint')
+      : busyWith
+        ? t('tasks.startBusyHint', { who: who?.name ?? '', title: busyWith.title })
+        : t('tasks.startHint', { who: who?.name ?? '' });
+  /** O cartão de um pedido: o `data-card` é o alvo do atalho da faixa e do rodapé. */
+  const slot = (card: AskCard | 'cancelreq', body: ReactNode) => (
+    <div className="task-card-slot" data-card={card} tabIndex={-1}>
+      {body}
+    </div>
+  );
   return (
-    <aside className="task-detail">
+    <aside className="task-detail" style={keyboard ? { bottom: keyboard } : undefined}>
       <header className="task-detail-head">
+        <span className="task-id muted small" title={t('tasks.idHint')}>
+          {task.id}
+        </span>
+        <div className="task-detail-top">
+          <h3 className="task-detail-title">{task.title}</h3>
+          <button className="drawer-close in-head" onClick={onClose} aria-label={t('tasks.closeDetails')}>
+            ×
+          </button>
+        </div>
         <span className="kicker" title={task.archived ? t('tasks.archivedHint') : undefined}>
           {LABEL[task.status]}
           {task.archived && ` · ${t('tasks.archivedTag')}`}
-          {' · '}
-          <span className="task-id" title={t('tasks.idHint')}>
-            {task.id}
-          </span>
         </span>
-        <button className="drawer-close in-head" onClick={onClose} aria-label={t('tasks.closeDetails')}>
-          ×
-        </button>
+        <p className="task-detail-who muted small">
+          {t('tasks.headOwner', { name: who?.name ?? t('tasks.nobody') })} · {t('tasks.headReviewer', { name: reviewerName })}
+        </p>
       </header>
-      {/* Gruda no topo ao rolar: o botão que falhou (Salvar, Apagar) pode estar longe daqui. */}
-      {error && (
-        <p className="error small task-detail-error" role="alert">
-          {error}
-        </p>
-      )}
-      {/* No topo, antes de tudo: é o que trava o card e só você destrava (a conversa espera a sua permissão). */}
-      <PermissionWaitBlock text={permission} onOpen={onOpenPermission} />
-      {/* No topo: explica por que o card está parado em Fazendo e leva à subtarefa (ou ao card de origem); no celular o detalhe cobre o quadro. */}
-      <SubtaskBlock task={task} tasks={tasks} labels={LABEL} staffName={who?.name ?? null} onOpen={onOpenTask} />
-      {/* Card = código: o card que terminou sem editar nada não foi para revisão; quem pediu decide (cancelar com motivo ou devolver ao responsável). */}
-      <NoCodeBlock task={task} nameOf={nameOf} busy={givingBack} onCancel={onCancel} onGiveBack={onGiveBack} />
-      {/* Também no topo: o resumo dos follow-ups e o caminho para a conversa onde eles esperam (o card costuma estar Finalizado: nada mais pede a sua atenção nele). */}
-      <FollowUpBlock task={task} tasks={tasks} team={staff} nameOf={nameOf} now={Date.now()} projectId={projectId} chatIds={chatFollowUps} onOpenChat={onOpenChat} onOpenTask={onOpenTask} onChanged={onChanged} />
-      <label>
-        {t('tasks.fieldTitle')}
-        <input value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} />
-      </label>
-      <label>
-        {t('tasks.description')}
-        <textarea rows={4} value={description} maxLength={8000} onChange={(e) => setDescription(e.target.value)} />
-      </label>
-      <GoalFields goal={goal} acceptance={acceptance} onGoal={setGoal} onAcceptance={setAcceptance} />
-      <BlockedByField tasks={tasks} selfId={task.id} value={blockedBy} labels={LABEL} onChange={setBlockedBy} collapsible />
-      <label>
-        {t('tasks.fieldOwner')}
-        <select
-          value={task.staffId ?? ''}
-          disabled={!!task.sessionId}
-          title={task.sessionId ? t('tasks.ownerLocked') : undefined}
-          onChange={(e) =>
-            void onSave(e.target.value && e.target.value === task.reviewerId ? { staffId: e.target.value, reviewerId: null } : { staffId: e.target.value || null })
-          }
-        >
-          <option value="">{t('tasks.nobody')}</option>
-          {byHierarchy(staff).map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name} — {s.role}
-            </option>
-          ))}
-        </select>
-      </label>
-      <ReviewerField staff={byHierarchy(staff)} ownerId={task.staffId} value={task.reviewerId ?? null} onChange={(reviewerId) => void onSave({ reviewerId })} />
-      <label>
-        PR
-        <input value={pr} placeholder="https://github.com/…/pull/123" onChange={(e) => setPr(e.target.value)} />
-      </label>
-      {dirty && (
-        <p className="actions">
-          <button
-            className="btn-primary"
-            onClick={() =>
-              void onSave({
-                title,
-                description,
-                pr: pr || null,
-                // Só o que mudou: o servidor confere dependência (existe? faz ciclo?) a cada envio.
-                ...(goalChanged && { goal: goal.trim() || null }),
-                ...(acceptanceChanged && { acceptance: acceptance.trim() || null }),
-                ...(depsChanged && { blockedBy }),
-              })
-            }
-          >
-            {t('tasks.save')}
-          </button>
-        </p>
-      )}
-      <p className="muted small">
-        {task.branch && (
-          <>
-            <BranchIcon /> {task.branch} ·{' '}
-          </>
-        )}
-        {cost ? t('tasks.costSuffix', { cost }) : t('tasks.noCostYet')}
-        {task.pr && (
-          <>
-            {' · '}
-            <a href={task.pr} target="_blank" rel="noreferrer">
-              {t('tasks.openPr')}
-            </a>
-          </>
-        )}
-      </p>
-      {/* Tarefa que nunca começou (criada e parada) não tem conversa: sem custo para mostrar. */}
-      {(task.sessionId || task.history.length > 1) && (
-        <TaskCostBlock
-          projectId={projectId}
-          taskId={task.id}
-          version={`${task.updatedAt}:${task.runId ?? ''}`}
-          nameOf={(id) => (id ? (staff.find((s) => s.id === id)?.name ?? id) : t('tasks.noOwner'))}
-        />
-      )}
-      {task.fallback && (
-        <p className="small">
-          <TaskFallbackBadge fallback={task.fallback} />
-        </p>
-      )}
-      <PrimaryReturnLine task={task} />
-      {fbWait && <p className={waitText}>{fbWait.hint}</p>}
-      <AutoInfo task={task} open={task.status === 'review'} />
-      <CommitBlock task={task} />
-      <PauseNote pause={task.pause} staffName={nameOf(task.staffId)} now={Date.now()} />
-      <RetryBadge retry={task.retry} now={Date.now()} withHint />
-      <DoubtBlock
-        question={task.question}
-        requestedBy={task.requestedBy}
-        nameOf={(id) => staff.find((s) => s.id === id)?.name ?? null}
-        now={Date.now()}
-        answer={{ projectId, taskId: task.id, onAnswered: onChanged }}
-      />
-      <CancelRequestBlock request={task.cancelRequest} staffName={who?.name ?? null} nameOf={nameOf} now={Date.now()} open={!isClosed(task)} />
-      {task.status === 'cancelled' && (
-        // Uma frase por linha (quem e quando; o motivo; o que a coluna significa), no tamanho de parágrafo do painel.
-        <div className="task-cancelled">
-          <p>
-            {t('tasks.cancelledDetail', {
-              name: cancelledWho(task, nameOf),
-              when: new Date(task.cancelledAt ?? task.updatedAt).toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }),
-            })}
+      <div className="task-detail-body" ref={bodyRef}>
+        {/* Gruda no topo ao rolar: o botão que falhou (Salvar, Apagar) pode estar longe daqui. */}
+        {error && (
+          <p className="error small task-detail-error" role="alert">
+            {error}
           </p>
-          {task.cancelReason && <p>{t('tasks.cancelledWhy', { reason: task.cancelReason })}</p>}
-          <p className="muted">{HELP.cancelled}</p>
-        </div>
-      )}
-      {waitingShown.length > 0 && (
-        <p className={waitText}>
-          {t('tasks.blockedDetail', { names: waitingShown.map(blockerName).join(', ') })}
-          {waitingShown.some((o) => o.status === 'cancelled') && ` ${t('tasks.blockedCancelledHint')}`}{' '}
-          {queuePos > 0 && (
-            <button className="link small" onClick={onUnqueue}>
-              {t('tasks.unqueue')}
-            </button>
+        )}
+        <NeedsYouStrip asks={asks} onGo={goTo} />
+        {showReview && (
+          <section className="task-review-box" data-card="review" tabIndex={-1} aria-label={t('tasks.reviewLabel')}>
+            <ReviewWho plan={plan} workerName={ownerName} reviewerName={(id) => nameOf(id) ?? id} asked={!!task.review} />
+            {task.review && (
+              <div className="task-code-row">
+                <b className="small">{t('tasks.reviewLabel')}</b>
+                <ReviewStatus task={task} staff={staff} onOpenStaff={onOpenStaff} />
+              </div>
+            )}
+          </section>
+        )}
+        {/* Os cartões de pedido, na ordem do que mais trava: a decisão de cada um fica no próprio cartão (resposta, follow-up) ou no rodapé fixo. */}
+        {task.question &&
+          slot(
+            'doubt',
+            <DoubtBlock
+              question={task.question}
+              requestedBy={task.requestedBy}
+              nameOf={(id) => staff.find((s) => s.id === id)?.name ?? null}
+              now={now}
+              answer={{ projectId, taskId: task.id, onAnswered: onChanged }}
+            />,
           )}
-        </p>
-      )}
-      {/* A ordem na fila não é aviso: texto padrão, sem o laranja da espera. */}
-      {queuePos > 0 && waitingShown.length === 0 && (
-        <p className="muted small">
-          {t(queueKeys(waitingOn.length > 0, !!busyWith).detail, {
-            who: who?.name ?? t('tasks.ownerFallback'),
-            pos: queuePos,
-            title: busyWith?.title ?? '',
-          })}{' '}
-          <button className="link small" onClick={onUnqueue}>
-            {t('tasks.unqueue')}
-          </button>
-        </p>
-      )}
-      {/* Só você muda a ordem da fila de um funcionário pela tela (arrastando o cartão no quadro); ele sugere, e o gestor que pediu o cartão reordena os dele (ver o Histórico). */}
-      {moves && (
-        <div className="task-order-box">
-          <p className="small">{t('tasks.orderLabel', { who: who?.name ?? t('tasks.ownerFallback'), pos: queuePos, total: queueTotal })}</p>
-          <p className="muted small">{t('tasks.orderHint', { who: who?.name ?? t('tasks.ownerFallback') })}</p>
-        </div>
-      )}
-      {task.resourceWait && (
-        <p className={waitText}>
-          {resourceWaitText(task.resourceWait, Date.now())}. {t('tasks.resourceWaitHint')}
-        </p>
-      )}
-      {!!task.held?.length && (
-        <p className={waitText}>
-          {task.held.length === 1 ? t('tasks.heldMineOne') : t('tasks.heldMineOther', { n: task.held.length })}: {task.held[0]!.reason}.{' '}
-          {t('tasks.heldNext')}
-        </p>
-      )}
-      <p className="actions">
+        {permission && slot('permission', <PermissionWaitBlock text={permission} />)}
+        {followUpsOf(task).length > 0 &&
+          slot(
+            'followup',
+            <FollowUpBlock task={task} tasks={tasks} team={staff} nameOf={nameOf} now={now} projectId={projectId} chatIds={chatFollowUps} onOpenChat={onOpenChat} onOpenTask={onOpenTask} onChanged={onChanged} />,
+          )}
+        {noCodeOf(task) && slot('nocode', <NoCodeBlock task={task} nameOf={nameOf} note={giveBackNote} />)}
+        {task.cancelRequest && slot('cancelreq', <CancelRequestBlock request={task.cancelRequest} staffName={who?.name ?? null} nameOf={nameOf} now={now} open={!isClosed(task)} />)}
+        {/* Explica por que o card está parado em Fazendo e leva à subtarefa (ou ao card de origem); no celular o detalhe cobre o quadro. */}
+        <SubtaskBlock task={task} tasks={tasks} labels={LABEL} staffName={who?.name ?? null} onOpen={onOpenTask} />
         {task.status === 'cancelled' && (
-          <button className="btn-primary" onClick={onReopen} title={t('tasks.reopenHint')}>
-            {t('tasks.reopen')}
-          </button>
-        )}
-        {!task.sessionId && queuePos === 0 && task.status !== 'cancelled' && (
-          <button
-            className="btn-primary"
-            disabled={!task.staffId}
-            onClick={onStart}
-            title={
-              !task.staffId
-                ? t('tasks.pickOwner')
-                : waitingOn.length
-                  ? t('tasks.startBlockedHint')
-                  : busyWith
-                    ? t('tasks.startBusyHint', { who: who?.name ?? '', title: busyWith.title })
-                    : t('tasks.startHint', { who: who?.name ?? '' })
-            }
-          >
-            {busyWith || waitingOn.length ? t('tasks.enqueue') : t('tasks.start')}
-          </button>
-        )}
-        {task.sessionId && who && (
-          <button className="btn-secondary" onClick={onOpen}>
-            {t('tasks.openChat', { who: who.name })}
-          </button>
-        )}
-        {task.status === 'review' && (
-          <button className="btn-primary" onClick={() => onMove('done')}>
-            {t('tasks.approve')}
-          </button>
-        )}
-        {/* A cancelada não muda de coluna: o servidor pede reabrir antes. */}
-        {task.status !== 'cancelled' && (
-          <select className="task-move" value={columnOf(task.status) ?? ''} onChange={(e) => onMove(e.target.value as TaskStatus)} aria-label={t('tasks.moveTo')}>
-            {COLUMNS.map(({ status: s }) => (
-              <option key={s} value={s}>
-                {t('tasks.moveOption', { status: LABEL[s] })}
-              </option>
-            ))}
-          </select>
-        )}
-      </p>
-      {task.status === 'review' && (
-        <ReviewWho
-          plan={reviewPlan(task, board)}
-          workerName={who?.name ?? t('tasks.ownerFallback')}
-          reviewerName={(id) => nameOf(id) ?? id}
-          asked={!!task.review}
-        />
-      )}
-      {task.status === 'review' && <ReviewDelegate projectId={projectId} task={task} staff={byHierarchy(staff)} onChanged={onChanged} onOpenStaff={onOpenStaff} />}
-      {task.sessionId && (
-        <details className="collapse">
-          <SectionSummary label={t('tasks.sectionCode')} sum={codeSummary(task, (id) => nameOf(id) ?? id)} />
-          <TaskCodePanel projectId={projectId} task={task} staff={staff} onChanged={onChanged} onOpenStaff={onOpenStaff} />
-        </details>
-      )}
-      {task.plan && (
-        <details className="collapse">
-          <summary>{t('tasks.approvedPlan')}</summary>
-          <div className="task-plan">
-            <Markdown text={task.plan} />
+          // Uma frase por linha (quem e quando; o motivo; o que a coluna significa), no tamanho de parágrafo do painel.
+          <div className="task-cancelled">
+            <p>
+              {t('tasks.cancelledDetail', {
+                name: cancelledWho(task, nameOf),
+                when: new Date(task.cancelledAt ?? task.updatedAt).toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }),
+              })}
+            </p>
+            {task.cancelReason && <p>{t('tasks.cancelledWhy', { reason: task.cancelReason })}</p>}
+            <p className="muted">{HELP.cancelled}</p>
           </div>
-        </details>
-      )}
-      <details className="collapse">
-        <summary>{t('tasks.history')}</summary>
-        <ul className="task-history small">
-          {[...task.history].reverse().map((h, i) => {
-            // Nota de ordem da fila: a frase já diz quem mexeu (você, ou o gestor que pediu o cartão) ou quem sugeriu; "automático" enganaria.
-            const order = orderNoteText(h.note, h.by);
-            // A volta ao motor principal também vem em pt do servidor: escrita no idioma da tela, com quem a fez (o sistema) na frente.
-            const primary = primaryNoteText(h.note);
-            return (
-              <li key={i}>
-                {new Date(h.at).toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {LABEL[h.status]}
-                {order ? ` (${order})` : ` (${h.by === 'auto' ? t('tasks.byAuto') : t('tasks.byYou')}${h.note ? `: ${primary ?? h.note})` : ')'}`}
-              </li>
-            );
-          })}
-        </ul>
-      </details>
-      <TaskRuns projectId={projectId} taskId={task.id} version={`${task.updatedAt}:${task.runId ?? ''}`} />
-      <p className="actions">
-        {!isClosed(task) && (
-          <button className="btn-secondary" onClick={onCancel} title={t('tasks.cancelTaskHint')}>
-            {t('tasks.cancelTask')}
-          </button>
         )}
-        <button className="btn-secondary task-delete" onClick={onDelete}>
-          {t('tasks.deleteTask')}
-        </button>
-      </p>
+        <section className="task-read" aria-label={t('tasks.sectionTask')}>
+          <div className="task-read-head">
+            <b>{t('tasks.sectionTask')}</b>
+            <button type="button" className="link task-edit-btn" aria-expanded={editing} onClick={editing ? closeEdit : () => setEditing(true)}>
+              {editing ? (dirty ? t('tasks.editDiscard') : t('tasks.editClose')) : t('tasks.edit')}
+            </button>
+          </div>
+          {editing ? (
+            <div className="task-edit">
+              <label>
+                {t('tasks.fieldTitle')}
+                <input value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} />
+              </label>
+              <label>
+                {t('tasks.description')}
+                <GrowTextarea rows={4} value={description} maxLength={8000} onChange={(e) => setDescription(e.target.value)} />
+              </label>
+              <GoalFields goal={goal} acceptance={acceptance} onGoal={setGoal} onAcceptance={setAcceptance} />
+              <BlockedByField tasks={tasks} selfId={task.id} value={blockedBy} labels={LABEL} onChange={setBlockedBy} collapsible />
+              <label>
+                {t('tasks.fieldOwner')}
+                <select
+                  value={task.staffId ?? ''}
+                  disabled={!!task.sessionId}
+                  title={task.sessionId ? t('tasks.ownerLocked') : undefined}
+                  onChange={(e) =>
+                    void onSave(e.target.value && e.target.value === task.reviewerId ? { staffId: e.target.value, reviewerId: null } : { staffId: e.target.value || null })
+                  }
+                >
+                  <option value="">{t('tasks.nobody')}</option>
+                  {byHierarchy(staff).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} — {s.role}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <ReviewerField staff={byHierarchy(staff)} ownerId={task.staffId} value={task.reviewerId ?? null} onChange={(reviewerId) => void onSave({ reviewerId })} />
+              <label>
+                PR
+                <input value={pr} placeholder="https://github.com/…/pull/123" onChange={(e) => setPr(e.target.value)} />
+              </label>
+              <p className="actions">
+                <button className={dirty ? 'btn-primary' : 'btn-secondary'} disabled={!dirty} onClick={saveEdits}>
+                  {t('tasks.save')}
+                </button>
+                {!dirty && saved && (
+                  <span className="save-ok" role="status">
+                    ✓ {t('tasks.saved')}
+                  </span>
+                )}
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="task-accept">
+                <b className="small">{t('tasks.fieldAcceptance')}</b>
+                {task.acceptance ? (
+                  <div className="task-read-text">
+                    <Markdown text={task.acceptance} />
+                  </div>
+                ) : (
+                  <p className="muted small">{t('tasks.acceptanceNone')}</p>
+                )}
+              </div>
+              {task.description && (
+                <details className="collapse">
+                  <summary>{t('tasks.description')}</summary>
+                  <div className="task-read-text">
+                    <Markdown text={task.description} />
+                  </div>
+                </details>
+              )}
+              {task.goal && (
+                <details className="collapse">
+                  <summary>{t('tasks.fieldGoal')}</summary>
+                  <div className="task-read-text">
+                    <Markdown text={task.goal} />
+                  </div>
+                </details>
+              )}
+            </>
+          )}
+          <p className="muted small">
+            {task.branch && (
+              <>
+                <BranchIcon /> {task.branch} ·{' '}
+              </>
+            )}
+            {cost ? t('tasks.costSuffix', { cost }) : t('tasks.noCostYet')}
+            {task.pr && (
+              <>
+                {' · '}
+                <a href={task.pr} target="_blank" rel="noreferrer">
+                  {t('tasks.openPr')}
+                </a>
+              </>
+            )}
+          </p>
+        </section>
+        {task.fallback && (
+          <p className="small">
+            <TaskFallbackBadge fallback={task.fallback} />
+          </p>
+        )}
+        <PrimaryReturnLine task={task} />
+        <AutoInfo task={task} open={task.status === 'review'} />
+        {/* Recolhidos: o que se consulta, não o que se decide. */}
+        {task.sessionId && (
+          <details className="collapse">
+            <SectionSummary label={t('tasks.sectionCode')} sum={codeSummary(task, (id) => nameOf(id) ?? id)} />
+            <CommitBlock task={task} />
+            <TaskCodePanel projectId={projectId} task={task} staff={staff} onChanged={onChanged} onOpenStaff={onOpenStaff} />
+          </details>
+        )}
+        {task.plan && (
+          <details className="collapse">
+            <summary>{t('tasks.approvedPlan')}</summary>
+            <div className="task-plan">
+              <Markdown text={task.plan} />
+            </div>
+          </details>
+        )}
+        {/* Tarefa que nunca começou (criada e parada) não tem conversa: sem custo para mostrar. */}
+        {(task.sessionId || task.history.length > 1) && (
+          <TaskCostBlock
+            projectId={projectId}
+            taskId={task.id}
+            version={`${task.updatedAt}:${task.runId ?? ''}`}
+            nameOf={(id) => (id ? (staff.find((s) => s.id === id)?.name ?? id) : t('tasks.noOwner'))}
+          />
+        )}
+        {waitHeads.length > 0 && (
+          // Em Aguardar e A fazer o porquê de a tarefa não andar é o que o dono veio ler: a seção já abre.
+          <details className="collapse" open={task.status === 'waiting' || task.status === 'todo'}>
+            <SectionSummary label={t('tasks.sectionWaits')} sum={waitSum} />
+            <div className="task-waits">
+              <PauseNote pause={task.pause} staffName={nameOf(task.staffId)} now={now} />
+              <RetryBadge retry={task.retry} now={now} withHint />
+              {fbWait && <p className={waitText}>{fbWait.hint}</p>}
+              {blockedLine && <p className={waitText}>{blockedLine}</p>}
+              {/* A ordem na fila não é aviso: texto padrão, sem o laranja da espera. */}
+              {queueLine && <p className="task-note">{queueLine}</p>}
+              {/* Só você muda a ordem da fila de um funcionário pela tela (arrastando o cartão no quadro); ele sugere, e o gestor que pediu o cartão reordena os dele (ver o Histórico). */}
+              {moves && (
+                <div className="task-order-box">
+                  <p className="small">{orderLine}</p>
+                  <p className="muted small">{t('tasks.orderHint', { who: ownerName })}</p>
+                </div>
+              )}
+              {resourceLine && <p className={waitText}>{resourceLine}</p>}
+              {heldLine && <p className={waitText}>{heldLine}</p>}
+            </div>
+          </details>
+        )}
+        <details className="collapse">
+          <summary>{t('tasks.history')}</summary>
+          <ul className="task-history small">
+            {[...task.history].reverse().map((h, i) => {
+              // Nota de ordem da fila: a frase já diz quem mexeu (você, ou o gestor que pediu o cartão) ou quem sugeriu; "automático" enganaria.
+              const order = orderNoteText(h.note, h.by);
+              // A volta ao motor principal também vem em pt do servidor: escrita no idioma da tela, com quem a fez (o sistema) na frente.
+              const primary = primaryNoteText(h.note);
+              return (
+                <li key={i}>
+                  {new Date(h.at).toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · {LABEL[h.status]}
+                  {order ? ` (${order})` : ` (${h.by === 'auto' ? t('tasks.byAuto') : t('tasks.byYou')}${h.note ? `: ${primary ?? h.note})` : ')'}`}
+                </li>
+              );
+            })}
+          </ul>
+        </details>
+        <TaskRuns projectId={projectId} taskId={task.id} version={`${task.updatedAt}:${task.runId ?? ''}`} />
+      </div>
+      <TaskDetailFooter
+        plan={foot}
+        columns={COLUMNS.map(({ status: s }) => ({ status: s, label: t('tasks.moveOption', { status: LABEL[s] }) }))}
+        column={columnOf(task.status)}
+        start={{ label: startLabel, title: startTitle, disabledReason: task.staffId ? null : t('tasks.pickOwner') }}
+        givingBack={givingBack}
+        chatLabel={who ? t('tasks.openChat', { who: who.name }) : null}
+        delegate={<ReviewDelegate bare projectId={projectId} task={task} staff={byHierarchy(staff)} onChanged={onChanged} onOpenStaff={onOpenStaff} />}
+        delegateLabel={task.review ? t('tasks.reviewDelegateAgain') : t('tasks.reviewDelegate')}
+        onStart={onStart}
+        onReopen={onReopen}
+        onApprove={() => onMove('done')}
+        onGoPermission={() => onOpenPermission?.()}
+        onGoCard={goTo}
+        onGiveBack={onGiveBack}
+        onOpenChat={onOpen}
+        onUnqueue={onUnqueue}
+        onMove={onMove}
+        onCancel={onCancel}
+        onDelete={onDelete}
+      />
     </aside>
   );
 }

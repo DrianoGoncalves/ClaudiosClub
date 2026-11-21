@@ -81,6 +81,7 @@ describe('config', () => {
       codexBrowser: false,
       clubGuard: true,
       aiTitles: true,
+      stopOnTabClose: false,
       ...colors,
     });
 
@@ -104,6 +105,7 @@ describe('config', () => {
       codexBrowser: false,
       clubGuard: true,
       aiTitles: true,
+      stopOnTabClose: false,
       ...colors,
     });
     expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ futuro: 1, companyName: 'Acme Labs' });

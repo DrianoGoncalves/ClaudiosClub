@@ -33,7 +33,7 @@ export interface PlanImpasseCtx {
 export interface PlanImpasse {
   /** Os agents que editam e a ficha em plan marca (na lista ou pelo roteiro). */
   agents: string[];
-  /** Os de `agents` que o roteiro chama: desmarcar na lista não os tira do aviso (o roteiro segue chamando, mesmo o que o projeto nem tem), só trocar o roteiro. */
+  /** Os de `agents` que o roteiro chama: desmarcar na lista não os tira do aviso (o roteiro segue chamando, mesmo o que o projeto nem tem): só trocar o roteiro ou a autonomia (uma que edite também tira o aviso). */
   playbookAgents: string[];
   /** Os MCPs marcados em "Livre" que podem escrever. */
   mcps: string[];
@@ -59,7 +59,7 @@ export function planImpasse(ctx: PlanImpasseCtx): PlanImpasse | null {
   const named = [...(claude ? ctx.agents : []), ...called];
   const agents = [...new Set(named)].filter(edits);
   const playbookAgents = agents.filter((name) => called.includes(name));
-  const mcps = claude ? (ctx.mcps ?? []).filter((m) => ctx.mcpOn.has(m.name) && accessOf(ctx.mcpAccess, m.name) === 'free' && m.tools?.write !== 0).map((m) => m.name) : [];
+  const mcps = claude ? (ctx.mcps ?? []).filter((m) => ctx.mcpOn.has(m.ref) && accessOf(ctx.mcpAccess, m.name) === 'free' && m.tools?.write !== 0).map((m) => m.name) : [];
   const browser = ctx.browser && (claude || ctx.codexBrowser) && browserAccess(ctx.mcpAccess) === 'free';
   return agents.length || mcps.length || browser ? { agents, playbookAgents, mcps, browser } : null;
 }
