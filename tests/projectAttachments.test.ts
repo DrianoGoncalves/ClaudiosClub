@@ -13,6 +13,7 @@ import {
   readAttachment,
   saveAttachment,
 } from '../server/projectAttachments';
+import { removeTemp } from './support/tmp';
 
 let base: string;
 let proj: string;
@@ -52,9 +53,7 @@ beforeAll(async () => {
   await fs.writeFile(path.join(base, 'segredo.txt'), 'fora');
 });
 
-afterAll(async () => {
-  await fs.rm(base, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(base));
 
 describe('listar', () => {
   it('sem a pasta, lista vazia e não cria nada', async () => {

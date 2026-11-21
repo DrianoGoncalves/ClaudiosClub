@@ -15,6 +15,7 @@ import { Pairing } from '../server/pairing';
 import { sessionAllowed, sessionInProject, type SessionScopeDeps } from '../server/sessionScope';
 import { TaskService } from '../server/tasks';
 import type { StaffProfile } from '../shared/model';
+import { removeTempSync } from './support/tmp';
 
 // Isolamento entre projetos (t-7e85fa): o token de uma conversa só alcança o projeto dela, em POST e em GET; o token inválido é 401 (nunca leitura
 // anônima); a conversa de outro projeto não se lê nem recebe mensagem pelo id; a tela e a sandbox do Codex seguem como estavam.
@@ -74,7 +75,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   for (const s of servers) await new Promise((r) => s.close(r));
-  fs.rmSync(dir, { recursive: true, force: true });
+  removeTempSync(dir);
 });
 
 const STAFF = { 'x-myco': '1' };

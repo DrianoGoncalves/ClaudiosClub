@@ -9,15 +9,14 @@ import { parseLauncherEntry } from '../server/staff/mcpLaunch';
 import { createMcpLibrary } from '../server/staff/mcpLibrary';
 import { migrateClubToGlobal, migrateMcpsAtBoot, repairLauncherEntries, rollbackMcpMigration } from '../server/staff/mcpMigration';
 import { migrateToolsKeys, newToolsKey, saveTestedTools, toolsKey } from '../server/staff/mcpTools';
+import { removeTemp } from './support/tmp';
 
 // Migração do registro do Club (~/.myco/mcps.json) para a Global (~/.claude.json): tudo em pastas temporárias, nunca o ~/.claude.json real.
 
 const VALOR = 'valor-do-cofre-MIG-AB12';
 const HDR = 'Bearer tok-do-cofre-MIG-987';
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await fs.rm(r, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(...roots));
 
 const REGISTRO = {
   servers: {

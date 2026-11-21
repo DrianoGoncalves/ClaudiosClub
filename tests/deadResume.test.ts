@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TaskService } from '../server/tasks';
 import type { StaffProfile, TurnCapHit } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Conversa de tarefa que morre no meio volta sozinha (t-f89dcd), o caso da t-2f3ff3: o card ficou em "a fazer" (queuedAt null, sessionId preenchido)
 // enquanto o ajuste guardado levava a conversa a trabalhar por fora do status; ela morreu e nada a retomava.
@@ -12,9 +13,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-dead-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const ana = { id: 'ana-1', name: 'Ana', role: 'Back-end', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
 

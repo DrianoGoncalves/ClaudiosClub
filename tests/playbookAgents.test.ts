@@ -9,14 +9,13 @@ import { readAgentSource } from '../server/adapters/claude/agentWrite';
 import { buildClaudeArgs } from '../server/staff/ficha';
 import { staffSettings } from '../server/staff/launch';
 import { ensurePlaybookAgents } from '../server/staff/playbookAgents';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-pb-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 async function dirs(name: string) {
   const projectPath = path.join(root, name);

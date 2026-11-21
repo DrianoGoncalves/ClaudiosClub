@@ -4,14 +4,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { findMcpJsonSecrets, mcpJsonWarnings } from '../server/staff/mcp';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-mcpsec-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const servers = (mcpServers: Record<string, unknown>) => ({ mcpServers });
 /** Texto com cara de chave aleatória, gerado na hora: o arquivo não tem chave nenhuma escrita. */

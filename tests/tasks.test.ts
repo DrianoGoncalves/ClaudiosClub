@@ -14,14 +14,13 @@ import { UsageStopError } from '../server/usageStop';
 import { readRuns } from '../server/taskRuns';
 import { REQUESTER_ASK_INTERVAL_MS, REQUESTER_ASK_MAX_BYTES, RequesterAskLimiter } from '../server/chat/requesterAsk';
 import { isUnverifiedOrigin, staffOrigin } from '../server/chat/origin';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-tasks-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 function service(dirName: string, autonomy: StaffProfile['autonomy'] = 'acceptEdits') {
   const dir = path.join(root, dirName);

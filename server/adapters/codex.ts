@@ -150,7 +150,8 @@ export class CodexAdapter {
         await (this.opts.sleep ?? sleep)(BACKOFF_MS * 2 ** attempt + Math.random() * 1_000);
       }
     } finally {
-      await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+      // maxRetries: no Windows o `codex` que acabou de sair ainda pode segurar a pasta por um instante (EBUSY/EPERM).
+      await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
     }
   }
 

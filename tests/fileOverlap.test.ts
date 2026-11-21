@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { StaffProfile, Task } from '../shared/model';
 import { ProjectPauses } from '../server/projectPause';
 import { readTasks, TaskService } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 // Arquivo em comum entre tarefas abertas de pessoas diferentes (t-baa184): as duas conversas de trabalho são avisadas, uma vez por par de tarefas e
 // arquivo; a sobreposição fica gravada nas duas (`Task.fileOverlaps`) e o pedido de revisão a cita. Claude e Codex passam pelo mesmo `onCodeEdit`.
@@ -13,9 +14,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-overlap-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const SAY = (file: string, id: string, name: string) => `${file} também está sendo editado na ${id} (${name}): releia antes de editar e não desfaça mudança alheia`;
 

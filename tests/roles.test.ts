@@ -5,14 +5,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AGENT_PRESETS, PLAYBOOK_AGENTS } from '../shared/agentPresets';
 import { BUILTIN_ROLES } from '../shared/roles';
 import { listRoles, removeRole, restoreBuiltins, saveRole, setDefaultRole } from '../server/roles';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-roles-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const custom = { label: 'Copywriter', role: 'Redator(a)', mission: 'Escrever os textos do site.', autonomy: 'acceptEdits', rules: ['Tom simples'], doneWhen: '', model: 'haiku', effort: 'low' };
 

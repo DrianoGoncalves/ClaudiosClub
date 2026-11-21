@@ -12,6 +12,7 @@ import type { McpAccessMap } from '../server/staff/mcpAccess';
 import { McpLaunchError, mcpLaunchCommand, quotedCommand, snapshotSpec } from '../server/staff/mcpLaunch';
 import { mcpFingerprint, saveTestedTools, toolsKey, type McpTool } from '../server/staff/mcpTools';
 import { setSecret } from '../server/secretVault';
+import { removeTemp } from './support/tmp';
 
 // Os MCPs da biblioteca do Club e os da ficha (projeto) entram no Codex pelo lançador, com o acesso da ficha. Nenhum valor de env ou
 // cabeçalho aparece na linha de comando nem em `servers`: a biblioteca fica no cofre (temporário) e o resto no arquivo de lançamento.
@@ -37,9 +38,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-codex-mcp-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 /** As entradas do ~/.claude.json da biblioteca, à mão (aceita `%` no caminho, que quotedCommand recusa): chamam o lançador com o nome do servidor. */
 function libraryPointers(clubFile: string, vaultDir: string) {

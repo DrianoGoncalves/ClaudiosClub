@@ -7,6 +7,7 @@ import type { StaffProfile, TestRun } from '../shared/model';
 import { TaskService } from '../server/tasks';
 import { runTests } from '../server/taskCode';
 import { ISOLATED_MAX, TestScan, failureBlock, isolateFailures, testFileOf, type Rerun } from '../server/testFailures';
+import { removeTemp } from './support/tmp';
 
 // Falhas da suíte no pedido de revisão (t-a7dc60): a lista dos arquivos que falham (lida da saída inteira, não do fim), a nova rodada isolada, e o destaque do
 // que falha isolado e toca a entrega. A saída do vitest abaixo é a real (vitest 5.1, CI=1, sem TTY).
@@ -15,9 +16,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-failures-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const VITEST_OUT = [
   ' RUN  v5.1.0 C:/proj',

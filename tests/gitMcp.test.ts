@@ -13,6 +13,7 @@ import { gitGrant, gitMcpServer, gitRefusal, readGitPolicy, runGitMcpStdio, TOOL
 import { gitLaunchOf, prepareCodexRun, prepareRun, type LaunchContext } from '../server/staff/launch';
 import { mcpOffDenyRules } from '../server/staff/mcpAccess';
 import { mcpWriteFileFor } from '../server/staff/mcp';
+import { removeTemp } from './support/tmp';
 
 // MCP de git (t-eaffcd), a parte de lançamento: acesso da ficha (`mcpAccess`), autonomia, os dois motores (mcp.json e --allowedTools no Claude; -c mcp_servers e
 // enabled_tools no Codex), a cópia do pacote para a pasta da conversa, o texto da ficha e o servidor stdio. O comportamento do git está em gitMcpRepo.test.ts.
@@ -41,10 +42,7 @@ beforeAll(async () => {
   bundleFile = path.join(root, 'git-mcp.fake.mjs');
   await fs.writeFile(bundleFile, '// pacote falso\n');
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-  await fs.rm(home, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, home));
 
 const profile = (over: Partial<StaffProfile> = {}) =>
   ({
@@ -194,7 +192,7 @@ describe('gitLaunchOf: entra em repositório, com o pacote e com o acesso ligado
       // Só vale se nenhuma pasta acima da temporária for um repositório (a máquina de quem roda).
       if (!(await fs.stat(path.join(os.tmpdir(), '.git')).catch(() => null))) expect(await gitLaunchOf(profile(), launch(plain), plain, path.join(root, 's8'))).toEqual({ server: null });
     } finally {
-      await fs.rm(plain, { recursive: true, force: true });
+      await removeTemp(plain);
     }
   });
 

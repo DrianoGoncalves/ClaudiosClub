@@ -5,15 +5,14 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Session, StaffProfile } from '../shared/model';
 import { uncommittedByConversation } from '../server/uncommitted';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 let n = 0;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-unc-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const NOW = new Date('2026-11-06T12:00:00Z');
 const RECENT = '2026-11-05T10:00:00Z';

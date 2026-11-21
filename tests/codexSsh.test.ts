@@ -8,6 +8,7 @@ import { renderFicha, isClaudeRoot } from '../server/staff/ficha';
 import { prepareCodexRun, type LaunchContext } from '../server/staff/launch';
 import { StaffInputSchema } from '../server/staff/store';
 import { ROOT } from '../server/root';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 /** Pacote do MCP de SSH de teste (o build de verdade não existe em dev sem `npm run build`). */
@@ -17,9 +18,7 @@ beforeAll(async () => {
   BUNDLE = path.join(root, 'ssh-mcp.mjs');
   await fs.writeFile(BUNDLE, '// pacote de teste');
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const profile = (over: Partial<StaffProfile> = {}) =>
   ({

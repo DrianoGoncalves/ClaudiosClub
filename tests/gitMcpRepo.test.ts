@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { findSecret } from '../server/chat/secrets';
 import { createGitMcp, writeGitPolicy, type GitPolicy } from '../server/staff/gitMcp';
 import { createSafeTools, githubRepoOf, resetBreaker, validBranchName } from '../server/staff/gitSafe';
+import { removeTemp } from './support/tmp';
 
 // MCP de git (t-eaffcd) contra repositórios git de verdade, em pasta temporária: commit só dos caminhos pedidos, hooks desligados, config hostil recusada,
 // push só para branch que não é main/master (nunca force), host só github.com, PR só com os argumentos fixos e as recusas por autonomia e acesso.
@@ -19,9 +20,7 @@ let seq = 0;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-gitmcp-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe' }).toString();
 const write = (dir: string, rel: string, text: string) => fs.writeFile(path.join(dir, rel), text);

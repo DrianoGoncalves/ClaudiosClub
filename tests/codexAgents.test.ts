@@ -7,6 +7,7 @@ import { buildCodexArgs, codexAgentArgs, tomlString, type CodexAgentRole } from 
 import { codexEffortOf, isReadOnlyAgent, renderCodexAgentToml, resolveCodexAgents, writeCodexAgents } from '../server/staff/codexAgents';
 import { renderFicha, type FichaContext } from '../server/staff/ficha';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Os agents da ficha como subagents do Codex: o esforço, o TOML, a gravação em pasta temporária, os `-c agents.*` e a ficha.
 
@@ -116,9 +117,7 @@ describe('writeCodexAgents', () => {
     outDir = path.join(root, 'run', 'agents');
     await fs.mkdir(user, { recursive: true });
   });
-  afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
+  afterEach(() => removeTemp(root));
 
   const dirs = () => ({ cwd, projectPath: project, userAgentsDir: user, outDir });
   const putAgent = async (dir: string, name: string, body: string, extra = 'model: haiku\ntools: Read, Grep\n') => {
@@ -196,7 +195,7 @@ describe('resolveCodexAgents: a mesma busca, sem gravar', () => {
       expect(r).toEqual({ found: ['executor'], missing: ['nao-existe', 'a b'] });
       expect(await fs.readdir(root)).toEqual(['user-agents']);
     } finally {
-      await fs.rm(root, { recursive: true, force: true });
+      await removeTemp(root);
     }
   });
 });

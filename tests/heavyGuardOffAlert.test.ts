@@ -10,6 +10,7 @@ import { ChatManager } from '../server/chat/manager';
 import { heavyGuardOffInboxItem } from '../server/inboxItems';
 import { TaskService } from '../server/tasks';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Follow-up f-22703c da t-3503b0: o aviso de que a fila de validação pesada ficou desligada (hooks.json na conta do Codex) não pode ficar só no chat, que ninguém lê numa conversa autônoma.
 // Conversa de TAREFA leva o aviso à nota da tarefa e à caixa (kind 'error', `InboxItem.heavyGuardOff`), uma vez por conversa e não a cada execução.
@@ -29,9 +30,7 @@ const codexHome = async () => {
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-guardoff-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 afterEach(() => {
   vi.unstubAllEnvs();
 });

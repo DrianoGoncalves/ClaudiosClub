@@ -9,6 +9,7 @@ import { resolveCaller, SessionTokens } from '../server/callers';
 import { blockedInboxItem, notStartedInboxItem } from '../server/inboxItems';
 import { blockers, cancelRequest, deleteRequest, NOT_STARTED_AFTER_DAYS, notStartedTasks, readTasks, stuckDependencies, stuckReason, TaskConflictError, TaskError, TaskForbiddenError, TaskService } from '../server/tasks';
 import { readRuns } from '../server/taskRuns';
+import { removeTemp } from './support/tmp';
 
 // Tarefa cancelada: fecha sem entrega, guarda o histórico e NÃO libera quem depende dela (só 'done' satisfaz dependência).
 
@@ -30,9 +31,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-cancel-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const person = (id: string, name: string, extra: Partial<StaffProfile> = {}) => ({ id, name, autonomy: 'acceptEdits', worktree: false, servers: [], ...extra }) as unknown as StaffProfile;
 

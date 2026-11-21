@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { cleanRel, createProjectEntry, deleteProjectEntry, parseDeleteBody, isSecretRel, listProjectTree, MAX_FILE_BYTES, parseCreateBody, parseOpenBody, parseWriteBody, ProjectFileError, readProjectFile, readProjectImageFile, resolveProjectFile, writeProjectFile } from '../server/projectFiles';
+import { removeTemp } from './support/tmp';
 
 let base: string;
 let root: string;
@@ -67,9 +68,7 @@ beforeAll(async () => {
   await fs.writeFile(path.join(outside, 'segredo.txt'), 'fora do projeto');
 });
 
-afterAll(async () => {
-  await fs.rm(base, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(base));
 
 describe('caminhos', () => {
   it('normaliza e recusa absoluto, NUL e ..', () => {

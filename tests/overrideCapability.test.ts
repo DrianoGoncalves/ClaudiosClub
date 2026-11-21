@@ -13,6 +13,7 @@ import { CodexProcess } from '../server/chat/codexProcess';
 import { CapabilityError, CodexCapability } from '../server/engineCapability';
 import { StaffError } from '../server/staff/store';
 import { StaffService, type StaffServiceOptions } from '../server/staff/service';
+import { removeTemp } from './support/tmp';
 
 // A conferência do Codex antes de uma troca de motor (StaffService.assertOverrideRunnable com `codexCapability`) e a falha real de sandbox
 // que a conversa avisa (CodexProcess.onSandboxFailure). O runner do `codex` é falso: nada roda de verdade.
@@ -49,9 +50,7 @@ beforeAll(async () => {
   projectPath = path.join(root, 'proj');
   await fs.mkdir(projectPath, { recursive: true });
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const project = (): Project => ({
   id: 'proj-id',

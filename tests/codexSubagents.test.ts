@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BackgroundTask } from '../shared/model';
 import { isToolCall, itemFromCodex } from '../server/chat/codexEvents';
 import { CodexSubagentWatch, parseSubAgentActivity, roleFromChildMeta } from '../server/chat/codexSubagents';
+import { removeTemp } from './support/tmp';
 
 const activity = (kind: 'started' | 'completed', thread = 'filho-1', agentPath = '/root/editar_alvo') =>
   JSON.stringify({ type: 'event_msg', payload: { type: 'item_completed', thread_id: 'pai', item: { type: 'SubAgentActivity', kind, id: 'call_1', agent_thread_id: thread, agent_path: agentPath } } });
@@ -69,7 +70,7 @@ describe('CodexSubagentWatch', () => {
   });
   afterEach(async () => {
     watch.stop();
-    await fs.rm(dir, { recursive: true, force: true });
+    await removeTemp(dir);
   });
 
   const last = () => seen.at(-1);

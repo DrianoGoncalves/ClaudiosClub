@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isAlive } from '../server/chat/registry';
 import { runTests, TEST_TIMEOUT_MS } from '../server/taskCode';
+import { removeTemp } from './support/tmp';
 
 // t-686f25: `runTests` com `shell: true` no Windows. O `child.kill()` mata só o `cmd`; o vitest (neto) segue, segura os pipes e o `close` só
 // vem quando ele acaba (t-d48343 levou 657 s com limite de 600 s). No tempo esgotado a árvore toda tem de sair.
@@ -14,9 +15,7 @@ beforeAll(async () => {
   // Imprime o próprio pid e fica vivo: faz o papel do vitest que não sai.
   await fs.writeFile(path.join(dir, 'longo.js'), 'console.log(process.pid); setInterval(() => {}, 1000);\n');
 });
-afterAll(async () => {
-  await fs.rm(dir, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(dir));
 
 const gone = async (pid: number) => {
   for (let i = 0; i < 50 && isAlive(pid); i++) await new Promise((r) => setTimeout(r, 100));

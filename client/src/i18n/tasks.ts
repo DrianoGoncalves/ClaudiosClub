@@ -56,6 +56,10 @@ export default defineMessages({
     'tasks.queuePos': '{pos}º na fila de {who}',
     'tasks.resourceWait': 'Aguardando recursos: {reason}{ago}',
     'tasks.resourceWaitHint': 'A fila segura esta tarefa até a máquina folgar. “Começar” à mão ignora a espera.',
+    'tasks.slotWait': 'Esperando a vez de editar: {holder} está editando o projeto. Começa sozinho quando esse card for aprovado e commitado{ago}',
+    'tasks.slotWaitHint': 'O projeto deixa um card editar por vez, para não misturar no commit arquivos de cards diferentes. “Começar” à mão ignora a espera.',
+    'tasks.slotWaitOpen': 'Abrir {id}',
+    'tasks.queueSlot': '{name}: fila parada, esperando a vez de editar: {holder} está editando o projeto; a fila anda quando esse card for aprovado e commitado · {n} na fila{since}',
     'tasks.queueLabel': 'Estado da fila de cada funcionário',
     'tasks.queueSince': 'desde {when}',
     'tasks.queueStFree': '{name}: livre · {n} na fila',
@@ -261,6 +265,9 @@ export default defineMessages({
     'tasks.boardReviewNobody': 'Precisa de pelo menos um funcionário no projeto',
     'tasks.boardCommit': 'Commit automático',
     'tasks.boardCommitSummaryOn': 'commit automático ligado',
+    'tasks.boardWriter': 'Um card escrevendo por vez',
+    'tasks.boardWriterRule':
+      'Evita misturar no mesmo commit arquivos de cards diferentes: só um card por vez edita o projeto e os outros esperam na fila. Quem trabalha em worktree própria não espera.',
     'tasks.boardCommitRule':
       'Quando uma tarefa fica pronta, o Claudio’s Club faz um commit local só com os arquivos que ela alterou. Nunca faz push. Ficam de fora o que outra tarefa aberta também alterou, o que você gravou no editor do Club depois dela, o que está em conflito e arquivos de segredo. Edição feita fora do Club (VS Code, terminal) não é detectada.',
     'tasks.commitSha': 'commit {sha}',
@@ -556,6 +563,10 @@ export default defineMessages({
     'tasks.queuePos': '#{pos} in {who}’s queue',
     'tasks.resourceWait': 'Waiting for resources: {reason}{ago}',
     'tasks.resourceWaitHint': 'The queue holds this task until the machine eases off. “Start” by hand ignores the wait.',
+    'tasks.slotWait': 'Waiting for its turn to edit: {holder} is editing the project. Starts on its own once that card is approved and committed{ago}',
+    'tasks.slotWaitHint': 'The project lets only one card edit at a time, so files from different cards do not end up mixed in a commit. “Start” by hand ignores the wait.',
+    'tasks.slotWaitOpen': 'Open {id}',
+    'tasks.queueSlot': '{name}: queue stalled, waiting for its turn to edit: {holder} is editing the project; the queue moves once that card is approved and committed · {n} in queue{since}',
     'tasks.queueLabel': 'Queue status of each employee',
     'tasks.queueSince': 'since {when}',
     'tasks.queueStFree': '{name}: free · {n} in queue',
@@ -761,6 +772,9 @@ export default defineMessages({
     'tasks.boardReviewNobody': 'Needs at least one staff member on the project',
     'tasks.boardCommit': 'Automatic commit',
     'tasks.boardCommitSummaryOn': 'automatic commit on',
+    'tasks.boardWriter': 'One card writing at a time',
+    'tasks.boardWriterRule':
+      'Avoids mixing files from different cards in the same commit: only one card at a time edits the project and the others wait in the queue. Anyone working in their own worktree does not wait.',
     'tasks.boardCommitRule':
       'When a task is done, Claudio’s Club makes a local commit with only the files it changed. It never pushes. Left out: files another open task also changed, files you saved in the Club editor after it, files in conflict and secret files. Edits made outside the Club (VS Code, terminal) are not detected.',
     'tasks.commitSha': 'commit {sha}',
@@ -1056,6 +1070,10 @@ export default defineMessages({
     'tasks.queuePos': 'n.º {pos} en la cola de {who}',
     'tasks.resourceWait': 'Esperando recursos: {reason}{ago}',
     'tasks.resourceWaitHint': 'La cola retiene esta tarea hasta que la máquina se despeje. “Empezar” a mano ignora la espera.',
+    'tasks.slotWait': 'Esperando su turno para editar: {holder} está editando el proyecto. Empieza sola cuando esa tarjeta sea aprobada y commiteada{ago}',
+    'tasks.slotWaitHint': 'El proyecto deja que una sola tarjeta edite a la vez, para no mezclar archivos de tarjetas distintas en el commit. “Empezar” a mano ignora la espera.',
+    'tasks.slotWaitOpen': 'Abrir {id}',
+    'tasks.queueSlot': '{name}: cola detenida, esperando su turno para editar: {holder} está editando el proyecto; la cola avanza cuando esa tarjeta sea aprobada y commiteada · {n} en la cola{since}',
     'tasks.queueLabel': 'Estado de la cola de cada empleado',
     'tasks.queueSince': 'desde {when}',
     'tasks.queueStFree': '{name}: libre · {n} en la cola',
@@ -1261,6 +1279,9 @@ export default defineMessages({
     'tasks.boardReviewNobody': 'Hace falta al menos un empleado en el proyecto',
     'tasks.boardCommit': 'Commit automático',
     'tasks.boardCommitSummaryOn': 'commit automático activado',
+    'tasks.boardWriter': 'Una tarjeta escribiendo a la vez',
+    'tasks.boardWriterRule':
+      'Evita mezclar en un mismo commit archivos de tarjetas distintas: solo una tarjeta a la vez edita el proyecto y las demás esperan en la cola. Quien trabaja en su propio worktree no espera.',
     'tasks.boardCommitRule':
       'Cuando una tarea queda lista, Claudio’s Club hace un commit local solo con los archivos que ella cambió. Nunca hace push. Quedan fuera lo que otra tarea abierta también cambió, lo que guardaste en el editor del Club después de ella, lo que está en conflicto y los archivos de secretos. La edición hecha fuera del Club (VS Code, terminal) no se detecta.',
     'tasks.commitSha': 'commit {sha}',

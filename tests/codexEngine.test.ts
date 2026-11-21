@@ -13,6 +13,7 @@ import { CodexProcess, readCodexThread } from '../server/chat/codexProcess';
 import { ChatManager } from '../server/chat/manager';
 import { ChatProcess } from '../server/chat/process';
 import { renderFicha, type FichaContext } from '../server/staff/ficha';
+import { removeTemp, tempDirs } from './support/tmp';
 
 // Motor Codex: montagem dos argumentos, conversão dos eventos do `codex exec --json` em itens, o processo (com `codex` falso) e a escolha
 // entre Claude e Codex no manager. As fixtures de tests/fixtures/codex/ são saídas reais do Codex CLI 0.156.1 (falha-modelo,
@@ -64,9 +65,9 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-codex-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
+// As pastas dos testes abaixo saem no fim do arquivo, mesmo quando a asserção falha antes (um rm no fim do `it` não roda).
+const tmp = tempDirs();
 
 const optionOf = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
 const configs = (args: string[]) => args.flatMap((a, i) => (args[i - 1] === '-c' ? [a] : []));
@@ -192,7 +193,7 @@ describe('Codex: argumentos', () => {
   });
 
   it('segredos: ~/.ssh, o cofre e o .vps (da pasta e do projeto) entram como "deny" com caminho exato, só pastas e só o que existe', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-deny-'));
+    const dir = await tmp('myco-deny-');
     const home = path.join(dir, 'home');
     const proj = path.join(dir, 'proj');
     const wt = path.join(dir, 'wt');
@@ -224,11 +225,10 @@ describe('Codex: argumentos', () => {
     expect(codexDenyPaths({ cwd: proj, projectPath: proj, ...nada })).toEqual([path.join(proj, '.vps')]);
     // O buildCodexArgs leva o contexto até o bloqueio.
     expect(filesOf(buildCodexArgs({ cwd: wt, sandbox: 'workspace', network: 'off', secrets: { projectPath: proj, ...nada } }))).toBe(`{${tomlString(path.join(proj, '.vps'))}="deny"}`);
-    await fs.rm(dir, { recursive: true, force: true });
   });
 
   it('segredos: um .vps que é arquivo entra como "deny"; mais de um arquivo regular recusa rodar (o bwrap só nega um por execução), em vez de deixar o de sobra legível', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-deny1-'));
+    const dir = await tmp('myco-deny1-');
     const home = path.join(dir, 'home');
     const proj = path.join(dir, 'proj');
     const wt = path.join(dir, 'wt');
@@ -249,11 +249,10 @@ describe('Codex: argumentos', () => {
     await fs.rm(path.join(wt, '.vps'));
     await fs.mkdir(path.join(wt, '.vps'));
     expect(codexDenyPaths(ctx)).toEqual(['~/.ssh', path.join(wt, '.vps'), path.join(proj, '.vps')]);
-    await fs.rm(dir, { recursive: true, force: true });
   });
 
   it('segredos: erro ao olhar um caminho (link em laço, permissão) recusa rodar, em vez de lançar um erro solto ou deixar o segredo de fora', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-deny-err-'));
+    const dir = await tmp('myco-deny-err-');
     const home = path.join(dir, 'home');
     const proj = path.join(dir, 'proj');
     await fs.mkdir(home, { recursive: true });
@@ -268,11 +267,10 @@ describe('Codex: argumentos', () => {
     await fs.writeFile(path.join(home, '.ssh'), 'arquivo, não pasta');
     expect(() => codexDenyPaths({ ...ctx, home: path.join(home, '.ssh') })).not.toThrow();
     expect(codexDenyPaths(ctx)).toEqual(['~/.ssh']); // ~/.ssh que é arquivo conta como arquivo regular a negar
-    await fs.rm(dir, { recursive: true, force: true });
   });
 
   it('codexSafetyArgs: a segurança de toda execução do Codex, sem depender de ficha; as ferramentas de leitura usam a mesma', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-safe-'));
+    const dir = await tmp('myco-safe-');
     const home = path.join(dir, 'home');
     const proj = path.join(dir, 'proj');
     await fs.mkdir(path.join(home, '.ssh'), { recursive: true });
@@ -307,7 +305,6 @@ describe('Codex: argumentos', () => {
     }
     const motor = buildCodexArgs({ cwd: proj, sandbox: 'workspace', model: 'gpt-6-sol', network: 'loopback', secrets: { projectPath: proj, home, mycoHome: path.join(home, '.myco') } });
     expect(motor.join('\u0000')).toContain(work.join('\u0000'));
-    await fs.rm(dir, { recursive: true, force: true });
   });
 
   it('FTP na ficha não combina com o Codex; SSH combina (o MCP myco-ssh); ultra só no Codex', () => {
@@ -1128,7 +1125,7 @@ describe('Codex: endurecimento (revisão)', () => {
   // ---- ficha do próprio funcionário só leitura ----
 
   it('a ficha do próprio funcionário (os arquivos que existem) entra como "read" na sandbox de escrita; a memória e o resto da pasta ficam como estavam', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-ro-'));
+    const dir = await tmp('myco-ro-');
     const staff = path.join(dir, '.myco', 'staff');
     await fs.mkdir(path.join(staff, 'ana.history'), { recursive: true });
     for (const f of ['ana.json', 'ana.md', 'ana.memory.md']) await fs.writeFile(path.join(staff, f), 'x');
@@ -1143,13 +1140,12 @@ describe('Codex: endurecimento (revisão)', () => {
     expect(filesOf(wt)).toBe(`{${tomlString(staff)}="write",${ro.slice(0, 3).map((p) => `${tomlString(p)}="read"`).join(',')}}`);
     // Na sandbox de leitura tudo já é leitura: nada a acrescentar.
     expect(filesOf(buildCodexArgs({ cwd: dir, sandbox: 'read-only', network: 'off', secrets, readOnlyPaths: ro }))).toBe('{}');
-    await fs.rm(dir, { recursive: true, force: true });
   });
 
   // ---- mycoHome obrigatório ----
 
   it('mycoHome é obrigatório e sem padrão: o cofre negado é o do MYCO_HOME informado, nunca o ~/.myco da pasta pessoal', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-home-'));
+    const dir = await tmp('myco-home-');
     const home = path.join(dir, 'home');
     const custom = path.join(dir, 'outro-myco');
     await fs.mkdir(path.join(home, '.myco', 'secrets'), { recursive: true });
@@ -1161,7 +1157,6 @@ describe('Codex: endurecimento (revisão)', () => {
     // @ts-expect-error mycoHome é obrigatório
     const semMycoHome: Parameters<typeof buildCodexArgs>[0] = { cwd: dir, sandbox: 'workspace', network: 'off', secrets: { projectPath: dir, home } };
     expect(semMycoHome).toBeDefined();
-    await fs.rm(dir, { recursive: true, force: true });
   });
 
   // ---- onde vai a ficha ----
@@ -1267,7 +1262,7 @@ describe('Codex: endurecimento (revisão)', () => {
   // ---- falha fechada ao montar a linha de comando ----
 
   it('segredo que não dá para proteger (dois .vps arquivo, ELOOP): o turno acaba com a mensagem, nada roda e a conversa fica livre para a próxima', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-blocked-'));
+    const dir = await tmp('myco-blocked-');
     const proj = path.join(dir, 'proj');
     const wt = path.join(dir, 'wt');
     await fs.mkdir(proj, { recursive: true });
@@ -1302,7 +1297,6 @@ describe('Codex: endurecimento (revisão)', () => {
     expect(f.runs).toHaveLength(1);
     expect(chat.snapshot().state.busy).toBe(false);
     expect(noticesOf(chat).at(-1)?.text).toMatch(/Não consegui conferir .*\.vps \(ELOOP\)/);
-    await fs.rm(dir, { recursive: true, force: true });
   });
 
   // ---- conferência do Codex instalado (versão e network_proxy) ----

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { acquire, currentHolder, isHeavyCommand, LOCK_FILE, release } from '../scripts/hooks/heavy-lock.mjs';
 import { isAlive } from '../server/chat/registry';
+import { removeTemp } from './support/tmp';
 
 // t-aafb19: uma validação pesada (suíte completa, tsc do projeto) por vez na máquina. A lógica (heavy-lock.mjs), o hook do terminal
 // (heavy-guard.mjs, rodado de verdade), o runTests do servidor e a ligação no staffSettings.
@@ -38,10 +39,7 @@ const lockDir = () => path.join(tmp, `lock-${n++}`);
 beforeAll(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-heavy-'));
 });
-afterAll(async () => {
-  await fs.rm(tmp, { recursive: true, force: true });
-  await fs.rm(home, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(tmp, home));
 
 /** Escreve uma trava de outro dono. */
 async function hold(dir: string, rec: Record<string, unknown>) {

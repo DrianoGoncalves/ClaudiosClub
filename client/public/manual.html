@@ -1189,7 +1189,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
           <li><b class="ui">Modelo</b> e <b class="ui">Esforço</b>: começam do cargo.</li>
           <li><b class="ui">Roteiro</b>: <b class="ui">Nenhum (trabalha do jeito dele)</b>, <b class="ui">Planeja grande, executa pequeno</b>, <b class="ui">Reconhece, depois constrói</b> ou <b class="ui">Portão de revisão</b>. Com um roteiro escolhido, <b class="ui">Quem ajuda neste roteiro</b> mostra cada agent dele com o papel e o modelo.</li>
           <li><b class="ui">Autonomia</b>: veja <a href="#autonomia">abaixo</a>.</li>
-          <li><b class="ui">Trabalhar numa worktree própria</b>: cópia git só dele, num branch próprio. O projeto precisa ser repositório git.</li>
+          <li><b class="ui">Trabalhar numa worktree própria</b>: cópia git só dele, num branch próprio. O projeto precisa ser repositório git. Sem ela, o funcionário edita direto no projeto; com a opção “um escritor por vez” ligada no projeto, ele espera o card de outro funcionário que está editando fechar, e a ficha mostra um aviso disso embaixo da opção. Com ela, trabalha em paralelo sem esperar. Veja <a href="#um-escritor">Um card escrevendo por vez</a>.</li>
           <li><b class="ui">Pode contratar subfuncionários</b>: os contratados entram como temporários, com no máximo a autonomia dele.</li>
           <li><b class="ui">Motor</b> e <b class="ui">Motor secundário</b> aparecem só com o Codex ligado (<a href="#motor-ficha">ver Consumo e motores</a>).</li>
         </ul>
@@ -2197,6 +2197,19 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       <li><b>Bolinha laranja com halo</b> (a fila está parada, visível sem passar o mouse), em <b>Fazendo</b>: <b>esperando a máquina folgar</b> (com o motivo, ex.: pouca memória), <b>parada pelo limite de consumo</b>, <b>testes esperando a vez</b> (outra suíte pesada roda; diz quem) e <b>entrega em processamento há mais de 3 minutos</b> (resumo e commit; a fila só anda quando terminar). Cada uma traz “desde HH:MM” e o motivo.</li>
       <li><b>Sem bolinha</b>: funcionário livre e projeto pausado (a faixa azul de cima já avisa).</li>
     </ul>  </article>
+
+  <article class="blk" id="um-escritor">
+    <h3>Um card escrevendo por vez</h3>
+    <p>Opção do projeto, <b>desligada por padrão</b>. Liga e desliga só pela tela: no quadro de tarefas, abra o painel recolhível <b class="ui">Revisão automática do quadro</b>; lá, a linha <b class="ui">Um card escrevendo por vez</b> tem um botão <b class="ui">Ligada</b> / <b class="ui">Desligada</b> e, embaixo, o texto da regra. Ligada, só <b>um card por vez</b> edita código no checkout principal (a pasta do próprio projeto).</p>
+    <ul>
+      <li><b>Por quê</b>: o commit automático por tarefa só leva os arquivos do próprio card. Com dois cards editando a mesma pasta ao mesmo tempo, os arquivos se misturam e o commit de um fica parcial. Com um card por vez, cada commit sai limpo.</li>
+      <li><b>Quem espera</b>: funcionário <b>sem</b> <b class="ui">Trabalhar numa worktree própria</b> edita direto no projeto. Se outro funcionário já tem um card editando, o card dele fica na fila e só começa quando o do outro fechar. O card que acabou de ficar pronto segura a vaga até a tentativa de commit terminar.</li>
+      <li><b>Quem não espera</b>: funcionário <b>com</b> <b class="ui">Trabalhar numa worktree própria</b> trabalha em paralelo numa cópia só dele. Também passam direto o card só de plano e o card criado automaticamente. A fila de cada funcionário já anda um card por vez: a regra vale entre funcionários diferentes.</li>
+      <li><b>No quadro</b>: o card que espera mostra o selo <b class="ui">Aguardando recursos: a vaga de escrita deste projeto está com “{título}” ({id}, fazendo)</b>, dizendo quem ocupa a vaga e em que fase (fazendo, em revisão, em Aguardar ou pronto com o commit automático ainda rodando). Ele começa sozinho quando a vaga libera ou a opção é desligada.</li>
+      <li><b>Na ficha</b> (aba <b class="ui">Ficha</b>, junto de <b class="ui">Trabalhar numa worktree própria</b>): um aviso diz o efeito. Sem worktree e opção ligada: “edita direto no projeto e espera”. Sem worktree e opção desligada: “junto com os outros”. Com worktree: “trabalha em paralelo numa cópia só dele, sem esperar ninguém”.</li>
+      <li><b>Quando ligar a worktree</b>: quando dois ou mais funcionários costumam editar ao mesmo tempo e esperar um pelo outro custa caro. Ela pesa disco, não memória, e o projeto precisa ser repositório git. Tarefa de worktree tem o fluxo de <b class="ui">Mesclar</b> e não entra no commit automático.</li>
+    </ul>
+  </article>
 
   <article class="blk" id="editar-tarefa">
     <h3>Editar, apagar e id</h3>

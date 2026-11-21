@@ -12,6 +12,7 @@ import { ChatProcess } from '../server/chat/process';
 import { CodexProcess } from '../server/chat/codexProcess';
 import { backoffMs, classifyTurnError, MAX_RETRY_AFTER_MS, retryField, retryNotice, TurnRetryLedger, type TurnEnd } from '../server/chat/turnRetry';
 import { TaskService } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 // Retomada automática de turno que falhou por causa passageira (Claude e Codex): classificação do erro, backoff com jitter, teto por turno
 // original (em disco), ação externa cortada, Parar/mensagem/teto/reinício e a ligação com o card (fica em "fazendo" durante a espera).
@@ -21,9 +22,7 @@ let n = 0;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-turn-retry-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const T0 = Date.parse('2026-11-17T10:00:00Z');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

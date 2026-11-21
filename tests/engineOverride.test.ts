@@ -10,6 +10,7 @@ import { ChatManager } from '../server/chat/manager';
 import { StaffService, type StaffServiceOptions } from '../server/staff/service';
 import { readProfile } from '../server/staff/store';
 import { UsageStopError } from '../server/usageStop';
+import { removeTemp } from './support/tmp';
 
 // Conversa no motor/modelo secundário (`engineOverride`): a conversa nova monta o motor dele, a sessão guarda o override (continue e
 // reabrir seguem nele), o plano B do Codex não roda, e a ficha no disco não muda. Fakes no estilo de tests/codexEngine.test.ts.
@@ -52,9 +53,7 @@ beforeAll(async () => {
   projectPath = path.join(root, 'proj');
   await fs.mkdir(projectPath, { recursive: true });
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const project = (): Project => ({
   id: 'proj-id',

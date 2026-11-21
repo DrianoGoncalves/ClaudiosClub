@@ -8,6 +8,7 @@ import type { AccountUsage, LiveSession, Project } from '../shared/model';
 import type { ToolAdapter } from '../server/adapters/types';
 import { ChatManager } from '../server/chat/manager';
 import { StaffService, type StaffServiceOptions } from '../server/staff/service';
+import { removeTemp } from './support/tmp';
 
 // A conversa do Codex entra no "live" do quadro (o Codex não grava ~/.claude/sessions): trabalhando vira busy, ociosa vira idle,
 // e o que o adapter do Claude já lista não entra de novo. Fakes no estilo de tests/engineOverride.test.ts.
@@ -39,9 +40,7 @@ beforeAll(async () => {
   projectPath = path.join(root, 'proj');
   await fs.mkdir(projectPath, { recursive: true });
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const project = (): Project => ({
   id: 'proj-id',

@@ -6,6 +6,7 @@ import type { Engine, StaffProfile } from '../shared/model';
 import { BRIEF_RULES, DELIVERY_FORMAT, PREMISE_LINE, REQUIRED_PROOFS_LINE, REVIEW_RUBRIC, SCOPE_LINE } from '../server/deliveryRules';
 import { renderFicha, type FichaContext } from '../server/staff/ficha';
 import { TaskService } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 // Entrega em formato fixo, provas exigidas e rubrica única do revisor (t-a7dc60): vale para todos os projetos e funcionários, nos dois motores, e por isso está no
 // servidor (brief da tarefa, pedido de revisão e ficha do gestor), não em preset de cargo.
@@ -14,9 +15,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-delivery-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const ENGINES: Engine[] = ['claude', 'codex'];
 

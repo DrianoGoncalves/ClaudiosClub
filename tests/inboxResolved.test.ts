@@ -14,6 +14,7 @@ import { commitInboxItem, codexSandboxInboxItem, heavyGuardOffInboxItem } from '
 import { CHECK_DEADLINE_MS, COMMIT_CHECK_TTL_MS, InboxResolver, RESOLVED_KEEP_MS, resolvedLast, settleWithin } from '../server/inboxResolved';
 import { TaskService, commitAlerts, readTasks } from '../server/tasks';
 import { CHANGED_FILES_MAX, type InboxItem, type StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Aviso de erro da caixa com o problema já resolvido (`InboxItem.resolvedAt`, t-d1a1ba): por tipo, aberto → sem marca e resolvido → com marca; prazo de 24 h; commit que fica resolvido;
 // ignorar o item resolvido; `error:<sessão>` que some sozinho; a extensão e a ordem da lista. Git de verdade em pasta temporária; o resto com relógio e dependências trocados.
@@ -24,9 +25,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-resolved-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe' }).toString();
 const write = (dir: string, rel: string, text: string) => fs.writeFile(path.join(dir, rel), text);

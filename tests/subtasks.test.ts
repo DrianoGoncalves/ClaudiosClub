@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TaskService } from '../server/tasks';
 import type { Engine, StaffProfile, Task } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Subtarefa e fim de turno (t-828dc7): a tarefa pedida pela API com o token da conversa de trabalho de um card Ã© subtarefa dele (`parentTaskId`, sozinho). O fim de
 // turno do card com subtarefa aberta nÃ£o Ã© entrega: fica em "fazendo", aguardando, sem ocupar o funcionÃ¡rio (a fila anda). Fechadas todas (pronta, cancelada ou
@@ -13,9 +14,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-subtasks-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const DAY = 24 * 60 * 60_000;
 const profile = (id: string, name: string, extra: Partial<StaffProfile> = {}) => ({ id, name, role: 'Back-end', autonomy: 'acceptEdits', worktree: false, ...extra }) as StaffProfile;

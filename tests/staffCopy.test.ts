@@ -10,6 +10,7 @@ import { TaskService } from '../server/tasks';
 import { StaffBusyError, StaffError, StaffOpenTasksError, StaffService, type StaffServiceOptions } from '../server/staff/service';
 import { fichaFile, listVersions, memoryDir, memoryFile, profileFile, readPortrait, readProfile, saveProfile, StaffInputSchema } from '../server/staff/store';
 import { ALLOCATION_FIELDS, PERSON_FIELDS, PERSON_PORTRAIT, REQUEST_FIELDS } from '../shared/person';
+import { removeTemp } from './support/tmp';
 
 // O config (arquivados) grava em MYCO_HOME: aponta para uma pasta temporária antes de o config.ts carregar.
 const home = await vi.hoisted(async () => {
@@ -19,6 +20,8 @@ const home = await vi.hoisted(async () => {
   process.env.MYCO_HOME = dir;
   return dir;
 });
+// No arquivo, não no describe: o segundo describe ("mesma pessoa") ainda grava o config no MYCO_HOME depois do primeiro.
+afterAll(() => removeTemp(home));
 
 let root: string;
 let origin: string;
@@ -106,10 +109,7 @@ describe('fichas entre projetos', () => {
     await fs.writeFile(path.join(dest, '.myco', 'staff', 'corrompida-0000.json'), '{ isto não é json');
   });
 
-  afterAll(async () => {
-    await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
-    await fs.rm(home, { recursive: true, force: true }).catch(() => undefined);
-  });
+  afterAll(() => removeTemp(root));
 
   it('lista as fichas de todos os projetos conhecidos, com só os campos da lista', async () => {
     const { people } = await service().directory();
@@ -199,7 +199,7 @@ describe('fichas entre projetos', () => {
       const com = (await service().copyFrom('dest', { fromProjectId: 'orig', staffId: 'ana-1a2b', withMemory: true }, true))!.profile;
       expect(await fs.readFile(path.join(memoryDir(dest, com.id), 'deploy.md'), 'utf8')).toBe('Passo 1\n');
     } finally {
-      await fs.rm(dirOrigem, { recursive: true, force: true });
+      await removeTemp(dirOrigem);
     }
   });
 
@@ -350,9 +350,7 @@ describe('mesma pessoa entre projetos', () => {
   beforeEach(async () => {
     w = await mundo();
   });
-  afterEach(async () => {
-    await fs.rm(w.base, { recursive: true, force: true }).catch(() => undefined);
-  });
+  afterEach(() => removeTemp(w.base));
 
   it('a cópia herda o personId; a origem sem vínculo ganha um (sem versão nova); a cópia da cópia herda', async () => {
     await saveProfile(w.dirs.a, perfil({ id: 'ana-1a2b', projectId: 'a', name: 'Ana Souza' }));

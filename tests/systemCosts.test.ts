@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { appendSystemCost, CostIndex, readSystemCosts, type SystemCostRow } from '../server/adapters/claude/costs';
 import { ShowcaseRunner, type ClaudeOutput, type ClaudeRun, type SpawnClaude } from '../server/showcaseRunner';
+import { removeTemp } from './support/tmp';
 
 const HTML = '<!doctype html><html lang="pt-BR"><head></head><body><h1>Projeto</h1></body></html>';
 const PROMPT = 'PROMPT_NAO_VAI_AO_LEDGER';
@@ -39,9 +40,7 @@ describe('gerador da vitrine: ledger do Sistema (gravação)', () => {
     file = path.join(dir, 'logs', 'system-costs.jsonl');
   });
 
-  afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
-  });
+  afterEach(() => removeTemp(dir));
 
   function runnerWith(responses: ClaudeRun[], systemCostsFile = file) {
     const logs: string[] = [];
@@ -152,9 +151,7 @@ describe('Sistema no relatório de custos (ledger)', () => {
     ledger = path.join(root, 'logs', 'system-costs.jsonl');
   });
 
-  afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 3 });
-  });
+  afterEach(() => removeTemp(root));
 
   /** Pasta de projetos inexistente: só o ledger tem gasto. */
   const index = (systemFile?: string) => new CostIndex(path.join(root, 'projects'), path.join(root, 'cache.json'), systemFile);

@@ -5,16 +5,17 @@ import { pollVisible } from '../usePoll';
 import { Markdown } from '../chat/markdown';
 import { formatAgo, formatShare } from '../format';
 import { t, locale } from '../i18n';
-import { BranchIcon, ClockIcon, ReviewIcon, UserIcon } from '../icons';
+import { BranchIcon, ClockIcon, UserIcon } from '../icons';
 import { PrimaryReturnBadge, PrimaryReturnLine, TaskFallbackBadge } from '../staff/FallbackBadge';
 import { AutoBadge, AutoInfo } from './AutoCard';
-import { BoardReview, useBoardCommit, useBoardReview } from './BoardReview';
+import { BoardReview, useBoardCommit, useBoardReview, useBoardWriter } from './BoardReview';
 import { CommitBadge, CommitBlock } from './TaskCommit';
 import { FallbackWaitBadge, fallbackWaitText } from './FallbackWait';
 import { ReviewDelegate, ReviewStatus } from './ReviewDelegate';
 import { byHierarchy } from './reviewPick';
 import { fellToOwner, reviewPlan } from './reviewRule';
 import { OwnerBadge, ReviewWho } from './ReviewWho';
+import { ReviewerChip } from './ReviewerChip';
 import { ownerAsks, footerPlan, type AskCard } from './detailActions';
 import { NeedsYouStrip, TaskDetailFooter } from './TaskDetailParts';
 import { GrowTextarea } from './GrowTextarea';
@@ -27,7 +28,7 @@ import { QueueDots, useQueues } from './QueueStrip';
 import { queueDots } from './queueState';
 import { RetryBadge, retryText } from './TaskRetry';
 import { SubtaskBadges, SubtaskBlock, SubtaskStack } from './TaskSubtasks';
-import { ResourceWaitBadge, resourceWaitText } from './ResourceWait';
+import { ResourceWaitBadge, resourceWaitHint, resourceWaitText, slotHolder } from './ResourceWait';
 import { BlockedBadge, BlockedByField, blockerName, openBlockers, sameDeps, shownBlockers } from './TaskDeps';
 import { waitClass, waitWarm } from './waitTone';
 import { dependentRows, type DepMap, type DepMode } from './cancelDeps';
@@ -185,6 +186,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const [dup, setDup] = useState<{ createdId: string; warnings: TaskCreateWarning[] } | null>(null);
   const boardReview = useBoardReview(projectId);
   const boardCommit = useBoardCommit(projectId);
+  const boardWriter = useBoardWriter(projectId);
   const projectPause = useProjectPause(projectId, projectName, onChanged, initialPause);
   const queues = useQueues(projectId, initialQueues);
   const now = Date.now();
@@ -309,7 +311,14 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   /** Quem aparece no seletor: quem tem tarefa no quadro (mais o escolhido, que pode ter esvaziado). */
   const filterOwners = staff.filter((s) => s.id === staffFilter || !!tasks?.some((t) => t.staffId === s.id));
   /** As bolinhas de quem está ocupado em Fazendo e Revisão (o filtro por funcionário vale para elas). */
-  const dots = queueDots(queues, tasks, (id) => nameOf(id), (id) => tasks?.find((x) => x.id === id)?.title ?? id, now, staffFilter);
+  const dots = queueDots(queues, tasks, (id) => nameOf(id), (id) => tasks?.find((x) => x.id === id)?.title ?? id, now, staffFilter, (id) => slotHolder(tasks?.find((x) => x.id === id)?.resourceWait, tasks ?? [], LABEL));
+  /** Quem revisa o cartão: o revisor apontado na tarefa; em Revisão, também o do quadro ou o que já recebeu o pedido (`reviewPlan`). Com o dono decidindo, só o apontado (quem reprovou). */
+  const cardReviewer = (t: Task): string | null => {
+    if (t.reviewerId) return t.reviewerId;
+    if (t.status !== 'review') return null;
+    const p = reviewPlan(t, boardReview.config);
+    return p.kind === 'staff' ? p.id : null;
+  };
   const closingTask = closing ? (tasks?.find((t) => t.id === closing.id) ?? null) : null;
 
   /**
@@ -404,9 +413,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             <BranchIcon /> {task.branch}
           </span>
         )}
-        {task.reviewerId && (
-          <span className="task-reviewer small" title={t('tasks.autoReviewHint', { name: nameOf(task.reviewerId) ?? task.reviewerId })}>
-            <ReviewIcon /> {nameOf(task.reviewerId) ?? task.reviewerId}
+        {cardReviewer(task) && (
+          <span className="task-reviewer small" title={t('tasks.autoReviewHint', { name: nameOf(cardReviewer(task)) ?? cardReviewer(task)! })}>
+            <ReviewerChip id={cardReviewer(task)!} staff={staff} projectId={projectId} />
             {!!task.reviewRounds && ` · ${t('tasks.reviewRounds', { n: task.reviewRounds, max: AUTO_REVIEW_ROUNDS })}`}
           </span>
         )}
@@ -422,7 +431,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             {t('tasks.queuePos', { pos: queuePosOf(task), who: nameOf(task.staffId) ?? t('tasks.ownerFallback') })}
           </span>
         )}
-        <ResourceWaitBadge wait={task.resourceWait} now={now} warm={waitWarm(task.status)} />
+        <ResourceWaitBadge wait={task.resourceWait} now={now} warm={waitWarm(task.status)} holder={slotHolder(task.resourceWait, tasks ?? [], LABEL)} onOpen={setSelected} />
         <RetryBadge retry={task.retry} now={now} />
         {!!task.held?.length && (
           <span className={`task-queue${waitClass(waitWarm(task.status))} small`} title={t('tasks.heldHint')}>
@@ -508,7 +517,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             onClose={() => setDup(null)}
           />
         )}
-        <BoardReview review={boardReview} commit={boardCommit} staff={byHierarchy(staff)} />
+        <BoardReview review={boardReview} commit={boardCommit} writer={boardWriter} staff={byHierarchy(staff)} />
         {adding && (
           <TaskForm
             staff={byHierarchy(staff)}
@@ -578,7 +587,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                       {LABEL[status]} <span className="muted">{col.length || ''}</span>
                     </h3>
                     {/* Quem está ocupado agora (Fazendo: executando ou fila travada; Revisão: revisando); o texto de cada um só no hover. */}
-                    {(status === 'doing' || status === 'review') && <QueueDots dots={dots.filter((d) => d.column === status)} staff={staff} projectId={projectId} />}
+                    {(status === 'doing' || status === 'review') && <QueueDots dots={dots.filter((d) => d.column === status)} staff={staff} projectId={projectId} onOpenTask={setSelected} />}
                   </div>
                   {col.map(card)}
                   {status === 'done' && archived.length > 0 && (
@@ -1044,11 +1053,14 @@ function TaskDetail({
     waitingShown.length > 0 ? `${t('tasks.blockedDetail', { names: waitingShown.map(blockerName).join(', ') })}${waitingShown.some((o) => o.status === 'cancelled') ? ` ${t('tasks.blockedCancelledHint')}` : ''}` : null;
   const queueLine = queuePos > 0 && waitingShown.length === 0 ? t(queueKeys(waitingOn.length > 0, !!busyWith).detail, { who: ownerName, pos: queuePos, title: busyWith?.title ?? '' }) : null;
   const orderLine = moves ? t('tasks.orderLabel', { who: ownerName, pos: queuePos, total: queueTotal }) : null;
-  const resourceLine = task.resourceWait ? `${resourceWaitText(task.resourceWait, now)}. ${t('tasks.resourceWaitHint')}` : null;
+  /** A espera pela vaga de escrita (`resourceWait.holder`) leva o card que ocupa, com link; a de recursos segue com o texto do servidor. */
+  const slotOwner = slotHolder(task.resourceWait, tasks, LABEL);
+  const resourceHead = task.resourceWait ? resourceWaitText(task.resourceWait, now, slotOwner) : null;
+  const resourceLine = resourceHead ? `${resourceHead}. ${resourceWaitHint(slotOwner)}` : null;
   const heldLine = task.held?.length
     ? `${task.held.length === 1 ? t('tasks.heldMineOne') : t('tasks.heldMineOther', { n: task.held.length })}: ${task.held[0]!.reason}. ${t('tasks.heldNext')}`
     : null;
-  const waitHeads = [pause?.head, retry?.head, blockedLine, queueLine, orderLine, resourceLine, heldLine, fbWait?.hint].filter((x): x is string => !!x);
+  const waitHeads = [pause?.head, retry?.head, blockedLine, queueLine, orderLine, resourceHead, heldLine, fbWait?.hint].filter((x): x is string => !!x);
   const waitSum = waitHeads.length > 1 ? `${waitHeads[0]} (+${waitHeads.length - 1})` : (waitHeads[0] ?? '');
   const startLabel = busyWith || waitingOn.length ? t('tasks.enqueue') : t('tasks.start');
   const startTitle = !task.staffId
@@ -1094,6 +1106,11 @@ function TaskDetail({
         <NeedsYouStrip asks={asks} onGo={goTo} />
         {showReview && (
           <section className="task-review-box" data-card="review" tabIndex={-1} aria-label={t('tasks.reviewLabel')}>
+            {plan.kind === 'staff' && (
+              <div className="task-review-who small">
+                <ReviewerChip id={plan.id} staff={staff} projectId={projectId} />
+              </div>
+            )}
             <ReviewWho plan={plan} workerName={ownerName} reviewerName={(id) => nameOf(id) ?? id} asked={!!task.review} />
             {task.review && (
               <div className="task-code-row">
@@ -1288,7 +1305,19 @@ function TaskDetail({
                   <p className="muted small">{t('tasks.orderHint', { who: ownerName })}</p>
                 </div>
               )}
-              {resourceLine && <p className={waitText}>{resourceLine}</p>}
+              {resourceLine && (
+                <p className={waitText}>
+                  {resourceLine}
+                  {slotOwner?.title != null && (
+                    <>
+                      {' '}
+                      <button type="button" className="link small" onClick={() => onOpenTask(slotOwner.id)}>
+                        {t('tasks.slotWaitOpen', { id: slotOwner.id })}
+                      </button>
+                    </>
+                  )}
+                </p>
+              )}
               {heldLine && <p className={waitText}>{heldLine}</p>}
             </div>
           </details>

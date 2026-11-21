@@ -4,6 +4,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { codexUsageOf } from '../server/adapters/codex/usage';
+import { removeTemp } from './support/tmp';
 
 // Uso de tokens do Codex a partir dos rollouts: último total cumulativo, arquivo sem uso, retomada em dois arquivos.
 // Fixture sintética (nenhum conteúdo de conversa real).
@@ -39,9 +40,7 @@ beforeEach(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-codex-usage-'));
 });
 
-afterEach(async () => {
-  await fs.rm(home, { recursive: true, force: true });
-});
+afterEach(() => removeTemp(home));
 
 /** Grava um rollout em sessions/AAAA/MM/DD (day = AAAA-MM-DD). */
 async function rolloutAt(day: string, lines: unknown[], name = `rollout-${day}T10-00-00-${THREAD}.jsonl`): Promise<void> {

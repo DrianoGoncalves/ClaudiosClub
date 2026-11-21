@@ -8,6 +8,7 @@ import { stuckInboxItem } from '../server/inboxItems';
 import { TaskConflictError, TaskForbiddenError, TaskService, ownAlerts, stuckState } from '../server/tasks';
 import { codeTouchedSince } from '../server/taskCode';
 import type { Engine, StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Card = código (t-dd7e82, parte 5): o turno que termina sem nenhuma edição (changedFiles vazio e nada mudado no repositório desde que o card começou) não é entrega: o card fica
 // em "fazendo", marcado "sem código", sem ocupar o funcionário, e quem pediu (gestor na conversa em que pediu, ou o dono pela caixa) cancela com motivo ou devolve ao responsável.
@@ -17,9 +18,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-nocode-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const PAST = '2020-01-01T00:00:00';
 const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe', env: { ...process.env, GIT_AUTHOR_DATE: PAST, GIT_COMMITTER_DATE: PAST } }).toString();

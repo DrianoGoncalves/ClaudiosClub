@@ -4,9 +4,10 @@ import path from 'node:path';
 import { z } from 'zod';
 import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type BoardWriterConfig, type CancelRequest,type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, type TaskPlanWait, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
 import { kanbanProgress } from '../shared/kanbanProgress';
-import { commitTaskFiles, leftText, type SharedHold } from './autoCommit';
+import { commitTaskFiles, leftText, type SharedHold, type SlotFound } from './autoCommit';
 import { BoardCommitInput, BoardConfigInput, BoardWriterInput, DEFAULT_BOARD_CONFIG, readBoardCommit, readBoardConfig, readBoardWriter, writeBoardCommit, writeBoardConfig, writeBoardWriter } from './boardConfig';
 import { pathKey, readOwnerWrites } from './ownerEdits';
+import { changedSince, readSnapshots, takeSnapshot, updateSnapshots } from './slotSnapshot';
 import { codePath, type CodeEdit } from './chat/codeEdits';
 import { findSecret } from './chat/secrets';
 import type { SecondOpinionInput } from './adapters/codex';
@@ -2051,6 +2052,8 @@ export class TaskService {
       const busyWith = occupant(fresh, staffId, taskId);
       if (!busyWith && !this.staffBusy(projectId, fresh, staffId)) {
         // A vaga de escrita (ver `takeSlot`): ocupada, a tarefa entra na fila com o motivo, sem erro; o seu "Começar" (`byOwner`) passa por cima, como pela pausa.
+        // Por cima dela, o checkout passa a ter mais de um escritor: as fotos do que estava sujo (ver `captureSlot`) já não dizem de quem é cada mudança e saem, e os commits voltam a só `changedFiles`.
+        if (byOwner) await this.dropSlotPhotos(projectId);
         const slot = byOwner ? { release: () => {} } : await this.takeSlot(projectId, now ?? task, profile);
         if ('holder' in slot) return this.change(projectId, taskId, (t) => slotWait(enqueue(t), slot.holder));
         try {
@@ -4081,8 +4084,11 @@ export class TaskService {
     if (!dir) return null;
     const input = parseOr(BoardWriterInput, body);
     await writeBoardWriter(dir, input);
-    // Desligada, quem esperava por ela já pode começar.
-    if (!input.singleWriter) void this.wakeSlotWaiters(projectId).catch(() => {});
+    // Desligada, quem esperava por ela já pode começar, e as fotos do que estava sujo já não valem (o checkout volta a ter vários escritores).
+    if (!input.singleWriter) {
+      await this.dropSlotPhotos(projectId);
+      void this.wakeSlotWaiters(projectId).catch(() => {});
+    }
     return input;
   }
 
@@ -4100,14 +4106,17 @@ export class TaskService {
   }
 
   /** A leitura da vaga para quem decide fora da fila dela (a aprovação do plano, ver `decidePlan`): null com a opção desligada ou sem precisar dela (worktree própria, card automático). */
-  private async slotView(projectId: string, task: Task): Promise<{ ownCopy: Set<string>; committing: Set<string> } | null> {
+  private async slotView(projectId: string, task: Task): Promise<{ dir: string; ownCopy: Set<string>; committing: Set<string>; free: boolean } | null> {
     if (!task.staffId || task.autoCreated) return null;
     const dir = await this.deps.projectPath(projectId);
     if (!dir || !(await readBoardWriter(dir)).singleWriter) return null;
     const profile = await this.deps.readProfile(projectId, task.staffId).catch(() => null);
     if (!profile || profile.worktree) return null;
     const committing = this.committingIds(projectId);
-    return { committing, ownCopy: await this.ownCopyStaff(projectId, await readTasks(dir), committing) };
+    const board = await readTasks(dir);
+    const ownCopy = await this.ownCopyStaff(projectId, board, committing);
+    // `free`: ninguém a ocupa nem está abrindo conversa agora (a conferência que vale é a de dentro da gravação, ver `decidePlan`; aqui só decide se vale tirar a foto).
+    return { dir, committing, ownCopy, free: !writeHolder(board, ownCopy, committing, task.id) && !this.slotStarting.get(projectId) };
   }
 
   /**
@@ -4127,9 +4136,17 @@ export class TaskService {
     const prev = this.slotQueues.get(projectId) ?? Promise.resolve();
     this.slotQueues.set(projectId, prev.then(() => mine));
     await prev;
+    // A foto do que já está sujo (ver `captureSlot`) vale desde antes de a conversa abrir; depois da tentativa de partida o `release` a confere (`settleSlot`) e só então solta a vez do portão.
+    let photo: Photo | null = null;
+    let released = false;
     const release = () => {
+      if (released) return;
+      released = true;
       if (this.slotStarting.get(projectId) === task.id) this.slotStarting.delete(projectId);
-      free();
+      if (!photo) return free();
+      void this.settleSlot(projectId, dir, task.id, photo)
+        .catch(() => {})
+        .finally(free);
     };
     try {
       // `readTasks` devolve lista vazia quando a leitura falha (no Windows, o arquivo trocado naquele instante): "sem ninguém" seria falso e deixaria dois escritores passarem. O próprio card tem de
@@ -4144,12 +4161,15 @@ export class TaskService {
       if (!self) throw new TaskError('não consegui conferir a vaga de escrita: o quadro não foi lido agora');
       const ownCopy = await this.ownCopyStaff(projectId, fresh, committing);
       // Quem já segura a vaga (voltou à fila, ajuste guardado, o dono que a tinha antes de a opção ligar) não espera por ninguém: não entra mais um escritor.
-      const holder = holdsWrite(self, fresh, ownCopy, committing) ? undefined : writeHolder(fresh, ownCopy, committing, task.id);
+      const holds = holdsWrite(self, fresh, ownCopy, committing);
+      const holder = holds ? undefined : writeHolder(fresh, ownCopy, committing, task.id);
       if (holder) {
         release();
         return { holder };
       }
       this.slotStarting.set(projectId, task.id);
+      // Quem já segura a vaga mantém a foto que tem; quem a ocupa agora ganha uma (a que já tinha, se ninguém mais a ocupou depois, ou uma nova).
+      if (!holds) photo = await this.captureSlot(dir, task.id);
       return { release };
     } catch (err) {
       release();
@@ -4160,6 +4180,77 @@ export class TaskService {
   /** A tarefa na fila espera a vaga de escrita de `holder`: o motivo fica em `Task.resourceWait`, que a fila (`queueStates`) e a tela já leem. Sem erro, sem consumo: ela só fica onde está. */
   private async holdForSlot(projectId: string, taskId: string, holder: Task): Promise<void> {
     await this.change(projectId, taskId, (t) => (t.status === 'todo' || t.status === 'waiting' ? slotWait(t, holder) : t));
+  }
+
+  /**
+   * A foto do que já está sujo no checkout (ver slotSnapshot.ts) para o card que vai ocupar a vaga: o commit automático dele leva depois o que mudou desde ela, inclusive por shell ou script. Reaproveita a
+   * do próprio card quando ela ainda existe (quem ocupa a vaga apaga as dos outros, `settleSlot`: se ainda está aqui, ninguém mais a ocupou depois); senão tira uma nova. Nunca lança nem atrasa a partida
+   * além do prazo da foto: sem foto, o commit é o de sempre. null = não gravou. `fresh`: a foto é nova, e some se a partida não vingar.
+   */
+  private async captureSlot(dir: string, taskId: string): Promise<Photo | null> {
+    try {
+      const mine = (await readSnapshots(dir))[taskId];
+      if (mine?.files) return { at: mine.at, fresh: false };
+      const snap = await takeSnapshot(dir);
+      await updateSnapshots(dir, (all) => ((all[taskId] = snap), true));
+      return { at: snap.at, fresh: true };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Depois da tentativa de partida (ver `takeSlot`, `decidePlan`): o card segura a vaga agora? Segura: a foto vale, e as dos cards que não seguram mais (parou, voltou à fila, pronto sem commit pendente,
+   * cancelado) saem, porque o checkout já teve outro escritor depois delas. Não segura (a partida não vingou: consumo, gate, erro): a foto nova dele sai; a que ele já tinha e reaproveitou fica. Lê o quadro de
+   * novo (o arquivo pode estar sendo trocado naquele instante, como em `takeSlot`); sem achar o card, não mexe em nada. A partida em curso (`slotStarting`) nunca é apagada.
+   */
+  private async settleSlot(projectId: string, dir: string, taskId: string, photo: Photo): Promise<void> {
+    let tasks = await readTasks(dir);
+    for (let i = 1; i <= 3 && !tasks.some((t) => t.id === taskId); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 25 * i));
+      tasks = await readTasks(dir);
+    }
+    const self = tasks.find((t) => t.id === taskId);
+    if (!self) return;
+    const committing = this.committingIds(projectId);
+    const ownCopy = await this.ownCopyStaff(projectId, tasks, committing);
+    const holds = (t: Task | undefined) => !!t && holdsWrite(t, tasks, ownCopy, committing);
+    const starting = this.slotStarting.get(projectId);
+    await updateSnapshots(dir, (all) => {
+      let changed = false;
+      if (holds(self)) {
+        for (const id of Object.keys(all)) {
+          if (id === taskId || id === starting || holds(tasks.find((t) => t.id === id))) continue;
+          delete all[id];
+          changed = true;
+        }
+      } else if (photo.fresh && all[taskId]?.at === photo.at) {
+        delete all[taskId];
+        changed = true;
+      }
+      return changed;
+    });
+  }
+
+  /** Apaga a foto do card (o commit dele já saiu, ou não vai sair) ou, sem `taskId`, todas: a vaga foi desligada, ou o dono passou por cima dela e o checkout tem mais de um escritor. Nunca lança. */
+  private async dropSlotPhotos(projectId: string, taskId?: string): Promise<void> {
+    const dir = await this.deps.projectPath(projectId).catch(() => null);
+    if (!dir) return;
+    await updateSnapshots(dir, (all) => {
+      const ids = taskId ? Object.keys(all).filter((id) => id === taskId) : Object.keys(all);
+      for (const id of ids) delete all[id];
+      return ids.length > 0;
+    }).catch(() => {});
+  }
+
+  /**
+   * O que a foto da vaga achou além de `changedFiles` na tarefa que ficou pronta (ver `commitDone`). undefined = sem foto, e o commit é o de sempre: a opção desligada, card que não ocupou a vaga
+   * (worktree, automático, "Começar" do dono por cima, a vaga ligada depois que ele já fazia) ou foto que o dono invalidou.
+   */
+  private async slotFound(dir: string, task: Task, profile: StaffProfile | null): Promise<SlotFound | undefined> {
+    if (task.autoCreated || profile?.worktree || !(await readBoardWriter(dir)).singleWriter) return undefined;
+    const snap = (await readSnapshots(dir))[task.id];
+    return snap ? changedSince(dir, snap) : undefined;
   }
 
   /** A vaga de escrita ficou livre (ou a opção foi desligada): acorda o dono de cada tarefa que esperava por ela (`resourceWait.holder`). Só fora de `locked`, como `wakeDependents`; o kick segue sem await. */
@@ -4180,6 +4271,7 @@ export class TaskService {
     this.committing.add(key);
     const run: Promise<void> = this.autoCommit(projectId, taskId)
       .catch(() => {}) // registro, não trava: nada aqui derruba quem deixou a tarefa pronta
+      .then(() => this.dropSlotPhotos(projectId, taskId)) // a foto da vaga serviu a esta entrega (ou o commit não ia sair): não sobra para a próxima
       .finally(() => {
         this.commitRuns.delete(run);
         this.committing.delete(key);
@@ -4221,7 +4313,9 @@ export class TaskService {
       const hold: SharedHold = { id: o.id, stoppedAt: stoppedWorkingAt(o) };
       for (const key of new Set((o.changedFiles ?? []).map(pathKey))) shared.set(key, [...(shared.get(key) ?? []), hold]);
     }
-    const out = await commitTaskFiles({ dir, taskId, title: task.title, files: task.changedFiles, shared, ownerWrites: await readOwnerWrites(dir) });
+    // Com a vaga de escrita, o que a tarefa mudou por shell ou script e `changedFiles` não vê vem da foto de quando ela a ocupou (ver `slotFound`).
+    const slot = await this.slotFound(dir, task, profile);
+    const out = await commitTaskFiles({ dir, taskId, title: task.title, files: task.changedFiles, shared, ownerWrites: await readOwnerWrites(dir), slot });
     const commit: TaskCommit = { ...out, for: doneAt, at: new Date().toISOString() };
     const line = commitNote(commit);
     await this.change(projectId, taskId, (t) => (line ? noted({ ...t, commit }, line) : { ...t, commit }));
@@ -5212,6 +5306,9 @@ export class TaskService {
         : [`[Tarefa "${title}"]`, `O plano foi recusado por ${who}. Motivo: ${input.reason}`, 'Ajuste o plano e termine o turno com ele, ainda sem editar arquivos: quem pediu decide de novo.'].join('\n\n');
     // Aprovado, o card vai implementar: é aqui que ele precisa da vaga de escrita (o plano, não). Ocupada, ele volta à fila com o motivo e a aprovação guardada, e implementa quando a vaga ficar livre (ver `takeSlot`).
     const slot = approve ? await this.slotView(projectId, first) : null;
+    // Com a vaga livre, a foto do que já está sujo vale desde antes de o card voltar a editar (ver `captureSlot`); a mensagem de aprovação só sai depois.
+    const photo = slot?.free ? await this.captureSlot(slot.dir, first.id) : null;
+    const settle = async () => void (photo && slot && (await this.settleSlot(projectId, slot.dir, first.id, photo).catch(() => {})));
     const out = await this.lockedWithDeadline(
       projectId,
       first.staffId,
@@ -5231,7 +5328,12 @@ export class TaskService {
           return { ...queued, resourceWait: { reason, since: at, holder: holder.id } };
         }),
       { op: `plano ${taskId}`, refused: 'a decisão do plano NÃO foi gravada', deadlineMs: this.lockDeadline() },
-    );
+    ).catch(async (err) => {
+      await settle();
+      throw err;
+    });
+    // Aprovado e implementando: a foto vale e as velhas saem; voltou à fila por vaga ocupada (ou nada gravado): a foto nova sai (ver `settleSlot`).
+    await settle();
     if (!out) return null;
     // Na fila esperando a vaga: a aprovação já está guardada no card (`held`) e o `takeNext` a manda quando ela abrir. O funcionário ficou livre (o card saiu de "planejando"): a fila dele anda.
     if (out.status === 'todo') {
@@ -6279,6 +6381,12 @@ function occupant(tasks: Task[], staffId: string, except?: string): Task | undef
 
 /** Os status em que o card segura a vaga de escrita do projeto (ver `writeHolder`): revisão e Aguardar continuam com ela, porque o código dele ainda está solto no checkout. */
 const WRITES: TaskStatus[] = ['doing', 'review', 'waiting'];
+
+/** A foto da vaga que um card tem em andamento (ver `TaskService.captureSlot`): o `at` que a identifica no `.myco/write-slot.json` e se foi tirada agora (`fresh`) ou é a que ele já tinha. */
+interface Photo {
+  at: string;
+  fresh: boolean;
+}
 
 /** Como o card aparece no motivo da espera pela vaga. */
 const SLOT_STATUS: Partial<Record<TaskStatus, string>> = { doing: 'fazendo', review: 'em revisão', waiting: 'em Aguardar', done: 'pronto, o commit automático ainda roda' };

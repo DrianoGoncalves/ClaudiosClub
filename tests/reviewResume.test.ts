@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { stuckState, TaskError, TaskService } from '../server/tasks';
 import type { StaffProfile, TestRun } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Revisão automática perdida num reinício (t-686f25): o card chegou em "revisão" (fim do turno), o servidor caiu antes do `autoReview` (os
 // testes da entrega levam minutos) e nada retomava. O `tick` pede a revisão, uma vez, só do que se perdeu assim.
@@ -12,9 +13,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-resume-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const MIN = 60_000;
 const later = (min: number) => new Date(Date.now() + min * MIN);

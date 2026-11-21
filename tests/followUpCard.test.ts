@@ -9,6 +9,7 @@ import { resolveCaller, SessionTokens } from '../server/callers';
 import { followUpInboxItem } from '../server/inboxItems';
 import { renderFicha, type FichaContext } from '../server/staff/ficha';
 import { TaskConflictError, TaskError, TaskForbiddenError, TaskService, followUpAlerts, type TaskServiceDeps } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 // Card = código (t-dd7e82), partes 2 a 4: o follow-up estruturado (recomendação, título leigo, impacto, tamanho, quem faria), o card do follow-up em um passo
 // (idempotente, atômico, só o dono ou quem pediu a tarefa) e o item da caixa do dono apontando para a conversa de trabalho. A regra nas fichas dos dois motores.
@@ -17,9 +18,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-fucard-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const person = (id: string, name: string, over: Partial<StaffProfile> = {}) =>
   ({ id, name, role: id.startsWith('gio') ? 'Orquestrador' : 'Back-end', autonomy: 'acceptEdits', worktree: false, servers: [], reportsTo: [], ...over }) as unknown as StaffProfile;

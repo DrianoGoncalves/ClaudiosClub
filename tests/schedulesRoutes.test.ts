@@ -14,6 +14,7 @@ import { buildSchedules, occurrenceState, ScheduleWindowError, scheduleWindow, t
 import { StaffError, StaffService, type StaffServiceOptions } from '../server/staff/service';
 import { readProfile, RoutinesSchema } from '../server/staff/store';
 import { buildTeamExport, planTeamImport } from '../server/staff/teamExport';
+import { removeTemp } from './support/tmp';
 
 // A tela central de agendamentos: o que o GET /schedules monta (rotinas, ocorrências da janela), a gravação de UMA rotina pelo caminho da ficha
 // (criar, editar, ligar/desligar, apagar), o schema do "quando roda" e as rotas só do navegador. 2026-11-18 é quarta-feira.
@@ -25,9 +26,7 @@ beforeAll(async () => {
   projectPath = path.join(root, 'proj');
   await fs.mkdir(projectPath, { recursive: true });
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const project = (): Project => ({ id: 'proj-id', path: projectPath, name: 'proj', exists: true, worktreeOf: null, hasClaudeMd: false, agentCount: 0, skillCount: 0, sessionCount: 0, lastActivityAt: null });
 const adapter = { listProjects: async () => [project()] } as unknown as ToolAdapter;

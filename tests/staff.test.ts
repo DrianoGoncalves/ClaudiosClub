@@ -31,6 +31,7 @@ import { listRoles, saveRole } from '../server/roles';
 import { PERSONALITIES, PERSONALITY_PROMPTS, personalityName, personalityReminder, personalitySection } from '../shared/personality';
 import { staffSettings } from '../server/staff/launch';
 import { CLEAN_BROWSER_MCP_NAME } from '../server/chat/codexArgs';
+import { removeTemp } from './support/tmp';
 
 // Os cargos (server/roles.ts) e a config leem MYCO_HOME: uma pasta temporária, para não usar o ~/.myco de quem roda os testes.
 const home = await vi.hoisted(async () => {
@@ -406,9 +407,7 @@ beforeAll(async () => {
   );
 });
 
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, home));
 
 describe('estilo de comunicação', () => {
   it('sem estilo a ficha não tem a seção; com caveman tem, como última seção, com o texto do preset', () => {
@@ -503,7 +502,7 @@ describe('estilo de comunicação', () => {
       await fs.writeFile(arquivo, '  \n');
       expect(execFileSync(process.execPath, [script, arquivo]).toString()).toBe('');
     } finally {
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTemp(dir);
     }
   });
 
@@ -519,22 +518,26 @@ describe('estilo de comunicação', () => {
 describe('infra: servidores por SSH', () => {
   it('lista só as conexões completas do projeto, sem usuário nem chave (o ~/.ssh/config fica de fora)', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-srv-'));
-    const key = path.join(dir, 'chave');
-    await fs.writeFile(key, 'x');
-    await fs.mkdir(path.join(dir, 'proj', '.vps'), { recursive: true });
-    await fs.writeFile(
-      path.join(dir, 'proj', '.vps', 'config.json'),
-      JSON.stringify({
-        connections: {
-          prod: { host: 'vps-a.example.com', user: 'deploy', identityFile: key, remoteRoot: '/var/www/app' },
-          apelido: { host: 'VPS' },
-          'mal nome': { host: 'x' },
-        },
-      }),
-    );
-    const list = await listServers(path.join(dir, 'proj'));
-    expect(list).toEqual([{ name: 'prod', source: 'vps', protocol: 'ssh', host: 'vps-a.example.com', remoteRoot: '/var/www/app' }]);
-    expect(JSON.stringify(list)).not.toMatch(/chave|deploy|identity/i);
+    try {
+      const key = path.join(dir, 'chave');
+      await fs.writeFile(key, 'x');
+      await fs.mkdir(path.join(dir, 'proj', '.vps'), { recursive: true });
+      await fs.writeFile(
+        path.join(dir, 'proj', '.vps', 'config.json'),
+        JSON.stringify({
+          connections: {
+            prod: { host: 'vps-a.example.com', user: 'deploy', identityFile: key, remoteRoot: '/var/www/app' },
+            apelido: { host: 'VPS' },
+            'mal nome': { host: 'x' },
+          },
+        }),
+      );
+      const list = await listServers(path.join(dir, 'proj'));
+      expect(list).toEqual([{ name: 'prod', source: 'vps', protocol: 'ssh', host: 'vps-a.example.com', remoteRoot: '/var/www/app' }]);
+      expect(JSON.stringify(list)).not.toMatch(/chave|deploy|identity/i);
+    } finally {
+      await removeTemp(dir);
+    }
   });
 
   it('a ficha traz as conexões e as regras; a linha de comando bloqueia chaves e .env', () => {

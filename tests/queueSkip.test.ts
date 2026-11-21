@@ -7,6 +7,7 @@ import type { Reservation } from '../server/resourceGate';
 import { TaskService } from '../server/tasks';
 import { UsageStopError } from '../server/usageStop';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // A fila não trava por causa de um cartão que não começa (t-23d463): a candidata que falha por motivo dela fica na fila com o motivo e a
 // próxima começa no mesmo tick; motivo da fila toda (consumo, reinício, gate de recursos, conversa ocupada) para na primeira, sem varrer.
@@ -16,9 +17,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-queueskip-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const MIN = 60_000;
 const ana = { id: 'ana-1', name: 'Ana', role: 'Back-end', autonomy: 'acceptEdits', worktree: false } as StaffProfile;

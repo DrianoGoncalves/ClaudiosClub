@@ -12,6 +12,9 @@ import { tempDirs } from './support/tmp';
 // pronto com o commit automático ainda por sair); o outro card que vai implementar espera na fila com o motivo (`Task.resourceWait`, o dado que `queueStates` e a tela já leem) e começa sozinho quando
 // a vaga abre. Worktree própria e a fase de plano não entram na conta. Repositório git de verdade (o commit automático roda), nos dois motores.
 
+// Um repositório git de verdade por teste (init, commit e o commit automático): sob carga cada um passa dos 5 s padrão, e a falha mudava a cada rodada (3 de 52 com 5 s, nenhuma com 60 s).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+
 const tmp = tempDirs();
 let root: string;
 beforeAll(async () => {

@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildSkillPlugin, hashSkillFolders, readLibrarySkill } from '../server/skillLibrary';
 import { buildClaudeArgs, renderFicha } from '../server/staff/ficha';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // MYCO_HOME de teste: nada no ~/.myco de quem roda os testes.
 const home = await vi.hoisted(async () => {
@@ -19,10 +20,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-skills-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-  await fs.rm(home, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, home));
 
 describe('sobra da biblioteca (virou Global)', () => {
   it('lê a pasta que sobrou da migração (conflito), para a rota GET de uma skill', async () => {

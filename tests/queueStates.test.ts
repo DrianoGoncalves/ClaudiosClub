@@ -6,6 +6,7 @@ import { ProjectPauses } from '../server/projectPause';
 import { TaskService } from '../server/tasks';
 import { UsageStopError } from '../server/usageStop';
 import type { StaffProfile, StaffQueue, TestRun, UsageStopHit } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // t-3f52ea: o estado da fila de cada funcionário (`GET /api/projects/:id/queues`), para o dono ver por que ela não anda: livre, ocupado com o card X, esperando recurso, limite de consumo,
 // projeto pausado, entrega em processamento (por fase) e a suíte de testes esperando a vez da fila de validação pesada. Só leitura: o que já existe não muda.
@@ -14,9 +15,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-queues-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const profile = (id: string, name: string, extra: Partial<StaffProfile> = {}) => ({ id, name, role: 'Back-end', autonomy: 'acceptEdits', worktree: false, reportsTo: [], engine: 'claude', ...extra }) as StaffProfile;
 const passed = (command: string): TestRun => ({ command, ok: true, output: '', ms: 1, at: '2026-11-19T12:00:00Z' });

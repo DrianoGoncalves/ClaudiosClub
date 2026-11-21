@@ -13,6 +13,7 @@ import {
   testConnection,
   writeStaffSshConfig,
 } from '../server/staff/servers';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 let key: string;
@@ -21,9 +22,7 @@ beforeAll(async () => {
   key = path.join(root, 'id_teste');
   await fs.writeFile(key, 'não é lida');
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const project = async (name: string) => {
   const dir = path.join(root, name);

@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ConfigPatch, readConfig, setArchived, updateConfig } from '../server/config';
 import { sweepFreelas, type FreelaSweepDeps } from '../server/freelaSweep';
 import type { LiveSession, Project, Session, StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 const NOW = new Date('2026-11-10T12:00:00Z');
 const daysAgo = (d: number) => new Date(NOW.getTime() - d * 86_400_000).toISOString();
@@ -16,9 +17,7 @@ let n = 0;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-freela-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 beforeEach(() => {
   file = path.join(root, `config-${n++}`, 'config.json');
 });

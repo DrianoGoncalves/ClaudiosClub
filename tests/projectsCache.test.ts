@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClaudeAdapter } from '../server/adapters/claude';
 import { encodeProjectDir } from '../server/adapters/claude/paths';
+import { removeTemp } from './support/tmp';
 
 // O resumo dos projetos (`listProjects`) lê todo transcript e quase toda rota passa por ele: com `projectsTtlMs` fica guardado, e muda na hora
 // quando o projeto muda (novo projeto: `forgetProjects`; apelido: nem entra no que fica guardado).
@@ -28,9 +29,7 @@ beforeAll(async () => {
   await fs.mkdir(projA, { recursive: true });
   await fs.mkdir(projB, { recursive: true });
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 beforeEach(async () => {
   // Cada teste começa com só o projA, sem conversa. O relógio é falso só na data (o disco segue de verdade).
   vi.useFakeTimers({ toFake: ['Date'] });

@@ -1,13 +1,15 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { testMcpConfig } from '../server/staff/mcpTest';
+import { removeTemp } from './support/tmp';
 
 // O teste do MCP encerra a árvore inteira: um servidor aberto por um intermediário (como o npx faz) não fica órfão,
 // mesmo que ele não saia quando o stdin fecha. No Windows quem faz isso é o taskkill /T; aqui, o grupo do processo.
-const dir = await mkdtemp(path.join(os.tmpdir(), 'mcp-tree-'));
-afterAll(() => rm(dir, { recursive: true, force: true }));
+// A pasta nasce dentro do describe: no Windows ele é pulado, e o vitest não roda o afterAll de um arquivo todo pulado
+// (criada no topo, a pasta ficava para trás a cada rodada).
+let dir: string;
 
 const alive = (pid: number) => {
   try {
@@ -19,6 +21,11 @@ const alive = (pid: number) => {
 };
 
 describe.skipIf(process.platform === 'win32')('teste do MCP no Unix', () => {
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'mcp-tree-'));
+  });
+  afterAll(() => removeTemp(dir));
+
   it('o neto (servidor aberto pelo comando) sai junto com o comando', async () => {
     const pidFile = path.join(dir, 'neto.pid');
     const child = path.join(dir, 'neto.mjs');

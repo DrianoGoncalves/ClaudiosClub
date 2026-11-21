@@ -7,6 +7,7 @@ import { lastCommitMs } from '../server/autoCommit';
 import { commitInboxItem } from '../server/inboxItems';
 import { TaskService, commitAlerts, readTasks } from '../server/tasks';
 import type { StaffProfile, Task } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Commit automático barrado por outra tarefa (t-2a8ee8): quem pediu a tarefa é avisado, uma vez por motivo, na conversa em que pediu; e a outra tarefa só barra se ainda pode ter mudança
 // pendente no arquivo (em fazendo/planejando/a fazer, ou parada sem commit do arquivo depois da parada). Repositórios git de verdade, em pasta temporária.
@@ -17,9 +18,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-commitnotice-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const PAST = '2020-01-01T00:00:00';
 const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe' }).toString();

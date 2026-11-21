@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { StaffProfile } from '../shared/model';
 import { DELIVERY_NOTE_MAX, DELIVERY_NOTES_MAX, parseDeliveryNotes, relativePath } from '../server/deliveryNotes';
 import { TaskService } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 describe('notas da entrega: parse', () => {
   it('lê uma linha por arquivo, com `:` ou travessão, e normaliza `\\` para `/`', () => {
@@ -61,9 +62,7 @@ describe('notas da entrega: gravadas no Task', () => {
   beforeAll(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-delivery-'));
   });
-  afterAll(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
+  afterAll(() => removeTemp(root));
 
   it('tarefa sem gestor também grava delivery (resumo cortado e notas)', async () => {
     const dir = path.join(root, 'sem-gestor');

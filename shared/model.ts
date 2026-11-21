@@ -740,6 +740,11 @@ export interface TaskCommit {
   note: string | null;
   /** Precisa de você (falhou, ficou arquivo de fora ou a lista passou do limite): vira item na caixa até você ver. */
   alert: boolean;
+  /**
+   * Com a vaga de escrita (ver `BoardWriterConfig`), quantos dos arquivos commitados vieram de fora de `Task.changedFiles`: o que a tarefa mudou por shell ou script e o Club não viu,
+   * achado pela foto do que já estava sujo quando ela ocupou a vaga (`server/slotSnapshot.ts`). 0 = a foto valeu e não achou nada por fora; ausente = sem foto (sem vaga, ou card que não a ocupou).
+   */
+  extra?: number;
   /** Você viu o aviso da caixa (o item some; o cartão segue mostrando o resultado). */
   ack?: boolean;
 }

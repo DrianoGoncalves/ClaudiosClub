@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { CodexSubagentWatch } from '../server/chat/codexSubagents';
 import { codexRolloutDenial } from '../server/chat/denied';
 import { ChatManager } from '../server/chat/manager';
+import { removeTemp } from './support/tmp';
 
 // Alerta "ação barrada" do Codex pelo ROLLOUT (follow-up f-a69470 da t-4ea7e3): no Codex 0.169 o `apply_patch` recusado pela sandbox só de leitura não sai no `--json`; fica no rollout,
 // no `function_call_output` da chamada, como o bloco "Script error:\npatch rejected: <motivo>". O shell com "acesso negado" do SO NÃO é sinal (mesmo texto de arquivo preso).
@@ -122,7 +123,7 @@ describe('CodexSubagentWatch: onLine', () => {
   }
   afterEach(async () => {
     watch.stop();
-    await fs.rm(dir, { recursive: true, force: true });
+    await removeTemp(dir);
   });
 
   it('entrega cada linha completa nova (sem as que já estavam), e a pela metade espera o resto', async () => {
@@ -183,7 +184,7 @@ describe('ChatManager + Codex: apply_patch recusado no rollout gera o item de a�
   afterAll(async () => {
     if (savedHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = savedHome;
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemp(root);
   });
 
   const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));

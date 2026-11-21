@@ -7,6 +7,7 @@ import { stuckInboxItem } from '../server/inboxItems';
 import type { LimitHit } from '../server/chat/usageLimit';
 import { ownAlerts, stuckState, TaskService } from '../server/tasks';
 import type { StaffProfile, Task } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // A troca para o secundário que não serve agora (`fallbackBlocked`): a tarefa espera o limite do motor da ficha baixar, em vez de cair
 // no secundário. Começo (`startPlan`), meio do turno (`onLimit`), a parada que ela mostra (`stuckState`, `ownAlerts`) e o id do aviso.
@@ -15,9 +16,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-fallbackblocked-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const NOW = Date.now();
 const MIN = 60_000;

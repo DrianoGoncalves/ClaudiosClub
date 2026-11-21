@@ -1,10 +1,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { openProjectTerminalRoute, shellCommand } from '../server/openProjectTerminal';
+import { removeTempSync } from './support/tmp';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-term-'));
+afterAll(() => removeTempSync(dir));
 const env = { SESSIONNAME: 'Console', DISPLAY: ':0', SHELL: '/bin/zsh', MYCO_TOKEN: 'x', GITHUB_TOKEN: 'y', PATH: 'p' };
 
 describe('openProjectTerminalRoute', () => {

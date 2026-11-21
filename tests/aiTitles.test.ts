@@ -11,6 +11,7 @@ import { cleanTitle, TitleService, titleArgs, titleInput, type TitleServiceDeps 
 import { reviewTaskOf } from '../server/titles/subject';
 import { SubjectTracker } from '../server/titles/tracker';
 import type { ClaudeOutput, ClaudeRun, SpawnClaude } from '../server/showcaseRunner';
+import { removeTemp } from './support/tmp';
 
 // Títulos de conversa gerados por IA: o `claude` é falso (spawnClaude), o relógio e a espera são injetados, e o cache e
 // o ledger ficam numa pasta temporária. Nada toca o ~/.claude nem o MYCO_HOME.
@@ -27,9 +28,7 @@ beforeEach(async () => {
   await fs.mkdir(path.join(projects, 'proj-1'), { recursive: true });
 });
 
-afterEach(async () => {
-  await fs.rm(dir, { recursive: true, force: true });
-});
+afterEach(() => removeTemp(dir));
 
 const userLine = (uuid: string, text: string) => JSON.stringify({ type: 'user', uuid, message: { role: 'user', content: text } }) + '\n';
 const asstLine = (uuid: string, text: string) =>

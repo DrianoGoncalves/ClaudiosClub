@@ -9,6 +9,7 @@ import { buildHandoff, collectGit, oldConversationExtract, type HandoffInput } f
 import { MAX_ITEMS } from '../server/chat/history';
 import { clockText } from '../server/chat/usageLimit';
 import { claudeLimitHit } from '../server/usageStop';
+import { removeTemp } from './support/tmp';
 
 // Conversa substituta (fallback de motor): a 1ª mensagem, a leitura da conversa antiga, o git e a hora do limite do Claude.
 
@@ -200,9 +201,7 @@ describe('collectGit: o git da pasta', () => {
   beforeAll(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-handoff-'));
   });
-  afterAll(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
+  afterAll(() => removeTemp(root));
 
   it('pasta que não é repositório: null', async () => {
     const dir = path.join(root, 'sem-git');

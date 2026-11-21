@@ -8,6 +8,7 @@ import { StaffError, StaffService, type StaffServiceOptions } from '../server/st
 import { UsageStopError } from '../server/usageStop';
 import { readSeal, sealFile, writeSeal } from '../server/staff/seal';
 import { fichaFile, memoryFile, profileFile, readProfile, saveChatChoice, saveProfile, StaffInputSchema } from '../server/staff/store';
+import { removeTemp } from './support/tmp';
 
 // Ficha com engine codex: o que o servidor aceita ao salvar, o que recusa ao abrir a conversa e o esforço `ultra` (só do Codex).
 
@@ -20,9 +21,7 @@ beforeAll(async () => {
   // Uma conexão FTP ('site') para o Codex recusar; 'vps1' não existe no projeto (o SSH não é conferido aqui).
   await fs.writeFile(path.join(projectPath, '.vps', 'ftp.json'), JSON.stringify({ connections: { site: { protocol: 'ftps', host: 'ftp.example.com', port: 21, user: 'deploy', remoteRoot: '/' } } }));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const project = (): Project => ({
   id: 'proj-id',

@@ -22,6 +22,7 @@ import {
 } from '../server/staff/ftp';
 import { saveConnection } from '../server/staff/servers';
 import { getSecret, hasSecret } from '../server/secretVault';
+import { removeTemp } from './support/tmp';
 
 const PASSWORD = 'S3nh@-Secreta-FTP';
 
@@ -35,9 +36,7 @@ beforeAll(async () => {
   key = path.join(root, 'id_teste');
   await fs.writeFile(key, 'x');
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const project = async (name: string) => {
   const dir = path.join(root, name);

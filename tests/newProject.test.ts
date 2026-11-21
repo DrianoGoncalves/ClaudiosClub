@@ -6,6 +6,7 @@ import { discoverProjects } from '../server/adapters/claude/projects';
 import { addExtraProject, readExtraProjects } from '../server/config';
 import { openProject, parseNewProject, usualParent } from '../server/newProject';
 import type { Project } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 // Fora da pasta temporária de propósito não dá em teste: o "tmp" do teste é outra pasta.
@@ -13,9 +14,7 @@ const fakeTmp = path.join(os.tmpdir(), 'myco-nao-e-o-tmp');
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-newproj-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 describe('novo projeto', () => {
   it('recusa nome de pasta que quebra caminho ou não funciona no Windows', () => {

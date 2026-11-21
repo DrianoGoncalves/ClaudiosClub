@@ -12,6 +12,7 @@ import { ChatProcess } from '../server/chat/process';
 import { deniedInboxItem } from '../server/inboxItems';
 import { TaskService } from '../server/tasks';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Alerta "ação barrada" (InboxKind 'denied'): conversa de TAREFA com ferramenta negada gera um item por conversa e por turno, agrupado, nos dois motores.
 // O texto e as camadas do Claude são os de denial.ts (que não muda); aqui se confere o item, o agrupamento, a dispensa e o limite do Codex.
@@ -28,9 +29,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-denied-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 /** Processo falso do claude: `emit` escreve uma linha no stdout dele. */
 function fakeClaude() {

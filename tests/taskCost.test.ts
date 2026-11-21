@@ -20,6 +20,7 @@ import {
   type CostSources,
   type RankedTask,
 } from '../server/taskCost';
+import { removeTemp } from './support/tmp';
 
 // Fontes simuladas: transcripts do Claude (como o CostIndex devolve), registro do Club e uso do Codex (como codexUsageOf).
 // Nenhum conteúdo de conversa real.
@@ -326,9 +327,7 @@ describe('cache do uso do Codex', () => {
     home = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-taskcost-'));
   });
 
-  afterEach(async () => {
-    await fs.rm(home, { recursive: true, force: true });
-  });
+  afterEach(() => removeTemp(home));
 
   const rollout = (input: number, cached: number, output: number) =>
     [
@@ -389,7 +388,7 @@ describe('sessão de projeto fora do quadro ainda tem custo', () => {
   afterAll(async () => {
     if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = prevCodexHome;
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemp(root);
   });
 
   const adapter = () =>

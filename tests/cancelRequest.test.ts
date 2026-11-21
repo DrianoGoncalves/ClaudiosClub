@@ -6,6 +6,7 @@ import type { StaffProfile, Task, TaskCreateResult } from '../shared/model';
 import { resolveCaller, SessionTokens, type Engine } from '../server/callers';
 import { renderFicha, type FichaContext } from '../server/staff/ficha';
 import { TaskConflictError, TaskError, TaskForbiddenError, TaskService, reasonRequest, type TaskServiceDeps } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 // Solicitante cancela a tarefa que nunca começou; a que já começou ele pede ao responsável, que decide; criar com chave de idempotência
 // (retry não duplica) e a resposta do POST que gravou mas não conseguiu começar.
@@ -14,9 +15,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-cancelreq-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const person = (id: string, name: string, over: Partial<StaffProfile> = {}) =>
   ({ id, name, role: id.startsWith('gio') ? 'Orquestrador' : 'Back-end', autonomy: 'acceptEdits', worktree: false, servers: [], reportsTo: [], ...over }) as unknown as StaffProfile;

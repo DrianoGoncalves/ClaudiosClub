@@ -8,6 +8,7 @@ import { resolveCaller, SessionTokens, type Engine } from '../server/callers';
 import { followUpInboxItem } from '../server/inboxItems';
 import { renderFicha, type FichaContext } from '../server/staff/ficha';
 import { TaskConflictError, TaskError, TaskForbiddenError, TaskService, followUpAlerts, untrustedBlock, type TaskServiceDeps } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 // Follow-up de revisão: quem revisou (ou fez) a tarefa registra o ajuste posterior sem poder criar card; grava ANTES de avisar; o aviso vai a quem pediu (ou à caixa do
 // dono) e é refeito se falhar; quem decide descarta ou marca "virou card". Nada vira card sozinho.
@@ -16,9 +17,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-followup-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const person = (id: string, name: string, over: Partial<StaffProfile> = {}) =>
   ({ id, name, role: id.startsWith('gio') ? 'Orquestrador' : 'Back-end', autonomy: 'acceptEdits', worktree: false, servers: [], reportsTo: [], ...over }) as unknown as StaffProfile;

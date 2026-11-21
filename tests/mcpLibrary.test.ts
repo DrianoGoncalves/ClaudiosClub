@@ -6,14 +6,13 @@ import { hasSecret, getSecret } from '../server/secretVault';
 import { buildMcpConfig, clubSecretId, listMcpServers, McpError } from '../server/staff/mcp';
 import { mcpLaunchCommand, parseLauncherEntry } from '../server/staff/mcpLaunch';
 import { createMcpLibrary, MASK, maskArgs, maskUrl } from '../server/staff/mcpLibrary';
+import { removeTemp } from './support/tmp';
 
 // Tudo em pastas temporárias: nunca o ~/.claude.json real. O cofre usa o modo arquivo (platform linux).
 
 const GH = 'ghp_k3J9xQ7mP2vL8nR5tY1wZ6cB4hF0dS9aE7uI';
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await fs.rm(r, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(...roots));
 
 async function setup(seed?: Record<string, unknown>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-mcplib-'));

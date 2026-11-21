@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { checkpoint, CodeError, locateCode, mergeCode, readCode } from '../server/taskCode';
 import { ensureWorktree } from '../server/staff/worktree';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 const homeBefore = process.env.MYCO_HOME;
@@ -16,7 +17,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (homeBefore === undefined) delete process.env.MYCO_HOME;
   else process.env.MYCO_HOME = homeBefore;
-  await fs.rm(root, { recursive: true, force: true });
+  await removeTemp(root);
 });
 
 /** Repositório de verdade, com um teste que passa ou falha conforme `ok.txt`. */

@@ -9,6 +9,7 @@ import { claudeToolCommand, codexToolCommand } from '../server/chat/codeEdits';
 import { scanSecrets } from '../server/chat/secrets';
 import { commandFiles, locateSecretFile } from '../server/chat/secretOrigin';
 import { secretInboxItem } from '../server/inboxItems';
+import { removeTemp } from './support/tmp';
 
 // Origem do alerta de segredo que veio da SAÍDA de um comando (t-e45afe, caso real de 19/11: `Get-Content DEPLOY.md ...; Get-Content .gitignore ...` e a
 // senha em DEPLOY.md, linha 20, sem `secret.file`): o servidor lê os arquivos que o comando leu e acha o que tem o segredo, nos dois motores.
@@ -60,9 +61,7 @@ beforeAll(async () => {
   await fs.writeFile(path.join(proj, 'binario.dat'), Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(`${SEGREDO}\n`)]));
   await fs.writeFile(path.join(outside, 'fora.md'), `${SEGREDO}\n`);
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const at = (...p: string[]) => path.join(proj, ...p);
 const occurrenceOf = (text: string) => {

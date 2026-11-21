@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ESCALATE_AFTER_MS } from '../server/retryPolicy';
 import { TaskService } from '../server/tasks';
 import type { Engine, StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Reprovação com itens (t-33b84c): o revisor fecha o REPROVADO com o bloco `[BLOQUEADORES]` e o executor recebe os 🔴 como checklist (nenhum cortado), responde item a item, e a
 // rodada seguinte leva o que foi pedido e o que ele respondeu (guardado no card, sobrevive a reinício). A DÚVIDA sobre um 🔴 vai ao revisor que reprovou. Revisor Claude e Codex:
@@ -14,9 +15,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-rejection-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const MIN = 60_000;
 const later = (min: number) => new Date(Date.now() + min * MIN);

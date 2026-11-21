@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createGuide, GuideExistsError, guideStatus, hasGuide, MAX_SHOWCASE_BYTES, readShowcase, unsafeShowcase } from '../server/projectGuide';
 import { ProjectFileError } from '../server/projectFiles';
+import { removeTemp } from './support/tmp';
 
 describe('guia do projeto (SPEC.md)', () => {
   let dir: string;
@@ -13,9 +14,7 @@ describe('guia do projeto (SPEC.md)', () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-guia-'));
   });
 
-  afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
-  });
+  afterEach(() => removeTemp(dir));
 
   it('sem SPEC.md e fora de git: não existe, não é git, não é ignorado; sem vitrine', async () => {
     expect(await guideStatus(dir)).toEqual({

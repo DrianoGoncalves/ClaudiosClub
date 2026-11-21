@@ -1,6 +1,10 @@
 import type { StaffQueue } from '../../../shared/model';
 import { clockHM } from '../chat/wakeCountdown';
 import { locale, t, type MsgKey } from '../i18n';
+import { slotHolderLabel, type SlotHolder } from './ResourceWait';
+
+/** Quem ocupa a vaga de escrita que o card `taskId` espera (ver `slotHolder`). */
+export type SlotOf = (taskId: string) => SlotHolder | null;
 
 // O estado da fila de cada funcionário (`GET /api/projects/:id/queues`, ver `TaskService.queueStates`) em frases de quem vê o quadro: por que a fila de alguém não anda.
 // Livre e ocupado são só um aviso discreto; o que trava (recurso, consumo, entrega demorando, suíte esperando a vez) vem em destaque, com desde quando e o que fazer.
@@ -17,6 +21,8 @@ export interface QueueRow {
   text: string;
   /** O porquê em palavras (o motivo do servidor, o que a fila espera): só nas travas. */
   detail?: string;
+  /** Fila parada pela vaga de escrita: o card que a ocupa, quando está na lista (o tooltip leva o link "Abrir"). */
+  openTaskId?: string;
 }
 
 /** Uma bolinha do quadro: quem está ocupado em Fazendo (executando, entregando, ou com a fila travada) ou em Revisão (revisando), e o texto que aparece no hover. */
@@ -27,6 +33,7 @@ export interface QueueDot {
   tone: 'busy' | 'stuck';
   text: string;
   detail?: string;
+  openTaskId?: string;
 }
 
 /** Só o que as bolinhas leem de um card: a revisão pedida e ainda sem resposta (o turno do revisor não terminou, nem foi substituída por uma entrega nova). */
@@ -43,6 +50,7 @@ export function queueDots(
   titleOf: (taskId: string) => string,
   now: number,
   only = '',
+  slotOf?: SlotOf,
 ): QueueDot[] {
   const reviewing = new Map<string, string[]>();
   for (const t of tasks ?? []) {
@@ -52,12 +60,12 @@ export function queueDots(
   }
   const state = new Map((queues ?? []).map((q) => [q.staffId, q] as const));
   const dots: QueueDot[] = [];
-  for (const r of queueRows(queues, nameOf, titleOf, now, only, true)) {
+  for (const r of queueRows(queues, nameOf, titleOf, now, only, true, slotOf)) {
     const q = state.get(r.staffId);
     if (!q || q.state === 'free') continue;
     // Ocupado sem card, com revisão aberta: a conversa dele é a revisão, que já tem a bolinha em Revisão.
     if (q.state === 'busy' && !q.taskId && reviewing.has(r.staffId)) continue;
-    dots.push({ staffId: r.staffId, column: 'doing', tone: r.tone === 'stuck' ? 'stuck' : 'busy', text: r.text, ...(r.detail && { detail: r.detail }) });
+    dots.push({ staffId: r.staffId, column: 'doing', tone: r.tone === 'stuck' ? 'stuck' : 'busy', text: r.text, ...(r.detail && { detail: r.detail }), ...(r.openTaskId && { openTaskId: r.openTaskId }) });
   }
   for (const [staffId, titles] of reviewing) {
     dots.push({ staffId, column: 'review', tone: 'busy', text: t('tasks.queueReviewing', { name: nameOf(staffId) ?? staffId, task: titles.join(', ') }) });
@@ -86,6 +94,8 @@ export function queueRows(
   only = '',
   /** Sem card esperando também entra (as bolinhas mostram quem está ocupado mesmo com a fila vazia). */
   empty = false,
+  /** Quem ocupa a vaga de escrita que o card esperando (`StaffQueue.taskId`) aguarda; null/ausente: a espera é do gate de recursos. */
+  slotOf?: SlotOf,
 ): QueueRow[] {
   const rows: QueueRow[] = [];
   for (const q of queues ?? []) {
@@ -105,9 +115,13 @@ export function queueRows(
       case 'busy':
         rows.push(row('quiet', q.taskId ? 'tasks.queueStBusy' : 'tasks.queueBusyChat'));
         break;
-      case 'resource-wait':
-        rows.push(row('stuck', 'tasks.queueResource', q.detail));
+      case 'resource-wait': {
+        // A fila parada pela vaga de escrita tem texto próprio (o servidor manda o motivo em pt-BR; aqui ele vira frase do idioma da tela, com o card que ocupa).
+        const slot = q.taskId ? slotOf?.(q.taskId) : null;
+        if (slot) rows.push({ ...row('stuck', 'tasks.queueSlot', t('tasks.slotWaitHint'), { holder: slotHolderLabel(slot) }), ...(slot.title !== null && { openTaskId: slot.id }) });
+        else rows.push(row('stuck', 'tasks.queueResource', q.detail));
         break;
+      }
       case 'usage-limit':
         rows.push(row('stuck', 'tasks.queueUsage', q.detail));
         break;

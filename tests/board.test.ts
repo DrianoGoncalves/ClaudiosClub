@@ -9,6 +9,7 @@ import { addExtraProject, readConfig, readExtraProjects, setArchived } from '../
 import { importableList, importProjects } from '../server/importProjects';
 import { ProjectError } from '../server/newProject';
 import { createProfile, StaffInputSchema } from '../server/staff/store';
+import { removeTemp } from './support/tmp';
 
 // Um ~/.claude falso com projetos de todo tipo: com ficha, sem ficha, do "Novo projeto", o demo, worktrees e pasta sumida.
 let root: string;
@@ -68,7 +69,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = prevCodexHome;
-  await fs.rm(root, { recursive: true, force: true });
+  await removeTemp(root);
 });
 
 function adapter(filtered = true, configFile = cfg, discoveryTtlMs = 0) {

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { StaffProfile } from '../shared/model';
 import { MEMORY_DETAIL_MAX_BYTES, MEMORY_INDEX_MAX_BYTES, MEMORY_INDEX_MAX_LINES, memoryJudge, memoryMeasure, memoryOver } from '../scripts/hooks/memory-cap.mjs';
+import { removeTemp } from './support/tmp';
 
 // O teto da memória fora do MCP: a regra (scripts/hooks/memory-cap.mjs) e o hook que a faz valer no Write/Edit/MultiEdit do Claude
 // (scripts/hooks/memory-guard.mjs), rodado de verdade, e a entrada que o staffSettings e o prepareRun põem nele.
@@ -33,10 +34,7 @@ beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-memguard-'));
   await fs.mkdir(staff(`${ID}.memory`), { recursive: true });
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-  await fs.rm(home, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, home));
 
 /** Roda o hook com o evento (ou o texto cru); devolve o que ele escreveu ('' = não respondeu). */
 const run = (input: unknown, script = hook) => execFileSync(process.execPath, [script], { input: typeof input === 'string' ? input : JSON.stringify(input) }).toString();

@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { StaffProfile, Task } from '../shared/model';
 import { resolveCaller, SessionTokens } from '../server/callers';
 import { TaskService, untrustedBlock, untrustedLine, type TaskServiceDeps } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 // Texto de funcionário nunca vira instrução na conversa de outro: os avisos de cancelamento, recusa, ordem, bloqueio e desfecho, e os títulos de tarefa, levam o texto dele
 // normalizado (NFKC, sem caracteres de formato), numa linha só e sem a marca `[MyCo` em posição nenhuma; a aspa dele não fecha a citação. A entrega e o critério de aceite
@@ -14,9 +15,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-untrusted-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 // Caracteres invisíveis e de largura cheia montados por código: no arquivo ficariam ilegíveis (ou seriam trocados pelo editor).
 const ZWSP = String.fromCharCode(0x200b);

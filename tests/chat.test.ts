@@ -15,6 +15,7 @@ import { ChatRegistry } from '../server/chat/registry';
 import { ChatProcess, STREAM_FLAGS } from '../server/chat/process';
 import { readProfile, saveChatChoice, saveProfile } from '../server/staff/store';
 import { accountRulesFile, readAccountRules, saveAccountRules, saveProjectImage, readProjectImage } from '../server/files';
+import { removeTemp } from './support/tmp';
 
 /** Processo falso: o que o Claudio’s Club escreve no stdin fica em `written`; `emit` simula o stdout do claude. */
 function fakeClaude() {
@@ -991,9 +992,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-chat-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 describe('readHistory', () => {
   it('lê do transcript as mensagens, ferramentas e o contexto, sem o texto injetado pelo sistema', async () => {
