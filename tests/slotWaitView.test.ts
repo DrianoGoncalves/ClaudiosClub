@@ -108,7 +108,7 @@ describe('o link para o card que ocupa a vaga', () => {
   });
 
   it('sem onOpen, sem o card na lista, ou espera do gate de recursos: o selo não tem link', () => {
-    const html = (holder: ReturnType<typeof slotHolder>, wait = slot, onOpen?: () => void) => renderToStaticMarkup(createElement(ResourceWaitBadge, { wait, now: NOW, holder, onOpen }));
+    const html = (holder: ReturnType<typeof slotHolder>, wait: { reason: string; since: string; holder?: string } = slot, onOpen?: () => void) => renderToStaticMarkup(createElement(ResourceWaitBadge, { wait, now: NOW, holder, onOpen }));
     expect(html(slotHolder(slot, cards, LABEL), slot, () => {})).toContain('role="link"');
     expect(html(slotHolder(slot, cards, LABEL))).not.toContain('role="link"');
     expect(html(slotHolder(slot, [], LABEL), slot, () => {})).not.toContain('role="link"');
