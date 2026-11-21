@@ -53,7 +53,7 @@ describe('os textos fixos', () => {
 describe('o brief da tarefa (nos dois motores): começo, retomada na fila e handoff', () => {
   const ana = (engine: Engine) => ({ id: 'ana-1', name: 'Ana', role: 'Back-end', autonomy: 'acceptEdits', worktree: false, engine }) as StaffProfile;
 
-  async function club(name: string, engine: Engine) {
+  async function club(name: string, engine: Engine, over: Partial<StaffProfile> = {}) {
     const dir = path.join(root, name);
     await fs.mkdir(dir, { recursive: true });
     const file = path.join(dir, '.myco', 'tasks.json');
@@ -62,7 +62,8 @@ describe('o brief da tarefa (nos dois motores): começo, retomada na fila e hand
     const svc = new TaskService({
       projectPath: async () => dir,
       projectIds: async () => ['p'],
-      readProfile: async (_p, id) => (id === 'ana-1' ? ana(engine) : null),
+      readProfile: async (_p, id) => (id === 'ana-1' ? { ...ana(engine), ...over } : null),
+      readLimit: async () => null, // sem limite em nenhum motor: só a troca que o teste pede (onLimit) acontece
       send: async (_p, _s, text) => (sent.push(text), 's-1'),
       sendTo: async (_p, session, _s, text) => (sentTo.push(text), session),
       branchFor: async () => null,
@@ -125,9 +126,56 @@ describe('o brief da tarefa (nos dois motores): começo, retomada na fila e hand
     brief(c.sentTo[0]!);
   });
 
-  it('handoff da troca de motor: leva o mesmo fim (a conversa nova é a que entrega)', async () => {
-    const src = await fs.readFile(path.join(__dirname, '..', 'server', 'tasks.ts'), 'utf8');
-    expect(src).toMatch(/closing: \[\.\.\.\(await this\.requesterLines\(projectId, task\)\), this\.cancelLine\(projectId, task, to\.engine\), \.\.\.BRIEF_RULES\]/);
+  // A troca de motor no meio do turno (onLimit) abre a conversa nova com o handoff, que termina com o mesmo fim do texto de início. O teste dispara a troca de verdade e lê o
+  // texto enviado à conversa nova (sent[1]; sent[0] é o início na antiga), em vez de casar o código-fonte: a linha do plano (planLineOf) entra no meio do fim e o regex quebrou.
+  const PLAN_LINE = 'Esta tarefa pede o plano primeiro: nesta rodada NÃO edite arquivos';
+  const OPEN_PLAN = { title: 'Botão', description: 'Pedido do botão.', acceptance: 'Critério.', staffId: 'ana-1' } as const;
+
+  /** Abre o card, deixa o motor da ficha bater no limite no meio do turno e devolve o handoff que foi para a conversa nova (e o id do card). */
+  async function handoff(name: string, engine: Engine, input: Record<string, unknown>, over: Partial<StaffProfile> = {}, edit?: (x: Record<string, any>) => void) {
+    const to: Engine = engine === 'claude' ? 'codex' : 'claude';
+    const c = await club(name, engine, { fallback: { engine: to, model: 'modelo-2' }, ...over });
+    const t = (await c.svc.create('p', { ...OPEN_PLAN, ...input }))!;
+    await c.svc.start('p', t.id);
+    if (edit) await c.edit(t.id, edit);
+    await c.svc.onLimit({ sessionId: 's-1', engine, hit: { resetsAt: Date.now() + 2 * 3_600_000, window: 'five_hour' } });
+    expect(c.sent).toHaveLength(2); // o início na conversa antiga e o handoff na nova
+    return { text: c.sent[1]!, to, id: t.id };
+  }
+
+  it.each(ENGINES)('handoff da troca de motor (ficha %s): leva o mesmo fim (cancelar com o endereço do motor novo + as 3 regras do brief), e a conversa nova é a que entrega', async (engine) => {
+    const { text, to, id } = await handoff(`handoff-fim-${engine}`, engine, {});
+    brief(text);
+    const cancel = text.indexOf(`Cancelar esta tarefa (id \`${id}\`)`);
+    expect(cancel).toBeGreaterThan(text.indexOf('## O que fazer')); // o fim vem depois das instruções do handoff
+    expect(cancel).toBeLessThan(text.indexOf(SCOPE_LINE)); // e a linha de cancelar, antes das regras do brief, como no texto de início
+    expect(text).toContain(to === 'codex' ? 'http://127.0.0.2:4848/api/projects/p/tasks/' : 'http://127.0.0.1:4848/api/projects/p/tasks/');
+    expect(text).not.toContain(PLAN_LINE); // card sem pedido de plano: nada a mais no fim
+  });
+
+  it.each(ENGINES)('handoff da troca de motor (ficha %s), card plano-primeiro sem plano aprovado: a linha do plano entra, entre as instruções e a linha de cancelar', async (engine) => {
+    const { text, id } = await handoff(`handoff-plano-${engine}`, engine, { planFirst: true });
+    expect(text.split(PLAN_LINE)).toHaveLength(2); // uma vez só
+    expect(text.indexOf(PLAN_LINE)).toBeGreaterThan(text.indexOf('## O que fazer'));
+    expect(text.indexOf(PLAN_LINE)).toBeLessThan(text.indexOf(`Cancelar esta tarefa (id \`${id}\`)`));
+    brief(text); // e o fim continua o mesmo
+  });
+
+  it('handoff da troca de motor: o pedido de plano na descrição (sem o campo) também leva a linha do plano', async () => {
+    const { text } = await handoff('handoff-plano-descricao', 'claude', { description: 'PLANO PRIMEIRO: proponha antes de editar.' });
+    expect(text).toContain(PLAN_LINE);
+  });
+
+  it('handoff da troca de motor: sem a linha do plano quando o plano já foi aprovado, quando o campo dispensa e quando a ficha só planeja', async () => {
+    const aprovado = await handoff('handoff-plano-aprovado', 'claude', { planFirst: true }, {}, (x) => {
+      x.plan = 'Plano aprovado: mudar o botão.';
+    });
+    expect(aprovado.text).not.toContain(PLAN_LINE);
+    const dispensado = await handoff('handoff-plano-dispensado', 'claude', { planFirst: false, description: 'PLANO PRIMEIRO, mas o dono dispensou.' });
+    expect(dispensado.text).not.toContain(PLAN_LINE);
+    const soPlaneja = await handoff('handoff-plano-ficha-plan', 'claude', { planFirst: true }, { autonomy: 'plan' });
+    expect(soPlaneja.text).not.toContain(PLAN_LINE); // a ficha "só planeja" já tem o plano pelo cartão da conversa
+    brief(soPlaneja.text);
   });
 });
 
