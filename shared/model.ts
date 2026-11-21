@@ -696,6 +696,15 @@ export interface BoardCommitConfig {
   autoCommit: boolean;
 }
 
+/**
+ * Um escritor por vez no checkout principal (também em `<projeto>/.myco/board.json`, na chave `singleWriter`; desligado por padrão): com ela ligada, só um card por vez fica com a "vaga de
+ * escrita" do projeto, e o outro que iria implementar espera na fila com o motivo (`Task.resourceWait`). Quem trabalha em worktree própria e a fase de plano não entram na conta
+ * (ver `TaskService.writeSlot`). Só liga e desliga pela tela.
+ */
+export interface BoardWriterConfig {
+  singleWriter: boolean;
+}
+
 /** Quantos arquivos do commit e quantos deixados de fora uma tarefa guarda (`TaskCommit.files` e `left`); o resto só entra na contagem da nota. */
 export const COMMIT_LIST_MAX = 100;
 
@@ -910,8 +919,11 @@ export interface Task {
   queuePos?: number;
   /** Começar mesmo com o limite de consumo batido (você confirmou ao pôr na fila). */
   queuedForce?: boolean;
-  /** Na fila, a partida foi segurada pelo gate de recursos (ver server/resourceGate.ts): o motivo e desde quando. Limpo ao começar. */
-  resourceWait?: { reason: string; since: string } | null;
+  /**
+   * Na fila, a partida foi segurada pelo gate de recursos (ver server/resourceGate.ts) ou pela vaga de escrita do projeto (ver `BoardWriterConfig`): o motivo e desde quando. Limpo ao começar.
+   * `holder`: só na espera pela vaga de escrita, o id do card que a ocupa.
+   */
+  resourceWait?: { reason: string; since: string; holder?: string } | null;
   /** Na fila, a partida falhou por motivo da própria tarefa (ficha, worktree, branch…): a fila segue sem ela e ela espera `nextAt` (ver `takeNext`). Limpo ao começar ou sair da fila. */
   startRetry?: RetryState;
   /** Você tirou a tarefa da fila de propósito ("tirar da fila"): a varredura do tick não a põe de volta (ver `enqueueIdle`). Sai ao entrar na fila, mudar de coluna ou de responsável. */
