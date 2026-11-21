@@ -5,6 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { clientChanged, DAILY, TSX, VITE } from '../scripts/lib';
 import { openTerminal } from './terminal';
+import { bodyText } from './bodyText';
 import { CodexAdapter, CodexError, defaultRunner } from './adapters/codex';
 import { CodexEnv, withAppAddress, type CodexEnvStatus } from './codexEnv';
 import { CodexCapability } from './engineCapability';
@@ -2921,7 +2922,7 @@ async function readJson(req: http.IncomingMessage): Promise<unknown> {
     if (size > MAX_BODY) throw new BadRequest('corpo grande demais');
     chunks.push(chunk as Buffer);
   }
-  const text = Buffer.concat(chunks).toString('utf8');
+  const text = bodyText(Buffer.concat(chunks));
   if (!text) return {};
   try {
     return JSON.parse(text);
