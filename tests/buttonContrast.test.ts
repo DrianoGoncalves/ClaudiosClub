@@ -38,9 +38,12 @@ describe.each(Object.entries(themes))('botões, tema %s', (_name, scope) => {
 });
 
 describe('CSS dos botões', () => {
-  it('a primária usa --on-ink-blue e os botões têm foco visível e alvo de 44 px', () => {
+  it('a primária usa --on-ink-blue e os botões têm foco visível e o mesmo tamanho (o do Salvar ficha)', () => {
     expect(css).toMatch(/:is\(\.btn-primary, \.btn-secondary\):focus-visible \{ outline: 2px solid var\(--ink-blue\)/);
-    expect(css).toMatch(/max-width: 640px\) \{\s*:is\(\.btn-primary, \.btn-secondary\):not\([^)]*\) \{ min-height: 44px; \}/);
+    expect(css).toMatch(/:is\(\.btn-primary, \.btn-secondary\):not\([^)]*\) \{ font-size: var\(--btn-font\); line-height: var\(--btn-lh\); padding: var\(--btn-pad\); min-height: var\(--btn-h\);/);
+    expect(css).not.toMatch(/font-size: *\d+(\.\d+)?px/);
+    // shorthand `font:` (peso opcional, depois o tamanho): o tamanho também vem do token
+    expect(css).not.toMatch(/\bfont:\s*(?:[a-z-]+\s+|\d{3}\s+)*\d+(\.\d+)?px/);
     expect(css).toMatch(/\.btn-primary \{[^}]*color: var\(--on-ink-blue\);/);
   });
 });

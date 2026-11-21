@@ -24,8 +24,12 @@ Dona: Belchior (design system). Aplicar nas telas é do front-end. Tokens e clas
 - Ordem fixa [⋯] [secundárias] [primária]. Primária à direita no desktop; no celular, largura total e embaixo.
 - Rótulo verbo + objeto. Nunca "OK" ou "Confirmar" soltos.
 - Primária desabilitada mostra o motivo ao lado. Durante o envio: "enviando…" e sem clique duplo.
-- Celular: alvo de toque 44 px (regra global ≤ 640 px; exceção: ícone 28 px `btn-icon`, `⋯`). Foco visível: contorno 2 px `--ink-blue`.
+- Tamanho único: primária e secundária têm a mesma altura (`--btn-h`, 28 px) em qualquer tela, inclusive no celular (decisão do dono em 2026-11-21; antes o celular tinha 44 px). A primária se destaca só pela cor de fundo. Foco visível: contorno 2 px `--ink-blue`.
 - Aplicar nos painéis com o componente `ActionBar` (barra de ações fixa, t-f541d9).
+
+## Tokens de tamanho (`client/src/styles.css`, `:root`)
+- Fonte: `--fs-xs` 8px, `--fs-sm` 10px, `--fs-md` 12px, `--fs-lg` 16px, `--fs-xl` 18px, `--fs-xxl` 32px. Toda `font-size` (e o tamanho no shorthand `font:`) vem desses tokens; px fixo falha em `tests/buttonContrast.test.ts`.
+- Botão e campo: `--btn-font`, `--btn-lh`, `--btn-pad`, `--btn-h`. Selects, inputs e botões de ícone usam `--btn-h` como altura.
 
 ## Contraste (WCAG AA ≥ 4,5:1)
 Texto da primária: `--on-ink-blue` sobre `--ink-blue` (claro 7,2:1; escuro 9,9:1). Destrutiva: `--danger` sobre `--card`/`--panel`/`--board`. Medido e travado em `tests/buttonContrast.test.ts`. Mexeu em token de botão → rode o teste.

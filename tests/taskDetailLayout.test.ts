@@ -289,7 +289,7 @@ describe('CSS do painel e textos', () => {
   });
 
   it('celular: alvo de toque de 44 px, foco visível e a primária em largura inteira embaixo', () => {
-    expect(css).toMatch(/\.action-bar :is\(\.btn-primary, \.btn-secondary[^)]*\) \{ min-height: 44px/);
+    expect(css).toMatch(/\.action-bar :is\(\.action-bar-pop > summary[^)]*\) \{ min-height: 28px/);
     expect(css).toMatch(/\.action-bar :is\([^)]*\):focus-visible \{ outline: 2px solid/);
     expect(css).toMatch(/@media \(max-width: 640px\) \{\s*\.action-bar > \.btn-primary \{ flex: 1 0 100%; \}/);
   });
