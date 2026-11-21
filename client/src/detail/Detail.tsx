@@ -244,6 +244,8 @@ export function EmployeePanel(props: {
     const l = id !== current ? props.live?.find((x) => x.sessionId === id) : undefined;
     return !!l && idleUnseen(seen, l);
   };
+  // Conversas com pergunta ou ação da caixa esperando: o select as destaca (a aberta também, para o "⚠" não sumir ao escolher).
+  const needsYou = new Set(pendingOf(props.inbox ?? []).map((i) => i.sessionId).filter(Boolean));
   // Sem ficha, a lista é a própria conversa: dá para abrir uma nova (a pesada fica no quadro) e voltar a ela.
   const listed = props.conversations?.length
     ? props.conversations
@@ -482,7 +484,7 @@ export function EmployeePanel(props: {
             {byDay(inArchive ? archivedList : active).map((g) => (
               <optgroup key={g.label} label={g.label}>
                 {g.items.map(({ c }) => {
-                  const o = conversationOption(c, !!liveOf(c.id)?.alive, unread(c.id));
+                  const o = conversationOption(c, !!liveOf(c.id)?.alive, unread(c.id), needsYou.has(c.id));
                   return (
                     <option key={c.id} value={c.id} className={o.className}>
                       {o.label}
@@ -793,12 +795,12 @@ function conversationLabel(c: { title: string | null; updatedAt: string | null }
 /**
  * A linha da conversa no seletor. Ativa (processo aberto): "· ativa" no fim, que vale em todo navegador (o celular
  * ignora a cor da opção). Inativa: classe `is-idle`, que o CSS põe em `--muted`; escolher uma inativa a reabre quando você manda mensagem.
- * "● " = ativa e parada que você ainda não viu.
+ * "● " = ativa e parada que você ainda não viu. "⚠ " + `is-needs` (amarelo) = pergunta ou ação da caixa esperando você.
  */
-export function conversationOption(c: { title: string | null; updatedAt: string | null }, alive: boolean, unread: boolean): { label: string; className: string } {
+export function conversationOption(c: { title: string | null; updatedAt: string | null }, alive: boolean, unread: boolean, needs = false): { label: string; className: string } {
   return {
-    label: `${unread ? '● ' : ''}${conversationLabel(c)}${alive ? ` · ${t('detail.convActive')}` : ''}`,
-    className: alive ? 'is-active' : 'is-idle',
+    label: `${needs ? '⚠ ' : unread ? '● ' : ''}${conversationLabel(c)}${alive ? ` · ${t('detail.convActive')}` : ''}`,
+    className: `${alive ? 'is-active' : 'is-idle'}${needs ? ' is-needs' : ''}`,
   };
 }
 

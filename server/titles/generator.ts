@@ -178,7 +178,8 @@ export class TitleService {
     if (!subject || subject.kind !== 'free') return { ...s, aiTitle: null };
     const key = AiTitleCache.keyOf(projectId, engine, s.id);
     const hit = await this.cache.get(key);
-    if (hit && hit.gen === GEN_VERSION && hit.subjectKey === subject.key && hit.status === 'ok' && hit.title) return { ...s, aiTitle: hit.title };
+    // Título pronto vale pela conversa toda: virada de assunto não o troca (só o manual troca).
+    if (hit && hit.gen === GEN_VERSION && hit.status === 'ok' && hit.title) return { ...s, aiTitle: hit.title };
     // Só depois da 1ª resposta do assistente: o turno fechou e o título tem com que trabalhar.
     if (subject.reply !== undefined && this.due(hit, subject.key, key)) this.enqueue({ projectId, engine, sessionId: s.id, key, subjectKey: subject.key });
     return { ...s, aiTitle: null };
@@ -194,8 +195,9 @@ export class TitleService {
     const now = this.now();
     if (now < this.openUntil) return false;
     if (this.inFlight.has(`${key}|${subjectKey}`)) return false;
-    if (!hit || hit.gen !== GEN_VERSION || hit.subjectKey !== subjectKey) return true;
-    if (hit.status === 'failed') return now - Date.parse(hit.at) >= FAILED_COOLDOWN_MS;
+    if (!hit || hit.gen !== GEN_VERSION) return true;
+    // Uma vez por conversa: ok e skip fecham o caso, e assunto posterior (virada) não reabre. Falha só tenta de novo o mesmo assunto, após o cooldown.
+    if (hit.status === 'failed' && hit.subjectKey === subjectKey) return now - Date.parse(hit.at) >= FAILED_COOLDOWN_MS;
     return false;
   }
 
