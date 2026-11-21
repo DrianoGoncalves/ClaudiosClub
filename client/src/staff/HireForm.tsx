@@ -19,6 +19,7 @@ import { api, withUsageConfirm, type DirectoryPerson } from '../api';
 import { portraitUrl } from '../board/nodes';
 import { effortLabel, employeeName, folderName } from '../format';
 import { t } from '../i18n';
+import { worktreeWaitKey } from './worktreeWait';
 import { MAX_INPUT_BYTES, PORTRAIT_MAX, shrinkImage } from '../lib/shrinkImage';
 import { ProtocolBadge } from '../office/ProtocolBadge';
 import { rosterRows } from './agentRoles';
@@ -243,6 +244,20 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
     );
     api.servers(projectId).then(setServerList, () => setServerList([]));
   }, [projectId, editing]);
+
+  // Opção do projeto "um escritor por vez": null = lendo, falhou ou servidor sem a rota (o texto não afirma a espera).
+  const [singleWriter, setSingleWriter] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    setSingleWriter(null);
+    api.boardWriter(projectId).then(
+      (c) => live && typeof c?.singleWriter === 'boolean' && setSingleWriter(c.singleWriter),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [projectId]);
 
   // Cargos da empresa (config → Cargos). Contratando, o cargo padrão já vem preenchido.
   const [roles, setRoles] = useState<RoleEntry[] | null>(null);
@@ -768,8 +783,11 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             {colleagues.length === 0 && <span className="muted small">{t('staff.noColleagues')}</span>}
             {colleagues.map((m) => (
               <label key={m.id} className="check">
-                <input type="checkbox" checked={managers.includes(m.id)} onChange={() => toggle(managers, setManagers, m.id)} /> {m.name}
-                <span className="muted small"> {m.role}</span>
+                <input type="checkbox" checked={managers.includes(m.id)} onChange={() => toggle(managers, setManagers, m.id)} />
+                <span className="check-text">
+                  <span>{m.name}</span>
+                  <span className="muted small">{m.role}</span>
+                </span>
               </label>
             ))}
           </div>
@@ -795,14 +813,20 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
             <div className="checks">
               {agentNames.map((a) => (
                 <label key={`a:${a}`} className="check">
-                  <input type="checkbox" checked={agents.includes(a)} onChange={() => toggle(agents, setAgents, a)} /> {a}
-                  <span className="muted small"> {t('staff.agentTag')} · {modelOf.get(a) ?? t('staff.callerModel')}</span>
+                  <input type="checkbox" checked={agents.includes(a)} onChange={() => toggle(agents, setAgents, a)} />
+                  <span className="check-text">
+                    <span>{a}</span>
+                    <span className="muted small">{t('staff.agentTag')} · {modelOf.get(a) ?? t('staff.callerModel')}</span>
+                  </span>
                 </label>
               ))}
               {skillSet.offered.map((s) => (
                 <label key={`s:${s.ref}`} className="check">
-                  <input type="checkbox" checked={skills.includes(s.ref)} onChange={() => toggle(skills, setSkills, s.ref)} /> {s.name}
-                  <span className="muted small"> {t('staff.skillTag')} · {t(SKILL_SCOPE_LABEL[s.scope])}</span>
+                  <input type="checkbox" checked={skills.includes(s.ref)} onChange={() => toggle(skills, setSkills, s.ref)} />
+                  <span className="check-text">
+                    <span>{s.name}</span>
+                    <span className="muted small">{t('staff.skillTag')} · {t(SKILL_SCOPE_LABEL[s.scope])}</span>
+                  </span>
                 </label>
               ))}
               {gone.map((ref) => {
@@ -810,8 +834,11 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                 const parsed = parseSkillRef(ref);
                 return (
                   <label key={`gone:${ref}`} className="check">
-                    <input type="checkbox" checked={skills.includes(ref)} onChange={() => toggle(skills, setSkills, ref)} /> {parsed?.name ?? ref}
-                    <span className="muted small"> {skillSet.all.get(ref)?.synced ? t('detail.synced') : t('staff.skillTag')}{parsed && ` · ${t(SKILL_SCOPE_LABEL[parsed.scope])}`}</span>
+                    <input type="checkbox" checked={skills.includes(ref)} onChange={() => toggle(skills, setSkills, ref)} />
+                    <span className="check-text">
+                      <span>{parsed?.name ?? ref}</span>
+                      <span className="muted small">{skillSet.all.get(ref)?.synced ? t('detail.synced') : t('staff.skillTag')}{parsed && ` · ${t(SKILL_SCOPE_LABEL[parsed.scope])}`}</span>
+                    </span>
                     {skillIsGone(ref, skillSet) && <span className="badge warn">{t('staff.skillGone')}</span>}
                   </label>
                 );
@@ -845,9 +872,9 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                               setMcpOn(toggleMcp(mcpOn, m.ref));
                             }}
                           />
-                          <span>
-                            {m.name}
-                            <span className="muted small"> {t(MCP_SCOPE_LABEL[m.scope])}{m.outOfGit && ` · ${t('mcp.outOfGit')}`} ·{t('staff.mcpWeightShort')}</span>
+                          <span className="check-text">
+                            <span>{m.name}</span>
+                            <span className="muted small">{t(MCP_SCOPE_LABEL[m.scope])}{m.outOfGit && ` · ${t('mcp.outOfGit')}`} ·{t('staff.mcpWeightShort')}</span>
                           </span>
                         </label>
                         {on && hasAccessKey(m.name) && (
@@ -905,19 +932,22 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                 return (
                   <div key={s.name} className={write ? 'check-server has-write' : 'check-server'}>
                     <label className="check">
-                      <input type="checkbox" checked={servers.includes(s.name)} onChange={() => toggleServer(s.name)} />{' '}
-                      <ProtocolBadge protocol={s.protocol} /> {s.name}
-                      <span className="muted small">
-                        {' '}
-                        {s.host}
-                        {s.remoteRoot ? ` · ${s.remoteRoot}` : ''}
+                      <input type="checkbox" checked={servers.includes(s.name)} onChange={() => toggleServer(s.name)} />
+                      <span className="check-text">
+                        <span>
+                          <ProtocolBadge protocol={s.protocol} /> {s.name}
+                        </span>
+                        <span className="muted small">
+                          {s.host}
+                          {s.remoteRoot ? ` · ${s.remoteRoot}` : ''}
+                        </span>
                       </span>
                     </label>
                     {write && (
                       <div className="check-write">
                         <label className="check">
-                          <input type="checkbox" checked={sshWrite.includes(s.name)} onChange={() => toggle(sshWrite, setSshWrite, s.name)} />{' '}
-                          {t('staff.sshWrite')}
+                          <input type="checkbox" checked={sshWrite.includes(s.name)} onChange={() => toggle(sshWrite, setSshWrite, s.name)} />
+                          <span className="check-text">{t('staff.sshWrite')}</span>
                         </label>
                         <p className="muted small">{t(codex ? 'staff.sshWriteHintCodex' : 'staff.sshWriteHint')}</p>
                         {sshWrite.includes(s.name) && !editsCode(autonomy) && (
@@ -932,8 +962,11 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
                 .filter((n) => serverList && !serverList.some((s) => s.name === n))
                 .map((n) => (
                   <label key={n} className="check">
-                    <input type="checkbox" checked onChange={() => toggleServer(n)} /> {n}
-                    <span className="muted small"> {t('office.hireServerGone')}</span>
+                    <input type="checkbox" checked onChange={() => toggleServer(n)} />
+                    <span className="check-text">
+                      <span>{n}</span>
+                      <span className="muted small">{t('office.hireServerGone')}</span>
+                    </span>
                   </label>
                 ))}
             </div>
@@ -948,7 +981,8 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
 
         <div className="check-link">
           <label className="check">
-            <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} /> {codex ? t('staff.browserLabelCodex') : t('staff.browserLabel')}
+            <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
+            <span className="check-text">{codex ? t('staff.browserLabelCodex') : t('staff.browserLabel')}</span>
           </label>
           <a className="link small" href={codex ? PLAYWRIGHT_BRIDGE_URL : CHROME_EXTENSION_URL} target="_blank" rel="noopener noreferrer">
             {codex ? t('staff.installLinkCodex') : t('staff.installLink')}
@@ -1005,15 +1039,21 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
         </fieldset>
 
         <label className="check">
-          <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} /> {t('staff.worktreeLabel')}
-          <span className="muted small">
-            {' '}
-            {t('staff.worktreeHintA')}<code>myco/…</code>{t('staff.worktreeHintB')}
+          <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} />
+          <span className="check-text">
+            <span>{t('staff.worktreeLabel')}</span>
+            <span className="muted small">
+              {t('staff.worktreeHintA')}<code>myco/…</code>{t('staff.worktreeHintB')}
+            </span>
+            <span className="muted small worktree-wait">{t(worktreeWaitKey(worktree, singleWriter))}</span>
           </span>
         </label>
         <label className="check">
-          <input type="checkbox" checked={canHire} onChange={(e) => setCanHire(e.target.checked)} /> {t('detail.canHire')}
-          <span className="muted small"> {t('detail.canHireHint')}</span>
+          <input type="checkbox" checked={canHire} onChange={(e) => setCanHire(e.target.checked)} />
+          <span className="check-text">
+            <span>{t('detail.canHire')}</span>
+            <span className="muted small">{t('detail.canHireHint')}</span>
+          </span>
         </label>
         </div>
           </>
