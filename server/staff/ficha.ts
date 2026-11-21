@@ -253,6 +253,8 @@ export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpSer
   const backups = ruleDirOf(path.join(MYCO_HOME, 'backups'));
   // A configuração do Club (limites, teto do turno, bloqueio da tela no navegador): só a tela muda; o agente não edita o arquivo.
   const mycoConfig = ruleDirOf(path.join(MYCO_HOME, 'config.json'));
+  // A política de fluxo dos projetos (server/flowPolicy.ts): quem leva a tarefa a "pronto" e quem aprova o plano. Só a tela muda; um agente que a ampliasse tiraria o dono do portão. Com o `.bad` e o temporário da gravação.
+  const flowPolicies = ruleDirOf(path.join(MYCO_HOME, 'flow-policies.json'));
   const toolsList = ruleDirOf(path.join(MYCO_HOME, 'mcp-tools.json'));
   // Os vínculos e os registros da consulta entre projetos (server/consult/): só o Club grava. Um funcionário que forjasse um vínculo, ou um registro `answered`, teria a "resposta" entregue a outro.
   const consult = ruleDirOf(path.join(MYCO_HOME, 'consult'));
@@ -294,6 +296,8 @@ export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpSer
     `Write(${backups}/**)`,
     `Edit(${mycoConfig})`,
     `Write(${mycoConfig})`,
+    `Edit(${flowPolicies}*)`,
+    `Write(${flowPolicies}*)`,
     `Edit(${consult}/**)`,
     `Write(${consult}/**)`,
     // Pasta de lançamento: o mcp.json das sessões (com a config dos MCPs do usuário e do projeto) não é lido. Sem Read da pasta toda:
