@@ -2476,8 +2476,8 @@ export class TaskService {
     if (!where || where.role !== 'work' || where.auto) return null;
     const tasks = (await this.list(where.projectId)) ?? [];
     const task = tasks.find((t) => t.id === where.taskId);
-    // Cancelada já não é a tarefa dele: a mensagem não espera a vez de ninguém, vai direto para a conversa.
-    if (!task?.staffId || task.status === 'cancelled') return null;
+    // Cancelada ou pronta já não é a tarefa dele: a mensagem não espera a vez de ninguém, vai direto para a conversa (guardada, ela seria descartada, ver `withoutClosedHeld`).
+    if (!task?.staffId || isClosed(task)) return null;
     const busyWith = occupant(tasks, task.staffId, task.id);
     // `auto`: a mensagem não é sua (outro funcionário, a decisão do revisor, o gestor respondendo): com o projeto pausado ela não acorda a conversa, espera ser retomado.
     // A sua nunca espera por isso (chat direto é ação manual).
@@ -2652,6 +2652,8 @@ export class TaskService {
       if (!paused) await this.safely(() => this.releaseBackground(projectId, tasks, now));
       await this.safely(() => this.releaseOutcomes(projectId, tasks, now));
       await this.safely(() => this.enqueueIdle(projectId, tasks));
+      // Saneamento: ajuste guardado em tarefa encerrada (de antes da correção, ou de uma corrida) sai com nota. O quadro lido acima ainda o tem, e o `waiting` abaixo acorda o dono dele à toa: o `takeNext` não o envia (ver `dropClosedHeld`).
+      await this.dropClosedHeld(projectId, tasks);
       for (const t of paused ? [] : tasks) {
         if (!t.sessionId || !t.staffId) continue;
         // "Planejando" só no Codex (ver `orphan`): no Claude parado pode ser o plano esperando a sua resposta, e nem pega a vez do funcionário à toa.
@@ -3299,6 +3301,15 @@ export class TaskService {
     }
   }
 
+  /**
+   * Tira o ajuste guardado das tarefas encerradas (ver `withoutClosedHeld`): `mutate` já faz isso em toda gravação, então basta gravar. Só grava se há o que tirar.
+   * True: gravou (quem chamou lê o quadro de novo). Falha de disco não derruba a fila: false, e a próxima rodada tenta de novo.
+   */
+  private async dropClosedHeld(projectId: string, tasks: Task[]): Promise<boolean> {
+    if (!tasks.some((t) => isClosed(t) && t.held?.length)) return false;
+    return this.mutate(projectId, clearClosedHeld).catch(() => false);
+  }
+
   private async takeNext(projectId: string, staffId: string): Promise<void> {
     // A vaga de escrita que o ajuste guardado pegou (ver `takeSlot`) nunca fica presa, mesmo se algo lançar.
     const claim: { release?: () => void } = {};
@@ -3313,7 +3324,10 @@ export class TaskService {
     // Projeto pausado: nada começa sozinho nele, nem a fila nem o ajuste que veio de funcionário (`HeldMessage.auto`). O seu ajuste, escrito por você, segue.
     // Só este projeto: a fila do mesmo funcionário em outro projeto não passa por aqui.
     const paused = await this.paused(projectId);
-    const tasks = (await this.list(projectId)) ?? [];
+    let tasks = (await this.list(projectId)) ?? [];
+    // Tarefa encerrada não recebe ajuste guardado: o que ficou nela (de antes de `withoutClosedHeld` valer, ou de uma corrida) sai agora, com nota, e nunca passa na frente do ajuste de uma tarefa aberta.
+    // Falhou em gravar: o filtro de `adjusts` abaixo já a pula, e a fila dele segue.
+    if (await this.dropClosedHeld(projectId, tasks)) tasks = (await this.list(projectId)) ?? [];
     // A tarefa parada (dúvida escalada sem edição, ou com a resposta dela guardada esperando a vez dele) não ocupa: a próxima da fila começa, e o ajuste vai antes dela.
     // Quem ocupa (planejando ou fazendo) segura a fila; só o ajuste guardado dela própria pode ir, para a conversa que está rodando.
     const occ = occupant(tasks, staffId);
@@ -3321,7 +3335,7 @@ export class TaskService {
     const at = Date.now();
     const sendable = (t: Task) => (t.held ?? []).filter((m) => (m.attempts ?? 0) < HELD_MAX_FAILS && (!m.nextAt || Date.parse(m.nextAt) <= at) && !(paused && m.auto));
     const adjusts = tasks
-      .filter((t) => t.staffId === staffId && t.sessionId && t.status !== 'cancelled' && (!occ || t.id === occ.id) && sendable(t).length)
+      .filter((t) => t.staffId === staffId && t.sessionId && !isClosed(t) && (!occ || t.id === occ.id) && sendable(t).length)
       .sort((a, b) => sendable(a)[0]!.at.localeCompare(sendable(b)[0]!.at));
     // Mandar o ajuste a um card em "a fazer" ou Aguardar o leva a fazendo (mais abaixo): quem não segura a vaga de escrita passa por ela (ver `takeSlot`). Com a vaga ocupada o ajuste dele espera
     // (o motivo fica em `Task.resourceWait`) e o seguinte vai.
@@ -4697,7 +4711,9 @@ export class TaskService {
         await this.change(projectId, taskId, (t) => (current(t) ? withRejection(noted(t, `reprovada por ${reviewer}`), rejection) : t));
         return;
       }
-      await this.change(projectId, taskId, (t) => (current(t) ? withRejection(moved(t, 'doing', 'auto', `reprovada por ${reviewer}`), rejection) : t));
+      const after = await this.change(projectId, taskId, (t) => (current(t) ? withRejection(moved(t, 'doing', 'auto', `reprovada por ${reviewer}`), rejection) : t));
+      // A tarefa foi finalizada (ou cancelada) entre a conferência acima e a gravação: não gravou nada, e o ajuste não vai para a conversa de uma tarefa fechada.
+      if (after?.status !== 'doing') return;
       try {
         if (!this.deps.sendTo) throw new TaskError('sem envio para a conversa de trabalho');
         // No secundário com o principal liberado, os ajustes vão numa conversa nova no principal (ver `backToPrimary`).
@@ -5761,7 +5777,8 @@ export class TaskService {
       tasks.map((t) => {
         if (t.id !== taskId) return t;
         seen.before = t;
-        seen.after = fn(t, tasks);
+        // O que volta a quem chamou já é o que `mutate` grava (ver `withoutClosedHeld`): a tarefa que acabou de fechar não devolve o ajuste guardado que vai sair.
+        seen.after = withoutClosedHeld(fn(t, tasks));
         return seen.after;
       }),
     );
@@ -5779,7 +5796,7 @@ export class TaskService {
     let freed = false;
     const run = prev.then(async () => {
       const before = await readTasks(dir);
-      const next = clearStaleRanks(clearBlockAlerts(fn(before)));
+      const next = clearClosedHeld(clearStaleRanks(clearBlockAlerts(fn(before))));
       await writeAtomic(file, JSON.stringify(next, null, 2) + '\n');
       // Toda tarefa que ficou pronta por qualquer caminho (a tela, a aprovação da revisão, a mescla) passa por aqui: é o ponto do commit automático (ver `autoCommit`).
       const was = new Map(before.map((t) => [t.id, t.status]));
@@ -6138,6 +6155,20 @@ export function notStartedTasks(tasks: Task[], now = Date.now()): NotStartedTask
 function clearBlockAlerts(tasks: Task[]): Task[] {
   return tasks.map((t) => (t.blockAlert && (t.status === 'doing' || t.status === 'planning' || t.status === 'done') ? { ...t, blockAlert: null } : t));
 }
+
+/**
+ * Tarefa encerrada (pronta ou cancelada) não recebe ajuste guardado: o que ficou guardado nela sai, com uma nota no histórico. Roda em toda gravação (`mutate`), então
+ * fechar a tarefa por qualquer caminho (a tela, a aprovação, a mescla, o cancelamento) já limpa, e o ajuste que chega depois do fechamento (a reprovação que corria com a
+ * finalização) some na mesma gravação. `updatedAt` não muda: arquivar a pronta (`withArchive`) conta a partir da última mudança de verdade, e limpar o resto não a traz de volta ao quadro.
+ */
+function withoutClosedHeld(t: Task): Task {
+  if (!isClosed(t) || !t.held?.length) return t;
+  const n = t.held.length;
+  const note = `${n === 1 ? 'ajuste guardado descartado' : `${n} ajustes guardados descartados`}: a tarefa ${t.status === 'done' ? 'já está pronta' : 'foi cancelada'}`;
+  return { ...t, held: [], history: [...t.history, { at: new Date().toISOString(), status: t.status, by: 'auto' as const, note }].slice(-MAX_HISTORY) };
+}
+
+const clearClosedHeld = (tasks: Task[]): Task[] => tasks.map(withoutClosedHeld);
 
 /** O aviso ao gestor de quem espera: quem parou, o motivo e os dependentes dele (um gestor, uma mensagem). */
 function blockedText(blocker: Task, deps: Task[], reason: string): string {
@@ -6863,7 +6894,6 @@ function cancelledTask(t: Task, by: string, reason: string | null): Task {
     fallbackBlocked: undefined,
     startRetry: undefined,
     runId: null,
-    ...(base.held?.length && { held: [] }),
     ...(open && { question: { ...open, status: 'answered' as const, answeredBy: 'user' as const, answeredAt: base.updatedAt, answer: 'tarefa cancelada' } }),
   };
 }
