@@ -415,7 +415,7 @@ export class CodexProcess extends ChatProcess {
     if (guardOff.file && !this.guardOffWarned) {
       this.guardOffWarned = true;
       this.addNotice(
-        `A fila de validação pesada ficou de fora desta conversa: a conta do Codex tem um hooks.json (${guardOff.file}). Para o hook da fila rodar, o Codex exigiria uma flag de confiança que também liberaria esse arquivo, sem confirmação e fora da sandbox. Apague ou renomeie o arquivo e a fila volta na próxima mensagem; até lá, esta conversa roda suíte completa sem esperar a vez.`,
+        `A fila de validação pesada e o bloqueio de git destrutivo (reset --hard, checkout --, clean, stash…) ficaram de fora desta conversa: a conta do Codex tem um hooks.json (${guardOff.file}). Para os hooks rodarem, o Codex exigiria uma flag de confiança que também liberaria esse arquivo, sem confirmação e fora da sandbox. Apague ou renomeie o arquivo e os dois voltam na próxima mensagem; até lá, esta conversa roda suíte completa sem esperar a vez e pode descartar trabalho não commitado no checkout principal.`,
         'warn',
       );
       this.heavyGuardChanged(guardOff.file);

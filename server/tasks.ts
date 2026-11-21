@@ -2,9 +2,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type BoardWriterConfig, type CancelRequest,type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, type TaskPlanWait, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
+import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, COMMIT_LIST_MAX, COMMIT_REDOS_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type BoardWriterConfig, type CancelRequest,type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, type TaskPlanWait, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
 import { kanbanProgress } from '../shared/kanbanProgress';
-import { commitTaskFiles, leftText, type SharedHold, type SlotFound } from './autoCommit';
+import { commitMessage, commitPaths, commitTaskFiles, leftText, summarize, type SharedHold, type SlotFound } from './autoCommit';
+import { leftoversPreview, planLeftovers, withCommitLeft } from './commitLeft';
 import { BoardCommitInput, BoardConfigInput, BoardWriterInput, DEFAULT_BOARD_CONFIG, readBoardCommit, readBoardConfig, readBoardWriter, writeBoardCommit, writeBoardConfig, writeBoardWriter } from './boardConfig';
 import { pathKey, readOwnerWrites } from './ownerEdits';
 import { changedSince, readSnapshots, takeSnapshot, updateSnapshots } from './slotSnapshot';
@@ -22,7 +23,7 @@ import { capReason } from './chat/turnCap';
 import { ChatClosingError } from './chat/manager';
 import type { Caller } from './callers';
 import type { Reservation } from './resourceGate';
-import type { ProjectPauses } from './projectPause';
+import { VERSION_PAUSE_DEFAULT_MINUTES, VERSION_PAUSE_MAX_MINUTES, clockOf, type PauseBy, type ProjectPauses } from './projectPause';
 import { CapabilityError } from './engineCapability';
 import { writeAtomic } from './staff/store';
 import { checkpoint, CodeError, codeTouchedSince, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
@@ -30,7 +31,8 @@ import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf
 import { UsageStopError } from './usageStop';
 import { BACKGROUND_WAIT_MS, ESCALATE_AFTER_MS, HELD_MAX_FAILS, OUTCOME_HOLD_MAX_MS, PERMISSION_STUCK_MS, PermanentError, REASK_AFTER_MS, REVIEW_WAIT_MS, failedRetry, isTransient, nextRetry, retryDue } from './retryPolicy';
 import { BLOCKERS_FORMAT, REJECTIONS_MAX, REPLY_MAX, citedIds, doubtIsAboutRejection, fitReviewText, nextBlockerId, parseBlockers, priorBlockers, type ParsedBlock } from './reviewBlockers';
-import type { DeliveryPhase, QueueDelivery, Rejection, ReviewBlocker, StaffQueue } from '../shared/model';
+import type { CommitLeftovers, CommitLeftoversDone, DeliveryPhase, FlowPolicy, QueueDelivery, Rejection, ReviewBlocker, StaffQueue, TaskCommitLeft, TaskOwnerGate } from '../shared/model';
+import { FlowPolicyInput, applyFlowInput, legacyPolicy, ownerGateOf, type FlowPolicies } from './flowPolicy';
 import type { HeavyWaitFn } from './heavyQueue';
 import { appendRun, newRunId, readRuns, type RunOutcome, type RunTrigger, type TaskRunEvent } from './taskRuns';
 import { hashSkillFolders } from './skillLibrary';
@@ -524,6 +526,11 @@ export interface TaskServiceDeps {
    * motor esperam (ver `TaskService.paused`); a revisão de entrega já feita roda. Sem ele, nenhum projeto é pausável (os testes de antes).
    */
   pauses?: ProjectPauses;
+  /**
+   * Onde estão as políticas de fluxo dos projetos (ver flowPolicy.ts). Sem ele, todo projeto tem a política virtual (o que já fazia: conclusão pelo revisor, commit pelo `board.json`) e a
+   * rota não grava (os testes de antes).
+   */
+  flow?: FlowPolicies;
 }
 
 /** A conversa da dúvida ao gestor: o que ele responde ali não é da tarefa (ver answerQuestion). */
@@ -979,6 +986,8 @@ export class TaskService {
     const cur = dir ? (await readTasks(dir)).find((t) => t.id === taskId) : undefined;
     // Cancelada só volta pelo `reopen` (limpa os campos do cancelamento e vai para "a fazer"); a coluna não muda por aqui.
     if (cur?.status === 'cancelled' && patch.status !== undefined) throw new TaskConflictError('a tarefa foi cancelada: reabra antes de mudar de coluna');
+    // Portão de "pronto" da política de fluxo (ver `flowOf`): com a conclusão reservada ao dono, só o pedido dele pela tela leva a tarefa a "pronto".
+    if (patch.status === 'done' && cur?.status !== 'done' && !byOwner) await this.needOwnerToFinish(projectId);
     if (cur)
       await this.checkReviewer(
         projectId,
@@ -2048,7 +2057,10 @@ export class TaskService {
       // O motivo (quem falta) não fica gravado: a caixa e o quadro o calculam na leitura (ver blockers e stuckDependencies).
       if (open.length) return this.change(projectId, taskId, (t) => enqueue(t));
       // Projeto pausado: só o seu "Começar" abre conversa. Um gestor pela API, o cartão arrastado para "a fazer" e as ações do guia entram na fila e esperam o projeto ser retomado.
-      if (!byOwner && (await this.paused(projectId))) return this.change(projectId, taskId, (t) => enqueue(t, `na fila de ${profile.name}: o projeto está pausado, começa quando for retomado`));
+      if (!byOwner && (await this.paused(projectId))) {
+        const version = (await this.deps.pauses?.get(projectId).catch(() => null))?.mode === 'version';
+        return this.change(projectId, taskId, (t) => enqueue(t, `na fila de ${profile.name}: o projeto está ${version ? 'em pausa de versão' : 'pausado'}, começa quando for retomado`));
+      }
       const busyWith = occupant(fresh, staffId, taskId);
       if (!busyWith && !this.staffBusy(projectId, fresh, staffId)) {
         // A vaga de escrita (ver `takeSlot`): ocupada, a tarefa entra na fila com o motivo, sem erro; o seu "Começar" (`byOwner`) passa por cima, como pela pausa.
@@ -2481,7 +2493,7 @@ export class TaskService {
     const busyWith = occupant(tasks, task.staffId, task.id);
     // `auto`: a mensagem não é sua (outro funcionário, a decisão do revisor, o gestor respondendo): com o projeto pausado ela não acorda a conversa, espera ser retomado.
     // A sua nunca espera por isso (chat direto é ação manual).
-    const pausedWait = !!msg.auto && (await this.paused(where.projectId).catch(() => true));
+    const pausedWait = !!msg.auto && (await this.holdsAuto(where.projectId, task).catch(() => true));
     if (!busyWith && !pausedWait && !this.staffBusy(where.projectId, tasks, task.staffId, sessionId)) return null;
     const name = (await this.deps.readProfile(where.projectId, task.staffId))?.name ?? 'ele';
     const reason = pausedWait ? 'espera o projeto ser retomado' : busyWith ? `espera ${name} terminar “${busyWith.title}”` : `espera ${name} terminar a conversa em que está`;
@@ -3153,6 +3165,8 @@ export class TaskService {
   // e os passos de revisão do `tick` rodam: o veredito é gravado, o ajuste que ele manda é que espera); o resto do servidor (rotinas, "continue",
   // despertador, retomada do reinício) recebe a pergunta pela opção `paused` de cada um, ligada ao mesmo `ProjectPauses` (ver index.ts). O que já roda termina o turno e para
   // ali: nada mata processo. A tarefa fica onde está e retoma ao despausar, na ordem da fila.
+  // Pausa de versão (`ProjectPause.mode`): o mesmo `paused` (todo ponto acima segue barrado), com prazo e uma só diferença: o ajuste automático de um card em voo (`holdsAuto`, em `hold` e
+  // `takeNextFrom`) não espera. Liga e encerra por `setVersionPause`/`endVersionPause`; sai sozinha no prazo (ver `ProjectPauses`, que avisa `resumeAfterExpiry`).
 
   /** O projeto está pausado? Um lugar só (`deps.pauses`); sem ele, nunca. Se o arquivo não dá para ler, o erro sobe: quem pergunta não começa nada nesta rodada e tenta na próxima. */
   private async paused(projectId: string): Promise<boolean> {
@@ -3182,6 +3196,74 @@ export class TaskService {
   }
 
   /**
+   * O ajuste automático (`HeldMessage.auto`: reprovação, resposta do gestor, aviso de outro funcionário) da tarefa `task` espera o projeto ser retomado? Pausa comum: sempre. Pausa de versão: só
+   * se o card não está em voo (ver `inFlight`): o que já começou termina, o que abriria trabalho novo espera. Sem pausa: nunca. Se o arquivo da pausa não lê, o erro sobe (quem pergunta segura).
+   */
+  private async holdsAuto(projectId: string, task: Task): Promise<boolean> {
+    if (!(await this.paused(projectId))) return false;
+    const pause = await this.deps.pauses?.get(projectId);
+    return pause?.mode !== 'version' || !inFlight(task);
+  }
+
+  /**
+   * Quem liga ou encerra a pausa de versão (ver `ProjectPause`): `null` = você, pela tela (`fromBrowser` é o do pedido, nunca do corpo); um funcionário só com o token da conversa dele neste
+   * projeto e a ficha com `canRelease` ("Pode versionar e fazer deploy", ligada só por você, pela tela). Sem token, de outro projeto ou sem a permissão: 403 (TaskForbiddenError), antes de ler o resto.
+   */
+  private async releaser(projectId: string, fromBrowser: boolean, caller: Caller | null): Promise<PauseBy | null> {
+    if (fromBrowser) return null;
+    const me = caller?.staffId;
+    if (!me || caller.projectId !== projectId) {
+      throw new TaskForbiddenError('só você, pelo Claudio’s Club, ou um funcionário com a permissão “Pode versionar e fazer deploy”, com o token da conversa dele (x-myco-token), liga ou encerra a pausa de versão');
+    }
+    const profile = await this.deps.readProfile(projectId, me).catch(() => null);
+    if (!profile?.canRelease) throw new TaskForbiddenError('a sua ficha não tem a permissão “Pode versionar e fazer deploy”: peça ao usuário para ligá-la');
+    return { staffId: me, name: profile.name.slice(0, 100) };
+  }
+
+  /**
+   * Liga a pausa de versão: o mesmo mecanismo da pausa, com prazo. Nada novo começa (fila, início de tarefa, rotinas, "continue", despertador, órfãs, troca de motor), mas o que já está em voo termina: o turno,
+   * a revisão da entrega e o ajuste de um card já em fazendo, planejando ou em revisão (ver `holdsAuto`). Sai sozinha no prazo, ou quando quem ligou encerra (`endVersionPause`).
+   * Quem liga, ver `releaser` (403). O prazo é `minutes`, inteiro de 1 a `VERSION_PAUSE_MAX_MINUTES`; você, pela tela, pode omitir (padrão `VERSION_PAUSE_DEFAULT_MINUTES`), o funcionário não (400, e fora da faixa
+   * também: nunca se ajusta em silêncio). 409: o projeto está em pausa comum (ela segue até você retomar) ou em pausa de versão de outra pessoa. Ligar de novo quem já ligou não muda o prazo.
+   */
+  async setVersionPause(projectId: string, body: unknown, fromBrowser: boolean, caller: Caller | null): Promise<{ paused: ProjectPause } | null> {
+    const by = await this.releaser(projectId, fromBrowser, caller);
+    const pauses = this.deps.pauses;
+    if (!pauses) throw new TaskError('a pausa de projeto não está disponível neste servidor');
+    const minutes = versionMinutes(body, fromBrowser);
+    if (!(await this.deps.projectPath(projectId))) return null;
+    const got = await pauses.pauseVersion(projectId, { minutes, ...(by && { by }) });
+    if (!got.ok) {
+      const who = got.pause.by?.name ?? 'o usuário';
+      throw new TaskConflictError(got.reason === 'standard' ? 'o projeto está em pausa comum: ela segue até o usuário retomar, e a pausa de versão não a troca' : `já há uma pausa de versão ligada por ${who} até ${clockOf(got.pause.until)}: só ${who} ou o usuário a encerra`);
+    }
+    return { paused: got.pause };
+  }
+
+  /**
+   * Encerra a pausa de versão antes do prazo: volta tudo ao normal, como retomar (a rodada do projeto roda em segundo plano). Você encerra qualquer uma; o funcionário só a que ele ligou, e precisa
+   * da permissão (403 nos outros). Sem pausa é um nada. Em pausa comum: 409 (só você a retoma). `reason` da saída: `ended` (quem ligou) ou `resumed` (você).
+   */
+  async endVersionPause(projectId: string, fromBrowser: boolean, caller: Caller | null): Promise<{ paused: null } | null> {
+    const by = await this.releaser(projectId, fromBrowser, caller);
+    const pauses = this.deps.pauses;
+    if (!pauses) throw new TaskError('a pausa de projeto não está disponível neste servidor');
+    if (!(await this.deps.projectPath(projectId))) return null;
+    const now = await pauses.get(projectId);
+    if (!now) return { paused: null };
+    if (now.mode !== 'version') throw new TaskConflictError('o projeto está em pausa comum, não de versão: só o usuário a retoma, pela tela');
+    if (by && now.by?.staffId !== by.staffId) throw new TaskForbiddenError(`só ${now.by?.name ?? 'o usuário'}, que ligou a pausa de versão, ou o usuário a encerra`);
+    const only = (p: ProjectPause) => p.mode === 'version' && (!by || p.by?.staffId === by.staffId);
+    if (await pauses.resume(projectId, { reason: by ? 'ended' : 'resumed', only, ...(by && { by }) })) void this.tick(new Date(), projectId).catch(() => {});
+    return { paused: null };
+  }
+
+  /** A pausa de versão venceu (ver `ProjectPauses`, que já a tirou): volta tudo ao normal como na retomada, com a rodada do projeto em segundo plano. */
+  resumeAfterExpiry(projectId: string): void {
+    void this.tick(new Date(), projectId).catch(() => {});
+  }
+
+  /**
    * O estado da fila de cada funcionário que tem card aberto ou entrega em processamento, ou null se o projeto não existe (404): para o dono ver por que ela não anda (ver `StaffQueue`).
    * Só leitura, derivado do que já existe (a pausa, o card em andamento, a espera do gate de recursos, a trava de consumo, as entregas em processamento e a espera da suíte): nada é gravado.
    * Quem não tem card aberto nem entrega não aparece (não há fila a explicar).
@@ -3204,7 +3286,7 @@ export class TaskService {
     const own = all.filter((d) => d.staffId === staffId).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
     const base: StaffQueue = { staffId, state: 'free', queued: queue.length, deliveries: own.map(({ staffId: _s, ...d }) => d) };
     const occ = occupant(tasks, staffId);
-    if (pause) return { ...base, state: 'paused', since: pause.at, ...(occ && { taskId: occ.id }) };
+    if (pause) return { ...base, state: 'paused', since: pause.at, ...(occ && { taskId: occ.id }), ...(pause.mode === 'version' && { detail: `pausa de versão até ${clockOf(pause.until)}` }) };
     if (occ) return { ...base, state: 'busy', taskId: occ.id, since: [...occ.history].reverse().find((h) => h.status === occ.status)?.at };
     if (this.staffBusy(projectId, tasks, staffId)) return { ...base, state: 'busy', detail: 'uma conversa dele está trabalhando' };
     const gated = queue.find((t) => t.resourceWait);
@@ -3313,13 +3395,15 @@ export class TaskService {
     // Projeto pausado: nada começa sozinho nele, nem a fila nem o ajuste que veio de funcionário (`HeldMessage.auto`). O seu ajuste, escrito por você, segue.
     // Só este projeto: a fila do mesmo funcionário em outro projeto não passa por aqui.
     const paused = await this.paused(projectId);
+    // Pausa de versão: o ajuste automático de um card já em voo segue (ver `holdsAuto`); só o de card parado ou novo espera. Pausa comum: todo `auto` espera.
+    const version = paused && (await this.deps.pauses?.get(projectId).catch(() => null))?.mode === 'version';
     const tasks = (await this.list(projectId)) ?? [];
     // A tarefa parada (dúvida escalada sem edição, ou com a resposta dela guardada esperando a vez dele) não ocupa: a próxima da fila começa, e o ajuste vai antes dela.
     // Quem ocupa (planejando ou fazendo) segura a fila; só o ajuste guardado dela própria pode ir, para a conversa que está rodando.
     const occ = occupant(tasks, staffId);
     // Só o ajuste que pode ir agora: o que já falhou espera a hora da próxima tentativa, e o que falhou HELD_MAX_FAILS vezes espera você (ver `stuckState`).
     const at = Date.now();
-    const sendable = (t: Task) => (t.held ?? []).filter((m) => (m.attempts ?? 0) < HELD_MAX_FAILS && (!m.nextAt || Date.parse(m.nextAt) <= at) && !(paused && m.auto));
+    const sendable = (t: Task) => (t.held ?? []).filter((m) => (m.attempts ?? 0) < HELD_MAX_FAILS && (!m.nextAt || Date.parse(m.nextAt) <= at) && !(paused && m.auto && !(version && inFlight(t))));
     const adjusts = tasks
       .filter((t) => t.staffId === staffId && t.sessionId && t.status !== 'cancelled' && (!occ || t.id === occ.id) && sendable(t).length)
       .sort((a, b) => sendable(a)[0]!.at.localeCompare(sendable(b)[0]!.at));
@@ -3554,10 +3638,12 @@ export class TaskService {
   }
 
   /** Mescla a worktree no projeto (testes verdes, ou sem testes confirmado). A tarefa vai para "pronto". */
-  async merge(projectId: string, taskId: string, skipTests = false): Promise<Task | null> {
+  async merge(projectId: string, taskId: string, skipTests = false, byOwner = false): Promise<Task | null> {
     const { dir, task, profile } = await this.context(projectId, taskId);
     // Cancelada não é entrega: mesclar a levaria para "pronto" e liberaria quem depende dela.
     if (task.status === 'cancelled') throw new TaskConflictError('a tarefa foi cancelada: não dá para mesclar');
+    // Antes de o código entrar: a mescla leva a "pronto", e com a conclusão reservada ao dono só o pedido dele (a rota passa `byOwner`) vale.
+    if (!byOwner) await this.needOwnerToFinish(projectId);
     const place = await locateCode(dir, task.staffId, !!profile?.worktree);
     if (!place) throw new TaskError('o projeto não é um repositório git');
     try {
@@ -4052,7 +4138,47 @@ export class TaskService {
   /** O commit automático deste projeto (ver boardConfig.ts e `autoCommit`); null se o projeto não existe. */
   async boardCommit(projectId: string): Promise<BoardCommitConfig | null> {
     const dir = await this.deps.projectPath(projectId);
-    return dir ? readBoardCommit(dir) : null;
+    return dir ? { autoCommit: (await this.flowOf(projectId)).commit } : null;
+  }
+
+  /**
+   * A política de fluxo vigente do projeto (ver flowPolicy.ts): a gravada em `~/.myco` ou, sem entrada, o que ele já fazia (conclusão pelo revisor, commit pelo `autoCommit` do `board.json`).
+   * Todo portão de "pronto", o commit e o aviso de "sem revisor" perguntam a este lugar; nada guarda cópia. Nunca lança (política ilegível é a restritiva).
+   */
+  private async flowOf(projectId: string): Promise<FlowPolicy> {
+    const stored = await this.deps.flow?.get(projectId);
+    if (stored) return stored;
+    const dir = await this.deps.projectPath(projectId);
+    return legacyPolicy(dir ? (await readBoardCommit(dir)).autoCommit : false);
+  }
+
+  /** Quem não é o dono pela tela (`byOwner`) não leva uma tarefa a "pronto" quando a política reserva a conclusão a ele: 403. Lê a política de `~/.myco`, nunca o card. */
+  private async needOwnerToFinish(projectId: string): Promise<void> {
+    if ((await this.flowOf(projectId)).completion === 'owner') throw new TaskForbiddenError('com a política de fluxo deste projeto, só você, pelo Claudio’s Club, leva uma tarefa a pronto');
+  }
+
+  /** A política de fluxo deste projeto (`GET .../flow-policy`); null se o projeto não existe. */
+  async flowPolicy(projectId: string): Promise<FlowPolicy | null> {
+    return (await this.deps.projectPath(projectId)) ? this.flowOf(projectId) : null;
+  }
+
+  /**
+   * Muda a política de fluxo: um preset (`{ mode }`) ou portões (`{ plan, completion, commit }`, gravam 'custom'; ver `FlowPolicyInput`). Só a tela chama (`fromBrowser`): o 403 vem antes de
+   * qualquer leitura, e a rota nem está em apiPolicy.ts. Vale para o que acontecer daqui para a frente: tarefa que já espera a aprovação do dono continua esperando. TaskError (400) se o corpo é inválido.
+   */
+  async setFlowPolicy(projectId: string, body: unknown, fromBrowser: boolean): Promise<FlowPolicy | null> {
+    if (!fromBrowser) throw new TaskForbiddenError('a política de fluxo só é alterada pelo Claudio’s Club');
+    const dir = await this.deps.projectPath(projectId);
+    if (!dir) return null;
+    if (!this.deps.flow) throw new TaskError('a política de fluxo não está disponível neste servidor');
+    return this.applyFlow(projectId, dir, parseOr(FlowPolicyInput, body));
+  }
+
+  /** Grava a política (ver `setFlowPolicy`) e espelha o commit no `board.json`: apagar `~/.myco/flow-policies.json` devolve o projeto exatamente ao que ele fazia. O espelho é só isso, nunca é lido com a política gravada. */
+  private async applyFlow(projectId: string, dir: string, input: FlowPolicyInput): Promise<FlowPolicy> {
+    const next = await this.deps.flow!.set(projectId, applyFlowInput(await this.flowOf(projectId), input));
+    await writeBoardCommit(dir, { autoCommit: next.commit }).catch(() => {});
+    return next;
   }
 
   /**
@@ -4064,7 +4190,9 @@ export class TaskService {
     const dir = await this.deps.projectPath(projectId);
     if (!dir) return null;
     const input = parseOr(BoardCommitInput, body);
-    await writeBoardCommit(dir, input);
+    // Com a política gravada, o toggle é o escritor do portão `commit` (grava 'custom' se mudou). Sem ela só o `board.json`, como sempre: o toggle de um projeto legado não cria política nem alerta.
+    if (this.deps.flow && (await this.deps.flow.get(projectId))) await this.applyFlow(projectId, dir, { commit: input.autoCommit });
+    else await writeBoardCommit(dir, input);
     return input;
   }
 
@@ -4297,7 +4425,7 @@ export class TaskService {
 
   /** Faz o commit da tarefa pronta (na fila do projeto). Devolve o aviso a quem pediu, para sair fora da fila (ver `tellCommitBlocked`), ou nada. */
   private async commitDone(projectId: string, dir: string, taskId: string): Promise<(() => Promise<void>) | void> {
-    if (this.deps.closing?.() || !(await readBoardCommit(dir)).autoCommit) return;
+    if (this.deps.closing?.() || !(await this.flowOf(projectId)).commit) return;
     const all = await readTasks(dir);
     const task = all.find((t) => t.id === taskId);
     if (!task || task.status !== 'done' || task.merged) return;
@@ -4372,6 +4500,88 @@ export class TaskService {
       }),
     );
     return ok && found;
+  }
+
+  /** A listagem de tarefas com `Task.commitLeft` (o estado do aviso de commit parcial, ver server/commitLeft.ts). Projeto desconhecido ou erro ao calcular: a lista sai como veio. */
+  async commitLeftOf(projectId: string, list: Task[] | null): Promise<Task[] | null> {
+    if (!list) return list;
+    const dir = await this.deps.projectPath(projectId);
+    return dir ? withCommitLeft(list, projectId, dir) : list;
+  }
+
+  /**
+   * O preview do "refazer o commit das sobras": os arquivos de fora como estão agora (motivo, cards abertos que ainda os tocam, cards cancelados que os tocaram), o diff do que o commit levaria e o
+   * `digest` que o POST devolve. Lido do disco e do git neste instante (sem cache). Só a tela chama (`fromBrowser`; 403 antes de qualquer leitura); null se o projeto ou a tarefa não existem. Só leitura.
+   */
+  async previewLeftovers(projectId: string, taskId: string, fromBrowser: boolean): Promise<CommitLeftovers | null> {
+    if (!fromBrowser) throw new TaskForbiddenError('as sobras do commit só são vistas pelo Claudio’s Club');
+    const dir = await this.deps.projectPath(projectId);
+    if (!dir) return null;
+    const all = await readTasks(dir);
+    const task = all.find((t) => t.id === taskId);
+    if (!task) return null;
+    const preview = await leftoversPreview(dir, task, await planLeftovers(dir, task, all));
+    // O commit é de outra entrega (a tarefa voltou para o trabalho) ou a tarefa nem está pronta: o botão não vale.
+    return task.status === 'done' && !task.merged && task.commit?.for === doneAtOf(task) ? preview : { ...preview, canRedo: false, digest: '' };
+  }
+
+  /**
+   * Refaz o commit das sobras de uma tarefa pronta: UM commit complementar só com os arquivos de fora do commit automático (`Task.commit.left`) que o dono confirmou ver (`digest` do preview). Só a
+   * tela chama (`fromBrowser`: 403 antes de tudo); 400 para corpo inválido, null se o projeto ou a tarefa não existem, TaskConflictError (409) com o motivo quando não dá. Roda na fila de commits do
+   * projeto (um por vez, junto com os commits automáticos) e, lá dentro, confere TUDO de novo no disco e no git (ver `redoDone`). Nunca passa por `commitDone`: a barra de `commit.for` é do commit
+   * automático, e este refazer vale para a mesma entrega (só leva o que ainda tem mudança no git, então repetir não commita nada duas vezes).
+   */
+  async redoLeftovers(projectId: string, taskId: string, body: unknown, fromBrowser: boolean): Promise<CommitLeftoversDone | null> {
+    if (!fromBrowser) throw new TaskForbiddenError('refazer o commit das sobras só pelo Claudio’s Club');
+    const dir = await this.deps.projectPath(projectId);
+    if (!dir) return null;
+    const input = parseOr(CommitRedoInput, body);
+    if (!(await readTasks(dir)).some((t) => t.id === taskId)) return null;
+    const run = (this.commitQueues.get(dir) ?? Promise.resolve()).then(() => this.redoDone(projectId, dir, taskId, input.digest));
+    this.commitQueues.set(dir, run.then(() => {}, () => {}));
+    return run;
+  }
+
+  /**
+   * O refazer, já na fila do projeto. Nada vem do pedido além do `digest`: o quadro, `commit.left` e o git são lidos de novo aqui, e os caminhos que entram no commit saem do plano (cada um está em
+   * `left` da tarefa, não é segredo/conflito/staged, tem mudança no git, e nenhum card aberto o toca). Recusa (409) se: a tarefa não está pronta ou o `commit` não é da entrega atual, não há sobras,
+   * o repositório não está em condição, algum card aberto toca as sobras, nada tem mudança, nada pode ir pelo botão, o conteúdo mudou desde o preview (`digest`), ou o git recusou (hook; `Task.commit`
+   * fica como estava). Grava o complementar em `commit.redos`, atualiza `left`/`status`/`alert` e deixa `sha`, `for` e `files` originais; sem commit original (`none`), o complementar vira o `sha`.
+   */
+  private async redoDone(projectId: string, dir: string, taskId: string, digest: string): Promise<CommitLeftoversDone> {
+    const refuse: (why: string) => never = (why) => {
+      throw new TaskConflictError(why);
+    };
+    if (this.deps.closing?.()) refuse('o Claudio’s Club está fechando: tente de novo quando ele abrir');
+    const all = await readTasks(dir);
+    const task = all.find((t) => t.id === taskId);
+    if (!task) return refuse('a tarefa não existe mais');
+    const c = task.commit;
+    if (task.status !== 'done' || task.merged || !c || c.for !== doneAtOf(task)) return refuse('o commit desta tarefa não é da entrega atual: nada a refazer');
+    if (!c.alert || !c.left.length || c.status === 'failed') return refuse('este aviso não tem arquivos de fora para commitar');
+    const plan = await planLeftovers(dir, task, all);
+    if (plan.repoNote) return refuse(plan.repoNote);
+    const view = plan.view;
+    if (!plan.status || !plan.head) return refuse('não consegui ler o git agora: tente de novo');
+    if (!view) return refuse('os arquivos de fora já não têm mudança no git (commitados ou desfeitos): nada a commitar');
+    if (view.state === 'waiting')
+      return refuse(`ainda há card aberto mexendo nos arquivos de fora: ${view.blockers.map((b) => `${b.id} (“${untrustedLine(b.title, 80)}”, ${b.status}): ${b.paths.slice(0, 3).map((p) => untrustedLine(p, 120)).join(', ')}`).join('; ')}`);
+    if (view.state !== 'ready') return refuse('este aviso é de erro do git, não de arquivos de fora: nada a refazer');
+    if (!plan.take.length) return refuse(`nenhum arquivo de fora pode ir pelo botão (segredo, conflito ou staged por você): resolva no git. De fora: ${leftText(plan.remaining)}`);
+    if (plan.digest !== digest) return refuse('os arquivos mudaram desde que você viu o diff: confira de novo e confirme');
+    const made = await commitPaths(dir, plan.head, plan.take, commitMessage(`Sobras de ${task.title}`, task.id)).catch((err) => refuse(`o git recusou o commit: ${summarize(err)}`));
+    if (!made) return refuse('os arquivos de fora já estão no HEAD: nada a commitar');
+    const taken = plan.take.slice(0, COMMIT_LIST_MAX);
+    const rest = plan.remaining;
+    const line = `commit complementar ${made.sha}: ${plan.take.length} ${plan.take.length === 1 ? 'arquivo' : 'arquivos'} das sobras${c.sha ? ` do commit ${c.sha}` : ''}${rest.length ? `; de fora: ${leftText(rest, 5)}` : ''}${made.problem ? ` (${made.problem})` : ''}`;
+    let updated: TaskCommit | undefined;
+    await this.change(projectId, taskId, (t) => {
+      // O registro é o da entrega que viu o preview: se a tarefa foi entregue de novo no meio, o commit existe mas não se mistura com o registro da entrega nova.
+      if (!t.commit || t.commit.for !== c.for) return noted(t, `${line}; o registro do commit já era de outra entrega e não foi atualizado`);
+      updated = afterRedo(t.commit, made, taken, rest, new Date().toISOString());
+      return noted({ ...t, commit: updated }, line);
+    });
+    return { ok: true, sha: made.sha, files: taken, left: rest, commit: updated ?? c };
   }
 
   /**
@@ -4614,7 +4824,7 @@ export class TaskService {
     try {
       if (task && task.status === 'review' && task.reviewerId && task.reviewerId === task.review?.staffId) {
         const reviewer = (await this.deps.readProfile(where.projectId, task.reviewerId))?.name ?? 'o revisor';
-        if (verdict === 'approved') await this.approve(where.projectId, task.id, reviewer);
+        if (verdict === 'approved') await this.approve(where.projectId, task.id, reviewer, { sessionId, deliveryAt: task.delivery?.at ?? null });
         else await this.reject(where.projectId, task.id, reviewer, reviewText ?? '', { sessionId, deliveryAt: task.delivery?.at ?? null });
       }
     } finally {
@@ -4642,19 +4852,34 @@ export class TaskService {
     }
   }
 
-  /** Aprovada pelo revisor: pronto, a não ser que o código ainda esteja numa worktree por mesclar. */
-  private async approve(projectId: string, taskId: string, reviewer: string): Promise<void> {
+  /**
+   * Aprovada pelo revisor: pronto, a não ser que o código ainda esteja numa worktree por mesclar ou que a política de fluxo do projeto reserve a conclusão ao dono (`completion: 'owner'`, ver
+   * `flowOf`): aí a tarefa fica em "revisão" com a nota e o item na caixa, e só a aprovação dele pela tela (ou o merge dele) a leva a "pronto". A decisão vem da política lida de `~/.myco`,
+   * não do que está no card (nem do `reviewerId`, nem de `Task.ownerGate`, que é só exibição). `verdict`: a revisão e a entrega que ela julgou; aprovação de entrega que já passou não decide nada.
+   */
+  private async approve(projectId: string, taskId: string, reviewer: string, verdict: Verdict): Promise<void> {
     const { dir, task, profile } = await this.context(projectId, taskId);
-    // Veredito que chega depois de a tarefa sair de "revisão" (cancelada, por exemplo) não decide nada.
-    if (task.status !== 'review') return;
+    // Veredito que chega depois de a tarefa sair de "revisão" (cancelada, por exemplo) ou de a tarefa ser entregue de novo não decide nada.
+    const current = (t: Task) => t.status === 'review' && isVerdictOf(t, verdict);
+    if (!current(task)) return;
     const place = task.staffId ? await locateCode(dir, task.staffId, !!profile?.worktree).catch(() => null) : null;
     const head = `[MyCo] Tarefa “${titleOf(task)}” (id ${task.id}): `;
-    if (place?.where === 'worktree' && !task.merged) {
-      await this.change(projectId, taskId, (t) => (t.status === 'review' ? noted(t, `aprovada por ${reviewer}; falta mesclar`) : t));
-      if (selfReview(task)) await this.tellRequester(projectId, task, `${head}aprovada; falta mesclar a worktree.`);
+    const owner = (await this.flowOf(projectId)).completion === 'owner';
+    const toMerge = place?.where === 'worktree' && !task.merged;
+    if (toMerge || owner) {
+      let wrote = false;
+      const note = toMerge ? `aprovada por ${reviewer}; falta mesclar${owner ? ' (e a sua aprovação)' : ''}` : `aprovada por ${reviewer}; falta sua aprovação`;
+      const out = await this.change(projectId, taskId, (t) => {
+        if (!current(t)) return t;
+        wrote = true;
+        return noted(owner ? withOwnerGate(t, 'approved', reviewer) : t, note);
+      });
+      if (!wrote) return;
+      if (selfReview(task)) await this.tellRequester(projectId, task, toMerge ? `${head}aprovada; falta mesclar a worktree.` : `${head}aprovada na sua revisão; falta a aprovação do dono (política de fluxo do projeto).`);
+      if (owner && out) this.warnDependents(projectId, taskId, stuckReason(out));
       return;
     }
-    const done = await this.change(projectId, taskId, (t) => (t.status === 'review' ? moved(t, 'done', 'auto', `aprovada por ${reviewer}`) : t));
+    const done = await this.change(projectId, taskId, (t) => (current(t) ? moved(t, 'done', 'auto', `aprovada por ${reviewer}`) : t));
     if (done?.status !== 'done') return;
     await this.wakeDependents(projectId, taskId);
     await this.settleRequester(projectId, done, 'foi para pronto', selfReview(task) ? `${head}aprovada na sua revisão, foi para pronto.` : null);
@@ -4734,7 +4959,7 @@ export class TaskService {
     // A pausa não barra a revisão: ela confere uma entrega que já está feita e só grava o veredito (não abre trabalho de execução). O que a pausa segura é o que sai do veredito: o ajuste
     // da reprovação fica guardado (`reject`) e a fila só anda ao retomar (`takeNext`).
     const reviewer = await this.reviewerOf(projectId, task);
-    if (!reviewer) return;
+    if (!reviewer) return this.waitsForOwnerWithoutReviewer(projectId, task);
     const deliveryAt = task.delivery?.at ?? null;
     if ((task.reviewRounds ?? 0) >= AUTO_REVIEW_ROUNDS) {
       // Só anota o limite se a tarefa ainda está em "revisão" e nesta entrega: cancelada (ou já aprovada, ou com entrega nova) enquanto
@@ -4790,6 +5015,24 @@ export class TaskService {
       // Quem pediu ia revisar e a revisão não começou: ele ainda tem de saber da entrega, como antes.
       if (selfReview(task) && task.sessionId) await this.tellManager(projectId, task, task.sessionId);
     }
+  }
+
+  /**
+   * Entregue e sem revisor configurado (ver `reviewerOf`), com a conclusão por IA ESCOLHIDA pelo dono (preset Automático, ou 'custom' com `completion` gravado por ele: `completionChosen`):
+   * a tarefa nunca vai a "pronto" sozinha sem revisão. Fica em "revisão" com a nota e o item na caixa (`Task.ownerGate`, só exibição), uma vez por entrega. Política virtual (projeto sem política
+   * gravada) ou conclusão do dono: nada a dizer aqui, como sempre (sem revisor o card já é do dono, por desenho).
+   */
+  private async waitsForOwnerWithoutReviewer(projectId: string, task: Task): Promise<void> {
+    const flow = await this.flowOf(projectId);
+    if (flow.source !== 'stored' || flow.completion !== 'ai' || !flow.completionChosen) return;
+    const deliveryAt = task.delivery?.at ?? null;
+    let wrote = false;
+    const out = await this.change(projectId, task.id, (t) => {
+      if (!onDelivery(t, deliveryAt) || (t.ownerGate && t.ownerGate.deliveryAt === deliveryAt)) return t;
+      wrote = true;
+      return noted(withOwnerGate(t, 'no-reviewer'), 'sem revisor configurado: espera sua aprovação');
+    });
+    if (wrote && out) this.warnDependents(projectId, task.id, stuckReason(out));
   }
 
   /** O revisor: outro funcionário do projeto, e não quem faz a tarefa (`check`: confere se ele existe). */
@@ -5731,7 +5974,7 @@ export class TaskService {
   async noteHeavyGuardOff(sessionId: string): Promise<{ taskId: string; title: string } | null> {
     const where = await this.where(sessionId);
     if (!where || (where.role !== 'work' && where.role !== 'deploy') || where.auto) return null;
-    const line = `fila de validação pesada desligada na conversa ${sessionId.slice(0, 8)}: a conta do Codex tem hooks.json e a flag de confiança que o hook da fila exige o liberaria sem confirmação; suíte completa e tsc rodam sem esperar a vez (apagar ou renomear o hooks.json religa a fila na próxima mensagem)`;
+    const line = `fila de validação pesada e bloqueio de git destrutivo desligados na conversa ${sessionId.slice(0, 8)}: a conta do Codex tem hooks.json e a flag de confiança que os hooks exigem o liberaria sem confirmação; suíte completa e tsc rodam sem esperar a vez e o git que descarta trabalho não commitado (reset --hard, checkout --, clean, stash) passa no checkout principal (apagar ou renomear o hooks.json religa os dois na próxima mensagem)`;
     const task = await this.change(where.projectId, where.taskId, (t) => (t.history.some((h) => h.note === line) ? t : noted(t, line)));
     return task ? { taskId: task.id, title: task.title } : null;
   }
@@ -5961,6 +6204,9 @@ export function stuckState(t: Task, now = Date.now()): StuckState | null {
   // Plano primeiro: o card entregou o plano (ver `holdPlan`) e quem pediu decide, aprovando ou recusando com o motivo: só ele destrava.
   if (waitsPlan(t)) return { reason: 'entregou o plano e espera quem pediu aprovar ou recusar', selfHeals: false, humanAction: 'decide', since: t.planWait!.since };
   if (t.status !== 'review') return null;
+  // Espera a aprovação do dono (política de fluxo, ver `Task.ownerGate`): a revisão já decidiu ou não há revisor, e só ele leva a tarefa a "pronto". É só o aviso: a autorização vem da política.
+  const og = ownerGateOf(t);
+  if (og) return { reason: og.why === 'approved' ? `aprovada${og.by ? ` por ${og.by}` : ''}; falta sua aprovação` : 'sem revisor configurado: falta sua aprovação', selfHeals: false, humanAction: 'decide', since: og.since };
   const rr = t.reviewRetry;
   if (rr && (rr.expired || now - Date.parse(rr.firstAt) >= REVIEW_WAIT_MS))
     return { reason: `a revisão automática não começou${rr.lastError ? `: ${rr.lastError}` : ''}`, selfHeals: false, humanAction: 'review', since: rr.firstAt };
@@ -6011,6 +6257,8 @@ export function ownAlerts(tasks: Task[], now = Date.now()): OwnAlert[] {
     else if (state.humanAction === 'decide' && markedNoCode(task) && task.noCode!.to === 'owner') out.push({ task, state: { ...state, humanAction: 'decide' } });
     // Plano pendente: o gestor que pediu o recebe na conversa dele; é do usuário quando foi ele que pediu ou o aviso ao gestor se perdeu (`TaskPlanWait.to`).
     else if (state.humanAction === 'decide' && waitsPlan(task) && task.planWait!.to === 'owner') out.push({ task, state: { ...state, humanAction: 'decide' } });
+    // Espera a aprovação do dono (política de fluxo): só ele destrava, então tem item próprio.
+    else if (state.humanAction === 'decide' && ownerGateOf(task)) out.push({ task, state: { ...state, humanAction: 'decide' } });
     // A dúvida "a caminho do gestor" também tem humanAction null: só a espera do limite entra (é a mesma razão que `stuckState` deu).
     else if (state.humanAction === null && fallbackWait(task, now)?.reason === state.reason) out.push({ task, state: { ...state, humanAction: null } });
   }
@@ -6379,6 +6627,25 @@ function occupant(tasks: Task[], staffId: string, except?: string): Task | undef
   return tasks.find((t) => t.staffId === staffId && t.id !== except && t.sessionId && !t.autoCreated && OCCUPIED.includes(t.status) && !parked(t, tasks));
 }
 
+/**
+ * O card já está em voo (pausa de versão): tem conversa e está planejando, fazendo ou em revisão, então um ajuste automático dele (reprovação, resposta do gestor, aviso) continua
+ * o que já começou. Em "a fazer", Aguardar, pronto ou sem conversa o mesmo ajuste abriria trabalho novo (levaria o card a fazendo), e a pausa o segura.
+ */
+function inFlight(t: Task): boolean {
+  return !!t.sessionId && (t.status === 'planning' || t.status === 'doing' || t.status === 'review');
+}
+
+/** O prazo pedido para a pausa de versão (`minutes` do corpo). Você, pela tela, pode omitir (padrão); o funcionário não. Fora de 1..teto, ou não inteiro: TaskError (400), nunca ajustado em silêncio. */
+function versionMinutes(body: unknown, fromBrowser: boolean): number {
+  const raw = body && typeof body === 'object' ? (body as { minutes?: unknown }).minutes : undefined;
+  if (raw === undefined || raw === null) {
+    if (fromBrowser) return VERSION_PAUSE_DEFAULT_MINUTES;
+    throw new TaskError(`diga o prazo da pausa de versão: {"minutes": de 1 a ${VERSION_PAUSE_MAX_MINUTES}}`);
+  }
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > VERSION_PAUSE_MAX_MINUTES) throw new TaskError(`prazo inválido: minutes é um número inteiro de 1 a ${VERSION_PAUSE_MAX_MINUTES}`);
+  return raw;
+}
+
 /** Os status em que o card segura a vaga de escrita do projeto (ver `writeHolder`): revisão e Aguardar continuam com ela, porque o código dele ainda está solto no checkout. */
 const WRITES: TaskStatus[] = ['doing', 'review', 'waiting'];
 
@@ -6527,7 +6794,11 @@ function reviewClosable(t: Task, sessionId: string, all: Task[]): boolean {
 }
 
 /** Entrega nova (o turno terminou, ou a conversa parou): o pedido de revisão que havia é da rodada anterior e deixa de valer (ver `liveReview`). */
-const supersedeReview = (t: Task): Task => (t.review && !t.review.superseded ? { ...t, review: { ...t.review, superseded: true } } : t);
+const supersedeReview = (t: Task): Task => {
+  // A espera pela aprovação do dono era da entrega que acabou (ver `Task.ownerGate`): a entrega nova é revisada de novo.
+  const open = t.ownerGate ? { ...t, ownerGate: undefined } : t;
+  return open.review && !open.review.superseded ? { ...open, review: { ...open.review, superseded: true } } : open;
+};
 
 /** A tarefa continua em "revisão" e na entrega de `deliveryAt` (`delivery.at`)? Marca do que uma revisão automática em voo pode gravar. */
 const onDelivery = (t: Task, deliveryAt: string | null): boolean => t.status === 'review' && (t.delivery?.at ?? null) === deliveryAt;
@@ -6786,6 +7057,27 @@ export function commitAlerts(tasks: Task[]): CommitAlert[] {
   return tasks.flatMap((task) => (task.commit?.alert && !task.commit.ack ? [{ task, commit: task.commit }] : [])).sort((a, b) => Date.parse(a.commit.at) - Date.parse(b.commit.at));
 }
 
+/** O corpo de `POST .../tasks/:id/commit-leftovers`: só o `digest` do preview, e nenhum campo a mais (o servidor nunca aceita caminho vindo do pedido). */
+const CommitRedoInput = z.object({ digest: z.string({ message: 'digest: informe o do preview' }).regex(/^[0-9a-f]{32}$/, 'digest inválido') }).strict();
+
+/**
+ * `Task.commit` depois de um commit complementar das sobras (ver `TaskService.redoLeftovers`): `left` passa a ser o que ainda ficou de fora e `alert`/`status` seguem dele; `sha`, `for`, `at` e `files`
+ * ficam os do commit original (sem commit original, o complementar vira o `sha`). Um problema DEPOIS do commit (índice não refeito) reabre o aviso mesmo com o `ack` antigo.
+ */
+function afterRedo(c: TaskCommit, made: { sha: string; problem: string | null }, files: string[], rest: TaskCommitLeft[], at: string): TaskCommit {
+  const next: TaskCommit = {
+    ...c,
+    status: rest.length ? 'partial' : 'committed',
+    sha: c.sha ?? made.sha,
+    left: rest,
+    note: made.problem ?? (c.status === 'none' ? null : c.note),
+    alert: rest.length > 0 || !!made.problem,
+    redos: [...(c.redos ?? []), { at, sha: made.sha, files }].slice(-COMMIT_REDOS_MAX),
+  };
+  if (made.problem) delete next.ack;
+  return next;
+}
+
 /** A impressão do conteúdo de um pedido de criar (para a chave de idempotência): o mesmo conteúdo, a mesma impressão; qualquer campo diferente, outra. */
 function contentHash(input: z.output<typeof TaskInput>, sentReviewer: boolean): string {
   // `planFirst` só entra quando vem: a impressão de quem criou antes do campo existir não muda (o retry com a mesma chave não vira 409).
@@ -6909,6 +7201,11 @@ const FALLBACK_MOTIVO: Record<NonNullable<Task['fallbackBlocked']>['reason'], st
   model: 'modelo indisponível',
   other: 'não abre',
 };
+
+/** A tarefa espera a aprovação do dono nesta entrega (`Task.ownerGate`): só exibição, a autorização vem da política (ver `TaskService.approve`). */
+function withOwnerGate(t: Task, why: TaskOwnerGate['why'], by?: string): Task {
+  return { ...t, ownerGate: { deliveryAt: t.delivery?.at ?? null, since: new Date().toISOString(), why, ...(by && { by }) } };
+}
 
 /** Uma linha no histórico, sem mudar de coluna. */
 function noted(t: Task, note: string): Task {
@@ -7071,7 +7368,7 @@ function moved(t: Task, status: TaskStatus, by: 'you' | 'auto', note?: string): 
   const history = [...t.history, { at, status, by, ...(note && { note }) }].slice(-MAX_HISTORY);
   // Saiu de Aguardar: o motivo era de lá. Saiu de revisão: o retry da revisão automática era da entrega que acabou.
   const leavesWait = t.status === 'waiting' ? { waitReason: null, engineStop: undefined } : {};
-  const leavesReview = t.status === 'review' && t.reviewRetry ? { reviewRetry: undefined } : {};
+  const leavesReview = t.status === 'review' && (t.reviewRetry || t.ownerGate) ? { reviewRetry: undefined, ownerGate: undefined } : {};
   // A ciência do corte era para a retomada na fila (em "a fazer"): em outra coluna já não vale.
   const leavesTodo = status !== 'todo' && t.cutAck ? { cutAck: undefined } : {};
   // A espera das subtarefas e a do segundo plano eram do "fazendo": em outra coluna (entrega, Aguardar, cancelada) já não valem.

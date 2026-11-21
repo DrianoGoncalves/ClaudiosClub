@@ -821,7 +821,7 @@ describe('rotas da extensão', () => {
     const base = (await listen(srv, '127.0.0.1'))!;
     const r = await call(base, 'GET', '/api/ext/v1/inbox', EXT_AUTH(tokenFor().token));
     const [got] = r.body.items as Array<Record<string, unknown>>;
-    expect(got).toMatchObject({ kind: 'error', taskId: 't-0a1b2c', summary: 'uma conversa de tarefa roda sem a fila de validação pesada' });
+    expect(got).toMatchObject({ kind: 'error', taskId: 't-0a1b2c', summary: 'uma conversa de tarefa roda sem a fila de validação pesada e sem o bloqueio de git destrutivo' });
     const text = JSON.stringify(r.body);
     for (const proibido of ['SEGREDO-HOME', 'hooks.json', 'TITULO-H', 'sess-SEGREDO-5', 'guardoff:']) expect(text, proibido).not.toContain(proibido);
   });

@@ -290,6 +290,7 @@ describe('TaskService.noteHeavyGuardOff: uma nota por conversa de trabalho', () 
     expect(notes(after)).toHaveLength(1);
     expect(after.history).toHaveLength(before + 1);
     expect(notes(after)[0]!.note).toMatch(/hooks\.json/);
+    expect(notes(after)[0]!.note).toMatch(/bloqueio de git destrutivo/); // t-0ccbff
     expect(notes(after)[0]!.note).not.toMatch(/[\\/]/); // só o nome do arquivo: o histórico aparece em mais telas que o chat
   });
 
@@ -319,6 +320,7 @@ describe('heavyGuardOffInboxItem e a fiação do servidor', () => {
     expect(item).toMatchObject({ id: 'guardoff:sess-1', kind: 'error', sessionId: 'sess-1', staffId: 'cris', at: hit.at, heavyGuardOff: { taskId: 't-a1b2c3', taskTitle: 'Tela', file: hit.file } });
     expect(item.summary).toContain('Tela');
     expect(item.summary).toContain('hooks.json');
+    expect(item.summary).toContain('bloqueio de git destrutivo'); // t-0ccbff
     expect(item.summary).not.toContain('C:\\'); // o caminho não vai no texto
   });
 

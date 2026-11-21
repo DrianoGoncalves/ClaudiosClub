@@ -641,8 +641,13 @@ describe('o lançamento leva o hook e a lib para a pasta da conversa (o agente n
     const proj = path.join(tmp, 'proj-codex');
     await fs.mkdir(proj, { recursive: true });
     const run = await prepareCodexRun({ ...profile, engine: 'codex' } as never, ctx(proj) as never, 'sess-h', proj);
-    expect(run.heavyGuard).toEqual({ hook: path.join(proj, 'run', 'sess-h', 'hooks', 'heavy-guard.mjs'), lockDir: heavyLockDir(), ownerPid: process.pid });
-    for (const f of ['heavy-guard.mjs', 'heavy-lock.mjs']) {
+    expect(run.heavyGuard).toEqual({
+      hook: path.join(proj, 'run', 'sess-h', 'hooks', 'heavy-guard.mjs'),
+      lockDir: heavyLockDir(),
+      ownerPid: process.pid,
+      git: { hook: path.join(proj, 'run', 'sess-h', 'hooks', 'git-guard.mjs'), projectPath: proj }, // o bloqueio do git destrutivo (t-0ccbff)
+    });
+    for (const f of ['heavy-guard.mjs', 'heavy-lock.mjs', 'git-guard.mjs', 'git-guard-lib.mjs']) {
       expect(await fs.readFile(path.join(proj, 'run', 'sess-h', 'hooks', f), 'utf8')).toBe(await fs.readFile(fileURLToPath(new URL(`../scripts/hooks/${f}`, import.meta.url)), 'utf8'));
     }
   });
