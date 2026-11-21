@@ -363,6 +363,7 @@ export async function planTeamImport(raw: unknown, ctx: { globalDir?: string; lo
         effort: s.effort,
         personality: s.personality,
         canHire: false,
+        canRelease: false,
         playbook: s.playbook,
         worktree: s.worktree,
         servers: [],
