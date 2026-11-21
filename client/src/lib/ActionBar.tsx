@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
+import { Fragment, useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { t } from '../i18n';
 
 // Barra de ações dos painéis (tarefa, e depois funcionário e projeto). Aplica por construção a regra de hierarquia dos botões:
@@ -24,6 +24,9 @@ export interface BarAction {
   danger?: boolean;
   /** Só nas secundárias: em vez de agir, o botão abre este painel (ex.: escolher quem revisa) acima da barra. */
   panel?: ReactNode;
+  /** Ícone do botão. Com iconOnly ele é o botão inteiro (o label vira o nome para o leitor de tela e o 	itle); só vale nas secundárias e na primária de fora do menu. */
+  icon?: ReactNode;
+  iconOnly?: boolean;
 }
 
 /** Um item do "⋯": uma ação, ou um nó livre (ex.: o seletor "Mover para"). */
@@ -34,7 +37,8 @@ export interface ActionBarProps {
   label: string;
   /** A ação principal (no máximo uma; sem pendência do dono, a próxima ação natural). */
   primary?: BarAction | null;
-  secondary?: BarAction[];
+  /** Alternativas; um nó livre (ex.: um botão com estado próprio) também entra aqui, na ordem em que vem. */
+  secondary?: MenuItem[];
   more?: MenuItem[];
   /** O nome do botão "⋯" para o leitor de tela. */
   moreLabel: string;
@@ -72,12 +76,15 @@ const closeMenu = (el: HTMLElement) => el.closest('details')?.removeAttribute('o
 
 function ActionButton({ a, kind, inMenu = false }: { a: BarAction; kind: 'primary' | 'secondary'; inMenu?: boolean }) {
   const danger = a.danger && kind === 'secondary';
-  const cls = `${kind === 'primary' ? 'btn-primary' : 'btn-secondary'}${danger ? ' is-danger' : ''}${inMenu ? ' action-bar-item' : ''}`;
+  const iconOnly = !!a.icon && !!a.iconOnly && !inMenu;
+  const cls = `${kind === 'primary' ? 'btn-primary' : 'btn-secondary'}${danger ? ' is-danger' : ''}${inMenu ? ' action-bar-item' : ''}${iconOnly ? ' btn-icon' : a.icon ? ' btn-with-icon' : ''}`;
+  const text = a.busy ? (a.busyLabel ?? t('actionBar.sending')) : a.label;
   return (
     <button
       type="button"
       className={cls}
-      title={a.title}
+      title={a.title ?? (iconOnly ? a.label : undefined)}
+      aria-label={iconOnly ? text : undefined}
       disabled={a.disabled || a.busy}
       aria-busy={a.busy || undefined}
       aria-describedby={kind === 'primary' && a.disabledReason ? `${a.id}-why` : undefined}
@@ -87,7 +94,8 @@ function ActionButton({ a, kind, inMenu = false }: { a: BarAction; kind: 'primar
         a.onClick?.();
       }}
     >
-      {a.busy ? (a.busyLabel ?? t('actionBar.sending')) : a.label}
+      {a.icon}
+      {!iconOnly && text}
     </button>
   );
 }
@@ -116,7 +124,9 @@ export function ActionBar({ label, primary, secondary = [], more = [], moreLabel
         </details>
       )}
       {secondary.map((a) =>
-        a.panel ? (
+        isNode(a) ? (
+          <Fragment key={a.id}>{a.node}</Fragment>
+        ) : a.panel ? (
           <details key={a.id} className="action-bar-pop">
             <summary className="btn-secondary" title={a.title}>
               {a.label}

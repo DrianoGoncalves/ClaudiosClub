@@ -578,7 +578,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                       {LABEL[status]} <span className="muted">{col.length || ''}</span>
                     </h3>
                     {/* Quem está ocupado agora (Fazendo: executando ou fila travada; Revisão: revisando); o texto de cada um só no hover. */}
-                    {(status === 'doing' || status === 'review') && <QueueDots dots={dots.filter((d) => d.column === status)} />}
+                    {(status === 'doing' || status === 'review') && <QueueDots dots={dots.filter((d) => d.column === status)} staff={staff} projectId={projectId} />}
                   </div>
                   {col.map(card)}
                   {status === 'done' && archived.length > 0 && (

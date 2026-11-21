@@ -1,12 +1,17 @@
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { resolveCaller, SessionTokens } from '../server/callers';
+import { resolveCaller, SANDBOX_HOST, SessionTokens } from '../server/callers';
+import { gate } from '../server/gate';
+import { Pairing } from '../server/pairing';
 import { stuckInboxItem } from '../server/inboxItems';
 import { TaskConflictError, TaskError, TaskForbiddenError, TaskService, ownAlerts, stuckState, wantsPlan } from '../server/tasks';
 import type { Engine, StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Plano não é entrega (t-bb54bc): o card que pede o plano primeiro (`Task.planFirst`, ou a descrição o pede) e termina o turno sem editar nada entregou o plano. Ele fica em "planejando"
 // com o plano pendente de quem pediu (`Task.planWait`): sem revisão, sem rodada, sem reprovação. Aprovar leva o MESMO card a "fazendo" com o plano gravado; recusar devolve ao responsável
@@ -16,9 +21,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-planfirst-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const PAST = '2020-01-01T00:00:00';
 const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe', env: { ...process.env, GIT_AUTHOR_DATE: PAST, GIT_COMMITTER_DATE: PAST } }).toString();
@@ -98,7 +101,9 @@ async function club(dirName: string, opts: { engine?: Engine } = {}) {
   const edit = (work: string) => svc.onCodeEdit({ sessionId: work, projectId: 'p', staffId: 'ana-1', engine, cwd: dir, files: [path.join(dir, 'a.ts')], request: null });
   /** As conversas de revisão abertas (o `send` com `reviewOnly`). */
   const reviewsOpened = () => h.sent.filter((s) => s.reviewOnly);
-  return { dir, h, svc, list, get, as, begin, endTurn, edit, people, reviewsOpened };
+  /** O token de `staffId` (o do motor do rig), para chamar a API pelo gate de verdade. */
+  const tokenOf = (staffId: string, session: string, projectId = 'p') => tokens.issue({ staffId, projectId, sessionId: session, engine });
+  return { dir, h, svc, list, get, as, begin, endTurn, edit, people, reviewsOpened, tokens, tokenOf };
 }
 const place = { projectId: 'p', projectName: 'Painel', sessionId: '', staffId: 'ana-1', name: 'Ana' };
 
@@ -469,5 +474,132 @@ describe('wantsPlan: o campo manda; sem ele, a descrição pede por frase, e a q
   it('o campo vence a descrição, nos dois sentidos', () => {
     expect(wantsPlan(t('Exportar o CSV.', { planFirst: true }))).toBe(true);
     expect(wantsPlan(t('Comece pelo plano e espere aprovação.', { planFirst: false }))).toBe(false);
+  });
+});
+
+// A rota do plano pelo gate de verdade (t-5a9ef6): `POST tasks/<id>/plan` ficou fora de `STAFF_POSTS` (server/apiPolicy.ts) e o gestor, com x-myco e o token da conversa dele, levava 400
+// "só pelo Claudio’s Club" antes de chegar a `decidePlan`: todo card com `planFirst` travava em "planejando". Aqui o pedido passa pelo `gate` (127.0.0.1 e a sandbox do Codex) e só então por `decidePlan`,
+// como em server/index.ts: o que o gate deixa passar o serviço ainda confere (quem pediu o card), e o que o gate barra nem chega a ele.
+describe('a rota do plano pelo gate de verdade', () => {
+  const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]', 'claudio.localhost']);
+  const isLocalOrigin = (o: string | undefined) => !o || LOCAL.has(new URL(o).hostname);
+  const STAFF = { 'x-myco': '1' };
+  let rig: Awaited<ReturnType<typeof club>>;
+  let pairing: Pairing;
+  const servers: http.Server[] = [];
+  let local: string;
+  let sandbox: string | null = null;
+
+  const listen = (srv: http.Server, host: string) =>
+    new Promise<string | null>((resolve) => {
+      srv.once('error', () => resolve(null));
+      srv.listen(0, host, () => resolve(`http://${host}:${(srv.address() as AddressInfo).port}`));
+    });
+  const PLAN_ROUTE = /^\/api\/projects\/p\/tasks\/([A-Za-z0-9-]+)\/plan$/;
+  const handler = async (req: http.IncomingMessage, res: http.ServerResponse) => {
+    const g = gate(req, res, { pairing, tokens: rig.tokens, localHostnames: LOCAL, isLocalOrigin, log: () => {} });
+    if (!g) return;
+    const reply = (status: number, body: unknown) => {
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body));
+    };
+    const m = PLAN_ROUTE.exec(g.url.pathname);
+    if (!m) return reply(404, { error: 'rota fora do teste' });
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    try {
+      const t = await rig.svc.decidePlan('p', m[1]!, g.caller, g.fromBrowser, JSON.parse(raw || '{}'));
+      reply(t ? 200 : 404, t ? { status: t.status } : { error: 'sem a tarefa' });
+    } catch (err) {
+      // Os mesmos códigos de server/index.ts.
+      if (err instanceof TaskConflictError) return reply(409, { error: (err as Error).message });
+      if (err instanceof TaskForbiddenError) return reply(403, { error: (err as Error).message });
+      if (err instanceof TaskError) return reply(400, { error: (err as Error).message });
+      throw err;
+    }
+  };
+
+  beforeAll(async () => {
+    pairing = new Pairing(path.join(root, 'gate-secrets', 'pairing.key'));
+    const a = http.createServer((req, res) => void handler(req, res));
+    const b = http.createServer((req, res) => void handler(req, res));
+    servers.push(a, b);
+    local = (await listen(a, '127.0.0.1'))!;
+    sandbox = await listen(b, SANDBOX_HOST);
+  });
+  afterAll(async () => {
+    for (const s of servers) await new Promise((r) => s.close(r));
+  });
+
+  interface Reply {
+    status: number;
+    body: { status?: string; error?: string };
+  }
+  const post = (base: string, pathname: string, body: unknown, headers: Record<string, string>): Promise<Reply> =>
+    new Promise((resolve, reject) => {
+      const req = http.request(`${base}${pathname}`, { method: 'POST', headers }, (res) => {
+        let text = '';
+        res.setEncoding('utf8').on('data', (d: string) => (text += d));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(text || '{}') }));
+      });
+      req.on('error', reject);
+      req.end(JSON.stringify(body));
+    });
+  const withToken = (t: string) => ({ ...STAFF, 'x-myco-token': t });
+  const route = (id: string, project = 'p') => `/api/projects/${project}/tasks/${id}/plan`;
+  const SO_PELO_CLUB = 'só pelo Claudio’s Club';
+
+  it('o gestor que pediu o card aprova o plano com o token: passa do gate (não é 400 "só pelo Claudio’s Club") e o card segue em fazendo', async () => {
+    rig = await club('gate-aprova');
+    const { id, work } = await rig.begin({ planFirst: true });
+    await rig.endTurn(work);
+    expect((await rig.get(id)).status).toBe('planning');
+    const r = await post(local, route(id), { decision: 'approve' }, withToken(rig.tokenOf('gio-1', 'gio-s')));
+    expect(r.body.error).toBeUndefined();
+    expect(r).toMatchObject({ status: 200, body: { status: 'doing' } });
+    expect((await rig.get(id)).planWait).toBeUndefined();
+  });
+
+  it('a recusa com o motivo também passa do gate e devolve o card ao responsável', async () => {
+    rig = await club('gate-recusa');
+    const { id, work } = await rig.begin({ planFirst: true });
+    await rig.endTurn(work);
+    const r = await post(local, route(id), { decision: 'reject', reason: 'Falta o plano de migração.' }, withToken(rig.tokenOf('gio-1', 'gio-s')));
+    expect(r).toMatchObject({ status: 200, body: { status: 'doing' } });
+  });
+
+  it('quem não pediu o card passa do gate e leva 403 do `decidePlan` (o responsável e outro funcionário); o card segue esperando a decisão', async () => {
+    rig = await club('gate-403');
+    const { id, work } = await rig.begin({ planFirst: true });
+    await rig.endTurn(work);
+    for (const [staffId, session] of [['ana-1', work], ['rui-1', 'rui-s']] as const) {
+      const r = await post(local, route(id), { decision: 'approve' }, withToken(rig.tokenOf(staffId, session)));
+      expect(r.status, staffId).toBe(403);
+      expect(r.body.error, staffId).not.toBe(SO_PELO_CLUB);
+    }
+    expect(await rig.get(id)).toMatchObject({ status: 'planning', planWait: { to: 'manager' } });
+  });
+
+  it('o gate segue barrando: sem token 401, token inventado 401, token de outro projeto 403, e sem o `x-myco` nem chega (o card segue esperando)', async () => {
+    rig = await club('gate-barra');
+    const { id, work } = await rig.begin({ planFirst: true });
+    await rig.endTurn(work);
+    expect((await post(local, route(id), { decision: 'approve' }, STAFF)).status).toBe(401);
+    expect((await post(local, route(id), { decision: 'approve' }, withToken('f'.repeat(64)))).status).toBe(401);
+    expect((await post(local, route(id), { decision: 'approve' }, withToken(rig.tokenOf('gio-1', 'gio-s', 'p2')))).status).toBe(403);
+    expect((await post(local, route(id), { decision: 'approve' }, { 'x-myco-token': rig.tokenOf('gio-1', 'gio-s') })).status).toBeGreaterThanOrEqual(400);
+    expect((await rig.get(id)).status).toBe('planning');
+  });
+
+  it.skipIf(process.platform === 'darwin')('pela sandbox do Codex (127.0.0.2): o gestor aprova no projeto da própria conversa; em outro projeto, 403', async () => {
+    if (!sandbox) return; // sem o alias 127.0.0.2, nada a provar aqui
+    rig = await club('gate-sandbox', { engine: 'codex' });
+    const { id, work } = await rig.begin({ planFirst: true });
+    await rig.endTurn(work);
+    expect((await post(sandbox, route(id, 'p2'), { decision: 'approve' }, withToken(rig.tokenOf('gio-1', 'gio-s')))).status).toBe(403);
+    expect((await rig.get(id)).status).toBe('planning');
+    const r = await post(sandbox, route(id), { decision: 'approve' }, withToken(rig.tokenOf('gio-1', 'gio-s')));
+    expect(r.body.error).toBeUndefined();
+    expect(r).toMatchObject({ status: 200, body: { status: 'doing' } });
   });
 });

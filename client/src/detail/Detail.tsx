@@ -47,9 +47,11 @@ import { effortLabel, employeeName, ENTRYPOINT_LABEL, folderName, formatPercent,
 import { isLoss, RANKING_PERIODS, type RankingGroup, type RankingRow, rankingRows, savingsList, teamSavings } from '../ranking';
 import { t, locale } from '../i18n';
 import { ServerLog } from '../office/ServerLog';
-import { ArchiveIcon, ArchiveRestoreIcon, ClockIcon, CopyIcon, FolderIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, PowerIcon, TasksIcon, UserPlusIcon } from '../icons';
-import { PausedTag, PauseButton } from '../tasks/ProjectPauseBar';
+import { ArchiveIcon, ArchiveRestoreIcon, CopyIcon, GhostIcon, MessageIcon, PencilIcon, PlusIcon, PowerIcon } from '../icons';
+import { PausedTag } from '../tasks/ProjectPauseBar';
 import { OpenTerminalButton } from './OpenTerminalButton';
+import { employeeBarPlan, PlanBar, projectBarPlan, useArchiveAction } from './PanelBars';
+import { ActionBar } from '../lib/ActionBar';
 import { closeConversation, runClose } from '../chat/closeConversation';
 import { clearFreshDraft } from '../chat/draftStore';
 import { CopyToLibrary, SkillLibrary } from '../office/SkillLibrary';
@@ -57,7 +59,6 @@ import { GithubInstall } from '../skills/GithubInstall';
 import { GithubBadges, GithubOrigin } from '../skills/GithubOrigin';
 import { SkillManage } from './SkillManage';
 import { skillRef } from './skillAccess';
-import { askConfirm } from '../lib/dialogStore';
 
 // A conversa (com o markdown e o remark) carrega ao abrir o painel do funcionário, não no pacote inicial.
 const ChatView = lazy(() => import('../chat/ChatView').then((m) => ({ default: m.ChatView })));
@@ -71,53 +72,6 @@ const ARCHIVED_OPTION = '__archived__';
 const BACK_OPTION = '__back__';
 const OLD_OPTION = '__old__';
 const NO_ARCHIVED: ArchivedConversations = {};
-
-function ArchiveButton({
-  archived,
-  onArchive,
-  what,
-  restoreLabel = t('detail.unarchive'),
-  iconOnly = false,
-  confirm = false,
-}: {
-  archived: boolean;
-  onArchive: (v: boolean) => Promise<void>;
-  what: string;
-  restoreLabel?: string;
-  /** Só o ícone (com o texto no title e no aria-label). */
-  iconOnly?: boolean;
-  /** Pede confirmação antes de arquivar (desarquivar não pergunta) e pinta o botão de vermelho. */
-  confirm?: boolean;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const click = async () => {
-    if (confirm && !archived && !(await askConfirm(t('detail.archiveConfirm', { what })))) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await onArchive(!archived);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <>
-      <button
-        className={['btn-secondary', iconOnly && 'btn-icon', confirm && !archived && 'is-danger'].filter(Boolean).join(' ')}
-        onClick={click}
-        disabled={busy}
-        aria-label={iconOnly ? (archived ? restoreLabel : t('detail.archive')) : undefined}
-        title={archived ? t('detail.showOnBoard', { what }) : t('detail.hideFromBoard', { what })}
-      >
-        {iconOnly ? archived ? <ArchiveRestoreIcon /> : <ArchiveIcon /> : archived ? restoreLabel : t('detail.archive')}
-      </button>
-      {error && <span className="error">{error}</span>}
-    </>
-  );
-}
 
 export function EmployeePanel(props: {
   session: Session | null;
@@ -612,6 +566,22 @@ export function EmployeePanel(props: {
       )}
     </>
   );
+  const archive = useArchiveAction({
+    archived: props.archived,
+    onArchive: props.onArchive,
+    what: t('detail.whatEmployee'),
+    label: t('detail.archiveEmployee'),
+    restoreLabel: t('detail.unarchiveEmployee'),
+    confirm: true,
+  });
+  const employeePlan = employeeBarPlan({
+    hasSheet: !!staff,
+    archived: props.archived,
+    temporary: !!staff?.temporary,
+    canHire: !!staff?.canHire,
+    onHireSub: props.onHireSub,
+    archive: archive.action,
+  });
   const actions = (
     <>
       {staff && project && (
@@ -620,19 +590,7 @@ export function EmployeePanel(props: {
           <Routines projectId={project.id} staff={staff} onChanged={props.onChanged} />
         </>
       )}
-      <p className="actions">
-        {staff?.canHire && (
-          <button className="btn-secondary" onClick={props.onHireSub}>
-            {t('detail.hireSub')}
-          </button>
-        )}
-        <ArchiveButton
-          archived={props.archived}
-          onArchive={props.onArchive}
-          what={t('detail.whatEmployee')}
-          restoreLabel={staff?.temporary ? t('detail.restore') : t('detail.unarchive')}
-        />
-      </p>
+      <PlanBar plan={employeePlan} error={archive.error} />
       {!props.archived && <p className="muted small">{t('detail.archiveClosesNote')}</p>}
       {staff && project && (
         <StaffHistory key={staff.updatedAt} projectId={project.id} staffId={staff.id} onRestored={(profile) => props.onRestored?.(profile)} />
@@ -662,7 +620,7 @@ export function EmployeePanel(props: {
           <>
             <p className="muted small">{t(props.ghost ? 'detail.ghostAbout' : 'detail.outsideMyco')}</p>
             <div className="chat-more-row">
-              <button type="button" className="btn-secondary" onClick={() => props.onEdit(current)} title={t('detail.giveProfileTitle')}>
+              <button type="button" className="btn-primary" onClick={() => props.onEdit(current)} title={t('detail.giveProfileTitle')}>
                 {t('detail.giveProfile')}
               </button>
             </div>
@@ -862,21 +820,16 @@ function TempNotice(props: {
       ) : (
         <span>{t('detail.tempNotice', { hirer, date: formatDate(staff.createdAt), days: TEMP_IDLE_DAYS })}</span>
       )}
-      <span className="temp-notice-actions">
-        {props.archived && (
-          <button className="btn-secondary" disabled={busy} onClick={() => void run(() => props.onArchive(false))} title={t('detail.restoreTempTitle')}>
-            {t('detail.restore')}
-          </button>
-        )}
-        <button
-          className="btn-primary"
-          disabled={busy}
-          onClick={() => void run(() => api.keepStaff(props.projectId, staff.id))}
-          title={t('detail.keepStaffTitle')}
-        >
-          {t('detail.keepStaff')}
-        </button>
-      </span>
+      <ActionBar
+        label={t('detail.tabActions')}
+        moreLabel={t('chat.moreOptions')}
+        secondary={
+          props.archived
+            ? [{ id: 'restore', label: t('detail.restoreEmployee'), title: t('detail.restoreTempTitle'), disabled: busy, onClick: () => void run(() => props.onArchive(false)) }]
+            : []
+        }
+        primary={{ id: 'keep', label: t('detail.keepStaff'), title: t('detail.keepStaffTitle'), disabled: busy, onClick: () => void run(() => api.keepStaff(props.projectId, staff.id)) }}
+      />
       {error && <span className="error">{error}</span>}
     </div>
   );
@@ -979,6 +932,15 @@ export function ProjectPanel({
   // Aviso do modelo de equipe (409: já havia equipe): vive aqui porque a chamada some quando a equipe é relida.
   const [teamNotice, setTeamNotice] = useState<string | null>(null);
 
+  const archive = useArchiveAction({
+    archived,
+    onArchive,
+    what: t('detail.whatProjectAndStaff'),
+    label: t('detail.archiveProject'),
+    restoreLabel: t('detail.unarchiveProject'),
+    confirm: true,
+  });
+
   useEffect(() => {
     setDetail(null);
     setError(null);
@@ -993,6 +955,18 @@ export function ProjectPanel({
   const liveById = new Map(live.map((s) => [s.sessionId, s]));
   const sessions = detail.sessions.map((s) => ({ ...s, live: liveById.get(s.id) ?? s.live }));
   const { project } = detail;
+  const barPlan = projectBarPlan({
+    exists: project.exists,
+    archived,
+    paused: !!tasks?.paused,
+    onHire,
+    onTasks,
+    onSchedules,
+    onFiles,
+    onTogglePause,
+    terminal: <OpenTerminalButton projectId={project.id} />,
+    archive: archive.action,
+  });
 
   // Depois de salvar, o detalhe é relido: o cabeçalho mostra o apelido novo.
   const rename = async (name: string | null) => {
@@ -1014,32 +988,6 @@ export function ProjectPanel({
           {!project.exists && <span className="badge warn">{t('detail.folderMissing')}</span>}
           {archived && <span className="badge dim">{t('detail.archived')}</span>}
           {tasks?.paused && <PausedTag pause={tasks.paused} now={Date.now()} className="badge is-paused" />}
-        </p>
-        <p className="actions">
-          {project.exists && (
-            <button className="btn-primary btn-with-icon" onClick={onHire} title={t('detail.hireEmployee')}>
-              <UserPlusIcon />
-              {t('detail.employee')}
-            </button>
-          )}
-          {project.exists && onTasks && (
-            <button className="btn-secondary btn-icon" onClick={onTasks} aria-label={t('detail.tasks')} title={t('detail.boardTasksTitle')}>
-              <TasksIcon size={16} />
-            </button>
-          )}
-          {project.exists && onSchedules && (
-            <button className="btn-secondary btn-icon" onClick={onSchedules} aria-label={t('schedules.open')} title={t('schedules.openTitle')}>
-              <ClockIcon size={16} />
-            </button>
-          )}
-          {project.exists && onFiles && (
-            <button className="btn-secondary btn-icon" onClick={onFiles} aria-label={t('files.open')} title={t('files.openTitle')}>
-              <FolderIcon size={16} />
-            </button>
-          )}
-          {project.exists && <OpenTerminalButton projectId={project.id} />}
-          {project.exists && onTogglePause && <PauseButton paused={!!tasks?.paused} iconOnly onClick={onTogglePause} />}
-          <ArchiveButton archived={archived} onArchive={onArchive} what={t('detail.whatProjectAndStaff')} iconOnly confirm />
         </p>
         {tasks && (
           <p className="muted small">
@@ -1138,6 +1086,7 @@ export function ProjectPanel({
           </>
         )}
       </div>
+      <PlanBar plan={barPlan} error={archive.error} />
     </>
   );
 }

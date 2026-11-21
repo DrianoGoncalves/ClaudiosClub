@@ -144,7 +144,7 @@ export function ShowcaseView({
       <h3>{t('detail.showcaseHeading')}</h3>
       <p className="muted small">{t('detail.showcaseHint')}</p>
       <p className="actions guide-actions">
-        <button className={exists ? 'btn-secondary' : 'btn-primary'} onClick={onStart} disabled={busy} aria-busy={busy || undefined}>
+        <button className="btn-secondary" onClick={onStart} disabled={busy} aria-busy={busy || undefined}>
           {busy ? t('detail.showcaseRunning') : t(exists ? 'detail.showcaseUpdate' : 'detail.showcaseCreate')}
         </button>
         {exists && (

@@ -19,8 +19,8 @@ import {
 } from './mcpForm';
 import { askConfirm } from '../lib/dialogStore';
 
-// Configurações › MCPs: os da conta (cofre do Club e ~/.claude.json) e os do projeto escolhido (.mcp.json e
-// locais). Cadastra e edita também os que nasceram fora do Club. Valores de env/cabeçalho só vão para o servidor.
+// Configurações › MCPs, como as skills: Global (~/.claude.json, vale também no Claude Code fora do Club) e Projeto (.mcp.json do projeto
+// escolhido; o escopo local aparece aqui, marcado como fora do git). Cadastra e edita também os que nasceram fora do Club. Valores de env/cabeçalho só vão para o servidor.
 
 type TestResult = { ok: boolean; tools: string[]; error?: string } | 'running';
 const refOf = (s: McpServer): McpRef => ({ scope: s.scope, ...(s.projectId && { projectId: s.projectId }), name: s.name });
@@ -119,6 +119,13 @@ export function McpServers({ projects }: { projects: Project[] }) {
                   <li key={s.name}>
                     <div className="mcp-line">
                       <span className="badge">{t(`mcp.type.${s.type}`)}</span> <b>{s.name}</b>{' '}
+                      {s.outOfGit && (
+                        <>
+                          <span className="badge" title={t('mcp.outOfGitHint')}>
+                            {t('mcp.outOfGit')}
+                          </span>{' '}
+                        </>
+                      )}
                       <span className="muted small mono mcp-target">{targetLabel(s)}</span>
                     </div>
                     {s.env.length + s.headers.length > 0 && (

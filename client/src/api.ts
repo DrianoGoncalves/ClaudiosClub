@@ -856,6 +856,8 @@ export const api = {
   /** Commit automático do projeto (a chave `autoCommit` do mesmo `.myco/board.json`): um commit local por tarefa pronta, nunca push. Servidor sem a rota = 404. */
   boardCommit: (projectId: string) => get<BoardCommitConfig>(`/api/projects/${projectId}/board-commit`),
   saveBoardCommit: (projectId: string, config: BoardCommitConfig) => post<BoardCommitConfig>(`/api/projects/${projectId}/board-commit`, config),
+  /** Um escritor por vez no checkout principal (a chave `singleWriter` do mesmo `.myco/board.json`). Só leitura aqui. Servidor sem a rota = 404. */
+  boardWriter: (projectId: string) => get<{ singleWriter: boolean }>(`/api/projects/${projectId}/board-writer`),
   /** Criar. A resposta é a tarefa gravada, com `warnings` quando há possível duplicata (só aviso: a tarefa foi criada). */
   createTask: (
     projectId: string,

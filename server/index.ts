@@ -5,6 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { clientChanged, DAILY, TSX, VITE } from '../scripts/lib';
 import { openTerminal } from './terminal';
+import { bodyText } from './bodyText';
 import { CodexAdapter, CodexError, defaultRunner } from './adapters/codex';
 import { CodexEnv, withAppAddress, type CodexEnvStatus } from './codexEnv';
 import { CodexCapability } from './engineCapability';
@@ -1672,6 +1673,14 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     new RegExp(`^/api/projects/${ID}/board-commit$`),
     ({ params: [id], body, fromBrowser }) => tasks.setBoardCommit(id!, body, fromBrowser),
   ],
+  // Um escritor por vez no checkout principal: `{ singleWriter }` (ver server/boardConfig.ts e TaskService.writeSlot). Como o commit automático: ler é livre, gravar só pela tela (o serviço
+  // responde 403 a quem não é a tela) e o funcionário nem tem este POST na lista de apiPolicy.ts.
+  ['GET', new RegExp(`^/api/projects/${ID}/board-writer$`), ({ params: [id] }) => tasks.boardWriter(id!)],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/board-writer$`),
+    ({ params: [id], body, fromBrowser }) => tasks.setBoardWriter(id!, body, fromBrowser),
+  ],
   // Pausar o projeto (ver server/projectPause.ts): pausado, nada de execução começa sozinho (fila, ajuste da reprovação, rotinas, despertador, "continue", retomada, troca de motor; a revisão da entrega já feita roda); o que já roda termina
   // o turno, e as suas ações manuais seguem. Ler é livre (`{ paused: { at } | null }`). Pausar e retomar só pelo navegador pareado: o serviço responde 403 a quem não é a tela (o gate já
   // barra o POST do funcionário antes, como nas outras rotas só da tela), e as rotas nem estão na lista de apiPolicy.ts. Idempotentes: pausar de novo mantém o horário, retomar o que roda é um nada.
@@ -2913,7 +2922,7 @@ async function readJson(req: http.IncomingMessage): Promise<unknown> {
     if (size > MAX_BODY) throw new BadRequest('corpo grande demais');
     chunks.push(chunk as Buffer);
   }
-  const text = Buffer.concat(chunks).toString('utf8');
+  const text = bodyText(Buffer.concat(chunks));
   if (!text) return {};
   try {
     return JSON.parse(text);

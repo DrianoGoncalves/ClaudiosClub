@@ -196,6 +196,12 @@ export default defineMessages({
     'staff.worktreeLabel': 'Trabalhar numa worktree própria',
     'staff.worktreeHintA': '(cópia git separada, no branch ',
     'staff.worktreeHintB': ': dois funcionários escrevendo ao mesmo tempo não se atropelam; o projeto precisa ser um repositório git)',
+    'staff.worktreeWaitOwn': 'Com worktree própria, trabalha em paralelo numa cópia só dele, sem esperar ninguém.',
+    'staff.worktreeWaitQueue':
+      'Sem worktree, edita direto no projeto e espera: só começa a editar quando o card de outro funcionário que está editando terminar (opção "um escritor por vez" ligada no projeto).',
+    'staff.worktreeWaitShared':
+      'Sem worktree, edita direto no projeto, junto com os outros. A opção "um escritor por vez" está desligada no projeto; ligada, ele esperaria a edição do outro terminar.',
+    'staff.worktreeWaitDirect': 'Sem worktree, edita direto no projeto e pode ter de esperar a edição de outro funcionário terminar (opção "um escritor por vez" do projeto).',
     'staff.editNote': 'Mudanças aqui (e nos MCPs) valem a partir da próxima sessão.',
     'staff.autonomy': 'Autonomia',
     'staff.modelLabel': 'Modelo',
@@ -723,6 +729,12 @@ export default defineMessages({
     'staff.worktreeLabel': 'Work in its own worktree',
     'staff.worktreeHintA': '(separate git copy, on branch ',
     'staff.worktreeHintB': ': two employees writing at the same time will not clash; the project must be a git repository)',
+    'staff.worktreeWaitOwn': 'With its own worktree, it works in parallel on a copy of its own, without waiting for anyone.',
+    'staff.worktreeWaitQueue':
+      'Without a worktree, it edits the project directly and waits: it only starts editing when another employee\'s card that is editing finishes (the project\'s "one writer at a time" option is on).',
+    'staff.worktreeWaitShared':
+      'Without a worktree, it edits the project directly, alongside the others. The project\'s "one writer at a time" option is off; if on, it would wait for the other\'s edit to finish.',
+    'staff.worktreeWaitDirect': 'Without a worktree, it edits the project directly and may have to wait for another employee\'s edit to finish (the project\'s "one writer at a time" option).',
     'staff.editNote': 'Changes here (and in MCPs) apply from the next session.',
     'staff.autonomy': 'Autonomy',
     'staff.modelLabel': 'Model',
@@ -1245,6 +1257,12 @@ export default defineMessages({
     'staff.worktreeLabel': 'Trabajar en un worktree propio',
     'staff.worktreeHintA': '(copia git separada, en la rama ',
     'staff.worktreeHintB': ': dos empleados escribiendo a la vez no se pisan; el proyecto debe ser un repositorio git)',
+    'staff.worktreeWaitOwn': 'Con worktree propio, trabaja en paralelo en una copia solo suya, sin esperar a nadie.',
+    'staff.worktreeWaitQueue':
+      'Sin worktree, edita directamente en el proyecto y espera: solo empieza a editar cuando termine la tarjeta de otro empleado que está editando (opción "un escritor a la vez" activada en el proyecto).',
+    'staff.worktreeWaitShared':
+      'Sin worktree, edita directamente en el proyecto, junto con los demás. La opción "un escritor a la vez" está desactivada en el proyecto; activada, esperaría a que termine la edición del otro.',
+    'staff.worktreeWaitDirect': 'Sin worktree, edita directamente en el proyecto y puede tener que esperar a que termine la edición de otro empleado (opción "un escritor a la vez" del proyecto).',
     'staff.editNote': 'Los cambios aquí (y en los MCPs) valen desde la próxima sesión.',
     'staff.autonomy': 'Autonomía',
     'staff.modelLabel': 'Modelo',

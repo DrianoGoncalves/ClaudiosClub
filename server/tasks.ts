@@ -2,10 +2,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type CancelRequest, type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, type TaskPlanWait, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
+import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type BoardWriterConfig, type CancelRequest,type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, type TaskPlanWait, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
 import { kanbanProgress } from '../shared/kanbanProgress';
 import { commitTaskFiles, leftText, type SharedHold } from './autoCommit';
-import { BoardCommitInput, BoardConfigInput, DEFAULT_BOARD_CONFIG, readBoardCommit, readBoardConfig, writeBoardCommit, writeBoardConfig } from './boardConfig';
+import { BoardCommitInput, BoardConfigInput, BoardWriterInput, DEFAULT_BOARD_CONFIG, readBoardCommit, readBoardConfig, readBoardWriter, writeBoardCommit, writeBoardConfig, writeBoardWriter } from './boardConfig';
 import { pathKey, readOwnerWrites } from './ownerEdits';
 import { codePath, type CodeEdit } from './chat/codeEdits';
 import { findSecret } from './chat/secrets';
@@ -673,6 +673,12 @@ export class TaskService {
   /** Commits automáticos em andamento (ver `commitSoon`) e a fila de cada projeto (ver `autoCommit`): um commit por vez por projeto. */
   private readonly commitRuns = new Set<Promise<void>>();
   private readonly commitQueues = new Map<string, Promise<unknown>>();
+  /** Os commits automáticos que ainda não terminaram (`projeto:tarefa`, de `commitSoon` até o fim da tentativa): o card pronto segura a vaga de escrita até o commit dele sair (ver `writeHolder`). */
+  private readonly committing = new Set<string>();
+  /** A vez de cada projeto na vaga de escrita (ver `takeSlot`): conferir a vaga e abrir a conversa é uma coisa só, uma por vez. Só em memória: o que vale (quem ocupa) sai de `tasks.json`. */
+  private readonly slotQueues = new Map<string, Promise<unknown>>();
+  /** Quem está abrindo a conversa agora com a vaga na mão (`projeto` → tarefa), para a aprovação do plano, que não passa pela fila acima, não furar a partida em andamento. */
+  private readonly slotStarting = new Map<string, string>();
   /** Avisos de arquivo em comum em andamento (ver `noteOverlaps`): fora da fila de edições, para a edição e o fim do turno não esperarem por eles. */
   private readonly overlapRuns = new Set<Promise<void>>();
 
@@ -2044,6 +2050,9 @@ export class TaskService {
       if (!byOwner && (await this.paused(projectId))) return this.change(projectId, taskId, (t) => enqueue(t, `na fila de ${profile.name}: o projeto está pausado, começa quando for retomado`));
       const busyWith = occupant(fresh, staffId, taskId);
       if (!busyWith && !this.staffBusy(projectId, fresh, staffId)) {
+        // A vaga de escrita (ver `takeSlot`): ocupada, a tarefa entra na fila com o motivo, sem erro; o seu "Começar" (`byOwner`) passa por cima, como pela pausa.
+        const slot = byOwner ? { release: () => {} } : await this.takeSlot(projectId, now ?? task, profile);
+        if ('holder' in slot) return this.change(projectId, taskId, (t) => slotWait(enqueue(t), slot.holder));
         try {
           return await this.startNow(projectId, taskId, profile, force, undefined, { trigger: opts.trigger ?? 'manual', skills: opts.skills }, timer);
         } catch (err) {
@@ -2055,6 +2064,8 @@ export class TaskService {
               ? `não começou: o Claudio’s Club está reiniciando; na fila de ${profile.name}, começa quando o servidor voltar`
               : `não começou: ${err.message}; na fila de ${profile.name}, começa quando o consumo baixar`;
           return this.change(projectId, taskId, (t) => enqueue(t, why));
+        } finally {
+          slot.release();
         }
       }
       const note = busyWith ? `na fila de ${profile.name}, depois de “${busyWith.title}”` : `na fila de ${profile.name} (ele está numa conversa)`;
@@ -3286,6 +3297,16 @@ export class TaskService {
   }
 
   private async takeNext(projectId: string, staffId: string): Promise<void> {
+    // A vaga de escrita que o ajuste guardado pegou (ver `takeSlot`) nunca fica presa, mesmo se algo lançar.
+    const claim: { release?: () => void } = {};
+    try {
+      await this.takeNextFrom(projectId, staffId, claim);
+    } finally {
+      claim.release?.();
+    }
+  }
+
+  private async takeNextFrom(projectId: string, staffId: string, claim: { release?: () => void }): Promise<void> {
     // Projeto pausado: nada começa sozinho nele, nem a fila nem o ajuste que veio de funcionário (`HeldMessage.auto`). O seu ajuste, escrito por você, segue.
     // Só este projeto: a fila do mesmo funcionário em outro projeto não passa por aqui.
     const paused = await this.paused(projectId);
@@ -3296,9 +3317,26 @@ export class TaskService {
     // Só o ajuste que pode ir agora: o que já falhou espera a hora da próxima tentativa, e o que falhou HELD_MAX_FAILS vezes espera você (ver `stuckState`).
     const at = Date.now();
     const sendable = (t: Task) => (t.held ?? []).filter((m) => (m.attempts ?? 0) < HELD_MAX_FAILS && (!m.nextAt || Date.parse(m.nextAt) <= at) && !(paused && m.auto));
-    const adjust = tasks
+    const adjusts = tasks
       .filter((t) => t.staffId === staffId && t.sessionId && t.status !== 'cancelled' && (!occ || t.id === occ.id) && sendable(t).length)
-      .sort((a, b) => sendable(a)[0]!.at.localeCompare(sendable(b)[0]!.at))[0];
+      .sort((a, b) => sendable(a)[0]!.at.localeCompare(sendable(b)[0]!.at));
+    // Mandar o ajuste a um card em "a fazer" ou Aguardar o leva a fazendo (mais abaixo): quem não segura a vaga de escrita passa por ela (ver `takeSlot`). Com a vaga ocupada o ajuste dele espera
+    // (o motivo fica em `Task.resourceWait`) e o seguinte vai.
+    let adjust: Task | undefined;
+    for (const c of adjusts) {
+      if (c.status !== 'todo' && c.status !== 'waiting') {
+        adjust = c;
+        break;
+      }
+      const got = await this.takeSlot(projectId, c, await this.deps.readProfile(projectId, staffId).catch(() => null));
+      if ('holder' in got) {
+        await this.holdForSlot(projectId, c.id, got.holder);
+        continue;
+      }
+      claim.release = got.release;
+      adjust = c;
+      break;
+    }
     if ((occ && !adjust) || this.staffBusy(projectId, tasks, staffId, adjust?.sessionId ?? undefined)) return;
     if (adjust && this.deps.sendTo) {
       const sid = adjust.sessionId!;
@@ -3346,6 +3384,8 @@ export class TaskService {
         return;
       }
     }
+    // O ajuste que não foi (ou sem envio) já não precisa da vaga: a fila abaixo pede a dela.
+    claim.release?.();
     // A que ocupa segue rodando: o ajuste que não foi (ou sem envio) não libera a fila dele.
     if (occ || paused) return;
     // A fila dele na ordem de `queueCmp` (a posição de quem reordenou, depois a de entrada, `queuedAt`; empate: a ordem do quadro). Bloqueada pula (a checagem
@@ -3361,9 +3401,24 @@ export class TaskService {
     for (const next of ready) {
       // A anterior pode ter aberto a conversa mesmo falhando (erro depois do envio): não abre outra por cima.
       if (next !== ready[0] && this.staffBusy(projectId, tasks, staffId)) return;
+      // A vaga de escrita (ver `takeSlot`) vem antes do gate de recursos e da conversa: ocupada, a tarefa fica na fila com o motivo e a próxima da fila segue (como a bloqueada), sem erro e sem consumo.
+      const slot = await this.takeSlot(projectId, next, profile);
+      if ('holder' in slot) {
+        await this.holdForSlot(projectId, next.id, slot.holder);
+        continue;
+      }
       // Só a partida automática passa pelo gate: começar à mão (start) ignora. Segurada, a tarefa fica na fila com o motivo. O gate vale para toda a fila: para aqui.
-      const gate = await this.deps.resourceGate?.();
-      if (gate && !gate.ok) return this.holdForResources(projectId, next.id, gate.reason);
+      let gate: Reservation | undefined;
+      try {
+        gate = await this.deps.resourceGate?.();
+      } catch (err) {
+        slot.release();
+        throw err;
+      }
+      if (gate && !gate.ok) {
+        slot.release();
+        return this.holdForResources(projectId, next.id, gate.reason);
+      }
       try {
         // Passou: a espera acabou (sai já, para não ficar "aguardando" se o limite de consumo barrar a partida logo depois).
         if (next.resourceWait) await this.change(projectId, next.id, (t) => ({ ...t, resourceWait: null }));
@@ -3387,6 +3442,7 @@ export class TaskService {
         lastWhy = why;
       } finally {
         gate?.release();
+        slot.release();
       }
     }
   }
@@ -4009,15 +4065,126 @@ export class TaskService {
     return input;
   }
 
+  /** Um escritor por vez no checkout principal deste projeto (ver boardConfig.ts e `takeSlot`); null se o projeto não existe. */
+  async boardWriter(projectId: string): Promise<BoardWriterConfig | null> {
+    const dir = await this.deps.projectPath(projectId);
+    return dir ? readBoardWriter(dir) : null;
+  }
+
+  /**
+   * Liga ou desliga a vaga de escrita: `{ singleWriter }`. Só a tela chama (`fromBrowser`): o 403 vem antes de qualquer leitura, como no commit automático. Vale para as partidas daqui para a frente;
+   * quem já está fazendo continua (e segura a vaga). TaskError (400) se o corpo é inválido. Não mexe nas outras chaves do `board.json`.
+   */
+  async setBoardWriter(projectId: string, body: unknown, fromBrowser: boolean): Promise<BoardWriterConfig | null> {
+    if (!fromBrowser) throw new TaskForbiddenError('a vaga de escrita só é ligada ou desligada pelo Claudio’s Club');
+    const dir = await this.deps.projectPath(projectId);
+    if (!dir) return null;
+    const input = parseOr(BoardWriterInput, body);
+    await writeBoardWriter(dir, input);
+    // Desligada, quem esperava por ela já pode começar.
+    if (!input.singleWriter) void this.wakeSlotWaiters(projectId).catch(() => {});
+    return input;
+  }
+
+  /** Os ids dos cards deste projeto com o commit automático ainda por terminar (ver `commitSoon`). */
+  private committingIds(projectId: string): Set<string> {
+    const prefix = `${projectId}:`;
+    return new Set([...this.committing].filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length)));
+  }
+
+  /** Quem, entre os donos dos cards `tasks`, trabalha numa cópia só sua (worktree própria): a escrita dele não conta na vaga do checkout principal. */
+  private async ownCopyStaff(projectId: string, tasks: Task[], committing: ReadonlySet<string>): Promise<Set<string>> {
+    const out = new Set<string>();
+    for (const id of new Set(tasks.filter((t) => t.staffId && (!isClosed(t) || committing.has(t.id))).map((t) => t.staffId!))) if ((await this.deps.readProfile(projectId, id).catch(() => null))?.worktree) out.add(id);
+    return out;
+  }
+
+  /** A leitura da vaga para quem decide fora da fila dela (a aprovação do plano, ver `decidePlan`): null com a opção desligada ou sem precisar dela (worktree própria, card automático). */
+  private async slotView(projectId: string, task: Task): Promise<{ ownCopy: Set<string>; committing: Set<string> } | null> {
+    if (!task.staffId || task.autoCreated) return null;
+    const dir = await this.deps.projectPath(projectId);
+    if (!dir || !(await readBoardWriter(dir)).singleWriter) return null;
+    const profile = await this.deps.readProfile(projectId, task.staffId).catch(() => null);
+    if (!profile || profile.worktree) return null;
+    const committing = this.committingIds(projectId);
+    return { committing, ownCopy: await this.ownCopyStaff(projectId, await readTasks(dir), committing) };
+  }
+
+  /**
+   * A vaga de escrita (ver `BoardWriterConfig`): `task` vai começar a implementar no checkout principal agora (partida, retomada da fila, ajuste guardado, plano aprovado)? Com a opção ligada, só um card
+   * por vez fica com a vaga, e quem chegar com ela ocupada espera na fila. Devolve `{ holder }` (o card que a ocupa: a tarefa não começa) ou `{ release }` (pode começar: chame `release` quando a
+   * conversa abriu e o status gravou, ou quando desistiu; sempre, num `finally`). Sem a opção, ou quando a tarefa não precisa dela (worktree própria, card automático, só planejando), passa direto e o
+   * `release` não faz nada. Conferir e abrir a conversa é uma coisa só por projeto (`slotQueues`): duas partidas de funcionários diferentes não passam juntas. O dono da vaga vem do estado gravado
+   * (`holdsWrite`), então o reinício não perde quem ocupa.
+   */
+  private async takeSlot(projectId: string, task: Task, profile: StaffProfile | null): Promise<{ holder: Task } | { release: () => void }> {
+    const none = { release: () => {} };
+    if (!profile || profile.worktree || task.autoCreated || startsPlanning(task, profile)) return none;
+    const dir = await this.deps.projectPath(projectId);
+    if (!dir || !(await readBoardWriter(dir)).singleWriter) return none;
+    let free!: () => void;
+    const mine = new Promise<void>((resolve) => (free = resolve));
+    const prev = this.slotQueues.get(projectId) ?? Promise.resolve();
+    this.slotQueues.set(projectId, prev.then(() => mine));
+    await prev;
+    const release = () => {
+      if (this.slotStarting.get(projectId) === task.id) this.slotStarting.delete(projectId);
+      free();
+    };
+    try {
+      // `readTasks` devolve lista vazia quando a leitura falha (no Windows, o arquivo trocado naquele instante): "sem ninguém" seria falso e deixaria dois escritores passarem. O próprio card tem de
+      // estar no que se leu; senão lê de novo, e sem achar a partida não segue (o card fica onde está, e a fila tenta no próximo tick).
+      let fresh = await readTasks(dir);
+      for (let i = 1; i <= 3 && !fresh.some((t) => t.id === task.id); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 25 * i));
+        fresh = await readTasks(dir);
+      }
+      const committing = this.committingIds(projectId);
+      const self = fresh.find((t) => t.id === task.id);
+      if (!self) throw new TaskError('não consegui conferir a vaga de escrita: o quadro não foi lido agora');
+      const ownCopy = await this.ownCopyStaff(projectId, fresh, committing);
+      // Quem já segura a vaga (voltou à fila, ajuste guardado, o dono que a tinha antes de a opção ligar) não espera por ninguém: não entra mais um escritor.
+      const holder = holdsWrite(self, fresh, ownCopy, committing) ? undefined : writeHolder(fresh, ownCopy, committing, task.id);
+      if (holder) {
+        release();
+        return { holder };
+      }
+      this.slotStarting.set(projectId, task.id);
+      return { release };
+    } catch (err) {
+      release();
+      throw err;
+    }
+  }
+
+  /** A tarefa na fila espera a vaga de escrita de `holder`: o motivo fica em `Task.resourceWait`, que a fila (`queueStates`) e a tela já leem. Sem erro, sem consumo: ela só fica onde está. */
+  private async holdForSlot(projectId: string, taskId: string, holder: Task): Promise<void> {
+    await this.change(projectId, taskId, (t) => (t.status === 'todo' || t.status === 'waiting' ? slotWait(t, holder) : t));
+  }
+
+  /** A vaga de escrita ficou livre (ou a opção foi desligada): acorda o dono de cada tarefa que esperava por ela (`resourceWait.holder`). Só fora de `locked`, como `wakeDependents`; o kick segue sem await. */
+  private async wakeSlotWaiters(projectId: string): Promise<void> {
+    const dir = await this.deps.projectPath(projectId);
+    if (!dir) return;
+    for (const s of new Set((await readTasks(dir)).filter((t) => t.resourceWait?.holder && t.staffId && !isClosed(t)).map((t) => t.staffId!))) void this.kick(projectId, s);
+  }
+
   /** Os commits automáticos que ainda estão rodando; resolve quando não há mais nenhum (os testes e o desligamento esperam por isto). */
   async commitsSettled(): Promise<void> {
     while (this.commitRuns.size) await Promise.all([...this.commitRuns]);
   }
 
   private commitSoon(projectId: string, taskId: string): void {
+    // O card pronto segura a vaga de escrita até a tentativa de commit terminar (ver `writeHolder`); depois, quem esperava por ela é acordado.
+    const key = `${projectId}:${taskId}`;
+    this.committing.add(key);
     const run: Promise<void> = this.autoCommit(projectId, taskId)
       .catch(() => {}) // registro, não trava: nada aqui derruba quem deixou a tarefa pronta
-      .finally(() => this.commitRuns.delete(run));
+      .finally(() => {
+        this.commitRuns.delete(run);
+        this.committing.delete(key);
+        void this.wakeSlotWaiters(projectId).catch(() => {});
+      });
     this.commitRuns.add(run);
   }
 
@@ -5039,24 +5206,37 @@ export class TaskService {
     const who = fromBrowser ? 'o usuário' : ((await this.deps.readProfile(projectId, me!).catch(() => null))?.name ?? me!);
     const approve = input.decision === 'approve';
     const since = first.planWait!.since;
+    const textOf = (title: string): string =>
+      approve
+        ? [`[Tarefa "${title}"]`, `O plano foi aprovado por ${who}. Implemente-o agora, neste mesmo card: não peça outra aprovação. Os arquivos, os testes e a entrega seguem como sempre.`, input.note && `Observação de quem aprovou: ${input.note}`].filter(Boolean).join('\n\n')
+        : [`[Tarefa "${title}"]`, `O plano foi recusado por ${who}. Motivo: ${input.reason}`, 'Ajuste o plano e termine o turno com ele, ainda sem editar arquivos: quem pediu decide de novo.'].join('\n\n');
+    // Aprovado, o card vai implementar: é aqui que ele precisa da vaga de escrita (o plano, não). Ocupada, ele volta à fila com o motivo e a aprovação guardada, e implementa quando a vaga ficar livre (ver `takeSlot`).
+    const slot = approve ? await this.slotView(projectId, first) : null;
     const out = await this.lockedWithDeadline(
       projectId,
       first.staffId,
       (gate) =>
-        this.changeGated(gate, projectId, taskId, (t) => {
+        this.changeGated(gate, projectId, taskId, (t, all) => {
           // Na vez dele, de novo: decidido por outro caminho, cancelado ou devolvido por mensagem enquanto esperava.
           if (!waitsPlan(t) || t.planWait!.since !== since) throw new TaskConflictError('o plano já foi decidido ou o card mudou: leia de novo');
-          return approve
-            ? moved({ ...t, plan: t.planWait!.text, planWait: undefined }, 'doing', 'auto', `plano aprovado por ${who}`)
-            : moved({ ...t, planWait: undefined }, 'doing', 'auto', `plano recusado por ${who}: ${untrustedLine(input.reason, 200)}`);
+          if (!approve) return moved({ ...t, planWait: undefined }, 'doing', 'auto', `plano recusado por ${who}: ${untrustedLine(input.reason, 200)}`);
+          // Conferida dentro da mudança (atômica no arquivo), e a partida que está abrindo a conversa agora (`slotStarting`) também conta como dona.
+          const starting = this.slotStarting.get(projectId);
+          const holder = slot && (writeHolder(all, slot.ownCopy, slot.committing, t.id) ?? (starting && starting !== t.id ? all.find((x) => x.id === starting) : undefined));
+          if (!holder) return moved({ ...t, plan: t.planWait!.text, planWait: undefined }, 'doing', 'auto', `plano aprovado por ${who}`);
+          const at = new Date().toISOString();
+          const reason = slotReason(holder);
+          const held: HeldMessage = { id: randomBytes(4).toString('hex'), at, text: textOf(t.title), reason, auto: true };
+          const queued = moved({ ...t, plan: t.planWait!.text, planWait: undefined, queuedAt: at, queuedForce: false, unqueued: undefined, held: [...(t.held ?? []), held] }, 'todo', 'auto', `plano aprovado por ${who}; ${reason}: o card espera na fila e implementa quando a vaga ficar livre`);
+          return { ...queued, resourceWait: { reason, since: at, holder: holder.id } };
         }),
       { op: `plano ${taskId}`, refused: 'a decisão do plano NÃO foi gravada', deadlineMs: this.lockDeadline() },
     );
     if (!out) return null;
-    const text = approve
-      ? [`[Tarefa "${out.title}"]`, `O plano foi aprovado por ${who}. Implemente-o agora, neste mesmo card: não peça outra aprovação. Os arquivos, os testes e a entrega seguem como sempre.`, input.note && `Observação de quem aprovou: ${input.note}`].filter(Boolean).join('\n\n')
-      : [`[Tarefa "${out.title}"]`, `O plano foi recusado por ${who}. Motivo: ${input.reason}`, 'Ajuste o plano e termine o turno com ele, ainda sem editar arquivos: quem pediu decide de novo.'].join('\n\n');
-    if (out.sessionId) await this.giveWorker(projectId, out, out.sessionId, text, approve ? 'a aprovação do plano' : 'a recusa do plano');
+    // Na fila esperando a vaga: a aprovação já está guardada no card (`held`) e o `takeNext` a manda quando ela abrir. O funcionário ficou livre (o card saiu de "planejando"): a fila dele anda.
+    if (out.status === 'todo') {
+      if (out.staffId) void this.kick(projectId, out.staffId);
+    } else if (out.sessionId) await this.giveWorker(projectId, out, out.sessionId, textOf(out.title), approve ? 'a aprovação do plano' : 'a recusa do plano');
     return (await this.fresh(projectId, taskId)) ?? out;
   }
 
@@ -5494,6 +5674,7 @@ export class TaskService {
     const file = tasksFile(dir);
     const prev = this.queues.get(file) ?? Promise.resolve();
     const finished: string[] = [];
+    let freed = false;
     const run = prev.then(async () => {
       const before = await readTasks(dir);
       const next = clearStaleRanks(clearBlockAlerts(fn(before)));
@@ -5501,11 +5682,21 @@ export class TaskService {
       // Toda tarefa que ficou pronta por qualquer caminho (a tela, a aprovação da revisão, a mescla) passa por aqui: é o ponto do commit automático (ver `autoCommit`).
       const was = new Map(before.map((t) => [t.id, t.status]));
       for (const t of next) if (t.status === 'done' && was.has(t.id) && was.get(t.id) !== 'done') finished.push(t.id);
+      // Um card que segurava a vaga de escrita saiu dela (pronto, cancelado, de volta à fila, "sem código"): quem esperava por ela é acordado (ver `wakeSlotWaiters`).
+      const now = new Map(next.map((t) => [t.id, t]));
+      if (next.some((t) => t.resourceWait?.holder))
+        for (const b of before) {
+          if (!WRITES.includes(b.status)) continue;
+          const a = now.get(b.id);
+          if (!a || !WRITES.includes(a.status) || (!b.noCode && a.noCode)) freed = true;
+        }
     });
     this.queues.set(file, run.catch(() => {}));
     await run;
     // Depois de gravada, e fora da fila da gravação: o commit (e os hooks dele) pode levar minutos e nada espera por ele.
     for (const id of finished) this.commitSoon(projectId, id);
+    // Depois do `commitSoon`: o card pronto já segura a vaga até o commit dele terminar.
+    if (freed) void this.wakeSlotWaiters(projectId).catch(() => {});
     return true;
   }
 
@@ -6084,6 +6275,51 @@ function clearStaleRanks(tasks: Task[]): Task[] {
 /** A tarefa que ocupa o funcionário (planejando ou fazendo, com conversa aberta), fora `except`. O card automático não ocupa: é só o registro de uma conversa direta. A parada (`parked`) também não. */
 function occupant(tasks: Task[], staffId: string, except?: string): Task | undefined {
   return tasks.find((t) => t.staffId === staffId && t.id !== except && t.sessionId && !t.autoCreated && OCCUPIED.includes(t.status) && !parked(t, tasks));
+}
+
+/** Os status em que o card segura a vaga de escrita do projeto (ver `writeHolder`): revisão e Aguardar continuam com ela, porque o código dele ainda está solto no checkout. */
+const WRITES: TaskStatus[] = ['doing', 'review', 'waiting'];
+
+/** Como o card aparece no motivo da espera pela vaga. */
+const SLOT_STATUS: Partial<Record<TaskStatus, string>> = { doing: 'fazendo', review: 'em revisão', waiting: 'em Aguardar', done: 'pronto, o commit automático ainda roda' };
+
+/**
+ * O card só planeja, não edita: a ficha "só planeja" (`planning`), ou plano primeiro (ver `wantsPlan`) sem plano aprovado nem edição. Não ocupa a vaga de escrita. Em revisão nunca vale: o que foi
+ * editado por shell não entra em `changedFiles`, e quem chegou à revisão já entregou código.
+ */
+const planPhase = (t: Task): boolean => t.status !== 'review' && (t.status === 'planning' || (!t.plan && !t.changedFiles?.length && wantsPlan(t)));
+
+/** A tarefa que vai começar (ou voltar a trabalhar) com esta ficha só planeja agora? Então não precisa da vaga de escrita. */
+const startsPlanning = (t: Task, profile: Pick<StaffProfile, 'autonomy'>): boolean => !t.plan && !t.changedFiles?.length && (profile.autonomy === 'plan' || wantsPlan(t));
+
+/** Desde quando o card está no status de agora (o `at` da última entrada dele no histórico). */
+const holdingSince = (t: Task): string => [...t.history].reverse().find((h) => h.status === t.status)?.at ?? t.updatedAt;
+
+/**
+ * Este card segura a vaga de escrita do checkout principal? Sim: o card com conversa, que não é automático nem de quem tem worktree própria (`ownCopy`: a cópia é outra), em fazendo, revisão ou
+ * Aguardar, que não está parado sem prender ninguém (`parked`: dúvida escalada sem edição, subtarefas, "sem código") nem só planejando (`planPhase`); e o card pronto cujo commit automático ainda
+ * não terminou (`committing`): o commit leva o que ele alterou, e o próximo card não começa a editar por cima antes.
+ */
+function holdsWrite(t: Task, tasks: Task[], ownCopy: ReadonlySet<string>, committing: ReadonlySet<string>): boolean {
+  if (!t.staffId || ownCopy.has(t.staffId) || t.autoCreated) return false;
+  if (t.status === 'done') return committing.has(t.id);
+  return !!t.sessionId && WRITES.includes(t.status) && !parked(t, tasks) && !planPhase(t);
+}
+
+/** O card que ocupa a vaga de escrita (ver `holdsWrite`), o que ocupa há mais tempo, fora `except`; undefined = livre. */
+function writeHolder(tasks: Task[], ownCopy: ReadonlySet<string>, committing: ReadonlySet<string>, except?: string): Task | undefined {
+  return tasks.filter((t) => t.id !== except && holdsWrite(t, tasks, ownCopy, committing)).sort((a, b) => holdingSince(a).localeCompare(holdingSince(b)))[0];
+}
+
+/** O motivo da espera pela vaga de escrita: quem a ocupa. É o dado que a fila e a tela leem (`Task.resourceWait`). */
+const slotReason = (holder: Task): string => `a vaga de escrita deste projeto está com “${titleOf(holder)}” (${holder.id}, ${SLOT_STATUS[holder.status] ?? holder.status})`;
+
+/** A tarefa passa a esperar a vaga de `holder`: o motivo e desde quando, sem nota nova enquanto continua esperando (só a primeira vez, como `holdForResources`). */
+function slotWait(t: Task, holder: Task): Task {
+  const reason = slotReason(holder);
+  if (t.resourceWait?.reason === reason && t.resourceWait.holder === holder.id) return t;
+  const next: Task = { ...t, resourceWait: { reason, since: t.resourceWait?.since ?? new Date().toISOString(), holder: holder.id } };
+  return t.resourceWait ? next : noted(next, `aguardando a vaga de escrita: ${reason}`);
 }
 
 /** `Task.pause` na listagem: o que a dúvida escalada a você faz com a fila do funcionário (ver `TaskPause`). Sem dúvida escalada, a tarefa sai como estava. */

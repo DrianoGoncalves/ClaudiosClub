@@ -55,7 +55,7 @@ export function TeamTemplatePicker({ value, onChange, allowNone }: { value: stri
             type="button"
             role="radio"
             aria-checked={value === o.id}
-            className={value === o.id ? 'btn-primary' : 'btn-secondary'}
+            className={value === o.id ? 'btn-secondary is-on' : 'btn-secondary'}
             onClick={() => onChange(o.id)}
           >
             {o.label}
@@ -104,7 +104,7 @@ export function TeamTemplateApply({ projectId, onApplied }: { projectId: string;
       <p className="muted small">{t('tpl.emptyHint')}</p>
       <TeamTemplatePicker value={picked} onChange={setPicked} allowNone={false} />
       <p className="actions">
-        <button type="button" className="btn-primary" disabled={!picked || busy} onClick={() => void apply()}>
+        <button type="button" className="btn-secondary" disabled={!picked || busy} onClick={() => void apply()}>
           {busy ? t('tpl.applying') : t('tpl.apply')}
         </button>
       </p>

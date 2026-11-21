@@ -4,7 +4,7 @@ Mostra no Chrome o que espera você e cria tarefas com responsável, mesmo com a
 
 ## O que faz
 
-- **Avisos**: de minuto em minuto, a extensão lê a caixa "precisa de mim" e mostra uma notificação do Chrome para cada item novo, com os mesmos tipos de aviso que a aba do Club mostra (plano para aprovar, permissão, segredo no chat, espera de resposta, erro, rotina que não rodou, consumo perto do limite, tarefa esquecida, bloqueada, parada ou com dúvida esperando você). Um mesmo aviso não aparece duas vezes. Nos avisos de segredo, a extensão não recebe o selo (real ou falso positivo) nem a dica do valor: eles só aparecem na tela do Claudio’s Club. O número no ícone é quantos itens estão na caixa.
+- **Avisos**: de minuto em minuto, a extensão lê a caixa "Inbox" e mostra uma notificação do Chrome para cada item novo, com os mesmos tipos de aviso que a aba do Club mostra (plano para aprovar, permissão, segredo no chat, espera de resposta, erro, rotina que não rodou, consumo perto do limite, tarefa esquecida, bloqueada, parada ou com dúvida esperando você). Um mesmo aviso não aparece duas vezes. Nos avisos de segredo, a extensão não recebe o selo (real ou falso positivo) nem a dica do valor: eles só aparecem na tela do Claudio’s Club. O número no ícone é quantos itens estão na caixa.
 - **Clicar no aviso** abre o Club numa aba nova, na tela de quem espera. Avisos de tarefa (dúvida, parada, bloqueada, esquecida em A fazer) abrem o quadro de tarefas do projeto já no cartão da tarefa (se o aviso não traz o id da tarefa, abrem só o quadro); aviso de consumo abre as Configurações.
 - **Tarefa rápida**: clique no ícone da extensão, escolha o **Projeto** e o **Responsável** (as fichas do projeto), dê um **Título** e, se quiser, uma **Descrição**. A tarefa entra no quadro em **Aguardar**; marque **Iniciar já** para ela começar (vale a trava de consumo: pode ficar na fila de **A fazer**).
 - **Da página atual**: você pode anexar a URL e o título da aba aberta e o texto selecionado nela. Nada é anexado sem você marcar. O que vem da página entra na descrição citado e avisado como **conteúdo externo**: é dado, não instrução, e o funcionário não deve executar o que ele pedir. A URL sai do Chrome sem usuário, senha, fragmento (`#…`) nem o valor de parâmetros que parecem segredo (`token`, `key`, `code`, `session`…).
@@ -39,7 +39,7 @@ Em **Pareadas**, **Revogar** ao lado do pareamento e confirme. A extensão perde
 - O Club precisa estar no endereço padrão, porta **4848**. Com outra porta (`MYCO_PORT`) a extensão não funciona, e o botão de baixar recusa o pacote.
 - As notificações precisam estar permitidas para o Chrome no sistema (no Windows, o modo Não incomodar as esconde; o número no ícone continua).
 - O texto de cada aviso vem do Club em português; os textos da própria extensão seguem o idioma do Chrome (português, inglês ou espanhol).
-- O aviso "fulano terminou" da aba do Club (turno que acabou) não chega pela extensão: só a caixa "precisa de mim".
+- O aviso "fulano terminou" da aba do Club (turno que acabou) não chega pela extensão: só a caixa "Inbox".
 - A extensão só lê as abas quando você clica no ícone, e só a aba atual.
 
 ## Segurança
