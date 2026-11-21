@@ -549,7 +549,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <li><a href="#ligar">Ligar de novo</a></li>
         <li><a href="#parear">Parear o navegador</a></li>
         <li><a href="#nivel">Nível de uso</a></li>
-        <li><a href="#demo">Projeto demo</a></li>
+        <li><a href="#modelos">Equipe pronta</a></li>
         <li><a href="#projeto">Primeiro projeto</a></li>
         <li><a href="#workspaces">Workspaces</a></li>
         <li><a href="#problemas-comecando">Tela em branco</a></li>
@@ -566,6 +566,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <li><a href="#autonomia">Autonomia</a></li>
         <li><a href="#memoria">Memória</a></li>
         <li><a href="#equipe">Gestor e equipe</a></li>
+        <li><a href="#consulta-projetos">Consulta entre projetos</a></li>
         <li><a href="#organograma">Organograma</a></li>
         <li><a href="#rh">RH</a></li>
         <li><a href="#mcps">MCPs</a></li>
@@ -575,13 +576,13 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     </li>
     <li>
       <h3 class="toc-h"><span class="toc-n">3</span><a href="#chat">Conversar</a></h3>
-      <p>Mensagens, “precisa de mim”, permissões, planos, despertador, retomada automática e conversa nova.</p>
+      <p>Mensagens, “Inbox”, permissões, planos, despertador, retomada automática e conversa nova.</p>
       <ul>
         <li><a href="#mensagem">Mandar mensagem</a></li>
         <li><a href="#trabalhando">Enquanto ele trabalha</a></li>
         <li><a href="#anexos">Anexos</a></li>
         <li><a href="#ajustes">Ajustes da conversa</a></li>
-        <li><a href="#precisa-de-mim">Precisa de mim</a></li>
+        <li><a href="#inbox">Inbox</a></li>
         <li><a href="#cartoes">Permissão, plano e pergunta</a></li>
         <li><a href="#arquivo-citado">Arquivo citado</a></li>
         <li><a href="#despertador">Despertador</a></li>
@@ -671,7 +672,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
   <div class="split wide-r">
     <ol class="legend">
       <li><span><b>Barras de consumo</b>: quanto da assinatura já foi usado em 5 h e em 7 dias. <a href="#barras">Ver 6</a></span></li>
-      <li><span><b>precisa de mim</b>, com contador: o que espera uma resposta sua. <a href="#precisa-de-mim">Ver 3</a></span></li>
+      <li><span><b>Inbox</b>, com contador: o que espera uma resposta sua. <a href="#inbox">Ver 3</a></span></li>
       <li><span><b>RH e ranking</b> (título “Funcionários”): <b class="ui">RH</b> com uma linha por pessoa; <b class="ui">Gastos</b> e <b class="ui">Economia</b> mostram quem mais gasta e quem mais economiza. <a href="#rh">Ver 2</a> e <a href="#ranking">Ver 6</a></span></li>
       <li><span><b>Configurações</b> (engrenagem, ou <kbd>Ctrl</kbd>+<kbd>,</kbd>). <a href="#abrir-config">Ver 7</a></span></li>
       <li><span><b>Abas</b>: <b class="ui">Todos</b>, <b class="ui">Sem workspace</b> e uma por workspace. <a href="#workspaces">Ver 1</a></span></li>
@@ -680,10 +681,10 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       <li><span><b>Reorganizar o quadro</b>: desfaz os arrastos e refaz a grade na ordem de agora. <a href="#organograma">Ver 2</a></span></li>
       <li><span><b>n sem commit</b> (ou <b>limpo</b>) no selo do projeto. <a href="#sem-commit">Ver 5</a></span></li>
     </ol>
-    <figure class="mock" role="img" aria-label="Ilustração da tela principal: barra do topo com barras de consumo, precisa de mim, RH e ranking e configurações; abas; uma sala de projeto com funcionários; botões + projeto e Reorganizar o quadro no rodapé.">
+    <figure class="mock" role="img" aria-label="Ilustração da tela principal: barra do topo com barras de consumo, Inbox, RH e ranking e configurações; abas; uma sala de projeto com funcionários; botões + projeto e Reorganizar o quadro no rodapé.">
       <div class="s-top">
         <span class="s-meters"><i class="pin in">1</i>Claude <span class="bar"><i style="width:34%"></i></span><small>5h</small> <span class="bar"><i class="mid" style="width:62%"></i></span><small>7d</small></span>
-        <span class="mb pn"><i class="pin l">2</i>precisa de mim <span class="cnt">5</span></span>
+        <span class="mb pn"><i class="pin l">2</i>Inbox <span class="cnt">5</span></span>
         <span class="mb pn"><i class="pin">3</i><svg class="i"><use href="#i-users"/></svg>RH e ranking</span>
         <span class="mb pn"><i class="pin">4</i><svg class="i"><use href="#i-gear"/></svg></span>
       </div>
@@ -822,6 +823,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <p>O trabalho roda no servidor do Claudio’s Club (um processo Node na sua máquina, porta 4848), não no navegador. Fechar a aba ou o navegador <b>não para</b> os funcionários: as conversas em andamento terminam o turno, a fila anda, e revisões, despertadores e continuações agendadas seguem.</p>
     <p>O que precisa de você (aprovar permissão, aprovar ou recusar plano, mover card, responder pergunta) continua esperando até você abrir o Claudio’s Club de novo.</p>
     <p>Para de verdade só se você fechar o servidor (terminal ou processo), clicar em <b class="ui">Parar o Clube dos Claudios</b> (<b class="ui">Configurações</b> → <b class="ui">Geral</b> → <b class="ui">Servidor</b>), ou se o computador hibernar ou desligar.</p>
+    <p>Prefere que ele pare ao fechar o navegador? Ligue <b class="ui">Parar ao fechar a aba</b> (<b class="ui">Configurações</b> → <b class="ui">Geral</b> → <b class="ui">Sistema</b>, no nível Avançado). Vem desligada. Ligada, o servidor para sozinho cerca de 30 segundos depois que a <b>última</b> aba do Claudio’s Club fechar; recarregar a página (F5) não para. Para como o botão Parar: as conversas em andamento são interrompidas (ficam salvas) e as rotinas só voltam quando você iniciar o servidor de novo.</p>
   </article>
 
   <article class="blk" id="parear">
@@ -871,17 +873,21 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <div class="note"><svg class="i ico"><use href="#i-info"/></svg><div><p>Dá para trocar a qualquer hora; nada se perde.</p></div></div>
   </article>
 
-  <article class="blk" id="demo">
-    <h3>Ver o projeto demo <span class="chip">opcional</span></h3>
-    <p>Para ver uma equipe pronta, numa pizzaria de exemplo (My.Co), com landing, cardápio e pedidos:</p>
+  <article class="blk" id="modelos">
+    <h3>Começar com uma equipe pronta <span class="chip">opcional</span></h3>
+    <p>Um modelo de equipe cria de uma vez as fichas de uma equipe, com a hierarquia (todos respondem ao orquestrador). Há dois:</p>
+    <ul>
+      <li><b class="ui">Site / landing page</b>: Marina (Orquestrador(a)), Caio (Web designer), Bia (Desenvolvedor(a) front-end), Rafael (Especialista em tráfego).</li>
+      <li><b class="ui">Manutenção de SaaS</b>: Helena (Orquestrador(a)), Tiago (Desenvolvedor(a) back-end), Laura (Desenvolvedor(a) front-end), Otávio (Analista de QA), Renata (Analista de segurança), Davi (DevOps / SRE).</li>
+    </ul>
     <ol class="steps">
-      <li><p class="st">Abra <span class="path"><b>Configurações</b><i>›</i><b>Geral</b><i>›</i><b>Projeto demo</b></span>.</p></li>
       <li>
-        <p class="st">Clique em <b class="ui">Criar projeto demo</b>. Ele cria uma vez e abre a sala.</p>
-        <figure class="mock" role="img" aria-label="Botão Criar projeto demo"><div class="mock-b"><span class="mb">Criar projeto demo</span></div></figure>
+        <p class="st"><b>No Novo projeto</b>: o campo <b class="ui">Equipe pronta (opcional)</b> vem em <b class="ui">Sem equipe</b>. Escolha um modelo para o projeto já abrir com a equipe.</p>
+        <figure class="mock panel" role="img" aria-label="Novo projeto com a escolha Sem equipe, Site / landing page ou Manutenção de SaaS"><div class="mock-t">+ projeto</div><div class="mock-b m-col"><span class="ml">Equipe pronta (opcional)</span><div class="m-row"><span class="mb on">Sem equipe</span><span class="mb">Site / landing page</span><span class="mb">Manutenção de SaaS</span></div></div></figure>
       </li>
+      <li><p class="st"><b>Num projeto sem nenhum funcionário</b>: na aba <b class="ui">Equipe</b> aparece <b class="ui">Comece com uma equipe pronta</b>. Escolha o modelo e clique em <b class="ui">Criar equipe</b>.</p></li>
     </ol>
-    <div class="note ok"><svg class="i ico"><use href="#i-check"/></svg><div><p>Ver o quadro e as fichas <b>não gasta nada</b>. Abrir um funcionário usa a sua cota.</p></div></div>
+    <div class="note ok"><svg class="i ico"><use href="#i-check"/></svg><div><p>Antes de aplicar, a tela lista quem entra (nome e cargo). Só as fichas são criadas: <b>nenhuma tarefa nem conversa começa sozinha</b>, e você edita ou apaga cada ficha depois. Projeto que já tem funcionário não mostra a opção, e o Club recusa (409) aplicar um modelo nele. Criar a equipe não gasta cota.</p></div></div>
   </article>
 
   <article class="blk" id="projeto">
@@ -910,6 +916,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
           </figure>
         </div>
       </li>
+      <li><p class="st">Se quiser, escolha uma <b class="ui">Equipe pronta</b> (veja <a href="#modelos">acima</a>); o padrão é <b class="ui">Sem equipe</b>.</p></li>
       <li>
         <p class="st">Marque, se quiser: <b class="ui">Iniciar um repositório git (o painel de código e a revisão usam o diff)</b>.</p>
         <figure class="mock panel" role="img" aria-label="Caixa de seleção Iniciar um repositório git"><div class="mock-b"><div class="mck on"><span>Iniciar um repositório git (o painel de código e a revisão usam o diff)</span></div></div></figure>
@@ -1304,6 +1311,28 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     </div>
   </article>
 
+  <article class="blk" id="consulta-projetos">
+    <h3>Consulta entre projetos <span class="chip">opcional</span></h3>
+    <p>Deixa um funcionário de um projeto perguntar a um funcionário de outro (ex.: o Roberto, do Slingshot, pergunta ao Alphonse, do Learnote, como funciona o builder). <b>Vem desligado</b>: só você liga, limita e revoga, pela tela.</p>
+    <h4>Ligar, limitar e revogar</h4>
+    <ol>
+      <li>No detalhe do projeto, aba <b class="ui">Projeto</b>, seção <b class="ui">Consulta entre projetos</b>, escolha o <b class="ui">Projeto consultado</b>.</li>
+      <li>Em <b class="ui">Quem daqui pode consultar</b>, deixe <b class="ui">Todos</b> ou escolha <b class="ui">Só alguns</b> e marque os funcionários.</li>
+      <li>Clique em <b class="ui">Ligar</b>. Vale na hora.</li>
+      <li>Para limitar depois: <b class="ui">Editar</b> na linha do vínculo, troque a lista e <b class="ui">Salvar lista</b>. Quem saiu da lista tem as consultas abertas canceladas.</li>
+      <li>Para revogar: <b class="ui">Revogar</b> e confirme. As consultas abertas entre os dois projetos são canceladas na hora e nenhuma resposta delas chega.</li>
+    </ol>
+    <p>O vínculo tem <b>direção</b>: ligar o Slingshot ao Learnote não deixa o Learnote perguntar ao Slingshot. A seção também lista quem pode consultar este projeto, com <b class="ui">Revogar</b>.</p>
+    <h4>O que o funcionário consultado pode e não pode</h4>
+    <ul>
+      <li><b>Pode:</b> ler os arquivos do projeto dele e escrever uma resposta curta (até 4 KB).</li>
+      <li><b>Não pode:</b> editar, rodar comando, usar API ou MCP, ler a memória pessoal, criar tarefa, delegar nem consultar outro projeto. Qualquer pedido de permissão é negado.</li>
+      <li>A resposta passa por um filtro que tira trechos com cara de segredo. É um filtro, não uma garantia: não ligue entre projetos cujos arquivos tenham segredos soltos.</li>
+    </ul>
+    <p><b>Custo:</b> a consulta gasta a <b>cota de uso do projeto consultado</b>, não a de quem perguntou. Projeto consultado pausado recusa a consulta. <b>Limites:</b> prazo de 10 minutos, uma consulta aberta por par de funcionários, até 3 abertas por projeto consultado e poucas por hora.</p>
+    <p><b>Como aparece:</b> a resposta chega à conversa de quem perguntou com o selo <b class="ui">Resposta de outro projeto · nome (projeto)</b>; a conversa de consulta abre com <b class="ui">Consulta de outro projeto · nome (projeto)</b>. É informação de outro funcionário, <b>não ordem sua</b>. Sem resposta (prazo, erro ou revogação), vira um aviso curto. A seção lista as últimas cinco consultas com o estado e o prazo.</p>
+  </article>
+
   <article class="blk" id="organograma">
     <h3>Organograma (quadro)</h3>
     <div class="split">
@@ -1369,12 +1398,10 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
   <article class="blk" id="mcps">
     <h3>MCPs</h3>
     <p>Cada MCP ligado que roda no seu computador ocupa memória, mas o peso de cada um não foi medido (a ficha diz “peso não medido”). O que foi medido, e o que gasta o limite de uso, está em <a href="#peso">O que pesa e quando vale ligar</a>.</p>
-    <p><span class="path"><b>Configurações</b><i>›</i><b>MCPs</b></span> (<b class="ui">Servidores MCP</b>). Há quatro escopos:</p>
+    <p><span class="path"><b>Configurações</b><i>›</i><b>MCPs</b></span> (<b class="ui">Servidores MCP</b>). Há só dois escopos, os mesmos das skills:</p>
     <div class="cards c2">
-      <div class="card"><h4>Da conta (Club) <span class="chip ok">recomendado</span></h4><p>Segredos no cofre do sistema, e só quem tem o MCP na ficha carrega.</p></div>
-      <div class="card"><h4>Da conta (Claude Code)</h4><p>Todas as sessões do Claude Code veem.</p></div>
-      <div class="card"><h4>Do projeto</h4><p>Vai para o git: <b>não ponha chave ali</b>.</p></div>
-      <div class="card"><h4>Locais do projeto</h4><p>Só neste computador.</p></div>
+      <div class="card"><h4>Global</h4><p><code>~/.claude.json</code>: vale em todos os projetos e também no Claude Code fora do Claudio’s Club. Os cadastrados pela tela guardam os segredos no cofre do sistema.</p></div>
+      <div class="card"><h4>Projeto</h4><p><code>.mcp.json</code> do projeto: vai para o git, <b>não ponha chave ali</b>. O antigo escopo local aparece aqui, com a marca <b class="ui">fora do git</b>.</p></div>
     </div>
     <div class="split">
       <div>
@@ -1600,17 +1627,17 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <div class="note"><svg class="i ico"><use href="#i-info"/></svg><div><p><b class="ui">Chat detalhado</b> (<span class="path"><b>Configurações</b><i>›</i><b>Conversa</b></span>) mostra as leituras, buscas e comandos que ele fez. Sem ele, a conversa mostra só as mensagens, os pedidos de permissão e os avisos.</p></div></div>
   </article>
 
-  <article class="blk" id="precisa-de-mim">
-    <h3>Precisa de mim</h3>
+  <article class="blk" id="inbox">
+    <h3>Inbox</h3>
     <div class="split">
       <ol class="steps">
-        <li><p class="st">O botão <b class="ui">precisa de mim</b> fica no topo do quadro, com um contador.</p></li>
+        <li><p class="st">O botão <b class="ui">Inbox</b> fica no topo do quadro, com um contador.</p></li>
         <li><p class="st">Clique para abrir a lista.</p></li>
         <li><p class="st">Clique num item para <b>abrir a conversa dele</b>.</p></li>
       </ol>
-      <figure class="mock panel" role="img" aria-label="Botão precisa de mim com contador 3 e a lista com rótulos plano, permissão e esperando; o item esperando tem um x; opção avisar no sistema">
+      <figure class="mock panel" role="img" aria-label="Botão Inbox com contador 3 e a lista com rótulos plano, permissão e esperando; o item esperando tem um x; opção avisar no sistema">
         <div class="mock-b m-col">
-          <span class="mb pn" style="justify-self:start"><i class="pin l">1</i>precisa de mim <span class="cnt">3</span></span>
+          <span class="mb pn" style="justify-self:start"><i class="pin l">1</i>Inbox <span class="cnt">3</span></span>
           <div class="pn"><i class="pin l">2</i>
           <ul class="mlist">
             <li><span class="tag sq">plano</span><span class="grow">Ana</span></li>
@@ -1637,6 +1664,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     </table></div>
     <ul>
       <li><b>Pergunta, espera e rotina</b> têm um <b>×</b> para tirar o item da caixa. Ao tirar uma pergunta, ela sai <b>sem resposta</b> (“Tira da caixa sem responder agora”). Ao tirar uma espera, ela só sai da caixa até a sessão mudar de status.</li>
+      <li><b>Cores dos alertas</b> (iguais na caixa e no quadro): <b>vermelho</b> = erro, segredo, ação barrada; <b>amarelo</b> = espera você (pergunta, permissão, plano, follow-up); <b>laranja</b> = fila que não anda (dependência, recurso, não começou); <b>verde</b> = resolvido, aprovado; <b>azul</b> = informativo (rotina, uso, recomendação).</li>
       <li>Aviso de <b>erro</b> cujo problema já passou ganha o selo <b class="ui">Resolvido</b> e fica atenuado: não conta no número do botão, no título da aba, nas abas de espaço de trabalho nem no cartão amarelo do quadro. Vale para o commit automático (os arquivos da tarefa já não têm mudança no git), a fila de validação desligada (o <code>hooks.json</code> sumiu), o sandbox do Codex (a duração mínima da senha passou a 0) e o teto do turno (a tarefa foi encerrada). O <b>×</b> o tira; sem isso o Club o remove sozinho depois de 24 horas, e um reinício do Club recomeça essa contagem. Resolvido vem depois dos pendentes na lista e não gera notificação do sistema. Erro sem esse selo continua pendente, como antes.</li>
       <li>O aviso de <b>ação barrada</b> vem de uma ferramenta negada numa conversa de tarefa (a de trabalho ou a de deploy): plano, regra do Club, regras de arquivo, classificador do <b>Autônomo</b> ou sandbox do Codex. Conversa livre, de card automático ou de revisão não geram. Há um item por conversa e por turno: as negações do mesmo turno se juntam (“+2 neste turno”) e vale a que mais provavelmente trava o trabalho. O atalho depende do que destrava: <b class="ui">Ajustar autonomia</b> (o classificador do Autônomo barrou, ou a sandbox do Codex só de leitura recusou) abre a ficha de quem foi barrado, na aba <b class="ui">Projeto</b>, e a mudança só desta conversa fica no botão do aviso, dentro do chat; <b class="ui">Dar acesso a servidores</b> (o Club bloqueou um <code>ssh</code> porque a ficha não tem conexão) abre a ficha na aba <b class="ui">Projeto</b>; <b class="ui">Abrir a conversa</b> (o classificador não respondeu) leva ao botão <b class="ui">Pedir para tentar de novo</b>. Sem dica (arquivo protegido, regra de arquivo, outra negação) não há atalho: clique no item para abrir a conversa. O <b>×</b> ignora o aviso pelo resto daquele turno; uma negação de turno novo o traz de volta. O item só vive na memória do servidor: some num reinício.</li>
       <li>O aviso de <b>segredo</b> também aparece como balão na própria conversa, com a mesma frase da caixa, o selo, a dica e o botão <b class="ui">Ignorar</b> (igual a <b class="ui">já troquei</b>: tira o aviso do balão e da caixa; se o segredo aparecer de novo, ele volta; em <b class="ui">possível credencial exposta</b> o botão se chama <b class="ui">Já troquei</b>, para não sugerir deixar pra lá). Quando o aviso sabe em que arquivo o segredo está, o balão mostra o caminho e o botão <b class="ui">Corrigir</b>, ao lado de <b class="ui">Ignorar</b> (o mesmo link <b class="ui">corrigir</b> aparece no item da caixa). Arquivo comum abre na aba <b class="ui">Arquivos</b> do projeto do aviso, já na linha do segredo quando o Club a achou. Arquivo de segredo, como <code>.env</code> ou chave, abre <b>fora do Club</b>, no editor de texto do seu computador (Bloco de Notas no Windows, TextEdit no Mac, o editor gráfico de <code>VISUAL</code> ou <code>EDITOR</code> no Linux): o conteúdo nunca aparece na tela do Club. Se não der, o botão diz por quê, em linguagem simples, e manda abrir o arquivo no seu editor: o Club não está neste computador (a página foi aberta de outra máquina), roda sem tela, o computador não tem editor de texto com janela configurado ou o sistema não conseguiu abrir. O balão só existe na tela: não vai para o modelo. <b class="ui">não é segredo</b> continua só na caixa, e o aviso de chave no <code>.mcp.json</code> do projeto, que não nasce numa conversa, também.</li>
@@ -1693,6 +1721,8 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <ul>
           <li>Escolha a resposta (ou <b class="ui">Outra resposta…</b>) e clique em <b class="ui">Responder</b>. Se disser “pode marcar mais de uma”, marque quantas quiser.</li>
           <li><b class="ui">Pular</b>: segue sem responder. Ele fica sabendo que você não respondeu.</li>
+          <li>A ficha de todo funcionário manda levar a decisão que trava o trabalho por este cartão (2 a 4 opções, a recomendada primeiro), sem pergunta solta no texto da resposta; se a dúvida não trava, ele decide, segue e diz o que decidiu.</li>
+          <li>No Codex, que não tem o cartão, a decisão vem num bloco no fim da resposta, com a linha <code>DÚVIDA:</code> e as opções numeradas. Em tarefa pedida por gestor ela vira a dúvida da tarefa (veja Tarefas); fora disso aparece só como texto na conversa, sem o cartão.</li>
         </ul>
       </div>
     </div>
@@ -1756,13 +1786,13 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <tr><td data-label="Situação">Erro que não parece passageiro</td><td data-label="Por quê">Sem sinal claro, repetir pode piorar. A conversa termina e você decide.</td></tr>
         <tr><td data-label="Situação">Limite de uso da assinatura</td><td data-label="Por quê">Tem o fluxo próprio: <b class="ui">Continuar sozinho quando o limite de uso voltar</b>.</td></tr>
         <tr><td data-label="Situação">Teto de ferramentas ou de minutos do turno</td><td data-label="Por quê">É o freio contra laço; retomar repetiria o laço.</td></tr>
-        <tr><td data-label="Situação">Ação que mexe fora do projeto ficou pela metade (push, deploy, comando no servidor, MCP que escreve), ou algo em segundo plano caiu junto</td><td data-label="Por quê">Não dá para saber se a ação aconteceu, e repetir poderia duplicá-la. A conversa aparece em <b class="ui">precisa de mim</b>, a tarefa vai para <b class="ui">Aguardar</b>, e você confere e manda uma mensagem.</td></tr>
+        <tr><td data-label="Situação">Ação que mexe fora do projeto ficou pela metade (push, deploy, comando no servidor, MCP que escreve), ou algo em segundo plano caiu junto</td><td data-label="Por quê">Não dá para saber se a ação aconteceu, e repetir poderia duplicá-la. A conversa aparece em <b class="ui">Inbox</b>, a tarefa vai para <b class="ui">Aguardar</b>, e você confere e manda uma mensagem.</td></tr>
         <tr><td data-label="Situação">Agent ou comando ainda rodando em segundo plano</td><td data-label="Por quê">A conversa não parou. O que terminar acorda o funcionário sozinho.</td></tr>
         <tr><td data-label="Situação">Já existe um “continue” do limite de uso, ou um despertador que vence antes</td><td data-label="Por quê">Esse já volta à conversa.</td></tr>
         <tr><td data-label="Situação">Você parou a conversa ou mandou uma mensagem</td><td data-label="Por quê">A conversa é sua de novo.</td></tr>
       </tbody>
     </table></div>
-    <div class="note"><svg class="i ico"><use href="#i-info"/></svg><div><p>Acabando as tentativas, o aviso diz “A conversa caiu (…) e não voltou depois de 3 tentativas automáticas” e avisa em <b class="ui">precisa de mim</b>. Na tarefa, o cartão em <b class="ui">Fazendo</b> mostra o selo <b class="ui">Retomando em 42s · 2/3</b> enquanto a retomada está marcada (<a href="#tarefas">capítulo 4</a>).</p></div></div>
+    <div class="note"><svg class="i ico"><use href="#i-info"/></svg><div><p>Acabando as tentativas, o aviso diz “A conversa caiu (…) e não voltou depois de 3 tentativas automáticas” e avisa em <b class="ui">Inbox</b>. Na tarefa, o cartão em <b class="ui">Fazendo</b> mostra o selo <b class="ui">Retomando em 42s · 2/3</b> enquanto a retomada está marcada (<a href="#tarefas">capítulo 4</a>).</p></div></div>
   </article>
 
   <article class="blk" id="conversa-nova">
@@ -1794,7 +1824,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <li><b class="ui">Arquivar</b> uma conversa também fecha seu processo: se estiver trabalhando, pede confirmação; se o servidor recusar, mostra o motivo e não arquiva. Ao arquivar funcionário ou projeto, só as conversas paradas fecham; as que trabalham continuam abertas e a tela avisa.</li>
         <li><b class="ui">Duplicar</b>: uma cópia da conversa, com todo o histórico, para tentar outro caminho sem perder a original.</li>
         <li>O seletor <b class="ui">Conversa</b> lista as conversas agrupadas por dia. As <b>ativas</b> (com o processo aberto) levam <b class="ui">· ativa</b> no fim; as demais aparecem em cinza (onde o navegador permite; no celular a cor não muda, vale o texto). Mandar mensagem numa conversa que não está ativa a reabre: confira antes de escolher.</li>
-        <li>Título da conversa (no seletor, em <b class="ui">precisa de mim</b> e na busca <kbd>Ctrl</kbd>+<kbd>K</kbd>): vale o que você escreveu com o lápis <b class="ui">Renomear conversa</b>; senão, o título gerado por IA a partir do assunto; enquanto ele não vem, o começo do assunto (a tarefa ou a sua 1ª mensagem). Conversa de tarefa, de assunto vago ou aberta fora do Club fica com o começo do assunto. A conversa de revisão de uma tarefa se chama <b class="ui">Revisão - título da tarefa</b> (o mesmo nome da coluna <b class="ui">Revisão</b> do quadro, no idioma da tela) e vale mais que o título gerado, mas menos que o seu. Para voltar ao automático, deixe o campo vazio e salve. Para não ter título gerado por IA, desmarque <b class="ui">Títulos de conversa por IA</b> nas Configurações (no Simples, <b class="ui">Dar título às conversas com IA</b>): a lista passa a mostrar o começo do assunto e a cota da assinatura não é gasta com isso.</li>
+        <li>Título da conversa (no seletor, em <b class="ui">Inbox</b> e na busca <kbd>Ctrl</kbd>+<kbd>K</kbd>): vale o que você escreveu com o lápis <b class="ui">Renomear conversa</b>; senão, o título gerado por IA a partir do assunto; enquanto ele não vem, o começo do assunto (a tarefa ou a sua 1ª mensagem). Conversa de tarefa, de assunto vago ou aberta fora do Club fica com o começo do assunto. A conversa de revisão de uma tarefa se chama <b class="ui">Revisão - título da tarefa</b> (o mesmo nome da coluna <b class="ui">Revisão</b> do quadro, no idioma da tela) e vale mais que o título gerado, mas menos que o seu. Para voltar ao automático, deixe o campo vazio e salve. Para não ter título gerado por IA, desmarque <b class="ui">Títulos de conversa por IA</b> nas Configurações (no Simples, <b class="ui">Dar título às conversas com IA</b>): a lista passa a mostrar o começo do assunto e a cota da assinatura não é gasta com isso.</li>
       </ul>
       <figure class="mock panel" role="img" aria-label="Botão mais (Nova conversa), Duplicar e seletor Conversa">
         <div class="mock-b m-row">
@@ -1846,7 +1876,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <tr><td data-label="Limite">Minutos por turno</td><td data-label="Padrão">180 (0 desliga)</td><td data-label="O que acontece ao passar">Igual ao de cima, com o aviso “Turno parado: passou de 180 minutos”.</td></tr>
         <tr><td data-label="Limite">Mensagens entre funcionários</td><td data-label="Padrão">20 em 30 min, por conversa</td><td data-label="O que acontece ao passar">A 21ª é recusada e o funcionário é orientado a falar com você.</td></tr>
         <tr><td data-label="Limite">Despertadores seguidos</td><td data-label="Padrão">20 sem você falar</td><td data-label="O que acontece ao passar">O próximo é recusado e ele pede o seu ok.</td></tr>
-        <tr><td data-label="Limite">Retomadas automáticas por turno</td><td data-label="Padrão">3 (1, se o processo caiu sem causa)</td><td data-label="O que acontece ao passar">A conversa fica parada, a tarefa vai para <b class="ui">Aguardar</b> e a caixa <b class="ui">precisa de mim</b> avisa.</td></tr>
+        <tr><td data-label="Limite">Retomadas automáticas por turno</td><td data-label="Padrão">3 (1, se o processo caiu sem causa)</td><td data-label="O que acontece ao passar">A conversa fica parada, a tarefa vai para <b class="ui">Aguardar</b> e a caixa <b class="ui">Inbox</b> avisa.</td></tr>
         <tr><td data-label="Limite">Estouros de limite de uso seguidos</td><td data-label="Padrão">5</td><td data-label="O que acontece ao passar">O “continue” automático desiste.</td></tr>
         <tr><td data-label="Limite">Revisão automática</td><td data-label="Padrão">3 rodadas</td><td data-label="O que acontece ao passar">Depois disso, a revisão fica com você.</td></tr>
         <tr><td data-label="Limite">Dúvidas ao gestor</td><td data-label="Padrão">3 por tarefa</td><td data-label="O que acontece ao passar">A próxima dúvida vai para você.</td></tr>
@@ -1982,7 +2012,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     </div>
     <div class="note"><svg class="i ico"><use href="#i-info"/></svg><div><p>Se o consumo estiver no limite na hora de começar, a tarefa <b>fica na fila e tenta de novo</b>.</p></div></div>
     <div class="note warn"><svg class="i ico"><use href="#i-alert"/></svg><div><p>Se a conversa parar no meio do trabalho (por exemplo, o servidor reiniciou), o Club <b>retoma uma vez</b>. Se parar de novo, a tarefa vai para <b>Revisão</b> com “conversa parou sem terminar” no histórico.</p></div></div>
-    <div class="note"><svg class="i ico"><use href="#i-info"/></svg><div><p>Fora o reinício do servidor, se a conversa cair por <b>falha passageira</b> (API sobrecarregada, erro 5xx, limite de taxa, conexão) ou o processo cair no meio do turno, o Club retoma sozinho, com espera crescente (30 s, 2 min e 8 min) e até 3 tentativas. A tarefa fica em <b>Fazendo</b> e o cartão ganha o selo <b>Retomando em 42s · 2/3</b> (tentativa 2 de 3; <b>Retomando agora</b> quando o envio está em curso). Ele some quando a retomada sai, quando você manda uma mensagem na conversa ou quando as tentativas acabam. Acabando, ou se a ação cortada mexia fora do projeto, a tarefa vai para <b>Aguardar</b> e a conversa aparece em <b>precisa de mim</b>. Detalhes e como desligar: <a href="#retomada">Retomada automática</a>.</p></div></div>
+    <div class="note"><svg class="i ico"><use href="#i-info"/></svg><div><p>Fora o reinício do servidor, se a conversa cair por <b>falha passageira</b> (API sobrecarregada, erro 5xx, limite de taxa, conexão) ou o processo cair no meio do turno, o Club retoma sozinho, com espera crescente (30 s, 2 min e 8 min) e até 3 tentativas. A tarefa fica em <b>Fazendo</b> e o cartão ganha o selo <b>Retomando em 42s · 2/3</b> (tentativa 2 de 3; <b>Retomando agora</b> quando o envio está em curso). Ele some quando a retomada sai, quando você manda uma mensagem na conversa ou quando as tentativas acabam. Acabando, ou se a ação cortada mexia fora do projeto, a tarefa vai para <b>Aguardar</b> e a conversa aparece em <b>Inbox</b>. Detalhes e como desligar: <a href="#retomada">Retomada automática</a>.</p></div></div>
     <p>O responsável só pode ser trocado <b>antes de começar</b>. Depois, aparece “A tarefa já começou com este funcionário”.</p>
   </article>
 
@@ -2047,6 +2077,11 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     </div>
   </article>
 
+  <article class="blk" id="precisa-de-voce">
+    <h3>Selo "Precisa de você" no cartão</h3>
+    <p>Cartão parado por uma ação sua na caixa de entrada ganha o selo amarelo <b class="ui">Precisa de você</b>, com o motivo ao passar o mouse e para leitores de tela (plano para aprovar, pedido de permissão, dúvida, revisão que não andou, ajuste que não chega ao funcionário, card sem código, espera por outra tarefa parada). É o mesmo amarelo dos avisos de "precisa de você" da caixa. Clicar no cartão abre o detalhe, onde está a ação. O selo some sozinho quando você resolve o item. Ação que é do gestor (dúvida por opções antes de chegar a você) não mostra o selo; aviso da caixa que não trava o cartão também não. O mesmo selo aparece no cabeçalho do projeto (com a contagem de tudo da sala que espera você) e no cartão do funcionário (só ponto e número, com o motivo ao passar o mouse): vêm dos avisos da caixa que pedem uma decisão sua (plano, permissão, resposta, dúvida, tarefa parada, follow-up); erro, segredo e rotina não contam. Com um plano esperando, a ação principal do painel da tarefa abre a conversa onde você o aprova.</p>
+  </article>
+
   <article class="blk" id="permissao">
     <h3>Esperando sua permissão</h3>
     <p>Quando a conversa de uma tarefa em <b>Fazendo</b> pede uma permissão e espera você responder, o cartão ganha o selo laranja <b class="ui">Esperando sua permissão: &lt;ferramenta&gt;</b> e o botão <b class="ui">Responder no chat</b>, que abre a conversa já no cartão do pedido (o detalhe da tarefa tem o mesmo botão). Passados 15 minutos o selo vira <b class="ui">Parada: esperando sua permissão</b>, com borda mais grossa, e o gestor que pediu a tarefa recebe um aviso, só informativo: a permissão é sua. O selo some quando você permite ou nega.</p>
@@ -2075,7 +2110,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <div class="split wide-r">
       <div>
         <p>Na seção <b>Revisão</b>, escolha <b class="ui">Quem revisa</b> e clique em <b class="ui">Delegar revisão</b> (ou <b class="ui">Delegar nova revisão</b>). O revisor responde com <b>APROVADO</b> ou <b>REPROVADO</b> na primeira linha. Ele <b>não muda o código</b>: só revisa.</p>
-        <p>Com a revisão automática parada, o mesmo pedido sai de <b class="ui">precisa de mim</b>, sem abrir o cartão: no item <b>parada</b>, <b class="ui">Delegar revisão</b> abre o seletor com os mesmos funcionários do cartão (o responsável da tarefa não entra). Com uma revisão já pedida e sem resposta, nem o cartão nem a caixa deixam escolher outro revisor.</p>
+        <p>Com a revisão automática parada, o mesmo pedido sai de <b class="ui">Inbox</b>, sem abrir o cartão: no item <b>parada</b>, <b class="ui">Delegar revisão</b> abre o seletor com os mesmos funcionários do cartão (o responsável da tarefa não entra). Com uma revisão já pedida e sem resposta, nem o cartão nem a caixa deixam escolher outro revisor.</p>
         <figure class="mock panel" role="img" aria-label="Seção Revisão: seletor Quem revisa e botão Delegar revisão">
           <div class="mock-b m-row"><span class="mf sel" style="flex:1 1 120px">Quem revisa</span><span class="mb p">Delegar revisão</span></div>
         </figure>
@@ -2109,9 +2144,9 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <ul>
       <li>O revisor que aprova e ainda vê uma melhoria <b>posterior</b> (uma limpeza, um risco menor, uma ideia para outra tarefa) registra um <b>follow-up</b> na tarefa. É só um registro: <b>nada vira card sozinho</b>.</li>
       <li><b>Falha que invalida a aprovação</b> (bug, regressão, critério não cumprido) continua sendo <b>reprovar</b>, não follow-up.</li>
-      <li>Decide o gestor que pediu a tarefa, pela conversa dele, ou <b>você</b>, pela tela (inclusive o que está com o gestor: vale quem decidir primeiro). Vai para você quando foi você quem pediu, quando o gestor saiu do projeto ou quando o aviso a ele não chegou em 30 minutos: aí aparece em <b class="ui">precisa de mim</b>, com o rótulo <b>follow-up</b>.</li>
+      <li>Decide o gestor que pediu a tarefa, pela conversa dele, ou <b>você</b>, pela tela (inclusive o que está com o gestor: vale quem decidir primeiro). Vai para você quando foi você quem pediu, quando o gestor saiu do projeto ou quando o aviso a ele não chegou em 30 minutos: aí aparece em <b class="ui">Inbox</b>, com o rótulo <b>follow-up</b>.</li>
       <li><b>Na conversa</b>: quando foi você quem pediu a tarefa e ela tem conversa, o follow-up aparece como <b>balão na conversa de trabalho</b>, depois da última mensagem. Só você o vê; o funcionário nunca o lê. O balão traz o selo <b class="ui">Vale fazer</b> ou <b class="ui">Opcional</b> (o “vale fazer” vem antes), o título em linguagem simples, <b class="ui">Se não fizer:</b>, o tamanho, quem faria e os <b class="ui">Detalhes técnicos</b> (fechado).</li>
-      <li><b>Na caixa</b> <b class="ui">precisa de mim</b>, o item <b>follow-up</b> mostra a recomendação e <b>abre essa conversa</b> ao clicar (sem conversa, abre o card).</li>
+      <li><b>Na caixa</b> <b class="ui">Inbox</b>, o item <b>follow-up</b> mostra a recomendação e <b>abre essa conversa</b> ao clicar (sem conversa, abre o card).</li>
       <li><b>No quadro</b>, o cartão não mostra o texto do follow-up, só um selo: <b class="ui">N follow-ups, M vale fazer</b> (amarelo quando algum espera você). Enquanto houver follow-up aberto, o selo <b>Aprovada</b> do cartão não aparece; quando todos forem decididos, ele volta. O detalhe traz o resumo e o botão <b class="ui">Abrir conversa</b>.</li>
       <li>Follow-up <b>antigo</b>, sem título nem recomendação, aparece com o texto, como antes. Antigo ou novo, enquanto está aberto e não espera na conversa, o detalhe oferece as mesmas saídas. Decidido, o que tem título e recomendação continua mostrando o selo, o título e o <b class="ui">Se não fizer:</b>.</li>
     </ul>
@@ -2129,7 +2164,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <h4>Card sem código</h4>
     <ul>
       <li>Card é para trabalho de código. Se o funcionário <b>termina o turno sem editar nenhum arquivo</b> (e sem pedir subtarefa), o card <b>não vai para revisão</b>: fica em <b>Fazendo</b> com o selo <b class="ui">Sem código</b>, e a fila do funcionário anda.</li>
-      <li>Decide <b>quem pediu o card</b>: o gestor, pela conversa dele, ou <b>você</b>, quando foi você quem pediu (ou o aviso ao gestor se perdeu). Com você, o selo fica amarelo e o item aparece em <b class="ui">precisa de mim</b>, com o rótulo <b>parada</b>.</li>
+      <li>Decide <b>quem pediu o card</b>: o gestor, pela conversa dele, ou <b>você</b>, quando foi você quem pediu (ou o aviso ao gestor se perdeu). Com você, o selo fica amarelo e o item aparece em <b class="ui">Inbox</b>, com o rótulo <b>parada</b>.</li>
       <li>No detalhe, o bloco <b class="ui">Terminou sem editar código</b> mostra o que o funcionário disse ao terminar (a análise ou a resposta costuma estar aí).</li>
     </ul>
     <div class="cards">
@@ -2152,9 +2187,15 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       <li><b>Vale para</b> o <b class="ui">Rodar testes</b>, os testes da revisão e da mescla (do Club) e o terminal dos funcionários, no Claude e no Codex.</li>
       <li><b>Passa direto</b>: teste de um arquivo ou com filtro, e qualquer outro comando.</li>
       <li><b>A espera não conta nos 10 minutos</b> dos testes do Club nem no tempo do cartão. Limite da espera: 30 minutos no Club e 13 no terminal do funcionário; depois disso o comando roda mesmo assim, sem trava.</li>
-      <li><b>Onde aparece</b>: o quadro ainda não mostra a espera. No terminal do funcionário aparece “Esperei N s a vez…”, e o Club registra <code>[fila] … esperando a vez</code> no log do servidor. Um <b class="ui">Rodar testes</b> que demora a começar costuma ser isso.</li>
+      <li><b>Onde aparece</b>: no quadro, uma bolinha laranja no topo de <b>Fazendo</b> diz, ao passar o mouse ou tocar, “testes de … esperando a vez (a suíte de … roda agora)”, desde que horas e quantos cartões esperam atrás (ver <a href="#estado-fila">Estado da fila de cada funcionário</a>). No terminal do funcionário aparece “Esperei N s a vez…”, e o Club registra <code>[fila] … esperando a vez</code> no log do servidor.</li>
     </ul>
-  </article>
+    <h4 id="estado-fila">Estado da fila de cada funcionário</h4>
+    <p>No topo das colunas <b>Fazendo</b> e <b>Revisão</b>, o quadro mostra uma bolinha por funcionário ocupado, para você ver por que a fila dele não anda sem investigar. Passe o mouse, use o teclado (Tab) ou toque na bolinha para ler a frase; toque fora, <code>Esc</code> ou rolar a fecha. Com o filtro por funcionário, só a dele. Atualiza sozinho a cada poucos segundos.</p>
+    <ul>
+      <li><b>Bolinha normal</b> (andamento): em <b>Fazendo</b>, quem trabalha num cartão ou numa conversa e quem tem uma entrega recém-começada; em <b>Revisão</b>, quem está revisando um cartão (o pedido de revisão ainda sem resposta). A frase diz o que a pessoa faz e quantos cartões esperam atrás.</li>
+      <li><b>Bolinha laranja com halo</b> (a fila está parada, visível sem passar o mouse), em <b>Fazendo</b>: <b>esperando a máquina folgar</b> (com o motivo, ex.: pouca memória), <b>parada pelo limite de consumo</b>, <b>testes esperando a vez</b> (outra suíte pesada roda; diz quem) e <b>entrega em processamento há mais de 3 minutos</b> (resumo e commit; a fila só anda quando terminar). Cada uma traz “desde HH:MM” e o motivo.</li>
+      <li><b>Sem bolinha</b>: funcionário livre e projeto pausado (a faixa azul de cima já avisa).</li>
+    </ul>  </article>
 
   <article class="blk" id="editar-tarefa">
     <h3>Editar, apagar e id</h3>
@@ -2497,7 +2538,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
     <h3>Codex no Windows: o terminal e a política de senha</h3>
     <p>No Windows, a sandbox do Codex roda os comandos de terminal por usuários locais do próprio Windows (<code>CodexSandboxOffline</code> e <code>CodexSandboxOnline</code>) e troca a senha deles a cada preparação. Se a política de senha do Windows exige uma <b>duração mínima da senha</b> maior que 0 dia, o Windows recusa a troca (erros 2224 e 2245) e <b>nenhum comando de terminal do Codex roda</b> nesta máquina. O funcionário só diz que o terminal está bloqueado; no texto do erro aparece <code>helper_user_create_or_update_failed</code>.</p>
     <ul>
-      <li><b>Como você fica sabendo:</b> o Claudio’s Club lê a política (só lê, com <code>net accounts</code>) ao abrir uma conversa do Codex e ao salvar uma ficha do Codex, e também quando o erro aparece num comando. Achando o problema, mostra “O terminal dos funcionários no Codex não funciona nesta máquina” de dois jeitos: um item <b>erro</b> em <b class="ui">precisa de mim</b> e um balão vermelho, o mesmo aviso, em toda conversa de quem roda no Codex (a conversa do Claude não vê). Só no Windows, e só quando há ficha ou conversa do Codex. O item é da máquina, sem projeto nem conversa: clicar na linha não abre nada, o que se faz está no próprio aviso.</li>
+      <li><b>Como você fica sabendo:</b> o Claudio’s Club lê a política (só lê, com <code>net accounts</code>) ao abrir uma conversa do Codex e ao salvar uma ficha do Codex, e também quando o erro aparece num comando. Achando o problema, mostra “O terminal dos funcionários no Codex não funciona nesta máquina” de dois jeitos: um item <b>erro</b> em <b class="ui">Inbox</b> e um balão vermelho, o mesmo aviso, em toda conversa de quem roda no Codex (a conversa do Claude não vê). Só no Windows, e só quando há ficha ou conversa do Codex. O item é da máquina, sem projeto nem conversa: clicar na linha não abre nada, o que se faz está no próprio aviso.</li>
       <li><b>Como resolver:</b> abra o PowerShell <b>como administrador</b> (botão direito no PowerShell → <b class="ui">Executar como administrador</b>) e rode <code>net accounts /minpwage:0</code>. O aviso traz esse comando com o botão <b class="ui">Copiar</b>; sem administrador o Windows nega o comando. Se o navegador não deixar copiar, o aviso diz para selecionar o comando e usar Ctrl+C. Depois, o aviso some sozinho na próxima conferência (ao abrir uma conversa do Codex, com até 10 minutos de intervalo) e o terminal volta; mande uma mensagem nova ao funcionário.</li>
       <li><b>O Claudio’s Club não roda o comando por você:</b> ele muda a política de segurança da máquina e exige administrador. Só o botão <b class="ui">Copiar</b> existe.</li>
       <li><b>Computador de domínio</b> (empresa, escola): a política de grupo pode desfazer a mudança e o erro volta. Peça a quem administra a rede para liberar a duração mínima da senha.</li>
@@ -2730,6 +2771,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
         <tr><td data-label="Item">Modelo do GPT</td><td data-label="Grupo">Geral (avançado)</td><td data-label="O que faz">Modelo do Codex usado nas perguntas ao GPT. <b class="ui">Padrão do Codex</b> deixa o Codex escolher. Só aparece com o Codex ligado.</td></tr>
         <tr><td data-label="Item">Atualizações</td><td data-label="Grupo">Geral</td><td data-label="O que faz">Mostra a versão e tem <b class="ui">Procurar agora</b>. Veja <a href="#atualizar">Atualizar o Club</a>.</td></tr>
         <tr><td data-label="Item">Servidor</td><td data-label="Grupo">Geral</td><td data-label="O que faz"><b class="ui">Reiniciar</b> e <b class="ui">Parar o Clube dos Claudios</b>. Ao parar, as conversas abertas fecham e as rotinas param até o servidor voltar.</td></tr>
+        <tr><td data-label="Item">Parar ao fechar a aba</td><td data-label="Grupo">Geral</td><td data-label="O que faz">Desligado por padrão. Ligado, o servidor para sozinho cerca de 30 segundos depois que a última aba do Claudio’s Club fechar (F5 não para), como o botão <b class="ui">Parar</b>.</td></tr>
         <tr><td data-label="Item">Ferramentas por turno</td><td data-label="Grupo">Executar</td><td data-label="O que faz">Teto de ferramentas por turno (padrão 500; 0 desliga). Passando dele, o turno para e você é avisado. Veja <a href="#freios">Freios contra laço</a>.</td></tr>
         <tr><td data-label="Item">Minutos por turno</td><td data-label="Grupo">Executar</td><td data-label="O que faz">Teto de minutos por turno (padrão 180; 0 desliga), sem contar o tempo esperando sua permissão ou resposta.</td></tr>
       </tbody>
@@ -2795,7 +2837,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       </li>
     </ol>
     <div class="cards c3">
-      <div class="card"><h4><span class="mb p">Avisos</span></h4><p>A extensão confere a caixa <b class="ui">Precisa de mim</b> a cada minuto. Com a aba do Club fechada, o aviso chega em até 1 minuto; clicar nele abre o Club na tela de quem espera.</p></div>
+      <div class="card"><h4><span class="mb p">Avisos</span></h4><p>A extensão confere a caixa <b class="ui">Inbox</b> a cada minuto. Com a aba do Club fechada, o aviso chega em até 1 minuto; clicar nele abre o Club na tela de quem espera.</p></div>
       <div class="card"><h4><span class="mb p">Tarefa rápida</span></h4><p>No ícone da extensão, escolha o projeto, o responsável e o título. A tarefa entra em <b>Aguardar</b>; marque <b class="ui">Iniciar já</b> para ela começar (se o consumo estiver travado, pode ficar em <b>A fazer</b>).</p></div>
       <div class="card"><h4><span class="mb p">Limites</span></h4><p>O Club e o Chrome precisam estar abertos. Com o Club fora do ar, o ícone mostra <code>off</code> e a tarefa não fica guardada.</p></div>
     </div>
@@ -3024,7 +3066,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
           <div class="chk">
             <p class="chk-t"><svg class="i ico"><use href="#i-check"/></svg>Conferir no fim</p>
             <ul>
-              <li>nenhum segredo foi colado no chat; se foi, troque-o e clique em <b class="ui">já troquei</b> no aviso <b class="ui">segredo</b> (em <b class="ui">precisa de mim</b>);</li>
+              <li>nenhum segredo foi colado no chat; se foi, troque-o e clique em <b class="ui">já troquei</b> no aviso <b class="ui">segredo</b> (em <b class="ui">Inbox</b>);</li>
               <li>os riscos críticos e altos estão corrigidos e reconferidos;</li>
               <li>as dependências com vulnerabilidade estão separadas entre produção e desenvolvimento.</li>
             </ul>
@@ -3045,13 +3087,13 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
           <li><p class="st">Antes, na VPS, crie um usuário só para a IA, sem root e com as permissões mínimas. No detalhe do projeto, em <b class="ui">Servidores</b>, cadastre a conexão com esse usuário e a chave dele, e use <b class="ui">Testar</b>. Chave com senha precisa estar no <code>ssh-agent</code>.</p></li>
           <li><p class="st">Contrate <b class="ui">DevOps / SRE</b>. Na ficha, aba <b class="ui">Projeto</b>, clique em <b class="ui">+ dar acesso a servidores (SSH e FTP)</b> e marque a conexão. A chave fica no seu computador; a ficha guarda só o nome. Deixe <b class="ui">Permitir comandos de escrita</b> desmarcado.</p></li>
           <li><p class="st"><b class="ui">Tarefas</b> → <b class="ui">Nova tarefa</b> → <b class="ui">O que precisa ser feito</b>: “só diagnosticar, sem mudar nada” → <b class="ui">Quem cuida</b>: <b class="ui">DevOps / SRE</b> → <b class="ui">Criar e começar</b>. Ele lê o servidor pelo MCP <code>myco-ssh</code> (status, logs, containers, serviços, arquivos de log).</p></li>
-          <li><p class="st">No Claude, em <b class="ui">precisa de mim</b>, aprove cada cartão de <b>permissão</b> com <b class="ui">Aprovar</b>. No Codex não aparece cartão: o comando de escrita roda direto, se a caixa estiver marcada. Evite <b class="ui">Sempre neste projeto</b> para comandos no servidor.</p></li>
+          <li><p class="st">No Claude, em <b class="ui">Inbox</b>, aprove cada cartão de <b>permissão</b> com <b class="ui">Aprovar</b>. No Codex não aparece cartão: o comando de escrita roda direto, se a caixa estiver marcada. Evite <b class="ui">Sempre neste projeto</b> para comandos no servidor.</p></li>
           <li><p class="st">Para publicar, o servidor precisa deixar de ser só leitura: na ficha, marque <b class="ui">Permitir comandos de escrita</b> na conexão. A autonomia <b class="ui">Edita sozinho</b>, que o cargo já traz, basta; se você a trocou por <b class="ui">Só planeja</b> ou <b class="ui">Pede tudo</b>, o servidor segue só leitura mesmo com a caixa marcada. No Claude, em <b class="ui">Edita sozinho</b> cada comando de escrita ainda pede o seu ok; no Codex, ele roda sem perguntar, e a caixa marcada é o que vale. Depois abra a tarefa em <b class="ui">Finalizado</b> (ou mesclada) → <b class="ui">Pedir deploy</b> → <b class="ui">Quem faz o deploy</b>: <b class="ui">DevOps / SRE</b>.</p></li>
           <li><p class="st">Siga o checklist: backup, estado antes e depois, runbook. Confirme os passos que não têm volta.</p></li>
           <li><p class="st">Lembre dos limites: ele não roda comando interativo (editor, <code>top</code>) nem <code>sudo</code> com senha, e no terminal dele não há <code>ssh</code>, <code>scp</code> nem <code>rsync</code>: tudo passa pelo MCP.</p></li>
         </ol>
         <div class="case-side">
-          <figure class="mock" role="img" aria-label="Cartão de permissão em precisa de mim: Aprovar em destaque e Sempre neste projeto esmaecido, com o aviso para evitar em comandos no servidor">
+          <figure class="mock" role="img" aria-label="Cartão de permissão em Inbox: Aprovar em destaque e Sempre neste projeto esmaecido, com o aviso para evitar em comandos no servidor">
             <div class="pcard" style="margin:10px"><b class="ttl">Pede permissão: [ferramenta]</b>
               <div class="acts"><span class="mb p">Aprovar</span><span class="mb off">Sempre neste projeto</span></div>
               <p class="m-note" style="margin:8px 0 0">Evite “Sempre neste projeto” para comandos no servidor.</p>
@@ -3201,7 +3243,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       <li><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>Pedido vago: o funcionário faz até três perguntas; responda com opções concretas.</span></li>
       <li><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>Ficha enxuta: poucas regras, só as que valem sempre (limite de 50).</span></li>
       <li><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>Memória curta (cerca de 60 linhas): guarde decisões, convenções e pendências, não logs.</span></li>
-      <li><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>Segredos não vão para o chat, para a ficha nem para a memória. Para MCP com chave, use o escopo <b class="ui">Da conta (Club)</b>; <b class="ui">Do projeto</b> vai para o git.</span></li>
+      <li><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>Segredos não vão para o chat, para a ficha nem para a memória. Para MCP com chave, use o escopo <b class="ui">Global</b> (segredos no cofre do sistema); <b class="ui">Projeto</b> vai para o git.</span></li>
       <li><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>Autonomia mínima: comece com <b class="ui">Só planeja</b> ou <b class="ui">Edita sozinho</b>. <b class="ui">Sem travas</b> só para quem você confia, em projeto com git.</span></li>
       <li><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>Projeto sem git não tem worktree, diff nem <b class="ui">Mesclar</b>: crie o repositório na hora de criar o projeto.</span></li>
       <li><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>Confira <b class="ui">O que mudou</b> e rode <b class="ui">Rodar testes</b> antes de <b class="ui">Mesclar em {base}</b>.</span></li>
@@ -3212,7 +3254,7 @@ footer.foot { margin: 48px 0 40px; padding-top: 16px; border-top: 2px dashed var
       <li><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span><b class="ui">Revisor(a)</b> e <b class="ui">Segurança (AppSec)</b> dão parecer; a correção vira tarefa nova para quem é da área.</span></li>
       <li><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>Para mapear um projeto já existente, crie o agent <b class="ui">Pesquisador (Haiku, só leitura)</b> com <b class="ui">Novo agent</b> no painel do projeto e peça o mapa a ele.</span></li>
       <li><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>Pensador × executor: o funcionário planeja e confere; o <b class="ui">Executor (Sonnet)</b> implementa e o <b class="ui">Executor rápido (Haiku)</b> faz só tarefa mecânica. Mudança local, conhecida e de baixo risco o funcionário faz sozinho: não é falha dele.</span></li>
-      <li><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span><b class="ui">Rodar testes</b> demorando a começar: outra suíte completa pode estar rodando no computador (uma por vez).</span></li>
+      <li><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span><b class="ui">Rodar testes</b> demorando a começar: outra suíte completa pode estar rodando no computador (uma por vez). O quadro mostra isso numa bolinha laranja no topo de Fazendo.</span></li>
     </ul>
   </section>
 
