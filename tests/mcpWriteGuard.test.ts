@@ -240,7 +240,7 @@ describe('a conversa: cópia dos hooks, política no run dir e nada por ferramen
     const cfg = { type: 'stdio', command: 'node', args: ['servidor.mjs'] };
     await fs.mkdir(home, { recursive: true });
     await fs.writeFile(path.join(home, 'claude.json'), JSON.stringify({ mcpServers: { falso: cfg } }));
-    await saveTestedTools(MCP_TOOLS_FILE, toolsKey('user', null, 'falso'), mcpFingerprint(cfg), [
+    await saveTestedTools(MCP_TOOLS_FILE, toolsKey('global', null, 'falso'), mcpFingerprint(cfg), [
       { name: 'buscar', readOnly: true },
       { name: 'apagar', readOnly: false },
     ]);

@@ -275,7 +275,8 @@ export async function commitPaths(dir: string, head: string, paths: string[], me
     if ((await git(dir, ['rev-parse', 'HEAD'])).trim() !== head) throw new Error('o HEAD mudou enquanto o commit era preparado: nada foi commitado');
     await git(dir, ['commit', '-q', '-m', message], { env, timeoutMs: COMMIT_TIMEOUT_MS });
   } finally {
-    await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
+    // maxRetries: no Windows o git que acabou de sair (ou o antivírus) ainda pode segurar o índice por um instante (EBUSY/EPERM).
+    await fs.rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
   }
   const sha = (await git(dir, ['rev-parse', '--short', 'HEAD'])).trim();
   if ((await git(dir, ['rev-parse', 'HEAD^']).catch(() => '')).trim() !== head) return { sha, problem: 'o HEAD mudou durante o commit: confira o histórico (git log) e o git status' };

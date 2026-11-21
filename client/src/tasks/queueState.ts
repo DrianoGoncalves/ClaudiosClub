@@ -1,6 +1,10 @@
 import type { StaffQueue } from '../../../shared/model';
 import { clockHM } from '../chat/wakeCountdown';
 import { locale, t, type MsgKey } from '../i18n';
+import { slotHolderLabel, type SlotHolder } from './ResourceWait';
+
+/** Quem ocupa a vaga de escrita que o card `taskId` espera (ver `slotHolder`). */
+export type SlotOf = (taskId: string) => SlotHolder | null;
 
 // O estado da fila de cada funcionário (`GET /api/projects/:id/queues`, ver `TaskService.queueStates`) em frases de quem vê o quadro: por que a fila de alguém não anda.
 // Livre e ocupado são só um aviso discreto; o que trava (recurso, consumo, entrega demorando, suíte esperando a vez) vem em destaque, com desde quando e o que fazer.
@@ -43,6 +47,7 @@ export function queueDots(
   titleOf: (taskId: string) => string,
   now: number,
   only = '',
+  slotOf?: SlotOf,
 ): QueueDot[] {
   const reviewing = new Map<string, string[]>();
   for (const t of tasks ?? []) {
@@ -52,7 +57,7 @@ export function queueDots(
   }
   const state = new Map((queues ?? []).map((q) => [q.staffId, q] as const));
   const dots: QueueDot[] = [];
-  for (const r of queueRows(queues, nameOf, titleOf, now, only, true)) {
+  for (const r of queueRows(queues, nameOf, titleOf, now, only, true, slotOf)) {
     const q = state.get(r.staffId);
     if (!q || q.state === 'free') continue;
     // Ocupado sem card, com revisão aberta: a conversa dele é a revisão, que já tem a bolinha em Revisão.
@@ -86,6 +91,8 @@ export function queueRows(
   only = '',
   /** Sem card esperando também entra (as bolinhas mostram quem está ocupado mesmo com a fila vazia). */
   empty = false,
+  /** Quem ocupa a vaga de escrita que o card esperando (`StaffQueue.taskId`) aguarda; null/ausente: a espera é do gate de recursos. */
+  slotOf?: SlotOf,
 ): QueueRow[] {
   const rows: QueueRow[] = [];
   for (const q of queues ?? []) {
@@ -105,9 +112,12 @@ export function queueRows(
       case 'busy':
         rows.push(row('quiet', q.taskId ? 'tasks.queueStBusy' : 'tasks.queueBusyChat'));
         break;
-      case 'resource-wait':
-        rows.push(row('stuck', 'tasks.queueResource', q.detail));
+      case 'resource-wait': {
+        // A fila parada pela vaga de escrita tem texto próprio (o servidor manda o motivo em pt-BR; aqui ele vira frase do idioma da tela, com o card que ocupa).
+        const slot = q.taskId ? slotOf?.(q.taskId) : null;
+        rows.push(slot ? row('stuck', 'tasks.queueSlot', t('tasks.slotWaitHint'), { holder: slotHolderLabel(slot) }) : row('stuck', 'tasks.queueResource', q.detail));
         break;
+      }
       case 'usage-limit':
         rows.push(row('stuck', 'tasks.queueUsage', q.detail));
         break;

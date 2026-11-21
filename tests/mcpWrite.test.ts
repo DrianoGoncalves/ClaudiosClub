@@ -180,9 +180,9 @@ describe('lista guardada e regras da sessão', () => {
 
   it('o teste guarda a lista; a ficha vê quantas são de escrita; a conversa recebe só as de leitura (o resto é do hook)', async () => {
     const env = await setup();
-    const r = await env.lib.test({ scope: 'user', name: 'falso' }, true);
+    const r = await env.lib.test({ scope: 'global', name: 'falso' }, true);
     expect(r.ok).toBe(true);
-    expect(await testedTools(env.toolsFile, toolsKey('user', null, 'falso'), mcpFingerprint(env.stdioCfg))).toHaveLength(5);
+    expect(await testedTools(env.toolsFile, toolsKey('global', null, 'falso'), mcpFingerprint(env.stdioCfg))).toHaveLength(5);
 
     const infos = await listMcpServers(env.proj, env.claude, env.club, env.toolsFile);
     expect(infos.find((m) => m.name === 'falso')?.tools).toEqual({ total: 5, write: 4 });
@@ -195,7 +195,7 @@ describe('lista guardada e regras da sessão', () => {
 
   it('MCP mudado depois do teste (outros argumentos): a lista de leitura fica vazia (a política pega o servidor inteiro)', async () => {
     const env = await setup();
-    await env.lib.test({ scope: 'user', name: 'falso' }, true);
+    await env.lib.test({ scope: 'global', name: 'falso' }, true);
     await fs.writeFile(env.claude, JSON.stringify({ mcpServers: { falso: { ...env.stdioCfg, args: [stdioScript, '--outro'] } } }));
     const file = await mcpWriteFileFor(env.proj, { mcpAccess: { falso: 'readonly' } }, env.claude, { clubFile: env.club, toolsFile: env.toolsFile });
     expect(file).toEqual({ falso: { policy: 'readonly', readOnly: [] } });
@@ -211,7 +211,7 @@ describe('lista guardada e regras da sessão', () => {
 
   it('lista fora do formato não é cortada: a entrada sai (volta a valer para o servidor inteiro)', async () => {
     const env = await setup();
-    const key = toolsKey('user', null, 'falso');
+    const key = toolsKey('global', null, 'falso');
     const fp = mcpFingerprint(env.stdioCfg);
     await saveTestedTools(env.toolsFile, key, fp, [{ name: 'ler', readOnly: true }]);
     await saveTestedTools(env.toolsFile, key, fp, [{ name: 'x'.repeat(300), readOnly: false }]);

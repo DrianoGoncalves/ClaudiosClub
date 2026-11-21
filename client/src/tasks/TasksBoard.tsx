@@ -8,7 +8,7 @@ import { t, locale } from '../i18n';
 import { BranchIcon, ClockIcon, ReviewIcon, UserIcon } from '../icons';
 import { PrimaryReturnBadge, PrimaryReturnLine, TaskFallbackBadge } from '../staff/FallbackBadge';
 import { AutoBadge, AutoInfo } from './AutoCard';
-import { BoardReview, useBoardCommit, useBoardReview } from './BoardReview';
+import { BoardReview, useBoardCommit, useBoardReview, useBoardWriter } from './BoardReview';
 import { CommitBadge, CommitBlock } from './TaskCommit';
 import { FallbackWaitBadge, fallbackWaitText } from './FallbackWait';
 import { ReviewDelegate, ReviewStatus } from './ReviewDelegate';
@@ -27,7 +27,7 @@ import { QueueDots, useQueues } from './QueueStrip';
 import { queueDots } from './queueState';
 import { RetryBadge, retryText } from './TaskRetry';
 import { SubtaskBadges, SubtaskBlock, SubtaskStack } from './TaskSubtasks';
-import { ResourceWaitBadge, resourceWaitText } from './ResourceWait';
+import { ResourceWaitBadge, resourceWaitHint, resourceWaitText, slotHolder } from './ResourceWait';
 import { BlockedBadge, BlockedByField, blockerName, openBlockers, sameDeps, shownBlockers } from './TaskDeps';
 import { waitClass, waitWarm } from './waitTone';
 import { dependentRows, type DepMap, type DepMode } from './cancelDeps';
@@ -185,6 +185,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const [dup, setDup] = useState<{ createdId: string; warnings: TaskCreateWarning[] } | null>(null);
   const boardReview = useBoardReview(projectId);
   const boardCommit = useBoardCommit(projectId);
+  const boardWriter = useBoardWriter(projectId);
   const projectPause = useProjectPause(projectId, projectName, onChanged, initialPause);
   const queues = useQueues(projectId, initialQueues);
   const now = Date.now();
@@ -309,7 +310,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   /** Quem aparece no seletor: quem tem tarefa no quadro (mais o escolhido, que pode ter esvaziado). */
   const filterOwners = staff.filter((s) => s.id === staffFilter || !!tasks?.some((t) => t.staffId === s.id));
   /** As bolinhas de quem está ocupado em Fazendo e Revisão (o filtro por funcionário vale para elas). */
-  const dots = queueDots(queues, tasks, (id) => nameOf(id), (id) => tasks?.find((x) => x.id === id)?.title ?? id, now, staffFilter);
+  const dots = queueDots(queues, tasks, (id) => nameOf(id), (id) => tasks?.find((x) => x.id === id)?.title ?? id, now, staffFilter, (id) => slotHolder(tasks?.find((x) => x.id === id)?.resourceWait, tasks ?? [], LABEL));
   const closingTask = closing ? (tasks?.find((t) => t.id === closing.id) ?? null) : null;
 
   /**
@@ -422,7 +423,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             {t('tasks.queuePos', { pos: queuePosOf(task), who: nameOf(task.staffId) ?? t('tasks.ownerFallback') })}
           </span>
         )}
-        <ResourceWaitBadge wait={task.resourceWait} now={now} warm={waitWarm(task.status)} />
+        <ResourceWaitBadge wait={task.resourceWait} now={now} warm={waitWarm(task.status)} holder={slotHolder(task.resourceWait, tasks ?? [], LABEL)} />
         <RetryBadge retry={task.retry} now={now} />
         {!!task.held?.length && (
           <span className={`task-queue${waitClass(waitWarm(task.status))} small`} title={t('tasks.heldHint')}>
@@ -508,7 +509,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             onClose={() => setDup(null)}
           />
         )}
-        <BoardReview review={boardReview} commit={boardCommit} staff={byHierarchy(staff)} />
+        <BoardReview review={boardReview} commit={boardCommit} writer={boardWriter} staff={byHierarchy(staff)} />
         {adding && (
           <TaskForm
             staff={byHierarchy(staff)}
@@ -1044,7 +1045,9 @@ function TaskDetail({
     waitingShown.length > 0 ? `${t('tasks.blockedDetail', { names: waitingShown.map(blockerName).join(', ') })}${waitingShown.some((o) => o.status === 'cancelled') ? ` ${t('tasks.blockedCancelledHint')}` : ''}` : null;
   const queueLine = queuePos > 0 && waitingShown.length === 0 ? t(queueKeys(waitingOn.length > 0, !!busyWith).detail, { who: ownerName, pos: queuePos, title: busyWith?.title ?? '' }) : null;
   const orderLine = moves ? t('tasks.orderLabel', { who: ownerName, pos: queuePos, total: queueTotal }) : null;
-  const resourceLine = task.resourceWait ? `${resourceWaitText(task.resourceWait, now)}. ${t('tasks.resourceWaitHint')}` : null;
+  /** A espera pela vaga de escrita (`resourceWait.holder`) leva o card que ocupa, com link; a de recursos segue com o texto do servidor. */
+  const slotOwner = slotHolder(task.resourceWait, tasks, LABEL);
+  const resourceLine = task.resourceWait ? `${resourceWaitText(task.resourceWait, now, slotOwner)}. ${resourceWaitHint(slotOwner)}` : null;
   const heldLine = task.held?.length
     ? `${task.held.length === 1 ? t('tasks.heldMineOne') : t('tasks.heldMineOther', { n: task.held.length })}: ${task.held[0]!.reason}. ${t('tasks.heldNext')}`
     : null;
@@ -1288,7 +1291,19 @@ function TaskDetail({
                   <p className="muted small">{t('tasks.orderHint', { who: ownerName })}</p>
                 </div>
               )}
-              {resourceLine && <p className={waitText}>{resourceLine}</p>}
+              {resourceLine && (
+                <p className={waitText}>
+                  {resourceLine}
+                  {slotOwner?.title != null && (
+                    <>
+                      {' '}
+                      <button type="button" className="link small" onClick={() => onOpenTask(slotOwner.id)}>
+                        {t('tasks.slotWaitOpen', { id: slotOwner.id })}
+                      </button>
+                    </>
+                  )}
+                </p>
+              )}
               {heldLine && <p className={waitText}>{heldLine}</p>}
             </div>
           </details>

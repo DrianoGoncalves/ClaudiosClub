@@ -1,21 +1,23 @@
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { resolveCaller, SessionTokens } from '../server/callers';
 import { sandboxVerdict, staffMayPost } from '../server/apiPolicy';
 import { TaskError, TaskForbiddenError, TaskService } from '../server/tasks';
 import type { Engine, StaffProfile, StaffQueue } from '../shared/model';
-import { tempDirs } from './support/tmp';
 
 // t-795f8d: um escritor por vez no checkout principal (`.myco/board.json`, `singleWriter`). Com a opção ligada, só um card por vez segura a vaga de escrita do projeto (fazendo, revisão, Aguardar, ou
 // pronto com o commit automático ainda por sair); o outro card que vai implementar espera na fila com o motivo (`Task.resourceWait`, o dado que `queueStates` e a tela já leem) e começa sozinho quando
 // a vaga abre. Worktree própria e a fase de plano não entram na conta. Repositório git de verdade (o commit automático roda), nos dois motores.
 
-const tmp = tempDirs();
 let root: string;
 beforeAll(async () => {
-  root = await tmp('myco-writer-');
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-writer-'));
+});
+afterAll(async () => {
+  await fs.rm(root, { recursive: true, force: true });
 });
 
 const PAST = '2020-01-01T00:00:00';

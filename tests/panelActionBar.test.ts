@@ -142,7 +142,7 @@ describe('o código dos painéis usa o ActionBar', () => {
     expect(css).toMatch(/\.btn-primary\.task-perm-go \{[^}]*\}/);
     expect(css).not.toMatch(/\.btn-secondary\.task-perm-go/);
     expect(css).toMatch(/\.panel-foot \{[^}]*position: sticky[^}]*env\(safe-area-inset-bottom\)/);
-    expect(css).toMatch(/@media \(max-width: 640px\) \{ \.btn-primary\.task-perm-go \{ min-height: 44px; \} \}/);
+    expect(css).toMatch(/\.btn-primary\.task-perm-go \{ width: 100%;(?![^}]*min-height)/);
   });
 
   it('o ActionBar aceita ícone (só ícone vira btn-icon com aria-label) e nó livre nas secundárias', () => {

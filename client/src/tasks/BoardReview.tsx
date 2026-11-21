@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useState } from 'react';
-import type { BoardCommitConfig, BoardConfig, StaffProfile } from '../../../shared/model';
+import type { BoardCommitConfig, BoardConfig, BoardWriterConfig, StaffProfile } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
 import { ReviewIcon } from '../icons';
@@ -109,6 +109,54 @@ export function useBoardCommit(projectId: string): BoardCommitState {
   return { config, error, saving, save };
 }
 
+export interface BoardWriterState {
+  /** null = ainda lendo, falhou ou o servidor não tem a rota. */
+  config: BoardWriterConfig | null;
+  error: string | null;
+  saving: boolean;
+  save: (singleWriter: boolean) => Promise<void>;
+}
+
+const isWriterConfig = (x: unknown): x is BoardWriterConfig => typeof x === 'object' && x !== null && typeof (x as BoardWriterConfig).singleWriter === 'boolean';
+
+/** Lê "um card escrevendo por vez" (a vaga de escrita do projeto) e grava o que o servidor devolve. Servidor sem a rota (404): o controle some. */
+export function useBoardWriter(projectId: string): BoardWriterState {
+  const [config, setConfig] = useState<BoardWriterConfig | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setConfig(null);
+    setError(null);
+    api.boardWriter(projectId).then(
+      (c) => live && isWriterConfig(c) && setConfig(c),
+      (e: Error) => live && !/: 404$/.test(e.message) && setError(e.message),
+    );
+    return () => {
+      live = false;
+    };
+  }, [projectId]);
+
+  const save = useCallback(
+    async (singleWriter: boolean) => {
+      setSaving(true);
+      setError(null);
+      try {
+        const saved = await api.saveBoardWriter(projectId, { singleWriter });
+        setConfig(isWriterConfig(saved) ? saved : await api.boardWriter(projectId));
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setSaving(false);
+      }
+    },
+    [projectId],
+  );
+
+  return { config, error, saving, save };
+}
+
 /** O funcionário que passa a ser o responsável ao ligar: o que já estava gravado (se ainda é do projeto) ou o primeiro da hierarquia. */
 export function reviewerToTurnOn(config: BoardConfig, staff: Pick<StaffProfile, 'id'>[]): string | null {
   return staff.some((s) => s.id === config.reviewerId) ? config.reviewerId : (staff[0]?.id ?? null);
@@ -118,20 +166,24 @@ interface Props {
   review: BoardReviewState;
   /** O commit automático; sem ele (ou sem `config`: lendo, ou servidor sem a rota) o controle não aparece. */
   commit?: BoardCommitState;
+  /** "Um card escrevendo por vez", junto do commit automático; mesma regra: sem `config` o controle não aparece. */
+  writer?: BoardWriterState;
   /** Funcionários do projeto, na ordem da hierarquia. */
   staff: StaffProfile[];
 }
 
-export function BoardReview({ review, commit, staff }: Props) {
+export function BoardReview({ review, commit, writer, staff }: Props) {
   const { config, missing, error, saving, save } = review;
   const labelId = useId();
   const commitLabelId = useId();
+  const writerLabelId = useId();
   if (missing || (!config && !error)) return null;
   const on = !!config?.autoReview;
   const reviewerId = config?.reviewerId ?? null;
   const known = staff.some((s) => s.id === reviewerId);
   const name = staff.find((s) => s.id === reviewerId)?.name ?? reviewerId ?? '';
   const commitOn = !!commit?.config?.autoCommit;
+  const writerOn = !!writer?.config?.singleWriter;
   return (
     <details className="collapse board-review">
       <summary>
@@ -188,11 +240,29 @@ export function BoardReview({ review, commit, staff }: Props) {
               <p className="muted small">{t('tasks.boardCommitRule')}</p>
             </>
           )}
+          {writer?.config && (
+            <>
+              <div className="board-review-row board-commit-row">
+                <span id={writerLabelId}>{t('tasks.boardWriter')}</span>
+                <button
+                  type="button"
+                  className="btn-secondary btn-toggle"
+                  aria-pressed={writerOn}
+                  aria-labelledby={writerLabelId}
+                  disabled={writer.saving}
+                  onClick={() => void writer.save(!writerOn)}
+                >
+                  {writerOn ? t('tasks.boardReviewOn') : t('tasks.boardReviewOff')}
+                </button>
+              </div>
+              <p className="muted small">{t('tasks.boardWriterRule')}</p>
+            </>
+          )}
         </div>
       )}
-      {(error || commit?.error) && (
+      {(error || commit?.error || writer?.error) && (
         <p className="error small" role="alert">
-          {error ?? commit?.error}
+          {error ?? commit?.error ?? writer?.error}
         </p>
       )}
     </details>

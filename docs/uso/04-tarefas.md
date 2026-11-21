@@ -359,6 +359,18 @@ No topo do quadro, dentro de **Revisão automática do quadro**, o botão **Comm
 - **Quando não commita** (e diz o motivo): sem lista de arquivos (edição só por terminal não é vista), lista no limite de 300 arquivos (pode estar cortada), repositório no meio de merge ou rebase, HEAD destacado, projeto que não é repositório git. Tarefa de **worktree** tem o fluxo de mesclar e fica de fora. Ligar depois não commita tarefas que já estavam prontas, e a mesma entrega nunca gera dois commits.
 - **Limite conhecido**: o Club só sabe o que foi gravado pelo **editor do Club** (aba de arquivos). Edição feita em **outro editor** (VS Code, vim…) ou pelo terminal não é detectada: o arquivo entra no commit da tarefa como se fosse dela. Se você edita o mesmo arquivo fora do Club, desligue o commit automático ou revise com `git show`.
 
+### Um card escrevendo por vez (opção "um escritor por vez")
+
+Opção do projeto, **desligada por padrão**. Liga e desliga só pela tela: no quadro de tarefas, abra o painel recolhível **Revisão automática do quadro**; lá, a linha **Um card escrevendo por vez** tem um botão **Ligada** / **Desligada** e, embaixo, o texto da regra. Ligada, só **um card por vez** edita código no checkout principal (a pasta do próprio projeto).
+
+- **Por quê**: o commit automático por tarefa só leva os arquivos do próprio card. Com dois cards editando a mesma pasta ao mesmo tempo, os arquivos se misturam e o commit de um fica parcial (veja "O que fica de fora" acima). Com um card por vez, cada commit sai limpo.
+- **Quem espera**: funcionário **sem** **Trabalhar numa worktree própria** edita direto no projeto. Se outro funcionário já tem um card editando, o card dele fica na fila e só começa quando o do outro fechar. O card que acabou de ficar pronto segura a vaga até a tentativa de commit terminar.
+- **Quem não espera**: funcionário **com** **Trabalhar numa worktree própria** trabalha em paralelo numa cópia só dele. Também passam direto o card só de plano (ainda não edita) e o card criado automaticamente.
+- **Mesma pessoa**: a fila de cada funcionário já anda um card por vez; a regra vale entre funcionários diferentes.
+- **No quadro**: o card que espera mostra o selo **Aguardando recursos: a vaga de escrita deste projeto está com “{título}” ({id}, fazendo)**. O texto diz quem ocupa a vaga e em que fase está (fazendo, em revisão, em Aguardar ou pronto com o commit automático ainda rodando). Ele começa sozinho quando a vaga libera ou a opção é desligada.
+- **Na ficha** (aba **Ficha**, ao lado de **Trabalhar numa worktree própria**): um aviso diz o efeito. Sem worktree e opção ligada: "Sem worktree, edita direto no projeto e espera…". Sem worktree e opção desligada: "…junto com os outros". Com worktree: "Com worktree própria, trabalha em paralelo numa cópia só dele, sem esperar ninguém."
+- **Quando ligar a worktree**: quando dois ou mais funcionários costumam editar ao mesmo tempo e esperar um pelo outro custa caro. Ela pesa disco, não memória, e o projeto precisa ser repositório git. Mas tarefa de worktree tem o fluxo de **Mesclar** e não entra no commit automático.
+
 ## Cancelar tarefa
 
 Cancelar fecha a tarefa sem entrega: ela não conta como pronta, o histórico e a conversa ficam guardados, e dá para **Reabrir** (volta para **A fazer**, sem começar sozinha). Quem depende dela continua esperando: cancelada bloqueia.
