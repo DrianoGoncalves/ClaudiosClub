@@ -417,8 +417,8 @@ const usageStopHit = async (projectId: string, staffId: string | null, engine: '
   }
 };
 /**
- * Projetos pausados (ver server/projectPause.ts): uma só fonte, perguntada por todo ponto de partida automática (a fila e a revisão em TaskService, as rotinas, o "continue", o
- * despertador, a retomada de turno e a do reinício). Pausado, nada começa sozinho; o que já roda termina o turno, e as suas ações manuais seguem.
+ * Projetos pausados (ver server/projectPause.ts): uma só fonte, perguntada por todo ponto de partida automática (a fila em TaskService, as rotinas, o "continue", o
+ * despertador, a retomada de turno e a do reinício). Pausado, nada de execução começa sozinho (a revisão da entrega já feita roda); o que já roda termina o turno, e as suas ações manuais seguem.
  */
 const projectPauses = new ProjectPauses(path.join(MYCO_HOME, 'paused-projects.json'));
 const projectPaused = (projectId: string) => projectPauses.isPaused(projectId);
@@ -702,7 +702,7 @@ const tasks = new TaskService({
   // E o plano (ou a permissão) que ficou pendente na conversa é negado: interromper não tira o cartão, e aprovar depois executaria.
   dismissPending: (sessionId, message) => void chats.dismissPending(sessionId, message),
   snapshot: (projectId, sessionId) => chats.snapshot(projectId, sessionId),
-  // Projeto pausado: a fila, a revisão automática, a retomada das órfãs e a troca de motor esperam (ver TaskService.paused).
+  // Projeto pausado: a fila, o ajuste da reprovação, a retomada das órfãs e a troca de motor esperam; a revisão da entrega já feita roda (ver TaskService.paused).
   pauses: projectPauses,
 });
 // Conversa direta no limite de uso (o dono pela tela): a mensagem segue no secundário da ficha, numa conversa nova (ver directFallback.ts).
@@ -1672,7 +1672,7 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     new RegExp(`^/api/projects/${ID}/board-commit$`),
     ({ params: [id], body, fromBrowser }) => tasks.setBoardCommit(id!, body, fromBrowser),
   ],
-  // Pausar o projeto (ver server/projectPause.ts): pausado, nada começa sozinho (fila, revisão automática, rotinas, despertador, "continue", retomada, troca de motor); o que já roda termina
+  // Pausar o projeto (ver server/projectPause.ts): pausado, nada de execução começa sozinho (fila, ajuste da reprovação, rotinas, despertador, "continue", retomada, troca de motor; a revisão da entrega já feita roda); o que já roda termina
   // o turno, e as suas ações manuais seguem. Ler é livre (`{ paused: { at } | null }`). Pausar e retomar só pelo navegador pareado: o serviço responde 403 a quem não é a tela (o gate já
   // barra o POST do funcionário antes, como nas outras rotas só da tela), e as rotas nem estão na lista de apiPolicy.ts. Idempotentes: pausar de novo mantém o horário, retomar o que roda é um nada.
   ['GET', new RegExp(`^/api/projects/${ID}/pause$`), ({ params: [id] }) => tasks.pauseOf(id!)],

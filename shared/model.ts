@@ -1377,8 +1377,8 @@ export interface TaskProgress {
 }
 
 /**
- * Projeto pausado (ver server/projectPause.ts): nada começa sozinho nele (fila, revisão automática, rotinas, despertador, "continue", retomada do reinício, troca de
- * motor). O que já roda termina o turno e para; as suas ações manuais (chat, mover cartão, "Começar") seguem. Só você pausa e despausa, pelo navegador.
+ * Projeto pausado (ver server/projectPause.ts): nada de execução começa sozinho nele (fila, ajuste da reprovação, rotinas, despertador, "continue", retomada do reinício, troca de
+ * motor); a revisão automática da entrega já feita roda. O que já roda termina o turno e para; as suas ações manuais (chat, mover cartão, "Começar") seguem. Só você pausa e despausa, pelo navegador.
  */
 export interface ProjectPause {
   /** Quando pausou (ISO). */

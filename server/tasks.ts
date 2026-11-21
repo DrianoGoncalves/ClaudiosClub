@@ -519,8 +519,8 @@ export interface TaskServiceDeps {
   /** O prazo da resposta das rotas que esperam a vez do funcionário (padrão: `LOCK_DEADLINE_MS`). */
   lockDeadlineMs?: number;
   /**
-   * Onde está quais projetos estão pausados (ver projectPause.ts). Pausado, nada começa sozinho: a fila, a revisão automática, a retomada das órfãs e a troca de motor
-   * esperam (ver `TaskService.paused`). Sem ele, nenhum projeto é pausável (os testes de antes).
+   * Onde está quais projetos estão pausados (ver projectPause.ts). Pausado, nada de execução começa sozinho: a fila, o ajuste da reprovação, a retomada das órfãs e a troca de
+   * motor esperam (ver `TaskService.paused`); a revisão de entrega já feita roda. Sem ele, nenhum projeto é pausável (os testes de antes).
    */
   pauses?: ProjectPauses;
 }
@@ -2618,9 +2618,9 @@ export class TaskService {
   async tick(now = new Date(), only?: string): Promise<void> {
     for (const projectId of only ? [only] : await this.deps.projectIds()) {
       const tasks = (await this.list(projectId)) ?? [];
-      // Projeto pausado (ver `paused`): a rodada só mantém o que não abre conversa (avisos, notas, a fila ganhando cartão) e o que o `takeNext` deixa passar (o seu ajuste
-      // guardado). A revisão e a retomada das órfãs ficam para quando ele for retomado, e a rodada que o retoma pega tudo na ordem de sempre. Sem a leitura da pausa
-      // (arquivo ilegível), vale como pausado.
+      // Projeto pausado (ver `paused`): a rodada mantém o que não abre trabalho de execução (avisos, notas, a fila ganhando cartão, a revisão das entregas já feitas) e o que o `takeNext`
+      // deixa passar (o seu ajuste guardado). A retomada das órfãs e o prazo do segundo plano ficam para quando ele for retomado, e a rodada que o retoma pega tudo na ordem de
+      // sempre. Sem a leitura da pausa (arquivo ilegível), vale como pausado.
       const paused = await this.paused(projectId).catch(() => true);
       await this.safely(() => this.escalateDoubts(projectId, tasks, now));
       await this.safely(() => this.retryDoubts(projectId, tasks, now));
@@ -2631,12 +2631,11 @@ export class TaskService {
       await this.safely(() => this.retryEngineStops(projectId, tasks, now));
       await this.safely(() => this.warnPermissions(projectId, tasks, now));
       await this.safely(() => this.retryOverlaps(projectId, tasks, now));
-      if (!paused) {
-        await this.safely(() => this.retryReviews(projectId, tasks, now));
-        await this.safely(() => this.chaseReviews(projectId, tasks, now));
-        await this.safely(() => this.resumeReviews(projectId, tasks));
-        await this.safely(() => this.releaseBackground(projectId, tasks, now));
-      }
+      // A revisão (abrir, refazer a que não começou, cobrar o veredito, recuperar a entrega que ficou sem pedido) roda pausado ou não: ver `autoReview`.
+      await this.safely(() => this.retryReviews(projectId, tasks, now));
+      await this.safely(() => this.chaseReviews(projectId, tasks, now));
+      await this.safely(() => this.resumeReviews(projectId, tasks));
+      if (!paused) await this.safely(() => this.releaseBackground(projectId, tasks, now));
       await this.safely(() => this.releaseOutcomes(projectId, tasks, now));
       await this.safely(() => this.enqueueIdle(projectId, tasks));
       for (const t of paused ? [] : tasks) {
@@ -3009,7 +3008,7 @@ export class TaskService {
 
   /**
    * A conversa parou sem terminar e o card foi para revisão com algo a revisar (ver `orphan`): abre a revisão automática como numa entrega, depois da vez do funcionário. Mesma chave
-   * de `deliver` e `retryReviews`: quem já a tem (o tick refazendo, ou outro aviso) não é atropelado. Projeto pausado, sem revisor ou falha seguem as regras de `autoReview`.
+   * de `deliver` e `retryReviews`: quem já a tem (o tick refazendo, ou outro aviso) não é atropelado. Sem revisor ou falha seguem as regras de `autoReview`.
    */
   private async reviewStopped(projectId: string, task: Task): Promise<void> {
     const key = `review:${projectId}:${task.id}`;
@@ -3135,8 +3134,9 @@ export class TaskService {
   }
 
   // ---- Projeto pausado -----------------------------------------------------------------------------------------------
-  // Pausado, nada começa sozinho (ver `ProjectPause`). Todo ponto de partida automática daqui pergunta a `paused` (a fila em `takeNext`, o início que não é seu em `startJob`, a
-  // revisão em `autoReview` e nos passos do `tick`, a retomada das órfãs, a troca de motor em `onLimit`, a reprovação em `reject`); o resto do servidor (rotinas, "continue",
+  // Pausado, nada de execução começa sozinho (ver `ProjectPause`). Todo ponto de partida automática daqui pergunta a `paused` (a fila em `takeNext`, o início que não é seu em `startJob`,
+  // a retomada das órfãs e o prazo do segundo plano no `tick`, a troca de motor em `onLimit`, o ajuste da reprovação em `reject`); a revisão da entrega já feita NÃO pergunta (`autoReview`
+  // e os passos de revisão do `tick` rodam: o veredito é gravado, o ajuste que ele manda é que espera); o resto do servidor (rotinas, "continue",
   // despertador, retomada do reinício) recebe a pergunta pela opção `paused` de cada um, ligada ao mesmo `ProjectPauses` (ver index.ts). O que já roda termina o turno e para
   // ali: nada mata processo. A tarefa fica onde está e retoma ao despausar, na ordem da fila.
 
@@ -4470,9 +4470,8 @@ export class TaskService {
 
   /** Entregue com revisor (o da tarefa ou o do quadro, ver `reviewerOf`): pede a revisão sozinho, até AUTO_REVIEW_ROUNDS rodadas. */
   private async autoReview(projectId: string, task: Task): Promise<void> {
-    // Projeto pausado: a revisão não abre sozinha, e a tarefa fica em "revisão" como entregue. Sem marca nem nota: ao retomar, `resumeReviews` a acha como a entrega que ficou
-    // sem pedido (ver `reviewLost`) e a revisão segue na ordem de sempre. O pedido seu, pelo quadro (`requestReview`), não passa por aqui.
-    if (await this.paused(projectId).catch(() => true)) return;
+    // A pausa não barra a revisão: ela confere uma entrega que já está feita e só grava o veredito (não abre trabalho de execução). O que a pausa segura é o que sai do veredito: o ajuste
+    // da reprovação fica guardado (`reject`) e a fila só anda ao retomar (`takeNext`).
     const reviewer = await this.reviewerOf(projectId, task);
     if (!reviewer) return;
     const deliveryAt = task.delivery?.at ?? null;

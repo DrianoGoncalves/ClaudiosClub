@@ -3,8 +3,8 @@ import { z } from 'zod';
 import type { ProjectPause } from '../shared/model';
 import { writeAtomic } from './atomicWrite';
 
-// Projeto pausado: nada começa sozinho nele (a fila, a revisão automática, as rotinas, o despertador, o "continue", a retomada do reinício e a troca de motor);
-// o que já roda termina o turno e para ali, e as ações manuais do dono seguem valendo. O estado é por projeto, em `~/.myco/paused-projects.json` (da máquina, não do
+// Projeto pausado: nada de execução começa sozinho nele (a fila, o ajuste da reprovação, as rotinas, o despertador, o "continue", a retomada do reinício e a troca de motor);
+// o que já roda termina o turno e para ali, e as ações manuais do dono seguem valendo. A revisão automática da entrega já feita NÃO é barrada: o veredito é gravado. O estado é por projeto, em `~/.myco/paused-projects.json` (da máquina, não do
 // repositório: pausar é decisão de quem paga o consumo aqui), e sobrevive a reinício. Um só lugar responde "este projeto está pausado?": todo ponto de partida
 // automática pergunta a este arquivo (`isPaused`), e nenhum guarda cópia.
 
