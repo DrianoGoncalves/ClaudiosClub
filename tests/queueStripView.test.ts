@@ -129,10 +129,11 @@ describe('QueueDots e o quadro', () => {
     );
     expect(html).toContain('role="group"');
     expect(html.match(/class="queue-dot"/g)).toHaveLength(2);
-    expect(html).toContain('class="queue-avatar is-stuck tone-wait"');
-    expect(html).toContain('class="queue-avatar is-busy"');
-    // Sem a ficha, as iniciais do id no lugar do retrato.
-    expect(html).toContain('>B<');
+    // O mesmo `Portrait` do organograma (menor), com o contorno à mão; sem a ficha, as iniciais do id.
+    expect(html.match(/class="bn-portrait is-mini"/g)).toHaveLength(2);
+    expect(html.match(/class="sketch /g)).toHaveLength(2);
+    expect(html).toContain('<span>B</span>');
+    expect(html).not.toContain('class="dot ');
     expect(html).toContain('aria-label="Belchior: fila parada, esperando a máquina folgar · 2 na fila · desde 14:32. pouca memória"');
     expect(html).not.toContain('role="tooltip"');
     expect(html).not.toContain('>Belchior');
@@ -148,8 +149,9 @@ describe('QueueDots e o quadro', () => {
     );
     expect(html).toContain('src="/api/projects/p1/staff/bel/portrait?v=2026-11-20T10%3A00%3A00.000Z"');
     expect(html.match(/<img /g)).toHaveLength(1);
-    expect(html).toContain('>LD<');
-    expect(html).not.toContain('class="dot ');
+    // Iniciais só quando não há foto: quem tem retrato não mostra as dele.
+    expect(html).toContain('<span>LD</span>');
+    expect(html).not.toContain('<span>B</span>');
   });
 
   it('ninguém ocupado, não desenha nada', () => {
@@ -163,7 +165,7 @@ describe('QueueDots e o quadro', () => {
         createElement(TasksBoard, {
           projectId: 'p',
           projectName: 'Projeto',
-          staff: [{ id: 'bel', name: 'Belchior', servers: [], reportsTo: [] } as never, { id: 'leo', name: 'Leonardo', servers: [], reportsTo: [] } as never],
+          staff: [{ id: 'bel', name: 'Belchior', portrait: 'p.png', updatedAt: ISO, servers: [], reportsTo: [] } as never, { id: 'leo', name: 'Leonardo', servers: [], reportsTo: [] } as never],
           costs: null,
           onClose: () => {},
           onOpenStaff: () => {},
@@ -177,6 +179,9 @@ describe('QueueDots e o quadro', () => {
     const doing = html.slice(html.indexOf('tasks-col-doing'), html.indexOf('tasks-col-review'));
     const rev = html.slice(html.indexOf('tasks-col-review'), html.indexOf('tasks-col-done'));
     expect(doing).toContain('aria-label="Belchior: trabalhando em Tela de login');
+    // O quadro passa a ficha: Belchior (com retrato) aparece com a foto, Leonardo (sem) com as iniciais.
+    expect(doing).toContain('src="/api/projects/p/staff/bel/portrait?v=');
+    expect(rev).toContain('<span>L</span>');
     expect(rev).toContain('aria-label="Leonardo: revisando Outra"');
     // Sem o dado das filas, só Fazendo perde a bolinha: Revisão vem dos cards.
     for (const none of [undefined, null]) {

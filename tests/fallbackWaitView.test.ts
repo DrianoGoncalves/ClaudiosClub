@@ -65,10 +65,10 @@ describe('texto da espera (cartão e detalhe)', () => {
 describe('selo no cartão', () => {
   const html = (w: Task['fallbackBlocked'], warm?: boolean) => renderToStaticMarkup(createElement(FallbackWaitBadge, { wait: w, now: NOW, warm }));
 
-  it('só A fazer leva o laranja (task-wait); nas outras colunas fica neutro', () => {
-    expect(html(wait(), true)).toContain('task-queue task-fbwait task-wait small');
+  it('só A fazer leva o laranja (tone-wait); nas outras colunas fica neutro', () => {
+    expect(html(wait(), true)).toContain('task-queue task-fbwait tone-wait small');
     expect(html(wait(), false)).toContain('task-queue task-fbwait small');
-    expect(html(wait())).not.toContain('task-wait');
+    expect(html(wait())).not.toContain('tone-wait');
   });
 
   it('texto escapado; a frase inteira vai no title', () => {

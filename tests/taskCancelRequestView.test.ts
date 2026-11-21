@@ -56,7 +56,7 @@ describe('selo do cartão: pedido de cancelamento', () => {
   it('o selo é neutro (sem amarelo nem laranja) e o title traz o motivo, ou o porquê da recusa; escapa o texto', () => {
     const p = renderToStaticMarkup(createElement(CancelRequestBadge, { request: pending({ reason: '<b>x</b> & y' }), nameOf }));
     expect(p).toContain('task-badge task-cancelreq small');
-    expect(p).not.toMatch(/is-waiting|task-wait/);
+    expect(p).not.toMatch(/is-waiting|tone-action|tone-wait/);
     expect(p).toContain('title="Pedido de cancelamento de Ana: &lt;b&gt;x&lt;/b&gt; &amp; y"');
     const r = renderToStaticMarkup(createElement(CancelRequestBadge, { request: refused(), nameOf }));
     expect(r).toContain('title="Cancelamento recusado: já está quase pronta"');

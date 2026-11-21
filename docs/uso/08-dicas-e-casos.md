@@ -75,7 +75,7 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 
 **Conferir no fim:**
 
-- nenhum segredo foi colado no chat; se foi, troque-o e clique em **já troquei** no aviso **segredo** (em **precisa de mim**);
+- nenhum segredo foi colado no chat; se foi, troque-o e clique em **já troquei** no aviso **segredo** (em **Inbox**);
 - os riscos críticos e altos estão corrigidos e reconferidos;
 - as dependências com vulnerabilidade estão separadas entre produção e desenvolvimento.
 
@@ -88,7 +88,7 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 1. Antes, na VPS, crie um usuário só para a IA, sem root e com as permissões mínimas. No detalhe do projeto, em **Servidores**, cadastre a conexão com esse usuário e a chave dele, e use **Testar**. Chave com senha precisa estar no `ssh-agent`.
 2. Contrate **DevOps / SRE**. Na ficha, aba **Projeto**, clique em **+ dar acesso a servidores (SSH e FTP)** e marque a conexão. A chave fica no seu computador; a ficha guarda só o nome. Deixe **Permitir comandos de escrita** desmarcado.
 3. **Tarefas** → **Nova tarefa** → **O que precisa ser feito**: "só diagnosticar, sem mudar nada" → **Quem cuida**: **DevOps / SRE** → **Criar e começar**. Ele lê o servidor pelo MCP `myco-ssh` (status, logs, containers, serviços, arquivos de log).
-4. No Claude, em **precisa de mim**, aprove cada cartão de **permissão** com **Aprovar**. No Codex não aparece cartão: o comando de escrita roda direto, se a caixa estiver marcada. Evite **Sempre neste projeto** para comandos no servidor.
+4. No Claude, em **Inbox**, aprove cada cartão de **permissão** com **Aprovar**. No Codex não aparece cartão: o comando de escrita roda direto, se a caixa estiver marcada. Evite **Sempre neste projeto** para comandos no servidor.
 5. Para publicar, o servidor precisa deixar de ser só leitura: na ficha, marque **Permitir comandos de escrita** na conexão. A autonomia **Edita sozinho**, que o cargo já traz, basta; se você a trocou por **Só planeja** ou **Pede tudo**, o servidor segue só leitura mesmo com a caixa marcada. No Claude, em **Edita sozinho** cada comando de escrita ainda pede o seu ok; no Codex, ele roda sem perguntar, e a caixa marcada é o que vale. Depois abra a tarefa em **Finalizado** (ou mesclada) → **Pedir deploy** → **Quem faz o deploy**: **DevOps / SRE**.
 6. Siga o checklist: backup, estado antes e depois, runbook. Confirme os passos que não têm volta.
 
@@ -163,7 +163,7 @@ Fontes: as páginas 01 a 07 desta pasta e `shared/roles.ts` (nomes dos cargos). 
 - Pedido vago: o funcionário faz até três perguntas; responda com opções concretas.
 - Ficha enxuta: poucas regras, só as que valem sempre (limite de 50).
 - Memória curta (cerca de 60 linhas): guarde decisões, convenções e pendências, não logs.
-- Segredos não vão para o chat, para a ficha nem para a memória. Para MCP com chave, use o escopo **Da conta (Club)**; **Do projeto** vai para o git.
+- Segredos não vão para o chat, para a ficha nem para a memória. Para MCP com chave, use o escopo **Global** (segredos no cofre do sistema); **Projeto** vai para o git.
 - Autonomia mínima: comece com **Só planeja** ou **Edita sozinho**. **Sem travas** só para quem você confia, em projeto com git.
 - Projeto sem git não tem worktree, diff nem **Mesclar**: crie o repositório na hora de criar o projeto.
 - Confira **O que mudou** e rode **Rodar testes** antes de **Mesclar em {base}**.

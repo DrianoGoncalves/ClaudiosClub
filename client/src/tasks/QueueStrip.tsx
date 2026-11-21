@@ -2,8 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { StaffProfile, StaffQueue } from '../../../shared/model';
 import { api } from '../api';
-import { portraitUrl } from '../board/nodes';
-import { initials } from '../format';
+import { Portrait, portraitUrl } from '../board/nodes';
 import { t } from '../i18n';
 import { cardTone } from '../inbox/alertTone';
 import { pollVisible } from '../usePoll';
@@ -30,18 +29,7 @@ export function useQueues(projectId: string, initial?: StaffQueue[] | null): Sta
 
 const TIP_W = 280;
 
-/** O retrato do funcionário no lugar da bolinha; sem retrato (ou com o arquivo quebrado), as iniciais. O anel leva a cor do estado: verde ocupado, laranja de espera na fila travada. */
-function QueueAvatar({ name, src, className }: { name: string; src: string | null; className: string }) {
-  const [broken, setBroken] = useState(false);
-  useEffect(() => setBroken(false), [src]);
-  return (
-    <span className={`queue-avatar ${className}`} aria-hidden="true">
-      {src && !broken ? <img src={src} alt="" loading="lazy" onError={() => setBroken(true)} /> : initials(name)}
-    </span>
-  );
-}
-
-/** `name` e `src` (o retrato) vêm da ficha do funcionário; sem ela, o id e as iniciais dele. */
+/** `name` e `src` (o retrato) vêm da ficha do funcionário; sem retrato, as iniciais (como no organograma). */
 function QueueDotButton({ dot, name, src }: { dot: QueueDot; name: string; src: string | null }) {
   const [at, setAt] = useState<{ left: number; top: number } | null>(null);
   const btn = useRef<HTMLButtonElement>(null);
@@ -81,7 +69,8 @@ function QueueDotButton({ dot, name, src }: { dot: QueueDot; name: string; src: 
         onBlur={close}
         onClick={open}
       >
-        <QueueAvatar name={name} src={src} className={dot.tone === 'stuck' ? `is-stuck ${cardTone('queue')}` : 'is-busy'} />
+        {/* O mesmo retrato do organograma (foto ou iniciais, contorno à mão), menor; o traço leva a cor do estado: azul ocupado, amarelo de espera na fila travada. */}
+        <Portrait id={dot.staffId} label={name} src={src} size={28} variant={dot.tone === 'stuck' ? 'waiting' : 'busy'} />
       </button>
       {at &&
         createPortal(

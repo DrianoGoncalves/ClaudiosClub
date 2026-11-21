@@ -4132,12 +4132,19 @@ export class TaskService {
       free();
     };
     try {
-      const fresh = await readTasks(dir);
+      // `readTasks` devolve lista vazia quando a leitura falha (no Windows, o arquivo trocado naquele instante): "sem ninguém" seria falso e deixaria dois escritores passarem. O próprio card tem de
+      // estar no que se leu; senão lê de novo, e sem achar a partida não segue (o card fica onde está, e a fila tenta no próximo tick).
+      let fresh = await readTasks(dir);
+      for (let i = 1; i <= 3 && !fresh.some((t) => t.id === task.id); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 25 * i));
+        fresh = await readTasks(dir);
+      }
       const committing = this.committingIds(projectId);
-      const ownCopy = await this.ownCopyStaff(projectId, fresh, committing);
       const self = fresh.find((t) => t.id === task.id);
+      if (!self) throw new TaskError('não consegui conferir a vaga de escrita: o quadro não foi lido agora');
+      const ownCopy = await this.ownCopyStaff(projectId, fresh, committing);
       // Quem já segura a vaga (voltou à fila, ajuste guardado, o dono que a tinha antes de a opção ligar) não espera por ninguém: não entra mais um escritor.
-      const holder = self && holdsWrite(self, fresh, ownCopy, committing) ? undefined : writeHolder(fresh, ownCopy, committing, task.id);
+      const holder = holdsWrite(self, fresh, ownCopy, committing) ? undefined : writeHolder(fresh, ownCopy, committing, task.id);
       if (holder) {
         release();
         return { holder };

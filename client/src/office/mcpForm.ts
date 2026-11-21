@@ -2,14 +2,15 @@
 // do formulário. Valores de env/cabeçalho nunca vêm do servidor: chave guardada aparece como "definido";
 // campo vazio = manter (null no corpo), preenchido = trocar, e "remover" vai em `removeKeys`.
 
-export type McpScope = 'club' | 'user' | 'project' | 'local';
+// Só dois escopos, como as skills: Global (~/.claude.json, vale também no Claude Code fora do Club) e Projeto (.mcp.json; o antigo escopo local\n// aparece como Projeto com outOfGit).
+export type McpScope = 'global' | 'project';
 export type McpType = 'http' | 'sse' | 'stdio';
 
-export const MCP_SCOPES: McpScope[] = ['club', 'user', 'project', 'local'];
+export const MCP_SCOPES: McpScope[] = ['global', 'project'];
 export const MCP_TYPES: McpType[] = ['http', 'sse', 'stdio'];
 
-/** Escopos que moram num projeto (.mcp.json e os locais do ~/.claude.json). */
-export const isProjectScope = (s: McpScope) => s === 'project' || s === 'local';
+/** Escopo que mora num projeto (.mcp.json e os locais do ~/.claude.json). */
+export const isProjectScope = (s: McpScope) => s === 'project';
 
 export interface McpKey {
   key: string;
@@ -20,6 +21,10 @@ export interface McpServer {
   name: string;
   scope: McpScope;
   projectId?: string;
+  /** Projeto: vem do escopo local do ~/.claude.json (não vai para o git). */
+  outOfGit?: boolean;
+  /** Global: entrada do Club (valores no cofre). */
+  managed?: boolean;
   type: McpType;
   url?: string;
   command?: string;
@@ -71,10 +76,10 @@ export interface McpDraft {
 
 const savedPairs = (keys: McpKey[]): PairDraft[] => keys.map((k) => ({ key: k.key, value: '', saved: k.set, removed: false }));
 
-/** Rascunho novo (sugere o cofre do Club) ou de um servidor existente. */
+/** Rascunho novo (começa na Global) ou de um servidor existente. */
 export function draftFrom(server: McpServer | null, projectId: string | null = null): McpDraft {
   if (!server) {
-    return { scope: 'club', projectId, name: '', type: 'http', url: '', command: '', args: '', argsMasked: false, argsTouched: false, env: [], headers: [] };
+    return { scope: 'global', projectId, name: '', type: 'http', url: '', command: '', args: '', argsMasked: false, argsTouched: false, env: [], headers: [] };
   }
   return {
     scope: server.scope,
@@ -182,7 +187,7 @@ export function targetLabel(s: McpServer): string {
 
 /** Agrupa na ordem da tela; os de projeto só do projeto escolhido. */
 export function groupServers(servers: McpServer[]): Record<McpScope, McpServer[]> {
-  const out: Record<McpScope, McpServer[]> = { club: [], user: [], project: [], local: [] };
+  const out: Record<McpScope, McpServer[]> = { global: [], project: [] };
   for (const s of servers) out[s.scope]?.push(s);
   for (const k of MCP_SCOPES) out[k].sort((a, b) => a.name.localeCompare(b.name));
   return out;

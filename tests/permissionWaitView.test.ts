@@ -98,7 +98,7 @@ describe('o quadro de tarefas: onde o selo, o atalho e o bloco são ligados', ()
     // O atalho é irmão do botão do cartão: depois do </button> do cartão, nunca dentro dele.
     const closeCard = card.indexOf('</button>');
     expect(card.indexOf('task-perm-go')).toBeGreaterThan(closeCard);
-    expect(card).toMatch(/<button class="btn-secondary task-perm-go"[^>]*>Responder no chat<\/button>/);
+    expect(card).toMatch(/<button class="btn-primary task-perm-go"[^>]*>Responder no chat<\/button>/);
     expect(detail).toContain('<div class="task-perm">');
     // O botão é a ação principal do rodapé fixo (uma vez só), não mais um botão dentro do cartão do pedido.
     expect(detail.match(/<button type="button" class="btn-primary"[^>]*>Responder no chat<\/button>/g)).toHaveLength(1);

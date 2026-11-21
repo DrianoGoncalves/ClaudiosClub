@@ -97,18 +97,20 @@ describe('o quadro: selo, destaque e topo da coluna Fazendo', () => {
     expect(card).toContain('>Planejando</span>');
     expect(card).not.toContain('Plano para aprovar');
     expect(card).not.toContain('is-waiting');
+    expect(card).not.toContain('tone-action');
   });
 
   it('sem a caixa (undefined): o mesmo, nada de plano esperando', () => {
     const card = cardOf(render([task()]), 't-17e624');
     expect(card).not.toContain('Plano para aprovar');
     expect(card).not.toContain('is-waiting');
+    expect(card).not.toContain('tone-action');
   });
 
   it('com plano esperando na conversa dela: selo amarelo "Plano para aprovar" e cartão is-waiting, como antes', () => {
     const card = cardOf(render([task()], [item()]), 't-17e624');
     expect(card).toMatch(/^<button class="task-card[^"]*is-waiting/);
-    expect(card).toContain('<span class="task-badge is-waiting" title="Ele está montando o plano; você aprova no cartão de plano do chat.">Plano para aprovar</span>');
+    expect(card).toContain('<span class="task-badge tone-action" title="Ele está montando o plano; você aprova no cartão de plano do chat.">Plano para aprovar</span>');
     expect(card).not.toContain('>Planejando</span>');
   });
 
@@ -116,6 +118,7 @@ describe('o quadro: selo, destaque e topo da coluna Fazendo', () => {
     const card = cardOf(render([task()], [item({ sessionId: 'sess-outra' })]), 't-17e624');
     expect(card).not.toContain('Plano para aprovar');
     expect(card).not.toContain('is-waiting');
+    expect(card).not.toContain('tone-action');
   });
 
   it('topo da coluna: só quem tem plano esperando passa na frente do mais recente', () => {

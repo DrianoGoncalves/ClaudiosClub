@@ -145,10 +145,10 @@ describe('balão do follow-up', () => {
   it('tarefa aberta: "Criar card" e "Descartar"; sem o selo "Finalizado"', () => {
     for (const t of [null, task({ status: 'doing' })]) {
       const out = notice(item(fields()), t);
-      expect(out).toContain('Criar card');
+      expect(out).toContain('Revisar e criar card');
       expect(out).toContain('Descartar');
       expect(out).not.toContain('Finalizado');
-      expect(out).not.toContain('Revisar');
+      expect(out).not.toContain('>Revisar<');
       expect(out).not.toContain('Concluir');
     }
   });
@@ -174,7 +174,7 @@ describe('balão do follow-up', () => {
     expect(out).not.toContain('Se não fizer');
     expect(out).not.toContain('fu-rec');
     expect(out).not.toContain('Tamanho:');
-    expect(out).toContain('Criar card');
+    expect(out).toContain('Revisar e criar card');
     expect(hasFields(legacy())).toBe(false);
     expect(hasFields(fields())).toBe(true);
     expect(followUpTitle({ title: undefined, text: 'Primeira.\nSegunda.' })).toBe('Primeira.');
@@ -302,7 +302,7 @@ describe('no quadro', () => {
         });
         it(`follow-up ${kind} com ${to === 'manager' ? 'o gestor' : 'você'}, sem conversa, tarefa em andamento: o dono vê Criar card e Descartar`, () => {
           const detail = open({ ...shape, to }, { status: 'doing', review: undefined });
-          expect(detail).toContain('Criar card');
+          expect(detail).toContain('Revisar e criar card');
           expect(detail).toContain('Descartar');
         });
       }

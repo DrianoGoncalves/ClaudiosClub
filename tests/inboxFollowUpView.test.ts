@@ -61,7 +61,7 @@ describe('follow-up na caixa', () => {
 
   it('tarefa de origem aberta: as saídas são Criar card e Descartar, sem o selo "Finalizado"', () => {
     const out = menu([followUpItem()], [task({ status: 'doing' })]);
-    expect(out).toContain('Criar card</button>');
+    expect(out).toContain('Revisar e criar card</button>');
     expect(out).toContain('Descartar</button>');
     expect(out).not.toContain('Concluir</button>');
     expect(out).not.toContain('fu-done');
@@ -70,13 +70,13 @@ describe('follow-up na caixa', () => {
   it('as saídas só ligam com a tarefa lida: sem a leitura (ainda não chegou ou falhou) ficam desligadas e a caixa diz por quê', () => {
     const out = menu([followUpItem()]);
     expect(out).toContain('Lendo a tarefa de origem');
-    const buttons = out.match(/<button[^>]*>(Criar card|Descartar)<\/button>/g) ?? [];
+    const buttons = out.match(/<button[^>]*>(Revisar e criar card|Descartar)<\/button>/g) ?? [];
     expect(buttons).toHaveLength(2);
     for (const b of buttons) expect(b).toContain('disabled=""');
     // Com a leitura, o aviso some e o botão liga.
     const read = menu([followUpItem()], [task({ status: 'doing' })]);
     expect(read).not.toContain('Lendo a tarefa de origem');
-    expect(read.match(/<button[^>]*>(Criar card|Descartar)<\/button>/g)?.some((b) => b.includes('disabled'))).toBe(false);
+    expect(read.match(/<button[^>]*>(Revisar e criar card|Descartar)<\/button>/g)?.some((b) => b.includes('disabled'))).toBe(false);
   });
 
   it('o "Abrir card" fica ligado mesmo sem a leitura (só abre o quadro)', () => {

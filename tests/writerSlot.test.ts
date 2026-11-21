@@ -398,14 +398,24 @@ describe('a fila', () => {
     const rui = await b.begin('rui-1', 'Terceira da fila');
     expect((await b.get(bia.id)).resourceWait!.holder).toBe(ana.id);
     expect((await b.get(rui.id)).resourceWait!.holder).toBe(ana.id);
-    const notes = (await b.get(rui.id)).history.length;
+    const notes = { [bia.id]: (await b.get(bia.id)).history.length, [rui.id]: (await b.get(rui.id)).history.length };
     await b.svc.update('p', ana.id, { status: 'done' });
-    await b.started(bia.id);
-    await until(async () => expect((await b.get(rui.id)).resourceWait?.holder).toBe(bia.id));
-    const t = await b.get(rui.id);
-    expect(t.resourceWait!.reason).toContain('“Segunda da fila”');
-    expect(t.history.length).toBe(notes);
-    expect(b.opened('rui-1')).toBe(0);
+    // As duas filas acordam juntas: quem entra primeiro na vaga não é fixo. Um começa; o outro passa a esperar por ele (o motivo troca de dono, sem nota nova).
+    await until(async () => {
+      const both = [await b.get(bia.id), await b.get(rui.id)];
+      const winner = both.find((t) => t.sessionId);
+      const loser = both.find((t) => !t.sessionId);
+      const state = JSON.stringify(both.map((t) => ({ id: t.id, status: t.status, sessionId: t.sessionId, resourceWait: t.resourceWait, queuedAt: t.queuedAt, startRetry: t.startRetry, last: t.history.at(-1) })));
+      expect(winner, state).toBeTruthy();
+      expect(loser?.resourceWait?.holder, state).toBe(winner!.id);
+    });
+    const both = [await b.get(bia.id), await b.get(rui.id)];
+    const winner = both.find((t) => t.sessionId)!;
+    const loser = both.find((t) => !t.sessionId)!;
+    expect(loser.resourceWait!.reason).toContain(`“${winner.title}”`);
+    expect(loser.resourceWait!.holder).not.toBe(ana.id);
+    expect(loser.history.length).toBe(notes[loser.id]);
+    expect(b.opened('bia-1') + b.opened('rui-1')).toBe(1);
   });
 
   it('duas partidas ao mesmo tempo (funcionários diferentes): só uma abre a conversa', async () => {
@@ -433,6 +443,17 @@ describe('a fila', () => {
     expect((await b.get(bia.id)).resourceWait!.holder).toBe(ana.id);
     expect((await b.get(ana.id)).status).toBe('doing');
     expect((await b.get(rui.id)).status).toBe('doing');
+  });
+
+  it('leitura do quadro sem o próprio card (arquivo trocado naquele instante) não vale como "vaga livre": a partida não segue e o portão não fica preso', async () => {
+    const b = await club('leitura');
+    await b.on();
+    const ghost = { ...(await b.get(await b.create('ana-1', 'Fantasma'))), id: 't-naoexiste' };
+    const gate = b.svc as unknown as { takeSlot(projectId: string, task: unknown, profile: unknown): Promise<unknown> };
+    await expect(gate.takeSlot('p', ghost, b.people['ana-1'])).rejects.toBeInstanceOf(TaskError);
+    // O portão foi solto: a partida seguinte passa.
+    const ana = await b.begin('ana-1', 'Real');
+    expect(ana.work).toBeTruthy();
   });
 
   it('o reinício não perde quem ocupa: o estado vem do tasks.json', async () => {

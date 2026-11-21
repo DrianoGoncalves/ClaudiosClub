@@ -64,7 +64,7 @@ export function PermissionWaitBadge({ text }: { text: PermissionText | null }) {
 export function PermissionGo({ onOpen }: { onOpen?: () => void }) {
   if (!onOpen) return null;
   return (
-    <button className="btn-secondary task-perm-go" onClick={onOpen} title={t('tasks.permOpenTitle')}>
+    <button className="btn-primary task-perm-go" onClick={onOpen} title={t('tasks.permOpenTitle')}>
       {t('tasks.permOpen')}
     </button>
   );

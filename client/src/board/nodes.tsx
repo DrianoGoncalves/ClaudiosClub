@@ -81,14 +81,15 @@ function Frame(props: {
   );
 }
 
-function Portrait({ id, label, src, ghost }: { id: string; label: string; src?: string | null; ghost?: boolean }) {
+/** `size`/`variant` só mudam fora do organograma (o quadro de tarefas usa o retrato menor, com o traço do estado); mesma foto, mesmas iniciais e mesmo contorno à mão. */
+export function Portrait({ id, label, src, ghost, size = 40, variant = 'portrait' }: { id: string; label: string; src?: string | null; ghost?: boolean; size?: number; variant?: SketchVariant }) {
   // O servidor reinicia a cada arquivo salvo em desenvolvimento: uma foto pedida nessa hora falha.
   // Tenta de novo duas vezes; depois, mostra as iniciais em vez do ícone de imagem quebrada.
   const [tries, setTries] = useState(0);
   useEffect(() => setTries(0), [src]);
   const shown = src && tries <= 2 ? (tries ? `${src}${src.includes('?') ? '&' : '?'}retry=${tries}` : src) : null;
   return (
-    <div className="bn-portrait">
+    <div className={size === 40 ? 'bn-portrait' : 'bn-portrait is-mini'} style={size === 40 ? undefined : { width: size, height: size }}>
       {ghost ? (
         <span className="bn-ghost">
           <GhostIcon size={24} />
@@ -98,7 +99,7 @@ function Portrait({ id, label, src, ghost }: { id: string; label: string; src?: 
       ) : (
         <span>{initials(label)}</span>
       )}
-      <Sketch variant="portrait" shape="ellipse" width={40} height={40} seed={`${id}:p`} />
+      <Sketch variant={variant} shape="ellipse" width={size} height={size} seed={`${id}:p`} />
     </div>
   );
 }

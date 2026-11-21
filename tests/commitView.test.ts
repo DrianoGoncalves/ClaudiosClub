@@ -52,13 +52,13 @@ describe('o selo do cartão', () => {
   it('commit inteiro: o SHA, neutro', () => {
     const html = badge(done({}));
     expect(html).toContain('commit abc1234');
-    expect(html).not.toContain('is-waiting');
+    expect(html).not.toContain('tone-action');
     expect(html).toContain('Nunca vai para o servidor remoto');
   });
 
   it('commit parcial: amarelo até você ignorar o aviso; depois neutro', () => {
     const partial = done({ status: 'partial', left: [{ path: 'b.ts', why: 'owner' }], alert: true });
-    expect(badge(partial)).toMatch(/task-commit small is-waiting[^>]*>commit parcial</);
+    expect(badge(partial)).toMatch(/task-commit small tone-action[^>]*>commit parcial</);
     expect(badge({ ...partial, ack: true })).toMatch(/task-commit small"[^>]*>commit parcial</);
   });
 
