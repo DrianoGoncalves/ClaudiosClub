@@ -1,14 +1,16 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { StaffQueue } from '../../../shared/model';
+import type { StaffProfile, StaffQueue } from '../../../shared/model';
 import { api } from '../api';
+import { portraitUrl } from '../board/nodes';
+import { initials } from '../format';
 import { t } from '../i18n';
 import { cardTone } from '../inbox/alertTone';
 import { pollVisible } from '../usePoll';
 import type { QueueDot } from './queueState';
 
-// Quem está ocupado em Fazendo e em Revisão, em bolinhas no topo da coluna (as mesmas `.dot` das conversas ativas do cabeçalho do projeto no organograma). A frase de cada um
-// (estado da fila, trava, detalhe) só aparece ao passar o mouse, focar ou tocar na bolinha; a fila travada ganha o tom de alerta já na bolinha. A lógica está em `queueState.ts` (testada sem tela).
+// Quem está ocupado em Fazendo e em Revisão, com o retrato de cada um (iniciais se não tem) no topo da coluna, empilhados e sobrepostos para ocupar pouco. A frase de cada um
+// (estado da fila, trava, detalhe) só aparece ao passar o mouse, focar ou tocar no retrato; a fila travada ganha o tom de alerta já no anel. A lógica está em `queueState.ts` (testada sem tela).
 
 /** Lê o estado das filas de tempos em tempos. `undefined` até a primeira leitura; servidor sem a rota (ou fora do ar) deixa como está, sem erro na tela. `initial` só para teste. */
 export function useQueues(projectId: string, initial?: StaffQueue[] | null): StaffQueue[] | null | undefined {
@@ -28,7 +30,19 @@ export function useQueues(projectId: string, initial?: StaffQueue[] | null): Sta
 
 const TIP_W = 280;
 
-function QueueDotButton({ dot }: { dot: QueueDot }) {
+/** O retrato do funcionário no lugar da bolinha; sem retrato (ou com o arquivo quebrado), as iniciais. O anel leva a cor do estado: verde ocupado, laranja de espera na fila travada. */
+function QueueAvatar({ name, src, className }: { name: string; src: string | null; className: string }) {
+  const [broken, setBroken] = useState(false);
+  useEffect(() => setBroken(false), [src]);
+  return (
+    <span className={`queue-avatar ${className}`} aria-hidden="true">
+      {src && !broken ? <img src={src} alt="" loading="lazy" onError={() => setBroken(true)} /> : initials(name)}
+    </span>
+  );
+}
+
+/** `name` e `src` (o retrato) vêm da ficha do funcionário; sem ela, o id e as iniciais dele. */
+function QueueDotButton({ dot, name, src }: { dot: QueueDot; name: string; src: string | null }) {
   const [at, setAt] = useState<{ left: number; top: number } | null>(null);
   const btn = useRef<HTMLButtonElement>(null);
   const tipId = useId();
@@ -67,7 +81,7 @@ function QueueDotButton({ dot }: { dot: QueueDot }) {
         onBlur={close}
         onClick={open}
       >
-        <span className={`dot ${dot.tone === 'stuck' ? `dot-stuck ${cardTone('queue')}` : 'dot-busy'}`} />
+        <QueueAvatar name={name} src={src} className={dot.tone === 'stuck' ? `is-stuck ${cardTone('queue')}` : 'is-busy'} />
       </button>
       {at &&
         createPortal(
@@ -81,13 +95,14 @@ function QueueDotButton({ dot }: { dot: QueueDot }) {
   );
 }
 
-export function QueueDots({ dots }: { dots: QueueDot[] }) {
+export function QueueDots({ dots, staff = [], projectId = '' }: { dots: QueueDot[]; staff?: Pick<StaffProfile, 'id' | 'name' | 'portrait' | 'updatedAt'>[]; projectId?: string }) {
   if (!dots.length) return null;
   return (
     <span className="queue-dots" role="group" aria-label={t('tasks.queueLabel')}>
-      {dots.map((d) => (
-        <QueueDotButton key={`${d.column}:${d.staffId}`} dot={d} />
-      ))}
+      {dots.map((d) => {
+        const s = staff.find((x) => x.id === d.staffId);
+        return <QueueDotButton key={`${d.column}:${d.staffId}`} dot={d} name={s?.name ?? d.staffId} src={s?.portrait ? portraitUrl(projectId, s) : null} />;
+      })}
     </span>
   );
 }

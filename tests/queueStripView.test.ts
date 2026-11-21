@@ -129,11 +129,27 @@ describe('QueueDots e o quadro', () => {
     );
     expect(html).toContain('role="group"');
     expect(html.match(/class="queue-dot"/g)).toHaveLength(2);
-    expect(html).toContain('class="dot dot-stuck tone-wait"');
-    expect(html).toContain('class="dot dot-busy"');
+    expect(html).toContain('class="queue-avatar is-stuck tone-wait"');
+    expect(html).toContain('class="queue-avatar is-busy"');
+    // Sem a ficha, as iniciais do id no lugar do retrato.
+    expect(html).toContain('>B<');
     expect(html).toContain('aria-label="Belchior: fila parada, esperando a máquina folgar · 2 na fila · desde 14:32. pouca memória"');
     expect(html).not.toContain('role="tooltip"');
     expect(html).not.toContain('>Belchior');
+  });
+
+  it('com a ficha: o retrato no lugar da bolinha; sem retrato, as iniciais do nome', () => {
+    const staff = [
+      { id: 'bel', name: 'Belchior', portrait: 'p.png', updatedAt: '2026-11-20T10:00:00.000Z' },
+      { id: 'leo', name: 'Leonardo Dev', portrait: null, updatedAt: ISO },
+    ];
+    const html = renderToStaticMarkup(
+      createElement(QueueDots, { projectId: 'p1', staff, dots: dotsOf([queue({ state: 'busy', taskId: 't-1' }), queue({ staffId: 'leo', state: 'busy', taskId: 't-1', queued: 0 })]) }),
+    );
+    expect(html).toContain('src="/api/projects/p1/staff/bel/portrait?v=2026-11-20T10%3A00%3A00.000Z"');
+    expect(html.match(/<img /g)).toHaveLength(1);
+    expect(html).toContain('>LD<');
+    expect(html).not.toContain('class="dot ');
   });
 
   it('ninguém ocupado, não desenha nada', () => {
