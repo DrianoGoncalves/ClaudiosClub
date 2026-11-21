@@ -157,6 +157,13 @@ describe('ownerAsks: só o que é decisão do dono', () => {
 describe('o painel de verdade (SSR): ordem, rodapé e sem duplicar', () => {
   const states: Task['status'][] = ['waiting', 'todo', 'doing', 'review', 'done', 'cancelled'];
 
+  it('o id fica numa linha própria acima do título, com a mesma classe do id do cartão, e não repete no selo de estado', () => {
+    const html = detail(task());
+    const head = html.slice(html.indexOf('<header class="task-detail-head">'), html.indexOf('</header>'));
+    expect(head).toMatch(/^<header class="task-detail-head"><span class="task-id muted small"[^>]*>t-lay001<\/span><div class="task-detail-top">/);
+    expect(count(head, 't-lay001')).toBe(1);
+  });
+
   it('o rodapé existe fora do corpo que rola, em todo estado, com no máximo um btn-primary', () => {
     for (const status of states) {
       const html = detail(task({ status, sessionId: status === 'waiting' || status === 'todo' ? null : 'sess-1' }));

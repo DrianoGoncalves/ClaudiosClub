@@ -1067,6 +1067,9 @@ function TaskDetail({
   return (
     <aside className="task-detail" style={keyboard ? { bottom: keyboard } : undefined}>
       <header className="task-detail-head">
+        <span className="task-id muted small" title={t('tasks.idHint')}>
+          {task.id}
+        </span>
         <div className="task-detail-top">
           <h3 className="task-detail-title">{task.title}</h3>
           <button className="drawer-close in-head" onClick={onClose} aria-label={t('tasks.closeDetails')}>
@@ -1076,10 +1079,6 @@ function TaskDetail({
         <span className="kicker" title={task.archived ? t('tasks.archivedHint') : undefined}>
           {LABEL[task.status]}
           {task.archived && ` · ${t('tasks.archivedTag')}`}
-          {' · '}
-          <span className="task-id" title={t('tasks.idHint')}>
-            {task.id}
-          </span>
         </span>
         <p className="task-detail-who muted small">
           {t('tasks.headOwner', { name: who?.name ?? t('tasks.nobody') })} · {t('tasks.headReviewer', { name: reviewerName })}
