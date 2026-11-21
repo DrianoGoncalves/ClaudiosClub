@@ -120,19 +120,19 @@ describe('o detalhe da tarefa de verdade: as três seções abrem recolhidas, em
   const section = (html: string, label: string) => html.match(new RegExp(`<details class="collapse[^"]*"([^>]*)><summary class="has-sum">${label}<span[^>]*>([^<]*)</span>`));
 
   for (const status of ['review', 'done', 'doing'] as const) {
-    it(`em ${status}: custo, código/revisão e bloqueada por fechados, cada um com o seu resumo`, () => {
+    it(`em ${status}: custo e código/revisão fechados, cada um com o seu resumo`, () => {
       const html = detail({ status, review: review({ doneAt: 'x', verdict: 'approved' }), tests: tests(true) });
       const cost = section(html, 'Custo da tarefa');
       const code = section(html, 'Código, revisão e deploy');
-      const deps = section(html, 'Bloqueada por');
-      for (const s of [cost, code, deps]) {
+      // "Bloqueada por" saiu da leitura: o campo abre com o botão Editar (o porquê de esperar fica em "Esperas e fila").
+      expect(section(html, 'Bloqueada por')).toBeNull();
+      for (const s of [cost, code]) {
         expect(s).not.toBeNull();
         expect(s![1]).toBe(''); // nenhum atributo `open`
       }
       expect(cost![2]).toBe('calculando…');
       // Sem ficha do revisor na equipe do teste, o nome cai no id (como no status da seção).
       expect(code![2]).toBe('Aprovada por rui-1 · Testes: passaram');
-      expect(deps![2]).toBe('1 tarefa · 1 em aberto');
     });
   }
 

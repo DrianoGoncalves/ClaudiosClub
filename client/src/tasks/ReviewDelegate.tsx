@@ -34,9 +34,11 @@ interface Props extends StatusProps {
   projectId: string;
   /** Algo mudou na tarefa (relê o quadro). */
   onChanged: () => void;
+  /** Sem o cabeçalho "Revisão: quem e o veredito" (o painel mostra isso no bloco Revisão): só o seletor e o pedido, como no painel do rodapé. */
+  bare?: boolean;
 }
 
-export function ReviewDelegate({ projectId, task, staff, onChanged, onOpenStaff }: Props) {
+export function ReviewDelegate({ projectId, task, staff, onChanged, onOpenStaff, bare = false }: Props) {
   const reviewers = reviewersOf(staff, task);
   const [picked, setPicked] = useState('');
   const [busy, setBusy] = useState(false);
@@ -60,10 +62,12 @@ export function ReviewDelegate({ projectId, task, staff, onChanged, onOpenStaff 
 
   return (
     <div className="task-review">
-      <div className="task-code-row">
-        <b className="small">{t('tasks.reviewLabel')}</b>
-        <ReviewStatus task={task} staff={staff} onOpenStaff={onOpenStaff} />
-      </div>
+      {!bare && (
+        <div className="task-code-row">
+          <b className="small">{t('tasks.reviewLabel')}</b>
+          <ReviewStatus task={task} staff={staff} onOpenStaff={onOpenStaff} />
+        </div>
+      )}
       {canPick &&
         (reviewers.length ? (
           <>
