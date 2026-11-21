@@ -361,7 +361,7 @@ export interface GitOpts {
 /** O executor do git: os pontos de entrada exportados aceitam outro (o MCP de git passa o dele, sem hooks e com ambiente controlado). */
 export type GitRun = (cwd: string, args: string[], opts?: GitOpts) => Promise<string>;
 
-const gitDefault: GitRun = (cwd, args, opts) => git(cwd, args, opts);
+export const gitDefault: GitRun = (cwd, args, opts) => git(cwd, args, opts);
 
 function git(cwd: string, args: string[], opts: GitOpts = {}): Promise<string> {
   return new Promise((resolve, reject) => {
