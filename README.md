@@ -225,6 +225,10 @@ git push origin v0.2.0
 
 O texto da tag é o que aparece no aviso de *Nova versão*.
 
+## Licença
+
+[GNU General Public License v3.0](LICENSE) ou posterior (GPL-3.0-or-later). Você pode usar, estudar, alterar e redistribuir; quem distribuir uma versão alterada precisa manter a mesma licença e publicar o código-fonte.
+
 ---
 
 <sub>Claudio's Club é um projeto independente, sem afiliação com a Anthropic e sem endosso dela. Claude e Claude Code são marcas da Anthropic.</sub>
