@@ -214,6 +214,23 @@ describe('selo do cartão com os follow-ups', () => {
     expect(verdictShown({ ...review('rejected'), followUps: [fu()] })).toBe(true);
     expect(verdictShown({ followUps: [fu()] })).toBe(false);
   });
+
+  it('o "Reprovada" some quando o ajuste é entregue e a nova rodada ainda não tem veredito; nova reprovação traz de volta', () => {
+    const rejected = (over: Partial<NonNullable<Task['review']>> = {}) => ({ staffId: 'rev', sessionId: 's-r', at: '2026-11-20T10:00:00Z', verdict: 'rejected' as const, ...over });
+    const delivery = (at: string) => ({ at, summary: 'ok' });
+    // 1) reprovada e de volta ao responsável (sem nova entrega): selo visível
+    expect(verdictShown({ review: rejected(), delivery: delivery('2026-11-20T09:00:00Z') })).toBe(true);
+    // 2) ajuste entregue: a revisão antiga fica `superseded` (ou a entrega é posterior ao pedido, tarefa de antes da marca): selo some
+    expect(verdictShown({ review: rejected({ superseded: true }), delivery: delivery('2026-11-20T11:00:00Z') })).toBe(false);
+    expect(verdictShown({ review: rejected(), delivery: delivery('2026-11-20T11:00:00Z') })).toBe(false);
+    // nova rodada pedida: a revisão nova ainda não tem veredito (e a velha foi trocada): sem selo
+    expect(verdictShown({ review: { staffId: 'rev', sessionId: 's-r2', at: '2026-11-20T11:05:00Z' }, delivery: delivery('2026-11-20T11:00:00Z') })).toBe(false);
+    // 3) nova reprovação (revisão nova, pedida depois da entrega): selo volta
+    expect(verdictShown({ review: rejected({ sessionId: 's-r2', at: '2026-11-20T11:05:00Z' }), delivery: delivery('2026-11-20T11:00:00Z') })).toBe(true);
+    // 4) aprovado: como antes, mesmo com a marca de rodada
+    expect(verdictShown({ review: rejected({ verdict: 'approved', superseded: true }), followUps: [] })).toBe(true);
+    expect(verdictShown({ review: rejected({ verdict: 'approved' }), delivery: delivery('2026-11-20T11:00:00Z'), followUps: [fu()] })).toBe(false);
+  });
 });
 
 // O quadro de verdade, com a tarefa carregada: separa o que é do cartão do que é do detalhe.
