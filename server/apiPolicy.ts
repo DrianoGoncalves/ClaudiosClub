@@ -35,6 +35,8 @@ const STAFF_POSTS: RegExp[] = [
   new RegExp(`^/api/projects/${ID}/tasks/${ID}/followup/${ID}/card$`),
   // Mandar revisar mesmo assim o card marcado "sem código" (quem pediu a tarefa, com o token; a rota confere que é ele e que o card espera a decisão; o resto leva 403).
   new RegExp(`^/api/projects/${ID}/tasks/${ID}/review-anyway$`),
+  // Decidir o plano do card que ele pediu (`planWait`: aprovar ou recusar; quem pediu o card, com o token; `decidePlan` confere que é ele e que o card espera o plano; o responsável, o revisor e o resto levam 403).
+  new RegExp(`^/api/projects/${ID}/tasks/${ID}/plan$`),
   // Consultar um funcionário de outro projeto vinculado pelo dono (server/consult/). A rota é do projeto de ORIGEM (o do token: o gate recusa o resto) e a origem e o remetente vêm do token; o vínculo
   // (só a tela grava: `/api/consult/links*` fica FORA desta lista) e os limites são conferidos pelo serviço. A conversa de consulta não tem token, então nunca chega aqui.
   new RegExp(`^/api/projects/${ID}/consult$`),
@@ -67,7 +69,7 @@ export function projectOfPath(pathname: string): string | null {
  */
 export function sandboxVerdict(method: string, pathname: string, projectId: string): { status: 403; error: string } | null {
   const allowed = method === 'GET' ? SANDBOX_GETS.some((r) => r.test(pathname)) : method === 'POST' && staffMayPost(pathname);
-  if (!allowed) return { status: 403, error: 'a sandbox do Codex não pode usar esta rota (só tarefas, editar tarefa que ainda não começou, ordem da fila, cancelar a própria tarefa ou pedir o cancelamento de uma que você pediu, revisar mesmo assim o card sem código que você pediu, follow-up de revisão, consulta a outro projeto vinculado e o diretório dela, contratar, mensagem, despertador e encerrar quem você contratou)' };
+  if (!allowed) return { status: 403, error: 'a sandbox do Codex não pode usar esta rota (só tarefas, editar tarefa que ainda não começou, ordem da fila, cancelar a própria tarefa ou pedir o cancelamento de uma que você pediu, revisar mesmo assim o card sem código que você pediu, decidir o plano do card que você pediu, follow-up de revisão, consulta a outro projeto vinculado e o diretório dela, contratar, mensagem, despertador e encerrar quem você contratou)' };
   const target = PROJECT_OF.exec(pathname)?.[1];
   if (target && target !== projectId) return { status: 403, error: 'a sandbox do Codex só fala com o projeto da própria conversa' };
   return null;
