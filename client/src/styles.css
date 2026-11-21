@@ -901,12 +901,14 @@ textarea.q-field { resize: vertical; }
 /* O retrato do organograma (`Portrait`, 28px) vai sobreposto ao vizinho para ocupar pouco; o botão sobe ao passar o mouse/focar, para o sobreposto não ficar escondido. Margem vertical negativa: a altura do cabeçalho não muda. */
 .queue-dots { padding-left: 6px; }
 .queue-dot { display: inline-flex; flex: none; width: 28px; height: 28px; margin: -6px 0 -6px -6px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--ink); cursor: help; position: relative; }
+/* Revisão: quem revisa não leva retrato, só a bolinha de ocupado; a área de toque passa de 24px sem mexer na altura do cabeçalho. */
+.queue-dot.is-plain { align-items: center; justify-content: center; width: 24px; height: 24px; margin: -6px -3px; }
 .queue-dot:hover, .queue-dot:focus-visible { z-index: 1; }
 .queue-dot:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; }
 /* Mesma fonte à mão (--hand) das iniciais do organograma, em corpo menor. */
 .bn-portrait.is-mini { font-size: var(--fs-md); }
 .bn-portrait.is-mini img { inset: 3px; width: 22px; height: 22px; }
-/* Quem revisa (ReviewerChip): o mesmo retrato em 22px ao lado do nome; a foto e as iniciais encolhem junto. */
+/* Quem revisa no painel (ReviewerChip): o mesmo retrato em 22px ao lado do nome; a foto e as iniciais encolhem junto. No cartão do quadro o revisor é só o nome (a foto é de quem executa). */
 .reviewer-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .reviewer-chip .bn-portrait.is-mini { flex: none; font-size: var(--fs-sm); }
 .reviewer-chip .bn-portrait.is-mini img { inset: 2px; width: 18px; height: 18px; }

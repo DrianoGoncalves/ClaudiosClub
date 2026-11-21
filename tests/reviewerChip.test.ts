@@ -1,12 +1,14 @@
-import { createElement } from 'react';
+﻿import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { InboxItem, StaffProfile, Task } from '../shared/model';
 import { projectNeeds, staffNeeds } from '../client/src/inbox/needsYou';
+import { stuckInboxItem } from '../server/inboxItems';
+import { ownAlerts } from '../server/tasks';
 import { ReviewerChip } from '../client/src/tasks/ReviewerChip';
 import { TasksBoard } from '../client/src/tasks/TasksBoard';
 
-// Card em Revisão: com revisor funcionário o card mostra quem revisa (retrato + nome) e nenhum selo de ação do dono; no limite de rodadas o selo "Você aprova ou reprova" continua.
+// Card em Revisão: com revisor funcionário o card mostra quem revisa só pelo nome (a foto do cartão é de quem executa); o painel leva o retrato + nome. Nenhum selo de ação do dono com revisor funcionário; no limite de rodadas o selo "Você aprova ou reprova" continua.
 
 const dav = { id: 'dav', name: 'Dav', role: 'Revisor', portrait: null, updatedAt: '2026-11-21T10:00:00.000Z', servers: [], reportsTo: [] } as unknown as StaffProfile;
 const withPhoto = { ...dav, id: 'ana', name: 'Ana Souza', portrait: 'ana.png' } as unknown as StaffProfile;
@@ -35,13 +37,30 @@ describe('ReviewerChip', () => {
 });
 
 describe('card em Revisão', () => {
-  it('revisor funcionário e sem inboxWait: retrato + nome, sem selo "precisa de você" nem "Você aprova ou reprova"', () => {
+  it('revisor funcionário e sem inboxWait: só o nome, sem selo "precisa de você" nem "Você aprova ou reprova"', () => {
     const html = board({ reviewerId: 'dav', review: reviewedBy });
     expect(html).toContain('class="task-reviewer small"');
-    expect(html).toContain('reviewer-chip');
-    expect(html).toContain('>Dav<');
+    expect(html).toContain('<span class="task-reviewer-name">Dav</span>');
+    expect(html).not.toContain('reviewer-chip');
     expect(html).not.toContain('needs-badge');
     expect(html).not.toContain('Você aprova ou reprova');
+  });
+
+  it('o cartão mostra quem revisa só pelo nome: sem foto, iniciais nem ícone, mesmo que o revisor tenha retrato', () => {
+    const line = (html: string) => html.slice(html.indexOf('class="task-reviewer small"'), html.indexOf('</button>', html.indexOf('class="task-reviewer small"')));
+    const noPhoto = line(board({ reviewerId: 'dav', review: reviewedBy }));
+    expect(noPhoto).not.toContain('bn-portrait');
+    expect(noPhoto).toContain('>Dav<');
+    const photo = line(board({ reviewerId: 'ana', staffId: 'dav', review: { ...reviewedBy, staffId: 'ana' } }));
+    expect(photo).not.toContain('bn-portrait');
+    expect(photo).not.toContain('<img');
+    expect(photo).toContain('>Ana Souza<');
+  });
+
+  it('em Revisão sem `reviewerId` na tarefa, quem recebeu o pedido de revisão aparece com o nome (sem retrato)', () => {
+    const html = board({ review: reviewedBy });
+    expect(html).toMatch(/class="task-reviewer small".*>Dav</);
+    expect(html).not.toContain('bn-portrait');
   });
 
   it('limite de rodadas: o selo do dono continua, e quem reprovou segue visível', () => {
@@ -56,22 +75,44 @@ describe('card em Revisão', () => {
   });
 
   it('sem revisor (o dono revisa): nenhuma linha de revisor', () => {
-    expect(board({ review: null })).not.toContain('reviewer-chip');
+    expect(board({ review: null })).not.toContain('task-reviewer');
   });
 });
 
-describe('contadores de funcionário e projeto', () => {
-  const item = (over: Partial<InboxItem>): InboxItem => ({ id: 'x', kind: 'plan', projectId: 'p', projectName: 'Projeto', sessionId: 's1', staffId: 'ana', name: 'Ana', summary: '', at: null, ...over });
-  const stuck = (humanAction: 'review' | 'decide' | null): InboxItem =>
-    item({ id: 'stuck:t1', kind: 'stuck', sessionId: '', stuck: { taskId: 't1', taskTitle: 'T1', reason: 'r', selfHeals: false, humanAction, since: '2026-11-21T10:00:00.000Z' } } as Partial<InboxItem>);
+// Os contadores leem os itens que o servidor deriva dos cards (mesma montagem de `getInbox`: `ownAlerts` + `stuckInboxItem`, com o funcionário do card), não listas escritas à mão.
+describe('contadores de funcionário e projeto, com cards em Revisão', () => {
+  const NOW = Date.parse('2026-11-21T12:00:00.000Z');
+  const ago = (min: number) => new Date(NOW - min * 60_000).toISOString();
+  const card = (id: string, staffId: string, over: Partial<Task>): Task =>
+    ({ id, title: id, description: '', status: 'review', staffId, sessionId: null, plan: null, branch: null, pr: null, createdAt: ago(300), updatedAt: ago(60), history: [{ at: ago(60), status: 'review', by: 'auto' }], reviewerId: 'dav', ...over }) as Task;
+  const itemsOf = (tasks: Task[]): InboxItem[] =>
+    ownAlerts(tasks, NOW).map((a) => stuckInboxItem(a, { projectId: 'p', projectName: 'Projeto', sessionId: '', staffId: a.task.staffId, name: a.task.staffId ?? '' }));
 
-  it('revisão em andamento com revisor funcionário não gera item na caixa: contadores zerados', () => {
-    expect(projectNeeds([], 'p')).toBeNull();
-    expect(staffNeeds([], 'p', 'ana', ['s1'])).toBeNull();
+  // ana: o revisor (Dav) está com a revisão aberta. bia: a revisão automática não começou, e o dono precisa agir. cai: o revisor funcionário foi pedido há pouco e ainda não houve revisão aberta.
+  const inReview = card('t-ana', 'ana', { review: { staffId: 'dav', sessionId: 'r1', at: ago(10) } as Task['review'] });
+  const notStarted = card('t-bia', 'bia', { reviewRetry: { attempts: 4, firstAt: ago(45), nextAt: ago(1), lastError: 'sem conversa', deliveryAt: null } });
+  const justAsked = card('t-cai', 'cai', { history: [{ at: ago(2), status: 'review', by: 'auto' }] });
+
+  it('revisão em andamento com revisor funcionário não vira item da caixa nem conta para o dono', () => {
+    expect(itemsOf([inReview, justAsked])).toEqual([]);
+    expect(staffNeeds(itemsOf([inReview]), 'p', 'ana', [])).toBeNull();
+    expect(projectNeeds(itemsOf([inReview, justAsked]), 'p')).toBeNull();
   });
 
-  it('o que espera o dono (revisão que não andou, limite) conta; a espera do limite do motor não', () => {
-    expect(projectNeeds([stuck('review'), stuck('decide')], 'p')?.count).toBe(2);
-    expect(projectNeeds([{ ...stuck(null), id: 'stuck:t1:fallback' }], 'p')).toBeNull();
+  it('misturado: só o card que espera o dono entra, no funcionário dele e no projeto', () => {
+    const items = itemsOf([inReview, notStarted, justAsked]);
+    expect(items.map((i) => i.id)).toEqual(['stuck:t-bia:review']);
+    expect(staffNeeds(items, 'p', 'bia', [])).toEqual({ count: 1, reasons: ['stuck'] });
+    expect(staffNeeds(items, 'p', 'ana', [])).toBeNull();
+    expect(staffNeeds(items, 'p', 'cai', [])).toBeNull();
+    expect(projectNeeds(items, 'p')).toEqual({ count: 1, reasons: ['stuck'] });
+    expect(projectNeeds(items, 'q')).toBeNull();
+  });
+
+  it('o selo do cartão e o contador concordam: o card com revisor trabalhando não tem selo, o parado tem', () => {
+    const html = (t: Task) => board({ ...t, id: 't1', ...(t.id === 't-bia' && { inboxWait: { kind: 'review', by: 'owner', itemId: 'stuck:t-bia:review', since: ago(45) } }) });
+    expect(html(inReview)).not.toContain('needs-badge');
+    expect(html(notStarted)).toContain('needs-badge tone-action');
   });
 });
+

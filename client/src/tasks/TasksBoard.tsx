@@ -415,7 +415,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         )}
         {cardReviewer(task) && (
           <span className="task-reviewer small" title={t('tasks.autoReviewHint', { name: nameOf(cardReviewer(task)) ?? cardReviewer(task)! })}>
-            <ReviewerChip id={cardReviewer(task)!} staff={staff} projectId={projectId} />
+            <span className="task-reviewer-name">{nameOf(cardReviewer(task)) ?? cardReviewer(task)}</span>
             {!!task.reviewRounds && ` · ${t('tasks.reviewRounds', { n: task.reviewRounds, max: AUTO_REVIEW_ROUNDS })}`}
           </span>
         )}

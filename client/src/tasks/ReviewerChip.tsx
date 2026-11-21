@@ -1,4 +1,4 @@
-import type { StaffProfile } from '../../../shared/model';
+﻿import type { StaffProfile } from '../../../shared/model';
 import { Portrait, portraitUrl } from '../board/nodes';
 
 // Quem revisa, no cartão e no painel: o retrato do organograma (foto, ou iniciais sem foto), menor, e o nome. Substitui o ícone de revisão.
