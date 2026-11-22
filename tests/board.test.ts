@@ -80,6 +80,8 @@ function adapter(filtered = true, configFile = cfg, discoveryTtlMs = 0) {
     extraPaths: pinned,
     ...(filtered ? { onBoard: boardFilter({ pinned }) } : {}),
     costCacheFile: path.join(root, `cache-${filtered}.json`),
+    // Sem isto, o total somaria o ledger do Sistema de quem roda o teste (~/.myco/logs/system-costs.jsonl): US$ 8,05 em vez de 8.
+    systemCostsFile: path.join(root, 'system-costs.jsonl'),
     discoveryTtlMs,
   });
 }

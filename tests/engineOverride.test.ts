@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AccountUsage, Project } from '../shared/model';
 import type { ToolAdapter } from '../server/adapters/types';
 import { ChatManager } from '../server/chat/manager';
@@ -14,6 +14,15 @@ import { removeTemp } from './support/tmp';
 
 // Conversa no motor/modelo secundário (`engineOverride`): a conversa nova monta o motor dele, a sessão guarda o override (continue e
 // reabrir seguem nele), o plano B do Codex não roda, e a ficha no disco não muda. Fakes no estilo de tests/codexEngine.test.ts.
+
+// A trava de consumo lê a config (`readConfig`, de MYCO_HOME): uma pasta temporária, senão vale o `usageStop` do ~/.myco de quem roda os testes (o do dono é nulo, e a trava nunca barra).
+const home = await vi.hoisted(async () => {
+  const os = await import('node:os');
+  const nodePath = await import('node:path');
+  const dir = nodePath.join(os.tmpdir(), `myco-override-home-${process.pid}-${Date.now()}`);
+  process.env.MYCO_HOME = dir;
+  return dir;
+});
 
 /** Cada `spawn` devolve um processo falso novo: `emit` simula o stdout, `close` o fim. */
 function fakeCodex() {
@@ -53,7 +62,7 @@ beforeAll(async () => {
   projectPath = path.join(root, 'proj');
   await fs.mkdir(projectPath, { recursive: true });
 });
-afterAll(() => removeTemp(root));
+afterAll(() => removeTemp(root, home));
 
 const project = (): Project => ({
   id: 'proj-id',

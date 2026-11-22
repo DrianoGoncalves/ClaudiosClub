@@ -16,8 +16,8 @@ import { TestScan } from './testFailures';
 export class CodeError extends Error {
   constructor(
     message: string,
-    /** `no-tests`: não há testes; dá para mesclar confirmando. */
-    readonly code: 'no-tests' | null = null,
+    /** `no-tests`: não há testes; dá para mesclar confirmando. `tests-timeout`: os testes da mescla passaram do tempo-limite (não é falha de teste; tentar de novo). */
+    readonly code: 'no-tests' | 'tests-timeout' | null = null,
     readonly tests: TestRun | null = null,
   ) {
     super(message);
@@ -116,13 +116,14 @@ export async function readCode(projectPath: string, place: CodePlace, upTo?: str
 /**
  * Mescla a worktree no branch atual do projeto. O que não foi commitado na worktree é commitado
  * antes (com a mensagem da tarefa). Com `upTo` (o commit da entrega), mescla só até ele e não
- * commita o pendente, que é da tarefa seguinte. Sem testes, só com `skipTests` (confirmado no Claudio’s Club).
+ * commita o pendente, que é da tarefa seguinte. Sem testes, só com `skipTests` (confirmado no Claudio’s Club). `testTimeoutMs`: o tempo-limite
+ * dos testes da mescla (padrão `TEST_TIMEOUT_MS`; os testes trocam). Testes cortados no tempo-limite não são falha: `CodeError` com `code: 'tests-timeout'`.
  */
 export async function mergeCode(
   projectPath: string,
   place: CodePlace,
   title: string,
-  opts: { skipTests?: boolean; upTo?: string | null } = {},
+  opts: { skipTests?: boolean; upTo?: string | null; testTimeoutMs?: number } = {},
 ): Promise<{ sha: string; base: string; branch: string; tests: TestRun | null }> {
   if (place.where !== 'worktree' || !place.branch) throw new CodeError('só dá para mesclar o trabalho de uma worktree');
   const end = await validEnd(place, opts.upTo);
@@ -147,9 +148,10 @@ export async function mergeCode(
   }
   let tests: TestRun | null = null;
   if (test) {
-    tests = await runTests(projectPath, test);
+    tests = await runTests(projectPath, test, opts.testTimeoutMs);
     if (!tests.ok) {
       await git(projectPath, ['merge', '--abort']).catch(() => {});
+      if (tests.timedOut) throw new CodeError(`os testes passaram do tempo-limite de ${formatLimit(tests.limitMs ?? TEST_TIMEOUT_MS)} com a mescla: nada foi mesclado (não é falha de teste: confira se a máquina está cheia e tente de novo)`, 'tests-timeout', tests);
       throw new CodeError('os testes falharam com a mescla: nada foi mesclado', null, tests);
     }
   }
@@ -175,18 +177,36 @@ export async function detectTest(dir: string): Promise<string | null> {
   return null;
 }
 
-/** O tempo que os testes têm (ver `runTests`). */
-export const TEST_TIMEOUT_MS = 10 * 60_000;
+/**
+ * O tempo que os testes têm (ver `runTests`). A suíte completa (6,8 mil testes) passava dos 10 min de antes: 26 de 49 rodadas de entrega desde 20/11 foram cortadas e saíram
+ * como "falhou", e a mescla (`mergeCode`, que aborta se os testes não passam) nunca passava. 30 min dá folga acima da duração medida da suíte, com a máquina cheia. A trava
+ * da fila pesada acompanha este valor (`leaseMs` de `runTests`).
+ */
+export const TEST_TIMEOUT_MS = 30 * 60_000;
+
+/** A margem do prazo da trava da fila pesada sobre o tempo-limite: o dono solta a trava logo depois do corte, e a trava não pode valer como órfã antes disso. */
+const LEASE_MARGIN_MS = 60_000;
+
+/** O tempo-limite em texto: "30 min" (de 1 min para cima) ou "3 s". */
+export function formatLimit(limitMs: number): string {
+  return limitMs >= 60_000 ? `${Math.round(limitMs / 60_000)} min` : `${Math.max(1, Math.round(limitMs / 1000))} s`;
+}
+
+/** O texto que a saída leva no fim de uma rodada cortada no tempo: quem só lê `output` (a tela, o revisor) vê que não foi falha de teste. */
+export function timeoutNote(limitMs: number): string {
+  return `[tempo esgotado: a rodada foi cortada aos ${formatLimit(limitMs)} sem terminar. Isto não é falha de teste: não diz nada sobre o código.]`;
+}
 
 /**
- * Roda os testes (até 10 min); guarda só o fim da saída. O comando vem de detectTest, nunca do pedido. A suíte completa entra na fila
+ * Roda os testes (até `TEST_TIMEOUT_MS`); guarda só o fim da saída. O comando vem de detectTest, nunca do pedido. A suíte completa entra na fila
  * da máquina (uma validação pesada por vez, a mesma do terminal dos funcionários; ver `withHeavyLock`): o tempo de espera não conta
- * nos 10 min nem no `ms` do resultado. `queueAs`: o comando que decide a fila (padrão: o próprio); a nova rodada só dos arquivos que falharam (ver `isolateFailures`) é leve
+ * no tempo-limite nem no `ms` do resultado. Rodada cortada no tempo-limite volta com `timedOut` (e `ok: false`): é "tempo esgotado", não "falhou".
+ * `queueAs`: o comando que decide a fila (padrão: o próprio); a nova rodada só dos arquivos que falharam (ver `isolateFailures`) é leve
  * por si, mas espera a vez como a suíte, para não rodar por cima de outra validação pesada e piorar a carga que causou a falha. `onWait`: avisa quando a suíte começa e quando deixa
  * de esperar a vez (ver `HeavyWaitFn`), para o estado da fila do funcionário mostrar a espera.
  */
 export function runTests(dir: string, command: string, timeoutMs = TEST_TIMEOUT_MS, queueAs = command, onWait?: HeavyWaitFn): Promise<TestRun> {
-  return withHeavyLock(queueAs, (held) => spawnTests(dir, command, timeoutMs, held), { label: `testes de ${path.basename(dir)}`, leaseMs: timeoutMs + 60_000, onWait });
+  return withHeavyLock(queueAs, (held) => spawnTests(dir, command, timeoutMs, held), { label: `testes de ${path.basename(dir)}`, leaseMs: timeoutMs + LEASE_MARGIN_MS, onWait });
 }
 
 /** `held`: a chave da trava da fila que esta execução segura; vai no ambiente dela (ver `HEAVY_HELD_ENV`). */
@@ -207,12 +227,29 @@ function spawnTests(dir: string, command: string, timeoutMs: number, held: strin
     };
     child.stdout.on('data', keep(0));
     child.stderr.on('data', keep(1));
-    const timer = setTimeout(() => (child.pid ? void killTree(child.pid) : child.kill()), timeoutMs);
+    let cut = false;
+    const timer = setTimeout(() => {
+      cut = true;
+      if (child.pid) void killTree(child.pid);
+      else child.kill();
+    }, timeoutMs);
     child.on('close', (code) => {
       clearTimeout(timer);
       scan.end();
       const read = scan.result();
-      resolve({ command, ok: code === 0, output: out.trim(), ms: Date.now() - started, at: new Date().toISOString(), ...(read.files !== undefined && { files: read.files }), ...(code !== 0 && read.failedFiles && { failedFiles: read.failedFiles }) });
+      // Cortada só se o corte valeu: a suíte que acabou limpa (código 0) no instante do corte passou.
+      const timedOut = cut && code !== 0;
+      const output = timedOut ? `${out.trim()}\n${timeoutNote(timeoutMs)}`.trim() : out.trim();
+      resolve({
+        command,
+        ok: code === 0,
+        output,
+        ms: Date.now() - started,
+        at: new Date().toISOString(),
+        ...(read.files !== undefined && { files: read.files }),
+        ...(code !== 0 && read.failedFiles && { failedFiles: read.failedFiles }),
+        ...(timedOut && { timedOut: true, limitMs: timeoutMs }),
+      });
     });
     child.on('error', (err) => {
       clearTimeout(timer);

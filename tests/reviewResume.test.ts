@@ -258,7 +258,8 @@ describe('revisão automática perdida em reinício', () => {
     const t = (await b.svc.create('p', { title: 'Tela', staffId: 'ana-1' }, 'gio-1', 'gio-s'))!; // pedida pela Giovana: ela é a revisora
     await b.svc.start('p', t.id);
     const delivered = b.svc.onTurnDone((await b.get(t.id)).sessionId!);
-    await new Promise((r) => setTimeout(r, 100)); // já em revisão, dentro dos testes
+    // Já em revisão, dentro dos testes. Espera a condição (até 10 s), não um tempo fixo: com a suíte cheia 100 ms não bastavam e o card ainda estava em "doing".
+    for (let i = 0; i < 1000 && (await b.get(t.id)).status !== 'review'; i++) await new Promise((r) => setTimeout(r, 10));
     expect(await b.get(t.id)).toMatchObject({ status: 'review' });
     expect((await b.get(t.id)).review).toBeUndefined();
 

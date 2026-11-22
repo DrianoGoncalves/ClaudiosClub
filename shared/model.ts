@@ -1684,6 +1684,13 @@ export interface TestRun {
   failedFiles?: TestFailedFile[];
   /** A nova rodada só dos arquivos que falharam (ver `isolateFailures`); só na validação da entrega. */
   isolated?: TestIsolation;
+  /**
+   * A rodada foi cortada no tempo-limite (`limitMs`) sem terminar: `ok` é false, mas NÃO é falha de teste, e o resultado não diz nada sobre o código.
+   * Ausente = a suíte terminou (passou ou falhou). Quem mostra o resultado separa "tempo esgotado" de "falhou".
+   */
+  timedOut?: boolean;
+  /** O tempo-limite que valia, em ms; vem junto com `timedOut`. */
+  limitMs?: number;
 }
 
 export interface TestFailedFile {

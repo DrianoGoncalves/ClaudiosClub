@@ -26,7 +26,7 @@ import type { Reservation } from './resourceGate';
 import { VERSION_PAUSE_DEFAULT_MINUTES, VERSION_PAUSE_MAX_MINUTES, clockOf, type PauseBy, type ProjectPauses } from './projectPause';
 import { CapabilityError } from './engineCapability';
 import { writeAtomic } from './staff/store';
-import { checkpoint, CodeError, codeTouchedSince, detectTest, locateCode, mergeCode, readCode, runTests, type CodePlace } from './taskCode';
+import { checkpoint, CodeError, codeTouchedSince, detectTest, formatLimit, locateCode, mergeCode, readCode, runTests, type CodePlace } from './taskCode';
 import { baseNote, baseWarning, syncWorktree, type SyncWorktree } from './worktreeBase';
 import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf, limitReading, limitOfStop, otherEngine, overrideOfFallback, shouldFallback, type OtherEngineReading } from './taskFallback';
 import { UsageStopError } from './usageStop';
@@ -6889,6 +6889,11 @@ function testsLine(t: TestRun | null | undefined, hasList = true): string {
   if (!t) return '';
   if (t.ok) return `Testes (\`${t.command}\`, rodados pelo Claudio’s Club): passaram em ${Math.round(t.ms / 1000)} s. Não rode de novo.`;
   const list = failureBlock(t, hasList);
+  // Cortada no tempo-limite: não é falha de teste e não prova nada sobre a entrega. Os arquivos que já tinham falhado antes do corte, se a leitura pegou algum, seguem valendo.
+  if (t.timedOut) {
+    const head = `Testes (\`${t.command}\`, rodados pelo Claudio’s Club): TEMPO ESGOTADO, cortados aos ${formatLimit(t.limitMs ?? t.ms)} sem terminar. Isto NÃO é falha de teste e não diz nada sobre a entrega: confira você mesmo os arquivos desta entrega (rode só os testes deles).`;
+    return list ? `${head}\nAntes do corte, estes arquivos já tinham falhado:\n${list}` : head;
+  }
   if (list) return `Testes (\`${t.command}\`, rodados pelo Claudio’s Club): FALHARAM. Não rode a suíte de novo: a lista abaixo já é da saída inteira.\n${list}`;
   return `Testes (\`${t.command}\`, rodados pelo Claudio’s Club): FALHARAM. Fim da saída:\n${t.output.slice(-800)}`;
 }
