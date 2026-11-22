@@ -1001,6 +1001,12 @@ export interface Task {
   deploy?: TaskHandoff | null;
   /** A worktree foi mesclada no projeto. */
   merged?: { at: string; sha: string; branch: string; base: string } | null;
+  /**
+   * Onde o código DESTE card é escrito, gravado quando a conversa de trabalho abre (ver `TaskService.startNow`): `project` = o checkout principal; `worktree` = a do funcionário,
+   * no `branch`. A mescla e a aprovação decidem por isto, não pela worktree que o funcionário tem agora (ela pode ter sido criada depois, para outro card). Ausente (card
+   * anterior a este campo) = vale a worktree atual dele (ver `locateTaskCode`). Só o servidor grava: nenhuma edição (tela ou API) aceita este campo.
+   */
+  codeAt?: { where: 'worktree' | 'project'; branch: string | null };
   /** Último teste rodado pelo Claudio’s Club para esta tarefa. */
   tests?: TestRun | null;
   /** Segunda opinião do Codex sobre o diff (Markdown), quando você pediu. */

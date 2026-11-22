@@ -86,7 +86,7 @@ export async function readCode(projectPath: string, place: CodePlace, upTo?: str
       ...clip(diff),
       test,
       canMerge: false,
-      whyNot: 'as mudanças já estão no próprio projeto (a ficha não usa worktree): não há o que mesclar',
+      whyNot: 'as mudanças já estão no próprio projeto (o card foi feito fora de worktree): não há o que mesclar',
     };
   }
   const end = await validEnd(place, upTo);

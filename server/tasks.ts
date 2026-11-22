@@ -25,7 +25,8 @@ import type { Reservation } from './resourceGate';
 import type { ProjectPauses } from './projectPause';
 import { CapabilityError } from './engineCapability';
 import { writeAtomic } from './staff/store';
-import { checkpoint, CodeError, codeTouchedSince, detectTest, locateCode, mergeCode, readCode, runTests } from './taskCode';
+import { checkpoint, CodeError, codeTouchedSince, detectTest, locateCode, mergeCode, readCode, runTests, type CodePlace } from './taskCode';
+import { baseNote, baseWarning, syncWorktree, type SyncWorktree } from './worktreeBase';
 import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf, limitReading, limitOfStop, otherEngine, overrideOfFallback, shouldFallback, type OtherEngineReading } from './taskFallback';
 import { UsageStopError } from './usageStop';
 import { BACKGROUND_WAIT_MS, ESCALATE_AFTER_MS, HELD_MAX_FAILS, OUTCOME_HOLD_MAX_MS, PERMISSION_STUCK_MS, PermanentError, REASK_AFTER_MS, REVIEW_WAIT_MS, failedRetry, isTransient, nextRetry, retryDue } from './retryPolicy';
@@ -404,6 +405,8 @@ export interface TaskServiceDeps {
   lastText?: (sessionId: string) => string | null;
   /** Branch em que ele vai trabalhar (a da worktree dele, ou a atual do projeto). */
   branchFor: (projectPath: string, profile: StaffProfile) => Promise<string | null>;
+  /** Avança a worktree dele ao HEAD do principal quando o card começa (ver `syncWorktree`); sem ele, o de verdade. */
+  syncWorktree?: SyncWorktree;
   /** Alguma conversa dele, neste projeto, no Claudio’s Club está trabalhando (turno ou segundo plano), fora `exceptSession` (uma ou várias). */
   isWorking?: (projectId: string, staffId: string, exceptSession?: string | readonly string[]) => boolean;
   /** Esta conversa (só ela) está trabalhando agora, turno ou segundo plano? Sem ela, a revisão e o card em "a fazer" olham as conversas todas do funcionário. */
@@ -2091,6 +2094,10 @@ export class TaskService {
     const plan = sw ? {} : await this.startPlan(projectId, task, profile);
     if (plan.wait) throw new LimitWaitError(plan.wait);
     const s = sw ?? plan.switch;
+    // O card começa na base de agora: a worktree dele (sempre a mesma) pode ter ficado atrás do principal. A troca de motor no meio do turno segue na que já está em uso.
+    // Nunca bloqueia o início: o que não avançou vira nota no card e aviso na conversa (ver `syncWorktree`).
+    const base = !sw && profile.worktree ? await (this.deps.syncWorktree ?? syncWorktree)(dir, profile.id).catch(() => null) : null;
+    const baseText = base ? baseWarning(base) : null;
     const text =
       s?.text ??
       [
@@ -2100,6 +2107,7 @@ export class TaskService {
         task.description,
         task.goal && `Meta: ${task.goal}`,
         task.acceptance && `Critério de aceite: ${task.acceptance}`,
+        baseText,
         planLineOf(task, profile),
         this.cancelLine(projectId, task, s?.override.engine ?? profile.engine ?? 'claude'),
         ...BRIEF_RULES,
@@ -2141,6 +2149,10 @@ export class TaskService {
     timer?.stage('registro');
     const runId = run && !sw ? await this.logStart(projectId, task, run.trigger ?? 'manual', run.skills ?? (await this.skillsOf(projectId, profile))) : undefined;
     const branch = await this.deps.branchFor(dir, profile).catch(() => null);
+    // Onde o código do card é escrito, gravado agora: a conversa já abriu, então a worktree dele (se a ficha pede uma) existe. A mescla e a aprovação decidem por isto (ver `locateTaskCode`),
+    // não pela worktree que ele tiver depois. A troca de motor no meio do turno é do mesmo card: não regrava.
+    const codeAt = sw ? null : await locateCode(dir, profile.id, !!profile.worktree).catch(() => null);
+    const baseLine = base ? baseNote(base) : '';
     this.bySession.set(sessionId, { projectId, taskId, role: 'work' });
     timer?.stage('gravar');
     return this.change(projectId, taskId, (t) => {
@@ -2149,11 +2161,25 @@ export class TaskService {
       // A conversa que abriu entra no histórico da tarefa (partida e troca de motor, que também passam aqui).
       const engine: Engine = s?.override.engine ?? (profile.engine === 'codex' ? 'codex' : 'claude');
       const started = withSession(
-        { ...t, sessionId, branch: branch ?? t.branch, queuedAt: null, queuedForce: false, resourceWait: null, fallbackBlocked: undefined, startRetry: undefined, unqueued: undefined, ...(s && { fallback: s.fallback }), ...(runId && { runId }) },
+        {
+          ...t,
+          sessionId,
+          branch: branch ?? t.branch,
+          ...(codeAt && { codeAt: { where: codeAt.where, branch: codeAt.branch } }),
+          queuedAt: null,
+          queuedForce: false,
+          resourceWait: null,
+          fallbackBlocked: undefined,
+          startRetry: undefined,
+          unqueued: undefined,
+          ...(s && { fallback: s.fallback }),
+          ...(runId && { runId }),
+        },
         { id: sessionId, role: 'work', staffId: profile.id, engine, at: new Date().toISOString() },
       );
       const moving = moved(started, next, 'auto', `com ${profile.name}`);
-      return s ? noted(moving, s.note) : moving;
+      const withBase = baseLine ? noted(moving, baseLine) : moving;
+      return s ? noted(withBase, s.note) : withBase;
     });
   }
 
@@ -3008,7 +3034,7 @@ export class TaskService {
     if (t.changedFiles?.length || t.subtasks?.length || t.autoCreated || !t.staffId) return true;
     const dir = await this.deps.projectPath(projectId);
     const profile = dir ? await this.deps.readProfile(projectId, t.staffId) : null;
-    const place = dir ? await locateCode(dir, t.staffId, !!profile?.worktree).catch(() => null) : null;
+    const place = dir ? await locateTaskCode(dir, t, !!profile?.worktree).catch(() => null) : null;
     return !place || (await codeTouchedSince(place, startedAt(t)));
   }
 
@@ -3540,7 +3566,7 @@ export class TaskService {
   /** O código da tarefa: onde está, o que mudou e se dá para mesclar. */
   async code(projectId: string, taskId: string): Promise<TaskCode | null> {
     const { dir, task, profile } = await this.context(projectId, taskId);
-    const place = await locateCode(dir, task.staffId, !!profile?.worktree);
+    const place = await locateTaskCode(dir, task, !!profile?.worktree);
     if (!place) throw new TaskError('o projeto não é um repositório git');
     return readCode(dir, place, deliveredAt(task));
   }
@@ -3548,7 +3574,7 @@ export class TaskService {
   /** Roda os testes onde está o código da tarefa e guarda o resultado no cartão. */
   async test(projectId: string, taskId: string): Promise<Task | null> {
     const { dir, task, profile } = await this.context(projectId, taskId);
-    const place = await locateCode(dir, task.staffId, !!profile?.worktree);
+    const place = await locateTaskCode(dir, task, !!profile?.worktree);
     if (!place) throw new TaskError('o projeto não é um repositório git');
     const command = await detectTest(dir);
     if (!command) throw new TaskError('não achei testes neste projeto (npm test, composer test ou phpunit)');
@@ -3572,7 +3598,7 @@ export class TaskService {
     const { dir, task, profile } = await this.context(projectId, taskId);
     // Cancelada não é entrega: mesclar a levaria para "pronto" e liberaria quem depende dela.
     if (task.status === 'cancelled') throw new TaskConflictError('a tarefa foi cancelada: não dá para mesclar');
-    const place = await locateCode(dir, task.staffId, !!profile?.worktree);
+    const place = await locateTaskCode(dir, task, !!profile?.worktree);
     if (!place) throw new TaskError('o projeto não é um repositório git');
     try {
       const m = await mergeCode(dir, place, task.title, { skipTests, upTo: deliveredAt(task) });
@@ -3610,7 +3636,7 @@ export class TaskService {
     if (task.status === 'cancelled') throw new TaskConflictError('a tarefa foi cancelada: reabra antes de pedir revisão');
     if (reviewerId === task.staffId) throw new TaskError('a revisão precisa ser de outro funcionário');
     const reviewer = await this.staffOrThrow(projectId, reviewerId);
-    const place = await locateCode(dir, task.staffId, !!profile?.worktree).catch(() => null);
+    const place = await locateTaskCode(dir, task, !!profile?.worktree).catch(() => null);
     // O projeto é de todos: o que está sem commit mistura as tarefas abertas, então o diff é só dos arquivos desta (`changedFiles`, ver `noteTaskEdit`).
     // Sem a lista (edição só por shell não é detectada), segue o diff inteiro, dito no pedido.
     const named = (task.changedFiles ?? []).filter((f) => SAFE_NAME.test(f));
@@ -4318,7 +4344,7 @@ export class TaskService {
     const doneAt = doneAtOf(task);
     if (task.commit?.for === doneAt) return;
     const profile = task.staffId ? await this.deps.readProfile(projectId, task.staffId) : null;
-    if ((await locateCode(dir, task.staffId, !!profile?.worktree).catch(() => null))?.where === 'worktree') return;
+    if ((await locateTaskCode(dir, task, !!profile?.worktree).catch(() => null))?.where === 'worktree') return;
     // O que outra tarefa não encerrada também alterou fica de fora enquanto ela ainda pode ter mudança pendente no arquivo (ver `sharedBlockers`): o diff da revisão dela (`git diff HEAD`)
     // esvaziaria, e o commit levaria o trabalho dela. A que já parou e teve o arquivo commitado depois da parada não barra.
     const shared = new Map<string, SharedHold[]>();
@@ -4661,7 +4687,7 @@ export class TaskService {
     const { dir, task, profile } = await this.context(projectId, taskId);
     // Veredito que chega depois de a tarefa sair de "revisão" (cancelada, por exemplo) não decide nada.
     if (task.status !== 'review') return;
-    const place = task.staffId ? await locateCode(dir, task.staffId, !!profile?.worktree).catch(() => null) : null;
+    const place = task.staffId ? await locateTaskCode(dir, task, !!profile?.worktree).catch(() => null) : null;
     const head = `[MyCo] Tarefa “${titleOf(task)}” (id ${task.id}): `;
     if (place?.where === 'worktree' && !task.merged) {
       await this.change(projectId, taskId, (t) => (t.status === 'review' ? noted(t, `aprovada por ${reviewer}; falta mesclar`) : t));
@@ -5089,7 +5115,7 @@ export class TaskService {
     if (task.noCode) return true;
     const dir = await this.deps.projectPath(projectId);
     const profile = dir ? await this.deps.readProfile(projectId, staffId) : null;
-    const place = dir ? await locateCode(dir, staffId, !!profile?.worktree).catch(() => null) : null;
+    const place = dir ? await locateTaskCode(dir, task, !!profile?.worktree).catch(() => null) : null;
     if (!place || (await codeTouchedSince(place, startedAt(task)))) return false;
     const manager = task.requestedBy ? await this.deps.readProfile(projectId, task.requestedBy) : null;
     const summary = (this.deps.lastText?.(sessionId) ?? '').trim().slice(0, NOCODE_SUMMARY_MAX);
@@ -5619,7 +5645,7 @@ export class TaskService {
     const command = await detectTest(dir);
     if (!command) return null;
     const profile = await this.deps.readProfile(projectId, task.staffId);
-    const place = await locateCode(dir, task.staffId, !!profile?.worktree).catch(() => null);
+    const place = await locateTaskCode(dir, task, !!profile?.worktree).catch(() => null);
     const cwd = place?.path ?? dir;
     const base = this.deps.runTests ?? runTests;
     const run: typeof base = (c, cmd, timeoutMs, queueAs) => base(c, cmd, timeoutMs, queueAs, onWait);
@@ -5637,8 +5663,8 @@ export class TaskService {
   private async markDelivery(projectId: string, task: Task): Promise<void> {
     const dir = await this.deps.projectPath(projectId);
     const profile = dir && task.staffId ? await this.deps.readProfile(projectId, task.staffId) : null;
-    if (!dir || !profile?.worktree) return;
-    const place = await locateCode(dir, task.staffId, true).catch(() => null);
+    if (!dir || (!profile?.worktree && task.codeAt?.where !== 'worktree')) return;
+    const place = await locateTaskCode(dir, task, true).catch(() => null);
     const sha = place ? await checkpoint(place, task.title).catch(() => null) : null;
     if (sha) await this.change(projectId, task.id, (t) => noted({ ...t, checkpoint: { sha, at: new Date().toISOString() } }, `entrega no commit ${sha.slice(0, 7)}`));
   }
@@ -6941,6 +6967,16 @@ const FALLBACK_MOTIVO: Record<NonNullable<Task['fallbackBlocked']>['reason'], st
 };
 
 /** Uma linha no histórico, sem mudar de coluna. */
+/**
+ * Onde está o código DESTA tarefa: o que o card gravou ao começar (`Task.codeAt`). `project`: o checkout principal, mesmo que o funcionário tenha ganhado uma worktree depois (para
+ * outro card): mesclá-la levaria o trabalho pela metade do outro card. `worktree`: a dele, mesmo que a ficha tenha deixado de pedir uma. Card sem `codeAt` (anterior a ele) segue
+ * a worktree atual do funcionário, como `locateCode`.
+ */
+function locateTaskCode(projectPath: string, task: Pick<Task, 'staffId' | 'codeAt'>, ownWorktree: boolean): Promise<CodePlace | null> {
+  if (task.codeAt?.where === 'project') return locateCode(projectPath, null, false);
+  return locateCode(projectPath, task.staffId, task.codeAt?.where === 'worktree' ? true : ownWorktree);
+}
+
 function noted(t: Task, note: string): Task {
   const at = new Date().toISOString();
   return { ...t, history: [...t.history, { at, status: t.status, by: 'auto' as const, note }].slice(-MAX_HISTORY), updatedAt: at };
