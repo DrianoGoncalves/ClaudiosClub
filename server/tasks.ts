@@ -2690,6 +2690,7 @@ export class TaskService {
       // A revisão (abrir, refazer a que não começou, cobrar o veredito, recuperar a entrega que ficou sem pedido) roda pausado ou não: ver `autoReview`.
       await this.safely(() => this.retryReviews(projectId, tasks, now));
       await this.safely(() => this.chaseReviews(projectId, tasks, now));
+      await this.safely(() => this.reapplyVerdicts(projectId, tasks));
       await this.safely(() => this.resumeReviews(projectId, tasks));
       if (!paused) await this.safely(() => this.releaseBackground(projectId, tasks, now));
       await this.safely(() => this.releaseOutcomes(projectId, tasks, now));
@@ -4894,6 +4895,41 @@ export class TaskService {
   }
 
   /**
+   * Veredito gravado e não aplicado (`verdictPending`): o veredito e a decisão são duas gravações (`onReviewTurn`: `noteHandoff` e depois `approve`/`reject`), e o que as separa
+   * não é atômico. O Club caído entre elas (o log de 21/11 da t-23e7cb para sem o "saiu" da conversa de revisão, que vem do `finally` logo depois da decisão), ou um erro aqui
+   * (o fim de turno chama `onTurnDone(...).catch(() => {})`), deixava o card em "revisão" para sempre: `chaseReviews` não cobra revisão com veredito e ninguém mais lia o que ficou
+   * gravado. Aplica o mesmo efeito que o turno aplicaria (aprovada: `approve`; reprovada: `reject` com o texto, lido do histórico da conversa, que o reinício apagou da memória).
+   * Só a revisão desta entrega (`liveReview`, a mesma conferência do turno), uma vez: a decisão aplicada deixa a nota no histórico (`decided`), que `approve` e `reject` conferem na própria
+   * gravação, então a varredura que chega com o turno ainda aplicando (ou outra varredura) não decide de novo. Um card que falha não segura os outros: a próxima rodada tenta de novo.
+   */
+  private async reapplyVerdicts(projectId: string, tasks: Task[]): Promise<void> {
+    if (this.deps.closing?.()) return;
+    for (const t of tasks) {
+      if (!verdictPending(t)) continue;
+      try {
+        // Relê: o estado pode ter mudado desde o começo do tick.
+        const fresh = ((await this.list(projectId)) ?? []).find((x) => x.id === t.id);
+        const r = fresh && verdictPending(fresh);
+        if (!fresh || !r) continue;
+        const reviewer = (await this.deps.readProfile(projectId, fresh.reviewerId!))?.name ?? 'o revisor';
+        const verdict = { sessionId: r.sessionId, deliveryAt: fresh.delivery?.at ?? null };
+        if (r.verdict === 'approved') {
+          await this.approve(projectId, t.id, reviewer, verdict);
+          continue;
+        }
+        // O texto vem do histórico da conversa (a foto junta o transcript e o que está aberto: a memória do turno se perdeu no reinício). Sem ele, ou com outro texto por cima (o
+        // último não é o veredito gravado), um ajuste sem os 🔴 não manda o executor a lugar nenhum: o card fica com você, com a nota.
+        const snap = await (this.deps.snapshot?.(projectId, r.sessionId) ?? Promise.resolve(null)).catch(() => null);
+        const text = snap ? oldConversationExtract(snap).lastAssistantText : null;
+        if (text && parseVerdict(text) === 'rejected') await this.reject(projectId, t.id, reviewer, text, verdict);
+        else await this.change(projectId, t.id, (x) => (verdictPending(x)?.sessionId === r.sessionId ? noted(x, `reprovada por ${reviewer}, mas o texto da revisão não pôde ser lido: fica com você`) : x));
+      } catch {
+        // A próxima rodada refaz (o que ela decide vem do estado gravado).
+      }
+    }
+  }
+
+  /**
    * Fecha o processo da conversa de revisão que já deu o veredito (`closeIfIdle`: o mesmo fechamento de `ChatManager.close`, que não vira erro e deixa a
    * sessão reabrível). Só com a conversa parada: se ainda trabalha (turno de outra mensagem, segundo plano), fica marcada e o `onIdle` fecha ao fim do
    * turno. Não fecha com re-pedido de veredito marcado, nem a conversa que é de outra coisa (ver `reviewClosable`: a de trabalho, a em que o gestor pediu,
@@ -4919,8 +4955,8 @@ export class TaskService {
    */
   private async approve(projectId: string, taskId: string, reviewer: string, verdict: Verdict): Promise<void> {
     const { dir, task, profile } = await this.context(projectId, taskId);
-    // Veredito que chega depois de a tarefa sair de "revisão" (cancelada, por exemplo) ou de a tarefa ser entregue de novo não decide nada.
-    const current = (t: Task) => t.status === 'review' && isVerdictOf(t, verdict);
+    // Veredito que chega depois de a tarefa sair de "revisão" (cancelada, por exemplo) ou de a tarefa ser entregue de novo não decide nada, nem o que já foi decidido (ver `decided`).
+    const current = (t: Task) => t.status === 'review' && isVerdictOf(t, verdict) && !decided(t);
     if (!current(task)) return;
     const place = task.staffId ? await locateTaskCode(dir, task, !!profile?.worktree).catch(() => null) : null;
     const head = `[MyCo] Tarefa “${titleOf(task)}” (id ${task.id}): `;
@@ -4956,10 +4992,10 @@ export class TaskService {
    */
   private async reject(projectId: string, taskId: string, reviewer: string, reviewText: string, verdict: Verdict): Promise<void> {
     const { dir, task } = await this.context(projectId, taskId);
-    // Veredito que chega depois de a tarefa sair de "revisão" (cancelada, por exemplo): não manda ajuste nenhum.
-    if (task.status !== 'review' || !isVerdictOf(task, verdict)) return;
+    // Veredito que chega depois de a tarefa sair de "revisão" (cancelada, por exemplo), ou já decidido (ver `decided`): não manda ajuste nenhum.
+    if (task.status !== 'review' || !isVerdictOf(task, verdict) || decided(task)) return;
     if (!task.staffId || !task.sessionId) {
-      await this.change(projectId, taskId, (t) => (t.status === 'review' ? noted(t, `reprovada por ${reviewer}, mas não tem conversa de trabalho: fica com você`) : t));
+      await this.change(projectId, taskId, (t) => (t.status === 'review' && !decided(t) ? noted(t, `reprovada por ${reviewer}, mas não tem conversa de trabalho: fica com você`) : t));
       return;
     }
     const staffId = task.staffId;
@@ -4971,11 +5007,11 @@ export class TaskService {
       // Na vez dele, de novo: cancelada (ou fora de revisão, ou de outra rodada) enquanto esperava, nada é guardado nem mandado à conversa dela.
       const now = ((await this.list(projectId)) ?? []).find((t) => t.id === taskId);
       // A conversa de trabalho pode ter voltado ao motor principal enquanto esperava a vez (ver `backToPrimary`): vale a de agora.
-      if (now?.status !== 'review' || !now.sessionId || !isVerdictOf(now, verdict)) return;
+      if (now?.status !== 'review' || !now.sessionId || !isVerdictOf(now, verdict) || decided(now)) return;
       const target = now.sessionId;
       // Os 🔴 e a rodada saem do que está gravado agora (os ids dependem da reprovação anterior), não do que a leitura de antes da vez dele viu.
       const { msg, rejection } = rejectionOf(now, reviewer, reviewText, lesson);
-      const current = (t: Task) => t.status === 'review' && isVerdictOf(t, verdict);
+      const current = (t: Task) => t.status === 'review' && isVerdictOf(t, verdict) && !decided(t);
       // A reprovação é da revisão, não sua: com o projeto pausado ela fica guardada (`auto`) e a tarefa segue em revisão até ele ser retomado.
       const reason = await this.hold(target, { text: msg, auto: true });
       if (reason) {
@@ -7333,6 +7369,24 @@ interface Verdict {
   deliveryAt: string | null;
 }
 const isVerdictOf = (t: Task, v: Verdict): boolean => t.review?.sessionId === v.sessionId && (t.delivery?.at ?? null) === v.deliveryAt;
+
+/** A nota que `approve` e `reject` deixam no histórico em toda saída (pronto, falta mesclar ou o dono, ajuste enviado ou guardado, sem conversa de trabalho). */
+const DECISION_NOTE = /^(aprovada|reprovada) por /;
+
+/**
+ * A decisão do veredito de agora já foi aplicada? Há uma nota de decisão desde a resposta da revisão (`doneAt`: a de uma rodada anterior é mais velha). Sai do histórico, e não de um campo
+ * novo, para valer também nos cards que já estavam assim; o histórico guarda os últimos MAX_HISTORY registros, e uma decisão com mais que isso de notas por cima volta a valer (uma nota repetida).
+ */
+const decided = (t: Task): boolean => {
+  const since = t.review?.doneAt ?? t.review?.at ?? '';
+  return t.history.some((h) => h.at >= since && DECISION_NOTE.test(h.note ?? ''));
+};
+
+/** A revisão desta entrega, em "revisão" e com o revisor marcado, deu o veredito e a decisão dele ainda não foi aplicada (ver `reapplyVerdicts`); a conferência é a de `onReviewTurn`. */
+function verdictPending(t: Task): TaskHandoff | undefined {
+  const r = liveReview(t);
+  return t.status === 'review' && r?.verdict && t.reviewerId && t.reviewerId === r.staffId && !decided(t) ? r : undefined;
+}
 
 /** Os 🔴 do bloco do revisor, um por item, cada campo numa linha só e sem a marca `[MyCo`. `box`: com a caixa de marcar (a lista que o executor confere). */
 function blockerList(blockers: ReviewBlocker[], box = false): string {
