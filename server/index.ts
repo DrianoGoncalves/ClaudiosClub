@@ -1520,7 +1520,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(StaffRef.extend({ skipTests: z.boolean().default(false) }), body);
       const { dir, place, profile } = await chatPlace(pid!, b.staffId);
-      return mergeCode(dir, place, `Trabalho de ${profile?.name ?? 'funcionário'}`, { skipTests: b.skipTests });
+      // A pasta de trabalho inteira, sem tarefa e pelo clique do dono: o único caminho que mescla o branch todo (`wholeBranch`); a mescla de uma tarefa vai até o commit da entrega.
+      return mergeCode(dir, place, `Trabalho de ${profile?.name ?? 'funcionário'}`, { skipTests: b.skipTests, wholeBranch: true });
     },
   ],
   // "Voltar até aqui": desfaz as edições de arquivo feitas desde aquela mensagem sua.

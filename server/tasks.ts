@@ -27,13 +27,13 @@ import { VERSION_PAUSE_DEFAULT_MINUTES, VERSION_PAUSE_MAX_MINUTES, clockOf, type
 import { CapabilityError } from './engineCapability';
 import { StateBusyError } from './atomicWrite';
 import { writeAtomic } from './staff/store';
-import { checkpoint, CodeError, codeTouchedSince, detectTest, formatLimit, locateCode, mergeCode, readCode, runTests, type CodePlace } from './taskCode';
+import { abortStaleMerge, checkpoint, CodeError, codeTouchedSince, commitsToMerge, detectTest, formatLimit, integratedSha, locateCode, mergeCode, readCode, runTests, type CodePlace } from './taskCode';
 import { baseNote, baseWarning, syncWorktree, type SyncWorktree } from './worktreeBase';
 import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf, limitReading, limitOfStop, otherEngine, overrideOfFallback, shouldFallback, type OtherEngineReading } from './taskFallback';
 import { UsageStopError } from './usageStop';
-import { BACKGROUND_WAIT_MS, ESCALATE_AFTER_MS, HELD_MAX_FAILS, OUTCOME_HOLD_MAX_MS, PERMISSION_STUCK_MS, PermanentError, REASK_AFTER_MS, REVIEW_WAIT_MS, failedRetry, isTransient, nextRetry, retryDue } from './retryPolicy';
+import { AUTO_MERGE_MAX_TRIES, BACKGROUND_WAIT_MS, ESCALATE_AFTER_MS, HELD_MAX_FAILS, OUTCOME_HOLD_MAX_MS, PERMISSION_STUCK_MS, PermanentError, REASK_AFTER_MS, REVIEW_WAIT_MS, failedRetry, isTransient, nextRetry, retryDue } from './retryPolicy';
 import { BLOCKERS_FORMAT, REJECTIONS_MAX, REPLY_MAX, citedIds, doubtIsAboutRejection, fitReviewText, nextBlockerId, parseBlockers, priorBlockers, type ParsedBlock } from './reviewBlockers';
-import type { CommitLeftovers, CommitLeftoversDone, DeliveryPhase, FlowPolicy, QueueDelivery, Rejection, ReviewBlocker, StaffQueue, TaskCommitLeft, TaskOwnerGate } from '../shared/model';
+import type { CommitLeftovers, CommitLeftoversDone, DeliveryPhase, FlowPolicy, QueueDelivery, Rejection, ReviewBlocker, StaffQueue, TaskAutoMerge, TaskCommitLeft, TaskOwnerGate } from '../shared/model';
 import { FlowPolicyInput, applyFlowInput, legacyPolicy, ownerGateOf, type FlowPolicies } from './flowPolicy';
 import type { HeavyWaitFn } from './heavyQueue';
 import { appendRun, newRunId, readRuns, type RunOutcome, type RunTrigger, type TaskRunEvent } from './taskRuns';
@@ -688,6 +688,9 @@ export class TaskService {
   /** Commits automáticos em andamento (ver `commitSoon`) e a fila de cada projeto (ver `autoCommit`): um commit por vez por projeto. */
   private readonly commitRuns = new Set<Promise<void>>();
   private readonly commitQueues = new Map<string, Promise<unknown>>();
+  /** As mesclas automáticas em andamento (ver `mergeSoon`) e as que já estão na fila ou rodando (`projeto:tarefa`): duas varreduras juntas não enfileiram a mesma duas vezes. */
+  private readonly mergeRuns = new Set<Promise<void>>();
+  private readonly mergeQueued = new Set<string>();
   /** Os commits automáticos que ainda não terminaram (`projeto:tarefa`, de `commitSoon` até o fim da tentativa): o card pronto segura a vaga de escrita até o commit dele sair (ver `writeHolder`). */
   private readonly committing = new Set<string>();
   /** A vez de cada projeto na vaga de escrita (ver `takeSlot`): conferir a vaga e abrir a conversa é uma coisa só, uma por vez. Só em memória: o que vale (quem ocupa) sai de `tasks.json`. */
@@ -2691,6 +2694,8 @@ export class TaskService {
       await this.safely(() => this.retryReviews(projectId, tasks, now));
       await this.safely(() => this.chaseReviews(projectId, tasks, now));
       await this.safely(() => this.reapplyVerdicts(projectId, tasks));
+      // A mescla automática da aprovação que ficou sem mescla (reinício, pausa, backoff vencido); roda em segundo plano, o tick não espera os testes (ver `retryMerges`).
+      await this.safely(() => this.retryMerges(projectId, tasks, now));
       await this.safely(() => this.resumeReviews(projectId, tasks));
       if (!paused) await this.safely(() => this.releaseBackground(projectId, tasks, now));
       await this.safely(() => this.releaseOutcomes(projectId, tasks, now));
@@ -3692,24 +3697,34 @@ export class TaskService {
     const place = await locateTaskCode(dir, task, !!profile?.worktree);
     if (!place) throw new TaskError('o projeto não é um repositório git');
     try {
-      const m = await mergeCode(dir, place, task.title, { skipTests, upTo: deliveredAt(task) });
-      let cancelledMeanwhile = false;
-      const out = await this.change(projectId, taskId, (t) => {
-        // A mescla demora: cancelada nesse intervalo, a tarefa NÃO vira pronta (liberaria quem depende dela). O código já entrou, e fica dito no histórico.
-        if (t.status === 'cancelled') {
-          cancelledMeanwhile = true;
-          return noted(t, `mesclado em ${m.base} (${m.sha}) depois de cancelada: a tarefa continua cancelada`);
-        }
-        return moved({ ...t, tests: m.tests ?? t.tests ?? null, merged: { at: new Date().toISOString(), sha: m.sha, branch: m.branch, base: m.base } }, 'done', 'auto', `mesclado em ${m.base} (${m.sha})`);
-      });
-      if (cancelledMeanwhile) throw new TaskConflictError(`a tarefa foi cancelada durante a mescla: o código já entrou em ${m.base} (${m.sha}), mas ela continua cancelada`);
-      await this.wakeDependents(projectId, taskId);
-      if (out?.status === 'done') await this.settleRequester(projectId, out, `mesclada em ${m.base}, foi para pronto`, null);
-      return out;
+      // Na fila do projeto (ver `inProjectQueue`): o clique do dono também não mescla por cima de uma mescla automática, nem de um commit, em andamento.
+      const m = await this.inProjectQueue(dir, () => mergeCode(dir, place, task.title, { skipTests, upTo: deliveredAt(task) }));
+      return await this.finishMerge(projectId, taskId, m);
     } catch (err) {
       if (err instanceof CodeError && err.tests) await this.change(projectId, taskId, (t) => ({ ...t, tests: err.tests }));
       throw err;
     }
+  }
+
+  /**
+   * A mescla entrou no principal: grava, leva a "pronto" e avisa quem esperava e quem pediu (a do dono e a automática terminam aqui). `valid`: só a automática, que não leva a "pronto" uma tarefa que
+   * mudou durante a mescla (saiu de "revisão", ou foi entregue de novo): o código entrou, e fica dito no histórico.
+   */
+  private async finishMerge(projectId: string, taskId: string, m: { sha: string; base: string; branch: string; tests: TestRun | null }, valid?: (t: Task) => boolean): Promise<Task | null> {
+    let cancelledMeanwhile = false;
+    const out = await this.change(projectId, taskId, (t) => {
+      // A mescla demora: cancelada nesse intervalo, a tarefa NÃO vira pronta (liberaria quem depende dela). O código já entrou, e fica dito no histórico.
+      if (t.status === 'cancelled') {
+        cancelledMeanwhile = true;
+        return noted(t, `mesclado em ${m.base} (${m.sha}) depois de cancelada: a tarefa continua cancelada`);
+      }
+      if (valid && !valid(t)) return noted({ ...t, autoMerge: undefined }, `mesclado em ${m.base} (${m.sha}), mas a tarefa mudou durante a mescla (entrega nova ou fora de revisão): o código entrou e ela segue como está`);
+      return moved({ ...t, tests: m.tests ?? t.tests ?? null, merged: { at: new Date().toISOString(), sha: m.sha, branch: m.branch, base: m.base }, autoMerge: undefined }, 'done', 'auto', `mesclado em ${m.base} (${m.sha})`);
+    });
+    if (cancelledMeanwhile) throw new TaskConflictError(`a tarefa foi cancelada durante a mescla: o código já entrou em ${m.base} (${m.sha}), mas ela continua cancelada`);
+    await this.wakeDependents(projectId, taskId);
+    if (out?.status === 'done') await this.settleRequester(projectId, out, `mesclada em ${m.base}, foi para pronto`, null);
+    return out;
   }
 
   /**
@@ -4464,10 +4479,19 @@ export class TaskService {
   private async autoCommit(projectId: string, taskId: string): Promise<void> {
     const dir = await this.deps.projectPath(projectId);
     if (!dir) return;
-    const run = (this.commitQueues.get(dir) ?? Promise.resolve()).then(() => this.commitDone(projectId, dir, taskId));
-    this.commitQueues.set(dir, run.then(() => {}, () => {}));
+    const run = this.inProjectQueue(dir, () => this.commitDone(projectId, dir, taskId));
     // O aviso a quem pediu espera conversa de terceiro: sai depois da fila do projeto, para não atrasar o commit da tarefa seguinte.
     await (await run)?.();
+  }
+
+  /**
+   * Uma escrita no checkout principal de cada vez por projeto: o commit automático e a mescla (com os testes, que levam minutos) dividem esta fila, e nenhum começa com o outro no meio
+   * (a mescla deixa o principal sujo até os testes passarem). Só em memória: o que vale sai do `tasks.json` (ver `Task.autoMerge`). Quem falha não trava quem vem depois.
+   */
+  private inProjectQueue<T>(dir: string, job: () => Promise<T>): Promise<T> {
+    const run = (this.commitQueues.get(dir) ?? Promise.resolve()).then(job);
+    this.commitQueues.set(dir, run.then(() => {}, () => {}));
+    return run;
   }
 
   /** Faz o commit da tarefa pronta (na fila do projeto). Devolve o aviso a quem pediu, para sair fora da fila (ver `tellCommitBlocked`), ou nada. */
@@ -4952,6 +4976,8 @@ export class TaskService {
    * Aprovada pelo revisor: pronto, a não ser que o código ainda esteja numa worktree por mesclar ou que a política de fluxo do projeto reserve a conclusão ao dono (`completion: 'owner'`, ver
    * `flowOf`): aí a tarefa fica em "revisão" com a nota e o item na caixa, e só a aprovação dele pela tela (ou o merge dele) a leva a "pronto". A decisão vem da política lida de `~/.myco`,
    * não do que está no card (nem do `reviewerId`, nem de `Task.ownerGate`, que é só exibição). `verdict`: a revisão e a entrega que ela julgou; aprovação de entrega que já passou não decide nada.
+   * Com a conclusão por IA ESCOLHIDA pelo dono (`autoMergeOn`) e o código numa worktree por mesclar, a aprovação grava `Task.autoMerge` (mesma escrita da nota) e pede a mescla automática (`mergeSoon`),
+   * em vez de esperar o clique: ver `mergeSoon`. Sem a escolha (projeto legado ou virtual), segue "falta mesclar".
    */
   private async approve(projectId: string, taskId: string, reviewer: string, verdict: Verdict): Promise<void> {
     const { dir, task, profile } = await this.context(projectId, taskId);
@@ -4962,15 +4988,25 @@ export class TaskService {
     const head = `[MyCo] Tarefa “${titleOf(task)}” (id ${task.id}): `;
     const owner = (await this.flowOf(projectId)).completion === 'owner';
     const toMerge = place?.where === 'worktree' && !task.merged;
+    // Conclusão por IA escolhida pelo dono e o código numa worktree por mesclar: a aprovação pede a mescla automática (ver `mergeSoon`) na mesma gravação da nota, sem esperar o clique.
+    const auto = toMerge && !owner && (await this.autoMergeOn(projectId));
     if (toMerge || owner) {
       let wrote = false;
-      const note = toMerge ? `aprovada por ${reviewer}; falta mesclar${owner ? ' (e a sua aprovação)' : ''}` : `aprovada por ${reviewer}; falta sua aprovação`;
+      const note = toMerge
+        ? `aprovada por ${reviewer}; ${auto ? 'a mescla automática vem a seguir' : `falta mesclar${owner ? ' (e a sua aprovação)' : ''}`}`
+        : `aprovada por ${reviewer}; falta sua aprovação`;
       const out = await this.change(projectId, taskId, (t) => {
         if (!current(t)) return t;
         wrote = true;
-        return noted(owner ? withOwnerGate(t, 'approved', reviewer) : t, note);
+        const gated = owner ? withOwnerGate(t, 'approved', reviewer) : t;
+        const asked: Task = auto ? { ...gated, autoMerge: { verdict: { sessionId: verdict.sessionId, deliveryAt: verdict.deliveryAt }, sha: deliveredAt(t), by: reviewer, since: new Date().toISOString() } } : gated;
+        return noted(asked, note);
       });
       if (!wrote) return;
+      if (auto) {
+        this.mergeSoon(projectId);
+        return;
+      }
       if (selfReview(task)) await this.tellRequester(projectId, task, toMerge ? `${head}aprovada; falta mesclar a worktree.` : `${head}aprovada na sua revisão; falta a aprovação do dono (política de fluxo do projeto).`);
       if (owner && out) this.warnDependents(projectId, taskId, stuckReason(out));
       return;
@@ -5131,6 +5167,207 @@ export class TaskService {
       return noted(withOwnerGate(t, 'no-reviewer'), 'sem revisor configurado: espera sua aprovação');
     });
     if (wrote && out) this.warnDependents(projectId, task.id, stuckReason(out));
+  }
+
+  /** A conclusão por IA foi ESCOLHIDA pelo dono (política gravada, `completionChosen`)? Só ela mescla sozinha: o projeto sem política gravada (legado, virtual) segue pedindo o clique. */
+  private async autoMergeOn(projectId: string): Promise<boolean> {
+    const flow = await this.flowOf(projectId);
+    return flow.source === 'stored' && flow.completion === 'ai' && flow.completionChosen;
+  }
+
+  /**
+   * Mescla automática (ver `Task.autoMerge`): a revisão aprovou uma entrega cujo código está numa worktree, e o projeto escolheu a conclusão por IA. Em vez de esperar o clique, o Club mescla até o commit
+   * da entrega (nunca o branch inteiro, ver `mergeCode`) e leva a "pronto". Fail closed, nesta ordem, na vez do projeto (`inProjectQueue`, uma escrita por vez no principal): a aprovação ainda vale para
+   * esta entrega (`isVerdictOf`); a política ainda manda a IA concluir; a entrega tem commit; o commit já está no principal (reinício que caiu depois de mesclar: só finaliza, sem mesclar de novo); os commits
+   * do meio do caminho são de cards já aprovados ou integrados (senão espera, sem contar tentativa); testes obrigatórios e verdes, nunca pulados. Os desfechos de `mergeCode`: conflito e teste
+   * vermelho voltam ao responsável (`bounceMerge`); principal sujo e testes cortados no tempo esperam com backoff até `AUTO_MERGE_MAX_TRIES`; sem testes, sem commit ou o teto: a mescla para e o card vai para a caixa
+   * (`TaskAutoMerge.stopped`), e o dono mescla pelo card. Projeto pausado não mescla (a varredura que o retoma pega). Cada card que falha não segura os outros.
+   */
+  private mergeSoon(projectId: string, now = new Date()): void {
+    const run: Promise<void> = this.sweepMerges(projectId, now)
+      .catch(() => {}) // registro, não trava: a próxima rodada do tick refaz (o que ela decide vem do estado gravado)
+      .finally(() => this.mergeRuns.delete(run));
+    this.mergeRuns.add(run);
+  }
+
+  /** As mesclas automáticas que ainda estão rodando; resolve quando não há mais nenhuma (os testes esperam por isto). */
+  async mergesSettled(): Promise<void> {
+    while (this.mergeRuns.size) await Promise.all([...this.mergeRuns]);
+  }
+
+  /** O tick: a aprovação que ficou sem mescla (reinício, projeto que estava pausado, backoff que venceu) volta à fila. Sem esperar: a mescla leva minutos, e o resto do tick não pode ficar parado atrás dela. */
+  private async retryMerges(projectId: string, tasks: Task[], now: Date): Promise<void> {
+    if (tasks.some((t) => t.status === 'review' && t.autoMerge && !t.autoMerge.stopped)) this.mergeSoon(projectId, now);
+  }
+
+  private async sweepMerges(projectId: string, now: Date): Promise<void> {
+    const dir = await this.deps.projectPath(projectId);
+    if (!dir || this.deps.closing?.() || (await this.paused(projectId).catch(() => true))) return;
+    const due = (await readTasks(dir))
+      .filter((t) => t.status === 'review' && t.autoMerge && !t.autoMerge.stopped && mergeDue(t.autoMerge, now.getTime()))
+      .sort((a, b) => a.autoMerge!.since.localeCompare(b.autoMerge!.since));
+    const jobs: Array<Promise<void>> = [];
+    for (const t of due) {
+      const key = `${projectId}:${t.id}`;
+      if (this.mergeQueued.has(key)) continue;
+      this.mergeQueued.add(key);
+      jobs.push(
+        this.inProjectQueue(dir, () => this.autoMergeOne(projectId, dir, t.id, now))
+          // O que sai da vez do projeto (gravar o desfecho, avisar quem pediu, mandar o ajuste à conversa) espera fora dela: não segura o commit nem a mescla seguinte.
+          .then((after) => after?.())
+          .catch(() => {})
+          .finally(() => this.mergeQueued.delete(key)),
+      );
+    }
+    await Promise.all(jobs);
+  }
+
+  /**
+   * Uma mescla automática, já na vez do projeto: lê o card de novo (o que valia ao enfileirar pode ter mudado) e decide pelo estado gravado. Só o que toca o checkout principal (conferir o que já está
+   * nele, desfazer o resto de uma queda, mesclar e testar) roda aqui; o desfecho volta como função para sair da vez (ver `sweepMerges`).
+   */
+  private async autoMergeOne(projectId: string, dir: string, taskId: string, now: Date): Promise<(() => Promise<void>) | void> {
+    if (this.deps.closing?.()) return;
+    const all = await readTasks(dir);
+    const task = all.find((t) => t.id === taskId);
+    const am = task?.autoMerge;
+    if (!task || !am || am.stopped || task.status !== 'review') return;
+    // A aprovação vale para ESTA entrega: entrega nova (ou outra revisão) não é a que o revisor aprovou, e a marca sai sem mesclar nada.
+    if (!isVerdictOf(task, am.verdict) || am.sha !== deliveredAt(task)) {
+      return async () => {
+        await this.change(projectId, taskId, (t) => (t.autoMerge && !(isVerdictOf(t, am.verdict) && am.sha === deliveredAt(t)) ? noted({ ...t, autoMerge: undefined }, 'mescla automática descartada: a entrega mudou desde a aprovação') : t));
+      };
+    }
+    if (!(await this.autoMergeOn(projectId))) return () => this.stopMerge(projectId, task, am, 'a política de fluxo do projeto não manda mais a IA concluir: a mescla fica com você');
+    if (!am.sha) return () => this.stopMerge(projectId, task, am, 'a entrega não tem commit gravado: a mescla automática foi recusada (não leva o branch inteiro)');
+    const profile = task.staffId ? await this.deps.readProfile(projectId, task.staffId) : null;
+    const place = await locateTaskCode(dir, task, !!profile?.worktree).catch(() => null);
+    if (place?.where !== 'worktree') return () => this.stopMerge(projectId, task, am, 'o código da tarefa não está numa worktree por mesclar');
+    const sha = am.sha;
+    // Resto de um processo que caiu no meio (o marcador é gravado antes de tocar o principal, e nesta fila só há uma mescla por vez): desfaz o `merge --no-commit` pela metade.
+    if (am.merging) await abortStaleMerge(dir, sha).catch(() => false);
+    const valid = (t: Task) => t.status === 'review' && !!t.autoMerge && isVerdictOf(t, am.verdict);
+    // Já está no principal (a mescla foi commitada e o Club caiu antes de gravar o card): só finaliza. Nunca uma segunda mescla.
+    const already = await integratedSha(dir, sha).catch(() => null);
+    if (already) {
+      const base = (await locateCode(dir, null, false).catch(() => null))?.branch ?? 'o principal';
+      return async () => void (await this.finishMerge(projectId, taskId, { sha: already, base, branch: place.branch ?? '', tests: null }, valid));
+    }
+    // Os commits do meio do caminho (os que a mescla traz além dos do próprio card) têm de ser de cards já aprovados ou integrados.
+    const inRange = new Set(await commitsToMerge(dir, sha).catch(() => [] as string[]));
+    const open = all.filter((o) => o.id !== task.id && o.checkpoint?.sha && o.checkpoint.sha !== sha && inRange.has(o.checkpoint.sha) && !approvedOrIntegrated(o));
+    if (open.length) {
+      const cancelled = open.filter((o) => o.status === 'cancelled');
+      const names = open.map((o) => `“${titleOf(o)}” (id ${o.id}, ${o.status === 'cancelled' ? 'cancelada' : o.status})`).join(', ');
+      if (cancelled.length) return () => this.stopMerge(projectId, task, am, `o commit de card cancelado está no meio do caminho: ${names}; mescle pelo card ou resolva antes`);
+      return () => this.waitMerge(projectId, task, am, 'open-card', `espera o card ainda não aprovado que está no meio do caminho: ${names}`);
+    }
+    const marked = await this.change(projectId, taskId, (t) => (valid(t) ? { ...t, autoMerge: { ...t.autoMerge!, merging: new Date().toISOString(), wait: undefined } } : t));
+    if (!marked?.autoMerge?.merging) return;
+    // Os testes são obrigatórios e a mescla automática nunca os pula (sem `skipTests`): sem testes ou com teste vermelho, não entra.
+    const result = await mergeCode(dir, place, task.title, { upTo: sha }).then(
+      (merged) => ({ merged }),
+      (err: unknown) => ({ err }),
+    );
+    if ('err' in result) return () => this.mergeFailed(projectId, task, am, result.err, now);
+    // Cancelada no meio da mescla (o código entrou, e o histórico diz): `finishMerge` lança o conflito, e não há mais nada a fazer aqui.
+    return async () => void (await this.finishMerge(projectId, taskId, result.merged, valid).catch(() => {}));
+  }
+
+  /** O desfecho de uma mescla que não entrou (ver `mergeSoon`): cada tipo de falha tem o seu caminho. */
+  private async mergeFailed(projectId: string, task: Task, am: TaskAutoMerge, err: unknown, now: Date): Promise<void> {
+    const tests = err instanceof CodeError ? err.tests : null;
+    const detail = oneLine(err instanceof Error ? err.message : String(err), 300);
+    if (err instanceof CodeError && err.code === 'conflict') {
+      const files = err.files.map((f) => `\`${untrustedLine(f, 200)}\``).join(', ');
+      return this.bounceMerge(projectId, task, am, `conflito com o principal em ${err.files.map((f) => untrustedLine(f, 200)).join(', ')}`, `a mescla automática falhou com conflito no principal, nos arquivos: ${files}. Nada foi mesclado. Traga o branch principal para a sua worktree (git merge), resolva os conflitos, rode os testes e entregue de novo.`, tests);
+    }
+    if (err instanceof CodeError && err.code === 'tests-failed') {
+      const out = tests?.output.trim() ? `\n\n${untrustedBlock(tests.output)}\n\n` : ' ';
+      return this.bounceMerge(projectId, task, am, 'os testes ficaram vermelhos com a mescla', `a mescla automática falhou: os testes ficaram vermelhos com o seu código sobre o principal de agora. Nada foi mesclado. A saída:${out}Corrija (traga o branch principal para a sua worktree, se preciso), rode os testes e entregue de novo.`, tests);
+    }
+    // Recusa que repetir não muda (sem commit de entrega, sem testes no projeto): para na hora, sem tentativas.
+    if (err instanceof CodeError && (err.code === 'no-delivery' || err.code === 'no-tests')) return this.stopMerge(projectId, task, am, err.code === 'no-tests' ? `${detail} (a mescla automática exige testes verdes e nunca os pula)` : detail, tests);
+    // Principal sujo, testes cortados no tempo, falha de git: passageiro, tenta de novo com backoff até o teto.
+    await this.retryMerge(projectId, task, am, err instanceof CodeError && err.code === 'main-dirty' ? 'main-dirty' : 'retry', detail, tests, now);
+  }
+
+  /** A mescla espera por um motivo que se resolve sozinho (card do meio ainda não aprovado): a nota sai uma vez por motivo, e o tick e cada aprovação conferem de novo. Não conta tentativa. */
+  private async waitMerge(projectId: string, task: Task, am: TaskAutoMerge, why: 'open-card', detail: string): Promise<void> {
+    await this.change(projectId, task.id, (t) => {
+      if (!stillAsked(t, am) || (t.autoMerge!.wait?.why === why && t.autoMerge!.wait.detail === detail)) return t;
+      return noted({ ...t, autoMerge: { ...t.autoMerge!, merging: undefined, wait: { why, detail, since: t.autoMerge!.wait?.since ?? new Date().toISOString() } } }, `mescla automática em espera: ${detail}`);
+    });
+  }
+
+  /** Falha passageira: marca a próxima tentativa (backoff com jitter, ver `failedRetry`); no teto, para. A nota sai na primeira falha e no fim. */
+  private async retryMerge(projectId: string, task: Task, am: TaskAutoMerge, why: 'main-dirty' | 'retry', detail: string, tests: TestRun | null, now: Date): Promise<void> {
+    let stopped = null as Task | null;
+    await this.change(projectId, task.id, (t) => {
+      if (!stillAsked(t, am)) return t;
+      const cur = t.autoMerge!;
+      const retry = failedRetry(cur.retry, new Error(detail), now);
+      const withTests = tests ? { ...t, tests } : t;
+      if (retry.attempts >= AUTO_MERGE_MAX_TRIES) {
+        const text = `desisti depois de ${retry.attempts} tentativas: ${detail}`;
+        return (stopped = noted({ ...withTests, autoMerge: { ...cur, merging: undefined, wait: undefined, retry, stopped: { detail: text, at: now.toISOString() } } }, `mescla automática parou: ${text}`));
+      }
+      const next = { ...withTests, autoMerge: { ...cur, merging: undefined, retry, wait: { why, detail, since: cur.wait?.since ?? now.toISOString() } } };
+      return cur.retry ? next : noted(next, `mescla automática em espera (nova tentativa em instantes): ${detail}`);
+    });
+    if (stopped) await this.announceMergeStopped(projectId, stopped);
+  }
+
+  /** A mescla automática parou: o card fica em "revisão" com o motivo (a caixa mostra), os dependentes e quem pediu sabem. */
+  private async stopMerge(projectId: string, task: Task, am: TaskAutoMerge, detail: string, tests: TestRun | null = null): Promise<void> {
+    let stopped = null as Task | null;
+    await this.change(projectId, task.id, (t) => {
+      if (!stillAsked(t, am) || t.autoMerge!.stopped) return t;
+      return (stopped = noted({ ...(tests ? { ...t, tests } : t), autoMerge: { ...t.autoMerge!, merging: undefined, wait: undefined, stopped: { detail, at: new Date().toISOString() } } }, `mescla automática parou: ${detail}`));
+    });
+    if (stopped) await this.announceMergeStopped(projectId, stopped);
+  }
+
+  private async announceMergeStopped(projectId: string, task: Task): Promise<void> {
+    this.warnDependents(projectId, task.id, stuckReason(task));
+    await this.tellRequester(projectId, task, `[MyCo] Tarefa “${titleOf(task)}” (id ${task.id}): aprovada, mas a mescla automática parou (${untrustedLine(task.autoMerge?.stopped?.detail, 300)}). Fica com o dono: ele mescla pelo card.`);
+  }
+
+  /**
+   * Conflito ou teste vermelho com a mescla: a falha é do código da entrega, e quem a corrige é o responsável. O ajuste vai para a conversa de trabalho como o da reprovação (`reject`): com a conversa
+   * ocupada ou o projeto pausado fica guardado e a tarefa segue em revisão (sem a marca da mescla, que não tenta de novo), e quando ele sai, a tarefa volta para "fazendo". A entrega seguinte é
+   * revisada e aprovada de novo, e cada volta gasta uma rodada de revisão (`AUTO_REVIEW_ROUNDS`): o que não se resolve acaba no limite, com o dono. Sem conversa de trabalho, para como `stopMerge`.
+   */
+  private async bounceMerge(projectId: string, task: Task, am: TaskAutoMerge, why: string, instruction: string, tests: TestRun | null): Promise<void> {
+    if (!task.staffId || !task.sessionId) return this.stopMerge(projectId, task, am, `${why}; a tarefa não tem conversa de trabalho para devolver`, tests);
+    const staffId = task.staffId;
+    const current = (t: Task) => stillAsked(t, am);
+    await this.locked(projectId, staffId, `mescla ${task.id}`, async () => {
+      const now = ((await this.list(projectId)) ?? []).find((t) => t.id === task.id);
+      if (!now || !current(now) || !now.sessionId) return;
+      const target = now.sessionId;
+      const msg = `[MyCo] Tarefa “${titleOf(now)}” (id ${now.id}): ${instruction}`;
+      const note = `mescla automática falhou: ${why}; devolvida ao responsável`;
+      const reason = await this.hold(target, { text: msg, auto: true });
+      if (reason) {
+        await this.change(projectId, task.id, (t) => (current(t) ? noted({ ...(tests ? { ...t, tests } : t), autoMerge: undefined }, `${note} (ajuste guardado: ${reason})`) : t));
+        return;
+      }
+      const after = await this.change(projectId, task.id, (t) => (current(t) ? moved({ ...(tests ? { ...t, tests } : t), autoMerge: undefined }, 'doing', 'auto', note) : t));
+      if (after?.status !== 'doing') return;
+      try {
+        if (!this.deps.sendTo) throw new TaskError('sem envio para a conversa de trabalho');
+        if (!(await this.backToPrimary(projectId, now, msg))) await this.deps.sendTo(projectId, target, staffId, msg, []);
+      } catch (err) {
+        // Não foi (limite de consumo, conversa fechada…): fica guardado e volta para revisão; o vigia manda depois (como na reprovação).
+        const error = (err as Error).message;
+        const held: HeldMessage = { id: randomBytes(4).toString('hex'), at: new Date().toISOString(), text: msg, reason: `não foi enviado: ${error}` };
+        await this.change(projectId, task.id, (t) => {
+          const back = t.status === 'doing' ? moved(t, 'review', 'auto', `ajuste da mescla automática não foi enviado: ${error}`) : t;
+          return { ...back, held: [...(back.held ?? []), held] };
+        });
+      }
+    });
   }
 
   /** O revisor: outro funcionário do projeto, e não quem faz a tarefa (`check`: confere se ele existe). */
@@ -6303,6 +6540,9 @@ export function stuckState(t: Task, now = Date.now()): StuckState | null {
   // Plano primeiro: o card entregou o plano (ver `holdPlan`) e quem pediu decide, aprovando ou recusando com o motivo: só ele destrava.
   if (waitsPlan(t)) return { reason: 'entregou o plano e espera quem pediu aprovar ou recusar', selfHeals: false, humanAction: 'decide', since: t.planWait!.since };
   if (t.status !== 'review') return null;
+  // Aprovada, e a mescla automática parou (sem testes, sem commit de entrega, principal sujo além do teto…): só o dono mescla pelo card (ver `TaskService.mergeSoon`).
+  const stopped = stoppedMerge(t);
+  if (stopped) return { reason: `aprovada, mas a mescla automática parou: ${stopped.detail}`, selfHeals: false, humanAction: 'decide', since: stopped.at };
   // Espera a aprovação do dono (política de fluxo, ver `Task.ownerGate`): a revisão já decidiu ou não há revisor, e só ele leva a tarefa a "pronto". É só o aviso: a autorização vem da política.
   const og = ownerGateOf(t);
   if (og) return { reason: og.why === 'approved' ? `aprovada${og.by ? ` por ${og.by}` : ''}; falta sua aprovação` : 'sem revisor configurado: falta sua aprovação', selfHeals: false, humanAction: 'decide', since: og.since };
@@ -6357,7 +6597,7 @@ export function ownAlerts(tasks: Task[], now = Date.now()): OwnAlert[] {
     // Plano pendente: o gestor que pediu o recebe na conversa dele; é do usuário quando foi ele que pediu ou o aviso ao gestor se perdeu (`TaskPlanWait.to`).
     else if (state.humanAction === 'decide' && waitsPlan(task) && task.planWait!.to === 'owner') out.push({ task, state: { ...state, humanAction: 'decide' } });
     // Espera a aprovação do dono (política de fluxo): só ele destrava, então tem item próprio.
-    else if (state.humanAction === 'decide' && ownerGateOf(task)) out.push({ task, state: { ...state, humanAction: 'decide' } });
+    else if (state.humanAction === 'decide' && (ownerGateOf(task) || stoppedMerge(task))) out.push({ task, state: { ...state, humanAction: 'decide' } });
     // A dúvida "a caminho do gestor" também tem humanAction null: só a espera do limite entra (é a mesma razão que `stuckState` deu).
     else if (state.humanAction === null && fallbackWait(task, now)?.reason === state.reason) out.push({ task, state: { ...state, humanAction: null } });
   }
@@ -6909,7 +7149,8 @@ function reviewClosable(t: Task, sessionId: string, all: Task[]): boolean {
 /** Entrega nova (o turno terminou, ou a conversa parou): o pedido de revisão que havia é da rodada anterior e deixa de valer (ver `liveReview`). */
 const supersedeReview = (t: Task): Task => {
   // A espera pela aprovação do dono era da entrega que acabou (ver `Task.ownerGate`): a entrega nova é revisada de novo.
-  const open = t.ownerGate ? { ...t, ownerGate: undefined } : t;
+  // A aprovação (e a mescla automática que ela pediu, ver `Task.autoMerge`) era da entrega que acabou: entrega nova invalida as duas.
+  const open = t.ownerGate || t.autoMerge ? { ...t, ownerGate: undefined, autoMerge: undefined } : t;
   return open.review && !open.review.superseded ? { ...open, review: { ...open.review, superseded: true } } : open;
 };
 
@@ -7324,6 +7565,18 @@ function withOwnerGate(t: Task, why: TaskOwnerGate['why'], by?: string): Task {
   return { ...t, ownerGate: { deliveryAt: t.delivery?.at ?? null, since: new Date().toISOString(), why, ...(by && { by }) } };
 }
 
+/** A tarefa segue em "revisão", com a mescla automática pedida por esta aprovação (a mesma revisão e entrega: `isVerdictOf`)? É a conferência de quem grava o desfecho de uma mescla. */
+const stillAsked = (t: Task, am: TaskAutoMerge): boolean => t.status === 'review' && !!t.autoMerge && isVerdictOf(t, am.verdict);
+
+/** A mescla automática está na hora de tentar? Esperando um card do meio, a cada varredura (conferir é barato e não conta tentativa); em backoff, quando vence; senão, já. */
+const mergeDue = (am: TaskAutoMerge, at: number): boolean => am.wait?.why === 'open-card' || !am.retry || retryDue(am.retry, at);
+
+/** O card do meio do caminho (o commit dele entra com a mescla de outro) é de uma entrega já aprovada ou integrada? Pronto, mesclado ou em revisão com o veredito aprovado desta entrega. */
+const approvedOrIntegrated = (t: Task): boolean => t.status === 'done' || !!t.merged || (t.status === 'review' && liveReview(t)?.verdict === 'approved');
+
+/** A mescla automática parada nesta entrega (só o que o dono destrava): ver `stuckState`. */
+const stoppedMerge = (t: Task) => (t.status === 'review' && t.autoMerge?.stopped && t.autoMerge.verdict.deliveryAt === (t.delivery?.at ?? null) ? t.autoMerge.stopped : undefined);
+
 /** Uma linha no histórico, sem mudar de coluna. */
 /**
  * Onde está o código DESTA tarefa: o que o card gravou ao começar (`Task.codeAt`). `project`: o checkout principal, mesmo que o funcionário tenha ganhado uma worktree depois (para
@@ -7529,7 +7782,7 @@ function moved(t: Task, status: TaskStatus, by: 'you' | 'auto', note?: string): 
   const history = [...t.history, { at, status, by, ...(note && { note }) }].slice(-MAX_HISTORY);
   // Saiu de Aguardar: o motivo era de lá. Saiu de revisão: o retry da revisão automática era da entrega que acabou.
   const leavesWait = t.status === 'waiting' ? { waitReason: null, engineStop: undefined } : {};
-  const leavesReview = t.status === 'review' && (t.reviewRetry || t.ownerGate) ? { reviewRetry: undefined, ownerGate: undefined } : {};
+  const leavesReview = t.status === 'review' && (t.reviewRetry || t.ownerGate || t.autoMerge) ? { reviewRetry: undefined, ownerGate: undefined, autoMerge: undefined } : {};
   // A ciência do corte era para a retomada na fila (em "a fazer"): em outra coluna já não vale.
   const leavesTodo = status !== 'todo' && t.cutAck ? { cutAck: undefined } : {};
   // A espera das subtarefas e a do segundo plano eram do "fazendo": em outra coluna (entrega, Aguardar, cancelada) já não valem.

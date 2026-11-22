@@ -391,9 +391,11 @@ describe('conclusão do dono: o revisor IA aprova e a tarefa espera', () => {
     }
   });
 
-  it('com a conclusão por IA a mescla do dono segue como sempre (e a tela, sem byOwner, não precisava dele)', async () => {
+  it('com a conclusão por IA que o dono não escolheu (herdada) a mescla segue pedindo o clique, como sempre (e a tela, sem byOwner, não precisava dele)', async () => {
     const p = await project('f-ai-merge', { ana: { worktree: true } });
-    await p.svc.setFlowPolicy('p', { mode: 'auto' }, true);
+    // Só o commit foi mexido: a conclusão 'ai' vem da política virtual e `completionChosen` fica desligado. Com o preset Automático a aprovação mescla sozinha (tests/autoMerge.test.ts).
+    await p.svc.setFlowPolicy('p', { commit: true }, true);
+    expect(await p.svc.flowPolicy('p')).toMatchObject({ completion: 'ai', completionChosen: false, source: 'stored' });
     const t = await p.make('Filtro');
     await p.deliver(t.id, 's-1');
     merging.place = { where: 'worktree', path: '/tmp/wt', branch: 'myco/ana-1' };

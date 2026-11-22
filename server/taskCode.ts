@@ -16,9 +16,14 @@ import { TestScan } from './testFailures';
 export class CodeError extends Error {
   constructor(
     message: string,
-    /** `no-tests`: não há testes; dá para mesclar confirmando. `tests-timeout`: os testes da mescla passaram do tempo-limite (não é falha de teste; tentar de novo). */
-    readonly code: 'no-tests' | 'tests-timeout' | null = null,
+    /**
+     * `no-tests`: não há testes; dá para mesclar confirmando. `tests-timeout`: os testes da mescla passaram do tempo-limite (não é falha de teste; tentar de novo). `no-delivery`: a entrega não tem um
+     * commit desta worktree até onde mesclar (recusa, nunca o branch inteiro). `main-dirty`: o checkout principal tem arquivo sem commit. `conflict`: conflito (os arquivos em `files`; a mescla foi desfeita).
+     * `tests-failed`: os testes ficaram vermelhos com a mescla (a saída em `tests`; a mescla foi desfeita).
+     */
+    readonly code: 'no-tests' | 'tests-timeout' | 'no-delivery' | 'main-dirty' | 'conflict' | 'tests-failed' | null = null,
     readonly tests: TestRun | null = null,
+    readonly files: string[] = [],
   ) {
     super(message);
   }
@@ -114,21 +119,27 @@ export async function readCode(projectPath: string, place: CodePlace, upTo?: str
 }
 
 /**
- * Mescla a worktree no branch atual do projeto. O que não foi commitado na worktree é commitado
- * antes (com a mensagem da tarefa). Com `upTo` (o commit da entrega), mescla só até ele e não
- * commita o pendente, que é da tarefa seguinte. Sem testes, só com `skipTests` (confirmado no Claudio’s Club). `testTimeoutMs`: o tempo-limite
- * dos testes da mescla (padrão `TEST_TIMEOUT_MS`; os testes trocam). Testes cortados no tempo-limite não são falha: `CodeError` com `code: 'tests-timeout'`.
+ * Mescla a worktree no branch atual do projeto, até `upTo` (o commit da entrega, que tem de ser desta worktree: ancestral do HEAD dela). Sem ele, ou com um que não vale, RECUSA
+ * (`CodeError` com `code: 'no-delivery'`): mesclar sem saber até onde levaria o branch inteiro, com o que a tarefa seguinte já começou. Só `wholeBranch` (a mescla do dono da pasta de
+ * trabalho inteira, sem tarefa: ver a rota de chat) mescla tudo, e aí o que não foi commitado na worktree é commitado antes (com a mensagem dada). Sem testes, só com `skipTests`
+ * (confirmado no Claudio’s Club). `testTimeoutMs`: o tempo-limite dos testes da mescla (padrão `TEST_TIMEOUT_MS`; os testes trocam). Testes cortados no tempo-limite não são falha:
+ * `CodeError` com `code: 'tests-timeout'`.
  */
 export async function mergeCode(
   projectPath: string,
   place: CodePlace,
   title: string,
-  opts: { skipTests?: boolean; upTo?: string | null; testTimeoutMs?: number } = {},
+  opts: { skipTests?: boolean; upTo?: string | null; wholeBranch?: boolean; testTimeoutMs?: number } = {},
 ): Promise<{ sha: string; base: string; branch: string; tests: TestRun | null }> {
   if (place.where !== 'worktree' || !place.branch) throw new CodeError('só dá para mesclar o trabalho de uma worktree');
   const end = await validEnd(place, opts.upTo);
+  if (!end && !opts.wholeBranch)
+    throw new CodeError(
+      opts.upTo ? 'o commit da entrega não é desta worktree (não é ancestral do HEAD dela): a mescla foi recusada, não vou levar o branch inteiro' : 'a entrega não tem commit gravado: a mescla foi recusada, não vou levar o branch inteiro',
+      'no-delivery',
+    );
   const code = await readCode(projectPath, place, end);
-  if (!code.canMerge || !code.base) throw new CodeError(code.whyNot ?? 'não dá para mesclar agora');
+  if (!code.canMerge || !code.base) throw new CodeError(code.whyNot ?? 'não dá para mesclar agora', code.base && (await dirtyCount(projectPath)) ? 'main-dirty' : null);
   const test = code.test;
   if (!test && !opts.skipTests) throw new CodeError('não achei testes neste projeto (npm test, composer test ou phpunit)', 'no-tests');
 
@@ -144,7 +155,8 @@ export async function mergeCode(
   } catch (err) {
     const conflicts = (await git(projectPath, ['diff', '--name-only', '--diff-filter=U']).catch(() => '')).trim();
     await git(projectPath, ['merge', '--abort']).catch(() => {});
-    throw new CodeError(conflicts ? `conflito ao mesclar em: ${conflicts.split(/\r?\n/).join(', ')}` : `não deu para mesclar: ${firstLine((err as Error).message)}`);
+    const files = conflicts.split(/\r?\n/).filter(Boolean);
+    throw new CodeError(files.length ? `conflito ao mesclar em: ${files.join(', ')}` : `não deu para mesclar: ${firstLine((err as Error).message)}`, files.length ? 'conflict' : null, null, files);
   }
   let tests: TestRun | null = null;
   if (test) {
@@ -152,7 +164,7 @@ export async function mergeCode(
     if (!tests.ok) {
       await git(projectPath, ['merge', '--abort']).catch(() => {});
       if (tests.timedOut) throw new CodeError(`os testes passaram do tempo-limite de ${formatLimit(tests.limitMs ?? TEST_TIMEOUT_MS)} com a mescla: nada foi mesclado (não é falha de teste: confira se a máquina está cheia e tente de novo)`, 'tests-timeout', tests);
-      throw new CodeError('os testes falharam com a mescla: nada foi mesclado', null, tests);
+      throw new CodeError('os testes falharam com a mescla: nada foi mesclado', 'tests-failed', tests);
     }
   }
   // Mescla sem mudança nenhuma (a base já tinha tudo): não há o que commitar.
@@ -164,6 +176,32 @@ export async function mergeCode(
   });
   const sha = (await git(projectPath, ['rev-parse', '--short', 'HEAD'])).trim();
   return { sha, base: code.base, branch: place.branch, tests };
+}
+
+/**
+ * O commit `end` já está no HEAD do checkout principal? Devolve o commit curto da mescla que o trouxe (ou o dele mesmo, se entrou por fast-forward), ou null se não está. É o que torna a
+ * mescla automática idempotente: o processo que caiu depois de commitar a mescla e antes de gravar o card não mescla de novo.
+ */
+export async function integratedSha(projectPath: string, end: string): Promise<string | null> {
+  if (!(await git(projectPath, ['merge-base', '--is-ancestor', end, 'HEAD']).then(() => true, () => false))) return null;
+  const merges = (await git(projectPath, ['log', '--merges', '--first-parent', '--ancestry-path', '--format=%h', `${end}..HEAD`]).catch(() => '')).split(/\r?\n/).filter(Boolean);
+  return merges.at(-1) ?? (await git(projectPath, ['rev-parse', '--short', end])).trim();
+}
+
+/** Os commits que mesclar até `end` traz ao principal (do mais novo ao mais antigo, `end` entre eles): o que está em `end` e não no HEAD do principal. */
+export async function commitsToMerge(projectPath: string, end: string): Promise<string[]> {
+  return (await git(projectPath, ['rev-list', `HEAD..${end}`])).split(/\r?\n/).filter(Boolean);
+}
+
+/**
+ * Uma mescla que o processo deixou pela metade no checkout principal (`merge --no-commit` com os testes rodando quando o Club caiu): só se é a deste `end` (MERGE_HEAD igual) ela é desfeita.
+ * Mescla em andamento de outra coisa (do dono, na mão) não é tocada. Devolve se desfez.
+ */
+export async function abortStaleMerge(projectPath: string, end: string): Promise<boolean> {
+  const head = (await git(projectPath, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).catch(() => '')).trim();
+  if (!head || head !== (await git(projectPath, ['rev-parse', '--verify', end]).catch(() => '')).trim()) return false;
+  await git(projectPath, ['merge', '--abort']);
+  return true;
 }
 
 /** O comando de testes do projeto, se houver um claro. */

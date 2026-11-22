@@ -1051,6 +1051,11 @@ export interface Task {
    */
   ownerGate?: TaskOwnerGate;
   /**
+   * A mescla automática desta entrega (ver `TaskService.mergeSoon`): gravada na aprovação, na mesma escrita da nota, quando o projeto escolheu a conclusão por IA e o código está numa worktree.
+   * É o que a fila e o reinício leem: nada se mescla sem ela, e ela só vale para a entrega aprovada (`verdict` + `sha`); entrega nova, mescla feita ou saída de "revisão" a desfazem. Só o servidor grava.
+   */
+  autoMerge?: TaskAutoMerge;
+  /**
    * O fim de turno do card (em "fazendo") achou agent ou comando ainda rodando em segundo plano: não é entrega. Sem revisão, sem resumo gravado e sem aviso a quem pediu; o card
    * segue em "fazendo" (e ocupando o funcionário) até o turno que vem depois do término. Vencido o prazo (`BACKGROUND_WAIT_MS`) sem o segundo plano terminar, a entrega segue como
    * sempre, com uma nota no histórico (`expiredAt`). Sai quando o card sai de "fazendo" ou quando o fim de turno acha o segundo plano vazio. Só o servidor grava.
@@ -1242,6 +1247,24 @@ export interface TaskNoCode {
   notifyRetry?: RetryState;
   /** Quando o aviso ao gestor foi dado como perdido e o card passou a `to: 'owner'` (ISO). */
   escalatedAt?: string;
+}
+
+/** A mescla automática de uma entrega aprovada (`Task.autoMerge`). */
+export interface TaskAutoMerge {
+  /** A revisão (conversa) e a entrega (`delivery.at`) que o revisor aprovou. */
+  verdict: { sessionId: string; deliveryAt: string | null };
+  /** O commit da entrega (`checkpoint.sha`): a mescla vai até ele. Null: a entrega não tem commit, e a mescla é recusada (nunca leva o branch inteiro). */
+  sha: string | null;
+  /** O nome de quem aprovou. */
+  by: string;
+  since: string;
+  /** Desde quando a mescla toca o checkout principal (gravado ANTES de mexer): se o processo cair no meio, o reinício vê o marcador sem execução viva e desfaz o que ficou pela metade. */
+  merging?: string;
+  /** Esperando para tentar de novo: o motivo, e quando; `retry` só conta as falhas que se repetem (principal sujo, testes cortados no tempo), com teto. */
+  wait?: { why: 'open-card' | 'main-dirty' | 'retry'; detail: string; since: string };
+  retry?: RetryState;
+  /** A mescla automática parou e só o dono segue (mescla pelo card): o motivo e quando. */
+  stopped?: { detail: string; at: string };
 }
 
 /** A espera pela aprovação do dono (`Task.ownerGate`). */
