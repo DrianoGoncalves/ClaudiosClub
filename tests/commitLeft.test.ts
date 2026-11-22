@@ -218,13 +218,14 @@ describe('withCommitLeft: a listagem de tarefas (git de verdade)', () => {
     expect(commits(p.dir)).toBe(3);
   });
 
-  it('o estado também vale com o aviso já ignorado (ack): o cartão segue mostrando', async () => {
+  it('com o aviso já ignorado (ack) o estado não é calculado (nada o lê, e custava git); o cartão segue mostrando o resultado do commit', async () => {
     const p = await project(root, 'lista-ack');
     const { a } = await p.partial();
+    expect((await p.listedTask(a)).commitLeft!.state).toBe('waiting');
     await p.svc.ackCommit(`commit:p:${a}`);
     const t = await p.listedTask(a);
-    expect(t.commit!.ack).toBe(true);
-    expect(t.commitLeft!.state).toBe('waiting');
+    expect(t.commit).toMatchObject({ status: 'partial', alert: true, ack: true });
+    expect(t.commitLeft).toBeUndefined();
   });
 
   it('sem nenhum aviso: a mesma lista, sem chamar o git', async () => {

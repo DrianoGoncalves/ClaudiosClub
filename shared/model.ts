@@ -1150,7 +1150,7 @@ export interface Task {
   commitNotice?: { key: string; at: string };
   /**
    * Só na listagem e na caixa (derivado, não gravado): o estado do aviso de commit parcial (ver `CommitLeft`): `waiting` (só ciência, algum card aberto ainda toca as sobras), `ready` (decisão do
-   * dono) ou `failed` (erro). Existe só com `commit.alert` e enquanto alguma sobra ainda tem mudança no git; vale também com o aviso já ignorado (`commit.ack`).
+   * dono) ou `failed` (erro). Existe só com `commit.alert` ainda não ignorado (`commit.ack`: nada na tela lê o estado do aviso ignorado, e calculá-lo custa git) e enquanto alguma sobra ainda tem mudança no git.
    */
   commitLeft?: CommitLeft;
   /**

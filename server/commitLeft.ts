@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, promises as fs } from 'node:fs';
 import path from 'node:path';
-import { CHANGED_FILES_MAX, COMMIT_LIST_MAX, isClosed, type CommitLeft, type CommitLeftBlocker, type CommitLeftFile, type CommitLeftoverFile, type CommitLeftovers, type Task, type TaskCommitLeft } from '../shared/model';
+import { CHANGED_FILES_MAX, COMMIT_LIST_MAX, isClosed, type CommitLeft, type CommitLeftBlocker, type CommitLeftFile, type CommitLeftoverFile, type CommitLeftovers, type Task, type TaskCommit, type TaskCommitLeft } from '../shared/model';
 import { gitDefault, inspectRepo, isConflict, statusOf, type GitRun, type Repo, type StatusEntry } from './autoCommit';
 import { CHECK_DEADLINE_MS, COMMIT_CHECK_TTL_MS, settleWithin } from './inboxResolved';
 import { pathKey } from './ownerEdits';
@@ -90,19 +90,26 @@ async function readLeft(dir: string, left: readonly TaskCommitLeft[], git: GitRu
   }
 }
 
-/** O `git status` das sobras, guardado por aviso (`projeto:tarefa@at#refeitos`): a caixa é lida a cada poucos segundos e o git não precisa ser consultado todas as vezes. Só na memória. */
+type StatusRead = Promise<Map<string, StatusEntry> | null>;
+
+/**
+ * O `git status` das sobras, guardado por aviso (`projeto:tarefa@at#refeitos`): a caixa é lida a cada poucos segundos e o git não precisa ser consultado todas as vezes. Só na memória. Guarda a
+ * leitura ainda em andamento também: quem chega no meio dela (a lista de tarefas, a caixa e a contagem leem juntas) espera a mesma, em vez de abrir outra.
+ */
 export class CommitLeftCache {
-  private readonly entries = new Map<string, { at: number; status: Map<string, StatusEntry> | null }>();
+  private readonly entries = new Map<string, { at: number; status: StatusRead }>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  /** O status guardado, ou `load` (com o prazo do git lento: passou dele, vale "não sei" e a próxima leitura tenta de novo depois do TTL). */
-  async status(key: string, load: () => Promise<Map<string, StatusEntry> | null>): Promise<Map<string, StatusEntry> | null> {
+  /** A leitura guardada (pronta ou em andamento) dentro do TTL, ou undefined. */
+  peek(key: string): StatusRead | undefined {
     const hit = this.entries.get(key);
-    if (hit && this.now() - hit.at < COMMIT_CHECK_TTL_MS) return hit.status;
-    const status = await settleWithin(load(), CHECK_DEADLINE_MS, null);
+    return hit && this.now() - hit.at < COMMIT_CHECK_TTL_MS ? hit.status : undefined;
+  }
+
+  /** Guarda a leitura de `key` a partir de agora. */
+  put(key: string, status: StatusRead): void {
     this.entries.set(key, { at: this.now(), status });
-    return status;
   }
 
   /** Esquece os avisos do projeto (`prefix`) que a leitura mais recente não viu (resolvidos, ignorados, tarefa apagada). */
@@ -118,30 +125,67 @@ export interface CommitLeftDeps {
   git?: GitRun;
 }
 
+/** Quantos git das leituras do aviso rodam ao mesmo tempo no servidor todo (projetos e chamadores somados): o resto espera a vez. */
+export const GIT_READ_SLOTS = 3;
+let slotsBusy = 0;
+const slotQueue: Array<() => void> = [];
+
+/** O `git` com a vaga: no máximo `GIT_READ_SLOTS` processos de uma vez. A vaga que sai passa direto para o próximo da fila. */
+function limited(git: GitRun): GitRun {
+  return async (cwd, args, opts) => {
+    if (slotsBusy >= GIT_READ_SLOTS) await new Promise<void>((resolve) => slotQueue.push(resolve));
+    else slotsBusy++;
+    try {
+      return await git(cwd, args, opts);
+    } finally {
+      const next = slotQueue.shift();
+      if (next) next();
+      else slotsBusy--;
+    }
+  };
+}
+
+/** O aviso está de pé e o dono ainda não o ignorou: só nesse o estado aparece (caixa, selo e contagem não olham o ignorado), então só nesse vale gastar git. */
+const watched = (t: Task): boolean => !!t.commit?.alert && !t.commit.ack;
+
 /**
- * A listagem de tarefas com `Task.commitLeft` (só as que têm aviso de commit de pé). O git só é consultado para quem tem sobras, uma vez por TTL (ver `CommitLeftCache`). Erro ao calcular: a lista
- * sai como estava (o estado é um complemento, nunca derruba o quadro).
+ * A listagem de tarefas com `Task.commitLeft` (só as que têm aviso de commit de pé e ainda não ignorado). O git é lido uma vez por chamada (o repositório e o `status` de todas as sobras juntas, não
+ * um por card) e só para quem tem sobras, uma vez por TTL (ver `CommitLeftCache`); os processos do git passam pela fila de `GIT_READ_SLOTS`. Erro ao calcular: a lista sai como estava (o estado é
+ * um complemento, nunca derruba o quadro).
  */
 export async function withCommitLeft(tasks: Task[], projectId: string, dir: string, deps: CommitLeftDeps = {}): Promise<Task[]> {
-  if (!tasks.some((t) => t.commit?.alert)) return tasks;
+  if (!tasks.some(watched)) return tasks;
   try {
     const cache = deps.cache ?? sharedCache;
-    const seen = new Set<string>();
+    const keyOf = (t: Task, c: TaskCommit) => `${projectId}:${t.id}@${c.at}#${c.redos?.length ?? 0}`;
+    const reads = new Map<string, StatusRead>();
+    const missing: Array<{ key: string; left: TaskCommitLeft[] }> = [];
+    for (const t of tasks) {
+      const c = t.commit;
+      if (!c || !watched(t) || c.status === 'failed' || !c.left.length) continue;
+      const key = keyOf(t, c);
+      const hit = cache.peek(key);
+      if (hit) reads.set(key, hit);
+      else missing.push({ key, left: c.left });
+    }
+    if (missing.length) {
+      // Uma leitura para todos os avisos sem guarda: o `status` de uma lista de caminhos serve a cada card, que só olha os seus.
+      const one = settleWithin(readLeft(dir, missing.flatMap((m) => m.left), limited(deps.git ?? gitDefault)).then((r) => r.status), CHECK_DEADLINE_MS, null);
+      for (const m of missing) {
+        cache.put(m.key, one);
+        reads.set(m.key, one);
+      }
+    }
     const out = await Promise.all(
       tasks.map(async (t) => {
         const c = t.commit;
-        if (!c?.alert) return t;
-        let status: Map<string, StatusEntry> | null = null;
-        if (c.status !== 'failed' && c.left.length) {
-          const key = `${projectId}:${t.id}@${c.at}#${c.redos?.length ?? 0}`;
-          seen.add(key);
-          status = await cache.status(key, async () => (await readLeft(dir, c.left, deps.git ?? gitDefault)).status);
-        }
-        const view = deriveCommitLeft(t, tasks, status);
+        if (!c || !watched(t)) return t;
+        const read = reads.get(keyOf(t, c));
+        const view = deriveCommitLeft(t, tasks, read ? await read : null);
         return view ? { ...t, commitLeft: view } : t;
       }),
     );
-    cache.sweep(`${projectId}:`, seen);
+    cache.sweep(`${projectId}:`, new Set(reads.keys()));
     return out;
   } catch {
     return tasks;
