@@ -585,7 +585,7 @@ describe('o caso do hold: nada é gravado na tarefa de outro projeto', () => {
     const onRequest = src.indexOf('async function onRequest');
     const gateAt = src.indexOf('const admitted = gate(', onRequest);
     expect(gateAt).toBeGreaterThan(onRequest);
-    for (const later of ['STREAM_ROUTE.exec(url.pathname)', 'for (const [method, pattern, handler] of routes)', 'serveStatic(url.pathname, res)']) {
+    for (const later of ['STREAM_ROUTE.exec(url.pathname)', 'for (const [method, pattern, handler] of routes)', 'serveStatic(CLIENT_DIR, url.pathname, req, res)']) {
       expect(src.indexOf(later, onRequest), later).toBeGreaterThan(gateAt);
     }
   });

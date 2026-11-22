@@ -1,4 +1,4 @@
-import { useCopy } from '../chat/markdown';
+import { useCopy } from '../lib/useCopy';
 import { t } from '../i18n';
 import type { SandboxAlert } from './codexSandbox';
 

@@ -7,8 +7,10 @@ import path from 'node:path';
 const writeQueues = new Map<string, Promise<void>>();
 // No Windows o rename pode falhar um instante (antivírus/indexador segurando o destino).
 const RENAME_RETRY_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
-const RENAME_ATTEMPTS = 6;
-const RENAME_BASE_MS = 20; // esperas: ~20, 40, 80, 160, 320 ms (com jitter de 50–100%): < 650 ms no total
+// Com um arquivo de MB num HDD, o antivírus segura o destino por mais de 650 ms e a gravação se perdia (EPERM no log): agora até ~3 s.
+const RENAME_ATTEMPTS = 9;
+const RENAME_BASE_MS = 20; // esperas: ~20, 40, 80, 160, 320, 640, 1000, 1000 ms (com jitter de 50–100%): < 3,3 s no total
+const RENAME_MAX_WAIT_MS = 1000;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -19,8 +21,12 @@ async function renameWithRetry(tmp: string, file: string): Promise<void> {
       return;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (attempt >= RENAME_ATTEMPTS || !code || !RENAME_RETRY_CODES.has(code)) throw err;
-      await sleep(RENAME_BASE_MS * 2 ** (attempt - 1) * (0.5 + Math.random() / 2));
+      if (!code || !RENAME_RETRY_CODES.has(code)) throw err;
+      if (attempt >= RENAME_ATTEMPTS) {
+        console.warn(`[gravar] ${file}: ${code} em ${attempt} tentativas de troca; esta gravação não entrou`);
+        throw err;
+      }
+      await sleep(Math.min(RENAME_MAX_WAIT_MS, RENAME_BASE_MS * 2 ** (attempt - 1)) * (0.5 + Math.random() / 2));
     }
   }
 }

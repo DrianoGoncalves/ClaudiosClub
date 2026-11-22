@@ -26,7 +26,7 @@ import { LazyScreen } from './LazyScreen';
 import { startPresence } from './presence';
 import { useTheme } from './theme';
 import { pollVisible, pollVisibleLoop } from './usePoll';
-import { archiveKey, ghostNodeId, HR_ID, manageNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID } from './board/layout';
+import { archiveKey, ghostNodeId, HR_ID, manageNodeId, projectNodeId, RANKING_ID, staffNodeId, SYNCED_NODE_ID, USER_NODE_ID, type StaffLink } from './board/layout';
 import { seedSeenIdle } from './board/unread';
 import { openSettings } from './toolbar/openSettings';
 import { PairControls } from './toolbar/PairControls';
@@ -54,6 +54,7 @@ import type { StaffFormMode } from './staff/HireForm';
 import { directoryPerson } from './staff/directory';
 import { UsageWarnings } from './chat/usageWarning';
 import { DialogHost } from './lib/DialogHost';
+import { Skeleton } from './lib/Skeleton';
 import { askConfirm, showAlert } from './lib/dialogStore';
 import { changePause } from './tasks/pauseState';
 
@@ -469,12 +470,32 @@ export function App() {
     return style;
   }, [board, selection, config, theme]);
   const [drawerWidth, setDrawerWidth] = useDrawerWidth();
+  // Desligar o gestor (o "x" na linha do organograma). O corpo muda a cada render (lê o board atual), mas o que as linhas recebem não: com uma
+  // função nova a cada render, o valor de EdgeActions (board/Board.tsx) mudava e todas as linhas do quadro redesenhavam junto com o App.
+  const unlinkLatest = useRef<(link: StaffLink) => void>(() => {});
+  unlinkLatest.current = ({ projectId, staffId, managerId }) => {
+    const who = board?.staff.find((s) => s.projectId === projectId && s.id === staffId);
+    const boss = board?.staff.find((s) => s.projectId === projectId && s.id === managerId);
+    api.removeManager(projectId, staffId, managerId).then(
+      () => {
+        setNotice(
+          t('app.unlinkDone', {
+            boss: boss?.name ?? t('app.fallbackManager'),
+            who: who?.name ?? t('app.fallbackEmployee'),
+          }),
+        );
+        load();
+      },
+      (e: Error) => !isPairingError(e) && setNotice(t('app.unlinkFailed', { error: e.message }), true),
+    );
+  };
+  const onUnlink = useCallback((link: StaffLink) => unlinkLatest.current(link), []);
   const isArchived = (kind: 'project' | 'session', id: string) =>
     (kind === 'project' ? config?.archived.projects : config?.archived.sessions)?.includes(id) ?? false;
 
   return (
     <div className={`app ${animations ? 'anim-on' : 'anim-off'}`}>
-      {!board && <div className="center">{error ? <p className="error">{error}</p> : <p className="muted">{t('app.loadingBoard')}</p>}</div>}
+      {!board && <div className="center">{error ? <p className="error">{error}</p> : <Skeleton label={t('app.loadingBoard')} variant="columns" />}</div>}
       {board && (
         <ReactFlowProvider>
           <BoardView
@@ -539,22 +560,7 @@ export function App() {
                 (e: Error) => !isPairingError(e) && setNotice(t('app.linkFailed', { error: e.message }), true),
               );
             }}
-            onUnlink={({ projectId, staffId, managerId }) => {
-              const who = board.staff.find((s) => s.projectId === projectId && s.id === staffId);
-              const boss = board.staff.find((s) => s.projectId === projectId && s.id === managerId);
-              api.removeManager(projectId, staffId, managerId).then(
-                () => {
-                  setNotice(
-                    t('app.unlinkDone', {
-                      boss: boss?.name ?? t('app.fallbackManager'),
-                      who: who?.name ?? t('app.fallbackEmployee'),
-                    }),
-                  );
-                  load();
-                },
-                (e: Error) => !isPairingError(e) && setNotice(t('app.unlinkFailed', { error: e.message }), true),
-              );
-            }}
+            onUnlink={onUnlink}
           />
         </ReactFlowProvider>
       )}
@@ -807,7 +813,7 @@ export function App() {
         </aside>
       )}
       {newProject && (
-        <LazyScreen>
+        <LazyScreen modal>
           <NewProjectForm
             workspaces={config?.workspaces ?? []}
             workspaceId={newProject.workspaceId}
@@ -820,7 +826,7 @@ export function App() {
         </LazyScreen>
       )}
       {agentForm && (
-        <LazyScreen>
+        <LazyScreen modal>
           <AgentForm
             target={agentForm}
             onClose={() => setAgentForm(null)}
@@ -855,7 +861,7 @@ export function App() {
         />
       )}
       {board && uncFor && (
-        <LazyScreen>
+        <LazyScreen modal>
           <UncommittedPanel
             projectId={uncFor}
             projectName={board.projects.find((p) => p.id === uncFor)?.name ?? uncFor}
@@ -868,7 +874,7 @@ export function App() {
         </LazyScreen>
       )}
       {board && tasksFor && (
-        <LazyScreen>
+        <LazyScreen modal>
           <TasksBoard
             key={`${tasksFor}:${jumpTask ?? ''}`}
             initialTaskId={jumpTask}
@@ -905,7 +911,7 @@ export function App() {
         </LazyScreen>
       )}
       {board && schedulesFor && (
-        <LazyScreen>
+        <LazyScreen modal>
           <SchedulesBoard
             key={schedulesFor}
             projectId={schedulesFor}
@@ -925,7 +931,7 @@ export function App() {
         </LazyScreen>
       )}
       {board && filesFor && (
-        <LazyScreen>
+        <LazyScreen modal>
           <FilesBoard
             key={filesFor}
             projectId={filesFor}
@@ -937,7 +943,7 @@ export function App() {
         </LazyScreen>
       )}
       {board && form && (
-        <LazyScreen>
+        <LazyScreen modal>
           <StaffForm
             key={form.mode.kind === 'edit' ? form.mode.profile.updatedAt : 'novo'}
             board={board}

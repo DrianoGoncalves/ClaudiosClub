@@ -22,6 +22,10 @@ export interface ToolAdapter {
   readonly id: string;
   /** Os projetos do quadro. */
   listProjects(): Promise<Project[]>;
+  /** A pasta de um projeto do quadro que existe (null: fora do quadro ou apagado), sem o resumo do `listProjects`: o caminho quente das tarefas. */
+  projectPath(id: string): Promise<string | null>;
+  /** Ids dos projetos do quadro que existem e não são worktree, sem o resumo do `listProjects`. */
+  boardProjectIds(): Promise<string[]>;
   /** Projetos do Claude Code que ainda estão fora do quadro (para importar). */
   listImportable(): Promise<Project[]>;
   /** Id e pasta de tudo que o Claude Code conhece e está fora do quadro (worktrees inclusive), sem ler nada deles. */

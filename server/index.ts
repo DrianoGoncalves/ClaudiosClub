@@ -6,6 +6,7 @@ import path from 'node:path';
 import { clientChanged, DAILY, TSX, VITE } from '../scripts/lib';
 import { openTerminal } from './terminal';
 import { bodyText } from './bodyText';
+import { serveStatic } from './staticFiles';
 import { CodexAdapter, CodexError, defaultRunner } from './adapters/codex';
 import { CodexEnv, withAppAddress, type CodexEnvStatus } from './codexEnv';
 import { CodexCapability } from './engineCapability';
@@ -296,7 +297,8 @@ const clubClaudeIds = async (): Promise<Set<string>> => {
   return new Set([...reg].filter(([, e]) => e.engine === 'claude').map(([id]) => id));
 };
 const adapter: ToolAdapter = new ClaudeAdapter({
-  // O resumo dos projetos lê todo transcript (segundos com centenas de conversas) e quase toda rota passa por ele (`projectPathOf`): guardado por 5 s.
+  // O resumo dos projetos lê todo transcript (segundos com centenas de conversas) e muitas rotas passam por ele: guardado por 5 s. O caminho das
+  // tarefas (`projectPathOf`, `projectIds`) não passa: usa `projectPath`/`boardProjectIds`, só a descoberta.
   // Novo projeto e importação chamam `forgetProjects`; o apelido nem entra no que fica guardado.
   projectsTtlMs: 5_000,
   extraPaths: pinnedProjects,
@@ -555,10 +557,8 @@ const turns = new TurnWatcher(
 turns.start();
 
 // Tarefas por projeto (`.myco/tasks.json`): começam numa conversa nova e andam sozinhas com ela.
-const projectPathOf = async (projectId: string) => {
-  const p = (await adapter.listProjects()).find((x) => x.id === projectId);
-  return p?.exists ? p.path : null;
-};
+// Sem o resumo do `listProjects` (stat de todo transcript): quase toda leitura e gravação de tarefa passa por aqui.
+const projectPathOf = (projectId: string) => adapter.projectPath(projectId);
 /** Fontes do custo por tarefa (ver server/taskCost.ts): transcripts do Claude, o registro do Club (threadId) e o uso do Codex. */
 async function taskCostSources(files: TranscriptCost[]): Promise<CostSources> {
   const registry = await readSessionRegistry().catch((): Map<string, { threadId?: string }> => new Map());
@@ -635,7 +635,7 @@ const tasks = new TaskService({
   projectPath: projectPathOf,
   // Versão das skills que a ficha marca no registro de execuções (ver tasks.ts, skillsOf).
   skillSources: (projectId) => skillSourcesOf(adapter, projectId),
-  projectIds: async () => (await adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf).map((p) => p.id),
+  projectIds: () => adapter.boardProjectIds(),
   readProfile: async (projectId, staffId) => {
     const dir = await projectPathOf(projectId);
     return dir ? readProfile(dir, staffId) : null;
@@ -2762,16 +2762,6 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ['POST', /^\/api\/retention\/disable$/, () => setRetentionDeletion(false, { fromBrowser: false })],
 ];
 
-const CONTENT_TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.json': 'application/json; charset=utf-8',
-};
 
 /**
  * O que a extensão do Chrome vê: as mesmas leituras e escritas da tela, só com a projeção dela (ver server/extension/routes.ts). Nada de
@@ -2795,7 +2785,22 @@ const extDeps: ExtensionDeps = {
   parkTask: (projectId, taskId, reason) => tasks.update(projectId, taskId, { waitReason: reason }),
 };
 
+/**
+ * Pedido que levou SLOW_REQUEST_MS ou mais vai para o log: método, caminho (sem a query, que pode levar código ou token), status e tempo.
+ * O rastreio leve do que trava, sem coletor externo. O stream (SSE) fica de fora: ele dura a conversa inteira.
+ */
+const SLOW_REQUEST_MS = 2_000;
+function watchSlow(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const start = performance.now();
+  res.once('finish', () => {
+    const ms = Math.round(performance.now() - start);
+    if (ms < SLOW_REQUEST_MS || String(res.getHeader('content-type') ?? '').startsWith('text/event-stream')) return;
+    console.warn(`[lento] ${req.method} ${(req.url ?? '').split('?')[0]} ${res.statusCode} em ${ms} ms`);
+  });
+}
+
 async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
+  watchSlow(req, res);
   // Porta de entrada (server/gate.ts): Host, método, navegador pareado (ver pairing.ts), quem chama (socket e token da conversa) e as listas de rotas.
   // Aqui também ficam GET /api/pair (o link com o código), POST /api/pair/request|claim|approve (o botão "Parear este navegador" + `npm run pair
   // CÓDIGO`) e POST /api/pair/rotate (desparear todos).
@@ -2911,7 +2916,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
   }
   if (req.method !== 'GET') return send(res, 405, { error: 'método não permitido' });
   if (await serveStartFiles(url.pathname, res)) return;
-  return serveStatic(url.pathname, res);
+  return serveStatic(CLIENT_DIR, url.pathname, req, res);
 }
 
 const server = http.createServer(onRequest);
@@ -3358,31 +3363,6 @@ function send(res: http.ServerResponse, status: number, body: unknown, headers: 
   res.end(JSON.stringify(body));
 }
 
-async function serveStatic(pathname: string, res: http.ServerResponse) {
-  const requested = path.resolve(CLIENT_DIR, '.' + decodeURIComponent(pathname));
-  const inside = requested === CLIENT_DIR || requested.startsWith(CLIENT_DIR + path.sep);
-  // Só rota do app (sem extensão) cai no index.html. Arquivo que falta (ex.: /assets/x.js de um build quebrado) é 404:
-  // devolver HTML no lugar do JS deixava a tela em branco, sem erro nenhum.
-  if (inside && !(await isFile(requested)) && path.extname(pathname) !== '') {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('Arquivo não encontrado.');
-    return;
-  }
-  const file = inside && (await isFile(requested)) ? requested : path.join(CLIENT_DIR, 'index.html');
-  try {
-    const data = await fs.readFile(file);
-    res.writeHead(200, { 'content-type': CONTENT_TYPES[path.extname(file)] ?? 'application/octet-stream' });
-    res.end(data);
-  } catch {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('Cliente não compilado. Use `npm run dev` ou `npm run build`.');
-  }
-}
-
-async function isFile(p: string): Promise<boolean> {
-  return fs.stat(p).then((s) => s.isFile()).catch(() => false);
-}
-
 /**
  * Migração das skills (ver skillMigration.ts): a biblioteca do Club vai para a Global (uma vez) e os nomes antigos das fichas viram refs.
  * O log diz o que mudou e o que ficou (conflitos e fichas de projeto que não deu para ler).
@@ -3507,8 +3487,25 @@ server.listen(PORT, HOST, () => {
         // Fila de tarefas: quem ficou com tarefa ou ajuste esperando. Reiniciando, a fila espera o boot (ver tasks.ts).
         // A coleta de CPU do gate começa aqui (a média vale depois de ~2 min).
       resourceGate.start();
+      // Uma rodada por vez: com o quadro grande e o disco lento a rodada passa de 60 s, e a seguinte começava por cima, dobrando leituras e gravações.
+      // Rodada presa (uma promessa que nunca resolve) não desliga a rede de segurança: passado TICK_STALE_MS, a próxima começa assim mesmo, com aviso no log.
+      const TICK_STALE_MS = 10 * 60_000;
+      let tickStartedAt: number | null = null;
       const queueTick = () => {
-          if (!chats.isClosing()) void tasks.tick().catch(() => {});
+          if (chats.isClosing()) return;
+          if (tickStartedAt !== null) {
+            const ms = Date.now() - tickStartedAt;
+            if (ms < TICK_STALE_MS) return;
+            console.warn(`[tarefas] a rodada da fila começou há ${Math.round(ms / 60_000)} min e não terminou; começando outra`);
+          }
+          const mine = Date.now();
+          tickStartedAt = mine;
+          void tasks
+            .tick()
+            .catch(() => {})
+            .finally(() => {
+              if (tickStartedAt === mine) tickStartedAt = null;
+            });
         };
         setTimeout(queueTick, 15_000).unref();
         setInterval(queueTick, 60_000).unref();

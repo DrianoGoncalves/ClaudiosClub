@@ -95,7 +95,7 @@ export function Portrait({ id, label, src, ghost, size = 40, variant = 'portrait
           <GhostIcon size={24} />
         </span>
       ) : shown ? (
-        <img src={shown} alt="" draggable={false} onError={() => setTimeout(() => setTries((t) => t + 1), 1500 * (tries + 1))} />
+        <img src={shown} alt="" draggable={false} loading="lazy" decoding="async" onError={() => setTimeout(() => setTries((t) => t + 1), 1500 * (tries + 1))} />
       ) : (
         <span>{initials(label)}</span>
       )}
@@ -190,7 +190,7 @@ export function ProjectNode({ id, data, selected, width }: NodeProps<Node<Projec
     >
       <div className="bn-header">
         <CollapseToggle collapsed={data.header.collapsed} />
-        {data.image && <img className="bn-header-img" src={data.image} alt="" draggable={false} />}
+        {data.image && <img className="bn-header-img" src={data.image} alt="" draggable={false} loading="lazy" decoding="async" />}
         <div className="bn-header-text">
           <div className="bn-title">
             {p.worktreeOf && <span className="bn-tag">{t('board.worktreeTag')}</span>}

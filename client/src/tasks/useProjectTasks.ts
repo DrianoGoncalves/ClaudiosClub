@@ -14,7 +14,9 @@ const EVERY_MS = 20_000;
 export const taskIn = (byProject: ReadonlyMap<string, Task[]>, projectId: string, taskId: string): Task | null => byProject.get(projectId)?.find((x) => x.id === taskId) ?? null;
 
 /** O que a leitura deixa em `byProject`: só os projetos que leram (`null` = falhou). Quem falhou fica como estava: sem leitura antes, segue desconhecido (as saídas do follow-up ficam desligadas). */
-export function mergeRead(prev: ReadonlyMap<string, Task[]>, got: readonly (readonly [string, Task[] | null])[]): Map<string, Task[]> {
+export function mergeRead(prev: ReadonlyMap<string, Task[]>, got: readonly (readonly [string, Task[] | null])[]): ReadonlyMap<string, Task[]> {
+  // Nada mudou (a leitura estável devolve a mesma lista, ver `readJson` em api.ts): o mesmo Map, e quem usa não redesenha a cada 20 s.
+  if (got.every(([id, tasks]) => !tasks || prev.get(id) === tasks)) return prev;
   const next = new Map(prev);
   for (const [id, tasks] of got) if (tasks) next.set(id, tasks);
   return next;

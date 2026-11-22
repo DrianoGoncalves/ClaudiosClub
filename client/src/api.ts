@@ -118,11 +118,68 @@ const GET_ATTEMPTS = 3;
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const offlineError = () => new ApiError(t('app.serverOffline'), 'offline', null);
 
-async function get<T>(url: string): Promise<T> {
+/** GETs iguais em voo ao mesmo tempo (o quadro, a fila e a busca pedindo a mesma lista) dividem uma ida ao servidor. `gen`: ver `writeGen`. */
+const inflight = new Map<string, { gen: number; res: Promise<Response> }>();
+
+/**
+ * Sobe no começo e no fim de toda escrita (POST, PUT, upload; ver `asWrite`). Um GET só se junta a outro em voo da mesma geração: a releitura
+ * logo depois de gravar nunca recebe a resposta de um GET que saiu antes da gravação (o cartão arrastado "voltaria" até o próximo polling).
+ */
+let writeGen = 0;
+
+/** Roda a escrita marcando a geração antes e depois (ver `writeGen`). */
+async function asWrite<T>(run: () => Promise<T>): Promise<T> {
+  writeGen++;
+  try {
+    return await run();
+  } finally {
+    writeGen++;
+  }
+}
+
+/**
+ * O `fetch` do GET, dividido entre quem pede a mesma URL enquanto a resposta não chegou (e nenhuma escrita começou ou terminou no meio).
+ * Cada um lê a própria cópia (`clone`): o corpo de uma Response só se lê uma vez. Chegou a resposta, a URL sai do mapa: o pedido seguinte vai ao servidor.
+ */
+async function sharedFetch(url: string): Promise<Response> {
+  let shared = inflight.get(url);
+  if (!shared || shared.gen !== writeGen) {
+    const mine = { gen: writeGen, res: fetch(url) };
+    shared = mine;
+    inflight.set(url, mine);
+    void mine.res
+      .finally(() => {
+        if (inflight.get(url) === mine) inflight.delete(url);
+      })
+      .catch(() => {});
+  }
+  const res = await shared.res;
+  return typeof res.clone === 'function' ? res.clone() : res;
+}
+
+/** A última resposta de cada GET lido com `stable` (o polling das telas): o texto, para comparar, e o objeto que saiu dele. */
+const lastStable = new Map<string, { text: string; value: unknown }>();
+
+/**
+ * O corpo da resposta como JSON. Com `stable`, a resposta igual à anterior (mesmo texto) devolve o MESMO objeto de antes: o `setState` do React
+ * recebe a mesma referência e não redesenha nada (o quadro tem centenas de cartões e relê a cada 5 s). Comparar o texto custa bem menos que o parse e
+ * o redesenho. Quem recebe não altera o objeto (as telas copiam antes de ordenar).
+ */
+async function readJson<T>(res: Response, url: string, stable: boolean): Promise<T> {
+  if (!stable) return (await res.json()) as T;
+  const text = await res.text();
+  const prev = lastStable.get(url);
+  if (prev && prev.text === text) return prev.value as T;
+  const value = JSON.parse(text) as T;
+  lastStable.set(url, { text, value });
+  return value;
+}
+
+async function get<T>(url: string, stable = false): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     let res: Response;
     try {
-      res = await fetch(url);
+      res = await sharedFetch(url);
     } catch (err) {
       if (!(err instanceof TypeError)) throw err;
       if (attempt >= GET_ATTEMPTS) throw offlineError();
@@ -135,7 +192,7 @@ async function get<T>(url: string): Promise<T> {
       if (refused) throw refused;
     }
     if (!res.ok) throw new Error(`${url}: ${res.status}`);
-    return (await res.json()) as T;
+    return readJson<T>(res, url, stable);
   }
 }
 
@@ -151,7 +208,7 @@ async function refusedForPairing(res: Response): Promise<ApiError | null> {
 async function getExplained<T>(url: string): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(url);
+    res = await sharedFetch(url);
   } catch (err) {
     if (err instanceof TypeError) throw offlineError();
     throw err;
@@ -175,11 +232,13 @@ function put<T>(url: string, body: unknown): Promise<T> {
 async function send<T>(method: 'POST' | 'PUT', url: string, body: unknown, headers: Record<string, string>): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(url, {
-      method,
-      headers: { 'content-type': 'application/json', 'x-myco': '1', ...headers },
-      body: JSON.stringify(body),
-    });
+    res = await asWrite(() =>
+      fetch(url, {
+        method,
+        headers: { 'content-type': 'application/json', 'x-myco': '1', ...headers },
+        body: JSON.stringify(body),
+      }),
+    );
   } catch (err) {
     if (err instanceof TypeError) throw offlineError();
     throw err;
@@ -530,7 +589,7 @@ export interface ExtensionInfo {
 async function postFile(url: string): Promise<Blob> {
   let res: Response;
   try {
-    res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-myco': '1' }, body: '{}' });
+    res = await asWrite(() => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-myco': '1' }, body: '{}' }));
   } catch (err) {
     if (err instanceof TypeError) throw offlineError();
     throw err;
@@ -584,6 +643,7 @@ export const api = {
     post<{ name: string; sha: string; digest: string; backup: string }>('/api/skills/github/update', { ...to, ...p }),
   githubRollback: (to: GithubTarget, name: string) => post<{ name: string; sha: string }>('/api/skills/github/rollback', { ...to, name }),
   /** `old: true` traz também as conversas antigas (arquivadas pela retenção). Sem o parâmetro, a lista segue como antes. */
+  // Sem leitura estável de propósito: o quadro relê ao voltar para a aba, e é esse redesenho que atualiza o "há X min" dos nós (board/nodes.tsx).
   board: (opts: { old?: boolean } = {}) => get<Board>(`/api/board${opts.old ? '?old=1' : ''}`),
   projects: () => get<Project[]>('/api/projects'),
   project: (id: string, opts: { old?: boolean } = {}) => get<ProjectDetail>(`/api/projects/${id}${opts.old ? '?old=1' : ''}`),
@@ -614,7 +674,7 @@ export const api = {
   updateStatus: (fresh = false) => get<UpdateStatus>(fresh ? '/api/update?fresh=1' : '/api/update'),
   applyUpdate: () => post<{ from: string; to: string; installed: boolean; restarting: boolean }>('/api/update'),
   /** `fresh`: relê o login do Codex na hora (a tela pede enquanto espera o login). */
-  usage: (fresh = false) => get<AccountUsage>(fresh ? '/api/usage?fresh=1' : '/api/usage'),
+  usage: (fresh = false) => get<AccountUsage>(fresh ? '/api/usage?fresh=1' : '/api/usage', true),
   /** Instala o Codex CLI (npm) pelo Claudio’s Club; se já estiver, não faz nada. `error` é o texto curto para o usuário. */
   installCodex: () => post<{ ok: boolean; error: string | null }>('/api/codex/install'),
   /** Abre o terminal do `codex login` (o usuário conclui no navegador). */
@@ -850,7 +910,7 @@ export const api = {
   /** Encerra a pausa de versão antes do prazo (sem pausa é um nada; em pausa comum, 409). */
   endVersionPause: (projectId: string) => post<{ paused: null }>(`/api/projects/${projectId}/version-pause/end`),
   /** O estado da fila de cada funcionário com card aberto ou entrega em processamento (só leitura). */
-  projectQueues: (projectId: string) => get<StaffQueue[]>(`/api/projects/${projectId}/queues`),
+  projectQueues: (projectId: string) => get<StaffQueue[]>(`/api/projects/${projectId}/queues`, true),
   taskCode: (projectId: string, taskId: string) => get<TaskCode>(`/api/projects/${projectId}/tasks/${taskId}/code`),
   taskTest: (projectId: string, taskId: string) => post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/test`),
   /** Segunda opinião do Codex sobre o diff da tarefa (o diff vai para a OpenAI). */
@@ -862,7 +922,8 @@ export const api = {
     post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/review`, { staffId, force }),
   taskDeploy: (projectId: string, taskId: string, staffId: string, force = false) =>
     post<Task | null>(`/api/projects/${projectId}/tasks/${taskId}/deploy`, { staffId, force }),
-  tasks: (projectId: string) => get<Task[] | null>(`/api/projects/${projectId}/tasks`),
+  // Estáveis (ver `readJson`): o polling do quadro, da fila e das conversas não redesenha nada quando a lista não mudou.
+  tasks: (projectId: string) => get<Task[] | null>(`/api/projects/${projectId}/tasks`, true),
   /** Revisão automática do quadro do projeto (`.myco/board.json`). Servidor sem a rota = 404. */
   boardReview: (projectId: string) => get<BoardConfig>(`/api/projects/${projectId}/board-review`),
   /** Grava o estado inteiro: o servidor recusa ligada sem responsável (`reviewerId`). */
@@ -1051,10 +1112,10 @@ export class FileApiError extends Error {
 async function filesFetch<T>(url: string, body?: unknown): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(
-      url,
-      body === undefined ? undefined : { method: 'POST', headers: { 'content-type': 'application/json', 'x-myco': '1' }, body: JSON.stringify(body) },
-    );
+    res =
+      body === undefined
+        ? await fetch(url)
+        : await asWrite(() => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-myco': '1' }, body: JSON.stringify(body) }));
   } catch (err) {
     if (err instanceof TypeError) throw offlineError();
     throw err;
@@ -1109,11 +1170,13 @@ export const attachmentsApi = {
     const url = `/api/projects/${projectId}/attachments?name=${encodeURIComponent(name)}`;
     let res: Response;
     try {
-      res = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/octet-stream', 'x-myco': '1' },
-        body: file,
-      });
+      res = await asWrite(() =>
+        fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/octet-stream', 'x-myco': '1' },
+          body: file,
+        }),
+      );
     } catch (err) {
       if (err instanceof TypeError) throw offlineError();
       throw err;
