@@ -23,7 +23,8 @@ import { useKeyboardInset } from './useKeyboardInset';
 import { TaskCodePanel } from './TaskCodePanel';
 import { DoubtBadge, DoubtBlock } from './TaskDoubt';
 import { PauseNote, pauseText } from './TaskPause';
-import { PausedBanner, PauseButton, useProjectPause } from './ProjectPauseBar';
+import { PausedBanner, PauseButton, useProjectPause, VersionPauseControl } from './ProjectPauseBar';
+import { isVersionPause } from './pauseState';
 import { QueueDots, useQueues } from './QueueStrip';
 import { queueDots } from './queueState';
 import { RetryBadge, retryText } from './TaskRetry';
@@ -481,7 +482,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
         <header className="tasks-head">
           <div className="tasks-head-title">
             <h2>{t('tasks.title', { name: projectName })}</h2>
-            {projectPause.pause !== undefined && <PauseButton paused={projectPause.pause !== null} busy={projectPause.busy} onClick={projectPause.toggle} />}
+            {projectPause.pause !== undefined && (
+              <PauseButton paused={projectPause.pause !== null} busy={projectPause.busy} onClick={projectPause.toggle} version={isVersionPause(projectPause.pause)} />
+            )}
           </div>
           <span className="tasks-head-actions">
             {onOpenSchedules && (
@@ -503,6 +506,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             </button>
           </span>
         </header>
+        {projectPause.pause === null && <VersionPauseControl busy={projectPause.busy} onStart={projectPause.startVersion} />}
         {projectPause.pause && <PausedBanner pause={projectPause.pause} now={now} />}
         {projectPause.error && <p className="error small" role="alert">{projectPause.error}</p>}
         {/* Com o detalhe aberto o erro aparece nele: no celular o detalhe cobre o quadro inteiro. */}

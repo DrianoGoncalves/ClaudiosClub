@@ -16,7 +16,9 @@ import { taskIn, useProjectTasks } from '../tasks/useProjectTasks';
 import { isInsideDialog } from '../lib/dialogStore';
 import { isLocalPage } from '../office/folderPick';
 import { sandboxOf } from './codexSandbox';
-import { CARD_TONE, INBOX_TONE, cardTone, toneClass } from './alertTone';
+import { CARD_TONE, cardTone, inboxTone, toneClass } from './alertTone';
+import { commitAlertOf } from './commitAlert';
+import { CommitLeftoverBody } from './CommitLeftover';
 import { deniedAction } from './deniedAlert';
 import { inboxText, inboxWho } from './inboxText';
 import { ReviewShortcutForm } from './ReviewShortcut';
@@ -56,6 +58,8 @@ const BLOCKER_ACTIONS = [
 
 /** Itens que só se dispensam ganham um X no canto; o title explica o que o X faz. Segredo tem duas ações, com texto. */
 function dismissTitleOf(item: InboxItem): string | null {
+  // Aviso de commit com decisão ou erro: o "Ignorar" é um botão do próprio item (CommitLeftoverBody), sem o X.
+  if (commitAlertOf(item)) return null;
   // Só a pergunta achada no texto do chat (kind 'waiting'): a dúvida de tarefa (kind 'question') não se dispensa, some quando é respondida.
   if (item.kind === 'waiting' && item.id.startsWith('question:')) return t('office.questionSeenTitle');
   if (item.id.startsWith('waiting:')) return t('inbox.dismissWaitingTitle');
@@ -115,6 +119,9 @@ export function InboxMenu({
   /** Quem recebeu a revisão pedida pelo atalho: o item some da lista, então a frase fica aqui, no menu, até fechar ou novo pedido. */
   const [reviewAsked, setReviewAsked] = useState<string | null>(null);
   const [reviewReadError, setReviewReadError] = useState<string | null>(null);
+  /** O que o "Commitar sobras" fez ("Commit abc1234 feito…"): o item some da lista, então a frase fica aqui, no menu, até fechar. */
+  const [commitDone, setCommitDone] = useState<string | null>(null);
+  const waiting = inbox.commitWaiting;
   // O follow-up pede a tarefa de origem (Finalizado?, o responsável dela, o texto inteiro) e o atalho "Delegar revisão" o estado da revisão (status, quem revisou):
   // lê o quadro dos projetos que têm um desses itens, só com o menu aberto.
   const fuProjects = inbox.items.filter((i) => (i.kind === 'followUp' && i.followUp) || stuckOf(i)?.humanAction === 'review').map((i) => i.projectId);
@@ -180,6 +187,7 @@ export function InboxMenu({
       setDelegating(null);
       setReviewAsked(null);
       setReviewReadError(null);
+      setCommitDone(null);
       setFixNote(null);
       setHeldNote(null);
       return;
@@ -215,6 +223,13 @@ export function InboxMenu({
           <FollowUpGoneNote message={followUpGone} className="inbox-fu-gone" />
           <FollowUpDoneNote message={followUpDone} className="inbox-fu-done" />
           <FollowUpDoneNote message={reviewAsked} className="inbox-fu-done" />
+          <FollowUpDoneNote message={commitDone} className="inbox-fu-done" />
+          {/* Commit parcial que espera outro card fechar: só ciência (nada a fazer), por isso uma linha de contagem e não um item. */}
+          {!!waiting?.total && (
+            <p className={`small inbox-commit-waiting ${toneClass('info')}`} role="status" title={t('inbox.commit.waitingTitle', { projects: waiting.projects.map((p) => `${p.projectName} (${p.count})`).join(', ') })}>
+              {t(waiting.total === 1 ? 'inbox.commit.waiting.one' : 'inbox.commit.waiting.other', { n: waiting.total })}
+            </p>
+          )}
           {reviewReadError && (
             <p className="error small inbox-fu-done" role="alert">
               {reviewReadError}
@@ -239,14 +254,16 @@ export function InboxMenu({
                 const stuckTask = stuck ? taskIn(fuTasks.byProject, item.projectId, stuck.taskId) : null;
                 const delegate = stuckTask ? reviewShortcutOf(item, stuckTask, staff) : null;
                 const sandbox = sandboxOf(item);
-                const tone = toneClass(isResolved(item) ? CARD_TONE.resolved : INBOX_TONE[item.kind]);
+                const commit = commitAlertOf(item);
+                const tone = toneClass(isResolved(item) ? CARD_TONE.resolved : inboxTone(item));
                 const row = (
                   <>
-                    <span className="inbox-kind">{KIND_LABEL[item.kind]}</span>
+                    <span className="inbox-kind">{commit?.state === 'ready' ? t('inbox.commit.kindReady') : KIND_LABEL[item.kind]}</span>
                     <span className="inbox-who">
                       <b>{inboxWho(item)}</b>
                       {item.name && item.projectName && <span className="muted"> · {item.projectName}</span>}
                       {isResolved(item) && <span className={`task-badge small inbox-resolved ${cardTone('resolved')}`}>{t('inbox.resolved')}</span>}
+                      {commit && !isResolved(item) && <span className={`task-badge small inbox-commit-status ${tone}`}>{t(commit.state === 'ready' ? 'inbox.commit.badgeReady' : 'inbox.commit.badgeFailed')}</span>}
                     </span>
                     {topic && <span className="inbox-topic" title={topic}>{topic}</span>}
                     <span className="inbox-summary" title={inboxText(item)}>{inboxText(item)}</span>
@@ -254,14 +271,14 @@ export function InboxMenu({
                   </>
                 );
                 return (
-                <li key={item.id} className={[dismissTitle && 'inbox-has-x', isResolved(item) && 'is-resolved'].filter(Boolean).join(' ') || undefined}>
+                <li key={item.id} className={[dismissTitle && 'inbox-has-x', isResolved(item) && 'is-resolved', commit && !isResolved(item) && `has-commit ${tone}`].filter(Boolean).join(' ') || undefined}>
                   {item.codexSandbox ? (
                     // Aviso da máquina (sem projeto nem conversa): não há para onde ir, então a linha não é botão; o que se faz está logo abaixo (copiar o comando) e o × ignora.
                     <div className={`inbox-item inbox-${item.kind} inbox-sandbox ${tone}`}>{row}</div>
                   ) : (
                     <button
                       role="menuitem"
-                      className={`inbox-item inbox-${item.kind} ${tone}`}
+                      className={`inbox-item inbox-${item.kind}${commit ? ' inbox-commit-row' : ''} ${tone}`}
                       onClick={() => {
                         setOpen(false);
                         onOpen(item);
@@ -271,6 +288,19 @@ export function InboxMenu({
                     </button>
                   )}
                   {sandbox && <SandboxFix alert={sandbox} className="inbox-sandbox-fix" />}
+                  {commit && !isResolved(item) && (
+                    <CommitLeftoverBody
+                      projectId={item.projectId}
+                      alert={commit}
+                      onIgnore={() => void inbox.dismiss(item)}
+                      onOpenCard={() => {
+                        setOpen(false);
+                        onOpen(item, { taskId: commit.taskId });
+                      }}
+                      onChanged={inbox.refresh}
+                      onDone={setCommitDone}
+                    />
+                  )}
                   {item.kind === 'secret' && secretVerdict && (
                     <div className="inbox-secret-verdict">
                       <SecretVerdictRow item={item} />

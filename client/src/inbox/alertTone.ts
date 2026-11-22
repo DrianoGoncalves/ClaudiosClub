@@ -1,4 +1,4 @@
-import type { InboxKind } from '../../../shared/model';
+import type { InboxItem, InboxKind } from '../../../shared/model';
 
 /**
  * Mapa único tipo de alerta → tom de cor, valendo na caixa de entrada e nos cartões do quadro.
@@ -28,6 +28,12 @@ export const INBOX_TONE: Record<InboxKind, AlertTone> = {
   routine: 'info',
   usage: 'info',
 };
+
+/**
+ * O tom do item da caixa: o do tipo (`INBOX_TONE`), salvo o aviso de commit parcial com decisão do dono (`autoCommit.state` 'ready': nenhum card aberto toca as sobras, refazer o commit ou ignorar),
+ * que é amarelo. O `failed` segue vermelho (kind 'error').
+ */
+export const inboxTone = (item: Pick<InboxItem, 'kind' | 'autoCommit'>): AlertTone => (item.kind === 'error' && item.autoCommit?.state === 'ready' ? 'action' : INBOX_TONE[item.kind]);
 
 /** Selos do cartão do quadro que não são um aviso da caixa. */
 export const CARD_TONE = {

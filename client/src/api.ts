@@ -10,6 +10,9 @@ import type {
   Board,
   BoardBackground,
   BoardCommitConfig,
+  CommitLeftovers,
+  CommitLeftoversDone,
+  CommitWaitingSummary,
   BoardConfig,
   BoardWriterConfig,
   BrowserStatus,
@@ -822,6 +825,12 @@ export const api = {
   chatPermission: (sessionId: string, requestId: string, allow: boolean, opts: PermissionOpts = {}) =>
     post<{ ok: boolean }>(`/api/chat/${sessionId}/permission`, { requestId, allow, ...opts }),
   inbox: () => get<InboxItem[]>('/api/inbox'),
+  /** Quantos avisos de commit parcial esperam outro card fechar (só ciência: não entram na lista da caixa). */
+  commitWaiting: () => get<CommitWaitingSummary>('/api/inbox/commit-waiting'),
+  /** O que o "refazer o commit das sobras" levaria agora (arquivos, diff e o `digest` que o POST devolve). Só leitura. */
+  commitLeftovers: (projectId: string, taskId: string) => getExplained<CommitLeftovers>(`/api/projects/${projectId}/tasks/${taskId}/commit-leftovers`),
+  /** Faz o commit complementar das sobras que o dono viu (`digest` do preview). A recusa (409) chega com o motivo em `message`. */
+  redoCommitLeftovers: (projectId: string, taskId: string, digest: string) => post<CommitLeftoversDone>(`/api/projects/${projectId}/tasks/${taskId}/commit-leftovers`, { digest }),
   turns: (since: string) => get<TurnNotice[]>(`/api/turns?since=${encodeURIComponent(since)}`),
   dismissSecret: (id: string, notSecret = false) => post<{ ok: boolean }>('/api/secrets/dismiss', { id, notSecret }),
   /** `id` = o do item da caixa: `error:<sessão>` (parou com erro) ou `cap:<sessão>` (parou no teto). */
@@ -836,6 +845,10 @@ export const api = {
   /** Pausa do projeto: `paused` null = rodando. Pausar e retomar são idempotentes e só valem pelo navegador pareado (403 fora dele). */
   projectPause: (projectId: string) => get<{ paused: ProjectPause | null }>(`/api/projects/${projectId}/pause`),
   setProjectPause: (projectId: string, paused: boolean) => post<{ paused: ProjectPause | null }>(`/api/projects/${projectId}/${paused ? 'pause' : 'resume'}`),
+  /** Pausa de versão (com prazo, `minutes` de 1 a 120): 409 se o projeto já está em pausa comum ou na de versão de outra pessoa. Só pelo navegador pareado (ou funcionário com `canRelease`, pela API). */
+  startVersionPause: (projectId: string, minutes: number) => post<{ paused: ProjectPause }>(`/api/projects/${projectId}/version-pause`, { minutes }),
+  /** Encerra a pausa de versão antes do prazo (sem pausa é um nada; em pausa comum, 409). */
+  endVersionPause: (projectId: string) => post<{ paused: null }>(`/api/projects/${projectId}/version-pause/end`),
   /** O estado da fila de cada funcionário com card aberto ou entrega em processamento (só leitura). */
   projectQueues: (projectId: string) => get<StaffQueue[]>(`/api/projects/${projectId}/queues`),
   taskCode: (projectId: string, taskId: string) => get<TaskCode>(`/api/projects/${projectId}/tasks/${taskId}/code`),
