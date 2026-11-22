@@ -8,7 +8,7 @@ import { cardTone } from '../inbox/alertTone';
 import { pollVisible } from '../usePoll';
 import type { QueueDot } from './queueState';
 
-// Quem está ocupado em Fazendo e em Revisão, com o retrato de cada um (iniciais se não tem) no topo da coluna, empilhados e sobrepostos para ocupar pouco. A frase de cada um
+// Quem está ocupado em Fazendo (executando, com o retrato de cada um, iniciais se não tem, empilhados e sobrepostos para ocupar pouco) e em Revisão (só bolinha, sem retrato: a foto serve para identificar a fila de quem executa). A frase de cada um
 // (estado da fila, trava, detalhe) só aparece ao passar o mouse, focar ou tocar no retrato; a fila travada ganha o tom de alerta já no anel. A lógica está em `queueState.ts` (testada sem tela).
 
 /** Lê o estado das filas de tempos em tempos. `undefined` até a primeira leitura; servidor sem a rota (ou fora do ar) deixa como está, sem erro na tela. `initial` só para teste. */
@@ -64,7 +64,7 @@ function QueueDotButton({ dot, name, src, onOpenTask }: { dot: QueueDot; name: s
       <button
         ref={btn}
         type="button"
-        className="queue-dot"
+        className={dot.column === 'doing' ? 'queue-dot' : 'queue-dot is-plain'}
         aria-label={label}
         aria-describedby={at ? tipId : undefined}
         onMouseEnter={open}
@@ -73,8 +73,12 @@ function QueueDotButton({ dot, name, src, onOpenTask }: { dot: QueueDot; name: s
         onBlur={(e) => !inTip(e.relatedTarget) && close()}
         onClick={open}
       >
-        {/* O mesmo retrato do organograma (foto ou iniciais, contorno à mão), menor; o traço leva a cor do estado: azul ocupado, amarelo de espera na fila travada. */}
-        <Portrait id={dot.staffId} label={name} src={src} size={28} variant={dot.tone === 'stuck' ? 'waiting' : 'busy'} />
+        {/* Fazendo (quem executa): o retrato do organograma (foto ou iniciais, contorno à mão), menor; o traço leva a cor do estado: azul ocupado, amarelo de espera na fila travada. Revisão (quem revisa): só a bolinha, sem retrato. */}
+        {dot.column === 'doing' ? (
+          <Portrait id={dot.staffId} label={name} src={src} size={28} variant={dot.tone === 'stuck' ? 'waiting' : 'busy'} />
+        ) : (
+          <span className="dot dot-busy" />
+        )}
       </button>
       {at &&
         createPortal(

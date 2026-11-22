@@ -186,6 +186,7 @@ describe('CodexProcess: conta com hooks.json roda sem a fila e avisa', () => {
     expect(warns(chat)).toHaveLength(1);
     expect(warns(chat)[0]!.text).toContain(file);
     expect(warns(chat)[0]!.text).toMatch(/fila de validação pesada/);
+    expect(warns(chat)[0]!.text).toMatch(/bloqueio de git destrutivo/); // t-0ccbff: o mesmo hooks.json também tira o bloqueio do git destrutivo
   });
 
   it('sem hooks.json: a flag e o hook como antes e nenhum aviso; o ambiente do codex leva o mesmo CODEX_HOME que foi conferido', async () => {

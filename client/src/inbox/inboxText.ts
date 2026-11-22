@@ -3,6 +3,7 @@ import { parseRetryNotice, retryNoticeText } from '../chat/retryNotice';
 import { t } from '../i18n';
 import { followUpText } from '../tasks/followUp';
 import { sandboxOf, sandboxText } from './codexSandbox';
+import { commitText } from './commitAlert';
 import { deniedOf, deniedText } from './deniedAlert';
 import { secretText, type Tr } from './secretText';
 import { questionOf, questionText, stuckOf, stuckText, type Kinded } from './taskAlerts';
@@ -45,7 +46,9 @@ export function notStartedText(item: Pick<InboxItem, 'summary' | 'notStarted'>, 
 }
 
 /** O texto do item na lista e na notificação. */
-export function inboxText(item: Pick<InboxItem, 'summary' | 'secret' | 'blocked' | 'notStarted' | 'followUp' | 'codexSandbox'> & Kinded, tr: Tr = t): string {
+export function inboxText(item: Pick<InboxItem, 'summary' | 'secret' | 'blocked' | 'notStarted' | 'followUp' | 'codexSandbox' | 'autoCommit'> & Kinded, tr: Tr = t): string {
+  const commit = commitText(item, tr);
+  if (commit) return commit;
   const sandbox = sandboxOf(item);
   if (sandbox) return sandboxText(sandbox, tr);
   if (deniedOf(item)) return deniedText(item, tr);

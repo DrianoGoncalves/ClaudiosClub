@@ -631,9 +631,17 @@ textarea.q-field { resize: vertical; }
 .project-paused-text { display: grid; gap: 2px; min-width: 0; }
 .project-paused-text p { margin: 0; font-size: var(--fs-md); overflow-wrap: anywhere; }
 /* Celular: só o ícone ao lado do título (o texto empurraria o título para outra linha); o nome fica no aria-label e no title, e a faixa abaixo diz o estado. */
-@media (max-width: 480px) { .tasks-head .project-pause-label { display: none; } }
+@media (max-width: 480px) { .tasks-head .project-pause-btn:not(.is-version) .project-pause-label { display: none; } }
 .badge.is-paused { color: var(--ink); border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 14%, transparent); font-weight: 600; }
 .badge.is-paused svg { vertical-align: -1px; }
+/* Pausa de versão: o controle (rótulo, prazo, ligar) abaixo do cabeçalho, só com o projeto rodando. Quebra em linhas no celular; alvos de toque de --btn-h. */
+.version-pause-control { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; padding: 6px 12px; border: 1px dashed var(--line); border-radius: 10px; color: var(--ink); }
+.version-pause-label { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; margin-right: auto; }
+.version-pause-control select { min-height: var(--btn-h); }
+.version-pause-control .btn-secondary { min-height: var(--btn-h); }
+@media (max-width: 640px) { .version-pause-control select, .version-pause-control .btn-secondary { min-height: 36px; } }
+@media (max-width: 480px) { .version-pause-label { flex-basis: 100%; } .version-pause-control select { flex: 1 1 0; min-width: 0; } }
+.bn-tag.is-paused.is-version, .badge.is-paused.is-version { white-space: nowrap; }
 /* Agendamentos do projeto: um cartão por despertador ou "continue" pendente. O texto é do funcionário: pre-wrap, nunca HTML. */
 .sched-intro, .sched-notice { margin: 0; font-size: var(--fs-md); }
 .sched-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
@@ -1105,6 +1113,8 @@ textarea.q-field { resize: vertical; }
 .task-badge:is(.task-doubt, .task-cancelreq, .task-followup, .task-commit, .task-nocode) { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Commit automático da tarefa pronta: neutro com o SHA; amarelo (.is-waiting) em "commit parcial" e "sem commit" até você ignorar o aviso da caixa. Texto --ink, como o follow-up. */
 .task-badge.task-commit { color: var(--ink); }
+/* "aguardando t-xxx, nada a fazer": a frase inteira é o aviso (só ciência), então quebra em vez de cortar na coluna estreita. */
+.task-badge.task-commit.task-commit-wait { white-space: normal; border-radius: 10px; }
 .task-commit-box { display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
 .task-commit-box ul { margin: 0; padding-left: 18px; }
 .task-commit-box li { overflow-wrap: anywhere; }
@@ -2088,6 +2098,29 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 .inbox-review-row button { flex: none; }
 @media (max-width: 640px) { .inbox-review-row :is(select, button), .inbox-dismiss:has(.inbox-delegate) button { min-height: var(--btn-h); } .inbox-review-row select { font-size: var(--fs-md); } }
 .inbox-at { grid-area: at; white-space: nowrap; }
+/* Aviso de commit parcial (inbox/CommitLeftover.tsx): a cor vem do .tone-* do item (âmbar = decisão do dono, vermelho = falhou). A frase inteira (sem o corte em 2 linhas), os arquivos de fora e os botões do
+   design system (docs/design-system.md): secundária à esquerda, primária à direita; no celular a primária ocupa a largura toda, embaixo, e o corpo usa a largura do menu. */
+.inbox-list { grid-template-columns: minmax(0, 1fr); }
+.inbox-list li.has-commit { border-left: 3px solid var(--tone); border-radius: 8px; background: color-mix(in srgb, var(--tone) 8%, transparent); }
+.inbox-commit-row .inbox-summary { display: block; -webkit-line-clamp: unset; line-clamp: unset; overflow: visible; }
+.inbox-commit-status { margin-left: 6px; color: var(--ink); white-space: nowrap; }
+.inbox-commit-waiting { margin: 0; padding: 8px 14px; flex: none; border-bottom: 1px solid var(--line); color: var(--tone-ink); overflow-wrap: anywhere; }
+.inbox-commit { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; padding: 0 10px 8px calc(var(--inbox-kind-w) + 20px); }
+.inbox-commit-files { margin: 0; padding-left: 16px; font-size: var(--fs-md); overflow-wrap: anywhere; }
+.inbox-commit-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.inbox-commit-panel { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; margin: 0; padding: 8px; border: 1px dashed var(--line); border-radius: 8px; background: var(--panel); }
+.inbox-commit-panel p { margin: 0; overflow-wrap: anywhere; }
+.inbox-commit-diffs { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.inbox-commit-letter { display: inline-block; min-width: 14px; text-align: center; font-family: ui-monospace, Consolas, monospace; font-weight: 700; color: var(--ink); border: 1px solid var(--line); border-radius: 4px; }
+.inbox-commit-diff summary { cursor: pointer; color: var(--muted); width: fit-content; min-height: 24px; }
+.inbox-commit-diff pre { margin: 4px 0 0; max-height: 200px; overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-sm); white-space: pre; tab-size: 2; }
+.inbox-commit-diff pre:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; }
+@media (max-width: 480px) {
+  .inbox-commit { padding-left: 10px; }
+  .inbox-commit-actions .btn-secondary { flex: 1 1 0; }
+  .inbox-commit-actions .btn-primary { flex: 1 0 100%; }
+  .inbox-commit-diff summary { min-height: 36px; padding: 8px 0; box-sizing: border-box; }
+}
 /* No celular o botão não fica na borda esquerda: ancorada nele, a caixa saía pela direita. Ocupa a largura da tela. */
 @media (max-width: 480px) {
   .inbox-menu { position: fixed; top: auto; left: 12px; right: 12px; width: auto; margin-top: 8px; }

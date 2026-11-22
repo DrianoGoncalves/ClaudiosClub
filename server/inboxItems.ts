@@ -1,10 +1,12 @@
 import type { ChatItem, InboxItem, SecretHint, SecretKind, SecretReason, SecretSource, SecretVerdict } from '../shared/model';
 import { leftText } from './autoCommit';
 import { secretFile } from './chat/codeEdits';
+import { ownerGateOf } from './flowPolicy';
 import { PASSWORD_POLICY_FIX, PASSWORD_POLICY_ID, type PasswordPolicyAlert } from './codexPasswordPolicy';
 import type { DeniedInfo } from './chat/denied';
 import { secretAlert } from './chat/secrets';
 import { isBlockedRel } from './projectFiles';
+import { clockOf, type ProjectPauses } from './projectPause';
 import type { CommitAlert, FollowUpAlert, NotStartedTask, OwnAlert, StuckDependency } from './tasks';
 
 // Avisos da caixa "precisa de mim" que vêm de uma conversa do Claudio’s Club e levam ao ponto dela que
@@ -113,6 +115,7 @@ const PLAN_SUMMARY_MAX = 1500;
 export function stuckInboxItem({ task, state }: OwnAlert, w: Place): InboxItem {
   const noCode = !!task.noCode && state.humanAction === 'decide';
   const planWait = !!task.planWait && task.status === 'planning' && state.humanAction === 'decide';
+  const ownerGate = ownerGateOf(task)?.why;
   return {
     id: `stuck:${task.id}:${state.humanAction ?? 'fallback'}`,
     kind: 'stuck',
@@ -128,6 +131,7 @@ export function stuckInboxItem({ task, state }: OwnAlert, w: Place): InboxItem {
       since: state.since,
       ...(noCode && { noCode: true as const, ...(task.noCode!.summary && { summary: task.noCode!.summary }) }),
       ...(planWait && { planWait: true as const, summary: task.planWait!.text.slice(0, PLAN_SUMMARY_MAX) }),
+      ...(ownerGate && state.humanAction === 'decide' && { ownerGate }),
     },
   };
 }
@@ -190,26 +194,78 @@ export function followUpInboxItem({ task, followUp: f }: FollowUpAlert, w: Omit<
   };
 }
 
+/** O que `ProjectPauses.notices` devolve, para a caixa: as pausas de versão ligadas e as saídas ainda não dispensadas. */
+export type VersionPauseNotices = Awaited<ReturnType<ProjectPauses['notices']>>;
+
+/**
+ * Os avisos da pausa de versão para o dono (ver `ProjectPauses.notices`): um enquanto ela está ligada (`routine:vpause:<projeto>:on`: quem ligou e até quando) e um depois que ela sai
+ * (`routine:vpause:<projeto>:end:<ms>`: por quê e quando; some ao dispensar ou em 24 h; sem `resolvedAt`, para a tela avisar a saída como avisa o resto). Reaproveitam o kind `routine`, que a tela já mostra como
+ * informação (tom `info`, não de erro, e fora do que pede ação sua) e já dispensa por `/api/routines/alerts/dismiss` (que aceita o id `vpause:`); a etiqueta diz "rotina", que é a do kind. `projectName` vem de quem monta a caixa.
+ */
+export function versionPauseItems(n: VersionPauseNotices, projectName: (projectId: string) => string): InboxItem[] {
+  const place = (projectId: string) => ({ projectId, projectName: projectName(projectId), sessionId: '', staffId: null, name: 'Pausa de versão' });
+  const out: InboxItem[] = [];
+  for (const { projectId, pause } of n.active) {
+    const who = pause.by?.name ?? 'você';
+    out.push({
+      id: `routine:vpause:${projectId}:on`,
+      kind: 'routine',
+      ...place(projectId),
+      summary: `pausa de versão ligada por ${who} às ${clockOf(pause.at)}: nada novo começa, o que já está em andamento termina; sai sozinha às ${clockOf(pause.until)}${pause.by ? ` ou quando ${who} encerrar` : ' ou quando você retomar o projeto'}`,
+      at: pause.at,
+    });
+  }
+  for (const { projectId, end } of n.ended) {
+    const at = clockOf(end.at);
+    const text =
+      end.reason === 'expired'
+        ? `a pausa de versão saiu às ${at}: o prazo acabou e o projeto voltou ao normal`
+        : end.reason === 'ended'
+          ? `a pausa de versão foi encerrada por ${end.endedBy?.name ?? 'quem a ligou'} às ${at}: o projeto voltou ao normal`
+          : end.reason === 'resumed'
+            ? `você retomou o projeto às ${at}: a pausa de versão saiu e tudo voltou ao normal`
+            : `você pausou o projeto às ${at}: a pausa de versão virou pausa comum e o projeto segue pausado, sem prazo`;
+    out.push({ id: `routine:vpause:${projectId}:end:${Date.parse(end.at)}`, kind: 'routine', ...place(projectId), summary: text, at: end.at });
+  }
+  return out;
+}
+
+/** O id do aviso de saída da pausa de versão (o que a rota de dispensar recebe, sem o prefixo `routine:`): o projeto e o `at` da saída, em ms. null = não é um id de saída. */
+export function versionPauseEndId(id: string): { projectId: string; atMs: number } | null {
+  const m = /^vpause:(.+):end:(\d{1,15})$/.exec(id);
+  return m ? { projectId: m[1]!, atMs: Number(m[2]) } : null;
+}
+
 /**
  * O commit automático de uma tarefa pronta que falhou, foi parcial ou não coube (ver commitAlerts). Reaproveita o kind 'error' (a tela já o ignora por `/api/errors/dismiss`, que aceita o id
  * `commit:<projeto>:<tarefa>`). Nada é gravado para o item além do `ack` da tarefa: some ao ignorar. O alvo é a tarefa no quadro (sem conversa, sem `staffId`: não pinta o cartão de ninguém).
  * Os caminhos e o motivo são texto de arquivo e de erro do git: a tela os mostra como texto puro.
  */
 export function commitInboxItem({ task, commit: c }: CommitAlert, w: Omit<Place, 'staffId'>): InboxItem {
+  const view = task.commitLeft;
   const what =
     c.status === 'failed'
       ? `o commit automático falhou: ${c.note}`
       : c.status === 'partial'
         ? `o commit automático foi parcial (${c.sha}): de fora ${leftText(c.left)}`
         : `o commit automático não foi feito: ${c.note}${c.left.length ? `; de fora ${leftText(c.left)}` : ''}`;
+  // Com o estado derivado (ver server/commitLeft.ts), o item diz o que pede: `ready` é decisão do dono (nenhum card aberto toca as sobras: refazer o commit ou ignorar), `failed` é erro. O tom da
+  // tela sai de `autoCommit.state`; o `kind` segue 'error' (a tela e a extensão já o conhecem). `waiting` não chega aqui (a caixa o tira da lista e só o conta).
+  const ask = view?.state === 'ready' ? `. Nenhum card aberto mexe nesses arquivos agora: refazer o commit das sobras ou ignorar` : '';
   return {
     id: `commit:${w.projectId}:${task.id}`,
     kind: 'error',
     ...w,
     staffId: null,
-    summary: `“${task.title}” ficou pronta, mas ${what}`,
+    summary: `“${task.title}” ficou pronta, mas ${what}${ask}`,
     at: c.at,
-    autoCommit: { taskId: task.id, taskTitle: task.title, status: c.status },
+    autoCommit: {
+      taskId: task.id,
+      taskTitle: task.title,
+      status: c.status,
+      sha: c.sha,
+      ...(view && { state: view.state, files: view.files, blockers: view.blockers, canRedo: view.canRedo, ...(view.truncated && { truncated: true as const }), ...(view.note && { note: view.note }) }),
+    },
   };
 }
 
@@ -272,7 +328,7 @@ export function heavyGuardOffInboxItem(g: HeavyGuardOffHit, w: Place): InboxItem
     id: g.id,
     kind: 'error',
     ...w,
-    summary: `“${g.taskTitle}” roda sem a fila de validação pesada: a conta do Codex tem um hooks.json. Apague ou renomeie o arquivo para a fila voltar na próxima mensagem; até lá a suíte completa roda sem esperar a vez.`,
+    summary: `“${g.taskTitle}” roda sem a fila de validação pesada e sem o bloqueio de git destrutivo: a conta do Codex tem um hooks.json. Apague ou renomeie o arquivo para os dois voltarem na próxima mensagem; até lá a suíte completa roda sem esperar a vez e o reset --hard (e afins) passa no checkout principal.`,
     at: g.at,
     heavyGuardOff: { taskId: g.taskId, taskTitle: g.taskTitle, file: g.file },
   };

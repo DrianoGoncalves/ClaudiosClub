@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { InboxItem, InboxKind, TurnNotice } from '../../../shared/model';
+import type { CommitWaitingSummary, InboxItem, InboxKind, TurnNotice } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
 import { pollVisible } from '../usePoll';
@@ -38,6 +38,8 @@ export interface InboxView {
   /** null = o navegador não oferece notificações. */
   canNotify: boolean;
   setNotify: (on: boolean) => Promise<void>;
+  /** Avisos de commit parcial que esperam outro card fechar: só ciência, não são item nem entram na contagem. Servidor sem a rota (ou erro): null. */
+  commitWaiting?: CommitWaitingSummary | null;
   /** Tira um aviso que só informa: segredo ("já troquei"), rotina que não rodou ("ok, vi") ou erro ("ignorar"). */
   dismiss: (item: InboxItem, opts?: { notSecret?: boolean }) => Promise<void>;
   /** Relê a caixa agora (depois de uma ação sobre a tarefa de um item: liberar, cancelar, começar). */
@@ -46,6 +48,7 @@ export interface InboxView {
 
 export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
   const [items, setItems] = useState<InboxItem[]>([]);
+  const [commitWaiting, setCommitWaiting] = useState<CommitWaitingSummary | null>(null);
   const canNotify = typeof Notification !== 'undefined';
   const [notify, setNotifyState] = useState(() => canNotify && readFlag(NOTIFY_KEY) && Notification.permission === 'granted');
   const seen = useRef<Set<string> | null>(null);
@@ -60,8 +63,9 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
   useEffect(() => {
     let stopped = false;
     const tick = async () => {
-      const [next, done] = await Promise.all([api.inbox().catch(() => null), api.turns(turnsSince.current).catch(() => null)]);
+      const [next, done, waiting] = await Promise.all([api.inbox().catch(() => null), api.turns(turnsSince.current).catch(() => null), api.commitWaiting().catch(() => null)]);
       if (stopped) return;
+      setCommitWaiting((prev) => (JSON.stringify(prev) === JSON.stringify(waiting) ? prev : waiting));
       if (done?.length) {
         turnsSince.current = done.reduce((max, d) => (d.at > max ? d.at : max), turnsSince.current);
         // "Terminou" só incomoda quando você não está olhando para o Claudio’s Club.
@@ -104,7 +108,7 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
 
   const refresh = useCallback(() => tickRef.current(), []);
 
-  return { items, notify, canNotify, setNotify, dismiss, refresh };
+  return { items, commitWaiting, notify, canNotify, setNotify, dismiss, refresh };
 }
 
 /** A rota de dispensar de cada tipo de item (o erro, `error:`/`cap:`, e a ação barrada, `denied:`, vão pelo id inteiro; o segredo e a rotina, sem o prefixo). */

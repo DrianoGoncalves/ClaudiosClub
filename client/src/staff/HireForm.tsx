@@ -167,6 +167,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
   // Motor secundário (quando o principal bate o limite); o motor dele é sempre o outro, então não entra no estado.
   const [fallback, setFallback] = useState<FallbackDraft>(draftOf(editing?.fallback));
   const [canHire, setCanHire] = useState(editing?.canHire ?? false);
+  const [canRelease, setCanRelease] = useState(editing?.canRelease ?? false);
   const [playbook, setPlaybook] = useState<'' | Playbook>(editing?.playbook ?? '');
   const [personality, setPersonality] = useState<'' | Personality>(editing?.personality ?? '');
   const [worktree, setWorktree] = useState(editing?.worktree ?? false);
@@ -410,6 +411,7 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
       model: model || null,
       effort: effort || null,
       canHire,
+      canRelease,
       playbook: playbook || null,
       // Só vai se mudou (ausente mantém o salvo; null limpa). No simples o campo nem aparece: nunca muda.
       ...(full ? personalityToSend(personality, editing?.personality) : {}),
@@ -1053,6 +1055,13 @@ export function StaffForm({ board, projectId, mode, simple = false, embedded = f
           <span className="check-text">
             <span>{t('detail.canHire')}</span>
             <span className="muted small">{t('detail.canHireHint')}</span>
+          </span>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={canRelease} onChange={(e) => setCanRelease(e.target.checked)} />
+          <span className="check-text">
+            <span>{t('detail.canRelease')}</span>
+            <span className="muted small">{t('detail.canReleaseHint')}</span>
           </span>
         </label>
         </div>

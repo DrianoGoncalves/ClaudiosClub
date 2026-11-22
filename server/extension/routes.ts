@@ -148,7 +148,7 @@ function projectItem(i: InboxItem) {
     name: i.name,
     // Permissão e ação barrada levam texto do agente/motor (o comando, o motivo do erro): a extensão recebe só uma frase fixa, que nem o nome da ferramenta traz. O commit automático leva
     // caminhos de arquivo e a saída do git (um hook que falhou): também só a frase fixa. A fila desligada por hooks.json leva o título da tarefa e a conta do Codex: o mesmo.
-    summary: i.kind === 'permission' ? 'pedido de permissão esperando você' : i.kind === 'denied' ? 'uma regra de permissão barrou uma ação' : i.autoCommit ? 'o commit automático de uma tarefa pronta precisa de você' : i.heavyGuardOff ? 'uma conversa de tarefa roda sem a fila de validação pesada' : i.summary.slice(0, SUMMARY_MAX),
+    summary: i.kind === 'permission' ? 'pedido de permissão esperando você' : i.kind === 'denied' ? 'uma regra de permissão barrou uma ação' : i.autoCommit ? 'o commit automático de uma tarefa pronta precisa de você' : i.heavyGuardOff ? 'uma conversa de tarefa roda sem a fila de validação pesada e sem o bloqueio de git destrutivo' : i.summary.slice(0, SUMMARY_MAX),
     at: i.at,
     // Só nos avisos de tarefa: a extensão abre o card ao clicar. Sem tarefa, o campo nem existe.
     ...(taskId ? { taskId } : {}),
