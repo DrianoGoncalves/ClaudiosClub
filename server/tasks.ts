@@ -25,6 +25,7 @@ import type { Caller } from './callers';
 import type { Reservation } from './resourceGate';
 import { VERSION_PAUSE_DEFAULT_MINUTES, VERSION_PAUSE_MAX_MINUTES, clockOf, type PauseBy, type ProjectPauses } from './projectPause';
 import { CapabilityError } from './engineCapability';
+import { StateBusyError } from './atomicWrite';
 import { writeAtomic } from './staff/store';
 import { checkpoint, CodeError, codeTouchedSince, detectTest, formatLimit, locateCode, mergeCode, readCode, runTests, type CodePlace } from './taskCode';
 import { baseNote, baseWarning, syncWorktree, type SyncWorktree } from './worktreeBase';
@@ -586,6 +587,9 @@ export interface StartOpts extends RunStart {
 
 /** Prazo das rotas (o POST de tarefa do gestor e o "Começar" da tela): passou, a resposta vem com a tarefa na fila e o começo segue sem elas. */
 export const START_DEADLINE_MS = 5_000;
+
+/** Esperas entre as repetições do registro do card automático quando o quadro está preso por outro processo (ver `onCodeEdit`). */
+export const EDIT_RETRY_WAITS_MS = [1_500, 4_000];
 /** Prazo das rotas que esperam a vez do funcionário (a edição, o cancelamento, a resposta à dúvida…, ver `lockedWithDeadline`): a vez não chegou nele, a operação é recusada (503) sem gravar. */
 export const LOCK_DEADLINE_MS = 8_000;
 /** O começo de uma tarefa que passa disto escreve o tempo de cada etapa no log. */
@@ -4638,17 +4642,31 @@ export class TaskService {
    * pasta do projeto e tudo em `.myco/` (ver `codePath`).
    *
    * É registro, não trava: a escrita nunca espera por isto (quem chama não espera, e erro aqui só é engolido pelo chamador). Limite
-   * aceito: edição só por shell (`sed`, `node -e`, scripts) não é vista, então não gera card.
+   * aceito: edição só por shell (`sed`, `node -e`, scripts) não é vista, então não gera card. Arquivo do quadro preso por outro processo
+   * (`StateBusyError`, depois das tentativas do rename): o registro é refeito mais duas vezes (`EDIT_RETRY_WAITS_MS`) antes de desistir.
    */
   onCodeEdit(ev: CodeEdit): Promise<void> {
     // Uma de cada vez por conversa (e o fim do turno espera pela fila, ver `workDone`): duas edições juntas nunca abrem dois cards.
-    const run = (this.edits.get(ev.sessionId) ?? Promise.resolve()).then(() => this.recordEdit(ev));
+    const run = (this.edits.get(ev.sessionId) ?? Promise.resolve()).then(() => this.recordEditRetrying(ev));
     const tail = run.catch(() => {});
     this.edits.set(ev.sessionId, tail);
     void tail.then(() => {
       if (this.edits.get(ev.sessionId) === tail) this.edits.delete(ev.sessionId);
     });
     return run;
+  }
+
+  /** `recordEdit` refeito quando o quadro estava preso por outro processo. É seguro repetir: a falha vem da gravação (nada foi gravado) e o registro é idempotente. */
+  private async recordEditRetrying(ev: CodeEdit): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.recordEdit(ev);
+      } catch (err) {
+        const wait = EDIT_RETRY_WAITS_MS[attempt];
+        if (!(err instanceof StateBusyError) || wait === undefined) throw err;
+        await new Promise<void>((resolve) => setTimeout(resolve, wait));
+      }
+    }
   }
 
   private async recordEdit(ev: CodeEdit): Promise<void> {

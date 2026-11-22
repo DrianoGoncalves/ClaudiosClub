@@ -141,6 +141,7 @@ import { boardFilter } from './board';
 import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
 import { AUTONOMY, dropStaffSessions, hasStaffFiles, listProjectStaff, listProjectStaffStrict, readProfile, saveProfile } from './staff/store';
+import { StateBusyError } from './atomicWrite';
 import { lastRetentionRun, nextRetentionDelay, retentionPreview, runRetentionSweep, setRetentionDeletion, type RetentionDeps } from './retentionSweep';
 import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
 import { writeOwnerFile } from './ownerEdits';
@@ -2862,6 +2863,11 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         if (err instanceof TaskForbiddenError) return send(res, 403, { error: err.message });
         // A vez do funcionário não chegou no prazo da resposta (edição, cancelamento, resposta à dúvida, ajuste guardado, revisão): 503, nada gravado (tentar de novo em instantes é seguro).
         if (err instanceof TaskBusyError) return send(res, 503, { error: err.message }, { 'retry-after': '5' });
+        // Arquivo de estado (tasks.json, config.json…) seguiu preso por outro processo depois de todas as tentativas do rename: 503, nada gravado (tentar de novo é seguro).
+        if (err instanceof StateBusyError) {
+          console.error('[estado] arquivo ocupado:', err.file, (err.cause as Error | undefined)?.message);
+          return send(res, 503, { error: err.message }, { 'retry-after': String(err.retryAfter) });
+        }
         // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
         if (err instanceof GuideExistsError) return send(res, 409, { error: 'exists' });
         // Teto de títulos manuais: só criar outro recusa (409); editar ou apagar um que existe segue.

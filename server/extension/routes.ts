@@ -3,6 +3,7 @@ import type http from 'node:http';
 import { z } from 'zod';
 import type { Admitted } from '../gate';
 import { StaffError } from '../staff/store';
+import { StateBusyError } from '../atomicWrite';
 import { SAFE_ID, TaskError } from '../tasks';
 import type { InboxItem, Task } from '../../shared/model';
 import type { ExtensionTokens } from './tokens';
@@ -306,6 +307,11 @@ export async function handleExtension(req: http.IncomingMessage, res: http.Serve
   } catch (err) {
     if (err instanceof ExtError) return json(res, err.status, { error: err.message });
     if (err instanceof TaskError || err instanceof StaffError) return json(res, 400, { error: err.message });
+    // Arquivo de estado preso por outro processo depois de todas as tentativas: 503, nada gravado (a extensão pode tentar de novo).
+    if (err instanceof StateBusyError) {
+      console.error('[estado] arquivo ocupado:', err.file, (err.cause as Error | undefined)?.message);
+      return json(res, 503, { error: err.message });
+    }
     console.error(err);
     return json(res, 500, { error: 'erro interno' });
   }
