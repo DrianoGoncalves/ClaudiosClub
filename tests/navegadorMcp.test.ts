@@ -86,11 +86,17 @@ beforeAll(async () => {
 afterAll(() => removeTemp(root));
 
 let n = 0;
-/** Uma pasta nova por teste: o log do servidor de mentira e o cache. */
+/**
+ * Uma pasta nova por teste: o log do servidor de mentira e o cache. O log já nasce (vazio): o `serverFingerprint` olha todo argumento
+ * absoluto que existe e procura o `playwright-core` acima dele. Com o log só aparecendo na primeira abertura, a 2ª conversa teria uma chave
+ * de cache diferente da 1ª sempre que há um `playwright-core` acima do TEMP (ex.: um `node_modules` na pasta pessoal), e nunca reusaria o cache.
+ */
 async function scratch() {
   const dir = path.join(root, `t${++n}`);
   await fs.mkdir(dir, { recursive: true });
-  return { dir, log: path.join(dir, 'fake.log'), cacheDir: path.join(dir, 'cache') };
+  const log = path.join(dir, 'fake.log');
+  await fs.writeFile(log, '');
+  return { dir, log, cacheDir: path.join(dir, 'cache') };
 }
 
 type Msg = { jsonrpc: string; id?: unknown; method?: string; params?: Record<string, unknown>; result?: any; error?: { code: number; message: string } };

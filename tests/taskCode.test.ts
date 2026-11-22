@@ -111,6 +111,25 @@ describe('código da tarefa', () => {
     expect(await fs.readFile(path.join(plain.dir, 'app.txt'), 'utf8')).toBe('v2\n');
   }, 90_000);
 
+  it('testes da mescla cortados no tempo-limite: não é falha de teste; a mescla é desfeita e o erro (e o resultado guardado) dizem "tempo-limite"', async () => {
+    const { dir, git } = await repo('lento');
+    // Os testes do projeto nunca acabam: só o corte os encerra.
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', scripts: { test: 'node -e "setInterval(() => {}, 1000)"' } }));
+    git('add', '.');
+    git('commit', '-qm', 'testes lentos');
+    const wt = await ensureWorktree(dir, 'ana-1');
+    await fs.writeFile(path.join(wt.path, 'app.txt'), 'v2\n');
+    const place = (await locateCode(dir, 'ana-1', true))!;
+
+    const err = await mergeCode(dir, place, 'Lenta', { testTimeoutMs: 3000 }).catch((e: CodeError) => e);
+    expect(err).toBeInstanceOf(CodeError);
+    expect(err).toMatchObject({ code: 'tests-timeout', tests: { ok: false, timedOut: true, limitMs: 3000 } });
+    expect((err as CodeError).message).toContain('passaram do tempo-limite de 3 s');
+    expect((err as CodeError).message).not.toContain('falharam');
+    expect(await fs.readFile(path.join(dir, 'app.txt'), 'utf8')).toBe('v1\n'); // a mescla foi desfeita
+    expect(git('status', '--porcelain').trim()).toBe('');
+  }, 60_000);
+
   it('sem worktree: mostra o que mudou no próprio projeto e não oferece mesclar', async () => {
     const { dir } = await repo('sem-wt', false);
     await fs.writeFile(path.join(dir, 'app.txt'), 'v3\n');

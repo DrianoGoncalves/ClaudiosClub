@@ -640,6 +640,8 @@ describe('prazo, fila e disjuntor', () => {
     });
     const p1 = call(mcp, 'ssh_status', { servidor: 'srv1' });
     const p2 = call(mcp, 'ssh_processos', { servidor: 'srv1' });
+    // Espera o primeiro comando começar (até 5 s; com a suíte cheia 30 ms não bastavam) e só então dá um tempo para o segundo, que tem de seguir esperando.
+    for (let i = 0; i < 500 && calls.length < 1; i++) await new Promise((r) => setTimeout(r, 10));
     await new Promise((r) => setTimeout(r, 30));
     expect(calls).toHaveLength(1);
     release();

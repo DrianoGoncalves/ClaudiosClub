@@ -1001,6 +1001,12 @@ export interface Task {
   deploy?: TaskHandoff | null;
   /** A worktree foi mesclada no projeto. */
   merged?: { at: string; sha: string; branch: string; base: string } | null;
+  /**
+   * Onde o código DESTE card é escrito, gravado quando a conversa de trabalho abre (ver `TaskService.startNow`): `project` = o checkout principal; `worktree` = a do funcionário,
+   * no `branch`. A mescla e a aprovação decidem por isto, não pela worktree que o funcionário tem agora (ela pode ter sido criada depois, para outro card). Ausente (card
+   * anterior a este campo) = vale a worktree atual dele (ver `locateTaskCode`). Só o servidor grava: nenhuma edição (tela ou API) aceita este campo.
+   */
+  codeAt?: { where: 'worktree' | 'project'; branch: string | null };
   /** Último teste rodado pelo Claudio’s Club para esta tarefa. */
   tests?: TestRun | null;
   /** Segunda opinião do Codex sobre o diff (Markdown), quando você pediu. */
@@ -1519,7 +1525,7 @@ export interface Rejection {
 
 export interface TaskDelivery {
   at: string;
-  /** Última mensagem do funcionário, cortada em 1500 caracteres. */
+  /** Última mensagem do funcionário; passando de 2500 caracteres, cortada em fim de linha com uma marca de corte no fim. */
   summary: string;
   /** Caminho relativo do arquivo → por que mudou (texto puro, até 200 caracteres). Ausente sem lista. */
   notes?: Record<string, string>;
@@ -1678,6 +1684,13 @@ export interface TestRun {
   failedFiles?: TestFailedFile[];
   /** A nova rodada só dos arquivos que falharam (ver `isolateFailures`); só na validação da entrega. */
   isolated?: TestIsolation;
+  /**
+   * A rodada foi cortada no tempo-limite (`limitMs`) sem terminar: `ok` é false, mas NÃO é falha de teste, e o resultado não diz nada sobre o código.
+   * Ausente = a suíte terminou (passou ou falhou). Quem mostra o resultado separa "tempo esgotado" de "falhou".
+   */
+  timedOut?: boolean;
+  /** O tempo-limite que valia, em ms; vem junto com `timedOut`. */
+  limitMs?: number;
 }
 
 export interface TestFailedFile {

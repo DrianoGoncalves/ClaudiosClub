@@ -398,6 +398,28 @@ describe('o pedido de revisão e o aviso ao gestor (TaskService)', () => {
     expect(plain.sent.at(-1)).toContain('FALHARAM. Fim da saída:\nquebrou de um jeito que ninguém lê');
   });
 
+  it('suíte cortada no tempo-limite: o pedido de revisão e o aviso ao gestor dizem TEMPO ESGOTADO (não FALHARAM) e o card guarda a marca', async () => {
+    const f = await flow('tempo-esgotado', run({ ms: 1_800_000, output: 'cortada', timedOut: true, limitMs: 1_800_000 }), again);
+    await f.svc.onTurnDone('s-1');
+    expect(f.ran.map((r) => r.command)).toEqual(['npm test']); // sem lista de falhas: não há o que rodar de novo
+    for (const text of [f.sent.at(-1)!, f.told.join('\n')]) {
+      expect(text).toContain('TEMPO ESGOTADO, cortados aos 30 min sem terminar');
+      expect(text).toContain('Isto NÃO é falha de teste');
+      expect(text).not.toContain('FALHARAM');
+    }
+    expect((await f.svc.list('p'))![0]!.tests).toMatchObject({ ok: false, timedOut: true, limitMs: 1_800_000 });
+  });
+
+  it('cortada no tempo-limite depois de alguns arquivos já terem falhado: o aviso diz as duas coisas, sem chamar a rodada de falha', async () => {
+    const f = await flow('tempo-esgotado-lista', run({ ms: 1_800_000, timedOut: true, limitMs: 1_800_000, files: undefined, failedFiles: [{ file: 'tests/a.test.ts', failed: 3 }] }), again);
+    await f.svc.onTurnDone('s-1');
+    const review = f.sent.at(-1)!;
+    expect(review).toContain('TEMPO ESGOTADO');
+    expect(review).toContain('Antes do corte, estes arquivos já tinham falhado:');
+    expect(review).toContain('Arquivos com falha: 1');
+    expect(review).not.toContain('FALHARAM');
+  });
+
   it('a nova rodada que dá erro não derruba a entrega: o pedido sai com a lista da suíte', async () => {
     const f = await flow('erro-rodada', suite, () => {
       throw new Error('sem rede');

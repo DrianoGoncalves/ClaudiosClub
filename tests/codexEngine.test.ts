@@ -87,7 +87,8 @@ describe('Codex: argumentos', () => {
   const base = { cwd: '/proj', sandbox: 'read-only' as const, network: 'loopback' as const, secrets: { projectPath: '/proj', home: '/nao-existe', mycoHome: '/nao-existe/.myco' } };
 
   it('primeira mensagem: exec --json com pasta, perfil de permissões, modelo, esforço e o prompt pelo stdin', () => {
-    const args = buildCodexArgs({ ...base, model: 'gpt-6-sol', effort: 'high', instructions: 'Você é a Bia.' });
+    // `platform` fixo: no Windows as instruções nunca vão na linha de comando (ver `instructionsInArgv`), e o teste não pode depender de onde roda.
+    const args = buildCodexArgs({ ...base, model: 'gpt-6-sol', effort: 'high', instructions: 'Você é a Bia.', platform: 'linux' });
     expect(args.slice(0, 5)).toEqual(['exec', '--json', '--skip-git-repo-check', '-C', '/proj']);
     expect(args).toContain('--ignore-user-config');
     expect(optionOf(args, '-C')).toBe('/proj');
@@ -188,7 +189,7 @@ describe('Codex: argumentos', () => {
     expect(tomlString('a "b" \\ c\nd\té ✓')).toBe('"a \\"b\\" \\\\ c\\nd\\té ✓"');
     expect(tomlString('x\u007fy')).toBe('"x\\u007fy"');
     expect(tomlString('metade \ud83d')).toBe('"metade \ufffd"');
-    const args = buildCodexArgs({ ...base, instructions: 'linha 1\nlinha "2"' });
+    const args = buildCodexArgs({ ...base, instructions: 'linha 1\nlinha "2"', platform: 'linux' });
     expect(configs(args)).toContain('developer_instructions="linha 1\\nlinha \\"2\\""');
   });
 
@@ -242,7 +243,8 @@ describe('Codex: argumentos', () => {
     // Dois arquivos (um na pasta da conversa, outro no projeto): antes o segundo era descartado em silêncio; agora nada roda.
     await fs.writeFile(path.join(wt, '.vps'), 'x');
     expect(() => codexDenyPaths(ctx)).toThrow(CodexBlockedError);
-    expect(() => codexDenyPaths(ctx)).toThrow(/mais de um arquivo para proteger \(.*wt\/\.vps, .*proj\/\.vps\).*só consegue negar um arquivo regular por execução/i);
+    // `[\\/]`: o caminho sai com a barra do sistema (`\` no Windows).
+    expect(() => codexDenyPaths(ctx)).toThrow(/mais de um arquivo para proteger \(.*wt[\\/]\.vps, .*proj[\\/]\.vps\).*só consegue negar um arquivo regular por execução/i);
     // O mesmo vale por qualquer caminho que monta a linha de comando.
     expect(() => buildCodexArgs({ cwd: wt, sandbox: 'workspace', network: 'off', secrets: { projectPath: proj, home, mycoHome: ctx.mycoHome } })).toThrow(CodexBlockedError);
     // Um dos dois virando pasta resolve.
@@ -414,7 +416,7 @@ describe('CodexProcess', () => {
     const f = fakeCodex();
     const threadFile = path.join(root, 'sess-1', 'codex-thread.json');
     const idle: string[] = [];
-    const chat = new CodexProcess({ ...profile, model: 'gpt-6-sol', effort: 'medium', instructions: 'Ficha da Bia', threadFile, spawnImpl: f.spawnImpl, onIdle: (r) => idle.push(r) });
+    const chat = new CodexProcess({ ...profile, model: 'gpt-6-sol', effort: 'medium', instructions: 'Ficha da Bia', platform: 'linux', threadFile, spawnImpl: f.spawnImpl, onIdle: (r) => idle.push(r) });
     const events: ChatEvent[] = [];
     chat.start();
     chat.subscribe((e) => events.push(e));
@@ -936,7 +938,9 @@ describe('ChatManager: Claude ou Codex', () => {
     expect(baseOf(calls[0]!.args)).toBe('":workspace"');
     noLegacySandbox(calls[0]!.args);
     expect(optionOf(calls[0]!.args, '-m')).toBe('gpt-6-sol');
-    expect(f.last().prompt()).toBe('oi codex'); // sem aviso de folga de cota nem de ficha
+    // Sem aviso de folga de cota nem de ficha. A ficha vai na linha de comando (Linux) ou no começo do prompt (Windows, ver `instructionsInArgv`): o manager não manda `platform`, então vale o de quem roda.
+    expect(f.last().prompt()).toBe(instructionsInArgv('Ficha') ? 'oi codex' : promptWithInstructions('Ficha', 'oi codex'));
+    expect(configs(calls[0]!.args).some((c) => c.startsWith('developer_instructions='))).toBe(instructionsInArgv('Ficha'));
     const snap = await m.snapshot('p', cid);
     expect(snap.live?.state).toMatchObject({ running: true, model: 'gpt-6-sol', effort: 'high', permissionMode: 'acceptEdits' });
     expect(m.has(cid)).toBe(true);
