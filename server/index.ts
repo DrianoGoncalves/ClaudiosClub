@@ -3163,7 +3163,7 @@ async function getInbox(): Promise<InboxItem[]> {
   }
   const own = chats.ownPids();
   for (const l of live) {
-    if (!l.alive || l.status !== 'waiting' || own.has(l.pid) || orphanIds.has(l.sessionId)) continue;
+    if (!l.alive || l.status !== 'waiting' || own.has(l.pid) || orphanIds.has(l.sessionId) || chats.isReusedPid(l)) continue;
     // Dispensada por você: volta só quando o status mudar (outro statusUpdatedAt).
     if (inboxState.isWaitingDismissed(l.sessionId, l.statusUpdatedAt)) continue;
     const w = where(l.sessionId, l);

@@ -45,6 +45,7 @@ import { CEILING_AT, contextNotice, kTokens, NOTICE_AT, rereadUsd, switchDecisio
 import { BOOST_NOTICE, CONTEXT_NOTICE, RETRY_TEXT, STAFF_NOTICE } from './items';
 import { InboxState } from '../inboxState';
 import { isAlive, killTree, type ChatRegistry } from './registry';
+import { confirmProcess, startedBeforeBoot, type ProcLister } from '../procIdentity';
 import { CONTINUE_TEXT, type AutoContinue, type AutoContinueEvent, type CancelBy, type Pending, type RetryInfo } from './autoContinue';
 import { attemptsAllowed, backoffMs, classifyTurnError, errorLine, isAuthFailure, retryField, retryNotice, TurnRetryLedger, type Transient, type TurnEnd, type TurnError } from './turnRetry';
 import { limitNotice, MAX_LIMIT_HITS, resumePlan, type LimitHit, type ResumePlan } from './usageLimit';
@@ -146,9 +147,10 @@ export interface ChatManagerOptions {
   projectDirOf?: (projectId: string) => Promise<string | null>;
   /** Processos abertos, gravados em disco para achar os órfãos depois de um reinício. */
   registry?: ChatRegistry;
-  /** Testes trocam (pid vivo? / encerrar processo). */
+  /** Testes trocam (pid vivo? / encerrar processo / nome e hora de criação do processo que tem o pid). */
   isAlive?: (pid: number) => boolean;
   kill?: (pid: number) => Promise<void>;
+  inspectProcess?: ProcLister;
   log?: (line: string) => void;
   /** Você aprovou o plano de uma conversa (a tarefa dela passa para "fazendo", com o plano). */
   onPlanApproved?: (sessionId: string, plan: string) => void;
@@ -236,6 +238,14 @@ const CLOSE_WAIT_MS = 10_000;
 const DENIED_TOOLS_MAX = 5;
 
 type Listener = (e: ChatEvent) => void;
+
+/** O processo que um registro ou arquivo de sessão aponta: o que `killVerified` confere antes de encerrar (`key` identifica a sessão em `reusedPids`). */
+interface KillTarget {
+  pid: number;
+  startedAt: string | null;
+  key: string;
+}
+type Elsewhere = NonNullable<ChatSnapshot['elsewhere']> & { target: KillTarget };
 
 /** Começo do aviso de ficha atualizada (o histórico do chat o esconde, ver items.ts). */
 export const FICHA_NOTICE = '[MyCo] Sua ficha foi atualizada depois que esta conversa começou.';
@@ -356,6 +366,8 @@ export class ChatManager {
   private readonly delegated = new Set<string>();
   /** As conversas de consulta de outro projeto abertas aqui (sessão → id da consulta; ver `isConsultSession`). Só em memória: o carimbo na ficha e o registro das consultas guardam o resto. */
   private readonly consultSessions = new Map<string, string>();
+  /** Registros de pid que a conferência de identidade achou em outro processo (`pid:startedAt` do arquivo de sessão): não contam como conversa aberta em outro lugar. Só na memória. */
+  private readonly reusedPids = new Set<string>();
   /** Quando cada conversa parou com erro (`onExit`): o carimbo que a dispensa do alerta guarda, para um erro novo voltar. Só na memória, como o erro. */
   private readonly errorAt = new Map<string, string>();
   /**
@@ -502,7 +514,7 @@ export class ChatManager {
       ],
       live,
       context,
-      elsewhere: await this.elsewhere(sessionId),
+      elsewhere: await this.elsewhere(sessionId).then((o) => o && { pid: o.pid, entrypoint: o.entrypoint, status: o.status, orphan: o.orphan }),
       commands: this.commands.get(projectId) ?? [],
       copy: await this.copyOf(sessionId),
       ...(this.overrides.has(sessionId) && { fallback: this.overrides.get(sessionId) }),
@@ -1335,6 +1347,11 @@ export class ChatManager {
     return this.chats.get(sessionId)?.lastAssistantText() ?? null;
   }
 
+  /** O pid dessa sessão foi conferido e é de outro processo (o sistema o reaproveitou): não é conversa, por mais "viva" que o arquivo diga. */
+  isReusedPid(l: Pick<LiveSession, 'pid' | 'startedAt'>): boolean {
+    return this.reusedPids.has(`${l.pid}:${l.startedAt ?? ''}`);
+  }
+
   /** Processos do Claudio’s Club de antes de um reinício do servidor, ainda vivos (ver `adopt`). */
   async orphans(live: LiveSession[]): Promise<Array<{ sessionId: string; pid: number; status: string | null }>> {
     const registry = this.opts.registry;
@@ -1342,8 +1359,9 @@ export class ChatManager {
     const alive = this.opts.isAlive ?? isAlive;
     const out: Array<{ sessionId: string; pid: number; status: string | null }> = [];
     for (const rec of Object.values(await registry.read())) {
-      if (rec.server === process.pid || alive(rec.server)) continue;
-      const s = live.find((l) => l.pid === rec.pid && l.sessionId === rec.sessionId && l.alive);
+      // Registro de antes do boot: o pid dele (e o do servidor que o gravou) já é de outro processo; `cleanOrphans` o tira do arquivo.
+      if (startedBeforeBoot(rec.startedAt) || rec.server === process.pid || alive(rec.server)) continue;
+      const s = live.find((l) => l.pid === rec.pid && l.sessionId === rec.sessionId && l.alive && !this.isReusedPid(l));
       if (s) out.push({ sessionId: rec.sessionId, pid: rec.pid, status: s.status });
     }
     return out;
@@ -1638,7 +1656,7 @@ export class ChatManager {
       // Órfão do próprio Claudio’s Club: ninguém mais fala com ele, então mandar mensagem já é o "Trazer".
       if (other?.orphan) {
         this.log(`${sessionId}: retomada aqui, encerrando processo órfão do Claudio’s Club (pid ${other.pid}, ${other.status ?? 'sem status'})`);
-        await this.endProcess(sessionId, other.pid);
+        await this.endProcess(sessionId, other.target);
       } else if (other) {
         this.log(`${sessionId} bloqueada: aberta em ${other.orphan ? 'processo órfão do Claudio’s Club' : (other.entrypoint ?? '?')} (pid ${other.pid})`);
         throw new ChatError(holdMessage(other));
@@ -1786,7 +1804,7 @@ export class ChatManager {
     if (!other) return;
     if (!other.orphan) throw new ChatError(holdMessage(other));
     this.log(`${sessionId}: encerrando processo órfão do Claudio’s Club (pid ${other.pid}, ${other.status ?? 'sem status'})`);
-    await this.endProcess(sessionId, other.pid);
+    await this.endProcess(sessionId, other.target);
   }
 
   /**
@@ -1803,12 +1821,33 @@ export class ChatManager {
       throw new ChatError(`a sessão está trabalhando agora (pid ${other.pid}): encerrar no meio do turno faria ela parar. Espere terminar e tente de novo`);
     }
     this.log(`${sessionId}: assumida aqui, encerrando o processo de ${other.entrypoint ?? '?'} (pid ${other.pid}, ${other.status ?? 'sem status'})`);
-    await this.endProcess(sessionId, other.pid);
+    await this.endProcess(sessionId, other.target);
   }
 
-  /** Encerra a árvore do processo, espera ele sair e tira o registro dele (se houver). */
-  private async endProcess(sessionId: string, pid: number): Promise<void> {
-    await (this.opts.kill ?? killTree)(pid);
+  /**
+   * Antes de encerrar um pid vindo do registro ou do arquivo de sessão: confere que ele ainda é o processo da conversa (ver `confirmProcess`).
+   * O sistema reaproveita pids (depois de reiniciar o PC, ou de o processo sair): o pid de outro processo não é tocado, só sai o registro
+   * dele e a sessão deixa de contar como aberta em outro lugar. `unknown` (não deu para olhar): nada é encerrado nem apagado.
+   */
+  private async killVerified(sessionId: string, target: KillTarget): Promise<'killed' | 'skipped' | 'unknown'> {
+    const identity = await confirmProcess(target.pid, target.startedAt, this.opts.inspectProcess);
+    if (identity === 'unknown') return 'unknown';
+    if (identity !== 'same') {
+      this.log(`${sessionId}: pid ${target.pid} ${identity === 'gone' ? 'já saiu' : 'é de outro processo (o número foi reaproveitado)'}: nada encerrado, registro tirado`);
+      this.reusedPids.add(target.key);
+      await this.opts.registry?.remove(sessionId, target.pid).catch(() => {});
+      return 'skipped';
+    }
+    await (this.opts.kill ?? killTree)(target.pid);
+    return 'killed';
+  }
+
+  /** Encerra a árvore do processo (se for o da conversa), espera ele sair e tira o registro dele (se houver). */
+  private async endProcess(sessionId: string, target: KillTarget): Promise<void> {
+    const pid = target.pid;
+    const verdict = await this.killVerified(sessionId, target);
+    if (verdict === 'unknown') throw new ChatError(`não consegui conferir se o processo ${pid} é o da conversa: nada foi encerrado. Feche-o à mão`);
+    if (verdict === 'skipped') return;
     const alive = this.opts.isAlive ?? isAlive;
     for (let i = 0; i < 50 && alive(pid); i++) await new Promise((r) => setTimeout(r, 100));
     if (alive(pid)) throw new ChatError(`não consegui encerrar o processo ${pid}`);
@@ -1825,6 +1864,12 @@ export class ChatManager {
     const alive = this.opts.isAlive ?? isAlive;
     const live = await this.opts.listLive();
     for (const rec of Object.values(await registry.read())) {
+      // De antes do boot do PC: o processo morreu junto, e os pids dele e do servidor que o abriu já podem ser de outros (por isso vem antes das conferências de pid).
+      if (startedBeforeBoot(rec.startedAt)) {
+        this.log(`${rec.sessionId}: registro de antes do boot do PC (pid ${rec.pid}) tirado, nenhum processo encerrado`);
+        await registry.remove(rec.sessionId, rec.pid);
+        continue;
+      }
       if (rec.server === process.pid) continue;
       if (!alive(rec.pid)) {
         await registry.remove(rec.sessionId, rec.pid);
@@ -1833,21 +1878,27 @@ export class ChatManager {
       if (alive(rec.server)) continue; // outro servidor do Claudio’s Club ainda cuida dele
       const s = live.find((l) => l.pid === rec.pid && l.sessionId === rec.sessionId);
       if (s && s.status !== 'busy') {
-        this.log(`${rec.sessionId}: processo órfão parado (pid ${rec.pid}, ${s.status ?? 'sem status'}) encerrado na subida`);
-        await (this.opts.kill ?? killTree)(rec.pid);
-        await registry.remove(rec.sessionId, rec.pid);
+        const verdict = await this.killVerified(rec.sessionId, { pid: rec.pid, startedAt: rec.startedAt || s.startedAt, key: `${s.pid}:${s.startedAt ?? ''}` });
+        if (verdict === 'unknown') continue;
+        if (verdict === 'killed') {
+          this.log(`${rec.sessionId}: processo órfão parado (pid ${rec.pid}, ${s.status ?? 'sem status'}) encerrado na subida`);
+          await registry.remove(rec.sessionId, rec.pid);
+        }
       }
     }
   }
 
-  private async elsewhere(sessionId: string): Promise<ChatSnapshot['elsewhere']> {
+  private async elsewhere(sessionId: string): Promise<Elsewhere | null> {
     const own = this.ownPids();
-    const live = (await this.opts.listLive()).find((s) => s.sessionId === sessionId && s.alive && !own.has(s.pid));
+    const live = (await this.opts.listLive()).find((s) => s.sessionId === sessionId && s.alive && !own.has(s.pid) && !this.isReusedPid(s) && !startedBeforeBoot(s.startedAt));
     if (!live) return null;
-    // Aberto por um servidor do Claudio’s Club que já morreu: ninguém mais fala com esse processo.
     const rec = (await this.opts.registry?.read())?.[sessionId];
-    const orphan = !!rec && rec.pid === live.pid && rec.server !== process.pid && !(this.opts.isAlive ?? isAlive)(rec.server);
-    return { pid: live.pid, entrypoint: live.entrypoint, status: live.status, orphan };
+    const mine = !!rec && rec.pid === live.pid;
+    if (mine && startedBeforeBoot(rec.startedAt)) return null; // registro de antes do boot: o pid é de outro processo
+    // Aberto por um servidor do Claudio’s Club que já morreu: ninguém mais fala com esse processo.
+    const orphan = mine && rec.server !== process.pid && !(this.opts.isAlive ?? isAlive)(rec.server);
+    // A hora de criação que a conferência compara: a do registro (gravada no spawn) quando há, senão a do arquivo de sessão.
+    return { pid: live.pid, entrypoint: live.entrypoint, status: live.status, orphan, target: { pid: live.pid, startedAt: (mine && rec.startedAt) || live.startedAt, key: `${live.pid}:${live.startedAt ?? ''}` } };
   }
 
   private log(line: string) {
