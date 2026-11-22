@@ -1525,7 +1525,7 @@ export interface Rejection {
 
 export interface TaskDelivery {
   at: string;
-  /** Última mensagem do funcionário, cortada em 1500 caracteres. */
+  /** Última mensagem do funcionário; passando de 2500 caracteres, cortada em fim de linha com uma marca de corte no fim. */
   summary: string;
   /** Caminho relativo do arquivo → por que mudou (texto puro, até 200 caracteres). Ausente sem lista. */
   notes?: Record<string, string>;

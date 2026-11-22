@@ -3,9 +3,29 @@
  * `- \`caminho/relativo\`: por que mudou`. Aqui só se lê esse texto; o que não cabe no formato é descartado.
  */
 
-export const DELIVERY_SUMMARY_MAX = 1500;
+export const DELIVERY_SUMMARY_MAX = 2500;
 export const DELIVERY_NOTE_MAX = 200;
 export const DELIVERY_NOTES_MAX = 50;
+
+/**
+ * O resumo da entrega para guardar e para os avisos: o texto inteiro se cabe em `max`; senão, cortado em fim de linha (sem quebra que sirva, em fim de palavra) com uma marca
+ * visível no fim, que diz quantos caracteres ficaram de fora. A marca cabe dentro de `max`. Quebra ou espaço só serve se deixa pelo menos metade do espaço (uma quebra no começo de
+ * um texto longo não esvazia o resumo); sem nenhum que sirva, o corte é seco. Cortar de novo um texto já cortado não muda nada (a marca está dentro do teto).
+ */
+export function fitDeliverySummary(text: string, max = DELIVERY_SUMMARY_MAX): string {
+  const full = text.trim();
+  if (full.length <= max) return full;
+  const mark = (n: number) => `\n… (entrega cortada: ${n} caracteres a mais)`;
+  const room = Math.max(0, max - mark(full.length).length);
+  const window = full.slice(0, room + 1); // o caractere de `room` é o primeiro a sair: se for a quebra, a linha de antes está inteira
+  let cut = window.lastIndexOf('\n');
+  if (cut < room / 2) cut = window.search(/\s\S*$/);
+  if (cut < room / 2) cut = room;
+  const high = full.charCodeAt(cut - 1);
+  if (cut === room && high >= 0xd800 && high <= 0xdbff) cut -= 1; // não parte um par substituto ao meio
+  const kept = full.slice(0, cut).trimEnd();
+  return kept + mark(full.length - kept.length);
+}
 
 const LINE = /^\s*[-*]\s+`([^`\n]+)`\s*(?::|—|–)\s*(.+)$/;
 
