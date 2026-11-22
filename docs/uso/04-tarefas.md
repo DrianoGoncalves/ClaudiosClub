@@ -93,8 +93,19 @@ Fila grande e você quer o time parado para focar em outro projeto? **Pausar pro
 - **Como aparece**: faixa azul no topo do quadro ("Projeto pausado desde hoje às 14:32" e o que isso faz), selo **Pausado** no cabeçalho da sala no quadro (abaixo do nome) e no painel do projeto, e o botão vira **Retomar projeto** (ícone de play, em azul cheio). O selo também aparece com o projeto sem nenhuma tarefa aberta.
 - **Retomar**: a fila segue na ordem de antes e a rodada começa na hora. O "continue", os despertadores e as rotinas saem no próximo ciclo deles.
 - **Fica gravado**: a pausa sobrevive ao reinício do servidor. Vale para esta máquina (não vai para o repositório) e é do projeto inteiro, não de um funcionário.
-- **Só você**: só o navegador do Club pausa ou retoma. Funcionário e conversa de tarefa recebem recusa (403).
+- **Só você**: só o navegador do Club pausa ou retoma. Funcionário e conversa de tarefa recebem recusa (403). A única exceção é a pausa de versão, abaixo.
 - **Se der erro** (sem conexão com o servidor, projeto que sumiu, falha ao gravar): o Club mostra um aviso no idioma da tela e o estado fica como estava.
+
+### Pausa de versão
+
+Variante com prazo, para montar uma versão sem que entre trabalho novo. No quadro, o controle **Pausa de versão** fica junto de **Pausar projeto**: escolha o prazo e use **Ligar pausa**. O padrão é 30 minutos e o máximo, 120.
+
+- **O que barra**: o mesmo que a pausa comum: nada novo começa (fila, início de tarefa, rotinas, despertadores, troca de motor).
+- **O que deixa terminar**: o turno em andamento, a revisão da entrega e o ajuste de um cartão em **Fazendo**, **Planejando** ou **Revisão**, como numa reprovação.
+- **Saída**: sai sozinha no prazo ou quando **Encerrar pausa** é usado; a fila segue como na retomada da pausa comum. A saída vira um aviso na caixa por 24 horas.
+- **Como aparece**: faixa com "Pausa de versão · faltam N min", quem ligou e a hora em que sai, e selo **Pausa de versão** com o tempo restante.
+- **Quem liga**: você, pelo Club, e o funcionário com a permissão **Pode versionar e fazer deploy** (pede o prazo, de 1 a 120 minutos). Quem encerra: você ou quem ligou; outro funcionário recebe recusa (403).
+- **Com pausa comum ligada**: a pausa de versão é recusada (409) e a comum segue; o mesmo vale para a pausa de versão de outra pessoa. A pausa comum não muda.
 
 ## Plano para aprovar
 
