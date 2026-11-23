@@ -142,6 +142,7 @@ import { boardFilter } from './board';
 import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
 import { AUTONOMY, dropStaffSessions, hasStaffFiles, listProjectStaff, listProjectStaffStrict, readProfile, saveProfile } from './staff/store';
+import type { Worktree } from './staff/worktree';
 import { StateBusyError } from './atomicWrite';
 import { lastRetentionRun, nextRetentionDelay, retentionPreview, runRetentionSweep, setRetentionDeletion, type RetentionDeps } from './retentionSweep';
 import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
@@ -518,7 +519,7 @@ const chats: ChatManager = new ChatManager({
   // Limite do Codex estourado: a hora de voltar vem da leitura fresca dos limites do Codex (só com `codexReview` ligado).
   codexLimits: async () => codexUsage.read((await readConfig()).codexReview, { fresh: true, waitMs: 8_000 }),
   listLive: () => adapter.listLiveSessions(),
-  resolve: (projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult),
+  resolve: (projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult, place) => staff.chatSpawn(projectId, sessionId, staffId, forkFrom, engineOverride, reviewOnly, consult, place),
   // A conversa de consulta de outro projeto terminou o turno: o serviço lê a resposta e a entrega (`consults` é declarado mais abaixo: só é lido na chamada).
   onConsultIdle: (consultId, sessionId, reason) => void consults.onIdle(consultId, sessionId, reason).catch((err) => console.warn('[consulta] fim de turno:', err)),
   rememberChoice: (projectId, staffId, sessionId, choice) => staff.rememberChoice(projectId, staffId, sessionId, choice),
@@ -600,7 +601,7 @@ const readLimitOf = async (engine: 'claude' | 'codex'): Promise<LimitHit | null 
 };
 
 /** Abre uma conversa nova com o funcionário e manda o texto. Sem `force`, confere o consumo antes. Usado pelas tarefas e pelas ações do guia. */
-const sendNewConversation = async (projectId: string, staffId: string, text: string, force: boolean, override?: EngineOverride, reviewOnly = false) => {
+const sendNewConversation = async (projectId: string, staffId: string, text: string, force: boolean, override?: EngineOverride, reviewOnly = false, place?: Worktree) => {
   // Lenta (2 s ou mais), escreve no log quanto levou a trava de consumo e quanto levou abrir a conversa (ver stageTimer.ts).
   const timer = new StageTimer(`abrir conversa de ${staffId}`);
   try {
@@ -609,7 +610,7 @@ const sendNewConversation = async (projectId: string, staffId: string, text: str
     timer.stage('consumo');
     if (!force) await staff.checkUsage(projectId, { staffId, ...(override && { engine: override.engine }) });
     timer.stage('abrir');
-    return await chats.send(projectId, null, staffId, text, undefined, [], [], false, undefined, override, reviewOnly);
+    return await chats.send(projectId, null, staffId, text, undefined, [], [], false, undefined, override, reviewOnly, undefined, place);
   } finally {
     timer.finish();
   }
@@ -1707,6 +1708,13 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     'POST',
     new RegExp(`^/api/projects/${ID}/board-writer$`),
     ({ params: [id], body, fromBrowser }) => tasks.setBoardWriter(id!, body, fromBrowser),
+  ],
+  // Worktree por card (ver server/cardWorktree.ts): `{ cardWorktree }`, LIGADA por padrão. Como a vaga de escrita: ler é livre, gravar só pela tela (403 ao funcionário).
+  ['GET', new RegExp(`^/api/projects/${ID}/board-card-worktree$`), ({ params: [id] }) => tasks.boardCardWorktree(id!)],
+  [
+    'POST',
+    new RegExp(`^/api/projects/${ID}/board-card-worktree$`),
+    ({ params: [id], body, fromBrowser }) => tasks.setBoardCardWorktree(id!, body, fromBrowser),
   ],
   // Pausar o projeto (ver server/projectPause.ts): pausado, nada de execução começa sozinho (fila, ajuste da reprovação, rotinas, despertador, "continue", retomada, troca de motor; a revisão da entrega já feita roda); o que já roda termina
   // o turno, e as suas ações manuais seguem. Ler é livre (`{ paused: { at } | null }`). Pausar e retomar só pelo navegador pareado: o serviço responde 403 a quem não é a tela (o gate já

@@ -26,6 +26,7 @@ import type {
   UsageLimit,
 } from '../../shared/model';
 import { writeAtomic } from '../staff/store';
+import type { Worktree } from '../staff/worktree';
 import { updateGitPolicyAutonomy } from '../staff/gitMcp';
 import { codexHistoryOf } from '../adapters/codex/rollout';
 import { isProjectDir } from '../adapters/claude/paths';
@@ -108,7 +109,8 @@ export interface ChatManagerOptions {
   listLive: () => Promise<LiveSession[]>;
   /** Monta a linha de comando (ficha, autonomia, MCPs) de quem vai conversar. */
   /** `forkFrom`: sessão nova que começa como cópia desta (duplicar a conversa). */
-  resolve: (projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly?: boolean, consult?: ConsultStamp) => Promise<ChatSpawn | null>;
+  /** `place`: a worktree do card, para a conversa NOVA de trabalho abrir nela (ver `TaskService.startNow`); ignorado ao reabrir uma conversa (a pasta gravada vale). */
+  resolve: (projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly?: boolean, consult?: ConsultStamp, place?: Worktree) => Promise<ChatSpawn | null>;
   /** Uma conversa de consulta (server/consult/) terminou um turno, ou saiu: o serviço de consulta lê a resposta e a entrega. */
   onConsultIdle?: (consultId: string, sessionId: string, reason: 'turn' | 'background' | 'exit') => void;
   /**
@@ -336,6 +338,7 @@ type DeliverRest = [
   guard?: () => boolean,
   reviewOnly?: boolean,
   consult?: ConsultStamp,
+  place?: Worktree,
 ];
 
 /** Conversas abertas pelo Claudio’s Club, uma por sessão (= funcionário). */
@@ -678,8 +681,9 @@ export class ChatManager {
     engineOverride?: EngineOverride,
     reviewOnly = false,
     consult?: ConsultStamp,
+    place?: Worktree,
   ): Promise<string> {
-    return this.deliver(projectId, sessionId, staffId, text, priority, images, files, delegated, false, origin, engineOverride, undefined, reviewOnly, consult);
+    return this.deliver(projectId, sessionId, staffId, text, priority, images, files, delegated, false, origin, engineOverride, undefined, reviewOnly, consult, place);
   }
 
   /**
@@ -837,6 +841,7 @@ export class ChatManager {
     guard?: () => boolean,
     reviewOnly = false,
     consult?: ConsultStamp,
+    place?: Worktree,
   ): Promise<string> {
     this.assertOpen();
     // Antes de qualquer mudança de estado (a retomada abaixo, o que `ensure` abre): a conversa aberta de outro projeto não é desta chamada.
@@ -845,7 +850,7 @@ export class ChatManager {
     // síncrona. A pendência e o orçamento só saem quando a mensagem entra (abaixo): se a conversa não abrir, a retomada marcada segue valendo.
     if (!auto && sessionId) this.voidRetry(sessionId);
     if (guard && !guard()) throw new ChatError('a retomada foi cancelada');
-    const chat = await this.ensure(projectId, sessionId, staffId, undefined, engineOverride, reviewOnly, consult);
+    const chat = await this.ensure(projectId, sessionId, staffId, undefined, engineOverride, reviewOnly, consult, place);
     // Qualquer mensagem sua (ou de outro funcionário) na conversa vale mais que o "continue" agendado.
     if (!auto) {
       this.dropRetry(chat.sessionId, 'message'); // conversa nova: o id só existe agora
@@ -1705,7 +1710,7 @@ export class ChatManager {
     };
   }
 
-  private async ensure(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly = false, consult?: ConsultStamp): Promise<ChatProcess> {
+  private async ensure(projectId: string, sessionId: string | null, staffId: string | null, forkFrom?: string, engineOverride?: EngineOverride, reviewOnly = false, consult?: ConsultStamp, place?: Worktree): Promise<ChatProcess> {
     this.assertSameProject(projectId, sessionId);
     const existing = sessionId ? this.chats.get(sessionId) : undefined;
     // Ficha nova só reabre com tudo parado: agents em segundo plano morreriam com o processo.
@@ -1724,7 +1729,7 @@ export class ChatManager {
     }
     // Conversa já aberta no secundário segue nele (continue, respawn, reabrir); o pedido de uma conversa nova vale só para ela.
     const override = sessionId ? this.overrides.get(sessionId) : engineOverride;
-    const spawn = await this.opts.resolve(projectId, sessionId, staffId, forkFrom, override, reviewOnly, consult);
+    const spawn = await this.opts.resolve(projectId, sessionId, staffId, forkFrom, override, reviewOnly, consult, place);
     if (!spawn) throw new ChatError('funcionário ou projeto não encontrado');
     if (override) this.overrides.set(spawn.sessionId, override);
     // Consulta de outro projeto: marcada já, antes de o processo abrir (sem token, sem aprovação, fora da conta de trabalho do funcionário; ver `isConsultSession`).

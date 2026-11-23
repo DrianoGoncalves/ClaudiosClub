@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import type { BoardCommitConfig, BoardConfig, BoardWriterConfig } from '../shared/model';
+import type { BoardCardWorktreeConfig, BoardCommitConfig, BoardConfig, BoardWriterConfig } from '../shared/model';
 import { writeAtomic } from './staff/store';
 
 // Configuração do quadro, por projeto: `<projeto>/.myco/board.json`, ao lado de `tasks.json` e das fichas. Duas coisas moram nele, cada uma com a sua rota e a sua leitura:
@@ -28,6 +28,9 @@ export const BoardCommitInput = z.object({ autoCommit: z.boolean({ message: 'aut
 
 /** O corpo de `POST /api/projects/:id/board-writer`: só `singleWriter`, e nenhum campo a mais. */
 export const BoardWriterInput = z.object({ singleWriter: z.boolean({ message: 'singleWriter: use true ou false' }) }).strict();
+
+/** O corpo de `POST /api/projects/:id/board-card-worktree`: só `cardWorktree`, e nenhum campo a mais. */
+export const BoardCardWorktreeInput = z.object({ cardWorktree: z.boolean({ message: 'cardWorktree: use true ou false' }) }).strict();
 
 /** O arquivo como objeto; ausente, ilegível ou que não é objeto vira vazio (a gravação refaz). */
 async function readRaw(dir: string): Promise<Record<string, unknown>> {
@@ -80,4 +83,13 @@ export async function readBoardWriter(dir: string): Promise<BoardWriterConfig> {
 
 export function writeBoardWriter(dir: string, config: BoardWriterConfig): Promise<void> {
   return patchBoardFile(dir, { singleWriter: config.singleWriter });
+}
+
+/** Worktree por card: o padrão é LIGADA (arquivo ausente, ilegível ou com valor torto liga); só o `false` gravado desliga. */
+export async function readBoardCardWorktree(dir: string): Promise<BoardCardWorktreeConfig> {
+  return { cardWorktree: (await readRaw(dir)).cardWorktree !== false };
+}
+
+export function writeBoardCardWorktree(dir: string, config: BoardCardWorktreeConfig): Promise<void> {
+  return patchBoardFile(dir, { cardWorktree: config.cardWorktree });
 }

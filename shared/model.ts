@@ -708,6 +708,14 @@ export interface BoardWriterConfig {
 }
 
 /**
+ * Worktree por card (também em `<projeto>/.myco/board.json`, na chave `cardWorktree`; LIGADA por padrão: só o `false` gravado desliga): cada card que edita código trabalha numa cópia git
+ * só dele e o Club a junta no principal na aprovação (ver server/cardWorktree.ts). Ligada, a vaga de escrita (`BoardWriterConfig`) não se aplica aos cards que ganham worktree. Só liga e desliga pela tela.
+ */
+export interface BoardCardWorktreeConfig {
+  cardWorktree: boolean;
+}
+
+/**
  * Política de fluxo do projeto (fonte única de quanto do fluxo é automático): `mode` diz de onde vêm os portões. 'auto', 'supervised' e 'manual' são presets (`FLOW_PRESETS`); 'custom' é o que
  * sobra quando o dono mexe num portão sozinho (ou o valor de um projeto que ainda não tem política, ver `FlowPolicy.source`).
  */
@@ -1007,8 +1015,10 @@ export interface Task {
    * Onde o código DESTE card é escrito, gravado quando a conversa de trabalho abre (ver `TaskService.startNow`): `project` = o checkout principal; `worktree` = a do funcionário,
    * no `branch`. A mescla e a aprovação decidem por isto, não pela worktree que o funcionário tem agora (ela pode ter sido criada depois, para outro card). Ausente (card
    * anterior a este campo) = vale a worktree atual dele (ver `locateTaskCode`). Só o servidor grava: nenhuma edição (tela ou API) aceita este campo.
+   * Worktree DO CARD (ver server/cardWorktree.ts): `path` é a pasta dela e `card: true`; `port` a porta de servidor de tela reservada ao card; `base` o HEAD de onde partiu. Card que ficou no principal
+   * porque a worktree não deu (sem git, sem commit, disco, falha): `why` diz o motivo. `cleanup`: a limpeza da pasta (card junto ou cancelado) não terminou e é refeita.
    */
-  codeAt?: { where: 'worktree' | 'project'; branch: string | null };
+  codeAt?: { where: 'worktree' | 'project'; branch: string | null; path?: string; card?: true; port?: number; base?: string | null; why?: string; cleanup?: { reason: string; since: string } };
   /** Último teste rodado pelo Claudio’s Club para esta tarefa. */
   tests?: TestRun | null;
   /** Segunda opinião do Codex sobre o diff (Markdown), quando você pediu. */

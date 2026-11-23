@@ -2,11 +2,13 @@ import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, CHECKPOINTS_MAX, COMMIT_LIST_MAX, COMMIT_REDOS_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type BoardWriterConfig, type CancelRequest,type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, type TaskPlanWait, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
+import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, CHECKPOINTS_MAX, COMMIT_LIST_MAX, COMMIT_REDOS_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type BoardCardWorktreeConfig, BoardWriterConfig, type CancelRequest,type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, type TaskPlanWait, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
 import { kanbanProgress } from '../shared/kanbanProgress';
 import { commitMessage, commitPaths, commitTaskFiles, leftText, summarize, type SharedHold, type SlotFound } from './autoCommit';
 import { leftoversPreview, planLeftovers, withCommitLeft } from './commitLeft';
-import { BoardCommitInput, BoardConfigInput, BoardWriterInput, DEFAULT_BOARD_CONFIG, readBoardCommit, readBoardConfig, readBoardWriter, writeBoardCommit, writeBoardConfig, writeBoardWriter } from './boardConfig';
+import { BoardCardWorktreeInput, BoardCommitInput, BoardConfigInput, BoardWriterInput, DEFAULT_BOARD_CONFIG, readBoardCardWorktree, readBoardCommit, readBoardConfig, readBoardWriter, writeBoardCardWorktree, writeBoardCommit, writeBoardConfig, writeBoardWriter } from './boardConfig';
+import { allocateCardPort, cardWorktreeAvailable, cardWorktreeFor, ensureCardWorktree, removeCardWorktree, type CardWorktree, type FreeBytes } from './cardWorktree';
+import type { Worktree } from './staff/worktree';
 import { pathKey, readOwnerWrites } from './ownerEdits';
 import { changedSince, readSnapshots, takeSnapshot, updateSnapshots } from './slotSnapshot';
 import { codePath, type CodeEdit } from './chat/codeEdits';
@@ -396,7 +398,9 @@ export interface TaskServiceDeps {
    * Abre uma conversa nova com o funcionário e manda a mensagem; devolve a sessão. `override`: o motor secundário (ver `Switch`).
    * `reviewOnly`: conversa de revisão, que não edita arquivos do projeto (só a memória dele, pelo MCP); ver `requestReview`.
    */
-  send: (projectId: string, staffId: string, text: string, force: boolean, override?: EngineOverride, reviewOnly?: boolean) => Promise<string>;
+  send: (projectId: string, staffId: string, text: string, force: boolean, override?: EngineOverride, reviewOnly?: boolean, place?: Worktree) => Promise<string>;
+  /** O espaço livre no disco do projeto, para decidir se cabe uma worktree de card (os testes trocam); sem ele, o de verdade. */
+  cardFree?: FreeBytes;
   /** Avisa um funcionário (o gestor que pediu a tarefa): na conversa `sessionId`, ou na mais recente dele. */
   notify?: (projectId: string, staffId: string, text: string, sessionId?: string | null) => Promise<void>;
   /** A conversa do funcionário, neste projeto, que está no meio de um turno agora (quem chamou a API), se for uma só. */
@@ -1007,6 +1011,20 @@ export class TaskService {
     if (cur?.status === 'cancelled' && patch.status !== undefined) throw new TaskConflictError('a tarefa foi cancelada: reabra antes de mudar de coluna');
     // Portão de "pronto" da política de fluxo (ver `flowOf`): com a conclusão reservada ao dono, só o pedido dele pela tela leva a tarefa a "pronto".
     if (patch.status === 'done' && cur?.status !== 'done' && !byOwner) await this.needOwnerToFinish(projectId);
+    // Código na worktree do card ainda fora do principal: "pronto" só com ele junto. Quem mexe a coluna (o "Aprovar entrega" do dono, a API) passa pela junção; se ela não puder rodar, o card NÃO vai a "pronto"
+    // e quem pediu recebe o motivo (409 em `CodeError`/`TaskConflictError`). Com a junção feita (`finishMerge` leva a "pronto"), o resto do patch segue sobre o card já pronto.
+    if (patch.status === 'done' && cur && dir && cur.status !== 'done' && cur.status !== 'cancelled' && cur.codeAt?.card && !cur.merged) {
+      const place = await locateTaskCode(dir, cur, true).catch(() => null);
+      // Sem a pasta não há como conferir nem juntar o código: fail closed.
+      if (!place) throw new TaskConflictError(`a worktree do card não existe mais: não dá para conferir nem juntar o código (o branch \`${cur.codeAt.branch ?? '?'}\`, se ainda existe, o guarda). Recupere-o ou cancele o card`);
+      // Card sem nenhuma mudança de código (análise, pesquisa): não há o que juntar, vai a "pronto" e a worktree sai.
+      if (!(await this.cardEmpty(dir, cur, place))) {
+        const merged = await this.merge(projectId, taskId, false, byOwner);
+        if (merged?.status !== 'done') return merged;
+        const { status: _status, ...rest } = patch;
+        return Object.keys(rest).length ? this.update(projectId, taskId, rest, byOwner) : merged;
+      }
+    }
     if (cur)
       await this.checkReviewer(
         projectId,
@@ -1046,6 +1064,8 @@ export class TaskService {
     if (out?.status === 'done' && before?.status !== 'done') {
       await this.wakeDependents(projectId, taskId);
       await this.settleRequester(projectId, out, 'foi para pronto', null);
+      // Card sem mudança de código que foi a "pronto" (ver o portão acima): a worktree dele já não serve.
+      if (out.codeAt?.card && !out.merged) void this.cleanupCard(projectId, out, false);
     }
     // "A fazer" com responsável começa na hora (ou entra na fila dele), como "Começar". O kick acima não pega este cartão (sem queuedAt).
     const becameTodo = out?.status === 'todo' && (before?.status !== 'todo' || before?.staffId !== out.staffId);
@@ -1180,6 +1200,8 @@ export class TaskService {
     // A conversa de trabalho e também a de revisão e a de deploy (se houver): nenhuma continua por conta de uma tarefa que não entrega.
     // Card automático: a conversa de trabalho é a sua conversa direta, e cancelar o registro não a interrompe.
     for (const sessionId of new Set([before.autoCreated ? null : before.sessionId, before.review?.sessionId, before.deploy?.sessionId])) if (sessionId) await this.silenceSession(sessionId);
+    // Cancelado não junta: a worktree do card e o branch saem, com o que havia nela guardado em `refs/myco/cancelled/<id>` (um cancelamento por engano não perde o trabalho).
+    if (out.codeAt?.card) await this.cleanupCard(projectId, out, true);
     const { reason } = opts;
     await this.logEnd(projectId, before, 'cancelled', reason ? `tarefa cancelada: ${reason}` : 'tarefa cancelada');
     // O que o dono decidiu, no mesmo gesto, sobre quem esperava por ela. Antes do aviso abaixo, que só conta quem ficou esperando.
@@ -2122,6 +2144,36 @@ export class TaskService {
   }
 
   /**
+   * A worktree DO CARD para a partida de `task` (ver cardWorktree.ts): cria (ou reencontra, em retomada e reinício) a cópia git só dele, do HEAD do principal de agora, com a porta de servidor de tela
+   * reservada. Devolve a pasta (`wt`: a conversa nova abre nela), a `port`, o `text` da partida e a `note` do histórico. Fica no principal, como antes, e devolve o `why` (visível no card e no texto): projeto sem
+   * git, sem commit, sem disco ou com falha ao criar. Fica no principal SEM motivo quando o dono desligou a opção, na troca de motor no meio do turno, no card automático e no card que já começou fora de
+   * worktree de card (não se muda o lugar do código no meio do trabalho). Nunca lança: o início do card não depende dela.
+   */
+  private async openCardWorktree(dir: string, task: Task, sw: boolean): Promise<{ wt?: CardWorktree; port?: number; why?: string; text?: string; note?: string }> {
+    if (sw || task.autoCreated || (task.codeAt && !task.codeAt.card)) return {};
+    if (!(await readBoardCardWorktree(dir).catch(() => ({ cardWorktree: true }))).cardWorktree) return {};
+    const left = (why: string) => ({ why, note: `worktree do card não usada: ${why}; o card edita no checkout principal`, text: `Aviso: este card não ganhou uma worktree própria (${why}): você edita no checkout principal, como antes.` });
+    const free = await cardWorktreeAvailable(dir, undefined, this.deps.cardFree);
+    if (!free.ok) return left(free.reason);
+    try {
+      const wt = await ensureCardWorktree(dir, task.id);
+      const taken = (await readTasks(dir)).filter((t) => t.id !== task.id).map((t) => t.codeAt?.port).filter((p): p is number => typeof p === 'number');
+      const port = task.codeAt?.port ?? (await allocateCardPort(task.id, taken)) ?? undefined;
+      const rel = path.relative(dir, wt.path).split(path.sep).join('/');
+      const text = [
+        `Você trabalha numa cópia git só deste card: \`${wt.path}\`, no branch \`${wt.branch}\`${wt.base ? ` (saiu do HEAD ${wt.base.slice(0, 7)} do principal)` : ''}. Edite só dentro dela, não troque de branch e não mexa na pasta principal do projeto. Faça commits pequenos quando uma parte ficar pronta; o Claudio’s Club junta o branch no principal quando a entrega for aprovada.`,
+        wt.linked.length ? `${wt.linked.map((n) => `\`${n}\``).join(' e ')} ${wt.linked.length > 1 ? 'apontam' : 'aponta'} para ${wt.linked.length > 1 ? 'os do' : 'o do'} projeto (sem cópia): não instale nem remova pacotes aqui; se o card precisar de dependência nova, avise quem pediu.` : '',
+        port ? `Servidor de tela ou de desenvolvimento deste card: use a porta ${port} (reservada só para ele). Não use a 4848 (o Claudio’s Club) nem a porta de outro card.` : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+      return { wt, port, text, note: `worktree do card em ${rel} (branch ${wt.branch}${wt.base ? `, base ${wt.base.slice(0, 7)}` : ''}${port ? `, porta ${port}` : ''})` };
+    } catch (err) {
+      return left(oneLine(err instanceof Error ? err.message : String(err), 200));
+    }
+  }
+
+  /**
    * `run`: a partida abre uma tentativa nova no registro (ver taskRuns.ts), com o que a abriu. Sem ele (troca no meio do turno),
    * a tentativa segue a que estava aberta. `timer`: o cronômetro do pedido, quando há um (ver `start`).
    */
@@ -2139,7 +2191,10 @@ export class TaskService {
     // O card começa na base de agora: a worktree dele (sempre a mesma) pode ter ficado atrás do principal. A troca de motor no meio do turno segue na que já está em uso.
     // Nunca bloqueia o início: o que não avançou vira nota no card e aviso na conversa (ver `syncWorktree`).
     const base = !sw && profile.worktree ? await (this.deps.syncWorktree ?? syncWorktree)(dir, profile.id).catch(() => null) : null;
-    const baseText = base ? baseWarning(base) : null;
+    // A worktree DO CARD (ver `openCardWorktree`): criada agora, do HEAD do principal, e a conversa nova abre nela. A troca de motor no meio do turno abre a nova conversa na mesma pasta.
+    const card = await this.openCardWorktree(dir, task, !!sw);
+    const place: Worktree | undefined = card.wt ? { path: card.wt.path, branch: card.wt.branch } : sw && task.codeAt?.card && task.codeAt.path ? { path: task.codeAt.path, branch: task.codeAt.branch ?? '' } : undefined;
+    const baseText = [card.text, base ? baseWarning(base) : null].filter(Boolean).join('\n\n') || null;
     const text =
       s?.text ??
       [
@@ -2160,9 +2215,11 @@ export class TaskService {
     timer?.stage('conversa');
     try {
       // Sem override, o envio é o de sempre (4 argumentos): só a troca carrega o motor secundário.
-      sessionId = s?.override
-        ? await this.deps.send(projectId, profile.id, text, force, s.override)
-        : await this.deps.send(projectId, profile.id, text, force);
+      sessionId = place
+        ? await this.deps.send(projectId, profile.id, text, force, s?.override, undefined, place)
+        : s?.override
+          ? await this.deps.send(projectId, profile.id, text, force, s.override)
+          : await this.deps.send(projectId, profile.id, text, force);
     } catch (err) {
       if (!s) throw err;
       // Reiniciando: não foi o motor secundário que falhou; quem chamou põe na fila (no meio do turno, ver `sw`).
@@ -2190,11 +2247,16 @@ export class TaskService {
     // Tentativa nova só na partida (a troca no meio do turno segue a que estava aberta). A conversa já abriu: o registro vai agora.
     timer?.stage('registro');
     const runId = run && !sw ? await this.logStart(projectId, task, run.trigger ?? 'manual', run.skills ?? (await this.skillsOf(projectId, profile))) : undefined;
-    const branch = await this.deps.branchFor(dir, profile).catch(() => null);
-    // Onde o código do card é escrito, gravado agora: a conversa já abriu, então a worktree dele (se a ficha pede uma) existe. A mescla e a aprovação decidem por isto (ver `locateTaskCode`),
-    // não pela worktree que ele tiver depois. A troca de motor no meio do turno é do mesmo card: não regrava.
-    const codeAt = sw ? null : await locateCode(dir, profile.id, !!profile.worktree).catch(() => null);
-    const baseLine = base ? baseNote(base) : '';
+    const branch = card.wt?.branch ?? (await this.deps.branchFor(dir, profile).catch(() => null));
+    // Onde o código do card é escrito, gravado agora: a conversa já abriu, então a worktree dele (a do card, ou a da ficha se ela pede uma) existe. A mescla e a aprovação decidem por isto (ver `locateTaskCode`),
+    // não pela worktree que ele tiver depois. A troca de motor no meio do turno é do mesmo card: não regrava. Card que não ganhou worktree por um motivo (`card.why`) grava o motivo.
+    const located = sw || card.wt ? null : await locateCode(dir, profile.id, !!profile.worktree).catch(() => null);
+    const codeAt: Task['codeAt'] | null = sw
+      ? null
+      : card.wt
+        ? { where: 'worktree', branch: card.wt.branch, path: card.wt.path, card: true, base: card.wt.base, ...(card.port && { port: card.port }) }
+        : located && { where: located.where, branch: located.branch, ...(card.why && { why: card.why }) };
+    const baseLine = [card.note, base ? baseNote(base) : ''].filter(Boolean).join('; ');
     this.bySession.set(sessionId, { projectId, taskId, role: 'work' });
     timer?.stage('gravar');
     return this.change(projectId, taskId, (t) => {
@@ -2207,7 +2269,7 @@ export class TaskService {
           ...t,
           sessionId,
           branch: branch ?? t.branch,
-          ...(codeAt && { codeAt: { where: codeAt.where, branch: codeAt.branch } }),
+          ...(codeAt && { codeAt }),
           queuedAt: null,
           queuedForce: false,
           resourceWait: null,
@@ -2721,6 +2783,7 @@ export class TaskService {
       await this.safely(() => this.reapplyVerdicts(projectId, tasks));
       // A mescla automática da aprovação que ficou sem mescla (reinício, pausa, backoff vencido); roda em segundo plano, o tick não espera os testes (ver `retryMerges`).
       await this.safely(() => this.retryMerges(projectId, tasks, now));
+      await this.safely(() => this.retryCleanups(projectId, tasks));
       await this.safely(() => this.resumeReviews(projectId, tasks));
       if (!paused) await this.safely(() => this.releaseBackground(projectId, tasks, now));
       await this.safely(() => this.releaseOutcomes(projectId, tasks, now));
@@ -3773,6 +3836,46 @@ export class TaskService {
     return this.change(projectId, taskId, (t) => noted({ ...t, secondOpinion: { at, text } }, 'segunda opinião do Codex'));
   }
 
+  /** A worktree do card não tem nada para juntar: nenhum commit além da base e nenhum arquivo mexido (card de análise, de pesquisa). Sem poder ler, devolve falso (não se dispensa a junção sem ter olhado). */
+  private async cardEmpty(dir: string, task: Task, place: CodePlace): Promise<boolean> {
+    if (!task.codeAt?.card) return false;
+    const code = await readCode(dir, place, deliveredAt(task)).catch(() => null);
+    return !!code && !code.files.length && !code.commits.length && !code.uncommitted;
+  }
+
+  /**
+   * Apaga a worktree e o branch do card (ver `removeCardWorktree`): junto ao principal (`discard` falso) ou cancelado (`discard`: o que está nela vai para `refs/myco/cancelled/<id>` antes). Pasta em uso
+   * (Windows) ou git ocupado não derruba nada: o motivo fica em `codeAt.cleanup` e a limpeza é refeita no tick (`retryCleanups`); sucesso limpa a marca. Nunca lança.
+   */
+  private async cleanupCard(projectId: string, task: Task, discard: boolean): Promise<void> {
+    try {
+      const dir = await this.deps.projectPath(projectId);
+      if (!dir || !task.codeAt?.card) return;
+      const result = await removeCardWorktree(dir, task.id, { discard });
+      const ok = result.removed;
+      await this.change(projectId, task.id, (t) => {
+        if (!t.codeAt?.card) return t;
+        if (ok) return t.codeAt.cleanup ? { ...t, codeAt: { ...t.codeAt, cleanup: undefined } } : t;
+        const prior = t.codeAt.cleanup;
+        const next = { ...t, codeAt: { ...t.codeAt, cleanup: { reason: result.reason ?? 'não deu para apagar', since: prior?.since ?? new Date().toISOString() } } };
+        return prior ? next : noted(next, `a worktree do card ficou por apagar: ${oneLine(result.reason ?? '', 200)} (o Claudio’s Club tenta de novo)`);
+      });
+    } catch {
+      // a limpeza é só higiene: o card já está decidido
+    }
+  }
+
+  /** O tick refaz a limpeza do que ficou pendente (pasta em uso na hora): cards `done`/`cancelled` com `codeAt.cleanup`. Uma de cada vez, sem esperar. */
+  private async retryCleanups(projectId: string, tasks: Task[]): Promise<void> {
+    for (const t of tasks) {
+      if (!t.codeAt?.cleanup || !isClosed(t)) continue;
+      const key = `cleanup:${projectId}:${t.id}`;
+      if (this.inFlight.has(key)) continue;
+      this.inFlight.add(key);
+      void this.cleanupCard(projectId, t, t.status === 'cancelled').finally(() => this.inFlight.delete(key));
+    }
+  }
+
   /** Mescla a worktree no projeto (testes verdes, ou sem testes confirmado). A tarefa vai para "pronto". */
   async merge(projectId: string, taskId: string, skipTests = false, byOwner = false): Promise<Task | null> {
     const { dir, task, profile } = await this.context(projectId, taskId);
@@ -3810,6 +3913,8 @@ export class TaskService {
     if (cancelledMeanwhile) throw new TaskConflictError(`a tarefa foi cancelada durante a mescla: o código já entrou em ${m.base} (${m.sha}), mas ela continua cancelada`);
     await this.wakeDependents(projectId, taskId);
     if (out?.status === 'done') await this.settleRequester(projectId, out, `mesclada em ${m.base}, foi para pronto`, null);
+    // O código entrou no principal: a worktree do card e o branch (todo no principal) saem.
+    if (out?.codeAt?.card) await this.cleanupCard(projectId, out, false);
     return out;
   }
 
@@ -4403,6 +4508,22 @@ export class TaskService {
     return input;
   }
 
+  /** Worktree por card neste projeto (ver cardWorktree.ts); padrão LIGADA. Null se o projeto não existe. */
+  async boardCardWorktree(projectId: string): Promise<BoardCardWorktreeConfig | null> {
+    const dir = await this.deps.projectPath(projectId);
+    return dir ? readBoardCardWorktree(dir) : null;
+  }
+
+  /** Liga ou desliga a worktree por card: `{ cardWorktree }`. Só a tela chama (403 antes de qualquer leitura). Vale para as partidas daqui para a frente; quem já começou segue onde está. 400 se o corpo é inválido. */
+  async setBoardCardWorktree(projectId: string, body: unknown, fromBrowser: boolean): Promise<BoardCardWorktreeConfig | null> {
+    if (!fromBrowser) throw new TaskForbiddenError('a worktree por card só é ligada ou desligada pelo Claudio’s Club');
+    const dir = await this.deps.projectPath(projectId);
+    if (!dir) return null;
+    const input = parseOr(BoardCardWorktreeInput, body);
+    await writeBoardCardWorktree(dir, input);
+    return input;
+  }
+
   /** Um escritor por vez no checkout principal deste projeto (ver boardConfig.ts e `takeSlot`); null se o projeto não existe. */
   async boardWriter(projectId: string): Promise<BoardWriterConfig | null> {
     const dir = await this.deps.projectPath(projectId);
@@ -4440,13 +4561,21 @@ export class TaskService {
     return out;
   }
 
+  /** O card vai ganhar (ou já tem) a worktree dele na partida? Mesma regra de `openCardWorktree` (opção ligada, git, commit e disco), sem criar nada. */
+  private async cardWorktreeWill(dir: string, task: Task): Promise<boolean> {
+    if (task.codeAt?.card) return true;
+    if (task.autoCreated || task.codeAt) return false;
+    if (!(await readBoardCardWorktree(dir).catch(() => ({ cardWorktree: true }))).cardWorktree) return false;
+    return (await cardWorktreeAvailable(dir, undefined, this.deps.cardFree).catch(() => ({ ok: false as const }))).ok;
+  }
+
   /** A leitura da vaga para quem decide fora da fila dela (a aprovação do plano, ver `decidePlan`): null com a opção desligada ou sem precisar dela (worktree própria, card automático). */
   private async slotView(projectId: string, task: Task): Promise<{ dir: string; ownCopy: Set<string>; committing: Set<string>; free: boolean } | null> {
     if (!task.staffId || task.autoCreated) return null;
     const dir = await this.deps.projectPath(projectId);
     if (!dir || !(await readBoardWriter(dir)).singleWriter) return null;
     const profile = await this.deps.readProfile(projectId, task.staffId).catch(() => null);
-    if (!profile || profile.worktree) return null;
+    if (!profile || profile.worktree || (await this.cardWorktreeWill(dir, task))) return null;
     const committing = this.committingIds(projectId);
     const board = await readTasks(dir);
     const ownCopy = await this.ownCopyStaff(projectId, board, committing);
@@ -4466,6 +4595,8 @@ export class TaskService {
     if (!profile || profile.worktree || task.autoCreated || startsPlanning(task, profile)) return none;
     const dir = await this.deps.projectPath(projectId);
     if (!dir || !(await readBoardWriter(dir)).singleWriter) return none;
+    // Com a worktree por card ligada e possível, o card vai escrever na cópia dele: a vaga do principal não se aplica.
+    if (await this.cardWorktreeWill(dir, task)) return none;
     let free!: () => void;
     const mine = new Promise<void>((resolve) => (free = resolve));
     const prev = this.slotQueues.get(projectId) ?? Promise.resolve();
@@ -4653,7 +4784,8 @@ export class TaskService {
     // esvaziaria, e o commit levaria o trabalho dela. A que já parou e teve o arquivo commitado depois da parada não barra.
     const shared = new Map<string, SharedHold[]>();
     for (const o of all) {
-      if (o.id === task.id || isClosed(o)) continue;
+      // Card em worktree de card edita a cópia dele: o que ele mexeu não está no arquivo do principal.
+      if (o.id === task.id || isClosed(o) || o.codeAt?.card) continue;
       const hold: SharedHold = { id: o.id, stoppedAt: stoppedWorkingAt(o) };
       for (const key of new Set((o.changedFiles ?? []).map(pathKey))) shared.set(key, [...(shared.get(key) ?? []), hold]);
     }
@@ -4940,13 +5072,14 @@ export class TaskService {
     if (!me.staffId || !first.length) return;
     const sharing = new Set<string>();
     for (const id of new Set([me.staffId, ...first.map((p) => p.other.staffId!)])) if ((await this.deps.readProfile(projectId, id))?.worktree !== true) sharing.add(id);
-    if (!sharing.has(me.staffId)) return;
+    // Cada card em worktree de card tem a cópia dele do arquivo: não divide o checkout com ninguém.
+    if (!sharing.has(me.staffId) || me.codeAt?.card) return;
     const touched = new Set<string>();
     // Os pares saem do quadro lido DENTRO da gravação (uma por vez por projeto): duas edições juntas veem uma à outra e o par nasce uma vez só.
     await this.mutate(projectId, (tasks) => {
       const cur = tasks.find((t) => t.id === me.id);
       if (!cur || isClosed(cur)) return tasks;
-      const pairs = overlapPairs(tasks, cur, files.filter((f) => cur.changedFiles?.includes(f))).filter((p) => sharing.has(p.other.staffId!));
+      const pairs = overlapPairs(tasks, cur, files.filter((f) => cur.changedFiles?.includes(f))).filter((p) => sharing.has(p.other.staffId!) && !p.other.codeAt?.card);
       if (!pairs.length) return tasks;
       const at = new Date().toISOString();
       return tasks.map((t) => {
@@ -5134,7 +5267,8 @@ export class TaskService {
     const place = task.staffId ? await locateTaskCode(dir, task, !!profile?.worktree).catch(() => null) : null;
     const head = `[MyCo] Tarefa “${titleOf(task)}” (id ${task.id}): `;
     const owner = (await this.flowOf(projectId)).completion === 'owner';
-    const toMerge = place?.where === 'worktree' && !task.merged;
+    // Card de worktree sem nenhuma mudança de código não tem o que juntar (ver `cardEmpty`): a aprovação o leva direto a "pronto".
+    const toMerge = place?.where === 'worktree' && !task.merged && !(await this.cardEmpty(dir, task, place));
     // Conclusão por IA escolhida pelo dono e o código numa worktree por mesclar: a aprovação pede a mescla automática (ver `mergeSoon`) na mesma gravação da nota, sem esperar o clique.
     const auto = toMerge && !owner && (await this.autoMergeOn(projectId));
     if (toMerge || owner) {
@@ -5169,6 +5303,7 @@ export class TaskService {
     if (!wrote || done?.status !== 'done') return;
     await this.wakeDependents(projectId, taskId);
     await this.settleRequester(projectId, done, 'foi para pronto', selfReview(task) ? `${head}aprovada na sua revisão, foi para pronto.` : null);
+    if (done.codeAt?.card && !done.merged) await this.cleanupCard(projectId, done, false);
   }
 
   /**
@@ -7382,7 +7517,8 @@ const holdingSince = (t: Task): string => [...t.history].reverse().find((h) => h
  * não terminou (`committing`): o commit leva o que ele alterou, e o próximo card não começa a editar por cima antes.
  */
 function holdsWrite(t: Task, tasks: Task[], ownCopy: ReadonlySet<string>, committing: ReadonlySet<string>): boolean {
-  if (!t.staffId || ownCopy.has(t.staffId) || t.autoCreated) return false;
+  // Card com worktree própria (a do card, ver cardWorktree.ts) escreve na cópia dele, não no checkout principal: não ocupa a vaga.
+  if (!t.staffId || ownCopy.has(t.staffId) || t.autoCreated || t.codeAt?.card) return false;
   if (t.status === 'done') return committing.has(t.id);
   return !!t.sessionId && WRITES.includes(t.status) && !parked(t, tasks) && !planPhase(t);
 }
@@ -7962,7 +8098,14 @@ const stoppedMerge = (t: Task) => (t.status === 'review' && t.autoMerge?.stopped
  * outro card): mesclá-la levaria o trabalho pela metade do outro card. `worktree`: a dele, mesmo que a ficha tenha deixado de pedir uma. Card sem `codeAt` (anterior a ele) segue
  * a worktree atual do funcionário, como `locateCode`.
  */
-function locateTaskCode(projectPath: string, task: Pick<Task, 'staffId' | 'codeAt'>, ownWorktree: boolean): Promise<CodePlace | null> {
+async function locateTaskCode(projectPath: string, task: Pick<Task, 'staffId' | 'codeAt'>, ownWorktree: boolean): Promise<CodePlace | null> {
+  // A worktree DO CARD (ver cardWorktree.ts): a pasta gravada no card, desde que seja uma das do Club (dentro de `.claude/worktrees/`) e ainda exista. Sumiu: null (nada a ler nem a mesclar).
+  if (task.codeAt?.card && task.codeAt.path) {
+    const root = path.resolve(projectPath, '.claude', 'worktrees') + path.sep;
+    const dir = path.resolve(task.codeAt.path);
+    const alive = dir.startsWith(root) && (await fs.stat(path.join(dir, '.git')).then((s) => s.isFile(), () => false));
+    return alive ? { where: 'worktree', path: dir, branch: task.codeAt.branch } : null;
+  }
   if (task.codeAt?.where === 'project') return locateCode(projectPath, null, false);
   return locateCode(projectPath, task.staffId, task.codeAt?.where === 'worktree' ? true : ownWorktree);
 }
