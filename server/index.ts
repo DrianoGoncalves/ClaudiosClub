@@ -62,7 +62,7 @@ import { createMcpLibrary } from './staff/mcpLibrary';
 import { migrateMcpsAtBoot as runMcpMigration } from './staff/mcpMigration';
 import { MCP_TOOLS_FILE } from './staff/mcpTools';
 import { CodexPasswordPolicy } from './codexPasswordPolicy';
-import { withInboxWait } from './inboxWait';
+import { managerPlanItemIds, withInboxWait } from './inboxWait';
 import { commitInboxAlerts, commitWaitingCount, resolveBy, withCommitLeft } from './commitLeft';
 import { blockedInboxItem, codexSandboxInboxItem, commitInboxItem, deniedInboxItem, followUpInboxItem, heavyGuardOffInboxItem, notStartedInboxItem, permissionInboxItem, questionInboxItem, secretInboxItem, stuckInboxItem, taskQuestionInboxItem, versionPauseEndId, versionPauseItems, withoutSecretHint } from './inboxItems';
 import { InboxResolver, resolvedLast, settleWithin } from './inboxResolved';
@@ -527,6 +527,8 @@ const chats: ChatManager = new ChatManager({
   copiesFile: path.join(MYCO_HOME, 'run', 'copies.json'),
   onPlanApproved: (sid, plan) => void tasks.onPlanApproved(sid, plan).catch((err) => console.error('[tarefas] plano aprovado:', sid, err)),
   onPlanRejected: (sid) => void tasks.onPlanRejected(sid).catch(() => {}),
+  onPlan: (sid, rid, plan) => void tasks.onPlan(sid, rid, plan).catch((err) => console.error('[tarefas] plano ao gestor:', sid, err)),
+  onPlanDenied: (sid, rid) => void tasks.onPlanDenied(sid, rid).catch(() => {}),
   onAsk: (sid, rid, qs) => void tasks.onAsk(sid, rid, qs).catch(() => {}),
   onAskAnswered: (sid, rid, by, summary) => void tasks.onAskAnswered(sid, rid, by, summary).catch(() => {}),
   onSent: (sid) => {
@@ -647,6 +649,9 @@ const tasks = new TaskService({
   // A pergunta por opções ainda aberta na conversa de trabalho, e a resposta do gestor (vai à conversa do funcionário).
   hasAsk: (sid, rid) => chats.hasPending(sid, rid),
   answerAsk: (sid, rid, answers, by) => chats.answer(sid, rid, true, { answers, by: by ?? 'manager' }),
+  // O cartão de plano (ExitPlanMode) ainda pendente na conversa de trabalho, e a decisão de quem pediu o card (aprovar executa como a autonomia dada; recusar leva o motivo, sem recusar de vez).
+  hasPlanCard: (sid, rid) => chats.hasPending(sid, rid),
+  answerPlan: (sid, rid, d) => chats.answer(sid, rid, d.allow, { ...(d.message && { message: d.message }), ...(d.executeAs && { executeAs: d.executeAs }), by: 'manager' }),
   dismissQuestion: (sid) => void chats.dismissQuestion(sid),
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
   isWorking: (projectId, staffId, except) => chats.staffWorking(projectId, staffId, except),
@@ -3107,10 +3112,17 @@ async function getInbox(): Promise<InboxItem[]> {
 
   const out: InboxItem[] = [];
   const liveById = new Map(live.map((l) => [l.sessionId, l]));
+  // As tarefas do quadro (lidas antes dos pedidos pendentes: o plano que o gestor decide não é item seu).
+  // Com a permissão que a conversa espera de você (`withPermission`): a tarefa parada nela segura os dependentes na caixa, como as outras paradas.
+  // Com o estado do aviso de commit parcial (`commitLeft`, ver server/commitLeft.ts).
+  const boardProjects = projects.filter((x) => x.exists && !x.worktreeOf);
+  const boards = await Promise.all(boardProjects.map(async (p) => ({ p, tasks: await withCommitLeft((await readTasks(p.path)).map((t) => tasks.withPermission(t)), p.id, p.path) })));
+  // Cartão de plano (ExitPlanMode) de card pedido por gestor: o plano é decisão dele (ver `TaskService.onPlan`), então não vira item da sua caixa; o cartão segue na conversa e você ainda pode decidir por ele.
+  const toManager = new Set(boards.flatMap((b) => [...managerPlanItemIds(b.tasks)]));
   for (const { sessionId, pending, error } of chats.attention()) {
     const w = where(sessionId, liveById.get(sessionId));
     if (hidden(w)) continue;
-    for (const p of pending) out.push(permissionInboxItem(p, w));
+    for (const p of pending) if (!toManager.has(`perm:${p.id}`)) out.push(permissionInboxItem(p, w));
     if (error) out.push({ id: `error:${sessionId}`, kind: 'error', ...w, summary: error, at: null });
   }
   // Terminou o turno perguntando algo no texto (sem pedido de permissão): espera até você responder.
@@ -3120,10 +3132,6 @@ async function getInbox(): Promise<InboxItem[]> {
   }
   // Tarefa que espera outra empacada (ver stuckDependencies em server/tasks.ts) e cartão esquecido em "a fazer" (ver notStartedTasks): calculados
   // na leitura, nada gravado; somem ao destravar, começar, cancelar, editar ou apagar. Só projetos do quadro e não arquivados (como os outros avisos).
-  const boardProjects = projects.filter((x) => x.exists && !x.worktreeOf);
-  // Com a permissão que a conversa espera de você (`withPermission`): a tarefa parada nela segura os dependentes na caixa, como as outras paradas.
-  // Com o estado do aviso de commit parcial (`commitLeft`, ver server/commitLeft.ts).
-  const boards = await Promise.all(boardProjects.map(async (p) => ({ p, tasks: await withCommitLeft((await readTasks(p.path)).map((t) => tasks.withPermission(t)), p.id, p.path) })));
   // Turno que parou no teto (ferramentas ou minutos): some quando você manda mensagem nova na conversa; com a tarefa da conversa já encerrada, segue na lista como resolvido.
   for (const c of chats.turnCaps()) {
     const w = where(c.sessionId, liveById.get(c.sessionId));

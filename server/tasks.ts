@@ -520,6 +520,10 @@ export interface TaskServiceDeps {
   hasAsk?: (sessionId: string, requestId: string) => boolean;
   /** Responde a pergunta aberta na conversa de trabalho; false se ela já não estava aberta. `by`: quem respondeu (o gestor, se omitido). */
   answerAsk?: (sessionId: string, requestId: string, answers: Record<string, string | string[]>, by?: 'manager' | 'user') => boolean;
+  /** O cartão de plano (ExitPlanMode) ainda está pendente na conversa de trabalho? (o processo está vivo esperando; reiniciar o servidor o perde) */
+  hasPlanCard?: (sessionId: string, requestId: string) => boolean;
+  /** Responde o cartão de plano pendente na conversa de trabalho: `allow` aprova (e passa a executar como `executeAs`), senão nega com `message`; false se ele já não estava pendente. */
+  answerPlan?: (sessionId: string, requestId: string, decision: { allow: boolean; message?: string; executeAs?: Autonomy }) => boolean;
   /** Tira da caixa a pergunta "para você" desta conversa: a sua resposta ficou guardada (`hold` com `byOwner`), então ela já não pede nada a você. */
   dismissQuestion?: (sessionId: string) => void;
   /** Onde escrever o tempo das etapas do começo de uma tarefa quando ele demora (padrão: console.warn). */
@@ -733,7 +737,8 @@ export class TaskService {
    * Só tarefa em "fazendo" ou "planejando" com conversa, fora o card automático (a conversa é sua, você está nela). Erro ao ler: sai sem.
    */
   withPermission(t: Task, now = Date.now()): Task {
-    if (!this.deps.permissionOf || !t.sessionId || t.autoCreated || !OCCUPIED.includes(t.status)) return t;
+    // O cartão de plano que o gestor decide (ver `planToManager`) é o plano dele, não permissão sua: sem o selo e sem o aviso "espera o usuário".
+    if (!this.deps.permissionOf || !t.sessionId || t.autoCreated || !OCCUPIED.includes(t.status) || planToManager(t)) return t;
     try {
       const wait = this.deps.permissionOf(t.sessionId);
       if (!wait || !Number.isFinite(Date.parse(wait.since))) return t;
@@ -2689,6 +2694,7 @@ export class TaskService {
       await this.safely(() => this.retryCancelRequests(projectId, tasks, now));
       await this.safely(() => this.retryFollowUps(projectId, tasks, now));
       await this.safely(() => this.retryNoCode(projectId, tasks, now));
+      await this.safely(() => this.reconcilePlanCards(projectId, tasks));
       await this.safely(() => this.retryPlanWait(projectId, tasks, now));
       await this.safely(() => this.retryEngineStops(projectId, tasks, now));
       await this.safely(() => this.warnPermissions(projectId, tasks, now));
@@ -3578,7 +3584,7 @@ export class TaskService {
           // A conversa voltou a trabalhar: o card em "a fazer" ou em Aguardar vai para fazendo, senão ela roda por fora do status (`occupant` não vê o
           // funcionário ocupado e a retomada de queda, que olha "fazendo", não pega). Sai da fila: a conversa já tem a mensagem.
           // Card que esperava a decisão do plano (já sem prender o funcionário, ver `parked`): a mensagem o põe a trabalhar de novo, como a mensagem direta na conversa (ver `onSent`); sem isto ele seguiria "planejando" e a fila o veria parado.
-          if (!t.autoCreated && waitsPlan(t)) return moved(next, 'doing', 'auto', 'ajuste guardado enviado: o plano deixou de esperar a decisão');
+          if (!t.autoCreated && waitsPlanIdle(t)) return moved(next, 'doing', 'auto', 'ajuste guardado enviado: o plano deixou de esperar a decisão');
           if (t.autoCreated || (t.status !== 'todo' && t.status !== 'waiting')) return noted(next, 'ajuste guardado enviado');
           return moved({ ...next, queuedAt: null, queuedForce: false, resourceWait: null, startRetry: undefined, unqueued: undefined }, 'doing', 'auto', 'ajuste guardado enviado: a conversa voltou a trabalhar, a tarefa volta para fazendo');
         });
@@ -3977,6 +3983,56 @@ export class TaskService {
   }
 
   /**
+   * O cartão de plano (ExitPlanMode) ficou pendente na conversa de trabalho de um card pedido por gestor (ficha `plan`, Claude, card em "planejando"): o plano é decisão de quem pediu, não do dono. O
+   * card ganha `planWait { to: 'manager', card }` com o plano, o gestor recebe o aviso como no plano entregue no fim do turno (`deliverPlanWait`: o tick refaz; perdido em 30 min, vai ao dono, que decide pelo
+   * cartão da conversa) e o cartão deixa de ser item da caixa do dono (ver `planToManager`). O card segue ocupando o funcionário (o processo vive esperando o cartão, ver `parked`). `decidePlan` responde o
+   * cartão; decidir pelo cartão da conversa (`onPlanApproved`, `onPlanRejected`, `onPlanDenied`) encerra a espera. Card do dono, sem gestor na equipe, em outra fase ou de conversa Codex (que não tem o
+   * cartão): nada muda, e o item 'plan' da caixa é o de sempre. True se o plano foi ao gestor.
+   */
+  async onPlan(sessionId: string, requestId: string, plan: string): Promise<boolean> {
+    const where = await this.where(sessionId);
+    if (where?.role !== 'work' || where.auto) return false;
+    const { projectId, taskId } = where;
+    const first = await this.fresh(projectId, taskId);
+    if (!first?.requestedBy || !first.staffId || first.autoCreated || first.status !== 'planning' || first.sessionId !== sessionId) return false;
+    if (!this.deps.answerPlan || (await this.workEngine(projectId, first, sessionId)) !== 'claude') return false;
+    if (!(await this.deps.readProfile(projectId, first.requestedBy).catch(() => null))) return false;
+    const text = plan.trim().slice(0, PLAN_TEXT_MAX) || NO_PLAN_TEXT;
+    const at = new Date().toISOString();
+    let waiting: Task | null = null;
+    await this.change(projectId, taskId, (t) => {
+      // O mesmo cartão duas vezes (reabriu a conversa): a espera que já existe vale.
+      if (t.status !== 'planning' || t.sessionId !== sessionId || t.planWait?.card === requestId) return t;
+      const planWait: TaskPlanWait = { since: at, text, to: 'manager', card: requestId, notifyRetry: { attempts: 0, nextAt: at, firstAt: at } };
+      return (waiting = noted({ ...t, planWait }, 'entregou o plano pelo cartão da conversa: espera quem pediu aprovar ou recusar'));
+    });
+    const marked = waiting as Task | null;
+    if (!marked) return false;
+    this.warnDependents(projectId, taskId, stuckReason(marked));
+    await this.deliverPlanWait(projectId, taskId);
+    return true;
+  }
+
+  /** O plano foi negado na conversa sem ser recusado de vez (o funcionário ajusta e apresenta de novo): a espera de decisão daquele cartão acaba. Outro cartão, ou nenhuma espera: nada. */
+  async onPlanDenied(sessionId: string, requestId: string): Promise<void> {
+    await this.onSession(sessionId, 'work', (t) => (t.planWait?.card === requestId ? noted({ ...t, planWait: undefined }, 'plano negado na conversa: o funcionário ajusta e apresenta de novo') : null));
+  }
+
+  /**
+   * O tick: o plano esperando pelo cartão (`planWait.card`) cujo cartão já não está pendente na conversa (o servidor reiniciou, ou a conversa fechou: o pedido pendente morre com o processo) perde o `card`.
+   * A espera continua, agora como a do plano entregue no fim do turno (decisão por mensagem) e sem prender o funcionário; sem isto o card ficaria sem nenhum caminho de decisão (item da caixa, resposta ao cartão).
+   */
+  private async reconcilePlanCards(projectId: string, tasks: Task[]): Promise<void> {
+    const has = this.deps.hasPlanCard;
+    if (!has) return;
+    for (const t of tasks) {
+      const card = t.planWait?.card;
+      if (!card || !waitsPlan(t) || !t.sessionId || has(t.sessionId, card)) continue;
+      await this.change(projectId, t.id, (x) => (x.planWait?.card === card ? noted({ ...x, planWait: { ...x.planWait, card: undefined } }, 'o cartão do plano não está mais pendente na conversa: a decisão passa a ir como mensagem') : x));
+    }
+  }
+
+  /**
    * Pergunta com opções (AskUserQuestion) na conversa de trabalho de uma tarefa pedida por gestor: vai para ele, numa conversa
    * nova dele, e a tarefa segue. True se foi ao gestor; false, a pergunta fica com você, como antes.
    */
@@ -4233,7 +4289,7 @@ export class TaskService {
       if (markedNoCode(t)) return noted({ ...t, noCode: undefined }, 'devolvida ao responsável: a marca "sem código" saiu');
       // Mensagem na conversa do card que espera decisão de plano (a de quem pediu, ou a sua): o card volta a "fazendo" e o plano não fica gravado (só a aprovação, em `decidePlan`, o grava); se
       // o responsável entregar o plano de novo, ele volta a esperar. Sem isto, em "planejando" o Claude nunca entregaria (ver `endsInDelivery`).
-      if (waitsPlan(t)) return moved(t, 'doing', 'auto', 'mensagem na conversa: o plano deixou de esperar a decisão');
+      if (waitsPlanIdle(t)) return moved(t, 'doing', 'auto', 'mensagem na conversa: o plano deixou de esperar a decisão');
       return t.awaitingSubtasks ? { ...t, awaitingSubtasks: undefined } : null;
     });
   }
@@ -5989,6 +6045,8 @@ export class TaskService {
     const who = fromBrowser ? 'o usuário' : ((await this.deps.readProfile(projectId, me!).catch(() => null))?.name ?? me!);
     const approve = input.decision === 'approve';
     const since = first.planWait!.since;
+    // O plano veio pelo cartão ExitPlanMode (`planWait.card`) e ele segue pendente na conversa: a decisão é a resposta dele (a conversa viva continua nela mesma). Sem o cartão (o processo caiu), vai como mensagem, abaixo.
+    if (first.planWait!.card && first.sessionId && this.deps.hasPlanCard?.(first.sessionId, first.planWait!.card)) return this.decidePlanCard(projectId, first, approve, input, who);
     const workerName = (await this.deps.readProfile(projectId, first.staffId).catch(() => null))?.name ?? 'o responsável';
     const textOf = (title: string): string =>
       approve
@@ -6042,6 +6100,49 @@ export class TaskService {
       if (out.staffId) void this.kick(projectId, out.staffId);
     } else if (out.sessionId) await this.giveWorker(projectId, out, out.sessionId, textOf(out.title), approve ? 'a aprovação do plano' : 'a recusa do plano');
     return (await this.fresh(projectId, taskId)) ?? out;
+  }
+
+  /**
+   * A decisão do plano que veio pelo cartão ExitPlanMode da conversa (`planWait.card`, ver `onPlan`), com o cartão ainda pendente: quem decide o responde, e o processo vivo segue na mesma conversa. `approve`:
+   * aprova e passa a executar com a autonomia de execução da ficha (o fim do modo plano cai em "pede tudo", como o "Aprovar e executar" da tela); o card vai a "fazendo" com o plano gravado, e a observação
+   * (`note`) vai depois, como mensagem. `reject`: nega o cartão com o motivo, sem recusar de vez (o funcionário ajusta e apresenta de novo, e o gestor decide outra vez); a espera acaba e o card segue em
+   * "planejando". A resposta ao cartão e o estado do card saem na vez do funcionário; quem decidiu antes (o cartão da conversa, ou o outro caminho) faz desta chamada um 409. O card segue ocupando o funcionário
+   * (o processo está esperando), então não há fila nem vaga de escrita aqui: a aprovação pelo cartão da ficha `plan` não passa pelo portão da vaga, como a feita pela tela.
+   */
+  private async decidePlanCard(projectId: string, first: Task, approve: boolean, input: { reason?: string; note?: string }, who: string): Promise<Task | null> {
+    const staffId = first.staffId!;
+    const sessionId = first.sessionId!;
+    const card = first.planWait!.card!;
+    const since = first.planWait!.since;
+    const profile = await this.deps.readProfile(projectId, staffId).catch(() => null);
+    const stale = () => new TaskConflictError('o plano já foi decidido ou o card mudou: leia de novo');
+    const out = await this.lockedWithDeadline(
+      projectId,
+      staffId,
+      async (gate) => {
+        // Na vez dele, de novo: decidido pelo cartão da conversa (ou por outro caminho), cancelado ou com o cartão já fora da conversa enquanto esperava.
+        const now = await this.fresh(projectId, first.id);
+        if (!now || !waitsPlan(now) || now.planWait!.since !== since || now.planWait!.card !== card || !this.deps.hasPlanCard?.(sessionId, card)) throw stale();
+        // O ponto sem volta: daqui a decisão chega ao cartão, e o prazo que passar já não a desfaz (ver `lockedWithDeadline`).
+        gate.commit();
+        const answer = approve
+          ? { allow: true, executeAs: executeAutonomyOf(profile?.autonomy ?? 'plan') }
+          : { allow: false, message: `O plano foi recusado por ${who}. Motivo: ${input.reason}\n\nAjuste o plano e apresente-o de novo: quem pediu decide outra vez. Ainda sem editar arquivos.` };
+        if (!this.deps.answerPlan?.(sessionId, card, answer)) throw stale();
+        return this.change(projectId, first.id, (t) => {
+          // A resposta ao cartão já pode ter movido o card (`onPlanApproved`): só o que ainda espera esta decisão muda.
+          if (!waitsPlan(t) || t.planWait!.since !== since) return t;
+          return approve
+            ? moved({ ...t, plan: t.planWait!.text, planWait: undefined }, 'doing', 'auto', `plano aprovado por ${who}`)
+            : noted({ ...t, planWait: undefined }, `plano recusado por ${who}: ${untrustedLine(input.reason, 200)}`);
+        });
+      },
+      { op: `plano ${first.id}`, refused: 'a decisão do plano NÃO foi gravada', deadlineMs: this.lockDeadline() },
+    );
+    if (!out) return null;
+    // A observação de quem aprovou não cabe na resposta do cartão: vai como mensagem à conversa (guardada, se ele estiver em outro card).
+    if (approve && input.note && out.sessionId) await this.giveWorker(projectId, out, out.sessionId, [`[Tarefa "${out.title}"]`, `Observação de ${who} ao aprovar o plano: ${input.note}`].join('\n\n'), 'a observação da aprovação do plano');
+    return (await this.fresh(projectId, first.id)) ?? out;
   }
 
   /**
@@ -6787,8 +6888,9 @@ export function ownAlerts(tasks: Task[], now = Date.now()): OwnAlert[] {
     if (state.humanAction === 'answer' || state.humanAction === 'review' || state.humanAction === 'resend') out.push({ task, state: { ...state, humanAction: state.humanAction } });
     // Card sem código: o gestor que pediu recebe o aviso na conversa dele; é do usuário quando foi ele que pediu ou o aviso ao gestor se perdeu (`TaskNoCode.to`).
     else if (state.humanAction === 'decide' && markedNoCode(task) && task.noCode!.to === 'owner') out.push({ task, state: { ...state, humanAction: 'decide' } });
-    // Plano pendente: o gestor que pediu o recebe na conversa dele; é do usuário quando foi ele que pediu ou o aviso ao gestor se perdeu (`TaskPlanWait.to`).
-    else if (state.humanAction === 'decide' && waitsPlan(task) && task.planWait!.to === 'owner') out.push({ task, state: { ...state, humanAction: 'decide' } });
+    // Plano pendente: o gestor que pediu o recebe na conversa dele; é do usuário quando foi ele que pediu ou o aviso ao gestor se perdeu (`TaskPlanWait.to`). Com o cartão ExitPlanMode pendente
+    // (`planWait.card`) o item da caixa é o próprio cartão (`permissionInboxItem`, kind 'plan'): um só pedido, sem o item de parada junto.
+    else if (state.humanAction === 'decide' && waitsPlan(task) && task.planWait!.to === 'owner' && !task.planWait!.card) out.push({ task, state: { ...state, humanAction: 'decide' } });
     // Espera a aprovação do dono (política de fluxo): só ele destrava, então tem item próprio.
     else if (state.humanAction === 'decide' && (ownerGateOf(task) || stoppedMerge(task))) out.push({ task, state: { ...state, humanAction: 'decide' } });
     // A dúvida "a caminho do gestor" também tem humanAction null: só a espera do limite entra (é a mesma razão que `stuckState` deu).
@@ -7033,16 +7135,22 @@ export function releasesStaff(t: Task): boolean {
 /**
  * Parada sem prender o funcionário: espera a sua resposta (`releasesStaff`), guarda a resposta da dúvida que chegou com ele em outra tarefa
  * (`HeldMessage.doubt`; sem isso a própria pausada viraria a ocupante), espera as subtarefas que ela delegou (`waitsOnSubtasks`), terminou sem editar código e espera quem pediu
- * decidir (`markedNoCode`) ou entregou o plano e espera quem pediu aprová-lo (`waitsPlan`: o turno acabou, a conversa está parada; aprovado, o card volta na vez dele, ver `decidePlan`).
- * O ajuste comum não conta: a conversa dela pode estar com o turno rodando. O cartão de plano da ficha `plan` (ExitPlanMode) NÃO é parada: o processo está vivo esperando o cartão.
+ * decidir (`markedNoCode`) ou entregou o plano e espera quem pediu aprová-lo (`waitsPlanIdle`: o turno acabou, a conversa está parada; aprovado, o card volta na vez dele, ver `decidePlan`).
+ * O ajuste comum não conta: a conversa dela pode estar com o turno rodando. O cartão de plano da ficha `plan` (ExitPlanMode, `planWait.card`) NÃO é parada: o processo está vivo esperando o cartão.
  */
-const parked = (t: Task, all: Task[]): boolean => releasesStaff(t) || !!t.held?.some((m) => m.doubt) || waitsOnSubtasks(t, all) || markedNoCode(t) || waitsPlan(t);
+const parked = (t: Task, all: Task[]): boolean => releasesStaff(t) || !!t.held?.some((m) => m.doubt) || waitsOnSubtasks(t, all) || markedNoCode(t) || waitsPlanIdle(t);
 
 /** O fim de turno de `t` o deixou marcado "sem código" (ver `holdNoCode`)? Só vale em "fazendo": em outra coluna a marca já saiu (`moved`). */
 const markedNoCode = (t: Task): boolean => !!t.noCode && t.status === 'doing';
 
 /** O plano de `t` espera a decisão de quem pediu (ver `holdPlan`)? Só vale em "planejando": em outra coluna a marca já saiu (`moved`). */
 const waitsPlan = (t: Task): boolean => !!t.planWait && t.status === 'planning';
+
+/** O plano que espera decisão é o fim de turno (sem cartão ExitPlanMode pendente: ver `TaskPlanWait.card`)? A conversa está parada, então não prende o funcionário (`parked`). */
+const waitsPlanIdle = (t: Task): boolean => waitsPlan(t) && !t.planWait!.card;
+
+/** O cartão de plano (ExitPlanMode) da conversa é decisão do gestor que pediu o card: não é item nem selo da caixa do dono, nem permissão que espera o dono (ver `TaskService.onPlan`). */
+export const planToManager = (t: Task): boolean => waitsPlan(t) && !!t.planWait!.card && t.planWait!.to === 'manager';
 
 /** Sem acento nem maiúscula, para casar as frases do pedido de plano. */
 const flat = (text: string): string => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();

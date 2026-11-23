@@ -1312,6 +1312,12 @@ export interface TaskPlanWait {
   notifyRetry?: RetryState;
   /** Quando o aviso ao gestor foi dado como perdido e o plano passou a `to: 'owner'` (ISO). */
   escalatedAt?: string;
+  /**
+   * O plano veio pelo cartão ExitPlanMode da conversa (ficha `plan`, Claude; ver `TaskService.onPlan`): o id do pedido pendente (`requestId`). O processo está vivo esperando o cartão,
+   * então o card segue ocupando o funcionário, e quem decide (a rota `/plan`) responde o cartão. Decidir pelo cartão da conversa também encerra esta espera. Ausente: o plano é o fim de turno
+   * (ficha que edita) e a decisão vai como mensagem.
+   */
+  card?: string;
 }
 
 /** A parada do card por erro do motor (`Task.engineStop`). `why`/`engine`/`error` são os do `TurnCapHit` `engine` que o originou. */

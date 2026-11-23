@@ -1,6 +1,6 @@
 import { isClosed, type ChatItem, type InboxItem, type InboxWait, type InboxWaitKind, type Task } from '../shared/model';
 import { blockedInboxItem, permissionInboxItem, stuckInboxItem, taskQuestionInboxItem, type Place } from './inboxItems';
-import { ownAlerts, stuckDependencies } from './tasks';
+import { ownAlerts, planToManager, stuckDependencies } from './tasks';
 
 // `Task.inboxWait` (só leitura, nada gravado): quais cards estão parados esperando alguém agir num item da caixa de entrada. Parte dos itens que a caixa já monta (server/inboxItems.ts) e decide,
 // por tipo, se o item TRAVA o card ou só avisa. A caixa (`getInbox`) e a listagem usam as mesmas regras de parada (`ownAlerts`, `stuckDependencies`), então o selo some junto com o item.
@@ -32,6 +32,8 @@ function verdictOf(item: InboxItem, task: Task): Verdict | null {
       if (s?.humanAction === 'review') return { kind: 'review', by: 'owner' };
       if (s?.humanAction === 'resend') return { kind: 'resend', by: 'owner' };
       if (s?.humanAction === 'decide' && s.noCode) return { kind: 'noCode', by: 'owner' };
+      // O plano que o card entregou e o usuário decide (card pedido por ele, ou o aviso ao gestor se perdeu): é o `planWait` do item de parada. O do gestor não chega aqui (sem item).
+      if (s?.humanAction === 'decide' && s.planWait) return { kind: 'plan', by: 'owner' };
       return null; // `humanAction` null: espera do limite da ficha, que baixa sozinho
     }
     case 'blocked': {
@@ -103,6 +105,14 @@ export function inboxWaits(items: InboxItem[], tasks: Task[]): Map<string, Inbox
 }
 
 /**
+ * Os ids dos itens `plan` da caixa (um por cartão ExitPlanMode pendente, ver `permissionInboxItem`) que são decisão do gestor que pediu o card (`planToManager`): ficam fora da caixa do dono e do selo
+ * `Task.inboxWait`. O cartão segue na conversa, e o dono ainda pode decidir por ele. Plano do dono, ou do gestor que não recebeu (escalado), mantém o item.
+ */
+export function managerPlanItemIds(tasks: Task[]): Set<string> {
+  return new Set(tasks.filter(planToManager).map((t) => `perm:p:${t.planWait!.card}`));
+}
+
+/**
  * Os itens da caixa que se referem a cards de `tasks` (o mesmo que `getInbox` monta para esses tipos: dúvida escalada ou parada própria, dependência empacada, plano e permissão pendentes
  * na conversa). Sem nome de projeto nem de funcionário: só o que `inboxWaits` lê. `tasks` precisa vir da listagem (com `permissionWait`, que entra na regra de parada).
  */
@@ -111,7 +121,8 @@ export function taskInboxItems(tasks: Task[], pending: PendingChats, projectId: 
   const out: InboxItem[] = [];
   for (const a of ownAlerts(tasks, now)) out.push(a.state.humanAction === 'answer' ? taskQuestionInboxItem(a, w) : stuckInboxItem(a, w));
   for (const s of stuckDependencies(tasks, now)) out.push(blockedInboxItem(s, w));
-  for (const { sessionId, pending: cards } of pending) for (const p of cards) out.push(permissionInboxItem(p, { ...w, sessionId }));
+  const toManager = managerPlanItemIds(tasks);
+  for (const { sessionId, pending: cards } of pending) for (const p of cards) if (!toManager.has(`perm:${p.id}`)) out.push(permissionInboxItem(p, { ...w, sessionId }));
   return out;
 }
 

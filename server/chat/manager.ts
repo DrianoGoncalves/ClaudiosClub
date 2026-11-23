@@ -156,6 +156,10 @@ export interface ChatManagerOptions {
   onPlanApproved?: (sessionId: string, plan: string) => void;
   /** Você recusou o plano de uma conversa (a tarefa dela sai da fila e vai para Aguardar). */
   onPlanRejected?: (sessionId: string) => void;
+  /** Um plano (ExitPlanMode) ficou pendente numa conversa: o card da tarefa o leva a quem pediu, se foi um gestor (ver `TaskService.onPlan`). */
+  onPlan?: (sessionId: string, requestId: string, plan: string) => void;
+  /** O plano foi negado sem ser recusado de vez (o funcionário ajusta e apresenta de novo): a espera de decisão do card acaba. */
+  onPlanDenied?: (sessionId: string, requestId: string) => void;
   /** Uma pergunta só de escolhas (AskUserQuestion) espera resposta numa conversa (a dúvida da tarefa dela vai ao gestor). */
   onAsk?: (sessionId: string, requestId: string, questions: NonNullable<TaskQuestion['questions']>) => void;
   /** Uma pergunta (AskUserQuestion) foi respondida, recusada ou pulada: `by` diz quem fechou, `summary` é o resumo para a tarefa. */
@@ -1115,6 +1119,7 @@ export class ChatManager {
     }
     if (allow && plan !== undefined) this.opts.onPlanApproved?.(sessionId, plan);
     if (rejectPlan) this.opts.onPlanRejected?.(sessionId);
+    else if (!allow && plan !== undefined) this.opts.onPlanDenied?.(sessionId, requestId);
     if (asked) this.opts.onAskAnswered?.(sessionId, requestId, opts.by ?? 'user', askSummary(asked, allow, opts.answers));
     return true;
   }
@@ -1770,6 +1775,8 @@ export class ChatManager {
       turnCaps: this.opts.turnCaps,
       onTurnCap: (hit) => this.turnCapped(spawn.sessionId, hit),
       onAsk: (requestId, questions) => this.opts.onAsk?.(spawn.sessionId, requestId, questions),
+      // O Codex não tem ExitPlanMode (a sandbox decide): o gancho só dispara no Claude, e `onPlan` confere o motor da conversa de novo.
+      onPlan: (requestId, plan) => this.opts.onPlan?.(spawn.sessionId, requestId, plan),
       // Quem ela é para a API: o mesmo token em toda execução da conversa (o Codex abre uma por mensagem), regerado se o servidor reiniciou.
       // Consulta de outro projeto não recebe token: sem ele a conversa não alcança nenhuma rota (chat/send, tarefa, contratação, nova consulta). Um salto só.
       mycoToken: spawn.consult ? undefined : this.opts.tokens?.issue({ staffId, projectId, sessionId: spawn.sessionId, engine: codex ? 'codex' : 'claude' }),
