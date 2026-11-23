@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CodexProcess } from '../server/chat/codexProcess';
 import { TaskService } from '../server/tasks';
 import type { Engine, StaffProfile, TestRun } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // t-3f52ea: a fila do funcionário não anda enquanto a entrega dele espera (testes na fila da suíte, aviso ao gestor), e o aviso atrasado do fim do turno anterior levava à revisão
 // um card cujo ajuste guardado acabara de ir. Aqui: (1) a entrega solta a vez dele depois do commit e do resumo, (2) o aviso atrasado do turno anterior não entrega nem retém o card
@@ -17,9 +18,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-delivq-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const PAST = '2020-01-01T00:00:00';
 const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe', env: { ...process.env, GIT_AUTHOR_DATE: PAST, GIT_COMMITTER_DATE: PAST } }).toString();

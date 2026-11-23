@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadedMark, pendingChanges, pendingRestartCheck } from '../server/pendingRestart';
+import { removeTempSync } from './support/tmp';
 
 // "Mudanças pendentes" (GET /api/server): o código no disco está à frente do que está no ar?
 
@@ -42,7 +43,7 @@ beforeEach(() => {
   write('dist/client/assets/a.js', '', built);
   write('dist/client/index.html', '<script src="/assets/a.js"></script>', built);
 });
-afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+afterEach(() => removeTempSync(root));
 
 const check = () => pendingChanges({ root, mark: loadedMark(f('dist/server.mjs'), Date.now()) });
 

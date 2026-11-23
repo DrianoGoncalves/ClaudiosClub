@@ -43,12 +43,35 @@ export function resourceWaitText(wait: Wait, now: number, holder?: SlotHolder | 
 /** A dica do selo e a frase que fecha o aviso do detalhe: o que a espera é e como ignorá-la. */
 export const resourceWaitHint = (holder?: SlotHolder | null): string => t(holder ? 'tasks.slotWaitHint' : 'tasks.resourceWaitHint');
 
-/** Selo discreto do cartão (mesma família do "na fila"): quebra linha em vez de cortar, o motivo é o que importa. */
-export function ResourceWaitBadge({ wait, now, warm, holder }: { wait?: Task['resourceWait']; now: number; warm?: boolean; holder?: SlotHolder | null }) {
+/**
+ * Selo discreto do cartão (mesma família do "na fila"): quebra linha em vez de cortar, o motivo é o que importa. Com `onOpen` e o card que ocupa na lista, o selo leva o link "Abrir t-xxxx"
+ * para ele. O cartão é um `<button>`, então o link é um `span role="link"` (botão dentro de botão é HTML inválido); o clique e Enter/Espaço não chegam ao cartão.
+ */
+export function ResourceWaitBadge({ wait, now, warm, holder, onOpen }: { wait?: Task['resourceWait']; now: number; warm?: boolean; holder?: SlotHolder | null; onOpen?: (id: string) => void }) {
   if (!wait) return null;
+  const open = holder && holder.title !== null && onOpen ? () => onOpen(holder.id) : null;
   return (
     <span className={`task-queue task-resource${waitClass(warm)} small`} title={resourceWaitHint(holder)}>
       {resourceWaitText(wait, now, holder)}
+      {open && holder && (
+        <span
+          role="link"
+          tabIndex={0}
+          className="task-slot-open"
+          onClick={(e) => {
+            e.stopPropagation();
+            open();
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            e.stopPropagation();
+            open();
+          }}
+        >
+          {t('tasks.slotWaitOpen', { id: holder.id })}
+        </span>
+      )}
     </span>
   );
 }

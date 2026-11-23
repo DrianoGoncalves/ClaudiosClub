@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ChatManager } from '../server/chat/manager';
 import { TaskService } from '../server/tasks';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // O veredito de um revisor que roda no Codex é lido (t-e2a019, achado na t-6270da): o `TurnWatcher` só vê o status das sessões do Claude, então o fim
 // de turno do Codex (`turn.completed` → `onIdle('turn')`) é o único aviso. No Claude o vigia já chama `onTurnDone`: o veredito entra uma vez só por turno.
@@ -15,9 +16,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-review-codex-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const noted = (t: { history: Array<{ note?: string }> }, re: RegExp) => t.history.filter((h) => re.test(h.note ?? '')).length;

@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { FTP_MCP_NAME, type Autonomy, type StaffProfile } from '../shared/model';
 import { buildClaudeArgs, type FichaContext } from '../server/staff/ficha';
 import { chromeLevel, codexMcpAccess, mcpAccessOfInput, mcpOffDenyRules, mcpServerKey, mergeMcpAccess, readMcpAccess } from '../server/staff/mcpAccess';
@@ -10,6 +10,7 @@ import { StaffInputSchema } from '../server/staff/store';
 import { SSH_READ_TOOLS } from '../server/staff/sshMcp';
 import { codexChromeMcpArgs, codexSshMcpArgs, CHROME_MCP_TOOLS } from '../server/chat/codexArgs';
 import { rememberRules } from '../server/chat/process';
+import { removeTemp } from './support/tmp';
 
 // store.ts e launch.ts leem MYCO_HOME: pasta temporária, para não usar o ~/.myco de quem roda os testes.
 const home = await vi.hoisted(async () => {
@@ -19,6 +20,7 @@ const home = await vi.hoisted(async () => {
   process.env.MYCO_HOME = dir;
   return dir;
 });
+afterAll(() => removeTemp(home));
 
 const profile = (over: Partial<StaffProfile> = {}): StaffProfile => ({
   id: 'ana-1a2b',

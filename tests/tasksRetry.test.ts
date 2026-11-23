@@ -8,6 +8,7 @@ import { ESCALATE_AFTER_MS, HELD_MAX_FAILS, PermanentError, RETRY_STEPS_MIN, fai
 import { ownAlerts, readTasks, stuckDependencies, stuckReason, stuckState, TaskConflictError, TaskError, TaskForbiddenError, TaskService } from '../server/tasks';
 import { UsageStopError } from '../server/usageStop';
 import type { InboxItem, StaffProfile, Task, TaskQuestion } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Linha de produção sem gargalo (t-76d427, plano da t-5daa14): retry da dúvida ao gestor e da revisão automática, dúvida escalada na
 // caixa e respondível pelo dono, ajuste guardado que não chega, aviso retido e a regra única de "parado" (`stuckState`).
@@ -16,9 +17,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-retry-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const MIN = 60_000;
 /** Daqui a `min` minutos (o relógio do `tick`; o resto do código marca a hora real). */

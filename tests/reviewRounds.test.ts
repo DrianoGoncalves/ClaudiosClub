@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { TaskService } from '../server/tasks';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Cada rodada de revisão julga a entrega de agora (t-6270da, caso t-b80e90): a tarefa volta a "revisão" com a revisão da rodada anterior ainda gravada
 // (veredito, doneAt, reaskAt) e a conversa velha do revisor ainda viva, enquanto os testes da entrega rodam e o pedido novo não saiu. Nessa janela o
@@ -13,9 +14,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-rounds-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const MIN = 60_000;
 const later = (min: number) => new Date(Date.now() + min * MIN);

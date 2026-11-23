@@ -125,6 +125,8 @@ const StaffInputObject = z.object({
   // Ausente = sem secundário; `null` no PATCH tira (como o retrato). Regras cruzadas: `assertFallbackRules`.
   fallback: FallbackSchema.nullable().optional(),
   canHire: z.boolean().default(false),
+  // "Pode versionar e fazer deploy": liga e encerra a pausa de versão pela API. Só você liga (tela); contratado por funcionário nasce sem (ver `StaffService.hire`).
+  canRelease: z.boolean().default(false),
   playbook: z.enum(PLAYBOOKS).nullable().default(null),
   worktree: z.boolean().default(false),
   servers: z.array(z.string().regex(/^[\w.-]{1,60}$/, 'servidor inválido')).max(30).default([]),

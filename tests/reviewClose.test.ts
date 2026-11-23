@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ChatManager } from '../server/chat/manager';
 import { TaskService } from '../server/tasks';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // A conversa de revisão é de um tiro só (t-dd474c): com o veredito gravado, o processo dela fecha pelo caminho seguro da t-073009 (sem virar erro
 // "saiu com código 1") em vez de ficar vivo até o reap. Parada: fecha na hora; trabalhando: ao fim do turno. Nunca com re-pedido marcado nem a conversa
@@ -17,9 +18,7 @@ let n = 0;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-review-close-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const MIN = 60_000;
 const later = (min: number) => new Date(Date.now() + min * MIN);

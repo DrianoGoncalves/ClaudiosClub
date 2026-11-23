@@ -15,12 +15,11 @@ import {
 import { renderFicha, type FichaContext } from '../server/staff/ficha';
 import { planSkills } from '../server/skillAccess';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Tudo em pastas temporárias, com a conta e o projeto de mentira: nada aqui toca o ~/.claude de quem roda os testes.
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-skillwrite-'));
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 /** Dá para criar link neste Windows (junction não precisa de admin; symlink de arquivo costuma precisar). */
 async function canLink(kind: 'dir' | 'file'): Promise<boolean> {

@@ -8,6 +8,7 @@ import { sandboxVerdict, staffMayPost } from '../server/apiPolicy';
 import type { Caller } from '../server/callers';
 import { renderFicha, type FichaContext } from '../server/staff/ficha';
 import { TaskConflictError, TaskError, TaskForbiddenError, TaskOrderBody, TaskService, readTasks } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 // Ordem da fila do funcionário (t-d257fb): o usuário reordena qualquer card; o gestor, só os que pediu e só entre eles; o responsável só sugere (vira
 // aviso a quem pediu, sem mudar nada). A fila anda pela posição gravada (`queueRank`) e continua pulando card bloqueado.
@@ -16,9 +17,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-queueorder-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const person = (id: string, name: string, reportsTo: string[] = []) => ({ id, name, role: 'Dev', autonomy: 'acceptEdits', worktree: false, servers: [], reportsTo }) as unknown as StaffProfile;
 const people: Record<string, StaffProfile> = {

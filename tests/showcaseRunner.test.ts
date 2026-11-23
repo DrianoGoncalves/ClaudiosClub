@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MAX_SHOWCASE_BYTES, SHOWCASE_CHECK_PATH, validCheck } from '../server/projectGuide';
 import {
   extractShowcase,
@@ -20,6 +20,7 @@ import {
   type SpawnClaude,
 } from '../server/showcaseRunner';
 import { UsageStopError } from '../server/usageStop';
+import { removeTemp } from './support/tmp';
 
 const HTML = '<!doctype html><html lang="pt-BR"><head><style>body{}</style></head><body><h1>Projeto</h1></body></html>';
 
@@ -89,6 +90,9 @@ const gitIn = (cwd: string, ...args: string[]) =>
     windowsHide: true,
     encoding: 'utf8',
   }).trim();
+
+// O ledger do Sistema dos testes (`systemCostsFile` em makeRunner) é gravado numa pasta fixa do TEMP: sai no fim do arquivo.
+afterAll(() => removeTemp(path.join(os.tmpdir(), 'myco-vitrine-teste')));
 
 const exists = (p: string) => fs.stat(p).then(
   () => true,
@@ -163,9 +167,7 @@ describe('gerador da vitrine: gravação', () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-vitrine-gerador-'));
   });
 
-  afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
-  });
+  afterEach(() => removeTemp(dir));
 
   const job = (head: string | null = null): ShowcaseJob => ({ projectId: 'p1', dir, prompt: 'PROMPT_NAO_LOGAR', head });
 
@@ -280,9 +282,7 @@ describe('gerador da vitrine: uma por projeto, reserva e tentativas', () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-vitrine-fila-'));
   });
 
-  afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
-  });
+  afterEach(() => removeTemp(dir));
 
   const job = (): ShowcaseJob => ({ projectId: 'p1', dir, prompt: 'P', head: null });
 

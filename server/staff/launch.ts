@@ -207,6 +207,7 @@ export async function prepareRun(profile: StaffProfile, ctx: LaunchContext, sess
     hooksDir,
     mcpWriteFile: hasPolicy ? mcpWriteFilePath : null,
     skillOverrides: skillOverridesOf(fichaCtx.skillPlan?.off ?? []),
+    projectPath: ctx.projectPath,
   });
   await writeAtomic(settingsFile, JSON.stringify(settings, null, 2));
   const agents = await ensurePlaybookAgents(profile, {
@@ -600,14 +601,19 @@ export async function prepareCodexRun(profile: StaffProfile, ctx: LaunchContext,
   // no meio do caminho (o Codex lê a ficha a cada mensagem), e o lançador, que roda fora da sandbox, não é reescrito por ele (quando o projeto é o do Club).
   const mcpJson = [...new Set([path.join(cwd, '.mcp.json'), path.join(ctx.projectPath, '.mcp.json')])];
   const bundleInCwd = isInside(cwd, MCP_LAUNCH_BUNDLE) ? [MCP_LAUNCH_BUNDLE] : [];
-  // Fila de validação pesada (hook do terminal). O hook roda FORA da sandbox: a cópia fica na pasta da conversa (a sandbox a nega), não no
-  // projeto, que o agente pode editar. Se não deu para copiar, a conversa roda sem a fila e sem a flag de confiança (nunca flag sem o hook).
+  // Fila de validação pesada e bloqueio do git destrutivo (hooks do terminal). Os hooks rodam FORA da sandbox: a cópia fica na pasta da conversa (a sandbox a nega), não no
+  // projeto, que o agente pode editar. Se não deu para copiar, a conversa roda sem a fila, sem o bloqueio e sem a flag de confiança (nunca flag sem o hook).
   const hooksDir = path.join(ctx.runDir, sessionId, 'hooks');
   const heavyGuard = await mkdir(hooksDir, { recursive: true })
-    .then(() => Promise.all(HEAVY_HOOK_FILES.map((f) => copyFile(path.join(HOOKS_DIR, f), path.join(hooksDir, f)))))
-    .then((): CodexHeavyGuard => ({ hook: path.join(hooksDir, 'heavy-guard.mjs'), lockDir: heavyLockDir(), ownerPid: process.pid }))
+    .then(() => Promise.all([...HEAVY_HOOK_FILES, ...GIT_HOOK_FILES].map((f) => copyFile(path.join(HOOKS_DIR, f), path.join(hooksDir, f)))))
+    .then((): CodexHeavyGuard => ({
+      hook: path.join(hooksDir, 'heavy-guard.mjs'),
+      lockDir: heavyLockDir(),
+      ownerPid: process.pid,
+      git: { hook: path.join(hooksDir, 'git-guard.mjs'), projectPath: ctx.projectPath },
+    }))
     .catch((err) => {
-      console.warn(`[staff] ${profile.name}: sem a fila de validação pesada no Codex (${err instanceof Error ? err.message : String(err)})`);
+      console.warn(`[staff] ${profile.name}: sem a fila de validação pesada e sem o bloqueio de git destrutivo no Codex (${err instanceof Error ? err.message : String(err)})`);
       return null;
     });
   return {
@@ -649,9 +655,11 @@ const HOOKS_DIR = path.join(ROOT, 'scripts', 'hooks');
 const DELIVERY_HOOK = path.join(HOOKS_DIR, 'delivery-check.mjs');
 const STYLE_HOOK = path.join(HOOKS_DIR, 'style-reminder.mjs');
 /** Os hooks de guarda que a conversa leva na própria pasta (cópia, ver prepareRun): o agente não edita o que os aplica. */
-const GUARD_HOOK_FILES = ['club-guard.mjs', 'mcp-write-guard.mjs', 'remote-guard.mjs', 'memory-guard.mjs', 'memory-cap.mjs', 'heavy-guard.mjs', 'heavy-lock.mjs'] as const;
+const GUARD_HOOK_FILES = ['club-guard.mjs', 'mcp-write-guard.mjs', 'remote-guard.mjs', 'memory-guard.mjs', 'memory-cap.mjs', 'heavy-guard.mjs', 'heavy-lock.mjs', 'git-guard.mjs', 'git-guard-lib.mjs'] as const;
 /** O hook da fila de validação pesada e a lib dele (o heavy-guard importa o heavy-lock da mesma pasta). Vão para a pasta do Claude e a do Codex. */
 const HEAVY_HOOK_FILES = ['heavy-guard.mjs', 'heavy-lock.mjs'] as const;
+/** O hook do git destrutivo e a regra dele (o git-guard importa o git-guard-lib da mesma pasta). Também vão para os dois motores. */
+const GIT_HOOK_FILES = ['git-guard.mjs', 'git-guard-lib.mjs'] as const;
 /** Ferramentas de navegador: o Claude in Chrome e os MCPs no padrão `browser_*` (Playwright e afins da biblioteca). */
 export const BROWSER_TOOLS_MATCHER = 'mcp__claude-in-chrome__.*|mcp__.*__browser_.*';
 /** Toda ferramenta de MCP: o hook de escrita decide pela política da ficha (sem política, não responde). */
@@ -662,6 +670,8 @@ export const REMOTE_GUARD_MATCHER = 'Bash|PowerShell';
 export const MEMORY_GUARD_MATCHER = 'Write|Edit|MultiEdit';
 /** Terminal também para a fila de validação pesada (suíte completa, tsc do projeto): uma por vez na máquina (scripts/hooks/heavy-guard.mjs). */
 export const HEAVY_GUARD_MATCHER = 'Bash|PowerShell';
+/** Terminal para o git que descarta mudança não commitada no checkout principal do projeto (scripts/hooks/git-guard.mjs). */
+export const GIT_GUARD_MATCHER = 'Bash|PowerShell';
 /** O hook da fila espera a vez aqui dentro, então o prazo dele passa dos 10 s dos outros: abaixo dele, a espera máxima do próprio hook (13 min). */
 const HEAVY_GUARD_TIMEOUT_S = 15 * 60;
 
@@ -674,12 +684,13 @@ const HEAVY_GUARD_TIMEOUT_S = 15 * 60;
  * E, com o `styleFile` (style.txt da conversa), um hook UserPromptSubmit põe o lembrete do estilo em cada mensagem (scripts/hooks/style-reminder.mjs).
  * `hooksDir`: a pasta com a cópia dos hooks de guarda da conversa (prepareRun); sem ela, a do programa (só os testes usam). `mcpWriteFile`:
  * a política de escrita dos MCPs (mcp-write.json); sem ela, não há hook de MCP. `heavyLockDir`: a pasta da trava da fila de validação
- * pesada (uma por máquina; o padrão é a do servidor, ver heavyQueue.ts).
+ * pesada (uma por máquina; o padrão é a do servidor, ver heavyQueue.ts). `projectPath`: o checkout principal do projeto, onde o git-guard barra o
+ * git que descarta trabalho não commitado; sem ele, não há esse hook (só os testes chamam sem; o lançamento sempre passa).
  */
 export function staffSettings(
   p?: Pick<StaffProfile, 'personality' | 'engine'>,
   styleFile?: string,
-  o: { clubGuard?: boolean; hooksDir?: string; mcpWriteFile?: string | null; skillOverrides?: Record<string, 'off'>; heavyLockDir?: string } = {},
+  o: { clubGuard?: boolean; hooksDir?: string; mcpWriteFile?: string | null; skillOverrides?: Record<string, 'off'>; heavyLockDir?: string; projectPath?: string } = {},
 ) {
   const guards = o.hooksDir ?? HOOKS_DIR;
   const lockDir = o.heavyLockDir ?? heavyLockDir();
@@ -699,6 +710,8 @@ export function staffSettings(
     ...(stage === 'pre' && o.mcpWriteFile ? [{ matcher: MCP_TOOLS_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'mcp-write-guard.mjs'), o.mcpWriteFile], timeout: 10, onFailure: 'block' }] }] : []),
     // Acesso remoto no terminal: sempre, com ou sem servidor na ficha (ver scripts/hooks/remote-guard.mjs).
     ...(stage === 'pre' ? [{ matcher: REMOTE_GUARD_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'remote-guard.mjs')], timeout: 10, onFailure: 'block' }] }] : []),
+    // Git que descarta mudança não commitada no checkout principal: sempre, com `onFailure: 'block'` (hook que falha não deixa o reset passar; ver o topo do script).
+    ...(stage === 'pre' && o.projectPath ? [{ matcher: GIT_GUARD_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'git-guard.mjs'), o.projectPath], timeout: 10, onFailure: 'block' }] }] : []),
     // Teto da memória no Write/Edit (fora do plan, onde o MCP myco-memoria tem o dele): sempre, sem `onFailure`, porque um erro do hook não deve travar a edição (ver o topo do script).
     ...(stage === 'pre' ? [{ matcher: MEMORY_GUARD_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [path.join(guards, 'memory-guard.mjs')], timeout: 10 }] }] : []),
     heavy(stage),

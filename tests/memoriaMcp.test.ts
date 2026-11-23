@@ -11,6 +11,7 @@ import { buildClaudeArgs, renderFicha } from '../server/staff/ficha';
 import { memoriaLaunchOf, prepareCodexRun, prepareRun, type LaunchContext } from '../server/staff/launch';
 import { MEMORY_DETAIL_MAX_BYTES, MEMORY_INDEX_MAX_BYTES, MEMORY_INDEX_MAX_LINES } from '../scripts/hooks/memory-cap.mjs';
 import { createMemoriaMcp, MEMORIA_MAX_FILES, memoriaMcpCommand, memoriaMcpServer, memoriaTarget, runMemoriaMcpStdio, TOOLS } from '../server/staff/memoriaMcp';
+import { removeTemp } from './support/tmp';
 
 // Funcionário em autonomia `plan` grava a PRÓPRIA memória (índice e pasta <id>.memory/) pelo MCP `myco-memoria`, nos dois motores, e nada mais:
 // nem a memória ou a ficha de outra pessoa, nem `..`, nem link, nem arquivo fora de `.myco/staff`.
@@ -34,10 +35,7 @@ beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-memoria-'));
   proj = path.join(root, 'proj');
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-  await fs.rm(home, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, home));
 
 /** Projeto limpo com as fichas de Ana (a dona) e de Bob (outra pessoa), e um arquivo de código. */
 async function seed() {

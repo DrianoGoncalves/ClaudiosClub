@@ -8,6 +8,7 @@ import type { ChatItem } from '../shared/model';
 import { ChatManager } from '../server/chat/manager';
 import { ChatProcess } from '../server/chat/process';
 import { CodexProcess } from '../server/chat/codexProcess';
+import { removeTemp } from './support/tmp';
 
 // Saída do processo: fechamento nosso (ociosidade, ficha nova, reinício, Parar) não é erro da conversa; saída inesperada é, com a mensagem real.
 
@@ -129,9 +130,7 @@ describe('ChatManager: fechamento intencional não entra na caixa', () => {
   beforeAll(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-exit-'));
   });
-  afterAll(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
+  afterAll(() => removeTemp(root));
 
   function manager() {
     const procs: Array<ReturnType<typeof fakeClaude>> = [];

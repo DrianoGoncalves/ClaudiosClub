@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ESCALATE_AFTER_MS } from '../server/retryPolicy';
 import { releasesStaff, TaskService } from '../server/tasks';
 import type { Engine, StaffProfile, Task } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Fila anda com dúvida escalada (t-a914ce): a tarefa com dúvida escalada ao dono e sem nenhuma edição não ocupa o funcionário, e a próxima da
 // fila começa; com edição, ou com a dúvida ainda com o gestor, segue ocupando. A resposta que chega com ele em outra tarefa fica guardada
@@ -14,9 +15,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-doubtq-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const MIN = 60_000;
 const profile = (id: string, name: string, extra: Partial<StaffProfile> = {}) => ({ id, name, role: 'Back-end', autonomy: 'acceptEdits', worktree: false, ...extra }) as StaffProfile;

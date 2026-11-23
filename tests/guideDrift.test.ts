@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { StaffProfile } from '../shared/model';
 import { guideActionText, MAX_LISTED_FILES, runGuideAction } from '../server/guideActions';
 import { guideStatus } from '../server/projectGuide';
+import { removeTemp } from './support/tmp';
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', ['-c', 'user.name=teste', '-c', 'user.email=teste@teste', '-c', 'commit.gpgsign=false', ...args], {
@@ -42,9 +43,7 @@ describe('guia: base da conferência e drift só do que mudou', () => {
     git(dir, 'commit', '-q', '-m', 'base');
   });
 
-  afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
-  });
+  afterEach(() => removeTemp(dir));
 
   it('drift em git grava o HEAD e a hora em .myco/guide.json; o status mostra a base sem mudanças', async () => {
     await run('drift');

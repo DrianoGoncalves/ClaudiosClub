@@ -8,6 +8,7 @@ import { claudeEditedFile, codePath, codexEditedFiles, type CodeEdit } from '../
 import { CodexProcess } from '../server/chat/codexProcess';
 import { ChatManager } from '../server/chat/manager';
 import { ChatProcess } from '../server/chat/process';
+import { removeTemp } from './support/tmp';
 
 // Edição de código vista na conversa (base do card automático do quadro): o que conta, o que não conta e a paridade Claude × Codex.
 
@@ -245,7 +246,7 @@ describe('ChatManager repassa a edição com quem, onde e o pedido, nos dois mot
       codex.run?.close();
       await tick();
       await manager.stopAll();
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTemp(dir);
     }
   });
 });

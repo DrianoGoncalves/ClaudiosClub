@@ -7,6 +7,7 @@ import type { ToolAdapter } from '../server/adapters/types';
 import { StaffError, StaffService } from '../server/staff/service';
 import { createProfile, listProjectStaff, saveProfile, StaffInputSchema } from '../server/staff/store';
 import { buildTeamExport, planTeamImport, safeSkillPath, type TeamFile } from '../server/staff/teamExport';
+import { removeTemp } from './support/tmp';
 
 // A biblioteca de skills e o config ficam em MYCO_HOME: aponta para uma pasta temporária antes de os módulos carregarem.
 const home = await vi.hoisted(async () => {
@@ -117,10 +118,7 @@ beforeAll(async () => {
   await saveProfile(origin, { ...velho, ended: { at: '2026-10-05T00:00:00.000Z', reason: 'fim' } });
 });
 
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-  await fs.rm(home, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, home));
 
 describe('equipe em arquivo (exportar e importar)', () => {
   it('exporta só a allowlist, sem id, conversa, servidor, conhecimento, memória ou vínculo de cofre', async () => {

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { clientChanged, DAILY, TSX, VITE } from '../scripts/lib';
 import { openTerminal } from './terminal';
 import { bodyText } from './bodyText';
+import { serveStatic } from './staticFiles';
 import { CodexAdapter, CodexError, defaultRunner } from './adapters/codex';
 import { CodexEnv, withAppAddress, type CodexEnvStatus } from './codexEnv';
 import { CodexCapability } from './engineCapability';
@@ -62,7 +63,8 @@ import { migrateMcpsAtBoot as runMcpMigration } from './staff/mcpMigration';
 import { MCP_TOOLS_FILE } from './staff/mcpTools';
 import { CodexPasswordPolicy } from './codexPasswordPolicy';
 import { withInboxWait } from './inboxWait';
-import { blockedInboxItem, codexSandboxInboxItem, commitInboxItem, deniedInboxItem, followUpInboxItem, heavyGuardOffInboxItem, notStartedInboxItem, permissionInboxItem, questionInboxItem, secretInboxItem, stuckInboxItem, taskQuestionInboxItem, withoutSecretHint } from './inboxItems';
+import { commitInboxAlerts, commitWaitingCount, resolveBy, withCommitLeft } from './commitLeft';
+import { blockedInboxItem, codexSandboxInboxItem, commitInboxItem, deniedInboxItem, followUpInboxItem, heavyGuardOffInboxItem, notStartedInboxItem, permissionInboxItem, questionInboxItem, secretInboxItem, stuckInboxItem, taskQuestionInboxItem, versionPauseEndId, versionPauseItems, withoutSecretHint } from './inboxItems';
 import { InboxResolver, resolvedLast, settleWithin } from './inboxResolved';
 import { capText } from './chat/turnCap';
 import { TurnRetryLedger } from './chat/turnRetry';
@@ -112,9 +114,12 @@ import { gitState } from './git';
 import { buildOrchestration, buildSavings, MarkBody, readAllMarks, readMarks, saveMark, savingsSince, withRunInfo } from './orchestration';
 import { buildCostReview, COST_REVIEW_MAX_DAYS, parseCostReviewDays } from './costReview';
 import { CostReviewApplyError, runCostReviewApply } from './costReviewApply';
-import type { Board, CostReport, InboxItem, InboxKind, LiveSession, Project, TurnNotice } from '../shared/model';
+import type { Board, CommitWaitingSummary, CostReport, InboxItem, InboxKind, LiveSession, Project, TurnNotice } from '../shared/model';
 import { TurnWatcher } from './turns';
 import { ProjectPauses } from './projectPause';
+import { ReleaseError, ReleaseService } from './release';
+import { createSafeTools } from './staff/gitSafe';
+import { FlowPolicies } from './flowPolicy';
 import { deliverToAsker } from './consult/deliver';
 import { ConsultLinks } from './consult/links';
 import { ConsultError, ConsultService } from './consult/service';
@@ -294,7 +299,8 @@ const clubClaudeIds = async (): Promise<Set<string>> => {
   return new Set([...reg].filter(([, e]) => e.engine === 'claude').map(([id]) => id));
 };
 const adapter: ToolAdapter = new ClaudeAdapter({
-  // O resumo dos projetos lê todo transcript (segundos com centenas de conversas) e quase toda rota passa por ele (`projectPathOf`): guardado por 5 s.
+  // O resumo dos projetos lê todo transcript (segundos com centenas de conversas) e muitas rotas passam por ele: guardado por 5 s. O caminho das
+  // tarefas (`projectPathOf`, `projectIds`) não passa: usa `projectPath`/`boardProjectIds`, só a descoberta.
   // Novo projeto e importação chamam `forgetProjects`; o apelido nem entra no que fica guardado.
   projectsTtlMs: 5_000,
   extraPaths: pinnedProjects,
@@ -421,8 +427,21 @@ const usageStopHit = async (projectId: string, staffId: string | null, engine: '
  * Projetos pausados (ver server/projectPause.ts): uma só fonte, perguntada por todo ponto de partida automática (a fila em TaskService, as rotinas, o "continue", o
  * despertador, a retomada de turno e a do reinício). Pausado, nada de execução começa sozinho (a revisão da entrega já feita roda); o que já roda termina o turno, e as suas ações manuais seguem.
  */
-const projectPauses = new ProjectPauses(path.join(MYCO_HOME, 'paused-projects.json'));
+// A pausa de versão que venceu volta tudo ao normal sozinha: a rodada do projeto roda na hora (encerrar e retomar já fazem isso pela rota; converter em comum segue pausado).
+const projectPauses = new ProjectPauses(path.join(MYCO_HOME, 'paused-projects.json'), undefined, (projectId, end) => {
+  if (end.reason === 'expired') tasks.resumeAfterExpiry(projectId);
+});
 const projectPaused = (projectId: string) => projectPauses.isPaused(projectId);
+/** Dispensa o aviso de saída da pausa de versão (id `vpause:<projeto>:end:<ms>`). O aviso "ligada" não se dispensa (sai com a pausa): false. */
+async function dismissVersionPause(id: string): Promise<boolean> {
+  const end = versionPauseEndId(id);
+  return end ? projectPauses.dismissEnd(end.projectId, end.atMs) : false;
+}
+/**
+ * A política de fluxo de cada projeto (ver server/flowPolicy.ts): quem leva a tarefa a "pronto" (a IA, pelo revisor, ou só o dono), quem aprova o plano e o commit automático. Em `~/.myco`, fora do
+ * projeto (o agente não grava ali); só a rota `flow-policy`, pela tela, a muda.
+ */
+const flowPolicies = new FlowPolicies(path.join(MYCO_HOME, 'flow-policies.json'));
 const autoContinue = new AutoContinue({
   file: path.join(MYCO_HOME, 'auto-continue.json'),
   enabled: async () => (await readConfig()).autoContinue,
@@ -540,10 +559,8 @@ const turns = new TurnWatcher(
 turns.start();
 
 // Tarefas por projeto (`.myco/tasks.json`): começam numa conversa nova e andam sozinhas com ela.
-const projectPathOf = async (projectId: string) => {
-  const p = (await adapter.listProjects()).find((x) => x.id === projectId);
-  return p?.exists ? p.path : null;
-};
+// Sem o resumo do `listProjects` (stat de todo transcript): quase toda leitura e gravação de tarefa passa por aqui.
+const projectPathOf = (projectId: string) => adapter.projectPath(projectId);
 /** Fontes do custo por tarefa (ver server/taskCost.ts): transcripts do Claude, o registro do Club (threadId) e o uso do Codex. */
 async function taskCostSources(files: TranscriptCost[]): Promise<CostSources> {
   const registry = await readSessionRegistry().catch((): Map<string, { threadId?: string }> => new Map());
@@ -620,7 +637,7 @@ const tasks = new TaskService({
   projectPath: projectPathOf,
   // Versão das skills que a ficha marca no registro de execuções (ver tasks.ts, skillsOf).
   skillSources: (projectId) => skillSourcesOf(adapter, projectId),
-  projectIds: async () => (await adapter.listProjects()).filter((p) => p.exists && !p.worktreeOf).map((p) => p.id),
+  projectIds: () => adapter.boardProjectIds(),
   readProfile: async (projectId, staffId) => {
     const dir = await projectPathOf(projectId);
     return dir ? readProfile(dir, staffId) : null;
@@ -705,6 +722,28 @@ const tasks = new TaskService({
   snapshot: (projectId, sessionId) => chats.snapshot(projectId, sessionId),
   // Projeto pausado: a fila, o ajuste da reprovação, a retomada das órfãs e a troca de motor esperam; a revisão da entrega já feita roda (ver TaskService.paused).
   pauses: projectPauses,
+  // Versão aberta: só as tarefas dela saem da fila e mesclam (ver server/release.ts). `releases` vem logo abaixo; a pergunta só acontece depois da subida.
+  releaseScope: (projectId) => releases.scope(projectId),
+  flow: flowPolicies,
+});
+// Versão com escopo (ver server/release.ts): o git e o gh sem hooks do projeto e com ambiente controlado, como o MCP de git; push e tag só pelos botões do dono.
+const releaseHooks = path.join(MYCO_HOME, 'run', 'release-nohooks');
+const releases: ReleaseService = new ReleaseService({
+  projectPath: projectPathOf,
+  projectIds: () => adapter.boardProjectIds(),
+  readTasks,
+  createTask: async (projectId, body) => tasks.create(projectId, body),
+  startTask: (projectId, taskId) => tasks.start(projectId, taskId),
+  runTests: async (dir) => {
+    const command = await detectTest(dir);
+    return command ? runTests(dir, command) : null;
+  },
+  tools: (() => {
+    const t = createSafeTools({ hooksDir: releaseHooks });
+    const ready = fs.mkdir(releaseHooks, { recursive: true });
+    return { git: async (cwd, args, opts) => (await ready, t.git(cwd, args, opts)), gh: async (args, input) => (await ready, t.gh(args, input)) };
+  })(),
+  onScopeLifted: (projectId) => void tasks.tick(new Date(), projectId).catch(() => {}),
 });
 // Conversa direta no limite de uso (o dono pela tela): a mensagem segue no secundário da ficha, numa conversa nova (ver directFallback.ts).
 const directFallback = new DirectFallback({
@@ -1629,6 +1668,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   // ---- caixa "precisa de mim" ----
   // O palpite e a dica mascarada do segredo só vão para a tela (navegador pareado): agente e curl recebem o aviso sem eles.
   ['GET', /^\/api\/inbox$/, async ({ paired }) => (paired ? await getInbox() : withoutSecretHint(await getInbox()))],
+  // Quantos avisos de commit parcial esperam outro card terminar (`autoCommit.state` 'waiting'): só ciência, fora da lista da caixa e do sino. Só leitura, com o mesmo acesso da caixa.
+  ['GET', /^\/api\/inbox\/commit-waiting$/, () => getCommitWaiting()],
   ['GET', /^\/api\/turns$/, ({ url }) => getTurns(url.searchParams.get('since'))],
   // ---- cargos (modelos de ficha) ----
   ['GET', /^\/api\/roles$/, () => listRoles()],
@@ -1653,7 +1694,12 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   // ---- tarefas por projeto ----
   ['GET', /^\/api\/tasks\/summary$/, () => tasks.summary()],
   // Com `inboxWait`: o card parado esperando um item da caixa (derivado, ver server/inboxWait.ts).
-  ['GET', new RegExp(`^/api/projects/${ID}/tasks$`), async ({ params: [id] }) => withInboxWait(await tasks.list(id!), id!, chats.attention())],
+  // E `commitLeft`: o estado do aviso de commit parcial do card (waiting, ready ou failed; derivado, ver server/commitLeft.ts).
+  ['GET', new RegExp(`^/api/projects/${ID}/tasks$`), async ({ params: [id] }) => tasks.commitLeftOf(id!, withInboxWait(await tasks.list(id!), id!, chats.attention()))],
+  // Refazer o commit das sobras de uma tarefa pronta (ver `TaskService.redoLeftovers`): o GET mostra os arquivos, o diff e o `digest`; o POST `{ digest }` faz o commit complementar. Só pela tela
+  // (o serviço responde 403 a quem não é a tela; o gate já barra o POST de funcionário e as rotas nem estão na lista de apiPolicy.ts). 404 se o projeto ou a tarefa não existem; 409 com o motivo se não dá.
+  ['GET', new RegExp(`^/api/projects/${ID}/tasks/${ID}/commit-leftovers$`), ({ params: [id, taskId], fromBrowser }) => tasks.previewLeftovers(id!, taskId!, fromBrowser)],
+  ['POST', new RegExp(`^/api/projects/${ID}/tasks/${ID}/commit-leftovers$`), ({ params: [id, taskId], body, fromBrowser }) => tasks.redoLeftovers(id!, taskId!, body, fromBrowser)],
   // Revisão automática do quadro: `{ autoReview, reviewerId }` (ver server/boardConfig.ts). Ler é livre; gravar só pela tela, como as outras
   // configurações de projeto (o funcionário nem tem este POST na lista de apiPolicy.ts).
   ['GET', new RegExp(`^/api/projects/${ID}/board-review$`), ({ params: [id] }) => tasks.boardConfig(id!)],
@@ -1673,6 +1719,10 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     new RegExp(`^/api/projects/${ID}/board-commit$`),
     ({ params: [id], body, fromBrowser }) => tasks.setBoardCommit(id!, body, fromBrowser),
   ],
+  // A política de fluxo do projeto (ver server/flowPolicy.ts e FLOW_PRESETS em shared/model.ts): `{ mode, plan, completion, commit, source, completionChosen }`. Ler é livre; gravar só pela tela
+  // (preset `{ mode }` ou portões `{ plan, completion, commit }`, que gravam 'custom'): o serviço responde 403 a quem não é a tela e o funcionário nem tem este POST na lista de apiPolicy.ts.
+  ['GET', new RegExp(`^/api/projects/${ID}/flow-policy$`), ({ params: [id] }) => tasks.flowPolicy(id!)],
+  ['POST', new RegExp(`^/api/projects/${ID}/flow-policy$`), ({ params: [id], body, fromBrowser }) => tasks.setFlowPolicy(id!, body, fromBrowser)],
   // Um escritor por vez no checkout principal: `{ singleWriter }` (ver server/boardConfig.ts e TaskService.writeSlot). Como o commit automático: ler é livre, gravar só pela tela (o serviço
   // responde 403 a quem não é a tela) e o funcionário nem tem este POST na lista de apiPolicy.ts.
   ['GET', new RegExp(`^/api/projects/${ID}/board-writer$`), ({ params: [id] }) => tasks.boardWriter(id!)],
@@ -1690,6 +1740,21 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ['GET', new RegExp(`^/api/projects/${ID}/queues$`), ({ params: [id] }) => tasks.queueStates(id!)],
   ['POST', new RegExp(`^/api/projects/${ID}/pause$`), ({ params: [id], fromBrowser }) => tasks.setPaused(id!, true, fromBrowser)],
   ['POST', new RegExp(`^/api/projects/${ID}/resume$`), ({ params: [id], fromBrowser }) => tasks.setPaused(id!, false, fromBrowser)],
+  // Pausa de versão (ver `ProjectPause.mode` e `TaskService.setVersionPause`): a pausa com prazo para montar uma versão do working tree sem trabalho novo mexendo nos arquivos; o que já está em voo termina e ela sai
+  // sozinha. Liga: a tela (prazo padrão 30 min) ou o funcionário com a permissão "Pode versionar e fazer deploy" (`canRelease`), pelo token da conversa e com `{ minutes }` obrigatório (1 a 120). Encerra: a tela
+  // (qualquer uma) ou quem a ligou. O 403 é do serviço, e as duas rotas estão em `STAFF_POSTS` (apiPolicy.ts). O estado sai no `GET .../pause` (`mode`, `at`, `until`, `by`).
+  ['POST', new RegExp(`^/api/projects/${ID}/version-pause$`), ({ params: [id], body, fromBrowser, caller }) => tasks.setVersionPause(id!, body, fromBrowser, caller)],
+  ['POST', new RegExp(`^/api/projects/${ID}/version-pause/end$`), ({ params: [id], fromBrowser, caller }) => tasks.endVersionPause(id!, fromBrowser, caller)],
+  // Versão com escopo (ver server/release.ts). O GET é de custo fixo (estado na memória, tarefas do `readTasks`); o histórico roda um git por pedido e a tela só pede ao abrir a aba.
+  // As escritas são só da tela (403 fora dela) e não estão em apiPolicy.ts: funcionário não abre, não publica e não cria tag.
+  ['GET', new RegExp(`^/api/projects/${ID}/release$`), ({ params: [id] }) => releases.view(id!)],
+  ['GET', new RegExp(`^/api/projects/${ID}/releases$`), ({ params: [id] }) => releases.history(id!)],
+  ['POST', new RegExp(`^/api/projects/${ID}/release$`), ({ params: [id], body, fromBrowser }) => releases.open(id!, body, fromBrowser)],
+  ['POST', new RegExp(`^/api/projects/${ID}/release/scope$`), ({ params: [id], body, fromBrowser }) => releases.changeScope(id!, body, fromBrowser)],
+  ['POST', new RegExp(`^/api/projects/${ID}/release/prepare$`), ({ params: [id], body, fromBrowser }) => releases.prepare(id!, body, fromBrowser)],
+  ['POST', new RegExp(`^/api/projects/${ID}/release/publish$`), ({ params: [id], fromBrowser }) => releases.publish(id!, fromBrowser)],
+  ['POST', new RegExp(`^/api/projects/${ID}/release/tag$`), ({ params: [id], fromBrowser }) => releases.tag(id!, fromBrowser)],
+  ['POST', new RegExp(`^/api/projects/${ID}/release/cancel$`), ({ params: [id], fromBrowser }) => releases.cancel(id!, fromBrowser)],
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks$`),
@@ -1898,7 +1963,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
           return tasks.secondOpinion(id!, taskId!);
         });
       }
-      if (action === 'merge') return tasks.merge(id!, taskId!, b.skipTests);
+      // O `true` é o dono pela tela (`fromBrowser` conferido acima): com a conclusão reservada a ele na política de fluxo, só a mescla dele leva a "pronto".
+      if (action === 'merge') return tasks.merge(id!, taskId!, b.skipTests, true);
       if (!b.staffId) throw new BadRequest(action === 'review' ? 'escolha quem revisa' : 'escolha quem faz o deploy');
       return action === 'review' ? tasks.requestReview(id!, taskId!, b.staffId, b.force, { assign: true }) : tasks.requestDeploy(id!, taskId!, b.staffId, b.force);
     },
@@ -1998,6 +2064,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     async ({ body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(z.object({ id: z.string().min(1).max(300) }), body);
+      // O aviso da pausa de versão (ligada ou que saiu) é da caixa, como o da rotina: o kind é `routine` para a tela mostrar como informação e tirar por aqui (ver `versionPauseItems`).
+      if (b.id.startsWith('vpause:')) return { ok: await dismissVersionPause(b.id) };
       return { ok: routines.dismissAlert(b.id) };
     },
   ],
@@ -2727,16 +2795,6 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ['POST', /^\/api\/retention\/disable$/, () => setRetentionDeletion(false, { fromBrowser: false })],
 ];
 
-const CONTENT_TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.json': 'application/json; charset=utf-8',
-};
 
 /**
  * O que a extensão do Chrome vê: as mesmas leituras e escritas da tela, só com a projeção dela (ver server/extension/routes.ts). Nada de
@@ -2760,7 +2818,22 @@ const extDeps: ExtensionDeps = {
   parkTask: (projectId, taskId, reason) => tasks.update(projectId, taskId, { waitReason: reason }),
 };
 
+/**
+ * Pedido que levou SLOW_REQUEST_MS ou mais vai para o log: método, caminho (sem a query, que pode levar código ou token), status e tempo.
+ * O rastreio leve do que trava, sem coletor externo. O stream (SSE) fica de fora: ele dura a conversa inteira.
+ */
+const SLOW_REQUEST_MS = 2_000;
+function watchSlow(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const start = performance.now();
+  res.once('finish', () => {
+    const ms = Math.round(performance.now() - start);
+    if (ms < SLOW_REQUEST_MS || String(res.getHeader('content-type') ?? '').startsWith('text/event-stream')) return;
+    console.warn(`[lento] ${req.method} ${(req.url ?? '').split('?')[0]} ${res.statusCode} em ${ms} ms`);
+  });
+}
+
 async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
+  watchSlow(req, res);
   // Porta de entrada (server/gate.ts): Host, método, navegador pareado (ver pairing.ts), quem chama (socket e token da conversa) e as listas de rotas.
   // Aqui também ficam GET /api/pair (o link com o código), POST /api/pair/request|claim|approve (o botão "Parear este navegador" + `npm run pair
   // CÓDIGO`) e POST /api/pair/rotate (desparear todos).
@@ -2825,6 +2898,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         // Dúvida já respondida, ou pergunta que não está mais aberta na conversa: 409; quem não é o gestor: 403 (antes do TaskError, 400).
         if (err instanceof TaskConflictError) return send(res, 409, { error: err.message });
         if (err instanceof TaskForbiddenError) return send(res, 403, { error: err.message });
+        if (err instanceof ReleaseError) return send(res, err.status, { error: err.message });
         // A vez do funcionário não chegou no prazo da resposta (edição, cancelamento, resposta à dúvida, ajuste guardado, revisão): 503, nada gravado (tentar de novo em instantes é seguro).
         if (err instanceof TaskBusyError) return send(res, 503, { error: err.message }, { 'retry-after': '5' });
         // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
@@ -2876,7 +2950,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
   }
   if (req.method !== 'GET') return send(res, 405, { error: 'método não permitido' });
   if (await serveStartFiles(url.pathname, res)) return;
-  return serveStatic(url.pathname, res);
+  return serveStatic(CLIENT_DIR, url.pathname, req, res);
 }
 
 const server = http.createServer(onRequest);
@@ -3035,6 +3109,26 @@ const usageWarnings = new UsageWarnings();
 const resolver = new InboxResolver();
 
 /**
+ * Quantos avisos de commit parcial esperam outro card terminar, por projeto (`GET /api/inbox/commit-waiting`): só ciência, a caixa não os lista. Os mesmos projetos da caixa (do quadro, não
+ * arquivados); o aviso que o dono já ignorou não conta. Erro ao ler um projeto: ele fica de fora da contagem, os outros seguem.
+ */
+async function getCommitWaiting(): Promise<CommitWaitingSummary> {
+  const projects = await adapter.listProjects();
+  const { hidden } = await sessionPlacesNow(projects);
+  const rows: CommitWaitingSummary['projects'] = [];
+  for (const p of projects.filter((x) => x.exists && !x.worktreeOf)) {
+    if (hidden({ projectId: p.id, staffId: null, sessionId: '' })) continue;
+    try {
+      const count = commitWaitingCount(await withCommitLeft(await readTasks(p.path), p.id, p.path));
+      if (count) rows.push({ projectId: p.id, projectName: p.name, count });
+    } catch {
+      // projeto ilegível: não entra na contagem
+    }
+  }
+  return { total: rows.reduce((n, r) => n + r.count, 0), projects: rows };
+}
+
+/**
  * Tudo que espera você, de todas as salas: planos prontos e permissões pendentes das conversas
  * no Claudio’s Club, sessões esperando resposta em outro lugar (app, terminal), conversas que pararam com
  * erro e processos órfãos de um reinício. Arquivados ficam de fora. Aviso de erro cujo problema já passou
@@ -3062,7 +3156,8 @@ async function getInbox(): Promise<InboxItem[]> {
   // na leitura, nada gravado; somem ao destravar, começar, cancelar, editar ou apagar. Só projetos do quadro e não arquivados (como os outros avisos).
   const boardProjects = projects.filter((x) => x.exists && !x.worktreeOf);
   // Com a permissão que a conversa espera de você (`withPermission`): a tarefa parada nela segura os dependentes na caixa, como as outras paradas.
-  const boards = await Promise.all(boardProjects.map(async (p) => ({ p, tasks: (await readTasks(p.path)).map((t) => tasks.withPermission(t)) })));
+  // Com o estado do aviso de commit parcial (`commitLeft`, ver server/commitLeft.ts).
+  const boards = await Promise.all(boardProjects.map(async (p) => ({ p, tasks: await withCommitLeft((await readTasks(p.path)).map((t) => tasks.withPermission(t)), p.id, p.path) })));
   // Turno que parou no teto (ferramentas ou minutos): some quando você manda mensagem nova na conversa; com a tarefa da conversa já encerrada, segue na lista como resolvido.
   for (const c of chats.turnCaps()) {
     const w = where(c.sessionId, liveById.get(c.sessionId));
@@ -3074,7 +3169,7 @@ async function getInbox(): Promise<InboxItem[]> {
   // Também as tarefas que só você destrava (ver ownAlerts): dúvida escalada ('question') e revisão ou ajuste parados ('stuck').
   // E os follow-ups de revisão que esperam você (ver followUpAlerts): tarefa que você pediu, ou o gestor não pôde receber ('followUp').
   // E o commit automático de tarefa pronta que falhou ou foi parcial (ver commitAlerts): kind 'error', some ao ignorar.
-  const stuck = boards.map(({ p, tasks: all }) => ({ p, rows: stuckDependencies(all), forgotten: notStartedTasks(all), own: ownAlerts(all), followUps: followUpAlerts(all), commits: commitAlerts(all) }));
+  const stuck = boards.map(({ p, tasks: all }) => ({ p, rows: stuckDependencies(all), forgotten: notStartedTasks(all), own: ownAlerts(all), followUps: followUpAlerts(all), commits: commitInboxAlerts(commitAlerts(all)) }));
   if (stuck.some((s) => s.rows.length || s.forgotten.length || s.own.length || s.followUps.length || s.commits.length)) {
     const staffNames = new Map((await staff.listAll(boardProjects)).map((s) => [`${s.projectId}:${s.id}`, s.name]));
     const nameOf = (projectId: string, staffId: string | null) => (staffId ? (staffNames.get(`${projectId}:${staffId}`) ?? '') : '');
@@ -3085,8 +3180,9 @@ async function getInbox(): Promise<InboxItem[]> {
         out.push(a.state.humanAction === 'answer' ? taskQuestionInboxItem(a, w) : stuckInboxItem(a, w));
       }
       for (const a of followUps) out.push(followUpInboxItem(a, { projectId: p.id, projectName: p.name, sessionId: '', name: nameOf(p.id, a.task.staffId) }, nameOf(p.id, a.followUp.by), nameOf(p.id, a.followUp.staffId ?? null)));
-      // Commit automático: os arquivos da tarefa já sem mudança no git = resolvido (consulta ao git em paralelo, com cache e prazo, ver InboxResolver.commit).
-      const commitItems = await Promise.all(commits.map((a) => resolver.commit(commitInboxItem(a, { projectId: p.id, projectName: p.name, sessionId: '', name: nameOf(p.id, a.task.staffId) }), p.path, a.task)));
+      // Commit automático: as sobras (ou, no aviso de erro, os arquivos da tarefa) já sem mudança no git = resolvido (consulta ao git em paralelo, com cache e prazo, ver InboxResolver.commit).
+      // Os que esperam outro card (`waiting`) não são item: ficam só no estado da tarefa e na contagem (`/api/inbox/commit-waiting`).
+      const commitItems = await Promise.all(commits.map((a) => resolver.commit(commitInboxItem(a, { projectId: p.id, projectName: p.name, sessionId: '', name: nameOf(p.id, a.task.staffId) }), p.path, resolveBy(a.task))));
       for (const item of commitItems) if (item) out.push(item);
       for (const s of rows) out.push(blockedInboxItem(s, { projectId: p.id, projectName: p.name, sessionId: '', staffId: s.task.staffId, name: nameOf(p.id, s.task.staffId) }));
       for (const n of forgotten) out.push(notStartedInboxItem(n, { projectId: p.id, projectName: p.name, sessionId: '', name: nameOf(p.id, n.task.staffId) }));
@@ -3107,6 +3203,10 @@ async function getInbox(): Promise<InboxItem[]> {
     if (hidden(w)) continue;
     const place = l.entrypoint === 'claude-desktop' ? 'no app do Claude' : l.entrypoint === 'sdk-cli' ? 'em outro programa' : 'num terminal';
     out.push({ id: `waiting:${l.sessionId}`, kind: 'waiting', ...w, summary: `esperando sua resposta ${place}`, at: l.statusUpdatedAt });
+  }
+  // Pausa de versão ligada, e a que saiu (prazo, encerrada, retomada) enquanto o dono não dispensa o aviso: itens informativos (ver `versionPauseItems`).
+  for (const item of versionPauseItems(await projectPauses.notices().catch(() => ({ active: [], ended: [] })), (id) => projects.find((p) => p.id === id)?.name ?? id)) {
+    if (!hidden({ projectId: item.projectId, staffId: null, sessionId: '' })) out.push(item);
   }
   // Rotinas que não rodaram (trava de consumo, funcionário ocupado, sessão aberta em outro lugar).
   for (const a of routines.alerts()) {
@@ -3297,31 +3397,6 @@ function send(res: http.ServerResponse, status: number, body: unknown, headers: 
   res.end(JSON.stringify(body));
 }
 
-async function serveStatic(pathname: string, res: http.ServerResponse) {
-  const requested = path.resolve(CLIENT_DIR, '.' + decodeURIComponent(pathname));
-  const inside = requested === CLIENT_DIR || requested.startsWith(CLIENT_DIR + path.sep);
-  // Só rota do app (sem extensão) cai no index.html. Arquivo que falta (ex.: /assets/x.js de um build quebrado) é 404:
-  // devolver HTML no lugar do JS deixava a tela em branco, sem erro nenhum.
-  if (inside && !(await isFile(requested)) && path.extname(pathname) !== '') {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('Arquivo não encontrado.');
-    return;
-  }
-  const file = inside && (await isFile(requested)) ? requested : path.join(CLIENT_DIR, 'index.html');
-  try {
-    const data = await fs.readFile(file);
-    res.writeHead(200, { 'content-type': CONTENT_TYPES[path.extname(file)] ?? 'application/octet-stream' });
-    res.end(data);
-  } catch {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('Cliente não compilado. Use `npm run dev` ou `npm run build`.');
-  }
-}
-
-async function isFile(p: string): Promise<boolean> {
-  return fs.stat(p).then((s) => s.isFile()).catch(() => false);
-}
-
 /**
  * Migração das skills (ver skillMigration.ts): a biblioteca do Club vai para a Global (uma vez) e os nomes antigos das fichas viram refs.
  * O log diz o que mudou e o que ficou (conflitos e fichas de projeto que não deu para ler).
@@ -3446,11 +3521,30 @@ server.listen(PORT, HOST, () => {
         // Fila de tarefas: quem ficou com tarefa ou ajuste esperando. Reiniciando, a fila espera o boot (ver tasks.ts).
         // A coleta de CPU do gate começa aqui (a média vale depois de ~2 min).
       resourceGate.start();
+      // Uma rodada por vez: com o quadro grande e o disco lento a rodada passa de 60 s, e a seguinte começava por cima, dobrando leituras e gravações.
+      // Rodada presa (uma promessa que nunca resolve) não desliga a rede de segurança: passado TICK_STALE_MS, a próxima começa assim mesmo, com aviso no log.
+      const TICK_STALE_MS = 10 * 60_000;
+      let tickStartedAt: number | null = null;
       const queueTick = () => {
-          if (!chats.isClosing()) void tasks.tick().catch(() => {});
+          if (chats.isClosing()) return;
+          if (tickStartedAt !== null) {
+            const ms = Date.now() - tickStartedAt;
+            if (ms < TICK_STALE_MS) return;
+            console.warn(`[tarefas] a rodada da fila começou há ${Math.round(ms / 60_000)} min e não terminou; começando outra`);
+          }
+          const mine = Date.now();
+          tickStartedAt = mine;
+          void tasks
+            .tick()
+            .catch(() => {})
+            .finally(() => {
+              if (tickStartedAt === mine) tickStartedAt = null;
+            });
         };
         setTimeout(queueTick, 15_000).unref();
         setInterval(queueTick, 60_000).unref();
+        // Versão aberta: põe o card de manual na fila e prepara sozinha quando tudo fica pronto (uma rodada por vez, ver ReleaseService.sweep).
+        setInterval(() => void releases.sweep().catch(() => {}), 60_000).unref();
       }).catch((err) => console.error('[retomar] falhou:', err));
     });
   // Temporários parados há dias saem do quadro (arquivados, nada apagado).

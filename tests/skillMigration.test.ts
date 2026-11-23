@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { convertStaffSkills, migrateLibraryToGlobal } from '../server/skillMigration';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // MYCO_HOME de teste (o módulo de skills lê a config ao carregar): nada vai para o ~/.myco de quem roda os testes.
 const home = await vi.hoisted(async () => {
@@ -18,10 +19,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-skill-migration-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-  await fs.rm(home, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, home));
 
 const pasta = async (dir: string, body: string) => {
   await fs.mkdir(dir, { recursive: true });

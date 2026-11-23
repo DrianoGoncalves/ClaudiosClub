@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { stuckState, TaskError, TaskService } from '../server/tasks';
 import type { StaffProfile, TestRun } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Revisão automática perdida num reinício (t-686f25): o card chegou em "revisão" (fim do turno), o servidor caiu antes do `autoReview` (os
 // testes da entrega levam minutos) e nada retomava. O `tick` pede a revisão, uma vez, só do que se perdeu assim.
@@ -12,9 +13,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-resume-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const MIN = 60_000;
 const later = (min: number) => new Date(Date.now() + min * MIN);
@@ -259,7 +258,8 @@ describe('revisão automática perdida em reinício', () => {
     const t = (await b.svc.create('p', { title: 'Tela', staffId: 'ana-1' }, 'gio-1', 'gio-s'))!; // pedida pela Giovana: ela é a revisora
     await b.svc.start('p', t.id);
     const delivered = b.svc.onTurnDone((await b.get(t.id)).sessionId!);
-    await new Promise((r) => setTimeout(r, 100)); // já em revisão, dentro dos testes
+    // Já em revisão, dentro dos testes. Espera a condição (até 10 s), não um tempo fixo: com a suíte cheia 100 ms não bastavam e o card ainda estava em "doing".
+    for (let i = 0; i < 1000 && (await b.get(t.id)).status !== 'review'; i++) await new Promise((r) => setTimeout(r, 10));
     expect(await b.get(t.id)).toMatchObject({ status: 'review' });
     expect((await b.get(t.id)).review).toBeUndefined();
 

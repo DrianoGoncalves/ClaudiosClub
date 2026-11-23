@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readProjectSessions, sessionTopic } from '../server/adapters/claude/sessions';
+import { removeTemp } from './support/tmp';
 
 const user = (content: unknown) => ({ type: 'user', message: { content } });
 const assistant = (text: string) => ({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
@@ -97,7 +98,7 @@ describe('assunto: vale a última virada (cauda do transcript)', () => {
       const [s] = await readProjectSessions(dir, new Map());
       expect(s?.topic).toBe('Como exporto o CSV?');
     } finally {
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTemp(dir);
     }
   });
 
@@ -114,7 +115,7 @@ describe('assunto: vale a última virada (cauda do transcript)', () => {
       await fs.writeFile(path.join(dir, 'plano.jsonl'), plain.map((r) => JSON.stringify(r)).join('\n') + '\n');
       expect((await readProjectSessions(dir, new Map())).find((s) => s.id === 'plano')?.topic).toBe('Corrija o total');
     } finally {
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTemp(dir);
     }
   });
 });

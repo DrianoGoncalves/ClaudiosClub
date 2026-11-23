@@ -1,15 +1,25 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AccountUsage, Project, StaffProfile } from '../shared/model';
 import type { ToolAdapter } from '../server/adapters/types';
 import { StaffError, StaffService, type StaffServiceOptions } from '../server/staff/service';
 import { UsageStopError } from '../server/usageStop';
 import { readSeal, sealFile, writeSeal } from '../server/staff/seal';
 import { fichaFile, memoryFile, profileFile, readProfile, saveChatChoice, saveProfile, StaffInputSchema } from '../server/staff/store';
+import { removeTemp } from './support/tmp';
 
 // Ficha com engine codex: o que o servidor aceita ao salvar, o que recusa ao abrir a conversa e o esforço `ultra` (só do Codex).
+
+// A trava de consumo lê a config (`readConfig`, de MYCO_HOME): uma pasta temporária, senão vale o `usageStop` do ~/.myco de quem roda os testes (o do dono é nulo, e a trava nunca barra).
+const home = await vi.hoisted(async () => {
+  const os = await import('node:os');
+  const nodePath = await import('node:path');
+  const dir = nodePath.join(os.tmpdir(), `myco-codex-staff-home-${process.pid}-${Date.now()}`);
+  process.env.MYCO_HOME = dir;
+  return dir;
+});
 
 let root: string;
 let projectPath: string;
@@ -20,9 +30,7 @@ beforeAll(async () => {
   // Uma conexão FTP ('site') para o Codex recusar; 'vps1' não existe no projeto (o SSH não é conferido aqui).
   await fs.writeFile(path.join(projectPath, '.vps', 'ftp.json'), JSON.stringify({ connections: { site: { protocol: 'ftps', host: 'ftp.example.com', port: 21, user: 'deploy', remoteRoot: '/' } } }));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, home));
 
 const project = (): Project => ({
   id: 'proj-id',
@@ -324,6 +332,7 @@ describe('contratação por gestor que roda no Codex', () => {
     expect(await readSeal(path.join(root, 'run'), projectPath, hired.id)).toBeNull(); // sem selo: o caminho Claude → Claude não muda
     // Pedindo `engine: "claude"` o gestor do Claude também não muda nada: autonomia limitada à dele, sem trava de manual.
     const pediu = (await svc.hire('proj-id', { ...hireBody, name: 'Sub Pediu Claude', reportsTo: [boss.id], engine: 'claude', mcps: ['github'] }, false))!.profile;
+    // `github` (nome antigo, sem escopo) vira `global:github` ao salvar (ver `convertMcps`): o projeto de teste não tem esse MCP.
     expect(pediu).toMatchObject({ engine: 'claude', autonomy: 'auto', mcps: ['global:github'] });
     expect(await readSeal(path.join(root, 'run'), projectPath, pediu.id)).toBeNull();
     expect((await svc.chatSpawn('proj-id', null, hired.id))!.engine).toBeUndefined();

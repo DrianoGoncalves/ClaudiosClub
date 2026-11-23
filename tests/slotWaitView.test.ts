@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../client/src/api';
 import messages from '../client/src/i18n/tasks';
 import { BoardReview, type BoardReviewState, type BoardWriterState } from '../client/src/tasks/BoardReview';
-import { queueRows } from '../client/src/tasks/queueState';
+import { queueDots, queueRows } from '../client/src/tasks/queueState';
+import { TasksBoard } from '../client/src/tasks/TasksBoard';
 import { ResourceWaitBadge, resourceWaitHint, resourceWaitText, slotHolder } from '../client/src/tasks/ResourceWait';
 import type { StaffQueue, TaskStatus } from '../shared/model';
 
@@ -56,12 +57,73 @@ describe('por que a fila não anda', () => {
   it('espera pela vaga: texto próprio com o card que ocupa e a dica; sem a vaga, o texto do gate', () => {
     const [row] = rows(queue({ detail: slot.reason }), () => slotHolder(slot, cards, LABEL));
     expect(row!.tone).toBe('stuck');
-    expect(row!.text).toBe('Ana: fila parada, esperando a vez de editar: “Corrigir o login” (t-aaaa11, Fazendo) está editando o projeto · 1 na fila');
+    expect(row!.text).toBe('Ana: fila parada, esperando a vez de editar: “Corrigir o login” (t-aaaa11, Fazendo) está editando o projeto; a fila anda quando esse card for aprovado e commitado · 1 na fila');
+    expect(row!.openTaskId).toBe('t-aaaa11'); // o tooltip leva o link "Abrir t-aaaa11"
     expect(row!.detail).toContain('um card editar por vez');
     const [gated] = rows(queue({ detail: gate.reason }), () => null);
     expect(gated!.text).toContain('esperando a máquina folgar');
     expect(gated!.detail).toBe(gate.reason);
+    expect(gated!.openTaskId).toBeUndefined();
     expect(rows(queue({ detail: gate.reason }))[0]!.text).toContain('esperando a máquina folgar');
+  });
+
+  it('card que ocupa fora da lista: o texto diz quem é, mas não há link; a bolinha herda o link da linha', () => {
+    const [row] = rows(queue({ detail: slot.reason }), () => slotHolder(slot, [], LABEL));
+    expect(row!.text).toContain('t-aaaa11 está editando o projeto');
+    expect(row!.openTaskId).toBeUndefined();
+    const dots = queueDots([queue({ detail: slot.reason })], [], () => 'Ana', (id) => id, NOW, '', () => slotHolder(slot, cards, LABEL));
+    expect(dots).toHaveLength(1);
+    expect(dots[0]).toMatchObject({ tone: 'stuck', openTaskId: 't-aaaa11' });
+  });
+});
+
+describe('o link para o card que ocupa a vaga', () => {
+  type El = { props: { role?: string; onClick?: (e: unknown) => void; onKeyDown?: (e: unknown) => void; children?: unknown } };
+  /** O selo é uma função sem hooks: chamada direto, devolve a árvore, e o span role="link" dela se aciona como o navegador faria. */
+  const linkOf = (onOpen: (id: string) => void) => {
+    const root = (ResourceWaitBadge as unknown as (p: object) => El)({ wait: slot, now: NOW, holder: slotHolder(slot, cards, LABEL), onOpen });
+    const kids = ([] as unknown[]).concat(root.props.children).filter((c): c is El => typeof c === 'object' && c !== null && 'props' in c);
+    return kids.find((k) => k.props.role === 'link');
+  };
+  const ev = (key = '') => ({ key, stop: vi.fn(), prevent: vi.fn(), get stopPropagation() { return this.stop; }, get preventDefault() { return this.prevent; } });
+
+  it('clique e Enter/Espaço abrem o card que ocupa e não chegam ao cartão (que abriria o próprio)', () => {
+    const opened: string[] = [];
+    const link = linkOf((id) => opened.push(id))!;
+    const click = ev();
+    link.props.onClick!(click);
+    expect(opened).toEqual(['t-aaaa11']);
+    expect(click.stop).toHaveBeenCalled();
+    for (const key of ['Enter', ' ']) {
+      const k = ev(key);
+      link.props.onKeyDown!(k);
+      expect(k.stop).toHaveBeenCalled();
+      expect(k.prevent).toHaveBeenCalled();
+    }
+    expect(opened).toEqual(['t-aaaa11', 't-aaaa11', 't-aaaa11']);
+    const other = ev('a');
+    link.props.onKeyDown!(other);
+    expect(opened).toHaveLength(3);
+    expect(other.stop).not.toHaveBeenCalled();
+  });
+
+  it('sem onOpen, sem o card na lista, ou espera do gate de recursos: o selo não tem link', () => {
+    const html = (holder: ReturnType<typeof slotHolder>, wait: { reason: string; since: string; holder?: string } = slot, onOpen?: () => void) => renderToStaticMarkup(createElement(ResourceWaitBadge, { wait, now: NOW, holder, onOpen }));
+    expect(html(slotHolder(slot, cards, LABEL), slot, () => {})).toContain('role="link"');
+    expect(html(slotHolder(slot, cards, LABEL))).not.toContain('role="link"');
+    expect(html(slotHolder(slot, [], LABEL), slot, () => {})).not.toContain('role="link"');
+    expect(html(null, gate, () => {})).not.toContain('role="link"');
+  });
+
+  it('no quadro: o cartão de quem espera e o painel dele mostram "Abrir t-aaaa11"', () => {
+    const task = (over: object) => ({ description: 'x', blockedBy: [], history: [], createdAt: SINCE, updatedAt: SINCE, ...over }) as never;
+    const tasks = [
+      task({ id: 't-aaaa11', title: 'Corrigir o login', status: 'doing', staffId: 'ana-1', sessionId: 's' }),
+      task({ id: 't-bbbb22', title: 'Novo filtro', status: 'todo', staffId: 'rui-1', queuedAt: SINCE, resourceWait: slot }),
+    ];
+    const html = renderToStaticMarkup(createElement(TasksBoard, { projectId: 'p', projectName: 'P', staff: [], costs: null, onClose() {}, onOpenStaff() {}, onChanged() {}, initialTasks: tasks, initialTaskId: 't-bbbb22' }));
+    expect(html.match(/Abrir t-aaaa11/g)).toHaveLength(2); // selo do cartão + painel
+    expect(html).toContain('Começa sozinho quando esse card for aprovado e commitado');
   });
 });
 

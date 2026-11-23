@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TaskService } from '../server/tasks';
 import type { StaffProfile, UsageStopHit } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Nenhum card esquecido em "a fazer" (t-d74d52): o que não tem nada que o segure entra na fila do responsável sozinho, pela varredura do `tick`
 // (que também roda na subida). Ocupado, espera a vez; livre, começa. Aguardar, dependência pendente, dúvida aberta, sem responsável e "tirar da fila"
@@ -13,9 +14,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-sweep-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const ana = { id: 'ana-1', name: 'Ana', role: 'Back-end', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
 

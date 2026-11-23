@@ -6,6 +6,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { removeTemp } from './support/tmp';
 
 const SCRIPT = fileURLToPath(new URL('../scripts/dev/fake-mcp.mjs', import.meta.url));
 const dir = path.join(os.tmpdir(), `fake-mcp-test-${process.pid}-${Date.now()}`);
@@ -53,7 +54,7 @@ describe('MCP falso para testar a escrita por MCP (scripts/dev/fake-mcp.mjs)', (
   });
   afterAll(async () => {
     for (const c of children) c.kill();
-    await fs.rm(dir, { recursive: true, force: true });
+    await removeTemp(dir);
   });
 
   it('initialize devolve a versão recebida e a capacidade de ferramentas; ping responde; método desconhecido dá -32601', async () => {

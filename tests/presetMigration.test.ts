@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AgentInput, readAgentSource, saveAgent } from '../server/adapters/claude/agentWrite';
 import { migrateAgentPresets, migrateProjectAgents } from '../server/staff/presetMigration';
 import { AGENT_PRESETS } from '../shared/agentPresets';
+import { removeTemp } from './support/tmp';
 
 // Migração do executor: só o arquivo igual ao pronto antigo (Haiku/low) vira o novo (Sonnet/medium); o personalizado fica como está.
 
@@ -36,9 +37,7 @@ beforeEach(async () => {
   dir = path.join(root, '.claude', 'agents');
   backup = path.join(root, 'bak');
 });
-afterEach(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterEach(() => removeTemp(root));
 
 /** Cria o executor como o código antigo criava (saveAgent com o pronto de então). */
 async function writeOld(over: Partial<typeof OLD_EXECUTOR> = {}) {

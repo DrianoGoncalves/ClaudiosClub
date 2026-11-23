@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, Suspense, type ReactNode } from 'react';
 import { isChunkLoadError, reloadOnce } from './chunkReload';
 import { t } from './i18n';
+import { Skeleton } from './lib/Skeleton';
 
 /** O texto do erro como texto puro (o React escapa; aqui só garante string e tamanho razoável). */
 function errorText(error: unknown): string {
@@ -46,11 +47,28 @@ class LoadFailure extends Component<{ children: ReactNode }, { error: unknown; f
   }
 }
 
-/** O `Suspense` das telas abertas sob demanda, com o aviso de falha de carga ou de render. */
-export function LazyScreen({ children, fallback = null }: { children: ReactNode; fallback?: ReactNode }) {
+/**
+ * O `Suspense` das telas abertas sob demanda, com o aviso de falha de carga ou de render. Enquanto o pedaço da tela baixa, um esqueleto no lugar
+ * dela (antes ficava vazio, e no celular parecia que o clique não tinha pegado): `modal` para as telas que abrem por cima de tudo (o esqueleto vem
+ * no mesmo véu e caixa do modal); sem ele, linhas no lugar (o painel lateral). Quem precisa de outro, passa `fallback` (null = nada).
+ */
+export function LazyScreen({ children, modal = false, fallback }: { children: ReactNode; modal?: boolean; fallback?: ReactNode }) {
+  const label = t('app.loadingScreen');
+  const waiting =
+    fallback !== undefined ? (
+      fallback
+    ) : modal ? (
+      <div className="modal-backdrop">
+        <div className="modal">
+          <Skeleton label={label} lines={4} />
+        </div>
+      </div>
+    ) : (
+      <Skeleton label={label} />
+    );
   return (
     <LoadFailure>
-      <Suspense fallback={fallback}>{children}</Suspense>
+      <Suspense fallback={waiting}>{children}</Suspense>
     </LoadFailure>
   );
 }

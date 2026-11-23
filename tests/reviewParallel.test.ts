@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TaskService } from '../server/tasks';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // A revisão roda em paralelo (t-d74d52): o revisor do card (que vale mais que o do quadro) abre a conversa de revisão sem esperar a tarefa de trabalho
 // dele, e a conversa não conta como trabalho para a fila dele. Ela abre sem edição de arquivo (`reviewOnly`).
@@ -12,9 +13,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-parallel-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const MIN = 60_000;
 const later = (min: number) => new Date(Date.now() + min * MIN);

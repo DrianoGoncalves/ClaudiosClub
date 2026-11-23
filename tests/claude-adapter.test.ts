@@ -6,6 +6,7 @@ import { ClaudeAdapter } from '../server/adapters/claude';
 import { parseFrontmatter, strList } from '../server/adapters/claude/frontmatter';
 import { readHeadTail } from '../server/adapters/claude/fsutil';
 import { encodeProjectDir, worktreeParent } from '../server/adapters/claude/paths';
+import { removeTemp } from './support/tmp';
 
 // Fixture sintética: um ~/.claude falso com dois projetos, um worktree, uma sessão viva e arquivos sensíveis.
 let root: string;
@@ -94,9 +95,7 @@ beforeAll(async () => {
   await write(path.join(home, 'skills', 'synced', 'bucket-1', 'pdf', 'SKILL.md'), '---\nname: pdf\n---\n');
 });
 
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 function adapter() {
   return new ClaudeAdapter({

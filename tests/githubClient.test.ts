@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createGitHubClient, GitHubError, GitHubRateLimited, gitBlobSha } from '../server/adapters/github/client';
+import { removeTemp } from './support/tmp';
 
 // Nada de rede: o fetch é falso e a espera, o sorteio do jitter e o relógio são controlados pelo teste.
 
@@ -12,9 +13,7 @@ let counter = 0;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-github-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
 const TREE = 'fedcba9876543210fedcba9876543210fedcba98';

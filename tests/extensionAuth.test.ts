@@ -17,6 +17,7 @@ import { buildExtensionZip, checkManifest, collectExtension, crc32, storeZip, ty
 import { Pairing, PAIR_COOKIE } from '../server/pairing';
 import { TaskError } from '../server/tasks';
 import type { InboxItem, Task } from '../shared/model';
+import { removeTempSync } from './support/tmp';
 
 // A extensão do Chrome: o gate (Origin, escopo, token), o pareamento e os tokens, as rotas (com deps falsos e o servidor de verdade), o
 // .zip e o manifest. Servidor HTTP de verdade nos dois endereços, como em callers.test.ts.
@@ -65,7 +66,7 @@ describe('ExtensionTokens', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-ext-tok-'));
     clock = 1_700_000_000_000;
   });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => removeTempSync(dir));
 
   it('o código vale uma vez só: a segunda troca recusa', () => {
     const t = new ExtensionTokens(fileIn(dir), now);
@@ -251,7 +252,7 @@ describe('zip da extensão', () => {
       expect(names).toContain('sub/x.js');
       expect(names).toContain('manifest.json');
     } finally {
-      fs.rmSync(d, { recursive: true, force: true });
+      removeTempSync(d);
     }
   });
 
@@ -285,7 +286,7 @@ describe('zip da extensão', () => {
       const back = readZip(await buildExtensionZip(d, 4848));
       expect(Object.keys(back).sort()).toEqual(['manifest.json', 'sw.js']);
     } finally {
-      fs.rmSync(d, { recursive: true, force: true });
+      removeTempSync(d);
     }
   });
 });
@@ -476,7 +477,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   for (const s of servers) await new Promise((r) => s.close(r));
-  fs.rmSync(dir, { recursive: true, force: true });
+  removeTempSync(dir);
 });
 
 beforeEach(() => {
@@ -820,7 +821,7 @@ describe('rotas da extensão', () => {
     const base = (await listen(srv, '127.0.0.1'))!;
     const r = await call(base, 'GET', '/api/ext/v1/inbox', EXT_AUTH(tokenFor().token));
     const [got] = r.body.items as Array<Record<string, unknown>>;
-    expect(got).toMatchObject({ kind: 'error', taskId: 't-0a1b2c', summary: 'uma conversa de tarefa roda sem a fila de validação pesada' });
+    expect(got).toMatchObject({ kind: 'error', taskId: 't-0a1b2c', summary: 'uma conversa de tarefa roda sem a fila de validação pesada e sem o bloqueio de git destrutivo' });
     const text = JSON.stringify(r.body);
     for (const proibido of ['SEGREDO-HOME', 'hooks.json', 'TITULO-H', 'sess-SEGREDO-5', 'guardoff:']) expect(text, proibido).not.toContain(proibido);
   });

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 import { ANIMATIONS_KEY, animationsOn, readAnimationsChoice } from '../client/src/animations';
 import { readConfig, updateConfig } from '../server/config';
+import { removeTemp } from './support/tmp';
 
 describe('Animações: padrão do nível Simples', () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -53,9 +54,7 @@ describe('Otimizar assinatura: padrão do nível Simples', () => {
   beforeAll(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-simple-defaults-'));
   });
-  afterAll(async () => {
-    await fs.rm(dir, { recursive: true, force: true });
-  });
+  afterAll(() => removeTemp(dir));
 
   it('config sem escolha salva = Simples com a otimização desligada', async () => {
     const config = await readConfig(path.join(dir, 'novo', 'config.json'));

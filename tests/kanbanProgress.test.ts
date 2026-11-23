@@ -8,6 +8,7 @@ import { kanbanProgress, progressPercent, progressTotal, STATUS_POINTS, TASK_POI
 import { KanbanProgressBar } from '../client/src/tasks/KanbanProgressBar';
 import { TaskService } from '../server/tasks';
 import type { StaffProfile, TaskStatus } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Dados simulados. Cada tarefa na conta vale 3 pontos; A fazer 0, Fazendo/Planejando 1, Revisão 2. Aguardar, Pronto e
 // Cancelada ficam fora da conta (nem pontos nem máximo).
@@ -87,7 +88,7 @@ describe('KanbanProgressBar', () => {
 describe('TaskService.summary: progress', () => {
   const dirs: string[] = [];
   afterAll(async () => {
-    await Promise.all(dirs.map((d) => fs.rm(d, { recursive: true, force: true })));
+    await removeTemp(...dirs);
   });
 
   /** Serviço sobre um tasks.json de dados fixos. */

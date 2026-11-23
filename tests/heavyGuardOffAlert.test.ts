@@ -10,6 +10,7 @@ import { ChatManager } from '../server/chat/manager';
 import { heavyGuardOffInboxItem } from '../server/inboxItems';
 import { TaskService } from '../server/tasks';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Follow-up f-22703c da t-3503b0: o aviso de que a fila de validação pesada ficou desligada (hooks.json na conta do Codex) não pode ficar só no chat, que ninguém lê numa conversa autônoma.
 // Conversa de TAREFA leva o aviso à nota da tarefa e à caixa (kind 'error', `InboxItem.heavyGuardOff`), uma vez por conversa e não a cada execução.
@@ -29,9 +30,7 @@ const codexHome = async () => {
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-guardoff-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 afterEach(() => {
   vi.unstubAllEnvs();
 });
@@ -291,6 +290,7 @@ describe('TaskService.noteHeavyGuardOff: uma nota por conversa de trabalho', () 
     expect(notes(after)).toHaveLength(1);
     expect(after.history).toHaveLength(before + 1);
     expect(notes(after)[0]!.note).toMatch(/hooks\.json/);
+    expect(notes(after)[0]!.note).toMatch(/bloqueio de git destrutivo/); // t-0ccbff
     expect(notes(after)[0]!.note).not.toMatch(/[\\/]/); // só o nome do arquivo: o histórico aparece em mais telas que o chat
   });
 
@@ -320,6 +320,7 @@ describe('heavyGuardOffInboxItem e a fiação do servidor', () => {
     expect(item).toMatchObject({ id: 'guardoff:sess-1', kind: 'error', sessionId: 'sess-1', staffId: 'cris', at: hit.at, heavyGuardOff: { taskId: 't-a1b2c3', taskTitle: 'Tela', file: hit.file } });
     expect(item.summary).toContain('Tela');
     expect(item.summary).toContain('hooks.json');
+    expect(item.summary).toContain('bloqueio de git destrutivo'); // t-0ccbff
     expect(item.summary).not.toContain('C:\\'); // o caminho não vai no texto
   });
 

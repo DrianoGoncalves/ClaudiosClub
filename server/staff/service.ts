@@ -212,7 +212,7 @@ function asEngine(profile: StaffProfile, o: EngineOverride): StaffProfile {
   if (o.engine === 'claude' && profile.engine === 'codex') {
     const teto = profile.autonomy;
     const autonomy = teto === 'plan' || teto === 'manual' ? teto : atMostAutonomy(atMostAutonomy(o.autonomy ?? 'acceptEdits', teto), 'acceptEdits');
-    return { ...base, autonomy, browser: false, mcps: [], canHire: false, servers: [] };
+    return { ...base, autonomy, browser: false, mcps: [], canHire: false, canRelease: false, servers: [] };
   }
   return base;
 }
@@ -420,6 +420,7 @@ export class StaffService {
       for (const m of managers) await this.guardSeal(project, m);
       input.autonomy = capAutonomy(input.autonomy, hirer.autonomy);
       input.canHire = false; // subfuncionário contratado por outro não contrata em cascata
+      input.canRelease = false; // nem liga a pausa de versão: essa permissão é só sua, pela tela
       input.servers = input.servers.filter((s) => hirer.servers.includes(s)); // nem acessa servidor que o gestor não acessa
       input.browser = input.browser && hirer.browser; // nem usa o navegador se o gestor não usa
       if (hirer.mcps !== null) {
@@ -575,6 +576,7 @@ export class StaffService {
       effort: src.effort,
       ...(src.personality && { personality: src.personality }),
       canHire: src.canHire,
+      canRelease: !!src.canRelease,
       playbook: src.playbook,
       worktree: src.worktree,
       servers: [],
@@ -790,6 +792,8 @@ export class StaffService {
     const { portraitDataUrl, launch: _launch, adoptSessionId: _adopt, force: _force, fallback, ...fields } = parsed.data;
     // Pedido sem `sshWrite` (a tela ainda não manda o campo): fica o que a ficha já tinha, para editar não zerar a escrita SSH.
     if (!(typeof body === 'object' && body !== null && 'sshWrite' in body)) fields.sshWrite = current.sshWrite ?? [];
+    // O mesmo com `canRelease`: a tela ainda não manda a permissão, e editar a ficha não pode desligá-la (o padrão do schema é desligado).
+    if (!(typeof body === 'object' && body !== null && 'canRelease' in body)) fields.canRelease = current.canRelease ?? false;
     // Sem `mcpAccess` no pedido, a tela antiga (legado) só aperta o que a ficha tem; sem nada, fica o da ficha; `{}` limpa.
     fields.mcpAccess = mcpAccessOfInput(fields, current.mcpAccess);
     delete fields.mcpPolicy;

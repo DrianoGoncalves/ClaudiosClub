@@ -4,6 +4,9 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CodexRun, CodexRunner } from '../server/adapters/codex';
 import { CODEX_ENV_TTL, CODEX_MIN_VERSION, CodexEnv, codexUpgradeHint, compareVersions, locateCodex, parseCodexFeatures, parseCodexVersion, resolveCodexCommand, withAppAddress, type CodexEnvStatus } from '../server/codexEnv';
+import { removeTemp, tempDirs } from './support/tmp';
+
+const tmp = tempDirs();
 
 // Conferência do Codex instalado: versão mínima (0.156.1) e o recurso `network_proxy`, de que a rede local depende.
 
@@ -63,7 +66,7 @@ describe('codexEnv: versão e recurso network_proxy', () => {
   });
 
   it('acha o codex no PATH e o caminho real depois dos links; sem ele, lista vazia', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-locate-'));
+    const dir = await tmp('myco-locate-');
     const real = path.join(dir, 'mise', 'installs', 'codex', 'latest', 'bin');
     const bin = path.join(dir, 'bin');
     await fs.mkdir(real, { recursive: true });
@@ -75,7 +78,6 @@ describe('codexEnv: versão e recurso network_proxy', () => {
     expect(codexUpgradeHint(found)).toBe('mise upgrade codex');
     expect(await locateCodex({ PATH: path.join(dir, 'vazia') }, 'linux')).toEqual([]);
     expect(await locateCodex({}, 'linux')).toEqual([]);
-    await fs.rm(dir, { recursive: true, force: true });
   });
 
   it('Codex serve e tem o network_proxy (experimental ou stable): rede local liberada, sem aviso', async () => {
@@ -193,9 +195,7 @@ describe('resolveCodexCommand: o codex sem shell (Windows acha o JS do .cmd do n
   beforeAll(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-codexcmd-'));
   });
-  afterAll(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
+  afterAll(() => removeTemp(root));
   /** Uma pasta de PATH com os arquivos (vazios) pedidos. */
   async function folder(name: string, files: string[] = []) {
     const dir = path.join(root, name);

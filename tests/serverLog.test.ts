@@ -3,14 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readServerLog } from '../server/staff/serverLog';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-srvlog-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const use = (at: string, id: string, name: string, command: string) =>
   JSON.stringify({ type: 'assistant', timestamp: at, sessionId: 's1', message: { content: [{ type: 'tool_use', id, name, input: { command } }] } });

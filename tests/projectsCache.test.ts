@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClaudeAdapter } from '../server/adapters/claude';
 import { encodeProjectDir } from '../server/adapters/claude/paths';
+import { removeTemp } from './support/tmp';
 
 // O resumo dos projetos (`listProjects`) lê todo transcript e quase toda rota passa por ele: com `projectsTtlMs` fica guardado, e muda na hora
 // quando o projeto muda (novo projeto: `forgetProjects`; apelido: nem entra no que fica guardado).
@@ -28,9 +29,7 @@ beforeAll(async () => {
   await fs.mkdir(projA, { recursive: true });
   await fs.mkdir(projB, { recursive: true });
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 beforeEach(async () => {
   // Cada teste começa com só o projA, sem conversa. O relógio é falso só na data (o disco segue de verdade).
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -118,5 +117,36 @@ describe('listProjects com cache (projectsTtlMs)', () => {
     expect(byPath(await ad.listProjects(), projA)).toMatchObject({ sessionCount: 0 });
     await transcript(projA, 's1');
     expect(byPath(await ad.listProjects(), projA)).toMatchObject({ sessionCount: 1 });
+  });
+});
+
+// O caminho quente das tarefas (`projectPathOf`, `projectIds` em server/index.ts) usa estes dois, sem o resumo: mesmo critério do
+// `exists`/`worktreeOf` do `listProjects`, sem stat de transcript.
+describe('projectPath e boardProjectIds (sem o resumo)', () => {
+  it('projectPath: a pasta do projeto do quadro; null fora do quadro e com a pasta apagada', async () => {
+    const gone = path.join(root, 'work', 'gone');
+    await fs.mkdir(gone, { recursive: true });
+    await writeConfig(projA, gone);
+    const ad = adapter();
+    expect(await ad.projectPath(idA)).toBe(path.resolve(projA));
+    expect(await ad.projectPath('nao-existe')).toBeNull();
+    const goneId = encodeProjectDir(path.resolve(gone));
+    expect(await ad.projectPath(goneId)).toBe(path.resolve(gone));
+    await fs.rm(gone, { recursive: true, force: true });
+    expect(await ad.projectPath(goneId)).toBeNull();
+    // Igual ao `listProjects` + `exists`.
+    const listed = (await ad.listProjects()).find((p) => p.id === goneId);
+    expect(listed?.exists).toBe(false);
+  });
+
+  it('boardProjectIds: os mesmos do filtro exists && !worktreeOf sobre o listProjects', async () => {
+    const wt = path.join(projA, '.claude', 'worktrees', 'w1');
+    const gone = path.join(root, 'work', 'gone2');
+    await fs.mkdir(wt, { recursive: true });
+    await writeConfig(projA, projB, wt, gone);
+    const ad = adapter();
+    const expected = (await ad.listProjects()).filter((p) => p.exists && !p.worktreeOf).map((p) => p.id);
+    expect((await ad.boardProjectIds()).sort()).toEqual(expected.sort());
+    expect((await ad.boardProjectIds()).sort()).toEqual([idA, encodeProjectDir(path.resolve(projB))].sort());
   });
 });

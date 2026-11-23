@@ -9,14 +9,13 @@ import { clubBlockedOrigins } from '../server/clubAddress';
 import { ConfigPatch, MYCO_HOME, readConfig, updateConfig } from '../server/config';
 import { renderFicha, secretDenyRules } from '../server/staff/ficha';
 import { BROWSER_TOOLS_MATCHER, codexChromeOf, staffSettings } from '../server/staff/launch';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-guard-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 // O navegador do funcionário não abre a tela do Club (scripts/hooks/club-guard.mjs e o --blocked-origins do Codex).
 

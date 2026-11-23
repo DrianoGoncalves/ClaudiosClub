@@ -7,14 +7,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { StaffProfile } from '../shared/model';
 import { ChatManager } from '../server/chat/manager';
 import { TaskService } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-busy-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 describe('“trabalhando” é por projeto: o mesmo staffId em dois projetos não se bloqueia', () => {
   it('uma conversa trabalhando no projeto p1 não segura a tarefa do mesmo funcionário no p2', async () => {

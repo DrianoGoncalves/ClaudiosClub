@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { expandVars, testMcpConfig } from '../server/staff/mcpTest';
+import { removeTemp } from './support/tmp';
 
 // Servidor HTTP falso (streamable: JSON e SSE) e um MCP stdio falso num arquivo temporário.
 
@@ -80,7 +81,7 @@ beforeAll(async () => {
 afterAll(async () => {
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
-  await fs.rm(root, { recursive: true, force: true });
+  await removeTemp(root);
 });
 
 describe('teste de MCP: HTTP (streamable)', () => {

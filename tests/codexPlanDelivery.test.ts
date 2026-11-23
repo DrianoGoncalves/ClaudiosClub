@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { TaskService } from '../server/tasks';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Ficha `plan` no Codex (t-930086, follow-up f-527cf3 da t-218ac6): "planejando" só sai pelo cartão de plano do chat, que o Codex não tem, e a entrega do fim do
 // turno só partia de "fazendo": o card ficava em planejando para sempre, sem entrega nem revisão, e segurava a fila (caso t-17e624). Agora, no Codex, o fim
@@ -13,9 +14,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-codexplan-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const MIN = 60_000;
 const later = (min: number) => new Date(Date.now() + min * MIN);

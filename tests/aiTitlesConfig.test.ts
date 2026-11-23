@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ConfigPatch, readConfig, updateConfig } from '../server/config';
+import { removeTemp } from './support/tmp';
 
 // Opção aiTitles no config: arquivo temporário, nada toca o ~/.myco.
 
@@ -12,9 +13,7 @@ beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-aititles-'));
 });
 
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const fileWith = async (name: string, body: unknown): Promise<string> => {
   const file = path.join(root, name);

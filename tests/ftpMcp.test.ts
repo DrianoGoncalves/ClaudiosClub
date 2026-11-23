@@ -11,6 +11,7 @@ import { buildClaudeArgs, renderFicha, secretDenyRules, type FichaContext } from
 import { saveFtpConnection, type FtpConnector, type FtpEntry, type FtpSession } from '../server/staff/ftp';
 import { createFtpMcp, ftpMcpCommand, ftpMcpServerConfig, resolveLocal, TOOLS } from '../server/staff/ftpMcp';
 import { StaffService } from '../server/staff/service';
+import { removeTemp } from './support/tmp';
 
 const PASSWORD = 'Senha-Do-FTP-123';
 
@@ -89,9 +90,7 @@ beforeAll(async () => {
   await saveFtpConnection(proj, { name: 'outro', protocol: 'ftp', host: 'ftp2.example.com', user: 'u', password: 'outra' }, vault);
   await fs.writeFile(path.join(proj, '.myco', 'staff', 'ana-1.json'), JSON.stringify({ servers: ['site'] }));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const text = (r: unknown) => (r as { result: { content: Array<{ text: string }> } }).result.content[0]!.text;
 const isError = (r: unknown) => (r as { result: { isError?: boolean } }).result.isError === true;

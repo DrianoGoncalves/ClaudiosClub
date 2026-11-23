@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CostIndex, dayKey, parseAssistantLine } from '../server/adapters/claude/costs';
 import { costOf, normalizeModel } from '../server/adapters/claude/pricing';
+import { removeTemp } from './support/tmp';
 
 describe('pricing', () => {
   it('normaliza ids com data ou sufixo', () => {
@@ -103,9 +104,7 @@ describe('CostIndex', () => {
     await fs.writeFile(path.join(proj, 's1', 'subagents', 'agent-x.meta.json'), JSON.stringify({ agentType: 'Explore' }));
   });
 
-  afterAll(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
+  afterAll(() => removeTemp(root));
 
   it('soma por projeto, sessão (com subagents), agent e dia, sem contar respostas repetidas', async () => {
     const idx = new CostIndex(projectsDir, path.join(root, 'cache.json'));

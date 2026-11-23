@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 import { PassThrough } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { IDLE_MS, lazyNavegadorCommand, navegadorProxyCommand, parseProxyArgs, runNavegadorProxy, serverFingerprint, type NavegadorProxyOptions } from '../server/navegadorMcp';
+import { removeTemp } from './support/tmp';
 
 // O proxy preguiçoso do MCP do navegador limpo: `initialize` e `tools/list` saem do cache sem abrir o servidor de verdade; o primeiro pedido que
 // precisa dele o abre (repetindo o `initialize` do cliente) e dali em diante tudo passa sem mudar. O servidor de verdade é um script de mentira
@@ -82,16 +83,20 @@ beforeAll(async () => {
   FAKE = path.join(root, 'fake-server.mjs');
   await fs.writeFile(FAKE, FAKE_SERVER);
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 let n = 0;
-/** Uma pasta nova por teste: o log do servidor de mentira e o cache. */
+/**
+ * Uma pasta nova por teste: o log do servidor de mentira e o cache. O log já nasce (vazio): o `serverFingerprint` olha todo argumento
+ * absoluto que existe e procura o `playwright-core` acima dele. Com o log só aparecendo na primeira abertura, a 2ª conversa teria uma chave
+ * de cache diferente da 1ª sempre que há um `playwright-core` acima do TEMP (ex.: um `node_modules` na pasta pessoal), e nunca reusaria o cache.
+ */
 async function scratch() {
   const dir = path.join(root, `t${++n}`);
   await fs.mkdir(dir, { recursive: true });
-  return { dir, log: path.join(dir, 'fake.log'), cacheDir: path.join(dir, 'cache') };
+  const log = path.join(dir, 'fake.log');
+  await fs.writeFile(log, '');
+  return { dir, log, cacheDir: path.join(dir, 'cache') };
 }
 
 type Msg = { jsonrpc: string; id?: unknown; method?: string; params?: Record<string, unknown>; result?: any; error?: { code: number; message: string } };

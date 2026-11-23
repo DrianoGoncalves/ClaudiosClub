@@ -21,6 +21,7 @@ import {
   type GptRun,
   type GptRunner,
 } from '../server/staff/gptMcp';
+import { removeTemp } from './support/tmp';
 
 // O MCP do GPT (`perguntar_gpt`): a montagem do `codex exec` (só leitura, sem shell, segredos negados), o plano B de modelo, o filtro de
 // segredos e o protocolo. O Codex de verdade é trocado por um runner falso; o spawn é testado com um `codex` de mentira no PATH.
@@ -41,9 +42,7 @@ beforeAll(async () => {
   configFile = path.join(mycoHome, 'config.json');
   for (const d of [proj, main, path.join(mycoHome, 'secrets'), path.join(home, '.ssh'), path.join(proj, '.vps'), path.join(main, '.vps')]) await fs.mkdir(d, { recursive: true });
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 beforeEach(async () => {
   await fs.rm(configFile, { force: true });
   await updateConfig({ codexReview: true }, configFile);

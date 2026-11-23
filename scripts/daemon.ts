@@ -107,12 +107,20 @@ function buildClient(): void {
   if (build.status !== 0) log('o build do cliente falhou (veja acima); o servidor sobe com a última versão do cliente');
 }
 
+/**
+ * O pool de I/O do Node tem 4 threads: o stat dos transcripts (centenas de uma vez) enfileirava atrás dele a leitura e a gravação do quadro.
+ * Com 16, o arquivo pequeno não espera a rajada. Quem já definiu o valor no ambiente manda. Os processos que o servidor abre herdam (inofensivo).
+ */
+function serverEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...env, UV_THREADPOOL_SIZE: env.UV_THREADPOOL_SIZE || '16' };
+}
+
 /** Roda o servidor até ele sair; devolve o código de saída. */
 async function runServer(args: string[]): Promise<number | null> {
   return new Promise((resolve) => {
     child = spawn(process.execPath, args, {
       cwd: ROOT,
-      env: process.env,
+      env: serverEnv(process.env),
       stdio: 'inherit',
       windowsHide: true,
     });

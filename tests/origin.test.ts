@@ -9,6 +9,7 @@ import { hasStaffNotice, STAFF_NOTICE } from '../server/chat/items';
 import { ChatManager } from '../server/chat/manager';
 import { type OriginDeps, staffOrigin, staffOriginNotice } from '../server/chat/origin';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // O carimbo de quem mandou (outro funcionário): sai do token de quem chama, nunca do corpo do pedido.
 
@@ -16,9 +17,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-origin-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const tupac = { id: 'tupac-91e7', name: 'Tupac', role: 'Analista de segurança (AppSec)', engine: 'claude' } as StaffProfile;
 const cris = { id: 'cris-1', name: 'Cris', role: 'Revisora', engine: 'codex' } as StaffProfile;

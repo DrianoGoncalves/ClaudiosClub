@@ -154,6 +154,15 @@ describe('QueueDots e o quadro', () => {
     expect(html).not.toContain('<span>B</span>');
   });
 
+  it('Revisão (quem revisa): só a bolinha, sem retrato nem iniciais, mesmo com ficha e foto', () => {
+    const staff = [{ id: 'leo', name: 'Leonardo', portrait: 'p.png', updatedAt: ISO }];
+    const html = renderToStaticMarkup(createElement(QueueDots, { projectId: 'p1', staff, dots: [{ staffId: 'leo', column: 'review', tone: 'busy', text: 'Leonardo: revisando X' }] }));
+    expect(html).toContain('class="queue-dot is-plain"');
+    expect(html).toContain('class="dot dot-busy"');
+    expect(html).not.toContain('bn-portrait');
+    expect(html).not.toContain('<img');
+  });
+
   it('ninguém ocupado, não desenha nada', () => {
     expect(renderToStaticMarkup(createElement(QueueDots, { dots: [] }))).toBe('');
   });
@@ -179,9 +188,9 @@ describe('QueueDots e o quadro', () => {
     const doing = html.slice(html.indexOf('tasks-col-doing'), html.indexOf('tasks-col-review'));
     const rev = html.slice(html.indexOf('tasks-col-review'), html.indexOf('tasks-col-done'));
     expect(doing).toContain('aria-label="Belchior: trabalhando em Tela de login');
-    // O quadro passa a ficha: Belchior (com retrato) aparece com a foto, Leonardo (sem) com as iniciais.
+    // O quadro passa a ficha: quem executa (Belchior, com retrato) aparece com a foto em Fazendo; quem revisa (Leonardo) é só bolinha em Revisão.
     expect(doing).toContain('src="/api/projects/p/staff/bel/portrait?v=');
-    expect(rev).toContain('<span>L</span>');
+    expect(rev.slice(rev.indexOf('queue-dots'), rev.indexOf('task-card'))).not.toContain('bn-portrait');
     expect(rev).toContain('aria-label="Leonardo: revisando Outra"');
     // Sem o dado das filas, só Fazendo perde a bolinha: Revisão vem dos cards.
     for (const none of [undefined, null]) {

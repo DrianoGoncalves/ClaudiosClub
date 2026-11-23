@@ -631,9 +631,48 @@ textarea.q-field { resize: vertical; }
 .project-paused-text { display: grid; gap: 2px; min-width: 0; }
 .project-paused-text p { margin: 0; font-size: var(--fs-md); overflow-wrap: anywhere; }
 /* Celular: só o ícone ao lado do título (o texto empurraria o título para outra linha); o nome fica no aria-label e no title, e a faixa abaixo diz o estado. */
-@media (max-width: 480px) { .tasks-head .project-pause-label { display: none; } }
+@media (max-width: 480px) { .tasks-head .project-pause-btn:not(.is-version) .project-pause-label { display: none; } }
 .badge.is-paused { color: var(--ink); border-color: var(--ink-blue); background: color-mix(in srgb, var(--ink-blue) 14%, transparent); font-weight: 600; }
 .badge.is-paused svg { vertical-align: -1px; }
+/* Versão com escopo (ReleaseDialog): a faixa do quadro (mesmo azul da pausa, borda tracejada: é um estado seu) e a página por cima do quadro, em tela cheia. */
+.release-banner { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; padding: 6px 12px; border: 1px dashed var(--ink-blue); border-left: 4px solid var(--ink-blue); border-radius: 10px; background: color-mix(in srgb, var(--ink-blue) 8%, transparent); color: var(--ink); }
+.release-banner p { margin: 0 auto 0 0; font-size: var(--fs-md); overflow-wrap: anywhere; }
+.release-banner .btn-secondary { min-height: var(--btn-h); }
+.release-modal .segmented { align-self: flex-start; }
+.release-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-bottom: 16px; }
+.release-body { display: grid; gap: 10px; max-width: 760px; }
+.release-head { margin: 4px 0 0; font-size: var(--fs-lg, 15px); }
+.release-field { display: grid; gap: 4px; max-width: 360px; }
+.release-field input, .release-field select { min-height: 36px; }
+.release-field input[aria-invalid="true"] { border-color: var(--ink-red); }
+.release-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.release-item { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); min-width: 0; }
+.release-pick { display: flex; align-items: flex-start; gap: 8px; min-width: 0; flex: 1 1 260px; cursor: pointer; }
+.release-pick input { flex: none; width: 18px; height: 18px; margin: 1px 0 0; }
+.release-title { min-width: 0; flex: 1 1 200px; overflow-wrap: anywhere; }
+.release-meta { flex: 0 1 auto; }
+.release-chip { font-weight: 600; }
+.release-chip[data-state="done"] { color: var(--ink-green); }
+.release-chip[data-state="stuck"] { color: var(--ink-red); }
+.release-chip[data-state="cancelled"] { color: var(--muted); }
+.release-item[data-state="cancelled"] .release-title { text-decoration: line-through; color: var(--muted); }
+.release-remove { margin-left: auto; min-height: var(--btn-h); }
+.release-progress { width: 100%; height: 8px; accent-color: var(--ink-green); }
+.release-add summary, .release-history summary { cursor: pointer; padding: 4px 0; }
+.release-add { display: grid; gap: 8px; }
+.release-status { display: grid; gap: 8px; justify-items: start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.release-status p { margin: 0; }
+.release-status a { overflow-wrap: anywhere; }
+.release-output { max-height: 240px; overflow: auto; white-space: pre-wrap; font-size: var(--fs-sm); }
+.release-foot { display: flex; flex-wrap: wrap; gap: 8px; }
+.release-foot .btn-primary, .release-foot .btn-secondary, .release-status > .btn-primary { min-height: 36px; }
+.release-history { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+.release-subject { display: block; margin-top: 2px; overflow-wrap: anywhere; }
+.release-summary { white-space: pre-wrap; overflow-wrap: anywhere; }
+.release-history-tasks { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 2px; }
+/* Celular: o botão "Versão" do cabeçalho divide a linha com os outros sem empurrar o título. */
+@media (max-width: 480px) { .tasks-head .release-open-btn { padding-inline: 8px; } .release-remove { margin-left: 0; } }
+.bn-tag.is-paused.is-version, .badge.is-paused.is-version { white-space: nowrap; }
 /* Agendamentos do projeto: um cartão por despertador ou "continue" pendente. O texto é do funcionário: pre-wrap, nunca HTML. */
 .sched-intro, .sched-notice { margin: 0; font-size: var(--fs-md); }
 .sched-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
@@ -901,15 +940,29 @@ textarea.q-field { resize: vertical; }
 /* O retrato do organograma (`Portrait`, 28px) vai sobreposto ao vizinho para ocupar pouco; o botão sobe ao passar o mouse/focar, para o sobreposto não ficar escondido. Margem vertical negativa: a altura do cabeçalho não muda. */
 .queue-dots { padding-left: 6px; }
 .queue-dot { display: inline-flex; flex: none; width: 28px; height: 28px; margin: -6px 0 -6px -6px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--ink); cursor: help; position: relative; }
+/* Revisão: quem revisa não leva retrato, só a bolinha de ocupado; a área de toque passa de 24px sem mexer na altura do cabeçalho. */
+.queue-dot.is-plain { align-items: center; justify-content: center; width: 24px; height: 24px; margin: -6px -3px; }
 .queue-dot:hover, .queue-dot:focus-visible { z-index: 1; }
 .queue-dot:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; }
 /* Mesma fonte à mão (--hand) das iniciais do organograma, em corpo menor. */
 .bn-portrait.is-mini { font-size: var(--fs-md); }
 .bn-portrait.is-mini img { inset: 3px; width: 22px; height: 22px; }
+/* Quem revisa no painel (ReviewerChip): o mesmo retrato em 22px ao lado do nome; a foto e as iniciais encolhem junto. No cartão do quadro o revisor é só o nome (a foto é de quem executa). */
+.reviewer-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.reviewer-chip .bn-portrait.is-mini { flex: none; font-size: var(--fs-sm); }
+.reviewer-chip .bn-portrait.is-mini img { inset: 2px; width: 18px; height: 18px; }
+.task-review-who { margin: 0; }
+.reviewer-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queue-tip { position: fixed; z-index: 1000; display: grid; gap: 2px; box-sizing: border-box; max-width: calc(100vw - 16px); padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); font-size: var(--fs-md); line-height: 1.3; overflow-wrap: anywhere; pointer-events: none; }
 .queue-tip.tone-wait { border-color: var(--tone); }
 .queue-tip strong { font-weight: 600; }
 .queue-detail { color: var(--muted); font-size: var(--fs-md); }
+/* A dica com link ("Abrir t-xxxx" do card que ocupa a vaga de escrita) é clicável; a faixa de cima cobre o vão até a bolinha, para o mouse chegar nela sem fechar. */
+.queue-tip.has-link { pointer-events: auto; }
+.queue-tip.has-link::before { content: ''; position: absolute; left: 0; right: 0; top: -8px; height: 8px; }
+.queue-tip .queue-open { justify-self: start; min-height: 28px; }
+/* Link do selo de espera do cartão (um span role="link": o cartão é um botão e não aceita botão dentro). */
+.task-slot-open { margin-left: 6px; color: var(--ink-blue); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; white-space: nowrap; }
 .tasks-col-review h3 { color: var(--waiting-ink); }
 .task-card { display: grid; gap: 2px; text-align: left; margin: 6px 0 0 0 ; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; cursor: grab; }
 .task-card:hover { border-color: var(--ink-blue); }
@@ -1091,6 +1144,8 @@ textarea.q-field { resize: vertical; }
 .task-badge:is(.task-doubt, .task-cancelreq, .task-followup, .task-commit, .task-nocode) { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Commit automático da tarefa pronta: neutro com o SHA; amarelo (.is-waiting) em "commit parcial" e "sem commit" até você ignorar o aviso da caixa. Texto --ink, como o follow-up. */
 .task-badge.task-commit { color: var(--ink); }
+/* "aguardando t-xxx, nada a fazer": a frase inteira é o aviso (só ciência), então quebra em vez de cortar na coluna estreita. */
+.task-badge.task-commit.task-commit-wait { white-space: normal; border-radius: 10px; }
 .task-commit-box { display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
 .task-commit-box ul { margin: 0; padding-left: 18px; }
 .task-commit-box li { overflow-wrap: anywhere; }
@@ -1316,6 +1371,17 @@ textarea.q-field { resize: vertical; }
 .msg-images { display: flex; align-items: center; gap: 4px; font-size: var(--fs-md); opacity: 0.85; margin-bottom: 2px; }
 .bn-git-branch { display: inline-flex; align-items: center; gap: 4px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* Esqueleto de carregamento (lib/Skeleton.tsx): blocos na cor da linha, com um brilho que passa; com "reduzir movimento", parado. */
+.skel { display: grid; gap: 8px; width: 100%; min-width: 0; }
+.skel-columns { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 760px) { .skel-columns { grid-template-columns: minmax(0, 1fr); } .skel-columns .skel-col ~ .skel-col { display: none; } }
+.skel-col { display: grid; align-content: start; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; }
+.skel-bar, .skel-card { border-radius: 6px; background: linear-gradient(90deg, var(--line) 25%, color-mix(in srgb, var(--line) 45%, transparent) 50%, var(--line) 75%); background-size: 200% 100%; animation: skel-shine 1.4s ease-in-out infinite; }
+.skel-bar { height: 12px; }
+.skel-head { height: 18px; width: 55%; }
+.skel-card { height: 64px; }
+@keyframes skel-shine { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .skel-bar, .skel-card { animation: none; } }
 /* Topo do funcionário: o "⋯" fica no canto do topo, à esquerda do "×" do painel. */
 .chat-top { position: relative; min-height: 28px; }
 .btn-secondary.chat-more-btn { position: absolute; top: 0; right: 10px; width: var(--btn-h); height: var(--btn-h); padding: 0; font-size: var(--fs-xl); line-height: 1; display: grid; place-items: center; }
@@ -1588,7 +1654,7 @@ button.link.review-task-link { font-family: ui-monospace, Consolas, monospace; f
 .weight-flag .weight-tip { margin: 2px 0 4px 14px; color: var(--ink); overflow-wrap: anywhere; }
 @media (max-width: 640px) { .weight-flag > summary { min-height: 36px; padding-top: 8px; padding-bottom: 8px; } .weight-flag > summary::before { top: 15px; } }
 :is(.modal, .hire-inline) .check { display: flex; flex-direction: row; align-items: center; gap: 6px; font-weight: 400; }
-/* Opção com ajuda: caixa à esquerda; rótulo e ajuda empilhados ao lado dela (nunca o rótulo abaixo da caixa). */
+/* Opção com ajuda: caixa à esquerda; rótulo e ajuda ao lado dela, na mesma linha quando cabe e quebrando para a linha de baixo quando não (nunca o rótulo abaixo da caixa). */
 :is(.modal, .hire-inline) .check:has(> .check-text) { align-items: flex-start; flex-wrap: nowrap; }
 :is(.modal, .hire-inline) .check:has(> .check-text) > input[type='checkbox'] { flex: none; margin-top: 2px; }
 .check > .check-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; overflow-wrap: anywhere; }
@@ -2074,6 +2140,29 @@ span.inbox-dismiss { display: flex; flex-wrap: wrap; justify-content: flex-end; 
 .inbox-review-row button { flex: none; }
 @media (max-width: 640px) { .inbox-review-row :is(select, button), .inbox-dismiss:has(.inbox-delegate) button { min-height: var(--btn-h); } .inbox-review-row select { font-size: var(--fs-md); } }
 .inbox-at { grid-area: at; white-space: nowrap; }
+/* Aviso de commit parcial (inbox/CommitLeftover.tsx): a cor vem do .tone-* do item (âmbar = decisão do dono, vermelho = falhou). A frase inteira (sem o corte em 2 linhas), os arquivos de fora e os botões do
+   design system (docs/design-system.md): secundária à esquerda, primária à direita; no celular a primária ocupa a largura toda, embaixo, e o corpo usa a largura do menu. */
+.inbox-list { grid-template-columns: minmax(0, 1fr); }
+.inbox-list li.has-commit { border-left: 3px solid var(--tone); border-radius: 8px; background: color-mix(in srgb, var(--tone) 8%, transparent); }
+.inbox-commit-row .inbox-summary { display: block; -webkit-line-clamp: unset; line-clamp: unset; overflow: visible; }
+.inbox-commit-status { margin-left: 6px; color: var(--ink); white-space: nowrap; }
+.inbox-commit-waiting { margin: 0; padding: 8px 14px; flex: none; border-bottom: 1px solid var(--line); color: var(--tone-ink); overflow-wrap: anywhere; }
+.inbox-commit { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; padding: 0 10px 8px calc(var(--inbox-kind-w) + 20px); }
+.inbox-commit-files { margin: 0; padding-left: 16px; font-size: var(--fs-md); overflow-wrap: anywhere; }
+.inbox-commit-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.inbox-commit-panel { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; margin: 0; padding: 8px; border: 1px dashed var(--line); border-radius: 8px; background: var(--panel); }
+.inbox-commit-panel p { margin: 0; overflow-wrap: anywhere; }
+.inbox-commit-diffs { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.inbox-commit-letter { display: inline-block; min-width: 14px; text-align: center; font-family: ui-monospace, Consolas, monospace; font-weight: 700; color: var(--ink); border: 1px solid var(--line); border-radius: 4px; }
+.inbox-commit-diff summary { cursor: pointer; color: var(--muted); width: fit-content; min-height: 24px; }
+.inbox-commit-diff pre { margin: 4px 0 0; max-height: 200px; overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-sm); white-space: pre; tab-size: 2; }
+.inbox-commit-diff pre:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; }
+@media (max-width: 480px) {
+  .inbox-commit { padding-left: 10px; }
+  .inbox-commit-actions .btn-secondary { flex: 1 1 0; }
+  .inbox-commit-actions .btn-primary { flex: 1 0 100%; }
+  .inbox-commit-diff summary { min-height: 36px; padding: 8px 0; box-sizing: border-box; }
+}
 /* No celular o botão não fica na borda esquerda: ancorada nele, a caixa saía pela direita. Ocupa a largura da tela. */
 @media (max-width: 480px) {
   .inbox-menu { position: fixed; top: auto; left: 12px; right: 12px; width: auto; margin-top: 8px; }

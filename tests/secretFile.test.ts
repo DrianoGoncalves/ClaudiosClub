@@ -11,6 +11,7 @@ import { ChatManager } from '../server/chat/manager';
 import { ChatProcess } from '../server/chat/process';
 import { secretInboxItem, type SecretHit } from '../server/inboxItems';
 import { isBlockedRel, ProjectFileError, readProjectFile, readProjectImageFile } from '../server/projectFiles';
+import { removeTemp } from './support/tmp';
 
 // Arquivo do aviso de segredo (`secret.file`): de onde vem em cada motor, como vira caminho do projeto e o que a tela recebe (nunca o valor
 // do segredo nem pasta absoluta). O valor abaixo é fictício: só precisa casar com o filtro de segredos.
@@ -26,9 +27,7 @@ beforeAll(async () => {
   await fs.writeFile(path.join(proj, 'src', 'a.ts'), 'export const a = 1;\n');
   await fs.writeFile(path.join(proj, '.env'), `${SEGREDO}\n`);
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const tick = () => new Promise((r) => setTimeout(r, 15));
 

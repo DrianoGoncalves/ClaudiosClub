@@ -10,6 +10,7 @@ import { ChatProcess, rememberRules } from '../server/chat/process';
 import { searchFiles } from '../server/fileSearch';
 import { TurnWatcher } from '../server/turns';
 import { applySuggestion, commandSuggestions, todosFrom, triggerOf } from '../client/src/chat/ChatExtras';
+import { removeTemp } from './support/tmp';
 
 // O que veio do app do Claude para a conversa do Claudio’s Club: ajustes na hora, "permitir sempre", anexos,
 // comandos "/", arquivos com "@", lista de tarefas e o aviso "terminou" de turno curto.
@@ -18,9 +19,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-parity-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 function fakeClaude() {
   const stdin = new PassThrough();

@@ -1,9 +1,10 @@
-import { type ReactNode, createContext, memo, useContext, useEffect, useRef, useState } from 'react';
+import { type ReactNode, createContext, memo, useContext } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Element, ElementContent } from 'hast';
 import { ImageIcon } from '../icons';
 import { t } from '../i18n';
+import { copyText, useCopy } from '../lib/useCopy';
 import { looksLikeFileLink, looksLikeFilePath, projectRelativePath, resolveFromDir } from './filePath';
 
 // Markdown das respostas da IA no padrão GFM (tabelas, listas aninhadas, tarefas, riscado, código),
@@ -51,32 +52,8 @@ function htmlAsText() {
 const hastText = (n: ElementContent): string =>
   n.type === 'text' ? n.value : n.type === 'element' ? n.children.map(hastText).join('') : '';
 
-/** Põe o texto na área de transferência; false quando o navegador recusa ou não a oferece (página sem HTTPS, sem permissão). */
-export async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Copia para a área de transferência; `copied` fica true por 1,5s para o botão confirmar. `failed` (3º item, opcional) fica true por 4s quando a cópia não deu. */
-export function useCopy(): [boolean, (text: string) => void, boolean] {
-  const [copied, setCopied] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>();
-  useEffect(() => () => clearTimeout(timer.current), []);
-  const copy = (text: string) => {
-    void copyText(text).then((ok) => {
-      setCopied(ok);
-      setFailed(!ok);
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => (ok ? setCopied(false) : setFailed(false)), ok ? 1500 : 4000);
-    });
-  };
-  return [copied, copy, failed];
-}
+// Moram em lib/useCopy.ts (fora do pedaço do markdown); reexportados para quem já importava daqui.
+export { copyText, useCopy };
 
 function CodeBlock({ node, children }: { node?: Element; children?: ReactNode }) {
   const code = node ? node.children.map(hastText).join('').replace(/\n$/, '') : '';

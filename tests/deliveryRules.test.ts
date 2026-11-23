@@ -6,6 +6,7 @@ import type { Engine, StaffProfile } from '../shared/model';
 import { BRIEF_RULES, DELIVERY_FORMAT, PREMISE_LINE, REQUIRED_PROOFS_LINE, REVIEW_RUBRIC, SCOPE_LINE } from '../server/deliveryRules';
 import { renderFicha, type FichaContext } from '../server/staff/ficha';
 import { TaskService } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 // Entrega em formato fixo, provas exigidas e rubrica única do revisor (t-a7dc60): vale para todos os projetos e funcionários, nos dois motores, e por isso está no
 // servidor (brief da tarefa, pedido de revisão e ficha do gestor), não em preset de cargo.
@@ -14,22 +15,32 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-delivery-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const ENGINES: Engine[] = ['claude', 'codex'];
 
 describe('os textos fixos', () => {
   it('o formato da entrega tem os 5 itens, nesta ordem', () => {
     const lines = DELIVERY_FORMAT.split('\n');
-    expect(lines[0]).toBe('Quando terminar, a sua última mensagem é a entrega, curta e neste formato fixo, nesta ordem:');
-    expect(lines[1]).toMatch(/^1\. Critério de pronto: cada item do critério de aceite, um por linha, com feito, não feito ou parcial/);
-    expect(lines[2]).toMatch(/^2\. tsc: /);
-    expect(lines[3]).toMatch(/^3\. Testes do tema: .*contagem/);
-    expect(lines[4]).toMatch(/^4\. Prints: os caminhos, quando o critério pedir\.$/);
+    expect(lines[0]).toBe('Quando terminar, a sua última mensagem é a entrega, curta e neste formato fixo, nesta ordem (o Claudio’s Club já anexa o critério de aceite e o resultado dos testes que ele roda: não os copie):');
+    expect(lines[1]).toMatch(/^1\. Critério de pronto: um item por linha, pelo NÚMERO ou por um trecho curto dele \(sem copiar o texto do item\), com feito, não feito ou parcial/);
+    expect(lines[2]).toBe('2. tsc: o resultado em uma linha (ou "não se aplica", se o projeto não tem).');
+    expect(lines[3]).toBe('3. Testes do tema: os arquivos rodados e a contagem (passaram e falharam), sem colar a saída.');
+    expect(lines[4]).toBe('4. Prints: o caminho absoluto de cada um, com a hora, quando o critério pedir.');
     expect(lines[5]).toBe('5. O que ficou de fora e por quê.');
     expect(lines).toHaveLength(6);
+  });
+
+  it('o formato enxuto: não pede o texto do critério nem a saída dos testes (o Club já anexa), mas mantém a contagem dos testes do tema', () => {
+    expect(DELIVERY_FORMAT).not.toContain('cada item do critério de aceite'); // a cópia do critério saiu: o número ou um trecho curto basta
+    expect(DELIVERY_FORMAT).toContain('não os copie');
+    expect(DELIVERY_FORMAT).toContain('sem colar a saída');
+    expect(DELIVERY_FORMAT).toContain('a contagem (passaram e falharam)'); // a testsLine não traz a contagem quando passam: ela continua vindo da entrega
+    expect(DELIVERY_FORMAT).toContain('o caminho absoluto de cada um, com a hora');
+    expect(DELIVERY_FORMAT).not.toMatch(/revisor/i); // a ficha do Codex não pode ter a palavra, e o texto vale para os dois motores
+    expect(REQUIRED_PROOFS_LINE).toContain('cada item do critério pelo número, com feito, não feito ou parcial, sem copiar o texto');
+    expect(REQUIRED_PROOFS_LINE).toContain('testes do tema com arquivos e contagem, sem a saída');
+    expect(REQUIRED_PROOFS_LINE).toContain('caminho absoluto e hora de cada print quando o critério pedir');
   });
 
   it('as 2 linhas do brief: escopo é orientação (helper/teste novo ligado à tarefa pode, com justificativa; fora do assunto, não) e premissa que não bate = DÚVIDA antes de implementar', () => {

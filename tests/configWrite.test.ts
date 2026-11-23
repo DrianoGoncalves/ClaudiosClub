@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { readConfig, setArchived, updateConfig } from '../server/config';
+import { removeTemp } from './support/tmp';
 
 // No Windows o rename do config.json pode falhar um instante com EPERM (antivírus/indexador): a tela não pode dar erro por isso.
 
@@ -15,9 +16,7 @@ const busy = (code = 'EPERM') => Object.assign(new Error(`${code}: operation not
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-configwrite-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 afterEach(() => {
   vi.restoreAllMocks();
 });

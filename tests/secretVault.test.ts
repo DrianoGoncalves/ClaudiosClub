@@ -3,14 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { deleteSecret, getSecret, hasSecret, moveSecret, secretFile, setSecret } from '../server/secretVault';
+import { removeTemp } from './support/tmp';
 
 let dir: string;
 beforeAll(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-vault-'));
 });
-afterAll(async () => {
-  await fs.rm(dir, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(dir));
 
 const SECRET = 'Sénha "forte" ç $x `y` 100%';
 

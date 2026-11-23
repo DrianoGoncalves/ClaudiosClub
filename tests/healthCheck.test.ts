@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { maskSnippet, type RuleId } from '../server/health/rules';
 import { checkProjectHealth, type HealthOptions, type HealthReport } from '../server/health/scan';
+import { removeTemp } from './support/tmp';
 
 /** Texto com cara de chave aleatória, gerado na hora (mesmo truque de secrets.test.ts). */
 const noise = (n: number) => Array.from({ length: n }, (_, i) => 'q7Xz2LmP9wKd4RtB'[(i * 7) % 16]).join('');
@@ -33,7 +34,7 @@ async function run(files: Record<string, string>, extra: { git?: boolean; track?
 const rule = (r: HealthReport, id: RuleId) => r.findings.filter((f) => f.rule === id);
 
 afterEach(async () => {
-  for (const d of dirs.splice(0)) await fs.rm(d, { recursive: true, force: true, maxRetries: 3 });
+  await removeTemp(...dirs.splice(0));
 });
 
 describe('hardcoded-secret', () => {

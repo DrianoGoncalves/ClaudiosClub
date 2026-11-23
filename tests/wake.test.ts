@@ -13,6 +13,7 @@ import { SLACK_MS } from '../server/chat/usageLimit';
 import { WAKE_MAX_SECONDS, WAKE_MAX_STREAK, WAKE_MIN_SECONDS, WAKE_TEXT_MAX, WakeBody, WakeStreakError, wakeNotice, watchWakeups } from '../server/chat/wake';
 import { clockHM, secondsLeft } from '../client/src/chat/wakeCountdown';
 import dicts from '../client/src/i18n/chat';
+import { removeTemp } from './support/tmp';
 
 // Despertador: o funcionário pede "me chame de novo nesta conversa daqui a N segundos com esta mensagem". Mesmo
 // agendador do "continue" do limite de uso, numa segunda instância com arquivo próprio. Relógio injetado em tudo.
@@ -21,9 +22,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-wake-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const T0 = Date.parse('2026-11-02T10:30:00');
 const HOUR = 3_600_000;

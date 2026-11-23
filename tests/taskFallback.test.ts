@@ -12,6 +12,7 @@ import { oldConversationExtract } from '../server/fallbackHandoff';
 import { limitOfStop, limitReading, shouldFallback } from '../server/taskFallback';
 import { TaskService } from '../server/tasks';
 import { UsageStopError } from '../server/usageStop';
+import { removeTemp } from './support/tmp';
 
 // Troca de motor por tarefa: a decisão pura (`shouldFallback`), o início no secundário (limite da ficha), o meio do turno
 // (`onLimit`: pré-checagem, para a antiga, cancela o "continue", abre a nova com o handoff), a fase e o modo, o que o boot
@@ -21,9 +22,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-taskfallback-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 // O código lê o relógio de verdade (Date.now): os resets dos testes são relativos a ele.
 const NOW = Date.now();

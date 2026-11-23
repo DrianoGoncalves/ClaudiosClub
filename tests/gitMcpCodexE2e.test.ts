@@ -9,6 +9,7 @@ import { resolveCodexCommand } from '../server/codexEnv';
 import { killTree } from '../server/chat/registry';
 import { ROOT } from '../server/root';
 import { gitMcpServer, writeGitPolicy } from '../server/staff/gitMcp';
+import { removeTemp } from './support/tmp';
 
 // Prova real do MCP de git (t-eaffcd) com o Codex de verdade, PULADA por padrão: só roda com MYCO_CODEX_E2E=1, o `codex` instalado e logado.
 //   $env:MYCO_CODEX_E2E=1; npx vitest run tests/gitMcpCodexE2e.test.ts
@@ -31,9 +32,7 @@ describe.skipIf(!installed)('Codex real: commit pela ferramenta git_commit do MC
   beforeAll(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-gitmcp-e2e-'));
   });
-  afterAll(async () => {
-    await fs.rm(root, { recursive: true, force: true }).catch(() => {});
-  });
+  afterAll(() => removeTemp(root));
 
   it('o terminal da sandbox não commita; a ferramenta commita só o caminho pedido, sem levar o que outro deixou staged', async () => {
     const repo = path.join(root, 'repo');

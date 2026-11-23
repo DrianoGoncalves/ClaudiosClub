@@ -8,6 +8,7 @@ import { findSecret } from '../server/chat/secrets';
 import { ResumeFile, resumeAfterRestart, takeResume, type ResumeEntry } from '../server/chat/resume';
 import { capReason, capText } from '../server/chat/turnCap';
 import { InboxState } from '../server/inboxState';
+import { removeTemp } from './support/tmp';
 
 // Retomada segura: a ação com efeito fora do projeto cortada pelo reinício não volta sozinha (vai para você).
 
@@ -15,9 +16,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-cut-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const tool = (name: string, input: unknown, result: string | null, summary = ''): ChatItem => ({
   kind: 'tool',

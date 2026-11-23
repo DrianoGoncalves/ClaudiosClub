@@ -6,6 +6,7 @@ import { AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, type StaffProfile, type TurnCapH
 import { sandboxVerdict, staffMayPost } from '../server/apiPolicy';
 import type { CodeEdit } from '../server/chat/codeEdits';
 import { readTasks, TaskError, TaskService } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 // Card automático (toda alteração de código de uma conversa sem tarefa vira card) e a revisão automática do quadro, por projeto.
 
@@ -13,9 +14,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-autocard-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const profileOf = (id: string, name: string, extra: Partial<StaffProfile> = {}) =>
   ({ id, name, autonomy: 'acceptEdits', worktree: false, servers: [], engine: 'claude', ...extra }) as unknown as StaffProfile;

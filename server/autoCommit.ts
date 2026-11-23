@@ -16,8 +16,9 @@ import { cleanRel, isBlockedRel } from './projectFiles';
 // `*`, `[`, `:` e espaço no nome valem como são. Renome e exclusão não precisam de tratamento à parte: sem `--find-renames`, o renome são dois caminhos (um novo e um que sumiu), e
 // `update-index --add --remove` grava o que está no disco ou tira o que sumiu, caminho por caminho.
 //
-// Limites conhecidos: edição só por shell não está em `changedFiles`; editor externo não é visto (o do Club sim, ver ownerEdits.ts); o HEAD pode mudar entre a leitura e o `git commit` (a
-// janela é de milissegundos: conferimos antes e depois, e a diferença vira aviso). Quem decide se roda e grava o resultado na tarefa é o TaskService; aqui só há git.
+// Limites conhecidos: edição só por shell não está em `changedFiles` (com a vaga de escrita ligada, a foto do que já estava sujo quando a tarefa a ocupou traz esses arquivos, ver `CommitRequest.slot`
+// e slotSnapshot.ts); editor externo não é visto (o do Club sim, ver ownerEdits.ts), e durante a vaga a edição externa é indistinguível da da tarefa; o HEAD pode mudar entre a leitura e o `git commit`
+// (a janela é de milissegundos: conferimos antes e depois, e a diferença vira aviso). Quem decide se roda e grava o resultado na tarefa é o TaskService; aqui só há git.
 
 /** O commit lê o HEAD uma vez, mas hooks lentos (lint, testes) rodam depois dele: cinco minutos. */
 const COMMIT_TIMEOUT_MS = 5 * 60_000;
@@ -26,6 +27,8 @@ const PATH_CHUNK = 100;
 /** Tolerância na comparação do mtime com o da sua gravação (o disco pode arredondar). */
 const OWNER_SLACK_MS = 2;
 const LITERAL = { GIT_LITERAL_PATHSPECS: '1' };
+/** Quantos arquivos por fora de `changedFiles` a foto da vaga pode trazer para um commit: acima disso é obra em massa (dependência, build, renome do projeto), e quem decide é você. */
+export const EXTRA_MAX = 1000;
 
 /** Estados do repositório em que um commit comum faria outra coisa (merge, rebase…) ou nem começaria (`index.lock`). */
 const BUSY: Array<[string, string]> = [
@@ -68,6 +71,12 @@ export interface SharedHold {
   stoppedAt: number | null;
 }
 
+/**
+ * O que a foto da vaga de escrita (ver slotSnapshot.ts) achou além de `Task.changedFiles`: `extra` são os caminhos que mudaram ou ficaram sujos depois da foto; `skipped` é o motivo de a foto não valer
+ * (`cap` sujeira demais para a foto, `git` o git não respondeu, `limit` arquivos demais por fora: `found` é quantos) e o commit segue só com `changedFiles`.
+ */
+export type SlotFound = { extra: string[] } | { skipped: 'cap' | 'git' | 'limit'; found?: number };
+
 export interface CommitRequest {
   /** A raiz do projeto (o checkout principal; worktree não passa por aqui). */
   dir: string;
@@ -79,6 +88,15 @@ export interface CommitRequest {
   shared: ReadonlyMap<string, SharedHold[]>;
   /** O que você gravou pelo editor do Club (ver ownerEdits.ts). */
   ownerWrites: Record<string, OwnerWrite>;
+  /** Só quando a tarefa ocupou a vaga de escrita e tem foto (ver `SlotFound`); ausente = o comportamento de sempre, só `files`. */
+  slot?: SlotFound;
+}
+
+/** A nota de uma foto da vaga que não valeu, e se ela precisa de você: o que ficou por fora não dá para contar, e acima do limite ao menos se sabe que há. */
+function skippedNote(s: Extract<SlotFound, { skipped: unknown }>): { note: string; alert: boolean } {
+  if (s.skipped === 'limit') return { note: `${s.found} arquivos mudaram desde que a tarefa ocupou a vaga (limite ${EXTRA_MAX}): só os da lista da tarefa foram considerados`, alert: true };
+  if (s.skipped === 'cap') return { note: 'a foto da vaga não coube (arquivos sujos demais): só os da lista da tarefa foram considerados', alert: false };
+  return { note: 'a foto da vaga não pôde ser conferida (git): só os da lista da tarefa foram considerados', alert: false };
 }
 
 /** O que `Task.commit` guarda, menos a entrega (`for`) e a hora (`at`), que são do TaskService. */
@@ -114,11 +132,15 @@ export async function pendingChanges(dir: string, files: string[] | undefined): 
 
 /** Faz o commit dos arquivos da tarefa, ou diz por que não fez. Nunca lança: o motivo vai em `note`. */
 export async function commitTaskFiles(req: CommitRequest): Promise<CommitResult> {
-  const none = (note: string, alert = false, left: TaskCommitLeft[] = []): CommitResult => ({ status: 'none', sha: null, files: [], left: cap(left), note, alert });
-  const files = [...new Set(req.files ?? [])];
-  if (!files.length) return none('a tarefa não tem lista de arquivos (edição só por shell não é detectada): nada foi commitado');
+  // A foto da vaga que não valeu entra na nota de qualquer resultado: sem ela, quem lê não sabe que o que a tarefa fez por script pode ter ficado de fora.
+  const skipped = req.slot && 'skipped' in req.slot ? skippedNote(req.slot) : null;
+  const none = (note: string, alert = false, left: TaskCommitLeft[] = []): CommitResult => ({ status: 'none', sha: null, files: [], left: cap(left), note: skipped ? `${note}; ${skipped.note}` : note, alert: alert || !!skipped?.alert });
+  const listed = [...new Set(req.files ?? [])];
+  // Com foto válida, o que a lista não traz vem dela (e a lista cortada não é problema: a foto olha o projeto todo).
+  const extra = req.slot && 'extra' in req.slot ? req.slot.extra : null;
+  if (!listed.length && !extra?.length) return none(extra ? 'a tarefa não tem lista de arquivos e a foto da vaga não achou arquivo alterado: nada foi commitado' : 'a tarefa não tem lista de arquivos (edição só por shell não é detectada): nada foi commitado');
   // No teto a lista foi cortada (ver CHANGED_FILES_MAX): o que sobrou fora dela não seria commitado e a tarefa pareceria inteira.
-  if (files.length >= CHANGED_FILES_MAX) return none(`a lista de arquivos chegou ao limite de ${CHANGED_FILES_MAX} e pode estar cortada: nada foi commitado`, true);
+  if (!extra && listed.length >= CHANGED_FILES_MAX) return none(`a lista de arquivos chegou ao limite de ${CHANGED_FILES_MAX} e pode estar cortada: nada foi commitado`, true);
 
   const repo = await inspectRepo(req.dir);
   if (!repo.ok) return none(repo.note, repo.alert);
@@ -126,7 +148,7 @@ export async function commitTaskFiles(req: CommitRequest): Promise<CommitResult>
   const left: TaskCommitLeft[] = [];
   const seen = new Set<string>();
   const rels: string[] = [];
-  for (const f of files) {
+  for (const f of [...listed, ...(extra ?? [])]) {
     const rel = safeRel(f);
     if (rel === null) left.push({ path: f.slice(0, 200), why: 'blocked' });
     else if (!seen.has(pathKey(rel))) {
@@ -134,6 +156,9 @@ export async function commitTaskFiles(req: CommitRequest): Promise<CommitResult>
       rels.push(rel);
     }
   }
+  // Os que só a foto trouxe: não há prova de que foram da tarefa (o git não diz de quem é a mudança), então valem regras um pouco mais estritas (ver `leftOutWhy`).
+  const fromPhoto = new Set((extra ?? []).map(pathKey));
+  for (const f of listed) fromPhoto.delete(pathKey(f));
 
   try {
     const status = await statusOf(req.dir, repo.prefix, rels);
@@ -142,7 +167,7 @@ export async function commitTaskFiles(req: CommitRequest): Promise<CommitResult>
       const key = pathKey(rel);
       const entry = status.get(key);
       if (!entry) continue; // sem mudança no git: já commitado ou desfeito
-      const why = await leftOutWhy(req, entry, key, rel);
+      const why = await leftOutWhy(req, entry, key, rel, fromPhoto.has(key));
       if (why) left.push({ path: entry.path, ...why });
       else take.push(entry.path);
     }
@@ -151,8 +176,11 @@ export async function commitTaskFiles(req: CommitRequest): Promise<CommitResult>
     }
     const made = await commitPaths(req.dir, repo.head, take, commitMessage(req.title, req.taskId));
     if (!made) return none('os arquivos da tarefa já estão no HEAD: nada a commitar', left.length > 0, left);
+    const outside = take.filter((p) => fromPhoto.has(pathKey(p))).length;
     const notes: string[] = [];
     if (take.length > COMMIT_LIST_MAX) notes.push(`${take.length} arquivos no commit (a lista guarda ${COMMIT_LIST_MAX})`);
+    if (outside) notes.push(`${outside} ${outside === 1 ? 'arquivo' : 'arquivos'} por fora da lista da tarefa, achados pela foto da vaga`);
+    if (skipped) notes.push(skipped.note);
     if (made.problem) notes.push(made.problem);
     return {
       status: left.length ? 'partial' : 'committed',
@@ -160,7 +188,8 @@ export async function commitTaskFiles(req: CommitRequest): Promise<CommitResult>
       files: take.slice(0, COMMIT_LIST_MAX),
       left: cap(left),
       note: notes.length ? notes.join('; ') : null,
-      alert: left.length > 0 || !!made.problem,
+      alert: left.length > 0 || !!made.problem || !!skipped?.alert,
+      ...(extra ? { extra: outside } : {}),
     };
   } catch (err) {
     return { status: 'failed', sha: null, files: [], left: cap(left), note: summarize(err), alert: true };
@@ -176,14 +205,17 @@ function safeRel(f: string): string | null {
   }
 }
 
-/** Por que o arquivo fica de fora do commit, ou null se pode entrar. */
-async function leftOutWhy(req: CommitRequest, e: StatusEntry, key: string, rel: string): Promise<Pick<TaskCommitLeft, 'why' | 'by'> | null> {
+/**
+ * Por que o arquivo fica de fora do commit, ou null se pode entrar. `fromPhoto`: o arquivo só veio da foto da vaga (não está na lista da tarefa); qualquer coisa staged nele já é escolha sua
+ * (quem faz `git add` num arquivo que a tarefa nunca registrou está dizendo que é dele), e não só o staged com mudança por cima.
+ */
+async function leftOutWhy(req: CommitRequest, e: StatusEntry, key: string, rel: string, fromPhoto = false): Promise<Pick<TaskCommitLeft, 'why' | 'by'> | null> {
   if (isBlockedRel(rel)) return { why: 'blocked' };
   if (isConflict(e)) return { why: 'conflict' };
   const holding = await sharedBlockers(req.dir, rel, req.shared.get(key) ?? []);
   if (holding.length) return { why: 'shared', by: holding.join(', ') };
   // Staged e com mudança nova por cima (MM, AM…): o índice guarda uma escolha sua que o commit passaria por cima.
-  if (e.x !== ' ' && e.x !== '?' && e.y !== ' ') return { why: 'staged' };
+  if (e.x !== ' ' && e.x !== '?' && (e.y !== ' ' || fromPhoto)) return { why: 'staged' };
   const w = req.ownerWrites[key];
   if (w) {
     const st = await fs.stat(path.join(req.dir, e.path)).catch(() => null);
@@ -256,6 +288,24 @@ export async function statusOf(dir: string, prefix: string, rels: string[], git:
   return out;
 }
 
+/**
+ * Tudo o que tem mudança no git dentro do projeto, por `pathKey` (a foto da vaga, ver slotSnapshot.ts): sem pathspec, o `status` olha o repositório inteiro e aqui sobra o que é da pasta do projeto,
+ * com o caminho a partir dela. Lança se o git falhar (não é repositório, tempo esgotado). Sem renome, como `statusOf`.
+ */
+export async function dirtyOf(dir: string, git: GitRun = gitDefault, timeoutMs?: number): Promise<Map<string, StatusEntry>> {
+  const prefix = (await git(dir, ['rev-parse', '--show-prefix'], { timeoutMs })).trim();
+  const raw = await git(dir, ['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all'], { timeoutMs });
+  const out = new Map<string, StatusEntry>();
+  for (const rec of raw.split('\0')) {
+    if (rec.length < 4) continue;
+    const rel = rec.slice(3);
+    if (prefix && !rel.startsWith(prefix)) continue;
+    const p = prefix ? rel.slice(prefix.length) : rel;
+    out.set(pathKey(p), { path: p, x: rec[0]!, y: rec[1]! });
+  }
+  return out;
+}
+
 /** Os estados "não mesclado" do `git status`: UU, AA, DD, AU, UA, DU, UD. */
 export const isConflict = (e: StatusEntry): boolean => e.x === 'U' || e.y === 'U' || (e.x === 'A' && e.y === 'A') || (e.x === 'D' && e.y === 'D');
 
@@ -311,7 +361,7 @@ export interface GitOpts {
 /** O executor do git: os pontos de entrada exportados aceitam outro (o MCP de git passa o dele, sem hooks e com ambiente controlado). */
 export type GitRun = (cwd: string, args: string[], opts?: GitOpts) => Promise<string>;
 
-const gitDefault: GitRun = (cwd, args, opts) => git(cwd, args, opts);
+export const gitDefault: GitRun = (cwd, args, opts) => git(cwd, args, opts);
 
 function git(cwd: string, args: string[], opts: GitOpts = {}): Promise<string> {
   return new Promise((resolve, reject) => {

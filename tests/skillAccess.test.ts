@@ -6,6 +6,7 @@ import { convertSkills, listSkillDirs, parseSkillRef, planSkills, resolveLegacyS
 import { prepareCodexRun, prepareRun, type LaunchContext } from '../server/staff/launch';
 import { renderFicha } from '../server/staff/ficha';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // MYCO_HOME de teste: a conversa grava em run/ e nada vai para o ~/.myco de quem roda os testes.
 const home = await vi.hoisted(async () => {
@@ -32,10 +33,7 @@ beforeAll(async () => {
   await skill(path.join(PROJ, '.claude', 'skills', 'x'), 'x', 'Projeto x: faz X do projeto');
   await skill(path.join(PROJ, '.claude', 'skills', 'y'), 'y', 'Projeto y: faz Y');
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-  await fs.rm(home, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, home));
 
 /** Uma pasta de skill com SKILL.md (frontmatter com nome e descrição) e um arquivo extra. */
 async function skill(dir: string, name: string, description: string): Promise<void> {

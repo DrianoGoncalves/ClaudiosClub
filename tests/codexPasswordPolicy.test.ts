@@ -20,6 +20,7 @@ import type { RunResult, Runner } from '../server/folderPicker';
 import { codexSandboxInboxItem } from '../server/inboxItems';
 import { StaffService, type StaffServiceOptions } from '../server/staff/service';
 import type { AccountUsage, Project } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // O sandbox do Codex no Windows quebra quando a política local de senha tem "duração mínima" > 0 (código 2224/2245): o Club avisa a caixa do dono, com o comando, e nunca o roda.
 // Nada aqui roda `net accounts` de verdade: o programa é falso e o sistema é injetado.
@@ -467,9 +468,7 @@ beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-pwpolicy-'));
   await fs.mkdir(path.join(root, 'proj'), { recursive: true });
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 describe('ChatManager: a conversa do Codex abre e leva o aviso adiante', () => {
   function manager(engine: 'codex' | 'claude', extra: Partial<ConstructorParameters<typeof ChatManager>[0]> = {}) {

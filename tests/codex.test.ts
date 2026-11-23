@@ -4,14 +4,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildReviewPrompt, CodexAdapter, type CodexRun, type CodexRunner, withoutSecretFiles } from '../server/adapters/codex';
+import { removeTemp } from './support/tmp';
 
 let tmp: string;
 beforeAll(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-codex-test-'));
 });
-afterAll(async () => {
-  await fs.rm(tmp, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(tmp));
 
 const section = (file: string, line: string) => `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n-old\n+${line}\n`;
 const input = (diff: string) => ({ title: 'Corrigir o total', request: 'Multiplicar pela quantidade', diff, truncated: false });

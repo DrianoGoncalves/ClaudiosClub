@@ -12,11 +12,11 @@ export const PREMISE_LINE =
 
 /** O fim da tarefa: a última mensagem é a entrega, neste formato e nesta ordem (igual no texto de início, na retomada e no handoff). */
 export const DELIVERY_FORMAT = [
-  'Quando terminar, a sua última mensagem é a entrega, curta e neste formato fixo, nesta ordem:',
-  '1. Critério de pronto: cada item do critério de aceite, um por linha, com feito, não feito ou parcial (e o motivo, se não for feito).',
-  '2. tsc: o resultado (ou "não se aplica", se o projeto não tem).',
-  '3. Testes do tema: os arquivos rodados e a contagem (passaram e falharam).',
-  '4. Prints: os caminhos, quando o critério pedir.',
+  'Quando terminar, a sua última mensagem é a entrega, curta e neste formato fixo, nesta ordem (o Claudio’s Club já anexa o critério de aceite e o resultado dos testes que ele roda: não os copie):',
+  '1. Critério de pronto: um item por linha, pelo NÚMERO ou por um trecho curto dele (sem copiar o texto do item), com feito, não feito ou parcial (e o motivo, se não for feito).',
+  '2. tsc: o resultado em uma linha (ou "não se aplica", se o projeto não tem).',
+  '3. Testes do tema: os arquivos rodados e a contagem (passaram e falharam), sem colar a saída.',
+  '4. Prints: o caminho absoluto de cada um, com a hora, quando o critério pedir.',
   '5. O que ficou de fora e por quê.',
 ].join('\n');
 
@@ -25,7 +25,7 @@ export const BRIEF_RULES: string[] = [SCOPE_LINE, PREMISE_LINE, DELIVERY_FORMAT]
 
 /** Ficha do gestor: as provas exigidas vão no critério de pronto, só elas. */
 export const REQUIRED_PROOFS_LINE =
-  'Provas exigidas: o critério de pronto (acceptance) diz quais provas a entrega precisa trazer (ex.: prints em 360, claro e escuro; teste de X; docs/uso), e só elas. A revisão cobra o que o critério pede: falta de prova exigida reprova, prova que o critério não pede não. A entrega chega em formato fixo (cada item do critério com feito, não feito ou parcial; tsc; testes do tema com contagem; prints quando o critério pedir; o que ficou de fora).';
+  'Provas exigidas: o critério de pronto (acceptance) diz quais provas a entrega precisa trazer (ex.: prints em 360, claro e escuro; teste de X; docs/uso), e só elas. A revisão cobra o que o critério pede: falta de prova exigida reprova, prova que o critério não pede não. A entrega chega em formato fixo, sem repetir o que o Claudio’s Club já anexa (cada item do critério pelo número, com feito, não feito ou parcial, sem copiar o texto; tsc em uma linha; testes do tema com arquivos e contagem, sem a saída; caminho absoluto e hora de cada print quando o critério pedir; o que ficou de fora).';
 
 /** A rubrica única do revisor (pedido de revisão e ficha do gestor): o que reprova e o que não reprova. */
 export const REVIEW_RUBRIC = [

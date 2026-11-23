@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ROUTINE_HISTORY_MAX, type CalendarRecurrence, type Routine, type StaffProfile } from '../shared/model';
 import { writeAtomic } from '../server/atomicWrite';
 import { RoutineScheduler, type RoutineOutcome } from '../server/routines';
+import { removeTemp } from './support/tmp';
 
 // Agendador das rotinas com execução atrasada: o cursor guarda o horário PREVISTO já tratado; cada tick roda UMA vez a ocorrência mais recente
 // não tratada (se dentro do limite, inclusive) e descarta as outras com registro. 2026-11-18 é quarta-feira; horário local.
@@ -13,9 +14,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-catchup-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 let n = 0;
 /** Um arquivo de estado novo por teste: "reiniciar" é criar outro agendador sobre o mesmo arquivo. */

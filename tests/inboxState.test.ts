@@ -3,14 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { InboxState } from '../server/inboxState';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-inbox-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 describe('o que a caixa lembra entre reinícios', () => {
   it('perguntas e "não é segredo" voltam depois de reabrir', async () => {

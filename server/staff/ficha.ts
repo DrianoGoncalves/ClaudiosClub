@@ -253,6 +253,8 @@ export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpSer
   const backups = ruleDirOf(path.join(MYCO_HOME, 'backups'));
   // A configuração do Club (limites, teto do turno, bloqueio da tela no navegador): só a tela muda; o agente não edita o arquivo.
   const mycoConfig = ruleDirOf(path.join(MYCO_HOME, 'config.json'));
+  // A política de fluxo dos projetos (server/flowPolicy.ts): quem leva a tarefa a "pronto" e quem aprova o plano. Só a tela muda; um agente que a ampliasse tiraria o dono do portão. Com o `.bad` e o temporário da gravação.
+  const flowPolicies = ruleDirOf(path.join(MYCO_HOME, 'flow-policies.json'));
   const toolsList = ruleDirOf(path.join(MYCO_HOME, 'mcp-tools.json'));
   // Os vínculos e os registros da consulta entre projetos (server/consult/): só o Club grava. Um funcionário que forjasse um vínculo, ou um registro `answered`, teria a "resposta" entregue a outro.
   const consult = ruleDirOf(path.join(MYCO_HOME, 'consult'));
@@ -294,6 +296,8 @@ export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpSer
     `Write(${backups}/**)`,
     `Edit(${mycoConfig})`,
     `Write(${mycoConfig})`,
+    `Edit(${flowPolicies}*)`,
+    `Write(${flowPolicies}*)`,
     `Edit(${consult}/**)`,
     `Write(${consult}/**)`,
     // Pasta de lançamento: o mcp.json das sessões (com a config dos MCPs do usuário e do projeto) não é lido. Sem Read da pasta toda:
@@ -758,6 +762,7 @@ export function renderFicha(p: StaffProfile, ctx: FichaContext): string {
     worktreeSection(ctx),
     teamSection(p, ctx),
     hiringSection(p, ctx),
+    releaseSection(p, ctx),
     wakeSection(p, ctx),
     memorySection(p, ctx),
     // Última seção: o estilo vale mais perto do fim, onde o modelo lê por último.
@@ -947,6 +952,22 @@ function memorySection(p: StaffProfile, ctx: FichaContext): string {
       : []),
     '- Ponto de corte: quando terminar um assunto (tarefa entregue, decisão tomada, pergunta respondida e nada pendente nesta conversa), atualize a memória com o que vale levar e termine a resposta com esta linha, sozinha, por último: `[MyCo:ponto-de-corte]`. Assim a próxima mensagem pode começar numa conversa nova, mais barata, e você não perde nada. Não use no meio de um trabalho nem quando espera uma resposta para continuar.',
     '- Se a mensagem vier com `[MyCo] Contexto desta conversa: …`, ela já está grande e cada resposta custa mais: feche o assunto atual e use o ponto de corte assim que for natural. Numa tarefa, entregue o que o critério de pronto já cobre (sem cortar prova que ele exige) e avise o que falta, em vez de seguir acumulando.',
+  ].join('\n');
+}
+
+/**
+ * "Pode versionar e fazer deploy" (`canRelease`): quem tem a permissão liga e encerra a pausa de versão (rotas em server/index.ts, regras em TaskService.setVersionPause). Só aparece
+ * para quem tem (as outras fichas não gastam texto com o que não podem fazer), igual para Claude e Codex.
+ */
+function releaseSection(p: StaffProfile, ctx: FichaContext): string {
+  if (!p.canRelease || !ctx.mycoUrl) return '';
+  const api = `${ctx.mycoUrl}/api/projects/${p.projectId}`;
+  return [
+    '## Versão e deploy',
+    'Você tem a permissão "Pode versionar e fazer deploy" (só o usuário a liga, pela tela do Claudio’s Club): pode ligar a pausa de versão para montar uma versão do projeto sem trabalho novo mexendo nos arquivos.',
+    `Para ligar: POST ${api}/version-pause com os cabeçalhos \`x-myco: 1\` e \`x-myco-token: $MYCO_TOKEN\` (o token da sua conversa, já no seu ambiente) e {"minutes": 30} (de 1 a 120, obrigatório). A resposta traz \`paused\` com \`at\`, \`until\` e \`by\`. Dá 409 se o projeto já está em pausa comum ou em pausa de versão de outra pessoa.`,
+    'Enquanto dura, nada novo começa (fila, rotinas, "continue", despertador, troca de motor), mas o que já estava em andamento termina: o turno, a revisão da entrega e o ajuste de um card que já estava em fazendo, planejando ou em revisão. Por isso os arquivos ainda podem mudar até esses terminarem: confira `git status` antes de copiar.',
+    `Ela sai sozinha no fim do prazo, e o usuário é avisado ao ligar e ao sair. Se terminar antes, encerre: POST ${api}/version-pause/end (mesmos cabeçalhos, sem corpo). Você só encerra a que você ligou; para mais tempo, ligue de novo depois que ela sair.`,
   ].join('\n');
 }
 

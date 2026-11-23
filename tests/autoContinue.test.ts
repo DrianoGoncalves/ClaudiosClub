@@ -9,6 +9,7 @@ import { AutoContinue, CONTINUE_TEXT, type AutoContinueEvent, type AutoContinueO
 import { ChatManager } from '../server/chat/manager';
 import { readConfig, updateConfig } from '../server/config';
 import { limitNotice, SLACK_MS } from '../server/chat/usageLimit';
+import { removeTemp } from './support/tmp';
 
 // "Continue" sozinho quando o limite de uso volta: agendador (relógio injetado, sem esperar de verdade)
 // e a ligação com a conversa (aviso, cancelamento, mensagem sua).
@@ -17,9 +18,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-autocontinue-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const T0 = Date.parse('2026-11-02T12:00:00.000Z');
 const HOUR = 3_600_000;
