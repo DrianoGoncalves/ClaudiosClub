@@ -656,6 +656,8 @@ export const ACK_CANCELLED_DAYS = 7;
 export const AUTO_REVIEW_ROUNDS = 3;
 /** Teto da lista de arquivos de um card automático (`Task.changedFiles`); passando disso, os arquivos novos não entram na lista. */
 export const CHANGED_FILES_MAX = 300;
+/** Quantos commits de entrega o card guarda (`Task.checkpoints`): o card reprovado tantas vezes assim já parou no limite de revisões. */
+export const CHECKPOINTS_MAX = 20;
 
 /** Teto de `Task.fileOverlaps` por tarefa; passando disso, o par novo não é registrado (nem avisado). */
 export const FILE_OVERLAPS_MAX = 50;
@@ -1051,6 +1053,11 @@ export interface Task {
    */
   ownerGate?: TaskOwnerGate;
   /**
+   * A mescla automática desta entrega (ver `TaskService.mergeSoon`): gravada na aprovação, na mesma escrita da nota, quando o projeto escolheu a conclusão por IA e o código está numa worktree.
+   * É o que a fila e o reinício leem: nada se mescla sem ela, e ela só vale para a entrega aprovada (`verdict` + `sha`); entrega nova, mescla feita ou saída de "revisão" a desfazem. Só o servidor grava.
+   */
+  autoMerge?: TaskAutoMerge;
+  /**
    * O fim de turno do card (em "fazendo") achou agent ou comando ainda rodando em segundo plano: não é entrega. Sem revisão, sem resumo gravado e sem aviso a quem pediu; o card
    * segue em "fazendo" (e ocupando o funcionário) até o turno que vem depois do término. Vencido o prazo (`BACKGROUND_WAIT_MS`) sem o segundo plano terminar, a entrega segue como
    * sempre, com uma nota no histórico (`expiredAt`). Sai quando o card sai de "fazendo" ou quando o fim de turno acha o segundo plano vazio. Só o servidor grava.
@@ -1111,6 +1118,11 @@ export interface Task {
    * vem depois é da próxima tarefa dele, que já pode ter começado na mesma worktree.
    */
   checkpoint?: { sha: string; at: string } | null;
+  /**
+   * Todos os commits de entrega deste card (o mais novo é o de `checkpoint`; no máximo `CHECKPOINTS_MAX`). `checkpoint` é sobrescrito a cada entrega, e o card reprovado que entrega de novo
+   * perde o commit da entrega reprovada, que segue no branch: a mescla automática (ver `TaskService.mergeSoon`) usa esta lista para saber de quem é cada commit do caminho.
+   */
+  checkpoints?: string[];
   /** Entrega (quando foi para revisão): o resumo da conversa e, se a ficha pediu, o porquê de cada arquivo. */
   delivery?: TaskDelivery;
   /** Dúvida do funcionário numa tarefa pedida por gestor: vai para o gestor (ou, escalada, para você). A mais recente. */
@@ -1150,7 +1162,7 @@ export interface Task {
   commitNotice?: { key: string; at: string };
   /**
    * Só na listagem e na caixa (derivado, não gravado): o estado do aviso de commit parcial (ver `CommitLeft`): `waiting` (só ciência, algum card aberto ainda toca as sobras), `ready` (decisão do
-   * dono) ou `failed` (erro). Existe só com `commit.alert` e enquanto alguma sobra ainda tem mudança no git; vale também com o aviso já ignorado (`commit.ack`).
+   * dono) ou `failed` (erro). Existe só com `commit.alert` ainda não ignorado (`commit.ack`: nada na tela lê o estado do aviso ignorado, e calculá-lo custa git) e enquanto alguma sobra ainda tem mudança no git.
    */
   commitLeft?: CommitLeft;
   /**
@@ -1242,6 +1254,24 @@ export interface TaskNoCode {
   notifyRetry?: RetryState;
   /** Quando o aviso ao gestor foi dado como perdido e o card passou a `to: 'owner'` (ISO). */
   escalatedAt?: string;
+}
+
+/** A mescla automática de uma entrega aprovada (`Task.autoMerge`). */
+export interface TaskAutoMerge {
+  /** A revisão (conversa) e a entrega (`delivery.at`) que o revisor aprovou. */
+  verdict: { sessionId: string; deliveryAt: string | null };
+  /** O commit da entrega (`checkpoint.sha`): a mescla vai até ele. Null: a entrega não tem commit, e a mescla é recusada (nunca leva o branch inteiro). */
+  sha: string | null;
+  /** O nome de quem aprovou. */
+  by: string;
+  since: string;
+  /** Desde quando a mescla toca o checkout principal (gravado ANTES de mexer): se o processo cair no meio, o reinício vê o marcador sem execução viva e desfaz o que ficou pela metade. */
+  merging?: string;
+  /** Esperando para tentar de novo: o motivo, e quando; `retry` só conta as falhas que se repetem (principal sujo, testes cortados no tempo), com teto. */
+  wait?: { why: 'open-card' | 'main-dirty' | 'retry'; detail: string; since: string };
+  retry?: RetryState;
+  /** A mescla automática parou e só o dono segue (mescla pelo card): o motivo e quando. */
+  stopped?: { detail: string; at: string };
 }
 
 /** A espera pela aprovação do dono (`Task.ownerGate`). */
@@ -1596,6 +1626,7 @@ export interface ProjectPause {
  * está pausado), `busy` (ele trabalha num card ou numa conversa), `resource-wait` (o gate de recursos segurou a partida), `usage-limit` (a trava de consumo barra o motor dele),
  * `delivering` (uma entrega dele ainda está sendo processada), `heavy-wait` (essa entrega espera a vez da suíte de testes: outra validação pesada roda na máquina) e `free`.
  * `delivering` e `heavy-wait` só aparecem com ele sem card em andamento: se ele já pegou o próximo, o estado é `busy` e a entrega segue em `deliveries`.
+ * `busy` sem `taskId` é um turno rodando numa conversa sem card; conversa aberta sem turno (só segundo plano, ou parada) não é `busy` (ver `StaffQueue.column` para onde cai no quadro).
  */
 export type QueueState = 'free' | 'busy' | 'delivering' | 'heavy-wait' | 'resource-wait' | 'usage-limit' | 'paused';
 
@@ -1617,10 +1648,42 @@ export interface QueueDelivery {
   holder?: string;
 }
 
+/** A coluna do quadro em que o que o funcionário faz agora cai (ver `StaffQueue.column`): "Fazendo", "Revisão" ou "A fazer". */
+export type QueueColumn = 'doing' | 'review' | 'todo';
+
+/** Uma revisão que o funcionário conduz com o turno rodando agora: o card em Revisão e desde quando o pedido foi feito (ISO). */
+export interface QueueReview {
+  taskId: string;
+  since: string;
+}
+
+/** O card que a fila de um funcionário espera (`StaffQueue.waitingOn`): quem o faz e quantos outros cards da fila dele esperam também. */
+export interface QueueWait {
+  /** O card esperado (`blockedBy` ainda aberto) do primeiro card da fila dele. */
+  taskId: string;
+  /** O título dele, curto. */
+  title: string;
+  /** Quem faz o card esperado; ausente se ele não tem responsável. */
+  staffId?: string;
+  /** Quantos outros cards da fila dele também esperam outro card (0 = só o primeiro). */
+  more: number;
+}
+
 /** A fila de um funcionário: o estado (ver `QueueState`), o card que o explica, desde quando e o que mais importa dele. */
 export interface StaffQueue {
   staffId: string;
   state: QueueState;
+  /**
+   * Onde ele está de fato ocupado, para as bolinhas do quadro (o `state` diz o que a FILA faz; isto, o que ELE faz): `doing` = um turno de card dele roda (`taskId`); `todo` = parado em
+   * "A fazer" por um motivo (`resource-wait`, `usage-limit`, ou todos os cards da fila esperando outro card, ver `waitingOn`); `review` = só revisa (`state: 'free'`, `taskId` = o card
+   * em Revisão); `null` = nada em coluna nenhuma: livre, conversa sem card, conversa aberta sem turno rodando, ou entrega que o Club processa (`delivering`, `heavy-wait`: não é turno dele).
+   * Ausente: servidor sem este campo (quem lê cai no `state`).
+   */
+  column?: QueueColumn | null;
+  /** As revisões que ele conduz com o turno rodando agora (a lista completa de Revisão, também quando `column` é outra). Ausente = nenhuma. */
+  reviewing?: QueueReview[];
+  /** Em `column: 'todo'` por dependência: o card que a fila dele espera. O motivo em palavras vai em `detail`. */
+  waitingOn?: QueueWait;
   /** O card que explica o estado: o que ele faz (`busy`), a que espera (`resource-wait`, `usage-limit`) ou o que entrega (`delivering`, `heavy-wait`). */
   taskId?: string;
   /** Desde quando está assim (ISO), quando o estado tem começo conhecido: o card entrou em andamento, a espera começou, a entrega começou (`delivering`) ou a suíte começou a esperar (`heavy-wait`). */

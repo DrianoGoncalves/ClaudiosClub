@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { StateBusyError } from '../server/atomicWrite';
 import { readConfig, setArchived, updateConfig } from '../server/config';
 import { removeTemp } from './support/tmp';
 
@@ -51,13 +52,20 @@ describe('gravação do config.json: rename com retry', () => {
     expect(await tmps(file)).toEqual([]);
   });
 
-  it('EPERM sempre: o erro original sobe, o arquivo antigo fica intacto e não sobra .tmp', async () => {
+  it('EPERM sempre: sobe StateBusyError (causa = o erro original; a API responde 503), o arquivo antigo fica intacto e não sobra .tmp', async () => {
     const file = fresh();
     await updateConfig({ autoContinue: true }, file);
     const before = await fs.readFile(file, 'utf8');
     const eperm = busy();
     const spy = vi.spyOn(fs, 'rename').mockRejectedValue(eperm);
-    await expect(updateConfig({ autoContinue: false }, file)).rejects.toBe(eperm);
+    // As esperas (alguns segundos no total) correm na hora: o relógio é testado em stateBusy.test.ts.
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void) => {
+      queueMicrotask(fn);
+      return 0 as unknown as NodeJS.Timeout;
+    }) as typeof setTimeout);
+    const err = await updateConfig({ autoContinue: false }, file).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StateBusyError);
+    expect((err as StateBusyError).cause).toBe(eperm);
     expect(spy.mock.calls.length).toBeGreaterThan(1); // tentou de novo antes de desistir
     spy.mockRestore();
     expect(await fs.readFile(file, 'utf8')).toBe(before);
