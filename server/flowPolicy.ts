@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { z } from 'zod';
-import { FLOW_PRESETS, type FlowGates, type FlowMode, type FlowPolicy, type Task, type TaskOwnerGate } from '../shared/model';
+import { FLOW_PRESETS, PUBLISH_PRESETS, type FlowGates, type FlowMode, type FlowPolicy, type PublishGate, type Task, type TaskOwnerGate } from '../shared/model';
 import { writeAtomic } from './atomicWrite';
 
 // A política de fluxo do projeto (quanto do fluxo é automático: ver `FlowPolicy` e `FLOW_PRESETS` em shared/model.ts). Fica em `~/.myco/flow-policies.json`, da máquina e FORA do
@@ -23,7 +23,11 @@ export function ownerGateOf(t: Task): TaskOwnerGate | undefined {
   return t.status === 'review' && t.ownerGate && t.ownerGate.deliveryAt === (t.delivery?.at ?? null) ? t.ownerGate : undefined;
 }
 
-const GatesShape = z.object({ plan: z.enum(['owner', 'ai']), completion: z.enum(['ai', 'owner']), commit: z.boolean() });
+const PUBLISH = z.enum(['manual', 'staff-pr', 'staff-all']);
+const GatesShape = z.object({ plan: z.enum(['owner', 'ai']), completion: z.enum(['ai', 'owner']), commit: z.boolean(), publish: PUBLISH.optional() });
+
+/** Quem publica a versão neste projeto (ver `FlowGates.publish`): sem política, sem o portão gravado ou ilegível, só o dono. */
+export const publishOf = (p: FlowPolicy | null | undefined): PublishGate => p?.publish ?? 'manual';
 
 const Entry = GatesShape.extend({
   mode: z.enum(['auto', 'supervised', 'manual', 'custom']),
@@ -44,19 +48,21 @@ export const FlowPolicyInput = z
     plan: z.enum(['owner', 'ai'], { message: "plan: use 'owner' ou 'ai'" }).optional(),
     completion: z.enum(['ai', 'owner'], { message: "completion: use 'ai' ou 'owner'" }).optional(),
     commit: z.boolean({ message: 'commit: use true ou false' }).optional(),
+    publish: z.enum(['manual', 'staff-pr', 'staff-all'], { message: "publish: use 'manual', 'staff-pr' ou 'staff-all'" }).optional(),
   })
   .strict()
   .superRefine((v, ctx) => {
-    const gates = v.plan !== undefined || v.completion !== undefined || v.commit !== undefined;
-    if (v.mode === undefined && !gates) ctx.addIssue({ code: 'custom', message: 'mande um preset (mode) ou um portão (plan, completion, commit)' });
+    const gates = v.plan !== undefined || v.completion !== undefined || v.commit !== undefined || v.publish !== undefined;
+    if (v.mode === undefined && !gates) ctx.addIssue({ code: 'custom', message: 'mande um preset (mode) ou um portão (plan, completion, commit, publish)' });
     if (v.mode !== undefined && gates) ctx.addIssue({ code: 'custom', message: 'mande um preset (mode) ou os portões, não os dois' });
   });
 export type FlowPolicyInput = z.infer<typeof FlowPolicyInput>;
 
 /** A política como o resto do servidor e a tela a leem: sem a hora da gravação. */
-const viewOf = ({ mode, plan, completion, commit, completionChosen }: Stored): FlowPolicy => ({ mode, plan, completion, commit, completionChosen, source: 'stored' });
+const viewOf = ({ mode, plan, completion, commit, completionChosen, publish }: Stored): FlowPolicy => ({ mode, plan, completion, commit, completionChosen, source: 'stored', ...(publish && { publish }) });
 
-const sameGates = (a: FlowGates, b: FlowGates): boolean => a.plan === b.plan && a.completion === b.completion && a.commit === b.commit;
+const sameGates = (a: FlowGates, b: FlowGates): boolean =>
+  a.plan === b.plan && a.completion === b.completion && a.commit === b.commit && (a.publish ?? 'manual') === (b.publish ?? 'manual');
 
 /**
  * A política que sai de aplicar `input` sobre a vigente. Preset: os portões do preset, `completionChosen` ligado (o dono escolheu a conclusão ao escolher o preset). Portões: mesclam sobre
@@ -64,11 +70,13 @@ const sameGates = (a: FlowGates, b: FlowGates): boolean => a.plan === b.plan && 
  * 'ai' do projeto antigo não conta como escolha do dono: ver o aviso "sem revisor" em TaskService).
  */
 export function applyFlowInput(current: FlowPolicy, input: FlowPolicyInput): Omit<FlowPolicy, 'source'> {
-  if (input.mode !== undefined) return { mode: input.mode, ...FLOW_PRESETS[input.mode], completionChosen: true };
+  if (input.mode !== undefined) return { mode: input.mode, ...FLOW_PRESETS[input.mode], publish: PUBLISH_PRESETS[input.mode], completionChosen: true };
+  const publish = input.publish ?? current.publish;
   const gates: FlowGates = {
     plan: input.plan ?? current.plan,
     completion: input.completion ?? current.completion,
     commit: input.commit ?? current.commit,
+    ...(publish && { publish }),
   };
   const mode: FlowMode = current.source === 'stored' && current.mode !== 'custom' && sameGates(gates, current) ? current.mode : 'custom';
   return { mode, ...gates, completionChosen: current.completionChosen || input.completion !== undefined };
@@ -106,7 +114,15 @@ export class FlowPolicies {
   async set(projectId: string, policy: Omit<FlowPolicy, 'source'>, now = new Date()): Promise<FlowPolicy> {
     const map = await this.load();
     const had = map.get(projectId);
-    const entry: Stored = { mode: policy.mode, plan: policy.plan, completion: policy.completion, commit: policy.commit, completionChosen: policy.completionChosen, at: now.toISOString() };
+    const entry: Stored = {
+      mode: policy.mode,
+      plan: policy.plan,
+      completion: policy.completion,
+      commit: policy.commit,
+      ...(policy.publish && { publish: policy.publish }),
+      completionChosen: policy.completionChosen,
+      at: now.toISOString(),
+    };
     map.set(projectId, entry);
     try {
       await this.save(map);

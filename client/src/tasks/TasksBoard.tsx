@@ -25,6 +25,7 @@ import { DoubtBadge, DoubtBlock } from './TaskDoubt';
 import { PauseNote, pauseText } from './TaskPause';
 import { PausedBanner, PauseButton, useProjectPause } from './ProjectPauseBar';
 import { ReleaseBanner, ReleaseDialog, useRelease } from './ReleaseDialog';
+import { CiBadge } from './CiBadge';
 import { isVersionPause } from './pauseState';
 import { QueueDots, useQueues } from './QueueStrip';
 import { queueDots } from './queueState';
@@ -1329,6 +1330,8 @@ function TaskDetail({
               </>
             )}
           </p>
+          {/* O CI do PR do cartão: lido só com o detalhe aberto (e de minuto em minuto enquanto roda), nunca no quadro todo. */}
+          {task.pr && /^https:\/\/github\.com\/.+\/pull\/\d+/.test(task.pr) && <CiBadge k={`task:${projectId}:${task.id}:${task.pr}`} load={() => api.taskCi(projectId, task.id)} />}
         </section>
         {task.fallback && (
           <p className="small">

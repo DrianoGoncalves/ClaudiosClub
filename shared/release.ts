@@ -1,7 +1,26 @@
-import type { Task, TaskStatus } from './model';
+import type { PublishGate, Task, TaskStatus } from './model';
 
 // Versão com escopo (ver server/release.ts): o dono escolhe as tarefas pendentes que entram, as de fora esperam, e quando todas ficam prontas o Club prepara
 // o commit da versão; publicar (push e PR) e criar a tag são botões dele. Aqui o que a tela e o servidor calculam igual: número, escopo com dependências e progresso.
+
+/** Quem fez: um funcionário (pela API, com a permissão) ou null = você, pela tela (ou o próprio Club, na preparação automática). */
+export type ReleaseActor = { staffId: string; name: string } | null;
+
+/** As provas da preparação: checagem de tipos e testes relacionados aos arquivos da versão. `none` = o projeto não tem; `skipped` = você mandou preparar sem elas. */
+export interface ReleaseProof {
+  typecheck: 'ok' | 'none' | 'skipped';
+  tests: 'ok' | 'none' | 'skipped';
+  /** Quantos arquivos de código mudaram desde a última tag (os testes relacionados vêm deles); null = rodou a suíte inteira. */
+  related: number | null;
+}
+
+/** Uma linha do registro da versão (o rastro: quem abriu, preparou, publicou, pediu a tag, furou com hotfix). */
+export interface ReleaseLogEntry {
+  at: string;
+  action: 'opened' | 'scope' | 'hotfix' | 'prepared' | 'prepare-failed' | 'discarded' | 'published' | 'tag-requested' | 'tag-declined' | 'tagged';
+  by: ReleaseActor;
+  detail?: string;
+}
 
 /** O que `<projeto>/.myco/release.json` guarda: a versão aberta (uma por projeto). Sem arquivo = nenhuma versão aberta. */
 export interface ReleaseState {
@@ -9,16 +28,30 @@ export interface ReleaseState {
   version: string;
   /** O escopo: as tarefas marcadas e as bloqueadoras que vieram junto. */
   taskIds: string[];
+  /** Hotfix: furam a versão aberta (começam e mesclam), mas a versão não espera por elas. */
+  hotfixes: string[];
   /** O card de manual e doc criado ao abrir (começa quando as outras ficam prontas); null = não pedido. */
   docsTaskId: string | null;
   openedAt: string;
   /** O commit local da versão (número novo no package.json e no lock). Com ele, a versão sai da frente: a fila e as mesclas de fora voltam. */
-  prepared: { at: string; sha: string; branch: string } | null;
+  prepared: { at: string; sha: string; branch: string; proof: ReleaseProof } | null;
   /** A última preparação que falhou (testes vermelhos, package.json mexido): a automática não tenta de novo sozinha. */
   prepareError: { at: string; message: string; testsOutput?: string } | null;
   /** Push do commit da versão para `release/<versão>` e o PR para a branch padrão. */
-  published: { at: string; branch: string; pr: string } | null;
+  published: { at: string; branch: string; pr: string; by: ReleaseActor } | null;
+  /** Um funcionário pediu a tag (modo staff-pr): espera o seu ok. */
+  tagRequest: { at: string; by: { staffId: string; name: string } } | null;
+  log: ReleaseLogEntry[];
 }
+
+/**
+ * Quem publica no projeto: o portão `publish` da política de fluxo (`FlowGates.publish`, em `~/.myco/flow-policies.json`; só você muda, pela tela):
+ * - `manual`: só você (o padrão);
+ * - `staff-pr`: o funcionário com "Pode versionar e fazer deploy" publica o PR; a tag pede o seu ok;
+ * - `staff-all`: ele publica o PR e a tag sozinho, e você é avisado.
+ */
+export type ReleaseMode = PublishGate;
+export const RELEASE_MODES: ReleaseMode[] = ['manual', 'staff-pr', 'staff-all'];
 
 /** Como cada tarefa do escopo está: pronta, andando, cancelada (sai da conta) ou travada por uma bloqueadora cancelada. */
 export type ReleaseTaskState = 'done' | 'pending' | 'cancelled' | 'stuck';
@@ -36,6 +69,8 @@ export interface ReleaseTaskView {
 /** `GET /api/projects/:id/release`. */
 export interface ReleaseView {
   release: ReleaseState | null;
+  /** Quem publica neste projeto (vale com ou sem versão aberta). */
+  mode: ReleaseMode;
   tasks: ReleaseTaskView[];
   /** Prontas e total (sem as canceladas). */
   done: number;

@@ -258,6 +258,10 @@ export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpSer
   const toolsList = ruleDirOf(path.join(MYCO_HOME, 'mcp-tools.json'));
   // Os vínculos e os registros da consulta entre projetos (server/consult/): só o Club grava. Um funcionário que forjasse um vínculo, ou um registro `answered`, teria a "resposta" entregue a outro.
   const consult = ruleDirOf(path.join(MYCO_HOME, 'consult'));
+  // A versão aberta de cada projeto (server/release.ts): escopo, preparação, PR publicado e avisos. Só o Club grava; um escopo ou um link de PR forjado mudaria o que é publicado.
+  const releases = ruleDirOf(path.join(MYCO_HOME, 'releases'));
+  // O registro dos deploys (server/deploy.ts): só o Club grava; um registro forjado mostraria "no ar" o que não foi.
+  const deploys = ruleDirOf(path.join(MYCO_HOME, 'deploys'));
   // Um ~/.claude.json fora da home (MYCO_CLAUDE_CONFIG) entra com o caminho dele; com espaço, a regra sairia quebrada (como as outras).
   const claudeConfig = defaultLocations().configFile;
   const claudeConfigRule = ruleDirOf(claudeConfig);
@@ -300,6 +304,10 @@ export function secretDenyRules(p: StaffProfile, keyFiles: string[] = [], ftpSer
     `Write(${flowPolicies}*)`,
     `Edit(${consult}/**)`,
     `Write(${consult}/**)`,
+    `Edit(${releases}/**)`,
+    `Write(${releases}/**)`,
+    `Edit(${deploys}/**)`,
+    `Write(${deploys}/**)`,
     // Pasta de lançamento: o mcp.json das sessões (com a config dos MCPs do usuário e do projeto) não é lido. Sem Read da pasta toda:
     // as skills do plugin da sessão (run/<sessão>/myco-plugin) são lidas pelo agente.
     `Read(${run}/**/mcp.json)`,
@@ -968,6 +976,8 @@ function releaseSection(p: StaffProfile, ctx: FichaContext): string {
     `Para ligar: POST ${api}/version-pause com os cabeçalhos \`x-myco: 1\` e \`x-myco-token: $MYCO_TOKEN\` (o token da sua conversa, já no seu ambiente) e {"minutes": 30} (de 1 a 120, obrigatório). A resposta traz \`paused\` com \`at\`, \`until\` e \`by\`. Dá 409 se o projeto já está em pausa comum ou em pausa de versão de outra pessoa.`,
     'Enquanto dura, nada novo começa (fila, rotinas, "continue", despertador, troca de motor), mas o que já estava em andamento termina: o turno, a revisão da entrega e o ajuste de um card que já estava em fazendo, planejando ou em revisão. Por isso os arquivos ainda podem mudar até esses terminarem: confira `git status` antes de copiar.',
     `Ela sai sozinha no fim do prazo, e o usuário é avisado ao ligar e ao sair. Se terminar antes, encerre: POST ${api}/version-pause/end (mesmos cabeçalhos, sem corpo). Você só encerra a que você ligou; para mais tempo, ligue de novo depois que ela sair.`,
+    `Publicar a versão: o usuário escolhe as tarefas e o Claudio’s Club prepara o commit da versão sozinho. Veja o estado em GET ${api}/release (\`mode\`, \`release.prepared\`, \`release.published\`). Se o modo do projeto deixa (\`staff-pr\` ou \`staff-all\`; no \`manual\`, o padrão, só o usuário publica) e sua autonomia é auto ou sem travas: POST ${api}/release/publish (mesmos cabeçalhos, sem corpo) faz o push da versão preparada para \`release/<versão>\` e abre o PR para main. Quem roda o git é o servidor: nunca faça você mesmo push de tag nem para main.`,
+    `A mescla do PR é sempre do usuário. Depois dela, POST ${api}/release/tag: no modo \`staff-all\` cria e envia a tag (ela atualiza as instalações); no \`staff-pr\` só registra o pedido, e o usuário aprova. Toda publicação fica registrada e vira aviso para o usuário.`,
   ].join('\n');
 }
 

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { StaffProfile, Task, TaskStatus } from '../../../shared/model';
-import { expandScope, parseVersion, type ReleaseHistory, type ReleaseTaskState, type ReleaseView } from '../../../shared/release';
+import { expandScope, parseVersion, RELEASE_MODES, type ReleaseActor, type ReleaseHistory, type ReleaseLogEntry, type ReleaseMode, type ReleaseProof, type ReleaseTaskState, type ReleaseView } from '../../../shared/release';
 import { api } from '../api';
 import { t } from '../i18n';
 import { askConfirm } from '../lib/dialogStore';
 import { pollVisible } from '../usePoll';
+import { CiBadge, CiSummary, useCi } from './CiBadge';
+import { DeployPanel } from './DeployPanel';
 
 // Versão com escopo (ver server/release.ts): a página em que o dono marca as tarefas pendentes que entram, acompanha a versão aberta (preparar, publicar, tag) e vê
 // o histórico (as tags). O estado é lido a cada 5 s enquanto a página está aberta (custo fixo no servidor); o histórico, só ao abrir e ao trocar para a aba.
@@ -24,6 +26,32 @@ const STATE_KEY: Record<ReleaseTaskState, Parameters<typeof t>[0]> = {
   cancelled: 'release.stateCancelled',
   stuck: 'release.stateStuck',
 };
+const MODE_KEY: Record<ReleaseMode, Parameters<typeof t>[0]> = {
+  manual: 'release.modeManual',
+  'staff-pr': 'release.modeAgentPr',
+  'staff-all': 'release.modeAgentAll',
+};
+const LOG_KEY: Record<ReleaseLogEntry['action'], Parameters<typeof t>[0]> = {
+  opened: 'release.logOpened',
+  scope: 'release.logScope',
+  hotfix: 'release.logHotfix',
+  prepared: 'release.logPrepared',
+  'prepare-failed': 'release.logPrepareFailed',
+  discarded: 'release.logDiscarded',
+  published: 'release.logPublished',
+  'tag-requested': 'release.logTagRequested',
+  'tag-declined': 'release.logTagDeclined',
+  tagged: 'release.logTagged',
+};
+const PROOF_KEY: Record<ReleaseProof['tests'], Parameters<typeof t>[0]> = { ok: 'release.proofOk', none: 'release.proofNone', skipped: 'release.proofSkipped' };
+const actorName = (by: ReleaseActor) => by?.name ?? t('release.you');
+/** "Provas: tipos ok, testes ok (relacionados a 12 arquivos)" ou "preparada sem as provas". */
+export function proofText(p: ReleaseProof): string {
+  if (p.typecheck === 'skipped' && p.tests === 'skipped') return t('release.proofSkippedAll');
+  const base = t('release.proof', { typecheck: t(PROOF_KEY[p.typecheck]), tests: t(PROOF_KEY[p.tests]) });
+  return p.related !== null ? `${base} ${t('release.proofRelated', { n: p.related })}` : base;
+}
+
 /** Pendentes na ordem em que mais importam: o que já anda primeiro. */
 const ORDER: TaskStatus[] = ['doing', 'planning', 'review', 'todo', 'waiting'];
 const pendingOf = (tasks: Task[]) =>
@@ -103,6 +131,11 @@ export function ReleaseDialog({ projectId, projectName, staff, tasks, onClose, o
   }, [onClose]);
 
   const release = view?.release ?? null;
+  // O CI do PR da versão: só depois de publicada (antes, nada vai ao GitHub).
+  const prUrl = release?.published?.pr ?? null;
+  const [ci, reloadCi] = useCi(prUrl ?? 'sem-pr', () => (prUrl ? api.releaseCi(projectId) : Promise.resolve(null)));
+  /** Entradas do histórico abertas: só elas leem o CI (uma consulta por entrada que você abre, nunca a lista toda). */
+  const [openTags, setOpenTags] = useState<Set<string>>(new Set());
   const pending = useMemo(() => pendingOf(tasks), [tasks]);
   const inScope = useMemo(() => new Set(release?.taskIds ?? []), [release]);
   // Com as dependências: a mesma conta do servidor (shared/release.ts).
@@ -158,11 +191,65 @@ export function ReleaseDialog({ projectId, projectName, staff, tasks, onClose, o
     );
   };
 
+  /** Quem publica no projeto (vale com ou sem versão aberta) e o botão que desliga a publicação por funcionários na hora. */
+  const modeSection = (mode: ReleaseMode) => (
+    <fieldset className="release-mode" disabled={busy}>
+      <legend>{t('release.modeHead')}</legend>
+      {RELEASE_MODES.map((m) => (
+        <label key={m} className="release-pick">
+          <input
+            type="radio"
+            name="release-mode"
+            checked={mode === m}
+            onChange={() =>
+              act(async () => {
+                await api.setPublishGate(projectId, m);
+                return api.release(projectId);
+              }, m === 'staff-all' ? t('release.modeAllConfirm') : undefined)
+            }
+          />
+          <span>{t(MODE_KEY[m])}</span>
+        </label>
+      ))}
+      {mode !== 'manual' && (
+        <button
+          type="button"
+          className="btn-secondary is-danger"
+          onClick={() =>
+            act(async () => {
+              await api.setPublishGate(projectId, 'manual');
+              return api.release(projectId);
+            })
+          }
+        >
+          {t('release.modeOff')}
+        </button>
+      )}
+    </fieldset>
+  );
+
+  /** O registro da versão (quem abriu, preparou, publicou, pediu a tag), do mais novo para o mais velho. */
+  const logSection = (log: ReleaseLogEntry[]) =>
+    log.length > 0 && (
+      <details className="release-add">
+        <summary>{t('release.logHead', { n: log.length })}</summary>
+        <ul className="release-history-tasks small">
+          {[...log].reverse().map((e, i) => (
+            <li key={`${e.at}-${i}`}>
+              <time dateTime={e.at}>{new Date(e.at).toLocaleString()}</time> · {t(LOG_KEY[e.action])} · {actorName(e.by)}
+              {e.detail ? ` · ${e.detail}` : ''}
+            </li>
+          ))}
+        </ul>
+      </details>
+    );
+
   const openForm = () => {
     const valid = !!parseVersion(version);
     const needsStaff = docs && !docsStaff;
     return (
       <div className="release-body">
+        {modeSection(view?.mode ?? 'manual')}
         <p className="muted small">{t('release.intro')}</p>
         <label className="release-field">
           <span>{t('release.number')}</span>
@@ -205,8 +292,10 @@ export function ReleaseDialog({ projectId, projectName, staff, tasks, onClose, o
   const current = (v: ReleaseView) => {
     const r = v.release!;
     const add = [...scope].filter((id) => !inScope.has(id));
+    const hotfixTitles = r.hotfixes.map((id) => tasks.find((x) => x.id === id)?.title ?? id);
     return (
       <div className="release-body">
+        {modeSection(v.mode)}
         <h3 className="release-head">{t('release.openedHead', { version: r.version, done: v.done, total: v.total })}</h3>
         <progress className="release-progress" max={Math.max(1, v.total)} value={v.done} aria-label={t('release.openedHead', { version: r.version, done: v.done, total: v.total })} />
         <ul className="release-list">
@@ -229,13 +318,19 @@ export function ReleaseDialog({ projectId, projectName, staff, tasks, onClose, o
             </li>
           ))}
         </ul>
+        {hotfixTitles.length > 0 && <p className="small">{t('release.hotfixes', { list: hotfixTitles.join(' · ') })}</p>}
         {!r.prepared && (
           <details className="release-add">
             <summary>{t('release.addHead')}</summary>
-            {picker(inScope)}
-            <button type="button" className="btn-secondary" disabled={busy || !add.length} onClick={() => act(() => api.changeReleaseScope(projectId, { add: [...picked] }))}>
-              {t('release.add', { n: add.length })}
-            </button>
+            {picker(new Set([...inScope, ...r.hotfixes]))}
+            <div className="release-foot">
+              <button type="button" className="btn-secondary" disabled={busy || !add.length} onClick={() => act(() => api.changeReleaseScope(projectId, { add: [...picked] }))}>
+                {t('release.add', { n: add.length })}
+              </button>
+              <button type="button" className="btn-secondary" title={t('release.hotfixTitle')} disabled={busy || !picked.size} onClick={() => act(() => api.changeReleaseScope(projectId, { hotfix: [...picked] }))}>
+                {t('release.hotfix', { n: picked.size })}
+              </button>
+            </div>
           </details>
         )}
         <div className="release-status" role="status">
@@ -270,15 +365,21 @@ export function ReleaseDialog({ projectId, projectName, staff, tasks, onClose, o
             </>
           )}
           {r.prepared && <p className="small">{t('release.prepared', { sha: r.prepared.sha.slice(0, 7), branch: r.prepared.branch })}</p>}
+          {r.prepared && <p className="muted small">{proofText(r.prepared.proof)}</p>}
           {r.prepared && !r.published && (
-            <button type="button" className="btn-primary" disabled={busy} onClick={() => act(() => api.publishRelease(projectId), t('release.publishConfirm', { version: r.version }))}>
-              {t('release.publish')}
-            </button>
+            <div className="release-foot">
+              <button type="button" className="btn-primary" disabled={busy} onClick={() => act(() => api.publishRelease(projectId), t('release.publishConfirm', { version: r.version }))}>
+                {t('release.publish')}
+              </button>
+              <button type="button" className="btn-secondary" disabled={busy} onClick={() => act(() => api.discardRelease(projectId), t('release.discardConfirm', { version: r.version }))}>
+                {t('release.discard')}
+              </button>
+            </div>
           )}
           {r.published && (
             <>
               <p className="small">
-                {t('release.published')}{' '}
+                {t('release.published')} ({t('release.publishedBy', { who: actorName(r.published.by) })}){' '}
                 {/^https:\/\/github\.com\//.test(r.published.pr) ? (
                   <a href={r.published.pr} target="_blank" rel="noopener noreferrer">
                     {r.published.pr}
@@ -287,13 +388,42 @@ export function ReleaseDialog({ projectId, projectName, staff, tasks, onClose, o
                   r.published.pr
                 )}
               </p>
-              <p className="muted small">{t('release.tagHint')}</p>
-              <button type="button" className="btn-primary" disabled={busy} onClick={() => act(() => api.tagRelease(projectId), t('release.tagConfirm', { version: r.version }))}>
-                {t('release.tag', { version: r.version })}
-              </button>
+              <CiSummary data={ci} />
+              {r.tagRequest ? (
+                <p className="small release-request">{t('release.tagRequest', { who: r.tagRequest.by.name, version: r.version })}</p>
+              ) : (
+                <p className="muted small">{t('release.tagHint')}</p>
+              )}
+              <div className="release-foot">
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={busy}
+                  onClick={() =>
+                    act(async () => {
+                      const out = await api.tagRelease(projectId);
+                      reloadCi();
+                      return out;
+                    }, t('release.tagConfirm', { version: r.version }))
+                  }
+                >
+                  {r.tagRequest ? t('release.approveTag', { version: r.version }) : t('release.tag', { version: r.version })}
+                </button>
+                {ci?.pr?.state === 'merged' && (!ci.merge || ci.merge.state === 'unavailable') && (
+                  <button type="button" className="btn-secondary" disabled={busy} onClick={() => act(() => api.tagRelease(projectId, true), t('release.tagForceConfirm', { version: r.version }))}>
+                    {t('release.tagForce')}
+                  </button>
+                )}
+                {r.tagRequest && (
+                  <button type="button" className="btn-secondary" disabled={busy} onClick={() => act(() => api.declineReleaseTag(projectId))}>
+                    {t('release.declineTag')}
+                  </button>
+                )}
+              </div>
             </>
           )}
         </div>
+        {logSection(r.log)}
         <div className="release-foot">
           <button type="button" className="btn-secondary is-danger" disabled={busy} onClick={() => act(() => api.cancelRelease(projectId), t('release.cancelConfirm', { version: r.version }))}>
             {t('release.cancel')}
@@ -305,12 +435,31 @@ export function ReleaseDialog({ projectId, projectName, staff, tasks, onClose, o
 
   const historyPane = () => {
     if (history === undefined) return <p className="muted">{t('release.loading')}</p>;
+    // Deploy como código da versão (a tag mais nova) e o rollback para a anterior; só lido com a aba aberta.
+    const deploy = (
+      <section className="release-status">
+        <h3 className="release-head">{t('release.deployHead')}</h3>
+        <DeployPanel projectId={projectId} />
+      </section>
+    );
     if (!history?.entries.length) return <p className="muted">{t('release.historyEmpty')}</p>;
     return (
+      <>
+      {deploy}
       <ul className="release-list">
         {history.entries.map((e) => (
           <li key={e.tag} className="release-history">
-            <details>
+            <details
+              onToggle={(ev) => {
+                const open = (ev.currentTarget as HTMLDetailsElement).open;
+                setOpenTags((s) => {
+                  const n = new Set(s);
+                  if (open) n.add(e.tag);
+                  else n.delete(e.tag);
+                  return n;
+                });
+              }}
+            >
               <summary>
                 <strong>{e.tag}</strong>
                 <span className="muted small">
@@ -320,6 +469,7 @@ export function ReleaseDialog({ projectId, projectName, staff, tasks, onClose, o
                 </span>
                 {e.subject && <span className="release-subject small">{e.subject}</span>}
               </summary>
+              {openTags.has(e.tag) && /^[0-9a-f]{40}$/.test(e.sha) && <CiBadge k={`commit:${e.sha}`} load={() => api.commitCi(projectId, e.sha)} />}
               {e.summary && <p className="release-summary small">{e.summary}</p>}
               {e.tasks.length ? (
                 <ul className="release-history-tasks small">
@@ -336,6 +486,7 @@ export function ReleaseDialog({ projectId, projectName, staff, tasks, onClose, o
           </li>
         ))}
       </ul>
+      </>
     );
   };
 

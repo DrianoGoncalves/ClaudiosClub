@@ -75,7 +75,7 @@ import { convertStaffSkills, migrateLibraryToGlobal } from './skillMigration';
 import { migrateProjectAgents } from './staff/presetMigration';
 import { skillSourcesOf } from './skillAccess';
 import { applyUpdate, checkUpdate, GitHubInstallBatchInput, GitHubInstallInput, GitHubPreviewInput, GitHubSkillInput, GitHubStatusQuery, GitHubUpdateInput, githubSkillsIn, installBatch, installSkill, previewSkill, rollback, SkillConflictError, UpdateChecker, type InstallTarget } from './skillInstall';
-import { GitHubError, GitHubRateLimited } from './adapters/github/client';
+import { GitHubError, GitHubRateLimited, githubActions, githubCi } from './adapters/github/client';
 import { FileError, projectImageUrl, readAccountRules, readProjectImage, saveAccountRules, saveProjectImage } from './files';
 import { createGuide, GuideExistsError, guideStatus, readShowcase } from './projectGuide';
 import { checkProjectHealth } from './health/scan';
@@ -117,9 +117,12 @@ import { CostReviewApplyError, runCostReviewApply } from './costReviewApply';
 import type { Board, CommitWaitingSummary, CostReport, InboxItem, InboxKind, LiveSession, Project, TurnNotice } from '../shared/model';
 import { TurnWatcher } from './turns';
 import { ProjectPauses } from './projectPause';
-import { ReleaseError, ReleaseService } from './release';
-import { createSafeTools } from './staff/gitSafe';
-import { FlowPolicies } from './flowPolicy';
+import { ReleaseError, ReleaseService, type ReleaseDeps } from './release';
+import { createSafeTools, githubRepoOf } from './staff/gitSafe';
+import { CiService } from './ciStatus';
+import { DeployError, DeployService } from './deploy';
+import { parsePrUrl } from '../shared/ci';
+import { FlowPolicies, publishOf } from './flowPolicy';
 import { deliverToAsker } from './consult/deliver';
 import { ConsultLinks } from './consult/links';
 import { ConsultError, ConsultService } from './consult/service';
@@ -728,22 +731,81 @@ const tasks = new TaskService({
 });
 // Versão com escopo (ver server/release.ts): o git e o gh sem hooks do projeto e com ambiente controlado, como o MCP de git; push e tag só pelos botões do dono.
 const releaseHooks = path.join(MYCO_HOME, 'run', 'release-nohooks');
+const releaseTools: ReleaseDeps['tools'] = (() => {
+  const t = createSafeTools({ hooksDir: releaseHooks });
+  const ready = fs.mkdir(releaseHooks, { recursive: true });
+  return { git: async (cwd, args, opts) => (await ready, t.git(cwd, args, opts)), gh: async (args, input) => (await ready, t.gh(args, input)) };
+})();
+/** O `owner/repo` do origin de cada projeto (só GitHub), guardado por 10 min: o status do CI não roda git a cada pedido. */
+const ciRepos = new Map<string, { value: { owner: string; repo: string } | null; at: number }>();
+async function ciRepoOf(projectId: string): Promise<{ owner: string; repo: string } | null> {
+  const hit = ciRepos.get(projectId);
+  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.value;
+  const dir = await projectPathOf(projectId);
+  const url = dir ? (await releaseTools.git(dir, ['remote', 'get-url', 'origin']).catch(() => '')).trim() : '';
+  const value = githubRepoOf(url);
+  ciRepos.set(projectId, { value, at: Date.now() });
+  return value;
+}
+/** O token do `gh` do dono (só na memória do servidor e só para a API do GitHub), guardado 10 min: o status do CI e o deploy como código. */
+let ghToken: { value: string | null; at: number } | null = null;
+async function githubToken(): Promise<string | null> {
+  if (ghToken && Date.now() - ghToken.at < 10 * 60_000) return ghToken.value;
+  const out = (await releaseTools.gh(['auth', 'token']).catch(() => '')).trim();
+  ghToken = { value: /^[A-Za-z0-9_]{20,255}$/.test(out) ? out : null, at: Date.now() };
+  return ghToken.value;
+}
+// Status do CI do GitHub (ver server/ciStatus.ts).
+const ci = new CiService({ client: githubCi, repoOf: ciRepoOf, token: githubToken });
 const releases: ReleaseService = new ReleaseService({
+  // Fora do projeto (o agente não grava ali; a ficha nega a escrita), como a política de fluxo.
+  stateDir: path.join(MYCO_HOME, 'releases'),
+  // Quem publica: o portão `publish` da política de fluxo do projeto (sem política: só você).
+  publishMode: async (projectId) => publishOf(await flowPolicies.get(projectId)),
   projectPath: projectPathOf,
   projectIds: () => adapter.boardProjectIds(),
   readTasks,
+  readProfile: async (projectId, staffId) => {
+    const dir = await projectPathOf(projectId);
+    return dir ? readProfile(dir, staffId) : null;
+  },
   createTask: async (projectId, body) => tasks.create(projectId, body),
   startTask: (projectId, taskId) => tasks.start(projectId, taskId),
-  runTests: async (dir) => {
-    const command = await detectTest(dir);
-    return command ? runTests(dir, command) : null;
+  // As provas da versão, sem a suíte inteira quando dá: a checagem de tipos do projeto e, com vitest, só os testes relacionados aos arquivos mudados desde a última tag
+  // (`files`, nomes já conferidos como seguros para a linha de comando). Sem vitest ou sem a lista, os testes do projeto. Cada uma na fila pesada da máquina (`runTests`).
+  runProof: async (dir, files) => {
+    type Pkg = { scripts?: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+    const pkg = await fs.readFile(path.join(dir, 'package.json'), 'utf8').then((t) => JSON.parse(t.replace(/^﻿/, '')) as Pkg, () => null);
+    const has = (name: string) => !!(pkg?.devDependencies?.[name] ?? pkg?.dependencies?.[name]);
+    const tsconfig = await fs.access(path.join(dir, 'tsconfig.json')).then(() => true, () => false);
+    const typeCmd = pkg?.scripts?.typecheck ? 'npm run typecheck' : tsconfig && has('typescript') ? 'npx tsc --noEmit' : null;
+    const testCmd = has('vitest') && files ? (files.length ? `npx vitest related ${files.join(' ')} --run` : null) : await detectTest(dir);
+    return { typecheck: typeCmd ? await runTests(dir, typeCmd) : null, tests: testCmd ? await runTests(dir, testCmd) : null };
   },
-  tools: (() => {
-    const t = createSafeTools({ hooksDir: releaseHooks });
-    const ready = fs.mkdir(releaseHooks, { recursive: true });
-    return { git: async (cwd, args, opts) => (await ready, t.git(cwd, args, opts)), gh: async (args, input) => (await ready, t.gh(args, input)) };
-  })(),
+  tools: releaseTools,
   onScopeLifted: (projectId) => void tasks.tick(new Date(), projectId).catch(() => {}),
+  ci: (projectId, sha) => ci.commit(projectId, sha),
+});
+// Deploy como código (ver server/deploy.ts e docs/deploy.md): dispara o deploy.yml do projeto e acompanha; sem ele, o "Pedir deploy" segue pela conversa SSH.
+const deploys = new DeployService({
+  stateDir: path.join(MYCO_HOME, 'deploys'),
+  projectPath: projectPathOf,
+  repoOf: ciRepoOf,
+  defaultBranch: async (projectId) => {
+    const dir = await projectPathOf(projectId);
+    const head = dir ? (await releaseTools.git(dir, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']).catch(() => '')).trim() : '';
+    return head.replace(/^origin\//, '') || 'main';
+  },
+  resolveCommit: async (projectId, sha) => {
+    const dir = await projectPathOf(projectId);
+    const out = dir ? (await releaseTools.git(dir, ['rev-parse', '-q', '--verify', `${sha}^{commit}`]).catch(() => '')).trim() : '';
+    return /^[0-9a-f]{40}$/.test(out) ? out : null;
+  },
+  tags: async (projectId) => ((await releases.history(projectId))?.entries ?? []).map((e) => e.tag),
+  readTasks,
+  token: githubToken,
+  client: githubActions,
+  notify: (projectId, text) => releases.addNotice(projectId, text),
 });
 // Conversa direta no limite de uso (o dono pela tela): a mensagem segue no secundário da ficha, numa conversa nova (ver directFallback.ts).
 const directFallback = new DirectFallback({
@@ -1722,7 +1784,11 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   // A política de fluxo do projeto (ver server/flowPolicy.ts e FLOW_PRESETS em shared/model.ts): `{ mode, plan, completion, commit, source, completionChosen }`. Ler é livre; gravar só pela tela
   // (preset `{ mode }` ou portões `{ plan, completion, commit }`, que gravam 'custom'): o serviço responde 403 a quem não é a tela e o funcionário nem tem este POST na lista de apiPolicy.ts.
   ['GET', new RegExp(`^/api/projects/${ID}/flow-policy$`), ({ params: [id] }) => tasks.flowPolicy(id!)],
-  ['POST', new RegExp(`^/api/projects/${ID}/flow-policy$`), ({ params: [id], body, fromBrowser }) => tasks.setFlowPolicy(id!, body, fromBrowser)],
+  // Com o portão `publish` de volta a "só você", o pedido de tag pendente de um funcionário é recusado na hora (ver ReleaseService.publishModeChanged).
+  ['POST', new RegExp(`^/api/projects/${ID}/flow-policy$`), ({ params: [id], body, fromBrowser }) => tasks.setFlowPolicy(id!, body, fromBrowser).then(async (policy) => {
+    if (policy) await releases.publishModeChanged(id!, publishOf(policy));
+    return policy;
+  })],
   // Um escritor por vez no checkout principal: `{ singleWriter }` (ver server/boardConfig.ts e TaskService.writeSlot). Como o commit automático: ler é livre, gravar só pela tela (o serviço
   // responde 403 a quem não é a tela) e o funcionário nem tem este POST na lista de apiPolicy.ts.
   ['GET', new RegExp(`^/api/projects/${ID}/board-writer$`), ({ params: [id] }) => tasks.boardWriter(id!)],
@@ -1752,8 +1818,44 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   ['POST', new RegExp(`^/api/projects/${ID}/release$`), ({ params: [id], body, fromBrowser }) => releases.open(id!, body, fromBrowser)],
   ['POST', new RegExp(`^/api/projects/${ID}/release/scope$`), ({ params: [id], body, fromBrowser }) => releases.changeScope(id!, body, fromBrowser)],
   ['POST', new RegExp(`^/api/projects/${ID}/release/prepare$`), ({ params: [id], body, fromBrowser }) => releases.prepare(id!, body, fromBrowser)],
-  ['POST', new RegExp(`^/api/projects/${ID}/release/publish$`), ({ params: [id], fromBrowser }) => releases.publish(id!, fromBrowser)],
-  ['POST', new RegExp(`^/api/projects/${ID}/release/tag$`), ({ params: [id], fromBrowser }) => releases.tag(id!, fromBrowser)],
+  // Publicar e criar a tag: a tela, ou o funcionário com "Pode versionar e fazer deploy" conforme o modo do projeto (o serviço confere o token, a permissão, a autonomia e o modo; as duas
+  // rotas estão em STAFF_POSTS, apiPolicy.ts). Quem executa o git é sempre o servidor.
+  ['POST', new RegExp(`^/api/projects/${ID}/release/publish$`), ({ params: [id], fromBrowser, caller }) => releases.publish(id!, fromBrowser, caller)],
+  ['POST', new RegExp(`^/api/projects/${ID}/release/tag$`), ({ params: [id], body, fromBrowser, caller }) => releases.tag(id!, fromBrowser, caller, body)],
+  // Status do CI do GitHub (ver server/ciStatus.ts): só sob demanda (a tela pede ao abrir a versão, o histórico ou o cartão, e em intervalo longo enquanto roda); o servidor guarda e
+  // consulta cada commit no máximo uma vez por minuto enquanto roda. Sempre o repositório do origin do projeto; o token do `gh` nunca sai do servidor.
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/release/ci$`),
+    async ({ params: [id] }) => {
+      const st = await releases.state(id!);
+      const pr = parsePrUrl(st?.published?.pr);
+      return pr ? ci.pull(id!, pr.number) : { pr: null, head: null, merge: null };
+    },
+  ],
+  ['GET', new RegExp(`^/api/projects/${ID}/ci/commit/([0-9a-f]{40})$`), ({ params: [id, sha] }) => ci.commit(id!, sha!)],
+  // Deploy como código (ver server/deploy.ts): o estado (com deploy rodando, atualizado do GitHub no máximo 1x a cada 30 s por deploy) e o disparo de versão ou rollback (só a tela;
+  // o do cartão vai pelo "Pedir deploy", acima). A rota não está em apiPolicy.ts: funcionário não dispara deploy.
+  ['GET', new RegExp(`^/api/projects/${ID}/deploys$`), ({ params: [id] }) => deploys.info(id!)],
+  ['GET', new RegExp(`^/api/projects/${ID}/tasks/${ID}/deploys$`), ({ params: [id, taskId] }) => deploys.info(id!, taskId!)],
+  ['POST', new RegExp(`^/api/projects/${ID}/deploys$`), ({ params: [id], body, fromBrowser }) => deploys.dispatch(id!, body, fromBrowser)],
+  [
+    'GET',
+    new RegExp(`^/api/projects/${ID}/tasks/${ID}/ci$`),
+    async ({ params: [id, taskId] }) => {
+      const dir = await projectPathOf(id!);
+      if (!dir) return null;
+      const task = (await readTasks(dir)).find((x) => x.id === taskId);
+      if (!task) return null;
+      const pr = parsePrUrl(task.pr);
+      const repo = await ciRepoOf(id!);
+      // Só o PR do repositório do próprio projeto: um link para outro repositório não vira consulta.
+      if (!pr || !repo || pr.owner.toLowerCase() !== repo.owner.toLowerCase() || pr.repo.toLowerCase() !== repo.repo.toLowerCase()) return { pr: null, head: null, merge: null };
+      return ci.pull(id!, pr.number);
+    },
+  ],
+  ['POST', new RegExp(`^/api/projects/${ID}/release/tag/decline$`), ({ params: [id], fromBrowser }) => releases.declineTag(id!, fromBrowser)],
+  ['POST', new RegExp(`^/api/projects/${ID}/release/discard$`), ({ params: [id], fromBrowser }) => releases.discard(id!, fromBrowser)],
   ['POST', new RegExp(`^/api/projects/${ID}/release/cancel$`), ({ params: [id], fromBrowser }) => releases.cancel(id!, fromBrowser)],
   [
     'POST',
@@ -1954,8 +2056,30 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
     new RegExp(`^/api/projects/${ID}/tasks/${ID}/(test|merge|review|deploy|second-opinion)$`),
     ({ params: [id, taskId, action], body, fromBrowser }) => {
       if (!fromBrowser) throw new BadRequest('tarefas só pelo Claudio’s Club');
-      const b = parse(z.object({ staffId: z.string().max(40).optional(), force: z.boolean().default(false), skipTests: z.boolean().default(false) }), body ?? {});
+      const b = parse(
+        z.object({
+          staffId: z.string().max(40).optional(),
+          force: z.boolean().default(false),
+          skipTests: z.boolean().default(false),
+          // Deploy como código: o ambiente e o seu ok para produção (ver server/deploy.ts).
+          environment: z.enum(['staging', 'producao']).default('staging'),
+          confirm: z.boolean().default(false),
+        }),
+        body ?? {},
+      );
       if (action === 'test') return tasks.test(id!, taskId!);
+      // "Pedir deploy" com `.github/workflows/deploy.yml` e origin no GitHub: o Club dispara o workflow com o commit mesclado e acompanha (ver server/deploy.ts). Sem ele, segue abaixo
+      // pela conversa SSH com o funcionário de infra (`requestDeploy`), como sempre.
+      if (action === 'deploy') {
+        return deploys.available(id!).then(async (av) => {
+          if (!av.ok) {
+            if (!b.staffId) throw new BadRequest('escolha quem faz o deploy');
+            return tasks.requestDeploy(id!, taskId!, b.staffId, b.force);
+          }
+          await deploys.dispatch(id!, { taskId, environment: b.environment, confirm: b.confirm }, true);
+          return (await tasks.list(id!))?.find((t) => t.id === taskId) ?? null;
+        });
+      }
       // O diff vai para a OpenAI: só com a opção ligada nas configurações e quando você pede, pelo botão.
       if (action === 'second-opinion') {
         return readConfig().then((c) => {
@@ -2066,6 +2190,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       const b = parse(z.object({ id: z.string().min(1).max(300) }), body);
       // O aviso da pausa de versão (ligada ou que saiu) é da caixa, como o da rotina: o kind é `routine` para a tela mostrar como informação e tirar por aqui (ver `versionPauseItems`).
       if (b.id.startsWith('vpause:')) return { ok: await dismissVersionPause(b.id) };
+      // O aviso da versão (publicação, preparação), também `routine` (ver `ReleaseService.inboxItems`).
+      if (b.id.startsWith('release:')) return { ok: await releases.dismiss(b.id) };
       return { ok: routines.dismissAlert(b.id) };
     },
   ],
@@ -2899,6 +3025,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         if (err instanceof TaskConflictError) return send(res, 409, { error: err.message });
         if (err instanceof TaskForbiddenError) return send(res, 403, { error: err.message });
         if (err instanceof ReleaseError) return send(res, err.status, { error: err.message });
+        if (err instanceof DeployError) return send(res, err.status, { error: err.message });
         // A vez do funcionário não chegou no prazo da resposta (edição, cancelamento, resposta à dúvida, ajuste guardado, revisão): 503, nada gravado (tentar de novo em instantes é seguro).
         if (err instanceof TaskBusyError) return send(res, 503, { error: err.message }, { 'retry-after': '5' });
         // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
@@ -3206,6 +3333,10 @@ async function getInbox(): Promise<InboxItem[]> {
   }
   // Pausa de versão ligada, e a que saiu (prazo, encerrada, retomada) enquanto o dono não dispensa o aviso: itens informativos (ver `versionPauseItems`).
   for (const item of versionPauseItems(await projectPauses.notices().catch(() => ({ active: [], ended: [] })), (id) => projects.find((p) => p.id === id)?.name ?? id)) {
+    if (!hidden({ projectId: item.projectId, staffId: null, sessionId: '' })) out.push(item);
+  }
+  // Versão: o pedido de tag de um funcionário e os avisos de publicação e preparação (custo fixo: estado na memória; ver `ReleaseService.inboxItems`).
+  for (const item of await releases.inboxItems(projects.map((p) => p.id), (id) => projects.find((p) => p.id === id)?.name ?? id).catch(() => [] as InboxItem[])) {
     if (!hidden({ projectId: item.projectId, staffId: null, sessionId: '' })) out.push(item);
   }
   // Rotinas que não rodaram (trava de consumo, funcionário ocupado, sessão aberta em outro lugar).
@@ -3545,6 +3676,8 @@ server.listen(PORT, HOST, () => {
         setInterval(queueTick, 60_000).unref();
         // Versão aberta: põe o card de manual na fila e prepara sozinha quando tudo fica pronto (uma rodada por vez, ver ReleaseService.sweep).
         setInterval(() => void releases.sweep().catch(() => {}), 60_000).unref();
+        // Deploy como código: acompanha só os deploys que rodam (uma rodada por vez, ver DeployService.sweep).
+        setInterval(() => void deploys.sweep().catch(() => {}), 60_000).unref();
       }).catch((err) => console.error('[retomar] falhou:', err));
     });
   // Temporários parados há dias saem do quadro (arquivados, nada apagado).

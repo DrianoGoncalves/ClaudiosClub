@@ -670,6 +670,24 @@ textarea.q-field { resize: vertical; }
 .release-subject { display: block; margin-top: 2px; overflow-wrap: anywhere; }
 .release-summary { white-space: pre-wrap; overflow-wrap: anywhere; }
 .release-history-tasks { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 2px; }
+.release-mode { display: grid; gap: 6px; justify-items: start; margin: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.release-mode legend { padding: 0 4px; font-weight: 600; }
+.release-mode .release-pick { flex: none; }
+.release-request { font-weight: 600; color: var(--ink-blue); }
+/* Status do CI (CiBadge): um ponto colorido e o estado em texto (a cor nunca é a única pista). */
+.ci-summary { display: grid; gap: 4px; }
+.ci-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: var(--fs-md); min-width: 0; }
+.ci-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.ci-line[data-state="success"] .ci-dot { background: var(--ink-green); }
+.ci-line[data-state="failure"] .ci-dot { background: var(--ink-red); }
+.ci-line[data-state="pending"] .ci-dot { background: var(--ink-blue); }
+.ci-checks { flex-basis: 100%; }
+.ci-checks ul { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 2px; }
+.ci-checks li[data-state="failure"] { color: var(--ink-red); }
+/* Deploy como código (DeployPanel): ambiente e botões numa linha que quebra no celular; os últimos deploys com o mesmo ponto do CI. */
+.deploy-panel { display: grid; gap: 6px; min-width: 0; }
+.deploy-panel select { min-height: 36px; }
+.deploy-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 /* Celular: o botão "Versão" do cabeçalho divide a linha com os outros sem empurrar o título. */
 @media (max-width: 480px) { .tasks-head .release-open-btn { padding-inline: 8px; } .release-remove { margin-left: 0; } }
 .bn-tag.is-paused.is-version, .badge.is-paused.is-version { white-space: nowrap; }

@@ -1,8 +1,9 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type { Task, TestRun } from '../shared/model';
-import { expandScope, nextVersion, parseReleaseBody, releaseBody, releaseProgress } from '../shared/release';
+import type { CiStatus } from '../shared/ci';
+import type { StaffProfile, Task, TestRun } from '../shared/model';
+import { expandScope, nextVersion, parseReleaseBody, releaseBody, releaseProgress, type ReleaseMode } from '../shared/release';
 import { ReleaseError, ReleaseService, type ReleaseDeps } from '../server/release';
 import { tempDirs } from './support/tmp';
 
@@ -51,8 +52,16 @@ describe('contas da versão (shared/release.ts)', () => {
   });
 });
 
+/** As fichas: com a permissão e autonomia auto; com a permissão e "aceitar edições"; sem a permissão. */
+const PROFILES: Record<string, Partial<StaffProfile>> = {
+  'gio-1': { id: 'gio-1', name: 'Giovana', autonomy: 'auto', canRelease: true },
+  'edi-1': { id: 'edi-1', name: 'Edi', autonomy: 'acceptEdits', canRelease: true },
+  'off-1': { id: 'off-1', name: 'Otto', autonomy: 'auto', canRelease: false },
+};
+const as = (staffId: string, projectId = 'p') => ({ staffId, projectId });
+
 /** Um projeto numa pasta temporária, com as tarefas na memória e o git e o gh falsos que anotam cada chamada. */
-async function setup(opts: { tasks?: Task[]; tests?: TestRun | null; tags?: string[]; merged?: boolean } = {}) {
+async function setup(opts: { tasks?: Task[]; tests?: TestRun | null; typecheck?: TestRun | null; tags?: string[]; merged?: boolean; changed?: string; ci?: CiStatus['state'] } = {}) {
   const dir = await tmp('myco-release-');
   await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '1.5.0' }, null, 2) + '\n');
   await fs.writeFile(path.join(dir, 'package-lock.json'), JSON.stringify({ name: 'x', version: '1.5.0', packages: { '': { name: 'x', version: '1.5.0' } } }, null, 2) + '\n');
@@ -64,6 +73,8 @@ async function setup(opts: { tasks?: Task[]; tests?: TestRun | null; tags?: stri
     started: [] as string[],
     lifted: [] as string[],
     tests: 0,
+    proofFiles: [] as Array<string[] | null>,
+    mode: 'manual' as ReleaseMode,
   };
   const tags = new Set(opts.tags ?? []);
   const git: ReleaseDeps['tools']['git'] = async (_cwd, args) => {
@@ -80,6 +91,9 @@ async function setup(opts: { tasks?: Task[]; tests?: TestRun | null; tags?: stri
     if (cmd === 'remote') return 'https://github.com/dono/club.git\n';
     if (cmd === 'config') return '';
     if (cmd === 'symbolic-ref') return 'origin/main\n';
+    if (cmd === 'describe') return 'v1.5.0\n';
+    if (cmd === 'diff') return opts.changed ?? 'server/release.ts\nclient/src/x.tsx\nREADME.md\n';
+    if (cmd === 'show') return JSON.stringify({ name: 'x', version: '1.5.0' });
     if (cmd === 'for-each-ref')
       return [
         ['v1.5.2', '2026-11-23T10:00:00-03:00', 'b'.repeat(40), 'c'.repeat(40), 'Versão 1.5.2', releaseBody('PR: x', [{ id: 't-aaaa01', title: 'A' }])].join('\0'),
@@ -96,7 +110,10 @@ async function setup(opts: { tasks?: Task[]; tests?: TestRun | null; tags?: stri
     if (args[1] === 'view') return JSON.stringify(opts.merged === false ? { state: 'OPEN', mergeCommit: null } : { state: 'MERGED', mergeCommit: { oid: '9'.repeat(40) } });
     return '';
   };
+  const stateDir = await tmp('myco-releases-');
   const deps: ReleaseDeps = {
+    stateDir,
+    publishMode: async () => h.mode,
     projectPath: async (id) => (id === 'p' ? dir : null),
     projectIds: async () => ['p'],
     readTasks: async () => h.tasks,
@@ -110,19 +127,28 @@ async function setup(opts: { tasks?: Task[]; tests?: TestRun | null; tags?: stri
       h.started.push(id);
       h.tasks = h.tasks.map((x) => (x.id === id ? { ...x, status: 'todo', queuedAt: 'agora' } : x));
     },
-    runTests: async () => {
+    readProfile: async (_p, id) => (PROFILES[id] as StaffProfile) ?? null,
+    runProof: async (_dir, files) => {
       h.tests++;
-      return opts.tests === undefined ? ({ command: 'npm test', ok: true, output: 'ok', ms: 1, at: '' } as TestRun) : opts.tests;
+      h.proofFiles.push(files);
+      const ok = (command: string) => ({ command, ok: true, output: 'ok', ms: 1, at: '' }) as TestRun;
+      return { typecheck: opts.typecheck === undefined ? ok('npm run typecheck') : opts.typecheck, tests: opts.tests === undefined ? ok('vitest related') : opts.tests };
     },
     tools: { git, gh },
     onScopeLifted: (id) => h.lifted.push(id),
+    ...(opts.ci && { ci: async (_p: string, sha: string) => ({ state: opts.ci!, sha, checks: [], checkedAt: '', reason: 'sem rede' }) }),
     log: () => {},
     now: () => new Date('2026-11-23T12:00:00.000Z'),
   };
   const svc = new ReleaseService(deps);
   const set = (id: string, status: Task['status']) => (h.tasks = h.tasks.map((x) => (x.id === id ? { ...x, status } : x)));
-  const file = path.join(dir, '.myco', 'release.json');
-  return { svc, deps, h, dir, set, file };
+  const file = path.join(stateDir, 'p.json');
+  /** O dono muda o portão `publish` da política de fluxo (a rota avisa o serviço). */
+  const setMode = async (m: ReleaseMode) => {
+    h.mode = m;
+    await svc.publishModeChanged('p', m);
+  };
+  return { svc, deps, h, dir, set, file, setMode };
 }
 
 describe('ReleaseService', () => {
@@ -174,7 +200,11 @@ describe('ReleaseService', () => {
     expect(commit).toContain('Versão 1.5.2');
     expect(commit.slice(-3)).toEqual(['--', 'package.json', 'package-lock.json']);
     expect(commit.find((x) => x.includes('- t-aaaa01 Tarefa t-aaaa01'))).toBeTruthy();
-    expect(v.release!.prepared).toEqual({ at: '2026-11-23T12:00:00.000Z', sha: 'a'.repeat(40), branch: 'release/1.5.0' });
+    // As provas: tipos e só os testes relacionados aos arquivos de código mudados desde a última tag (o README fica de fora).
+    expect(c.h.proofFiles).toEqual([['server/release.ts', 'client/src/x.tsx']]);
+    expect(c.h.git.find((a) => a[0] === 'diff')).toEqual(['diff', '--name-only', '--diff-filter=d', 'v1.5.0..HEAD']);
+    expect(v.release!.prepared).toEqual({ at: '2026-11-23T12:00:00.000Z', sha: 'a'.repeat(40), branch: 'release/1.5.0', proof: { typecheck: 'ok', tests: 'ok', related: 2 } });
+    expect(v.release!.log.map((e) => e.action)).toEqual(['opened', 'prepared']);
     expect(await c.svc.scope('p')).toBeNull();
     expect(c.h.lifted).toEqual(['p']);
     await expect(c.svc.changeScope('p', { add: ['t-out003'] }, true)).rejects.toThrow(/já foi preparada/);
@@ -234,7 +264,7 @@ describe('ReleaseService', () => {
   it('publicar: push do commit da versão para release/<versão> (sem force, sem tags) e o PR para a branch padrão; tag depois da mescla fecha a versão', async () => {
     const c = await setup({ merged: false });
     await c.svc.open('p', { version: '1.5.2', taskIds: ['t-bbbb02'] }, true);
-    await expect(c.svc.publish('p', true)).rejects.toThrow(/prepare a versão/);
+    await expect(c.svc.publish('p', true)).rejects.toThrow(/ainda não foi preparada/);
     c.set('t-bbbb02', 'done');
     await c.svc.prepare('p', {}, true);
     await c.svc.settled('p');
@@ -261,7 +291,9 @@ describe('ReleaseService', () => {
     expect(c.h.git.find((a) => a[0] === 'fetch')).toEqual(['fetch', '--no-tags', 'origin', 'main']);
     expect(c.h.git.filter((a) => a[0] === 'push').at(-1)).toEqual(['push', '--no-verify', 'origin', 'refs/tags/v1.5.2']);
     expect(v.release).toBeNull();
-    await expect(fs.access(c.file)).rejects.toThrow();
+    // A versão fechou; o arquivo (fora do projeto) fica só com o aviso da publicação para a caixa.
+    expect(JSON.parse(await fs.readFile(c.file, 'utf8'))).toMatchObject({ release: null, notices: expect.arrayContaining([expect.objectContaining({ text: expect.stringMatching(/tag v1\.5\.2 enviada/) })]) });
+    await expect(fs.access(path.join(c.dir, '.myco', 'release.json'))).rejects.toThrow();
     const hist = (await c.svc.history('p'))!;
     expect(hist.entries.map((e) => e.tag)).toEqual(['v1.5.2', 'v1.5.1']);
     expect(hist.entries[0]).toMatchObject({ sha: 'c'.repeat(40), subject: 'Versão 1.5.2', summary: 'PR: x', tasks: [{ id: 't-aaaa01', title: 'A' }] });
@@ -280,6 +312,169 @@ describe('ReleaseService', () => {
     const fresh = new ReleaseService(c.deps);
     expect(await fresh.state('p')).toBeNull();
     await expect(fs.access(`${c.file}.bad`)).resolves.toBeUndefined();
+  });
+
+  it('provas: tipos vermelhos barram; nome de arquivo fora do seguro ou demais roda a suíte inteira; "sem as provas" fica registrado', async () => {
+    const c = await setup({ typecheck: { command: 'npm run typecheck', ok: false, output: 'TS2322', ms: 1, at: '' } as TestRun, changed: 'server/a b.ts\nserver/c.ts\n' });
+    await c.svc.open('p', { version: '1.5.2', taskIds: ['t-bbbb02'] }, true);
+    c.set('t-bbbb02', 'done');
+    await c.svc.prepare('p', {}, true);
+    await c.svc.settled('p');
+    expect(c.h.proofFiles).toEqual([null]);
+    expect((await c.svc.state('p'))!.prepareError).toMatchObject({ message: 'a checagem de tipos falhou: nada foi commitado', testsOutput: 'TS2322' });
+    await c.svc.prepare('p', { skipTests: true }, true);
+    await c.svc.settled('p');
+    const st = (await c.svc.state('p'))!;
+    expect(st.prepared!.proof).toEqual({ typecheck: 'skipped', tests: 'skipped', related: null });
+    expect(st.log.at(-1)).toMatchObject({ action: 'prepared', detail: expect.stringMatching(/sem as provas \(liberado por você\)/) });
+  });
+
+  it('hotfix: fura a versão (a fila e a mescla o deixam passar) sem segurar a preparação; entra no changelog marcado', async () => {
+    const c = await setup();
+    await c.svc.open('p', { version: '1.5.2', taskIds: ['t-bbbb02'] }, true);
+    const v = (await c.svc.changeScope('p', { hotfix: ['t-out003'] }, true))!;
+    expect(v.release!.hotfixes).toEqual(['t-out003']);
+    expect([...(await c.svc.scope('p'))!.ids].sort()).toEqual(['t-bbbb02', 't-out003']);
+    expect(v).toMatchObject({ total: 1 });
+    c.set('t-bbbb02', 'done');
+    c.set('t-out003', 'done');
+    await c.svc.prepare('p', {}, true);
+    await c.svc.settled('p');
+    const commit = c.h.git.find((a) => a[0] === 'commit')!;
+    expect(commit.find((x) => x.includes('- t-out003 [hotfix] Tarefa t-out003'))).toBeTruthy();
+  });
+
+  it('descartar a versão preparada: commit novo que volta só o número (o resto do package.json fica), a trava volta; publicada, não', async () => {
+    const c = await setup();
+    await c.svc.open('p', { version: '1.5.2', taskIds: ['t-bbbb02'] }, true);
+    c.set('t-bbbb02', 'done');
+    await c.svc.prepare('p', {}, true);
+    await c.svc.settled('p');
+    // Depois da preparação, outra tarefa mexeu no package.json (e commitou): o descarte não a desfaz.
+    const pkg = JSON.parse(await fs.readFile(path.join(c.dir, 'package.json'), 'utf8'));
+    await fs.writeFile(path.join(c.dir, 'package.json'), JSON.stringify({ ...pkg, scripts: { novo: 'x' } }, null, 2) + '\n');
+    await expect(c.svc.discard('p', false)).rejects.toMatchObject({ status: 403 });
+    const v = (await c.svc.discard('p', true))!;
+    expect(JSON.parse(await fs.readFile(path.join(c.dir, 'package.json'), 'utf8'))).toMatchObject({ version: '1.5.0', scripts: { novo: 'x' } });
+    expect(c.h.git.filter((a) => a[0] === 'commit').at(-1)!.slice(0, 5)).toEqual(['commit', '--only', '--allow-empty', '-m', 'Descarta a versão 1.5.2 (não publicada)']);
+    expect(v.release).toMatchObject({ prepared: null });
+    expect(await c.svc.scope('p')).not.toBeNull();
+    await c.svc.prepare('p', {}, true);
+    await c.svc.settled('p');
+    await c.svc.publish('p', true);
+    await expect(c.svc.discard('p', true)).rejects.toThrow(/já foi publicada/);
+  });
+
+  it('o funcionário pela API: precisa do token deste projeto, da permissão, de autonomia auto e de um modo que deixe; o padrão (manual) recusa', async () => {
+    const c = await setup();
+    await c.svc.open('p', { version: '1.5.2', taskIds: ['t-bbbb02'] }, true);
+    c.set('t-bbbb02', 'done');
+    await c.svc.prepare('p', {}, true);
+    await c.svc.settled('p');
+    await expect(c.svc.publish('p', false, null)).rejects.toMatchObject({ status: 403 });
+    await expect(c.svc.publish('p', false, as('gio-1', 'outro'))).rejects.toMatchObject({ status: 403 });
+    await expect(c.svc.publish('p', false, as('off-1'))).rejects.toThrow(/não tem a permissão/);
+    await expect(c.svc.publish('p', false, as('edi-1'))).rejects.toThrow(/autonomia auto/);
+    await expect(c.svc.publish('p', false, as('gio-1'))).rejects.toThrow(/publicação manual/);
+    expect(c.h.git.some((a) => a[0] === 'push')).toBe(false);
+    await c.setMode('staff-pr');
+    expect((await c.svc.view('p'))!.mode).toBe('staff-pr');
+    const v = (await c.svc.publish('p', false, as('gio-1')))!;
+    expect(v.release!.published).toMatchObject({ branch: 'release/1.5.2', by: { staffId: 'gio-1', name: 'Giovana' } });
+    expect(c.h.gh.find((a) => a[1] === 'create')).toBeTruthy();
+    // Rastro: registro e aviso na caixa.
+    expect(v.release!.log.at(-1)).toMatchObject({ action: 'published', by: { name: 'Giovana' } });
+    const items = await c.svc.inboxItems(['p'], () => 'Club');
+    expect(items).toEqual([expect.objectContaining({ kind: 'routine', projectName: 'Club', summary: expect.stringMatching(/PR aberto por Giovana/) })]);
+    expect(await c.svc.dismiss(items[0]!.id.replace(/^routine:/, ''))).toBe(true);
+    expect(await c.svc.inboxItems(['p'], () => 'Club')).toEqual([]);
+  });
+
+  it('modo staff-pr: a tag do funcionário vira pedido (aviso na caixa), e você aprova ou recusa; desligar recusa o pedido pendente', async () => {
+    const c = await setup();
+    await c.setMode('staff-pr');
+    await c.svc.open('p', { version: '1.5.2', taskIds: ['t-bbbb02'] }, true);
+    c.set('t-bbbb02', 'done');
+    await c.svc.prepare('p', {}, true);
+    await c.svc.settled('p');
+    await c.svc.publish('p', false, as('gio-1'));
+    const asked = (await c.svc.tag('p', false, as('gio-1')))!;
+    expect(asked.release!.tagRequest).toMatchObject({ by: { staffId: 'gio-1' } });
+    expect(c.h.git.some((a) => a[0] === 'tag')).toBe(false);
+    expect((await c.svc.inboxItems(['p'], () => 'Club')).some((i) => i.id === 'routine:release:p:request')).toBe(true);
+    expect((await c.svc.declineTag('p', true))!.release!.tagRequest).toBeNull();
+    await c.svc.tag('p', false, as('gio-1'));
+    // Você aprova criando a tag: ela diz quem pediu e quem aprovou.
+    expect((await c.svc.tag('p', true))!.release).toBeNull();
+    const tagged = c.h.git.find((a) => a[0] === 'tag')!;
+    expect(tagged).toEqual(['tag', '-a', 'v1.5.2', '9'.repeat(40), '-F', '-']);
+    // Desligar com pedido pendente o recusa.
+    const d = await setup();
+    await d.setMode('staff-pr');
+    await d.svc.open('p', { version: '1.5.2', taskIds: ['t-bbbb02'] }, true);
+    d.set('t-bbbb02', 'done');
+    await d.svc.prepare('p', {}, true);
+    await d.svc.settled('p');
+    await d.svc.publish('p', false, as('gio-1'));
+    await d.svc.tag('p', false, as('gio-1'));
+    await d.setMode('manual');
+    expect((await d.svc.state('p'))!.tagRequest).toBeNull();
+    await expect(d.svc.tag('p', false, as('gio-1'))).rejects.toThrow(/publicação manual/);
+  });
+
+  it('modo staff-all: o funcionário cria a tag (só com o PR mesclado) e você é avisado', async () => {
+    const c = await setup({ merged: false });
+    await c.setMode('staff-all');
+    await c.svc.open('p', { version: '1.5.2', taskIds: ['t-bbbb02'] }, true);
+    c.set('t-bbbb02', 'done');
+    await c.svc.prepare('p', {}, true);
+    await c.svc.settled('p');
+    await c.svc.publish('p', false, as('gio-1'));
+    await expect(c.svc.tag('p', false, as('gio-1'))).rejects.toThrow(/ainda não foi mesclado/);
+    const m = await setup();
+    await m.setMode('staff-all');
+    await m.svc.open('p', { version: '1.5.2', taskIds: ['t-bbbb02'] }, true);
+    m.set('t-bbbb02', 'done');
+    await m.svc.prepare('p', {}, true);
+    await m.svc.settled('p');
+    await m.svc.publish('p', false, as('gio-1'));
+    expect((await m.svc.tag('p', false, as('gio-1')))!.release).toBeNull();
+    expect(m.h.git.filter((a) => a[0] === 'push').at(-1)).toEqual(['push', '--no-verify', 'origin', 'refs/tags/v1.5.2']);
+    expect((await m.svc.inboxItems(['p'], () => 'Club')).some((i) => /tag v1\.5\.2 enviada por Giovana/.test(i.summary))).toBe(true);
+  });
+
+  it('a tag só sai com o CI do commit da mescla verde (ou sem CI): vermelho e rodando recusam; indisponível recusa, menos para você com "force"', async () => {
+    const ready = async (ci: CiStatus['state']) => {
+      const c = await setup({ ci });
+      await c.setMode('staff-all');
+      await c.svc.open('p', { version: '1.5.2', taskIds: ['t-bbbb02'] }, true);
+      c.set('t-bbbb02', 'done');
+      await c.svc.prepare('p', {}, true);
+      await c.svc.settled('p');
+      await c.svc.publish('p', true);
+      return c;
+    };
+    await expect((await ready('failure')).svc.tag('p', true)).rejects.toThrow(/CI do commit da mescla \(9999999\) falhou/);
+    await expect((await ready('pending')).svc.tag('p', true)).rejects.toThrow(/ainda está rodando/);
+    const off = await ready('unavailable');
+    await expect(off.svc.tag('p', false, as('gio-1'), { force: true })).rejects.toThrow(/status do CI indisponível \(sem rede\)$/);
+    await expect(off.svc.tag('p', true)).rejects.toThrow(/crie a tag mesmo assim/);
+    expect(off.h.git.some((a) => a[0] === 'tag')).toBe(false);
+    expect((await off.svc.tag('p', true, null, { force: true }))!.release).toBeNull();
+    expect((await (await ready('none')).svc.tag('p', true))!.release).toBeNull();
+    expect((await (await ready('success')).svc.tag('p', false, as('gio-1')))!.release).toBeNull();
+  });
+
+  it('destino: só main ou master; outra branch padrão é recusada antes do push', async () => {
+    const c = await setup();
+    const git = c.deps.tools.git;
+    c.deps.tools.git = async (cwd, args, o) => (args[0] === 'symbolic-ref' ? 'origin/develop\n' : git(cwd, args, o));
+    await c.svc.open('p', { version: '1.5.2', taskIds: ['t-bbbb02'] }, true);
+    c.set('t-bbbb02', 'done');
+    await c.svc.prepare('p', {}, true);
+    await c.svc.settled('p');
+    await expect(c.svc.publish('p', true)).rejects.toThrow(/só publica para main ou master/);
+    expect(c.h.git.some((a) => a[0] === 'push')).toBe(false);
   });
 
   it('projeto que não existe: 404 nas escritas, null nas leituras', async () => {
