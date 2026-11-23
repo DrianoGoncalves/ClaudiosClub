@@ -3,6 +3,7 @@
   "version": "1.5.1",
   "private": true,
   "description": "Quadro branco para orquestrar agentes do Claude Code entre projetos",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "engines": {
     "node": ">=22"
