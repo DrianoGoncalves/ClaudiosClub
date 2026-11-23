@@ -4885,7 +4885,7 @@ export class TaskService {
       `[MyCo] A tarefa “${titleOf(task)}” (id ${task.id}) ficou pronta, mas o commit automático ${commit.status === 'partial' ? `só levou parte dos arquivos (${commit.sha})` : 'NÃO foi feito'}. Ficaram de fora, porque outra tarefa ainda pode ter mudança pendente neles:`,
       shared.map((l) => `- \`${untrustedLine(l.path, 200)}\`: também alterado por ${(l.by ?? '').split(', ').filter(Boolean).map(who).join(', ')}`).join('\n'),
       rest > 0 ? `Há ${rest === 1 ? 'mais 1 arquivo' : `mais ${rest} arquivos`} de fora por outros motivos: a nota do cartão tem a lista.` : '',
-      'Esses arquivos seguem sem commit, e o commit automático não se refaz sozinho quando essas tarefas terminarem: commite-os à mão depois que elas fecharem, ou peça ao usuário.',
+      'Esses arquivos seguem sem commit. Quando essas tarefas ficarem prontas, o Claudio’s Club tenta commitá-los sozinho (um commit complementar); se uma delas for cancelada ou o commit não sair, o aviso fica para o usuário na caixa e só ele decide.',
     ]
       .filter(Boolean)
       .join('\n\n');
@@ -8012,7 +8012,7 @@ const CommitRedoInput = z.object({ digest: z.string({ message: 'digest: informe 
  * `Task.commit` depois de um commit complementar das sobras (ver `TaskService.redoLeftovers`): `left` passa a ser o que ainda ficou de fora e `alert`/`status` seguem dele; `sha`, `for`, `at` e `files`
  * ficam os do commit original (sem commit original, o complementar vira o `sha`). Um problema DEPOIS do commit (índice não refeito) reabre o aviso mesmo com o `ack` antigo.
  */
-function afterRedo(c: TaskCommit, made: { sha: string; problem: string | null }, files: string[], rest: TaskCommitLeft[], at: string): TaskCommit {
+function afterRedo(c: TaskCommit, made: { sha: string; problem: string | null }, files: string[], rest: TaskCommitLeft[], at: string, auto = false): TaskCommit {
   const next: TaskCommit = {
     ...c,
     status: rest.length ? 'partial' : 'committed',
@@ -8020,10 +8020,26 @@ function afterRedo(c: TaskCommit, made: { sha: string; problem: string | null },
     left: rest,
     note: made.problem ?? (c.status === 'none' ? null : c.note),
     alert: rest.length > 0 || !!made.problem,
-    redos: [...(c.redos ?? []), { at, sha: made.sha, files }].slice(-COMMIT_REDOS_MAX),
+    redos: [...(c.redos ?? []), { at, sha: made.sha, files, ...(auto && { auto: true as const }) }].slice(-COMMIT_REDOS_MAX),
   };
   if (made.problem) delete next.ack;
+  // A tentativa automática era das sobras de antes: as de agora são outras (e uma tentativa que o git recusou não prende o aviso em `failed` depois de um commit que saiu).
+  delete next.auto;
   return next;
+}
+
+/**
+ * Uma tentativa automática de commitar as sobras que não commitou e não se repete para as mesmas sobras (`key`, ver `TaskCommit.auto`): `failed` quando o git recusou ou não respondeu (a mensagem vira
+ * `note` e o aviso vira `failed`), falso quando nada podia ir sozinho agora (conflito, staged, editado por você). Só `redoDone` no modo `auto` lança; `sweepLeftovers` a grava.
+ */
+class AutoAttempt extends TaskConflictError {
+  constructor(
+    message: string,
+    readonly key: string,
+    readonly failed: boolean,
+  ) {
+    super(message);
+  }
 }
 
 /** A impressão do conteúdo de um pedido de criar (para a chave de idempotência): o mesmo conteúdo, a mesma impressão; qualquer campo diferente, outra. */
@@ -8433,4 +8449,6 @@ function withPatch(t: Task, p: z.infer<typeof TaskPatch>, by: 'you' | 'auto', no
 
 function parseOr<S extends z.ZodTypeAny>(schema: S, body: unknown): z.output<S> {
   const r = schema.safeParse(body);
-  if (!r.success) throw new TaskError(r.error.issues[0]?.message ?? 'tarefa i
+  if (!r.success) throw new TaskError(r.error.issues[0]?.message ?? 'tarefa inválida');
+  return r.data;
+}
