@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { TaskService } from '../server/tasks';
 import { FLOW_PRESETS, type ChatSnapshot, type FlowPolicy, type StaffProfile } from '../shared/model';
 import { removeTemp } from './support/tmp';
@@ -26,6 +26,7 @@ async function board() {
   const people: Record<string, StaffProfile> = {
     'ana-1': { id: 'ana-1', name: 'Ana', role: 'Back-end', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
     'rev-1': { id: 'rev-1', name: 'Rui', role: 'Revisor', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
+    'ger-1': { id: 'ger-1', name: 'Gil', role: 'Gestor', autonomy: 'acceptEdits', worktree: false } as StaffProfile,
   };
   const h = {
     sentTo: [] as Array<{ session: string; text: string }>,
@@ -39,6 +40,10 @@ async function board() {
     /** Sem transcript: o histórico da conversa de revisão não tem o texto dela. */
     noTranscript: false,
     slowProfile: 0,
+    /** Enquanto houver, a leitura do perfil do revisor (a que o turno e a varredura fazem antes de decidir) espera: os dois chegam à decisão juntos. */
+    gate: null as Promise<void> | null,
+    /** Quem revisa o card: é o perfil que `crash`, `slowProfile` e `gate` seguram. */
+    reviewer: 'rev-1',
     k: 0,
   };
   /** Um serviço de tarefas; `fresh`: o de depois de reiniciar (o que o turno tinha na memória se foi, só o transcript e o card ficam). */
@@ -47,8 +52,9 @@ async function board() {
       projectPath: async () => dir,
       projectIds: async () => ['p'],
       readProfile: async (_p, id) => {
-        if (h.slowProfile && id === 'rev-1') await sleep(h.slowProfile);
-        if (h.crash && id === 'rev-1') throw new Error('o Club caiu');
+        if (h.slowProfile && id === h.reviewer) await sleep(h.slowProfile);
+        if (h.gate && id === h.reviewer) await h.gate;
+        if (h.crash && id === h.reviewer) throw new Error('o Club caiu');
         return people[id] ?? null;
       },
       send: async (_p, staffId) => `${staffId}-${++h.k}`,
@@ -233,14 +239,42 @@ describe('veredito gravado e não aplicado', () => {
     await b.svc.onTurnDone((await b.get(t.id)).sessionId!);
     const review = (await b.get(t.id)).review!.sessionId;
     b.h.said.set(review, 'REPROVADO\n🔴 a.ts:1 quebrou');
-    b.h.slowProfile = 60; // o `readProfile` do turno segura a decisão depois de o veredito estar gravado
+    let open!: () => void;
+    b.h.gate = new Promise<void>((resolve) => (open = resolve)); // o `readProfile` do turno segura a decisão depois de o veredito estar gravado
     const live = b.svc.onTurnDone(review);
-    await sleep(20);
-    expect((await b.get(t.id)).review!.verdict).toBe('rejected'); // gravado, decisão ainda não
-    await b.tick();
-    await live;
+    await vi.waitFor(async () => expect((await b.get(t.id)).review!.verdict).toBe('rejected')); // gravado, decisão ainda não
+    const sweep = b.tick();
+    await sleep(100);
+    open();
+    await Promise.all([live, sweep]);
     expect(b.h.sentTo.filter((m) => /reprovou/.test(m.text))).toHaveLength(1);
     expect((await b.get(t.id)).rejections).toHaveLength(1);
+  });
+
+  it('aprovado no caminho pronto, o turno e a varredura chegando juntos à decisão: o aviso a quem pediu e o despertar dos dependentes saem uma vez só', async () => {
+    const b = await board();
+    b.h.reviewer = 'ger-1';
+    // O gestor que pediu revisa: o desfecho "foi para pronto" vai para a conversa dele (`selfReview`), e é esse aviso que não pode sair em dobro.
+    const t = (await b.svc.create('p', { title: 'Tela', description: 'Mostrar o card', staffId: 'ana-1', reviewerId: 'ger-1' }))!;
+    await b.edit(t.id, (x) => Object.assign(x, { requestedBy: 'ger-1', requestedSession: 'ger-pediu' }));
+    await b.svc.start('p', t.id);
+    await b.svc.onTurnDone((await b.get(t.id)).sessionId!);
+    const review = (await b.get(t.id)).review!.sessionId;
+    const wake = vi.spyOn(b.svc as never as { wakeDependents: () => Promise<void> }, 'wakeDependents');
+    let open!: () => void;
+    b.h.gate = new Promise<void>((resolve) => (open = resolve));
+    b.h.said.set(review, 'APROVADO\n🟢 a.ts:2 nome');
+    const live = b.svc.onTurnDone(review);
+    await vi.waitFor(async () => expect((await b.get(t.id)).review!.verdict).toBe('approved')); // gravado, a decisão presa no perfil do revisor
+    const sweep = b.tick(); // a varredura vê o veredito sem decisão e também chega à decisão
+    await sleep(100);
+    open();
+    await Promise.all([live, sweep]);
+    const after = await b.get(t.id);
+    expect(after.status).toBe('done');
+    expect(after.history.filter((e) => e.status === 'done')).toHaveLength(1);
+    expect(b.h.told.filter((m) => /foi para pronto/.test(m))).toHaveLength(1);
+    expect(wake).toHaveBeenCalledTimes(1);
   });
 
   it('reprovado sem o texto da revisão legível: não manda ajuste vazio nem conta rodada; o card fica com você, com a nota, uma vez', async () => {

@@ -5011,8 +5011,15 @@ export class TaskService {
       if (owner && out) this.warnDependents(projectId, taskId, stuckReason(out));
       return;
     }
-    const done = await this.change(projectId, taskId, (t) => (current(t) ? moved(t, 'done', 'auto', `aprovada por ${reviewer}`) : t));
-    if (done?.status !== 'done') return;
+    // `change` devolve o card como está gravado: o que outra decisão (o turno e a varredura chegando juntos) já levou a "pronto" volta `done` sem esta gravação ter movido nada, e o
+    // aviso e o despertar dos dependentes saem uma vez só, de quem gravou (`wrote`, como no caminho acima).
+    let wrote = false;
+    const done = await this.change(projectId, taskId, (t) => {
+      if (!current(t)) return t;
+      wrote = true;
+      return moved(t, 'done', 'auto', `aprovada por ${reviewer}`);
+    });
+    if (!wrote || done?.status !== 'done') return;
     await this.wakeDependents(projectId, taskId);
     await this.settleRequester(projectId, done, 'foi para pronto', selfReview(task) ? `${head}aprovada na sua revisão, foi para pronto.` : null);
   }
