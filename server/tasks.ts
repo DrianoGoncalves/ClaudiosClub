@@ -2697,6 +2697,8 @@ export class TaskService {
       if (!paused) await this.safely(() => this.releaseBackground(projectId, tasks, now));
       await this.safely(() => this.releaseOutcomes(projectId, tasks, now));
       await this.safely(() => this.enqueueIdle(projectId, tasks));
+      // Aviso velho de espera pela vaga de escrita (opção desligada, worktree própria, dono que já não a segura): sai do cartão e da fila.
+      await this.safely(() => this.clearStaleSlotWaits(projectId, tasks));
       // Saneamento: ajuste guardado em tarefa encerrada (de antes da correção, ou de uma corrida) sai com nota. O quadro lido acima ainda o tem, e o `waiting` abaixo acorda o dono dele à toa: o `takeNext` não o envia (ver `dropClosedHeld`).
       await this.dropClosedHeld(projectId, tasks);
       for (const t of paused ? [] : tasks) {
@@ -4357,6 +4359,30 @@ export class TaskService {
       release();
       throw err;
     }
+  }
+
+  /**
+   * Espera pela vaga de escrita que já não vale (`resourceWait.holder`): a opção desligada, o dono da tarefa com worktree própria (ele nem usa a vaga) ou o card citado que já não a
+   * segura. O motivo só saía quando a tarefa começava, e quem espera a vez do próprio funcionário ocupado nunca chegava lá: o aviso velho ficava no cartão ("esperando a vez de
+   * editar") e na fila ("travada") por dias, sem travar nada. Uma gravação por projeto, só quando há o que limpar; a espera do gate de recursos (sem `holder`) não é tocada.
+   */
+  private async clearStaleSlotWaits(projectId: string, tasks: Task[]): Promise<void> {
+    if (!tasks.some((t) => !isClosed(t) && t.resourceWait?.holder)) return;
+    const dir = await this.deps.projectPath(projectId);
+    if (!dir) return;
+    const single = (await readBoardWriter(dir)).singleWriter;
+    const committing = this.committingIds(projectId);
+    const ownCopy = await this.ownCopyStaff(projectId, tasks, committing);
+    const stale = (t: Task, all: Task[]): boolean => {
+      const holderId = t.resourceWait?.holder;
+      if (isClosed(t) || !holderId) return false;
+      if (!single || (!!t.staffId && ownCopy.has(t.staffId))) return true;
+      const holder = all.find((x) => x.id === holderId);
+      return !holder || !holdsWrite(holder, all, ownCopy, committing);
+    };
+    if (!tasks.some((t) => stale(t, tasks))) return;
+    // Na gravação, a conta é refeita com o quadro de agora (`all`): quem passou a segurar a vaga no meio do caminho mantém o motivo de quem espera por ele.
+    await this.mutate(projectId, (all) => all.map((t) => (stale(t, all) ? { ...t, resourceWait: null } : t)));
   }
 
   /** A tarefa na fila espera a vaga de escrita de `holder`: o motivo fica em `Task.resourceWait`, que a fila (`queueStates`) e a tela já leem. Sem erro, sem consumo: ela só fica onde está. */
