@@ -804,6 +804,12 @@ export interface TaskCommit {
    * `for` e `files` seguem sendo os do commit original; `left`, `status` e `alert` refletem o que ainda ficou de fora. Só o servidor grava.
    */
   redos?: CommitRedo[];
+  /**
+   * A tentativa AUTOMÁTICA de commitar as sobras que não commitou nada (ver `TaskService.leftoversSoon`): uma por `key` (a entrega mais as sobras de agora), então o Club não repete em laço. Com `note`, o git
+   * falhou (hook, repositório fora de condição): o aviso vira `failed` com ela, e o botão do dono segue valendo. Sem `note`, nada podia ir sozinho agora (arquivo ficou em conflito, staged ou editado por você).
+   * Sai quando o `left` muda (outro commit, o botão). Só o servidor grava.
+   */
+  auto?: { key: string; at: string; note?: string };
 }
 
 /** Quantos commits complementares uma tarefa guarda em `TaskCommit.redos`. */
@@ -814,6 +820,8 @@ export interface CommitRedo {
   at: string;
   sha: string;
   files: string[];
+  /** Saiu sozinho, quando o último card que travava as sobras ficou pronto (e não pelo botão). */
+  auto?: true;
 }
 
 /**
@@ -857,7 +865,7 @@ export interface CommitLeft {
   files: CommitLeftFile[];
   /** Os cards abertos que travam, um por card; só em `waiting`. */
   blockers: CommitLeftBlocker[];
-  /** Só em `ready`, com pelo menos um arquivo `redo`: a tela pode oferecer o botão. */
+  /** Só em `ready` (ou em `failed` por uma tentativa automática que o git recusou, ver `TaskCommit.auto`), com pelo menos um arquivo `redo`: a tela pode oferecer o botão. */
   canRedo: boolean;
   /** A lista de sobras bateu no teto (`COMMIT_LIST_MAX`): pode haver mais arquivos de fora do que os listados. */
   truncated?: true;

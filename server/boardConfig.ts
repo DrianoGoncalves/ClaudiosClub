@@ -85,9 +85,13 @@ export function writeBoardWriter(dir: string, config: BoardWriterConfig): Promis
   return patchBoardFile(dir, { singleWriter: config.singleWriter });
 }
 
-/** Worktree por card: o padrão é LIGADA (arquivo ausente, ilegível ou com valor torto liga); só o `false` gravado desliga. */
+/**
+ * Worktree por card: o padrão é LIGADA (arquivo ausente, ilegível ou com valor torto liga); só o `false` gravado desliga. `MYCO_CARD_WORKTREE_DEFAULT=off` troca só o padrão de quem não gravou nada
+ * (existe para a bateria de testes dos outros assuntos, que começam cards em repositórios git e não querem a cópia por card; ver `tests/support/cardOff.ts`): em produção a variável não existe.
+ */
 export async function readBoardCardWorktree(dir: string): Promise<BoardCardWorktreeConfig> {
-  return { cardWorktree: (await readRaw(dir)).cardWorktree !== false };
+  const saved = (await readRaw(dir)).cardWorktree;
+  return { cardWorktree: typeof saved === 'boolean' ? saved : process.env.MYCO_CARD_WORKTREE_DEFAULT !== 'off' };
 }
 
 export function writeBoardCardWorktree(dir: string, config: BoardCardWorktreeConfig): Promise<void> {

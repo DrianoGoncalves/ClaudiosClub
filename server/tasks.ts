@@ -4,8 +4,9 @@ import path from 'node:path';
 import { z } from 'zod';
 import { ACK_CANCELLED_DAYS, AUTO_REVIEW_ROUNDS, CHANGED_FILES_MAX, CHECKPOINTS_MAX, COMMIT_LIST_MAX, COMMIT_REDOS_MAX, FILE_OVERLAPS_MAX, TASK_STATUSES, isClosed, satisfiesDependency, type Autonomy, type BackgroundTask, type BoardCommitConfig, type BoardConfig, type BoardCardWorktreeConfig, BoardWriterConfig, type CancelRequest,type ChatItem, type ChatSnapshot, type Engine, type EngineOverride, type FileOverlap, type FollowUp, type FollowUpCardResult, type FollowUpResult, type HeldMessage, type HumanAction, type PermissionWait, type ProjectPause, type StaffProfile, type Task,type TaskCode, type TaskCommit, type TaskCreateResult, type TaskCreateWarning, type TaskDelivery, type TaskEngineStop, type TaskFallback, type TaskHandoff, type TaskPause, type TaskPlanWait, TaskRetry, type TaskQuestion, type TaskSession, type TaskStatus, type TaskSubtaskRef, type TaskSummary, type TestRun, type TurnCapHit, type UsageStopHit } from '../shared/model';
 import { kanbanProgress } from '../shared/kanbanProgress';
-import { commitMessage, commitPaths, commitTaskFiles, leftText, summarize, type SharedHold, type SlotFound } from './autoCommit';
-import { leftoversPreview, planLeftovers, withCommitLeft } from './commitLeft';
+import { commitMessage, commitPaths, commitTaskFiles, leftText, ownerWrote, summarize, type SharedHold, type SlotFound } from './autoCommit';
+import { autoLeft } from './commitAuto';
+import { keyOfLeft, leftKey, leftoversPreview, planLeftovers, redoOpen, withCommitLeft } from './commitLeft';
 import { BoardCardWorktreeInput, BoardCommitInput, BoardConfigInput, BoardWriterInput, DEFAULT_BOARD_CONFIG, readBoardCardWorktree, readBoardCommit, readBoardConfig, readBoardWriter, writeBoardCardWorktree, writeBoardCommit, writeBoardConfig, writeBoardWriter } from './boardConfig';
 import { allocateCardPort, cardWorktreeAvailable, cardWorktreeFor, ensureCardWorktree, removeCardWorktree, type CardWorktree, type FreeBytes } from './cardWorktree';
 import type { Worktree } from './staff/worktree';
@@ -705,6 +706,8 @@ export class TaskService {
   private readonly mergeQueued = new Set<string>();
   /** Os commits automáticos que ainda não terminaram (`projeto:tarefa`, de `commitSoon` até o fim da tentativa): o card pronto segura a vaga de escrita até o commit dele sair (ver `writeHolder`). */
   private readonly committing = new Set<string>();
+  /** Os commits automáticos das sobras já na fila ou rodando (`projeto:tarefa`, ver `sweepLeftovers`): duas varreduras juntas não enfileiram a mesma duas vezes. */
+  private readonly leftoversQueued = new Set<string>();
   /** A vez de cada projeto na vaga de escrita (ver `takeSlot`): conferir a vaga e abrir a conversa é uma coisa só, uma por vez. Só em memória: o que vale (quem ocupa) sai de `tasks.json`. */
   private readonly slotQueues = new Map<string, Promise<unknown>>();
   /** Quem está abrindo a conversa agora com a vaga na mão (`projeto` → tarefa), para a aprovação do plano, que não passa pela fila acima, não furar a partida em andamento. */
@@ -2255,7 +2258,11 @@ export class TaskService {
       ? null
       : card.wt
         ? { where: 'worktree', branch: card.wt.branch, path: card.wt.path, card: true, base: card.wt.base, ...(card.port && { port: card.port }) }
-        : located && { where: located.where, branch: located.branch, ...(card.why && { why: card.why }) };
+        : located
+          ? { where: located.where, branch: located.branch, ...(card.why && { why: card.why }) }
+          : card.why
+            ? { where: 'project', branch: null, why: card.why }
+            : null;
     const baseLine = [card.note, base ? baseNote(base) : ''].filter(Boolean).join('; ');
     this.bySession.set(sessionId, { projectId, taskId, role: 'work' });
     timer?.stage('gravar');
@@ -2783,6 +2790,8 @@ export class TaskService {
       await this.safely(() => this.reapplyVerdicts(projectId, tasks));
       // A mescla automática da aprovação que ficou sem mescla (reinício, pausa, backoff vencido); roda em segundo plano, o tick não espera os testes (ver `retryMerges`).
       await this.safely(() => this.retryMerges(projectId, tasks, now));
+      // O commit das sobras que o card que as travava já liberou (reinício, ou card que ficou pronto sem passar pelo gatilho); ver `retryLeftovers`.
+      await this.safely(() => this.retryLeftovers(projectId, tasks));
       await this.safely(() => this.retryCleanups(projectId, tasks));
       await this.safely(() => this.resumeReviews(projectId, tasks));
       if (!paused) await this.safely(() => this.releaseBackground(projectId, tasks, now));
@@ -4731,7 +4740,7 @@ export class TaskService {
     while (this.commitRuns.size) await Promise.all([...this.commitRuns]);
   }
 
-  private commitSoon(projectId: string, taskId: string): void {
+  private commitSoon(projectId: string, taskId: string): Promise<void> {
     // O card pronto segura a vaga de escrita até a tentativa de commit terminar (ver `writeHolder`); depois, quem esperava por ela é acordado.
     const key = `${projectId}:${taskId}`;
     this.committing.add(key);
@@ -4744,6 +4753,63 @@ export class TaskService {
         void this.wakeSlotWaiters(projectId).catch(() => {});
       });
     this.commitRuns.add(run);
+    return run;
+  }
+
+  /**
+   * Um card ficou pronto: depois do commit dele (`after`, que leva o arquivo inteiro e costuma resolver as sobras de quem ele travava), o commit das sobras que ele travava é tentado sozinho (ver
+   * `sweepLeftovers`). Só o done chama daqui: o cancelado pode ter deixado mudança no disco, e o aviso fica para o dono. O `tick` também chama (`retryLeftovers`), sem `after`. Registro, não trava.
+   */
+  private leftoversSoon(projectId: string, after: Promise<unknown> = Promise.resolve()): void {
+    const run: Promise<void> = after
+      .catch(() => {})
+      .then(() => this.sweepLeftovers(projectId))
+      .catch(() => {})
+      .finally(() => this.commitRuns.delete(run));
+    this.commitRuns.add(run);
+  }
+
+  private autoCtx(projectId: string) {
+    return { doneAt: doneAtOf, busy: (id: string) => this.committing.has(`${projectId}:${id}`) };
+  }
+
+  /** O tick: sobras que o automático já pode levar e ninguém tentou (reinício, card que ficou pronto com o Club fora do ar). Só olha o quadro; o git só entra quando há o que tentar. */
+  private async retryLeftovers(projectId: string, tasks: Task[]): Promise<void> {
+    const ctx = this.autoCtx(projectId);
+    if (tasks.some((t) => autoLeft(t, tasks, ctx).length)) this.leftoversSoon(projectId);
+  }
+
+  /**
+   * As tarefas prontas com sobras que o commit automático pode levar (ver `autoLeft`) entram, uma por vez, na fila de commits do projeto, e `redoDone` (o mesmo do botão, no modo automático) confere tudo
+   * de novo lá dentro. Sem commit automático ligado no projeto, nada. Uma tentativa por tarefa e por conjunto de sobras (`TaskCommit.auto`): o que não deu é gravado e não se repete em laço.
+   */
+  private async sweepLeftovers(projectId: string): Promise<void> {
+    const dir = await this.deps.projectPath(projectId);
+    if (!dir || this.deps.closing?.() || !(await this.flowOf(projectId)).commit) return;
+    const all = await readTasks(dir);
+    const ctx = this.autoCtx(projectId);
+    const jobs: Array<Promise<unknown>> = [];
+    for (const t of all) {
+      const key = `${projectId}:${t.id}`;
+      if (this.leftoversQueued.has(key) || !autoLeft(t, all, ctx).length) continue;
+      this.leftoversQueued.add(key);
+      jobs.push(
+        this.inProjectQueue(dir, () => this.redoDone(projectId, dir, t.id, { auto: true }))
+          .catch((err) => (err instanceof AutoAttempt ? this.noteAutoAttempt(projectId, t.id, err) : undefined))
+          .catch(() => {})
+          .finally(() => this.leftoversQueued.delete(key)),
+      );
+    }
+    await Promise.all(jobs);
+  }
+
+  /** Grava a tentativa automática que não commitou (ver `TaskCommit.auto`), se as sobras ainda são as dela: com erro do git, vira linha do histórico e o aviso vira `failed`. */
+  private async noteAutoAttempt(projectId: string, taskId: string, a: AutoAttempt): Promise<void> {
+    await this.change(projectId, taskId, (t) => {
+      if (!t.commit || leftKey(t.commit) !== a.key) return t;
+      const next: Task = { ...t, commit: { ...t.commit, auto: { key: a.key, at: new Date().toISOString(), ...(a.failed && { note: a.message.slice(0, 300) }) } } };
+      return a.failed ? noted(next, `commit complementar automático das sobras não saiu: ${a.message}`) : next;
+    });
   }
 
   /**
@@ -4885,7 +4951,7 @@ export class TaskService {
     if (!dir) return null;
     const input = parseOr(CommitRedoInput, body);
     if (!(await readTasks(dir)).some((t) => t.id === taskId)) return null;
-    const run = (this.commitQueues.get(dir) ?? Promise.resolve()).then(() => this.redoDone(projectId, dir, taskId, input.digest));
+    const run = (this.commitQueues.get(dir) ?? Promise.resolve()).then(() => this.redoDone(projectId, dir, taskId, { digest: input.digest }));
     this.commitQueues.set(dir, run.then(() => {}, () => {}));
     return run;
   }
@@ -4895,8 +4961,13 @@ export class TaskService {
    * `left` da tarefa, não é segredo/conflito/staged, tem mudança no git, e nenhum card aberto o toca). Recusa (409) se: a tarefa não está pronta ou o `commit` não é da entrega atual, não há sobras,
    * o repositório não está em condição, algum card aberto toca as sobras, nada tem mudança, nada pode ir pelo botão, o conteúdo mudou desde o preview (`digest`), ou o git recusou (hook; `Task.commit`
    * fica como estava). Grava o complementar em `commit.redos`, atualiza `left`/`status`/`alert` e deixa `sha`, `for` e `files` originais; sem commit original (`none`), o complementar vira o `sha`.
+   *
+   * O modo `auto` é o do commit automático das sobras (ver `sweepLeftovers`): a mesma conferência, sem `digest` (quem decide é a regra, não o dono) e só com as sobras que `autoLeft` libera (motivo `shared`,
+   * todos os cards que as barravam prontos, nenhum aberto nem cancelado tocando) e que você não gravou depois no editor do Club. O resto do `left` fica como está. O que não vale agora (card aberto,
+   * tarefa de outra entrega, ignorado…) sai como 409 que o chamador engole; o que não commitou e não se repete (git recusou, nada podia ir) sai como `AutoAttempt`, que vira `TaskCommit.auto`.
    */
-  private async redoDone(projectId: string, dir: string, taskId: string, digest: string): Promise<CommitLeftoversDone> {
+  private async redoDone(projectId: string, dir: string, taskId: string, mode: { digest: string } | { auto: true }): Promise<CommitLeftoversDone> {
+    const auto = 'auto' in mode;
     const refuse: (why: string) => never = (why) => {
       throw new TaskConflictError(why);
     };
@@ -4907,26 +4978,46 @@ export class TaskService {
     const c = task.commit;
     if (task.status !== 'done' || task.merged || !c || c.for !== doneAtOf(task)) return refuse('o commit desta tarefa não é da entrega atual: nada a refazer');
     if (!c.alert || !c.left.length || c.status === 'failed') return refuse('este aviso não tem arquivos de fora para commitar');
-    const plan = await planLeftovers(dir, task, all);
-    if (plan.repoNote) return refuse(plan.repoNote);
+    // O automático só leva o que o quadro libera agora, e a tarefa que o dono ignorou, ou que o automático já tentou para estas sobras, não é dele.
+    const eligible = auto ? autoLeft(task, all, this.autoCtx(projectId)) : [];
+    if (auto && (!eligible.length || !(await this.flowOf(projectId)).commit)) return refuse('nada a commitar sozinho: sem sobras liberadas, ignorado pelo dono, já tentado ou o commit automático está desligado');
+    // O plano do automático vale só para as sobras liberadas: um card aberto que toca outro arquivo de fora (owner, staged…) não o segura.
+    const attempt = (note: string | null): never => {
+      throw new AutoAttempt(note ?? 'nada podia ir sozinho agora', leftKey(c), note !== null);
+    };
+    const plan = await planLeftovers(dir, auto ? { ...task, commit: { ...c, left: eligible } } : task, all);
+    if (plan.repoNote) return auto ? attempt(plan.repoNote) : refuse(plan.repoNote);
     const view = plan.view;
-    if (!plan.status || !plan.head) return refuse('não consegui ler o git agora: tente de novo');
+    if (!plan.status || !plan.head) return auto ? attempt('não consegui ler o git') : refuse('não consegui ler o git agora: tente de novo');
     if (!view) return refuse('os arquivos de fora já não têm mudança no git (commitados ou desfeitos): nada a commitar');
     if (view.state === 'waiting')
       return refuse(`ainda há card aberto mexendo nos arquivos de fora: ${view.blockers.map((b) => `${b.id} (“${untrustedLine(b.title, 80)}”, ${b.status}): ${b.paths.slice(0, 3).map((p) => untrustedLine(p, 120)).join(', ')}`).join('; ')}`);
-    if (view.state !== 'ready') return refuse('este aviso é de erro do git, não de arquivos de fora: nada a refazer');
-    if (!plan.take.length) return refuse(`nenhum arquivo de fora pode ir pelo botão (segredo, conflito ou staged por você): resolva no git. De fora: ${leftText(plan.remaining)}`);
-    if (plan.digest !== digest) return refuse('os arquivos mudaram desde que você viu o diff: confira de novo e confirme');
-    const made = await commitPaths(dir, plan.head, plan.take, commitMessage(`Sobras de ${task.title}`, task.id)).catch((err) => refuse(`o git recusou o commit: ${summarize(err)}`));
+    if (!redoOpen(view)) return refuse('este aviso é de erro do git, não de arquivos de fora: nada a refazer');
+    let take = plan.take;
+    let rest = plan.remaining;
+    if (auto) {
+      // O que não era liberado continua em `left` como estava; o que foi liberado e agora não vai (conflito, staged, ou você gravou no editor depois) fica com o motivo de agora.
+      const freed = new Set(eligible.map((l) => keyOfLeft(l.path)));
+      const writes = await readOwnerWrites(dir);
+      take = [];
+      rest = [...c.left.filter((l) => !freed.has(keyOfLeft(l.path))), ...plan.remaining];
+      for (const p of plan.take) {
+        if (await ownerWrote(dir, p, writes[pathKey(p)])) rest.push({ path: p, why: 'owner' });
+        else take.push(p);
+      }
+      if (!take.length) return attempt(null);
+    }
+    if (!take.length) return refuse(`nenhum arquivo de fora pode ir pelo botão (segredo, conflito ou staged por você): resolva no git. De fora: ${leftText(plan.remaining)}`);
+    if (!auto && plan.digest !== (mode as { digest: string }).digest) return refuse('os arquivos mudaram desde que você viu o diff: confira de novo e confirme');
+    const made = await commitPaths(dir, plan.head, take, commitMessage(`Sobras de ${task.title}`, task.id)).catch((err) => (auto ? attempt(`o git recusou o commit: ${summarize(err)}`) : refuse(`o git recusou o commit: ${summarize(err)}`)));
     if (!made) return refuse('os arquivos de fora já estão no HEAD: nada a commitar');
-    const taken = plan.take.slice(0, COMMIT_LIST_MAX);
-    const rest = plan.remaining;
-    const line = `commit complementar ${made.sha}: ${plan.take.length} ${plan.take.length === 1 ? 'arquivo' : 'arquivos'} das sobras${c.sha ? ` do commit ${c.sha}` : ''}${rest.length ? `; de fora: ${leftText(rest, 5)}` : ''}${made.problem ? ` (${made.problem})` : ''}`;
+    const taken = take.slice(0, COMMIT_LIST_MAX);
+    const line = `commit complementar${auto ? ' automático' : ''} ${made.sha}: ${take.length} ${take.length === 1 ? 'arquivo' : 'arquivos'} das sobras${c.sha ? ` do commit ${c.sha}` : ''}${rest.length ? `; de fora: ${leftText(rest, 5)}` : ''}${made.problem ? ` (${made.problem})` : ''}`;
     let updated: TaskCommit | undefined;
     await this.change(projectId, taskId, (t) => {
       // O registro é o da entrega que viu o preview: se a tarefa foi entregue de novo no meio, o commit existe mas não se mistura com o registro da entrega nova.
       if (!t.commit || t.commit.for !== c.for) return noted(t, `${line}; o registro do commit já era de outra entrega e não foi atualizado`);
-      updated = afterRedo(t.commit, made, taken, rest, new Date().toISOString());
+      updated = afterRedo(t.commit, made, taken, rest, new Date().toISOString(), auto);
       return noted({ ...t, commit: updated }, line);
     });
     return { ok: true, sha: made.sha, files: taken, left: rest, commit: updated ?? c };
@@ -6784,7 +6875,9 @@ export class TaskService {
     this.queues.set(file, run.catch(() => {}));
     await run;
     // Depois de gravada, e fora da fila da gravação: o commit (e os hooks dele) pode levar minutos e nada espera por ele.
-    for (const id of finished) this.commitSoon(projectId, id);
+    const commits = finished.map((id) => this.commitSoon(projectId, id));
+    // Depois dos commits deles: as sobras que esses cards travavam (ver `leftoversSoon`).
+    if (commits.length) this.leftoversSoon(projectId, Promise.all(commits));
     // Depois do `commitSoon`: o card pronto já segura a vaga até o commit dele terminar.
     if (freed) void this.wakeSlotWaiters(projectId).catch(() => {});
     return true;
@@ -8340,6 +8433,4 @@ function withPatch(t: Task, p: z.infer<typeof TaskPatch>, by: 'you' | 'auto', no
 
 function parseOr<S extends z.ZodTypeAny>(schema: S, body: unknown): z.output<S> {
   const r = schema.safeParse(body);
-  if (!r.success) throw new TaskError(r.error.issues[0]?.message ?? 'tarefa inválida');
-  return r.data;
-}
+  if (!r.success) throw new TaskError(r.error.issues[0]?.message ?? 'tarefa i
