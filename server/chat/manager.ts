@@ -1461,10 +1461,22 @@ export class ChatManager {
    * em outro projeto não conta: cada projeto tem o seu funcionário.
    */
   staffWorking(projectId: string, staffId: string, exceptSession?: string | readonly string[]): boolean {
+    return this.anyStaffChat(projectId, staffId, exceptSession, (c) => c.working);
+  }
+
+  /**
+   * Como `staffWorking`, mas só com turno em andamento (ou pedido sem resposta): a conversa parada que deixou algo em segundo plano não conta. É o "ocupado" que o quadro mostra;
+   * quem segura a fila continua sendo `staffWorking`.
+   */
+  staffTurning(projectId: string, staffId: string, exceptSession?: string | readonly string[]): boolean {
+    return this.anyStaffChat(projectId, staffId, exceptSession, (c) => c.busy);
+  }
+
+  private anyStaffChat(projectId: string, staffId: string, exceptSession: string | readonly string[] | undefined, active: (c: ChatProcess) => boolean): boolean {
     const except = typeof exceptSession === 'string' ? [exceptSession] : (exceptSession ?? []);
     for (const c of this.chats.values()) {
       // A conversa de consulta de outro projeto roda em paralelo (só lê): não segura a fila do funcionário.
-      if (c.running && c.projectId === projectId && c.staffId === staffId && !except.includes(c.sessionId) && !this.consultSessions.has(c.sessionId) && c.working) return true;
+      if (c.running && c.projectId === projectId && c.staffId === staffId && !except.includes(c.sessionId) && !this.consultSessions.has(c.sessionId) && active(c)) return true;
     }
     return false;
   }

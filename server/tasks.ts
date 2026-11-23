@@ -33,7 +33,7 @@ import { ENGINE_LABEL, atHour, atMostAutonomy, autonomyOfMode, executeAutonomyOf
 import { UsageStopError } from './usageStop';
 import { AUTO_MERGE_MAX_TRIES, BACKGROUND_WAIT_MS, ESCALATE_AFTER_MS, HELD_MAX_FAILS, OUTCOME_HOLD_MAX_MS, PERMISSION_STUCK_MS, PermanentError, REASK_AFTER_MS, REVIEW_WAIT_MS, failedRetry, isTransient, nextRetry, retryDue } from './retryPolicy';
 import { BLOCKERS_FORMAT, REJECTIONS_MAX, REPLY_MAX, citedIds, doubtIsAboutRejection, fitReviewText, nextBlockerId, parseBlockers, priorBlockers, type ParsedBlock } from './reviewBlockers';
-import type { CommitLeftovers, CommitLeftoversDone, DeliveryPhase, FlowPolicy, QueueDelivery, Rejection, ReviewBlocker, StaffQueue, TaskAutoMerge, TaskCommitLeft, TaskOwnerGate } from '../shared/model';
+import type { CommitLeftovers, CommitLeftoversDone, DeliveryPhase, FlowPolicy, QueueColumn, QueueDelivery, QueueReview, QueueWait, Rejection, ReviewBlocker, StaffQueue, TaskAutoMerge, TaskCommitLeft, TaskOwnerGate } from '../shared/model';
 import { FlowPolicyInput, applyFlowInput, legacyPolicy, ownerGateOf, type FlowPolicies } from './flowPolicy';
 import type { HeavyWaitFn } from './heavyQueue';
 import { appendRun, newRunId, readRuns, type RunOutcome, type RunTrigger, type TaskRunEvent } from './taskRuns';
@@ -412,6 +412,8 @@ export interface TaskServiceDeps {
   syncWorktree?: SyncWorktree;
   /** Alguma conversa dele, neste projeto, no Claudio’s Club está trabalhando (turno ou segundo plano), fora `exceptSession` (uma ou várias). */
   isWorking?: (projectId: string, staffId: string, exceptSession?: string | readonly string[]) => boolean;
+  /** Como `isWorking`, só com turno rodando (o segundo plano de uma conversa parada não conta): o "ocupado" do estado da fila (`queueStates`). Sem ela, vale `isWorking`. */
+  isTurning?: (projectId: string, staffId: string, exceptSession?: string | readonly string[]) => boolean;
   /** Esta conversa (só ela) está trabalhando agora, turno ou segundo plano? Sem ela, a revisão e o card em "a fazer" olham as conversas todas do funcionário. */
   isSessionWorking?: (sessionId: string) => boolean;
   /** O servidor está fechando para reiniciar: fim de turno não conclui tarefa (a órfã do boot retoma). */
@@ -3093,11 +3095,25 @@ export class TaskService {
    * (`exceptSession` de antes); sem nenhuma, a chamada de antes.
    */
   private staffBusy(projectId: string, tasks: Task[], staffId: string, own?: string): boolean {
+    const except = this.exceptSessions(tasks, staffId, own);
+    return this.deps.isWorking?.(projectId, staffId, except.length > 1 ? except : except[0]) ?? false;
+  }
+
+  /**
+   * Como `staffBusy`, só com turno rodando (ver `deps.isTurning`): é o "ocupado" que `queueStates` mostra. Uma conversa aberta que só deixou algo em segundo plano segura a fila (`staffBusy`),
+   * mas ele não está trabalhando nela.
+   */
+  private staffTurning(projectId: string, tasks: Task[], staffId: string): boolean {
+    const except = this.exceptSessions(tasks, staffId);
+    return (this.deps.isTurning ?? this.deps.isWorking)?.(projectId, staffId, except.length > 1 ? except : except[0]) ?? false;
+  }
+
+  /** As conversas dele que não contam como trabalho (ver `staffBusy`): as dos cards parados, as de revisão e `own`. */
+  private exceptSessions(tasks: Task[], staffId: string, own?: string): string[] {
     const idle = tasks.filter((t) => t.staffId === staffId && t.sessionId && !t.autoCreated && OCCUPIED.includes(t.status) && parked(t, tasks)).map((t) => t.sessionId!);
     // A revisão que ele faz roda em paralelo (não edita nada): não conta como trabalho, nem segura a fila dele nem o ajuste de outra tarefa dele.
     const reviewing = reviewSessionsOf(tasks, staffId);
-    const except = [...idle.filter((s) => s !== own), ...(own ? [own] : []), ...reviewing.filter((s) => s !== own && !idle.includes(s))];
-    return this.deps.isWorking?.(projectId, staffId, except.length > 1 ? except : except[0]) ?? false;
+    return [...idle.filter((s) => s !== own), ...(own ? [own] : []), ...reviewing.filter((s) => s !== own && !idle.includes(s))];
   }
 
   /**
@@ -3312,36 +3328,79 @@ export class TaskService {
     const pause = (await this.deps.pauses?.get(projectId)) ?? null;
     const prefix = `${projectId}:`;
     const deliveries = [...this.deliveries].filter(([key]) => key.startsWith(prefix)).map(([key, d]) => ({ taskId: key.slice(prefix.length), ...d }));
-    const ids = new Set([...tasks.filter((t) => t.staffId && !isClosed(t)).map((t) => t.staffId!), ...deliveries.map((d) => d.staffId)]);
+    const reviews = this.reviewTurns(tasks);
+    const ids = new Set([...tasks.filter((t) => t.staffId && !isClosed(t)).map((t) => t.staffId!), ...deliveries.map((d) => d.staffId), ...reviews.keys()]);
     const out: StaffQueue[] = [];
-    for (const staffId of ids) out.push(await this.queueState(projectId, tasks, staffId, pause, deliveries));
+    for (const staffId of ids) out.push(await this.queueState(projectId, tasks, staffId, pause, deliveries, reviews.get(staffId) ?? []));
     return out;
   }
 
-  /** A fila de um funcionário (ver `queueStates`): o primeiro estado que vale, na ordem de `QueueState`. */
-  private async queueState(projectId: string, tasks: Task[], staffId: string, pause: ProjectPause | null, all: Array<DeliveryActivity & { taskId: string }>): Promise<StaffQueue> {
+  /** As revisões com o turno do revisor rodando agora (a conversa de revisão, não o segundo plano dela), por revisor, a mais antiga primeiro. Só cards em Revisão com o pedido que vale (`liveReview`). */
+  private reviewTurns(tasks: Task[]): Map<string, QueueReview[]> {
+    const out = new Map<string, QueueReview[]>();
+    for (const t of tasks) {
+      const r = t.status === 'review' && !t.archived ? liveReview(t) : undefined;
+      if (!r || !this.turnRunning(r.sessionId)) continue;
+      out.set(r.staffId, [...(out.get(r.staffId) ?? []), { taskId: t.id, since: r.at }].sort((a, b) => a.since.localeCompare(b.since)));
+    }
+    return out;
+  }
+
+  /**
+   * A fila de um funcionário (ver `queueStates`): o primeiro estado que vale, na ordem de `QueueState`; e `column`, onde ele está de fato ocupado: `doing` só com o turno do card rodando,
+   * `todo` na espera de um motivo, `review` só revisando, e nada (`null`) em conversa sem card, conversa parada e entrega do Club (`delivering` não é turno dele).
+   */
+  private async queueState(projectId: string, tasks: Task[], staffId: string, pause: ProjectPause | null, all: Array<DeliveryActivity & { taskId: string }>, reviews: QueueReview[]): Promise<StaffQueue> {
     const queue = queueOf(tasks, staffId);
     const own = all.filter((d) => d.staffId === staffId).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
-    const base: StaffQueue = { staffId, state: 'free', queued: queue.length, deliveries: own.map(({ staffId: _s, ...d }) => d) };
+    const base: StaffQueue = { staffId, state: 'free', column: null, queued: queue.length, deliveries: own.map(({ staffId: _s, ...d }) => d), ...(reviews.length && { reviewing: reviews }) };
     const occ = occupant(tasks, staffId);
-    if (pause) return { ...base, state: 'paused', since: pause.at, ...(occ && { taskId: occ.id }), ...(pause.mode === 'version' && { detail: `pausa de versão até ${clockOf(pause.until)}` }) };
-    if (occ) return { ...base, state: 'busy', taskId: occ.id, since: [...occ.history].reverse().find((h) => h.status === occ.status)?.at };
-    if (this.staffBusy(projectId, tasks, staffId)) return { ...base, state: 'busy', detail: 'uma conversa dele está trabalhando' };
+    // O card em fazendo segura a fila, mas só tem alguém trabalhando nele com a conversa rodando (turno, ou o segundo plano que o mantém em fazendo, ver `holdBackground`): sem isso, a coluna fica vazia.
+    const doing: QueueColumn | null = occ && (this.deps.isSessionWorking?.(occ.sessionId!) ?? true) ? 'doing' : null;
+    if (pause) return { ...base, column: doing, state: 'paused', since: pause.at, ...(occ && { taskId: occ.id }), ...(pause.mode === 'version' && { detail: `pausa de versão até ${clockOf(pause.until)}` }) };
+    if (occ) return { ...base, column: doing, state: 'busy', taskId: occ.id, since: [...occ.history].reverse().find((h) => h.status === occ.status)?.at };
+    if (this.staffTurning(projectId, tasks, staffId)) return { ...base, state: 'busy', detail: 'uma conversa dele está trabalhando' };
     const gated = queue.find((t) => t.resourceWait);
-    if (gated?.resourceWait) return { ...base, state: 'resource-wait', taskId: gated.id, since: gated.resourceWait.since, detail: gated.resourceWait.reason };
+    if (gated?.resourceWait) return { ...base, column: 'todo', state: 'resource-wait', taskId: gated.id, since: gated.resourceWait.since, detail: gated.resourceWait.reason };
     // O card que o `takeNext` começaria agora: o limite de consumo só barra a partida dele (o que você pôs na fila com "forçar" passa por cima).
     const now = Date.now();
     const next = queue.find((t) => !heldFirst(t) && !blockers(t, tasks).length && (!t.startRetry || retryDue(t.startRetry, now)));
     if (next && !next.queuedForce) {
       const profile = await this.deps.readProfile(projectId, staffId).catch(() => null);
       const hit = profile ? await this.deps.stopHit?.(projectId, staffId, next.fallback?.engine ?? primaryEngine(profile)).catch(() => null) : null;
-      if (hit) return { ...base, state: 'usage-limit', taskId: next.id, since: next.queuedAt ?? undefined, detail: new UsageStopError(hit).message };
+      if (hit) return { ...base, column: 'todo', state: 'usage-limit', taskId: next.id, since: next.queuedAt ?? undefined, detail: new UsageStopError(hit).message };
     }
-    // Quem segura a fila é o `saving` (na vez dele); a suíte esperando é o que o dono quer ver; o resto segue em paralelo.
+    // Quem segura a fila é o `saving` (na vez dele); a suíte esperando é o que o dono quer ver; o resto segue em paralelo. É o Club validando e commitando, sem turno dele: a coluna fica vazia.
     const d = own.find((x) => x.phase === 'saving') ?? own.find((x) => x.phase === 'heavy-wait') ?? own[0];
-    if (!d) return base;
-    const heavy = d.phase === 'heavy-wait';
-    return { ...base, state: heavy ? 'heavy-wait' : 'delivering', taskId: d.taskId, since: heavy ? d.since : d.startedAt, phase: d.phase, ...(d.holder && { detail: `outra validação pesada roda: ${d.holder}` }) };
+    if (d) {
+      const heavy = d.phase === 'heavy-wait';
+      return { ...base, state: heavy ? 'heavy-wait' : 'delivering', taskId: d.taskId, since: heavy ? d.since : d.startedAt, phase: d.phase, ...(d.holder && { detail: `outra validação pesada roda: ${d.holder}` }) };
+    }
+    // Sem turno de card nem entrega: revisando é o que ele faz; senão, parado com a fila toda esperando outro card (ver `dependencyWait`).
+    const review = reviews[0];
+    if (review) return { ...base, column: 'review', taskId: review.taskId, since: review.since };
+    const wait = await this.dependencyWait(projectId, tasks, queue);
+    if (wait) return { ...base, column: 'todo', taskId: queue[0]!.id, detail: wait.detail, waitingOn: wait.on };
+    // Livre para o quadro, mas uma conversa aberta com algo em segundo plano (sem turno rodando) ainda segura a próxima partida: o dono vê por que a fila não anda.
+    if (queue.length && this.staffBusy(projectId, tasks, staffId)) return { ...base, detail: 'uma conversa dele tem algo em segundo plano, sem turno rodando: a fila espera terminar' };
+    return base;
+  }
+
+  /**
+   * Todos os cards da fila dele esperam outro card (`blockedBy` ainda aberto, ver `blockers`): o card que o primeiro da fila espera, quem o faz e quantos outros esperam também, com o motivo em
+   * palavras. null: fila vazia, ou algum card dela pode começar (então o que a segura é outra coisa, e `queueState` já a mostrou).
+   */
+  private async dependencyWait(projectId: string, tasks: Task[], queue: Task[]): Promise<{ on: QueueWait; detail: string } | null> {
+    const first = queue[0];
+    if (!first || !queue.every((t) => blockers(t, tasks).length)) return null;
+    const blocker = tasks.find((t) => t.id === blockers(first, tasks)[0]);
+    if (!blocker) return null;
+    const name = blocker.staffId ? ((await this.deps.readProfile(projectId, blocker.staffId).catch(() => null))?.name ?? blocker.staffId) : null;
+    const title = shortTitle(blocker.title);
+    const more = queue.length - 1;
+    const who = `${name ? `de ${name}` : 'sem responsável'}${blocker.status === 'cancelled' ? ', cancelado: o dono decide' : ''}`;
+    const detail = `a fila dele espera o card ${blocker.id} "${title}" (${who})${more ? `; mais ${more} ${more === 1 ? 'card da fila espera' : 'cards da fila esperam'} outros cards` : ''}`;
+    return { on: { taskId: blocker.id, title, ...(blocker.staffId && { staffId: blocker.staffId }), more }, detail };
   }
 
   /** `Task.projectPaused` na listagem: a tarefa aberta de um projeto pausado (derivado, não gravado). */
@@ -6981,6 +7040,12 @@ function reordered(queue: Task[], id: string, o: TaskOrder, scope: (t: Task) => 
 function clearStaleRanks(tasks: Task[]): Task[] {
   return tasks.map((t) => (t.queueRank !== undefined && !inQueue(t) ? { ...t, queueRank: undefined } : t));
 }
+
+/** O título para uma frase curta (o motivo da espera em `queueStates`): numa linha só, até 60 caracteres. */
+const shortTitle = (title: string): string => {
+  const one = title.replace(/\s+/g, ' ').trim();
+  return one.length > 60 ? `${one.slice(0, 59).trimEnd()}…` : one;
+};
 
 /** A tarefa que ocupa o funcionário (planejando ou fazendo, com conversa aberta), fora `except`. O card automático não ocupa: é só o registro de uma conversa direta. A parada (`parked`) também não. */
 function occupant(tasks: Task[], staffId: string, except?: string): Task | undefined {

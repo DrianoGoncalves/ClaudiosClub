@@ -650,6 +650,7 @@ const tasks = new TaskService({
   dismissQuestion: (sid) => void chats.dismissQuestion(sid),
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
   isWorking: (projectId, staffId, except) => chats.staffWorking(projectId, staffId, except),
+  isTurning: (projectId, staffId, except) => chats.staffTurning(projectId, staffId, except),
   isSessionWorking: (sessionId) => chats.isWorking(sessionId),
   // Só a partida automática da fila passa pelo gate (o start à mão não): sem RAM, CPU ou vaga, a tarefa espera na fila.
   resourceGate: () => resourceGate.reserve(),

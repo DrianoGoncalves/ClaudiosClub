@@ -1619,6 +1619,7 @@ export interface ProjectPause {
  * está pausado), `busy` (ele trabalha num card ou numa conversa), `resource-wait` (o gate de recursos segurou a partida), `usage-limit` (a trava de consumo barra o motor dele),
  * `delivering` (uma entrega dele ainda está sendo processada), `heavy-wait` (essa entrega espera a vez da suíte de testes: outra validação pesada roda na máquina) e `free`.
  * `delivering` e `heavy-wait` só aparecem com ele sem card em andamento: se ele já pegou o próximo, o estado é `busy` e a entrega segue em `deliveries`.
+ * `busy` sem `taskId` é um turno rodando numa conversa sem card; conversa aberta sem turno (só segundo plano, ou parada) não é `busy` (ver `StaffQueue.column` para onde cai no quadro).
  */
 export type QueueState = 'free' | 'busy' | 'delivering' | 'heavy-wait' | 'resource-wait' | 'usage-limit' | 'paused';
 
@@ -1640,10 +1641,42 @@ export interface QueueDelivery {
   holder?: string;
 }
 
+/** A coluna do quadro em que o que o funcionário faz agora cai (ver `StaffQueue.column`): "Fazendo", "Revisão" ou "A fazer". */
+export type QueueColumn = 'doing' | 'review' | 'todo';
+
+/** Uma revisão que o funcionário conduz com o turno rodando agora: o card em Revisão e desde quando o pedido foi feito (ISO). */
+export interface QueueReview {
+  taskId: string;
+  since: string;
+}
+
+/** O card que a fila de um funcionário espera (`StaffQueue.waitingOn`): quem o faz e quantos outros cards da fila dele esperam também. */
+export interface QueueWait {
+  /** O card esperado (`blockedBy` ainda aberto) do primeiro card da fila dele. */
+  taskId: string;
+  /** O título dele, curto. */
+  title: string;
+  /** Quem faz o card esperado; ausente se ele não tem responsável. */
+  staffId?: string;
+  /** Quantos outros cards da fila dele também esperam outro card (0 = só o primeiro). */
+  more: number;
+}
+
 /** A fila de um funcionário: o estado (ver `QueueState`), o card que o explica, desde quando e o que mais importa dele. */
 export interface StaffQueue {
   staffId: string;
   state: QueueState;
+  /**
+   * Onde ele está de fato ocupado, para as bolinhas do quadro (o `state` diz o que a FILA faz; isto, o que ELE faz): `doing` = um turno de card dele roda (`taskId`); `todo` = parado em
+   * "A fazer" por um motivo (`resource-wait`, `usage-limit`, ou todos os cards da fila esperando outro card, ver `waitingOn`); `review` = só revisa (`state: 'free'`, `taskId` = o card
+   * em Revisão); `null` = nada em coluna nenhuma: livre, conversa sem card, conversa aberta sem turno rodando, ou entrega que o Club processa (`delivering`, `heavy-wait`: não é turno dele).
+   * Ausente: servidor sem este campo (quem lê cai no `state`).
+   */
+  column?: QueueColumn | null;
+  /** As revisões que ele conduz com o turno rodando agora (a lista completa de Revisão, também quando `column` é outra). Ausente = nenhuma. */
+  reviewing?: QueueReview[];
+  /** Em `column: 'todo'` por dependência: o card que a fila dele espera. O motivo em palavras vai em `detail`. */
+  waitingOn?: QueueWait;
   /** O card que explica o estado: o que ele faz (`busy`), a que espera (`resource-wait`, `usage-limit`) ou o que entrega (`delivering`, `heavy-wait`). */
   taskId?: string;
   /** Desde quando está assim (ISO), quando o estado tem começo conhecido: o card entrou em andamento, a espera começou, a entrega começou (`delivering`) ou a suíte começou a esperar (`heavy-wait`). */
