@@ -6539,6 +6539,12 @@ function parseTasks(raw: string): Task[] | null {
  */
 const tasksCache = new Map<string, { version: string; tasks: Task[] }>();
 const FREEZE_CACHED = !!process.env.VITEST;
+/**
+ * Só guarda a leitura de um arquivo parado há pelo menos isso (a técnica do git para o "racily clean"): o mtime do Windows anda em degraus de ~15,6 ms
+ * (FAT, de 2 s), e duas gravações de mesmo tamanho no mesmo degrau dão a mesma versão. Gravação recente: lê do disco toda vez até o arquivo assentar;
+ * depois disso, qualquer gravação nova cai num degrau posterior e muda a versão.
+ */
+const RACY_MS = 3_000;
 
 const fileVersion = (st: { mtimeMs: number; ctimeMs: number; size: number; ino: number }) => `${st.mtimeMs}:${st.ctimeMs}:${st.size}:${st.ino}`;
 
@@ -6572,6 +6578,11 @@ export async function readTasks(dir: string): Promise<Task[]> {
   // JSON ruim não fica guardado (a próxima leitura tenta de novo). A versão é a do `stat` de antes da leitura: se o arquivo mudou no meio,
   // a próxima leitura vê outra versão e lê de novo.
   if (!tasks) return [];
+  // Arquivo mexido há pouco (ver RACY_MS): não guarda; a versão dele ainda pode se repetir numa gravação seguinte.
+  if (Date.now() - st.mtimeMs < RACY_MS) {
+    tasksCache.delete(file);
+    return tasks;
+  }
   tasksCache.set(file, { version, tasks: FREEZE_CACHED ? deepFreeze(tasks) : tasks });
   return [...tasks];
 }
