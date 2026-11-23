@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Autonomy,
   ChatAttachment,
@@ -422,9 +422,12 @@ export function useChat(projectId: string, initialSessionId: string | null, staf
   const discardHeld = (item: ChatItem) =>
     discardHeldItem(item, { projectId, sessionId, reload: load, drop: (id) => setHeld((h) => h.filter((i) => i.id !== id)) });
 
+  // A mesma lista enquanto as partes não mudam: com um array novo a cada render, os `useMemo` do ChatView que dependem de `items` refaziam tudo.
+  const items = useMemo(() => mergeItems(history, live, held), [history, live, held]);
+
   return {
     sessionId,
-    items: mergeItems(history, live, held),
+    items,
     state,
     context: state?.context ?? baseContext,
     elsewhere,

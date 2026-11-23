@@ -1340,6 +1340,17 @@ textarea.q-field { resize: vertical; }
 .msg-images { display: flex; align-items: center; gap: 4px; font-size: var(--fs-md); opacity: 0.85; margin-bottom: 2px; }
 .bn-git-branch { display: inline-flex; align-items: center; gap: 4px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* Esqueleto de carregamento (lib/Skeleton.tsx): blocos na cor da linha, com um brilho que passa; com "reduzir movimento", parado. */
+.skel { display: grid; gap: 8px; width: 100%; min-width: 0; }
+.skel-columns { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 760px) { .skel-columns { grid-template-columns: minmax(0, 1fr); } .skel-columns .skel-col ~ .skel-col { display: none; } }
+.skel-col { display: grid; align-content: start; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; }
+.skel-bar, .skel-card { border-radius: 6px; background: linear-gradient(90deg, var(--line) 25%, color-mix(in srgb, var(--line) 45%, transparent) 50%, var(--line) 75%); background-size: 200% 100%; animation: skel-shine 1.4s ease-in-out infinite; }
+.skel-bar { height: 12px; }
+.skel-head { height: 18px; width: 55%; }
+.skel-card { height: 64px; }
+@keyframes skel-shine { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .skel-bar, .skel-card { animation: none; } }
 /* Topo do funcionário: o "⋯" fica no canto do topo, à esquerda do "×" do painel. */
 .chat-top { position: relative; min-height: 28px; }
 .btn-secondary.chat-more-btn { position: absolute; top: 0; right: 10px; width: var(--btn-h); height: var(--btn-h); padding: 0; font-size: var(--fs-xl); line-height: 1; display: grid; place-items: center; }

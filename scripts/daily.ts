@@ -122,7 +122,8 @@ function run(): void {
   }
   const server = spawn(process.execPath, [SERVER_BUNDLE], {
     cwd: ROOT,
-    env: { ...process.env, MYCO_PORT: String(port) },
+    // Como no vigia (scripts/daemon.ts, `serverEnv`): o pool de I/O de 4 threads enfileirava o quadro atrás do stat dos transcripts.
+    env: { ...process.env, UV_THREADPOOL_SIZE: process.env.UV_THREADPOOL_SIZE || '16', MYCO_PORT: String(port) },
     stdio: 'inherit',
   });
   server.on('exit', (code) => process.exit(code ?? 0));

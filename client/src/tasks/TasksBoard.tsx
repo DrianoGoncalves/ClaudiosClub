@@ -50,6 +50,7 @@ import { primaryNoteText } from './primaryReturn';
 import { dropAfter, dropPosition, orderMoves, orderNoteText, queuePosOf, queueSize, stepOfKey, type OrderBody, type OrderMoves } from './queueOrder';
 import { TaskRuns } from './TaskRuns';
 import { askConfirm } from '../lib/dialogStore';
+import { Skeleton } from '../lib/Skeleton';
 import { cardTone } from '../inbox/alertTone';
 import { NeedsYouBadge } from '../inbox/NeedsYouBadge';
 import { taskWaitNeeds } from '../inbox/needsYou';
@@ -161,6 +162,12 @@ interface Props {
 }
 
 const NO_ITEMS: InboxItem[] = [];
+/** Quantos cartões um grupo longo mostra por vez (ver `limited`). */
+export const LIST_STEP = 40;
+/** Projeto sem quadro (`null` do servidor): sempre a mesma lista vazia, para o polling não redesenhar à toa. */
+const NO_TASKS: Task[] = [];
+/** De quanto em quanto tempo o quadro se redesenha sozinho (o "há X min" e as contagens dos selos), já que o polling estável não redesenha nada quando a lista não muda. */
+const CLOCK_MS = 30_000;
 
 export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOpenStaff, onChanged, initialTaskId = null, onOpenSchedules, initialTasks, initialPause, initialQueues, inboxItems = NO_ITEMS, onOpenInbox }: Props) {
   const [tasks, setTasks] = useState<Task[] | null>(initialTasks ?? null);
@@ -177,6 +184,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const [staffFilter, setStaffFilter] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [showCancelled, setShowCancelled] = useState(false);
+  /** Quantos cartões cada grupo longo mostra (ver `limited`), por grupo; sem entrada, LIST_STEP. */
+  const [limits, setLimits] = useState<Record<string, number>>({});
   /** Diálogo de cancelar ou apagar aberto, para a tarefa `id`. */
   const [closing, setClosing] = useState<{ mode: DepMode; id: string } | null>(null);
   /** O card sem código que está sendo devolvido ao responsável (o botão espera o envio). */
@@ -190,10 +199,18 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const boardWriter = useBoardWriter(projectId);
   const projectPause = useProjectPause(projectId, projectName, onChanged, initialPause);
   const queues = useQueues(projectId, initialQueues);
+  // O relógio do quadro: sem ele, com a leitura estável, "há 3 min" e as contagens dos selos congelavam enquanto nada mudasse. Só força o
+  // redesenho: a hora é lida a cada render (depois de uma ação, "agora" é agora mesmo, não a hora do último tique).
+  const [, setClock] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setClock((n) => n + 1), CLOCK_MS);
+    return () => clearInterval(timer);
+  }, []);
   const now = Date.now();
 
   const load = useCallback(() => {
-    api.tasks(projectId).then((t) => setTasks(t ?? []), (e: Error) => setError(e.message));
+    // A lista igual à anterior chega como o mesmo objeto (leitura estável, ver api.ts): o React não redesenha os cartões.
+    api.tasks(projectId).then((t) => setTasks(t ?? NO_TASKS), (e: Error) => setError(e.message));
   }, [projectId]);
 
   // As tarefas andam sozinhas (plano aprovado, turno terminado): relê de tempos em tempos.
@@ -223,15 +240,26 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     return () => clearTimeout(timer);
   }, [saved]);
 
-  /** Roda a ação e relê o quadro; devolve se deu certo (o erro vai para `error`). */
-  const act = async (fn: () => Promise<unknown>) => {
+  /** Troca no quadro a tarefa de mesmo id (a mudança otimista, ou a de antes para desfazer); as outras ficam como estão. */
+  const putTask = (next: Task) => setTasks((cur) => (cur ? cur.map((x) => (x.id === next.id ? next : x)) : cur));
+
+  /**
+   * Roda a ação e relê o quadro; devolve se deu certo (o erro vai para `error`). Com `optimistic`, o cartão muda na tela antes da resposta (o
+   * arrasto não espera o servidor) e volta como era se a ação falhar. A releitura depois da resposta traz o que o servidor decidiu de fato ("Fazendo"
+   * com o funcionário ocupado vira fila) e o resto que a ação mexeu (posições da fila, dependentes). A Task da resposta não entra direto: ela vem
+   * sem os campos que a listagem calcula (posição na fila, arquivada, permissão), e o cartão piscaria até a releitura.
+   */
+  const act = async (fn: () => Promise<unknown>, optimistic?: { before: Task; after: Task }) => {
     setError(null);
+    if (optimistic) putTask(optimistic.after);
     try {
       await fn();
       load();
       onChanged();
       return true;
     } catch (e) {
+      // Desfaz só se o cartão ainda é o da mudança otimista: uma releitura ou outro arrasto depois dela já mostra o estado mais novo.
+      if (optimistic) setTasks((cur) => (cur ? cur.map((x) => (x === optimistic.after ? optimistic.before : x)) : cur));
       setError((e as Error).message);
       return false;
     }
@@ -240,7 +268,10 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     if (await act(fn)) setSaved(key);
   };
 
-  const move = (t: Task, status: TaskStatus) => t.status !== status && act(() => api.updateTask(projectId, t.id, { status }));
+  // Mudar de coluna atualiza o `updatedAt`, e o arquivamento é derivado dele (pronta há mais de 7 dias): o cartão otimista já sai do arquivo.
+  const move = (t: Task, status: TaskStatus) =>
+    t.status !== status &&
+    act(() => api.updateTask(projectId, t.id, { status }), { before: t, after: { ...t, status, updatedAt: new Date().toISOString(), archived: false, archivedAt: undefined } });
   /** Muda o lugar do cartão na fila do responsável (o servidor confere quem pode e recusa o que não muda nada). */
   const reorder = (t: Task, body: OrderBody) => act(() => api.reorderTask(projectId, t.id, body));
   const start = (t: Task) => act(() => withUsageConfirm((force) => api.startTask(projectId, t.id, force)));
@@ -476,6 +507,26 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     </Fragment>
   );
 
+  /**
+   * Os grupos longos (Pronto, arquivadas, canceladas) mostram os LIST_STEP primeiros (já na ordem de mais recente) e um "Mostrar mais": o quadro
+   * chegava a ~300 cartões de uma vez, cada um com dezenas de selos. O contador da coluna continua com o total. As outras colunas ficam inteiras:
+   * são curtas, e nelas um cartão ativo escondido seria trabalho em andamento sumindo da tela ("A fazer" ainda tem a ordem da fila, que se arrasta).
+   */
+  const limited = (key: string, list: Task[]) => {
+    const max = limits[key] ?? LIST_STEP;
+    const rest = list.length - max;
+    return (
+      <>
+        {list.slice(0, max).map(card)}
+        {rest > 0 && (
+          <button className="link small tasks-archived-toggle" onClick={() => setLimits((l) => ({ ...l, [key]: max + LIST_STEP }))}>
+            {t('tasks.showMore', { n: Math.min(LIST_STEP, rest), rest })}
+          </button>
+        )}
+      </>
+    );
+  };
+
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal tasks-modal" role="dialog" aria-label={t('tasks.dialogLabel', { name: projectName })}>
@@ -549,7 +600,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
           />
         )}
         {!tasks ? (
-          <p className="muted">{t('tasks.loading')}</p>
+          <Skeleton label={t('tasks.loading')} variant="columns" />
         ) : (
           <>
           {filterOwners.length > 0 && (
@@ -593,7 +644,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                     {/* Quem está ocupado agora (Fazendo: executando ou fila travada; Revisão: revisando); o texto de cada um só no hover. */}
                     {(status === 'doing' || status === 'review') && <QueueDots dots={dots.filter((d) => d.column === status)} staff={staff} projectId={projectId} onOpenTask={setSelected} />}
                   </div>
-                  {col.map(card)}
+                  {status === 'done' ? limited('done', col) : col.map(card)}
                   {status === 'done' && archived.length > 0 && (
                     <>
                       <button
@@ -604,7 +655,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                       >
                         {showArchived ? t('tasks.hideArchived') : t('tasks.showArchived', { n: archived.length })}
                       </button>
-                      {showArchived && byRecent(archived).map(card)}
+                      {showArchived && limited('archived', byRecent(archived))}
                     </>
                   )}
                   {/* Canceladas: o mesmo grupo recolhido das arquivadas, no fim de Pronto (fechou sem entrega, então não é "pronta"). */}
@@ -613,7 +664,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                       <button className="link small tasks-archived-toggle" aria-expanded={showCancelled} title={HELP.cancelled} onClick={() => setShowCancelled((v) => !v)}>
                         {showCancelled ? t('tasks.hideCancelled') : t('tasks.showCancelled', { n: cancelled.length })}
                       </button>
-                      {showCancelled && byRecent(cancelled).map(card)}
+                      {showCancelled && limited('cancelled', byRecent(cancelled))}
                     </>
                   )}
                 </section>

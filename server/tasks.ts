@@ -6427,7 +6427,12 @@ export class TaskService {
     const run = prev.then(async () => {
       const before = await readTasks(dir);
       const next = clearClosedHeld(clearStaleRanks(clearBlockAlerts(fn(before))));
-      await writeAtomic(file, JSON.stringify(next, null, 2) + '\n');
+      try {
+        await writeAtomic(file, JSON.stringify(next, null, 2) + '\n');
+      } finally {
+        // Gravou (ou falhou no meio): o guardado já não vale; a próxima leitura vem do disco.
+        forgetTasks(dir);
+      }
       // Toda tarefa que ficou pronta por qualquer caminho (a tela, a aprovação da revisão, a mescla) passa por aqui: é o ponto do commit automático (ver `autoCommit`).
       const was = new Map(before.map((t) => [t.id, t.status]));
       for (const t of next) if (t.status === 'done' && was.has(t.id) && was.get(t.id) !== 'done') finished.push(t.id);
@@ -6473,20 +6478,64 @@ function withArchive(t: Task, now = Date.now()): Task {
 /** "No ar" saiu do quadro: o que foi gravado com ele segue como "pronto" (o histórico também). */
 const fromLegacy = (s: string): TaskStatus => (s === 'live' ? 'done' : (s as TaskStatus));
 
-/** As tarefas do projeto (`.myco/tasks.json`), só leitura; lista vazia se não há arquivo. */
-export async function readTasks(dir: string): Promise<Task[]> {
-  const raw = await fs.readFile(tasksFile(dir), 'utf8').catch(() => null);
-  if (!raw) return [];
+/** O texto do `tasks.json` como tarefas (status legado convertido, sem as inválidas); null se não é JSON de lista. */
+function parseTasks(raw: string): Task[] | null {
   try {
     const data = JSON.parse(raw.replace(/^﻿/, '')) as unknown;
-    if (!Array.isArray(data)) return [];
+    if (!Array.isArray(data)) return null;
     return (data as Task[])
       .filter((t) => t && typeof t.id === 'string')
       .map((t) => ({ ...t, status: fromLegacy(t.status), history: t.history?.map((h) => ({ ...h, status: fromLegacy(h.status) })) ?? t.history }))
       .filter((t) => TASK_STATUSES.includes(t.status));
   } catch {
+    return null;
+  }
+}
+
+/**
+ * O quadro já lido, por arquivo: as tarefas e a versão do arquivo (mtime, ctime, tamanho e inode) de quando foram lidas. Quase toda operação lê o quadro
+ * (a listagem a cada poucos segundos, a caixa, o resumo, a rodada da fila, cada mudança), e o arquivo passa de MB: reler e refazer o parse a cada leitura
+ * era o maior gasto de CPU do servidor. Um `stat` confere a versão; mudou (gravação daqui ou de fora), lê de novo. A gravação (`mutate`) tira a entrada.
+ * As tarefas guardadas são as mesmas para todo leitor: ninguém as altera no lugar (o código monta tarefa nova com spread), e nos testes elas vêm
+ * congeladas para pegar quem tentar. Cada leitor recebe a própria lista (cópia rasa), então empurrar ou tirar item da lista não afeta os outros.
+ */
+const tasksCache = new Map<string, { version: string; tasks: Task[] }>();
+const FREEZE_CACHED = !!process.env.VITEST;
+
+const fileVersion = (st: { mtimeMs: number; ctimeMs: number; size: number; ino: number }) => `${st.mtimeMs}:${st.ctimeMs}:${st.size}:${st.ino}`;
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const v of Object.values(value)) deepFreeze(v);
+  }
+  return value;
+}
+
+/** Esquece o quadro guardado de `dir` (depois de gravar: a próxima leitura vem do disco). */
+function forgetTasks(dir: string): void {
+  tasksCache.delete(tasksFile(dir));
+}
+
+/** As tarefas do projeto (`.myco/tasks.json`), só leitura; lista vazia se não há arquivo. Guardadas por versão do arquivo (ver `tasksCache`). */
+export async function readTasks(dir: string): Promise<Task[]> {
+  const file = tasksFile(dir);
+  const st = await fs.stat(file).catch(() => null);
+  if (!st) {
+    tasksCache.delete(file);
     return [];
   }
+  const version = fileVersion(st);
+  const hit = tasksCache.get(file);
+  if (hit && hit.version === version) return [...hit.tasks];
+  const raw = await fs.readFile(file, 'utf8').catch(() => null);
+  if (!raw) return [];
+  const tasks = parseTasks(raw);
+  // JSON ruim não fica guardado (a próxima leitura tenta de novo). A versão é a do `stat` de antes da leitura: se o arquivo mudou no meio,
+  // a próxima leitura vê outra versão e lê de novo.
+  if (!tasks) return [];
+  tasksCache.set(file, { version, tasks: FREEZE_CACHED ? deepFreeze(tasks) : tasks });
+  return [...tasks];
 }
 
 /**

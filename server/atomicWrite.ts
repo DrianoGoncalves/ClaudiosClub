@@ -37,7 +37,10 @@ export async function renameWithRetry(tmp: string, file: string): Promise<void> 
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (!code || !RENAME_RETRY_CODES.has(code)) throw err;
-      if (attempt >= RENAME_ATTEMPTS) throw new StateBusyError(file, err);
+      if (attempt >= RENAME_ATTEMPTS) {
+        console.warn(`[gravar] ${file}: ${code} em ${attempt} tentativas de troca; esta gravação não entrou`);
+        throw new StateBusyError(file, err);
+      }
       await sleep(Math.min(RENAME_BASE_MS * 2 ** (attempt - 1), RENAME_MAX_WAIT_MS) * (0.5 + Math.random() / 2));
     }
   }

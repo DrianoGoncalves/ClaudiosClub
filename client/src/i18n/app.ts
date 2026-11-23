@@ -4,6 +4,7 @@ export default defineMessages({
   'pt-BR': {
     'app.name': 'Clube dos Claudios',
     'app.loadingBoard': 'Carregando o quadro…',
+    'app.loadingScreen': 'Carregando a tela…',
     'app.lazyFailed': 'Esta tela não carregou. Pode ter havido uma atualização ou a conexão caiu.',
     'app.renderFailed': 'Esta tela quebrou ao abrir. Motivo:',
     'app.reload': 'Recarregar',
@@ -50,6 +51,7 @@ export default defineMessages({
   en: {
     'app.name': 'Claudio’s Club',
     'app.loadingBoard': 'Loading the board…',
+    'app.loadingScreen': 'Loading the screen…',
     'app.lazyFailed': 'This screen failed to load. The app may have been updated, or the connection dropped.',
     'app.renderFailed': 'This screen crashed while opening. Reason:',
     'app.reload': 'Reload',
@@ -96,6 +98,7 @@ export default defineMessages({
   es: {
     'app.name': 'Club de los Claudios',
     'app.loadingBoard': 'Cargando el tablero…',
+    'app.loadingScreen': 'Cargando la pantalla…',
     'app.lazyFailed': 'Esta pantalla no se cargó. Puede que la app se haya actualizado o que la conexión se haya caído.',
     'app.renderFailed': 'Esta pantalla falló al abrirse. Motivo:',
     'app.reload': 'Recargar',
