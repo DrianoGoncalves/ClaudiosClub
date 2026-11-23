@@ -16,7 +16,7 @@ export function ImageIcon({ size = 15 }: { size?: number }) {
 /** Enviar (avião de papel): o botão de enviar do chat. */
 export function SendIcon({ size = 16 }: { size?: number }) {
   return (
-    <svg width={size} height={size} aria-hidden="true" {...base}>
+    <svg className="ico-send" width={size} height={size} aria-hidden="true" {...base}>
       <path d="M14.5 21.7a.5.5 0 0 0 .9 0l6.5-19a.5.5 0 0 0-.6-.6l-19 6.5a.5.5 0 0 0 0 .9l7.9 3.2a2 2 0 0 1 1.1 1.1z" />
       <path d="M21.9 2.1 10.9 13.1" />
     </svg>
@@ -57,7 +57,7 @@ export function FileDiffIcon({ size = 16 }: { size?: number }) {
 /** Mais: começar algo novo (conversa nova). */
 export function PlusIcon({ size = 16 }: { size?: number }) {
   return (
-    <svg width={size} height={size} aria-hidden="true" {...base}>
+    <svg className="ico-plus" width={size} height={size} aria-hidden="true" {...base}>
       <path d="M12 5v14" />
       <path d="M5 12h14" />
     </svg>
@@ -360,7 +360,7 @@ export function FileIcon({ size = 14 }: { size?: number }) {
 /** Lixeira: apagar o arquivo ou a pasta selecionada na árvore. */
 export function TrashIcon({ size = 14 }: { size?: number }) {
   return (
-    <svg width={size} height={size} aria-hidden="true" {...base}>
+    <svg className="ico-trash" width={size} height={size} aria-hidden="true" {...base}>
       <path d="M3 6h18" />
       <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
       <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
