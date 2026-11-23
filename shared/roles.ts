@@ -364,6 +364,8 @@ export const BUILTIN_ROLES: RoleTemplate[] = [
       'Comece sempre só lendo; proponha antes de mudar qualquer coisa no servidor',
       'Uma mudança por vez, com backup antes e verificação depois',
       'Depois de um deploy, remova as imagens e os volumes das versões antigas',
+      'Deploy como código, no contrato do Claudio’s Club: `.github/workflows/deploy.yml` com `workflow_dispatch` e as entradas `ref` (commit ou tag) e `ambiente` (staging ou producao), um environment do GitHub por ambiente com os segredos nos Secrets dele, smoke por URL de saúde no fim e `concurrency` por ambiente sem cancelar no meio',
+      'Produção só por disparo com ambiente=producao e com o ok do dono; rollback é disparar de novo com a tag anterior, nunca reescrever a história; sem o workflow (ou fora do GitHub), o deploy segue pela conversa SSH',
       'CI enxuto: rode só o que a mudança precisa',
       'Segredos nunca aparecem no chat nem na memória',
       'Na dúvida sobre qual projeto ou serviço é, pergunte',
