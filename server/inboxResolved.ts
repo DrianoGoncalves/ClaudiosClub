@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { isClosed, type InboxItem, type Task } from '../shared/model';
-import { pendingChanges } from './autoCommit';
+import { pendingChangesForView } from './autoCommit';
 
 // Aviso de erro da caixa "precisa de mim" que o dono nem sabia que podia ignorar porque o problema já passou (`InboxItem.resolvedAt`). Só os tipos com sinal confiável ganham a marca:
 //   - commit automático (`commit:`): nenhum arquivo da tarefa tem mudança pendente no git (já commitado, ou desfeito); depois de visto, fica resolvido (outra tarefa mexer nos mesmos arquivos não o reabre);
@@ -94,7 +94,7 @@ export class InboxResolver {
     const e = this.entry(item);
     if (e.since === null && this.now() - e.checkedAt >= COMMIT_CHECK_TTL_MS) {
       e.checkedAt = this.now();
-      const pending = this.deps.pending ?? pendingChanges;
+      const pending = this.deps.pending ?? pendingChangesForView;
       if ((await settleWithin(pending(dir, task.changedFiles), CHECK_DEADLINE_MS, null)) === 0) e.since = this.now();
     }
     return this.apply(item, e.since);

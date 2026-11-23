@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { resolveCaller, SessionTokens } from '../server/callers';
 import { sandboxVerdict, staffMayPost } from '../server/apiPolicy';
 import { TaskError, TaskForbiddenError, TaskService } from '../server/tasks';
@@ -18,7 +19,10 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 const tmp = tempDirs();
 let root: string;
 beforeAll(async () => {
-  root = await tmp('myco-writer-');
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-writer-'));
+});
+afterAll(async () => {
+  await fs.rm(root, { recursive: true, force: true });
 });
 
 const PAST = '2020-01-01T00:00:00';

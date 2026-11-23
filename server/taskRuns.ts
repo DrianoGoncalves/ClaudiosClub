@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { renameWithRetry } from './atomicWrite';
 import { ensureMycoGitignore } from './mycoGitignore';
 
 // Registro das execuções de tarefa: `<projeto>/.myco/task-runs.jsonl`, uma linha JSON por evento. Só cresce (append-only):
@@ -51,7 +52,7 @@ export function appendRun(dir: string, ev: TaskRunEvent): Promise<void> {
     const { size, clean: endsClean } = await tail(file);
     let clean = endsClean;
     if (size > RUNS_ROTATE_BYTES) {
-      await fs.rename(file, `${file}.1`);
+      await renameWithRetry(file, `${file}.1`);
       clean = true;
     }
     await fs.appendFile(file, (clean ? '' : '\n') + JSON.stringify(ev) + '\n', 'utf8');

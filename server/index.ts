@@ -147,6 +147,7 @@ import { boardFilter } from './board';
 import { mycoWorktreeParents, sessionPlaces } from './sessionPlaces';
 import { importableList, importProjects } from './importProjects';
 import { AUTONOMY, dropStaffSessions, hasStaffFiles, listProjectStaff, listProjectStaffStrict, readProfile, saveProfile } from './staff/store';
+import { StateBusyError } from './atomicWrite';
 import { lastRetentionRun, nextRetentionDelay, retentionPreview, runRetentionSweep, setRetentionDeletion, type RetentionDeps } from './retentionSweep';
 import { readPersonMemory, savePersonMemory } from './staff/personalMemory';
 import { writeOwnerFile } from './ownerEdits';
@@ -654,6 +655,7 @@ const tasks = new TaskService({
   dismissQuestion: (sid) => void chats.dismissQuestion(sid),
   branchFor: async (dir, profile) => (profile.worktree ? `myco/${profile.id}` : ((await gitState(dir))?.branch ?? null)),
   isWorking: (projectId, staffId, except) => chats.staffWorking(projectId, staffId, except),
+  isTurning: (projectId, staffId, except) => chats.staffTurning(projectId, staffId, except),
   isSessionWorking: (sessionId) => chats.isWorking(sessionId),
   // Só a partida automática da fila passa pelo gate (o start à mão não): sem RAM, CPU ou vaga, a tarefa espera na fila.
   resourceGate: () => resourceGate.reserve(),
@@ -1604,7 +1606,8 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
       if (!fromBrowser) throw new BadRequest('só pelo Claudio’s Club');
       const b = parse(StaffRef.extend({ skipTests: z.boolean().default(false) }), body);
       const { dir, place, profile } = await chatPlace(pid!, b.staffId);
-      return mergeCode(dir, place, `Trabalho de ${profile?.name ?? 'funcionário'}`, { skipTests: b.skipTests });
+      // A pasta de trabalho inteira, sem tarefa e pelo clique do dono: o único caminho que mescla o branch todo (`wholeBranch`); a mescla de uma tarefa vai até o commit da entrega.
+      return mergeCode(dir, place, `Trabalho de ${profile?.name ?? 'funcionário'}`, { skipTests: b.skipTests, wholeBranch: true });
     },
   ],
   // "Voltar até aqui": desfaz as edições de arquivo feitas desde aquela mensagem sua.
@@ -3028,6 +3031,11 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         if (err instanceof DeployError) return send(res, err.status, { error: err.message });
         // A vez do funcionário não chegou no prazo da resposta (edição, cancelamento, resposta à dúvida, ajuste guardado, revisão): 503, nada gravado (tentar de novo em instantes é seguro).
         if (err instanceof TaskBusyError) return send(res, 503, { error: err.message }, { 'retry-after': '5' });
+        // Arquivo de estado (tasks.json, config.json…) seguiu preso por outro processo depois de todas as tentativas do rename: 503, nada gravado (tentar de novo é seguro).
+        if (err instanceof StateBusyError) {
+          console.error('[estado] arquivo ocupado:', err.file, (err.cause as Error | undefined)?.message);
+          return send(res, 503, { error: err.message }, { 'retry-after': String(err.retryAfter) });
+        }
         // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
         if (err instanceof GuideExistsError) return send(res, 409, { error: 'exists' });
         // Teto de títulos manuais: só criar outro recusa (409); editar ou apagar um que existe segue.
@@ -3323,7 +3331,7 @@ async function getInbox(): Promise<InboxItem[]> {
   }
   const own = chats.ownPids();
   for (const l of live) {
-    if (!l.alive || l.status !== 'waiting' || own.has(l.pid) || orphanIds.has(l.sessionId)) continue;
+    if (!l.alive || l.status !== 'waiting' || own.has(l.pid) || orphanIds.has(l.sessionId) || chats.isReusedPid(l)) continue;
     // Dispensada por você: volta só quando o status mudar (outro statusUpdatedAt).
     if (inboxState.isWaitingDismissed(l.sessionId, l.statusUpdatedAt)) continue;
     const w = where(l.sessionId, l);

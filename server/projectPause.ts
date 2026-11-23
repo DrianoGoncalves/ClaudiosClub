@@ -232,7 +232,9 @@ export class ProjectPauses {
     try {
       raw = await fs.readFile(this.file, 'utf8');
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return new Map();
+      // ENOTDIR: um pedaço do caminho é arquivo (Linux); o de pausas também não existe.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return new Map();
       throw err;
     }
     let list: unknown;

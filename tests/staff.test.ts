@@ -24,6 +24,7 @@ import {
 import { ROOT } from '../server/root';
 import { buildMcpConfig, listMcpServers } from '../server/staff/mcp';
 import { StaffError, StaffService } from '../server/staff/service';
+import { StateBusyError } from '../server/atomicWrite';
 import { readProfile, saveChatChoice, StaffInputSchema, writeAtomic } from '../server/staff/store';
 import { AGENT_PRESETS } from '../shared/agentPresets';
 import { BUILTIN_ROLES } from '../shared/roles';
@@ -1263,14 +1264,22 @@ describe('StaffService', () => {
       expect((await fs.readdir(path.dirname(file))).filter((n) => n.endsWith('.tmp'))).toEqual([]);
     });
 
-    it('writeAtomic: rename que falha sempre (EPERM) relança o erro original e não deixa .tmp', async () => {
+    it('writeAtomic: rename que falha sempre (EPERM) esgota as tentativas em StateBusyError (causa = o erro original) e não deixa .tmp', async () => {
       const file = path.join(root, 'atomic-fail', 'f.json');
       const eperm = Object.assign(new Error('EPERM simulado'), { code: 'EPERM' });
       const spy = vi.spyOn(fs, 'rename').mockRejectedValue(eperm);
+      // As esperas (alguns segundos no total) correm na hora: o que se testa é o desfecho, não o relógio (ver stateBusy.test.ts).
+      const timer = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void) => {
+        queueMicrotask(fn);
+        return 0 as unknown as NodeJS.Timeout;
+      }) as typeof setTimeout);
       try {
-        await expect(writeAtomic(file, 'x\n')).rejects.toBe(eperm);
+        const err = await writeAtomic(file, 'x\n').catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(StateBusyError);
+        expect((err as StateBusyError).cause).toBe(eperm);
         expect(spy.mock.calls.length).toBeGreaterThan(1); // tentou de novo
       } finally {
+        timer.mockRestore();
         spy.mockRestore();
       }
       expect((await fs.readdir(path.dirname(file))).filter((n) => n.endsWith('.tmp'))).toEqual([]);

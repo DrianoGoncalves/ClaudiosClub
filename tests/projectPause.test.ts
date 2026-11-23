@@ -10,7 +10,6 @@ import { ProjectPauses } from '../server/projectPause';
 import { RoutineScheduler } from '../server/routines';
 import { TaskForbiddenError, TaskService } from '../server/tasks';
 import type { Engine, StaffProfile } from '../shared/model';
-import { removeTemp } from './support/tmp';
 
 // Pausar o projeto (t-8224a4): pausado, nada de execução começa sozinho (fila, início que não é do dono, retomada das órfãs, ajuste da reprovação, troca de motor, rotinas,
 // despertador/"continue"/retomada de turno e retomada do reinício); o que já roda termina o turno; as ações do dono seguem; o estado sobrevive ao reinício.
@@ -20,7 +19,9 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-pause-'));
 });
-afterAll(() => removeTemp(root));
+afterAll(async () => {
+  await fs.rm(root, { recursive: true, force: true });
+});
 
 const MIN = 60_000;
 const ago = (min: number) => new Date(Date.now() - min * MIN).toISOString();

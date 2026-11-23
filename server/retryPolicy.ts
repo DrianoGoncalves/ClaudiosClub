@@ -13,6 +13,8 @@ export const REVIEW_WAIT_MS = 30 * 60_000;
 export const REASK_AFTER_MS = 10 * 60_000;
 /** Ajuste guardado que falhou tantas vezes deixa de ir sozinho e fica parado, para você. */
 export const HELD_MAX_FAILS = 5;
+/** A mescla automática que falha por causa passageira (principal sujo, testes cortados no tempo) tenta tantas vezes, com o backoff acima, e depois para: o item vai para a caixa do dono. Conflito e teste vermelho não contam: voltam ao responsável. */
+export const AUTO_MERGE_MAX_TRIES = 5;
 /** Conversa de tarefa que espera a sua resposta a um pedido de permissão há mais que isso conta como parada, e o gestor que pediu é avisado (uma vez). Sem opção na Config. */
 export const PERMISSION_STUCK_MS = 15 * 60_000;
 /** Aviso retido ao gestor (tarefa dele ainda aberta) é solto depois disso. */

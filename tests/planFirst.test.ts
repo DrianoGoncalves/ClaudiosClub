@@ -11,7 +11,6 @@ import { Pairing } from '../server/pairing';
 import { stuckInboxItem } from '../server/inboxItems';
 import { TaskConflictError, TaskError, TaskForbiddenError, TaskService, ownAlerts, stuckState, wantsPlan } from '../server/tasks';
 import type { Engine, StaffProfile } from '../shared/model';
-import { removeTemp } from './support/tmp';
 
 // Plano não é entrega (t-bb54bc): o card que pede o plano primeiro (`Task.planFirst`, ou a descrição o pede) e termina o turno sem editar nada entregou o plano. Ele fica em "planejando"
 // com o plano pendente de quem pediu (`Task.planWait`): sem revisão, sem rodada, sem reprovação. Aprovar leva o MESMO card a "fazendo" com o plano gravado; recusar devolve ao responsável
@@ -21,7 +20,9 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-planfirst-'));
 });
-afterAll(() => removeTemp(root));
+afterAll(async () => {
+  await fs.rm(root, { recursive: true, force: true });
+});
 
 const PAST = '2020-01-01T00:00:00';
 const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe', env: { ...process.env, GIT_AUTHOR_DATE: PAST, GIT_COMMITTER_DATE: PAST } }).toString();
