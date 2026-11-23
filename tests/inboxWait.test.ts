@@ -6,6 +6,7 @@ import { commitInboxItem, deniedInboxItem, followUpInboxItem, heavyGuardOffInbox
 import { inboxWaits, taskInboxItems, withInboxWait, type PendingChats } from '../server/inboxWait';
 import { TaskService } from '../server/tasks';
 import type { ChatItem, Engine, InboxItem, StaffProfile, Task, TaskCommit } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // `Task.inboxWait` (t-28543e): o card parado esperando alguém agir num item da caixa de entrada, derivado dos itens que a caixa já monta (nada gravado). Marca o que TRAVA o card
 // (plano, permissão, dúvida, revisão ou ajuste que não anda, card sem código, dependência empacada) e deixa de fora o que só avisa. Some sozinho quando o item sai.
@@ -215,9 +216,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-inboxwait-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 async function project(name: string, engine: Engine, tasks: Array<Partial<Task> & { id: string }>) {
   const dir = path.join(root, name);

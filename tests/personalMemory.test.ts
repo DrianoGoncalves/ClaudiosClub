@@ -6,6 +6,7 @@ import type { StaffProfile } from '../shared/model';
 import { peopleRuleDir, secretDenyRules } from '../server/staff/ficha';
 import { prepareRun, type LaunchContext } from '../server/staff/launch';
 import { PERSON_MEMORY_MAX_LINES, readPersonMemory, savePersonMemory } from '../server/staff/personalMemory';
+import { removeTemp } from './support/tmp';
 
 // O config e o cofre leem MYCO_HOME ao carregar: a pasta temporária vai antes dos imports.
 const home = await vi.hoisted(async () => {
@@ -78,9 +79,7 @@ beforeAll(async () => {
   await fs.mkdir(project(), { recursive: true });
 });
 
-afterAll(async () => {
-  await fs.rm(home, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(home));
 
 describe('memória pessoal: armazenamento', () => {
   it('grava e lê, com a forma normalizada (LF, sem espaço no fim, uma quebra no fim)', async () => {

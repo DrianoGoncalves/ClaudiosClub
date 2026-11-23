@@ -13,6 +13,7 @@ import { capReason, capText } from '../server/chat/turnCap';
 import { isAuthFailure, TurnRetryLedger } from '../server/chat/turnRetry';
 import { NO_EDIT_MARK, TaskConflictError, TaskForbiddenError, TaskService } from '../server/tasks';
 import type { Engine, StaffProfile, TurnCapHit } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Entrega inválida não vira revisão (t-e3af82), Claude e Codex:
 //  1. turno de trabalho que termina em erro de autenticação ou de motor (sinal estruturado do stream) não vai para revisão: o card para em Aguardar com o motivo, quem pediu é avisado,
@@ -25,9 +26,7 @@ let n = 0;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-entrega-invalida-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const T0 = Date.parse('2026-11-19T10:00:00Z');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

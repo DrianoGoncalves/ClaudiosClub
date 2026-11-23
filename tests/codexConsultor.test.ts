@@ -6,6 +6,7 @@ import type { Project } from '../shared/model';
 import type { ToolAdapter } from '../server/adapters/types';
 import { updateConfig } from '../server/config';
 import { StaffService } from '../server/staff/service';
+import { removeTemp } from './support/tmp';
 
 // codexReview até o `perguntar_gpt`: com a flag ligada, o funcionário do Claude abre a conversa com o MCP do GPT no mcp.json e a ficha
 // manda usá-lo; desligada, ou no motor Codex, nada disso. A config e os agents da conta ficam em pastas temporárias.
@@ -35,10 +36,7 @@ beforeAll(async () => {
   proj = path.join(root, 'proj');
   await fs.mkdir(proj, { recursive: true });
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-  await fs.rm(homes, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, homes));
 
 /** Contrata alguém com roteiro, abre a conversa e devolve o que a sessão vê: mcp.json (se houver), ficha e agents do projeto. */
 async function open(name: string, engine?: 'codex') {

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // MCPs da ficha com escopo (server/mcpAccessRefs.ts), a entrada do Club no ~/.claude.json (parseLauncherEntry, clubDefOf), a conversão das
 // fichas e a paridade Claude/Codex: as mesmas refs levam os mesmos servidores aos dois motores.
@@ -25,9 +26,7 @@ const { prepareRun, prepareCodexRun } = await import('../server/staff/launch');
 const { setSecret } = await import('../server/secretVault');
 
 const roots: string[] = [home];
-afterAll(async () => {
-  for (const r of roots) await fs.rm(r, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(...roots));
 const tmp = async (prefix: string) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   roots.push(dir);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { InboxItem, InboxKind, TurnNotice } from '../../../shared/model';
+import type { CommitWaitingSummary, InboxItem, InboxKind, TurnNotice } from '../../../shared/model';
 import { api } from '../api';
 import { t } from '../i18n';
 import { pollVisible } from '../usePoll';
@@ -38,6 +38,8 @@ export interface InboxView {
   /** null = o navegador não oferece notificações. */
   canNotify: boolean;
   setNotify: (on: boolean) => Promise<void>;
+  /** Avisos de commit parcial que esperam outro card fechar: só ciência, não são item nem entram na contagem. Servidor sem a rota (ou erro): null. */
+  commitWaiting?: CommitWaitingSummary | null;
   /** Tira um aviso que só informa: segredo ("já troquei"), rotina que não rodou ("ok, vi") ou erro ("ignorar"). */
   dismiss: (item: InboxItem, opts?: { notSecret?: boolean }) => Promise<void>;
   /** Relê a caixa agora (depois de uma ação sobre a tarefa de um item: liberar, cancelar, começar). */
@@ -46,6 +48,7 @@ export interface InboxView {
 
 export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
   const [items, setItems] = useState<InboxItem[]>([]);
+  const [commitWaiting, setCommitWaiting] = useState<CommitWaitingSummary | null>(null);
   const canNotify = typeof Notification !== 'undefined';
   const [notify, setNotifyState] = useState(() => canNotify && readFlag(NOTIFY_KEY) && Notification.permission === 'granted');
   const seen = useRef<Set<string> | null>(null);
@@ -56,12 +59,21 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
   /** Hora da última leitura dos turnos que terminaram (o servidor manda só os de depois). */
   const turnsSince = useRef(new Date().toISOString());
   const tickRef = useRef<() => Promise<void>>(async () => {});
+  /**
+   * Itens dispensados agora (id → quando), que saíram da tela antes da resposta do servidor (ver `dismiss`): uma leitura que começou ANTES da
+   * dispensa ainda os traz e não pode devolvê-los à caixa. A leitura que começou depois decide (o servidor já sabe), e a marca sai.
+   */
+  const gone = useRef(new Map<string, number>());
 
   useEffect(() => {
     let stopped = false;
     const tick = async () => {
-      const [next, done] = await Promise.all([api.inbox().catch(() => null), api.turns(turnsSince.current).catch(() => null)]);
+      const started = Date.now();
+      const [read, done, waiting] = await Promise.all([api.inbox().catch(() => null), api.turns(turnsSince.current).catch(() => null), api.commitWaiting().catch(() => null)]);
       if (stopped) return;
+      for (const [id, at] of gone.current) if (at < started) gone.current.delete(id);
+      const next = read && gone.current.size ? read.filter((i) => !gone.current.has(i.id)) : read;
+      setCommitWaiting((prev) => (JSON.stringify(prev) === JSON.stringify(waiting) ? prev : waiting));
       if (done?.length) {
         turnsSince.current = done.reduce((max, d) => (d.at > max ? d.at : max), turnsSince.current);
         // "Terminou" só incomoda quando você não está olhando para o Claudio’s Club.
@@ -98,13 +110,18 @@ export function useInbox(onOpen: (item: InboxItem) => void): InboxView {
 
   /** Tira da caixa: rotina vista, segredo trocado (ou que não é segredo), pergunta vista sem responder, sessão esperando em outro lugar, erro ignorado. */
   const dismiss = useCallback(async (item: InboxItem, opts: { notSecret?: boolean } = {}) => {
-    await dismissCall(item, opts).catch(() => {});
+    // Sai da caixa na hora, sem esperar o servidor (antes saía depois da resposta, e a falha já era engolida). Leitura em voo não o traz de volta
+    // (`gone`); se a dispensa não pegou, a primeira leitura depois dela traz o item de volta.
+    // A marca vale até a resposta (Infinity); depois, até a primeira leitura que começou depois dela.
+    gone.current.set(item.id, Infinity);
     setItems((prev) => prev.filter((i) => i.id !== item.id));
+    await dismissCall(item, opts).catch(() => {});
+    if (gone.current.has(item.id)) gone.current.set(item.id, Date.now());
   }, []);
 
   const refresh = useCallback(() => tickRef.current(), []);
 
-  return { items, notify, canNotify, setNotify, dismiss, refresh };
+  return { items, commitWaiting, notify, canNotify, setNotify, dismiss, refresh };
 }
 
 /** A rota de dispensar de cada tipo de item (o erro, `error:`/`cap:`, e a ação barrada, `denied:`, vão pelo id inteiro; o segredo e a rotina, sem o prefixo). */

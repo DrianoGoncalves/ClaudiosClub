@@ -17,6 +17,7 @@ import { parseNewProject, ProjectError } from '../server/newProject';
 import { Pairing } from '../server/pairing';
 import { StaffBusyError, StaffError, StaffService, StaffTeamExistsError } from '../server/staff/service';
 import { createProfile, fichaFile, hasStaffFiles, listProjectStaff, memoryFile, StaffInputSchema } from '../server/staff/store';
+import { removeTemp, removeTempSync } from './support/tmp';
 
 // A pasta do demo antigo é lida de MYCO_HOME: aponta para uma pasta temporária antes de os módulos carregarem.
 const home = await vi.hoisted(async () => {
@@ -66,10 +67,7 @@ beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-teamtpl-'));
 });
 afterEach(() => vi.restoreAllMocks());
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-  await fs.rm(home, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, home));
 
 describe('os modelos (shared/teamTemplates.ts)', () => {
   it('são dois, com a composição pedida e o orquestrador primeiro', () => {
@@ -287,7 +285,7 @@ describe('a rota e o fim do demo', () => {
     });
     afterAll(async () => {
       await new Promise((r) => srv.close(r));
-      fsSync.rmSync(dir, { recursive: true, force: true });
+      removeTempSync(dir);
     });
 
     const post = (headers: Record<string, string>): Promise<{ status: number; body: { error?: string; fromBrowser?: boolean } }> =>

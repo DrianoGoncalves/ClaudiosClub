@@ -12,6 +12,7 @@ import { applyLive, mergeItems } from '../client/src/chat/chatWindow';
 import { codexHistoryOf } from '../server/adapters/codex/rollout';
 import { CHECKPOINT } from '../server/chat/items';
 import { dropSeamEchoes } from '../server/chat/seam';
+import { removeTemp } from './support/tmp';
 
 // Conversa de horas: o processo guarda só os itens mais recentes (e o log do stream acompanha); o que saiu volta do transcript
 // no snapshot, a partir do ponto em que o stream começa (`cut`).
@@ -20,9 +21,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-evict-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 afterEach(() => vi.useRealTimers());
 
 function fakeClaude() {

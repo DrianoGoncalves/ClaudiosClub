@@ -11,6 +11,7 @@ import { ChatManager, CloseRefusedError, type ChatManagerOptions } from '../serv
 import { CodexProcess } from '../server/chat/codexProcess';
 import { isAlive } from '../server/chat/registry';
 import { CLOSED_BY_YOU, TaskService } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 // Fechar a conversa (rota /api/chat/:id/close e o arquivar): parada fecha na hora e os MCPs filhos morrem; trabalhando pede confirmação e
 // confere a ação cortada como o reinício; a tarefa vai para Aguardar antes da saída (sem entrega, sem erro); arquivar fecha o processo.
@@ -21,9 +22,7 @@ let n = 0;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-close-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const T0 = Date.parse('2026-11-17T10:00:00Z');
 const MIN = 60_000;

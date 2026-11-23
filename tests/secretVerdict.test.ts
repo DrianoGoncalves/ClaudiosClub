@@ -11,6 +11,7 @@ import { ChatProcess } from '../server/chat/process';
 import { findSecret, scanSecrets, type ClassifiedSecret } from '../server/chat/secrets';
 import { InboxState } from '../server/inboxState';
 import { secretInboxItem, withoutSecretHint } from '../server/inboxItems';
+import { removeTemp } from './support/tmp';
 
 // Palpite (real ou exemplo) e dica mascarada do aviso de segredo. Os valores abaixo são montados na hora: o arquivo não tem nada com cara de
 // chave real (o GitHub barraria o push, e um funcionário que lesse este arquivo dispararia a guarda).
@@ -201,9 +202,7 @@ beforeAll(async () => {
   proj = path.join(root, 'proj');
   await fs.mkdir(proj, { recursive: true });
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const tick = () => new Promise((r) => setTimeout(r, 15));
 

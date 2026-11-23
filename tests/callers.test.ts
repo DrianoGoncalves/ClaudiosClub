@@ -13,6 +13,7 @@ import { ChatProcess } from '../server/chat/process';
 import { CodexProcess } from '../server/chat/codexProcess';
 import { gate } from '../server/gate';
 import { PAIR_COOKIE, Pairing } from '../server/pairing';
+import { removeTempSync } from './support/tmp';
 
 // Quem chama a API: o socket (127.0.0.2 = sandbox do Codex) e o token da conversa valem mais do que o pedido declara (Origin, cookie,
 // requestedBy, reportsTo). Os testes de HTTP abrem a porta de entrada de verdade (server/gate.ts) nos dois endereços.
@@ -278,7 +279,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   for (const s of servers) await new Promise((r) => s.close(r));
-  fs.rmSync(dir, { recursive: true, force: true });
+  removeTempSync(dir);
 });
 
 const STAFF = { 'x-myco': '1' };

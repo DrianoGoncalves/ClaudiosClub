@@ -6,6 +6,7 @@ import { ProjectPauses } from '../server/projectPause';
 import { TaskService } from '../server/tasks';
 import { UsageStopError } from '../server/usageStop';
 import type { StaffProfile, StaffQueue, TestRun, UsageStopHit } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // t-3f52ea: o estado da fila de cada funcionário (`GET /api/projects/:id/queues`), para o dono ver por que ela não anda: livre, ocupado com o card X, esperando recurso, limite de consumo,
 // projeto pausado, entrega em processamento (por fase) e a suíte de testes esperando a vez da fila de validação pesada. Só leitura: o que já existe não muda.
@@ -14,9 +15,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-queues-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const profile = (id: string, name: string, extra: Partial<StaffProfile> = {}) => ({ id, name, role: 'Back-end', autonomy: 'acceptEdits', worktree: false, reportsTo: [], engine: 'claude', ...extra }) as StaffProfile;
 const passed = (command: string): TestRun => ({ command, ok: true, output: '', ms: 1, at: '2026-11-19T12:00:00Z' });
@@ -120,14 +119,14 @@ describe('GET /queues: o estado da fila de cada funcionário', () => {
     const { id, work } = await b.begin('Primeira');
     await b.endTurn(work!);
     expect((await b.get(id)).status).toBe('review');
-    expect(await b.ana()).toEqual({ staffId: 'ana-1', state: 'free', queued: 0, deliveries: [] });
+    expect(await b.ana()).toEqual({ staffId: 'ana-1', state: 'free', column: null, queued: 0, deliveries: [] });
   });
 
   it('ocupado com o card X (planejando ou fazendo): o id e desde quando; a fila dele conta os cards que esperam', async () => {
     const b = await club('ocupado');
     const first = await b.begin('Primeira');
     const second = await b.begin('Segunda');
-    expect(await b.ana()).toEqual({ staffId: 'ana-1', state: 'busy', taskId: first.id, since: ISO, queued: 1, deliveries: [] });
+    expect(await b.ana()).toEqual({ staffId: 'ana-1', state: 'busy', column: 'doing', taskId: first.id, since: ISO, queued: 1, deliveries: [] });
     expect((await b.get(second.id)).status).toBe('todo');
   });
 
@@ -199,7 +198,7 @@ describe('entrega em processamento (a fila dele já anda: ver `deliveries`)', ()
     expect(q.deliveries[0]!.holder).toBeUndefined();
     b.h.testsGate.resolve(passed('npm test'));
     await delivering;
-    expect(await b.ana()).toEqual({ staffId: 'ana-1', state: 'free', queued: 0, deliveries: [] });
+    expect(await b.ana()).toEqual({ staffId: 'ana-1', state: 'free', column: null, queued: 0, deliveries: [] });
   });
 
   it('a suíte espera a vez da fila de validação pesada: heavy-wait com quem segura e desde quando; quando a vez chega, volta a tests', async () => {

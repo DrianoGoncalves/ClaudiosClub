@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Política de escrita dos MCPs na ficha (server/staff/mcpTools.ts): o teste guarda o que é só leitura, a ficha escolhe
 // livre / pede antes / bloqueada, e a conversa recebe o arquivo que o hook scripts/hooks/mcp-write-guard.mjs lê (ver mcpWriteGuard.test.ts).
@@ -29,9 +30,7 @@ const { MCP_TOOLS_MATCHER, staffSettings } = await import('../server/staff/launc
 const { StaffInputSchema } = await import('../server/staff/store');
 
 const roots: string[] = [home];
-afterAll(async () => {
-  for (const r of roots) await fs.rm(r, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(...roots));
 
 async function tmp(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));

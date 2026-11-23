@@ -21,6 +21,7 @@ import {
   UPLOAD_MAX,
   type SshSpawn,
 } from '../server/staff/sshMcp';
+import { removeTemp } from './support/tmp';
 
 const TOKEN = 'sk-ant-api03-Zq8Lm2Rt7Vx9Wb4Nc6Pd1Hy5Js3Ke0Gu';
 const CMD_STATUS = 'uptime; df -h; free -m';
@@ -124,9 +125,7 @@ beforeAll(async () => {
   await writeFicha('ana-2', { servers: ['srv1'] });
 });
 
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const text = (r: unknown) => (r as { result: { content: Array<{ text: string }> } }).result.content[0]!.text;
 /** O texto sem a linha de marca (`MARCA_SAIDA`), que vem antes de todo texto das ferramentas. */
@@ -641,6 +640,8 @@ describe('prazo, fila e disjuntor', () => {
     });
     const p1 = call(mcp, 'ssh_status', { servidor: 'srv1' });
     const p2 = call(mcp, 'ssh_processos', { servidor: 'srv1' });
+    // Espera o primeiro comando começar (até 5 s; com a suíte cheia 30 ms não bastavam) e só então dá um tempo para o segundo, que tem de seguir esperando.
+    for (let i = 0; i < 500 && calls.length < 1; i++) await new Promise((r) => setTimeout(r, 10));
     await new Promise((r) => setTimeout(r, 30));
     expect(calls).toHaveLength(1);
     release();

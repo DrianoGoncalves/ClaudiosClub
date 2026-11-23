@@ -5,7 +5,7 @@ import { pollVisible } from '../usePoll';
 import { Markdown } from '../chat/markdown';
 import { formatAgo, formatShare } from '../format';
 import { t, locale } from '../i18n';
-import { BranchIcon, ClockIcon, ReviewIcon, UserIcon } from '../icons';
+import { BranchIcon, ClockIcon, UserIcon } from '../icons';
 import { PrimaryReturnBadge, PrimaryReturnLine, TaskFallbackBadge } from '../staff/FallbackBadge';
 import { AutoBadge, AutoInfo } from './AutoCard';
 import { BoardReview, useBoardCommit, useBoardReview, useBoardWriter } from './BoardReview';
@@ -15,6 +15,7 @@ import { ReviewDelegate, ReviewStatus } from './ReviewDelegate';
 import { byHierarchy } from './reviewPick';
 import { fellToOwner, reviewPlan } from './reviewRule';
 import { OwnerBadge, ReviewWho } from './ReviewWho';
+import { ReviewerChip } from './ReviewerChip';
 import { ownerAsks, footerPlan, type AskCard } from './detailActions';
 import { NeedsYouStrip, TaskDetailFooter } from './TaskDetailParts';
 import { GrowTextarea } from './GrowTextarea';
@@ -23,6 +24,8 @@ import { TaskCodePanel } from './TaskCodePanel';
 import { DoubtBadge, DoubtBlock } from './TaskDoubt';
 import { PauseNote, pauseText } from './TaskPause';
 import { PausedBanner, PauseButton, useProjectPause } from './ProjectPauseBar';
+import { ReleaseBanner, ReleaseDialog, useRelease } from './ReleaseDialog';
+import { isVersionPause } from './pauseState';
 import { QueueDots, useQueues } from './QueueStrip';
 import { queueDots } from './queueState';
 import { RetryBadge, retryText } from './TaskRetry';
@@ -48,6 +51,7 @@ import { primaryNoteText } from './primaryReturn';
 import { dropAfter, dropPosition, orderMoves, orderNoteText, queuePosOf, queueSize, stepOfKey, type OrderBody, type OrderMoves } from './queueOrder';
 import { TaskRuns } from './TaskRuns';
 import { askConfirm } from '../lib/dialogStore';
+import { Skeleton } from '../lib/Skeleton';
 import { cardTone } from '../inbox/alertTone';
 import { NeedsYouBadge } from '../inbox/NeedsYouBadge';
 import { taskWaitNeeds } from '../inbox/needsYou';
@@ -159,6 +163,12 @@ interface Props {
 }
 
 const NO_ITEMS: InboxItem[] = [];
+/** Quantos cartões um grupo longo mostra por vez (ver `limited`). */
+export const LIST_STEP = 40;
+/** Projeto sem quadro (`null` do servidor): sempre a mesma lista vazia, para o polling não redesenhar à toa. */
+const NO_TASKS: Task[] = [];
+/** De quanto em quanto tempo o quadro se redesenha sozinho (o "há X min" e as contagens dos selos), já que o polling estável não redesenha nada quando a lista não muda. */
+const CLOCK_MS = 30_000;
 
 export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOpenStaff, onChanged, initialTaskId = null, onOpenSchedules, initialTasks, initialPause, initialQueues, inboxItems = NO_ITEMS, onOpenInbox }: Props) {
   const [tasks, setTasks] = useState<Task[] | null>(initialTasks ?? null);
@@ -175,6 +185,8 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const [staffFilter, setStaffFilter] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [showCancelled, setShowCancelled] = useState(false);
+  /** Quantos cartões cada grupo longo mostra (ver `limited`), por grupo; sem entrada, LIST_STEP. */
+  const [limits, setLimits] = useState<Record<string, number>>({});
   /** Diálogo de cancelar ou apagar aberto, para a tarefa `id`. */
   const [closing, setClosing] = useState<{ mode: DepMode; id: string } | null>(null);
   /** O card sem código que está sendo devolvido ao responsável (o botão espera o envio). */
@@ -187,11 +199,22 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const boardCommit = useBoardCommit(projectId);
   const boardWriter = useBoardWriter(projectId);
   const projectPause = useProjectPause(projectId, projectName, onChanged, initialPause);
+  /** A versão com escopo (ver ReleaseDialog): a faixa lê de 15 em 15 s; a página abre por cima do quadro. */
+  const [release, setRelease] = useRelease(projectId);
+  const [releaseOpen, setReleaseOpen] = useState(false);
   const queues = useQueues(projectId, initialQueues);
+  // O relógio do quadro: sem ele, com a leitura estável, "há 3 min" e as contagens dos selos congelavam enquanto nada mudasse. Só força o
+  // redesenho: a hora é lida a cada render (depois de uma ação, "agora" é agora mesmo, não a hora do último tique).
+  const [, setClock] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setClock((n) => n + 1), CLOCK_MS);
+    return () => clearInterval(timer);
+  }, []);
   const now = Date.now();
 
   const load = useCallback(() => {
-    api.tasks(projectId).then((t) => setTasks(t ?? []), (e: Error) => setError(e.message));
+    // A lista igual à anterior chega como o mesmo objeto (leitura estável, ver api.ts): o React não redesenha os cartões.
+    api.tasks(projectId).then((t) => setTasks(t ?? NO_TASKS), (e: Error) => setError(e.message));
   }, [projectId]);
 
   // As tarefas andam sozinhas (plano aprovado, turno terminado): relê de tempos em tempos.
@@ -201,11 +224,11 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   }, [load]);
 
   useEffect(() => {
-    // Com o diálogo de cancelar/apagar aberto, o Esc é dele (fecha só o diálogo).
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !closing && (selected ? setSelected(null) : onClose());
+    // Com o diálogo de cancelar/apagar (ou a página da versão) aberto, o Esc é dele (fecha só o diálogo).
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !closing && !releaseOpen && (selected ? setSelected(null) : onClose());
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose, selected, closing]);
+  }, [onClose, selected, closing, releaseOpen]);
 
   // O erro de uma tarefa não segue para a próxima.
   useEffect(() => setError(null), [selected]);
@@ -221,15 +244,26 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     return () => clearTimeout(timer);
   }, [saved]);
 
-  /** Roda a ação e relê o quadro; devolve se deu certo (o erro vai para `error`). */
-  const act = async (fn: () => Promise<unknown>) => {
+  /** Troca no quadro a tarefa de mesmo id (a mudança otimista, ou a de antes para desfazer); as outras ficam como estão. */
+  const putTask = (next: Task) => setTasks((cur) => (cur ? cur.map((x) => (x.id === next.id ? next : x)) : cur));
+
+  /**
+   * Roda a ação e relê o quadro; devolve se deu certo (o erro vai para `error`). Com `optimistic`, o cartão muda na tela antes da resposta (o
+   * arrasto não espera o servidor) e volta como era se a ação falhar. A releitura depois da resposta traz o que o servidor decidiu de fato ("Fazendo"
+   * com o funcionário ocupado vira fila) e o resto que a ação mexeu (posições da fila, dependentes). A Task da resposta não entra direto: ela vem
+   * sem os campos que a listagem calcula (posição na fila, arquivada, permissão), e o cartão piscaria até a releitura.
+   */
+  const act = async (fn: () => Promise<unknown>, optimistic?: { before: Task; after: Task }) => {
     setError(null);
+    if (optimistic) putTask(optimistic.after);
     try {
       await fn();
       load();
       onChanged();
       return true;
     } catch (e) {
+      // Desfaz só se o cartão ainda é o da mudança otimista: uma releitura ou outro arrasto depois dela já mostra o estado mais novo.
+      if (optimistic) setTasks((cur) => (cur ? cur.map((x) => (x === optimistic.after ? optimistic.before : x)) : cur));
       setError((e as Error).message);
       return false;
     }
@@ -238,7 +272,10 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     if (await act(fn)) setSaved(key);
   };
 
-  const move = (t: Task, status: TaskStatus) => t.status !== status && act(() => api.updateTask(projectId, t.id, { status }));
+  // Mudar de coluna atualiza o `updatedAt`, e o arquivamento é derivado dele (pronta há mais de 7 dias): o cartão otimista já sai do arquivo.
+  const move = (t: Task, status: TaskStatus) =>
+    t.status !== status &&
+    act(() => api.updateTask(projectId, t.id, { status }), { before: t, after: { ...t, status, updatedAt: new Date().toISOString(), archived: false, archivedAt: undefined } });
   /** Muda o lugar do cartão na fila do responsável (o servidor confere quem pode e recusa o que não muda nada). */
   const reorder = (t: Task, body: OrderBody) => act(() => api.reorderTask(projectId, t.id, body));
   const start = (t: Task) => act(() => withUsageConfirm((force) => api.startTask(projectId, t.id, force)));
@@ -311,6 +348,13 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const filterOwners = staff.filter((s) => s.id === staffFilter || !!tasks?.some((t) => t.staffId === s.id));
   /** As bolinhas de quem está ocupado em Fazendo e Revisão (o filtro por funcionário vale para elas). */
   const dots = queueDots(queues, tasks, (id) => nameOf(id), (id) => tasks?.find((x) => x.id === id)?.title ?? id, now, staffFilter, (id) => slotHolder(tasks?.find((x) => x.id === id)?.resourceWait, tasks ?? [], LABEL));
+  /** Quem revisa o cartão: o revisor apontado na tarefa; em Revisão, também o do quadro ou o que já recebeu o pedido (`reviewPlan`). Com o dono decidindo, só o apontado (quem reprovou). */
+  const cardReviewer = (t: Task): string | null => {
+    if (t.reviewerId) return t.reviewerId;
+    if (t.status !== 'review') return null;
+    const p = reviewPlan(t, boardReview.config);
+    return p.kind === 'staff' ? p.id : null;
+  };
   const closingTask = closing ? (tasks?.find((t) => t.id === closing.id) ?? null) : null;
 
   /**
@@ -405,9 +449,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             <BranchIcon /> {task.branch}
           </span>
         )}
-        {task.reviewerId && (
-          <span className="task-reviewer small" title={t('tasks.autoReviewHint', { name: nameOf(task.reviewerId) ?? task.reviewerId })}>
-            <ReviewIcon /> {nameOf(task.reviewerId) ?? task.reviewerId}
+        {cardReviewer(task) && (
+          <span className="task-reviewer small" title={t('tasks.autoReviewHint', { name: nameOf(cardReviewer(task)) ?? cardReviewer(task)! })}>
+            <span className="task-reviewer-name">{nameOf(cardReviewer(task)) ?? cardReviewer(task)}</span>
             {!!task.reviewRounds && ` · ${t('tasks.reviewRounds', { n: task.reviewRounds, max: AUTO_REVIEW_ROUNDS })}`}
           </span>
         )}
@@ -423,7 +467,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             {t('tasks.queuePos', { pos: queuePosOf(task), who: nameOf(task.staffId) ?? t('tasks.ownerFallback') })}
           </span>
         )}
-        <ResourceWaitBadge wait={task.resourceWait} now={now} warm={waitWarm(task.status)} holder={slotHolder(task.resourceWait, tasks ?? [], LABEL)} />
+        <ResourceWaitBadge wait={task.resourceWait} now={now} warm={waitWarm(task.status)} holder={slotHolder(task.resourceWait, tasks ?? [], LABEL)} onOpen={setSelected} />
         <RetryBadge retry={task.retry} now={now} />
         {!!task.held?.length && (
           <span className={`task-queue${waitClass(waitWarm(task.status))} small`} title={t('tasks.heldHint')}>
@@ -467,15 +511,40 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
     </Fragment>
   );
 
+  /**
+   * Os grupos longos (Pronto, arquivadas, canceladas) mostram os LIST_STEP primeiros (já na ordem de mais recente) e um "Mostrar mais": o quadro
+   * chegava a ~300 cartões de uma vez, cada um com dezenas de selos. O contador da coluna continua com o total. As outras colunas ficam inteiras:
+   * são curtas, e nelas um cartão ativo escondido seria trabalho em andamento sumindo da tela ("A fazer" ainda tem a ordem da fila, que se arrasta).
+   */
+  const limited = (key: string, list: Task[]) => {
+    const max = limits[key] ?? LIST_STEP;
+    const rest = list.length - max;
+    return (
+      <>
+        {list.slice(0, max).map(card)}
+        {rest > 0 && (
+          <button className="link small tasks-archived-toggle" onClick={() => setLimits((l) => ({ ...l, [key]: max + LIST_STEP }))}>
+            {t('tasks.showMore', { n: Math.min(LIST_STEP, rest), rest })}
+          </button>
+        )}
+      </>
+    );
+  };
+
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal tasks-modal" role="dialog" aria-label={t('tasks.dialogLabel', { name: projectName })}>
         <header className="tasks-head">
           <div className="tasks-head-title">
             <h2>{t('tasks.title', { name: projectName })}</h2>
-            {projectPause.pause !== undefined && <PauseButton paused={projectPause.pause !== null} busy={projectPause.busy} onClick={projectPause.toggle} />}
+            {projectPause.pause !== undefined && (
+              <PauseButton paused={projectPause.pause !== null} busy={projectPause.busy} onClick={projectPause.toggle} version={isVersionPause(projectPause.pause)} />
+            )}
           </div>
           <span className="tasks-head-actions">
+            <button className="btn-secondary release-open-btn" onClick={() => setReleaseOpen(true)} title={t('release.openTitle')}>
+              {t('release.open')}
+            </button>
             {onOpenSchedules && (
               <button className="btn-secondary btn-with-icon" onClick={onOpenSchedules} title={t('schedules.openTitle')}>
                 <ClockIcon /> {t('schedules.open')}
@@ -495,6 +564,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             </button>
           </span>
         </header>
+        <ReleaseBanner view={release} onOpen={() => setReleaseOpen(true)} />
         {projectPause.pause && <PausedBanner pause={projectPause.pause} now={now} />}
         {projectPause.error && <p className="error small" role="alert">{projectPause.error}</p>}
         {/* Com o detalhe aberto o erro aparece nele: no celular o detalhe cobre o quadro inteiro. */}
@@ -537,7 +607,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
           />
         )}
         {!tasks ? (
-          <p className="muted">{t('tasks.loading')}</p>
+          <Skeleton label={t('tasks.loading')} variant="columns" />
         ) : (
           <>
           {filterOwners.length > 0 && (
@@ -579,9 +649,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                       {LABEL[status]} <span className="muted">{col.length || ''}</span>
                     </h3>
                     {/* Quem está ocupado agora (Fazendo: executando ou fila travada; Revisão: revisando); o texto de cada um só no hover. */}
-                    {(status === 'doing' || status === 'review') && <QueueDots dots={dots.filter((d) => d.column === status)} staff={staff} projectId={projectId} />}
+                    {(status === 'doing' || status === 'review') && <QueueDots dots={dots.filter((d) => d.column === status)} staff={staff} projectId={projectId} onOpenTask={setSelected} />}
                   </div>
-                  {col.map(card)}
+                  {status === 'done' ? limited('done', col) : col.map(card)}
                   {status === 'done' && archived.length > 0 && (
                     <>
                       <button
@@ -592,7 +662,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                       >
                         {showArchived ? t('tasks.hideArchived') : t('tasks.showArchived', { n: archived.length })}
                       </button>
-                      {showArchived && byRecent(archived).map(card)}
+                      {showArchived && limited('archived', byRecent(archived))}
                     </>
                   )}
                   {/* Canceladas: o mesmo grupo recolhido das arquivadas, no fim de Pronto (fechou sem entrega, então não é "pronta"). */}
@@ -601,7 +671,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                       <button className="link small tasks-archived-toggle" aria-expanded={showCancelled} title={HELP.cancelled} onClick={() => setShowCancelled((v) => !v)}>
                         {showCancelled ? t('tasks.hideCancelled') : t('tasks.showCancelled', { n: cancelled.length })}
                       </button>
-                      {showCancelled && byRecent(cancelled).map(card)}
+                      {showCancelled && limited('cancelled', byRecent(cancelled))}
                     </>
                   )}
                 </section>
@@ -658,6 +728,19 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                   await api.deleteTask(projectId, current.id);
                   setSelected(null);
                 });
+            }}
+          />
+        )}
+        {releaseOpen && (
+          <ReleaseDialog
+            projectId={projectId}
+            projectName={projectName}
+            staff={byHierarchy(staff)}
+            tasks={tasks ?? []}
+            onClose={() => setReleaseOpen(false)}
+            onChanged={(v) => {
+              setRelease(v);
+              load();
             }}
           />
         )}
@@ -1047,11 +1130,12 @@ function TaskDetail({
   const orderLine = moves ? t('tasks.orderLabel', { who: ownerName, pos: queuePos, total: queueTotal }) : null;
   /** A espera pela vaga de escrita (`resourceWait.holder`) leva o card que ocupa, com link; a de recursos segue com o texto do servidor. */
   const slotOwner = slotHolder(task.resourceWait, tasks, LABEL);
-  const resourceLine = task.resourceWait ? `${resourceWaitText(task.resourceWait, now, slotOwner)}. ${resourceWaitHint(slotOwner)}` : null;
+  const resourceHead = task.resourceWait ? resourceWaitText(task.resourceWait, now, slotOwner) : null;
+  const resourceLine = resourceHead ? `${resourceHead}. ${resourceWaitHint(slotOwner)}` : null;
   const heldLine = task.held?.length
     ? `${task.held.length === 1 ? t('tasks.heldMineOne') : t('tasks.heldMineOther', { n: task.held.length })}: ${task.held[0]!.reason}. ${t('tasks.heldNext')}`
     : null;
-  const waitHeads = [pause?.head, retry?.head, blockedLine, queueLine, orderLine, resourceLine, heldLine, fbWait?.hint].filter((x): x is string => !!x);
+  const waitHeads = [pause?.head, retry?.head, blockedLine, queueLine, orderLine, resourceHead, heldLine, fbWait?.hint].filter((x): x is string => !!x);
   const waitSum = waitHeads.length > 1 ? `${waitHeads[0]} (+${waitHeads.length - 1})` : (waitHeads[0] ?? '');
   const startLabel = busyWith || waitingOn.length ? t('tasks.enqueue') : t('tasks.start');
   const startTitle = !task.staffId
@@ -1097,6 +1181,11 @@ function TaskDetail({
         <NeedsYouStrip asks={asks} onGo={goTo} />
         {showReview && (
           <section className="task-review-box" data-card="review" tabIndex={-1} aria-label={t('tasks.reviewLabel')}>
+            {plan.kind === 'staff' && (
+              <div className="task-review-who small">
+                <ReviewerChip id={plan.id} staff={staff} projectId={projectId} />
+              </div>
+            )}
             <ReviewWho plan={plan} workerName={ownerName} reviewerName={(id) => nameOf(id) ?? id} asked={!!task.review} />
             {task.review && (
               <div className="task-code-row">

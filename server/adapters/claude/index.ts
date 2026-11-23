@@ -13,6 +13,7 @@ import { TtlCache } from '../../ttlCache';
 import type { SessionQuery, ToolAdapter } from '../types';
 import { markDuplicates, readAgentsDir } from './agents';
 import { CostIndex, systemCostsPath } from './costs';
+import { exists } from './fsutil';
 import { defaultLocations, worktreeParent, type ClaudeLocations } from './paths';
 import {
   discoverProjects,
@@ -81,6 +82,22 @@ export class ClaudeAdapter implements ToolAdapter {
     const [summaries, names] = await Promise.all([this.summaries ? this.summaries.get('all', () => this.summarizeAll()) : this.summarizeAll(), this.displayNames()]);
     // Objeto novo a cada chamada: quem recebe pode mexer sem estragar o que está guardado.
     return summaries.map((p) => ({ ...p, name: names[p.id] || p.name }));
+  }
+
+  /**
+   * Só a descoberta (cache de `discoveryTtlMs`) e um `access` na pasta: o resumo do `listProjects` faz stat de todo transcript e, com o
+   * cache vencido, segurava cada leitura e gravação de tarefa atrás dele (o pool de I/O do Node é um só). Mesmo critério do `exists` do resumo.
+   */
+  async projectPath(id: string): Promise<string | null> {
+    const ref = await this.ref(id);
+    return ref && (await exists(ref.path)) ? ref.path : null;
+  }
+
+  /** Os do quadro que existem e não são worktree (o filtro de `p.exists && !p.worktreeOf` sobre o `listProjects`), sem o resumo (ver `projectPath`). */
+  async boardProjectIds(): Promise<string[]> {
+    const refs = (await this.refs()).filter((r) => !worktreeParent(r.path));
+    const alive = await Promise.all(refs.map((r) => exists(r.path)));
+    return refs.filter((_, i) => alive[i]).map((r) => r.id);
   }
 
   /** Lê todo transcript dos projetos do quadro (caro: segundos com centenas de conversas); o nome é o da pasta, o apelido entra em `listProjects`. */

@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import type { LiveSession, Session } from '../../../shared/model';
+import { bootTime, startedBeforeBoot } from '../../procIdentity';
 import { feedSubject, initialSubjectState, reviewTaskOf, type SubjectEvent, type SubjectView } from '../../titles/subject';
 import { subjectTracker } from '../../titles/tracker';
 import { listDir, readHeadTail, tryJson } from './fsutil';
@@ -38,7 +39,7 @@ type TranscriptLine = z.infer<typeof TranscriptLine>;
 
 const CustomTitleFile = z.object({ customTitle: z.string() });
 
-export async function readLiveSessions(claudeHome: string): Promise<LiveSession[]> {
+export async function readLiveSessions(claudeHome: string, boot = bootTime()): Promise<LiveSession[]> {
   const dir = path.join(claudeHome, 'sessions');
   // Os arquivos `<pid>.<hash>.key` ao lado são chaves de processo: nunca ler.
   const files = (await listDir(dir)).filter((e) => e.isFile() && /^\d+\.json$/.test(e.name));
@@ -48,7 +49,8 @@ export async function readLiveSessions(claudeHome: string): Promise<LiveSession[
       const parsed = raw === null ? null : LiveFile.safeParse(tryJson(raw));
       if (!parsed?.success) return null;
       const s = parsed.data;
-      const alive = isPidAlive(s.pid);
+      // Arquivo de antes do boot (o PC reiniciou com a sessão aberta): o Claude não apagou, e o sistema pode ter dado o pid a outro processo.
+      const alive = isPidAlive(s.pid) && !startedBeforeBoot(s.startedAt, boot);
       return {
         sessionId: s.sessionId,
         pid: s.pid,

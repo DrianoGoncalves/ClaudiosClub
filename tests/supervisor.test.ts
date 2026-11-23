@@ -4,6 +4,9 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { clientChanged, clientMissing } from '../scripts/lib';
 import { QUICK_EXITS_BEFORE_REBUILD, startSteps, supervise, takeFlag, type SupervisorDeps } from '../scripts/supervisor';
+import { removeTempSync, tempDirs } from './support/tmp';
+
+const tmp = tempDirs();
 
 // O vigia: código novo só entra pelo botão. Queda sobe a mesma versão; mudança de arquivo não reinicia nada.
 
@@ -82,7 +85,7 @@ describe('vigia (scripts/supervisor.ts)', () => {
   });
 
   it('mudança de arquivo com o servidor no ar não reinicia', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-vigia-'));
+    const dir = tmp.sync('myco-vigia-');
     const file = path.join(dir, 'index.ts');
     fs.writeFileSync(file, 'v1');
     let stop = false;
@@ -112,7 +115,6 @@ describe('vigia (scripts/supervisor.ts)', () => {
     stop = true;
     exit(0);
     await done;
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 });
 
@@ -133,7 +135,7 @@ describe('subida completa x queda (startSteps)', () => {
     touch(path.join(root, 'client', 'App.tsx'), old);
     touch(built(), old + 1000);
   });
-  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+  afterEach(() => removeTempSync(root));
 
   const io = () => {
     const builds = { n: 0 };

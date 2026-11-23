@@ -11,6 +11,7 @@ import { CHROME_MCP_CLI, codexChromeOf, prepareCodexRun, type LaunchContext } fr
 import { StaffService, type StaffServiceOptions } from '../server/staff/service';
 import { ROOT } from '../server/root';
 import { clubBlockedOrigins } from '../server/clubAddress';
+import { removeTemp } from './support/tmp';
 
 // O Chrome do usuário no Codex (MCP `myco-chrome`, Playwright em modo extensão): quando entra, como vai na linha de comando, o que a ficha diz.
 
@@ -31,9 +32,7 @@ beforeAll(async () => {
   await fs.mkdir(path.dirname(CLI), { recursive: true });
   await fs.writeFile(CLI, '// cli de teste');
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const profile = (over: Partial<StaffProfile> = {}) =>
   ({

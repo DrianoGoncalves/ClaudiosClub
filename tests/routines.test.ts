@@ -5,14 +5,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Routine, StaffProfile } from '../shared/model';
 import { RoutineScheduler, type RoutineOutcome } from '../server/routines';
 import { RoutinesSchema } from '../server/staff/store';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-routines-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const routine = (over: Partial<Routine> = {}): Routine => ({
   id: 'r1',

@@ -40,6 +40,9 @@ const STAFF_POSTS: RegExp[] = [
   // Consultar um funcionário de outro projeto vinculado pelo dono (server/consult/). A rota é do projeto de ORIGEM (o do token: o gate recusa o resto) e a origem e o remetente vêm do token; o vínculo
   // (só a tela grava: `/api/consult/links*` fica FORA desta lista) e os limites são conferidos pelo serviço. A conversa de consulta não tem token, então nunca chega aqui.
   new RegExp(`^/api/projects/${ID}/consult$`),
+  // Pausa de versão: ligar (com prazo) e encerrar a que ele ligou. A rota é do projeto do token e o serviço exige o token da conversa e a permissão "Pode versionar e fazer deploy" na ficha (403 sem ela);
+  // a pausa comum (`/pause`, `/resume`) fica FORA desta lista: é só da tela.
+  new RegExp(`^/api/projects/${ID}/version-pause(?:/end)?$`),
 ];
 
 /** O POST em `pathname` pode vir de um funcionário pela API? */
@@ -69,7 +72,7 @@ export function projectOfPath(pathname: string): string | null {
  */
 export function sandboxVerdict(method: string, pathname: string, projectId: string): { status: 403; error: string } | null {
   const allowed = method === 'GET' ? SANDBOX_GETS.some((r) => r.test(pathname)) : method === 'POST' && staffMayPost(pathname);
-  if (!allowed) return { status: 403, error: 'a sandbox do Codex não pode usar esta rota (só tarefas, editar tarefa que ainda não começou, ordem da fila, cancelar a própria tarefa ou pedir o cancelamento de uma que você pediu, revisar mesmo assim o card sem código que você pediu, decidir o plano do card que você pediu, follow-up de revisão, consulta a outro projeto vinculado e o diretório dela, contratar, mensagem, despertador e encerrar quem você contratou)' };
+  if (!allowed) return { status: 403, error: 'a sandbox do Codex não pode usar esta rota (só tarefas, editar tarefa que ainda não começou, ordem da fila, cancelar a própria tarefa ou pedir o cancelamento de uma que você pediu, revisar mesmo assim o card sem código que você pediu, decidir o plano do card que você pediu, follow-up de revisão, consulta a outro projeto vinculado e o diretório dela, contratar, mensagem, despertador, ligar e encerrar a pausa de versão e encerrar quem você contratou)' };
   const target = PROJECT_OF.exec(pathname)?.[1];
   if (target && target !== projectId) return { status: 403, error: 'a sandbox do Codex só fala com o projeto da própria conversa' };
   return null;

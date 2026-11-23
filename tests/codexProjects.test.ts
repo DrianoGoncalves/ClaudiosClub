@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { listCodexProjects } from '../server/adapters/codex/projects';
+import { removeTemp } from './support/tmp';
 
 // Pastas que o Codex conhece (config.toml + cwd dos rollouts), com um ~/.codex falso em tmp.
 // As pastas de projeto também ficam em tmp: por isso o padrão (sem includeTemp) as recusa, e os casos de lista passam includeTemp.
@@ -17,9 +18,7 @@ beforeEach(async () => {
   work = path.join(root, 'work');
 });
 
-afterEach(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterEach(() => removeTemp(root));
 
 const real = (p: string) => realpathSync.native(p);
 /** Como o config.toml do Codex traz as pastas no Windows: em minúsculas. */

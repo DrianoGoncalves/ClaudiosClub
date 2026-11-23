@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { renameWithRetry } from './atomicWrite';
 
 // Cofre de segredos do Claudio’s Club (senhas de FTP), fora de qualquer projeto: ~/.myco/secrets/.
 // Windows: cada segredo é cifrado com o DPAPI do usuário (CurrentUser) pelo powershell.exe, e o valor
@@ -89,7 +90,7 @@ async function writePrivate(file: string, content: string, o?: VaultOptions): Pr
   try {
     await fs.writeFile(tmp, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     if (platformOf(o) !== 'win32') await fs.chmod(tmp, 0o600);
-    await fs.rename(tmp, file);
+    await renameWithRetry(tmp, file);
   } catch (err) {
     await fs.rm(tmp, { force: true }).catch(() => {});
     throw err;

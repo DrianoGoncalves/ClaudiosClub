@@ -21,6 +21,8 @@ export interface QueueRow {
   text: string;
   /** O porquê em palavras (o motivo do servidor, o que a fila espera): só nas travas. */
   detail?: string;
+  /** Fila parada pela vaga de escrita: o card que a ocupa, quando está na lista (o tooltip leva o link "Abrir"). */
+  openTaskId?: string;
 }
 
 /** Uma bolinha do quadro: quem está ocupado em Fazendo (executando, entregando, ou com a fila travada) ou em Revisão (revisando), e o texto que aparece no hover. */
@@ -31,6 +33,7 @@ export interface QueueDot {
   tone: 'busy' | 'stuck';
   text: string;
   detail?: string;
+  openTaskId?: string;
 }
 
 /** Só o que as bolinhas leem de um card: a revisão pedida e ainda sem resposta (o turno do revisor não terminou, nem foi substituída por uma entrega nova). */
@@ -62,7 +65,7 @@ export function queueDots(
     if (!q || q.state === 'free') continue;
     // Ocupado sem card, com revisão aberta: a conversa dele é a revisão, que já tem a bolinha em Revisão.
     if (q.state === 'busy' && !q.taskId && reviewing.has(r.staffId)) continue;
-    dots.push({ staffId: r.staffId, column: 'doing', tone: r.tone === 'stuck' ? 'stuck' : 'busy', text: r.text, ...(r.detail && { detail: r.detail }) });
+    dots.push({ staffId: r.staffId, column: 'doing', tone: r.tone === 'stuck' ? 'stuck' : 'busy', text: r.text, ...(r.detail && { detail: r.detail }), ...(r.openTaskId && { openTaskId: r.openTaskId }) });
   }
   for (const [staffId, titles] of reviewing) {
     dots.push({ staffId, column: 'review', tone: 'busy', text: t('tasks.queueReviewing', { name: nameOf(staffId) ?? staffId, task: titles.join(', ') }) });
@@ -115,7 +118,8 @@ export function queueRows(
       case 'resource-wait': {
         // A fila parada pela vaga de escrita tem texto próprio (o servidor manda o motivo em pt-BR; aqui ele vira frase do idioma da tela, com o card que ocupa).
         const slot = q.taskId ? slotOf?.(q.taskId) : null;
-        rows.push(slot ? row('stuck', 'tasks.queueSlot', t('tasks.slotWaitHint'), { holder: slotHolderLabel(slot) }) : row('stuck', 'tasks.queueResource', q.detail));
+        if (slot) rows.push({ ...row('stuck', 'tasks.queueSlot', t('tasks.slotWaitHint'), { holder: slotHolderLabel(slot) }), ...(slot.title !== null && { openTaskId: slot.id }) });
+        else rows.push(row('stuck', 'tasks.queueResource', q.detail));
         break;
       }
       case 'usage-limit':

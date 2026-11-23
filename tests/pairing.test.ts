@@ -20,6 +20,7 @@ import {
 import { DEFAULT_SECRETS_DIR } from '../server/secretVault';
 import { secretDenyRules } from '../server/staff/ficha';
 import type { StaffProfile } from '../shared/model';
+import { removeTempSync } from './support/tmp';
 
 let dir: string;
 let keyFile: string;
@@ -98,7 +99,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise((r) => server.close(r));
-  fs.rmSync(dir, { recursive: true, force: true });
+  removeTempSync(dir);
 });
 
 describe('chave do pareamento', () => {

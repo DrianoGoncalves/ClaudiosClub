@@ -11,6 +11,7 @@ import { deleteSecret, setSecret } from '../server/secretVault';
 import { secretDenyRules } from '../server/staff/ficha';
 import { buildMcpConfig, clubSecretId } from '../server/staff/mcp';
 import { launchSpec, McpLaunchError, mcpLaunchCommand, parseLaunchArgs } from '../server/staff/mcpLaunch';
+import { removeTemp } from './support/tmp';
 
 // Os segredos da biblioteca do Club: nunca no mcp.json (a sessão lê), só no cofre, e o lançador os tira de lá ao subir.
 // Tudo em pastas temporárias; o cofre usa o modo arquivo (platform linux), que lê em qualquer sistema.
@@ -22,9 +23,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-launch-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 /** Uma biblioteca com um stdio (env no cofre), um http com cabeçalho e um http sem nada; os valores já no cofre. */
 async function setup(extra: Record<string, unknown> = {}) {

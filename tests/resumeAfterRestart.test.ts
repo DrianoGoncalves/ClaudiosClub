@@ -9,6 +9,7 @@ import { ChatClosingError, ChatManager, type ChatManagerOptions } from '../serve
 import { bootResume, RESUME_MAX_AGE_MS, ResumeFile, resumeAfterRestart, resumeText, takeResume, type ResumeEntry } from '../server/chat/resume';
 import { isInjectedUserText, RESTART_PENDING_TEXT, RESTART_TEXT } from '../server/chat/items';
 import { InboxState } from '../server/inboxState';
+import { removeTemp } from './support/tmp';
 
 // Reinício pelo navegador: o que vai para o disco ao sair, o que o boot reabre e o que recusa entrega enquanto fecha.
 // Processos falsos (sem `claude` de verdade) e relógio injetado, como em wake.test.ts.
@@ -17,9 +18,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-resume-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const NOW = Date.parse('2026-11-11T12:00:00.000Z');
 const MIN = 60_000;

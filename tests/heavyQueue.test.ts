@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { acquire, currentHolder, isHeavyCommand, LOCK_FILE, release } from '../scripts/hooks/heavy-lock.mjs';
 import { isAlive } from '../server/chat/registry';
+import { removeTemp } from './support/tmp';
 
 // t-aafb19: uma validação pesada (suíte completa, tsc do projeto) por vez na máquina. A lógica (heavy-lock.mjs), o hook do terminal
 // (heavy-guard.mjs, rodado de verdade), o runTests do servidor e a ligação no staffSettings.
@@ -25,7 +26,7 @@ const home = await vi.hoisted(async () => {
 const { buildCodexArgs, codexHeavyArgs, CODEX_HEAVY_LEASE_S } = await import('../server/chat/codexArgs');
 const { itemFromCodex } = await import('../server/chat/codexEvents');
 const { heavyLockDir, withHeavyLock } = await import('../server/heavyQueue');
-const { runTests } = await import('../server/taskCode');
+const { runTests, TEST_TIMEOUT_MS } = await import('../server/taskCode');
 const { staffSettings, HEAVY_GUARD_MATCHER } = await import('../server/staff/launch');
 
 const guard = fileURLToPath(new URL('../scripts/hooks/heavy-guard.mjs', import.meta.url));
@@ -38,10 +39,7 @@ const lockDir = () => path.join(tmp, `lock-${n++}`);
 beforeAll(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-heavy-'));
 });
-afterAll(async () => {
-  await fs.rm(tmp, { recursive: true, force: true });
-  await fs.rm(home, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(tmp, home));
 
 /** Escreve uma trava de outro dono. */
 async function hold(dir: string, rec: Record<string, unknown>) {
@@ -368,11 +366,30 @@ fs.appendFileSync(log, 'start ' + Date.now() + '\\n'); setTimeout(() => { fs.app
   it('a espera pela vez não conta no limite de tempo dos testes', async () => {
     const a = await project('prazo', 10);
     await acquire({ dir: heavyLockDir(), key: 'outra-suite', pid: process.pid, leaseMs: 60_000, maxWaitMs: 1000 });
-    const run = runTests(a.dir, 'npm test', 4000); // esperando 4 s+ pela vez: se o relógio já corresse, o limite estouraria antes de começar
-    await sleep(4200);
+    // Esperando 6 s+ pela vez: se o relógio já corresse, o limite estouraria antes de começar. O comando é o `node` direto (a fila é a do `npm test`, 4º argumento): a partida do
+    // npm, sob a suíte cheia, passava dos 4 s do limite de antes e cortava a rodada que o teste dá como certa.
+    const run = runTests(a.dir, `"${process.execPath}" t.js`, 6000, 'npm test');
+    await sleep(6200);
     await release(heavyLockDir(), 'outra-suite');
     const res = await run;
     expect(res.ok, res.output).toBe(true);
+  }, 60_000);
+
+  // t-4193d0: o tempo-limite subiu para 30 min; a trava tem de valer por mais que ele, senão vira órfã no meio da suíte e a fila deixa outra validação entrar por cima.
+  it('o prazo da trava acompanha o tempo-limite: limite + 60 s (o padrão e um limite dado)', async () => {
+    const a = await project('prazo-trava', 1500);
+    const leaseOf = async (run: Promise<unknown>) => {
+      let held: { since: number; expiresAt: number } | null = null;
+      for (let i = 0; i < 400 && !held; i++) {
+        held = (await currentHolder(heavyLockDir())) as typeof held;
+        if (!held) await sleep(20);
+      }
+      await run;
+      expect(held, 'a suíte não pegou a trava').not.toBeNull();
+      return held!.expiresAt - held!.since;
+    };
+    expect(await leaseOf(runTests(a.dir, 'npm test'))).toBe(TEST_TIMEOUT_MS + 60_000);
+    expect(await leaseOf(runTests(a.dir, 'npm test', 90_000))).toBe(150_000);
   }, 60_000);
 
   it('comando que não é a suíte inteira passa direto, sem tocar na fila', async () => {
@@ -643,8 +660,13 @@ describe('o lançamento leva o hook e a lib para a pasta da conversa (o agente n
     const proj = path.join(tmp, 'proj-codex');
     await fs.mkdir(proj, { recursive: true });
     const run = await prepareCodexRun({ ...profile, engine: 'codex' } as never, ctx(proj) as never, 'sess-h', proj);
-    expect(run.heavyGuard).toEqual({ hook: path.join(proj, 'run', 'sess-h', 'hooks', 'heavy-guard.mjs'), lockDir: heavyLockDir(), ownerPid: process.pid });
-    for (const f of ['heavy-guard.mjs', 'heavy-lock.mjs']) {
+    expect(run.heavyGuard).toEqual({
+      hook: path.join(proj, 'run', 'sess-h', 'hooks', 'heavy-guard.mjs'),
+      lockDir: heavyLockDir(),
+      ownerPid: process.pid,
+      git: { hook: path.join(proj, 'run', 'sess-h', 'hooks', 'git-guard.mjs'), projectPath: proj }, // o bloqueio do git destrutivo (t-0ccbff)
+    });
+    for (const f of ['heavy-guard.mjs', 'heavy-lock.mjs', 'git-guard.mjs', 'git-guard-lib.mjs']) {
       expect(await fs.readFile(path.join(proj, 'run', 'sess-h', 'hooks', f), 'utf8')).toBe(await fs.readFile(fileURLToPath(new URL(`../scripts/hooks/${f}`, import.meta.url)), 'utf8'));
     }
   });

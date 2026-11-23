@@ -5,7 +5,7 @@ import { cardTone } from '../inbox/alertTone';
 // O commit automático da tarefa pronta (`Task.commit`, ver server/autoCommit.ts): selo no cartão (o SHA, "commit parcial" ou "sem commit") e, no detalhe, o que entrou e o que ficou de fora
 // e por quê. É sempre um commit LOCAL: o Club nunca faz push. Os motivos chegam como código (`TaskCommitLeft.why`) e saem aqui no idioma da página; a `note` do servidor é texto em pt-BR.
 
-type CommitTask = Pick<Task, 'status' | 'commit'>;
+type CommitTask = Pick<Task, 'status' | 'commit' | 'commitLeft'>;
 
 /** O motivo de um arquivo ter ficado de fora, no idioma da página. */
 export const whyText = (l: TaskCommitLeft): string => t(`tasks.commitWhy.${l.why}`, { task: l.by ?? '' });
@@ -17,6 +17,17 @@ export const whyText = (l: TaskCommitLeft): string => t(`tasks.commitWhy.${l.why
 export function CommitBadge({ task }: { task: CommitTask }) {
   const c = task.commit;
   if (!c || task.status !== 'done') return null;
+  // Sobras que um card aberto ainda toca: só ciência (a caixa nem lista; o aviso sobe para ela quando o card fechar). Dispensado pelo dono, volta ao selo neutro de sempre.
+  const wait = task.commitLeft?.state === 'waiting' && c.alert && !c.ack ? task.commitLeft.blockers : null;
+  if (wait?.length) {
+    const all = wait.map((b) => b.id);
+    const ids = all.length > 3 ? `${all.slice(0, 3).join(', ')} +${all.length - 3}` : all.join(', ');
+    return (
+      <span className={`task-badge task-commit task-commit-wait small ${cardTone('recommended')}`} title={t('tasks.commitWaitingHint', { ids: all.join(', ') })}>
+        {t('tasks.commitWaiting', { ids })}
+      </span>
+    );
+  }
   const warm = c.alert && !c.ack ? ` ${cardTone('owner')}` : '';
   if (c.status === 'committed' && c.sha) {
     return (

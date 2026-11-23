@@ -8,6 +8,7 @@ import { projectScopeVerdict, sandboxVerdict, staffMayPost } from '../server/api
 import { SANDBOX_HOST, SessionTokens, type TokenOwner } from '../server/callers';
 import { gate } from '../server/gate';
 import { Pairing } from '../server/pairing';
+import { removeTempSync } from './support/tmp';
 
 // A porta de entrada da consulta entre projetos (t-ee823d), contra o gate de verdade nos dois endereços: a rota de consulta e o diretório são do projeto de ORIGEM (o do token), só o POST
 // de consulta é de funcionário, os vínculos (`/api/consult/links*`) são só da tela, e a conversa de consulta não tem token, então nenhuma rota é dela.
@@ -58,7 +59,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   for (const s of servers) await new Promise((r) => s.close(r));
-  fs.rmSync(dir, { recursive: true, force: true });
+  removeTempSync(dir);
 });
 
 const who = (over: Partial<TokenOwner> = {}): TokenOwner => ({ staffId: 'roberto', projectId: 'p1', sessionId: 's-roberto', engine: 'claude', ...over });

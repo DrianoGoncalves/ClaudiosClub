@@ -12,6 +12,7 @@ import { ChatManager } from '../server/chat/manager';
 import { RETRY_MS, SLACK_MS } from '../server/chat/usageLimit';
 import { codexLimitHit } from '../server/codexUsage';
 import { readUsage } from '../server/usage';
+import { removeTemp } from './support/tmp';
 
 // Limite do Codex: a hora de voltar é a que o leitor do Codex dá (ou 30 min), o motor vai junto na pendência e a trava de
 // consumo confere o motor da conversa. Erro que não é cota (autenticação, limite por minuto, contexto) não agenda nada.
@@ -42,9 +43,7 @@ let n = 0;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-codex-limit-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 /** O erro de cota do plano; `resets` é o `resets_in_seconds` que o Codex manda (ausente se não passar). */
 const limitMsg = (resets?: unknown) =>

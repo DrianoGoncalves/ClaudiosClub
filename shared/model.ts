@@ -656,6 +656,8 @@ export const ACK_CANCELLED_DAYS = 7;
 export const AUTO_REVIEW_ROUNDS = 3;
 /** Teto da lista de arquivos de um card automático (`Task.changedFiles`); passando disso, os arquivos novos não entram na lista. */
 export const CHANGED_FILES_MAX = 300;
+/** Quantos commits de entrega o card guarda (`Task.checkpoints`): o card reprovado tantas vezes assim já parou no limite de revisões. */
+export const CHECKPOINTS_MAX = 20;
 
 /** Teto de `Task.fileOverlaps` por tarefa; passando disso, o par novo não é registrado (nem avisado). */
 export const FILE_OVERLAPS_MAX = 50;
@@ -705,6 +707,48 @@ export interface BoardWriterConfig {
   singleWriter: boolean;
 }
 
+/**
+ * Política de fluxo do projeto (fonte única de quanto do fluxo é automático): `mode` diz de onde vêm os portões. 'auto', 'supervised' e 'manual' são presets (`FLOW_PRESETS`); 'custom' é o que
+ * sobra quando o dono mexe num portão sozinho (ou o valor de um projeto que ainda não tem política, ver `FlowPolicy.source`).
+ */
+export type FlowMode = 'auto' | 'supervised' | 'manual' | 'custom';
+
+/**
+ * Os portões. `plan`: quem aprova o plano de um card que pede plano primeiro; 'owner' = como hoje (quem pediu o card ou o dono decide), 'ai' fica só guardado (a aprovação por IA é de outro
+ * card e ainda não age). `completion`: quem leva uma tarefa em revisão a "pronto"; 'ai' = o veredito APROVADO do revisor (e, sem revisor, a tarefa espera o dono), 'owner' = só o dono, pela tela.
+ * `commit`: o commit automático local da tarefa pronta (o `autoCommit` de sempre).
+ */
+export interface FlowGates {
+  plan: 'owner' | 'ai';
+  completion: 'ai' | 'owner';
+  commit: boolean;
+}
+
+/**
+ * Os valores de cada preset, o ÚNICO lugar onde eles moram (servidor e tela leem daqui).
+ * - auto: plano e conclusão pela IA, commit automático. A conclusão por IA exige revisor configurado: sem ele a tarefa fica em "revisão" com a nota e um item na caixa do dono, e nunca vai a
+ *   "pronto" sozinha sem revisão.
+ * - supervised: plano pela IA, conclusão do dono (a aprovação do revisor IA não leva a "pronto"), commit automático depois da aprovação do dono (o commit roda quando a tarefa fica pronta).
+ * - manual: plano e conclusão do dono, commit desligado.
+ * `bypassPermissions` não entra em nenhum preset.
+ */
+export const FLOW_PRESETS: Record<'auto' | 'supervised' | 'manual', FlowGates> = {
+  auto: { plan: 'ai', completion: 'ai', commit: true },
+  supervised: { plan: 'ai', completion: 'owner', commit: true },
+  manual: { plan: 'owner', completion: 'owner', commit: false },
+};
+
+/**
+ * A política vigente do projeto. Gravada pelo dono (`source: 'stored'`, em `~/.myco/flow-policies.json`, fora do projeto: o agente não grava) ou, sem entrada, o que o projeto já fazia
+ * (`source: 'default'`: mode 'custom', plan 'owner', completion 'ai' e commit = o `autoCommit` do `board.json`). A política virtual não gera alerta nem muda o comportamento.
+ */
+export interface FlowPolicy extends FlowGates {
+  mode: FlowMode;
+  source: 'default' | 'stored';
+  /** O dono escolheu a conclusão (um preset, ou `completion` no corpo): só então 'ai' sem revisor vira aviso na caixa. Sempre false na política virtual. */
+  completionChosen: boolean;
+}
+
 /** Quantos arquivos do commit e quantos deixados de fora uma tarefa guarda (`TaskCommit.files` e `left`); o resto só entra na contagem da nota. */
 export const COMMIT_LIST_MAX = 100;
 
@@ -740,8 +784,123 @@ export interface TaskCommit {
   note: string | null;
   /** Precisa de você (falhou, ficou arquivo de fora ou a lista passou do limite): vira item na caixa até você ver. */
   alert: boolean;
+  /**
+   * Com a vaga de escrita (ver `BoardWriterConfig`), quantos dos arquivos commitados vieram de fora de `Task.changedFiles`: o que a tarefa mudou por shell ou script e o Club não viu,
+   * achado pela foto do que já estava sujo quando ela ocupou a vaga (`server/slotSnapshot.ts`). 0 = a foto valeu e não achou nada por fora; ausente = sem foto (sem vaga, ou card que não a ocupou).
+   */
+  extra?: number;
   /** Você viu o aviso da caixa (o item some; o cartão segue mostrando o resultado). */
   ack?: boolean;
+  /**
+   * Os commits complementares das sobras (`left`) que você mandou refazer pelo botão (ver `TaskService.redoLeftovers`): um por vez, do mais antigo ao mais novo (teto `COMMIT_REDOS_MAX`). `sha`,
+   * `for` e `files` seguem sendo os do commit original; `left`, `status` e `alert` refletem o que ainda ficou de fora. Só o servidor grava.
+   */
+  redos?: CommitRedo[];
+}
+
+/** Quantos commits complementares uma tarefa guarda em `TaskCommit.redos`. */
+export const COMMIT_REDOS_MAX = 20;
+
+/** Um commit complementar das sobras do commit automático (ver `TaskCommit.redos`). */
+export interface CommitRedo {
+  at: string;
+  sha: string;
+  files: string[];
+}
+
+/**
+ * O estado do aviso de commit parcial, derivado pelo servidor (ver `CommitLeft` e server/commitLeft.ts): `waiting` algum arquivo de fora ainda é tocado por card aberto (só ciência: o refazer
+ * espera esses cards fecharem); `ready` nenhum card aberto toca os arquivos de fora e eles seguem com mudança no git (decisão do dono: refazer o commit ou ignorar); `failed` o git falhou ou o repositório
+ * não estava em condição (erro). Tom na tela: `ready` = decisão (amarelo), `failed` = erro, `waiting` não entra na caixa.
+ */
+export type CommitLeftState = 'waiting' | 'ready' | 'failed';
+
+/** Um arquivo que o commit automático deixou de fora, como está agora (ver `CommitLeft.files`). */
+export interface CommitLeftFile {
+  path: string;
+  /** O motivo de agora: o de `TaskCommitLeft.why`, trocado por `blocked`, `conflict` ou `staged` quando o arquivo está assim neste momento (os que o botão nunca leva). */
+  why: CommitWhy;
+  /** Os ids dos cards ABERTOS que ainda tocam o arquivo (`changedFiles`); vazio fora de `waiting`. */
+  by: string[];
+  /** Os ids de cards CANCELADOS que o tocaram: a mudança deles pode estar no disco, e o commit leva o arquivo inteiro. */
+  cancelledBy?: string[];
+  /** O botão "refazer o commit das sobras" leva este arquivo? Falso: segredo, conflito ou staged por você (resolva no git). */
+  redo: boolean;
+}
+
+/** Um card aberto que trava as sobras de outro (ver `CommitLeft.blockers`). */
+export interface CommitLeftBlocker {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  /** Os arquivos de fora que ele toca. */
+  paths: string[];
+}
+
+/**
+ * O aviso de commit parcial de uma tarefa pronta, calculado a cada leitura (`Task.commitLeft`; o item da caixa leva os mesmos campos em `InboxItem.autoCommit`). Só existe com o aviso de pé
+ * (`commit.alert`) e enquanto alguma sobra ainda tem mudança no git: sem isso, o problema passou.
+ */
+export interface CommitLeft {
+  state: CommitLeftState;
+  /** O sha do commit original (nunca muda; null se nada foi commitado). */
+  sha: string | null;
+  /** Até `COMMIT_LIST_MAX` arquivos. */
+  files: CommitLeftFile[];
+  /** Os cards abertos que travam, um por card; só em `waiting`. */
+  blockers: CommitLeftBlocker[];
+  /** Só em `ready`, com pelo menos um arquivo `redo`: a tela pode oferecer o botão. */
+  canRedo: boolean;
+  /** A lista de sobras bateu no teto (`COMMIT_LIST_MAX`): pode haver mais arquivos de fora do que os listados. */
+  truncated?: true;
+  /** Em `failed`: o motivo (a primeira linha do erro do git, ou a razão de o commit não ter saído). */
+  note?: string;
+}
+
+/** Um arquivo do preview do "refazer" (`CommitLeftovers`): a mudança no git e o diff que entraria no commit. */
+export interface CommitLeftoverFile extends CommitLeftFile {
+  /** `A` = arquivo novo (sem rastreio), `D` = apagado, `M` = alterado. */
+  status: 'M' | 'A' | 'D';
+  /** O diff contra o HEAD, texto puro (arquivo do projeto: a tela não o interpreta). Vazio em binário e em arquivo que o botão não leva (`redo` falso); nunca vem de segredo. */
+  diff: string;
+  binary?: true;
+  /** O diff foi cortado (64 KB por arquivo, 400 KB no total). */
+  diffTruncated?: true;
+}
+
+/** O que a tela mostra antes de o dono confirmar o "refazer" (`GET /api/projects/:id/tasks/:taskId/commit-leftovers`) e o `digest` que ele devolve no POST. */
+export interface CommitLeftovers {
+  taskId: string;
+  /** `undefined`: as sobras já não têm mudança no git (nada a refazer). */
+  state?: CommitLeftState;
+  sha: string | null;
+  canRedo: boolean;
+  /** O HEAD curto quando o preview foi montado. */
+  head: string;
+  /** Vale só para o que está na tela: HEAD mais o conteúdo de cada arquivo que o botão levaria. Mudou algo, o POST recusa (409) e a tela relê o preview. Vazio se `canRedo` é falso. */
+  digest: string;
+  files: CommitLeftoverFile[];
+  blockers: CommitLeftBlocker[];
+  /** Arquivos de fora que já não têm mudança no git. */
+  dropped: string[];
+  truncated?: true;
+}
+
+/** O resultado de refazer o commit das sobras (`POST /api/projects/:id/tasks/:taskId/commit-leftovers`). */
+export interface CommitLeftoversDone {
+  ok: true;
+  /** O sha do commit complementar. */
+  sha: string;
+  files: string[];
+  /** O que ainda ficou de fora (vazio = tudo entrou). */
+  left: TaskCommitLeft[];
+  commit: TaskCommit;
+}
+
+/** Quantas tarefas esperam, por projeto, outro card terminar para as sobras poderem ser commitadas (`GET /api/inbox/commit-waiting`). Só ciência: não entra na lista da caixa nem no sino. */
+export interface CommitWaitingSummary {
+  total: number;
+  projects: Array<{ projectId: string; projectName: string; count: number }>;
 }
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
@@ -844,6 +1003,12 @@ export interface Task {
   deploy?: TaskHandoff | null;
   /** A worktree foi mesclada no projeto. */
   merged?: { at: string; sha: string; branch: string; base: string } | null;
+  /**
+   * Onde o código DESTE card é escrito, gravado quando a conversa de trabalho abre (ver `TaskService.startNow`): `project` = o checkout principal; `worktree` = a do funcionário,
+   * no `branch`. A mescla e a aprovação decidem por isto, não pela worktree que o funcionário tem agora (ela pode ter sido criada depois, para outro card). Ausente (card
+   * anterior a este campo) = vale a worktree atual dele (ver `locateTaskCode`). Só o servidor grava: nenhuma edição (tela ou API) aceita este campo.
+   */
+  codeAt?: { where: 'worktree' | 'project'; branch: string | null };
   /** Último teste rodado pelo Claudio’s Club para esta tarefa. */
   tests?: TestRun | null;
   /** Segunda opinião do Codex sobre o diff (Markdown), quando você pediu. */
@@ -882,6 +1047,16 @@ export interface Task {
    * card, cancelamento) a desfaz. Só o servidor grava.
    */
   planWait?: TaskPlanWait;
+  /**
+   * A tarefa em "revisão" espera a aprovação do dono (política de fluxo com conclusão 'owner', ou 'ai' sem revisor configurado): só a EXIBIÇÃO (a nota e o item na caixa). Quem autoriza a ir
+   * a "pronto" é a política lida de `~/.myco` e o pedido do dono pela tela, nunca este campo. Vale só para a entrega `deliveryAt`; entrega nova, ou sair de "revisão", o desfaz. Só o servidor grava.
+   */
+  ownerGate?: TaskOwnerGate;
+  /**
+   * A mescla automática desta entrega (ver `TaskService.mergeSoon`): gravada na aprovação, na mesma escrita da nota, quando o projeto escolheu a conclusão por IA e o código está numa worktree.
+   * É o que a fila e o reinício leem: nada se mescla sem ela, e ela só vale para a entrega aprovada (`verdict` + `sha`); entrega nova, mescla feita ou saída de "revisão" a desfazem. Só o servidor grava.
+   */
+  autoMerge?: TaskAutoMerge;
   /**
    * O fim de turno do card (em "fazendo") achou agent ou comando ainda rodando em segundo plano: não é entrega. Sem revisão, sem resumo gravado e sem aviso a quem pediu; o card
    * segue em "fazendo" (e ocupando o funcionário) até o turno que vem depois do término. Vencido o prazo (`BACKGROUND_WAIT_MS`) sem o segundo plano terminar, a entrega segue como
@@ -943,6 +1118,11 @@ export interface Task {
    * vem depois é da próxima tarefa dele, que já pode ter começado na mesma worktree.
    */
   checkpoint?: { sha: string; at: string } | null;
+  /**
+   * Todos os commits de entrega deste card (o mais novo é o de `checkpoint`; no máximo `CHECKPOINTS_MAX`). `checkpoint` é sobrescrito a cada entrega, e o card reprovado que entrega de novo
+   * perde o commit da entrega reprovada, que segue no branch: a mescla automática (ver `TaskService.mergeSoon`) usa esta lista para saber de quem é cada commit do caminho.
+   */
+  checkpoints?: string[];
   /** Entrega (quando foi para revisão): o resumo da conversa e, se a ficha pediu, o porquê de cada arquivo. */
   delivery?: TaskDelivery;
   /** Dúvida do funcionário numa tarefa pedida por gestor: vai para o gestor (ou, escalada, para você). A mais recente. */
@@ -980,6 +1160,11 @@ export interface Task {
    * e o mesmo motivo não avisa de novo. Só é gravado quando o aviso chegou. Só o servidor grava.
    */
   commitNotice?: { key: string; at: string };
+  /**
+   * Só na listagem e na caixa (derivado, não gravado): o estado do aviso de commit parcial (ver `CommitLeft`): `waiting` (só ciência, algum card aberto ainda toca as sobras), `ready` (decisão do
+   * dono) ou `failed` (erro). Existe só com `commit.alert` ainda não ignorado (`commit.ack`: nada na tela lê o estado do aviso ignorado, e calculá-lo custa git) e enquanto alguma sobra ainda tem mudança no git.
+   */
+  commitLeft?: CommitLeft;
   /**
    * Só na listagem (derivado, não gravado): a dúvida da tarefa está escalada a você (`question.status === 'escalated'`) e isso decide se
    * ela prende o funcionário. Ausente = dúvida com o gestor, respondida ou sem dúvida (a fila não muda).
@@ -1069,6 +1254,36 @@ export interface TaskNoCode {
   notifyRetry?: RetryState;
   /** Quando o aviso ao gestor foi dado como perdido e o card passou a `to: 'owner'` (ISO). */
   escalatedAt?: string;
+}
+
+/** A mescla automática de uma entrega aprovada (`Task.autoMerge`). */
+export interface TaskAutoMerge {
+  /** A revisão (conversa) e a entrega (`delivery.at`) que o revisor aprovou. */
+  verdict: { sessionId: string; deliveryAt: string | null };
+  /** O commit da entrega (`checkpoint.sha`): a mescla vai até ele. Null: a entrega não tem commit, e a mescla é recusada (nunca leva o branch inteiro). */
+  sha: string | null;
+  /** O nome de quem aprovou. */
+  by: string;
+  since: string;
+  /** Desde quando a mescla toca o checkout principal (gravado ANTES de mexer): se o processo cair no meio, o reinício vê o marcador sem execução viva e desfaz o que ficou pela metade. */
+  merging?: string;
+  /** Esperando para tentar de novo: o motivo, e quando; `retry` só conta as falhas que se repetem (principal sujo, testes cortados no tempo), com teto. */
+  wait?: { why: 'open-card' | 'main-dirty' | 'retry'; detail: string; since: string };
+  retry?: RetryState;
+  /** A mescla automática parou e só o dono segue (mescla pelo card): o motivo e quando. */
+  stopped?: { detail: string; at: string };
+}
+
+/** A espera pela aprovação do dono (`Task.ownerGate`). */
+export interface TaskOwnerGate {
+  /** A entrega (`Task.delivery.at`) a que a espera pertence; null = a tarefa não tinha entrega gravada. */
+  deliveryAt: string | null;
+  /** Quando a espera começou (ISO). */
+  since: string;
+  /** 'approved': o revisor aprovou e falta o dono; 'no-reviewer': a política manda a IA concluir e não há revisor configurado. */
+  why: 'approved' | 'no-reviewer';
+  /** O nome de quem aprovou (com `why: 'approved'`). */
+  by?: string;
 }
 
 /** O plano que espera decisão (`Task.planWait`). */
@@ -1340,7 +1555,7 @@ export interface Rejection {
 
 export interface TaskDelivery {
   at: string;
-  /** Última mensagem do funcionário, cortada em 1500 caracteres. */
+  /** Última mensagem do funcionário; passando de 2500 caracteres, cortada em fim de linha com uma marca de corte no fim. */
   summary: string;
   /** Caminho relativo do arquivo → por que mudou (texto puro, até 200 caracteres). Ausente sem lista. */
   notes?: Record<string, string>;
@@ -1395,6 +1610,15 @@ export interface TaskProgress {
 export interface ProjectPause {
   /** Quando pausou (ISO). */
   at: string;
+  /**
+   * Ausente = pausa comum. `version` = pausa de versão (montar uma versão do working tree compartilhado): nada novo começa (fila, início de tarefa, rotinas, "continue", despertador,
+   * órfãs, troca de motor), mas o que já está em voo termina (turno, revisão da entrega e o ajuste de um card já em fazendo, planejando ou revisão, como a reprovação). Sai sozinha em `until`.
+   */
+  mode?: 'version';
+  /** Só na pausa de versão: até quando (ISO); passado esse horário o projeto volta ao normal sozinho. */
+  until?: string;
+  /** Só na pausa de versão: quem ligou (funcionário com `canRelease`); ausente = você, pela tela. */
+  by?: { staffId: string; name: string };
 }
 
 /**
@@ -1402,6 +1626,7 @@ export interface ProjectPause {
  * está pausado), `busy` (ele trabalha num card ou numa conversa), `resource-wait` (o gate de recursos segurou a partida), `usage-limit` (a trava de consumo barra o motor dele),
  * `delivering` (uma entrega dele ainda está sendo processada), `heavy-wait` (essa entrega espera a vez da suíte de testes: outra validação pesada roda na máquina) e `free`.
  * `delivering` e `heavy-wait` só aparecem com ele sem card em andamento: se ele já pegou o próximo, o estado é `busy` e a entrega segue em `deliveries`.
+ * `busy` sem `taskId` é um turno rodando numa conversa sem card; conversa aberta sem turno (só segundo plano, ou parada) não é `busy` (ver `StaffQueue.column` para onde cai no quadro).
  */
 export type QueueState = 'free' | 'busy' | 'delivering' | 'heavy-wait' | 'resource-wait' | 'usage-limit' | 'paused';
 
@@ -1423,10 +1648,42 @@ export interface QueueDelivery {
   holder?: string;
 }
 
+/** A coluna do quadro em que o que o funcionário faz agora cai (ver `StaffQueue.column`): "Fazendo", "Revisão" ou "A fazer". */
+export type QueueColumn = 'doing' | 'review' | 'todo';
+
+/** Uma revisão que o funcionário conduz com o turno rodando agora: o card em Revisão e desde quando o pedido foi feito (ISO). */
+export interface QueueReview {
+  taskId: string;
+  since: string;
+}
+
+/** O card que a fila de um funcionário espera (`StaffQueue.waitingOn`): quem o faz e quantos outros cards da fila dele esperam também. */
+export interface QueueWait {
+  /** O card esperado (`blockedBy` ainda aberto) do primeiro card da fila dele. */
+  taskId: string;
+  /** O título dele, curto. */
+  title: string;
+  /** Quem faz o card esperado; ausente se ele não tem responsável. */
+  staffId?: string;
+  /** Quantos outros cards da fila dele também esperam outro card (0 = só o primeiro). */
+  more: number;
+}
+
 /** A fila de um funcionário: o estado (ver `QueueState`), o card que o explica, desde quando e o que mais importa dele. */
 export interface StaffQueue {
   staffId: string;
   state: QueueState;
+  /**
+   * Onde ele está de fato ocupado, para as bolinhas do quadro (o `state` diz o que a FILA faz; isto, o que ELE faz): `doing` = um turno de card dele roda (`taskId`); `todo` = parado em
+   * "A fazer" por um motivo (`resource-wait`, `usage-limit`, ou todos os cards da fila esperando outro card, ver `waitingOn`); `review` = só revisa (`state: 'free'`, `taskId` = o card
+   * em Revisão); `null` = nada em coluna nenhuma: livre, conversa sem card, conversa aberta sem turno rodando, ou entrega que o Club processa (`delivering`, `heavy-wait`: não é turno dele).
+   * Ausente: servidor sem este campo (quem lê cai no `state`).
+   */
+  column?: QueueColumn | null;
+  /** As revisões que ele conduz com o turno rodando agora (a lista completa de Revisão, também quando `column` é outra). Ausente = nenhuma. */
+  reviewing?: QueueReview[];
+  /** Em `column: 'todo'` por dependência: o card que a fila dele espera. O motivo em palavras vai em `detail`. */
+  waitingOn?: QueueWait;
   /** O card que explica o estado: o que ele faz (`busy`), a que espera (`resource-wait`, `usage-limit`) ou o que entrega (`delivering`, `heavy-wait`). */
   taskId?: string;
   /** Desde quando está assim (ISO), quando o estado tem começo conhecido: o card entrou em andamento, a espera começou, a entrega começou (`delivering`) ou a suíte começou a esperar (`heavy-wait`). */
@@ -1490,6 +1747,13 @@ export interface TestRun {
   failedFiles?: TestFailedFile[];
   /** A nova rodada só dos arquivos que falharam (ver `isolateFailures`); só na validação da entrega. */
   isolated?: TestIsolation;
+  /**
+   * A rodada foi cortada no tempo-limite (`limitMs`) sem terminar: `ok` é false, mas NÃO é falha de teste, e o resultado não diz nada sobre o código.
+   * Ausente = a suíte terminou (passou ou falhou). Quem mostra o resultado separa "tempo esgotado" de "falhou".
+   */
+  timedOut?: boolean;
+  /** O tempo-limite que valia, em ms; vem junto com `timedOut`. */
+  limitMs?: number;
 }
 
 export interface TestFailedFile {
@@ -1727,6 +1991,11 @@ export interface StaffProfile {
   modelObsolete?: { model: string; engine: Engine; at: string };
   /** Pode contratar subfuncionários (subsessões) pelo Claudio’s Club. */
   canHire: boolean;
+  /**
+   * "Pode versionar e fazer deploy": liga e encerra a pausa de versão pela API (ver `ProjectPause`). Padrão desligado; só você liga, pela tela. Ausente = desligado (fichas antigas);
+   * opcional no tipo porque o client monta fichas sem ele.
+   */
+  canRelease?: boolean;
   /** Roteiro de trabalho (orquestração); null = nenhum. */
   playbook: Playbook | null;
   /** Trabalha numa worktree git própria (escritores em paralelo sem pisar um no outro). */
@@ -2320,6 +2589,11 @@ export interface InboxItem {
      * `POST .../tasks/<id>/plan` (`{"decision": "approve"}` ou `{"decision": "reject", "reason": "…"}`). `summary`: o começo do plano (texto do funcionário, puro).
      */
     planWait?: true;
+    /**
+     * A tarefa em "revisão" espera a SUA aprovação (`Task.ownerGate`; `humanAction` é 'decide'): 'approved' = o revisor IA aprovou e falta você; 'no-reviewer' = a política de fluxo
+     * manda a IA concluir e não há revisor configurado. A saída é "Aprovar" no card (ou reprovar/devolver).
+     */
+    ownerGate?: 'approved' | 'no-reviewer';
     summary?: string;
   };
   /**
@@ -2364,8 +2638,11 @@ export interface InboxItem {
   /**
    * O commit automático de uma tarefa pronta falhou, foi parcial ou não coube (kind 'error', id `commit:<tarefa>`; ver `commitInboxItem` em server/inboxItems.ts). `summary` (pt-BR)
    * traz o motivo e os arquivos que ficaram de fora. O alvo é a tarefa no quadro (sem conversa, sem `staffId`). Ignorar: `POST /api/errors/dismiss` `{ id }` (só pela tela).
+   * `state` (ver `CommitLeftState`) diz o que o aviso pede e dá o tom: `ready` = decisão do dono (refazer o commit das sobras ou ignorar), `failed` = erro; ausente = o problema já passou (item
+   * com `resolvedAt`). `waiting` nunca vira item (só `Task.commitLeft` e a contagem de `GET /api/inbox/commit-waiting`). Com `state`, vêm também `sha` (o commit original), `files` (cada
+   * sobra com o motivo e os cards abertos que a travam), `blockers`, `canRedo`, `truncated` e `note`, os mesmos campos de `CommitLeft`; quem fez a tarefa é `name`.
    */
-  autoCommit?: { taskId: string; taskTitle: string; status: TaskCommit['status'] };
+  autoCommit?: { taskId: string; taskTitle: string; status: TaskCommit['status']; sha?: string | null } & Partial<CommitLeft>;
   /**
    * A conta do Codex tem um `hooks.json` e a conversa de tarefa roda SEM a fila de validação pesada (kind 'error', id `guardoff:<sessão>`; ver `heavyGuardOffInboxItem` em
    * server/inboxItems.ts e `codexHeavyArgs` em server/chat/codexArgs.ts): suíte completa e `tsc` correm sem esperar a vez. Um item por conversa, uma vez (não a cada execução); some quando

@@ -22,6 +22,7 @@ import {
 } from '../server/folderPicker';
 import { gate } from '../server/gate';
 import { Pairing } from '../server/pairing';
+import { removeTempSync } from './support/tmp';
 
 // "Novo projeto → pasta que já existe": o servidor abre a janela nativa e devolve o caminho. Nada aqui abre janela de verdade: o que roda é
 // trocado por um `runner` falso. (A janela do Windows foi aberta de verdade à parte: ver a entrega da tarefa.)
@@ -291,7 +292,7 @@ describe('a rota: só a tela chega', () => {
     });
     afterAll(async () => {
       await new Promise((r) => srv.close(r));
-      fs.rmSync(dir, { recursive: true, force: true });
+      removeTempSync(dir);
     });
 
     const post = (headers: Record<string, string>): Promise<{ status: number; body: { error?: string; fromBrowser?: boolean } }> =>

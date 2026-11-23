@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TaskService } from '../server/tasks';
 import type { StaffProfile, TurnCapHit, UsageStopHit } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // O dono leva para "A fazer", pela tela, o card parado em Aguardar por ação cortada (t-093bb6, resposta à revisão da t-f89dcd): vale como ciência do corte,
 // a vez do card retoma a MESMA conversa sem a checagem e o card vai para fazendo. Pela API ou pela varredura, a checagem segue valendo.
@@ -12,9 +13,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-cutack-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const profiles: Record<string, StaffProfile> = {
   'ana-1': { id: 'ana-1', name: 'Ana', role: 'Back-end', autonomy: 'acceptEdits', worktree: false } as StaffProfile,

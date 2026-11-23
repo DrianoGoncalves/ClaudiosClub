@@ -12,9 +12,11 @@ import { STAFF_NOTICE, toolSummary } from '../server/chat/items';
 import { ChatManager } from '../server/chat/manager';
 import { InboxState } from '../server/inboxState';
 import { ChatRegistry } from '../server/chat/registry';
+import { bootTime, type ProcLister } from '../server/procIdentity';
 import { ChatProcess, STREAM_FLAGS } from '../server/chat/process';
 import { readProfile, saveChatChoice, saveProfile } from '../server/staff/store';
 import { accountRulesFile, readAccountRules, saveAccountRules, saveProjectImage, readProjectImage } from '../server/files';
+import { removeTemp } from './support/tmp';
 
 /** Processo falso: o que o Claudio’s Club escreve no stdin fica em `written`; `emit` simula o stdout do claude. */
 function fakeClaude() {
@@ -482,10 +484,13 @@ describe('ChatProcess', () => {
 describe('ChatManager: processo órfão de um servidor que reiniciou', () => {
   const DEAD_SERVER = 99_001;
   const ORPHAN = 99_002;
-  function setup(status: string) {
-    const registry = new ChatRegistry(path.join(root, `chats-${status}.json`));
+  let files = 0;
+  /** `inspect`: o que o sistema diz do processo que tem o pid (o padrão é a conversa de verdade: `claude.exe`, sem hora de criação). */
+  function setup(status: string, inspect: ProcLister = async () => ({ name: 'claude.exe', startedAt: null })) {
+    const registry = new ChatRegistry(path.join(root, `chats-${status}-${files++}.json`));
     const alive = new Set([ORPHAN]);
     const killed: number[] = [];
+    const inspected: number[] = [];
     const lines: string[] = [];
     const m = new ChatManager({
       transcriptsDir: root,
@@ -499,10 +504,15 @@ describe('ChatManager: processo órfão de um servidor que reiniciou', () => {
         killed.push(pid);
         alive.delete(pid);
       },
+      inspectProcess: async (pid) => {
+        inspected.push(pid);
+        return inspect(pid);
+      },
       log: (l) => lines.push(l),
     });
-    return { m, registry, killed, lines };
+    return { m, registry, killed, inspected, lines };
   }
+  const beforeBoot = () => new Date(bootTime() - 3_600_000).toISOString();
 
   it('mandar mensagem para o órfão encerra o processo e segue aqui', async () => {
     const { m, registry, killed, lines } = setup('busy');
@@ -553,11 +563,142 @@ describe('ChatManager: processo órfão de um servidor que reiniciou', () => {
     await ocupado.m.cleanOrphans();
     expect(ocupado.killed).toEqual([]);
   });
+
+  describe('depois de reiniciar o PC (registro de antes do boot)', () => {
+    const live = [{ sessionId: 'orf', pid: ORPHAN, alive: true, entrypoint: 'sdk-cli', status: 'busy' }] as never;
+
+    it('não vira órfão, não é encerrado (nem conferido) e sai do registro na subida', async () => {
+      const { m, registry, killed, inspected, lines } = setup('busy');
+      await registry.add({ sessionId: 'orf', pid: ORPHAN, server: DEAD_SERVER, startedAt: beforeBoot() });
+      expect(await m.orphans(live)).toEqual([]);
+      expect((await m.snapshot('p', 'orf')).elsewhere).toBeNull();
+      await m.cleanOrphans();
+      expect(await registry.read()).toEqual({});
+      expect(killed).toEqual([]);
+      expect(inspected).toEqual([]);
+      expect(lines.some((l) => l.includes('antes do boot'))).toBe(true);
+    });
+
+    it('mandar mensagem não encerra o pid reaproveitado', async () => {
+      const { m, registry, killed } = setup('busy');
+      await registry.add({ sessionId: 'orf', pid: ORPHAN, server: DEAD_SERVER, startedAt: beforeBoot() });
+      await expect(m.send('p', 'orf', null, 'oi')).rejects.toThrow(/não encontrado/);
+      expect(killed).toEqual([]);
+    });
+
+    it('o pid do servidor também foi reaproveitado (igual ao deste servidor ou vivo): o registro sai do mesmo jeito', async () => {
+      const { m, registry, killed } = setup('waiting');
+      await registry.add({ sessionId: 'orf', pid: ORPHAN, server: process.pid, startedAt: beforeBoot() });
+      await m.cleanOrphans();
+      expect(await registry.read()).toEqual({});
+      expect(killed).toEqual([]);
+    });
+
+    it('registro de depois do boot continua órfão legítimo', async () => {
+      const { m, registry } = setup('busy');
+      await registry.add({ sessionId: 'orf', pid: ORPHAN, server: DEAD_SERVER, startedAt: new Date().toISOString() });
+      expect(await m.orphans(live)).toEqual([{ sessionId: 'orf', pid: ORPHAN, status: 'busy' }]);
+    });
+  });
+
+  describe('pid reaproveitado por outro processo (sem reiniciar o PC)', () => {
+    const NOW = () => new Date().toISOString();
+    const stranger: ProcLister = async () => ({ name: 'chrome.exe', startedAt: Date.now() });
+
+    it('mandar mensagem: nome de outra imagem não leva taskkill, só sai o registro, e a sessão deixa de contar como aberta lá', async () => {
+      const { m, registry, killed, inspected, lines } = setup('busy', stranger);
+      await registry.add({ sessionId: 'orf', pid: ORPHAN, server: DEAD_SERVER, startedAt: NOW() });
+      await expect(m.send('p', 'orf', null, 'oi')).rejects.toThrow(/não encontrado/);
+      expect(inspected).toEqual([ORPHAN]);
+      expect(killed).toEqual([]);
+      expect(await registry.read()).toEqual({});
+      expect(lines.some((l) => l.includes('é de outro processo'))).toBe(true);
+      expect((await m.snapshot('p', 'orf')).elsewhere).toBeNull();
+      expect(await m.orphans(live())).toEqual([]);
+    });
+
+    it('"Trazer": não encerra o processo alheio', async () => {
+      const { m, registry, killed } = setup('busy', stranger);
+      await registry.add({ sessionId: 'orf', pid: ORPHAN, server: DEAD_SERVER, startedAt: NOW() });
+      await m.adopt('orf');
+      expect(killed).toEqual([]);
+      expect(await registry.read()).toEqual({});
+    });
+
+    it('na subida: órfão parado de pid reaproveitado não é encerrado', async () => {
+      const { m, registry, killed } = setup('waiting', stranger);
+      await registry.add({ sessionId: 'orf', pid: ORPHAN, server: DEAD_SERVER, startedAt: NOW() });
+      await m.cleanOrphans();
+      expect(killed).toEqual([]);
+      expect(await registry.read()).toEqual({});
+    });
+
+    it('mesmo nome (node), mas criado muito longe da hora gravada: é outro processo', async () => {
+      const { m, registry, killed } = setup('busy', async () => ({ name: 'node.exe', startedAt: Date.now() + 3_600_000 }));
+      await registry.add({ sessionId: 'orf', pid: ORPHAN, server: DEAD_SERVER, startedAt: NOW() });
+      await m.adopt('orf');
+      expect(killed).toEqual([]);
+      expect(await registry.read()).toEqual({});
+    });
+
+    it('o processo já saiu entre a leitura e a conferência: nada a encerrar', async () => {
+      const { m, registry, killed } = setup('busy', async () => null);
+      await registry.add({ sessionId: 'orf', pid: ORPHAN, server: DEAD_SERVER, startedAt: NOW() });
+      await m.adopt('orf');
+      expect(killed).toEqual([]);
+      expect(await registry.read()).toEqual({});
+    });
+
+    it('não deu para olhar o processo: não encerra, não apaga o registro e diz o que fazer', async () => {
+      const { m, registry, killed } = setup('waiting', async () => {
+        throw new Error('powershell sumiu');
+      });
+      await registry.add({ sessionId: 'orf', pid: ORPHAN, server: DEAD_SERVER, startedAt: NOW() });
+      await expect(m.adopt('orf')).rejects.toThrow(/não consegui conferir/);
+      await m.cleanOrphans();
+      expect(killed).toEqual([]);
+      expect(Object.keys(await registry.read())).toEqual(['orf']);
+    });
+
+    function live() {
+      return [{ sessionId: 'orf', pid: ORPHAN, alive: true, entrypoint: 'sdk-cli', status: 'busy', startedAt: null }] as never;
+    }
+  });
+
+  describe('órfão legítimo (mesmo processo, servidor morto, sem reiniciar o PC)', () => {
+    const started = () => new Date().toISOString();
+
+    it('mandar mensagem segue encerrando (claude.exe criado na hora gravada)', async () => {
+      const at = started();
+      const { m, registry, killed, lines } = setup('busy', async () => ({ name: 'claude.exe', startedAt: Date.parse(at) + 40 }));
+      await registry.add({ sessionId: 'orf', pid: ORPHAN, server: DEAD_SERVER, startedAt: at });
+      await expect(m.send('p', 'orf', null, 'oi')).rejects.toThrow(/não encontrado/);
+      expect(killed).toEqual([ORPHAN]);
+      expect(await registry.read()).toEqual({});
+      expect(lines.some((l) => l.includes('retomada aqui'))).toBe(true);
+    });
+
+    it('"Trazer" e a limpeza da subida encerram com node ou codex também', async () => {
+      for (const name of ['node', 'Codex.exe']) {
+        const at = started();
+        const trazer = setup('busy', async () => ({ name, startedAt: Date.parse(at) + 40 }));
+        await trazer.registry.add({ sessionId: 'orf', pid: ORPHAN, server: DEAD_SERVER, startedAt: at });
+        await trazer.m.adopt('orf');
+        expect(trazer.killed).toEqual([ORPHAN]);
+
+        const subida = setup('waiting', async () => ({ name, startedAt: Date.parse(at) + 40 }));
+        await subida.registry.add({ sessionId: 'orf', pid: ORPHAN, server: DEAD_SERVER, startedAt: at });
+        await subida.m.cleanOrphans();
+        expect(subida.killed).toEqual([ORPHAN]);
+        expect(await subida.registry.read()).toEqual({});
+      }
+    });
+  });
 });
 
 describe('ChatManager: assumir sessão aberta em outro lugar', () => {
   const OTHER = 99_101;
-  function setup(status: string | null, present = true) {
+  function setup(status: string | null, present = true, inspect: ProcLister = async () => ({ name: 'claude.exe', startedAt: null })) {
     const alive = new Set(present ? [OTHER] : []);
     const killed: number[] = [];
     const m = new ChatManager({
@@ -571,6 +712,7 @@ describe('ChatManager: assumir sessão aberta em outro lugar', () => {
         killed.push(pid);
         alive.delete(pid);
       },
+      inspectProcess: inspect,
       log: () => {},
     });
     return { m, killed };
@@ -594,6 +736,13 @@ describe('ChatManager: assumir sessão aberta em outro lugar', () => {
     const { m, killed } = setup('waiting', false);
     await m.takeOver('ter');
     expect(killed).toEqual([]);
+  });
+
+  it('pid do arquivo de sessão reaproveitado por outro processo: não encerra e a sessão deixa de contar como aberta lá', async () => {
+    const { m, killed } = setup('waiting', true, async () => ({ name: 'chrome.exe', startedAt: null }));
+    await m.takeOver('ter');
+    expect(killed).toEqual([]);
+    expect((await m.snapshot('p', 'ter')).elsewhere).toBeNull();
   });
 });
 
@@ -991,9 +1140,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-chat-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 describe('readHistory', () => {
   it('lê do transcript as mensagens, ferramentas e o contexto, sem o texto injetado pelo sistema', async () => {

@@ -136,8 +136,13 @@ export function QuickJump({
     [found, sessionOf, titles],
   );
 
-  const words = fold(query).split(/\s+/).filter(Boolean);
-  const named = words.length ? items.filter((i) => words.every((w) => fold(`${i.title} ${i.detail} ${KIND[i.kind]}`).includes(w))) : items;
+  // O texto de busca de cada item já normalizado (sem acento, minúsculo) uma vez por lista: antes, cada tecla e cada passada do mouse
+  // normalizavam de novo todos os itens (funcionários, projetos e as centenas de tarefas).
+  const hay = useMemo(() => items.map((i) => fold(`${i.title} ${i.detail} ${KIND[i.kind]}`)), [items]);
+  const named = useMemo(() => {
+    const words = fold(query).split(/\s+/).filter(Boolean);
+    return words.length ? items.filter((_, n) => words.every((w) => hay[n]!.includes(w))) : items;
+  }, [items, hay, query]);
   const shown = [...named.slice(0, MAX), ...hits].slice(0, MAX + 8);
 
   useEffect(() => {

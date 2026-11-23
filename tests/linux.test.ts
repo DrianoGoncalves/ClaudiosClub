@@ -7,6 +7,7 @@ import { AgentInput, saveAgent } from '../server/adapters/claude/agentWrite';
 import { browserStatus, EXTENSION_ID } from '../server/browser';
 import { killTree } from '../server/chat/registry';
 import { openLoginTerminal } from '../server/auth';
+import { removeTemp } from './support/tmp';
 
 // Caminhos e processos do Linux/macOS (o que o Windows não exercita): grupo de processos, navegador no ~/.config e
 // a ferramenta PowerShell fora do Windows.
@@ -47,7 +48,7 @@ describe.skipIf(process.platform !== 'linux')('navegador no Linux', () => {
   });
   afterEach(async () => {
     process.env.HOME = oldHome;
-    await fs.rm(home, { recursive: true, force: true });
+    await removeTemp(home);
   });
 
   it('acha a extensão no perfil do Chromium e a ponte no NativeMessagingHosts', async () => {
@@ -85,7 +86,7 @@ describe('ferramenta PowerShell', () => {
       else expect(raw).not.toContain('PowerShell');
       expect(a.name).toBe('executor');
     } finally {
-      await fs.rm(root, { recursive: true, force: true });
+      await removeTemp(root);
     }
   });
 });
@@ -109,7 +110,7 @@ describe.skipIf(process.platform !== 'linux')('login num terminal no Linux', () 
       expect(args).toContain('claude auth login --claudeai');
     } finally {
       process.env.PATH = oldPath;
-      await fs.rm(bin, { recursive: true, force: true });
+      await removeTemp(bin);
     }
   });
 
@@ -123,7 +124,7 @@ describe.skipIf(process.platform !== 'linux')('login num terminal no Linux', () 
       expect(r.error).toContain('nenhum terminal');
     } finally {
       process.env.PATH = oldPath;
-      await fs.rm(bin, { recursive: true, force: true });
+      await removeTemp(bin);
     }
   });
 });

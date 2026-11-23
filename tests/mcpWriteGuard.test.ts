@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // O hook de escrita por MCP (scripts/hooks/mcp-write-guard.mjs) rodado de verdade, e a conversa que o leva na própria pasta
 // (prepareRun): a política (mcp-write.json) é a da conversa, e nenhum MCP vira regra por ferramenta no --disallowedTools.
@@ -27,9 +28,7 @@ const hookSrc = (name: string) => fileURLToPath(new URL(`../scripts/hooks/${name
 const hook = hookSrc('mcp-write-guard.mjs');
 
 const roots: string[] = [home];
-afterAll(async () => {
-  for (const r of roots) await fs.rm(r, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(...roots));
 
 async function tmp(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));

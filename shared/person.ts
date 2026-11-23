@@ -20,6 +20,7 @@ export const ALLOCATION_FIELDS = [
   'mcpAccess',
   'knowledge',
   'canHire',
+  'canRelease',
   'worktree',
   'servers',
   'sshWrite',

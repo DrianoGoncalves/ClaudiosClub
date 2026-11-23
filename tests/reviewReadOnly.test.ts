@@ -9,6 +9,7 @@ import type { ToolAdapter } from '../server/adapters/types';
 import { CodexProcess } from '../server/chat/codexProcess';
 import { StaffService, type StaffServiceOptions } from '../server/staff/service';
 import { readProfile } from '../server/staff/store';
+import { removeTemp } from './support/tmp';
 
 // A conversa de revisão de tarefa não edita arquivo do projeto (t-d74d52), nos dois motores: no Claude saem Edit, MultiEdit, Write e NotebookEdit
 // (`--disallowedTools`); no Codex a sandbox é só de leitura. A memória do próprio revisor segue pelo MCP `myco-memoria`. Vale ao reabrir a conversa.
@@ -20,9 +21,7 @@ beforeAll(async () => {
   projectPath = path.join(root, 'proj');
   await fs.mkdir(projectPath, { recursive: true });
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const project = (): Project => ({ id: 'proj-id', path: projectPath, name: 'proj', exists: true, worktreeOf: null, hasClaudeMd: false, agentCount: 0, skillCount: 0, sessionCount: 0, lastActivityAt: null });
 const adapter = { listProjects: async () => [project()] } as unknown as ToolAdapter;

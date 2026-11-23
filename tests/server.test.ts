@@ -8,6 +8,7 @@ import { readUsage } from '../server/usage';
 import { projectBudgetHit, UsageStopError } from '../server/usageStop';
 import type { AccountUsage } from '../shared/model';
 import { ensureMycoGitignore, IGNORED_IMAGES } from '../server/mycoGitignore';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 
@@ -15,9 +16,7 @@ beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-server-'));
 });
 
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 describe('.myco/.gitignore', () => {
   it('cria com as imagens e, se já existe, só acrescenta o que falta', async () => {

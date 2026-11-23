@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { StaffProfile } from '../shared/model';
 import { GuideActionError, guideActionText, GuideChanges, MAX_LISTED_FILES, runGuideAction } from '../server/guideActions';
 import { GUIDE_TEMPLATE, recordCheck, SHOWCASE_CHECK_PATH } from '../server/projectGuide';
+import { removeTemp } from './support/tmp';
 
 describe('ações do guia: textos', () => {
   it('cada ação começa com o rótulo dela, em pt-BR', () => {
@@ -60,9 +61,7 @@ describe('ações do guia: runGuideAction', () => {
     sent = [];
   });
 
-  afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
-  });
+  afterEach(() => removeTemp(dir));
 
   it('teste com SPEC.md: abre conversa nova do funcionário com o texto da ação e devolve o id', async () => {
     await fs.writeFile(path.join(dir, 'SPEC.md'), '# Guia\n', 'utf8');
@@ -140,9 +139,7 @@ describe('vitrine (ação showcase): gerador oculto, sem funcionário', () => {
     sent = [];
   });
 
-  afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
-  });
+  afterEach(() => removeTemp(dir));
 
   it('textos: gerar sem CTA e sem Explore; atualizar com a lista; atualizar sem base; rodapé com o sha curto só com git', () => {
     const c = guideActionText('showcase');

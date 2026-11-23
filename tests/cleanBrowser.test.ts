@@ -15,6 +15,7 @@ import {
 } from '../server/chat/codexArgs';
 import { buildClaudeArgs, renderFicha } from '../server/staff/ficha';
 import { cleanBrowserChannel, cleanBrowserOf, NAVEGADOR_CACHE_DIR, prepareCodexRun, prepareRun, type LaunchContext } from '../server/staff/launch';
+import { removeTemp } from './support/tmp';
 
 // O navegador limpo (MCP `myco-navegador`): um Playwright MCP com perfil em memória, sem logins, para os dois motores. Quando entra,
 // como vai na linha de comando e no mcp.json, e o que a ficha diz (igual nos dois motores).
@@ -46,10 +47,7 @@ beforeAll(async () => {
   await fs.writeFile(CLI, '// cli de teste');
   await fs.writeFile(BUNDLE, '// pacote de teste');
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-  await fs.rm(home, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, home));
 
 const CLEAN_ON = 'Navegador limpo: o MCP `myco-navegador` abre um Chrome à parte';
 const count = (text: string, part: string) => text.split(part).length - 1;

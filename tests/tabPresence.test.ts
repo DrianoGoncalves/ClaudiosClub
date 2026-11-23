@@ -11,6 +11,7 @@ import { EXTENSION_ORIGIN } from '../server/extension/identity';
 import { gate } from '../server/gate';
 import { Pairing } from '../server/pairing';
 import { PresenceBody, TAB_CHECK_MS, TAB_GRACE_MS, TAB_TTL_MS, TabPresence } from '../server/tabPresence';
+import { removeTempSync } from './support/tmp';
 
 // Parar o Club ao fechar a aba (t-cafbf3): a opção no config, a lógica de presença e carência (relógio falso) e a porta de entrada (gate de verdade).
 
@@ -18,7 +19,7 @@ let dir: string;
 beforeAll(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'myco-tabpresence-'));
 });
-afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterAll(() => removeTempSync(dir));
 
 describe('opção stopOnTabClose (config)', () => {
   const fileWith = (name: string, content: unknown) => {

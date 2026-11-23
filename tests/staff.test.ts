@@ -24,6 +24,7 @@ import {
 import { ROOT } from '../server/root';
 import { buildMcpConfig, listMcpServers } from '../server/staff/mcp';
 import { StaffError, StaffService } from '../server/staff/service';
+import { StateBusyError } from '../server/atomicWrite';
 import { readProfile, saveChatChoice, StaffInputSchema, writeAtomic } from '../server/staff/store';
 import { AGENT_PRESETS } from '../shared/agentPresets';
 import { BUILTIN_ROLES } from '../shared/roles';
@@ -31,6 +32,7 @@ import { listRoles, saveRole } from '../server/roles';
 import { PERSONALITIES, PERSONALITY_PROMPTS, personalityName, personalityReminder, personalitySection } from '../shared/personality';
 import { staffSettings } from '../server/staff/launch';
 import { CLEAN_BROWSER_MCP_NAME } from '../server/chat/codexArgs';
+import { removeTemp } from './support/tmp';
 
 // Os cargos (server/roles.ts) e a config leem MYCO_HOME: uma pasta temporária, para não usar o ~/.myco de quem roda os testes.
 const home = await vi.hoisted(async () => {
@@ -240,6 +242,25 @@ describe('ficha', () => {
     expect(renderFicha(profile(), { ...ctx, mycoUrl: '' })).not.toContain('## Despertador');
   });
 
+  it('"Pode versionar e fazer deploy" (canRelease): a seção da pausa de versão só aparece com a permissão, igual para Claude e Codex, e sem o endereço do Club não sai', () => {
+    for (const engine of ['claude', 'codex'] as const) {
+      const com = renderFicha(profile({ projectId: 'proj-x', engine, canRelease: true }), ctx).replaceAll('AGENTS.md', 'INSTRUCOES.md');
+      const section = com.slice(com.indexOf('## Versão e deploy'), com.indexOf('## Despertador'));
+      expect(section, engine).toContain('"Pode versionar e fazer deploy"');
+      expect(section).toContain('POST http://127.0.0.1:4848/api/projects/proj-x/version-pause com os cabeçalhos `x-myco: 1` e `x-myco-token: $MYCO_TOKEN`');
+      expect(section).toContain('{"minutes": 30} (de 1 a 120, obrigatório)');
+      expect(section).toContain('POST http://127.0.0.1:4848/api/projects/proj-x/version-pause/end');
+      expect(section).toContain('nada novo começa');
+      expect(section).toContain('os arquivos ainda podem mudar');
+      expect(section).toContain('sai sozinha no fim do prazo');
+      // Sem a permissão (ou com ela desligada, ou numa ficha antiga sem o campo): nada de seção.
+      for (const over of [{ canRelease: false }, {}]) expect(renderFicha(profile({ projectId: 'proj-x', engine, ...over }), ctx), engine).not.toContain('Versão e deploy');
+      expect(renderFicha(profile({ engine, canRelease: true }), { ...ctx, mycoUrl: '' })).not.toContain('Versão e deploy');
+      // No Codex a ficha não cita o que ele não tem (agents, skills, Chrome, Monitor, revisor).
+      if (engine === 'codex') for (const banned of [/\bAgent\b/, /agents?\b/i, /subagent/i, /pesquisador|executor|revisor/i, /Chrome/i, /Monitor/, /skills?\b/i, /Claude Code/, /mcp__/]) expect(section, String(banned)).not.toMatch(banned);
+    }
+  });
+
   it('memória: a ficha cita a pasta <id>.memory/ como índice, e sem o sufixo .memory.md não mostra a linha da pasta', () => {
     const md = renderFicha(profile(), ctx);
     const section = md.slice(md.indexOf('## Memória'), md.indexOf('- Ponto de corte'));
@@ -406,9 +427,7 @@ beforeAll(async () => {
   );
 });
 
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, home));
 
 describe('estilo de comunicação', () => {
   it('sem estilo a ficha não tem a seção; com caveman tem, como última seção, com o texto do preset', () => {
@@ -503,7 +522,7 @@ describe('estilo de comunicação', () => {
       await fs.writeFile(arquivo, '  \n');
       expect(execFileSync(process.execPath, [script, arquivo]).toString()).toBe('');
     } finally {
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTemp(dir);
     }
   });
 
@@ -519,22 +538,26 @@ describe('estilo de comunicação', () => {
 describe('infra: servidores por SSH', () => {
   it('lista só as conexões completas do projeto, sem usuário nem chave (o ~/.ssh/config fica de fora)', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-srv-'));
-    const key = path.join(dir, 'chave');
-    await fs.writeFile(key, 'x');
-    await fs.mkdir(path.join(dir, 'proj', '.vps'), { recursive: true });
-    await fs.writeFile(
-      path.join(dir, 'proj', '.vps', 'config.json'),
-      JSON.stringify({
-        connections: {
-          prod: { host: 'vps-a.example.com', user: 'deploy', identityFile: key, remoteRoot: '/var/www/app' },
-          apelido: { host: 'VPS' },
-          'mal nome': { host: 'x' },
-        },
-      }),
-    );
-    const list = await listServers(path.join(dir, 'proj'));
-    expect(list).toEqual([{ name: 'prod', source: 'vps', protocol: 'ssh', host: 'vps-a.example.com', remoteRoot: '/var/www/app' }]);
-    expect(JSON.stringify(list)).not.toMatch(/chave|deploy|identity/i);
+    try {
+      const key = path.join(dir, 'chave');
+      await fs.writeFile(key, 'x');
+      await fs.mkdir(path.join(dir, 'proj', '.vps'), { recursive: true });
+      await fs.writeFile(
+        path.join(dir, 'proj', '.vps', 'config.json'),
+        JSON.stringify({
+          connections: {
+            prod: { host: 'vps-a.example.com', user: 'deploy', identityFile: key, remoteRoot: '/var/www/app' },
+            apelido: { host: 'VPS' },
+            'mal nome': { host: 'x' },
+          },
+        }),
+      );
+      const list = await listServers(path.join(dir, 'proj'));
+      expect(list).toEqual([{ name: 'prod', source: 'vps', protocol: 'ssh', host: 'vps-a.example.com', remoteRoot: '/var/www/app' }]);
+      expect(JSON.stringify(list)).not.toMatch(/chave|deploy|identity/i);
+    } finally {
+      await removeTemp(dir);
+    }
   });
 
   it('a ficha traz as conexões e as regras; a linha de comando bloqueia chaves e .env', () => {
@@ -756,6 +779,40 @@ describe('StaffService', () => {
     expect(await svc.isManagerOf('proj-id', boss.id, r!.profile.id)).toBe(true);
     expect(await svc.isManagerOf('proj-id', r!.profile.id, boss.id)).toBe(false);
     expect(await svc.isManagerOf('proj-id', 'ninguem', r!.profile.id)).toBe(false);
+  });
+
+  it('canRelease: padrão desligado; o navegador liga; contratado pela API nasce sem (mesmo pedindo); editar sem o campo mantém e com false desliga; ficha antiga lê como desligada', async () => {
+    const svc = service();
+    const staffDir = path.join(projectPath, '.myco', 'staff');
+    const off = (await svc.hire('proj-id', { ...input, name: 'Sem Permissao', launch: false }, true))!.profile;
+    expect(off.canRelease).toBe(false);
+    const on = (await svc.hire('proj-id', { ...input, name: 'Com Permissao', canHire: true, canRelease: true, launch: false }, true))!.profile;
+    expect(on.canRelease).toBe(true);
+    expect(await fs.readFile(path.join(staffDir, `${on.id}.md`), 'utf8')).toContain('## Versão e deploy');
+    expect(await fs.readFile(path.join(staffDir, `${off.id}.md`), 'utf8')).not.toContain('Versão e deploy');
+
+    // Pela API (gestor com canHire): o subfuncionário nasce sem a permissão, mesmo que o pedido a traga.
+    const sub = (await svc.hire('proj-id', { ...input, name: 'Subordinada', canRelease: true, reportsTo: on.id, launch: false }, false))!.profile;
+    expect(sub.canRelease).toBe(false);
+    expect(await fs.readFile(path.join(staffDir, `${sub.id}.md`), 'utf8')).not.toContain('Versão e deploy');
+
+    // Editar pela tela atual (que ainda não manda o campo) não desliga a permissão; mandar false desliga, e a seção sai da ficha.
+    const corpo = { name: 'Com Permissao', role: 'Dev', mission: 'Implementar', autonomy: 'acceptEdits', mcps: ['docs'], canHire: true };
+    await svc.update('proj-id', on.id, corpo);
+    expect((await readProfile(projectPath, on.id))!.canRelease).toBe(true);
+    expect(await fs.readFile(path.join(staffDir, `${on.id}.md`), 'utf8')).toContain('## Versão e deploy');
+    await svc.update('proj-id', on.id, { ...corpo, canRelease: false });
+    expect((await readProfile(projectPath, on.id))!.canRelease).toBe(false);
+    expect(await fs.readFile(path.join(staffDir, `${on.id}.md`), 'utf8')).not.toContain('Versão e deploy');
+    await svc.update('proj-id', on.id, { ...corpo, canRelease: true });
+    expect((await readProfile(projectPath, on.id))!.canRelease).toBe(true);
+
+    // Ficha gravada antes do campo existir: lê como desligada.
+    const file = path.join(staffDir, `${off.id}.json`);
+    const raw = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>;
+    delete raw.canRelease;
+    await fs.writeFile(file, JSON.stringify(raw));
+    expect((await readProfile(projectPath, off.id))!.canRelease).toBe(false);
   });
 
   it('PATCH: sem o campo mantém o estilo; null tira, e a seção sai da ficha', async () => {
@@ -1207,14 +1264,22 @@ describe('StaffService', () => {
       expect((await fs.readdir(path.dirname(file))).filter((n) => n.endsWith('.tmp'))).toEqual([]);
     });
 
-    it('writeAtomic: rename que falha sempre (EPERM) relança o erro original e não deixa .tmp', async () => {
+    it('writeAtomic: rename que falha sempre (EPERM) esgota as tentativas em StateBusyError (causa = o erro original) e não deixa .tmp', async () => {
       const file = path.join(root, 'atomic-fail', 'f.json');
       const eperm = Object.assign(new Error('EPERM simulado'), { code: 'EPERM' });
       const spy = vi.spyOn(fs, 'rename').mockRejectedValue(eperm);
+      // As esperas (alguns segundos no total) correm na hora: o que se testa é o desfecho, não o relógio (ver stateBusy.test.ts).
+      const timer = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void) => {
+        queueMicrotask(fn);
+        return 0 as unknown as NodeJS.Timeout;
+      }) as typeof setTimeout);
       try {
-        await expect(writeAtomic(file, 'x\n')).rejects.toBe(eperm);
+        const err = await writeAtomic(file, 'x\n').catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(StateBusyError);
+        expect((err as StateBusyError).cause).toBe(eperm);
         expect(spy.mock.calls.length).toBeGreaterThan(1); // tentou de novo
       } finally {
+        timer.mockRestore();
         spy.mockRestore();
       }
       expect((await fs.readdir(path.dirname(file))).filter((n) => n.endsWith('.tmp'))).toEqual([]);

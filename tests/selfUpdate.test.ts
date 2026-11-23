@@ -4,11 +4,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyUpdate, readUpdateStatus, SelfUpdater } from '../server/selfUpdate';
+import { removeTempSync } from './support/tmp';
 
 // Um "GitHub" de mentira (repositório bare), o clone em que o Claudio’s Club roda e outro clone que publica
 // as versões (tags).
 
-// Dezenas de chamadas ao git por teste (e o beforeEach clona dois repositórios): sob carga passam dos 5 s padrão.
+// Dezenas de chamadas ao git por teste (e o beforeEach clona dois repositórios): sob carga passam dos 5 s padrão, e um teste que estoura o prazo
+// segue rodando depois do afterEach e recria a pasta já apagada (sobravam árvores inteiras no TEMP).
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 let dir: string;
@@ -39,7 +41,7 @@ beforeEach(() => {
   git(dir, 'clone', '-q', remote, app);
 });
 
-afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterEach(() => removeTempSync(dir));
 
 /** Publica uma versão: tag anotada com as notas, enviada ao remoto. */
 function release(tag: string, notes = `versão ${tag}`) {

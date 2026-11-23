@@ -6,6 +6,7 @@ import type { StaffProfile, Task } from '../shared/model';
 import { resolveCaller, SessionTokens, type Engine } from '../server/callers';
 import { renderFicha, type FichaContext } from '../server/staff/ficha';
 import { TaskBusyError, TaskConflictError, TaskError, TaskForbiddenError, TaskService } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 // Funcionário edita pela API a tarefa que ainda não começou (Aguardar e A fazer): quem pediu ou o gestor de quem faz, com o token da conversa.
 
@@ -13,9 +14,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-edit-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const person = (id: string, name: string, reportsTo: string[] = []) => ({ id, name, autonomy: 'acceptEdits', worktree: false, servers: [], reportsTo }) as unknown as StaffProfile;
 

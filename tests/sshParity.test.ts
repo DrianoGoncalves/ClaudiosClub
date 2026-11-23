@@ -7,6 +7,7 @@ import { buildClaudeArgs } from '../server/staff/ficha';
 import { prepareCodexRun, prepareRun, sshLaunchOf, type LaunchContext } from '../server/staff/launch';
 import { ROOT } from '../server/root';
 import { SSH_MCP_NAME, SSH_READ_TOOLS } from '../server/staff/sshMcp';
+import { removeTemp } from './support/tmp';
 
 // O MCP de SSH (`myco-ssh`) tem de sair igual nos dois motores: o mesmo comando e os mesmos argumentos, a mesma escrita e a mesma
 // barreira (projeto do Club, pacote ausente, acesso desligado). No Claude, a lista de leitura vai ao mcp-write.json e às --allowedTools.
@@ -29,10 +30,7 @@ beforeAll(async () => {
   BUNDLE = path.join(root, 'ssh-mcp.mjs');
   await fs.writeFile(BUNDLE, '// pacote de teste');
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-  await fs.rm(home, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, home));
 
 const profile = (over: Partial<StaffProfile> = {}) =>
   ({

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { editorEnv, editorFor, hasGraphicalSession, openEditorRoute, openInEditor, type SpawnFn } from '../server/openInEditor';
 import { isBlockedRel, ProjectFileError } from '../server/projectFiles';
+import { removeTemp } from './support/tmp';
 
 // "Corrigir" / arquivo de segredo da aba Arquivos (t-e45afe): o servidor abre o arquivo num editor de texto fixo e nunca devolve nem lê o conteúdo.
 // Só abre arquivo de segredo e confere o caminho real de novo antes do `spawn` (t-d62471). Nenhum teste abre janela: o `spawn` é um mock, que confere o
@@ -63,9 +64,7 @@ beforeAll(async () => {
   }
   realProj = await fs.realpath(proj);
 });
-afterAll(async () => {
-  await fs.rm(base, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(base));
 afterEach(() => vi.restoreAllMocks());
 
 interface Call {

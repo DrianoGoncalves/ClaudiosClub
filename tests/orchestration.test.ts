@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { FileCost, TranscriptCost } from '../server/adapters/claude/costs';
 import { buildOrchestration, buildSavings, readAllMarks, readMarks, saveMark, savingsSince } from '../server/orchestration';
+import { removeTemp } from './support/tmp';
 
 const tokens = (input: number, output: number) => ({ input, output, write: 0, write1h: 0, read: 0 });
 
@@ -42,13 +43,18 @@ describe('valeu a pena?', () => {
   });
 
   it('guarda e tira marcas por sessão', async () => {
-    const file = path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'myco-marks-')), 'marks.json');
-    await saveMark('s1', 'agent-a', 'used', file);
-    await saveMark('s1', 'agent-b', 'partial', file);
-    expect(await readMarks('s1', file)).toEqual({ 'agent-a': 'used', 'agent-b': 'partial' });
-    await saveMark('s1', 'agent-a', null, file);
-    expect(await readMarks('s1', file)).toEqual({ 'agent-b': 'partial' });
-    expect(await readMarks('outra', file)).toEqual({});
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-marks-'));
+    try {
+      const file = path.join(dir, 'marks.json');
+      await saveMark('s1', 'agent-a', 'used', file);
+      await saveMark('s1', 'agent-b', 'partial', file);
+      expect(await readMarks('s1', file)).toEqual({ 'agent-a': 'used', 'agent-b': 'partial' });
+      await saveMark('s1', 'agent-a', null, file);
+      expect(await readMarks('s1', file)).toEqual({ 'agent-b': 'partial' });
+      expect(await readMarks('outra', file)).toEqual({});
+    } finally {
+      await removeTemp(dir);
+    }
   });
 });
 
@@ -127,11 +133,16 @@ describe('ranking de economia', () => {
   });
 
   it('lê as marcas de todas as sessões de uma vez', async () => {
-    const file = path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'myco-marks-')), 'marks.json');
-    expect(await readAllMarks(file)).toEqual({});
-    await saveMark('s1', 'agent-a', 'used', file);
-    await saveMark('s2', 'agent-b', 'discarded', file);
-    expect(await readAllMarks(file)).toEqual({ s1: { 'agent-a': 'used' }, s2: { 'agent-b': 'discarded' } });
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-marks-'));
+    try {
+      const file = path.join(dir, 'marks.json');
+      expect(await readAllMarks(file)).toEqual({});
+      await saveMark('s1', 'agent-a', 'used', file);
+      await saveMark('s2', 'agent-b', 'discarded', file);
+      expect(await readAllMarks(file)).toEqual({ s1: { 'agent-a': 'used' }, s2: { 'agent-b': 'discarded' } });
+    } finally {
+      await removeTemp(dir);
+    }
   });
 
   it('o início do período conta hoje como o 1º dia', () => {

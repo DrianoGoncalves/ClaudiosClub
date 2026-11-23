@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildStartPage } from '../server/startPage';
+import { removeTemp } from './support/tmp';
 
 describe('página de início servida pela porta', () => {
   it('vai num arquivo só: CSS e ícones embutidos, nada relativo à pasta do projeto', async () => {
@@ -48,7 +49,7 @@ describe('log na página de início', () => {
       expect(await readTail(file, 22)).toBe('linha-tres\n');
       expect(await readTail(path.join(dir, 'nao-existe.log'))).toBe('');
     } finally {
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTemp(dir);
     }
   });
 });

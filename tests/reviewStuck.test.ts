@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { REVIEW_WAIT_MS } from '../server/retryPolicy';
 import { TaskService, ownAlerts, stuckState } from '../server/tasks';
 import type { StaffProfile, Task } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Card em revisão sem revisão aberta (t-2a8ee8): `stuckState` o marca como parada ('review', "Delegar revisão") passado o prazo, e o fim "conversa parou sem terminar" não o deixa em revisão
 // sem ninguém olhar: com o que revisar abre a revisão automática; sem nada alterado vai para Aguardar, com o motivo, e quem pediu é avisado. Repositório git de verdade no segundo bloco.
@@ -16,9 +17,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-reviewstuck-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const MIN = 60_000;
 const T0 = Date.parse('2026-11-18T12:31:00.000Z');

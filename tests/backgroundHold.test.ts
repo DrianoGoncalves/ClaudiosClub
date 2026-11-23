@@ -8,6 +8,7 @@ import { ChatManager } from '../server/chat/manager';
 import { BACKGROUND_WAIT_MS } from '../server/retryPolicy';
 import { TaskService } from '../server/tasks';
 import type { BackgroundTask, StaffProfile, Task } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Turno que termina com trabalho em segundo plano (t-aff796, caso t-33b84c): o resumo "rodando em segundo plano; retomo quando terminar" virou entrega e abriu a revisão em
 // cima de trabalho pela metade. Agora o card segue em "fazendo" (sem delivery, sem revisão, sem aviso) até o turno que vem depois do término; o que nunca termina tem prazo.
@@ -16,9 +17,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-bghold-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const WAIT_MIN = BACKGROUND_WAIT_MS / 60_000;
 const STALE = 'Lote A de mutações rodando em segundo plano; retomo quando terminar.';

@@ -16,6 +16,7 @@ import { consultDenyRules, buildClaudeConsultArgs, secretDenyRules } from '../se
 import { CONSULT_GUIDE_MAX_BYTES } from '../server/staff/consultGuide';
 import { StaffService } from '../server/staff/service';
 import { profileFile, readProfile } from '../server/staff/store';
+import { removeTemp } from './support/tmp';
 
 // O perfil SÓ LEITURA da conversa de consulta (t-ee823d), nos dois motores, e as duas ressalvas do Tupac: R2 (a leitura é só a pasta do projeto: `.myco`, MYCO_HOME, ~/.codex, ~/.claude, outros
 // projetos e `.env` ficam negados, inclusive no Codex) e R3 (todo pedido de permissão da conversa de consulta é negado na hora, sem virar aprovação na tela do dono). Provado também com chamada real
@@ -40,10 +41,7 @@ beforeAll(async () => {
   await fs.mkdir(proj, { recursive: true });
   await fs.mkdir(outro, { recursive: true });
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-  await fs.rm(base, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, base));
 
 const mkProject = (id: string, dir: string): Project => ({ id, path: dir, name: path.basename(dir), exists: true, worktreeOf: null, hasClaudeMd: false, agentCount: 0, skillCount: 0, sessionCount: 0, lastActivityAt: null });
 const service = () =>

@@ -3,14 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { appendRun, readRuns, RUNS_ROTATE_BYTES, type TaskRunEvent } from '../server/taskRuns';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-runs-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const ev = (over: Partial<TaskRunEvent> = {}): TaskRunEvent => ({ ev: 'start', runId: 'r-1', taskId: 't-1', staffId: 'ana-1', at: new Date().toISOString(), ...over });
 

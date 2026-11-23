@@ -6,6 +6,7 @@ import type { AccountUsage, Project } from '../shared/model';
 import type { ToolAdapter } from '../server/adapters/types';
 import { StaffService, type StaffServiceOptions } from '../server/staff/service';
 import { readProfile, saveProfile, StaffInputSchema } from '../server/staff/store';
+import { removeTemp } from './support/tmp';
 
 // Motor secundário (fallback) na ficha: o que o servidor aceita ao contratar e ao editar. Só o dado; nada o usa ainda.
 
@@ -18,9 +19,7 @@ beforeAll(async () => {
   // 'site' é uma conexão FTP (o Codex não aceita); 'vps1' não existe e não conta como FTP.
   await fs.writeFile(path.join(projectPath, '.vps', 'ftp.json'), JSON.stringify({ connections: { site: { protocol: 'ftps', host: 'ftp.example.com', port: 21, user: 'deploy', remoteRoot: '/' } } }));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const project = (): Project => ({
   id: 'proj-id',

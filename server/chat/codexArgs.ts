@@ -322,6 +322,8 @@ export function codexGitMcpArgs(s: CodexMcpServer | null | undefined): string[] 
  * `hooks.json` criado nesse intervalo roda nesta execução; a próxima já o vê) e a lista de lugares de hook do Codex, que muda de versão para
  * versão (plugins, outro nome de arquivo): revisar a cada Codex novo (tests/codexHooksE2e.test.ts, com MYCO_CODEX_E2E=1, refaz a matriz).
  * Quem NÃO usa a flag: o `perguntar_gpt` (codexSafetyArgs), que só lê.
+ * O hook do git destrutivo (scripts/hooks/git-guard.mjs, `git`) vai pelo mesmo caminho e pelas mesmas regras da flag: com `hooks.json` na conta, nenhum dos dois
+ * roda, e o aviso (`onHeavyGuardOff`) diz isso. O Codex avisa que PreToolUse é "guardrail, não fronteira completa" (hooks.md): ver o limite no git-guard-lib.mjs.
  */
 export interface CodexHeavyGuard {
   /** O heavy-guard.mjs, a cópia na pasta da conversa: o hook roda FORA da sandbox, então o agente não pode editá-lo. */
@@ -330,6 +332,8 @@ export interface CodexHeavyGuard {
   lockDir: string;
   /** Quem segura a trava enquanto a conversa vive: o servidor do Claudio’s Club. O shell que abre o hook morre a cada chamada (provado: o ppid muda). */
   ownerPid: number;
+  /** O bloqueio do git que descarta trabalho não commitado no checkout principal: o git-guard.mjs (cópia, ao lado do git-guard-lib.mjs) e a pasta do projeto. Ausente = sem ele. */
+  git?: { hook: string; projectPath: string };
 }
 
 /** A trava do Codex vale tanto quanto o limite dos testes do servidor (10 min) mais uma folga: a chamada do Codex não traz timeout. */
@@ -337,6 +341,8 @@ export const CODEX_HEAVY_LEASE_S = 12 * 60;
 /** A espera máxima do hook (13 min, no heavy-guard.mjs) cabe aqui. */
 const CODEX_HEAVY_PRE_TIMEOUT_S = 15 * 60;
 const CODEX_HEAVY_POST_TIMEOUT_S = 30;
+/** O git-guard abre o shell do Codex, o node e até três `git`; na partida fria o hook chega a dezenas de segundos (ver tests/codexHooksE2e.test.ts), e estourar o prazo deixa o comando passar. */
+const CODEX_GIT_PRE_TIMEOUT_S = 60;
 
 /** A pasta de dados do Codex como ele a acha: `CODEX_HOME` (vazia vale como ausente; relativa, a partir da pasta onde o `codex` roda) ou `~/.codex`. */
 function codexHomeDir(cwd: string, env: NodeJS.ProcessEnv, home: string): string {
@@ -371,16 +377,26 @@ export function accountHooksFile(cwd: string, env: NodeJS.ProcessEnv = process.e
  */
 export function codexHeavyArgs(g: CodexHeavyGuard | null | undefined, o: { accountHooks?: string | null; platform?: NodeJS.Platform } = {}): string[] {
   if (!g || o.accountHooks) return [];
-  const [node, ...paths] = [process.execPath, g.hook, g.lockDir].map((p) => p.replace(/\\/g, '/'));
-  if ([node, ...paths].some((p) => /["`$%\r\n]/.test(p!))) return [];
+  const slashes = (...ps: string[]) => ps.map((p) => p.replace(/\\/g, '/'));
+  // Cada hook entra se os caminhos dele cabem entre aspas no shell; um que não cabe sai sozinho (o outro segue) e, sem nenhum, a flag não fica sozinha.
+  const fits = (ps: string[]) => !ps.some((p) => /["`$%\r\n]/.test(p));
+  const [node] = slashes(process.execPath);
   const exe = `${(o.platform ?? process.platform) === 'win32' ? '& ' : ''}"${node}"`;
-  const run = (stage: 'pre' | 'post') => `${exe} "${paths[0]}" "${paths[1]}" ${stage} ${g.ownerPid} ${CODEX_HEAVY_LEASE_S}`;
-  const group = (stage: 'pre' | 'post', timeout: number) =>
-    `[{matcher=${tomlString('Bash')},hooks=[{type=${tomlString('command')},command=${tomlString(run(stage))},timeout=${timeout}}]}]`;
+  const group = (command: string, timeout: number) => `{matcher=${tomlString('Bash')},hooks=[{type=${tomlString('command')},command=${tomlString(command)},timeout=${timeout}}]}`;
+  const heavy = slashes(g.hook, g.lockDir);
+  const git = g.git ? slashes(g.git.hook, g.git.projectPath) : null;
+  const heavyOk = fits([node!, ...heavy]);
+  const gitOk = !!git && fits([node!, ...git]);
+  const run = (stage: 'pre' | 'post') => `${exe} "${heavy[0]}" "${heavy[1]}" ${stage} ${g.ownerPid} ${CODEX_HEAVY_LEASE_S}`;
+  const pre = [
+    ...(heavyOk ? [group(run('pre'), CODEX_HEAVY_PRE_TIMEOUT_S)] : []),
+    ...(gitOk ? [group(`${exe} "${git![0]}" "${git![1]}"`, CODEX_GIT_PRE_TIMEOUT_S)] : []),
+  ];
+  if (!pre.length) return [];
   return [
     '--dangerously-bypass-hook-trust',
-    '-c', `hooks.PreToolUse=${group('pre', CODEX_HEAVY_PRE_TIMEOUT_S)}`,
-    '-c', `hooks.PostToolUse=${group('post', CODEX_HEAVY_POST_TIMEOUT_S)}`,
+    '-c', `hooks.PreToolUse=[${pre.join(',')}]`,
+    ...(heavyOk ? ['-c', `hooks.PostToolUse=[${group(run('post'), CODEX_HEAVY_POST_TIMEOUT_S)}]`] : []),
   ];
 }
 

@@ -3,6 +3,7 @@ import type http from 'node:http';
 import { z } from 'zod';
 import type { Admitted } from '../gate';
 import { StaffError } from '../staff/store';
+import { StateBusyError } from '../atomicWrite';
 import { SAFE_ID, TaskError } from '../tasks';
 import type { InboxItem, Task } from '../../shared/model';
 import type { ExtensionTokens } from './tokens';
@@ -148,7 +149,7 @@ function projectItem(i: InboxItem) {
     name: i.name,
     // Permissão e ação barrada levam texto do agente/motor (o comando, o motivo do erro): a extensão recebe só uma frase fixa, que nem o nome da ferramenta traz. O commit automático leva
     // caminhos de arquivo e a saída do git (um hook que falhou): também só a frase fixa. A fila desligada por hooks.json leva o título da tarefa e a conta do Codex: o mesmo.
-    summary: i.kind === 'permission' ? 'pedido de permissão esperando você' : i.kind === 'denied' ? 'uma regra de permissão barrou uma ação' : i.autoCommit ? 'o commit automático de uma tarefa pronta precisa de você' : i.heavyGuardOff ? 'uma conversa de tarefa roda sem a fila de validação pesada' : i.summary.slice(0, SUMMARY_MAX),
+    summary: i.kind === 'permission' ? 'pedido de permissão esperando você' : i.kind === 'denied' ? 'uma regra de permissão barrou uma ação' : i.autoCommit ? 'o commit automático de uma tarefa pronta precisa de você' : i.heavyGuardOff ? 'uma conversa de tarefa roda sem a fila de validação pesada e sem o bloqueio de git destrutivo' : i.summary.slice(0, SUMMARY_MAX),
     at: i.at,
     // Só nos avisos de tarefa: a extensão abre o card ao clicar. Sem tarefa, o campo nem existe.
     ...(taskId ? { taskId } : {}),
@@ -306,6 +307,11 @@ export async function handleExtension(req: http.IncomingMessage, res: http.Serve
   } catch (err) {
     if (err instanceof ExtError) return json(res, err.status, { error: err.message });
     if (err instanceof TaskError || err instanceof StaffError) return json(res, 400, { error: err.message });
+    // Arquivo de estado preso por outro processo depois de todas as tentativas: 503, nada gravado (a extensão pode tentar de novo).
+    if (err instanceof StateBusyError) {
+      console.error('[estado] arquivo ocupado:', err.file, (err.cause as Error | undefined)?.message);
+      return json(res, 503, { error: err.message });
+    }
     console.error(err);
     return json(res, 500, { error: 'erro interno' });
   }

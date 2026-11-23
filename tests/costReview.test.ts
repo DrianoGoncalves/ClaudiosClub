@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import type { CostReview } from '../shared/model';
 import { buildCostReview, isStaffId, parseCostReviewDays } from '../server/costReview';
 import { createProfile, StaffInputSchema } from '../server/staff/store';
+import { removeTemp } from './support/tmp';
 
 // Fixtures sintéticas: um projeto e transcripts num temp dir; nada do ~/.claude real.
 const PROJECT = 'proj-test';
@@ -13,9 +14,7 @@ const DAY = 86_400_000;
 const at = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await fs.rm(r, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(...roots));
 
 interface SetupOptions {
   model?: string | null;

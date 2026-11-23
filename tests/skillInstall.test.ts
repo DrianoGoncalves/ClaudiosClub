@@ -24,6 +24,7 @@ import {
   type InstallTarget,
   type PreviewOk,
 } from '../server/skillInstall';
+import { removeTemp } from './support/tmp';
 
 // Sem rede: o GitHub é um repositório falso (commits, árvores e arquivos com o sha1 de git de verdade). O relógio é do teste.
 // Uma pasta temporária por teste; nada toca ~/.claude nem ~/.myco.
@@ -33,9 +34,7 @@ let seq = 0;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-skillinstall-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const URL_DIR = 'https://github.com/o/r/tree/main/skills/ponytail';
 const SKILL = (desc = 'Envia arquivos para a VPS', body = 'Passo 1.') => `---\nname: ponytail\ndescription: ${desc}\n---\n\n${body}\n`;

@@ -12,6 +12,7 @@ import {
   CodexCapability,
   isSandboxFailure,
 } from '../server/engineCapability';
+import { removeTemp } from './support/tmp';
 
 // A conferência antes de rodar o Codex: a sonda da sandbox no Windows (com cache), a barra depois de falha real e os agents da ficha.
 // O runner é falso: nada roda o `codex` de verdade.
@@ -193,9 +194,7 @@ describe('CodexCapability.agents: os agents da ficha', () => {
     await fs.mkdir(user, { recursive: true });
     await fs.writeFile(path.join(user, 'executor.md'), '---\nname: executor\ndescription: d\nmodel: haiku\ntools: Read\n---\nfaz\n');
   });
-  afterAll(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
+  afterAll(() => removeTemp(root));
 
   const dirs = () => ({ cwd: path.join(root, 'wt'), projectPath: path.join(root, 'proj'), userAgentsDir: user });
   const cap = () => new CodexCapability(fakeRun().run);

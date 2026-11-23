@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ChatClosingError } from '../server/chat/manager';
 import { TaskService } from '../server/tasks';
 import type { StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // O POST de tarefa (e o "Começar" da tela) não fica preso na vez do funcionário (t-3ab1e7): com prazo, a resposta vem com a tarefa na fila e o
 // começo segue em segundo plano, sem perder a tarefa nem abrir a conversa duas vezes. O tempo de cada etapa vai para o log quando demora.
@@ -13,9 +14,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-startdeadline-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const ana = { id: 'ana-1', name: 'Ana', role: 'Back-end', autonomy: 'acceptEdits', worktree: false } as StaffProfile;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

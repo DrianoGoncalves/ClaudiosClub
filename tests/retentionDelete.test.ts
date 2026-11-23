@@ -10,6 +10,7 @@ import { AutoContinue } from '../server/chat/autoContinue';
 import { listProjectStaffStrict } from '../server/staff/store';
 import { lastRetentionRun, nextRetentionDelay, retentionPreview, runRetentionSweep, setRetentionDeletion, type RetentionDeps } from '../server/retentionSweep';
 import type { LiveSession, Project, StaffProfile, Task } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Exclusão da retenção (etapa 2). Tudo em pastas temporárias: ~/.claude e ~/.codex reais não são lidos nem escritos.
 // O Codex é um mock (`deleteThread`); o ~/.codex do teste é uma pasta temporária via CODEX_HOME.
@@ -32,7 +33,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = prevCodexHome;
-  await fs.rm(root, { recursive: true, force: true });
+  await removeTemp(root);
 });
 
 const task = (sessionId: string, status: string) => ({ status, sessionId, review: null, deploy: null, question: undefined }) as unknown as Task;

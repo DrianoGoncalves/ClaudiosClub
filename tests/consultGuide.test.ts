@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CONSULT_GUIDE_MAX_BYTES, readConsultGuide } from '../server/staff/consultGuide';
+import { removeTemp } from './support/tmp';
 
 // O CLAUDE.md do projeto consultado que entra no prompt da consulta no Claude (t-1a9bf2): lido com teto, só da raiz, e nunca um link que sai da pasta do projeto.
 
@@ -11,9 +12,7 @@ let n = 0;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-consult-guide-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 const project = async () => {
   const dir = path.join(root, `p${n++}`);
   await fs.mkdir(dir, { recursive: true });

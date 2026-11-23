@@ -10,6 +10,7 @@ import type { LimitHit } from '../server/chat/usageLimit';
 import { buildHandoff } from '../server/fallbackHandoff';
 import { TaskService } from '../server/tasks';
 import { parsePrimaryNote } from '../client/src/tasks/primaryReturn';
+import { removeTemp } from './support/tmp';
 
 // Volta ao motor principal: a tarefa que trocou de motor por limite (`Task.fallback`) retoma, com o principal liberado, numa conversa NOVA nele,
 // com o handoff da antiga. Cobre os pontos de retomada (ajuste guardado, fila, resposta de dúvida, reprovação do revisor, órfã, resume do reinício),
@@ -19,9 +20,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-primaryreturn-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const NOW = Date.now();
 const MIN = 60_000;

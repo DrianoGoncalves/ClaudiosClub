@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createSkill, withName } from '../server/skillCreate';
+import { removeTemp } from './support/tmp';
 
 // MYCO_HOME de teste: nada no ~/.myco de quem roda os testes.
 const home = await vi.hoisted(async () => {
@@ -34,10 +35,7 @@ beforeAll(async () => {
   await fs.writeFile(path.join(GLOBAL, 'vps', 'SKILL.md'), '---\nname: vps\ndescription: Envia arquivos\n---\n\nUse o script.\n');
   await fs.writeFile(path.join(GLOBAL, 'vps', 'scripts', 'envio.sh'), 'echo ok\n');
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-  await fs.rm(home, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root, home));
 
 describe('criar em branco', () => {
   it('grava o SKILL.md com nome e descrição, no escopo pedido', async () => {

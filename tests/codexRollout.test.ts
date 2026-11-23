@@ -11,6 +11,7 @@ import {
   readCodexHistory,
   rolloutSummary,
 } from '../server/adapters/codex/rollout';
+import { removeTemp } from './support/tmp';
 
 // Rollout do Codex (conversa do funcionário no motor Codex): histórico, assunto, achar o arquivo e a sessão do quadro.
 // A amostra é sintética (tests/fixtures/codex/rollout-sample.jsonl), sem conversa real.
@@ -24,9 +25,7 @@ beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-codex-'));
 });
 
-afterEach(async () => {
-  await fs.rm(dir, { recursive: true, force: true });
-});
+afterEach(() => removeTemp(dir));
 
 /** Põe um rollout em `<home>/sessions/2026/11/09/` (a amostra, se não vier `lines`). */
 async function placeRollout(home: string, threadId: string, lines?: string[]): Promise<string> {

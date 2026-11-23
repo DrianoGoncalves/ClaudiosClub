@@ -21,7 +21,7 @@ interface Props {
 export function Face({ person, big = false }: { person: DirectoryPerson; big?: boolean }) {
   const cls = big ? 'copy-face is-big' : 'copy-face';
   return person.hasPortrait ? (
-    <img className={cls} src={portraitUrl(person.projectId, { id: person.staffId, updatedAt: person.updatedAt })} alt="" />
+    <img className={cls} src={portraitUrl(person.projectId, { id: person.staffId, updatedAt: person.updatedAt })} alt="" loading="lazy" decoding="async" />
   ) : (
     <span className={cls} aria-hidden="true">
       {person.name.trim().charAt(0).toUpperCase()}

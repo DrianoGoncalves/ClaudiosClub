@@ -10,6 +10,7 @@ import { retainedSessionIds } from '../server/retention';
 import { attachThreadId, getRegisteredSession, readSessionRegistry, recordSession, RegistryInputError, RegistryReadError } from '../server/sessionsRegistry';
 import { StaffService } from '../server/staff/service';
 import type { AccountUsage, LiveSession, Project, StaffProfile, Task } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Lê o que o `readProjectSessions` lê de cada transcript: o teste prova que as conversas antigas não chegam a ser lidas.
 const probe = vi.hoisted(() => ({ reads: [] as string[] }));
@@ -34,9 +35,7 @@ let n = 0;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-retention-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 /** Pasta nova e única por teste. */
 const fresh = (name: string) => path.join(root, `${name}-${n++}`);
 

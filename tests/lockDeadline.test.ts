@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { StaffProfile, Task } from '../shared/model';
 import { resolveCaller, SessionTokens, type Engine } from '../server/callers';
 import { TaskBusyError, TaskService, type TaskServiceDeps } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 // As rotas que esperam a vez do funcionário (`TaskService.locked`) respondem no prazo (`lockedWithDeadline`): estourou, 503 (TaskBusyError) e NADA gravado, nem quando a vez chegar
 // depois; gravou, responde sucesso. E o log da vez presa diz quem a segura, em que operação e há quanto tempo, só com ids.
@@ -13,9 +14,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-lockdl-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-});
+afterAll(() => removeTemp(root));
 
 const person = (id: string, name: string, over: Partial<StaffProfile> = {}) => ({ id, name, role: 'Back-end', autonomy: 'acceptEdits', worktree: false, servers: [], reportsTo: [], ...over }) as unknown as StaffProfile;
 

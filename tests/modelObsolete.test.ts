@@ -9,6 +9,7 @@ import { isClaudeModelNotFound } from '../server/chat/modelNotFound';
 import { ChatProcess } from '../server/chat/process';
 import { buildClaudeArgs } from '../server/staff/ficha';
 import { fitModelObsolete, readProfile, saveModelObsolete, saveProfile, staffDir } from '../server/staff/store';
+import { removeTemp } from './support/tmp';
 
 // Os dois formatos que o claude 2.1.310 manda para um modelo inexistente (medidos com `--model claude-inexistente-9-9`).
 const REFUSAL_TEXT = "There's an issue with the selected model (claude-inexistente-9-9). It may not exist or you may not have access to it. Run --model to pick a different model.";
@@ -75,9 +76,7 @@ describe('modelObsolete: store', () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'modelobs-'));
     await fs.mkdir(staffDir(dir), { recursive: true });
   });
-  afterAll(async () => {
-    await fs.rm(dir, { recursive: true, force: true });
-  });
+  afterAll(() => removeTemp(dir));
 
   it('grava a marca quando a ficha usa esse modelo e esse motor', async () => {
     await saveProfile(dir, profile({ id: 'g-1' }));

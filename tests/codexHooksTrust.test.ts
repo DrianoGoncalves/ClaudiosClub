@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import type { ChatItem } from '../shared/model';
 import { accountHooksFile, buildCodexArgs, type CodexHeavyGuard } from '../server/chat/codexArgs';
 import { CodexProcess } from '../server/chat/codexProcess';
+import { removeTemp } from './support/tmp';
 
 // Auditoria t-3bea79 (Codex 0.169.0): a flag --dangerously-bypass-hook-trust, que o Club passa para o hook da fila de validação pesada, também
 // libera o $CODEX_HOME/hooks.json da conta (fora da sandbox, sem confirmação, com o MYCO_TOKEN da conversa). Regra: com hooks.json na conta,
@@ -31,9 +32,7 @@ const codexHome = async () => {
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-hooks-trust-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 afterEach(() => {
   vi.unstubAllEnvs();
 });
@@ -187,6 +186,7 @@ describe('CodexProcess: conta com hooks.json roda sem a fila e avisa', () => {
     expect(warns(chat)).toHaveLength(1);
     expect(warns(chat)[0]!.text).toContain(file);
     expect(warns(chat)[0]!.text).toMatch(/fila de validação pesada/);
+    expect(warns(chat)[0]!.text).toMatch(/bloqueio de git destrutivo/); // t-0ccbff: o mesmo hooks.json também tira o bloqueio do git destrutivo
   });
 
   it('sem hooks.json: a flag e o hook como antes e nenhum aviso; o ambiente do codex leva o mesmo CODEX_HOME que foi conferido', async () => {

@@ -20,6 +20,7 @@ import {
 import { ConsultStore, MAX_RECORDS, pruned, RETENTION_MS, type ConsultRecord } from '../server/consult/store';
 import { ANSWER_MAX_BYTES, cleanAnswer, consultPrompt, redactSecrets } from '../server/consult/text';
 import type { ConsultStamp } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // A consulta entre projetos (t-ee823d): vínculo só pela tela e na hora, remetente e origem do token, um salto só, idempotência, limites, prazo, entrega da resposta uma vez (também ocupada ou
 // fechada) e o registro que sobrevive a um reinício. O serviço roda com dependências falsas e arquivos de verdade numa pasta temporária.
@@ -29,9 +30,7 @@ let n = 0;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-consult-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const PROJECTS: Record<string, { id: string; name: string }> = { A: { id: 'A', name: 'Slingshot' }, B: { id: 'B', name: 'Learnote' }, C: { id: 'C', name: 'Terceiro' } };
 const person = (id: string, name: string, role: string) => ({ id, name, role });

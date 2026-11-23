@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import type { StaffProfile, Task } from '../shared/model';
 import { CostReviewApplyBody, CostReviewApplyError, runCostReviewApply } from '../server/costReviewApply';
 import { createProfile, readProfile, saveProfile, StaffInputSchema } from '../server/staff/store';
+import { removeTemp } from './support/tmp';
 
 // Fixtures sintéticas num temp dir (nada do ~/.claude real). Os textos das regras são os de server/costReview.ts.
 const PROJECT = 'proj-test';
@@ -15,9 +16,7 @@ const RULE_OUTPUT = 'Saída grande (JSON, log, diff): salve em arquivo e filtre 
 const TASK_TITLE = 'Compactar a memória';
 
 const roots: string[] = [];
-afterAll(async () => {
-  for (const r of roots) await fs.rm(r, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(...roots));
 
 interface SetupOptions {
   model?: string | null;

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { checkpoint, CodeError, locateCode, mergeCode, readCode } from '../server/taskCode';
 import { ensureWorktree } from '../server/staff/worktree';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 const homeBefore = process.env.MYCO_HOME;
@@ -16,7 +17,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (homeBefore === undefined) delete process.env.MYCO_HOME;
   else process.env.MYCO_HOME = homeBefore;
-  await fs.rm(root, { recursive: true, force: true });
+  await removeTemp(root);
 });
 
 /** Repositório de verdade, com um teste que passa ou falha conforme `ok.txt`. */
@@ -56,7 +57,7 @@ describe('código da tarefa', () => {
     expect(code.files.map((f) => `${f.status} ${f.path}`).sort()).toEqual(['? novo.txt', 'M app.txt']);
     expect(code.diff).toContain('+v2');
 
-    const merged = await mergeCode(dir, place, 'Atualizar o app');
+    const merged = await mergeCode(dir, place, 'Atualizar o app', { wholeBranch: true });
     expect(merged).toMatchObject({ base: 'main', branch: 'myco/ana-1', tests: { ok: true, command: 'npm test' } });
     expect(await fs.readFile(path.join(dir, 'app.txt'), 'utf8')).toBe('v2\n');
     expect(git('log', '-1', '--format=%s').trim()).toBe('Merge myco/ana-1: Atualizar o app');
@@ -92,7 +93,7 @@ describe('código da tarefa', () => {
     const wt = await ensureWorktree(dir, 'ana-1');
     await fs.writeFile(path.join(wt.path, 'ok.txt'), 'nao'); // quebra o teste
     const place = (await locateCode(dir, 'ana-1', true))!;
-    const err = await mergeCode(dir, place, 'Quebrar').catch((e: CodeError) => e);
+    const err = await mergeCode(dir, place, 'Quebrar', { wholeBranch: true }).catch((e: CodeError) => e);
     expect(err).toBeInstanceOf(CodeError);
     expect((err as CodeError).tests).toMatchObject({ ok: false });
     expect(await fs.readFile(path.join(dir, 'ok.txt'), 'utf8')).toBe('sim'); // a mescla foi desfeita
@@ -105,10 +106,29 @@ describe('código da tarefa', () => {
     const wt2 = await ensureWorktree(plain.dir, 'bia-1');
     await fs.writeFile(path.join(wt2.path, 'app.txt'), 'v2\n');
     const place2 = (await locateCode(plain.dir, 'bia-1', true))!;
-    await expect(mergeCode(plain.dir, place2, 'Sem testes')).rejects.toMatchObject({ code: 'no-tests' });
-    expect((await mergeCode(plain.dir, place2, 'Sem testes', { skipTests: true })).tests).toBeNull();
+    await expect(mergeCode(plain.dir, place2, 'Sem testes', { wholeBranch: true })).rejects.toMatchObject({ code: 'no-tests' });
+    expect((await mergeCode(plain.dir, place2, 'Sem testes', { skipTests: true, wholeBranch: true })).tests).toBeNull();
     expect(await fs.readFile(path.join(plain.dir, 'app.txt'), 'utf8')).toBe('v2\n');
   }, 90_000);
+
+  it('testes da mescla cortados no tempo-limite: não é falha de teste; a mescla é desfeita e o erro (e o resultado guardado) dizem "tempo-limite"', async () => {
+    const { dir, git } = await repo('lento');
+    // Os testes do projeto nunca acabam: só o corte os encerra.
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', scripts: { test: 'node -e "setInterval(() => {}, 1000)"' } }));
+    git('add', '.');
+    git('commit', '-qm', 'testes lentos');
+    const wt = await ensureWorktree(dir, 'ana-1');
+    await fs.writeFile(path.join(wt.path, 'app.txt'), 'v2\n');
+    const place = (await locateCode(dir, 'ana-1', true))!;
+
+    const err = await mergeCode(dir, place, 'Lenta', { testTimeoutMs: 3000, wholeBranch: true }).catch((e: CodeError) => e);
+    expect(err).toBeInstanceOf(CodeError);
+    expect(err).toMatchObject({ code: 'tests-timeout', tests: { ok: false, timedOut: true, limitMs: 3000 } });
+    expect((err as CodeError).message).toContain('passaram do tempo-limite de 3 s');
+    expect((err as CodeError).message).not.toContain('falharam');
+    expect(await fs.readFile(path.join(dir, 'app.txt'), 'utf8')).toBe('v1\n'); // a mescla foi desfeita
+    expect(git('status', '--porcelain').trim()).toBe('');
+  }, 60_000);
 
   it('sem worktree: mostra o que mudou no próprio projeto e não oferece mesclar', async () => {
     const { dir } = await repo('sem-wt', false);

@@ -8,6 +8,7 @@ import type { StaffProfile, Task } from '../shared/model';
 import { ChatManager, type ChatManagerOptions } from '../server/chat/manager';
 import { PERMISSION_STUCK_MS } from '../server/retryPolicy';
 import { ownAlerts, permissionStuck, stuckDependencies, stuckReason, stuckState, TaskService } from '../server/tasks';
+import { removeTemp } from './support/tmp';
 
 // Tarefa com permissão pendente (t-fc9e1e): a conversa de trabalho espera o dono responder um pedido de permissão. O estado vai no GET (`permissionWait`,
 // derivado do processo), passados 15 min a tarefa conta como parada (`stuckState`) e o gestor que pediu recebe UM aviso por pedido. Respondida, some.
@@ -18,9 +19,7 @@ let n = 0;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-permwait-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const MIN = 60_000;
 const ago = (min: number) => new Date(Date.now() - min * MIN).toISOString();

@@ -5,14 +5,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AgentInput, readAgentSource, saveAgent } from '../server/adapters/claude/agentWrite';
 import { activeSubagents } from '../server/adapters/claude/sessions';
 import { encodeProjectDir } from '../server/adapters/claude/paths';
+import { removeTemp } from './support/tmp';
 
 let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-agents-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const input = (over: object = {}) =>
   AgentInput.parse({

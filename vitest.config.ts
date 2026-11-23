@@ -6,5 +6,12 @@ export default defineConfig({
     root: '.',
     include: ['tests/**/*.test.ts'],
     environment: 'node',
+    // Cada rodada ganha uma pasta própria no TEMP (os.tmpdir() dos testes) e a apaga no fim, junto com as sobras de baterias interrompidas
+    // e as pastas legadas de teste com mais de 1 h; nunca outro `myco-*` (ver tests/support/tmpSweep.ts).
+    globalSetup: ['tests/support/globalTmp.ts'],
+    // Os 5 s padrão do vitest estouram sob carga (suíte inteira com 3 workers numa máquina de 4 CPUs, git e spawn lentos): o teste caía sem estar errado e o resultado da
+    // entrega virava "falhou". 30 s dão folga sem esconder travamento de verdade (teste parado ainda cai); quem precisa de mais declara no próprio `it`.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });

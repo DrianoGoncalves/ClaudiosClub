@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TaskConflictError, TaskForbiddenError, TaskService } from '../server/tasks';
 import type { StaffProfile, Task } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Mensagem guardada (t-f13ed2): o dono responde com o funcionário ocupado e a pergunta sai da caixa; e "Excluir" o ajuste guardado
 // (`TaskService.discardHeld`), só pelo dono, sem correr com a entrega e sem apagar a resposta a uma dúvida.
@@ -12,9 +13,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-held-discard-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const people: Record<string, StaffProfile> = {
   'ana-1': { id: 'ana-1', name: 'Ana', role: 'Back-end', autonomy: 'acceptEdits', worktree: false } as StaffProfile,

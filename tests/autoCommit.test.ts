@@ -9,6 +9,7 @@ import { commitInboxItem } from '../server/inboxItems';
 import { MAX_OWNER_EDITS, readOwnerWrites, recordOwnerWrite, writeOwnerFile } from '../server/ownerEdits';
 import { TaskError, TaskForbiddenError, TaskService, commitAlerts, readTasks } from '../server/tasks';
 import { CHANGED_FILES_MAX, type StaffProfile } from '../shared/model';
+import { removeTemp } from './support/tmp';
 
 // Commit automático por tarefa pronta (t-33bd83): um commit local só com os arquivos da tarefa, sem varrer o trabalho de outras tarefas abertas, sem mexer no que você deixou staged
 // e sem esvaziar o `git diff HEAD` de quem está em revisão. Repositórios git de verdade, em pasta temporária.
@@ -20,9 +21,7 @@ let root: string;
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'myco-autocommit-'));
 });
-afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterAll(() => removeTemp(root));
 
 const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe' }).toString();
 /** `git status` sem a pasta do Club (tasks.json e afins ficam sem rastreio em todo teste). */
