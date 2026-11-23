@@ -1014,7 +1014,12 @@ export class TaskService {
         patch.staffId !== undefined ? patch.staffId : cur.staffId,
         patch.reviewerId !== undefined,
       );
+    // Troca do revisor de uma tarefa parada no limite de revisões automáticas: zera as rodadas e pede a revisão ao novo (ver `withReviewHandoff`). Só a troca por outro conta aqui:
+    // o patch com o mesmo revisor não muda nada; delegar de novo ao mesmo é o "Delegar revisão" (`requestReview`).
+    const swaps = (t: Task): boolean => !!patch.reviewerId && patch.reviewerId !== t.reviewerId && (patch.status === undefined || patch.status === 'review') && reviewCapped(t);
+    const handoff = cur && swaps(cur) ? { from: await this.nameOf(projectId, cur.reviewerId!), to: await this.nameOf(projectId, patch.reviewerId!) } : null;
     let before: Task | undefined;
+    let handed = false;
     const out = await this.change(projectId, taskId, (t, all) => {
       before = t;
       if (patch.blockedBy) checkBlockedBy(t.id, patch.blockedBy, all);
@@ -1028,8 +1033,13 @@ export class TaskService {
       const stays = t.status === 'todo' && out.status === 'todo' && out.staffId === t.staffId;
       const unqueued = patch.queued === false ? out.status === 'todo' : stays && !!t.unqueued;
       const settled = unqueued ? { ...out, unqueued: true } : out.unqueued ? { ...out, unqueued: undefined } : out;
-      return acks ? { ...settled, cutAck: true } : settled;
+      const done = acks ? { ...settled, cutAck: true } : settled;
+      // Conferido de novo na vez da gravação: o card pode ter saído do limite (ou trocado de revisor) entre a leitura e ela.
+      handed = !!handoff && swaps(t);
+      return handed ? withReviewHandoff(done, handoff!.from, handoff!.to, 0) : done;
     });
+    // O pedido ao novo revisor sai pelo caminho da revisão automática (rodada 1 do novo revisor; falha segue as regras dela: tentar de novo ou ir para a caixa).
+    if (handed && out) await this.autoReview(projectId, out);
     // Saiu de "fazendo" à mão (ou mudou de dono, ou tirou dependência): quem estava com ela pode pegar a próxima.
     for (const s of new Set([before?.staffId, out?.staffId])) if (s) void this.kick(projectId, s);
     // Virou pronta à mão: quem dependia dela pode começar (fora de qualquer `locked`, ver wakeDependents).
@@ -1048,7 +1058,8 @@ export class TaskService {
         return out;
       }
     }
-    return out;
+    // Com o pedido ao novo revisor aberto, devolve a tarefa como ficou (a revisão e a rodada 1), não a da gravação.
+    return handed ? (((await this.list(projectId)) ?? []).find((t) => t.id === taskId) ?? out) : out;
   }
 
   /**
@@ -3888,6 +3899,8 @@ export class TaskService {
       .filter(Boolean)
       .join('\n\n');
     // Só aprova ou reprova: a conversa abre sem edição de arquivo (ver `reviewOnly`) e não entra na fila de trabalho dele (ver `staffBusy`).
+    // Quem revisava até agora, para a nota de quando o pedido é a delegação de uma tarefa parada no limite (abaixo).
+    const prevName = opts.assign && !opts.delivery && task.reviewerId ? await this.nameOf(projectId, task.reviewerId) : null;
     const sessionId = await this.deps.send(projectId, reviewer.id, text, force, undefined, true);
     this.bySession.set(sessionId, { projectId, taskId, role: 'review' });
     const at = new Date().toISOString();
@@ -3896,8 +3909,11 @@ export class TaskService {
         // Cancelada enquanto a conversa do revisor abria: ela não volta para "revisão" (um APROVADO depois a levaria a pronto).
         if (t.status === 'cancelled') throw new TaskConflictError('a tarefa foi cancelada: reabra antes de pedir revisão');
         if (opts.delivery && !onDelivery(t, opts.delivery.at)) throw new TaskConflictError('a tarefa mudou desde a entrega: a revisão automática não vale mais');
+        // Delegar (pelo quadro, `assign`) uma tarefa parada no limite de revisões, a outro revisor ou de novo ao mesmo: as rodadas zeram e esta revisão é a 1ª do revisor (ver `withReviewHandoff`).
+        // Conferido na vez da gravação, antes de o pedido trocar a revisão da tarefa. Fora do limite, as rodadas ficam como estão.
+        const base = prevName !== null && reviewCapped(t) ? withReviewHandoff(t, prevName, reviewer.name, 1) : t;
         return withSession(
-          moved({ ...t, review: { staffId: reviewer.id, sessionId, at }, reviewRetry: undefined, ...(opts.assign && { reviewerId: reviewer.id }) }, 'review', 'auto', `revisão pedida a ${reviewer.name}`),
+          moved({ ...base, review: { staffId: reviewer.id, sessionId, at }, reviewRetry: undefined, ...(opts.assign && { reviewerId: reviewer.id }) }, 'review', 'auto', `revisão pedida a ${reviewer.name}`),
           { id: sessionId, role: 'review', staffId: reviewer.id, engine: reviewer.engine === 'codex' ? 'codex' : 'claude', at },
         );
       });
@@ -6644,6 +6660,11 @@ export class TaskService {
     if (!p) throw new TaskError('funcionário não encontrado neste projeto');
     return p;
   }
+
+  /** O nome do funcionário para o histórico; o id se a ficha não existe mais (revisor excluído). */
+  private async nameOf(projectId: string, staffId: string): Promise<string> {
+    return (await this.deps.readProfile(projectId, staffId))?.name ?? staffId;
+  }
 }
 
 const tasksFile = (dir: string) => path.join(dir, '.myco', 'tasks.json');
@@ -6855,10 +6876,8 @@ export function stuckState(t: Task, now = Date.now()): StuckState | null {
   const r = liveReview(t);
   if (t.reviewerId && r && t.reviewerId === r.staffId && r.reasked && !r.verdict && r.reaskAt && ((r.doneAt && r.doneAt > r.reaskAt) || now - Date.parse(r.reaskAt) >= REVIEW_WAIT_MS))
     return { reason: 'a revisão automática ficou sem veredito', selfHeals: false, humanAction: 'review', since: r.reaskAt };
-  // reviewRounds sobe logo depois de pedir a revisão: com a última em curso já é AUTO_REVIEW_ROUNDS. Por isso o limite só conta com a última revisão
-  // respondida (doneAt) e sem aprovação (aprovada, ela só espera a mescla). A nota do limite como última linha do histórico (de qualquer N) também
-  // vale: é a tarefa que parou no limite antigo (2) e a entrega seguinte ficou sem revisar. O dono decide por ela, como no limite de agora.
-  if (t.reviewerId && t.review?.doneAt && t.review.verdict !== 'approved' && ((t.reviewRounds ?? 0) >= AUTO_REVIEW_ROUNDS || CAP_NOTE.test(t.history.at(-1)?.note ?? '')))
+  // O limite de revisões (ver `reviewCapped`): o dono decide por ela, como no limite de agora.
+  if (reviewCapped(t))
     return { reason: 'limite de revisões automáticas atingido', selfHeals: false, humanAction: 'decide', since };
   if (!t.staffId) return { reason: 'sem responsável', selfHeals: false, humanAction: 'decide', since };
   // Revisor marcado e nenhuma revisão desta entrega (`liveReview`: ausente, de entrega anterior ou `superseded`) nem retry: a revisão nunca começou (o fim "conversa parou sem terminar" perdido entre
@@ -6931,6 +6950,24 @@ function withReask(t: Task): Task {
 const capNote = (n: number) => `limite de ${n} revisões automáticas; o que sobrou fica com você: aceitar como trade-off (anotar em "Decisões" no SPEC.md) ou pedir ajuste`;
 /** Reconhece a nota do limite de qualquer época (o N muda: 2 no limite antigo, 3 hoje); ver `stuckReason`. */
 const CAP_NOTE = /^limite de \d+ revisões automáticas;/;
+
+/**
+ * A tarefa em "revisão" parou no limite de revisões automáticas (a conta de `stuckState`)? reviewRounds sobe logo depois de pedir a revisão: com a última em curso já é
+ * AUTO_REVIEW_ROUNDS. Por isso o limite só conta com a última revisão respondida (`doneAt`) e sem aprovação (aprovada, ela só espera a mescla). A nota do limite como última linha do
+ * histórico (de qualquer N) também vale: é a tarefa que parou no limite antigo (2) e a entrega seguinte ficou sem revisar.
+ */
+const reviewCapped = (t: Task): boolean =>
+  t.status === 'review' && !!t.reviewerId && !!t.review?.doneAt && t.review.verdict !== 'approved' && ((t.reviewRounds ?? 0) >= AUTO_REVIEW_ROUNDS || CAP_NOTE.test(t.history.at(-1)?.note ?? ''));
+
+/**
+ * Delegar a revisão de uma tarefa parada no limite (ver `reviewCapped`), a outro revisor ou de novo ao mesmo, é decisão sua: as rodadas zeram (`rounds`: com 1, a revisão que o
+ * pedido abre já conta como a primeira do revisor, como em `autoReview`) e o histórico diz quem passou a revisar. Com `from` igual a `to`, o texto é o da delegação ao mesmo revisor.
+ */
+function withReviewHandoff(t: Task, from: string, to: string, rounds: number): Task {
+  const was = t.reviewRounds ?? 0;
+  const who = from === to ? `revisão delegada de novo a ${to}` : `revisor trocado de ${from} para ${to}`;
+  return noted({ ...t, reviewRounds: rounds }, `${who}; rodadas de revisão zeradas (${was}/${AUTO_REVIEW_ROUNDS})`);
+}
 
 /** O motivo (e a nota do histórico) da tarefa que foi para Aguardar porque você fechou a conversa dela no meio do turno (ver `parkClosed`). */
 export const CLOSED_BY_YOU = 'conversa fechada por você';
