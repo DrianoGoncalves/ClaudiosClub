@@ -117,6 +117,8 @@ import { CostReviewApplyError, runCostReviewApply } from './costReviewApply';
 import type { Board, CommitWaitingSummary, CostReport, InboxItem, InboxKind, LiveSession, Project, TurnNotice } from '../shared/model';
 import { TurnWatcher } from './turns';
 import { ProjectPauses } from './projectPause';
+import { ReleaseError, ReleaseService } from './release';
+import { createSafeTools } from './staff/gitSafe';
 import { FlowPolicies } from './flowPolicy';
 import { deliverToAsker } from './consult/deliver';
 import { ConsultLinks } from './consult/links';
@@ -720,7 +722,28 @@ const tasks = new TaskService({
   snapshot: (projectId, sessionId) => chats.snapshot(projectId, sessionId),
   // Projeto pausado: a fila, o ajuste da reprovação, a retomada das órfãs e a troca de motor esperam; a revisão da entrega já feita roda (ver TaskService.paused).
   pauses: projectPauses,
+  // Versão aberta: só as tarefas dela saem da fila e mesclam (ver server/release.ts). `releases` vem logo abaixo; a pergunta só acontece depois da subida.
+  releaseScope: (projectId) => releases.scope(projectId),
   flow: flowPolicies,
+});
+// Versão com escopo (ver server/release.ts): o git e o gh sem hooks do projeto e com ambiente controlado, como o MCP de git; push e tag só pelos botões do dono.
+const releaseHooks = path.join(MYCO_HOME, 'run', 'release-nohooks');
+const releases: ReleaseService = new ReleaseService({
+  projectPath: projectPathOf,
+  projectIds: () => adapter.boardProjectIds(),
+  readTasks,
+  createTask: async (projectId, body) => tasks.create(projectId, body),
+  startTask: (projectId, taskId) => tasks.start(projectId, taskId),
+  runTests: async (dir) => {
+    const command = await detectTest(dir);
+    return command ? runTests(dir, command) : null;
+  },
+  tools: (() => {
+    const t = createSafeTools({ hooksDir: releaseHooks });
+    const ready = fs.mkdir(releaseHooks, { recursive: true });
+    return { git: async (cwd, args, opts) => (await ready, t.git(cwd, args, opts)), gh: async (args, input) => (await ready, t.gh(args, input)) };
+  })(),
+  onScopeLifted: (projectId) => void tasks.tick(new Date(), projectId).catch(() => {}),
 });
 // Conversa direta no limite de uso (o dono pela tela): a mensagem segue no secundário da ficha, numa conversa nova (ver directFallback.ts).
 const directFallback = new DirectFallback({
@@ -1722,6 +1745,16 @@ const routes: Array<['GET' | 'POST' | 'PUT', RegExp, Handler]> = [
   // (qualquer uma) ou quem a ligou. O 403 é do serviço, e as duas rotas estão em `STAFF_POSTS` (apiPolicy.ts). O estado sai no `GET .../pause` (`mode`, `at`, `until`, `by`).
   ['POST', new RegExp(`^/api/projects/${ID}/version-pause$`), ({ params: [id], body, fromBrowser, caller }) => tasks.setVersionPause(id!, body, fromBrowser, caller)],
   ['POST', new RegExp(`^/api/projects/${ID}/version-pause/end$`), ({ params: [id], fromBrowser, caller }) => tasks.endVersionPause(id!, fromBrowser, caller)],
+  // Versão com escopo (ver server/release.ts). O GET é de custo fixo (estado na memória, tarefas do `readTasks`); o histórico roda um git por pedido e a tela só pede ao abrir a aba.
+  // As escritas são só da tela (403 fora dela) e não estão em apiPolicy.ts: funcionário não abre, não publica e não cria tag.
+  ['GET', new RegExp(`^/api/projects/${ID}/release$`), ({ params: [id] }) => releases.view(id!)],
+  ['GET', new RegExp(`^/api/projects/${ID}/releases$`), ({ params: [id] }) => releases.history(id!)],
+  ['POST', new RegExp(`^/api/projects/${ID}/release$`), ({ params: [id], body, fromBrowser }) => releases.open(id!, body, fromBrowser)],
+  ['POST', new RegExp(`^/api/projects/${ID}/release/scope$`), ({ params: [id], body, fromBrowser }) => releases.changeScope(id!, body, fromBrowser)],
+  ['POST', new RegExp(`^/api/projects/${ID}/release/prepare$`), ({ params: [id], body, fromBrowser }) => releases.prepare(id!, body, fromBrowser)],
+  ['POST', new RegExp(`^/api/projects/${ID}/release/publish$`), ({ params: [id], fromBrowser }) => releases.publish(id!, fromBrowser)],
+  ['POST', new RegExp(`^/api/projects/${ID}/release/tag$`), ({ params: [id], fromBrowser }) => releases.tag(id!, fromBrowser)],
+  ['POST', new RegExp(`^/api/projects/${ID}/release/cancel$`), ({ params: [id], fromBrowser }) => releases.cancel(id!, fromBrowser)],
   [
     'POST',
     new RegExp(`^/api/projects/${ID}/tasks$`),
@@ -2865,6 +2898,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
         // Dúvida já respondida, ou pergunta que não está mais aberta na conversa: 409; quem não é o gestor: 403 (antes do TaskError, 400).
         if (err instanceof TaskConflictError) return send(res, 409, { error: err.message });
         if (err instanceof TaskForbiddenError) return send(res, 403, { error: err.message });
+        if (err instanceof ReleaseError) return send(res, err.status, { error: err.message });
         // A vez do funcionário não chegou no prazo da resposta (edição, cancelamento, resposta à dúvida, ajuste guardado, revisão): 503, nada gravado (tentar de novo em instantes é seguro).
         if (err instanceof TaskBusyError) return send(res, 503, { error: err.message }, { 'retry-after': '5' });
         // Já há SPEC.md no projeto: a criação não sobrescreve (409 com `exists`).
@@ -3509,6 +3543,8 @@ server.listen(PORT, HOST, () => {
         };
         setTimeout(queueTick, 15_000).unref();
         setInterval(queueTick, 60_000).unref();
+        // Versão aberta: põe o card de manual na fila e prepara sozinha quando tudo fica pronto (uma rodada por vez, ver ReleaseService.sweep).
+        setInterval(() => void releases.sweep().catch(() => {}), 60_000).unref();
       }).catch((err) => console.error('[retomar] falhou:', err));
     });
   // Temporários parados há dias saem do quadro (arquivados, nada apagado).

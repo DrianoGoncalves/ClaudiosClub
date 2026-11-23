@@ -10,8 +10,6 @@ import {
   pauseHeading,
   pausedTip,
   versionBy,
-  VERSION_PAUSE_DEFAULT,
-  VERSION_PAUSE_OPTIONS,
   type PauseView,
 } from './pauseState';
 import { clockHM } from '../chat/wakeCountdown';
@@ -23,7 +21,6 @@ import { clockHM } from '../chat/wakeCountdown';
 export interface ProjectPauseState extends PauseView {
   /** Pausa/retoma (na pausa de versão, encerra-a). */
   toggle: () => void;
-  startVersion: (minutes: number) => void;
 }
 
 /** Com a pausa de versão ligada, refaz a tela de tempos em tempos para o "faltam X min" andar (a leitura do estado só muda a tela quando o estado muda). */
@@ -56,7 +53,7 @@ export function useProjectPause(projectId: string, projectName: string, onChange
     return () => clearInterval(id);
   }, [versioned]);
 
-  return { ...view, toggle: () => void controller.toggle(), startVersion: (minutes) => void controller.startVersion(minutes) };
+  return { ...view, toggle: () => void controller.toggle() };
 }
 
 /** Pausar projeto ⇄ Retomar projeto. Retomar é o botão cheio (é a ação que o dono quer quando vê a faixa). `iconOnly` para o painel estreito; no cabeçalho do quadro o CSS tira o texto em tela estreita (o nome fica no aria-label e no title). */
@@ -87,28 +84,6 @@ export function PausedTag({ pause, now, className }: { pause: ProjectPause; now:
     <span className={`${className}${isVersionPause(pause) ? ' is-version' : ''}`} title={pausedTip(pause, now)}>
       <PauseIcon size={10} /> {text}
     </span>
-  );
-}
-
-/** "Pausa de versão" com o prazo (minutos) ao lado e o botão de ligar: só aparece com o projeto rodando. O prazo escolhido é o pedido (sem pergunta). */
-export function VersionPauseControl({ busy, onStart }: { busy?: boolean; onStart: (minutes: number) => void }) {
-  const [minutes, setMinutes] = useState<number>(VERSION_PAUSE_DEFAULT);
-  return (
-    <div className="version-pause-control" role="group" aria-label={t('tasks.versionPauseBtn')} title={t('tasks.versionPauseTitle')}>
-      <span className="version-pause-label">
-        <PauseIcon size={14} /> {t('tasks.versionPauseBtn')}
-      </span>
-      <select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} disabled={busy} aria-label={t('tasks.versionPauseDeadline')}>
-        {VERSION_PAUSE_OPTIONS.map((m) => (
-          <option key={m} value={m}>
-            {minutesLabel(m)}
-          </option>
-        ))}
-      </select>
-      <button type="button" className="btn-secondary" disabled={busy} onClick={() => onStart(minutes)}>
-        {t('tasks.versionPauseStart')}
-      </button>
-    </div>
   );
 }
 

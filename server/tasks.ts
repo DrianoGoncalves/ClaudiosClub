@@ -530,6 +530,10 @@ export interface TaskServiceDeps {
    */
   pauses?: ProjectPauses;
   /**
+   * O escopo da versão aberta (ver server/release.ts): enquanto ela não é preparada, só as tarefas dela saem da fila, começam sem ser pelo dono e mesclam. Null (ou sem ele) = sem trava.
+   */
+  releaseScope?: (projectId: string) => Promise<{ version: string; ids: ReadonlySet<string> } | null>;
+  /**
    * Onde estão as políticas de fluxo dos projetos (ver flowPolicy.ts). Sem ele, todo projeto tem a política virtual (o que já fazia: conclusão pelo revisor, commit pelo `board.json`) e a
    * rota não grava (os testes de antes).
    */
@@ -2064,6 +2068,9 @@ export class TaskService {
         const version = (await this.deps.pauses?.get(projectId).catch(() => null))?.mode === 'version';
         return this.change(projectId, taskId, (t) => enqueue(t, `na fila de ${profile.name}: o projeto está ${version ? 'em pausa de versão' : 'pausado'}, começa quando for retomado`));
       }
+      // Versão aberta (ver server/release.ts): tarefa de fora só começa pelo dono; a dos outros entra na fila e espera a versão ser preparada.
+      const scope = byOwner ? null : await this.deps.releaseScope?.(projectId).catch(() => null);
+      if (scope && !scope.ids.has(taskId)) return this.change(projectId, taskId, (t) => enqueue(t, `na fila de ${profile.name}: fora da versão ${scope.version}, começa quando ela for preparada`));
       const busyWith = occupant(fresh, staffId, taskId);
       if (!busyWith && !this.staffBusy(projectId, fresh, staffId)) {
         // A vaga de escrita (ver `takeSlot`): ocupada, a tarefa entra na fila com o motivo, sem erro; o seu "Começar" (`byOwner`) passa por cima, como pela pausa.
@@ -3515,11 +3522,13 @@ export class TaskService {
     claim.release?.();
     // A que ocupa segue rodando: o ajuste que não foi (ou sem envio) não libera a fila dele.
     if (occ || paused) return;
+    // Versão aberta (ver server/release.ts): só as tarefas dela saem da fila; as de fora esperam a versão ser preparada.
+    const scope = await this.deps.releaseScope?.(projectId).catch(() => null);
     // A fila dele na ordem de `queueCmp` (a posição de quem reordenou, depois a de entrada, `queuedAt`; empate: a ordem do quadro). Bloqueada pula (a checagem
     // é aqui, na hora de começar), e a que falhou por motivo dela espera a hora da próxima tentativa (`startRetry`) sem segurar as outras. Com conversa
     // (`sessionId`) é o card que voltou para "a fazer" depois de ter começado (ver `enqueueIdle`): a vez dele retoma essa conversa em vez de abrir outra.
     const ready = tasks
-      .filter((t) => t.staffId === staffId && inQueue(t) && !heldFirst(t) && !blockers(t, tasks).length && (!t.startRetry || retryDue(t.startRetry, at)))
+      .filter((t) => t.staffId === staffId && inQueue(t) && !heldFirst(t) && !blockers(t, tasks).length && (!t.startRetry || retryDue(t.startRetry, at)) && (!scope || scope.ids.has(t.id)))
       .sort(queueCmp);
     if (!ready.length) return;
     const profile = await this.deps.readProfile(projectId, staffId);
@@ -3682,6 +3691,9 @@ export class TaskService {
     const { dir, task, profile } = await this.context(projectId, taskId);
     // Cancelada não é entrega: mesclar a levaria para "pronto" e liberaria quem depende dela.
     if (task.status === 'cancelled') throw new TaskConflictError('a tarefa foi cancelada: não dá para mesclar');
+    // Versão aberta (ver server/release.ts): só as tarefas dela mesclam, para o commit da versão levar só o escopo.
+    const scope = await this.deps.releaseScope?.(projectId).catch(() => null);
+    if (scope && !scope.ids.has(taskId)) throw new TaskConflictError(`a versão ${scope.version} está aberta e esta tarefa não está nela: a mescla espera a versão ser preparada (ou inclua a tarefa na versão)`);
     // Antes de o código entrar: a mescla leva a "pronto", e com a conclusão reservada ao dono só o pedido dele (a rota passa `byOwner`) vale.
     if (!byOwner) await this.needOwnerToFinish(projectId);
     const place = await locateTaskCode(dir, task, !!profile?.worktree);

@@ -78,6 +78,7 @@ import type {
   UserScope,
 } from '../../shared/model';
 import type { RoleEntry, RoleTemplate } from '../../shared/roles';
+import type { ReleaseHistory, ReleaseView } from '../../shared/release';
 import { locale, t } from './i18n';
 import { askUsageStop } from './chat/usageNotice';
 import type { GuideAction } from './detail/guideActions';
@@ -909,6 +910,18 @@ export const api = {
   startVersionPause: (projectId: string, minutes: number) => post<{ paused: ProjectPause }>(`/api/projects/${projectId}/version-pause`, { minutes }),
   /** Encerra a pausa de versão antes do prazo (sem pausa é um nada; em pausa comum, 409). */
   endVersionPause: (projectId: string) => post<{ paused: null }>(`/api/projects/${projectId}/version-pause/end`),
+  /** Versão com escopo (ver server/release.ts): o estado e o progresso, de custo fixo (leitura estável: igual = mesmo objeto). */
+  release: (projectId: string) => get<ReleaseView>(`/api/projects/${projectId}/release`, true),
+  /** As versões fechadas (tags) e o número sugerido. Roda git no servidor: só ao abrir a aba. */
+  releaseHistory: (projectId: string) => get<ReleaseHistory>(`/api/projects/${projectId}/releases`),
+  openRelease: (projectId: string, body: { version: string; taskIds: string[]; docsStaffId: string | null }) => post<ReleaseView>(`/api/projects/${projectId}/release`, body),
+  changeReleaseScope: (projectId: string, body: { add?: string[]; remove?: string[] }) => post<ReleaseView>(`/api/projects/${projectId}/release/scope`, body),
+  prepareRelease: (projectId: string, skipTests = false) => post<ReleaseView>(`/api/projects/${projectId}/release/prepare`, { skipTests }),
+  /** Push do commit da versão e o PR (ação externa: a tela confirma antes). */
+  publishRelease: (projectId: string) => post<ReleaseView>(`/api/projects/${projectId}/release/publish`),
+  /** A tag da versão no commit da mescla do PR (atualiza as instalações: a tela confirma antes). */
+  tagRelease: (projectId: string) => post<ReleaseView>(`/api/projects/${projectId}/release/tag`),
+  cancelRelease: (projectId: string) => post<ReleaseView>(`/api/projects/${projectId}/release/cancel`),
   /** O estado da fila de cada funcionário com card aberto ou entrega em processamento (só leitura). */
   projectQueues: (projectId: string) => get<StaffQueue[]>(`/api/projects/${projectId}/queues`, true),
   taskCode: (projectId: string, taskId: string) => get<TaskCode>(`/api/projects/${projectId}/tasks/${taskId}/code`),

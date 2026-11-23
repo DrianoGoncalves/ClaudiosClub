@@ -23,7 +23,8 @@ import { useKeyboardInset } from './useKeyboardInset';
 import { TaskCodePanel } from './TaskCodePanel';
 import { DoubtBadge, DoubtBlock } from './TaskDoubt';
 import { PauseNote, pauseText } from './TaskPause';
-import { PausedBanner, PauseButton, useProjectPause, VersionPauseControl } from './ProjectPauseBar';
+import { PausedBanner, PauseButton, useProjectPause } from './ProjectPauseBar';
+import { ReleaseBanner, ReleaseDialog, useRelease } from './ReleaseDialog';
 import { isVersionPause } from './pauseState';
 import { QueueDots, useQueues } from './QueueStrip';
 import { queueDots } from './queueState';
@@ -198,6 +199,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   const boardCommit = useBoardCommit(projectId);
   const boardWriter = useBoardWriter(projectId);
   const projectPause = useProjectPause(projectId, projectName, onChanged, initialPause);
+  /** A versão com escopo (ver ReleaseDialog): a faixa lê de 15 em 15 s; a página abre por cima do quadro. */
+  const [release, setRelease] = useRelease(projectId);
+  const [releaseOpen, setReleaseOpen] = useState(false);
   const queues = useQueues(projectId, initialQueues);
   // O relógio do quadro: sem ele, com a leitura estável, "há 3 min" e as contagens dos selos congelavam enquanto nada mudasse. Só força o
   // redesenho: a hora é lida a cada render (depois de uma ação, "agora" é agora mesmo, não a hora do último tique).
@@ -220,11 +224,11 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
   }, [load]);
 
   useEffect(() => {
-    // Com o diálogo de cancelar/apagar aberto, o Esc é dele (fecha só o diálogo).
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !closing && (selected ? setSelected(null) : onClose());
+    // Com o diálogo de cancelar/apagar (ou a página da versão) aberto, o Esc é dele (fecha só o diálogo).
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !closing && !releaseOpen && (selected ? setSelected(null) : onClose());
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose, selected, closing]);
+  }, [onClose, selected, closing, releaseOpen]);
 
   // O erro de uma tarefa não segue para a próxima.
   useEffect(() => setError(null), [selected]);
@@ -538,6 +542,9 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             )}
           </div>
           <span className="tasks-head-actions">
+            <button className="btn-secondary release-open-btn" onClick={() => setReleaseOpen(true)} title={t('release.openTitle')}>
+              {t('release.open')}
+            </button>
             {onOpenSchedules && (
               <button className="btn-secondary btn-with-icon" onClick={onOpenSchedules} title={t('schedules.openTitle')}>
                 <ClockIcon /> {t('schedules.open')}
@@ -557,7 +564,7 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
             </button>
           </span>
         </header>
-        {projectPause.pause === null && <VersionPauseControl busy={projectPause.busy} onStart={projectPause.startVersion} />}
+        <ReleaseBanner view={release} onOpen={() => setReleaseOpen(true)} />
         {projectPause.pause && <PausedBanner pause={projectPause.pause} now={now} />}
         {projectPause.error && <p className="error small" role="alert">{projectPause.error}</p>}
         {/* Com o detalhe aberto o erro aparece nele: no celular o detalhe cobre o quadro inteiro. */}
@@ -721,6 +728,19 @@ export function TasksBoard({ projectId, projectName, staff, costs, onClose, onOp
                   await api.deleteTask(projectId, current.id);
                   setSelected(null);
                 });
+            }}
+          />
+        )}
+        {releaseOpen && (
+          <ReleaseDialog
+            projectId={projectId}
+            projectName={projectName}
+            staff={byHierarchy(staff)}
+            tasks={tasks ?? []}
+            onClose={() => setReleaseOpen(false)}
+            onChanged={(v) => {
+              setRelease(v);
+              load();
             }}
           />
         )}

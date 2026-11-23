@@ -96,9 +96,28 @@ Fila grande e você quer o time parado para focar em outro projeto? **Pausar pro
 - **Só você**: só o navegador do Club pausa ou retoma. Funcionário e conversa de tarefa recebem recusa (403). A única exceção é a pausa de versão, abaixo.
 - **Se der erro** (sem conexão com o servidor, projeto que sumiu, falha ao gravar): o Club mostra um aviso no idioma da tela e o estado fica como estava.
 
-### Pausa de versão
+## Versão
 
-Variante com prazo, para montar uma versão sem que entre trabalho novo. No quadro, o controle **Pausa de versão** fica junto de **Pausar projeto**: escolha o prazo e use **Ligar pausa**. O padrão é 30 minutos e o máximo, 120.
+O botão **Versão**, no cabeçalho do quadro, abre a página da versão (tela cheia, por cima do quadro). Ela tem duas abas: **Versão** e **Histórico**.
+
+- **Abrir**: marque as tarefas pendentes (Aguardar, A fazer, Fazendo, Revisão) que entram. As bloqueadoras abertas de cada uma entram junto, marcadas como **dependência**. O número vem sugerido a partir da última tag (ex.: depois de `v1.5.1`, `1.5.2`); dá para trocar. Uma versão aberta por projeto, até 50 tarefas.
+- **Card de manual e doc**: marcado por padrão. Escolha quem cuida dele. Ele fica em **Aguardar** e entra na fila sozinho quando as outras tarefas da versão ficam prontas.
+- **Enquanto a versão está aberta**: só as tarefas dela saem da fila. As de fora esperam em **A fazer** com a nota "fora da versão". As que já estavam em **Fazendo** ou **Revisão** terminam, mas **a mescla delas espera**: o checkout é um só, e a mescla levaria código não marcado para a versão. O seu **Começar** continua valendo. Uma faixa no quadro mostra "Versão X aberta · N de M prontas".
+- **Atenção, funcionário sem worktree**: a tarefa de fora que já estava em **Fazendo** sem worktree muda o checkout direto, sem mescla para segurar. O que ela entregar antes da preparação entra na versão.
+- **Reprovada**: fica na versão e volta para ajuste, como sempre. A página mostra quantas vezes voltou e o botão **Tirar**.
+- **Cancelada**: sai da conta sozinha. Se outra tarefa da versão depende dela, essa fica **Travada** e a versão não fecha até você tirar a dependente ou resolver a dependência.
+- **Pôr e tirar**: até preparar, **Pôr mais tarefas na versão** e **Tirar** mudam o escopo. Tirar uma bloqueadora de que outra tarefa da versão ainda depende é recusado.
+- **Preparar (sozinho)**: quando todas ficam em **Pronto** (com worktree, isso já inclui a mescla), o Club roda os testes do projeto, sobe o número no `package.json` e no `package-lock.json` e faz o commit local "Versão X" só desses dois arquivos. A partir daí a fila e as mesclas de fora voltam a andar. O build não roda aqui: ele mexeria no `dist/` e reiniciaria o servidor do `daily:start`.
+- **Se a preparação falhar** (testes vermelhos ou `package.json` mexido sem commit): nada é commitado, o motivo e a saída dos testes aparecem na página, e o Club não tenta de novo sozinho. Use **Tentar de novo** ou **Preparar sem os testes**.
+- **Publicar (push e PR)**: botão seu, com confirmação. Envia o commit da versão para a branch `release/X` no GitHub (nunca force) e abre o PR para a branch padrão. Commits feitos depois da preparação não vão juntos.
+- **Criar tag vX**: depois de mesclar o PR no GitHub. O Club confere que o PR foi mesclado, cria a tag anotada no commit da mescla (com o resumo e a lista das tarefas) e a envia. **É a tag que publica a versão**: as instalações do Club passam a ver a atualização. A versão fecha aqui.
+- **Cancelar versão**: a fila e as mesclas de fora voltam. Um commit de versão já feito fica (é local).
+- **Histórico**: a lista das versões publicadas (as tags `vX.Y.Z`), da mais nova para a mais velha, com data, commit e, ao abrir, o resumo e as tarefas que entraram. Versões de antes desta ferramenta aparecem sem a lista de tarefas.
+- **Só você**: abrir, mudar, preparar, publicar, criar a tag e cancelar são só pelo navegador do Club. Funcionário recebe recusa (403).
+
+### Pausa de versão (pela API)
+
+A pausa com prazo continua existindo para o funcionário com a permissão **Pode versionar e fazer deploy**, pela API. Ela não aparece mais como controle no quadro; quando alguém a liga, a faixa e o selo abaixo aparecem e o botão **Encerrar pausa** a desliga.
 
 - **O que barra**: o mesmo que a pausa comum: nada novo começa (fila, início de tarefa, rotinas, despertadores, troca de motor).
 - **O que deixa terminar**: o turno em andamento, a revisão da entrega e o ajuste de um cartão em **Fazendo**, **Planejando** ou **Revisão**, como numa reprovação.

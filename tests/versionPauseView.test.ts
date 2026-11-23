@@ -8,7 +8,7 @@ import type { Board, ProjectPause, StaffProfile } from '../shared/model';
 import { StaffForm } from '../client/src/staff/HireForm';
 import { TasksBoard } from '../client/src/tasks/TasksBoard';
 import { createPauseController, minutesLabel, pauseHeading, pausedTip, versionBy, versionLeft, type PauseView } from '../client/src/tasks/pauseState';
-import { PausedBanner, PausedTag, PauseButton, VersionPauseControl } from '../client/src/tasks/ProjectPauseBar';
+import { PausedBanner, PausedTag, PauseButton } from '../client/src/tasks/ProjectPauseBar';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -94,15 +94,6 @@ describe('selo, faixa e controle', () => {
     expect(renderToStaticMarkup(createElement(PauseButton, { paused: true, onClick: () => {} }))).toContain('Retomar projeto');
     expect(renderToStaticMarkup(createElement(PauseButton, { paused: false, onClick: () => {} }))).toContain('Pausar projeto');
   });
-
-  it('controle: prazos 15/30/60/120 min com 30 selecionado, e o botão Ligar pausa', () => {
-    const html = renderToStaticMarkup(createElement(VersionPauseControl, { onStart: () => {} }));
-    expect(html).toContain('Pausa de versão');
-    expect(html).toMatch(/<option value="30" selected="">30 min<\/option>/);
-    for (const label of ['15 min', '1 h', '2 h']) expect(html).toContain(`>${label}</option>`);
-    expect(html).toContain('Ligar pausa');
-    expect(renderToStaticMarkup(createElement(VersionPauseControl, { busy: true, onStart: () => {} }))).toContain('disabled');
-  });
 });
 
 describe('controlador: ligar com prazo e encerrar antes', () => {
@@ -184,9 +175,10 @@ describe('o quadro de tarefas', () => {
       createElement(TasksBoard, { projectId: 'p', projectName: 'Projeto', staff: [], costs: null, onClose: () => {}, onOpenStaff: () => {}, onChanged: () => {}, initialTasks: [], initialPause }),
     );
 
-  it('rodando: o controle "Pausa de versão" aparece junto de "Pausar projeto", sem faixa', () => {
+  it('rodando: o botão "Versão" (a versão com escopo, no lugar do controle da pausa com prazo) aparece junto de "Pausar projeto", sem faixa', () => {
     const html = board(null);
-    expect(html).toContain('version-pause-control');
+    expect(html).toContain('release-open-btn');
+    expect(html).not.toContain('version-pause-control');
     expect(html).toContain('Pausar projeto');
     expect(html).not.toContain('project-paused');
   });

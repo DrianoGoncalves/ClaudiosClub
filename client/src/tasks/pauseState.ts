@@ -29,10 +29,6 @@ export function pausedTip(pause: ProjectPause, now: number): string {
   return `${pausedHeading(pause, now)}. ${t('tasks.projectPausedShort')}`;
 }
 
-/** Prazos que a tela oferece para a pausa de versão (minutos); o padrão é o do servidor (30). O servidor aceita de 1 a 120. */
-export const VERSION_PAUSE_OPTIONS = [15, 30, 60, 120] as const;
-export const VERSION_PAUSE_DEFAULT = 30;
-
 export const isVersionPause = (pause: ProjectPause | null | undefined): pause is ProjectPause & { mode: 'version'; until: string } => pause?.mode === 'version' && !!pause.until;
 
 /** "45 min", "1 h", "1 h 05 min": o prazo ou o que falta, em minutos inteiros (arredonda para cima, nunca "0 min"). */
