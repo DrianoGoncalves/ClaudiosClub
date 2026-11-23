@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { AccountUsage, Project, StaffProfile } from '../shared/model';
+import { TAREFA_MCP_NAME, type AccountUsage, type Project, type StaffProfile } from '../shared/model';
 import { usageStopHit, UsageStopError } from '../server/usageStop';
 import { ensureWorktree, worktreeFor } from '../server/staff/worktree';
 import { listServers } from '../server/staff/servers';
@@ -719,9 +719,9 @@ describe('StaffService', () => {
     const sid = spawn.sessionId;
     expect(spawn.args).toEqual(expect.arrayContaining(['--session-id', sid, '--permission-mode', 'acceptEdits', '--strict-mcp-config']));
     // A config de MCP (com possíveis segredos) fica fora do projeto, só com o escolhido. O navegador limpo (ficha com Navegador) entra à
-    // parte, se o Chrome ou o Edge estiver nesta máquina: não conta aqui (ver cleanBrowser.test.ts).
+    // parte, se o Chrome ou o Edge estiver nesta máquina: não conta aqui (ver cleanBrowser.test.ts). O MCP de tarefa (cancelar; ver tarefaMcp.test.ts) também entra à parte.
     const mcp = JSON.parse(await fs.readFile(path.join(root, 'run', sid, 'mcp.json'), 'utf8'));
-    expect(Object.keys(mcp.mcpServers).filter((k) => k !== CLEAN_BROWSER_MCP_NAME)).toEqual(['docs']);
+    expect(Object.keys(mcp.mcpServers).filter((k) => k !== CLEAN_BROWSER_MCP_NAME && k !== TAREFA_MCP_NAME)).toEqual(['docs']);
   });
 
   it('retomar a conversa usa --resume na mesma sessão, sem duplicar', async () => {

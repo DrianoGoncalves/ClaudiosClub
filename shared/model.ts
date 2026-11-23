@@ -2281,6 +2281,12 @@ export const GIT_MCP_NAME = 'myco-git';
 export const GIT_READ_TOOLS: string[] = ['git_status', 'git_diff', 'git_log'];
 export const GIT_WRITE_TOOLS: string[] = ['git_commit', 'git_push', 'git_pr_criar'];
 
+/**
+ * MCP de tarefa do Club (`tarefa_cancelar`, `tarefa_pedir_cancelamento`, `tarefa_recusar_cancelamento`), só no Claude: outro caminho para as rotas `cancel`, `cancel-request` e
+ * `cancel-request/refuse`, com o token da própria conversa (o servidor confere quem é dono da tarefa). O Codex segue pelo curl, que lá não passa por classificador.
+ */
+export const TAREFA_MCP_NAME = 'myco-tarefa';
+
 /** MCP que leva uma pergunta ao GPT (Codex): a ferramenta aparece como `mcp__myco-gpt__perguntar_gpt`. */
 export const GPT_MCP_NAME = 'myco-gpt';
 export const GPT_TOOL_NAME = 'perguntar_gpt';

@@ -483,7 +483,8 @@ describe('Claude em plan: mcp.json, --allowedTools e a ficha', () => {
     expect(cfg.mcpServers[MEMORIA_MCP_NAME]!.type).toBe('stdio');
     expect(cfg.mcpServers[MEMORIA_MCP_NAME]!.args.slice(-4)).toEqual(['--project', proj, '--staff', ID]);
     const args = buildClaudeArgs(p, { ...run, sessionId: 's', resume: false, firstPrompt: null });
-    expect(args[args.indexOf('--allowedTools') + 1]).toBe(`mcp__${MEMORIA_MCP_NAME}`);
+    // Junto com o MCP de tarefa (cancelar a própria tarefa; ver tests/tarefaMcp.test.ts), que entra em toda conversa do Claude fora da revisão.
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe(`mcp__${MEMORIA_MCP_NAME},mcp__myco-tarefa`);
     expect(args[args.indexOf('--permission-mode') + 1]).toBe('plan');
     const md = memoriaEm(await fichaDe(proj));
     expect(md).toContain('é sempre permitido, mesmo que uma regra da ficha proíba editar arquivos');
@@ -513,7 +514,8 @@ describe('Claude em plan: mcp.json, --allowedTools e a ficha', () => {
     const run = await prepareRun(p, launch(proj), 'sess-off', proj);
     expect(run.memoriaMcp).toBe(false);
     const args = buildClaudeArgs(p, { ...run, sessionId: 's', resume: false, firstPrompt: null });
-    expect(args.includes('--allowedTools')).toBe(false);
+    // Só o MCP de tarefa (outro assunto) sobra em --allowedTools: a memória não.
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__myco-tarefa');
     // `off` também sai pelo --disallowedTools (regra do mcpAccess, que não foi afrouxada).
     expect(args[args.indexOf('--disallowedTools') + 1]!.split(',')).toContain(`mcp__${MEMORIA_MCP_NAME}`);
     const md = memoriaEm(await fichaDe(proj));

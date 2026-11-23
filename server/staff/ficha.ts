@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PLAYBOOK_AGENTS } from '../../shared/agentPresets';
 import { personalityName, personalitySection } from '../../shared/personality';
-import { FTP_MCP_NAME, GIT_MCP_NAME, GIT_READ_TOOLS, GIT_WRITE_TOOLS, GPT_MCP_NAME, GPT_TOOL_NAME, MEMORIA_MCP_NAME, TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
+import { FTP_MCP_NAME, GIT_MCP_NAME, GIT_READ_TOOLS, GIT_WRITE_TOOLS, GPT_MCP_NAME, GPT_TOOL_NAME, MEMORIA_MCP_NAME, TAREFA_MCP_NAME, TEMP_IDLE_DAYS, type Autonomy, type Playbook, type ServerInfo, type StaffProfile } from '../../shared/model';
 import { GUIDE_PATH } from '../projectGuide';
 import { REQUIRED_PROOFS_LINE, REVIEW_RUBRIC } from '../deliveryRules';
 import { MYCO_HOME } from '../config';
@@ -12,6 +12,8 @@ import { defaultLocations, pathKey } from '../adapters/claude/paths';
 import { mcpOffDenyRules } from './mcpAccess';
 import { CLEAN_BROWSER_DENIED, CLEAN_BROWSER_MCP_NAME, CONSULT_CREDENTIAL_DIRS, CONSULT_CREDENTIAL_FILES } from '../chat/codexArgs';
 import { SSH_MCP_NAME, SSH_READ_TOOLS } from './sshMcp';
+import { tarefaToolName } from './tarefaText';
+import type { TarefaTool } from './tarefaMcp';
 import type { CodexMcpMotivo } from './mcp';
 import type { SkillPlan } from '../skillAccess';
 import { CONSULT_GUIDE_MAX_BYTES, type ConsultGuide } from './consultGuide';
@@ -61,6 +63,8 @@ export interface FichaContext {
   memoria?: MemoriaInfo;
   /** O MCP de git da conversa, se a pasta é um repositório (ver `gitSection`). Ausente = não é um repositório git. */
   git?: GitInfo;
+  /** O MCP de tarefa da conversa (Claude): a seção de quem pede tarefas manda cancelar pela ferramenta (ver `removeFromQueue`). Ausente = o curl. */
+  tarefa?: TarefaInfo;
   /** O índice da memória passa do teto (ver memory-cap.mjs): o tamanho que ele tem. O aviso vai só no prompt (`systemPrompt`), não no .md da ficha. Ausente = dentro do teto. */
   memoryOver?: { bytes: number; lines: number };
   /** Codex com Navegador na ficha: o que a seção Navegador diz (ver `codexChromeLines`). Ausente = sem Navegador no Codex. */
@@ -103,6 +107,12 @@ export interface MemoriaInfo {
   review?: boolean;
 }
 
+/** O MCP de tarefa (`myco-tarefa`) da conversa (ver `tarefaLaunchOf` em launch.ts). Ausente na `FichaContext` = Codex (ou ficha sem conversa): a ficha manda o curl. */
+export interface TarefaInfo {
+  /** O MCP foi anexado à conversa. Falso: conversa de revisão, acesso desligado na ficha (`mcpAccess`) ou sem endereço do Club. */
+  mcp: boolean;
+}
+
 /** O MCP de git (`myco-git`) da conversa (ver `gitLaunchOf` em launch.ts). Ausente na `FichaContext` = a pasta não é um repositório git. */
 export interface GitInfo {
   /** O MCP foi anexado à conversa. */
@@ -143,6 +153,20 @@ const CARD_IS_CODE_TEAM = (api: string): string =>
   `Card = código: o quadro de tarefas só tem trabalho que edita código, e não deve virar lista de pendências. O plano de um código é a fase "planejando" do próprio card (a pessoa planeja, você aprova e ela segue no mesmo card), nunca um card separado de plano. Pergunta, análise, auditoria e parecer para alguém da equipe vão por mensagem direta, não por card: POST ${api}/chat/send com os mesmos cabeçalhos e {"sessionId": "<a conversa dela, ou null para abrir uma nova>", "staffId": "<o id dela>", "text": "<a pergunta>"}. Card que a pessoa termina sem editar nenhum arquivo de código não vai para revisão: fica marcado "sem código" e chega a você como aviso, para cancelar com o motivo, devolver a ela ou, se ela pode ter editado por um caminho que o Claudio’s Club não vê (script, shell), mandar revisar mesmo assim: POST ${api}/tasks/<id da tarefa>/review-anyway com os mesmos cabeçalhos e corpo {}.`;
 
 /**
+ * Como o gestor tira da fila uma tarefa que ele pediu: cancelar na hora (a pessoa ainda não começou) ou pedir o cancelamento (já começou). No Claude com o MCP `myco-tarefa` na
+ * conversa (`ctx.tarefa`), pela ferramenta, com a API como alternativa se ela faltar ou falhar (o curl de cancelar é negado pelo classificador do modo auto); no resto (Codex, acesso
+ * desligado, conversa de revisão), pela API, como antes. As duas portas chegam à mesma rota.
+ */
+function removeFromQueue(p: StaffProfile, ctx: FichaContext, api: string): string {
+  const route = (to: string, hint: string) => `POST ${api}/tasks/<id da tarefa>/${to} com {"reason": "${hint}"}`;
+  if (codexOf(p) || !ctx.tarefa?.mcp) {
+    return `se a pessoa ainda NÃO começou (nunca teve conversa), ${route('cancel', '<por quê, em uma frase>')} (mesmos cabeçalhos) cancela na hora. Se ela JÁ começou (ou parou, mas já teve conversa), o cancelamento direto é 409: mande um pedido, ${route('cancel-request', '<por quê>')}.`;
+  }
+  const tool = (t: TarefaTool) => `\`${tarefaToolName(t)}\``;
+  return `se a pessoa ainda NÃO começou (nunca teve conversa), ${tool('tarefa_cancelar')} (\`tarefa\`: o id; \`motivo\`: o porquê, em uma frase) cancela na hora. Se ela JÁ começou (ou parou, mas já teve conversa), o cancelamento direto é 409: mande um pedido com ${tool('tarefa_pedir_cancelamento')} (os mesmos campos). É a mesma rota da API, mas sem o terminal: o curl de cancelar costuma ser barrado pelo modo de permissão. Se a ferramenta faltar ou falhar, a API: ${route('cancel', '<por quê>')} (cancelar) ou ${route('cancel-request', '<por quê>')} (pedir), com os mesmos cabeçalhos.`;
+}
+
+/**
  * A equipe de um gestor: o que é da área de alguém vai para essa pessoa, como tarefa do Claudio’s Club (fila,
  * quadro, aviso de volta); os agents do roteiro ficam com o que não tem dono. A conversa do gestor
  * costuma ser longa (centenas de milhares de tokens), então cada passo dele custa caro: ele repassa
@@ -162,7 +186,7 @@ function teamSection(p: StaffProfile, ctx: FichaContext): string {
     'Repasse sem pesquisar: não leia o código para escrever a tarefa. Mande o pedido do usuário nas palavras dele, o critério de pronto e o que não mexer (com o motivo); cite arquivos só se já souber quais são. Quem é da área acha as linhas. Pedido que é inteiro de uma área vai como está, numa tarefa só para essa pessoa, sem você planejar; um card cabe numa sessão (uma tela ou um fluxo): pedido maior vira cards menores, com blockedBy quando um depende do outro, e não um card gigante; um pedido com partes de áreas diferentes vira uma tarefa para cada pessoa.',
     REQUIRED_PROOFS_LINE,
     `Para passar uma tarefa: POST ${api}/tasks com os cabeçalhos \`x-myco: 1\` e \`x-myco-token: $MYCO_TOKEN\` (o token da sua conversa, já no seu ambiente) e um JSON com title, description (o pedido e o que não mexer), acceptance (o critério de pronto), goal (opcional: uma frase do porquê), planFirst (opcional: true quando a pessoa deve entregar o plano antes de editar; ver "Plano primeiro" abaixo), blockedBy (ids das tarefas que precisam terminar antes, só quando esta não pode ser feita ou conferida sem elas prontas; a fila é da pessoa, então entre pessoas diferentes só o blockedBy garante a ordem: dependência real entre pessoas leva blockedBy; mexer no mesmo assunto não basta, e tarefas que vão mexer nos mesmos arquivos vão para a mesma pessoa, cuja fila as serializa sem blockedBy; cancelada continua bloqueando; para a mesma pessoa, sem dependência real, deixe vazio: a fila dela espera sozinha), staffId (o id da pessoa), requestedBy: "${p.id}", start: true e idempotencyKey (uma chave única por tarefa, de 8 a 100 caracteres: letras, números e . _ : -, ex.: "exportar-csv-17nov-a1"). Se a resposta não chegar ou vier com erro, REPITA o mesmo pedido com a MESMA chave: a tarefa não duplica nem recomeça (a mesma chave com outro conteúdo é 409; tarefa nova, chave nova). A tarefa entra na fila dela (uma por vez), começa sozinha quando ela ficar livre (tarefa em revisão não segura a fila; no limite de consumo, espera ele baixar) e aparece no quadro de tarefas. A resposta é a tarefa gravada: "idempotentReplay": true é a tarefa de antes (o retry não criou nada); "startError" é o começo que falhou depois de gravar (a fila retoma sozinha: NÃO crie outra); "warnings" é só aviso de possível duplicata (título parecido que você passou à mesma pessoa há pouco: confira se não é a mesma tarefa).`,
-    `Tirar da fila uma tarefa que VOCÊ pediu, sempre com o motivo ("reason"; mesmos cabeçalhos): se a pessoa ainda NÃO começou (nunca teve conversa), POST ${api}/tasks/<id da tarefa>/cancel com {"reason": "<por quê, em uma frase>"} cancela na hora. Se ela JÁ começou (ou parou, mas já teve conversa), o cancelamento direto é 409: mande um pedido, POST ${api}/tasks/<id da tarefa>/cancel-request com {"reason": "<por quê>"}. Ele chega na conversa dela, que decide: se aceitar, cancela e você é avisado do cancelamento; se recusar, diz por quê e o motivo chega como aviso na conversa em que você pediu (a tarefa segue). O pedido e a decisão ficam no histórico do card, e só há um pedido aberto por vez; recusado, não insista (outro pedido só depois de 10 min, senão 409): com fato novo, fale com o usuário. Só vale para tarefa que você pediu (403 nas outras); quem só revisa não cancela. Cancelar não desfaz arquivos nem libera quem depende dela.`,
+    `Tirar da fila uma tarefa que VOCÊ pediu, sempre com o motivo: ${removeFromQueue(p, ctx, api)} Ele chega na conversa dela, que decide: se aceitar, cancela e você é avisado do cancelamento; se recusar, diz por quê e o motivo chega como aviso na conversa em que você pediu (a tarefa segue). O pedido e a decisão ficam no histórico do card, e só há um pedido aberto por vez; recusado, não insista (outro pedido só depois de 10 min, senão 409): com fato novo, fale com o usuário. Só vale para tarefa que você pediu (403 nas outras); quem só revisa não cancela. Cancelar não desfaz arquivos nem libera quem depende dela.`,
     `Se o pedido mudar antes de a pessoa começar, edite a tarefa em vez de criar outra com blockedBy (duplica o quadro): POST ${api}/tasks/<id da tarefa> com os mesmos cabeçalhos (\`x-myco: 1\` e \`x-myco-token: $MYCO_TOKEN\`) e um JSON só com o que muda: title, description, acceptance, goal, blockedBy ou staffId (o que você manda substitui o valor atual, então mande o texto inteiro do campo). Só vale em Aguardar e A fazer, antes de a conversa da tarefa existir; em Fazendo, Revisão ou Finalizado a resposta é 409 e o complemento vai para a pessoa na conversa da tarefa. Só edita quem pediu a tarefa ou o gestor de quem a faz (senão 403), e staffId só para quem reporta a você: em A fazer, a tarefa vai para o fim da fila do novo. A coluna não muda por aqui. A resposta vem em segundos: 200 gravou; 503 é a vez de quem faz a tarefa ocupada e NADA foi gravado (repita em instantes). planFirst (true ou false) também se edita por aqui.`,
     `Plano primeiro: quando a pessoa deve entregar o plano antes de editar (complexidade alta, autenticação, mudança de banco), crie a tarefa com "planFirst": true (sem o campo, o Claudio’s Club também reconhece na descrição frases como "comece pelo plano" ou "plano primeiro"; "planFirst": false dispensa). O plano que ela entrega no fim do turno NÃO é entrega: o card fica em Planejando, sem revisão, sem rodada e sem reprovação, e o plano chega a você na conversa em que pediu. Você decide: POST ${api}/tasks/<id da tarefa>/plan com os mesmos cabeçalhos e {"decision": "approve"} (a pessoa segue neste mesmo card e implementa; "note" opcional acrescenta uma observação) ou {"decision": "reject", "reason": "<o que ajustar no plano>"} (volta a ela com o motivo, e ela entrega o plano de novo). Só você, que pediu, e o usuário decidem (403 para os outros; 409 se o card não espera plano). Não reprove nem mande conferir um plano: não há o que conferir, e a mensagem sua na conversa da tarefa também o devolve, mas só a aprovação acima grava o plano no card.`,
     `Ordem da fila: cada pessoa faz as tarefas na ordem em que entraram na fila dela (a bloqueada por blockedBy é pulada). Para subir ou descer uma tarefa que VOCÊ pediu: POST ${api}/tasks/<id da tarefa>/order com os mesmos cabeçalhos e {"step": "up"} ou {"step": "down"}; ela troca de lugar com a sua tarefa mais próxima na fila da pessoa e nenhuma tarefa de outro solicitante muda de posição (a resposta traz de que posição para qual). Tarefa que você não pediu, ou furar a fila de outro, é 403: isso é só do usuário. Quem faz a tarefa não muda a ordem: ele só te manda uma sugestão com o motivo, que chega como aviso na conversa em que você pediu e não altera nada; quem decide é você.`,
@@ -1108,6 +1132,8 @@ export interface ClaudeArgsOptions {
   memoriaMcp?: boolean;
   /** O MCP de git (`myco-git`) entrou (ver prepareRun): as de leitura entram em --allowedTools (com `editing`) e, na revisão, as de escrita saem. */
   gitMcp?: boolean;
+  /** O MCP de tarefa (`myco-tarefa`) entrou (ver prepareRun): entra inteiro em --allowedTools (cancelar é ação do próprio Club, conferida no servidor), qualquer que seja a autonomia; fora da revisão. */
+  tarefaMcp?: boolean;
   /** Conversa de revisão de tarefa: as ferramentas de edição saem (REVIEW_DENIED), qualquer que seja a autonomia da ficha. A memória própria fica pelo MCP. */
   readOnly?: boolean;
 }
@@ -1256,7 +1282,10 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   const memoria = o.memoriaMcp && (p.autonomy === 'plan' || o.readOnly) ? [`mcp__${MEMORIA_MCP_NAME}`] : [];
   // As de leitura do git; commit, push e PR seguem a permissão normal (pede em aceitar edições) e o hook de escrita, e saem de vez na revisão.
   const gitRead = o.gitMcp && editing ? GIT_READ_TOOLS.map((t) => `mcp__${GIT_MCP_NAME}__${t}`) : [];
-  const allowed = [...(p.browser && editing ? ['mcp__claude-in-chrome'] : []), ...(o.cleanBrowser && editing ? [`mcp__${CLEAN_BROWSER_MCP_NAME}`] : []), ...sshRead, ...gitRead, ...memoria];
+  // Cancelar a própria tarefa (ou a que pediu): ação do próprio Club, conferida no servidor pelo token da conversa; liberada inteira, em qualquer autonomia, para não cair no
+  // classificador do modo auto nem virar pedido de permissão ao dono. Fora da revisão (o revisor não cancela), mesmo que a flag venha ligada.
+  const tarefa = o.tarefaMcp && !o.readOnly ? [`mcp__${TAREFA_MCP_NAME}`] : [];
+  const allowed = [...(p.browser && editing ? ['mcp__claude-in-chrome'] : []), ...(o.cleanBrowser && editing ? [`mcp__${CLEAN_BROWSER_MCP_NAME}`] : []), ...sshRead, ...gitRead, ...memoria, ...tarefa];
   if (allowed.length) args.push('--allowedTools', allowed.join(','));
   // Com a internet desligada (Configurações), a busca na web do Claude também sai: a ferramenta é recusada antes de rodar.
   const web = o.internetAccess === false ? ['WebSearch', 'WebFetch'] : [];
@@ -1264,7 +1293,8 @@ export function buildClaudeArgs(p: StaffProfile, o: ClaudeArgsOptions): string[]
   const clean = o.cleanBrowser ? CLEAN_BROWSER_DENIED.map((t) => `mcp__${CLEAN_BROWSER_MCP_NAME}__${t}`) : [];
   // Os MCPs marcados como Desligado (acesso da ficha) também saem daqui; os de leitura e de pedir antes são o hook de escrita (mcp-write.json).
   // Revisão: nada de editar arquivo (o revisor só lê e responde APROVADO ou REPROVADO). Vale a cada abertura, também ao reabrir a conversa.
-  const review = o.readOnly ? [...REVIEW_DENIED, ...(o.gitMcp ? GIT_WRITE_TOOLS.map((t) => `mcp__${GIT_MCP_NAME}__${t}`) : [])] : [];
+  // O revisor também não cancela: o `myco-tarefa` nem entra na revisão (ver tarefaLaunchOf), e a regra cobre um servidor de mesmo nome que viesse de outra config.
+  const review = o.readOnly ? [...REVIEW_DENIED, ...(o.gitMcp ? GIT_WRITE_TOOLS.map((t) => `mcp__${GIT_MCP_NAME}__${t}`) : []), `mcp__${TAREFA_MCP_NAME}`] : [];
   args.push('--disallowedTools', [...secretDenyRules(p, o.keyFiles, o.ftpServers, o.manualEditable === true), ...web, ...clean, ...mcpOffDenyRules(p.mcpAccess), ...review].join(','));
   if (o.mcpConfigPath) args.push('--mcp-config', o.mcpConfigPath, ...(o.strictMcp === false ? [] : ['--strict-mcp-config']));
   return args;

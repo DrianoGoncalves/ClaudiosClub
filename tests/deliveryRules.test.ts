@@ -114,13 +114,24 @@ describe('o brief da tarefa (nos dois motores): começo, retomada na fila e hand
 
   it('o texto é o mesmo nos dois motores, fora o endereço da API', async () => {
     const texts: string[] = [];
+    const cancels: string[] = [];
     for (const engine of ENGINES) {
       const c = await club(`igual-${engine}`, engine);
       const t = (await c.svc.create('p', { title: 'Botão', description: 'Pedido do botão.', acceptance: 'Critério.', staffId: 'ana-1' }))!;
       await c.svc.start('p', t.id);
-      texts.push(c.sent[0]!.replace(/http:\/\/127\.0\.0\.\d:4848/g, '<api>').replace(/t-[0-9a-f]{6}/g, 't-x'));
+      const lines = c.sent[0]!.replace(/http:\/\/127\.0\.0\.\d:4848/g, '<api>').replace(/t-[0-9a-f]{6}/g, 't-x').split('\n');
+      // A linha de cancelar é a única que muda: no Claude aponta a ferramenta do MCP `myco-tarefa` (o curl de cancelar é barrado pelo classificador do modo auto), no Codex segue o curl.
+      cancels.push(lines.find((l) => l.startsWith('Cancelar esta tarefa'))!);
+      texts.push(lines.map((l) => (l.startsWith('Cancelar esta tarefa') ? '<cancelar>' : l)).join('\n'));
     }
     expect(texts[0]).toBe(texts[1]);
+    const [claude, codex] = [cancels[0]!, cancels[1]!];
+    expect(claude).toContain('`mcp__myco-tarefa__tarefa_cancelar`');
+    expect(claude).toContain('se ela faltar ou falhar, use o curl `curl -s -X POST');
+    expect(codex).not.toContain('mcp__myco-tarefa');
+    expect(codex).toContain('cancele pela API do Claudio’s Club com `curl -s -X POST');
+    // O fim é o mesmo nos dois (quando cancelar e quando não).
+    for (const l of [claude, codex]) expect(l).toContain('e pare por aí, sem mais nada.');
   });
 
   it.each(ENGINES)('retomada na fila (o card voltou para "a fazer"), %s: o mesmo fim', async (engine) => {

@@ -1,7 +1,7 @@
 import { lstatSync, readdirSync, statSync, type Stats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { FTP_MCP_NAME, GIT_MCP_NAME, GPT_MCP_NAME, MEMORIA_MCP_NAME, type Autonomy } from '../../shared/model';
+import { FTP_MCP_NAME, GIT_MCP_NAME, GPT_MCP_NAME, MEMORIA_MCP_NAME, TAREFA_MCP_NAME, type Autonomy } from '../../shared/model';
 import { SANDBOX_HOST } from '../callers';
 
 // Linha de comando do Codex (CLI da OpenAI) para um funcionário com `engine: 'codex'`. Cada mensagem é uma execução
@@ -517,6 +517,7 @@ export const CODEX_RESERVED_MCP_NAMES: ReadonlySet<string> = new Set([
   GPT_MCP_NAME,
   MEMORIA_MCP_NAME,
   GIT_MCP_NAME,
+  TAREFA_MCP_NAME,
   'claude-in-chrome',
 ]);
 
