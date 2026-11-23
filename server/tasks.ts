@@ -3577,6 +3577,8 @@ export class TaskService {
           const next = { ...t, runId, held: (t.held ?? []).filter((m) => !sent.has(m.id)) };
           // A conversa voltou a trabalhar: o card em "a fazer" ou em Aguardar vai para fazendo, senão ela roda por fora do status (`occupant` não vê o
           // funcionário ocupado e a retomada de queda, que olha "fazendo", não pega). Sai da fila: a conversa já tem a mensagem.
+          // Card que esperava a decisão do plano (já sem prender o funcionário, ver `parked`): a mensagem o põe a trabalhar de novo, como a mensagem direta na conversa (ver `onSent`); sem isto ele seguiria "planejando" e a fila o veria parado.
+          if (!t.autoCreated && waitsPlan(t)) return moved(next, 'doing', 'auto', 'ajuste guardado enviado: o plano deixou de esperar a decisão');
           if (t.autoCreated || (t.status !== 'todo' && t.status !== 'waiting')) return noted(next, 'ajuste guardado enviado');
           return moved({ ...next, queuedAt: null, queuedForce: false, resourceWait: null, startRetry: undefined, unqueued: undefined }, 'doing', 'auto', 'ajuste guardado enviado: a conversa voltou a trabalhar, a tarefa volta para fazendo');
         });
@@ -5852,8 +5854,8 @@ export class TaskService {
   /**
    * Plano primeiro: o card pede o plano antes da edição (`Task.planFirst`, ou a descrição o pede: ver `wantsPlan`) e o turno terminou sem nenhuma edição (`changedFiles` vazio). O que o responsável
    * entregou é o plano, e plano não é entrega: o card NÃO vai para revisão (sem pedido de revisão, sem rodada, sem reprovação, sem commit). Vai para "planejando" com o plano pendente de quem
-   * pediu (`Task.planWait`) e segue ocupando o funcionário, como o cartão de plano. Quem pediu decide: aprovar (o card segue em "fazendo", no mesmo card) ou recusar com o motivo (volta ao
-   * responsável); ver `decidePlan`. O aviso vai ao gestor, na conversa em que pediu (`deliverPlanWait`: o tick refaz; perdido em 30 min, ou sem gestor, vai ao usuário), ou direto ao usuário (item
+   * pediu (`Task.planWait`) e NÃO prende o funcionário (`parked`: a fila dele anda; o cartão de plano da ficha `plan`, com o processo vivo esperando, é o que segue ocupando). Quem pediu decide:
+   * aprovar (o card segue em "fazendo", no mesmo card, na vez dele) ou recusar com o motivo (volta ao responsável); ver `decidePlan`. O aviso vai ao gestor, na conversa em que pediu (`deliverPlanWait`: o tick refaz; perdido em 30 min, ou sem gestor, vai ao usuário), ou direto ao usuário (item
    * 'stuck' da caixa, ver `ownAlerts`).
    *
    * Só a ficha que edita (autonomia diferente de "só planeja"): a ficha `plan` tem o plano pelo cartão de plano da conversa (Claude) ou, no Codex, o fim do turno que entrega (ver `endsInDelivery`).
@@ -5888,8 +5890,9 @@ export class TaskService {
     });
     const marked = waiting as Task | null;
     if (!marked) return already;
-    // Quem esperava por ele fica sabendo; a fila dele não anda (o card segue ocupando, como no cartão de plano).
+    // Quem esperava por ele fica sabendo, e a fila dele anda: o turno acabou e o card espera a decisão de quem pediu sem prender o funcionário (`parked`), como o "sem código". Sem `await` (a vez dele não espera).
     this.warnDependents(projectId, task.id, stuckReason(marked));
+    void this.kick(projectId, staffId);
     if (manager) await this.deliverPlanWait(projectId, task.id);
     return true;
   }
@@ -5967,6 +5970,9 @@ export class TaskService {
    * revisão, conta rodada ou registra reprovação. Só o usuário (`fromBrowser`) ou o gestor que pediu o card, com o token da conversa dele (403 para o responsável e os outros). Card que não espera
    * plano (já decidido, cancelado, devolvido por mensagem na conversa): 409. Tarefa que não existe: null.
    *
+   * O card entregou o plano e não prende o funcionário (`parked`): a fila dele andou. Com outro card já ocupando-o na hora da decisão, o card não volta a "fazendo" por cima dele (dois ocupantes): vai
+   * para "a fazer", na fila, com a decisão guardada (`held`), e retoma na conversa que já tem quando ele ficar livre (mesmo caminho da vaga de escrita ocupada).
+   *
    * A gravação roda na vez do funcionário e responde em `LOCK_DEADLINE_MS` (503 e nada gravado, ver `lockedWithDeadline`); a mensagem ao responsável sai depois da vez (conversa de terceiro não
    * espera dentro dela), e a que não vai (limite de consumo, conversa fechada, projeto pausado) fica guardada (`held`) para a fila enviar.
    */
@@ -5981,6 +5987,7 @@ export class TaskService {
     const who = fromBrowser ? 'o usuário' : ((await this.deps.readProfile(projectId, me!).catch(() => null))?.name ?? me!);
     const approve = input.decision === 'approve';
     const since = first.planWait!.since;
+    const workerName = (await this.deps.readProfile(projectId, first.staffId).catch(() => null))?.name ?? 'o responsável';
     const textOf = (title: string): string =>
       approve
         ? [`[Tarefa "${title}"]`, `O plano foi aprovado por ${who}. Implemente-o agora, neste mesmo card: não peça outra aprovação. Os arquivos, os testes e a entrega seguem como sempre.`, input.note && `Observação de quem aprovou: ${input.note}`].filter(Boolean).join('\n\n')
@@ -5997,16 +6004,28 @@ export class TaskService {
         this.changeGated(gate, projectId, taskId, (t, all) => {
           // Na vez dele, de novo: decidido por outro caminho, cancelado ou devolvido por mensagem enquanto esperava.
           if (!waitsPlan(t) || t.planWait!.since !== since) throw new TaskConflictError('o plano já foi decidido ou o card mudou: leia de novo');
-          if (!approve) return moved({ ...t, planWait: undefined }, 'doing', 'auto', `plano recusado por ${who}: ${untrustedLine(input.reason, 200)}`);
+          // Enquanto o plano esperava, a fila dele andou (ver `parked`): se outro card já ocupa o funcionário, este não volta a "fazendo" por cima dele (dois ocupantes). Volta à fila com a decisão
+          // guardada (`held`) e retoma na vez dele (ver `takeNext`: o ajuste guardado vai antes da fila, e o card passa a "fazendo" quando ele é enviado).
+          const busy = occupant(all, first.staffId!, t.id);
+          const at = new Date().toISOString();
+          const toQueue = (next: Task, why: string, note: string): Task => {
+            const held: HeldMessage = { id: randomBytes(4).toString('hex'), at, text: textOf(t.title), reason: why, auto: true };
+            return moved({ ...next, queuedAt: at, queuedForce: false, unqueued: undefined, held: [...(next.held ?? []), held] }, 'todo', 'auto', note);
+          };
+          const busyReason = busy ? `espera ${workerName} terminar “${busy.title}”` : '';
+          if (!approve) {
+            if (!busy) return moved({ ...t, planWait: undefined }, 'doing', 'auto', `plano recusado por ${who}: ${untrustedLine(input.reason, 200)}`);
+            return toQueue({ ...t, planWait: undefined }, busyReason, `plano recusado por ${who}: ${untrustedLine(input.reason, 200)}; ${busyReason}: o card espera na fila e ajusta o plano na vez dele`);
+          }
           // Conferida dentro da mudança (atômica no arquivo), e a partida que está abrindo a conversa agora (`slotStarting`) também conta como dona.
           const starting = this.slotStarting.get(projectId);
           const holder = slot && (writeHolder(all, slot.ownCopy, slot.committing, t.id) ?? (starting && starting !== t.id ? all.find((x) => x.id === starting) : undefined));
-          if (!holder) return moved({ ...t, plan: t.planWait!.text, planWait: undefined }, 'doing', 'auto', `plano aprovado por ${who}`);
-          const at = new Date().toISOString();
-          const reason = slotReason(holder);
-          const held: HeldMessage = { id: randomBytes(4).toString('hex'), at, text: textOf(t.title), reason, auto: true };
-          const queued = moved({ ...t, plan: t.planWait!.text, planWait: undefined, queuedAt: at, queuedForce: false, unqueued: undefined, held: [...(t.held ?? []), held] }, 'todo', 'auto', `plano aprovado por ${who}; ${reason}: o card espera na fila e implementa quando a vaga ficar livre`);
-          return { ...queued, resourceWait: { reason, since: at, holder: holder.id } };
+          if (holder) {
+            const reason = slotReason(holder);
+            return { ...toQueue({ ...t, plan: t.planWait!.text, planWait: undefined }, reason, `plano aprovado por ${who}; ${reason}: o card espera na fila e implementa quando a vaga ficar livre`), resourceWait: { reason, since: at, holder: holder.id } };
+          }
+          if (busy) return toQueue({ ...t, plan: t.planWait!.text, planWait: undefined }, busyReason, `plano aprovado por ${who}; ${busyReason}: o card espera na fila e implementa na vez dele`);
+          return moved({ ...t, plan: t.planWait!.text, planWait: undefined }, 'doing', 'auto', `plano aprovado por ${who}`);
         }),
       { op: `plano ${taskId}`, refused: 'a decisão do plano NÃO foi gravada', deadlineMs: this.lockDeadline() },
     ).catch(async (err) => {
@@ -7011,10 +7030,11 @@ export function releasesStaff(t: Task): boolean {
 
 /**
  * Parada sem prender o funcionário: espera a sua resposta (`releasesStaff`), guarda a resposta da dúvida que chegou com ele em outra tarefa
- * (`HeldMessage.doubt`; sem isso a própria pausada viraria a ocupante), espera as subtarefas que ela delegou (`waitsOnSubtasks`) ou terminou sem editar código e espera quem pediu
- * decidir (`markedNoCode`). O ajuste comum não conta: a conversa dela pode estar com o turno rodando.
+ * (`HeldMessage.doubt`; sem isso a própria pausada viraria a ocupante), espera as subtarefas que ela delegou (`waitsOnSubtasks`), terminou sem editar código e espera quem pediu
+ * decidir (`markedNoCode`) ou entregou o plano e espera quem pediu aprová-lo (`waitsPlan`: o turno acabou, a conversa está parada; aprovado, o card volta na vez dele, ver `decidePlan`).
+ * O ajuste comum não conta: a conversa dela pode estar com o turno rodando. O cartão de plano da ficha `plan` (ExitPlanMode) NÃO é parada: o processo está vivo esperando o cartão.
  */
-const parked = (t: Task, all: Task[]): boolean => releasesStaff(t) || !!t.held?.some((m) => m.doubt) || waitsOnSubtasks(t, all) || markedNoCode(t);
+const parked = (t: Task, all: Task[]): boolean => releasesStaff(t) || !!t.held?.some((m) => m.doubt) || waitsOnSubtasks(t, all) || markedNoCode(t) || waitsPlan(t);
 
 /** O fim de turno de `t` o deixou marcado "sem código" (ver `holdNoCode`)? Só vale em "fazendo": em outra coluna a marca já saiu (`moved`). */
 const markedNoCode = (t: Task): boolean => !!t.noCode && t.status === 'doing';

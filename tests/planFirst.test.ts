@@ -9,6 +9,7 @@ import { resolveCaller, SANDBOX_HOST, SessionTokens } from '../server/callers';
 import { gate } from '../server/gate';
 import { Pairing } from '../server/pairing';
 import { stuckInboxItem } from '../server/inboxItems';
+import { inboxWaits, taskInboxItems, withInboxWait } from '../server/inboxWait';
 import { TaskConflictError, TaskError, TaskForbiddenError, TaskService, ownAlerts, stuckState, wantsPlan } from '../server/tasks';
 import type { Engine, StaffProfile } from '../shared/model';
 import { removeTemp } from './support/tmp';
@@ -143,15 +144,114 @@ describe.each<Engine>(['claude', 'codex'])('card de plano primeiro entrega o pla
     expect(stuckState(t)).toMatchObject({ humanAction: 'decide', selfHeals: false, reason: expect.stringContaining('plano') });
   });
 
-  it('o card segue ocupando o funcionário (como o cartão de plano): a próxima da fila só começa com a decisão', async () => {
-    const b = await club(`ocupa-${engine}`, { engine });
+  it('o plano entregue não prende o funcionário (como a Revisão): o card da fila dele começa e o plano segue esperando a decisão', async () => {
+    const b = await club(`libera-${engine}`, { engine });
+    const first = await b.begin({ planFirst: true, title: 'Com plano' });
+    // Estava na fila antes de o plano chegar: o fim do turno do plano (que acorda a fila) já o começa.
+    const queued = (await b.svc.create('p', { title: 'Na fila', description: 'x', staffId: 'ana-1', reviewerId: null }, 'gio-1', 'gio-s'))!;
+    await b.svc.start('p', queued.id);
+    expect((await b.get(queued.id)).sessionId).toBeNull();
+    await b.endTurn(first.work);
+    const started = await b.get(queued.id);
+    expect(started.status).toBe('doing');
+    expect(started.sessionId).toBeTruthy();
+    // Um card que chega depois também começa na hora (o funcionário não está ocupado pelo plano).
+    const late = (await b.svc.create('p', { title: 'Depois', description: 'x', staffId: 'ana-1', reviewerId: null }, 'gio-1', 'gio-s'))!;
+    await b.svc.start('p', late.id);
+    expect((await b.get(late.id)).sessionId).toBeNull(); // o da fila já ocupa: este espera a vez dele, como sempre
+    // O plano segue esperando quem pediu, no mesmo card.
+    const waiting = await b.get(first.id);
+    expect(waiting.status).toBe('planning');
+    expect(waiting.planWait).toMatchObject({ to: 'manager' });
+    expect(stuckState(waiting)).toMatchObject({ humanAction: 'decide' });
+  });
+
+  it('o card chega depois do plano e começa na hora: o plano entregue não é ocupante', async () => {
+    const b = await club(`livre-${engine}`, { engine });
     const first = await b.begin({ planFirst: true, title: 'Com plano' });
     await b.endTurn(first.work);
     const next = (await b.svc.create('p', { title: 'Próxima', description: 'x', staffId: 'ana-1', reviewerId: null }, 'gio-1', 'gio-s'))!;
     await b.svc.start('p', next.id);
-    expect((await b.get(next.id)).sessionId).toBeNull();
+    const t = await b.get(next.id);
+    expect(t.status).toBe('doing');
+    expect(t.sessionId).toBeTruthy();
+    expect((await b.get(first.id)).status).toBe('planning');
+  });
+
+  it('aprovado com o funcionário livre: o card segue a "fazendo" na conversa dele, como sempre', async () => {
+    const b = await club(`aprova-livre-${engine}`, { engine });
+    const first = await b.begin({ planFirst: true, title: 'Com plano' });
+    await b.endTurn(first.work);
     await b.svc.decidePlan('p', first.id, b.as('gio-1', 'gio-s'), false, { decision: 'approve' });
-    expect((await b.get(first.id)).status).toBe('doing');
+    const t = await b.get(first.id);
+    expect(t.status).toBe('doing');
+    expect(b.h.delivered.filter((d) => d.sessionId === first.work).at(-1)!.text).toContain('O plano foi aprovado por Gio');
+  });
+
+  it('aprovado com o funcionário em outro card: volta à fila com a aprovação guardada e retoma na vez dele, na mesma conversa', async () => {
+    const b = await club(`aprova-ocupado-${engine}`, { engine });
+    const first = await b.begin({ planFirst: true, title: 'Com plano' });
+    await b.endTurn(first.work);
+    const other = (await b.svc.create('p', { title: 'Outro card', description: 'x', staffId: 'ana-1', reviewerId: null }, 'gio-1', 'gio-s'))!;
+    await b.svc.start('p', other.id);
+    const otherWork = (await b.get(other.id)).sessionId!;
+    expect(otherWork).toBeTruthy();
+    const out = await b.svc.decidePlan('p', first.id, b.as('gio-1', 'gio-s'), false, { decision: 'approve', note: 'Sem mexer na API.' });
+    // Não volta a "fazendo" por cima do outro card (dois ocupantes): espera na fila, com o plano gravado e a decisão guardada.
+    expect(out).toMatchObject({ id: first.id, status: 'todo', plan: PLAN, sessionId: first.work });
+    expect(out!.planWait).toBeUndefined();
+    expect(out!.queuedAt).toBeTruthy();
+    expect(out!.held).toHaveLength(1);
+    expect(out!.held![0]).toMatchObject({ auto: true, reason: 'espera Ana terminar “Outro card”' });
+    expect(out!.held![0]!.text).toContain('O plano foi aprovado por Gio');
+    expect(out!.held![0]!.text).toContain('Observação de quem aprovou: Sem mexer na API.');
+    expect(out!.history.at(-1)!.note).toContain('plano aprovado por Gio; espera Ana terminar “Outro card”');
+    expect(b.h.delivered.filter((d) => d.sessionId === first.work)).toEqual([]);
+    expect((await b.get(other.id)).status).toBe('doing');
+    // O outro card entrega: o funcionário fica livre, a aprovação vai à conversa que o card já tinha e ele volta a "fazendo".
+    await b.edit(otherWork);
+    await b.endTurn(otherWork, 'Feito.');
+    const back = await b.get(first.id);
+    expect(back).toMatchObject({ status: 'doing', plan: PLAN, sessionId: first.work });
+    expect(back.held ?? []).toEqual([]);
+    expect(b.h.delivered.filter((d) => d.sessionId === first.work).at(-1)!.text).toContain('O plano foi aprovado por Gio');
+    expect(b.reviewsOpened().length).toBe(0);
+  });
+
+  it('recusado com o funcionário em outro card: também espera a vez dele, com o motivo guardado', async () => {
+    const b = await club(`recusa-ocupado-${engine}`, { engine });
+    const first = await b.begin({ planFirst: true, title: 'Com plano' });
+    await b.endTurn(first.work);
+    const other = (await b.svc.create('p', { title: 'Outro card', description: 'x', staffId: 'ana-1', reviewerId: null }, 'gio-1', 'gio-s'))!;
+    await b.svc.start('p', other.id);
+    const otherWork = (await b.get(other.id)).sessionId!;
+    const out = await b.svc.decidePlan('p', first.id, b.as('gio-1', 'gio-s'), false, { decision: 'reject', reason: 'Falta a migração.' });
+    expect(out).toMatchObject({ status: 'todo', plan: null });
+    expect(out!.held![0]!.text).toContain('O plano foi recusado por Gio. Motivo: Falta a migração.');
+    expect(b.h.delivered.filter((d) => d.sessionId === first.work)).toEqual([]);
+    await b.edit(otherWork);
+    await b.endTurn(otherWork, 'Feito.');
+    expect(await b.get(first.id)).toMatchObject({ status: 'doing', plan: null });
+    expect(b.h.delivered.filter((d) => d.sessionId === first.work).at(-1)!.text).toContain('Falta a migração.');
+  });
+
+  it('mensagem na conversa do plano com o funcionário em outro card fica guardada; enviada, o card volta a "fazendo" e o plano deixa de esperar', async () => {
+    const b = await club(`mensagem-ocupado-${engine}`, { engine });
+    const first = await b.begin({ planFirst: true, title: 'Com plano' });
+    await b.endTurn(first.work);
+    const other = (await b.svc.create('p', { title: 'Outro card', description: 'x', staffId: 'ana-1', reviewerId: null }, 'gio-1', 'gio-s'))!;
+    await b.svc.start('p', other.id);
+    const otherWork = (await b.get(other.id)).sessionId!;
+    const reason = await b.svc.hold(first.work, { text: 'Mude o plano: use a lib X.' });
+    expect(reason).toContain('espera Ana terminar “Outro card”');
+    expect((await b.get(first.id)).status).toBe('planning');
+    await b.edit(otherWork);
+    await b.endTurn(otherWork, 'Feito.');
+    const t = await b.get(first.id);
+    expect(t.status).toBe('doing');
+    expect(t.planWait).toBeUndefined();
+    expect(t.held ?? []).toEqual([]);
+    expect(b.h.delivered.filter((d) => d.sessionId === first.work).at(-1)!.text).toContain('Mude o plano: use a lib X.');
   });
 
   it('o mesmo fim de turno duas vezes (o vigia e o processo) marca e avisa uma vez só', async () => {
@@ -331,6 +431,28 @@ describe('plano pedido pelo dono, aviso que falha e a rede de segurança', () =>
     const out = await b.svc.decidePlan('p', id, null, true, { decision: 'approve' });
     expect(out).toMatchObject({ status: 'doing', plan: PLAN });
     expect(ownAlerts([out!])).toEqual([]);
+  });
+
+  it.each<Engine>(['claude', 'codex'])('a caixa do dono: o plano de card pedido por gestor não é decisão dele (sem item e sem selo "by: owner"); o do dono tem o item: %s', async (engine) => {
+    const b = await club(`caixa-${engine}`, { engine });
+    const byManager = await b.begin({ planFirst: true });
+    await b.endTurn(byManager.work);
+    const byOwner = await b.begin({ planFirst: true, title: 'Do dono' }, null, 'rui-1');
+    b.h.texts[byOwner.work] = PLAN;
+    await b.svc.onTurnDone(byOwner.work);
+    const tasks = await b.list();
+    expect(tasks.find((t) => t.id === byManager.id)!.planWait).toMatchObject({ to: 'manager' });
+    expect(tasks.find((t) => t.id === byOwner.id)!.planWait).toMatchObject({ to: 'owner' });
+    const items = taskInboxItems(tasks, [], 'p');
+    expect(items.filter((i) => i.stuck?.taskId === byManager.id)).toEqual([]);
+    expect(items.filter((i) => i.stuck?.taskId === byOwner.id).map((i) => i.stuck)).toMatchObject([{ humanAction: 'decide', planWait: true, summary: PLAN }]);
+    expect(items.some((i) => i.kind === 'plan')).toBe(false);
+    // O selo do quadro (`Task.inboxWait`) segue a mesma regra: o gestor decide, então nada prende o card na caixa do dono.
+    expect(inboxWaits(items, tasks).has(byManager.id)).toBe(false);
+    expect(withInboxWait(tasks, 'p', [])!.find((t) => t.id === byManager.id)!.inboxWait).toBeUndefined();
+    // O gestor decide e o card sai de vez da espera.
+    await b.svc.decidePlan('p', byManager.id, b.as('gio-1', 'gio-s'), false, { decision: 'approve' });
+    expect(taskInboxItems(await b.list(), [], 'p').filter((i) => i.stuck?.taskId === byManager.id)).toEqual([]);
   });
 
   it('o aviso ao gestor falha: o card fica esperando, o tick refaz com backoff, e passados 30 min o item vai para a caixa do dono', async () => {
