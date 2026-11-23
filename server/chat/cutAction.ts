@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { BackgroundTask, ChatItem } from '../../shared/model';
 import { isClipped } from './items';
-import { findSecrets } from './secrets';
+import { findSecrets, maskSecretQuery } from './secrets';
 
 // Ação cortada pelo reinício: a ferramenta que estava rodando quando o processo da conversa caiu (sem resultado no fim da
 // conversa). Se ela mexe fora do projeto (servidor, push, deploy, site, API), ninguém sabe se chegou a acontecer: a conversa
@@ -225,7 +225,7 @@ export function hasExternalEffect(name: string, input: string): boolean {
 
 const MAX_ACTION = 80;
 
-/** Troca cada segredo do texto por `[segredo]` (findSecrets acha todos, com posição). */
+/** Troca cada segredo do texto por `[segredo]` (findSecrets acha todos, com posição), e o valor de parâmetro de URL que carrega segredo (`?code=`, `&token=`: o código de pareamento não tem formato próprio). */
 function maskSecrets(text: string): string {
   let out = '';
   let at = 0;
@@ -234,7 +234,7 @@ function maskSecrets(text: string): string {
     out += `${text.slice(at, f.index)}[segredo]`;
     at = f.index + f.length;
   }
-  return out + text.slice(at);
+  return maskSecretQuery(out + text.slice(at));
 }
 
 /** O resumo da ação que vai para a caixa, o histórico e o resume.json: sem segredo, em uma linha, curto. */

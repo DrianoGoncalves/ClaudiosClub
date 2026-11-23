@@ -1064,6 +1064,18 @@ export interface Task {
    */
   backgroundWait?: TaskBackgroundWait;
   /**
+   * O card voltou de "revisão" para "fazendo" por mensagem na conversa de trabalho (nota "você respondeu"): o turno que vem responde a ela, e resposta não é entrega. Se esse turno não
+   * editou arquivo (`edited` marca a edição que o Club viu) nem trouxe a entrega no formato, o card volta para "revisão" com a entrega ANTERIOR (sem resumo novo, sem rodada de revisão nova,
+   * sem aviso a quem pediu). `kept`: o que a revisão tinha antes de sair (a espera pelo dono, a mescla automática, o retry), devolvido junto. Some quando o card sai de "fazendo". Só o servidor grava.
+   */
+  reopened?: { at: string; edited?: true; kept?: Pick<Task, 'ownerGate' | 'autoMerge' | 'reviewRetry'> };
+  /**
+   * O card foi para Aguardar porque a conversa "parou no meio" de uma ação com efeito fora do projeto (`TurnCapHit` `restart`, ou `retry` com `why: 'cut'`): uma parada PRESUMIDA, lida do
+   * transcript. Se o turno da conversa terminar normal depois (a parada era falsa, ou ela seguiu por mensagem), o card sai de Aguardar e o fim do turno decide como em "fazendo": a entrega
+   * é gravada e ele vai para revisão. Some quando o card sai de Aguardar. Só o servidor grava.
+   */
+  waitCut?: { at: string };
+  /**
    * O turno de trabalho terminou em erro do motor (autenticação, ou o erro do turno que não é passageiro nem foi retomado: ver `TurnCapHit` `engine`) e o card foi para Aguardar em vez de
    * revisão: não há entrega. Quem pediu o card é avisado (gestor, na conversa em que pediu; o usuário, pela caixa, que também recebe o item do erro). Some quando o card sai de Aguardar.
    * Só o servidor grava.

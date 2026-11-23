@@ -148,6 +148,20 @@ export function findSecrets(text: string): Array<{ label: string; index: number;
   return out.sort((a, b) => a.index - b.index);
 }
 
+/**
+ * Parâmetro de URL que carrega segredo: o nome tem `code` (código de pareamento, OAuth), `token`, `key`, `secret`, `pass…`, `pwd`, `auth`, `sig…`, `session` ou `otp`. Casa só na query
+ * (depois de `?`, `&` ou `;`), até o espaço, `&`, `#` ou aspas. Larga de propósito: mascarar a mais num texto de aviso não custa nada, deixar passar um código custa.
+ */
+const SECRET_QUERY = /([?&;])([\w.-]*(?:code|token|key|secret|pass|pwd|auth|sig|session|otp)[\w.-]*)=([^\s&#"'`<>]*)/gi;
+
+/**
+ * Troca o valor dos parâmetros de URL que carregam segredo por `[segredo]` (`…/api/pair?code=abc` → `…/api/pair?code=[segredo]`). Para o texto que vira nota do card, motivo de espera,
+ * histórico e aviso: o `findSecrets` não pega um código curto de pareamento, e o corte do resumo da ação não o salva (a parte que sobra do código ainda é o código). Texto sem query não muda.
+ */
+export function maskSecretQuery(text: string): string {
+  return text.replace(SECRET_QUERY, '$1$2=[segredo]');
+}
+
 // ---- Palpite (real ou exemplo) e dica mascarada: heurística local e determinística, feita na detecção ----
 // É o único momento em que o valor está em memória. Sem IA, sem testar a credencial no provedor, sem reler transcript.
 

@@ -56,7 +56,7 @@ import type { SessionTokens } from '../callers';
 import { resumeText, type ResumeEntry } from './resume';
 import { externalBackground, externalCutWithAgents, subagentsDirOf } from './cutAction';
 import { legacyLabel, worseVerdict, type ClassifiedSecret, type SecretHint, type SecretKind, type SecretReason, type SecretSource, type SecretVerdict } from './secrets';
-import { capReason, capText, type TurnCaps } from './turnCap';
+import { capReason, capText, presumedStop, type TurnCaps } from './turnCap';
 import type { ConsultStamp, TurnCapHit } from '../../shared/model';
 
 export interface ChatSpawn {
@@ -318,6 +318,22 @@ export async function findTranscript(transcriptsDir: string, projectId: string, 
   return direct;
 }
 
+/** Os argumentos de `deliver` depois do projeto e da conversa (os de `deliverNow`, na mesma ordem). */
+type DeliverRest = [
+  staffId: string | null,
+  text: string,
+  priority: SendPriority | undefined,
+  images: string[],
+  files: ChatAttachment[],
+  delegated: boolean,
+  auto: boolean,
+  origin?: string,
+  engineOverride?: EngineOverride,
+  guard?: () => boolean,
+  reviewOnly?: boolean,
+  consult?: ConsultStamp,
+];
+
 /** Conversas abertas pelo Claudio’s Club, uma por sessão (= funcionário). */
 export class ChatManager {
   private readonly chats = new Map<string, ChatProcess>();
@@ -411,6 +427,8 @@ export class ChatManager {
   private readonly retryGen = new Map<string, number>();
   /** O aviso da retomada de cada conversa aberta (para trocar o texto no mesmo aviso). */
   private readonly retryNotices = new Map<string, string>();
+  /** Mensagens a caminho de cada conversa que já existe (ver `deliver`): o processo ainda abrindo não conta como parado (ver `turnAlive`). */
+  private readonly sending = new Map<string, number>();
   /**
    * O último turno de cada conversa de funcionário que terminou em erro do motor sem retomada (login recusado, ou erro que não passa sozinho): a tarefa de trabalho lê daqui, no fim do
    * turno, para ir a Aguardar em vez de revisão (ver `engineStopOf`). Em memória: sai no turno bem-sucedido seguinte e em qualquer mensagem não automática.
@@ -783,7 +801,23 @@ export class ChatManager {
     if (this.shuttingDown) throw new ChatClosingError();
   }
 
-  private async deliver(
+  /**
+   * Manda a mensagem (ver `deliverNow`) e, enquanto ela está a caminho, conta a conversa como viva (`turnAlive`): abrir o processo leva segundos, e nesse meio tempo a conversa ainda
+   * não aparece como aberta nem trabalhando. Sem isso, a conferência de "parou no meio" (`restartCut`) lê um transcript com a ação sem resultado e segura uma conversa que está voltando.
+   */
+  private async deliver(projectId: string, sessionId: string | null, ...rest: DeliverRest): Promise<string> {
+    if (!sessionId) return this.deliverNow(projectId, sessionId, ...rest);
+    this.sending.set(sessionId, (this.sending.get(sessionId) ?? 0) + 1);
+    try {
+      return await this.deliverNow(projectId, sessionId, ...rest);
+    } finally {
+      const left = (this.sending.get(sessionId) ?? 1) - 1;
+      if (left > 0) this.sending.set(sessionId, left);
+      else this.sending.delete(sessionId);
+    }
+  }
+
+  private async deliverNow(
     projectId: string,
     sessionId: string | null,
     staffId: string | null,
@@ -1403,9 +1437,18 @@ export class ChatManager {
    * e mexe fora do projeto? Então segura (ver `holdCut`) e devolve o motivo; senão, null (a tarefa retoma como sempre).
    */
   async restartCut(projectId: string, sessionId: string): Promise<TurnCapHit | null> {
+    // Conversa com turno vivo (ou com mensagem abrindo o processo) não parou no meio de nada: o transcript dela sempre mostra a ferramenta em andamento sem resultado.
+    if (this.turnAlive(sessionId)) return null;
     const { history } = await this.snapshot(projectId, sessionId);
     const action = await this.cutOf(projectId, sessionId, history, false);
-    return action ? this.holdCut(sessionId, action) : null;
+    // O turno pode ter voltado enquanto o transcript era lido: conferido de novo, de forma síncrona, antes de segurar a conversa (`holdCut` cancela a retomada e o "continue").
+    return action && !this.turnAlive(sessionId) ? this.holdCut(sessionId, action) : null;
+  }
+
+  /** A conversa tem turno vivo: aberta e no meio de um turno (ou com algo em segundo plano), ou com uma mensagem a caminho que ainda abre o processo (ver `deliver`). */
+  private turnAlive(sessionId: string): boolean {
+    const chat = this.chats.get(sessionId);
+    return !!(chat?.running && chat.working) || (this.sending.get(sessionId) ?? 0) > 0;
   }
 
   /**
@@ -1994,6 +2037,8 @@ export class ChatManager {
     const retries = this.opts.retries;
     if (end.kind === 'ok') {
       this.engineStops.delete(sessionId);
+      // O turno terminou normal: a parada "no meio de…" guardada antes dele era presumida e não se confirmou (a conversa estava viva). O fim de turno da tarefa (que vem logo depois) não a lê mais.
+      if (presumedStop(this.inbox.turnCapOf(sessionId))) this.inbox.setTurnCap(sessionId, null);
       if (!retries) return;
       // Sucesso real: o turno original acabou. Uma retomada que ainda estivesse marcada mandaria um "continue" a mais.
       this.retryLedger.clear(sessionId);

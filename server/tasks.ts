@@ -13,13 +13,14 @@ import { codePath, type CodeEdit } from './chat/codeEdits';
 import { findSecret } from './chat/secrets';
 import type { SecondOpinionInput } from './adapters/codex';
 import { buildHandoff, collectGit, oldConversationExtract } from './fallbackHandoff';
-import { fitDeliverySummary, parseDeliveryNotes } from './deliveryNotes';
+import { fitDeliverySummary, looksLikeDelivery, parseDeliveryNotes } from './deliveryNotes';
 import { hasGuide } from './projectGuide';
 import type { LimitHit } from './chat/usageLimit';
 import { RESUME_TEXT } from './chat/items';
 import { BRIEF_RULES, REVIEW_RUBRIC } from './deliveryRules';
 import { failureBlock, isolateFailures } from './testFailures';
-import { capReason } from './chat/turnCap';
+import { maskSecretQuery } from './chat/secrets';
+import { capReason, presumedStop } from './chat/turnCap';
 import { ChatClosingError } from './chat/manager';
 import type { Caller } from './callers';
 import type { Reservation } from './resourceGate';
@@ -224,7 +225,7 @@ export const TaskPatch = z.object({
     .enum(TASK_STATUSES)
     .refine((s) => s !== 'cancelled', 'para cancelar use a ação Cancelar da tarefa (cancel), não a mudança de coluna')
     .optional(),
-  waitReason: z.string().trim().max(200, 'motivo longo demais (máx. 200)').transform((v) => v || null).nullable().optional(),
+  waitReason: z.string().trim().max(200, 'motivo longo demais (máx. 200)').transform((v) => maskSecretQuery(v) || null).nullable().optional(),
   pr: z
     .string()
     .trim()
@@ -3029,6 +3030,8 @@ export class TaskService {
       // A última ação ficou pela metade e mexe fora do projeto (push, deploy, servidor): retomar sozinho poderia repeti-la.
       // Segura a conversa para você (caixa de entrada) e a tarefa vai para Aguardar. Erro ao conferir: retoma como sempre.
       const cut = await (this.deps.restartCut?.(projectId, t.sessionId) ?? Promise.resolve(null)).catch(() => null);
+      // A conferência do transcript leva tempo, e a conversa pode ter voltado a trabalhar (mensagem, retomada de turno que falhou): com o turno vivo, nada parou no meio e nada é retomado por cima.
+      if (isWorking(projectId, staffId)) return false;
       if (cut) return !!(await this.parkForCap(projectId, taskId, t.sessionId, cut));
       const at = now.toISOString();
       try {
@@ -4220,7 +4223,9 @@ export class TaskService {
     // Aguardando subtarefas, ou sem código: mensagem na conversa o tira da espera (ele volta a trabalhar e a ocupar o funcionário); o próximo fim de turno decide de novo.
     // Sem código, a mensagem é a de quem pediu (devolver ao responsável) ou a sua.
     await this.onSession(sessionId, 'work', (t) => {
-      if (t.status === 'review' && !t.autoCreated) return moved(t, 'doing', 'auto', 'você respondeu');
+      // O turno que vem responde a esta mensagem, e resposta não é entrega: `reopened` deixa o fim dele conferir se houve edição ou entrega nova (ver `holdReply`).
+      // Com a reprovação desta entrega ainda sem resposta, a mensagem é o ajuste dela (ver `reject`): o turno que vem a responde, e essa resposta É a entrega.
+      if (t.status === 'review' && !t.autoCreated) return awaitsReply(t) ? moved(t, 'doing', 'auto', 'você respondeu') : { ...moved(t, 'doing', 'auto', 'você respondeu'), reopened: reopenedFrom(t) };
       if (markedNoCode(t)) return noted({ ...t, noCode: undefined }, 'devolvida ao responsável: a marca "sem código" saiu');
       // Mensagem na conversa do card que espera decisão de plano (a de quem pediu, ou a sua): o card volta a "fazendo" e o plano não fica gravado (só a aprovação, em `decidePlan`, o grava); se
       // o responsável entregar o plano de novo, ele volta a esperar. Sem isto, em "planejando" o Claude nunca entregaria (ver `endsInDelivery`).
@@ -4822,6 +4827,8 @@ export class TaskService {
     const board = await readTasks(dir);
     const current = board.find((t) => t.id === taskId);
     if (!current || current.sessionId !== sessionId || isClosed(current)) return;
+    // O turno que responde a uma mensagem (`reopened`) só vira entrega se editou algo: a edição conta mesmo com o arquivo já na lista (ver `holdReply`).
+    if (current.reopened && !current.reopened.edited) await this.change(projectId, taskId, (t) => (t.reopened && !t.reopened.edited && t.sessionId === sessionId ? { ...t, reopened: { ...t.reopened, edited: true as const } } : t));
     if (files.every((f) => current.changedFiles?.includes(f))) return this.noteOverlaps(projectId, board, current, files);
     await this.mutate(projectId, (tasks) =>
       tasks.map((t) => {
@@ -5475,12 +5482,15 @@ export class TaskService {
     // Parou no limite de uso com o "continue" agendado: não é entrega. Fica em "fazendo", ninguém é avisado
     // e a fila não anda (a tarefa segue ocupando o funcionário). Erro ao perguntar: vale como hoje, entrega.
     if (await this.deps.awaitingLimit?.(sessionId).catch(() => false)) return;
-    const current = ((await this.list(where.projectId)) ?? []).find((t) => t.id === where.taskId);
+    const listed = ((await this.list(where.projectId)) ?? []).find((t) => t.id === where.taskId);
     // Fim de uma conversa que já não é a da tarefa (trocou de motor, ou outra): não entrega, não fecha, não anda a fila.
-    if (!current || current.sessionId !== sessionId) return;
+    if (!listed || listed.sessionId !== sessionId) return;
     // Cancelada: o fim do turno (o que o cancelamento interrompeu, ou um despertador solto) não entrega, não manda para revisão e não
     // retoma nada. Quem cancelou já andou a fila (ver `cancel`).
-    if (current.status === 'cancelled') return;
+    if (listed.status === 'cancelled') return;
+    // Aguardar por "parou no meio" e o turno terminou normal (sem teto nem erro do motor guardado, conferidos acima): a parada era presumida e não se confirmou. O card volta a "fazendo" e segue abaixo.
+    // A saída do processo (`exit`: você fechou a conversa, ou ela caiu) não é turno que terminou: a parada presumida fica.
+    const current = reason === 'exit' ? listed : await this.resumeFromCut(where.projectId, listed, sessionId);
     const staffId = current.staffId;
     if (!staffId) return;
     // Dúvida ao gestor (ver doubtHeld): com `DÚVIDA:` ou pergunta por opções aberta, a tarefa não entrega agora.
@@ -5492,6 +5502,8 @@ export class TaskService {
     // Plano primeiro: o card pediu o plano antes da edição e o turno entregou só ele (nenhuma edição). Plano não é entrega: espera a decisão de quem pediu em "planejando" (ver holdPlan).
     // Antes do "sem código": o plano tem decisão própria (aprovar, recusar), e no projeto compartilhado a mexida de outra tarefa esconde o "sem código" e levaria o plano à revisão.
     if (await this.holdPlan(where.projectId, current, sessionId)) return;
+    // Mensagem tirou o card da revisão e o turno só a respondeu (sem edição, sem entrega no formato): a entrega anterior segue valendo (ver holdReply).
+    if (await this.holdReply(where.projectId, current, sessionId)) return;
     // Card = código: o turno não editou nada, e então não há o que revisar (ver holdNoCode).
     if (await this.holdNoCode(where.projectId, current, sessionId)) return;
     // Planejando no Codex (ficha `plan`, sandbox só leitura): sem cartão de plano, o fim do turno é a entrega (ver `endsInDelivery`). Só lê a ficha com "planejando".
@@ -5699,6 +5711,30 @@ export class TaskService {
       if (this.deps.liveWork?.(t.sessionId)?.busy) continue;
       await this.workDone(t.sessionId, undefined, now);
     }
+  }
+
+  /**
+   * O card saiu da revisão por mensagem na conversa de trabalho (`Task.reopened`, nota "você respondeu") e o turno que terminou só respondeu a ela: nenhuma edição vista pelo Club
+   * (`reopened.edited`) e o texto final não é uma entrega no formato (`looksLikeDelivery`: sem linha "- `arquivo`: por quê" nem "Critério de pronto"). Uma resposta curta ("Aviso visto", uma
+   * pergunta, uma explicação) não pode virar a entrega: gravaria o resumo por cima do que o card tinha (prova, testes, contrastes), abriria outra rodada de revisão e avisaria quem pediu de novo.
+   * Aqui o card volta para "revisão" como estava (a entrega, a revisão e o que ela guardava: `reopened.kept`), com uma nota, sem resumo novo, sem rodada e sem aviso, e a fila dele anda.
+   * Limite: edição por comando de shell que o Club não vê, com resposta fora do formato, também cai aqui; a revisão lê o diff do que a tarefa alterou. Devolve true se o card voltou.
+   */
+  private async holdReply(projectId: string, task: Task, sessionId: string): Promise<boolean> {
+    const staffId = task.staffId;
+    const r = task.reopened;
+    if (!staffId || !r || r.edited || task.status !== 'doing' || task.sessionId !== sessionId || !task.delivery || looksLikeDelivery(this.deps.lastText?.(sessionId) ?? '')) return false;
+    let back = false;
+    await this.locked(projectId, staffId, `resposta ${task.id}`, () =>
+      this.change(projectId, task.id, (t) => {
+        // Na vez dele, de novo: editou, saiu de "fazendo" ou o turno voltou a rodar enquanto esperava.
+        if (t.status !== 'doing' || t.sessionId !== sessionId || t.reopened?.at !== r.at || t.reopened.edited || !t.delivery || this.turnRunning(sessionId)) return t;
+        back = true;
+        return moved({ ...t, ...t.reopened.kept, runId: null }, 'review', 'auto', 'resposta à mensagem, sem edição nem entrega nova: a entrega anterior segue valendo');
+      }),
+    );
+    if (back) void this.kick(projectId, staffId);
+    return back;
   }
 
   /**
@@ -6011,7 +6047,24 @@ export class TaskService {
    */
   private async parkForCap(projectId: string, taskId: string, sessionId: string, hit: TurnCapHit): Promise<Task | null> {
     // O erro do motor também para o card que planejava: o plano não chegou, e no Codex o fim do turno de "planejando" seria a entrega (ver `endsInDelivery`).
-    return this.parkWaiting(projectId, taskId, sessionId, capReason(hit), 'auto', 'limit', hit.kind === 'engine' ? ['doing', 'todo', 'planning'] : ['doing', 'todo']);
+    // "Parou no meio" é parada presumida (lida do transcript), não fato: a marca deixa o fim de turno normal que vier depois desfazê-la (ver `resumeFromCut`).
+    return this.parkWaiting(projectId, taskId, sessionId, capReason(hit), 'auto', 'limit', hit.kind === 'engine' ? ['doing', 'todo', 'planning'] : ['doing', 'todo'], undefined, presumedStop(hit) ? { waitCut: { at: new Date().toISOString() } } : undefined);
+  }
+
+  /**
+   * O turno da conversa terminou normal e o card está em Aguardar por uma parada presumida (`Task.waitCut`: "a conversa parou no meio de…"): a parada era falsa, ou a conversa seguiu
+   * depois (mensagem sua). O card volta a "fazendo" e o resto do fim de turno decide como sempre (dúvida, segundo plano, "sem código", entrega). Só com a mesma conversa e sem parada
+   * guardada agora (um teto ou erro do motor que valha segue em Aguardar). Devolve a tarefa como ficou.
+   */
+  private async resumeFromCut(projectId: string, task: Task, sessionId: string): Promise<Task> {
+    const staffId = task.staffId;
+    if (!staffId || task.status !== 'waiting' || !task.waitCut || task.sessionId !== sessionId) return task;
+    const back = await this.locked(projectId, staffId, `parada-presumida ${task.id}`, () =>
+      this.change(projectId, task.id, (t) =>
+        t.status === 'waiting' && t.waitCut && t.sessionId === sessionId && !this.turnRunning(sessionId) ? moved(t, 'doing', 'auto', 'o turno terminou normal: a parada presumida ("parou no meio") não se confirmou') : t,
+      ),
+    );
+    return back && back.status === 'doing' ? back : task;
   }
 
   /**
@@ -6099,13 +6152,15 @@ export class TaskService {
     outcome: RunOutcome,
     from: readonly TaskStatus[],
     skip?: (t: Task) => boolean,
+    /** Marca que vai junto na mesma gravação (`Task.waitCut`). */
+    mark?: Partial<Task>,
   ): Promise<Task | null> {
     let parked: Task | null = null;
     const seen: { before?: Task } = {};
     await this.change(projectId, taskId, (t) => {
       if (!from.includes(t.status) || t.sessionId !== sessionId || skip?.(t)) return t;
       seen.before = t;
-      parked = moved({ ...t, queuedAt: null, waitReason: why, runId: null }, 'waiting', by, why);
+      parked = moved({ ...t, queuedAt: null, waitReason: why, runId: null, ...mark }, 'waiting', by, why);
       return parked;
     });
     const back = parked as Task | null;
@@ -7728,7 +7783,7 @@ function locateTaskCode(projectPath: string, task: Pick<Task, 'staffId' | 'codeA
 
 function noted(t: Task, note: string): Task {
   const at = new Date().toISOString();
-  return { ...t, history: [...t.history, { at, status: t.status, by: 'auto' as const, note }].slice(-MAX_HISTORY), updatedAt: at };
+  return { ...t, history: [...t.history, { at, status: t.status, by: 'auto' as const, note: maskSecretQuery(note) }].slice(-MAX_HISTORY), updatedAt: at };
 }
 
 /** Acrescenta a conversa à tarefa, sem repetir o id; passando de `MAX_SESSIONS`, sai a mais antiga. */
@@ -7828,8 +7883,20 @@ function rejectionOf(t: Task, reviewer: string, reviewText: string, lesson: stri
   return { msg, rejection };
 }
 
-/** Guarda a reprovação no card e conta a rodada (a mesma escrita que a move para "fazendo" ou, com o ajuste guardado, a deixa em revisão). */
-const withRejection = (t: Task, rejection: Rejection): Task => rework({ ...t, rejections: [...(t.rejections ?? []), rejection].slice(-REJECTIONS_MAX) });
+/** Guarda a reprovação no card e conta a rodada (a mesma escrita que a move para "fazendo" ou, com o ajuste guardado, a deixa em revisão). A resposta ao ajuste é entrega: o "voltou por mensagem" (`reopened`) não vale mais. */
+const withRejection = (t: Task, rejection: Rejection): Task => rework({ ...t, reopened: undefined, rejections: [...(t.rejections ?? []), rejection].slice(-REJECTIONS_MAX) });
+
+/** A última reprovação é a da entrega de agora e o executor ainda não a respondeu (a mesma conta de `withReply`)? Então o turno que vem é a resposta dele, e a resposta é a entrega. */
+const awaitsReply = (t: Task): boolean => {
+  const last = t.rejections?.at(-1);
+  return !!last && !last.reply && last.deliveryAt === (t.delivery?.at ?? null);
+};
+
+/** O que a mensagem em "revisão" marca ao devolver o card a "fazendo" (`Task.reopened`): a hora e o que a revisão guardava, para o caso de o turno ser só uma resposta (ver `holdReply`). */
+function reopenedFrom(t: Task): NonNullable<Task['reopened']> {
+  const kept = { ...(t.ownerGate && { ownerGate: t.ownerGate }), ...(t.autoMerge && { autoMerge: t.autoMerge }), ...(t.reviewRetry && { reviewRetry: t.reviewRetry }) };
+  return { at: new Date().toISOString(), ...(Object.keys(kept).length && { kept }) };
+}
 
 /**
  * A resposta do executor à última reprovação: o que ele disse ao terminar o turno (a entrega que `recordDelivery` grava). Só a entrega logo depois da reprovada (`deliveryAt` é a de ANTES
@@ -7917,19 +7984,21 @@ function reviewerDoubtText(apiUrl: string, projectId: string, t: Task, who: stri
 function moved(t: Task, status: TaskStatus, by: 'you' | 'auto', note?: string): Task {
   if (t.status === status) return t;
   const at = new Date().toISOString();
-  const history = [...t.history, { at, status, by, ...(note && { note }) }].slice(-MAX_HISTORY);
-  // Saiu de Aguardar: o motivo era de lá. Saiu de revisão: o retry da revisão automática era da entrega que acabou.
-  const leavesWait = t.status === 'waiting' ? { waitReason: null, engineStop: undefined } : {};
+  // A nota e o motivo de Aguardar são texto livre (a ação cortada, o que um funcionário escreveu): o valor de `?code=`, `&token=`… não fica gravado.
+  const history = [...t.history, { at, status, by, ...(note && { note: maskSecretQuery(note) }) }].slice(-MAX_HISTORY);
+  const waitReason = status === 'waiting' && t.waitReason ? { waitReason: maskSecretQuery(t.waitReason) } : {};
+  // Saiu de Aguardar: o motivo era de lá, e a parada presumida (`waitCut`) também. Saiu de revisão: o retry da revisão automática era da entrega que acabou.
+  const leavesWait = t.status === 'waiting' ? { waitReason: null, engineStop: undefined, waitCut: undefined } : {};
   const leavesReview = t.status === 'review' && (t.reviewRetry || t.ownerGate || t.autoMerge) ? { reviewRetry: undefined, ownerGate: undefined, autoMerge: undefined } : {};
   // A ciência do corte era para a retomada na fila (em "a fazer"): em outra coluna já não vale.
   const leavesTodo = status !== 'todo' && t.cutAck ? { cutAck: undefined } : {};
-  // A espera das subtarefas e a do segundo plano eram do "fazendo": em outra coluna (entrega, Aguardar, cancelada) já não valem.
-  const leavesDoing = status !== 'doing' && (t.awaitingSubtasks || t.noCode || t.backgroundWait) ? { awaitingSubtasks: undefined, noCode: undefined, backgroundWait: undefined } : {};
+  // A espera das subtarefas e a do segundo plano eram do "fazendo", e o "voltou de revisão por mensagem" (`reopened`) também: em outra coluna (entrega, Aguardar, cancelada) já não valem.
+  const leavesDoing = status !== 'doing' && (t.awaitingSubtasks || t.noCode || t.backgroundWait || t.reopened) ? { awaitingSubtasks: undefined, noCode: undefined, backgroundWait: undefined, reopened: undefined } : {};
   // O plano pendente era do "planejando": em outra coluna (decisão, entrega, Aguardar, cancelada) já não vale.
   const leavesPlanning = status !== 'planning' && t.planWait ? { planWait: undefined } : {};
   // Ficou pronta sem decisão sobre o pedido de cancelamento: não há mais o que cancelar.
   const settlesRequest = status === 'done' && t.cancelRequest?.status === 'pending' ? { cancelRequest: { ...t.cancelRequest, status: 'moot' as const, decidedAt: at, waiting: undefined, retry: undefined } } : {};
-  return { ...t, ...leavesWait, ...leavesReview, ...leavesTodo, ...leavesDoing, ...leavesPlanning, ...settlesRequest, status, updatedAt: at, history };
+  return { ...t, ...waitReason, ...leavesWait, ...leavesReview, ...leavesTodo, ...leavesDoing, ...leavesPlanning, ...settlesRequest, status, updatedAt: at, history };
 }
 
 function withPatch(t: Task, p: z.infer<typeof TaskPatch>, by: 'you' | 'auto', note?: string): Task {

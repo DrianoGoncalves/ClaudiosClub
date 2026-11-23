@@ -44,6 +44,14 @@ export function parseDeliveryNotes(text: string): Record<string, string> | undef
   return notes.size ? Object.fromEntries(notes) : undefined;
 }
 
+/**
+ * O texto é uma entrega no formato (e não uma resposta a mensagem ou aviso)? Tem ao menos uma linha por arquivo mudado (`- \`caminho\`: por quê`) ou abre o item "Critério de pronto"
+ * do formato fixo da tarefa (numerado, em negrito ou título). Resposta curta ("Aviso visto…", uma pergunta, uma explicação) não tem nenhum dos dois.
+ */
+export function looksLikeDelivery(text: string): boolean {
+  return !!parseDeliveryNotes(text) || /^\s*(?:\d+[.)]\s*)?[*_#\s]*crit[ée]rio de pronto\b/im.test(text);
+}
+
 /** Caminho relativo e normalizado com `/`; null para absoluto, `..`, `~`, vazio ou com caractere proibido. */
 export function relativePath(raw: string): string | null {
   const p = raw.trim().replace(/\\/g, '/');
