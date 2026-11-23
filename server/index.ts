@@ -45,7 +45,7 @@ import { createSkill } from './skillCreate';
 import { projectClaudeDir } from './adapters/claude/projects';
 import { ChatClosingError, ChatError, ChatManager, CloseRefusedError, findTranscript } from './chat/manager';
 import { ResumeFile, bootResume, resumeText } from './chat/resume';
-import { AnnotationsField, AnswersField } from './chat/questions';
+import { AnnotationsField, AnswersField, TaskAnswerBody } from './chat/questions';
 import { touchedFiles } from './chatChanges';
 import { uncommittedByConversation } from './uncommitted';
 import { searchConversations } from './chatSearch';
@@ -951,14 +951,6 @@ const ChatSettingsBody = z
   })
   .refine((b) => b.model || b.effort || b.autonomy, 'nada para mudar');
 const StaffRef = z.object({ staffId: z.string().max(40).nullable().default(null), force: z.boolean().default(false) });
-// Resposta do gestor à dúvida da tarefa (ver TaskService.answerQuestion): `answers` por pergunta; `text` na dúvida escrita; `escalate` passa a você.
-const TaskAnswerBody = z.object({
-  questionId: z.string().min(1).max(100),
-  answers: z.record(z.string().max(500), z.union([z.string().max(500), z.array(z.string().max(500)).max(20)])).optional(),
-  text: z.string().max(2_000).optional(),
-  escalate: z.boolean().optional(),
-});
-
 function parse<S extends z.ZodTypeAny>(schema: S, body: unknown): z.output<S> {
   const r = schema.safeParse(body);
   if (!r.success) throw new BadRequest(r.error.issues[0]?.message ?? 'pedido inválido');

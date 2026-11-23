@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RESUME_TEXT } from '../server/chat/items';
+import { parseQuestions, TaskAnswerBody } from '../server/chat/questions';
 import { blockedInboxItem, stuckInboxItem, taskQuestionInboxItem } from '../server/inboxItems';
 import { ESCALATE_AFTER_MS, HELD_MAX_FAILS, PermanentError, RETRY_STEPS_MIN, failedRetry, isTransient, nextRetry, retryDue } from '../server/retryPolicy';
 import { ownAlerts, readTasks, stuckDependencies, stuckReason, stuckState, TaskConflictError, TaskError, TaskForbiddenError, TaskService } from '../server/tasks';
@@ -410,8 +411,10 @@ describe('dúvida ao gestor: retry, escalada e resposta do dono', () => {
 
   it('10b. a rota só trata como dono o que vem do navegador pareado: `fromBrowser`, nunca o corpo do pedido', async () => {
     const src = await fs.readFile(path.join(__dirname, '..', 'server', 'index.ts'), 'utf8');
-    const schema = /const TaskAnswerBody = z\.object\(\{([\s\S]*?)\n\}\);/.exec(src)![1]!;
+    const questions = await fs.readFile(path.join(__dirname, '..', 'server', 'chat', 'questions.ts'), 'utf8');
+    const schema = /export const TaskAnswerBody = z\.object\(\{([\s\S]*?)\n\}\);/.exec(questions)![1]!;
     expect([...schema.matchAll(/^\s*(\w+):/gm)].map((m) => m[1])).toEqual(['questionId', 'answers', 'text', 'escalate']);
+    expect(src).toContain('parse(TaskAnswerBody, body)');
     const route = /\/tasks\/\$\{ID\}\/answer\$`\),([\s\S]*?)\n  \],/.exec(src)![1]!;
     expect(route).toContain('caller, fromBrowser }');
     expect(route).toContain('tasks.answerQuestion(id!, taskId!, who, b, fromBrowser)');
@@ -470,6 +473,91 @@ describe('dúvida ao gestor: retry, escalada e resposta do dono', () => {
     const it = taskQuestionInboxItem(ownAlerts(await texto.list())[0]!, { projectId: 'p', projectName: 'P', sessionId: '', staffId: 'ana-1', name: 'Ana' });
     expect(it.question).toMatchObject({ source: 'text' });
     expect(it.question!.text!.length).toBeLessThanOrEqual(2000);
+  });
+});
+
+describe('resposta do gestor por opções: a chave é a pergunta inteira (t-253c13)', () => {
+  /** A pergunta de `n` caracteres que `parseQuestions` aceita (1000 é o teto: 1001 cai no cartão genérico). */
+  const pergunta = (n: number) => `${'Qual banco usar? '.repeat(Math.ceil(n / 17))}`.slice(0, n - 1) + '?';
+  /** Dúvida por opções aberta com o gestor (Giovana) numa tarefa da Ana. */
+  async function aberta(name: string, questions: Array<{ question: string; options: string[]; multiSelect?: boolean }>) {
+    const b = await board(name);
+    const id = await pedida(b);
+    const work = (await b.get(id)).sessionId!;
+    b.h.asks.add('req-1');
+    expect(await b.svc.onAsk(work, 'req-1', questions)).toBe(true);
+    return { b, id, work, t: await b.get(id) };
+  }
+
+  it('1. a chave igual à pergunta de 1000 caracteres (o teto da pergunta) passa no corpo e fecha a dúvida', async () => {
+    const longa = pergunta(1000);
+    expect(longa).toHaveLength(1000);
+    expect(parseQuestions({ questions: [{ question: longa, options: [{ label: 'Postgres' }] }] })).not.toBeNull();
+    expect(parseQuestions({ questions: [{ question: `${longa}x`, options: [{ label: 'Postgres' }] }] })).toBeNull(); // 1001: o teto é este
+    const body = { questionId: 'req-1', answers: { [longa]: 'Postgres' } };
+    expect(TaskAnswerBody.safeParse(body).success).toBe(true);
+
+    const { b, id, work, t } = await aberta('r-chave-longa', [{ question: longa, options: ['Postgres', 'MySQL'] }]);
+    const out = await b.svc.answerQuestion('p', id, gestor(t), TaskAnswerBody.parse(body));
+    expect(b.h.answeredAsks).toEqual([{ sessionId: work, requestId: 'req-1', by: 'manager' }]);
+    expect(out?.question).toMatchObject({ status: 'answered', answeredBy: 'manager' });
+  });
+
+  it('1b. várias perguntas, uma delas de 1000 caracteres: todas as chaves exatas passam', async () => {
+    const longa = pergunta(1000);
+    const { b, id, t } = await aberta('r-chave-varias', [
+      { question: 'Qual banco?', options: ['Postgres', 'MySQL'] },
+      { question: longa, options: ['a', 'b'], multiSelect: true },
+    ]);
+    const out = await b.svc.answerQuestion('p', id, gestor(t), { questionId: 'req-1', answers: { 'Qual banco?': 'MySQL', [longa]: ['a', 'b'] } });
+    expect(out?.question).toMatchObject({ status: 'answered', answeredBy: 'manager' });
+    expect(b.h.answeredAsks).toHaveLength(1);
+  });
+
+  it('2. chave que não é nenhuma pergunta aberta: 400 que diz qual chave e quais valem, e a dúvida segue aberta', async () => {
+    const longa = pergunta(700);
+    const { b, id, t } = await aberta('r-chave-errada', [{ question: longa, options: ['Postgres', 'MySQL'] }]);
+    const who = gestor(t);
+    const recusa = async (answers: Record<string, string | string[]>) => {
+      const err = await b.svc.answerQuestion('p', id, who, { questionId: 'req-1', answers }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(TaskError);
+      return (err as TaskError).message;
+    };
+    // Chave curta inventada (o contorno da t-1a9bf2): agora diz que não casa e mostra a pergunta de verdade.
+    const curta = await recusa({ banco: 'Postgres' });
+    expect(curta).toContain('a chave "banco" de answers não é nenhuma pergunta aberta');
+    expect(curta).toContain(`1. "${longa.slice(0, 80)}…"`);
+    // A pergunta cortada (o que a caixa mostra) também não casa: a chave é o texto inteiro.
+    expect(await recusa({ [longa.slice(0, 500)]: 'Postgres' })).toContain('texto exato e inteiro');
+    // Uma chave certa e uma errada: recusa tudo, nada vai à conversa do funcionário.
+    await recusa({ [longa]: 'Postgres', outra: 'MySQL' });
+    // Maior que qualquer pergunta que existe: passa no corpo e leva a mesma mensagem (e não o "Invalid key in record" do zod).
+    const enorme = 'x'.repeat(1500);
+    expect(TaskAnswerBody.safeParse({ questionId: 'req-1', answers: { [enorme]: 'a' } }).success).toBe(true);
+    expect(await recusa({ [enorme]: 'a' })).toContain(`a chave "${'x'.repeat(80)}…" de answers`);
+
+    expect(b.h.answeredAsks).toEqual([]);
+    expect(b.h.delivered).toEqual([]);
+    expect((await b.get(id)).question).toMatchObject({ status: 'open' });
+    // Com a chave certa depois, responde.
+    await b.svc.answerQuestion('p', id, who, { questionId: 'req-1', answers: { [longa]: 'Postgres' } });
+    expect((await b.get(id)).question).toMatchObject({ status: 'answered', answeredBy: 'manager' });
+  });
+
+  it('2b. a conferência vale também para o dono (navegador pareado); escalar e a dúvida escrita seguem como antes', async () => {
+    const { b, id, t } = await aberta('r-chave-dono', [{ question: 'Qual banco?', options: ['Postgres'] }]);
+    await expect(b.svc.answerQuestion('p', id, null, { questionId: 'req-1', answers: { banco: 'Postgres' } }, true)).rejects.toThrow('não é nenhuma pergunta aberta');
+    // Escalar não manda `answers` e não confere chave.
+    const out = await b.svc.answerQuestion('p', id, gestor(t), { questionId: 'req-1', escalate: true });
+    expect(out?.question).toMatchObject({ status: 'escalated' });
+
+    // Dúvida escrita: a chave de `answers` (se vier) não é pergunta nenhuma e continua valendo só como texto.
+    const texto = await board('r-chave-texto');
+    const tid = await pedida(texto);
+    await doubt(texto, tid);
+    const qt = (await texto.get(tid)).question!;
+    await texto.svc.answerQuestion('p', tid, gestor(await texto.get(tid)), { questionId: qt.id, answers: { qualquer: 'pode' } });
+    expect((await texto.get(tid)).question).toMatchObject({ status: 'answered', answer: 'qualquer: pode' });
   });
 });
 

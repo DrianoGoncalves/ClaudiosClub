@@ -4037,6 +4037,8 @@ export class TaskService {
     const from = asUser ? 'do usuário' : `de ${(await this.deps.readProfile(projectId, caller!.staffId))?.name ?? 'o gestor'}`;
     if (q.source === 'ask') {
       if (!answers) throw new TaskError('a pergunta é por opções: mande answers');
+      const unknownKey = q.questions?.length ? Object.keys(answers).find((k) => !q.questions!.some((x) => x.question === k)) : undefined;
+      if (unknownKey !== undefined) throw new TaskError(unknownAnswerKey(unknownKey, q.questions!));
       // Sem a pergunta pendente na conversa (ou sem como respondê-la), não há o que responder: 409.
       const gone = () => new TaskConflictError('essa pergunta já foi respondida (não está mais aberta na conversa do funcionário)');
       const askStaff = task.staffId;
@@ -7286,6 +7288,13 @@ function answersText(answers: Record<string, string | string[]>): string {
   return Object.entries(answers)
     .map(([pergunta, a]) => `${pergunta}: ${Array.isArray(a) ? a.join(', ') : a}`)
     .join('\n');
+}
+
+/** O 400 da chave de `answers` que não é nenhuma pergunta aberta da dúvida: qual foi e quais valem (cortadas, para o erro caber). */
+function unknownAnswerKey(key: string, questions: NonNullable<TaskQuestion['questions']>): string {
+  const cut = (s: string) => (s.length > 80 ? `${s.slice(0, 80)}…` : s);
+  const open = questions.map((x, i) => `${i + 1}. "${cut(x.question)}"`).join('; ');
+  return `a chave "${cut(key)}" de answers não é nenhuma pergunta aberta desta dúvida: use como chave o texto exato e inteiro da pergunta (${open})`;
 }
 
 /** A dúvida escrita da mensagem: da linha `DÚVIDA:` (ou `DUVIDA:`, em qualquer caixa, com `**` em volta) até o fim, cortada. */
